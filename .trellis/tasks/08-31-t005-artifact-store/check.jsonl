@@ -1,0 +1,5 @@
+{"path":".trellis/spec/core/contracts.md","reason":"Defines ArtifactStore input, integrity, evidence, producer, and immutability boundaries."}
+{"path":".trellis/spec/core/architecture.md","reason":"Defines ArtifactStore seam and cross-layer validation obligations."}
+{"path":".trellis/spec/core/python-runtime.md","reason":"Defines typed Python, atomic I/O, and test requirements."}
+{"path":"schemas/artifact.schema.json","reason":"Canonical Artifact envelope and integrity wire contract."}
+{"path":"schemas/plan.schema.json","reason":"Typed plan payload contract used by lineage tests."}

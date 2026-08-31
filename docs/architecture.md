@@ -59,12 +59,14 @@ Task(JSON)
 | 数据 | v0.1 存储 | 说明 |
 |---|---|---|
 | Task 与状态 | SQLite | 事务性更新，唯一状态写入者是 Orchestrator |
-| Artifact 索引 | SQLite | kind、producer、revision、父子关系、校验结果 |
-| Artifact 正文 | 文件系统 JSON | `artifacts/runs/<task-id>/<attempt>/<kind>.json` |
+| Artifact 索引 | 后续接入 SQLite | T005 先由文件名和 typed `ArtifactRef` 提供按 ID 读取；Orchestrator 阶段再持久化查询索引 |
+| Artifact 正文 | 文件系统 JSON | `artifacts/art_<artifact-id>.json`，临时文件 + 原子 rename |
 | 运行日志 | 文件系统文本 | 脱敏、截断、由 evidence 引用 |
 | Trellis 规则 | Git 中的 Markdown | 组织知识，评审后变更 |
 
 Task 快照和状态事件的 Python 入口分别是 `Task` 与 `StateEvent`；`SqliteTaskRepository` 使用 `tasks`、`state_events` 两张表。快照正文和事件正文均保留 JSON，便于重启后由 Pydantic 重新校验并按事件 revision 回放。
+
+Artifact 的 Python 入口是 `Artifact` union；`FileArtifactStore` 以 Artifact ID 作为受校验的文件名。写入前必须由 `seal_artifact` 生成 canonical JSON SHA-256，Store 再验证 typed contract、`validated=true` 和父子 lineage；成功写入使用临时文件、`fsync` 和原子替换，重复正文幂等，变更正文拒绝覆盖。
 
 ## 5. 信任边界与安全默认值
 

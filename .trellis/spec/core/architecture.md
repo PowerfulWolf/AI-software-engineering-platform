@@ -18,7 +18,8 @@ build_event(task: Task, to_status: TaskStatus, *, event_id: EventId,
 apply_event(task: Task, event: StateEvent) -> Task
 ContextBuilder.build(task: Task, role: AgentRole, *, attempt: int,
                      candidate_revision: str | None = None) -> ContextBundle
-ArtifactStore.put(artifact: ArtifactEnvelope) -> ArtifactRef
+ArtifactStore.put(artifact: Artifact) -> ArtifactRef
+ArtifactStore.get(artifact_id: ArtifactId) -> Artifact
 TaskRepository.create(task: Task) -> None
 TaskRepository.get(task_id: TaskId) -> Task
 TaskRepository.append_event(event: StateEvent) -> None
@@ -35,6 +36,8 @@ TaskRepository.current_revision(task_id: TaskId) -> int
 - `apply_event` 不得修改传入的 Task，且必须拒绝 Task ID、起始状态或时间戳不一致的事件；
 - `ContextBundle` 必须包含 source URI、SHA-256、token 计数、policy 和 `context_id`；
 - `ArtifactStore.put` 只接受 Schema 校验通过且 `integrity.validated=true` 的 envelope；
+- `ArtifactStore.get` 返回重新校验且 digest 匹配的 typed Artifact；缺失、篡改或损坏文件返回稳定错误；
+- Artifact parent/supersedes 只能引用已存在的同 Task Artifact，写入采用临时文件、`fsync` 和原子 rename；
 - `StateEvent` 必须包含 `event_id`、from/to status、actor、reason、source revision 和 artifact IDs；
 - Task 快照与 StateEvent 必须由 `TaskRepository.append_event` 在同一 SQLite 事务中提交；相同事件正文重放幂等，不同正文复用 ID 拒绝；
 - repository 每个连接开启 foreign keys，数据库使用 WAL；关闭后重新打开必须只依赖持久化 JSON 恢复 Task 与事件序列；

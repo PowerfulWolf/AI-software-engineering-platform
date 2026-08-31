@@ -65,6 +65,7 @@ ai-software-engineer/
 │   ├── cli.py                        # ase 命令入口
 │   ├── domain/                       # Task、Agent、Artifact 强类型契约
 │   ├── store/                        # SQLite Task 快照与 StateEvent 日志
+│   ├── artifacts/                    # 原子 JSON ArtifactStore 与 SHA-256
 │   ├── orchestration/                 # 串行状态机 guard/reducer
 │   └── prompts/                      # 后续：版本化 role prompt 模板
 ├── docs/
@@ -141,6 +142,6 @@ uv run mypy src tests
 
 ## 当前状态
 
-M0 设计基线、T001 Python CLI 骨架、T002 领域模型和 T003 SQLite repository 已完成。当前可运行 `ase`，并可用 Pydantic 校验 Task、Agent Definition、StateEvent 以及四类 Artifact；正反例同时受 canonical JSON Schema contract tests 保护，Task 状态事件可在 SQLite 重启后恢复。T004 已将文档中的状态图落成纯函数 guard/reducer，禁止跳过 QA/Review 或从终态继续迁移。
+M0 设计基线和 T001–T005 已完成。当前可运行 `ase`，并可用 Pydantic 校验 Task、Agent Definition、StateEvent 以及四类 Artifact；正反例受 canonical JSON Schema contract tests 保护。Task 状态事件可在 SQLite 重启后恢复，状态图由纯函数 guard/reducer 管理，ArtifactStore 提供 SHA-256、lineage、原子写入和不可变重放保证。
 
-下一步是 T005：实现 ArtifactStore 与跨 Artifact 一致性守卫。后续实现仍严格按 `AGENTS.md` 与 `.trellis/spec/` 推进，任何跨语言契约变更先更新 Schema 和文档，再更新代码与测试。
+下一步是 T006：实现 Git worktree manager 与路径/命令 policy。后续实现仍严格按 `AGENTS.md` 与 `.trellis/spec/` 推进，任何跨语言契约变更先更新 Schema 和文档，再更新代码与测试。

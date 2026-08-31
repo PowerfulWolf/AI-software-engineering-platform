@@ -102,6 +102,10 @@
 - artifact 不可原地修改；修订通过新 artifact + `supersedes` 关系表达；
 - Schema 校验、哈希计算和持久化由 Orchestrator/ArtifactStore 完成，Agent 不能自报通过。
 
+`ArtifactStore.put(artifact: Artifact) -> ArtifactRef` 只接受 `schema_version=v0.1`、typed union 校验通过、`integrity.validated=true` 且 digest 匹配的 Artifact。Digest 对 canonical JSON 顶层 `integrity` 字段之外的内容计算 SHA-256；`seal_artifact` 生成带 `validated_at` 的不可变副本。Store 将正文写入 `artifacts/art_<artifact-id>.json`，采用临时文件 + `fsync` + 原子 rename。
+
+`parent_artifact_ids` 必须指向已存在且属于同一 Task 的 Artifact；`supersedes` 还必须是同一 kind。相同 ID 的完全相同正文重放是幂等 no-op，不同正文抛出 `ArtifactAlreadyExists`，不覆盖旧证据；缺失/跨 Task/跨 kind 引用抛出 `ArtifactParentError`。
+
 ## 7. 四类 artifact 的最小字段
 
 | kind | 必填业务字段 |

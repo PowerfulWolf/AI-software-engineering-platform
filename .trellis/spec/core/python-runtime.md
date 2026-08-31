@@ -201,6 +201,79 @@ apply_event(task: Task, event: StateEvent) -> Task
 - Task ID、from_status、时间戳错误返回 typed error 且原快照不变；
 - reducer 测试禁止 I/O/import side effect，严格 mypy 和 Ruff 必须通过。
 
+## Immutable Filesystem ArtifactStore
+
+### Scope / Trigger
+
+新增或修改 Artifact 持久化、摘要、parent/supersedes lineage 或读取恢复时适用。`artifacts/` 包是 typed Artifact 与文件系统之间的唯一边界；Agent 和 domain model 不直接读写 artifact 文件。
+
+### Signatures
+
+```python
+class ArtifactStore(Protocol):
+    def put(self, artifact: Artifact) -> ArtifactRef: ...
+    def get(self, artifact_id: ArtifactId) -> Artifact: ...
+
+artifact_digest(artifact: Artifact) -> Sha256
+seal_artifact(artifact: Artifact, *, validated_at: datetime) -> Artifact
+FileArtifactStore(root: str | Path)
+```
+
+### Contracts
+
+- canonical digest 使用 `artifact.to_wire()`、排序 key、compact separators、UTF-8、`allow_nan=false`，并排除顶层 `integrity`；
+- `seal_artifact` 返回新 Artifact，不修改输入；`put` 要求 `schema_version=v0.1`、typed validation、`validated=true` 和 digest 匹配；
+- 文件名只来自已校验的 Artifact ID，布局为 `<root>/<artifact-id>.json`；
+- exact ID + exact wire payload 是幂等 no-op；相同 ID 的不同正文抛 `ArtifactAlreadyExists`；
+- 所有 parent/supersedes 必须已存在且同 Task；supersedes 还必须同 kind；
+- 写入顺序为同目录 temporary file → flush → `fsync` → `os.replace`；失败清理临时文件，不产生正式文件；
+- `get` 必须重新执行 typed validation、schema version 和 digest 校验，不能返回裸 dict。
+
+### Validation & Error Matrix
+
+| 输入/持久化问题 | 结果 |
+|---|---|
+| Artifact ID 不存在 | `ArtifactNotFound` |
+| unsealed 或 digest mismatch | `ArtifactIntegrityError`（put）/`ArtifactCorruption`（get） |
+| unsupported schema version | `SchemaVersionError`（put）/`ArtifactCorruption`（get） |
+| missing/cross-Task parent | `ArtifactParentError` |
+| supersedes 不同 kind | `ArtifactParentError` |
+| existing ID changed payload | `ArtifactAlreadyExists` |
+| JSON 截断、ID mismatch、typed validation failure | `ArtifactCorruption` |
+| NaN/Infinity 等非标准 JSON 数值 | `ArtifactValidationError` |
+
+### Good / Base / Bad Cases
+
+- **Good**：seal plan，put/get round-trip，随后实现报告引用该 plan 作为 parent；
+- **Base**：相同 sealed Artifact 重放时返回同一 ref，不重写文件；
+- **Bad**：让 Agent 自报 digest、覆盖旧 artifact、接受缺失 parent，或直接 `write_text` 到正式文件。
+
+### Tests Required
+
+- seal/digest deterministic、immutable input、put/get 和 ref 测试；
+- unsealed、digest mismatch、schema version、missing/cross-Task/cross-kind lineage 测试；
+- exact replay 与 immutable conflict 测试；
+- corrupted/truncated/tampered file 和 successful-write temp cleanup 测试；
+- 完整 JSON Schema contract suite、Ruff、strict mypy 和 build 必须通过。
+
+### Wrong vs Correct
+
+#### Wrong
+
+```python
+path.write_text(json.dumps(agent_payload))
+```
+
+#### Correct
+
+```python
+sealed = seal_artifact(artifact, validated_at=now)
+reference = artifact_store.put(sealed)
+assert artifact_store.get(reference.artifact_id) == sealed
+```
+
+前者让 Agent 自报内容和摘要并可覆盖历史证据；后者在 typed boundary 重新校验、验证 digest/lineage，并通过原子文件写入保持不可变。
+
 ## 8. Scenario: Installable CLI Package
 
 ### 8.1 Scope / Trigger

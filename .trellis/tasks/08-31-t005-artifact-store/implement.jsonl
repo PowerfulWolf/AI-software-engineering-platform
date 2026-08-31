@@ -1,0 +1,5 @@
+{"path":"src/ai_software_engineer/artifacts/ports.py","reason":"Typed ArtifactStore Protocol and durable ArtifactRef."}
+{"path":"src/ai_software_engineer/artifacts/store.py","reason":"Canonical digest, sealing, lineage validation, immutable replay, and atomic JSON persistence."}
+{"path":"src/ai_software_engineer/artifacts/__init__.py","reason":"Public ArtifactStore API and stable typed errors."}
+{"path":"tests/artifacts/test_store.py","reason":"Public-seam coverage for integrity, lineage, immutability, corruption, and atomic writes."}
+{"path":".trellis/spec/core/python-runtime.md","reason":"Executable ArtifactStore signatures, contracts, error matrix, cases, tests, and wrong/correct usage."}

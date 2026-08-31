@@ -8,7 +8,10 @@
 
 ```python
 AgentAdapter.run(request: AgentRequest) -> AgentResult
-ArtifactStore.put(artifact: ArtifactEnvelope) -> ArtifactRef
+ArtifactStore.put(artifact: Artifact) -> ArtifactRef
+ArtifactStore.get(artifact_id: ArtifactId) -> Artifact
+artifact_digest(artifact: Artifact) -> Sha256
+seal_artifact(artifact: Artifact, *, validated_at: datetime) -> Artifact
 Policy.check(role: AgentRole, operation: Operation) -> PolicyDecision
 validate_artifact(payload: object, kind: ArtifactKind) -> Artifact
 ```
@@ -28,6 +31,10 @@ validate_artifact(payload: object, kind: ArtifactKind) -> Artifact
 
 Artifact 通过 `schemas/artifact.schema.json` 的共同 envelope 传递；业务内容分别由 `plan.schema.json`、`implementation-report.schema.json`、`qa-report.schema.json`、`review-report.schema.json` 约束。Schema 变化必须同步更新 `docs/contracts.md`、`AGENTS.md` 和 contract fixtures。
 
+`FileArtifactStore` 只接受 `schema_version=v0.1`、typed union 校验通过、`integrity.validated=true` 且 canonical digest 匹配的 Artifact。Digest 排除顶层 `integrity` 避免循环；`seal_artifact` 返回带 digest 和 `validated_at` 的新 immutable Artifact。
+
+Artifact ID 映射到受控 root 下的单一 JSON 文件。相同 ID/相同正文重放幂等，相同 ID/不同正文拒绝覆盖；parent/supersedes 必须先存在且属于同一 Task，`supersedes` 还必须同 kind。写入采用同目录临时文件、`fsync` 和原子 rename。
+
 ### No self-approval
 
 `implementation-report` 只能描述实现事实；QA verdict 必须来自独立 QA run；Review verdict 必须来自独立 Reviewer run。任何同一 run 同时产出实现与批准信号都视为 policy violation。
@@ -46,6 +53,9 @@ Artifact 通过 `schemas/artifact.schema.json` 的共同 envelope 传递；业�
 | QA 有 `NOT_TESTED` required criterion | `qa-report=FAIL`，路由 Coder 或阻塞 | 是（FAIL） |
 | Reviewer `APPROVE` 但有 MAJOR/BLOCKER finding | validator 拒绝 verdict，重跑 Reviewer | 否 |
 | evidence URI/sha 缺失 | artifact 无效，不允许状态迁移 | 否 |
+| digest 不匹配或 `validated=false` | `ArtifactIntegrityError`，不落盘 | 否 |
+| parent/supersedes 缺失或越界 | `ArtifactParentError`，不落盘 | 否 |
+| 相同 artifact ID 的正文变化 | `ArtifactAlreadyExists`，保留旧正文 | 否 |
 
 ## 5. Good / Base / Bad Cases
 
@@ -60,6 +70,7 @@ Artifact 通过 `schemas/artifact.schema.json` 的共同 envelope 传递；业�
 - policy 对路径、命令、状态和 artifact 写入的拒绝测试；
 - 独立 run ID 测试：同一 run 不能同时产生 implementation 与 approval；
 - evidence 完整性、source revision 一致性和 supersedes 不可变测试。
+- 原子写入、exact replay、digest 篡改、缺失/跨 Task lineage 和损坏文件测试。
 
 ## 7. Wrong vs Correct
 
