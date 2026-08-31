@@ -33,7 +33,7 @@ The exact Git commit proposed for QA, review, and eventual human delivery.
 _Avoid_: Latest code, current branch
 
 **Context Manifest**:
-The deterministic inventory of sources, hashes, policy, prompt version, and budget supplied to one Agent Run.
+The deterministic, role-scoped inventory of redacted sources, hashes, machine policy, exact source revision, and token budget supplied to one Agent Run. Prompt-template versioning is a later extension; v0.1 does not infer sources from implicit conversation memory.
 _Avoid_: Prompt context, memory dump
 
 **Evidence**:

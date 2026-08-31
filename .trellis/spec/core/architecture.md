@@ -40,7 +40,7 @@ WorkspacePolicy.authorize_command(arguments: tuple[str, ...]) -> tuple[str, ...]
 - `run_task` 只能推进 `docs/state-machine.md` 中的合法迁移；
 - `validate_transition` 是唯一状态图入口；`build_event`/`apply_event` 必须保持纯函数，不得读写 repository；
 - `apply_event` 不得修改传入的 Task，且必须拒绝 Task ID、起始状态或时间戳不一致的事件；
-- `ContextBundle` 必须包含 source URI、SHA-256、token 计数、policy 和 `context_id`；
+- `ContextBundle` 必须包含 source URI、脱敏内容、SHA-256、token 计数、policy、精确 source revision 和 `context_id`；policy section 固定优先级 0，外部 source 不得占用该优先级；
 - `ArtifactStore.put` 只接受 Schema 校验通过且 `integrity.validated=true` 的 envelope；
 - `ArtifactStore.get` 返回重新校验且 digest 匹配的 typed Artifact；缺失、篡改或损坏文件返回稳定错误；
 - Artifact parent/supersedes 只能引用已存在的同 Task Artifact，写入采用临时文件、`fsync` 和原子 rename；
@@ -58,7 +58,7 @@ WorkspacePolicy.authorize_command(arguments: tuple[str, ...]) -> tuple[str, ...]
 |---|---|---|
 | Task 不符合 Schema | Task repository 边界 | 拒绝创建，不启动 Agent |
 | revision 不存在/不匹配 | Git manager + artifact validator | `BLOCKED`（外部 ref）或 `FAILED`（内部不变量） |
-| context 超预算/含 secret | Context Builder | 脱敏/裁剪；无法满足时 `BLOCKED` |
+| context 超预算/含 secret | Context Builder | 先脱敏再计数/哈希；optional 裁剪，required 无法满足时 `BLOCKED` |
 | worktree root/role/ref/revision 不合法 | Git manager | typed Git workspace error；不复用或清理现场 |
 | repository hook/filter 可能执行 | Git manager | hook 强制禁用；external filter 拒绝 create |
 | path/command 越权 | WorkspacePolicy | stable policy violation；命令不启动并生成 evidence |
@@ -76,7 +76,7 @@ WorkspacePolicy.authorize_command(arguments: tuple[str, ...]) -> tuple[str, ...]
 
 - 状态机：每条合法迁移 + 每个非法跳转断言拒绝和事务不变；
 - Artifact：正反 Schema、哈希篡改、重复 ID、revision mismatch；
-- Context：来源排序稳定、预算裁剪、secret redaction、prompt injection 不改变 policy；
+- Context：来源排序稳定、预算裁剪、secret redaction、priority 0 保留、prompt injection 不改变 policy；
 - Git：worktree 隔离、path/command allowlist、未保存变更阻止清理；
 - Recovery：中断后重放不重复 event，能回到最近 checkpoint。
 

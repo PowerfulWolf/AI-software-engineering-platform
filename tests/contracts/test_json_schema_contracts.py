@@ -9,6 +9,8 @@ import pytest
 from jsonschema import Draft202012Validator, FormatChecker
 from referencing import Registry, Resource
 
+from ai_software_engineer.context import ContextBudget, ContextSource, FileContextBuilder
+from ai_software_engineer.domain import AgentPermissions, AgentRole, NetworkAccess
 from ai_software_engineer.domain.model import WirePayload
 from tests.domain.factories import (
     make_agent,
@@ -140,6 +142,48 @@ def test_common_artifact_schema_requires_evidence_digest() -> None:
     ]
 
     _assert_invalid(payload, "artifact.schema.json")
+
+
+def test_context_bundle_satisfies_the_canonical_schema(tmp_path: Path) -> None:
+    bundle = FileContextBuilder(
+        tmp_path,
+        AgentPermissions(
+            read_paths=(),
+            write_paths=(),
+            commands=("pytest",),
+            network=NetworkAccess.NONE,
+        ),
+        sources=(
+            ContextSource(
+                source_id="evidence",
+                uri="evidence://contract",
+                content="contract evidence",
+            ),
+        ),
+        budget=ContextBudget(max_input_tokens=500, reserved_output_tokens=100),
+    ).build(make_task(), AgentRole.REVIEWER, attempt=1, candidate_revision="c" * 40)
+
+    _assert_valid(bundle.to_wire(), "context.schema.json")
+
+
+def test_context_schema_rejects_missing_section_hash(tmp_path: Path) -> None:
+    bundle = FileContextBuilder(
+        tmp_path,
+        AgentPermissions(
+            read_paths=(),
+            write_paths=(),
+            commands=("pytest",),
+            network=NetworkAccess.NONE,
+        ),
+    ).build(make_task(), AgentRole.CODER, attempt=1)
+    payload = bundle.to_wire()
+    sections = payload["sections"]
+    assert isinstance(sections, list)
+    section = sections[0]
+    assert isinstance(section, dict)
+    section.pop("sha256")
+
+    _assert_invalid(payload, "context.schema.json")
 
 
 def test_common_artifact_schema_rejects_invalid_timestamp_format() -> None:

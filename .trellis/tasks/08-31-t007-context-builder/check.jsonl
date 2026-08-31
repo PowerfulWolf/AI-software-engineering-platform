@@ -1,0 +1,8 @@
+{"path":"AGENTS.md","reason":"Policy precedence, role isolation, and no implicit Agent messages."}
+{"path":"CONTEXT.md","reason":"Organization-owned Context Manifest vocabulary."}
+{"path":"docs/context-routing.md","reason":"Canonical source layers, routing matrix, manifest, budget, and injection rules."}
+{"path":"docs/contracts.md","reason":"Agent permissions, context manifest ID, and artifact context references."}
+{"path":"docs/git-worktree.md","reason":"Root-bound path policy used for Context file sources."}
+{"path":".trellis/spec/core/architecture.md","reason":"ContextBuilder signature, source hash, policy, and replay invariants."}
+{"path":".trellis/spec/core/contracts.md","reason":"Context manifest as role/artifact contract input."}
+{"path":".trellis/spec/core/python-runtime.md","reason":"Typed Python, Protocol, file I/O, and canonical JSON quality contract."}

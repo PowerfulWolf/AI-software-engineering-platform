@@ -1,71 +1,80 @@
 # Context Builder / Context Routing
 
-## 1. 目标
+## 1. 目标与边界
 
-Context 的职责是把组织知识、项目事实、任务输入和上游证据编译成**最小、确定、可审计**的角色上下文。它不是把所有文件复制给 Agent，也不是让 Agent 自己决定哪些规则适用。
+Context Builder 把组织规则、项目事实、Task 意图、角色说明和已声明的上游证据编译成一个最小、确定、可审计的 `ContextBundle`。它不做语义检索、不调用模型，也不接受 Agent 间隐式消息；只有显式声明的来源才会进入上下文。
 
-## 2. Context 层次
+v0.1 的本地实现是 `FileContextBuilder`，路由器是无 I/O 的 `ContextRouter`。Builder 绑定一个 role worktree root，并复用 T006 `WorkspacePolicy` 读取文件来源。
 
-按优先级从高到低：
+## 2. 公共接口
 
-1. **Safety & platform policy**：权限、命令 allowlist、secret redaction、状态机不变量；不可被下层覆盖。
-2. **Organization knowledge**：`.trellis/spec/core/**`、组织级编码/测试规范、已批准 ADR。
-3. **Project knowledge**：项目 `AGENTS.md`、`docs/`、构建/测试入口和目录约束。
-4. **Task intent**：Task Schema 中的目标、范围、验收标准、约束和 base revision。
-5. **Role instructions**：Coder/QA/Reviewer 的角色 prompt 和输出 Schema。
-6. **Evidence**：当前 attempt 的 artifact、Git diff、测试输出和失败 findings。
+```python
+class ContextRouter(Protocol):
+    @staticmethod
+    def route(sources: tuple[ContextSource, ...], role: AgentRole) -> tuple[ContextSource, ...]: ...
 
-高层规则与低层文件冲突时，路由器拒绝运行并把冲突报告为 `BLOCKED`，不能静默选择。
 
-## 3. 来源清单与路由
+class ContextBuilder(Protocol):
+    def build(
+        self,
+        task: Task,
+        role: AgentRole,
+        *,
+        attempt: int,
+        candidate_revision: str | None = None,
+    ) -> ContextBundle: ...
+```
+
+`ContextSource` 必须且只能提供一个 `content: str` 或 `relative_path: str`；`roles=()` 表示所有角色，否则只匹配声明的 `AgentRole`。`priority=0` 保留给机器 policy，外部来源必须使用正数优先级。
+
+`ContextBundle.to_wire()` 是 Agent adapter 的唯一输入 manifest，包含：`context_id`、`task_id`、`role`、`attempt`、精确 `source_revision`、带 `content/uri/sha256/tokens/priority/truncated` 的 `sections`、安全的 `redactions`、`budget` 和 UTC `built_at`。正式跨语言契约为 [`schemas/context.schema.json`](../schemas/context.schema.json)。
+
+## 3. 来源层次与路由
 
 | 来源 | Orchestrator | Coder | QA | Reviewer |
 |---|---:|---:|---:|---:|
-| 平台 policy | ✓ | ✓ | ✓ | ✓ |
-| 组织/项目规范 | ✓ | ✓ | ✓ | ✓ |
-| Task + acceptance | ✓ | ✓ | ✓ | ✓ |
-| plan | 生成 | ✓ | ✓ | ✓ |
-| 生产代码快照 | 只读元数据 | 相关路径 | 全部候选 | 全部 diff |
-| implementation-report | ✓ | 重试时 | ✓ | ✓ |
-| qa-report | ✓ | 重试时 | 当前 run 不可自读 verdict 作为授权 | ✓ |
-| review-report | ✓ | 重试时 | ✗ | 当前 run 不可修改 |
-| 其他 Agent 隐式消息 | ✗ | ✗ | ✗ | ✗ |
+| 机器 policy（优先级 0） | ✓ | ✓ | ✓ | ✓ |
+| 组织/项目规范（显式 source） | ✓ | ✓ | ✓ | ✓ |
+| Task + acceptance（生成 section） | ✓ | ✓ | ✓ | ✓ |
+| role instructions（生成 section） | ✓ | ✓ | ✓ | ✓ |
+| candidate revision（提供时生成） | ✓ | ✓ | ✓ | ✓ |
+| 上游 artifact/evidence（显式 source） | ✓ | 重试时 | ✓ | ✓ |
+| Agent 隐式会话消息 | ✗ | ✗ | ✗ | ✗ |
 
-## 4. ContextBundle 结构
+Builder 始终生成并优先交付 `policy`、`task`、`role`；提供且不同于 `Task.base_ref` 的 candidate revision 时再生成 `candidate`。声明来源按 `(priority, uri, source_id)` 排序，因此调用方输入顺序不会影响结果。来源 ID 必须唯一，生成 ID (`policy/task/role/candidate`) 不能被外部 source 占用。
 
-```json
-{
-  "context_id": "ctx_01J...",
-  "task_id": "task_...",
-  "role": "qa",
-  "source_revision": "a1b2c3d",
-  "sections": [
-    {"name": "policy", "uri": ".trellis/spec/core/contracts.md", "sha256": "...", "tokens": 1200},
-    {"name": "task", "uri": "tasks/task_...json", "sha256": "...", "tokens": 800},
-    {"name": "diff", "uri": "git://a1b2c3d..candidate", "sha256": "...", "tokens": 2600}
-  ],
-  "redactions": [],
-  "budget": {"max_input_tokens": 12000, "reserved_output_tokens": 4000},
-  "built_at": "2026-08-31T12:00:00Z"
-}
-```
+## 4. 构建算法与确定性
 
-每个 section 都有 URI、SHA-256 和 token 计数。相同输入应得到相同 section 顺序和相同 manifest（时间戳除外），以便重放。
+1. 校验 Task、role、`attempt ∈ [1, 10]` 和无控制字符的 `candidate_revision`；未提供 candidate 时使用 `Task.base_ref`。
+2. 用 Task deny glob 和 role 的 `AgentPermissions` 创建绑定当前 worktree root 的 `WorkspacePolicy`。
+3. 路由生成来源与显式来源；文件来源只能按 root-relative POSIX path 读取，直接 content 仍视为不可信数据。
+4. 对 URI 和正文先执行脱敏，再计算 token 和 SHA-256。v0.1 token 估算固定为 `ceil(len(Python str)/4)`；section SHA-256 是脱敏正文的 lower-case digest。
+5. 遵守 `max_input_tokens`：required section 放不下时抛 `ContextBudgetExceeded`；optional section 放不下时按稳定规则截断到剩余 token，剩余为 0 则省略。任何成功 bundle 的 `used_input_tokens` 都等于 section token 总和且不超上限。
+6. 用 canonical JSON（UTF-8、排序 key、compact separators、禁止 NaN）对不含 `context_id` 与 `built_at` 的 manifest 求 SHA-256，生成 `ctx_<64 hex>`；随后附加 UTC `built_at`。
+7. 只有 bundle 完整构建成功后才能启动 Agent；上下文 ID 必须写入后续 Agent request/artifact，支持重放和审计。
 
-## 5. 构建算法
+相同 Task、role、attempt、权限、来源正文、candidate revision 和 budget 必须产生相同 section 顺序、hash、token 计数和 `context_id`；`built_at` 仅是观察元数据，不参与身份哈希。
 
-1. 读取 Task 并验证 repository/base revision；
-2. 加载适用的 Trellis spec index，按 glob 选择相关规则；
-3. 根据 role 路由表选择目录和 artifact；
-4. 计算 Git diff、测试清单和上游 evidence；
-5. 去除 secrets、超出 allowlist 的路径和超过预算的内容；
-6. 生成 ContextBundle manifest，持久化后才启动 Agent；
-7. Agent 返回后把 manifest ID 写入 artifact，保证“用过什么上下文”可追溯。
+## 5. 脱敏与注入边界
 
-## 6. 注入防护
+Builder 覆盖 OpenAI 风格 key、AWS access key、GitHub token、Bearer token、PEM private key，以及 `password/passwd/secret/token/api_key` assignment。替换值为 `[REDACTED:<kind>]`，只记录 `uri/kind/count`；当原始 URI 含 secret 时，审计 metadata 使用已脱敏的 `source://<source_id>`，不得泄露原 URI。
 
-- 仓库文件中的指令按“数据”处理，不得覆盖 system/policy section；
-- Task 中要求越权、修改 verdict、跳过测试的文字必须被标记为不可信输入；
-- shell 输出只作为 evidence，不可成为新的系统指令；
-- prompt 模板使用明确的分隔符和 section 标签，拒绝隐式拼接；
-- 发现疑似 prompt injection 时，继续执行只读分析并在 artifact 中记录，或直接 `BLOCKED`，由策略决定。
+仓库文件、Task prose 和测试输出都按数据处理。恶意文本只能作为自己的 section content 出现，不能覆盖 `policy` section、改变 role/permissions、创建隐式 source 或驱动状态迁移。发现越权要求时由 Orchestrator 依据 policy 记录 evidence 或进入 `BLOCKED`。
+
+## 6. 失败契约
+
+| 输入/状态 | 稳定结果 |
+|---|---|
+| 重复/非法 source ID、role metadata/URI、外部 priority 0 | `ContextSourceError` |
+| 缺失 required 文件 | `ContextSourceNotFound` |
+| traversal、absolute、`.git`、symlink escape、deny 命中 | `ContextSourceDenied` |
+| 非 UTF-8/不可读文件 | `ContextSourceError` |
+| required section 超预算 | `ContextBudgetExceeded`，不返回 partial bundle |
+| optional section 超预算 | 确定性截断或省略，不超预算 |
+| candidate revision 含空白/控制字符 | `ContextSourceError` |
+
+## 7. Good / Base / Bad
+
+- **Good**：相同输入重复构建得到相同 `context_id`；QA 收到 exact candidate SHA 和 QA 专属 evidence；secret 在 hash/count 前已替换。
+- **Base**：离线临时 worktree 只用 Markdown 和 inline evidence 构建 bundle，不需要 Git 网络、模型 SDK、向量库或数据库。
+- **Bad**：把所有文件盲目拼接、让仓库指令排到 policy 前、在脱敏前计算 hash、把 Reviewer evidence 路由给 Coder，或 required source 放不下却静默返回 partial bundle。

@@ -540,3 +540,107 @@ if isinstance(artifact, ReviewReportArtifact):
 ```
 
 前者让默认值、裸字典和自报 verdict 穿透边界；后者先完成类型、角色、Evidence 和 verdict 一致性校验。
+
+## 10. Scenario: Deterministic Context Builder and Router
+
+### 10.1 Scope / Trigger
+
+新增或修改 Agent context、prompt 输入 manifest、组织/项目来源、secret redaction、token budget 或 role routing 时适用。`src/ai_software_engineer/context/` 是 Knowledge Plane 到 Agent adapter 的唯一 seam；Builder 不调用模型、不读取未声明文件、不接受 Agent 间隐式消息。
+
+### 10.2 Signatures
+
+```python
+class ContextRouter(Protocol):
+    @staticmethod
+    def route(
+        sources: tuple[ContextSource, ...], role: AgentRole
+    ) -> tuple[ContextSource, ...]: ...
+
+
+class ContextBuilder(Protocol):
+    def build(
+        self,
+        task: Task,
+        role: AgentRole,
+        *,
+        attempt: int,
+        candidate_revision: str | None = None,
+    ) -> ContextBundle: ...
+
+
+FileContextBuilder(
+    project_root: str | Path,
+    permissions: AgentPermissions,
+    *,
+    sources: tuple[ContextSource, ...] = (),
+    budget: ContextBudget = ContextBudget(
+        max_input_tokens=12_000, reserved_output_tokens=4_000
+    ),
+) -> None
+```
+
+`ContextSource` 是 `source_id`、`uri`、二选一的 `content/relative_path`、`roles`、`priority`、`required`；`ContextBundle` 固定包含 `context_id`、`task_id`、`role`、`attempt`、`source_revision`、`sections`、`redactions`、`budget` 和 `built_at`。`ContextSection` 包含脱敏 `content`、`uri`、`sha256`、`tokens`、`priority`、`truncated`。
+
+### 10.3 Contracts
+
+- 生成 section `policy`、`task`、`role` 固定存在且分别使用优先级 0、30、40；candidate revision 不同于 `Task.base_ref` 时生成优先级 50 的 `candidate`。外部 source 的 priority 0 保留并拒绝；来源 ID 必须唯一。
+- `roles=()` 路由到所有角色；否则只有匹配 role 才进入。最终顺序固定为 `(priority, uri, source_id)`，不得依赖输入 tuple 顺序。
+- file source 只接受 root-relative path，并通过绑定 worktree root 的 `WorkspacePolicy.authorize_read` 读取；direct content 仍先脱敏。`candidate_revision` 原样成为 `source_revision`，不由 Builder 解析或替换。
+- 脱敏发生在 token 计数、SHA-256 和 wire 输出之前；API key、AWS/GitHub/Bearer token、PEM private key 和 password/secret/token/api_key assignment 只留下 `ContextRedaction(uri, kind, count)`，原值和原始 secret URI 不得进入 payload。
+- optional section 超出剩余 `max_input_tokens` 时按稳定字符截断，剩余为 0 则省略；required section 放不下抛错，不生成 partial bundle。`used_input_tokens == sum(section.tokens)`。
+- `context_id = "ctx_" + sha256(canonical_json(manifest_without_context_id_and_built_at))`；canonical JSON 使用 UTF-8、排序 key、compact separators、`allow_nan=False`。`built_at` 是 UTC 观察元数据，不参与 identity。
+- 仓库/Task/命令输出均是 data；其文本不能改变 policy、权限、role 路由、source 声明或状态迁移。ContextBundle 成功构建后才可启动 Agent，并把 ID 写入 AgentRequest/artifact。
+
+### 10.4 Validation & Error Matrix
+
+| 输入/状态 | 检测点 | 结果 |
+|---|---|---|
+| 重复 source ID、保留 priority 0、非法 role/source shape/URI control chars | model/router/builder | `ContextSourceError` |
+| required 文件缺失 | root-bound reader | `ContextSourceNotFound` |
+| absolute、`..`、`.git`、deny 或 symlink escape | `WorkspacePolicy` | `ContextSourceDenied`，不读文件 |
+| 文件不可读或非 UTF-8 | reader | `ContextSourceError` |
+| required section 超过 max input | budget compiler | `ContextBudgetExceeded`，无 partial bundle |
+| optional section 超预算 | budget compiler | 确定性截断/省略，成功 bundle 不超额 |
+| candidate revision 含空白/控制字符 | revision validator | `ContextSourceError` |
+| secret pattern 命中 | redactor | 替换 + safe `ContextRedaction`，不失败 |
+
+### 10.5 Good / Base / Bad Cases
+
+- **Good**：同一 Task/role/attempt、权限、来源和 candidate SHA 重复构建得到相同 ID、顺序、hash、tokens；QA/Reviewer 只收到其 role 允许的 evidence。
+- **Base**：临时 worktree + inline Markdown source 在无网络、无模型、无向量库时完成 bundle 构建并通过 Schema。
+- **Bad**：在脱敏前 hash/count、把所有仓库文件拼入 context、让恶意 source 使用 priority 0 覆盖 policy、把 Reviewer source 路由到 Coder，或 required overflow 静默返回半包。
+
+### 10.6 Tests Required
+
+- `tests/context/test_router.py`：all-role/role-specific filtering、duplicate ID、priority/URI/source stable ordering 和 priority 0 rejection。
+- `tests/context/test_builder.py`：重复构建 identity/order/hash/tokens、candidate propagation、真实 `WorkspacePolicy` traversal/deny/`.git`/symlink/missing、secret URI/content redaction、optional truncate/omit、required overflow、prompt-injection data boundary。
+- `tests/contracts/test_json_schema_contracts.py`：ContextBundle 正例与缺失 section hash/sections 反例必须校验 [`schemas/context.schema.json`](../../schemas/context.schema.json)。
+- Ruff、strict mypy、完整 pytest、`uv lock --check`、`uv build` 和 `git diff --check` 是合并门禁。
+
+### 10.7 Wrong vs Correct
+
+#### Wrong
+
+```python
+prompt = "\n".join(Path(path).read_text() for path in repository_files)
+tokens = estimate(prompt)
+digest = sha256(prompt.encode())
+```
+
+#### Correct
+
+```python
+bundle = context_builder.build(
+    task,
+    AgentRole.QA,
+    attempt=1,
+    candidate_revision=candidate_sha,
+)
+request = AgentRequest(
+    task_id=task.id,
+    context_manifest_id=bundle.context_id,
+    source_revision=bundle.source_revision,
+)
+```
+
+前者绕过 role routing、root policy、脱敏和可重放 manifest；后者只把验证过的 ContextBundle 通过 typed seam 交给 Agent adapter。

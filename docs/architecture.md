@@ -19,7 +19,7 @@ v0.1 解决一个窄而完整的问题：在已有 Git 项目中，把一条需�
 
 ### Knowledge Plane
 
-由 `.trellis/spec/`（组织级规则）、项目文档、任务 PRD/Design、历史 artifact 摘要和失败经验组成。Context Builder 只读取声明过的来源并生成带哈希的 manifest；不把整仓库或整段历史盲目塞给模型。
+由 `.trellis/spec/`（组织级规则）、项目文档、任务 PRD/Design、历史 artifact 摘要和失败经验组成。`context/` 中的 Context Router/Builder 只读取声明过的来源并生成带哈希、脱敏、预算约束的 manifest；不把整仓库或整段历史盲目塞给模型。policy section 由机器权限生成并固定排在外部文本之前，仓库内容永远是数据而非新的系统指令。
 
 ### Agent Execution Plane
 
@@ -45,11 +45,11 @@ v0.1 的 `GitWorktreeManager` 将所有 role worktree 放在 main checkout 外�
 Task(JSON)
   → validate + persist
   → plan artifact
-  → coder context(manifest + plan)
+  → coder context(policy + task + role + declared sources)
   → implementation-report + candidate commit
-  → QA context(manifest + diff + acceptance criteria)
+  → QA context(manifest + candidate revision + diff/evidence)
   → qa-report
-  → review context(manifest + code + qa-report)
+  → review context(manifest + candidate revision + qa-report)
   → review-report
   → DONE | retry Coder | BLOCKED
 ```

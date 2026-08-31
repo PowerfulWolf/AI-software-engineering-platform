@@ -1,0 +1,8 @@
+{"path":"schemas/context.schema.json","reason":"ContextBundle manifest wire contract for cross-language replay."}
+{"path":"src/ai_software_engineer/context/ports.py","reason":"ContextBuilder Protocol and ContextRouter seam."}
+{"path":"src/ai_software_engineer/context/models.py","reason":"Typed ContextSource, section, redaction, budget, and bundle values."}
+{"path":"src/ai_software_engineer/context/router.py","reason":"Pure deterministic role source routing."}
+{"path":"src/ai_software_engineer/context/builder.py","reason":"Root-bound source loading, redaction, budget, canonical hashing, and immutable bundle construction."}
+{"path":"tests/context/test_builder.py","reason":"Public-seam deterministic, redaction, budget, policy, and candidate revision tests."}
+{"path":"tests/context/test_router.py","reason":"Role routing and stable ordering tests."}
+{"path":"tests/contracts/test_json_schema_contracts.py","reason":"ContextBundle Python model to JSON Schema contract coverage."}
