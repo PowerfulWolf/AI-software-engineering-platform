@@ -1,0 +1,147 @@
+"""Keep Python domain payloads aligned with the canonical Draft 2020-12 schemas."""
+
+import json
+from collections.abc import Callable
+from pathlib import Path
+from typing import Protocol, cast
+
+import pytest
+from jsonschema import Draft202012Validator, FormatChecker
+from referencing import Registry, Resource
+
+from ai_software_engineer.domain.model import WirePayload
+from tests.domain.factories import (
+    make_agent,
+    make_implementation_artifact,
+    make_plan_artifact,
+    make_qa_artifact,
+    make_review_artifact,
+    make_task,
+)
+
+SCHEMA_DIR = Path(__file__).parents[2] / "schemas"
+
+
+class WireModel(Protocol):
+    def to_wire(self) -> WirePayload: ...
+
+
+type ModelFactory = Callable[[], WireModel]
+type JsonSchema = dict[str, object]
+
+
+def _load_schema(path: Path) -> JsonSchema:
+    decoded: object = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(decoded, dict):
+        raise TypeError(f"Schema must be a JSON object: {path}")
+    return cast(JsonSchema, decoded)
+
+
+SCHEMAS = {path.name: _load_schema(path) for path in SCHEMA_DIR.glob("*.schema.json")}
+REGISTRY = Registry().with_resources(
+    (
+        cast(str, schema["$id"]),
+        Resource.from_contents(schema),
+    )
+    for schema in SCHEMAS.values()
+)
+
+
+def _errors(payload: WirePayload, schema_name: str) -> list[str]:
+    validator = Draft202012Validator(
+        SCHEMAS[schema_name],
+        registry=REGISTRY,
+        format_checker=FormatChecker(),
+    )
+    return sorted(error.message for error in validator.iter_errors(payload))
+
+
+def _assert_valid(payload: WirePayload, schema_name: str) -> None:
+    assert _errors(payload, schema_name) == []
+
+
+def _assert_invalid(payload: WirePayload, schema_name: str) -> None:
+    assert _errors(payload, schema_name)
+
+
+@pytest.mark.parametrize(
+    ("factory", "schema_name"),
+    (
+        (make_task, "task.schema.json"),
+        (make_agent, "agent.schema.json"),
+        (make_plan_artifact, "plan.schema.json"),
+        (make_implementation_artifact, "implementation-report.schema.json"),
+        (make_qa_artifact, "qa-report.schema.json"),
+        (make_review_artifact, "review-report.schema.json"),
+    ),
+)
+def test_python_positive_examples_satisfy_the_canonical_schema(
+    factory: ModelFactory, schema_name: str
+) -> None:
+    _assert_valid(factory().to_wire(), schema_name)
+
+
+@pytest.mark.parametrize(
+    "factory",
+    (make_plan_artifact, make_implementation_artifact, make_qa_artifact, make_review_artifact),
+)
+def test_every_typed_artifact_satisfies_the_common_envelope(factory: ModelFactory) -> None:
+    _assert_valid(factory().to_wire(), "artifact.schema.json")
+
+
+def test_all_committed_schemas_are_valid_draft_2020_12_documents() -> None:
+    for schema in SCHEMAS.values():
+        Draft202012Validator.check_schema(schema)
+
+
+def test_task_schema_rejects_malformed_id() -> None:
+    payload = make_task().to_wire()
+    payload["id"] = "invalid"
+
+    _assert_invalid(payload, "task.schema.json")
+
+
+def test_agent_schema_rejects_unknown_properties() -> None:
+    payload = make_agent().to_wire()
+    payload["self_approve"] = True
+
+    _assert_invalid(payload, "agent.schema.json")
+
+
+@pytest.mark.parametrize(
+    ("factory", "schema_name"),
+    (
+        (make_plan_artifact, "plan.schema.json"),
+        (make_implementation_artifact, "implementation-report.schema.json"),
+        (make_qa_artifact, "qa-report.schema.json"),
+        (make_review_artifact, "review-report.schema.json"),
+    ),
+)
+def test_artifact_schema_rejects_missing_typed_content(
+    factory: ModelFactory, schema_name: str
+) -> None:
+    payload = factory().to_wire()
+    payload["content"] = {}
+
+    _assert_invalid(payload, schema_name)
+
+
+def test_common_artifact_schema_requires_evidence_digest() -> None:
+    payload = make_plan_artifact().to_wire()
+    payload["evidence"] = [
+        {
+            "evidence_id": "ev_missing_hash",
+            "type": "file",
+            "uri": "evidence/spec.txt",
+            "description": "Digest intentionally omitted.",
+        }
+    ]
+
+    _assert_invalid(payload, "artifact.schema.json")
+
+
+def test_common_artifact_schema_rejects_invalid_timestamp_format() -> None:
+    payload = make_plan_artifact().to_wire()
+    payload["created_at"] = "not-a-date"
+
+    _assert_invalid(payload, "artifact.schema.json")

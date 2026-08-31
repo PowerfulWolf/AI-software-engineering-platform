@@ -1,0 +1,8 @@
+{"path":"schemas/task.schema.json","reason":"Canonical cross-language Task wire contract."}
+{"path":"schemas/agent.schema.json","reason":"Canonical Agent Definition and permission wire contract."}
+{"path":"schemas/artifact.schema.json","reason":"Common Artifact, Evidence, Finding, and integrity contract."}
+{"path":"schemas/plan.schema.json","reason":"Plan Artifact content contract."}
+{"path":"schemas/implementation-report.schema.json","reason":"Coder output contract."}
+{"path":"schemas/qa-report.schema.json","reason":"Independent QA verdict contract."}
+{"path":"schemas/review-report.schema.json","reason":"Independent Reviewer verdict contract."}
+{"path":"CONTEXT.md","reason":"Organization-owned ubiquitous language for Task, Agent Run, Artifact, and Evidence."}

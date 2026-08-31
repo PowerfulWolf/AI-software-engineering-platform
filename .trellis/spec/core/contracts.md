@@ -10,7 +10,7 @@
 AgentAdapter.run(request: AgentRequest) -> AgentResult
 ArtifactStore.put(artifact: ArtifactEnvelope) -> ArtifactRef
 Policy.check(role: AgentRole, operation: Operation) -> PolicyDecision
-validate_artifact(payload: object, kind: ArtifactKind) -> ValidatedArtifact
+validate_artifact(payload: object, kind: ArtifactKind) -> Artifact
 ```
 
 `AgentRequest` 必须携带 `task_id`、`run_id`、`attempt`、`source_revision`、`context_manifest_id`、permissions 和 output schema；`AgentResult` 不能直接改变 Task 状态。
@@ -74,8 +74,8 @@ if "all tests pass" in coder_result.text:
 ### Correct
 
 ```python
-qa = validate_artifact(qa_payload, "qa-report")
-review = validate_artifact(review_payload, "review-report")
+qa = validate_artifact(qa_payload, ArtifactKind.QA_REPORT)
+review = validate_artifact(review_payload, ArtifactKind.REVIEW_REPORT)
 assert qa.producer.role == "qa" and review.producer.role == "reviewer"
 assert qa.source_revision == review.source_revision == candidate_sha
 assert qa.content["status"] == "PASS"

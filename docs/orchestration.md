@@ -32,7 +32,7 @@ def run_task(task_id: str) -> DeliveryResult:
     # v0.1 不新增 Planner 角色：由 Orchestrator 以 planning mode 调用 adapter，
     # 产出 plan artifact，但不获得业务代码写权限。
     plan = run_agent(role="orchestrator", mode="planning", task=task)
-    validate_artifact(plan, kind="plan", source_revision=task.base_revision)
+    validate_artifact(plan, kind=ArtifactKind.PLAN)
     store.put(plan)
 
     while task.attempts < task.max_attempts:

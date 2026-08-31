@@ -59,9 +59,12 @@ Human / Product Owner
 ai-software-engineer/
 ├── README.md
 ├── AGENTS.md                         # Codex 项目级 bootstrap 指令
+├── CONTEXT.md                        # 领域统一语言
 ├── pyproject.toml                    # Python 包、依赖与质量工具配置
 ├── src/ai_software_engineer/         # 控制平面 Python 包
-│   └── prompts/                      # 实现阶段：版本化 role prompt 模板
+│   ├── cli.py                        # ase 命令入口
+│   ├── domain/                       # Task、Agent、Artifact 强类型契约
+│   └── prompts/                      # 后续：版本化 role prompt 模板
 ├── docs/
 │   ├── architecture.md               # 分层、边界和部署形态
 │   ├── tech-stack.md                 # 技术选型与取舍
@@ -88,8 +91,11 @@ ai-software-engineer/
 │   ├── README.md
 │   └── spec/core/
 │       ├── architecture.md
-│       └── contracts.md
-├── tests/                            # 实现阶段：unit、contract、e2e
+│       ├── contracts.md
+│       └── python-runtime.md
+├── tests/
+│   ├── domain/                       # 单对象不变量和权限边界
+│   └── contracts/                    # Python model ↔ JSON Schema 一致性
 └── artifacts/runs/                   # 运行产物（默认 gitignored）
 ```
 
@@ -132,4 +138,6 @@ uv run mypy src tests
 
 ## 当前状态
 
-本目录是 v0.1 的设计基线（design baseline），不是已经完成的运行时代码。实现应严格按 `AGENTS.md` 和 `.trellis/spec/` 中的契约推进；任何契约变更先更新 Schema 与文档，再更新代码和测试。
+M0 设计基线、T001 Python CLI 骨架和 T002 领域模型已经完成。当前可运行 `ase`，并可用 Pydantic 校验 Task、Agent Definition 以及四类 Artifact；正反例同时受 canonical JSON Schema contract tests 保护。
+
+下一步是 T003：实现 SQLite Task repository 和幂等事件日志。后续实现仍严格按 `AGENTS.md` 与 `.trellis/spec/` 推进，任何跨语言契约变更先更新 Schema 和文档，再更新代码与测试。

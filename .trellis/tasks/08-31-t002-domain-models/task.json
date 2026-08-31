@@ -1,0 +1,10 @@
+{
+  "id": "task_t002_domain_models",
+  "title": "T002 Task, Agent, and Artifact domain models",
+  "status": "completed",
+  "branch": "ai/task_t002_domain_models/attempt-1",
+  "base_branch": "main",
+  "scope": "backend",
+  "created_at": "2026-08-31T15:03:00+08:00",
+  "updated_at": "2026-08-31T15:21:35+08:00"
+}

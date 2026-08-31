@@ -95,9 +95,10 @@
 ## 6. Artifact 通用规则
 
 - 正文符合对应 JSON Schema；
+- Python 入口先使用 `Task.model_validate`、`AgentDefinition.model_validate` 或 `validate_artifact` 转成 typed model；下游不解析裸 `dict`；
 - `producer` 是角色 + agent 版本 + run_id；
 - `source_revision` 指向实际读取/审查的 Git revision；
-- `evidence` 是可定位、可复核的引用，不接受“看起来没问题”这类无证据描述；
+- `evidence` 是带 URI 和 SHA-256、可定位、可复核的引用，不接受“看起来没问题”这类无证据描述；Finding 至少引用一个 envelope Evidence ID；
 - artifact 不可原地修改；修订通过新 artifact + `supersedes` 关系表达；
 - Schema 校验、哈希计算和持久化由 Orchestrator/ArtifactStore 完成，Agent 不能自报通过。
 
@@ -111,3 +112,9 @@
 | `review-report` | verdict、findings、checked_dimensions、evidence |
 
 详细机器契约见 [`schemas/`](../schemas/)。
+
+## 8. Python 领域入口
+
+`src/ai_software_engineer/domain/` 是 Python 控制平面的唯一领域类型入口。`TaskStatus`、`AgentRole` 和 `ArtifactKind` 不能在 store、agent adapter 或 orchestrator 中重复定义。`to_wire()` 负责生成 JSON-compatible payload 并省略不存在的 optional 字段；cross-language 消费者仍以 `schemas/*.json` 为准。
+
+Pydantic validator 只处理单个对象可判断的规则；Task required criterion 与 QA 结果是否一一对应、四类 Artifact 是否属于同一 candidate revision、各 verdict 是否来自独立 run 等跨对象规则，由后续 ArtifactStore/Orchestrator guard 执行。

@@ -1,0 +1,3 @@
+{"path":".trellis/spec/core/python-runtime.md","reason":"Primary executable contract for typed Python domain and wire boundaries."}
+{"path":".trellis/spec/core/contracts.md","reason":"Defines role ownership, evidence, verdict, and no-self-approval rules."}
+{"path":".trellis/tasks/08-31-t002-domain-models/prd.md","reason":"Verifies all T002 acceptance criteria and out-of-scope boundaries."}

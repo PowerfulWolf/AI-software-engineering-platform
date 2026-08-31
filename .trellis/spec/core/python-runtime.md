@@ -152,3 +152,84 @@ def run(task_id: str) -> None:
     result = service.run(TaskId(task_id))
     render_delivery_result(result)
 ```
+
+## 9. Scenario: Typed Domain and Wire Contracts
+
+### 9.1 Scope / Trigger
+
+新增或修改 `Task`、`AgentDefinition`、Artifact envelope、四类 Artifact content、共同 Enum 或跨语言 JSON 字段时适用。Python model 是不可信输入进入领域层的第一道边界；`schemas/*.json` 仍是其他语言和外部工具使用的正式 wire contract。
+
+### 9.2 Signatures
+
+```python
+Task.model_validate(payload: object) -> Task
+AgentDefinition.model_validate(payload: object) -> AgentDefinition
+validate_artifact(payload: object, kind: ArtifactKind) -> Artifact
+DomainModel.to_wire() -> WirePayload
+```
+
+实现位置固定为：
+
+```text
+src/ai_software_engineer/domain/
+├── enums.py
+├── model.py
+├── task.py
+├── agent.py
+└── artifact.py
+```
+
+### 9.3 Contracts
+
+- model 使用 Pydantic v2、`extra="forbid"` 和 `frozen=True`；所有 optional wire property 在 `to_wire()` 中缺省时省略，不能输出 Schema 不接受的 `null`；
+- `TaskStatus`、`AgentRole`、`ArtifactKind` 只在 `domain/enums.py` 定义；其他模块必须导入，不得复制字符串常量；
+- `AgentDefinition` 每个 role 只拥有一种 output：`orchestrator → plan`、`coder → implementation-report`、`qa → qa-report`、`reviewer → review-report`；
+- Artifact subtype 的 `kind`、typed `content` 和 `producer.role` 必须一致；
+- Artifact content 引用的 Evidence ID 必须存在于同一 envelope，Evidence 必须有 URI 和 SHA-256；Finding 至少引用一个 Evidence ID；
+- QA `PASS` 要求报告内 criterion/test 全为 `PASS` 且无 `MAJOR/BLOCKER`；Reviewer `APPROVE` 只允许 `INFO` finding，`REJECT` 至少包含一个 `MAJOR/BLOCKER`；
+- 需要 Task、候选 revision 或历史 artifact 才能判断的规则不得塞入单对象 validator，应由后续 Orchestrator/ArtifactStore guard 校验。
+
+### 9.4 Validation & Error Matrix
+
+| 输入问题 | 检测点 | 结果 |
+|---|---|---|
+| 未知字段、非法 ID/Enum、naive timestamp | Pydantic model boundary | `ValidationError`，不进入 repository |
+| Task attempt 超预算或两个 max-attempt 来源冲突 | `Task` after-validator | 拒绝 Task |
+| role/output 或 producer/kind 不匹配 | `AgentDefinition` / Artifact subtype | policy-invalid，不能产出 verdict |
+| content 引用不存在的 Evidence ID | Artifact subtype validator | artifact 无效 |
+| QA/Review verdict 与 findings 冲突 | content after-validator | verdict 无效，要求同角色重跑 |
+| Python wire payload 不符合 JSON Schema | `tests/contracts/test_json_schema_contracts.py` | CI 失败，阻止合并 |
+
+### 9.5 Good / Base / Bad Cases
+
+- **Good**：`validate_artifact` 按 `kind` 返回具体 subtype，`to_wire()` 可通过对应 Draft 2020-12 Schema；
+- **Base**：可选字段缺失时不写出 `null`，时间统一为带时区的 RFC 3339 字符串；
+- **Bad**：Coder 伪造 `qa-report`、Review `APPROVE` 同时携带 `MAJOR` finding，或测试引用 envelope 中不存在的 Evidence。
+
+### 9.6 Tests Required
+
+- `tests/domain/`：合法、非法、边界和同对象不变量；
+- `tests/contracts/test_json_schema_contracts.py`：Task、Agent 和四类 Artifact 的正例必须同时通过 Python model 与 canonical Schema；
+- Schema 反例至少覆盖非法 ID、未知字段、缺失 typed content、缺 Evidence SHA 和非法 date-time；
+- producer-role/output-kind、Evidence link、QA status 和 Review verdict 必须有独立断言；
+- Ruff、strict mypy 和完整 pytest 必须同时通过。
+
+### 9.7 Wrong vs Correct
+
+#### Wrong
+
+```python
+role = payload.get("role", "coder")
+if payload["content"].get("verdict") == "APPROVE":
+    advance_task(payload)
+```
+
+#### Correct
+
+```python
+artifact = validate_artifact(payload, ArtifactKind.REVIEW_REPORT)
+if isinstance(artifact, ReviewReportArtifact):
+    deliver_review(artifact)
+```
+
+前者让默认值、裸字典和自报 verdict 穿透边界；后者先完成类型、角色、Evidence 和 verdict 一致性校验。

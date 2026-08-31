@@ -9,7 +9,7 @@
     "evidence": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["evidence_id", "type", "uri", "description"],
+      "required": ["evidence_id", "type", "uri", "description", "sha256"],
       "properties": {
         "evidence_id": {"type": "string", "pattern": "^ev_[a-z0-9][a-z0-9_-]{2,63}$"},
         "type": {"enum": ["test", "command", "diff", "file", "log", "metric"]},
@@ -31,7 +31,7 @@
         "message": {"type": "string", "minLength": 1},
         "file": {"type": "string"},
         "line": {"type": "integer", "minimum": 1},
-        "evidence_ids": {"type": "array", "items": {"type": "string"}},
+        "evidence_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}},
         "recommendation": {"type": "string"}
       }
     }
