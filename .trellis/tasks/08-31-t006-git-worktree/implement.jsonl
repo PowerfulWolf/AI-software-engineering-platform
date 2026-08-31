@@ -1,0 +1,6 @@
+{"path":"src/ai_software_engineer/git/ports.py","reason":"Typed GitWorkspace interface and immutable worktree values."}
+{"path":"src/ai_software_engineer/git/worktree.py","reason":"Local Git CLI adapter for isolated create, inspect, and safe remove behavior."}
+{"path":"src/ai_software_engineer/git/policy.py","reason":"Machine read/write path and tokenized command authorization."}
+{"path":"tests/git/test_worktree.py","reason":"Real fixture repository tests through the public GitWorkspace seam."}
+{"path":"tests/git/test_policy.py","reason":"Good/Base/Bad path and command policy tests through the public interface."}
+{"path":".trellis/spec/core/python-runtime.md","reason":"Executable Git interfaces, subprocess contract, errors, cases, and test points."}

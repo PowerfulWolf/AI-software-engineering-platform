@@ -11,6 +11,17 @@
 
 权限必须由机器可验证的 policy 表达；自然语言 prompt 只是解释，不是授权来源。
 
+### AgentPermissions 的执行语义
+
+`WorkspacePolicy(worktree.path, permissions, denied_paths=...)` 是路径和命令授权入口：
+
+- `read_paths` 与 `write_paths` 分开匹配，写权限不从读权限推导；Task deny glob 永远优先；
+- 路径既检查 lexical canonical form，也在绑定的 worktree root 下解析 symlink，越过 root 或指向 `.git` 时抛 `PathPolicyViolation`；
+- `commands` 中每个字符串用 `shlex.split` 固化为 token prefix。运行时只接收 argv tuple，按完整 token 匹配并拒绝 shell syntax；
+- 返回成功只代表 operation 在 application policy 中获准，不代表可以绕过后续 executor 的 cwd、env、timeout、network、resource 和 evidence 约束。
+
+Git role workspace 由 `GitWorkspace.create/inspect/remove` 管理。Coder 使用 attempt branch；QA/Reviewer detached 到 candidate SHA；dirty workspace 不允许清理。完整错误与 Git 执行安全契约见 [`docs/git-worktree.md`](git-worktree.md)。
+
 ## 2. 共同输入信封
 
 每次 Agent 运行都收到以下固定结构：

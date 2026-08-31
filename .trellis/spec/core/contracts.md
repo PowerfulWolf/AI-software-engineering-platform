@@ -12,7 +12,11 @@ ArtifactStore.put(artifact: Artifact) -> ArtifactRef
 ArtifactStore.get(artifact_id: ArtifactId) -> Artifact
 artifact_digest(artifact: Artifact) -> Sha256
 seal_artifact(artifact: Artifact, *, validated_at: datetime) -> Artifact
-Policy.check(role: AgentRole, operation: Operation) -> PolicyDecision
+WorkspacePolicy(workspace_root: str | Path, permissions: AgentPermissions,
+                *, denied_paths: tuple[str, ...] = ())
+WorkspacePolicy.authorize_read(path: str | PurePosixPath) -> PurePosixPath
+WorkspacePolicy.authorize_write(path: str | PurePosixPath) -> PurePosixPath
+WorkspacePolicy.authorize_command(arguments: tuple[str, ...]) -> tuple[str, ...]
 validate_artifact(payload: object, kind: ArtifactKind) -> Artifact
 ```
 
@@ -26,6 +30,10 @@ validate_artifact(payload: object, kind: ArtifactKind) -> Artifact
 - `coder`：写允许的生产代码/单元测试，输出 implementation-report，不写 verdict；
 - `qa`：读候选代码，可写测试目录，输出 qa-report，不写生产代码；
 - `reviewer`：只读候选代码和上游 artifact，输出 review-report，不改仓库。
+
+### Machine workspace policy
+
+`WorkspacePolicy` 绑定一个 manager-owned role worktree root 和该 role 的 `AgentPermissions`。read/write allowlist 分别判断，Task deny glob 永远优先；absolute、`..`、`.git`、非 canonical path 和解析后越过 root 的 symlink 一律拒绝。command entry 解析为 token prefix，不能用 `git` 或字符串包含关系误授权 `git push`。policy violation 抛稳定错误，调用方后续必须将拒绝路径/argv 写成 evidence；自然语言 prompt 不参与授权。
 
 ### Artifact boundary
 
@@ -50,6 +58,8 @@ Artifact ID 映射到受控 root 下的单一 JSON 文件。相同 ID/相同正�
 | 缺少 required 字段 | Schema validator 拒绝，要求同角色重试一次 | 否 |
 | producer role 与 output kind 不匹配 | policy violation，`BLOCKED` | 否 |
 | Coder 写入 QA/Review artifact | 立即终止 run，保留命令/路径 evidence | 否 |
+| 路径越过 allowlist、deny、`.git` 或 worktree root | `PathPolicyViolation`，命令不启动 | 否 |
+| command token prefix 不匹配或含 shell syntax | `CommandPolicyViolation`，命令不启动 | 否 |
 | QA 有 `NOT_TESTED` required criterion | `qa-report=FAIL`，路由 Coder 或阻塞 | 是（FAIL） |
 | Reviewer `APPROVE` 但有 MAJOR/BLOCKER finding | validator 拒绝 verdict，重跑 Reviewer | 否 |
 | evidence URI/sha 缺失 | artifact 无效，不允许状态迁移 | 否 |

@@ -33,6 +33,8 @@ Artifact Store 保存 JSON artifact 正文、Schema 版本、producer、source r
 
 Git worktree 管理候选代码。Orchestrator 在主 checkout 上只做读取和 ref 操作；Coder 使用可写 worktree；QA 可在专用 worktree 写测试但不能改生产代码；Reviewer 只读。
 
+v0.1 的 `GitWorktreeManager` 将所有 role worktree 放在 main checkout 外，Coder 使用独立 attempt branch，QA/Reviewer detached 到同一 candidate SHA。`WorkspacePolicy` 绑定具体 worktree root，先做 path/command 授权；Git adapter 再用 argv、固定 cwd/env/timeout 执行。dirty worktree 保留用于 evidence/recovery，不 force cleanup。
+
 ### Human Boundary
 
 需求澄清、越权批准、冲突解决和最终合并都属于人类边界。任何无法在既定预算或证据标准内解决的情况都进入 `BLOCKED`，而不是让 Agent 自行放宽规则。
@@ -75,6 +77,7 @@ Artifact 的 Python 入口是 `Artifact` union；`FileArtifactStore` 以 Artifac
 3. 所有命令通过 allowlist 执行，禁止任意 shell 拼接；网络默认关闭，只有显式配置的包镜像/模型 endpoint 可访问。
 4. artifact 写入采用临时文件 + 原子 rename；校验失败的 artifact 不进入正式索引。
 5. Secret 不进入 context；日志和 artifact 写入前执行基本脱敏（API key、token、密码、私钥）。
+6. 内部 Git 调用禁用 repository hooks/fsmonitor 和 external diff/textconv；发现 repository-local external checkout filter 时 v0.1 fail closed。完整 OS/container sandbox 仍是 command executor 阶段的安全门，Git policy 不冒充该能力。
 
 ## 6. v0.1 非目标
 

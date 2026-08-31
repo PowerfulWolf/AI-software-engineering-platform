@@ -20,7 +20,21 @@ class TaskRepository(Protocol):
 
 class GitWorkspace(Protocol):
     def create(self, spec: WorktreeSpec) -> WorktreeRef: ...
-    def inspect(self, revision: GitRevision) -> CandidateSnapshot: ...
+    def inspect(self, worktree: WorktreeRef) -> WorktreeSnapshot: ...
+    def remove(self, worktree: WorktreeRef) -> None: ...
+
+
+class WorkspacePolicy:
+    def __init__(
+        self,
+        workspace_root: str | Path,
+        permissions: AgentPermissions,
+        *,
+        denied_paths: tuple[str, ...] = (),
+    ) -> None: ...
+    def authorize_read(self, path: str | PurePosixPath) -> PurePosixPath: ...
+    def authorize_write(self, path: str | PurePosixPath) -> PurePosixPath: ...
+    def authorize_command(self, arguments: tuple[str, ...]) -> tuple[str, ...]: ...
 ```
 
 CLI、数据库、Git、模型 SDK 和文件系统实现只能依赖这些端口，不得反向渗入领域层。
@@ -33,6 +47,7 @@ CLI、数据库、Git、模型 SDK 和文件系统实现只能依赖这些端口
 - `TaskStatus`、`AgentRole`、`ArtifactKind` 只有一个定义位置；
 - 模型 SDK 只能存在于 `agents/adapters/` 或等价 infrastructure 层；
 - subprocess 必须使用参数数组、timeout、明确 cwd 和环境 allowlist，不使用 `shell=True`；
+- Git adapter 必须禁用 repository hooks/fsmonitor，拒绝 repository-local external checkout filters，并用 `--no-ext-diff --no-textconv` 检查变更；
 - 依赖必须锁定；新增依赖要记录消除的 failure mode；
 - JSON Schema 是跨语言 wire contract，Python model 必须有一致性测试。
 
@@ -273,6 +288,105 @@ assert artifact_store.get(reference.artifact_id) == sealed
 ```
 
 前者让 Agent 自报内容和摘要并可覆盖历史证据；后者在 typed boundary 重新校验、验证 digest/lineage，并通过原子文件写入保持不可变。
+
+## Isolated Git Worktree and Workspace Policy
+
+### 1. Scope / Trigger
+
+新增或修改 Git worktree、候选 revision 检查、role workspace 清理、路径/命令授权或任何 Git subprocess 时适用。`src/ai_software_engineer/git/` 是 Orchestrator 与本地 Git CLI 之间的唯一 seam；Agent 不得提交任意 Git 字符串给该 adapter。
+
+### 2. Signatures
+
+```python
+class GitWorkspace(Protocol):
+    def create(self, spec: WorktreeSpec) -> WorktreeRef: ...
+    def inspect(self, worktree: WorktreeRef) -> WorktreeSnapshot: ...
+    def remove(self, worktree: WorktreeRef) -> None: ...
+
+
+GitWorktreeManager(repository: str | Path, worktree_root: str | Path,
+                   *, command_timeout_seconds: float = 30.0)
+
+
+WorkspacePolicy(workspace_root: str | Path,
+                permissions: AgentPermissions,
+                *, denied_paths: tuple[str, ...] = ())
+
+WorkspacePolicy.authorize_read(path: str | PurePosixPath) -> PurePosixPath
+WorkspacePolicy.authorize_write(path: str | PurePosixPath) -> PurePosixPath
+WorkspacePolicy.authorize_command(arguments: tuple[str, ...]) -> tuple[str, ...]
+```
+
+`WorktreeSpec` 字段固定为 `task_id`、`role`、`attempt`、`source_revision`；`WorktreeRef` 固定返回 role layout、完整 HEAD SHA、branch 或 detached 标志；`WorktreeSnapshot` 返回当前完整 HEAD SHA 和已排序的 staged/unstaged/untracked relative paths。
+
+### 3. Contracts
+
+- worktree root 必须位于 main checkout 之外，layout 固定为 `<root>/<task-id>/<role>-attempt-<NN>`；create 在落盘前解析 target 的已有 symlink parents，结果必须仍位于 configured root 内；
+- Coder 创建 `ai/<task-id>/attempt-<n>` branch，QA/Reviewer detached 到同一 candidate commit；Orchestrator role 不允许构造 `WorktreeSpec`；
+- source ref 必须先通过 `git rev-parse --verify --end-of-options <ref>^{commit}` 固化为完整 SHA；已有 target 或 Coder branch 不复用；
+- `inspect/remove` 只接受 layout 和 Git common directory 都与 manager 匹配的 `WorktreeRef`；
+- `remove` 先检查 staged、unstaged 和 untracked paths，dirty worktree 抛 `DirtyWorktree(changed_paths)` 并保留现场，clean cleanup 不删除 branch/commit；
+- Git subprocess 只使用 argv、`shell=False`、固定 timeout、明确 cwd 和最小 env；每次 invocation 覆盖 `core.hooksPath=/dev/null`、`core.fsmonitor=false`；
+- repository-local `filter.*.(clean|smudge|process)` 可能在 checkout 运行外部程序，v0.1 在 create 前以 `UnsafeRepositoryConfiguration` fail closed；diff inspection 传 `--no-ext-diff --no-textconv`；
+- `WorkspacePolicy` 必须绑定实际 role worktree root。路径先做 POSIX lexical validation，再解析已有 symlink parents 并验证仍在 root 内且不指向 `.git`；deny glob 优先于 role read/write allowlist；
+- command allowlist entry 用 `shlex.split` 解析成完整 token prefix。运行时只接受预先 tokenized argv；空命令、shell 控制 token、换行、`$()`、backtick 或未匹配 prefix 都拒绝；
+- path/command policy 是 application guard，不替代未来的 OS/container sandbox、network isolation、resource limit 和 command-argument-specific controls。
+
+### 4. Validation & Error Matrix
+
+| 输入/状态 | 结果 |
+|---|---|
+| repository 不存在、不是 Git root 或传入子目录 | `InvalidRepository` |
+| worktree root 位于 main checkout 内，或 task target 经 symlink 逃逸 root | `InvalidWorktreeRoot`，不创建目录 |
+| source ref 不存在/不是 commit | `RevisionNotFound` |
+| repository-local external checkout filter | `UnsafeRepositoryConfiguration`，不执行 filter |
+| target path 或 Coder branch 已存在 | `WorktreeAlreadyExists`，不复用旧现场 |
+| ref path/layout/common Git directory 不匹配 | `UnmanagedWorktree` |
+| cleanup 前有 tracked/untracked change | `DirtyWorktree.changed_paths`，保留 worktree |
+| Git non-zero/timeout | `GitCommandError` / `GitCommandTimeout` |
+| workspace root 不存在、absolute/traversal/`.git`/symlink escape/deny path | `PathPolicyViolation` |
+| argv/allowlist 为空、含 shell syntax 或 prefix 不匹配 | `CommandPolicyViolation` |
+
+### 5. Good / Base / Bad Cases
+
+- **Good**：Coder 在独立 branch 形成 candidate；QA/Reviewer detached 到同一 SHA；inspection 返回相同 HEAD；clean worktree 可回收且 candidate branch 保留。
+- **Base**：无网络的临时 Git repository 创建一个 role worktree，main HEAD/branch/status 完全不变。
+- **Bad**：把 worktree root 放进 main checkout、允许 `../secret` 或 symlink escape、把 `git push` 错配成 `git diff`、执行 repository hook/filter，或 force-remove dirty worktree。
+
+### 6. Tests Required
+
+- 真实 temporary Git fixture 断言 Coder branch、QA/Reviewer detached SHA、目录隔离和 main checkout 不变；
+- inspection 同时断言 staged、unstaged、untracked path；cleanup 断言 dirty preserve、clean remove、branch retain；
+- 反例覆盖 invalid role/repository/root/revision、symlinked task directory escape、target/branch collision 和 forged ref；
+- policy 覆盖 read/write separation、deny precedence、absolute/`..`/`.git`、symlink escape、empty Reviewer writes、command token prefix collision 和 shell-like argv；
+- executable `post-checkout` hook 的 sentinel 必须不生成；external smudge/process filter 必须在执行前被拒绝；
+- Ruff、strict mypy、完整 pytest、lock、build 和 `git diff --check` 全部通过。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+subprocess.run(agent_command, cwd=main_checkout, shell=True)
+shutil.rmtree(worktree_path, ignore_errors=True)
+```
+
+#### Correct
+
+```python
+worktree = git_workspace.create(spec)
+policy = WorkspacePolicy(worktree.path, permissions, denied_paths=task_denied_paths)
+safe_path = policy.authorize_write("src/package/service.py")
+safe_argv = policy.authorize_command(("pytest", "tests/unit", "-q"))
+
+snapshot = git_workspace.inspect(worktree)
+if snapshot.dirty:
+    persist_changed_path_evidence(snapshot.changed_paths)
+else:
+    git_workspace.remove(worktree)
+```
+
+前者把 prompt、main checkout 和 destructive cleanup 组合成不可审计执行；后者只通过 typed seam、绑定 root 的 policy 和 dirty guard 推进。
 
 ## 8. Scenario: Installable CLI Package
 
