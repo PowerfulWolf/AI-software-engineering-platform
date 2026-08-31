@@ -59,7 +59,9 @@ Human / Product Owner
 ai-software-engineer/
 ├── README.md
 ├── AGENTS.md                         # Codex 项目级 bootstrap 指令
-├── pyproject.toml                    # v0.1 运行时（实现阶段创建）
+├── pyproject.toml                    # Python 包、依赖与质量工具配置
+├── src/ai_software_engineer/         # 控制平面 Python 包
+│   └── prompts/                      # 实现阶段：版本化 role prompt 模板
 ├── docs/
 │   ├── architecture.md               # 分层、边界和部署形态
 │   ├── tech-stack.md                 # 技术选型与取舍
@@ -87,8 +89,6 @@ ai-software-engineer/
 │   └── spec/core/
 │       ├── architecture.md
 │       └── contracts.md
-├── runtime/                          # 实现阶段：orchestrator、adapters、policy
-│   └── prompts/                       # 实现阶段：版本化 role prompt 模板
 ├── tests/                            # 实现阶段：unit、contract、e2e
 └── artifacts/runs/                   # 运行产物（默认 gitignored）
 ```
@@ -102,6 +102,18 @@ ai-software-engineer/
 - 每次 Agent 运行都有超时、token budget、最大重试次数和可复现的 context manifest。
 
 具体选择和理由见 [`docs/tech-stack.md`](docs/tech-stack.md)。
+
+## 开发环境
+
+```bash
+uv sync
+uv run ase --help
+uv run pytest
+uv run ruff check .
+uv run mypy src tests
+```
+
+项目使用 Python 3.12+。uv 会读取 `.python-version` 并建立隔离环境；`ase` 是平台 CLI 入口。
 
 ## 文档导航
 

@@ -70,4 +70,4 @@ Every finding needs severity, location, explanation, and evidence IDs.
 
 ## Prompt 版本化
 
-模板存放在 `runtime/prompts/<role>.md.j2`（实现阶段），每次运行在 context manifest 中记录模板 SHA 和版本。修改 prompt 等同于修改代码契约：先更新 `.trellis/spec/core/contracts.md`，再更新测试 fixture。
+模板存放在 `src/ai_software_engineer/prompts/<role>.md.j2`（实现阶段），每次运行在 context manifest 中记录模板 SHA 和版本。修改 prompt 等同于修改代码契约：先更新 `.trellis/spec/core/contracts.md`，再更新测试 fixture。

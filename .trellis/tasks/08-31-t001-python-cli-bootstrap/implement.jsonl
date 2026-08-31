@@ -1,0 +1,4 @@
+{"path":".trellis/spec/core/architecture.md","reason":"Defines control-plane boundaries and required invariants."}
+{"path":".trellis/spec/core/contracts.md","reason":"Prevents CLI bootstrap from inventing or bypassing role/artifact contracts."}
+{"path":".trellis/spec/core/python-runtime.md","reason":"Defines Python typing, packaging, adapter, dependency, and test requirements."}
+{"path":"docs/tech-stack.md","reason":"Records the accepted Python, Typer, uv, pytest, and Ruff choices."}

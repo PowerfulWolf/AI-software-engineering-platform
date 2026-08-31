@@ -1,0 +1,10 @@
+{
+  "id": "task_t001_python_cli",
+  "title": "T001 Python package and CLI bootstrap",
+  "status": "completed",
+  "branch": "ai/task_t001_python_cli/attempt-1",
+  "base_branch": "main",
+  "scope": "backend",
+  "created_at": "2026-08-31T15:00:00+08:00",
+  "updated_at": "2026-08-31T16:00:00+08:00"
+}

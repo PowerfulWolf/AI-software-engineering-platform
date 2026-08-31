@@ -17,6 +17,7 @@
 | Agent 接口 | `AgentAdapter`（OpenAI-compatible 默认） | 模型供应商可替换，角色契约不绑定某家 API | 在 Orchestrator 中硬编码 SDK |
 | 测试 | pytest + contract fixtures | 覆盖状态机、Schema、权限和端到端 happy path | 只做手工演示 |
 | 可观测性 | 结构化 JSONL 日志 + SQLite metrics | 本地可用，易导出；保留 task/attempt/agent 关联 | 先上完整 tracing 平台 |
+| 构建后端 | Hatchling | 配置小、支持 `src` layout 和单一版本来源，不侵入运行时 | 自定义构建脚本 |
 | 打包 | `pyproject.toml` + uv/pip | 简洁、可重复安装 | 多模块容器平台 |
 
 ## 关键接口（实现阶段）
@@ -25,8 +26,10 @@
 class AgentAdapter(Protocol):
     def run(self, request: AgentRequest) -> AgentResult: ...
 
+
 class ContextBuilder(Protocol):
     def build(self, task: Task, role: AgentRole) -> ContextBundle: ...
+
 
 class ArtifactStore(Protocol):
     def put(self, artifact: ArtifactEnvelope) -> ArtifactRef: ...

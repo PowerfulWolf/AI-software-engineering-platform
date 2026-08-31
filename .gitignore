@@ -5,6 +5,10 @@ node_modules/
 dist/
 build/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 __pycache__/
 .trellis/.developer
 .trellis/.runtime/

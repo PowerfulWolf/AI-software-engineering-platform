@@ -1,0 +1,3 @@
+{"path":".trellis/spec/core/python-runtime.md","reason":"Primary quality contract for the new Python package."}
+{"path":".trellis/spec/core/architecture.md","reason":"Check that the CLI remains a thin delivery boundary."}
+{"path":".trellis/tasks/08-31-t001-python-cli-bootstrap/prd.md","reason":"Verify every T001 acceptance criterion and out-of-scope boundary."}

@@ -56,8 +56,7 @@ def run_task(task_id: str) -> DeliveryResult:
 
         assert transition(task, "REVIEW")
         review_ctx = context.build(task, role="reviewer", candidate=impl.commit_sha)
-        review_result = agents.run("reviewer", review_ctx,
-                                   policy=policy.for_role("reviewer"))
+        review_result = agents.run("reviewer", review_ctx, policy=policy.for_role("reviewer"))
         review = validate_and_store(review_result, "review-report", task)
         if review.verdict == "APPROVE":
             assert git.clean_candidate(impl.commit_sha)

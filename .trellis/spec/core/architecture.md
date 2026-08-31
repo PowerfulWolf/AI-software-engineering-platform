@@ -62,12 +62,15 @@ if agent_text.lower().startswith("looks good"):
 ### Correct
 
 ```python
-review = artifact_store.validate_and_get(review_artifact_id,
-                                         schema="review-report")
+review = artifact_store.validate_and_get(review_artifact_id, schema="review-report")
 assert review.source_revision == candidate_sha
 assert review.content["verdict"] == "APPROVE"
-transition(task.id, "DONE", reason="review_approved",
-           artifact_ids=[plan_id, impl_id, qa_id, review_artifact_id])
+transition(
+    task.id,
+    "DONE",
+    reason="review_approved",
+    artifact_ids=[plan_id, impl_id, qa_id, review_artifact_id],
+)
 ```
 
 ## 8. Required invariants
