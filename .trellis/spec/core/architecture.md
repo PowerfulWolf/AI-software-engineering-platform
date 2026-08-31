@@ -10,6 +10,12 @@
 run_task(task_id: str) -> DeliveryResult
 transition(task_id: str, to_status: TaskStatus, *, reason: str,
            artifact_ids: list[str] = ()) -> StateEvent
+validate_transition(task: Task, to_status: TaskStatus) -> None
+build_event(task: Task, to_status: TaskStatus, *, event_id: EventId,
+            reason: str, source_revision: str,
+            artifact_ids: tuple[ArtifactId, ...] = (),
+            occurred_at: datetime) -> StateEvent
+apply_event(task: Task, event: StateEvent) -> Task
 ContextBuilder.build(task: Task, role: AgentRole, *, attempt: int,
                      candidate_revision: str | None = None) -> ContextBundle
 ArtifactStore.put(artifact: ArtifactEnvelope) -> ArtifactRef
@@ -25,6 +31,8 @@ TaskRepository.current_revision(task_id: TaskId) -> int
 ## 3. Contracts
 
 - `run_task` 只能推进 `docs/state-machine.md` 中的合法迁移；
+- `validate_transition` 是唯一状态图入口；`build_event`/`apply_event` 必须保持纯函数，不得读写 repository；
+- `apply_event` 不得修改传入的 Task，且必须拒绝 Task ID、起始状态或时间戳不一致的事件；
 - `ContextBundle` 必须包含 source URI、SHA-256、token 计数、policy 和 `context_id`；
 - `ArtifactStore.put` 只接受 Schema 校验通过且 `integrity.validated=true` 的 envelope；
 - `StateEvent` 必须包含 `event_id`、from/to status、actor、reason、source revision 和 artifact IDs；

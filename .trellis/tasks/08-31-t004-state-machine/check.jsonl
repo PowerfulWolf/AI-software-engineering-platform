@@ -1,0 +1,5 @@
+{"path":".trellis/spec/core/architecture.md","reason":"Defines pure transition/reducer seams and orchestrator ownership."}
+{"path":".trellis/spec/core/python-runtime.md","reason":"Defines typed Python implementation and test requirements."}
+{"path":".trellis/spec/core/contracts.md","reason":"Defines StateEvent actor and artifact boundaries."}
+{"path":"docs/state-machine.md","reason":"Canonical v0.1 status graph and replay rules."}
+{"path":"schemas/state-event.schema.json","reason":"Canonical StateEvent wire contract reused by T004."}

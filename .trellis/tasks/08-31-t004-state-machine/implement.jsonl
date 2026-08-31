@@ -1,0 +1,4 @@
+{"path":"src/ai_software_engineer/orchestration/state_machine.py","reason":"Canonical pure transition graph, typed guards, event builder, and reducer."}
+{"path":"src/ai_software_engineer/orchestration/__init__.py","reason":"Public orchestration policy exports."}
+{"path":"tests/orchestration/test_state_machine.py","reason":"Full legal/illegal edge and reducer contract coverage."}
+{"path":"docs/state-machine.md","reason":"Documents the exact Python guard/reducer signatures and behavior."}

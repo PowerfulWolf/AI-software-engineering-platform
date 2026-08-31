@@ -119,6 +119,8 @@
 
 `SqliteTaskRepository` 对重复事件执行精确幂等：正文相同直接成功且不新增 revision，正文不同抛出 `EventIdempotencyConflict`。未知 Task、stale `from_status`、重复 Task ID 和损坏 JSON 都转换为 typed repository error，不返回半结构化数据。
 
+状态图由 `orchestration.state_machine` 的 `validate_transition`/`build_event`/`apply_event` 唯一维护。Repository 不自行放宽或扩展迁移边；ArtifactStore/Orchestrator 后续再对 QA PASS、Review APPROVE 和 candidate revision 做跨 Artifact 守卫。
+
 ## 9. Python 领域入口
 
 `src/ai_software_engineer/domain/` 是 Python 控制平面的唯一领域类型入口。`TaskStatus`、`AgentRole` 和 `ArtifactKind` 不能在 store、agent adapter 或 orchestrator 中重复定义。`to_wire()` 负责生成 JSON-compatible payload 并省略不存在的 optional 字段；cross-language 消费者仍以 `schemas/*.json` 为准。

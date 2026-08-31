@@ -153,6 +153,54 @@ assert repository.current_revision(event.task_id) == 1
 
 前者产生没有事件证据的状态写入并留下部分提交风险；后者让 Task 快照和 StateEvent 在一个事务中前进。
 
+## Task State Machine Guard and Reducer
+
+### Scope / Trigger
+
+新增状态迁移、Orchestrator 路由或 StateEvent 回放时适用。状态图只能在 `orchestration/state_machine.py` 定义一次；该模块是纯函数，不得导入 SQLite、Git、Agent SDK 或执行 subprocess。
+
+### Signatures
+
+```python
+validate_transition(task: Task, to_status: TaskStatus) -> None
+build_event(task: Task, to_status: TaskStatus, *, event_id: EventId,
+            reason: str, source_revision: str,
+            artifact_ids: tuple[ArtifactId, ...] = (),
+            occurred_at: datetime) -> StateEvent
+apply_event(task: Task, event: StateEvent) -> Task
+```
+
+### Contracts
+
+- `NEW -> PLANNING -> IMPLEMENTING -> QA -> REVIEW -> DONE` 是主路径；QA/Review 的 retry、BLOCKED 和非终态到 FAILED 是唯一额外边；
+- `DONE`、`BLOCKED`、`FAILED` 为终态，自迁移和终态迁移拒绝；
+- `build_event` 固定 `actor=orchestrator`，必须先通过 `validate_transition`；
+- `apply_event` 检查 Task ID、`from_status`、合法边和 `occurred_at >= task.updated_at`，返回 `model_copy`，不得修改输入；
+- repository 只持久化事件，不重复实现状态图；Artifact verdict、candidate revision 和 attempt budget 属于后续跨对象 guard。
+
+### Validation & Error Matrix
+
+| 输入问题 | 检测点 | 结果 |
+|---|---|---|
+| 未定义边或自迁移 | `validate_transition` | `IllegalTransition` |
+| Task 已处于终态 | `validate_transition` | `TerminalTask` |
+| Event Task ID 不匹配 | `apply_event` | `TaskMismatch` |
+| Event 起始状态落后 | `apply_event` | `StaleEvent` |
+| Event 时间早于快照 | `apply_event` | `StaleEvent` |
+
+### Good / Base / Bad Cases
+
+- **Good**：`build_event` 生成 orchestrator-owned StateEvent，`apply_event` 返回新快照，原 Task 保持不变；
+- **Base**：调用方使用 fake artifact metadata，纯 reducer 仍可离线测试完整状态图；
+- **Bad**：直接写 `task.status`、绕过 guard，或让 repository 接受跳过 QA/Review 的事件。
+
+### Tests Required
+
+- 每条合法边、每个终态、自迁移和代表性跳转错误都有断言；
+- 生成事件通过 StateEvent Pydantic 与 JSON Schema contract；
+- Task ID、from_status、时间戳错误返回 typed error 且原快照不变；
+- reducer 测试禁止 I/O/import side effect，严格 mypy 和 Ruff 必须通过。
+
 ## 8. Scenario: Installable CLI Package
 
 ### 8.1 Scope / Trigger
