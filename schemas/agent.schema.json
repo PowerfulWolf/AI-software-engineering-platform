@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/agent.schema.json",
+  "title": "Agent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "role", "version", "model", "permissions", "input_artifacts", "output_artifacts", "max_retries", "timeout_seconds"],
+  "properties": {
+    "id": {"type": "string", "pattern": "^agent_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "role": {"enum": ["orchestrator", "coder", "qa", "reviewer"]},
+    "version": {"type": "string", "minLength": 1},
+    "model": {"type": "string", "minLength": 1},
+    "provider": {"type": "string"},
+    "system_prompt_ref": {"type": "string", "minLength": 1},
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["read_paths", "write_paths", "commands", "network"],
+      "properties": {
+        "read_paths": {"type": "array", "items": {"type": "string"}},
+        "write_paths": {"type": "array", "items": {"type": "string"}},
+        "commands": {"type": "array", "items": {"type": "string"}},
+        "network": {"enum": ["none", "model_endpoint_only", "allowlist"]},
+        "can_change_state": {"type": "boolean", "default": false},
+        "can_merge": {"type": "boolean", "default": false}
+      }
+    },
+    "input_artifacts": {"type": "array", "items": {"enum": ["plan", "implementation-report", "qa-report", "review-report"]}},
+    "output_artifacts": {"type": "array", "items": {"enum": ["plan", "implementation-report", "qa-report", "review-report"]}},
+    "max_retries": {"type": "integer", "minimum": 0, "maximum": 5},
+    "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 3600},
+    "token_budget": {"type": "integer", "minimum": 1},
+    "metadata": {"type": "object"}
+  }
+}

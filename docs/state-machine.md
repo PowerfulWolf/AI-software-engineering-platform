@@ -1,0 +1,64 @@
+# Task 状态机
+
+## 1. 状态集合
+
+| 状态 | 含义 | 可停留条件 |
+|---|---|---|
+| `NEW` | Task 已创建但尚未检查 | Schema 合法、仓库可访问 |
+| `PLANNING` | 生成并校验 plan | 需求和验收标准足够明确 |
+| `IMPLEMENTING` | Coder 在候选 worktree 中实现 | 有有效 plan，且未超出重试预算 |
+| `QA` | QA 执行测试并产出 verdict | 有候选 revision 和 implementation-report |
+| `REVIEW` | Reviewer 独立审查 | QA `PASS` 且候选 revision 未变化 |
+| `DONE` | Review `APPROVE`，候选变更可交付 | 所有 required checks 有证据 |
+| `BLOCKED` | 需要人类处理或外部条件 | 需求冲突、预算耗尽、环境不可用等 |
+| `FAILED` | 平台自身不可恢复故障 | 数据损坏、内部 invariant 违反 |
+
+## 2. 合法迁移
+
+```text
+NEW ──validate──> PLANNING
+PLANNING ──plan.valid──> IMPLEMENTING
+IMPLEMENTING ──candidate.ready──> QA
+QA ──PASS──> REVIEW
+QA ──FAIL (retryable)──> IMPLEMENTING
+QA ──FAIL (non-retryable/budget exhausted)──> BLOCKED
+REVIEW ──APPROVE──> DONE
+REVIEW ──REJECT (retryable)──> IMPLEMENTING
+REVIEW ──REJECT (non-retryable/budget exhausted)──> BLOCKED
+任何非终态 ──platform invariant violation──> FAILED
+```
+
+`DONE`、`BLOCKED`、`FAILED` 是终态。重新执行必须显式创建新的 attempt 或人工将 Task 置回 `IMPLEMENTING`，不能由 Agent 自行跳转。
+
+## 3. 迁移守卫
+
+- 每次迁移都带 `event_id`、`from_status`、`to_status`、`actor=orchestrator`、`reason`、`artifact_ids` 和时间戳。
+- 迁移在 SQLite 事务中完成；状态版本（`revision`）采用乐观锁，重复提交必须幂等。
+- `QA → REVIEW` 只接受最新候选 revision 的 `qa-report.status=PASS`。
+- `REVIEW → DONE` 只接受 `review-report.verdict=APPROVE`、required evidence 完整且工作树干净。
+- 任何 artifact 的 `task_id`、`source_revision` 或 Schema 版本不匹配，迁移拒绝并进入 `FAILED`（数据问题）或 `BLOCKED`（外部问题）。
+
+## 4. 事件记录示例
+
+```json
+{
+  "event_id": "evt_01J...",
+  "task_id": "task_20260831_001",
+  "from_status": "QA",
+  "to_status": "REVIEW",
+  "actor": "orchestrator",
+  "reason": "qa_passed",
+  "artifact_ids": ["art_qa_001"],
+  "source_revision": "a1b2c3d",
+  "occurred_at": "2026-08-31T12:00:00Z"
+}
+```
+
+## 5. 回放与恢复
+
+状态可由事件流重放得到，artifact 只作为事件引用的证据。进程重启后：
+
+1. 读取最后一个已提交事件；
+2. 检查对应 artifact 和 worktree 是否存在；
+3. 若上次 Agent 运行没有 `completed` 记录，标记该 attempt 为 `interrupted`；
+4. 从最近一个有效 checkpoint 继续，不重复消费已确认的 artifact。

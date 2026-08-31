@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/task.schema.json",
+  "title": "Task",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "title", "description", "repository", "base_ref", "acceptance_criteria", "status", "max_attempts", "created_at", "updated_at"],
+  "properties": {
+    "id": {"type": "string", "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "title": {"type": "string", "minLength": 1, "maxLength": 200},
+    "description": {"type": "string", "minLength": 1},
+    "repository": {"type": "string", "minLength": 1, "description": "Local path or approved clone URL"},
+    "base_ref": {"type": "string", "minLength": 1},
+    "acceptance_criteria": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "description", "required", "verification"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$"},
+          "description": {"type": "string", "minLength": 1},
+          "required": {"type": "boolean"},
+          "verification": {"type": "string", "minLength": 1},
+          "test_ids": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "constraints": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowed_paths": {"type": "array", "items": {"type": "string"}},
+        "denied_paths": {"type": "array", "items": {"type": "string"}},
+        "allowed_commands": {"type": "array", "items": {"type": "string"}},
+        "max_attempts": {"type": "integer", "minimum": 1, "maximum": 10},
+        "notes": {"type": "string"}
+      }
+    },
+    "status": {"enum": ["NEW", "PLANNING", "IMPLEMENTING", "QA", "REVIEW", "DONE", "BLOCKED", "FAILED"]},
+    "max_attempts": {"type": "integer", "minimum": 1, "maximum": 10},
+    "attempts": {"type": "integer", "minimum": 0, "maximum": 10},
+    "owner": {"type": "string"},
+    "labels": {"type": "array", "items": {"type": "string"}},
+    "created_at": {"type": "string", "format": "date-time"},
+    "updated_at": {"type": "string", "format": "date-time"},
+    "metadata": {"type": "object"}
+  }
+}

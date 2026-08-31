@@ -1,0 +1,15 @@
+.DS_Store
+.env
+.venv/
+node_modules/
+dist/
+build/
+.pytest_cache/
+__pycache__/
+.trellis/.developer
+.trellis/.runtime/
+.trellis/workspace/*
+!.trellis/workspace/.gitkeep
+worktrees/
+artifacts/runs/*
+!artifacts/runs/.gitkeep

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/plan.schema.json",
+  "title": "Plan artifact",
+  "allOf": [
+    {"$ref": "artifact.schema.json"},
+    {
+      "type": "object",
+      "properties": {
+        "kind": {"const": "plan"},
+        "content": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["goal", "assumptions", "steps", "acceptance_mapping", "risks"],
+          "properties": {
+            "goal": {"type": "string", "minLength": 1},
+            "assumptions": {"type": "array", "items": {"type": "string"}},
+            "steps": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["step_id", "description", "files", "verification"],
+                "properties": {
+                  "step_id": {"type": "string"},
+                  "description": {"type": "string", "minLength": 1},
+                  "files": {"type": "array", "items": {"type": "string"}},
+                  "verification": {"type": "string", "minLength": 1}
+                }
+              }
+            },
+            "acceptance_mapping": {"type": "array", "items": {"type": "object", "required": ["criterion_id", "step_ids", "test_strategy"], "properties": {"criterion_id": {"type": "string"}, "step_ids": {"type": "array", "items": {"type": "string"}}, "test_strategy": {"type": "string"}}, "additionalProperties": false}},
+            "risks": {"type": "array", "items": {"type": "object", "required": ["risk", "mitigation"], "properties": {"risk": {"type": "string"}, "mitigation": {"type": "string"}}, "additionalProperties": false}}
+          }
+        }
+      }
+    }
+  ]
+}

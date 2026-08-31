@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/qa-report.schema.json",
+  "title": "QA report artifact",
+  "allOf": [
+    {"$ref": "artifact.schema.json"},
+    {
+      "type": "object",
+      "properties": {
+        "kind": {"const": "qa-report"},
+        "content": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "criteria_results", "tests_run", "findings"],
+          "properties": {
+            "status": {"enum": ["PASS", "FAIL"]},
+            "criteria_results": {"type": "array", "minItems": 1, "items": {"type": "object", "required": ["criterion_id", "status", "evidence_ids"], "properties": {"criterion_id": {"type": "string"}, "status": {"enum": ["PASS", "FAIL", "NOT_TESTED"]}, "evidence_ids": {"type": "array", "items": {"type": "string"}}, "notes": {"type": "string"}}, "additionalProperties": false}},
+            "tests_run": {"type": "array", "items": {"type": "object", "required": ["command", "status", "evidence_id"], "properties": {"command": {"type": "string"}, "status": {"enum": ["PASS", "FAIL", "ERROR"]}, "evidence_id": {"type": "string"}, "duration_ms": {"type": "integer", "minimum": 0}}, "additionalProperties": false}},
+            "findings": {"type": "array", "items": {"$ref": "artifact.schema.json#/$defs/finding"}},
+            "environment": {"type": "object"}
+          }
+        }
+      }
+    }
+  ]
+}

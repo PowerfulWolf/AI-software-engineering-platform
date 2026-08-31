@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/review-report.schema.json",
+  "title": "Review report artifact",
+  "allOf": [
+    {"$ref": "artifact.schema.json"},
+    {
+      "type": "object",
+      "properties": {
+        "kind": {"const": "review-report"},
+        "content": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["verdict", "findings", "checked_dimensions", "evidence"],
+          "properties": {
+            "verdict": {"enum": ["APPROVE", "REJECT"]},
+            "findings": {"type": "array", "items": {"$ref": "artifact.schema.json#/$defs/finding"}},
+            "checked_dimensions": {"type": "array", "minItems": 1, "items": {"enum": ["correctness", "acceptance", "regression", "security", "maintainability", "performance", "契约一致性"]}},
+            "evidence": {"type": "array", "items": {"type": "string"}},
+            "summary": {"type": "string"}
+          }
+        }
+      }
+    }
+  ]
+}

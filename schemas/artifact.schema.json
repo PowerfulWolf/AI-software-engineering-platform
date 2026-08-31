@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/artifact.schema.json",
+  "title": "Artifact envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["artifact_id", "task_id", "kind", "schema_version", "producer", "source_revision", "context_manifest_id", "created_at", "parent_artifact_ids", "evidence", "content", "integrity"],
+  "$defs": {
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_id", "type", "uri", "description"],
+      "properties": {
+        "evidence_id": {"type": "string", "pattern": "^ev_[a-z0-9][a-z0-9_-]{2,63}$"},
+        "type": {"enum": ["test", "command", "diff", "file", "log", "metric"]},
+        "uri": {"type": "string", "minLength": 1},
+        "locator": {"type": "string"},
+        "description": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "required": {"type": "boolean", "default": false}
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["finding_id", "severity", "message", "evidence_ids"],
+      "properties": {
+        "finding_id": {"type": "string"},
+        "severity": {"enum": ["INFO", "MINOR", "MAJOR", "BLOCKER"]},
+        "code": {"type": "string"},
+        "message": {"type": "string", "minLength": 1},
+        "file": {"type": "string"},
+        "line": {"type": "integer", "minimum": 1},
+        "evidence_ids": {"type": "array", "items": {"type": "string"}},
+        "recommendation": {"type": "string"}
+      }
+    }
+  },
+  "properties": {
+    "artifact_id": {"type": "string", "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "task_id": {"type": "string", "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "kind": {"enum": ["plan", "implementation-report", "qa-report", "review-report"]},
+    "schema_version": {"type": "string", "pattern": "^v[0-9]+\\.[0-9]+$"},
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "agent_id", "agent_version", "run_id"],
+      "properties": {
+        "role": {"enum": ["orchestrator", "coder", "qa", "reviewer"]},
+        "agent_id": {"type": "string"},
+        "agent_version": {"type": "string"},
+        "run_id": {"type": "string"}
+      }
+    },
+    "source_revision": {"type": "string", "minLength": 1},
+    "context_manifest_id": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "format": "date-time"},
+    "parent_artifact_ids": {"type": "array", "items": {"type": "string"}},
+    "supersedes": {"type": "string"},
+    "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence"}},
+    "content": {"type": "object"},
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha256", "validated"],
+      "properties": {
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "validated": {"type": "boolean"},
+        "validated_at": {"type": "string", "format": "date-time"}
+      }
+    }
+  }
+}
