@@ -64,6 +64,7 @@ ai-software-engineer/
 ├── src/ai_software_engineer/         # 控制平面 Python 包
 │   ├── cli.py                        # ase 命令入口
 │   ├── domain/                       # Task、Agent、Artifact 强类型契约
+│   ├── store/                        # SQLite Task 快照与 StateEvent 日志
 │   └── prompts/                      # 后续：版本化 role prompt 模板
 ├── docs/
 │   ├── architecture.md               # 分层、边界和部署形态
@@ -86,7 +87,8 @@ ai-software-engineer/
 │   ├── plan.schema.json
 │   ├── implementation-report.schema.json
 │   ├── qa-report.schema.json
-│   └── review-report.schema.json
+│   ├── review-report.schema.json
+│   └── state-event.schema.json
 ├── .trellis/
 │   ├── README.md
 │   └── spec/core/
@@ -138,6 +140,6 @@ uv run mypy src tests
 
 ## 当前状态
 
-M0 设计基线、T001 Python CLI 骨架和 T002 领域模型已经完成。当前可运行 `ase`，并可用 Pydantic 校验 Task、Agent Definition 以及四类 Artifact；正反例同时受 canonical JSON Schema contract tests 保护。
+M0 设计基线、T001 Python CLI 骨架、T002 领域模型和 T003 SQLite repository 已完成。当前可运行 `ase`，并可用 Pydantic 校验 Task、Agent Definition、StateEvent 以及四类 Artifact；正反例同时受 canonical JSON Schema contract tests 保护，Task 状态事件可在 SQLite 重启后恢复。
 
-下一步是 T003：实现 SQLite Task repository 和幂等事件日志。后续实现仍严格按 `AGENTS.md` 与 `.trellis/spec/` 推进，任何跨语言契约变更先更新 Schema 和文档，再更新代码与测试。
+下一步是 T004：实现状态机 reducer/guard。后续实现仍严格按 `AGENTS.md` 与 `.trellis/spec/` 推进，任何跨语言契约变更先更新 Schema 和文档，再更新代码与测试。

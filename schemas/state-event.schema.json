@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/state-event.schema.json",
+  "title": "Task state event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["event_id", "task_id", "from_status", "to_status", "actor", "reason", "artifact_ids", "source_revision", "occurred_at"],
+  "properties": {
+    "event_id": {"type": "string", "pattern": "^evt_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "task_id": {"type": "string", "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "from_status": {"enum": ["NEW", "PLANNING", "IMPLEMENTING", "QA", "REVIEW", "DONE", "BLOCKED", "FAILED"]},
+    "to_status": {"enum": ["NEW", "PLANNING", "IMPLEMENTING", "QA", "REVIEW", "DONE", "BLOCKED", "FAILED"]},
+    "actor": {"const": "orchestrator"},
+    "reason": {"type": "string", "minLength": 1},
+    "artifact_ids": {"type": "array", "items": {"type": "string", "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$"}},
+    "source_revision": {"type": "string", "minLength": 1},
+    "occurred_at": {"type": "string", "format": "date-time"}
+  }
+}

@@ -30,7 +30,13 @@ REVIEW ──REJECT (non-retryable/budget exhausted)──> BLOCKED
 
 `DONE`、`BLOCKED`、`FAILED` 是终态。重新执行必须显式创建新的 attempt 或人工将 Task 置回 `IMPLEMENTING`，不能由 Agent 自行跳转。
 
-## 3. 迁移守卫
+## 3. StateEvent 持久化契约
+
+每次状态变化都由 `schemas/state-event.schema.json` 描述，并通过 `StateEvent` typed model 进入 repository。StateEvent 至少包含 `event_id`、`task_id`、`from_status`、`to_status`、`actor=orchestrator`、`reason`、`artifact_ids`、`source_revision` 和带时区的 `occurred_at`。
+
+SQLite 中 Task 快照和 StateEvent 必须在同一个 `BEGIN IMMEDIATE` 事务内写入：事件正文以 JSON 保存，Task `revision` 从 0 开始，每个事件递增 1。相同 `event_id` 和完全相同正文的重放是幂等 no-op；相同 ID 的不同正文必须拒绝，不能覆盖审计记录。
+
+## 4. 迁移守卫
 
 - 每次迁移都带 `event_id`、`from_status`、`to_status`、`actor=orchestrator`、`reason`、`artifact_ids` 和时间戳。
 - 迁移在 SQLite 事务中完成；状态版本（`revision`）采用乐观锁，重复提交必须幂等。
@@ -38,7 +44,7 @@ REVIEW ──REJECT (non-retryable/budget exhausted)──> BLOCKED
 - `REVIEW → DONE` 只接受 `review-report.verdict=APPROVE`、required evidence 完整且工作树干净。
 - 任何 artifact 的 `task_id`、`source_revision` 或 Schema 版本不匹配，迁移拒绝并进入 `FAILED`（数据问题）或 `BLOCKED`（外部问题）。
 
-## 4. 事件记录示例
+## 5. 事件记录示例
 
 ```json
 {
@@ -54,7 +60,7 @@ REVIEW ──REJECT (non-retryable/budget exhausted)──> BLOCKED
 }
 ```
 
-## 5. 回放与恢复
+## 6. 回放与恢复
 
 状态可由事件流重放得到，artifact 只作为事件引用的证据。进程重启后：
 

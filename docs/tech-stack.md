@@ -57,3 +57,9 @@ class ArtifactStore(Protocol):
 - 性能优化必须由 profiling/metrics 驱动，不能以“未来可能需要”为由提前分布式化。
 
 Python 不限制目标仓库语言。所有构建和测试通过受 policy 管理的命令执行，例如 Maven、Gradle、CMake、CTest、Go test、npm 或 pytest。
+
+## Future TODO — 可扩展 Task Repository
+
+- 保持 `TaskRepository` Protocol、Task/StateEvent JSON 和 Artifact 契约稳定；未来可将 SQLite 实现替换为 PostgreSQL 等服务端后端。
+- 触发条件：真实并发、远程多用户协作、备份/高可用或单机 WAL 已无法满足指标，而不是“预想中的规模”。
+- 进入实施前必须新增 ADR，明确迁移、事务隔离、灾备、运维和成本，并保留 SQLite 作为离线/fake adapter 测试后端。

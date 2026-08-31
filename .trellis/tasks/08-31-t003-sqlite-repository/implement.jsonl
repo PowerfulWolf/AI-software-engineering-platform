@@ -1,0 +1,5 @@
+{"path":"schemas/state-event.schema.json","reason":"Canonical cross-language StateEvent wire contract."}
+{"path":"src/ai_software_engineer/domain/event.py","reason":"Typed immutable StateEvent model."}
+{"path":"src/ai_software_engineer/store/ports.py","reason":"TaskRepository Protocol."}
+{"path":"src/ai_software_engineer/store/repository.py","reason":"SQLite snapshot/event implementation and typed errors."}
+{"path":"tests/store/test_repository.py","reason":"Persistence, idempotency, rollback, restart, and pragma contract tests."}

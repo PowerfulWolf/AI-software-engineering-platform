@@ -81,6 +81,78 @@ def run(self, request: AgentRequest) -> AgentResult:
 
 前者让供应商对象和未类型化 payload 穿透系统；后者把不稳定输入封装在 adapter 边界。
 
+## SQLite Task Repository and State Events
+
+### Scope / Trigger
+
+新增或修改 Task 持久化、状态事件、SQLite schema、重启恢复或幂等写入时适用。Repository 是领域模型和 SQLite 之间的唯一边界；领域层不能导入 `sqlite3`。
+
+### Signatures
+
+```python
+class TaskRepository(Protocol):
+    def create(self, task: Task) -> None: ...
+    def get(self, task_id: TaskId) -> Task: ...
+    def append_event(self, event: StateEvent) -> None: ...
+    def list_events(self, task_id: TaskId) -> tuple[StateEvent, ...]: ...
+    def current_revision(self, task_id: TaskId) -> int: ...
+```
+
+Concrete implementation: `SqliteTaskRepository(database: str | Path)`.
+
+### Contracts
+
+- Task row stores typed `Task.to_wire()` JSON, indexed status/timestamps, and a non-negative per-Task revision; a new Task starts at revision 0;
+- `append_event` executes `BEGIN IMMEDIATE`, checks exact event ID replay, compares `event.from_status` with the current typed Task, inserts the event at `revision + 1`, updates the Task snapshot, and commits once;
+- identical event ID + identical JSON is a no-op; identical event ID + changed payload raises `EventIdempotencyConflict`;
+- malformed persisted JSON raises `StoreCorruption`; missing Task raises `TaskNotFound`; duplicate Task ID raises `TaskAlreadyExists`; stale `from_status` raises `InvalidStateEvent`;
+- SQLite connections set `PRAGMA foreign_keys = ON`, `PRAGMA journal_mode = WAL`, and `PRAGMA synchronous = NORMAL`;
+- repository does not decide whether a status edge is legal; T004 state-machine guard owns that policy.
+
+### Validation & Error Matrix
+
+| 输入问题 | 检测点 | 结果 |
+|---|---|---|
+| Task ID already exists | `create` transaction | rollback + `TaskAlreadyExists` |
+| Event Task does not exist | `append_event` | rollback + `TaskNotFound` |
+| Event `from_status` differs from snapshot | append guard | rollback + `InvalidStateEvent` |
+| Event ID replay with changed payload | idempotency check | rollback + `EventIdempotencyConflict` |
+| Stored JSON or revision has invalid type | decode boundary | `StoreCorruption` |
+| Process closes and reopens | durable snapshot/event rows | same Task/events/revision recovered |
+
+### Good / Base / Bad Cases
+
+- **Good**: append one valid event, reopen the database, and replay the same event without changing revision;
+- **Base**: repository uses one local SQLite file, WAL, and no in-memory cache, so fake adapters can test recovery offline;
+- **Bad**: update the Task row first and write an event later, overwrite an event ID, or accept a stale `from_status`.
+
+### Tests Required
+
+- `tests/store/test_repository.py` must assert create/get, close/reopen, atomic append, exact replay, conflicting replay, stale status rollback, unknown Task errors, and SQLite runtime pragmas;
+- `tests/domain/test_event.py` must assert StateEvent schema, immutability, orchestrator ownership, and duplicate artifact rejection;
+- contract fixtures must validate `StateEvent.to_wire()` against `schemas/state-event.schema.json` with format checking;
+- repository tests must assert no event/revision mutation after every rejected operation.
+
+### Wrong vs Correct
+
+#### Wrong
+
+```python
+task = repository.get(task_id)
+task.status = event.to_status
+repository.save(task)
+repository.append_event(event)
+```
+
+#### Correct
+
+```python
+repository.append_event(event)
+assert repository.current_revision(event.task_id) == 1
+```
+
+前者产生没有事件证据的状态写入并留下部分提交风险；后者让 Task 快照和 StateEvent 在一个事务中前进。
+
 ## 8. Scenario: Installable CLI Package
 
 ### 8.1 Scope / Trigger

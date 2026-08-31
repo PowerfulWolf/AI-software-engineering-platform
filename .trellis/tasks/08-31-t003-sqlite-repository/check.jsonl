@@ -1,0 +1,5 @@
+{"path":".trellis/spec/core/architecture.md","reason":"Defines TaskRepository, StateEvent, transaction, and recovery invariants."}
+{"path":".trellis/spec/core/python-runtime.md","reason":"Defines typed SQLite repository signatures, error matrix, and quality gates."}
+{"path":".trellis/spec/core/contracts.md","reason":"Defines StateEvent and artifact evidence boundaries."}
+{"path":"docs/state-machine.md","reason":"Defines event fields, revision and replay behavior."}
+{"path":"docs/tech-stack.md","reason":"Records SQLite v0.1 choice and PostgreSQL future TODO."}

@@ -36,6 +36,7 @@ from ai_software_engineer.domain import (
     ReviewReportArtifact,
     ReviewReportContent,
     ReviewVerdict,
+    StateEvent,
     Task,
     TaskConstraints,
     TaskStatus,
@@ -44,6 +45,26 @@ from ai_software_engineer.domain import (
 NOW = datetime(2026, 8, 31, 7, 0, tzinfo=UTC)
 SHA256 = "a" * 64
 CANDIDATE_SHA = "b" * 40
+
+
+def make_state_event(
+    *,
+    event_id: str = "evt_domain_001",
+    task_id: str = "task_domain_001",
+    from_status: TaskStatus = TaskStatus.NEW,
+    to_status: TaskStatus = TaskStatus.PLANNING,
+) -> StateEvent:
+    return StateEvent(
+        event_id=event_id,
+        task_id=task_id,
+        from_status=from_status,
+        to_status=to_status,
+        actor=AgentRole.ORCHESTRATOR,
+        reason="Task validated",
+        artifact_ids=("art_plan_001",),
+        source_revision="a" * 40,
+        occurred_at=NOW,
+    )
 
 
 def make_task() -> Task:

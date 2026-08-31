@@ -64,6 +64,8 @@ Task(JSON)
 | 运行日志 | 文件系统文本 | 脱敏、截断、由 evidence 引用 |
 | Trellis 规则 | Git 中的 Markdown | 组织知识，评审后变更 |
 
+Task 快照和状态事件的 Python 入口分别是 `Task` 与 `StateEvent`；`SqliteTaskRepository` 使用 `tasks`、`state_events` 两张表。快照正文和事件正文均保留 JSON，便于重启后由 Pydantic 重新校验并按事件 revision 回放。
+
 ## 5. 信任边界与安全默认值
 
 1. 用户 Task、仓库内容和测试输出都视为**潜在不可信数据**；prompt 注入不能改变角色权限或状态机。

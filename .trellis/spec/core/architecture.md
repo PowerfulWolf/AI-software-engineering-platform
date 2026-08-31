@@ -13,6 +13,11 @@ transition(task_id: str, to_status: TaskStatus, *, reason: str,
 ContextBuilder.build(task: Task, role: AgentRole, *, attempt: int,
                      candidate_revision: str | None = None) -> ContextBundle
 ArtifactStore.put(artifact: ArtifactEnvelope) -> ArtifactRef
+TaskRepository.create(task: Task) -> None
+TaskRepository.get(task_id: TaskId) -> Task
+TaskRepository.append_event(event: StateEvent) -> None
+TaskRepository.list_events(task_id: TaskId) -> tuple[StateEvent, ...]
+TaskRepository.current_revision(task_id: TaskId) -> int
 ```
 
 这些接口必须是幂等或显式拒绝重复操作；实现不得通过全局可变状态绕过 Task/attempt 关联。
@@ -23,6 +28,8 @@ ArtifactStore.put(artifact: ArtifactEnvelope) -> ArtifactRef
 - `ContextBundle` 必须包含 source URI、SHA-256、token 计数、policy 和 `context_id`；
 - `ArtifactStore.put` 只接受 Schema 校验通过且 `integrity.validated=true` 的 envelope；
 - `StateEvent` 必须包含 `event_id`、from/to status、actor、reason、source revision 和 artifact IDs；
+- Task 快照与 StateEvent 必须由 `TaskRepository.append_event` 在同一 SQLite 事务中提交；相同事件正文重放幂等，不同正文复用 ID 拒绝；
+- repository 每个连接开启 foreign keys，数据库使用 WAL；关闭后重新打开必须只依赖持久化 JSON 恢复 Task 与事件序列；
 - 主 checkout 只读，业务代码只能在角色 worktree 产生。
 
 ## 4. Validation & Error Matrix

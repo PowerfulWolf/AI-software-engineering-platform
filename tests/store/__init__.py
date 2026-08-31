@@ -1,0 +1,1 @@
+"""SQLite repository contract tests."""

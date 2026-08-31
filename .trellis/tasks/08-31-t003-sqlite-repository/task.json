@@ -1,0 +1,10 @@
+{
+  "id": "task_t003_sqlite_repository",
+  "title": "T003 SQLite Task repository and state event log",
+  "status": "completed",
+  "branch": "ai/task_t003_sqlite_repository/attempt-1",
+  "base_branch": "main",
+  "scope": "backend",
+  "created_at": "2026-08-31T15:30:00+08:00",
+  "updated_at": "2026-08-31T15:58:00+08:00"
+}

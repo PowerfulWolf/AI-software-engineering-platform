@@ -113,7 +113,13 @@
 
 详细机器契约见 [`schemas/`](../schemas/)。
 
-## 8. Python 领域入口
+## 8. StateEvent 与持久化
+
+状态迁移事件使用 `schemas/state-event.schema.json`，Python 入口为 `StateEvent`。`TaskRepository.append_event(event)` 以事件的 `from_status` 对比当前 Task 快照，成功后在同一事务中写入事件、更新 `status`/`updated_at` 并递增 revision；不负责判断状态机边是否合法，合法性由 T004 reducer/guard 决定。
+
+`SqliteTaskRepository` 对重复事件执行精确幂等：正文相同直接成功且不新增 revision，正文不同抛出 `EventIdempotencyConflict`。未知 Task、stale `from_status`、重复 Task ID 和损坏 JSON 都转换为 typed repository error，不返回半结构化数据。
+
+## 9. Python 领域入口
 
 `src/ai_software_engineer/domain/` 是 Python 控制平面的唯一领域类型入口。`TaskStatus`、`AgentRole` 和 `ArtifactKind` 不能在 store、agent adapter 或 orchestrator 中重复定义。`to_wire()` 负责生成 JSON-compatible payload 并省略不存在的 optional 字段；cross-language 消费者仍以 `schemas/*.json` 为准。
 

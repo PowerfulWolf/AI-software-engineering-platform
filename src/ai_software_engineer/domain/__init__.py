@@ -41,6 +41,7 @@ from ai_software_engineer.domain.enums import (
     ReviewVerdict,
     TaskStatus,
 )
+from ai_software_engineer.domain.event import StateEvent
 from ai_software_engineer.domain.task import AcceptanceCriterion, Task, TaskConstraints
 
 Agent = AgentDefinition
@@ -84,6 +85,7 @@ __all__ = [
     "ReviewReportArtifact",
     "ReviewReportContent",
     "ReviewVerdict",
+    "StateEvent",
     "Task",
     "TaskConstraints",
     "TaskStatus",

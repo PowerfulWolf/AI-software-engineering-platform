@@ -16,6 +16,7 @@ from tests.domain.factories import (
     make_plan_artifact,
     make_qa_artifact,
     make_review_artifact,
+    make_state_event,
     make_task,
 )
 
@@ -73,6 +74,7 @@ def _assert_invalid(payload: WirePayload, schema_name: str) -> None:
         (make_implementation_artifact, "implementation-report.schema.json"),
         (make_qa_artifact, "qa-report.schema.json"),
         (make_review_artifact, "review-report.schema.json"),
+        (make_state_event, "state-event.schema.json"),
     ),
 )
 def test_python_positive_examples_satisfy_the_canonical_schema(
