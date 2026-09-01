@@ -42,6 +42,13 @@ CLI、数据库、Git、模型 SDK 和文件系统实现只能依赖这些端口
 ## 3. Contracts
 
 - Python 版本：`>=3.12`，在 `pyproject.toml` 中声明；
+- CLI 只做参数、错误和 JSON 编排；Task、Evaluation 和 Handoff 规则必须委托给 typed
+  application services 与 ports。成功命令输出 canonical JSON，错误输出稳定单行 stderr 和非零退出码；
+- `task create` 不得通过导入已完成或已有 attempt 的快照绕过 `NEW → PLANNING`；
+- `evaluation report` 只能从 `TaskRepository`、`ArtifactStore` 和 `EvaluationEventStore` 重算，
+  禁止把一个不可回放的 `adr=true` 当作事实；
+- `handoff build` 只能读取 `DONE/BLOCKED`，并将 immutable store 返回的路径作为结果；CLI 不执行
+  review argv、merge 或修改终态记录；
 - 外部 JSON/RPC/模型输出在 adapter 边界用 Pydantic 校验；
 - 领域层使用明确类型、Enum、dataclass/Pydantic model，不传递裸 `dict[str, Any]`；
 - `TaskStatus`、`AgentRole`、`ArtifactKind` 只有一个定义位置；
