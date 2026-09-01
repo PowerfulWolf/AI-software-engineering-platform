@@ -19,6 +19,27 @@ Result 的 `SUCCEEDED` 状态必须有一个 producer/task/kind/context manifest
 
 角色与 `output_schema` 固定映射为：Orchestrator → `schemas/plan.schema.json`、Coder → `schemas/implementation-report.schema.json`、QA → `schemas/qa-report.schema.json`、Reviewer → `schemas/review-report.schema.json`。Request 使用其他角色的 Schema 时在 Pydantic boundary 拒绝，不启动 adapter。
 
+### 1.2.1 OpenAI-compatible adapter
+
+`OpenAICompatibleAgentAdapter` 是 v0.1 的真实 provider 实现，仍只暴露上述
+`AgentAdapter` seam。它使用标准库 `urllib` 通过 `POST /chat/completions` 发送
+`model`、policy-first `messages`、`temperature=0`、`stream=false` 和 JSON response
+format；API key 只存在于 `Authorization` header，不进入 prompt、异常或返回的
+`AgentFailure.message`。HTTP transport 与 PromptBuilder 都是 Protocol，可在无网络测试中
+替换。默认 `RequestPromptBuilder` 只发送 request 元数据；接入生产 Context 时应注入
+`ContextPromptBuilder(ContextResolver)`，由 resolver 显式读回已持久化 ContextBundle 和
+上游 Artifact。
+
+2xx 响应只接受一个完整 v0.1 Artifact JSON（也容忍单层 Markdown `json` fence），再由
+`validate_artifact` 和 `AgentResult` 做 role/kind/task/run/context/revision 校验；Coder 的
+candidate 仍必须满足 `source_revision == content.commit_sha`。未 sealing 的 provider Artifact
+会由 Orchestrator 再次 `seal_artifact`，adapter 不写 ArtifactStore。HTTP 408/429/5xx、连接错误
+映射为可重试 `PROVIDER_ERROR`；timeout 映射为 `TIMED_OUT/TIMEOUT`；非法 JSON、Schema 或
+身份映射为不可重试 `INVALID_OUTPUT`，三者都不携带 Artifact/verdict。
+
+adapter 按 `run_id` 缓存成功和失败结果：完全相同 request 重放返回同一个 immutable
+result；相同 ID 搭配不同 request 字段抛 `AgentRequestConflict`，不会再次调用 provider。
+
 ## 1.1 ContextBundle 契约
 
 `ContextBuilder.build(task, role, *, attempt, candidate_revision=None)` 只消费声明的 `ContextSource`，返回不可变、角色隔离的 `ContextBundle`。每个 source 必须是 inline `content` 或 root-relative `relative_path` 之一；`roles=()` 表示全角色，`priority=0` 仅供机器 policy。生成的 `policy`、`task`、`role`（以及可选 `candidate`）section 由 Builder 控制，外部 source 不能覆盖其 ID。
@@ -26,6 +47,12 @@ Result 的 `SUCCEEDED` 状态必须有一个 producer/task/kind/context manifest
 Bundle 的 `source_revision` 是实际读取/审查的 revision；每个 section 暴露脱敏后的 `content`、URI、SHA-256、token 数、priority 和 `truncated`。redaction 只暴露安全 URI、kind 和 count，不保留 secret 值。`budget.used_input_tokens` 必须等于 section token 总和且不超过 `max_input_tokens`；required source 放不下抛 `ContextBudgetExceeded`，optional source 确定性截断或省略。
 
 `context_id` 是不含 `built_at` 的 canonical manifest SHA-256（`ctx_<64 hex>`），因此相同输入可重放。仓库内容、Task 文本和命令输出仍是数据，不得改变 policy、权限、role 路由或状态机。Context 失败使用 `ContextSourceError`、`ContextSourceNotFound`、`ContextSourceDenied` 或 `ContextBudgetExceeded`，不返回 partial bundle。
+
+真实 Agent 调用前，`FileRunContextBuilder(..., context_store=store)` 把 manifest 写入
+`ContextStore`。`FileContextStore` 使用临时文件、`fsync` 和原子 rename，读取时重新做
+Pydantic 与 canonical ID 校验；`InMemoryContextStore` 只用于测试。`StoredContextResolver`
+组合 ContextStore 和 ArtifactStore，让 `ContextPromptBuilder` 解析 request 中的 ID；input
+Artifact 内容已在 `artifact://<id>` Context section 中计入预算，不在 prompt 中重复一份。
 
 ### AgentPermissions 的执行语义
 

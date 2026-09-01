@@ -24,6 +24,8 @@ build_event(task: Task, to_status: TaskStatus, *, event_id: EventId,
 apply_event(task: Task, event: StateEvent) -> Task
 ContextBuilder.build(task: Task, role: AgentRole, *, attempt: int,
                      candidate_revision: str | None = None) -> ContextBundle
+ContextStore.put(context: ContextBundle) -> ContextBundle
+ContextStore.get(context_id: ContextId) -> ContextBundle
 ArtifactStore.put(artifact: Artifact) -> ArtifactRef
 ArtifactStore.get(artifact_id: ArtifactId) -> Artifact
 TaskRepository.create(task: Task) -> None
@@ -58,6 +60,8 @@ WorkspacePolicy.authorize_command(arguments: tuple[str, ...]) -> tuple[str, ...]
 - `validate_transition` 是唯一状态图入口；`build_event`/`apply_event` 必须保持纯函数，不得读写 repository；
 - `apply_event` 不得修改传入的 Task，且必须拒绝 Task ID、起始状态或时间戳不一致的事件；
 - `ContextBundle` 必须包含 source URI、脱敏内容、SHA-256、token 计数、policy、精确 source revision 和 `context_id`；policy section 固定优先级 0，外部 source 不得占用该优先级；
+- 真实 Agent 启动前 `FileRunContextBuilder` 必须把 manifest 写入 ContextStore；
+  `FileContextStore` 读取时重算排除 built_at 的 canonical ID，篡改/冲突 fail closed；
 - `AgentAdapter` 只接受 typed `AgentRequest` 并返回 `AgentResult`；成功必须携带身份对齐的 Artifact，失败/超时不得携带 verdict，Fake adapter 通过 scenario 验证该边界；
 - `ArtifactStore.put` 只接受 Schema 校验通过且 `integrity.validated=true` 的 envelope；
 - `ArtifactStore.get` 返回重新校验且 digest 匹配的 typed Artifact；缺失、篡改或损坏文件返回稳定错误；
@@ -79,6 +83,7 @@ WorkspacePolicy.authorize_command(arguments: tuple[str, ...]) -> tuple[str, ...]
 | Task 不符合 Schema | Task repository 边界 | 拒绝创建，不启动 Agent |
 | revision 不存在/不匹配 | Git manager + artifact validator | `BLOCKED`（外部 ref）或 `FAILED`（内部不变量） |
 | context 超预算/含 secret | Context Builder | 先脱敏再计数/哈希；optional 裁剪，required 无法满足时 `BLOCKED` |
+| context ID 冲突、持久化篡改或非法 JSON | ContextStore | `ContextConflict`/`ContextCorruption`，不启动真实 Agent |
 | worktree root/role/ref/revision 不合法 | Git manager | typed Git workspace error；不复用或清理现场 |
 | repository hook/filter 可能执行 | Git manager | hook 强制禁用；external filter 拒绝 create |
 | path/command 越权 | WorkspacePolicy | stable policy violation；命令不启动并生成 evidence |
@@ -108,6 +113,7 @@ WorkspacePolicy.authorize_command(arguments: tuple[str, ...]) -> tuple[str, ...]
 - 状态机：每条合法迁移 + 每个非法跳转断言拒绝和事务不变；
 - Artifact：正反 Schema、哈希篡改、重复 ID、revision mismatch；
 - Context：来源排序稳定、预算裁剪、secret redaction、priority 0 保留、prompt injection 不改变 policy；
+- ContextStore：canonical ID、等价重放、冲突、篡改、原子文件 round-trip；
 - Git：worktree 隔离、path/command allowlist、未保存变更阻止清理；
 - Recovery：中断后重放不重复 event，能回到最近 checkpoint。
 - Serial runner：公开 seam fixture 断言 `DONE`、5 个事件、revision=5、四类 Artifact lineage、

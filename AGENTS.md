@@ -37,7 +37,7 @@ NEW → PLANNING → IMPLEMENTING → QA → REVIEW → DONE
 1. **定位规范**：阅读 `.trellis/spec/` 相关文件和本目录 `docs/`；若契约要变化，先更新 Schema/文档。
 2. **定义 Task**：每个实现任务要有目标、范围、验收标准、允许路径、验证命令和回滚点。
 3. **先测契约**：先写状态迁移、Schema、权限和 fake adapter 的测试，再接真实模型。
-4. **实现最小闭环**：依次完成 domain/store → Git/context → fake agents → Orchestrator → retry/recovery → real adapter → evaluation。
+4. **实现最小闭环**：依次完成 domain/store → Git/context → fake agents → Orchestrator → retry/recovery → real adapter → evaluation。T011 的真实 adapter 只通过 typed `AgentAdapter`、显式 PromptBuilder/ContextResolver 和 HTTP transport seam 接入。
 5. **质量门**：运行格式化、类型检查、单元测试、contract tests 和 fixture e2e；检查变更没有越过 allowlist。
 6. **沉淀知识**：把新 failure mode、取舍和可复用模式补进 `.trellis/spec/`；不要用重复的本地常量或未类型化 payload 解析。
 

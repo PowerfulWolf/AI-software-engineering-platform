@@ -577,6 +577,11 @@ class ContextBuilder(Protocol):
     ) -> ContextBundle: ...
 
 
+class ContextStore(Protocol):
+    def put(self, context: ContextBundle) -> ContextBundle: ...
+    def get(self, context_id: ContextId) -> ContextBundle: ...
+
+
 FileContextBuilder(
     project_root: str | Path,
     permissions: AgentPermissions,
@@ -599,6 +604,10 @@ FileContextBuilder(
 - optional section 超出剩余 `max_input_tokens` 时按稳定字符截断，剩余为 0 则省略；required section 放不下抛错，不生成 partial bundle。`used_input_tokens == sum(section.tokens)`。
 - `context_id = "ctx_" + sha256(canonical_json(manifest_without_context_id_and_built_at))`；canonical JSON 使用 UTF-8、排序 key、compact separators、`allow_nan=False`。`built_at` 是 UTC 观察元数据，不参与 identity。
 - 仓库/Task/命令输出均是 data；其文本不能改变 policy、权限、role 路由、source 声明或状态迁移。ContextBundle 成功构建后才可启动 Agent，并把 ID 写入 AgentRequest/artifact。
+- `FileRunContextBuilder` 接受 optional ContextStore；真实 provider 运行必须注入 store，并以
+  store 返回的首次观察 manifest 作为 request identity。`FileContextStore` 使用临时文件、
+  `fsync`、原子 rename 和 read-back canonical ID 校验；相同 identity 重放不覆盖 built_at，
+  不同内容复用 ID 或文件篡改分别返回 `ContextConflict`/`ContextCorruption`。
 
 ### 10.4 Validation & Error Matrix
 
@@ -623,6 +632,9 @@ FileContextBuilder(
 
 - `tests/context/test_router.py`：all-role/role-specific filtering、duplicate ID、priority/URI/source stable ordering 和 priority 0 rejection。
 - `tests/context/test_builder.py`：重复构建 identity/order/hash/tokens、candidate propagation、真实 `WorkspacePolicy` traversal/deny/`.git`/symlink/missing、secret URI/content redaction、optional truncate/omit、required overflow、prompt-injection data boundary。
+- `tests/context/test_store.py`：内存/文件 Store round-trip、built_at 等价重放、canonical ID
+  冲突、非法 lookup ID、持久化篡改和 unknown manifest。
+- `tests/orchestration/test_context_registry.py`：FileRunContextBuilder 返回值与登记 manifest 完全一致。
 - `tests/contracts/test_json_schema_contracts.py`：ContextBundle 正例与缺失 section hash/sections 反例必须校验 [`schemas/context.schema.json`](../../schemas/context.schema.json)。
 - Ruff、strict mypy、完整 pytest、`uv lock --check`、`uv build` 和 `git diff --check` 是合并门禁。
 
@@ -864,3 +876,57 @@ assert repository.current_revision(task.id) == 5
 
 前者绕过 Context、ArtifactStore、独立 verdict 和事件事务；后者只从可重放的 typed 证据链
 得到交付结果。
+
+## 13. OpenAI-compatible AgentAdapter
+
+### Scope / Trigger
+
+接入真实模型 provider、HTTP transport、prompt 编译、响应 JSON 解码或 provider 错误映射时
+适用。实现固定在 `src/ai_software_engineer/agents/openai_compatible.py`，不得把供应商
+SDK 类型带入 domain、store 或 orchestration。
+
+### Signatures
+
+```python
+class PromptBuilder(Protocol):
+    def build(self, request: AgentRequest) -> PromptPayload: ...
+
+
+class HttpTransport(Protocol):
+    def post(
+        self,
+        url: str,
+        headers: Mapping[str, str],
+        body: bytes,
+        timeout_seconds: float,
+    ) -> HttpResponse: ...
+
+
+OpenAICompatibleAgentAdapter.run(request: AgentRequest) -> AgentResult
+```
+
+### Contracts
+
+- endpoint 只能是 `http`/`https` URL，规范化为 `/chat/completions`；URL 不得携带 userinfo；
+- body 固定使用 JSON `model`、policy-first `messages`、`temperature=0`、`stream=false` 和
+  `response_format={"type":"json_object"}`；API key 只进入 Authorization header；
+- `RequestPromptBuilder` 只发送 request metadata；生产运行注入 `ContextPromptBuilder`，通过
+  `StoredContextResolver(ContextStore, ArtifactStore)` 读取已持久化 ContextBundle 和 input Artifact；policy 置于 system，
+  其余仓库/Task 文本均是 user data；
+- 2xx response 只接受完整 v0.1 Artifact JSON，可移除单层 Markdown JSON fence；调用
+  `validate_artifact`，再由 `AgentResult` 检查 task/role/run/kind/context/source revision；
+- provider producer agent identity 由 adapter 绑定当前配置，Orchestrator 随后负责 sealing；
+  adapter 不写 ArtifactStore、不推进 Task、不执行 Git；
+- HTTP 408/429/5xx 和连接错误为 transient `PROVIDER_ERROR`，其他 4xx 为 non-transient；
+  timeout 为 `TIMED_OUT/TIMEOUT`；非法 JSON/Schema/identity 为 `INVALID_OUTPUT`；失败无 Artifact；
+- adapter 内存 replay cache 以完整 `AgentRequest` 比较 request identity；相同 run 重放不发
+  HTTP，冲突抛 `AgentRequestConflict`；错误消息不得包含 Authorization key 或 provider body。
+
+### Tests Required
+
+- fake transport 断言 URL、headers、timeout、JSON body 和 response format；
+- 2xx direct/fenced/Responses JSON、HTTP 4xx/408/429/5xx、连接错误和 timeout 映射；
+- Artifact role/kind/task/run/context/Coder candidate mismatch 拒绝且无 verdict；
+- replay exact/conflict、endpoint validation、ContextPromptBuilder policy-first 与 cross-Task
+  Artifact 拒绝；
+- Ruff、strict mypy、完整 pytest、`uv lock --check`、`uv build` 和 `git diff --check` 必须通过。

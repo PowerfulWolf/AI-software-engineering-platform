@@ -4,7 +4,12 @@ import json
 from pathlib import Path
 from typing import Protocol
 
-from ai_software_engineer.context import ContextBundle, ContextSource, FileContextBuilder
+from ai_software_engineer.context import (
+    ContextBundle,
+    ContextSource,
+    ContextStore,
+    FileContextBuilder,
+)
 from ai_software_engineer.context.ports import ContextSourceError
 from ai_software_engineer.domain.agent import AgentDefinition
 from ai_software_engineer.domain.artifact import Artifact
@@ -33,9 +38,11 @@ class FileRunContextBuilder:
         project_root: str | Path,
         *,
         sources: tuple[ContextSource, ...] = (),
+        context_store: ContextStore | None = None,
     ) -> None:
         self._project_root = Path(project_root)
         self._sources = sources
+        self._context_store = context_store
 
     def build(
         self,
@@ -53,12 +60,15 @@ class FileRunContextBuilder:
             agent.permissions,
             sources=self._sources + artifact_sources,
         )
-        return builder.build(
+        bundle = builder.build(
             task,
             agent.role,
             attempt=attempt,
             candidate_revision=candidate_revision,
         )
+        if self._context_store is None:
+            return bundle
+        return self._context_store.put(bundle)
 
     @staticmethod
     def _artifact_sources(

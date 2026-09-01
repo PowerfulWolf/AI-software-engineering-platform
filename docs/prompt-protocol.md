@@ -33,6 +33,34 @@ class AgentAdapter(Protocol):
 
 v0.1 的 `FakeAgentAdapter` 不渲染 prompt、不访问网络或 Git，而是按 `(role, attempt)` 注入可重复 scenario。它用于离线验证状态机和失败路由；真实 adapter 必须复用同一 request/result contract，不得让供应商对象穿透到 Orchestrator。
 
+真实 provider 使用 `OpenAICompatibleAgentAdapter`。它把 `AgentRequest` 交给可注入的
+`PromptBuilder`，再通过可注入的 `HttpTransport` 调用完整的 Chat Completions endpoint。
+默认 builder 只发送身份和机器权限元数据；生产运行必须绑定显式 `ContextResolver`，使用
+`ContextPromptBuilder` 将已持久化的 policy-first ContextBundle 与 input Artifact 编译为
+system/user 两条消息。模型输出必须是一个完整 Artifact envelope；adapter 在进入
+Orchestrator 前完成 JSON、Schema、role/kind、身份和 candidate revision 校验。
+
+provider 配置示例（endpoint 可以是 `https://api.openai.com/v1` 或完整
+`.../chat/completions`）：
+
+```python
+context_store = FileContextStore(runtime_root / "contexts")
+context_builder = FileRunContextBuilder(project_root, context_store=context_store)
+context_resolver = StoredContextResolver(context_store, artifact_store)
+
+adapter = OpenAICompatibleAgentAdapter(
+    endpoint="https://api.openai.com/v1",
+    api_key=os.environ["ASE_MODEL_API_KEY"],
+    model="gpt-5",
+    agent_id="agent_coder_001",
+    agent_version="v0.1",
+    context_resolver=context_resolver,
+)
+```
+
+API key 只写入 Authorization header；adapter 的错误消息不携带 provider body 或 secret。
+T011 仍不启用 streaming、tool calling、自动 Git/merge 或并行调度。
+
 ## Orchestrator（planning mode）
 
 ```text

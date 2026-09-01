@@ -1,0 +1,5 @@
+{"step":"define provider seams and request/response mapping","status":"completed"}
+{"step":"implement adapter and public exports","status":"completed"}
+{"step":"sync docs and core specs","status":"completed"}
+{"step":"add durable ContextStore and runner registration seam","status":"completed"}
+{"step":"run quality gates","status":"completed"}

@@ -14,7 +14,7 @@
 | 编排 | 进程内显式状态机 | 便于调试和回放，串行流程不需要队列 | Celery、Temporal、Kafka |
 | Repo 隔离 | Git CLI + worktree | 原生支持分支、diff 和回滚，任何语言 Agent 都能复用 | 自研 VCS 抽象 |
 | Prompt | 版本化 Markdown/Jinja2 模板 | 可评审、可追踪、便于把规则与任务数据分离 | 隐式 prompt 拼接 |
-| Agent 接口 | `AgentAdapter`（OpenAI-compatible 默认） | 模型供应商可替换，角色契约不绑定某家 API | 在 Orchestrator 中硬编码 SDK |
+| Agent 接口 | `AgentAdapter` + `OpenAICompatibleAgentAdapter` | 标准库 HTTP、可注入 transport/prompt，模型供应商可替换且角色契约不绑定某家 API | 在 Orchestrator 中硬编码 SDK |
 | 测试 | pytest + contract fixtures | 覆盖状态机、Schema、权限和端到端 happy path | 只做手工演示 |
 | 可观测性 | 结构化 JSONL 日志 + SQLite metrics | 本地可用，易导出；保留 task/attempt/agent 关联 | 先上完整 tracing 平台 |
 | 构建后端 | Hatchling | 配置小、支持 `src` layout 和单一版本来源，不侵入运行时 | 自定义构建脚本 |
@@ -43,7 +43,9 @@ class ArtifactStore(Protocol):
     def get(self, artifact_id: ArtifactId) -> Artifact: ...
 ```
 
-实现应先写接口与 contract tests，再接入具体模型。这样可以用 fake adapter 在没有网络或模型配额时完整测试状态机。
+实现应先写接口与 contract tests，再接入具体模型。T011 的真实 adapter 使用标准库
+`urllib`，通过 Chat Completions JSON 协议避免新增供应商 SDK 依赖；HTTP transport 与
+PromptBuilder 都可替换，因此 fake adapter 在没有网络或模型配额时仍能完整测试状态机。
 
 ## 选型原则
 
