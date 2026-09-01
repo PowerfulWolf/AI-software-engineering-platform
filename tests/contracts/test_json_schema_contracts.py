@@ -13,6 +13,7 @@ from ai_software_engineer.context import ContextBudget, ContextSource, FileConte
 from ai_software_engineer.domain import AgentPermissions, AgentRole, NetworkAccess
 from ai_software_engineer.domain.model import WirePayload
 from ai_software_engineer.evaluation import HandoffBuilder
+from ai_software_engineer.project_workspace import ProjectWorkspaceRegistry
 from ai_software_engineer.runtime import RuntimeConfig
 from tests.domain.factories import (
     make_agent,
@@ -111,6 +112,26 @@ def test_runtime_config_satisfies_the_canonical_schema() -> None:
     config = RuntimeConfig(endpoint="https://api.example.test/v1", model="runtime-model")
 
     _assert_valid(config.to_wire(), "runtime-config.schema.json")
+
+
+def test_project_workspace_manifest_satisfies_the_canonical_schema(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    workspace = ProjectWorkspaceRegistry(tmp_path / "sidecars").register(project)
+
+    _assert_valid(workspace.manifest.to_wire(), "project-workspace.schema.json")
+
+
+def test_project_workspace_schema_rejects_layout_drift(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    workspace = ProjectWorkspaceRegistry(tmp_path / "sidecars").register(project)
+    payload = workspace.manifest.to_wire()
+    layout = payload["layout"]
+    assert isinstance(layout, dict)
+    layout["logs"] = "custom-logs"
+
+    _assert_invalid(payload, "project-workspace.schema.json")
 
 
 def test_runtime_config_schema_rejects_plaintext_api_key() -> None:

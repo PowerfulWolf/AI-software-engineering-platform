@@ -49,6 +49,9 @@ EvaluationTraceBuilder.build(case_id: EvaluationCaseId) -> EvaluationTrace
 EvaluationEngine.evaluate(traces: tuple[EvaluationTrace, ...]) -> EvaluationReport
 HandoffBuilder.build(task_id: TaskId) -> HandoffBundle
 FileHandoffStore.put(bundle: HandoffBundle) -> HandoffRef
+ProjectWorkspaceRegistry.register(project_root: str | Path, *,
+                                   project_id: ProjectId | str | None = None) -> ProjectWorkspace
+project_id_for_root(project_root: str | Path) -> ProjectId
 ```
 
 这些接口必须是幂等或显式拒绝重复操作；实现不得通过全局可变状态绕过 Task/attempt 关联。
@@ -94,6 +97,17 @@ FileHandoffStore.put(bundle: HandoffBundle) -> HandoffRef
 - Handoff 只允许 `DONE/BLOCKED`，其 deterministic JSON 与 Markdown 必须一致；它不执行复核
   argv、不 merge，也不修改 Task/Artifact/verdict。
 
+### Project workspace and visualization boundary
+
+- `ProjectWorkspaceRegistry` 只读 canonical `project_root`，并在外置 registry root 原子初始化
+  固定 sidecar layout；目标项目永远是默认代码 cwd，sidecar 保存平台元数据，不复制源码。
+- manifest、registry path、project path 必须通过 lexical + resolved containment 校验；sidecar
+  与 project root 重叠、existing symlink、ID collision、manifest/layout 损坏都 fail closed。
+- project-native rules 与平台工程约定冲突时不使用自动优先级；生成 `SPEC_CONFLICT` 并等待
+  HumanAction/Resolution artifact。平台 hard safety policy 不能被项目规则放宽。
+- Visualization read projections 只能从 durable StateEvent、AgentRunEvent、Context、Artifact、
+  Evidence、Evaluation、Handoff 和只读 Git inspection 重算，不写 Task/verdict 或执行 Agent。
+
 ## 4. Validation & Error Matrix
 
 | 输入问题 | 检测点 | 结果 |
@@ -121,6 +135,11 @@ FileHandoffStore.put(bundle: HandoffBundle) -> HandoffRef
 | DONE 缺回归观察 | EvaluationEngine | `ADR=PENDING`，仍在分母 |
 | 非终态或 DONE 断链请求 handoff | HandoffBuilder | `HandoffNotReady` / `HandoffContractError` |
 | Handoff JSON/Markdown/identity 被篡改 | FileHandoffStore | `HandoffCorruption`，不返回半可信内容 |
+| project root 缺失或不是目录 | ProjectWorkspaceRegistry | `ProjectRootNotFound`；不创建 registry/sidecar |
+| registry/sidecar 与 project 重叠或 registry 是 symlink | ProjectWorkspaceRegistry | `WorkspacePlacementError`/`WorkspaceRootError`；目标项目保持不变 |
+| Project ID 已绑定另一 project root | ProjectWorkspaceRegistry | `ProjectWorkspaceConflict`；不覆盖首次 manifest |
+| workspace manifest/layout 缺失、digest/Schema 非法或路径不匹配 | ProjectWorkspaceRegistry | `ProjectWorkspaceCorruption`；不自动修复组织状态 |
+| staging 初始化失败 | ProjectWorkspaceRegistry | `ProjectWorkspaceError`；清理本轮隐藏 staging，不发布半成品 |
 
 ## 5. Good / Base / Bad Cases
 
@@ -140,6 +159,11 @@ FileHandoffStore.put(bundle: HandoffBundle) -> HandoffRef
   binding executor 的 cwd 等于 manager-issued root，clean 后才关闭。
 - **T016 Bad**：把 QA AgentDefinition 配给 Coder spec、直接用 main checkout 构造 executor，
   或 force-remove dirty role worktree。
+- **T017 Good**：同一 canonical project root 重复注册返回首次 `workspace.json`，目标项目内容
+  不变，14 个平台目录全部位于外置 sidecar。
+- **T017 Base**：一个尚无语言/构建描述的空本地目录也能注册；ProjectProfile 发现属于 T018。
+- **T017 Bad**：在目标项目创建 `.ase`、把源码复制到 sidecar、复用已绑定的 Project ID，或
+  发现旧 layout 缺失时静默补目录。
 
 ## 6. Tests Required
 
@@ -156,6 +180,10 @@ FileHandoffStore.put(bundle: HandoffBundle) -> HandoffRef
   conflict、合法篡改；emitter 覆盖 success/invalid/replay；handoff 覆盖 DONE/BLOCKED/断链/篡改。
 - Role worktree composition：真实 Git fixture 覆盖同角色 binding、Coder branch、QA detached
   candidate、固定 executor cwd、role mismatch、dirty/clean cleanup 和初始化失败回收。
+- Project workspace：真实临时目录覆盖 stable ID、幂等 replay、目标目录无写入、固定 layout、
+  ID collision、registry symlink、project overlap、manifest/layout corruption 和 staging cleanup；
+  `ProjectWorkspaceManifest.to_wire()` 必须通过 canonical JSON Schema 正反 fixture，Schema-valid
+  正文篡改也必须由 manifest SHA-256 检出。
 
 ## 7. Wrong vs Correct
 
@@ -178,6 +206,18 @@ transition(
     reason="review_approved",
     artifact_ids=[plan_id, impl_id, qa_id, review_artifact_id],
 )
+```
+
+### Project workspace wrong vs correct
+
+```python
+# Wrong: platform metadata pollutes the target project.
+state_database = project_root / ".ase" / "state.sqlite3"
+
+# Correct: code cwd and platform state have distinct, typed roots.
+workspace = ProjectWorkspaceRegistry(registry_root).register(project_root)
+code_cwd = workspace.project_root
+state_database = workspace.directory("state") / "state.sqlite3"
 ```
 
 ## 8. Required invariants

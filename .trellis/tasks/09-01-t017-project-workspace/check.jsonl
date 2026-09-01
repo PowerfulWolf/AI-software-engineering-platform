@@ -1,0 +1,5 @@
+{"check":"project/sidecar separation","status":"passed","result":"registration writes only under the external registry root; target project remains the code cwd and receives no .ase or platform metadata"}
+{"check":"identity and immutable replay","status":"passed","result":"canonical project path yields stable Project ID; exact replay preserves first manifest; collision and canonical digest tampering fail closed"}
+{"check":"filesystem boundary","status":"passed","result":"project overlap, registry symlink, missing project, missing manifest/layout and non-sidecar target paths are rejected"}
+{"check":"atomic initialization","status":"passed","result":"fixed 14-directory layout is staged then renamed; failed initialization cleans its hidden staging directory"}
+{"check":"visualization readiness","status":"passed","result":"future Task board/timeline/Agent detail/Human inbox consume durable sidecar facts through a read-only projection"}

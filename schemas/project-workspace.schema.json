@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/project-workspace.schema.json",
+  "title": "ProjectWorkspaceManifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "layout_version", "project_id", "project_root", "ai_workspace_root", "layout", "created_at", "manifest_sha256"],
+  "properties": {
+    "schema_version": {"const": "v0.1"},
+    "layout_version": {"const": "v0.1"},
+    "project_id": {"type": "string", "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "project_root": {"type": "string", "pattern": "^/", "minLength": 2},
+    "ai_workspace_root": {"type": "string", "pattern": "^/", "minLength": 2},
+    "layout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "agents", "knowledge", "policy", "state", "artifacts", "contexts", "evidence", "evaluations", "handoffs", "runs", "locks", "logs", "spec_conflicts"],
+      "properties": {
+        "profile": {"const": "profile"},
+        "agents": {"const": "agents"},
+        "knowledge": {"const": "knowledge"},
+        "policy": {"const": "policy"},
+        "state": {"const": "state"},
+        "artifacts": {"const": "artifacts"},
+        "contexts": {"const": "contexts"},
+        "evidence": {"const": "evidence"},
+        "evaluations": {"const": "evaluations"},
+        "handoffs": {"const": "handoffs"},
+        "runs": {"const": "runs"},
+        "locks": {"const": "locks"},
+        "logs": {"const": "logs"},
+        "spec_conflicts": {"const": "spec-conflicts"}
+      }
+    },
+    "created_at": {"type": "string", "format": "date-time"},
+    "manifest_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  }
+}

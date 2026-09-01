@@ -31,6 +31,28 @@ ADR 不由 `Task.status == DONE` 单独决定。`EvaluationEngine` 还要求最�
 链、独立 run、candidate revision、required criterion evidence、无越权人工动作/策略放宽，
 以及交付后的 regression window PASS。观察窗口未完成返回 `PENDING` 并保守地留在 ADR 分母。
 
+## Project Workspace 契约
+
+`ProjectWorkspaceRegistry(registry_root).register(project_root, project_id=None)` 把一个 canonical
+本地目标项目绑定到外置 sidecar，并返回 typed `ProjectWorkspace`。目标项目仍是实际代码、测试
+和构建命令 cwd；sidecar 只承载平台状态。`workspace.json` 的 wire contract 是
+`schemas/project-workspace.schema.json`，固定字段为：
+
+- `schema_version/layout_version=v0.1`；
+- `project_id`、absolute `project_root`、absolute `ai_workspace_root`；
+- 14 个固定 layout 名称；
+- UTC `created_at` 和排除自身字段计算的 canonical `manifest_sha256`。
+
+初始化先在 registry root 下建立隐藏 staging、写入并 `fsync` manifest，再以目录 rename 发布。
+同一绑定重放返回首次 manifest；Project ID collision、registry symlink、目标项目内 sidecar、缺失
+project、manifest digest/Schema/path mismatch 或 layout 缺失均 fail closed。注册不复制源码，也不
+在目标项目创建 `.ase`、数据库、Agent 日志、Artifact 或 Evidence。T020 自动装配 Runtime 前，
+外部项目必须把 Runtime paths 显式配置到 `ProjectWorkspace.directory(...)` 下。
+
+项目原生规范只读发现并以 URI/hash 引用。若它与平台工程规范或 Task 约束冲突，未来
+`SpecCompiler` 必须产生 `SPEC_CONFLICT` 并等待人工 resolution；hard safety policy 不允许项目
+规范放宽。Agent 工作可视化同样只读 sidecar durable facts，不接受 Task 状态或 verdict 写入。
+
 ## 1.2 Agent Run 输入/输出契约
 
 `AgentAdapter.run(request: AgentRequest) -> AgentResult` 是 Fake 与真实模型 adapter 的共同边界。Request 固定携带 `run_id`、`task_id`、`role`、`attempt`、`source_revision`、`context_manifest_id`、`input_artifact_ids`、`permissions`、`output_schema` 和 `timeout_seconds`；其中 Context manifest ID 必须来自已成功构建的 ContextBundle。
