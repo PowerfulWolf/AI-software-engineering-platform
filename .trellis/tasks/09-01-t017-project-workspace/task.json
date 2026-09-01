@@ -1,0 +1,31 @@
+{
+  "id": "T017",
+  "slug": "project-workspace",
+  "title": "建立外置 per-project AI workspace 注册与初始化契约",
+  "status": "completed",
+  "phase": "verify",
+  "depends_on": ["T016"],
+  "allowed_paths": [
+    "src/ai_software_engineer/project_workspace.py",
+    "schemas/project-workspace.schema.json",
+    "tests/project_workspace/**",
+    "README.md",
+    "docs/architecture.md",
+    "docs/contracts.md",
+    "docs/milestones.md",
+    "docs/visualization.md",
+    "docs/runtime.md",
+    "AGENTS.md",
+    ".trellis/spec/core/architecture.md",
+    ".trellis/spec/core/contracts.md",
+    ".trellis/tasks/09-01-t017-project-workspace/**"
+  ],
+  "verification_commands": [
+    "uv run pytest -q",
+    "uv run ruff check .",
+    "uv run ruff format --check .",
+    "uv run mypy src tests",
+    "uv build",
+    "git diff --check"
+  ]
+}

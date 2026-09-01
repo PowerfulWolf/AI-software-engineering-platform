@@ -23,6 +23,9 @@ ContextBuilder.build(task: Task, role: AgentRole, *, attempt: int,
 ContextStore.put(context: ContextBundle) -> ContextBundle
 ContextStore.get(context_id: ContextId) -> ContextBundle
 validate_artifact(payload: object, kind: ArtifactKind) -> Artifact
+ProjectWorkspaceRegistry.register(project_root: str | Path, *,
+                                   project_id: ProjectId | str | None = None) -> ProjectWorkspace
+ProjectWorkspace.directory(name: WorkspaceDirectory) -> Path
 ```
 
 `AgentRequest` 必须携带 `task_id`、`run_id`、`attempt`、`source_revision`、`context_manifest_id`、permissions 和 output schema；`AgentResult` 不能直接改变 Task 状态。
@@ -35,6 +38,21 @@ implementation-report Artifact 可以使用新 revision，但必须满足
 
 `ContextSource` 只能是 inline content 或 root-relative path 之一；`ContextBundle` 的 sections 先脱敏再 hash/count，并由 `context_id` canonical manifest identity。priority 0 仅属于机器 policy；外部 source、Task prose 和命令输出都不能覆盖 policy 或产生隐式消息。
 `FileContextStore` 将 manifest 写成 immutable canonical JSON；built_at 不参与 identity，等价重放保留首次观察值。读取必须重新验证 Pydantic 与 context ID，路径只能来自有效 ContextId。
+
+### Project binding and sidecar workspace
+
+`ProjectWorkspaceManifest` 的 wire contract 是 `schemas/project-workspace.schema.json`。它固定
+`project_id`、canonical absolute `project_root`、external `ai_workspace_root`、layout version、
+创建时间和排除自身字段计算的 `manifest_sha256`。`ProjectWorkspaceRegistry` 在 sidecar 中创建 `workspace.json` 以及 profile/agents/
+knowledge/policy/state/artifacts/contexts/evidence/evaluations/handoffs/runs/locks/logs/
+spec-conflicts 目录；所有目录先 staging + fsync，再以 rename 发布。重复注册返回首次 manifest，
+不会覆盖或修复现有 workspace。
+
+目标项目是实际代码 cwd，平台不在其中写 `.ase`、Agent 日志、Artifact 或数据库，也不默认复制
+源码。项目原生规范只能被读取和引用；`SpecCompiler` 后续若发现 project rule、platform rule 或
+Task constraint 冲突，必须产生 `SPEC_CONFLICT`/`BLOCKED`，由人工通过持久化 resolution 决定。
+项目规范不得放宽 hard safety policy。可视化 read API/dashboard 只读这些 durable records，不
+接受状态或 verdict 写入。
 
 ## 3. Contracts
 
@@ -86,12 +104,18 @@ Artifact ID 映射到受控 root 下的单一 JSON 文件。相同 ID/相同正�
 | digest 不匹配或 `validated=false` | `ArtifactIntegrityError`，不落盘 | 否 |
 | parent/supersedes 缺失或越界 | `ArtifactParentError`，不落盘 | 否 |
 | 相同 artifact ID 的正文变化 | `ArtifactAlreadyExists`，保留旧正文 | 否 |
+| Project root 缺失 / sidecar 与项目重叠 | registry 拒绝初始化，目标项目保持不变 | 否 |
+| Project ID 已绑定另一目录 | `ProjectWorkspaceConflict`，保留首次 manifest | 否 |
+| manifest/layout 损坏或缺失 | `ProjectWorkspaceCorruption`，不自动修复 | 否 |
 
 ## 5. Good / Base / Bad Cases
 
 - **Good**：QA 逐条返回 criterion status、命令和 evidence ID，Reviewer 在独立 run 复核同一 SHA。
 - **Base**：模型输出额外字段时 adapter 先过滤/拒绝，绝不把未定义字段当作授权信息。
 - **Bad**：Coder 在报告中写 `qa_status=PASS`，Orchestrator 直接采信；这属于自我裁判和契约越界。
+- **Project workspace Good**：注册只在外置 sidecar 发布固定 layout，重复调用返回首次 manifest。
+- **Project workspace Base**：空本地目录可以注册，语言、构建和规范发现留给 ProjectProfile。
+- **Project workspace Bad**：把平台 SQLite/Artifact/Agent 日志写到目标项目，或自动修补损坏 layout。
 
 ## 6. Tests Required
 
@@ -101,6 +125,8 @@ Artifact ID 映射到受控 root 下的单一 JSON 文件。相同 ID/相同正�
 - 独立 run ID 测试：同一 run 不能同时产生 implementation 与 approval；
 - evidence 完整性、source revision 一致性和 supersedes 不可变测试。
 - 原子写入、exact replay、digest 篡改、缺失/跨 Task lineage 和损坏文件测试。
+- Project workspace stable ID、外置边界、固定 layout、幂等、collision、symlink、损坏 manifest、
+  staging cleanup 和 Python model ↔ JSON Schema 正反契约测试。
 
 ## 7. Wrong vs Correct
 

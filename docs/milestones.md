@@ -1,8 +1,8 @@
 # v0.1 开发里程碑与第一批可执行任务
 
-> 实施状态：T001–T016 已完成；M0–M4 的 v0.1 核心库退出条件已通过自动化测试验证，T014
-> 提供配置驱动的串行运行入口，T015 提供 fail-closed 命令执行端口，T016 将其绑定到 role
-> worktree 生命周期。
+> 实施状态：T001–T017 已完成；目标项目与外置 AI workspace 已有稳定绑定和固定 layout。M0–M4 的
+> v0.1 核心库退出条件已通过自动化测试验证。T014 提供配置驱动的串行运行入口，T015 提供
+> fail-closed 命令执行端口，T016 将其绑定到 role worktree 生命周期。
 
 ## 里程碑
 
@@ -34,6 +34,23 @@
 
 退出条件：指标可从事件流重算；人工可在不读内部日志的情况下理解并处理 BLOCKED/DONE。
 
+### M5 — 任意项目接入与规范治理
+
+把平台从“绑定一个 Git fixture”推进到“给定任意本地项目即可安全接入”：目标项目仍是实际
+代码 cwd，平台状态全部进入外置 per-project AI workspace。项目原生规范与平台规范发生冲突
+时必须生成 `SPEC_CONFLICT` 并等待人工决定，禁止 Agent 静默选择。
+
+### M6 — 可执行交付
+
+将受控命令、Git inspection、模型 tool protocol 和 evidence capture 接入真实 Coder/QA/Reviewer
+运行，完成一个目标项目的可复核交付；仍保持串行，不自动 merge 保护分支。
+
+### M7 — Agent 工作可视化
+
+先建立只读事件投影与本地 read API，再实现 Task board、Run timeline、Agent detail 和 Human
+inbox。可视化只消费 durable StateEvent、AgentRunEvent、Context、Artifact、Evidence 和
+Handoff，不成为第二个状态写入者。详细设计见 [`docs/visualization.md`](visualization.md)。
+
 ## 第一批可执行任务
 
 | ID | 任务 | 交付物 | 验收标准 | 依赖 |
@@ -54,9 +71,19 @@
 | T014 | 组装配置驱动的 Task run | `src/ai_software_engineer/runtime.py`、`ase task run`、RuntimeConfig Schema | 真实 adapter 与 fake adapter 共用 composition seam；自动记录 CaseStarted/AgentRun；缺少密钥、非法配置和终态 Task fail closed | T010–T013 |
 | T015 | 实现受控命令执行器 | `src/ai_software_engineer/execution.py`、命令契约测试 | argv allowlist、固定 worktree cwd、最小环境、超时进程组终止和输出截断均 fail closed | T006/T014 |
 | T016 | 接入 role worktree 与受控执行生命周期 | `src/ai_software_engineer/role_workspace.py`、组合契约测试 | 同角色 AgentDefinition 才能绑定 manager-owned worktree；命令 cwd 固定；dirty cleanup 保留现场 | T006/T015 |
+| T017 | 建立外置 Project Workspace 注册与初始化 | `src/ai_software_engineer/project_workspace.py`、workspace Schema、contract tests | 任意本地项目获得稳定 sidecar；不复制源码、不污染目标项目；幂等和边界 fail closed | T016 |
+| T018 | 发现 ProjectProfile 与项目原生规范 | `project_profile.py`、native-rule index、profile Schema | 识别语言/构建/VCS/规范来源并保存 URI/hash；未知或冲突事实不猜测 | T017 |
+| T019 | SpecCompiler 与人工冲突治理 | `spec_compiler.py`、`spec-conflict` artifact、resolution event | platform hard policy、项目规范、任务约束可审计合并；工程冲突进入 `BLOCKED` | T017/T018 |
+| T020 | Runtime 绑定 project_root 与 ai_workspace_root | Runtime/CLI composition tests | 命令 cwd 是目标项目（或显式 role checkout），Task/Artifact/Context/Evaluation 全进 sidecar | T017/T019 |
+| T021 | 命令、diff、测试与 Agent usage evidence capture | `evidence/`、`runs/` durable contracts | 每次运行产出可定位、脱敏、带 SHA 的证据；超时/拒绝也可回放 | T015/T020 |
+| T022 | Coder/QA/Reviewer tool protocol | typed tool port + fake integration | Agent 只能通过 policy-bound argv/tool 调用，不能从自由文本执行 shell 或修改 verdict | T016/T021 |
+| T023 | 真实目标项目串行交付 | fixture matrix + e2e | Java/Go/TS/Python 等项目按 ProjectProfile 选择检查命令并完成 candidate→QA→Review | T019–T022 |
+| T024 | 事件驱动 RunProjection 与只读 read API | projection models/API contract | 从 durable facts 重算 Task board/timeline 数据；API 不迁移状态、不写 verdict | T012/T020/T021 |
+| T025 | 本地 Agent 工作可视化 dashboard | Task board、timeline、agent detail、human inbox | 人类能看到上下文、证据、预算、失败路由和冲突，不读取隐式会话 | T024 |
 
 ## 第一批任务的执行顺序
 
-`T001 → T002 → T003 → T004/T005/T006 → T007 → T008 → T009 → T010 → T011 → T012 → T013 → T014 → T015 → T016`。
+`T001 → T002 → T003 → T004/T005/T006 → T007 → T008 → T009 → T010 → T011 → T012 → T013 → T014 → T015 → T016 → T017 → T018 → T019 → T020 → T021 → T022 → T023 → T024 → T025`。
 
-每完成一个任务，都先运行 contract tests，再更新 `.trellis/spec/`；不要在 T009 之前引入并行调度、队列或向量库。
+每完成一个任务，都先运行 contract tests，再更新 `.trellis/spec/`；不要在 T009 之前引入并行
+调度、队列或向量库；可视化也必须先消费已存在的 durable facts，不能反向驱动 Agent。

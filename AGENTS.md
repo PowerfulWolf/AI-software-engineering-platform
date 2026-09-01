@@ -10,7 +10,7 @@
 
 ## v0.1 硬边界
 
-第一阶段只实现单仓库、单 Task、串行：
+第一阶段只实现单项目、单 Task、串行（v0.1 的代码隔离 adapter 使用 Git）：
 
 ```text
 NEW → PLANNING → IMPLEMENTING → QA → REVIEW → DONE
@@ -25,6 +25,24 @@ NEW → PLANNING → IMPLEMENTING → QA → REVIEW → DONE
 - 让 Agent 自己修改权限、Schema、状态机或 Trellis 规范。
 
 若需求看似需要以上能力，先把它拆成不改变 v0.1 边界的最小任务，或进入 `BLOCKED` 请求人类决定。
+
+## 目标项目与外置 AI Workspace
+
+平台可以接入任意本地项目；Task 的 `repository`/`project_root` 是目标项目的真实代码目录，
+也是默认命令 cwd。每个项目必须注册一个位于目标目录之外的 `ai_workspace_root`，由
+`ProjectWorkspaceRegistry` 建立固定 sidecar layout。Agent、ProjectProfile、项目级 prompt/规范、
+Task/StateEvent、Context、Artifact、Evidence、Evaluation、Handoff、运行日志和锁只能写入
+该 sidecar；不得在目标项目创建 `.ase`、AI 日志或数据库，也不得默认复制源码。
+
+目标项目自身的 `AGENTS.md`、`CONTRIBUTING`、README、CI、`.editorconfig`、`.trellis/spec/` 等
+是 project-native rules，必须只读发现、记录 URI/hash 并纳入 Context。平台 sidecar 不能悄悄
+覆盖它们。平台 hard safety policy（无自我批准、无 secret 泄露、无越权命令/路径）不可被项目
+规范放宽；工程约定或 Task 约束发生冲突时生成 `SPEC_CONFLICT`，任务进入 `BLOCKED` 并交人工。
+人工决定必须写入 `HumanActionEvent`/resolution artifact；不能只修改聊天记录或让 Agent 自行选边。
+
+后续可选的 role Git worktree 是临时代码 checkout，不是 AI metadata workspace；逻辑项目仍由
+给定 `project_root` 绑定。可视化只读取 sidecar 的 durable events/artifacts/evidence 和目标项目
+的只读 Git inspection，不直接驱动状态或 verdict；路线见 `docs/visualization.md`。
 
 ## 已接受的语言决策
 

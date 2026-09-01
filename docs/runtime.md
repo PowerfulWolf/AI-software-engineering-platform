@@ -37,7 +37,10 @@ export OPENAI_API_KEY='...'
 `api_key_required` 默认为 `true`。只有离线 fake adapter 测试才可以显式设为 `false`；
 CLI 仍然使用真实 OpenAI-compatible adapter，不会因为该开关自动创建 fake 模型。
 
-路径可以是相对当前工作目录的路径，也可以是绝对路径。`RuntimeSession` 会打开 SQLite
+路径可以是相对当前工作目录的路径，也可以是绝对路径。T020 自动绑定 Project Workspace
+之前，接入外部目标项目时必须把全部 `paths` 显式配置到 T017 创建的 `ai_workspace_root` 下，
+并从该 sidecar（或平台控制目录）运行 CLI；不得在目标项目 cwd 中沿用 `.ase/state.sqlite3`
+或 `artifacts/*` 默认值。`RuntimeSession` 会打开 SQLite
 Task/StateEvent、不可变 Artifact、Context manifest 和 Evaluation event store；`handoffs`
 路径由 `ase handoff build` 使用。目录由各自的 store 按需创建。
 

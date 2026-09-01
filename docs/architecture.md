@@ -11,7 +11,7 @@ v0.1 解决一个窄而完整的问题：在已有 Git 项目中，把一条需�
 - Agent 不直接互相调用，所有交互经过 Orchestrator 和 artifact store；
 - 人类是需求来源和最终升级出口；v0.1 不自动向保护分支 push/merge。
 
-## 2. 六个逻辑组件
+## 2. 逻辑组件
 
 ### Control Plane
 
@@ -20,6 +20,23 @@ v0.1 解决一个窄而完整的问题：在已有 Git 项目中，把一条需�
 ### Knowledge Plane
 
 由 `.trellis/spec/`（组织级规则）、项目文档、任务 PRD/Design、历史 artifact 摘要和失败经验组成。`context/` 中的 Context Router/Builder 只读取声明过的来源并生成带哈希、脱敏、预算约束的 manifest；不把整仓库或整段历史盲目塞给模型。policy section 由机器权限生成并固定排在外部文本之前，仓库内容永远是数据而非新的系统指令。
+
+### Project Binding 与外置 AI Workspace
+
+`ProjectWorkspaceRegistry` 将操作者给出的本地 `project_root` 绑定到目标目录之外的
+`ai_workspace_root`。目标项目仍是实际代码、测试、构建和默认命令 cwd；sidecar 保存
+`ProjectProfile`、项目级 Agent/规范、Task/StateEvent、Context、Artifact、Evidence、Evaluation、
+Handoff、run metadata 和日志。T017 的 manifest 与固定 layout 是后续 Runtime/Context/Visualization
+共享的路径契约，注册过程不会复制源码或在目标项目写入平台文件。
+
+目标项目已有的 `AGENTS.md`、CONTRIBUTING、README、CI、`.editorconfig`、`.trellis/spec/` 等
+project-native rules 只读发现并以 URI/hash 引用。平台 hard safety policy 不可被覆盖；工程规则
+或任务约束冲突会生成 `SPEC_CONFLICT` 并进入 `BLOCKED`，由人工选择更新项目规范、平台规范或
+任务约束，决定以 `HumanActionEvent` 和 resolution artifact 持久化。Agent 和 UI 都不能静默选边。
+
+后续可选的 role worktree 是临时代码 checkout，与 sidecar 元数据分离；逻辑项目绑定仍指向给定
+`project_root`。Agent 工作可视化只从 sidecar durable facts 和目标项目只读 Git inspection 生成
+read projection，不成为第二个状态写入者，详见 [`docs/visualization.md`](visualization.md)。
 
 ### Agent Execution Plane
 
@@ -80,6 +97,7 @@ Task(JSON)
 | 运行日志 | 文件系统文本 | 脱敏、截断、由 evidence 引用 |
 | Evaluation events | 文件系统 canonical JSON | 一事件一文件，带内部 SHA-256，exact replay 幂等 |
 | Handoff | 文件系统 JSON + Markdown | deterministic ID，等价重建保留首次观察时间 |
+| Project workspace binding | 外置 sidecar `workspace.json` + 固定目录 | 目标项目外置、幂等、与项目路径绑定；不复制源码 |
 | Trellis 规则 | Git 中的 Markdown | 组织知识，评审后变更 |
 
 Task 快照和状态事件的 Python 入口分别是 `Task` 与 `StateEvent`；`SqliteTaskRepository` 使用 `tasks`、`state_events` 两张表。快照正文和事件正文均保留 JSON，便于重启后由 Pydantic 重新校验并按事件 revision 回放。
