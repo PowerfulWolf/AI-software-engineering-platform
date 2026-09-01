@@ -1,7 +1,8 @@
 # CLI 使用说明
 
-T013 将 v0.1 的持久化和评估能力组装为离线 `ase` 命令。CLI 只负责 composition，不绕过
-Task、Artifact、StateEvent、EvaluationEvent 或 Handoff 的 typed contract。
+T013–T014 将 v0.1 的持久化、评估和串行运行能力组装为 `ase` 命令。CLI 只负责
+composition，不绕过 Task、Artifact、StateEvent、EvaluationEvent 或 Handoff 的 typed
+contract。
 
 ## 默认目录
 
@@ -40,6 +41,23 @@ ase evaluation report case_example_001 \
 报告来自 `EvaluationTraceBuilder + EvaluationEngine` 对 durable facts 的重放。命令不接受
 `--adr` 或其他覆盖参数；缺失 CaseStartedEvent、事件损坏或 Artifact 断链会 fail closed。
 
+## 运行 Task
+
+使用 Runtime 配置装配真实 OpenAI-compatible AgentAdapter，并按固定顺序执行
+`Orchestrator → Coder → QA → Reviewer`：
+
+```bash
+export OPENAI_API_KEY='...'
+ase task run task_example_001 --config runtime.json
+```
+
+配置中的 `paths.database` 必须指向创建 Task 时使用的同一个 SQLite 文件。API key 不得写入
+JSON；只允许通过 `api_key_env` 指定环境变量名。完整字段、role override 和离线 fake 注入
+方式见 [`docs/runtime.md`](runtime.md)。
+
+成功输出包含 `case_id` 和 typed retry result；失败输出单行错误并返回退出码 2，不打印
+provider secret。`--case-id` 可提供外部评估使用的稳定 case identity。
+
 ## 生成 Human Handoff
 
 ```bash
@@ -54,6 +72,7 @@ JSON/Markdown 路径；命令不会执行 review command、merge 或修改终态
 
 ## 当前边界
 
-T013 没有添加 `ase task run`：真实 Agent 运行仍由应用层装配 `RetryingOrchestrator`、
-`AgentAdapter`、ContextStore 和 Git workspace。这样 CLI 可以先稳定地消费和复核事实，
-不会把 provider 凭据、工作树写权限或状态迁移逻辑藏进入口脚本。
+T014 的 `task run` 仍只做单仓库、单 Task、串行 Coder → QA → Reviewer。它不创建复杂 DAG、
+消息队列、向量库或容器 sandbox，不自动 merge/deploy；Git worktree 和最终合并继续由
+后续 composition/human boundary 负责。CLI 不直接修改状态、verdict、artifact 或执行
+merge。

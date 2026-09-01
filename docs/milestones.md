@@ -1,6 +1,7 @@
 # v0.1 开发里程碑与第一批可执行任务
 
-> 实施状态：T001–T013 已完成；M0–M4 的 v0.1 核心库退出条件已通过自动化测试验证。
+> 实施状态：T001–T014 已完成；M0–M4 的 v0.1 核心库退出条件已通过自动化测试验证，T014
+> 额外提供了配置驱动的串行运行入口。
 
 ## 里程碑
 
@@ -49,9 +50,10 @@
 | T011 | 接入真实 AgentAdapter | `src/ai_software_engineer/agents/openai_compatible.py` | fake/real 共用 request/response contract | T008/T009 |
 | T012 | 实现 metrics、ADR 和交付包 | `src/ai_software_engineer/evaluation/*` | 从事件流重算 ADR，输出 handoff bundle | T009/T010 |
 | T013 | 组装离线 CLI/runtime 入口 | `src/ai_software_engineer/cli.py` | 可创建/查看 Task、重算 evaluation、生成 handoff，错误 fail closed | T003/T012 |
+| T014 | 组装配置驱动的 Task run | `src/ai_software_engineer/runtime.py`、`ase task run`、RuntimeConfig Schema | 真实 adapter 与 fake adapter 共用 composition seam；自动记录 CaseStarted/AgentRun；缺少密钥、非法配置和终态 Task fail closed | T010–T013 |
 
 ## 第一批任务的执行顺序
 
-`T001 → T002 → T003 → T004/T005/T006 → T007 → T008 → T009 → T010 → T011 → T012 → T013`。
+`T001 → T002 → T003 → T004/T005/T006 → T007 → T008 → T009 → T010 → T011 → T012 → T013 → T014`。
 
 每完成一个任务，都先运行 contract tests，再更新 `.trellis/spec/`；不要在 T009 之前引入并行调度、队列或向量库。

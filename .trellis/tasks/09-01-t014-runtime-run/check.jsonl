@@ -1,0 +1,3 @@
+{"check":"RuntimeConfig Pydantic and JSON Schema contracts","status":"passed","result":"positive config, unknown plaintext key, duplicate role and env-name boundaries covered"}
+{"check":"offline RuntimeSession serial composition","status":"passed","result":"fake adapter completed Orchestrator/Coder/QA/Reviewer and persisted CaseStarted plus AgentRun facts"}
+{"check":"CLI task run failure boundary","status":"passed","result":"missing API key returns stable exit code 2 without traceback or secret"}

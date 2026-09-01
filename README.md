@@ -70,7 +70,8 @@ ai-software-engineer/
 │   ├── git/                          # role worktree 隔离与 path/command policy
 │   ├── context/                      # 确定、脱敏、预算受限的 Context Builder/Router
 │   ├── agents/                       # AgentAdapter、Fake 与 OpenAI-compatible adapter
-│   ├── orchestration/                 # 串行 runner、Context composition 与状态机
+│   ├── orchestration/                # 串行 runner、Context composition 与状态机
+│   ├── runtime.py                    # RuntimeConfig、角色路由与 task run composition
 │   ├── evaluation/                   # Evaluation events、metrics/ADR、handoff
 │   └── prompts/                      # 后续：版本化 role prompt 模板
 ├── docs/
@@ -84,7 +85,8 @@ ai-software-engineer/
 │   ├── orchestration.md              # 核心流程与伪代码
 │   ├── failure-routing.md            # 失败分类、重试与升级
 │   ├── evaluation.md                 # 指标与 Autonomous Delivery Rate
-│   ├── cli.md                         # 离线 CLI 使用说明
+│   ├── cli.md                        # CLI 使用说明
+│   ├── runtime.md                    # Runtime 配置与 task run
 │   ├── milestones.md                 # 里程碑与第一批任务
 │   └── decisions/
 │       └── 0001-python-control-plane.md # 已接受的语言架构决策
@@ -99,7 +101,8 @@ ai-software-engineer/
 │   ├── context.schema.json
 │   ├── state-event.schema.json
 │   ├── evaluation-event.schema.json
-│   └── handoff-bundle.schema.json
+│   ├── handoff-bundle.schema.json
+│   └── runtime-config.schema.json
 ├── .trellis/
 │   ├── README.md
 │   └── spec/core/
@@ -110,8 +113,9 @@ ai-software-engineer/
 │   ├── domain/                       # 单对象不变量和权限边界
 │   ├── context/                      # 路由、预算、脱敏和注入边界
 │   ├── agents/                       # Fake/real AgentAdapter 共用契约
-│   ├── orchestration/                 # 串行交付闭环与状态 checkpoint
+│   ├── orchestration/                # 串行交付闭环与状态 checkpoint
 │   ├── evaluation/                   # 事件重放、ADR 与 DONE/BLOCKED handoff
+│   ├── runtime/                      # RuntimeSession 与 fake adapter composition
 │   └── contracts/                    # Python model ↔ JSON Schema 一致性
 └── artifacts/runs/                   # 运行产物（默认 gitignored）
 ```
@@ -150,12 +154,13 @@ uv run mypy src tests
 - 失败路由：[`docs/failure-routing.md`](docs/failure-routing.md)
 - 评估：[`docs/evaluation.md`](docs/evaluation.md)
 - CLI 使用：[`docs/cli.md`](docs/cli.md)
+- Runtime 配置与 task run：[`docs/runtime.md`](docs/runtime.md)
 - 里程碑：[`docs/milestones.md`](docs/milestones.md)
 - 语言架构决策：[`docs/decisions/0001-python-control-plane.md`](docs/decisions/0001-python-control-plane.md)
 - Codex bootstrap：[`AGENTS.md`](AGENTS.md)
 
 ## 当前状态
 
-M0–M4 与 T001–T013 的 v0.1 核心库已经完成。当前可运行 `ase`，并可用 Pydantic 与 canonical JSON Schema 校验 Task、Agent Definition、StateEvent、ContextBundle、AgentRequest/AgentResult、四类 Artifact、EvaluationEvent 与 HandoffBundle。Task/事件可从 SQLite 恢复，Artifact/Context/Evaluation/Handoff 文件存储都采用不可变、原子、fail-closed 的边界。Repository Plane、Context Plane、Fake/真实 AgentAdapter、串行 Orchestrator 与有界 retry/recovery 已形成可离线验证的闭环。
+M0–M4 与 T001–T014 的 v0.1 核心库已经完成。当前可运行 `ase`，并可用 Pydantic 与 canonical JSON Schema 校验 Task、Agent Definition、StateEvent、ContextBundle、AgentRequest/AgentResult、四类 Artifact、EvaluationEvent、HandoffBundle 与 RuntimeConfig。Task/事件可从 SQLite 恢复，Artifact/Context/Evaluation/Handoff 文件存储都采用不可变、原子、fail-closed 的边界。Repository Plane、Context Plane、Fake/真实 AgentAdapter、串行 Orchestrator、有界 retry/recovery 和 RuntimeSession 已形成可离线验证的闭环。
 
-T012 通过 `EvaluatingAgentAdapter` 自动记录 Agent run 事实，`EvaluationTraceBuilder + EvaluationEngine` 从状态事件、评估事件和封存 Artifact 重算 metrics/ADR；`HandoffBuilder + FileHandoffStore` 为 `DONE/BLOCKED` 输出自包含 JSON 与 Markdown。T013 将这些能力接入离线 CLI：`ase task create/show/events`、`ase evaluation report` 和 `ase handoff build`。缺少回归观察窗口时 ADR 明确为 `PENDING`，不会把未知当成功。完整装配示例见 [`docs/evaluation.md`](docs/evaluation.md)。真实 provider 凭据、模型选择和网络策略仍由部署环境注入；v0.1 不自动 merge、部署或引入并行 DAG。
+T012 通过 `EvaluatingAgentAdapter` 自动记录 Agent run 事实，`EvaluationTraceBuilder + EvaluationEngine` 从状态事件、评估事件和封存 Artifact 重算 metrics/ADR；`HandoffBuilder + FileHandoffStore` 为 `DONE/BLOCKED` 输出自包含 JSON 与 Markdown。T013 将这些能力接入离线 CLI：`ase task create/show/events`、`ase evaluation report` 和 `ase handoff build`；T014 增加受配置驱动的 `ase task run`，从环境读取 API key，复用同一 stores 和 retry runner。缺少回归观察窗口时 ADR 明确为 `PENDING`，不会把未知当成功。完整装配示例见 [`docs/evaluation.md`](docs/evaluation.md) 与 [`docs/runtime.md`](docs/runtime.md)。真实 provider 凭据、模型选择和网络策略仍由部署环境注入；v0.1 不自动 merge、部署或引入并行 DAG。

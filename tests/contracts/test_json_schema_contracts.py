@@ -13,6 +13,7 @@ from ai_software_engineer.context import ContextBudget, ContextSource, FileConte
 from ai_software_engineer.domain import AgentPermissions, AgentRole, NetworkAccess
 from ai_software_engineer.domain.model import WirePayload
 from ai_software_engineer.evaluation import HandoffBuilder
+from ai_software_engineer.runtime import RuntimeConfig
 from tests.domain.factories import (
     make_agent,
     make_implementation_artifact,
@@ -104,6 +105,19 @@ def test_every_typed_artifact_satisfies_the_common_envelope(factory: ModelFactor
 def test_all_committed_schemas_are_valid_draft_2020_12_documents() -> None:
     for schema in SCHEMAS.values():
         Draft202012Validator.check_schema(schema)
+
+
+def test_runtime_config_satisfies_the_canonical_schema() -> None:
+    config = RuntimeConfig(endpoint="https://api.example.test/v1", model="runtime-model")
+
+    _assert_valid(config.to_wire(), "runtime-config.schema.json")
+
+
+def test_runtime_config_schema_rejects_plaintext_api_key() -> None:
+    payload = RuntimeConfig(endpoint="https://api.example.test/v1", model="runtime-model").to_wire()
+    payload["api_key"] = "secret-that-must-stay-out-of-config"
+
+    _assert_invalid(payload, "runtime-config.schema.json")
 
 
 def test_task_schema_rejects_malformed_id() -> None:
