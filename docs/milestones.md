@@ -3,6 +3,9 @@
 > 实施状态：T001–T017 已完成；目标项目与外置 AI workspace 已有稳定绑定和固定 layout。M0–M4 的
 > v0.1 核心库退出条件已通过自动化测试验证。T014 提供配置驱动的串行运行入口，T015 提供
 > fail-closed 命令执行端口，T016 将其绑定到 role worktree 生命周期。
+>
+> 已完成阶段、逐任务验证基线和提交证据见
+> [`docs/archive/2026-09-01-v0.1-foundation-t001-t017.md`](archive/2026-09-01-v0.1-foundation-t001-t017.md)。
 
 ## 里程碑
 
