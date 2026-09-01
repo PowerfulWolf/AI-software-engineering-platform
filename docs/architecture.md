@@ -23,7 +23,7 @@ v0.1 解决一个窄而完整的问题：在已有 Git 项目中，把一条需�
 
 ### Agent Execution Plane
 
-通过 `AgentAdapter` 启动 Coder、QA、Reviewer。每个运行使用独立会话标识、独立 prompt、角色权限和 worktree。模型供应商可以更换，但角色契约不能由模型自行修改。
+通过 `AgentAdapter.run(AgentRequest) -> AgentResult` 启动 Coder、QA、Reviewer。每个运行使用独立 `run_id`、Context manifest、角色权限、超时和 worktree。`AgentResult` 只能携带与 request 身份对齐的 typed Artifact，或不含 Artifact 的 typed failure；模型供应商可以更换，但角色契约不能由模型自行修改。T008 的 `FakeAgentAdapter` 通过脚本注入成功、QA FAIL、Review REJECT 和 timeout，供离线状态机测试。
 
 ### Evidence Plane
 

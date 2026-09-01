@@ -18,6 +18,19 @@ CONTEXT_MANIFEST: {context_manifest_id}
 
 模型输出必须是一个 JSON 文档；自然语言解释放在 `summary` 字段，不得混入 JSON 外层。
 
+## AgentAdapter 执行信封
+
+模型或 Fake adapter 都实现同一个 typed seam：
+
+```python
+class AgentAdapter(Protocol):
+    def run(self, request: AgentRequest) -> AgentResult: ...
+```
+
+`AgentRequest` 固定携带 `run_id`、`task_id`、`role`、`attempt`、`source_revision`、`context_manifest_id`、`input_artifact_ids`、机器 `permissions`、`output_schema` 和 `timeout_seconds`。`AgentResult` 回显这些身份字段，并且只能是 `SUCCEEDED + typed artifact`，或 `FAILED/TIMED_OUT + AgentFailure`；失败结果不能携带 verdict Artifact。
+
+v0.1 的 `FakeAgentAdapter` 不渲染 prompt、不访问网络或 Git，而是按 `(role, attempt)` 注入可重复 scenario。它用于离线验证状态机和失败路由；真实 adapter 必须复用同一 request/result contract，不得让供应商对象穿透到 Orchestrator。
+
 ## Orchestrator（planning mode）
 
 ```text

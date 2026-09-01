@@ -68,6 +68,10 @@ Artifact ID 映射到受控 root 下的单一 JSON 文件。相同 ID/相同正�
 | QA 有 `NOT_TESTED` required criterion | `qa-report=FAIL`，路由 Coder 或阻塞 | 是（FAIL） |
 | Reviewer `APPROVE` 但有 MAJOR/BLOCKER finding | validator 拒绝 verdict，重跑 Reviewer | 否 |
 | evidence URI/sha 缺失 | artifact 无效，不允许状态迁移 | 否 |
+| AgentResult 成功但 Artifact 身份/role/kind/revision/context 不匹配 | adapter output guard | 否 |
+| Agent timeout/provider/invalid output | typed AgentFailure mapping | 否 |
+| same `run_id` 重放相同 request | adapter replay cache | 原结果幂等返回 |
+| same `run_id` 搭配不同 request | replay identity guard | 否，抛 `AgentRequestConflict` |
 | digest 不匹配或 `validated=false` | `ArtifactIntegrityError`，不落盘 | 否 |
 | parent/supersedes 缺失或越界 | `ArtifactParentError`，不落盘 | 否 |
 | 相同 artifact ID 的正文变化 | `ArtifactAlreadyExists`，保留旧正文 | 否 |

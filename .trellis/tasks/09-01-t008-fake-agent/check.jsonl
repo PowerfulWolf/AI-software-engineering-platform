@@ -1,0 +1,4 @@
+{"path":"src/ai_software_engineer/agents","reason":"New Agent Execution Plane package."}
+{"path":"tests/agents","reason":"Agent adapter contract coverage."}
+{"path":".trellis/spec/core/index.md","reason":"Core protocol, artifact and quality gates."}
+{"path":"docs/prompt-protocol.md","reason":"Agent request identity and output boundary."}

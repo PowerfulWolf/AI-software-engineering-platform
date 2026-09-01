@@ -41,7 +41,7 @@
 | T005 | 实现 ArtifactStore | `src/ai_software_engineer/artifacts/*` | 原子写入、sha256、父子关系、不可变 | T002/T003 |
 | T006 | 实现 Git worktree manager | `src/ai_software_engineer/git/*` | fixture repo 中创建三角色 worktree，路径 allowlist 生效 | T001 |
 | T007 | 实现 Context Builder/Router | `src/ai_software_engineer/context/*` | 生成稳定 manifest，脱敏并限制预算 | T002/T006 |
-| T008 | 实现 FakeAgentAdapter | `src/ai_software_engineer/agents/fake.py` | 可注入成功、QA FAIL、Review REJECT、超时 | T002 |
+| T008 | 实现 FakeAgentAdapter | `src/ai_software_engineer/agents/fake.py` | 可注入成功、QA FAIL、Review REJECT、超时和 typed failures | T002/T007 |
 | T009 | 实现 Orchestrator happy path | `src/ai_software_engineer/orchestrator/runner.py` | fixture Task 走到 DONE 并生成四类 artifact | T004–T008 |
 | T010 | 实现失败路由与恢复 | `src/ai_software_engineer/orchestrator/retry.py` | attempt 上限、分类路由、重启恢复测试 | T009 |
 | T011 | 接入真实 AgentAdapter | `src/ai_software_engineer/agents/openai_compatible.py` | fake/real 共用 request/response contract | T008/T009 |
