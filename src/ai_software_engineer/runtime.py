@@ -327,9 +327,7 @@ def _permissions(role: AgentRole, override: RoleAgentOverride | None) -> AgentPe
         AgentRole.REVIEWER: (),
     }[role]
     write_paths = (
-        override.write_paths
-        if override and override.write_paths is not None
-        else default_writes
+        override.write_paths if override and override.write_paths is not None else default_writes
     )
     _validate_write_scope(role, write_paths)
     return AgentPermissions(

@@ -171,9 +171,7 @@ def test_runtime_role_overrides_cannot_widen_write_boundaries() -> None:
     config = RuntimeConfig(
         endpoint="https://api.example.test/v1",
         model="runtime-model",
-        role_overrides=(
-            RoleAgentOverride(role=AgentRole.REVIEWER, write_paths=("src/**",)),
-        ),
+        role_overrides=(RoleAgentOverride(role=AgentRole.REVIEWER, write_paths=("src/**",)),),
     )
 
     with pytest.raises(RuntimeConfigurationError, match="reviewer cannot write"):
