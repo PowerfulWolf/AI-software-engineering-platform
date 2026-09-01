@@ -2,7 +2,6 @@
 
 import hashlib
 import json
-import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -27,6 +26,7 @@ from ai_software_engineer.domain.enums import AgentRole
 from ai_software_engineer.domain.model import WirePayload
 from ai_software_engineer.domain.task import Task
 from ai_software_engineer.git import PathPolicyViolation, WorkspacePolicy
+from ai_software_engineer.redaction import redact_text
 
 DEFAULT_CONTEXT_BUDGET: Final[ContextBudget] = ContextBudget(
     max_input_tokens=12_000,
@@ -38,29 +38,6 @@ DEFAULT_ROLE_INSTRUCTIONS: Final[dict[AgentRole, str]] = {
     AgentRole.QA: "Independently verify every required acceptance criterion with evidence.",
     AgentRole.REVIEWER: "Review the exact candidate revision read-only and report findings.",
 }
-
-_SECRET_PATTERNS: Final[tuple[tuple[str, re.Pattern[str]], ...]] = (
-    (
-        "private_key",
-        re.compile(
-            r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
-            re.DOTALL,
-        ),
-    ),
-    ("openai_key", re.compile(r"\bsk-[A-Za-z0-9][A-Za-z0-9_-]{19,}\b")),
-    ("aws_access_key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
-    ("github_token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b")),
-    (
-        "bearer_token",
-        re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}"),
-    ),
-    (
-        "secret_assignment",
-        re.compile(
-            r"""(?i)(["']?\b(?:password|passwd|secret|token|api[_-]?key)\b["']?\s*[:=]\s*["']?)([^\s,;"'}]+)(["']?)"""
-        ),
-    ),
-)
 
 
 class FileContextBuilder:
@@ -260,17 +237,11 @@ def _section_name(source: ContextSource) -> str:
 
 
 def _redact(content: str, uri: str) -> tuple[str, list[ContextRedaction]]:
-    redactions: list[ContextRedaction] = []
-    redacted = content
-    for kind, pattern in _SECRET_PATTERNS:
-        if kind == "secret_assignment":
-            replacement = rf"\1[REDACTED:{kind}]\3"
-        else:
-            replacement = f"[REDACTED:{kind}]"
-        redacted, count = pattern.subn(replacement, redacted)
-        if count:
-            redactions.append(ContextRedaction(uri=uri, kind=kind, count=count))
-    return redacted, redactions
+    result = redact_text(content)
+    redactions = [
+        ContextRedaction(uri=uri, kind=item.kind, count=item.count) for item in result.occurrences
+    ]
+    return result.text, redactions
 
 
 def _estimate_tokens(content: str) -> int:

@@ -1,0 +1,27 @@
+{
+  "id": "T023",
+  "slug": "evidence-capture",
+  "title": "封存命令、diff、测试与 Agent usage evidence",
+  "status": "completed",
+  "phase": "verify",
+  "depends_on": ["T015", "T022"],
+  "allowed_paths": [
+    "src/ai_software_engineer/evidence/**",
+    "src/ai_software_engineer/redaction.py",
+    "src/ai_software_engineer/context/builder.py",
+    "src/ai_software_engineer/agents/**",
+    "schemas/evidence*.schema.json",
+    "tests/evidence/**",
+    "tests/agents/**",
+    "tests/context/**",
+    ".trellis/tasks/09-01-t023-evidence-capture/**"
+  ],
+  "verification_commands": [
+    "uv run pytest",
+    "uv run ruff check .",
+    "uv run ruff format --check .",
+    "uv run mypy src tests",
+    "uv build --offline",
+    "git diff --check"
+  ]
+}

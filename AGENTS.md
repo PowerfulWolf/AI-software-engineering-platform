@@ -127,6 +127,15 @@ Coder/QA/Reviewer 的 branch、detached candidate 和 permissions 不能互换�
 `GitWorkspace.remove`，dirty worktree 抛 `DirtyWorktree` 并保留现场；不得 force-delete 或
 让 session 直接迁移 Task、写 Artifact、解释 verdict。
 
+T023/T024 的执行边界必须保持为两个显式 seam：`RunEvidenceSession`/`FileEvidenceStore` 负责
+把脱敏、限长、带 SHA 的 command/diff/test/usage facts 与 run manifest 原子封存；
+`PolicyBoundToolRegistry` 只接受带 `run_id`、`role`、`operation_id` 的 typed
+`read_file`/`write_file`/tokenized `run_command` 请求。没有自由文本 `shell`/`exec`，也没有
+写 artifact、verdict、state 或 Trellis 规则的 tool。QA 只能写 `tests/**`，Reviewer 始终只读；
+timeout、拒绝、启动失败和非 UTF-8/越权路径都必须 fail closed。工具返回成功不等于 verdict，
+应用服务必须显式把工具结果交给 EvidenceStore，Agent 不得直接持有 EvidenceStore 或
+subprocess/filesystem handle。
+
 ## Agent Prompt 最低要求
 
 每个 role prompt 都必须包含：

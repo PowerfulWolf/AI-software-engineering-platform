@@ -1,0 +1,3 @@
+{"path":"src/ai_software_engineer/execution.py","reason":"Reuse only typed argv CommandExecutor; shell=False and bounded environment remain the execution boundary."}
+{"path":"src/ai_software_engineer/git/policy.py","reason":"Reuse canonical path and command allowlist authorization."}
+{"path":"docs/git-worktree.md","reason":"Role worktree and command isolation contract."}

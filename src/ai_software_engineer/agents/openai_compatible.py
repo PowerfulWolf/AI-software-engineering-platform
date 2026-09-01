@@ -22,6 +22,7 @@ from ai_software_engineer.agents.models import (
     AgentRequest,
     AgentResult,
     AgentRunStatus,
+    AgentUsage,
 )
 from ai_software_engineer.agents.ports import (
     AgentConfigurationError,
@@ -353,8 +354,10 @@ class OpenAICompatibleAgentAdapter:
                 transient=transient,
                 duration_ms=duration_ms,
             )
+        provider_payload: object | None = None
         try:
             provider_payload = json.loads(response.body.decode("utf-8"))
+            usage = _extract_usage(provider_payload)
             content = _extract_content(provider_payload)
             artifact_payload = json.loads(_strip_json_fence(content))
             artifact = validate_artifact(artifact_payload, ROLE_OUTPUT[request.role])
@@ -368,10 +371,12 @@ class OpenAICompatibleAgentAdapter:
                 context_manifest_id=request.context_manifest_id,
                 status=AgentRunStatus.SUCCEEDED,
                 artifact=artifact,
+                usage=usage,
                 duration_ms=duration_ms,
             )
             return result
         except (UnicodeDecodeError, TypeError, ValueError, KeyError, IndexError):
+            usage = _extract_usage(provider_payload)
             return _failure(
                 request,
                 AgentRunStatus.FAILED,
@@ -379,6 +384,7 @@ class OpenAICompatibleAgentAdapter:
                 "provider returned invalid JSON or Artifact output",
                 transient=False,
                 duration_ms=duration_ms,
+                usage=usage,
             )
 
 
@@ -458,6 +464,24 @@ def _extract_content(payload: object) -> str | Mapping[str, object]:
     raise ValueError("provider response has no message content")
 
 
+def _extract_usage(payload: object) -> AgentUsage | None:
+    if not isinstance(payload, Mapping):
+        return None
+    usage = payload.get("usage")
+    if not isinstance(usage, Mapping):
+        return None
+    input_tokens = usage.get("prompt_tokens", usage.get("input_tokens"))
+    output_tokens = usage.get("completion_tokens", usage.get("output_tokens"))
+    total_tokens = usage.get("total_tokens")
+    if not all(type(value) is int for value in (input_tokens, output_tokens, total_tokens)):
+        return None
+    return AgentUsage(
+        input_tokens=cast(int, input_tokens),
+        output_tokens=cast(int, output_tokens),
+        total_tokens=cast(int, total_tokens),
+    )
+
+
 def _strip_json_fence(content: str | Mapping[str, object]) -> str:
     if isinstance(content, Mapping):
         return json.dumps(content, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
@@ -489,6 +513,7 @@ def _failure(
     *,
     transient: bool,
     duration_ms: int,
+    usage: AgentUsage | None = None,
 ) -> AgentResult:
     return AgentResult(
         run_id=request.run_id,
@@ -499,6 +524,7 @@ def _failure(
         context_manifest_id=request.context_manifest_id,
         status=status,
         error=AgentFailure(code=code, message=message, transient=transient),
+        usage=usage,
         duration_ms=max(0, duration_ms),
     )
 

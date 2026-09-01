@@ -712,6 +712,8 @@ def _runtime_paths(sidecar: Path) -> RuntimePaths:
         contexts=str(root / "contexts"),
         evaluation_events=str(root / "evaluations"),
         handoffs=str(root / "handoffs"),
+        evidence=str(root / "evidence"),
+        runs=str(root / "runs"),
     )
 
 

@@ -139,6 +139,25 @@ Artifact 内容已在 `artifact://<id>` Context section 中计入预算，不在
 - `commands` 中每个字符串用 `shlex.split` 固化为 token prefix。运行时只接收 argv tuple，按完整 token 匹配并拒绝 shell syntax；
 - 返回成功只代表 operation 在 application policy 中获准，不代表可以绕过后续 executor 的 cwd、env、timeout、network、resource 和 evidence 约束。
 
+### T023 EvidenceRecord / RunEvidenceManifest
+
+`RunEvidenceSession` 将每次命令、diff、测试和 Agent usage 封装为带 `RunEvidenceIdentity` 的
+discriminated `EvidenceRecord`。落盘前统一执行 secret redaction、UTF-8 字节上限和 canonical
+JSON SHA-256；`FileEvidenceStore` 采用 immutable put、原子写入和读取时完整性校验。timeout、
+拒绝和启动失败也必须先持久化 typed evidence，再重新抛出原异常。一个 run 只能由
+`RunEvidenceManifest` 封存，manifest 的 evidence IDs、identity 和时间窗口必须与磁盘事实一致。
+相同 operation/evidence ID 的完全相同重放是幂等，不同正文或篡改内容拒绝。
+
+### T024 Typed Agent Tool Protocol
+
+Agent 只能提交 `ReadFileRequest`、`WriteFileRequest`、`RunCommandRequest`，每个请求都带
+`run_id`、`role`、`operation_id`。`PolicyBoundToolRegistry` 绑定一个 role、worktree root 和
+`WorkspacePolicy`，返回 typed success 或 `ToolRejectedResult`。路径是 repository-relative，命令
+是 tokenized argv；协议没有自由文本 `shell`/`exec`、verdict、artifact 或 state mutation 字段。
+Coder 的写权限由 policy 限定，QA 只能写 `tests/**`，Reviewer 始终只读；`.trellis`、
+artifact/state/verdict/report 路径以及 shell interpreter 都必须 fail closed。工具成功不等于
+QA PASS/Review APPROVE，所有结果必须由应用层显式交给 EvidenceStore 后才能进入交付链。
+
 Git role workspace 由 `GitWorkspace.create/inspect/remove` 管理。Coder 使用 attempt branch；QA/Reviewer detached 到 candidate SHA；dirty workspace 不允许清理。完整错误与 Git 执行安全契约见 [`docs/git-worktree.md`](git-worktree.md)。
 
 ## 2. 共同输入信封

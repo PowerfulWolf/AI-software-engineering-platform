@@ -14,7 +14,9 @@
         "artifacts": {"type": "string", "minLength": 1},
         "contexts": {"type": "string", "minLength": 1},
         "evaluation_events": {"type": "string", "minLength": 1},
-        "handoffs": {"type": "string", "minLength": 1}
+        "handoffs": {"type": "string", "minLength": 1},
+        "evidence": {"type": "string", "minLength": 1},
+        "runs": {"type": "string", "minLength": 1}
       }
     },
     "source": {

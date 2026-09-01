@@ -233,6 +233,8 @@ def test_runtime_session_composes_serial_delivery_and_persists_case_facts(tmp_pa
     with SqliteTaskRepository(config.paths.database) as repository:
         repository.create(task)
     with RuntimeSession(config, environment={}, agent_adapter=adapter) as session:
+        assert Path(config.paths.evidence).is_dir()
+        assert Path(config.paths.runs).is_dir()
         result = session.run_task(task.id)
     events = FileEvaluationEventStore(config.paths.evaluation_events).list_for_case(result.case_id)
     with SqliteTaskRepository(config.paths.database) as repository:

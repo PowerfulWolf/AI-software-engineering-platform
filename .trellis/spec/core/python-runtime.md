@@ -1605,3 +1605,78 @@ else:
 
 后者把调度、规范、workspace 和运行身份都保持为可验证事实；任何边界失败都在 Agent 启动前
 fail closed，且没有把组织元数据写进目标代码目录。
+
+## 20. Evidence capture and typed tool protocol (T023–T024)
+
+### 20.1 Scope and signatures
+
+- `RunEvidenceSession.capture_command(operation_id, executor, arguments, timeout_seconds=...)`
+  captures the requested tokenized argv, bounded stdout/stderr/cwd, return code, duration and
+  typed timeout/rejection/start-failure outcome. The command is executed only through the existing
+  `CommandExecutor` port.
+- `RunEvidenceSession.record_diff(...)`, `record_test(...)` and `record_agent_result(...)` create
+  discriminated `EvidenceRecord` values. Test records may reference only a command record from the
+  same `RunEvidenceIdentity`; Agent usage records carry provider-neutral `AgentUsage` counts.
+- `RunEvidenceSession.seal(outcome)` writes one `RunEvidenceManifest` containing the ordered evidence
+  IDs. `FileEvidenceStore.put/get/seal_run/get_run` use canonical JSON, SHA-256 and atomic rename;
+  an existing ID is immutable and equivalent replay is idempotent.
+- `PolicyBoundToolRegistry.execute(request)` accepts only `ReadFileRequest`, `WriteFileRequest`, or
+  `RunCommandRequest` carrying `run_id`, `role` and `operation_id`. It returns a typed success or
+  `ToolRejectedResult`; no free-text shell or verdict/artifact/state mutation operation exists.
+
+### 20.2 Invariants and error matrix
+
+| Input or failure | Detection | Required result |
+|---|---|---|
+| Secret in argv, output, cwd, diff or Agent error | shared `redact_text` before persistence/hash | replacement token plus redaction counts; original secret is never durable |
+| Command timeout, policy rejection, failed start | `RunEvidenceSession.capture_command` | persist failed evidence first, then re-raise the typed execution error; same operation replays the record |
+| Changed content under an existing evidence ID | `FileEvidenceStore.put` | `EvidenceConflict`; never overwrite |
+| Tampered JSON, digest, filename or manifest references | store read/seal validation | `EvidenceCorruption`/`RunEvidenceConflict`; no partial result |
+| Test references another run's command | `record_test` | `EvidenceCaptureError` |
+| Tool request role/run differs from bound registry | `PolicyBoundToolRegistry.execute` | `ToolRequestIdentityMismatch`; do not execute |
+| Path traversal, `.trellis`, artifact/state/verdict/report path | `WorkspacePolicy` plus role guard | typed `PATH_DENIED` rejection |
+| QA write outside `tests/**`; Reviewer write anywhere | role guard | typed `PATH_DENIED` rejection |
+| shell interpreter or unallowlisted argv | `WorkspacePolicy.authorize_command` | typed `COMMAND_DENIED` rejection; no shell invocation |
+| non-UTF-8 read or oversized file/output | bounded read/decode | typed rejection or truncated result with explicit marker |
+
+### 20.3 Good / Base / Bad
+
+- **Good**: redact first, hash the canonical sealed envelope, persist immutable evidence, and route
+  every tool result through the bound role/run policy. A rejected command is evidence, not a PASS.
+- **Base**: local filesystem stores, fake `CommandExecutor`, and fake Agent adapter are sufficient
+  to test replay, tamper detection, role isolation, and schema compatibility offline.
+- **Bad**: persist provider raw response, hash before redaction, accept a free-form `shell` field,
+  let QA edit production code, let Reviewer write a report file, or use tool success as a verdict.
+
+### 20.4 Tests required
+
+- `tests/evidence/`: command success/failure/timeout/replay, redaction, bounded diff, same-run test
+  linkage, Agent usage, manifest sealing, immutable store and corruption paths;
+- `tests/tools/`: typed request adapter, no shell/verdict fields, Coder read/write/command, QA and
+  Reviewer write refusal, denied paths, and identity mismatch;
+- `tests/contracts/`: every evidence, manifest, tool request and tool result wire payload must pass
+  its Draft 2020-12 schema; malformed discriminators and unknown fields must fail;
+- full pytest, Ruff check/format, strict Mypy, offline package build and `git diff --check` before
+  integration.
+
+### 20.5 Wrong vs Correct
+
+```python
+# Wrong: unbounded provider output and an ambient shell escape hatch.
+result = subprocess.run(agent_text, shell=True, cwd=project_root)
+write_json(sidecar / "evidence.json", result.__dict__)
+```
+
+```python
+# Correct: typed request, bound policy, redacted immutable evidence.
+request = RunCommandRequest(
+    run_id=run_id, role=role, operation_id="qa.tests", argv=("pytest", "-q")
+)
+tool_result = registry.execute(request)
+command_evidence = evidence_session.capture_command("qa.tests", executor, request.argv)
+manifest = evidence_session.seal(RunOutcome.SUCCEEDED)
+```
+
+The tool protocol is an application seam in v0.1. Runtime exposes the evidence store and sidecar
+roots, but every future role adapter must explicitly wrap tool calls with `RunEvidenceSession`; no
+Agent receives direct filesystem, subprocess, verdict, or state-store access.

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/run-evidence-manifest.schema.json",
+  "title": "Run evidence manifest",
+  "description": "Immutable ordered index of every evidence record captured for one Agent Run.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "identity", "outcome", "evidence_ids", "started_at", "completed_at", "manifest_sha256"],
+  "properties": {
+    "schema_version": {"const": "v0.1"},
+    "identity": {"$ref": "https://ai-software-engineer.local/schemas/evidence.schema.json#/$defs/identity"},
+    "outcome": {"enum": ["SUCCEEDED", "FAILED", "TIMED_OUT", "REJECTED"]},
+    "evidence_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "https://ai-software-engineer.local/schemas/evidence.schema.json#/$defs/evidenceId"}},
+    "started_at": {"type": "string", "format": "date-time"},
+    "completed_at": {"type": "string", "format": "date-time"},
+    "manifest_sha256": {"$ref": "https://ai-software-engineer.local/schemas/evidence.schema.json#/$defs/sha256"}
+  }
+}

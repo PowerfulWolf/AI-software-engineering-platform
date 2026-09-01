@@ -92,6 +92,22 @@ _Avoid_: Prompt context, memory dump
 A stable, locatable reference to a command result, test, diff, file, log, or metric that supports an Artifact claim.
 _Avoid_: Explanation, confidence
 
+**Evidence Record**:
+An immutable, redacted, SHA-256 sealed fact captured for one Agent Run, discriminated by command, diff, test, or Agent usage and bound to the run identity.
+_Avoid_: Raw provider response, unverified log
+
+**Run Evidence Manifest**:
+The sealed, ordered index of every Evidence Record for one run, including outcome, identity and time window. It is the replay boundary for a run and cannot be edited in place.
+_Avoid_: Run transcript, verdict
+
+**Typed Tool Request/Result**:
+A schema-validated operation envelope (`read_file`, `write_file`, or tokenized `run_command`) and its success or fail-closed rejection. It is bound to a role, run and operation ID; it is not a shell API.
+_Avoid_: Tool text, ambient command
+
+**Policy-Bound Tool Registry**:
+The application service that authorizes typed tool requests against one role worktree and returns typed results without exposing filesystem, subprocess, artifact, verdict or state-store handles.
+_Avoid_: Agent sandbox shortcut
+
 **Finding**:
 A structured, severity-rated issue linked to Evidence and returned by QA or Reviewer.
 _Avoid_: Comment, opinion

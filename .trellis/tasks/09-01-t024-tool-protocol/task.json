@@ -1,0 +1,21 @@
+{
+  "id": "T024",
+  "slug": "tool-protocol",
+  "title": "建立 Coder/QA/Reviewer typed tool protocol",
+  "status": "completed",
+  "phase": "verify",
+  "depends_on": ["T016", "T019", "T023"],
+  "allowed_paths": [
+    "src/ai_software_engineer/tools/**",
+    "schemas/tool-*.schema.json",
+    "tests/tools/**",
+    "docs/tool-protocol.md",
+    ".trellis/tasks/09-01-t024-tool-protocol/**"
+  ],
+  "verification_commands": [
+    "uv run pytest -q tests/tools",
+    "uv run ruff check src/ai_software_engineer/tools tests/tools",
+    "uv run mypy src/ai_software_engineer/tools tests/tools",
+    "git diff --check"
+  ]
+}

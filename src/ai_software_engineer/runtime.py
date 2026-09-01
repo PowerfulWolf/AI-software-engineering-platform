@@ -37,6 +37,7 @@ from ai_software_engineer.evaluation import (
     EvaluationEventStore,
     FileEvaluationEventStore,
 )
+from ai_software_engineer.evidence import FileEvidenceStore
 from ai_software_engineer.orchestration import (
     FileRunContextBuilder,
     RetryingOrchestrator,
@@ -83,6 +84,8 @@ class RuntimePaths(DomainModel):
     contexts: NonEmptyStr = "artifacts/contexts"
     evaluation_events: NonEmptyStr = "artifacts/evaluation-events"
     handoffs: NonEmptyStr = "artifacts/handoffs"
+    evidence: NonEmptyStr = "artifacts/evidence"
+    runs: NonEmptyStr = "artifacts/run-manifests"
 
 
 class RoleAgentOverride(DomainModel):
@@ -226,6 +229,7 @@ class RuntimeSession:
         self._evaluation_store: EvaluationEventStore = FileEvaluationEventStore(
             config.paths.evaluation_events
         )
+        self._evidence_store = FileEvidenceStore(config.paths.evidence, config.paths.runs)
         if agent_adapter is not None:
             self._agent_adapter = agent_adapter
         else:
@@ -327,6 +331,11 @@ class RuntimeSession:
     def close(self) -> None:
         """Close the SQLite connection while retaining all durable facts."""
         self._repository.close()
+
+    @property
+    def evidence_store(self) -> FileEvidenceStore:
+        """Expose the run evidence port to application services without widening Agent access."""
+        return self._evidence_store
 
     def __enter__(self) -> "RuntimeSession":
         return self

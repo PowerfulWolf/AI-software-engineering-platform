@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/evidence.schema.json",
+  "title": "Evidence record",
+  "description": "One immutable, redacted fact captured during an isolated Agent Run.",
+  "oneOf": [
+    {"$ref": "#/$defs/commandRecord"},
+    {"$ref": "#/$defs/diffRecord"},
+    {"$ref": "#/$defs/testRecord"},
+    {"$ref": "#/$defs/agentUsageRecord"}
+  ],
+  "$defs": {
+    "projectId": {"type": "string", "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "taskId": {"type": "string", "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "runId": {"type": "string", "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "contextId": {"type": "string", "pattern": "^ctx_[a-f0-9]{64}$"},
+    "evidenceId": {"type": "string", "pattern": "^ev_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "operationId": {"type": "string", "pattern": "^[a-z][a-z0-9_.:-]{0,127}$"},
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project_id", "task_id", "run_id", "agent_id", "role", "attempt", "source_revision", "context_manifest_id"],
+      "properties": {
+        "project_id": {"$ref": "#/$defs/projectId"},
+        "task_id": {"$ref": "#/$defs/taskId"},
+        "run_id": {"$ref": "#/$defs/runId"},
+        "agent_id": {"type": "string", "minLength": 1},
+        "role": {"enum": ["orchestrator", "coder", "qa", "reviewer"]},
+        "attempt": {"type": "integer", "minimum": 1, "maximum": 10},
+        "source_revision": {"type": "string", "minLength": 1},
+        "context_manifest_id": {"$ref": "#/$defs/contextId"}
+      }
+    },
+    "redactions": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "count"],
+        "properties": {"kind": {"type": "string", "minLength": 1}, "count": {"type": "integer", "minimum": 1}}
+      }
+    },
+    "base": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "evidence_id", "kind", "operation_id", "identity", "description", "captured_at", "payload", "record_sha256"],
+      "properties": {
+        "schema_version": {"const": "v0.1"},
+        "evidence_id": {"$ref": "#/$defs/evidenceId"},
+        "kind": {"enum": ["command", "diff", "test", "agent_usage"]},
+        "operation_id": {"$ref": "#/$defs/operationId"},
+        "identity": {"$ref": "#/$defs/identity"},
+        "description": {"type": "string", "minLength": 1},
+        "captured_at": {"type": "string", "format": "date-time"},
+        "redactions": {"$ref": "#/$defs/redactions"},
+        "payload": {"type": "object"},
+        "record_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "commandPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outcome", "argv", "cwd", "duration_ms", "stdout", "stderr", "stdout_truncated", "stderr_truncated"],
+      "properties": {
+        "outcome": {"enum": ["COMPLETED", "TIMED_OUT", "REJECTED", "FAILED_TO_START"]},
+        "argv": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "cwd": {"type": "string", "minLength": 1},
+        "returncode": {"type": "integer"},
+        "stdout": {"type": "string"},
+        "stderr": {"type": "string"},
+        "duration_ms": {"type": "integer", "minimum": 0},
+        "stdout_truncated": {"type": "boolean"},
+        "stderr_truncated": {"type": "boolean"},
+        "error_code": {"type": "string", "minLength": 1},
+        "error_message": {"type": "string"}
+      },
+      "allOf": [
+        {"if": {"properties": {"outcome": {"const": "COMPLETED"}}}, "then": {"required": ["returncode"], "not": {"required": ["error_code"]}}},
+        {"if": {"properties": {"outcome": {"enum": ["TIMED_OUT", "REJECTED", "FAILED_TO_START"]}}}, "then": {"required": ["error_code"], "not": {"required": ["returncode"]}}}
+      ]
+    },
+    "diffPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base_revision", "candidate_revision", "changed_paths", "patch", "patch_truncated"],
+      "properties": {
+        "base_revision": {"type": "string", "minLength": 1},
+        "candidate_revision": {"type": "string", "minLength": 1},
+        "changed_paths": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "patch": {"type": "string"},
+        "patch_truncated": {"type": "boolean"}
+      }
+    },
+    "testPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["framework", "suite", "outcome", "command_evidence_id", "required"],
+      "properties": {
+        "framework": {"type": "string", "minLength": 1},
+        "suite": {"type": "string", "minLength": 1},
+        "outcome": {"enum": ["PASS", "FAIL", "ERROR", "NOT_RUN"]},
+        "command_evidence_id": {"$ref": "#/$defs/evidenceId"},
+        "required": {"type": "boolean"}
+      }
+    },
+    "agentUsagePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "model", "status", "duration_ms"],
+      "properties": {
+        "provider": {"type": "string", "minLength": 1},
+        "model": {"type": "string", "minLength": 1},
+        "status": {"enum": ["SUCCEEDED", "FAILED", "TIMED_OUT"]},
+        "duration_ms": {"type": "integer", "minimum": 0},
+        "usage": {
+          "type": "object", "additionalProperties": false,
+          "required": ["input_tokens", "output_tokens", "total_tokens"],
+          "properties": {
+            "input_tokens": {"type": "integer", "minimum": 0},
+            "output_tokens": {"type": "integer", "minimum": 0},
+            "total_tokens": {"type": "integer", "minimum": 0}
+          }
+        },
+        "error_code": {"enum": ["TIMEOUT", "INVALID_OUTPUT", "PROVIDER_ERROR", "POLICY_VIOLATION"]},
+        "error_message": {"type": "string"},
+        "transient": {"type": "boolean"}
+      },
+      "allOf": [
+        {"if": {"properties": {"status": {"const": "SUCCEEDED"}}}, "then": {"not": {"anyOf": [{"required": ["error_code"]}, {"required": ["transient"]}]}}},
+        {"if": {"properties": {"status": {"enum": ["FAILED", "TIMED_OUT"]}}}, "then": {"required": ["error_code", "transient"]}}
+      ]
+    },
+    "commandRecord": {"allOf": [{"$ref": "#/$defs/base"}, {"type": "object", "properties": {"kind": {"const": "command"}, "payload": {"$ref": "#/$defs/commandPayload"}}}]},
+    "diffRecord": {"allOf": [{"$ref": "#/$defs/base"}, {"type": "object", "properties": {"kind": {"const": "diff"}, "payload": {"$ref": "#/$defs/diffPayload"}}}]},
+    "testRecord": {"allOf": [{"$ref": "#/$defs/base"}, {"type": "object", "properties": {"kind": {"const": "test"}, "payload": {"$ref": "#/$defs/testPayload"}}}]},
+    "agentUsageRecord": {"allOf": [{"$ref": "#/$defs/base"}, {"type": "object", "properties": {"kind": {"const": "agent_usage"}, "payload": {"$ref": "#/$defs/agentUsagePayload"}}}]}
+  }
+}

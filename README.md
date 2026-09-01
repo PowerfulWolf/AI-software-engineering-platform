@@ -18,7 +18,7 @@
 
 ## 当前进度（2026-09-01）
 
-T001–T022 已完成。自动化质量基线为 **344 个测试**、Ruff 检查与格式检查通过、strict Mypy
+T001–T024 已完成。自动化质量基线为 **364 个测试**、Ruff 检查与格式检查通过、strict Mypy
 检查 **112 个源码文件**、Python package build 通过。
 
 | 阶段 | 状态 | 已交付结果 |
@@ -30,7 +30,7 @@ T001–T022 已完成。自动化质量基线为 **344 个测试**、Ruff 检查
 | M4 Evaluation + Handoff | 已完成 | Evaluation events、指标/ADR 重算、DONE/BLOCKED handoff、CLI/runtime |
 | 执行安全边界 | 已完成 | fail-closed 命令执行端口、role worktree 执行生命周期 |
 | M5 组织 Workforce 与任意项目接入 | 已完成 | sidecar、Workforce、Scheduler/ModelRouter、ProjectProfile、SpecCompiler、Runtime workspace binding |
-| M6 可执行交付 | 进行中 | evidence capture、Agent tool protocol、跨语言真实项目 E2E |
+| M6 可执行交付 | 进行中 | evidence capture、Agent tool protocol 已完成；跨语言真实项目 E2E 待 T025 |
 | M7 Agent 可视化 | 待开始 | 只读投影/API、Task board、timeline、Agent detail、Human inbox |
 
 完整阶段事实、任务清单和提交证据见
@@ -98,9 +98,12 @@ ai-software-engineer/
 │   ├── project_profile.py            # 技术栈、VCS 与项目原生规则只读发现
 │   ├── spec_compiler.py              # 三层规范编译、冲突与人工 resolution
 │   ├── execution.py                  # worktree 内受控 argv/subprocess 执行端口
+│   ├── evidence/                     # 脱敏、带 SHA 的 command/diff/test/usage 证据
+│   ├── tools/                        # role/run 绑定的 typed tool protocol
 │   ├── role_workspace.py             # Git worktree + executor 生命周期组合
 │   ├── project_workspace.py           # 目标项目与外置 AI sidecar workspace 绑定
 │   ├── evaluation/                   # Evaluation events、metrics/ADR、handoff
+│   ├── tools/                        # typed read/write/argv tool registry
 │   └── prompts/                      # 后续：版本化 role prompt 模板
 ├── docs/
 │   ├── architecture.md               # 分层、边界和部署形态
@@ -115,6 +118,7 @@ ai-software-engineer/
 │   ├── evaluation.md                 # 指标与 Autonomous Delivery Rate
 │   ├── cli.md                        # CLI 使用说明
 │   ├── runtime.md                    # Runtime 配置与 task run
+│   ├── tool-protocol.md              # T024 typed tool 与角色隔离
 │   ├── milestones.md                 # 里程碑与第一批任务
 │   ├── archive/                      # 已完成阶段的事实、验证与提交记录
 │   └── decisions/                    # 已接受的架构决策
@@ -136,7 +140,11 @@ ai-software-engineer/
 │   ├── project-profile.schema.json
 │   ├── spec-conflict.schema.json
 │   ├── spec-resolution.schema.json
-│   └── runtime-workspace-binding.schema.json
+│   ├── runtime-workspace-binding.schema.json
+│   ├── evidence.schema.json
+│   ├── run-evidence-manifest.schema.json
+│   ├── tool-request.schema.json
+│   └── tool-result.schema.json
 ├── .trellis/
 │   ├── README.md
 │   └── spec/core/
@@ -156,6 +164,8 @@ ai-software-engineer/
 │   ├── runtime_workspace/            # workspace/binding/allocation 组合契约
 │   ├── execution/                    # 命令 allowlist、环境和 timeout 测试
 │   ├── role_workspace/               # role worktree 与 executor 组合测试
+│   ├── evidence/                     # evidence capture、脱敏、重放和完整性
+│   ├── tools/                        # typed tool protocol 和角色隔离
 │   └── contracts/                    # Python model ↔ JSON Schema 一致性
 └── artifacts/runs/                   # 运行产物（默认 gitignored）
 ```

@@ -1,0 +1,1 @@
+"""Typed tool protocol tests."""

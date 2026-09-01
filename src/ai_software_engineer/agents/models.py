@@ -19,6 +19,7 @@ from ai_software_engineer.domain.task import TaskId
 
 AgentAttempt = Annotated[StrictInt, Field(ge=1, le=10)]
 DurationMs = Annotated[StrictInt, Field(ge=0)]
+TokenCount = Annotated[StrictInt, Field(ge=0)]
 ROLE_OUTPUT_SCHEMA: Final[dict[AgentRole, str]] = {
     AgentRole.ORCHESTRATOR: "schemas/plan.schema.json",
     AgentRole.CODER: "schemas/implementation-report.schema.json",
@@ -63,6 +64,20 @@ class AgentFailure(DomainModel):
     transient: StrictBool
 
 
+class AgentUsage(DomainModel):
+    """Provider-neutral token usage reported for one Agent Run."""
+
+    input_tokens: TokenCount
+    output_tokens: TokenCount
+    total_tokens: TokenCount
+
+    @model_validator(mode="after")
+    def validate_total(self) -> Self:
+        if self.total_tokens < self.input_tokens + self.output_tokens:
+            raise ValueError("total_tokens cannot be less than input_tokens + output_tokens")
+        return self
+
+
 class AgentRequest(DomainModel):
     """Immutable input envelope supplied to one Agent adapter invocation."""
 
@@ -100,6 +115,7 @@ class AgentResult(DomainModel):
     status: AgentRunStatus
     artifact: Artifact | None = None
     error: AgentFailure | None = None
+    usage: AgentUsage | None = None
     duration_ms: DurationMs = 0
 
     @model_validator(mode="after")
@@ -172,6 +188,7 @@ __all__ = [
     "AgentRequest",
     "AgentResult",
     "AgentRunStatus",
+    "AgentUsage",
     "FakeBehavior",
     "FakeScenario",
     "RunId",

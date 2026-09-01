@@ -1,0 +1,5 @@
+{"path":"src/ai_software_engineer/tools/models.py","reason":"Typed request/result wire contracts and adapters."}
+{"path":"src/ai_software_engineer/tools/registry.py","reason":"Per-run role and WorkspacePolicy-bound tool facade."}
+{"path":"schemas/tool-request.schema.json","reason":"Canonical request schema."}
+{"path":"schemas/tool-result.schema.json","reason":"Canonical success/rejection schema."}
+{"path":"tests/tools/**","reason":"Offline fake backend and role isolation tests."}

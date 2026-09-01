@@ -42,13 +42,15 @@
     "paths": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["database", "artifacts", "contexts", "evaluation_events", "handoffs"],
+      "required": ["database", "artifacts", "contexts", "evaluation_events", "handoffs", "evidence", "runs"],
       "properties": {
         "database": {"type": "string", "pattern": "^/", "minLength": 2},
         "artifacts": {"type": "string", "pattern": "^/", "minLength": 2},
         "contexts": {"type": "string", "pattern": "^/", "minLength": 2},
         "evaluation_events": {"type": "string", "pattern": "^/", "minLength": 2},
-        "handoffs": {"type": "string", "pattern": "^/", "minLength": 2}
+        "handoffs": {"type": "string", "pattern": "^/", "minLength": 2},
+        "evidence": {"type": "string", "pattern": "^/", "minLength": 2},
+        "runs": {"type": "string", "pattern": "^/", "minLength": 2}
       }
     },
     "bound_at": {"type": "string", "format": "date-time"},

@@ -94,7 +94,7 @@ worktree 中运行，Coder 保留 attempt branch；`close` 委托 Git 的 dirty 
 
 ### Evidence Plane
 
-Artifact Store 保存 JSON artifact 正文、Schema 版本、producer、source revision、父子关系、证据路径与 SHA-256。Git diff、测试输出和静态检查结果都以 evidence 条目引用，必要时保存截断后的日志文件。
+Artifact Store 保存 JSON artifact 正文、Schema 版本、producer、source revision、父子关系、证据路径与 SHA-256。T023 的 `FileEvidenceStore` 在 sidecar `evidence/` 与 `runs/` 下保存脱敏、限长、带 SHA-256 的 command/diff/test/Agent usage records 及 run manifest；超时、拒绝和启动失败也会留下可重放事实。T024 的 typed tool registry 将每个 role/run 的文件和命令操作绑定到 `WorkspacePolicy`，工具结果必须由应用层转成 evidence，不能直接写 artifact、verdict 或状态。
 
 ### Repository Plane
 

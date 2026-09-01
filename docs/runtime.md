@@ -19,7 +19,9 @@ artifact；真实模型凭据只从进程环境读取。
     "artifacts": "artifacts/runs",
     "contexts": "artifacts/contexts",
     "evaluation_events": "artifacts/evaluation-events",
-    "handoffs": "artifacts/handoffs"
+    "handoffs": "artifacts/handoffs",
+    "evidence": "artifacts/evidence",
+    "runs": "artifacts/run-manifests"
   },
   "test_entrypoints": ["pytest"],
   "timeout_seconds": 600,
@@ -41,8 +43,11 @@ CLI 仍然使用真实 OpenAI-compatible adapter，不会因为该开关自动�
 `RuntimeWorkspaceBinding.compose_runtime_config(...)` 已能把全部 paths 绑定到 T017 sidecar；
 当前 CLI 尚未自动调用它。通过 CLI 接入外部项目时仍须显式配置 sidecar 绝对路径，不得在目标
 项目 cwd 中沿用 `.ase/state.sqlite3` 或 `artifacts/*` 默认值。`RuntimeSession` 会打开 SQLite
-Task/StateEvent、不可变 Artifact、Context manifest 和 Evaluation event store；`handoffs`
-路径由 `ase handoff build` 使用。目录由各自的 store 按需创建。
+Task/StateEvent、不可变 Artifact、Context manifest、Evaluation event store 和独立的
+`FileEvidenceStore`。`evidence` 保存 command/diff/test/usage records，`runs` 保存封存 manifest；
+两者不能与 ArtifactStore root 重叠。`handoffs` 路径由 `ase handoff build` 使用。目录由各自的
+store 按需创建。当前 role adapter 尚未自动包装每个 tool call，接入应用服务时必须显式创建
+`RunEvidenceSession`，不能把 EvidenceStore 暴露给 Agent。
 
 ## 运行一个 Task
 
