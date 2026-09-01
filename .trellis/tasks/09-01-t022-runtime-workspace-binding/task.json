@@ -1,0 +1,24 @@
+{
+  "id": "T022",
+  "slug": "runtime-workspace-binding",
+  "title": "绑定 organization/project workspace 到 Runtime",
+  "status": "completed",
+  "phase": "verify",
+  "depends_on": ["T019", "T021"],
+  "allowed_paths": [
+    "src/ai_software_engineer/runtime.py",
+    "src/ai_software_engineer/runtime_workspace.py",
+    "schemas/runtime-workspace-binding.schema.json",
+    "tests/runtime_workspace/**",
+    "tests/runtime/**",
+    ".trellis/tasks/09-01-t022-runtime-workspace-binding/**"
+  ],
+  "verification_commands": [
+    "uv run pytest -q",
+    "uv run ruff check .",
+    "uv run ruff format --check .",
+    "uv run mypy src tests",
+    "uv build --offline",
+    "git diff --check"
+  ]
+}

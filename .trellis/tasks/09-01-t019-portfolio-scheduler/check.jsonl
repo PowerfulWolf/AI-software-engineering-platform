@@ -1,0 +1,2 @@
+{"path":"tests/scheduling/**","reason":"Deterministic selection, capacity aggregation, lease waiting and no-self-review tests."}
+{"path":"docs/orchestration.md","reason":"Scheduler must not write TaskStatus or share Task session; root will update after merge."}

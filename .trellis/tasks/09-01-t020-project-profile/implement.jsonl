@@ -1,0 +1,4 @@
+{"path":".trellis/spec/core/architecture.md","reason":"Project binding and read-only native-rule discovery boundary; root will synchronize shared docs."}
+{"path":".trellis/spec/core/contracts.md","reason":"Project sidecar, URI/hash and fail-closed contract patterns."}
+{"path":"src/ai_software_engineer/project_workspace.py","reason":"External sidecar registration and project-root safety boundary."}
+{"path":"tests/project_workspace/test_registry.py","reason":"Temporary directory, symlink and no-target-write test patterns."}

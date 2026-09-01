@@ -1,0 +1,2 @@
+{"path":"tests/project_profile/**","reason":"Language/build/VCS/native rule detection, determinism and read-only boundary tests."}
+{"path":"docs/architecture.md","reason":"ProjectProfile and native-rule source placement; root will update after merge."}

@@ -1,0 +1,4 @@
+{"path":".trellis/spec/core/architecture.md","reason":"Scheduler/ModelRouter seam and ownership contract; root will synchronize shared docs after implementation."}
+{"path":".trellis/spec/core/contracts.md","reason":"Workforce contracts, no-self-review and deterministic route invariants."}
+{"path":"src/ai_software_engineer/domain/workforce.py","reason":"AgentProfile, WorkItem, Lease, RunDemand and ModelPolicy inputs."}
+{"path":"tests/workforce/test_contracts.py","reason":"Existing positive and negative workforce contract patterns."}

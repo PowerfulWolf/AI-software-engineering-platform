@@ -1,0 +1,4 @@
+{"path":".trellis/spec/core/architecture.md","reason":"Organization/project/runtime boundary and TaskOrchestrator ownership."}
+{"path":".trellis/spec/core/contracts.md","reason":"Workspace, AgentRunAllocation, path safety and human boundary contracts."}
+{"path":"src/ai_software_engineer/runtime.py","reason":"Existing RuntimeConfig/RuntimeSession composition to preserve."}
+{"path":"src/ai_software_engineer/project_workspace.py","reason":"Validated external project sidecar binding."}

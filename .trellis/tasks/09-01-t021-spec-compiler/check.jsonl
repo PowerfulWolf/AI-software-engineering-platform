@@ -1,0 +1,1 @@
+{"path":"tests/spec_compiler/**","reason":"Precedence, conflict, resolution, deterministic hash and hard-policy fail-closed tests."}

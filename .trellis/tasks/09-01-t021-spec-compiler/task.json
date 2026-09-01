@@ -1,0 +1,23 @@
+{
+  "id": "T021",
+  "slug": "spec-compiler",
+  "title": "实现 SpecCompiler 与规范冲突人工治理",
+  "status": "completed",
+  "phase": "verify",
+  "depends_on": ["T020"],
+  "allowed_paths": [
+    "src/ai_software_engineer/spec_compiler.py",
+    "schemas/spec-resolution.schema.json",
+    "schemas/spec-conflict.schema.json",
+    "tests/spec_compiler/**",
+    ".trellis/tasks/09-01-t021-spec-compiler/**"
+  ],
+  "verification_commands": [
+    "uv run pytest -q",
+    "uv run ruff check .",
+    "uv run ruff format --check .",
+    "uv run mypy src tests",
+    "uv build --offline",
+    "git diff --check"
+  ]
+}

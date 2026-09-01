@@ -1,0 +1,22 @@
+{
+  "id": "T020",
+  "slug": "project-profile",
+  "title": "发现 ProjectProfile 与项目原生规范",
+  "status": "completed",
+  "phase": "verify",
+  "depends_on": ["T017", "T018"],
+  "allowed_paths": [
+    "src/ai_software_engineer/project_profile.py",
+    "schemas/project-profile.schema.json",
+    "tests/project_profile/**",
+    ".trellis/tasks/09-01-t020-project-profile/**"
+  ],
+  "verification_commands": [
+    "uv run pytest -q",
+    "uv run ruff check .",
+    "uv run ruff format --check .",
+    "uv run mypy src tests",
+    "uv build --offline",
+    "git diff --check"
+  ]
+}

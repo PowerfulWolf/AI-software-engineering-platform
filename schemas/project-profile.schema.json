@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/project-profile.schema.json",
+  "title": "ProjectProfile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "schema_version",
+    "project_id",
+    "project_root_uri",
+    "source_revision",
+    "detector_version",
+    "languages",
+    "build_systems",
+    "vcs",
+    "native_rules",
+    "observed_at",
+    "profile_sha256"
+  ],
+  "properties": {
+    "kind": {"const": "project_profile"},
+    "schema_version": {"const": "v0.1"},
+    "project_id": {
+      "type": "string",
+      "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"
+    },
+    "project_root_uri": {
+      "type": "string",
+      "pattern": "^project://project_[a-z0-9][a-z0-9_-]{2,63}$"
+    },
+    "source_revision": {
+      "type": "string",
+      "pattern": "^(unknown|[a-f0-9]{40,64})$"
+    },
+    "detector_version": {"type": "string", "pattern": "^t020-v[0-9]+$"},
+    "languages": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/languageFact"}
+    },
+    "build_systems": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/buildSystemFact"}
+    },
+    "vcs": {"$ref": "#/$defs/vcsInfo"},
+    "native_rules": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/nativeRuleSource"}
+    },
+    "observed_at": {"type": "string", "format": "date-time"},
+    "profile_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  },
+  "$defs": {
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?!/)(?!.*//)(?!\\.\\.?/)(?!.*\\/\\.\\.?\\/)(?!.*\\/\\.\\.?$)[^\\u0000-\\u001f]+$"
+    },
+    "languageFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["language", "markers"],
+      "properties": {
+        "language": {
+          "enum": ["python", "java", "go", "typescript", "cpp", "unknown"]
+        },
+        "markers": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/relativePath"}
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"language": {"const": "unknown"}}},
+          "then": {"properties": {"markers": {"maxItems": 0}}},
+          "else": {"properties": {"markers": {"minItems": 1}}}
+        }
+      ]
+    },
+    "buildSystemFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["system", "markers"],
+      "properties": {
+        "system": {
+          "enum": [
+            "python",
+            "maven",
+            "gradle",
+            "go",
+            "npm",
+            "pnpm",
+            "yarn",
+            "bun",
+            "cmake",
+            "meson",
+            "make",
+            "bazel",
+            "unknown"
+          ]
+        },
+        "markers": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/relativePath"}
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"system": {"const": "unknown"}}},
+          "then": {"properties": {"markers": {"maxItems": 0}}},
+          "else": {"properties": {"markers": {"minItems": 1}}}
+        }
+      ]
+    },
+    "vcsInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {"enum": ["git", "mercurial", "subversion", "bazaar", "none", "unknown"]},
+        "marker": {"$ref": "#/$defs/relativePath"},
+        "revision": {"type": "string", "pattern": "^(unknown|[a-f0-9]{40,64})$"},
+        "ref": {"type": "string", "pattern": "^refs/[A-Za-z0-9._/-]+$"}
+      }
+    },
+    "nativeRuleSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uri", "relative_path", "kinds", "sha256", "byte_length"],
+      "properties": {
+        "uri": {
+          "type": "string",
+          "pattern": "^project://project_[a-z0-9][a-z0-9_-]{2,63}/[^/].*$"
+        },
+        "relative_path": {"$ref": "#/$defs/relativePath"},
+        "kinds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": ["agents", "contributing", "readme", "editorconfig", "ci", "trellis-spec"]
+          }
+        },
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "byte_length": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

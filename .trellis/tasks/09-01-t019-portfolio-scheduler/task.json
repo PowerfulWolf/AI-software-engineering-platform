@@ -1,0 +1,22 @@
+{
+  "id": "T019",
+  "slug": "portfolio-scheduler",
+  "title": "实现组织级 PortfolioScheduler 与 ModelRouter",
+  "status": "completed",
+  "phase": "verify",
+  "depends_on": ["T018"],
+  "allowed_paths": [
+    "src/ai_software_engineer/scheduling/**",
+    "tests/scheduling/**",
+    "schemas/scheduling.schema.json",
+    ".trellis/tasks/09-01-t019-portfolio-scheduler/**"
+  ],
+  "verification_commands": [
+    "uv run pytest -q",
+    "uv run ruff check .",
+    "uv run ruff format --check .",
+    "uv run mypy src tests",
+    "uv build --offline",
+    "git diff --check"
+  ]
+}

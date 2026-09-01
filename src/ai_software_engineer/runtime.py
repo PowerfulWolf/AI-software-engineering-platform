@@ -205,8 +205,15 @@ class RuntimeSession:
         *,
         environment: Mapping[str, str] | None = None,
         agent_adapter: AgentAdapter | None = None,
+        agent_definitions: Mapping[AgentRole, AgentDefinition] | None = None,
+        project_root: str | Path | None = None,
     ) -> None:
         self._config = config
+        self._agent_definitions = _validate_agent_definitions(
+            agent_definitions if agent_definitions is not None else config.agent_definitions()
+        )
+        self._project_root = _validated_project_root(project_root)
+        self._case_model_id = _model_identity(self._agent_definitions)
         variables = environment if environment is not None else os.environ
         api_key = variables.get(config.api_key_env)
         if config.api_key_required and not api_key:
@@ -233,7 +240,7 @@ class RuntimeSession:
                         agent_version=definition.version,
                         context_resolver=resolver,
                     )
-                    for role, definition in config.agent_definitions().items()
+                    for role, definition in self._agent_definitions.items()
                 }
             )
 
@@ -245,12 +252,21 @@ class RuntimeSession:
     ) -> RuntimeRunResult:
         """Record a CaseStartedEvent and run the existing bounded serial orchestrator."""
         task = self._repository.get(task_id)
+        project_root = Path(task.repository).expanduser().resolve(strict=False)
+        if self._project_root is not None and project_root != self._project_root:
+            raise RuntimeConfigurationError(
+                f"Task {task.id} repository does not match bound project root"
+            )
+        if not project_root.is_dir():
+            raise RuntimeConfigurationError(
+                f"Task {task.id} repository is not an existing directory: {project_root}"
+            )
         if task.status in {TaskStatus.DONE, TaskStatus.BLOCKED, TaskStatus.FAILED}:
             raise TaskNotRunnable(f"Task {task.id} is terminal at {task.status.value}")
         selected_case = case_id or _default_case_id(task.id)
         self._ensure_case_started(selected_case, task.id, task.base_ref)
         context_builder = FileRunContextBuilder(
-            task.repository,
+            project_root,
             sources=self._config.context_sources,
             context_store=self._context_store,
         )
@@ -264,7 +280,7 @@ class RuntimeSession:
             artifact_store=self._artifact_store,
             context_builder=context_builder,
             agent_adapter=instrumented,
-            agent_definitions=self._config.agent_definitions(),
+            agent_definitions=self._agent_definitions,
         )
         return RuntimeRunResult(case_id=selected_case, result=runner.run_task(task.id))
 
@@ -280,7 +296,7 @@ class RuntimeSession:
             if (
                 start.task_id != task_id
                 or start.base_revision != base_revision
-                or start.model_id != self._config.model
+                or start.model_id != self._case_model_id
                 or start.prompt_version != self._config.prompt_version
                 or start.spec_version != self._config.spec_version
                 or start.test_entrypoints != self._config.test_entrypoints
@@ -300,7 +316,7 @@ class RuntimeSession:
                 task_id=task_id,
                 occurred_at=datetime.now(UTC),
                 base_revision=base_revision,
-                model_id=self._config.model,
+                model_id=self._case_model_id,
                 prompt_version=self._config.prompt_version,
                 spec_version=self._config.spec_version,
                 test_entrypoints=self._config.test_entrypoints,
@@ -373,6 +389,42 @@ def _default_case_id(task_id: str) -> EvaluationCaseId:
 def _case_started_event_id(case_id: str) -> str:
     digest = hashlib.sha256(f"case-started\0{case_id}".encode()).hexdigest()[:32]
     return f"evalevt_case_started_{digest}"
+
+
+def _validated_project_root(project_root: str | Path | None) -> Path | None:
+    if project_root is None:
+        return None
+    resolved = Path(project_root).expanduser().resolve(strict=False)
+    if not resolved.is_dir():
+        raise RuntimeConfigurationError(f"bound project root is not a directory: {resolved}")
+    return resolved
+
+
+def _validate_agent_definitions(
+    definitions: Mapping[AgentRole, AgentDefinition],
+) -> dict[AgentRole, AgentDefinition]:
+    resolved = dict(definitions)
+    missing = set(AgentRole) - set(resolved)
+    extra = set(resolved) - set(AgentRole)
+    mismatched = tuple(role for role, definition in resolved.items() if definition.role is not role)
+    if missing or extra or mismatched:
+        raise RuntimeConfigurationError("runtime AgentDefinitions must match every role exactly")
+    ensure_unique((definition.id for definition in resolved.values()), "runtime agent IDs")
+    return resolved
+
+
+def _model_identity(definitions: Mapping[AgentRole, AgentDefinition]) -> str:
+    routes = tuple(
+        sorted(
+            (role.value, definition.provider or "unknown", definition.model)
+            for role, definition in definitions.items()
+        )
+    )
+    models = {(provider, model) for _, provider, model in routes}
+    if len(models) == 1:
+        return next(iter(models))[1]
+    encoded = json.dumps(routes, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return f"model-set-{hashlib.sha256(encoded).hexdigest()[:24]}"
 
 
 __all__ = [

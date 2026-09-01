@@ -1,0 +1,1 @@
+"""ProjectProfile contract tests."""

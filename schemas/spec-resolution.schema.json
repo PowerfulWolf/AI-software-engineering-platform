@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/spec-resolution.schema.json",
+  "title": "SpecResolution",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "schema_version",
+    "id",
+    "conflict_id",
+    "conflict_sha256",
+    "project_id",
+    "task_id",
+    "action",
+    "operator_id",
+    "rationale",
+    "evidence_uris",
+    "resolved_at",
+    "resolution_sha256"
+  ],
+  "properties": {
+    "kind": {"const": "SPEC_RESOLUTION"},
+    "schema_version": {"const": "v0.1"},
+    "id": {"type": "string", "pattern": "^spec_resolution_[a-f0-9]{64}$"},
+    "conflict_id": {"type": "string", "pattern": "^spec_conflict_[a-f0-9]{64}$"},
+    "conflict_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "project_id": {"type": "string", "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "task_id": {"type": "string", "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "action": {
+      "enum": ["SELECT_RULE", "KEEP_HARD_POLICY", "UPDATE_LOWER_RULE", "TERMINATE_DELIVERY"]
+    },
+    "selected_rule_id": {
+      "type": "string",
+      "pattern": "^rule_[a-z0-9][a-z0-9_-]{2,63}$"
+    },
+    "operator_id": {"type": "string", "minLength": 1},
+    "rationale": {"type": "string", "minLength": 1},
+    "evidence_uris": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "resolved_at": {"type": "string", "format": "date-time"},
+    "resolution_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "action": {"enum": ["SELECT_RULE", "KEEP_HARD_POLICY"]}
+        },
+        "required": ["action"]
+      },
+      "then": {"required": ["selected_rule_id"]},
+      "else": {"not": {"required": ["selected_rule_id"]}}
+    }
+  ]
+}

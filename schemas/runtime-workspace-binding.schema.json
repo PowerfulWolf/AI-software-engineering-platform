@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/runtime-workspace-binding.schema.json",
+  "title": "RuntimeWorkspaceBinding",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "schema_version",
+    "organization_id",
+    "organization_root",
+    "organization_manifest_sha256",
+    "project_id",
+    "project_root",
+    "project_workspace_root",
+    "project_manifest_sha256",
+    "project_profile_sha256",
+    "paths",
+    "bound_at",
+    "binding_sha256"
+  ],
+  "properties": {
+    "kind": {"const": "runtime_workspace_binding"},
+    "schema_version": {"const": "v0.1"},
+    "organization_id": {
+      "type": "string",
+      "pattern": "^organization_[a-z0-9][a-z0-9_-]{2,63}$"
+    },
+    "organization_root": {"type": "string", "pattern": "^/", "minLength": 2},
+    "organization_manifest_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "project_id": {
+      "type": "string",
+      "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"
+    },
+    "project_root": {"type": "string", "pattern": "^/", "minLength": 2},
+    "project_workspace_root": {"type": "string", "pattern": "^/", "minLength": 2},
+    "project_manifest_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "project_profile_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "paths": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["database", "artifacts", "contexts", "evaluation_events", "handoffs"],
+      "properties": {
+        "database": {"type": "string", "pattern": "^/", "minLength": 2},
+        "artifacts": {"type": "string", "pattern": "^/", "minLength": 2},
+        "contexts": {"type": "string", "pattern": "^/", "minLength": 2},
+        "evaluation_events": {"type": "string", "pattern": "^/", "minLength": 2},
+        "handoffs": {"type": "string", "pattern": "^/", "minLength": 2}
+      }
+    },
+    "bound_at": {"type": "string", "format": "date-time"},
+    "binding_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  }
+}

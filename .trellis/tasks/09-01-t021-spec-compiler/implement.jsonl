@@ -1,0 +1,3 @@
+{"path":".trellis/spec/core/architecture.md","reason":"Knowledge plane and ProjectProfile/SpecCompiler boundary."}
+{"path":".trellis/spec/core/contracts.md","reason":"Hard safety, native rule conflict and human-resolution contract."}
+{"path":"docs/context-routing.md","reason":"Compiled spec becomes explicit Context source; no implicit Agent memory."}

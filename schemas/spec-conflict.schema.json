@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/spec-conflict.schema.json",
+  "title": "SpecConflict",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "schema_version",
+    "id",
+    "project_id",
+    "task_id",
+    "field",
+    "classification",
+    "rules",
+    "reason",
+    "human_question",
+    "affected_criteria",
+    "recovery_conditions",
+    "detected_at",
+    "conflict_sha256"
+  ],
+  "properties": {
+    "kind": {"const": "SPEC_CONFLICT"},
+    "schema_version": {"const": "v0.1"},
+    "id": {"type": "string", "pattern": "^spec_conflict_[a-f0-9]{64}$"},
+    "project_id": {"type": "string", "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "task_id": {"type": "string", "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "field": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,127}$"},
+    "classification": {"enum": ["HARD_SAFETY", "ENGINEERING"]},
+    "rules": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/specRule"}
+    },
+    "reason": {"type": "string", "minLength": 1},
+    "human_question": {"type": "string", "minLength": 1},
+    "affected_criteria": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$"}
+    },
+    "recovery_conditions": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "detected_at": {"type": "string", "format": "date-time"},
+    "conflict_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  },
+  "$defs": {
+    "specRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id",
+        "field",
+        "value",
+        "layer",
+        "priority",
+        "scopes",
+        "source_uri",
+        "source_sha256",
+        "rationale"
+      ],
+      "properties": {
+        "kind": {"const": "spec_rule"},
+        "id": {"type": "string", "pattern": "^rule_[a-z0-9][a-z0-9_-]{2,63}$"},
+        "field": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,127}$"},
+        "value": true,
+        "layer": {
+          "enum": ["platform_hard", "platform_engineering", "project", "task"]
+        },
+        "priority": {"type": "integer", "minimum": 1, "maximum": 10000},
+        "scopes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^(\\*|[a-z][a-z0-9_.:-]{0,127})$"
+          }
+        },
+        "source_uri": {"type": "string", "minLength": 1},
+        "source_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "rationale": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}
