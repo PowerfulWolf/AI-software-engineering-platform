@@ -19,6 +19,7 @@ Archive 是组织记忆的一部分，不依赖任何单个 Agent 的会话。�
 | 2026-09-01 | `3ca68b4` | Bootstrap 至 T017；M0–M4 完成，M5 启动 | [v0.1 Foundation：T001–T017](2026-09-01-v0.1-foundation-t001-t017.md) |
 | 2026-09-01 | `400ac04` | T018；组织 Workforce foundation，M5 组织层启动 | [T018 Organization Workforce](2026-09-01-t018-organization-workforce.md) |
 | 2026-09-01 | `8d76ce2` | T019–T022；组织调度、项目发现、规范治理与 Runtime binding，M5 完成 | [T019–T022 Organization Runtime](2026-09-01-t019-t022-organization-runtime.md) |
+| 2026-09-01 | `02b3183` | T023–T024；Evidence capture、typed tool protocol 与 Runtime evidence roots，M6 执行边界 | [T023–T024 Executable Delivery](2026-09-01-t023-t024-executable-delivery.md) |
 
 ## 后续归档约定
 
