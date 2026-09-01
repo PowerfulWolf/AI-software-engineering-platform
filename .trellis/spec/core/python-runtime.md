@@ -1373,3 +1373,37 @@ if not snapshot.dirty:
 
 前者绕过 role policy、shell/env/timeout 和 dirty evidence；后者把 worktree 所有权、命令执行和
 清理边界固定在可验证的 typed seams。
+
+## 18. T018 Organization Workforce Models
+
+### 18.1 Scope and files
+
+`src/ai_software_engineer/domain/workforce.py` 是组织 Agent、调度视图、Lease 和 run-scoped model
+allocation 的唯一 Python 领域入口；正式 wire contract 是 `schemas/workforce.schema.json`。
+共同 Enum 位于 `domain/enums.py`，不得在 Scheduler、Runtime 或 UI 重复定义。
+
+### 18.2 Contracts
+
+- 所有 model 继承 frozen/extra-forbid `DomainModel`，ID 使用 typed regex，时间必须带时区；
+- AgentProfile 声明 capabilities、eligible_roles、max_parallel_assignments 和 default ModelPolicy；
+  不允许 concrete model/project permissions；
+- ModelPolicy 的 provider/model route 必须唯一，完整覆盖四个 RiskTier，default/floor BrainTier
+  必须有 route；ModelSelection 至少一个 machine-readable reason；
+- RunDemand 只携带可观测的 role/risk、上下文规模、计划变更规模、受影响层和失败计数，供后续
+  ModelRouter 做 deterministic selection；不得把具体模型固化到 AgentProfile；
+- waiting WorkItem 必须有 wait_reason；RETRY_SCHEDULED 还必须有 future available_at；非 waiting
+  WorkItem 不得携带 wait_reason；
+- TaskLease expires_at 必须晚于 acquired_at；`lease_is_active` 显式接收 clock，不读取全局时间；
+- RoleAssignment/AgentRunAllocation attempt 从 1 开始；run allocation 必须携带完整归因；
+- `validate_assignment_independence` 拒绝同一 Task 历史中同 Agent 跨 Coder/QA/Reviewer 角色；
+- ProjectWorkspace `schema_version=v0.1/layout_version=v0.2`，固定 `assignments/` 替换 `agents/`；
+  legacy manifest fail closed，不自动删除或迁移。
+
+### 18.3 Tests and quality gates
+
+- `tests/workforce/test_contracts.py` 必须覆盖 valid model、extra field、完整 risk floors、waiting、
+  retry time、lease window、naive clock、自审拒绝和 JSON Schema；
+- `tests/project_workspace/test_registry.py` 验证 v0.2 layout 与 legacy manifest 拒绝；
+- `tests/contracts/test_json_schema_contracts.py` 验证所有 Schema draft 合法和 project layout drift；
+- 修改这些跨层字段必须同步 CONTEXT、ADR、README、docs、AGENTS 和 core specs，并运行全量
+  pytest、Ruff、strict mypy、offline build 与 diff check。

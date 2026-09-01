@@ -2,7 +2,23 @@
 
 ## 1. 责任边界
 
-Orchestrator 是唯一的状态写入者和路由决策者。它不实现业务代码，也不根据模型自然语言自行推断“应该算通过”；所有决定都依赖可校验 artifact、Git 元数据和显式策略。
+TaskOrchestrator 是一个 Task 交付状态的唯一写入者。它不实现业务代码，也不根据模型自然语言
+推断“应该算通过”；所有决定依赖可校验 Artifact、Git 元数据和显式策略。
+
+PortfolioScheduler 位于它上层，管理 WorkQueue、Agent capacity、RoleAssignment、TaskLease 和
+ModelSelection。Scheduler 不写 TaskStatus、不解释 verdict；TaskOrchestrator 不拥有全局 Agent
+或决定队列优先级。这两个独立 seam 避免把跨 Task 调度复杂度塞进交付状态机。
+
+```text
+WorkQueue
+  → PortfolioScheduler.match(WorkItem, AgentProfile)
+  → RoleAssignment + TaskLease
+  → ModelRouter.select(...) → ModelSelection
+  → AgentRunAllocation
+  → TaskOrchestrator.run_task(task_id)
+```
+
+当前代码只实现最后一层串行 TaskOrchestrator；T019 实现前面的 Scheduler/ModelRouter。
 
 ## 2. 核心流程
 
@@ -118,7 +134,9 @@ T009 严格只接受 `NEW` Task，不包含 retry loop；T010 接受 `NEW`、`PL
 | timeout/provider error/invalid output | 在预算内重试当前 role；失败结果不产生 verdict |
 | QA `FAIL` | 持久化 qa-report，带 findings 回流 Coder，创建新 candidate |
 | Review `REJECT` | 持久化 review-report，带 findings 回流 Coder，创建新 candidate |
-| policy/需求不明确/预算用尽 | 生成 `BlockedResult`，追加 `BLOCKED` event |
+| 临时 provider/依赖不可用 | WorkItem → `RETRY_SCHEDULED/WAITING_DEPENDENCY`，释放 Lease |
+| 需求不明确/规范冲突 | WorkItem → `WAITING_HUMAN`，释放 Lease，Task 保持 checkpoint |
+| policy 终止/预算终局用尽 | 生成 `BlockedResult`，追加 Task `BLOCKED` event |
 | 内部不变量破坏 | 保留现场并追加 `FAILED` event |
 
 同一 attempt 的上下文只来自声明的已持久化 Artifact；重启恢复会扫描本 Task 的可信

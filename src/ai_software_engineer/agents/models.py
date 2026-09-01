@@ -3,7 +3,7 @@
 from enum import StrEnum
 from typing import Annotated, Final, Self
 
-from pydantic import Field, StrictBool, StrictInt, StringConstraints, model_validator
+from pydantic import Field, StrictBool, StrictInt, model_validator
 
 from ai_software_engineer.context.models import ContextId
 from ai_software_engineer.domain.agent import ROLE_OUTPUT, AgentPermissions, TimeoutSeconds
@@ -13,10 +13,10 @@ from ai_software_engineer.domain.artifact import (
     ImplementationReportArtifact,
 )
 from ai_software_engineer.domain.enums import AgentRole
+from ai_software_engineer.domain.identity import RunId as RunId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.task import TaskId
 
-RunId = Annotated[str, StringConstraints(pattern=r"^run_[a-z0-9][a-z0-9_-]{2,63}$")]
 AgentAttempt = Annotated[StrictInt, Field(ge=1, le=10)]
 DurationMs = Annotated[StrictInt, Field(ge=0)]
 ROLE_OUTPUT_SCHEMA: Final[dict[AgentRole, str]] = {

@@ -1,0 +1,12 @@
+{"path":"CONTEXT.md","reason":"Canonical organization-owned Agent, Assignment, Lease, WorkItem and model allocation language."}
+{"path":"docs/decisions/0002-organization-owned-agent-workforce.md","reason":"Hard-to-reverse ownership, scheduling and model allocation decision."}
+{"path":".trellis/spec/core/architecture.md","reason":"Cross-layer Scheduler/TaskOrchestrator seam and sidecar placement contract."}
+{"path":".trellis/spec/core/contracts.md","reason":"Executable workforce wire contracts and validation matrix."}
+{"path":".trellis/spec/core/python-runtime.md","reason":"Pydantic/Schema implementation and test requirements."}
+{"path":"src/ai_software_engineer/domain/agent.py","reason":"Existing AgentDefinition is retained as a resolved run configuration."}
+{"path":"src/ai_software_engineer/domain/task.py","reason":"Task delivery lifecycle remains separate from WorkItem scheduling lifecycle."}
+{"path":"src/ai_software_engineer/project_workspace.py","reason":"Replace project-owned agents directory with assignment records."}
+{"step":"implement canonical organization workforce contracts and RunDemand signals","status":"completed"}
+{"step":"upgrade project sidecar layout to v0.2 assignments and reject legacy agents layout","status":"completed"}
+{"step":"synchronize README, ADR, architecture, state/failure routing, visualization and core specs","status":"completed"}
+{"step":"run full quality gates and record T018 verification","status":"completed"}

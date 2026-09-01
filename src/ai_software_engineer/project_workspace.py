@@ -1,8 +1,8 @@
 """External per-project AI workspace registry.
 
 The target repository remains the source of truth for project code.  This module only
-creates a sidecar directory for platform-owned state, prompts, profiles, artifacts,
-evidence, and run metadata; it never copies or modifies the target repository.
+creates a sidecar directory for project profiles, assignments, platform state, artifacts,
+evidence, and run metadata; organization Agent identities live outside the project sidecar.
 """
 
 import hashlib
@@ -25,13 +25,13 @@ from pydantic import (
     field_validator,
 )
 
+from ai_software_engineer.domain.identity import ProjectId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 
-ProjectId = Annotated[str, StringConstraints(pattern=r"^project_[a-z0-9][a-z0-9_-]{2,63}$")]
 ManifestSha256 = Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
 WorkspaceDirectory = Literal[
     "profile",
-    "agents",
+    "assignments",
     "knowledge",
     "policy",
     "state",
@@ -47,10 +47,11 @@ WorkspaceDirectory = Literal[
 ]
 
 SUPPORTED_SCHEMA_VERSION: Final = "v0.1"
+SUPPORTED_LAYOUT_VERSION: Final = "v0.2"
 WORKSPACE_MANIFEST_NAME: Final = "workspace.json"
 WORKSPACE_DIRECTORIES: Final[tuple[WorkspaceDirectory, ...]] = (
     "profile",
-    "agents",
+    "assignments",
     "knowledge",
     "policy",
     "state",
@@ -96,7 +97,7 @@ class WorkspaceLayout(DomainModel):
     """Stable relative directory names inside one AI sidecar workspace."""
 
     profile: NonEmptyStr = "profile"
-    agents: NonEmptyStr = "agents"
+    assignments: NonEmptyStr = "assignments"
     knowledge: NonEmptyStr = "knowledge"
     policy: NonEmptyStr = "policy"
     state: NonEmptyStr = "state"
@@ -119,7 +120,7 @@ class WorkspaceLayout(DomainModel):
         """Return typed directory names for filesystem initialization."""
         return {
             "profile": self.profile,
-            "agents": self.agents,
+            "assignments": self.assignments,
             "knowledge": self.knowledge,
             "policy": self.policy,
             "state": self.state,
@@ -138,14 +139,14 @@ class WorkspaceLayout(DomainModel):
         """Reject layout changes that could make stores or visualizers ambiguous."""
         values = tuple(self.as_mapping().values())
         if values != WORKSPACE_DIRECTORIES:
-            raise ProjectWorkspaceCorruption("sidecar layout does not match the v0.1 contract")
+            raise ProjectWorkspaceCorruption("sidecar layout does not match the v0.2 contract")
 
 
 class ProjectWorkspaceManifest(DomainModel):
     """Persisted binding between a target code root and an external AI workspace."""
 
     schema_version: Literal["v0.1"] = SUPPORTED_SCHEMA_VERSION
-    layout_version: Literal["v0.1"] = SUPPORTED_SCHEMA_VERSION
+    layout_version: Literal["v0.2"] = SUPPORTED_LAYOUT_VERSION
     project_id: ProjectId
     project_root: NonEmptyStr
     ai_workspace_root: NonEmptyStr
@@ -429,6 +430,7 @@ def _remove_directory_tree(path: Path) -> None:
 
 
 __all__ = [
+    "SUPPORTED_LAYOUT_VERSION",
     "SUPPORTED_SCHEMA_VERSION",
     "WORKSPACE_DIRECTORIES",
     "WORKSPACE_MANIFEST_NAME",

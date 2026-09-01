@@ -2,7 +2,10 @@
 
 ## 1. Scope / Trigger
 
-本规范适用于 ai-software-engineer v0.1 的所有运行时代码、CLI 和测试。凡是新增组件、跨层 payload、状态持久化或 Agent 执行入口，都必须先检查本规范。架构由 Control Plane、Knowledge Plane、Agent Execution Plane、Evidence Plane、Repository Plane 和 Human Boundary 组成；边界定义见 `docs/architecture.md`。
+本规范适用于 ai-software-engineer v0.1 的所有运行时代码、CLI 和测试。凡是新增模块、跨层
+payload、状态持久化或 Agent 执行入口，都必须先检查本规范。架构由 Control Plane、Organization
+Workforce Plane、Knowledge Plane、Agent Execution Plane、Evidence Plane、Repository Plane 和
+Human Boundary 组成；边界定义见 `docs/architecture.md`。
 
 ## 2. Signatures
 
@@ -160,7 +163,7 @@ project_id_for_root(project_root: str | Path) -> ProjectId
 - **T016 Bad**：把 QA AgentDefinition 配给 Coder spec、直接用 main checkout 构造 executor，
   或 force-remove dirty role worktree。
 - **T017 Good**：同一 canonical project root 重复注册返回首次 `workspace.json`，目标项目内容
-  不变，14 个平台目录全部位于外置 sidecar。
+  不变，14 个平台目录全部位于外置 sidecar；T018 v0.2 layout 使用 `assignments/`，不复制 Agent。
 - **T017 Base**：一个尚无语言/构建描述的空本地目录也能注册；ProjectProfile 发现属于 T018。
 - **T017 Bad**：在目标项目创建 `.ase`、把源码复制到 sidecar、复用已绑定的 Project ID，或
   发现旧 layout 缺失时静默补目录。
@@ -222,7 +225,7 @@ state_database = workspace.directory("state") / "state.sqlite3"
 
 ## 8. Required invariants
 
-1. Orchestrator 是唯一状态迁移者；
+1. TaskOrchestrator 是一个 Task 的唯一状态迁移者；PortfolioScheduler 不写 TaskStatus；
 2. Agent 不能直接向另一个 Agent 发送未持久化消息；
 3. 每个 run 都绑定一个 context manifest、policy、source revision 和预算；
 4. 每个 artifact 都必须 Schema 校验、哈希和原子持久化；
@@ -236,3 +239,48 @@ state_database = workspace.directory("state") / "state.sqlite3"
 - context allowlist、脱敏和稳定性测试；
 - Git path/command policy 与 worktree 隔离测试；
 - 中断恢复和幂等回放测试。
+
+## 10. Organization Workforce Plane
+
+### 10.1 Implemented T018 seams
+
+```python
+AgentProfile.model_validate(payload: object) -> AgentProfile
+ModelPolicy.model_validate(payload: object) -> ModelPolicy
+RunDemand.model_validate(payload: object) -> RunDemand
+WorkItem.model_validate(payload: object) -> WorkItem
+RoleAssignment.model_validate(payload: object) -> RoleAssignment
+TaskLease.model_validate(payload: object) -> TaskLease
+AgentRunAllocation.model_validate(payload: object) -> AgentRunAllocation
+validate_assignment_independence(candidate: RoleAssignment,
+                                 existing: tuple[RoleAssignment, ...]) -> None
+lease_is_active(lease: TaskLease, *, at: datetime) -> bool
+```
+
+TaskStatus 继续表示单 Task 交付证据链；WorkItemStatus 表示组织调度可用性。临时
+`WAITING_HUMAN/WAITING_DEPENDENCY/RETRY_SCHEDULED` 必须释放/到期 Lease，Task 保持最近
+checkpoint。`BLOCKED` 只用于终局无安全继续路径。当前 T010 还没有 WorkItem composition，
+兼容映射将在 T019 替换。
+
+### 10.2 Target T019 seams
+
+```python
+PortfolioScheduler.assign(work_item: WorkItem,
+                          agents: tuple[AgentProfile, ...],
+                          active_leases: tuple[TaskLease, ...]) -> AssignmentDecision
+ModelRouter.select(demand: RunDemand,
+                   agent: AgentProfile,
+                   policy: ModelPolicy) -> ModelSelection
+```
+
+Scheduler 只管理 WorkItem、capacity、Assignment 和 Lease，不迁移 TaskStatus；ModelRouter 只返回
+带 reason 的 ModelSelection，不调用 provider。TaskOrchestrator 继续固定一个 Task 内角色顺序。
+
+### 10.3 Required invariants
+
+1. AgentProfile 属于 organization，不属于 Project；
+2. 同一 Task 历史中的 Coder、QA、Reviewer agent_id 两两独立；
+3. active Lease 不超过 AgentProfile.max_parallel_assignments；
+4. 每个 AgentRunAllocation 绑定 Agent、Assignment、ModelSelection、Context、Prompt、Spec 和 tool policy；
+5. 跨 Task 并发不能共享 Context、worktree、Artifact lineage 或可变模型会话；
+6. 模型评价按 Agent × Model × Role × Task class × Risk 归因。

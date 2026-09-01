@@ -1,0 +1,216 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/workforce.schema.json",
+  "title": "Organization workforce contract",
+  "oneOf": [
+    {"$ref": "#/$defs/agentProfile"},
+    {"$ref": "#/$defs/modelPolicy"},
+    {"$ref": "#/$defs/modelSelection"},
+    {"$ref": "#/$defs/runDemand"},
+    {"$ref": "#/$defs/workItem"},
+    {"$ref": "#/$defs/roleAssignment"},
+    {"$ref": "#/$defs/taskLease"},
+    {"$ref": "#/$defs/agentRunAllocation"}
+  ],
+  "$defs": {
+    "agentId": {"type": "string", "pattern": "^agent_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "taskId": {"type": "string", "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "projectId": {"type": "string", "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "assignmentId": {"type": "string", "pattern": "^assignment_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "leaseId": {"type": "string", "pattern": "^lease_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "modelPolicyId": {"type": "string", "pattern": "^model_policy_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "role": {"enum": ["orchestrator", "coder", "qa", "reviewer"]},
+    "brainTier": {"enum": ["economy", "standard", "reasoning", "critical"]},
+    "riskTier": {"enum": ["low", "normal", "high", "critical"]},
+    "nonNegativeCount": {"type": "integer", "minimum": 0, "maximum": 10000000},
+    "modelSelection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "policy_id", "policy_version", "provider", "model", "tier", "reasons", "selected_at"],
+      "properties": {
+        "kind": {"const": "model_selection"},
+        "policy_id": {"$ref": "#/$defs/modelPolicyId"},
+        "policy_version": {"type": "string", "minLength": 1},
+        "provider": {"type": "string", "minLength": 1},
+        "model": {"type": "string", "minLength": 1},
+        "tier": {"$ref": "#/$defs/brainTier"},
+        "reasons": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["default", "task_complexity", "risk_floor", "role_floor", "context_capacity", "objective_escalation", "budget_constraint", "operator_override"]}
+        },
+        "selected_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "agentProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "version", "display_name", "capabilities", "eligible_roles", "max_parallel_assignments", "default_model_policy_id", "active"],
+      "properties": {
+        "kind": {"const": "agent_profile"},
+        "id": {"$ref": "#/$defs/agentId"},
+        "version": {"type": "string", "minLength": 1},
+        "display_name": {"type": "string", "minLength": 1},
+        "capabilities": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "eligible_roles": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/role"}},
+        "max_parallel_assignments": {"type": "integer", "minimum": 1, "maximum": 16},
+        "default_model_policy_id": {"$ref": "#/$defs/modelPolicyId"},
+        "active": {"type": "boolean"},
+        "metadata": {"type": "object"}
+      }
+    },
+    "modelPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "version", "default_tier", "routes", "risk_floors"],
+      "properties": {
+        "kind": {"const": "model_policy"},
+        "id": {"$ref": "#/$defs/modelPolicyId"},
+        "version": {"type": "string", "minLength": 1},
+        "default_tier": {"$ref": "#/$defs/brainTier"},
+        "routes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["provider", "model", "tier", "capabilities"],
+            "properties": {
+              "provider": {"type": "string", "minLength": 1},
+              "model": {"type": "string", "minLength": 1},
+              "tier": {"$ref": "#/$defs/brainTier"},
+              "capabilities": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+            }
+          }
+        },
+        "risk_floors": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "allOf": [
+            {"contains": {"type": "object", "required": ["risk"], "properties": {"risk": {"const": "low"}}}, "minContains": 1, "maxContains": 1},
+            {"contains": {"type": "object", "required": ["risk"], "properties": {"risk": {"const": "normal"}}}, "minContains": 1, "maxContains": 1},
+            {"contains": {"type": "object", "required": ["risk"], "properties": {"risk": {"const": "high"}}}, "minContains": 1, "maxContains": 1},
+            {"contains": {"type": "object", "required": ["risk"], "properties": {"risk": {"const": "critical"}}}, "minContains": 1, "maxContains": 1}
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["risk", "minimum_tier"],
+            "properties": {
+              "risk": {"$ref": "#/$defs/riskTier"},
+              "minimum_tier": {"$ref": "#/$defs/brainTier"}
+            }
+          }
+        },
+        "metadata": {"type": "object"}
+      }
+    },
+    "runDemand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind", "task_id", "role", "risk", "required_capabilities", "context_tokens",
+        "planned_files", "affected_layers", "failed_runs", "qa_failures", "review_rejections",
+        "touches_critical_paths"
+      ],
+      "properties": {
+        "kind": {"const": "run_demand"},
+        "task_id": {"$ref": "#/$defs/taskId"},
+        "role": {"$ref": "#/$defs/role"},
+        "risk": {"$ref": "#/$defs/riskTier"},
+        "required_capabilities": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "context_tokens": {"$ref": "#/$defs/nonNegativeCount"},
+        "planned_files": {"$ref": "#/$defs/nonNegativeCount"},
+        "affected_layers": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "failed_runs": {"$ref": "#/$defs/nonNegativeCount"},
+        "qa_failures": {"$ref": "#/$defs/nonNegativeCount"},
+        "review_rejections": {"$ref": "#/$defs/nonNegativeCount"},
+        "touches_critical_paths": {"type": "boolean"}
+      }
+    },
+    "workItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "task_id", "project_id", "status", "priority", "risk", "required_capabilities", "created_at", "updated_at"],
+      "properties": {
+        "kind": {"const": "work_item"},
+        "task_id": {"$ref": "#/$defs/taskId"},
+        "project_id": {"$ref": "#/$defs/projectId"},
+        "status": {"enum": ["READY", "LEASED", "RUNNING", "WAITING_HUMAN", "WAITING_DEPENDENCY", "RETRY_SCHEDULED", "CLOSED"]},
+        "priority": {"type": "integer", "minimum": 0, "maximum": 1000},
+        "risk": {"$ref": "#/$defs/riskTier"},
+        "required_capabilities": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "wait_reason": {"type": "string", "minLength": 1},
+        "available_at": {"type": "string", "format": "date-time"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "updated_at": {"type": "string", "format": "date-time"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"enum": ["WAITING_HUMAN", "WAITING_DEPENDENCY", "RETRY_SCHEDULED"]}}, "required": ["status"]},
+          "then": {"required": ["wait_reason"]},
+          "else": {"not": {"required": ["wait_reason"]}}
+        },
+        {
+          "if": {"properties": {"status": {"const": "RETRY_SCHEDULED"}}, "required": ["status"]},
+          "then": {"required": ["available_at"]}
+        }
+      ]
+    },
+    "roleAssignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "project_id", "task_id", "agent_id", "role", "attempt", "lease_id", "capacity_units", "assigned_at"],
+      "properties": {
+        "kind": {"const": "role_assignment"},
+        "id": {"$ref": "#/$defs/assignmentId"},
+        "project_id": {"$ref": "#/$defs/projectId"},
+        "task_id": {"$ref": "#/$defs/taskId"},
+        "agent_id": {"$ref": "#/$defs/agentId"},
+        "role": {"$ref": "#/$defs/role"},
+        "attempt": {"type": "integer", "minimum": 1, "maximum": 10},
+        "lease_id": {"$ref": "#/$defs/leaseId"},
+        "capacity_units": {"type": "integer", "minimum": 1, "maximum": 16},
+        "assigned_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "taskLease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "assignment_id", "task_id", "agent_id", "capacity_units", "acquired_at", "expires_at"],
+      "properties": {
+        "kind": {"const": "task_lease"},
+        "id": {"$ref": "#/$defs/leaseId"},
+        "assignment_id": {"$ref": "#/$defs/assignmentId"},
+        "task_id": {"$ref": "#/$defs/taskId"},
+        "agent_id": {"$ref": "#/$defs/agentId"},
+        "capacity_units": {"type": "integer", "minimum": 1, "maximum": 16},
+        "acquired_at": {"type": "string", "format": "date-time"},
+        "expires_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "agentRunAllocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "run_id", "assignment_id", "project_id", "task_id", "agent_id", "role", "attempt", "model_selection", "context_manifest_id", "prompt_version", "spec_version", "tool_policy_ref", "allocated_at"],
+      "properties": {
+        "kind": {"const": "agent_run_allocation"},
+        "run_id": {"type": "string", "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$"},
+        "assignment_id": {"$ref": "#/$defs/assignmentId"},
+        "project_id": {"$ref": "#/$defs/projectId"},
+        "task_id": {"$ref": "#/$defs/taskId"},
+        "agent_id": {"$ref": "#/$defs/agentId"},
+        "role": {"$ref": "#/$defs/role"},
+        "attempt": {"type": "integer", "minimum": 1, "maximum": 10},
+        "model_selection": {"$ref": "#/$defs/modelSelection"},
+        "context_manifest_id": {"type": "string", "pattern": "^ctx_[a-f0-9]{64}$"},
+        "prompt_version": {"type": "string", "minLength": 1},
+        "spec_version": {"type": "string", "minLength": 1},
+        "tool_policy_ref": {"type": "string", "minLength": 1},
+        "allocated_at": {"type": "string", "format": "date-time"}
+      }
+    }
+  }
+}

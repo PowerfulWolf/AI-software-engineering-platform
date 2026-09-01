@@ -5,10 +5,10 @@ from typing import Annotated, Self
 from pydantic import AwareDatetime, Field, StrictBool, StrictInt, StringConstraints, model_validator
 
 from ai_software_engineer.domain.enums import AgentRole
+from ai_software_engineer.domain.identity import ContextId as ContextId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.task import TaskId
 
-ContextId = Annotated[str, StringConstraints(pattern=r"^ctx_[a-f0-9]{64}$")]
 ContextSourceId = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_.:-]{0,127}$")]
 ContextSectionName = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_.:/-]{0,127}$")]
 TokenCount = Annotated[StrictInt, Field(ge=0)]

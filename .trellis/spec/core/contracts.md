@@ -43,14 +43,16 @@ implementation-report Artifact 可以使用新 revision，但必须满足
 
 `ProjectWorkspaceManifest` 的 wire contract 是 `schemas/project-workspace.schema.json`。它固定
 `project_id`、canonical absolute `project_root`、external `ai_workspace_root`、layout version、
-创建时间和排除自身字段计算的 `manifest_sha256`。`ProjectWorkspaceRegistry` 在 sidecar 中创建 `workspace.json` 以及 profile/agents/
+创建时间和排除自身字段计算的 `manifest_sha256`。T018 的 `layout_version=v0.2`；
+`ProjectWorkspaceRegistry` 在 sidecar 中创建 `workspace.json` 以及 profile/assignments/
 knowledge/policy/state/artifacts/contexts/evidence/evaluations/handoffs/runs/locks/logs/
 spec-conflicts 目录；所有目录先 staging + fsync，再以 rename 发布。重复注册返回首次 manifest，
 不会覆盖或修复现有 workspace。
 
 目标项目是实际代码 cwd，平台不在其中写 `.ase`、Agent 日志、Artifact 或数据库，也不默认复制
 源码。项目原生规范只能被读取和引用；`SpecCompiler` 后续若发现 project rule、platform rule 或
-Task constraint 冲突，必须产生 `SPEC_CONFLICT`/`BLOCKED`，由人工通过持久化 resolution 决定。
+Task constraint 冲突，必须产生 `SPEC_CONFLICT` 并使 WorkItem 进入 `WAITING_HUMAN`、释放 Lease；
+只有人工决定终止交付时 Task 才进入 `BLOCKED`，resolution 必须持久化。
 项目规范不得放宽 hard safety policy。可视化 read API/dashboard 只读这些 durable records，不
 接受状态或 verdict 写入。
 
@@ -77,7 +79,9 @@ Artifact ID 映射到受控 root 下的单一 JSON 文件。相同 ID/相同正�
 
 ### No self-approval
 
-`implementation-report` 只能描述实现事实；QA verdict 必须来自独立 QA run；Review verdict 必须来自独立 Reviewer run。任何同一 run 同时产出实现与批准信号都视为 policy violation。
+`implementation-report` 只能描述实现事实；QA verdict 必须来自独立 QA Agent/run；Review verdict
+必须来自独立 Reviewer Agent/run。同一 Task 历史中的 Coder、QA、Reviewer agent_id 两两不同；
+同一 run 或同一 Agent 跨这些角色产生实现与批准信号都视为 policy violation。
 
 ### Evidence requirements
 
@@ -195,3 +199,83 @@ Review APPROVE 和四 HandoffArtifact refs；BLOCKED 必须有 `blocked_reason`�
 能在 bundle evidence 中解析；review command 保存 argv tokens，不保存可执行 shell 字符串。
 Handoff ID 排除 `generated_at`，等价 replay 保留第一次观察；JSON 与 deterministic Markdown
 任何一侧不一致都拒绝读取。
+
+## 10. T018 Organization Workforce Contract
+
+### 10.1 Signatures
+
+```python
+AgentProfile.model_validate(payload: object) -> AgentProfile
+ModelPolicy.model_validate(payload: object) -> ModelPolicy
+RunDemand.model_validate(payload: object) -> RunDemand
+WorkItem.model_validate(payload: object) -> WorkItem
+RoleAssignment.model_validate(payload: object) -> RoleAssignment
+TaskLease.model_validate(payload: object) -> TaskLease
+AgentRunAllocation.model_validate(payload: object) -> AgentRunAllocation
+is_waiting(status: WorkItemStatus) -> bool
+lease_is_active(lease: TaskLease, *, at: datetime) -> bool
+validate_assignment_independence(candidate: RoleAssignment,
+                                 existing: tuple[RoleAssignment, ...]) -> None
+```
+
+Wire contract 是 `schemas/workforce.schema.json` 的 discriminated union。`AgentProfile` 是组织成员
+身份，不包含 project path 或 concrete model；`AgentDefinition` 仍是 TaskOrchestrator 消费的
+resolved single-role run config。Project sidecar 只持久化 `assignments/`，AgentProfile、
+ModelPolicy、全局 WorkQueue 和绩效属于组织 workspace。
+
+`RunDemand` 是 ModelRouter 的输入事实：它记录 role/risk、required capabilities、context token
+估计、计划文件数、受影响架构层、历史失败/QA 驳回/Review 驳回次数和是否触及 critical path。计数
+来自可观察的 Task、Context、Artifact 和事件，不接受 Agent 自报置信度作为唯一依据。
+
+### 10.2 Validation matrix
+
+| 输入/状态 | 结果 |
+|---|---|
+| AgentProfile capability/eligible role 重复或 capacity 不在 1..16 | Pydantic/Schema 拒绝 |
+| AgentProfile 包含 concrete `model` | extra field 拒绝 |
+| ModelPolicy 缺任一 RiskTier floor 或 floor 无 eligible route | 拒绝，不允许 ModelRouter 猜测 |
+| WAITING WorkItem 无 `wait_reason` | 拒绝；RETRY_SCHEDULED 还必须有未来 available_at |
+| Lease expiry 不晚于 acquired_at，或用 naive datetime 评估 | 拒绝 |
+| 同一 Task 历史的 Coder/QA/Reviewer 使用同一 agent_id | `AssignmentConflict` |
+| AgentRunAllocation 缺 Agent/Model/Context/Prompt/Spec/tool policy 任一归因 | Schema 拒绝 |
+| v0.1 `agents/` project layout | ProjectWorkspace v0.2 拒绝，不自动改写旧 sidecar |
+
+### 10.3 Good / Base / Bad
+
+- Good：同一 AgentProfile 持有两个不同 Task 的 Lease；每个 Run 有独立 Assignment、Context、
+  worktree 和 ModelSelection，且未超过 capacity。
+- Base：没有满足 RiskTier floor 的 route 时不创建 Assignment/Run，等待 operator 更新 ModelPolicy。
+- Bad：为每个 Project 复制 AgentProfile，或一个模型会话共享多个 Task 的可变上下文。
+
+### 10.4 Tests required
+
+- `tests/workforce/test_contracts.py` 覆盖 organization identity、risk floor、waiting reason、lease
+  window、自审冲突、run attribution 和 Python ↔ JSON Schema；
+- `tests/project_workspace/` 与 `tests/contracts/` 覆盖 assignments layout v0.2 和 legacy agents 拒绝；
+- T019 实现 Scheduler 后必须新增 capacity aggregate、Lease release/expiry、priority aging、
+  no-self-review 和 deterministic ModelRouter 测试。
+
+### 10.5 Wrong vs Correct
+
+#### Wrong
+
+```python
+# Project owns a copied Agent and one mutable session multiplexes unrelated Tasks.
+project_agents[project_id] = AgentDefinition(model="largest-model", role="coder", ...)
+shared_session.run(task_a)
+shared_session.run(task_b)
+```
+
+#### Correct
+
+```python
+profile = AgentProfile.model_validate(organization_agent_payload)
+assignment = RoleAssignment.model_validate(project_assignment_payload)
+validate_assignment_independence(assignment, existing_assignments)
+allocation = AgentRunAllocation.model_validate(run_allocation_payload)
+assert allocation.agent_id == profile.id
+assert allocation.assignment_id == assignment.id
+```
+
+前者复制组织身份、把 model 固化到成员并产生跨 Task 上下文串扰；后者让 Project 只保存
+Assignment，每个 Run 显式记录成员、模型、Context 与 policy。

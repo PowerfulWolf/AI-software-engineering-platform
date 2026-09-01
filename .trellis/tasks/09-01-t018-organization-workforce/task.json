@@ -1,0 +1,33 @@
+{
+  "id": "T018",
+  "slug": "organization-workforce",
+  "title": "建立组织级 Agent workforce 与 run-scoped model 契约",
+  "status": "completed",
+  "phase": "verify",
+  "depends_on": ["T017"],
+  "allowed_paths": [
+    "src/ai_software_engineer/domain/**",
+    "src/ai_software_engineer/project_workspace.py",
+    "schemas/workforce.schema.json",
+    "schemas/project-workspace.schema.json",
+    "tests/domain/**",
+    "tests/workforce/**",
+    "tests/project_workspace/**",
+    "tests/contracts/**",
+    "README.md",
+    "CONTEXT.md",
+    "AGENTS.md",
+    "docs/**",
+    ".trellis/workflow.md",
+    ".trellis/spec/core/**",
+    ".trellis/tasks/09-01-t018-organization-workforce/**"
+  ],
+  "verification_commands": [
+    "uv run pytest -q",
+    "uv run ruff check .",
+    "uv run ruff format --check .",
+    "uv run mypy src tests",
+    "uv build --offline",
+    "git diff --check"
+  ]
+}

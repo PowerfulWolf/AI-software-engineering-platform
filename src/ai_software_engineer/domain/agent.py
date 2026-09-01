@@ -1,4 +1,4 @@
-"""Agent Definition and machine-enforced permission contracts."""
+"""Resolved role execution and machine-enforced permission contracts."""
 
 from typing import Annotated, Final, Self
 
@@ -50,7 +50,7 @@ class AgentPermissions(DomainModel):
 
 
 class AgentDefinition(DomainModel):
-    """Versioned configuration used to create isolated Agent Runs."""
+    """Resolved single-role run configuration; the organization identity is AgentProfile."""
 
     id: AgentId
     role: AgentRole

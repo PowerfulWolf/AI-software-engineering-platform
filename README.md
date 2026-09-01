@@ -10,14 +10,16 @@
 ## 设计原则
 
 1. **Knowledge belongs to the organization, not the agent**：规则、设计决策、失败经验和验收标准沉淀在 `.trellis/` 与任务 artifact 中；Agent 是可替换的执行者。
-2. **No agent may be the sole judge of its own work**：Coder 不能批准自己的代码；QA 与 Reviewer 必须由独立会话、独立上下文和受限权限执行。
+2. **No agent may be the sole judge of its own work**：Coder 不能批准自己的代码；同一 Task 历史
+   的 Coder、QA、Reviewer 必须是不同 Agent，并使用独立 Run、Context、worktree 和受限权限。
 3. **Agents communicate through verifiable artifacts, not shared assumptions**：跨角色传递只允许使用经过 Schema 校验、带来源 revision、证据和哈希的 artifact。
-4. **先闭环，再扩展**：v0.1 只实现单任务、单项目、串行状态机；不引入复杂 DAG、向量数据库、自动生产部署或多租户。
+4. **Task 内串行，组织层有界调度**：每个 Task 仍按 `Coder → QA → Reviewer` 串行；组织可以在
+   容量允许时调度多个相互隔离 Task，不引入单 Task 复杂 DAG、共享会话或分布式队列。
 
 ## 当前进度（2026-09-01）
 
-当前 `main` 基线为 `3ca68b4`，T001–T017 已完成并合入。自动化质量基线为 **283 个测试**、
-Ruff 检查与格式检查通过、strict Mypy 检查 **92 个源码文件**、Python package build 通过。
+T001–T018 已完成。自动化质量基线为 **303 个测试**、Ruff 检查与格式检查通过、strict Mypy
+检查 **96 个源码文件**、Python package build 通过。
 
 | 阶段 | 状态 | 已交付结果 |
 |---|---|---|
@@ -27,8 +29,8 @@ Ruff 检查与格式检查通过、strict Mypy 检查 **92 个源码文件**、P
 | M3 串行 Agent Loop | 已完成 | Fake/真实 AgentAdapter、`Coder → QA → Reviewer`、有界重试与恢复 |
 | M4 Evaluation + Handoff | 已完成 | Evaluation events、指标/ADR 重算、DONE/BLOCKED handoff、CLI/runtime |
 | 执行安全边界 | 已完成 | fail-closed 命令执行端口、role worktree 执行生命周期 |
-| M5 任意项目接入 | 进行中 | T017 已提供外置 per-project AI workspace；ProjectProfile 与规范治理待接入 |
-| M6 可执行交付 | 待开始 | Agent tool protocol、evidence capture、跨语言真实项目 E2E |
+| M5 组织 Workforce 与任意项目接入 | 进行中 | T017 sidecar + T018 Agent/Assignment/Lease/ModelPolicy/RunDemand；Scheduler 与 ProjectProfile 待接入 |
+| M6 可执行交付 | 待开始 | ModelRouter、Agent tool protocol、evidence capture、跨语言真实项目 E2E |
 | M7 Agent 可视化 | 待开始 | 只读投影/API、Task board、timeline、Agent detail、Human inbox |
 
 完整阶段事实、任务清单和提交证据见
@@ -50,32 +52,27 @@ Ruff 检查与格式检查通过、strict Mypy 检查 **92 个源码文件**、P
 - 通过 Review 的候选分支/补丁，或 `BLOCKED` 及其证据；
 - 可从事件重算的 Evaluation/ADR 报告，以及供人类直接复核的 JSON + Markdown handoff。
 
-明确不做：并行 Agent/DAG、向量库/RAG 平台、自动合并到保护分支、生产发布、数据库迁移编排、跨仓库变更、长驻自治 Agent。
+明确不做：单 Task 并行 Agent/DAG、共享多 Task 会话、分布式 Scheduler、向量库/RAG 平台、
+自动合并保护分支、生产发布、数据库迁移编排和跨仓库事务。
 
 ## 总体架构
 
 ```text
-Human / Product Owner
-          │ Task + acceptance criteria
-          ▼
-┌──────────────────────────────────────┐
-│ Control Plane: Orchestrator          │
-│ 状态机 · 路由 · 重试 · budget · 审计 │
-└──────────────┬───────────────────────┘
-               │ deterministic context bundles
-┌──────────────▼───────────────────────┐
-│ Knowledge Plane: Trellis              │
-│ org rules · project specs · decisions │
-│ task history · artifact index         │
-└──────────────┬───────────────────────┘
-               │ role-scoped input/output artifacts
-     ┌─────────┼──────────┬────────────┐
-     ▼         ▼          ▼            │
-   Coder      QA       Reviewer         │
- (write)   (tests)    (read-only)       │
-     └─────────┴──────────┴────────────┘
-               ▼
-       Git worktrees + CI evidence
+Human / Product Owner → WorkQueue
+              │
+              ▼
+PortfolioScheduler + ModelRouter
+  AgentProfile · capacity · priority · risk · Lease
+              │ RoleAssignment + ModelSelection
+              ▼
+TaskOrchestrator（每个 Task 内串行）
+              │
+     ┌────────┼─────────┐
+     ▼        ▼         ▼
+   Coder      QA     Reviewer
+     │ isolated Context/worktree/Artifact
+     ▼
+Trellis Knowledge + Project sidecar + Git/Evidence
 ```
 
 ## 项目结构
@@ -88,7 +85,7 @@ ai-software-engineer/
 ├── pyproject.toml                    # Python 包、依赖与质量工具配置
 ├── src/ai_software_engineer/         # 控制平面 Python 包
 │   ├── cli.py                        # ase 命令入口与 composition root
-│   ├── domain/                       # Task、Agent、Artifact 强类型契约
+│   ├── domain/                       # Task、Agent、Workforce、Artifact 强类型契约
 │   ├── store/                        # SQLite Task 快照与 StateEvent 日志
 │   ├── artifacts/                    # 原子 JSON ArtifactStore 与 SHA-256
 │   ├── git/                          # role worktree 隔离与 path/command policy
@@ -116,8 +113,7 @@ ai-software-engineer/
 │   ├── runtime.md                    # Runtime 配置与 task run
 │   ├── milestones.md                 # 里程碑与第一批任务
 │   ├── archive/                      # 已完成阶段的事实、验证与提交记录
-│   └── decisions/
-│       └── 0001-python-control-plane.md # 已接受的语言架构决策
+│   └── decisions/                    # 已接受的架构决策
 ├── schemas/
 │   ├── task.schema.json
 │   ├── agent.schema.json
@@ -131,7 +127,8 @@ ai-software-engineer/
 │   ├── evaluation-event.schema.json
 │   ├── handoff-bundle.schema.json
 │   ├── runtime-config.schema.json
-│   └── project-workspace.schema.json
+│   ├── project-workspace.schema.json
+│   └── workforce.schema.json
 ├── .trellis/
 │   ├── README.md
 │   └── spec/core/
@@ -157,15 +154,25 @@ ai-software-engineer/
 ```text
 <ai-workspace-root>/<project-id>/
 ├── workspace.json
-├── profile/ agents/ knowledge/ policy/ state/
+├── profile/ assignments/ knowledge/ policy/ state/
 ├── artifacts/ contexts/ evidence/ evaluations/
 ├── handoffs/ runs/ locks/ logs/ spec-conflicts/
 ```
 
-目标项目仍是代码、测试和构建命令的默认 cwd；sidecar 只保存平台元数据和可审计事实。项目
-原生规范会被索引和引用，不会被平台静默覆盖；规范冲突进入人工处理队列。
+目标项目仍是代码、测试和构建命令的默认 cwd；sidecar 只保存项目元数据、Assignment 和可审计
+事实。AgentProfile 不属于项目，组织级数据采用独立 workspace：
 
-T017 当前提供 Python application seam；CLI 自动绑定将在 T020 接入：
+```text
+<organization-workspace>/
+├── agents/ model-policies/ work-queue/
+├── leases/ performance/ policies/
+└── projects/                         # Project sidecar registry
+```
+
+项目原生规范会被索引和引用，不会被平台静默覆盖；规范冲突进入人工处理队列。
+
+T018 将 sidecar layout 升级为 v0.2；旧 `agents/` layout 不会被静默改写。CLI 自动绑定组织与
+项目 workspace 将在 T022 接入：
 
 ```python
 from ai_software_engineer.project_workspace import ProjectWorkspaceRegistry
@@ -208,6 +215,8 @@ uv run mypy src tests
 - 用 `ase evaluation report` 从 durable facts 重算指标和 ADR；
 - 用 `ase handoff build` 为 `DONE/BLOCKED` Task 生成 JSON + Markdown 交付包；
 - 在 Python application seam 中注册任意本地项目的外置 sidecar workspace；
+- 用 AgentProfile、WorkItem、RoleAssignment、TaskLease、ModelPolicy、ModelSelection 和
+  AgentRunAllocation 表达组织成员、容量和 run-scoped 大脑；
 - 复用 Git worktree、Context、Artifact、retry、evaluation 和受控命令执行组件继续开发。
 
 最小 CLI 流程：
@@ -223,13 +232,14 @@ uv run ase handoff build <task-id> \
   --output /path/to/ai-workspace/handoffs
 ```
 
-在 T020 完成 CLI 自动绑定前，外部目标项目的 state、artifact、context、evaluation 和 handoff
+在 T022 完成 CLI 自动绑定前，外部目标项目的 state、artifact、context、evaluation 和 handoff
 路径必须显式指向 sidecar，避免污染目标项目。配置示例和字段说明见
 [`docs/runtime.md`](docs/runtime.md) 与 [`docs/cli.md`](docs/cli.md)。
 
-当前尚未完成的关键闭环是：自动发现项目技术栈与原生规范、人工处理规范冲突、让模型通过
-受策略约束的 tool protocol 真正编辑/测试项目、封存命令/diff/测试证据、完成跨语言目标项目
-E2E，以及可视化工作台。平台也不会自动 merge 保护分支或部署生产环境。
+当前尚未完成的关键闭环是：PortfolioScheduler/ModelRouter 的持久化调度、自动发现项目技术栈
+与原生规范、人工处理规范冲突、让模型通过受策略约束的 tool protocol 真正编辑/测试项目、
+封存命令/diff/测试证据、跨语言项目 E2E，以及可视化工作台。平台也不会自动 merge 保护分支
+或部署生产环境。
 
 ## 文档导航
 
@@ -248,4 +258,5 @@ E2E，以及可视化工作台。平台也不会自动 merge 保护分支或部�
 - 里程碑：[`docs/milestones.md`](docs/milestones.md)
 - 阶段归档：[`docs/archive/README.md`](docs/archive/README.md)
 - 语言架构决策：[`docs/decisions/0001-python-control-plane.md`](docs/decisions/0001-python-control-plane.md)
+- Agent Workforce 决策：[`docs/decisions/0002-organization-owned-agent-workforce.md`](docs/decisions/0002-organization-owned-agent-workforce.md)
 - Codex bootstrap：[`AGENTS.md`](AGENTS.md)

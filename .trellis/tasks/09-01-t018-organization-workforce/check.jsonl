@@ -1,0 +1,10 @@
+{"path":"tests/workforce/**","reason":"Positive, boundary and negative workforce domain cases."}
+{"path":"tests/contracts/test_json_schema_contracts.py","reason":"Python model and Draft 2020-12 Schema consistency."}
+{"path":"tests/project_workspace/**","reason":"Sidecar layout v0.2 and no project-owned Agent storage."}
+{"path":"docs/state-machine.md","reason":"Temporary scheduling waits must not become terminal Task BLOCKED."}
+{"path":"docs/milestones.md","reason":"Roadmap must place Scheduler/ModelRouter before ProjectProfile execution composition."}
+{"check":"organization identity separation","status":"passed","result":"AgentProfile has no concrete model or project path; ProjectId, RunId and ContextId use canonical shared aliases"}
+{"check":"delivery-role independence","status":"passed","result":"same-agent Coder/QA/Reviewer assignments are rejected across the complete Task history, including retries"}
+{"check":"run-scoped model attribution","status":"passed","result":"RunDemand signals and ModelSelection are bound into AgentRunAllocation with policy/context/prompt/spec/tool references"}
+{"check":"schedule versus delivery state","status":"passed","result":"WorkItem waiting states require reasons and retry availability; Task BLOCKED remains terminal-only"}
+{"check":"sidecar layout migration safety","status":"passed","result":"v0.2 assignments layout is created and legacy agents layout is rejected without mutation"}

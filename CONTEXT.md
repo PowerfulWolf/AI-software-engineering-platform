@@ -12,12 +12,40 @@ _Avoid_: Job, ticket, prompt
 A uniquely identified, independently verifiable condition that a Task must satisfy.
 _Avoid_: Requirement item, checklist entry
 
-**Agent Definition**:
-The versioned role, model, permissions, artifact contract, retry limit, and execution budget used to configure Agent Runs.
-_Avoid_: Agent config, bot
+**Agent**:
+A long-lived, organization-owned team member with stable identity, capabilities, role eligibility, capacity, and performance history. An Agent is not owned by a Project and is not a model process.
+_Avoid_: Project agent, bot, model instance
+
+**Agent Profile**:
+The versioned organization record describing one Agent's capabilities, eligible roles, capacity, trust, and default Model Policy. It does not contain project-specific permissions or a concrete model selection.
+_Avoid_: Agent Definition, role config
+
+**Role Assignment**:
+A temporary, auditable binding of one Agent to one Role for one Task attempt. Assignment does not transfer ownership of the Agent to the Project.
+_Avoid_: Project agent, permanent role
+
+**Task Lease**:
+An expiring claim on an Agent's bounded capacity for one Role Assignment. Releasing or expiring a Lease makes the Agent available without discarding Task evidence.
+_Avoid_: Lock, ownership
+
+**Work Item**:
+The schedulable representation of a Task, carrying priority, required capabilities, risk, availability, and waiting state independently from delivery status.
+_Avoid_: Task status, queue message
+
+**Model Policy**:
+An organization-owned rule set that defines eligible models, a default Brain Tier, risk floors, and escalation signals for Agent Runs.
+_Avoid_: Agent model, provider config
+
+**Run Demand**:
+The objective, run-scoped routing facts derived from a Task, Context, Artifact, and event history: role, risk, context size, planned change scope, affected layers, failure counts, and critical-path impact. It is input to ModelRouter, not an Agent's self-reported confidence.
+_Avoid_: model guess, confidence score
+
+**Model Selection**:
+The concrete provider, model, Brain Tier, policy version, and reasons allocated to one Agent Run.
+_Avoid_: Agent brain, default model
 
 **Agent Run**:
-One isolated invocation of an Agent Definition for a Task attempt, identified by a `run_id` and bound to one Context Manifest and source revision.
+One isolated invocation for a Role Assignment, identified by a `run_id` and bound to one Agent, Model Selection, Context Manifest, tool policy, source revision, and Task attempt.
 _Avoid_: Session, conversation
 
 **Task Attempt**:

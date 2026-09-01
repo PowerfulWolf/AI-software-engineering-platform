@@ -5,21 +5,25 @@
 ## 不可违反的原则
 
 - **Knowledge belongs to the organization, not the agent.** 新规则、决策、失败模式和可复用经验必须写入 `.trellis/spec/` 或 `docs/`，不能只留在聊天记录或模型记忆中。
-- **No agent may be the sole judge of its own work.** Coder 不得生成/修改 QA 或 Review verdict；QA 不得批准生产代码；Reviewer 不得改代码或自行 merge；Orchestrator 只按 artifact 和 policy 作决定。
+- **No agent may be the sole judge of its own work.** Coder 不得生成/修改 QA 或 Review verdict；
+  同一 Task 历史中的 Coder、QA、Reviewer 必须是不同 Agent；Reviewer 不得改代码或自行 merge；
+  TaskOrchestrator 只按 artifact 和 policy 作决定。
 - **Agents communicate through verifiable artifacts, not shared assumptions.** 角色之间只传递 Schema 校验通过、带 `task_id`、`source_revision`、`context_manifest_id`、evidence 和 SHA-256 的 artifact。
 
 ## v0.1 硬边界
 
-第一阶段只实现单项目、单 Task、串行（v0.1 的代码隔离 adapter 使用 Git）：
+每个 Task 内部只实现串行交付（v0.1 的代码隔离 adapter 使用 Git）：
 
 ```text
 NEW → PLANNING → IMPLEMENTING → QA → REVIEW → DONE
                                   ↘ FAIL/REJECT → IMPLEMENTING
 ```
 
-允许 `BLOCKED` 和 `FAILED` 终态。禁止在 v0.1 引入：
+当前 Runtime 一次仍只推进一个 Task；T018 仅建立组织级 workforce 契约，T019 才实现有界
+PortfolioScheduler/ModelRouter。未来可以并发多个彼此隔离的 Task，但单个 Task 内的角色不能
+并行或跳步。允许 `BLOCKED` 和 `FAILED` 终态。禁止在 v0.1 引入：
 
-- 复杂 DAG、并行 Agent、动态角色创建；
+- 单 Task 内复杂 DAG、并行 Coder/QA/Reviewer、动态角色创建；
 - 向量数据库、通用 RAG 平台、消息队列、Temporal/Celery/Kafka；
 - 自动 merge 到保护分支、自动生产部署、多租户和跨仓库事务；
 - 让 Agent 自己修改权限、Schema、状态机或 Trellis 规范。
@@ -30,19 +34,40 @@ NEW → PLANNING → IMPLEMENTING → QA → REVIEW → DONE
 
 平台可以接入任意本地项目；Task 的 `repository`/`project_root` 是目标项目的真实代码目录，
 也是默认命令 cwd。每个项目必须注册一个位于目标目录之外的 `ai_workspace_root`，由
-`ProjectWorkspaceRegistry` 建立固定 sidecar layout。Agent、ProjectProfile、项目级 prompt/规范、
-Task/StateEvent、Context、Artifact、Evidence、Evaluation、Handoff、运行日志和锁只能写入
-该 sidecar；不得在目标项目创建 `.ase`、AI 日志或数据库，也不得默认复制源码。
+`ProjectWorkspaceRegistry` 建立固定 sidecar layout。ProjectProfile、项目级 prompt/规范、
+Assignment、Task/StateEvent、Context、Artifact、Evidence、Evaluation、Handoff、运行日志和锁
+只能写入该 sidecar；不得在目标项目创建 `.ase`、AI 日志或数据库，也不得默认复制源码。
+AgentProfile、ModelPolicy、全局 WorkQueue 和团队绩效属于组织 workspace，不复制进项目 sidecar。
 
 目标项目自身的 `AGENTS.md`、`CONTRIBUTING`、README、CI、`.editorconfig`、`.trellis/spec/` 等
 是 project-native rules，必须只读发现、记录 URI/hash 并纳入 Context。平台 sidecar 不能悄悄
 覆盖它们。平台 hard safety policy（无自我批准、无 secret 泄露、无越权命令/路径）不可被项目
-规范放宽；工程约定或 Task 约束发生冲突时生成 `SPEC_CONFLICT`，任务进入 `BLOCKED` 并交人工。
+规范放宽；工程约定或 Task 约束发生冲突时生成 `SPEC_CONFLICT`，WorkItem 进入
+`WAITING_HUMAN`、释放 Lease 并交人工；只有决定终止本次交付时 Task 才进入 `BLOCKED`。
 人工决定必须写入 `HumanActionEvent`/resolution artifact；不能只修改聊天记录或让 Agent 自行选边。
 
 后续可选的 role Git worktree 是临时代码 checkout，不是 AI metadata workspace；逻辑项目仍由
 给定 `project_root` 绑定。可视化只读取 sidecar 的 durable events/artifacts/evidence 和目标项目
 的只读 Git inspection，不直接驱动状态或 verdict；路线见 `docs/visualization.md`。
+
+## 组织级 Agent 与模型分配
+
+- Agent 是组织拥有的长期团队成员；Project 只拥有工作、规范、访问授权和执行记录；
+- Role 是一次 Task attempt 的临时岗位，必须通过 `RoleAssignment + TaskLease` 分配；
+- 同一 Agent 可以在容量允许时持有多个独立 Task Lease，但每个 AgentRun 必须使用独立 Context、
+  worktree、Artifact lineage 和 tool policy；禁止一个长驻会话混用多个 Task；
+- 同一 Task 历史中的 Coder、QA、Reviewer 必须是不同 Agent；高风险任务可进一步要求模型或
+  provider 多样性；
+- `AgentDefinition` 只是由 AgentProfile、Assignment、ModelSelection 和项目 policy 解析出的
+  单角色运行配置，不代表 Agent 身份；
+- 具体模型按 AgentRun 分配。`ModelPolicy` 必须定义风险最低 BrainTier，升级依赖测试失败、
+  invalid artifact、QA/Review 驳回、上下文容量和高风险路径等客观事实，不能只信 Agent 自报置信度；
+- 绩效归因至少包含 `agent_profile × model × role × task_class × risk_tier`，不能把强模型收益
+  全部记到 Agent 身上。
+
+Task delivery status 与 WorkItem scheduling status 是两个状态机。`WAITING_HUMAN`、
+`WAITING_DEPENDENCY`、`RETRY_SCHEDULED` 属于 WorkItem，并要求释放或到期 TaskLease；Task 保持
+最近的交付 checkpoint。只有没有安全继续路径或预算终局耗尽时才进入终态 `BLOCKED`。
 
 ## 已接受的语言决策
 
