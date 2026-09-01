@@ -33,6 +33,12 @@ root，先复用 `WorkspacePolicy` 检查完整 tokenized argv，再以 `shell=F
 stdout/stderr 受字节上限并带截断标志，timeout/启动失败是稳定 typed error。这样 QA 能在
 未来生成可复核 test evidence，同时不让 shell 字符串、宿主机 secrets 或 cwd 越界穿过执行边界。
 
+T016 的 `RoleWorktreeSession` 是该端口与 Repository Plane 的最小组合层：它只接受同角色
+`AgentDefinition` 与 `WorktreeSpec`，调用 `GitWorkspace.create` 后把返回的 manager-owned
+root 绑定给 `SubprocessCommandExecutor`。QA/Reviewer 继续在 candidate SHA 的 detached
+worktree 中运行，Coder 保留 attempt branch；`close` 委托 Git 的 dirty 检查，不能 force-delete
+未持久化现场。该层不迁移 Task、不写 Artifact，也不把模型文本解释成命令。
+
 ### Evidence Plane
 
 Artifact Store 保存 JSON artifact 正文、Schema 版本、producer、source revision、父子关系、证据路径与 SHA-256。Git diff、测试输出和静态检查结果都以 evidence 条目引用，必要时保存截断后的日志文件。

@@ -1174,6 +1174,13 @@ class CommandExecutor(Protocol):
             timeout_seconds: float | None = None) -> CommandResult: ...
 
 
+@dataclass(frozen=True, slots=True)
+class CommandExecutorSettings:
+    environment_allowlist: tuple[str, ...] = ("PATH", "LANG", "LC_ALL")
+    default_timeout_seconds: float = 600.0
+    max_output_bytes: int = 1_000_000
+
+
 SubprocessCommandExecutor(
     workspace_root: str | Path,
     permissions: AgentPermissions,
@@ -1260,3 +1267,109 @@ evidence = save_command_evidence(result)
 
 前者允许 shell 注入、cwd/secret 越界并丢失 timeout 语义；后者在 policy、环境、资源和输出
 边界内返回可审计事实，是否 PASS 仍由独立 QA 契约决定。
+
+## 17. T016 Role Worktree Execution Composition
+
+### 17.1 Scope / Trigger
+
+新增或修改 role worktree 创建、Agent permissions 绑定、命令 executor 生命周期、dirty cleanup
+或 candidate detached checkout 时适用。`RoleWorktreeSession` 是 T006 `GitWorkspace` 与
+T015 `CommandExecutor` 之间的唯一组合端口；它不改变 Task/Artifact wire Schema，也不替代
+未来的 OS/container sandbox。
+
+### 17.2 Signatures
+
+```python
+@dataclass(frozen=True, slots=True)
+class RoleWorktreeBinding:
+    worktree: WorktreeRef
+    executor: CommandExecutor
+
+RoleWorktreeSession(
+    git_workspace: GitWorkspace,
+    *,
+    environment: Mapping[str, str] | None = None,
+    environment_allowlist: tuple[str, ...] = ("PATH", "LANG", "LC_ALL"),
+    default_timeout_seconds: float = 600.0,
+    max_output_bytes: int = 1_000_000,
+)
+
+RoleWorktreeSession.open(
+    spec: WorktreeSpec,
+    agent: AgentDefinition,
+    *,
+    denied_paths: tuple[str, ...] = (),
+) -> RoleWorktreeBinding
+RoleWorktreeSession.inspect(binding: RoleWorktreeBinding) -> WorktreeSnapshot
+RoleWorktreeSession.close(binding: RoleWorktreeBinding) -> None
+```
+
+### 17.3 Contracts
+
+- `open` 先检查 `spec.role is agent.role`，再调用注入的 `GitWorkspace.create`；
+  `WorktreeSpec` 已拒绝 orchestrator，因此 orchestrator 没有 role worktree；
+- 返回的 `WorktreeRef.path` 是唯一 executor cwd；session 不接受调用方另传的 cwd，也不从
+  Agent prompt 解析路径；executor 继续执行 T015 的 argv、env、timeout、输出和 shell guards；
+- Coder 的 branch、QA/Reviewer 的 detached candidate 和 attempt 编号完全由 GitWorkspace
+  决定；session 不创建第二套 layout、branch 或 revision；
+- `close` 只调用 `GitWorkspace.remove`。dirty worktree 必须抛出 `DirtyWorktree` 并保留现场，
+  clean worktree 才能删除；删除不会删除 Coder branch 或 candidate commit；
+- `RoleWorktreeSession` 构造器先创建并验证 T015 `CommandExecutorSettings`，非法环境名、timeout
+  或 output limit 在任何 Git worktree/branch 创建前拒绝；若 path-bound executor 在 `open` 后仍
+  意外初始化失败，仅对本次刚创建的 worktree 尝试受保护清理，原始错误继续抛出，清理失败通过
+  exception note 暴露，不能静默吞掉；已有 binding 或 dirty worktree 不自动清理；
+- session 只组合生命周期，不迁移 Task 状态、不落盘 Artifact、不解释 returncode/verdict，也
+  不把模型自由文本变成命令。上层必须将 `CommandResult` 转成 evidence 并由独立 QA/Reviewer
+  契约作决定。
+
+### 17.4 Validation & Error Matrix
+
+| 输入/状态 | 检测点 | 结果 |
+|---|---|---|
+| spec.role 与 agent.role 不一致 | `RoleWorktreeSession.open` | `RoleWorktreeAgentMismatch`，不创建 worktree |
+| spec.role 为 orchestrator | `WorktreeSpec` validator | `ValidationError`，不创建 worktree |
+| Git repository/ref/root/layout 非法 | `GitWorkspace.create` | T006 typed Git error，binding 不产生 |
+| executor env/timeout/output 配置非法 | `RoleWorktreeSession` / `CommandExecutorSettings` constructor | 稳定 `ValueError`，不创建 worktree/branch |
+| 命令未授权或 shell token | binding.executor / `WorkspacePolicy` | `CommandPolicyViolation`，进程不启动 |
+| 命令超时/启动失败 | T015 executor | `CommandTimedOut`/`CommandExecutionError` |
+| binding worktree dirty | `RoleWorktreeSession.close` → GitWorkspace | `DirtyWorktree.changed_paths`，保留现场 |
+| binding worktree clean | `RoleWorktreeSession.close` → GitWorkspace | 安全移除，branch/commit 保留 |
+
+### 17.5 Good / Base / Bad
+
+- **Good**：同角色 Coder binding 在 manager branch 中执行 allowlisted argv；QA binding detached
+  到同一 candidate SHA；命令结果含 binding cwd，清理前先检查 snapshot；
+- **Base**：真实临时 Git repository + Python 标准库命令即可覆盖组合层，无 provider、网络或
+  数据库依赖；
+- **Bad**：把 QA AgentDefinition 传给 Coder spec、把 main checkout 直接绑定 executor、
+  忽略 `DirtyWorktree` 强制删除，或把模型输出 shell 字符串交给 binding。
+
+### 17.6 Tests Required
+
+- `tests/role_workspace/test_role_workspace.py` 覆盖 Coder cwd/branch、QA detached candidate、
+  role mismatch、dirty cleanup/现场保留、clean cleanup 和 executor 初始化失败清理；
+- 断言所有 binding 命令仍经 T015 `CommandExecutor`，不新增第二套 subprocess 或 Git 命令
+  拼接路径；
+- 运行全量 pytest、Ruff、strict mypy、build、lock 和 `git diff --check`。
+
+### 17.7 Wrong vs Correct
+
+#### Wrong
+
+```python
+subprocess.run(agent_text, shell=True, cwd=repository)
+shutil.rmtree(worktree.path)
+```
+
+#### Correct
+
+```python
+binding = session.open(spec, agent_definition)
+result = binding.executor.run(("pytest", "-q"))
+snapshot = session.inspect(binding)
+if not snapshot.dirty:
+    session.close(binding)
+```
+
+前者绕过 role policy、shell/env/timeout 和 dirty evidence；后者把 worktree 所有权、命令执行和
+清理边界固定在可验证的 typed seams。

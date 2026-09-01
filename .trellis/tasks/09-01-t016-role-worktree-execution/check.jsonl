@@ -1,0 +1,4 @@
+{"check":"role and worktree identity","status":"passed","result":"same-role AgentDefinition is required; Coder uses attempt branch and QA uses detached candidate SHA"}
+{"check":"executor cwd and policy reuse","status":"passed","result":"binding executor runs in manager-issued worktree root and inherits T015 argv/env/timeout/output guards"}
+{"check":"cleanup safety","status":"passed","result":"dirty close raises DirtyWorktree and retains evidence; clean close removes only the managed worktree"}
+{"check":"initialization configuration boundary","status":"passed","result":"invalid executor settings are rejected before any worktree or attempt branch is created"}
