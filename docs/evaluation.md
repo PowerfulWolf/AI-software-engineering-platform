@@ -1,51 +1,147 @@
-# Evaluation 指标与 Autonomous Delivery Rate
+# Evaluation 指标、ADR 与 Human Handoff
 
-## 1. 评估单位
+## 1. 为什么需要独立事件流
 
-一个 evaluation case = 一个固定 Task、固定 base revision、固定 acceptance criteria、固定测试入口。每次模型/策略变更都在同一 case 集合上回放，避免把需求变化误当成能力变化。
-
-## 2. 核心指标
-
-| 指标 | 定义 | v0.1 目标 |
-|---|---|---:|
-| Task Completion Rate | `DONE` cases / started cases | ≥ 70% |
-| First-pass QA Rate | 首次 Coder 后 QA `PASS` 的 cases / cases | ≥ 50% |
-| First-pass Review Rate | 首次 Review `APPROVE` 的 cases / cases | ≥ 40% |
-| Artifact Validity Rate | 首次 Schema/完整性校验通过的 artifact / artifact 总数 | ≥ 98% |
-| Evidence Coverage | 有定位 evidence 的 required checks / required checks | 100% |
-| Median Cycle Time | 从 `PLANNING` 到 `DONE` 的中位时间 | 持续下降，先记录基线 |
-| Mean Attempts | 每个 case 的 Coder attempt 平均数 | ≤ 2.0 |
-| Regression Escape Rate | 交付后人工/隐藏测试发现的问题 / DONE cases | < 10% |
-| Human Escalation Rate | 进入 `BLOCKED` 且需人类决定的 cases / started cases | < 25% |
-| Policy Violation Rate | 被拒绝的越权动作 / agent runs | 0 个未捕获 |
-
-## 3. Autonomous Delivery Rate（ADR）
-
-### 定义
-
-在给定 evaluation 集合和时间窗口内：
+`StateEvent` 只记录 Orchestrator 的状态迁移，无法诚实回答“有没有人改代码”“policy 是否被
+放宽”“非法输出出现了几次”“交付后有没有回归”。因此 T012 保留 StateEvent 的单一职责，
+另建不可变 `EvaluationEvent` 流；评估输入是：
 
 ```text
-ADR = 满足以下全部条件的 DONE Task 数 / 已启动且纳入评估的 Task 数
+Task snapshot + ordered StateEvents + sealed Artifacts + ordered EvaluationEvents
+    → EvaluationTrace
+    → EvaluationEngine
+    → per-case assessment + aggregate metrics/ADR
 ```
 
-“满足全部条件”包括：
+汇总数字不是事实来源。任何 report 都可从同一 trace 重算。
 
-1. 从 `NEW` 到 `DONE` 无人修改业务代码、测试或 verdict；
-2. 未绕过或人工放宽任何 policy、budget 或状态迁移守卫；
-3. QA 和 Reviewer 均由独立 run 产出有效 artifact；
-4. required acceptance criteria、测试和 evidence 完整；
-5. candidate diff 可由人类按交付包复核并合并（v0.1 不要求平台自动 merge）；
-6. 在规定的观察窗口内没有已知回归（若有隐藏测试，纳入窗口）。
+## 2. Public API
 
-人工仅做“开始任务”和“查看/合并交付包”不降低 ADR；人工澄清需求、修代码、重写 verdict、批准越权或替平台补齐 evidence 都算非自治，Task 只计入 Completion Rate，不计入 ADR。
+```python
+EvaluationEventStore.append(event: EvaluationEvent) -> EvaluationEvent
+EvaluationEventStore.get(event_id: EvaluationEventId) -> EvaluationEvent
+EvaluationEventStore.find(event_id: EvaluationEventId) -> EvaluationEvent | None
+EvaluationEventStore.list_for_case(case_id: EvaluationCaseId) -> tuple[EvaluationEvent, ...]
 
-### 记录字段
+EvaluatingAgentAdapter.run(request: AgentRequest) -> AgentResult
+EvaluationTraceBuilder.build(case_id: EvaluationCaseId) -> EvaluationTrace
+EvaluationEngine.evaluate(traces: tuple[EvaluationTrace, ...]) -> EvaluationReport
 
-每个 case 记录 `task_id`、`model_id`、prompt/spec 版本、base/candidate SHA、attempt 数、人工事件、状态事件、artifact validity、隐藏测试结果和 ADR 布尔值。指标必须可从事件流重算，不能只保存一个汇总数字。
+HandoffBuilder.build(task_id: TaskId) -> HandoffBundle
+FileHandoffStore.put(bundle: HandoffBundle) -> HandoffRef
+FileHandoffStore.get(handoff_id: HandoffId) -> HandoffBundle
+```
 
-## 4. 质量门槛
+四类 Evaluation event：
 
-- 任何未捕获的 policy violation 或 artifact 伪造都是发布阻断项；
-- ADR 提升不能以降低 evidence coverage 或放宽 Review 标准为代价；
-- 每次失败都要按分类统计，优先修复重复出现的 failure mode，再调模型参数。
+| kind | 关键字段 | 作用 |
+|---|---|---|
+| `case_started` | case/task/base/model/prompt/spec/tests/included | 冻结可比较的 case |
+| `agent_run` | role/run/attempt/output status/artifact/policy counts/duration | 计算 run 与输出质量 |
+| `human_action` | action/evidence URI/note | 区分允许动作与取消自治资格的干预 |
+| `regression_check` | PASS/FAIL/window/evidence URI/hidden tests | 关闭交付观察窗口 |
+
+`FileEvaluationEventStore` 每个事件保存一份 `event + canonical sha256` JSON 信封。相同 ID/正文
+重放幂等；相同 ID/不同正文、合法字段篡改、损坏 JSON 或非法 lookup 都返回 typed error。
+
+## 3. Autonomous Delivery Rate
+
+在给定 evaluation 集合和窗口内：
+
+```text
+ADR = ELIGIBLE 的 DONE cases / 已启动且 included 的 cases
+```
+
+`ELIGIBLE` 必须同时满足：
+
+1. StateEvent 从 `NEW` 到 `DONE`，最终事件引用有效 plan/implementation/QA/review 链；
+2. implementation/QA/review 绑定同一 candidate，四个 producer run 独立；
+3. `AgentRunEvent` 与四个 Artifact 的 role/run/artifact identity 完全一致；
+4. QA `PASS`、Reviewer `APPROVE`，required criteria 都有 QA evidence；
+5. 无改码、改测试、改 verdict、补 evidence、需求澄清或 policy override；
+6. 无 uncaught policy violation；
+7. `DONE` 后的最新 regression window 为 `PASS`。
+
+结论有四态：
+
+- `ELIGIBLE`：进入 ADR 分子；
+- `PENDING`：交付链合格，但 regression window 尚未关闭；进入分母、不进入分子；
+- `INELIGIBLE`：任一硬条件失败；
+- `EXCLUDED`：case 明确 `included=false`，不进入分母。
+
+人工只做 `START_TASK`、`VIEW_HANDOFF`、`MERGE_DELIVERY` 不降低 ADR。其他人工动作必须记录，
+不能靠不记录来“优化”指标。
+
+## 4. 可重算指标
+
+| 指标 | 计算 |
+|---|---|
+| Task Completion Rate | DONE / started included cases |
+| First-pass QA/Review Rate | 首个对应 run 在 attempt 1 产生 PASS/APPROVE / started cases |
+| Artifact Validity Rate | VALID / (VALID + INVALID) Agent outputs；NOT_PRODUCED 不进分母 |
+| Evidence Coverage | 有 PASS evidence 的 required criteria / required criteria |
+| Median Cycle Time | PLANNING event 到 DONE event 的毫秒中位数 |
+| Mean Attempts | 每 case 最大持久化 attempt 的平均值 |
+| Regression Escape Rate | regression FAIL 的 DONE cases / DONE cases |
+| Regression Observation Coverage | 已关闭窗口的 DONE cases / DONE cases |
+| Human Escalation Rate | BLOCKED / started cases |
+| Policy Violation Rate | 记录的 policy violations / Agent runs |
+| ADR | ELIGIBLE / started included cases |
+
+每个 `Rate` 同时保留 numerator、denominator、value；分母为 0 时 value 是 `null`，不伪造 0%。
+
+## 5. 运行装配
+
+```python
+event_store = FileEvaluationEventStore(runtime_root / "evaluation-events")
+event_store.append(case_started_event)
+
+instrumented_agent = EvaluatingAgentAdapter(
+    case_id=case_started_event.case_id,
+    delegate=real_or_fake_agent,
+    event_store=event_store,
+)
+runner = RetryingOrchestrator(
+    repository=repository,
+    artifact_store=artifact_store,
+    context_builder=context_builder,
+    agent_adapter=instrumented_agent,
+    agent_definitions=agent_definitions,
+)
+runner.run_task(case_started_event.task_id)
+
+trace = EvaluationTraceBuilder(
+    repository=repository,
+    artifact_store=artifact_store,
+    event_store=event_store,
+).build(case_started_event.case_id)
+report = EvaluationEngine().evaluate((trace,))
+
+bundle = HandoffBuilder(
+    repository=repository,
+    artifact_store=artifact_store,
+).build(case_started_event.task_id)
+handoff_ref = FileHandoffStore(runtime_root / "handoffs").put(bundle)
+```
+
+同一 Agent request replay 会复用确定性 evaluation event ID 和首次 `occurred_at`，不会重复计数。
+回归窗口结束后追加 `RegressionCheckEvent`，重新 build trace/evaluate 即可把 `PENDING` 更新为
+`ELIGIBLE` 或 `INELIGIBLE`；不修改旧 report 或旧事件。
+
+## 6. Handoff 内容
+
+`DONE` handoff 必须包含四制品链、candidate、QA/Review gate、逐 criterion evidence、changed
+files、风险、事件 ID 和 tokenized Git review argv。`BLOCKED` handoff 包含最后 reason/
+classification、已有 candidate/QA evidence、风险和安全下一步。`FileHandoffStore` 同时写
+canonical JSON 与 deterministic Markdown；两者任一被篡改，读取 fail closed。
+
+Handoff 只帮助人类复核、合并或决定如何解除阻塞。它不会执行 Git 命令、自动 merge、修改
+verdict 或把终态 Task 原地重开。
+
+## 7. v0.1 边界
+
+- Evaluation event 和 handoff 当前使用文件端口；未来可替换 PostgreSQL/observability adapter，
+  但 typed contract 和 replay 语义不变；
+- runner 通过装饰后的 AgentAdapter 自动发 run 事件；human/regression 事实仍需可信外部执行器记录；
+- v0.1 不提供在线 dashboard、分布式 tracing、自动隐藏测试平台或统计显著性分析；
+- metrics 不得用于放宽 QA/Review/evidence 标准，任何未捕获的 policy violation 仍是发布阻断项。

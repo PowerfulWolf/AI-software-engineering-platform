@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/handoff-bundle.schema.json",
+  "title": "Human handoff bundle",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "handoff_id",
+    "schema_version",
+    "generated_at",
+    "task_id",
+    "title",
+    "description",
+    "repository",
+    "outcome",
+    "attempts",
+    "base_revision",
+    "summary",
+    "criteria",
+    "changed_files",
+    "artifacts",
+    "evidence",
+    "event_ids",
+    "known_risks",
+    "next_actions",
+    "review_commands"
+  ],
+  "properties": {
+    "handoff_id": {"type": "string", "pattern": "^handoff_[a-f0-9]{64}$"},
+    "schema_version": {"const": "v0.1"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "task_id": {"type": "string", "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "title": {"type": "string", "minLength": 1},
+    "description": {"type": "string", "minLength": 1},
+    "repository": {"type": "string", "minLength": 1},
+    "outcome": {"enum": ["DONE", "BLOCKED"]},
+    "attempts": {"type": "integer", "minimum": 0},
+    "base_revision": {"type": "string", "minLength": 1},
+    "candidate_revision": {"type": "string", "pattern": "^[a-f0-9]{7,64}$"},
+    "summary": {"type": "string", "minLength": 1},
+    "qa_status": {"enum": ["PASS", "FAIL"]},
+    "review_verdict": {"enum": ["APPROVE", "REJECT"]},
+    "criteria": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/criterion"}
+    },
+    "changed_files": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/changedFile"}
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/artifact"}
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "$ref": "https://ai-software-engineer.local/schemas/artifact.schema.json#/$defs/evidence"
+      }
+    },
+    "event_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^evt_[a-z0-9][a-z0-9_-]{2,63}$"}
+    },
+    "known_risks": {"type": "array", "items": {"type": "string"}},
+    "blocked_classification": {"type": "string"},
+    "blocked_reason": {"type": "string"},
+    "next_actions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "review_commands": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/reviewCommand"}
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"outcome": {"const": "DONE"}}},
+      "then": {
+        "required": ["candidate_revision", "qa_status", "review_verdict"],
+        "properties": {
+          "qa_status": {"const": "PASS"},
+          "review_verdict": {"const": "APPROVE"},
+          "artifacts": {"minItems": 4, "maxItems": 4}
+        },
+        "not": {"required": ["blocked_reason"]}
+      },
+      "else": {"required": ["blocked_reason"]}
+    }
+  ],
+  "$defs": {
+    "criterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["criterion_id", "description", "required", "status", "evidence_ids"],
+      "properties": {
+        "criterion_id": {"type": "string", "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$"},
+        "description": {"type": "string", "minLength": 1},
+        "required": {"type": "boolean"},
+        "status": {"enum": ["PASS", "FAIL", "NOT_TESTED", "NOT_ASSESSED"]},
+        "evidence_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^ev_[a-z0-9][a-z0-9_-]{2,63}$"}
+        },
+        "notes": {"type": "string"}
+      }
+    },
+    "changedFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "change", "lines_added", "lines_deleted"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "change": {"enum": ["added", "modified", "deleted", "renamed"]},
+        "lines_added": {"type": "integer", "minimum": 0},
+        "lines_deleted": {"type": "integer", "minimum": 0}
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
+        "kind",
+        "sha256",
+        "producer_role",
+        "run_id",
+        "source_revision",
+        "context_manifest_id",
+        "evidence_ids"
+      ],
+      "properties": {
+        "artifact_id": {"type": "string", "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$"},
+        "kind": {"enum": ["plan", "implementation-report", "qa-report", "review-report"]},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "producer_role": {"enum": ["orchestrator", "coder", "qa", "reviewer"]},
+        "run_id": {"type": "string", "minLength": 1},
+        "source_revision": {"type": "string", "minLength": 1},
+        "context_manifest_id": {"type": "string", "minLength": 1},
+        "evidence_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^ev_[a-z0-9][a-z0-9_-]{2,63}$"}
+        }
+      }
+    },
+    "reviewCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "argv"],
+      "properties": {
+        "label": {"type": "string", "minLength": 1},
+        "argv": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

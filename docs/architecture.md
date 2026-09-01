@@ -37,7 +37,7 @@ v0.1 的 `GitWorktreeManager` 将所有 role worktree 放在 main checkout 外�
 
 ### Human Boundary
 
-需求澄清、越权批准、冲突解决和最终合并都属于人类边界。任何无法在既定预算或证据标准内解决的情况都进入 `BLOCKED`，而不是让 Agent 自行放宽规则。
+需求澄清、越权批准、冲突解决和最终合并都属于人类边界。任何无法在既定预算或证据标准内解决的情况都进入 `BLOCKED`，而不是让 Agent 自行放宽规则。T012 的 Evaluation 层把 case 启动、Agent run、人工动作和回归窗口记录为不可变事件；`EvaluationEngine` 只从这些事件、StateEvent 与封存 Artifact 重算指标。`HandoffBuilder` 为 `DONE/BLOCKED` 构造自包含 JSON + Markdown，不要求人类阅读内部日志。
 
 ## 3. 数据流
 
@@ -50,6 +50,8 @@ Task(JSON)
   → QA context(candidate + persisted plan/implementation) → qa-report → seal/store/read-back
   → review context(candidate + persisted plan/implementation/QA) → review-report → seal/store/read-back
   → DONE | retry current role/Coder | BLOCKED | FAILED
+  → EvaluationTrace → metrics/ADR
+  → HandoffBundle(JSON + Markdown) → human review/merge or unblock decision
 ```
 
 每个箭头都是一个契约边界：输入必须先通过 Schema 校验，输出必须包含 `task_id`、`source_revision` 和可定位 evidence。`FileRunContextBuilder` 只把 ArtifactStore 读回的显式上游 Artifact 编译为 `artifact://<id>` Context source；下游不读取上游 Agent 的未持久化记忆。
@@ -62,6 +64,8 @@ Task(JSON)
 | Artifact 索引 | 后续接入 SQLite | T005 先由文件名和 typed `ArtifactRef` 提供按 ID 读取；Orchestrator 阶段再持久化查询索引 |
 | Artifact 正文 | 文件系统 JSON | `artifacts/art_<artifact-id>.json`，临时文件 + 原子 rename |
 | 运行日志 | 文件系统文本 | 脱敏、截断、由 evidence 引用 |
+| Evaluation events | 文件系统 canonical JSON | 一事件一文件，带内部 SHA-256，exact replay 幂等 |
+| Handoff | 文件系统 JSON + Markdown | deterministic ID，等价重建保留首次观察时间 |
 | Trellis 规则 | Git 中的 Markdown | 组织知识，评审后变更 |
 
 Task 快照和状态事件的 Python 入口分别是 `Task` 与 `StateEvent`；`SqliteTaskRepository` 使用 `tasks`、`state_events` 两张表。快照正文和事件正文均保留 JSON，便于重启后由 Pydantic 重新校验并按事件 revision 回放。

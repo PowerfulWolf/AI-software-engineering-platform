@@ -930,3 +930,123 @@ OpenAICompatibleAgentAdapter.run(request: AgentRequest) -> AgentResult
 - replay exact/conflict、endpoint validation、ContextPromptBuilder policy-first 与 cross-Task
   Artifact 拒绝；
 - Ruff、strict mypy、完整 pytest、`uv lock --check`、`uv build` 和 `git diff --check` 必须通过。
+
+## 14. Scenario: Replayable Evaluation and Human Handoff
+
+### 14.1 Scope / Trigger
+
+新增或修改 delivery metrics、ADR、Agent run instrumentation、人类动作、回归观察、终态交付包
+或其文件持久化时适用。`src/ai_software_engineer/evaluation/` 是唯一边界；Evaluation 不修改
+Task 状态，Handoff 不执行 Git/merge。
+
+### 14.2 Signatures
+
+```python
+class EvaluationEventStore(Protocol):
+    def append(self, event: EvaluationEvent) -> EvaluationEvent: ...
+    def get(self, event_id: EvaluationEventId) -> EvaluationEvent: ...
+    def find(self, event_id: EvaluationEventId) -> EvaluationEvent | None: ...
+    def list_for_case(self, case_id: EvaluationCaseId) -> tuple[EvaluationEvent, ...]: ...
+
+
+class EvaluatingAgentAdapter:
+    def run(self, request: AgentRequest) -> AgentResult: ...
+
+
+class EvaluationTraceBuilder:
+    def build(self, case_id: EvaluationCaseId) -> EvaluationTrace: ...
+
+
+class EvaluationEngine:
+    def evaluate(self, traces: tuple[EvaluationTrace, ...]) -> EvaluationReport: ...
+
+
+class HandoffBuilder:
+    def build(self, task_id: TaskId) -> HandoffBundle: ...
+
+
+class FileHandoffStore:
+    def put(self, bundle: HandoffBundle) -> HandoffRef: ...
+    def get(self, handoff_id: HandoffId) -> HandoffBundle: ...
+```
+
+### 14.3 Contracts
+
+- EvaluationEvent 是 `case_started | agent_run | human_action | regression_check` typed union；
+  case/event/Task identity 必须一致，事件按 `(occurred_at, event_id)` 稳定排序；
+- `FileEvaluationEventStore` 的磁盘 record 是 `{event, sha256}`；digest 基于 canonical event JSON，
+  同 ID 同正文 replay 幂等，同 ID 改正文拒绝，读取重新验证 digest 与 Pydantic；
+- `EvaluatingAgentAdapter` 只装饰现有 AgentAdapter。事件 ID 是 case/run 的 deterministic SHA-256；
+  replay 读取首次 event timestamp 后重建同一事实，不重复调用 metrics counter；
+- `EvaluationTraceBuilder` 要求唯一 CaseStartedEvent，并从 TaskRepository、ArtifactStore、
+  EvaluationEventStore 读回所有事实；base/task/event/artifact identity 任一不同 fail closed；
+- `EvaluationEngine` 不 I/O。ADR 状态固定 `ELIGIBLE/INELIGIBLE/PENDING/EXCLUDED`；Rate 保存
+  numerator/denominator/value，分母 0 时 value 为 None；
+- DONE chain 由最终 StateEvent 的四个 artifact ID 解析；plan base、implementation candidate、
+  QA/Review revision/parent/verdict、criteria set、producer run uniqueness 和 integrity 全部匹配；
+- disqualifying human actions、policy override、uncaught policy violation、回归 FAIL 使 ADR
+  INELIGIBLE；只有回归观察缺失且其他条件合格时为 PENDING；
+- `HandoffBuilder` 只接受 DONE/BLOCKED。DONE 使用同一个 delivery-chain resolver；BLOCKED 保留
+  最后 reason、已有 candidate/findings/evidence；review commands 是 argv tuple；
+- `handoff_id = handoff_ + sha256(canonical bundle excluding handoff_id/generated_at)`；Store 写
+  `<id>.json` 与 `<id>.md`，两者用临时文件、fsync、atomic replace，读取必须互相一致。
+
+### 14.4 Validation & Error Matrix
+
+| 输入/状态 | 检测点 | 结果 |
+|---|---|---|
+| case 无 start / 多 start | TraceBuilder | `EvaluationTraceNotFound` / `EvaluationTraceConflict` |
+| case base、Task、event 或 artifact identity 不同 | TraceBuilder | `EvaluationTraceContractError` |
+| event exact replay / changed replay | EventStore | 原事件 / `EvaluationEventConflict` |
+| event JSON/digest/ID 被篡改 | FileEvaluationEventStore | `EvaluationEventCorruption` |
+| same run replay | EvaluatingAgentAdapter | 原 result + 单个首次观察 event |
+| run event 与 artifact producer 不同 | EvaluationEngine | ADR `INELIGIBLE: INCOMPLETE_RUN_EVIDENCE` |
+| DONE 缺 regression check | EvaluationEngine | ADR `PENDING: REGRESSION_PENDING` |
+| human 改码/测试/verdict/evidence 或 override | EvaluationEngine | ADR `INELIGIBLE` + stable reason |
+| 非 DONE/BLOCKED 请求 handoff | HandoffBuilder | `HandoffNotReady` |
+| DONE 缺有效四制品链 | HandoffBuilder | `HandoffContractError` |
+| Handoff ID forged、JSON/Markdown 被改 | FileHandoffStore | integrity/corruption error |
+
+### 14.5 Good / Base / Bad Cases
+
+- **Good**：5 个 case 的事件/Artifact 重新装配后，completion/validity/evidence/ADR 的 numerator、
+  denominator、value 与首次运行完全相同；DONE handoff 可直接展示 candidate/evidence/argv。
+- **Base**：完整 DONE 但观察窗口未结束，handoff 仍可审阅，ADR 明确 PENDING。
+- **Bad**：将 `DONE` 当 `adr=true`，从当前文件系统猜“无人修改”，保存无法重算的百分比，或让
+  handoff 自动执行 Git merge。
+
+### 14.6 Tests Required
+
+- `tests/evaluation/test_event_store.py`：memory/file round-trip、order、exact replay、conflict、
+  invalid lookup 和合法字段篡改；
+- `tests/evaluation/test_emitter.py`：valid output、invalid output、exact replay 单事件/首次时间；
+- `tests/evaluation/test_trace.py`：真实 SQLite + sealed FileArtifactStore + FileEvaluationEventStore
+  组装 eligible trace，并覆盖 missing start/base mismatch；
+- `tests/evaluation/test_metrics.py`：eligible、pending、human + uncaught policy、blocked、regression
+  与 invalid artifact output；固定 5-case ADR/completion 计数；
+- `tests/evaluation/test_handoff.py`：DONE/BLOCKED 字段、非终态、断链、first observation 与
+  Markdown 篡改；
+- `tests/contracts/test_json_schema_contracts.py`：四类 Evaluation event/Handoff 正例和未知 action/
+  空 next-actions 反例；Ruff、strict mypy、完整 pytest、lock、build、diff check 全部通过。
+
+### 14.7 Wrong vs Correct
+
+#### Wrong
+
+```python
+if repository.get(task_id).status is TaskStatus.DONE:
+    metrics.save({"adr": True})
+```
+
+#### Correct
+
+```python
+trace = trace_builder.build(case_id)
+report = EvaluationEngine().evaluate((trace,))
+bundle = handoff_store.put(handoff_builder.build(trace.task.id))
+assert report.summary.autonomous_delivery_rate.denominator == 1
+assert bundle.handoff_id.startswith("handoff_")
+```
+
+前者丢失人工/policy/regression/invalid-output 事实且无法重算；后者只从 typed durable facts 得出
+结论，并把人类交付与自动状态迁移分离。

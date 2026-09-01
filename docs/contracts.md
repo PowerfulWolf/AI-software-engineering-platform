@@ -11,6 +11,26 @@
 
 权限必须由机器可验证的 policy 表达；自然语言 prompt 只是解释，不是授权来源。
 
+## Evaluation 与 Handoff 契约
+
+T012 新增两类不改变 Task 状态的组织级事实：
+
+- `EvaluationEvent`：`CaseStartedEvent` 固定 case/model/prompt/spec/base/tests；
+  `AgentRunEvent` 记录 role/run/attempt/output validity/policy violation；
+  `HumanActionEvent` 记录允许或取消自治资格的人工动作；`RegressionCheckEvent` 关闭观察窗口。
+- `HandoffBundle`：只为 `DONE/BLOCKED` 构造，携带 Task 摘要、candidate、验收项、四制品链或
+  阻塞证据、changed files、风险、复核 argv 和人类下一步。
+
+`EvaluationEventStore.append/get/find/list_for_case` 与 `FileHandoffStore.put/get` 都是 immutable
+边界。Evaluation event 文件使用 `event + sha256` 内部信封，合法字段被篡改也会被发现；
+Handoff ID 排除 `generated_at`，等价重建保留首次观察，JSON 和确定性 Markdown 任一不一致都
+fail closed。Wire contract 分别是 `schemas/evaluation-event.schema.json` 和
+`schemas/handoff-bundle.schema.json`。
+
+ADR 不由 `Task.status == DONE` 单独决定。`EvaluationEngine` 还要求最终 StateEvent 的四制品
+链、独立 run、candidate revision、required criterion evidence、无越权人工动作/策略放宽，
+以及交付后的 regression window PASS。观察窗口未完成返回 `PENDING` 并保守地留在 ADR 分母。
+
 ## 1.2 Agent Run 输入/输出契约
 
 `AgentAdapter.run(request: AgentRequest) -> AgentResult` 是 Fake 与真实模型 adapter 的共同边界。Request 固定携带 `run_id`、`task_id`、`role`、`attempt`、`source_revision`、`context_manifest_id`、`input_artifact_ids`、`permissions`、`output_schema` 和 `timeout_seconds`；其中 Context manifest ID 必须来自已成功构建的 ContextBundle。

@@ -23,7 +23,8 @@
 
 - `plan`、`implementation-report`、`qa-report`、`review-report` 四类 artifact；
 - 一个可审计的状态事件流；
-- 通过 Review 的候选分支/补丁，或 `BLOCKED` 及其证据。
+- 通过 Review 的候选分支/补丁，或 `BLOCKED` 及其证据；
+- 可从事件重算的 Evaluation/ADR 报告，以及供人类直接复核的 JSON + Markdown handoff。
 
 明确不做：并行 Agent/DAG、向量库/RAG 平台、自动合并到保护分支、生产发布、数据库迁移编排、跨仓库变更、长驻自治 Agent。
 
@@ -70,6 +71,7 @@ ai-software-engineer/
 │   ├── context/                      # 确定、脱敏、预算受限的 Context Builder/Router
 │   ├── agents/                       # AgentAdapter、Fake 与 OpenAI-compatible adapter
 │   ├── orchestration/                 # 串行 runner、Context composition 与状态机
+│   ├── evaluation/                   # Evaluation events、metrics/ADR、handoff
 │   └── prompts/                      # 后续：版本化 role prompt 模板
 ├── docs/
 │   ├── architecture.md               # 分层、边界和部署形态
@@ -94,7 +96,9 @@ ai-software-engineer/
 │   ├── qa-report.schema.json
 │   ├── review-report.schema.json
 │   ├── context.schema.json
-│   └── state-event.schema.json
+│   ├── state-event.schema.json
+│   ├── evaluation-event.schema.json
+│   └── handoff-bundle.schema.json
 ├── .trellis/
 │   ├── README.md
 │   └── spec/core/
@@ -106,6 +110,7 @@ ai-software-engineer/
 │   ├── context/                      # 路由、预算、脱敏和注入边界
 │   ├── agents/                       # Fake/real AgentAdapter 共用契约
 │   ├── orchestration/                 # 串行交付闭环与状态 checkpoint
+│   ├── evaluation/                   # 事件重放、ADR 与 DONE/BLOCKED handoff
 │   └── contracts/                    # Python model ↔ JSON Schema 一致性
 └── artifacts/runs/                   # 运行产物（默认 gitignored）
 ```
@@ -149,6 +154,6 @@ uv run mypy src tests
 
 ## 当前状态
 
-M0 设计基线和 T001–T010 已完成。当前可运行 `ase`，并可用 Pydantic 校验 Task、Agent Definition、StateEvent、ContextBundle、AgentRequest/AgentResult 以及四类 Artifact；正反例受 canonical JSON Schema contract tests 保护。Task 状态事件可在 SQLite 重启后恢复，状态图由纯函数 guard/reducer 管理，ArtifactStore 提供 SHA-256、lineage、原子写入和不可变重放保证。Repository Plane 可从指定 SHA 创建隔离的 Coder/QA/Reviewer worktree，检查 staged/unstaged/untracked 变更，并通过绑定 worktree root 的 policy 拒绝路径逃逸和未授权命令。Context Plane 会按角色路由显式来源，先脱敏再计数/哈希，并可通过 FileContextStore 原子保存、读回和校验 manifest。Agent Execution Plane 现在同时提供可脚本化的离线 Fake adapter 和标准库 HTTP 的 OpenAI-compatible adapter；真实 adapter 通过同一个 typed request/result seam、显式 PromptBuilder/StoredContextResolver、响应 Schema 校验和有界错误映射接入供应商。`SerialOrchestrator` 与 T010 retry/recovery 仍保持单 Task、串行、无 DAG/向量库边界。
+M0–M4 与 T001–T012 的 v0.1 核心库已经完成。当前可运行 `ase`，并可用 Pydantic 与 canonical JSON Schema 校验 Task、Agent Definition、StateEvent、ContextBundle、AgentRequest/AgentResult、四类 Artifact、EvaluationEvent 与 HandoffBundle。Task/事件可从 SQLite 恢复，Artifact/Context/Evaluation/Handoff 文件存储都采用不可变、原子、fail-closed 的边界。Repository Plane、Context Plane、Fake/真实 AgentAdapter、串行 Orchestrator 与有界 retry/recovery 已形成可离线验证的闭环。
 
-下一步是 T012：从事件流重算 metrics/Autonomous Delivery Rate，并生成可供人类审阅的交付包。真实 provider 的凭据、模型选择和网络策略仍由部署环境注入；离线 fake contract tests 是默认质量门，T011 不自动 merge、部署或并行调度。
+T012 通过 `EvaluatingAgentAdapter` 自动记录 Agent run 事实，`EvaluationTraceBuilder + EvaluationEngine` 从状态事件、评估事件和封存 Artifact 重算 metrics/ADR；`HandoffBuilder + FileHandoffStore` 为 `DONE/BLOCKED` 输出自包含 JSON 与 Markdown。缺少回归观察窗口时 ADR 明确为 `PENDING`，不会把未知当成功。完整装配示例见 [`docs/evaluation.md`](docs/evaluation.md)。真实 provider 凭据、模型选择和网络策略仍由部署环境注入；v0.1 不自动 merge、部署或引入并行 DAG。

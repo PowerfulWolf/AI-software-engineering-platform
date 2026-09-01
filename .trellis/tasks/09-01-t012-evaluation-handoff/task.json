@@ -1,0 +1,29 @@
+{
+  "id": "T012",
+  "slug": "evaluation-handoff",
+  "title": "实现 metrics、ADR 与 human handoff",
+  "status": "completed",
+  "phase": "verify",
+  "depends_on": ["T009", "T010", "T011"],
+  "allowed_paths": [
+    "src/ai_software_engineer/evaluation/**",
+    "tests/evaluation/**",
+    "tests/contracts/test_json_schema_contracts.py",
+    "schemas/evaluation-event.schema.json",
+    "schemas/handoff-bundle.schema.json",
+    "docs/**",
+    ".trellis/spec/core/**",
+    ".trellis/tasks/09-01-t012-evaluation-handoff/**",
+    "AGENTS.md",
+    "README.md"
+  ],
+  "verification_commands": [
+    "uv run pytest",
+    "uv run ruff check .",
+    "uv run ruff format --check .",
+    "uv run mypy src tests",
+    "uv lock --check",
+    "uv build",
+    "git diff --check"
+  ]
+}

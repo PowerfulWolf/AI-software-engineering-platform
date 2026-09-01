@@ -148,3 +148,24 @@ ArtifactStore，runner 负责重新 seal 和持久化。
 或 revision → `FAILED/INVALID_OUTPUT(transient=false)`。失败结果没有 Artifact 或 verdict，
 错误消息不得包含 API key 或 provider 原始 body。完全相同的 request 重放返回同一结果，
 相同 `run_id` 搭配不同 request 必须抛 `AgentRequestConflict` 且不发起第二次调用。
+
+## 9. T012 EvaluationEvent 与 HandoffBundle
+
+Evaluation wire contract 固定为 `schemas/evaluation-event.schema.json` 的 discriminated union：
+
+- `case_started`：`case_id/task_id/base_revision/model_id/prompt_version/spec_version/
+  test_entrypoints/included`；
+- `agent_run`：`run_id/role/attempt/output_status/artifact_id/policy_violations/
+  caught_policy_violations/duration_ms`；只有 `VALID` 可带 artifact ID；
+- `human_action`：枚举 action、evidence URI、可选 note；
+- `regression_check`：PASS/FAIL、window start/end、evidence URI、hidden-tests 标志。
+
+`EvaluatingAgentAdapter` 从 typed AgentResult 发出确定 ID 的 AgentRunEvent；exact Agent replay
+保留第一次 `occurred_at`，INVALID_OUTPUT 计作 invalid artifact output，timeout/provider failure
+计作 not-produced，捕获的 POLICY_VIOLATION 同时记录 total/caught。
+
+Handoff wire contract 固定为 `schemas/handoff-bundle.schema.json`。DONE 必须有 candidate、QA PASS、
+Review APPROVE 和四 HandoffArtifact refs；BLOCKED 必须有 `blocked_reason`。criteria evidence IDs 必须
+能在 bundle evidence 中解析；review command 保存 argv tokens，不保存可执行 shell 字符串。
+Handoff ID 排除 `generated_at`，等价 replay 保留第一次观察；JSON 与 deterministic Markdown
+任何一侧不一致都拒绝读取。

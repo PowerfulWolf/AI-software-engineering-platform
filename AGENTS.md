@@ -89,6 +89,18 @@ NEW → PLANNING → IMPLEMENTING → QA → REVIEW → DONE
 - `INVALID_OUTPUT`、`POLICY_VIOLATION`、需求歧义和预算耗尽不能靠无限重试解决；按 `docs/failure-routing.md` 进入 `BLOCKED`；
 - 状态事件必须带 `from_status`、`to_status`、attempt、reason、artifact IDs、source revision，并支持幂等回放。
 
+## Evaluation / Human Handoff 规则
+
+- 每个纳入评估的运行先写唯一 `CaseStartedEvent`；用 `EvaluatingAgentAdapter` 包装实际
+  AgentAdapter，不能在任务完成后手工补造 Agent run 历史；
+- 人工澄清、改业务代码/测试/verdict、补 evidence 或放宽 policy 必须写 `HumanActionEvent`，
+  不得为了提高 ADR 隐去；开始任务、查看/合并 handoff 不取消自治资格；
+- `DONE` 在 observation window 结束前只能得到 `ADR=PENDING`；回归检查必须有 evidence URI；
+- 指标汇总只能由 `EvaluationTraceBuilder + EvaluationEngine` 重算，禁止持久化一个无法回放的
+  `adr=true`；
+- 人类只消费 `HandoffBundle` 及其引用的 immutable Artifact/Evidence；handoff 不授权自动 merge，
+  也不能覆盖 Task、StateEvent 或角色 verdict。
+
 ## 完成定义（Definition of Done）
 
 一个实现任务只有在以下全部满足时才算完成：
