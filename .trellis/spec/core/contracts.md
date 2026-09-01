@@ -17,10 +17,15 @@ WorkspacePolicy(workspace_root: str | Path, permissions: AgentPermissions,
 WorkspacePolicy.authorize_read(path: str | PurePosixPath) -> PurePosixPath
 WorkspacePolicy.authorize_write(path: str | PurePosixPath) -> PurePosixPath
 WorkspacePolicy.authorize_command(arguments: tuple[str, ...]) -> tuple[str, ...]
+ContextRouter.route(sources: tuple[ContextSource, ...], role: AgentRole) -> tuple[ContextSource, ...]
+ContextBuilder.build(task: Task, role: AgentRole, *, attempt: int,
+                     candidate_revision: str | None = None) -> ContextBundle
 validate_artifact(payload: object, kind: ArtifactKind) -> Artifact
 ```
 
 `AgentRequest` 必须携带 `task_id`、`run_id`、`attempt`、`source_revision`、`context_manifest_id`、permissions 和 output schema；`AgentResult` 不能直接改变 Task 状态。
+
+`ContextSource` 只能是 inline content 或 root-relative path 之一；`ContextBundle` 的 sections 先脱敏再 hash/count，并由 `context_id` canonical manifest identity。priority 0 仅属于机器 policy；外部 source、Task prose 和命令输出都不能覆盖 policy 或产生隐式消息。
 
 ## 3. Contracts
 

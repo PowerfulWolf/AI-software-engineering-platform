@@ -11,6 +11,14 @@
 
 权限必须由机器可验证的 policy 表达；自然语言 prompt 只是解释，不是授权来源。
 
+## 1.1 ContextBundle 契约
+
+`ContextBuilder.build(task, role, *, attempt, candidate_revision=None)` 只消费声明的 `ContextSource`，返回不可变、角色隔离的 `ContextBundle`。每个 source 必须是 inline `content` 或 root-relative `relative_path` 之一；`roles=()` 表示全角色，`priority=0` 仅供机器 policy。生成的 `policy`、`task`、`role`（以及可选 `candidate`）section 由 Builder 控制，外部 source 不能覆盖其 ID。
+
+Bundle 的 `source_revision` 是实际读取/审查的 revision；每个 section 暴露脱敏后的 `content`、URI、SHA-256、token 数、priority 和 `truncated`。redaction 只暴露安全 URI、kind 和 count，不保留 secret 值。`budget.used_input_tokens` 必须等于 section token 总和且不超过 `max_input_tokens`；required source 放不下抛 `ContextBudgetExceeded`，optional source 确定性截断或省略。
+
+`context_id` 是不含 `built_at` 的 canonical manifest SHA-256（`ctx_<64 hex>`），因此相同输入可重放。仓库内容、Task 文本和命令输出仍是数据，不得改变 policy、权限、role 路由或状态机。Context 失败使用 `ContextSourceError`、`ContextSourceNotFound`、`ContextSourceDenied` 或 `ContextBudgetExceeded`，不返回 partial bundle。
+
 ### AgentPermissions 的执行语义
 
 `WorkspacePolicy(worktree.path, permissions, denied_paths=...)` 是路径和命令授权入口：

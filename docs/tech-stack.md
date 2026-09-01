@@ -28,7 +28,14 @@ class AgentAdapter(Protocol):
 
 
 class ContextBuilder(Protocol):
-    def build(self, task: Task, role: AgentRole) -> ContextBundle: ...
+    def build(
+        self,
+        task: Task,
+        role: AgentRole,
+        *,
+        attempt: int,
+        candidate_revision: str | None = None,
+    ) -> ContextBundle: ...
 
 
 class ArtifactStore(Protocol):
