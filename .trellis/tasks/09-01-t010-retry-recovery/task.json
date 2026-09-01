@@ -1,0 +1,10 @@
+{
+  "id": "task_t010_retry_recovery",
+  "title": "T010 bounded retry and checkpoint recovery",
+  "status": "completed",
+  "branch": "ai/task_t010_retry/attempt-1",
+  "base_branch": "main",
+  "scope": "backend",
+  "created_at": "2026-09-01T15:00:00+08:00",
+  "updated_at": "2026-09-01T17:00:00+08:00"
+}

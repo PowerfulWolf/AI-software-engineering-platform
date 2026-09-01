@@ -71,15 +71,17 @@ def run_task(task_id: str) -> DeliveryResult:
     return block(task, "attempt_budget_exhausted")
 ```
 
-上面描述 M3 完整目标；当前 T009 已实现其中的单 attempt happy path，入口为：
+上面描述 M3 完整目标；T009 已实现单 attempt happy path，T010 通过同一组端口增加了
+`RetryingOrchestrator.run_task(task_id) -> DeliveryResult | BlockedResult`。它从 durable
+Task/event/Artifact checkpoint 恢复，不重复已读回的有效 Artifact。
 
 ```python
 SerialOrchestrator.run_task(task_id: TaskId) -> DeliveryResult
 ```
 
-T009 严格只接受 `NEW` Task，不包含 retry loop：planning、Coder、QA、Reviewer 每个角色运行
-一次。QA FAIL、Review REJECT、timeout 或 typed failure 会保留最后有效 checkpoint 并抛出稳定
-错误；T010 再根据 `docs/failure-routing.md` 添加 attempt、retry、BLOCKED 和恢复。
+T009 严格只接受 `NEW` Task，不包含 retry loop；T010 接受 `NEW`、`PLANNING`、`IMPLEMENTING`、
+`QA`、`REVIEW` checkpoint，并按最多 `Task.max_attempts` 次尝试执行。旧 Artifact 永不覆盖，
+修复后的 implementation-report 通过 `supersedes` 和 QA/Review finding parent 建立 lineage。
 
 每次 run 的执行顺序固定为：
 
@@ -106,6 +108,22 @@ T009 严格只接受 `NEW` Task，不包含 retry loop：planning、Coder、QA�
   必须等于 `content.commit_sha`；不能在 Coder 启动前虚构未知 candidate。
 - plan/implementation/QA 对 Task criterion ID 必须精确全覆盖；4 个 producer run ID 必须独立。
 
-## 5. 交付包
+- 每次 Agent attempt 先通过 `TaskRepository.record_attempt` 持久化；StateEvent 记录对应
+  `attempt`，进程重启后以事件与快照中的最大 attempt 恢复预算。
+
+## 5. T010 路由摘要
+
+| 失败 | 动作 |
+|---|---|
+| timeout/provider error/invalid output | 在预算内重试当前 role；失败结果不产生 verdict |
+| QA `FAIL` | 持久化 qa-report，带 findings 回流 Coder，创建新 candidate |
+| Review `REJECT` | 持久化 review-report，带 findings 回流 Coder，创建新 candidate |
+| policy/需求不明确/预算用尽 | 生成 `BlockedResult`，追加 `BLOCKED` event |
+| 内部不变量破坏 | 保留现场并追加 `FAILED` event |
+
+同一 attempt 的上下文只来自声明的已持久化 Artifact；重启恢复会扫描本 Task 的可信
+Artifact，识别最新 plan/implementation/QA/Review，并从最近合法状态继续。
+
+## 6. 交付包
 
 `deliver()` 生成一个只读索引：Task、base_ref、candidate_sha、diff 路径、四类 artifact、测试命令/输出和未解决风险。交付包不执行 merge；人类或后续发布流程决定是否合并。

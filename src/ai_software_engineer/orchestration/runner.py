@@ -307,6 +307,7 @@ class SerialOrchestrator:
         input_artifacts: tuple[Artifact, ...],
         expected_parents: tuple[ArtifactId, ...],
         seen_run_ids: set[RunId],
+        expected_supersedes: ArtifactId | None = None,
     ) -> _CompletedRun:
         definition = self._definitions[role]
         context = self._context_builder.build(
@@ -340,6 +341,10 @@ class SerialOrchestrator:
             raise DeliveryContractViolation(
                 f"{role.value} Artifact parent lineage does not match its inputs"
             )
+        if result.artifact.supersedes != expected_supersedes:
+            raise DeliveryContractViolation(
+                f"{role.value} Artifact supersedes lineage does not match the retry input"
+            )
         sealed = seal_artifact(result.artifact, validated_at=self._clock())
         reference = self._artifact_store.put(sealed)
         persisted = self._artifact_store.get(reference.artifact_id)
@@ -372,6 +377,7 @@ class SerialOrchestrator:
             reason=reason,
             source_revision=source_revision,
             artifact_ids=artifact_ids,
+            attempt=attempt,
             occurred_at=self._clock(),
         )
         self._repository.append_event(event)

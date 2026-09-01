@@ -9,6 +9,7 @@
 ```python
 run_task(task_id: str) -> DeliveryResult
 SerialOrchestrator.run_task(task_id: TaskId) -> DeliveryResult
+RetryingOrchestrator.run_task(task_id: TaskId) -> DeliveryResult | BlockedResult
 RunContextBuilder.build(task: Task, agent: AgentDefinition, *, attempt: int,
                         candidate_revision: str | None = None,
                         input_artifacts: tuple[Artifact, ...] = ()) -> ContextBundle
@@ -18,6 +19,7 @@ validate_transition(task: Task, to_status: TaskStatus) -> None
 build_event(task: Task, to_status: TaskStatus, *, event_id: EventId,
             reason: str, source_revision: str,
             artifact_ids: tuple[ArtifactId, ...] = (),
+            attempt: int = 1,
             occurred_at: datetime) -> StateEvent
 apply_event(task: Task, event: StateEvent) -> Task
 ContextBuilder.build(task: Task, role: AgentRole, *, attempt: int,
@@ -27,6 +29,7 @@ ArtifactStore.get(artifact_id: ArtifactId) -> Artifact
 TaskRepository.create(task: Task) -> None
 TaskRepository.get(task_id: TaskId) -> Task
 TaskRepository.append_event(event: StateEvent) -> None
+TaskRepository.record_attempt(task_id: TaskId, attempt: int) -> None
 TaskRepository.list_events(task_id: TaskId) -> tuple[StateEvent, ...]
 TaskRepository.current_revision(task_id: TaskId) -> int
 GitWorkspace.create(spec: WorktreeSpec) -> WorktreeRef
@@ -44,6 +47,8 @@ WorkspacePolicy.authorize_command(arguments: tuple[str, ...]) -> tuple[str, ...]
 - `run_task` 只能推进 `docs/state-machine.md` 中的合法迁移；
 - T009 `SerialOrchestrator.run_task` 只接受 `NEW` Task，以固定单 attempt 顺序运行
   planning-mode Orchestrator、Coder、QA、Reviewer；retry、BLOCKED 路由和恢复属于 T010；
+- T010 `RetryingOrchestrator` 只在上述串行路径上增加有界 retry/recovery；每次 Agent 调用前
+  持久化 `attempt`，从 durable Artifact/event checkpoint 恢复，不引入复杂 DAG、队列或向量库；
 - 每个 Agent 输入只包含 ArtifactStore 已持久化并读回的显式上游 Artifact；
   `FileRunContextBuilder` 将其编译为 required `artifact://<id>` source，禁止隐式 Agent 消息；
 - Coder request/context revision 是输入基线，implementation-report revision 是输出 candidate，
@@ -57,9 +62,11 @@ WorkspacePolicy.authorize_command(arguments: tuple[str, ...]) -> tuple[str, ...]
 - `ArtifactStore.put` 只接受 Schema 校验通过且 `integrity.validated=true` 的 envelope；
 - `ArtifactStore.get` 返回重新校验且 digest 匹配的 typed Artifact；缺失、篡改或损坏文件返回稳定错误；
 - Artifact parent/supersedes 只能引用已存在的同 Task Artifact，写入采用临时文件、`fsync` 和原子 rename；
-- `StateEvent` 必须包含 `event_id`、from/to status、actor、reason、source revision 和 artifact IDs；
+- `StateEvent` 必须包含 `event_id`、from/to status、actor、attempt、reason、source revision 和 artifact IDs；
 - Task 快照与 StateEvent 必须由 `TaskRepository.append_event` 在同一 SQLite 事务中提交；相同事件正文重放幂等，不同正文复用 ID 拒绝；
 - repository 每个连接开启 foreign keys，数据库使用 WAL；关闭后重新打开必须只依赖持久化 JSON 恢复 Task 与事件序列；
+- `record_attempt` 只能单调增加 Task.attempts，不能超过 Task.max_attempts；它不虚构状态迁移，
+  StateEvent 的 attempt 用于审计并与快照最大值交叉校验；
 - 主 checkout 只读，业务代码只能在角色 worktree 产生。
 - role worktree root 必须位于 main checkout 外；Coder branch 与 QA/Reviewer detached candidate 不复用旧 attempt；dirty worktree 不自动清理；
 - repository hook/fsmonitor 禁用，repository-local external checkout filter 在没有更强 sandbox 的 v0.1 中 fail closed；
@@ -83,6 +90,7 @@ WorkspacePolicy.authorize_command(arguments: tuple[str, ...]) -> tuple[str, ...]
 | Agent FAILED/TIMED_OUT | 当前阶段 checkpoint | `AgentRunFailed`，不伪造 Artifact/verdict |
 | QA FAIL / Review REJECT | verdict guard | Artifact 可持久化；停在 QA/REVIEW，T010 决定路由 |
 | criteria、parent、candidate 或独立 run 不一致 | delivery guard | `DeliveryContractViolation`，不推进下一状态 |
+| retry attempt 超过预算 | retry router | `BlockedResult` + `BLOCKED` event，保留最后 finding Artifact |
 
 ## 5. Good / Base / Bad Cases
 

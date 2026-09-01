@@ -21,6 +21,7 @@ from ai_software_engineer.domain.artifact import (
 )
 from ai_software_engineer.domain.enums import ArtifactKind
 from ai_software_engineer.domain.model import WirePayload
+from ai_software_engineer.domain.task import TaskId
 
 SUPPORTED_SCHEMA_VERSION: Final = "v0.1"
 _ARTIFACT_ID_ADAPTER: Final[TypeAdapter[ArtifactId]] = TypeAdapter(ArtifactId)
@@ -125,6 +126,22 @@ class FileArtifactStore:
                 raise
             raise ArtifactCorruption(f"Artifact {artifact_id} violates its contract") from error
         return artifact
+
+    def list_for_task(self, task_id: TaskId) -> tuple[Artifact, ...]:
+        """Return all trusted Artifacts for a Task in deterministic ID order."""
+        artifacts: list[Artifact] = []
+        try:
+            paths = sorted(self._root.glob("art_*.json"))
+        except OSError as error:
+            raise ArtifactStoreError(f"cannot list Artifacts for {task_id}") from error
+        for path in paths:
+            try:
+                artifact = self.get(path.stem)
+            except ArtifactNotFound:
+                continue
+            if artifact.task_id == task_id:
+                artifacts.append(artifact)
+        return tuple(artifacts)
 
     def _validate_for_put(self, artifact: Artifact) -> None:
         if artifact.schema_version != SUPPORTED_SCHEMA_VERSION:

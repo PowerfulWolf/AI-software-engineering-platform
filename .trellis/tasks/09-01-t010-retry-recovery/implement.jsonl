@@ -1,0 +1,10 @@
+{"path":"src/ai_software_engineer/domain/event.py","reason":"Persist StateEvent attempt for retry audit."}
+{"path":"src/ai_software_engineer/orchestration/state_machine.py","reason":"Allow safe BLOCKED routing from planning and implementation checkpoints."}
+{"path":"src/ai_software_engineer/store/ports.py","reason":"Add durable attempt checkpoint contract."}
+{"path":"src/ai_software_engineer/store/repository.py","reason":"Implement atomic monotonic SQLite attempt persistence."}
+{"path":"src/ai_software_engineer/artifacts/ports.py","reason":"Expose task-scoped Artifact enumeration."}
+{"path":"src/ai_software_engineer/artifacts/store.py","reason":"Implement trusted deterministic Artifact listing."}
+{"path":"src/ai_software_engineer/orchestration/runner.py","reason":"Make DeliveryResult collections compatible with retry history and enforce supersedes."}
+{"path":"src/ai_software_engineer/orchestration/retry.py","reason":"Implement serial retry, failure classification, BLOCKED result and restart recovery."}
+{"path":"tests/orchestration/test_retry.py","reason":"Cover timeout retry, QA finding lineage, budget block and restart recovery."}
+{"path":"tests/store/test_repository.py","reason":"Cover durable attempt checkpoint reopen behavior."}

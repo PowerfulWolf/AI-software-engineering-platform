@@ -132,6 +132,9 @@ Git role workspace 由 `GitWorkspace.create/inspect/remove` 管理。Coder 使�
 
 `ArtifactStore.put(artifact: Artifact) -> ArtifactRef` 只接受 `schema_version=v0.1`、typed union 校验通过、`integrity.validated=true` 且 digest 匹配的 Artifact。Digest 对 canonical JSON 顶层 `integrity` 字段之外的内容计算 SHA-256；`seal_artifact` 生成带 `validated_at` 的不可变副本。Store 将正文写入 `artifacts/art_<artifact-id>.json`，采用临时文件 + `fsync` + 原子 rename。
 
+`ArtifactStore.list_for_task(task_id)` 只返回重新解析、校验 digest 和 lineage 后属于该 Task
+的 Artifact，并按稳定 ID 顺序枚举；它是恢复入口，不是 Agent 可写的共享状态。
+
 `parent_artifact_ids` 必须指向已存在且属于同一 Task 的 Artifact；`supersedes` 还必须是同一 kind。相同 ID 的完全相同正文重放是幂等 no-op，不同正文抛出 `ArtifactAlreadyExists`，不覆盖旧证据；缺失/跨 Task/跨 kind 引用抛出 `ArtifactParentError`。
 
 ## 7. 四类 artifact 的最小字段
@@ -151,9 +154,13 @@ Git role workspace 由 `GitWorkspace.create/inspect/remove` 管理。Coder 使�
 
 `SqliteTaskRepository` 对重复事件执行精确幂等：正文相同直接成功且不新增 revision，正文不同抛出 `EventIdempotencyConflict`。未知 Task、stale `from_status`、重复 Task ID 和损坏 JSON 都转换为 typed repository error，不返回半结构化数据。
 
+`TaskRepository.record_attempt(task_id, attempt)` 在同一 SQLite 文件中原子更新 Task 快照的
+`attempts`，不增加状态 revision；重复或更小的 attempt 是幂等 no-op，超过 `max_attempts`
+拒绝。它用于 Agent 调用前的崩溃恢复，避免把 self-transition 当成 attempt 日志。
+
 状态图由 `orchestration.state_machine` 的 `validate_transition`/`build_event`/`apply_event` 唯一维护。Repository 不自行放宽或扩展迁移边；ArtifactStore/Orchestrator 后续再对 QA PASS、Review APPROVE 和 candidate revision 做跨 Artifact 守卫。
 
-T009 的 `SerialOrchestrator.run_task` 只接受 `NEW` Task，并按固定单 attempt 路径提交 5 个事件。每个 Agent Artifact 先由 runner 检查 request echo、直接 parent lineage、criterion coverage 和 revision，再由 `seal_artifact`/ArtifactStore 原子持久化并读回。QA FAIL、Review REJECT 或 Agent failure 停在当前 durable checkpoint；T010 才拥有重试与 BLOCKED 路由策略。
+T009 的 `SerialOrchestrator.run_task` 只接受 `NEW` Task，并按固定单 attempt 路径提交 5 个事件。每个 Agent Artifact 先由 runner 检查 request echo、直接 parent lineage、criterion coverage 和 revision，再由 `seal_artifact`/ArtifactStore 原子持久化并读回。T010 的 `RetryingOrchestrator` 在此之上执行有界 retry：QA FAIL/Review REJECT 回流 Coder，瞬时 Agent failure 重试当前 role，预算或策略问题进入 BLOCKED；旧 Artifact 不覆盖并保留 `supersedes` lineage。
 
 ## 9. Python 领域入口
 

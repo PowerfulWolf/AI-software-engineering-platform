@@ -2,7 +2,7 @@
 
 from typing import Annotated, Literal, Self
 
-from pydantic import AwareDatetime, StringConstraints, model_validator
+from pydantic import AwareDatetime, Field, StringConstraints, model_validator
 
 from ai_software_engineer.domain.artifact import ArtifactId
 from ai_software_engineer.domain.enums import AgentRole, TaskStatus
@@ -20,6 +20,7 @@ class StateEvent(DomainModel):
     from_status: TaskStatus
     to_status: TaskStatus
     actor: Literal[AgentRole.ORCHESTRATOR]
+    attempt: Annotated[int, Field(ge=1, le=10)] = 1
     reason: NonEmptyStr
     artifact_ids: tuple[ArtifactId, ...]
     source_revision: NonEmptyStr

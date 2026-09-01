@@ -109,6 +109,7 @@ class TaskRepository(Protocol):
     def create(self, task: Task) -> None: ...
     def get(self, task_id: TaskId) -> Task: ...
     def append_event(self, event: StateEvent) -> None: ...
+    def record_attempt(self, task_id: TaskId, attempt: int) -> None: ...
     def list_events(self, task_id: TaskId) -> tuple[StateEvent, ...]: ...
     def current_revision(self, task_id: TaskId) -> int: ...
 ```
@@ -119,6 +120,8 @@ Concrete implementation: `SqliteTaskRepository(database: str | Path)`.
 
 - Task row stores typed `Task.to_wire()` JSON, indexed status/timestamps, and a non-negative per-Task revision; a new Task starts at revision 0;
 - `append_event` executes `BEGIN IMMEDIATE`, checks exact event ID replay, compares `event.from_status` with the current typed Task, inserts the event at `revision + 1`, updates the Task snapshot, and commits once;
+- `record_attempt` executes an atomic snapshot update without adding a state event; it is idempotent for
+  the same/lower attempt and rejects values above `Task.max_attempts`;
 - identical event ID + identical JSON is a no-op; identical event ID + changed payload raises `EventIdempotencyConflict`;
 - malformed persisted JSON raises `StoreCorruption`; missing Task raises `TaskNotFound`; duplicate Task ID raises `TaskAlreadyExists`; stale `from_status` raises `InvalidStateEvent`;
 - SQLite connections set `PRAGMA foreign_keys = ON`, `PRAGMA journal_mode = WAL`, and `PRAGMA synchronous = NORMAL`;
@@ -181,6 +184,7 @@ validate_transition(task: Task, to_status: TaskStatus) -> None
 build_event(task: Task, to_status: TaskStatus, *, event_id: EventId,
             reason: str, source_revision: str,
             artifact_ids: tuple[ArtifactId, ...] = (),
+            attempt: int = 1,
             occurred_at: datetime) -> StateEvent
 apply_event(task: Task, event: StateEvent) -> Task
 ```
@@ -190,6 +194,8 @@ apply_event(task: Task, event: StateEvent) -> Task
 - `NEW -> PLANNING -> IMPLEMENTING -> QA -> REVIEW -> DONE` 是主路径；QA/Review 的 retry、BLOCKED 和非终态到 FAILED 是唯一额外边；
 - `DONE`、`BLOCKED`、`FAILED` 为终态，自迁移和终态迁移拒绝；
 - `build_event` 固定 `actor=orchestrator`，必须先通过 `validate_transition`；
+- StateEvent 的 `attempt`（1..10）用于审计；Agent 调用前必须由 repository checkpoint 同一
+  attempt，重启时取快照与事件最大值恢复预算；
 - `apply_event` 检查 Task ID、`from_status`、合法边和 `occurred_at >= task.updated_at`，返回 `model_copy`，不得修改输入；
 - repository 只持久化事件，不重复实现状态图；Artifact verdict、candidate revision 和 attempt budget 属于后续跨对象 guard。
 
@@ -228,6 +234,7 @@ apply_event(task: Task, event: StateEvent) -> Task
 class ArtifactStore(Protocol):
     def put(self, artifact: Artifact) -> ArtifactRef: ...
     def get(self, artifact_id: ArtifactId) -> Artifact: ...
+    def list_for_task(self, task_id: TaskId) -> tuple[Artifact, ...]: ...
 
 artifact_digest(artifact: Artifact) -> Sha256
 seal_artifact(artifact: Artifact, *, validated_at: datetime) -> Artifact
@@ -243,6 +250,8 @@ FileArtifactStore(root: str | Path)
 - 所有 parent/supersedes 必须已存在且同 Task；supersedes 还必须同 kind；
 - 写入顺序为同目录 temporary file → flush → `fsync` → `os.replace`；失败清理临时文件，不产生正式文件；
 - `get` 必须重新执行 typed validation、schema version 和 digest 校验，不能返回裸 dict。
+- `list_for_task` 必须逐个执行同样的校验，并按稳定顺序返回指定 Task 的可信 Artifact；
+  损坏文件 fail closed，不能被恢复逻辑忽略。
 
 ### Validation & Error Matrix
 
@@ -771,6 +780,10 @@ class OrchestrationIdentityFactory(Protocol):
 
 class SerialOrchestrator:
     def run_task(self, task_id: TaskId) -> DeliveryResult: ...
+
+
+class RetryingOrchestrator:
+    def run_task(self, task_id: TaskId) -> DeliveryResult | BlockedResult: ...
 ```
 
 `DeliveryResult` 固定包含最终 typed Task、candidate revision、四个 Artifact ID、四个 Context
@@ -781,6 +794,8 @@ manifest ID、四个 run ID 和五个 event ID。默认 identity factory 使用 
 
 - runner 只接受 `NEW` Task，T009 固定 attempt=1，顺序为 planning-mode Orchestrator →
   Coder → QA → Reviewer；不能并行、跳步或在本阶段自行重试；
+- T010 `RetryingOrchestrator` 从 durable `PLANNING`/`IMPLEMENTING`/`QA`/`REVIEW` checkpoint
+  恢复，在 `Task.max_attempts` 内重试当前 role 或回流 Coder；不引入 DAG、队列或向量库；
 - 状态 checkpoint 固定为 5 个事件：`PLANNING`、`IMPLEMENTING`、`QA`、`REVIEW`、`DONE`；
   所有事件通过 `build_event` + `TaskRepository.append_event` 提交，再从 repository 读回快照；
 - 每次 run 先用当前 durable Task 快照构建 Context。Task status/updated_at 在 Task section 中，
@@ -793,8 +808,8 @@ manifest ID、四个 run ID 和五个 event ID。默认 identity factory 使用 
   必须 PASS、Reviewer 必须 APPROVE；QA/Review 必须绑定 implementation candidate；
 - runner 重新 seal Agent Artifact，再通过 ArtifactStore put/get，只有读回的 Artifact 才进入
   下游 Context；`DONE` event 引用完整四 Artifact 链；
-- QA FAIL、Review REJECT 和 Agent failure 不进入下阶段。有效 failure Artifact 可以被持久化，
-  但 T009 停在 QA/REVIEW；T010 才分类重试或进入 BLOCKED。
+- QA FAIL、Review REJECT 和 Agent failure 不直接进入下阶段。T010 将 finding 作为已持久化
+  Artifact 路由到新 Coder attempt，或在预算/策略失败时返回 `BlockedResult`。
 
 ### 12.4 Validation & Error Matrix
 

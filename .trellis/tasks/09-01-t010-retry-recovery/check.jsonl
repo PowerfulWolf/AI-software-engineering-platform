@@ -1,0 +1,3 @@
+{"command":"uv run pytest","result":"passed","evidence":"185 tests passed"}
+{"command":"uv run ruff check src tests","result":"passed","evidence":"All checks passed"}
+{"command":"uv run mypy src tests","result":"passed","evidence":"Success: no issues found"}
