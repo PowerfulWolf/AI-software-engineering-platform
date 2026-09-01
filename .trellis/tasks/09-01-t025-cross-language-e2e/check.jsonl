@@ -1,0 +1,6 @@
+{"path":"src/ai_software_engineer/project_profile.py","reason":"Use the existing read-only language/build discovery contract."}
+{"path":"src/ai_software_engineer/project_workspace.py","reason":"Keep target project code and external sidecar placement under the established registry contract."}
+{"path":"src/ai_software_engineer/runtime_workspace.py","reason":"Exercise organization/project RuntimeWorkspaceBinding without changing composition code."}
+{"path":"src/ai_software_engineer/tools/**","reason":"Use only typed PolicyBoundToolRegistry requests and results."}
+{"path":"src/ai_software_engineer/evidence/**","reason":"Use RunEvidenceSession and FileEvidenceStore for command/test proof."}
+{"path":"src/ai_software_engineer/orchestration/**","reason":"Exercise existing serial candidate-QA-review state machine seam."}

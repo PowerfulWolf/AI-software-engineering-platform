@@ -1,0 +1,20 @@
+{
+  "id": "T025",
+  "slug": "cross-language-e2e",
+  "title": "验证任意目标项目的串行 candidate-QA-review 交付",
+  "status": "completed",
+  "phase": "verify",
+  "depends_on": ["T020", "T021", "T022", "T023", "T024"],
+  "allowed_paths": [
+    "fixtures/target-projects/**",
+    "tests/e2e/**",
+    "docs/target-project-e2e.md",
+    ".trellis/tasks/09-01-t025-cross-language-e2e/**"
+  ],
+  "verification_commands": [
+    "PYTEST_ADDOPTS='-p no:cacheprovider' .venv/bin/pytest -q tests/e2e",
+    "RUFF_CACHE_DIR=/private/tmp/ase-ruff-cache .venv/bin/ruff check tests/e2e",
+    "MYPYPATH=src MYPY_CACHE_DIR=/private/tmp/ase-mypy-cache .venv/bin/mypy --explicit-package-bases tests/e2e/test_target_project_delivery.py",
+    "git diff --check"
+  ]
+}
