@@ -4,12 +4,12 @@
 
 | 类别 | 示例 | 默认动作 |
 |---|---|---|
-| `TRANSIENT_INFRA` | 模型超时、临时网络错误、进程被中断 | 指数退避后重试同一角色，最多 2 次 |
-| `INVALID_OUTPUT` | JSON 不符合 Schema、缺字段、哈希不匹配 | 不重试原输出；重启同角色一次，仍失败则 `BLOCKED` |
+| `TRANSIENT_INFRA` | 模型超时、临时网络错误、进程被中断 | 进入 `RETRY_SCHEDULED`，释放 Lease，退避后重试原角色 |
+| `INVALID_OUTPUT` | JSON 不符合 Schema、缺字段、哈希不匹配 | 重启同角色一次；退避期间释放 Lease，重复失败再终局 `BLOCKED` |
 | `QA_FINDING` | 测试失败、验收标准未满足 | 将 findings 原样路由给 Coder，创建新 attempt |
 | `REVIEW_FINDING` | BLOCKER/MAJOR 代码问题 | 将 finding + evidence 路由给 Coder，创建新 attempt |
 | `POLICY_VIOLATION` | 越权写文件、篡改 verdict、执行禁用命令 | 立即终止 run，记录安全事件，`BLOCKED` |
-| `REQUIREMENT_AMBIGUITY` | 验收标准互相冲突或缺少关键输入 | `BLOCKED`，请求人类澄清 |
+| `REQUIREMENT_AMBIGUITY` | 验收标准互相冲突或缺少关键输入 | WorkItem → `WAITING_HUMAN`，释放 Lease并请求澄清 |
 | `BUDGET_EXHAUSTED` | attempt/token/time budget 用尽 | `BLOCKED`，交付全部 evidence |
 | `PLATFORM_BUG` | 状态不变量破坏、数据库损坏 | `FAILED`，保留现场并报警 |
 
@@ -32,11 +32,17 @@
 | Review REJECT | Coder → `IMPLEMENTING` | review-report、QA report、候选 diff |
 | Review 证据不足 | Reviewer | 缺失证据清单 |
 | 权限越界 | `BLOCKED` | policy decision、命令/路径、日志 |
-| 需求歧义 | `BLOCKED` | 问题、受影响验收标准 |
+| 需求歧义 | WorkItem → `WAITING_HUMAN` | 问题、受影响验收标准、恢复条件 |
+
+当前 T010 尚未接入 WorkItem，因此 Runtime 仍可能把这条路线映射为终态 `BLOCKED`；T019 必须
+替换该兼容行为。只有人类决定终止，或等待超过明确治理期限并按 policy 关闭交付时，Task 才
+进入 `BLOCKED`。
 
 ## 4. 升级内容
 
-进入 `BLOCKED` 时必须生成一份可供人类处理的摘要：发生阶段、最后有效 revision、已尝试次数、阻塞分类、最小需要的决定、完整 evidence 路径和建议下一步。不要只返回“Agent failed”。
+进入 `WAITING_*` 时必须持久化等待原因、恢复条件、最后 checkpoint、相关 evidence 和 Lease 释放
+事实。进入终态 `BLOCKED` 时还必须生成可供人类处理的摘要：发生阶段、最后有效 revision、已尝试
+次数、阻塞分类、最小需要的决定、完整 evidence 路径和建议下一步。不要只返回“Agent failed”。
 
 ## 5. v0.1 实现边界（T010）
 
@@ -51,5 +57,6 @@
 - `BlockedResult` 包含 classification、reason、attempt、Artifact IDs 和完整 event IDs，
   同时追加 `BLOCKED` StateEvent；内部契约破坏追加 `FAILED` 后保留异常现场。
 
-该实现仍是单 Task、串行、进程内控制循环。队列、复杂 DAG、跨任务调度和模型供应商重试
-退避属于后续版本；v0.1 的 retry 次数上限由 Task.max_attempts 统一约束。
+该实现仍是单 Task、串行、进程内控制循环，因此暂时把部分等待映射为终态 `BLOCKED`。T019
+引入 WorkItem/Lease 后会替换这项兼容行为；单 Task 内仍不引入复杂 DAG 或角色并行，retry 次数
+上限继续由 Task.max_attempts 约束。

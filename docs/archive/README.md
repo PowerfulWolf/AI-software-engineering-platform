@@ -17,6 +17,7 @@ Archive 是组织记忆的一部分，不依赖任何单个 Agent 的会话。�
 | 日期 | 基线 | 范围 | 记录 |
 |---|---|---|---|
 | 2026-09-01 | `3ca68b4` | Bootstrap 至 T017；M0–M4 完成，M5 启动 | [v0.1 Foundation：T001–T017](2026-09-01-v0.1-foundation-t001-t017.md) |
+| 2026-09-01 | `400ac04` | T018；组织 Workforce foundation，M5 组织层启动 | [T018 Organization Workforce](2026-09-01-t018-organization-workforce.md) |
 
 ## 后续归档约定
 

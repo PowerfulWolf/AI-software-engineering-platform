@@ -11,6 +11,33 @@
 
 权限必须由机器可验证的 policy 表达；自然语言 prompt 只是解释，不是授权来源。
 
+## Organization Workforce 契约
+
+T018 的 [`schemas/workforce.schema.json`](../schemas/workforce.schema.json) 定义八类组织级事实：
+
+- `AgentProfile`：长期成员身份、能力、eligible roles、最大并行 Assignment 和默认 ModelPolicy；
+- `WorkItem`：Task 的优先级、风险、能力需求和 `WAITING_*` 调度状态；
+- `RoleAssignment`：Agent 在一个 Task attempt 中临时担任的 Role；
+- `TaskLease`：有明确获得/过期时间的 Agent 容量占用；
+- `ModelPolicy`：eligible provider/model routes、默认 BrainTier 和完整 risk floors；
+- `ModelSelection`：一次 Run 的 provider/model/tier/policy version 与选择理由；
+- `RunDemand`：一次 Run 的风险、上下文规模、变更规模、受影响层数和历史失败等客观路由信号；
+- `AgentRunAllocation`：把 Agent、Assignment、Model、Context、Prompt、Spec 和 tool policy 绑定到
+  唯一 `run_id`。
+
+`AgentProfile` 不包含具体 model 或 project path；Project 不能复制或拥有 AgentProfile。当前
+`AgentDefinition` 是由上述事实和 project policy 解析出的单角色执行配置，用来兼容既有
+TaskOrchestrator，不是团队成员本体。
+
+同一 Task 历史中的 Coder、QA、Reviewer assignment 必须使用不同 `agent_id`。一个 Agent 可以
+持有多个不同 Task 的 Lease，但 active Lease 总量不能超过 `max_parallel_assignments`，且各 Run
+不得共享 Context、worktree、Artifact lineage 或可变模型会话。该容量聚合守卫和持久化属于 T019。
+
+ModelPolicy 必须覆盖 `low/normal/high/critical` 全部 RiskTier，且每个最低 BrainTier 都有 eligible
+route。ModelRouter 选择最小满足质量/风险约束的 route，并记录 reasons；模型升级依据测试失败、
+invalid Artifact、QA/Review 驳回、高风险路径或 Context capacity 等客观信号，不只使用 Agent
+自报置信度。绩效按 `agent × model × role × task class × risk` 归因。
+
 ## Evaluation 与 Handoff 契约
 
 T012 新增两类不改变 Task 状态的组织级事实：
@@ -38,20 +65,21 @@ ADR 不由 `Task.status == DONE` 单独决定。`EvaluationEngine` 还要求最�
 和构建命令 cwd；sidecar 只承载平台状态。`workspace.json` 的 wire contract 是
 `schemas/project-workspace.schema.json`，固定字段为：
 
-- `schema_version/layout_version=v0.1`；
+- `schema_version=v0.1`、`layout_version=v0.2`；
 - `project_id`、absolute `project_root`、absolute `ai_workspace_root`；
-- 14 个固定 layout 名称；
+- 14 个固定 layout 名称，其中 `assignments/` 保存项目相关分配事实，不保存 Agent 本体；
 - UTC `created_at` 和排除自身字段计算的 canonical `manifest_sha256`。
 
 初始化先在 registry root 下建立隐藏 staging、写入并 `fsync` manifest，再以目录 rename 发布。
 同一绑定重放返回首次 manifest；Project ID collision、registry symlink、目标项目内 sidecar、缺失
 project、manifest digest/Schema/path mismatch 或 layout 缺失均 fail closed。注册不复制源码，也不
-在目标项目创建 `.ase`、数据库、Agent 日志、Artifact 或 Evidence。T020 自动装配 Runtime 前，
+在目标项目创建 `.ase`、数据库、Agent 日志、Artifact 或 Evidence。T022 自动装配 Runtime 前，
 外部项目必须把 Runtime paths 显式配置到 `ProjectWorkspace.directory(...)` 下。
 
-项目原生规范只读发现并以 URI/hash 引用。若它与平台工程规范或 Task 约束冲突，未来
-`SpecCompiler` 必须产生 `SPEC_CONFLICT` 并等待人工 resolution；hard safety policy 不允许项目
-规范放宽。Agent 工作可视化同样只读 sidecar durable facts，不接受 Task 状态或 verdict 写入。
+AgentProfile、ModelPolicy、全局 WorkQueue 和团队绩效位于组织 workspace。项目原生规范只读
+发现并以 URI/hash 引用；若它与平台工程规范或 Task 约束冲突，未来 `SpecCompiler` 必须产生
+`SPEC_CONFLICT`，使 WorkItem 进入 `WAITING_HUMAN` 并释放 Lease。只有决定终止本次交付时 Task
+才进入 `BLOCKED`。hard safety policy 不允许项目规范放宽。
 
 ## 1.2 Agent Run 输入/输出契约
 
@@ -192,7 +220,8 @@ Git role workspace 由 `GitWorkspace.create/inspect/remove` 管理。Coder 使�
 
 - 正文符合对应 JSON Schema；
 - Python 入口先使用 `Task.model_validate`、`AgentDefinition.model_validate` 或 `validate_artifact` 转成 typed model；下游不解析裸 `dict`；
-- `producer` 是角色 + agent 版本 + run_id；
+- `producer` 是角色 + resolved AgentDefinition 版本 + run_id；`AgentRunAllocation` 另行提供长期
+  AgentProfile 与 run-scoped ModelSelection 归因；
 - `source_revision` 指向实际读取/审查的 Git revision；
 - 对 Coder，request/context 的 `source_revision` 是修改前输入基线，implementation-report 的 `source_revision` 是修改后 candidate；后者必须等于 `content.commit_sha`。QA/Reviewer request 与 Artifact 都绑定这个 candidate；
 - `evidence` 是带 URI 和 SHA-256、可定位、可复核的引用，不接受“看起来没问题”这类无证据描述；Finding 至少引用一个 envelope Evidence ID；
@@ -233,6 +262,9 @@ T009 的 `SerialOrchestrator.run_task` 只接受 `NEW` Task，并按固定单 at
 
 ## 9. Python 领域入口
 
-`src/ai_software_engineer/domain/` 是 Python 控制平面的唯一领域类型入口。`TaskStatus`、`AgentRole` 和 `ArtifactKind` 不能在 store、agent adapter 或 orchestrator 中重复定义。`to_wire()` 负责生成 JSON-compatible payload 并省略不存在的 optional 字段；cross-language 消费者仍以 `schemas/*.json` 为准。
+`src/ai_software_engineer/domain/` 是 Python 控制平面的唯一领域类型入口。`TaskStatus`、
+`WorkItemStatus`、`AgentRole`、`BrainTier`、`RiskTier` 和 `ArtifactKind` 不能在 store、agent adapter
+或 orchestrator 中重复定义。`to_wire()` 负责生成 JSON-compatible payload 并省略不存在的
+optional 字段；cross-language 消费者仍以 `schemas/*.json` 为准。
 
 Pydantic validator 只处理单个对象可判断的规则；Task required criterion 与 QA 结果是否一一对应、四类 Artifact 是否属于同一 candidate revision、各 verdict 是否来自独立 run 等跨对象规则，由后续 ArtifactStore/Orchestrator guard 执行。

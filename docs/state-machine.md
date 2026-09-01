@@ -10,8 +10,23 @@
 | `QA` | QA 执行测试并产出 verdict | 有候选 revision 和 implementation-report |
 | `REVIEW` | Reviewer 独立审查 | QA `PASS` 且候选 revision 未变化 |
 | `DONE` | Review `APPROVE`，候选变更可交付 | 所有 required checks 有证据 |
-| `BLOCKED` | 需要人类处理或外部条件 | 需求冲突、预算耗尽、环境不可用等 |
+| `BLOCKED` | 本次交付没有安全继续路径 | 预算终局耗尽、策略终止或人类决定结束交付 |
 | `FAILED` | 平台自身不可恢复故障 | 数据损坏、内部 invariant 违反 |
+
+TaskStatus 只描述交付证据链。T018 新增的 WorkItemStatus 独立描述组织调度状态：
+
+| WorkItemStatus | 含义 | Lease 行为 |
+|---|---|---|
+| `READY` | 可被 Scheduler 分配 | 无 active Lease |
+| `LEASED` | 已占用某 Agent 容量 | 必须有未过期 TaskLease |
+| `RUNNING` | 一个隔离 AgentRun 正在执行 | Lease 必须覆盖本次 Run |
+| `WAITING_HUMAN` | 等待人工澄清、规范 resolution 或授权 | 释放 Lease，Task 保持 checkpoint |
+| `WAITING_DEPENDENCY` | 等待 CI、依赖或外部系统 | 释放 Lease，Task 保持 checkpoint |
+| `RETRY_SCHEDULED` | 已决定重试但尚未到 `available_at` | 释放 Lease，到时回到 READY |
+| `CLOSED` | Task 已进入 DONE/BLOCKED/FAILED | 不再分配 Lease |
+
+这两个状态机正交：例如 Task 可以停在 `QA`，同时 WorkItem 为 `WAITING_DEPENDENCY`。等待条件
+满足后只把 WorkItem 恢复为 `READY`，不伪造 `QA → IMPLEMENTING` 等交付迁移。
 
 ## 2. 合法迁移
 
@@ -30,7 +45,8 @@ REVIEW ──REJECT (non-retryable/budget exhausted)──> BLOCKED
 任何非终态 ──platform invariant violation──> FAILED
 ```
 
-`DONE`、`BLOCKED`、`FAILED` 是终态。重新执行必须显式创建新的 attempt 或人工将 Task 置回 `IMPLEMENTING`，不能由 Agent 自行跳转。
+`DONE`、`BLOCKED`、`FAILED` 是 Task 终态。临时人类/依赖等待不得进入 `BLOCKED`；终态后重新
+执行必须显式创建新 Task 或由未来受审计的人类 reopening contract 处理，Agent 不能自行跳转。
 
 ## 3. Python Guard / Reducer
 

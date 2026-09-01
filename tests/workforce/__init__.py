@@ -1,0 +1,1 @@
+"""Organization workforce contract tests."""

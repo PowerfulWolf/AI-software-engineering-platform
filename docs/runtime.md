@@ -37,7 +37,7 @@ export OPENAI_API_KEY='...'
 `api_key_required` 默认为 `true`。只有离线 fake adapter 测试才可以显式设为 `false`；
 CLI 仍然使用真实 OpenAI-compatible adapter，不会因为该开关自动创建 fake 模型。
 
-路径可以是相对当前工作目录的路径，也可以是绝对路径。T020 自动绑定 Project Workspace
+路径可以是相对当前工作目录的路径，也可以是绝对路径。T022 自动绑定 Project Workspace
 之前，接入外部目标项目时必须把全部 `paths` 显式配置到 T017 创建的 `ai_workspace_root` 下，
 并从该 sidecar（或平台控制目录）运行 CLI；不得在目标项目 cwd 中沿用 `.ase/state.sqlite3`
 或 `artifacts/*` 默认值。`RuntimeSession` 会打开 SQLite
@@ -105,6 +105,12 @@ prompt/spec version 或 test entrypoints 不同，运行会 fail closed。没有
 每个 role 最多一个 override；缺省权限为 Coder 写 `src/**` 与 `tests/**`、QA 只写
 `tests/**`、Reviewer 不写仓库、Orchestrator 不写业务代码。配置只收窄或明确声明运行
 策略，不能绕过 Task deny paths、Artifact lineage 或状态机。
+
+T018 后，上述 `role_overrides` 和 `RuntimeConfig.agent_definitions()` 只是当前单 Task Runtime 的
+兼容入口。它们产生的 `AgentDefinition` 是某次单角色执行的 resolved config，不是组织成员身份。
+T019/T022 将从 AgentProfile、RoleAssignment、ModelSelection 和 project policy 解析同一结构；
+具体 model 按 AgentRun 分配，不永久写入 AgentProfile。当前 CLI 还不会创建 Assignment/Lease，
+也不会跨 Task 调度。
 
 ## 明确边界
 

@@ -6,14 +6,14 @@
 看到当前状态、哪个角色在运行、它读取了哪些 Context、产生了哪些 Artifact/Evidence、消耗了
 多少预算、为什么重试或阻塞，以及下一步需要谁作决定。
 
-目标项目的代码目录和外置 AI workspace 分工如下：
+目标项目、项目 sidecar 和组织 workspace 分工如下：
 
 ```text
-目标项目（实际 cwd）                 外置 AI workspace（可视化事实源）
-代码 / 测试 / 构建配置                 StateEvent / AgentRunEvent
-项目原生规范与文档                    Context manifest / ProjectProfile
-Git refs / candidate commit           Artifact / Evidence / Handoff
-                                     Evaluation / logs / conflict resolution
+目标项目（实际 cwd）       项目 sidecar                    组织 workspace
+代码 / 测试 / 构建配置      StateEvent / Assignment         AgentProfile / ModelPolicy
+项目原生规范与文档         Context / ProjectProfile         WorkQueue / TaskLease
+Git refs / candidate        Artifact / Evidence / Handoff   跨项目绩效 / capacity
+                           Evaluation / conflict resolution
 ```
 
 UI 不扫描模型隐式会话，也不把 Agent 自由文本当成状态事实。所有展示都从 sidecar 中的 typed
@@ -23,20 +23,24 @@ UI 不扫描模型隐式会话，也不把 Agent 自由文本当成状态事实�
 
 ### 1. Task board
 
-按 `NEW → PLANNING → IMPLEMENTING → QA → REVIEW → DONE/BLOCKED/FAILED` 展示任务卡片。卡片
-显示当前 attempt、candidate SHA、最后一个事件、等待的角色和人工动作；状态颜色来自
-`StateEvent`，不是 Agent 文本。
+同时展示 Task delivery status 与 WorkItem scheduling status。Task 卡片按
+`NEW → PLANNING → IMPLEMENTING → QA → REVIEW → DONE/BLOCKED/FAILED` 展示证据链，并单独显示
+`READY/LEASED/RUNNING/WAITING_*/CLOSED`、当前 Lease、candidate SHA 和恢复条件；不能把临时等待
+画成终局 BLOCKED。
 
 ### 2. Run timeline
 
 以时间线串起 `CaseStartedEvent → AgentRunEvent → StateEvent → Artifact/Evidence`。每个节点都
-显示 `run_id`、role、context manifest ID、spec/policy 版本、输入 Artifact IDs、输出 digest、
-耗时、token budget 和失败分类；点击可跳到 immutable JSON 或脱敏日志。
+显示 `run_id`、`agent_id`、assignment/lease、role、ModelSelection reasons、context manifest ID、
+spec/policy 版本、输入 Artifact IDs、输出 digest、耗时、token/cost 和失败分类；点击可跳到
+immutable JSON 或脱敏日志。
 
 ### 3. Agent detail
 
-按 Coder/QA/Reviewer 展示权限、有效 cwd、读取/写入路径、命令、candidate SHA 和 verdict。
-权限是机器 policy 的投影，UI 不提供扩大权限的编辑入口。
+以组织 AgentProfile 为主体展示能力、eligible roles、当前/历史 Assignment、capacity utilization、
+模型分配、质量/成本/延迟和被驳回率，并可下钻到 project/task/run。权限是每次 Assignment 的
+机器 policy 投影，UI 不提供扩大权限的编辑入口。绩效必须按 Agent × Model × Role × Task class ×
+Risk 分层，不能用强模型掩盖成员表现。
 
 ### 4. Human inbox
 
@@ -46,11 +50,11 @@ UI 不扫描模型隐式会话，也不把 Agent 自由文本当成状态事实�
 
 ## 数据与接口路线
 
-1. T021 起所有命令输出、diff、测试、模型调用和状态变化都写为可定位的 Evidence/Events；
-2. T024 建立只读 `RunProjection` 与本地 JSON/HTTP read API，从 SQLite Task/Event、
+1. T023 起所有命令输出、diff、测试、模型调用和状态变化都写为可定位的 Evidence/Events；
+2. T026 建立只读 `RunProjection` 与本地 JSON/HTTP read API，从 SQLite Task/Event、
    ArtifactStore、EvaluationEventStore 和 sidecar manifest 重算，支持按 project/task/run/role/
    candidate 查询，默认脱敏并分页；API 不执行 Agent、不迁移状态、不接受 verdict 写入；
-3. T025 实现本地 dashboard（Task board、timeline、Agent detail、human inbox），先消费 read API，
+3. T027 实现本地 dashboard（Task board、timeline、Agent detail、human inbox），先消费 read API，
    再考虑实时 SSE/WebSocket；实时推送只传递新增事件 ID，客户端可从 durable store 重放；
 4. 后续才评估跨项目聚合、长期指标、告警和权限分级。没有测量数据前不引入消息队列、向量库
    或分布式 tracing 平台。

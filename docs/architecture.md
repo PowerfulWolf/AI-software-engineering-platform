@@ -7,7 +7,8 @@ v0.1 解决一个窄而完整的问题：在已有 Git 项目中，把一条需�
 ### 运行假设
 
 - 一个 Task 只绑定一个 repository 和一个 base ref；
-- 一个 Orchestrator 实例一次只推进一个 Task（可在未来扩展并发）；
+- 一个 TaskOrchestrator 实例一次只推进一个 Task，Task 内角色保持串行；
+- 组织级 PortfolioScheduler 可以在容量允许时并发多个隔离 Task，但当前尚未接入 Runtime；
 - Agent 不直接互相调用，所有交互经过 Orchestrator 和 artifact store；
 - 人类是需求来源和最终升级出口；v0.1 不自动向保护分支 push/merge。
 
@@ -15,7 +16,10 @@ v0.1 解决一个窄而完整的问题：在已有 Git 项目中，把一条需�
 
 ### Control Plane
 
-由 Orchestrator、状态机、路由器、预算管理器和审计日志组成。它是唯一可以迁移 Task 状态的组件，负责检查前置条件、启动 Agent、验证 artifact、决定重试或升级。T010 的 `RetryingOrchestrator` 复用 T009 串行 runner，只增加有界 retry、attempt checkpoint、BLOCKED/FAILED 路由和重启恢复。
+Control Plane 分为两个 seam。`PortfolioScheduler` 管理组织 WorkQueue、Agent 容量、Assignment、
+Lease 和 ModelSelection，但不迁移 Task 交付状态；`TaskOrchestrator` 是唯一可以迁移一个 Task
+状态的模块，负责检查前置条件、启动 Agent、验证 artifact、决定重试或终局升级。T010 的
+`RetryingOrchestrator` 是当前 TaskOrchestrator 实现；T019 才接入前一层 Scheduler/ModelRouter。
 
 ### Knowledge Plane
 
@@ -25,18 +29,43 @@ v0.1 解决一个窄而完整的问题：在已有 Git 项目中，把一条需�
 
 `ProjectWorkspaceRegistry` 将操作者给出的本地 `project_root` 绑定到目标目录之外的
 `ai_workspace_root`。目标项目仍是实际代码、测试、构建和默认命令 cwd；sidecar 保存
-`ProjectProfile`、项目级 Agent/规范、Task/StateEvent、Context、Artifact、Evidence、Evaluation、
-Handoff、run metadata 和日志。T017 的 manifest 与固定 layout 是后续 Runtime/Context/Visualization
+`ProjectProfile`、Assignment/规范、Task/StateEvent、Context、Artifact、Evidence、Evaluation、
+Handoff、run metadata 和日志。T018 的 v0.2 layout 用 `assignments/` 替换 `agents/`，因为 Agent
+身份属于组织而不是项目。manifest 与固定 layout 是后续 Runtime/Context/Visualization
 共享的路径契约，注册过程不会复制源码或在目标项目写入平台文件。
 
 目标项目已有的 `AGENTS.md`、CONTRIBUTING、README、CI、`.editorconfig`、`.trellis/spec/` 等
 project-native rules 只读发现并以 URI/hash 引用。平台 hard safety policy 不可被覆盖；工程规则
-或任务约束冲突会生成 `SPEC_CONFLICT` 并进入 `BLOCKED`，由人工选择更新项目规范、平台规范或
-任务约束，决定以 `HumanActionEvent` 和 resolution artifact 持久化。Agent 和 UI 都不能静默选边。
+或任务约束冲突会生成 `SPEC_CONFLICT`，WorkItem 进入 `WAITING_HUMAN` 并释放 Lease，由人工选择
+更新项目规范、平台规范或任务约束；只有决定终止本次交付时 Task 才进入 `BLOCKED`。决定以
+`HumanActionEvent` 和 resolution artifact 持久化，Agent 和 UI 都不能静默选边。
 
 后续可选的 role worktree 是临时代码 checkout，与 sidecar 元数据分离；逻辑项目绑定仍指向给定
 `project_root`。Agent 工作可视化只从 sidecar durable facts 和目标项目只读 Git inspection 生成
 read projection，不成为第二个状态写入者，详见 [`docs/visualization.md`](visualization.md)。
+
+### Organization Workforce Plane
+
+组织 workspace 保存 `AgentProfile`、`ModelPolicy`、WorkQueue 和跨项目绩效；项目 sidecar 只保存
+Assignment、project access/policy override 和运行事实。一个 AgentProfile 可以声明多个可担任
+Role 和 `max_parallel_assignments`，但每个 RoleAssignment 都必须有独立 TaskLease、Context、
+worktree、Artifact lineage 和 AgentRunAllocation。
+
+模型不是 Agent 身份。`RunDemand` 汇总 Task risk/complexity、Role、Context capacity、历史表现、
+预算和客观 escalation signals；`ModelRouter` 根据这些信号、Role floor 和 policy route，为每次
+AgentRun 返回一个带 policy version 与 reasons 的 `ModelSelection`。当前 `AgentDefinition` 保留为
+解析后的单角色运行配置：
+
+```text
+AgentProfile + WorkItem + Project policy
+        → PortfolioScheduler → RoleAssignment + TaskLease
+        → ModelRouter → ModelSelection
+        → AgentRunAllocation → resolved AgentDefinition
+        → TaskOrchestrator
+```
+
+同一 Task 历史中的 Coder、QA、Reviewer 必须是不同 Agent；高风险 Task 可以额外要求不同模型
+或 provider。跨 Task 并发只复用 Agent 身份和组织绩效，不复用可变会话或工作区。
 
 ### Agent Execution Plane
 
@@ -68,12 +97,19 @@ v0.1 的 `GitWorktreeManager` 将所有 role worktree 放在 main checkout 外�
 
 ### Human Boundary
 
-需求澄清、越权批准、冲突解决和最终合并都属于人类边界。任何无法在既定预算或证据标准内解决的情况都进入 `BLOCKED`，而不是让 Agent 自行放宽规则。T012 的 Evaluation 层把 case 启动、Agent run、人工动作和回归窗口记录为不可变事件；`EvaluationEngine` 只从这些事件、StateEvent 与封存 Artifact 重算指标。`HandoffBuilder` 为 `DONE/BLOCKED` 构造自包含 JSON + Markdown，不要求人类阅读内部日志。
+需求澄清、越权批准、冲突解决和最终合并都属于人类边界。临时等待人类或依赖时 WorkItem
+进入 `WAITING_HUMAN/WAITING_DEPENDENCY` 并释放 Lease，Task 保留最近 checkpoint；只有没有
+安全继续路径或预算终局耗尽时才进入 `BLOCKED`。T012 的 Evaluation 层把 case 启动、Agent
+run、人工动作和回归窗口记录为不可变事件；`EvaluationEngine` 只从这些事件、StateEvent 与
+封存 Artifact 重算指标。`HandoffBuilder` 为 `DONE/BLOCKED` 构造自包含 JSON + Markdown。
 
 ## 3. 数据流
 
 ```text
-Task(JSON)
+WorkItem + AgentProfile + ModelPolicy
+  → Assignment + Lease + RunDemand
+  → run-scoped ModelSelection
+  → Task(JSON)
   → validate + persist
   → planning context → plan artifact → seal/store/read-back
   → coder context(policy + task + role + persisted plan)
@@ -98,6 +134,7 @@ Task(JSON)
 | Evaluation events | 文件系统 canonical JSON | 一事件一文件，带内部 SHA-256，exact replay 幂等 |
 | Handoff | 文件系统 JSON + Markdown | deterministic ID，等价重建保留首次观察时间 |
 | Project workspace binding | 外置 sidecar `workspace.json` + 固定目录 | 目标项目外置、幂等、与项目路径绑定；不复制源码 |
+| Agent/Model workforce | 组织 workspace（T019 持久化） | AgentProfile、ModelPolicy、WorkQueue 和跨项目绩效，不复制进 Project |
 | Trellis 规则 | Git 中的 Markdown | 组织知识，评审后变更 |
 
 Task 快照和状态事件的 Python 入口分别是 `Task` 与 `StateEvent`；`SqliteTaskRepository` 使用 `tasks`、`state_events` 两张表。快照正文和事件正文均保留 JSON，便于重启后由 Pydantic 重新校验并按事件 revision 回放。
@@ -115,4 +152,6 @@ Artifact 的 Python 入口是 `Artifact` union；`FileArtifactStore` 以 Artifac
 
 ## 6. v0.1 非目标
 
-不做多 Agent 并发、复杂 DAG、向量数据库、自动生产部署、跨仓库事务、自动需求拆分、自动修改组织规范、自动 merge 保护分支。若未来需要这些能力，先补充新的状态、权限和评估契约。
+不做单 Task 内多角色并发或复杂 DAG，不引入消息队列、向量数据库、自动生产部署、跨仓库事务、
+自动需求拆分、自动修改组织规范或自动 merge 保护分支。组织层只实现单进程、有界、Lease 驱动
+的多 Task 调度；不会用共享长驻会话冒充并发，也不会在 v0.1 引入分布式 Scheduler。

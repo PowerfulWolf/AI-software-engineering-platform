@@ -1,7 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ai-software-engineer.local/schemas/agent.schema.json",
-  "title": "Agent",
+  "title": "Resolved Agent Run Definition",
+  "description": "A single-role execution configuration resolved from an organization AgentProfile, RoleAssignment, ModelSelection, and project policy.",
   "type": "object",
   "additionalProperties": false,
   "required": ["id", "role", "version", "model", "permissions", "input_artifacts", "output_artifacts", "max_retries", "timeout_seconds"],

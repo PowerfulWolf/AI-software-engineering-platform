@@ -18,4 +18,5 @@
 - 没有同一 candidate SHA 的 QA `PASS` 不能进入 `REVIEW`；
 - 没有独立 Review `APPROVE` 不能进入 `DONE`；
 - 任何 policy violation、artifact 伪造或 revision 不匹配都不能静默恢复；
-- v0.1 不以引入并行调度、向量库或分布式基础设施为“完成标准”。
+- v0.1 不引入单 Task 并行 DAG、向量库或分布式基础设施；组织层多 Task 调度只能在
+  AgentProfile/Assignment/Lease/ModelPolicy 契约下有界实现，禁止共享可变会话或 worktree。

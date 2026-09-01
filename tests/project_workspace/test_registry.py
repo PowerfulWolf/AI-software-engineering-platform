@@ -33,12 +33,14 @@ def test_register_creates_external_normalized_sidecar_without_touching_project(
 
     workspace = registry.register(project)
 
+    assert workspace.manifest.layout_version == "v0.2"
     assert workspace.project_root == project.resolve()
     assert workspace.root.parent == (tmp_path / "ai-workspaces").resolve()
     assert workspace.root != workspace.project_root
     assert source.read_text(encoding="utf-8") == "project-owned\n"
     assert workspace.manifest_path.is_file()
     assert workspace.directory("profile").is_dir()
+    assert workspace.directory("assignments").is_dir()
     assert workspace.directory("spec-conflicts").is_dir()
     assert not (project / ".ase").exists()
     assert set(project.iterdir()) == {source}
@@ -56,6 +58,20 @@ def test_register_creates_external_normalized_sidecar_without_touching_project(
         list(Draft202012Validator(schema, format_checker=FormatChecker()).iter_errors(payload))
         == []
     )
+
+
+def test_manifest_rejects_legacy_project_owned_agents_layout(tmp_path: Path) -> None:
+    project = tmp_path / "target-project"
+    project.mkdir()
+    workspace = ProjectWorkspaceRegistry(tmp_path / "sidecars").register(project)
+    payload = workspace.manifest.to_wire()
+    layout = payload["layout"]
+    assert isinstance(layout, dict)
+    layout["agents"] = layout.pop("assignments")
+    payload["layout_version"] = "v0.1"
+
+    with pytest.raises(ValidationError):
+        ProjectWorkspaceManifest.model_validate(payload)
 
 
 def test_register_is_idempotent_and_preserves_first_manifest_observation(tmp_path: Path) -> None:

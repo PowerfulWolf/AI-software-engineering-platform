@@ -134,6 +134,19 @@ def test_project_workspace_schema_rejects_layout_drift(tmp_path: Path) -> None:
     _assert_invalid(payload, "project-workspace.schema.json")
 
 
+def test_project_workspace_schema_rejects_project_owned_agents_directory(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    workspace = ProjectWorkspaceRegistry(tmp_path / "sidecars").register(project)
+    payload = workspace.manifest.to_wire()
+    layout = payload["layout"]
+    assert isinstance(layout, dict)
+    layout["agents"] = layout.pop("assignments")
+    payload["layout_version"] = "v0.1"
+
+    _assert_invalid(payload, "project-workspace.schema.json")
+
+
 def test_runtime_config_schema_rejects_plaintext_api_key() -> None:
     payload = RuntimeConfig(endpoint="https://api.example.test/v1", model="runtime-model").to_wire()
     payload["api_key"] = "secret-that-must-stay-out-of-config"

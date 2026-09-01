@@ -21,6 +21,41 @@ class AgentRole(StrEnum):
     REVIEWER = "reviewer"
 
 
+class BrainTier(StrEnum):
+    ECONOMY = "economy"
+    STANDARD = "standard"
+    REASONING = "reasoning"
+    CRITICAL = "critical"
+
+
+class RiskTier(StrEnum):
+    LOW = "low"
+    NORMAL = "normal"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class WorkItemStatus(StrEnum):
+    READY = "READY"
+    LEASED = "LEASED"
+    RUNNING = "RUNNING"
+    WAITING_HUMAN = "WAITING_HUMAN"
+    WAITING_DEPENDENCY = "WAITING_DEPENDENCY"
+    RETRY_SCHEDULED = "RETRY_SCHEDULED"
+    CLOSED = "CLOSED"
+
+
+class ModelRouteReason(StrEnum):
+    DEFAULT = "default"
+    TASK_COMPLEXITY = "task_complexity"
+    RISK_FLOOR = "risk_floor"
+    ROLE_FLOOR = "role_floor"
+    CONTEXT_CAPACITY = "context_capacity"
+    OBJECTIVE_ESCALATION = "objective_escalation"
+    BUDGET_CONSTRAINT = "budget_constraint"
+    OPERATOR_OVERRIDE = "operator_override"
+
+
 class ArtifactKind(StrEnum):
     PLAN = "plan"
     IMPLEMENTATION_REPORT = "implementation-report"
