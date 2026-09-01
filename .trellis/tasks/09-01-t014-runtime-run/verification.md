@@ -2,7 +2,7 @@
 
 ## 结果
 
-- `UV_CACHE_DIR=/tmp/ase-uv-cache PYTEST_ADDOPTS='-p no:cacheprovider' uv run --offline pytest -q`：250 passed。
+- `UV_CACHE_DIR=/tmp/ase-uv-cache PYTEST_ADDOPTS='-p no:cacheprovider' uv run --offline pytest -q`：254 passed。
 - `UV_CACHE_DIR=/tmp/ase-uv-cache RUFF_CACHE_DIR=/tmp/ase-ruff-cache uv run --offline ruff check .`：通过。
 - `UV_CACHE_DIR=/tmp/ase-uv-cache uv run --offline ruff format --check .`：163 files already formatted。
 - `UV_CACHE_DIR=/tmp/ase-uv-cache MYPY_CACHE_DIR=/tmp/ase-mypy-cache uv run --offline mypy src tests`：通过，83 个 source files。
