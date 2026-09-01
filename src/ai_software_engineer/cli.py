@@ -9,7 +9,9 @@ import typer
 from pydantic import ValidationError
 
 from ai_software_engineer import __version__
+from ai_software_engineer.agents import AgentError
 from ai_software_engineer.artifacts import ArtifactStoreError, FileArtifactStore
+from ai_software_engineer.context import ContextError
 from ai_software_engineer.domain import Task, TaskStatus
 from ai_software_engineer.evaluation import (
     EvaluationEngine,
@@ -20,6 +22,12 @@ from ai_software_engineer.evaluation import (
     FileHandoffStore,
     HandoffBuilder,
     HandoffError,
+)
+from ai_software_engineer.orchestration import OrchestrationError
+from ai_software_engineer.runtime import (
+    RuntimeConfig,
+    RuntimeConfigurationError,
+    RuntimeSession,
 )
 from ai_software_engineer.store import SqliteTaskRepository, StoreError
 
@@ -121,6 +129,38 @@ def list_task_events(
     except (OSError, StoreError) as error:
         _fail(error)
     _emit([event.to_wire() for event in events])
+
+
+@task_app.command("run")
+def run_task(
+    task_id: Annotated[str, typer.Argument(help="Task ID to execute serially.")],
+    config: Annotated[
+        Path, typer.Option("--config", "-c", help="Runtime configuration JSON document.")
+    ],
+    case_id: Annotated[
+        str | None, typer.Option("--case-id", help="Optional stable Evaluation case ID.")
+    ] = None,
+) -> None:
+    """Run one Task through the bounded Coder → QA → Reviewer workflow."""
+    try:
+        runtime_config = RuntimeConfig.from_file(config)
+        with RuntimeSession(runtime_config) as runtime:
+            result = runtime.run_task(task_id, case_id=case_id)
+    except (
+        OSError,
+        JSONDecodeError,
+        ValidationError,
+        ValueError,
+        StoreError,
+        ArtifactStoreError,
+        ContextError,
+        AgentError,
+        OrchestrationError,
+        EvaluationEventStoreError,
+        RuntimeConfigurationError,
+    ) as error:
+        _fail(error)
+    _emit({"case_id": result.case_id, "result": result.result.to_wire()})
 
 
 @evaluation_app.command("report")

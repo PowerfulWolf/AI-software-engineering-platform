@@ -49,6 +49,11 @@ T013 起，`ase` CLI 是 control-plane 的 composition root，而不是绕过领
 - `ase task show TASK_ID` 与 `ase task events TASK_ID` 只读 SQLite typed snapshot/event stream；
 - `ase evaluation report CASE_ID` 必须通过 `EvaluationTraceBuilder + EvaluationEngine` 从 durable facts 重算，不能读取持久化的 `adr=true`；
 - `ase handoff build TASK_ID` 只接受 `DONE/BLOCKED`，通过 `HandoffBuilder + FileHandoffStore` 输出 immutable JSON/Markdown；
+- `ase task run TASK_ID --config runtime.json` 必须通过 `RuntimeConfig + RuntimeSession` 装配
+  `RoleAwareAgentAdapter`、`EvaluatingAgentAdapter` 和 `RetryingOrchestrator`；配置只保存
+  `api_key_env`，secret 必须从进程环境读取；
+- `RuntimeSession` 运行前写入唯一/幂等 `CaseStartedEvent`，使用配置 paths 打开既有 stores，
+  不在 composition root 直接修改 Task 状态、verdict 或 Artifact；
 - CLI 错误必须 fail closed、返回非零退出码且不打印 traceback 或 provider secret；CLI 不直接修改状态、verdict、artifact 或执行 merge。
 
 ## 角色权限（机器 policy 优先）

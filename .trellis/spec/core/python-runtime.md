@@ -1057,3 +1057,103 @@ assert bundle.handoff_id.startswith("handoff_")
 
 前者丢失人工/policy/regression/invalid-output 事实且无法重算；后者只从 typed durable facts 得出
 结论，并把人类交付与自动状态迁移分离。
+
+## 15. T014 Runtime Configuration and Task Run Composition
+
+### 15.1 Scope / Trigger
+
+新增或修改 `ase task run`、provider endpoint 配置、API key 环境变量、角色模型覆盖、
+Runtime store 路径或 Evaluation case 启动时适用。Runtime 是 operator-owned composition
+root，不能成为绕过既有 typed ports、状态机或 ArtifactStore 的第二套业务实现。
+
+### 15.2 Signatures
+
+```python
+RuntimeConfig.from_file(path: str | Path) -> RuntimeConfig
+RuntimeConfig.agent_definitions() -> dict[AgentRole, AgentDefinition]
+RoleAwareAgentAdapter(adapters: Mapping[AgentRole, AgentAdapter])
+RoleAwareAgentAdapter.run(request: AgentRequest) -> AgentResult
+RuntimeSession(config: RuntimeConfig, *, environment: Mapping[str, str] | None = None,
+               agent_adapter: AgentAdapter | None = None)
+RuntimeSession.run_task(task_id: TaskId, *, case_id: EvaluationCaseId | None = None) -> RuntimeRunResult
+```
+
+Runtime 配置 JSON 的必填字段是 `endpoint` 和 `model`；`api_key_env` 只能是大写环境变量
+名。`paths` 固定包含 `database`、`artifacts`、`contexts`、`evaluation_events` 和
+`handoffs`。`role_overrides` 每个 `AgentRole` 最多一项。
+
+### 15.3 Contracts
+
+- API key 不属于 RuntimeConfig wire payload；RuntimeSession 只读取 `api_key_env` 指定的
+  进程环境变量，异常消息只允许暴露变量名，不能暴露值或 provider response body。
+- `RuntimeConfig.agent_definitions()` 必须生成恰好四个角色定义，并保持 T002 role input/output
+  artifact mapping；默认 Coder 写 `src/**`/`tests/**`，QA 写 `tests/**`，Reviewer 不写，
+  只有 Orchestrator 的 `can_change_state=true`，所有角色 `can_merge=false`。
+- RuntimeSession 只打开已有 `SqliteTaskRepository`、`FileArtifactStore`、`FileContextStore`
+  和 `FileEvaluationEventStore`，通过 `FileRunContextBuilder`、`EvaluatingAgentAdapter` 和
+  `RetryingOrchestrator` 运行；不能在 Runtime 层直接设置 `Task.status` 或 sealing Artifact。
+- 每次运行先写一条确定性 `CaseStartedEvent`（case ID、Task、base revision、model、prompt、
+  spec 和 test entrypoints）；完全相同的 start 是幂等 no-op，不同 Task/base 的同 case 必须拒绝。
+- 未提供 `case_id` 时使用 Task ID 的 SHA-256 前 32 位生成 stable `case_<hex>`；start event ID
+  使用 case ID 的 SHA-256 前 32 位生成 `evalevt_case_started_<hex>`，满足 EvaluationEventId
+  长度上限。
+- 真实 provider 和离线 fake 只能通过同一 typed `AgentAdapter` 注入；T014 不新增 DAG、队列、
+  vector store、自动 merge 或 deploy。
+
+### 15.4 Validation & Error Matrix
+
+| 输入/状态 | 检测点 | 结果 |
+|---|---|---|
+| `api_key` 或其他未知 Runtime 字段 | Pydantic/JSON Schema boundary | 拒绝配置，不启动 Agent |
+| `api_key_required=true` 且环境变量缺失 | RuntimeSession constructor | `RuntimeConfigurationError`，不打开运行 |
+| endpoint 含控制字符、role 重复或 entrypoint 重复 | RuntimeConfig validator | 配置验证失败 |
+| role override 写入路径超出角色边界 | `RuntimeConfig.agent_definitions()` | `RuntimeConfigurationError`，不启动 Agent |
+| RoleAwareAgentAdapter 缺角色 | adapter composition | `RuntimeConfigurationError` |
+| 同 case 的 Task/base/model/prompt/spec/tests 不一致 | CaseStarted guard | fail closed，不追加 start |
+| case 已有 AgentRun/Human facts 但没有 CaseStarted | CaseStarted guard | fail closed，不补造 start |
+| Task 为 DONE/BLOCKED/FAILED | RuntimeSession.run_task | `TaskNotRunnable`，不追加状态 |
+| provider timeout/invalid output/policy failure | existing AgentAdapter + retry runner | typed AgentFailure，按 T010 分类重试或 BLOCKED |
+| 同一 fake adapter 与真实 adapter request contract 不一致 | `AgentResult`/Artifact guard | 不产生 verdict，不迁移状态 |
+
+### 15.5 Good / Base / Bad Cases
+
+- **Good**：用 JSON 配置 endpoint/model，API key 在环境变量，注入 fake adapter 跑完四个角色；
+  重启同一 case 不重复 CaseStartedEvent，所有 run/artifact/context 可从 stores 重放。
+- **Base**：仅配置默认 role definitions，RuntimeSession 组合既有 T010 runner；provider 更换
+  只替换 `AgentAdapter`，不改 domain 或 orchestration。
+- **Bad**：把 key 写进 JSON、CLI 直接调用模型 SDK、Runtime 直接改 Task 为 DONE，或让 role
+  override 授予 Reviewer 写生产代码/merge；这些都必须在 boundary fail closed。
+
+### 15.6 Tests Required
+
+- RuntimeConfig 正例通过 Pydantic 和 `schemas/runtime-config.schema.json`；未知字段、明文 key、
+  非法 env name、重复 role/entrypoint 和越权 write path 均拒绝。
+- `agent_definitions()` 断言四角色集合、输入/输出 Artifact、Coder/QA/Reviewer 写权限、
+  Orchestrator state 权限和所有角色禁止 merge。
+- RoleAwareAgentAdapter 断言按 request.role 路由并拒绝缺角色；RuntimeSession 断言缺 key、
+  terminal Task、case identity mismatch 的稳定错误。
+- fake adapter e2e 断言 `NEW → PLANNING → IMPLEMENTING → QA → REVIEW → DONE`、四个 Agent
+  run、一个 CaseStartedEvent、immutable Artifact/Context 持久化和可重算 Evaluation trace。
+- CLI 断言 `task run` 使用配置 paths、错误退出码为 2、不打印 traceback/API key；运行全量
+  contract tests、Ruff、strict mypy、build 和 `git diff --check`。
+
+### 15.7 Wrong vs Correct
+
+#### Wrong
+
+```python
+payload = json.loads(Path("runtime.json").read_text())
+client = OpenAI(api_key=payload["api_key"])
+task.status = "DONE"
+```
+
+#### Correct
+
+```python
+config = RuntimeConfig.from_file(path)
+with RuntimeSession(config) as runtime:
+    result = runtime.run_task(task_id, case_id=case_id)
+```
+
+前者泄露 secret、绕过 typed adapter 和状态守卫；后者把配置、凭据、case 事实和串行路由
+固定在可验证的 application composition seam。

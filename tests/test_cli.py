@@ -140,3 +140,35 @@ def test_evaluation_report_missing_case_is_a_stable_cli_error(tmp_path: Path) ->
     assert result.exit_code == 2
     assert "Traceback" not in result.output
     assert "error:" in result.stderr
+
+
+def test_task_run_missing_runtime_secret_is_a_stable_cli_error(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    task = make_task().model_copy(update={"repository": str(project_root)})
+    database = tmp_path / "state.sqlite3"
+    config_file = tmp_path / "runtime.json"
+    config_file.write_text(
+        json.dumps(
+            {
+                "endpoint": "https://api.example.test/v1",
+                "model": "runtime-model",
+                "paths": {
+                    "database": str(database),
+                    "artifacts": str(tmp_path / "artifacts"),
+                    "contexts": str(tmp_path / "contexts"),
+                    "evaluation_events": str(tmp_path / "evaluation-events"),
+                    "handoffs": str(tmp_path / "handoffs"),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    with SqliteTaskRepository(database) as repository:
+        repository.create(task)
+
+    result = runner.invoke(app, ["task", "run", task.id, "--config", str(config_file)])
+
+    assert result.exit_code == 2
+    assert "OPENAI_API_KEY" in result.stderr
+    assert "Traceback" not in result.output

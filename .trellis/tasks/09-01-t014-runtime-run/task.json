@@ -1,0 +1,31 @@
+{
+  "id": "T014",
+  "slug": "runtime-run",
+  "title": "组装配置驱动的 Task run",
+  "status": "completed",
+  "phase": "verify",
+  "depends_on": ["T010", "T011", "T012", "T013"],
+  "allowed_paths": [
+    "src/ai_software_engineer/runtime.py",
+    "src/ai_software_engineer/cli.py",
+    "schemas/runtime-config.schema.json",
+    "tests/runtime/**",
+    "tests/contracts/test_json_schema_contracts.py",
+    "tests/test_cli.py",
+    "docs/runtime.md",
+    "docs/cli.md",
+    "docs/milestones.md",
+    "README.md",
+    "AGENTS.md",
+    ".trellis/spec/core/python-runtime.md",
+    ".trellis/tasks/09-01-t014-runtime-run/**"
+  ],
+  "verification_commands": [
+    "uv run pytest -q",
+    "uv run ruff check .",
+    "uv run ruff format --check .",
+    "uv run mypy src tests",
+    "uv build",
+    "git diff --check"
+  ]
+}
