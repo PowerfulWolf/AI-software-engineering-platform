@@ -1,0 +1,26 @@
+{
+  "id": "T013",
+  "slug": "cli-runtime",
+  "title": "组装离线 CLI/runtime 入口",
+  "status": "completed",
+  "phase": "verify",
+  "depends_on": ["T003", "T012"],
+  "allowed_paths": [
+    "src/ai_software_engineer/cli.py",
+    "tests/test_cli.py",
+    "docs/cli.md",
+    "docs/milestones.md",
+    "README.md",
+    "AGENTS.md",
+    ".trellis/spec/core/python-runtime.md",
+    ".trellis/tasks/09-01-t013-cli-runtime/**"
+  ],
+  "verification_commands": [
+    "uv run pytest -q",
+    "uv run ruff check .",
+    "uv run ruff format --check .",
+    "uv run mypy src tests",
+    "uv build",
+    "git diff --check"
+  ]
+}

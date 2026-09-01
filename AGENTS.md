@@ -41,6 +41,16 @@ NEW → PLANNING → IMPLEMENTING → QA → REVIEW → DONE
 5. **质量门**：运行格式化、类型检查、单元测试、contract tests 和 fixture e2e；检查变更没有越过 allowlist。
 6. **沉淀知识**：把新 failure mode、取舍和可复用模式补进 `.trellis/spec/`；不要用重复的本地常量或未类型化 payload 解析。
 
+## CLI/runtime composition
+
+T013 起，`ase` CLI 是 control-plane 的 composition root，而不是绕过领域契约的脚本：
+
+- `ase task create --file TASK.json` 只接受 `status=NEW`、`attempts=0` 的 Schema-valid Task；
+- `ase task show TASK_ID` 与 `ase task events TASK_ID` 只读 SQLite typed snapshot/event stream；
+- `ase evaluation report CASE_ID` 必须通过 `EvaluationTraceBuilder + EvaluationEngine` 从 durable facts 重算，不能读取持久化的 `adr=true`；
+- `ase handoff build TASK_ID` 只接受 `DONE/BLOCKED`，通过 `HandoffBuilder + FileHandoffStore` 输出 immutable JSON/Markdown；
+- CLI 错误必须 fail closed、返回非零退出码且不打印 traceback 或 provider secret；CLI 不直接修改状态、verdict、artifact 或执行 merge。
+
 ## 角色权限（机器 policy 优先）
 
 | 角色 | 允许写入 | 允许命令 | 明确禁止 |

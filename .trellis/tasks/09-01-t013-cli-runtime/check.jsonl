@@ -1,0 +1,3 @@
+{"check":"CLI contract tests","status":"passed","result":"8 CLI tests passed"}
+{"check":"full test suite","status":"passed","result":"243 passed"}
+{"check":"lint/typecheck/build","status":"passed","result":"ruff, format, strict mypy, uv build, git diff --check"}
