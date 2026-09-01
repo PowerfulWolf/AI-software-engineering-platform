@@ -1,0 +1,30 @@
+{
+  "id": "T011",
+  "slug": "real-agent",
+  "title": "接入 OpenAI-compatible 真实 AgentAdapter",
+  "status": "completed",
+  "phase": "verify",
+  "depends_on": ["T008", "T009", "T010"],
+  "allowed_paths": [
+    "src/ai_software_engineer/agents/**",
+    "src/ai_software_engineer/context/**",
+    "src/ai_software_engineer/orchestration/context.py",
+    "tests/agents/**",
+    "tests/context/**",
+    "tests/orchestration/test_context_registry.py",
+    "docs/**",
+    ".trellis/spec/core/**",
+    ".trellis/tasks/09-01-t011-real-agent/**",
+    "AGENTS.md",
+    "README.md"
+  ],
+  "verification_commands": [
+    "uv run pytest",
+    "uv run ruff check .",
+    "uv run ruff format --check .",
+    "uv run mypy src tests",
+    "uv lock --check",
+    "uv build",
+    "git diff --check"
+  ]
+}

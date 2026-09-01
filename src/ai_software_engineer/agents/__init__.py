@@ -1,4 +1,4 @@
-"""Public Agent Execution Plane contracts and offline adapter."""
+"""Public Agent Execution Plane contracts and fake/real adapters."""
 
 from ai_software_engineer.agents.fake import FakeAgentAdapter
 from ai_software_engineer.agents.models import (
@@ -11,6 +11,21 @@ from ai_software_engineer.agents.models import (
     FakeBehavior,
     FakeScenario,
     RunId,
+)
+from ai_software_engineer.agents.openai_compatible import (
+    ContextPromptBuilder,
+    ContextResolver,
+    HttpResponse,
+    HttpTransport,
+    OpenAICompatibleAgentAdapter,
+    OpenAICompatibleConfigurationError,
+    OpenAICompatibleError,
+    PromptBuilder,
+    PromptMessage,
+    PromptPayload,
+    RequestPromptBuilder,
+    StoredContextResolver,
+    UrllibHttpTransport,
 )
 from ai_software_engineer.agents.ports import (
     AgentAdapter,
@@ -30,8 +45,21 @@ __all__ = [
     "AgentRequestConflict",
     "AgentResult",
     "AgentRunStatus",
+    "ContextPromptBuilder",
+    "ContextResolver",
     "FakeAgentAdapter",
     "FakeBehavior",
     "FakeScenario",
+    "HttpResponse",
+    "HttpTransport",
+    "OpenAICompatibleAgentAdapter",
+    "OpenAICompatibleConfigurationError",
+    "OpenAICompatibleError",
+    "PromptBuilder",
+    "PromptMessage",
+    "PromptPayload",
+    "RequestPromptBuilder",
     "RunId",
+    "StoredContextResolver",
+    "UrllibHttpTransport",
 ]

@@ -1,0 +1,2 @@
+{"check":"contract tests","status":"passed","result":"213 passed"}
+{"check":"lint/typecheck/build","status":"passed","result":"ruff, format, mypy, uv lock --check, uv build, git diff --check"}

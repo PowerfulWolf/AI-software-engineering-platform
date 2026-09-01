@@ -68,7 +68,7 @@ ai-software-engineer/
 │   ├── artifacts/                    # 原子 JSON ArtifactStore 与 SHA-256
 │   ├── git/                          # role worktree 隔离与 path/command policy
 │   ├── context/                      # 确定、脱敏、预算受限的 Context Builder/Router
-│   ├── agents/                       # AgentAdapter、typed run contract 与 Fake adapter
+│   ├── agents/                       # AgentAdapter、Fake 与 OpenAI-compatible adapter
 │   ├── orchestration/                 # 串行 runner、Context composition 与状态机
 │   └── prompts/                      # 后续：版本化 role prompt 模板
 ├── docs/
@@ -149,6 +149,6 @@ uv run mypy src tests
 
 ## 当前状态
 
-M0 设计基线和 T001–T009 已完成。当前可运行 `ase`，并可用 Pydantic 校验 Task、Agent Definition、StateEvent、ContextBundle、AgentRequest/AgentResult 以及四类 Artifact；正反例受 canonical JSON Schema contract tests 保护。Task 状态事件可在 SQLite 重启后恢复，状态图由纯函数 guard/reducer 管理，ArtifactStore 提供 SHA-256、lineage、原子写入和不可变重放保证。Repository Plane 可从指定 SHA 创建隔离的 Coder/QA/Reviewer worktree，检查 staged/unstaged/untracked 变更，并通过绑定 worktree root 的 policy 拒绝路径逃逸和未授权命令。Context Plane 会按角色路由显式来源，先脱敏再计数/哈希，并在超预算时确定性截断或 fail closed。Agent Execution Plane 有可脚本化的离线 Fake adapter；`SerialOrchestrator` 现已把 Context、四次独立 Agent Run、ArtifactStore、状态机和 SQLite 串成可重启验证的 `NEW → ... → DONE` 单 attempt 闭环。
+M0 设计基线和 T001–T010 已完成。当前可运行 `ase`，并可用 Pydantic 校验 Task、Agent Definition、StateEvent、ContextBundle、AgentRequest/AgentResult 以及四类 Artifact；正反例受 canonical JSON Schema contract tests 保护。Task 状态事件可在 SQLite 重启后恢复，状态图由纯函数 guard/reducer 管理，ArtifactStore 提供 SHA-256、lineage、原子写入和不可变重放保证。Repository Plane 可从指定 SHA 创建隔离的 Coder/QA/Reviewer worktree，检查 staged/unstaged/untracked 变更，并通过绑定 worktree root 的 policy 拒绝路径逃逸和未授权命令。Context Plane 会按角色路由显式来源，先脱敏再计数/哈希，并可通过 FileContextStore 原子保存、读回和校验 manifest。Agent Execution Plane 现在同时提供可脚本化的离线 Fake adapter 和标准库 HTTP 的 OpenAI-compatible adapter；真实 adapter 通过同一个 typed request/result seam、显式 PromptBuilder/StoredContextResolver、响应 Schema 校验和有界错误映射接入供应商。`SerialOrchestrator` 与 T010 retry/recovery 仍保持单 Task、串行、无 DAG/向量库边界。
 
-下一步是 T010：实现 QA FAIL/Review REJECT 路由、attempt 上限和中断恢复；T009 对这些结果只持久化已验证 evidence 并停在当前 checkpoint，不会猜测重试。后续实现仍严格按 `AGENTS.md` 与 `.trellis/spec/` 推进，任何跨语言契约变更先更新 Schema 和文档，再更新代码与测试。
+下一步是 T012：从事件流重算 metrics/Autonomous Delivery Rate，并生成可供人类审阅的交付包。真实 provider 的凭据、模型选择和网络策略仍由部署环境注入；离线 fake contract tests 是默认质量门，T011 不自动 merge、部署或并行调度。

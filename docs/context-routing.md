@@ -4,7 +4,7 @@
 
 Context Builder 把组织规则、项目事实、Task 意图、角色说明和已声明的上游证据编译成一个最小、确定、可审计的 `ContextBundle`。它不做语义检索、不调用模型，也不接受 Agent 间隐式消息；只有显式声明的来源才会进入上下文。
 
-v0.1 的本地实现是 `FileContextBuilder`，路由器是无 I/O 的 `ContextRouter`。Builder 绑定一个 role worktree root，并复用 T006 `WorkspacePolicy` 读取文件来源。应用层的 `FileRunContextBuilder` 根据 AgentDefinition 权限创建 Builder，并把 ArtifactStore 已读回的显式上游 Artifact 编译成 required `artifact://<artifact_id>` inline source；它不接受隐式 Agent 消息。
+v0.1 的本地实现是 `FileContextBuilder`，路由器是无 I/O 的 `ContextRouter`。Builder 绑定一个 role worktree root，并复用 T006 `WorkspacePolicy` 读取文件来源。应用层的 `FileRunContextBuilder` 根据 AgentDefinition 权限创建 Builder，并把 ArtifactStore 已读回的显式上游 Artifact 编译成 required `artifact://<artifact_id>` inline source；它不接受隐式 Agent 消息。T011 可为它注入 `ContextStore`，将返回的 manifest 先登记/持久化，再由真实 provider adapter 按 `context_manifest_id` 解析。
 
 ## 2. 公共接口
 
@@ -23,7 +23,17 @@ class ContextBuilder(Protocol):
         attempt: int,
         candidate_revision: str | None = None,
     ) -> ContextBundle: ...
+
+
+class ContextStore(Protocol):
+    def put(self, context: ContextBundle) -> ContextBundle: ...
+    def get(self, context_id: ContextId) -> ContextBundle: ...
 ```
+
+`InMemoryContextStore` 用于单进程测试；真实运行使用 `FileContextStore` 将 canonical
+ContextBundle 以 `<context_id>.json` 原子落盘。Store 会重新计算排除 `built_at` 的 manifest
+SHA-256；相同 identity 的重复登记返回首次观察值，不同内容复用 ID、文件篡改或非法 JSON
+分别抛 `ContextConflict`/`ContextCorruption`，不会把不可信 manifest 交给模型。
 
 `ContextSource` 必须且只能提供一个 `content: str` 或 `relative_path: str`；`roles=()` 表示所有角色，否则只匹配声明的 `AgentRole`。`priority=0` 保留给机器 policy，外部来源必须使用正数优先级。
 

@@ -20,6 +20,8 @@ WorkspacePolicy.authorize_command(arguments: tuple[str, ...]) -> tuple[str, ...]
 ContextRouter.route(sources: tuple[ContextSource, ...], role: AgentRole) -> tuple[ContextSource, ...]
 ContextBuilder.build(task: Task, role: AgentRole, *, attempt: int,
                      candidate_revision: str | None = None) -> ContextBundle
+ContextStore.put(context: ContextBundle) -> ContextBundle
+ContextStore.get(context_id: ContextId) -> ContextBundle
 validate_artifact(payload: object, kind: ArtifactKind) -> Artifact
 ```
 
@@ -32,6 +34,7 @@ implementation-report Artifact 可以使用新 revision，但必须满足
 必须严格绑定该 candidate。
 
 `ContextSource` 只能是 inline content 或 root-relative path 之一；`ContextBundle` 的 sections 先脱敏再 hash/count，并由 `context_id` canonical manifest identity。priority 0 仅属于机器 policy；外部 source、Task prose 和命令输出都不能覆盖 policy 或产生隐式消息。
+`FileContextStore` 将 manifest 写成 immutable canonical JSON；built_at 不参与 identity，等价重放保留首次观察值。读取必须重新验证 Pydantic 与 context ID，路径只能来自有效 ContextId。
 
 ## 3. Contracts
 
@@ -119,3 +122,29 @@ assert qa.source_revision == review.source_revision == candidate_sha
 assert qa.content["status"] == "PASS"
 assert review.content["verdict"] == "APPROVE"
 ```
+
+## 8. T011 OpenAI-compatible provider adapter
+
+真实模型 adapter 必须实现与 Fake 相同的 `AgentAdapter.run` Protocol。Provider HTTP 细节
+只能存在 `agents/openai_compatible.py`；PromptBuilder 与 HttpTransport 是可替换端口，
+不得让 SDK response、裸 dict 或 provider exception 进入 Orchestrator。请求使用显式
+policy-first messages、`temperature=0`、`stream=false` 和 JSON response format；API key
+只放在 Authorization header。
+
+`FileRunContextBuilder` 通过注入的 ContextStore 原子登记 manifest；真实运行使用
+`FileContextStore`，测试可用 `InMemoryContextStore`。`StoredContextResolver` 组合
+ContextStore/ArtifactStore，且 input Artifact 正文只使用已计入预算的 `artifact://<id>`
+Context section，不在 prompt 中重复。
+
+2xx body 必须解码为完整 v0.1 Artifact，再执行 `validate_artifact` 和 AgentResult identity
+guard。允许单层 Markdown JSON fence，但不允许从自由文本猜 verdict。Coder candidate 的
+`source_revision` 必须等于 `content.commit_sha`；provider 返回的 producer agent identity
+由 adapter 绑定当前 Agent Definition 后再交付给 Orchestrator。adapter 不 sealing、不写
+ArtifactStore，runner 负责重新 seal 和持久化。
+
+错误映射固定为：transport timeout → `TIMED_OUT/TIMEOUT(transient=true)`；HTTP 408/429/5xx
+或连接失败 → `FAILED/PROVIDER_ERROR(transient=true)`；其他 HTTP 4xx →
+`FAILED/PROVIDER_ERROR(transient=false)`；2xx 非法 JSON、Schema、role/kind、run/context
+或 revision → `FAILED/INVALID_OUTPUT(transient=false)`。失败结果没有 Artifact 或 verdict，
+错误消息不得包含 API key 或 provider 原始 body。完全相同的 request 重放返回同一结果，
+相同 `run_id` 搭配不同 request 必须抛 `AgentRequestConflict` 且不发起第二次调用。
