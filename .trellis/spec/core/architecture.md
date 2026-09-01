@@ -40,6 +40,11 @@ GitWorkspace.remove(worktree: WorktreeRef) -> None
 WorkspacePolicy.authorize_read(path: str | PurePosixPath) -> PurePosixPath
 WorkspacePolicy.authorize_write(path: str | PurePosixPath) -> PurePosixPath
 WorkspacePolicy.authorize_command(arguments: tuple[str, ...]) -> tuple[str, ...]
+EvaluatingAgentAdapter.run(request: AgentRequest) -> AgentResult
+EvaluationTraceBuilder.build(case_id: EvaluationCaseId) -> EvaluationTrace
+EvaluationEngine.evaluate(traces: tuple[EvaluationTrace, ...]) -> EvaluationReport
+HandoffBuilder.build(task_id: TaskId) -> HandoffBundle
+FileHandoffStore.put(bundle: HandoffBundle) -> HandoffRef
 ```
 
 这些接口必须是幂等或显式拒绝重复操作；实现不得通过全局可变状态绕过 Task/attempt 关联。
@@ -75,6 +80,12 @@ WorkspacePolicy.authorize_command(arguments: tuple[str, ...]) -> tuple[str, ...]
 - role worktree root 必须位于 main checkout 外；Coder branch 与 QA/Reviewer detached candidate 不复用旧 attempt；dirty worktree 不自动清理；
 - repository hook/fsmonitor 禁用，repository-local external checkout filter 在没有更强 sandbox 的 v0.1 中 fail closed；
 - 路径 policy 绑定 worktree root 并检查 lexical + symlink containment，command policy 只接受完整 token prefix 和无 shell syntax 的 argv。
+- Evaluation 不扩展状态机：`EvaluatingAgentAdapter` 装饰既有 adapter 并发出 replay-safe
+  AgentRunEvent；TraceBuilder 只读 Task/StateEvent/Artifact/EvaluationEvent；Engine 是纯计算；
+- ADR 的 DONE、四制品链、独立 run、evidence、人类动作、policy 与 regression 条件都必须从
+  typed facts 重算；未关闭 regression window 是 `PENDING`，不是成功；
+- Handoff 只允许 `DONE/BLOCKED`，其 deterministic JSON 与 Markdown 必须一致；它不执行复核
+  argv、不 merge，也不修改 Task/Artifact/verdict。
 
 ## 4. Validation & Error Matrix
 
@@ -96,6 +107,11 @@ WorkspacePolicy.authorize_command(arguments: tuple[str, ...]) -> tuple[str, ...]
 | QA FAIL / Review REJECT | verdict guard | Artifact 可持久化；停在 QA/REVIEW，T010 决定路由 |
 | criteria、parent、candidate 或独立 run 不一致 | delivery guard | `DeliveryContractViolation`，不推进下一状态 |
 | retry attempt 超过预算 | retry router | `BlockedResult` + `BLOCKED` event，保留最后 finding Artifact |
+| Evaluation event exact replay / changed replay | EvaluationEventStore | 幂等返回 / `EvaluationEventConflict` |
+| Evaluation event digest、JSON 或身份损坏 | EvaluationEventStore/TraceBuilder | corruption/contract error，不计算指标 |
+| DONE 缺回归观察 | EvaluationEngine | `ADR=PENDING`，仍在分母 |
+| 非终态或 DONE 断链请求 handoff | HandoffBuilder | `HandoffNotReady` / `HandoffContractError` |
+| Handoff JSON/Markdown/identity 被篡改 | FileHandoffStore | `HandoffCorruption`，不返回半可信内容 |
 
 ## 5. Good / Base / Bad Cases
 
@@ -107,6 +123,10 @@ WorkspacePolicy.authorize_command(arguments: tuple[str, ...]) -> tuple[str, ...]
   4 个 sealed Artifact，关闭重开后 Task 仍为 `DONE`。
 - **T009 Bad**：使用 `NEW` Task 快照预构建 planning Context，或强制 Coder 输出 Artifact
   复用输入 base revision；前者破坏 manifest identity，后者使 Coder 无法产生新 commit。
+- **T012 Good**：同一 SQLite/Artifact/Evaluation facts 重放产生同一 metrics/ADR；等价 handoff
+  重建保留首次观察时间。
+- **T012 Base**：DONE delivery 在 regression window 结束前保持 `PENDING`，人类仍可审阅 handoff。
+- **T012 Bad**：只看 `Task.status == DONE` 就写 `adr=true`，或任务完成后手工补造“无人干预”历史。
 
 ## 6. Tests Required
 
@@ -119,6 +139,8 @@ WorkspacePolicy.authorize_command(arguments: tuple[str, ...]) -> tuple[str, ...]
 - Serial runner：公开 seam fixture 断言 `DONE`、5 个事件、revision=5、四类 Artifact lineage、
   Context/run identity；Agent failure、QA FAIL、criterion 缺失、重复 run ID、非 NEW Task
   分别停在预期 durable checkpoint。
+- Evaluation：5-case suite 覆盖 eligible/pending/human/blocked/regression；event store 覆盖 replay、
+  conflict、合法篡改；emitter 覆盖 success/invalid/replay；handoff 覆盖 DONE/BLOCKED/断链/篡改。
 
 ## 7. Wrong vs Correct
 

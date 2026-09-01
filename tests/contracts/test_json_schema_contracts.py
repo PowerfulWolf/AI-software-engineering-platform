@@ -12,6 +12,7 @@ from referencing import Registry, Resource
 from ai_software_engineer.context import ContextBudget, ContextSource, FileContextBuilder
 from ai_software_engineer.domain import AgentPermissions, AgentRole, NetworkAccess
 from ai_software_engineer.domain.model import WirePayload
+from ai_software_engineer.evaluation import HandoffBuilder
 from tests.domain.factories import (
     make_agent,
     make_implementation_artifact,
@@ -21,6 +22,13 @@ from tests.domain.factories import (
     make_state_event,
     make_task,
 )
+from tests.evaluation.factories import (
+    make_agent_run,
+    make_case_started,
+    make_human_action,
+    make_regression_check,
+)
+from tests.evaluation.test_handoff import _persist_trace
 
 SCHEMA_DIR = Path(__file__).parents[2] / "schemas"
 
@@ -191,3 +199,51 @@ def test_common_artifact_schema_rejects_invalid_timestamp_format() -> None:
     payload["created_at"] = "not-a-date"
 
     _assert_invalid(payload, "artifact.schema.json")
+
+
+@pytest.mark.parametrize(
+    "factory",
+    (make_case_started, make_agent_run, make_human_action, make_regression_check),
+)
+def test_evaluation_events_satisfy_the_canonical_schema(factory: ModelFactory) -> None:
+    _assert_valid(factory().to_wire(), "evaluation-event.schema.json")
+
+
+def test_evaluation_event_schema_rejects_unknown_human_action() -> None:
+    payload = make_human_action().to_wire()
+    payload["action"] = "APPROVE_ANYTHING"
+
+    _assert_invalid(payload, "evaluation-event.schema.json")
+
+
+def test_handoff_bundle_satisfies_the_canonical_schema(tmp_path: Path) -> None:
+    repository, artifacts = _persist_trace(tmp_path)
+    try:
+        bundle = HandoffBuilder(
+            repository=repository,
+            artifact_store=artifacts,
+            clock=lambda: make_task().created_at,
+        ).build("task_domain_001")
+    finally:
+        repository.close()
+
+    _assert_valid(bundle.to_wire(), "handoff-bundle.schema.json")
+
+
+def test_handoff_schema_rejects_missing_next_actions(tmp_path: Path) -> None:
+    repository, artifacts = _persist_trace(tmp_path)
+    try:
+        payload = (
+            HandoffBuilder(
+                repository=repository,
+                artifact_store=artifacts,
+                clock=lambda: make_task().created_at,
+            )
+            .build("task_domain_001")
+            .to_wire()
+        )
+    finally:
+        repository.close()
+    payload["next_actions"] = []
+
+    _assert_invalid(payload, "handoff-bundle.schema.json")
