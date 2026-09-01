@@ -644,3 +644,88 @@ request = AgentRequest(
 ```
 
 前者绕过 role routing、root policy、脱敏和可重放 manifest；后者只把验证过的 ContextBundle 通过 typed seam 交给 Agent adapter。
+
+## 11. Scenario: Typed Agent Adapter and Deterministic Fake
+
+### 11.1 Scope / Trigger
+
+新增或修改 Agent request/response、模型 provider adapter、timeout/failure mapping、run replay 或 FakeAgentAdapter 场景时适用。`src/ai_software_engineer/agents/` 是 Orchestrator 与模型执行器之间的唯一 seam；真实 SDK、网络和 prompt 渲染不得进入 domain 或 Fake adapter。
+
+### 11.2 Signatures
+
+```python
+class AgentAdapter(Protocol):
+    def run(self, request: AgentRequest) -> AgentResult: ...
+
+
+class FakeAgentAdapter:
+    def __init__(
+        self,
+        *,
+        scenarios: Mapping[tuple[AgentRole, int], FakeScenario] | None = None,
+        default: FakeScenario | None = None,
+    ) -> None: ...
+    def run(self, request: AgentRequest) -> AgentResult: ...
+```
+
+`AgentRequest` 固定字段为 `run_id`、`task_id`、`role`、`attempt`、`source_revision`、`context_manifest_id`、`input_artifact_ids`、`permissions`、`output_schema` 和 `timeout_seconds`。`AgentResult` 固定回显身份字段，并包含 `status`、可选 `artifact`、可选 `error` 和 `duration_ms`。`AgentFailure` 固定为 `code`、`message`、`transient`。
+
+### 11.3 Contracts
+
+- 所有 request/result/scenario model 使用 Pydantic v2、`extra="forbid"`、`frozen=True`；`run_id`、`context_manifest_id`、Task/Artifact ID 和 attempt 采用既有 typed aliases。
+- `AgentRequest.output_schema` 固定映射：Orchestrator → `schemas/plan.schema.json`、Coder → `schemas/implementation-report.schema.json`、QA → `schemas/qa-report.schema.json`、Reviewer → `schemas/review-report.schema.json`；角色/Schema 不匹配在 adapter 启动前拒绝。
+- `AgentResult.SUCCEEDED` 必须有且只有一个 typed Artifact，且 Artifact 的 `task_id`、producer role/run ID、kind、source revision 和 context manifest ID 与 request 完全一致；成功的 QA 只能是 `PASS`，成功的 Reviewer 只能是 `APPROVE`。
+- `FAILED`/`TIMED_OUT` 必须没有 Artifact；必须有 `AgentFailure`。`TIMED_OUT` 只能使用 `TIMEOUT` code；`INVALID_OUTPUT` 不产生 verdict，`PROVIDER_ERROR` 可标记 transient 供后续 retry router 使用。
+- `FakeBehavior` 支持 `SUCCESS`、`QA_FAIL`、`REVIEW_REJECT`、`TIMEOUT`、`INVALID_OUTPUT`、`PROVIDER_ERROR`。QA_FAIL 只能由 QA role 产生 FAIL report，REVIEW_REJECT 只能由 Reviewer 产生 REJECT report；行为与 role 不匹配是配置错误。
+- Fake scenario 按 `(role, attempt)` 选择，default 作为兜底；缺少 scenario、非法 key 或 attempt 越界抛 `AgentConfigurationError`，不得猜测默认行为。
+- 同一 `run_id` 的完全相同 AgentRequest 重放返回相同 immutable AgentResult；相同 ID 搭配任一不同 request 字段抛 `AgentRequestConflict`，不重复执行 scenario。
+- Fake adapter 不访问网络、Git、文件系统或模型 SDK。真实 adapter 必须复用同一 Protocol 和 typed result，不得把 provider response 或裸 dict 穿透到 Orchestrator。
+
+### 11.4 Validation & Error Matrix
+
+| 输入/状态 | 检测点 | 结果 |
+|---|---|---|
+| request 缺字段、非法 ID/role/attempt/权限 | Pydantic boundary | `ValidationError`，不执行 |
+| scenario 缺失、key/attempt 非法、特殊行为 role 不匹配 | Fake configuration | `AgentConfigurationError` |
+| artifact task/role/run/kind/revision/context mismatch | adapter output guard | `FAILED + INVALID_OUTPUT`，无 artifact |
+| QA 成功非 PASS 或 QA_FAIL 非 FAIL | adapter output guard | `FAILED + INVALID_OUTPUT` |
+| Reviewer 成功非 APPROVE 或 REJECT 非 REJECT | adapter output guard | `FAILED + INVALID_OUTPUT` |
+| provider/invalid output scenario | adapter mapping | `FAILED + typed code`，无 verdict |
+| timeout scenario | adapter mapping | `TIMED_OUT + TIMEOUT(transient=true)`，无 artifact |
+| same run ID + exact request | replay cache | 原结果幂等返回 |
+| same run ID + changed request | replay cache | `AgentRequestConflict`，不覆盖原结果 |
+
+### 11.5 Good / Base / Bad Cases
+
+- **Good**：Fake adapter 为 Coder 返回同一 request identity 的 implementation-report；QA FAIL 和 Reviewer REJECT 只由对应 role 返回；timeout 不产生 Artifact。
+- **Base**：无网络的 fixture 测试通过 scenario script 复现成功、失败和重试输入，真实 adapter 可替换而无需修改 Orchestrator。
+- **Bad**：让 Coder 返回 `qa-report`、接受不同 candidate SHA 的 Artifact、把 timeout 当 PASS、对同一 run ID 重新执行，或让 Fake 直接调用供应商 SDK。
+
+### 11.6 Tests Required
+
+- `tests/agents/test_fake.py`：四类 role success、QA FAIL、Review REJECT、timeout、invalid/provider failures、scenario routing、missing/invalid config、artifact identity/verdict mismatch、run replay/conflict 和 result state invariants。
+- 测试使用现有 typed Artifact factory 的 identity-aligned copies，通过 `AgentAdapter.run` 公共 seam 断言，不 mock Pydantic validator、缓存或内部 helper。
+- 每个 failure 断言 `status/code/transient`、无 artifact、无 verdict；每个 success 断言 artifact producer/kind/task/source/context/run 对齐。
+- Ruff、strict mypy、完整 pytest、`uv lock --check`、`uv build` 和 `git diff --check` 是合并门禁。
+
+### 11.7 Wrong vs Correct
+
+#### Wrong
+
+```python
+raw = model.invoke(prompt)
+if raw.get("status") == "PASS":
+    return raw
+```
+
+#### Correct
+
+```python
+result = agent_adapter.run(request)
+if result.status is AgentRunStatus.SUCCEEDED:
+    artifact = result.artifact
+    assert artifact is not None
+    assert artifact.source_revision == request.source_revision
+```
+
+前者让 provider dict 和自报 verdict 穿透边界；后者只接受与 request 身份对齐的 typed Artifact，失败和超时不会被误当成交付信号。

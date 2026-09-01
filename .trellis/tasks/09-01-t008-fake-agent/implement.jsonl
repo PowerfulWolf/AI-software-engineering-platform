@@ -1,0 +1,6 @@
+{"path":"src/ai_software_engineer/agents/models.py","reason":"Typed AgentRequest, AgentResult, failure and fake scenario contracts."}
+{"path":"src/ai_software_engineer/agents/ports.py","reason":"AgentAdapter protocol and stable execution errors."}
+{"path":"src/ai_software_engineer/agents/fake.py","reason":"Deterministic scenario adapter with artifact and run replay guards."}
+{"path":"src/ai_software_engineer/agents/__init__.py","reason":"Public Agent Execution Plane exports."}
+{"path":"tests/agents/test_fake.py","reason":"Public seam behavior, mismatch, failure and idempotency tests."}
+{"path":".trellis/spec/core/python-runtime.md","reason":"Agent adapter signatures, typed failures and fake adapter constraints."}

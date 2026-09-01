@@ -41,6 +41,7 @@ WorkspacePolicy.authorize_command(arguments: tuple[str, ...]) -> tuple[str, ...]
 - `validate_transition` 是唯一状态图入口；`build_event`/`apply_event` 必须保持纯函数，不得读写 repository；
 - `apply_event` 不得修改传入的 Task，且必须拒绝 Task ID、起始状态或时间戳不一致的事件；
 - `ContextBundle` 必须包含 source URI、脱敏内容、SHA-256、token 计数、policy、精确 source revision 和 `context_id`；policy section 固定优先级 0，外部 source 不得占用该优先级；
+- `AgentAdapter` 只接受 typed `AgentRequest` 并返回 `AgentResult`；成功必须携带身份对齐的 Artifact，失败/超时不得携带 verdict，Fake adapter 通过 scenario 验证该边界；
 - `ArtifactStore.put` 只接受 Schema 校验通过且 `integrity.validated=true` 的 envelope；
 - `ArtifactStore.get` 返回重新校验且 digest 匹配的 typed Artifact；缺失、篡改或损坏文件返回稳定错误；
 - Artifact parent/supersedes 只能引用已存在的同 Task Artifact，写入采用临时文件、`fsync` 和原子 rename；
