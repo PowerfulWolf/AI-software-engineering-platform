@@ -1157,3 +1157,106 @@ with RuntimeSession(config) as runtime:
 
 前者泄露 secret、绕过 typed adapter 和状态守卫；后者把配置、凭据、case 事实和串行路由
 固定在可验证的 application composition seam。
+
+## 16. T015 Policy-Bound Command Execution
+
+### 16.1 Scope / Trigger
+
+新增或修改 QA/Coder/Reviewer 命令执行、测试日志采集、worktree cwd、子进程超时或环境变量
+传递时适用。`SubprocessCommandExecutor` 是执行命令的唯一预留端口；它不解释业务 verdict，
+不写 Task/Artifact/Evaluation，也不替代未来的 OS/container sandbox。
+
+### 16.2 Signatures
+
+```python
+class CommandExecutor(Protocol):
+    def run(self, arguments: tuple[str, ...], *,
+            timeout_seconds: float | None = None) -> CommandResult: ...
+
+
+SubprocessCommandExecutor(
+    workspace_root: str | Path,
+    permissions: AgentPermissions,
+    *,
+    denied_paths: tuple[str, ...] = (),
+    environment: Mapping[str, str] | None = None,
+    environment_allowlist: tuple[str, ...] = ("PATH", "LANG", "LC_ALL"),
+    default_timeout_seconds: float = 600.0,
+    max_output_bytes: int = 1_000_000,
+)
+
+SubprocessCommandExecutor.run(arguments: tuple[str, ...], *,
+                              timeout_seconds: float | None = None) -> CommandResult
+```
+
+`CommandResult` 固定包含 `argv`、`cwd`、`returncode`、`stdout`、`stderr`、`duration_ms`、
+`stdout_truncated` 和 `stderr_truncated`。错误类型为 `CommandExecutionError` 和
+`CommandTimedOut`；命令未授权沿用 `WorkspacePolicy` 的 `CommandPolicyViolation`。
+
+### 16.3 Contracts
+
+- `run` 只接受已 tokenized argv，调用前必须复用 `WorkspacePolicy.authorize_command`；不接受
+  shell 字符串、shell 控制 token 或用户拼接的命令片段。
+- cwd 永远是构造器绑定的 resolved worktree root；构造器要求该目录存在，不能由每次调用
+  的参数覆盖或越过 `.git`/root containment。
+- subprocess 固定 `shell=False`、`stdin=DEVNULL`、明确 cwd、`start_new_session=True`、
+  timeout 和最小环境；timeout 先终止进程组，必要时升级为 SIGKILL，再抛 `CommandTimedOut`。
+- 默认环境只含 `PATH`、`LANG=C`、`LC_ALL=C`；其他变量必须同时存在于注入映射和显式
+  `environment_allowlist`，不复制完整 `os.environ`，不自动传递 API key/token/password。
+- stdout/stderr 以 UTF-8 replacement 解码并分别限制 `max_output_bytes`；结果保留截断标志。
+  非零 return code 仍是 typed `CommandResult`，必须由上层结合测试语义生成 evidence，不能
+  直接写成 PASS。
+- 仅“无法启动”和 timeout 抛 executor error；拒绝、非零退出和截断输出必须保留可观察事实。
+  错误消息不能包含命令完整 argv 中可能出现的 secret 或输出正文。
+
+### 16.4 Validation & Error Matrix
+
+| 输入/状态 | 检测点 | 结果 |
+|---|---|---|
+| workspace root 缺失/不是目录 | `WorkspacePolicy` constructor | `PathPolicyViolation`，不启动进程 |
+| 未授权 command、空 argv 或 shell token | `authorize_command` | `CommandPolicyViolation` |
+| allowlist 环境名重复/含小写、控制字符 | executor constructor | `ValueError` |
+| timeout 非正数、NaN、Infinity | constructor/run | `ValueError` |
+| max output bytes 非正数 | constructor | `ValueError` |
+| executable 无法启动 | `Popen` | `CommandExecutionError`，不伪造结果 |
+| process 超时 | `communicate`/process-group guard | `CommandTimedOut`，进程组已终止 |
+| command exit code != 0 | result boundary | `CommandResult(returncode!=0)`，不产生 PASS |
+| stdout/stderr 超限 | bounded decoder | `CommandResult` + 对应 truncated=true |
+| 宿主环境含 secret 但未在 allowlist | env builder | secret 不进入子进程 |
+
+### 16.5 Good / Base / Bad Cases
+
+- **Good**：QA 在绑定 worktree 运行 `(sys.executable, "-c", "...")`，拿到 cwd、returncode、
+  截断日志和 duration，再由 QA artifact 引用 evidence。
+- **Base**：临时 fixture 只依赖 Python 标准库；允许 fake executor/fixture subprocess 替换真实
+  进程，但两者都实现同一 `CommandExecutor` Protocol。
+- **Bad**：`shell=True`、`"pytest " + user_input`、把完整 `os.environ` 传给 Agent、用
+  `returncode == 0` 直接迁移 Task，或在 timeout 后保留仍运行的子进程。
+
+### 16.6 Tests Required
+
+- `tests/execution/test_executor.py`：成功、非零退出、stdout/stderr 截断、固定 cwd、timeout
+  进程组终止、启动失败、未授权 argv、shell token、环境 secret 隔离和显式 allowlist。
+- 断言每次 subprocess 的 `shell=False`、`stdin=DEVNULL`、`cwd`、`env`、`timeout` 和
+  `start_new_session`；错误消息不包含 stdout、stderr 或 secret。
+- 构造器边界测试覆盖缺失 root、非法 timeout、非法 output limit 和重复/非法环境名。
+- 后续 Runtime/QA 集成必须断言非零结果被转换为 evidence 而非 verdict；完整 pytest、Ruff、
+  strict mypy、build、lock 和 `git diff --check` 必须通过。
+
+### 16.7 Wrong vs Correct
+
+#### Wrong
+
+```python
+subprocess.run("pytest " + user_input, shell=True, env=os.environ)
+```
+
+#### Correct
+
+```python
+result = executor.run(("pytest", "-q"), timeout_seconds=120)
+evidence = save_command_evidence(result)
+```
+
+前者允许 shell 注入、cwd/secret 越界并丢失 timeout 语义；后者在 policy、环境、资源和输出
+边界内返回可审计事实，是否 PASS 仍由独立 QA 契约决定。

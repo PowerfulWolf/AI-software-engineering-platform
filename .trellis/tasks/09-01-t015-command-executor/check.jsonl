@@ -1,0 +1,4 @@
+{"check":"argv and workspace policy boundary","status":"passed","result":"allowlisted tokenized argv runs in the bound worktree; unauthorized and shell-control tokens are rejected"}
+{"check":"environment and output isolation","status":"passed","result":"only PATH/LANG/LC_ALL and explicit allowlist entries are passed; bounded stdout/stderr expose truncation flags"}
+{"check":"timeout lifecycle","status":"passed","result":"timeout raises stable CommandTimedOut and terminates the full process group, including descendants"}
+{"check":"failure evidence","status":"passed","result":"non-zero exit remains typed CommandResult; missing executable raises CommandExecutionError without output leakage"}

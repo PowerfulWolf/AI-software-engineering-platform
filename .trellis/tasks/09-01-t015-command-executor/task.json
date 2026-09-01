@@ -1,0 +1,27 @@
+{
+  "id": "T015",
+  "slug": "command-executor",
+  "title": "实现受控命令执行器",
+  "status": "completed",
+  "phase": "verify",
+  "depends_on": ["T006", "T014"],
+  "allowed_paths": [
+    "src/ai_software_engineer/execution.py",
+    "tests/execution/**",
+    "README.md",
+    "docs/runtime.md",
+    "docs/architecture.md",
+    "docs/milestones.md",
+    "AGENTS.md",
+    ".trellis/spec/core/python-runtime.md",
+    ".trellis/tasks/09-01-t015-command-executor/**"
+  ],
+  "verification_commands": [
+    "uv run pytest -q",
+    "uv run ruff check .",
+    "uv run ruff format --check .",
+    "uv run mypy src tests",
+    "uv build",
+    "git diff --check"
+  ]
+}
