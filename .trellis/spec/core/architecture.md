@@ -164,7 +164,7 @@ project_id_for_root(project_root: str | Path) -> ProjectId
   或 force-remove dirty role worktree。
 - **T017 Good**：同一 canonical project root 重复注册返回首次 `workspace.json`，目标项目内容
   不变，14 个平台目录全部位于外置 sidecar；T018 v0.2 layout 使用 `assignments/`，不复制 Agent。
-- **T017 Base**：一个尚无语言/构建描述的空本地目录也能注册；ProjectProfile 发现属于 T018。
+- **T017 Base**：一个尚无语言/构建描述的空本地目录也能注册；ProjectProfile 发现属于 T020。
 - **T017 Bad**：在目标项目创建 `.ase`、把源码复制到 sidecar、复用已绑定的 Project ID，或
   发现旧 layout 缺失时静默补目录。
 
@@ -259,22 +259,34 @@ lease_is_active(lease: TaskLease, *, at: datetime) -> bool
 
 TaskStatus 继续表示单 Task 交付证据链；WorkItemStatus 表示组织调度可用性。临时
 `WAITING_HUMAN/WAITING_DEPENDENCY/RETRY_SCHEDULED` 必须释放/到期 Lease，Task 保持最近
-checkpoint。`BLOCKED` 只用于终局无安全继续路径。当前 T010 还没有 WorkItem composition，
-兼容映射将在 T019 替换。
+checkpoint。`BLOCKED` 只用于终局无安全继续路径。当前 `RetryingOrchestrator` 还没有持久化
+WorkItem composition；T019–T022 已提供纯调度、等待路由和 Runtime allocation seams，后续
+application service 必须用它们替换兼容映射。
 
-### 10.2 Target T019 seams
+### 10.2 Implemented T019–T022 seams
 
 ```python
-PortfolioScheduler.assign(work_item: WorkItem,
-                          agents: tuple[AgentProfile, ...],
-                          active_leases: tuple[TaskLease, ...]) -> AssignmentDecision
-ModelRouter.select(demand: RunDemand,
-                   agent: AgentProfile,
-                   policy: ModelPolicy) -> ModelSelection
+PortfolioScheduler.match(work_item, role, agents, active_leases, assignments=(), *,
+                         now, attempt=1, work_items=()) -> AssignmentDecision
+PortfolioScheduler.schedule(work_items, role, agents, active_leases, assignments=(), *,
+                            now, attempt=1) -> tuple[AssignmentDecision, ...]
+ModelRouter.route(demand, agent, policy, *, now) -> ModelRoutingDecision
+ProjectProfile.discover(project_root, *, project_id=None, observed_at=None,
+                        revision=None) -> ProjectProfile
+SpecCompiler.compile(profile, task, rules, *, compiled_at,
+                     resolutions=()) -> SpecCompilation
+RuntimeWorkspaceBinder.bind(organization, project, profile, *,
+                            bound_at) -> RuntimeWorkspaceBinding
+RuntimeWorkforceResolver.resolve(*, work_item, assignment, lease, selection,
+                                 compiled_spec, context, tool_policy_id,
+                                 prompt_version, resolved_at) -> RuntimeAgentRun
 ```
 
-Scheduler 只管理 WorkItem、capacity、Assignment 和 Lease，不迁移 TaskStatus；ModelRouter 只返回
-带 reason 的 ModelSelection，不调用 provider。TaskOrchestrator 继续固定一个 Task 内角色顺序。
+Scheduler 只返回 WorkItem/capacity/Assignment/Lease 决策，不迁移 TaskStatus；ModelRouter 只返回
+带 reason 的 ModelSelection/refusal，不调用 provider。ProjectProfile 是只读观察，不执行构建或
+猜测测试入口。SpecCompiler 只自动合并显式结构化规则；冲突不按层级静默覆盖。Runtime binding
+固定 organization/project/sidecar 边界并在重开时检测漂移。TaskOrchestrator 继续固定一个 Task
+内角色顺序，CLI 持久化 WorkQueue/自动 binding 尚未实现。
 
 ### 10.3 Required invariants
 
@@ -284,3 +296,7 @@ Scheduler 只管理 WorkItem、capacity、Assignment 和 Lease，不迁移 TaskS
 4. 每个 AgentRunAllocation 绑定 Agent、Assignment、ModelSelection、Context、Prompt、Spec 和 tool policy；
 5. 跨 Task 并发不能共享 Context、worktree、Artifact lineage 或可变模型会话；
 6. 模型评价按 Agent × Model × Role × Task class × Risk 归因。
+7. Organization workspace、Project sidecar 和 project_root 两两不重叠；AI metadata 不写目标项目；
+8. CompiledSpec 冲突时不得产生 runnable allocation；hard safety resolution 不可放宽；
+9. RuntimeAgentRun 必须同时验证 WorkItem、Assignment、active Lease、AgentProfile、ModelSelection、
+   CompiledSpec、Context 和 Task repository 身份。

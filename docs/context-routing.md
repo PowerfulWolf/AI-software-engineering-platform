@@ -6,6 +6,11 @@ Context Builder 把组织规则、项目事实、Task 意图、角色说明和�
 
 v0.1 的本地实现是 `FileContextBuilder`，路由器是无 I/O 的 `ContextRouter`。Builder 绑定一个 role worktree root，并复用 T006 `WorkspacePolicy` 读取文件来源。应用层的 `FileRunContextBuilder` 根据 AgentDefinition 权限创建 Builder，并把 ArtifactStore 已读回的显式上游 Artifact 编译成 required `artifact://<artifact_id>` inline source；它不接受隐式 Agent 消息。T011 可为它注入 `ContextStore`，将返回的 manifest 先登记/持久化，再由真实 provider adapter 按 `context_manifest_id` 解析。
 
+T021 的 `CompiledSpec.to_context_source()` 产生唯一 required `compiled.spec` source；T022 的
+`RuntimeWorkspaceBinding.compose_runtime_config(...)` 只在校验 ProjectProfile、sidecar binding 和
+CompiledSpec 完整性后注入它。Runtime 配置若已声明同名 source 会 fail closed，避免规范重复或
+覆盖。项目 Markdown 规则仍以 URI/hash 留在 ProjectProfile，不在 Context 层做语义猜测。
+
 ## 2. 公共接口
 
 ```python

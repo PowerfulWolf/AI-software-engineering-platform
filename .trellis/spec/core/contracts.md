@@ -50,7 +50,7 @@ spec-conflicts 目录；所有目录先 staging + fsync，再以 rename 发布�
 不会覆盖或修复现有 workspace。
 
 目标项目是实际代码 cwd，平台不在其中写 `.ase`、Agent 日志、Artifact 或数据库，也不默认复制
-源码。项目原生规范只能被读取和引用；`SpecCompiler` 后续若发现 project rule、platform rule 或
+源码。项目原生规范只能被读取和引用；`SpecCompiler` 若发现 project rule、platform rule 或
 Task constraint 冲突，必须产生 `SPEC_CONFLICT` 并使 WorkItem 进入 `WAITING_HUMAN`、释放 Lease；
 只有人工决定终止交付时 Task 才进入 `BLOCKED`，resolution 必须持久化。
 项目规范不得放宽 hard safety policy。可视化 read API/dashboard 只读这些 durable records，不
@@ -216,6 +216,12 @@ is_waiting(status: WorkItemStatus) -> bool
 lease_is_active(lease: TaskLease, *, at: datetime) -> bool
 validate_assignment_independence(candidate: RoleAssignment,
                                  existing: tuple[RoleAssignment, ...]) -> None
+PortfolioScheduler.match(...) -> AssignmentDecision
+PortfolioScheduler.schedule(...) -> tuple[AssignmentDecision, ...]
+ModelRouter.route(...) -> ModelRoutingDecision
+ProjectProfile.discover(...) -> ProjectProfile
+SpecCompiler.compile(...) -> SpecCompilation
+RuntimeWorkforceResolver.resolve(...) -> RuntimeAgentRun
 ```
 
 Wire contract 是 `schemas/workforce.schema.json` 的 discriminated union。`AgentProfile` 是组织成员
@@ -239,6 +245,14 @@ ModelPolicy、全局 WorkQueue 和绩效属于组织 workspace。
 | 同一 Task 历史的 Coder/QA/Reviewer 使用同一 agent_id | `AssignmentConflict` |
 | AgentRunAllocation 缺 Agent/Model/Context/Prompt/Spec/tool policy 任一归因 | Schema 拒绝 |
 | v0.1 `agents/` project layout | ProjectWorkspace v0.2 拒绝，不自动改写旧 sidecar |
+| waiting/future retry/closed WorkItem | Scheduler 返回 typed rejection，不创建 Assignment/Lease |
+| batch 内新 Lease 将导致 capacity 超限 | 后续 WorkItem 返回 `CAPACITY_EXHAUSTED` |
+| route 无显式 context capacity 或没有满足 tier 的 route | ModelRouter typed refusal，不能猜测 |
+| ProjectProfile 遇到 symlink escape、非 UTF-8 rule、revision mismatch | typed error，不返回 partial profile |
+| 结构化规范冲突 | `SpecCompilation.status=CONFLICT` + `WAITING_HUMAN`；不按层级静默覆盖 |
+| resolution 尝试放宽 hard safety 或缺 evidence | `SpecResolutionRejected` |
+| runtime workspace 重叠、manifest/profile/binding 漂移 | RuntimeWorkspace typed conflict/corruption |
+| allocation 的 Lease 过期或任一 task/agent/model/context/spec 身份不一致 | `RuntimeAllocationError` |
 
 ### 10.3 Good / Base / Bad
 
@@ -252,8 +266,10 @@ ModelPolicy、全局 WorkQueue 和绩效属于组织 workspace。
 - `tests/workforce/test_contracts.py` 覆盖 organization identity、risk floor、waiting reason、lease
   window、自审冲突、run attribution 和 Python ↔ JSON Schema；
 - `tests/project_workspace/` 与 `tests/contracts/` 覆盖 assignments layout v0.2 和 legacy agents 拒绝；
-- T019 实现 Scheduler 后必须新增 capacity aggregate、Lease release/expiry、priority aging、
-  no-self-review 和 deterministic ModelRouter 测试。
+- `tests/scheduling/` 覆盖 capacity aggregate、Lease release/expiry、priority/age/risk、batch 新 Lease、
+  no-self-review、deterministic ModelRouter 和 typed refusal；
+- `tests/project_profile/`、`tests/spec_compiler/`、`tests/runtime_workspace/` 覆盖跨语言发现、规则
+  完整性、人工冲突治理、workspace 隔离和 allocation cross-object guards。
 
 ### 10.5 Wrong vs Correct
 

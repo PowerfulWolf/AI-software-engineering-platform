@@ -31,7 +31,9 @@ TaskOrchestrator，不是团队成员本体。
 
 同一 Task 历史中的 Coder、QA、Reviewer assignment 必须使用不同 `agent_id`。一个 Agent 可以
 持有多个不同 Task 的 Lease，但 active Lease 总量不能超过 `max_parallel_assignments`，且各 Run
-不得共享 Context、worktree、Artifact lineage 或可变模型会话。该容量聚合守卫和持久化属于 T019。
+不得共享 Context、worktree、Artifact lineage 或可变模型会话。T019 的
+`active_capacity_by_agent` 和 `PortfolioScheduler` 已实现 capacity aggregate、自审拒绝与 batch
+内新 Lease 占用；决策持久化属于后续 WorkQueue application service。
 
 ModelPolicy 必须覆盖 `low/normal/high/critical` 全部 RiskTier，且每个最低 BrainTier 都有 eligible
 route。ModelRouter 选择最小满足质量/风险约束的 route，并记录 reasons；模型升级依据测试失败、
@@ -73,13 +75,17 @@ ADR 不由 `Task.status == DONE` 单独决定。`EvaluationEngine` 还要求最�
 初始化先在 registry root 下建立隐藏 staging、写入并 `fsync` manifest，再以目录 rename 发布。
 同一绑定重放返回首次 manifest；Project ID collision、registry symlink、目标项目内 sidecar、缺失
 project、manifest digest/Schema/path mismatch 或 layout 缺失均 fail closed。注册不复制源码，也不
-在目标项目创建 `.ase`、数据库、Agent 日志、Artifact 或 Evidence。T022 自动装配 Runtime 前，
-外部项目必须把 Runtime paths 显式配置到 `ProjectWorkspace.directory(...)` 下。
+在目标项目创建 `.ase`、数据库、Agent 日志、Artifact 或 Evidence。T022 的 Python
+`RuntimeWorkspaceBinding` 已能把 Runtime paths 固定到 `ProjectWorkspace.directory(...)` 下；
+当前 CLI 自动装配尚未接入，CLI 配置仍必须显式使用这些 sidecar paths。
 
-AgentProfile、ModelPolicy、全局 WorkQueue 和团队绩效位于组织 workspace。项目原生规范只读
-发现并以 URI/hash 引用；若它与平台工程规范或 Task 约束冲突，未来 `SpecCompiler` 必须产生
-`SPEC_CONFLICT`，使 WorkItem 进入 `WAITING_HUMAN` 并释放 Lease。只有决定终止本次交付时 Task
-才进入 `BLOCKED`。hard safety policy 不允许项目规范放宽。
+AgentProfile、ModelPolicy、全局 WorkQueue 和团队绩效位于组织 workspace。T020 的 ProjectProfile
+只读发现语言、构建、VCS 和原生规范来源并记录 URI/hash；T021 的 `SpecCompiler` 对显式结构化
+规则产生 `SPEC_CONFLICT` 和 `WAITING_HUMAN` route，人工 resolution 以不可变 SHA 记录。
+Markdown 正文不会被模型猜测式解析。只有决定终止本次交付时 Task 才进入 `BLOCKED`；hard
+safety policy 不允许项目规范放宽。正式 wire contracts 是
+`project-profile.schema.json`、`spec-conflict.schema.json`、`spec-resolution.schema.json` 与
+`runtime-workspace-binding.schema.json`。
 
 ## 1.2 Agent Run 输入/输出契约
 

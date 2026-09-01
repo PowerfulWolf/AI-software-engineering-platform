@@ -19,9 +19,10 @@ NEW → PLANNING → IMPLEMENTING → QA → REVIEW → DONE
                                   ↘ FAIL/REJECT → IMPLEMENTING
 ```
 
-当前 Runtime 一次仍只推进一个 Task；T018 仅建立组织级 workforce 契约，T019 才实现有界
-PortfolioScheduler/ModelRouter。未来可以并发多个彼此隔离的 Task，但单个 Task 内的角色不能
-并行或跳步。允许 `BLOCKED` 和 `FAILED` 终态。禁止在 v0.1 引入：
+当前 `RuntimeSession` 一次仍只推进一个 Task；T019 已实现纯、确定、可重放的有界
+PortfolioScheduler/ModelRouter 决策，尚未实现持久化 WorkQueue application service。组织层可以
+并发多个彼此隔离的 Task，但单个 Task 内的角色不能并行或跳步。允许 `BLOCKED` 和 `FAILED`
+终态。禁止在 v0.1 引入：
 
 - 单 Task 内复杂 DAG、并行 Coder/QA/Reviewer、动态角色创建；
 - 向量数据库、通用 RAG 平台、消息队列、Temporal/Celery/Kafka；
@@ -39,12 +40,18 @@ Assignment、Task/StateEvent、Context、Artifact、Evidence、Evaluation、Hand
 只能写入该 sidecar；不得在目标项目创建 `.ase`、AI 日志或数据库，也不得默认复制源码。
 AgentProfile、ModelPolicy、全局 WorkQueue 和团队绩效属于组织 workspace，不复制进项目 sidecar。
 
+T022 的 `RuntimeWorkspaceBinding` 是 Python composition seam：它将组织 workspace、项目 sidecar、
+ProjectProfile、CompiledSpec 和 RuntimePaths 绑定，并校验 Task.repository 精确等于 project_root。
+当前 CLI 仍要求显式提供 sidecar paths；不得把 Python seam 描述成 CLI 已自动完成项目发现。
+
 目标项目自身的 `AGENTS.md`、`CONTRIBUTING`、README、CI、`.editorconfig`、`.trellis/spec/` 等
 是 project-native rules，必须只读发现、记录 URI/hash 并纳入 Context。平台 sidecar 不能悄悄
 覆盖它们。平台 hard safety policy（无自我批准、无 secret 泄露、无越权命令/路径）不可被项目
 规范放宽；工程约定或 Task 约束发生冲突时生成 `SPEC_CONFLICT`，WorkItem 进入
 `WAITING_HUMAN`、释放 Lease 并交人工；只有决定终止本次交付时 Task 才进入 `BLOCKED`。
 人工决定必须写入 `HumanActionEvent`/resolution artifact；不能只修改聊天记录或让 Agent 自行选边。
+`ProjectProfile` 只发现语言、构建系统、VCS 与原生规则来源，不猜测测试入口；Markdown 规范正文
+保持 URI/hash 引用，只有显式结构化 `SpecRule` 才参与自动冲突判断。
 
 后续可选的 role Git worktree 是临时代码 checkout，不是 AI metadata workspace；逻辑项目仍由
 给定 `project_root` 绑定。可视化只读取 sidecar 的 durable events/artifacts/evidence 和目标项目

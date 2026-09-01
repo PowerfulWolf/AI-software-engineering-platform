@@ -32,6 +32,30 @@ _Avoid_: Lock, ownership
 The schedulable representation of a Task, carrying priority, required capabilities, risk, availability, and waiting state independently from delivery status.
 _Avoid_: Task status, queue message
 
+**Project Profile**:
+An immutable, integrity-checked observation of one project's language markers, build systems, VCS revision, and project-native rule sources. It records facts and URI/hash references; it does not guess test commands or interpret Markdown semantics.
+_Avoid_: Generated project policy, Agent memory
+
+**Compiled Spec**:
+The deterministic set of explicit structured organization, project, and Task rules admitted for one project delivery after conflict checks. It is injected into Context as one required, hash-addressed source.
+_Avoid_: Prompt prose, merged Markdown
+
+**Spec Conflict**:
+An immutable record that two or more applicable structured rules cannot be safely combined. Engineering conflicts route the Work Item to `WAITING_HUMAN`; hard safety rules cannot be relaxed.
+_Avoid_: Warning, Agent choice
+
+**Spec Resolution**:
+An evidence-backed human decision that resolves or terminates one Spec Conflict without rewriting its history.
+_Avoid_: Chat approval, silent priority override
+
+**Organization Workspace**:
+The external durable root owned by the AI engineering organization for Agent Profiles, Model Policies, Work Items, Leases, and metrics. It never lives inside or belongs to a target project.
+_Avoid_: Project workspace, source checkout
+
+**Runtime Workspace Binding**:
+The integrity-checked composition fact connecting one Organization Workspace, one Project sidecar, one Project Profile, fixed Runtime paths, and the exact target project root.
+_Avoid_: Current working directory, CLI defaults
+
 **Model Policy**:
 An organization-owned rule set that defines eligible models, a default Brain Tier, risk floors, and escalation signals for Agent Runs.
 _Avoid_: Agent model, provider config

@@ -34,9 +34,10 @@
 | 权限越界 | `BLOCKED` | policy decision、命令/路径、日志 |
 | 需求歧义 | WorkItem → `WAITING_HUMAN` | 问题、受影响验收标准、恢复条件 |
 
-当前 T010 尚未接入 WorkItem，因此 Runtime 仍可能把这条路线映射为终态 `BLOCKED`；T019 必须
-替换该兼容行为。只有人类决定终止，或等待超过明确治理期限并按 policy 关闭交付时，Task 才
-进入 `BLOCKED`。
+当前 `RetryingOrchestrator` 尚未接入持久化 WorkItem application service，因此该兼容入口仍可能
+把等待映射为终态 `BLOCKED`。T019 已提供正确的纯调度语义，T021 已提供规范冲突的
+`WAITING_HUMAN` route；后续 composition 必须持久化并使用它们。只有人类决定终止，或等待超过
+明确治理期限并按 policy 关闭交付时，Task 才进入 `BLOCKED`。
 
 ## 4. 升级内容
 
@@ -57,6 +58,7 @@
 - `BlockedResult` 包含 classification、reason、attempt、Artifact IDs 和完整 event IDs，
   同时追加 `BLOCKED` StateEvent；内部契约破坏追加 `FAILED` 后保留异常现场。
 
-该实现仍是单 Task、串行、进程内控制循环，因此暂时把部分等待映射为终态 `BLOCKED`。T019
-引入 WorkItem/Lease 后会替换这项兼容行为；单 Task 内仍不引入复杂 DAG 或角色并行，retry 次数
-上限继续由 Task.max_attempts 约束。
+该实现仍是单 Task、串行、进程内控制循环，因此暂时把部分等待映射为终态 `BLOCKED`。T019–T022
+已经建立 WorkItem/Lease、等待路由和 Runtime allocation seams；持久化队列 composition 接入后
+才能移除兼容行为。单 Task 内仍不引入复杂 DAG 或角色并行，retry 次数上限继续由
+Task.max_attempts 约束。

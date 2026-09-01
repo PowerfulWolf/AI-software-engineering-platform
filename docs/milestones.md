@@ -1,12 +1,13 @@
 # v0.1 开发里程碑与第一批可执行任务
 
-> 实施状态：T001–T018 已完成，T019 开始实现组织级 Scheduler/ModelRouter；
-> 目标项目与外置 AI workspace 已有稳定绑定。M0–M4 的
+> 实施状态：T001–T022 已完成；M5 已通过组织级 Scheduler/ModelRouter、ProjectProfile、
+> SpecCompiler 与 Runtime workspace binding 达到退出条件。目标项目与外置 AI workspace 已有
+> 稳定绑定。M0–M5 的
 > v0.1 核心库退出条件已通过自动化测试验证。T014 提供配置驱动的串行运行入口，T015 提供
 > fail-closed 命令执行端口，T016 将其绑定到 role worktree 生命周期。
 >
 > 已完成阶段、逐任务验证基线和提交证据见
-> [`docs/archive/2026-09-01-v0.1-foundation-t001-t017.md`](archive/2026-09-01-v0.1-foundation-t001-t017.md)。
+> [`docs/archive/2026-09-01-t019-t022-organization-runtime.md`](archive/2026-09-01-t019-t022-organization-runtime.md)。
 
 ## 里程碑
 
@@ -45,11 +46,16 @@ Agent 由组织长期拥有，通过 Assignment/Lease 服务多个 Project；模
 进入外置 sidecar，AgentProfile/ModelPolicy/WorkQueue 留在组织 workspace。项目规范冲突进入
 `WAITING_HUMAN` 并释放 Lease，禁止 Agent 静默选择。
 
+退出条件：调度和模型选择可确定重放；ProjectProfile 只读发现项目事实；结构化规范冲突必须
+进入人工 resolution；Runtime 可从组织/项目 workspace 解析完整 AgentRunAllocation，且所有
+sidecar 路径与目标源码目录分离。T019–T022 已满足这些条件。
+
 ### M6 — 可执行交付
 
 将受控命令、Git inspection、模型 tool protocol 和 evidence capture 接入真实 Coder/QA/Reviewer
 运行，完成一个目标项目的可复核交付；单 Task 内仍保持串行，不自动 merge 保护分支。组织层
-可在 T019 后有界并发多个相互隔离 Task。
+可在 T019 后有界并发多个相互隔离 Task。T019 当前提供纯决策 seam；持久化 WorkQueue 与并发
+application service 是 M6 的组合工作，不引入分布式队列。
 
 ### M7 — Agent 工作可视化
 
@@ -91,8 +97,9 @@ Handoff，不成为第二个状态写入者。详细设计见 [`docs/visualizati
 
 ## 第一批任务的执行顺序
 
-`T001 → ... → T017 → T018 → T019 → T020 → T021 → T022 → T023 → T024 → T025 → T026 → T027`。
+已完成：`T001 → ... → T022`。当前剩余顺序：
+`T023 → T024 → T025 → T026 → T027`。
 
-每完成一个任务，都先运行 contract tests，再更新 `.trellis/spec/`。T019 只实现单进程、有界、
-Lease 驱动的跨 Task 调度；禁止把单 Task 改成并行 DAG，也不引入消息队列或向量库。可视化必须
-先消费 durable facts，不能反向驱动 Agent。
+每完成一个任务，都先运行 contract tests，再更新 `.trellis/spec/`。T019 保持单进程、有界、
+Lease 驱动的纯跨 Task 调度决策；禁止把单 Task 改成并行 DAG，也不引入消息队列或向量库。
+可视化必须先消费 durable facts，不能反向驱动 Agent。

@@ -18,7 +18,9 @@ WorkQueue
   → TaskOrchestrator.run_task(task_id)
 ```
 
-当前代码只实现最后一层串行 TaskOrchestrator；T019 实现前面的 Scheduler/ModelRouter。
+T019 已实现前面的纯 Scheduler/ModelRouter 决策，T022 已实现将已持久化 workforce、CompiledSpec
+和 workspace binding 解析为 `AgentRunAllocation + AgentDefinition`。当前尚缺持久化 WorkQueue
+循环与 CLI composition，因此 `RuntimeSession` 仍一次显式运行一个 Task。
 
 ## 2. 核心流程
 

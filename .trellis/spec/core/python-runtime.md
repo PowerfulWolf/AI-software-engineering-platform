@@ -1407,3 +1407,201 @@ allocation 的唯一 Python 领域入口；正式 wire contract 是 `schemas/wor
 - `tests/contracts/test_json_schema_contracts.py` 验证所有 Schema draft 合法和 project layout drift；
 - 修改这些跨层字段必须同步 CONTEXT、ADR、README、docs、AGENTS 和 core specs，并运行全量
   pytest、Ruff、strict mypy、offline build 与 diff check。
+
+## 19. T019–T022 Organization Scheduling, Spec Governance, and Runtime Binding
+
+### 19.1 Scope and files
+
+- `scheduling/portfolio.py` 与 `scheduling/model_router.py`：无 I/O、可重放的 Assignment/Lease 与
+  run-scoped model 决策；
+- `project_profile.py`：只读发现语言、build system、VCS 和 project-native rule sources；
+- `spec_compiler.py`：结构化三层规则、冲突、人工 resolution 与不可变文件记录；
+- `runtime_workspace.py`：organization workspace、project binding、workforce record 和
+  `AgentRunAllocation` composition；
+- `runtime.py`：允许注入 resolved AgentDefinition 与 bound project root，同时保持旧
+  RuntimeConfig 兼容入口；
+- wire contracts：`project-profile.schema.json`、`spec-conflict.schema.json`、
+  `spec-resolution.schema.json`、`runtime-workspace-binding.schema.json`。
+
+本阶段不实现分布式队列、CLI 自动 workspace binding、模型 tool loop 或证据采集。T019 的
+Scheduler 是 pure decision seam；调用方负责将决策写入后续 durable WorkQueue/Lease ports。
+
+### 19.2 Signatures
+
+```python
+active_capacity_by_agent(agents, leases, work_items=(), *, at) -> dict[AgentId, int]
+PortfolioScheduler.match(work_item, role, agents, active_leases, assignments=(), *,
+                         now, attempt=1, work_items=()) -> AssignmentDecision
+PortfolioScheduler.schedule(work_items, role, agents, active_leases, assignments=(), *,
+                            now, attempt=1) -> tuple[AssignmentDecision, ...]
+ModelRouter.route(demand, agent, policy, *, now) -> ModelRoutingDecision
+ModelRouter.select(demand, agent, policy, *, now) -> ModelSelection
+
+ProjectProfile.discover(project_root, *, project_id=None, observed_at=None,
+                        revision=None) -> ProjectProfile
+discover_project_profile(project_root, *, project_id=None, observed_at=None,
+                         revision=None) -> ProjectProfile
+
+SpecCompiler.compile(profile, task, rules, *, compiled_at,
+                     resolutions=()) -> SpecCompilation
+SpecResolution.create(conflict, *, action, actor, rationale, evidence,
+                      resolved_at, selected_rule_id=None) -> SpecResolution
+FileSpecRecordStore.put_conflict(conflict) -> SpecConflict
+FileSpecRecordStore.put_resolution(resolution) -> SpecResolution
+
+OrganizationWorkspace.initialize(root, *, organization_id,
+                                 created_at) -> OrganizationWorkspace
+OrganizationWorkspace.open(root, *, organization_id=None) -> OrganizationWorkspace
+RuntimeWorkspaceBinder.bind(organization, project, profile, *,
+                            bound_at) -> RuntimeWorkspaceBinding
+RuntimeWorkspaceBinding.compose_runtime_config(config, compiled_spec) -> RuntimeConfig
+RuntimeWorkspaceBinding.validate_task_repository(repository) -> Path
+FileOrganizationWorkforceStore.put_agent(profile) -> AgentProfile
+FileOrganizationWorkforceStore.put_policy(policy) -> ModelPolicy
+RuntimeWorkforceResolver.resolve(*, work_item, assignment, lease, selection,
+                                 context_manifest_id, compiled_spec,
+                                 allocated_at) -> RuntimeAgentRun
+RuntimeSession(config, *, agent_adapter=None, agent_definitions=None,
+               project_root=None)
+```
+
+### 19.3 Contracts and invariants
+
+#### Scheduling and model routing
+
+- `match/schedule/route` 不读取全局 clock、不写 store、不迁移 TaskStatus；所有时间由调用方显式传入；
+- WorkItem 必须 READY，或 RETRY_SCHEDULED 且 `available_at <= now`；waiting/closed/future work 返回
+  typed rejection，不创建 Assignment/Lease；
+- active capacity 只统计未过期、未释放、且不属于 waiting WorkItem 的 Lease；未知 Agent Lease
+  仍计入 snapshot，不能借 malformed input 隐藏占用；
+- batch scheduling 按 ready、priority、risk、age、TaskId 稳定排序，新产生 Lease 立即计入后续
+  capacity；Assignment/Lease ID 由业务 identity 稳定生成；
+- 同一 Task 历史的 Coder/QA/Reviewer 不能由同一 Agent 承担；rejection 保留每个 candidate 的
+  machine-readable 原因；
+- ModelRouter 先应用 policy default/risk floor，再根据 planned files、affected layers、context
+  tokens、历史 failure/QA/Review rejection 和 critical path 客观升级一档；
+- route context capacity 由 composition 明确声明。非空 Context 遇到未声明容量时 fail closed，
+  不能假定无限窗口；选择最小满足 tier/capacity 的稳定 route，并记录 reasons。
+
+#### ProjectProfile and SpecCompiler
+
+- ProjectProfile 遍历目标根目录时不执行项目命令、不跟随逃逸 symlink、不读取 `.git` 内容作为
+  source text；语言/build/VCS 未知必须记录 UNKNOWN/empty facts，不猜测；
+- native rule source 必须是 root-relative POSIX path、`project://<project_id>/<path>` URI、
+  UTF-8 content SHA 和 source revision；profile digest 排除 `observed_at`，相同项目事实可重放；
+- ProjectProfile 只发现 rule source，不把 Markdown 自然语言自动转换为 SpecRule，也不推断
+  test entrypoint；
+- SpecCompiler 至少需要一个 `PLATFORM_HARD` rule，并自动加入 Task 的显式 constraints；rule source
+  必须属于 exact ProjectProfile/Task；
+- 同 scope/key 的不兼容结构化值产生 immutable SpecConflict；层级或 priority 只用于稳定排序，
+  不用于静默解决冲突；
+- 未解决 conflict 返回 `SpecCompilation.status=CONFLICT` 和 `WaitingHumanRoute`；不得产生
+  runnable CompiledSpec；
+- SpecResolution 必须带 actor、rationale、evidence 和 exact conflict identity；hard safety conflict
+  只能保留 hard rule 或终止，不能选择较弱规则；
+- conflict/resolution store 使用 canonical JSON + SHA、atomic rename、immutable put；相同 identity
+  等价重放幂等，不同正文复用 identity 拒绝。
+
+#### Runtime workspace and allocation
+
+- Organization workspace 固定包含 `organization.json`、`agents/`、`model-policies/`、`work-items/`、
+  `leases/`、`metrics/`；初始化 staging + fsync + atomic rename，existing manifest 重开须完整校验；
+- organization root、project root、project sidecar 两两不得重叠。Project sidecar 继续使用 T017 v0.2
+  layout，Runtime 固定映射 `state/state.sqlite3`、`artifacts/`、`contexts/`、`evaluations/` 和
+  `handoffs/`；
+- binding 在 sidecar 的 `profile/project-profile.json` 与 `policy/runtime-workspace-binding.json`
+  保存不可变记录；重开时校验 organization/project manifest、profile digest、binding digest 和
+  当前 project facts，任一漂移 fail closed；
+- `compose_runtime_config` 只接受同 project 的完整 CompiledSpec，将其作为唯一
+  `compiled.spec` ContextSource 注入；重复 source ID 拒绝；
+- workforce store 只在 organization workspace 保存 AgentProfile/ModelPolicy，envelope 和 payload
+  SHA 都必须匹配；Project 不能复制 Agent 身份；
+- resolver 必须同时验证 WorkItem、RoleAssignment、active Lease、AgentProfile、ModelPolicy、
+  ModelSelection、CompiledSpec、persisted Context 和 role/attempt/task/project identity；Context 必须
+  含 exact CompiledSpec URI/content SHA；
+- 成功解析返回 `RuntimeAgentRun(allocation, agent_definition, code_root)`；tool policy ref 从 resolved
+  permissions canonical hash 派生，run ID 从 assignment/context/model/prompt/spec/policy identity
+  稳定派生；
+- bound RuntimeSession 运行前要求 `Task.repository == project_root`。注入 definitions 必须覆盖四个
+ 角色且 role/key/Agent ID 唯一；多模型 case identity 使用稳定 model-set digest，不能假称单模型。
+
+### 19.4 Validation and error matrix
+
+| 输入/状态 | 检测点 | 结果 |
+|---|---|---|
+| naive scheduler/router/allocation time | public boundary | `SchedulerInputError`/`ValueError`/`RuntimeAllocationError` |
+| waiting/closed/future WorkItem | `PortfolioScheduler.match` | REJECTED + stable code，无 Assignment/Lease |
+| Agent inactive/role mismatch/capability missing/capacity exhausted | Scheduler | 对应 typed rejection，继续考虑其他 Agent |
+| 同 Task 跨 delivery role 复用 Agent | independence guard | `SELF_REVIEW` rejection |
+| batch 重复 Task ID | `schedule` | `SchedulerInputError` |
+| ModelPolicy/Agent mismatch 或没有 tier/capacity route | ModelRouter | REJECTED + `ModelRoutingRefusal`；`select` 抛 `ModelRoutingRejected` |
+| root 缺失、symlink escape、非 UTF-8 rule、revision mismatch | ProjectProfile | typed ProjectProfile error，不返回 partial profile |
+| 缺 PLATFORM_HARD、rule source 与 profile/task 不符 | SpecCompiler | `HardPolicyMissing`/`SpecSourceMismatch` |
+| 未解决结构化冲突 | SpecCompiler | CONFLICT + WAITING_HUMAN route，无 CompiledSpec |
+| resolution 缺 evidence、引用未知 conflict、放宽 hard safety | resolution/compile | `SpecResolutionRejected` |
+| immutable spec record 被改写或磁盘 digest 不符 | FileSpecRecordStore | conflict/corruption typed error |
+| organization/project/sidecar overlap 或 manifest/layout 漂移 | workspace open/bind | RuntimeWorkspace conflict/corruption |
+| current project facts 与 persisted profile 不同 | binding validate | `RuntimeWorkspaceConflict` |
+| Task.repository 与 binding project root 不同 | Runtime binding/session | `RuntimeWorkspaceConflict`/`RuntimeConfigurationError` |
+| Lease 过期、selection policy/model 不匹配、Context 缺 compiled spec | resolver | `RuntimeAllocationError`，Agent 不启动 |
+
+### 19.5 Good / Base / Bad
+
+- **Good**：两个 READY WorkItem 以同一显式 clock 调度；第一个新 Lease 被第二个 capacity check
+  观察；每个 run 使用独立 Assignment、Context、CompiledSpec、tool policy 和 model selection；
+- **Base**：本地临时 Git 目录 + Markdown/manifest fixtures + fake adapter 即可验证全部组合，不需要
+  provider 网络、容器、消息队列或数据库服务；
+- **Bad**：Scheduler 内直接写 TaskStatus；把未知 context window 当无限；按“平台规则优先”静默
+  吞掉项目冲突；在目标项目写 `.ase`；让 Runtime 用过期 Lease 或不含 exact CompiledSpec 的 Context。
+
+### 19.6 Tests required
+
+- `tests/scheduling/`：readiness、priority/risk/age、capacity aggregate、expiry/release/waiting、batch
+  新 Lease、no-self-review、deterministic IDs、risk/complexity/failure/context routing 和 refusals；
+- `tests/project_profile/`：Python/Java/C++/Go/TypeScript markers、multiple build systems、Git revision、
+  native rules、stable digest、unknown facts、symlink/UTF-8/revision fail-closed；
+- `tests/spec_compiler/`：clean compile、Task constraints、conflict route、hard safety、resolution evidence、
+  record immutability/corruption、CompiledSpec ContextSource；
+- `tests/runtime_workspace/`：atomic organization layout、overlap/corruption、binding reopen/profile drift、
+  fixed paths、workforce envelopes、allocation cross-object guards、exact CompiledSpec Context 和 bound
+  RuntimeSession repository；
+- `tests/contracts/`：四个新 Schema 与 Python model 正反例；
+- 全量 pytest、Ruff check/format、strict Mypy、offline build 和 `git diff --check`。
+
+### 19.7 Wrong vs Correct
+
+#### Wrong
+
+```python
+# Hidden mutation, guessed policy precedence, and project pollution.
+task.status = "QA"
+agent = first_agent_with_capacity()
+model = "largest-model"
+write_json(project_root / ".ase" / "profile.json", guessed_profile)
+compiled = {**organization_rules, **project_rules}
+```
+
+#### Correct
+
+```python
+decision = scheduler.match(work_item, role, agents, active_leases, assignments, now=clock.now())
+model_decision = router.route(demand, agent, policy, now=clock.now())
+profile = ProjectProfile.discover(project_root, project_id=project.project_id)
+compilation = SpecCompiler().compile(profile, task, rules, compiled_at=clock.now())
+if compilation.waiting_route is not None:
+    persist_waiting_human(compilation.waiting_route)
+else:
+    binding = binder.bind(organization, project, profile, bound_at=clock.now())
+    runtime_run = resolver.resolve(
+        work_item=work_item,
+        assignment=decision.assignment,
+        lease=decision.lease,
+        selection=model_decision.selection,
+        context_manifest_id=context.context_id,
+        compiled_spec=compilation.compiled_spec,
+        allocated_at=clock.now(),
+    )
+```
+
+后者把调度、规范、workspace 和运行身份都保持为可验证事实；任何边界失败都在 Agent 启动前
+fail closed，且没有把组织元数据写进目标代码目录。

@@ -18,8 +18,8 @@
 
 ## 当前进度（2026-09-01）
 
-T001–T018 已完成。自动化质量基线为 **303 个测试**、Ruff 检查与格式检查通过、strict Mypy
-检查 **96 个源码文件**、Python package build 通过。
+T001–T022 已完成。自动化质量基线为 **344 个测试**、Ruff 检查与格式检查通过、strict Mypy
+检查 **112 个源码文件**、Python package build 通过。
 
 | 阶段 | 状态 | 已交付结果 |
 |---|---|---|
@@ -29,12 +29,12 @@ T001–T018 已完成。自动化质量基线为 **303 个测试**、Ruff 检查
 | M3 串行 Agent Loop | 已完成 | Fake/真实 AgentAdapter、`Coder → QA → Reviewer`、有界重试与恢复 |
 | M4 Evaluation + Handoff | 已完成 | Evaluation events、指标/ADR 重算、DONE/BLOCKED handoff、CLI/runtime |
 | 执行安全边界 | 已完成 | fail-closed 命令执行端口、role worktree 执行生命周期 |
-| M5 组织 Workforce 与任意项目接入 | 进行中 | T017 sidecar + T018 Agent/Assignment/Lease/ModelPolicy/RunDemand；Scheduler 与 ProjectProfile 待接入 |
-| M6 可执行交付 | 待开始 | ModelRouter、Agent tool protocol、evidence capture、跨语言真实项目 E2E |
+| M5 组织 Workforce 与任意项目接入 | 已完成 | sidecar、Workforce、Scheduler/ModelRouter、ProjectProfile、SpecCompiler、Runtime workspace binding |
+| M6 可执行交付 | 进行中 | evidence capture、Agent tool protocol、跨语言真实项目 E2E |
 | M7 Agent 可视化 | 待开始 | 只读投影/API、Task board、timeline、Agent detail、Human inbox |
 
 完整阶段事实、任务清单和提交证据见
-[`docs/archive/2026-09-01-v0.1-foundation-t001-t017.md`](docs/archive/2026-09-01-v0.1-foundation-t001-t017.md)；
+[`docs/archive/2026-09-01-t019-t022-organization-runtime.md`](docs/archive/2026-09-01-t019-t022-organization-runtime.md)；
 后续路线见 [`docs/milestones.md`](docs/milestones.md)。
 
 ## MVP 边界
@@ -92,7 +92,11 @@ ai-software-engineer/
 │   ├── context/                      # 确定、脱敏、预算受限的 Context Builder/Router
 │   ├── agents/                       # AgentAdapter、Fake 与 OpenAI-compatible adapter
 │   ├── orchestration/                # 串行 runner、Context composition 与状态机
+│   ├── scheduling/                   # 纯 PortfolioScheduler 与 run-scoped ModelRouter
 │   ├── runtime.py                    # RuntimeConfig、角色路由与 task run composition
+│   ├── runtime_workspace.py          # 组织/项目 workspace 绑定与 workforce 解析
+│   ├── project_profile.py            # 技术栈、VCS 与项目原生规则只读发现
+│   ├── spec_compiler.py              # 三层规范编译、冲突与人工 resolution
 │   ├── execution.py                  # worktree 内受控 argv/subprocess 执行端口
 │   ├── role_workspace.py             # Git worktree + executor 生命周期组合
 │   ├── project_workspace.py           # 目标项目与外置 AI sidecar workspace 绑定
@@ -128,7 +132,11 @@ ai-software-engineer/
 │   ├── handoff-bundle.schema.json
 │   ├── runtime-config.schema.json
 │   ├── project-workspace.schema.json
-│   └── workforce.schema.json
+│   ├── workforce.schema.json
+│   ├── project-profile.schema.json
+│   ├── spec-conflict.schema.json
+│   ├── spec-resolution.schema.json
+│   └── runtime-workspace-binding.schema.json
 ├── .trellis/
 │   ├── README.md
 │   └── spec/core/
@@ -142,6 +150,10 @@ ai-software-engineer/
 │   ├── orchestration/                # 串行交付闭环与状态 checkpoint
 │   ├── evaluation/                   # 事件重放、ADR 与 DONE/BLOCKED handoff
 │   ├── runtime/                      # RuntimeSession 与 fake adapter composition
+│   ├── scheduling/                   # capacity、priority、independence 与模型路由
+│   ├── project_profile/              # 跨语言发现、完整性与路径边界
+│   ├── spec_compiler/                # 冲突、resolution 与不可变记录
+│   ├── runtime_workspace/            # workspace/binding/allocation 组合契约
 │   ├── execution/                    # 命令 allowlist、环境和 timeout 测试
 │   ├── role_workspace/               # role worktree 与 executor 组合测试
 │   └── contracts/                    # Python model ↔ JSON Schema 一致性
@@ -164,23 +176,36 @@ ai-software-engineer/
 
 ```text
 <organization-workspace>/
-├── agents/ model-policies/ work-queue/
-├── leases/ performance/ policies/
-└── projects/                         # Project sidecar registry
+├── organization.json
+├── agents/ model-policies/ work-items/
+└── leases/ metrics/
 ```
 
 项目原生规范会被索引和引用，不会被平台静默覆盖；规范冲突进入人工处理队列。
 
-T018 将 sidecar layout 升级为 v0.2；旧 `agents/` layout 不会被静默改写。CLI 自动绑定组织与
-项目 workspace 将在 T022 接入：
+T018 将 sidecar layout 升级为 v0.2；旧 `agents/` layout 不会被静默改写。T022 提供 Python
+composition seam，将组织 workspace、项目 sidecar、ProjectProfile 与 Runtime 绑定；CLI 自动
+发现与绑定仍是后续入口工作：
 
 ```python
+from datetime import UTC, datetime
+
 from ai_software_engineer.project_workspace import ProjectWorkspaceRegistry
+from ai_software_engineer.project_profile import ProjectProfile
+from ai_software_engineer.runtime_workspace import OrganizationWorkspace, RuntimeWorkspaceBinder
 
 workspace = ProjectWorkspaceRegistry("/path/to/ase-workspaces").register("/path/to/target-project")
+now = datetime.now(UTC)
+organization = OrganizationWorkspace.initialize(
+    "/path/to/ase-organization",
+    organization_id="organization_primary",
+    created_at=now,
+)
+profile = ProjectProfile.discover(workspace.project_root, project_id=workspace.project_id)
+binding = RuntimeWorkspaceBinder().bind(organization, workspace, profile, bound_at=now)
 print(workspace.project_root)  # 实际代码 cwd
 print(workspace.root)  # 外置 AI workspace
-print(workspace.directory("state"))  # SQLite 等平台状态目录
+print(binding.paths.database)  # sidecar/state/state.sqlite3
 ```
 
 ## 推荐的 v0.1 运行形态
@@ -215,8 +240,12 @@ uv run mypy src tests
 - 用 `ase evaluation report` 从 durable facts 重算指标和 ADR；
 - 用 `ase handoff build` 为 `DONE/BLOCKED` Task 生成 JSON + Markdown 交付包；
 - 在 Python application seam 中注册任意本地项目的外置 sidecar workspace；
+- 只读发现语言、构建系统、VCS 和项目原生规范来源，并以 URI/hash 形成 ProjectProfile；
+- 用 SpecCompiler 编译结构化组织/项目/Task 规则，冲突时生成 `WAITING_HUMAN` 路由和不可变 resolution；
 - 用 AgentProfile、WorkItem、RoleAssignment、TaskLease、ModelPolicy、ModelSelection 和
   AgentRunAllocation 表达组织成员、容量和 run-scoped 大脑；
+- 用 PortfolioScheduler/ModelRouter 做确定、可重放的 Assignment/Lease 与模型选择决策；
+- 在 Python application seam 中绑定组织/项目 workspace，并解析 run-scoped AgentDefinition；
 - 复用 Git worktree、Context、Artifact、retry、evaluation 和受控命令执行组件继续开发。
 
 最小 CLI 流程：
@@ -232,14 +261,14 @@ uv run ase handoff build <task-id> \
   --output /path/to/ai-workspace/handoffs
 ```
 
-在 T022 完成 CLI 自动绑定前，外部目标项目的 state、artifact、context、evaluation 和 handoff
-路径必须显式指向 sidecar，避免污染目标项目。配置示例和字段说明见
+当前 CLI 尚未自动发现并绑定 workspace。使用 CLI 时，外部目标项目的 state、artifact、context、
+evaluation 和 handoff 路径仍必须显式指向 sidecar，避免污染目标项目；Python application 可用
+T022 的 `RuntimeWorkspaceBinding.compose_runtime_config(...)` 完成同一装配。配置示例和字段说明见
 [`docs/runtime.md`](docs/runtime.md) 与 [`docs/cli.md`](docs/cli.md)。
 
-当前尚未完成的关键闭环是：PortfolioScheduler/ModelRouter 的持久化调度、自动发现项目技术栈
-与原生规范、人工处理规范冲突、让模型通过受策略约束的 tool protocol 真正编辑/测试项目、
-封存命令/diff/测试证据、跨语言项目 E2E，以及可视化工作台。平台也不会自动 merge 保护分支
-或部署生产环境。
+当前尚未完成的关键闭环是：持久化 WorkQueue 与调度 application service、CLI workspace 自动
+装配、让模型通过受策略约束的 tool protocol 真正编辑/测试项目、封存命令/diff/测试证据、
+跨语言项目 E2E，以及可视化工作台。平台也不会自动 merge 保护分支或部署生产环境。
 
 ## 文档导航
 

@@ -8,7 +8,7 @@ v0.1 解决一个窄而完整的问题：在已有 Git 项目中，把一条需�
 
 - 一个 Task 只绑定一个 repository 和一个 base ref；
 - 一个 TaskOrchestrator 实例一次只推进一个 Task，Task 内角色保持串行；
-- 组织级 PortfolioScheduler 可以在容量允许时并发多个隔离 Task，但当前尚未接入 Runtime；
+- 组织级 PortfolioScheduler 可以为多个隔离 Task 产生有界分配决策；持久化队列循环尚未接入 CLI Runtime；
 - Agent 不直接互相调用，所有交互经过 Orchestrator 和 artifact store；
 - 人类是需求来源和最终升级出口；v0.1 不自动向保护分支 push/merge。
 
@@ -19,7 +19,8 @@ v0.1 解决一个窄而完整的问题：在已有 Git 项目中，把一条需�
 Control Plane 分为两个 seam。`PortfolioScheduler` 管理组织 WorkQueue、Agent 容量、Assignment、
 Lease 和 ModelSelection，但不迁移 Task 交付状态；`TaskOrchestrator` 是唯一可以迁移一个 Task
 状态的模块，负责检查前置条件、启动 Agent、验证 artifact、决定重试或终局升级。T010 的
-`RetryingOrchestrator` 是当前 TaskOrchestrator 实现；T019 才接入前一层 Scheduler/ModelRouter。
+`RetryingOrchestrator` 是当前 TaskOrchestrator 实现；T019 已交付纯 Scheduler/ModelRouter seam，
+由后续 application service 负责持久化其 Assignment、Lease 和 ModelSelection 决策。
 
 ### Knowledge Plane
 
@@ -32,13 +33,17 @@ Lease 和 ModelSelection，但不迁移 Task 交付状态；`TaskOrchestrator` �
 `ProjectProfile`、Assignment/规范、Task/StateEvent、Context、Artifact、Evidence、Evaluation、
 Handoff、run metadata 和日志。T018 的 v0.2 layout 用 `assignments/` 替换 `agents/`，因为 Agent
 身份属于组织而不是项目。manifest 与固定 layout 是后续 Runtime/Context/Visualization
-共享的路径契约，注册过程不会复制源码或在目标项目写入平台文件。
+共享的路径契约，注册过程不会复制源码或在目标项目写入平台文件。T020 的 `ProjectProfile`
+确定性发现语言、构建系统、VCS 和原生规则来源；T022 的 `RuntimeWorkspaceBinding` 将这些事实与
+组织 workspace、固定 RuntimePaths 绑定并在重开时校验完整性。
 
 目标项目已有的 `AGENTS.md`、CONTRIBUTING、README、CI、`.editorconfig`、`.trellis/spec/` 等
 project-native rules 只读发现并以 URI/hash 引用。平台 hard safety policy 不可被覆盖；工程规则
 或任务约束冲突会生成 `SPEC_CONFLICT`，WorkItem 进入 `WAITING_HUMAN` 并释放 Lease，由人工选择
-更新项目规范、平台规范或任务约束；只有决定终止本次交付时 Task 才进入 `BLOCKED`。决定以
-`HumanActionEvent` 和 resolution artifact 持久化，Agent 和 UI 都不能静默选边。
+更新项目规范、平台规范或任务约束；只有决定终止本次交付时 Task 才进入 `BLOCKED`。T021 以
+`SpecConflict`、`WaitingHumanRoute` 和 immutable `SpecResolution` 固化这条边界；决定还应进入
+`HumanActionEvent`，Agent 和 UI 都不能静默选边。Markdown 正文保持 URI/hash 引用，只有显式
+结构化规则参与自动冲突检测。
 
 后续可选的 role worktree 是临时代码 checkout，与 sidecar 元数据分离；逻辑项目绑定仍指向给定
 `project_root`。Agent 工作可视化只从 sidecar durable facts 和目标项目只读 Git inspection 生成
@@ -65,7 +70,9 @@ AgentProfile + WorkItem + Project policy
 ```
 
 同一 Task 历史中的 Coder、QA、Reviewer 必须是不同 Agent；高风险 Task 可以额外要求不同模型
-或 provider。跨 Task 并发只复用 Agent 身份和组织绩效，不复用可变会话或工作区。
+或 provider。跨 Task 并发只复用 Agent 身份和组织绩效，不复用可变会话或工作区。T019 的
+`PortfolioScheduler.match/schedule` 与 `ModelRouter.route` 都是无 I/O 决策函数；T022 的
+`RuntimeWorkforceResolver` 再将已持久化事实解析为 `AgentRunAllocation + AgentDefinition`。
 
 ### Agent Execution Plane
 
@@ -134,7 +141,8 @@ WorkItem + AgentProfile + ModelPolicy
 | Evaluation events | 文件系统 canonical JSON | 一事件一文件，带内部 SHA-256，exact replay 幂等 |
 | Handoff | 文件系统 JSON + Markdown | deterministic ID，等价重建保留首次观察时间 |
 | Project workspace binding | 外置 sidecar `workspace.json` + 固定目录 | 目标项目外置、幂等、与项目路径绑定；不复制源码 |
-| Agent/Model workforce | 组织 workspace（T019 持久化） | AgentProfile、ModelPolicy、WorkQueue 和跨项目绩效，不复制进 Project |
+| Agent/Model workforce | 组织 workspace 文件记录 | T022 原子保存 AgentProfile/ModelPolicy；work-items/leases/metrics 为后续持久化端口 |
+| ProjectProfile / Spec governance | Project sidecar 文件记录 | profile 与 runtime binding 不可变；冲突/resolution 使用带 SHA 的 append-only 记录 |
 | Trellis 规则 | Git 中的 Markdown | 组织知识，评审后变更 |
 
 Task 快照和状态事件的 Python 入口分别是 `Task` 与 `StateEvent`；`SqliteTaskRepository` 使用 `tasks`、`state_events` 两张表。快照正文和事件正文均保留 JSON，便于重启后由 Pydantic 重新校验并按事件 revision 回放。
