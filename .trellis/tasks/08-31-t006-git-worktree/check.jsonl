@@ -1,0 +1,6 @@
+{"path":"AGENTS.md","reason":"Project-wide role permissions, worktree isolation, and no-auto-merge constraints."}
+{"path":".trellis/spec/core/architecture.md","reason":"Repository Plane seam, worktree invariant, and Git validation matrix."}
+{"path":".trellis/spec/core/contracts.md","reason":"Machine policy and role write/command boundaries."}
+{"path":".trellis/spec/core/python-runtime.md","reason":"Python Git adapter, subprocess, typing, and quality contracts."}
+{"path":"docs/git-worktree.md","reason":"Canonical layout, branch, role, cleanup, and recovery rules."}
+{"path":"docs/contracts.md","reason":"AgentPermissions semantics and role capabilities."}

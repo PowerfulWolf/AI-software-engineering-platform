@@ -25,6 +25,12 @@ TaskRepository.get(task_id: TaskId) -> Task
 TaskRepository.append_event(event: StateEvent) -> None
 TaskRepository.list_events(task_id: TaskId) -> tuple[StateEvent, ...]
 TaskRepository.current_revision(task_id: TaskId) -> int
+GitWorkspace.create(spec: WorktreeSpec) -> WorktreeRef
+GitWorkspace.inspect(worktree: WorktreeRef) -> WorktreeSnapshot
+GitWorkspace.remove(worktree: WorktreeRef) -> None
+WorkspacePolicy.authorize_read(path: str | PurePosixPath) -> PurePosixPath
+WorkspacePolicy.authorize_write(path: str | PurePosixPath) -> PurePosixPath
+WorkspacePolicy.authorize_command(arguments: tuple[str, ...]) -> tuple[str, ...]
 ```
 
 这些接口必须是幂等或显式拒绝重复操作；实现不得通过全局可变状态绕过 Task/attempt 关联。
@@ -42,6 +48,9 @@ TaskRepository.current_revision(task_id: TaskId) -> int
 - Task 快照与 StateEvent 必须由 `TaskRepository.append_event` 在同一 SQLite 事务中提交；相同事件正文重放幂等，不同正文复用 ID 拒绝；
 - repository 每个连接开启 foreign keys，数据库使用 WAL；关闭后重新打开必须只依赖持久化 JSON 恢复 Task 与事件序列；
 - 主 checkout 只读，业务代码只能在角色 worktree 产生。
+- role worktree root 必须位于 main checkout 外；Coder branch 与 QA/Reviewer detached candidate 不复用旧 attempt；dirty worktree 不自动清理；
+- repository hook/fsmonitor 禁用，repository-local external checkout filter 在没有更强 sandbox 的 v0.1 中 fail closed；
+- 路径 policy 绑定 worktree root 并检查 lexical + symlink containment，command policy 只接受完整 token prefix 和无 shell syntax 的 argv。
 
 ## 4. Validation & Error Matrix
 
@@ -50,6 +59,9 @@ TaskRepository.current_revision(task_id: TaskId) -> int
 | Task 不符合 Schema | Task repository 边界 | 拒绝创建，不启动 Agent |
 | revision 不存在/不匹配 | Git manager + artifact validator | `BLOCKED`（外部 ref）或 `FAILED`（内部不变量） |
 | context 超预算/含 secret | Context Builder | 脱敏/裁剪；无法满足时 `BLOCKED` |
+| worktree root/role/ref/revision 不合法 | Git manager | typed Git workspace error；不复用或清理现场 |
+| repository hook/filter 可能执行 | Git manager | hook 强制禁用；external filter 拒绝 create |
+| path/command 越权 | WorkspacePolicy | stable policy violation；命令不启动并生成 evidence |
 | artifact Schema/哈希失败 | ArtifactStore | 不入库，不触发状态迁移 |
 | 非法状态迁移 | state machine guard | 事务回滚并记录 invariant error |
 | Agent 超时 | execution adapter | 无 verdict；按 transient 规则重试 |

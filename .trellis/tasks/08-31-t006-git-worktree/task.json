@@ -1,0 +1,10 @@
+{
+  "id": "task_t006_git_worktree",
+  "title": "T006 isolated Git worktrees and workspace policy",
+  "status": "completed",
+  "branch": "ai/task_t006_git_worktree/attempt-1",
+  "base_branch": "main",
+  "scope": "backend",
+  "created_at": "2026-08-31T16:26:07+08:00",
+  "updated_at": "2026-08-31T16:54:00+08:00"
+}
