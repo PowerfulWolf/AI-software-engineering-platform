@@ -15,7 +15,7 @@ v0.1 解决一个窄而完整的问题：在已有 Git 项目中，把一条需�
 
 ### Control Plane
 
-由 Orchestrator、状态机、路由器、预算管理器和审计日志组成。它是唯一可以迁移 Task 状态的组件，负责检查前置条件、启动 Agent、验证 artifact、决定重试或升级。
+由 Orchestrator、状态机、路由器、预算管理器和审计日志组成。它是唯一可以迁移 Task 状态的组件，负责检查前置条件、启动 Agent、验证 artifact、决定重试或升级。T010 的 `RetryingOrchestrator` 复用 T009 串行 runner，只增加有界 retry、attempt checkpoint、BLOCKED/FAILED 路由和重启恢复。
 
 ### Knowledge Plane
 
@@ -49,7 +49,7 @@ Task(JSON)
   → implementation-report + candidate commit → seal/store/read-back
   → QA context(candidate + persisted plan/implementation) → qa-report → seal/store/read-back
   → review context(candidate + persisted plan/implementation/QA) → review-report → seal/store/read-back
-  → DONE | retry Coder | BLOCKED
+  → DONE | retry current role/Coder | BLOCKED | FAILED
 ```
 
 每个箭头都是一个契约边界：输入必须先通过 Schema 校验，输出必须包含 `task_id`、`source_revision` 和可定位 evidence。`FileRunContextBuilder` 只把 ArtifactStore 读回的显式上游 Artifact 编译为 `artifact://<id>` Context source；下游不读取上游 Agent 的未持久化记忆。
@@ -58,7 +58,7 @@ Task(JSON)
 
 | 数据 | v0.1 存储 | 说明 |
 |---|---|---|
-| Task 与状态 | SQLite | 事务性更新，唯一状态写入者是 Orchestrator |
+| Task 与状态 | SQLite | 事务性更新，唯一状态写入者是 Orchestrator；attempt 通过 `record_attempt` 单调 checkpoint |
 | Artifact 索引 | 后续接入 SQLite | T005 先由文件名和 typed `ArtifactRef` 提供按 ID 读取；Orchestrator 阶段再持久化查询索引 |
 | Artifact 正文 | 文件系统 JSON | `artifacts/art_<artifact-id>.json`，临时文件 + 原子 rename |
 | 运行日志 | 文件系统文本 | 脱敏、截断、由 evidence 引用 |

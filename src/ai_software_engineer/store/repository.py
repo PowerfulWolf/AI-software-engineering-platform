@@ -132,9 +132,16 @@ class SqliteTaskRepository:
                 raise InvalidStateEvent(
                     f"Task {event.task_id} is {task.status}, event starts at {event.from_status}"
                 )
+            if event.attempt > task.max_attempts:
+                raise InvalidStateEvent(
+                    f"event {event.event_id} attempt {event.attempt} exceeds Task max_attempts"
+                )
 
             next_task = task.model_copy(
-                update={"status": event.to_status, "updated_at": event.occurred_at}
+                update={
+                    "status": event.to_status,
+                    "updated_at": event.occurred_at,
+                }
             )
             next_revision = revision + 1
             try:
@@ -164,6 +171,29 @@ class SqliteTaskRepository:
                     raise StoreError("Task revision changed while appending state event")
             except sqlite3.IntegrityError as error:
                 raise StoreError("failed to append state event") from error
+
+    def record_attempt(self, task_id: TaskId, attempt: int) -> None:
+        """Durably checkpoint an Agent attempt without inventing a state transition."""
+        if type(attempt) is not int or not 1 <= attempt <= 10:
+            raise StoreError(f"attempt must be between 1 and 10: {attempt}")
+        with self._transaction():
+            row = self._connection.execute(
+                "SELECT id, payload_json FROM tasks WHERE id = ?", (task_id,)
+            ).fetchone()
+            if row is None:
+                raise TaskNotFound(task_id)
+            task = self._decode_task(_text(row, "id"), _text(row, "payload_json"))
+            if attempt > task.max_attempts:
+                raise StoreError(f"attempt {attempt} exceeds Task max_attempts {task.max_attempts}")
+            if attempt <= task.attempts:
+                return
+            next_task = task.model_copy(update={"attempts": attempt})
+            updated = self._connection.execute(
+                "UPDATE tasks SET payload_json = ? WHERE id = ?",
+                (_encode(next_task.to_wire()), task_id),
+            )
+            if updated.rowcount != 1:
+                raise StoreError("Task attempt checkpoint was not written")
 
     def list_events(self, task_id: TaskId) -> tuple[StateEvent, ...]:
         """Return a Task's events in replay order."""

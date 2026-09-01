@@ -18,7 +18,9 @@
 ```text
 NEW ──validate──> PLANNING
 PLANNING ──plan.valid──> IMPLEMENTING
+PLANNING ──non-retryable──> BLOCKED
 IMPLEMENTING ──candidate.ready──> QA
+IMPLEMENTING ──non-retryable──> BLOCKED
 QA ──PASS──> REVIEW
 QA ──FAIL (retryable)──> IMPLEMENTING
 QA ──FAIL (non-retryable/budget exhausted)──> BLOCKED
@@ -43,11 +45,11 @@ build_event(task: Task, to_status: TaskStatus, *, event_id: EventId,
 apply_event(task: Task, event: StateEvent) -> Task
 ```
 
-`validate_transition` 只接受上表中的边；自迁移和终态迁移分别拒绝为 `IllegalTransition`/`TerminalTask`。`build_event` 固定 `actor=orchestrator`，并调用同一 guard；`apply_event` 检查 Task ID、`from_status` 和时间戳，返回新的 immutable Task，不修改输入。Repository 只负责在事务中持久化已通过 guard 的事件，不重复定义状态图。
+`validate_transition` 只接受上表中的边；自迁移和终态迁移分别拒绝为 `IllegalTransition`/`TerminalTask`。`build_event` 固定 `actor=orchestrator`，并调用同一 guard；`apply_event` 检查 Task ID、`from_status` 和时间戳，返回新的 immutable Task，不修改输入。Repository 只负责在事务中持久化已通过 guard 的事件，不重复定义状态图。T010 的 attempt 计数通过 `TaskRepository.record_attempt` 单独 checkpoint，不制造伪造的 self-transition。
 
 ## 4. StateEvent 持久化契约
 
-每次状态变化都由 `schemas/state-event.schema.json` 描述，并通过 `StateEvent` typed model 进入 repository。StateEvent 至少包含 `event_id`、`task_id`、`from_status`、`to_status`、`actor=orchestrator`、`reason`、`artifact_ids`、`source_revision` 和带时区的 `occurred_at`。
+每次状态变化都由 `schemas/state-event.schema.json` 描述，并通过 `StateEvent` typed model 进入 repository。StateEvent 至少包含 `event_id`、`task_id`、`from_status`、`to_status`、`actor=orchestrator`、`attempt`、`reason`、`artifact_ids`、`source_revision` 和带时区的 `occurred_at`。
 
 SQLite 中 Task 快照和 StateEvent 必须在同一个 `BEGIN IMMEDIATE` 事务内写入：事件正文以 JSON 保存，Task `revision` 从 0 开始，每个事件递增 1。相同 `event_id` 和完全相同正文的重放是幂等 no-op；相同 ID 的不同正文必须拒绝，不能覆盖审计记录。
 
@@ -68,6 +70,7 @@ SQLite 中 Task 快照和 StateEvent 必须在同一个 `BEGIN IMMEDIATE` 事务
   "from_status": "QA",
   "to_status": "REVIEW",
   "actor": "orchestrator",
+  "attempt": 1,
   "reason": "qa_passed",
   "artifact_ids": ["art_qa_001"],
   "source_revision": "a1b2c3d",

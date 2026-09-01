@@ -9,8 +9,10 @@ from ai_software_engineer.domain.task import Task
 
 LEGAL_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
     TaskStatus.NEW: frozenset({TaskStatus.PLANNING, TaskStatus.FAILED}),
-    TaskStatus.PLANNING: frozenset({TaskStatus.IMPLEMENTING, TaskStatus.FAILED}),
-    TaskStatus.IMPLEMENTING: frozenset({TaskStatus.QA, TaskStatus.FAILED}),
+    TaskStatus.PLANNING: frozenset(
+        {TaskStatus.IMPLEMENTING, TaskStatus.BLOCKED, TaskStatus.FAILED}
+    ),
+    TaskStatus.IMPLEMENTING: frozenset({TaskStatus.QA, TaskStatus.BLOCKED, TaskStatus.FAILED}),
     TaskStatus.QA: frozenset(
         {TaskStatus.REVIEW, TaskStatus.IMPLEMENTING, TaskStatus.BLOCKED, TaskStatus.FAILED}
     ),
@@ -60,6 +62,7 @@ def build_event(
     reason: str,
     source_revision: str,
     artifact_ids: tuple[ArtifactId, ...] = (),
+    attempt: int = 1,
     occurred_at: datetime,
 ) -> StateEvent:
     """Create an orchestrator-owned event after validating its status edge."""
@@ -70,6 +73,7 @@ def build_event(
         from_status=task.status,
         to_status=to_status,
         actor=AgentRole.ORCHESTRATOR,
+        attempt=attempt,
         reason=reason,
         artifact_ids=artifact_ids,
         source_revision=source_revision,
@@ -88,4 +92,13 @@ def apply_event(task: Task, event: StateEvent) -> Task:
     validate_transition(task, event.to_status)
     if event.occurred_at < task.updated_at:
         raise StaleEvent(f"event {event.event_id} predates Task snapshot")
-    return task.model_copy(update={"status": event.to_status, "updated_at": event.occurred_at})
+    if event.attempt > task.max_attempts:
+        raise StaleEvent(
+            f"event {event.event_id} attempt {event.attempt} exceeds Task max_attempts"
+        )
+    return task.model_copy(
+        update={
+            "status": event.to_status,
+            "updated_at": event.occurred_at,
+        }
+    )

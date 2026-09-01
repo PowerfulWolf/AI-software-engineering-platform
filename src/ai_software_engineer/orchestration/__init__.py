@@ -4,6 +4,15 @@ from ai_software_engineer.orchestration.context import (
     FileRunContextBuilder,
     RunContextBuilder,
 )
+from ai_software_engineer.orchestration.retry import (
+    BlockedResult,
+    RetryAction,
+    RetryClassification,
+    RetryDecision,
+    RetryDeliveryResult,
+    RetryingOrchestrator,
+    RetryResult,
+)
 from ai_software_engineer.orchestration.runner import (
     AgentRunFailed,
     DeliveryContractViolation,
@@ -29,6 +38,7 @@ from ai_software_engineer.orchestration.state_machine import (
 
 __all__ = [
     "AgentRunFailed",
+    "BlockedResult",
     "DeliveryContractViolation",
     "DeliveryResult",
     "FileRunContextBuilder",
@@ -36,6 +46,12 @@ __all__ = [
     "OrchestrationError",
     "OrchestrationIdentityFactory",
     "OrchestratorConfigurationError",
+    "RetryAction",
+    "RetryClassification",
+    "RetryDecision",
+    "RetryDeliveryResult",
+    "RetryResult",
+    "RetryingOrchestrator",
     "RunContextBuilder",
     "SerialOrchestrator",
     "StaleEvent",

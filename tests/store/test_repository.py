@@ -108,6 +108,22 @@ def test_event_timestamp_becomes_task_updated_at(tmp_path: Path) -> None:
         assert repository.get(task.id).updated_at == occurred_at
 
 
+def test_attempt_checkpoint_survives_reopen_without_a_fake_state_transition(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "state.db"
+    task = make_task()
+    with SqliteTaskRepository(database) as repository:
+        repository.create(task)
+        repository.record_attempt(task.id, 2)
+        assert repository.get(task.id).attempts == 2
+        assert repository.current_revision(task.id) == 0
+
+    with SqliteTaskRepository(database) as reopened:
+        assert reopened.get(task.id).attempts == 2
+        assert reopened.list_events(task.id) == ()
+
+
 def test_unknown_task_operations_raise_typed_error(tmp_path: Path) -> None:
     with SqliteTaskRepository(tmp_path / "state.db") as repository:
         with pytest.raises(TaskNotFound):

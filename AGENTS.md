@@ -83,9 +83,11 @@ NEW → PLANNING → IMPLEMENTING → QA → REVIEW → DONE
 ## 失败与重试
 
 - 默认最多 3 个 Coder attempt；Agent timeout/崩溃只按 transient 重试，不产生 verdict；
+- T010 使用 `RetryingOrchestrator` 继续已有 `PLANNING`/`IMPLEMENTING`/`QA`/`REVIEW`
+  checkpoint；每次 Agent 调用前调用 `TaskRepository.record_attempt`，StateEvent 同步记录 attempt；
 - QA `FAIL` 或 Review `REJECT` 必须把原 finding、命令、位置和 evidence ID 路由给 Coder；
 - `INVALID_OUTPUT`、`POLICY_VIOLATION`、需求歧义和预算耗尽不能靠无限重试解决；按 `docs/failure-routing.md` 进入 `BLOCKED`；
-- 状态事件必须带 `from_status`、`to_status`、reason、artifact IDs、source revision，并支持幂等回放。
+- 状态事件必须带 `from_status`、`to_status`、attempt、reason、artifact IDs、source revision，并支持幂等回放。
 
 ## 完成定义（Definition of Done）
 
