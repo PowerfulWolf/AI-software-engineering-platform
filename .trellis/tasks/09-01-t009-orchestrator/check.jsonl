@@ -1,0 +1,5 @@
+{"path":"src/ai_software_engineer/orchestration","reason":"New cross-layer application service and context composition seam."}
+{"path":"src/ai_software_engineer/agents","reason":"Coder revision contract remains safe for other roles."}
+{"path":"tests/orchestration","reason":"Observable state, Artifact and replay evidence coverage."}
+{"path":".trellis/spec/core/index.md","reason":"Core orchestration, persistence, context and Agent invariants."}
+{"path":"docs/orchestration.md","reason":"Happy-path algorithm and fail-closed T009 boundary."}

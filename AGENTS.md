@@ -68,7 +68,8 @@ NEW → PLANNING → IMPLEMENTING → QA → REVIEW → DONE
 - 先写临时文件，Schema 校验和 SHA-256 通过后原子落盘；
 - artifact 不可原地修改，修订使用新 ID + `supersedes`；
 - 所有下游只读取 artifact store，不读取上游 Agent 的隐式会话；
-- `DONE` 必须引用同一 candidate SHA 的 `plan`、`implementation-report`、`qa-report` 和 `review-report`；
+- `DONE` 必须引用完整的 `plan → implementation-report → qa-report → review-report` 链；
+  implementation/QA/Review 必须使用同一 candidate SHA，plan 可以绑定 Task base revision；
 - 缺 evidence、revision 不匹配或 Schema 失败时，拒绝迁移，不允许“宽松接受”。
 
 ## Git / worktree 规则

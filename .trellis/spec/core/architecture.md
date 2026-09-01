@@ -8,6 +8,10 @@
 
 ```python
 run_task(task_id: str) -> DeliveryResult
+SerialOrchestrator.run_task(task_id: TaskId) -> DeliveryResult
+RunContextBuilder.build(task: Task, agent: AgentDefinition, *, attempt: int,
+                        candidate_revision: str | None = None,
+                        input_artifacts: tuple[Artifact, ...] = ()) -> ContextBundle
 transition(task_id: str, to_status: TaskStatus, *, reason: str,
            artifact_ids: list[str] = ()) -> StateEvent
 validate_transition(task: Task, to_status: TaskStatus) -> None
@@ -38,6 +42,14 @@ WorkspacePolicy.authorize_command(arguments: tuple[str, ...]) -> tuple[str, ...]
 ## 3. Contracts
 
 - `run_task` 只能推进 `docs/state-machine.md` 中的合法迁移；
+- T009 `SerialOrchestrator.run_task` 只接受 `NEW` Task，以固定单 attempt 顺序运行
+  planning-mode Orchestrator、Coder、QA、Reviewer；retry、BLOCKED 路由和恢复属于 T010；
+- 每个 Agent 输入只包含 ArtifactStore 已持久化并读回的显式上游 Artifact；
+  `FileRunContextBuilder` 将其编译为 required `artifact://<id>` source，禁止隐式 Agent 消息；
+- Coder request/context revision 是输入基线，implementation-report revision 是输出 candidate，
+  且必须等于 `content.commit_sha`；QA/Reviewer request 与 Artifact 必须绑定该 candidate；
+- plan/implementation/QA 必须完整覆盖 Task acceptance criterion IDs；Artifact 直接 parent
+  固定为 `() → plan → implementation → qa`，4 个 producer run ID 必须独立；
 - `validate_transition` 是唯一状态图入口；`build_event`/`apply_event` 必须保持纯函数，不得读写 repository；
 - `apply_event` 不得修改传入的 Task，且必须拒绝 Task ID、起始状态或时间戳不一致的事件；
 - `ContextBundle` 必须包含 source URI、脱敏内容、SHA-256、token 计数、policy、精确 source revision 和 `context_id`；policy section 固定优先级 0，外部 source 不得占用该优先级；
@@ -66,12 +78,22 @@ WorkspacePolicy.authorize_command(arguments: tuple[str, ...]) -> tuple[str, ...]
 | artifact Schema/哈希失败 | ArtifactStore | 不入库，不触发状态迁移 |
 | 非法状态迁移 | state machine guard | 事务回滚并记录 invariant error |
 | Agent 超时 | execution adapter | 无 verdict；按 transient 规则重试 |
+| Task 不是 `NEW` | `SerialOrchestrator` 入口 | `TaskNotRunnable`，不追加事件 |
+| AgentDefinition 缜密性/角色映射错误 | runner 初始化 | `OrchestratorConfigurationError`，不启动 Agent |
+| Agent FAILED/TIMED_OUT | 当前阶段 checkpoint | `AgentRunFailed`，不伪造 Artifact/verdict |
+| QA FAIL / Review REJECT | verdict guard | Artifact 可持久化；停在 QA/REVIEW，T010 决定路由 |
+| criteria、parent、candidate 或独立 run 不一致 | delivery guard | `DeliveryContractViolation`，不推进下一状态 |
 
 ## 5. Good / Base / Bad Cases
 
-- **Good**：同一 Task/attempt 的 context manifest、candidate SHA 和四类 artifact 可从事件流重放。
+- **Good**：同一 Task/attempt 的 context manifest、完整四 Artifact lineage，以及
+  implementation/QA/Review 共用的 candidate SHA 可从事件流重放；plan 可以绑定 base revision。
 - **Base**：模型不可用时 fake adapter 仍能让状态机、权限和 artifact contract tests 通过。
 - **Bad**：Orchestrator 直接读取 Agent 自由文本并把“looks good”写成 `DONE`；必须拒绝并要求结构化 artifact。
+- **T009 Good**：真实临时 SQLite + FileArtifactStore + FakeAgentAdapter 产生 5 个事件、
+  4 个 sealed Artifact，关闭重开后 Task 仍为 `DONE`。
+- **T009 Bad**：使用 `NEW` Task 快照预构建 planning Context，或强制 Coder 输出 Artifact
+  复用输入 base revision；前者破坏 manifest identity，后者使 Coder 无法产生新 commit。
 
 ## 6. Tests Required
 
@@ -80,6 +102,9 @@ WorkspacePolicy.authorize_command(arguments: tuple[str, ...]) -> tuple[str, ...]
 - Context：来源排序稳定、预算裁剪、secret redaction、priority 0 保留、prompt injection 不改变 policy；
 - Git：worktree 隔离、path/command allowlist、未保存变更阻止清理；
 - Recovery：中断后重放不重复 event，能回到最近 checkpoint。
+- Serial runner：公开 seam fixture 断言 `DONE`、5 个事件、revision=5、四类 Artifact lineage、
+  Context/run identity；Agent failure、QA FAIL、criterion 缺失、重复 run ID、非 NEW Task
+  分别停在预期 durable checkpoint。
 
 ## 7. Wrong vs Correct
 

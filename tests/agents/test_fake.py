@@ -23,6 +23,7 @@ from ai_software_engineer.domain import (
     Artifact,
     Finding,
     FindingSeverity,
+    ImplementationReportArtifact,
     NetworkAccess,
     QaReportArtifact,
     QaReportStatus,
@@ -104,6 +105,52 @@ def test_fake_success_returns_typed_artifact_and_exact_replay_is_idempotent() ->
     assert result.artifact == artifact
     assert result.error is None
     assert adapter.run(request) == result
+
+
+def test_coder_can_turn_its_input_revision_into_a_new_candidate_revision() -> None:
+    request = _request(AgentRole.CODER, source_revision="a" * 40)
+    artifact = make_implementation_artifact().model_copy(
+        update={
+            "task_id": request.task_id,
+            "context_manifest_id": request.context_manifest_id,
+            "producer": make_implementation_artifact().producer.model_copy(
+                update={"run_id": request.run_id}
+            ),
+        }
+    )
+    adapter = FakeAgentAdapter(
+        default=FakeScenario(behavior=FakeBehavior.SUCCESS, artifact=artifact)
+    )
+
+    result = adapter.run(request)
+
+    assert result.status is AgentRunStatus.SUCCEEDED
+    assert result.artifact is not None
+    assert isinstance(result.artifact, ImplementationReportArtifact)
+    assert result.artifact.source_revision == CANDIDATE_SHA
+    assert result.artifact.content.commit_sha == CANDIDATE_SHA
+
+
+def test_coder_candidate_revision_must_match_implementation_commit_sha() -> None:
+    request = _request(AgentRole.CODER, source_revision="a" * 40)
+    artifact = make_implementation_artifact().model_copy(
+        update={
+            "source_revision": "c" * 40,
+            "context_manifest_id": request.context_manifest_id,
+            "producer": make_implementation_artifact().producer.model_copy(
+                update={"run_id": request.run_id}
+            ),
+        }
+    )
+
+    result = FakeAgentAdapter(
+        default=FakeScenario(behavior=FakeBehavior.SUCCESS, artifact=artifact)
+    ).run(request)
+
+    assert result.status is AgentRunStatus.FAILED
+    assert result.artifact is None
+    assert result.error is not None
+    assert result.error.code is AgentErrorCode.INVALID_OUTPUT
 
 
 @pytest.mark.parametrize(
@@ -309,7 +356,7 @@ def test_agent_result_itself_rejects_artifact_identity_mismatch() -> None:
     artifact = _align(make_implementation_artifact(), request)
     mismatched = artifact.model_copy(update={"source_revision": "d" * 40})
 
-    with pytest.raises(ValidationError, match="source_revision"):
+    with pytest.raises(ValidationError, match="candidate revision"):
         AgentResult(
             run_id=request.run_id,
             task_id=request.task_id,

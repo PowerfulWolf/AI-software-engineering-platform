@@ -23,7 +23,7 @@ v0.1 解决一个窄而完整的问题：在已有 Git 项目中，把一条需�
 
 ### Agent Execution Plane
 
-通过 `AgentAdapter.run(AgentRequest) -> AgentResult` 启动 Coder、QA、Reviewer。每个运行使用独立 `run_id`、Context manifest、角色权限、超时和 worktree。`AgentResult` 只能携带与 request 身份对齐的 typed Artifact，或不含 Artifact 的 typed failure；模型供应商可以更换，但角色契约不能由模型自行修改。T008 的 `FakeAgentAdapter` 通过脚本注入成功、QA FAIL、Review REJECT 和 timeout，供离线状态机测试。
+通过 `AgentAdapter.run(AgentRequest) -> AgentResult` 启动 planning-mode Orchestrator、Coder、QA、Reviewer。每个运行使用独立 `run_id`、Context manifest、角色权限、超时和 worktree。`AgentResult` 只能携带与 request 身份对齐的 typed Artifact，或不含 Artifact 的 typed failure；模型供应商可以更换，但角色契约不能由模型自行修改。T008 的 `FakeAgentAdapter` 通过脚本注入成功、QA FAIL、Review REJECT 和 timeout；T009 的 `SerialOrchestrator` 使用同一 seam 完成离线交付闭环。
 
 ### Evidence Plane
 
@@ -44,17 +44,15 @@ v0.1 的 `GitWorktreeManager` 将所有 role worktree 放在 main checkout 外�
 ```text
 Task(JSON)
   → validate + persist
-  → plan artifact
-  → coder context(policy + task + role + declared sources)
-  → implementation-report + candidate commit
-  → QA context(manifest + candidate revision + diff/evidence)
-  → qa-report
-  → review context(manifest + candidate revision + qa-report)
-  → review-report
+  → planning context → plan artifact → seal/store/read-back
+  → coder context(policy + task + role + persisted plan)
+  → implementation-report + candidate commit → seal/store/read-back
+  → QA context(candidate + persisted plan/implementation) → qa-report → seal/store/read-back
+  → review context(candidate + persisted plan/implementation/QA) → review-report → seal/store/read-back
   → DONE | retry Coder | BLOCKED
 ```
 
-每个箭头都是一个契约边界：输入必须先通过 Schema 校验，输出必须包含 `task_id`、`source_revision` 和可定位 evidence。下游只信任 artifact，不读取上游 Agent 的未持久化记忆。
+每个箭头都是一个契约边界：输入必须先通过 Schema 校验，输出必须包含 `task_id`、`source_revision` 和可定位 evidence。`FileRunContextBuilder` 只把 ArtifactStore 读回的显式上游 Artifact 编译为 `artifact://<id>` Context source；下游不读取上游 Agent 的未持久化记忆。
 
 ## 4. 持久化模型
 

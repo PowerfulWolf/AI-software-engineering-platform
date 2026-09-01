@@ -71,13 +71,40 @@ def run_task(task_id: str) -> DeliveryResult:
     return block(task, "attempt_budget_exhausted")
 ```
 
+上面描述 M3 完整目标；当前 T009 已实现其中的单 attempt happy path，入口为：
+
+```python
+SerialOrchestrator.run_task(task_id: TaskId) -> DeliveryResult
+```
+
+T009 严格只接受 `NEW` Task，不包含 retry loop：planning、Coder、QA、Reviewer 每个角色运行
+一次。QA FAIL、Review REJECT、timeout 或 typed failure 会保留最后有效 checkpoint 并抛出稳定
+错误；T010 再根据 `docs/failure-routing.md` 添加 attempt、retry、BLOCKED 和恢复。
+
+每次 run 的执行顺序固定为：
+
+```text
+读取当前 durable Task 快照
+  → FileRunContextBuilder(机器 policy + Task + role + ArtifactStore 上游 Artifact)
+  → AgentRequest → AgentAdapter
+  → request/result 与跨对象 gate 校验
+  → seal_artifact → ArtifactStore.put/get
+  → build_event → TaskRepository.append_event → 重新读取 Task
+```
+
+只有 ArtifactStore 读回的 Artifact 才进入下游 Context；不传递上游 Agent 隐式会话。
+
 ## 4. 运行不变量
 
 - 每个 Agent run 必须有唯一 `run_id`、context manifest 和 timeout；
 - Agent 超时/崩溃不产生 verdict，Orchestrator 记录 `interrupted` 并按重试策略处理；
 - 同一 `run_id` 重放必须幂等，不能重复创建状态事件；
 - artifact 校验失败不能被“降级接受”；
-- `DONE` 必须引用同一 candidate revision 的 plan、implementation、QA、Review artifact。
+- `DONE` 必须引用完整的 plan、implementation、QA、Review lineage；implementation、QA、
+  Review 必须使用同一 candidate revision，plan 可绑定 Task base revision。
+- Coder request/context revision 是输入基线，implementation-report revision 是新 candidate 且
+  必须等于 `content.commit_sha`；不能在 Coder 启动前虚构未知 candidate。
+- plan/implementation/QA 对 Task criterion ID 必须精确全覆盖；4 个 producer run ID 必须独立。
 
 ## 5. 交付包
 

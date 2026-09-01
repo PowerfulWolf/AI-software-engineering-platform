@@ -25,6 +25,12 @@ validate_artifact(payload: object, kind: ArtifactKind) -> Artifact
 
 `AgentRequest` 必须携带 `task_id`、`run_id`、`attempt`、`source_revision`、`context_manifest_id`、permissions 和 output schema；`AgentResult` 不能直接改变 Task 状态。
 
+`source_revision` 在 request/result identity 中表示 Agent Run 的输入 revision。Orchestrator、QA、
+Reviewer 输出仍必须与它完全相同；Coder 是唯一创建新 commit 的角色，其
+implementation-report Artifact 可以使用新 revision，但必须满足
+`artifact.source_revision == artifact.content.commit_sha`。后续 QA/Reviewer 的 request/result
+必须严格绑定该 candidate。
+
 `ContextSource` 只能是 inline content 或 root-relative path 之一；`ContextBundle` 的 sections 先脱敏再 hash/count，并由 `context_id` canonical manifest identity。priority 0 仅属于机器 policy；外部 source、Task prose 和命令输出都不能覆盖 policy 或产生隐式消息。
 
 ## 3. Contracts
@@ -68,7 +74,9 @@ Artifact ID 映射到受控 root 下的单一 JSON 文件。相同 ID/相同正�
 | QA 有 `NOT_TESTED` required criterion | `qa-report=FAIL`，路由 Coder 或阻塞 | 是（FAIL） |
 | Reviewer `APPROVE` 但有 MAJOR/BLOCKER finding | validator 拒绝 verdict，重跑 Reviewer | 否 |
 | evidence URI/sha 缺失 | artifact 无效，不允许状态迁移 | 否 |
-| AgentResult 成功但 Artifact 身份/role/kind/revision/context 不匹配 | adapter output guard | 否 |
+| AgentResult 成功但 Artifact 身份/role/kind/context 不匹配 | adapter output guard | 否 |
+| Coder candidate 与 `implementation-report.commit_sha` 不匹配 | adapter output guard | 否 |
+| 非 Coder Artifact revision 与 request 不匹配 | adapter output guard | 否 |
 | Agent timeout/provider/invalid output | typed AgentFailure mapping | 否 |
 | same `run_id` 重放相同 request | adapter replay cache | 原结果幂等返回 |
 | same `run_id` 搭配不同 request | replay identity guard | 否，抛 `AgentRequestConflict` |

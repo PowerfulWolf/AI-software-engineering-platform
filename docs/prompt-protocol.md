@@ -29,6 +29,8 @@ class AgentAdapter(Protocol):
 
 `AgentRequest` 固定携带 `run_id`、`task_id`、`role`、`attempt`、`source_revision`、`context_manifest_id`、`input_artifact_ids`、机器 `permissions`、`output_schema` 和 `timeout_seconds`。`AgentResult` 回显这些身份字段，并且只能是 `SUCCEEDED + typed artifact`，或 `FAILED/TIMED_OUT + AgentFailure`；失败结果不能携带 verdict Artifact。
 
+这里 request 的 `source_revision` 始终表示 Agent 实际收到的输入 revision。Coder 会在该基线上创建新 commit，因此 implementation-report Artifact 的 `source_revision` 可以不同，但必须等于报告内 `commit_sha`；QA 和 Reviewer 随后的 request/result 都必须严格绑定这个 candidate。不要为了追求字段字面相等而在 Coder 启动前虚构未知 candidate。
+
 v0.1 的 `FakeAgentAdapter` 不渲染 prompt、不访问网络或 Git，而是按 `(role, attempt)` 注入可重复 scenario。它用于离线验证状态机和失败路由；真实 adapter 必须复用同一 request/result contract，不得让供应商对象穿透到 Orchestrator。
 
 ## Orchestrator（planning mode）

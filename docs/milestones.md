@@ -37,13 +37,13 @@
 | T001 | 初始化 Python 包与 CLI 骨架 | `pyproject.toml`、`src/ai_software_engineer/cli.py` | `--help` 可运行，pytest 可发现 | M0 |
 | T002 | 实现 Task/Agent/Artifact Pydantic 模型 | `src/ai_software_engineer/domain/*` | 通过对应 JSON Schema 的正反例 | T001 |
 | T003 | 实现 SQLite repository 与事件日志 | `src/ai_software_engineer/store/*` | 事务写入、幂等 event、重启读取 | T002 |
-| T004 | 实现状态机 reducer/guard | `src/ai_software_engineer/orchestrator/state_machine.py` | 覆盖所有迁移和非法迁移 | T003 |
+| T004 | 实现状态机 reducer/guard | `src/ai_software_engineer/orchestration/state_machine.py` | 覆盖所有迁移和非法迁移 | T003 |
 | T005 | 实现 ArtifactStore | `src/ai_software_engineer/artifacts/*` | 原子写入、sha256、父子关系、不可变 | T002/T003 |
 | T006 | 实现 Git worktree manager | `src/ai_software_engineer/git/*` | fixture repo 中创建三角色 worktree，路径 allowlist 生效 | T001 |
 | T007 | 实现 Context Builder/Router | `src/ai_software_engineer/context/*` | 生成稳定 manifest，脱敏并限制预算 | T002/T006 |
 | T008 | 实现 FakeAgentAdapter | `src/ai_software_engineer/agents/fake.py` | 可注入成功、QA FAIL、Review REJECT、超时和 typed failures | T002/T007 |
-| T009 | 实现 Orchestrator happy path | `src/ai_software_engineer/orchestrator/runner.py` | fixture Task 走到 DONE 并生成四类 artifact | T004–T008 |
-| T010 | 实现失败路由与恢复 | `src/ai_software_engineer/orchestrator/retry.py` | attempt 上限、分类路由、重启恢复测试 | T009 |
+| T009 | 实现 Orchestrator happy path | `src/ai_software_engineer/orchestration/runner.py` | fixture Task 走到 DONE 并生成四类 artifact | T004–T008 |
+| T010 | 实现失败路由与恢复 | `src/ai_software_engineer/orchestration/retry.py` | attempt 上限、分类路由、重启恢复测试 | T009 |
 | T011 | 接入真实 AgentAdapter | `src/ai_software_engineer/agents/openai_compatible.py` | fake/real 共用 request/response contract | T008/T009 |
 | T012 | 实现 metrics、ADR 和交付包 | `src/ai_software_engineer/evaluation/*` | 从事件流重算 ADR，输出 handoff bundle | T009/T010 |
 

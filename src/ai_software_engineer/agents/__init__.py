@@ -2,6 +2,7 @@
 
 from ai_software_engineer.agents.fake import FakeAgentAdapter
 from ai_software_engineer.agents.models import (
+    ROLE_OUTPUT_SCHEMA,
     AgentErrorCode,
     AgentFailure,
     AgentRequest,
@@ -9,6 +10,7 @@ from ai_software_engineer.agents.models import (
     AgentRunStatus,
     FakeBehavior,
     FakeScenario,
+    RunId,
 )
 from ai_software_engineer.agents.ports import (
     AgentAdapter,
@@ -18,6 +20,7 @@ from ai_software_engineer.agents.ports import (
 )
 
 __all__ = [
+    "ROLE_OUTPUT_SCHEMA",
     "AgentAdapter",
     "AgentConfigurationError",
     "AgentError",
@@ -30,4 +33,5 @@ __all__ = [
     "FakeAgentAdapter",
     "FakeBehavior",
     "FakeScenario",
+    "RunId",
 ]

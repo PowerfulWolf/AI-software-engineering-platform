@@ -15,7 +15,7 @@
 
 `AgentAdapter.run(request: AgentRequest) -> AgentResult` 是 Fake 与真实模型 adapter 的共同边界。Request 固定携带 `run_id`、`task_id`、`role`、`attempt`、`source_revision`、`context_manifest_id`、`input_artifact_ids`、`permissions`、`output_schema` 和 `timeout_seconds`；其中 Context manifest ID 必须来自已成功构建的 ContextBundle。
 
-Result 的 `SUCCEEDED` 状态必须有一个 producer/task/kind/source revision/context manifest/run ID 全部对齐的 typed Artifact，不能同时有 failure。`FAILED` 或 `TIMED_OUT` 必须只携带 `AgentFailure(code, message, transient)`，不产生 verdict；`TIMED_OUT` 只能使用 `TIMEOUT` code。Fake adapter 的 scenario 只用于离线测试，不得绕过这些检查。
+Result 的 `SUCCEEDED` 状态必须有一个 producer/task/kind/context manifest/run ID 全部对齐的 typed Artifact，不能同时有 failure。Orchestrator、QA、Reviewer 的 Artifact revision 必须与 request 的输入 revision 相同；Coder request revision 是输入基线，其 implementation-report 可以指向新 candidate，但 envelope `source_revision` 必须与 `content.commit_sha` 相同。`FAILED` 或 `TIMED_OUT` 必须只携带 `AgentFailure(code, message, transient)`，不产生 verdict；`TIMED_OUT` 只能使用 `TIMEOUT` code。Fake adapter 的 scenario 只用于离线测试，不得绕过这些检查。
 
 角色与 `output_schema` 固定映射为：Orchestrator → `schemas/plan.schema.json`、Coder → `schemas/implementation-report.schema.json`、QA → `schemas/qa-report.schema.json`、Reviewer → `schemas/review-report.schema.json`。Request 使用其他角色的 Schema 时在 Pydantic boundary 拒绝，不启动 adapter。
 
@@ -125,6 +125,7 @@ Git role workspace 由 `GitWorkspace.create/inspect/remove` 管理。Coder 使�
 - Python 入口先使用 `Task.model_validate`、`AgentDefinition.model_validate` 或 `validate_artifact` 转成 typed model；下游不解析裸 `dict`；
 - `producer` 是角色 + agent 版本 + run_id；
 - `source_revision` 指向实际读取/审查的 Git revision；
+- 对 Coder，request/context 的 `source_revision` 是修改前输入基线，implementation-report 的 `source_revision` 是修改后 candidate；后者必须等于 `content.commit_sha`。QA/Reviewer request 与 Artifact 都绑定这个 candidate；
 - `evidence` 是带 URI 和 SHA-256、可定位、可复核的引用，不接受“看起来没问题”这类无证据描述；Finding 至少引用一个 envelope Evidence ID；
 - artifact 不可原地修改；修订通过新 artifact + `supersedes` 关系表达；
 - Schema 校验、哈希计算和持久化由 Orchestrator/ArtifactStore 完成，Agent 不能自报通过。
@@ -151,6 +152,8 @@ Git role workspace 由 `GitWorkspace.create/inspect/remove` 管理。Coder 使�
 `SqliteTaskRepository` 对重复事件执行精确幂等：正文相同直接成功且不新增 revision，正文不同抛出 `EventIdempotencyConflict`。未知 Task、stale `from_status`、重复 Task ID 和损坏 JSON 都转换为 typed repository error，不返回半结构化数据。
 
 状态图由 `orchestration.state_machine` 的 `validate_transition`/`build_event`/`apply_event` 唯一维护。Repository 不自行放宽或扩展迁移边；ArtifactStore/Orchestrator 后续再对 QA PASS、Review APPROVE 和 candidate revision 做跨 Artifact 守卫。
+
+T009 的 `SerialOrchestrator.run_task` 只接受 `NEW` Task，并按固定单 attempt 路径提交 5 个事件。每个 Agent Artifact 先由 runner 检查 request echo、直接 parent lineage、criterion coverage 和 revision，再由 `seal_artifact`/ArtifactStore 原子持久化并读回。QA FAIL、Review REJECT 或 Agent failure 停在当前 durable checkpoint；T010 才拥有重试与 BLOCKED 路由策略。
 
 ## 9. Python 领域入口
 

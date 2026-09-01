@@ -4,7 +4,7 @@
 
 Context Builder 把组织规则、项目事实、Task 意图、角色说明和已声明的上游证据编译成一个最小、确定、可审计的 `ContextBundle`。它不做语义检索、不调用模型，也不接受 Agent 间隐式消息；只有显式声明的来源才会进入上下文。
 
-v0.1 的本地实现是 `FileContextBuilder`，路由器是无 I/O 的 `ContextRouter`。Builder 绑定一个 role worktree root，并复用 T006 `WorkspacePolicy` 读取文件来源。
+v0.1 的本地实现是 `FileContextBuilder`，路由器是无 I/O 的 `ContextRouter`。Builder 绑定一个 role worktree root，并复用 T006 `WorkspacePolicy` 读取文件来源。应用层的 `FileRunContextBuilder` 根据 AgentDefinition 权限创建 Builder，并把 ArtifactStore 已读回的显式上游 Artifact 编译成 required `artifact://<artifact_id>` inline source；它不接受隐式 Agent 消息。
 
 ## 2. 公共接口
 
@@ -54,6 +54,8 @@ Builder 始终生成并优先交付 `policy`、`task`、`role`；提供且不同
 7. 只有 bundle 完整构建成功后才能启动 Agent；上下文 ID 必须写入后续 Agent request/artifact，支持重放和审计。
 
 相同 Task、role、attempt、权限、来源正文、candidate revision 和 budget 必须产生相同 section 顺序、hash、token 计数和 `context_id`；`built_at` 仅是观察元数据，不参与身份哈希。
+
+状态迁移后的 Task 快照属于 Context identity 的一部分：例如 planning run 的 Task section 是 `PLANNING`，Coder run 是 `IMPLEMENTING`。重放或离线 Fake scenario 必须使用对应 durable checkpoint 构建 manifest，不能拿 `NEW` 快照冒充后续输入。
 
 ## 5. 脱敏与注入边界
 

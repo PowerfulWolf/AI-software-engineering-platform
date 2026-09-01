@@ -1,0 +1,7 @@
+{"path":"src/ai_software_engineer/orchestration/runner.py","reason":"Serial application service, typed result, identities and cross-object delivery guards."}
+{"path":"src/ai_software_engineer/orchestration/context.py","reason":"Compose role permissions and explicit upstream Artifact sources through FileContextBuilder."}
+{"path":"src/ai_software_engineer/agents/models.py","reason":"Correct Coder input revision versus output candidate contract."}
+{"path":"src/ai_software_engineer/agents/fake.py","reason":"Apply the same Coder candidate exception at the fake output guard."}
+{"path":"tests/orchestration/test_runner.py","reason":"Real SQLite/filesystem fixture e2e and public-seam negative behavior."}
+{"path":"tests/agents/test_fake.py","reason":"Coder base-to-candidate contract regression test."}
+{"path":".trellis/spec/core/python-runtime.md","reason":"Executable Orchestrator signatures, contracts, validation matrix and test points."}
