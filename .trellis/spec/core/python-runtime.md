@@ -674,7 +674,7 @@ class FakeAgentAdapter:
 
 - 所有 request/result/scenario model 使用 Pydantic v2、`extra="forbid"`、`frozen=True`；`run_id`、`context_manifest_id`、Task/Artifact ID 和 attempt 采用既有 typed aliases。
 - `AgentRequest.output_schema` 固定映射：Orchestrator → `schemas/plan.schema.json`、Coder → `schemas/implementation-report.schema.json`、QA → `schemas/qa-report.schema.json`、Reviewer → `schemas/review-report.schema.json`；角色/Schema 不匹配在 adapter 启动前拒绝。
-- `AgentResult.SUCCEEDED` 必须有且只有一个 typed Artifact，且 Artifact 的 `task_id`、producer role/run ID、kind、source revision 和 context manifest ID 与 request 完全一致；成功的 QA 只能是 `PASS`，成功的 Reviewer 只能是 `APPROVE`。
+- `AgentResult.SUCCEEDED` 必须有且只有一个 typed Artifact，且 Artifact 的 `task_id`、producer role/run ID、kind 和 context manifest ID 与 request 完全一致。Orchestrator/QA/Reviewer Artifact revision 必须与 request 相同；Coder Artifact 可以是新 candidate，但必须满足 `source_revision == content.commit_sha`。成功的 QA 只能是 `PASS`，成功的 Reviewer 只能是 `APPROVE`。
 - `FAILED`/`TIMED_OUT` 必须没有 Artifact；必须有 `AgentFailure`。`TIMED_OUT` 只能使用 `TIMEOUT` code；`INVALID_OUTPUT` 不产生 verdict，`PROVIDER_ERROR` 可标记 transient 供后续 retry router 使用。
 - `FakeBehavior` 支持 `SUCCESS`、`QA_FAIL`、`REVIEW_REJECT`、`TIMEOUT`、`INVALID_OUTPUT`、`PROVIDER_ERROR`。QA_FAIL 只能由 QA role 产生 FAIL report，REVIEW_REJECT 只能由 Reviewer 产生 REJECT report；行为与 role 不匹配是配置错误。
 - Fake scenario 按 `(role, attempt)` 选择，default 作为兜底；缺少 scenario、非法 key 或 attempt 越界抛 `AgentConfigurationError`，不得猜测默认行为。
@@ -687,7 +687,9 @@ class FakeAgentAdapter:
 |---|---|---|
 | request 缺字段、非法 ID/role/attempt/权限 | Pydantic boundary | `ValidationError`，不执行 |
 | scenario 缺失、key/attempt 非法、特殊行为 role 不匹配 | Fake configuration | `AgentConfigurationError` |
-| artifact task/role/run/kind/revision/context mismatch | adapter output guard | `FAILED + INVALID_OUTPUT`，无 artifact |
+| artifact task/role/run/kind/context mismatch | adapter output guard | `FAILED + INVALID_OUTPUT`，无 artifact |
+| Coder candidate 与 implementation `commit_sha` 不同 | adapter output guard | `FAILED + INVALID_OUTPUT`，无 artifact |
+| 非 Coder artifact revision 与 request 不同 | adapter output guard | `FAILED + INVALID_OUTPUT`，无 artifact |
 | QA 成功非 PASS 或 QA_FAIL 非 FAIL | adapter output guard | `FAILED + INVALID_OUTPUT` |
 | Reviewer 成功非 APPROVE 或 REJECT 非 REJECT | adapter output guard | `FAILED + INVALID_OUTPUT` |
 | provider/invalid output scenario | adapter mapping | `FAILED + typed code`，无 verdict |
@@ -697,9 +699,9 @@ class FakeAgentAdapter:
 
 ### 11.5 Good / Base / Bad Cases
 
-- **Good**：Fake adapter 为 Coder 返回同一 request identity 的 implementation-report；QA FAIL 和 Reviewer REJECT 只由对应 role 返回；timeout 不产生 Artifact。
+- **Good**：Fake adapter 为 Coder 从 request 的输入基线返回自洽的新 candidate implementation-report；QA FAIL 和 Reviewer REJECT 只由对应 role 返回；timeout 不产生 Artifact。
 - **Base**：无网络的 fixture 测试通过 scenario script 复现成功、失败和重试输入，真实 adapter 可替换而无需修改 Orchestrator。
-- **Bad**：让 Coder 返回 `qa-report`、接受不同 candidate SHA 的 Artifact、把 timeout 当 PASS、对同一 run ID 重新执行，或让 Fake 直接调用供应商 SDK。
+- **Bad**：让 Coder 返回 `qa-report`、让 Coder candidate 与报告 `commit_sha` 不同、让 QA/Reviewer 审查不同 SHA、把 timeout 当 PASS、对同一 run ID 重新执行，或让 Fake 直接调用供应商 SDK。
 
 ### 11.6 Tests Required
 
@@ -725,7 +727,125 @@ result = agent_adapter.run(request)
 if result.status is AgentRunStatus.SUCCEEDED:
     artifact = result.artifact
     assert artifact is not None
-    assert artifact.source_revision == request.source_revision
+    if result.role is AgentRole.CODER:
+        assert artifact.source_revision == artifact.content.commit_sha
+    else:
+        assert artifact.source_revision == request.source_revision
 ```
 
 前者让 provider dict 和自报 verdict 穿透边界；后者只接受与 request 身份对齐的 typed Artifact，失败和超时不会被误当成交付信号。
+
+## 12. Scenario: Serial Orchestrator Happy Path
+
+### 12.1 Scope / Trigger
+
+新增或修改应用层 Task 执行、跨 Artifact gate、role Context composition、Agent Run identity、
+checkpoint 或交付结果时适用。`orchestration/runner.py` 是 v0.1 Control Plane 应用服务；它编排
+端口但不拥有 SQLite、文件系统、Git 或模型 SDK 实现。
+
+### 12.2 Signatures
+
+```python
+class RunContextBuilder(Protocol):
+    def build(
+        self,
+        task: Task,
+        agent: AgentDefinition,
+        *,
+        attempt: int,
+        candidate_revision: str | None = None,
+        input_artifacts: tuple[Artifact, ...] = (),
+    ) -> ContextBundle: ...
+
+
+class OrchestrationIdentityFactory(Protocol):
+    def new_run_id(self, task_id: TaskId, role: AgentRole, attempt: int) -> RunId: ...
+    def new_event_id(
+        self,
+        task_id: TaskId,
+        from_status: TaskStatus,
+        to_status: TaskStatus,
+        attempt: int,
+    ) -> EventId: ...
+
+
+class SerialOrchestrator:
+    def run_task(self, task_id: TaskId) -> DeliveryResult: ...
+```
+
+`DeliveryResult` 固定包含最终 typed Task、candidate revision、四个 Artifact ID、四个 Context
+manifest ID、四个 run ID 和五个 event ID。默认 identity factory 使用 UUID；测试通过 Protocol
+注入确定值，clock 也通过 callable 注入。
+
+### 12.3 Contracts
+
+- runner 只接受 `NEW` Task，T009 固定 attempt=1，顺序为 planning-mode Orchestrator →
+  Coder → QA → Reviewer；不能并行、跳步或在本阶段自行重试；
+- 状态 checkpoint 固定为 5 个事件：`PLANNING`、`IMPLEMENTING`、`QA`、`REVIEW`、`DONE`；
+  所有事件通过 `build_event` + `TaskRepository.append_event` 提交，再从 repository 读回快照；
+- 每次 run 先用当前 durable Task 快照构建 Context。Task status/updated_at 在 Task section 中，
+  因此 `NEW`、`PLANNING` 等快照不能互换而保持同一 context ID；
+- `FileRunContextBuilder` 使用 AgentDefinition permissions 创建 `FileContextBuilder`，只把显式
+  `input_artifacts` 编译成 canonical JSON `artifact://<id>` required source，并验证 Task、kind、ID；
+- 输出 Artifact 必须回显 request identity；direct parent 固定为 plan `()`、implementation
+  `(plan)`、QA `(implementation)`、review `(qa)`；producer run IDs 必须各不相同；
+- plan/implementation/QA criterion IDs 必须与 Task acceptance criteria 精确集合相等；QA
+  必须 PASS、Reviewer 必须 APPROVE；QA/Review 必须绑定 implementation candidate；
+- runner 重新 seal Agent Artifact，再通过 ArtifactStore put/get，只有读回的 Artifact 才进入
+  下游 Context；`DONE` event 引用完整四 Artifact 链；
+- QA FAIL、Review REJECT 和 Agent failure 不进入下阶段。有效 failure Artifact 可以被持久化，
+  但 T009 停在 QA/REVIEW；T010 才分类重试或进入 BLOCKED。
+
+### 12.4 Validation & Error Matrix
+
+| 输入/状态 | 结果 | durable checkpoint |
+|---|---|---|
+| Task 非 NEW | `TaskNotRunnable` | 不变，0 个新增事件 |
+| roles 缺失、key/definition role 不同、agent ID 重复 | `OrchestratorConfigurationError` | 不启动 |
+| Agent FAILED/TIMED_OUT | `AgentRunFailed(result)` | 当前 stage |
+| QA FAIL / Review REJECT | `UnexpectedVerdict` | QA / REVIEW；verdict Artifact 已持久化 |
+| context/request/result identity 不同 | `DeliveryContractViolation` 或 typed adapter error | 当前 stage |
+| criterion set、parent lineage、candidate、run uniqueness 错误 | `DeliveryContractViolation` | 不推进下一 stage |
+| Artifact seal/store/read-back 失败 | typed ArtifactStore error | 当前 stage |
+| event/repository 失败 | typed state/repository error | 最近已提交 checkpoint |
+
+### 12.5 Good / Base / Bad Cases
+
+- **Good**：fixture Task 到 DONE；SQLite revision=5；四 Artifact lineage/run/context 可复核；
+  数据库关闭重开后仍能读取相同 DONE Task 与事件流。
+- **Base**：无 Git、网络、模型 SDK时，FakeAgentAdapter + 临时 SQLite/filesystem 完成离线闭环。
+- **Bad**：直接把 Agent 自由文本转成状态；把未持久化 Artifact 拼进下游 prompt；用 `NEW`
+  Task 预建所有 Context；在 QA FAIL 后继续 REVIEW；复用同一个 run ID 伪装独立审查。
+
+### 12.6 Tests Required
+
+- `tests/orchestration/test_runner.py` happy path 通过 public `run_task` seam，使用真实
+  `SqliteTaskRepository`、`FileArtifactStore`、`FileRunContextBuilder` 和 Fake adapter；
+- 断言最终 DONE/candidate、5 个有序事件、repository revision=5、四 Artifact sealed/lineage、
+  四个 Context ID、四个独立 run ID，以及关闭重开后的 Task/event；
+- 反例至少覆盖 Agent timeout、QA FAIL、plan criterion 缺失、重复 run ID、非 NEW Task；
+  每例断言具体 typed error、当前 Task status/revision 和未产生的下游 Artifact；
+- Ruff、strict mypy、完整 pytest、lock、build 和 `git diff --check` 全部通过。
+
+### 12.7 Wrong vs Correct
+
+#### Wrong
+
+```python
+text = agent.run(prompt)
+if "PASS" in text:
+    task.status = TaskStatus.DONE
+```
+
+#### Correct
+
+```python
+result = runner.run_task(task.id)
+assert result.task.status is TaskStatus.DONE
+assert len(result.artifact_ids) == 4
+assert len(result.run_ids) == 4
+assert repository.current_revision(task.id) == 5
+```
+
+前者绕过 Context、ArtifactStore、独立 verdict 和事件事务；后者只从可重放的 typed 证据链
+得到交付结果。

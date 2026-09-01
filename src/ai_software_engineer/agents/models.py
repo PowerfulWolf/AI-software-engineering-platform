@@ -7,7 +7,11 @@ from pydantic import Field, StrictBool, StrictInt, StringConstraints, model_vali
 
 from ai_software_engineer.context.models import ContextId
 from ai_software_engineer.domain.agent import ROLE_OUTPUT, AgentPermissions, TimeoutSeconds
-from ai_software_engineer.domain.artifact import Artifact, ArtifactId
+from ai_software_engineer.domain.artifact import (
+    Artifact,
+    ArtifactId,
+    ImplementationReportArtifact,
+)
 from ai_software_engineer.domain.enums import AgentRole
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.task import TaskId
@@ -127,7 +131,12 @@ class AgentResult(DomainModel):
             raise ValueError("AgentResult Artifact producer run_id mismatch")
         if artifact.kind is not ROLE_OUTPUT[self.role]:
             raise ValueError("AgentResult Artifact kind mismatch")
-        if artifact.source_revision != self.source_revision:
+        if self.role is AgentRole.CODER and (
+            not isinstance(artifact, ImplementationReportArtifact)
+            or artifact.source_revision != artifact.content.commit_sha
+        ):
+            raise ValueError("AgentResult Coder Artifact candidate revision mismatch")
+        if self.role is not AgentRole.CODER and artifact.source_revision != self.source_revision:
             raise ValueError("AgentResult Artifact source_revision mismatch")
         if artifact.context_manifest_id != self.context_manifest_id:
             raise ValueError("AgentResult Artifact context_manifest_id mismatch")

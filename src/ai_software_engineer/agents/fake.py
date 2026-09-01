@@ -13,7 +13,7 @@ from ai_software_engineer.agents.models import (
 )
 from ai_software_engineer.agents.ports import AgentConfigurationError, AgentRequestConflict
 from ai_software_engineer.domain.agent import ROLE_OUTPUT
-from ai_software_engineer.domain.artifact import Artifact
+from ai_software_engineer.domain.artifact import Artifact, ImplementationReportArtifact
 from ai_software_engineer.domain.enums import AgentRole, QaReportStatus, ReviewVerdict
 
 ScenarioKey = tuple[AgentRole, int]
@@ -139,8 +139,16 @@ class FakeAgentAdapter:
             return "fake Artifact producer run_id does not match AgentRequest"
         if artifact.kind is not expected_kind:
             return "fake Artifact kind does not match Agent role contract"
-        if artifact.source_revision != request.source_revision:
+        if (
+            request.role is not AgentRole.CODER
+            and artifact.source_revision != request.source_revision
+        ):
             return "fake Artifact source_revision does not match AgentRequest"
+        if request.role is AgentRole.CODER and (
+            not isinstance(artifact, ImplementationReportArtifact)
+            or artifact.source_revision != artifact.content.commit_sha
+        ):
+            return "fake Coder Artifact candidate revision does not match commit_sha"
         if artifact.context_manifest_id != request.context_manifest_id:
             return "fake Artifact context_manifest_id does not match AgentRequest"
         if request.role is AgentRole.QA:

@@ -69,7 +69,7 @@ ai-software-engineer/
 │   ├── git/                          # role worktree 隔离与 path/command policy
 │   ├── context/                      # 确定、脱敏、预算受限的 Context Builder/Router
 │   ├── agents/                       # AgentAdapter、typed run contract 与 Fake adapter
-│   ├── orchestration/                 # 串行状态机 guard/reducer
+│   ├── orchestration/                 # 串行 runner、Context composition 与状态机
 │   └── prompts/                      # 后续：版本化 role prompt 模板
 ├── docs/
 │   ├── architecture.md               # 分层、边界和部署形态
@@ -105,6 +105,7 @@ ai-software-engineer/
 │   ├── domain/                       # 单对象不变量和权限边界
 │   ├── context/                      # 路由、预算、脱敏和注入边界
 │   ├── agents/                       # Fake/real AgentAdapter 共用契约
+│   ├── orchestration/                 # 串行交付闭环与状态 checkpoint
 │   └── contracts/                    # Python model ↔ JSON Schema 一致性
 └── artifacts/runs/                   # 运行产物（默认 gitignored）
 ```
@@ -148,6 +149,6 @@ uv run mypy src tests
 
 ## 当前状态
 
-M0 设计基线和 T001–T008 已完成。当前可运行 `ase`，并可用 Pydantic 校验 Task、Agent Definition、StateEvent、ContextBundle、AgentRequest/AgentResult 以及四类 Artifact；正反例受 canonical JSON Schema contract tests 保护。Task 状态事件可在 SQLite 重启后恢复，状态图由纯函数 guard/reducer 管理，ArtifactStore 提供 SHA-256、lineage、原子写入和不可变重放保证。Repository Plane 可从指定 SHA 创建隔离的 Coder/QA/Reviewer worktree，检查 staged/unstaged/untracked 变更，并通过绑定 worktree root 的 policy 拒绝路径逃逸和未授权命令。Context Plane 会按角色路由显式来源，先脱敏再计数/哈希，并在超预算时确定性截断或 fail closed。Agent Execution Plane 现在有可脚本化的离线 Fake adapter，可验证成功、QA FAIL、Review REJECT、timeout 和 typed failure。
+M0 设计基线和 T001–T009 已完成。当前可运行 `ase`，并可用 Pydantic 校验 Task、Agent Definition、StateEvent、ContextBundle、AgentRequest/AgentResult 以及四类 Artifact；正反例受 canonical JSON Schema contract tests 保护。Task 状态事件可在 SQLite 重启后恢复，状态图由纯函数 guard/reducer 管理，ArtifactStore 提供 SHA-256、lineage、原子写入和不可变重放保证。Repository Plane 可从指定 SHA 创建隔离的 Coder/QA/Reviewer worktree，检查 staged/unstaged/untracked 变更，并通过绑定 worktree root 的 policy 拒绝路径逃逸和未授权命令。Context Plane 会按角色路由显式来源，先脱敏再计数/哈希，并在超预算时确定性截断或 fail closed。Agent Execution Plane 有可脚本化的离线 Fake adapter；`SerialOrchestrator` 现已把 Context、四次独立 Agent Run、ArtifactStore、状态机和 SQLite 串成可重启验证的 `NEW → ... → DONE` 单 attempt 闭环。
 
-下一步是 T009：实现串行 Orchestrator happy path，串联 `Context → Coder → QA → Reviewer` 并生成四类 artifact。后续实现仍严格按 `AGENTS.md` 与 `.trellis/spec/` 推进，任何跨语言契约变更先更新 Schema 和文档，再更新代码与测试。
+下一步是 T010：实现 QA FAIL/Review REJECT 路由、attempt 上限和中断恢复；T009 对这些结果只持久化已验证 evidence 并停在当前 checkpoint，不会猜测重试。后续实现仍严格按 `AGENTS.md` 与 `.trellis/spec/` 推进，任何跨语言契约变更先更新 Schema 和文档，再更新代码与测试。
