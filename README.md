@@ -1,6 +1,9 @@
 # ai-software-engineer v0.1
 
-一个基于 Trellis 思想与 Multi-Agent 协作的软件工程平台 MVP。
+一个基于 Trellis 思想与 Multi-Agent 协作的、可审计的 AI 软件工程平台。
+
+它的目标不是演示多个 Agent 互相对话，而是逐步建立一个有制度、有岗位边界、有组织记忆、
+能够持续交付和自我改进的数字研发团队。
 
 > 目标：给定一个已有 Git 项目和一条可验收需求，平台以可追溯、可复核的方式串行运行 `Coder → QA → Reviewer`，最终产出一个可合并变更或明确的阻塞原因。
 
@@ -10,6 +13,27 @@
 2. **No agent may be the sole judge of its own work**：Coder 不能批准自己的代码；QA 与 Reviewer 必须由独立会话、独立上下文和受限权限执行。
 3. **Agents communicate through verifiable artifacts, not shared assumptions**：跨角色传递只允许使用经过 Schema 校验、带来源 revision、证据和哈希的 artifact。
 4. **先闭环，再扩展**：v0.1 只实现单任务、单项目、串行状态机；不引入复杂 DAG、向量数据库、自动生产部署或多租户。
+
+## 当前进度（2026-09-01）
+
+当前 `main` 基线为 `3ca68b4`，T001–T017 已完成并合入。自动化质量基线为 **283 个测试**、
+Ruff 检查与格式检查通过、strict Mypy 检查 **92 个源码文件**、Python package build 通过。
+
+| 阶段 | 状态 | 已交付结果 |
+|---|---|---|
+| M0 设计与 Bootstrap | 已完成 | 总体架构、契约、状态机、Trellis/Codex 指令、Python CLI 骨架 |
+| M1 Domain + Persistence | 已完成 | 强类型领域模型、SQLite 事件事实、纯状态机、不可变 ArtifactStore |
+| M2 Git + Context | 已完成 | role worktree 隔离、命令/路径策略、确定性 Context Builder/Router |
+| M3 串行 Agent Loop | 已完成 | Fake/真实 AgentAdapter、`Coder → QA → Reviewer`、有界重试与恢复 |
+| M4 Evaluation + Handoff | 已完成 | Evaluation events、指标/ADR 重算、DONE/BLOCKED handoff、CLI/runtime |
+| 执行安全边界 | 已完成 | fail-closed 命令执行端口、role worktree 执行生命周期 |
+| M5 任意项目接入 | 进行中 | T017 已提供外置 per-project AI workspace；ProjectProfile 与规范治理待接入 |
+| M6 可执行交付 | 待开始 | Agent tool protocol、evidence capture、跨语言真实项目 E2E |
+| M7 Agent 可视化 | 待开始 | 只读投影/API、Task board、timeline、Agent detail、Human inbox |
+
+完整阶段事实、任务清单和提交证据见
+[`docs/archive/2026-09-01-v0.1-foundation-t001-t017.md`](docs/archive/2026-09-01-v0.1-foundation-t001-t017.md)；
+后续路线见 [`docs/milestones.md`](docs/milestones.md)。
 
 ## MVP 边界
 
@@ -91,6 +115,7 @@ ai-software-engineer/
 │   ├── cli.md                        # CLI 使用说明
 │   ├── runtime.md                    # Runtime 配置与 task run
 │   ├── milestones.md                 # 里程碑与第一批任务
+│   ├── archive/                      # 已完成阶段的事实、验证与提交记录
 │   └── decisions/
 │       └── 0001-python-control-plane.md # 已接受的语言架构决策
 ├── schemas/
@@ -173,6 +198,39 @@ uv run mypy src tests
 
 项目使用 Python 3.12+。uv 会读取 `.python-version` 并建立隔离环境；`ase` 是平台 CLI 入口。
 
+## 当前如何使用
+
+当前版本首先是一套可运行、可测试、可扩展的控制平面基础，而不是已经能够对任意项目全自动
+改码交付的最终产品。现阶段可以：
+
+- 用 `ase task create/show/events` 创建和审计强类型 Task；
+- 用 `ase task run` 按固定顺序运行配置驱动的 Coder、QA、Reviewer；
+- 用 `ase evaluation report` 从 durable facts 重算指标和 ADR；
+- 用 `ase handoff build` 为 `DONE/BLOCKED` Task 生成 JSON + Markdown 交付包；
+- 在 Python application seam 中注册任意本地项目的外置 sidecar workspace；
+- 复用 Git worktree、Context、Artifact、retry、evaluation 和受控命令执行组件继续开发。
+
+最小 CLI 流程：
+
+```bash
+uv sync
+uv run ase task create --file task.json --database /path/to/ai-workspace/state/state.sqlite3
+export OPENAI_API_KEY='...'
+uv run ase task run <task-id> --config runtime.json
+uv run ase handoff build <task-id> \
+  --database /path/to/ai-workspace/state/state.sqlite3 \
+  --artifacts /path/to/ai-workspace/artifacts \
+  --output /path/to/ai-workspace/handoffs
+```
+
+在 T020 完成 CLI 自动绑定前，外部目标项目的 state、artifact、context、evaluation 和 handoff
+路径必须显式指向 sidecar，避免污染目标项目。配置示例和字段说明见
+[`docs/runtime.md`](docs/runtime.md) 与 [`docs/cli.md`](docs/cli.md)。
+
+当前尚未完成的关键闭环是：自动发现项目技术栈与原生规范、人工处理规范冲突、让模型通过
+受策略约束的 tool protocol 真正编辑/测试项目、封存命令/diff/测试证据、完成跨语言目标项目
+E2E，以及可视化工作台。平台也不会自动 merge 保护分支或部署生产环境。
+
 ## 文档导航
 
 - 架构与边界：[`docs/architecture.md`](docs/architecture.md)
@@ -188,11 +246,6 @@ uv run mypy src tests
 - Runtime 配置与 task run：[`docs/runtime.md`](docs/runtime.md)
 - Project workspace 与 Agent 工作可视化：[`docs/visualization.md`](docs/visualization.md)
 - 里程碑：[`docs/milestones.md`](docs/milestones.md)
+- 阶段归档：[`docs/archive/README.md`](docs/archive/README.md)
 - 语言架构决策：[`docs/decisions/0001-python-control-plane.md`](docs/decisions/0001-python-control-plane.md)
 - Codex bootstrap：[`AGENTS.md`](AGENTS.md)
-
-## 当前状态
-
-M0–M4 与 T001–T017 已经完成。任意本地目标项目现在可以注册稳定、外置、带 manifest SHA-256 的 AI sidecar workspace；目标代码目录不会收到 `.ase`、Agent 日志或平台 Artifact。当前可运行 `ase`，并可用 Pydantic 与 canonical JSON Schema 校验 Task、Agent Definition、StateEvent、ContextBundle、AgentRequest/AgentResult、四类 Artifact、EvaluationEvent、HandoffBundle、RuntimeConfig 与 ProjectWorkspaceManifest。Task/事件可从 SQLite 恢复，Artifact/Context/Evaluation/Handoff 文件存储都采用不可变、原子、fail-closed 的边界。Repository Plane、Context Plane、Fake/真实 AgentAdapter、串行 Orchestrator、有界 retry/recovery、RuntimeSession、受策略约束的 worktree 命令执行端口、role worktree 生命周期和 per-project sidecar 注册层已形成可离线验证的闭环。
-
-T012 通过 `EvaluatingAgentAdapter` 自动记录 Agent run 事实，`EvaluationTraceBuilder + EvaluationEngine` 从状态事件、评估事件和封存 Artifact 重算 metrics/ADR；`HandoffBuilder + FileHandoffStore` 为 `DONE/BLOCKED` 输出自包含 JSON 与 Markdown。T013 将这些能力接入离线 CLI：`ase task create/show/events`、`ase evaluation report` 和 `ase handoff build`；T014 增加受配置驱动的 `ase task run`，从环境读取 API key，复用同一 stores 和 retry runner；T015 增加 `SubprocessCommandExecutor`，在固定 worktree cwd 中以 tokenized argv、命令 allowlist、最小环境、输出上限和进程组 timeout 执行后续 Coder/QA/Reviewer 命令；T016 用 `RoleWorktreeSession` 将同角色 `AgentDefinition`、manager-owned worktree 与该执行端口组合起来，沿用 detached candidate、branch 和 dirty cleanup 规则。缺少回归观察窗口时 ADR 明确为 `PENDING`，不会把未知当成功。完整装配示例见 [`docs/evaluation.md`](docs/evaluation.md) 与 [`docs/runtime.md`](docs/runtime.md)。真实 provider 凭据、模型选择和网络策略仍由部署环境注入；v0.1 不自动 merge、部署或引入并行 DAG。

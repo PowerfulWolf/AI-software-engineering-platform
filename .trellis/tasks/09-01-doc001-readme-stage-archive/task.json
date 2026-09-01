@@ -1,0 +1,22 @@
+{
+  "id": "DOC001",
+  "slug": "readme-stage-archive",
+  "title": "更新当前进度 README 与阶段归档",
+  "status": "completed",
+  "phase": "verify",
+  "depends_on": ["T017"],
+  "allowed_paths": [
+    "README.md",
+    "docs/milestones.md",
+    "docs/archive/**",
+    ".trellis/tasks/09-01-doc001-readme-stage-archive/**"
+  ],
+  "verification_commands": [
+    "uv run pytest -q",
+    "uv run ruff check .",
+    "uv run ruff format --check .",
+    "uv run mypy src tests",
+    "uv build",
+    "git diff --check"
+  ]
+}
