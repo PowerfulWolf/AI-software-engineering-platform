@@ -73,6 +73,7 @@ ai-software-engineer/
 │   ├── orchestration/                # 串行 runner、Context composition 与状态机
 │   ├── runtime.py                    # RuntimeConfig、角色路由与 task run composition
 │   ├── execution.py                  # worktree 内受控 argv/subprocess 执行端口
+│   ├── role_workspace.py             # Git worktree + executor 生命周期组合
 │   ├── evaluation/                   # Evaluation events、metrics/ADR、handoff
 │   └── prompts/                      # 后续：版本化 role prompt 模板
 ├── docs/
@@ -118,6 +119,7 @@ ai-software-engineer/
 │   ├── evaluation/                   # 事件重放、ADR 与 DONE/BLOCKED handoff
 │   ├── runtime/                      # RuntimeSession 与 fake adapter composition
 │   ├── execution/                    # 命令 allowlist、环境和 timeout 测试
+│   ├── role_workspace/               # role worktree 与 executor 组合测试
 │   └── contracts/                    # Python model ↔ JSON Schema 一致性
 └── artifacts/runs/                   # 运行产物（默认 gitignored）
 ```
@@ -163,6 +165,6 @@ uv run mypy src tests
 
 ## 当前状态
 
-M0–M4 与 T001–T015 的 v0.1 核心库已经完成。当前可运行 `ase`，并可用 Pydantic 与 canonical JSON Schema 校验 Task、Agent Definition、StateEvent、ContextBundle、AgentRequest/AgentResult、四类 Artifact、EvaluationEvent、HandoffBundle 与 RuntimeConfig。Task/事件可从 SQLite 恢复，Artifact/Context/Evaluation/Handoff 文件存储都采用不可变、原子、fail-closed 的边界。Repository Plane、Context Plane、Fake/真实 AgentAdapter、串行 Orchestrator、有界 retry/recovery、RuntimeSession 和受策略约束的 worktree 命令执行端口已形成可离线验证的闭环。
+M0–M4 与 T001–T016 的 v0.1 核心库已经完成。当前可运行 `ase`，并可用 Pydantic 与 canonical JSON Schema 校验 Task、Agent Definition、StateEvent、ContextBundle、AgentRequest/AgentResult、四类 Artifact、EvaluationEvent、HandoffBundle 与 RuntimeConfig。Task/事件可从 SQLite 恢复，Artifact/Context/Evaluation/Handoff 文件存储都采用不可变、原子、fail-closed 的边界。Repository Plane、Context Plane、Fake/真实 AgentAdapter、串行 Orchestrator、有界 retry/recovery、RuntimeSession、受策略约束的 worktree 命令执行端口和 role worktree 生命周期组合层已形成可离线验证的闭环。
 
-T012 通过 `EvaluatingAgentAdapter` 自动记录 Agent run 事实，`EvaluationTraceBuilder + EvaluationEngine` 从状态事件、评估事件和封存 Artifact 重算 metrics/ADR；`HandoffBuilder + FileHandoffStore` 为 `DONE/BLOCKED` 输出自包含 JSON 与 Markdown。T013 将这些能力接入离线 CLI：`ase task create/show/events`、`ase evaluation report` 和 `ase handoff build`；T014 增加受配置驱动的 `ase task run`，从环境读取 API key，复用同一 stores 和 retry runner；T015 增加 `SubprocessCommandExecutor`，在固定 worktree cwd 中以 tokenized argv、命令 allowlist、最小环境、输出上限和进程组 timeout 执行后续 Coder/QA/Reviewer 命令。缺少回归观察窗口时 ADR 明确为 `PENDING`，不会把未知当成功。完整装配示例见 [`docs/evaluation.md`](docs/evaluation.md) 与 [`docs/runtime.md`](docs/runtime.md)。真实 provider 凭据、模型选择和网络策略仍由部署环境注入；v0.1 不自动 merge、部署或引入并行 DAG。
+T012 通过 `EvaluatingAgentAdapter` 自动记录 Agent run 事实，`EvaluationTraceBuilder + EvaluationEngine` 从状态事件、评估事件和封存 Artifact 重算 metrics/ADR；`HandoffBuilder + FileHandoffStore` 为 `DONE/BLOCKED` 输出自包含 JSON 与 Markdown。T013 将这些能力接入离线 CLI：`ase task create/show/events`、`ase evaluation report` 和 `ase handoff build`；T014 增加受配置驱动的 `ase task run`，从环境读取 API key，复用同一 stores 和 retry runner；T015 增加 `SubprocessCommandExecutor`，在固定 worktree cwd 中以 tokenized argv、命令 allowlist、最小环境、输出上限和进程组 timeout 执行后续 Coder/QA/Reviewer 命令；T016 用 `RoleWorktreeSession` 将同角色 `AgentDefinition`、manager-owned worktree 与该执行端口组合起来，沿用 detached candidate、branch 和 dirty cleanup 规则。缺少回归观察窗口时 ADR 明确为 `PENDING`，不会把未知当成功。完整装配示例见 [`docs/evaluation.md`](docs/evaluation.md) 与 [`docs/runtime.md`](docs/runtime.md)。真实 provider 凭据、模型选择和网络策略仍由部署环境注入；v0.1 不自动 merge、部署或引入并行 DAG。

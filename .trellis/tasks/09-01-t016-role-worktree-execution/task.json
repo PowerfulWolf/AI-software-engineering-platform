@@ -1,0 +1,31 @@
+{
+  "id": "T016",
+  "slug": "role-worktree-execution",
+  "title": "接入 role worktree 与受控命令执行生命周期",
+  "status": "completed",
+  "phase": "verify",
+  "depends_on": ["T006", "T015"],
+  "allowed_paths": [
+    "src/ai_software_engineer/execution.py",
+    "src/ai_software_engineer/role_workspace.py",
+    "tests/execution/**",
+    "tests/role_workspace/**",
+    "README.md",
+    "docs/architecture.md",
+    "docs/git-worktree.md",
+    "docs/runtime.md",
+    "docs/milestones.md",
+    "AGENTS.md",
+    ".trellis/spec/core/architecture.md",
+    ".trellis/spec/core/python-runtime.md",
+    ".trellis/tasks/09-01-t016-role-worktree-execution/**"
+  ],
+  "verification_commands": [
+    "uv run pytest -q",
+    "uv run ruff check .",
+    "uv run ruff format --check .",
+    "uv run mypy src tests",
+    "uv build",
+    "git diff --check"
+  ]
+}

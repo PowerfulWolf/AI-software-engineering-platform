@@ -9,6 +9,7 @@ import threading
 import time
 from collections.abc import Mapping
 from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Protocol
 
@@ -34,6 +35,29 @@ class CommandTimedOut(CommandExecutionError):
         super().__init__("command timed out")
         self.arguments = arguments
         self.duration_ms = duration_ms
+
+
+@dataclass(frozen=True, slots=True)
+class CommandExecutorSettings:
+    """Validated reusable limits for one or more role-bound executors."""
+
+    environment_allowlist: tuple[str, ...] = _DEFAULT_ENVIRONMENT_ALLOWLIST
+    default_timeout_seconds: float = 600.0
+    max_output_bytes: int = 1_000_000
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "environment_allowlist",
+            _validate_environment_allowlist(self.environment_allowlist),
+        )
+        object.__setattr__(
+            self,
+            "default_timeout_seconds",
+            _validate_timeout(self.default_timeout_seconds),
+        )
+        if type(self.max_output_bytes) is not int or self.max_output_bytes < 1:
+            raise ValueError("max_output_bytes must be a positive integer")
 
 
 class CommandResult(DomainModel):
@@ -74,6 +98,11 @@ class SubprocessCommandExecutor:
         default_timeout_seconds: float = 600.0,
         max_output_bytes: int = 1_000_000,
     ) -> None:
+        settings = CommandExecutorSettings(
+            environment_allowlist=environment_allowlist,
+            default_timeout_seconds=default_timeout_seconds,
+            max_output_bytes=max_output_bytes,
+        )
         self._workspace_root = Path(workspace_root).resolve()
         self._policy = WorkspacePolicy(
             self._workspace_root,
@@ -81,11 +110,9 @@ class SubprocessCommandExecutor:
             denied_paths=denied_paths,
         )
         self._environment = dict(environment if environment is not None else os.environ)
-        self._environment_allowlist = _validate_environment_allowlist(environment_allowlist)
-        self._default_timeout_seconds = _validate_timeout(default_timeout_seconds)
-        if type(max_output_bytes) is not int or max_output_bytes < 1:
-            raise ValueError("max_output_bytes must be a positive integer")
-        self._max_output_bytes = max_output_bytes
+        self._environment_allowlist = settings.environment_allowlist
+        self._default_timeout_seconds = settings.default_timeout_seconds
+        self._max_output_bytes = settings.max_output_bytes
 
     def run(
         self,
@@ -256,6 +283,7 @@ def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
 __all__ = [
     "CommandExecutionError",
     "CommandExecutor",
+    "CommandExecutorSettings",
     "CommandResult",
     "CommandTimedOut",
     "SubprocessCommandExecutor",

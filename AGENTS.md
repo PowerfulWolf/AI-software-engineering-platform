@@ -71,6 +71,11 @@ role worktree cwd，复用 `WorkspacePolicy.authorize_command`，固定 `shell=F
 进程组终止和 stdout/stderr 上限；非零退出只能作为 evidence，不能直接当作 PASS。
 子进程只接收 `PATH`、`LANG`、`LC_ALL` 及显式 environment allowlist 中的变量，禁止把完整
 宿主环境或 API key 自动传入；启动失败和超时必须返回稳定 typed error。
+T016 的 `RoleWorktreeSession` 是 Git 与命令执行的组合入口：`open` 只接受同角色
+`WorktreeSpec + AgentDefinition`，必须使用 `GitWorkspace` 返回的 manager-owned path；
+Coder/QA/Reviewer 的 branch、detached candidate 和 permissions 不能互换。`close` 只能复用
+`GitWorkspace.remove`，dirty worktree 抛 `DirtyWorktree` 并保留现场；不得 force-delete 或
+让 session 直接迁移 Task、写 Artifact、解释 verdict。
 
 ## Agent Prompt 最低要求
 

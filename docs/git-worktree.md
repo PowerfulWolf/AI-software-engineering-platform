@@ -110,3 +110,16 @@ v0.1 不自动 merge。交付物是：
 - 无法确定候选 commit 是否对应 artifact 时，停止清理并进入 `BLOCKED`。
 
 `inspect` 通过 Git 返回精确 HEAD，并合并 staged、unstaged 和 untracked changed paths。`remove` 只接受 layout 与 Git common directory 都属于当前 manager 的 `WorktreeRef`；dirty 时抛出带 `changed_paths` 的 `DirtyWorktree`，clean 时调用 `git worktree remove`，但保留 Coder branch 和 candidate commit。
+
+## RoleWorktreeSession 组合层
+
+T016 的 `RoleWorktreeSession` 将 `WorktreeSpec`、同角色 `AgentDefinition` 和 T015
+`SubprocessCommandExecutor` 组合为一个 `RoleWorktreeBinding`。`open` 先由注入的
+`GitWorkspace` 创建 worktree，再把 `agent.permissions` 绑定到具体 root；role mismatch 在
+创建前拒绝，避免将 Coder 权限错配给 QA/Reviewer。调用方只能通过 binding 的 executor 运行
+tokenized argv，仍受命令、环境、cwd、timeout 和输出边界约束。
+
+`inspect(binding)` 返回 manager 的 Git snapshot，`close(binding)` 只委托受保护的
+`GitWorkspace.remove`：dirty worktree 抛 `DirtyWorktree` 并保留 evidence，clean worktree
+才移除；Coder branch 和 candidate commit 不被清理。session 不修改 Task/Artifact 状态，也不
+负责决定命令是否使 QA PASS 或 Reviewer APPROVE。

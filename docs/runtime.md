@@ -115,3 +115,8 @@ worktree 根目录，调用前复用 `WorkspacePolicy.authorize_command`，只�
 通过 `shell=False`、进程组 timeout、最小环境和 stdout/stderr 截断返回 `CommandResult`。
 当前 `ase task run` 尚未自动让 Agent 执行任意命令；接入必须继续由角色 application service
 显式调用该端口，并把非零退出和日志转换为 evidence，不能把它直接当作 PASS。
+
+T016 的 `RoleWorktreeSession` 进一步把 `WorktreeSpec`、同角色 `AgentDefinition`、
+`GitWorkspace` 和 `SubprocessCommandExecutor` 组合成可复用 binding：Coder 获得 attempt
+branch，QA/Reviewer 获得 candidate SHA 的 detached worktree；`close` 复用 dirty-worktree
+保护。它仍是 application seam，不会自动运行模型输出、改变状态或执行 merge。

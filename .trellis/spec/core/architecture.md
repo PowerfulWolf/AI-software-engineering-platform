@@ -37,6 +37,10 @@ TaskRepository.current_revision(task_id: TaskId) -> int
 GitWorkspace.create(spec: WorktreeSpec) -> WorktreeRef
 GitWorkspace.inspect(worktree: WorktreeRef) -> WorktreeSnapshot
 GitWorkspace.remove(worktree: WorktreeRef) -> None
+RoleWorktreeSession.open(spec: WorktreeSpec, agent: AgentDefinition,
+                         *, denied_paths: tuple[str, ...] = ()) -> RoleWorktreeBinding
+RoleWorktreeSession.inspect(binding: RoleWorktreeBinding) -> WorktreeSnapshot
+RoleWorktreeSession.close(binding: RoleWorktreeBinding) -> None
 WorkspacePolicy.authorize_read(path: str | PurePosixPath) -> PurePosixPath
 WorkspacePolicy.authorize_write(path: str | PurePosixPath) -> PurePosixPath
 WorkspacePolicy.authorize_command(arguments: tuple[str, ...]) -> tuple[str, ...]
@@ -80,6 +84,9 @@ FileHandoffStore.put(bundle: HandoffBundle) -> HandoffRef
 - role worktree root 必须位于 main checkout 外；Coder branch 与 QA/Reviewer detached candidate 不复用旧 attempt；dirty worktree 不自动清理；
 - repository hook/fsmonitor 禁用，repository-local external checkout filter 在没有更强 sandbox 的 v0.1 中 fail closed；
 - 路径 policy 绑定 worktree root 并检查 lexical + symlink containment，command policy 只接受完整 token prefix 和无 shell syntax 的 argv。
+- T016 `RoleWorktreeSession` 只组合同角色 `WorktreeSpec + AgentDefinition`，并把
+  `GitWorkspace.create` 返回的 manager-owned path 绑定到 T015 command executor；它不能创建
+  第二套 layout/ref、绕过 dirty cleanup、迁移 Task 或解释 verdict；
 - Evaluation 不扩展状态机：`EvaluatingAgentAdapter` 装饰既有 adapter 并发出 replay-safe
   AgentRunEvent；TraceBuilder 只读 Task/StateEvent/Artifact/EvaluationEvent；Engine 是纯计算；
 - ADR 的 DONE、四制品链、独立 run、evidence、人类动作、policy 与 regression 条件都必须从
@@ -96,6 +103,8 @@ FileHandoffStore.put(bundle: HandoffBundle) -> HandoffRef
 | context 超预算/含 secret | Context Builder | 先脱敏再计数/哈希；optional 裁剪，required 无法满足时 `BLOCKED` |
 | context ID 冲突、持久化篡改或非法 JSON | ContextStore | `ContextConflict`/`ContextCorruption`，不启动真实 Agent |
 | worktree root/role/ref/revision 不合法 | Git manager | typed Git workspace error；不复用或清理现场 |
+| WorktreeSpec 与 AgentDefinition role 不一致 | RoleWorktreeSession | `RoleWorktreeAgentMismatch`；不创建 worktree |
+| role binding dirty 时请求 close | RoleWorktreeSession → Git manager | `DirtyWorktree`；保留 changed paths 现场 |
 | repository hook/filter 可能执行 | Git manager | hook 强制禁用；external filter 拒绝 create |
 | path/command 越权 | WorkspacePolicy | stable policy violation；命令不启动并生成 evidence |
 | artifact Schema/哈希失败 | ArtifactStore | 不入库，不触发状态迁移 |
@@ -127,6 +136,10 @@ FileHandoffStore.put(bundle: HandoffBundle) -> HandoffRef
   重建保留首次观察时间。
 - **T012 Base**：DONE delivery 在 regression window 结束前保持 `PENDING`，人类仍可审阅 handoff。
 - **T012 Bad**：只看 `Task.status == DONE` 就写 `adr=true`，或任务完成后手工补造“无人干预”历史。
+- **T016 Good**：Coder binding 使用 attempt branch，QA/Reviewer binding detached 到同一 candidate；
+  binding executor 的 cwd 等于 manager-issued root，clean 后才关闭。
+- **T016 Bad**：把 QA AgentDefinition 配给 Coder spec、直接用 main checkout 构造 executor，
+  或 force-remove dirty role worktree。
 
 ## 6. Tests Required
 
@@ -141,6 +154,8 @@ FileHandoffStore.put(bundle: HandoffBundle) -> HandoffRef
   分别停在预期 durable checkpoint。
 - Evaluation：5-case suite 覆盖 eligible/pending/human/blocked/regression；event store 覆盖 replay、
   conflict、合法篡改；emitter 覆盖 success/invalid/replay；handoff 覆盖 DONE/BLOCKED/断链/篡改。
+- Role worktree composition：真实 Git fixture 覆盖同角色 binding、Coder branch、QA detached
+  candidate、固定 executor cwd、role mismatch、dirty/clean cleanup 和初始化失败回收。
 
 ## 7. Wrong vs Correct
 
