@@ -66,6 +66,11 @@ T013 起，`ase` CLI 是 control-plane 的 composition root，而不是绕过领
 | `reviewer` | 仅 `review-report` artifact | 只读检查、测试复跑 | 任何仓库写操作、merge、修复代码 |
 
 自然语言 prompt 不能扩大表格中的权限。命令和路径必须由执行器在调用前检查；拒绝要生成 evidence。
+T015 的 `SubprocessCommandExecutor` 是角色命令执行唯一端口：只接受 tokenized argv，绑定
+role worktree cwd，复用 `WorkspacePolicy.authorize_command`，固定 `shell=False`、timeout、
+进程组终止和 stdout/stderr 上限；非零退出只能作为 evidence，不能直接当作 PASS。
+子进程只接收 `PATH`、`LANG`、`LC_ALL` 及显式 environment allowlist 中的变量，禁止把完整
+宿主环境或 API key 自动传入；启动失败和超时必须返回稳定 typed error。
 
 ## Agent Prompt 最低要求
 

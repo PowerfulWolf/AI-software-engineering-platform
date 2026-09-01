@@ -109,3 +109,9 @@ T014 仍然是单仓库、单 Task、串行 Coder → QA → Reviewer。`Runtime
 DAG、消息队列、向量库、容器 sandbox，也不自动 merge/deploy；Git worktree 的创建、候选
 commit 和最终合并继续属于后续 Git composition/human boundary。Provider SDK 和 HTTP 只
 存在于 `agents/openai_compatible.py`，Runtime 层只依赖 typed `AgentAdapter`。
+
+T015 提供后续 QA/Coder 集成使用的 `SubprocessCommandExecutor`。它绑定一个已经创建的
+worktree 根目录，调用前复用 `WorkspacePolicy.authorize_command`，只接受 tokenized argv，
+通过 `shell=False`、进程组 timeout、最小环境和 stdout/stderr 截断返回 `CommandResult`。
+当前 `ase task run` 尚未自动让 Agent 执行任意命令；接入必须继续由角色 application service
+显式调用该端口，并把非零退出和日志转换为 evidence，不能把它直接当作 PASS。

@@ -25,6 +25,14 @@ v0.1 解决一个窄而完整的问题：在已有 Git 项目中，把一条需�
 
 通过 `AgentAdapter.run(AgentRequest) -> AgentResult` 启动 planning-mode Orchestrator、Coder、QA、Reviewer。每个运行使用独立 `run_id`、Context manifest、角色权限、超时和 worktree。`AgentResult` 只能携带与 request 身份对齐的 typed Artifact，或不含 Artifact 的 typed failure；模型供应商可以更换，但角色契约不能由模型自行修改。T008 的 `FakeAgentAdapter` 通过脚本注入成功、QA FAIL、Review REJECT 和 timeout；T009 的 `SerialOrchestrator` 使用同一 seam 完成离线交付闭环。
 
+### Command Execution Boundary
+
+T015 的 `SubprocessCommandExecutor` 是角色执行命令的唯一预留端口：它绑定具体 worktree
+root，先复用 `WorkspacePolicy` 检查完整 tokenized argv，再以 `shell=False`、明确 cwd、
+最小环境和固定 timeout 启动进程组。非零 return code 只是可观察结果，不等于 verdict；
+stdout/stderr 受字节上限并带截断标志，timeout/启动失败是稳定 typed error。这样 QA 能在
+未来生成可复核 test evidence，同时不让 shell 字符串、宿主机 secrets 或 cwd 越界穿过执行边界。
+
 ### Evidence Plane
 
 Artifact Store 保存 JSON artifact 正文、Schema 版本、producer、source revision、父子关系、证据路径与 SHA-256。Git diff、测试输出和静态检查结果都以 evidence 条目引用，必要时保存截断后的日志文件。
