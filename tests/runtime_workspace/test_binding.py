@@ -10,10 +10,10 @@ from jsonschema import Draft202012Validator, FormatChecker
 from ai_software_engineer.domain import (
     AcceptanceCriterion,
     AgentProfile,
-    AgentRole,
     BrainTier,
     ModelPolicy,
     ModelRoute,
+    OrganizationRole,
     RiskModelFloor,
     RiskTier,
     Task,
@@ -206,7 +206,7 @@ def test_organization_workforce_store_is_idempotent_and_detects_tampering(
         version="v1",
         display_name="Runtime Coder",
         capabilities=("python",),
-        eligible_roles=(AgentRole.CODER,),
+        eligible_roles=(OrganizationRole.CODER,),
         max_parallel_assignments=2,
         default_model_policy_id="model_policy_runtime_001",
     )

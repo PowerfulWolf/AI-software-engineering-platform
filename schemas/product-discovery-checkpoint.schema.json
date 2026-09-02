@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/product-discovery-checkpoint.schema.json",
+  "title": "ProductDiscoveryCheckpoint",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "schema_version",
+    "request_id",
+    "project_id",
+    "revision",
+    "request_revision",
+    "request_sha256",
+    "dialogue_count",
+    "status",
+    "updated_at",
+    "checkpoint_sha256"
+  ],
+  "properties": {
+    "kind": {"const": "product_discovery_checkpoint"},
+    "schema_version": {"const": "v0.1"},
+    "request_id": {"type": "string", "pattern": "^request_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "project_id": {"type": "string", "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "revision": {"type": "integer", "minimum": 1},
+    "previous_checkpoint_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "request_revision": {"type": "integer", "minimum": 1},
+    "request_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "dialogue_count": {"type": "integer", "minimum": 0},
+    "dialogue_head_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "current_product_spec_id": {"type": "string", "pattern": "^product_spec_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "current_product_spec_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "current_product_spec_version": {"type": "integer", "minimum": 1},
+    "current_approval_id": {"type": "string", "pattern": "^product_approval_[a-f0-9]{64}$"},
+    "current_approval_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "status": {"enum": ["PRODUCT_DISCOVERY", "WAITING_PRODUCT_APPROVAL", "CHANGES_REQUESTED", "APPROVED"]},
+    "updated_at": {"type": "string", "format": "date-time"},
+    "checkpoint_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"revision": {"const": 1}}, "required": ["revision"]},
+      "then": {"not": {"required": ["previous_checkpoint_sha256"]}},
+      "else": {"required": ["previous_checkpoint_sha256"]}
+    },
+    {
+      "if": {"properties": {"dialogue_count": {"const": 0}}, "required": ["dialogue_count"]},
+      "then": {"not": {"required": ["dialogue_head_sha256"]}},
+      "else": {"required": ["dialogue_head_sha256"]}
+    },
+    {
+      "if": {"properties": {"status": {"const": "PRODUCT_DISCOVERY"}}, "required": ["status"]},
+      "then": {
+        "not": {
+          "anyOf": [
+            {"required": ["current_product_spec_id"]},
+            {"required": ["current_product_spec_sha256"]},
+            {"required": ["current_product_spec_version"]},
+            {"required": ["current_approval_id"]},
+            {"required": ["current_approval_sha256"]}
+          ]
+        }
+      }
+    },
+    {
+      "if": {"properties": {"status": {"const": "WAITING_PRODUCT_APPROVAL"}}, "required": ["status"]},
+      "then": {
+        "required": ["current_product_spec_id", "current_product_spec_sha256", "current_product_spec_version"],
+        "not": {"anyOf": [{"required": ["current_approval_id"]}, {"required": ["current_approval_sha256"]}]}
+      }
+    },
+    {
+      "if": {"properties": {"status": {"enum": ["CHANGES_REQUESTED", "APPROVED"]}}, "required": ["status"]},
+      "then": {
+        "required": [
+          "current_product_spec_id",
+          "current_product_spec_sha256",
+          "current_product_spec_version",
+          "current_approval_id",
+          "current_approval_sha256"
+        ]
+      }
+    }
+  ]
+}

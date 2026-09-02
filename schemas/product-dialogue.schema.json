@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/product-dialogue.schema.json",
+  "title": "ProductDialogueRecord",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "schema_version",
+    "id",
+    "request_id",
+    "project_id",
+    "sequence",
+    "actor",
+    "content",
+    "recorded_at",
+    "dialogue_sha256"
+  ],
+  "properties": {
+    "kind": {"const": "product_dialogue_record"},
+    "schema_version": {"const": "v0.1"},
+    "id": {"type": "string", "pattern": "^product_dialogue_[a-f0-9]{64}$"},
+    "request_id": {"type": "string", "pattern": "^request_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "project_id": {"type": "string", "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "sequence": {"type": "integer", "minimum": 1},
+    "actor": {"enum": ["HUMAN", "PRODUCT_AGENT"]},
+    "content": {"type": "string", "minLength": 1, "maxLength": 20000},
+    "previous_dialogue_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "recorded_at": {"type": "string", "format": "date-time"},
+    "dialogue_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"sequence": {"const": 1}}, "required": ["sequence"]},
+      "then": {"not": {"required": ["previous_dialogue_sha256"]}},
+      "else": {"required": ["previous_dialogue_sha256"]}
+    }
+  ]
+}

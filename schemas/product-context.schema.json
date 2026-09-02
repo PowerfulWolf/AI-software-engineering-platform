@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/product-context.schema.json",
+  "title": "ProductContextManifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "schema_version",
+    "context_id",
+    "project_id",
+    "request_id",
+    "preparation",
+    "project_profile",
+    "project_baseline",
+    "project_request",
+    "dialogue",
+    "expected_product_spec_version",
+    "sources",
+    "permissions",
+    "built_at",
+    "context_sha256"
+  ],
+  "properties": {
+    "kind": {"const": "product_context_manifest"},
+    "schema_version": {"const": "v0.1"},
+    "context_id": {"type": "string", "pattern": "^ctx_[a-f0-9]{64}$"},
+    "project_id": {
+      "$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/projectId"
+    },
+    "request_id": {
+      "$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/requestId"
+    },
+    "preparation": {
+      "$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/ProjectPreparation"
+    },
+    "project_profile": {
+      "$ref": "https://ai-software-engineer.local/schemas/project-profile.schema.json"
+    },
+    "project_baseline": {
+      "$ref": "https://ai-software-engineer.local/schemas/project-baseline.schema.json#/$defs/ProjectSpecBaseline"
+    },
+    "project_request": {
+      "$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/ProjectRequest"
+    },
+    "dialogue": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/dialogueItem"}
+    },
+    "current_product_spec": {
+      "$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/ProductSpec"
+    },
+    "expected_product_spec_version": {"type": "integer", "minimum": 1},
+    "expected_supersedes": {
+      "$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/productSpecId"
+    },
+    "sources": {
+      "type": "array",
+      "minItems": 5,
+      "items": {"$ref": "#/$defs/source"}
+    },
+    "permissions": {"$ref": "#/$defs/permissions"},
+    "built_at": {"type": "string", "format": "date-time"},
+    "context_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "dialogueItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sequence", "actor", "summary", "dialogue_sha256"],
+      "properties": {
+        "sequence": {"type": "integer", "minimum": 1},
+        "actor": {"enum": ["HUMAN", "PRODUCT_AGENT"]},
+        "summary": {"type": "string", "minLength": 1},
+        "previous_sha256": {"$ref": "#/$defs/sha256"},
+        "dialogue_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uri", "sha256"],
+      "properties": {
+        "uri": {"type": "string", "minLength": 1, "pattern": "^[^\\u0000-\\u001f]+$"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "read_project_facts",
+        "read_project_rules",
+        "read_project_request",
+        "read_product_dialogue",
+        "output_clarification",
+        "output_product_spec",
+        "write_code",
+        "execute_shell",
+        "change_project_state",
+        "approve_product_spec"
+      ],
+      "properties": {
+        "read_project_facts": {"const": true},
+        "read_project_rules": {"const": true},
+        "read_project_request": {"const": true},
+        "read_product_dialogue": {"const": true},
+        "output_clarification": {"const": true},
+        "output_product_spec": {"const": true},
+        "write_code": {"const": false},
+        "execute_shell": {"const": false},
+        "change_project_state": {"const": false},
+        "approve_product_spec": {"const": false}
+      }
+    }
+  }
+}

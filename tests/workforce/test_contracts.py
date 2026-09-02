@@ -18,6 +18,7 @@ from ai_software_engineer.domain import (
     ModelRoute,
     ModelRouteReason,
     ModelSelection,
+    OrganizationRole,
     RiskModelFloor,
     RiskTier,
     RoleAssignment,
@@ -40,7 +41,7 @@ def make_agent_profile() -> AgentProfile:
         version="v1",
         display_name="Alpha",
         capabilities=("python", "contract-testing", "architecture"),
-        eligible_roles=(AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER),
+        eligible_roles=(OrganizationRole.CODER, OrganizationRole.QA, OrganizationRole.REVIEWER),
         max_parallel_assignments=3,
         default_model_policy_id="model_policy_engineering_default",
         metadata={"team": "platform"},
@@ -147,15 +148,39 @@ def test_agent_profile_is_organization_owned_and_not_a_concrete_model_config() -
     profile = make_agent_profile()
 
     assert profile.eligible_roles == (
-        AgentRole.CODER,
-        AgentRole.QA,
-        AgentRole.REVIEWER,
+        OrganizationRole.CODER,
+        OrganizationRole.QA,
+        OrganizationRole.REVIEWER,
     )
     assert profile.max_parallel_assignments == 3
     payload = profile.to_wire()
     payload["model"] = "must-not-be-member-identity"
     with pytest.raises(ValidationError):
         AgentProfile.model_validate(payload)
+
+
+def test_agent_profile_declares_product_as_an_organization_role_only() -> None:
+    profile = make_agent_profile().model_copy(
+        update={
+            "eligible_roles": (
+                OrganizationRole.PROJECT_MANAGER,
+                OrganizationRole.PRODUCT,
+                OrganizationRole.DESIGNER,
+            )
+        }
+    )
+
+    assert profile.eligible_roles == (
+        OrganizationRole.PROJECT_MANAGER,
+        OrganizationRole.PRODUCT,
+        OrganizationRole.DESIGNER,
+    )
+    schema = json.loads(
+        (Path(__file__).parents[2] / "schemas" / "workforce.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert list(Draft202012Validator(schema).iter_errors(profile.to_wire())) == []
 
 
 def test_model_policy_requires_every_risk_floor_and_an_available_route() -> None:

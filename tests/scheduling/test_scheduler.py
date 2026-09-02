@@ -11,6 +11,7 @@ from ai_software_engineer.domain import (
     ModelPolicy,
     ModelRoute,
     ModelRouteReason,
+    OrganizationRole,
     RiskModelFloor,
     RiskTier,
     RoleAssignment,
@@ -37,7 +38,11 @@ def agent(
     name: str = "alpha",
     *,
     capabilities: tuple[str, ...] = ("python",),
-    roles: tuple[AgentRole, ...] = (AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER),
+    roles: tuple[OrganizationRole, ...] = (
+        OrganizationRole.CODER,
+        OrganizationRole.QA,
+        OrganizationRole.REVIEWER,
+    ),
     max_parallel_assignments: int = 1,
     active: bool = True,
 ) -> AgentProfile:
@@ -223,7 +228,7 @@ def test_retry_scheduled_item_becomes_ready_at_its_available_time() -> None:
 def test_agent_eligibility_failures_are_structured(
     role: AgentRole, expected: AssignmentRejectionCode
 ) -> None:
-    profile = agent(capabilities=("java",), roles=(AgentRole.CODER,))
+    profile = agent(capabilities=("java",), roles=(OrganizationRole.CODER,))
     requested = work_item(capabilities=("python",)) if role is AgentRole.CODER else work_item()
 
     decision = PortfolioScheduler().match(requested, role, [profile], [], now=NOW)

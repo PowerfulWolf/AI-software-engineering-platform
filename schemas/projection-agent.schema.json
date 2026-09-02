@@ -9,7 +9,7 @@
     "agent_id": {"type": "string", "minLength": 1},
     "display_name": {"type": "string", "minLength": 1},
     "active": {"type": "boolean"},
-    "eligible_roles": {"type": "array", "items": {"enum": ["orchestrator", "coder", "qa", "reviewer"]}},
+    "eligible_roles": {"type": "array", "items": {"enum": ["project_manager", "product", "designer", "planner", "orchestrator", "coder", "qa", "reviewer"]}},
     "run_ids": {"type": "array", "items": {"type": "string", "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$"}},
     "lease_ids": {"type": "array", "items": {"type": "string", "minLength": 1}},
     "models": {"type": "array", "items": {"type": "string", "minLength": 1}}

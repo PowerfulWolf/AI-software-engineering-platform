@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from types import MappingProxyType
 
-from ai_software_engineer.domain.enums import BrainTier, ModelRouteReason
+from ai_software_engineer.domain.enums import BrainTier, ModelRouteReason, OrganizationRole
 from ai_software_engineer.domain.workforce import (
     AgentProfile,
     ModelPolicy,
@@ -83,7 +83,7 @@ class ModelRouter:
                     message=f"Agent {agent.id} is inactive",
                 ),
             )
-        if demand.role not in agent.eligible_roles:
+        if OrganizationRole(demand.role.value) not in agent.eligible_roles:
             return self._reject(
                 demand,
                 agent,

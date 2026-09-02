@@ -44,6 +44,21 @@ class RequirementPriority(StrEnum):
 
 
 class AgentRole(StrEnum):
+    """Delivery-runtime roles bound to Task artifacts and state transitions."""
+
+    ORCHESTRATOR = "orchestrator"
+    CODER = "coder"
+    QA = "qa"
+    REVIEWER = "reviewer"
+
+
+class OrganizationRole(StrEnum):
+    """Long-lived roles that an organization-owned AgentProfile may declare."""
+
+    PROJECT_MANAGER = "project_manager"
+    PRODUCT = "product"
+    DESIGNER = "designer"
+    PLANNER = "planner"
     ORCHESTRATOR = "orchestrator"
     CODER = "coder"
     QA = "qa"

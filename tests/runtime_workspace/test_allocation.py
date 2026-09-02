@@ -13,6 +13,7 @@ from ai_software_engineer.domain import (
     BrainTier,
     ModelRouteReason,
     ModelSelection,
+    OrganizationRole,
     RiskTier,
     RoleAssignment,
     Task,
@@ -61,7 +62,7 @@ def allocation_facts(tmp_path: Path) -> AllocationFacts:
         version="v1",
         display_name="Runtime Coder",
         capabilities=("python",),
-        eligible_roles=(AgentRole.CODER,),
+        eligible_roles=(OrganizationRole.CODER,),
         max_parallel_assignments=2,
         default_model_policy_id="model_policy_runtime_001",
     )

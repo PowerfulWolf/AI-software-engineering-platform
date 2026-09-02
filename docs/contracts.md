@@ -2,6 +2,10 @@
 
 ## 1. 角色总览
 
+下表是已经进入 Task delivery runtime 的四个岗位，即 `AgentRole`。组织长期成员可声明的
+`OrganizationRole` 还包含 `project_manager/product/designer/planner`；这些上游岗位不能被
+伪装成 delivery `AgentRole` 以绕过各自的 stage/context/approval 契约。
+
 | 角色 | 读取 | 写入 | 可执行 | 不能做 | 输出 |
 |---|---|---|---|---|---|
 | Orchestrator | Task、全部 artifact、策略和 Git 元数据 | 状态事件、artifact 索引、运行元数据 | 受 allowlist 的 Git/测试/Agent 启动 | 不写业务代码，不替代 Reviewer | 状态迁移、路由决定 |
@@ -46,6 +50,11 @@ T018 的 [`schemas/workforce.schema.json`](../schemas/workforce.schema.json) 定
 - `RunDemand`：一次 Run 的风险、上下文规模、变更规模、受影响层数和历史失败等客观路由信号；
 - `AgentRunAllocation`：把 Agent、Assignment、Model、Context、Prompt、Spec 和 tool policy 绑定到
   唯一 `run_id`。
+
+`AgentProfile.eligible_roles` 使用 `OrganizationRole`，可表达 Project Manager、Product、
+Designer、Planner 与四个 delivery 岗位的长期胜任资格。`RoleAssignment`、`RunDemand` 和
+现有 TaskOrchestrator 仍使用只含 `orchestrator/coder/qa/reviewer` 的 `AgentRole`；只有进入
+delivery runtime 时才能执行这一收窄映射。
 
 `AgentProfile` 不包含具体 model 或 project path；Project 不能复制或拥有 AgentProfile。当前
 `AgentDefinition` 是由上述事实和 project policy 解析出的单角色执行配置，用来兼容既有
@@ -310,7 +319,7 @@ T009 的 `SerialOrchestrator.run_task` 只接受 `NEW` Task，并按固定单 at
 ## 9. Python 领域入口
 
 `src/ai_software_engineer/domain/` 是 Python 控制平面的唯一领域类型入口。`TaskStatus`、
-`WorkItemStatus`、`AgentRole`、`BrainTier`、`RiskTier` 和 `ArtifactKind` 不能在 store、agent adapter
+`WorkItemStatus`、`OrganizationRole`、`AgentRole`、`BrainTier`、`RiskTier` 和 `ArtifactKind` 不能在 store、agent adapter
 或 orchestrator 中重复定义。`to_wire()` 负责生成 JSON-compatible payload 并省略不存在的
 optional 字段；cross-language 消费者仍以 `schemas/*.json` 为准。
 
@@ -363,3 +372,65 @@ profile/binding/baseline 重做完整性验证并与传入 checkpoint exact comp
 `StageAdvanceAuthorization`。它不修改 Product/Design/Plan，不写 verdict，也不代替后续
 Task state machine。T029 的这一能力当前是 Python application seam；将它暴露为“项目目录 +
 需求”的统一 CLI 入口是 T032。
+
+## 11. Product Agent 需求澄清与人工确认（T030）
+
+T030 的 `ProductDiscoveryService` 只能在 exact `ProjectPreparation` 之上工作，不会创建或修改
+Delivery Task。它接受四类 typed command：
+
+```python
+start(command: StartProductDiscoveryCommand) -> ProductDiscoveryResult
+record_human_message(command: RecordHumanMessageCommand) -> ProductDiscoveryResult
+run_product(command: RunProductAgentCommand) -> ProductDiscoveryResult
+decide_as_human(command: HumanProductDecisionCommand) -> ProductDiscoveryResult
+```
+
+每个 command 都携带稳定 operation/run ID、timezone-aware `submitted_at` 和（除 start 外）
+`expected_checkpoint_sha256`。过期 checkpoint、同一 operation ID 下改变 typed input、错误阶段或
+lineage 不匹配都 fail closed。
+
+### Product context 和 adapter
+
+`ProductContextBuilder` 构建与 Delivery `Task`/`ContextBundle` 分离的 task-free
+`ProductContextManifest`。它精确绑定 ProjectPreparation、当前 ProjectRequest、已提交对话前缀、
+当前 ProductSpec 以及 next version/supersedes，并为每个来源记录 URI 与 SHA-256。
+`built_at` 可留痕但不参与 context identity，因此相同事实可确定重建。
+
+`ProductAgentAdapter.run(ProductAgentRequest) -> ProductAgentResult` 只允许返回两种成功结果：
+澄清问题或 `READY_FOR_REVIEW` ProductSpec。timeout、provider failure 和 invalid output 使用
+typed failure，不生成批准 verdict。Product Agent 权限明确排除代码修改、shell/command、
+Delivery Task 状态、ProductSpecApproval 和 stage authorization。Fake adapter 与真实 adapter 共享该边界。
+
+### 人工决策不可伪造
+
+`HumanProductDecisionCommand` 只携带人工通道生成的 `approval_reference`、exact ProductSpec ID/digest
+和 expected checkpoint，不直接信任调用方声称的决策、操作人、理由或时间。与 Product Agent
+隔离的 `HumanProductDecisionVerifier` 必须将引用验证为 `VerifiedHumanProductDecision`；
+验证结果与命令或当前 spec 有任何不一致都拒绝。
+
+`REQUEST_CHANGES` 会写入 exact ProductSpecApproval、新 ProjectRequest revision 和人类理由对话，
+再回到需求澄清。`APPROVED` 除写入同样的不可变批准事实外，还必须调用
+Project Manager `advance_stage(StageAdvanceRequest)`；该 Skill 使用当前 facts 重新校验
+`PRODUCT_SPEC_APPROVED → SOLUTION_DESIGN`，不接受调用方伪造时间或 authorization。
+
+### 不可变事实、崩溃恢复与重放
+
+Product sidecar store 保存六类 append-only 事实：
+
+1. digest-linked `ProductDialogueRecord`；
+2. supersedes-linked `ProjectRequestRevision`；
+3. 版本化 `ProductSpec`；
+4. 绑定 exact spec ID/digest 的 `ProductSpecApproval`；
+5. 引用当前对话、request、spec 和 approval digest 的 `ProductDiscoveryCheckpoint`；
+6. 绑定 command digest、result identity 与预期 checkpoint 的 `ProductOperationRecord`。
+
+外部输出校验完成后的写入顺序是“operation receipt（完整 effect bundle）→ 效果事实 →
+checkpoint”，checkpoint 是对外可见的提交点。如果进程在 receipt 之后、effects 或 checkpoint
+发布之前崩溃，exact command replay 会从 receipt 中补齐事实并恢复 checkpoint。已完成的批准
+重放从 receipt 恢复已验证决策和 stage authorization，不会
+再次调用人工验证器或重复推进阶段。store 在文件发布时防止 symlink/path escape，
+并对 schema、SHA-256、序号、supersedes 和跨事实 lineage 逐次复核。
+
+Wire contracts 为 `schemas/product-agent-run.schema.json`、`product-context.schema.json`、
+`product-dialogue.schema.json` 和 `product-discovery-checkpoint.schema.json`。其他 Product 记录在
+Python typed boundary 上验证；后续若跨进程暴露，必须先补 wire schema，不能传递裸 `dict`。

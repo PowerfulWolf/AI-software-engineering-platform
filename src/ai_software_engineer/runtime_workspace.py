@@ -22,7 +22,7 @@ from pydantic import (
 )
 
 from ai_software_engineer.context import ContextStoreError, FileContextStore
-from ai_software_engineer.domain import AgentDefinition, WorkItemStatus
+from ai_software_engineer.domain import AgentDefinition, OrganizationRole, WorkItemStatus
 from ai_software_engineer.domain.agent import AgentId
 from ai_software_engineer.domain.identity import ContextId, ProjectId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, WirePayload
@@ -682,7 +682,7 @@ class RuntimeWorkforceResolver:
     ) -> None:
         if not agent.active or agent.id != assignment.agent_id:
             raise RuntimeAllocationError("AgentProfile is inactive or identity-mismatched")
-        if assignment.role not in agent.eligible_roles:
+        if OrganizationRole(assignment.role.value) not in agent.eligible_roles:
             raise RuntimeAllocationError("AgentProfile is not eligible for assignment role")
         missing = set(item.required_capabilities) - set(agent.capabilities)
         if missing:

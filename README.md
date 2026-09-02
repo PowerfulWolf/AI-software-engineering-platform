@@ -18,9 +18,10 @@
 
 ## 当前进度（2026-09-02）
 
-T001–T029 已完成。T029 新增的 Project Manager preparation 契约已通过 **71 个定向
-测试**；当前全量质量基线为 **451 个测试**，Ruff 检查与格式检查通过，strict Mypy
-检查 **156 个源码文件**，Python sdist/wheel 离线构建通过。
+T001–T030 已完成。T030 新增 Product Agent 需求澄清、版本化 ProductSpec、
+可验证的人工批准门禁与崩溃后重放；Product 定向契约测试当前为 **51 个**。
+当前全量质量基线为 **504 个测试**；Ruff check/format、strict Mypy、offline package build
+和 `git diff --check` 全部通过。
 
 | 阶段 | 状态 | 已交付结果 |
 |---|---|---|
@@ -33,7 +34,7 @@ T001–T029 已完成。T029 新增的 Project Manager preparation 契约已通�
 | M5 组织 Workforce 与任意项目接入 | 已完成 | sidecar、Workforce、Scheduler/ModelRouter、ProjectProfile、SpecCompiler、Runtime workspace binding |
 | M6 可执行交付 | 已完成 | evidence capture、typed tools、跨语言目标项目串行交付、只读投影/API |
 | M7 Agent 可视化 | 已完成 | 静态只读 dashboard：Task board、timeline、Agent detail、Human inbox |
-| M8 Project Manager 与完整 Agent 团队 | 进行中 | T028 已交付上游阶段契约；T029 已交付 `prepare_project`、项目级规范基线、人工冲突路由和阶段授权；T030–T032 待组合 |
+| M8 Project Manager 与完整 Agent 团队 | 进行中 | T028–T030 已交付上游契约、项目准备与 Product 确认循环；T031–T032 待组合 Designer/Planner 与统一接单入口 |
 
 完整阶段事实、任务清单和提交证据见
 [`docs/archive/2026-09-01-t019-t022-organization-runtime.md`](docs/archive/2026-09-01-t019-t022-organization-runtime.md)；
@@ -45,6 +46,8 @@ T028 的 Project Manager/Agent Skills 决策与阶段契约见
 [`docs/archive/2026-09-02-t028-project-manager-stage-contracts.md`](docs/archive/2026-09-02-t028-project-manager-stage-contracts.md)；
 T029 的 Project Manager preparation Skill 实现见
 [`docs/archive/2026-09-02-t029-project-manager-skills.md`](docs/archive/2026-09-02-t029-project-manager-skills.md)；
+T030 的 Product Agent 确认循环见
+[`docs/archive/2026-09-02-t030-product-agent.md`](docs/archive/2026-09-02-t030-product-agent.md)；
 后续路线见 [`docs/milestones.md`](docs/milestones.md)。
 
 ## MVP 边界
@@ -82,7 +85,7 @@ flowchart TB
     READY --> PRODUCT["Product Agent<br/>与用户澄清需求、维护需求对话"]
     U -. "准备完成后讨论需求" .-> PRODUCT
     PRODUCT --> PRODUCT_SPEC["Product Spec<br/>目标、范围、需求、验收标准"]
-    PRODUCT_SPEC --> PRODUCT_REVIEW["Product Review<br/>确认产品定义"]
+    PRODUCT_SPEC --> PRODUCT_REVIEW["Human Product Review<br/>可信人工通道验证 exact spec ID + digest"]
     PRODUCT_REVIEW --> DESIGNER["Solution Designer Agent<br/>技术方案与实施规划"]
     DESIGNER --> TECH_DESIGN["Technical Design<br/>架构、步骤、测试策略、风险"]
     TECH_DESIGN --> PLANNER["Planner Agent<br/>整体执行计划、能力与风险需求"]
@@ -122,7 +125,7 @@ flowchart TB
 | 层 | 核心职责 | 明确不能做 |
 |---|---|---|
 | Project Manager Agent | 团队领导；通过 prepare、advance、commit-dispatch、recover、deliver Skills 接单和推进整支团队 | 不能绕过 Skill 直接写状态、分配资源或批准代码 |
-| Product Agent | 与用户澄清需求，产出可评审、可追溯的 Product Spec | 不能自己批准产品范围，不能设计实现细节 |
+| Product Agent | 与用户澄清需求，产出可评审、可追溯的版本化 Product Spec | 不能自己批准产品范围，不能持有人工决策验证权限，不能设计实现细节 |
 | Solution Designer Agent | 把已确认 Product Spec 转换为 Technical Design 和实施/测试规划 | 不能改写产品需求，不能直接提交业务实现 |
 | Planner Agent | 根据 Product Spec 和 Technical Design 制定整体执行计划，可用只读调度/模型预演 Skills 检查可行性 | 不能提交具体 Agent/模型，不能启动 Agent 或修改状态 |
 | Agent Skills | Agent 按角色调用的 typed、policy-bound 能力接口；把请求委托给确定性 service 并返回可验证结果 | 不是 Prompt 指令，不授予 ambient store/shell 权限 |
@@ -155,6 +158,7 @@ ai-software-engineer/
 │   ├── runtime.py                    # RuntimeConfig、角色路由与 task run composition
 │   ├── runtime_workspace.py           # 组织/项目 workspace 绑定与 workforce 解析
 │   ├── project_manager/               # prepare_project、project baseline、阶段授权与不可变记录
+│   ├── product/                       # Product context/adapter、确认循环、不可变事实与重放
 │   ├── projection/                    # 从 durable facts 重算只读 Task/Run/Agent/Lease
 │   ├── read_api.py                    # transport-neutral GET-only projection API
 │   ├── visualization/                 # 无依赖静态只读 dashboard renderer
@@ -215,7 +219,11 @@ ai-software-engineer/
 │   ├── projection-run.schema.json
 │   ├── projection-agent.schema.json
 │   ├── projection-lease.schema.json
-│   └── projection-snapshot.schema.json
+│   ├── projection-snapshot.schema.json
+│   ├── product-agent-run.schema.json
+│   ├── product-context.schema.json
+│   ├── product-dialogue.schema.json
+│   └── product-discovery-checkpoint.schema.json
 ├── .trellis/
 │   ├── README.md
 │   └── spec/core/
@@ -234,6 +242,7 @@ ai-software-engineer/
 │   ├── spec_compiler/                # 冲突、resolution 与不可变记录
 │   ├── runtime_workspace/            # workspace/binding/allocation 组合契约
 │   ├── project_manager/              # baseline、prepare/replay、stage gate 与跨语言接入
+│   ├── product/                      # Product model/store/context/adapter/service 契约
 │   ├── execution/                    # 命令 allowlist、环境和 timeout 测试
 │   ├── role_workspace/               # role worktree 与 executor 组合测试
 │   ├── evidence/                     # evidence capture、脱敏、重放和完整性
@@ -251,7 +260,7 @@ ai-software-engineer/
 | 位置 | 保存内容 | 谁拥有 |
 |---|---|---|
 | 目标项目目录 | 业务代码、测试、构建文件、项目原生规范 | 原项目 |
-| Project sidecar | ProjectProfile、Assignment、Task/StateEvent、Context、Artifact、Evidence、Handoff | 当前项目 |
+| Project sidecar | ProjectProfile、Product 对话/需求/Spec/批准/checkpoint/operation、Assignment、Task/StateEvent、Context、Artifact、Evidence、Handoff | 当前项目 |
 | Organization workspace | AgentProfile、ModelPolicy、WorkQueue、Lease、跨项目绩效 | AI 软件工程团队 |
 
 目标项目代码目录之外，平台为每个项目建立固定的 sidecar workspace；这些目录不会写入目标项目：
@@ -279,7 +288,9 @@ ai-software-engineer/
 当前架构只有这一种所有权模型：AgentProfile 属于组织，Project sidecar 只保存 Assignment 和项目
 运行事实。T029 已将 `ProjectWorkspaceRegistry + ProjectProfile + RuntimeWorkspaceBinder`
 和 task-free project baseline compiler 封装为 Project Manager Agent 的 `prepare_project` Python
-Skill seam；调用方只传绝对项目目录。统一 CLI 接单入口仍属于 T032。
+Skill seam；调用方只传绝对项目目录。T030 又把需求对话、ProjectRequest 修订、
+ProductSpec 版本、人工批准、checkpoint 和 operation receipt 封存为 sidecar 下的不可变
+事实链。统一 CLI 接单入口仍属于 T032。
 
 ## 推荐的 v0.1 运行形态
 
@@ -332,6 +343,15 @@ uv run mypy src tests
   prepare/reopen sidecar 并复核 current profile、binding 与 baseline，不信任调用方持有的
   过期 result。Agent-visible wire contract 为
   `schemas/agent-skill-project-manager.schema.json`。
+- 在 Python application seam 中使用 `ProductDiscoveryService` 运行需求澄清循环：人类与
+  Product Agent 的每次消息、ProjectRequest 修订、ProductSpec 版本、ProductSpecApproval、
+  checkpoint 和 operation receipt 都是带 SHA-256 的 append-only 事实。
+- 人工决策命令只提交 `approval_reference`；只有与 Product Agent 隔离的
+  `HumanProductDecisionVerifier` 能解析出操作人、决策、理由和时间，并绑定 exact spec ID/digest。
+  `APPROVED` 还必须通过 Project Manager `advance_stage` 对当前事实的重新校验。
+- 同一 operation ID + typed command 可在进程重启后精确重放；operation receipt 保存预期
+  checkpoint，因此在事实已写入但 checkpoint 尚未发布时也能恢复，变更同一
+  operation 的输入则 fail closed。
 
 最小 CLI 流程：
 
@@ -353,8 +373,9 @@ T029 的 `ProjectManagerSkillService.prepare_project(...)` 完成 prepare，并�
 [`docs/runtime.md`](docs/runtime.md) 与 [`docs/cli.md`](docs/cli.md)。
 
 当前最大的产品缺口不是底层组件，而是统一接单入口：T029 已让 Python application
-只用项目目录完成 prepare，但 CLI 还没有把 prepare、Product/Designer/Planner Agent 和现有交付
-循环连成一条用户流程。T030–T032 将依次实现 Product/Designer/Planner Agent 组合，以及“项目目录 + 需求”的统一
+只用项目目录完成 prepare，T030 已让 Product Agent 完成可恢复的需求澄清和人工确认；
+但 CLI 还没有把 prepare、Product、Designer/Planner 和现有交付循环连成一条用户流程。
+T031 下一步实现 Designer/Planner 及调度 Skills，T032 再实现“项目目录 + 需求”的统一
 CLI/E2E，使项目注册、规范编译、Task 创建、团队分配和串行交付自动衔接。持久化 WorkQueue 后台
 循环、自动 merge 保护分支和生产部署仍不在当前能力内。
 

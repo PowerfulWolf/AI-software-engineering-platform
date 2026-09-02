@@ -10,7 +10,12 @@ from datetime import datetime, timedelta
 from hashlib import sha256
 
 from ai_software_engineer.domain.agent import AgentId
-from ai_software_engineer.domain.enums import AgentRole, RiskTier, WorkItemStatus
+from ai_software_engineer.domain.enums import (
+    AgentRole,
+    OrganizationRole,
+    RiskTier,
+    WorkItemStatus,
+)
 from ai_software_engineer.domain.task import AttemptCount, TaskId
 from ai_software_engineer.domain.workforce import (
     AgentProfile,
@@ -144,7 +149,7 @@ class PortfolioScheduler:
             if not agent.active:
                 rejection_code = AssignmentRejectionCode.INACTIVE_AGENT
                 message = f"Agent {agent.id} is inactive"
-            elif role not in agent.eligible_roles:
+            elif OrganizationRole(role.value) not in agent.eligible_roles:
                 rejection_code = AssignmentRejectionCode.ROLE_NOT_ELIGIBLE
                 message = f"Agent {agent.id} is not eligible for role {role.value}"
             elif missing:

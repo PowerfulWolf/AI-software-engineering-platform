@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/product-agent-run.schema.json",
+  "title": "Product Agent Run Envelope",
+  "oneOf": [
+    {"$ref": "#/$defs/request"},
+    {"$ref": "#/$defs/result"}
+  ],
+  "$defs": {
+    "projectId": {
+      "$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/projectId"
+    },
+    "requestId": {
+      "$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/requestId"
+    },
+    "runId": {"type": "string", "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "contextId": {"type": "string", "pattern": "^ctx_[a-f0-9]{64}$"},
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "schema_version",
+        "run_id",
+        "project_id",
+        "request_id",
+        "context",
+        "permissions",
+        "output_schema",
+        "timeout_seconds"
+      ],
+      "properties": {
+        "kind": {"const": "product_agent_request"},
+        "schema_version": {"const": "v0.1"},
+        "run_id": {"$ref": "#/$defs/runId"},
+        "project_id": {"$ref": "#/$defs/projectId"},
+        "request_id": {"$ref": "#/$defs/requestId"},
+        "context": {
+          "$ref": "https://ai-software-engineer.local/schemas/product-context.schema.json"
+        },
+        "permissions": {
+          "$ref": "https://ai-software-engineer.local/schemas/product-context.schema.json#/$defs/permissions"
+        },
+        "output_schema": {"const": "schemas/product-spec.schema.json"},
+        "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 3600}
+      }
+    },
+    "clarification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "schema_version", "summary", "questions"],
+      "properties": {
+        "kind": {"const": "product_clarification"},
+        "schema_version": {"const": "v0.1"},
+        "summary": {"type": "string", "minLength": 1},
+        "questions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "transient"],
+      "properties": {
+        "code": {"enum": ["TIMEOUT", "INVALID_OUTPUT", "PROVIDER_ERROR"]},
+        "message": {"type": "string", "minLength": 1},
+        "transient": {"type": "boolean"}
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "schema_version",
+        "run_id",
+        "project_id",
+        "request_id",
+        "context_id",
+        "status",
+        "duration_ms"
+      ],
+      "properties": {
+        "kind": {"const": "product_agent_result"},
+        "schema_version": {"const": "v0.1"},
+        "run_id": {"$ref": "#/$defs/runId"},
+        "project_id": {"$ref": "#/$defs/projectId"},
+        "request_id": {"$ref": "#/$defs/requestId"},
+        "context_id": {"$ref": "#/$defs/contextId"},
+        "status": {"enum": ["SUCCEEDED", "FAILED", "TIMED_OUT"]},
+        "clarification": {"$ref": "#/$defs/clarification"},
+        "product_spec": {
+          "$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/ProductSpec"
+        },
+        "error": {"$ref": "#/$defs/failure"},
+        "duration_ms": {"type": "integer", "minimum": 0}
+      },
+      "oneOf": [
+        {
+          "required": ["clarification"],
+          "properties": {"status": {"const": "SUCCEEDED"}},
+          "not": {"anyOf": [{"required": ["product_spec"]}, {"required": ["error"]}]}
+        },
+        {
+          "required": ["product_spec"],
+          "properties": {"status": {"const": "SUCCEEDED"}},
+          "not": {"anyOf": [{"required": ["clarification"]}, {"required": ["error"]}]}
+        },
+        {
+          "required": ["error"],
+          "properties": {
+            "status": {"const": "FAILED"},
+            "error": {
+              "type": "object",
+              "required": ["code"],
+              "properties": {
+                "code": {"enum": ["INVALID_OUTPUT", "PROVIDER_ERROR"]}
+              }
+            }
+          },
+          "not": {"anyOf": [{"required": ["clarification"]}, {"required": ["product_spec"]}]}
+        },
+        {
+          "required": ["error"],
+          "properties": {
+            "status": {"const": "TIMED_OUT"},
+            "error": {
+              "type": "object",
+              "required": ["code"],
+              "properties": {"code": {"const": "TIMEOUT"}}
+            }
+          },
+          "not": {"anyOf": [{"required": ["clarification"]}, {"required": ["product_spec"]}]}
+        }
+      ]
+    }
+  }
+}

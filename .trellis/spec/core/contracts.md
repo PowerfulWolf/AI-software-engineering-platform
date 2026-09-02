@@ -428,3 +428,130 @@ authorization = project_manager.advance_stage(
 
 正确流程在任何需求出现前只编译项目基线，冲突必须给人类，且只有重新校验通过的
 ProjectPreparation 才能解锁 Product Agent。
+
+## 13. T030 Product Agent discovery contract
+
+### 13.1 Scope / Trigger
+
+当实现或修改 Product Agent、需求澄清、ProductSpec 版本、用户确认、Product discovery
+重放或 Designer gate 时必须遵守本契约。Product discovery 是 Task-free 上游阶段：不得创建假
+Delivery Task，也不得复用 Coder/QA/Reviewer 的 `AgentRole`、ContextBundle 或审批能力。
+
+`OrganizationRole` 表示长期团队岗位；`AgentRole` 只表示现有 Delivery runtime 的
+`ORCHESTRATOR/CODER/QA/REVIEWER`。Product Agent 是组织成员，但不是 Delivery verdict participant。
+
+### 13.2 Public signatures
+
+```python
+class ProductAgentAdapter(Protocol):
+    def run(self, request: ProductAgentRequest) -> ProductAgentResult: ...
+
+class HumanProductDecisionVerifier(Protocol):
+    def verify(self, command: HumanProductDecisionCommand) -> VerifiedHumanProductDecision: ...
+
+class ProjectStageAdvancePort(Protocol):
+    def advance_stage(self, request: StageAdvanceRequest) -> StageAdvanceAuthorization: ...
+
+class ProductRecordStore(Protocol):
+    # append-only typed dialogue/request/spec/approval/checkpoint/operation methods
+    ...
+
+ProductDiscoveryService.start(command: StartProductDiscoveryCommand) -> ProductDiscoveryResult
+ProductDiscoveryService.record_human_message(
+    command: RecordHumanMessageCommand,
+) -> ProductDiscoveryResult
+ProductDiscoveryService.run_product(command: RunProductAgentCommand) -> ProductDiscoveryResult
+ProductDiscoveryService.decide_as_human(
+    command: HumanProductDecisionCommand,
+) -> ProductDiscoveryResult
+```
+
+Wire schemas：`schemas/product-context.schema.json`、`schemas/product-agent-run.schema.json`、
+`schemas/product-dialogue.schema.json`、`schemas/product-discovery-checkpoint.schema.json`。
+
+### 13.3 Executable contracts
+
+- 四类 command 都必须带调用方生成的 aware `submitted_at`；command identity 包含完整 typed
+  input。相同 operation/run ID + 相同 input 是 exact replay，不同 input 是 conflict；
+- Product context 必须携带并绑定 exact `ProjectProfile`、`ProjectSpecBaseline`、preparation、request
+  revision、checkpoint 所引用的 dialogue prefix、current ProductSpec 和 fail-closed permissions；Agent
+  不能只收到无内容的 hash 引用。独立 source 只有在存在独立 digest 时才能单独声明，项目 baseline
+  作为一个 verified aggregate source；
+- Product Agent 只能返回 clarification 或 `READY_FOR_REVIEW` ProductSpec；不能写代码、执行 shell、
+  改项目状态或批准 ProductSpec；ProductSpec 必须覆盖 acceptance criteria，并严格使用
+  `version=current+1`、`supersedes=current.id`；
+- 人类 decision command 只携带可信 channel reference。只有 `HumanProductDecisionVerifier` 返回的
+  `VerifiedHumanProductDecision` 才能创建 Approval；Product Agent 不能构造 decision/operator/rationale；
+- APPROVED 必须在写入审批事实前调用 Project Manager 的 `advance_stage(request)`，由该 Skill
+  重新检查 current project facts；旧 preparation、旧 spec ID/digest 或 project drift 全部 fail closed；
+- Dialogue、ProjectRequestRevision、ProductSpec、Approval、Operation、Checkpoint 都 append-only。
+  adapter/verifier/advancer 输出在内存中校验后，第一个 durable write 必须是携带完整 effect bundle、
+  目标 checkpoint 和不可重算外部授权 evidence 的 operation receipt；随后才发布 effects → checkpoint。
+  checkpoint 是原子提交点；重启通过 receipt 补齐缺失 effects/checkpoint，不得再次调用已完成的外部端口；
+- store 必须使用 root-relative directory descriptors、`O_NOFOLLOW` 与 exclusive hard-link publish，
+  并在 publish 前后校验目录 inode；symlink swap、路径逃逸、并发 changed winner 和篡改全部拒绝。
+
+### 13.4 Validation & Error Matrix
+
+| Input / state | Detection | Required result |
+|---|---|---|
+| 未 PREPARED 或 preparation/request lineage 不一致 | context/service gate | typed error，不调用 Product Agent |
+| dialogue sequence/head 或 source digest 不一致 | context integrity | fail closed，不构建 context |
+| adapter timeout/provider error/invalid output | typed result boundary | 记录失败 operation，不推进 checkpoint |
+| clarification | adapter result | 追加 Product dialogue，提交新 checkpoint |
+| ProductSpec 版本、supersedes、scope 或 status 错误 | service/domain guard | `ProductAgentOutputRejected`，无 approval |
+| Product Agent 自带 approval 字段 | schema/tool boundary | rejected；只有 human verifier port 可决策 |
+| approval reference 未验证或 verified identity 不一致 | trusted verifier guard | `ProductDiscoveryStateError`，无 approval fact |
+| stale checkpoint/spec 或 current project facts drift | checkpoint + PM Skill | typed stale/drift error，不解锁 Designer |
+| crash before operation receipt | no durable operation exists | 由外部端口自身 idempotency/retry policy 处理，不猜测完成 |
+| crash after receipt/before effects/checkpoint | receipt effect bundle | 补齐 effects 并提交 exact checkpoint，不重复外部调用 |
+| operation ID 改 input | operation store/service | `ProductOperationConflict` |
+| symlink swap/path escape/tamper | store path/integrity guards | typed store error，不写目标项目 |
+
+### 13.5 Good / Base / Bad Cases
+
+- **Good**：PREPARED 项目收到需求，Product Agent 多轮澄清并生成 v1 ProductSpec；可信人类通道
+  批准 exact ID/digest，Project Manager 重验 current facts 后解锁 Designer。
+- **Base**：adapter timeout 只形成 typed failure receipt；current discovery checkpoint 不变，后续可重试。
+- **Bad**：Product Agent 自批、从会话记忆猜用户决定、用最新文件替代 checkpoint prefix、把旧 preview
+  当授权、在目标项目写对话/状态，或在 restart 时再次执行外部审批副作用。
+
+### 13.6 Required tests
+
+- `tests/product/test_context.py`：Task-free exact sources、dialogue chain、baseline aggregate provenance、
+  permission deny 与 Schema；
+- `tests/product/test_agents.py`：clarification/ready/timeout/provider/invalid output、request echo 与 conflict；
+- `tests/product/test_models.py`、`test_store.py`：digest/lineage、exact replay、tamper、concurrency、
+  symlink/path race；
+- `tests/product/test_service.py`：start/message/clarify/version/approval/change request、stale/drift、
+  human-only verification、restart replay 与 interrupted checkpoint recovery；
+- targeted/full pytest、Ruff check/format、strict Mypy、offline build 和 `git diff --check` 是合并门禁。
+
+### 13.7 Wrong vs Correct
+
+#### Wrong
+
+```python
+decision = product_agent.approve(spec)
+store.overwrite_current_spec(spec)
+designer.start(latest_spec_from_directory())
+```
+
+#### Correct
+
+```python
+ready = product_service.run_product(run_command)
+approved = product_service.decide_as_human(
+    HumanProductDecisionCommand(
+        approval_reference=trusted_human_reference,
+        product_spec_id=ready.product_spec.id,
+        product_spec_sha256=ready.product_spec.product_spec_sha256,
+        expected_checkpoint_sha256=ready.checkpoint.checkpoint_sha256,
+        submitted_at=received_at,
+        **identity,
+    )
+)
+assert approved.authorization is not None
+```
+
+正确流程让产品决策成为可验证、可恢复的组织事实，而不是某个 Agent 对当前聊天的解释。

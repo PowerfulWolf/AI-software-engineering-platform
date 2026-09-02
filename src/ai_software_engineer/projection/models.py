@@ -17,7 +17,12 @@ from typing import Annotated, Literal, Self
 from pydantic import AwareDatetime, Field, StrictBool, StrictInt, StringConstraints, model_validator
 
 from ai_software_engineer.domain.artifact import Artifact, ArtifactId, EvidenceId
-from ai_software_engineer.domain.enums import AgentRole, TaskStatus, WorkItemStatus
+from ai_software_engineer.domain.enums import (
+    AgentRole,
+    OrganizationRole,
+    TaskStatus,
+    WorkItemStatus,
+)
 from ai_software_engineer.domain.event import StateEvent
 from ai_software_engineer.domain.identity import ContextId, ProjectId, RunId
 from ai_software_engineer.domain.model import DomainModel, JsonValue, NonEmptyStr, ensure_unique
@@ -132,7 +137,7 @@ class AgentProjection(DomainModel):
     agent_id: NonEmptyStr
     display_name: NonEmptyStr | None = None
     active: StrictBool | None = None
-    eligible_roles: tuple[AgentRole, ...] = ()
+    eligible_roles: tuple[OrganizationRole, ...] = ()
     run_ids: tuple[RunId, ...] = ()
     lease_ids: tuple[NonEmptyStr, ...] = ()
     models: tuple[NonEmptyStr, ...] = ()

@@ -2089,3 +2089,117 @@ authorization.validate_integrity()
 
 正确模式让“项目已准备”成为可重放、可重新验证的组织事实，而不是某个 Agent
 会话中的临时假设。
+
+## 24. Product discovery durable runtime（T030）
+
+### 24.1 Scope / Trigger
+
+实现 Product discovery application、Product adapter、上游 context routing、可信用户确认或
+sidecar product records 时使用本节。该 runtime 位于 `ProjectPreparation` 之后、
+`TechnicalDesign` 之前，必须独立于 Delivery Task runtime。
+
+### 24.2 Signatures and fixed runtime order
+
+```python
+service = ProductDiscoveryService(
+    preparation=current_preparation,
+    store=product_record_store,
+    adapter=product_agent_adapter,
+    stage_advancer=project_manager_skill,
+    human_decision_verifier=trusted_human_channel,
+)
+
+started = service.start(start_command)
+message = service.record_human_message(message_command)
+candidate = service.run_product(run_command)
+decision = service.decide_as_human(decision_command)
+```
+
+每个成功状态变化固定执行：
+
+```text
+load exact committed checkpoint
+→ validate expected checkpoint and external typed output
+→ write operation receipt(checkpoint + complete effect bundle + external evidence)
+→ publish immutable effect facts
+→ publish immutable checkpoint as commit point
+→ return typed result
+```
+
+`ProductContextBuilder.build(...)` 必须携带并校验 exact `ProjectProfile` 与 `ProjectSpecBaseline` 内容，
+并只读取 checkpoint 引用的 request revision 与 dialogue prefix；只给 URI/hash 而不给可读规则内容不算
+完成 routing。目录中更新但尚未提交的 orphan effect records 不能改变 current context。Product Agent
+permissions 固定只读项目事实/规范/请求/对话并仅输出 clarification/ProductSpec，所有代码、shell、
+state、approval 权限为 false。
+
+### 24.3 Persistence / replay / trust contracts
+
+- `FileProductRecordStore` root 必须位于 project sidecar，不得是目标项目目录；所有记录 canonical
+  JSON、digest-bound、append-only；
+- `current_checkpoint` 决定已提交事实；读取历史 checkpoint 校验其引用的 exact prefix，不要求它等于
+  文件夹中最新 orphan facts；
+- command 的 `submitted_at` 为 deterministic event time。重试相同 command 必须重建相同 dialogue、
+  request revision、spec/approval 和 operation identity；
+- operation receipt 的 `result_payload.effects/checkpoint` 是 crash recovery evidence。receipt 是校验
+  外部结果后的第一个 durable write；若 effects/checkpoint 尚未发布，replay 先 exact-materialize
+  effects，再校验 request/revision/lineage 并发布 checkpoint；
+- APPROVED receipt 还必须保存 verified human decision 与 `StageAdvanceAuthorization`；completed replay
+  从 receipt 恢复结果，禁止再次调用 verifier 或 stage advancer；
+- human verifier 与 Project Manager Skill 是 policy-bound dependencies，不能从 Product Agent
+  request/prompt/tool payload 注入；
+- Product Agent adapter 抛异常被转换为 application error；provider/timeout/invalid output 应优先返回
+  typed terminal result，不能用半成品 ProductSpec 推进。
+
+### 24.4 Validation matrix
+
+| Runtime point | Invalid case | Required behavior / no-side-effect guarantee |
+|---|---|---|
+| command boundary | naive/missing submitted time、extra field | Pydantic rejection |
+| context build | fake Task、wrong preparation/request/dialogue source | typed lineage/integrity error |
+| adapter response | run/project/request/context echo mismatch | `ProductAgentOutputRejected` |
+| spec persistence | wrong status/version/supersedes/coverage | reject before approval/checkpoint |
+| human decision | untrusted reference or verifier mismatch | no Approval/Designer authorization |
+| PM stage check | profile/binding/baseline drift | propagate typed drift, no Approval fact |
+| effect publish | exact existing record | replay same record |
+| effect publish | same identity/different bytes | conflict, preserve first winner |
+| effect/checkpoint publish interruption | receipt exists | materialize exact effect bundle and checkpoint once |
+| completed approval retry | verifier/advancer unavailable | replay stored evidence successfully |
+| path traversal/symlink swap | dirfd/inode guard | typed path error; no outside write |
+
+### 24.5 Good / Base / Bad
+
+- **Good**：进程在 operation receipt 后退出；相同 command 重启，恢复 checkpoint，并返回
+  `replayed=true`，adapter/verifier/advancer 的已完成外部副作用不重复。
+- **Base**：timeout receipt 指向当前 checkpoint；状态不前进，retry policy 可选择新 run ID。
+- **Bad**：用 wall clock 重建旧 command、读取 `latest_request_revision()` 作为 current、先发布 checkpoint
+  再写 receipt、在 replay 中再次请求人类/授权，或跟随 symlink 发布记录。
+
+### 24.6 Required tests
+
+- context：exact sources/aggregate baseline、dialogue prefix、permissions、schema/tamper；
+- adapter：all terminal behaviors、identity echo、exact request replay/conflict；
+- store：all records、lineage/digest/envelope、concurrent winner、symlink swap/path escape；
+- service：state/lineage/version/human-only approval/project drift、external-free completed replay、
+  receipt-to-checkpoint recovery；
+- 合并前运行 T030 targeted suite、全量 pytest、Ruff、strict Mypy、offline build、diff check。
+
+### 24.7 Wrong vs Correct
+
+#### Wrong
+
+```python
+facts = store.latest_everything(request_id)
+approval = ProductSpecApproval.create(spec, decision=agent_decision)
+store.replace_checkpoint(checkpoint)
+```
+
+#### Correct
+
+```python
+checkpoint = store.current_checkpoint(request_id)
+facts = store.resolve_checkpoint_prefix(checkpoint)
+result = product_service.decide_as_human(command_with_trusted_reference)
+result.checkpoint.validate_integrity()
+```
+
+runtime 以 immutable checkpoint 和可信 port 隔离模型推理、用户决定、项目政策与 durable state。

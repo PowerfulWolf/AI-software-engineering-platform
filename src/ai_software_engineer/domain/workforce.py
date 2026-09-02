@@ -10,6 +10,7 @@ from ai_software_engineer.domain.enums import (
     AgentRole,
     BrainTier,
     ModelRouteReason,
+    OrganizationRole,
     RiskTier,
     WorkItemStatus,
 )
@@ -50,7 +51,7 @@ class AgentProfile(DomainModel):
     version: AgentProfileVersion
     display_name: NonEmptyStr
     capabilities: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1)]
-    eligible_roles: Annotated[tuple[AgentRole, ...], Field(min_length=1)]
+    eligible_roles: Annotated[tuple[OrganizationRole, ...], Field(min_length=1)]
     max_parallel_assignments: ParallelAssignmentLimit
     default_model_policy_id: ModelPolicyId
     active: StrictBool = True

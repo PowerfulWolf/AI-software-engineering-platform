@@ -14,6 +14,7 @@ from ai_software_engineer.domain.artifact import (
     QaReportArtifact,
     ReviewReportArtifact,
 )
+from ai_software_engineer.domain.enums import OrganizationRole
 from ai_software_engineer.domain.event import StateEvent
 from ai_software_engineer.domain.task import Task, TaskId
 from ai_software_engineer.domain.workforce import (
@@ -449,8 +450,12 @@ class RunProjectionBuilder:
             agent_runs = sorted(run_by_agent.get(agent_id, ()), key=lambda item: item.run_id)
             agent_leases = sorted(lease_by_agent.get(agent_id, ()), key=lambda item: item.lease_id)
             roles = set(profile.eligible_roles if profile else ())
-            roles.update(item.role for item in agent_runs if item.role is not None)
-            roles.update(item.role for item in agent_leases if item.role is not None)
+            roles.update(
+                OrganizationRole(item.role.value) for item in agent_runs if item.role is not None
+            )
+            roles.update(
+                OrganizationRole(item.role.value) for item in agent_leases if item.role is not None
+            )
             models = {item.model for item in agent_runs if item.model is not None}
             result.append(
                 AgentProjection(
