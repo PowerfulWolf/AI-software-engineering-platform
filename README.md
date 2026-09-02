@@ -16,44 +16,6 @@
 4. **Task 内串行，组织层有界调度**：每个 Task 仍按 `Coder → QA → Reviewer` 串行；组织可以在
    容量允许时调度多个相互隔离 Task，不引入单 Task 复杂 DAG、共享会话或分布式队列。
 
-## 当前进度（2026-09-02）
-
-T001–T032 已完成。T032 把 Project Manager prepare、Product confirmation、Designer、Planner、原子
-dispatch 和现有串行 Delivery 组合成统一、可恢复的 application/CLI facade，并补齐 Dispatch→Task、
-ExecutionPlan→PlanArtifact 与 role worktree 的严格消费边界。当前全量质量基线为 **604 个测试**；
-Ruff check/format、strict Mypy、offline package build 和 `git diff --check` 全部通过。
-
-| 阶段 | 状态 | 已交付结果 |
-|---|---|---|
-| M0 设计与 Bootstrap | 已完成 | 总体架构、契约、状态机、Trellis/Codex 指令、Python CLI 骨架 |
-| M1 Domain + Persistence | 已完成 | 强类型领域模型、SQLite 事件事实、纯状态机、不可变 ArtifactStore |
-| M2 Git + Context | 已完成 | role worktree 隔离、命令/路径策略、确定性 Context Builder/Router |
-| M3 串行 Agent Loop | 已完成 | Fake/真实 AgentAdapter、`Coder → QA → Reviewer`、有界重试与恢复 |
-| M4 Evaluation + Handoff | 已完成 | Evaluation events、指标/ADR 重算、DONE/BLOCKED handoff、CLI/runtime |
-| 执行安全边界 | 已完成 | fail-closed 命令执行端口、role worktree 执行生命周期 |
-| M5 组织 Workforce 与任意项目接入 | 已完成 | sidecar、Workforce、Scheduler/ModelRouter、ProjectProfile、SpecCompiler、Runtime workspace binding |
-| M6 可执行交付 | 已完成 | evidence capture、typed tools、跨语言目标项目串行交付、只读投影/API |
-| M7 Agent 可视化 | 已完成 | 静态只读 dashboard：Task board、timeline、Agent detail、Human inbox |
-| M8 Project Manager 与完整 Agent 团队 | 已完成 | T028–T032：准备、Product 确认、Designer/Planner、原子分配与统一可恢复接单入口 |
-
-完整阶段事实、任务清单和提交证据见
-[`docs/archive/2026-09-01-t019-t022-organization-runtime.md`](docs/archive/2026-09-01-t019-t022-organization-runtime.md)；
-T023–T025 的执行边界和跨语言验证见
-[`docs/archive/2026-09-01-t025-target-project-e2e.md`](docs/archive/2026-09-01-t025-target-project-e2e.md)；
-T026–T027 的只读投影与可视化见
-[`docs/archive/2026-09-01-t026-t027-projection-visualization.md`](docs/archive/2026-09-01-t026-t027-projection-visualization.md)；
-T028 的 Project Manager/Agent Skills 决策与阶段契约见
-[`docs/archive/2026-09-02-t028-project-manager-stage-contracts.md`](docs/archive/2026-09-02-t028-project-manager-stage-contracts.md)；
-T029 的 Project Manager preparation Skill 实现见
-[`docs/archive/2026-09-02-t029-project-manager-skills.md`](docs/archive/2026-09-02-t029-project-manager-skills.md)；
-T030 的 Product Agent 确认循环见
-[`docs/archive/2026-09-02-t030-product-agent.md`](docs/archive/2026-09-02-t030-product-agent.md)；
-T031 的 Designer、Planner 与原子 Dispatch 见
-[`docs/archive/2026-09-02-t031-designer-planner-dispatch.md`](docs/archive/2026-09-02-t031-designer-planner-dispatch.md)；
-T032 的统一接单、恢复和 worktree bridge 见
-[`docs/archive/2026-09-02-t032-unified-project-entry.md`](docs/archive/2026-09-02-t032-unified-project-entry.md)；
-后续路线见 [`docs/milestones.md`](docs/milestones.md)。
-
 ## MVP 边界
 
 输入：
@@ -328,83 +290,140 @@ uv run mypy src tests
 
 项目使用 Python 3.12+。uv 会读取 `.python-version` 并建立隔离环境；`ase` 是平台 CLI 入口。
 
-## 当前如何使用
+## 最新使用方法
 
-当前版本首先是一套可运行、可测试、可扩展的控制平面基础，而不是已经能够对任意项目全自动
-改码交付的最终产品。现阶段可以：
-
-- 用 `ase task create/show/events` 创建和审计强类型 Task；
-- 用 `ase task run` 按固定顺序运行配置驱动的 Coder、QA、Reviewer；
-- 用 `ase evaluation report` 从 durable facts 重算指标和 ADR；
-- 用 `ase handoff build` 为 `DONE/BLOCKED` Task 生成 JSON + Markdown 交付包；
-- 在 Python application seam 中注册任意本地项目的外置 sidecar workspace；
-- 只读发现语言、构建系统、VCS 和项目原生规范来源，并以 URI/hash 形成 ProjectProfile；
-- 用 SpecCompiler 编译结构化组织/项目/Task 规则，冲突时生成 `WAITING_HUMAN` 路由和不可变 resolution；
-- 用 AgentProfile、WorkItem、RoleAssignment、TaskLease、ModelPolicy、ModelSelection 和
-  AgentRunAllocation 表达组织成员、容量和 run-scoped 大脑；
-- 用 PortfolioScheduler/ModelRouter 做确定、可重放的 Assignment/Lease 与模型选择决策；
-- 在 Python application seam 中绑定组织/项目 workspace，并解析 run-scoped AgentDefinition；
-- 用 typed tool protocol 和 EvidenceStore 约束并封存文件、命令、diff、测试及模型 usage；
-- 用跨语言 fixture 验证 Python、Java、C++、Go、TypeScript 项目的隔离交付边界；
-- 从 durable facts 重算 projection，并输出只读 JSON/静态 dashboard。
-- 用 ProjectPreparation、ProjectRequest、ProductSpec/Approval、TechnicalDesign 和 ExecutionPlan
-  typed contracts 表达上游团队交接；只有用户批准的精确 Product Spec 和完整阶段链才能派生 Task。
-- 在 Python application seam 中调用 `ProjectManagerSkillService.prepare_project(...)`：只给绝对
-  项目目录，即可注册/重开外置 sidecar、发现 ProjectProfile、绑定组织并编译不含
-  Task 假设的项目基线；冲突返回 `WAITING_HUMAN`，成功返回可重放的
-  `ProjectPreparation`。
-- 启动 Product Agent 前调用同一 service 的 `require_product_context(...)`；该门禁会重新
-  prepare/reopen sidecar 并复核 current profile、binding 与 baseline，不信任调用方持有的
-  过期 result。Agent-visible wire contract 为
-  `schemas/agent-skill-project-manager.schema.json`。
-- 在 Python application seam 中使用 `ProductDiscoveryService` 运行需求澄清循环：人类与
-  Product Agent 的每次消息、ProjectRequest 修订、ProductSpec 版本、ProductSpecApproval、
-  checkpoint 和 operation receipt 都是带 SHA-256 的 append-only 事实。
-- 人工决策命令只提交 `approval_reference`；只有与 Product Agent 隔离的
-  `HumanProductDecisionVerifier` 能解析出操作人、决策、理由和时间，并绑定 exact spec ID/digest。
-  `APPROVED` 还必须通过 Project Manager `advance_stage` 对当前事实的重新校验。
-- 同一 operation ID + typed command 可在进程重启后精确重放；operation receipt 保存预期
-  checkpoint，因此在事实已写入但 checkpoint 尚未发布时也能恢复，变更同一
-  operation 的输入则 fail closed。
-- 通过 `UnifiedProjectEntryService` 或宿主已绑定的 `ase project start/reply/approve/resume/status`
-  统一接单；`ProjectDeliveryIntake` 与 checkpoint chain 允许从 PREPARING 到 DELIVERING 的任一自动
-  阶段恢复，人工命令必须绑定 exact current checkpoint。
-- 从 `DispatchCommitRecord` exact-create-or-compare Delivery Task，并把 approved ExecutionPlan 机械
-  materialize 为 PlanArtifact；Coder、QA、Reviewer 的 Agent/model 与 worktree 必须消费 exact dispatch。
-
-低层 Task CLI 流程：
+### 1. 安装开发环境
 
 ```bash
+git clone git@github.com:PowerfulWolf/AI-software-engineering-platform.git
+cd AI-software-engineering-platform
 uv sync
-uv run ase task create --file task.json --database /path/to/ai-workspace/state/state.sqlite3
+uv run ase --help
+```
+
+项目要求 Python 3.12+、`uv` 和 Git。平台数据不会写进目标项目，而是由宿主放在外置的
+organization workspace、project sidecar 和 worktree root 中。
+
+### 2. 通过 Project Manager 接单
+
+这是最新的面向用户入口。application host 完成一次团队配置后，每个需求只需要目标项目目录和需求
+文本，不需要再传 SQLite、artifact、context 或 worktree 路径：
+
+```bash
+uv run ase project start /absolute/path/to/target-project \
+  --requirement "增加订单取消功能，并补充自动化测试"
+```
+
+Project Manager 会自动完成：
+
+```text
+注册或重开项目 sidecar
+  → 发现 ProjectProfile 与项目原生规范
+  → 编译组织/项目规范
+  → Product Agent 整理 ProductSpec
+  → 等待用户澄清或确认
+  → Designer 生成 TechnicalDesign
+  → Planner 生成 ExecutionPlan
+  → Scheduler/ModelRouter 分配 Agent 与模型
+  → Coder → QA → Reviewer
+  → DONE 或带证据的 BLOCKED
+```
+
+命令返回 JSON，其中最重要的是 `checkpoint.delivery_id`、`checkpoint.stage`、
+`checkpoint.checkpoint_sha256` 和 Product 阶段产物。后续操作必须引用最新 checkpoint，防止旧页面或
+重复命令覆盖新事实。
+
+Product Agent 需要补充信息时：
+
+```bash
+uv run ase project reply delivery_xxx \
+  --checkpoint <current-checkpoint-sha256> \
+  --message "取消只允许在未支付状态进行"
+```
+
+ProductSpec 已可评审时，确认当前版本并继续整支团队：
+
+```bash
+uv run ase project approve delivery_xxx \
+  --checkpoint <current-checkpoint-sha256>
+```
+
+查看进度或在进程中断后恢复：
+
+```bash
+uv run ase project status delivery_xxx
+uv run ase project resume delivery_xxx
+```
+
+`resume` 不会生成新的业务输入，只会重新校验 durable facts 并从第一个未完成阶段继续。规范冲突、
+stale checkpoint、Agent 输出无效或 worktree 漂移都会 fail closed，不会静默猜测或覆盖。
+
+### 3. 当前生产绑定边界
+
+仓库已经提供统一 CLI、可恢复 application facade、完整 checkpoint/dispatch/worktree 契约和离线跨语言
+E2E，但**不会默选生产模型、凭据或 fake Agent**。部署入口必须在进程启动时调用
+`configure_project_entry(...)`，把真实 organization-owned team、模型策略、provider 和平台 workspace
+root 绑定到 CLI；未绑定时，`ase project ...` 会明确返回 `team runtime is not configured`。
+
+换句话说：统一接单流程已经跑通并可验证，但“下载仓库后立刻让真实模型修改任意项目”的 production
+team host 尚未交付。现有 `OpenAICompatibleAgentAdapter` 可以生成 typed delivery artifact，真实
+Product/Designer/Planner provider 和 Coder 受控工具执行仍需要下一阶段装配。
+
+直接验证当前统一流程：
+
+```bash
+uv run pytest -q tests/e2e/test_unified_project_entry.py
+```
+
+该测试使用 deterministic fake team，覆盖 Python、Java、C++ 项目从“目录 + 需求”到 Product 确认、
+Designer、Planner、dispatch 和 DONE，并验证目标项目没有被 sidecar 数据污染。
+
+### 4. 使用低层 Task Runtime
+
+需要直接调试现有 Delivery runtime 时，可以继续使用兼容的低层命令。此路径面向平台开发者，需要显式
+提供 sidecar 内部路径和 Runtime 配置：
+
+```bash
+uv run ase task create \
+  --file task.json \
+  --database /path/to/project-sidecar/state/state.sqlite3
+
 export OPENAI_API_KEY='...'
 uv run ase task run <task-id> --config runtime.json
+
+uv run ase task events <task-id> \
+  --database /path/to/project-sidecar/state/state.sqlite3
+
 uv run ase handoff build <task-id> \
-  --database /path/to/ai-workspace/state/state.sqlite3 \
-  --artifacts /path/to/ai-workspace/artifacts \
-  --output /path/to/ai-workspace/handoffs
+  --database /path/to/project-sidecar/state/state.sqlite3 \
+  --artifacts /path/to/project-sidecar/artifacts \
+  --output /path/to/project-sidecar/handoffs
 ```
 
-面向用户的统一流程在 application host 完成一次团队绑定后，只需要：
+`task run` 固定执行 `Coder → QA → Reviewer`，不会自动 merge 或 deploy。Runtime 配置、provider secret、
+角色覆盖和路径约束见 [`docs/runtime.md`](docs/runtime.md)，全部命令语义见
+[`docs/cli.md`](docs/cli.md)。
+
+### 5. 验证平台本身
 
 ```bash
-ase project start /absolute/path/to/project --requirement "实现已经确认的需求"
-# 根据返回的 checkpoint 继续 reply 或 approve
-ase project approve delivery_xxx --checkpoint <sha256>
-ase project resume delivery_xxx
-ase project status delivery_xxx
+uv run pytest -q
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy src tests
+uv build --offline
 ```
 
-内部 state、artifact、context、evidence、evaluation、handoff 与 worktree 路径由宿主从 organization
-workspace 和 project sidecar 组合，不再要求每个需求手工传入。仓库不会静默使用 fake Agent：部署宿主
-必须先用 `configure_project_entry(...)` 绑定真实团队、模型策略和 provider；未绑定时 CLI 明确拒绝。
-完整命令语义见 [`docs/cli.md`](docs/cli.md)。
+## 当前进度（2026-09-02）
 
-当前最大的实用化缺口是**生产团队宿主**，而不是流程状态机：offline fake-team E2E 已验证从目录、
-需求到 DONE 的完整组合，但真实 Product/Designer/Planner provider、模型工具调用与凭据策略仍需由部署
-宿主明确配置。现有 delivery `OpenAICompatibleAgentAdapter` 只产生 typed artifact，并不等于已经能让
-真实 Coder 通过受控工具修改任意项目。持久化后台 WorkQueue、自动 merge 保护分支和生产部署也仍不在
-当前能力内；T033 Reporter 按决定保持暂停。
+| 阶段 | 阶段性成果 |
+|---|---|
+| M0–M2 平台基础 | 完成总体架构、强类型领域契约、SQLite/ArtifactStore、状态机、Git worktree 与 Context routing |
+| M3–M4 串行交付 | 完成 `Coder → QA → Reviewer`、有界重试/恢复、Evaluation、ADR 和 Human Handoff |
+| M5 组织与项目接入 | 完成 organization-owned Workforce、Scheduler/ModelRouter、ProjectProfile、SpecCompiler 和外置 sidecar |
+| M6 可执行与可审计 | 完成受控命令、typed tools、Evidence、跨语言交付边界与只读 API |
+| M7 团队可视化 | 完成 Task board、Run timeline、Agent detail 和 Human inbox 静态只读 dashboard |
+| M8 完整接单链 | 完成 Project Manager、Product、Designer、Planner、原子 dispatch 和统一可恢复项目入口 |
 
 ## 文档导航
 
@@ -421,7 +440,7 @@ workspace 和 project sidecar 组合，不再要求每个需求手工传入。�
 - Runtime 配置与 task run：[`docs/runtime.md`](docs/runtime.md)
 - Project workspace 与 Agent 工作可视化：[`docs/visualization.md`](docs/visualization.md)
 - 里程碑：[`docs/milestones.md`](docs/milestones.md)
-- 阶段归档：[`docs/archive/README.md`](docs/archive/README.md)
+- 阶段成果与提交证据：[`docs/archive/README.md`](docs/archive/README.md)
 - 语言架构决策：[`docs/decisions/0001-python-control-plane.md`](docs/decisions/0001-python-control-plane.md)
 - Agent Workforce 决策：[`docs/decisions/0002-organization-owned-agent-workforce.md`](docs/decisions/0002-organization-owned-agent-workforce.md)
 - Codex bootstrap：[`AGENTS.md`](AGENTS.md)
