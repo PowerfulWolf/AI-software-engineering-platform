@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/dispatch-commit.schema.json",
+  "title": "DispatchCommitRecord",
+  "type": "object", "additionalProperties": false,
+  "required": ["kind", "schema_version", "id", "project_id", "task_id", "project_request_id", "execution_plan_id", "execution_plan_sha256", "execution_plan_phase_ids", "ready_request_revision", "ready_request_revision_sha256", "planner_run_id", "planner_run_record_sha256", "design_checkpoint_sha256", "planning_authorization_sha256", "planner_checkpoint_sha256", "planning_preview_id", "planning_preview_sha256", "workforce_snapshot_sha256", "stage_authorization_sha256", "task", "phases", "committed_at", "dispatch_sha256"],
+  "properties": {
+    "kind": {"const": "dispatch_commit"}, "schema_version": {"const": "v0.1"},
+    "id": {"type": "string", "pattern": "^dispatch_commit_[a-f0-9]{64}$"},
+    "project_id": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/projectId"},
+    "task_id": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/taskId"},
+    "project_request_id": {"type": "string", "pattern": "^request_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "execution_plan_id": {"$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/executionPlanId"},
+    "execution_plan_sha256": {"$ref": "#/$defs/sha256"},
+    "execution_plan_phase_ids": {
+      "type": "array", "minItems": 3, "maxItems": 3,
+      "items": {"type": "string", "pattern": "^phase_[a-z0-9][a-z0-9_-]{1,63}$"}
+    },
+    "ready_request_revision": {"type": "integer", "minimum": 1},
+    "ready_request_revision_sha256": {"$ref": "#/$defs/sha256"},
+    "planner_run_id": {"type": "string", "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "planner_run_record_sha256": {"$ref": "#/$defs/sha256"},
+    "design_checkpoint_sha256": {"$ref": "#/$defs/sha256"},
+    "planning_authorization_sha256": {"$ref": "#/$defs/sha256"},
+    "planner_checkpoint_sha256": {"$ref": "#/$defs/sha256"},
+    "planning_preview_id": {"type": "string", "pattern": "^planning_preview_[a-f0-9]{64}$"},
+    "planning_preview_sha256": {"$ref": "#/$defs/sha256"},
+    "workforce_snapshot_sha256": {"$ref": "#/$defs/sha256"},
+    "stage_authorization_sha256": {"$ref": "#/$defs/sha256"},
+    "task": {
+      "allOf": [
+        {"$ref": "https://ai-software-engineer.local/schemas/task.schema.json"},
+        {"properties": {"status": {"const": "NEW"}}}
+      ]
+    },
+    "phases": {
+      "type": "array", "minItems": 3, "maxItems": 3,
+      "prefixItems": [
+        {"allOf": [{"$ref": "#/$defs/phase"}, {"properties": {"role": {"const": "coder"}, "assignment": {"properties": {"role": {"const": "coder"}}}}}]},
+        {"allOf": [{"$ref": "#/$defs/phase"}, {"properties": {"role": {"const": "qa"}, "assignment": {"properties": {"role": {"const": "qa"}}}}}]},
+        {"allOf": [{"$ref": "#/$defs/phase"}, {"properties": {"role": {"const": "reviewer"}, "assignment": {"properties": {"role": {"const": "reviewer"}}}}}]}
+      ]
+    },
+    "committed_at": {"type": "string", "format": "date-time"},
+    "dispatch_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "phase": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "phase_id", "role", "agent_id", "assignment", "lease", "model_selection"],
+      "properties": {
+        "kind": {"const": "dispatch_phase_commit"},
+        "phase_id": {"type": "string", "pattern": "^phase_[a-z0-9][a-z0-9_-]{1,63}$"},
+        "role": {"enum": ["coder", "qa", "reviewer"]},
+        "agent_id": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/agentId"},
+        "assignment": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/roleAssignment"},
+        "lease": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/taskLease"},
+        "model_selection": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/modelSelection"}
+      }
+    }
+  }
+}

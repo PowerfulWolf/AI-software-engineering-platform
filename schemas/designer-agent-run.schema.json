@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/designer-agent-run.schema.json",
+  "title": "Designer Agent Request or Result",
+  "oneOf": [{"$ref": "#/$defs/request"}, {"$ref": "#/$defs/result"}],
+  "$defs": {
+    "runId": {"type": "string", "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "contextId": {"type": "string", "pattern": "^ctx_[a-f0-9]{64}$"},
+    "request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "schema_version", "run_id", "project_id", "request_id", "context", "permissions", "output_schema", "timeout_seconds"],
+      "properties": {
+        "kind": {"const": "designer_agent_request"}, "schema_version": {"const": "v0.1"},
+        "run_id": {"$ref": "#/$defs/runId"},
+        "project_id": {"$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/projectId"},
+        "request_id": {"$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/requestId"},
+        "context": {"$ref": "https://ai-software-engineer.local/schemas/designer-context.schema.json"},
+        "permissions": {"$ref": "https://ai-software-engineer.local/schemas/designer-context.schema.json#/$defs/permissions"},
+        "output_schema": {"const": "schemas/technical-design.schema.json"},
+        "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 3600}
+      }
+    },
+    "failure": {
+      "type": "object", "additionalProperties": false, "required": ["code", "message", "transient"],
+      "properties": {
+        "code": {"enum": ["TIMEOUT", "INVALID_OUTPUT", "PROVIDER_ERROR"]},
+        "message": {"type": "string", "minLength": 1}, "transient": {"type": "boolean"}
+      }
+    },
+    "result": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "schema_version", "run_id", "project_id", "request_id", "context_id", "status", "duration_ms"],
+      "properties": {
+        "kind": {"const": "designer_agent_result"}, "schema_version": {"const": "v0.1"},
+        "run_id": {"$ref": "#/$defs/runId"},
+        "project_id": {"$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/projectId"},
+        "request_id": {"$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/requestId"},
+        "context_id": {"$ref": "#/$defs/contextId"},
+        "status": {"enum": ["SUCCEEDED", "FAILED", "TIMED_OUT"]},
+        "technical_design": {"$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/TechnicalDesign"},
+        "error": {"$ref": "#/$defs/failure"}, "duration_ms": {"type": "integer", "minimum": 0}
+      },
+      "oneOf": [
+        {"required": ["technical_design"], "properties": {"status": {"const": "SUCCEEDED"}}, "not": {"required": ["error"]}},
+        {"required": ["error"], "properties": {"status": {"const": "FAILED"}, "error": {"properties": {"code": {"enum": ["INVALID_OUTPUT", "PROVIDER_ERROR"]}}}}, "not": {"required": ["technical_design"]}},
+        {"required": ["error"], "properties": {"status": {"const": "TIMED_OUT"}, "error": {"properties": {"code": {"const": "TIMEOUT"}}}}, "not": {"required": ["technical_design"]}}
+      ]
+    }
+  }
+}

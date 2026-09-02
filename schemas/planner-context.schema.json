@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/planner-context.schema.json",
+  "title": "PlannerContextManifest",
+  "type": "object", "additionalProperties": false,
+  "required": ["kind", "schema_version", "context_id", "project_id", "request_id", "project_request_revision", "product_spec", "product_approval", "technical_design", "design_checkpoint", "planning_authorization", "expected_execution_plan_version", "permissions", "built_at", "context_sha256"],
+  "properties": {
+    "kind": {"const": "planner_context_manifest"}, "schema_version": {"const": "v0.1"},
+    "context_id": {"type": "string", "pattern": "^ctx_[a-f0-9]{64}$"},
+    "project_id": {"$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/projectId"},
+    "request_id": {"$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/requestId"},
+    "project_request_revision": {"$ref": "#/$defs/projectRequestRevision"},
+    "product_spec": {"$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/ProductSpec"},
+    "product_approval": {"$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/ProductSpecApproval"},
+    "technical_design": {"$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/TechnicalDesign"},
+    "design_checkpoint": {"$ref": "#/$defs/designCheckpoint"},
+    "planning_authorization": {"$ref": "https://ai-software-engineer.local/schemas/agent-skill-project-manager.schema.json#/$defs/StageAdvanceAuthorization"},
+    "expected_execution_plan_version": {"type": "integer", "minimum": 1},
+    "permissions": {"$ref": "#/$defs/permissions"},
+    "built_at": {"type": "string", "format": "date-time"},
+    "context_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "runId": {"type": "string", "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "projectRequestRevision": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "schema_version", "request", "revision", "recorded_at", "request_revision_sha256"],
+      "properties": {
+        "kind": {"const": "project_request_revision"},
+        "schema_version": {"const": "v0.1"},
+        "request": {"$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/ProjectRequest"},
+        "revision": {"type": "integer", "minimum": 1},
+        "supersedes_sha256": {"$ref": "#/$defs/sha256"},
+        "recorded_at": {"type": "string", "format": "date-time"},
+        "request_revision_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "designCheckpoint": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "schema_version", "run_id", "project_id", "request_id", "run_record_sha256", "technical_design_id", "technical_design_sha256", "input_request_revision_sha256", "request_revision", "request_revision_sha256", "planning_authorization_sha256", "committed_at", "checkpoint_sha256"],
+      "properties": {
+        "kind": {"const": "design_commit_checkpoint"},
+        "schema_version": {"const": "v0.1"},
+        "run_id": {"$ref": "#/$defs/runId"},
+        "project_id": {"$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/projectId"},
+        "request_id": {"$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/requestId"},
+        "run_record_sha256": {"$ref": "#/$defs/sha256"},
+        "technical_design_id": {"$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/technicalDesignId"},
+        "technical_design_sha256": {"$ref": "#/$defs/sha256"},
+        "input_request_revision_sha256": {"$ref": "#/$defs/sha256"},
+        "request_revision": {"type": "integer", "minimum": 1},
+        "request_revision_sha256": {"$ref": "#/$defs/sha256"},
+        "planning_authorization_sha256": {"$ref": "#/$defs/sha256"},
+        "committed_at": {"type": "string", "format": "date-time"},
+        "checkpoint_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "permissions": {
+      "type": "object", "additionalProperties": false,
+      "required": ["read_stage_artifacts", "produce_execution_plan", "preview_scheduler", "preview_model_router", "write_project_files", "run_commands", "modify_product_or_design", "persist_assignments_or_leases", "persist_model_selection", "advance_project_stage"],
+      "properties": {
+        "read_stage_artifacts": {"const": true}, "produce_execution_plan": {"const": true},
+        "preview_scheduler": {"const": true}, "preview_model_router": {"const": true},
+        "write_project_files": {"const": false}, "run_commands": {"const": false},
+        "modify_product_or_design": {"const": false}, "persist_assignments_or_leases": {"const": false},
+        "persist_model_selection": {"const": false}, "advance_project_stage": {"const": false}
+      }
+    }
+  }
+}

@@ -555,3 +555,126 @@ assert approved.authorization is not None
 ```
 
 正确流程让产品决策成为可验证、可恢复的组织事实，而不是某个 Agent 对当前聊天的解释。
+
+## 14. T031 Designer、Planner preview 与 commit-dispatch
+
+### 14.1 Scope / Trigger
+
+修改 approved ProductSpec 到 Delivery Task 之间的 Designer、Planner、Scheduler/ModelRouter preview
+或 Project Manager dispatch 边界时，必须遵守本节。Designer/Planner 是
+`OrganizationRole`；它们不能加入只承载交付 verdict 的 `AgentRole`，也不能复用 Delivery
+`ContextBundle`。
+
+### 14.2 Signatures
+
+```python
+DesignerAgentAdapter.run(DesignerAgentRequest) -> DesignerAgentResult
+DesignerService.run(RunDesignerCommand) -> DesignerServiceResult
+PlannerAgentAdapter.run(PlannerAgentRequest) -> PlannerAgentResult
+PlannerStageService.produce(ProduceExecutionPlanCommand) -> PlanningStageResult
+PlanningPreviewService.preview(...) -> PlanningPreview
+FileExecutionPlanStore.put_execution_plan(plan) -> ExecutionPlan
+FileExecutionPlanStore.find_for_request(request_id) -> ExecutionPlan | None
+FileExecutionPlanStore.put_run(record) -> PlannerRunRecord
+FileExecutionPlanStore.put_checkpoint(checkpoint) -> PlannerCommitCheckpoint
+ProjectManagerDispatchService.commit_dispatch(request) -> DispatchCommitRecord
+DispatchAuthority.current_snapshot(project_id, task_id) -> DispatchWorkforceSnapshot
+DispatchAuthority.commit_if_current(record, expected_snapshot_sha256) -> DispatchCommitRecord
+SqliteDispatchAuthority.seed_snapshot(snapshot) -> DispatchWorkforceSnapshot
+```
+
+`src/ai_software_engineer/project_manager/dispatch_authority.py` owns two SQLite tables:
+`dispatch_workforce_snapshots(project_id, task_id, payload_json, snapshot_sha256)` and
+`dispatch_commits(id, project_id, task_id, payload_json, dispatch_sha256)`. The latter row is the
+single allocation commit point; Assignment/Lease projections are rebuilt from its exact typed payload.
+
+Wire contracts：`designer-context.schema.json`、`designer-agent-run.schema.json`、
+`planner-context.schema.json`、`planner-agent-run.schema.json`、`planner-preview.schema.json`、
+`dispatch-commit.schema.json`，以及既有 `technical-design.schema.json`、
+`execution-plan.schema.json`。
+
+### 14.3 Contracts
+
+- Designer context 必须携带完整 ProjectPreparation、ProjectProfile、ProjectSpecBaseline、当前
+  DESIGNING request revision 和 exact approved ProductSpec/Approval；URI/hash 不能代替 Agent 需要的正文；
+- Designer 只能生成 TechnicalDesign。成功结果必须精确覆盖所有 requirement/acceptance IDs；
+  receipt 必须先于任何 effect；PLANNING revision 使用 expected-predecessor CAS 发布，随后发布 design
+  与最终 DesignCommitCheckpoint。adapter 返回后、receipt 前必须再次检查 current Product facts；
+- Planner context 只接受当前 PLANNING `ProjectRequestRevision`、exact DesignCommitCheckpoint、planning
+  authorization、ProductSpec/Approval/TechnicalDesign；adapter 前后都必须重新检查 current fact；
+- Planner 的 accepted result 必须先写 durable `PlannerRunRecord`，再以 expected-predecessor CAS 发布
+  READY revision、ExecutionPlan 和 PlannerCommitCheckpoint；checkpoint 写入和读取都必须重建并比较
+  exact run，orphan/forged checkpoint 一律拒绝；重启只从 receipt 补齐，不再次调用 adapter；
+- ExecutionPlan 固定 `Coder → QA → Reviewer`，只包含 capability、risk、minimum BrainTier 和
+  checkpoints 等抽象 demand；具体 Agent/model/provider/Assignment/Lease 一律禁止；
+- PlanningPreviewService 不得持有 write store。preview 临时计算三阶段 Assignment/Lease/ModelSelection，
+  并把前一阶段候选纳入后续阶段 capacity/self-review 检查，但不落盘；
+- preview identity 必须绑定 Task、WorkItem、ExecutionPlan、三个 RunDemand 和 canonical workforce/
+  policy snapshot；collection 排序不影响 identity，phase 顺序必须影响 identity；
+- commit-dispatch 必须从权威端口验证 exact current READY revision 和 durable Planner run/plan/checkpoint，验证
+  未过期 preview，并由 `DispatchAuthority` 读取 current workforce snapshot；调用方不能自报 current facts；
+- commit 在内存中重新运行相同 engines，并比较 Agent 与 policy/version/provider/model/tier 语义；
+  RunDemand 必须由 exact Task + ExecutionPlan 机械派生，不能由调用方注入；
+- 三阶段全部成功后，必须再次读取 current READY 与完整 Planner handoff，再只调用一次
+  `DispatchAuthority.commit_if_current`。生产实现必须先获取所有 request revision writer 共享的 Product
+  fence，再进入所有 reservation writer 共享的 SQLite transaction；同一围栏内重验 READY/Planner，
+  CAS snapshot，并原子保存 NEW Task 与 `(RoleAssignment, TaskLease, ModelSelection) × 3`；
+- append-only stores 对 exact replay 幂等，changed identity、digest/envelope tamper、ambiguous
+  request plan 和 symlink/path escape 必须 fail closed。Designer/Planner stores 使用 dirfd、
+  `O_NOFOLLOW`、write-all、目录 inode 前后校验和 publish 后 exact read-back。
+
+### 14.4 Validation & Error Matrix
+
+| Input / state | Detection | Required result |
+|---|---|---|
+| Product 未批准、DESIGNING revision 非 current、context lineage 漂移 | Designer context/service | 不调用或不接受 Designer output |
+| TechnicalDesign 缺 requirement/acceptance coverage | domain output guard | `DesignerOutputRejected`，无 checkpoint |
+| receipt 后中断 | Designer replay | 补齐 exact effects，不再次调用外部端口 |
+| Agent 运行期间 request revision 被并发推进 | adapter 后 current-fact recheck / revision CAS | 只保留可审计 receipt 或 zero effects；无 design/plan/checkpoint |
+| Planner request 非 current PLANNING revision | Planner stage current-fact gate | typed stale error，zero plan writes |
+| Planner receipt 后进程中断或 fresh adapter 输出不同 plan | durable run receipt replay | 补齐 receipt 中唯一 plan/READY/checkpoint，不再次调用 adapter |
+| ExecutionPlan phase 顺序错或含具体分配字段 | strict model/schema | invalid output，无 READY revision |
+| capacity/model route 不可行 | preview pure engines | `PlanningPreviewRejected`，zero writes |
+| preview 到期或 Task/WorkItem/demand/workforce/policy 改变 | commit preview guard | `DispatchPreviewStale`，zero writes |
+| Planner run/plan/checkpoint orphan、伪造或 lineage 不一致 | durable full-handoff read-back | `DispatchPreviewStale`，zero writes |
+| READY revision 或 workforce snapshot 在 commit fence 中改变 | Product revision fence + SQLite CAS | stale/conflict，zero writes |
+| commit 选择与 preview 语义不同 | commit engine comparison | `DispatchDecisionDrift`，zero writes |
+| 后续 phase 复用同 Agent 或超 capacity | pending assignment/lease inputs | typed rejection，zero partial writes |
+| store replay 内容不同或文件被篡改 | append-only store read-back | conflict/corruption，不覆盖首次记录 |
+
+### 14.5 Good / Base / Bad Cases
+
+- **Good**：approved spec → complete design checkpoint → abstract plan + feasible preview → current-fact
+  commit → 一个包含三个独立 Agent 分配的 dispatch record；两个 authority 实例竞争时只有一个 commit。
+- **Base**：当前没有满足 context/risk/minimum tier 的 route，preview 明确拒绝；更新组织 policy/facts
+  后重新 preview，不把不可行计划伪装成可执行。
+- **Bad**：Planner 把 agent/model 写进 ExecutionPlan，或 Project Manager 逐阶段写 store 后才发现
+  Reviewer 无容量；这会让建议越权并留下半提交事实。
+
+### 14.6 Tests Required
+
+- Designer：完整 context/permissions、adapter success/failure/conflict、coverage、current Product facts、
+  adapter-window concurrent revision、receipt-first interrupted recovery、store replay/tamper/path/short-write；
+- Planner：context/adapter、current revision stale guard、plan store find/replay/ambiguity/tamper、
+  durable fresh-process replay、concurrent revision、abstract plan、READY_FOR_DELIVERY revision；
+- Preview：无 write port、determinism、demand digest、capacity/model/minimum tier refusal；
+- Dispatch：stage/task/work-item/current workforce drift、expiry、self-review、commit-time capacity/model
+  refusal、fabricated/current READY+checkpoint、commit-window CAS、single store call、exact replay/conflict/tamper；
+- 所有 Python wire fixture 必须同时通过 Pydantic round-trip 与 Draft 2020-12 Schema 正反测试。
+
+### 14.7 Wrong vs Correct
+
+#### Wrong
+
+```python
+for phase in plan.phases:
+    store.put(scheduler.match(phase))  # 第三个角色失败时前两个已经被提交
+```
+
+#### Correct
+
+```python
+preview = planner_preview.preview(snapshot)  # pure/read-only evidence
+record = project_manager.commit_dispatch(exact_handoff.with_preview(preview))
+# service 自行读取权威 facts；全部成功后仅调用一次 authority.commit_if_current(...)
+```

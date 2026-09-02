@@ -18,9 +18,10 @@
 
 ## 当前进度（2026-09-02）
 
-T001–T030 已完成。T030 新增 Product Agent 需求澄清、版本化 ProductSpec、
-可验证的人工批准门禁与崩溃后重放；Product 定向契约测试当前为 **51 个**。
-当前全量质量基线为 **504 个测试**；Ruff check/format、strict Mypy、offline package build
+T001–T031 已完成。T031 新增 Solution Designer、Planner 只读资源预演，以及 Project Manager
+基于权威当前事实和 exact Planner handoff 重算后，通过 Product revision fence + SQLite transaction
+原子提交三角色分配；T031 相关定向测试当前为
+**145 个**。当前全量质量基线为 **579 个测试**；Ruff check/format、strict Mypy、offline package build
 和 `git diff --check` 全部通过。
 
 | 阶段 | 状态 | 已交付结果 |
@@ -34,7 +35,7 @@ T001–T030 已完成。T030 新增 Product Agent 需求澄清、版本化 Produ
 | M5 组织 Workforce 与任意项目接入 | 已完成 | sidecar、Workforce、Scheduler/ModelRouter、ProjectProfile、SpecCompiler、Runtime workspace binding |
 | M6 可执行交付 | 已完成 | evidence capture、typed tools、跨语言目标项目串行交付、只读投影/API |
 | M7 Agent 可视化 | 已完成 | 静态只读 dashboard：Task board、timeline、Agent detail、Human inbox |
-| M8 Project Manager 与完整 Agent 团队 | 进行中 | T028–T030 已交付上游契约、项目准备与 Product 确认循环；T031–T032 待组合 Designer/Planner 与统一接单入口 |
+| M8 Project Manager 与完整 Agent 团队 | 进行中 | T028–T031 已交付准备、Product 确认、Designer/Planner 与原子分配；T032 待完成统一接单入口 |
 
 完整阶段事实、任务清单和提交证据见
 [`docs/archive/2026-09-01-t019-t022-organization-runtime.md`](docs/archive/2026-09-01-t019-t022-organization-runtime.md)；
@@ -48,6 +49,8 @@ T029 的 Project Manager preparation Skill 实现见
 [`docs/archive/2026-09-02-t029-project-manager-skills.md`](docs/archive/2026-09-02-t029-project-manager-skills.md)；
 T030 的 Product Agent 确认循环见
 [`docs/archive/2026-09-02-t030-product-agent.md`](docs/archive/2026-09-02-t030-product-agent.md)；
+T031 的 Designer、Planner 与原子 Dispatch 见
+[`docs/archive/2026-09-02-t031-designer-planner-dispatch.md`](docs/archive/2026-09-02-t031-designer-planner-dispatch.md)；
 后续路线见 [`docs/milestones.md`](docs/milestones.md)。
 
 ## MVP 边界
@@ -157,8 +160,10 @@ ai-software-engineer/
 │   ├── scheduling/                   # 纯 PortfolioScheduler 与 run-scoped ModelRouter
 │   ├── runtime.py                    # RuntimeConfig、角色路由与 task run composition
 │   ├── runtime_workspace.py           # 组织/项目 workspace 绑定与 workforce 解析
-│   ├── project_manager/               # prepare_project、project baseline、阶段授权与不可变记录
+│   ├── project_manager/               # prepare、阶段授权、当前事实重算与原子 dispatch
 │   ├── product/                       # Product context/adapter、确认循环、不可变事实与重放
+│   ├── design/                        # Designer context/adapter、TechnicalDesign 与恢复 checkpoint
+│   ├── planning/                      # Planner context/adapter、ExecutionPlan store 与只读 preview
 │   ├── projection/                    # 从 durable facts 重算只读 Task/Run/Agent/Lease
 │   ├── read_api.py                    # transport-neutral GET-only projection API
 │   ├── visualization/                 # 无依赖静态只读 dashboard renderer
@@ -223,7 +228,13 @@ ai-software-engineer/
 │   ├── product-agent-run.schema.json
 │   ├── product-context.schema.json
 │   ├── product-dialogue.schema.json
-│   └── product-discovery-checkpoint.schema.json
+│   ├── product-discovery-checkpoint.schema.json
+│   ├── designer-context.schema.json
+│   ├── designer-agent-run.schema.json
+│   ├── planner-context.schema.json
+│   ├── planner-agent-run.schema.json
+│   ├── planner-preview.schema.json
+│   └── dispatch-commit.schema.json
 ├── .trellis/
 │   ├── README.md
 │   └── spec/core/
@@ -290,7 +301,8 @@ ai-software-engineer/
 和 task-free project baseline compiler 封装为 Project Manager Agent 的 `prepare_project` Python
 Skill seam；调用方只传绝对项目目录。T030 又把需求对话、ProjectRequest 修订、
 ProductSpec 版本、人工批准、checkpoint 和 operation receipt 封存为 sidecar 下的不可变
-事实链。统一 CLI 接单入口仍属于 T032。
+事实链。T031 已把 approved ProductSpec 继续转换为 TechnicalDesign、抽象 ExecutionPlan、只读
+资源预演和原子 dispatch bundle。统一 CLI 接单入口仍属于 T032。
 
 ## 推荐的 v0.1 运行形态
 
@@ -372,10 +384,9 @@ T029 的 `ProjectManagerSkillService.prepare_project(...)` 完成 prepare，并�
 `RuntimeWorkspaceBinding.compose_runtime_config(...)` 完成后续装配。配置示例和字段说明见
 [`docs/runtime.md`](docs/runtime.md) 与 [`docs/cli.md`](docs/cli.md)。
 
-当前最大的产品缺口不是底层组件，而是统一接单入口：T029 已让 Python application
-只用项目目录完成 prepare，T030 已让 Product Agent 完成可恢复的需求澄清和人工确认；
-但 CLI 还没有把 prepare、Product、Designer/Planner 和现有交付循环连成一条用户流程。
-T031 下一步实现 Designer/Planner 及调度 Skills，T032 再实现“项目目录 + 需求”的统一
+当前最大的产品缺口不是底层组件，而是统一接单入口：T029–T031 已分别完成 prepare、可恢复的
+Product 确认、Designer/Planner 与调度提交；但 CLI 还没有把这些能力和现有交付循环连成一条
+用户流程。T032 将实现“项目目录 + 需求”的统一
 CLI/E2E，使项目注册、规范编译、Task 创建、团队分配和串行交付自动衔接。持久化 WorkQueue 后台
 循环、自动 merge 保护分支和生产部署仍不在当前能力内。
 

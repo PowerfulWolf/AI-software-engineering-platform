@@ -25,6 +25,7 @@ Archive 是组织记忆的一部分，不依赖任何单个 Agent 的会话。�
 | 2026-09-02 | 本记录所在提交 | T028；Project Manager/Agent Skills 架构、Product/Design/Plan contracts 与用户确认门禁 | [T028 Project Manager Stage Contracts](2026-09-02-t028-project-manager-stage-contracts.md) |
 | 2026-09-02 | 本记录所在提交 | T029；Project Manager prepare Skill、task-free baseline、Product gate 与阶段授权 | [T029 Project Manager Agent Skills](2026-09-02-t029-project-manager-skills.md) |
 | 2026-09-02 | 本记录所在提交 | T030；Product Agent 需求澄清、人工确认、不可变事实与崩溃重放 | [T030 Product Agent](2026-09-02-t030-product-agent.md) |
+| 2026-09-02 | 本记录所在提交 | T031；Designer、Planner read-only preview 与 Project Manager 原子 dispatch | [T031 Designer、Planner 与 Dispatch](2026-09-02-t031-designer-planner-dispatch.md) |
 
 ## 后续归档约定
 

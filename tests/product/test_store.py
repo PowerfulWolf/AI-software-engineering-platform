@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Event
 
 import pytest
 
@@ -470,6 +472,41 @@ def test_concurrent_first_writer_is_read_back_and_never_overwritten(
     with pytest.raises(ProductRecordConflict, match="concurrently"):
         store.put_operation(contender)
     assert store.get_operation(winner.operation_id) == winner
+
+
+def test_request_revision_writer_uses_public_cross_domain_fence(tmp_path: Path) -> None:
+    store = FileProductRecordStore(tmp_path / "product")
+    first = store.put_request_revision(_request_revision())
+    second = _request_revision(
+        revision=2,
+        previous=first,
+        status=ProjectRequestStatus.DESIGNING,
+    )
+    fence_held = Event()
+    release = Event()
+    writer_started = Event()
+
+    def hold_fence() -> None:
+        with store.request_revision_fence():
+            fence_held.set()
+            assert release.wait(timeout=5)
+
+    def write_revision() -> ProjectRequestRevision:
+        writer_started.set()
+        return store.compare_and_put_request_revision(
+            second,
+            expected_current_sha256=first.request_revision_sha256,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        holder = executor.submit(hold_fence)
+        assert fence_held.wait(timeout=5)
+        writer = executor.submit(write_revision)
+        assert writer_started.wait(timeout=5)
+        assert not writer.done()
+        release.set()
+        holder.result(timeout=5)
+        assert writer.result(timeout=5) == second
 
 
 def test_publish_race_cannot_write_through_replaced_directory(

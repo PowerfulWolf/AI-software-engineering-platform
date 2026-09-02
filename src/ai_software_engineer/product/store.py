@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import errno
+import fcntl
 import hashlib
 import json
 import os
 import secrets
 import stat
-from contextlib import suppress
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, contextmanager, suppress
 from pathlib import Path
 from typing import Final, Protocol, TypeVar
 
@@ -23,6 +25,7 @@ from ai_software_engineer.domain.project_delivery import (
     ProductSpecId,
     ProjectRequestId,
     StageContractError,
+    StageSha256,
 )
 from ai_software_engineer.product.models import (
     ProductDialogueRecord,
@@ -77,6 +80,15 @@ class ProductRecordStore(Protocol):
     ) -> tuple[ProductDialogueRecord, ...]: ...
 
     def put_request_revision(self, record: ProjectRequestRevision) -> ProjectRequestRevision: ...
+
+    def compare_and_put_request_revision(
+        self,
+        record: ProjectRequestRevision,
+        *,
+        expected_current_sha256: StageSha256 | None,
+    ) -> ProjectRequestRevision: ...
+
+    def request_revision_fence(self) -> AbstractContextManager[None]: ...
 
     def get_request_revision(
         self, request_id: ProjectRequestId | str, revision: int
@@ -193,11 +205,104 @@ class FileProductRecordStore:
 
     def put_request_revision(self, record: ProjectRequestRevision) -> ProjectRequestRevision:
         _validate_record(record)
-        if record.revision > 1:
-            previous = self.get_request_revision(record.request.id, record.revision - 1)
-            _validate_request_lineage(previous, record)
-        target = self._request_record_path("requests", record.request.id, record.revision)
-        return self._put(target, record, ProjectRequestRevision)
+        with self.request_revision_fence():
+            if record.revision > 1:
+                previous = self.get_request_revision(record.request.id, record.revision - 1)
+                _validate_request_lineage(previous, record)
+            target = self._request_record_path("requests", record.request.id, record.revision)
+            return self._put(target, record, ProjectRequestRevision)
+
+    def compare_and_put_request_revision(
+        self,
+        record: ProjectRequestRevision,
+        *,
+        expected_current_sha256: StageSha256 | None,
+    ) -> ProjectRequestRevision:
+        """Append only when the durable head is the exact expected predecessor.
+
+        The root-scoped advisory lock makes the current-head check and exclusive
+        publication one compare-and-append operation for every cooperating writer.
+        Exact replay of the current record remains idempotent.
+        """
+        _validate_record(record)
+        if expected_current_sha256 != record.supersedes_sha256:
+            raise ProductRecordLineageError(
+                "expected current revision does not match record supersedes digest"
+            )
+        with self.request_revision_fence():
+            current: ProjectRequestRevision | None
+            try:
+                current = self.current_request_revision(record.request.id)
+            except ProductRecordNotFound:
+                current = None
+            if current == record:
+                return current
+            observed_sha256 = current.request_revision_sha256 if current is not None else None
+            if observed_sha256 != expected_current_sha256:
+                raise ProductRecordLineageError(
+                    "ProjectRequestRevision compare-and-append predecessor is stale"
+                )
+            if record.revision == 1:
+                if current is not None or expected_current_sha256 is not None:
+                    raise ProductRecordLineageError(
+                        "first ProjectRequestRevision requires an empty history"
+                    )
+            else:
+                if current is None:
+                    raise ProductRecordLineageError(
+                        "ProjectRequestRevision predecessor does not exist"
+                    )
+                _validate_request_lineage(current, record)
+            target = self._request_record_path("requests", record.request.id, record.revision)
+            persisted = self._put(target, record, ProjectRequestRevision)
+            if self.current_request_revision(record.request.id) != persisted:
+                raise ProductRecordLineageError(
+                    "ProjectRequestRevision was not published as the current durable head"
+                )
+            return persisted
+
+    @contextmanager
+    def request_revision_fence(self) -> Iterator[None]:
+        """Fence a current-revision read and a cooperating cross-domain commit.
+
+        Every ProjectRequest revision writer uses this same root-scoped advisory lock.
+        Callers that combine a READY revision with another durable transaction must acquire
+        this fence first, then open their transaction, so the revision cannot advance inside
+        the cross-domain validation/commit window.
+        """
+        root_fd: int | None = None
+        lock_fd: int | None = None
+        try:
+            root_fd = _open_directory_chain(self._root, ())
+            if not _directory_fd_matches_path(root_fd, self._root):
+                raise ProductRecordPathError(
+                    "Product record root changed before revision compare-and-append"
+                )
+            lock_fd = os.open(
+                ".request-revisions.lock",
+                os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+                dir_fd=root_fd,
+            )
+            if not stat.S_ISREG(os.fstat(lock_fd).st_mode):
+                raise ProductRecordPathError("Product revision lock is not a regular file")
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            if not _directory_fd_matches_path(root_fd, self._root):
+                raise ProductRecordPathError(
+                    "Product record root changed while acquiring revision lock"
+                )
+            yield
+        except ProductRecordPathError:
+            raise
+        except OSError as error:
+            raise ProductRecordStoreError("cannot lock Product request revisions") from error
+        finally:
+            if lock_fd is not None:
+                with suppress(OSError):
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                os.close(lock_fd)
+            if root_fd is not None:
+                os.close(root_fd)
 
     def get_request_revision(
         self, request_id: ProjectRequestId | str, revision: int

@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/planner-preview.schema.json",
+  "title": "PlanningPreview",
+  "type": "object", "additionalProperties": false,
+  "required": ["kind", "schema_version", "id", "project_id", "task_id", "task_sha256", "work_item_sha256", "execution_plan_id", "execution_plan_sha256", "workforce_snapshot_sha256", "phases", "previewed_at", "valid_until", "preview_sha256"],
+  "properties": {
+    "kind": {"const": "planning_preview"}, "schema_version": {"const": "v0.1"},
+    "id": {"type": "string", "pattern": "^planning_preview_[a-f0-9]{64}$"},
+    "project_id": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/projectId"},
+    "task_id": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/taskId"},
+    "task_sha256": {"$ref": "#/$defs/sha256"}, "work_item_sha256": {"$ref": "#/$defs/sha256"},
+    "execution_plan_id": {"$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/executionPlanId"},
+    "execution_plan_sha256": {"$ref": "#/$defs/sha256"},
+    "workforce_snapshot_sha256": {"$ref": "#/$defs/sha256"},
+    "phases": {
+      "type": "array", "minItems": 3, "maxItems": 3,
+      "prefixItems": [
+        {"allOf": [{"$ref": "#/$defs/phase"}, {"$ref": "#/$defs/coderPhase"}]},
+        {"allOf": [{"$ref": "#/$defs/phase"}, {"$ref": "#/$defs/qaPhase"}]},
+        {"allOf": [{"$ref": "#/$defs/phase"}, {"$ref": "#/$defs/reviewerPhase"}]}
+      ]
+    },
+    "previewed_at": {"type": "string", "format": "date-time"},
+    "valid_until": {"type": "string", "format": "date-time"},
+    "preview_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "coderPhase": {"$ref": "#/$defs/rolePhase", "properties": {"role": {"const": "coder"}, "demand": {"properties": {"role": {"const": "coder"}}}, "assignment_decision": {"properties": {"role": {"const": "coder"}}}, "model_routing_decision": {"properties": {"role": {"const": "coder"}}}}},
+    "qaPhase": {"$ref": "#/$defs/rolePhase", "properties": {"role": {"const": "qa"}, "demand": {"properties": {"role": {"const": "qa"}}}, "assignment_decision": {"properties": {"role": {"const": "qa"}}}, "model_routing_decision": {"properties": {"role": {"const": "qa"}}}}},
+    "reviewerPhase": {"$ref": "#/$defs/rolePhase", "properties": {"role": {"const": "reviewer"}, "demand": {"properties": {"role": {"const": "reviewer"}}}, "assignment_decision": {"properties": {"role": {"const": "reviewer"}}}, "model_routing_decision": {"properties": {"role": {"const": "reviewer"}}}}},
+    "rolePhase": {"type": "object"},
+    "phase": {
+      "type": "object", "additionalProperties": false,
+      "required": ["phase_id", "role", "demand", "assignment_decision", "model_routing_decision"],
+      "properties": {
+        "phase_id": {"type": "string", "pattern": "^phase_[a-z0-9][a-z0-9_-]{1,63}$"},
+        "role": {"enum": ["coder", "qa", "reviewer"]},
+        "demand": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/runDemand"},
+        "assignment_decision": {"$ref": "#/$defs/assignedDecision"},
+        "model_routing_decision": {"$ref": "#/$defs/selectedModelDecision"}
+      }
+    },
+    "assignedDecision": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "status", "task_id", "project_id", "role", "attempt", "agent_id", "assignment", "lease", "reasons", "decided_at"],
+      "properties": {
+        "kind": {"const": "assignment_decision"}, "status": {"const": "ASSIGNED"},
+        "task_id": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/taskId"},
+        "project_id": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/projectId"},
+        "role": {"enum": ["coder", "qa", "reviewer"]}, "attempt": {"type": "integer", "minimum": 1, "maximum": 10},
+        "agent_id": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/agentId"},
+        "assignment": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/roleAssignment"},
+        "lease": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/taskLease"},
+        "reasons": {"type": "array", "maxItems": 0},
+        "decided_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "selectedModelDecision": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "status", "task_id", "agent_id", "role", "selection", "decided_at"],
+      "properties": {
+        "kind": {"const": "model_routing_decision"}, "status": {"const": "SELECTED"},
+        "task_id": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/taskId"},
+        "agent_id": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/agentId"},
+        "role": {"enum": ["coder", "qa", "reviewer"]},
+        "selection": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/modelSelection"},
+        "decided_at": {"type": "string", "format": "date-time"}
+      }
+    }
+  }
+}

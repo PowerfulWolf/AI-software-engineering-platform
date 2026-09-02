@@ -434,3 +434,146 @@ checkpoint”，checkpoint 是对外可见的提交点。如果进程在 receipt
 Wire contracts 为 `schemas/product-agent-run.schema.json`、`product-context.schema.json`、
 `product-dialogue.schema.json` 和 `product-discovery-checkpoint.schema.json`。其他 Product 记录在
 Python typed boundary 上验证；后续若跨进程暴露，必须先补 wire schema，不能传递裸 `dict`。
+
+## 12. Designer、Planner preview 与 commit-dispatch（T031）
+
+T031 把 approved ProductSpec 到现有 Delivery Task 之间的空档实现为三个相互隔离的边界：
+Designer 产出 TechnicalDesign；Planner 产出不含具体分配的 ExecutionPlan，并使用只读 preview
+检查当前可行性；Project Manager 根据提交时的当前事实重算并一次提交三阶段分配。三个边界都不
+复用 Delivery `ContextBundle`，也不会直接运行 Coder、QA 或 Reviewer。
+
+### Designer：完整项目知识、最小权限和提交点
+
+`RunDesignerCommand` 携带完整且可读的 `ProjectPreparation`、`ProjectProfile`、
+`ProjectSpecBaseline`、当前 `ProjectRequestRevision`、approved ProductSpec/Approval、
+`SOLUTION_DESIGN` authorization 和稳定 `submitted_at`。`DesignContextBuilder` 由这些事实生成
+task-free `DesignContextManifest`；相同内容的 identity 不含 `built_at`，因此可确定重建。
+只提供 URI/hash 而不提供 Profile/Baseline 正文不满足该契约。
+
+```python
+DesignerAgentAdapter.run(DesignerAgentRequest) -> DesignerAgentResult
+DesignerService.run(RunDesignerCommand) -> DesignerServiceResult
+```
+
+Designer request 只能读取项目事实、项目规范、请求、ProductSpec 和 Approval，并输出
+TechnicalDesign。权限显式拒绝代码写入、shell、修改 Product/Approval、推进项目阶段和创建
+Delivery Task。成功结果必须绑定 exact run/project/request/context，且 TechnicalDesign 必须精确覆盖
+全部 requirement IDs 与 acceptance criterion IDs；timeout、provider error 和 invalid output 是 typed
+failure，不产生 design 或 request revision。
+
+成功提交采用明确的 journal/commit 语义：
+
+```text
+DesignRunRecord receipt（包含完整预期效果）
+  → CAS append supersedes-linked ProjectRequestRevision(status=PLANNING)
+  → append TechnicalDesign
+  → exact read-back design + revision
+  → publish DesignCommitCheckpoint（对外完成点）
+```
+
+只有 `DesignCommitCheckpoint` 存在才表示 Planner handoff 完整。若进程在 receipt 后、revision 或
+checkpoint 前中断，相同 command replay 从 receipt 补齐效果，不重复调用 Designer adapter 或
+Project Manager stage advancer。相同 run ID 改变 command digest、Product store 当前 revision/spec/
+approval 漂移、授权或 coverage 不一致、append-only identity 冲突和读回不一致均 fail closed。
+
+### Planner：抽象 ExecutionPlan 与不可写 preview
+
+`PlannerContextManifest` 精确绑定状态为 `PLANNING` 的 ProjectRequestRevision、ProductSpec、Approval、
+TechnicalDesign、DesignCommitCheckpoint 和 planning authorization，不含 Delivery Task。
+`PlannerAgentPermissions` 只允许读取 stage artifacts、生成
+ExecutionPlan，以及调用只读 Scheduler/ModelRouter preview；明确拒绝项目写入、命令执行、修改
+Product/Design、持久化 Assignment/Lease/ModelSelection 和推进阶段。
+
+```python
+PlannerAgentAdapter.run(PlannerAgentRequest) -> PlannerAgentResult
+PlannerStageService.produce(ProduceExecutionPlanCommand) -> PlanningStageResult
+PlanningPreviewService.preview(...) -> PlanningPreview
+```
+
+ExecutionPlan 固定三个串行 phase：`coder → qa → reviewer`。每个 phase 只描述 role、objective、
+required capabilities、risk、minimum BrainTier、checkpoints 和 critical-path 标志；模型输出包含
+具体 agent/model/provider/Assignment/Lease 等额外字段时由 strict model/schema 拒绝。
+`PlannerStageService` 在 adapter 返回后重新检查 current handoff，随后先持久化包含唯一 plan 与 READY
+revision effects 的 `PlannerRunRecord`。materialization 使用 expected-predecessor CAS 追加
+`READY_FOR_DELIVERY` revision，再发布 exact plan 和 `PlannerCommitCheckpoint`。进程重启时，即使 fresh
+adapter 会返回不同 plan，也只能从 durable receipt 补齐原结果，不会再次调用 adapter 或覆盖旧 revision。
+
+`PlanningPreviewService` 不接受 store/repository write port。它消费由完整 stage chain 派生的
+`NEW Task`、READY WorkItem、三个 `RunDemand`、AgentProfile、active Lease、existing Assignment 和
+ModelPolicy；依次调用现有 `PortfolioScheduler.match` 与 `ModelRouter.route`。每一 phase 的临时
+Assignment/Lease 会在内存中计入下一 phase capacity，但不会落盘。
+
+成功的 `PlanningPreview` 包含三个 `PlanningPhasePreview`，其中的 Agent/Assignment/Lease/
+ModelSelection 只是带时间窗的建议 evidence，不是授权。preview 还绑定 Task digest、WorkItem digest、
+ExecutionPlan digest、排序规范化的 workforce snapshot digest、`previewed_at` 和 `valid_until`。
+capacity 或 model route 不可行时抛带 exact decision evidence 的 `PlanningPreviewRejected`，不会伪造
+可行性或写入组织/项目 store。
+
+### Project Manager commit-dispatch：当前事实重算与单次原子写
+
+```python
+ProjectManagerDispatchService.commit_dispatch(
+    CommitDispatchRequest,
+) -> DispatchCommitRecord
+DispatchCommitStore.commit(DispatchCommitRecord) -> DispatchCommitRecord
+DispatchAuthority.current_snapshot(...) -> DispatchWorkforceSnapshot
+SqliteDispatchAuthority.seed_snapshot(snapshot) -> DispatchWorkforceSnapshot
+SqliteDispatchAuthority.commit_if_current(record, *, expected_snapshot_sha256) -> DispatchCommitRecord
+```
+
+SQLite authority 的持久化结构是
+`dispatch_workforce_snapshots(project_id, task_id, payload_json, snapshot_sha256)` 与
+`dispatch_commits(id, project_id, task_id, payload_json, dispatch_sha256)`。commit row 是单一原子提交点；
+三组 Assignment/Lease 从经过完整性校验的 typed record 投影，不另写可能半成功的子记录。
+
+`CommitDispatchRequest` 必须携带完整 prepared-to-plan stage chain、exact READY revision、durable
+PlannerRunRecord/ExecutionPlan/PlannerCommitCheckpoint、`DELIVERY_DISPATCH` authorization、PlanningPreview，以及 Delivery Task 的
+repository/base ref/attempt/time 输入。current WorkItem/AgentProfile/Lease/Assignment/ModelPolicy 不由调用方
+自报；服务从 `DispatchAuthority.current_snapshot` 读取并校验 canonical digest。RunDemand 由 exact
+Task + ExecutionPlan 机械派生，不接受调用方注入。
+
+验证通过后，服务对 Coder、QA、Reviewer 按顺序重新调用同一 Scheduler/ModelRouter；前一 phase 的
+新 Assignment/Lease 只在本次内存候选中占用 capacity。commit-time Agent 必须与 preview 相同，
+model 的 policy/version/provider/model/tier 语义也必须相同，且不能低于 ExecutionPlan 的 minimum
+BrainTier。任何 phase 拒绝、决策漂移、自我评审、容量不足或 model refusal 都发生在 store 调用前，
+因此不能产生部分持久化。
+
+全部三阶段成功后，服务再次读取 current READY revision 以及完整 Planner run/plan/checkpoint，然后构造一个
+`DispatchCommitRecord`。record 除 exact NEW Task 和 `(RoleAssignment, TaskLease, ModelSelection) × 3`
+外，还记录 request、READY revision、Planner run、Design checkpoint、planning authorization 与
+Planner checkpoint 的 exact identity/digest。最后只调用一次
+`DispatchAuthority.commit_if_current`。生产 `SqliteDispatchAuthority` 先获取 Product revision fence，
+再进入 SQLite `BEGIN IMMEDIATE`：在同一围栏中重新验证 current READY head、durable Planner 完整
+handoff 和 workforce snapshot CAS，并以单个 commit record 作为三组 Assignment/Lease 的原子提交点。
+跨实例竞争只有一个事务可以占用资源，另一个必须 exact replay 或 stale/conflict，不能超分配。
+`FileDispatchCommitStore` 使用 digest envelope、dirfd + `O_NOFOLLOW`、exclusive hard-link publish 和
+inode/root 校验；相同 record 重放幂等，changed identity、篡改、symlink/path race 全部拒绝。
+
+当前 commit record 是原子 dispatch bundle，并未直接写入现有 TaskRepository 或启动 Delivery
+runtime；T032 的统一项目入口负责把该 bundle 接到 durable runtime composition。Planner preview
+不能代替 commit，Project Manager commit 也不授权自动 merge 或部署。
+
+### T031 失败矩阵
+
+| 失败点 | 处理 | 持久化结果 |
+|---|---|---|
+| ProductSpec 未 APPROVED、ProjectRequest 状态或 stage authorization 错 | Designer context/service typed rejection | 无新 design/revision/checkpoint |
+| Designer identity、design lineage/coverage 或 immutable read-back 错 | `DesignerOutputRejected`/typed persistence error | 不发布 commit checkpoint |
+| Designer 在 receipt 后中断 | exact replay materialize design + PLANNING revision | 最终只发布一个 checkpoint |
+| Designer/Planner Agent 运行期间 current revision 被推进 | adapter 后 current recheck / CAS | 无 design/plan/checkpoint effect |
+| Planner 输出具体分配字段、错误 phase 顺序、旧 plan version | strict Pydantic/domain/adapter rejection | 无 plan/READY revision |
+| Planner 在 receipt 后崩溃并以 fresh adapter 重启 | durable receipt recovery | 不再次调用 adapter，只补齐唯一 effects/checkpoint |
+| preview capacity 或 model route 不可行 | `PlanningPreviewRejected` + decision evidence | zero store writes |
+| preview 过期、WorkItem/workforce/policy/demand 变化 | `DispatchPreviewStale` | zero dispatch writes |
+| Planner run/plan/checkpoint 缺失、伪造或 lineage 不一致 | complete durable handoff read-back | zero dispatch writes |
+| READY revision 或 workforce 在最终提交围栏变化 | Product revision fence + SQLite CAS | `DispatchPreviewStale`/`DispatchAuthorityConflict`，zero writes |
+| commit 重算改变 Agent 或 model semantics | `DispatchDecisionDrift` | zero dispatch writes |
+| commit-time capacity/model refusal或三角色不独立 | `DispatchRejected`/record validator | zero partial writes |
+| dispatch ID changed replay、envelope/digest/path 篡改 | typed store conflict/corruption/path error | 保留首次可信 record |
+
+T031 的 canonical wire contracts 是 `schemas/technical-design.schema.json`、
+`schemas/execution-plan.schema.json`、`schemas/designer-context.schema.json`、
+`schemas/designer-agent-run.schema.json`、`schemas/planner-context.schema.json`、
+`schemas/planner-agent-run.schema.json`、`schemas/planner-preview.schema.json` 和
+`schemas/dispatch-commit.schema.json`。所有跨进程输入必须先通过对应 Schema 与 strict Pydantic
+`to_wire()` round-trip，不能用裸 `dict` 绕过 typed contract。

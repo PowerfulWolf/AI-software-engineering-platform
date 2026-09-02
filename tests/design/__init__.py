@@ -1,0 +1,1 @@
+"""Solution Designer contract tests."""
