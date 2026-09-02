@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/projection-run.schema.json",
+  "title": "Run projection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["run_id", "task_id", "status", "artifact_ids", "evidence_ids", "evaluation_event_ids", "timeline"],
+  "properties": {
+    "run_id": {"type": "string", "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "task_id": {"type": "string", "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "project_id": {"type": "string", "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "agent_id": {"type": "string", "minLength": 1},
+    "role": {"enum": ["orchestrator", "coder", "qa", "reviewer"]},
+    "attempt": {"type": "integer", "minimum": 1, "maximum": 10},
+    "provider": {"type": "string", "minLength": 1},
+    "model": {"type": "string", "minLength": 1},
+    "context_manifest_id": {"type": "string", "pattern": "^ctx_[a-f0-9]{64}$"},
+    "source_revision": {"type": "string", "minLength": 1},
+    "status": {"enum": ["UNKNOWN", "RUNNING", "SUCCEEDED", "INVALID", "FAILED", "TIMED_OUT", "REJECTED"]},
+    "output_status": {"type": "string", "minLength": 1},
+    "artifact_ids": {"type": "array", "items": {"type": "string", "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$"}},
+    "evidence_ids": {"type": "array", "items": {"type": "string", "pattern": "^ev_[a-z0-9][a-z0-9_-]{2,63}$"}},
+    "evaluation_event_ids": {"type": "array", "items": {"type": "string", "pattern": "^evalevt_[a-z0-9][a-z0-9_-]{2,63}$"}},
+    "timeline": {"type": "array", "items": {"$ref": "projection-timeline.schema.json"}}
+  }
+}

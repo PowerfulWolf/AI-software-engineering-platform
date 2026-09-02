@@ -1,0 +1,10 @@
+{
+  "id": "T027",
+  "slug": "visualization",
+  "title": "实现本地 Agent 工作可视化 dashboard",
+  "status": "completed",
+  "phase": "verify",
+  "depends_on": ["T026"],
+  "allowed_paths": ["src/ai_software_engineer/visualization/**", "tests/visualization/**", "docs/visualization-implementation.md", ".trellis/tasks/09-01-t027-visualization/**"],
+  "verification_commands": ["uv run pytest -q tests/visualization", "uv run ruff check src/ai_software_engineer/visualization tests/visualization", "uv run mypy src/ai_software_engineer/visualization tests/visualization", "git diff --check"]
+}

@@ -20,6 +20,8 @@ Archive 是组织记忆的一部分，不依赖任何单个 Agent 的会话。�
 | 2026-09-01 | `400ac04` | T018；组织 Workforce foundation，M5 组织层启动 | [T018 Organization Workforce](2026-09-01-t018-organization-workforce.md) |
 | 2026-09-01 | `8d76ce2` | T019–T022；组织调度、项目发现、规范治理与 Runtime binding，M5 完成 | [T019–T022 Organization Runtime](2026-09-01-t019-t022-organization-runtime.md) |
 | 2026-09-01 | `02b3183` | T023–T024；Evidence capture、typed tool protocol 与 Runtime evidence roots，M6 执行边界 | [T023–T024 Executable Delivery](2026-09-01-t023-t024-executable-delivery.md) |
+| 2026-09-01 | `dff64ab` | T025；Python/Java/Go/TypeScript 任意目标项目串行交付 fixture matrix | [T025 Target Project E2E](2026-09-01-t025-target-project-e2e.md) |
+| 2026-09-01 | pending | T026–T027；事件驱动只读 projection/read API 与静态 dashboard | 待本轮集成提交后补充 commit |
 
 ## 后续归档约定
 

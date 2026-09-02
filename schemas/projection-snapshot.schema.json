@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/projection-snapshot.schema.json",
+  "title": "RunProjection snapshot",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "tasks", "runs", "agents", "leases"],
+  "properties": {
+    "schema_version": {"const": "v0.1"},
+    "tasks": {"type": "array", "items": {"$ref": "projection-task.schema.json"}},
+    "runs": {"type": "array", "items": {"$ref": "projection-run.schema.json"}},
+    "agents": {"type": "array", "items": {"$ref": "projection-agent.schema.json"}},
+    "leases": {"type": "array", "items": {"$ref": "projection-lease.schema.json"}}
+  }
+}

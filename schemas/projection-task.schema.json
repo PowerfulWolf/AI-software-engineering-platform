@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/projection-task.schema.json",
+  "title": "Task projection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["task_id", "title", "status", "attempts", "state_revision", "state_event_ids", "run_ids", "artifact_ids", "evidence_ids", "evaluation_event_ids", "timeline"],
+  "properties": {
+    "task_id": {"type": "string", "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "project_id": {"type": "string", "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "title": {"type": "string", "minLength": 1},
+    "status": {"enum": ["NEW", "PLANNING", "IMPLEMENTING", "QA", "REVIEW", "DONE", "BLOCKED", "FAILED"]},
+    "attempts": {"type": "integer", "minimum": 0},
+    "state_revision": {"type": "integer", "minimum": 0},
+    "work_item_status": {"enum": ["READY", "LEASED", "RUNNING", "WAITING_HUMAN", "WAITING_DEPENDENCY", "RETRY_SCHEDULED", "CLOSED"]},
+    "candidate_revision": {"type": "string", "minLength": 1},
+    "qa_status": {"type": "string", "minLength": 1},
+    "review_verdict": {"type": "string", "minLength": 1},
+    "state_event_ids": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "run_ids": {"type": "array", "items": {"type": "string", "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$"}},
+    "artifact_ids": {"type": "array", "items": {"type": "string", "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$"}},
+    "evidence_ids": {"type": "array", "items": {"type": "string", "pattern": "^ev_[a-z0-9][a-z0-9_-]{2,63}$"}},
+    "evaluation_event_ids": {"type": "array", "items": {"type": "string", "pattern": "^evalevt_[a-z0-9][a-z0-9_-]{2,63}$"}},
+    "handoff_id": {"type": "string", "pattern": "^handoff_[a-f0-9]{64}$"},
+    "timeline": {"type": "array", "items": {"$ref": "projection-timeline.schema.json"}}
+  }
+}

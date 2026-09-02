@@ -1,0 +1,3 @@
+{"check":"projection seam","result":"PASS","evidence":"DashboardRenderer accepts ProjectionSnapshot or ReadOnlyProjectionApi and imports no stores or executors"}
+{"check":"read-only boundary","result":"PASS","evidence":"HTML exposes no state, verdict, command, or merge actions"}
+{"check":"untrusted text","result":"PASS","evidence":"embedded JSON escapes script terminators and browser uses textContent"}

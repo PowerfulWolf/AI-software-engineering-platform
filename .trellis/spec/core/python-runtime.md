@@ -1680,3 +1680,49 @@ manifest = evidence_session.seal(RunOutcome.SUCCEEDED)
 The tool protocol is an application seam in v0.1. Runtime exposes the evidence store and sidecar
 roots, but every future role adapter must explicitly wrap tool calls with `RunEvidenceSession`; no
 Agent receives direct filesystem, subprocess, verdict, or state-store access.
+
+## 21. Read projection and visualization (T026–T027)
+
+### 21.1 Scope and contracts
+
+- `ProjectionFacts.from_iterables(...)` is an immutable adapter input assembled from validated durable
+  Task/StateEvent, Artifact, Evidence, Evaluation, Handoff, WorkItem, Assignment, Lease, Allocation
+  and AgentProfile facts plus an optional explicit `as_of` timestamp.
+- `RunProjectionBuilder.build(facts) -> ProjectionSnapshot` validates unique IDs, Task references,
+  run identity agreement and contiguous StateEvent streams, then deterministically builds Task, Run,
+  Agent and Lease summaries with source-addressable timeline entries. It has no I/O or mutation port.
+- `ReadOnlyProjectionApi(snapshot)` exposes GET-only task/run/agent/lease list and detail operations,
+  stable pagination and filters. Non-GET returns 405; invalid query parameters return 400; unknown
+  resources return 404.
+- `DashboardRenderer.build_data/render_json/render_html(snapshot_or_api)` renders Task board, Run
+  timeline, Agent detail/capacity and Human inbox. It is dependency-free and transport-neutral.
+
+### 21.2 Error matrix and tests
+
+| Input/failure | Detection | Result |
+|---|---|---|
+| duplicate IDs, unknown Task or conflicting run identity | projection validation | `ProjectionConflict`, no partial snapshot |
+| broken StateEvent chain or final status mismatch | contiguous stream guard | `ProjectionConflict` |
+| naive `as_of` or missing clock | lease projection | reject naive time; missing time is `UNKNOWN` |
+| non-GET, invalid paging, missing resource | read API | 405, 400, or 404 without mutation |
+| untrusted title/reason in HTML | escaped JSON + browser `textContent` | text only; no script execution |
+| unavailable capacity/cost fact | projection/renderer | explicit unknown/empty value; never inferred |
+
+Required fixtures cover deterministic rebuild, Task/Run/Agent/Lease aggregation, source timeline,
+conflict rejection, API filters/paging and dashboard injection safety. Full pytest, Ruff, strict Mypy,
+offline build and `git diff --check` remain mandatory.
+
+### 21.3 Good / Base / Bad
+
+- **Good**: rebuild a snapshot from immutable facts after restart, include source URI/digest on every
+  timeline item, and render it without a write capability.
+- **Base**: local typed tuples and static HTML are enough; no HTTP framework, event bus, frontend build
+  chain, vector database or live subscription is required in v0.1.
+- **Bad**: let a dashboard mutate Task status, infer utilization from missing capacity, read mutable
+  repository state directly, or treat a projection summary as a verdict authority.
+
+```python
+# Correct: read-only projection and explicit unknowns.
+snapshot = RunProjectionBuilder().build(facts)
+html = DashboardRenderer().render_html(ReadOnlyProjectionApi(snapshot))
+```

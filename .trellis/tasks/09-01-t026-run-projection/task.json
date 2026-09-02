@@ -1,0 +1,10 @@
+{
+  "id": "T026",
+  "slug": "run-projection",
+  "title": "事件驱动 RunProjection 与只读 read API",
+  "status": "completed",
+  "phase": "verify",
+  "depends_on": ["T012", "T018", "T022", "T023"],
+  "allowed_paths": ["src/ai_software_engineer/projection/**", "src/ai_software_engineer/read_api.py", "schemas/projection*.schema.json", "tests/projection/**", "tests/read_api/**", "docs/projection.md", ".trellis/tasks/09-01-t026-run-projection/**"],
+  "verification_commands": ["uv run pytest -q tests/projection tests/read_api", "uv run ruff check src/ai_software_engineer/projection src/ai_software_engineer/read_api.py tests/projection tests/read_api", "uv run mypy src/ai_software_engineer/projection src/ai_software_engineer/read_api.py tests/projection tests/read_api", "git diff --check"]
+}

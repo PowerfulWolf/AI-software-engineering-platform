@@ -18,8 +18,8 @@
 
 ## 当前进度（2026-09-01）
 
-T001–T024 已完成。自动化质量基线为 **364 个测试**、Ruff 检查与格式检查通过、strict Mypy
-检查 **112 个源码文件**、Python package build 通过。
+T001–T027 已完成。自动化质量基线为 **380 个测试**、Ruff 检查与格式检查通过、strict Mypy
+检查 **142 个源码文件**、Python package build 通过。
 
 | 阶段 | 状态 | 已交付结果 |
 |---|---|---|
@@ -30,11 +30,15 @@ T001–T024 已完成。自动化质量基线为 **364 个测试**、Ruff 检查
 | M4 Evaluation + Handoff | 已完成 | Evaluation events、指标/ADR 重算、DONE/BLOCKED handoff、CLI/runtime |
 | 执行安全边界 | 已完成 | fail-closed 命令执行端口、role worktree 执行生命周期 |
 | M5 组织 Workforce 与任意项目接入 | 已完成 | sidecar、Workforce、Scheduler/ModelRouter、ProjectProfile、SpecCompiler、Runtime workspace binding |
-| M6 可执行交付 | 进行中 | evidence capture、Agent tool protocol 已完成；跨语言真实项目 E2E 待 T025 |
-| M7 Agent 可视化 | 待开始 | 只读投影/API、Task board、timeline、Agent detail、Human inbox |
+| M6 可执行交付 | 已完成 | evidence capture、typed tools、跨语言目标项目串行交付、只读投影/API |
+| M7 Agent 可视化 | 已完成 | 静态只读 dashboard：Task board、timeline、Agent detail、Human inbox |
 
 完整阶段事实、任务清单和提交证据见
 [`docs/archive/2026-09-01-t019-t022-organization-runtime.md`](docs/archive/2026-09-01-t019-t022-organization-runtime.md)；
+T023–T025 的执行边界和跨语言验证见
+[`docs/archive/2026-09-01-t025-target-project-e2e.md`](docs/archive/2026-09-01-t025-target-project-e2e.md)；
+T026–T027 的只读投影与可视化见
+[`docs/archive/2026-09-01-t026-t027-projection-visualization.md`](docs/archive/2026-09-01-t026-t027-projection-visualization.md)；
 后续路线见 [`docs/milestones.md`](docs/milestones.md)。
 
 ## MVP 边界
@@ -94,7 +98,10 @@ ai-software-engineer/
 │   ├── orchestration/                # 串行 runner、Context composition 与状态机
 │   ├── scheduling/                   # 纯 PortfolioScheduler 与 run-scoped ModelRouter
 │   ├── runtime.py                    # RuntimeConfig、角色路由与 task run composition
-│   ├── runtime_workspace.py          # 组织/项目 workspace 绑定与 workforce 解析
+│   ├── runtime_workspace.py           # 组织/项目 workspace 绑定与 workforce 解析
+│   ├── projection/                    # 从 durable facts 重算只读 Task/Run/Agent/Lease
+│   ├── read_api.py                    # transport-neutral GET-only projection API
+│   ├── visualization/                 # 无依赖静态只读 dashboard renderer
 │   ├── project_profile.py            # 技术栈、VCS 与项目原生规则只读发现
 │   ├── spec_compiler.py              # 三层规范编译、冲突与人工 resolution
 │   ├── execution.py                  # worktree 内受控 argv/subprocess 执行端口
@@ -103,7 +110,6 @@ ai-software-engineer/
 │   ├── role_workspace.py             # Git worktree + executor 生命周期组合
 │   ├── project_workspace.py           # 目标项目与外置 AI sidecar workspace 绑定
 │   ├── evaluation/                   # Evaluation events、metrics/ADR、handoff
-│   ├── tools/                        # typed read/write/argv tool registry
 │   └── prompts/                      # 后续：版本化 role prompt 模板
 ├── docs/
 │   ├── architecture.md               # 分层、边界和部署形态
@@ -119,6 +125,9 @@ ai-software-engineer/
 │   ├── cli.md                        # CLI 使用说明
 │   ├── runtime.md                    # Runtime 配置与 task run
 │   ├── tool-protocol.md              # T024 typed tool 与角色隔离
+│   ├── target-project-e2e.md          # T025 跨语言目标项目验证
+│   ├── projection.md                  # T026 事件驱动只读 projection/read API
+│   ├── visualization-implementation.md # T027 dashboard renderer
 │   ├── milestones.md                 # 里程碑与第一批任务
 │   ├── archive/                      # 已完成阶段的事实、验证与提交记录
 │   └── decisions/                    # 已接受的架构决策
@@ -144,7 +153,13 @@ ai-software-engineer/
 │   ├── evidence.schema.json
 │   ├── run-evidence-manifest.schema.json
 │   ├── tool-request.schema.json
-│   └── tool-result.schema.json
+│   ├── tool-result.schema.json
+│   ├── projection-timeline.schema.json
+│   ├── projection-task.schema.json
+│   ├── projection-run.schema.json
+│   ├── projection-agent.schema.json
+│   ├── projection-lease.schema.json
+│   └── projection-snapshot.schema.json
 ├── .trellis/
 │   ├── README.md
 │   └── spec/core/
@@ -166,6 +181,7 @@ ai-software-engineer/
 │   ├── role_workspace/               # role worktree 与 executor 组合测试
 │   ├── evidence/                     # evidence capture、脱敏、重放和完整性
 │   ├── tools/                        # typed tool protocol 和角色隔离
+│   ├── e2e/                          # 跨语言目标项目串行交付
 │   └── contracts/                    # Python model ↔ JSON Schema 一致性
 └── artifacts/runs/                   # 运行产物（默认 gitignored）
 ```

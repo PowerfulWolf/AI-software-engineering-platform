@@ -1,0 +1,3 @@
+{"check":"deterministic projection","result":"PASS","evidence":"same ProjectionFacts yields byte-equivalent immutable ProjectionSnapshot"}
+{"check":"conflict detection","result":"PASS","evidence":"unknown task, duplicate IDs, broken StateEvent stream and naive as_of fail closed"}
+{"check":"read-only API","result":"PASS","evidence":"ReadOnlyProjectionApi accepts snapshot only; non-GET returns 405 and mutation routes are absent"}

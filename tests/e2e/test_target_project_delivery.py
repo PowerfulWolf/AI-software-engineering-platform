@@ -139,9 +139,7 @@ class _RegistryCommandExecutor:
                 role=self._role,
                 operation_id="tool.e2e.command",
                 argv=arguments,
-                timeout_seconds=(
-                    int(timeout_seconds) if timeout_seconds is not None else None
-                ),
+                timeout_seconds=(int(timeout_seconds) if timeout_seconds is not None else None),
             )
         )
         if isinstance(result, ToolRejectedResult):
@@ -271,9 +269,7 @@ def _build_adapter(
     contexts: FileRunContextBuilder,
 ) -> FakeAgentAdapter:
     suffix = case.language.value
-    run_ids = {
-        role: f"run_t025_{suffix}_{role.value}" for role in AgentRole
-    }
+    run_ids = {role: f"run_t025_{suffix}_{role.value}" for role in AgentRole}
     plan_context = contexts.build(
         task.model_copy(update={"status": TaskStatus.PLANNING}),
         definitions[AgentRole.ORCHESTRATOR],

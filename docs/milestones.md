@@ -1,6 +1,6 @@
 # v0.1 开发里程碑与第一批可执行任务
 
-> 实施状态：T001–T024 已完成；M5 已通过组织级 Scheduler/ModelRouter、ProjectProfile、
+> 实施状态：T001–T027 已完成；M5 已通过组织级 Scheduler/ModelRouter、ProjectProfile、
 > SpecCompiler 与 Runtime workspace binding 达到退出条件。目标项目与外置 AI workspace 已有
 > 稳定绑定。M0–M5 的
 > v0.1 核心库退出条件已通过自动化测试验证。T014 提供配置驱动的串行运行入口，T015 提供
@@ -59,9 +59,10 @@ application service 是 M6 的组合工作，不引入分布式队列。
 
 ### M7 — Agent 工作可视化
 
-先建立只读事件投影与本地 read API，再实现 Task board、Run timeline、Agent detail 和 Human
-inbox。可视化只消费 durable StateEvent、AgentRunEvent、Context、Artifact、Evidence 和
-Handoff，不成为第二个状态写入者。详细设计见 [`docs/visualization.md`](visualization.md)。
+已建立只读事件投影、GET-only read API 和无依赖静态 renderer，提供 Task board、Run timeline、
+Agent detail 和 Human inbox。可视化只消费 durable StateEvent、AgentRunEvent、Context、Artifact、
+Evidence 和 Handoff，不成为第二个状态写入者。实现细节见 [`docs/projection.md`](projection.md)、
+[`docs/visualization-implementation.md`](visualization-implementation.md)。
 
 ## 第一批可执行任务
 
@@ -97,8 +98,8 @@ Handoff，不成为第二个状态写入者。详细设计见 [`docs/visualizati
 
 ## 第一批任务的执行顺序
 
-已完成：`T001 → ... → T024`。当前剩余顺序：
-`T025 → T026 → T027`。
+已完成：`T001 → ... → T027`。M6/M7 当前退出条件已满足；后续进入真实业务项目运行、HTTP/SSE
+适配和成本/容量投影迭代。
 
 每完成一个任务，都先运行 contract tests，再更新 `.trellis/spec/`。T019 保持单进程、有界、
 Lease 驱动的纯跨 Task 调度决策；禁止把单 Task 改成并行 DAG，也不引入消息队列或向量库。

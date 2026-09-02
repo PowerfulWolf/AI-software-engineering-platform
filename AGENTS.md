@@ -57,6 +57,13 @@ ProjectProfile、CompiledSpec 和 RuntimePaths 绑定，并校验 Task.repositor
 给定 `project_root` 绑定。可视化只读取 sidecar 的 durable events/artifacts/evidence 和目标项目
 的只读 Git inspection，不直接驱动状态或 verdict；路线见 `docs/visualization.md`。
 
+T026/T027 的 projection 与 dashboard 只能是 read side：`ProjectionFacts` 必须来自已校验的
+durable StateEvent、Evaluation、Artifact、Evidence、Assignment、Lease 和 Handoff，
+`RunProjectionBuilder` 纯重算 `ProjectionSnapshot`；`ReadOnlyProjectionApi` 仅提供 GET 列表/详情、
+过滤和分页，非 GET 返回 405。`DashboardRenderer` 只消费 snapshot/API，输出 JSON 或静态 HTML，
+不得打开 socket、执行命令、写 Task、verdict、artifact、state 或人工决策；总 capacity/cost 等
+未被事实支持的字段必须显示 unknown，不得猜测。恶意任务文本只能以 textContent 安全渲染。
+
 ## 组织级 Agent 与模型分配
 
 - Agent 是组织拥有的长期团队成员；Project 只拥有工作、规范、访问授权和执行记录；

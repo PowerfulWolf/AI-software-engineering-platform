@@ -9,7 +9,7 @@ from typing import cast
 from jsonschema import Draft202012Validator, FormatChecker
 from referencing import Registry, Resource
 
-from ai_software_engineer.domain import AgentRole
+from ai_software_engineer.domain import AgentRole, TaskStatus
 from ai_software_engineer.evidence import (
     CommandEvidencePayload,
     CommandEvidenceRecord,
@@ -21,6 +21,7 @@ from ai_software_engineer.evidence import (
     seal_run_manifest,
 )
 from ai_software_engineer.execution import CommandResult
+from ai_software_engineer.projection import ProjectionSnapshot, TaskProjection
 from ai_software_engineer.tools import (
     ReadFileResult,
     RunCommandResult,
@@ -152,3 +153,20 @@ def test_typed_tool_results_wire_match_schema() -> None:
     )
     for result in results:
         _assert_valid(result.to_wire(), "tool-result.schema.json")
+
+
+def test_projection_snapshot_wire_matches_projection_schemas() -> None:
+    snapshot = ProjectionSnapshot(
+        tasks=(
+            TaskProjection(
+                task_id="task_contract_projection",
+                project_id="project_contract_projection",
+                title="projection contract",
+                status=TaskStatus.DONE,
+                attempts=1,
+                state_revision=5,
+            ),
+        )
+    )
+    _assert_valid(snapshot.tasks[0].to_wire(), "projection-task.schema.json")
+    _assert_valid(snapshot.to_wire(), "projection-snapshot.schema.json")

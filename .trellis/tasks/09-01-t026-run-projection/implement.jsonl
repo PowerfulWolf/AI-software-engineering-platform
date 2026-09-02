@@ -1,0 +1,4 @@
+{"path":"src/ai_software_engineer/projection/models.py","change":"added","summary":"Typed immutable projection contracts"}
+{"path":"src/ai_software_engineer/projection/projector.py","change":"added","summary":"Pure event/fact projection builder"}
+{"path":"src/ai_software_engineer/read_api.py","change":"added","summary":"GET-only transport-neutral read API"}
+{"path":"schemas/projection-snapshot.schema.json","change":"added","summary":"Draft 2020-12 snapshot contract"}

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/projection-timeline.schema.json",
+  "title": "Projection timeline entry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "kind", "occurred_at", "summary", "source_uri", "details"],
+  "properties": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "kind": {"enum": ["state_event", "evaluation_event", "artifact", "evidence", "handoff", "assignment", "lease"]},
+    "occurred_at": {"type": "string", "format": "date-time"},
+    "task_id": {"type": "string", "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "run_id": {"type": "string", "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "role": {"enum": ["orchestrator", "coder", "qa", "reviewer"]},
+    "summary": {"type": "string", "minLength": 1},
+    "source_uri": {"type": "string", "minLength": 1},
+    "source_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "details": {"type": "object", "additionalProperties": true}
+  }
+}
