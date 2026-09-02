@@ -4,7 +4,7 @@
 
 - 日期：2026-09-01
 - 纳入任务：T026 RunProjection/read API、T027 visualization dashboard
-- feature/integration commit：待本轮集成提交后回填
+- feature/integration commit：`0d6f3ed`
 
 ## 形成的能力
 
