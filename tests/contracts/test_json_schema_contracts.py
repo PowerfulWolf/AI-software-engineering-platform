@@ -142,8 +142,6 @@ def test_project_workspace_schema_rejects_project_owned_agents_directory(tmp_pat
     layout = payload["layout"]
     assert isinstance(layout, dict)
     layout["agents"] = layout.pop("assignments")
-    payload["layout_version"] = "v0.1"
-
     _assert_invalid(payload, "project-workspace.schema.json")
 
 

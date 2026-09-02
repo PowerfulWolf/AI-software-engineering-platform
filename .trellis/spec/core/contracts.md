@@ -43,7 +43,7 @@ implementation-report Artifact 可以使用新 revision，但必须满足
 
 `ProjectWorkspaceManifest` 的 wire contract 是 `schemas/project-workspace.schema.json`。它固定
 `project_id`、canonical absolute `project_root`、external `ai_workspace_root`、layout version、
-创建时间和排除自身字段计算的 `manifest_sha256`。T018 的 `layout_version=v0.2`；
+创建时间和排除自身字段计算的 `manifest_sha256`。当前初始 `layout_version=v0.1`；
 `ProjectWorkspaceRegistry` 在 sidecar 中创建 `workspace.json` 以及 profile/assignments/
 knowledge/policy/state/artifacts/contexts/evidence/evaluations/handoffs/runs/locks/logs/
 spec-conflicts 目录；所有目录先 staging + fsync，再以 rename 发布。重复注册返回首次 manifest，
@@ -244,7 +244,7 @@ ModelPolicy、全局 WorkQueue 和绩效属于组织 workspace。
 | Lease expiry 不晚于 acquired_at，或用 naive datetime 评估 | 拒绝 |
 | 同一 Task 历史的 Coder/QA/Reviewer 使用同一 agent_id | `AssignmentConflict` |
 | AgentRunAllocation 缺 Agent/Model/Context/Prompt/Spec/tool policy 任一归因 | Schema 拒绝 |
-| v0.1 `agents/` project layout | ProjectWorkspace v0.2 拒绝，不自动改写旧 sidecar |
+| project sidecar 声明 `agents/` | ProjectWorkspace 拒绝结构漂移；AgentProfile 只能存在于 organization workspace |
 | waiting/future retry/closed WorkItem | Scheduler 返回 typed rejection，不创建 Assignment/Lease |
 | batch 内新 Lease 将导致 capacity 超限 | 后续 WorkItem 返回 `CAPACITY_EXHAUSTED` |
 | route 无显式 context capacity 或没有满足 tier 的 route | ModelRouter typed refusal，不能猜测 |
@@ -265,7 +265,8 @@ ModelPolicy、全局 WorkQueue 和绩效属于组织 workspace。
 
 - `tests/workforce/test_contracts.py` 覆盖 organization identity、risk floor、waiting reason、lease
   window、自审冲突、run attribution 和 Python ↔ JSON Schema；
-- `tests/project_workspace/` 与 `tests/contracts/` 覆盖 assignments layout v0.2 和 legacy agents 拒绝；
+- `tests/project_workspace/` 与 `tests/contracts/` 覆盖当前 v0.1 assignments layout 和
+  project-owned agents 结构拒绝；
 - `tests/scheduling/` 覆盖 capacity aggregate、Lease release/expiry、priority/age/risk、batch 新 Lease、
   no-self-review、deterministic ModelRouter 和 typed refusal；
 - `tests/project_profile/`、`tests/spec_compiler/`、`tests/runtime_workspace/` 覆盖跨语言发现、规则
@@ -295,3 +296,22 @@ assert allocation.assignment_id == assignment.id
 
 前者复制组织身份、把 model 固化到成员并产生跨 Task 上下文串扰；后者让 Project 只保存
 Assignment，每个 Run 显式记录成员、模型、Context 与 policy。
+
+## 11. T028 Project Manager Agent, Skills, and stage artifacts
+
+Project Manager 是组织级团队领导 Agent，不是与 Agent 并列的用户可见 Service。它只能通过 typed、
+policy-bound Skills 执行 `prepare_project`、`advance_stage`、`commit_dispatch`、`route_failure` 和
+`deliver_result`；每个 Skill 由 deterministic application service 实现，并只持有完成该能力所需的
+最小 ports。Prompt 不授予状态、store、shell 或启动其他 Agent 的 ambient authority。
+
+Planner Agent 可调用 read-only Scheduler/ModelRouter preview Skills，把当前 capacity、risk floor 和
+context capacity 形成 feasibility evidence；preview 不创建 Assignment/Lease/ModelSelection。Project
+Manager 的 `commit_dispatch` 必须基于当前 facts 重新运行同一 engines，typed decision 成功后才
+持久化具体分配。这样 Planner 可以做真实可行的计划，但不能既计划又批准自己的资源方案。
+
+上游 stage artifacts 固定为 `ProjectPreparation → ProjectRequest → ProductSpec +
+ProductSpecApproval → TechnicalDesign → ExecutionPlan`。Product Agent 不能创建 Approval；只有用户对
+exact ProductSpec ID/digest 的 APPROVED record 才能解锁 Designer。TechnicalDesign 必须精确覆盖
+requirement/acceptance IDs；ExecutionPlan v0.1 固定 Coder→QA→Reviewer，并禁止 concrete Agent/model/
+provider/Lease 字段。完整 chain 通过 `derive_delivery_task` 后，现有 Task/Artifact/Orchestrator contract
+才开始生效。

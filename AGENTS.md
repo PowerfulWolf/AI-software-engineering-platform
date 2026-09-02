@@ -10,6 +10,23 @@
   TaskOrchestrator 只按 artifact 和 policy 作决定。
 - **Agents communicate through verifiable artifacts, not shared assumptions.** 角色之间只传递 Schema 校验通过、带 `task_id`、`source_revision`、`context_manifest_id`、evidence 和 SHA-256 的 artifact。
 
+## 组织形态：Knowledge Plane + Agent Team + Skills
+
+- Knowledge Plane 由组织通用知识库和每个项目的外置 sidecar 组成；前者保存通用规范、Skills、
+  AgentProfile 与历史经验，后者保存 ProjectProfile、项目规范、Product/Design/Plan artifacts 和运行事实；
+- Project Manager 是组织级团队领导 Agent，负责接单、推进、协调和交付。它只能通过 typed、
+  policy-bound Skills 调用 deterministic application services，不能从 prompt 获得 store/state/shell
+  或启动其他 Agent 的 ambient authority；
+- Product Agent 产出 ProductSpec，但不能批准自己的工作。只有用户对 exact spec ID/digest 的
+  ProductSpecApproval(APPROVED) 才能进入 Solution Designer；
+- Solution Designer Agent 产出精确覆盖 requirement/acceptance IDs 的 TechnicalDesign；Planner
+  Agent 产出 ExecutionPlan，可以使用只读 Scheduler/ModelRouter preview Skills 检查可行性；
+- Planner preview 不产生具体 Assignment/Lease/ModelSelection。Project Manager 的
+  `commit_dispatch` Skill 必须基于当前 facts 重新调用同一 deterministic engines 后才能提交分配；
+- T028 stage contract 已固定 `ProjectPreparation → ProjectRequest → ProductSpec/Approval →
+  TechnicalDesign → ExecutionPlan → NEW Task`。现有 AgentAdapter 暂仍覆盖 Delivery 四角色；扩展
+  Product/Designer/Planner producer/run/context lineage 时不得绕过这些 stage contract。
+
 ## v0.1 硬边界
 
 每个 Task 内部只实现串行交付（v0.1 的代码隔离 adapter 使用 Git）：

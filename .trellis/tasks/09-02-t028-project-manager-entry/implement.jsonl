@@ -1,0 +1,4 @@
+{"path":"src/ai_software_engineer/domain/project_delivery.py","change":"added","summary":"ProjectPreparation/Request、ProductSpec/Approval、TechnicalDesign、ExecutionPlan 与 Task 派生 contracts"}
+{"path":"schemas/project-stage-defs.schema.json","change":"added","summary":"上游阶段共享 Draft 2020-12 wire definitions 与六个公开 Schema"}
+{"path":"src/ai_software_engineer/project_workspace.py","change":"changed","summary":"assignments sidecar 成为唯一初始 v0.1 layout，不保留未使用迁移语义"}
+{"path":".trellis/tasks/09-02-t029-project-manager-skills","change":"added","summary":"T029–T033 连续可执行任务入口"}

@@ -1,0 +1,31 @@
+{
+  "id": "T032",
+  "slug": "unified-project-entry",
+  "title": "实现项目目录 + 需求的统一接单与串行交付入口",
+  "status": "planned",
+  "phase": "plan",
+  "depends_on": ["T031"],
+  "allowed_paths": [
+    "src/ai_software_engineer/cli.py",
+    "src/ai_software_engineer/project_manager/**",
+    "src/ai_software_engineer/runtime.py",
+    "src/ai_software_engineer/orchestration/**",
+    "tests/cli/**",
+    "tests/e2e/**",
+    "fixtures/target-projects/**",
+    "docs/**",
+    "README.md",
+    "AGENTS.md",
+    ".trellis/spec/core/**",
+    ".trellis/tasks/09-02-t032-unified-project-entry/**"
+  ],
+  "verification_commands": [
+    "uv run pytest -q tests/cli tests/e2e",
+    "uv run pytest -q",
+    "uv run ruff check .",
+    "uv run ruff format --check .",
+    "uv run mypy src tests",
+    "uv build --offline",
+    "git diff --check"
+  ]
+}

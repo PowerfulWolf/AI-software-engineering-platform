@@ -31,7 +31,7 @@ Lease 和 ModelSelection，但不迁移 Task 交付状态；`TaskOrchestrator` �
 `ProjectWorkspaceRegistry` 将操作者给出的本地 `project_root` 绑定到目标目录之外的
 `ai_workspace_root`。目标项目仍是实际代码、测试、构建和默认命令 cwd；sidecar 保存
 `ProjectProfile`、Assignment/规范、Task/StateEvent、Context、Artifact、Evidence、Evaluation、
-Handoff、run metadata 和日志。T018 的 v0.2 layout 用 `assignments/` 替换 `agents/`，因为 Agent
+Handoff、run metadata 和日志。当前初始 v0.1 layout 使用 `assignments/` 而不是 `agents/`，因为 Agent
 身份属于组织而不是项目。manifest 与固定 layout 是后续 Runtime/Context/Visualization
 共享的路径契约，注册过程不会复制源码或在目标项目写入平台文件。T020 的 `ProjectProfile`
 确定性发现语言、构建系统、VCS 和原生规则来源；T022 的 `RuntimeWorkspaceBinding` 将这些事实与

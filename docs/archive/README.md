@@ -22,6 +22,7 @@ Archive 是组织记忆的一部分，不依赖任何单个 Agent 的会话。�
 | 2026-09-01 | `02b3183` | T023–T024；Evidence capture、typed tool protocol 与 Runtime evidence roots，M6 执行边界 | [T023–T024 Executable Delivery](2026-09-01-t023-t024-executable-delivery.md) |
 | 2026-09-01 | `dff64ab` | T025；Python/Java/Go/TypeScript 任意目标项目串行交付 fixture matrix | [T025 Target Project E2E](2026-09-01-t025-target-project-e2e.md) |
 | 2026-09-01 | `0d6f3ed` | T026–T027；事件驱动只读 projection/read API 与静态 dashboard | [T026–T027 Projection & Visualization](2026-09-01-t026-t027-projection-visualization.md) |
+| 2026-09-02 | 本记录所在提交 | T028；Project Manager/Agent Skills 架构、Product/Design/Plan contracts 与用户确认门禁 | [T028 Project Manager Stage Contracts](2026-09-02-t028-project-manager-stage-contracts.md) |
 
 ## 后续归档约定
 

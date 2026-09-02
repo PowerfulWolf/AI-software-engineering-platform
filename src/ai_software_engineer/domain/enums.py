@@ -14,6 +14,35 @@ class TaskStatus(StrEnum):
     FAILED = "FAILED"
 
 
+class ProjectRequestStatus(StrEnum):
+    PRODUCT_DISCOVERY = "PRODUCT_DISCOVERY"
+    WAITING_PRODUCT_APPROVAL = "WAITING_PRODUCT_APPROVAL"
+    DESIGNING = "DESIGNING"
+    PLANNING = "PLANNING"
+    READY_FOR_DELIVERY = "READY_FOR_DELIVERY"
+    DELIVERING = "DELIVERING"
+    REPORTING = "REPORTING"
+    DONE = "DONE"
+    WAITING_HUMAN = "WAITING_HUMAN"
+    BLOCKED = "BLOCKED"
+
+
+class ProductSpecStatus(StrEnum):
+    DRAFT = "DRAFT"
+    READY_FOR_REVIEW = "READY_FOR_REVIEW"
+
+
+class ProductApprovalDecision(StrEnum):
+    APPROVED = "APPROVED"
+    REQUEST_CHANGES = "REQUEST_CHANGES"
+
+
+class RequirementPriority(StrEnum):
+    MUST = "MUST"
+    SHOULD = "SHOULD"
+    COULD = "COULD"
+
+
 class AgentRole(StrEnum):
     ORCHESTRATOR = "orchestrator"
     CODER = "coder"

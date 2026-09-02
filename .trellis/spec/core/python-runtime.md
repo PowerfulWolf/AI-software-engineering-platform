@@ -1396,14 +1396,15 @@ allocation 的唯一 Python 领域入口；正式 wire contract 是 `schemas/wor
 - TaskLease expires_at 必须晚于 acquired_at；`lease_is_active` 显式接收 clock，不读取全局时间；
 - RoleAssignment/AgentRunAllocation attempt 从 1 开始；run allocation 必须携带完整归因；
 - `validate_assignment_independence` 拒绝同一 Task 历史中同 Agent 跨 Coder/QA/Reviewer 角色；
-- ProjectWorkspace `schema_version=v0.1/layout_version=v0.2`，固定 `assignments/` 替换 `agents/`；
-  legacy manifest fail closed，不自动删除或迁移。
+- ProjectWorkspace `schema_version=v0.1/layout_version=v0.1`，初始且唯一的当前 layout 固定使用
+  `assignments/`；Project sidecar 不存在 `agents/`，因为 AgentProfile 属于组织。
 
 ### 18.3 Tests and quality gates
 
 - `tests/workforce/test_contracts.py` 必须覆盖 valid model、extra field、完整 risk floors、waiting、
   retry time、lease window、naive clock、自审拒绝和 JSON Schema；
-- `tests/project_workspace/test_registry.py` 验证 v0.2 layout 与 legacy manifest 拒绝；
+- `tests/project_workspace/test_registry.py` 验证 v0.1 `assignments/` layout，并拒绝项目拥有
+  `agents/` 目录的结构漂移；
 - `tests/contracts/test_json_schema_contracts.py` 验证所有 Schema draft 合法和 project layout drift；
 - 修改这些跨层字段必须同步 CONTEXT、ADR、README、docs、AGENTS 和 core specs，并运行全量
   pytest、Ruff、strict mypy、offline build 与 diff check。
@@ -1506,8 +1507,8 @@ RuntimeSession(config, *, agent_adapter=None, agent_definitions=None,
 
 - Organization workspace 固定包含 `organization.json`、`agents/`、`model-policies/`、`work-items/`、
   `leases/`、`metrics/`；初始化 staging + fsync + atomic rename，existing manifest 重开须完整校验；
-- organization root、project root、project sidecar 两两不得重叠。Project sidecar 继续使用 T017 v0.2
-  layout，Runtime 固定映射 `state/state.sqlite3`、`artifacts/`、`contexts/`、`evaluations/` 和
+- organization root、project root、project sidecar 两两不得重叠。Project sidecar 使用当前唯一的
+  v0.1 `assignments/` layout，Runtime 固定映射 `state/state.sqlite3`、`artifacts/`、`contexts/`、`evaluations/` 和
   `handoffs/`；
 - binding 在 sidecar 的 `profile/project-profile.json` 与 `policy/runtime-workspace-binding.json`
   保存不可变记录；重开时校验 organization/project manifest、profile digest、binding digest 和
@@ -1726,3 +1727,159 @@ offline build and `git diff --check` remain mandatory.
 snapshot = RunProjectionBuilder().build(facts)
 html = DashboardRenderer().render_html(ReadOnlyProjectionApi(snapshot))
 ```
+
+## 22. Project Manager stage contracts and Agent Skill boundary (T028)
+
+### 22.1 Scope / Trigger
+
+新增或修改 Project Preparation、需求确认、Technical Design、Planner Execution Plan、Project
+Manager Skill 或从上游阶段派生 Delivery Task 时适用。`domain/project_delivery.py` 是 Product、
+Designer、Planner 与现有 Task 之间唯一的 typed contract seam；原始聊天文本不能直接创建 Task。
+
+Project Manager 是组织级团队领导 Agent。其 prepare/advance/commit-dispatch/recover/deliver 能力必须
+实现为 policy-bound Skills，Skill 内部调用 deterministic application services；不能把 authority、
+状态机或 store handle 放进 prompt。Planner 可以调用只读 Scheduler/ModelRouter preview Skills，
+但只有 Project Manager 的 commit-dispatch Skill 可以复核并持久化 Assignment/Lease/ModelSelection。
+
+### 22.2 Signatures
+
+```python
+ProjectPreparation.create(*, organization_id, project_id, project_root,
+                          project_workspace_root, organization_root,
+                          project_profile_sha256, runtime_binding_sha256,
+                          baseline_spec_sha256, baseline_source_uris=(),
+                          prepared_at) -> ProjectPreparation
+
+ProjectRequest.create(*, request_id, project_id, preparation_sha256, title,
+                      original_request, status, created_at,
+                      updated_at=None) -> ProjectRequest
+
+ProductSpec.create(*, spec_id, request_id, project_id, version, status, summary,
+                   goals, requirements, acceptance_criteria, created_at,
+                   non_goals=(), assumptions=(), open_questions=(),
+                   decisions=(), supersedes=None) -> ProductSpec
+
+ProductSpecApproval.create(product_spec, *, decision, operator_id,
+                           rationale, decided_at) -> ProductSpecApproval
+
+TechnicalDesign.create(product_spec, approval, *, design_id, version, summary,
+                       components, requirement_mappings, acceptance_mappings,
+                       implementation_steps, created_at, risks=()) -> TechnicalDesign
+
+ExecutionPlan.create(product_spec, technical_design, *, plan_id, version, phases,
+                     created_at, feasibility_evidence_uris=()) -> ExecutionPlan
+
+require_product_approval(product_spec, approval) -> None
+validate_stage_chain(preparation, request, product_spec, approval,
+                     technical_design, execution_plan) -> None
+derive_delivery_task(preparation, request, product_spec, approval, technical_design,
+                     execution_plan, *, task_id, repository, base_ref, max_attempts,
+                     created_at, constraints=None, owner=None, labels=()) -> Task
+```
+
+Wire contracts are:
+
+```text
+schemas/project-preparation.schema.json
+schemas/project-request.schema.json
+schemas/product-spec.schema.json
+schemas/product-spec-approval.schema.json
+schemas/technical-design.schema.json
+schemas/execution-plan.schema.json
+schemas/project-stage-defs.schema.json
+```
+
+### 22.3 Contracts
+
+- 所有 stage model 继承 frozen/extra-forbid `DomainModel`，使用 aware datetime、typed ID、唯一集合和
+  canonical SHA-256；读取或跨阶段使用前必须执行 `validate_integrity()`；
+- ProjectPreparation 只证明外置 sidecar、ProjectProfile、organization binding 与 project-level
+  baseline 已准备；其三个 root 必须绝对且互不重叠。Task constraints 在需求形成后由现有
+  `SpecCompiler` 二次编译，Prepare 不能声称已编译未知 Task；
+- ProductSpec requirement 必须引用已知 AcceptanceCriterion，且每个 criterion 至少归属一个
+  requirement。Product Agent 只能产出 `DRAFT/READY_FOR_REVIEW`，不能产出 approved 状态；
+- 用户决定是独立、不可变的 `ProductSpecApproval`，必须绑定 exact Project/Request/spec ID/digest。
+  只有 `APPROVED` 且 spec 为 `READY_FOR_REVIEW` 才能启动 Designer；`REQUEST_CHANGES` 生成下一版本，
+  不覆盖旧 spec/decision；
+- TechnicalDesign 必须完整且精确覆盖 ProductSpec requirement IDs 与 acceptance IDs，并只引用已声明
+  component；它必须引用 exact approval；
+- ExecutionPlan v0.1 固定为 `coder → qa → reviewer` 三阶段，只包含 objective、capability、risk、
+  BrainTier floor、checkpoint、critical-path 和 preview evidence URI；禁止 concrete Agent、provider、
+  model、Assignment 或 Lease；
+- `derive_delivery_task` 先重验完整 stage chain，要求 ProjectRequest=`READY_FOR_DELIVERY`、repository
+  等于 prepared project root，再把 ProductSpec acceptance criteria 原样投影为 NEW Task；上游 ID 与
+  digest 写入 Task metadata，Planner/Coder 不能改写验收标准；
+- T028 stage documents 是不可变、可验证的上游 artifacts，但暂不加入现有四类 Delivery Artifact
+  envelope。T030/T031 扩展 Agent role/run/context producer lineage 时必须保持这些 wire payload 兼容；
+- Agent Skill 是 typed facade，不是 prompt instruction。Preview Skill 无持久化端口；commit Skill 必须
+  以当前容量/Policy 重新执行同一 Scheduler/ModelRouter engine，不能把 preview 当成授权结果。
+
+### 22.4 Validation & Error Matrix
+
+| Input / state | Detection | Result |
+|---|---|---|
+| stage ID、enum、时间、未知字段非法 | Pydantic/Schema boundary | validation failure，不进入下一阶段 |
+| stage payload 在创建后被修改 | `validate_integrity` | `StageIntegrityError` |
+| approval 为 REQUEST_CHANGES 或 spec 非 READY | `require_product_approval` | `ProductApprovalRequired` |
+| approval 引用另一 spec version/digest/Request/Project | approval gate | `StageContractMismatch` |
+| Design 缺失或多出 requirement/acceptance ID | design coverage guard | `StageContractMismatch` |
+| Design/Plan lineage 不匹配 | stage chain guard | `StageContractMismatch` |
+| Plan role 非 coder→qa→reviewer 或携带 concrete allocation field | model/Schema | validation failure |
+| Request 非 READY_FOR_DELIVERY 或 repository 不同 | Task derivation guard | `StageContractMismatch`，Task 不创建 |
+| Planner preview 已过期或不符合当前容量 | commit-dispatch Skill | 重新调度；不持久化旧 preview |
+
+### 22.5 Good / Base / Bad
+
+- **Good**：用户批准 exact ProductSpec digest；Design 全覆盖；Planner 用只读 preview 证明计划可行；
+  Project Manager commit Skill 重新校验后派生一个带完整 lineage 的 NEW Task。
+- **Base**：全部 stage contract、approval、coverage、Schema 和 Task 投影可用本地 fixture 离线验证，
+  不需要模型、Git 命令、数据库、队列或向量库。
+- **Bad**：Product Agent 自批需求；Designer 使用旧版本；Planner 写死 model/Agent；Project Manager
+  把 preview 直接当 Lease；或从聊天摘要直接构造缺少 traceable acceptance 的 Task。
+
+### 22.6 Tests Required
+
+- `tests/project_manager/test_contracts.py`：六类 stage 正例、Schema 对齐、用户批准/修改、跨版本审批、
+  digest tamper、Design 精确覆盖、Plan 固定顺序/禁止 concrete allocation、Task acceptance/metadata 投影；
+- `tests/contracts/test_json_schema_contracts.py`：所有 committed Schema 必须是 Draft 2020-12，未知字段、
+  非法 ID/time/enum 必须 fail closed；
+- T029 Skill tests 必须断言 Planner preview 无写调用，Project Manager commit 会重新调用 engine 并只在
+  typed decision 成功后写 Assignment/Lease/ModelSelection；
+- 全量 pytest、Ruff format/check、strict Mypy、offline build 与 `git diff --check` 是合并门禁。
+
+### 22.7 Wrong vs Correct
+
+#### Wrong
+
+```python
+task = Task(description=chat_summary, acceptance_criteria=agent_guesses)
+assignment = planner_output["agent_id"]
+model = planner_output["model"]
+```
+
+#### Correct
+
+```python
+approval = ProductSpecApproval.create(
+    product_spec,
+    decision=ProductApprovalDecision.APPROVED,
+    operator_id=user_id,
+    rationale=rationale,
+    decided_at=clock.now(),
+)
+design = TechnicalDesign.create(product_spec, approval, ...)
+plan = ExecutionPlan.create(product_spec, design, phases=serial_demands, ...)
+task = derive_delivery_task(
+    preparation,
+    request,
+    product_spec,
+    approval,
+    design,
+    plan,
+    repository=preparation.project_root,
+    ...,
+)
+```
+
+正确流程让用户批准、Design coverage、Planner demand 和 Task acceptance 都成为可重放事实；具体
+Agent/模型只能由 Project Manager commit-dispatch Skill 通过确定性 engines 产生。

@@ -163,7 +163,7 @@ project_id_for_root(project_root: str | Path) -> ProjectId
 - **T016 Bad**：把 QA AgentDefinition 配给 Coder spec、直接用 main checkout 构造 executor，
   或 force-remove dirty role worktree。
 - **T017 Good**：同一 canonical project root 重复注册返回首次 `workspace.json`，目标项目内容
-  不变，14 个平台目录全部位于外置 sidecar；T018 v0.2 layout 使用 `assignments/`，不复制 Agent。
+  不变，14 个平台目录全部位于外置 sidecar；当前初始 v0.1 layout 使用 `assignments/`，不复制 Agent。
 - **T017 Base**：一个尚无语言/构建描述的空本地目录也能注册；ProjectProfile 发现属于 T020。
 - **T017 Bad**：在目标项目创建 `.ase`、把源码复制到 sidecar、复用已绑定的 Project ID，或
   发现旧 layout 缺失时静默补目录。

@@ -1,0 +1,30 @@
+{
+  "id": "T033",
+  "slug": "delivery-reporter",
+  "title": "评估并实现只读 Reporter Agent/Skill",
+  "status": "planned",
+  "phase": "plan",
+  "depends_on": ["T032"],
+  "allowed_paths": [
+    "src/ai_software_engineer/reporting/**",
+    "src/ai_software_engineer/evaluation/**",
+    "src/ai_software_engineer/projection/**",
+    "src/ai_software_engineer/visualization/**",
+    "schemas/reporter*.schema.json",
+    "tests/reporting/**",
+    "tests/evaluation/**",
+    "tests/projection/**",
+    "tests/visualization/**",
+    "docs/**",
+    ".trellis/spec/core/**",
+    ".trellis/tasks/09-02-t033-delivery-reporter/**"
+  ],
+  "verification_commands": [
+    "uv run pytest -q tests/reporting tests/evaluation tests/projection tests/visualization",
+    "uv run ruff check .",
+    "uv run ruff format --check .",
+    "uv run mypy src tests",
+    "uv build --offline",
+    "git diff --check"
+  ]
+}

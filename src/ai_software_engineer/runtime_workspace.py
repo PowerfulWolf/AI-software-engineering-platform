@@ -333,7 +333,7 @@ class RuntimeWorkspaceBinding(DomainModel):
         config: RuntimeConfig,
         compiled_spec: CompiledSpec,
     ) -> RuntimeConfig:
-        """Replace legacy relative stores and inject the exact compiled spec source."""
+        """Bind configured stores to the sidecar and inject the exact compiled spec source."""
         self.validate_environment()
         compiled_spec.validate_integrity()
         if compiled_spec.project_id != self.project_id:

@@ -47,7 +47,7 @@ WorkspaceDirectory = Literal[
 ]
 
 SUPPORTED_SCHEMA_VERSION: Final = "v0.1"
-SUPPORTED_LAYOUT_VERSION: Final = "v0.2"
+SUPPORTED_LAYOUT_VERSION: Final = "v0.1"
 WORKSPACE_MANIFEST_NAME: Final = "workspace.json"
 WORKSPACE_DIRECTORIES: Final[tuple[WorkspaceDirectory, ...]] = (
     "profile",
@@ -113,7 +113,7 @@ class WorkspaceLayout(DomainModel):
 
     @classmethod
     def default(cls) -> "WorkspaceLayout":
-        """Return the only v0.1 layout accepted by the registry."""
+        """Return the only current layout accepted by the registry."""
         return cls()
 
     def as_mapping(self) -> dict[WorkspaceDirectory, str]:
@@ -135,18 +135,18 @@ class WorkspaceLayout(DomainModel):
             "spec-conflicts": self.spec_conflicts,
         }
 
-    def validate_v01(self) -> None:
+    def validate_current(self) -> None:
         """Reject layout changes that could make stores or visualizers ambiguous."""
         values = tuple(self.as_mapping().values())
         if values != WORKSPACE_DIRECTORIES:
-            raise ProjectWorkspaceCorruption("sidecar layout does not match the v0.2 contract")
+            raise ProjectWorkspaceCorruption("sidecar layout does not match the current contract")
 
 
 class ProjectWorkspaceManifest(DomainModel):
     """Persisted binding between a target code root and an external AI workspace."""
 
     schema_version: Literal["v0.1"] = SUPPORTED_SCHEMA_VERSION
-    layout_version: Literal["v0.2"] = SUPPORTED_LAYOUT_VERSION
+    layout_version: Literal["v0.1"] = SUPPORTED_LAYOUT_VERSION
     project_id: ProjectId
     project_root: NonEmptyStr
     ai_workspace_root: NonEmptyStr
@@ -185,7 +185,7 @@ class ProjectWorkspaceManifest(DomainModel):
         """Validate paths, identity, and the fixed directory layout from disk."""
         if self.manifest_sha256 != _manifest_digest(self):
             raise ProjectWorkspaceCorruption("workspace manifest digest does not match content")
-        self.layout.validate_v01()
+        self.layout.validate_current()
         project_root = _resolved_path(self.project_root)
         workspace_root = _resolved_path(self.ai_workspace_root)
         expected = expected_workspace_root.resolve(strict=False)

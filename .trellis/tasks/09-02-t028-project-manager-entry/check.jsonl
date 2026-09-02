@@ -1,0 +1,3 @@
+{"check":"requirements","result":"PASS","evidence":"用户确认 ProductSpec exact approval gate；Project Manager Agent + policy-bound Skills；Planner preview/Project Manager commit 边界"}
+{"check":"contracts","result":"PASS","evidence":"六类 frozen stage models、七份 Draft 2020-12 Schema、exact coverage/lineage/Task derivation guards"}
+{"check":"quality","result":"PASS","evidence":"393 pytest；Ruff check/format；strict Mypy 145 files；offline build；git diff --check"}

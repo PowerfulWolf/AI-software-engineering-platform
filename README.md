@@ -16,10 +16,10 @@
 4. **Task 内串行，组织层有界调度**：每个 Task 仍按 `Coder → QA → Reviewer` 串行；组织可以在
    容量允许时调度多个相互隔离 Task，不引入单 Task 复杂 DAG、共享会话或分布式队列。
 
-## 当前进度（2026-09-01）
+## 当前进度（2026-09-02）
 
-T001–T027 已完成。自动化质量基线为 **380 个测试**、Ruff 检查与格式检查通过、strict Mypy
-检查 **142 个源码文件**、Python package build 通过。
+T001–T028 已完成。自动化质量基线为 **393 个测试**、Ruff 检查与格式检查通过、strict Mypy
+检查 **145 个源码文件**、Python package build 通过。
 
 | 阶段 | 状态 | 已交付结果 |
 |---|---|---|
@@ -32,6 +32,7 @@ T001–T027 已完成。自动化质量基线为 **380 个测试**、Ruff 检查
 | M5 组织 Workforce 与任意项目接入 | 已完成 | sidecar、Workforce、Scheduler/ModelRouter、ProjectProfile、SpecCompiler、Runtime workspace binding |
 | M6 可执行交付 | 已完成 | evidence capture、typed tools、跨语言目标项目串行交付、只读投影/API |
 | M7 Agent 可视化 | 已完成 | 静态只读 dashboard：Task board、timeline、Agent detail、Human inbox |
+| M8 Project Manager 与完整 Agent 团队 | 进行中 | T028 已交付 Product/Design/Plan typed contracts、用户确认门禁和 Task 派生守卫；T029–T032 待组合 |
 
 完整阶段事实、任务清单和提交证据见
 [`docs/archive/2026-09-01-t019-t022-organization-runtime.md`](docs/archive/2026-09-01-t019-t022-organization-runtime.md)；
@@ -39,6 +40,8 @@ T023–T025 的执行边界和跨语言验证见
 [`docs/archive/2026-09-01-t025-target-project-e2e.md`](docs/archive/2026-09-01-t025-target-project-e2e.md)；
 T026–T027 的只读投影与可视化见
 [`docs/archive/2026-09-01-t026-t027-projection-visualization.md`](docs/archive/2026-09-01-t026-t027-projection-visualization.md)；
+T028 的 Project Manager/Agent Skills 决策与阶段契约见
+[`docs/archive/2026-09-02-t028-project-manager-stage-contracts.md`](docs/archive/2026-09-02-t028-project-manager-stage-contracts.md)；
 后续路线见 [`docs/milestones.md`](docs/milestones.md)。
 
 ## MVP 边界
@@ -46,12 +49,13 @@ T026–T027 的只读投影与可视化见
 输入：
 
 - 一个已有本地项目目录（Git 是 v0.1 的首个 Repository adapter，未来可接入其他 VCS）；
-- 一条包含验收标准的 Task；
-- 可选的项目规范、架构文档和测试命令。
+- 一条自然语言需求；Product Agent 将其整理为可评审 Product Spec，并由用户确认；
+- 组织通用知识/AgentProfile/ModelPolicy，以及项目自身规范（由 sidecar 只读索引）。
 
 输出：
 
 - `plan`、`implementation-report`、`qa-report`、`review-report` 四类 artifact；
+- ProductSpec/Approval、TechnicalDesign、ExecutionPlan 等上游团队交接 artifact；
 - 一个可审计的状态事件流；
 - 通过 Review 的候选分支/补丁，或 `BLOCKED` 及其证据；
 - 可从事件重算的 Evaluation/ADR 报告，以及供人类直接复核的 JSON + Markdown handoff。
@@ -61,23 +65,71 @@ T026–T027 的只读投影与可视化见
 
 ## 总体架构
 
-```text
-Human / Product Owner → WorkQueue
-              │
-              ▼
-PortfolioScheduler + ModelRouter
-  AgentProfile · capacity · priority · risk · Lease
-              │ RoleAssignment + ModelSelection
-              ▼
-TaskOrchestrator（每个 Task 内串行）
-              │
-     ┌────────┼─────────┐
-     ▼        ▼         ▼
-   Coder      QA     Reviewer
-     │ isolated Context/worktree/Artifact
-     ▼
-Trellis Knowledge + Project sidecar + Git/Evidence
+平台可以理解成一家数字软件公司：通用知识库与项目 sidecar 构成 Knowledge Plane，组织长期拥有
+Agent 团队，Agent 通过受控 Skills 调用确定性能力。用户先选择项目目录，Project Manager Agent
+完成项目准备；准备成功后，用户再与 Product Agent 讨论需求。后续由专业 Agent 按制度完成产品
+定义、技术设计、执行规划、开发、测试和审查，最后把可合并候选或明确阻塞证据交给人类。
+
+```mermaid
+flowchart TB
+    U["用户<br/>选择项目目录"] --> PM["Project Manager Agent<br/>团队领导"]
+
+    PM --> ONBOARD["Project Preparation<br/>注册外置 workspace<br/>发现 ProjectProfile<br/>编译项目级规范"]
+    ONBOARD --> READY["Project Prepared<br/>项目上下文与安全边界就绪"]
+    READY --> PRODUCT["Product Agent<br/>与用户澄清需求、维护需求对话"]
+    U -. "准备完成后讨论需求" .-> PRODUCT
+    PRODUCT --> PRODUCT_SPEC["Product Spec<br/>目标、范围、需求、验收标准"]
+    PRODUCT_SPEC --> PRODUCT_REVIEW["Product Review<br/>确认产品定义"]
+    PRODUCT_REVIEW --> DESIGNER["Solution Designer Agent<br/>技术方案与实施规划"]
+    DESIGNER --> TECH_DESIGN["Technical Design<br/>架构、步骤、测试策略、风险"]
+    TECH_DESIGN --> PLANNER["Planner Agent<br/>整体执行计划、能力与风险需求"]
+    PLANNER --> EXEC_PLAN["Execution Plan<br/>阶段、检查点、角色与 BrainTier 需求"]
+    EXEC_PLAN --> PREVIEW["Planner Skills<br/>preview schedule / model route"]
+    PREVIEW --> DISPATCH["Project Manager Skill<br/>commit dispatch"]
+    DISPATCH --> CONTROL["Deterministic Engines<br/>Scheduler · ModelRouter · stores"]
+
+    CONTROL --> ASSIGN["RoleAssignment + TaskLease<br/>按任务难度选择 Agent 与模型"]
+    ASSIGN --> ORCH["Task Orchestrator<br/>一个 Task 的唯一状态推进者"]
+
+    ORCH --> CODER["Coder<br/>按 Technical Design 实现 + 单元测试"]
+    CODER --> QA["QA<br/>独立验证"]
+    QA --> REVIEWER["Reviewer<br/>独立审查"]
+    QA -- "FAIL" --> CODER
+    REVIEWER -- "REJECT" --> CODER
+
+    REVIEWER -- "APPROVE" --> DELIVERY["Delivery<br/>candidate SHA + artifacts + evidence + handoff"]
+    DELIVERY --> REPORTER["Reporter（可选）<br/>按用户需要组织交付视图"]
+
+    COMMON_KNOWLEDGE["Organization Knowledge<br/>通用规范 · Skills · 历史经验"] --> KNOWLEDGE["Knowledge Plane"]
+    SIDECAR_KNOWLEDGE["Project Sidecar<br/>ProjectProfile · 项目规范 · 阶段 artifacts"] --> KNOWLEDGE
+    KNOWLEDGE --> PM
+    KNOWLEDGE --> PRODUCT
+    KNOWLEDGE --> DESIGNER
+    KNOWLEDGE --> PLANNER
+    KNOWLEDGE --> ORCH
+    ORCH --> FACTS["Durable Facts<br/>StateEvent · Context · Artifact · Evidence"]
+    FACTS --> VIEW["Read Projection + Dashboard<br/>只读观察，不修改 verdict"]
+    REPORTER --> HUMAN["Human Boundary<br/>合并、冲突决策、最终业务判断"]
+    DELIVERY --> HUMAN
+    VIEW --> HUMAN
 ```
+
+### 各层只负责什么
+
+| 层 | 核心职责 | 明确不能做 |
+|---|---|---|
+| Project Manager Agent | 团队领导；通过 prepare、advance、commit-dispatch、recover、deliver Skills 接单和推进整支团队 | 不能绕过 Skill 直接写状态、分配资源或批准代码 |
+| Product Agent | 与用户澄清需求，产出可评审、可追溯的 Product Spec | 不能自己批准产品范围，不能设计实现细节 |
+| Solution Designer Agent | 把已确认 Product Spec 转换为 Technical Design 和实施/测试规划 | 不能改写产品需求，不能直接提交业务实现 |
+| Planner Agent | 根据 Product Spec 和 Technical Design 制定整体执行计划，可用只读调度/模型预演 Skills 检查可行性 | 不能提交具体 Agent/模型，不能启动 Agent 或修改状态 |
+| Agent Skills | Agent 按角色调用的 typed、policy-bound 能力接口；把请求委托给确定性 service 并返回可验证结果 | 不是 Prompt 指令，不授予 ambient store/shell 权限 |
+| Scheduler / ModelRouter engines | 为 Planner preview 和 Project Manager commit-dispatch 提供同一套确定性容量、Assignment、Lease 与模型计算 | 不能生成产品/设计内容，不能修改 Task verdict |
+| Task Orchestrator | 按状态机串行推进一个 Task，校验 artifact 和 retry 条件 | 不能跳过 QA/Review，不能编写业务代码 |
+| Coder / QA / Reviewer | 在独立 Context、worktree 和权限下完成各自岗位工作 | 不能共享隐式记忆，不能批准自己的工作 |
+| Knowledge + Evidence | 保存规范、上下文、artifact、命令、测试和模型使用证据 | 不能依赖某个 Agent 的临时会话 |
+| Projection + Dashboard | 从 durable facts 重算团队和交付状态 | 只读，不能迁移状态或修改 verdict |
+| Reporter（可选） | 从已验证 artifact/Handoff 生成面向用户的交付表达 | 不能创造事实、改变 verdict 或隐藏失败 |
+| Human Boundary | 处理规范冲突、业务歧义、保护分支合并与生产决策 | 人工动作必须留痕，不能静默改写历史 |
 
 ## 项目结构
 
@@ -186,8 +238,18 @@ ai-software-engineer/
 └── artifacts/runs/                   # 运行产物（默认 gitignored）
 ```
 
-目标项目代码目录之外，平台会为每个项目建立外置 sidecar workspace。其固定布局如下；这些
-目录不应出现在目标项目中：
+## Workspace 分工
+
+平台把代码、项目运行事实和组织成员彻底分开，避免污染目标项目，也避免把 Agent 错误地绑定给
+某一个项目。
+
+| 位置 | 保存内容 | 谁拥有 |
+|---|---|---|
+| 目标项目目录 | 业务代码、测试、构建文件、项目原生规范 | 原项目 |
+| Project sidecar | ProjectProfile、Assignment、Task/StateEvent、Context、Artifact、Evidence、Handoff | 当前项目 |
+| Organization workspace | AgentProfile、ModelPolicy、WorkQueue、Lease、跨项目绩效 | AI 软件工程团队 |
+
+目标项目代码目录之外，平台为每个项目建立固定的 sidecar workspace；这些目录不会写入目标项目：
 
 ```text
 <ai-workspace-root>/<project-id>/
@@ -209,30 +271,10 @@ ai-software-engineer/
 
 项目原生规范会被索引和引用，不会被平台静默覆盖；规范冲突进入人工处理队列。
 
-T018 将 sidecar layout 升级为 v0.2；旧 `agents/` layout 不会被静默改写。T022 提供 Python
-composition seam，将组织 workspace、项目 sidecar、ProjectProfile 与 Runtime 绑定；CLI 自动
-发现与绑定仍是后续入口工作：
-
-```python
-from datetime import UTC, datetime
-
-from ai_software_engineer.project_workspace import ProjectWorkspaceRegistry
-from ai_software_engineer.project_profile import ProjectProfile
-from ai_software_engineer.runtime_workspace import OrganizationWorkspace, RuntimeWorkspaceBinder
-
-workspace = ProjectWorkspaceRegistry("/path/to/ase-workspaces").register("/path/to/target-project")
-now = datetime.now(UTC)
-organization = OrganizationWorkspace.initialize(
-    "/path/to/ase-organization",
-    organization_id="organization_primary",
-    created_at=now,
-)
-profile = ProjectProfile.discover(workspace.project_root, project_id=workspace.project_id)
-binding = RuntimeWorkspaceBinder().bind(organization, workspace, profile, bound_at=now)
-print(workspace.project_root)  # 实际代码 cwd
-print(workspace.root)  # 外置 AI workspace
-print(binding.paths.database)  # sidecar/state/state.sqlite3
-```
+当前架构只有这一种所有权模型：AgentProfile 属于组织，Project sidecar 只保存 Assignment 和项目
+运行事实。`ProjectWorkspaceRegistry + ProjectProfile + RuntimeWorkspaceBinder` 已能通过 Python API
+完成项目注册和 Runtime 绑定；T029 将把这些内部步骤封装为 Project Manager Agent 的
+`prepare_project` Skill。
 
 ## 推荐的 v0.1 运行形态
 
@@ -272,7 +314,11 @@ uv run mypy src tests
   AgentRunAllocation 表达组织成员、容量和 run-scoped 大脑；
 - 用 PortfolioScheduler/ModelRouter 做确定、可重放的 Assignment/Lease 与模型选择决策；
 - 在 Python application seam 中绑定组织/项目 workspace，并解析 run-scoped AgentDefinition；
-- 复用 Git worktree、Context、Artifact、retry、evaluation 和受控命令执行组件继续开发。
+- 用 typed tool protocol 和 EvidenceStore 约束并封存文件、命令、diff、测试及模型 usage；
+- 用跨语言 fixture 验证 Python、Java、Go、TypeScript 项目的隔离交付边界；
+- 从 durable facts 重算 projection，并输出只读 JSON/静态 dashboard。
+- 用 ProjectPreparation、ProjectRequest、ProductSpec/Approval、TechnicalDesign 和 ExecutionPlan
+  typed contracts 表达上游团队交接；只有用户批准的精确 Product Spec 和完整阶段链才能派生 Task。
 
 最小 CLI 流程：
 
@@ -292,9 +338,11 @@ evaluation 和 handoff 路径仍必须显式指向 sidecar，避免污染目标�
 T022 的 `RuntimeWorkspaceBinding.compose_runtime_config(...)` 完成同一装配。配置示例和字段说明见
 [`docs/runtime.md`](docs/runtime.md) 与 [`docs/cli.md`](docs/cli.md)。
 
-当前尚未完成的关键闭环是：持久化 WorkQueue 与调度 application service、CLI workspace 自动
-装配、让模型通过受策略约束的 tool protocol 真正编辑/测试项目、封存命令/diff/测试证据、
-跨语言项目 E2E，以及可视化工作台。平台也不会自动 merge 保护分支或部署生产环境。
+当前最大的产品缺口不是底层组件，而是统一接单入口：CLI 仍要求使用者手工准备 workspace、路径
+和 Runtime 配置。T028 已建立 Product/Design/Plan 的 typed 交接与用户确认门禁；T029–T032 将依次
+实现 Project Manager Skills、Product/Designer/Planner Agent 组合，以及“项目目录 + 需求”的统一
+CLI/E2E，使项目注册、规范编译、Task 创建、团队分配和串行交付自动衔接。持久化 WorkQueue 后台
+循环、自动 merge 保护分支和生产部署仍不在当前能力内。
 
 ## 文档导航
 

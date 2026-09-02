@@ -33,7 +33,7 @@ def test_register_creates_external_normalized_sidecar_without_touching_project(
 
     workspace = registry.register(project)
 
-    assert workspace.manifest.layout_version == "v0.2"
+    assert workspace.manifest.layout_version == "v0.1"
     assert workspace.project_root == project.resolve()
     assert workspace.root.parent == (tmp_path / "ai-workspaces").resolve()
     assert workspace.root != workspace.project_root
@@ -60,7 +60,7 @@ def test_register_creates_external_normalized_sidecar_without_touching_project(
     )
 
 
-def test_manifest_rejects_legacy_project_owned_agents_layout(tmp_path: Path) -> None:
+def test_manifest_rejects_project_owned_agents_layout(tmp_path: Path) -> None:
     project = tmp_path / "target-project"
     project.mkdir()
     workspace = ProjectWorkspaceRegistry(tmp_path / "sidecars").register(project)

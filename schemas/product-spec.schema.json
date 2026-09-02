@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/product-spec.schema.json",
+  "title": "ProductSpec",
+  "$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/ProductSpec"
+}

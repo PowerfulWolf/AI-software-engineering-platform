@@ -11,6 +11,28 @@
 
 权限必须由机器可验证的 policy 表达；自然语言 prompt 只是解释，不是授权来源。
 
+## Project Manager、Agent Skills 与上游交接
+
+Project Manager 是用户看到的组织级团队领导 Agent。项目准备、阶段推进、提交调度、失败路由和
+交付通过 typed、policy-bound Skills 执行；Skill 背后是确定性 application service 与最小 ports，
+而不是 Prompt 中的自由授权。Planner 可以调用只读 Scheduler/ModelRouter preview Skills 检查计划
+可行性，但 preview 不写 Assignment/Lease/ModelSelection；只有 Project Manager 的
+`commit_dispatch` Skill 重新校验当前 facts 后才能提交具体分配。
+
+进入现有 TaskOrchestrator 前，上游交接链固定为：
+
+```text
+ProjectPreparation → ProjectRequest → ProductSpec + ProductSpecApproval
+                   → TechnicalDesign → ExecutionPlan → NEW Task
+```
+
+Product Agent 不能批准自己的 Product Spec；用户 Approval 必须引用精确 spec ID 与 SHA-256。
+TechnicalDesign 必须精确覆盖全部 requirement/acceptance IDs；ExecutionPlan v0.1 只能声明串行
+Coder→QA→Reviewer 的 capability/risk/BrainTier demand，不能携带 concrete Agent、model、provider、
+Assignment 或 Lease。正式 wire contracts 位于 `schemas/project-*.schema.json`、
+`schemas/product-spec*.schema.json`、`schemas/technical-design.schema.json` 和
+`schemas/execution-plan.schema.json`。
+
 ## Organization Workforce 契约
 
 T018 的 [`schemas/workforce.schema.json`](../schemas/workforce.schema.json) 定义八类组织级事实：
@@ -67,7 +89,7 @@ ADR 不由 `Task.status == DONE` 单独决定。`EvaluationEngine` 还要求最�
 和构建命令 cwd；sidecar 只承载平台状态。`workspace.json` 的 wire contract 是
 `schemas/project-workspace.schema.json`，固定字段为：
 
-- `schema_version=v0.1`、`layout_version=v0.2`；
+- `schema_version=v0.1`、`layout_version=v0.1`；这是使用 `assignments/` 的唯一初始布局；
 - `project_id`、absolute `project_root`、absolute `ai_workspace_root`；
 - 14 个固定 layout 名称，其中 `assignments/` 保存项目相关分配事实，不保存 Agent 本体；
 - UTC `created_at` 和排除自身字段计算的 canonical `manifest_sha256`。

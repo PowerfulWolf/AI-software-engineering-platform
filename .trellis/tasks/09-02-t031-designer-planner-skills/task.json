@@ -1,0 +1,35 @@
+{
+  "id": "T031",
+  "slug": "designer-planner-skills",
+  "title": "实现 Solution Designer、Planner 与调度预演/提交 Skills",
+  "status": "planned",
+  "phase": "plan",
+  "depends_on": ["T030"],
+  "allowed_paths": [
+    "src/ai_software_engineer/design/**",
+    "src/ai_software_engineer/planning/**",
+    "src/ai_software_engineer/project_manager/**",
+    "src/ai_software_engineer/scheduling/**",
+    "src/ai_software_engineer/agents/**",
+    "src/ai_software_engineer/context/**",
+    "src/ai_software_engineer/domain/**",
+    "schemas/technical-design*.schema.json",
+    "schemas/execution-plan*.schema.json",
+    "schemas/workforce.schema.json",
+    "tests/design/**",
+    "tests/planning/**",
+    "tests/project_manager/**",
+    "tests/scheduling/**",
+    "docs/**",
+    ".trellis/spec/core/**",
+    ".trellis/tasks/09-02-t031-designer-planner-skills/**"
+  ],
+  "verification_commands": [
+    "uv run pytest -q tests/design tests/planning tests/project_manager tests/scheduling",
+    "uv run ruff check .",
+    "uv run ruff format --check .",
+    "uv run mypy src tests",
+    "uv build --offline",
+    "git diff --check"
+  ]
+}

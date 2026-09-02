@@ -1,0 +1,32 @@
+{
+  "id": "T029",
+  "slug": "project-manager-skills",
+  "title": "实现 Project Preparation 与 Project Manager Agent Skills",
+  "status": "planned",
+  "phase": "plan",
+  "depends_on": ["T028"],
+  "allowed_paths": [
+    "src/ai_software_engineer/project_manager/**",
+    "src/ai_software_engineer/spec_compiler.py",
+    "src/ai_software_engineer/project_workspace.py",
+    "src/ai_software_engineer/project_profile.py",
+    "src/ai_software_engineer/runtime_workspace.py",
+    "src/ai_software_engineer/domain/**",
+    "schemas/project-*.schema.json",
+    "schemas/agent-skill*.schema.json",
+    "tests/project_manager/**",
+    "tests/spec_compiler/**",
+    "tests/runtime_workspace/**",
+    "docs/**",
+    ".trellis/spec/core/**",
+    ".trellis/tasks/09-02-t029-project-manager-skills/**"
+  ],
+  "verification_commands": [
+    "uv run pytest -q tests/project_manager tests/spec_compiler tests/runtime_workspace",
+    "uv run ruff check .",
+    "uv run ruff format --check .",
+    "uv run mypy src tests",
+    "uv build --offline",
+    "git diff --check"
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "id": "T030",
+  "slug": "product-agent",
+  "title": "实现 Product Agent 需求对话与用户确认循环",
+  "status": "planned",
+  "phase": "plan",
+  "depends_on": ["T029"],
+  "allowed_paths": [
+    "src/ai_software_engineer/product/**",
+    "src/ai_software_engineer/project_manager/**",
+    "src/ai_software_engineer/agents/**",
+    "src/ai_software_engineer/context/**",
+    "src/ai_software_engineer/domain/**",
+    "schemas/agent.schema.json",
+    "schemas/product-spec*.schema.json",
+    "schemas/project-request*.schema.json",
+    "tests/product/**",
+    "tests/agents/**",
+    "tests/context/**",
+    "tests/project_manager/**",
+    "docs/**",
+    ".trellis/spec/core/**",
+    ".trellis/tasks/09-02-t030-product-agent/**"
+  ],
+  "verification_commands": [
+    "uv run pytest -q tests/product tests/project_manager tests/agents tests/context",
+    "uv run ruff check .",
+    "uv run ruff format --check .",
+    "uv run mypy src tests",
+    "uv build --offline",
+    "git diff --check"
+  ]
+}

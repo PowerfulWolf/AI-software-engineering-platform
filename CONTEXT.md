@@ -4,6 +4,50 @@ This context defines the shared language for auditable software delivery perform
 
 ## Language
 
+**Project Request**:
+A durable product-level request tied to one Project, containing the evolving user intent before it is specific enough to become a Delivery Task.
+_Avoid_: Raw prompt, Task, chat session
+
+**Project Preparation**:
+The deterministic pre-conversation checkpoint proving that a Project has an external sidecar, a verified Project Profile, an organization binding, and a conflict-free project-level spec baseline.
+_Avoid_: Requirement intake, Task planning, repository scan chat
+
+**Project Manager**:
+The organization-owned Agent that leads the team, accepts work, communicates with the user, advances stages, coordinates specialist Agents, and delivers results. Its privileged actions are exposed as policy-bound Skills backed by deterministic application services; the Agent cannot bypass their validation or stores.
+_Avoid_: Super-agent, autonomous judge, Scheduler
+
+**Agent Skill**:
+A typed, policy-bound capability an Agent may invoke for its role. A Skill delegates authoritative work to deterministic services and returns verifiable results; it is not prompt prose and does not grant ambient access to stores, state, or subprocesses.
+_Avoid_: Prompt instruction, hidden authority, arbitrary tool call
+
+**Product Agent**:
+An organization-owned Agent eligible for the Product Role, responsible for clarifying user intent and producing a reviewable Product Spec.
+_Avoid_: Producter Agent, Task creator, requirements chatbot
+
+**Product Spec**:
+An immutable, versioned product definition containing goals, non-goals, requirements, acceptance criteria, assumptions, open questions, and traceable user decisions for one Project Request.
+_Avoid_: Prompt summary, Task description, informal PRD
+
+**Solution Designer Agent**:
+An organization-owned Agent eligible for the Designer Role, responsible for turning a frozen Product Spec and verified Project facts into a Technical Design. It is a technical solution role, not a UI/UX visual-design role.
+_Avoid_: UI designer, Coder, planning-mode Orchestrator
+
+**Technical Design**:
+An immutable, versioned implementation contract mapping Product Spec requirements to architecture changes, implementation steps, test strategy, risks, and verification points.
+_Avoid_: Coding notes, Product Spec, unstructured plan
+
+**Planner Agent**:
+An organization-owned Agent eligible for the Planner Role, responsible for producing an Execution Plan from verified product, design, project, and organization facts. It may use read-only Scheduler/ModelRouter preview Skills to test feasibility, but it cannot commit concrete Agents, models, Assignments, or Leases.
+_Avoid_: Project Manager Service, Scheduler, super-agent
+
+**Dispatch Commit**:
+The Project Manager Agent's policy-bound action that revalidates an approved Execution Plan through the deterministic Scheduler and ModelRouter, persists Role Assignments, Leases, and Model Selections, and only then starts eligible Agent Runs.
+_Avoid_: Planner suggestion, self-assignment, prompt routing
+
+**Execution Plan**:
+An immutable plan describing delivery phases, checkpoints, required roles and capabilities, risk signals, and model-tier demand without containing a concrete Role Assignment, Lease, provider, or model selection.
+_Avoid_: Assignment, Model Selection, mutable schedule
+
 **Task**:
 A bounded unit of requested software work tied to one repository, one base revision, explicit acceptance criteria, and a delivery state.
 _Avoid_: Job, ticket, prompt

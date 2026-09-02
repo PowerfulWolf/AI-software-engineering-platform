@@ -1,0 +1,259 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json",
+  "title": "Project Stage Contract Definitions",
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "nonEmpty": {"type": "string", "minLength": 1},
+    "projectId": {"type": "string", "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "requestId": {"type": "string", "pattern": "^request_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "productSpecId": {"type": "string", "pattern": "^product_spec_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "approvalId": {"type": "string", "pattern": "^product_approval_[a-f0-9]{64}$"},
+    "technicalDesignId": {"type": "string", "pattern": "^technical_design_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "executionPlanId": {"type": "string", "pattern": "^execution_plan_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "acceptanceCriterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "description", "required", "verification", "test_ids"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$"},
+        "description": {"$ref": "#/$defs/nonEmpty"},
+        "required": {"type": "boolean"},
+        "verification": {"$ref": "#/$defs/nonEmpty"},
+        "test_ids": {"type": "array", "items": {"$ref": "#/$defs/nonEmpty"}, "uniqueItems": true}
+      }
+    },
+    "ProjectPreparation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "schema_version", "organization_id", "project_id", "project_root", "project_workspace_root", "organization_root", "project_profile_sha256", "runtime_binding_sha256", "baseline_spec_sha256", "baseline_source_uris", "status", "prepared_at", "preparation_sha256"],
+      "properties": {
+        "kind": {"const": "project_preparation"},
+        "schema_version": {"const": "v0.1"},
+        "organization_id": {"type": "string", "pattern": "^organization_[a-z0-9][a-z0-9_-]{2,63}$"},
+        "project_id": {"$ref": "#/$defs/projectId"},
+        "project_root": {"type": "string", "pattern": "^/", "minLength": 2},
+        "project_workspace_root": {"type": "string", "pattern": "^/", "minLength": 2},
+        "organization_root": {"type": "string", "pattern": "^/", "minLength": 2},
+        "project_profile_sha256": {"$ref": "#/$defs/sha256"},
+        "runtime_binding_sha256": {"$ref": "#/$defs/sha256"},
+        "baseline_spec_sha256": {"$ref": "#/$defs/sha256"},
+        "baseline_source_uris": {"type": "array", "items": {"$ref": "#/$defs/nonEmpty"}, "uniqueItems": true},
+        "status": {"const": "PREPARED"},
+        "prepared_at": {"type": "string", "format": "date-time"},
+        "preparation_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "ProjectRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "schema_version", "id", "project_id", "preparation_sha256", "title", "original_request", "status", "created_at", "updated_at", "request_sha256"],
+      "properties": {
+        "kind": {"const": "project_request"},
+        "schema_version": {"const": "v0.1"},
+        "id": {"$ref": "#/$defs/requestId"},
+        "project_id": {"$ref": "#/$defs/projectId"},
+        "preparation_sha256": {"$ref": "#/$defs/sha256"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 200},
+        "original_request": {"$ref": "#/$defs/nonEmpty"},
+        "status": {"enum": ["PRODUCT_DISCOVERY", "WAITING_PRODUCT_APPROVAL", "DESIGNING", "PLANNING", "READY_FOR_DELIVERY", "DELIVERING", "REPORTING", "DONE", "WAITING_HUMAN", "BLOCKED"]},
+        "created_at": {"type": "string", "format": "date-time"},
+        "updated_at": {"type": "string", "format": "date-time"},
+        "request_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "productRequirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "statement", "priority", "rationale", "acceptance_criterion_ids"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^req_[a-z0-9][a-z0-9_-]{1,63}$"},
+        "statement": {"$ref": "#/$defs/nonEmpty"},
+        "priority": {"enum": ["MUST", "SHOULD", "COULD"]},
+        "rationale": {"$ref": "#/$defs/nonEmpty"},
+        "acceptance_criterion_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$"}}
+      }
+    },
+    "productDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "question", "decision", "rationale", "decided_by", "decided_at"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^decision_[a-z0-9][a-z0-9_-]{1,63}$"},
+        "question": {"$ref": "#/$defs/nonEmpty"},
+        "decision": {"$ref": "#/$defs/nonEmpty"},
+        "rationale": {"$ref": "#/$defs/nonEmpty"},
+        "decided_by": {"$ref": "#/$defs/nonEmpty"},
+        "decided_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "ProductSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "schema_version", "id", "request_id", "project_id", "version", "status", "summary", "goals", "non_goals", "requirements", "acceptance_criteria", "assumptions", "open_questions", "decisions", "created_at", "product_spec_sha256"],
+      "properties": {
+        "kind": {"const": "product_spec"},
+        "schema_version": {"const": "v0.1"},
+        "id": {"$ref": "#/$defs/productSpecId"},
+        "request_id": {"$ref": "#/$defs/requestId"},
+        "project_id": {"$ref": "#/$defs/projectId"},
+        "version": {"type": "integer", "minimum": 1},
+        "status": {"enum": ["DRAFT", "READY_FOR_REVIEW"]},
+        "summary": {"$ref": "#/$defs/nonEmpty"},
+        "goals": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/nonEmpty"}},
+        "non_goals": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/nonEmpty"}},
+        "requirements": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/productRequirement"}},
+        "acceptance_criteria": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/acceptanceCriterion"}},
+        "assumptions": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/nonEmpty"}},
+        "open_questions": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/nonEmpty"}},
+        "decisions": {"type": "array", "items": {"$ref": "#/$defs/productDecision"}},
+        "supersedes": {"$ref": "#/$defs/productSpecId"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "product_spec_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "ProductSpecApproval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "schema_version", "id", "request_id", "project_id", "product_spec_id", "product_spec_sha256", "decision", "operator_id", "rationale", "decided_at", "approval_sha256"],
+      "properties": {
+        "kind": {"const": "product_spec_approval"},
+        "schema_version": {"const": "v0.1"},
+        "id": {"$ref": "#/$defs/approvalId"},
+        "request_id": {"$ref": "#/$defs/requestId"},
+        "project_id": {"$ref": "#/$defs/projectId"},
+        "product_spec_id": {"$ref": "#/$defs/productSpecId"},
+        "product_spec_sha256": {"$ref": "#/$defs/sha256"},
+        "decision": {"enum": ["APPROVED", "REQUEST_CHANGES"]},
+        "operator_id": {"$ref": "#/$defs/nonEmpty"},
+        "rationale": {"$ref": "#/$defs/nonEmpty"},
+        "decided_at": {"type": "string", "format": "date-time"},
+        "approval_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "designComponent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "responsibility", "affected_paths"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^component_[a-z0-9][a-z0-9_-]{1,63}$"},
+        "name": {"$ref": "#/$defs/nonEmpty"},
+        "responsibility": {"$ref": "#/$defs/nonEmpty"},
+        "affected_paths": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/nonEmpty"}}
+      }
+    },
+    "requirementMapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requirement_id", "component_ids", "approach"],
+      "properties": {
+        "requirement_id": {"type": "string", "pattern": "^req_[a-z0-9][a-z0-9_-]{1,63}$"},
+        "component_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^component_[a-z0-9][a-z0-9_-]{1,63}$"}},
+        "approach": {"$ref": "#/$defs/nonEmpty"}
+      }
+    },
+    "acceptanceMapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["acceptance_criterion_id", "verification_strategy", "test_levels"],
+      "properties": {
+        "acceptance_criterion_id": {"type": "string", "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$"},
+        "verification_strategy": {"$ref": "#/$defs/nonEmpty"},
+        "test_levels": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/nonEmpty"}}
+      }
+    },
+    "designStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "description", "component_ids", "verification"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^design_step_[a-z0-9][a-z0-9_-]{1,63}$"},
+        "description": {"$ref": "#/$defs/nonEmpty"},
+        "component_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^component_[a-z0-9][a-z0-9_-]{1,63}$"}},
+        "verification": {"$ref": "#/$defs/nonEmpty"}
+      }
+    },
+    "designRisk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "description", "tier", "mitigation"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^design_risk_[a-z0-9][a-z0-9_-]{1,63}$"},
+        "description": {"$ref": "#/$defs/nonEmpty"},
+        "tier": {"enum": ["low", "normal", "high", "critical"]},
+        "mitigation": {"$ref": "#/$defs/nonEmpty"}
+      }
+    },
+    "TechnicalDesign": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "schema_version", "id", "request_id", "project_id", "product_spec_id", "product_spec_sha256", "product_approval_id", "version", "status", "summary", "components", "requirement_mappings", "acceptance_mappings", "implementation_steps", "risks", "created_at", "technical_design_sha256"],
+      "properties": {
+        "kind": {"const": "technical_design"},
+        "schema_version": {"const": "v0.1"},
+        "id": {"$ref": "#/$defs/technicalDesignId"},
+        "request_id": {"$ref": "#/$defs/requestId"},
+        "project_id": {"$ref": "#/$defs/projectId"},
+        "product_spec_id": {"$ref": "#/$defs/productSpecId"},
+        "product_spec_sha256": {"$ref": "#/$defs/sha256"},
+        "product_approval_id": {"$ref": "#/$defs/approvalId"},
+        "version": {"type": "integer", "minimum": 1},
+        "status": {"const": "READY_FOR_PLANNING"},
+        "summary": {"$ref": "#/$defs/nonEmpty"},
+        "components": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/designComponent"}},
+        "requirement_mappings": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/requirementMapping"}},
+        "acceptance_mappings": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/acceptanceMapping"}},
+        "implementation_steps": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/designStep"}},
+        "risks": {"type": "array", "items": {"$ref": "#/$defs/designRisk"}},
+        "created_at": {"type": "string", "format": "date-time"},
+        "technical_design_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "planPhase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "role", "objective", "required_capabilities", "risk", "minimum_brain_tier", "checkpoints", "critical_path"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^phase_[a-z0-9][a-z0-9_-]{1,63}$"},
+        "role": {"enum": ["coder", "qa", "reviewer"]},
+        "objective": {"$ref": "#/$defs/nonEmpty"},
+        "required_capabilities": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/nonEmpty"}},
+        "risk": {"enum": ["low", "normal", "high", "critical"]},
+        "minimum_brain_tier": {"enum": ["economy", "standard", "reasoning", "critical"]},
+        "checkpoints": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/nonEmpty"}},
+        "critical_path": {"type": "boolean"}
+      }
+    },
+    "ExecutionPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "schema_version", "id", "request_id", "project_id", "product_spec_id", "product_spec_sha256", "technical_design_id", "technical_design_sha256", "version", "status", "phases", "feasibility_evidence_uris", "created_at", "execution_plan_sha256"],
+      "properties": {
+        "kind": {"const": "execution_plan"},
+        "schema_version": {"const": "v0.1"},
+        "id": {"$ref": "#/$defs/executionPlanId"},
+        "request_id": {"$ref": "#/$defs/requestId"},
+        "project_id": {"$ref": "#/$defs/projectId"},
+        "product_spec_id": {"$ref": "#/$defs/productSpecId"},
+        "product_spec_sha256": {"$ref": "#/$defs/sha256"},
+        "technical_design_id": {"$ref": "#/$defs/technicalDesignId"},
+        "technical_design_sha256": {"$ref": "#/$defs/sha256"},
+        "version": {"type": "integer", "minimum": 1},
+        "status": {"const": "READY_FOR_DISPATCH"},
+        "phases": {
+          "type": "array",
+          "prefixItems": [
+            {"allOf": [{"$ref": "#/$defs/planPhase"}, {"properties": {"role": {"const": "coder"}}}]},
+            {"allOf": [{"$ref": "#/$defs/planPhase"}, {"properties": {"role": {"const": "qa"}}}]},
+            {"allOf": [{"$ref": "#/$defs/planPhase"}, {"properties": {"role": {"const": "reviewer"}}}]}
+          ],
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "feasibility_evidence_uris": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/nonEmpty"}},
+        "created_at": {"type": "string", "format": "date-time"},
+        "execution_plan_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "id": "T028",
+  "slug": "project-manager-entry",
+  "title": "建立 Project Request、Project Manager 与产品设计阶段",
+  "status": "completed",
+  "phase": "verify",
+  "depends_on": ["T019", "T020", "T021", "T022", "T024", "T025"],
+  "allowed_paths": [
+    "src/ai_software_engineer/project_manager/**",
+    "src/ai_software_engineer/product/**",
+    "src/ai_software_engineer/design/**",
+    "src/ai_software_engineer/domain/**",
+    "src/ai_software_engineer/project_manager/**",
+    "src/ai_software_engineer/project_workspace.py",
+    "schemas/project-preparation*.schema.json",
+    "schemas/project-stage*.schema.json",
+    "schemas/project-request*.schema.json",
+    "schemas/product-spec*.schema.json",
+    "schemas/technical-design*.schema.json",
+    "schemas/execution-plan*.schema.json",
+    "tests/project_manager/**",
+    "tests/contracts/**",
+    "tests/project_workspace/**",
+    "docs/**",
+    "README.md",
+    "AGENTS.md",
+    ".trellis/spec/core/**",
+    ".trellis/tasks/09-02-t028-project-manager-entry/**"
+  ],
+  "verification_commands": [
+    "uv run pytest -q",
+    "uv run ruff check .",
+    "uv run ruff format --check .",
+    "uv run mypy src tests",
+    "uv build --offline",
+    "git diff --check"
+  ]
+}

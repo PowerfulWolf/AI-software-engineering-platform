@@ -7,7 +7,7 @@
   "required": ["schema_version", "layout_version", "project_id", "project_root", "ai_workspace_root", "layout", "created_at", "manifest_sha256"],
   "properties": {
     "schema_version": {"const": "v0.1"},
-    "layout_version": {"const": "v0.2"},
+    "layout_version": {"const": "v0.1"},
     "project_id": {"type": "string", "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"},
     "project_root": {"type": "string", "pattern": "^/", "minLength": 2},
     "ai_workspace_root": {"type": "string", "pattern": "^/", "minLength": 2},
