@@ -1883,3 +1883,209 @@ task = derive_delivery_task(
 
 正确流程让用户批准、Design coverage、Planner demand 和 Task acceptance 都成为可重放事实；具体
 Agent/模型只能由 Project Manager commit-dispatch Skill 通过确定性 engines 产生。
+
+## 23. Project Manager task-free preparation runtime（T029）
+
+### 23.1 Scope / Trigger
+
+以下情况必须使用本节的可执行契约：
+
+- 从一个绝对项目目录注册/重开外置 sidecar；
+- 在 Product Agent 启动前发现 current ProjectProfile、绑定 organization 并编译项目基线；
+- 保存、重放或验证 ProjectPreparation/project-baseline record；
+- 通过 Project Manager Agent Skill 授权 Product/Design/Planning/Delivery Dispatch 的下一阶段。
+
+这是需求出现前的 project-level preparation，不是 Task compilation。实现不得创建临时
+Task、虚构 acceptance criteria 或把原生规范文本直接当成结构化指令。
+
+### 23.2 Signatures
+
+Agent-visible facade：
+
+```python
+class ProjectManagerSkill(Protocol):
+    def prepare_project(self, request: PrepareProjectRequest) -> PrepareProjectResult: ...
+    def require_product_context(self, result: PrepareProjectResult) -> ProjectPreparation: ...
+    def advance_stage(self, request: StageAdvanceRequest) -> StageAdvanceAuthorization: ...
+```
+
+Agent-visible request/result/stage authorization wire schema 固定为
+`schemas/agent-skill-project-manager.schema.json`。
+
+Deterministic service/port boundary：
+
+```python
+class ProjectRuleProvider(Protocol):
+    def rules_for(self, profile: ProjectProfile) -> Sequence[SpecRule]: ...
+
+class ProjectPreparationStore(Protocol):
+    def put(self, preparation: ProjectPreparation) -> ProjectPreparation: ...
+    def get(self, project_id: ProjectId | str) -> ProjectPreparation: ...
+    def find(self, project_id: ProjectId | str) -> ProjectPreparation | None: ...
+
+class ProjectBaselineCompilationRecorder(Protocol):
+    def record(
+        self,
+        workspace: ProjectWorkspace,
+        compilation: ProjectBaselineCompilation,
+    ) -> ProjectBaselineCompilation: ...
+
+ProjectBaselineCompiler.compile(
+    profile: ProjectProfile,
+    rules: Sequence[SpecRule],
+    *,
+    compiled_at: datetime,
+) -> ProjectBaselineCompilation
+
+ProjectStageAdvancer.advance_stage(
+    request: StageAdvanceRequest,
+    *,
+    authorized_at: datetime,
+) -> StageAdvanceAuthorization
+```
+
+Composition 必须显式注入 `OrganizationWorkspace`、`ProjectWorkspaceRegistry`、platform
+rules、`ProjectRuleProvider`、preparation store factory 和 baseline recorder。binder/compiler/
+stage advancer/aware clock 可替换测试实现，但不能从 Agent request 获取。
+
+### 23.3 Contracts
+
+#### Request/result
+
+- `PrepareProjectRequest` 固定 `kind=prepare_project_request`、`schema_version=v0.1`，业务字段只有
+  `project_root`；该路径必须绝对且不含 ASCII control character；
+- `PrepareProjectResult` 是互斥 union：`PREPARED` 必须只带同 project 的 preparation；
+  `WAITING_HUMAN` 必须只带 project-scoped conflicts 与 matching route；
+- status 不是 `PREPARED`、没有 preparation、调用方 result 已过时，或 current facts 不同时，
+  `ProjectManagerSkillService.require_product_context` 必须 fail closed；
+- Product gate 不仅校验 supplied digest；必须以 supplied preparation 的 `project_root` 重新调用
+  `prepare_project`，重开 sidecar 并重验 current profile/binding/baseline，再比较完整
+  `ProjectPreparation` 和 `baseline_compilation_sha256`。
+
+#### Project baseline
+
+- `ProjectBaselineCompiler` 只允许 `PLATFORM_HARD`、`PLATFORM_ENGINEERING`、`PROJECT`规则，
+  且至少一条 `PLATFORM_HARD`；`TASK` rule 无条件拒绝；
+- structured PROJECT rule 的 `source_uri/source_sha256` 必须与 current ProjectProfile 原生规范条目
+  exact match；没有 adapter 解释的 native rule 记录为 `opaque_project_sources`；
+- 排序和 digest 不依赖输入顺序或 `compiled_at`，所以 exact facts 在不同时间重放产生同一
+  `baseline_sha256/compilation_sha256`；
+- overlapping scopes 下同 field 的不同 values 生成不带 `task_id` 的 `ProjectSpecConflict`；
+  任意参与规则为 `PLATFORM_HARD` 时 classification 必须为 `HARD_SAFETY`，否则为
+  `ENGINEERING`；不得靠 layer/priority 静默胜出；
+- conflict result 必须生成 `work_item_status=WAITING_HUMAN`、
+  `reason=PROJECT_SPEC_CONFLICT`、`product_agent_start_allowed=false` 的 route。
+
+Wire schema 为 `schemas/project-baseline.schema.json`；`ProjectSpecBaseline`、
+`ProjectSpecConflict`、`ProjectWaitingHumanRoute`、`ProjectBaselineCompilation` 都是 frozen/
+extra-forbid typed model 并带 canonical digest/identity guard。
+
+#### Persistence/replay/path
+
+- success compilation 写入
+  `sidecar/policy/project-baseline-compilations/<compilation_sha256>.json`；conflict compilation 写入
+  `sidecar/spec-conflicts/project-baseline-compilations/<compilation_sha256>.json`；
+- ProjectPreparation 写入
+  `sidecar/policy/project-preparation-<project_id>.json`；三类记录都不能以目标项目为 root；
+- store 必须写 canonical JSON envelope，执行 same-directory temporary file → flush/fsync →
+  exclusive `os.link` publish → directory fsync；`FileExistsError` 转入 exact first-record 读回，
+  不覆盖并发 winner；read 必须重验 envelope digest、model、inner digest 和 filename/workspace
+  identity；
+- exact success/conflict replay 返回首次 durable record，包括首次 `compiled_at/prepared_at`；
+  同 identity 改内容、篡改、malformed JSON、symlink、non-file path 或 root escape 必须 fail closed；
+- `prepare_project` 的有序流程固定为 register/reopen → read existing preparation → discover profile
+  → bind → compile → record compilation → persist/replay preparation；不能跳过记录读回校验。
+
+#### Stage advance
+
+- `StageAdvanceRequest` target 与 input prefix 必须精确匹配：Product=1、Design=4、Planning=5、
+  Delivery Dispatch=6 个 stage documents；缺失或多带 future document 都拒绝；
+- `ProjectManagerSkillService.advance_stage` 必须先对 preparation 重新 prepare +
+  `require_product_context`，防止用过时 checkpoint 推进阶段；
+- `StageAdvanceAuthorization.input_sha256s` 必须按 stage 顺序绑定 exact input digests；
+  authorization 只是可验证 receipt，不编辑 artifact/verdict/status。
+
+### 23.4 Validation & Error Matrix
+
+| Input / state | Detection | Result / no-side-effect guarantee |
+|---|---|---|
+| relative/control-character `project_root` 或 extra request field | Pydantic request boundary | `ValidationError`，不注册 |
+| naive clock | service/compiler/advancer aware-time guard | error，不形成可信 record |
+| 缺 `PLATFORM_HARD` | compiler | `HardPolicyMissing` |
+| 任意 `TASK` rule | compiler | `TaskScopedRuleRejected` |
+| PROJECT rule URI/hash 不属于 exact profile | provenance guard | `SpecSourceMismatch` |
+| overlapping scope 下 field values 不同 | conflict detector | durable `CONFLICT/WAITING_HUMAN`，无 preparation |
+| old conflict exact replay | compilation recorder | 返回首次 durable conflict/compiled_at |
+| old PREPARED 后 profile/binding/baseline 漂移 | binder + candidate comparison | `RuntimeWorkspaceConflict` / `ProjectPreparationDrift` |
+| organization/project/sidecar roots overlap | binding/composition guard | `ProjectPreparationCompositionError` |
+| recorder 返回无效或不同 compilation identity | service read-back guard | `ProjectBaselineRecordError` |
+| preparation 同 project identity 改内容 | append-once store | `ProjectPreparationConflict` |
+| envelope/model/inner digest/filename 篡改 | store read | typed corruption，不返回 partial record |
+| store root/record 为 symlink、非文件或 escape | path guard | typed path error，目标仓库不写入 |
+| Product gate 收到 WAITING_HUMAN/缺 preparation | service gate | `ProductContextNotReady` |
+| Product gate 收到过时 PREPARED result | re-prepare + exact comparison | typed conflict/drift，不启动 Product Agent |
+| stage request 缺/多 artifact | request shape validator | `ValidationError` |
+| stage digest、approval 或 lineage 不合法 | stage domain guards | `StageIntegrityError` / approval error / `ProjectStageNotReady` |
+
+### 23.5 Good / Base / Bad Cases
+
+- **Good**：给 Python/Java/C++ fixture 一个绝对目录，得到 Schema-valid
+  ProjectPreparation；重放使用首次时间；Product gate 再次观测项目事实后才授权。
+- **Base**：项目 native rules 只作 URI/hash 索引，仅对有明确 adapter provenance 的条目产生
+  structured PROJECT rule。
+- **Bad**：构造假 Task 复用 `SpecCompiler`；冲突时按 priority 猜一个 winner；只检查旧
+  result 的 digest 就启动 Product Agent；原地覆盖 preparation；或在 target root 写 `.ase`。
+
+### 23.6 Tests Required
+
+- `tests/project_manager/test_baseline.py`
+  - 断言 input-order/time-independent digest、opaque native sources 和 JSON Schema；
+  - 断言 hard safety 必需、TASK rule 拒绝、PROJECT provenance exact match；
+  - 断言 overlap 冲突/none-overlap、classification、WAITING_HUMAN/Product block；
+  - 断言 success/conflict store 分路、首记录重放和 tamper rejection。
+- `tests/project_manager/test_store.py`
+  - 断言 immutable put/get/find、exact replay、changed content conflict；
+  - 断言 malformed/envelope/inner digest/identity tamper 都被拒绝；
+  - 断言 symlink/non-file/path escape、exclusive hard-link publish failure 与并发首写不留
+    partial/temp record。
+- `tests/project_manager/test_preparation.py`
+  - 断言 Python/Java/C++ 仅目录准备且 target file bytes 不变；
+  - 断言 success/conflict 首次重放、profile drift、preparation corruption、recorder mismatch；
+  - 断言 Product gate 重新 prepare/reopen，过时 result 无法解锁 context。
+- `tests/project_manager/test_stages.py`
+  - 断言 exact input count、aware clock、approval/lineage/digest guard 和 authorization integrity。
+- 合并门禁：T029 targeted pytest、full pytest、Ruff check/format、strict Mypy、offline
+  build 与 `git diff --check`。
+
+### 23.7 Wrong vs Correct
+
+#### Wrong
+
+```python
+# 不允许：虚构 Task、静默解决冲突、信任过期 result。
+fake_task = Task(description="unknown", acceptance_criteria=())
+compiled = SpecCompiler().compile(fake_task, platform, project, ())
+compiled = choose_highest_priority(compiled)
+preparation = old_result.preparation
+start_product_agent(preparation)
+```
+
+#### Correct
+
+```python
+request = PrepareProjectRequest(project_root=str(project_root.resolve()))
+result = project_manager.prepare_project(request)
+
+# 方法内部重新 prepare/reopen 并验证 current profile/binding/baseline。
+preparation = project_manager.require_product_context(result)
+authorization = project_manager.advance_stage(
+    StageAdvanceRequest(
+        target=ProjectStage.PRODUCT_DISCOVERY,
+        preparation=preparation,
+    )
+)
+authorization.validate_integrity()
+```
+
+正确模式让“项目已准备”成为可重放、可重新验证的组织事实，而不是某个 Agent
+会话中的临时假设。

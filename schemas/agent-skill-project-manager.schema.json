@@ -1,0 +1,308 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/agent-skill-project-manager.schema.json",
+  "title": "Project Manager Agent Skill Contracts",
+  "oneOf": [
+    {"$ref": "#/$defs/PrepareProjectRequest"},
+    {"$ref": "#/$defs/PrepareProjectResult"},
+    {"$ref": "#/$defs/StageAdvanceRequest"},
+    {"$ref": "#/$defs/StageAdvanceAuthorization"}
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "projectId": {
+      "type": "string",
+      "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"
+    },
+    "PrepareProjectRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "schema_version", "project_root"],
+      "properties": {
+        "kind": {"const": "prepare_project_request"},
+        "schema_version": {"const": "v0.1"},
+        "project_root": {
+          "type": "string",
+          "pattern": "^/[^\\u0000-\\u001f]*$",
+          "minLength": 2
+        }
+      }
+    },
+    "projectSpecConflict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "schema_version",
+        "id",
+        "project_id",
+        "project_profile_sha256",
+        "field",
+        "classification",
+        "rules",
+        "reason",
+        "human_question",
+        "recovery_conditions",
+        "detected_at",
+        "conflict_sha256"
+      ],
+      "properties": {
+        "kind": {"const": "PROJECT_SPEC_CONFLICT"},
+        "schema_version": {"const": "v0.1"},
+        "id": {
+          "type": "string",
+          "pattern": "^project_spec_conflict_[a-f0-9]{64}$"
+        },
+        "project_id": {"$ref": "#/$defs/projectId"},
+        "project_profile_sha256": {"$ref": "#/$defs/sha256"},
+        "field": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_.-]{0,127}$"
+        },
+        "classification": {"enum": ["HARD_SAFETY", "ENGINEERING"]},
+        "rules": {
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "https://ai-software-engineer.local/schemas/project-baseline.schema.json#/$defs/specRule"
+          }
+        },
+        "reason": {"type": "string", "minLength": 1},
+        "human_question": {"type": "string", "minLength": 1},
+        "recovery_conditions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "detected_at": {"type": "string", "format": "date-time"},
+        "conflict_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "projectWaitingHumanRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "work_item_status",
+        "reason",
+        "conflict_ids",
+        "product_agent_start_allowed",
+        "recovery_conditions"
+      ],
+      "properties": {
+        "kind": {"const": "project_spec_waiting_human_route"},
+        "work_item_status": {"const": "WAITING_HUMAN"},
+        "reason": {"const": "PROJECT_SPEC_CONFLICT"},
+        "conflict_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^project_spec_conflict_[a-f0-9]{64}$"
+          }
+        },
+        "product_agent_start_allowed": {"const": false},
+        "recovery_conditions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "PrepareProjectResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "schema_version",
+        "status",
+        "project_id",
+        "baseline_compilation_sha256",
+        "conflicts"
+      ],
+      "properties": {
+        "kind": {"const": "prepare_project_result"},
+        "schema_version": {"const": "v0.1"},
+        "status": {"enum": ["PREPARED", "WAITING_HUMAN"]},
+        "project_id": {"$ref": "#/$defs/projectId"},
+        "baseline_compilation_sha256": {"$ref": "#/$defs/sha256"},
+        "preparation": {
+          "$ref": "https://ai-software-engineer.local/schemas/project-preparation.schema.json"
+        },
+        "conflicts": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/projectSpecConflict"}
+        },
+        "route": {"$ref": "#/$defs/projectWaitingHumanRoute"}
+      },
+      "oneOf": [
+        {
+          "required": ["preparation"],
+          "properties": {
+            "status": {"const": "PREPARED"},
+            "conflicts": {"maxItems": 0},
+            "route": false
+          }
+        },
+        {
+          "required": ["route"],
+          "properties": {
+            "status": {"const": "WAITING_HUMAN"},
+            "preparation": false,
+            "conflicts": {"minItems": 1}
+          }
+        }
+      ]
+    },
+    "StageAdvanceRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "target"],
+      "properties": {
+        "kind": {"const": "stage_advance_request"},
+        "target": {
+          "enum": [
+            "PRODUCT_DISCOVERY",
+            "SOLUTION_DESIGN",
+            "PLANNING",
+            "DELIVERY_DISPATCH"
+          ]
+        },
+        "preparation": {
+          "$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/ProjectPreparation"
+        },
+        "project_request": {
+          "$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/ProjectRequest"
+        },
+        "product_spec": {
+          "$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/ProductSpec"
+        },
+        "product_approval": {
+          "$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/ProductSpecApproval"
+        },
+        "technical_design": {
+          "$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/TechnicalDesign"
+        },
+        "execution_plan": {
+          "$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/ExecutionPlan"
+        }
+      },
+      "oneOf": [
+        {
+          "required": ["preparation"],
+          "properties": {
+            "target": {"const": "PRODUCT_DISCOVERY"},
+            "project_request": false,
+            "product_spec": false,
+            "product_approval": false,
+            "technical_design": false,
+            "execution_plan": false
+          }
+        },
+        {
+          "required": [
+            "preparation",
+            "project_request",
+            "product_spec",
+            "product_approval"
+          ],
+          "properties": {
+            "target": {"const": "SOLUTION_DESIGN"},
+            "technical_design": false,
+            "execution_plan": false
+          }
+        },
+        {
+          "required": [
+            "preparation",
+            "project_request",
+            "product_spec",
+            "product_approval",
+            "technical_design"
+          ],
+          "properties": {
+            "target": {"const": "PLANNING"},
+            "execution_plan": false
+          }
+        },
+        {
+          "required": [
+            "preparation",
+            "project_request",
+            "product_spec",
+            "product_approval",
+            "technical_design",
+            "execution_plan"
+          ],
+          "properties": {"target": {"const": "DELIVERY_DISPATCH"}}
+        }
+      ]
+    },
+    "StageAdvanceAuthorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "schema_version",
+        "target",
+        "project_id",
+        "input_sha256s",
+        "authorized_at",
+        "authorization_sha256"
+      ],
+      "properties": {
+        "kind": {"const": "stage_advance_authorization"},
+        "schema_version": {"const": "v0.1"},
+        "target": {
+          "enum": [
+            "PRODUCT_DISCOVERY",
+            "SOLUTION_DESIGN",
+            "PLANNING",
+            "DELIVERY_DISPATCH"
+          ]
+        },
+        "project_id": {"$ref": "#/$defs/projectId"},
+        "input_sha256s": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 6,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/sha256"}
+        },
+        "authorized_at": {"type": "string", "format": "date-time"},
+        "authorization_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "target": {"const": "PRODUCT_DISCOVERY"},
+            "input_sha256s": {"minItems": 1, "maxItems": 1}
+          }
+        },
+        {
+          "properties": {
+            "target": {"const": "SOLUTION_DESIGN"},
+            "input_sha256s": {"minItems": 4, "maxItems": 4}
+          }
+        },
+        {
+          "properties": {
+            "target": {"const": "PLANNING"},
+            "input_sha256s": {"minItems": 5, "maxItems": 5}
+          }
+        },
+        {
+          "properties": {
+            "target": {"const": "DELIVERY_DISPATCH"},
+            "input_sha256s": {"minItems": 6, "maxItems": 6}
+          }
+        }
+      ]
+    }
+  }
+}

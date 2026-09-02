@@ -18,8 +18,9 @@
 
 ## 当前进度（2026-09-02）
 
-T001–T028 已完成。自动化质量基线为 **393 个测试**、Ruff 检查与格式检查通过、strict Mypy
-检查 **145 个源码文件**、Python package build 通过。
+T001–T029 已完成。T029 新增的 Project Manager preparation 契约已通过 **71 个定向
+测试**；当前全量质量基线为 **451 个测试**，Ruff 检查与格式检查通过，strict Mypy
+检查 **156 个源码文件**，Python sdist/wheel 离线构建通过。
 
 | 阶段 | 状态 | 已交付结果 |
 |---|---|---|
@@ -32,7 +33,7 @@ T001–T028 已完成。自动化质量基线为 **393 个测试**、Ruff 检查
 | M5 组织 Workforce 与任意项目接入 | 已完成 | sidecar、Workforce、Scheduler/ModelRouter、ProjectProfile、SpecCompiler、Runtime workspace binding |
 | M6 可执行交付 | 已完成 | evidence capture、typed tools、跨语言目标项目串行交付、只读投影/API |
 | M7 Agent 可视化 | 已完成 | 静态只读 dashboard：Task board、timeline、Agent detail、Human inbox |
-| M8 Project Manager 与完整 Agent 团队 | 进行中 | T028 已交付 Product/Design/Plan typed contracts、用户确认门禁和 Task 派生守卫；T029–T032 待组合 |
+| M8 Project Manager 与完整 Agent 团队 | 进行中 | T028 已交付上游阶段契约；T029 已交付 `prepare_project`、项目级规范基线、人工冲突路由和阶段授权；T030–T032 待组合 |
 
 完整阶段事实、任务清单和提交证据见
 [`docs/archive/2026-09-01-t019-t022-organization-runtime.md`](docs/archive/2026-09-01-t019-t022-organization-runtime.md)；
@@ -42,6 +43,8 @@ T026–T027 的只读投影与可视化见
 [`docs/archive/2026-09-01-t026-t027-projection-visualization.md`](docs/archive/2026-09-01-t026-t027-projection-visualization.md)；
 T028 的 Project Manager/Agent Skills 决策与阶段契约见
 [`docs/archive/2026-09-02-t028-project-manager-stage-contracts.md`](docs/archive/2026-09-02-t028-project-manager-stage-contracts.md)；
+T029 的 Project Manager preparation Skill 实现见
+[`docs/archive/2026-09-02-t029-project-manager-skills.md`](docs/archive/2026-09-02-t029-project-manager-skills.md)；
 后续路线见 [`docs/milestones.md`](docs/milestones.md)。
 
 ## MVP 边界
@@ -151,6 +154,7 @@ ai-software-engineer/
 │   ├── scheduling/                   # 纯 PortfolioScheduler 与 run-scoped ModelRouter
 │   ├── runtime.py                    # RuntimeConfig、角色路由与 task run composition
 │   ├── runtime_workspace.py           # 组织/项目 workspace 绑定与 workforce 解析
+│   ├── project_manager/               # prepare_project、project baseline、阶段授权与不可变记录
 │   ├── projection/                    # 从 durable facts 重算只读 Task/Run/Agent/Lease
 │   ├── read_api.py                    # transport-neutral GET-only projection API
 │   ├── visualization/                 # 无依赖静态只读 dashboard renderer
@@ -229,6 +233,7 @@ ai-software-engineer/
 │   ├── project_profile/              # 跨语言发现、完整性与路径边界
 │   ├── spec_compiler/                # 冲突、resolution 与不可变记录
 │   ├── runtime_workspace/            # workspace/binding/allocation 组合契约
+│   ├── project_manager/              # baseline、prepare/replay、stage gate 与跨语言接入
 │   ├── execution/                    # 命令 allowlist、环境和 timeout 测试
 │   ├── role_workspace/               # role worktree 与 executor 组合测试
 │   ├── evidence/                     # evidence capture、脱敏、重放和完整性
@@ -272,9 +277,9 @@ ai-software-engineer/
 项目原生规范会被索引和引用，不会被平台静默覆盖；规范冲突进入人工处理队列。
 
 当前架构只有这一种所有权模型：AgentProfile 属于组织，Project sidecar 只保存 Assignment 和项目
-运行事实。`ProjectWorkspaceRegistry + ProjectProfile + RuntimeWorkspaceBinder` 已能通过 Python API
-完成项目注册和 Runtime 绑定；T029 将把这些内部步骤封装为 Project Manager Agent 的
-`prepare_project` Skill。
+运行事实。T029 已将 `ProjectWorkspaceRegistry + ProjectProfile + RuntimeWorkspaceBinder`
+和 task-free project baseline compiler 封装为 Project Manager Agent 的 `prepare_project` Python
+Skill seam；调用方只传绝对项目目录。统一 CLI 接单入口仍属于 T032。
 
 ## 推荐的 v0.1 运行形态
 
@@ -319,6 +324,14 @@ uv run mypy src tests
 - 从 durable facts 重算 projection，并输出只读 JSON/静态 dashboard。
 - 用 ProjectPreparation、ProjectRequest、ProductSpec/Approval、TechnicalDesign 和 ExecutionPlan
   typed contracts 表达上游团队交接；只有用户批准的精确 Product Spec 和完整阶段链才能派生 Task。
+- 在 Python application seam 中调用 `ProjectManagerSkillService.prepare_project(...)`：只给绝对
+  项目目录，即可注册/重开外置 sidecar、发现 ProjectProfile、绑定组织并编译不含
+  Task 假设的项目基线；冲突返回 `WAITING_HUMAN`，成功返回可重放的
+  `ProjectPreparation`。
+- 启动 Product Agent 前调用同一 service 的 `require_product_context(...)`；该门禁会重新
+  prepare/reopen sidecar 并复核 current profile、binding 与 baseline，不信任调用方持有的
+  过期 result。Agent-visible wire contract 为
+  `schemas/agent-skill-project-manager.schema.json`。
 
 最小 CLI 流程：
 
@@ -335,12 +348,13 @@ uv run ase handoff build <task-id> \
 
 当前 CLI 尚未自动发现并绑定 workspace。使用 CLI 时，外部目标项目的 state、artifact、context、
 evaluation 和 handoff 路径仍必须显式指向 sidecar，避免污染目标项目；Python application 可用
-T022 的 `RuntimeWorkspaceBinding.compose_runtime_config(...)` 完成同一装配。配置示例和字段说明见
+T029 的 `ProjectManagerSkillService.prepare_project(...)` 完成 prepare，并用 T022 的
+`RuntimeWorkspaceBinding.compose_runtime_config(...)` 完成后续装配。配置示例和字段说明见
 [`docs/runtime.md`](docs/runtime.md) 与 [`docs/cli.md`](docs/cli.md)。
 
-当前最大的产品缺口不是底层组件，而是统一接单入口：CLI 仍要求使用者手工准备 workspace、路径
-和 Runtime 配置。T028 已建立 Product/Design/Plan 的 typed 交接与用户确认门禁；T029–T032 将依次
-实现 Project Manager Skills、Product/Designer/Planner Agent 组合，以及“项目目录 + 需求”的统一
+当前最大的产品缺口不是底层组件，而是统一接单入口：T029 已让 Python application
+只用项目目录完成 prepare，但 CLI 还没有把 prepare、Product/Designer/Planner Agent 和现有交付
+循环连成一条用户流程。T030–T032 将依次实现 Product/Designer/Planner Agent 组合，以及“项目目录 + 需求”的统一
 CLI/E2E，使项目注册、规范编译、Task 创建、团队分配和串行交付自动衔接。持久化 WorkQueue 后台
 循环、自动 merge 保护分支和生产部署仍不在当前能力内。
 

@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/project-baseline.schema.json",
+  "title": "Project Baseline Contracts",
+  "oneOf": [
+    {"$ref": "#/$defs/ProjectSpecBaseline"},
+    {"$ref": "#/$defs/ProjectSpecConflict"},
+    {"$ref": "#/$defs/ProjectWaitingHumanRoute"},
+    {"$ref": "#/$defs/ProjectBaselineCompilation"}
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "projectId": {"type": "string", "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "nonEmpty": {"type": "string", "minLength": 1},
+    "sourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uri", "sha256"],
+      "properties": {
+        "uri": {"$ref": "#/$defs/nonEmpty"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "specRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "field", "value", "layer", "priority", "scopes", "source_uri", "source_sha256", "rationale"],
+      "properties": {
+        "kind": {"const": "spec_rule"},
+        "id": {"type": "string", "pattern": "^rule_[a-z0-9][a-z0-9_-]{2,63}$"},
+        "field": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,127}$"},
+        "value": true,
+        "layer": {"enum": ["platform_hard", "platform_engineering", "project"]},
+        "priority": {"type": "integer", "minimum": 1, "maximum": 10000},
+        "scopes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^(\\*|[a-z][a-z0-9_.:-]{0,127})$"}
+        },
+        "source_uri": {"$ref": "#/$defs/nonEmpty"},
+        "source_sha256": {"$ref": "#/$defs/sha256"},
+        "rationale": {"$ref": "#/$defs/nonEmpty"}
+      }
+    },
+    "ProjectSpecBaseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "schema_version", "project_id", "project_profile_sha256", "rules", "opaque_project_sources", "baseline_sha256"],
+      "properties": {
+        "kind": {"const": "project_spec_baseline"},
+        "schema_version": {"const": "v0.1"},
+        "project_id": {"$ref": "#/$defs/projectId"},
+        "project_profile_sha256": {"$ref": "#/$defs/sha256"},
+        "rules": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "contains": {"type": "object", "required": ["layer"], "properties": {"layer": {"const": "platform_hard"}}},
+          "minContains": 1,
+          "items": {"$ref": "#/$defs/specRule"}
+        },
+        "opaque_project_sources": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/sourceRef"}},
+        "baseline_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "ProjectSpecConflict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "schema_version", "id", "project_id", "project_profile_sha256", "field", "classification", "rules", "reason", "human_question", "recovery_conditions", "detected_at", "conflict_sha256"],
+      "properties": {
+        "kind": {"const": "PROJECT_SPEC_CONFLICT"},
+        "schema_version": {"const": "v0.1"},
+        "id": {"type": "string", "pattern": "^project_spec_conflict_[a-f0-9]{64}$"},
+        "project_id": {"$ref": "#/$defs/projectId"},
+        "project_profile_sha256": {"$ref": "#/$defs/sha256"},
+        "field": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,127}$"},
+        "classification": {"enum": ["HARD_SAFETY", "ENGINEERING"]},
+        "rules": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"$ref": "#/$defs/specRule"}},
+        "reason": {"$ref": "#/$defs/nonEmpty"},
+        "human_question": {"$ref": "#/$defs/nonEmpty"},
+        "recovery_conditions": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/nonEmpty"}},
+        "detected_at": {"type": "string", "format": "date-time"},
+        "conflict_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "ProjectWaitingHumanRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "work_item_status", "reason", "conflict_ids", "product_agent_start_allowed", "recovery_conditions"],
+      "properties": {
+        "kind": {"const": "project_spec_waiting_human_route"},
+        "work_item_status": {"const": "WAITING_HUMAN"},
+        "reason": {"const": "PROJECT_SPEC_CONFLICT"},
+        "conflict_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^project_spec_conflict_[a-f0-9]{64}$"}},
+        "product_agent_start_allowed": {"const": false},
+        "recovery_conditions": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/nonEmpty"}}
+      }
+    },
+    "ProjectBaselineCompilation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "schema_version", "status", "project_id", "project_profile_sha256", "conflicts", "compiled_at", "compilation_sha256"],
+      "properties": {
+        "kind": {"const": "project_baseline_compilation"},
+        "schema_version": {"const": "v0.1"},
+        "status": {"enum": ["COMPILED", "CONFLICT"]},
+        "project_id": {"$ref": "#/$defs/projectId"},
+        "project_profile_sha256": {"$ref": "#/$defs/sha256"},
+        "compiled_spec": {"$ref": "#/$defs/ProjectSpecBaseline"},
+        "conflicts": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/ProjectSpecConflict"}},
+        "route": {"$ref": "#/$defs/ProjectWaitingHumanRoute"},
+        "compiled_at": {"type": "string", "format": "date-time"},
+        "compilation_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "oneOf": [
+        {
+          "required": ["compiled_spec"],
+          "properties": {"status": {"const": "COMPILED"}, "conflicts": {"maxItems": 0}, "route": false}
+        },
+        {
+          "required": ["route"],
+          "properties": {"status": {"const": "CONFLICT"}, "compiled_spec": false, "conflicts": {"minItems": 1}}
+        }
+      ]
+    }
+  }
+}

@@ -315,3 +315,116 @@ exact ProductSpec ID/digest 的 APPROVED record 才能解锁 Designer。Technica
 requirement/acceptance IDs；ExecutionPlan v0.1 固定 Coder→QA→Reviewer，并禁止 concrete Agent/model/
 provider/Lease 字段。完整 chain 通过 `derive_delivery_task` 后，现有 Task/Artifact/Orchestrator contract
 才开始生效。
+
+## 12. T029 Project Manager preparation Skill
+
+### 12.1 Scope / Trigger
+
+当实现或修改“只给项目目录即准备项目”、project-level baseline、ProjectPreparation
+重放或上游 stage authorization 时必须遵守本契约。该 seam 发生在 Product Agent 启动前，
+不得构造 Task 或猜测需求级 constraints。
+
+### 12.2 Signatures
+
+```python
+class ProjectManagerSkill(Protocol):
+    def prepare_project(self, request: PrepareProjectRequest) -> PrepareProjectResult: ...
+    def require_product_context(self, result: PrepareProjectResult) -> ProjectPreparation: ...
+    def advance_stage(self, request: StageAdvanceRequest) -> StageAdvanceAuthorization: ...
+
+ProjectBaselineCompiler.compile(
+    profile: ProjectProfile,
+    rules: Sequence[SpecRule],
+    *,
+    compiled_at: datetime,
+) -> ProjectBaselineCompilation
+
+FileProjectPreparationStore.put(preparation: ProjectPreparation) -> ProjectPreparation
+FileProjectPreparationStore.get(project_id: ProjectId | str) -> ProjectPreparation
+FileProjectPreparationStore.find(project_id: ProjectId | str) -> ProjectPreparation | None
+```
+
+Agent-visible wire schema：`schemas/agent-skill-project-manager.schema.json`。Project baseline wire
+schema：`schemas/project-baseline.schema.json`。
+
+### 12.3 Contracts
+
+- public request 只允许无控制字符的绝对 `project_root`；organization、registry、rules、clock、
+  binder 和 stores 为 policy-bound dependencies，不从 Agent payload 取得；
+- 基线只接受 `PLATFORM_HARD/PLATFORM_ENGINEERING/PROJECT`，必须包含 hard safety，
+  `TASK` rule 一律拒绝；PROJECT rule 必须绑定 current ProjectProfile URI + digest；
+- native project document 在没有显式 adapter 时只作为 opaque source；不从 Markdown 自动推断结构化
+  rule；
+- 成功结果只有 `PREPARED + ProjectPreparation`；冲突结果只有 `WAITING_HUMAN +
+  conflicts + route`，两者互斥；未 PREPARED 时 Product context 必须拒绝；
+- `require_product_context` 不信任调用方持有的旧 result；它必须通过同一 Skill service
+  重新 prepare/reopen sidecar，重验 current profile/binding/baseline，然后才返回 Preparation；
+- baseline compilation 和 ProjectPreparation 都是 canonical-SHA、append-once sidecar 记录，通过
+  temporary file + fsync + exclusive hard-link publish 保护并发首写；exact
+  replay（包括 conflict）返回首次记录，不更新首次时间；
+- `advance_stage` 只验证 exact immutable prefix 并产生 digest-bound authorization，不修改
+  stage artifact、delivery Artifact、verdict 或 Task status。
+
+### 12.4 Validation & Error Matrix
+
+| Input / state | Detection | Required result |
+|---|---|---|
+| relative/control-character root 或 unknown request field | request model | validation failure，不注册 |
+| 缺 `PLATFORM_HARD` | baseline compiler | `HardPolicyMissing` |
+| `TASK` rule 进入 prepare | baseline compiler | `TaskScopedRuleRejected` |
+| PROJECT source URI/hash 不在 exact profile | source guard | `SpecSourceMismatch` |
+| overlapping scope 下 field value 冲突 | project conflict detector | `WAITING_HUMAN`，Product Agent 禁止启动 |
+| profile/binding/workspace identity 漂移 | binder/preparation comparison | typed conflict/drift，不复用旧 checkpoint |
+| record envelope/stage digest 被篡改 | store read + integrity guard | typed corruption，不返回 partial model |
+| symlink/path escape/sidecar overlap | registry/store path guard | typed path/workspace error，目标项目不写入 |
+| stage prefix 缺失、多余或 lineage 不一致 | request shape + stage guard | validation failure / `ProjectStageNotReady` |
+| naive runtime clock | service/compiler/stage guard | typed/value error，不持久化 |
+
+### 12.5 Good / Base / Bad Cases
+
+- **Good**：给一个 Python/Java/C++ 项目的绝对目录，得到带 profile/binding/baseline digests
+  的 ProjectPreparation；相同输入重放返回首次 checkpoint。
+- **Base**：原生规范只索引 URI/hash，没有 adapter 就不把文本猜成 SpecRule。
+- **Bad**：创建临时 Task 来复用 task compiler、项目规范静默覆盖 hard safety、冲突时继续
+  Product Agent，或把运行事实写进目标仓库。
+
+### 12.6 Tests Required
+
+- `tests/project_manager/test_baseline.py`：Task-free/稳定排序、Schema、hard safety、scope overlap、
+  source provenance、WAITING_HUMAN、append-once/tamper；
+- `tests/project_manager/test_store.py`：exact replay、changed identity、atomic failure、digest/envelope
+  corruption、symlink/path boundary；
+- `tests/project_manager/test_preparation.py`：Python/Java/C++ 仅目录接入、零污染、首次时间重放、
+  profile drift、recorder mismatch、重新验证 Product gate；
+- `tests/project_manager/test_stages.py`：exact prefix、approval/lineage、authorization digest 和无修改边界；
+- targeted pytest 与全量 pytest、Ruff check/format、strict Mypy、offline build、
+  `git diff --check` 都是合并门禁。
+
+### 12.7 Wrong vs Correct
+
+#### Wrong
+
+```python
+fake_task = Task(description="unknown request", acceptance_criteria=())
+baseline = SpecCompiler().compile(fake_task, platform_rules, project_rules, ())
+if baseline.conflicts:
+    baseline = prefer_project_rules(baseline)
+start_product_agent(project_root)
+```
+
+#### Correct
+
+```python
+request = PrepareProjectRequest(project_root=str(project_root.resolve()))
+result = project_manager.prepare_project(request)
+preparation = project_manager.require_product_context(result)
+authorization = project_manager.advance_stage(
+    StageAdvanceRequest(
+        target=ProjectStage.PRODUCT_DISCOVERY,
+        preparation=preparation,
+    )
+)
+```
+
+正确流程在任何需求出现前只编译项目基线，冲突必须给人类，且只有重新校验通过的
+ProjectPreparation 才能解锁 Product Agent。

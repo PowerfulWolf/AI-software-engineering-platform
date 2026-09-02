@@ -315,3 +315,51 @@ T009 的 `SerialOrchestrator.run_task` 只接受 `NEW` Task，并按固定单 at
 optional 字段；cross-language 消费者仍以 `schemas/*.json` 为准。
 
 Pydantic validator 只处理单个对象可判断的规则；Task required criterion 与 QA 结果是否一一对应、四类 Artifact 是否属于同一 candidate revision、各 verdict 是否来自独立 run 等跨对象规则，由后续 ArtifactStore/Orchestrator guard 执行。
+
+## 10. Project Manager preparation Skill（T029）
+
+T029 把项目注册、ProjectProfile 发现、organization binding 和项目级规范编译收口为
+Project Manager Agent 的 typed Skill：
+
+```python
+class ProjectManagerSkill(Protocol):
+    def prepare_project(self, request: PrepareProjectRequest) -> PrepareProjectResult: ...
+    def require_product_context(self, result: PrepareProjectResult) -> ProjectPreparation: ...
+    def advance_stage(self, request: StageAdvanceRequest) -> StageAdvanceAuthorization: ...
+```
+
+Agent-visible request/result/authorization 的 wire contract 是
+`schemas/agent-skill-project-manager.schema.json`。`PrepareProjectRequest` 的唯一业务输入是
+无控制字符的绝对 `project_root`。organization identity、sidecar registry、platform rules、
+rule provider、clock 和 stores 都是 Skill runtime
+按 policy 注入的依赖，不是 Agent 可以传入或替换的 ambient authority。
+
+`prepare_project` 严格按以下顺序运行：
+
+```text
+register/reopen external sidecar
+  → discover and integrity-check ProjectProfile
+  → bind organization + project + exact profile
+  → compile PLATFORM_HARD/PLATFORM_ENGINEERING/PROJECT baseline
+  → append compilation record
+  → PREPARED checkpoint or WAITING_HUMAN route
+```
+
+项目基线是 task-free 的：必须包含至少一条 `PLATFORM_HARD` 规则，拒绝 `TASK` 规则，
+不会虚构 Task/acceptance criteria。结构化 PROJECT rule 必须绑定当前 ProjectProfile 中精确的
+source URI + SHA-256；未有显式 adapter 解释的原生规范只作为 opaque source 引用。
+重叠 scope 下同一 field 的不同 value 不按优先级静默覆盖，而是生成 project-scoped
+`ProjectSpecConflict` 和 `WAITING_HUMAN`，且 `product_agent_start_allowed=false`。
+
+成功的 `ProjectPreparation` 和 baseline compilation 都在外置 sidecar 内 append-once 保存，
+通过同目录 temporary file + fsync + exclusive hard-link publish 保证并发首写不被覆盖。
+完全相同的重放返回第一次记录及其时间戳；一旦 profile/binding/baseline 漂移、记录篡改、
+identity collision、symlink/path escape 或同一项目改内容，必须返回 typed error，不覆盖、
+不返回 partial result。成功或失败都不允许在目标项目目录写入 AI 运行事实。
+
+`require_product_context` 不信任传入 result 的快照；它重新 prepare/reopen sidecar，对 current
+profile/binding/baseline 重做完整性验证并与传入 checkpoint exact compare。
+`advance_stage` 只接受与目标阶段完全一致的 artifact prefix，返回绑定所有输入 digest 的
+`StageAdvanceAuthorization`。它不修改 Product/Design/Plan，不写 verdict，也不代替后续
+Task state machine。T029 的这一能力当前是 Python application seam；将它暴露为“项目目录 +
+需求”的统一 CLI 入口是 T032。

@@ -1,6 +1,6 @@
 # v0.1 开发里程碑与第一批可执行任务
 
-> 实施状态：T001–T027 已完成；M5 已通过组织级 Scheduler/ModelRouter、ProjectProfile、
+> 实施状态：T001–T029 已完成；M5 已通过组织级 Scheduler/ModelRouter、ProjectProfile、
 > SpecCompiler 与 Runtime workspace binding 达到退出条件。目标项目与外置 AI workspace 已有
 > 稳定绑定。M0–M5 的
 > v0.1 核心库退出条件已通过自动化测试验证。T014 提供配置驱动的串行运行入口，T015 提供
@@ -73,7 +73,12 @@ Reviewer 和可选 Reporter 通过 immutable stage/delivery artifacts 协作。P
 
 退出条件：用户只给项目目录与需求即可完成 prepare、Product Spec 用户确认、Technical Design、
 Execution Plan、团队分配和串行交付；流程可 resume，目标项目保持干净，规范冲突与失败有明确人工
-checkpoint。T028 已完成上游 typed contract 基线，T029–T032 负责组合入口，T033 评估 Reporter。
+checkpoint。T028 已完成上游 typed contract 基线，T029 已完成 Project Manager
+preparation seam，T030–T032 负责后续 Agent 与统一入口组合，T033 评估 Reporter。
+
+T029 已将“只给绝对项目目录”封装为 Project Manager Agent 的 Python Skill seam：
+注册/重开 sidecar、发现 ProjectProfile、绑定组织、编译 task-free baseline，或在项目级
+规范冲突时返回 `WAITING_HUMAN`。统一 CLI 用户入口仍属于 T032。
 
 ## 第一批可执行任务
 
@@ -107,7 +112,7 @@ checkpoint。T028 已完成上游 typed contract 基线，T029–T032 负责组�
 | T026 | 事件驱动 RunProjection 与只读 read API | projection models/API contract | 重算 Task/WorkItem/Agent/Model/Lease timeline；API 不迁移状态、不写 verdict | T012/T018/T022/T023 |
 | T027 | 本地 Agent 工作可视化 dashboard | Task board、team capacity、timeline、agent detail、human inbox | 同时看到交付/调度状态、模型理由、成本、证据、等待和冲突 | T026 |
 | T028 | 上游阶段与用户确认合同 | ProjectPreparation/Request、ProductSpec/Approval、TechnicalDesign、ExecutionPlan Schema 与 Task 派生 guard | exact 用户批准、Design 全覆盖、Plan 无 concrete allocation、完整 lineage 才能创建 Task | T019–T025 |
-| T029 | Project Manager Agent Skills | `prepare_project`、project baseline、typed Skill facade | 只给目录完成 prepare；冲突 WAITING_HUMAN；目标项目零污染 | T028 |
+| T029（已完成） | Project Manager Agent Skills | `prepare_project`、project baseline、typed Skill facade | 只给目录完成 prepare；冲突 WAITING_HUMAN；目标项目零污染 | T028 |
 | T030 | Product Agent 与确认循环 | product role/context/adapter、版本化 ProductSpec/Approval | Agent 不能自批；修改生成新版本；对话事实可重放 | T029 |
 | T031 | Designer/Planner 与调度 Skills | TechnicalDesign/ExecutionPlan producer、preview/commit dispatch | Planner preview 只读；Project Manager commit 重新校验并提交分配 | T030 |
 | T032 | 统一项目接单入口 | CLI/application facade、resume、跨语言 E2E | 项目目录 + 需求走通 prepare→delivery，不手拼 Runtime paths | T031 |
@@ -115,7 +120,8 @@ checkpoint。T028 已完成上游 typed contract 基线，T029–T032 负责组�
 
 ## 第一批任务的执行顺序
 
-已完成：`T001 → ... → T028`。当前进入 M8：`T029 → T030 → T031 → T032`，随后按真实交付表达
+已完成：`T001 → ... → T029`。当前 M8 的下一个主任务是 `T030`，之后是
+`T031 → T032`，随后按真实交付表达
 缺口决定 T033。HTTP/SSE、后台队列和更复杂容量投影不先于统一接单入口。
 
 每完成一个任务，都先运行 contract tests，再更新 `.trellis/spec/`。T019 保持单进程、有界、
