@@ -3,6 +3,8 @@
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -13,11 +15,22 @@ from ai_software_engineer.domain import (
     ArtifactKind,
     NetworkAccess,
 )
-from ai_software_engineer.git import DirtyWorktree, GitWorktreeManager, WorktreeSpec
+from ai_software_engineer.git import (
+    DirtyWorktree,
+    GitWorktreeManager,
+    WorktreeRef,
+    WorktreeSnapshot,
+    WorktreeSpec,
+)
+from ai_software_engineer.project_manager.dispatch import DispatchCommitRecord
 from ai_software_engineer.role_workspace import (
+    DispatchRoleBindingMismatch,
+    DispatchRoleWorktreeCoordinator,
     RoleWorktreeAgentMismatch,
+    RoleWorktreeRecoveryUnsupported,
     RoleWorktreeSession,
 )
+from tests.domain.factories import make_task
 
 
 def _git(repository: Path, *arguments: str) -> str:
@@ -180,3 +193,134 @@ def test_executor_configuration_failure_does_not_leave_new_worktree(tmp_path: Pa
 
     assert not (tmp_path / "worktrees/task_workspace_016/coder-attempt-01").exists()
     assert _git(repository, "branch", "--list", "ai/task_workspace_016/attempt-1") == ""
+
+
+def test_recovered_binding_preserves_dirty_evidence_and_executor_cwd(tmp_path: Path) -> None:
+    repository = _fixture_repository(tmp_path)
+    spec = _spec(repository, AgentRole.CODER, "task_workspace_recover")
+    worktree_root = tmp_path / "worktrees"
+    created = GitWorktreeManager(repository, worktree_root).create(spec)
+    evidence = created.path / "src/app.py"
+    evidence.write_text("VALUE = 99\n", encoding="utf-8")
+
+    restarted_session = RoleWorktreeSession(GitWorktreeManager(repository, worktree_root))
+    first = restarted_session.recover(spec, _agent(AgentRole.CODER))
+    second = restarted_session.recover(spec, _agent(AgentRole.CODER))
+    result = second.executor.run((sys.executable, "-c", "import os; print(os.getcwd())"))
+
+    assert first.worktree == second.worktree == created
+    assert result.stdout.strip() == str(created.path)
+    assert restarted_session.inspect(second).changed_paths == ("src/app.py",)
+    with pytest.raises(DirtyWorktree):
+        restarted_session.close(second)
+    assert evidence.read_text(encoding="utf-8") == "VALUE = 99\n"
+
+
+def test_recovery_role_mismatch_is_rejected_before_git_inspection(tmp_path: Path) -> None:
+    repository = _fixture_repository(tmp_path)
+    spec = _spec(repository, AgentRole.QA, "task_workspace_recover_mismatch")
+    worktree_root = tmp_path / "worktrees"
+    created = GitWorktreeManager(repository, worktree_root).create(spec)
+    session = RoleWorktreeSession(GitWorktreeManager(repository, worktree_root))
+
+    with pytest.raises(RoleWorktreeAgentMismatch, match="does not match"):
+        session.recover(spec, _agent(AgentRole.REVIEWER))
+
+    assert created.path.is_dir()
+
+
+class _CreateOnlyGitWorkspace:
+    def __init__(self, delegate: GitWorktreeManager) -> None:
+        self._delegate = delegate
+
+    def create(self, spec: WorktreeSpec) -> WorktreeRef:
+        return self._delegate.create(spec)
+
+    def inspect(self, worktree: WorktreeRef) -> WorktreeSnapshot:
+        return self._delegate.inspect(worktree)
+
+    def remove(self, worktree: WorktreeRef) -> None:
+        self._delegate.remove(worktree)
+
+
+def test_recovery_requires_an_explicit_git_recovery_seam(tmp_path: Path) -> None:
+    repository = _fixture_repository(tmp_path)
+    manager = GitWorktreeManager(repository, tmp_path / "worktrees")
+    session = RoleWorktreeSession(_CreateOnlyGitWorkspace(manager))
+
+    with pytest.raises(RoleWorktreeRecoveryUnsupported, match="does not support"):
+        session.recover(_spec(repository, AgentRole.CODER), _agent(AgentRole.CODER))
+
+
+def _dispatch(repository: Path) -> DispatchCommitRecord:
+    task = make_task().model_copy(
+        update={
+            "id": "task_dispatch_workspace_032",
+            "repository": str(repository),
+            "base_ref": _git(repository, "rev-parse", "HEAD"),
+        }
+    )
+    phases = tuple(
+        SimpleNamespace(
+            role=role,
+            agent_id=_agent(role).id,
+            assignment=SimpleNamespace(attempt=1, task_id=task.id),
+            lease=SimpleNamespace(task_id=task.id),
+            model_selection=SimpleNamespace(provider="local", model=f"fixture-{role.value}"),
+        )
+        for role in (AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER)
+    )
+    dispatch = SimpleNamespace(
+        task=task,
+        task_id=task.id,
+        phases=phases,
+        validate_integrity=lambda: None,
+    )
+    return cast(DispatchCommitRecord, dispatch)
+
+
+def test_dispatch_bindings_enforce_assigned_roles_and_same_candidate(tmp_path: Path) -> None:
+    repository = _fixture_repository(tmp_path)
+    dispatch = _dispatch(repository)
+    definitions = {
+        role: _agent(role) for role in (AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER)
+    }
+    coordinator = DispatchRoleWorktreeCoordinator(
+        RoleWorktreeSession(GitWorktreeManager(repository, tmp_path / "worktrees"))
+    )
+
+    coder = coordinator.open_coder(dispatch, definitions)
+    (coder.worktree.path / "src/app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _git(coder.worktree.path, "add", "src/app.py")
+    _git(coder.worktree.path, "commit", "-m", "candidate")
+    candidate = _git(coder.worktree.path, "rev-parse", "HEAD")
+    verifiers = coordinator.open_verifiers(dispatch, candidate, definitions)
+
+    assert verifiers.qa.worktree.head_revision == candidate
+    assert verifiers.reviewer.worktree.head_revision == candidate
+    assert verifiers.qa.worktree.detached is True
+    assert verifiers.reviewer.worktree.detached is True
+    assert _git(repository, "status", "--porcelain") == ""
+
+    coordinator.close(verifiers.qa)
+    coordinator.close(verifiers.reviewer)
+    coordinator.close(coder)
+
+
+def test_dispatch_binding_rejects_model_drift_before_checkout(tmp_path: Path) -> None:
+    repository = _fixture_repository(tmp_path)
+    dispatch = _dispatch(repository)
+    definitions = {
+        role: _agent(role) for role in (AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER)
+    }
+    definitions[AgentRole.CODER] = definitions[AgentRole.CODER].model_copy(
+        update={"model": "unassigned-model"}
+    )
+    coordinator = DispatchRoleWorktreeCoordinator(
+        RoleWorktreeSession(GitWorktreeManager(repository, tmp_path / "worktrees"))
+    )
+
+    with pytest.raises(DispatchRoleBindingMismatch, match="dispatch allocation"):
+        coordinator.open_coder(dispatch, definitions)
+
+    assert not (tmp_path / "worktrees").exists()

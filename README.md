@@ -18,11 +18,10 @@
 
 ## 当前进度（2026-09-02）
 
-T001–T031 已完成。T031 新增 Solution Designer、Planner 只读资源预演，以及 Project Manager
-基于权威当前事实和 exact Planner handoff 重算后，通过 Product revision fence + SQLite transaction
-原子提交三角色分配；T031 相关定向测试当前为
-**145 个**。当前全量质量基线为 **579 个测试**；Ruff check/format、strict Mypy、offline package build
-和 `git diff --check` 全部通过。
+T001–T032 已完成。T032 把 Project Manager prepare、Product confirmation、Designer、Planner、原子
+dispatch 和现有串行 Delivery 组合成统一、可恢复的 application/CLI facade，并补齐 Dispatch→Task、
+ExecutionPlan→PlanArtifact 与 role worktree 的严格消费边界。当前全量质量基线为 **604 个测试**；
+Ruff check/format、strict Mypy、offline package build 和 `git diff --check` 全部通过。
 
 | 阶段 | 状态 | 已交付结果 |
 |---|---|---|
@@ -35,7 +34,7 @@ T001–T031 已完成。T031 新增 Solution Designer、Planner 只读资源预�
 | M5 组织 Workforce 与任意项目接入 | 已完成 | sidecar、Workforce、Scheduler/ModelRouter、ProjectProfile、SpecCompiler、Runtime workspace binding |
 | M6 可执行交付 | 已完成 | evidence capture、typed tools、跨语言目标项目串行交付、只读投影/API |
 | M7 Agent 可视化 | 已完成 | 静态只读 dashboard：Task board、timeline、Agent detail、Human inbox |
-| M8 Project Manager 与完整 Agent 团队 | 进行中 | T028–T031 已交付准备、Product 确认、Designer/Planner 与原子分配；T032 待完成统一接单入口 |
+| M8 Project Manager 与完整 Agent 团队 | 已完成 | T028–T032：准备、Product 确认、Designer/Planner、原子分配与统一可恢复接单入口 |
 
 完整阶段事实、任务清单和提交证据见
 [`docs/archive/2026-09-01-t019-t022-organization-runtime.md`](docs/archive/2026-09-01-t019-t022-organization-runtime.md)；
@@ -51,6 +50,8 @@ T030 的 Product Agent 确认循环见
 [`docs/archive/2026-09-02-t030-product-agent.md`](docs/archive/2026-09-02-t030-product-agent.md)；
 T031 的 Designer、Planner 与原子 Dispatch 见
 [`docs/archive/2026-09-02-t031-designer-planner-dispatch.md`](docs/archive/2026-09-02-t031-designer-planner-dispatch.md)；
+T032 的统一接单、恢复和 worktree bridge 见
+[`docs/archive/2026-09-02-t032-unified-project-entry.md`](docs/archive/2026-09-02-t032-unified-project-entry.md)；
 后续路线见 [`docs/milestones.md`](docs/milestones.md)。
 
 ## MVP 边界
@@ -302,7 +303,8 @@ ai-software-engineer/
 Skill seam；调用方只传绝对项目目录。T030 又把需求对话、ProjectRequest 修订、
 ProductSpec 版本、人工批准、checkpoint 和 operation receipt 封存为 sidecar 下的不可变
 事实链。T031 已把 approved ProductSpec 继续转换为 TechnicalDesign、抽象 ExecutionPlan、只读
-资源预演和原子 dispatch bundle。统一 CLI 接单入口仍属于 T032。
+资源预演和原子 dispatch bundle；T032 再把这条上游链、Task materialization、串行 Delivery 与严格
+role worktree consumer 组合为统一、可恢复入口。
 
 ## 推荐的 v0.1 运行形态
 
@@ -343,7 +345,7 @@ uv run mypy src tests
 - 用 PortfolioScheduler/ModelRouter 做确定、可重放的 Assignment/Lease 与模型选择决策；
 - 在 Python application seam 中绑定组织/项目 workspace，并解析 run-scoped AgentDefinition；
 - 用 typed tool protocol 和 EvidenceStore 约束并封存文件、命令、diff、测试及模型 usage；
-- 用跨语言 fixture 验证 Python、Java、Go、TypeScript 项目的隔离交付边界；
+- 用跨语言 fixture 验证 Python、Java、C++、Go、TypeScript 项目的隔离交付边界；
 - 从 durable facts 重算 projection，并输出只读 JSON/静态 dashboard。
 - 用 ProjectPreparation、ProjectRequest、ProductSpec/Approval、TechnicalDesign 和 ExecutionPlan
   typed contracts 表达上游团队交接；只有用户批准的精确 Product Spec 和完整阶段链才能派生 Task。
@@ -364,8 +366,13 @@ uv run mypy src tests
 - 同一 operation ID + typed command 可在进程重启后精确重放；operation receipt 保存预期
   checkpoint，因此在事实已写入但 checkpoint 尚未发布时也能恢复，变更同一
   operation 的输入则 fail closed。
+- 通过 `UnifiedProjectEntryService` 或宿主已绑定的 `ase project start/reply/approve/resume/status`
+  统一接单；`ProjectDeliveryIntake` 与 checkpoint chain 允许从 PREPARING 到 DELIVERING 的任一自动
+  阶段恢复，人工命令必须绑定 exact current checkpoint。
+- 从 `DispatchCommitRecord` exact-create-or-compare Delivery Task，并把 approved ExecutionPlan 机械
+  materialize 为 PlanArtifact；Coder、QA、Reviewer 的 Agent/model 与 worktree 必须消费 exact dispatch。
 
-最小 CLI 流程：
+低层 Task CLI 流程：
 
 ```bash
 uv sync
@@ -378,17 +385,26 @@ uv run ase handoff build <task-id> \
   --output /path/to/ai-workspace/handoffs
 ```
 
-当前 CLI 尚未自动发现并绑定 workspace。使用 CLI 时，外部目标项目的 state、artifact、context、
-evaluation 和 handoff 路径仍必须显式指向 sidecar，避免污染目标项目；Python application 可用
-T029 的 `ProjectManagerSkillService.prepare_project(...)` 完成 prepare，并用 T022 的
-`RuntimeWorkspaceBinding.compose_runtime_config(...)` 完成后续装配。配置示例和字段说明见
-[`docs/runtime.md`](docs/runtime.md) 与 [`docs/cli.md`](docs/cli.md)。
+面向用户的统一流程在 application host 完成一次团队绑定后，只需要：
 
-当前最大的产品缺口不是底层组件，而是统一接单入口：T029–T031 已分别完成 prepare、可恢复的
-Product 确认、Designer/Planner 与调度提交；但 CLI 还没有把这些能力和现有交付循环连成一条
-用户流程。T032 将实现“项目目录 + 需求”的统一
-CLI/E2E，使项目注册、规范编译、Task 创建、团队分配和串行交付自动衔接。持久化 WorkQueue 后台
-循环、自动 merge 保护分支和生产部署仍不在当前能力内。
+```bash
+ase project start /absolute/path/to/project --requirement "实现已经确认的需求"
+# 根据返回的 checkpoint 继续 reply 或 approve
+ase project approve delivery_xxx --checkpoint <sha256>
+ase project resume delivery_xxx
+ase project status delivery_xxx
+```
+
+内部 state、artifact、context、evidence、evaluation、handoff 与 worktree 路径由宿主从 organization
+workspace 和 project sidecar 组合，不再要求每个需求手工传入。仓库不会静默使用 fake Agent：部署宿主
+必须先用 `configure_project_entry(...)` 绑定真实团队、模型策略和 provider；未绑定时 CLI 明确拒绝。
+完整命令语义见 [`docs/cli.md`](docs/cli.md)。
+
+当前最大的实用化缺口是**生产团队宿主**，而不是流程状态机：offline fake-team E2E 已验证从目录、
+需求到 DONE 的完整组合，但真实 Product/Designer/Planner provider、模型工具调用与凭据策略仍需由部署
+宿主明确配置。现有 delivery `OpenAICompatibleAgentAdapter` 只产生 typed artifact，并不等于已经能让
+真实 Coder 通过受控工具修改任意项目。持久化后台 WorkQueue、自动 merge 保护分支和生产部署也仍不在
+当前能力内；T033 Reporter 按决定保持暂停。
 
 ## 文档导航
 

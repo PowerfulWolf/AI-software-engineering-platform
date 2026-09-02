@@ -678,3 +678,114 @@ preview = planner_preview.preview(snapshot)  # pure/read-only evidence
 record = project_manager.commit_dispatch(exact_handoff.with_preview(preview))
 # service 自行读取权威 facts；全部成功后仅调用一次 authority.commit_if_current(...)
 ```
+
+## 15. T032 统一项目接单、恢复与 Delivery bridge
+
+### 15.1 Scope / Trigger
+
+修改“项目目录 + 需求”入口、Project Manager delivery checkpoint、Dispatch 到 Task runtime 的桥接，
+或 role worktree 恢复规则时，必须遵守本节。T032 只组合既有阶段；不得在 bridge 中重新做产品、
+设计、资源规划，也不得把 Runtime 内部路径暴露成每次接单的业务参数。
+
+### 15.2 Signatures
+
+```python
+UnifiedProjectEntryService.start(StartProjectDelivery) -> ProjectDeliveryResult
+UnifiedProjectEntryService.reply(ReplyToProduct) -> ProjectDeliveryResult
+UnifiedProjectEntryService.approve(ApproveProductSpec) -> ProjectDeliveryResult
+UnifiedProjectEntryService.resume(ResumeProjectDelivery) -> ProjectDeliveryResult
+UnifiedProjectEntryService.status(DeliveryId) -> ProjectDeliveryResult
+FileProjectDeliveryCheckpointStore.put_intake(ProjectDeliveryIntake) -> ProjectDeliveryIntake
+FileProjectDeliveryCheckpointStore.put(ProjectDeliveryCheckpoint) -> ProjectDeliveryCheckpoint
+DispatchTaskMaterializer.materialize(DispatchCommitRecord) -> Task
+ExecutionPlanAgentAdapter.run(AgentRequest) -> AgentResult
+DispatchRoleWorktreeCoordinator.open_coder(...) -> RoleWorktreeBinding
+DispatchRoleWorktreeCoordinator.open_verifiers(...) -> VerificationWorktreeBindings
+configure_project_entry(ProjectEntryProvider) -> None
+```
+
+CLI 合同固定为 `ase project start/reply/approve/resume/status`。应用宿主只在进程启动时绑定一次
+organization-owned team composition；若未绑定，命令必须以稳定配置错误退出，不得回退到隐式路径或
+伪造 Agent。
+
+### 15.3 Contracts
+
+- delivery ID 由 canonical absolute project root + initial requirement 确定派生；同一 ID 的 title、
+  requirement 或 root 变化必须拒绝；首次接单先 exact-create `ProjectDeliveryIntake`，使 Product 原生
+  fact 生成前的崩溃也能从原始业务输入恢复；
+- `ProjectDeliveryCheckpoint` 是 append-only、连续 sequence/hash chain，只引用各阶段权威 fact 的
+  ID/digest，不复制其 payload；每次命令都先读 current checkpoint，再由 backend `reconcile` 重验
+  原生事实；人工 reply/approve 必须提交 exact current checkpoint digest；
+- `resume` 不接收新业务事实。PREPARING/PRODUCT_DISCOVERY 从 durable intake 重放；DESIGNING、
+  PLANNING、DISPATCHING、DELIVERING 从最后 checkpoint 继续；WAITING、BLOCKED、FAILED、DONE 不被
+  静默推进；
+- ProductSpec approval 是正常流程唯一人工业务门禁。规范冲突、资源不可行、权限/完整性错误属于
+  安全阻塞，不得被解释为业务确认；
+- `DispatchCommitRecord.task` 是 SQLite TaskRepository 的 durable intent。materializer 只允许不存在时
+  创建，或把已推进 Task 归一到 NEW/attempt=0 后 exact compare；同 ID 不同 immutable facts 立即拒绝；
+- T031 `ExecutionPlan` 到 Delivery `PlanArtifact` 的转换是确定性 materialization：必须保留 exact
+  Product/Design/acceptance lineage，不能重新调用 Planner，也不能引入新的 concrete allocation；
+- role runtime 必须消费 dispatch 内的 exact Agent/model/provider/Assignment/Lease。Coder 从 Task 的
+  full base SHA 创建 branch worktree；QA 与 Reviewer 从同一 full candidate SHA 创建互相独立的 detached
+  worktree；恢复必须核对 common-dir、path、role、attempt、branch/detached 和 HEAD，dirty 现场保留；
+- CLI 每次接单只需要 project root、requirement 和可选 title。数据库、artifact、context、evidence、
+  evaluation、handoff、worktree roots 由 application host 从 project sidecar/organization workspace
+  组合，不能由用户逐次拼装；
+- checkpoint/intake 文件使用 canonical digest envelope、exclusive publish、write-all、root/directory
+  inode 与 symlink/path 检查；changed replay 和篡改不能覆盖首次事实。
+- backend 必须把可预期的 provider/policy/output 失败分类为
+  `DeliveryBackendFailure(code, safe_summary)`；facade 将其提交为安全 BLOCKED checkpoint。未分类异常视为
+  进程中断，保留当前可恢复 checkpoint，不能把异常字符串或 provider payload 原样持久化。
+
+### 15.4 Validation & Error Matrix
+
+| Input / state | Detection | Required result |
+|---|---|---|
+| relative project root、unsafe sidecar/intake/checkpoint path | command model / store guards | typed validation/path error，zero stage effects |
+| same delivery ID 的 title/root/requirement 改变 | durable intake comparison | conflict，不调用 Product |
+| Product start 前进程中断 | intake + PREPARING/PRODUCT_DISCOVERY checkpoint | `resume` 使用原 submitted_at 与原始输入继续 |
+| reply/approve 使用旧 checkpoint | current digest fence | `DeliveryCheckpointStale`，zero Product effects |
+| native Product/Design/Plan/Dispatch/Task digest 漂移 | backend reconcile / bridge guards | fail closed，不从 checkpoint 猜测 payload |
+| Dispatch Task 已存在且 immutable facts 不同 | `DispatchTaskMaterializer` exact compare | `DispatchTaskConflict`，不覆盖 Task |
+| concrete Agent/model 与 dispatch allocation 不同 | worktree coordinator binding check | checkout 前 `DispatchRoleBindingMismatch` |
+| QA/Reviewer revision 非 full SHA 或不同 | worktree coordinator | 拒绝验证，不使用 movable ref |
+| worktree path/common-dir/HEAD/branch 漂移或 dirty | strict recovery inspection | typed recovery error；dirty evidence 不清理 |
+| application host 未绑定 team runtime | `project_entry()` | CLI exit 2、安全单行错误、无 traceback |
+| Delivery retry budget exhausted | native retry result | terminal BLOCKED checkpoint + evidence references |
+
+### 15.5 Good / Base / Bad Cases
+
+- **Good**：Python/Java/C++ Git fixture 只提交目录和需求，在 Product exact approval 后串行得到 DONE、
+  full candidate SHA 和完整 checkpoint chain；目标 main checkout 保持不变。
+- **Base**：Product 要求澄清或等待批准，命令返回 WAITING checkpoint；进程重启后 status/reply/approve/
+  resume 从 durable facts 继续，不依赖 adapter 内存。
+- **Bad**：用旧 approval checkpoint、伪造 dispatch Task、给 QA movable branch，或把不同 model 的
+  AgentDefinition 绑定到已提交 allocation；系统必须在 effect 前拒绝，而不是“尽量继续”。
+
+### 15.6 Tests Required
+
+- checkpoint/intake：strict model、canonical identity、exact replay、sequence/hash chain、tamper、gap、
+  symlink/root swap、changed replay、Product-start interruption resume；
+- unified entry：Python/Java/C++ directory+requirement、Product approval fence、DONE/BLOCKED、reopen/status、
+  target tree zero pollution；
+- delivery bridge：Task create-or-compare、progressed replay、Task collision、PlanArtifact acceptance lineage；
+- worktree：真实 Git branch/detached recovery、wrong path/common-dir/HEAD/ref、dirty preservation、dispatch
+  Agent/model drift、QA/Reviewer exact same candidate；
+- CLI：只暴露业务参数；unconfigured host 稳定退出且无 traceback；全量 Ruff、strict Mypy、offline build。
+
+### 15.7 Wrong vs Correct
+
+#### Wrong
+
+```python
+runtime = RuntimeConfig(database=user_flag, artifacts=user_flag)  # 每个需求手拼内部路径
+qa = git.checkout("candidate")  # movable ref，未消费 dispatch
+```
+
+#### Correct
+
+```python
+result = project_manager.start(StartProjectDelivery(project_root=root, requirement=text))
+# host 从 sidecar/organization 自动组合内部路径；人工只确认 exact Product checkpoint
+bindings = worktrees.open_verifiers(dispatch, full_candidate_sha, assigned_definitions)
+```

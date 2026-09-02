@@ -4,7 +4,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Final
+from typing import Final, Protocol, runtime_checkable
 
 from ai_software_engineer.domain.enums import AgentRole
 from ai_software_engineer.git.ports import WorktreeRef, WorktreeSnapshot, WorktreeSpec
@@ -52,6 +52,18 @@ class UnmanagedWorktree(GitWorkspaceError):
     """Raised when a reference does not identify a worktree owned by this manager."""
 
 
+class WorktreeNotFound(GitWorkspaceError):
+    """Raised when a recovery target is not present at its deterministic path."""
+
+
+class WorktreeIdentityDrift(GitWorkspaceError):
+    """Raised when a recovery target no longer has its expected role identity."""
+
+
+class WorktreeRevisionDrift(GitWorkspaceError):
+    """Raised when a recovery target HEAD differs from its durable revision."""
+
+
 class DirtyWorktree(GitWorkspaceError):
     """Raised when cleanup would discard tracked or untracked evidence."""
 
@@ -66,6 +78,13 @@ class GitCommandError(GitWorkspaceError):
 
 class GitCommandTimeout(GitWorkspaceError):
     """Raised when an allowlisted Git command exceeds its fixed timeout."""
+
+
+@runtime_checkable
+class RecoverableGitWorkspace(Protocol):
+    """Optional restart seam implemented by Git workspaces with durable identity checks."""
+
+    def recover(self, spec: WorktreeSpec) -> WorktreeRef: ...
 
 
 class GitWorktreeManager:
@@ -91,6 +110,7 @@ class GitWorktreeManager:
         source_revision = self._resolve_revision(spec.source_revision)
         target = self._target_path(spec)
         self._validate_target_containment(target)
+        self._validate_target_has_no_symlinks(target)
         branch = self._branch_name(spec) if spec.role is AgentRole.CODER else None
 
         if target.exists() or (branch is not None and self._branch_exists(branch)):
@@ -115,8 +135,53 @@ class GitWorktreeManager:
             detached=branch is None,
         )
 
+    def recover(self, spec: WorktreeSpec) -> WorktreeRef:
+        """Reopen an existing role worktree after verifying its complete durable identity.
+
+        Recovery is deliberately read-only. It never checks out a revision, changes a branch,
+        cleans files, or removes a mismatched target. Any drift is left in place as evidence.
+        """
+        self._validate_repository()
+        self._validate_repository_filters()
+        self._validate_worktree_root()
+        expected_revision = self._resolve_revision(spec.source_revision)
+        if spec.source_revision != expected_revision:
+            raise WorktreeRevisionDrift(
+                "worktree recovery requires a durable full commit SHA, "
+                f"not a movable ref: {spec.source_revision}"
+            )
+        target = self._target_path(spec)
+        self._validate_target_containment(target)
+        self._validate_target_has_no_symlinks(target)
+        if not target.exists():
+            raise WorktreeNotFound(str(target))
+        if not target.is_dir():
+            raise WorktreeIdentityDrift(f"recovery target is not a directory: {target}")
+
+        self._validate_registered_worktree(target)
+        expected_branch = self._branch_name(spec) if spec.role is AgentRole.CODER else None
+        self._validate_role_git_state(target, expected_branch=expected_branch)
+        actual_revision = self._run_git(("rev-parse", "HEAD"), cwd=target)
+        if actual_revision != expected_revision:
+            raise WorktreeRevisionDrift(
+                f"worktree HEAD drift for {target}: "
+                f"expected {expected_revision}, observed {actual_revision}"
+            )
+
+        return WorktreeRef(
+            task_id=spec.task_id,
+            role=spec.role,
+            attempt=spec.attempt,
+            path=target,
+            head_revision=expected_revision,
+            branch=expected_branch,
+            detached=expected_branch is None,
+        )
+
     def inspect(self, worktree: WorktreeRef) -> WorktreeSnapshot:
         """Return the exact HEAD and changed repository paths for a managed worktree."""
+        self._validate_repository()
+        self._validate_repository_filters()
         path = self._validate_owned_worktree(worktree)
         head_revision = self._run_git(("rev-parse", "HEAD"), cwd=path)
         tracked = self._run_git_bytes(
@@ -192,6 +257,21 @@ class GitWorktreeManager:
         if not resolved_target.is_relative_to(self._worktree_root):
             raise InvalidWorktreeRoot(f"worktree target escapes configured root: {target}")
 
+    def _validate_target_has_no_symlinks(self, target: Path) -> None:
+        try:
+            relative_target = target.relative_to(self._worktree_root)
+        except ValueError as error:
+            raise InvalidWorktreeRoot(
+                f"worktree target escapes configured root: {target}"
+            ) from error
+        current = self._worktree_root
+        for part in relative_target.parts:
+            current /= part
+            if current.is_symlink():
+                raise InvalidWorktreeRoot(
+                    f"worktree target contains a symlink component: {current}"
+                )
+
     def _branch_exists(self, branch: str) -> bool:
         completed = self._invoke_git(
             ("show-ref", "--verify", "--quiet", f"refs/heads/{branch}"),
@@ -207,22 +287,86 @@ class GitWorktreeManager:
         return f"ai/{spec.task_id}/attempt-{spec.attempt}"
 
     def _validate_owned_worktree(self, worktree: WorktreeRef) -> Path:
-        expected = (
-            self._worktree_root
-            / worktree.task_id
-            / f"{worktree.role.value}-attempt-{worktree.attempt:02d}"
-        )
-        if worktree.path.resolve() != expected.resolve() or not expected.is_dir():
+        try:
+            spec = WorktreeSpec(
+                task_id=worktree.task_id,
+                role=worktree.role,
+                attempt=worktree.attempt,
+                source_revision=worktree.head_revision,
+            )
+        except (AttributeError, TypeError, ValueError) as error:
+            raise UnmanagedWorktree(str(worktree.path)) from error
+        expected = self._target_path(spec)
+        expected_branch = self._branch_name(spec) if spec.role is AgentRole.CODER else None
+        if worktree.path != expected or not expected.is_dir():
+            raise UnmanagedWorktree(str(worktree.path))
+        if worktree.branch != expected_branch or worktree.detached != (expected_branch is None):
             raise UnmanagedWorktree(str(worktree.path))
         try:
+            ref_revision = self._resolve_revision(worktree.head_revision)
+        except RevisionNotFound as error:
+            raise UnmanagedWorktree(str(worktree.path)) from error
+        if ref_revision != worktree.head_revision:
+            raise UnmanagedWorktree(str(worktree.path))
+        self._validate_target_containment(expected)
+        self._validate_target_has_no_symlinks(expected)
+        self._validate_registered_worktree(expected)
+        self._validate_role_git_state(expected, expected_branch=expected_branch)
+        return expected
+
+    def _validate_registered_worktree(self, path: Path) -> None:
+        try:
+            top_level = self._run_git(("rev-parse", "--show-toplevel"), cwd=path)
             common_directory = self._run_git(
-                ("rev-parse", "--path-format=absolute", "--git-common-dir"), cwd=expected
+                ("rev-parse", "--path-format=absolute", "--git-common-dir"), cwd=path
+            )
+            manager_common_directory = self._run_git(
+                ("rev-parse", "--path-format=absolute", "--git-common-dir"),
+                cwd=self._repository,
             )
         except GitWorkspaceError as error:
-            raise UnmanagedWorktree(str(worktree.path)) from error
-        if Path(common_directory).resolve() != (self._repository / ".git").resolve():
-            raise UnmanagedWorktree(str(worktree.path))
-        return expected
+            raise UnmanagedWorktree(str(path)) from error
+        if Path(top_level).resolve() != path.resolve():
+            raise UnmanagedWorktree(str(path))
+        if Path(common_directory).resolve() != Path(manager_common_directory).resolve():
+            raise UnmanagedWorktree(str(path))
+        if path.resolve() not in self._registered_worktree_paths():
+            raise UnmanagedWorktree(str(path))
+
+    def _registered_worktree_paths(self) -> set[Path]:
+        payload = self._run_git_bytes(
+            ("worktree", "list", "--porcelain", "-z"), cwd=self._repository
+        )
+        try:
+            fields = payload.decode("utf-8").split("\0")
+        except UnicodeDecodeError as error:
+            raise GitCommandError("Git returned a non-UTF-8 worktree path") from error
+        paths: set[Path] = set()
+        for field in fields:
+            if field.startswith("worktree "):
+                paths.add(Path(field.removeprefix("worktree ")).resolve())
+        return paths
+
+    def _validate_role_git_state(self, path: Path, *, expected_branch: str | None) -> None:
+        actual_branch = self._current_branch(path)
+        if actual_branch != expected_branch:
+            expected = expected_branch if expected_branch is not None else "detached HEAD"
+            observed = actual_branch if actual_branch is not None else "detached HEAD"
+            raise WorktreeIdentityDrift(
+                f"worktree role identity drift for {path}: expected {expected}, observed {observed}"
+            )
+
+    def _current_branch(self, path: Path) -> str | None:
+        completed = self._invoke_git(("symbolic-ref", "--quiet", "--short", "HEAD"), cwd=path)
+        if completed.returncode == 0:
+            branch = completed.stdout.strip()
+            if not branch:
+                raise GitCommandError("Git returned an empty symbolic branch")
+            return branch
+        if completed.returncode == 1:
+            return None
+        message = completed.stderr.strip() or "cannot inspect worktree branch"
+        raise GitCommandError(message)
 
     def _run_git(self, arguments: tuple[str, ...], *, cwd: Path) -> str:
         completed = self._invoke_git(arguments, cwd=cwd)

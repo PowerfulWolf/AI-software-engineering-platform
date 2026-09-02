@@ -17,6 +17,9 @@ from ai_software_engineer.git import (
     UnmanagedWorktree,
     UnsafeRepositoryConfiguration,
     WorktreeAlreadyExists,
+    WorktreeIdentityDrift,
+    WorktreeNotFound,
+    WorktreeRevisionDrift,
     WorktreeSpec,
 )
 
@@ -318,3 +321,215 @@ def test_external_checkout_filter_is_rejected_before_it_can_execute(tmp_path: Pa
         )
 
     assert not filter_sentinel.exists()
+
+
+def test_existing_worktree_can_be_recovered_idempotently_after_restart(tmp_path: Path) -> None:
+    repository = _create_fixture_repository(tmp_path)
+    revision = _git(repository, "rev-parse", "HEAD")
+    spec = WorktreeSpec(
+        task_id="task_fixture_recover",
+        role=AgentRole.QA,
+        attempt=2,
+        source_revision=revision,
+    )
+    worktree_root = tmp_path / "worktrees"
+    created = GitWorktreeManager(repository, worktree_root).create(spec)
+
+    restarted_manager = GitWorktreeManager(repository, worktree_root)
+    first = restarted_manager.recover(spec)
+    second = restarted_manager.recover(spec)
+
+    assert first == second == created
+    assert first.detached is True
+    assert first.branch is None
+    assert restarted_manager.inspect(first).head_revision == revision
+    assert _git(repository, "status", "--porcelain") == ""
+
+
+def test_recovery_preserves_dirty_worktree_evidence(tmp_path: Path) -> None:
+    repository = _create_fixture_repository(tmp_path)
+    spec = WorktreeSpec(
+        task_id="task_fixture_dirty_recover",
+        role=AgentRole.REVIEWER,
+        attempt=1,
+        source_revision=_git(repository, "rev-parse", "HEAD"),
+    )
+    worktree_root = tmp_path / "worktrees"
+    created = GitWorktreeManager(repository, worktree_root).create(spec)
+    evidence = created.path / "review-notes.txt"
+    evidence.write_text("retain after crash\n", encoding="utf-8")
+
+    restarted_manager = GitWorktreeManager(repository, worktree_root)
+    recovered = restarted_manager.recover(spec)
+
+    assert restarted_manager.inspect(recovered).changed_paths == ("review-notes.txt",)
+    assert evidence.read_text(encoding="utf-8") == "retain after crash\n"
+    with pytest.raises(DirtyWorktree):
+        restarted_manager.remove(recovered)
+    assert recovered.path.is_dir()
+
+
+def test_recovery_rejects_missing_and_unmanaged_targets(tmp_path: Path) -> None:
+    repository = _create_fixture_repository(tmp_path)
+    revision = _git(repository, "rev-parse", "HEAD")
+    worktree_root = tmp_path / "worktrees"
+    manager = GitWorktreeManager(repository, worktree_root)
+    missing_spec = WorktreeSpec(
+        task_id="task_fixture_missing_recover",
+        role=AgentRole.QA,
+        attempt=1,
+        source_revision=revision,
+    )
+
+    with pytest.raises(WorktreeNotFound):
+        manager.recover(missing_spec)
+
+    unmanaged_spec = WorktreeSpec(
+        task_id="task_fixture_unmanaged_recover",
+        role=AgentRole.QA,
+        attempt=1,
+        source_revision=revision,
+    )
+    unmanaged_target = worktree_root / "task_fixture_unmanaged_recover/qa-attempt-01"
+    unmanaged_target.parent.mkdir(parents=True)
+    subprocess.run(
+        ("git", "clone", "--quiet", str(repository), str(unmanaged_target)),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    with pytest.raises(UnmanagedWorktree):
+        manager.recover(unmanaged_spec)
+    assert unmanaged_target.is_dir()
+
+
+def test_recovery_rejects_revision_drift_without_modifying_the_worktree(
+    tmp_path: Path,
+) -> None:
+    repository = _create_fixture_repository(tmp_path)
+    base_revision = _git(repository, "rev-parse", "HEAD")
+    spec = WorktreeSpec(
+        task_id="task_fixture_revision_drift",
+        role=AgentRole.CODER,
+        attempt=1,
+        source_revision=base_revision,
+    )
+    worktree_root = tmp_path / "worktrees"
+    created = GitWorktreeManager(repository, worktree_root).create(spec)
+    (created.path / "README.md").write_text("candidate\n", encoding="utf-8")
+    _git(created.path, "add", "README.md")
+    _git(created.path, "commit", "-m", "unexpected uncheckpointed candidate")
+    drifted_revision = _git(created.path, "rev-parse", "HEAD")
+
+    with pytest.raises(WorktreeRevisionDrift, match="HEAD drift"):
+        GitWorktreeManager(repository, worktree_root).recover(spec)
+
+    assert created.path.is_dir()
+    assert _git(created.path, "rev-parse", "HEAD") == drifted_revision
+    assert _git(created.path, "branch", "--show-current") == created.branch
+
+
+def test_recovery_rejects_role_branch_drift_without_repairing_it(tmp_path: Path) -> None:
+    repository = _create_fixture_repository(tmp_path)
+    spec = WorktreeSpec(
+        task_id="task_fixture_identity_drift",
+        role=AgentRole.QA,
+        attempt=1,
+        source_revision=_git(repository, "rev-parse", "HEAD"),
+    )
+    worktree_root = tmp_path / "worktrees"
+    created = GitWorktreeManager(repository, worktree_root).create(spec)
+    _git(created.path, "switch", "-c", "rogue-qa-branch")
+
+    with pytest.raises(WorktreeIdentityDrift, match="role identity drift"):
+        GitWorktreeManager(repository, worktree_root).recover(spec)
+
+    assert created.path.is_dir()
+    assert _git(created.path, "branch", "--show-current") == "rogue-qa-branch"
+
+
+def test_recovery_rejects_a_movable_source_ref(tmp_path: Path) -> None:
+    repository = _create_fixture_repository(tmp_path)
+    revision = _git(repository, "rev-parse", "HEAD")
+    worktree_root = tmp_path / "worktrees"
+    manager = GitWorktreeManager(repository, worktree_root)
+    created = manager.create(
+        WorktreeSpec(
+            task_id="task_fixture_movable_ref",
+            role=AgentRole.REVIEWER,
+            attempt=1,
+            source_revision=revision,
+        )
+    )
+
+    with pytest.raises(WorktreeRevisionDrift, match="durable full commit SHA"):
+        manager.recover(
+            WorktreeSpec(
+                task_id="task_fixture_movable_ref",
+                role=AgentRole.REVIEWER,
+                attempt=1,
+                source_revision="HEAD",
+            )
+        )
+
+    assert created.path.is_dir()
+    assert _git(created.path, "rev-parse", "HEAD") == revision
+
+
+def test_recovery_rejects_new_external_filter_before_inspection(tmp_path: Path) -> None:
+    repository = _create_fixture_repository(tmp_path)
+    spec = WorktreeSpec(
+        task_id="task_fixture_recovery_filter",
+        role=AgentRole.QA,
+        attempt=1,
+        source_revision=_git(repository, "rev-parse", "HEAD"),
+    )
+    worktree_root = tmp_path / "worktrees"
+    created = GitWorktreeManager(repository, worktree_root).create(spec)
+    filter_sentinel = tmp_path / "recovery-filter-executed"
+    filter_program = tmp_path / "recovery-filter"
+    filter_program.write_text(
+        f"#!/bin/sh\ncat\nprintf executed > {filter_sentinel}\n",
+        encoding="utf-8",
+    )
+    filter_program.chmod(0o755)
+    _git(repository, "config", "filter.unsafe.clean", str(filter_program))
+
+    with pytest.raises(UnsafeRepositoryConfiguration):
+        GitWorktreeManager(repository, worktree_root).recover(spec)
+
+    assert created.path.is_dir()
+    assert not filter_sentinel.exists()
+
+
+@pytest.mark.parametrize(
+    "identity_case",
+    ("branch", "detached", "revision"),
+)
+def test_inspection_rejects_forged_reference_identity(
+    tmp_path: Path,
+    identity_case: str,
+) -> None:
+    repository = _create_fixture_repository(tmp_path)
+    manager = GitWorktreeManager(repository, tmp_path / "worktrees")
+    created = manager.create(
+        WorktreeSpec(
+            task_id="task_fixture_forged_ref",
+            role=AgentRole.CODER,
+            attempt=1,
+            source_revision=_git(repository, "rev-parse", "HEAD"),
+        )
+    )
+
+    if identity_case == "branch":
+        forged = replace(created, branch="unexpected")
+    elif identity_case == "detached":
+        forged = replace(created, branch=None, detached=False)
+    else:
+        forged = replace(created, head_revision="HEAD")
+
+    with pytest.raises(UnmanagedWorktree):
+        manager.inspect(forged)
+
+    assert created.path.is_dir()

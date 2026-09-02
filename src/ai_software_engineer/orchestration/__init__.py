@@ -4,6 +4,14 @@ from ai_software_engineer.orchestration.context import (
     FileRunContextBuilder,
     RunContextBuilder,
 )
+from ai_software_engineer.orchestration.planned_delivery import (
+    DispatchTaskConflict,
+    DispatchTaskMaterializer,
+    ExecutionPlanAgentAdapter,
+    PlannedDeliveryError,
+    PlannedDeliveryLineageError,
+    PlannedRoleAgentAdapter,
+)
 from ai_software_engineer.orchestration.retry import (
     BlockedResult,
     RetryAction,
@@ -41,11 +49,17 @@ __all__ = [
     "BlockedResult",
     "DeliveryContractViolation",
     "DeliveryResult",
+    "DispatchTaskConflict",
+    "DispatchTaskMaterializer",
+    "ExecutionPlanAgentAdapter",
     "FileRunContextBuilder",
     "IllegalTransition",
     "OrchestrationError",
     "OrchestrationIdentityFactory",
     "OrchestratorConfigurationError",
+    "PlannedDeliveryError",
+    "PlannedDeliveryLineageError",
+    "PlannedRoleAgentAdapter",
     "RetryAction",
     "RetryClassification",
     "RetryDecision",

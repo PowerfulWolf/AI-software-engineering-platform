@@ -39,10 +39,11 @@ export OPENAI_API_KEY='...'
 `api_key_required` 默认为 `true`。只有离线 fake adapter 测试才可以显式设为 `false`；
 CLI 仍然使用真实 OpenAI-compatible adapter，不会因为该开关自动创建 fake 模型。
 
-路径可以是相对当前工作目录的路径，也可以是绝对路径。T022 的 Python
-`RuntimeWorkspaceBinding.compose_runtime_config(...)` 已能把全部 paths 绑定到 T017 sidecar；
-当前 CLI 尚未自动调用它。通过 CLI 接入外部项目时仍须显式配置 sidecar 绝对路径，不得在目标
-项目 cwd 中沿用 `.ase/state.sqlite3` 或 `artifacts/*` 默认值。`RuntimeSession` 会打开 SQLite
+路径可以是相对当前工作目录的路径，也可以是绝对路径。低层 `ase task run` 仍要求显式 Runtime
+配置；不得在外部目标项目 cwd 中误用 `.ase/state.sqlite3` 或 `artifacts/*` 默认值。T022 的
+`RuntimeWorkspaceBinding.compose_runtime_config(...)` 能把全部 paths 绑定到 T017 sidecar；T032 的
+`ase project ...` application facade 要求宿主自动调用这类 composition，不把内部路径暴露为每次
+接单参数。`RuntimeSession` 会打开 SQLite
 Task/StateEvent、不可变 Artifact、Context manifest、Evaluation event store 和独立的
 `FileEvidenceStore`。`evidence` 保存 command/diff/test/usage records，`runs` 保存封存 manifest；
 两者不能与 ArtifactStore root 重叠。`handoffs` 路径由 `ase handoff build` 使用。目录由各自的
@@ -116,7 +117,8 @@ T018 后，上述 `role_overrides` 和 `RuntimeConfig.agent_definitions()` 只�
 T022 的 `RuntimeWorkforceResolver` 已从 AgentProfile、RoleAssignment、active TaskLease、
 ModelSelection、CompiledSpec、Context 与 project policy 解析同一结构；具体 model 按 AgentRun
 分配，不永久写入 AgentProfile。`RuntimeSession` 接受该 resolved definitions 和绑定 project root，
-并拒绝 Task.repository 漂移。当前 CLI 还不会创建 Assignment/Lease，也不会跨 Task 调度。
+并拒绝 Task.repository 漂移。T032 的 Project Manager 入口消费 T031 已提交的 Assignment/Lease；低层
+`ase task run` 兼容命令仍不会创建 Assignment/Lease 或跨 Task 调度。
 
 ## 明确边界
 
@@ -134,4 +136,6 @@ worktree 根目录，调用前复用 `WorkspacePolicy.authorize_command`，只�
 T016 的 `RoleWorktreeSession` 进一步把 `WorktreeSpec`、同角色 `AgentDefinition`、
 `GitWorkspace` 和 `SubprocessCommandExecutor` 组合成可复用 binding：Coder 获得 attempt
 branch，QA/Reviewer 获得 candidate SHA 的 detached worktree；`close` 复用 dirty-worktree
-保护。它仍是 application seam，不会自动运行模型输出、改变状态或执行 merge。
+保护。T032 新增 `DispatchRoleWorktreeCoordinator`，在创建或恢复 worktree 前核对 exact dispatch
+Agent/model/provider/Assignment/Lease，并要求 QA/Reviewer 使用同一个 full candidate SHA。该 seam
+不会自动运行模型输出、改变状态或执行 merge。

@@ -24,6 +24,21 @@ from ai_software_engineer.evaluation import (
     HandoffError,
 )
 from ai_software_engineer.orchestration import OrchestrationError
+from ai_software_engineer.project_manager.delivery import (
+    ApproveProductSpec,
+    ReplyToProduct,
+    ResumeProjectDelivery,
+    StartProjectDelivery,
+    UnifiedProjectEntryError,
+)
+from ai_software_engineer.project_manager.delivery_checkpoint import (
+    DeliveryId,
+    ProjectDeliveryCheckpointError,
+)
+from ai_software_engineer.project_manager.entrypoint import (
+    ProjectEntryNotConfigured,
+    project_entry,
+)
 from ai_software_engineer.runtime import (
     RuntimeConfig,
     RuntimeConfigurationError,
@@ -43,9 +58,11 @@ evaluation_app = typer.Typer(help="Recompute replayable evaluation reports.", no
 handoff_app = typer.Typer(
     help="Build human-readable terminal delivery handoffs.", no_args_is_help=True
 )
+project_app = typer.Typer(help="Start and resume Project Manager deliveries.", no_args_is_help=True)
 app.add_typer(task_app, name="task")
 app.add_typer(evaluation_app, name="evaluation")
 app.add_typer(handoff_app, name="handoff")
+app.add_typer(project_app, name="project")
 
 DEFAULT_DATABASE = Path(".ase/state.sqlite3")
 DEFAULT_ARTIFACTS = Path("artifacts/runs")
@@ -55,6 +72,16 @@ DEFAULT_HANDOFFS = Path("artifacts/handoffs")
 
 class CliInputError(ValueError):
     """Raised when a CLI command's explicit input contract is not met."""
+
+
+_PROJECT_ERRORS = (
+    OSError,
+    ValidationError,
+    ValueError,
+    UnifiedProjectEntryError,
+    ProjectDeliveryCheckpointError,
+    ProjectEntryNotConfigured,
+)
 
 
 def _version_callback(show_version: bool) -> None:
@@ -161,6 +188,101 @@ def run_task(
     ) as error:
         _fail(error)
     _emit({"case_id": result.case_id, "result": result.result.to_wire()})
+
+
+@project_app.command("start")
+def start_project_delivery(
+    project_root: Annotated[Path, typer.Argument(help="Absolute target Git project root.")],
+    requirement: Annotated[
+        str, typer.Option("--requirement", "-r", help="Requirement to clarify and deliver.")
+    ],
+    title: Annotated[
+        str, typer.Option("--title", help="Short Product discovery title.")
+    ] = "Software delivery request",
+) -> None:
+    """Prepare a project and run Product discovery to its human gate."""
+    try:
+        result = project_entry().start(
+            StartProjectDelivery(
+                project_root=str(project_root),
+                requirement=requirement,
+                title=title,
+            )
+        )
+    except _PROJECT_ERRORS as error:
+        _fail(error)
+    _emit(result.to_wire())
+
+
+@project_app.command("reply")
+def reply_to_product(
+    delivery_id: Annotated[DeliveryId, typer.Argument(help="Delivery ID.")],
+    message: Annotated[str, typer.Option("--message", "-m", help="Answer to the Product Agent.")],
+    checkpoint: Annotated[
+        str, typer.Option("--checkpoint", help="Exact current checkpoint SHA-256.")
+    ],
+) -> None:
+    """Add one human Product clarification and run one bounded Product turn."""
+    try:
+        result = project_entry().reply(
+            ReplyToProduct(
+                delivery_id=delivery_id,
+                expected_checkpoint_sha256=checkpoint,
+                message=message,
+            )
+        )
+    except _PROJECT_ERRORS as error:
+        _fail(error)
+    _emit(result.to_wire())
+
+
+@project_app.command("approve")
+def approve_product_spec(
+    delivery_id: Annotated[DeliveryId, typer.Argument(help="Delivery ID.")],
+    checkpoint: Annotated[
+        str, typer.Option("--checkpoint", help="Exact Product checkpoint SHA-256.")
+    ],
+    approval_reference: Annotated[
+        str | None,
+        typer.Option("--approval-reference", help="Trusted external approval reference."),
+    ] = None,
+) -> None:
+    """Approve the exact ProductSpec and continue the serial delivery."""
+    try:
+        result = project_entry().approve(
+            ApproveProductSpec(
+                delivery_id=delivery_id,
+                expected_checkpoint_sha256=checkpoint,
+                approval_reference=(approval_reference or f"cli-product-approval:{checkpoint}"),
+            )
+        )
+    except _PROJECT_ERRORS as error:
+        _fail(error)
+    _emit(result.to_wire())
+
+
+@project_app.command("resume")
+def resume_project_delivery(
+    delivery_id: Annotated[DeliveryId, typer.Argument(help="Delivery ID.")],
+) -> None:
+    """Reconcile native facts and continue the first incomplete automatic stage."""
+    try:
+        result = project_entry().resume(ResumeProjectDelivery(delivery_id=delivery_id))
+    except _PROJECT_ERRORS as error:
+        _fail(error)
+    _emit(result.to_wire())
+
+
+@project_app.command("status")
+def show_project_delivery(
+    delivery_id: Annotated[DeliveryId, typer.Argument(help="Delivery ID.")],
+) -> None:
+    """Show the latest verified delivery checkpoint."""
+    try:
+        result = project_entry().status(delivery_id)
+    except _PROJECT_ERRORS as error:
+        _fail(error)
+    _emit(result.to_wire())
 
 
 @evaluation_app.command("report")

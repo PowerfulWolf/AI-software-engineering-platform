@@ -75,12 +75,12 @@ Reviewer 和可选 Reporter 通过 immutable stage/delivery artifacts 协作。P
 Execution Plan、团队分配和串行交付；流程可 resume，目标项目保持干净，规范冲突与失败有明确人工
 checkpoint。T028 已完成上游 typed contract 基线，T029 已完成 Project Manager
 preparation seam，T030 已完成 Product Agent 需求澄清、人工确认与崩溃恢复；T031 已完成
-Designer/Planner、只读资源预演与 Project Manager 原子 dispatch；T032 负责统一入口组合，
-T033 暂不执行。
+Designer/Planner、只读资源预演与 Project Manager 原子 dispatch；T032 已完成统一入口、durable intake/
+checkpoint、Dispatch→Task/Plan bridge 与严格 role worktree consumer。T033 暂不执行。
 
 T029 已将“只给绝对项目目录”封装为 Project Manager Agent 的 Python Skill seam：
 注册/重开 sidecar、发现 ProjectProfile、绑定组织、编译 task-free baseline，或在项目级
-规范冲突时返回 `WAITING_HUMAN`。统一 CLI 用户入口仍属于 T032。
+规范冲突时返回 `WAITING_HUMAN`。T032 已把它组合进统一 CLI/application 入口。
 
 T030 在 prepare 结果之上增加 task-free Product context、Product Agent adapter 与
 `ProductDiscoveryService`。对话、ProjectRequest 修订、ProductSpec/Approval、checkpoint 与
@@ -122,13 +122,13 @@ operation receipt 均为 append-only 事实；只有 trusted human verifier 解�
 | T029（已完成） | Project Manager Agent Skills | `prepare_project`、project baseline、typed Skill facade | 只给目录完成 prepare；冲突 WAITING_HUMAN；目标项目零污染 | T028 |
 | T030（已完成） | Product Agent 与确认循环 | product role/context/adapter、版本化 ProductSpec/Approval、恢复 checkpoint | Agent 不能自批；只信任已验证人工决策；修改生成新版本；对话/操作可重放 | T029 |
 | T031（已完成） | Designer/Planner 与调度 Skills | TechnicalDesign/ExecutionPlan producer、preview/commit dispatch | Planner preview 只读；Project Manager commit 重新校验并提交分配 | T030 |
-| T032 | 统一项目接单入口 | CLI/application facade、resume、跨语言 E2E | 项目目录 + 需求走通 prepare→delivery，不手拼 Runtime paths | T031 |
+| T032（已完成） | 统一项目接单入口 | CLI/application facade、resume、跨语言 E2E | 项目目录 + 需求走通 prepare→delivery，不手拼 Runtime paths | T031 |
 | T033（暂停） | Reporter 决策与实现 | deterministic report 或 read-only Reporter Agent | 不创造事实/改 verdict/隐藏失败；输出可追溯 sources | T032 |
 
 ## 第一批任务的执行顺序
 
-已完成：`T001 → ... → T031`。当前 M8 的下一个主任务是 `T032`。T033 暂停；HTTP/SSE、
-后台队列和更复杂容量投影不先于统一接单入口。
+已完成：`T001 → ... → T032`。T033 暂停；当前没有自动启动下一个 Task。生产 team host、HTTP/SSE、
+后台队列和更复杂容量投影需要另行立项，不把 offline fake-team 验收冒充为真实 provider 已完成。
 
 每完成一个任务，都先运行 contract tests，再更新 `.trellis/spec/`。T019 保持单进程、有界、
 Lease 驱动的纯跨 Task 调度决策；禁止把单 Task 改成并行 DAG，也不引入消息队列或向量库。

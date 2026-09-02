@@ -70,9 +70,43 @@ ase handoff build task_example_001 \
 只有 `DONE` 或 `BLOCKED` Task 可以生成 handoff。成功输出包含 `handoff_id`、摘要哈希和
 JSON/Markdown 路径；命令不会执行 review command、merge 或修改终态 Task。
 
+## 统一项目接单
+
+T032 提供面向 Project Manager 的业务入口；一次接单不再要求用户手工传 database、artifact、context
+或 worktree 路径：
+
+```bash
+ase project start /absolute/path/to/project \
+  --requirement "Add the approved feature"
+
+ase project reply delivery_xxx \
+  --checkpoint <current-checkpoint-sha256> \
+  --message "The expected behavior is ..."
+
+ase project approve delivery_xxx \
+  --checkpoint <current-checkpoint-sha256>
+
+ase project resume delivery_xxx
+ase project status delivery_xxx
+```
+
+`start` 自动 prepare/reopen 外置 project sidecar，并运行一个有界 Product turn；它在需要澄清或
+ProductSpec 等待批准时返回 checkpoint。`reply` 和 `approve` 都必须引用 exact current checkpoint，
+旧页面或重复命令不能覆盖新事实。批准后 Project Manager 自动推进 Designer、Planner、dispatch 与
+现有串行 Delivery；进程中断后使用 `resume`。
+
+`ase` 的 application host 必须在启动时通过 `configure_project_entry(...)` 绑定 organization-owned
+team composition，包括 Agent adapters、policy 和平台 workspace root。这是一次部署配置，不是每个需求
+都要用户拼装的参数；未绑定时命令以退出码 2 fail closed。仓库的 offline E2E 使用 deterministic fake
+team 验证完整组合，不把 fake 隐式设为生产默认值。
+
 ## 当前边界
 
 T014 的 `task run` 仍只做单仓库、单 Task、串行 Coder → QA → Reviewer。它不创建复杂 DAG、
 消息队列、向量库或容器 sandbox，不自动 merge/deploy；Git worktree 和最终合并继续由
 后续 composition/human boundary 负责。CLI 不直接修改状态、verdict、artifact 或执行
 merge。
+
+`project` 入口也不会自动 merge/deploy，且不会把 fake Agent 当作真实团队。生产宿主需要明确绑定
+真实 provider/team composition；Provider 的 secret 仍只来自宿主环境，不写入 checkpoint、sidecar
+或 CLI 输出。

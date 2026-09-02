@@ -123,3 +123,26 @@ tokenized argv，仍受命令、环境、cwd、timeout 和输出边界约束。
 `GitWorkspace.remove`：dirty worktree 抛 `DirtyWorktree` 并保留 evidence，clean worktree
 才移除；Coder branch 和 candidate commit 不被清理。session 不修改 Task/Artifact 状态，也不
 负责决定命令是否使 QA PASS 或 Reviewer APPROVE。
+
+## Dispatch 绑定与严格恢复
+
+T032 的 `DispatchRoleWorktreeCoordinator` 不接受调用方临时指定 Agent/model。它从已通过完整性校验的
+`DispatchCommitRecord` 找到每个 role 的 Assignment、TaskLease 与 ModelSelection，再与即将执行的
+`AgentDefinition` 比较 agent ID、role、provider、model、task 和 attempt；任何漂移都在 checkout 前
+拒绝。
+
+```python
+coder = coordinator.open_coder(dispatch, resolved_definitions)
+# Coder 提交并形成 immutable full SHA 后：
+verification = coordinator.open_verifiers(
+    dispatch,
+    candidate_revision,
+    resolved_definitions,
+)
+assert verification.qa.worktree.head_revision == verification.reviewer.worktree.head_revision
+```
+
+Coder 必须从 Task `base_ref` 的 full commit SHA 创建 branch worktree；QA/Reviewer 必须从同一个 full
+candidate SHA 创建两个独立 detached worktree。`recover=True` 不做 checkout/reset/clean，而是要求
+现有路径、Git common-dir、role/attempt layout、branch/detached 状态和 HEAD 全部吻合；dirty 文件作为
+中断 evidence 保留。恢复检查失败时上层进入人工处理，不能悄悄创建另一份环境继续。

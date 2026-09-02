@@ -19,8 +19,9 @@ WorkQueue
 ```
 
 T019 已实现前面的纯 Scheduler/ModelRouter 决策，T022 已实现将已持久化 workforce、CompiledSpec
-和 workspace binding 解析为 `AgentRunAllocation + AgentDefinition`。当前尚缺持久化 WorkQueue
-循环与 CLI composition，因此 `RuntimeSession` 仍一次显式运行一个 Task。
+和 workspace binding 解析为 `AgentRunAllocation + AgentDefinition`。T031 原子提交三角色 allocation，
+T032 再把它组合进统一 Project Manager 入口；`RuntimeSession` 仍一次只运行一个 Task，持久化
+WorkQueue 后台循环尚未实现。
 
 ## 2. 核心流程
 
@@ -147,3 +148,20 @@ Artifact，识别最新 plan/implementation/QA/Review，并从最近合法状态
 ## 6. 交付包
 
 `deliver()` 生成一个只读索引：Task、base_ref、candidate_sha、diff 路径、四类 artifact、测试命令/输出和未解决风险。交付包不执行 merge；人类或后续发布流程决定是否合并。
+
+## 7. T032 统一入口的上层推进
+
+`UnifiedProjectEntryService` 位于 TaskOrchestrator 之上，不成为第二个 TaskStatus writer。它只推进
+Project delivery stage，并把每个已验证 native handoff 的 ID/digest 写入 append-only checkpoint：
+
+```text
+durable intake → prepare → Product reply/approval gate
+  → Designer → Planner → atomic dispatch
+  → exact Task materialization → RetryingOrchestrator
+  → DONE/BLOCKED checkpoint
+```
+
+组织 `ExecutionPlan` 已完成规划，所以 Delivery 的 PlanArtifact 由 `ExecutionPlanAgentAdapter` 确定性
+materialize；现有 Orchestrator 仍负责 seal/store 与 Task transition，但不会再次做产品、技术或资源
+规划。任何阶段中断后，`resume` 先通过 backend reconcile 读取原生事实，再从 checkpoint 的
+`next_action` 继续；它不从共享聊天或 Agent 内存推断进度。

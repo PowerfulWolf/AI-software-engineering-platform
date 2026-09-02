@@ -370,8 +370,8 @@ identity collision、symlink/path escape 或同一项目改内容，必须返回
 profile/binding/baseline 重做完整性验证并与传入 checkpoint exact compare。
 `advance_stage` 只接受与目标阶段完全一致的 artifact prefix，返回绑定所有输入 digest 的
 `StageAdvanceAuthorization`。它不修改 Product/Design/Plan，不写 verdict，也不代替后续
-Task state machine。T029 的这一能力当前是 Python application seam；将它暴露为“项目目录 +
-需求”的统一 CLI 入口是 T032。
+Task state machine。T029 的能力由 T032 通过 `UnifiedProjectEntryService` 暴露为“项目目录 + 需求”的
+统一 CLI/application 入口。
 
 ## 11. Product Agent 需求澄清与人工确认（T030）
 
@@ -549,8 +549,8 @@ handoff 和 workforce snapshot CAS，并以单个 commit record 作为三组 Ass
 `FileDispatchCommitStore` 使用 digest envelope、dirfd + `O_NOFOLLOW`、exclusive hard-link publish 和
 inode/root 校验；相同 record 重放幂等，changed identity、篡改、symlink/path race 全部拒绝。
 
-当前 commit record 是原子 dispatch bundle，并未直接写入现有 TaskRepository 或启动 Delivery
-runtime；T032 的统一项目入口负责把该 bundle 接到 durable runtime composition。Planner preview
+T031 的 commit record 本身是原子 dispatch bundle；T032 由 `DispatchTaskMaterializer` 将其中的 NEW
+Task exact-create-or-compare 到现有 TaskRepository，并由统一入口启动 Delivery。Planner preview
 不能代替 commit，Project Manager commit 也不授权自动 merge 或部署。
 
 ### T031 失败矩阵
@@ -577,3 +577,26 @@ T031 的 canonical wire contracts 是 `schemas/technical-design.schema.json`、
 `schemas/planner-agent-run.schema.json`、`schemas/planner-preview.schema.json` 和
 `schemas/dispatch-commit.schema.json`。所有跨进程输入必须先通过对应 Schema 与 strict Pydantic
 `to_wire()` round-trip，不能用裸 `dict` 绕过 typed contract。
+
+## 13. 统一项目接单与恢复（T032）
+
+`UnifiedProjectEntryService` 固定组合 prepare→Product gate→Designer→Planner→dispatch→delivery，公开
+`start/reply/approve/resume/status`。CLI 只接收绝对项目目录、需求、Product 消息和 exact checkpoint；
+内部 Runtime paths 由 application host 从 organization workspace 与 project sidecar 组合。
+
+首次 start 在 stage checkpoint 之外 exact-create `ProjectDeliveryIntake`，保存原始目录、标题、需求与
+提交时间。因此进程在 Product 原生事实产生前中断，`resume` 仍能重放完全相同的 Product command。
+`ProjectDeliveryCheckpoint` 是连续的 append-only hash chain，只保存 native preparation/Product/
+Design/Plan/Dispatch/Task references 与 digests；人工 reply/approve 使用旧 checkpoint 时必须 zero
+effects。可预期的 native stage 失败由 backend 分类为 `DeliveryBackendFailure`，只把 typed code 与安全
+摘要写入 BLOCKED checkpoint；未分类异常保留当前 checkpoint 供 resume。应用宿主未调用
+`configure_project_entry(...)` 时 CLI 明确失败，不会默选 fake Agent。
+
+Dispatch 到 Delivery 的 bridge 有三个约束：`DispatchTaskMaterializer` 只允许 NEW Task exact create 或
+合法已推进 Task 的 immutable replay；`ExecutionPlanAgentAdapter` 只把 approved organization plan 机械
+转换为 PlanArtifact，不二次规划；`DispatchRoleWorktreeCoordinator` 必须让 Agent/model/provider 与
+dispatch allocation 完全一致。Coder 在 frozen base SHA 的 branch worktree 执行，QA 和 Reviewer 在
+同一 full candidate SHA 的独立 detached worktree 执行；recovery 核对 path、common-dir、role、attempt、
+branch/detached 与 HEAD，dirty 现场不得清理。
+
+完整 executable contract、错误矩阵与必测项见 `.trellis/spec/core/contracts.md` 第 15 节。

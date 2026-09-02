@@ -20,10 +20,14 @@ from ai_software_engineer.git.worktree import (
     GitWorktreeManager,
     InvalidRepository,
     InvalidWorktreeRoot,
+    RecoverableGitWorkspace,
     RevisionNotFound,
     UnmanagedWorktree,
     UnsafeRepositoryConfiguration,
     WorktreeAlreadyExists,
+    WorktreeIdentityDrift,
+    WorktreeNotFound,
+    WorktreeRevisionDrift,
 )
 
 __all__ = [
@@ -37,13 +41,17 @@ __all__ = [
     "InvalidRepository",
     "InvalidWorktreeRoot",
     "PathPolicyViolation",
+    "RecoverableGitWorkspace",
     "RevisionNotFound",
     "UnmanagedWorktree",
     "UnsafeRepositoryConfiguration",
     "WorkspacePolicy",
     "WorkspacePolicyError",
     "WorktreeAlreadyExists",
+    "WorktreeIdentityDrift",
+    "WorktreeNotFound",
     "WorktreeRef",
+    "WorktreeRevisionDrift",
     "WorktreeSnapshot",
     "WorktreeSpec",
 ]

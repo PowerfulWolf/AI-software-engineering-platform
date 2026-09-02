@@ -103,6 +103,13 @@ CASES = (
         ("java", "-version"),
     ),
     TargetProjectCase(
+        ProjectLanguage.CPP,
+        BuildSystem.CMAKE,
+        "src/hello.cpp",
+        "cmake",
+        ("cmake", "--version"),
+    ),
+    TargetProjectCase(
         ProjectLanguage.GO,
         BuildSystem.GO,
         "main.go",
