@@ -1,0 +1,5 @@
+{"path":".trellis/spec/core/index.md","reason":"Core pre-development and quality checklist."}
+{"path":".trellis/spec/core/architecture.md","reason":"Production composition and cross-layer boundaries."}
+{"path":".trellis/spec/core/contracts.md","reason":"Agent, artifact, tool, evidence, and security contracts."}
+{"path":".trellis/spec/core/python-runtime.md","reason":"Typed Python adapters, configuration, and quality rules."}
+{"path":"AGENTS.md","reason":"Organization invariants and v0.1 hard boundaries."}

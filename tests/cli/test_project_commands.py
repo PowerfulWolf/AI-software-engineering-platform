@@ -20,7 +20,7 @@ def test_project_commands_expose_only_business_inputs() -> None:
     assert "--contexts" not in result.stdout
 
 
-def test_unconfigured_application_host_fails_without_traceback(tmp_path: Path) -> None:
+def test_missing_production_config_fails_without_traceback(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
 
@@ -30,5 +30,5 @@ def test_unconfigured_application_host_fails_without_traceback(tmp_path: Path) -
     )
 
     assert result.exit_code == 2
-    assert "team runtime is not configured" in result.stderr
+    assert "cannot load production configuration" in result.stderr
     assert "Traceback" not in result.stderr

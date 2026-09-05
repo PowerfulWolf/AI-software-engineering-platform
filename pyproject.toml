@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
   "pydantic>=2,<3",
+  "pymysql>=1.1,<2",
   "typer>=0.12,<1",
 ]
 
@@ -26,6 +27,7 @@ dev = [
   "pytest>=8,<10",
   "ruff>=0.8,<1",
   "types-jsonschema>=4,<5",
+  "types-pymysql>=1.1,<2",
 ]
 
 [tool.hatch.version]
@@ -45,6 +47,9 @@ files = ["src", "tests"]
 [tool.pytest.ini_options]
 addopts = ["-ra", "--strict-config", "--strict-markers"]
 testpaths = ["tests"]
+markers = [
+  "mysql: integration tests requiring ASE_TEST_MYSQL_DSN",
+]
 
 [tool.ruff]
 target-version = "py312"

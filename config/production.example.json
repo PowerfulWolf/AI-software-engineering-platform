@@ -1,0 +1,37 @@
+{
+  "schema_version": "v0.1",
+  "platform_root": "/absolute/path/to/ase-data",
+  "database": {
+    "backend": "mysql",
+    "dsn_env": "ASE_MYSQL_DSN"
+  },
+  "model_routes": [
+    {
+      "provider": "codex",
+      "model": "gpt-5.5",
+      "kind": "codex_cli",
+      "reasoning_effort": "medium",
+      "enabled": true
+    },
+    {
+      "provider": "qwen",
+      "model": "YOUR_QWEN_MODEL",
+      "kind": "responses",
+      "endpoint": "https://YOUR_WORKSPACE_ID.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/responses",
+      "api_key_env": "DASHSCOPE_API_KEY",
+      "reasoning_effort": "medium",
+      "enabled": false
+    },
+    {
+      "provider": "deepseek",
+      "model": "YOUR_DEEPSEEK_MODEL",
+      "kind": "responses",
+      "endpoint": "https://api.deepseek.com/v1/responses",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "reasoning_effort": "medium",
+      "enabled": false
+    }
+  ],
+  "codex_executable": "codex",
+  "live_model_execution": false
+}

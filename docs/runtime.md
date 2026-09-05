@@ -1,5 +1,9 @@
 # Runtime 配置与任务执行
 
+> 日常使用请从 [`production-setup.md`](production-setup.md) 的 `ase project ...` 开始。Production Team
+> Host 自动使用 MySQL、组织 Workforce、项目 sidecar、GPT-5.5 路由和隔离 worktree，不需要手工构造
+> 本文的 RuntimeConfig。本文描述的是可独立调试的低层 Task Runtime。
+
 T014 把已经通过测试的 Domain、Context、Artifact、Evaluation 和 `RetryingOrchestrator`
 组装成一个可运行的 composition root。Runtime 配置属于操作者和部署环境，不是 Agent
 artifact；真实模型凭据只从进程环境读取。
@@ -117,8 +121,9 @@ T018 后，上述 `role_overrides` 和 `RuntimeConfig.agent_definitions()` 只�
 T022 的 `RuntimeWorkforceResolver` 已从 AgentProfile、RoleAssignment、active TaskLease、
 ModelSelection、CompiledSpec、Context 与 project policy 解析同一结构；具体 model 按 AgentRun
 分配，不永久写入 AgentProfile。`RuntimeSession` 接受该 resolved definitions 和绑定 project root，
-并拒绝 Task.repository 漂移。T032 的 Project Manager 入口消费 T031 已提交的 Assignment/Lease；低层
-`ase task run` 兼容命令仍不会创建 Assignment/Lease 或跨 Task 调度。
+并拒绝 Task.repository 漂移。T032 的 Project Manager 入口消费 T031 已提交的 Assignment/Lease；T034
+的 Production Team Host 已将该入口绑定到 MySQL 与真实 Codex/Responses adapters。低层
+`ase task run` 兼容命令仍不会创建 Assignment/Lease、准备项目或跨 Task 调度。
 
 ## 明确边界
 
@@ -137,5 +142,7 @@ T016 的 `RoleWorktreeSession` 进一步把 `WorktreeSpec`、同角色 `AgentDef
 `GitWorkspace` 和 `SubprocessCommandExecutor` 组合成可复用 binding：Coder 获得 attempt
 branch，QA/Reviewer 获得 candidate SHA 的 detached worktree；`close` 复用 dirty-worktree
 保护。T032 新增 `DispatchRoleWorktreeCoordinator`，在创建或恢复 worktree 前核对 exact dispatch
-Agent/model/provider/Assignment/Lease，并要求 QA/Reviewer 使用同一个 full candidate SHA。该 seam
-不会自动运行模型输出、改变状态或执行 merge。
+Agent/model/provider/Assignment/Lease，并要求 QA/Reviewer 使用同一个 full candidate SHA。T034 的
+production delivery adapter 现在消费该 seam，动态为 Coder 创建 branch worktree，并让 QA/Reviewer
+在 exact candidate SHA 的独立 detached worktree 中运行；完成后只清理干净 worktree，dirty 现场保留。
+该路径仍不会执行 merge/deploy。

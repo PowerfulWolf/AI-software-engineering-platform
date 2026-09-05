@@ -8,7 +8,8 @@ v0.1 解决一个窄而完整的问题：在已有 Git 项目中，把一条需�
 
 - 一个 Task 只绑定一个 repository 和一个 base ref；
 - 一个 TaskOrchestrator 实例一次只推进一个 Task，Task 内角色保持串行；
-- 组织级 PortfolioScheduler 可以为多个隔离 Task 产生有界分配决策；持久化队列循环尚未接入 CLI Runtime；
+- Project Manager 通过同一 Scheduler/ModelRouter engine 预演并提交 Assignment/Lease；后台持久化队列
+  循环尚未实现；
 - Agent 不直接互相调用，所有交互经过 Orchestrator 和 artifact store；
 - 人类是需求来源和最终升级出口；v0.1 不自动向保护分支 push/merge。
 
@@ -19,8 +20,9 @@ v0.1 解决一个窄而完整的问题：在已有 Git 项目中，把一条需�
 Control Plane 分为两个 seam。`PortfolioScheduler` 管理组织 WorkQueue、Agent 容量、Assignment、
 Lease 和 ModelSelection，但不迁移 Task 交付状态；`TaskOrchestrator` 是唯一可以迁移一个 Task
 状态的模块，负责检查前置条件、启动 Agent、验证 artifact、决定重试或终局升级。T010 的
-`RetryingOrchestrator` 是当前 TaskOrchestrator 实现；T019 已交付纯 Scheduler/ModelRouter seam，
-由后续 application service 负责持久化其 Assignment、Lease 和 ModelSelection 决策。
+`RetryingOrchestrator` 是当前 TaskOrchestrator 实现；T019 提供纯 Scheduler/ModelRouter seam，T031
+的 dispatch service 与 T034 的 MySQL authority 已负责重新校验并原子提交 Assignment、Lease 和
+ModelSelection。Planner 只能只读预演，不能自行提交分配。
 
 ### Knowledge Plane
 
@@ -76,15 +78,23 @@ AgentProfile + WorkItem + Project policy
 
 ### Agent Execution Plane
 
-通过 `AgentAdapter.run(AgentRequest) -> AgentResult` 启动 planning-mode Orchestrator、Coder、QA、Reviewer。每个运行使用独立 `run_id`、Context manifest、角色权限、超时和 worktree。`AgentResult` 只能携带与 request 身份对齐的 typed Artifact，或不含 Artifact 的 typed failure；模型供应商可以更换，但角色契约不能由模型自行修改。T008 的 `FakeAgentAdapter` 通过脚本注入成功、QA FAIL、Review REJECT 和 timeout；T009 的 `SerialOrchestrator` 使用同一 seam 完成离线交付闭环。
+通过 `AgentAdapter.run(AgentRequest) -> AgentResult` 启动 planning-mode Orchestrator、Coder、QA、Reviewer。
+每个运行使用独立 `run_id`、Context manifest、角色权限、超时和 worktree。`AgentResult` 只能携带与
+request 身份对齐的 typed Artifact，或不含 Artifact 的 typed failure；模型供应商可以更换，但角色
+契约不能由模型自行修改。T034 默认用 Codex CLI + GPT-5.5，另有 Responses-compatible adapter 和
+durable delivery-route fallback evidence；fake/scripted adapter 只用于离线 contract/E2E。
 
 ### Command Execution Boundary
 
-T015 的 `SubprocessCommandExecutor` 是角色执行命令的唯一预留端口：它绑定具体 worktree
+T015 的 `SubprocessCommandExecutor` 是 HTTP tool-loop 角色执行命令的受控端口：它绑定具体 worktree
 root，先复用 `WorkspacePolicy` 检查完整 tokenized argv，再以 `shell=False`、明确 cwd、
 最小环境和固定 timeout 启动进程组。非零 return code 只是可观察结果，不等于 verdict；
 stdout/stderr 受字节上限并带截断标志，timeout/启动失败是稳定 typed error。这样 QA 能在
-未来生成可复核 test evidence，同时不让 shell 字符串、宿主机 secrets 或 cwd 越界穿过执行边界。
+生成可复核 test evidence，同时不让 shell 字符串、宿主机 secrets 或 cwd 越界穿过执行边界。
+
+T034 的 Codex CLI provider 还使用 Codex 自身 sandbox，并在返回后校验 clean worktree、exact HEAD、
+changed paths 和 typed Artifact。这个组合是 v0.1 的进程级安全边界，不宣称等价于容器/虚拟机级强
+隔离。
 
 T016 的 `RoleWorktreeSession` 是该端口与 Repository Plane 的最小组合层：它只接受同角色
 `AgentDefinition` 与 `WorktreeSpec`，调用 `GitWorkspace.create` 后把返回的 manager-owned
@@ -113,8 +123,10 @@ run、人工动作和回归窗口记录为不可变事件；`EvaluationEngine` �
 ## 3. 数据流
 
 ```text
-WorkItem + AgentProfile + ModelPolicy
-  → Assignment + Lease + RunDemand
+Project directory + requirement
+  → prepare + ProductSpec human approval + TechnicalDesign + ExecutionPlan
+  → WorkItem + AgentProfile + ModelPolicy
+  → Assignment + Lease + RunDemand + MySQL dispatch commit
   → run-scoped ModelSelection
   → Task(JSON)
   → validate + persist
@@ -134,18 +146,21 @@ WorkItem + AgentProfile + ModelPolicy
 
 | 数据 | v0.1 存储 | 说明 |
 |---|---|---|
-| Task 与状态 | SQLite | 事务性更新，唯一状态写入者是 Orchestrator；attempt 通过 `record_attempt` 单调 checkpoint |
-| Artifact 索引 | 后续接入 SQLite | T005 先由文件名和 typed `ArtifactRef` 提供按 ID 读取；Orchestrator 阶段再持久化查询索引 |
+| Task 与状态 | MySQL 8.0（生产）/ SQLite（兼容） | 两个 adapter 共用 Repository contract；生产 append event 使用事务和行锁 |
+| Dispatch authority | MySQL 8.0 | snapshot/commit 行锁、版本 fence、Assignment/Lease/ModelSelection 原子提交 |
+| Artifact 索引 | 文件名 + typed `ArtifactRef` | 按 ID 读取，写入与 parent lineage 校验不依赖数据库 |
 | Artifact 正文 | 文件系统 JSON | `artifacts/art_<artifact-id>.json`，临时文件 + 原子 rename |
 | 运行日志 | 文件系统文本 | 脱敏、截断、由 evidence 引用 |
 | Evaluation events | 文件系统 canonical JSON | 一事件一文件，带内部 SHA-256，exact replay 幂等 |
 | Handoff | 文件系统 JSON + Markdown | deterministic ID，等价重建保留首次观察时间 |
 | Project workspace binding | 外置 sidecar `workspace.json` + 固定目录 | 目标项目外置、幂等、与项目路径绑定；不复制源码 |
-| Agent/Model workforce | 组织 workspace 文件记录 | T022 原子保存 AgentProfile/ModelPolicy；work-items/leases/metrics 为后续持久化端口 |
+| Agent/Model workforce | 组织 workspace + MySQL dispatch | AgentProfile/ModelPolicy 属于组织；已提交 Assignment/Lease 与 dispatch fence 在 MySQL |
 | ProjectProfile / Spec governance | Project sidecar 文件记录 | profile 与 runtime binding 不可变；冲突/resolution 使用带 SHA 的 append-only 记录 |
 | Trellis 规则 | Git 中的 Markdown | 组织知识，评审后变更 |
 
-Task 快照和状态事件的 Python 入口分别是 `Task` 与 `StateEvent`；`SqliteTaskRepository` 使用 `tasks`、`state_events` 两张表。快照正文和事件正文均保留 JSON，便于重启后由 Pydantic 重新校验并按事件 revision 回放。
+Task 快照和状态事件的 Python 入口分别是 `Task` 与 `StateEvent`。Production Team Host 使用
+`MySqlTaskRepository`；`SqliteTaskRepository` 只服务低层 Runtime 和离线测试。两者都保存可由 Pydantic
+重新校验的 JSON 正文，并按 event revision 回放。
 
 Artifact 的 Python 入口是 `Artifact` union；`FileArtifactStore` 以 Artifact ID 作为受校验的文件名。写入前必须由 `seal_artifact` 生成 canonical JSON SHA-256，Store 再验证 typed contract、`validated=true` 和父子 lineage；成功写入使用临时文件、`fsync` 和原子替换，重复正文幂等，变更正文拒绝覆盖。
 

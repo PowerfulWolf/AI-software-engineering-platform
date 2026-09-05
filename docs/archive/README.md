@@ -27,6 +27,7 @@ Archive 是组织记忆的一部分，不依赖任何单个 Agent 的会话。�
 | 2026-09-02 | 本记录所在提交 | T030；Product Agent 需求澄清、人工确认、不可变事实与崩溃重放 | [T030 Product Agent](2026-09-02-t030-product-agent.md) |
 | 2026-09-02 | 本记录所在提交 | T031；Designer、Planner read-only preview 与 Project Manager 原子 dispatch | [T031 Designer、Planner 与 Dispatch](2026-09-02-t031-designer-planner-dispatch.md) |
 | 2026-09-02 | 本记录所在提交 | T032；统一项目接单、durable resume、Dispatch/Task 与 role worktree bridge | [T032 统一项目接单](2026-09-02-t032-unified-project-entry.md) |
+| 2026-09-05 | 本记录所在提交 | T034；Production Team Host、MySQL、真实模型路由与隔离交付 | [T034 Production Team Host](2026-09-05-t034-production-team-host.md) |
 
 ## 后续归档约定
 

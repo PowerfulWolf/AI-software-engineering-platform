@@ -702,11 +702,13 @@ ExecutionPlanAgentAdapter.run(AgentRequest) -> AgentResult
 DispatchRoleWorktreeCoordinator.open_coder(...) -> RoleWorktreeBinding
 DispatchRoleWorktreeCoordinator.open_verifiers(...) -> VerificationWorktreeBindings
 configure_project_entry(ProjectEntryProvider) -> None
+project_entry() -> UnifiedProjectEntryService
 ```
 
-CLI 合同固定为 `ase project start/reply/approve/resume/status`。应用宿主只在进程启动时绑定一次
-organization-owned team composition；若未绑定，命令必须以稳定配置错误退出，不得回退到隐式路径或
-伪造 Agent。
+CLI 合同固定为 `ase project start/reply/approve/resume/status`。测试宿主可以显式绑定
+organization-owned team composition；T034 后，未注入测试 provider 时 `project_entry()` 必须惰性创建
+`OrganizationTeamHost.from_environment()`。配置、MySQL 或 provider 前置条件失败时以稳定错误退出，不得
+回退伪造 Agent。
 
 ### 15.3 Contracts
 
@@ -721,7 +723,8 @@ organization-owned team composition；若未绑定，命令必须以稳定配置
   静默推进；
 - ProductSpec approval 是正常流程唯一人工业务门禁。规范冲突、资源不可行、权限/完整性错误属于
   安全阻塞，不得被解释为业务确认；
-- `DispatchCommitRecord.task` 是 SQLite TaskRepository 的 durable intent。materializer 只允许不存在时
+- `DispatchCommitRecord.task` 是 TaskRepository 的 durable intent。production host 使用 MySQL，低层
+  测试可使用 SQLite；materializer 只允许不存在时
   创建，或把已推进 Task 归一到 NEW/attempt=0 后 exact compare；同 ID 不同 immutable facts 立即拒绝；
 - T031 `ExecutionPlan` 到 Delivery `PlanArtifact` 的转换是确定性 materialization：必须保留 exact
   Product/Design/acceptance lineage，不能重新调用 Planner，也不能引入新的 concrete allocation；

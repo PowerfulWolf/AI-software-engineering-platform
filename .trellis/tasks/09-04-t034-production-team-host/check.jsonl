@@ -1,0 +1,5 @@
+{"path":".trellis/spec/core/index.md","reason":"Core quality checklist."}
+{"path":".trellis/spec/core/architecture.md","reason":"Verify production composition boundaries and error matrix."}
+{"path":".trellis/spec/core/contracts.md","reason":"Verify role separation, artifacts, tools, evidence, and secret handling."}
+{"path":".trellis/spec/core/python-runtime.md","reason":"Verify typing, adapters, tests, and dependency constraints."}
+{"path":"AGENTS.md","reason":"Verify project invariants and scope."}

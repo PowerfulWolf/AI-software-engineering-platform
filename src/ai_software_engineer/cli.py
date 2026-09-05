@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from ai_software_engineer import __version__
 from ai_software_engineer.agents import AgentError
 from ai_software_engineer.artifacts import ArtifactStoreError, FileArtifactStore
+from ai_software_engineer.config import ProductionConfigError
 from ai_software_engineer.context import ContextError
 from ai_software_engineer.domain import Task, TaskStatus
 from ai_software_engineer.evaluation import (
@@ -81,6 +82,8 @@ _PROJECT_ERRORS = (
     UnifiedProjectEntryError,
     ProjectDeliveryCheckpointError,
     ProjectEntryNotConfigured,
+    ProductionConfigError,
+    StoreError,
 )
 
 

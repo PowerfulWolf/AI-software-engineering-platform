@@ -345,11 +345,11 @@ class OpenAICompatibleAgentAdapter:
         self, request: AgentRequest, response: HttpResponse, duration_ms: int
     ) -> AgentResult:
         if response.status_code < 200 or response.status_code >= 300:
-            transient = response.status_code in {408, 429} or response.status_code >= 500
+            status, code, transient = _http_failure(response)
             return _failure(
                 request,
-                AgentRunStatus.FAILED,
-                AgentErrorCode.PROVIDER_ERROR,
+                status,
+                code,
                 f"provider returned HTTP {response.status_code}",
                 transient=transient,
                 duration_ms=duration_ms,
@@ -480,6 +480,40 @@ def _extract_usage(payload: object) -> AgentUsage | None:
         output_tokens=cast(int, output_tokens),
         total_tokens=cast(int, total_tokens),
     )
+
+
+def _http_failure(
+    response: HttpResponse,
+) -> tuple[AgentRunStatus, AgentErrorCode, bool]:
+    if response.status_code == 408:
+        return AgentRunStatus.TIMED_OUT, AgentErrorCode.TIMEOUT, True
+    if response.status_code in {401, 403}:
+        return AgentRunStatus.FAILED, AgentErrorCode.AUTHENTICATION_ERROR, False
+    if response.status_code == 429:
+        code = (
+            AgentErrorCode.QUOTA_EXHAUSTED
+            if _provider_error_code(response.body)
+            in {"billing_hard_limit_reached", "insufficient_quota", "quota_exceeded"}
+            else AgentErrorCode.RATE_LIMITED
+        )
+        return AgentRunStatus.FAILED, code, True
+    if response.status_code >= 500:
+        return AgentRunStatus.FAILED, AgentErrorCode.PROVIDER_UNAVAILABLE, True
+    return AgentRunStatus.FAILED, AgentErrorCode.PROVIDER_ERROR, False
+
+
+def _provider_error_code(body: bytes) -> str | None:
+    try:
+        payload: object = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, Mapping):
+        return None
+    error = payload.get("error")
+    if not isinstance(error, Mapping):
+        return None
+    code = error.get("code")
+    return code if isinstance(code, str) else None
 
 
 def _strip_json_fence(content: str | Mapping[str, object]) -> str:

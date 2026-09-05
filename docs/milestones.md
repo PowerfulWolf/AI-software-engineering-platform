@@ -1,6 +1,6 @@
 # v0.1 开发里程碑与第一批可执行任务
 
-> 实施状态：T001–T031 已完成；M5 已通过组织级 Scheduler/ModelRouter、ProjectProfile、
+> 实施状态：T001–T032、T034 已完成，T033 Reporter 暂停；M5 已通过组织级 Scheduler/ModelRouter、ProjectProfile、
 > SpecCompiler 与 Runtime workspace binding 达到退出条件。目标项目与外置 AI workspace 已有
 > 稳定绑定。M0–M5 的
 > v0.1 核心库退出条件已通过自动化测试验证。T014 提供配置驱动的串行运行入口，T015 提供
@@ -87,6 +87,17 @@ T030 在 prepare 结果之上增加 task-free Product context、Product Agent ad
 operation receipt 均为 append-only 事实；只有 trusted human verifier 解析的 exact spec
 决策能通过 Project Manager stage gate。T031 已在此基础上补齐 design、plan 和 dispatch。
 
+### M9 — Production Team Host
+
+将 M8 的 provider-neutral facade 装配成可直接使用的组织团队：CLI 自动加载无 secret 配置，MySQL 8.0
+保存生产 Task/StateEvent/dispatch authority，Codex CLI 使用 GPT-5.5，Responses-compatible adapter
+承载显式 Qwen/DeepSeek fallback。Product、Designer、Planner 生成 typed stage artifacts；Coder、QA、
+Reviewer 在独立 worktree 中完成 candidate、验证和审查。
+
+退出条件：一次部署配置后，用户只传目标 Git 项目绝对目录和需求；离线 scripted-provider + 真实 MySQL
+E2E 到达 DONE，目标主 checkout 零改动；提供显式 opt-in live GPT-5.5 smoke，默认测试不消费额度；
+失败、fallback、checkpoint 和 candidate 均可追溯。T033 Reporter 仍不属于本阶段。
+
 ## 第一批可执行任务
 
 | ID | 任务 | 交付物 | 验收标准 | 依赖 |
@@ -124,11 +135,14 @@ operation receipt 均为 append-only 事实；只有 trusted human verifier 解�
 | T031（已完成） | Designer/Planner 与调度 Skills | TechnicalDesign/ExecutionPlan producer、preview/commit dispatch | Planner preview 只读；Project Manager commit 重新校验并提交分配 | T030 |
 | T032（已完成） | 统一项目接单入口 | CLI/application facade、resume、跨语言 E2E | 项目目录 + 需求走通 prepare→delivery，不手拼 Runtime paths | T031 |
 | T033（暂停） | Reporter 决策与实现 | deterministic report 或 read-only Reporter Agent | 不创造事实/改 verdict/隐藏失败；输出可追溯 sources | T032 |
+| T034（已完成） | Production Team Host | 自动 Host、MySQL、Codex/Responses/fallback、真实隔离 delivery | 一次配置后目录+需求可运行；MySQL scripted E2E、全量质量门禁和 opt-in live smoke | T032 |
 
 ## 第一批任务的执行顺序
 
-已完成：`T001 → ... → T032`。T033 暂停；当前没有自动启动下一个 Task。生产 team host、HTTP/SSE、
-后台队列和更复杂容量投影需要另行立项，不把 offline fake-team 验收冒充为真实 provider 已完成。
+已完成：`T001 → ... → T032`、`T034`。T033 暂停。HTTP/SSE、后台队列、Reporter 和更复杂容量投影
+需要另行立项。opt-in live smoke 已验证真实 GPT-5.5 的 Product/Designer/Planner/dispatch；当前 Codex
+desktop 环境中的 Coder 被 macOS 嵌套 sandbox 限制阻止，不能把这次受限运行描述为完整 live DONE。
+普通本地终端的 smoke 入口已提供；MySQL scripted-provider E2E 已独立验证完整 DONE 流程。
 
 每完成一个任务，都先运行 contract tests，再更新 `.trellis/spec/`。T019 保持单进程、有界、
 Lease 驱动的纯跨 Task 调度决策；禁止把单 Task 改成并行 DAG，也不引入消息队列或向量库。

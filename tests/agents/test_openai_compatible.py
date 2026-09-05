@@ -202,9 +202,22 @@ def test_fenced_json_response_is_accepted() -> None:
     assert result.artifact == artifact
 
 
-@pytest.mark.parametrize("status_code", (400, 401, 408, 429, 500, 503))
+@pytest.mark.parametrize(
+    ("status_code", "expected_status", "expected_code", "transient"),
+    (
+        (400, AgentRunStatus.FAILED, AgentErrorCode.PROVIDER_ERROR, False),
+        (401, AgentRunStatus.FAILED, AgentErrorCode.AUTHENTICATION_ERROR, False),
+        (408, AgentRunStatus.TIMED_OUT, AgentErrorCode.TIMEOUT, True),
+        (429, AgentRunStatus.FAILED, AgentErrorCode.RATE_LIMITED, True),
+        (500, AgentRunStatus.FAILED, AgentErrorCode.PROVIDER_UNAVAILABLE, True),
+        (503, AgentRunStatus.FAILED, AgentErrorCode.PROVIDER_UNAVAILABLE, True),
+    ),
+)
 def test_provider_http_errors_never_return_artifact_or_leak_response(
     status_code: int,
+    expected_status: AgentRunStatus,
+    expected_code: AgentErrorCode,
+    transient: bool,
 ) -> None:
     transport = RecordingTransport(
         response=HttpResponse(
@@ -215,12 +228,27 @@ def test_provider_http_errors_never_return_artifact_or_leak_response(
 
     result = _adapter(transport).run(_coder_request())
 
-    assert result.status is AgentRunStatus.FAILED
+    assert result.status is expected_status
     assert result.artifact is None
     assert result.error is not None
-    assert result.error.code is AgentErrorCode.PROVIDER_ERROR
-    assert result.error.transient is (status_code in {408, 429} or status_code >= 500)
+    assert result.error.code is expected_code
+    assert result.error.transient is transient
     assert "secret-provider-key" not in result.error.message
+
+
+def test_quota_response_is_classified_without_leaking_provider_body() -> None:
+    transport = RecordingTransport(
+        response=HttpResponse(
+            status_code=429,
+            body=b'{"error":{"code":"insufficient_quota","message":"secret"}}',
+        )
+    )
+
+    result = _adapter(transport).run(_coder_request())
+
+    assert result.error is not None
+    assert result.error.code is AgentErrorCode.QUOTA_EXHAUSTED
+    assert "secret" not in result.error.message
 
 
 def test_transport_timeout_maps_to_typed_timeout() -> None:

@@ -589,8 +589,9 @@ T031 的 canonical wire contracts 是 `schemas/technical-design.schema.json`、
 `ProjectDeliveryCheckpoint` 是连续的 append-only hash chain，只保存 native preparation/Product/
 Design/Plan/Dispatch/Task references 与 digests；人工 reply/approve 使用旧 checkpoint 时必须 zero
 effects。可预期的 native stage 失败由 backend 分类为 `DeliveryBackendFailure`，只把 typed code 与安全
-摘要写入 BLOCKED checkpoint；未分类异常保留当前 checkpoint 供 resume。应用宿主未调用
-`configure_project_entry(...)` 时 CLI 明确失败，不会默选 fake Agent。
+摘要写入 BLOCKED checkpoint；未分类异常保留当前 checkpoint 供 resume。正常 CLI 不要求应用宿主
+手工注入 composition：未注入测试 provider 时，`project_entry()` 会从配置和环境变量惰性创建
+`OrganizationTeamHost`。配置、MySQL 或模型 route 不可用时明确失败，不会默选 fake Agent。
 
 Dispatch 到 Delivery 的 bridge 有三个约束：`DispatchTaskMaterializer` 只允许 NEW Task exact create 或
 合法已推进 Task 的 immutable replay；`ExecutionPlanAgentAdapter` 只把 approved organization plan 机械

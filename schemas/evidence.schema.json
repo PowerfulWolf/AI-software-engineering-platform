@@ -123,7 +123,7 @@
             "total_tokens": {"type": "integer", "minimum": 0}
           }
         },
-        "error_code": {"enum": ["TIMEOUT", "INVALID_OUTPUT", "PROVIDER_ERROR", "POLICY_VIOLATION"]},
+        "error_code": {"enum": ["TIMEOUT", "QUOTA_EXHAUSTED", "RATE_LIMITED", "AUTHENTICATION_ERROR", "PROVIDER_UNAVAILABLE", "INVALID_OUTPUT", "PROVIDER_ERROR", "POLICY_VIOLATION"]},
         "error_message": {"type": "string"},
         "transient": {"type": "boolean"}
       },

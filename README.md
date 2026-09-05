@@ -114,16 +114,17 @@ ai-software-engineer/
 ├── src/ai_software_engineer/         # 控制平面 Python 包
 │   ├── cli.py                        # ase 命令入口与 composition root
 │   ├── domain/                       # Task、Agent、Workforce、Artifact 强类型契约
-│   ├── store/                        # SQLite Task 快照与 StateEvent 日志
+│   ├── store/                        # MySQL 生产存储与 SQLite 兼容存储
 │   ├── artifacts/                    # 原子 JSON ArtifactStore 与 SHA-256
 │   ├── git/                          # role worktree 隔离与 path/command policy
 │   ├── context/                      # 确定、脱敏、预算受限的 Context Builder/Router
-│   ├── agents/                       # AgentAdapter、Fake 与 OpenAI-compatible adapter
+│   ├── agents/                       # Codex/Responses/Fallback/Fake typed adapters
 │   ├── orchestration/                # 串行 runner、Context composition 与状态机
 │   ├── scheduling/                   # 纯 PortfolioScheduler 与 run-scoped ModelRouter
 │   ├── runtime.py                    # RuntimeConfig、角色路由与 task run composition
 │   ├── runtime_workspace.py           # 组织/项目 workspace 绑定与 workforce 解析
 │   ├── project_manager/               # prepare、阶段授权、当前事实重算与原子 dispatch
+│   ├── config/                        # 无 secret 的 Production Team Host 配置
 │   ├── product/                       # Product context/adapter、确认循环、不可变事实与重放
 │   ├── design/                        # Designer context/adapter、TechnicalDesign 与恢复 checkpoint
 │   ├── planning/                      # Planner context/adapter、ExecutionPlan store 与只读 preview
@@ -270,70 +271,71 @@ role worktree consumer 组合为统一、可恢复入口。
 
 ## 推荐的 v0.1 运行形态
 
-- 单机 CLI + Python 进程；
-- SQLite 保存 Task、状态事件和 artifact 索引；文件系统保存 artifact 正文；
-- Git CLI 管理 worktree；
-- 模型通过一个 `AgentAdapter` 接口接入，默认支持 OpenAI-compatible endpoint；
-- 每次 Agent 运行都有超时、token budget、最大重试次数和可复现的 context manifest。
+- 单机 `ase` CLI + Python 进程；
+- MySQL 8.0 保存生产 Task、StateEvent、Assignment、Lease 和 dispatch fence；
+- 外置文件系统保存 organization workspace、项目 sidecar、Context、Artifact 和 Evidence；
+- Git worktree 隔离 Coder、QA、Reviewer，目标项目主 checkout 保持不变；
+- 已登录 Codex CLI 使用 `gpt-5.5`，可显式配置 Qwen/DeepSeek Responses-compatible fallback；
+- SQLite 只保留给底层 Runtime、离线测试和兼容场景，不是正常项目接单的生产存储。
 
 具体选择和理由见 [`docs/tech-stack.md`](docs/tech-stack.md)。
 
-## 开发环境
-
-```bash
-uv sync
-uv run ase --help
-uv run pytest
-uv run ruff check .
-uv run mypy src tests
-```
-
-项目使用 Python 3.12+。uv 会读取 `.python-version` 并建立隔离环境；`ase` 是平台 CLI 入口。
-
 ## 最新使用方法
 
-### 1. 安装开发环境
+正常使用只有两个层次：平台管理员做一次 Team Host 配置；之后每个需求只提交“项目绝对目录 + 需求”。
+
+### 1. 一次性安装与配置
+
+前置条件是 Python 3.12+、`uv`、Git、Docker，以及已登录的 Codex CLI：
 
 ```bash
 git clone git@github.com:PowerfulWolf/AI-software-engineering-platform.git
 cd AI-software-engineering-platform
 uv sync
-uv run ase --help
+codex login status
+
+cp .env.example .env
+docker compose up -d mysql
+
+mkdir -p "$HOME/.config/ai-software-engineer"
+cp config/production.example.json \
+  "$HOME/.config/ai-software-engineer/config.json"
 ```
 
-项目要求 Python 3.12+、`uv` 和 Git。平台数据不会写进目标项目，而是由宿主放在外置的
-organization workspace、project sidecar 和 worktree root 中。
+编辑 `config.json`：把 `platform_root` 改成真实绝对目录，把
+`live_model_execution` 改成 `true`。默认第一路由是当前 Codex 账号下的 `gpt-5.5`；配置文件不保存
+密码或 API key。
 
-### 2. 通过 Project Manager 接单
+再把 Docker 开发账号对应的 DSN 注入当前 shell：
 
-这是最新的面向用户入口。application host 完成一次团队配置后，每个需求只需要目标项目目录和需求
-文本，不需要再传 SQLite、artifact、context 或 worktree 路径：
+```bash
+export ASE_MYSQL_DSN='mysql+pymysql://ase:ase_local_change_me@127.0.0.1:3307/ai_software_engineer'
+```
+
+如果配置文件不放默认位置，再设置 `ASE_CONFIG=/absolute/path/to/config.json`。Qwen/DeepSeek 是可选
+fallback：只有填写自己的 endpoint、设置相应 API key 环境变量并把 route 的 `enabled` 改为 `true`
+后才会启用；“免费额度”取决于部署账户，不是模型的固定属性。完整配置见
+[`docs/production-setup.md`](docs/production-setup.md)。
+
+### 2. 提交一个真实需求
+
+目标必须是一个已有、干净、已提交 HEAD 的 Git 项目。正常入口不要求你理解数据库、sidecar、Task 或
+worktree：
 
 ```bash
 uv run ase project start /absolute/path/to/target-project \
   --requirement "增加订单取消功能，并补充自动化测试"
 ```
 
-Project Manager 会自动完成：
+Project Manager 自动注册项目、创建外置 workspace、发现 ProjectProfile/项目规范并编译规则，然后让
+Product Agent 整理需求。命令返回 JSON；后续只需要保留：
 
-```text
-注册或重开项目 sidecar
-  → 发现 ProjectProfile 与项目原生规范
-  → 编译组织/项目规范
-  → Product Agent 整理 ProductSpec
-  → 等待用户澄清或确认
-  → Designer 生成 TechnicalDesign
-  → Planner 生成 ExecutionPlan
-  → Scheduler/ModelRouter 分配 Agent 与模型
-  → Coder → QA → Reviewer
-  → DONE 或带证据的 BLOCKED
-```
+- `checkpoint.delivery_id`：本次交付 ID；
+- `checkpoint.stage`：当前阶段；
+- `checkpoint.checkpoint_sha256`：防止旧操作覆盖新事实的游标；
+- `product`：待确认的 ProductSpec 或澄清问题。
 
-命令返回 JSON，其中最重要的是 `checkpoint.delivery_id`、`checkpoint.stage`、
-`checkpoint.checkpoint_sha256` 和 Product 阶段产物。后续操作必须引用最新 checkpoint，防止旧页面或
-重复命令覆盖新事实。
-
-Product Agent 需要补充信息时：
+如果阶段是 `WAITING_PRODUCT_REPLY`，回答问题：
 
 ```bash
 uv run ase project reply delivery_xxx \
@@ -341,72 +343,70 @@ uv run ase project reply delivery_xxx \
   --message "取消只允许在未支付状态进行"
 ```
 
-ProductSpec 已可评审时，确认当前版本并继续整支团队：
+如果阶段是 `WAITING_PRODUCT_APPROVAL`，先阅读返回的 ProductSpec，再批准 exact 版本：
 
 ```bash
 uv run ase project approve delivery_xxx \
   --checkpoint <current-checkpoint-sha256>
 ```
 
-查看进度或在进程中断后恢复：
+批准后 Project Manager 会继续执行：
+
+```text
+Designer → Planner → Scheduler/ModelRouter → Coder → QA → Reviewer
+```
+
+中断后可以跨进程查看和恢复：
 
 ```bash
 uv run ase project status delivery_xxx
 uv run ase project resume delivery_xxx
 ```
 
-`resume` 不会生成新的业务输入，只会重新校验 durable facts 并从第一个未完成阶段继续。规范冲突、
-stale checkpoint、Agent 输出无效或 worktree 漂移都会 fail closed，不会静默猜测或覆盖。
+`resume` 只重放、校验 durable facts 并继续首个未完成阶段，不会凭空增加业务输入。规范冲突、过期
+checkpoint、无效 Agent 输出、资源不足或 worktree 漂移都会停止并留下明确证据。
 
-### 3. 当前生产绑定边界
+### 3. 得到什么，怎么交付
 
-仓库已经提供统一 CLI、可恢复 application facade、完整 checkpoint/dispatch/worktree 契约和离线跨语言
-E2E，但**不会默选生产模型、凭据或 fake Agent**。部署入口必须在进程启动时调用
-`configure_project_entry(...)`，把真实 organization-owned team、模型策略、provider 和平台 workspace
-root 绑定到 CLI；未绑定时，`ase project ...` 会明确返回 `team runtime is not configured`。
-
-换句话说：统一接单流程已经跑通并可验证，但“下载仓库后立刻让真实模型修改任意项目”的 production
-team host 尚未交付。现有 `OpenAICompatibleAgentAdapter` 可以生成 typed delivery artifact，真实
-Product/Designer/Planner provider 和 Coder 受控工具执行仍需要下一阶段装配。
-
-直接验证当前统一流程：
+成功时 `checkpoint.stage` 为 `DONE`，`checkpoint.candidate_revision` 是已经通过 QA 和 Reviewer 的
+候选 commit。平台不会替你改动或合并目标项目的当前分支；可在目标仓库中复核并由人类决定合并：
 
 ```bash
-uv run pytest -q tests/e2e/test_unified_project_entry.py
+git -C /absolute/path/to/target-project show <candidate_revision>
+git -C /absolute/path/to/target-project branch --contains <candidate_revision>
 ```
 
-该测试使用 deterministic fake team，覆盖 Python、Java、C++ 项目从“目录 + 需求”到 Product 确认、
-Designer、Planner、dispatch 和 DONE，并验证目标项目没有被 sidecar 数据污染。
+候选通常位于 `ai/<task-id>/attempt-1` 分支。ProductSpec、TechnicalDesign、ExecutionPlan、四类交付
+Artifact、Context、Evidence、状态事件和模型路由尝试都保存在 `platform_root/projects/<project-id>/`
+对应 sidecar；组织 AgentProfile 和跨项目事实保存在 `platform_root/organization/`。目标项目中不会出现
+`.ase`、Agent 配置或平台日志。
 
-### 4. 使用低层 Task Runtime
+当前不会自动 merge、deploy 或生成 Reporter 报告；这些仍是可信人工边界，T033 Reporter 继续暂停。
 
-需要直接调试现有 Delivery runtime 时，可以继续使用兼容的低层命令。此路径面向平台开发者，需要显式
-提供 sidecar 内部路径和 Runtime 配置：
+### 4. 可选：执行一次真实 GPT-5.5 冒烟交付
+
+这会真实消耗当前 Codex 账号额度，必须显式开启：
 
 ```bash
-uv run ase task create \
-  --file task.json \
-  --database /path/to/project-sidecar/state/state.sqlite3
-
-export OPENAI_API_KEY='...'
-uv run ase task run <task-id> --config runtime.json
-
-uv run ase task events <task-id> \
-  --database /path/to/project-sidecar/state/state.sqlite3
-
-uv run ase handoff build <task-id> \
-  --database /path/to/project-sidecar/state/state.sqlite3 \
-  --artifacts /path/to/project-sidecar/artifacts \
-  --output /path/to/project-sidecar/handoffs
+ASE_RUN_LIVE_TESTS=1 scripts/smoke-live-gpt55.sh
 ```
 
-`task run` 固定执行 `Coder → QA → Reviewer`，不会自动 merge 或 deploy。Runtime 配置、provider secret、
-角色覆盖和路径约束见 [`docs/runtime.md`](docs/runtime.md)，全部命令语义见
+脚本建立临时 Git 项目并尝试完整交付，绝不自动合并；如果 Product Agent 认为仍需澄清，脚本会保留
+现场并返回非零，供人工继续。默认测试不会运行这个脚本或消费模型额度。
+
+### 5. 底层 Task Runtime 是什么
+
+`ase task ...` 是平台开发者用于单独测试状态机、Artifact、SQLite 兼容后端或某个 AgentAdapter 的低层
+入口。它需要手工传内部路径和 RuntimeConfig，不会准备项目、发现规范、做 Product/Design/Plan 或提交
+组织调度。正常交付请使用 `ase project ...`。
+
+底层接口示例和边界见 [`docs/runtime.md`](docs/runtime.md)；完整命令见
 [`docs/cli.md`](docs/cli.md)。
 
-### 5. 验证平台本身
+## 开发与验证
 
 ```bash
+uv sync
 uv run pytest -q
 uv run ruff check .
 uv run ruff format --check .
@@ -414,19 +414,21 @@ uv run mypy src tests
 uv build --offline
 ```
 
-## 当前进度（2026-09-02）
+## 当前进度（2026-09-05）
 
 | 阶段 | 阶段性成果 |
 |---|---|
-| M0–M2 平台基础 | 完成总体架构、强类型领域契约、SQLite/ArtifactStore、状态机、Git worktree 与 Context routing |
-| M3–M4 串行交付 | 完成 `Coder → QA → Reviewer`、有界重试/恢复、Evaluation、ADR 和 Human Handoff |
-| M5 组织与项目接入 | 完成 organization-owned Workforce、Scheduler/ModelRouter、ProjectProfile、SpecCompiler 和外置 sidecar |
-| M6 可执行与可审计 | 完成受控命令、typed tools、Evidence、跨语言交付边界与只读 API |
-| M7 团队可视化 | 完成 Task board、Run timeline、Agent detail 和 Human inbox 静态只读 dashboard |
-| M8 完整接单链 | 完成 Project Manager、Product、Designer、Planner、原子 dispatch 和统一可恢复项目入口 |
+| M0–M2 平台基础 | 完成架构、强类型契约、状态机、Artifact、Context 和 Git 隔离 |
+| M3–M4 串行交付 | 完成 `Coder → QA → Reviewer`、有界恢复、Evaluation、ADR 与 Human Handoff |
+| M5 组织与项目接入 | 完成 organization-owned Workforce、调度、ProjectProfile、SpecCompiler 和外置 sidecar |
+| M6 可执行与可审计 | 完成受控命令、typed tools、Evidence、跨语言边界和只读 API |
+| M7 团队可视化 | 完成 Task board、Run timeline、Agent detail 和 Human inbox 静态 dashboard |
+| M8 完整接单链 | 完成 Product、Designer、Planner、原子 dispatch 和统一可恢复入口 |
+| M9 Production Team Host | 完成自动 Host、MySQL 生产存储、GPT-5.5 Codex/Responses 路由、Qwen/DeepSeek fallback seam 和隔离交付闭环；真实模型冒烟需显式运行 |
 
 ## 文档导航
 
+- 生产部署与最新使用：[`docs/production-setup.md`](docs/production-setup.md)
 - 架构与边界：[`docs/architecture.md`](docs/architecture.md)
 - 状态机：[`docs/state-machine.md`](docs/state-machine.md)
 - 契约与权限：[`docs/contracts.md`](docs/contracts.md)

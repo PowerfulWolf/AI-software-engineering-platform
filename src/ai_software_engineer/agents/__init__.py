@@ -1,6 +1,25 @@
 """Public Agent Execution Plane contracts and fake/real adapters."""
 
+from ai_software_engineer.agents.codex_cli import (
+    CodexCliAgentAdapter,
+    CodexCliConfigurationError,
+    CodexCliError,
+    CodexCommandRunner,
+    CodexInvocationResult,
+    SubprocessCodexCommandRunner,
+)
 from ai_software_engineer.agents.fake import FakeAgentAdapter
+from ai_software_engineer.agents.fallback import (
+    FallbackAgentAdapter,
+    FileModelRouteAttemptStore,
+    ModelRouteAttempt,
+    ModelRouteAttemptConflict,
+    ModelRouteAttemptCorruption,
+    ModelRouteAttemptStore,
+    ModelRouteAttemptStoreError,
+    ProviderAgentRoute,
+    RouteAttemptOutcome,
+)
 from ai_software_engineer.agents.models import (
     ROLE_OUTPUT_SCHEMA,
     AgentErrorCode,
@@ -34,6 +53,20 @@ from ai_software_engineer.agents.ports import (
     AgentError,
     AgentRequestConflict,
 )
+from ai_software_engineer.agents.responses import (
+    ResponsesAgentAdapter,
+    ResponsesAgentConfigurationError,
+    ResponsesAgentError,
+)
+from ai_software_engineer.agents.structured import (
+    CodexCliStructuredModelClient,
+    FallbackStructuredModelClient,
+    ResponsesStructuredModelClient,
+    StructuredModelClient,
+    StructuredModelError,
+    StructuredModelResult,
+    StructuredModelRoute,
+)
 
 __all__ = [
     "ROLE_OUTPUT_SCHEMA",
@@ -47,21 +80,46 @@ __all__ = [
     "AgentResult",
     "AgentRunStatus",
     "AgentUsage",
+    "CodexCliAgentAdapter",
+    "CodexCliConfigurationError",
+    "CodexCliError",
+    "CodexCliStructuredModelClient",
+    "CodexCommandRunner",
+    "CodexInvocationResult",
     "ContextPromptBuilder",
     "ContextResolver",
     "FakeAgentAdapter",
     "FakeBehavior",
     "FakeScenario",
+    "FallbackAgentAdapter",
+    "FallbackStructuredModelClient",
+    "FileModelRouteAttemptStore",
     "HttpResponse",
     "HttpTransport",
+    "ModelRouteAttempt",
+    "ModelRouteAttemptConflict",
+    "ModelRouteAttemptCorruption",
+    "ModelRouteAttemptStore",
+    "ModelRouteAttemptStoreError",
     "OpenAICompatibleAgentAdapter",
     "OpenAICompatibleConfigurationError",
     "OpenAICompatibleError",
     "PromptBuilder",
     "PromptMessage",
     "PromptPayload",
+    "ProviderAgentRoute",
     "RequestPromptBuilder",
+    "ResponsesAgentAdapter",
+    "ResponsesAgentConfigurationError",
+    "ResponsesAgentError",
+    "ResponsesStructuredModelClient",
+    "RouteAttemptOutcome",
     "RunId",
     "StoredContextResolver",
+    "StructuredModelClient",
+    "StructuredModelError",
+    "StructuredModelResult",
+    "StructuredModelRoute",
+    "SubprocessCodexCommandRunner",
     "UrllibHttpTransport",
 ]

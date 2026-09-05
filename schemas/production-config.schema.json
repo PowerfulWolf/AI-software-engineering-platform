@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/production-config.schema.json",
+  "title": "ProductionConfig",
+  "description": "Secret-free operator configuration for the organization-owned Production Team Host.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["platform_root", "model_routes"],
+  "$defs": {
+    "env_var": {
+      "type": "string",
+      "pattern": "^[A-Z_][A-Z0-9_]{0,127}$"
+    },
+    "database": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "backend": {"const": "mysql", "default": "mysql"},
+        "dsn_env": {"$ref": "#/$defs/env_var", "default": "ASE_MYSQL_DSN"}
+      }
+    },
+    "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "model", "kind"],
+      "properties": {
+        "provider": {"type": "string", "minLength": 1},
+        "model": {"type": "string", "minLength": 1},
+        "kind": {"enum": ["codex_cli", "responses"]},
+        "endpoint": {
+          "anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}],
+          "default": null
+        },
+        "api_key_env": {
+          "anyOf": [{"$ref": "#/$defs/env_var"}, {"type": "null"}],
+          "default": null
+        },
+        "reasoning_effort": {
+          "enum": ["low", "medium", "high", "xhigh"],
+          "default": "medium"
+        },
+        "enabled": {"type": "boolean", "default": true}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"kind": {"const": "codex_cli"}}, "required": ["kind"]},
+          "then": {
+            "properties": {
+              "endpoint": {"type": "null"},
+              "api_key_env": {"type": "null"}
+            }
+          },
+          "else": {
+            "required": ["endpoint", "api_key_env"],
+            "properties": {
+              "endpoint": {"type": "string", "minLength": 1},
+              "api_key_env": {"$ref": "#/$defs/env_var"}
+            }
+          }
+        }
+      ]
+    }
+  },
+  "properties": {
+    "schema_version": {"const": "v0.1", "default": "v0.1"},
+    "platform_root": {"type": "string", "minLength": 1},
+    "database": {"$ref": "#/$defs/database"},
+    "model_routes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {"$ref": "#/$defs/route"}
+    },
+    "codex_executable": {"type": "string", "minLength": 1, "default": "codex"},
+    "live_model_execution": {"type": "boolean", "default": false}
+  }
+}

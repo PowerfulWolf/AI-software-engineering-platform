@@ -82,8 +82,12 @@ project_id_for_root(project_root: str | Path) -> ProjectId
 - `ArtifactStore.get` 返回重新校验且 digest 匹配的 typed Artifact；缺失、篡改或损坏文件返回稳定错误；
 - Artifact parent/supersedes 只能引用已存在的同 Task Artifact，写入采用临时文件、`fsync` 和原子 rename；
 - `StateEvent` 必须包含 `event_id`、from/to status、actor、attempt、reason、source revision 和 artifact IDs；
-- Task 快照与 StateEvent 必须由 `TaskRepository.append_event` 在同一 SQLite 事务中提交；相同事件正文重放幂等，不同正文复用 ID 拒绝；
-- repository 每个连接开启 foreign keys，数据库使用 WAL；关闭后重新打开必须只依赖持久化 JSON 恢复 Task 与事件序列；
+- Task 快照与 StateEvent 必须由 `TaskRepository.append_event` 在同一数据库事务中提交；相同事件正文
+  重放幂等，不同正文复用 ID 拒绝；Production Team Host 使用 MySQL/InnoDB row lock + CAS，低层兼容
+  adapter 使用 SQLite transaction；
+- SQLite adapter 每个连接开启 foreign keys/WAL；MySQL adapter 使用 InnoDB、唯一
+  `(task_id, revision)` 和 `SELECT ... FOR UPDATE`。两者关闭重开都必须只依赖持久化 JSON 恢复 Task 与
+  事件序列；
 - `record_attempt` 只能单调增加 Task.attempts，不能超过 Task.max_attempts；它不虚构状态迁移，
   StateEvent 的 attempt 用于审计并与快照最大值交叉校验；
 - 主 checkout 只读，业务代码只能在角色 worktree 产生。

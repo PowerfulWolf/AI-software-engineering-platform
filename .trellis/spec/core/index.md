@@ -8,6 +8,8 @@
 4. 对任何跨层字段变化同步检查 `schemas/*.json` 与 `docs/contracts.md`；
 5. 对状态、Context 或 Git 变化分别检查 `docs/state-machine.md`、`docs/context-routing.md`、`docs/git-worktree.md`；
 6. 先补 contract tests，再接入真实模型或外部服务。
+7. 修改 `ase project ...`、MySQL、生产模型或 fallback 前阅读
+   [`production-team-host.md`](production-team-host.md)。
 
 ## Quality Check
 
@@ -22,3 +24,4 @@
 - [`architecture.md`](architecture.md)
 - [`contracts.md`](contracts.md)
 - [`python-runtime.md`](python-runtime.md)
+- [`production-team-host.md`](production-team-host.md)

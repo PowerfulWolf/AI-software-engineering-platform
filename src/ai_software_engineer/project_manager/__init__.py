@@ -58,6 +58,9 @@ from ai_software_engineer.project_manager.dispatch_authority import (
     DispatchRevisionAuthority,
     SqliteDispatchAuthority,
 )
+from ai_software_engineer.project_manager.mysql_dispatch_authority import (
+    MySqlDispatchAuthority,
+)
 from ai_software_engineer.project_manager.preparation import (
     PrepareProjectRequest,
     PrepareProjectResult,
@@ -120,6 +123,7 @@ __all__ = [
     "FileProjectBaselineCompilationStore",
     "FileProjectDeliveryCheckpointStore",
     "FileProjectPreparationStore",
+    "MySqlDispatchAuthority",
     "PrepareProjectRequest",
     "PrepareProjectResult",
     "PrepareProjectStatus",

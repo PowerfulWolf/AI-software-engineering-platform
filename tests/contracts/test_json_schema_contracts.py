@@ -9,6 +9,7 @@ import pytest
 from jsonschema import Draft202012Validator, FormatChecker
 from referencing import Registry, Resource
 
+from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.context import ContextBudget, ContextSource, FileContextBuilder
 from ai_software_engineer.domain import AgentPermissions, AgentRole, NetworkAccess
 from ai_software_engineer.domain.model import WirePayload
@@ -112,6 +113,43 @@ def test_runtime_config_satisfies_the_canonical_schema() -> None:
     config = RuntimeConfig(endpoint="https://api.example.test/v1", model="runtime-model")
 
     _assert_valid(config.to_wire(), "runtime-config.schema.json")
+
+
+def test_production_config_satisfies_the_canonical_schema(tmp_path: Path) -> None:
+    config = ProductionConfig.model_validate(
+        {
+            "platform_root": str((tmp_path / "platform").resolve()),
+            "model_routes": [
+                {
+                    "provider": "codex",
+                    "model": "gpt-5.5",
+                    "kind": "codex_cli",
+                },
+                {
+                    "provider": "qwen",
+                    "model": "qwen3.8-max",
+                    "kind": "responses",
+                    "endpoint": "https://example.invalid/v1/responses",
+                    "api_key_env": "QWEN_API_KEY",
+                    "enabled": False,
+                },
+            ],
+        }
+    )
+
+    _assert_valid(config.to_wire(), "production-config.schema.json")
+
+
+def test_production_config_schema_rejects_plaintext_secret(tmp_path: Path) -> None:
+    payload = ProductionConfig.model_validate(
+        {
+            "platform_root": str((tmp_path / "platform").resolve()),
+            "model_routes": [{"provider": "codex", "model": "gpt-5.5", "kind": "codex_cli"}],
+        }
+    ).to_wire()
+    payload["mysql_dsn"] = "mysql://user:secret@example.invalid/database"
+
+    _assert_invalid(payload, "production-config.schema.json")
 
 
 def test_project_workspace_manifest_satisfies_the_canonical_schema(tmp_path: Path) -> None:

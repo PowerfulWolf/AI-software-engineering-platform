@@ -19,6 +19,7 @@ from ai_software_engineer.runtime import (
     RuntimeConfig,
     RuntimeConfigurationError,
     RuntimePaths,
+    RuntimePersistence,
     RuntimeSession,
 )
 from ai_software_engineer.store import SqliteTaskRepository
@@ -192,6 +193,24 @@ def test_runtime_role_overrides_require_unique_agent_ids() -> None:
 def test_runtime_session_requires_only_declared_environment_secret(tmp_path: Path) -> None:
     with pytest.raises(RuntimeConfigurationError, match="OPENAI_API_KEY"):
         RuntimeSession(_config(tmp_path, api_key_required=True), environment={})
+
+
+def test_mysql_runtime_requires_only_the_declared_dsn_environment_name(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path).model_copy(
+        update={
+            "persistence": RuntimePersistence(
+                backend="mysql",
+                mysql_dsn_env="TEAM_MYSQL_DSN",
+            )
+        }
+    )
+
+    with pytest.raises(RuntimeConfigurationError, match="TEAM_MYSQL_DSN") as captured:
+        RuntimeSession(config, environment={}, agent_adapter=RuntimeFixtureAdapter())
+
+    assert "mysql://" not in str(captured.value)
 
 
 def test_runtime_session_rejects_changed_runtime_identity_for_existing_case(tmp_path: Path) -> None:

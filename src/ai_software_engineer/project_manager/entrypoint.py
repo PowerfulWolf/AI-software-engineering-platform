@@ -11,6 +11,7 @@ class ProjectEntryNotConfigured(RuntimeError):
 
 ProjectEntryProvider = Callable[[], UnifiedProjectEntryService]
 _provider: ProjectEntryProvider | None = None
+_default_service: UnifiedProjectEntryService | None = None
 
 
 def configure_project_entry(provider: ProjectEntryProvider) -> None:
@@ -21,11 +22,14 @@ def configure_project_entry(provider: ProjectEntryProvider) -> None:
 
 def project_entry() -> UnifiedProjectEntryService:
     """Resolve the host-owned Project Manager application service."""
-    if _provider is None:
-        raise ProjectEntryNotConfigured(
-            "Project Manager team runtime is not configured by the application host"
-        )
-    return _provider()
+    if _provider is not None:
+        return _provider()
+    global _default_service
+    if _default_service is None:
+        from ai_software_engineer.project_manager.production_host import OrganizationTeamHost
+
+        _default_service = OrganizationTeamHost.from_environment().project_entry()
+    return _default_service
 
 
 __all__ = [

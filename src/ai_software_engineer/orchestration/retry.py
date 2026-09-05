@@ -661,7 +661,14 @@ def _retryable(error: AgentRunFailed) -> bool:
         result.status in {AgentRunStatus.TIMED_OUT, AgentRunStatus.FAILED}
         and result.error is not None
         and result.error.code
-        in {AgentErrorCode.TIMEOUT, AgentErrorCode.PROVIDER_ERROR, AgentErrorCode.INVALID_OUTPUT}
+        in {
+            AgentErrorCode.TIMEOUT,
+            AgentErrorCode.QUOTA_EXHAUSTED,
+            AgentErrorCode.RATE_LIMITED,
+            AgentErrorCode.PROVIDER_UNAVAILABLE,
+            AgentErrorCode.PROVIDER_ERROR,
+            AgentErrorCode.INVALID_OUTPUT,
+        }
     )
 
 

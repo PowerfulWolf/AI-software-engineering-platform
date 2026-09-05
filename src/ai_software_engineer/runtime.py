@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import Field, StrictBool, StrictInt, StringConstraints, model_validator
 
@@ -44,7 +44,7 @@ from ai_software_engineer.orchestration import (
     RetryResult,
     TaskNotRunnable,
 )
-from ai_software_engineer.store import SqliteTaskRepository
+from ai_software_engineer.store import MySqlTaskRepository, SqliteTaskRepository
 
 EnvVarName = Annotated[str, StringConstraints(pattern=r"^[A-Z_][A-Z0-9_]{0,127}$")]
 
@@ -88,6 +88,13 @@ class RuntimePaths(DomainModel):
     runs: NonEmptyStr = "artifacts/run-manifests"
 
 
+class RuntimePersistence(DomainModel):
+    """Select a durable TaskRepository without embedding connection secrets."""
+
+    backend: Literal["sqlite", "mysql"] = "sqlite"
+    mysql_dsn_env: EnvVarName = "ASE_MYSQL_DSN"
+
+
 class RoleAgentOverride(DomainModel):
     """Optional per-role model and machine-policy overrides."""
 
@@ -116,6 +123,7 @@ class RuntimeConfig(DomainModel):
     spec_version: NonEmptyStr = "spec-v0.1"
     test_entrypoints: tuple[NonEmptyStr, ...] = ("pytest",)
     paths: RuntimePaths = RuntimePaths()
+    persistence: RuntimePersistence = RuntimePersistence()
     context_sources: tuple[ContextSource, ...] = ()
     role_overrides: tuple[RoleAgentOverride, ...] = ()
     timeout_seconds: StrictInt = Field(default=600, ge=1, le=3600)
@@ -223,7 +231,7 @@ class RuntimeSession:
             raise RuntimeConfigurationError(
                 f"required API key environment variable is missing: {config.api_key_env}"
             )
-        self._repository = SqliteTaskRepository(config.paths.database)
+        self._repository = _open_task_repository(config, variables)
         self._artifact_store = FileArtifactStore(config.paths.artifacts)
         self._context_store = FileContextStore(config.paths.contexts)
         self._evaluation_store: EvaluationEventStore = FileEvaluationEventStore(
@@ -329,7 +337,7 @@ class RuntimeSession:
         )
 
     def close(self) -> None:
-        """Close the SQLite connection while retaining all durable facts."""
+        """Close the durable TaskRepository while retaining committed facts."""
         self._repository.close()
 
     @property
@@ -372,6 +380,21 @@ def _permissions(role: AgentRole, override: RoleAgentOverride | None) -> AgentPe
         ),
         can_change_state=role is AgentRole.ORCHESTRATOR,
     )
+
+
+def _open_task_repository(
+    config: RuntimeConfig,
+    environment: Mapping[str, str],
+) -> SqliteTaskRepository | MySqlTaskRepository:
+    if config.persistence.backend == "sqlite":
+        return SqliteTaskRepository(config.paths.database)
+    dsn = environment.get(config.persistence.mysql_dsn_env)
+    if not dsn:
+        raise RuntimeConfigurationError(
+            "required MySQL DSN environment variable is missing: "
+            f"{config.persistence.mysql_dsn_env}"
+        )
+    return MySqlTaskRepository(dsn)
 
 
 def _validate_write_scope(role: AgentRole, write_paths: tuple[NonEmptyStr, ...]) -> None:
@@ -442,6 +465,7 @@ __all__ = [
     "RuntimeConfig",
     "RuntimeConfigurationError",
     "RuntimePaths",
+    "RuntimePersistence",
     "RuntimeRunResult",
     "RuntimeSession",
 ]
