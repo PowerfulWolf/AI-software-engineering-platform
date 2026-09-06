@@ -122,3 +122,32 @@ trusted coverage error, seal the diagnostic checkpoint, and preserve fail-closed
 Regression: `tests/project_manager/test_joint_planner_feedback.py` exercises service + real journal
 with deterministic models, restart, exact input IDs, preserved approval, strict rejection, and
 attempt exhaustion. It does not claim live model success or independent QA/Review of feature code.
+
+## 9. Exact integration command context (T039)
+
+Scope: Planner context and `ProductionJointBackend.validate_plan` command preflight. General
+ProjectProfile commands are broader than integration tests; neither list alone grants execution.
+`integration_commands.planner_command_policy() -> dict[str, object]` returns a fresh copy of
+`test_prefixes`, `forbidden_options`, and the project-allowlist-intersection requirement.
+`is_test_command(argv: tuple[str, ...]) -> bool` enforces those same immutable constants. No prefix
+or flag behavior is widened. Planner receives this as `integration_command_policy`.
+
+If the existing test-command predicate rejects a plan, backend raises `IntegrationCommandError`
+with a one-based check index and argv SHA-256, not argv/check-name text. Service seals that safe
+feedback and rejected-plan SHA in a new PLANNING checkpoint, leaves plan absent, then re-raises.
+Resume sees the feedback and still uses the original three-call budget. Arbitrary policy/provider
+exceptions are not caught and echoed. Canonical schemas and prior checkpoints are unchanged.
+
+| Case | Result |
+|---|---|
+| Supported test prefix + project allowlist, no forbidden flag | Existing preflight continues |
+| Build, lint, inspection, install or test-skip/help argv | Reject; never reinterpret as a test |
+| Rejected command contains sensitive argument | Diagnostic stores hash/index only |
+| Context consumer mutates returned list | Authoritative predicate remains unchanged |
+| Valid new plan after rejection | Full preflight again, never a fabricated verdict |
+
+Good: choose argv from the intersection of prepared commands and test policy. Base: valid first
+plans unchanged. Bad: broaden the validator because a model selected a disallowed command.
+Wrong: duplicate a partial prefix list in a prompt. Correct: derive context and enforcement from
+one module and verify both with `test_integration_command_policy.py`. Service/journal feedback
+regression is `test_command_rejection_is_safe_and_durable`.

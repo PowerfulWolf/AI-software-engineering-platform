@@ -25,9 +25,13 @@ from ai_software_engineer.git import (
     WorktreeRef,
     WorktreeSpec,
 )
+from ai_software_engineer.multi_directory.integration_commands import (
+    is_test_command as _test_command,
+)
 from ai_software_engineer.multi_directory.models import (
     Candidate,
     ChildDelivery,
+    IntegrationCommandError,
     IntegrationEvidence,
     JointCheckpoint,
     JointExecutionPlan,
@@ -204,17 +208,14 @@ class ProductionJointBackend:
         return ChildDelivery(unit_id=unit_id, checkpoint=result.checkpoint)
 
     def validate_plan(self, checkpoint: JointCheckpoint, plan: JointExecutionPlan) -> None:
-        for check in plan.integration_checks:
+        for check_index, check in enumerate(plan.integration_checks, 1):
             prepared = next(p for p in checkpoint.preparations if p.unit_id == check.unit_id)
             unit = next(u for u in checkpoint.scope.units if u.id == check.unit_id)
             permissions = _integration_permissions(prepared.commands)
             WorkspacePolicy(unit.root, permissions).authorize_command(check.argv)
             # Integration is testing, not a general shell/build/install escape hatch.
             if not _test_command(check.argv):
-                raise ValueError(
-                    "integration requires a supported test command, "
-                    "not inspection/install/inline code"
-                )
+                raise IntegrationCommandError(check_index=check_index, argv=check.argv)
         assert checkpoint.design is not None
         for interface in checkpoint.design.interfaces:
             participants = {interface.producer, *interface.consumers}
@@ -417,50 +418,6 @@ def _integration_permissions(commands: tuple[str, ...]) -> AgentPermissions:
         commands=tuple(c for c in commands if not c.startswith("git ")),
         network=NetworkAccess.NONE,
     )
-
-
-def _test_command(argv: tuple[str, ...]) -> bool:
-    denied = {
-        "-c",
-        "--eval",
-        "-e",
-        "install",
-        "publish",
-        "deploy",
-        "--help",
-        "-h",
-        "--version",
-        "--collect-only",
-        "--co",
-        "--listTests",
-        "--passWithNoTests",
-        "--dry-run",
-        "-DskipTests",
-        "-Dmaven.test.skip",
-        "-x",
-        "--exclude-task",
-    }
-    if any(token.split("=", 1)[0] in denied for token in argv):
-        return False
-    prefixes = (
-        ("pytest",),
-        ("python", "-m", "pytest"),
-        ("python3", "-m", "pytest"),
-        ("python", "-m", "unittest"),
-        ("python3", "-m", "unittest"),
-        ("uv", "run", "pytest"),
-        ("npm", "test"),
-        ("pnpm", "test"),
-        ("yarn", "test"),
-        ("bun", "test"),
-        ("go", "test"),
-        ("ctest",),
-        ("mvn", "test"),
-        ("./mvnw", "test"),
-        ("gradle", "test"),
-        ("./gradlew", "test"),
-    )
-    return any(argv[: len(prefix)] == prefix for prefix in prefixes)
 
 
 def _require_nonempty_test_run(result: CommandResult) -> None:

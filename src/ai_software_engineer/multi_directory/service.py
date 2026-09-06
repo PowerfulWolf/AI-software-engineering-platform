@@ -12,9 +12,11 @@ from pydantic import AwareDatetime, Field
 from ai_software_engineer.agents import StructuredModelClient
 from ai_software_engineer.company_workspace import CompanyWorkspace
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
+from ai_software_engineer.multi_directory.integration_commands import planner_command_policy
 from ai_software_engineer.multi_directory.models import (
     ChildDelivery,
     DialogueMessage,
+    IntegrationCommandError,
     IntegrationEvidence,
     JointApproval,
     JointCheckpoint,
@@ -300,6 +302,9 @@ class JointDeliveryService:
                 "acceptance and interface IDs. "
                 "Use the exact required_coverage lists supplied by the platform and correct "
                 "any prior rejection in next_action; do not omit documentation/delivery criteria. "
+                "Integration argv must match integration_command_policy AND prepared project "
+                "commands. Build/lint/docs inspection belongs to native QA/Review, not an "
+                "integration test command. Use tests to check the candidate behavior. "
                 "Commands are tokenized argv from the prepared unit command allowlist; "
                 "no shell, git mutation, "
                 "installs, deployment, secrets or fabricated tests. Commands run at the "
@@ -317,13 +322,13 @@ class JointDeliveryService:
             assert checkpoint.product_spec is not None and checkpoint.design is not None
             try:
                 plan.validate_for(checkpoint.scope, checkpoint.product_spec, checkpoint.design)
-            except PlanCoverageError as exc:
+                self.backend.validate_plan(checkpoint, plan)
+            except (PlanCoverageError, IntegrationCommandError) as exc:
                 self._save(
                     checkpoint,
-                    next_action=f"Rejected plan {digest(plan)}: {exc}. Correct coverage on resume.",
+                    next_action=f"Rejected plan {digest(plan)}: {exc}. Correct the plan on resume.",
                 )
                 raise
-            self.backend.validate_plan(checkpoint, plan)
             checkpoint = self._save(
                 checkpoint,
                 stage=JointStage.DELIVERING,
@@ -401,6 +406,7 @@ class JointDeliveryService:
         )
         payload["design_sha256"] = digest(checkpoint.design) if checkpoint.design else None
         if checkpoint.product_spec is not None and checkpoint.design is not None:
+            payload["integration_command_policy"] = planner_command_policy()
             payload["required_coverage"] = {
                 "acceptance_ids": list(checkpoint.product_spec.acceptance_ids()),
                 "write_unit_ids": [unit.unit_id for unit in checkpoint.design.units],

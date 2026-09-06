@@ -8,6 +8,7 @@ import pytest
 
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.execution import CommandResult
+from ai_software_engineer.multi_directory.integration_commands import is_test_command
 from ai_software_engineer.multi_directory.models import (
     JointApproval,
     JointCheckpoint,
@@ -20,7 +21,6 @@ from ai_software_engineer.multi_directory.models import (
 from ai_software_engineer.multi_directory.production import (
     DerivedStageInputs,
     _require_nonempty_test_run,
-    _test_command,
 )
 from ai_software_engineer.multi_directory.scope import DirectoryScope, DirectoryUnit
 from ai_software_engineer.multi_directory.service import CreateRequirementProject
@@ -153,7 +153,7 @@ def test_projection_is_deterministic_and_requires_exact_root(tmp_path: Path) -> 
     ],
 )
 def test_integration_rejects_non_test_commands(argv: tuple[str, ...]) -> None:
-    assert not _test_command(argv)
+    assert not is_test_command(argv)
 
 
 def test_integration_zero_test_success_is_not_a_pass(tmp_path: Path) -> None:

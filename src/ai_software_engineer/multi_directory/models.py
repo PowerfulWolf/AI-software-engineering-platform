@@ -193,6 +193,18 @@ class PlanCoverageError(ValueError):
         )
 
 
+class IntegrationCommandError(ValueError):
+    """Safe preflight feedback without echoing untrusted argv or check names."""
+
+    def __init__(self, *, check_index: int, argv: tuple[str, ...]) -> None:
+        command_sha = hashlib.sha256(json.dumps(argv, separators=(",", ":")).encode()).hexdigest()
+        super().__init__(
+            "integration requires a supported test command, not inspection/install/inline code; "
+            f"check index: {check_index}; argv sha256: {command_sha}. "
+            "Use integration_command_policy intersected with prepared project commands"
+        )
+
+
 class JointExecutionPlan(DomainModel):
     design_sha256: Digest
     units: Annotated[tuple[UnitPlan, ...], Field(min_length=1)]

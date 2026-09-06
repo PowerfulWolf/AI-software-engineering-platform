@@ -9,6 +9,7 @@ import pytest
 from ai_software_engineer.agents import StructuredModelClient, StructuredModelResult
 from ai_software_engineer.company_workspace import CompanyWorkspace
 from ai_software_engineer.multi_directory.models import (
+    IntegrationCommandError,
     JointCheckpoint,
     JointExecutionPlan,
     JointStage,
@@ -28,6 +29,7 @@ class PlanningBackend:
     def __init__(self, plan: JointExecutionPlan) -> None:
         self.plan = plan
         self.inputs: list[Mapping[str, object]] = []
+        self.command_error = False
 
     def client(self, scope: DirectoryScope) -> StructuredModelClient:
         return self
@@ -47,7 +49,8 @@ class PlanningBackend:
         pass
 
     def validate_plan(self, checkpoint: JointCheckpoint, plan: JointExecutionPlan) -> None:
-        pass
+        if self.command_error:
+            raise IntegrationCommandError(check_index=1, argv=("ruff", "private-value"))
 
     def prepare(self, unit: DirectoryUnit) -> NoReturn:
         raise AssertionError("already prepared")
@@ -152,6 +155,11 @@ def test_rejected_coverage_survives_restart_and_reaches_next_attempt(
         "write_unit_ids": [u.unit_id for u in design.units],
         "interface_ids": [i.id for i in design.interfaces],
     }
+    policy = backend.inputs[0]["integration_command_policy"]
+    assert isinstance(policy, dict)
+    assert ["uv", "run", "pytest"] in policy["test_prefixes"]
+    assert ["ruff"] not in policy["test_prefixes"]
+    assert "--collect-only" in policy["forbidden_options"]
     restarted = JointDeliveryService(backend=backend, company=company)
     if exhaust:
         for _ in range(2):
@@ -172,3 +180,36 @@ def test_rejected_coverage_survives_restart_and_reaches_next_attempt(
     assert accepted.stage is JointStage.DELIVERING and accepted.plan == valid
     assert accepted.attempts == {"plan": 2}
     assert not accepted.children and accepted.integration is None
+
+
+def test_command_rejection_is_safe_and_durable(tmp_path: Path) -> None:
+    cp = checkpoint(tmp_path)
+    assert cp.plan is not None
+    company = CompanyWorkspace.initialize(
+        tmp_path / "platform", company_id="company_test", name="Test"
+    )
+    backend = PlanningBackend(cp.plan)
+    backend.command_error = True
+    service = JointDeliveryService(backend=backend, company=company)
+    seed = JointCheckpoint.seal(
+        {
+            **cp.to_wire(),
+            "company_manifest_sha256": company.manifest.manifest_sha256,
+            "stage": JointStage.PLANNING,
+            "plan": None,
+        }
+    )
+    service.journal.append(seed, expected=None)
+    with pytest.raises(IntegrationCommandError, match="supported test command"):
+        service.resume(ResumeProjectDelivery(delivery_id=seed.delivery_id))
+    rejected = service.status(seed.delivery_id).checkpoint
+    assert "private-value" not in rejected.next_action
+    assert "check index: 1" in rejected.next_action
+    assert "argv sha256:" in rejected.next_action
+    assert digest(cp.plan) in rejected.next_action
+    assert rejected.plan is None and rejected.attempts == {"plan": 1}
+    backend.command_error = False
+    reopened = JointDeliveryService(backend=backend, company=company)
+    with pytest.raises(DeliveryReached):
+        reopened.resume(ResumeProjectDelivery(delivery_id=seed.delivery_id))
+    assert backend.inputs[-1]["next_action"] == rejected.next_action
