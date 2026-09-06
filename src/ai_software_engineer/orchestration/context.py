@@ -5,11 +5,13 @@ from pathlib import Path
 from typing import Protocol
 
 from ai_software_engineer.context import (
+    ContextBudget,
     ContextBundle,
     ContextSource,
     ContextStore,
     FileContextBuilder,
 )
+from ai_software_engineer.context.builder import DEFAULT_CONTEXT_BUDGET
 from ai_software_engineer.context.ports import ContextSourceError
 from ai_software_engineer.domain.agent import AgentDefinition
 from ai_software_engineer.domain.artifact import Artifact
@@ -39,10 +41,12 @@ class FileRunContextBuilder:
         *,
         sources: tuple[ContextSource, ...] = (),
         context_store: ContextStore | None = None,
+        budget: ContextBudget = DEFAULT_CONTEXT_BUDGET,
     ) -> None:
         self._project_root = Path(project_root)
         self._sources = sources
         self._context_store = context_store
+        self._budget = budget
 
     def build(
         self,
@@ -59,6 +63,7 @@ class FileRunContextBuilder:
             self._project_root,
             agent.permissions,
             sources=self._sources + artifact_sources,
+            budget=self._budget,
         )
         bundle = builder.build(
             task,

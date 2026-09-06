@@ -24,6 +24,7 @@ from ai_software_engineer.config import (
     ProductionConfig,
     ProviderRouteConfig,
 )
+from ai_software_engineer.context import ContextBudget, FileContextStore
 from ai_software_engineer.domain import (
     AgentDefinition,
     AgentProducer,
@@ -45,6 +46,8 @@ from ai_software_engineer.domain import (
     ReviewReportContent,
     ReviewVerdict,
 )
+from ai_software_engineer.orchestration import BlockedResult, RetryDeliveryResult
+from ai_software_engineer.project_manager import production_backend
 from ai_software_engineer.project_manager.delivery import (
     ApproveProductSpec,
     StartProjectDelivery,
@@ -343,10 +346,18 @@ def _git_output(*arguments: str, cwd: Path) -> str:
 
 
 @pytest.mark.mysql
-def test_host_completes_isolated_scripted_delivery_without_polluting_project(
+@pytest.mark.parametrize("input_limit", [32_000, 1])
+def test_host_records_isolated_delivery_without_polluting_project(
     tmp_path: Path,
     mysql_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
+    input_limit: int,
 ) -> None:
+    monkeypatch.setattr(
+        production_backend,
+        "PRODUCTION_DELIVERY_CONTEXT_BUDGET",
+        ContextBudget(max_input_tokens=input_limit, reserved_output_tokens=4_000),
+    )
     project = tmp_path / "target"
     project.mkdir()
     (project / "hello.txt").write_text("hello\n", encoding="utf-8")
@@ -386,11 +397,36 @@ def test_host_completes_isolated_scripted_delivery_without_polluting_project(
         )
     )
 
+    if input_limit == 1:
+        assert approved.checkpoint.stage is DeliveryStage.BLOCKED
+        assert approved.checkpoint.task_status is not None
+        assert approved.checkpoint.task_status.value == "BLOCKED"
+        assert approved.checkpoint.task_revision == 2
+        assert approved.checkpoint.stage_attempts.delivering == 1
+        assert isinstance(approved.delivery, BlockedResult)
+        assert approved.delivery.classification.value == "BUDGET_EXHAUSTED"
+        assert approved.delivery.artifact_ids == ()
+        assert approved.checkpoint.candidate_revision is None
+        assert (project / "hello.txt").read_text(encoding="utf-8") == "hello\n"
+        return
     assert approved.checkpoint.stage is DeliveryStage.DONE
     assert approved.checkpoint.dispatch_commit_id is not None
     assert approved.checkpoint.task_id is not None
     assert approved.checkpoint.candidate_revision is not None
-    assert approved.delivery is not None
+    assert isinstance(approved.delivery, RetryDeliveryResult)
+    context_store = FileContextStore(
+        Path(config.platform_root)
+        / "companies"
+        / config.company_id
+        / "projects"
+        / str(approved.checkpoint.project_id)
+        / "contexts"
+    )
+    for context_id in approved.delivery.context_manifest_ids:
+        context = context_store.get(context_id)
+        assert context.budget.max_input_tokens == 32_000
+        assert context.budget.reserved_output_tokens == 4_000
+        assert all(not section.truncated for section in context.sections)
     assert (project / "hello.txt").read_text(encoding="utf-8") == "hello\n"
     candidate_content = _git_output(
         "show",

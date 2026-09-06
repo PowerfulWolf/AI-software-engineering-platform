@@ -3,6 +3,7 @@
 from enum import StrEnum
 
 from ai_software_engineer.agents import AgentErrorCode, AgentRunStatus, RunId
+from ai_software_engineer.context import ContextBudgetExceeded
 from ai_software_engineer.context.models import ContextId
 from ai_software_engineer.domain.artifact import (
     Artifact,
@@ -92,6 +93,25 @@ class RetryingOrchestrator(SerialOrchestrator):
     """
 
     def run_task(self, task_id: TaskId) -> RetryResult:  # type: ignore[override]
+        try:
+            return self._run_task(task_id)
+        except ContextBudgetExceeded:
+            task = self._repository.get(task_id)
+            events = self._repository.list_events(task_id)
+            artifact_ids = tuple(
+                dict.fromkeys(artifact_id for event in events for artifact_id in event.artifact_ids)
+            )
+            return self._blocked(
+                task,
+                RetryClassification.BUDGET_EXHAUSTED,
+                "Required context exceeds the configured input budget; no automatic retry.",
+                max(task.attempts, 1),
+                tuple(event.event_id for event in events),
+                artifact_ids,
+                source_revision=events[-1].source_revision if events else task.base_ref,
+            )
+
+    def _run_task(self, task_id: TaskId) -> RetryResult:
         task = self._repository.get(task_id)
         if task.status in {TaskStatus.DONE, TaskStatus.BLOCKED, TaskStatus.FAILED}:
             raise TaskNotRunnable(f"Task {task.id} is terminal at {task.status.value}")

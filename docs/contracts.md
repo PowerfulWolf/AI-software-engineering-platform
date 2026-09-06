@@ -110,6 +110,11 @@ project、manifest digest/Schema/path mismatch 或 layout 缺失均 fail closed�
 `RuntimeWorkspaceBinding` 已能把 Runtime paths 固定到 `ProjectWorkspace.directory(...)` 下；
 生产 Host 已自动注册并装配公司 sidecar 下的项目子模块；底层 RuntimeConfig 仍显式使用这些路径。
 
+Runtime wire 可选字段 `context_max_input_tokens` 为严格整数（1..2,000,000），默认 12,000；
+生产交付显式配置 32,000。它必须传到各角色 ContextBundle 的 budget，不会因 required source
+超限自动增加。生产 Profile 阅读投影只压缩语言 marker 清单，保留完整规范引用及原始 profile
+digest；投影不是可写回的 ProjectProfile。详见 [上下文契约](context-routing.md)。
+
 ### 联合需求项目
 
 `ase request create DIR... --name NAME` 先准备全部目录，再允许 `discuss/approve/status/resume`。

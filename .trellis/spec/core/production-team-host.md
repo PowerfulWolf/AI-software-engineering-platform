@@ -176,6 +176,9 @@ this does not authorize rebasing old approval or QA/Review evidence in place.
 - delivery 完成只产生 `DONE + candidate_revision`；不 merge、不 push 目标保护分支、不 deploy。
 - production v0.1 每个 delivery role 的 Task attempt budget 是 1；自动路径不能安全继续时必须生成
   BLOCKED/WAITING_HUMAN 证据，而不是无限重试。
+- T042 production context 使用显式 32,000 input / 4,000 output reserve；完整规范索引和批准文档
+  不截断，语言 marker 清单仅作 context-only 投影。低层 Runtime 默认仍为 12,000 input。
+  签名、错误矩阵与回归点见 `python-runtime.md` 的 T042 小节；旧 manifest/审批不改写。
 
 ## 4. Validation & Error Matrix
 

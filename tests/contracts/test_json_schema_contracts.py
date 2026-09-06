@@ -116,6 +116,15 @@ def test_runtime_config_satisfies_the_canonical_schema() -> None:
     _assert_valid(config.to_wire(), "runtime-config.schema.json")
 
 
+@pytest.mark.parametrize("limit", [0, True, 2_000_001])
+def test_runtime_context_limit_rejects_invalid_values(limit: int) -> None:
+    payload = RuntimeConfig(endpoint="https://api.example.test/v1", model="fake").to_wire()
+    payload["context_max_input_tokens"] = limit
+    _assert_invalid(payload, "runtime-config.schema.json")
+    with pytest.raises(ValueError):
+        RuntimeConfig.model_validate(payload)
+
+
 def test_production_config_satisfies_the_canonical_schema(tmp_path: Path) -> None:
     config = ProductionConfig.model_validate(
         {

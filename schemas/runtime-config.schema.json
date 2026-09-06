@@ -76,6 +76,7 @@
     "paths": {"$ref": "#/$defs/paths"},
     "persistence": {"$ref": "#/$defs/persistence"},
     "context_sources": {"type": "array", "items": {"$ref": "#/$defs/source"}},
+    "context_max_input_tokens": {"type": "integer", "minimum": 1, "maximum": 2000000, "default": 12000},
     "role_overrides": {"type": "array", "items": {"$ref": "#/$defs/override"}},
     "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 3600, "default": 600},
     "token_budget": {"type": "integer", "minimum": 1, "default": 20000},

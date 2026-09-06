@@ -645,7 +645,55 @@ FileContextBuilder(
 - `tests/contracts/test_json_schema_contracts.py`：ContextBundle 正例与缺失 section hash/sections 反例必须校验 [`schemas/context.schema.json`](../../schemas/context.schema.json)。
 - Ruff、strict mypy、完整 pytest、`uv lock --check`、`uv build` 和 `git diff --check` 是合并门禁。
 
-### 10.7 Wrong vs Correct
+### 10.7 T042: Production context composition
+
+Scope: Runtime budget plumbing and production discovery-source projection.
+
+Signatures:
+`project_profile_context(profile: ProjectProfile) -> ContextSource`;
+`FileRunContextBuilder(..., budget: ContextBudget = DEFAULT_CONTEXT_BUDGET)`;
+`RuntimeConfig.context_max_input_tokens: StrictInt = 12000` (1..2,000,000).
+
+Contract: Runtime passes the explicit input cap to every role, records it in the persisted manifest,
+and reserves 4,000 output tokens. Existing low-level defaults stay 12,000/4,000. Production uses
+32,000/4,000 and declares a matching 36,000 role token budget. These remain local character-based
+estimates, not provider window/usage guarantees. Required overflow never truncates or auto-retries.
+
+Profile context has `kind=project_profile_context`, a URI pinned to `profile_sha256`, and full
+native_rules/build_systems/vcs/revision. Language marker inventories become counts and first three
+sorted samples. Never overwrite the full immutable profile or call this projection schema-valid
+ProjectProfile; the digest refers to the original record, while section SHA hashes delivered text.
+
+| Case | Expected |
+|---|---|
+| 1,500 language markers plus native rules | Compact context; unchanged native references/profile |
+| Explicit 32,000 input with >12,000 required tokens | Four-role offline Runtime succeeds; exact cap in each manifest |
+| Same sources with 12,000 input | ContextBudgetExceeded; no Agent call |
+| Runtime catches overflow in any role | Existing BUDGET_EXHAUSTED/BLOCKED event; no call/retry of overflowing role |
+| Zero, boolean or >2,000,000 input cap | Pydantic and canonical runtime-config schema reject |
+
+Good: measured projection plus explicit bounded production budget. Base: old low-level config is
+unchanged. Bad: dropping standards, using a partial JSON document or globally raising the hidden
+default to make a live run continue. Tests: `tests/context/test_project_profile.py`,
+`tests/runtime/test_runtime.py::test_explicit_context_limit_reaches_all_runtime_roles`,
+runtime Schema negatives and production-host persisted-context assertions. ContextBuilder still
+raises; RetryingOrchestrator catches only ContextBudgetExceeded and returns the existing BlockedResult
+after recording a fixed safe reason, current attempt and event-bound artifact/source revision facts.
+Project Manager consequently seals the real BLOCKED Task snapshot and event count, not stale NEW.
+Four-role overflow tests assert no offending/later Agent calls, no fake verdict, preserved prior
+artifacts/candidate revision, and no terminal replay. The MySQL host test asserts BLOCKED/revision2.
+
+Wrong: `json.dumps(profile.to_wire())` for every role on a large repository.
+Correct: `project_profile_context(profile)` plus explicit budget propagated end to end.
+
+Post-mortem (B/D/E): small fixture profiles hid a production-scale inventory assumption; Runtime
+could not carry a host-selected context budget. Marker inventory alone was 17,266 estimated tokens
+in the archived case; compacting it alone still left roughly 19,100 required base-input tokens.
+Thus neither blind cap increases nor compression alone is sufficient. Test both scale and plumbing.
+Follow-up: provider-aware whole-prompt token accounting and early admission remain distinct work;
+this fix does not pretend local section estimates cover tool schemas, output or future evidence.
+
+### 10.8 Wrong vs Correct
 
 #### Wrong
 

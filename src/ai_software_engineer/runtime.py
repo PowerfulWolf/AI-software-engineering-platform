@@ -19,7 +19,7 @@ from ai_software_engineer.agents import (
     StoredContextResolver,
 )
 from ai_software_engineer.artifacts import FileArtifactStore
-from ai_software_engineer.context import ContextSource, FileContextStore
+from ai_software_engineer.context import ContextBudget, ContextSource, FileContextStore
 from ai_software_engineer.domain import (
     AgentDefinition,
     AgentPermissions,
@@ -125,6 +125,7 @@ class RuntimeConfig(DomainModel):
     paths: RuntimePaths = RuntimePaths()
     persistence: RuntimePersistence = RuntimePersistence()
     context_sources: tuple[ContextSource, ...] = ()
+    context_max_input_tokens: StrictInt = Field(default=12_000, ge=1, le=2_000_000)
     role_overrides: tuple[RoleAgentOverride, ...] = ()
     timeout_seconds: StrictInt = Field(default=600, ge=1, le=3600)
     token_budget: StrictInt = Field(default=20_000, ge=1)
@@ -281,6 +282,10 @@ class RuntimeSession:
             project_root,
             sources=self._config.context_sources,
             context_store=self._context_store,
+            budget=ContextBudget(
+                max_input_tokens=self._config.context_max_input_tokens,
+                reserved_output_tokens=4_000,
+            ),
         )
         instrumented = EvaluatingAgentAdapter(
             case_id=selected_case,

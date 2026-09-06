@@ -25,7 +25,8 @@ from ai_software_engineer.config import (
     ProductionConfig,
     ProductionConfigError,
 )
-from ai_software_engineer.context import ContextSource, FileContextStore
+from ai_software_engineer.context import ContextBudget, ContextSource, FileContextStore
+from ai_software_engineer.context.profile import project_profile_context
 from ai_software_engineer.design import (
     DesignerService,
     DesignerServiceResult,
@@ -143,6 +144,9 @@ from ai_software_engineer.store import MySqlTaskRepository
 
 Clock = Callable[[], datetime]
 ResultT = TypeVar("ResultT")
+PRODUCTION_DELIVERY_CONTEXT_BUDGET = ContextBudget(
+    max_input_tokens=32_000, reserved_output_tokens=4_000
+)
 _ALL_CAPABILITIES = (
     "implementation",
     "testing",
@@ -315,12 +319,7 @@ class ProductionProjectDeliveryBackend:
         """Export verified, readable preparation facts for a joint Product conversation."""
         facts = self._facts(preparation)
         return (
-            ContextSource(
-                source_id="project.profile",
-                uri=f"profile://{facts.profile.project_id}",
-                content=json.dumps(facts.profile.to_wire(), sort_keys=True),
-                required=True,
-            ),
+            project_profile_context(facts.profile),
             ContextSource(
                 source_id="project.baseline",
                 uri=f"baseline://{facts.profile.project_id}",
@@ -717,6 +716,8 @@ class ProductionProjectDeliveryBackend:
             endpoint="https://runtime.invalid/v1/responses",
             model=primary.model,
             api_key_required=False,
+            context_max_input_tokens=PRODUCTION_DELIVERY_CONTEXT_BUDGET.max_input_tokens,
+            token_budget=_delivery_token_budget(),
             paths=paths,
             persistence=RuntimePersistence(
                 backend="mysql",
@@ -724,13 +725,7 @@ class ProductionProjectDeliveryBackend:
             ),
             context_sources=(
                 *self._delivery_context_sources,
-                ContextSource(
-                    source_id="project.profile",
-                    uri=f"profile://{facts.profile.project_id}/{facts.profile.profile_sha256}",
-                    content=json.dumps(facts.profile.to_wire(), ensure_ascii=False, sort_keys=True),
-                    priority=20,
-                    required=True,
-                ),
+                project_profile_context(facts.profile),
                 ContextSource(
                     source_id="project.baseline",
                     uri=f"baseline://{facts.baseline.project_id}/{facts.baseline.baseline_sha256}",
@@ -1037,9 +1032,14 @@ def _agent_definitions(
             output_artifacts=(_ROLE_OUTPUT[phase.role],),
             max_retries=0,
             timeout_seconds=600,
-            token_budget=20_000,
+            token_budget=_delivery_token_budget(),
         )
     return definitions
+
+
+def _delivery_token_budget() -> int:
+    budget = PRODUCTION_DELIVERY_CONTEXT_BUDGET
+    return budget.max_input_tokens + budget.reserved_output_tokens
 
 
 def _runtime_paths(workspace: ProjectWorkspace) -> RuntimePaths:

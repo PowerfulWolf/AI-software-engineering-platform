@@ -8,12 +8,14 @@ from pydantic import ValidationError
 
 from ai_software_engineer.agents import AgentRequest, AgentResult, AgentRunStatus
 from ai_software_engineer.artifacts import FileArtifactStore
+from ai_software_engineer.context import ContextSource, FileContextStore
 from ai_software_engineer.domain import AgentRole, Artifact, QaReportStatus
 from ai_software_engineer.evaluation import (
     CaseStartedEvent,
     EvaluationTraceBuilder,
     FileEvaluationEventStore,
 )
+from ai_software_engineer.orchestration import BlockedResult, TaskNotRunnable
 from ai_software_engineer.runtime import (
     RoleAgentOverride,
     RuntimeConfig,
@@ -124,6 +126,93 @@ def _config(tmp_path: Path, *, api_key_required: bool = False) -> RuntimeConfig:
             handoffs=str(tmp_path / "handoffs"),
         ),
     )
+
+
+@pytest.mark.parametrize("input_limit", [12_000, 32_000])
+def test_explicit_context_limit_reaches_all_runtime_roles(tmp_path: Path, input_limit: int) -> None:
+    config = _config(tmp_path).model_copy(
+        update={
+            "context_max_input_tokens": input_limit,
+            "context_sources": (
+                ContextSource(
+                    source_id="approved.design",
+                    uri="design://fixture",
+                    content="Design detail. " * 4000,
+                    required=True,
+                ),
+            ),
+        }
+    )
+    task = make_task().model_copy(update={"repository": str(tmp_path)})
+    with SqliteTaskRepository(config.paths.database) as repository:
+        repository.create(task)
+    adapter = RuntimeFixtureAdapter()
+    with RuntimeSession(config, agent_adapter=adapter, environment={}) as runtime:
+        if input_limit == 12_000:
+            blocked = runtime.run_task(task.id).result
+            assert isinstance(blocked, BlockedResult)
+            assert blocked.classification.value == "BUDGET_EXHAUSTED"
+            assert blocked.task.status.value == "BLOCKED"
+            assert adapter.requests == []
+            return
+        result = runtime.run_task(task.id)
+    assert result.result.task.status.value == "DONE"
+    assert len(adapter.requests) == 4
+    store = FileContextStore(config.paths.contexts)
+    for request in adapter.requests:
+        context = store.get(request.context_manifest_id)
+        assert context.budget.max_input_tokens == input_limit
+        assert 12_000 < context.budget.used_input_tokens < input_limit
+        assert all(not section.truncated for section in context.sections)
+
+
+@pytest.mark.parametrize("overflow_role", list(AgentRole))
+def test_context_overflow_records_current_phase_without_retry(
+    tmp_path: Path, overflow_role: AgentRole
+) -> None:
+    config = _config(tmp_path).model_copy(
+        update={
+            "context_sources": (
+                ContextSource(
+                    source_id="large.required",
+                    uri="source://large",
+                    content="x" * 52_000,
+                    roles=(overflow_role,),
+                    required=True,
+                ),
+            )
+        }
+    )
+    task = make_task().model_copy(update={"repository": str(tmp_path)})
+    with SqliteTaskRepository(config.paths.database) as repository:
+        repository.create(task)
+    adapter = RuntimeFixtureAdapter()
+    with RuntimeSession(config, agent_adapter=adapter, environment={}) as runtime:
+        blocked = runtime.run_task(task.id).result
+        assert isinstance(blocked, BlockedResult)
+        assert blocked.task.status.value == "BLOCKED"
+        assert blocked.classification.value == "BUDGET_EXHAUSTED"
+        assert blocked.attempt == 1
+        with pytest.raises(TaskNotRunnable):
+            runtime.run_task(task.id)
+    roles = list(AgentRole)
+    assert [request.role for request in adapter.requests] == roles[: roles.index(overflow_role)]
+    with SqliteTaskRepository(config.paths.database) as repository:
+        events = repository.list_events(task.id)
+        assert tuple(event.event_id for event in events) == blocked.event_ids
+        assert repository.get(task.id) == blocked.task
+        assert (
+            events[-1].from_status.value
+            == {
+                AgentRole.ORCHESTRATOR: "PLANNING",
+                AgentRole.CODER: "IMPLEMENTING",
+                AgentRole.QA: "QA",
+                AgentRole.REVIEWER: "REVIEW",
+            }[overflow_role]
+        )
+        assert events[-1].source_revision == events[-2].source_revision
+    artifacts = FileArtifactStore(config.paths.artifacts).list_for_task(task.id)
+    assert set(blocked.artifact_ids) == {artifact.artifact_id for artifact in artifacts}
 
 
 def test_runtime_config_builds_all_roles_with_v01_permission_boundaries() -> None:
