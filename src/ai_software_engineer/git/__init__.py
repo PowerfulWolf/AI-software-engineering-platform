@@ -1,5 +1,6 @@
 """Repository Plane interfaces for role-isolated Git worktrees."""
 
+from ai_software_engineer.git.capture import WorktreeChangeCapture
 from ai_software_engineer.git.policy import (
     CommandPolicyViolation,
     PathPolicyViolation,
@@ -25,6 +26,7 @@ from ai_software_engineer.git.worktree import (
     UnmanagedWorktree,
     UnsafeRepositoryConfiguration,
     WorktreeAlreadyExists,
+    WorktreeCaptureRejected,
     WorktreeIdentityDrift,
     WorktreeNotFound,
     WorktreeRevisionDrift,
@@ -48,6 +50,8 @@ __all__ = [
     "WorkspacePolicy",
     "WorkspacePolicyError",
     "WorktreeAlreadyExists",
+    "WorktreeCaptureRejected",
+    "WorktreeChangeCapture",
     "WorktreeIdentityDrift",
     "WorktreeNotFound",
     "WorktreeRef",

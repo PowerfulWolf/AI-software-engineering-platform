@@ -1,13 +1,24 @@
 """Local Git CLI adapter for isolated role worktrees."""
 
+import hashlib
 import os
 import shutil
 import subprocess
 from pathlib import Path
 from typing import Final, Protocol, runtime_checkable
 
+from ai_software_engineer.domain.agent import AgentPermissions
 from ai_software_engineer.domain.enums import AgentRole
+from ai_software_engineer.git.capture import (
+    MAX_CAPTURE_BYTES,
+    MAX_CAPTURE_FILES,
+    WorktreeChangeCapture,
+    read_capture_file,
+    without_hunk_labels,
+)
+from ai_software_engineer.git.policy import WorkspacePolicy
 from ai_software_engineer.git.ports import WorktreeRef, WorktreeSnapshot, WorktreeSpec
+from ai_software_engineer.redaction import redact_text
 
 _GIT_ENV: Final[dict[str, str]] = {
     "GIT_CONFIG_NOSYSTEM": "1",
@@ -70,6 +81,10 @@ class DirtyWorktree(GitWorkspaceError):
     def __init__(self, changed_paths: tuple[str, ...]) -> None:
         super().__init__(f"worktree has unsaved changes: {', '.join(changed_paths)}")
         self.changed_paths = changed_paths
+
+
+class WorktreeCaptureRejected(GitWorkspaceError):
+    """The preserved work is unsupported, unsafe, or changed during inspection."""
 
 
 class GitCommandError(GitWorkspaceError):
@@ -200,6 +215,141 @@ class GitWorktreeManager:
         if snapshot.dirty:
             raise DirtyWorktree(snapshot.changed_paths)
         self._run_git(("worktree", "remove", str(worktree.path.resolve())), cwd=self._repository)
+
+    def capture_changes(
+        self,
+        worktree: WorktreeRef,
+        permissions: AgentPermissions,
+        *,
+        denied_paths: tuple[str, ...] = (),
+    ) -> WorktreeChangeCapture:
+        """Observe preserved Coder modifications without changing files, index or refs.
+
+        v1 deliberately accepts only modifications to existing regular text files;
+        added/deleted/renamed/untracked files, mode changes and partial commits need a
+        later explicit recovery contract. A capture is not authorization to resume.
+        The caller must ensure the old executor has stopped before taking this fact.
+        """
+        if worktree.role is not AgentRole.CODER:
+            raise WorktreeCaptureRejected("only Coder work can be captured for recovery")
+        first = self._capture_changes_once(worktree, permissions, denied_paths)
+        second = self._capture_changes_once(worktree, permissions, denied_paths)
+        if first != second:
+            raise WorktreeCaptureRejected("worktree changed during capture")
+        return first
+
+    def verify_capture(
+        self,
+        capture: WorktreeChangeCapture,
+        permissions: AgentPermissions,
+        *,
+        denied_paths: tuple[str, ...] = (),
+    ) -> None:
+        """Re-read the exact source; stale/tampered captures never authorize recovery."""
+        observed = self.capture_changes(capture.worktree, permissions, denied_paths=denied_paths)
+        if observed != capture:
+            raise WorktreeCaptureRejected("preserved work no longer matches capture")
+
+    def _capture_changes_once(
+        self,
+        worktree: WorktreeRef,
+        permissions: AgentPermissions,
+        denied_paths: tuple[str, ...],
+    ) -> WorktreeChangeCapture:
+        # recover validates full SHA, registered ownership, exact branch and HEAD;
+        # validate the supplied ref as well, not merely its derived Task/attempt.
+        self._validate_owned_worktree(worktree)
+        self.recover(
+            WorktreeSpec(
+                task_id=worktree.task_id,
+                role=worktree.role,
+                attempt=worktree.attempt,
+                source_revision=worktree.head_revision,
+            )
+        )
+        root = worktree.path
+        policy = WorkspacePolicy(root, permissions, denied_paths=denied_paths)
+        if self._run_git_bytes(("ls-files", "--others", "--exclude-standard", "-z"), cwd=root):
+            raise WorktreeCaptureRejected("untracked files require a separate recovery contract")
+        flags = self._run_git_bytes(("ls-files", "-v", "-z"), cwd=root)
+        if any(entry and entry[:1] != b"H" for entry in flags.split(b"\0")):
+            raise WorktreeCaptureRejected("nonstandard index flags are not supported")
+        arguments = (
+            "--no-optional-locks",
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+        )
+        raw = self._run_git_bytes(
+            (*arguments, "--raw", "--no-abbrev", "-z", "HEAD", "--"), cwd=root
+        )
+        entries = raw.split(b"\0")[:-1]
+        if len(entries) % 2 or len(entries) // 2 > MAX_CAPTURE_FILES:
+            raise WorktreeCaptureRejected("unsupported capture file inventory")
+        files: list[tuple[str, str]] = []
+        total_bytes = 0
+        for header, raw_path in zip(entries[::2], entries[1::2], strict=True):
+            fields = header.split()
+            if (
+                len(fields) != 5
+                or fields[0] not in (b":100644", b":100755")
+                or fields[0][1:] != fields[1]
+                or fields[4] != b"M"
+            ):
+                raise WorktreeCaptureRejected("capture supports regular-file modifications only")
+            try:
+                path = raw_path.decode("utf-8")
+                policy.authorize_read(path)
+                policy.authorize_write(path)
+                content = read_capture_file(root, path, executable=fields[1] == b"100755")
+                base_size = int(
+                    self._run_git(("cat-file", "-s", fields[2].decode("ascii")), cwd=root)
+                )
+                total_bytes += len(content) + base_size
+                if total_bytes > MAX_CAPTURE_BYTES:
+                    raise WorktreeCaptureRejected("capture content exceeds byte limit")
+            except (OSError, UnicodeError, ValueError) as error:
+                raise WorktreeCaptureRejected("capture cannot read a regular UTF-8 file") from error
+            files.append((path, hashlib.sha256(content).hexdigest()))
+        staged_paths = _decode_nul_paths(
+            self._run_git_bytes(
+                (*arguments, "--cached", "--name-only", "-z", "HEAD", "--"), cwd=root
+            )
+        )
+        if not staged_paths.issubset({path for path, _ in files}):
+            raise WorktreeCaptureRejected("index-only changes require a separate recovery contract")
+        patch_arguments = (
+            *arguments,
+            "--binary",
+            "--full-index",
+            "--no-color",
+            "--unified=0",
+            "--inter-hunk-context=0",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+        )
+        patch = without_hunk_labels(self._run_git_bytes((*patch_arguments, "HEAD", "--"), cwd=root))
+        staged = without_hunk_labels(
+            self._run_git_bytes((*patch_arguments, "--cached", "HEAD", "--"), cwd=root)
+        )
+        for payload in (patch, staged):
+            if len(payload) > MAX_CAPTURE_BYTES:
+                raise WorktreeCaptureRejected("capture diff exceeds byte limit")
+            try:
+                text = payload.decode("utf-8")
+            except UnicodeError as error:
+                raise WorktreeCaptureRejected("capture diff is not UTF-8") from error
+            if b"GIT binary patch" in payload or redact_text(text).occurrences:
+                # Redacting a reusable patch would silently change code. Refuse it;
+                # never print/persist the original content or a transformed patch.
+                raise WorktreeCaptureRejected("capture contains binary or sensitive content")
+        return WorktreeChangeCapture(
+            worktree=worktree,
+            patch=patch,
+            index_diff_sha256=hashlib.sha256(staged).hexdigest(),
+            file_sha256s=tuple(sorted(files)),
+        )
 
     def _validate_repository(self) -> None:
         if self._git is None or not self._repository.is_dir():

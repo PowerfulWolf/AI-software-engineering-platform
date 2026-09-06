@@ -146,3 +146,9 @@ Coder 必须从 Task `base_ref` 的 full commit SHA 创建 branch worktree；QA/
 candidate SHA 创建两个独立 detached worktree。`recover=True` 不做 checkout/reset/clean，而是要求
 现有路径、Git common-dir、role/attempt layout、branch/detached 状态和 HEAD 全部吻合；dirty 文件作为
 中断 evidence 保留。恢复检查失败时上层进入人工处理，不能悄悄创建另一份环境继续。
+
+T044 第一阶段增加只读 Python 接口 `GitWorktreeManager.capture_changes/verify_capture`，用于识别
+中断 Coder 留下的既有文本文件修改，绑定原 HEAD、分支、patch、文件摘要与暂存区摘要。
+它不保存或应用补丁，不修改旧工作树，也不恢复终态 Task。新增/删除/二进制/越权或敏感改动等
+不支持的情况明确拒绝；细节见 [恢复契约](../.trellis/spec/core/delivery-recovery.md)。生产恢复入口、
+授权后的新执行和基线更新仍需后续实现，不能用捕获成功代替候选提交及独立 QA/Review。

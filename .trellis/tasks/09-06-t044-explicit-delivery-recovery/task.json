@@ -1,0 +1,1 @@
+{"id":"T044","title":"Explicit delivery recovery after provider interruption","status":"in_progress","phase":"capture_verified","remaining":["durable authorization and upstream carry-forward","fresh execution and snapshot seed","production CLI recovery and offline end-to-end tests","real Coder QA Reviewer validation"]}

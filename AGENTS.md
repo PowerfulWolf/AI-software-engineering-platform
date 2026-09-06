@@ -202,6 +202,8 @@ subprocess/filesystem handle。
 - Coder 提交前检查 changed paths 和 `git diff --check`；QA 测试变更默认不进入候选分支；Reviewer 只读；
 - v0.1 只交付 candidate SHA + diff + evidence，不自动 merge；
 - 清理前确认 artifact 已持久化且 worktree 无未保存变更。
+- 中断改动捕获是只读事实，不是批准或 candidate；不能因额度恢复而重置终态 Task 或接受任意
+  dirty worktree。恢复扩展遵守 `.trellis/spec/core/delivery-recovery.md`，旧执行和失败历史须保留。
 
 ## 失败与重试
 
