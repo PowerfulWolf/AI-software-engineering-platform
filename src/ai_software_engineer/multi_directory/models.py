@@ -67,6 +67,14 @@ class JointProductSpec(DomainModel):
     version: Annotated[int, Field(ge=1)]
     product: ProductDraft
 
+    def acceptance_ids(self) -> tuple[str, ...]:
+        """The authoritative global identifiers shared by context and validation."""
+        return tuple(
+            f"ac_{i:03d}_{j:03d}"
+            for i, requirement in enumerate(self.product.requirements, 1)
+            for j, _ in enumerate(requirement.acceptance, 1)
+        )
+
     @model_validator(mode="after")
     def ready_only(self) -> Self:
         if self.product.action != "ready":
@@ -174,6 +182,17 @@ class IntegrationCheck(DomainModel):
     timeout_seconds: Annotated[int, Field(ge=1, le=600)] = 120
 
 
+class PlanCoverageError(ValueError):
+    """Only trusted expected IDs, never model prose or provider errors, form feedback."""
+
+    def __init__(self, *, missing_acceptance: set[str], missing_units: set[str]) -> None:
+        super().__init__(
+            "integration checks must cover all acceptance criteria and write units; "
+            f"missing acceptance IDs: {', '.join(sorted(missing_acceptance)) or 'none'}; "
+            f"missing write unit IDs: {', '.join(sorted(missing_units)) or 'none'}"
+        )
+
+
 class JointExecutionPlan(DomainModel):
     design_sha256: Digest
     units: Annotated[tuple[UnitPlan, ...], Field(min_length=1)]
@@ -196,11 +215,7 @@ class JointExecutionPlan(DomainModel):
                 raise ValueError("dependency must precede its consumer in the serial plan")
             completed.add(unit.unit_id)
         known = {u.id for u in scope.units}
-        expected = {
-            f"ac_{i:03d}_{j:03d}"
-            for i, r in enumerate(product.product.requirements, 1)
-            for j, _ in enumerate(r.acceptance, 1)
-        }
+        expected = set(product.acceptance_ids())
         covered: set[str] = set()
         consumed: set[str] = set()
         interfaces: set[str] = set()
@@ -213,8 +228,8 @@ class JointExecutionPlan(DomainModel):
             consumed.update(check.consumes)
             interfaces.update(check.interface_ids)
         if covered != expected or not modified <= consumed:
-            raise ValueError(
-                "integration checks must cover all acceptance criteria and write units"
+            raise PlanCoverageError(
+                missing_acceptance=expected - covered, missing_units=modified - consumed
             )
         if interfaces != {i.id for i in design.interfaces}:
             raise ValueError("integration checks must cover the shared interfaces")

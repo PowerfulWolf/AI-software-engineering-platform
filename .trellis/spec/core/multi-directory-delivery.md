@@ -90,3 +90,35 @@ Wrong：`for root in roots: native.start(root, same_requirement)`，各自产品
 
 Correct：联合 Product + 人工批准 → 联合 Design/Plan → 确定性原生投影 → 各仓独立 QA/Review
 → pinned integration evidence → joint DONE。
+
+## 8. Planner coverage rejection feedback (T038)
+
+Scope: semantic acceptance/write-unit omissions after JointExecutionPlan parsing, not provider,
+authorization or arbitrary schema failures. `JointProductSpec.acceptance_ids() -> tuple[str, ...]`
+is shared by the validator and model context. `_produce` supplies
+`required_coverage.{acceptance_ids,write_unit_ids,interface_ids}` from approved Product/Design facts.
+These context-only fields do not alter wire schemas or authorize new requirements.
+
+`JointExecutionPlan.validate_for(...)` raises `PlanCoverageError` for missing acceptance/write
+coverage. `JointDeliveryService` appends a PLANNING checkpoint with the rejected plan SHA and
+safe missing IDs in `next_action`, then re-raises; `plan` remains absent. Only expected IDs generated
+from trusted facts enter diagnostics, never provider prose, commands, raw output or secrets.
+Resume preserves approval/Design, includes durable next_action, and spends the existing three-call
+budget. It cannot auto-fill a model plan, produce a verdict, reset attempts or accept a partial plan.
+
+| Case | Required behavior |
+|---|---|
+| One omitted acceptance or write unit | Reject; persist precise missing IDs + plan digest |
+| Restart after rejection | Same feedback in next Planner input, preserved approval and budget |
+| Corrected plan | Revalidate every guard, only then enter delivery |
+| Three rejected plans | Next resume rejects before calling model |
+| Unrelated schema/provider failure | Existing failure path; not reclassified or silently retried |
+
+Good: durable rejection guides the second bounded model attempt. Base: valid first attempts are
+unchanged. Bad: infer test coverage, silently add IDs, or retry without explaining omissions.
+Wrong: catch every exception and pass raw error text to the model. Correct: catch only the dedicated
+trusted coverage error, seal the diagnostic checkpoint, and preserve fail-closed behavior.
+
+Regression: `tests/project_manager/test_joint_planner_feedback.py` exercises service + real journal
+with deterministic models, restart, exact input IDs, preserved approval, strict rejection, and
+attempt exhaustion. It does not claim live model success or independent QA/Review of feature code.

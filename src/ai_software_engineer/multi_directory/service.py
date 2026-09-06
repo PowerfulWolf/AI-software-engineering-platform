@@ -23,6 +23,7 @@ from ai_software_engineer.multi_directory.models import (
     JointProductSpec,
     JointStage,
     JointTechnicalDesign,
+    PlanCoverageError,
     PreparedUnit,
     digest,
 )
@@ -297,6 +298,8 @@ class JointDeliveryService:
                 "coder/qa/reviewer phases. "
                 "Also provide executable integration_checks covering all global "
                 "acceptance and interface IDs. "
+                "Use the exact required_coverage lists supplied by the platform and correct "
+                "any prior rejection in next_action; do not omit documentation/delivery criteria. "
                 "Commands are tokenized argv from the prepared unit command allowlist; "
                 "no shell, git mutation, "
                 "installs, deployment, secrets or fabricated tests. Commands run at the "
@@ -312,7 +315,14 @@ class JointDeliveryService:
                 "them in native QA/Coder work.",
             )
             assert checkpoint.product_spec is not None and checkpoint.design is not None
-            plan.validate_for(checkpoint.scope, checkpoint.product_spec, checkpoint.design)
+            try:
+                plan.validate_for(checkpoint.scope, checkpoint.product_spec, checkpoint.design)
+            except PlanCoverageError as exc:
+                self._save(
+                    checkpoint,
+                    next_action=f"Rejected plan {digest(plan)}: {exc}. Correct coverage on resume.",
+                )
+                raise
             self.backend.validate_plan(checkpoint, plan)
             checkpoint = self._save(
                 checkpoint,
@@ -390,6 +400,12 @@ class JointDeliveryService:
             digest(checkpoint.product_spec) if checkpoint.product_spec else None
         )
         payload["design_sha256"] = digest(checkpoint.design) if checkpoint.design else None
+        if checkpoint.product_spec is not None and checkpoint.design is not None:
+            payload["required_coverage"] = {
+                "acceptance_ids": list(checkpoint.product_spec.acceptance_ids()),
+                "write_unit_ids": [unit.unit_id for unit in checkpoint.design.units],
+                "interface_ids": [interface.id for interface in checkpoint.design.interfaces],
+            }
         result = self.backend.client(checkpoint.scope).complete(
             instructions=_POLICY + instructions,
             input_payload=payload,
