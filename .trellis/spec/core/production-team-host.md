@@ -150,6 +150,41 @@ Environment contract:
   目前没有独立 durable attempt ledger，因此 provider 返回到 stage artifact 落盘之间仍有可能重复计费的
   crash window。修改这条边界前应另立任务，不能在文档中声称 exactly-once billing。
 
+#### T043: Safe CLI failure diagnostics
+
+Scope/signatures: `SubprocessCodexCommandRunner.run(...) -> CodexInvocationResult` and
+`CodexCliAgentAdapter.run(request) -> AgentResult`. Existing wire schemas and routing remain unchanged.
+For nonzero exit/timeout, error.message includes a fixed-text cause category, returncode and SHA-256
+of captured stdout/stderr. Raw output, task prose and secrets are never copied into diagnostics.
+Cause is a heuristic match using the existing quota/rate/auth markers; an unmatched exit is labeled
+UNKNOWN_EXIT rather than asserting provider unavailability. Timeout is labeled TIMEOUT.
+
+Capture is bounded to 1,000,000 characters per stream, retaining equal head/tail portions on overflow.
+Hashes identify these captured strings, not an untruncated transcript; truncation is not a substitute
+for full provider evidence. TimeoutExpired partial bytes use UTF-8 replacement decoding. No durable
+raw transcript or new secret-bearing log is introduced.
+
+| Case | Routing / diagnostics |
+|---|---|
+| Clean quota/rate/auth exit | Existing typed routing; safe cause/exit/digests added |
+| Dirty quota/auth/unknown exit | Non-transient POLICY_VIOLATION; original recognized cause or UNKNOWN_EXIT retained |
+| Dirty timeout | Non-transient POLICY_VIOLATION + cause=TIMEOUT; preserve worktree |
+| Long output with trailing error | Bounded tail retains the marker for classification |
+| Existing historical generic error | Remains unknown; never infer or rewrite its cause |
+
+Good: interrupted work is preserved and the next operator can distinguish known/unknown causes.
+Base: same-run replay returns the existing result. Bad: replacing quota-with-dirty by a transient quota
+error, deleting work to enable fallback, or asserting old discarded stderr can be recovered from a hash.
+Tests: `tests/agents/test_codex_cli.py` covers dirty categories, timeout, no artifact/retry, retained file
+and HEAD, secret exclusion, stable replay, bounded tail and timeout byte capture.
+
+Wrong: return only "left changes" and discard the already available process classification.
+Correct: retain POLICY_VIOLATION for safety and append a safe diagnostic, without enabling fallback.
+Root cause (B/D): failure routing and failure diagnosis were conflated; the dirty guard returned before
+classification and small clean-failure fixtures hid the omission. A real-Git dirty quota test caught it.
+This repair cannot determine the original round3 exit cause; explicit recovery of interrupted work
+and general provider error evidence remain separate work, not permission to resurrect terminal tasks.
+
 ### 3.4 Worktree and delivery
 
 Production preparation uses `ProjectManagerSkillService(versioned_preparations=True)` and

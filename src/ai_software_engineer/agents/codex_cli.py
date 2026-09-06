@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -91,8 +92,13 @@ class SubprocessCodexCommandRunner:
                 timeout=timeout_seconds,
                 check=False,
             )
-        except subprocess.TimeoutExpired:
-            return CodexInvocationResult(returncode=-1, timed_out=True)
+        except subprocess.TimeoutExpired as error:
+            return CodexInvocationResult(
+                returncode=-1,
+                timed_out=True,
+                stdout=_bounded(_process_text(error.stdout)),
+                stderr=_bounded(_process_text(error.stderr)),
+            )
         except OSError as error:
             raise CodexCliError("Codex CLI process could not be started") from error
         return CodexInvocationResult(
@@ -237,14 +243,15 @@ class CodexCliAgentAdapter:
                     return _failure(
                         request,
                         AgentErrorCode.POLICY_VIOLATION,
-                        "Codex CLI left changes after an interrupted execution",
+                        "Codex CLI left changes after an interrupted execution; "
+                        + _failure_diagnostic(invocation),
                         transient=False,
                         duration_ms=_elapsed_ms(started),
                     )
                 return _failure(
                     request,
                     AgentErrorCode.TIMEOUT,
-                    "Codex CLI execution timed out",
+                    "Codex CLI execution timed out; " + _failure_diagnostic(invocation),
                     transient=True,
                     duration_ms=_elapsed_ms(started),
                     timed_out=True,
@@ -254,7 +261,8 @@ class CodexCliAgentAdapter:
                     return _failure(
                         request,
                         AgentErrorCode.POLICY_VIOLATION,
-                        "Codex CLI left changes after a failed execution",
+                        "Codex CLI left changes after a failed execution; "
+                        + _failure_diagnostic(invocation),
                         transient=False,
                         duration_ms=_elapsed_ms(started),
                     )
@@ -262,7 +270,7 @@ class CodexCliAgentAdapter:
                 return _failure(
                     request,
                     code,
-                    "Codex CLI provider execution failed",
+                    "Codex CLI provider execution failed; " + _failure_diagnostic(invocation),
                     transient=transient,
                     duration_ms=_elapsed_ms(started),
                 )
@@ -429,14 +437,35 @@ def _workspace_unchanged(root: Path, initial_head: str) -> bool:
 def _classify_cli_failure(
     invocation: CodexInvocationResult,
 ) -> tuple[AgentErrorCode, bool]:
+    code = _recognized_cli_failure(invocation) or AgentErrorCode.PROVIDER_UNAVAILABLE
+    return code, code is not AgentErrorCode.AUTHENTICATION_ERROR
+
+
+def _recognized_cli_failure(invocation: CodexInvocationResult) -> AgentErrorCode | None:
     text = f"{invocation.stdout}\n{invocation.stderr}".lower()
     if any(marker in text for marker in ("insufficient_quota", "quota exceeded", "usage limit")):
-        return AgentErrorCode.QUOTA_EXHAUSTED, True
+        return AgentErrorCode.QUOTA_EXHAUSTED
     if any(marker in text for marker in ("rate limit", "too many requests", "429")):
-        return AgentErrorCode.RATE_LIMITED, True
+        return AgentErrorCode.RATE_LIMITED
     if any(marker in text for marker in ("unauthorized", "authentication", "sign in", "login")):
-        return AgentErrorCode.AUTHENTICATION_ERROR, False
-    return AgentErrorCode.PROVIDER_UNAVAILABLE, True
+        return AgentErrorCode.AUTHENTICATION_ERROR
+    return None
+
+
+def _failure_diagnostic(invocation: CodexInvocationResult) -> str:
+    code = AgentErrorCode.TIMEOUT if invocation.timed_out else _recognized_cli_failure(invocation)
+    cause = code.value if code is not None else "UNKNOWN_EXIT"
+    return (
+        f"cause={cause}; returncode={invocation.returncode}; "
+        f"stdout_sha256={hashlib.sha256(invocation.stdout.encode()).hexdigest()}; "
+        f"stderr_sha256={hashlib.sha256(invocation.stderr.encode()).hexdigest()}"
+    )
+
+
+def _process_text(value: str | bytes | None) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value or ""
 
 
 def _filtered_environment(source: Mapping[str, str]) -> dict[str, str]:
@@ -476,7 +505,10 @@ def _failure(
 
 
 def _bounded(value: str, limit: int = 1_000_000) -> str:
-    return value if len(value) <= limit else value[:limit]
+    if len(value) <= limit:
+        return value
+    head = limit // 2
+    return value[:head] + value[-(limit - head) :]
 
 
 def _elapsed_ms(started: float) -> int:

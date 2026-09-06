@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from collections.abc import Mapping
 from pathlib import Path
+
+import pytest
 
 from ai_software_engineer.agents import (
     AgentErrorCode,
@@ -14,6 +17,7 @@ from ai_software_engineer.agents import (
     CodexCliAgentAdapter,
     CodexInvocationResult,
 )
+from ai_software_engineer.agents.codex_cli import SubprocessCodexCommandRunner
 from ai_software_engineer.domain import ChangedFile, ChangeType
 from tests.agents.test_openai_compatible import StaticPromptBuilder, _coder_request
 from tests.domain.factories import make_implementation_artifact
@@ -109,6 +113,11 @@ class _FailureRunner:
 
 
 class _DirtyFailureRunner:
+    def __init__(self, invocation: CodexInvocationResult | None = None) -> None:
+        self.invocation = invocation or CodexInvocationResult(
+            returncode=1, stderr="usage limit reached"
+        )
+
     def run(
         self,
         argv: tuple[str, ...],
@@ -122,7 +131,7 @@ class _DirtyFailureRunner:
         target = cwd / "src" / "partial.py"
         target.parent.mkdir()
         target.write_text("partial = True\n", encoding="utf-8")
-        return CodexInvocationResult(returncode=1, stderr="usage limit reached")
+        return self.invocation
 
 
 def test_coder_creates_verified_candidate_in_isolated_worktree(tmp_path: Path) -> None:
@@ -216,3 +225,96 @@ def test_cli_failure_with_partial_changes_cannot_fallback(tmp_path: Path) -> Non
     assert result.error is not None
     assert result.error.code is AgentErrorCode.POLICY_VIOLATION
     assert result.error.transient is False
+    assert "cause=QUOTA_EXHAUSTED" in result.error.message
+    assert "returncode=1" in result.error.message
+
+
+@pytest.mark.parametrize(
+    ("stderr", "timed_out", "cause"),
+    [
+        ("usage limit reached", False, "QUOTA_EXHAUSTED"),
+        ("rate limit exceeded", False, "RATE_LIMITED"),
+        ("authentication failed", False, "AUTHENTICATION_ERROR"),
+        ("unrecognized provider exit", False, "UNKNOWN_EXIT"),
+        ("partial output before termination", True, "TIMEOUT"),
+    ],
+)
+def test_dirty_failure_preserves_safe_diagnostics_without_enabling_retry(
+    tmp_path: Path, stderr: str, timed_out: bool, cause: str
+) -> None:
+    root, base = _repository(tmp_path)
+    request = _coder_request().model_copy(update={"source_revision": base})
+    private = "private-task-prose-and-secret-value"
+    invocation = CodexInvocationResult(
+        returncode=-1 if timed_out else 1,
+        timed_out=timed_out,
+        stdout=private,
+        stderr=stderr + private,
+    )
+    adapter = CodexCliAgentAdapter(
+        workspace_root=root,
+        model="fixture",
+        agent_id="agent_coder_001",
+        agent_version="v0.1",
+        prompt_builder=StaticPromptBuilder(),
+        runner=_DirtyFailureRunner(invocation),
+    )
+    result = adapter.run(request)
+    assert result.error is not None
+    assert result.status is AgentRunStatus.FAILED
+    assert result.error.code is AgentErrorCode.POLICY_VIOLATION
+    assert result.error.transient is False
+    assert result.artifact is None
+    assert f"cause={cause}" in result.error.message
+    assert hashlib.sha256(private.encode()).hexdigest() in result.error.message
+    assert private not in result.model_dump_json()
+    assert len(result.error.message) < 400
+    assert _git(root, "rev-parse", "HEAD") == base
+    assert (root / "src" / "partial.py").read_text() == "partial = True\n"
+    assert adapter.run(request) == result
+
+
+def test_subprocess_capture_retains_trailing_failure_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout="start" + "x" * 1_000_010 + "usage limit reached",
+            stderr="private stderr",
+        )
+
+    monkeypatch.setattr(subprocess, "run", run)
+    invocation = SubprocessCodexCommandRunner().run(
+        ("unused",),
+        cwd=tmp_path,
+        environment={},
+        stdin="",
+        timeout_seconds=1,
+    )
+    assert len(invocation.stdout) == 1_000_000
+    assert invocation.stdout.startswith("start")
+    assert invocation.stdout.endswith("usage limit reached")
+
+
+def test_subprocess_timeout_retains_bounded_partial_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(
+            cmd="unused", timeout=1, output=b"partial stdout", stderr=b"partial stderr\xff"
+        )
+
+    monkeypatch.setattr(subprocess, "run", run)
+    invocation = SubprocessCodexCommandRunner().run(
+        ("unused",),
+        cwd=tmp_path,
+        environment={},
+        stdin="",
+        timeout_seconds=1,
+    )
+    assert invocation.timed_out
+    assert invocation.returncode == -1
+    assert invocation.stdout == "partial stdout"
+    assert invocation.stderr == "partial stderr\ufffd"
