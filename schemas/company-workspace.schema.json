@@ -7,7 +7,7 @@
   "required": ["company_id", "name", "platform_root", "company_root", "created_at", "manifest_sha256"],
   "properties": {
     "schema_version": {"const": "v0.1", "default": "v0.1"},
-    "company_id": {"type": "string", "pattern": "^company_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "company_id": {"type": "string", "pattern": "^company_[a-z0-9][a-z0-9_-]{1,63}$"},
     "name": {"type": "string", "minLength": 1, "maxLength": 200},
     "platform_root": {"type": "string", "minLength": 1},
     "company_root": {"type": "string", "minLength": 1},

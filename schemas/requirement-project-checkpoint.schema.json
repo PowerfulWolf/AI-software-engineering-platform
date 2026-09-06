@@ -2042,7 +2042,7 @@
       "type": "string"
     },
     "company_id": {
-      "pattern": "^company_[a-z0-9][a-z0-9_-]{2,63}$",
+      "pattern": "^company_[a-z0-9][a-z0-9_-]{1,63}$",
       "title": "Company Id",
       "type": "string"
     },

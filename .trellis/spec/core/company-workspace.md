@@ -26,6 +26,12 @@ and path checks. No migration/deletion of older top-level `projects/` is implici
 
 ## Contracts
 
+- CompanyId uses `^company_[a-z0-9][a-z0-9_-]{1,63}$`: suffix length 2–64. Accept `company_ai`
+  without changing the default company or weakening path guards. Empty, one-character, uppercase,
+  slash/traversal and overlong suffixes reject. Config, manifest and joint-checkpoint schemas must
+  share this boundary; test `test_company_identifiers.py` verifies all three and immutable reopening.
+- Wrong: pad `company_ai` or rename a hashed manifest. Correct: accept the valid identifier and
+  initialize a separate company, preserving any existing `company_default` facts byte-for-byte.
 - Project registration validates the entire platform root is external to the target code root.
 - Project IDs and production delivery IDs include company identity so shared MySQL facts cannot
   collide for the same source path and requirement registered under two companies.

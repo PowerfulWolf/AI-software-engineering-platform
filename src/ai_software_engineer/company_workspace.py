@@ -20,7 +20,7 @@ from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_u
 from ai_software_engineer.project_workspace import ProjectWorkspace, ProjectWorkspaceRegistry
 from ai_software_engineer.redaction import redact_text
 
-CompanyId = Annotated[str, StringConstraints(pattern=r"^company_[a-z0-9][a-z0-9_-]{2,63}$")]
+CompanyId = Annotated[str, StringConstraints(pattern=r"^company_[a-z0-9][a-z0-9_-]{1,63}$")]
 CompanyName = Annotated[str, StringConstraints(min_length=1, max_length=200)]
 Digest = Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
 _DIRECTORIES = ("knowledge", "projects", "requests")
