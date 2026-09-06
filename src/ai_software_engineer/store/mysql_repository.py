@@ -106,6 +106,12 @@ class MySqlTaskRepository:
     def append_event(self, event: StateEvent) -> None:
         """Atomically append an event and advance its locked Task snapshot."""
         with self._transaction(), self._connection.cursor() as cursor:
+            # Serialize same-Task writers before either acquires an absent event-ID gap lock.
+            cursor.execute(
+                "SELECT id, payload_json, revision FROM tasks WHERE id = %s FOR UPDATE",
+                (event.task_id,),
+            )
+            task_row = cast(Mapping[str, object] | None, cursor.fetchone())
             cursor.execute(
                 "SELECT payload_json FROM state_events WHERE event_id = %s FOR UPDATE",
                 (event.event_id,),
@@ -117,11 +123,6 @@ class MySqlTaskRepository:
                     return
                 raise EventIdempotencyConflict(event.event_id)
 
-            cursor.execute(
-                "SELECT id, payload_json, revision FROM tasks WHERE id = %s FOR UPDATE",
-                (event.task_id,),
-            )
-            task_row = cast(Mapping[str, object] | None, cursor.fetchone())
             if task_row is None:
                 raise TaskNotFound(event.task_id)
             task_id = _text(task_row, "id")

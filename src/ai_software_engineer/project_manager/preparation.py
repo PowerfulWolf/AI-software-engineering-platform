@@ -163,6 +163,7 @@ class ProjectManagerSkillService:
         binder: RuntimeWorkspaceBinder | None = None,
         stage_advancer: ProjectStageAdvancer | None = None,
         clock: Clock | None = None,
+        versioned_preparations: bool = False,
     ) -> None:
         self._organization = organization
         self._registry = registry
@@ -171,7 +172,8 @@ class ProjectManagerSkillService:
         self._preparation_store_factory = preparation_store_factory
         self._baseline_recorder = baseline_recorder
         self._baseline_compiler = baseline_compiler or ProjectBaselineCompiler()
-        self._binder = binder or RuntimeWorkspaceBinder()
+        self._binder = binder or RuntimeWorkspaceBinder(versioned=versioned_preparations)
+        self._versioned_preparations = versioned_preparations
         self._stage_advancer = stage_advancer or ProjectStageAdvancer()
         self._clock = clock or _utc_now
 
@@ -190,6 +192,15 @@ class ProjectManagerSkillService:
             project_id=workspace.project_id,
             observed_at=observed_at,
         )
+        if self._versioned_preparations and (
+            existing is None or existing.project_profile_sha256 != profile.profile_sha256
+        ):
+            store = self._preparation_store_factory(
+                workspace.directory("policy") / f"preparations-{profile.profile_sha256}"
+            )
+            existing = store.find(workspace.project_id)
+            if existing is not None:
+                existing.validate_integrity()
         try:
             binding = self._binder.bind(
                 self._organization,

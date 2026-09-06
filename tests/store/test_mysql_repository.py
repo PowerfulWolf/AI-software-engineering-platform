@@ -156,13 +156,17 @@ def test_unknown_task_operations_raise_typed_error(
         repository.list_events("task_missing_001")
 
 
+@pytest.mark.parametrize("race_round", range(10))
 def test_competing_connections_cannot_publish_the_same_revision(
     repository: MySqlTaskRepository,
+    race_round: int,
 ) -> None:
     task, first = _facts()
+    prefix = f"evt_mysql_competing_{uuid4().hex}_{race_round}"
+    first = first.model_copy(update={"event_id": prefix + "_a"})
     second = first.model_copy(
         update={
-            "event_id": f"evt_mysql_competing_{uuid4().hex}",
+            "event_id": prefix + "_b",
             "to_status": TaskStatus.IMPLEMENTING,
         }
     )
@@ -187,7 +191,11 @@ def test_competing_connections_cannot_publish_the_same_revision(
             )
 
         assert sum(outcome is None for outcome in outcomes) == 1
-        assert sum(isinstance(outcome, InvalidStateEvent) for outcome in outcomes) == 1
+        assert sum(isinstance(outcome, InvalidStateEvent) for outcome in outcomes) == 1, [
+            (type(outcome).__name__, getattr(outcome.__cause__, "args", ())[:1])
+            for outcome in outcomes
+            if outcome is not None
+        ]
         assert repository.current_revision(task.id) == 1
         assert len(repository.list_events(task.id)) == 1
     finally:

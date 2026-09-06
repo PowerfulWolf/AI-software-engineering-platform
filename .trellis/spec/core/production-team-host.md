@@ -103,8 +103,11 @@ Environment contract:
 
 - MySQL 8.0/InnoDB 是 `ase project ...` 的 production relational store。Task 快照和 StateEvent 使用
   与 SQLite adapter 完全相同的 Pydantic/JSON contract。
-- `append_event` 必须在一个事务内：锁 event ID、锁 Task row、校验 from status/attempt、写入
+- `append_event` 必须在一个事务内：先锁 Task row、再检查/锁 event ID、校验 from status/attempt、写入
   `(task_id, revision)` 唯一 event、CAS 更新 Task snapshot；任何失败全部 rollback。
+- 不要在竞争同一 Task 的行锁前获取不同缺失 event ID 的间隙锁，否则相邻 ID 的插入会形成死锁。
+  `test_competing_connections_cannot_publish_the_same_revision` 使用相邻 ID 运行 10 轮；每轮必须只有
+  一个成功、一个 InvalidStateEvent，最终恰好一条 event/revision，不允许用连接错误或重跑掩盖。
 - same event ID + exact body 是幂等重放；same ID + changed body 是
   `EventIdempotencyConflict`。`record_attempt` 只能单调增加且不得超过 Task budget。
 - dispatch 使用全局 InnoDB reservation lock，加锁后再次读取 current workforce snapshot；必须同时
@@ -148,6 +151,19 @@ Environment contract:
   crash window。修改这条边界前应另立任务，不能在文档中声称 exactly-once billing。
 
 ### 3.4 Worktree and delivery
+
+Production preparation uses `ProjectManagerSkillService(versioned_preparations=True)` and
+`RuntimeWorkspaceBinder(versioned=True)`. A stable project ID is not a single immutable baseline:
+new profiles are stored at `profile/project-profile-<profile_sha256>.json`, bindings at
+`policy/runtime-workspace-binding-<binding_sha256>.json`, and preparation records under
+`policy/preparations-<profile_sha256>/`. All stay inside the same company project module.
+Matching legacy fixed-name records are replayed with their original timestamps; other legacy
+records remain untouched. New snapshots are exclusively published, never replace concurrent winners.
+`load_project_profile(sidecar, profile_sha256)` must read the requested hash, not a mutable latest
+pointer. A legacy fallback must pass that exact hash; corrupt/symlink snapshots never fall back.
+Low-level composition remains legacy by default. New production intakes may prepare newer facts,
+but existing delivery/product/stage gates still compare their exact preparation and source revision;
+this does not authorize rebasing old approval or QA/Review evidence in place.
 
 - dispatch 后才可 materialize Task；Task repository、Artifact/Context/Evidence roots、Agent definitions
   和 dispatch bundle 必须来自同一 project sidecar 与 exact revision lineage。
@@ -195,6 +211,13 @@ body 或目标项目中的 secret。
   同时当 Coder 和 Reviewer；在 main checkout 写代码；auth/invalid output 后静默换模型；自动 merge。
 
 ## 6. Tests Required
+
+- T040: `tests/e2e/test_project_revision_preparation.py` uses real Git/MySQL to prepare two baselines,
+  preserve all previous JSON bytes, reopen/replay the new request, and reject old request drift
+  before any model call. `test_preparation_versions.py` covers legacy replay plus Product gate;
+  `test_binding_versions.py` covers old/new bindings, timestamp replay, corruption and symlinks.
+  Good: new intake/new snapshot with stable project identity. Bad: overwrite fixed profile or allow
+  an old request to adopt new source facts. RuntimeWorkspaceError is a stable CLI error, not traceback.
 
 - `tests/config/test_production.py`：配置文件/env、route 条件、duplicate route、secret 不落盘；
 - `tests/contracts/test_json_schema_contracts.py`：ProductionConfig positive/negative canonical schema；

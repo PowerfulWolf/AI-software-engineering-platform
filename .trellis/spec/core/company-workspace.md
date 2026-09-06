@@ -36,6 +36,10 @@ and path checks. No migration/deletion of older top-level `projects/` is implici
 - Project IDs and production delivery IDs include company identity so shared MySQL facts cannot
   collide for the same source path and requirement registered under two companies.
 - AgentProfile stays under `organization/`, not inside a Company or project module.
+- One stable project module can retain multiple immutable production baseline snapshots. Profile,
+  binding and preparation versions stay under its existing `profile/` and `policy/` directories;
+  new Git baselines do not require another Company or Project ID. Existing requests remain pinned
+  and reject source/knowledge drift. See production-team-host T040 for exact filenames and gates.
 - Company knowledge selection is explicit and read-only, relative to `knowledge/`; no recursive
   scan or automatic loading of other projects/companies. Reject traversal, symlinks, missing files,
   non-UTF8, private-key/credential file names, and oversized content. Redact supported secret forms.

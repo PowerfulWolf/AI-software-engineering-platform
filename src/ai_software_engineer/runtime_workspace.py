@@ -63,6 +63,34 @@ PROJECT_PROFILE_NAME: Final = "project-profile.json"
 RUNTIME_BINDING_NAME: Final = "runtime-workspace-binding.json"
 
 
+def _versioned_record_path(directory: Path, name: str, sha256: str) -> Path:
+    validated = TypeAdapter(Sha256).validate_python(sha256)
+    if directory.is_symlink():
+        raise RuntimeWorkspaceCorruption("workspace record directory cannot be a symlink")
+    return directory / f"{Path(name).stem}-{validated}.json"
+
+
+def _record_read_path(directory: Path, name: str, sha256: str) -> Path:
+    versioned = _versioned_record_path(directory, name, sha256)
+    target = versioned if versioned.exists() or versioned.is_symlink() else directory / name
+    if target.is_symlink():
+        raise RuntimeWorkspaceCorruption("workspace record cannot be a symlink")
+    return target
+
+
+def load_project_profile(sidecar: Path, profile_sha256: str) -> ProjectProfile:
+    """Read the exact profile snapshot; legacy fallback must match the requested digest."""
+    path = _record_read_path(sidecar / "profile", PROJECT_PROFILE_NAME, profile_sha256)
+    try:
+        profile = ProjectProfile.model_validate_json(path.read_text(encoding="utf-8"))
+        profile.validate_integrity()
+    except (OSError, UnicodeError, ValueError) as error:
+        raise RuntimeWorkspaceCorruption("project profile record is invalid") from error
+    if profile.profile_sha256 != profile_sha256:
+        raise RuntimeWorkspaceConflict("ProjectProfile snapshot digest does not match")
+    return profile
+
+
 class RuntimeWorkspaceError(RuntimeError):
     """Base error for organization/project composition failures."""
 
@@ -284,12 +312,13 @@ class RuntimeWorkspaceBinding(DomainModel):
                 json.loads(manifest_path.read_text(encoding="utf-8"))
             )
             manifest.validate_binding(sidecar)
-            profile = ProjectProfile.model_validate(
-                json.loads((sidecar / "profile" / PROJECT_PROFILE_NAME).read_text(encoding="utf-8"))
-            )
-            profile.validate_integrity()
+            profile = load_project_profile(sidecar, self.project_profile_sha256)
             persisted = RuntimeWorkspaceBinding.model_validate(
-                json.loads((sidecar / "policy" / RUNTIME_BINDING_NAME).read_text(encoding="utf-8"))
+                json.loads(
+                    _record_read_path(
+                        sidecar / "policy", RUNTIME_BINDING_NAME, self.binding_sha256
+                    ).read_text(encoding="utf-8")
+                )
             )
             persisted.validate_integrity()
         except (
@@ -354,6 +383,9 @@ class RuntimeWorkspaceBinding(DomainModel):
 class RuntimeWorkspaceBinder:
     """Validate and persist one organization/project RuntimeWorkspaceBinding."""
 
+    def __init__(self, *, versioned: bool = False) -> None:
+        self._versioned = versioned
+
     def bind(
         self,
         organization: OrganizationWorkspace,
@@ -407,13 +439,34 @@ class RuntimeWorkspaceBinder:
         )
         binding = provisional.model_copy(update={"binding_sha256": _binding_digest(provisional)})
         binding.validate_integrity()
+        profile_path = project.directory("profile") / PROJECT_PROFILE_NAME
+        binding_path = project.directory("policy") / RUNTIME_BINDING_NAME
+        if self._versioned:
+            if profile_path.is_symlink():
+                raise RuntimeWorkspaceCorruption("legacy profile cannot be a symlink")
+            legacy = None
+            if profile_path.exists():
+                try:
+                    legacy = ProjectProfile.model_validate_json(
+                        profile_path.read_text(encoding="utf-8")
+                    )
+                    legacy.validate_integrity()
+                except (OSError, UnicodeError, ValueError) as error:
+                    raise RuntimeWorkspaceCorruption("legacy profile record is invalid") from error
+            if legacy is None or legacy.profile_sha256 != profile.profile_sha256:
+                profile_path = _versioned_record_path(
+                    project.directory("profile"), PROJECT_PROFILE_NAME, profile.profile_sha256
+                )
+                binding_path = _versioned_record_path(
+                    project.directory("policy"), RUNTIME_BINDING_NAME, binding.binding_sha256
+                )
         _put_immutable_model(
-            project.directory("profile") / PROJECT_PROFILE_NAME,
+            profile_path,
             profile,
             timestamp_field="observed_at",
         )
         persisted = _put_immutable_model(
-            project.directory("policy") / RUNTIME_BINDING_NAME,
+            binding_path,
             binding,
             timestamp_field="bound_at",
         )
@@ -737,6 +790,8 @@ def _put_immutable_model(
     *,
     timestamp_field: str,
 ) -> DomainModel:
+    if path.is_symlink() or path.parent.is_symlink():
+        raise RuntimeWorkspaceCorruption("workspace record cannot be a symlink")
     if path.exists():
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -751,11 +806,12 @@ def _put_immutable_model(
         if left != right:
             raise RuntimeWorkspaceConflict(f"workspace record already exists: {path.name}")
         return existing
-    _atomic_json_write(path, model.to_wire())
+    if not _atomic_json_write(path, model.to_wire(), overwrite=False):
+        return _put_immutable_model(path, model, timestamp_field=timestamp_field)
     return model
 
 
-def _atomic_json_write(path: Path, payload: WirePayload) -> None:
+def _atomic_json_write(path: Path, payload: WirePayload, *, overwrite: bool = True) -> bool:
     encoded = _canonical_json(payload).encode("utf-8")
     temporary_path: Path | None = None
     try:
@@ -770,8 +826,16 @@ def _atomic_json_write(path: Path, payload: WirePayload) -> None:
             temporary.write(encoded)
             temporary.flush()
             os.fsync(temporary.fileno())
-        os.replace(temporary_path, path)
+        if overwrite:
+            os.replace(temporary_path, path)
+        else:
+            try:
+                os.link(temporary_path, path)
+            except FileExistsError:
+                return False
+            temporary_path.unlink()
         temporary_path = None
+        return True
     except OSError as error:
         raise RuntimeWorkspaceError(f"cannot persist workspace record: {path}") from error
     finally:

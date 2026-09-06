@@ -135,6 +135,7 @@ from ai_software_engineer.runtime import (
 from ai_software_engineer.runtime_workspace import (
     FileOrganizationWorkforceStore,
     OrganizationWorkspace,
+    load_project_profile,
 )
 from ai_software_engineer.scheduling import ModelRouter, PortfolioScheduler
 from ai_software_engineer.spec_compiler import SpecRule
@@ -297,6 +298,7 @@ class ProductionProjectDeliveryBackend:
             preparation_store_factory=FileProjectPreparationStore,
             baseline_recorder=self._baseline_store,
             clock=self._clock,
+            versioned_preparations=True,
         )
         self._structured_clients = structured_clients or ConfiguredStructuredClientFactory(
             config, self._environment
@@ -762,10 +764,9 @@ class ProductionProjectDeliveryBackend:
             prepared.project_root,
             project_id=prepared.project_id,
         )
-        profile = ProjectProfile.model_validate_json(
-            (workspace.directory("profile") / "project-profile.json").read_text(encoding="utf-8")
-        )
-        profile.validate_integrity()
+        profile = load_project_profile(workspace.root, prepared.project_profile_sha256)
+        if profile.project_id != prepared.project_id:
+            raise ValueError("prepared profile belongs to another project")
         compilation = self._baseline_store.get(workspace, preparation.baseline_compilation_sha256)
         baseline = compilation.compiled_spec
         if baseline is None:

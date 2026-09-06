@@ -54,6 +54,7 @@ from ai_software_engineer.runtime import (
     RuntimeConfigurationError,
     RuntimeSession,
 )
+from ai_software_engineer.runtime_workspace import RuntimeWorkspaceError
 from ai_software_engineer.store import SqliteTaskRepository, StoreError
 from ai_software_engineer.team_view.reader import ProductionTeamReader
 from ai_software_engineer.team_view.server import create_team_server
@@ -111,6 +112,7 @@ class CliInputError(ValueError):
 
 
 _PROJECT_ERRORS = (
+    RuntimeWorkspaceError,
     StructuredModelError,
     CommandExecutionError,
     GitWorkspaceError,
