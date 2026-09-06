@@ -1,68 +1,72 @@
-# Agent 工作可视化设计（后续里程碑）
+# 团队工作台
 
-## 目标
+## 使用
 
-可视化不是把 Agent 的聊天窗口搬到网页上，而是把一次交付变成可重放的事实视图：人类能
-看到当前状态、哪个角色在运行、它读取了哪些 Context、产生了哪些 Artifact/Evidence、消耗了
-多少预算、为什么重试或阻塞，以及下一步需要谁作决定。
+先按照 [生产配置](production-setup.md) 设置 ASE_CONFIG 和 MySQL DSN，再通过
+`ase request create DIR... --name NAME` 准备需求项目。另开终端：
 
-目标项目、项目 sidecar 和组织 workspace 分工如下：
-
-```text
-目标项目（实际 cwd）       项目 sidecar                    组织 workspace
-代码 / 测试 / 构建配置      StateEvent / Assignment         AgentProfile / ModelPolicy
-项目原生规范与文档         Context / ProjectProfile         WorkQueue / TaskLease
-Git refs / candidate        Artifact / Evidence / Handoff   跨项目绩效 / capacity
-                           Evaluation / conflict resolution
+```bash
+uv run ase team serve --port 8765
 ```
 
-UI 不扫描模型隐式会话，也不把 Agent 自由文本当成状态事实。所有展示都从 sidecar 中的 typed
-记录和目标项目的只读 Git inspection 生成。
+打开 **http://127.0.0.1:8765**（使用该地址，不使用 localhost 别名）。Ctrl+C 只停止工作台，
+不停止其他进程的交付。页面每 5 秒读取已提交数据，不要求手工拼装 ProjectionFacts。
+配置缺失或端口占用时 CLI 安全退出；公司未准备、数据库不可用或记录校验失败时页面报错，
+不伪装成空团队。真正空的已准备公司显示接单提示。
 
-## v0.1 后的最小视图
+## 三条阅读路径
 
-### 1. Task board
+1. **团队成员**：组织成员、岗位、启用配置、当前公司多项分配、当前岗位阶段、分配模型与历史任务。
+   一个 Agent 不随项目复制，当前任务也不是单值字段。
+2. **需求与交付**：所有选定代码目录/模块、只读参考目录、各仓进度和整体验收状态。
+   点击需求看联合 ProductSpec、TechnicalDesign、ExecutionPlan、IntegrationEvidence。
+3. **任务详情**：Task 状态、最近活动、阻塞、候选 SHA、时间线、实际模型路由尝试的结果、
+   耗时和失败分类，以及已通过状态事件引用的 plan/implementation/QA/review 报告。
+   单仓旧入口的上游文档暂提供 ID/digest 引用；联合文档和四类交付报告提供脱敏正文。
 
-同时展示 Task delivery status 与 WorkItem scheduling status。Task 卡片按
-`NEW → PLANNING → IMPLEMENTING → QA → REVIEW → DONE/BLOCKED/FAILED` 展示证据链，并单独显示
-`READY/LEASED/RUNNING/WAITING_*/CLOSED`、当前 Lease、candidate SHA 和恢复条件；不能把临时等待
-画成终局 BLOCKED。
+记录在调用完成或阶段提交后发布，不显示模型私有思考或未提交聊天。报告 SHA 指向原始已验证
+事实，展示正文再次脱敏后不应拿展示字符串计算源 SHA。
 
-### 2. Run timeline
+## 不能混淆的状态
 
-以时间线串起 `CaseStartedEvent → AgentRunEvent → StateEvent → Artifact/Evidence`。每个节点都
-显示 `run_id`、`agent_id`、assignment/lease、role、ModelSelection reasons、context manifest ID、
-spec/policy 版本、输入 Artifact IDs、输出 digest、耗时、token/cost 和失败分类；点击可跳到
-immutable JSON 或脱敏日志。
+- IMPLEMENTING / QA / REVIEW 是交付 checkpoint，不是进程存活证明。
+- 当前岗位由 Task 状态和 DispatchPhaseCommit 对齐；预分配 QA 不会提前标为正在测试。
+- enabled、max_parallel_assignments 是配置，不代表在线状态或实时全组织容量占用。
+- 当前公司视图不统计其他公司工作，不把公司范围计数当成组织总负载。
+- 没有 heartbeat 时 execution_liveness=UNKNOWN，不能仅靠超时猜测进程失败。
+- 分配模型来自 ModelSelection；实际调用模型来自 ModelRouteAttempt，降级记录不会被原始分配覆盖。
+- 调用成功不等于 QA/Review gate 通过；一个子仓 DONE 不等于多仓需求 DONE。
+- 上游岗位未登记为独立 AgentProfile 时，只在需求阶段显示，不生成虚构成员。
 
-### 3. Agent detail
+刷新失败保留上次画面并标记“旧数据”和成功时间；无变化的刷新不替换 DOM，有变化时保留已展开
+历史/报告，避免阅读中每 5 秒被折叠。
 
-以组织 AgentProfile 为主体展示能力、eligible roles、当前/历史 Assignment、capacity utilization、
-模型分配、质量/成本/延迟和被驳回率，并可下钻到 project/task/run。权限是每次 Assignment 的
-机器 policy 投影，UI 不提供扩大权限的编辑入口。绩效必须按 Agent × Model × Role × Task class ×
-Risk 分层，不能用强模型掩盖成员表现。
+## 数据链与接口
 
-### 4. Human inbox
+```text
+当前公司 manifest + requests journal + projects 原生 checkpoint
+                      ↓
+MySQL 一致性只读事务：Task / StateEvent / Dispatch
+                      ↓
+Artifact / Evaluation / ModelRouteAttempt + 组织 AgentProfile
+                      ↓
+ProductionTeamReader → TeamSnapshot → GET /api/v1/team → 工作台
+```
 
-聚合 `SPEC_CONFLICT`、`POLICY_VIOLATION`、预算耗尽、非法输出和需要手工合并的 Handoff。
-每项必须给出冲突双方的规则版本、Evidence、建议处理方式和“更新平台规范 / 更新项目规范 /
-修正任务”的明确选项；解决结果写入 `HumanActionEvent`，不能只停留在 UI。
+父需求尚未写回 child 时，由批准的联合文档确定性派生 native delivery ID，读取最新 Task。
+文件 prefix 先于 MySQL snapshot 捕获。读侧不调用 prepare、reconcile、register 或 Team Host，
+不创建 stores/schema、不扫描代码、不调用模型、不写 checkpoint。记录不一致返回 503。
 
-## 数据与接口路线
+HTTP 仅绑定 loopback，校验 Host/Origin，关闭 CORS/缓存，采用 CSP 与 textContent。
+只开放 /、/app.js、/style.css、/api/v1/team；写方法 405，未知路径 404，错误不泄露 DSN。
+没有任意文件路由，不应通过反向代理公开到局域网或互联网。这不是带认证的多用户站点。
 
-1. T023 起所有命令输出、diff、测试、模型调用和状态变化都写为可定位的 Evidence/Events；
-2. T026 建立只读 `RunProjection` 与本地 JSON/HTTP read API，从 SQLite Task/Event、
-   ArtifactStore、EvaluationEventStore 和 sidecar manifest 重算，支持按 project/task/run/role/
-   candidate 查询，默认脱敏并分页；API 不执行 Agent、不迁移状态、不接受 verdict 写入；
-3. T027 实现本地 dashboard（Task board、timeline、Agent detail、human inbox），先消费 read API，
-   再考虑实时 SSE/WebSocket；实时推送只传递新增事件 ID，客户端可从 durable store 重放；
-4. 后续才评估跨项目聚合、长期指标、告警和权限分级。没有测量数据前不引入消息队列、向量库
-   或分布式 tracing 平台。
+正式 wire contract：[team-snapshot.schema.json](../schemas/team-snapshot.schema.json)。
+旧 DashboardRenderer / ReadOnlyProjectionApi 仍为纯、transport-neutral 的基础组件，
+静态 snapshot 工具不是正常入口；新增 socket 只由 team_view.server composition 持有。
 
-## 必须保留的安全边界
+## 后续边界
 
-- Agent 输出和仓库内容在 UI 中标记为不可信数据，不能覆盖 policy 或触发按钮动作；
-- 所有链接带 source revision、context/artifact digest 和 evidence URI，缺失时显示“不可验证”；
-- secret redaction 在写入 sidecar 前完成，UI 不能请求原始 provider body；
-- projection 是纯读模型，任何状态迁移、冲突解决和 merge 仍由 Orchestrator 或人工边界完成；
-- UI 断线、重复消费或重放不会改变 Task、Artifact 或 verdict。
+执行器 heartbeat/started/finished 与失联识别；上游岗位统一成员分配；数据量增大后的分页/增量读取；
+之后才考虑可信聊天接单、批准和恢复操作。当前不引入 Reporter、可写调度、复杂 DAG、成本大屏
+或后台自动调度系统。

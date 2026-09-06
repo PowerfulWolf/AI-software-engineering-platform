@@ -32,6 +32,11 @@ Sha256 = Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
 _UNSEALED = "0" * 64
 
 
+def model_route_root(project_workspace_root: Path) -> Path:
+    """Shared production ledger location for delivery writers and read projections."""
+    return project_workspace_root / "runs" / "model-routes"
+
+
 class RouteAttemptOutcome(StrEnum):
     """Whether a provider route completed, switched, or ended the run."""
 
@@ -154,14 +159,21 @@ class ModelRouteAttemptCorruption(ModelRouteAttemptStoreError):
 class FileModelRouteAttemptStore:
     """Persist one digest-protected JSON record per route slot."""
 
-    def __init__(self, root: str | Path) -> None:
+    def __init__(self, root: str | Path, *, read_only: bool = False) -> None:
         self._root = Path(root).expanduser().resolve(strict=False)
+        self._read_only = read_only
         try:
-            self._root.mkdir(parents=True, exist_ok=True)
+            if read_only:
+                if not self._root.is_dir():
+                    raise ModelRouteAttemptStoreError("model route root is missing")
+            else:
+                self._root.mkdir(parents=True, exist_ok=True)
         except OSError as error:
             raise ModelRouteAttemptStoreError("cannot initialize model route store") from error
 
     def append(self, attempt: ModelRouteAttempt) -> ModelRouteAttempt:
+        if self._read_only:
+            raise ModelRouteAttemptStoreError("model route store is read-only")
         attempt.validate_integrity()
         target = self._path(attempt.run_id, attempt.route_index)
         if target.exists():
@@ -383,4 +395,5 @@ __all__ = [
     "ModelRouteAttemptStoreError",
     "ProviderAgentRoute",
     "RouteAttemptOutcome",
+    "model_route_root",
 ]

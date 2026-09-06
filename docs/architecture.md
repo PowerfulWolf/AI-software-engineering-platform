@@ -30,6 +30,14 @@ ModelSelection。Planner 只能只读预演，不能自行提交分配。
 
 ### Project Binding 与外置 AI Workspace
 
+生产装配以 Company 为外置 workspace 的收纳边界：
+`companies/<company_id>/knowledge/` 保存共享知识，`projects/` 保存项目知识与每仓运行子模块，
+`requests/` 保存需求项目联合记录。`CompanyWorkspace.project_registry()` 复用下述 per-repository
+绑定协议，并把公司身份纳入项目和交付 ID；organization workspace 仍独立拥有 Agent 与调度事实。
+这不是要求用户建立业务项目组，也不是 OS 级多租户沙箱。公司资料只按显式选择加载，不自动覆盖
+项目原生规范。需求项目先准备全部目录，再维护一份联合产品文档和批准链；联合设计/计划投影为
+原生单仓 Task。各仓独立 QA/Review 后，使用完整候选集合执行联合验收，全部通过才是整体 DONE。
+
 `ProjectWorkspaceRegistry` 将操作者给出的本地 `project_root` 绑定到目标目录之外的
 `ai_workspace_root`。目标项目仍是实际代码、测试、构建和默认命令 cwd；sidecar 保存
 `ProjectProfile`、Assignment/规范、Task/StateEvent、Context、Artifact、Evidence、Evaluation、

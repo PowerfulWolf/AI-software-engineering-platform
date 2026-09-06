@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>团队工作台 · ai-software-engineer</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="monogram">ae</span><span>AI Software<br />Engineer</span>
+      </div>
+      <p class="nav-label">团队工作台</p>
+      <nav aria-label="主导航">
+        <button id="nav-team" class="selected" aria-current="page">
+          团队成员
+        </button>
+        <button id="nav-requests">需求与交付</button>
+      </nav>
+      <div class="side-note">只读工作台<br />不会启动 Agent 或修改任务</div>
+    </aside>
+    <main>
+      <header>
+        <div>
+          <p id="company">正在连接公司工作空间</p>
+          <h1 id="heading">团队成员</h1>
+        </div>
+        <button id="refresh">刷新</button>
+      </header>
+      <div id="connection" role="status" aria-live="polite">
+        正在读取真实运行记录…
+      </div>
+      <p class="explanation">
+        任务阶段来自持久化记录；尚无执行器心跳，不能据此确认 Agent
+        在线或进程仍在运行。
+      </p>
+      <section id="content" aria-label="工作台内容"></section>
+      <section id="detail" hidden aria-label="详情"></section>
+    </main>
+  </body>
+</html>

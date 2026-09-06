@@ -12,6 +12,8 @@ from threading import Barrier
 import pymysql
 import pytest
 
+from ai_software_engineer.domain import TaskStatus
+from ai_software_engineer.orchestration.state_machine import build_event
 from ai_software_engineer.project_manager import MySqlDispatchAuthority
 from ai_software_engineer.project_manager.dispatch import (
     DispatchAuthorityConflict,
@@ -21,11 +23,56 @@ from ai_software_engineer.project_manager.dispatch import (
     ProjectManagerDispatchService,
 )
 from ai_software_engineer.scheduling import PortfolioScheduler
-from ai_software_engineer.store.mysql_repository import open_mysql_connection
+from ai_software_engineer.store.mysql_repository import MySqlTaskRepository, open_mysql_connection
 from tests.project_manager.test_dispatch import _router
 from tests.project_manager.test_dispatch_authority import _durable_facts
 
 pytestmark = pytest.mark.mysql
+
+
+@pytest.mark.parametrize("terminal", [TaskStatus.BLOCKED, TaskStatus.FAILED, TaskStatus.DONE])
+def test_terminal_tasks_release_capacity_without_erasing_dispatch(
+    tmp_path: Path, mysql_dsn: str, terminal: TaskStatus
+) -> None:
+    _, snapshot, record, plans, revisions = _durable_facts(tmp_path)
+    authority = MySqlDispatchAuthority(
+        mysql_dsn, request_revisions=revisions, planner_records=plans
+    )
+    authority.seed_snapshot(snapshot)
+    authority.commit_if_current(record, expected_snapshot_sha256=snapshot.snapshot_sha256)
+    before = authority.current_snapshot(project_id=record.project_id, task_id=record.task_id)
+    assert {p.lease.id for p in record.phases} <= {x.id for x in before.active_leases}
+    with MySqlTaskRepository(mysql_dsn) as repository:
+        repository.create(record.task)
+        repository.record_attempt(record.task_id, 1)
+        stages = (
+            (
+                TaskStatus.PLANNING,
+                TaskStatus.IMPLEMENTING,
+                TaskStatus.QA,
+                TaskStatus.REVIEW,
+                terminal,
+            )
+            if terminal is TaskStatus.DONE
+            else (TaskStatus.PLANNING, terminal)
+        )
+        for index, stage in enumerate(stages):
+            task = repository.get(record.task_id)
+            repository.append_event(
+                build_event(
+                    task,
+                    stage,
+                    event_id=f"evt_release_{record.task_id}_{index}",
+                    reason="Capacity regression fixture",
+                    source_revision=task.base_ref,
+                    occurred_at=task.updated_at + timedelta(seconds=1),
+                )
+            )
+    reopened = MySqlDispatchAuthority(mysql_dsn, request_revisions=revisions, planner_records=plans)
+    after = reopened.current_snapshot(project_id=record.project_id, task_id=record.task_id)
+    assert not any(x.task_id == record.task_id for x in after.active_leases)
+    assert after.assignments == before.assignments
+    assert reopened.get_commit(record.id) == record
 
 
 @pytest.fixture
@@ -38,6 +85,11 @@ def mysql_dsn() -> str:
             with connection.cursor() as cursor:
                 cursor.execute("DELETE FROM dispatch_commits")
                 cursor.execute("DELETE FROM dispatch_workforce_snapshots")
+                # This module's fixture has a fixed Task ID; remove only its prior run.
+                cursor.execute(
+                    "DELETE FROM state_events WHERE task_id = %s", ("task_dispatch_001",)
+                )
+                cursor.execute("DELETE FROM tasks WHERE id = %s", ("task_dispatch_001",))
             connection.commit()
         except pymysql.ProgrammingError as error:
             connection.rollback()

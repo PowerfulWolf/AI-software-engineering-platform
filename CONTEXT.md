@@ -4,6 +4,22 @@ This context defines the shared language for auditable software delivery perform
 
 ## Language
 
+**Company**:
+The client knowledge and confidentiality boundary within which the engineering team works. A Company owns shared knowledge, Project Knowledge Modules, and Requirement Projects, but does not own the platform's Agents.
+_Avoid_: Agent organization, code repository
+
+**Company Sidecar**:
+The unified external workspace holding one Company's shared knowledge, Project Knowledge Modules, and Requirement Project records. Physical co-location does not grant access to every module or make company guidance override project rules.
+_Avoid_: Source checkout, Agent memory, per-repository top-level sidecar
+
+**Project Knowledge Module**:
+A company-scoped collection of project facts, native-rule references, architecture knowledge, and historical decisions associated with code directories. It is reused by relevant Requirement Projects rather than copied into each request.
+_Avoid_: Code clone, Agent team, Requirement Project
+
+**Requirement Project**:
+A named collaboration space within one Company whose selected code scope is prepared before requirement discussion begins. It owns the discussion, approved product definition, technical design, execution plan, and joint delivery facts, and may involve several code repositories.
+_Avoid_: Code repository, Project group, single-repository Task
+
 **Project Request**:
 A durable product-level request tied to one Project, containing the evolving user intent before it is specific enough to become a Delivery Task.
 _Avoid_: Raw prompt, Task, chat session

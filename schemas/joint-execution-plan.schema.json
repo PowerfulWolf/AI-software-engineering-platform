@@ -1,0 +1,235 @@
+{
+  "$defs": {
+    "BrainTier": {
+      "enum": [
+        "economy",
+        "standard",
+        "reasoning",
+        "critical"
+      ],
+      "title": "BrainTier",
+      "type": "string"
+    },
+    "ExecutionPlanDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "phases": {
+          "items": {
+            "$ref": "#/$defs/PhaseDraft"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "title": "Phases",
+          "type": "array"
+        }
+      },
+      "required": [
+        "phases"
+      ],
+      "title": "ExecutionPlanDraft",
+      "type": "object"
+    },
+    "IntegrationCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "unit_id": {
+          "pattern": "^unit_[a-f0-9]{16}$",
+          "title": "Unit Id",
+          "type": "string"
+        },
+        "consumes": {
+          "items": {
+            "pattern": "^unit_[a-f0-9]{16}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Consumes",
+          "type": "array"
+        },
+        "acceptance_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Acceptance Ids",
+          "type": "array"
+        },
+        "interface_ids": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Interface Ids",
+          "type": "array"
+        },
+        "argv": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Argv",
+          "type": "array"
+        },
+        "timeout_seconds": {
+          "default": 120,
+          "maximum": 600,
+          "minimum": 1,
+          "title": "Timeout Seconds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "unit_id",
+        "consumes",
+        "acceptance_ids",
+        "argv"
+      ],
+      "title": "IntegrationCheck",
+      "type": "object"
+    },
+    "PhaseDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "enum": [
+            "coder",
+            "qa",
+            "reviewer"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "objective": {
+          "minLength": 1,
+          "title": "Objective",
+          "type": "string"
+        },
+        "required_capabilities": {
+          "items": {
+            "enum": [
+              "implementation",
+              "testing",
+              "review",
+              "security",
+              "contract-validation",
+              "python",
+              "java",
+              "cpp",
+              "go",
+              "typescript"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Required Capabilities",
+          "type": "array"
+        },
+        "risk": {
+          "$ref": "#/$defs/RiskTier"
+        },
+        "minimum_brain_tier": {
+          "$ref": "#/$defs/BrainTier"
+        },
+        "checkpoints": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Checkpoints",
+          "type": "array"
+        }
+      },
+      "required": [
+        "role",
+        "objective",
+        "required_capabilities",
+        "risk",
+        "minimum_brain_tier",
+        "checkpoints"
+      ],
+      "title": "PhaseDraft",
+      "type": "object"
+    },
+    "RiskTier": {
+      "enum": [
+        "low",
+        "normal",
+        "high",
+        "critical"
+      ],
+      "title": "RiskTier",
+      "type": "string"
+    },
+    "UnitPlan": {
+      "additionalProperties": false,
+      "properties": {
+        "unit_id": {
+          "pattern": "^unit_[a-f0-9]{16}$",
+          "title": "Unit Id",
+          "type": "string"
+        },
+        "depends_on": {
+          "default": [],
+          "items": {
+            "pattern": "^unit_[a-f0-9]{16}$",
+            "type": "string"
+          },
+          "title": "Depends On",
+          "type": "array"
+        },
+        "plan": {
+          "$ref": "#/$defs/ExecutionPlanDraft"
+        }
+      },
+      "required": [
+        "unit_id",
+        "plan"
+      ],
+      "title": "UnitPlan",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "design_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Design Sha256",
+      "type": "string"
+    },
+    "units": {
+      "items": {
+        "$ref": "#/$defs/UnitPlan"
+      },
+      "minItems": 1,
+      "title": "Units",
+      "type": "array"
+    },
+    "integration_checks": {
+      "items": {
+        "$ref": "#/$defs/IntegrationCheck"
+      },
+      "minItems": 1,
+      "title": "Integration Checks",
+      "type": "array"
+    }
+  },
+  "required": [
+    "design_sha256",
+    "units",
+    "integration_checks"
+  ],
+  "title": "JointExecutionPlan",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/joint-execution-plan.schema.json"
+}

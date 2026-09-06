@@ -1,21 +1,30 @@
 # Production Team Host：部署与使用
 
-本文描述 T034 之后的正常项目交付入口。平台管理员配置一次组织 Team Host；之后用户只提供目标 Git
-项目绝对目录和自然语言需求。底层 `ase task ...` 不属于这条日常路径。
+平台管理员配置一次组织 Team Host；之后用户创建需求项目、选择一个或多个代码目录，平台准备所有
+项目规范后再讨论需求。底层 `ase task ...` 不属于这条日常路径。
 
 ## 1. 运行边界
+
+**Team Host 是团队运行的装配入口，不是一个 Agent，也不是 Docker 容器。**
+它读取组织配置，连接并初始化 MySQL，打开组织 workspace 与项目 sidecar 注册表，
+把模型适配器、Project Manager 工作流及隔离交付服务连接起来，提供给 CLI 使用。
+Project Manager 负责推进工作；Host 负责让这些能力能够实际运行。
+
+当前 Host 是随 CLI 进程创建的 Python 对象，并非一直驻留后台的服务。命令退出后，
+工作进度保存在 MySQL 和外置 workspace；下一次命令重新装配 Host，再读取事实继续。
+因此“长期团队”指组织身份和工作记录持久化，不代表 Agent 或 Host 进程一直在线。
 
 ```text
 目标项目（代码与原生规范）
         │
         ▼
-ase project start / reply / approve / resume
+ase request create / discuss / approve / resume
         │
         ▼
 OrganizationTeamHost
   ├── MySQL：Task、StateEvent、dispatch authority
   ├── organization workspace：AgentProfile、ModelPolicy、跨项目事实
-  ├── project sidecar：需求、设计、计划、Context、Artifact、Evidence
+  ├── company sidecar：公司知识、项目子模块、需求项目记录
   └── Git worktrees：Coder、QA、Reviewer 的隔离 checkout
 ```
 
@@ -92,6 +101,9 @@ cp config/production.example.json \
 ```json
 {
   "platform_root": "/absolute/path/to/ase-data",
+  "company_id": "company_default",
+  "company_name": "Default company",
+  "company_knowledge_paths": [],
   "live_model_execution": true
 }
 ```
@@ -106,13 +118,24 @@ export ASE_CONFIG='/absolute/path/to/production.json'
 `live_model_execution=false` 是示例文件的安全默认值；它会明确拒绝真实模型运行，不会偷偷切换 fake
 Agent。
 
+`company_id` 默认为 `company_default`，选定公司后项目自动收纳到它的 sidecar，无须每仓配置路径。
+这里的 Company 是知识和工作记录的隔离边界，不是特定业务团队；初次使用保留默认值即可。
+`company_name` 是首次注册的显示名；ID/名称与持久化 manifest 不一致时拒绝静默覆盖。
+公司知识文档放在 `companies/<company_id>/knowledge/`，`company_knowledge_paths` 只填写本次
+Host 需要的文档相对路径，例如 `["workflow.md"]`。这些资料是只读上下文，不会自动覆盖项目规范。
+已准备项目依赖的公司知识发生变化时，会拒绝继续旧交付，应检查变化并处理规范/上下文冲突。
+默认配置不读取任何额外公司文档，也不会自动迁移旧 `platform_root/projects/` 数据。
+
 ## 5. 模型路由
 
 `model_routes` 的数组顺序就是冻结后的尝试顺序。示例配置的初始顺序是：
 
 1. `codex / gpt-5.5 / codex_cli`；
-2. `qwen / YOUR_QWEN_MODEL / responses`（替换占位符并显式启用后）；
-3. `deepseek / YOUR_DEEPSEEK_MODEL / responses`（替换占位符并显式启用后）。
+2. `deepseek / YOUR_DEEPSEEK_MODEL / responses`（替换占位符并显式启用后）；
+3. `qwen / YOUR_QWEN_MODEL / responses`（千问，替换占位符并显式启用后）。
+
+即 **GPT → DeepSeek → Qianwen（千问）**。禁用的路由直接跳过；这是默认配置优先级，
+不是代码中按供应商名称强制排序，显式配置的数组顺序仍然有效。
 
 Codex 路由不接受 endpoint 或 API key 字段。Responses 路由必须同时配置 `endpoint` 和
 `api_key_env`，例如 `DASHSCOPE_API_KEY` 或 `DEEPSEEK_API_KEY`；密钥本身只存在于进程环境。
@@ -128,9 +151,51 @@ Artifact、policy violation、产品歧义或规范冲突不会靠换模型掩�
 模型是某次 AgentRun 使用的“大脑”，不是 Agent 身份。Coder、QA、Reviewer 始终是三个不同的组织
 Agent，即使它们碰巧使用同一模型也不能互相代替或自我批准。
 
+当前生产 Host 将首个启用路由构造为主模型策略，各风险等级使用同一档位；底层 ModelRouter
+虽然支持风险/能力约束，生产入口尚未配置按任务难度差异化选模的完整策略。
+
 ## 6. 日常交付
 
 ### 6.1 开始并讨论需求
+
+先创建需求项目，目录可以只传一个，也可以传多个不相邻的仓库或模块目录：
+
+```bash
+uv run ase request create /absolute/path/to/backend /another/path/to/frontend \
+  --name "订单取消"
+```
+
+创建不调用模型。所有目录准备成功后返回 `READY_FOR_DISCUSSION`，再用输出的 delivery_id 和
+checkpoint_sha256 讨论需求：
+
+```bash
+uv run ase request discuss delivery_multi_xxx \
+  --checkpoint <checkpoint_sha256> \
+  --message "前后端支持取消未支付订单，并补充自动化测试"
+```
+
+`checkpoint.product_spec` 保存联合产品文档，`checkpoint.dialogue` 保存澄清问答；修订也使用
+`request discuss`。可评审后只批准一次：
+
+```bash
+uv run ase request approve delivery_multi_xxx --checkpoint <latest-checkpoint-sha256>
+uv run ase request status delivery_multi_xxx
+uv run ase request resume delivery_multi_xxx
+```
+
+联合方案按仓库生成原生 Task；每仓依次完成 Coder、QA、Reviewer 后，平台在完整候选集合上
+实际运行联合验收。`checkpoint.children` 给出每仓 Task/candidate；`checkpoint.integration`
+保存候选集合、命令及结果。只有联合验收通过才报告整体 DONE。
+
+测试通过环境变量 `ASE_UNIT_<unit-id 的大写 16 位 hex 后缀>` 访问候选目录，cwd 是所指定仓库
+的候选根；不传入 Host secrets。测试必须存在于候选中、符合项目命令 allowlist；不能用 echo、
+Git inspection 或无测试的成功退出冒充验收。平台保留独立候选，不自动 merge/push。
+
+中断后复用已记录的阶段和原生子交付；未落盘的模型响应可能重复调用，测试也可能重跑。
+BLOCKED 不会靠 resume 自动修复代码；检查 `next_action` 和子 checkpoint 的失败原因。
+源 HEAD、选定规范或知识变化时，应重新准备新的需求项目，不能套用旧批准。
+
+下面保留原单仓一步式入口，方便兼容旧命令；新需求推荐上面的 `request` 流程。
 
 ```bash
 uv run ase project start /absolute/path/to/target-project \
@@ -204,16 +269,21 @@ PR 或人工 Git 命令完成交付。
 ```text
 <platform_root>/
 ├── organization/                 # 组织 AgentProfile、ModelPolicy、跨项目事实
-├── projects/<project-id>/        # 每个项目唯一 sidecar
-    ├── workspace.json
-    ├── profile/ knowledge/ policy/ state/
-    ├── contexts/ artifacts/ evidence/ evaluations/
-│   └── handoffs/ runs/ logs/ assignments/
+├── companies/<company_id>/      # 每个公司一个 sidecar
+│   ├── company.json
+│   ├── knowledge/               # 显式选择的公司共享资料
+│   ├── projects/<project-id>/   # 项目知识及独立 per-repository 运行事实
+│   │   ├── workspace.json
+│   │   └── profile/ knowledge/ policy/ state/ contexts/ artifacts/ evidence/ ...
+│   └── requests/                # 联合产品/批准/方案/计划/候选与验收 journal
 └── worktrees/<project-id>/       # 当前/保留的角色 worktree
 ```
 
 MySQL 和整个 `platform_root` 都是恢复所需数据，应一起备份。不要只备份目标 Git 项目。干净 worktree 可
 回收；dirty/漂移 worktree 会保留给人工取证。
+
+项目 ID 与 delivery ID 包含公司命名空间，多个公司即使显式登记同一源码路径也不共用交付记录。
+这不代替 OS 级访问控制；有宿主文件系统权限的管理员仍能访问各目录。
 
 ## 8. Live smoke
 

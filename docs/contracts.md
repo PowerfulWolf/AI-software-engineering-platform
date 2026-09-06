@@ -108,7 +108,21 @@ ADR 不由 `Task.status == DONE` 单独决定。`EvaluationEngine` 还要求最�
 project、manifest digest/Schema/path mismatch 或 layout 缺失均 fail closed。注册不复制源码，也不
 在目标项目创建 `.ase`、数据库、Agent 日志、Artifact 或 Evidence。T022 的 Python
 `RuntimeWorkspaceBinding` 已能把 Runtime paths 固定到 `ProjectWorkspace.directory(...)` 下；
-当前 CLI 自动装配尚未接入，CLI 配置仍必须显式使用这些 sidecar paths。
+生产 Host 已自动注册并装配公司 sidecar 下的项目子模块；底层 RuntimeConfig 仍显式使用这些路径。
+
+### 联合需求项目
+
+`ase request create DIR... --name NAME` 先准备全部目录，再允许 `discuss/approve/status/resume`。
+一个请求使用一份联合产品批准链，按仓库机械投影为既有单仓 Task/Artifact 契约，不改变
+Task.repository/source_revision 的单仓含义。子仓完成后必须验证完整 pinned candidate set；
+子仓 DONE 不等于联合 DONE。
+
+新增 wire contracts：`requirement-project-create.schema.json`、
+`requirement-project-checkpoint.schema.json`、`joint-product-spec.schema.json`、
+`joint-technical-design.schema.json`、`joint-execution-plan.schema.json`。
+Python 入口在 `multi_directory/models.py`、`service.py`，生产桥接在 `production.py`。
+完整签名、授权投影、路径/命令校验和恢复矩阵见
+[`多目录交付 code-spec`](../.trellis/spec/core/multi-directory-delivery.md)。
 
 AgentProfile、ModelPolicy、全局 WorkQueue 和团队绩效位于组织 workspace。T020 的 ProjectProfile
 只读发现语言、构建、VCS 和原生规范来源并记录 URI/hash；T021 的 `SpecCompiler` 对显式结构化
@@ -601,3 +615,11 @@ dispatch allocation 完全一致。Coder 在 frozen base SHA 的 branch worktree
 branch/detached 与 HEAD，dirty 现场不得清理。
 
 完整 executable contract、错误矩阵与必测项见 `.trellis/spec/core/contracts.md` 第 15 节。
+
+## T036 TeamSnapshot read contract
+
+`GET /api/v1/team` 输出 `schemas/team-snapshot.schema.json`：company/as_of、组织成员、当前公司
+需求、目录范围、Task、分配、时间线、报告和已完成模型路由记录。不接受写入。成员的任务集合为多值，
+current_stage 来自 Task 状态与 Dispatch 的 role 匹配，不代表执行器在线。execution_liveness 仅
+UNKNOWN；planned_model 不代替 ModelRouteAttempt 的实际模型。读取不会初始化 store 或推进业务。
+具体路径、错误矩阵、测试见 `.trellis/spec/core/live-team-view.md`。

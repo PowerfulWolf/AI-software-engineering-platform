@@ -50,6 +50,14 @@ PortfolioScheduler/ModelRouter 决策，尚未实现持久化 WorkQueue applicat
 
 ## 目标项目与外置 AI Workspace
 
+生产 Host 的外置收纳边界现在是 Company：`<platform_root>/companies/<company_id>/`。
+`knowledge/` 保存选定公司公共知识，`projects/<project-id>/` 保留项目知识及每仓运行契约，
+`requests/` 保存需求项目联合记录。下文 per-project sidecar 指公司内的子模块，不代表用户需要
+管理多个独立顶层 workspace。AgentProfile 仍在 organization workspace；Company 不拥有 Agent。
+公司身份必须参与 project/delivery ID，不能只靠目录区分共享 MySQL 中的事实。详见
+`.trellis/spec/core/company-workspace.md`。多仓入口和候选集验收见
+`.trellis/spec/core/multi-directory-delivery.md`；不得绕过联合批准或原生 QA/Review。
+
 平台可以接入任意本地项目；Task 的 `repository`/`project_root` 是目标项目的真实代码目录，
 也是默认命令 cwd。每个项目必须注册一个位于目标目录之外的 `ai_workspace_root`，由
 `ProjectWorkspaceRegistry` 建立固定 sidecar layout。ProjectProfile、项目级 prompt/规范、
@@ -59,7 +67,8 @@ AgentProfile、ModelPolicy、全局 WorkQueue 和团队绩效属于组织 worksp
 
 T022 的 `RuntimeWorkspaceBinding` 是 Python composition seam：它将组织 workspace、项目 sidecar、
 ProjectProfile、CompiledSpec 和 RuntimePaths 绑定，并校验 Task.repository 精确等于 project_root。
-当前 CLI 仍要求显式提供 sidecar paths；不得把 Python seam 描述成 CLI 已自动完成项目发现。
+生产 CLI 由 Team Host 根据公司配置自动注册项目子模块并完成准备；低层 Python binding 仍保留
+精确根目录校验。`ase request create DIR... --name NAME` 先归并目录、准备所有仓库，再允许讨论。
 
 目标项目自身的 `AGENTS.md`、`CONTRIBUTING`、README、CI、`.editorconfig`、`.trellis/spec/` 等
 是 project-native rules，必须只读发现、记录 URI/hash 并纳入 Context。平台 sidecar 不能悄悄
@@ -80,6 +89,12 @@ durable StateEvent、Evaluation、Artifact、Evidence、Assignment、Lease 和 H
 过滤和分页，非 GET 返回 405。`DashboardRenderer` 只消费 snapshot/API，输出 JSON 或静态 HTML，
 不得打开 socket、执行命令、写 Task、verdict、artifact、state 或人工决策；总 capacity/cost 等
 未被事实支持的字段必须显示 unknown，不得猜测。恶意任务文本只能以 textContent 安全渲染。
+
+T036 `ase team serve` 的 socket 由独立 `team_view.server` composition 持有；旧 Renderer 仍是纯读组件。
+ProductionTeamReader 不构造 Team Host，不 prepare/reconcile 或初始化数据库，只读取当前公司的已验证
+journal、MySQL Task/events/dispatch 和组织成员。详见 `.trellis/spec/core/live-team-view.md`。
+Task 阶段、模型调用结束、执行器在线是不同事实；没有心跳时只能显示 UNKNOWN，分配模型也不能冒充
+降级后的实际模型。
 
 ## 组织级 Agent 与模型分配
 

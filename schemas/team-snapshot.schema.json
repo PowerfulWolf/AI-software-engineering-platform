@@ -1,0 +1,663 @@
+{
+  "$defs": {
+    "AgentRole": {
+      "description": "Delivery-runtime roles bound to Task artifacts and state transitions.",
+      "enum": [
+        "orchestrator",
+        "coder",
+        "qa",
+        "reviewer"
+      ],
+      "title": "AgentRole",
+      "type": "string"
+    },
+    "AgentView": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "roles": {
+          "items": {
+            "$ref": "#/$defs/OrganizationRole"
+          },
+          "title": "Roles",
+          "type": "array"
+        },
+        "capabilities": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Capabilities",
+          "type": "array"
+        },
+        "enabled": {
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "max_parallel_assignments": {
+          "title": "Max Parallel Assignments",
+          "type": "integer"
+        },
+        "execution_liveness": {
+          "const": "UNKNOWN",
+          "default": "UNKNOWN",
+          "title": "Execution Liveness",
+          "type": "string"
+        },
+        "assigned_delivery_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Assigned Delivery Ids",
+          "type": "array"
+        },
+        "current_stage_delivery_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Current Stage Delivery Ids",
+          "type": "array"
+        },
+        "history_delivery_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "History Delivery Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "roles",
+        "capabilities",
+        "enabled",
+        "max_parallel_assignments"
+      ],
+      "title": "AgentView",
+      "type": "object"
+    },
+    "AssignmentView": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_id": {
+          "title": "Agent Id",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/AgentRole"
+        },
+        "planned_provider": {
+          "title": "Planned Provider",
+          "type": "string"
+        },
+        "planned_model": {
+          "title": "Planned Model",
+          "type": "string"
+        },
+        "current_stage": {
+          "title": "Current Stage",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "agent_id",
+        "role",
+        "planned_provider",
+        "planned_model",
+        "current_stage"
+      ],
+      "title": "AssignmentView",
+      "type": "object"
+    },
+    "DocumentView": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "source_uri": {
+          "title": "Source Uri",
+          "type": "string"
+        },
+        "sha256": {
+          "title": "Sha256",
+          "type": "string"
+        },
+        "content": {
+          "default": "",
+          "title": "Content",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "source_uri",
+        "sha256"
+      ],
+      "title": "DocumentView",
+      "type": "object"
+    },
+    "JsonValue": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "OrganizationRole": {
+      "description": "Long-lived roles that an organization-owned AgentProfile may declare.",
+      "enum": [
+        "project_manager",
+        "product",
+        "designer",
+        "planner",
+        "orchestrator",
+        "coder",
+        "qa",
+        "reviewer"
+      ],
+      "title": "OrganizationRole",
+      "type": "string"
+    },
+    "ProjectionEventKind": {
+      "description": "Source fact types rendered in a timeline.",
+      "enum": [
+        "state_event",
+        "evaluation_event",
+        "artifact",
+        "evidence",
+        "handoff",
+        "assignment",
+        "lease"
+      ],
+      "title": "ProjectionEventKind",
+      "type": "string"
+    },
+    "RequestView": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "stage": {
+          "title": "Stage",
+          "type": "string"
+        },
+        "scopes": {
+          "items": {
+            "$ref": "#/$defs/ScopeView"
+          },
+          "title": "Scopes",
+          "type": "array"
+        },
+        "next_action": {
+          "title": "Next Action",
+          "type": "string"
+        },
+        "blocker": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Blocker"
+        },
+        "documents": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DocumentView"
+          },
+          "title": "Documents",
+          "type": "array"
+        },
+        "checkpoint_sha256": {
+          "title": "Checkpoint Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "stage",
+        "scopes",
+        "next_action",
+        "checkpoint_sha256"
+      ],
+      "title": "RequestView",
+      "type": "object"
+    },
+    "RunView": {
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/AgentRole"
+        },
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "route_index": {
+          "title": "Route Index",
+          "type": "integer"
+        },
+        "outcome": {
+          "title": "Outcome",
+          "type": "string"
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error Code"
+        },
+        "duration_ms": {
+          "title": "Duration Ms",
+          "type": "integer"
+        },
+        "completed_at": {
+          "format": "date-time",
+          "title": "Completed At",
+          "type": "string"
+        },
+        "source_uri": {
+          "title": "Source Uri",
+          "type": "string"
+        },
+        "sha256": {
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "role",
+        "provider",
+        "model",
+        "route_index",
+        "outcome",
+        "duration_ms",
+        "completed_at",
+        "source_uri",
+        "sha256"
+      ],
+      "title": "RunView",
+      "type": "object"
+    },
+    "ScopeView": {
+      "additionalProperties": false,
+      "properties": {
+        "root": {
+          "title": "Root",
+          "type": "string"
+        },
+        "selected_paths": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Selected Paths",
+          "type": "array"
+        },
+        "reference_only": {
+          "default": false,
+          "title": "Reference Only",
+          "type": "boolean"
+        },
+        "delivery_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Delivery Id"
+        }
+      },
+      "required": [
+        "root",
+        "selected_paths"
+      ],
+      "title": "ScopeView",
+      "type": "object"
+    },
+    "TaskView": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "request_id": {
+          "title": "Request Id",
+          "type": "string"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Id"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/ScopeView"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "checkpoint_stage": {
+          "title": "Checkpoint Stage",
+          "type": "string"
+        },
+        "terminal": {
+          "title": "Terminal",
+          "type": "boolean"
+        },
+        "last_activity": {
+          "format": "date-time",
+          "title": "Last Activity",
+          "type": "string"
+        },
+        "execution_liveness": {
+          "const": "UNKNOWN",
+          "default": "UNKNOWN",
+          "title": "Execution Liveness",
+          "type": "string"
+        },
+        "blocker": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Blocker"
+        },
+        "next_action": {
+          "title": "Next Action",
+          "type": "string"
+        },
+        "candidate_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Revision"
+        },
+        "assignments": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/AssignmentView"
+          },
+          "title": "Assignments",
+          "type": "array"
+        },
+        "timeline": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/TimelineEntry"
+          },
+          "title": "Timeline",
+          "type": "array"
+        },
+        "runs": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RunView"
+          },
+          "title": "Runs",
+          "type": "array"
+        },
+        "documents": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DocumentView"
+          },
+          "title": "Documents",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "request_id",
+        "title",
+        "scope",
+        "status",
+        "checkpoint_stage",
+        "terminal",
+        "last_activity",
+        "next_action"
+      ],
+      "title": "TaskView",
+      "type": "object"
+    },
+    "TimelineEntry": {
+      "additionalProperties": false,
+      "description": "A small, source-addressable timeline item.",
+      "properties": {
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ProjectionEventKind"
+        },
+        "occurred_at": {
+          "format": "date-time",
+          "title": "Occurred At",
+          "type": "string"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Id"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Run Id"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentRole"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "summary": {
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        },
+        "source_uri": {
+          "minLength": 1,
+          "title": "Source Uri",
+          "type": "string"
+        },
+        "source_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Sha256"
+        },
+        "details": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Details",
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "occurred_at",
+        "summary",
+        "source_uri"
+      ],
+      "title": "TimelineEntry",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "v0.1",
+      "default": "v0.1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "as_of": {
+      "format": "date-time",
+      "title": "As Of",
+      "type": "string"
+    },
+    "company_id": {
+      "title": "Company Id",
+      "type": "string"
+    },
+    "company_name": {
+      "title": "Company Name",
+      "type": "string"
+    },
+    "agents": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/AgentView"
+      },
+      "title": "Agents",
+      "type": "array"
+    },
+    "requests": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/RequestView"
+      },
+      "title": "Requests",
+      "type": "array"
+    },
+    "tasks": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/TaskView"
+      },
+      "title": "Tasks",
+      "type": "array"
+    }
+  },
+  "required": [
+    "as_of",
+    "company_id",
+    "company_name"
+  ],
+  "title": "TeamSnapshot",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/team-snapshot.schema.json"
+}

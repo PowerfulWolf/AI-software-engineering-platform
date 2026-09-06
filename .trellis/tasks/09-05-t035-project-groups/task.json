@@ -1,0 +1,10 @@
+{
+  "id": "T035",
+  "slug": "multi-directory-delivery",
+  "title": "支持单项目与跨项目需求的多目录联合交付",
+  "status": "completed",
+  "phase": "verified",
+  "depends_on": ["T034"],
+  "allowed_paths": ["src/ai_software_engineer/**", "tests/**", "schemas/**", "config/**", "docs/**", "README.md", "CONTEXT.md", "AGENTS.md", ".trellis/spec/core/**", ".trellis/tasks/09-05-t035-project-groups/**"],
+  "verification_commands": ["uv run pytest -q", "uv run ruff check .", "uv run ruff format --check .", "uv run mypy src tests", "uv build --offline", "git diff --check"]
+}

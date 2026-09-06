@@ -1,6 +1,13 @@
 # CLI 使用说明
 
-正常用户入口是 `ase project ...`：Production Team Host 自动从 `ASE_CONFIG`/默认配置和环境变量装配
+## 团队工作台
+
+`ase team serve --port 8765` 使用同一生产配置，在 http://127.0.0.1:8765 提供当前公司的只读团队、
+多目录需求和任务详情。每 5 秒自动刷新，不初始化 workspace/schema、不调用模型、不修改交付。
+配置错误/端口占用返回 exit 2；数据不可用显示明确错误，不能被解释成没有任务。
+详见 [工作台说明](visualization.md)。
+
+正常用户入口是 `ase request ...`，旧 `ase project ...` 保留兼容：Production Team Host 自动从 `ASE_CONFIG`/默认配置和环境变量装配
 MySQL、组织团队、模型路由、项目 sidecar 与 worktree。`ase task ...`、`ase evaluation ...`、
 `ase handoff ...` 是保留给平台开发、兼容测试和诊断的低层命令。CLI 不绕过 Task、Artifact、
 StateEvent、EvaluationEvent 或 Handoff 的 typed contract。
@@ -10,24 +17,25 @@ StateEvent、EvaluationEvent 或 Handoff 的 typed contract。
 完成一次 [`production-setup.md`](production-setup.md) 配置后：
 
 ```bash
-ase project start /absolute/path/to/project \
-  --requirement "Add the approved feature"
+ase request create /absolute/path/to/backend /another/path/to/frontend --name "Order cancellation"
 
-ase project reply delivery_xxx \
+ase request discuss delivery_multi_xxx \
   --checkpoint <current-checkpoint-sha256> \
   --message "The expected behavior is ..."
 
-ase project approve delivery_xxx \
+ase request approve delivery_multi_xxx \
   --checkpoint <current-checkpoint-sha256>
 
-ase project status delivery_xxx
-ase project resume delivery_xxx
+ase request status delivery_multi_xxx
+ase request resume delivery_multi_xxx
 ```
 
-`start` 自动 prepare/reopen 外置 project sidecar、发现项目规范并运行一个有界 Product turn。`reply` 和
-`approve` 必须引用 exact current checkpoint；旧页面或重复命令不能覆盖新事实。批准后 Project
-Manager 自动推进 Designer、Planner、dispatch 和 `Coder → QA → Reviewer`。进程中断后用 `resume`
-重算 durable facts 并继续。
+`create` 先 prepare 全部目录并停在 READY_FOR_DISCUSSION，不调用模型；目录可以只传一个。
+`discuss` 运行一个有界 Product turn；`discuss/approve` 必须引用 exact current checkpoint，旧操作
+不能覆盖新事实。批准联合产品后自动推进 Designer、Planner、每仓 dispatch 与 Coder→QA→Reviewer，
+最后在完整候选集合执行联合验收。进程中断后 `resume` 重算 durable facts 并继续。
+联合结果在 `checkpoint.children/integration/next_action`，不会自动合并候选。
+旧 `ase project start DIR... --requirement TEXT` 仍支持一步式接单。
 
 未调用测试注入的 `configure_project_entry(...)` 时，CLI 会惰性创建
 `OrganizationTeamHost.from_environment()`；缺配置、MySQL 不可达、`live_model_execution=false` 或模型

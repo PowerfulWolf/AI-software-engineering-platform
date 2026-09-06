@@ -70,10 +70,15 @@ class InMemoryEvaluationEventStore:
 class FileEvaluationEventStore:
     """Persist one canonical JSON file per append-only Evaluation event."""
 
-    def __init__(self, root: str | Path) -> None:
+    def __init__(self, root: str | Path, *, read_only: bool = False) -> None:
         self._root = Path(root)
+        self._read_only = read_only
         try:
-            self._root.mkdir(parents=True, exist_ok=True)
+            if read_only:
+                if not self._root.is_dir():
+                    raise EvaluationEventStoreError("evaluation root is missing")
+            else:
+                self._root.mkdir(parents=True, exist_ok=True)
         except OSError as error:
             raise EvaluationEventStoreError(
                 f"cannot initialize EvaluationEventStore at {self._root}"
@@ -81,6 +86,8 @@ class FileEvaluationEventStore:
 
     def append(self, event: EvaluationEvent) -> EvaluationEvent:
         target = self._path(event.event_id)
+        if self._read_only:
+            raise EvaluationEventStoreError("evaluation store is read-only")
         if target.exists():
             existing = self.get(event.event_id)
             if existing == event:

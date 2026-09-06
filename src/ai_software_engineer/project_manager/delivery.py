@@ -75,6 +75,7 @@ class DeliveryBackendFailure(UnifiedProjectEntryError):
 
 class StartProjectDelivery(DomainModel):
     project_root: NonEmptyStr
+    additional_project_roots: tuple[NonEmptyStr, ...] = ()
     requirement: NonEmptyStr
     title: Annotated[str, StringConstraints(min_length=1, max_length=200)] = (
         "Software delivery request"
@@ -198,12 +199,18 @@ class UnifiedProjectEntryService:
         *,
         backend: ProjectDeliveryBackend,
         catalog: ProjectDeliveryCheckpointCatalog,
+        delivery_namespace: str | None = None,
     ) -> None:
         self._backend = backend
         self._catalog = catalog
+        self._delivery_namespace = delivery_namespace
 
     def start(self, command: StartProjectDelivery) -> ProjectDeliveryResult:
-        delivery_id = _delivery_id(command.project_root, command.requirement)
+        if command.additional_project_roots:
+            raise ValueError("multiple directories require the organization joint delivery host")
+        delivery_id = _delivery_id(
+            command.project_root, command.requirement, namespace=self._delivery_namespace
+        )
         preparation = self._backend.prepare(command.project_root)
         store = self._catalog.for_project(preparation.project_id)
         try:
@@ -732,12 +739,14 @@ class UnifiedProjectEntryService:
         return store.put(checkpoint)
 
 
-def _delivery_id(project_root: str, requirement: str) -> DeliveryId:
+def _delivery_id(
+    project_root: str, requirement: str, *, namespace: str | None = None
+) -> DeliveryId:
+    identity = {"project_root": str(Path(project_root).resolve()), "requirement": requirement}
+    if namespace is not None:
+        identity["namespace"] = namespace
     canonical = json.dumps(
-        {
-            "project_root": str(Path(project_root).resolve()),
-            "requirement": requirement,
-        },
+        identity,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),

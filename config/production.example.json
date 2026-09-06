@@ -1,6 +1,9 @@
 {
   "schema_version": "v0.1",
   "platform_root": "/absolute/path/to/ase-data",
+  "company_id": "company_default",
+  "company_name": "Default company",
+  "company_knowledge_paths": [],
   "database": {
     "backend": "mysql",
     "dsn_env": "ASE_MYSQL_DSN"
@@ -14,20 +17,20 @@
       "enabled": true
     },
     {
-      "provider": "qwen",
-      "model": "YOUR_QWEN_MODEL",
-      "kind": "responses",
-      "endpoint": "https://YOUR_WORKSPACE_ID.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/responses",
-      "api_key_env": "DASHSCOPE_API_KEY",
-      "reasoning_effort": "medium",
-      "enabled": false
-    },
-    {
       "provider": "deepseek",
       "model": "YOUR_DEEPSEEK_MODEL",
       "kind": "responses",
       "endpoint": "https://api.deepseek.com/v1/responses",
       "api_key_env": "DEEPSEEK_API_KEY",
+      "reasoning_effort": "medium",
+      "enabled": false
+    },
+    {
+      "provider": "qwen",
+      "model": "YOUR_QWEN_MODEL",
+      "kind": "responses",
+      "endpoint": "https://YOUR_WORKSPACE_ID.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/responses",
+      "api_key_env": "DASHSCOPE_API_KEY",
       "reasoning_effort": "medium",
       "enabled": false
     }

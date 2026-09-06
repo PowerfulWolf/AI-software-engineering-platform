@@ -1,0 +1,170 @@
+{
+  "$defs": {
+    "AcceptanceDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "verification": {
+          "minLength": 1,
+          "title": "Verification",
+          "type": "string"
+        },
+        "test_ids": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Test Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "description",
+        "verification"
+      ],
+      "title": "AcceptanceDraft",
+      "type": "object"
+    },
+    "ProductDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "clarify",
+            "ready"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "summary": {
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        },
+        "questions": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Questions",
+          "type": "array"
+        },
+        "goals": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Goals",
+          "type": "array"
+        },
+        "non_goals": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Non Goals",
+          "type": "array"
+        },
+        "assumptions": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Assumptions",
+          "type": "array"
+        },
+        "requirements": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RequirementDraft"
+          },
+          "title": "Requirements",
+          "type": "array"
+        }
+      },
+      "required": [
+        "action",
+        "summary"
+      ],
+      "title": "ProductDraft",
+      "type": "object"
+    },
+    "RequirementDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "statement": {
+          "minLength": 1,
+          "title": "Statement",
+          "type": "string"
+        },
+        "priority": {
+          "$ref": "#/$defs/RequirementPriority",
+          "default": "MUST"
+        },
+        "rationale": {
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        },
+        "acceptance": {
+          "items": {
+            "$ref": "#/$defs/AcceptanceDraft"
+          },
+          "minItems": 1,
+          "title": "Acceptance",
+          "type": "array"
+        }
+      },
+      "required": [
+        "statement",
+        "rationale",
+        "acceptance"
+      ],
+      "title": "RequirementDraft",
+      "type": "object"
+    },
+    "RequirementPriority": {
+      "enum": [
+        "MUST",
+        "SHOULD",
+        "COULD"
+      ],
+      "title": "RequirementPriority",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "scope_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Scope Sha256",
+      "type": "string"
+    },
+    "version": {
+      "minimum": 1,
+      "title": "Version",
+      "type": "integer"
+    },
+    "product": {
+      "$ref": "#/$defs/ProductDraft"
+    }
+  },
+  "required": [
+    "scope_sha256",
+    "version",
+    "product"
+  ],
+  "title": "JointProductSpec",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/joint-product-spec.schema.json"
+}

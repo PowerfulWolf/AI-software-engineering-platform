@@ -1,0 +1,35 @@
+{
+  "additionalProperties": false,
+  "description": "Name the collaboration space and its code scope BEFORE discussing requirements.",
+  "properties": {
+    "name": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Name",
+      "type": "string"
+    },
+    "project_roots": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 32,
+      "minItems": 1,
+      "title": "Project Roots",
+      "type": "array"
+    },
+    "submitted_at": {
+      "format": "date-time",
+      "title": "Submitted At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "project_roots"
+  ],
+  "title": "CreateRequirementProject",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/requirement-project-create.schema.json"
+}

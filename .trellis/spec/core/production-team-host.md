@@ -93,6 +93,9 @@ Environment contract:
   `configure_project_entry(...)`，也不得因配置失败回退 fake Agent。
 - Host 创建时必须先验证 MySQL 并幂等初始化 schema，再打开 organization workspace 和 project
   registry。`platform_root`/sidecar/worktree 不得写入目标项目。
+- project registry 现在由 `CompanyWorkspace.project_registry()` 装配，位于
+  `companies/<company_id>/projects/`；`company_knowledge_paths` 显式选择的资料作为只读、
+  脱敏、digest-bound 的公司上下文纳入 baseline。公司归属契约见 `company-workspace.md`。
 - 组织稳定拥有三个不同的 Coder、QA、Reviewer AgentProfile；model/provider 是每次 Run 的
   `ModelSelection`，不能成为 Agent 身份。
 
@@ -109,6 +112,10 @@ Environment contract:
   和 selected model 后才能写 immutable dispatch commit。
 - dispatch preview 不能假设数据库为空；必须以 authority 的 current snapshot 为输入，否则已有全局
   Assignment/Lease 会造成错误分配或冲突。
+- current_snapshot 读取与 dispatch task_id 关联的 MySQL typed Task 快照：DONE/BLOCKED/FAILED 的
+  Lease 不再计入 active_leases；保留不可变 dispatch commit 和完整 Assignment 历史。未物化或
+  未结束的 Task 仍保留容量预留，不能仅凭父需求、Agent 文本或 wall-clock 猜测完成。preview 与
+  commit-under-lock 使用同一派生规则，损坏的 Task JSON 必须 fail closed。
 
 ### 3.3 Providers and fallback
 
@@ -127,10 +134,12 @@ Environment contract:
 - Responses provider 只能把 model output 中明确的 typed tool call 交给 role/run-bound
   `PolicyBoundToolRegistry`；不允许从自由文本提取 shell。所有 provider 最终都要通过相同
   Artifact/task/run/context/source revision/verdict guard。
+- 默认配置优先级为 GPT → DeepSeek → Qianwen（provider key 为 `qwen`）；
+  `enabled_routes()` 保留配置数组顺序并跳过禁用项，不按供应商品牌硬编码重排。
 - route 顺序在 Run 开始前冻结。只有 quota/rate-limit/timeout/temporary provider unavailable 允许切换；
   auth、invalid output、policy violation、产品/规范冲突不允许换模型掩盖。
 - delivery route 的每次尝试必须先形成 `ModelRouteAttempt`，写入
-  `<project-sidecar>/evidence/model-route-attempts/<run-id>/`。exact replay 复用已持久化 result，slot/body
+  `<project-sidecar>/runs/model-routes/<run-id>/`（通过 `model_route_root` 定位）。exact replay 复用已持久化 result，slot/body
   冲突或 hash 损坏 fail closed。每条 attempt 必须保存完整 canonical `AgentRequest` 的 SHA-256；进程
   重启后，同一 `run_id` 的权限、输入制品、输出 Schema、超时或其他 request 字段发生变化都必须拒绝
   replay。
@@ -192,7 +201,9 @@ body 或目标项目中的 secret。
 - `tests/store/test_mysql_repository.py`：与 SQLite 可观察行为一致、atomic append、replay/conflict、rollback、
   reopen；必须通过 `ASE_TEST_MYSQL_DSN` 显式 opt-in；
 - `tests/project_manager/test_mysql_dispatch_authority.py`：snapshot/commit 幂等、stale fence、reservation、
-  corruption、跨连接恢复；
+  corruption、跨连接恢复；三种 Task 终态释放容量而不删除分配事实，非终态仍占容量；
+- `tests/e2e/test_joint_delivery.py`：一个 Host 连续完成五次双仓需求（10 个原生 Task），超过
+  Agent 的 8 个并行槽位仍可串行交付，不能通过增加 capacity 或等待 15 分钟掩盖 Lease 泄漏；
 - `tests/agents/test_codex_cli.py`、`test_responses.py`、`test_fallback.py`、
   `test_openai_compatible.py`：request/response、Git、tool、error mapping、fallback allowlist 和 attempt replay；
 - `tests/project_manager/test_production_agents.py`：Product/Designer/Planner typed draft 和 exact lineage；

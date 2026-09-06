@@ -20,6 +20,7 @@ from ai_software_engineer.agents import (
     ResponsesAgentAdapter,
     StoredContextResolver,
 )
+from ai_software_engineer.agents.fallback import model_route_root
 from ai_software_engineer.config import (
     ModelProviderKind,
     ProductionConfig,
@@ -208,7 +209,7 @@ class DispatchDeliveryAgentAdapter:
         return FallbackAgentAdapter(
             tuple(routes),
             attempt_store=FileModelRouteAttemptStore(
-                self._project_workspace_root / "runs" / "model-routes"
+                model_route_root(self._project_workspace_root)
             ),
         )
 

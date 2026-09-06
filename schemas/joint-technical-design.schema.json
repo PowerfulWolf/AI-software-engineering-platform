@@ -1,0 +1,359 @@
+{
+  "$defs": {
+    "AcceptanceMappingDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "acceptance_criterion_id": {
+          "minLength": 1,
+          "title": "Acceptance Criterion Id",
+          "type": "string"
+        },
+        "verification_strategy": {
+          "minLength": 1,
+          "title": "Verification Strategy",
+          "type": "string"
+        },
+        "test_levels": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Test Levels",
+          "type": "array"
+        }
+      },
+      "required": [
+        "acceptance_criterion_id",
+        "verification_strategy",
+        "test_levels"
+      ],
+      "title": "AcceptanceMappingDraft",
+      "type": "object"
+    },
+    "ComponentDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Key",
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "responsibility": {
+          "minLength": 1,
+          "title": "Responsibility",
+          "type": "string"
+        },
+        "affected_paths": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Affected Paths",
+          "type": "array"
+        }
+      },
+      "required": [
+        "key",
+        "name",
+        "responsibility",
+        "affected_paths"
+      ],
+      "title": "ComponentDraft",
+      "type": "object"
+    },
+    "DesignRiskDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Key",
+          "type": "string"
+        },
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "tier": {
+          "$ref": "#/$defs/RiskTier"
+        },
+        "mitigation": {
+          "minLength": 1,
+          "title": "Mitigation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "description",
+        "tier",
+        "mitigation"
+      ],
+      "title": "DesignRiskDraft",
+      "type": "object"
+    },
+    "DesignStepDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Key",
+          "type": "string"
+        },
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "component_keys": {
+          "items": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Component Keys",
+          "type": "array"
+        },
+        "verification": {
+          "minLength": 1,
+          "title": "Verification",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "description",
+        "component_keys",
+        "verification"
+      ],
+      "title": "DesignStepDraft",
+      "type": "object"
+    },
+    "InterfaceContract": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "producer": {
+          "pattern": "^unit_[a-f0-9]{16}$",
+          "title": "Producer",
+          "type": "string"
+        },
+        "consumers": {
+          "items": {
+            "pattern": "^unit_[a-f0-9]{16}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Consumers",
+          "type": "array"
+        },
+        "specification": {
+          "minLength": 1,
+          "title": "Specification",
+          "type": "string"
+        },
+        "compatibility": {
+          "minLength": 1,
+          "title": "Compatibility",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "producer",
+        "consumers",
+        "specification",
+        "compatibility"
+      ],
+      "title": "InterfaceContract",
+      "type": "object"
+    },
+    "RequirementMappingDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "requirement_id": {
+          "minLength": 1,
+          "title": "Requirement Id",
+          "type": "string"
+        },
+        "component_keys": {
+          "items": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Component Keys",
+          "type": "array"
+        },
+        "approach": {
+          "minLength": 1,
+          "title": "Approach",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requirement_id",
+        "component_keys",
+        "approach"
+      ],
+      "title": "RequirementMappingDraft",
+      "type": "object"
+    },
+    "RiskTier": {
+      "enum": [
+        "low",
+        "normal",
+        "high",
+        "critical"
+      ],
+      "title": "RiskTier",
+      "type": "string"
+    },
+    "TechnicalDesignDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "summary": {
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        },
+        "components": {
+          "items": {
+            "$ref": "#/$defs/ComponentDraft"
+          },
+          "minItems": 1,
+          "title": "Components",
+          "type": "array"
+        },
+        "requirement_mappings": {
+          "items": {
+            "$ref": "#/$defs/RequirementMappingDraft"
+          },
+          "minItems": 1,
+          "title": "Requirement Mappings",
+          "type": "array"
+        },
+        "acceptance_mappings": {
+          "items": {
+            "$ref": "#/$defs/AcceptanceMappingDraft"
+          },
+          "minItems": 1,
+          "title": "Acceptance Mappings",
+          "type": "array"
+        },
+        "implementation_steps": {
+          "items": {
+            "$ref": "#/$defs/DesignStepDraft"
+          },
+          "minItems": 1,
+          "title": "Implementation Steps",
+          "type": "array"
+        },
+        "risks": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DesignRiskDraft"
+          },
+          "title": "Risks",
+          "type": "array"
+        }
+      },
+      "required": [
+        "summary",
+        "components",
+        "requirement_mappings",
+        "acceptance_mappings",
+        "implementation_steps"
+      ],
+      "title": "TechnicalDesignDraft",
+      "type": "object"
+    },
+    "UnitDesign": {
+      "additionalProperties": false,
+      "properties": {
+        "unit_id": {
+          "pattern": "^unit_[a-f0-9]{16}$",
+          "title": "Unit Id",
+          "type": "string"
+        },
+        "requirement_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Requirement Ids",
+          "type": "array"
+        },
+        "design": {
+          "$ref": "#/$defs/TechnicalDesignDraft"
+        }
+      },
+      "required": [
+        "unit_id",
+        "requirement_ids",
+        "design"
+      ],
+      "title": "UnitDesign",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "product_spec_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Product Spec Sha256",
+      "type": "string"
+    },
+    "summary": {
+      "minLength": 1,
+      "title": "Summary",
+      "type": "string"
+    },
+    "units": {
+      "items": {
+        "$ref": "#/$defs/UnitDesign"
+      },
+      "minItems": 1,
+      "title": "Units",
+      "type": "array"
+    },
+    "reference_only": {
+      "default": [],
+      "items": {
+        "pattern": "^unit_[a-f0-9]{16}$",
+        "type": "string"
+      },
+      "title": "Reference Only",
+      "type": "array"
+    },
+    "interfaces": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/InterfaceContract"
+      },
+      "title": "Interfaces",
+      "type": "array"
+    }
+  },
+  "required": [
+    "product_spec_sha256",
+    "summary",
+    "units"
+  ],
+  "title": "JointTechnicalDesign",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/joint-technical-design.schema.json"
+}

@@ -9,6 +9,7 @@ import pytest
 from jsonschema import Draft202012Validator, FormatChecker
 from referencing import Registry, Resource
 
+from ai_software_engineer.company_workspace import CompanyWorkspace
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.context import ContextBudget, ContextSource, FileContextBuilder
 from ai_software_engineer.domain import AgentPermissions, AgentRole, NetworkAccess
@@ -138,6 +139,14 @@ def test_production_config_satisfies_the_canonical_schema(tmp_path: Path) -> Non
     )
 
     _assert_valid(config.to_wire(), "production-config.schema.json")
+
+
+def test_company_manifest_satisfies_canonical_schema(tmp_path: Path) -> None:
+    workspace = CompanyWorkspace.initialize(tmp_path, company_id="company_test", name="Test")
+    _assert_valid(workspace.manifest.to_wire(), "company-workspace.schema.json")
+    malformed = workspace.manifest.to_wire()
+    malformed["company_id"] = "../escape"
+    _assert_invalid(malformed, "company-workspace.schema.json")
 
 
 def test_production_config_schema_rejects_plaintext_secret(tmp_path: Path) -> None:

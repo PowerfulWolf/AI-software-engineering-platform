@@ -14,6 +14,7 @@ from pymysql.connections import Connection
 
 from ai_software_engineer.domain.enums import (
     ProjectRequestStatus,
+    TaskStatus,
     WorkItemStatus,
 )
 from ai_software_engineer.domain.identity import ProjectId
@@ -35,7 +36,11 @@ from ai_software_engineer.project_manager.dispatch import (
 from ai_software_engineer.project_manager.dispatch_authority import (
     DispatchRevisionAuthority,
 )
-from ai_software_engineer.store.mysql_repository import open_mysql_connection
+from ai_software_engineer.store.mysql_repository import (
+    MySqlTaskRepository,
+    _decode_task,
+    open_mysql_connection,
+)
 
 
 class MySqlDispatchAuthority:
@@ -51,6 +56,8 @@ class MySqlDispatchAuthority:
         self._dsn = dsn
         self._request_revisions = request_revisions
         self._planner_records = planner_records
+        # Capacity is derived from durable Task outcomes, never from an Agent's claim.
+        MySqlTaskRepository(dsn).close()
         with closing(open_mysql_connection(self._dsn)) as connection:
             try:
                 with self._transaction(connection), connection.cursor() as cursor:
@@ -258,6 +265,19 @@ class MySqlDispatchAuthority:
                 """
             )
             commit_rows = cast(tuple[Mapping[str, object], ...], cursor.fetchall())
+            cursor.execute(
+                """
+                SELECT DISTINCT t.id, t.payload_json
+                FROM tasks AS t JOIN dispatch_commits AS d ON d.task_id = t.id
+                """
+            )
+            task_rows = cast(tuple[Mapping[str, object], ...], cursor.fetchall())
+            terminal_tasks = {
+                task.id
+                for row in task_rows
+                if (task := _decode_task(str(row["id"]), str(row["payload_json"]))).status
+                in {TaskStatus.DONE, TaskStatus.BLOCKED, TaskStatus.FAILED}
+            }
 
         assignments = {assignment.id: assignment for assignment in base.assignments}
         leases = {lease.id: lease for lease in base.active_leases}
@@ -283,7 +303,9 @@ class MySqlDispatchAuthority:
             task_id=base.task_id,
             work_item=work_item,
             agents=base.agents,
-            active_leases=leases.values(),
+            active_leases=(
+                lease for lease in leases.values() if lease.task_id not in terminal_tasks
+            ),
             assignments=assignments.values(),
             model_policies=base.model_policies,
         )

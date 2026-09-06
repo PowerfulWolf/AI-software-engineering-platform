@@ -83,15 +83,22 @@ def seal_artifact(artifact: Artifact, *, validated_at: datetime) -> Artifact:
 class FileArtifactStore:
     """Persist each Artifact as one canonical JSON file under a controlled root."""
 
-    def __init__(self, root: str | Path) -> None:
+    def __init__(self, root: str | Path, *, read_only: bool = False) -> None:
         self._root = Path(root)
+        self._read_only = read_only
         try:
-            self._root.mkdir(parents=True, exist_ok=True)
+            if read_only:
+                if not self._root.is_dir():
+                    raise ArtifactStoreError("artifact root is missing")
+            else:
+                self._root.mkdir(parents=True, exist_ok=True)
         except OSError as error:
             raise ArtifactStoreError(f"cannot initialize ArtifactStore at {self._root}") from error
 
     def put(self, artifact: Artifact) -> ArtifactRef:
         """Validate, lineage-check, and atomically persist one immutable Artifact."""
+        if self._read_only:
+            raise ArtifactStoreError("artifact store is read-only")
         self._validate_for_put(artifact)
         target = self._path(artifact.artifact_id)
         if target.exists():

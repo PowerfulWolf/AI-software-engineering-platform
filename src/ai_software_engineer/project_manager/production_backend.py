@@ -68,6 +68,7 @@ from ai_software_engineer.planning import (
 from ai_software_engineer.product import (
     FileProductRecordStore,
     HumanProductDecisionCommand,
+    HumanProductDecisionVerifier,
     ProductDiscoveryResult,
     ProductDiscoveryService,
     RecordHumanMessageCommand,
@@ -275,12 +276,18 @@ class ProductionProjectDeliveryBackend:
         structured_clients: StructuredClientFactory | None = None,
         delivery_route_adapters: DeliveryRouteAdapterFactory | None = None,
         clock: Clock | None = None,
+        preparation_guard: Callable[[], None] | None = None,
+        delivery_context_sources: tuple[ContextSource, ...] = (),
+        human_decision_verifier: HumanProductDecisionVerifier | None = None,
     ) -> None:
         self._config = config
         self._environment = dict(environment)
         self._organization = organization
         self._registry = registry
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._preparation_guard = preparation_guard
+        self._delivery_context_sources = delivery_context_sources
+        self._human_decision_verifier = human_decision_verifier or _CliHumanDecisionVerifier()
         self._baseline_store = FileProjectBaselineCompilationStore()
         self._preparer = ProjectManagerSkillService(
             organization=organization,
@@ -298,7 +305,27 @@ class ProductionProjectDeliveryBackend:
         self._dsn = config.require_mysql_dsn(self._environment)
 
     def prepare(self, project_root: str) -> PrepareProjectResult:
+        if self._preparation_guard is not None:
+            self._preparation_guard()
         return self._preparer.prepare_project(PrepareProjectRequest(project_root=project_root))
+
+    def prepared_context(self, preparation: PrepareProjectResult) -> tuple[ContextSource, ...]:
+        """Export verified, readable preparation facts for a joint Product conversation."""
+        facts = self._facts(preparation)
+        return (
+            ContextSource(
+                source_id="project.profile",
+                uri=f"profile://{facts.profile.project_id}",
+                content=json.dumps(facts.profile.to_wire(), sort_keys=True),
+                required=True,
+            ),
+            ContextSource(
+                source_id="project.baseline",
+                uri=f"baseline://{facts.profile.project_id}",
+                content=json.dumps(facts.baseline.to_wire(), sort_keys=True),
+                required=True,
+            ),
+        )
 
     def start_product(
         self,
@@ -694,6 +721,7 @@ class ProductionProjectDeliveryBackend:
                 mysql_dsn_env=self._config.database.dsn_env,
             ),
             context_sources=(
+                *self._delivery_context_sources,
                 ContextSource(
                     source_id="project.profile",
                     uri=f"profile://{facts.profile.project_id}/{facts.profile.profile_sha256}",
@@ -775,7 +803,7 @@ class ProductionProjectDeliveryBackend:
                 self._structured_clients.for_project(facts.workspace.project_root)
             ),
             stage_advancer=self._preparer,
-            human_decision_verifier=_CliHumanDecisionVerifier(),
+            human_decision_verifier=self._human_decision_verifier,
         )
 
     @staticmethod

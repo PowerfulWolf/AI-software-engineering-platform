@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 
+from ai_software_engineer.multi_directory.service import JointDeliveryService
 from ai_software_engineer.project_manager.delivery import UnifiedProjectEntryService
 
 
@@ -12,6 +13,7 @@ class ProjectEntryNotConfigured(RuntimeError):
 ProjectEntryProvider = Callable[[], UnifiedProjectEntryService]
 _provider: ProjectEntryProvider | None = None
 _default_service: UnifiedProjectEntryService | None = None
+_requirement_service: JointDeliveryService | None = None
 
 
 def configure_project_entry(provider: ProjectEntryProvider) -> None:
@@ -30,6 +32,15 @@ def project_entry() -> UnifiedProjectEntryService:
 
         _default_service = OrganizationTeamHost.from_environment().project_entry()
     return _default_service
+
+
+def requirement_entry() -> JointDeliveryService:
+    global _requirement_service
+    if _requirement_service is None:
+        from ai_software_engineer.project_manager.production_host import OrganizationTeamHost
+
+        _requirement_service = OrganizationTeamHost.from_environment().requirement_entry()
+    return _requirement_service
 
 
 __all__ = [

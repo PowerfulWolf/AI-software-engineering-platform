@@ -316,22 +316,27 @@ class ProjectDeliveryCheckpointPathError(ProjectDeliveryCheckpointError):
 class FileProjectDeliveryCheckpointStore:
     """Filesystem append-only journal with contiguous hash-chain verification."""
 
-    def __init__(self, root: str | Path) -> None:
+    def __init__(self, root: str | Path, *, read_only: bool = False) -> None:
         configured = Path(root).expanduser()
-        if configured.is_symlink():
+        self._read_only = read_only
+        if any(path.is_symlink() for path in (configured, *configured.parents)):
             raise ProjectDeliveryCheckpointPathError("checkpoint root cannot be a symlink")
         self._root = configured.resolve(strict=False)
-        self._root.mkdir(parents=True, exist_ok=True)
+        if not read_only:
+            self._root.mkdir(parents=True, exist_ok=True)
         self._require_root()
         root_stat = self._root.lstat()
         self._root_identity = (root_stat.st_dev, root_stat.st_ino)
         self._intake_root = self._root / _INTAKE_DIRECTORY
-        self._intake_root.mkdir(exist_ok=True)
+        if not read_only:
+            self._intake_root.mkdir(exist_ok=True)
         self._require_intake_root()
         intake_stat = self._intake_root.lstat()
         self._intake_root_identity = (intake_stat.st_dev, intake_stat.st_ino)
 
     def put_intake(self, intake: ProjectDeliveryIntake) -> ProjectDeliveryIntake:
+        if self._read_only:
+            raise ProjectDeliveryCheckpointPathError("checkpoint store is read-only")
         """Exact-create one durable start command without changing checkpoint ordering."""
         intake.validate_integrity()
         self._require_intake_root()
@@ -384,6 +389,8 @@ class FileProjectDeliveryCheckpointStore:
         return intake
 
     def put(self, checkpoint: ProjectDeliveryCheckpoint) -> ProjectDeliveryCheckpoint:
+        if self._read_only:
+            raise ProjectDeliveryCheckpointPathError("checkpoint store is read-only")
         checkpoint.validate_integrity()
         directory = self._delivery_directory(checkpoint.delivery_id, create=True)
         assert directory is not None
