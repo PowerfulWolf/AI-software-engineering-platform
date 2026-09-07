@@ -23,6 +23,7 @@ from ai_software_engineer.recovery import (
 )
 from ai_software_engineer.recovery.current import NativeRecoveryFactsVerifier
 from ai_software_engineer.recovery.native import NativeRecoverySourceReader
+from ai_software_engineer.recovery.sealing import RecoveryTaskSealingService
 from ai_software_engineer.recovery.task import AuthorizedRecoveryTaskBuilder
 from tests.git.test_capture import git
 from tests.project_manager.test_production_backend import _git, _ScriptedClientFactory
@@ -172,6 +173,16 @@ def test_native_current_gate_and_authorization_preserve_history(
     assert draft.rebound_request != original.request
     assert (_snapshot(Path(config.platform_root)), _snapshot(project)) == before
 
+    sealing = RecoveryTaskSealingService(store, builder)
+    record = sealing.seal(plan.plan_sha256)
+    assert record.task == draft.task
+    reopened = FileRecoveryStore(sidecar / "recovery-test", scope=scope)
+    before = _snapshot(Path(config.platform_root)), _snapshot(project)
+    assert reopened.get_task_record(plan.plan_sha256) == record
+    assert RecoveryTaskSealingService(reopened, builder).seal(plan.plan_sha256) == record
+    assert sealing.require_current(plan.plan_sha256) == record
+    assert (_snapshot(Path(config.platform_root)), _snapshot(project)) == before
+
     for change in (
         {"target_preparation_sha256": "0" * 64},
         {"target_base_revision": run.source_revision},
@@ -184,6 +195,9 @@ def test_native_current_gate_and_authorization_preserve_history(
     (project / "hello.txt").write_text("uncommitted\n")
     with pytest.raises(RecoveryRejected):
         service.require_current_authorization(plan.plan_sha256)
+    assert reopened.get_task_record(plan.plan_sha256) == record
+    with pytest.raises(RecoveryRejected):
+        sealing.require_current(plan.plan_sha256)
     (project / "hello.txt").write_text("hello\n")
     (project / "untracked.txt").write_text("untracked\n")
     with pytest.raises(RecoveryRejected):

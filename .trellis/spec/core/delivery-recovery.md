@@ -348,3 +348,56 @@ Tests: `tests/recovery/test_current.py` uses real temporary Git/MySQL, fake Agen
 assert missing approval, same/new base, stale base, narrowed permissions/denies, target dirt/untracked,
 company knowledge selection, corrupted profile, unchanged source, deterministic draft and zero-write
 snapshots. Existing native single/joint tests and Host regression cover shared rule extraction.
+
+## Increment D1 — sealed Task input (not dispatch)
+
+```python
+RecoveryTaskRecord.create(draft: RecoveryTaskDraft,
+                          authorization: RecoveryAuthorization) -> RecoveryTaskRecord
+FileRecoveryStore.put_task_record(record: RecoveryTaskRecord) -> RecoveryTaskRecord
+FileRecoveryStore.get_task_record(plan_sha256: str) -> RecoveryTaskRecord
+RecoveryTaskSealingService(store: FileRecoveryStore, builder: AuthorizedRecoveryTaskBuilder)
+RecoveryTaskSealingService.seal(plan_sha256: str) -> RecoveryTaskRecord
+RecoveryTaskSealingService.require_current(plan_sha256: str) -> RecoveryTaskRecord
+```
+
+`recovery/records.py` defines wire kind `recovery_task_record`, version v0.1, fields
+`recovery_plan_sha256`, `authorization_sha256`, `rebound_request`, `task`, `record_sha256`.
+Separate `schemas/recovery-task-record.schema.json`; existing plan/authorization schema unchanged.
+Record digest covers every field except itself. Validate request integrity, NEW Task/attempts0,
+derived Task ID and recovery/project/request metadata; reject detected sensitive text, not redact it.
+Store checks exact approved plan/authorization, target repository/base/preparation, timestamps and
+source/stage references. Hashes are integrity, not independent trust in a caller's constructed Task.
+
+Store uses existing private bounded no-follow/exclusive publication at `task-<plan_sha256>.json`.
+One record per plan; exact replay is read-only, changed content conflicts. Authorization and plan
+must already exist in the same durable scope. No independent unbound Task file, Task DB row, lease,
+assignment, dispatch, worktree write or model call is created. Crash after atomic publication can
+reopen the complete record; crash before it publishes nothing executable.
+
+`seal` builds through current authorization/native facts, then publishes. `get_task_record` checks
+stored integrity/lineage only and may return valid historical data after current code drifts.
+`require_current` rebuilds through the approved facts gate and compares the entire record before
+future consumers may proceed. There is no permanent grant in a stored hash and no lock implied by
+the comparison. Dispatch still needs a durable current-fact/allocation fence and seed admission.
+
+| Case | Required result |
+|---|---|
+| Valid approved draft | One sealed Task input; no dispatch or DB Task mutation |
+| Close/reopen/exact replay | Same bytes and record; no model calls |
+| Missing/rejected/other authorization or changed base/Task identity | Reject |
+| Different Task text under decided record identity | Conflict, preserve first record |
+| Corrupt JSON/envelope/hash or unsafe file | Fail closed via existing store guards |
+| Current logical checkout becomes dirty | Historical get allowed; require_current rejects |
+
+Good: real native offline fixture seals, reopens, revalidates with old source untouched. Base: exact
+replay without another write. Bad: treat raw `get_task_record()` as a fresh dispatch permission.
+Required tests: `test_task_record.py` wire/schema, missing auth, replay, conflict, corruption, secret,
+Task status/attempt/ID/metadata/digest/base/auth rejection; `test_current.py` real native sealing and
+stale-current rejection. Generic store crash/concurrency/path protections remain under full regression.
+
+Schema integration guard: model-generated JSON Schema is not yet a repository-registered schema.
+Every `schemas/*.schema.json` requires the Draft 2020-12 `$schema` and unique project `$id`; the global
+contract registry loads all files by `$id`. `test_task_record.py` checks both plus schema validity;
+the full contract suite verifies registry integration. Do not weaken the registry to tolerate a
+missing identity. Preserve these fields when regenerating the record schema.

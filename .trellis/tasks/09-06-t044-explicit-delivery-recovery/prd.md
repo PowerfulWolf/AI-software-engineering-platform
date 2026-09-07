@@ -146,3 +146,20 @@ may overwrite original READY Request or bypass execution gates.
 C3 validation: 870 passed /140.55s; Ruff/format493files, Mypy274files, offline lock/build and
 diff-check passed. Actual original-base read-only gate passed: BLOCKED/revision3, capture955b3247,
 15 files, same joint parent, no persisted plan/Task/model. This is not approval of a new base.
+
+## Increment D1 acceptance
+
+Scope: `recovery/{records,sealing,store}.py`, `schemas/recovery-task-record.schema.json`,
+`tests/recovery/{test_task_record,test_current}.py`, spec/contracts/task/archive.
+
+- [x] Persist exact approved Task/rebound Request as one immutable scoped record.
+- [x] Integrity/schema/plan/authorization/identity validation and sensitive-text rejection.
+- [x] Reopen/exact replay, changed-content conflict and current-facts execution revalidation.
+- [x] Final targeted/full regression and release checks before commit.
+
+No real business record, DB Task, resource allocation or Agent run. No migration required; generic
+Task execution must not consume this input as a dispatch receipt.
+
+D1 validation: recovery suite61 passed /46.65s; final full879 passed /153.94s after fixing missing
+Schema registry `$id/$schema`. Ruff/format497files, Mypy277files, offline lock/build and diff-check
+passed. No live models or business records; dedicated test database only.

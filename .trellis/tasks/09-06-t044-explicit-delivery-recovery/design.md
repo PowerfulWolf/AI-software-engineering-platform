@@ -121,3 +121,18 @@ the approved recovery plan. Draft is not persisted/dispatched and cannot enter e
 request stores by overwriting the original revision. A future atomic receipt must seal this exact
 draft before dispatch. Tests require missing approval rejection, deterministic replay, unchanged
 approved document digests, new Task/base with attempts zero, and current drift rejection.
+
+## Increment D1 — durable authorized Task record
+
+`RecoveryTaskRecord` seals exact plan/authorization digests, rebound Request and NEW Task in the scoped
+FileRecoveryStore. `RecoveryTaskSealingService.seal(plan_sha256)` rebuilds through current authorization,
+publishes one immutable record and replays exact content. `require_current(plan_sha256)` must rebuild
+and compare the complete record before any future execution. Raw storage integrity is not authority.
+No resource leases or dispatch, no Task DB write or worktree seed is added in D1. This is the durable
+carry-forward prerequisite, not a completed execution receipt.
+
+Validate NEW/attempts0, new Task/base/project/request identity and all recovery metadata against the
+stored approved plan/authorization; bound size, secret rejection, no-follow/exclusive existing store
+rules apply. Good: real current-facts fixture seals/reopens without changing original history. Base:
+exact receipt read/replay. Bad: changed content, decision, Task identity, secret, file tamper or current
+drift. Wire schema is separate `recovery-task-record.schema.json`; existing plan/auth schema unchanged.

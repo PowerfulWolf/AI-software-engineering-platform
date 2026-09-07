@@ -23,9 +23,10 @@ from ai_software_engineer.recovery.models import (
     canonical_bytes,
     digest,
 )
+from ai_software_engineer.recovery.records import RecoveryTaskRecord
 
 MAX_RECORD_BYTES = 8_000_000
-_Record = TypeVar("_Record", RecoveryPlan, RecoveryAuthorization, RecoveryScope)
+_Record = TypeVar("_Record", RecoveryPlan, RecoveryAuthorization, RecoveryScope, RecoveryTaskRecord)
 
 
 class RecoveryRecordMissing(RecoveryRejected):
@@ -158,6 +159,17 @@ class FileRecoveryStore:
         if self._get("scope", digest(self._scope.to_wire()), RecoveryScope) != self._scope:
             raise RecoveryRejected("recovery scope manifest changed")
 
+    def put_task_record(self, record: RecoveryTaskRecord) -> RecoveryTaskRecord:
+        plan = self.get_plan(record.recovery_plan_sha256)
+        record.validate_binding(plan, self.get_authorization(plan.plan_sha256))
+        return self._put("task", plan.plan_sha256, record, RecoveryTaskRecord)
+
+    def get_task_record(self, plan_sha256: str) -> RecoveryTaskRecord:
+        plan = self.get_plan(plan_sha256)
+        record = self._get("task", plan_sha256, RecoveryTaskRecord)
+        record.validate_binding(plan, self.get_authorization(plan_sha256))
+        return record
+
     @contextmanager
     def _directory(self) -> Iterator[int]:
         descriptor = _open_directory(self._root)
@@ -187,7 +199,7 @@ class FileRecoveryStore:
             TypeAdapter(StageSha256).validate_python(identity)
         except ValueError as error:
             raise RecoveryRejected("invalid recovery record identity") from error
-        if category not in ("scope", "plan", "authorization"):
+        if category not in ("scope", "plan", "authorization", "task"):
             raise RecoveryRejected("invalid recovery record category")
         if category == "scope":
             return "scope.json"

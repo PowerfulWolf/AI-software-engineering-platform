@@ -662,3 +662,8 @@ Task 或执行。新目标基线与规范校验、人工恢复入口及实际执
 草稿及其重新绑定的 Request 只在内存中，不覆盖旧记录，不写 Task 或启动 Agent。
 生产恢复 CLI、新 dispatch/执行记录、seed receipt 和 provider admission 仍待接入；
 详见 `.trellis/spec/core/delivery-recovery.md`。
+
+T044 D1 增加 `RecoveryTaskRecord` 与 `RecoveryTaskSealingService`，可将上述批准后草稿封存为
+sidecar 恢复目录下的一份不可变记录，支持重开与精确重放。读取历史记录不等于当前执行授权：
+执行前必须 `require_current` 重建并比对。该记录不是 dispatch/资源租约，不写 MySQL Task、
+不应用原 Coder 改动、不运行模型。Schema：`schemas/recovery-task-record.schema.json`。

@@ -51,3 +51,13 @@ No persisted recovery execution or actual model/Task run yet.
 Full 870 passed /140.55s; Ruff/format493files/Mypy274files/offline lock/build/diff-check passed.
 Actual original-base inspection passed with unchanged capture955b3247, BLOCKED/revision3 and 15 files.
 No real Task draft or plan persisted, business writes, candidate, QA or Review. Zero real model calls.
+
+## Increment D1 result — 2026-09-07
+
+Sealed Task input model/schema, scoped store and current-fact sealing/admission service implemented.
+Historical read is deliberately separate from current execution admission. New Task remains only a
+sealed recovery input, not a MySQL Task or allocation/dispatch. No live business effects.
+
+Recovery61 passed /46.65s; full879 passed /153.94s. First full collection caught missing Schema
+registration identity; fixed `$id/$schema`, added focused checks and reran full regression.
+Ruff/format497files, strict Mypy277files, offline lock/build and diff-check passed. Zero real models.
