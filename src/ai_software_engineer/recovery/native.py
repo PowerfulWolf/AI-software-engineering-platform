@@ -26,6 +26,7 @@ from ai_software_engineer.domain import (
     ProductSpec,
     ProductSpecApproval,
     ProjectPreparation,
+    ProjectRequest,
     Task,
     TaskStatus,
     TechnicalDesign,
@@ -72,6 +73,8 @@ class NativeRecoverySource:
     approval: ProductSpecApproval
     design: TechnicalDesign
     plan: ExecutionPlan
+    request: ProjectRequest
+    task: Task
 
 
 class NativeRecoverySourceReader:
@@ -260,7 +263,16 @@ class NativeRecoverySourceReader:
         if _parent(company, cp, approval) != (parent_id, parent_sha):
             raise ValueError("parent changed during inspection")
         return NativeRecoverySource(
-            source, permissions, denied, preparation, product, approval, design, plan
+            source,
+            permissions,
+            denied,
+            preparation,
+            product,
+            approval,
+            design,
+            plan,
+            ready.request,
+            task,
         )
 
     def _sql(self, cp: ProjectDeliveryCheckpoint) -> tuple[Task, int, DispatchCommitRecord]:

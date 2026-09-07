@@ -273,3 +273,78 @@ Wrong: successful `git apply --check --3way` means no conflict. A real Git test 
 check can succeed before actual application writes unmerged entries/conflict markers. Correct:
 run a real three-way merge in an isolated index and reject its nonzero result before touching target.
 Future CLI/dispatch/seed receipt and provider admission remain unimplemented.
+
+## Increment C3 — current native facts and authorized Task draft
+
+### Scope and signatures
+
+```python
+NativeRecoveryFactsVerifier(config: ProductionConfig, environment: Mapping[str, str])
+NativeRecoveryFactsVerifier.validate(plan: RecoveryPlan) -> None
+NativeRecoveryFactsVerifier.inspect(plan: RecoveryPlan) -> NativeRecoveryFacts
+AuthorizedRecoveryTaskBuilder(authorization: RecoveryAuthorizationService,
+                             facts: NativeRecoveryFactsVerifier)
+AuthorizedRecoveryTaskBuilder.build(plan_sha256: str) -> RecoveryTaskDraft
+```
+
+Implementations: `recovery/current.py`, `recovery/task.py`. Frozen in-process results, no new wire
+Schema, record format or database migration. Native source result additionally exposes the already
+verified original READY `request: ProjectRequest` and BLOCKED `task: Task`.
+
+### Contracts
+
+The concrete facts verifier resolves the C1 original chain and requires exact RecoverySource,
+Coder permissions and deny list. This version does not infer glob narrowing or permit policy changes.
+Resolve the exact persisted target preparation using versioned native stores; company/project and
+organization roots/IDs cannot move. Load bounded regular profile/binding records, establish scope
+before following embedded paths, and use native binding environment validation. Recompile current
+company knowledge and project source baseline using `production_rules(company, knowledge)`, shared
+with Production Host; construction preserves previous rule fields and digests. Production currently
+has no structured project-rule provider; native documents remain opaque hash-bound references.
+
+Require profile source revision and actual Git HEAD equal the proposed full target SHA, clean logical
+checkout (tracked and untracked nonignored files), and old-base ancestry. Verify the captured Coder
+through the configured project worktree root, not caller-provided authority. Two complete inspections
+detect observed drift; they are not cross-store locks or an OS sandbox. Git calls reuse the adapter's
+fixed environment/hooks/filter guards. No register, prepare, mkdir, DDL, model or store mutation.
+Caller must first prepare the new base via normal production preparation and stop concurrent writers.
+
+`RecoveryAuthorizationService` can now use this concrete `RecoveryFactsVerifier`; proposal, fresh
+approval and execution admission all revalidate current facts. Approval must explicitly cover reuse
+of the original solution against the exact proposed target preparation/base. Code cannot infer
+semantic design compatibility from ancestry or Git merge success.
+
+`RecoveryTaskDraft` contains `recovery_plan_sha256`, verified `facts`, a separately `rebound_request`
+and NEW `task`. Builder requires approved current authorization before and after construction. Preserve
+original request ID/text/status/creation time, rebind only preparation and update time in a NEW
+in-memory value. Reuse exact Product/approval/Design/Plan via `derive_delivery_task`; never change their
+digests or synthesize another Product approval. New Task ID is derived from RecoveryPlan, attempts=0,
+base is the exact target; original constraints/max attempts/owner/labels are preserved.
+
+Task metadata includes `recovery_plan_sha256`, `recovery_of_task_id`, `recovery_of_delivery_id`,
+`recovery_source_checkpoint_sha256`, `recovery_original_request_sha256`,
+`recovery_rebound_request_sha256`, `recovery_target_preparation_sha256`, plus normal stage references.
+No Task/dispatch is persisted. The same-ID rebound request must NOT overwrite the original native
+request revision. Future recovery execution receipt must seal it separately with authorization and
+fresh allocation, then admit the seed; current draft is not executable dispatch authority.
+
+### Validation and examples
+
+| Case | Result |
+|---|---|
+| Exact same base/preparation or clean newer prepared descendant | Verified facts, original approved content retained |
+| Wrong source/company/permissions/denies/preparation/binding/profile/base | Safe `RecoveryRejected` |
+| Project code dirty, untracked file, rule/company knowledge drift | Reject current execution even after approval |
+| Missing environment | Reject without initializing directories or DB |
+| No approved recovery decision | Task draft rejected |
+| Authorized exact replay | Equal NEW Task draft and request; no writes or models |
+
+Good: offline interrupted Coder, normal preparation at newer commit, trusted fake recovery decision,
+then deterministic new Task draft while all old source files/index/records remain unchanged. Base:
+same-base check, or missing environment with zero effects. Bad: persisting the rebound request over
+old history or feeding a draft directly to runtime without sealed fresh dispatch/seed admission.
+
+Tests: `tests/recovery/test_current.py` uses real temporary Git/MySQL, fake Agents and human verifier;
+assert missing approval, same/new base, stale base, narrowed permissions/denies, target dirt/untracked,
+company knowledge selection, corrupted profile, unchanged source, deterministic draft and zero-write
+snapshots. Existing native single/joint tests and Host regression cover shared rule extraction.

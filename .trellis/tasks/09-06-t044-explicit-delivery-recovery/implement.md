@@ -40,3 +40,14 @@ Full regression: 867 passed /198.85s. After final `.gitattributes` guard and pub
 final seed suite: 18 passed /72.42s. Ruff/format (488 files), Mypy (270 files), offline lock/build and
 diff-check pass. Source-only changes; no business DB writes, live model calls or original Coder edits.
 Next: target preparation/carry-forward, authorized new execution and seed receipt/provider admission.
+
+## Increment C3 result — 2026-09-07
+
+Native source/current target gate and authorized in-memory Task draft implemented. Shared Host rule
+builder avoids mismatched company context; original request/Task join already-verified source facts.
+Draft keeps original stage digests, budgets and constraints, and cannot overwrite old request history.
+No persisted recovery execution or actual model/Task run yet.
+
+Full 870 passed /140.55s; Ruff/format493files/Mypy274files/offline lock/build/diff-check passed.
+Actual original-base inspection passed with unchanged capture955b3247, BLOCKED/revision3 and 15 files.
+No real Task draft or plan persisted, business writes, candidate, QA or Review. Zero real model calls.

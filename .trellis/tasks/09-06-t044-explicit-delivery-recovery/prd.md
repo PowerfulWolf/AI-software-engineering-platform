@@ -126,3 +126,23 @@ this task directory and archive. No original requirement worktree or business re
 
 T044 remains open: new target preparation/carry-forward and authorized production execution are not
 implemented by this repository operation. Rollback is an isolated source commit, no migration.
+
+## Increment C3 acceptance
+
+Scope extends to `recovery/{current,task,native}.py`, shared `project_manager/production_rules.py`
+and Host callsites, `tests/recovery/test_current.py`, spec/contracts/task/archive. No real requirement
+checkout or business records modified.
+
+- [x] Concrete native source + current target verifier for existing recovery authorization service.
+- [x] Shared Host rules, versioned preparation/profile/binding, clean descendant Git base and capture checks.
+- [x] Approved recovery produces deterministic in-memory NEW Task/rebound Request, original approval retained.
+- [x] Missing approval/environment and stale code/knowledge/policy/records reject without hidden writes.
+- [x] Full regression/release checks recorded before local commit.
+
+Remaining production work: seal carry-forward/Task draft with fresh dispatch and execution receipt,
+human recovery CLI, seed receipt/provider admission, then real Coder/QA/Reviewer delivery. No draft
+may overwrite original READY Request or bypass execution gates.
+
+C3 validation: 870 passed /140.55s; Ruff/format493files, Mypy274files, offline lock/build and
+diff-check passed. Actual original-base read-only gate passed: BLOCKED/revision3, capture955b3247,
+15 files, same joint parent, no persisted plan/Task/model. This is not approval of a new base.

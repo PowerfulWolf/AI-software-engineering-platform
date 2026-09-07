@@ -88,3 +88,36 @@ Implementation correction: `git apply --check --3way` does not reliably reject m
 Preflight instead performs actual `--cached --3way` application in a disposable copied Git index,
 then checks the exit status. Only after current-fact revalidation is target `--index` application used.
 The temporary preflight may create unreachable Git objects, but not target files/index/refs.
+
+## Increment C3 — native current-fact gate
+
+Implement `NativeRecoveryFactsVerifier(config, environment).validate(plan)` and
+`inspect(plan) -> NativeRecoveryFacts`. Resolve the original source via C1, then load the exact
+already-persisted target preparation/profile/runtime binding. Re-discover current target profile,
+recompile rules using the SAME company-context/hard-rule builder as the production Host, and require
+exact target HEAD, clean logical checkout and source-base ancestry. No prepare/registry/DDL/store writes.
+Permissions/denies must equal original Coder policy in this bounded version; narrowing or widening
+requires another explicit policy design, not guessed glob containment. Validate the captured source
+using the configured project's Git manager, not a caller-provided path authority.
+
+NativeRecoveryFacts contains original approved documents plus target preparation, profile and baseline
+in memory. It is not a new Product approval or dispatch permission. Existing RecoveryAuthorizationService
+uses this concrete gate before proposal/decision/execution. A human approves exact new preparation and
+base in RecoveryPlan; semantic reuse of an old design is never inferred from a clean Git merge.
+
+Good: offline failed native Coder, commit a newer clean base, prepare it through normal Host, propose/
+authorize via fake trusted human, then reopen/revalidate with zero model calls and zero writes.
+Base: same base/preparation. Bad: stale HEAD/profile/company knowledge, dirty logical checkout, invalid
+source/capture, wrong company/binding/preparation, policy drift. Tests must preserve source bytes and
+business revisions. Refactor shared production rule construction without changing rule digests.
+CLI, upstream carry-forward persistence and fresh dispatch/Task/seed admission remain separate work.
+
+Add an in-process `AuthorizedRecoveryTaskBuilder.build(plan_sha256) -> RecoveryTaskDraft` using
+the existing authorization execution gate and concrete current facts. The draft holds a separately
+rebound ProjectRequest (same product request identity, new preparation/time) and a NEW Task with
+recovery-of metadata. Original request/Product/approval/Design/Plan are not modified or reapproved.
+Reuse `derive_delivery_task`, preserve original constraints/attempt budget, and derive Task ID from
+the approved recovery plan. Draft is not persisted/dispatched and cannot enter existing native
+request stores by overwriting the original revision. A future atomic receipt must seal this exact
+draft before dispatch. Tests require missing approval rejection, deterministic replay, unchanged
+approved document digests, new Task/base with attempts zero, and current drift rejection.

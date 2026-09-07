@@ -653,3 +653,12 @@ Authorization 绑定 exact plan、人工操作引用和可信验证器返回的�
 只读 MySQL 一致性快照、已批准上游文档及失败 Coder context/route 读取并校验 `RecoverySource`。
 联合需求的父审批归属由平台发现，调用方不能省略。返回值仅为进程内事实集合；不创建新审批、
 Task 或执行。新目标基线与规范校验、人工恢复入口及实际执行连接仍待完成。
+
+### T044 C3：恢复时的新基线校验与 Task 草稿
+
+`NativeRecoveryFactsVerifier` 将原交付事实和已准备的新基线串起来，只读复核当前项目、
+公司知识、规范、绑定、Git HEAD 与原 Coder 捕获。`AuthorizedRecoveryTaskBuilder` 必须经过
+恢复批准，才生成关联原任务的 NEW Task 草稿；原产品批准、设计与计划保持原摘要。
+草稿及其重新绑定的 Request 只在内存中，不覆盖旧记录，不写 Task 或启动 Agent。
+生产恢复 CLI、新 dispatch/执行记录、seed receipt 和 provider admission 仍待接入；
+详见 `.trellis/spec/core/delivery-recovery.md`。
