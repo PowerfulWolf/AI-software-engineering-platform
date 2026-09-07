@@ -29,3 +29,14 @@ Native stores retain their formats; reader reuses their validation rather than d
 lock/build/diff-check passed. Actual round3 read-only inspection succeeded with the unchanged known
 source/parent digests. Old checkpoint timestamps are initiating-command times, not a causal ordering
 fence for model completion; identity/state chains remain authoritative. No paid model calls.
+
+## Increment C2 result — 2026-09-07
+
+Repository seed implemented with real isolated-index conflict preflight, fresh target identity and
+both policies. Post-apply interruption preserves evidence. Original source files/index/refs remain
+unchanged; attributes changes and custom merge behavior are rejected. No production entry added.
+
+Full regression: 867 passed /198.85s. After final `.gitattributes` guard and public error export,
+final seed suite: 18 passed /72.42s. Ruff/format (488 files), Mypy (270 files), offline lock/build and
+diff-check pass. Source-only changes; no business DB writes, live model calls or original Coder edits.
+Next: target preparation/carry-forward, authorized new execution and seed receipt/provider admission.

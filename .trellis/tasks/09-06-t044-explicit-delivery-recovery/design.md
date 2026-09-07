@@ -60,3 +60,31 @@ Base: reopening gives the same result. Bad: wrong company/checkpoint/Task/run/co
 modified native payload, future request revision or non-Coder failure rejects with a safe error.
 Verify with upstream store read-only contracts and offline production fixtures; all historic bytes and
 SQL revisions remain unchanged. Rollback is an isolated source commit; no database migration.
+
+## Increment C2 — seed a fresh Coder worktree
+
+`GitWorktreeManager.seed_changes(capture, target, source_permissions, target_permissions,
+*, source_denied_paths=(), target_denied_paths=()) -> WorktreeChangeCapture` is a lower-level repository
+operation, never Agent/human authority. The future application caller must authorize the exact
+RecoveryPlan and target preparation, materialize a NEW Task/dispatch and create its worktree first.
+This increment uses only temporary test worktrees; no live recovery seed is authorized or performed.
+
+Require a different Task, Coder role, attempt 1, exact registered branch/full target SHA, clean target
+and original capture revalidation. Target must descend from the original base. Enforce both source
+and target policies on every path. Reject custom merge drivers/attributes; use controlled Git three-way
+application of the verified full-index patch, with zero-context support and preflight. No fuzzy/manual
+conflict resolution, commit, source staging, ref rewriting or reset. Changed files in newer main are
+retained when Git merges without conflicts. Return a newly verified target capture for later sealing.
+
+Good: independent newer-base edits plus preserved Coder changes; old files/index/HEAD unchanged.
+Base: same original base, empty capture or already-applied edits; never infer a candidate.
+Bad: conflict, changed source, dirty/forged target, unrelated base, narrowed policy, custom driver.
+Preflight rejection leaves target content/index unchanged. A failure after actual application retains
+the new target for diagnosis; no cleanup/rollback. Replaying seed into dirty work is forbidden; later
+receipt-aware recovery must verify the exact returned capture instead. No production CLI/provider dirty
+admission is added here. Test real Git, failure/race injection, source/index preservation and no model use.
+
+Implementation correction: `git apply --check --3way` does not reliably reject merge conflicts.
+Preflight instead performs actual `--cached --3way` application in a disposable copied Git index,
+then checks the exit status. Only after current-fact revalidation is target `--index` application used.
+The temporary preflight may create unreachable Git objects, but not target files/index/refs.

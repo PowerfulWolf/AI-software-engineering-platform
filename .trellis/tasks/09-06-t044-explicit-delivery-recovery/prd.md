@@ -112,3 +112,17 @@ strict Mypy (269 files), offline lock/build and diff-check passed. Actual round3
 Task digest fd8d42f0ed08ece74081265e9124b375ea6affa24eff9141c610865982c7c58b, child b67e1691,
 parent 617b6514, original base 68f8f8c, 22 write allowlist entries /13 denies. Zero real model calls,
 business writes, requirement commits, QA/Review or GitHub push.
+
+## Increment C2 acceptance
+
+Scope: `git/worktree.py`, package export, `tests/git/test_seed.py`, recovery spec, Git docs,
+this task directory and archive. No original requirement worktree or business records are edited.
+
+- [x] Seed captured existing-file edits into a different Task's clean Coder attempt 1.
+- [x] Verify source capture, both path policies, exact identities and descendant target baseline.
+- [x] Isolated-index three-way preflight rejects conflicts without changing target files/index.
+- [x] Preserve source and post-apply failure evidence; reject dirty replay and merge-rule changes.
+- [x] Repository-only offline tests; no model calls, candidate or production recovery admission.
+
+T044 remains open: new target preparation/carry-forward and authorized production execution are not
+implemented by this repository operation. Rollback is an isolated source commit, no migration.

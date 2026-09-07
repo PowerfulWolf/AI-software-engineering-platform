@@ -226,3 +226,50 @@ Wrong: assume `route.completed_at <= checkpoint.checkpointed_at` proves ownershi
 checkpoints retain the initiating command timestamp, which may precede a run. Correct: bind explicit
 run/task/context/revision and state/approval chains; do not rewrite historical timestamps or infer
 provider failure cause from them.
+
+## Increment C2 — seed a fresh repository checkout
+
+Scope: repository operation in `git/worktree.py`, not a production recovery entry or approval.
+
+```python
+GitWorktreeManager.seed_changes(
+    capture: WorktreeChangeCapture, target: WorktreeRef,
+    source_permissions: AgentPermissions, target_permissions: AgentPermissions,
+    *, source_denied_paths: tuple[str, ...] = (), target_denied_paths: tuple[str, ...] = (),
+) -> WorktreeChangeCapture
+```
+
+Caller must first authorize exact recovery/target preparation, create a fresh Task and exclusively
+hold both worktrees with the previous executor stopped. Require different Task IDs, target Coder
+attempt 1, registered full-SHA identity, clean target and target base descending from source base.
+Revalidate original capture and both read/write/deny policies; target paths must be bounded regular
+UTF-8 files. Reject effective external filter/merge-driver configuration and merge attributes.
+Reject `.gitattributes` edits so the applied patch cannot change its own merge behavior.
+No model, state, dispatch, approval, commit, ref rewrite, reset or old worktree write occurs here.
+
+Use full-index zero-context three-way Git apply with fixed text default, whitespace behavior and
+existing hook/fsmonitor guards. Preflight actually applies with `--cached --3way --unidiff-zero` to
+a disposable copied index (`GIT_INDEX_FILE`); Git may create unreachable shared objects, but no
+target index/files/refs change. Recheck source, target and configuration, then apply with `--index`
+to target. Return a revalidated target capture; independent newer-base changes remain. Original
+source is checked again. Observation is not an OS lock against concurrent hostile writers.
+
+| Case | Result |
+|---|---|
+| Compatible newer base or same base | Target capture; source content/index/HEAD unchanged |
+| Empty source or changes already in new base | Empty capture, not a candidate or delivery |
+| Conflict, old/unrelated base, dirty/wrong identity, denied path or merge driver | `WorktreeSeedRejected`; retain source and target |
+| Preflight failure | Original target files/index unchanged; temporary index disposed |
+| Failure after actual apply | Preserve new target changes for diagnosis; never reset/reapply blindly |
+| Replay onto dirty target | Reject; future receipt-aware application must verify prior capture |
+
+Good: source changes VALUE, newer base changes FOOTER, result retains both. Base: empty capture.
+Bad: use returned capture as implementation-report or bypass provider dirty-worktree admission.
+`tests/git/test_seed.py` uses real temporary Git: both bases, empty/already-applied, conflicts,
+source drift, dirty/forged role/root/Task, narrowed permission/deny, external driver/attribute,
+preflight/post-apply process loss, source/index/ref preservation and dirty replay.
+
+Wrong: successful `git apply --check --3way` means no conflict. A real Git test demonstrated that
+check can succeed before actual application writes unmerged entries/conflict markers. Correct:
+run a real three-way merge in an isolated index and reject its nonzero result before touching target.
+Future CLI/dispatch/seed receipt and provider admission remain unimplemented.

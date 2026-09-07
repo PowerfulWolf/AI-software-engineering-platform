@@ -30,6 +30,7 @@ from ai_software_engineer.git.worktree import (
     WorktreeIdentityDrift,
     WorktreeNotFound,
     WorktreeRevisionDrift,
+    WorktreeSeedRejected,
 )
 
 __all__ = [
@@ -56,6 +57,7 @@ __all__ = [
     "WorktreeNotFound",
     "WorktreeRef",
     "WorktreeRevisionDrift",
+    "WorktreeSeedRejected",
     "WorktreeSnapshot",
     "WorktreeSpec",
 ]

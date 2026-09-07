@@ -4,6 +4,7 @@ import hashlib
 import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Final, Protocol, runtime_checkable
 
@@ -16,7 +17,7 @@ from ai_software_engineer.git.capture import (
     read_capture_file,
     without_hunk_labels,
 )
-from ai_software_engineer.git.policy import WorkspacePolicy
+from ai_software_engineer.git.policy import PathPolicyViolation, WorkspacePolicy
 from ai_software_engineer.git.ports import WorktreeRef, WorktreeSnapshot, WorktreeSpec
 from ai_software_engineer.redaction import redact_text
 
@@ -85,6 +86,10 @@ class DirtyWorktree(GitWorkspaceError):
 
 class WorktreeCaptureRejected(GitWorkspaceError):
     """The preserved work is unsupported, unsafe, or changed during inspection."""
+
+
+class WorktreeSeedRejected(GitWorkspaceError):
+    """A recovery seed cannot safely be applied; retain both worktrees."""
 
 
 class GitCommandError(GitWorkspaceError):
@@ -249,6 +254,126 @@ class GitWorktreeManager:
         observed = self.capture_changes(capture.worktree, permissions, denied_paths=denied_paths)
         if observed != capture:
             raise WorktreeCaptureRejected("preserved work no longer matches capture")
+
+    def seed_changes(
+        self,
+        capture: WorktreeChangeCapture,
+        target: WorktreeRef,
+        source_permissions: AgentPermissions,
+        target_permissions: AgentPermissions,
+        *,
+        source_denied_paths: tuple[str, ...] = (),
+        target_denied_paths: tuple[str, ...] = (),
+    ) -> WorktreeChangeCapture:
+        """Seed an exclusively held fresh checkout, not an authorization or candidate.
+
+        The application must separately authorize the exact recovery plan and stop
+        other writers. No old files, index, refs, Task or approval records are edited.
+        Failures after application retain the target for diagnosis, never reset it.
+        """
+        try:
+            if (
+                target.role is not AgentRole.CODER
+                or target.attempt != 1
+                or target.task_id == capture.worktree.task_id
+            ):
+                raise WorktreeSeedRejected("seed requires a fresh Coder Task")
+            self.verify_capture(capture, source_permissions, denied_paths=source_denied_paths)
+            clean = self.capture_changes(
+                target, target_permissions, denied_paths=target_denied_paths
+            )
+            if clean.patch:
+                raise WorktreeSeedRejected("seed target must be clean")
+            self._run_git(
+                (
+                    "merge-base",
+                    "--is-ancestor",
+                    capture.worktree.head_revision,
+                    target.head_revision,
+                ),
+                cwd=target.path,
+            )
+            policy = WorkspacePolicy(
+                target.path, target_permissions, denied_paths=target_denied_paths
+            )
+            for path in capture.changed_paths:
+                policy.authorize_read(path)
+                policy.authorize_write(path)
+                if Path(path).name == ".gitattributes":
+                    raise WorktreeSeedRejected("seed cannot change its own merge attributes")
+                read_capture_file(
+                    target.path,
+                    path,
+                    executable=bool((target.path / path).lstat().st_mode & 0o100),
+                )
+            self._validate_seed_configuration(target, capture.changed_paths)
+            arguments = (
+                "-c",
+                "merge.default=text",
+                "-c",
+                "apply.ignoreWhitespace=no",
+                "apply",
+                "--3way",
+                "--index",
+                "--unidiff-zero",
+                "--whitespace=nowarn",
+            )
+            if capture.patch:
+                # --check can report success even when the three-way merge conflicts.
+                # Actually merge into a disposable index, never the target index/files.
+                with tempfile.TemporaryDirectory(prefix="ase-seed-") as temporary:
+                    temporary_index = Path(temporary) / "index"
+                    index = Path(
+                        self._run_git(
+                            ("rev-parse", "--path-format=absolute", "--git-path", "index"),
+                            cwd=target.path,
+                        )
+                    )
+                    shutil.copyfile(index, temporary_index)
+                    self._run_git_bytes(
+                        (*arguments, "--cached", "-"),
+                        cwd=target.path,
+                        input=capture.patch,
+                        index_file=temporary_index,
+                    )
+                # Preflight is not a lock. Detect observed drift immediately before writing.
+                self.verify_capture(capture, source_permissions, denied_paths=source_denied_paths)
+                self.verify_capture(clean, target_permissions, denied_paths=target_denied_paths)
+                self._validate_seed_configuration(target, capture.changed_paths)
+                self._run_git_bytes((*arguments, "-"), cwd=target.path, input=capture.patch)
+            seeded = self.capture_changes(
+                target, target_permissions, denied_paths=target_denied_paths
+            )
+            if not set(seeded.changed_paths).issubset(capture.changed_paths):
+                raise WorktreeSeedRejected("seed changed unexpected paths")
+            self.verify_capture(capture, source_permissions, denied_paths=source_denied_paths)
+            return seeded
+        except (GitWorkspaceError, PathPolicyViolation, OSError, ValueError) as error:
+            raise WorktreeSeedRejected(
+                "recovery seed rejected; preserve source and target"
+            ) from error
+
+    def _validate_seed_configuration(self, target: WorktreeRef, paths: tuple[str, ...]) -> None:
+        configured = self._invoke_git(
+            (
+                "config",
+                "--name-only",
+                "--get-regexp",
+                r"^(merge\..*\.driver|filter\..*\.(clean|smudge|process))$",
+            ),
+            cwd=target.path,
+        )
+        if configured.returncode != 1:
+            raise WorktreeSeedRejected("seed requires no external merge drivers or filters")
+        if paths:
+            attributes = self._run_git_bytes(
+                ("check-attr", "-z", "merge", "--", *paths), cwd=target.path
+            )
+            fields = attributes.split(b"\0")[:-1]
+            if len(fields) != len(paths) * 3 or any(
+                value != b"unspecified" for value in fields[2::3]
+            ):
+                raise WorktreeSeedRejected("seed does not support merge attributes")
 
     def _capture_changes_once(
         self,
@@ -526,17 +651,27 @@ class GitWorktreeManager:
             raise GitCommandError(f"{command}: {message}")
         return completed.stdout.strip()
 
-    def _run_git_bytes(self, arguments: tuple[str, ...], *, cwd: Path) -> bytes:
+    def _run_git_bytes(
+        self,
+        arguments: tuple[str, ...],
+        *,
+        cwd: Path,
+        input: bytes | None = None,
+        index_file: Path | None = None,
+    ) -> bytes:
         if self._git is None:
             raise InvalidRepository("Git executable is unavailable")
         try:
             completed = subprocess.run(
                 (self._git, *_GIT_SAFETY_CONFIG, *arguments),
                 cwd=cwd,
-                env=_GIT_ENV,
+                env=_GIT_ENV
+                if index_file is None
+                else {**_GIT_ENV, "GIT_INDEX_FILE": str(index_file)},
                 check=False,
                 capture_output=True,
                 text=False,
+                input=input,
                 timeout=self._command_timeout_seconds,
                 shell=False,
             )

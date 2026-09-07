@@ -152,3 +152,9 @@ T044 第一阶段增加只读 Python 接口 `GitWorktreeManager.capture_changes/
 它不保存或应用补丁，不修改旧工作树，也不恢复终态 Task。新增/删除/二进制/越权或敏感改动等
 不支持的情况明确拒绝；细节见 [恢复契约](../.trellis/spec/core/delivery-recovery.md)。生产恢复入口、
 授权后的新执行和基线更新仍需后续实现，不能用捕获成功代替候选提交及独立 QA/Review。
+
+T044 C2 增加 `seed_changes(capture, target, source_permissions, target_permissions, ...)`，
+在原改动和双方权限校验后，将文本修改三方应用到另一个新 Task 的干净 Coder worktree。
+新基线必须包含旧基线；冲突先在临时暂存区检出，不污染目标文件。旧 worktree 不变，
+应用后只返回改动捕获，不提交代码、不生成 verdict。它目前仅由临时 Git 测试验证；
+生产授权、Task/dispatch、恢复入口及 provider 接续仍需接入，不能直接拿它恢复旧终态 Task。
