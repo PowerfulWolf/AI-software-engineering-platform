@@ -69,12 +69,14 @@ class DesignRecordStore(Protocol):
 class FileDesignRecordStore:
     """Persist records below an external project sidecar with exclusive publish."""
 
-    def __init__(self, root: str | Path) -> None:
+    def __init__(self, root: str | Path, *, read_only: bool = False) -> None:
+        self._read_only = read_only
         configured = Path(root).expanduser()
         if configured.is_symlink():
             raise DesignRecordPathError("Designer store root cannot be a symlink")
         self._root = configured.resolve(strict=False)
-        self._root.mkdir(parents=True, exist_ok=True)
+        if not read_only:
+            self._root.mkdir(parents=True, exist_ok=True)
         self._require_root()
         root_stat = self._root.lstat()
         self._root_identity = (root_stat.st_dev, root_stat.st_ino)
@@ -192,6 +194,8 @@ class FileDesignRecordStore:
             raise DesignRecordCorruption("cannot decode Designer record") from error
 
     def _path(self, category: str, identity: str, *, create: bool = True) -> Path:
+        if create and self._read_only:
+            raise DesignRecordPathError("Designer store is read-only")
         if category not in {"designs", "runs", "checkpoints"}:
             raise DesignRecordPathError(f"unknown Designer record category: {category}")
         self._require_root()

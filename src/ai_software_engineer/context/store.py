@@ -56,16 +56,20 @@ class InMemoryContextStore:
 class FileContextStore:
     """Persist immutable Context manifests as validated atomic JSON files."""
 
-    def __init__(self, root: str | Path) -> None:
+    def __init__(self, root: str | Path, *, read_only: bool = False) -> None:
+        self._read_only = read_only
         self._root = Path(root).resolve()
         try:
-            self._root.mkdir(parents=True, exist_ok=True)
+            if not read_only:
+                self._root.mkdir(parents=True, exist_ok=True)
         except OSError as error:
             raise ContextStoreError(f"cannot initialize ContextStore at {self._root}") from error
         if not self._root.is_dir():
             raise ContextStoreError(f"ContextStore root is not a directory: {self._root}")
 
     def put(self, context: ContextBundle) -> ContextBundle:
+        if self._read_only:
+            raise ContextStoreError("Context store is read-only")
         _validate_context_identity(context, ContextIntegrityError)
         path = self._path(context.context_id)
         if path.exists():

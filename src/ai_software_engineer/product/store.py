@@ -138,13 +138,15 @@ class ProductRecordStore(Protocol):
 class FileProductRecordStore:
     """Persist product facts below an external sidecar using exclusive publication."""
 
-    def __init__(self, root: str | Path) -> None:
+    def __init__(self, root: str | Path, *, read_only: bool = False) -> None:
+        self._read_only = read_only
         configured = Path(root).expanduser()
         if configured.is_symlink():
             raise ProductRecordPathError("Product record store root cannot be a symlink")
         self._root = configured.resolve(strict=False)
         try:
-            self._root.mkdir(parents=True, exist_ok=True)
+            if not read_only:
+                self._root.mkdir(parents=True, exist_ok=True)
         except OSError as error:
             raise ProductRecordStoreError(
                 f"cannot initialize Product record store at {self._root}"
@@ -270,6 +272,8 @@ class FileProductRecordStore:
         this fence first, then open their transaction, so the revision cannot advance inside
         the cross-domain validation/commit window.
         """
+        if self._read_only:
+            raise ProductRecordPathError("Product store is read-only")
         root_fd: int | None = None
         lock_fd: int | None = None
         try:
@@ -749,6 +753,8 @@ class FileProductRecordStore:
         return category_dir / f"{identity}.json"
 
     def _category(self, category: str, *, create: bool) -> Path:
+        if create and self._read_only:
+            raise ProductRecordPathError("Product store is read-only")
         if category not in {
             "dialogue",
             "requests",

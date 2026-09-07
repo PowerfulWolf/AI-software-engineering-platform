@@ -90,3 +90,25 @@ MySQL test database. Ruff/format (482 files), strict Mypy (267 files), offline l
 diff-check passed. Real temporary Git verifies source bytes/HEAD preservation and rejects post-approval
 drift. No live model calls, production recovery records, new Tasks, target edits, candidate or QA/Review.
 Source platform changes are Astra's implementation, not autonomous requirement delivery.
+
+## Increment C1 acceptance
+
+Scope extends to `recovery/native.py`, `tests/recovery/test_native.py` and read-only constructor/write
+guards in `context/store.py`, `product/store.py`, `design/store.py`, `planning/store.py`,
+`project_manager/store.py`; task, recovery spec, contracts and archive docs are updated together.
+
+- [x] Real original Task/dispatch/events + approved native stage chain resolved through read-only stores.
+- [x] Joint parent and delegated approval lineage discovered, not caller-optional.
+- [x] Failed Coder route/context/permissions bound to exact Task/base/attempt; corrupted/missing records reject.
+- [x] Single/joint real Git/MySQL offline fixtures and store no-initialization/write rejection checks pass.
+- [x] Read-only inspection of actual round3 resolves original BLOCKED/revision3 and exact known parent/child.
+- [x] Full regression/build/lint/type checks recorded before local commit.
+
+This is original-source inspection only. Fresh target preparation/rules, explicit carry-forward,
+human recovery entry, fresh Task/dispatch/seed and actual Coder→QA→Reviewer remain unimplemented.
+
+C1 validation 2026-09-07: 850 passed /84.30s, including dedicated MySQL tests; Ruff/format (485 files),
+strict Mypy (269 files), offline lock/build and diff-check passed. Actual round3 source inspection:
+Task digest fd8d42f0ed08ece74081265e9124b375ea6affa24eff9141c610865982c7c58b, child b67e1691,
+parent 617b6514, original base 68f8f8c, 22 write allowlist entries /13 denies. Zero real model calls,
+business writes, requirement commits, QA/Review or GitHub push.

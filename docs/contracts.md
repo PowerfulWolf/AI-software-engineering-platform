@@ -648,3 +648,8 @@ Authorization 绑定 exact plan、人工操作引用和可信验证器返回的�
 当前只提供可测试的恢复记录与授权服务；真实事实读取、人工授权入口、新基线继承、Task/dispatch、
 补丁应用和生产 CLI 尚未接通。不能将这些契约描述为已恢复真实交付。签名、错误矩阵和测试点见
 [`delivery-recovery.md`](../.trellis/spec/core/delivery-recovery.md)。
+
+后续 C1 已提供 `recovery.native.NativeRecoverySourceReader.inspect`：从选定公司的原生 journal、
+只读 MySQL 一致性快照、已批准上游文档及失败 Coder context/route 读取并校验 `RecoverySource`。
+联合需求的父审批归属由平台发现，调用方不能省略。返回值仅为进程内事实集合；不创建新审批、
+Task 或执行。新目标基线与规范校验、人工恢复入口及实际执行连接仍待完成。

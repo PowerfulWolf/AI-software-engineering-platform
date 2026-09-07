@@ -30,6 +30,7 @@ Archive 是组织记忆的一部分，不依赖任何单个 Agent 的会话。�
 | 2026-09-05 | 本记录所在提交 | T034；Production Team Host、MySQL、真实模型路由与隔离交付 | [T034 Production Team Host](2026-09-05-t034-production-team-host.md) |
 | 2026-09-06 | `6ae0608` | T044 A；中断 Coder 改动的只读捕获，整体任务未完成 | [T044 只读捕获](2026-09-06-t044-recovery-capture.md) |
 | 2026-09-07 | 本记录所在提交 | T044 B；恢复计划与人工决定记录，生产恢复入口未完成 | [T044 恢复记录](2026-09-07-t044-recovery-records.md) |
+| 2026-09-07 | 本记录所在提交 | T044 C1；原始交付事实只读校验，尚未恢复执行 | [T044 原始交付事实](2026-09-07-t044-native-recovery-facts.md) |
 
 ## 后续归档约定
 

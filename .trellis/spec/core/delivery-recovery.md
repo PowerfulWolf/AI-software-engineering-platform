@@ -162,3 +162,67 @@ is rejected rather than redacted. Recovery permissions cannot grant Coder state-
 Double freshness checks do not lock Git or external databases. The trusted caller must establish the
 old executor has stopped; future dispatch must add its own current-fact fence. This seam supplies no
 production fact verifier, human channel, Task, dispatch, seed application or CLI command.
+
+## Increment C1 — read original production facts
+
+Scope: `recovery/native.py` inspects the original failed production delivery. This is not the full
+`RecoveryFactsVerifier`: it does not validate a new target preparation/current rules or authorize a
+new execution. Use only after the old executor has stopped; storage remains trusted organization
+infrastructure, not an OS security sandbox against concurrent arbitrary writers.
+
+```python
+NativeRecoverySourceReader(config: ProductionConfig, environment: Mapping[str, str])
+NativeRecoverySourceReader.inspect(
+    scope: RecoveryScope, *, failed_run_id: str, failed_context_id: str,
+) -> NativeRecoverySource
+```
+
+The frozen in-process result contains `source: RecoverySource`, original `permissions/denied_paths`
+and typed `preparation/product/approval/design/plan`. It is not a new wire Artifact or approval.
+Company is selected by config; manifests must bind the exact company/project/code directory. Read
+the terminal native journal and one MySQL REPEATABLE READ / CONSISTENT SNAPSHOT / READ ONLY
+transaction for `tasks`, `state_events` and `dispatch_commits`; no repository constructor/DDL,
+prepare, model, Task mutation or dispatch call. Reuse existing SQL row decoders and stage validators.
+
+Require BLOCKED before candidate creation, attempt 1, exact Task revision, unchanged immutable
+dispatch intent and contiguous state events ending IMPLEMENTING→BLOCKED. Read the native completed
+Product approval, Designer/Planner commits and authoritative READY request revision; verify stage
+digests, original preparation and semantic coverage through `validate_stage_chain`. Read the failed
+Coder route and its exact ContextBundle, rather than accepting caller-supplied permissions. Missing
+or successful routes, wrong role/base/attempt/context and route index gaps reject.
+
+Discover parent ownership from company joint journals and deterministic child identity. A delegated
+joint approval must match the parent approval reference and exact stored child checkpoint; callers
+cannot opt out of parent lineage. Recheck native checkpoint, SQL Task/dispatch, current request and
+parent at the end. This detects observed drift, not a cross-filesystem/database transaction or lock.
+
+The existing `FileProductRecordStore`, `FileDesignRecordStore`, `FileExecutionPlanStore`,
+`FileProjectPreparationStore` and `FileContextStore` accept `read_only: bool = False` as a keyword-only
+constructor option. True never initializes missing roots; writes (including exact write replay) and
+Product revision fences reject. Default production writers are unchanged. Inspection rejects symlink
+roots and preflights bounded regular context/route/parent files before native parsing. SQL credentials
+come only from `config.database.dsn_env`; public failure is safe `RecoveryRejected`, without raw cause.
+
+| Input/failure | Result |
+|---|---|
+| Native single-project failed Coder | Exact source and approved documents; no writes |
+| Joint child failed Coder | Same plus mandatory verified parent ID/checkpoint |
+| Missing platform/root/record/approval | Reject; never initialize or fabricate facts |
+| Wrong scope, Task revision/status, run/context, dispatch or upstream digest | Reject |
+| Rejected/changed approval, later READY revision, tampered stage commit | Reject |
+| Read-only put/fence | Typed native store error before file/lock publication |
+| Complete result replay | Same facts, no Agent/model calls |
+
+Good: real temporary Git/MySQL + offline interrupted Coder, then two byte-preserving inspections.
+Base: no platform exists, rejection creates nothing. Bad: feeding the returned source directly into
+dispatch without separately authorizing new preparation and recovery intent.
+
+Tests: `tests/recovery/test_native.py` covers single/joint production fixtures, read-only store modes,
+cross-company/missing run/context, corrupted Product/approval/Designer/Planner/parent records and
+byte snapshots of project/sidecar. Dedicated MySQL test DB only; real source observation is separately
+recorded and is not independent QA/Review evidence for the original feature.
+
+Wrong: assume `route.completed_at <= checkpoint.checkpointed_at` proves ownership. Legacy native
+checkpoints retain the initiating command timestamp, which may precede a run. Correct: bind explicit
+run/task/context/revision and state/approval chains; do not rewrite historical timestamps or infer
+provider failure cause from them.

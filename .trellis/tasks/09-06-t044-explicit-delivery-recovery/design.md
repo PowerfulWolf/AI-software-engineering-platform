@@ -39,3 +39,24 @@ their private helpers and domain-specific errors are not a reusable storage API.
 Production fact-reader/human-channel adapters, CLI, target preparation, new Task/dispatch, patch
 application and actual model delivery remain the next increment. Do not construct fake upstream
 approvals to make recovery appear integrated.
+
+## Increment C1 — native source inspection
+
+Implement `NativeRecoverySourceReader(config, environment).inspect(scope, *, failed_run_id,
+failed_context_id) -> NativeRecoverySource`. Resolve the selected company/project manifest, terminal
+native checkpoint, one read-only consistent MySQL Task/events/dispatch snapshot, exact Product
+approval/Design/Planner records, original preparation and failed Coder context/route. Return typed
+in-process source facts and approved content, never an execution permission. Discover joint ownership
+from the existing company journal; omission by a caller cannot discard parent approval lineage.
+
+Add explicit `read_only=True` to existing upstream stores instead of duplicating their file formats.
+Reads cannot initialize missing roots; writes/fences on read-only instances reject. Reuse native
+integrity/stage-chain validators and SQL row decoders. No schema change, model call, new preparation,
+source-branch modification or Task mutation. New target/current rules and human authorization are still
+separate prerequisites; the source reader must not masquerade as a complete RecoveryFactsVerifier.
+
+Good: a real Git/MySQL delivery stopped by an offline Coder yields exact source hashes without writes.
+Base: reopening gives the same result. Bad: wrong company/checkpoint/Task/run/context, missing approval,
+modified native payload, future request revision or non-Coder failure rejects with a safe error.
+Verify with upstream store read-only contracts and offline production fixtures; all historic bytes and
+SQL revisions remain unchanged. Rollback is an isolated source commit; no database migration.

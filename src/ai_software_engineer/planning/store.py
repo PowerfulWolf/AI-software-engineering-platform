@@ -71,12 +71,14 @@ class ExecutionPlanStore(Protocol):
 class FileExecutionPlanStore:
     """Publish canonical plans exclusively; exact replay returns the first record."""
 
-    def __init__(self, root: str | Path) -> None:
+    def __init__(self, root: str | Path, *, read_only: bool = False) -> None:
+        self._read_only = read_only
         configured = Path(root).expanduser()
         if configured.is_symlink():
             raise ExecutionPlanPathError("ExecutionPlan store root cannot be a symlink")
         self._root = configured.resolve(strict=False)
-        self._root.mkdir(parents=True, exist_ok=True)
+        if not read_only:
+            self._root.mkdir(parents=True, exist_ok=True)
         self._require_root()
         root_stat = self._root.lstat()
         self._root_identity = (root_stat.st_dev, root_stat.st_ino)
@@ -267,6 +269,8 @@ class FileExecutionPlanStore:
             raise ExecutionPlanCorruption("cannot decode Planner record") from error
 
     def _path(self, category: str, identity: str, *, create: bool = True) -> Path:
+        if create and self._read_only:
+            raise ExecutionPlanPathError("Planner store is read-only")
         if category not in {"execution-plans", "runs", "checkpoints"}:
             raise ExecutionPlanPathError(f"unknown Planner record category: {category}")
         self._require_root()

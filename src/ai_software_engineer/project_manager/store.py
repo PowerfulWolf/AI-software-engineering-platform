@@ -68,13 +68,15 @@ class ProjectPreparationStore(Protocol):
 class FileProjectPreparationStore:
     """Persist one canonical, append-once preparation record per project."""
 
-    def __init__(self, root: str | Path) -> None:
+    def __init__(self, root: str | Path, *, read_only: bool = False) -> None:
+        self._read_only = read_only
         configured = Path(root).expanduser()
         if configured.is_symlink():
             raise ProjectPreparationPathError("ProjectPreparation store root cannot be a symlink")
         self._root = configured.resolve(strict=False)
         try:
-            self._root.mkdir(parents=True, exist_ok=True)
+            if not read_only:
+                self._root.mkdir(parents=True, exist_ok=True)
         except OSError as error:
             raise ProjectPreparationStoreError(
                 f"cannot initialize ProjectPreparation store at {self._root}"
@@ -86,6 +88,8 @@ class FileProjectPreparationStore:
 
     def put(self, preparation: ProjectPreparation) -> ProjectPreparation:
         """Validate and atomically publish one immutable preparation record."""
+        if self._read_only:
+            raise ProjectPreparationPathError("Preparation store is read-only")
         _validate_preparation(preparation, ProjectPreparationIntegrityError)
         target = self._path(preparation.project_id)
         if target.exists() or target.is_symlink():
