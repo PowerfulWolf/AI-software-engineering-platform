@@ -21,7 +21,7 @@ from ai_software_engineer.git import (
 )
 
 if TYPE_CHECKING:
-    from ai_software_engineer.project_manager.dispatch import DispatchCommitRecord
+    from ai_software_engineer.project_manager.dispatch import DeliveryAllocation
 
 
 class RoleWorktreeError(RuntimeError):
@@ -165,7 +165,7 @@ class DispatchRoleWorktreeCoordinator:
 
     def open_coder(
         self,
-        dispatch: DispatchCommitRecord,
+        dispatch: DeliveryAllocation,
         definitions: Mapping[AgentRole, AgentDefinition],
         *,
         recover: bool = False,
@@ -178,7 +178,7 @@ class DispatchRoleWorktreeCoordinator:
 
     def open_verifiers(
         self,
-        dispatch: DispatchCommitRecord,
+        dispatch: DeliveryAllocation,
         candidate_revision: str,
         definitions: Mapping[AgentRole, AgentDefinition],
         *,
@@ -236,7 +236,7 @@ class DispatchRoleWorktreeCoordinator:
 
     @staticmethod
     def _definition(
-        dispatch: DispatchCommitRecord,
+        dispatch: DeliveryAllocation,
         role: AgentRole,
         definitions: Mapping[AgentRole, AgentDefinition],
         *,
@@ -263,7 +263,7 @@ class DispatchRoleWorktreeCoordinator:
 
     @staticmethod
     def _spec(
-        dispatch: DispatchCommitRecord,
+        dispatch: DeliveryAllocation,
         role: AgentRole,
         revision: str,
         *,

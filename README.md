@@ -392,6 +392,11 @@ uv run ase request resume DELIVERY_ID
 更详细的配置、恢复与候选复核步骤见 [使用手册](docs/production-setup.md)。
 日常接单不需要 `ase task ...` 底层 Runtime，也不需要手工准备 sidecar、Agent 或 snapshot。
 
+若 Coder 因中断留下未提交修改，且任务已终态阻塞，不能直接 `resume` 或清理现场。
+平台提供单独的[显式恢复流程](docs/cli.md#显式接手失败-coder-的保留修改)：人类确认原方案、
+新基线和保留修改后，新 Task 接手并重新经过 QA/Reviewer。恢复结果通过
+`ase recovery inspect --plan PLAN_FILE --runtime` 查看；旧需求记录和看板不会被静默改成成功。
+
 ## 开发与验证
 
 ```bash

@@ -61,3 +61,21 @@ sealed recovery input, not a MySQL Task or allocation/dispatch. No live business
 Recovery61 passed /46.65s; full879 passed /153.94s. First full collection caught missing Schema
 registration identity; fixed `$id/$schema`, added focused checks and reran full regression.
 Ruff/format497files, strict Mypy277files, offline lock/build and diff-check passed. Zero real models.
+
+## Execution integration — 2026-09-07
+
+Implemented new recovery allocation kind under the existing MySQL reservation fence, explicit
+operator entry/CLI, seed and invocation receipts, exact Codex admission and shared delivery runtime.
+Original native dispatch stays strict; role consumers accept typed common allocation. Recovery
+Task outcomes remain separate from original parent/child terminal checkpoints. Aggregate ADR excludes
+the linked recovery case, preserving its detailed Agent events and the original failed case.
+
+First offline single-project Codex-bound Git/MySQL full delivery passed (73.65s). Added wrong
+Task/base/attempt/path/policy and seed drift checks, schema/receipt/lock tests, read-only CLI checks,
+global reservation visibility, original-fact preservation and joint-context E2E. Final regression
+results to be recorded before source commit. No real model invoked during platform development.
+
+Final validation: full suite **884 passed /292.03s** (dedicated MySQL test DB, including single/joint
+recovery); final read-only Task status/CLI/record tests **4 passed /71.77s**; Runtime/Codex/CLI
+regression **36 passed /1.60s**. Ruff/format505files, strict Mypy284files, offline lock/build and
+diff-check passed. Source branch `feat/t044-recovery-execution`; no business execution yet.

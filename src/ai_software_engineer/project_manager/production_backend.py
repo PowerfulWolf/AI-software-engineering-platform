@@ -40,11 +40,13 @@ from ai_software_engineer.domain import (
     AgentRole,
     ArtifactKind,
     BrainTier,
+    ExecutionPlan,
     ModelPolicy,
     ModelRoute,
     NetworkAccess,
     OrganizationRole,
     ProductApprovalDecision,
+    ProductSpec,
     RiskModelFloor,
     RiskTier,
     TaskConstraints,
@@ -93,6 +95,7 @@ from ai_software_engineer.project_manager.delivery_checkpoint import (
 )
 from ai_software_engineer.project_manager.dispatch import (
     CommitDispatchRequest,
+    DeliveryAllocation,
     DispatchCommitRecord,
     DispatchError,
     DispatchRejected,
@@ -676,21 +679,44 @@ class ProductionProjectDeliveryBackend:
             planner_records=facts.planning,
         )
         dispatch = authority.get_commit(cast(str, checkpoint.dispatch_commit_id))
+        spec = facts.product.find_product_spec(cast(str, checkpoint.product_spec_id))
+        design = facts.design.get_run(_designer_run_id(checkpoint.delivery_id)).technical_design
+        if spec is None or design is None:
+            raise ValueError("delivery plan inputs are missing")
+        return self.run_prepared_allocation(
+            dispatch,
+            facts.preparation,
+            spec,
+            design,
+            facts.planning.get_execution_plan(dispatch.execution_plan_id),
+        )
+
+    def run_prepared_allocation(
+        self,
+        dispatch: DeliveryAllocation,
+        preparation: PrepareProjectResult,
+        spec: ProductSpec,
+        design: TechnicalDesign,
+        plan: ExecutionPlan,
+        *,
+        route_adapters: DeliveryRouteAdapterFactory | None = None,
+        extra_context: tuple[ContextSource, ...] = (),
+    ) -> RetryResult:
+        """Trusted composition after native or recovery allocation authorization."""
+        facts = self._facts(preparation)
+        if dispatch.project_id != facts.workspace.project_id:
+            raise ValueError("allocation and preparation project mismatch")
         repository = MySqlTaskRepository(self._dsn)
         try:
             DispatchTaskMaterializer(repository).materialize(dispatch)
         finally:
             repository.close()
         definitions = _agent_definitions(dispatch, _task_commands(facts.profile))
-        spec = facts.product.find_product_spec(cast(str, checkpoint.product_spec_id))
-        design = facts.design.get_run(_designer_run_id(checkpoint.delivery_id)).technical_design
-        if spec is None or design is None:
-            raise ValueError("delivery plan inputs are missing")
         plan_adapter = ExecutionPlanAgentAdapter(
             task=dispatch.task,
             product_spec=spec,
             technical_design=design,
-            execution_plan=facts.planning.get_execution_plan(dispatch.execution_plan_id),
+            execution_plan=plan,
             agent_id=definitions[AgentRole.ORCHESTRATOR].id,
             agent_version=definitions[AgentRole.ORCHESTRATOR].version,
             created_at=dispatch.committed_at,
@@ -709,7 +735,7 @@ class ProductionProjectDeliveryBackend:
             project_workspace_root=facts.workspace.root,
             context_resolver=resolver,
             environment=self._environment,
-            route_adapters=self._delivery_route_adapters,
+            route_adapters=route_adapters or self._delivery_route_adapters,
         )
         primary = self._config.enabled_routes()[0]
         runtime_config = RuntimeConfig(
@@ -725,6 +751,7 @@ class ProductionProjectDeliveryBackend:
             ),
             context_sources=(
                 *self._delivery_context_sources,
+                *extra_context,
                 project_profile_context(facts.profile),
                 ContextSource(
                     source_id="project.baseline",
@@ -990,7 +1017,7 @@ def _clean_git_head(project_root: Path) -> str:
 
 
 def _agent_definitions(
-    dispatch: DispatchCommitRecord,
+    dispatch: DeliveryAllocation,
     commands: tuple[str, ...],
 ) -> dict[AgentRole, AgentDefinition]:
     constraints = dispatch.task.constraints

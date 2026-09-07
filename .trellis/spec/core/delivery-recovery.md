@@ -401,3 +401,88 @@ Every `schemas/*.schema.json` requires the Draft 2020-12 `$schema` and unique pr
 contract registry loads all files by `$id`. `test_task_record.py` checks both plus schema validity;
 the full contract suite verifies registry integration. Do not weaken the registry to tolerate a
 missing identity. Preserve these fields when regenerating the record schema.
+
+## Recovery execution contract (T044 remaining integration)
+
+`RecoveryDispatchRecord` is a distinct allocation kind, not a fabricated Planner run. It binds the
+sealed Task record, approved recovery plan, current workforce snapshot and three freshly computed
+Coder/QA/Reviewer allocations. MySQL publishes it in the same `dispatch_commits` reservation domain
+under the existing global lock; normal dispatch must count recovery reservations too. Original
+native dispatch readers remain strict. Rebuild the sealed Task and rerun deterministic scheduling
+inside the commit fence. Exact replay returns the first allocation, never a second Task.
+
+The human CLI separates proposal, exact-digest approval and execution. Execution holds a nonblocking
+recovery lock, verifies current original/target facts, materializes only the new Task, opens a fresh
+Coder worktree and seeds the approved capture. A private immutable seed receipt binds dispatch,
+plan and actual target capture. Missing receipt after an interrupted dirty apply rejects rather than
+guessing whether application completed. Receipt replay verifies the exact seed; changed seed rejects.
+Provider admission is an explicit Coder-only callback immediately before invocation; default clean
+worktree policy is unchanged. It verifies Task/base/attempt/role/path/policy and receipt capture.
+After provider invocation, existing runtime retry/verdict/candidate rules apply unchanged; no recovery
+entry may reset terminal Tasks or fabricate a completion. An interrupted provider attempt is not
+silently rerun from a seed receipt. QA and Reviewer remain independently bound to candidate SHA.
+
+Validation: real temporary Git/MySQL plus offline providers must cover full DONE chain, replay,
+cross-task/capture/policy drift, missing approval, changed source/target, stale workforce and global
+reservation visibility, seed receipt interruption, and unchanged original terminal history. CLI
+approval requires an explicit human decision for the exact persisted plan. Actual model calls and
+delivery outcomes are separately recorded, not inferred from offline tests. No automatic merge.
+
+### Implemented entry signatures and storage
+
+`OrganizationTeamHost.recovery_entry() -> NativeRecoveryEntry` in `recovery/entry.py`:
+
+```python
+propose(*, project_root, delivery_id, failed_run_id, failed_context_id) -> tuple[RecoveryPlan, Path]
+open_recovery_plan(config: ProductionConfig, path: Path) -> tuple[FileRecoveryStore, RecoveryPlan]
+approve(path: Path, *, confirmed_plan: str, reference: str) -> None
+execute(path: Path, *, route_factory=None) -> RetryResult
+RecoveryAllocator.allocate(plan_sha256: str) -> RecoveryDispatchRecord
+RecoverySeedService.seed(target: WorktreeRef) -> RecoverySeedRecord
+RecoverySeedService.authorize(request: AgentRequest, workspace_root: Path) -> None
+```
+
+The test-only trusted `route_factory(seed)` injects offline adapters; production uses
+`ConfiguredDeliveryRouteAdapterFactory(initial_workspace_admission=seed)`. Codex's default clean
+guard remains unchanged when this dependency is absent. Public errors never include raw provider
+text/secrets; CLI returns 2 for admission failures, 3 for a non-DONE runtime result, 0 for DONE.
+Recovery currently admits exactly one CODEX_CLI route and requires live_model_execution=true.
+
+Records live at `company/projects/<project>/state/recovery-<old-delivery>/` with plan/authorization/
+task/seed/invocation `<plan-sha>` names plus scoped manifest and nonblocking advisory execution lock.
+The lock covers all plans for this old delivery, not just one new Task. The trusted operator must
+still stop the old executor and other code writers; this is not an OS sandbox or distributed lock.
+`RecoveryDispatchRecord` reuses common task/project/phase/model fields but explicitly binds
+recovery_plan_sha256 + recovery_task_record_sha256, without fabricated native Planner provenance.
+MySQL JSON payload supports this second kind, requiring upgraded readers but no SQL DDL migration.
+Native get_commit/_decode_commit stay strict; global reservation reads use the allocation union.
+
+| Failure / replay | Required behavior |
+|---|---|
+| Missing exact human confirmation / config disabled / unsupported route | No provider |
+| Stale source, target, sealed Task or policy | Reject before fresh execution |
+| Exact existing allocation | Verify current Task binding; reuse first record/leases |
+| Concurrent recovery execution | Nonblocking lock refusal, no second Coder |
+| Missing seed receipt and dirty target | Reject; preserve both scenes |
+| Wrong Task/base/attempt/path/permissions/context or changed seed | Reject provider admission |
+| Provider previously admitted, including process loss | Refuse repeat Coder; inspect native Task/artifacts |
+| Terminal recovery Task | Never reset; same terminal and original history remain |
+| Child recovered to DONE | Report new candidate; old joint parent remains unchanged |
+
+CaseStartedEvent for a Task carrying recovery_of_task_id is excluded from aggregate ADR; its Agent
+events still persist and original failed case remains included. Never count a recovery as another
+fresh demand success. Metadata/approval/dispatch/seed/invocation retain original lineage.
+
+Good: `tests/recovery/test_execution.py` real Git/MySQL + offline Codex process yields four artifacts,
+independent Coder/QA/Reviewer, candidate alignment, global capacity visibility, preserved old failure
+and refused rerun. Base: CLI inspection creates no Host/organization/DB; exact seed/approval replay.
+Bad: using old `project status` to inspect historical checkpoint after changing baseline (it reconciles
+current preparation), or routing section names as source IDs. ContextBuilder prefixes user sources
+with `source:`; restore `source:joint.approved_context` as source_id `joint.approved_context`.
+The joint fixture verifies this source in every new ContextBundle without rerunning upstream models.
+Tests also cover records/schema identity, allocation scope/role/hash tamper, file corruption,
+seed drift, invocation lineage and scope-lock contention. Schema registry requires `$id/$schema`.
+
+Testing note: accumulated pytest temporary Git trees can make automatic old-temp cleanup slow.
+Use a fresh `mktemp -d` path as `--basetemp` for the test run; never delete a broad workspace or
+mistake cleanup latency for a model call. Diagnose via bounded stack/progress, not repeated retries.

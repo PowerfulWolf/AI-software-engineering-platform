@@ -136,3 +136,23 @@ stored approved plan/authorization; bound size, secret rejection, no-follow/excl
 rules apply. Good: real current-facts fixture seals/reopens without changing original history. Base:
 exact receipt read/replay. Bad: changed content, decision, Task identity, secret, file tamper or current
 drift. Wire schema is separate `recovery-task-record.schema.json`; existing plan/auth schema unchanged.
+
+## Execution integration
+
+Distinct RecoveryDispatchRecord avoids fictional Planner READY revisions. MySQL global reservation
+lock + original Product fence revalidate sealed current facts and compute fresh serial allocation.
+Native dispatch remains strict; general role worktree/runtime consumers accept a typed allocation
+union. Original Task/Request/parent are not rewritten. Shared production runtime method accepts
+approved documents with the new Task and prepared profile; no second orchestrator implementation.
+
+NativeRecoveryEntry exposes propose/approve/execute; CLI inspect can read Task via read-only SQL
+without initializing Team Host. One private nonblocking scope lock excludes duplicate recovery
+executors. Seed receipt atomically binds approved plan/dispatch/actual target capture; Codex admission
+checks exact request/context/capture and seals invocation before provider launch. Ambiguous process
+loss after this point fails closed; no silent second call or terminal reset. Ordinary dirty admission
+is unchanged. Old joint-approved context is restored as required source, preserving prefix semantics.
+
+Wire schema: recovery-execution.schema.json for dispatch, seed, invocation. Source models and stores
+remain trusted organization infrastructure, not a sandbox against arbitrary filesystem/DB writers.
+Recovery does not silently resume the terminal parent or perform multi-repository integration adoption.
+New recovery evaluation events persist but are excluded from fresh-demand ADR to avoid double counting.

@@ -629,41 +629,26 @@ current_stage 来自 Task 状态与 Dispatch 的 role 匹配，不代表执行�
 UNKNOWN；planned_model 不代替 ModelRouteAttempt 的实际模型。读取不会初始化 store 或推进业务。
 具体路径、错误矩阵、测试见 `.trellis/spec/core/live-team-view.md`。
 
-## T044 显式恢复记录（尚未接入生产执行）
+## T044 显式恢复与串行执行
 
-`schemas/delivery-recovery.schema.json` 定义 `RecoveryPlan | RecoveryAuthorization`，对应 Python
-`recovery.models`。Plan 绑定失败 Task/checkpoint、dispatch、批准的上游文档、失败 run/context、
-只读改动快照和目标 base/preparation；新 Task ID 由完整 plan digest 派生，不复活旧 BLOCKED Task。
-Authorization 绑定 exact plan、人工操作引用和可信验证器返回的决定，不是 Agent verdict。
+恢复使用新的 Task，关联原失败 Task/checkpoint、批准的 Product/Design/Plan 和捕获的修改。
+旧终态、批准与 Coder 现场不变，不把原 Planner 记录伪装成新规划。
 
-`FileRecoveryStore` 在项目代码目录之外显式初始化私有目录，用 `scope.json` 固化公司、项目和
-失败 delivery 所有权；构造函数只打开已有目录。Plan 和 decision 均只允许首次发布或内容完全相同
-的重放。Schema 检查结构，Python 再检查 hash、跨字段绑定、canonical paths 和敏感内容；hash
-只能证明内容一致，不能证明其可信来源。
+- `delivery-recovery.schema.json`：RecoveryPlan / RecoveryAuthorization，精确绑定人类批准的基线与修改。
+- `recovery-task-record.schema.json`：封存重新绑定 preparation 的 Request 与 NEW Task。
+- `recovery-execution.schema.json`：RecoveryDispatchRecord / RecoverySeedRecord / RecoveryInvocationRecord。
+  新分配进入同一个 MySQL 全局资源锁；种子记录绑定目标 worktree 捕获；调用记录防止重复放行 Coder。
 
-`RecoveryAuthorizationService` 在 proposal、首次批准和执行准入时复核 facts/capture。已封存批准
-的精确重放不再请求人工，但后续执行必须调用 `require_current_authorization` 重新检查；拒绝决定
-可以留档，不能启动执行。该服务没有 Task、模型、dispatch 或 Git apply 端口。
+`ase recovery propose → inspect → approve → run` 是可信本地操作者入口，不是 Agent 工具。
+`inspect` 只读；`propose` 会通过正常入口准备当前项目并持久化提案，不调用模型。
+批准必须确认 exact plan SHA、原方案在新基线上的复用和捕获修改。执行前再核对原始与当前事实。
 
-当前只提供可测试的恢复记录与授权服务；真实事实读取、人工授权入口、新基线继承、Task/dispatch、
-补丁应用和生产 CLI 尚未接通。不能将这些契约描述为已恢复真实交付。签名、错误矩阵和测试点见
-[`delivery-recovery.md`](../.trellis/spec/core/delivery-recovery.md)。
+执行复用既有 Scheduler/ModelRouter、Task materializer、RuntimeSession 和角色 worktree。
+只有匹配 seed receipt 的 Coder 初始修改可获准，普通任务仍要求干净工作树。
+原联合需求上下文继续传给新角色；QA/Reviewer 仍独立验证同一 candidate SHA。
+本版只支持单条显式 Codex route；不静默处理第二次 provider 中断，不覆盖旧父/子 checkpoint，
+不自动 merge/push/deploy。恢复子 Task 完成不等于原多仓需求已经完成联合验收。
 
-后续 C1 已提供 `recovery.native.NativeRecoverySourceReader.inspect`：从选定公司的原生 journal、
-只读 MySQL 一致性快照、已批准上游文档及失败 Coder context/route 读取并校验 `RecoverySource`。
-联合需求的父审批归属由平台发现，调用方不能省略。返回值仅为进程内事实集合；不创建新审批、
-Task 或执行。新目标基线与规范校验、人工恢复入口及实际执行连接仍待完成。
-
-### T044 C3：恢复时的新基线校验与 Task 草稿
-
-`NativeRecoveryFactsVerifier` 将原交付事实和已准备的新基线串起来，只读复核当前项目、
-公司知识、规范、绑定、Git HEAD 与原 Coder 捕获。`AuthorizedRecoveryTaskBuilder` 必须经过
-恢复批准，才生成关联原任务的 NEW Task 草稿；原产品批准、设计与计划保持原摘要。
-草稿及其重新绑定的 Request 只在内存中，不覆盖旧记录，不写 Task 或启动 Agent。
-生产恢复 CLI、新 dispatch/执行记录、seed receipt 和 provider admission 仍待接入；
-详见 `.trellis/spec/core/delivery-recovery.md`。
-
-T044 D1 增加 `RecoveryTaskRecord` 与 `RecoveryTaskSealingService`，可将上述批准后草稿封存为
-sidecar 恢复目录下的一份不可变记录，支持重开与精确重放。读取历史记录不等于当前执行授权：
-执行前必须 `require_current` 重建并比对。该记录不是 dispatch/资源租约，不写 MySQL Task、
-不应用原 Coder 改动、不运行模型。Schema：`schemas/recovery-task-record.schema.json`。
+恢复事件仍完整记录，但其 CaseStartedEvent 使用 `included=false`，避免将同一需求恢复成功
+再计入一个新自主交付样本；原失败评估记录保留。恢复批准及 Task metadata 提供人工决策归属。
+完整签名、错误矩阵和限制见 [恢复规范](../.trellis/spec/core/delivery-recovery.md)。

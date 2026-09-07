@@ -20,6 +20,7 @@ from ai_software_engineer.agents import (
     ResponsesAgentAdapter,
     StoredContextResolver,
 )
+from ai_software_engineer.agents.codex_cli import InitialWorkspaceAdmission
 from ai_software_engineer.agents.fallback import model_route_root
 from ai_software_engineer.config import (
     ModelProviderKind,
@@ -30,7 +31,7 @@ from ai_software_engineer.config import (
 from ai_software_engineer.domain import AgentDefinition, AgentRole
 from ai_software_engineer.git import GitWorktreeManager
 from ai_software_engineer.orchestration import ExecutionPlanAgentAdapter
-from ai_software_engineer.project_manager.dispatch import DispatchCommitRecord
+from ai_software_engineer.project_manager.dispatch import DeliveryAllocation
 from ai_software_engineer.role_workspace import (
     DispatchRoleWorktreeCoordinator,
     RoleWorktreeBinding,
@@ -57,6 +58,11 @@ class DeliveryRouteAdapterFactory(Protocol):
 class ConfiguredDeliveryRouteAdapterFactory:
     """Build real Codex CLI or Responses adapters from secret-free route metadata."""
 
+    def __init__(
+        self, *, initial_workspace_admission: InitialWorkspaceAdmission | None = None
+    ) -> None:
+        self._initial_admission = initial_workspace_admission
+
     def create(
         self,
         *,
@@ -78,6 +84,9 @@ class ConfiguredDeliveryRouteAdapterFactory:
                 executable=config.codex_executable,
                 reasoning_effort=route.reasoning_effort,
                 environment=environment,
+                initial_workspace_admission=(
+                    self._initial_admission if definition.role is AgentRole.CODER else None
+                ),
             )
         assert route.api_key_env is not None and route.endpoint is not None
         api_key = environment.get(route.api_key_env)
@@ -107,7 +116,7 @@ class DispatchDeliveryAgentAdapter:
     def __init__(
         self,
         *,
-        dispatch: DispatchCommitRecord,
+        dispatch: DeliveryAllocation,
         definitions: Mapping[AgentRole, AgentDefinition],
         plan_adapter: ExecutionPlanAgentAdapter,
         config: ProductionConfig,

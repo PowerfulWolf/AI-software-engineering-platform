@@ -163,3 +163,23 @@ Task execution must not consume this input as a dispatch receipt.
 D1 validation: recovery suite61 passed /46.65s; final full879 passed /153.94s after fixing missing
 Schema registry `$id/$schema`. Ruff/format497files, Mypy277files, offline lock/build and diff-check
 passed. No live models or business records; dedicated test database only.
+
+## Remaining integration (D2): allocation, CLI, seed admission and offline delivery
+
+Scope includes recovery modules, MySQL dispatch union, normal delivery composition reuse, Codex
+initial-admission port, Runtime evaluation attribution, role consumers, CLI, matching schemas/tests/docs.
+No original requirement code or terminal business facts may be edited. Target work begins only after
+current exact recovery approval. Rollback: revert the isolated platform commit before use; once a new
+recovery allocation is stored, keep an upgraded MySQL reader until records are handled explicitly.
+
+- [x] New recovery dispatch shares global allocation reservations without fabricated Planner facts.
+- [x] Human propose/inspect/approve/run entry and immutable seed/invocation receipts.
+- [x] First offline full Coder→QA→Reviewer reaches DONE and preserves the old failed scene.
+- [x] Default clean policy retained; exact seed, identity, permissions and invocation gate required.
+- [x] Recovery case excluded from fresh-demand aggregate ADR; original failure stays recorded.
+- [x] Final single/joint offline tests, complete regression and release checks.
+- [ ] Actual exact target plan, approval and real model delivery attempt.
+
+User explicitly asked to finish the three integration steps and then attempt real delivery in this
+same work stream. Do not stop after another foundation increment. If exact human approval is missing,
+prepare and show the real plan and ask for that concrete approval, not generic permission to continue.

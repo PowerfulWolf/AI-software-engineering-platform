@@ -335,6 +335,66 @@ class DispatchCommitRecord(DomainModel):
             raise DispatchCommitCorruption("dispatch record digest does not match content")
 
 
+class RecoveryDispatchRecord(DomainModel):
+    """Fresh allocation authorized by a sealed recovery, not a new Planner run."""
+
+    kind: Literal["recovery_dispatch"] = "recovery_dispatch"
+    schema_version: Literal["v0.1"] = "v0.1"
+    id: DispatchCommitId
+    project_id: ProjectId
+    task_id: TaskId
+    project_request_id: ProjectRequestId
+    execution_plan_id: ExecutionPlanId
+    execution_plan_sha256: DispatchSha256
+    execution_plan_phase_ids: tuple[PlanPhaseId, PlanPhaseId, PlanPhaseId]
+    recovery_plan_sha256: DispatchSha256
+    recovery_task_record_sha256: DispatchSha256
+    workforce_snapshot_sha256: DispatchSha256
+    task: Task
+    phases: Annotated[tuple[DispatchPhaseCommit, ...], Field(min_length=3, max_length=3)]
+    committed_at: AwareDatetime
+    dispatch_sha256: DispatchSha256
+
+    @model_validator(mode="after")
+    def validate_record(self) -> Self:
+        if (
+            self.task.id != self.task_id
+            or self.task.status is not TaskStatus.NEW
+            or self.task.attempts != 0
+            or self.task_id != f"task_recovery_{self.recovery_plan_sha256[:32]}"
+            or self.id != f"dispatch_commit_{self.recovery_plan_sha256}"
+            or self.task.metadata.get("recovery_plan_sha256") != self.recovery_plan_sha256
+            or self.task.metadata.get("project_id") != self.project_id
+            or self.task.metadata.get("project_request_id") != self.project_request_id
+            or self.task.metadata.get("execution_plan_id") != self.execution_plan_id
+            or self.task.metadata.get("execution_plan_sha256") != self.execution_plan_sha256
+        ):
+            raise ValueError("recovery dispatch Task lineage mismatch")
+        if (
+            tuple(p.role for p in self.phases)
+            != (AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER)
+            or len({p.agent_id for p in self.phases}) != 3
+        ):
+            raise ValueError("recovery requires three independent serial Agents")
+        if tuple(p.phase_id for p in self.phases) != self.execution_plan_phase_ids:
+            raise ValueError("recovery phase IDs mismatch")
+        _require_unique((p.assignment.id for p in self.phases), "Assignment IDs")
+        _require_unique((p.lease.id for p in self.phases), "Lease IDs")
+        if any(
+            p.assignment.task_id != self.task_id or p.assignment.project_id != self.project_id
+            for p in self.phases
+        ):
+            raise ValueError("recovery allocation scope mismatch")
+        return self
+
+    def validate_integrity(self) -> None:
+        if self.dispatch_sha256 != _record_digest(self):
+            raise DispatchCommitCorruption("recovery dispatch digest mismatch")
+
+
+DeliveryAllocation = DispatchCommitRecord | RecoveryDispatchRecord
+
+
 class CommitDispatchRequest(DomainModel):
     """Exact current facts required to authorize one dispatch commit."""
 
@@ -827,7 +887,7 @@ class FileDispatchCommitStore:
         return record
 
 
-def _record_digest(record: DispatchCommitRecord) -> str:
+def _record_digest(record: DeliveryAllocation) -> str:
     payload = record.model_dump(mode="json", exclude={"dispatch_sha256"}, exclude_none=True)
     return hashlib.sha256(_canonical_json(payload).encode()).hexdigest()
 

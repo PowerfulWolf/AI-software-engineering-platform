@@ -1,0 +1,854 @@
+{
+  "$defs": {
+    "AcceptanceCriterion": {
+      "additionalProperties": false,
+      "description": "One independently verifiable condition for Task delivery.",
+      "properties": {
+        "id": {
+          "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "required": {
+          "title": "Required",
+          "type": "boolean"
+        },
+        "verification": {
+          "minLength": 1,
+          "title": "Verification",
+          "type": "string"
+        },
+        "test_ids": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Test Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "description",
+        "required",
+        "verification"
+      ],
+      "title": "AcceptanceCriterion",
+      "type": "object"
+    },
+    "AgentRole": {
+      "description": "Delivery-runtime roles bound to Task artifacts and state transitions.",
+      "enum": [
+        "orchestrator",
+        "coder",
+        "qa",
+        "reviewer"
+      ],
+      "title": "AgentRole",
+      "type": "string"
+    },
+    "BrainTier": {
+      "enum": [
+        "economy",
+        "standard",
+        "reasoning",
+        "critical"
+      ],
+      "title": "BrainTier",
+      "type": "string"
+    },
+    "CapturedChanges": {
+      "additionalProperties": false,
+      "properties": {
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "attempt": {
+          "maximum": 10,
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "source_revision": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "worktree_path": {
+          "pattern": "^/[^\\x00-\\x1f]*$",
+          "title": "Worktree Path",
+          "type": "string"
+        },
+        "patch": {
+          "maxLength": 1000000,
+          "title": "Patch",
+          "type": "string"
+        },
+        "index_diff_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Index Diff Sha256",
+          "type": "string"
+        },
+        "files": {
+          "items": {
+            "$ref": "#/$defs/CapturedFile"
+          },
+          "maxItems": 256,
+          "title": "Files",
+          "type": "array"
+        },
+        "capture_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Capture Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "attempt",
+        "source_revision",
+        "worktree_path",
+        "patch",
+        "index_diff_sha256",
+        "files",
+        "capture_sha256"
+      ],
+      "title": "CapturedChanges",
+      "type": "object"
+    },
+    "CapturedFile": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "minLength": 1,
+          "pattern": "^[^\\x00-\\x1f]+$",
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "title": "CapturedFile",
+      "type": "object"
+    },
+    "DispatchPhaseCommit": {
+      "additionalProperties": false,
+      "description": "Concrete commit-time allocation for one serial delivery role.",
+      "properties": {
+        "kind": {
+          "const": "dispatch_phase_commit",
+          "default": "dispatch_phase_commit",
+          "title": "Kind",
+          "type": "string"
+        },
+        "phase_id": {
+          "pattern": "^phase_[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Phase Id",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/AgentRole"
+        },
+        "agent_id": {
+          "pattern": "^agent_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Agent Id",
+          "type": "string"
+        },
+        "assignment": {
+          "$ref": "#/$defs/RoleAssignment"
+        },
+        "lease": {
+          "$ref": "#/$defs/TaskLease"
+        },
+        "model_selection": {
+          "$ref": "#/$defs/ModelSelection"
+        }
+      },
+      "required": [
+        "phase_id",
+        "role",
+        "agent_id",
+        "assignment",
+        "lease",
+        "model_selection"
+      ],
+      "title": "DispatchPhaseCommit",
+      "type": "object"
+    },
+    "JsonValue": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "ModelRouteReason": {
+      "enum": [
+        "default",
+        "task_complexity",
+        "risk_floor",
+        "role_floor",
+        "context_capacity",
+        "objective_escalation",
+        "budget_constraint",
+        "operator_override"
+      ],
+      "title": "ModelRouteReason",
+      "type": "string"
+    },
+    "ModelSelection": {
+      "additionalProperties": false,
+      "description": "Concrete, run-scoped model allocation with machine-readable reasons.",
+      "properties": {
+        "kind": {
+          "const": "model_selection",
+          "default": "model_selection",
+          "title": "Kind",
+          "type": "string"
+        },
+        "policy_id": {
+          "pattern": "^model_policy_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Policy Id",
+          "type": "string"
+        },
+        "policy_version": {
+          "minLength": 1,
+          "title": "Policy Version",
+          "type": "string"
+        },
+        "provider": {
+          "minLength": 1,
+          "title": "Provider",
+          "type": "string"
+        },
+        "model": {
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "tier": {
+          "$ref": "#/$defs/BrainTier"
+        },
+        "reasons": {
+          "items": {
+            "$ref": "#/$defs/ModelRouteReason"
+          },
+          "minItems": 1,
+          "title": "Reasons",
+          "type": "array"
+        },
+        "selected_at": {
+          "format": "date-time",
+          "title": "Selected At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "policy_id",
+        "policy_version",
+        "provider",
+        "model",
+        "tier",
+        "reasons",
+        "selected_at"
+      ],
+      "title": "ModelSelection",
+      "type": "object"
+    },
+    "RecoveryDispatchRecord": {
+      "additionalProperties": false,
+      "description": "Fresh allocation authorized by a sealed recovery, not a new Planner run.",
+      "properties": {
+        "kind": {
+          "const": "recovery_dispatch",
+          "default": "recovery_dispatch",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^dispatch_commit_[a-f0-9]{64}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "project_id": {
+          "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "project_request_id": {
+          "pattern": "^request_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Project Request Id",
+          "type": "string"
+        },
+        "execution_plan_id": {
+          "pattern": "^execution_plan_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Execution Plan Id",
+          "type": "string"
+        },
+        "execution_plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Execution Plan Sha256",
+          "type": "string"
+        },
+        "execution_plan_phase_ids": {
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "pattern": "^phase_[a-z0-9][a-z0-9_-]{1,63}$",
+              "type": "string"
+            },
+            {
+              "pattern": "^phase_[a-z0-9][a-z0-9_-]{1,63}$",
+              "type": "string"
+            },
+            {
+              "pattern": "^phase_[a-z0-9][a-z0-9_-]{1,63}$",
+              "type": "string"
+            }
+          ],
+          "title": "Execution Plan Phase Ids",
+          "type": "array"
+        },
+        "recovery_plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Recovery Plan Sha256",
+          "type": "string"
+        },
+        "recovery_task_record_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Recovery Task Record Sha256",
+          "type": "string"
+        },
+        "workforce_snapshot_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Workforce Snapshot Sha256",
+          "type": "string"
+        },
+        "task": {
+          "$ref": "#/$defs/Task"
+        },
+        "phases": {
+          "items": {
+            "$ref": "#/$defs/DispatchPhaseCommit"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "title": "Phases",
+          "type": "array"
+        },
+        "committed_at": {
+          "format": "date-time",
+          "title": "Committed At",
+          "type": "string"
+        },
+        "dispatch_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Dispatch Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "project_id",
+        "task_id",
+        "project_request_id",
+        "execution_plan_id",
+        "execution_plan_sha256",
+        "execution_plan_phase_ids",
+        "recovery_plan_sha256",
+        "recovery_task_record_sha256",
+        "workforce_snapshot_sha256",
+        "task",
+        "phases",
+        "committed_at",
+        "dispatch_sha256"
+      ],
+      "title": "RecoveryDispatchRecord",
+      "type": "object"
+    },
+    "RecoveryInvocationRecord": {
+      "additionalProperties": false,
+      "description": "At-most-once provider admission; uncertainty is never permission to rerun.",
+      "properties": {
+        "kind": {
+          "const": "recovery_invocation_record",
+          "default": "recovery_invocation_record",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "recovery_plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Recovery Plan Sha256",
+          "type": "string"
+        },
+        "seed_record_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Seed Record Sha256",
+          "type": "string"
+        },
+        "run_id": {
+          "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "context_manifest_id": {
+          "pattern": "^ctx_[a-f0-9]{64}$",
+          "title": "Context Manifest Id",
+          "type": "string"
+        },
+        "record_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Record Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "recovery_plan_sha256",
+        "seed_record_sha256",
+        "run_id",
+        "context_manifest_id",
+        "record_sha256"
+      ],
+      "title": "RecoveryInvocationRecord",
+      "type": "object"
+    },
+    "RecoverySeedRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "recovery_seed_record",
+          "default": "recovery_seed_record",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "recovery_plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Recovery Plan Sha256",
+          "type": "string"
+        },
+        "dispatch_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Dispatch Sha256",
+          "type": "string"
+        },
+        "capture": {
+          "$ref": "#/$defs/CapturedChanges"
+        },
+        "record_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Record Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "recovery_plan_sha256",
+        "dispatch_sha256",
+        "capture",
+        "record_sha256"
+      ],
+      "title": "RecoverySeedRecord",
+      "type": "object"
+    },
+    "RoleAssignment": {
+      "additionalProperties": false,
+      "description": "Temporary binding of an organization Agent to one Task role and lease.",
+      "properties": {
+        "kind": {
+          "const": "role_assignment",
+          "default": "role_assignment",
+          "title": "Kind",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^assignment_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "project_id": {
+          "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "agent_id": {
+          "pattern": "^agent_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Agent Id",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/AgentRole"
+        },
+        "attempt": {
+          "maximum": 10,
+          "minimum": 0,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "lease_id": {
+          "pattern": "^lease_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Lease Id",
+          "type": "string"
+        },
+        "capacity_units": {
+          "default": 1,
+          "maximum": 16,
+          "minimum": 1,
+          "title": "Capacity Units",
+          "type": "integer"
+        },
+        "assigned_at": {
+          "format": "date-time",
+          "title": "Assigned At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "project_id",
+        "task_id",
+        "agent_id",
+        "role",
+        "attempt",
+        "lease_id",
+        "assigned_at"
+      ],
+      "title": "RoleAssignment",
+      "type": "object"
+    },
+    "Task": {
+      "additionalProperties": false,
+      "description": "A bounded request tied to one repository and delivery state.",
+      "properties": {
+        "id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "repository": {
+          "minLength": 1,
+          "title": "Repository",
+          "type": "string"
+        },
+        "base_ref": {
+          "minLength": 1,
+          "title": "Base Ref",
+          "type": "string"
+        },
+        "acceptance_criteria": {
+          "items": {
+            "$ref": "#/$defs/AcceptanceCriterion"
+          },
+          "minItems": 1,
+          "title": "Acceptance Criteria",
+          "type": "array"
+        },
+        "constraints": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskConstraints"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "status": {
+          "$ref": "#/$defs/TaskStatus"
+        },
+        "max_attempts": {
+          "maximum": 10,
+          "minimum": 1,
+          "title": "Max Attempts",
+          "type": "integer"
+        },
+        "attempts": {
+          "default": 0,
+          "maximum": 10,
+          "minimum": 0,
+          "title": "Attempts",
+          "type": "integer"
+        },
+        "owner": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner"
+        },
+        "labels": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Labels",
+          "type": "array"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Metadata",
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "description",
+        "repository",
+        "base_ref",
+        "acceptance_criteria",
+        "status",
+        "max_attempts",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "Task",
+      "type": "object"
+    },
+    "TaskConstraints": {
+      "additionalProperties": false,
+      "description": "Machine-consumable restrictions attached to a Task.",
+      "properties": {
+        "allowed_paths": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Allowed Paths",
+          "type": "array"
+        },
+        "denied_paths": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Denied Paths",
+          "type": "array"
+        },
+        "allowed_commands": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Allowed Commands",
+          "type": "array"
+        },
+        "max_attempts": {
+          "anyOf": [
+            {
+              "maximum": 10,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Attempts"
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Notes"
+        }
+      },
+      "title": "TaskConstraints",
+      "type": "object"
+    },
+    "TaskLease": {
+      "additionalProperties": false,
+      "description": "Expiring claim on Agent capacity for one RoleAssignment.",
+      "properties": {
+        "kind": {
+          "const": "task_lease",
+          "default": "task_lease",
+          "title": "Kind",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^lease_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "assignment_id": {
+          "pattern": "^assignment_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Assignment Id",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "agent_id": {
+          "pattern": "^agent_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Agent Id",
+          "type": "string"
+        },
+        "capacity_units": {
+          "default": 1,
+          "maximum": 16,
+          "minimum": 1,
+          "title": "Capacity Units",
+          "type": "integer"
+        },
+        "acquired_at": {
+          "format": "date-time",
+          "title": "Acquired At",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "assignment_id",
+        "task_id",
+        "agent_id",
+        "acquired_at",
+        "expires_at"
+      ],
+      "title": "TaskLease",
+      "type": "object"
+    },
+    "TaskStatus": {
+      "enum": [
+        "NEW",
+        "PLANNING",
+        "IMPLEMENTING",
+        "QA",
+        "REVIEW",
+        "DONE",
+        "BLOCKED",
+        "FAILED"
+      ],
+      "title": "TaskStatus",
+      "type": "string"
+    }
+  },
+  "anyOf": [
+    {
+      "$ref": "#/$defs/RecoveryDispatchRecord"
+    },
+    {
+      "$ref": "#/$defs/RecoverySeedRecord"
+    },
+    {
+      "$ref": "#/$defs/RecoveryInvocationRecord"
+    }
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/recovery-execution.schema.json"
+}

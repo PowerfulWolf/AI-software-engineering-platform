@@ -32,7 +32,7 @@ from ai_software_engineer.domain import (
 from ai_software_engineer.store import TaskNotFound, TaskRepository
 
 if TYPE_CHECKING:
-    from ai_software_engineer.project_manager.dispatch import DispatchCommitRecord
+    from ai_software_engineer.project_manager.dispatch import DeliveryAllocation
 
 
 class PlannedDeliveryError(RuntimeError):
@@ -53,7 +53,7 @@ class DispatchTaskMaterializer:
     def __init__(self, repository: TaskRepository) -> None:
         self._repository = repository
 
-    def materialize(self, dispatch: DispatchCommitRecord) -> Task:
+    def materialize(self, dispatch: DeliveryAllocation) -> Task:
         dispatch.validate_integrity()
         expected = dispatch.task
         try:

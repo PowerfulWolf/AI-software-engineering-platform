@@ -45,6 +45,12 @@ class CodexCliConfigurationError(AgentConfigurationError, CodexCliError):
     """Raised when the executable or worktree boundary is invalid."""
 
 
+class InitialWorkspaceAdmission(Protocol):
+    """Trusted explicit admission of an exact recovery seed, never a dirty flag."""
+
+    def authorize(self, request: AgentRequest, workspace_root: Path) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class CodexInvocationResult:
     """Bounded process outcome used by the adapter and injected test runners."""
@@ -123,6 +129,7 @@ class CodexCliAgentAdapter:
         reasoning_effort: str = "medium",
         environment: Mapping[str, str] | None = None,
         runner: CodexCommandRunner | None = None,
+        initial_workspace_admission: InitialWorkspaceAdmission | None = None,
     ) -> None:
         root = Path(workspace_root).expanduser().resolve(strict=False)
         if not root.is_dir() or root.is_symlink():
@@ -146,6 +153,7 @@ class CodexCliAgentAdapter:
         self._reasoning_effort = reasoning_effort
         self._environment = _filtered_environment(environment or os.environ)
         self._runner = runner or SubprocessCodexCommandRunner()
+        self._initial_admission = initial_workspace_admission
         self._requests: dict[str, AgentRequest] = {}
         self._results: dict[str, AgentResult] = {}
 
@@ -200,7 +208,12 @@ class CodexCliAgentAdapter:
         )
         if initial_head != expected_head:
             raise CodexCliError("worktree HEAD does not match AgentRequest source revision")
-        if _git(self._workspace_root, "status", "--porcelain"):
+        if self._initial_admission is not None:
+            try:
+                self._initial_admission.authorize(request, self._workspace_root)
+            except Exception as error:
+                raise CodexCliError("recovery seed admission rejected") from error
+        elif _git(self._workspace_root, "status", "--porcelain"):
             raise CodexCliError("Codex worktree must be clean before execution")
 
         prompt = self._prompt_builder.build(request)

@@ -121,3 +121,30 @@ merge。
 `project` 入口也不会自动 merge/deploy，且不会把 fake Agent 当作真实团队。Provider secret 只来自
 宿主环境，不写入配置、checkpoint、sidecar 或 CLI 输出。SQLite 默认目录仅属于低层兼容命令；Production
 Team Host 固定使用 MySQL。
+
+## 显式接手失败 Coder 的保留修改
+
+仅用于已停止、尚未产生 candidate 的失败 Coder。先保存现场；不要 reset、stash 或修改旧终态。
+原方案必须仍适用，目标项目需处于干净的、已包含平台修复的基线。
+
+```bash
+ase recovery propose --project /absolute/project --delivery delivery_ID \
+  --run run_ID --context ctx_ID
+# 上条输出 plan_file；先查看，再由人类明确批准输出的完整 plan_sha256。
+ase recovery inspect --plan /absolute/sidecar/state/recovery-delivery_ID/plan-SHA.json
+ase recovery approve --plan /absolute/sidecar/state/recovery-delivery_ID/plan-SHA.json \
+  --confirm FULL_PLAN_SHA --reference human-approval-reference
+ase recovery run --plan /absolute/sidecar/state/recovery-delivery_ID/plan-SHA.json
+# 另一个终端只读查看新的 Task 阶段（不重新 prepare 或执行）：
+ase recovery inspect --plan /absolute/sidecar/state/recovery-delivery_ID/plan-SHA.json --runtime
+```
+
+沿用 `ASE_CONFIG`、配置中指定的 MySQL DSN 环境变量及已登录 Codex；配置必须允许真实模型运行，
+且本版恢复仅支持一条 Codex route。提案/检查/批准都不调用模型；`run` 才执行新的串行角色。
+`run` 输出新 Task、candidate SHA、artifact/context/run/event IDs 或 BLOCKED 原因；退出码
+0 表示 DONE，3 表示本次交付未完成，2 表示入口拒绝。交付分支为 `ai/<新TaskID>/attempt-1`。
+
+复核是独立 QA/Reviewer 完成的，不把已有修改视为实现报告。重复批准精确重放；Coder 一旦获准
+调用，重复 `run` 会拒绝并要求检查持久化记录，避免在结果不明时重复消耗模型额度。
+若在 seed 写入与 receipt 发布之间中断，保留新旧现场并拒绝盲目重放。旧父/子需求 checkpoint
+仍保持原记录；本命令不自动关联联合验收、不 merge/push/deploy，也不重启已失败的新恢复 Task。

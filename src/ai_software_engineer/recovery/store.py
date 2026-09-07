@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import stat
@@ -23,10 +24,22 @@ from ai_software_engineer.recovery.models import (
     canonical_bytes,
     digest,
 )
-from ai_software_engineer.recovery.records import RecoveryTaskRecord
+from ai_software_engineer.recovery.records import (
+    RecoveryInvocationRecord,
+    RecoverySeedRecord,
+    RecoveryTaskRecord,
+)
 
 MAX_RECORD_BYTES = 8_000_000
-_Record = TypeVar("_Record", RecoveryPlan, RecoveryAuthorization, RecoveryScope, RecoveryTaskRecord)
+_Record = TypeVar(
+    "_Record",
+    RecoveryPlan,
+    RecoveryAuthorization,
+    RecoveryScope,
+    RecoveryTaskRecord,
+    RecoverySeedRecord,
+    RecoveryInvocationRecord,
+)
 
 
 class RecoveryRecordMissing(RecoveryRejected):
@@ -170,6 +183,62 @@ class FileRecoveryStore:
         record.validate_binding(plan, self.get_authorization(plan_sha256))
         return record
 
+    def put_seed(self, record: RecoverySeedRecord) -> RecoverySeedRecord:
+        self._validate_seed(record)
+        return self._put("seed", record.recovery_plan_sha256, record, RecoverySeedRecord)
+
+    @contextmanager
+    def execution_lock(self) -> Iterator[None]:
+        """One executor for this recovery scope; never wait while another runs."""
+        with self._directory() as directory:
+            fd = os.open(
+                "execution.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600, dir_fd=directory
+            )
+            try:
+                metadata = os.fstat(fd)
+                if not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o077:
+                    raise RecoveryRejected("unsafe recovery execution lock")
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError as error:
+                    raise RecoveryRejected("recovery already has an executor") from error
+                yield
+            finally:
+                os.close(fd)
+
+    def get_seed(self, plan_sha256: str) -> RecoverySeedRecord:
+        record = self._get("seed", plan_sha256, RecoverySeedRecord)
+        if record.recovery_plan_sha256 != plan_sha256:
+            raise RecoveryRejected("seed filename identity mismatch")
+        self._validate_seed(record)
+        return record
+
+    def _validate_seed(self, record: RecoverySeedRecord) -> None:
+        record.validate_integrity()
+        plan = self.get_plan(record.recovery_plan_sha256)
+        task = self.get_task_record(plan.plan_sha256).task
+        target = record.capture.to_capture().worktree
+        if target.task_id != task.id or target.head_revision != task.base_ref:
+            raise RecoveryRejected("seed target differs from authorized Task")
+        if target.role.value != "coder" or target.attempt != 1:
+            raise RecoveryRejected("seed is not the first recovery Coder")
+
+    def get_invocation(self, plan_sha256: str) -> RecoveryInvocationRecord:
+        record = self._get("invocation", plan_sha256, RecoveryInvocationRecord)
+        if (
+            record.recovery_plan_sha256 != plan_sha256
+            or record.seed_record_sha256 != self.get_seed(plan_sha256).record_sha256
+        ):
+            raise RecoveryRejected("invocation seed lineage mismatch")
+        return record
+
+    def put_invocation(self, record: RecoveryInvocationRecord) -> RecoveryInvocationRecord:
+        if record.seed_record_sha256 != self.get_seed(record.recovery_plan_sha256).record_sha256:
+            raise RecoveryRejected("invocation seed mismatch")
+        return self._put(
+            "invocation", record.recovery_plan_sha256, record, RecoveryInvocationRecord
+        )
+
     @contextmanager
     def _directory(self) -> Iterator[int]:
         descriptor = _open_directory(self._root)
@@ -199,7 +268,7 @@ class FileRecoveryStore:
             TypeAdapter(StageSha256).validate_python(identity)
         except ValueError as error:
             raise RecoveryRejected("invalid recovery record identity") from error
-        if category not in ("scope", "plan", "authorization", "task"):
+        if category not in ("scope", "plan", "authorization", "task", "seed", "invocation"):
             raise RecoveryRejected("invalid recovery record category")
         if category == "scope":
             return "scope.json"

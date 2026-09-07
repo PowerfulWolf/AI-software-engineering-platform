@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import closing, contextmanager
 from datetime import datetime
 from typing import cast
@@ -21,6 +21,7 @@ from ai_software_engineer.domain.identity import ProjectId
 from ai_software_engineer.domain.task import TaskId
 from ai_software_engineer.planning.models import PlannerRunOutcome
 from ai_software_engineer.project_manager.dispatch import (
+    DeliveryAllocation,
     DispatchAuthorityConflict,
     DispatchCommitConflict,
     DispatchCommitCorruption,
@@ -32,6 +33,7 @@ from ai_software_engineer.project_manager.dispatch import (
     DispatchPreviewStale,
     DispatchSha256,
     DispatchWorkforceSnapshot,
+    RecoveryDispatchRecord,
 )
 from ai_software_engineer.project_manager.dispatch_authority import (
     DispatchRevisionAuthority,
@@ -216,6 +218,12 @@ class MySqlDispatchAuthority:
             return record
 
     def get_commit(self, commit_id: DispatchCommitId) -> DispatchCommitRecord:
+        record = self.get_allocation(commit_id)
+        if not isinstance(record, DispatchCommitRecord):
+            raise DispatchCommitCorruption("expected native Planner dispatch")
+        return record
+
+    def get_allocation(self, commit_id: DispatchCommitId) -> DeliveryAllocation:
         with closing(open_mysql_connection(self._dsn)) as connection:
             try:
                 with connection.cursor() as cursor:
@@ -231,7 +239,54 @@ class MySqlDispatchAuthority:
                 raise DispatchCommitPathError("cannot read MySQL dispatch commit") from error
         if row is None:
             raise DispatchCommitNotFound(f"dispatch commit {commit_id} was not found")
-        return _decode_commit(row)
+        return _decode_allocation(row)
+
+    def commit_recovery(
+        self,
+        *,
+        project_id: ProjectId,
+        task_id: TaskId,
+        plan_sha256: DispatchSha256,
+        validate_current: Callable[[RecoveryDispatchRecord | None], None],
+        build: Callable[[DispatchWorkforceSnapshot], RecoveryDispatchRecord],
+    ) -> RecoveryDispatchRecord:
+        """Recheck recovery facts and recompute allocation inside the global fence."""
+        commit_id = f"dispatch_commit_{plan_sha256}"
+        with (
+            self._request_revisions.request_revision_fence(),
+            closing(open_mysql_connection(self._dsn)) as connection,
+            self._transaction(connection),
+            connection.cursor() as cursor,
+        ):
+            self._lock_authority(cursor)
+            cursor.execute("SELECT * FROM dispatch_commits WHERE id = %s FOR UPDATE", (commit_id,))
+            row = cast(Mapping[str, object] | None, cursor.fetchone())
+            if row is not None:
+                existing = _decode_allocation(row)
+                if not isinstance(existing, RecoveryDispatchRecord):
+                    raise DispatchCommitConflict("recovery identity belongs to native dispatch")
+                validate_current(existing)
+                return existing
+            validate_current(None)
+            snapshot = self._current_snapshot(connection, project_id, task_id)
+            record = build(snapshot)
+            record.validate_integrity()
+            if (
+                record.id != commit_id
+                or record.project_id != project_id
+                or record.task_id != task_id
+                or record.workforce_snapshot_sha256 != snapshot.snapshot_sha256
+            ):
+                raise DispatchAuthorityConflict("recovery allocation differs from fenced inputs")
+            self._validate_reservations(record, snapshot)
+            validate_current(record)
+            cursor.execute(
+                "INSERT INTO dispatch_commits "
+                "(id, project_id, task_id, payload_json, dispatch_sha256) VALUES (%s,%s,%s,%s,%s)",
+                (record.id, project_id, task_id, _encode(record), record.dispatch_sha256),
+            )
+            self._current_snapshot(connection, project_id, task_id)
+            return record
 
     def _current_snapshot(
         self,
@@ -283,7 +338,7 @@ class MySqlDispatchAuthority:
         leases = {lease.id: lease for lease in base.active_leases}
         task_commit_time: datetime | None = None
         for commit_row in commit_rows:
-            commit = _decode_commit(commit_row)
+            commit = _decode_allocation(commit_row)
             if commit.task_id == task_id:
                 task_commit_time = commit.committed_at
             for phase in commit.phases:
@@ -355,7 +410,7 @@ class MySqlDispatchAuthority:
 
     @staticmethod
     def _validate_reservations(
-        record: DispatchCommitRecord,
+        record: DeliveryAllocation,
         snapshot: DispatchWorkforceSnapshot,
     ) -> None:
         assignment_ids = {assignment.id for assignment in snapshot.assignments}
@@ -399,7 +454,7 @@ class MySqlDispatchAuthority:
                 raise DispatchCommitPathError("MySQL dispatch commit failed") from error
 
 
-def _encode(model: DispatchWorkforceSnapshot | DispatchCommitRecord) -> str:
+def _encode(model: DispatchWorkforceSnapshot | DeliveryAllocation) -> str:
     return json.dumps(
         model.to_wire(),
         ensure_ascii=False,
@@ -425,8 +480,20 @@ def _decode_snapshot(row: Mapping[str, object]) -> DispatchWorkforceSnapshot:
 
 
 def _decode_commit(row: Mapping[str, object]) -> DispatchCommitRecord:
+    record = _decode_allocation(row)
+    if not isinstance(record, DispatchCommitRecord):
+        raise DispatchCommitCorruption("expected native Planner dispatch")
+    return record
+
+
+def _decode_allocation(row: Mapping[str, object]) -> DeliveryAllocation:
     try:
-        record = DispatchCommitRecord.model_validate_json(_text(row, "payload_json"))
+        payload = json.loads(_text(row, "payload_json"))
+        record: DeliveryAllocation
+        if isinstance(payload, dict) and payload.get("kind") == "recovery_dispatch":
+            record = RecoveryDispatchRecord.model_validate(payload)
+        else:
+            record = DispatchCommitRecord.model_validate(payload)
         record.validate_integrity()
         if (
             _text(row, "id") != record.id

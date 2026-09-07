@@ -277,7 +277,14 @@ class RuntimeSession:
         if task.status in {TaskStatus.DONE, TaskStatus.BLOCKED, TaskStatus.FAILED}:
             raise TaskNotRunnable(f"Task {task.id} is terminal at {task.status.value}")
         selected_case = case_id or _default_case_id(task.id)
-        self._ensure_case_started(selected_case, task.id, task.base_ref)
+        # Linked recovery is part of the original failed demand, not a fresh success
+        # to inflate the autonomous-delivery numerator. Its events remain observable.
+        self._ensure_case_started(
+            selected_case,
+            task.id,
+            task.base_ref,
+            included="recovery_of_task_id" not in task.metadata,
+        )
         context_builder = FileRunContextBuilder(
             project_root,
             sources=self._config.context_sources,
@@ -302,7 +309,12 @@ class RuntimeSession:
         return RuntimeRunResult(case_id=selected_case, result=runner.run_task(task.id))
 
     def _ensure_case_started(
-        self, case_id: EvaluationCaseId, task_id: TaskId, base_revision: str
+        self,
+        case_id: EvaluationCaseId,
+        task_id: TaskId,
+        base_revision: str,
+        *,
+        included: bool = True,
     ) -> None:
         existing = self._evaluation_store.list_for_case(case_id)
         starts = tuple(event for event in existing if isinstance(event, CaseStartedEvent))
@@ -317,6 +329,7 @@ class RuntimeSession:
                 or start.prompt_version != self._config.prompt_version
                 or start.spec_version != self._config.spec_version
                 or start.test_entrypoints != self._config.test_entrypoints
+                or start.included != included
             ):
                 raise RuntimeConfigurationError(
                     f"case {case_id} does not match its frozen Task/runtime identity"
@@ -337,7 +350,7 @@ class RuntimeSession:
                 prompt_version=self._config.prompt_version,
                 spec_version=self._config.spec_version,
                 test_entrypoints=self._config.test_entrypoints,
-                included=True,
+                included=included,
             )
         )
 

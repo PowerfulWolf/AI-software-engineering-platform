@@ -7,9 +7,11 @@ from typing import TYPE_CHECKING, Literal, Self
 from pydantic import Field, model_validator
 
 from ai_software_engineer.domain import ProjectRequest, Task, TaskStatus
+from ai_software_engineer.domain.identity import ContextId, RunId
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.domain.project_delivery import StageSha256
 from ai_software_engineer.recovery.models import (
+    CapturedChanges,
     RecoveryAuthorization,
     RecoveryPlan,
     RecoveryRejected,
@@ -17,6 +19,55 @@ from ai_software_engineer.recovery.models import (
     digest,
 )
 from ai_software_engineer.redaction import redact_text
+
+
+class RecoverySeedRecord(DomainModel):
+    kind: Literal["recovery_seed_record"] = "recovery_seed_record"
+    schema_version: Literal["v0.1"] = "v0.1"
+    recovery_plan_sha256: StageSha256
+    dispatch_sha256: StageSha256
+    capture: CapturedChanges
+    record_sha256: StageSha256
+
+    @classmethod
+    def create(
+        cls, *, plan_sha256: str, dispatch_sha256: str, capture: CapturedChanges
+    ) -> RecoverySeedRecord:
+        value = cls(
+            recovery_plan_sha256=plan_sha256,
+            dispatch_sha256=dispatch_sha256,
+            capture=capture,
+            record_sha256="0" * 64,
+        )
+        return value.model_copy(update={"record_sha256": value.recompute_sha256()})
+
+    def recompute_sha256(self) -> str:
+        return digest(self.model_dump(mode="json", exclude_none=True, exclude={"record_sha256"}))
+
+    def validate_integrity(self) -> None:
+        self.capture.to_capture()
+        if self.record_sha256 != self.recompute_sha256():
+            raise RecoveryRejected("seed receipt integrity mismatch")
+
+
+class RecoveryInvocationRecord(DomainModel):
+    """At-most-once provider admission; uncertainty is never permission to rerun."""
+
+    kind: Literal["recovery_invocation_record"] = "recovery_invocation_record"
+    schema_version: Literal["v0.1"] = "v0.1"
+    recovery_plan_sha256: StageSha256
+    seed_record_sha256: StageSha256
+    run_id: RunId
+    context_manifest_id: ContextId
+    record_sha256: StageSha256
+
+    def recompute_sha256(self) -> str:
+        return digest(self.model_dump(mode="json", exclude_none=True, exclude={"record_sha256"}))
+
+    def validate_integrity(self) -> None:
+        if self.record_sha256 != self.recompute_sha256():
+            raise RecoveryRejected("invocation receipt integrity mismatch")
+
 
 if TYPE_CHECKING:
     from ai_software_engineer.recovery.task import RecoveryTaskDraft

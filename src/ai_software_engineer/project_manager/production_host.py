@@ -6,6 +6,7 @@ import os
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ai_software_engineer.company_workspace import CompanyWorkspace
 from ai_software_engineer.config import ProductionConfig
@@ -30,6 +31,9 @@ from ai_software_engineer.project_manager.production_rules import (
 )
 from ai_software_engineer.runtime_workspace import OrganizationWorkspace
 from ai_software_engineer.store import MySqlTaskRepository
+
+if TYPE_CHECKING:
+    from ai_software_engineer.recovery.entry import NativeRecoveryEntry
 
 
 class OrganizationTeamHost:
@@ -81,6 +85,7 @@ class OrganizationTeamHost:
             catalog=ProjectDeliveryCheckpointCatalog(registry.registry_root),
             delivery_namespace=config.company_id,
         )
+        self._recovery_backend = backend
 
         def derived_backend(
             clients: StructuredClientFactory,
@@ -128,6 +133,12 @@ class OrganizationTeamHost:
 
     def requirement_entry(self) -> JointDeliveryService:
         return self._requirements
+
+    def recovery_entry(self) -> NativeRecoveryEntry:
+        """Explicit human recovery; does not restart an old terminal delivery."""
+        from ai_software_engineer.recovery.entry import NativeRecoveryEntry
+
+        return NativeRecoveryEntry(self._config, self._environment, self._recovery_backend)
 
     @property
     def company_workspace(self) -> CompanyWorkspace:
