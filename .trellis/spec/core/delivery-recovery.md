@@ -86,10 +86,11 @@ manager.verify_capture(capture, assigned_permissions, denied_paths=denied)
 # Neither call creates Task, approval or candidate.
 ```
 
-## Remaining production recovery (not implemented in this increment)
+## Production recovery roadmap
 
-1. Sidecar append-only plan/receipt binds failed parent/child/Task/dispatch/upstream digests and
-   capture; trusted human authorization binds the exact recovery plan.
+1. Increment B below implements the append-only plan/receipt and authorization service seam.
+   Production adapters must still resolve native failed parent/child/Task/dispatch/upstream facts
+   and actual human authorization; hashes supplied by callers are not sufficient evidence.
 2. Explicit carry-forward of approved content onto a newly prepared base; never overwrite historical
    profile/spec/approval hashes. Base conflicts or changed current rules block.
 3. Fresh execution/Task/run/branch and resource allocation with recovery-of lineage. Bound snapshot
@@ -97,3 +98,67 @@ manager.verify_capture(capture, assigned_permissions, denied_paths=denied)
 4. Coder completes/commits/reports; fresh independent QA/Reviewer validate that candidate. Joint
    integration/evaluation retain failure and human intervention. Receipt replay avoids duplicate calls;
    a second interruption needs a new explicit linked recovery.
+
+## Increment B contract — durable recovery intent
+
+Scope: `recovery/` holds proposed recovery and verified human decision facts, not Task execution.
+
+```python
+RecoveryAuthorizationService.propose(plan: RecoveryPlan) -> RecoveryPlan
+RecoveryAuthorizationService.authorize(command: RecoveryApprovalCommand) -> RecoveryAuthorization
+RecoveryAuthorizationService.require_current_authorization(plan_sha256: str) -> RecoveryPlan
+FileRecoveryStore.initialize(root: str | Path, *, scope: RecoveryScope) -> FileRecoveryStore
+FileRecoveryStore(root: str | Path, *, scope: RecoveryScope)  # existing store, no mkdir
+FileRecoveryStore.put_plan(plan: RecoveryPlan) -> RecoveryPlan
+FileRecoveryStore.get_plan(plan_sha256: str) -> RecoveryPlan
+FileRecoveryStore.put_authorization(record: RecoveryAuthorization) -> RecoveryAuthorization
+FileRecoveryStore.get_authorization(plan_sha256: str) -> RecoveryAuthorization
+```
+
+`RecoveryPlan` contains failed-source lineage, embedded `CapturedChanges`, target base/preparation,
+permissions/denies, aware creation time and `plan_sha256`. `RecoveryAuthorization` contains the exact
+approval command plus verifier-issued decision and `authorization_sha256`; one decision per plan.
+`schemas/delivery-recovery.schema.json` describes plan/authorization union; model and wire validation
+both reject extras. Integrity is not trusted origin: application ports must independently verify facts.
+
+The service has no model, Task/state, Git apply or dispatch port. Propose and fresh approval verify
+current facts and the exact capture. Human verification is followed by a second freshness check before
+one complete receipt publish. Exact receipt replay needs no callbacks; execution gate separately
+requires APPROVED and revalidates current source/target/capture. New Task identity is derived from plan
+digest, not the old Task ID. No completed plan or receipt may be overwritten.
+
+Store opens existing root without writes; initialize creates one directory under an existing sidecar.
+Persist `scope.json` binding company/project/delivery and canonical project root, including after
+restart; a constructor argument alone cannot establish durable ownership. Reject overlapping/symlinked paths, inode
+replacement, nonregular files, invalid identity/digest and bounded-size violations. Use private files,
+dirfd/no-follow operations, write-all, fsync and exclusive publication. Plan embeds the patch so no
+partial multi-file snapshot exists. Successful publication followed by process loss replays from the
+single full receipt. Crash before receipt depends on verifier's own command idempotency.
+
+| Case | Required result |
+|---|---|
+| Exact plan/command replay | Same original fact, no second human-verifier call |
+| Changed command for decided plan | Recovery conflict; preserve first decision |
+| Verifier mismatches plan/reference or time | Refuse before receipt |
+| Current facts or capture changed | Refuse at proposal/approval/execution gate |
+| Human rejects | Durable rejection, no execution authorization |
+| Tampered digest/patch/filename or cross-company/source | Fail closed |
+| Concurrent differing decisions | One exclusive winner; loser cannot overwrite |
+| Read-only open / denied root / secret | No project writes; no raw secret in error |
+
+Good: close/reopen and replay exact approval offline. Base: durable rejection. Bad:
+`store.get_authorization(sha)` used as permission without `require_current_authorization(sha)`.
+Tests in `tests/recovery/` must assert callback counts, zero runtime/target effects, all failure cases,
+real-Git capture round-trip, schema parity, file mode, concurrent first-winner and interrupted publish.
+
+`RecoverySource` binds `scope`, BLOCKED `task_id/task_revision/task_sha256`, `checkpoint_sha256`,
+`dispatch_sha256`, `preparation_sha256`, approved `product_spec_sha256/approval_sha256`,
+`technical_design_sha256/execution_plan_sha256`, `failed_run_id/failed_context_id`, `base_revision`
+and optional paired `parent_delivery_id/parent_checkpoint_sha256`. `RecoveryPlan` additionally binds
+`target_base_revision/target_preparation_sha256`. Full commits have exactly 40 or 64 hex characters.
+Paths, permission strings and approval metadata reject detected secrets before persistence; a patch
+is rejected rather than redacted. Recovery permissions cannot grant Coder state-change or merge rights.
+
+Double freshness checks do not lock Git or external databases. The trusted caller must establish the
+old executor has stopped; future dispatch must add its own current-fact fence. This seam supplies no
+production fact verifier, human channel, Task, dispatch, seed application or CLI command.

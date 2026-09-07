@@ -628,3 +628,23 @@ branch/detached 与 HEAD，dirty 现场不得清理。
 current_stage 来自 Task 状态与 Dispatch 的 role 匹配，不代表执行器在线。execution_liveness 仅
 UNKNOWN；planned_model 不代替 ModelRouteAttempt 的实际模型。读取不会初始化 store 或推进业务。
 具体路径、错误矩阵、测试见 `.trellis/spec/core/live-team-view.md`。
+
+## T044 显式恢复记录（尚未接入生产执行）
+
+`schemas/delivery-recovery.schema.json` 定义 `RecoveryPlan | RecoveryAuthorization`，对应 Python
+`recovery.models`。Plan 绑定失败 Task/checkpoint、dispatch、批准的上游文档、失败 run/context、
+只读改动快照和目标 base/preparation；新 Task ID 由完整 plan digest 派生，不复活旧 BLOCKED Task。
+Authorization 绑定 exact plan、人工操作引用和可信验证器返回的决定，不是 Agent verdict。
+
+`FileRecoveryStore` 在项目代码目录之外显式初始化私有目录，用 `scope.json` 固化公司、项目和
+失败 delivery 所有权；构造函数只打开已有目录。Plan 和 decision 均只允许首次发布或内容完全相同
+的重放。Schema 检查结构，Python 再检查 hash、跨字段绑定、canonical paths 和敏感内容；hash
+只能证明内容一致，不能证明其可信来源。
+
+`RecoveryAuthorizationService` 在 proposal、首次批准和执行准入时复核 facts/capture。已封存批准
+的精确重放不再请求人工，但后续执行必须调用 `require_current_authorization` 重新检查；拒绝决定
+可以留档，不能启动执行。该服务没有 Task、模型、dispatch 或 Git apply 端口。
+
+当前只提供可测试的恢复记录与授权服务；真实事实读取、人工授权入口、新基线继承、Task/dispatch、
+补丁应用和生产 CLI 尚未接通。不能将这些契约描述为已恢复真实交付。签名、错误矩阵和测试点见
+[`delivery-recovery.md`](../.trellis/spec/core/delivery-recovery.md)。

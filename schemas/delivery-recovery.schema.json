@@ -1,0 +1,517 @@
+{
+  "$defs": {
+    "AgentPermissions": {
+      "additionalProperties": false,
+      "description": "The executable path, command, network, and state capabilities of an Agent.",
+      "properties": {
+        "read_paths": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Read Paths",
+          "type": "array"
+        },
+        "write_paths": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Write Paths",
+          "type": "array"
+        },
+        "commands": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Commands",
+          "type": "array"
+        },
+        "network": {
+          "$ref": "#/$defs/NetworkAccess"
+        },
+        "can_change_state": {
+          "default": false,
+          "title": "Can Change State",
+          "type": "boolean"
+        },
+        "can_merge": {
+          "default": false,
+          "title": "Can Merge",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "read_paths",
+        "write_paths",
+        "commands",
+        "network"
+      ],
+      "title": "AgentPermissions",
+      "type": "object"
+    },
+    "CapturedChanges": {
+      "additionalProperties": false,
+      "properties": {
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "attempt": {
+          "maximum": 10,
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "source_revision": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "worktree_path": {
+          "pattern": "^/[^\\x00-\\x1f]*$",
+          "title": "Worktree Path",
+          "type": "string"
+        },
+        "patch": {
+          "maxLength": 1000000,
+          "title": "Patch",
+          "type": "string"
+        },
+        "index_diff_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Index Diff Sha256",
+          "type": "string"
+        },
+        "files": {
+          "items": {
+            "$ref": "#/$defs/CapturedFile"
+          },
+          "maxItems": 256,
+          "title": "Files",
+          "type": "array"
+        },
+        "capture_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Capture Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "attempt",
+        "source_revision",
+        "worktree_path",
+        "patch",
+        "index_diff_sha256",
+        "files",
+        "capture_sha256"
+      ],
+      "title": "CapturedChanges",
+      "type": "object"
+    },
+    "CapturedFile": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "minLength": 1,
+          "pattern": "^[^\\x00-\\x1f]+$",
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "title": "CapturedFile",
+      "type": "object"
+    },
+    "NetworkAccess": {
+      "enum": [
+        "none",
+        "model_endpoint_only",
+        "allowlist"
+      ],
+      "title": "NetworkAccess",
+      "type": "string"
+    },
+    "RecoveryApprovalCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "operation_id": {
+          "pattern": "^[a-z][a-z0-9_-]{2,127}$",
+          "title": "Operation Id",
+          "type": "string"
+        },
+        "plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "approval_reference": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Approval Reference",
+          "type": "string"
+        },
+        "submitted_at": {
+          "format": "date-time",
+          "title": "Submitted At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id",
+        "plan_sha256",
+        "approval_reference",
+        "submitted_at"
+      ],
+      "title": "RecoveryApprovalCommand",
+      "type": "object"
+    },
+    "RecoveryAuthorization": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "recovery_authorization",
+          "default": "recovery_authorization",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "command": {
+          "$ref": "#/$defs/RecoveryApprovalCommand"
+        },
+        "decision": {
+          "$ref": "#/$defs/VerifiedRecoveryDecision"
+        },
+        "authorization_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Authorization Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command",
+        "decision",
+        "authorization_sha256",
+        "kind"
+      ],
+      "title": "RecoveryAuthorization",
+      "type": "object"
+    },
+    "RecoveryPlan": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "recovery_plan",
+          "default": "recovery_plan",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/RecoverySource"
+        },
+        "capture": {
+          "$ref": "#/$defs/CapturedChanges"
+        },
+        "target_base_revision": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Target Base Revision",
+          "type": "string"
+        },
+        "target_preparation_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Target Preparation Sha256",
+          "type": "string"
+        },
+        "permissions": {
+          "$ref": "#/$defs/AgentPermissions",
+          "allOf": [
+            {
+              "properties": {
+                "can_merge": {
+                  "const": false
+                },
+                "can_change_state": {
+                  "const": false
+                }
+              }
+            }
+          ]
+        },
+        "denied_paths": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Denied Paths",
+          "type": "array"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "capture",
+        "target_base_revision",
+        "target_preparation_sha256",
+        "permissions",
+        "denied_paths",
+        "created_at",
+        "plan_sha256",
+        "kind"
+      ],
+      "title": "RecoveryPlan",
+      "type": "object"
+    },
+    "RecoveryScope": {
+      "additionalProperties": false,
+      "properties": {
+        "company_id": {
+          "pattern": "^company_[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Company Id",
+          "type": "string"
+        },
+        "project_id": {
+          "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "delivery_id": {
+          "pattern": "^delivery_[a-z0-9][a-z0-9_-]{2,95}$",
+          "title": "Delivery Id",
+          "type": "string"
+        },
+        "project_root": {
+          "pattern": "^/[^\\x00-\\x1f]*$",
+          "title": "Project Root",
+          "type": "string"
+        }
+      },
+      "required": [
+        "company_id",
+        "project_id",
+        "delivery_id",
+        "project_root"
+      ],
+      "title": "RecoveryScope",
+      "type": "object"
+    },
+    "RecoverySource": {
+      "additionalProperties": false,
+      "description": "Exact references; a trusted facts port must resolve and verify their origin.",
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/RecoveryScope"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "task_status": {
+          "const": "BLOCKED",
+          "default": "BLOCKED",
+          "title": "Task Status",
+          "type": "string"
+        },
+        "task_revision": {
+          "minimum": 1,
+          "title": "Task Revision",
+          "type": "integer"
+        },
+        "task_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Task Sha256",
+          "type": "string"
+        },
+        "checkpoint_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Checkpoint Sha256",
+          "type": "string"
+        },
+        "dispatch_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Dispatch Sha256",
+          "type": "string"
+        },
+        "preparation_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Preparation Sha256",
+          "type": "string"
+        },
+        "product_spec_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Product Spec Sha256",
+          "type": "string"
+        },
+        "approval_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Approval Sha256",
+          "type": "string"
+        },
+        "technical_design_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Technical Design Sha256",
+          "type": "string"
+        },
+        "execution_plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Execution Plan Sha256",
+          "type": "string"
+        },
+        "failed_run_id": {
+          "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Failed Run Id",
+          "type": "string"
+        },
+        "failed_context_id": {
+          "pattern": "^ctx_[a-f0-9]{64}$",
+          "title": "Failed Context Id",
+          "type": "string"
+        },
+        "base_revision": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Base Revision",
+          "type": "string"
+        },
+        "parent_delivery_id": {
+          "anyOf": [
+            {
+              "pattern": "^delivery_[a-z0-9][a-z0-9_-]{2,95}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Delivery Id"
+        },
+        "parent_checkpoint_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Checkpoint Sha256"
+        }
+      },
+      "required": [
+        "scope",
+        "task_id",
+        "task_revision",
+        "task_sha256",
+        "checkpoint_sha256",
+        "dispatch_sha256",
+        "preparation_sha256",
+        "product_spec_sha256",
+        "approval_sha256",
+        "technical_design_sha256",
+        "execution_plan_sha256",
+        "failed_run_id",
+        "failed_context_id",
+        "base_revision"
+      ],
+      "title": "RecoverySource",
+      "type": "object"
+    },
+    "VerifiedRecoveryDecision": {
+      "additionalProperties": false,
+      "properties": {
+        "plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "approval_reference": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Approval Reference",
+          "type": "string"
+        },
+        "approved": {
+          "title": "Approved",
+          "type": "boolean"
+        },
+        "operator_id": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Operator Id",
+          "type": "string"
+        },
+        "rationale": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        },
+        "decided_at": {
+          "format": "date-time",
+          "title": "Decided At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan_sha256",
+        "approval_reference",
+        "approved",
+        "operator_id",
+        "rationale",
+        "decided_at"
+      ],
+      "title": "VerifiedRecoveryDecision",
+      "type": "object"
+    }
+  },
+  "discriminator": {
+    "mapping": {
+      "recovery_authorization": "#/$defs/RecoveryAuthorization",
+      "recovery_plan": "#/$defs/RecoveryPlan"
+    },
+    "propertyName": "kind"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/RecoveryPlan"
+    },
+    {
+      "$ref": "#/$defs/RecoveryAuthorization"
+    }
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/delivery-recovery.schema.json",
+  "title": "Explicit recovery plan or verified human decision receipt"
+}

@@ -60,6 +60,22 @@ Rollback: revert isolated platform commit; no database/runtime or original workt
 Future cases: process-loss replay; second interruption; new baseline/conflict; multi-directory child
 lineage; original failure and human-intervention attribution in evaluation.
 
+## Increment B scope and acceptance
+
+Allowed paths extend to `src/ai_software_engineer/recovery/**`, `tests/recovery/**`,
+`schemas/delivery-recovery.schema.json`, `docs/contracts.md`, recovery spec, task and archive files.
+No target repository, original Coder checkout, live Task/checkpoint or approval records may be edited.
+
+- [x] Typed plan/capture/decision contract and wire schema reject malformed, secret or mismatched input.
+- [x] Persist immutable scoped plans and decisions outside code; read-only reopening does not initialize.
+- [x] Exact decision replay survives restart with no repeated verifier calls; current drift still blocks execution.
+- [x] Real temporary Git round-trip, concurrent first-winner, corruption, symlink/FIFO, root/scope replacement,
+  private modes, short writes and interrupted publication have regression tests.
+- [x] Full regression and release checks recorded before committing this increment.
+
+Production native-fact and human-channel adapters remain unimplemented. Test fixtures are explicitly fake,
+not evidence of real human approval or a successful platform delivery. T044 remains in progress.
+
 ## Increment A validation
 2026-09-06: 23 capture tests; full regression **800 passed /139.05s**, including the dedicated local
 MySQL test database (not self-iteration business data). Ruff/format, Mypy (258 files), offline lock,
@@ -67,3 +83,10 @@ sdist/wheel and diff-check passed. Build output used temporary directories after
 write was denied by sandbox. Actual preserved Coder: 15 files/19,749 patch bytes successfully captured
 and revalidated in memory with original permissions; index bytes and HEAD unchanged. No live models,
 durable recovery receipt, new Task, candidate, QA or Review. T044 remains in progress.
+
+## Increment B validation
+2026-09-07: 42 new recovery tests; full regression **842 passed /81.74s**, including only the dedicated
+MySQL test database. Ruff/format (482 files), strict Mypy (267 files), offline lock and sdist/wheel build,
+diff-check passed. Real temporary Git verifies source bytes/HEAD preservation and rejects post-approval
+drift. No live model calls, production recovery records, new Tasks, target edits, candidate or QA/Review.
+Source platform changes are Astra's implementation, not autonomous requirement delivery.
