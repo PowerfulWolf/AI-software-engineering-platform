@@ -173,7 +173,7 @@ class _DirtySuccessRunner:
             }
         )
         output_path = Path(argv[argv.index("--output-last-message") + 1])
-        output_path.write_text(json.dumps(draft.to_wire()), encoding="utf-8")
+        output_path.write_text(json.dumps({"artifact": draft.to_wire()}), encoding="utf-8")
         return CodexInvocationResult(returncode=0)
 
 
@@ -239,7 +239,7 @@ class _ProgressRunner:
             }
         )
         output_path = Path(argv[argv.index("--output-last-message") + 1])
-        output_path.write_text(json.dumps(progress.to_wire()), encoding="utf-8")
+        output_path.write_text(json.dumps({"artifact": progress.to_wire()}), encoding="utf-8")
         return CodexInvocationResult(returncode=0)
 
 

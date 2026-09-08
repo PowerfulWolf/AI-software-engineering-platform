@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import tempfile
 import time
@@ -317,7 +318,10 @@ class CodexCliAgentAdapter:
             except OSError as error:
                 raise CodexCliError("Codex CLI did not write its structured output") from error
 
-        artifact = validate_artifact_payload(json.loads(raw_output))
+        payload = json.loads(raw_output)
+        if isinstance(payload, dict) and set(payload) == {"artifact"}:
+            payload = payload["artifact"]
+        artifact = validate_artifact_payload(payload)
         if artifact.kind not in ROLE_OUTPUTS[request.role]:
             raise ValueError("Codex CLI returned an Artifact outside the role contract")
         artifact = _normalize_producer(artifact, request, self._agent_id, self._agent_version)
@@ -441,6 +445,14 @@ def _artifact_schema(role: AgentRole) -> dict[str, object]:
         schema = PlanArtifact.model_json_schema()
     elif role is AgentRole.CODER:
         schema = TypeAdapter(CoderProgressArtifact | ImplementationReportArtifact).json_schema()
+        definitions = schema.pop("$defs", {})
+        schema = {
+            "type": "object",
+            "properties": {"artifact": schema},
+            "required": ["artifact"],
+            "additionalProperties": False,
+            "$defs": definitions,
+        }
     elif role is AgentRole.QA:
         schema = QaReportArtifact.model_json_schema()
     else:
@@ -468,7 +480,8 @@ def _compile_prompt(request: AgentRequest, messages: Sequence[object]) -> str:
             "a candidate and must not claim completion. "
             "Prioritize focused required tests before broader optional suites. Stop expanding "
             "scope before the completion reserve; the JSON report and a complete intended diff "
-            "take priority over optional validation."
+            "take priority over optional validation. Return the Artifact inside the required "
+            "top-level object with the single key artifact."
         ),
         AgentRole.QA: (
             "Independently test the exact candidate without modifying it; return only qa-report."
@@ -549,14 +562,20 @@ def _classify_cli_failure(
     invocation: CodexInvocationResult,
 ) -> tuple[AgentErrorCode, bool]:
     code = _recognized_cli_failure(invocation) or AgentErrorCode.PROVIDER_UNAVAILABLE
-    return code, code is not AgentErrorCode.AUTHENTICATION_ERROR
+    return code, code not in {AgentErrorCode.AUTHENTICATION_ERROR, AgentErrorCode.INVALID_OUTPUT}
 
 
 def _recognized_cli_failure(invocation: CodexInvocationResult) -> AgentErrorCode | None:
-    text = f"{invocation.stdout}\n{invocation.stderr}".lower()
+    text = invocation.stderr.lower()
+    if "error:" in text:
+        text = text[text.index("error:") :]
+    if "invalid_json_schema" in text:
+        return AgentErrorCode.INVALID_OUTPUT
     if any(marker in text for marker in ("insufficient_quota", "quota exceeded", "usage limit")):
         return AgentErrorCode.QUOTA_EXHAUSTED
-    if any(marker in text for marker in ("rate limit", "too many requests", "429")):
+    if any(marker in text for marker in ("rate limit", "too many requests")) or re.search(
+        r"\b429\b", text
+    ):
         return AgentErrorCode.RATE_LIMITED
     if any(marker in text for marker in ("unauthorized", "authentication", "sign in", "login")):
         return AgentErrorCode.AUTHENTICATION_ERROR
