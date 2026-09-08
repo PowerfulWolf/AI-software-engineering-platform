@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -588,7 +589,7 @@ class ProductionProjectDeliveryBackend:
         )
         agents, policy = self._workforce()
         workforce_store = FileOrganizationWorkforceStore(self._organization)
-        policy = workforce_store.put_policy(policy)
+        policy = workforce_store.put_policy(policy, versioned=True)
         agents = cast(
             tuple[AgentProfile, AgentProfile, AgentProfile],
             tuple(workforce_store.put_agent(agent) for agent in agents),
@@ -863,6 +864,19 @@ class ProductionProjectDeliveryBackend:
             risk_floors=tuple(
                 RiskModelFloor(risk=risk, minimum_tier=BrainTier.CRITICAL) for risk in RiskTier
             ),
+        )
+        policy = policy.model_copy(
+            update={
+                "version": "v0.1-"
+                + hashlib.sha256(
+                    json.dumps(
+                        policy.model_dump(mode="json", exclude={"version"}),
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        ensure_ascii=False,
+                    ).encode("utf-8")
+                ).hexdigest()
+            }
         )
         profiles = tuple(
             AgentProfile(

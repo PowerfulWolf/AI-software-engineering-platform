@@ -122,6 +122,45 @@ Environment contract:
 
 ### 3.3 Providers and fallback
 
+#### Immutable policy revisions (2026-09-08)
+
+Scope: changing the configured primary model in an already initialized organization, both native
+and recovery dispatch. `AgentProfile.id` and `default_model_policy_id` must remain stable.
+
+Signatures: `FileOrganizationWorkforceStore.put_policy(policy, *, versioned=False)` and
+`get_policy(policy_id, *, version=None)`. Production callers opt into versioned writes. `_workforce`
+sets `ModelPolicy.version = "v0.1-" + sha256(canonical_policy_without_version)`; canonical encoding is
+UTF-8, sorted JSON keys, compact separators, ensure_ascii=False. Full policy content participates.
+ModelSelection already contains policy_version; no wire or SQL schema changes are required.
+
+Versioned files use `<policy-id>__<sha256(version)>.json` in organization/model-policies, with the
+same key as envelope object_id. Their payload retains the logical policy ID/version. Legacy
+`<policy-id>.json` remains unchanged. No latest pointer or implicit policy promotion is introduced.
+Exact-version reads select the versioned file, otherwise accept legacy only if its version matches.
+Runtime allocation reads by selection.policy_id AND selection.policy_version.
+
+| Case | Required result |
+|---|---|
+| New configured model | New version, same team members; preserve old policy/dispatch |
+| Same version/body | Idempotent replay |
+| Same version/different body | RuntimeWorkspaceConflict; never overwrite |
+| Missing requested version / wrong identity | RuntimeWorkspaceCorruption |
+| Corrupted/symlink revision | Fail closed; never fall back to legacy |
+| Legacy selection | Exact matching legacy record remains readable |
+
+Workforce publication uses exclusive atomic creation and revalidates a concurrent winner.
+Good: switch models with unchanged AgentProfile and both policy versions readable. Base: legacy
+unversioned callers keep strict immutable semantics. Bad: delete/replace the old policy or mint new
+Agent IDs solely to change model. Tests: runtime_workspace/test_binding.py covers exact versions,
+conflict, corruption and preserved legacy bytes; production_backend test preloads an old policy,
+changes configured model in the same organization, then exercises native dispatch and delivery.
+Recovery uses the same put_policy(versioned=True); its real Git/MySQL offline suite must also pass.
+
+Wrong: reuse fixed policy ID/version with changed route, or read a selected policy by ID alone.
+Correct: stable policy family/Agent identity, content-versioned policy, exact selected-version read.
+Root cause: immutability was enforced correctly, but production configuration lacked revision identity;
+fresh-organization tests hid the conflict. This does not authorize replaying terminal Tasks.
+
 - Product、Designer、Planner 只能通过 `StructuredModelClient` 返回 Pydantic 可校验的 draft；最终
   ProductSpec/TechnicalDesign/ExecutionPlan ID 与 lineage 由平台生成，模型不能自选事实 identity。
 - 任何传给 strict structured-output provider 的 Pydantic Schema 必须先通过

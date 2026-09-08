@@ -306,7 +306,7 @@ class NativeRecoveryEntry:
         agents, policy = self.backend._workforce()
         workforce = FileOrganizationWorkforceStore(self.backend._organization)
         saved_agents = tuple(workforce.put_agent(a) for a in agents)
-        policy = workforce.put_policy(policy)
+        policy = workforce.put_policy(policy, versioned=True)
         dispatch = RecoveryAllocator(
             sealing=sealing,
             builder=builder,

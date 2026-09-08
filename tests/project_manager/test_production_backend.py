@@ -61,6 +61,7 @@ from ai_software_engineer.project_manager.production_delivery import (
 )
 from ai_software_engineer.project_manager.production_host import OrganizationTeamHost
 from ai_software_engineer.role_workspace import RoleWorktreeBinding
+from ai_software_engineer.runtime_workspace import FileOrganizationWorkforceStore
 
 
 class _ScriptedStructuredClient(StructuredModelClient):
@@ -381,6 +382,28 @@ def test_host_records_isolated_delivery_without_polluting_project(
         structured_clients=_ScriptedClientFactory(),
         delivery_route_adapters=_ScriptedDeliveryFactory(),
     )
+    old_agents, old_policy = host._recovery_backend._workforce()
+    workforce = FileOrganizationWorkforceStore(host._recovery_backend._organization)
+    for agent in old_agents:
+        workforce.put_agent(agent)
+    legacy_policy = old_policy.model_copy(update={"version": "v0.1"})
+    workforce.put_policy(legacy_policy)
+    config = config.model_copy(
+        update={
+            "model_routes": (config.model_routes[0].model_copy(update={"model": "gpt-5.6-sol"}),)
+        }
+    )
+    host = OrganizationTeamHost(
+        config=config,
+        environment={"ASE_MYSQL_DSN": mysql_dsn, "PATH": os.environ.get("PATH", "")},
+        structured_clients=_ScriptedClientFactory(),
+        delivery_route_adapters=_ScriptedDeliveryFactory(),
+    )
+    new_agents, new_policy = host._recovery_backend._workforce()
+    assert new_agents == old_agents
+    assert new_policy.id == old_policy.id
+    assert new_policy.version != old_policy.version
+    assert host._recovery_backend._workforce()[1] == new_policy
     service = host.project_entry()
     started = service.start(
         StartProjectDelivery(
@@ -397,6 +420,8 @@ def test_host_records_isolated_delivery_without_polluting_project(
         )
     )
 
+    assert workforce.get_policy(legacy_policy.id) == legacy_policy
+    assert workforce.get_policy(new_policy.id, version=new_policy.version) == new_policy
     if input_limit == 1:
         assert approved.checkpoint.stage is DeliveryStage.BLOCKED
         assert approved.checkpoint.task_status is not None

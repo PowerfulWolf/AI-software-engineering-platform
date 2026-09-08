@@ -495,25 +495,41 @@ class FileOrganizationWorkforceStore:
         except ValidationError as error:
             raise RuntimeWorkspaceCorruption(f"AgentProfile is invalid: {validated}") from error
 
-    def put_policy(self, policy: ModelPolicy) -> ModelPolicy:
+    def put_policy(self, policy: ModelPolicy, *, versioned: bool = False) -> ModelPolicy:
         return self._put(
             "model_policy",
-            policy.id,
+            self._policy_key(policy.id, policy.version) if versioned else policy.id,
             policy,
             self._workspace.directory("model-policies"),
         )
 
-    def get_policy(self, policy_id: ModelPolicyId | str) -> ModelPolicy:
+    def get_policy(
+        self, policy_id: ModelPolicyId | str, *, version: str | None = None
+    ) -> ModelPolicy:
         validated = TypeAdapter(ModelPolicyId).validate_python(policy_id)
+        root = self._workspace.directory("model-policies")
+        key = validated
+        if version is not None:
+            revision_key = self._policy_key(validated, version)
+            path = root / f"{revision_key}.json"
+            if path.exists() or path.is_symlink():
+                key = revision_key
         payload = self._get(
             "model_policy",
-            validated,
-            self._workspace.directory("model-policies"),
+            key,
+            root,
         )
         try:
-            return ModelPolicy.model_validate(payload)
+            policy = ModelPolicy.model_validate(payload)
         except ValidationError as error:
             raise RuntimeWorkspaceCorruption(f"ModelPolicy is invalid: {validated}") from error
+        if policy.id != validated or (version is not None and policy.version != version):
+            raise RuntimeWorkspaceCorruption("ModelPolicy identity/version mismatch")
+        return policy
+
+    @staticmethod
+    def _policy_key(policy_id: str, version: str) -> str:
+        return f"{policy_id}__{_sha256(version)}"
 
     @staticmethod
     def _put[ModelT: AgentProfile | ModelPolicy](
@@ -530,6 +546,8 @@ class FileOrganizationWorkforceStore:
             "sha256": _sha256(_canonical_json(payload)),
         }
         path = root / f"{object_id}.json"
+        if path.is_symlink():
+            raise RuntimeWorkspaceCorruption("workforce record cannot be a symlink")
         if path.exists():
             existing = FileOrganizationWorkforceStore._get(kind, object_id, root)
             if existing != payload:
@@ -537,12 +555,15 @@ class FileOrganizationWorkforceStore:
                     f"organization workforce record already exists: {object_id}"
                 )
             return model
-        _atomic_json_write(path, envelope)
+        if not _atomic_json_write(path, envelope, overwrite=False):
+            return FileOrganizationWorkforceStore._put(kind, object_id, model, root)
         return model
 
     @staticmethod
     def _get(kind: str, object_id: str, root: Path) -> WirePayload:
         path = root / f"{object_id}.json"
+        if path.is_symlink():
+            raise RuntimeWorkspaceCorruption("workforce record cannot be a symlink")
         if not path.is_file():
             raise RuntimeWorkspaceCorruption(
                 f"organization workforce record is missing: {object_id}"
@@ -621,7 +642,7 @@ class RuntimeWorkforceResolver:
         _require_aware(allocated_at, "allocation time")
         self._validate_scheduling(work_item, assignment, lease, allocated_at)
         agent = self._workforce.get_agent(assignment.agent_id)
-        policy = self._workforce.get_policy(selection.policy_id)
+        policy = self._workforce.get_policy(selection.policy_id, version=selection.policy_version)
         self._validate_workforce(agent, policy, work_item, assignment, selection, allocated_at)
         compiled_spec.validate_integrity()
         if (

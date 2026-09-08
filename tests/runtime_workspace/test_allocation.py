@@ -54,7 +54,7 @@ class AllocationFacts(NamedTuple):
     resolver: RuntimeWorkforceResolver
 
 
-def allocation_facts(tmp_path: Path) -> AllocationFacts:
+def allocation_facts(tmp_path: Path, *, versioned: bool = False) -> AllocationFacts:
     org, _workspace, profile, project, binding = bind(tmp_path)
     store = FileOrganizationWorkforceStore(org)
     agent = AgentProfile(
@@ -69,6 +69,9 @@ def allocation_facts(tmp_path: Path) -> AllocationFacts:
     policy = model_policy()
     store.put_agent(agent)
     store.put_policy(policy)
+    if versioned:
+        policy = policy.model_copy(update={"version": "v2"})
+        store.put_policy(policy, versioned=True)
     task = runtime_task(project)
     compilation = SpecCompiler().compile(profile, task, (hard_rule(),), compiled_at=NOW)
     assert compilation.compiled_spec is not None
@@ -139,8 +142,10 @@ def allocation_facts(tmp_path: Path) -> AllocationFacts:
     )
 
 
+@pytest.mark.parametrize("versioned", [False, True])
 def test_resolver_builds_auditable_allocation_and_existing_agent_definition(
     tmp_path: Path,
+    versioned: bool,
 ) -> None:
     (
         binding,
@@ -153,7 +158,7 @@ def test_resolver_builds_auditable_allocation_and_existing_agent_definition(
         lease,
         selection,
         resolver,
-    ) = allocation_facts(tmp_path)
+    ) = allocation_facts(tmp_path, versioned=versioned)
 
     first = resolver.resolve(
         work_item=item,

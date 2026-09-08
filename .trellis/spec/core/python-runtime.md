@@ -1565,6 +1565,9 @@ RuntimeSession(config, *, agent_adapter=None, agent_definitions=None,
   `compiled.spec` ContextSource 注入；重复 source ID 拒绝；
 - workforce store 只在 organization workspace 保存 AgentProfile/ModelPolicy，envelope 和 payload
   SHA 都必须匹配；Project 不能复制 Agent 身份；
+- 生产模型切换使用不可变ModelPolicy版本，不改变Agent身份；resolver必须按
+  `ModelSelection.policy_id + policy_version`读取。精确版本、旧记录兼容、并发发布与错误矩阵见
+  `production-team-host.md`的Immutable policy revisions小节；不得读取隐式latest策略。
 - resolver 必须同时验证 WorkItem、RoleAssignment、active Lease、AgentProfile、ModelPolicy、
   ModelSelection、CompiledSpec、persisted Context 和 role/attempt/task/project identity；Context 必须
   含 exact CompiledSpec URI/content SHA；

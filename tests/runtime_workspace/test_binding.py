@@ -226,6 +226,38 @@ def test_organization_workforce_store_is_idempotent_and_detects_tampering(
         store.get_agent(agent.id)
 
 
+def test_policy_revisions_preserve_legacy_and_require_exact_version(tmp_path: Path) -> None:
+    org = organization(tmp_path)
+    store = FileOrganizationWorkforceStore(org)
+    old = model_policy()
+    store.put_policy(old)
+    legacy = org.directory("model-policies") / f"{old.id}.json"
+    original = legacy.read_bytes()
+    new = old.model_copy(
+        update={
+            "version": "v2",
+            "routes": tuple(
+                route.model_copy(update={"model": f"new-{route.model}"}) for route in old.routes
+            ),
+        }
+    )
+    assert store.put_policy(new, versioned=True) == new
+    assert store.put_policy(new, versioned=True) == new
+    assert store.get_policy(old.id) == old
+    assert store.get_policy(old.id, version=old.version) == old
+    assert store.get_policy(new.id, version=new.version) == new
+    assert legacy.read_bytes() == original
+    with pytest.raises(RuntimeWorkspaceConflict):
+        store.put_policy(new.model_copy(update={"routes": old.routes}), versioned=True)
+    with pytest.raises(RuntimeWorkspaceCorruption):
+        store.get_policy(old.id, version="missing")
+    revision = org.directory("model-policies") / f"{store._policy_key(new.id, new.version)}.json"
+    revision.write_text("{}", encoding="utf-8")
+    with pytest.raises(RuntimeWorkspaceCorruption):
+        store.get_policy(old.id, version=new.version)
+    assert store.get_policy(old.id) == old
+
+
 def model_policy() -> ModelPolicy:
     return ModelPolicy(
         id="model_policy_runtime_001",
