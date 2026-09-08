@@ -173,6 +173,14 @@ class _ScriptedDeliveryAdapter(AgentAdapter):
         self._workspace = workspace
 
     def run(self, request: AgentRequest) -> AgentResult:
+        assert (
+            self._definition.timeout_seconds
+            == {
+                AgentRole.CODER: 1_800,
+                AgentRole.QA: 1_200,
+                AgentRole.REVIEWER: 1_200,
+            }[request.role]
+        )
         now = datetime.now(UTC)
         identity = request.run_id.removeprefix("run_")
         producer = AgentProducer(
@@ -302,6 +310,23 @@ class _ScriptedDeliveryFactory(DeliveryRouteAdapterFactory):
     ) -> AgentAdapter:
         del route, context_resolver, config, environment
         return _ScriptedDeliveryAdapter(definition, binding.worktree.path)
+
+
+@pytest.mark.parametrize(
+    ("role", "expected"),
+    [
+        (AgentRole.CODER, 1_800),
+        (AgentRole.QA, 1_200),
+        (AgentRole.REVIEWER, 1_200),
+    ],
+)
+def test_production_delivery_timeout_is_bounded_by_role(role: AgentRole, expected: int) -> None:
+    assert production_backend._delivery_timeout_seconds(role) == expected
+
+
+def test_production_delivery_timeout_rejects_unsupported_role() -> None:
+    with pytest.raises(ValueError, match="unsupported production delivery role: orchestrator"):
+        production_backend._delivery_timeout_seconds(AgentRole.ORCHESTRATOR)
 
 
 @pytest.fixture

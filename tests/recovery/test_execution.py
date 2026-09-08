@@ -76,6 +76,14 @@ class OfflineRunner:
         timeout_seconds: float,
     ) -> CodexInvocationResult:
         assert self.request is not None and cwd == self.root
+        assert (
+            timeout_seconds
+            == {
+                AgentRole.CODER: 1_800,
+                AgentRole.QA: 1_200,
+                AgentRole.REVIEWER: 1_200,
+            }[self.request.role]
+        )
         if self.request.role is AgentRole.CODER:
             if self.reapply:
                 assert (cwd / "hello.txt").read_text() == "new base greeting\n"

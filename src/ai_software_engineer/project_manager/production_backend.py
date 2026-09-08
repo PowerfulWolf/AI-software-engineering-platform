@@ -1072,10 +1072,21 @@ def _agent_definitions(
             input_artifacts=_ROLE_INPUTS[phase.role],
             output_artifacts=(_ROLE_OUTPUT[phase.role],),
             max_retries=0,
-            timeout_seconds=600,
+            timeout_seconds=_delivery_timeout_seconds(phase.role),
             token_budget=_delivery_token_budget(),
         )
     return definitions
+
+
+def _delivery_timeout_seconds(role: AgentRole) -> int:
+    try:
+        return {
+            AgentRole.CODER: 1_800,
+            AgentRole.QA: 1_200,
+            AgentRole.REVIEWER: 1_200,
+        }[role]
+    except KeyError as exc:
+        raise ValueError(f"unsupported production delivery role: {role.value}") from exc
 
 
 def _delivery_token_budget() -> int:

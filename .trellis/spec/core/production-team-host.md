@@ -58,6 +58,7 @@ ProductionProjectDeliveryBackend.run_planner(...) -> PlanningStageResult
 ProductionProjectDeliveryBackend.commit_dispatch(...) -> DispatchCommitRecord
 ProductionProjectDeliveryBackend.run_delivery(...) -> RetryResult
 ProductionProjectDeliveryBackend.reconcile(...) -> None
+_delivery_timeout_seconds(role: AgentRole) -> int
 ```
 
 CLI production command:
@@ -250,6 +251,10 @@ this does not authorize rebasing old approval or QA/Review evidence in place.
 - delivery 完成只产生 `DONE + candidate_revision`；不 merge、不 push 目标保护分支、不 deploy。
 - production v0.1 每个 delivery role 的 Task attempt budget 是 1；自动路径不能安全继续时必须生成
   BLOCKED/WAITING_HUMAN 证据，而不是无限重试。
+- production role 执行仍有硬上限，但按职责分配：Coder 1,800 秒，QA 与 Reviewer 各 1,200 秒，
+  deterministic Orchestrator 60 秒。native 与 recovery delivery 都必须通过同一
+  `_agent_definitions` seam 获得这些预算；未知 delivery role fail closed。超时仍无 Artifact，dirty
+  worktree 仍保留且不得自动重试。未来的风险自适应或 operator 配置不能静默改变已批准 Run。
 - T042 production context 使用显式 32,000 input / 4,000 output reserve；完整规范索引和批准文档
   不截断，语言 marker 清单仅作 context-only 投影。低层 Runtime 默认仍为 12,000 input。
   签名、错误矩阵与回归点见 `python-runtime.md` 的 T042 小节；旧 manifest/审批不改写。
@@ -271,6 +276,7 @@ this does not authorize rebasing old approval or QA/Review evidence in place.
 | 项目规则冲突 | SpecCompiler | `WAITING_HUMAN`，不静默选边 |
 | target project dirty/not Git/HEAD 漂移 | delivery precondition | stable failure + preserved project/worktree |
 | Coder 未 commit、越权路径或 dirty | Codex/Responses Git guard | policy/invalid-output failure；不进入 QA |
+| production role 超过其 1,800/1,200 秒预算 | subprocess/adapter timeout guard | 无 Artifact；dirty 现场保留，Task BLOCKED |
 | QA/Reviewer candidate 不同或修改 worktree | dispatch/worktree/artifact guard | fail closed；不进入 DONE |
 | `status`/`resume` durable facts 损坏 | checkpoint reconciliation | corruption/drift failure；不覆盖原记录 |
 
@@ -286,6 +292,12 @@ body 或目标项目中的 secret。
   dispatch、worktree 和 typed artifact 仍走真实实现。只有显式 live smoke 才消费 GPT-5.5。
 - **Bad**：在每个项目复制 AgentProfile；把 DSN/API key 写入 JSON；Planner 直接提交分配；让同一 Agent
   同时当 Coder 和 Reviewer；在 main checkout 写代码；auth/invalid output 后静默换模型；自动 merge。
+- **Role-budget Good**：复杂 Coder 在 1,800 秒硬上限内完成候选提交与 Artifact，随后由各自拥有
+  1,200 秒上限的独立 QA、Reviewer 验证。
+- **Role-budget Base**：离线 scripted runner 只验证 `AgentDefinition → AgentRequest → subprocess`
+  传递的 exact timeout，不等待 wall clock，也不调用 provider。
+- **Role-budget Bad**：所有 delivery role 共享 600 秒，导致代码已改完但验证/提交被杀；或把上限改为
+  无界、超时后把 dirty worktree 当候选继续 QA。
 
 ## 6. Tests Required
 
@@ -308,7 +320,9 @@ body 或目标项目中的 secret。
   `test_openai_compatible.py`：request/response、Git、tool、error mapping、fallback allowlist 和 attempt replay；
 - `tests/project_manager/test_production_agents.py`：Product/Designer/Planner typed draft 和 exact lineage；
 - `tests/project_manager/test_production_backend.py`：真实 MySQL + 临时 Git + scripted team 到 DONE，独立
-  verifier worktrees 检查 exact candidate，主 checkout 零污染；
+  verifier worktrees 检查 exact candidate，主 checkout 零污染，并断言三个 delivery role 的生产预算；
+- `tests/recovery/test_execution.py`：offline Codex runner 直接断言 recovery 将相同 role timeout 传入
+  subprocess seam；
 - `scripts/smoke-live-gpt55.sh`：只有 `ASE_RUN_LIVE_TESTS=1` 才运行，不进默认 CI，不自动 merge；
 - 合并门禁：full pytest、Ruff check/format、strict mypy、offline build、`git diff --check`。
 
@@ -335,3 +349,31 @@ result = entry.start(StartProjectDelivery(project_root=absolute_git_root, requir
 前者让 secret、fake 执行和调度权限穿透用户入口；后者由唯一 production composition root 加载环境
 secret、MySQL、organization-owned team 和 policy-bound adapters，Planner 仍只能 preview，Project
 Manager 在 MySQL authority 下重新校验后 commit dispatch。
+
+### Role timeout budget
+
+#### Wrong
+
+```python
+AgentDefinition(role=phase.role, timeout_seconds=600, ...)
+```
+
+#### Correct
+
+```python
+AgentDefinition(
+    role=phase.role,
+    timeout_seconds=_delivery_timeout_seconds(phase.role),
+    ...,
+)
+```
+
+固定职责预算同时解决两个风险：复杂实现不会被过早杀死，每个真实模型调用又仍受领域层
+`1..3600` 秒边界约束。新增角色必须先获得显式预算和测试；不得回退到共享默认值。
+
+Root cause (D/E): fast scripted fixtures hid the implicit assumption that a shared 600-second
+whole-role budget was sufficient. A real Coder reached every authorized file but was killed before
+verification, commit, and Artifact sealing; the full repository test suite alone consumes most of
+that budget. Prevention is three-layered: a pure role contract test, production adapter assertions,
+and recovery's offline command-runner assertion. Model latency must not be tested with wall-clock
+sleeps, and a future configurable/adaptive policy must preserve a bounded, approval-visible value.
