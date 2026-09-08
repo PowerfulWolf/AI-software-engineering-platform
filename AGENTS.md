@@ -204,6 +204,8 @@ subprocess/filesystem handle。
 - 清理前确认 artifact 已持久化且 worktree 无未保存变更。
 - 中断改动捕获是只读事实，不是批准或 candidate；不能因额度恢复而重置终态 Task 或接受任意
   dirty worktree。恢复扩展遵守 `.trellis/spec/core/delivery-recovery.md`，旧执行和失败历史须保留。
+- 恢复冲突只能在新计划显式批准 `input_mode=coder_reapply` 后交给 Coder：从干净基线读取
+  required 的完整旧补丁并适配。不得在旧批准下自动切换、静默截断补丁或让编排者手工解需求冲突。
 
 ## 失败与重试
 

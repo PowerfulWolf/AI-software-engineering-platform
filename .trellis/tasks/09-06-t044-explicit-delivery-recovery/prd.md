@@ -183,3 +183,35 @@ recovery allocation is stored, keep an upgraded MySQL reader until records are h
 User explicitly asked to finish the three integration steps and then attempt real delivery in this
 same work stream. Do not stop after another foundation increment. If exact human approval is missing,
 prepare and show the real plan and ask for that concrete approval, not generic permission to continue.
+
+## D3: Coder-owned reapplication after base conflicts (approved 2026-09-07)
+
+Real plan18977a93 was approved but its seed preflight rejected a production_host.py import conflict;
+no model was invoked and both old edits and the clean new checkout remain. User approved adding
+Coder-owned conflict recovery. Reuse this task; Trellis task scripts are absent in this repository.
+
+Decision: optional `RecoveryPlan.input_mode="coder_reapply"`, explicitly selected at proposal,
+hash/approval bound. Legacy absent mode still means strict Git seed with conflict rejection.
+In reapply mode the new Coder starts at clean target base with the entire captured patch in one
+required Coder-only ContextSource. Coder adapts changes to current code and produces a normal
+candidate. Existing seed receipt binds the empty initial capture; it never claims patch application.
+Alternative: unmerged index/conflict markers would require broader Git/admission support; excluded.
+Alternative: Astra manually resolving the requirement would defeat the requested self-delivery test.
+
+Patterns: Git seed capture/verify and immutable seed receipt; ContextSource required/roles routing;
+Codex initial admission callback. No new dependencies, models, DAG, database or verdict protocol.
+Scope: recovery modules/tests, delivery-recovery schema, recovery spec/contracts/CLI docs, AGENTS,
+task and archive. Do not edit requirement files in either original or fresh worktree.
+
+Acceptance:
+- [x] Absent-mode historical wire/digest remains unchanged; mode change changes Task/approval identity.
+- [x] Clean initial capture only in reapply mode; dirty/unmerged/drifted target rejects without reset.
+- [x] Full exact patch URI/content/hash, not truncated, verified before first provider invocation.
+- [x] Missing/changed/oversized required context rejects; no implicit mode fallback or extra authority.
+- [x] Real Git/MySQL offline conflict fixture reaches independent QA/Review/DONE, old history unchanged.
+- [x] Full regression/lint/type/build (890 passed); see D3 archive for final validation.
+- [ ] New exact production plan/approval before live execution and actual role delivery.
+
+Future cases (out of scope): recovery-of-recovery, automatic parent adoption, arbitrary rebase/merge,
+binary/add/delete capture, prompt-budget enlargement and automatic approval. Rollback: isolated platform
+commit revert before new-mode records exist; readers without mode support must reject rather than guess.

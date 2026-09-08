@@ -29,10 +29,12 @@ from ai_software_engineer.project_manager.production_delivery import (
     DeliveryRouteAdapterFactory,
 )
 from ai_software_engineer.recovery.allocation import RecoveryAllocator
+from ai_software_engineer.recovery.context import recovery_context_sources
 from ai_software_engineer.recovery.current import NativeRecoveryFactsVerifier
 from ai_software_engineer.recovery.models import (
     CapturedChanges,
     RecoveryApprovalCommand,
+    RecoveryInputMode,
     RecoveryPlan,
     RecoveryRejected,
     RecoveryScope,
@@ -148,7 +150,13 @@ class NativeRecoveryEntry:
         self.config, self.environment, self.backend = config, dict(environment), backend
 
     def propose(
-        self, *, project_root: str, delivery_id: str, failed_run_id: str, failed_context_id: str
+        self,
+        *,
+        project_root: str,
+        delivery_id: str,
+        failed_run_id: str,
+        failed_context_id: str,
+        input_mode: RecoveryInputMode | None = None,
     ) -> tuple[RecoveryPlan, Path]:
         prepared = self.backend.prepare(project_root).preparation
         if prepared is None:
@@ -177,6 +185,7 @@ class NativeRecoveryEntry:
             old, original.permissions, denied_paths=original.denied_paths
         )
         plan = RecoveryPlan.create(
+            input_mode=input_mode,
             source=original.source,
             capture=CapturedChanges.from_capture(capture),
             target_base_revision=manager._run_git(("rev-parse", "HEAD"), cwd=Path(project_root)),
@@ -357,17 +366,5 @@ class NativeRecoveryEntry:
             draft.facts.original.design,
             draft.facts.original.plan,
             route_adapters=factory,
-            extra_context=(
-                *extra,
-                ContextSource(
-                    source_id="recovery.origin",
-                    uri=f"recovery://{plan.plan_sha256}",
-                    required=True,
-                    content="This is a new recovery Task seeded with approved interrupted edits "
-                    f"from {plan.source.task_id}. Inspect and finish the edits, verify, "
-                    "commit a candidate and produce your own report. "
-                    "The seed is not a completed implementation or QA/Review verdict.",
-                    priority=10,
-                ),
-            ),
+            extra_context=(*extra, *recovery_context_sources(plan)),
         )

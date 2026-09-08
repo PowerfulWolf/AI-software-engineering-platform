@@ -94,6 +94,8 @@ SafeText = Annotated[
     str, StringConstraints(min_length=1, max_length=2000), AfterValidator(_safe_text)
 ]
 
+RecoveryInputMode = Literal["coder_reapply"]
+
 
 class CapturedFile(DomainModel):
     path: RelativePath
@@ -199,6 +201,8 @@ class RecoverySource(DomainModel):
 class RecoveryPlan(DomainModel):
     kind: Literal["recovery_plan"] = "recovery_plan"
     schema_version: Literal["v0.1"] = "v0.1"
+    # None is omitted from wire/digest, preserving historical strict-seed approvals.
+    input_mode: RecoveryInputMode | None = None
     source: RecoverySource
     capture: CapturedChanges
     target_base_revision: FullCommit

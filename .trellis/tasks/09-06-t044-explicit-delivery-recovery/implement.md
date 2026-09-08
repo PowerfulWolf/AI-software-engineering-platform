@@ -79,3 +79,16 @@ Final validation: full suite **884 passed /292.03s** (dedicated MySQL test DB, i
 recovery); final read-only Task status/CLI/record tests **4 passed /71.77s**; Runtime/Codex/CLI
 regression **36 passed /1.60s**. Ruff/format505files, strict Mypy284files, offline lock/build and
 diff-check passed. Source branch `feat/t044-recovery-execution`; no business execution yet.
+
+## D3 implementation — 2026-09-08
+
+Added optional approved mode, CLI flag, clean initial-capture branch, required Coder patch source and
+exact provider-admission guard. Real Git/MySQL offline strict/reapply/joint cases initially all passed
+(3 passed /206.88s). Added actual strict conflict rejection and missing-patch admission probes to the
+reapply fixture; these are included in the upcoming final full regression. Six fast context/mode/CLI
+tests passed. All testing uses offline providers and the dedicated test database, not business data.
+
+Final full regression **890 passed /370.71s**, including the added conflict and admission probes.
+Last strengthened Schema/budget tests **3 passed /0.31s**; Ruff/format508files, strict Mypy286files,
+offline lock/build and diff-check passed. New code revalidates real historical plan18977a93 without
+changing its hash/capture. Cross-layer quality review complete; no target feature code or real models.

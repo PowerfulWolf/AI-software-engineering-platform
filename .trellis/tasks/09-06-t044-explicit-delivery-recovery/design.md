@@ -156,3 +156,14 @@ Wire schema: recovery-execution.schema.json for dispatch, seed, invocation. Sour
 remain trusted organization infrastructure, not a sandbox against arbitrary filesystem/DB writers.
 Recovery does not silently resume the terminal parent or perform multi-repository integration adoption.
 New recovery evaluation events persist but are excluded from fresh-demand ADR to avoid double counting.
+
+## D3: Explicit clean-base Coder reapplication
+
+The user approved Coder-owned conflict handling after real strict seed18977a93 refused an import
+conflict. Add optional input_mode=coder_reapply to the approved plan; None is omitted so historical
+digests do not change. No automatic fallback or unmerged-index support. In this mode seed captures
+the clean new target without applying code; existing record lineage binds its meaning to the plan.
+The entire old patch is required Coder-only context. Provider admission verifies exact content/URI/
+SHA/non-truncation before the invocation receipt. Default seed and all current-fact/independent
+verdict gates stay unchanged. Executable matrix: delivery-recovery spec D3; scope and alternatives:
+PRD D3. No platform implementation of the target feature and no historical metadata mutation.

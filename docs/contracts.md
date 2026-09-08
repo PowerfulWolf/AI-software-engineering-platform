@@ -643,6 +643,11 @@ UNKNOWN；planned_model 不代替 ModelRouteAttempt 的实际模型。读取不�
 `inspect` 只读；`propose` 会通过正常入口准备当前项目并持久化提案，不调用模型。
 批准必须确认 exact plan SHA、原方案在新基线上的复用和捕获修改。执行前再核对原始与当前事实。
 
+`RecoveryPlan.input_mode` 可显式为 `coder_reapply`：在干净新基线启动 Coder，通过 required、
+Coder-only 的 `recovery.patch` ContextSource 交付完整旧补丁，让 Coder 适配冲突。模式参与 plan SHA；
+省略字段保持历史哈希和严格 Git seed 行为，不自动 fallback。此模式的 seed receipt 记录空的初始
+改动捕获，不表示补丁已经应用；非空捕获拒绝。准入要求补丁 URI、正文、SHA 完全一致且未截断。
+
 执行复用既有 Scheduler/ModelRouter、Task materializer、RuntimeSession 和角色 worktree。
 只有匹配 seed receipt 的 Coder 初始修改可获准，普通任务仍要求干净工作树。
 原联合需求上下文继续传给新角色；QA/Reviewer 仍独立验证同一 candidate SHA。

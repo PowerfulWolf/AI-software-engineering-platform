@@ -17,10 +17,10 @@ from ai_software_engineer.agents import (
     StoredContextResolver,
 )
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
-from ai_software_engineer.context import FileContextStore
+from ai_software_engineer.context import FileContextBuilder, FileContextStore
 from ai_software_engineer.domain import AgentDefinition, AgentRole, TaskStatus
 from ai_software_engineer.evaluation import CaseStartedEvent, FileEvaluationEventStore
-from ai_software_engineer.git import WorktreeCaptureRejected
+from ai_software_engineer.git import WorktreeCaptureRejected, WorktreeSeedRejected
 from ai_software_engineer.multi_directory.service import CreateRequirementProject
 from ai_software_engineer.multi_directory.store import JointJournal
 from ai_software_engineer.orchestration.retry import RetryDeliveryResult
@@ -54,8 +54,16 @@ from tests.recovery.test_native import InterruptedFactory, _snapshot
 
 
 class OfflineRunner:
-    def __init__(self, definition: AgentDefinition, root: Path, calls: list[AgentRequest]) -> None:
+    def __init__(
+        self,
+        definition: AgentDefinition,
+        root: Path,
+        calls: list[AgentRequest],
+        *,
+        reapply: bool = False,
+    ) -> None:
         self.definition, self.root, self.calls = definition, root, calls
+        self.reapply = reapply
         self.request: AgentRequest | None = None
 
     def run(
@@ -69,7 +77,12 @@ class OfflineRunner:
     ) -> CodexInvocationResult:
         assert self.request is not None and cwd == self.root
         if self.request.role is AgentRole.CODER:
-            assert (cwd / "hello.txt").read_text() == "partially implemented\n"
+            if self.reapply:
+                assert (cwd / "hello.txt").read_text() == "new base greeting\n"
+                assert git(cwd, "status", "--porcelain") == ""
+                assert "recovery.patch" in stdin and "partially implemented" in stdin
+            else:
+                assert (cwd / "hello.txt").read_text() == "partially implemented\n"
             assert "recovery.origin" in stdin
         self.calls.append(self.request)
         result = _ScriptedDeliveryAdapter(self.definition, cwd).run(self.request)
@@ -109,6 +122,18 @@ class OfflineAdapter:
                 with pytest.raises(RecoveryRejected):
                     self.seed.authorize(bad, root)
             receipt = self.seed.store.get_seed(self.seed.dispatch.recovery_plan_sha256)
+            if self.runner.reapply:
+                without_patch = FileContextBuilder(self.runner.root, request.permissions).build(
+                    self.seed.dispatch.task, AgentRole.CODER, attempt=1
+                )
+                wrong_context = self.seed.contexts.put(without_patch)
+                with pytest.raises(RecoveryRejected, match="complete approved recovery patch"):
+                    self.seed.authorize(
+                        request.model_copy(
+                            update={"context_manifest_id": wrong_context.context_id}
+                        ),
+                        self.runner.root,
+                    )
             before = (self.runner.root / "hello.txt").read_bytes()
             (self.runner.root / "hello.txt").write_text("unexpected drift\n")
             with pytest.raises(WorktreeCaptureRejected):
@@ -135,7 +160,13 @@ class OfflineFactory:
         config: ProductionConfig,
         environment: Mapping[str, str],
     ) -> AgentAdapter:
-        runner = OfflineRunner(definition, binding.worktree.path, self.calls)
+        plan = self.seed.store.get_plan(self.seed.dispatch.recovery_plan_sha256)
+        runner = OfflineRunner(
+            definition,
+            binding.worktree.path,
+            self.calls,
+            reapply=plan.input_mode == "coder_reapply",
+        )
         return OfflineAdapter(
             CodexCliAgentAdapter(
                 workspace_root=binding.worktree.path,
@@ -155,8 +186,9 @@ class OfflineFactory:
 
 
 @pytest.mark.mysql
+@pytest.mark.parametrize("reapply", [False, True])
 def test_recovery_complete_native_delivery_and_preserve_failed_history(
-    tmp_path: Path, mysql_dsn: str
+    tmp_path: Path, mysql_dsn: str, reapply: bool
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -196,12 +228,16 @@ def test_recovery_complete_native_delivery_and_preserve_failed_history(
     recovery = host.recovery_entry()
     (project / "platform-fix.txt").write_text("independent fix\n")
     _git("add", "platform-fix.txt", cwd=project)
+    if reapply:
+        (project / "hello.txt").write_text("new base greeting\n")
+        _git("add", "hello.txt", cwd=project)
     _git("commit", "-m", "platform fixes", cwd=project)
     plan, path = recovery.propose(
         project_root=str(project),
         delivery_id=failed.delivery_id,
         failed_run_id=original_run.run_id,
         failed_context_id=original_run.context_manifest_id,
+        input_mode="coder_reapply" if reapply else None,
     )
     store, loaded = recovery.open_plan(path)
     assert loaded == plan
@@ -222,6 +258,20 @@ def test_recovery_complete_native_delivery_and_preserve_failed_history(
     factories: list[OfflineFactory] = []
 
     def factory(seed: RecoverySeedService) -> OfflineFactory:
+        if reapply:
+            # Prove this exact input really conflicts on the strict Git path. Preflight
+            # must leave the already captured clean target unchanged for Coder reapplication.
+            receipt = seed.store.get_seed(plan.plan_sha256)
+            with pytest.raises(WorktreeSeedRejected):
+                seed.manager.seed_changes(
+                    plan.capture.to_capture(),
+                    receipt.capture.to_capture().worktree,
+                    plan.permissions,
+                    seed.permissions,
+                    source_denied_paths=plan.denied_paths,
+                    target_denied_paths=plan.denied_paths,
+                )
+            seed.verify(receipt)
         sidecar = path.parent.parent.parent
         authority = MySqlDispatchAuthority(
             mysql_dsn,
@@ -244,6 +294,7 @@ def test_recovery_complete_native_delivery_and_preserve_failed_history(
 
     result = recovery.execute(path, route_factory=factory)
     assert result.task.status is TaskStatus.DONE, result
+    assert isinstance(result, RetryDeliveryResult)
     assert read_recovery_task(config, environment, store, plan) == result.task
     assert len(result.artifact_ids) == 4
     assert [r.role for r in factories[0].calls] == [
@@ -252,7 +303,12 @@ def test_recovery_complete_native_delivery_and_preserve_failed_history(
         AgentRole.REVIEWER,
     ]
     assert factories[0].calls[1].source_revision == factories[0].calls[2].source_revision
-    assert (project / "hello.txt").read_text() == "hello\n"
+    assert (project / "hello.txt").read_text() == ("new base greeting\n" if reapply else "hello\n")
+    assert (
+        git(project, "show", f"{result.candidate_revision}:platform-fix.txt") == "independent fix"
+    )
+    if reapply:
+        assert not store.get_seed(plan.plan_sha256).capture.patch
     assert git(project, "status", "--porcelain") == ""
     assert _snapshot(original_tree) == old_bytes
     assert (

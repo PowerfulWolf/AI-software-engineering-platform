@@ -29,6 +29,12 @@ def propose(
     delivery: Annotated[str, typer.Option()],
     run: Annotated[str, typer.Option()],
     context: Annotated[str, typer.Option()],
+    coder_reapply: Annotated[
+        bool,
+        typer.Option(
+            help="Start clean and let Coder adapt the approved patch; requires new approval."
+        ),
+    ] = False,
 ) -> None:
     """Prepare current base and capture the stopped original executor; no model call."""
     try:
@@ -40,6 +46,7 @@ def propose(
                 delivery_id=delivery,
                 failed_run_id=run,
                 failed_context_id=context,
+                input_mode="coder_reapply" if coder_reapply else None,
             )
         )
     except Exception:
@@ -51,6 +58,7 @@ def propose(
                 "plan_sha256": plan.plan_sha256,
                 "new_task_id": plan.new_task_id,
                 "target_base": plan.target_base_revision,
+                "input_mode": plan.input_mode or "git_seed",
                 "changed_files": [f.path for f in plan.capture.files],
             },
             indent=2,

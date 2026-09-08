@@ -222,6 +222,8 @@ class FileRecoveryStore:
             raise RecoveryRejected("seed target differs from authorized Task")
         if target.role.value != "coder" or target.attempt != 1:
             raise RecoveryRejected("seed is not the first recovery Coder")
+        if plan.input_mode == "coder_reapply" and (record.capture.patch or record.capture.files):
+            raise RecoveryRejected("Coder reapplication initial capture must be clean")
 
     def get_invocation(self, plan_sha256: str) -> RecoveryInvocationRecord:
         record = self._get("invocation", plan_sha256, RecoveryInvocationRecord)

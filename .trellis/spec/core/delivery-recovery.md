@@ -486,3 +486,57 @@ seed drift, invocation lineage and scope-lock contention. Schema registry requir
 Testing note: accumulated pytest temporary Git trees can make automatic old-temp cleanup slow.
 Use a fresh `mktemp -d` path as `--basetemp` for the test run; never delete a broad workspace or
 mistake cleanup latency for a model call. Diagnose via bounded stack/progress, not repeated retries.
+
+## D3: Explicit Coder reapplication on a clean base
+
+### Scope / Signatures
+
+For interrupted edits conflicting with a newer approved target. `RecoveryPlan.input_mode` is
+optional `Literal["coder_reapply"] | None`; omission retains the historical strict Git seed path.
+`NativeRecoveryEntry.propose(..., input_mode=None)`; CLI `ase recovery propose ... --coder-reapply`.
+`recovery_context_sources(plan) -> tuple[ContextSource, ...]` supplies origin and optional patch.
+`RecoverySeedService.seed/authorize` signatures and receipt schemas remain unchanged.
+
+### Contracts
+
+Mode participates in plan digest, new Task identity and exact human approval. None is omitted from
+wire/digest; historical plans retain their identity. Never fall back to reapplication after a failed
+Git seed under an old approval. Reapply starts at the clean exact target base, without git apply or
+conflict markers. The seed record captures that empty initial workspace, not applied changes; store
+and admission reject nonempty captures for this mode. Current source/target/permissions still validate.
+
+The original full UTF-8 patch becomes required Coder-only `recovery.patch` with URI
+`recovery://<plan-sha>/patch/<capture-sha>`. Ordinary routing/redaction/budget rules still apply;
+immediately before provider admission require exact section URI/content/SHA and `truncated=false`.
+Missing, redacted, truncated or altered patch rejects; overflow never silently drops it or increases
+budget. Origin explains clean-base reapplication and treats old edits as untrusted input, not a
+candidate/verdict. No old-worktree access or permission widening is granted to the Coder.
+QA/Reviewer receive approved solution and the new candidate/report, not a second copy of the patch.
+The normal candidate cleanliness/path checks, at-most-once invocation and independent verdict gates
+are unchanged. This resolves code conflicts, not project normative conflicts (still human-owned).
+
+### Validation matrix / examples
+
+| Case | Result |
+|---|---|
+| No mode, Git conflict | Reject before provider, preserve source and clean target |
+| Approved coder_reapply, same conflict | Clean target receipt + full patch context; Coder may adapt it |
+| Mode altered under old digest/approval | Integrity/authorization rejection |
+| Dirty target or forged nonempty receipt | Reject, never clean/reset |
+| Missing/altered/truncated patch section | Reject before invocation receipt/provider |
+| Required patch exceeds context cap | Existing budget BLOCKED; no provider or silent partial input |
+| Invocation already recorded | Reject rerun; preserve history |
+
+Good: real Git conflict fixture preserves newer base changes while offline Coder adapts original
+edits and independent QA/Review validate one candidate. Base: absent mode preserves old digest and
+strict seed behavior. Bad: catch every seed exception and launch Coder anyway.
+
+### Tests / Wrong vs Correct
+
+Tests cover mode Schema/digest/approval separation, required/role-scoped exact patch, budget overflow,
+dirty receipt rejection, provider-admission tamper rejection, real conflict full delivery and original
+history preservation. Reuse normal Git/Codex tests for dirty and candidate guards.
+
+Wrong: `except WorktreeSeedRejected: start_coder()`.
+Correct: explicitly propose/approve `input_mode="coder_reapply"`, capture a clean fresh base, route
+and validate the complete approved patch, then use the normal Coder→QA→Reviewer runtime.

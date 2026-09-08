@@ -141,6 +141,18 @@ ase recovery inspect --plan /absolute/sidecar/state/recovery-delivery_ID/plan-SH
 
 沿用 `ASE_CONFIG`、配置中指定的 MySQL DSN 环境变量及已登录 Codex；配置必须允许真实模型运行，
 且本版恢复仅支持一条 Codex route。提案/检查/批准都不调用模型；`run` 才执行新的串行角色。
+
+如果旧补丁与新基线冲突，可以重新提案时加 `--coder-reapply`，然后批准**新计划**：
+
+```bash
+ase recovery propose --project /absolute/project --delivery delivery_ID \
+  --run run_ID --context ctx_ID --coder-reapply
+```
+
+这个模式不会先应用补丁：Coder 从干净的新基线开始，收到完整旧补丁并自行适配、处理代码冲突。
+省略该选项仍使用原来的 Git 自动继承，冲突即停止；不会静默切换模式。旧批准不能授权新模式。
+补丁只传给 Coder，内容缺失、变化或超出上下文预算都拒绝启动，不能截断后继续。
+
 `run` 输出新 Task、candidate SHA、artifact/context/run/event IDs 或 BLOCKED 原因；退出码
 0 表示 DONE，3 表示本次交付未完成，2 表示入口拒绝。交付分支为 `ai/<新TaskID>/attempt-1`。
 

@@ -7,6 +7,7 @@ from ai_software_engineer.context import FileContextStore
 from ai_software_engineer.domain import AgentPermissions, AgentRole
 from ai_software_engineer.git import GitWorktreeManager, WorktreeRef
 from ai_software_engineer.project_manager.dispatch import RecoveryDispatchRecord
+from ai_software_engineer.recovery.context import validate_reapply_context
 from ai_software_engineer.recovery.models import CapturedChanges, RecoveryRejected
 from ai_software_engineer.recovery.records import RecoveryInvocationRecord, RecoverySeedRecord
 from ai_software_engineer.recovery.sealing import RecoveryTaskSealingService
@@ -35,14 +36,23 @@ class RecoverySeedService:
         try:
             receipt = self.store.get_seed(plan.plan_sha256)
         except RecoveryRecordMissing:
-            capture = self.manager.seed_changes(
-                plan.capture.to_capture(),
-                target,
-                plan.permissions,
-                self.permissions,
-                source_denied_paths=plan.denied_paths,
-                target_denied_paths=plan.denied_paths,
-            )
+            if plan.input_mode == "coder_reapply":
+                capture = self.manager.capture_changes(
+                    target, self.permissions, denied_paths=plan.denied_paths
+                )
+                if capture.patch:
+                    raise RecoveryRejected(
+                        "Coder reapplication requires a clean initial worktree"
+                    ) from None
+            else:
+                capture = self.manager.seed_changes(
+                    plan.capture.to_capture(),
+                    target,
+                    plan.permissions,
+                    self.permissions,
+                    source_denied_paths=plan.denied_paths,
+                    target_denied_paths=plan.denied_paths,
+                )
             receipt = self.store.put_seed(
                 RecoverySeedRecord.create(
                     plan_sha256=plan.plan_sha256,
@@ -87,6 +97,7 @@ class RecoverySeedService:
             or context.attempt != 1
         ):
             raise RecoveryRejected("Coder context differs from authorized seed")
+        validate_reapply_context(plan, context)
         self.verify(receipt)
         try:
             self.store.get_invocation(plan.plan_sha256)

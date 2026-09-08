@@ -216,6 +216,14 @@
     "RecoveryPlan": {
       "additionalProperties": false,
       "properties": {
+        "input_mode": {
+          "anyOf": [
+            {"const": "coder_reapply", "type": "string"},
+            {"type": "null"}
+          ],
+          "default": null,
+          "title": "Input Mode"
+        },
         "kind": {
           "const": "recovery_plan",
           "default": "recovery_plan",

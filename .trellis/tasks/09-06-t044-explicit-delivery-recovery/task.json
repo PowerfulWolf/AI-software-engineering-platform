@@ -1,1 +1,1 @@
-{"id":"T044","title":"Explicit delivery recovery after provider interruption","status":"in_progress","phase":"recovery_execution_offline_verified","remaining":["exact real target recovery plan and human approval","real Coder QA Reviewer validation"]}
+{"id":"T044","title":"Explicit delivery recovery after provider interruption","status":"in_progress","phase":"coder_reapply_offline_verified","remaining":["new exact real target recovery plan and human approval","real Coder QA Reviewer validation"]}
