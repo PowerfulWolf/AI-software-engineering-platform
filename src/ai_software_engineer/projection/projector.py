@@ -14,7 +14,7 @@ from ai_software_engineer.domain.artifact import (
     QaReportArtifact,
     ReviewReportArtifact,
 )
-from ai_software_engineer.domain.enums import OrganizationRole
+from ai_software_engineer.domain.enums import AgentRole, OrganizationRole
 from ai_software_engineer.domain.event import StateEvent
 from ai_software_engineer.domain.task import Task, TaskId
 from ai_software_engineer.domain.workforce import (
@@ -61,6 +61,12 @@ _RUN_STATUS_BY_OUTPUT: Final[dict[ArtifactOutputStatus, RunProjectionStatus]] = 
     ArtifactOutputStatus.VALID: RunProjectionStatus.SUCCEEDED,
     ArtifactOutputStatus.INVALID: RunProjectionStatus.INVALID,
     ArtifactOutputStatus.NOT_PRODUCED: RunProjectionStatus.FAILED,
+}
+
+_ORGANIZATION_ROLE_BY_DELIVERY_ROLE: Final[dict[AgentRole, OrganizationRole]] = {
+    AgentRole.CODER: OrganizationRole.CODER,
+    AgentRole.QA: OrganizationRole.QA,
+    AgentRole.REVIEWER: OrganizationRole.REVIEWER,
 }
 
 
@@ -451,11 +457,24 @@ class RunProjectionBuilder:
             agent_leases = sorted(lease_by_agent.get(agent_id, ()), key=lambda item: item.lease_id)
             roles = set(profile.eligible_roles if profile else ())
             roles.update(
-                OrganizationRole(item.role.value) for item in agent_runs if item.role is not None
+                organization_role
+                for item in agent_runs
+                if item.role is not None
+                and (organization_role := _ORGANIZATION_ROLE_BY_DELIVERY_ROLE.get(item.role))
+                is not None
             )
             roles.update(
-                OrganizationRole(item.role.value) for item in agent_leases if item.role is not None
+                organization_role
+                for item in agent_leases
+                if item.role is not None
+                and (organization_role := _ORGANIZATION_ROLE_BY_DELIVERY_ROLE.get(item.role))
+                is not None
             )
+            # The legacy planning-mode orchestrator is a deterministic control identity, not a
+            # long-lived organization member. Keep its Run in Task history without inventing an
+            # Agent card or reintroducing OrganizationRole.ORCHESTRATOR.
+            if profile is None and not roles:
+                continue
             models = {item.model for item in agent_runs if item.model is not None}
             result.append(
                 AgentProjection(

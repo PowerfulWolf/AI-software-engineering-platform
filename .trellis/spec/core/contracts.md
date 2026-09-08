@@ -31,8 +31,8 @@ ProjectWorkspace.directory(name: WorkspaceDirectory) -> Path
 `AgentRequest` 必须携带 `task_id`、`run_id`、`attempt`、`source_revision`、`context_manifest_id`、permissions 和 output schema；`AgentResult` 不能直接改变 Task 状态。
 
 `source_revision` 在 request/result identity 中表示 Agent Run 的输入 revision。Orchestrator、QA、
-Reviewer 输出仍必须与它完全相同；Coder 是唯一创建新 commit 的角色，其
-implementation-report Artifact 可以使用新 revision，但必须满足
+Reviewer 输出仍必须与它完全相同；Coder 是唯一决定代码改动的角色，Codex adapter 可由平台
+finalizer 在机器策略校验后创建新 commit。最终 implementation-report Artifact 可以使用新 revision，但必须满足
 `artifact.source_revision == artifact.content.commit_sha`。后续 QA/Reviewer 的 request/result
 必须严格绑定该 candidate。
 
@@ -61,7 +61,8 @@ Task constraint 冲突，必须产生 `SPEC_CONFLICT` 并使 WorkItem 进入 `WA
 ### Role boundaries
 
 - `orchestrator`：读全量元数据，写状态/索引，不写业务代码；
-- `coder`：写允许的生产代码/单元测试，输出 implementation-report，不写 verdict；
+- `coder`：写允许的生产代码/单元测试；未完成输出 coder-progress，完成输出 provisional
+  implementation-report，由平台 CandidateCommit Skill 创建候选；不写 verdict；
 - `qa`：读候选代码，可写测试目录，输出 qa-report，不写生产代码；
 - `reviewer`：只读候选代码和上游 artifact，输出 review-report，不改仓库。
 
@@ -71,7 +72,10 @@ Task constraint 冲突，必须产生 `SPEC_CONFLICT` 并使 WorkItem 进入 `WA
 
 ### Artifact boundary
 
-Artifact 通过 `schemas/artifact.schema.json` 的共同 envelope 传递；业务内容分别由 `plan.schema.json`、`implementation-report.schema.json`、`qa-report.schema.json`、`review-report.schema.json` 约束。Schema 变化必须同步更新 `docs/contracts.md`、`AGENTS.md` 和 contract fixtures。
+Artifact 通过 `schemas/artifact.schema.json` 的共同 envelope 传递；业务内容分别由 `plan.schema.json`、
+`coder-progress.schema.json`、`implementation-report.schema.json`、`qa-report.schema.json`、
+`review-report.schema.json` 约束；Coder 的二选一输出入口为 `coder-output.schema.json`。Schema 变化
+必须同步更新 `docs/contracts.md`、`AGENTS.md` 和 contract fixtures。
 
 `FileArtifactStore` 只接受 `schema_version=v0.1`、typed union 校验通过、`integrity.validated=true` 且 canonical digest 匹配的 Artifact。Digest 排除顶层 `integrity` 避免循环；`seal_artifact` 返回带 digest 和 `validated_at` 的新 immutable Artifact。
 
@@ -308,6 +312,11 @@ Planner Agent 可调用 read-only Scheduler/ModelRouter preview Skills，把当�
 context capacity 形成 feasibility evidence；preview 不创建 Assignment/Lease/ModelSelection。Project
 Manager 的 `commit_dispatch` 必须基于当前 facts 重新运行同一 engines，typed decision 成功后才
 持久化具体分配。这样 Planner 可以做真实可行的计划，但不能既计划又批准自己的资源方案。
+
+T046 起，Planner 对任务流转与派发策略负责，但常驻轮询、数据库锁、Lease 心跳和超时回收属于
+deterministic Dispatcher application service。正常结果按 Planner 已批准的 ExecutionPlan 与路由规则
+自动推进；只有计划漂移、连续失败、能力/容量冲突、预算升级或人工门禁才重新启动 Planner Agent。
+Dispatcher 不是 AgentProfile，也不得依赖模型额度才能维持队列安全。
 
 上游 stage artifacts 固定为 `ProjectPreparation → ProjectRequest → ProductSpec +
 ProductSpecApproval → TechnicalDesign → ExecutionPlan`。Product Agent 不能创建 Approval；只有用户对
@@ -791,4 +800,92 @@ qa = git.checkout("candidate")  # movable ref，未消费 dispatch
 result = project_manager.start(StartProjectDelivery(project_root=root, requirement=text))
 # host 从 sidecar/organization 自动组合内部路径；人工只确认 exact Product checkpoint
 bindings = worktrees.open_verifiers(dispatch, full_candidate_sha, assigned_definitions)
+```
+
+## 16. Scenario: bounded Coder continuation and organization-owned production team
+
+### 16.1 Scope / Trigger
+
+当 Coder 无法在一次有界 Run 内完成实现，或 production Host 创建/打开组织 workspace 时适用。
+目标是保留可验证的实现进度并重新调度同一长期成员，同时把“保存草稿”和“创建候选提交”拆成
+两个明确权限边界。单 Task 仍严格串行，不引入 DAG、后台消息队列或自动 merge。
+
+### 16.2 Signatures
+
+```python
+CandidateCommitSkill.changed_paths() -> tuple[str, ...]
+CandidateCommitSkill.finalize(request: CandidateCommitRequest) -> CandidateCommitResult
+validate_artifact_payload(payload: object) -> Artifact
+production_organization_team(config: ProductionConfig) \
+    -> tuple[tuple[AgentProfile, ...], ModelPolicy]
+RetryingOrchestrator.run_task(task_id: TaskId) -> RetryResult
+```
+
+### 16.3 Contracts
+
+- Coder output schema 是 `schemas/coder-output.schema.json`，只能为 `coder-progress` 或
+  `implementation-report`；其他 role 仍只有一个合法 output kind。
+- `CoderProgressArtifact.content` 必须包含 `status=CONTINUE_REQUIRED`、与 attempt 相等的
+  `checkpoint_sequence`、精确 `changed_files`、互不重叠的 completed/remaining step IDs、tests 和
+  非空 next actions。Artifact 绑定输入 revision，不创建 commit。
+- Coder continuation request 必须引用输入中的 progress artifact，并携带排序后的 exact dirty paths。
+  worktree HEAD 和 dirty inventory 任一漂移都拒绝启动。
+- 状态循环固定为 `IMPLEMENTING → CONTINUE_REQUIRED → QUEUED → IMPLEMENTING`；进入下一次
+  IMPLEMENTING 前单调持久化 attempt。达到 Task.max_attempts 后 BLOCKED，不允许无限续跑。
+- `CandidateCommitSkill` 只在 implementation-report 完成路径运行。它精确校验 HEAD、reported/observed
+  paths 与 `AgentPermissions`，使用固定 hook-free Git 参数创建一个 commit，并验证最终 clean 和
+  base..candidate path inventory。Coder 模型不能自行取得这一 authority。
+- production roster 固定持久化 Project Manager、Product、Designer、Planner、Coder、QA、Reviewer
+  七个 `AgentProfile`。`OrganizationRole` 不包含 Orchestrator；Scheduler、ModelRouter、Orchestrator
+  是确定性能力，不创建 AgentProfile。
+  需求仅创建 Assignment/Lease/Run/Context，不复制团队成员身份。
+
+### 16.4 Validation & Error Matrix
+
+| 输入/状态 | 结果 |
+|---|---|
+| progress 的 role/kind/sequence/remaining/next actions 非法 | INVALID_OUTPUT/contract violation；不迁移 |
+| progress paths 与 dirty worktree 不一致或越权 | POLICY_VIOLATION；保留现场，不入 QA |
+| CONTINUE_REQUIRED/QUEUED 缺 progress Artifact | PLATFORM_BUG → BLOCKED/FAILED evidence |
+| continuation 达到 max_attempts | BUDGET_EXHAUSTED → BLOCKED |
+| CandidateCommit source HEAD 漂移、路径不符或越权 | `CandidateCommitRejected`；不提交 |
+| CandidateCommit 后 dirty 或 diff inventory 改变 | 拒绝 candidate；不入 QA |
+| 已持久化旧 delivery trio profile | exact-compatible replay；新增四成员独立写入 |
+| profile/policy 同 ID 内容漂移 | immutable workforce store 拒绝覆盖 |
+
+### 16.5 Good / Base / Bad Cases
+
+- **Good**：attempt 1 返回 progress 并保留授权草稿；状态重排队；attempt 2 接收 exact checkpoint，
+  完成后平台创建 candidate，再由独立 QA/Reviewer 验证。
+- **Base**：Coder 一次完成，直接经过 CandidateCommit，状态不经过 continuation loop。
+- **Bad**：超时后直接把 dirty worktree 提交给 QA；让 Coder 执行 git commit；每个需求临时创建
+  Project Manager/Product/Designer/Planner profile；把 Orchestrator 当可自主演化的团队成员。
+
+### 16.6 Tests Required
+
+- `tests/git/test_candidate_commit.py`：真实 Git 的成功提交、inventory mismatch、越权路径；
+- `tests/agents/test_codex_cli.py`：progress 保留 dirty 草稿并在下一 Run 完成提交；
+- `tests/orchestration/test_retry.py`：完整状态序列、continuation request binding、进程在 checkpoint
+  后退出并重启恢复；
+- domain/schema contract tests：progress 正反校验、Coder 二选一 output、所有嵌入 TaskStatus schema；
+- production/team-view tests：七成员持久名册、既有三成员 exact replay、确定性能力不成为成员。
+
+### 16.7 Wrong vs Correct
+
+#### Wrong
+
+```python
+if coder_timed_out and git.is_dirty(worktree):
+    git.commit("partial")
+    start_qa(worktree.head)
+```
+
+#### Correct
+
+```python
+progress = validate_artifact_payload(coder_output)
+assert isinstance(progress, CoderProgressArtifact)
+transition(task, TaskStatus.CONTINUE_REQUIRED, artifact_ids=(progress.artifact_id,))
+transition(task, TaskStatus.QUEUED, artifact_ids=(progress.artifact_id,))
+# A later bounded Coder Run consumes the persisted checkpoint; QA waits for CandidateCommitResult.
 ```

@@ -53,6 +53,7 @@ ROLE_INPUTS = {
     AgentRole.ORCHESTRATOR: (),
     AgentRole.CODER: (
         ArtifactKind.PLAN,
+        ArtifactKind.CODER_PROGRESS,
         ArtifactKind.QA_REPORT,
         ArtifactKind.REVIEW_REPORT,
     ),
@@ -63,11 +64,11 @@ ROLE_INPUTS = {
         ArtifactKind.QA_REPORT,
     ),
 }
-ROLE_OUTPUT = {
-    AgentRole.ORCHESTRATOR: ArtifactKind.PLAN,
-    AgentRole.CODER: ArtifactKind.IMPLEMENTATION_REPORT,
-    AgentRole.QA: ArtifactKind.QA_REPORT,
-    AgentRole.REVIEWER: ArtifactKind.REVIEW_REPORT,
+ROLE_OUTPUTS = {
+    AgentRole.ORCHESTRATOR: (ArtifactKind.PLAN,),
+    AgentRole.CODER: (ArtifactKind.CODER_PROGRESS, ArtifactKind.IMPLEMENTATION_REPORT),
+    AgentRole.QA: (ArtifactKind.QA_REPORT,),
+    AgentRole.REVIEWER: (ArtifactKind.REVIEW_REPORT,),
 }
 
 
@@ -120,7 +121,7 @@ def _definitions() -> dict[AgentRole, AgentDefinition]:
                 can_change_state=role is AgentRole.ORCHESTRATOR,
             ),
             input_artifacts=ROLE_INPUTS[role],
-            output_artifacts=(ROLE_OUTPUT[role],),
+            output_artifacts=ROLE_OUTPUTS[role],
             max_retries=0,
             timeout_seconds=60,
             token_budget=4_000,

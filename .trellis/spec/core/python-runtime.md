@@ -751,6 +751,11 @@ class FakeAgentAdapter:
 - 所有 request/result/scenario model 使用 Pydantic v2、`extra="forbid"`、`frozen=True`；`run_id`、`context_manifest_id`、Task/Artifact ID 和 attempt 采用既有 typed aliases。
 - `AgentRequest.output_schema` 固定映射：Orchestrator → `schemas/plan.schema.json`、Coder → `schemas/implementation-report.schema.json`、QA → `schemas/qa-report.schema.json`、Reviewer → `schemas/review-report.schema.json`；角色/Schema 不匹配在 adapter 启动前拒绝。
 - `AgentResult.SUCCEEDED` 必须有且只有一个 typed Artifact，且 Artifact 的 `task_id`、producer role/run ID、kind 和 context manifest ID 与 request 完全一致。Orchestrator/QA/Reviewer Artifact revision 必须与 request 相同；Coder Artifact 可以是新 candidate，但必须满足 `source_revision == content.commit_sha`。成功的 QA 只能是 `PASS`，成功的 Reviewer 只能是 `APPROVE`。
+- Codex CLI 的 sandboxed Coder 可在 provider 成功时返回仅供 adapter 内部使用的 provisional
+  implementation report：其 `source_revision` 与 `content.commit_sha` 都必须等于 request source。
+  Adapter 必须先对 exact dirty diff 执行 report inventory 与 `WorkspacePolicy` 校验，再由平台使用
+  固定、无 hook/签名/交互的 Git 命令形成 candidate，并把最终 SHA 绑定到正式 Artifact。该 draft
+  不是 `AgentResult`、不得落盘或进入 QA；provider failure/timeout 永远不能触发 finalization。
 - `FAILED`/`TIMED_OUT` 必须没有 Artifact；必须有 `AgentFailure`。`TIMED_OUT` 只能使用 `TIMEOUT` code；`INVALID_OUTPUT` 不产生 verdict，`PROVIDER_ERROR` 可标记 transient 供后续 retry router 使用。
 - `FakeBehavior` 支持 `SUCCESS`、`QA_FAIL`、`REVIEW_REJECT`、`TIMEOUT`、`INVALID_OUTPUT`、`PROVIDER_ERROR`。QA_FAIL 只能由 QA role 产生 FAIL report，REVIEW_REJECT 只能由 Reviewer 产生 REJECT report；行为与 role 不匹配是配置错误。
 - Fake scenario 按 `(role, attempt)` 选择，default 作为兜底；缺少 scenario、非法 key 或 attempt 越界抛 `AgentConfigurationError`，不得猜测默认行为。

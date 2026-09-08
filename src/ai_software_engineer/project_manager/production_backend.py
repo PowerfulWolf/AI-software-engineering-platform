@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import subprocess
@@ -40,15 +39,11 @@ from ai_software_engineer.domain import (
     AgentProfile,
     AgentRole,
     ArtifactKind,
-    BrainTier,
     ExecutionPlan,
     ModelPolicy,
-    ModelRoute,
     NetworkAccess,
-    OrganizationRole,
     ProductApprovalDecision,
     ProductSpec,
-    RiskModelFloor,
     RiskTier,
     TaskConstraints,
     TechnicalDesign,
@@ -106,6 +101,10 @@ from ai_software_engineer.project_manager.dispatch import (
 from ai_software_engineer.project_manager.mysql_dispatch_authority import (
     MySqlDispatchAuthority,
 )
+from ai_software_engineer.project_manager.organization_team import (
+    DELIVERY_CAPABILITIES,
+    production_organization_team,
+)
 from ai_software_engineer.project_manager.preparation import (
     PrepareProjectRequest,
     PrepareProjectResult,
@@ -151,22 +150,13 @@ ResultT = TypeVar("ResultT")
 PRODUCTION_DELIVERY_CONTEXT_BUDGET = ContextBudget(
     max_input_tokens=32_000, reserved_output_tokens=4_000
 )
-_ALL_CAPABILITIES = (
-    "implementation",
-    "testing",
-    "review",
-    "security",
-    "contract-validation",
-    "python",
-    "java",
-    "cpp",
-    "go",
-    "typescript",
-)
+PRODUCTION_DELIVERY_MAX_ATTEMPTS = 3
+_ALL_CAPABILITIES = DELIVERY_CAPABILITIES
 _ROLE_INPUTS: dict[AgentRole, tuple[ArtifactKind, ...]] = {
     AgentRole.ORCHESTRATOR: (),
     AgentRole.CODER: (
         ArtifactKind.PLAN,
+        ArtifactKind.CODER_PROGRESS,
         ArtifactKind.QA_REPORT,
         ArtifactKind.REVIEW_REPORT,
     ),
@@ -177,11 +167,11 @@ _ROLE_INPUTS: dict[AgentRole, tuple[ArtifactKind, ...]] = {
         ArtifactKind.QA_REPORT,
     ),
 }
-_ROLE_OUTPUT = {
-    AgentRole.ORCHESTRATOR: ArtifactKind.PLAN,
-    AgentRole.CODER: ArtifactKind.IMPLEMENTATION_REPORT,
-    AgentRole.QA: ArtifactKind.QA_REPORT,
-    AgentRole.REVIEWER: ArtifactKind.REVIEW_REPORT,
+_ROLE_OUTPUTS = {
+    AgentRole.ORCHESTRATOR: (ArtifactKind.PLAN,),
+    AgentRole.CODER: (ArtifactKind.CODER_PROGRESS, ArtifactKind.IMPLEMENTATION_REPORT),
+    AgentRole.QA: (ArtifactKind.QA_REPORT,),
+    AgentRole.REVIEWER: (ArtifactKind.REVIEW_REPORT,),
 }
 
 
@@ -562,7 +552,7 @@ class ProductionProjectDeliveryBackend:
             task_id=task_id,
             repository=str(facts.workspace.project_root),
             base_ref=base_ref,
-            max_attempts=1,
+            max_attempts=PRODUCTION_DELIVERY_MAX_ATTEMPTS,
             created_at=checkpoint.checkpointed_at,
             constraints=constraints,
             owner="project-manager",
@@ -590,10 +580,7 @@ class ProductionProjectDeliveryBackend:
         agents, policy = self._workforce()
         workforce_store = FileOrganizationWorkforceStore(self._organization)
         policy = workforce_store.put_policy(policy, versioned=True)
-        agents = cast(
-            tuple[AgentProfile, AgentProfile, AgentProfile],
-            tuple(workforce_store.put_agent(agent) for agent in agents),
-        )
+        agents = tuple(workforce_store.put_agent(agent) for agent in agents)
         snapshot = DispatchWorkforceSnapshot.create(
             project_id=preparation.project_id,
             task_id=task.id,
@@ -657,7 +644,7 @@ class ProductionProjectDeliveryBackend:
             task_id=task.id,
             repository=str(facts.workspace.project_root),
             base_ref=base_ref,
-            max_attempts=1,
+            max_attempts=PRODUCTION_DELIVERY_MAX_ATTEMPTS,
             task_created_at=checkpoint.checkpointed_at,
             committed_at=checkpoint.checkpointed_at + timedelta(seconds=1),
             constraints=constraints,
@@ -847,50 +834,8 @@ class ProductionProjectDeliveryBackend:
 
     def _workforce(
         self,
-    ) -> tuple[tuple[AgentProfile, AgentProfile, AgentProfile], ModelPolicy]:
-        primary = self._config.enabled_routes()[0]
-        policy = ModelPolicy(
-            id="model_policy_delivery_default",
-            version="v0.1",
-            default_tier=BrainTier.CRITICAL,
-            routes=(
-                ModelRoute(
-                    provider=primary.provider,
-                    model=primary.model,
-                    tier=BrainTier.CRITICAL,
-                    capabilities=_ALL_CAPABILITIES,
-                ),
-            ),
-            risk_floors=tuple(
-                RiskModelFloor(risk=risk, minimum_tier=BrainTier.CRITICAL) for risk in RiskTier
-            ),
-        )
-        policy = policy.model_copy(
-            update={
-                "version": "v0.1-"
-                + hashlib.sha256(
-                    json.dumps(
-                        policy.model_dump(mode="json", exclude={"version"}),
-                        sort_keys=True,
-                        separators=(",", ":"),
-                        ensure_ascii=False,
-                    ).encode("utf-8")
-                ).hexdigest()
-            }
-        )
-        profiles = tuple(
-            AgentProfile(
-                id=f"agent_team_{role.value}",
-                version="v0.1",
-                display_name=f"Team {role.value.title()}",
-                capabilities=_ALL_CAPABILITIES,
-                eligible_roles=(OrganizationRole(role.value),),
-                max_parallel_assignments=8,
-                default_model_policy_id=policy.id,
-            )
-            for role in (AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER)
-        )
-        return cast(tuple[AgentProfile, AgentProfile, AgentProfile], profiles), policy
+    ) -> tuple[tuple[AgentProfile, ...], ModelPolicy]:
+        return production_organization_team(self._config)
 
     @staticmethod
     def _guard(label: str, operation: Callable[[], ResultT]) -> ResultT:
@@ -964,8 +909,10 @@ def _task_constraints(profile: ProjectProfile, design: TechnicalDesign) -> TaskC
         allowed_paths=affected,
         denied_paths=denied,
         allowed_commands=_task_commands(profile),
-        max_attempts=1,
-        notes="Production v0.1 uses one serial Coder → QA → Reviewer attempt.",
+        max_attempts=PRODUCTION_DELIVERY_MAX_ATTEMPTS,
+        notes=(
+            "Production v0.1 is serial; bounded Coder runs may checkpoint and continue before QA."
+        ),
     )
 
 
@@ -973,8 +920,6 @@ def _task_commands(profile: ProjectProfile) -> tuple[str, ...]:
     commands = {
         "git status",
         "git diff",
-        "git add",
-        "git commit",
         "git rev-parse",
         "git ls-files",
         "git show",
@@ -1070,7 +1015,7 @@ def _agent_definitions(
                 network=NetworkAccess.MODEL_ENDPOINT_ONLY,
             ),
             input_artifacts=_ROLE_INPUTS[phase.role],
-            output_artifacts=(_ROLE_OUTPUT[phase.role],),
+            output_artifacts=_ROLE_OUTPUTS[phase.role],
             max_retries=0,
             timeout_seconds=_delivery_timeout_seconds(phase.role),
             token_budget=_delivery_token_budget(),

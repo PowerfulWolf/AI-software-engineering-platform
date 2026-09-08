@@ -6,6 +6,7 @@ from typing import Protocol
 import pytest
 
 from ai_software_engineer.domain import (
+    AgentRole,
     ArtifactKind,
     Finding,
     FindingSeverity,
@@ -16,11 +17,21 @@ from ai_software_engineer.domain import (
 )
 from ai_software_engineer.domain.model import WirePayload
 from tests.domain.factories import (
+    make_coder_progress_artifact,
     make_implementation_artifact,
     make_plan_artifact,
     make_qa_artifact,
     make_review_artifact,
 )
+
+
+def test_coder_progress_is_a_non_candidate_coder_artifact() -> None:
+    progress = make_coder_progress_artifact()
+
+    assert progress.kind is ArtifactKind.CODER_PROGRESS
+    assert progress.producer.role is AgentRole.CODER
+    assert progress.content.status.value == "CONTINUE_REQUIRED"
+    assert progress.content.remaining_step_ids == ("step_schemas",)
 
 
 class WireArtifact(Protocol):
@@ -40,6 +51,7 @@ def test_discriminated_artifact_validation_returns_the_typed_subclass() -> None:
     ("factory", "wrong_role"),
     (
         (make_plan_artifact, "coder"),
+        (make_coder_progress_artifact, "qa"),
         (make_implementation_artifact, "qa"),
         (make_qa_artifact, "reviewer"),
         (make_review_artifact, "orchestrator"),
@@ -77,6 +89,16 @@ def test_artifact_rejects_dangling_content_evidence_reference() -> None:
 
     with pytest.raises(ValueError, match=r"unknown Evidence IDs.*ev_missing"):
         QaReportArtifact.model_validate(payload)
+
+
+def test_coder_progress_rejects_overlapping_completed_and_remaining_steps() -> None:
+    payload = make_coder_progress_artifact().to_wire()
+    content = payload["content"]
+    assert isinstance(content, dict)
+    content["remaining_step_ids"] = ["step_models"]
+
+    with pytest.raises(ValueError, match="both completed and remaining"):
+        validate_artifact(payload, ArtifactKind.CODER_PROGRESS)
 
 
 def test_qa_pass_rejects_not_tested_criterion() -> None:

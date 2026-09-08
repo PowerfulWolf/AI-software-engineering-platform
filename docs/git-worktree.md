@@ -36,7 +36,9 @@ source ref 会先解析为完整 commit SHA。已有 target path 或 Coder branc
 ### Coder
 
 - 仅能写 Task policy 的 `write_paths`；
-- 提交前必须检查 `git diff --check`、状态和变更文件 allowlist；
+- 不直接执行 `git add`/`git commit`；完成时返回 provisional implementation-report，未完成时返回
+  `coder-progress`；
+- 平台提交前必须检查 source revision、实际 dirty inventory、reported paths 和变更文件 allowlist；
 - 不允许改 `.trellis/spec/`、状态数据库、artifact 历史和 CI 配置（除非 Task 显式批准并由人类升级）。
 
 ### QA
@@ -97,10 +99,29 @@ checkout filter 是更隐蔽的外部执行入口。v0.1 若发现 repository-lo
 v0.1 不自动 merge。交付物是：
 
 1. `base_ref`、candidate commit SHA 和统一 diff；
-2. 四类 artifact 与测试 evidence；
+2. 四类终态 artifact、可选 coder-progress lineage 与测试 evidence；
 3. 人类可以审阅并手动 merge 的建议。
 
 未来若开启自动 merge，必须额外满足 protected branch、签名、CI 绿灯、review 独立性和回滚点等门禁。
+
+## CandidateCommit Skill
+
+`CandidateCommitSkill` 是平台/Project Manager 持有的最小 Git 权限 seam，Coder 模型本身不持有
+Git 元数据写权限：
+
+```python
+CandidateCommitSkill.changed_paths() -> tuple[str, ...]
+CandidateCommitSkill.finalize(request: CandidateCommitRequest) -> CandidateCommitResult
+```
+
+`finalize` 只接受精确 `task_id`、输入 full SHA、排序且非空的 reported paths 与该 Run 的
+`AgentPermissions`。实现必须保证 HEAD 等于输入 SHA、reported paths 等于 tracked/untracked dirty
+inventory、每条路径通过 `WorkspacePolicy`，然后以固定身份、禁用 hooks/fsmonitor/GPG 的参数创建
+一个提交。提交后 worktree 必须 clean，`base..candidate` 的路径集合必须仍与请求完全一致。
+
+任一 revision/path/policy 漂移都抛 `CandidateCommitRejected`，保留现场且不允许进入 QA。
+`coder-progress` 不调用本 Skill：它要求 HEAD 不变，并保留与 Artifact 完全一致的授权 dirty paths，
+由下一次 Coder Run 继续。这样“保存进度”和“宣布候选完成”是两个不同的机器边界。
 
 ## 7. 清理与恢复
 
@@ -133,7 +154,7 @@ T032 的 `DispatchRoleWorktreeCoordinator` 不接受调用方临时指定 Agent/
 
 ```python
 coder = coordinator.open_coder(dispatch, resolved_definitions)
-# Coder 提交并形成 immutable full SHA 后：
+# Coder 返回 intended diff，平台 finalizer 校验并形成 immutable full SHA 后：
 verification = coordinator.open_verifiers(
     dispatch,
     candidate_revision,
@@ -142,7 +163,8 @@ verification = coordinator.open_verifiers(
 assert verification.qa.worktree.head_revision == verification.reviewer.worktree.head_revision
 ```
 
-Coder 必须从 Task `base_ref` 的 full commit SHA 创建 branch worktree；QA/Reviewer 必须从同一个 full
+Coder 必须从 Task `base_ref` 的 full commit SHA 创建 branch worktree；Codex sandbox 不获得原仓库
+`.git` 写权限，candidate 由平台对 exact diff/report/path policy 校验后封装。QA/Reviewer 必须从同一个 full
 candidate SHA 创建两个独立 detached worktree。`recover=True` 不做 checkout/reset/clean，而是要求
 现有路径、Git common-dir、role/attempt layout、branch/detached 状态和 HEAD 全部吻合；dirty 文件作为
 中断 evidence 保留。恢复检查失败时上层进入人工处理，不能悄悄创建另一份环境继续。

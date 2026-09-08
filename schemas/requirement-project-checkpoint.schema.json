@@ -1908,6 +1908,8 @@
         "NEW",
         "PLANNING",
         "IMPLEMENTING",
+        "CONTINUE_REQUIRED",
+        "QUEUED",
         "QA",
         "REVIEW",
         "DONE",

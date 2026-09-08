@@ -17,6 +17,7 @@ from ai_software_engineer.domain.enums import (
     AgentRole,
     ArtifactKind,
     ChangeType,
+    CoderProgressStatus,
     EvidenceType,
     FindingSeverity,
     ImplementationTestStatus,
@@ -177,6 +178,30 @@ class ImplementationReportContent(DomainModel):
         return self
 
 
+class CoderProgressContent(DomainModel):
+    """A non-candidate implementation checkpoint that requests another bounded Coder run."""
+
+    status: Literal[CoderProgressStatus.CONTINUE_REQUIRED] = CoderProgressStatus.CONTINUE_REQUIRED
+    checkpoint_sequence: PositiveInt
+    summary: NonEmptyStr
+    changed_files: tuple[ChangedFile, ...]
+    completed_step_ids: tuple[NonEmptyStr, ...]
+    remaining_step_ids: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1)]
+    tests_run: tuple[ImplementationTestRun, ...]
+    next_actions: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1)]
+
+    @model_validator(mode="after")
+    def validate_checkpoint(self) -> Self:
+        ensure_unique((changed.path for changed in self.changed_files), "progress changed paths")
+        ensure_unique(self.completed_step_ids, "progress completed step IDs")
+        ensure_unique(self.remaining_step_ids, "progress remaining step IDs")
+        ensure_unique(self.next_actions, "progress next actions")
+        overlap = set(self.completed_step_ids) & set(self.remaining_step_ids)
+        if overlap:
+            raise ValueError("progress steps cannot be both completed and remaining")
+        return self
+
+
 class QaCriterionResult(DomainModel):
     criterion_id: AcceptanceCriterionId
     status: QaCriterionStatus
@@ -307,6 +332,17 @@ class ImplementationReportArtifact(ArtifactEnvelope[ImplementationReportContent]
         return self
 
 
+class CoderProgressArtifact(ArtifactEnvelope[CoderProgressContent]):
+    kind: Literal[ArtifactKind.CODER_PROGRESS] = ArtifactKind.CODER_PROGRESS
+
+    @model_validator(mode="after")
+    def validate_progress_policy(self) -> Self:
+        if self.producer.role is not AgentRole.CODER:
+            raise ValueError("coder-progress Artifact must be produced by coder")
+        self.ensure_evidence_references(test.evidence_id for test in self.content.tests_run)
+        return self
+
+
 class QaReportArtifact(ArtifactEnvelope[QaReportContent]):
     kind: Literal[ArtifactKind.QA_REPORT] = ArtifactKind.QA_REPORT
 
@@ -343,7 +379,11 @@ class ReviewReportArtifact(ArtifactEnvelope[ReviewReportContent]):
 
 
 Artifact = Annotated[
-    PlanArtifact | ImplementationReportArtifact | QaReportArtifact | ReviewReportArtifact,
+    PlanArtifact
+    | CoderProgressArtifact
+    | ImplementationReportArtifact
+    | QaReportArtifact
+    | ReviewReportArtifact,
     Field(discriminator="kind"),
 ]
 _ARTIFACT_ADAPTER: Final[TypeAdapter[Artifact]] = TypeAdapter(Artifact)
@@ -355,3 +395,8 @@ def validate_artifact(payload: object, kind: ArtifactKind) -> Artifact:
     if artifact.kind is not kind:
         raise ValueError(f"expected {kind} Artifact, received {artifact.kind}")
     return artifact
+
+
+def validate_artifact_payload(payload: object) -> Artifact:
+    """Validate an Artifact without trusting an external expected-kind discriminator."""
+    return _ARTIFACT_ADAPTER.validate_python(payload)

@@ -12,17 +12,22 @@ RetryLimit = Annotated[StrictInt, Field(ge=0, le=5)]
 TimeoutSeconds = Annotated[StrictInt, Field(ge=1, le=3600)]
 TokenBudget = Annotated[StrictInt, Field(ge=1)]
 
-ROLE_OUTPUT: Final[dict[AgentRole, ArtifactKind]] = {
-    AgentRole.ORCHESTRATOR: ArtifactKind.PLAN,
-    AgentRole.CODER: ArtifactKind.IMPLEMENTATION_REPORT,
-    AgentRole.QA: ArtifactKind.QA_REPORT,
-    AgentRole.REVIEWER: ArtifactKind.REVIEW_REPORT,
+ROLE_OUTPUTS: Final[dict[AgentRole, tuple[ArtifactKind, ...]]] = {
+    AgentRole.ORCHESTRATOR: (ArtifactKind.PLAN,),
+    AgentRole.CODER: (ArtifactKind.CODER_PROGRESS, ArtifactKind.IMPLEMENTATION_REPORT),
+    AgentRole.QA: (ArtifactKind.QA_REPORT,),
+    AgentRole.REVIEWER: (ArtifactKind.REVIEW_REPORT,),
 }
 
 ROLE_INPUTS: Final[dict[AgentRole, frozenset[ArtifactKind]]] = {
     AgentRole.ORCHESTRATOR: frozenset(ArtifactKind),
     AgentRole.CODER: frozenset(
-        {ArtifactKind.PLAN, ArtifactKind.QA_REPORT, ArtifactKind.REVIEW_REPORT}
+        {
+            ArtifactKind.PLAN,
+            ArtifactKind.CODER_PROGRESS,
+            ArtifactKind.QA_REPORT,
+            ArtifactKind.REVIEW_REPORT,
+        }
     ),
     AgentRole.QA: frozenset({ArtifactKind.PLAN, ArtifactKind.IMPLEMENTATION_REPORT}),
     AgentRole.REVIEWER: frozenset(
@@ -71,9 +76,10 @@ class AgentDefinition(DomainModel):
         ensure_unique(self.input_artifacts, "input_artifacts")
         ensure_unique(self.output_artifacts, "output_artifacts")
 
-        expected = ROLE_OUTPUT[self.role]
-        if self.output_artifacts != (expected,):
-            raise ValueError(f"{self.role} must output exactly {expected}")
+        expected = ROLE_OUTPUTS[self.role]
+        if self.output_artifacts != expected:
+            rendered = ", ".join(kind.value for kind in expected)
+            raise ValueError(f"{self.role} must output exactly: {rendered}")
 
         invalid_inputs = sorted(set(self.input_artifacts) - ROLE_INPUTS[self.role])
         if invalid_inputs:

@@ -9,7 +9,7 @@
     "task_id": {"type": "string", "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$"},
     "project_id": {"type": "string", "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"},
     "title": {"type": "string", "minLength": 1},
-    "status": {"enum": ["NEW", "PLANNING", "IMPLEMENTING", "QA", "REVIEW", "DONE", "BLOCKED", "FAILED"]},
+    "status": {"enum": ["NEW", "PLANNING", "IMPLEMENTING", "CONTINUE_REQUIRED", "QUEUED", "QA", "REVIEW", "DONE", "BLOCKED", "FAILED"]},
     "attempts": {"type": "integer", "minimum": 0},
     "state_revision": {"type": "integer", "minimum": 0},
     "work_item_status": {"enum": ["READY", "LEASED", "RUNNING", "WAITING_HUMAN", "WAITING_DEPENDENCY", "RETRY_SCHEDULED", "CLOSED"]},

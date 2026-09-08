@@ -26,8 +26,8 @@
         "can_merge": {"type": "boolean", "default": false}
       }
     },
-    "input_artifacts": {"type": "array", "items": {"enum": ["plan", "implementation-report", "qa-report", "review-report"]}},
-    "output_artifacts": {"type": "array", "items": {"enum": ["plan", "implementation-report", "qa-report", "review-report"]}},
+    "input_artifacts": {"type": "array", "items": {"enum": ["plan", "coder-progress", "implementation-report", "qa-report", "review-report"]}},
+    "output_artifacts": {"type": "array", "items": {"enum": ["plan", "coder-progress", "implementation-report", "qa-report", "review-report"]}},
     "max_retries": {"type": "integer", "minimum": 0, "maximum": 5},
     "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 3600},
     "token_budget": {"type": "integer", "minimum": 1},

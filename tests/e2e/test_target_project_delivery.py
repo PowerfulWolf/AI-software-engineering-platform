@@ -183,6 +183,7 @@ def _agent_definitions(case: TargetProjectCase) -> dict[AgentRole, AgentDefiniti
         AgentRole.ORCHESTRATOR: (),
         AgentRole.CODER: (
             ArtifactKind.PLAN,
+            ArtifactKind.CODER_PROGRESS,
             ArtifactKind.QA_REPORT,
             ArtifactKind.REVIEW_REPORT,
         ),
@@ -194,10 +195,10 @@ def _agent_definitions(case: TargetProjectCase) -> dict[AgentRole, AgentDefiniti
         ),
     }
     outputs = {
-        AgentRole.ORCHESTRATOR: ArtifactKind.PLAN,
-        AgentRole.CODER: ArtifactKind.IMPLEMENTATION_REPORT,
-        AgentRole.QA: ArtifactKind.QA_REPORT,
-        AgentRole.REVIEWER: ArtifactKind.REVIEW_REPORT,
+        AgentRole.ORCHESTRATOR: (ArtifactKind.PLAN,),
+        AgentRole.CODER: (ArtifactKind.CODER_PROGRESS, ArtifactKind.IMPLEMENTATION_REPORT),
+        AgentRole.QA: (ArtifactKind.QA_REPORT,),
+        AgentRole.REVIEWER: (ArtifactKind.REVIEW_REPORT,),
     }
     definitions: dict[AgentRole, AgentDefinition] = {}
     for role in AgentRole:
@@ -222,7 +223,7 @@ def _agent_definitions(case: TargetProjectCase) -> dict[AgentRole, AgentDefiniti
                 can_change_state=role is AgentRole.ORCHESTRATOR,
             ),
             input_artifacts=inputs[role],
-            output_artifacts=(outputs[role],),
+            output_artifacts=outputs[role],
             max_retries=0,
             timeout_seconds=60,
             token_budget=2_000,

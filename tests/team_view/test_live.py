@@ -21,7 +21,7 @@ from ai_software_engineer.agents import AgentRequest, AgentResult
 from ai_software_engineer.cli import app
 from ai_software_engineer.company_workspace import CompanyWorkspace
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
-from ai_software_engineer.domain.enums import AgentRole
+from ai_software_engineer.domain.enums import AgentRole, OrganizationRole
 from ai_software_engineer.multi_directory.models import JointCheckpoint, JointStage
 from ai_software_engineer.multi_directory.scope import DirectoryScope, DirectoryUnit
 from ai_software_engineer.multi_directory.service import CreateRequirementProject
@@ -137,16 +137,24 @@ def test_real_inflight_joint_and_terminal_reads(
                 approval_reference=f"human-{index}",
             )
         ).checkpoint
-        assert done.stage == "DONE"
+        assert done.stage == "DONE", done.next_action
     assert len(seen) == 12
     first = seen[0][1]
     assert len(first.tasks) == 1 and first.requests[0].stage == "DELIVERING"
     final = reader.snapshot()
-    assert len(final.requests) == 2 and len(final.tasks) == 4 and len(final.agents) == 3
+    assert len(final.requests) == 2 and len(final.tasks) == 4 and len(final.agents) == 7
     assert all(
         not a.current_stage_delivery_ids and not a.assigned_delivery_ids for a in final.agents
     )
-    assert all(len(a.history_delivery_ids) == 4 for a in final.agents)
+    delivery_agents = tuple(
+        agent
+        for agent in final.agents
+        if set(agent.roles)
+        & {OrganizationRole.CODER, OrganizationRole.QA, OrganizationRole.REVIEWER}
+    )
+    upstream_agents = tuple(agent for agent in final.agents if agent not in delivery_agents)
+    assert all(len(a.history_delivery_ids) == 4 for a in delivery_agents)
+    assert all(not a.history_delivery_ids for a in upstream_agents)
     assert all(t.candidate_revision and len(t.assignments) == 3 for t in final.tasks)
     assert all(t.timeline and t.documents for t in final.tasks)
     assert all(len(t.runs) == 3 and all(r.model == "gpt-5.5" for r in t.runs) for t in final.tasks)

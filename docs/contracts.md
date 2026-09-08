@@ -9,7 +9,7 @@
 | 角色 | 读取 | 写入 | 可执行 | 不能做 | 输出 |
 |---|---|---|---|---|---|
 | Orchestrator | Task、全部 artifact、策略和 Git 元数据 | 状态事件、artifact 索引、运行元数据 | 受 allowlist 的 Git/测试/Agent 启动 | 不写业务代码，不替代 Reviewer | 状态迁移、路由决定 |
-| Coder | 任务上下文、规范、相关代码、QA/Review findings | 生产代码、单元测试、implementation-report | lint、unit test、受限构建 | 修改 verdict、修改 Trellis 规则、访问 secrets | commit + implementation-report |
+| Coder | 任务上下文、规范、相关代码、上次 coder-progress、QA/Review findings | 生产代码、单元测试、provisional report | lint、unit test、受限构建 | 修改 verdict、修改 Trellis 规则、访问 secrets 或 Git 元数据 | 未完成：coder-progress；完成：intended diff，由平台封装 commit + implementation-report |
 | QA | PRD、验收标准、候选 diff、生产代码、测试规范 | QA 测试目录、qa-report | 测试、静态检查、只读构建 | 修改生产代码、批准代码、改写 Coder artifact | qa-report |
 | Reviewer | PRD、plan、diff、implementation-report、qa-report、规范 | review-report（仅 artifact store） | 只读检查、测试复跑 | 修改仓库、修改 QA verdict、直接 merge | review-report |
 
@@ -52,7 +52,8 @@ T018 的 [`schemas/workforce.schema.json`](../schemas/workforce.schema.json) 定
   唯一 `run_id`。
 
 `AgentProfile.eligible_roles` 使用 `OrganizationRole`，可表达 Project Manager、Product、
-Designer、Planner 与四个 delivery 岗位的长期胜任资格。`RoleAssignment`、`RunDemand` 和
+Designer、Planner 与 Coder/QA/Reviewer 三个 delivery 岗位的长期胜任资格。Orchestrator 是
+确定性控制能力，不是 `AgentProfile`。`RoleAssignment`、`RunDemand` 和
 现有 TaskOrchestrator 仍使用只含 `orchestrator/coder/qa/reviewer` 的 `AgentRole`；只有进入
 delivery runtime 时才能执行这一收窄映射。
 
@@ -64,7 +65,14 @@ TaskOrchestrator，不是团队成员本体。
 持有多个不同 Task 的 Lease，但 active Lease 总量不能超过 `max_parallel_assignments`，且各 Run
 不得共享 Context、worktree、Artifact lineage 或可变模型会话。T019 的
 `active_capacity_by_agent` 和 `PortfolioScheduler` 已实现 capacity aggregate、自审拒绝与 batch
-内新 Lease 占用；决策持久化属于后续 WorkQueue application service。
+内新 Lease 占用。T046 的 `MySqlPersistentWorkQueue` 已将一次角色 Run 持久化为
+`QueuedWorkItem`，并由确定性 Dispatcher tick 在数据库围栏内提交 Assignment/Lease/ModelSelection；
+当前 `ase request` 兼容入口尚待改成逐角色 Worker 消费这条队列。
+
+Queue 状态与 Task 状态正交：`READY/LEASED/RUNNING/WAITING_*/RETRY_SCHEDULED/CLOSED` 只表达
+资源调度；TaskOrchestrator 仍独占 delivery verdict。Lease 明文 owner token 只交给 Worker，数据库
+只保存 digest。关闭当前 WorkItem 与发布下一角色 WorkItem 是同一事务；完整 wire contract 见
+[`schemas/work-queue.schema.json`](../schemas/work-queue.schema.json)。
 
 ModelPolicy 必须覆盖 `low/normal/high/critical` 全部 RiskTier，且每个最低 BrainTier 都有 eligible
 route。ModelRouter 选择最小满足质量/风险约束的 route，并记录 reasons；模型升级依据测试失败、
@@ -141,7 +149,7 @@ safety policy 不允许项目规范放宽。正式 wire contracts 是
 
 `AgentAdapter.run(request: AgentRequest) -> AgentResult` 是 Fake 与真实模型 adapter 的共同边界。Request 固定携带 `run_id`、`task_id`、`role`、`attempt`、`source_revision`、`context_manifest_id`、`input_artifact_ids`、`permissions`、`output_schema` 和 `timeout_seconds`；其中 Context manifest ID 必须来自已成功构建的 ContextBundle。
 
-Result 的 `SUCCEEDED` 状态必须有一个 producer/task/kind/context manifest/run ID 全部对齐的 typed Artifact，不能同时有 failure。Orchestrator、QA、Reviewer 的 Artifact revision 必须与 request 的输入 revision 相同；Coder request revision 是输入基线，其 implementation-report 可以指向新 candidate，但 envelope `source_revision` 必须与 `content.commit_sha` 相同。`FAILED` 或 `TIMED_OUT` 必须只携带 `AgentFailure(code, message, transient)`，不产生 verdict；`TIMED_OUT` 只能使用 `TIMEOUT` code。Fake adapter 的 scenario 只用于离线测试，不得绕过这些检查。
+Result 的 `SUCCEEDED` 状态必须有一个 producer/task/kind/context manifest/run ID 全部对齐的 typed Artifact，不能同时有 failure。Orchestrator、QA、Reviewer 的 Artifact revision 必须与 request 的输入 revision 相同；Coder request revision 是输入基线，其最终 implementation-report 可以指向新 candidate，但 envelope `source_revision` 必须与 `content.commit_sha` 相同。Codex Coder 的 provisional report 只在 adapter 内部存在：平台先验证 exact diff/report/path policy，再创建并绑定 candidate；它不会作为 Result 或 Artifact 落盘。`FAILED` 或 `TIMED_OUT` 必须只携带 `AgentFailure(code, message, transient)`，不产生 verdict；`TIMED_OUT` 只能使用 `TIMEOUT` code。Fake adapter 的 scenario 只用于离线测试，不得绕过这些检查。
 
 角色与 `output_schema` 固定映射为：Orchestrator → `schemas/plan.schema.json`、Coder → `schemas/implementation-report.schema.json`、QA → `schemas/qa-report.schema.json`、Reviewer → `schemas/review-report.schema.json`。Request 使用其他角色的 Schema 时在 Pydantic boundary 拒绝，不启动 adapter。
 
@@ -298,7 +306,7 @@ Git role workspace 由 `GitWorkspace.create/inspect/remove` 管理。Coder 使�
 - `producer` 是角色 + resolved AgentDefinition 版本 + run_id；`AgentRunAllocation` 另行提供长期
   AgentProfile 与 run-scoped ModelSelection 归因；
 - `source_revision` 指向实际读取/审查的 Git revision；
-- 对 Coder，request/context 的 `source_revision` 是修改前输入基线，implementation-report 的 `source_revision` 是修改后 candidate；后者必须等于 `content.commit_sha`。QA/Reviewer request 与 Artifact 都绑定这个 candidate；
+- 对 Coder，request/context 的 `source_revision` 是修改前输入基线；Codex adapter 在验证 provisional report 与 dirty diff 后由平台封装 candidate，最终 implementation-report 的 `source_revision` 必须等于 `content.commit_sha`。QA/Reviewer request 与 Artifact 都绑定这个 candidate；
 - `evidence` 是带 URI 和 SHA-256、可定位、可复核的引用，不接受“看起来没问题”这类无证据描述；Finding 至少引用一个 envelope Evidence ID；
 - artifact 不可原地修改；修订通过新 artifact + `supersedes` 关系表达；
 - Schema 校验、哈希计算和持久化由 Orchestrator/ArtifactStore 完成，Agent 不能自报通过。
@@ -310,11 +318,12 @@ Git role workspace 由 `GitWorkspace.create/inspect/remove` 管理。Coder 使�
 
 `parent_artifact_ids` 必须指向已存在且属于同一 Task 的 Artifact；`supersedes` 还必须是同一 kind。相同 ID 的完全相同正文重放是幂等 no-op，不同正文抛出 `ArtifactAlreadyExists`，不覆盖旧证据；缺失/跨 Task/跨 kind 引用抛出 `ArtifactParentError`。
 
-## 7. 四类 artifact 的最小字段
+## 7. 五类 artifact 的最小字段
 
 | kind | 必填业务字段 |
 |---|---|
 | `plan` | goal、assumptions、steps、acceptance_mapping、risks |
+| `coder-progress` | status=CONTINUE_REQUIRED、checkpoint_sequence、summary、changed_files、completed_step_ids、remaining_step_ids、tests_run、next_actions |
 | `implementation-report` | commit_sha、changed_files、acceptance_mapping、tests_run、known_risks |
 | `qa-report` | status、criteria_results、tests_run、findings、evidence |
 | `review-report` | verdict、findings、checked_dimensions、evidence |
@@ -334,6 +343,11 @@ Git role workspace 由 `GitWorkspace.create/inspect/remove` 管理。Coder 使�
 状态图由 `orchestration.state_machine` 的 `validate_transition`/`build_event`/`apply_event` 唯一维护。Repository 不自行放宽或扩展迁移边；ArtifactStore/Orchestrator 后续再对 QA PASS、Review APPROVE 和 candidate revision 做跨 Artifact 守卫。
 
 T009 的 `SerialOrchestrator.run_task` 只接受 `NEW` Task，并按固定单 attempt 路径提交 5 个事件。每个 Agent Artifact 先由 runner 检查 request echo、直接 parent lineage、criterion coverage 和 revision，再由 `seal_artifact`/ArtifactStore 原子持久化并读回。T010 的 `RetryingOrchestrator` 在此之上执行有界 retry：QA FAIL/Review REJECT 回流 Coder，瞬时 Agent failure 重试当前 role，预算或策略问题进入 BLOCKED；旧 Artifact 不覆盖并保留 `supersedes` lineage。
+
+Coder 可输出 `coder-progress` 或 `implementation-report`。前者绑定输入 revision，不创建候选，
+并以精确 changed paths 绑定保留的 worktree 草稿；后者必须经过 `CandidateCommitSkill` 才能形成
+候选 SHA。后续 progress 通过同 kind `supersedes` 串联，最终 implementation-report 以 progress
+作为 parent，但只有 implementation-report 才允许 Task 进入 QA。
 
 ## 9. Python 领域入口
 

@@ -58,26 +58,29 @@ def test_task_rejects_conflicting_constraint_budget() -> None:
 
 
 @pytest.mark.parametrize(
-    ("role", "output_kind"),
+    ("role", "output_kinds"),
     (
-        (AgentRole.ORCHESTRATOR, ArtifactKind.PLAN),
-        (AgentRole.CODER, ArtifactKind.IMPLEMENTATION_REPORT),
-        (AgentRole.QA, ArtifactKind.QA_REPORT),
-        (AgentRole.REVIEWER, ArtifactKind.REVIEW_REPORT),
+        (AgentRole.ORCHESTRATOR, (ArtifactKind.PLAN,)),
+        (
+            AgentRole.CODER,
+            (ArtifactKind.CODER_PROGRESS, ArtifactKind.IMPLEMENTATION_REPORT),
+        ),
+        (AgentRole.QA, (ArtifactKind.QA_REPORT,)),
+        (AgentRole.REVIEWER, (ArtifactKind.REVIEW_REPORT,)),
     ),
 )
-def test_each_agent_role_owns_exactly_one_output_artifact_kind(
-    role: AgentRole, output_kind: ArtifactKind
+def test_each_agent_role_owns_its_exact_output_artifact_contract(
+    role: AgentRole, output_kinds: tuple[ArtifactKind, ...]
 ) -> None:
     payload = make_agent().to_wire()
     payload["id"] = f"agent_{role}_001"
     payload["role"] = role
     payload["input_artifacts"] = []
-    payload["output_artifacts"] = [output_kind]
+    payload["output_artifacts"] = list(output_kinds)
 
     agent = AgentDefinition.model_validate(payload)
 
-    assert agent.output_artifacts == (output_kind,)
+    assert agent.output_artifacts == output_kinds
 
 
 def test_agent_rejects_an_output_owned_by_another_role() -> None:

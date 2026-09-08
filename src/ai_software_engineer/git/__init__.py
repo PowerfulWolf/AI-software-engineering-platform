@@ -1,5 +1,13 @@
 """Repository Plane interfaces for role-isolated Git worktrees."""
 
+from ai_software_engineer.git.candidate_commit import (
+    CandidateCommitError,
+    CandidateCommitRejected,
+    CandidateCommitRequest,
+    CandidateCommitResult,
+    CandidateCommitSkill,
+    GitCandidateCommitSkill,
+)
 from ai_software_engineer.git.capture import WorktreeChangeCapture
 from ai_software_engineer.git.policy import (
     CommandPolicyViolation,
@@ -34,8 +42,14 @@ from ai_software_engineer.git.worktree import (
 )
 
 __all__ = [
+    "CandidateCommitError",
+    "CandidateCommitRejected",
+    "CandidateCommitRequest",
+    "CandidateCommitResult",
+    "CandidateCommitSkill",
     "CommandPolicyViolation",
     "DirtyWorktree",
+    "GitCandidateCommitSkill",
     "GitCommandError",
     "GitCommandTimeout",
     "GitWorkspace",

@@ -16,6 +16,8 @@ const labels = {
   DELIVERING: "分仓交付",
   INTEGRATING: "联合验收",
   IMPLEMENTING: "实现中",
+  CONTINUE_REQUIRED: "等待继续实现",
+  QUEUED: "已重新排队",
   QA: "测试中",
   REVIEW: "评审中",
   DONE: "已完成",

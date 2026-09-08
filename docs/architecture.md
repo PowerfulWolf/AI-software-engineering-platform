@@ -8,8 +8,8 @@ v0.1 解决一个窄而完整的问题：在已有 Git 项目中，把一条需�
 
 - 一个 Task 只绑定一个 repository 和一个 base ref；
 - 一个 TaskOrchestrator 实例一次只推进一个 Task，Task 内角色保持串行；
-- Project Manager 通过同一 Scheduler/ModelRouter engine 预演并提交 Assignment/Lease；后台持久化队列
-  循环尚未实现；
+- Planner 负责流转与派发策略；T046 的 MySQL PersistentWorkQueue 保存 Run 级工作，确定性
+  Dispatcher tick 执行原子领取、Lease 生命周期和过期恢复；
 - Agent 不直接互相调用，所有交互经过 Orchestrator 和 artifact store；
 - 人类是需求来源和最终升级出口；v0.1 不自动向保护分支 push/merge。
 
@@ -17,12 +17,13 @@ v0.1 解决一个窄而完整的问题：在已有 Git 项目中，把一条需�
 
 ### Control Plane
 
-Control Plane 分为两个 seam。`PortfolioScheduler` 管理组织 WorkQueue、Agent 容量、Assignment、
-Lease 和 ModelSelection，但不迁移 Task 交付状态；`TaskOrchestrator` 是唯一可以迁移一个 Task
-状态的模块，负责检查前置条件、启动 Agent、验证 artifact、决定重试或终局升级。T010 的
-`RetryingOrchestrator` 是当前 TaskOrchestrator 实现；T019 提供纯 Scheduler/ModelRouter seam，T031
-的 dispatch service 与 T034 的 MySQL authority 已负责重新校验并原子提交 Assignment、Lease 和
-ModelSelection。Planner 只能只读预演，不能自行提交分配。
+Control Plane 分为四个 seam。Planner Agent 通过 typed Skills 制定计划、流转、优先级和派发策略；
+`PersistentWorkQueue` 保存一个角色 Run 对应的 `QueuedWorkItem`；`DispatcherLoop.tick` 使用
+`PortfolioScheduler + ModelRouter` 计算当前成员和模型，并在 MySQL 容量 fence 下原子提交
+Assignment/Lease/ModelSelection；`TaskOrchestrator` 仍是唯一可以迁移一个 Task 交付状态的模块，
+负责验证 Artifact，并在同一完成事务中发布下一角色 WorkItem。常规规则由确定性 service 执行，
+计划漂移、连续失败、资源冲突、预算升级和人工门禁才重新启动 Planner Agent。Dispatcher 不是
+AgentProfile，也不能因模型额度耗尽而停止 Lease 安全维护。
 
 ### Knowledge Plane
 
@@ -66,6 +67,11 @@ Assignment、project access/policy override 和运行事实。一个 AgentProfil
 Role 和 `max_parallel_assignments`，但每个 RoleAssignment 都必须有独立 TaskLease、Context、
 worktree、Artifact lineage 和 AgentRunAllocation。
 
+T046 的队列项使用独立 `work_item_id + role + attempt + checkpoint_sequence` 标识一次逻辑 Run；
+`dispatch_sequence` 在同一 Run 等待恢复或 Lease 过期重排时递增，为新的 Assignment/Lease 产生
+确定且不冲突的身份。队列按 priority、risk、age 排序；`preferred_agent_id` 只提供续跑 affinity，
+不能绕过能力、容量或角色独立性。
+
 模型不是 Agent 身份。`RunDemand` 汇总 Task risk/complexity、Role、Context capacity、历史表现、
 预算和客观 escalation signals；`ModelRouter` 根据这些信号、Role floor 和 policy route，为每次
 AgentRun 返回一个带 policy version 与 reasons 的 `ModelSelection`。当前 `AgentDefinition` 保留为
@@ -75,8 +81,9 @@ AgentRun 返回一个带 policy version 与 reasons 的 `ModelSelection`。当�
 AgentProfile + WorkItem + Project policy
         → PortfolioScheduler → RoleAssignment + TaskLease
         → ModelRouter → ModelSelection
-        → AgentRunAllocation → resolved AgentDefinition
-        → TaskOrchestrator
+        → PersistentWorkQueue.claim(owner fence)
+        → AgentRunAllocation → resolved AgentDefinition → Agent Runner
+        → TaskOrchestrator → close current + enqueue next
 ```
 
 同一 Task 历史中的 Coder、QA、Reviewer 必须是不同 Agent；高风险 Task 可以额外要求不同模型

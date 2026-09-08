@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
 
+from pydantic import TypeAdapter
+
 from ai_software_engineer.agents.json_schema import strict_output_schema
 from ai_software_engineer.agents.models import (
     AgentErrorCode,
@@ -27,14 +29,22 @@ from ai_software_engineer.agents.ports import (
     AgentError,
     AgentRequestConflict,
 )
-from ai_software_engineer.domain.agent import ROLE_OUTPUT
+from ai_software_engineer.domain.agent import ROLE_OUTPUTS
 from ai_software_engineer.domain.artifact import (
     Artifact,
+    CoderProgressArtifact,
     ImplementationReportArtifact,
-    validate_artifact,
+    validate_artifact_payload,
 )
 from ai_software_engineer.domain.enums import AgentRole
-from ai_software_engineer.git import WorkspacePolicy, WorkspacePolicyError
+from ai_software_engineer.git import (
+    CandidateCommitError,
+    CandidateCommitRequest,
+    CandidateCommitSkill,
+    GitCandidateCommitSkill,
+    WorkspacePolicy,
+    WorkspacePolicyError,
+)
 
 
 class CodexCliError(AgentError):
@@ -130,6 +140,7 @@ class CodexCliAgentAdapter:
         environment: Mapping[str, str] | None = None,
         runner: CodexCommandRunner | None = None,
         initial_workspace_admission: InitialWorkspaceAdmission | None = None,
+        candidate_commit_skill: CandidateCommitSkill | None = None,
     ) -> None:
         root = Path(workspace_root).expanduser().resolve(strict=False)
         if not root.is_dir() or root.is_symlink():
@@ -154,6 +165,9 @@ class CodexCliAgentAdapter:
         self._environment = _filtered_environment(environment or os.environ)
         self._runner = runner or SubprocessCodexCommandRunner()
         self._initial_admission = initial_workspace_admission
+        self._candidate_commit = candidate_commit_skill or GitCandidateCommitSkill(
+            root, environment=environment
+        )
         self._requests: dict[str, AgentRequest] = {}
         self._results: dict[str, AgentResult] = {}
 
@@ -185,7 +199,7 @@ class CodexCliAgentAdapter:
                 transient=False,
                 duration_ms=_elapsed_ms(started),
             )
-        except CodexCliError:
+        except (CandidateCommitError, CodexCliError):
             result = _failure(
                 request,
                 AgentErrorCode.POLICY_VIOLATION,
@@ -213,8 +227,19 @@ class CodexCliAgentAdapter:
                 self._initial_admission.authorize(request, self._workspace_root)
             except Exception as error:
                 raise CodexCliError("recovery seed admission rejected") from error
-        elif _git(self._workspace_root, "status", "--porcelain"):
-            raise CodexCliError("Codex worktree must be clean before execution")
+        else:
+            initial_changed = self._candidate_commit.changed_paths()
+            if request.continuation_checkpoint_id is None:
+                if initial_changed:
+                    raise CodexCliError("Codex worktree must be clean before execution")
+            elif initial_changed != request.continuation_changed_paths:
+                raise CodexCliError(
+                    "Coder continuation worktree does not match the persisted checkpoint"
+                )
+            else:
+                policy = WorkspacePolicy(self._workspace_root, request.permissions)
+                for path in initial_changed:
+                    policy.authorize_write(path)
 
         prompt = self._prompt_builder.build(request)
         compiled_prompt = _compile_prompt(request, prompt.to_messages())
@@ -292,8 +317,11 @@ class CodexCliAgentAdapter:
             except OSError as error:
                 raise CodexCliError("Codex CLI did not write its structured output") from error
 
-        artifact = validate_artifact(json.loads(raw_output), ROLE_OUTPUT[request.role])
+        artifact = validate_artifact_payload(json.loads(raw_output))
+        if artifact.kind not in ROLE_OUTPUTS[request.role]:
+            raise ValueError("Codex CLI returned an Artifact outside the role contract")
         artifact = _normalize_producer(artifact, request, self._agent_id, self._agent_version)
+        artifact = self._finalize_coder_candidate(request, initial_head, artifact)
         self._validate_git_result(request, initial_head, artifact)
         try:
             return AgentResult(
@@ -316,6 +344,41 @@ class CodexCliAgentAdapter:
                 duration_ms=_elapsed_ms(started),
             )
 
+    def _finalize_coder_candidate(
+        self,
+        request: AgentRequest,
+        initial_head: str,
+        artifact: Artifact,
+    ) -> Artifact:
+        """Turn one policy-checked Coder draft into a Git candidate outside the Agent sandbox."""
+        if request.role is not AgentRole.CODER:
+            return artifact
+        if isinstance(artifact, CoderProgressArtifact):
+            return artifact
+        final_head = _git(self._workspace_root, "rev-parse", "HEAD")
+        changed = self._candidate_commit.changed_paths()
+        if final_head != initial_head or not changed:
+            return artifact
+        if not isinstance(artifact, ImplementationReportArtifact):
+            raise ValueError("Coder did not return an implementation report")
+        if artifact.source_revision != initial_head or artifact.content.commit_sha != initial_head:
+            raise ValueError("Coder draft does not bind the immutable source revision")
+        reported = tuple(sorted(file.path for file in artifact.content.changed_files))
+        if changed != reported:
+            raise WorkspacePolicyError("Coder draft changed_files do not match the dirty worktree")
+        committed = self._candidate_commit.finalize(
+            CandidateCommitRequest(
+                task_id=request.task_id,
+                source_revision=initial_head,
+                reported_paths=reported,
+                permissions=request.permissions,
+            )
+        )
+        content = artifact.content.model_copy(update={"commit_sha": committed.candidate_revision})
+        return artifact.model_copy(
+            update={"source_revision": committed.candidate_revision, "content": content}
+        )
+
     def _validate_git_result(
         self,
         request: AgentRequest,
@@ -323,12 +386,27 @@ class CodexCliAgentAdapter:
         artifact: Artifact,
     ) -> None:
         final_head = _git(self._workspace_root, "rev-parse", "HEAD")
-        if _git(self._workspace_root, "status", "--porcelain"):
-            raise WorkspacePolicyError("role left uncommitted worktree changes")
         if request.role is not AgentRole.CODER:
+            if _git(self._workspace_root, "status", "--porcelain"):
+                raise WorkspacePolicyError("role left uncommitted worktree changes")
             if final_head != initial_head:
                 raise WorkspacePolicyError("read-only role changed worktree revision")
             return
+        if isinstance(artifact, CoderProgressArtifact):
+            if final_head != initial_head or artifact.source_revision != initial_head:
+                raise WorkspacePolicyError("Coder progress cannot create a candidate revision")
+            changed = self._candidate_commit.changed_paths()
+            reported = tuple(sorted(file.path for file in artifact.content.changed_files))
+            if changed != reported:
+                raise WorkspacePolicyError(
+                    "Coder progress changed_files do not match the dirty worktree"
+                )
+            policy = WorkspacePolicy(self._workspace_root, request.permissions)
+            for path in changed:
+                policy.authorize_write(path)
+            return
+        if _git(self._workspace_root, "status", "--porcelain"):
+            raise WorkspacePolicyError("Coder left uncommitted worktree changes")
         if final_head == initial_head:
             raise ValueError("Coder did not produce a candidate commit")
         if not isinstance(artifact, ImplementationReportArtifact):
@@ -362,7 +440,7 @@ def _artifact_schema(role: AgentRole) -> dict[str, object]:
     if role is AgentRole.ORCHESTRATOR:
         schema = PlanArtifact.model_json_schema()
     elif role is AgentRole.CODER:
-        schema = ImplementationReportArtifact.model_json_schema()
+        schema = TypeAdapter(CoderProgressArtifact | ImplementationReportArtifact).json_schema()
     elif role is AgentRole.QA:
         schema = QaReportArtifact.model_json_schema()
     else:
@@ -379,10 +457,17 @@ def _compile_prompt(request: AgentRequest, messages: Sequence[object]) -> str:
     role_instruction = {
         AgentRole.ORCHESTRATOR: "Produce only the plan Artifact; do not modify the repository.",
         AgentRole.CODER: (
-            "Implement the approved plan in this isolated worktree. Run allowed tests, create one "
-            "Git commit, then return an implementation-report bound to the exact HEAD commit. "
+            "Implement the approved plan in this isolated worktree and run allowed tests. Do not "
+            "run git add or git commit because linked-worktree Git metadata is outside your "
+            "sandbox. If the implementation is complete, leave only the intended repository "
+            "changes and return a provisional implementation-report whose source_revision and "
+            "content.commit_sha both equal the exact request source revision; the platform will "
+            "policy-check and bind the candidate. If more work is required, return coder-progress "
+            "with status CONTINUE_REQUIRED, the complete changed-file inventory, completed and "
+            "remaining plan steps, tests, and concrete next actions. A progress checkpoint is not "
+            "a candidate and must not claim completion. "
             "Prioritize focused required tests before broader optional suites. Stop expanding "
-            "scope before the completion reserve; the clean candidate commit and JSON artifact "
+            "scope before the completion reserve; the JSON report and a complete intended diff "
             "take priority over optional validation."
         ),
         AgentRole.QA: (

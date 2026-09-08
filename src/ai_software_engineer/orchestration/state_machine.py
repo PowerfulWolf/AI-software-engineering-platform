@@ -12,7 +12,18 @@ LEGAL_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
     TaskStatus.PLANNING: frozenset(
         {TaskStatus.IMPLEMENTING, TaskStatus.BLOCKED, TaskStatus.FAILED}
     ),
-    TaskStatus.IMPLEMENTING: frozenset({TaskStatus.QA, TaskStatus.BLOCKED, TaskStatus.FAILED}),
+    TaskStatus.IMPLEMENTING: frozenset(
+        {
+            TaskStatus.CONTINUE_REQUIRED,
+            TaskStatus.QA,
+            TaskStatus.BLOCKED,
+            TaskStatus.FAILED,
+        }
+    ),
+    TaskStatus.CONTINUE_REQUIRED: frozenset(
+        {TaskStatus.QUEUED, TaskStatus.BLOCKED, TaskStatus.FAILED}
+    ),
+    TaskStatus.QUEUED: frozenset({TaskStatus.IMPLEMENTING, TaskStatus.BLOCKED, TaskStatus.FAILED}),
     TaskStatus.QA: frozenset(
         {TaskStatus.REVIEW, TaskStatus.IMPLEMENTING, TaskStatus.BLOCKED, TaskStatus.FAILED}
     ),

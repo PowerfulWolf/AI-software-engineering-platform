@@ -52,6 +52,7 @@ _ROLE_INPUTS: dict[AgentRole, tuple[ArtifactKind, ...]] = {
     AgentRole.ORCHESTRATOR: (),
     AgentRole.CODER: (
         ArtifactKind.PLAN,
+        ArtifactKind.CODER_PROGRESS,
         ArtifactKind.QA_REPORT,
         ArtifactKind.REVIEW_REPORT,
     ),
@@ -64,7 +65,7 @@ _ROLE_INPUTS: dict[AgentRole, tuple[ArtifactKind, ...]] = {
 }
 _ROLE_OUTPUTS: dict[AgentRole, tuple[ArtifactKind, ...]] = {
     AgentRole.ORCHESTRATOR: (ArtifactKind.PLAN,),
-    AgentRole.CODER: (ArtifactKind.IMPLEMENTATION_REPORT,),
+    AgentRole.CODER: (ArtifactKind.CODER_PROGRESS, ArtifactKind.IMPLEMENTATION_REPORT),
     AgentRole.QA: (ArtifactKind.QA_REPORT,),
     AgentRole.REVIEWER: (ArtifactKind.REVIEW_REPORT,),
 }

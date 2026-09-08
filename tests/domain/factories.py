@@ -12,6 +12,8 @@ from ai_software_engineer.domain import (
     ArtifactKind,
     ChangedFile,
     ChangeType,
+    CoderProgressArtifact,
+    CoderProgressContent,
     Evidence,
     EvidenceType,
     ImplementationAcceptanceMapping,
@@ -116,10 +118,14 @@ def make_agent() -> AgentDefinition:
         ),
         input_artifacts=(
             ArtifactKind.PLAN,
+            ArtifactKind.CODER_PROGRESS,
             ArtifactKind.QA_REPORT,
             ArtifactKind.REVIEW_REPORT,
         ),
-        output_artifacts=(ArtifactKind.IMPLEMENTATION_REPORT,),
+        output_artifacts=(
+            ArtifactKind.CODER_PROGRESS,
+            ArtifactKind.IMPLEMENTATION_REPORT,
+        ),
         max_retries=1,
         timeout_seconds=600,
         token_budget=20_000,
@@ -228,6 +234,44 @@ def make_implementation_artifact() -> ImplementationReportArtifact:
                 ),
             ),
             known_risks=(),
+        ),
+        integrity=_integrity(),
+    )
+
+
+def make_coder_progress_artifact() -> CoderProgressArtifact:
+    return CoderProgressArtifact(
+        artifact_id="art_progress_001",
+        task_id="task_domain_001",
+        schema_version="v0.1",
+        producer=_producer(AgentRole.CODER, "agent_coder_001"),
+        source_revision="a" * 40,
+        context_manifest_id="ctx_progress_001",
+        created_at=NOW,
+        parent_artifact_ids=("art_plan_001",),
+        evidence=(_evidence("ev_progress_tests", EvidenceType.TEST),),
+        content=CoderProgressContent(
+            checkpoint_sequence=1,
+            summary="Domain models are implemented; schema synchronization remains.",
+            changed_files=(
+                ChangedFile(
+                    path="src/ai_software_engineer/domain/task.py",
+                    change=ChangeType.MODIFIED,
+                    lines_added=20,
+                    lines_deleted=2,
+                ),
+            ),
+            completed_step_ids=("step_models",),
+            remaining_step_ids=("step_schemas",),
+            tests_run=(
+                ImplementationTestRun(
+                    command="pytest tests/domain",
+                    status=ImplementationTestStatus.PASS,
+                    evidence_id="ev_progress_tests",
+                    duration_ms=120,
+                ),
+            ),
+            next_actions=("Synchronize JSON Schemas and rerun contract tests.",),
         ),
         integrity=_integrity(),
     )

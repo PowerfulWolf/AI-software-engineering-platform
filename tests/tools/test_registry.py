@@ -52,6 +52,7 @@ def _agent(role: AgentRole, *, broad_write: bool = False) -> AgentDefinition:
     inputs = {
         AgentRole.CODER: (
             ArtifactKind.PLAN,
+            ArtifactKind.CODER_PROGRESS,
             ArtifactKind.QA_REPORT,
             ArtifactKind.REVIEW_REPORT,
         ),
@@ -62,10 +63,10 @@ def _agent(role: AgentRole, *, broad_write: bool = False) -> AgentDefinition:
             ArtifactKind.QA_REPORT,
         ),
     }[role]
-    output = {
-        AgentRole.CODER: ArtifactKind.IMPLEMENTATION_REPORT,
-        AgentRole.QA: ArtifactKind.QA_REPORT,
-        AgentRole.REVIEWER: ArtifactKind.REVIEW_REPORT,
+    outputs = {
+        AgentRole.CODER: (ArtifactKind.CODER_PROGRESS, ArtifactKind.IMPLEMENTATION_REPORT),
+        AgentRole.QA: (ArtifactKind.QA_REPORT,),
+        AgentRole.REVIEWER: (ArtifactKind.REVIEW_REPORT,),
     }[role]
     return AgentDefinition(
         id=f"agent_{role.value}_tool",
@@ -87,7 +88,7 @@ def _agent(role: AgentRole, *, broad_write: bool = False) -> AgentDefinition:
             network=NetworkAccess.NONE,
         ),
         input_artifacts=inputs,
-        output_artifacts=(output,),
+        output_artifacts=outputs,
         max_retries=0,
         timeout_seconds=60,
         token_budget=1000,

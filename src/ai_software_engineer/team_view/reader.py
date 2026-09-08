@@ -56,6 +56,7 @@ from .models import (
 _TERMINAL = {"DONE", "BLOCKED", "FAILED"}
 _CURRENT_ROLE = {
     TaskStatus.IMPLEMENTING: AgentRole.CODER,
+    TaskStatus.CONTINUE_REQUIRED: AgentRole.CODER,
     TaskStatus.QA: AgentRole.QA,
     TaskStatus.REVIEW: AgentRole.REVIEWER,
 }

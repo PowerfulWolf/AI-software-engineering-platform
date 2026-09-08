@@ -261,7 +261,7 @@ def test_agent_adapter_records_failed_run_before_returning_result(tmp_path: Path
         context_manifest_id=session.identity.context_manifest_id,
         input_artifact_ids=(),
         permissions=_permissions(),
-        output_schema="schemas/implementation-report.schema.json",
+        output_schema="schemas/coder-output.schema.json",
         timeout_seconds=60,
     )
     adapter = EvidenceCapturingAgentAdapter(

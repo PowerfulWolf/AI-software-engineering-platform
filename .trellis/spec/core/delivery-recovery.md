@@ -95,7 +95,8 @@ manager.verify_capture(capture, assigned_permissions, denied_paths=denied)
    profile/spec/approval hashes. Base conflicts or changed current rules block.
 3. Fresh execution/Task/run/branch and resource allocation with recovery-of lineage. Bound snapshot
    application supplies untrusted Coder input, not a candidate commit. Original worktree is retained.
-4. Coder completes/commits/reports; fresh independent QA/Reviewer validate that candidate. Joint
+4. Coder completes the intended diff/report and the platform finalizes the validated candidate;
+   fresh independent QA/Reviewer validate that commit. Joint
    integration/evaluation retain failure and human intervention. Receipt replay avoids duplicate calls;
    a second interruption needs a new explicit linked recovery.
 

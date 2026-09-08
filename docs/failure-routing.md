@@ -27,6 +27,7 @@
 |---|---|---|
 | plan Schema 失败 | Planner/Coder（一次） | 校验错误路径 |
 | Coder 崩溃 | Coder | 相同 context manifest、attempt+1 |
+| Coder 主动返回未完成 checkpoint | `CONTINUE_REQUIRED → QUEUED → IMPLEMENTING` | coder-progress、精确 dirty paths、remaining steps、next actions |
 | QA 测试失败 | Coder → `IMPLEMENTING` | qa-report、失败命令、候选 diff |
 | QA 环境故障 | QA | 环境日志、原候选 SHA |
 | Review REJECT | Coder → `IMPLEMENTING` | review-report、QA report、候选 diff |
@@ -52,7 +53,9 @@
 - `TaskRepository.record_attempt` 在每次 Agent 调用前单调持久化 attempt，进程重启后从 Task
   快照和 StateEvent 的最大 attempt 恢复；
 - ArtifactStore 通过 `list_for_task` 扫描并重新校验本 Task 的 Artifact，恢复最新 plan、
-  implementation、qa-report 和 review-report；
+  coder-progress、implementation、qa-report 和 review-report；
+- 合法 `coder-progress` 先持久化，再经过 `CONTINUE_REQUIRED → QUEUED → IMPLEMENTING` 分配下一次
+  Coder Run；checkpoint 或 worktree 漂移立即阻塞，不将半成品交给 QA；
 - QA/Review finding 仅作为已持久化 Artifact 路由，修复 Coder 的新 Artifact 必须声明
   旧 implementation 的 `supersedes`，并把 finding Artifact 放进 parent lineage；
 - `BlockedResult` 包含 classification、reason、attempt、Artifact IDs 和完整 event IDs，

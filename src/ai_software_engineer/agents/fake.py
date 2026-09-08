@@ -12,8 +12,12 @@ from ai_software_engineer.agents.models import (
     FakeScenario,
 )
 from ai_software_engineer.agents.ports import AgentConfigurationError, AgentRequestConflict
-from ai_software_engineer.domain.agent import ROLE_OUTPUT
-from ai_software_engineer.domain.artifact import Artifact, ImplementationReportArtifact
+from ai_software_engineer.domain.agent import ROLE_OUTPUTS
+from ai_software_engineer.domain.artifact import (
+    Artifact,
+    CoderProgressArtifact,
+    ImplementationReportArtifact,
+)
 from ai_software_engineer.domain.enums import AgentRole, QaReportStatus, ReviewVerdict
 
 ScenarioKey = tuple[AgentRole, int]
@@ -122,6 +126,11 @@ class FakeAgentAdapter:
         if scenario.behavior is FakeBehavior.QA_FAIL and request.role is not AgentRole.QA:
             raise AgentConfigurationError("QA_FAIL requires qa role")
         if (
+            scenario.behavior is FakeBehavior.CONTINUE_REQUIRED
+            and request.role is not AgentRole.CODER
+        ):
+            raise AgentConfigurationError("CONTINUE_REQUIRED requires coder role")
+        if (
             scenario.behavior is FakeBehavior.REVIEW_REJECT
             and request.role is not AgentRole.REVIEWER
         ):
@@ -130,25 +139,31 @@ class FakeAgentAdapter:
     def _artifact_mismatch(
         self, request: AgentRequest, behavior: FakeBehavior, artifact: Artifact
     ) -> str | None:
-        expected_kind = ROLE_OUTPUT[request.role]
+        expected_kinds = ROLE_OUTPUTS[request.role]
         if artifact.task_id != request.task_id:
             return "fake Artifact task_id does not match AgentRequest"
         if artifact.producer.role is not request.role:
             return "fake Artifact producer role does not match AgentRequest"
         if artifact.producer.run_id != request.run_id:
             return "fake Artifact producer run_id does not match AgentRequest"
-        if artifact.kind is not expected_kind:
+        if artifact.kind not in expected_kinds:
             return "fake Artifact kind does not match Agent role contract"
         if (
             request.role is not AgentRole.CODER
             and artifact.source_revision != request.source_revision
         ):
             return "fake Artifact source_revision does not match AgentRequest"
-        if request.role is AgentRole.CODER and (
-            not isinstance(artifact, ImplementationReportArtifact)
-            or artifact.source_revision != artifact.content.commit_sha
-        ):
-            return "fake Coder Artifact candidate revision does not match commit_sha"
+        if request.role is AgentRole.CODER:
+            if isinstance(artifact, ImplementationReportArtifact):
+                if artifact.source_revision != artifact.content.commit_sha:
+                    return "fake Coder Artifact candidate revision does not match commit_sha"
+            elif isinstance(artifact, CoderProgressArtifact):
+                if artifact.source_revision != request.source_revision:
+                    return "fake Coder progress does not match request source revision"
+                if behavior is not FakeBehavior.CONTINUE_REQUIRED:
+                    return "fake Coder progress requires CONTINUE_REQUIRED behavior"
+            else:
+                return "fake Coder Artifact type is invalid"
         if artifact.context_manifest_id != request.context_manifest_id:
             return "fake Artifact context_manifest_id does not match AgentRequest"
         if request.role is AgentRole.QA:

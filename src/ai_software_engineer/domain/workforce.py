@@ -168,6 +168,7 @@ class WorkItem(DomainModel):
     priority: Priority
     risk: RiskTier
     required_capabilities: tuple[NonEmptyStr, ...] = ()
+    preferred_agent_id: AgentId | None = None
     wait_reason: NonEmptyStr | None = None
     available_at: AwareDatetime | None = None
     created_at: AwareDatetime

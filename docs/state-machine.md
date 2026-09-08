@@ -7,6 +7,8 @@
 | `NEW` | Task 已创建但尚未检查 | Schema 合法、仓库可访问 |
 | `PLANNING` | 生成并校验 plan | 需求和验收标准足够明确 |
 | `IMPLEMENTING` | Coder 在候选 worktree 中实现 | 有有效 plan，且未超出重试预算 |
+| `CONTINUE_REQUIRED` | Coder 已留下可验证 checkpoint，仍有计划步骤未完成 | 有有效 coder-progress，未生成 candidate |
+| `QUEUED` | checkpoint 已验证并等待下一次 Coder Run | 仍有 attempt 预算，保留同一隔离 worktree |
 | `QA` | QA 执行测试并产出 verdict | 有候选 revision 和 implementation-report |
 | `REVIEW` | Reviewer 独立审查 | QA `PASS` 且候选 revision 未变化 |
 | `DONE` | Review `APPROVE`，候选变更可交付 | 所有 required checks 有证据 |
@@ -34,6 +36,9 @@ TaskStatus 只描述交付证据链。T018 新增的 WorkItemStatus 独立描述
 NEW ──validate──> PLANNING
 PLANNING ──plan.valid──> IMPLEMENTING
 PLANNING ──non-retryable──> BLOCKED
+IMPLEMENTING ──coder-progress──> CONTINUE_REQUIRED
+CONTINUE_REQUIRED ──checkpoint.valid + budget.available──> QUEUED
+QUEUED ──next Coder allocated──> IMPLEMENTING
 IMPLEMENTING ──candidate.ready──> QA
 IMPLEMENTING ──non-retryable──> BLOCKED
 QA ──PASS──> REVIEW
@@ -44,6 +49,9 @@ REVIEW ──REJECT (retryable)──> IMPLEMENTING
 REVIEW ──REJECT (non-retryable/budget exhausted)──> BLOCKED
 任何非终态 ──platform invariant violation──> FAILED
 ```
+
+`CONTINUE_REQUIRED/QUEUED` 是 Task 内部的持久化 Coder 接续 checkpoint，不等同于 WorkItem
+队列状态。每次 `QUEUED → IMPLEMENTING` 都增加 attempt；预算耗尽时转 `BLOCKED`。
 
 `DONE`、`BLOCKED`、`FAILED` 是 Task 终态。临时人类/依赖等待不得进入 `BLOCKED`；终态后重新
 执行必须显式创建新 Task 或由未来受审计的人类 reopening contract 处理，Agent 不能自行跳转。
@@ -102,3 +110,7 @@ SQLite 中 Task 快照和 StateEvent 必须在同一个 `BEGIN IMMEDIATE` 事务
 2. 检查对应 artifact 和 worktree 是否存在；
 3. 若上次 Agent 运行没有 `completed` 记录，标记该 attempt 为 `interrupted`；
 4. 从最近一个有效 checkpoint 继续，不重复消费已确认的 artifact。
+
+如果最后状态是 `CONTINUE_REQUIRED`，恢复器先重新读取并校验对应 `coder-progress`；如果最后状态
+是 `QUEUED`，则在持久化下一个 attempt 后进入 `IMPLEMENTING`。checkpoint 缺失、changed paths
+漂移或 worktree HEAD 改变都 fail closed，不允许重新生成一份“看起来等价”的草稿。

@@ -140,7 +140,14 @@ class PortfolioScheduler:
             return self._rejected(work_item, role, attempt, now, (early,))
 
         capacity = _active_capacity(agents, active_leases, all_work_items, at=now)
-        ordered_agents = sorted(agents, key=lambda agent: self._agent_sort_key(agent, capacity))
+        ordered_agents = sorted(
+            agents,
+            key=lambda agent: self._agent_sort_key(
+                agent,
+                capacity,
+                preferred_agent_id=work_item.preferred_agent_id,
+            ),
+        )
         rejections: list[AssignmentRejection] = []
         for agent in ordered_agents:
             missing = tuple(sorted(set(work_item.required_capabilities) - set(agent.capabilities)))
@@ -241,10 +248,14 @@ class PortfolioScheduler:
 
     @staticmethod
     def _agent_sort_key(
-        agent: AgentProfile, capacity: Mapping[AgentId, int]
-    ) -> tuple[int, int, AgentId]:
+        agent: AgentProfile,
+        capacity: Mapping[AgentId, int],
+        *,
+        preferred_agent_id: AgentId | None,
+    ) -> tuple[int, int, int, AgentId]:
         available = agent.max_parallel_assignments - capacity.get(agent.id, 0)
-        return (-available, -agent.max_parallel_assignments, agent.id)
+        preferred = int(agent.id != preferred_agent_id)
+        return (preferred, -available, -agent.max_parallel_assignments, agent.id)
 
     @staticmethod
     def _readiness_rejection(item: WorkItem, *, now: datetime) -> AssignmentRejection | None:
@@ -282,7 +293,17 @@ class PortfolioScheduler:
     def _build_assignment(
         item: WorkItem, role: AgentRole, agent_id: AgentId, attempt: AttemptCount, now: datetime
     ) -> RoleAssignment:
-        assignment_id = _stable_id("assignment", item.task_id, role.value, agent_id, str(attempt))
+        scheduling_identity = str(getattr(item, "id", item.task_id))
+        dispatch_sequence = str(getattr(item, "dispatch_sequence", 0))
+        assignment_id = _stable_id(
+            "assignment",
+            scheduling_identity,
+            dispatch_sequence,
+            item.task_id,
+            role.value,
+            agent_id,
+            str(attempt),
+        )
         lease_id = _stable_id("lease", assignment_id)
         return RoleAssignment(
             id=assignment_id,

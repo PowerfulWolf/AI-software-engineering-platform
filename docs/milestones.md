@@ -54,8 +54,9 @@ sidecar 路径与目标源码目录分离。T019–T022 已满足这些条件。
 
 将受控命令、Git inspection、模型 tool protocol 和 evidence capture 接入真实 Coder/QA/Reviewer
 运行，完成一个目标项目的可复核交付；单 Task 内仍保持串行，不自动 merge 保护分支。组织层
-可在 T019 后有界并发多个相互隔离 Task。T019 当前提供纯决策 seam；持久化 WorkQueue 与并发
-application service 是 M6 的组合工作，不引入分布式队列。
+可在 T019 后有界并发多个相互隔离 Task。T046 已提供单节点 MySQL PersistentWorkQueue、
+Dispatcher tick 与 Lease lifecycle；把 `ase request` 改为逐角色 Worker 消费该队列仍是 M6 的后续
+组合工作，不引入分布式消息队列。
 
 ### M7 — Agent 工作可视化
 
@@ -69,7 +70,9 @@ Evidence 和 Handoff，不成为第二个状态写入者。实现细节见 [`doc
 以“组织通用知识库 + 项目 sidecar + organization-owned Agent Team + policy-bound Skills”为产品
 架构。Project Manager Agent 是团队领导；Product、Solution Designer、Planner、Coder、QA、
 Reviewer 和可选 Reporter 通过 immutable stage/delivery artifacts 协作。Planner 可做只读资源预演，
-具体 Assignment/Lease/ModelSelection 只能由 Project Manager commit-dispatch Skill 复核并提交。
+T031 的兼容入口由 Project Manager commit-dispatch Skill 复核预演结果；T046 起 Planner 拥有运行期
+流转和派发策略，确定性 Dispatcher 在当前 MySQL facts 下提交每次 Run 的
+Assignment/Lease/ModelSelection。
 
 退出条件：用户只给项目目录与需求即可完成 prepare、Product Spec 用户确认、Technical Design、
 Execution Plan、团队分配和串行交付；流程可 resume，目标项目保持干净，规范冲突与失败有明确人工
@@ -132,14 +135,16 @@ E2E 到达 DONE，目标主 checkout 零改动；提供显式 opt-in live GPT-5.
 | T028 | 上游阶段与用户确认合同 | ProjectPreparation/Request、ProductSpec/Approval、TechnicalDesign、ExecutionPlan Schema 与 Task 派生 guard | exact 用户批准、Design 全覆盖、Plan 无 concrete allocation、完整 lineage 才能创建 Task | T019–T025 |
 | T029（已完成） | Project Manager Agent Skills | `prepare_project`、project baseline、typed Skill facade | 只给目录完成 prepare；冲突 WAITING_HUMAN；目标项目零污染 | T028 |
 | T030（已完成） | Product Agent 与确认循环 | product role/context/adapter、版本化 ProductSpec/Approval、恢复 checkpoint | Agent 不能自批；只信任已验证人工决策；修改生成新版本；对话/操作可重放 | T029 |
-| T031（已完成） | Designer/Planner 与调度 Skills | TechnicalDesign/ExecutionPlan producer、preview/commit dispatch | Planner preview 只读；Project Manager commit 重新校验并提交分配 | T030 |
+| T031（已完成） | Designer/Planner 与调度 Skills | TechnicalDesign/ExecutionPlan producer、preview/兼容 commit dispatch | Planner preview 只读；Project Manager 对交付启动授权重新校验 | T030 |
 | T032（已完成） | 统一项目接单入口 | CLI/application facade、resume、跨语言 E2E | 项目目录 + 需求走通 prepare→delivery，不手拼 Runtime paths | T031 |
 | T033（暂停） | Reporter 决策与实现 | deterministic report 或 read-only Reporter Agent | 不创造事实/改 verdict/隐藏失败；输出可追溯 sources | T032 |
 | T034（已完成） | Production Team Host | 自动 Host、MySQL、Codex/Responses/fallback、真实隔离 delivery | 一次配置后目录+需求可运行；MySQL scripted E2E、全量质量门禁和 opt-in live smoke | T032 |
+| T046（已完成） | Persistent WorkQueue 与 Dispatcher | Run 级 MySQL queue、Planner-owned dispatcher、owner-fenced Lease lifecycle | 两个 Dispatcher 竞争只有一个 claim；过期 owner 不能提交；关闭当前与发布下一项原子 | T045 |
 
 ## 第一批任务的执行顺序
 
-已完成：`T001 → ... → T032`、`T034`。T033 暂停。HTTP/SSE、后台队列、Reporter 和更复杂容量投影
+已完成：`T001 → ... → T032`、`T034`、`T046`。T033 暂停。HTTP/SSE、
+逐角色后台 Worker、Reporter 和更复杂容量投影
 需要另行立项。opt-in live smoke 已验证真实 GPT-5.5 的 Product/Designer/Planner/dispatch；当前 Codex
 desktop 环境中的 Coder 被 macOS 嵌套 sandbox 限制阻止，不能把这次受限运行描述为完整 live DONE。
 普通本地终端的 smoke 入口已提供；MySQL scripted-provider E2E 已独立验证完整 DONE 流程。

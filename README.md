@@ -17,8 +17,9 @@
    的 Coder、QA、Reviewer 必须是不同 Agent，并使用独立 Run、Context、worktree 和受限权限。
 3. **Agents communicate through verifiable artifacts, not shared assumptions**：跨角色传递只允许使用经过 Schema 校验、带来源 revision、证据和哈希的 artifact。
 4. **Task 内串行，组织层有界调度**：每个 Task 仍按 `Coder → QA → Reviewer` 串行；组织可以在
-   容量约束下分配多个相互隔离 Task，不引入单 Task 复杂 DAG、共享会话或分布式队列。
-   当前已有分配与调度算法，但尚无常驻任务队列，阻塞后不会自动切换下一项工作。
+   容量约束下分配多个相互隔离 Task，不引入单 Task 复杂 DAG、共享会话或外部分布式队列。
+   T046 提供 MySQL PersistentWorkQueue、确定性 Dispatcher tick 和 owner-fenced Lease 生命周期；
+   一次队列项只代表一个可执行角色 Run，不提前占用尚未开始的 QA/Reviewer。
 
 ## MVP 边界
 
@@ -30,7 +31,8 @@
 
 日常 `ase request ...` 入口的交付结果：
 
-- `plan`、`implementation-report`、`qa-report`、`review-report` 四类 artifact；
+- DONE 时的 `plan`、`implementation-report`、`qa-report`、`review-report` 四类终态 artifact；复杂实现
+  还会保留一个或多个 `coder-progress` checkpoint；
 - ProductSpec/Approval、TechnicalDesign、ExecutionPlan 等上游团队交接 artifact；
 - 一个可审计的状态事件流；
 - 各仓通过 QA/Review 的候选提交与联合验收记录，或阻塞状态及其证据；
@@ -54,8 +56,11 @@ Agent 通过受控 Skills 调用确定性能力。用户先选择项目目录，
 完成项目准备；准备成功后，用户再与 Product Agent 讨论需求。后续由专业 Agent 按制度完成产品
 定义、技术设计、执行规划、开发、测试和审查，最后把可合并候选或明确阻塞证据交给人类。
 
-下图以当前生产入口为准。底层 Runtime 已有有界返工能力，但生产入口目前每个交付角色只尝试
-一次；QA/Review 不通过时保留失败证据并停止，尚未接通完整的自动返工循环。
+下图是 T046 后的控制平面边界。Planner 对流转和派发策略负责；Dispatcher 负责不依赖模型额度的
+有界轮询、领取事务和过期恢复，持有 Lease 的 Worker 负责启动、心跳与结果提交。正常状态按已批准
+规则推进，只有计划漂移、连续失败、资源冲突或人工门禁
+才重新启动 Planner Agent。当前 `ase request` 兼容入口仍同步执行整单交付；切换到逐角色 Worker
+后才会由后台 Dispatcher 自动运行整条队列链。
 
 ```mermaid
 flowchart TB
@@ -71,20 +76,25 @@ flowchart TB
     DESIGNER --> TECH_DESIGN["Technical Design<br/>架构、步骤、测试策略、风险"]
     TECH_DESIGN --> PLANNER["Planner Agent<br/>整体执行计划、能力与风险需求"]
     PLANNER --> EXEC_PLAN["Execution Plan<br/>阶段、检查点、角色与 BrainTier 需求"]
-    EXEC_PLAN --> PREVIEW["Planner Skills<br/>preview schedule / model route"]
-    PREVIEW --> DISPATCH["Project Manager Skill<br/>commit dispatch"]
-    DISPATCH --> CONTROL["Deterministic Engines<br/>Scheduler · ModelRouter · stores"]
+    EXEC_PLAN --> PLAN_SKILLS["Planner Skills<br/>Queue inspection · dispatch planning<br/>result routing · reprioritize"]
+    PLAN_SKILLS --> QUEUE[("MySQL PersistentWorkQueue<br/>一个 WorkItem = 一个角色 Run")]
+    QUEUE --> DISPATCHER["Dispatcher Service<br/>有界 tick · 原子领取 · 过期回收"]
+    DISPATCHER --> ENGINES["Deterministic Skills<br/>PortfolioScheduler · ModelRouter"]
+    ENGINES --> LEASE["RoleAssignment + TaskLease + ModelSelection<br/>owner token 只保存 digest"]
+    LEASE --> RUNNER["Agent Runner<br/>独立 Context + role worktree"]
 
-    CONTROL --> ASSIGN["RoleAssignment + TaskLease<br/>校验成员容量与模型策略"]
-    ASSIGN --> ORCH["Task Orchestrator<br/>一个 Task 的唯一状态推进者"]
+    RUNNER --> CODER["Coder<br/>实现、测试、checkpoint 或 candidate"]
+    RUNNER --> QA["QA<br/>独立验证"]
+    RUNNER --> REVIEWER["Reviewer<br/>独立审查"]
+    CODER --> ORCH["Result Handler / Task Orchestrator<br/>校验 Artifact · 推进 Task"]
+    QA --> ORCH
+    REVIEWER --> ORCH
+    ORCH -- "原子关闭当前项并发布下一项" --> QUEUE
+    ORCH -- "需要人工或依赖" --> WAIT["WAITING_HUMAN / WAITING_DEPENDENCY<br/>立即释放 Lease"]
+    WAIT -- "可信恢复信号" --> QUEUE
+    ORCH -- "无安全继续路径" --> STOP["Task BLOCKED / FAILED<br/>保留现场与证据"]
 
-    ORCH --> CODER["Coder<br/>按 Technical Design 实现 + 单元测试"]
-    CODER --> QA["QA<br/>独立验证"]
-    QA -- "PASS" --> REVIEWER["Reviewer<br/>独立审查"]
-    QA -- "FAIL" --> STOP["停止交付<br/>保留证据，交人工处理"]
-    REVIEWER -- "REJECT" --> STOP
-
-    REVIEWER -- "各仓 APPROVE" --> JOINT["联合验收<br/>完整候选集合 · 实际集成测试"]
+    ORCH -- "各仓 APPROVE" --> JOINT["联合验收<br/>完整候选集合 · 实际集成测试"]
     JOINT -- "PASS" --> DELIVERY["Delivery<br/>各仓 candidate SHA + artifacts + 联合验收证据"]
     JOINT -- "FAIL" --> STOP
     DELIVERY -. "后续扩展" .-> REPORTER["Reporter（暂不开发）<br/>后续按需组织交付视图"]
@@ -96,6 +106,7 @@ flowchart TB
     KNOWLEDGE --> DESIGNER
     KNOWLEDGE --> PLANNER
     KNOWLEDGE --> ORCH
+    KNOWLEDGE --> RUNNER
     ORCH --> FACTS["Durable Facts<br/>StateEvent · Context · Artifact · Evidence"]
     FACTS --> VIEW["团队工作台<br/>自动读取真实记录，只读观察"]
     REPORTER --> HUMAN["Human Boundary<br/>合并、冲突决策、最终业务判断"]
@@ -115,15 +126,69 @@ flowchart TB
 | Project Manager Agent | 团队领导；通过 prepare、advance、commit-dispatch、recover、deliver Skills 接单和推进整支团队 | 不能绕过 Skill 直接写状态、分配资源或批准代码 |
 | Product Agent | 与用户澄清需求，产出可评审、可追溯的版本化 Product Spec | 不能自己批准产品范围，不能持有人工决策验证权限，不能设计实现细节 |
 | Solution Designer Agent | 把已确认 Product Spec 转换为 Technical Design 和实施/测试规划 | 不能改写产品需求，不能直接提交业务实现 |
-| Planner Agent | 根据 Product Spec 和 Technical Design 制定整体执行计划，可用只读调度/模型预演 Skills 检查可行性 | 不能提交具体 Agent/模型，不能启动 Agent 或修改状态 |
+| Planner Agent | 制定执行计划并拥有流转/派发策略；通过 QueueInspection、DispatchPlanning、ResultRouting、Reprioritize 等 typed Skills 决定下一步 | 不能亲自持有轮询、数据库锁、心跳或 Lease owner authority |
 | Agent Skills | Agent 按角色调用的 typed、policy-bound 能力接口；把请求委托给确定性 service 并返回可验证结果 | 不是 Prompt 指令，不授予 ambient store/shell 权限 |
-| Scheduler / ModelRouter engines | 为 Planner preview 和 Project Manager commit-dispatch 提供同一套确定性容量、Assignment、Lease 与模型计算 | 不能生成产品/设计内容，不能修改 Task verdict |
+| PersistentWorkQueue | 在 MySQL 保存 Run 级 WorkItem、Assignment、Lease 和生命周期事件 | 不解释 Artifact，不修改 Task verdict，不保存模型会话 |
+| Dispatcher Service | 持续执行 Planner 批准的规则；每次 tick 回收过期 Lease，并原子领取至多一个 Run | 不是 Agent，不依赖模型在线，不替 Worker 续约，不自行改变产品/技术计划 |
+| Scheduler / ModelRouter engines | 为每个 Run 重新计算成员容量、独立性和模型选择 | 不能生成产品/设计内容，不能修改 Task verdict |
 | Task Orchestrator | 按状态机串行推进一个 Task，校验 artifact 和 retry 条件 | 不能跳过 QA/Review，不能编写业务代码 |
-| Coder / QA / Reviewer | 在独立 Context、worktree 和权限下完成各自岗位工作 | 不能共享隐式记忆，不能批准自己的工作 |
+| Agent Runner / Coder / QA / Reviewer | Runner 持有本次 Lease owner token 并负责 start/heartbeat/result；成员在独立 Context、worktree 和权限下完成岗位工作 | 不能共享隐式记忆，不能批准自己的工作，不能使用别人的 Lease 提交 |
 | Knowledge + Evidence | 保存规范、上下文、artifact、命令、测试和模型使用证据 | 不能依赖某个 Agent 的临时会话 |
 | Projection + Dashboard | 从 durable facts 重算团队和交付状态 | 只读，不能迁移状态或修改 verdict |
 | Reporter（暂不开发） | 后续从已验证 artifact/Handoff 生成面向用户的交付表达 | 不能创造事实、改变 verdict 或隐藏失败 |
 | Human Boundary | 处理规范冲突、业务歧义、保护分支合并与生产决策 | 人工动作必须留痕，不能静默改写历史 |
+
+Project Manager、Product、Solution Designer、Planner、Coder、QA、Reviewer 都是组织 workspace
+中持久化的长期成员；需求只产生 Assignment、Lease、独立 Context 和运行记录，不临时复制一套
+AgentProfile。Scheduler、ModelRouter 和 Task Orchestrator 是这些成员调用的确定性能力，不作为
+会聊天、会自我判断的新成员。
+
+### 一个需求的实际流转
+
+队列只发布“现在可以执行”的角色，不会在 Coder 开发时提前占用 QA 和 Reviewer：
+
+```mermaid
+flowchart LR
+    PLAN["ExecutionPlan 已批准"] --> C1["Coder WorkItem<br/>READY"]
+    C1 --> C_RUN["LEASED → RUNNING"]
+    C_RUN -- "coder-progress" --> C_NEXT["关闭当前项<br/>发布后续 Coder WorkItem"]
+    C_NEXT --> C1
+    C_RUN -- "CandidateCommit" --> Q["QA WorkItem<br/>READY"]
+    Q -- "FAIL + evidence" --> C_FIX["Coder Fix WorkItem<br/>READY"]
+    C_FIX --> C_RUN
+    Q -- "PASS" --> R["Reviewer WorkItem<br/>READY"]
+    R -- "REJECT + findings" --> C_FIX
+    R -- "APPROVE" --> DONE["Task DONE<br/>candidate SHA + evidence"]
+```
+
+每个方框都是独立 `work_item_id`。同一 Task 可以产生多个 Coder/QA/Reviewer Run；每次 Run 都重新
+经过 Scheduler 和 ModelRouter。续跑可设置 `preferred_agent_id` 保持上下文连续，但只有原成员仍具备
+能力和容量时才优先；实际代码现场属于 Task branch/worktree，不属于 Agent 的临时会话。
+
+### Lease 生命周期
+
+```mermaid
+stateDiagram-v2
+    [*] --> READY
+    READY --> LEASED: Dispatcher 原子领取
+    LEASED --> RUNNING: Worker 启动
+    RUNNING --> RUNNING: heartbeat 续约
+    RUNNING --> CLOSED: Artifact 校验通过
+    RUNNING --> RETRY_SCHEDULED: 暂时失败或需要稍后继续
+    RUNNING --> WAITING_HUMAN: 需要人工决定
+    RUNNING --> WAITING_DEPENDENCY: 等待外部依赖
+    LEASED --> RETRY_SCHEDULED: 启动失败或 Lease 过期
+    RUNNING --> RETRY_SCHEDULED: heartbeat 过期
+    RETRY_SCHEDULED --> LEASED: 到达 available_at 后被重新领取
+    WAITING_HUMAN --> READY: 人工动作已留痕
+    WAITING_DEPENDENCY --> READY: 依赖恢复已验证
+    CLOSED --> [*]
+```
+
+领取在 MySQL 全局容量 fence 和行锁内完成；只有持有 exact `lease_id + owner_token` 的 Worker 能
+启动、续约、完成、等待或重试。数据库只保存 owner token 的 SHA-256。等待会立即释放容量；过期
+Lease 被标记为 EXPIRED，原 WorkItem 增加 `dispatch_sequence` 后进入可审计的延迟重排。关闭当前
+WorkItem 与发布下一角色 WorkItem 在同一事务中完成，重复的相同 completion 可安全重放。
 
 ## 项目结构
 
@@ -143,6 +208,7 @@ ai-software-engineer/
 │   ├── agents/                       # Codex/Responses/Fallback/Fake typed adapters
 │   ├── orchestration/                # 串行 runner、Context composition 与状态机
 │   ├── scheduling/                   # 纯 PortfolioScheduler 与 run-scoped ModelRouter
+│   ├── work_queue/                   # MySQL PersistentWorkQueue、Dispatcher 与 Lease 生命周期
 │   ├── runtime.py                    # RuntimeConfig、角色路由与 task run composition
 │   ├── runtime_workspace.py           # 组织/项目 workspace 绑定与 workforce 解析
 │   ├── project_manager/               # prepare、阶段授权、当前事实重算与原子 dispatch
@@ -290,8 +356,9 @@ ai-software-engineer/
 └── leases/ metrics/
 ```
 
-目录或契约存在不代表后台服务已经实现：生产 Task/dispatch/Lease 权威事实保存在 MySQL，
-目前没有常驻 WorkQueue 消费者，也不将这些目录视为已运行的自动排队或绩效汇总服务。
+生产 Task、Run 级 WorkItem、Assignment、Lease 和生命周期事件的权威事实保存在 MySQL；组织目录
+保存 AgentProfile/ModelPolicy 等不可变身份与策略。T046 已提供可由 Team Host 组合的 Dispatcher
+tick，进程监督负责重复调用；现有 `ase request` 兼容入口尚未切换为后台逐角色 Worker。
 
 项目原生规范会被索引和引用，不会被平台静默覆盖；规范冲突会记录并等待人工处理。
 公司知识按显式选择加载，并做脱敏与来源校验；不会自动加载其他公司或无关项目的资料。
@@ -300,7 +367,8 @@ ai-software-engineer/
 
 ## 推荐的 v0.1 运行形态
 
-- 单机 `ase` CLI + Python 进程；Team Host 随命令装配，非后台守护服务，中断后需显式 resume；
+- 单机 `ase` CLI + Python Team Host；PersistentWorkQueue/Dispatcher 可由进程管理器常驻监督，
+  当前 `ase request` 兼容入口仍随命令装配并在中断后显式 resume；
 - MySQL 8.0 保存生产 Task、StateEvent、Assignment、Lease 和 dispatch fence；
 - 外置文件系统保存 organization workspace、项目 sidecar、Context、Artifact 和 Evidence；
 - Git worktree 隔离 Coder、QA、Reviewer，目标项目主 checkout 保持不变；
@@ -386,6 +454,9 @@ uv run ase request resume DELIVERY_ID
 
 - **需要你回答或确认**：按 `checkpoint.next_action` 操作。
 - **中断或阻塞**：先看 next_action 和失败证据；平台不会后台自动继续，resume 也不会自动解决规范冲突。
+- **Coder 单次运行未完成**：平台保存 `coder-progress`，自动执行
+  `CONTINUE_REQUIRED → QUEUED → IMPLEMENTING` 并在 attempt 预算内继续；若平台进程在 checkpoint
+  后退出，使用 `resume` 从该 checkpoint 继续，不会把半成品交给 QA。
 - **DONE**：`checkpoint.children` 给出各仓候选提交，`checkpoint.integration` 给出联合验收结果。人工复核后，按原项目流程合并。
 
 平台不会自动合并、推送或部署，也不会把候选代码自动切换到目标项目当前分支。
@@ -408,21 +479,23 @@ uv run mypy src tests
 uv build --offline
 ```
 
-MySQL 集成测试需设置 `ASE_TEST_MYSQL_DSN`，指向专用测试数据库。T036 完成时全量回归为
-713 项通过；测试使用脚本化模型，不代表真实模型已完成验收。
+MySQL 集成测试需设置 `ASE_TEST_MYSQL_DSN`，指向专用测试数据库。测试使用脚本化模型验证契约，
+不代表真实模型已完成业务验收。
 
-## 当前进度（2026-09-06）
+## 当前进度（2026-09-08）
 
 | 阶段 | 阶段性成果 |
 |---|---|
 | M0–M2 平台基础 | 完成架构、强类型契约、状态机、Artifact、Context 和 Git 隔离 |
 | M3–M4 串行交付 | 完成底层 `Coder → QA → Reviewer`、有界恢复、Evaluation/ADR 与 Handoff 组件；不等于生产入口已启用全部能力 |
-| M5 组织与项目接入 | 完成组织拥有的 Workforce、确定性调度算法、ProjectProfile、SpecCompiler 和外置 sidecar；尚无常驻任务队列 |
+| M5 组织与项目接入 | 完成组织拥有的 Workforce、确定性调度算法、ProjectProfile、SpecCompiler 和外置 sidecar |
 | M6 可执行与可审计 | 完成受控命令、typed tools、Evidence、跨语言边界和只读 API |
 | M7 团队可视化 | 本地只读团队工作台，自动读取当前公司多目录需求、成员分配、执行历史和报告；旧静态组件保留为底层工具 |
 | M8 接单与推进 | 接通 Product、Designer、Planner、原子 dispatch 和可恢复 CLI 入口；产品批准与必要澄清仍由人工完成 |
-| M9 Production Team Host | 完成命令级自动装配、MySQL 存储、配置驱动的模型路由与隔离交付；每个交付角色当前只尝试一次，真实模型验收需另行执行 |
+| M9 Production Team Host | 完成命令级自动装配、MySQL 存储、配置驱动的模型路由与隔离交付；Coder 支持有界 checkpoint/续跑，真实模型验收需另行执行 |
 | M10 公司知识与联合交付 | 公司统一 sidecar、按需知识加载；先准备后讨论的需求项目入口；多仓独立交付、联合候选验收与中断恢复 |
+| M11 持续团队与候选提交 | 七个组织级长期成员；显式 CandidateCommit Skill；CoderProgress Artifact；可重启的有界 Coder 续跑循环 |
+| M12 持久工作队列 | MySQL Run 级 WorkItem、Planner-owned Dispatcher tick、原子 Assignment/Lease/ModelSelection、owner-fenced 心跳/完成/等待/重试/过期回收；`ase request` 逐角色 Worker 接线仍待完成 |
 
 ## 文档导航
 

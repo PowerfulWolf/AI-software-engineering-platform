@@ -8,6 +8,7 @@
     {"$ref": "#/$defs/modelSelection"},
     {"$ref": "#/$defs/runDemand"},
     {"$ref": "#/$defs/workItem"},
+    {"$ref": "#/$defs/queuedWorkItem"},
     {"$ref": "#/$defs/roleAssignment"},
     {"$ref": "#/$defs/taskLease"},
     {"$ref": "#/$defs/agentRunAllocation"}
@@ -16,11 +17,12 @@
     "agentId": {"type": "string", "pattern": "^agent_[a-z0-9][a-z0-9_-]{2,63}$"},
     "taskId": {"type": "string", "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$"},
     "projectId": {"type": "string", "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "workItemId": {"type": "string", "pattern": "^work_[a-z0-9][a-z0-9_-]{2,95}$"},
     "assignmentId": {"type": "string", "pattern": "^assignment_[a-z0-9][a-z0-9_-]{2,63}$"},
     "leaseId": {"type": "string", "pattern": "^lease_[a-z0-9][a-z0-9_-]{2,63}$"},
     "modelPolicyId": {"type": "string", "pattern": "^model_policy_[a-z0-9][a-z0-9_-]{2,63}$"},
     "deliveryRole": {"enum": ["orchestrator", "coder", "qa", "reviewer"]},
-    "organizationRole": {"enum": ["project_manager", "product", "designer", "planner", "orchestrator", "coder", "qa", "reviewer"]},
+    "organizationRole": {"enum": ["project_manager", "product", "designer", "planner", "coder", "qa", "reviewer"]},
     "brainTier": {"enum": ["economy", "standard", "reasoning", "critical"]},
     "riskTier": {"enum": ["low", "normal", "high", "critical"]},
     "nonNegativeCount": {"type": "integer", "minimum": 0, "maximum": 10000000},
@@ -139,6 +141,51 @@
         "kind": {"const": "work_item"},
         "task_id": {"$ref": "#/$defs/taskId"},
         "project_id": {"$ref": "#/$defs/projectId"},
+        "status": {"enum": ["READY", "LEASED", "RUNNING", "WAITING_HUMAN", "WAITING_DEPENDENCY", "RETRY_SCHEDULED", "CLOSED"]},
+        "priority": {"type": "integer", "minimum": 0, "maximum": 1000},
+        "risk": {"$ref": "#/$defs/riskTier"},
+        "required_capabilities": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "preferred_agent_id": {"$ref": "#/$defs/agentId"},
+        "wait_reason": {"type": "string", "minLength": 1},
+        "available_at": {"type": "string", "format": "date-time"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "updated_at": {"type": "string", "format": "date-time"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"enum": ["WAITING_HUMAN", "WAITING_DEPENDENCY", "RETRY_SCHEDULED"]}}, "required": ["status"]},
+          "then": {"required": ["wait_reason"]},
+          "else": {"not": {"required": ["wait_reason"]}}
+        },
+        {
+          "if": {"properties": {"status": {"const": "RETRY_SCHEDULED"}}, "required": ["status"]},
+          "then": {"required": ["available_at"]}
+        }
+      ]
+    },
+    "queuedWorkItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind", "id", "task_id", "project_id", "role", "attempt",
+        "checkpoint_sequence", "dispatch_sequence", "repository_scopes", "status", "priority", "risk",
+        "required_capabilities", "created_at", "updated_at"
+      ],
+      "properties": {
+        "kind": {"const": "work_item"},
+        "id": {"$ref": "#/$defs/workItemId"},
+        "task_id": {"$ref": "#/$defs/taskId"},
+        "project_id": {"$ref": "#/$defs/projectId"},
+        "role": {"enum": ["coder", "qa", "reviewer"]},
+        "attempt": {"type": "integer", "minimum": 1, "maximum": 10},
+        "checkpoint_sequence": {"type": "integer", "minimum": 0, "maximum": 10000},
+        "dispatch_sequence": {"type": "integer", "minimum": 0, "maximum": 10000},
+        "repository_scopes": {
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "preferred_agent_id": {"$ref": "#/$defs/agentId"},
+        "parent_work_item_id": {"$ref": "#/$defs/workItemId"},
         "status": {"enum": ["READY", "LEASED", "RUNNING", "WAITING_HUMAN", "WAITING_DEPENDENCY", "RETRY_SCHEDULED", "CLOSED"]},
         "priority": {"type": "integer", "minimum": 0, "maximum": 1000},
         "risk": {"$ref": "#/$defs/riskTier"},

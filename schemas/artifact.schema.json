@@ -39,7 +39,7 @@
   "properties": {
     "artifact_id": {"type": "string", "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$"},
     "task_id": {"type": "string", "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$"},
-    "kind": {"enum": ["plan", "implementation-report", "qa-report", "review-report"]},
+    "kind": {"enum": ["plan", "coder-progress", "implementation-report", "qa-report", "review-report"]},
     "schema_version": {"type": "string", "pattern": "^v[0-9]+\\.[0-9]+$"},
     "producer": {
       "type": "object",

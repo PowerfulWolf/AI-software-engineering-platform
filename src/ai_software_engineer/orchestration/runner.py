@@ -20,6 +20,7 @@ from ai_software_engineer.domain.agent import AgentDefinition
 from ai_software_engineer.domain.artifact import (
     Artifact,
     ArtifactId,
+    CoderProgressArtifact,
     CommitSha,
     ImplementationReportArtifact,
     PlanArtifact,
@@ -28,6 +29,7 @@ from ai_software_engineer.domain.artifact import (
 )
 from ai_software_engineer.domain.enums import (
     AgentRole,
+    ArtifactKind,
     QaReportStatus,
     ReviewVerdict,
     TaskStatus,
@@ -308,6 +310,7 @@ class SerialOrchestrator:
         expected_parents: tuple[ArtifactId, ...],
         seen_run_ids: set[RunId],
         expected_supersedes: ArtifactId | None = None,
+        expected_supersedes_by_kind: Mapping[ArtifactKind, ArtifactId | None] | None = None,
     ) -> _CompletedRun:
         definition = self._definitions[role]
         context = self._context_builder.build(
@@ -321,6 +324,12 @@ class SerialOrchestrator:
         if run_id in seen_run_ids:
             raise DeliveryContractViolation(f"duplicate Agent run ID: {run_id}")
         seen_run_ids.add(run_id)
+        progress_inputs = tuple(
+            artifact for artifact in input_artifacts if isinstance(artifact, CoderProgressArtifact)
+        )
+        if len(progress_inputs) > 1:
+            raise DeliveryContractViolation("Coder run received multiple progress checkpoints")
+        progress = progress_inputs[0] if progress_inputs else None
         request = AgentRequest(
             run_id=run_id,
             task_id=task.id,
@@ -332,6 +341,12 @@ class SerialOrchestrator:
             permissions=definition.permissions,
             output_schema=ROLE_OUTPUT_SCHEMA[role],
             timeout_seconds=definition.timeout_seconds,
+            continuation_checkpoint_id=(progress.artifact_id if progress is not None else None),
+            continuation_changed_paths=(
+                tuple(sorted(item.path for item in progress.content.changed_files))
+                if progress is not None
+                else ()
+            ),
         )
         result = self._agent_adapter.run(request)
         self._validate_result_identity(request, result)
@@ -341,7 +356,14 @@ class SerialOrchestrator:
             raise DeliveryContractViolation(
                 f"{role.value} Artifact parent lineage does not match its inputs"
             )
-        if result.artifact.supersedes != expected_supersedes:
+        required_supersedes = expected_supersedes
+        if expected_supersedes_by_kind is not None:
+            if result.artifact.kind not in expected_supersedes_by_kind:
+                raise DeliveryContractViolation(
+                    f"{role.value} Artifact kind has no supersedes contract"
+                )
+            required_supersedes = expected_supersedes_by_kind[result.artifact.kind]
+        if result.artifact.supersedes != required_supersedes:
             raise DeliveryContractViolation(
                 f"{role.value} Artifact supersedes lineage does not match the retry input"
             )

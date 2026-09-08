@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/work-queue.schema.json",
+  "title": "Persistent WorkQueue result contract",
+  "oneOf": [
+    {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/queuedWorkItem"},
+    {"$ref": "#/$defs/queueClaim"},
+    {"$ref": "#/$defs/queueCompletion"},
+    {"$ref": "#/$defs/dispatcherTickResult"}
+  ],
+  "$defs": {
+    "artifactReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_id", "sha256"],
+      "properties": {
+        "artifact_id": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      }
+    },
+    "queueClaim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind", "work_item", "assignment", "lease", "model_selection", "worker_id", "claimed_at"
+      ],
+      "properties": {
+        "kind": {"const": "queue_claim"},
+        "work_item": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/queuedWorkItem"},
+        "assignment": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/roleAssignment"},
+        "lease": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/taskLease"},
+        "model_selection": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/modelSelection"},
+        "worker_id": {"type": "string", "pattern": "^worker_[a-z0-9][a-z0-9_-]{2,63}$"},
+        "claimed_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "queueCompletion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "work_item", "artifacts", "completed_at"],
+      "properties": {
+        "kind": {"const": "queue_completion"},
+        "work_item": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/queuedWorkItem"},
+        "artifacts": {
+          "type": "array", "uniqueItems": true,
+          "items": {"$ref": "#/$defs/artifactReceipt"}
+        },
+        "next_work_item": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/queuedWorkItem"},
+        "completed_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "dispatcherTickResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind", "status", "rejections", "reclaimed_work_item_ids", "ticked_at"
+      ],
+      "properties": {
+        "kind": {"const": "dispatcher_tick_result"},
+        "status": {"enum": ["DISPATCHED", "IDLE", "REJECTED"]},
+        "claim": {"$ref": "#/$defs/queueClaim"},
+        "rejections": {
+          "type": "array", "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "reclaimed_work_item_ids": {
+          "type": "array", "uniqueItems": true,
+          "items": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/workItemId"}
+        },
+        "ticked_at": {"type": "string", "format": "date-time"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "DISPATCHED"}}, "required": ["status"]},
+          "then": {"required": ["claim"]},
+          "else": {"not": {"required": ["claim"]}}
+        },
+        {
+          "if": {"properties": {"status": {"const": "REJECTED"}}, "required": ["status"]},
+          "then": {"properties": {"rejections": {"minItems": 1}}},
+          "else": {"properties": {"rejections": {"maxItems": 0}}}
+        }
+      ]
+    }
+  }
+}

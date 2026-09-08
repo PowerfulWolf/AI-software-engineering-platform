@@ -6,10 +6,11 @@ from typing import Annotated, Final, Self
 from pydantic import Field, StrictBool, StrictInt, model_validator
 
 from ai_software_engineer.context.models import ContextId
-from ai_software_engineer.domain.agent import ROLE_OUTPUT, AgentPermissions, TimeoutSeconds
+from ai_software_engineer.domain.agent import ROLE_OUTPUTS, AgentPermissions, TimeoutSeconds
 from ai_software_engineer.domain.artifact import (
     Artifact,
     ArtifactId,
+    CoderProgressArtifact,
     ImplementationReportArtifact,
 )
 from ai_software_engineer.domain.enums import AgentRole
@@ -22,7 +23,7 @@ DurationMs = Annotated[StrictInt, Field(ge=0)]
 TokenCount = Annotated[StrictInt, Field(ge=0)]
 ROLE_OUTPUT_SCHEMA: Final[dict[AgentRole, str]] = {
     AgentRole.ORCHESTRATOR: "schemas/plan.schema.json",
-    AgentRole.CODER: "schemas/implementation-report.schema.json",
+    AgentRole.CODER: "schemas/coder-output.schema.json",
     AgentRole.QA: "schemas/qa-report.schema.json",
     AgentRole.REVIEWER: "schemas/review-report.schema.json",
 }
@@ -53,6 +54,7 @@ class FakeBehavior(StrEnum):
     """Scriptable outcomes supported by the offline FakeAgentAdapter."""
 
     SUCCESS = "success"
+    CONTINUE_REQUIRED = "continue_required"
     QA_FAIL = "qa_fail"
     REVIEW_REJECT = "review_reject"
     TIMEOUT = "timeout"
@@ -95,6 +97,8 @@ class AgentRequest(DomainModel):
     permissions: AgentPermissions
     output_schema: NonEmptyStr
     timeout_seconds: TimeoutSeconds
+    continuation_checkpoint_id: ArtifactId | None = None
+    continuation_changed_paths: tuple[NonEmptyStr, ...] = ()
 
     @model_validator(mode="after")
     def validate_artifact_ids(self) -> Self:
@@ -104,6 +108,17 @@ class AgentRequest(DomainModel):
             raise ValueError(
                 f"AgentRequest output_schema for {self.role.value} must be {expected_schema}"
             )
+        ensure_unique(self.continuation_changed_paths, "continuation changed paths")
+        if tuple(sorted(self.continuation_changed_paths)) != self.continuation_changed_paths:
+            raise ValueError("continuation changed paths must be sorted")
+        if self.continuation_checkpoint_id is None:
+            if self.continuation_changed_paths:
+                raise ValueError("continuation paths require a checkpoint Artifact")
+        elif (
+            self.role is not AgentRole.CODER
+            or self.continuation_checkpoint_id not in self.input_artifact_ids
+        ):
+            raise ValueError("Coder continuation must reference one input checkpoint Artifact")
         return self
 
 
@@ -149,13 +164,16 @@ class AgentResult(DomainModel):
             raise ValueError("AgentResult Artifact producer role mismatch")
         if artifact.producer.run_id != self.run_id:
             raise ValueError("AgentResult Artifact producer run_id mismatch")
-        if artifact.kind is not ROLE_OUTPUT[self.role]:
+        if artifact.kind not in ROLE_OUTPUTS[self.role]:
             raise ValueError("AgentResult Artifact kind mismatch")
-        if self.role is AgentRole.CODER and (
-            not isinstance(artifact, ImplementationReportArtifact)
-            or artifact.source_revision != artifact.content.commit_sha
-        ):
-            raise ValueError("AgentResult Coder Artifact candidate revision mismatch")
+        if self.role is AgentRole.CODER:
+            if isinstance(artifact, ImplementationReportArtifact):
+                if artifact.source_revision != artifact.content.commit_sha:
+                    raise ValueError("AgentResult Coder candidate revision mismatch")
+            elif not isinstance(artifact, CoderProgressArtifact):
+                raise ValueError("AgentResult Coder Artifact type mismatch")
+            elif artifact.source_revision != self.source_revision:
+                raise ValueError("Coder progress must bind the request source revision")
         if self.role is not AgentRole.CODER and artifact.source_revision != self.source_revision:
             raise ValueError("AgentResult Artifact source_revision mismatch")
         if artifact.context_manifest_id != self.context_manifest_id:
@@ -174,6 +192,7 @@ class FakeScenario(DomainModel):
     def validate_artifact_requirement(self) -> Self:
         needs_artifact = self.behavior in {
             FakeBehavior.SUCCESS,
+            FakeBehavior.CONTINUE_REQUIRED,
             FakeBehavior.QA_FAIL,
             FakeBehavior.REVIEW_REJECT,
         }

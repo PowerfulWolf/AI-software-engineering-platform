@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import cast
 from urllib.parse import urlparse
 
+from pydantic import TypeAdapter
+
 from ai_software_engineer.agents.json_schema import strict_output_schema
 from ai_software_engineer.agents.models import (
     AgentErrorCode,
@@ -33,17 +35,25 @@ from ai_software_engineer.agents.ports import (
     AgentRequestConflict,
 )
 from ai_software_engineer.domain import AgentDefinition, AgentRole
-from ai_software_engineer.domain.agent import ROLE_OUTPUT
+from ai_software_engineer.domain.agent import ROLE_OUTPUTS
 from ai_software_engineer.domain.artifact import (
     Artifact,
+    CoderProgressArtifact,
     ImplementationReportArtifact,
     PlanArtifact,
     QaReportArtifact,
     ReviewReportArtifact,
-    validate_artifact,
+    validate_artifact_payload,
 )
 from ai_software_engineer.domain.model import JsonValue, WirePayload
-from ai_software_engineer.git import WorkspacePolicy, WorkspacePolicyError
+from ai_software_engineer.git import (
+    CandidateCommitError,
+    CandidateCommitRequest,
+    CandidateCommitSkill,
+    GitCandidateCommitSkill,
+    WorkspacePolicy,
+    WorkspacePolicyError,
+)
 from ai_software_engineer.tools import (
     PolicyBoundToolRegistry,
     ReadFileRequest,
@@ -76,6 +86,7 @@ class ResponsesAgentAdapter:
         transport: HttpTransport | None = None,
         max_turns: int = 40,
         max_tool_calls: int = 100,
+        candidate_commit_skill: CandidateCommitSkill | None = None,
     ) -> None:
         root = Path(workspace_root).expanduser().resolve(strict=False)
         if not root.is_dir() or root.is_symlink():
@@ -105,6 +116,7 @@ class ResponsesAgentAdapter:
         self._transport = transport or UrllibHttpTransport()
         self._max_turns = max_turns
         self._max_tool_calls = max_tool_calls
+        self._candidate_commit = candidate_commit_skill or GitCandidateCommitSkill(root)
         self._requests: dict[str, AgentRequest] = {}
         self._results: dict[str, AgentResult] = {}
 
@@ -119,7 +131,13 @@ class ResponsesAgentAdapter:
         started = time.monotonic()
         initial_head = _git(self._workspace_root, "rev-parse", "HEAD")
         try:
-            _validate_request_binding(request, self._agent, self._workspace_root, initial_head)
+            _validate_request_binding(
+                request,
+                self._agent,
+                self._workspace_root,
+                initial_head,
+                self._candidate_commit,
+            )
             result = self._execute(request, started, initial_head)
         except TimeoutError:
             result = _safe_failure(
@@ -152,7 +170,7 @@ class ResponsesAgentAdapter:
                 transient=False,
                 duration_ms=_elapsed_ms(started),
             )
-        except (ResponsesAgentError, WorkspacePolicyError):
+        except (CandidateCommitError, ResponsesAgentError, WorkspacePolicyError):
             result = _safe_failure(
                 request,
                 self._workspace_root,
@@ -251,13 +269,22 @@ class ResponsesAgentAdapter:
                 input_items = outputs
                 continue
             content = _output_text(payload)
-            artifact = validate_artifact(json.loads(content), ROLE_OUTPUT[request.role])
+            artifact = validate_artifact_payload(json.loads(content))
+            if artifact.kind not in ROLE_OUTPUTS[request.role]:
+                raise ValueError("provider Artifact is outside the role contract")
             artifact = _normalize_producer(artifact, request, self._agent)
+            artifact = _finalize_coder_candidate(
+                request,
+                initial_head,
+                artifact,
+                self._candidate_commit,
+            )
             _validate_git_result(
                 self._workspace_root,
                 request,
                 initial_head,
                 artifact,
+                self._candidate_commit,
             )
             return AgentResult(
                 run_id=request.run_id,
@@ -473,7 +500,7 @@ def _artifact_schema(role: AgentRole) -> dict[str, object]:
     if role is AgentRole.ORCHESTRATOR:
         schema = PlanArtifact.model_json_schema()
     elif role is AgentRole.CODER:
-        schema = ImplementationReportArtifact.model_json_schema()
+        schema = TypeAdapter(CoderProgressArtifact | ImplementationReportArtifact).json_schema()
     elif role is AgentRole.QA:
         schema = QaReportArtifact.model_json_schema()
     else:
@@ -486,14 +513,61 @@ def _validate_request_binding(
     agent: AgentDefinition,
     root: Path,
     initial_head: str,
+    candidate_commit: CandidateCommitSkill,
 ) -> None:
     if request.role is not agent.role or request.permissions != agent.permissions:
         raise ResponsesAgentConfigurationError("AgentRequest does not match bound AgentDefinition")
     source = _git(root, "rev-parse", "--verify", f"{request.source_revision}^{{commit}}")
-    if initial_head != source or _git(root, "status", "--porcelain"):
+    if initial_head != source:
         raise ResponsesAgentConfigurationError(
-            "Responses worktree is not clean at the requested source revision"
+            "Responses worktree is not at the requested source revision"
         )
+    observed = candidate_commit.changed_paths()
+    if request.continuation_checkpoint_id is None:
+        if observed:
+            raise ResponsesAgentConfigurationError("Responses worktree must be clean")
+    elif observed != request.continuation_changed_paths:
+        raise ResponsesAgentConfigurationError(
+            "Responses continuation worktree does not match the checkpoint"
+        )
+    else:
+        policy = WorkspacePolicy(root, request.permissions)
+        for path in observed:
+            policy.authorize_write(path)
+
+
+def _finalize_coder_candidate(
+    request: AgentRequest,
+    initial_head: str,
+    artifact: Artifact,
+    skill: CandidateCommitSkill,
+) -> Artifact:
+    if request.role is not AgentRole.CODER or isinstance(artifact, CoderProgressArtifact):
+        return artifact
+    if not isinstance(artifact, ImplementationReportArtifact):
+        raise ValueError("Coder did not return a supported output")
+    observed = skill.changed_paths()
+    if not observed:
+        return artifact
+    if artifact.source_revision != initial_head or artifact.content.commit_sha != initial_head:
+        raise ValueError("Coder draft does not bind the immutable source revision")
+    reported = tuple(sorted(item.path for item in artifact.content.changed_files))
+    result = skill.finalize(
+        CandidateCommitRequest(
+            task_id=request.task_id,
+            source_revision=initial_head,
+            reported_paths=reported,
+            permissions=request.permissions,
+        )
+    )
+    return artifact.model_copy(
+        update={
+            "source_revision": result.candidate_revision,
+            "content": artifact.content.model_copy(
+                update={"commit_sha": result.candidate_revision}
+            ),
+        }
+    )
 
 
 def _validate_git_result(
@@ -501,14 +575,28 @@ def _validate_git_result(
     request: AgentRequest,
     initial_head: str,
     artifact: Artifact,
+    skill: CandidateCommitSkill,
 ) -> None:
     final_head = _git(root, "rev-parse", "HEAD")
-    if _git(root, "status", "--porcelain"):
-        raise WorkspacePolicyError("role left uncommitted worktree changes")
     if request.role is not AgentRole.CODER:
+        if _git(root, "status", "--porcelain"):
+            raise WorkspacePolicyError("role left uncommitted worktree changes")
         if final_head != initial_head:
             raise WorkspacePolicyError("read-only role changed worktree revision")
         return
+    if isinstance(artifact, CoderProgressArtifact):
+        if final_head != initial_head or artifact.source_revision != initial_head:
+            raise WorkspacePolicyError("Coder progress cannot create a candidate revision")
+        changed = skill.changed_paths()
+        reported = tuple(sorted(item.path for item in artifact.content.changed_files))
+        if changed != reported:
+            raise WorkspacePolicyError("Coder progress does not match the dirty worktree")
+        policy = WorkspacePolicy(root, request.permissions)
+        for path in changed:
+            policy.authorize_write(path)
+        return
+    if _git(root, "status", "--porcelain"):
+        raise WorkspacePolicyError("role left uncommitted worktree changes")
     if final_head == initial_head or not isinstance(artifact, ImplementationReportArtifact):
         raise ValueError("Coder did not produce a candidate commit and implementation report")
     if artifact.source_revision != final_head or artifact.content.commit_sha != final_head:

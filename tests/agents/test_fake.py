@@ -62,7 +62,7 @@ def _request(
 ) -> AgentRequest:
     output_schema = {
         AgentRole.ORCHESTRATOR: "schemas/plan.schema.json",
-        AgentRole.CODER: "schemas/implementation-report.schema.json",
+        AgentRole.CODER: "schemas/coder-output.schema.json",
         AgentRole.QA: "schemas/qa-report.schema.json",
         AgentRole.REVIEWER: "schemas/review-report.schema.json",
     }[role]

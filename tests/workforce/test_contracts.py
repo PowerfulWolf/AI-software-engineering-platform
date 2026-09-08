@@ -278,6 +278,27 @@ def test_run_demand_contains_objective_model_routing_signals() -> None:
     assert demand.touches_critical_paths is True
 
 
+def test_agent_affinity_belongs_to_work_item_not_run_demand() -> None:
+    work_item = make_work_item().model_copy(update={"preferred_agent_id": "agent_engineer_alpha"})
+    schema = json.loads(
+        (Path(__file__).parents[2] / "schemas" / "workforce.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert list(Draft202012Validator(schema).iter_errors(work_item.to_wire())) == []
+
+    demand_payload = RunDemand(
+        task_id="task_workforce_001",
+        role=AgentRole.CODER,
+        risk=RiskTier.NORMAL,
+    ).to_wire()
+    demand_payload["preferred_agent_id"] = "agent_engineer_alpha"
+    assert list(Draft202012Validator(schema).iter_errors(demand_payload))
+    with pytest.raises(ValidationError):
+        RunDemand.model_validate(demand_payload)
+
+
 def test_run_allocation_makes_agent_model_and_policy_attributable() -> None:
     allocation = make_run_allocation()
 

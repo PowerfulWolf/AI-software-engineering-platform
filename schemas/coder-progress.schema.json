@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/coder-progress.schema.json",
+  "title": "Coder progress artifact",
+  "allOf": [
+    {"$ref": "artifact.schema.json"},
+    {
+      "type": "object",
+      "properties": {
+        "kind": {"const": "coder-progress"},
+        "producer": {
+          "type": "object",
+          "properties": {"role": {"const": "coder"}}
+        },
+        "content": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "checkpoint_sequence", "summary", "changed_files", "completed_step_ids", "remaining_step_ids", "tests_run", "next_actions"],
+          "properties": {
+            "status": {"const": "CONTINUE_REQUIRED"},
+            "checkpoint_sequence": {"type": "integer", "minimum": 1},
+            "summary": {"type": "string", "minLength": 1},
+            "changed_files": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["path", "change", "lines_added", "lines_deleted"],
+                "properties": {
+                  "path": {"type": "string", "minLength": 1},
+                  "change": {"enum": ["added", "modified", "deleted", "renamed"]},
+                  "lines_added": {"type": "integer", "minimum": 0},
+                  "lines_deleted": {"type": "integer", "minimum": 0}
+                }
+              }
+            },
+            "completed_step_ids": {"type": "array", "items": {"type": "string", "minLength": 1}},
+            "remaining_step_ids": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+            "tests_run": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["command", "status", "evidence_id"],
+                "properties": {
+                  "command": {"type": "string", "minLength": 1},
+                  "status": {"enum": ["PASS", "FAIL", "NOT_RUN"]},
+                  "evidence_id": {"type": "string", "pattern": "^ev_[a-z0-9][a-z0-9_-]{2,63}$"},
+                  "duration_ms": {"type": "integer", "minimum": 0}
+                }
+              }
+            },
+            "next_actions": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+          }
+        }
+      }
+    }
+  ]
+}

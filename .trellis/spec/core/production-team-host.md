@@ -21,6 +21,9 @@ OrganizationTeamHost.from_environment(
     environment: Mapping[str, str] | None = None,
 ) -> OrganizationTeamHost
 OrganizationTeamHost.project_entry() -> UnifiedProjectEntryService
+OrganizationTeamHost.work_queue -> MySqlPersistentWorkQueue
+OrganizationTeamHost.planner_dispatcher(*, demand_builder, worker_id,
+                                        owner_token_factory=None) -> DispatcherLoop
 project_entry() -> UnifiedProjectEntryService
 
 MySqlTaskRepository(dsn: str)
@@ -99,6 +102,8 @@ Environment contract:
   脱敏、digest-bound 的公司上下文纳入 baseline。公司归属契约见 `company-workspace.md`。
 - 组织稳定拥有三个不同的 Coder、QA、Reviewer AgentProfile；model/provider 是每次 Run 的
   `ModelSelection`，不能成为 Agent 身份。
+- Host 装配组织级 `MySqlPersistentWorkQueue`；Planner 拥有流转与派发策略，Dispatcher 只执行有界、
+  确定性的 tick。完整事务和 Lease fence 见 `persistent-work-queue.md`。
 
 ### 3.2 MySQL Task and dispatch authority
 
@@ -234,23 +239,24 @@ derive a deterministic reserve.
 
 Contract: the reserve is `min(300, max(10, timeout // 5), max(0, timeout - 1))`. The compiled prompt
 states the exact total and reserve. Coder must prioritize focused required tests, stop scope expansion
-before the reserve, and prioritize a clean candidate commit plus JSON implementation-report over
-broader optional validation. Other roles receive the same total/reserve fact while retaining their
-own read-only role instruction. This changes no wire field, sandbox, permission, Git guard, timeout,
-retry, Artifact, verdict, or downstream independence contract.
+before the reserve, and prioritize a complete intended diff plus provisional JSON implementation
+report over broader optional validation. Other roles receive the same total/reserve fact while
+retaining their own read-only role instruction. This changes no external wire field, sandbox,
+permission, timeout, retry, Artifact, verdict, or downstream independence contract.
 
 | Case | Required result |
 |---|---|
 | timeout 1 / 2 seconds | reserve 0 / 1; always less than total |
 | timeout 60 / 1,200 seconds | reserve 12 / 240 |
-| Coder timeout 1,800 seconds | prompt states total 1,800 and reserve 300 plus commit/Artifact priority |
+| Coder timeout 1,800 seconds | prompt states total 1,800 and reserve 300 plus diff/report priority |
 | timeout 3,600 seconds | reserve remains capped at 300 |
 | remote model ignores budget | existing hard timeout and dirty-worktree guard remain authoritative |
 
-Good: Coder finishes focused required verification, stops expanding scope, commits cleanly, and emits
-the Artifact within the reserve. Base: injected runner asserts exact prompt text in milliseconds.
-Bad: only tell the model to commit “eventually”, remove the hard timeout, auto-commit dirty output, or
-claim the prompt unit test proves a remote model will comply.
+Good: Coder finishes focused required verification, stops expanding scope, and emits the provisional
+report within the reserve; the platform-owned finalizer below creates the commit. Base: injected
+runner asserts exact prompt text in milliseconds. Bad: ask the sandboxed Agent to write external Git
+metadata, remove the hard timeout, commit unvalidated dirty output, or claim the prompt unit test
+proves remote-model timing.
 
 Tests: `tests/agents/test_codex_cli.py::test_coder_creates_verified_candidate_in_isolated_worktree`
 asserts the real subprocess stdin contract; `test_completion_reserve_is_bounded` covers boundary and
@@ -268,6 +274,77 @@ and completed a broad pytest subprocess, yet timed out dirty before commit/Artif
 test can prevent prompt regression; only live delivery can test model compliance. If this contract is
 still insufficient, the next architectural step is staged/checkpointed Coder execution, not unbounded
 timeouts or silent adoption of dirty work.
+
+#### Platform-owned Coder candidate finalization
+
+##### 1. Scope / Trigger
+
+`CodexCliAgentAdapter.run(request) -> AgentResult` uses this path only after a Coder provider exits
+successfully with a schema-valid provisional implementation report, unchanged HEAD, and intended
+worktree changes. A linked worktree stores its index and refs under the target repository's external
+`.git/worktrees/...`; the Codex `workspace-write` sandbox must not receive write access to that tree.
+
+##### 2. Signatures
+
+```python
+CodexCliAgentAdapter._finalize_coder_candidate(
+    request: AgentRequest,
+    initial_head: str,
+    artifact: Artifact,
+) -> Artifact
+
+_worktree_changed_paths(root: Path) -> tuple[str, ...]
+```
+
+##### 3. Contracts
+
+- The provisional report uses the exact request source revision for both `source_revision` and
+  `content.commit_sha`; it is never persisted or sent downstream as a completed Artifact.
+- Before Git mutation, the platform requires unchanged HEAD, an exact reported/observed path set,
+  UTF-8 NUL-delimited paths, and `WorkspacePolicy.authorize_write` for every path.
+- The platform stages only that validated set. Commit execution disables repository hooks, fsmonitor,
+  signing and interactive identity lookup, and uses a fixed platform author/message.
+- After commit, the platform replaces only the two provisional revision fields with exact HEAD and
+  reruns the existing clean-worktree, diff inventory, Artifact identity and path-policy guards.
+- A Coder that already produced a clean valid commit remains supported. Provider failure/timeout,
+  dirty QA/Reviewer, changed HEAD plus dirty files, invalid report or unauthorized diff is never
+  finalized. Failure preserves the worktree and cannot enter QA.
+
+##### 4. Validation & Error Matrix
+
+| State | Result |
+|---|---|
+| success + unchanged HEAD + exact authorized dirty diff + provisional revision | one platform-created candidate; final report bound to exact SHA |
+| report path missing/extra vs observed diff | non-transient policy failure; no commit |
+| unauthorized, denied, non-UTF-8 or `.git`-resolving path | non-transient policy failure; no commit |
+| provisional revision differs from request source | invalid output; no commit |
+| provider nonzero/timeout with changes | existing policy failure and preserved dirty work; no finalizer |
+| Agent-created clean commit | existing candidate validation; no second commit |
+| changed HEAD plus dirty work | policy failure; no additional commit |
+| controlled add/commit failure or concurrent drift | fail closed; preserve resulting worktree/index state |
+
+##### 5. Good / Base / Bad Cases
+
+- **Good**: the Agent edits only approved files and returns an exact draft; the platform creates one
+  candidate and QA/Reviewer independently inspect that SHA.
+- **Base**: an injected runner reproduces the sandbox-external Git condition without a model call and
+  the adapter returns the same final `AgentResult` contract as an Agent-created commit.
+- **Bad**: grant the Agent the target repository `.git`, run arbitrary shell from model text, stage
+  paths absent from the report, or commit after provider timeout/failure.
+
+##### 6. Tests Required
+
+`tests/agents/test_codex_cli.py` must cover successful finalization, unauthorized path, inventory
+mismatch, provisional revision mismatch, the legacy clean-commit path, dirty provider failure and
+timeout. Production recovery tests must assert the same AgentResult/candidate contract and the next
+explicitly approved live recovery is the real macOS proof. Default tests never consume model quota.
+
+##### 7. Wrong vs Correct
+
+Wrong: add `--add-dir <target-repository>/.git` to Codex or commit any dirty tree after process exit.
+Correct: model-success draft → exact diff/report/policy validation → fixed platform Git commit → exact
+SHA binding → existing artifact/candidate validation. This keeps Git authority in a deterministic
+module while the Agent owns implementation decisions.
 
 ### 3.4 Worktree and delivery
 
@@ -290,11 +367,13 @@ this does not authorize rebasing old approval or QA/Review evidence in place.
   来自 TechnicalDesign affected paths，commands 来自确定性 ProjectProfile build-system allowlist。
 - Coder worktree 位于 `<platform_root>/worktrees/<project-id>/<task-id>/coder-attempt-01` 并使用
   `ai/<task-id>/attempt-1` branch；QA、Reviewer 在 exact candidate SHA 的不同 detached worktree。
-- Coder 必须留下 clean candidate commit，且 changed paths 不越权；QA/Reviewer 不得改变 HEAD 或工作树。
+- Coder 必须留下完整 intended diff 和 provisional report；平台 finalizer 形成 clean candidate commit，
+  且 changed paths 不越权。QA/Reviewer 不得改变 HEAD 或工作树。
   clean worktree 可以关闭，dirty/漂移现场必须保留，禁止 force reset/delete。
 - delivery 完成只产生 `DONE + candidate_revision`；不 merge、不 push 目标保护分支、不 deploy。
-- production v0.1 每个 delivery role 的 Task attempt budget 是 1；自动路径不能安全继续时必须生成
-  BLOCKED/WAITING_HUMAN 证据，而不是无限重试。
+- production v0.1 的 Task attempt budget 是 3。Coder 可在预算内用 `coder-progress` 明确请求下一次
+  Run；每次都经过 `CONTINUE_REQUIRED → QUEUED → IMPLEMENTING` 并持久化 attempt。预算耗尽或
+  checkpoint/worktree 漂移时生成 BLOCKED 证据，不得无限重试或把草稿交给 QA。
 - production role 执行仍有硬上限，但按职责分配：Coder 1,800 秒，QA 与 Reviewer 各 1,200 秒，
   deterministic Orchestrator 60 秒。native 与 recovery delivery 都必须通过同一
   `_agent_definitions` seam 获得这些预算；未知 delivery role fail closed。超时仍无 Artifact，dirty
@@ -319,7 +398,9 @@ this does not authorize rebasing old approval or QA/Review evidence in place.
 | ProductSpec 未获 exact human approval | Product gate | `WAITING_PRODUCT_APPROVAL`，不运行 Designer |
 | 项目规则冲突 | SpecCompiler | `WAITING_HUMAN`，不静默选边 |
 | target project dirty/not Git/HEAD 漂移 | delivery precondition | stable failure + preserved project/worktree |
-| Coder 未 commit、越权路径或 dirty | Codex/Responses Git guard | policy/invalid-output failure；不进入 QA |
+| Coder provisional report/diff 不匹配、越权路径或 finalization 后 dirty | Codex Git guard | policy/invalid-output failure；不进入 QA |
+| Coder 返回合法未完成 checkpoint | artifact/worktree/state guards | 保存 progress，重新排队下一次 Coder；不进入 QA |
+| Coder continuation 预算耗尽或 checkpoint 漂移 | retry/runtime admission | BLOCKED，保留 progress 和 worktree evidence |
 | production role 超过其 1,800/1,200 秒预算 | subprocess/adapter timeout guard | 无 Artifact；dirty 现场保留，Task BLOCKED |
 | QA/Reviewer candidate 不同或修改 worktree | dispatch/worktree/artifact guard | fail closed；不进入 DONE |
 | `status`/`resume` durable facts 损坏 | checkpoint reconciliation | corruption/drift failure；不覆盖原记录 |
@@ -330,18 +411,21 @@ body 或目标项目中的 secret。
 ## 5. Good / Base / Bad Cases
 
 - **Good**：真实临时 Git 项目 + MySQL + scripted structured/delivery providers 完成
-  prepare→Product approval→Design→Plan→dispatch→Coder commit→独立 QA/Review→DONE；main checkout 和
+  prepare→Product approval→Design→Plan→dispatch→Coder diff/report→平台 candidate finalization→独立 QA/Review→DONE；main checkout 和
   target files 不变，candidate commit 可由 `git show` 复核。
 - **Base**：缺少真实额度时，contract/E2E 使用注入的 deterministic providers；Production Host、MySQL、
   dispatch、worktree 和 typed artifact 仍走真实实现。只有显式 live smoke 才消费 GPT-5.5。
 - **Bad**：在每个项目复制 AgentProfile；把 DSN/API key 写入 JSON；Planner 直接提交分配；让同一 Agent
   同时当 Coder 和 Reviewer；在 main checkout 写代码；auth/invalid output 后静默换模型；自动 merge。
-- **Role-budget Good**：复杂 Coder 在 1,800 秒硬上限内完成候选提交与 Artifact，随后由各自拥有
+- **Role-budget Good**：复杂 Coder 在 1,800 秒硬上限内完成 intended diff/report，平台形成候选提交与 Artifact，随后由各自拥有
   1,200 秒上限的独立 QA、Reviewer 验证。
 - **Role-budget Base**：离线 scripted runner 只验证 `AgentDefinition → AgentRequest → subprocess`
   传递的 exact timeout，不等待 wall clock，也不调用 provider。
 - **Role-budget Bad**：所有 delivery role 共享 600 秒，导致代码已改完但验证/提交被杀；或把上限改为
   无界、超时后把 dirty worktree 当候选继续 QA。
+- **Continuation Good**：Coder 在收尾预算内输出 progress，平台保留 exact dirty inventory；下一次
+  Run 消费该 checkpoint，完成后由 CandidateCommit Skill 创建候选。
+- **Roster Good**：Host 初始化时持久化七个长期 AgentProfile；需求 dispatch 只引用它们，不复制身份。
 
 ## 6. Tests Required
 

@@ -14,6 +14,8 @@
 9. 修改联合交付入口、子仓投影或集成验证时阅读 [`multi-directory-delivery.md`](multi-directory-delivery.md)。
 10. 修改实时团队视图、只读 store 或 HTTP 入口时阅读 [`live-team-view.md`](live-team-view.md)。
 11. 修改中断改动捕获或终态恢复时阅读 [`delivery-recovery.md`](delivery-recovery.md)。
+12. 修改组织队列、Dispatcher 或 Lease 生命周期时阅读
+    [`persistent-work-queue.md`](persistent-work-queue.md)。
 
 ## Quality Check
 
@@ -33,3 +35,4 @@
 - [`multi-directory-delivery.md`](multi-directory-delivery.md)
 - [`live-team-view.md`](live-team-view.md)
 - [`delivery-recovery.md`](delivery-recovery.md)
+- [`persistent-work-queue.md`](persistent-work-queue.md)

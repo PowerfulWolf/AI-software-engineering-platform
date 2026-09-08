@@ -18,6 +18,7 @@ from ai_software_engineer.project_manager.delivery import (
     ProjectDeliveryCheckpointCatalog,
     UnifiedProjectEntryService,
 )
+from ai_software_engineer.project_manager.organization_team import production_organization_team
 from ai_software_engineer.project_manager.production_backend import (
     ConfiguredStructuredClientFactory,
     ProductionProjectDeliveryBackend,
@@ -29,8 +30,15 @@ from ai_software_engineer.project_manager.production_delivery import (
 from ai_software_engineer.project_manager.production_rules import (
     production_rules,
 )
-from ai_software_engineer.runtime_workspace import OrganizationWorkspace
+from ai_software_engineer.runtime_workspace import (
+    FileOrganizationWorkforceStore,
+    OrganizationWorkspace,
+)
+from ai_software_engineer.scheduling import ModelRouter, PortfolioScheduler
 from ai_software_engineer.store import MySqlTaskRepository
+from ai_software_engineer.work_queue import DispatcherLoop, MySqlPersistentWorkQueue
+from ai_software_engineer.work_queue.dispatcher import OwnerTokenFactory, RunDemandBuilder
+from ai_software_engineer.work_queue.models import LeaseWorkerId
 
 if TYPE_CHECKING:
     from ai_software_engineer.recovery.entry import NativeRecoveryEntry
@@ -59,6 +67,14 @@ class OrganizationTeamHost:
             organization_id="organization_ai_software_engineer",
             created_at=datetime.now(UTC),
         )
+        workforce = FileOrganizationWorkforceStore(organization)
+        profiles, policy = production_organization_team(config)
+        workforce.put_policy(policy, versioned=True)
+        for profile in profiles:
+            workforce.put_agent(profile)
+        self._work_queue = MySqlPersistentWorkQueue(dsn)
+        self._profiles = profiles
+        self._model_policy = policy
         self._company = CompanyWorkspace.initialize(
             root, company_id=config.company_id, name=config.company_name
         )
@@ -139,6 +155,33 @@ class OrganizationTeamHost:
         from ai_software_engineer.recovery.entry import NativeRecoveryEntry
 
         return NativeRecoveryEntry(self._config, self._environment, self._recovery_backend)
+
+    @property
+    def work_queue(self) -> MySqlPersistentWorkQueue:
+        """Organization Run queue; project sidecars never own this state."""
+        return self._work_queue
+
+    def planner_dispatcher(
+        self,
+        *,
+        demand_builder: RunDemandBuilder,
+        worker_id: LeaseWorkerId | str,
+        owner_token_factory: OwnerTokenFactory | None = None,
+    ) -> DispatcherLoop:
+        """Compose the deterministic execution side of Planner dispatch authority."""
+        capacities = {
+            (route.provider, route.model): 2_000_000 for route in self._model_policy.routes
+        }
+        return DispatcherLoop(
+            queue=self._work_queue,
+            scheduler=PortfolioScheduler(),
+            model_router=ModelRouter(route_context_capacities=capacities),
+            agents=self._profiles,
+            policies=(self._model_policy,),
+            demand_builder=demand_builder,
+            worker_id=worker_id,
+            owner_token_factory=owner_token_factory,
+        )
 
     @property
     def company_workspace(self) -> CompanyWorkspace:

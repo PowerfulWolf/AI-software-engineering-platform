@@ -19,7 +19,7 @@ from ai_software_engineer.projection import (
     RunProjectionBuilder,
     RunProjectionStatus,
 )
-from tests.domain.factories import make_state_event, make_task
+from tests.domain.factories import make_plan_artifact, make_state_event, make_task
 
 NOW = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
 
@@ -117,3 +117,15 @@ def test_projection_as_of_is_explicit_and_lease_status_is_recomputed() -> None:
                 tasks=(task,), leases=(lease,), as_of=datetime(2026, 9, 1)
             )
         )
+
+
+def test_control_orchestrator_run_remains_in_timeline_without_fake_team_member() -> None:
+    plan = make_plan_artifact()
+
+    snapshot = RunProjectionBuilder().build(
+        ProjectionFacts.from_iterables(tasks=(make_task(),), artifacts=(plan,))
+    )
+
+    assert snapshot.runs[0].role is AgentRole.ORCHESTRATOR
+    assert snapshot.runs[0].agent_id == plan.producer.agent_id
+    assert snapshot.agents == ()

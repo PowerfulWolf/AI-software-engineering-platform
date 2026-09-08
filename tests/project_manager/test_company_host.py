@@ -76,6 +76,10 @@ def test_company_host_scopes_product_catalog_and_context(
         "ai_software_engineer.project_manager.production_host.MySqlTaskRepository",
         _ConnectivityStub,
     )
+    monkeypatch.setattr(
+        "ai_software_engineer.project_manager.production_host.MySqlPersistentWorkQueue",
+        _ConnectivityStub,
+    )
     repo = tmp_path / "code"
     repo.mkdir()
     _git("init", cwd=repo)

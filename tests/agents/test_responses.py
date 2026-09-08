@@ -69,7 +69,7 @@ def _request(base: str) -> tuple[AgentRequest, AgentDefinition]:
         model="qwen3.8-max",
         permissions=permissions,
         input_artifacts=(ArtifactKind.PLAN, ArtifactKind.QA_REPORT, ArtifactKind.REVIEW_REPORT),
-        output_artifacts=(ArtifactKind.IMPLEMENTATION_REPORT,),
+        output_artifacts=(ArtifactKind.CODER_PROGRESS, ArtifactKind.IMPLEMENTATION_REPORT),
         max_retries=0,
         timeout_seconds=60,
     )

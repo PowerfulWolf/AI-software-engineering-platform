@@ -32,8 +32,8 @@ from ai_software_engineer.agents.ports import (
 from ai_software_engineer.artifacts import ArtifactStore
 from ai_software_engineer.context.models import ContextBundle, ContextId
 from ai_software_engineer.context.ports import ContextStore
-from ai_software_engineer.domain.agent import ROLE_OUTPUT
-from ai_software_engineer.domain.artifact import Artifact, ArtifactId, validate_artifact
+from ai_software_engineer.domain.agent import ROLE_OUTPUTS
+from ai_software_engineer.domain.artifact import Artifact, ArtifactId, validate_artifact_payload
 from ai_software_engineer.domain.model import DomainModel, JsonValue, NonEmptyStr, WirePayload
 
 PromptRole = Literal["system", "user", "assistant"]
@@ -360,7 +360,9 @@ class OpenAICompatibleAgentAdapter:
             usage = _extract_usage(provider_payload)
             content = _extract_content(provider_payload)
             artifact_payload = json.loads(_strip_json_fence(content))
-            artifact = validate_artifact(artifact_payload, ROLE_OUTPUT[request.role])
+            artifact = validate_artifact_payload(artifact_payload)
+            if artifact.kind not in ROLE_OUTPUTS[request.role]:
+                raise ValueError("provider Artifact is outside the role contract")
             artifact = _normalize_producer(artifact, request, self._agent_id, self._agent_version)
             result = AgentResult(
                 run_id=request.run_id,

@@ -21,8 +21,9 @@
   ProductSpecApproval(APPROVED) 才能进入 Solution Designer；
 - Solution Designer Agent 产出精确覆盖 requirement/acceptance IDs 的 TechnicalDesign；Planner
   Agent 产出 ExecutionPlan，可以使用只读 Scheduler/ModelRouter preview Skills 检查可行性；
-- Planner preview 不产生具体 Assignment/Lease/ModelSelection。Project Manager 的
-  `commit_dispatch` Skill 必须基于当前 facts 重新调用同一 deterministic engines 后才能提交分配；
+- Planner preview 不产生具体 Assignment/Lease/ModelSelection。Planner 对流转和派发策略负责，
+  通过 typed Queue/Dispatch Skills 产生可审计意图；Dispatcher service 基于当前 facts 重新调用同一
+  deterministic engines，并在 MySQL fence 中提交分配；
 - T028 stage contract 已固定 `ProjectPreparation → ProjectRequest → ProductSpec/Approval →
   TechnicalDesign → ExecutionPlan → NEW Task`。现有 AgentAdapter 暂仍覆盖 Delivery 四角色；扩展
   Product/Designer/Planner producer/run/context lineage 时不得绕过这些 stage contract。
@@ -32,13 +33,15 @@
 每个 Task 内部只实现串行交付（v0.1 的代码隔离 adapter 使用 Git）：
 
 ```text
-NEW → PLANNING → IMPLEMENTING → QA → REVIEW → DONE
-                                  ↘ FAIL/REJECT → IMPLEMENTING
+NEW → PLANNING → IMPLEMENTING ──complete──→ QA → REVIEW → DONE
+                    │                         ↘ FAIL/REJECT → IMPLEMENTING
+                    └─checkpoint→ CONTINUE_REQUIRED → QUEUED → IMPLEMENTING
 ```
 
-当前 `RuntimeSession` 一次仍只推进一个 Task；T019 已实现纯、确定、可重放的有界
-PortfolioScheduler/ModelRouter 决策，尚未实现持久化 WorkQueue application service。组织层可以
-并发多个彼此隔离的 Task，但单个 Task 内的角色不能并行或跳步。允许 `BLOCKED` 和 `FAILED`
+当前 `RuntimeSession` 一次仍只推进一个 Task；T046 已实现 Run 级 MySQL PersistentWorkQueue、
+确定性 Dispatcher tick 和 owner-fenced Lease lifecycle。外部进程监督负责重复 tick，Planner 模型
+不运行无限循环。组织层可以并发多个彼此隔离的 Task，但单个 Task 内的角色不能并行或跳步。
+当前 `ase request` 兼容入口尚未切换为逐角色 Worker。允许 `BLOCKED` 和 `FAILED`
 终态。禁止在 v0.1 引入：
 
 - 单 Task 内复杂 DAG、并行 Coder/QA/Reviewer、动态角色创建；
@@ -191,15 +194,20 @@ subprocess/filesystem handle。
 - 先写临时文件，Schema 校验和 SHA-256 通过后原子落盘；
 - artifact 不可原地修改，修订使用新 ID + `supersedes`；
 - 所有下游只读取 artifact store，不读取上游 Agent 的隐式会话；
+- `coder-progress` 是非候选 checkpoint：HEAD 必须仍为输入 revision，`remaining_step_ids` 和
+  `next_actions` 非空，实际 dirty paths 必须与 `changed_files` 完全一致；
 - `DONE` 必须引用完整的 `plan → implementation-report → qa-report → review-report` 链；
   implementation/QA/Review 必须使用同一 candidate SHA，plan 可以绑定 Task base revision；
 - 缺 evidence、revision 不匹配或 Schema 失败时，拒绝迁移，不允许“宽松接受”。
 
 ## Git / worktree 规则
 
-- 主 checkout 只读；每个 Task/attempt 建立独立 Coder、QA、Reviewer worktree；
-- branch 命名：`ai/<task-id>/attempt-<n>`；重试创建新 worktree，不污染旧现场；
-- Coder 提交前检查 changed paths 和 `git diff --check`；QA 测试变更默认不进入候选分支；Reviewer 只读；
+- 主 checkout 只读；每个 Task 建立隔离 Coder worktree，QA、Reviewer 使用独立 worktree；
+- Coder 的同一需求延续使用同一个隔离 worktree/branch；`coder-progress` 必须精确声明保留的 dirty
+  paths，平台重启后校验 checkpoint 才能再次运行 Coder；
+- Coder 不直接执行 `git add/commit`。完整实现由平台 `CandidateCommitSkill` 对 source revision、
+  reported paths、实际 dirty inventory 和 write policy 做精确校验后创建一个候选提交；
+- QA 测试变更默认不进入候选分支；Reviewer 只读；
 - v0.1 只交付 candidate SHA + diff + evidence，不自动 merge；
 - 清理前确认 artifact 已持久化且 worktree 无未保存变更。
 - 中断改动捕获是只读事实，不是批准或 candidate；不能因额度恢复而重置终态 Task 或接受任意
@@ -210,8 +218,12 @@ subprocess/filesystem handle。
 ## 失败与重试
 
 - 默认最多 3 个 Coder attempt；Agent timeout/崩溃只按 transient 重试，不产生 verdict；
-- T010 使用 `RetryingOrchestrator` 继续已有 `PLANNING`/`IMPLEMENTING`/`QA`/`REVIEW`
+- T010 使用 `RetryingOrchestrator` 继续已有 `PLANNING`/`IMPLEMENTING`/`CONTINUE_REQUIRED`/
+  `QUEUED`/`QA`/`REVIEW`
   checkpoint；每次 Agent 调用前调用 `TaskRepository.record_attempt`，StateEvent 同步记录 attempt；
+- Coder 未在本次时限内完成时必须返回 `coder-progress`，触发
+  `IMPLEMENTING → CONTINUE_REQUIRED → QUEUED → IMPLEMENTING`；每次继续都消耗一次 attempt，
+  达到 `max_attempts` 后进入 `BLOCKED`，不得无限循环或把草稿交给 QA；
 - QA `FAIL` 或 Review `REJECT` 必须把原 finding、命令、位置和 evidence ID 路由给 Coder；
 - `INVALID_OUTPUT`、`POLICY_VIOLATION`、需求歧义和预算耗尽不能靠无限重试解决；按 `docs/failure-routing.md` 进入 `BLOCKED`；
 - 状态事件必须带 `from_status`、`to_status`、attempt、reason、artifact IDs、source revision，并支持幂等回放。

@@ -27,9 +27,9 @@ class AgentAdapter(Protocol):
     def run(self, request: AgentRequest) -> AgentResult: ...
 ```
 
-`AgentRequest` 固定携带 `run_id`、`task_id`、`role`、`attempt`、`source_revision`、`context_manifest_id`、`input_artifact_ids`、机器 `permissions`、`output_schema` 和 `timeout_seconds`。`AgentResult` 回显这些身份字段，并且只能是 `SUCCEEDED + typed artifact`，或 `FAILED/TIMED_OUT + AgentFailure`；失败结果不能携带 verdict Artifact。
+`AgentRequest` 固定携带 `run_id`、`task_id`、`role`、`attempt`、`source_revision`、`context_manifest_id`、`input_artifact_ids`、机器 `permissions`、`output_schema` 和 `timeout_seconds`。Coder 接续运行还必须携带 `continuation_checkpoint_id` 和排序后的 `continuation_changed_paths`，且 checkpoint 必须在 input artifacts 中。`AgentResult` 回显这些身份字段，并且只能是 `SUCCEEDED + typed artifact`，或 `FAILED/TIMED_OUT + AgentFailure`；失败结果不能携带 verdict Artifact。
 
-这里 request 的 `source_revision` 始终表示 Agent 实际收到的输入 revision。Coder 会在该基线上创建新 commit，因此 implementation-report Artifact 的 `source_revision` 可以不同，但必须等于报告内 `commit_sha`；QA 和 Reviewer 随后的 request/result 都必须严格绑定这个 candidate。不要为了追求字段字面相等而在 Coder 启动前虚构未知 candidate。
+这里 request 的 `source_revision` 始终表示 Agent 实际收到的输入 revision。Coder 在该基线上形成 intended diff；Codex adapter 先校验 provisional report、实际路径与机器权限，再由平台创建 candidate commit。最终 implementation-report Artifact 的 `source_revision` 可以不同，但必须等于报告内 `commit_sha`；QA 和 Reviewer 随后的 request/result 都必须严格绑定这个 candidate。不要为了追求字段字面相等而在 Coder 启动前虚构未知 candidate。
 
 v0.1 的 `FakeAgentAdapter` 不渲染 prompt、不访问网络或 Git，而是按 `(role, attempt)` 注入可重复 scenario。它用于离线验证状态机和失败路由；真实 adapter 必须复用同一 request/result contract，不得让供应商对象穿透到 Orchestrator。
 
@@ -80,11 +80,17 @@ Implement only the Task acceptance criteria in the assigned worktree.
 Read the plan and every prior QA/Review finding before editing.
 Map each acceptance criterion to changed code, tests, and evidence.
 Run only allowlisted commands. Do not delete or weaken tests to hide a failure.
-Commit the candidate changes. Never emit or edit qa-report/review-report verdicts.
+Do not request access to external Git metadata. Return the exact intended diff inventory and
+provisional implementation report; the platform validates and creates the candidate commit.
+Never emit or edit qa-report/review-report verdicts.
+If required implementation work remains when the bounded run must end, return coder-progress with
+the exact dirty-path inventory, completed and remaining plan steps, test evidence, and next actions.
 When blocked by ambiguity, missing dependency, or required permission, stop and report it.
 ```
 
-输出：`implementation-report` + candidate commit SHA。Coder 不能把“测试应该通过”写成测试证据。
+输出二选一：未完成时为 `coder-progress`（不产生 candidate）；完成时为 provisional
+`implementation-report`，通过 `CandidateCommitSkill` 机器校验后由平台绑定 candidate commit SHA。
+Coder 不能把“测试应该通过”写成测试证据。
 
 ## QA
 

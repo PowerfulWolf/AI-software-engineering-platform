@@ -290,7 +290,8 @@ Scheduler 只返回 WorkItem/capacity/Assignment/Lease 决策，不迁移 TaskSt
 带 reason 的 ModelSelection/refusal，不调用 provider。ProjectProfile 是只读观察，不执行构建或
 猜测测试入口。SpecCompiler 只自动合并显式结构化规则；冲突不按层级静默覆盖。Runtime binding
 固定 organization/project/sidecar 边界并在重开时检测漂移。TaskOrchestrator 继续固定一个 Task
-内角色顺序，CLI 持久化 WorkQueue/自动 binding 尚未实现。
+内角色顺序。T046 的 PersistentWorkQueue 以一次可执行角色 Run 为队列粒度，Dispatcher 仅执行
+Planner 批准的调度/路由规则；模型会话不负责轮询、事务、心跳或 Lease 回收。
 
 ### 10.3 Required invariants
 
@@ -304,3 +305,7 @@ Scheduler 只返回 WorkItem/capacity/Assignment/Lease 决策，不迁移 TaskSt
 8. CompiledSpec 冲突时不得产生 runnable allocation；hard safety resolution 不可放宽；
 9. RuntimeAgentRun 必须同时验证 WorkItem、Assignment、active Lease、AgentProfile、ModelSelection、
    CompiledSpec、Context 和 Task repository 身份。
+10. Queue WorkItem 必须有独立 identity、role、attempt、checkpoint sequence 和 repository scopes；
+    同一 Task 的后续 Coder/QA/Reviewer Run 不能复用前一 WorkItem identity。
+11. Lease owner token 只以 digest 持久化；start/renew/complete/wait/retry 必须在 row lock 下校验 owner。
+12. 当前 WorkItem 关闭与下一个 WorkItem 发布必须原子完成；过期 Lease 只能进入可审计的恢复路径。

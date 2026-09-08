@@ -132,7 +132,7 @@ def test_planning_adapter_rejects_a_non_planning_role(tmp_path: Path) -> None:
             commands=("git status",),
             network=NetworkAccess.NONE,
         ),
-        output_schema="schemas/implementation-report.schema.json",
+        output_schema="schemas/coder-output.schema.json",
         timeout_seconds=60,
     )
 

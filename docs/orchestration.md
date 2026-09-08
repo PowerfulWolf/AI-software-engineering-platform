@@ -5,23 +5,45 @@
 TaskOrchestrator 是一个 Task 交付状态的唯一写入者。它不实现业务代码，也不根据模型自然语言
 推断“应该算通过”；所有决定依赖可校验 Artifact、Git 元数据和显式策略。
 
-PortfolioScheduler 位于它上层，管理 WorkQueue、Agent capacity、RoleAssignment、TaskLease 和
-ModelSelection。Scheduler 不写 TaskStatus、不解释 verdict；TaskOrchestrator 不拥有全局 Agent
-或决定队列优先级。这两个独立 seam 避免把跨 Task 调度复杂度塞进交付状态机。
+Planner Agent 位于它上层，拥有流转和派发策略；`PersistentWorkQueue`、Dispatcher、Scheduler 与
+ModelRouter 是执行这些策略的确定性 seams。Scheduler 不写 TaskStatus、不解释 verdict；Dispatcher
+不生成计划；TaskOrchestrator 不拥有全局 Agent 或决定队列优先级。这样模型判断、跨 Task 调度和
+单 Task 证据状态机彼此隔离。
 
 ```text
 WorkQueue
-  → PortfolioScheduler.match(WorkItem, AgentProfile)
+  → DispatcherLoop.tick()
+  → PortfolioScheduler.match(QueuedWorkItem, AgentProfile)
   → RoleAssignment + TaskLease
   → ModelRouter.select(...) → ModelSelection
-  → AgentRunAllocation
-  → TaskOrchestrator.run_task(task_id)
+  → MySQL atomic claim + owner token digest
+  → AgentRunAllocation → one role Agent Run
+  → TaskOrchestrator validates result
+  → close current WorkItem + enqueue next WorkItem atomically
 ```
 
-T019 已实现前面的纯 Scheduler/ModelRouter 决策，T022 已实现将已持久化 workforce、CompiledSpec
-和 workspace binding 解析为 `AgentRunAllocation + AgentDefinition`。T031 原子提交三角色 allocation，
-T032 再把它组合进统一 Project Manager 入口；`RuntimeSession` 仍一次只运行一个 Task，持久化
-WorkQueue 后台循环尚未实现。
+T019 实现纯 Scheduler/ModelRouter，T022 将已持久化 workforce、CompiledSpec 和 workspace binding
+解析为 `AgentRunAllocation + AgentDefinition`。T046 增加 MySQL Run 级队列、Planner-owned
+Dispatcher tick、原子 claim、owner-fenced start/renew/complete/wait/retry 和 Lease expiry reaper；
+每次 tick 先回收过期 Lease，再领取至多一个 Run。start/renew/result 属于持有 owner token 的 Worker，
+不是 Dispatcher 的隐式权限。
+当前 `ase request` 兼容入口仍一次同步运行一个 Task；逐角色 Worker 接线完成后，由外部进程监督器
+重复调用 tick，不由 Planner 的模型会话运行无限循环。
+
+### WorkItem 生命周期
+
+```text
+READY → LEASED → RUNNING → CLOSED
+                    ├─→ RETRY_SCHEDULED ──available_at──→ READY/claim
+                    ├─→ WAITING_HUMAN ──human event──→ READY
+                    └─→ WAITING_DEPENDENCY ──verified signal──→ READY
+
+LEASED/RUNNING ──Lease expiry──→ RETRY_SCHEDULED
+```
+
+只有 exact `lease_id + owner_token` 的 Worker 能执行生命周期操作，数据库只保存 token digest。
+等待和重试立即释放容量；心跳只能延长尚未过期的 Lease；过期 owner 不能复活或提交结果。相同
+completion 重放返回首次结果，不同正文复用已关闭 WorkItem 会被拒绝。
 
 ## 2. 核心流程
 
@@ -31,7 +53,9 @@ WorkQueue 后台循环尚未实现。
 生成 plan（可由规划 Agent 或受限 Coder 规划模式完成）
   ↓ schema/evidence 校验
 创建 Coder worktree → 启动 Coder
-  ↓ implementation-report + candidate commit
+  ├─ coder-progress → CONTINUE_REQUIRED → QUEUED → 继续同一隔离 worktree
+  └─ implementation complete → CandidateCommit Skill → candidate commit
+       ↓ implementation-report
 创建 QA worktree → 启动 QA
   ├─ FAIL → 分类 finding → retry Coder 或 BLOCKED
   └─ PASS
@@ -59,8 +83,17 @@ def run_task(task_id: str) -> DeliveryResult:
         assert transition(task, "IMPLEMENTING")
         ctx = context.build(task, role="coder", attempt=task.attempts)
         coder_result = agents.run("coder", ctx, policy=policy.for_role("coder"))
-        impl = validate_and_store(coder_result, "implementation-report", task)
-        if not impl.valid or not git.is_allowed_candidate(impl.commit_sha, task):
+        coder_artifact = validate_and_store(coder_result, "coder-output", task)
+        if coder_artifact.kind == "coder-progress":
+            validate_checkpoint(coder_artifact, worktree)
+            transition(task, "CONTINUE_REQUIRED", artifacts=[coder_artifact])
+            if task.attempts >= task.max_attempts:
+                return block(task, "attempt_budget_exhausted")
+            transition(task, "QUEUED", artifacts=[coder_artifact])
+            continue
+
+        impl = candidate_commit.finalize(coder_artifact, worktree, policy)
+        if not impl.valid:
             return block(task, "invalid_coder_output")
 
         assert transition(task, "QA")
@@ -99,7 +132,7 @@ SerialOrchestrator.run_task(task_id: TaskId) -> DeliveryResult
 ```
 
 T009 严格只接受 `NEW` Task，不包含 retry loop；T010 接受 `NEW`、`PLANNING`、`IMPLEMENTING`、
-`QA`、`REVIEW` checkpoint，并按最多 `Task.max_attempts` 次尝试执行。旧 Artifact 永不覆盖，
+`CONTINUE_REQUIRED`、`QUEUED`、`QA`、`REVIEW` checkpoint，并按最多 `Task.max_attempts` 次尝试执行。旧 Artifact 永不覆盖，
 修复后的 implementation-report 通过 `supersedes` 和 QA/Review finding parent 建立 lineage。
 
 每次 run 的执行顺序固定为：
@@ -125,6 +158,8 @@ T009 严格只接受 `NEW` Task，不包含 retry loop；T010 接受 `NEW`、`PL
   Review 必须使用同一 candidate revision，plan 可绑定 Task base revision。
 - Coder request/context revision 是输入基线，implementation-report revision 是新 candidate 且
   必须等于 `content.commit_sha`；不能在 Coder 启动前虚构未知 candidate。
+- `coder-progress` 不产生 candidate；它的 source revision 保持输入基线，并将精确 dirty paths、
+  已完成/剩余步骤和 next actions 作为下一次 Coder Run 的显式输入。
 - plan/implementation/QA 对 Task criterion ID 必须精确全覆盖；4 个 producer run ID 必须独立。
 
 - 每次 Agent attempt 先通过 `TaskRepository.record_attempt` 持久化；StateEvent 记录对应
@@ -143,7 +178,7 @@ T009 严格只接受 `NEW` Task，不包含 retry loop；T010 接受 `NEW`、`PL
 | 内部不变量破坏 | 保留现场并追加 `FAILED` event |
 
 同一 attempt 的上下文只来自声明的已持久化 Artifact；重启恢复会扫描本 Task 的可信
-Artifact，识别最新 plan/implementation/QA/Review，并从最近合法状态继续。
+Artifact，识别最新 plan/coder-progress/implementation/QA/Review，并从最近合法状态继续。
 
 ## 6. 交付包
 

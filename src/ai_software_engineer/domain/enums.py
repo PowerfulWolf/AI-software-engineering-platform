@@ -7,6 +7,8 @@ class TaskStatus(StrEnum):
     NEW = "NEW"
     PLANNING = "PLANNING"
     IMPLEMENTING = "IMPLEMENTING"
+    CONTINUE_REQUIRED = "CONTINUE_REQUIRED"
+    QUEUED = "QUEUED"
     QA = "QA"
     REVIEW = "REVIEW"
     DONE = "DONE"
@@ -59,7 +61,6 @@ class OrganizationRole(StrEnum):
     PRODUCT = "product"
     DESIGNER = "designer"
     PLANNER = "planner"
-    ORCHESTRATOR = "orchestrator"
     CODER = "coder"
     QA = "qa"
     REVIEWER = "reviewer"
@@ -102,6 +103,7 @@ class ModelRouteReason(StrEnum):
 
 class ArtifactKind(StrEnum):
     PLAN = "plan"
+    CODER_PROGRESS = "coder-progress"
     IMPLEMENTATION_REPORT = "implementation-report"
     QA_REPORT = "qa-report"
     REVIEW_REPORT = "review-report"
@@ -140,6 +142,10 @@ class ImplementationTestStatus(StrEnum):
     PASS = "PASS"
     FAIL = "FAIL"
     NOT_RUN = "NOT_RUN"
+
+
+class CoderProgressStatus(StrEnum):
+    CONTINUE_REQUIRED = "CONTINUE_REQUIRED"
 
 
 class QaReportStatus(StrEnum):
