@@ -15,6 +15,7 @@ from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.multi_directory.integration_commands import planner_command_policy
 from ai_software_engineer.multi_directory.models import (
     ChildDelivery,
+    DesignInterfaceConsumersError,
     DialogueMessage,
     IntegrationCommandError,
     IntegrationEvidence,
@@ -264,7 +265,7 @@ class JointDeliveryService:
                     "revisions."
                 ),
             )
-        if checkpoint.stage is JointStage.DESIGNING:
+        while checkpoint.stage is JointStage.DESIGNING:
             checkpoint = self._attempt(checkpoint, "design")
             design = self._produce(
                 checkpoint,
@@ -278,12 +279,26 @@ class JointDeliveryService:
                 "requirement/acceptance mappings. "
                 "Cover every requirement, define explicit producer/consumer interface "
                 "contracts and compatibility. "
+                "Each interface consumers list must contain unique input unit IDs. "
+                "Do not list one repository repeatedly for its internal components. "
+                "Use interfaces=[] when no interface contract is needed. "
+                "Correct any prior rejection in next_action. "
                 "Component affected_paths are repository-relative and MUST remain "
                 "within selected_paths. "
                 "Read-only inputs need no artificial code change. This is not a generic DAG.",
             )
             assert checkpoint.product_spec is not None
-            design.validate_for(checkpoint.scope, checkpoint.product_spec)
+            try:
+                design.validate_for(checkpoint.scope, checkpoint.product_spec)
+            except DesignInterfaceConsumersError as exc:
+                checkpoint = self._save(
+                    checkpoint,
+                    next_action=(
+                        f"Rejected design {digest(design)}: {exc}. "
+                        "Return a corrected complete design within the remaining attempt budget."
+                    ),
+                )
+                continue
             checkpoint = self._save(
                 checkpoint,
                 stage=JointStage.PLANNING,

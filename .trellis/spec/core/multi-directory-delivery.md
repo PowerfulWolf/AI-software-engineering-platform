@@ -151,3 +151,57 @@ plans unchanged. Bad: broaden the validator because a model selected a disallowe
 Wrong: duplicate a partial prefix list in a prompt. Correct: derive context and enforcement from
 one module and verify both with `test_integration_command_policy.py`. Service/journal feedback
 regression is `test_command_rejection_is_safe_and_durable`.
+
+## 10. Bounded Designer duplicate-consumer correction
+
+### Scope / Trigger
+
+Schema-valid JointTechnicalDesign with repeated interface consumers. This is a recoverable
+model artifact rejection, not permission to normalize the model output or retry arbitrary errors.
+
+### Signatures and contracts
+
+`DesignInterfaceConsumersError(interface_index: int)` is a ValueError subtype raised by
+`JointTechnicalDesign.validate_for(scope, product)` after interface scope membership checks.
+`JointDeliveryService._advance` catches only this type, seals a DESIGNING checkpoint containing
+the rejected design SHA and one-based interface index in `next_action`, then calls Designer again
+within the existing three-call design budget. Every call spends an attempt before execution.
+The invalid design remains absent; feedback never includes interface names, prose or raw output.
+Approval, product and scope are unchanged. No wire fields, schemas or migration are introduced.
+An interruption preserves the feedback and spent attempts. Exhaustion raises before another call;
+the last DESIGNING checkpoint remains inspectable, with no accepted design or downstream Task.
+
+### Validation & Error Matrix
+
+| Case | Result |
+|---|---|
+| Repeated known consumers, then valid full design | Durable rejection; full validation before Planner |
+| Three duplicate-consumer rejections | No fourth call, no plan/dispatch; preserve last diagnostic |
+| Provider interruption during correction | Propagate; resume retains feedback and budget |
+| Wrong ProductSpec digest, path escape, foreign unit, schema/provider error | No automatic retry |
+| Already accepted Design | Resume does not regenerate Design |
+
+### Good / Base / Bad and tests
+
+Good: Designer corrects the complete document using durable `next_action`; Base: first valid
+design behaves as before; Bad: silently deduplicate consumers and approve the altered document.
+`tests/project_manager/test_joint_designer_feedback.py` uses a deterministic provider and real
+journal to assert exact rejection, correction before planning, preserved approval, interruption,
+budget exhaustion/reopen, safe diagnostics, and no retry for unrelated violations.
+
+Wrong: `except ValueError: retry()` or `consumers = tuple(set(consumers))`.
+Correct: catch the dedicated safe diagnostic, append immutable feedback, spend the existing budget,
+and revalidate the next complete artifact. Production delivery success still needs real QA/Review.
+
+### Bug analysis
+
+1. Root cause (B/D/E): semantic uniqueness is stricter than JSON shape; the service assumed a
+   parsed design was semantically usable, and tests lacked rejection-to-correction coverage.
+2. Prior fixes: Planner feedback did not cover Designer. This fix keeps that distinct boundary;
+   it does not generalize Planner retries or treat provider failures as design errors.
+3. Prevention: P0 typed safe diagnostic and durable correction loop DONE; P0 real-journal
+   regression tests DONE; P1 audit other semantic validators for similarly safe feedback TODO.
+4. Systematic expansion: other validation failures still fail closed. Add typed feedback only
+   after defining the safe fields and call budget; never echo arbitrary exceptions.
+5. Knowledge capture: this section records the executable contract and regression seam. This repo
+   has no `src/templates/markdown/spec/` mirror to synchronize.

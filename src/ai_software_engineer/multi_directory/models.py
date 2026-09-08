@@ -103,6 +103,13 @@ class InterfaceContract(DomainModel):
     compatibility: NonEmptyStr
 
 
+class DesignInterfaceConsumersError(ValueError):
+    """Safe duplicate-consumer diagnostic; never echo model-authored prose."""
+
+    def __init__(self, *, interface_index: int) -> None:
+        super().__init__(f"interface consumers must be unique; interface index: {interface_index}")
+
+
 class JointTechnicalDesign(DomainModel):
     product_spec_sha256: Digest
     summary: NonEmptyStr
@@ -160,10 +167,11 @@ class JointTechnicalDesign(DomainModel):
                     raise ValueError("design write paths exceed the selected directories")
         if covered != set(expected):
             raise ValueError("joint design does not cover the approved product")
-        for interface in self.interfaces:
-            ensure_unique(interface.consumers, "interface consumers")
+        for index, interface in enumerate(self.interfaces, 1):
             if interface.producer not in known or not set(interface.consumers) <= set(known):
                 raise ValueError("interface references a directory outside this request")
+            if len(set(interface.consumers)) != len(interface.consumers):
+                raise DesignInterfaceConsumersError(interface_index=index)
 
 
 class UnitPlan(DomainModel):
