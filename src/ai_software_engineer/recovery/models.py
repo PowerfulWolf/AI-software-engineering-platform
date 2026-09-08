@@ -207,7 +207,11 @@ class RecoveryPlan(DomainModel):
     capture: CapturedChanges
     target_base_revision: FullCommit
     target_preparation_sha256: StageSha256
+    # Source permissions prove the captured historical worktree. A separately
+    # approved target policy lets recovery survive later security tightening
+    # without silently expanding what the new Coder may do.
     permissions: AgentPermissions
+    target_permissions: AgentPermissions | None = None
     denied_paths: tuple[str, ...]
     created_at: AwareDatetime
     plan_sha256: StageSha256
@@ -221,6 +225,11 @@ class RecoveryPlan(DomainModel):
     def new_task_id(self) -> TaskId:
         return "task_recovery_" + self.plan_sha256[:32]
 
+    @property
+    def effective_target_permissions(self) -> AgentPermissions:
+        """Return the approved target policy, preserving legacy plan semantics."""
+        return self.target_permissions or self.permissions
+
     @model_validator(mode="after")
     def validate_lineage(self) -> Self:
         if (
@@ -228,12 +237,28 @@ class RecoveryPlan(DomainModel):
             or self.capture.source_revision != self.source.base_revision
         ):
             raise ValueError("capture must belong to the failed Task and base")
-        if self.permissions.can_change_state or self.permissions.can_merge:
+        target = self.effective_target_permissions
+        if (
+            self.permissions.can_change_state
+            or self.permissions.can_merge
+            or target.can_change_state
+            or target.can_merge
+        ):
             raise ValueError("recovery cannot grant Coder state or merge authority")
+        if self.target_permissions is not None and (
+            not set(target.read_paths).issubset(self.permissions.read_paths)
+            or not set(target.write_paths).issubset(self.permissions.write_paths)
+            or not set(target.commands).issubset(self.permissions.commands)
+            or target.network is not self.permissions.network
+        ):
+            raise ValueError("recovery target permissions may only narrow source permissions")
         for value in (
             *self.permissions.read_paths,
             *self.permissions.write_paths,
             *self.permissions.commands,
+            *target.read_paths,
+            *target.write_paths,
+            *target.commands,
             *self.denied_paths,
         ):
             _safe_text(value)

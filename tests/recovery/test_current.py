@@ -187,6 +187,7 @@ def test_native_current_gate_and_authorization_preserve_history(
         {"target_preparation_sha256": "0" * 64},
         {"target_base_revision": run.source_revision},
         {"permissions": original.permissions.model_copy(update={"write_paths": ()})},
+        {"target_permissions": original.permissions.model_copy(update={"commands": ()})},
         {"denied_paths": (*original.denied_paths, "hello.txt")},
     ):
         with pytest.raises(RecoveryRejected):

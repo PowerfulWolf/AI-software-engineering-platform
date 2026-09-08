@@ -943,6 +943,20 @@ def _task_commands(profile: ProjectProfile) -> tuple[str, ...]:
     return tuple(sorted(commands))
 
 
+def _delivery_role_permissions(
+    role: AgentRole,
+    allowed_paths: tuple[str, ...],
+    commands: tuple[str, ...],
+) -> AgentPermissions:
+    """Compile the current machine-enforced policy for one delivery role."""
+    return AgentPermissions(
+        read_paths=("**",),
+        write_paths=allowed_paths if role is AgentRole.CODER else (),
+        commands=commands,
+        network=NetworkAccess.MODEL_ENDPOINT_ONLY,
+    )
+
+
 def _clean_git_head(project_root: Path) -> str:
     environment = {
         "PATH": os.environ.get("PATH", os.defpath),
@@ -1008,12 +1022,7 @@ def _agent_definitions(
             version="v0.1",
             model=phase.model_selection.model,
             provider=phase.model_selection.provider,
-            permissions=AgentPermissions(
-                read_paths=("**",),
-                write_paths=allowed_paths if phase.role is AgentRole.CODER else (),
-                commands=commands,
-                network=NetworkAccess.MODEL_ENDPOINT_ONLY,
-            ),
+            permissions=_delivery_role_permissions(phase.role, allowed_paths, commands),
             input_artifacts=_ROLE_INPUTS[phase.role],
             output_artifacts=_ROLE_OUTPUTS[phase.role],
             max_retries=0,

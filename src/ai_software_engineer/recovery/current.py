@@ -6,11 +6,15 @@ from pathlib import Path
 
 from ai_software_engineer.company_workspace import CompanyWorkspace, _read_regular, _reject_symlinks
 from ai_software_engineer.config import ProductionConfig
-from ai_software_engineer.domain import ProjectPreparation
+from ai_software_engineer.domain import AgentRole, ProjectPreparation
 from ai_software_engineer.git import GitWorktreeManager
 from ai_software_engineer.project_manager.baseline import (
     ProjectBaselineCompiler,
     ProjectSpecBaseline,
+)
+from ai_software_engineer.project_manager.production_backend import (
+    _delivery_role_permissions,
+    _task_commands,
 )
 from ai_software_engineer.project_manager.production_rules import production_rules
 from ai_software_engineer.project_profile import ProjectProfile
@@ -106,6 +110,13 @@ class NativeRecoveryFactsVerifier:
             or profile.source_revision != plan.target_base_revision
         ):
             raise ValueError("target profile mismatch")
+        constraints = original.task.constraints
+        allowed_paths = constraints.allowed_paths if constraints is not None else ()
+        expected_target_permissions = _delivery_role_permissions(
+            AgentRole.CODER, allowed_paths, _task_commands(profile)
+        )
+        if plan.effective_target_permissions != expected_target_permissions:
+            raise ValueError("approved target Coder permissions are no longer current")
         binding_path = _record_read_path(
             sidecar / "policy", RUNTIME_BINDING_NAME, target.runtime_binding_sha256
         )

@@ -267,6 +267,24 @@
             }
           ]
         },
+        "target_permissions": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentPermissions",
+              "allOf": [
+                {
+                  "properties": {
+                    "can_merge": {"const": false},
+                    "can_change_state": {"const": false}
+                  }
+                }
+              ]
+            },
+            {"type": "null"}
+          ],
+          "default": null,
+          "title": "Target Permissions"
+        },
         "denied_paths": {
           "items": {
             "type": "string"

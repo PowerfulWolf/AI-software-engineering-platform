@@ -662,6 +662,11 @@ Coder-only 的 `recovery.patch` ContextSource 交付完整旧补丁，让 Coder 
 省略字段保持历史哈希和严格 Git seed 行为，不自动 fallback。此模式的 seed receipt 记录空的初始
 改动捕获，不表示补丁已经应用；非空捕获拒绝。准入要求补丁 URI、正文、SHA 完全一致且未截断。
 
+恢复计划把权限分成两个用途：`permissions` 精确验证旧 Coder 现场，`target_permissions` 封存新
+Coder 的当前权限。新权限只能按精确 token 收紧 read/write/command，network 必须不变，且两者都
+不能改状态或 merge。旧记录省略新字段并保持原 SHA；如果平台权限已经收紧，旧批准会安全失效，
+必须重新提案并由人类批准 exact 新 SHA，不能在执行时静默换权限。
+
 执行复用既有 Scheduler/ModelRouter、Task materializer、RuntimeSession 和角色 worktree。
 只有匹配 seed receipt 的 Coder 初始修改可获准，普通任务仍要求干净工作树。
 原联合需求上下文继续传给新角色；QA/Reviewer 仍独立验证同一 candidate SHA。

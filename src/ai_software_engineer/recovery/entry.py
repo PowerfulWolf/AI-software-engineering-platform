@@ -22,6 +22,7 @@ from ai_software_engineer.project_manager.mysql_dispatch_authority import (
 from ai_software_engineer.project_manager.production_backend import (
     ProductionProjectDeliveryBackend,
     _agent_definitions,
+    _delivery_role_permissions,
     _task_commands,
 )
 from ai_software_engineer.project_manager.production_delivery import (
@@ -158,7 +159,8 @@ class NativeRecoveryEntry:
         failed_context_id: str,
         input_mode: RecoveryInputMode | None = None,
     ) -> tuple[RecoveryPlan, Path]:
-        prepared = self.backend.prepare(project_root).preparation
+        prepared_result = self.backend.prepare(project_root)
+        prepared = prepared_result.preparation
         if prepared is None:
             raise RecoveryRejected("project preparation needs human resolution")
         scope = RecoveryScope(
@@ -184,6 +186,13 @@ class NativeRecoveryEntry:
         capture = manager.capture_changes(
             old, original.permissions, denied_paths=original.denied_paths
         )
+        constraints = original.task.constraints
+        allowed_paths = constraints.allowed_paths if constraints is not None else ()
+        target_permissions = _delivery_role_permissions(
+            AgentRole.CODER,
+            allowed_paths,
+            _task_commands(self.backend._facts(prepared_result).profile),
+        )
         plan = RecoveryPlan.create(
             input_mode=input_mode,
             source=original.source,
@@ -191,6 +200,7 @@ class NativeRecoveryEntry:
             target_base_revision=manager._run_git(("rev-parse", "HEAD"), cwd=Path(project_root)),
             target_preparation_sha256=prepared.preparation_sha256,
             permissions=original.permissions,
+            target_permissions=target_permissions,
             denied_paths=original.denied_paths,
             created_at=datetime.now(UTC),
         )
@@ -315,7 +325,7 @@ class NativeRecoveryEntry:
             policies=(policy,),
         ).allocate(plan.plan_sha256)
         definitions = _agent_definitions(dispatch, _task_commands(draft.facts.profile))
-        if definitions[AgentRole.CODER].permissions != plan.permissions:
+        if definitions[AgentRole.CODER].permissions != plan.effective_target_permissions:
             raise RecoveryRejected("new Coder permissions differ from approved recovery")
         manager = self._manager(plan.source.scope)
         coordinator = DispatchRoleWorktreeCoordinator(

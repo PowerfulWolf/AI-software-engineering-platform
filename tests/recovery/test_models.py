@@ -8,6 +8,7 @@ import pytest
 from jsonschema import Draft202012Validator, FormatChecker
 from pydantic import Field, TypeAdapter, ValidationError
 
+from ai_software_engineer.domain import NetworkAccess
 from ai_software_engineer.recovery import (
     CapturedChanges,
     RecoveryAuthorization,
@@ -68,6 +69,39 @@ def test_changed_baseline_has_new_plan_and_new_task_identity(tmp_path: Path) -> 
     assert changed.new_task_id != plan.new_task_id
     with pytest.raises(RecoveryRejected):
         plan.model_copy(update={"target_base_revision": "d" * 40}).validate_integrity()
+
+
+def test_target_permissions_are_hash_bound_and_may_only_narrow_source(tmp_path: Path) -> None:
+    old = make_plan(tmp_path / "project")
+    source = old.permissions.model_copy(update={"commands": ("git status", "git commit")})
+    target = source.model_copy(update={"commands": ("git status",)})
+    plan = RecoveryPlan.create(
+        **{
+            **old.to_wire(),
+            "permissions": source,
+            "target_permissions": target,
+        }
+    )
+    VALIDATOR.validate(plan.to_wire())
+    assert plan.effective_target_permissions == target
+    assert plan.plan_sha256 != old.plan_sha256
+    assert (
+        RecoveryPlan.model_validate(old.to_wire()).effective_target_permissions == old.permissions
+    )
+    for expanded in (
+        target.model_copy(update={"read_paths": (*source.read_paths, "docs/**")}),
+        target.model_copy(update={"write_paths": (*source.write_paths, "tests/**")}),
+        target.model_copy(update={"commands": (*source.commands, "git push")}),
+        target.model_copy(update={"network": NetworkAccess.MODEL_ENDPOINT_ONLY}),
+    ):
+        with pytest.raises(ValidationError, match="may only narrow"):
+            RecoveryPlan.create(
+                **{
+                    **old.to_wire(),
+                    "permissions": source,
+                    "target_permissions": expanded,
+                }
+            )
 
 
 def test_capture_tamper_and_cross_task_are_rejected(tmp_path: Path) -> None:

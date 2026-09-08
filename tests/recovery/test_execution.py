@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import ai_software_engineer.project_manager.production_backend as production_backend
 from ai_software_engineer.agents import (
     AgentAdapter,
     AgentRequest,
@@ -203,9 +204,16 @@ class OfflineFactory:
 
 
 @pytest.mark.mysql
-@pytest.mark.parametrize("reapply", [False, True])
+@pytest.mark.parametrize(
+    ("reapply", "legacy_direct_commit"),
+    [(False, False), (True, False), (True, True)],
+)
 def test_recovery_complete_native_delivery_and_preserve_failed_history(
-    tmp_path: Path, mysql_dsn: str, reapply: bool
+    tmp_path: Path,
+    mysql_dsn: str,
+    reapply: bool,
+    legacy_direct_commit: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -223,6 +231,15 @@ def test_recovery_complete_native_delivery_and_preserve_failed_history(
         ),
     )
     environment = {"ASE_MYSQL_DSN": mysql_dsn, "PATH": os.environ.get("PATH", "")}
+    current_task_commands = production_backend._task_commands
+    if legacy_direct_commit:
+        monkeypatch.setattr(
+            production_backend,
+            "_task_commands",
+            lambda profile: tuple(
+                sorted((*current_task_commands(profile), "git add", "git commit"))
+            ),
+        )
     interrupted = InterruptedFactory()
     host = OrganizationTeamHost(
         config=config,
@@ -242,6 +259,8 @@ def test_recovery_complete_native_delivery_and_preserve_failed_history(
         )
     ).checkpoint
     original_run = interrupted.requests[0]
+    if legacy_direct_commit:
+        monkeypatch.setattr(production_backend, "_task_commands", current_task_commands)
     recovery = host.recovery_entry()
     (project / "platform-fix.txt").write_text("independent fix\n")
     _git("add", "platform-fix.txt", cwd=project)
@@ -258,6 +277,11 @@ def test_recovery_complete_native_delivery_and_preserve_failed_history(
     )
     store, loaded = recovery.open_plan(path)
     assert loaded == plan
+    assert plan.target_permissions is not None
+    assert "git commit" not in plan.target_permissions.commands
+    if legacy_direct_commit:
+        assert "git commit" in plan.permissions.commands
+        assert plan.target_permissions != plan.permissions
     with pytest.raises(RecoveryRejected):
         recovery.execute(path)
     with pytest.raises(RecoveryRejected):

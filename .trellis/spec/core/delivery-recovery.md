@@ -117,7 +117,8 @@ FileRecoveryStore.get_authorization(plan_sha256: str) -> RecoveryAuthorization
 ```
 
 `RecoveryPlan` contains failed-source lineage, embedded `CapturedChanges`, target base/preparation,
-permissions/denies, aware creation time and `plan_sha256`. `RecoveryAuthorization` contains the exact
+source/target permissions, denies, aware creation time and `plan_sha256`. `permissions` proves the
+historical capture; optional `target_permissions` binds the current Coder policy. `RecoveryAuthorization` contains the exact
 approval command plus verifier-issued decision and `authorization_sha256`; one decision per plan.
 `schemas/delivery-recovery.schema.json` describes plan/authorization union; model and wire validation
 both reject extras. Integrity is not trusted origin: application ports must independently verify facts.
@@ -159,6 +160,8 @@ and optional paired `parent_delivery_id/parent_checkpoint_sha256`. `RecoveryPlan
 `target_base_revision/target_preparation_sha256`. Full commits have exactly 40 or 64 hex characters.
 Paths, permission strings and approval metadata reject detected secrets before persistence; a patch
 is rejected rather than redacted. Recovery permissions cannot grant Coder state-change or merge rights.
+Target permissions must be an exact-token subset of source read/write/command permissions and retain
+the same network class. Omission preserves historical plan wire/digest and means source=target.
 
 Double freshness checks do not lock Git or external databases. The trusted caller must establish the
 old executor has stopped; future dispatch must add its own current-fact fence. This seam supplies no
@@ -295,7 +298,9 @@ verified original READY `request: ProjectRequest` and BLOCKED `task: Task`.
 ### Contracts
 
 The concrete facts verifier resolves the C1 original chain and requires exact RecoverySource,
-Coder permissions and deny list. This version does not infer glob narrowing or permit policy changes.
+source Coder permissions and deny list. It independently compiles the current target Coder policy and
+requires exact equality with approved `effective_target_permissions`; only the plan model's conservative
+exact-token subset rule permits policy tightening. It never infers glob containment or permits expansion.
 Resolve the exact persisted target preparation using versioned native stores; company/project and
 organization roots/IDs cannot move. Load bounded regular profile/binding records, establish scope
 before following embedded paths, and use native binding environment validation. Recompile current
@@ -541,3 +546,80 @@ history preservation. Reuse normal Git/Codex tests for dirty and candidate guard
 Wrong: `except WorktreeSeedRejected: start_coder()`.
 Correct: explicitly propose/approve `input_mode="coder_reapply"`, capture a clean fresh base, route
 and validate the complete approved patch, then use the normal Coder→QA→Reviewer runtime.
+
+## D4: Source capture policy versus current target policy
+
+### Scope / Trigger
+
+Use this contract when a failed Coder worktree was created under an older permission policy and the
+platform policy has since changed before recovery. The recovery proposal must remain executable after
+safe policy tightening without treating historical capture authority as current execution authority.
+
+### Signatures
+
+```python
+RecoveryPlan.permissions: AgentPermissions                 # exact historical/source policy
+RecoveryPlan.target_permissions: AgentPermissions | None   # approved current target policy
+RecoveryPlan.effective_target_permissions -> AgentPermissions
+_delivery_role_permissions(role, allowed_paths, commands) -> AgentPermissions
+```
+
+### Contracts
+
+- `permissions` remains the only policy used to verify/capture the original dirty worktree and to read
+  historical plans. `target_permissions` is used for the fresh AgentDefinition, target seed, Context,
+  tool policy and provider admission.
+- New proposals compile target permissions from the current ProjectProfile and original Task allowed
+  paths. Both proposal and execution independently recompute that target policy through the same
+  deterministic compiler and require exact equality with the approved value.
+- A non-null target may only use exact read/write/command entries present in the source and must retain
+  the source network class. Both policies prohibit state-change and merge. Conservative exact-token
+  checks intentionally reject semantic glob guesses.
+- `target_permissions=None` is omitted from wire/digest and means `target=source`, preserving old record
+  identities. If current policy has tightened, such an old approval is stale and execution fails closed;
+  a new proposal and exact human approval are required.
+- Allocation may never choose the current permissions implicitly after approval. The newly built Coder
+  definition must equal `effective_target_permissions` before worktree creation/provider admission.
+
+### Validation & Error Matrix
+
+| Case | Required result |
+|---|---|
+| Source has `git commit`, current target omits it | New hash-bound proposal; execution uses narrowed target and can reach QA |
+| Target adds any read/write/command token | Plan validation rejects before persistence |
+| Target changes network/state/merge authority | Plan validation rejects before persistence |
+| Current target compiler differs after approval | Current-fact gate rejects; no Agent starts |
+| Historical plan with no target field and unchanged policy | Original digest and behavior remain valid |
+| Historical plan with no target field after tightening | Stale approval rejected; generate/approve a new plan |
+
+### Good / Base / Bad Cases
+
+- **Good**: historical capture is verified with its original policy while the fresh Coder receives the
+  separately approved, strictly narrower current policy.
+- **Base**: unchanged source/target policies remain separately hash-bound in a new proposal; legacy
+  plans omit the field and preserve their identity.
+- **Bad**: compare a fresh AgentDefinition directly with historical capture permissions, or silently
+  replace an approved target policy with whatever the runtime currently computes.
+
+### Tests Required
+
+- Model/Schema tests assert optional-field legacy parity, digest separation, safe narrowing and every
+  widening/network/state/merge rejection.
+- Real Git/MySQL recovery starts the failed Task with legacy direct-commit commands, restores current
+  no-direct-commit policy, then proves a new approved recovery reaches CandidateCommit, independent QA
+  and Reviewer while old Task/worktree history stays unchanged.
+- Current-fact tests mutate the approved target or current compiler result and assert rejection before
+  Task/worktree/provider effects. Ruff, strict Mypy, full pytest, offline build and diff-check remain gates.
+
+### Wrong vs Correct
+
+```python
+# Wrong: historical capture authority is assumed to be current execution authority.
+assert fresh_coder.permissions == plan.permissions
+```
+
+```python
+# Correct: verify source with source policy; execute only the independently approved current policy.
+manager.verify_capture(plan.capture.to_capture(), plan.permissions)
+assert fresh_coder.permissions == plan.effective_target_permissions
+```
