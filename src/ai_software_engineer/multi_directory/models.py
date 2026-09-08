@@ -110,6 +110,19 @@ class DesignInterfaceConsumersError(ValueError):
         super().__init__(f"interface consumers must be unique; interface index: {interface_index}")
 
 
+class DesignWritePathsError(ValueError):
+    """Locate rejected write proposals without echoing untrusted paths."""
+
+    def __init__(self, *, unit_index: int, component_index: int, path_index: int) -> None:
+        super().__init__(
+            "design write paths exceed the selected directories; "
+            f"unit index: {unit_index}; component index: {component_index}; "
+            f"path index: {path_index}. Use canonical repository-relative paths within "
+            "selected_paths; no absolute paths, dot segments, backslashes, control "
+            "characters, .git segments or trailing slashes"
+        )
+
+
 class JointTechnicalDesign(DomainModel):
     product_spec_sha256: Digest
     summary: NonEmptyStr
@@ -129,7 +142,7 @@ class JointTechnicalDesign(DomainModel):
             raise ValueError("design must classify every input unit exactly once")
         expected = {f"req_{i:03d}": r for i, r in enumerate(product.product.requirements, 1)}
         covered: set[str] = set()
-        for item in self.units:
+        for unit_index, item in enumerate(self.units, 1):
             ensure_unique(item.requirement_ids, "unit requirement IDs")
             ensure_unique(
                 (m.requirement_id for m in item.design.requirement_mappings), "requirement mappings"
@@ -162,9 +175,14 @@ class JointTechnicalDesign(DomainModel):
             for component_keys in component_groups:
                 if not set(component_keys) <= keys:
                     raise ValueError("design references an unknown component")
-            for component in item.design.components:
-                if any(not known[item.unit_id].permits(p) for p in component.affected_paths):
-                    raise ValueError("design write paths exceed the selected directories")
+            for component_index, component in enumerate(item.design.components, 1):
+                for path_index, path in enumerate(component.affected_paths, 1):
+                    if not known[item.unit_id].permits(path):
+                        raise DesignWritePathsError(
+                            unit_index=unit_index,
+                            component_index=component_index,
+                            path_index=path_index,
+                        )
         if covered != set(expected):
             raise ValueError("joint design does not cover the approved product")
         for index, interface in enumerate(self.interfaces, 1):

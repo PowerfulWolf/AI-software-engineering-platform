@@ -16,6 +16,7 @@ from ai_software_engineer.multi_directory.integration_commands import planner_co
 from ai_software_engineer.multi_directory.models import (
     ChildDelivery,
     DesignInterfaceConsumersError,
+    DesignWritePathsError,
     DialogueMessage,
     IntegrationCommandError,
     IntegrationEvidence,
@@ -285,12 +286,14 @@ class JointDeliveryService:
                 "Correct any prior rejection in next_action. "
                 "Component affected_paths are repository-relative and MUST remain "
                 "within selected_paths. "
+                "Use canonical paths such as src/config.py or src/**, not ./src/config.py, "
+                "src/, '.', absolute paths, backslashes, .git or '..' segments. "
                 "Read-only inputs need no artificial code change. This is not a generic DAG.",
             )
             assert checkpoint.product_spec is not None
             try:
                 design.validate_for(checkpoint.scope, checkpoint.product_spec)
-            except DesignInterfaceConsumersError as exc:
+            except (DesignInterfaceConsumersError, DesignWritePathsError) as exc:
                 checkpoint = self._save(
                     checkpoint,
                     next_action=(

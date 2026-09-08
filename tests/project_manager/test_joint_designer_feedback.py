@@ -175,3 +175,52 @@ def test_foreign_duplicate_consumers_are_not_reclassified(tmp_path: Path) -> Non
     assert len(backend.design_inputs) == 1
     rejected = service.status(seed.delivery_id).checkpoint
     assert rejected.design is None and rejected.attempts == {"design": 1}
+
+
+@pytest.mark.parametrize("path", ["./src/config.py", "src/", ".", "/private/secret", "../secret"])
+@pytest.mark.parametrize("exhaust", [False, True])
+def test_invalid_write_path_feedback_is_safe_and_bounded(
+    tmp_path: Path, path: str, exhaust: bool
+) -> None:
+    service, backend, seed, _ = setup_design(tmp_path)
+    valid = backend.designs[1]
+    assert isinstance(valid, JointTechnicalDesign)
+    unit = valid.units[0]
+    component = unit.design.components[0].model_copy(update={"affected_paths": (path,)})
+    invalid = valid.model_copy(
+        update={
+            "units": (
+                unit.model_copy(
+                    update={
+                        "design": unit.design.model_copy(
+                            update={
+                                "components": (component, *unit.design.components[1:]),
+                            }
+                        )
+                    }
+                ),
+                *valid.units[1:],
+            )
+        }
+    )
+    backend.designs = [invalid] * 3 if exhaust else [invalid, valid]
+    command = ResumeProjectDelivery(delivery_id=seed.delivery_id)
+    if exhaust:
+        with pytest.raises(ValueError, match="design attempt budget exhausted"):
+            service.resume(command)
+        final = service.status(seed.delivery_id).checkpoint
+        assert final.design is None and final.plan is None and not final.children
+        reopened = JointDeliveryService(backend=backend, company=service.company)
+        with pytest.raises(ValueError, match="design attempt budget exhausted"):
+            reopened.resume(command)
+        assert len(backend.design_inputs) == 3
+    else:
+        with pytest.raises(DeliveryReached):
+            service.resume(command)
+        final = service.status(seed.delivery_id).checkpoint
+        assert final.design == valid and final.approval == seed.approval
+    feedback = str(backend.design_inputs[1]["next_action"])
+    assert "design write paths exceed the selected directories" in feedback
+    assert "unit index: 1; component index: 1; path index: 1" in feedback
+    assert digest(invalid) in feedback
+    assert "secret" not in feedback

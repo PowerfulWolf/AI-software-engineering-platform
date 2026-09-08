@@ -178,7 +178,8 @@ the last DESIGNING checkpoint remains inspectable, with no accepted design or do
 | Repeated known consumers, then valid full design | Durable rejection; full validation before Planner |
 | Three duplicate-consumer rejections | No fourth call, no plan/dispatch; preserve last diagnostic |
 | Provider interruption during correction | Propagate; resume retains feedback and budget |
-| Wrong ProductSpec digest, path escape, foreign unit, schema/provider error | No automatic retry |
+| Wrong ProductSpec digest, foreign unit, schema/provider error | No automatic retry |
+| Proposed write-path rejection | Dedicated bounded feedback in section 11; scope never widened |
 | Already accepted Design | Resume does not regenerate Design |
 
 ### Good / Base / Bad and tests
@@ -205,3 +206,35 @@ and revalidate the next complete artifact. Production delivery success still nee
    after defining the safe fields and call budget; never echo arbitrary exceptions.
 5. Knowledge capture: this section records the executable contract and regression seam. This repo
    has no `src/templates/markdown/spec/` mirror to synchronize.
+
+## 11. Designer write-path rejection feedback
+
+Scope: a schema-valid design proposes a path rejected by `DirectoryUnit.permits`. Its predicate
+is unchanged: noncanonical paths and true scope escapes both remain rejected. No automatic
+normalization or expansion of selected directories is allowed.
+
+Signature: `DesignWritePathsError(unit_index: int, component_index: int, path_index: int)`.
+The validator supplies one-based positions, never raw paths or component names. The service seals
+the rejected design digest and safe diagnostic in `next_action`, then requests a complete corrected
+design using the same total three-call Designer budget as section 10. All guards run again.
+Approval, selected scope, previous checkpoints, wire schemas and provider-failure behavior stay
+unchanged. This error concerns a proposed artifact, not an executed unauthorized write.
+
+| Input / event | Required behavior |
+|---|---|
+| `./src/file.py`, `src/`, `.`, absolute or traversal path | Reject, persist safe indices and correction rules |
+| Canonical path outside selected module | Reject; never widen scope |
+| Corrected complete design within scope | Revalidate before Planner |
+| Three rejections or restart after exhaustion | No fourth call or child Task |
+| Unrelated provider/lineage failure | Propagate, no catch-all retry |
+
+Good: Designer regenerates an in-scope document; Base: valid first output is unchanged;
+Bad: strip `../` or enlarge scope to make the output pass.
+Wrong: echo arbitrary exception/path strings to the model. Correct: typed error with fixed text,
+indices and rejected artifact digest, durable feedback, bounded calls.
+Tests: `test_invalid_write_path_feedback_is_safe_and_bounded` covers five invalid path forms,
+correction, strict rejection, exhaustion/restart, approval preservation and secret-free diagnostics;
+existing scope/contract tests preserve module containment and schema parity.
+Root cause (B/D): semantic path rejection lacked a safe service feedback contract. Consumer-only
+repair did not cover this independent validator. Prevention is typed diagnostics plus service/journal
+tests, not relaxing the validator. Other semantic failures remain fail-closed pending explicit contracts.
