@@ -84,7 +84,15 @@ class OfflineRunner:
                 AgentRole.REVIEWER: 1_200,
             }[self.request.role]
         )
+        reserve_seconds = {
+            AgentRole.CODER: 300,
+            AgentRole.QA: 240,
+            AgentRole.REVIEWER: 240,
+        }[self.request.role]
+        assert f"hard execution limit is {int(timeout_seconds)} seconds" in stdin
+        assert f"Reserve the final {reserve_seconds} seconds" in stdin
         if self.request.role is AgentRole.CODER:
+            assert "candidate commit and JSON artifact take priority" in stdin
             if self.reapply:
                 assert (cwd / "hello.txt").read_text() == "new base greeting\n"
                 assert git(cwd, "status", "--porcelain") == ""

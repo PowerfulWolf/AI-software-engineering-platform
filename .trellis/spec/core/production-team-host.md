@@ -225,6 +225,50 @@ classification and small clean-failure fixtures hid the omission. A real-Git dir
 This repair cannot determine the original round3 exit cause; explicit recovery of interrupted work
 and general provider error evidence remain separate work, not permission to resurrect terminal tasks.
 
+#### Deadline-aware Codex finalization
+
+Scope/trigger: applies whenever `AgentRequest.timeout_seconds` is passed to a Codex CLI role. The
+subprocess hard limit alone is not an Agent-visible execution plan; `_compile_prompt(request,
+messages) -> str` must expose it and `_completion_reserve_seconds(timeout_seconds) -> int` must
+derive a deterministic reserve.
+
+Contract: the reserve is `min(300, max(10, timeout // 5), max(0, timeout - 1))`. The compiled prompt
+states the exact total and reserve. Coder must prioritize focused required tests, stop scope expansion
+before the reserve, and prioritize a clean candidate commit plus JSON implementation-report over
+broader optional validation. Other roles receive the same total/reserve fact while retaining their
+own read-only role instruction. This changes no wire field, sandbox, permission, Git guard, timeout,
+retry, Artifact, verdict, or downstream independence contract.
+
+| Case | Required result |
+|---|---|
+| timeout 1 / 2 seconds | reserve 0 / 1; always less than total |
+| timeout 60 / 1,200 seconds | reserve 12 / 240 |
+| Coder timeout 1,800 seconds | prompt states total 1,800 and reserve 300 plus commit/Artifact priority |
+| timeout 3,600 seconds | reserve remains capped at 300 |
+| remote model ignores budget | existing hard timeout and dirty-worktree guard remain authoritative |
+
+Good: Coder finishes focused required verification, stops expanding scope, commits cleanly, and emits
+the Artifact within the reserve. Base: injected runner asserts exact prompt text in milliseconds.
+Bad: only tell the model to commit “eventually”, remove the hard timeout, auto-commit dirty output, or
+claim the prompt unit test proves a remote model will comply.
+
+Tests: `tests/agents/test_codex_cli.py::test_coder_creates_verified_candidate_in_isolated_worktree`
+asserts the real subprocess stdin contract; `test_completion_reserve_is_bounded` covers boundary and
+production values. A fresh explicitly approved live recovery is required to validate model behavior;
+the test suite never spends live quota by default.
+
+Wrong: keep `timeout_seconds` only in `subprocess.run(timeout=...)` while the Agent sees no deadline.
+Correct: preserve that kill switch and also compile exact total/reserve/finalization priority into the
+role prompt.
+
+Root cause (B/D/E): the external runner contract and Agent-visible work contract diverged. Fast fake
+runners always committed immediately, so tests proved postconditions without proving the model was
+told how to finish before the external deadline. A real 1,800-second run changed all authorized areas
+and completed a broad pytest subprocess, yet timed out dirty before commit/Artifact. The deterministic
+test can prevent prompt regression; only live delivery can test model compliance. If this contract is
+still insufficient, the next architectural step is staged/checkpointed Coder execution, not unbounded
+timeouts or silent adoption of dirty work.
+
 ### 3.4 Worktree and delivery
 
 Production preparation uses `ProjectManagerSkillService(versioned_preparations=True)` and

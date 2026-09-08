@@ -17,7 +17,10 @@ from ai_software_engineer.agents import (
     CodexCliAgentAdapter,
     CodexInvocationResult,
 )
-from ai_software_engineer.agents.codex_cli import SubprocessCodexCommandRunner
+from ai_software_engineer.agents.codex_cli import (
+    SubprocessCodexCommandRunner,
+    _completion_reserve_seconds,
+)
 from ai_software_engineer.domain import ChangedFile, ChangeType
 from tests.agents.test_openai_compatible import StaticPromptBuilder, _coder_request
 from tests.domain.factories import make_implementation_artifact
@@ -136,7 +139,9 @@ class _DirtyFailureRunner:
 
 def test_coder_creates_verified_candidate_in_isolated_worktree(tmp_path: Path) -> None:
     root, base = _repository(tmp_path)
-    request = _coder_request().model_copy(update={"source_revision": base})
+    request = _coder_request().model_copy(
+        update={"source_revision": base, "timeout_seconds": 1_800}
+    )
     runner = _CoderRunner(request)
     adapter = CodexCliAgentAdapter(
         workspace_root=root,
@@ -166,6 +171,19 @@ def test_coder_creates_verified_candidate_in_isolated_worktree(tmp_path: Path) -
     assert "QWEN_API_KEY" not in environment
     assert environment["UV_CACHE_DIR"] == str(tmp_path / "uv-cache")
     assert "Never merge, push, deploy" in prompt
+    assert "hard execution limit is 1800 seconds" in prompt
+    assert "Reserve the final 300 seconds" in prompt
+    assert "focused required tests before broader optional suites" in prompt
+    assert "candidate commit and JSON artifact take priority" in prompt
+
+
+@pytest.mark.parametrize(
+    ("timeout_seconds", "expected_reserve"),
+    [(1, 0), (2, 1), (60, 12), (1_200, 240), (1_800, 300), (3_600, 300)],
+)
+def test_completion_reserve_is_bounded(timeout_seconds: int, expected_reserve: int) -> None:
+    assert _completion_reserve_seconds(timeout_seconds) == expected_reserve
+    assert expected_reserve < timeout_seconds
 
 
 def test_coder_change_outside_write_policy_is_rejected(tmp_path: Path) -> None:
