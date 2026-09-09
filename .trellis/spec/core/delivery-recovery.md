@@ -999,6 +999,13 @@ dispatch_sha256
   next unconsumed operation. Human gates and DONE return current facts without a provider call.
 - A classified pre-Task failure records `failed_stage`; resume reopens that exact stage and clears
   the failure fields before invoking only its next operation.
+- A dispatch may have materialized its Task before Delivery runtime composition fails. A terminal
+  checkpoint whose Task cursor is exactly `NEW`, revision `0`, has no candidate and has zero
+  Delivery attempts is a pre-invocation failure, not a failed Coder. Resume reopens `DELIVERING`
+  before failed-Coder discovery. Legacy checkpoints may omit `failed_stage`; only this complete
+  fact conjunction permits inferring `DELIVERING`. Runtime then reconciles the native Task: a
+  concurrently advanced or terminal Task is resumed or adopted through its normal event/artifact
+  gates rather than treated as a new invocation.
 - A terminal Coder Task without a candidate is discovered from its exact final failed route and
   Context. Resume captures the preserved worktree and emits an exact `RecoveryPlan`; approval starts
   a new recovery Task and attaches its terminal result to the original Delivery hash chain.
@@ -1036,6 +1043,7 @@ dispatch_sha256
 | WAITING_PRODUCT_REPLY / APPROVAL / WAITING_HUMAN | Typed human gate | 0 |
 | DONE | Exact checkpoint replay | 0 |
 | BLOCKED/FAILED before Task, retryable `failed_stage` | Reopen exact stage | Next stage only |
+| BLOCKED/FAILED after Task materialization, Task `NEW` revision 0, no candidate/Delivery attempt | Reopen `DELIVERING`; legacy `failed_stage` may be absent | Normal runtime reconciliation |
 | BLOCKED/FAILED Coder, no candidate | Publish exact recovery plan | 0 |
 | Recovery/remediation Coder fails again without candidate | Follow allocation ancestry; publish next recovery plan | 0 |
 | Approved recovery plan, no invocation | Fresh recovery Task: Coder → QA → Reviewer | 3+ bounded retries |
@@ -1058,6 +1066,8 @@ dispatch_sha256
   artifacts and appends the missing Delivery checkpoint without opening role worktrees.
 - Base: a failed Coder has no candidate but its attempt-1 worktree and final route ledger are intact;
   resume discovers the Run/Context and requires exact approval before reusing those edits.
+- Base: dispatch materialized a pristine Task and runtime composition stopped before admission;
+  resume re-enters Delivery without asking failed-Coder recovery to invent a missing identity.
 - Bad: reset the old Task to IMPLEMENTING, run Coder against Candidate V1 before independent
   verification, reuse a consumed verifier request, or treat a digest supplied by CLI as authority.
 
@@ -1071,6 +1081,8 @@ dispatch_sha256
   Coder fail, then prove a second `resume` creates a new plan/Task and reaches DONE.
 - `tests/recovery/test_delivery_continuation.py`: checkpoint attachment, target preparation adoption,
   result sealing and exact replay without duplicate journal entries.
+- `tests/e2e/test_unified_project_entry.py`: current and legacy Delivery-startup checkpoints with a
+  pristine materialized Task resume through the public controller and never call recovery/verification.
 - `tests/recovery/test_execution_records.py`: continuation digest/metadata/phase validation plus
   Draft 2020-12 schema validation.
 - Joint tests must retain DONE children and continue only incomplete children before integration.

@@ -451,7 +451,7 @@ class UnifiedProjectEntryService:
         return ProjectDeliveryResult(checkpoint=current)
 
     def retry_interrupted_stage(self, command: ResumeProjectDelivery) -> ProjectDeliveryResult:
-        """Re-enter one exact pre-Task stage after a classified infrastructure stop."""
+        """Re-enter one exact stage before any role invocation was admitted."""
         store, current = self._current(command.delivery_id)
         self._backend.reconcile(current)
         retryable = {
@@ -460,12 +460,20 @@ class UnifiedProjectEntryService:
             DeliveryFailureCode.TRANSIENT_PROVIDER_FAILURE,
             DeliveryFailureCode.INVARIANT_VIOLATION,
         }
+        pristine_delivery_start = (
+            current.task_id is not None
+            and current.task_status is TaskStatus.NEW
+            and current.task_revision == 0
+            and current.candidate_revision is None
+            and current.stage_attempts.delivering == 0
+            and current.failed_stage in {None, DeliveryStage.DELIVERING}
+        )
+        pre_task_stage = current.task_id is None and current.failed_stage is not None
         if (
             current.stage not in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
-            or current.task_id is not None
             or current.candidate_revision is not None
-            or current.failed_stage is None
             or current.failure_code not in retryable
+            or not (pre_task_stage or pristine_delivery_start)
         ):
             return ProjectDeliveryResult(checkpoint=current)
         next_actions = {
@@ -476,8 +484,10 @@ class UnifiedProjectEntryService:
             DeliveryStage.DESIGNING: DeliveryNextAction.RUN_DESIGNER,
             DeliveryStage.PLANNING: DeliveryNextAction.RUN_PLANNER,
             DeliveryStage.DISPATCHING: DeliveryNextAction.COMMIT_DISPATCH,
+            DeliveryStage.DELIVERING: DeliveryNextAction.RUN_DELIVERY,
         }
-        target = current.failed_stage
+        target = DeliveryStage.DELIVERING if pristine_delivery_start else current.failed_stage
+        assert target is not None
         next_action = next_actions.get(target)
         if next_action is None:
             return ProjectDeliveryResult(checkpoint=current)

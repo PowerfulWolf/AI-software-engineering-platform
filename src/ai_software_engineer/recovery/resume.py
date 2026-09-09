@@ -98,26 +98,26 @@ class DeliveryResumeController:
                 result,
                 next_action=str(result.checkpoint.next_action),
             )
+        retried = self._entry.retry_interrupted_stage(command)
+        if retried.checkpoint != current:
+            outcome = (
+                DeliveryResumeOutcome.WAITING_HUMAN
+                if retried.checkpoint.stage
+                in {
+                    DeliveryStage.WAITING_PRODUCT_REPLY,
+                    DeliveryStage.WAITING_PRODUCT_APPROVAL,
+                    DeliveryStage.WAITING_HUMAN,
+                    DeliveryStage.BLOCKED,
+                    DeliveryStage.FAILED,
+                }
+                else DeliveryResumeOutcome.CONTINUED
+            )
+            return self._result(
+                outcome,
+                retried,
+                next_action=str(retried.checkpoint.next_action),
+            )
         if current.task_id is None:
-            retried = self._entry.retry_interrupted_stage(command)
-            if retried.checkpoint != current:
-                outcome = (
-                    DeliveryResumeOutcome.WAITING_HUMAN
-                    if retried.checkpoint.stage
-                    in {
-                        DeliveryStage.WAITING_PRODUCT_REPLY,
-                        DeliveryStage.WAITING_PRODUCT_APPROVAL,
-                        DeliveryStage.WAITING_HUMAN,
-                        DeliveryStage.BLOCKED,
-                        DeliveryStage.FAILED,
-                    }
-                    else DeliveryResumeOutcome.CONTINUED
-                )
-                return self._result(
-                    outcome,
-                    retried,
-                    next_action=str(retried.checkpoint.next_action),
-                )
             return self._result(
                 DeliveryResumeOutcome.WAITING_HUMAN,
                 ProjectDeliveryResult(checkpoint=current),

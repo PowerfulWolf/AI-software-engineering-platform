@@ -7,9 +7,11 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
+from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
 from ai_software_engineer.design import DesignerServiceResult
 from ai_software_engineer.domain import (
     AcceptanceCriterion,
@@ -79,6 +81,10 @@ from ai_software_engineer.project_manager.stages import (
 )
 from ai_software_engineer.project_profile import ProjectProfile
 from ai_software_engineer.project_workspace import ProjectWorkspaceRegistry
+from ai_software_engineer.recovery.resume import (
+    DeliveryResumeController,
+    DeliveryResumeOutcome,
+)
 from ai_software_engineer.runtime_workspace import OrganizationWorkspace
 from ai_software_engineer.spec_compiler import SpecRule, SpecRuleLayer
 
@@ -501,6 +507,21 @@ class _TransientPlannerBackend(_OfflineBackend):
         return super().run_planner(checkpoint)
 
 
+class _TransientDeliveryStartupBackend(_OfflineBackend):
+    def __init__(self, platform: Path) -> None:
+        super().__init__(platform)
+        self.delivery_calls = 0
+
+    def run_delivery(self, checkpoint: ProjectDeliveryCheckpoint) -> RetryResult:
+        self.delivery_calls += 1
+        if self.delivery_calls == 1:
+            raise DeliveryBackendFailure(
+                DeliveryFailureCode.INVARIANT_VIOLATION,
+                "Delivery runtime failed before the Coder was admitted",
+            )
+        return super().run_delivery(checkpoint)
+
+
 def _copy_fixture(tmp_path: Path, language: str) -> Path:
     source = Path(__file__).parents[2] / "fixtures" / "target-projects" / language
     target = tmp_path / "target"
@@ -766,3 +787,92 @@ def test_resume_reenters_exact_transient_pre_task_stage(tmp_path: Path) -> None:
     assert completed.failed_stage is None
     assert completed.failure_code is None
     assert backend.planner_calls == 2
+
+
+@pytest.mark.parametrize("legacy_without_failed_stage", (False, True))
+def test_resume_retries_delivery_startup_before_any_coder_run(
+    tmp_path: Path,
+    legacy_without_failed_stage: bool,
+) -> None:
+    project = _copy_fixture(tmp_path, "python")
+    platform = tmp_path / "platform"
+    backend = _TransientDeliveryStartupBackend(platform)
+    catalog = ProjectDeliveryCheckpointCatalog(platform / "projects")
+    service = UnifiedProjectEntryService(backend=backend, catalog=catalog)
+    started = service.start(
+        StartProjectDelivery(
+            project_root=str(project.resolve()),
+            requirement="Add a resumable greeting.",
+            submitted_at=NOW,
+        )
+    )
+    blocked = service.approve(
+        ApproveProductSpec(
+            delivery_id=started.checkpoint.delivery_id,
+            expected_checkpoint_sha256=started.checkpoint.checkpoint_sha256,
+            approval_reference="delivery-startup-retry-test",
+            submitted_at=NOW + timedelta(minutes=1),
+        )
+    ).checkpoint
+
+    assert blocked.stage is DeliveryStage.BLOCKED
+    assert blocked.task_status is TaskStatus.NEW
+    assert blocked.task_revision == 0
+    assert blocked.candidate_revision is None
+    assert blocked.stage_attempts.delivering == 0
+    if legacy_without_failed_stage:
+        payload = blocked.to_wire()
+        for field in (
+            "sequence",
+            "previous_checkpoint_sha256",
+            "failed_stage",
+            "checkpointed_at",
+            "checkpoint_sha256",
+        ):
+            payload.pop(field, None)
+        blocked = ProjectDeliveryCheckpoint.create(
+            **payload,
+            sequence=blocked.sequence + 1,
+            previous_checkpoint_sha256=blocked.checkpoint_sha256,
+            checkpointed_at=NOW + timedelta(minutes=2),
+        )
+        catalog.for_delivery(blocked.delivery_id).put(blocked)
+        assert blocked.failed_stage is None
+    else:
+        assert blocked.failed_stage is DeliveryStage.DELIVERING
+
+    recovery = Mock()
+    verification = Mock()
+    controller = DeliveryResumeController(
+        config=ProductionConfig(
+            platform_root=str(platform),
+            model_routes=(
+                ProviderRouteConfig(
+                    provider="codex",
+                    model="offline-test",
+                    kind=ModelProviderKind.CODEX_CLI,
+                ),
+            ),
+        ),
+        environment={},
+        backend=Mock(),
+        entry=service,
+        recovery=recovery,
+        verification=verification,
+    )
+    result = controller.resume(
+        ResumeProjectDelivery(
+            delivery_id=blocked.delivery_id,
+            submitted_at=NOW + timedelta(minutes=3),
+        )
+    )
+    completed = result.checkpoint
+
+    assert result.outcome is DeliveryResumeOutcome.CONTINUED
+    assert completed.stage is DeliveryStage.DONE
+    assert completed.task_status is TaskStatus.DONE
+    assert completed.failed_stage is None
+    assert completed.failure_code is None
+    assert backend.delivery_calls == 2
+    assert recovery.mock_calls == []
+    assert verification.mock_calls == []

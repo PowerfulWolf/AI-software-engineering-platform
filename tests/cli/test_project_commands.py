@@ -24,9 +24,12 @@ def test_project_commands_expose_only_business_inputs() -> None:
     assert "--contexts" not in result.stdout
 
 
-def test_missing_production_config_fails_without_traceback(tmp_path: Path) -> None:
+def test_missing_production_config_fails_without_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     project = tmp_path / "project"
     project.mkdir()
+    monkeypatch.setenv("ASE_CONFIG", str(tmp_path / "missing-production-config.json"))
 
     result = runner.invoke(
         app,

@@ -438,6 +438,8 @@ uv run ase request resume DELIVERY_ID
 平台读取 MySQL、sidecar、Git 和不可变 checkpoint，只执行下一项尚未完成且已获授权的工作：
 
 - 普通进程中断：直接从最近 checkpoint 继续；已完成的阶段和仓库不会重跑。
+- Dispatch 已创建 Task、但 Runtime 尚未接纳任何 Agent 时：若 Task 仍是
+  `NEW / revision 0 / candidate=null`，直接重入 Delivery；这不是 Coder 失败，不需要恢复计划。
 - Coder 尚无 candidate、失败 worktree 存在修改：自动定位失败 Run/Context 并返回精确恢复计划；
   批准后创建新 Task 接续旧修改，再走 `Coder → QA → Reviewer`；新的恢复/修复 Coder 若再次中断，
   继续执行同一个 `resume`，平台会沿完整 Task/dispatch 历史创建下一次恢复，而不是卡死在第一轮。
