@@ -182,6 +182,8 @@ QA/Reviewer Agent、模型、权限及独立验证 Task；`verify-inspect` 纯�
 但 report 的 Task 和 candidate 仍是原始身份，不创建假 Coder、不重置原 Task、不发布 DONE 事件。
 
 同一计划的每个角色在 provider 调用前先写入不可变 invocation。进程在调用后丢失结果时，该角色
-不能自动重跑；先执行 `verify-inspect`。QA FAIL 或 Review REJECT 返回退出码 3，安全拒绝或配置问题
+不能自动重跑；先执行 `verify-inspect`。若 invocation 已存在但没有完整报告，使用相同的 project 与
+delivery 再执行一次 `verify-propose`，人工批准新的 plan SHA 后运行新计划。它会固定旧失败 run、
+分配新的验证 run 并复用原 candidate，不会重跑 Coder。QA FAIL 或 Review REJECT 返回退出码 3，安全拒绝或配置问题
 返回 2，只有 QA PASS + Review APPROVE 返回 0 和 `verified=true`。命令不 merge/push/deploy；计划中
 绑定的 parent delivery/checkpoint 与 completion 共同保留需求关联，旧 checkpoint 仍保持历史真实。

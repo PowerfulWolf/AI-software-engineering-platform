@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Set
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -56,6 +56,7 @@ from ai_software_engineer.recovery.verification_native import (
 )
 from ai_software_engineer.recovery.verification_records import (
     CandidateVerificationCompletion,
+    CandidateVerificationInputs,
     CandidateVerificationPlan,
 )
 from ai_software_engineer.runtime_workspace import load_project_profile
@@ -113,6 +114,20 @@ def _stage_sha(source: NativeCandidateSource) -> str:
             "design": source.stages.design.to_wire(),
             "plan": source.stages.plan.to_wire(),
         }
+    )
+
+
+def _verification_inputs_are_current(
+    approved: CandidateVerificationInputs,
+    current: CandidateVerificationInputs,
+    admitted_run_ids: Set[str],
+) -> bool:
+    """Accept only append-only run facts durably admitted by this exact plan."""
+    approved_runs, current_runs = set(approved.prior_run_ids), set(current.prior_run_ids)
+    return (
+        current.model_copy(update={"prior_run_ids": approved.prior_run_ids}) == approved
+        and approved_runs <= current_runs
+        and current_runs - approved_runs <= set(admitted_run_ids)
     )
 
 
@@ -219,13 +234,33 @@ def _definitions(
 
 
 class NativeVerificationFacts(VerificationFacts):
-    def __init__(self, config: ProductionConfig, environment: Mapping[str, str]) -> None:
-        self.config, self.environment = config, dict(environment)
+    def __init__(
+        self,
+        config: ProductionConfig,
+        environment: Mapping[str, str],
+        *,
+        store: FileRecoveryStore | None = None,
+    ) -> None:
+        self.config, self.environment, self.store = config, dict(environment), store
+
+    def _admitted_run_ids(self, plan: CandidateVerificationPlan) -> set[str]:
+        if self.store is None:
+            return set()
+        result: set[str] = set()
+        for role in (AgentRole.QA, AgentRole.REVIEWER):
+            try:
+                invocation = self.store.get_verification_invocation(plan.plan_sha256, role)
+            except RecoveryRecordMissing:
+                continue
+            result.add(invocation.request.run_id)
+        return result
 
     def validate(self, plan: CandidateVerificationPlan) -> None:
         source = NativeCandidateSourceReader(self.config, self.environment).inspect(plan.scope)
         if (
-            source.inputs != plan.inputs
+            not _verification_inputs_are_current(
+                plan.inputs, source.inputs, self._admitted_run_ids(plan)
+            )
             or source.checkpoint.checkpoint_sha256 != plan.native_checkpoint_sha256
             or source.runtime.dispatch.dispatch_sha256 != plan.dispatch_sha256
             or _stage_sha(source) != plan.approved_stage_chain_sha256
@@ -311,11 +346,10 @@ class CandidateVerificationEntry:
             created_at=now,
         )
         store = FileRecoveryStore.initialize(verification_store_root(source), scope=scope)
-        facts = NativeVerificationFacts(self.config, self.environment)
         CandidateVerificationAdmission(
             store=store,
             plan_sha256=plan.plan_sha256,
-            facts=facts,
+            facts=NativeVerificationFacts(self.config, self.environment, store=store),
             artifacts=FileArtifactStore(
                 Path(source.stages.preparation.project_workspace_root) / "artifacts"
             ),
@@ -358,6 +392,24 @@ class CandidateVerificationEntry:
         if not self.config.live_model_execution:
             raise RecoveryRejected("live model execution is disabled")
         store, plan = self.open(path)
+        try:
+            completion = store.get_verification_completion(plan.plan_sha256)
+        except RecoveryRecordMissing:
+            pass
+        else:
+            NativeVerificationFacts(self.config, self.environment, store=store).validate(plan)
+            return completion
+        for role in (AgentRole.QA, AgentRole.REVIEWER):
+            try:
+                invocation = store.get_verification_invocation(plan.plan_sha256, role)
+            except RecoveryRecordMissing:
+                continue
+            raise RecoveryRejected(
+                f"{role.value} run {invocation.request.run_id} was already admitted without "
+                "a sealed completion; this approved plan cannot be replayed. Run "
+                "verify-propose for the same project and delivery, then approve the new plan; "
+                "Coder will not run"
+            )
         source = NativeCandidateSourceReader(self.config, self.environment).inspect(plan.scope)
         admission = self._admission(store, plan)
         authority = self._authority(source)
@@ -380,7 +432,7 @@ class CandidateVerificationEntry:
             source_task_id=plan.inputs.task_id,
             plan_sha256=plan.plan_sha256,
             validate_current=lambda _: NativeVerificationFacts(
-                self.config, self.environment
+                self.config, self.environment, store=store
             ).validate(plan),
             build=build,
         )
@@ -432,7 +484,7 @@ class CandidateVerificationEntry:
         return CandidateVerificationAdmission(
             store=store,
             plan_sha256=plan.plan_sha256,
-            facts=NativeVerificationFacts(self.config, self.environment),
+            facts=NativeVerificationFacts(self.config, self.environment, store=store),
             artifacts=FileArtifactStore(
                 Path(source.stages.preparation.project_workspace_root) / "artifacts"
             ),

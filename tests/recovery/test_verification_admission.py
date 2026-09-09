@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 from jsonschema import Draft202012Validator, FormatChecker
@@ -22,7 +23,11 @@ from ai_software_engineer.recovery.verification_admission import (
     CandidateVerificationAdmission,
     ExplicitVerificationHuman,
 )
-from ai_software_engineer.recovery.verification_entry import _policy_sha
+from ai_software_engineer.recovery.verification_entry import (
+    CandidateVerificationEntry,
+    _policy_sha,
+    _verification_inputs_are_current,
+)
 from ai_software_engineer.recovery.verification_records import (
     CandidateVerificationCompletion,
     CandidateVerificationInvocation,
@@ -41,6 +46,112 @@ class Facts:
         plan.validate_integrity()
         if self.stale:
             raise RecoveryRejected("offline current facts changed")
+
+
+def test_current_inputs_allow_only_runs_admitted_by_the_same_plan(tmp_path: Path) -> None:
+    inputs, repository, _ = setup_verification(tmp_path, ScriptedAdapter(), Admission())
+    try:
+        admitted = "run_verification_qa_02"
+        current = inputs.model_copy(update={"prior_run_ids": (*inputs.prior_run_ids, admitted)})
+
+        assert _verification_inputs_are_current(inputs, current, {admitted})
+        assert not _verification_inputs_are_current(inputs, current, set())
+        assert not _verification_inputs_are_current(
+            inputs,
+            current.model_copy(
+                update={"prior_run_ids": (*current.prior_run_ids, "run_foreign_03")}
+            ),
+            {admitted},
+        )
+        assert not _verification_inputs_are_current(
+            inputs,
+            current.model_copy(update={"prior_run_ids": (admitted,)}),
+            {admitted},
+        )
+        assert not _verification_inputs_are_current(
+            inputs,
+            current.model_copy(update={"candidate_revision": "f" * 40}),
+            {admitted},
+        )
+    finally:
+        repository.close()
+
+
+def test_consumed_failed_invocation_requires_a_new_plan_without_calling_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = InterruptedAdapter()
+    inputs, repository, _ = setup_verification(tmp_path, adapter, Admission())
+    scope = RecoveryScope(
+        company_id="company_test",
+        project_id="project_test",
+        delivery_id="delivery_test",
+        project_root=str(tmp_path / "project"),
+    )
+    plan = CandidateVerificationPlan.create(
+        scope=scope,
+        inputs=inputs,
+        native_checkpoint_sha256="1" * 64,
+        dispatch_sha256="2" * 64,
+        approved_stage_chain_sha256="3" * 64,
+        current_policy_sha256="4" * 64,
+        definitions=tuple(_definitions().values()),
+        created_at=_clock(),
+    )
+    store = FileRecoveryStore.initialize(tmp_path / "verification", scope=scope)
+    artifacts = FileArtifactStore(tmp_path / "artifacts")
+    admission = CandidateVerificationAdmission(
+        store=store,
+        plan_sha256=plan.plan_sha256,
+        facts=Facts(),
+        artifacts=artifacts,
+        clock=_clock,
+    )
+    admission.propose(plan)
+    admission.approve(
+        RecoveryApprovalCommand(
+            operation_id="op_verification_test",
+            plan_sha256=plan.plan_sha256,
+            approval_reference="offline-human-confirmation",
+            submitted_at=_clock(),
+        ),
+        human=ExplicitVerificationHuman(plan.plan_sha256),
+    )
+    verifier = CandidateVerificationRunner(
+        repository=repository,
+        artifact_store=artifacts,
+        context_builder=FileRunContextBuilder(tmp_path / "project"),
+        agent_adapter=adapter,
+        agent_definitions=_definitions(),
+        admission=admission,
+        clock=_clock,
+    )
+    try:
+        with pytest.raises(RuntimeError, match="process lost"):
+            verifier.verify_candidate(inputs)
+        assert len(adapter.requests) == 1
+        config = ProductionConfig(
+            platform_root=str(tmp_path / "platform"),
+            live_model_execution=True,
+            model_routes=(
+                ProviderRouteConfig(
+                    provider="codex",
+                    model="gpt-test",
+                    kind=ModelProviderKind.CODEX_CLI,
+                ),
+            ),
+        )
+        entry = CandidateVerificationEntry(config, {}, Mock())
+        monkeypatch.setattr(entry, "open", lambda _: (store, plan))
+
+        with pytest.raises(
+            RecoveryRejected,
+            match=r"cannot be replayed.*verify-propose.*Coder will not run",
+        ):
+            entry.execute(tmp_path / "verification-plan.json")
+        assert len(adapter.requests) == 1
+    finally:
+        repository.close()
 
 
 def test_verification_policy_digest_binds_all_enabled_fallback_routes(tmp_path: Path) -> None:

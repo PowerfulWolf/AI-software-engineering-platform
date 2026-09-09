@@ -41,3 +41,11 @@ Final command surface: `verify-propose` pins candidate/current allocation, `veri
 `verify-approve` seals exact human consent, and `verify-run` invokes only QA then Reviewer. The
 original Task ID remains in reports while a separate execution Task ID scopes Assignment, Lease and
 worktree names so terminal-task capacity filtering cannot release live verifier work.
+
+Post-live retry correction: a first QA provider call ended with a durable `RATE_LIMITED` route attempt
+and no report. The source reader then included that run in its append-only history, while current-fact
+validation compared the entire input object exactly and mislabeled the platform's own admitted run as
+source drift. Validation now permits only run additions sealed by this exact plan, while retaining
+exact checks for every other fact and rejecting foreign additions/removals. A consumed plan stops
+before provider reuse and directs the operator to propose and approve a new plan for the same
+candidate; Coder is not rerun.

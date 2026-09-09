@@ -53,3 +53,31 @@ provider was created.
 ## Commit
 
 This archive is stored in the implementation commit; use that commit as the immutable baseline.
+
+## Post-release correction: failed verifier successor plan
+
+The first admitted QA call returned a durable `RATE_LIMITED` failure. Its run correctly became part
+of native history, but the freshness gate incorrectly treated every post-proposal run addition as
+external source drift. The gate now accepts only append-only runs backed by this plan's immutable
+invocation receipts. Missing historical runs, foreign runs and all non-run changes still fail closed.
+
+The same approved plan remains at-most-once and cannot call QA again. `verify-run` now reports the
+consumed role/run before allocation or provider work and instructs the operator to run
+`verify-propose` again for the same project/delivery. The successor plan receives a new digest,
+approval, execution Task and verifier run IDs while retaining the same candidate; Coder never runs.
+
+### Bug analysis
+
+- **Root cause**: D (test coverage gap) plus E (implicit assumption). Offline admission tests proved
+  duplicate prevention but never exercised native source inspection after the admitted QA run became
+  visible in the route/artifact ledgers. The freshness check implicitly assumed source inputs stayed
+  byte-identical throughout execution.
+- **Why the earlier fix was insufficient**: separating terminal-Task planning composition allowed QA
+  to start, but it did not trace the write-back path from provider route evidence into the next
+  native freshness read.
+- **Prevention**: the runtime now structurally authorizes only same-plan invocation additions; focused
+  tests cover admitted, foreign, removed and non-run-changed facts; the executable recovery spec
+  defines successor-plan handling and the at-most-once boundary.
+- **Systematic expansion**: every workflow that revalidates an approved snapshot after performing its
+  own append-only write must classify self-authored facts separately from external drift. Exact object
+  equality is valid only for genuinely immutable projections.

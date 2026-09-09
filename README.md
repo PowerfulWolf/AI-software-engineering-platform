@@ -448,6 +448,9 @@ uv run ase verify-run --plan PLAN_FILE
 `verify-run` 使用独立的验证 Task/Assignment/Lease/worktree 身份，但报告仍绑定原 Task 和同一个
 candidate commit。QA FAIL 时不会调用 Reviewer；只有 QA PASS 且 Review APPROVE 才输出
 `verified=true`。重复或结果不确定的同角色调用会 fail closed，先用 `verify-inspect` 检查，不会偷偷重试。
+如果某个角色已经封存调用、但因限额、超时或进程中断没有生成完整报告，不要重跑同一个
+`PLAN_FILE`：再次执行 `verify-propose`（使用相同的 `--project` 与 `--delivery`），批准新计划摘要，
+再运行新计划。新计划复用同一个 candidate、生成新的验证 run，仍然不会调用 Coder。
 更详细的边界见 [CLI 手册](docs/cli.md) 与 [恢复规范](.trellis/spec/core/delivery-recovery.md)。
 
 ## 开发与验证

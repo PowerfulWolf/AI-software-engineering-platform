@@ -826,3 +826,82 @@ adapter = DispatchDeliveryAgentAdapter(
     ...,
 )
 ```
+
+### E2.1 Append-only verifier runs and successor plans
+
+#### Scope / Trigger
+
+Use after a verification role has been durably admitted. The native candidate reader will then see
+that role's route attempt and, after success, its report as new run facts even though the candidate,
+terminal Task and approved upstream chain did not change.
+
+#### Signatures
+
+```python
+_verification_inputs_are_current(
+    approved: CandidateVerificationInputs,
+    current: CandidateVerificationInputs,
+    admitted_run_ids: Set[str],
+) -> bool
+NativeVerificationFacts(..., store: FileRecoveryStore | None = None).validate(plan) -> None
+CandidateVerificationEntry.execute(path) -> CandidateVerificationCompletion
+```
+
+#### Contracts
+
+- Every run ID pinned before proposal remains present. Its removal is source drift.
+- A run ID added after proposal is current only when an invocation for that exact plan and role was
+  durably published before the provider call. An unrelated run remains source drift.
+- Candidate, Task revision/digest, artifact lineage, checkpoint, dispatch, stage chain, parent and
+  policy comparisons remain exact; the append-only exception applies only to `prior_run_ids`.
+- A sealed completion may replay without another provider call. An invocation without a sealed
+  completion has consumed that plan's at-most-once role slot and `verify-run` must stop before SQL
+  allocation/worktree/provider effects with the run ID and successor-plan instruction.
+- Continue the same candidate by running `verify-propose` again for the same project/delivery,
+  explicitly approving its new digest, then running that new plan. The new plan pins the failed run
+  in `prior_run_ids` and creates a fresh execution Task/run identity; it never reruns Coder.
+- An expired Lease restores capacity automatically. Immediate durable release for a conclusively
+  failed provider attempt requires a separately sealed failure-resolution contract; do not overload
+  a completion digest or silently release an outcome whose completion is uncertain.
+
+#### Validation & Error Matrix
+
+| Current fact | Result |
+|---|---|
+| Exact approved inputs, no invocation | Current; first QA may be admitted |
+| Approved history plus this plan's admitted QA/Reviewer run | Current; continue/complete |
+| Invocation exists but no sealed completion | Refuse same plan before provider; propose successor |
+| Historical run removed or foreign run added | `verification source changed after proposal` |
+| Candidate/Task/artifact/checkpoint/policy changed | Existing exact drift rejection |
+
+#### Good / Base / Bad Cases
+
+- Good: QA run is sealed, its route/report becomes visible, Reviewer starts once, then completion
+  replays without a provider call.
+- Base: a typed `RATE_LIMITED` QA attempt consumes the old plan; a newly approved successor verifies
+  the same candidate without Coder.
+- Bad: compare the whole current `CandidateVerificationInputs` byte-for-byte after admitting QA, or
+  rerun the old request because its provider result was a known failure.
+
+#### Tests Required
+
+- Assert same-plan admitted additions are accepted, foreign additions and historical removals fail,
+  and changing any non-run input still fails.
+- Assert a consumed invocation produces the successor-plan message and makes zero additional adapter
+  calls. Retain the existing process-loss and duplicate-admission tests.
+- Exercise QA PASS -> Reviewer -> completion with the native facts implementation so each
+  post-provider freshness check observes its own append-only run facts.
+
+#### Wrong vs Correct
+
+```python
+# Wrong: QA creates a route fact, so this rejects the platform's own admitted invocation as drift.
+if current_inputs != plan.inputs:
+    raise RecoveryRejected("verification source changed after proposal")
+
+# Correct: exact non-run facts + preserved history + additions authorized by this plan only.
+if not _verification_inputs_are_current(
+    plan.inputs, current_inputs, admitted_run_ids_for(plan.plan_sha256)
+):
+    raise RecoveryRejected("verification source changed after proposal")
+```
