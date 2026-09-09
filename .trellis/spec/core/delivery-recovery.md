@@ -2,9 +2,10 @@
 
 ## Scope / Trigger
 
-Use when capturing interrupted Coder work or extending terminal delivery recovery. This first
-increment is a **read-only Python repository seam**, not a production recovery command. Existing
-`resume`, Task terminal guards, role cleanliness guards and artifact gates remain unchanged.
+Use when capturing interrupted Coder work or extending terminal delivery recovery. Historical T044
+increments below remain the break-glass foundations. The normal production continuation boundary is
+now the Delivery-level `ase request resume`; Task terminal guards, role cleanliness guards and
+artifact gates remain unchanged.
 
 ## Signatures
 
@@ -904,4 +905,198 @@ if not _verification_inputs_are_current(
     plan.inputs, current_inputs, admitted_run_ids_for(plan.plan_sha256)
 ):
     raise RecoveryRejected("verification source changed after proposal")
+```
+
+## Scenario: Delivery-level universal resume and candidate remediation
+
+### 1. Scope / Trigger
+
+Use this contract whenever the public Project Manager continuation entry, candidate verification,
+post-verdict remediation, joint-child recovery, or adoption of a terminal Task result changes. The
+unit of continuation is a Delivery aggregate. One already-admitted provider invocation remains
+at-most-once; `resume` may create a new plan, Run, or successor Task but must never replay that
+invocation identity.
+
+### 2. Signatures
+
+```python
+class ResumeProjectDelivery(DomainModel):
+    delivery_id: DeliveryId
+    approved_plan_sha256: Sha256 | None = None
+    approval_reference: NonEmptyStr | None = None
+
+OrganizationTeamHost.resume_delivery(
+    command: ResumeProjectDelivery,
+) -> DeliveryResumeResult | JointDeliveryResult
+
+DeliveryResumeController.resume(command: ResumeProjectDelivery) -> DeliveryResumeResult
+UnifiedProjectEntryService.begin_continuation(
+    dispatch: ContinuationDispatchRecord, *, at: datetime
+) -> ProjectDeliveryResult
+UnifiedProjectEntryService.finish_continuation(
+    dispatch: ContinuationDispatchRecord, delivery: RetryResult, *, at: datetime
+) -> ProjectDeliveryResult
+UnifiedProjectEntryService.accept_verification(
+    plan: CandidateVerificationPlan,
+    completion: CandidateVerificationCompletion,
+) -> ProjectDeliveryResult
+
+NativeRecoverySourceReader.discover_failed_coder(scope: RecoveryScope) -> NativeRecoverySource
+NativeRecoveryEntry.propose_delivery(
+    checkpoint: ProjectDeliveryCheckpoint,
+) -> tuple[RecoveryPlan, Path]
+NativeRecoveryEntry.resume_execution(path: Path) -> NativeRecoveryExecution
+resolve_planner_dispatch(
+    current: DeliveryAllocation,
+    allocations: Mapping[str, DeliveryAllocation],
+    history: tuple[ProjectDeliveryCheckpoint, ...],
+) -> DispatchCommitRecord
+allocation_preparation_sha256(
+    allocation: DeliveryAllocation,
+    original_preparation_sha256: str,
+) -> str
+UnifiedProjectEntryService.begin_recovery(
+    plan: RecoveryPlan, dispatch: RecoveryDispatchRecord, *, at: datetime
+) -> ProjectDeliveryResult
+UnifiedProjectEntryService.finish_recovery(
+    plan: RecoveryPlan,
+    dispatch: RecoveryDispatchRecord,
+    delivery: RetryResult,
+    *,
+    at: datetime,
+) -> ProjectDeliveryResult
+```
+
+CLI:
+
+```text
+ase request resume DELIVERY_ID
+ase request resume DELIVERY_ID --approve-plan PLAN_SHA256 \
+  --approval-reference AUDIT_REFERENCE
+```
+
+`ContinuationDispatchRecord` is stored in the ordinary MySQL `dispatch_commits` authority and in
+`schemas/recovery-execution.schema.json`. Required lineage fields are:
+
+```text
+kind = continuation_dispatch
+continuation_kind = verification_remediation
+continuation_sha256                 # rejected verification completion
+continuation_plan_sha256            # exact approved verification plan
+continuation_context_sha256         # sealed completion + candidate patch context
+target_preparation_sha256           # current project preparation used by successor
+source_delivery_id / source_task_id
+source_base_revision / source_revision / source_dispatch_id
+task / phases[Coder, QA, Reviewer] / workforce_snapshot_sha256
+dispatch_sha256
+```
+
+### 3. Contracts
+
+- `approved_plan_sha256` and `approval_reference` are an all-or-none pair. Approval is
+  for an exact emitted plan, not for the candidate or Delivery in general.
+- PREPARING through DELIVERING reuse the existing immutable stage artifacts and continue only the
+  next unconsumed operation. Human gates and DONE return current facts without a provider call.
+- A classified pre-Task failure records `failed_stage`; resume reopens that exact stage and clears
+  the failure fields before invoking only its next operation.
+- A terminal Coder Task without a candidate is discovered from its exact final failed route and
+  Context. Resume captures the preserved worktree and emits an exact `RecoveryPlan`; approval starts
+  a new recovery Task and attaches its terminal result to the original Delivery hash chain.
+- Recovery and remediation dispatches are successor allocations, not new Planner approvals.
+  `resolve_planner_dispatch` must follow their digest-bound Delivery history to the original Planner
+  dispatch; `allocation_preparation_sha256` separately validates the preparation used by the current
+  successor Task. If that successor Coder also fails before a candidate, the same `resume` flow emits
+  another fresh recovery plan and Task instead of assuming only one recovery attempt.
+- A terminal Task with a durable candidate first gets independent QA/Reviewer verification. Missing
+  approval returns `VERIFICATION_APPROVAL_REQUIRED` with the exact plan path/digest and next command.
+- An invocation with no sealed completion is ambiguous and cannot be replayed. A later `resume`
+  proposes a new plan/Run for the same candidate and requires a new exact approval.
+- PASS + APPROVE may seal the original Delivery DONE without rewriting its terminal Task; the
+  checkpoint binds both verification plan and completion digests.
+- QA FAIL or Review REJECT creates exactly one deterministic successor Task and dispatch from the
+  completion digest. Required Coder context contains the sealed completion plus a bounded,
+  secret-scanned diff from the original base to Candidate V1.
+- The successor Task starts on the current clean project preparation/base and executes the normal
+  serial Coder → QA → Reviewer runtime. Candidate V2 is recorded on the original Delivery hash chain;
+  the source Task/events remain terminal and unchanged.
+- If the process dies after the successor Task becomes terminal but before the Delivery checkpoint
+  is appended, `run_prepared_allocation` reconstructs `RetryDeliveryResult`/`BlockedResult` from the
+  Task event stream and sealed artifacts. It performs zero provider calls before the checkpoint is
+  adopted.
+- A joint parent resumes one incomplete child at a time, retains DONE children, then re-enters joint
+  integration only after the complete candidate set exists.
+- No resume path merges, pushes, deploys, relaxes project policy, silently changes company knowledge,
+  or overwrites historical Task/checkpoint/verdict records.
+
+### 4. Validation & Error Matrix
+
+| Durable condition | Result | Provider calls |
+|---|---|---:|
+| PREPARING–DELIVERING, next operation unconsumed | Continue current stage | Next role only |
+| WAITING_PRODUCT_REPLY / APPROVAL / WAITING_HUMAN | Typed human gate | 0 |
+| DONE | Exact checkpoint replay | 0 |
+| BLOCKED/FAILED before Task, retryable `failed_stage` | Reopen exact stage | Next stage only |
+| BLOCKED/FAILED Coder, no candidate | Publish exact recovery plan | 0 |
+| Recovery/remediation Coder fails again without candidate | Follow allocation ancestry; publish next recovery plan | 0 |
+| Approved recovery plan, no invocation | Fresh recovery Task: Coder → QA → Reviewer | 3+ bounded retries |
+| Recovery Task already terminal, Delivery not updated | Adopt terminal Task result | 0 |
+| Candidate, no current verification plan | Publish plan and exact approval command | 0 |
+| Plan digest mismatch or missing audit reference | Keep current plan awaiting approval | 0 |
+| Approved plan, no invocation | QA; Reviewer only after QA PASS | 1–2 |
+| Admitted invocation, no completion | Publish successor plan; require approval | 0 |
+| PASS + APPROVE completion | Bind verified candidate and mark Delivery DONE | 0 |
+| QA FAIL / Review REJECT completion | Deterministic continuation dispatch and fresh serial Task | 3+ bounded retries |
+| Successor Task terminal, Delivery still DELIVERING | Rebuild result and append checkpoint | 0 |
+| Project/preparation/policy/candidate/parent drift | Fail closed with safe error | 0 |
+| Candidate patch secret/non-UTF-8/>1 MiB | `RecoveryRejected` before allocation | 0 |
+
+### 5. Good / Base / Bad Cases
+
+- Good: Candidate V1 reaches QA FAIL, the completion creates one successor Task, Coder produces
+  Candidate V2, independent QA/Reviewer approve it, and the original Delivery becomes DONE.
+- Base: the successor Task is already DONE after a process loss; replay reconstructs its four final
+  artifacts and appends the missing Delivery checkpoint without opening role worktrees.
+- Base: a failed Coder has no candidate but its attempt-1 worktree and final route ledger are intact;
+  resume discovers the Run/Context and requires exact approval before reusing those edits.
+- Bad: reset the old Task to IMPLEMENTING, run Coder against Candidate V1 before independent
+  verification, reuse a consumed verifier request, or treat a digest supplied by CLI as authority.
+
+### 6. Tests Required
+
+- `tests/recovery/test_resume.py`: real Git + MySQL, three RATE_LIMITED QA runs, exact plan approval,
+  independent QA FAIL, deterministic successor Task, Coder/QA/Reviewer order, Candidate V2, preserved
+  original BLOCKED Task, process loss after successor DONE, and zero-call replay.
+- The same suite must cover failed-Coder discovery, recovery-plan approval, a fresh serial recovery
+  Task and attachment of its candidate to the original Delivery. It must also make the first recovery
+  Coder fail, then prove a second `resume` creates a new plan/Task and reaches DONE.
+- `tests/recovery/test_delivery_continuation.py`: checkpoint attachment, target preparation adoption,
+  result sealing and exact replay without duplicate journal entries.
+- `tests/recovery/test_execution_records.py`: continuation digest/metadata/phase validation plus
+  Draft 2020-12 schema validation.
+- Joint tests must retain DONE children and continue only incomplete children before integration.
+- Source Mypy, Ruff/format, offline package build, and the full MySQL suite are release gates.
+
+### 7. Wrong vs Correct
+
+```python
+# Wrong: the Task finished before the Delivery checkpoint, so invoke Runtime again.
+runtime.run_task(task.id)  # TaskNotRunnable or duplicate provider side effect
+
+# Correct: materialize idempotently, then adopt authoritative terminal facts.
+terminal = _terminal_delivery_result(repository, artifact_store, task.id)
+if terminal is not None:
+    return terminal
+return runtime.run_task(task.id).result
+```
+
+```python
+# Wrong: QA FAIL mutates/reopens the historical Task.
+old_task.status = TaskStatus.IMPLEMENTING
+
+# Correct: immutable completion selects one deterministic successor allocation.
+dispatch = authority.commit_continuation(
+    continuation_sha256=completion.completion_sha256,
+    validate_current=validate_current,
+    build=build_successor,
+)
 ```

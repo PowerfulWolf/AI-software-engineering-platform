@@ -177,7 +177,14 @@ class JointDeliveryService:
 
     def resume(self, command: ResumeProjectDelivery) -> JointDeliveryResult:
         with self.journal.lock(command.delivery_id):
-            return JointDeliveryResult(checkpoint=self._advance(self._current(command.delivery_id)))
+            checkpoint = self._current(command.delivery_id)
+            if checkpoint.stage is JointStage.BLOCKED and checkpoint.integration is None:
+                checkpoint = self._save(
+                    checkpoint,
+                    stage=JointStage.DELIVERING,
+                    next_action="Resume only incomplete repository deliveries.",
+                )
+            return JointDeliveryResult(checkpoint=self._advance(checkpoint))
 
     def status(self, delivery_id: str) -> JointDeliveryResult:
         checkpoint = self._current(delivery_id)

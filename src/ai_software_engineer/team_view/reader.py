@@ -25,10 +25,16 @@ from ai_software_engineer.project_manager.delivery_checkpoint import (
     ProjectDeliveryCheckpoint,
     ProjectDeliveryIntake,
 )
-from ai_software_engineer.project_manager.mysql_dispatch_authority import _decode_commit
+from ai_software_engineer.project_manager.dispatch import (
+    ContinuationDispatchRecord,
+    VerificationReservation,
+)
+from ai_software_engineer.project_manager.mysql_dispatch_authority import _decode_allocation
 from ai_software_engineer.project_workspace import ProjectWorkspaceManifest
 from ai_software_engineer.projection.models import ProjectionFacts
 from ai_software_engineer.projection.projector import RunProjectionBuilder
+from ai_software_engineer.recovery.models import RecoveryScope
+from ai_software_engineer.recovery.store import FileRecoveryStore, RecoveryRecordMissing
 from ai_software_engineer.redaction import redact_text
 from ai_software_engineer.runtime_workspace import (
     FileOrganizationWorkforceStore,
@@ -179,6 +185,7 @@ class ProductionTeamReader:
                 with connection.cursor(DictCursor) as cursor:
                     cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
                     cursor.execute("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
+                    native_by_task: dict[str, tuple[_Native, str, ScopeView]] = {}
                     for native in natives:
                         cp = native.checkpoint
                         request_id, scope = ownership.get(
@@ -196,6 +203,8 @@ class ProductionTeamReader:
                             raise ValueError("child code scope mismatch")
                         view = _read_task(native, request_id, scope, cursor)
                         tasks.append(view)
+                        if view.task_id is not None:
+                            native_by_task[view.task_id] = (native, request_id, scope)
                         if cp.delivery_id not in ownership:
                             requests.append(
                                 RequestView(
@@ -209,6 +218,13 @@ class ProductionTeamReader:
                                     checkpoint_sha256=cp.checkpoint_sha256,
                                 )
                             )
+                    tasks.extend(
+                        _read_verifications(
+                            cursor,
+                            native_by_task,
+                            company_id=company.manifest.company_id,
+                        )
+                    )
             finally:
                 connection.rollback()
                 connection.close()
@@ -342,13 +358,185 @@ def _read_task(native: _Native, request_id: str, scope: ScopeView, cursor: DictC
         candidate_revision=cp.candidate_revision,
         documents=_stage_refs(cp),
     )
+    return _read_task_details(native, cursor, base)
+
+
+def _read_verifications(
+    cursor: DictCursor,
+    native_by_task: Mapping[str, tuple[_Native, str, ScopeView]],
+    *,
+    company_id: str,
+) -> tuple[TaskView, ...]:
+    """Project verification reservations as first-class read-side work items."""
+    cursor.execute(
+        "SELECT plan_sha256,payload_json,completion_sha256 "
+        "FROM verification_reservations ORDER BY plan_sha256"
+    )
+    result: list[TaskView] = []
+    project_ids = {native.checkpoint.project_id for native, _, _ in native_by_task.values()}
+    for row in cursor.fetchall():
+        reservation = VerificationReservation.model_validate_json(_text(row, "payload_json"))
+        if reservation.plan_sha256 != row["plan_sha256"]:
+            raise ValueError("verification reservation row identity mismatch")
+        source = native_by_task.get(str(reservation.source_task_id))
+        if source is None:
+            if reservation.project_id in project_ids:
+                raise ValueError("verification reservation source Task is missing")
+            continue
+        native, request_id, source_scope = source
+        if reservation.project_id != native.checkpoint.project_id:
+            raise ValueError("verification reservation project mismatch")
+        result.append(
+            _verification_view(
+                native,
+                request_id,
+                source_scope,
+                reservation,
+                str(row["completion_sha256"]) if row["completion_sha256"] is not None else None,
+                company_id=company_id,
+            )
+        )
+    return tuple(result)
+
+
+def _verification_view(
+    native: _Native,
+    request_id: str,
+    source_scope: ScopeView,
+    reservation: VerificationReservation,
+    completion_sha256: str | None,
+    *,
+    company_id: str,
+) -> TaskView:
+    verification_id = f"verification_{reservation.plan_sha256[:32]}"
+    current_role = AgentRole.QA
+    status, terminal = "VERIFY_QA", False
+    next_action = "QA candidate verification is active or awaiting resume."
+    blocker: str | None = None
+    last_activity = reservation.committed_at
+    documents: list[DocumentView] = []
+    run_ids: set[str] = set()
+    store_root = (
+        native.sidecar / "state" / f"candidate-verification-{native.checkpoint.delivery_id}"
+    )
+    completion = None
+    if store_root.exists():
+        scope = RecoveryScope(
+            company_id=company_id,
+            project_id=native.checkpoint.project_id,
+            delivery_id=native.checkpoint.delivery_id,
+            project_root=native.checkpoint.project_root,
+        )
+        store = FileRecoveryStore(store_root, scope=scope)
+        plan = store.get_verification_plan(reservation.plan_sha256)
+        authorization = store.get_verification_authorization(reservation.plan_sha256)
+        if (
+            plan.execution_task_id != reservation.task_id
+            or plan.inputs.task_id != reservation.source_task_id
+            or not authorization.decision.approved
+        ):
+            raise ValueError("verification reservation lineage mismatch")
+        documents.extend(
+            (
+                DocumentView(
+                    name="CandidateVerificationPlan",
+                    source_uri=f"candidate-verification://{reservation.plan_sha256}/plan",
+                    sha256=plan.plan_sha256,
+                    content=_safe(plan.model_dump_json(indent=2)),
+                ),
+                DocumentView(
+                    name="CandidateVerificationApproval",
+                    source_uri=f"candidate-verification://{reservation.plan_sha256}/approval",
+                    sha256=authorization.authorization_sha256,
+                    content=_safe(authorization.model_dump_json(indent=2)),
+                ),
+            )
+        )
+        for role in (AgentRole.QA, AgentRole.REVIEWER):
+            try:
+                invocation = store.get_verification_invocation(reservation.plan_sha256, role)
+            except RecoveryRecordMissing:
+                continue
+            run_ids.add(str(invocation.request.run_id))
+            last_activity = max(last_activity, invocation.admitted_at)
+            if role is AgentRole.REVIEWER:
+                current_role, status = AgentRole.REVIEWER, "VERIFY_REVIEW"
+                next_action = "Reviewer candidate verification is active or awaiting resume."
+        try:
+            completion = store.get_verification_completion(reservation.plan_sha256)
+        except RecoveryRecordMissing:
+            pass
+        else:
+            last_activity = max(last_activity, completion.completed_at)
+            documents.append(
+                DocumentView(
+                    name="CandidateVerificationCompletion",
+                    source_uri=f"candidate-verification://{reservation.plan_sha256}/completion",
+                    sha256=completion.completion_sha256,
+                    content=_safe(completion.model_dump_json(indent=2)),
+                )
+            )
+    if completion_sha256 is not None:
+        if completion is None or completion.completion_sha256 != completion_sha256:
+            raise ValueError("verification completion lineage mismatch")
+        terminal = True
+        current_role = AgentRole.QA
+        if completion.verified:
+            status = "VERIFIED"
+            next_action = "Candidate verification passed; continue the delivery acceptance policy."
+        else:
+            status = "REMEDIATION_REQUIRED"
+            blocker = (
+                "QA failed; resume the delivery to create a linked Coder remediation."
+                if completion.qa.content.status.value == "FAIL"
+                else "Review rejected; resume the delivery to create a linked Coder remediation."
+            )
+            next_action = blocker
+    assignments = tuple(
+        AssignmentView(
+            agent_id=phase.agent_id,
+            role=phase.role,
+            planned_provider=phase.model_selection.provider,
+            planned_model=phase.model_selection.model,
+            current_stage=not terminal and phase.role is current_role,
+        )
+        for phase in reservation.phases
+    )
+    return TaskView(
+        id=verification_id,
+        request_id=request_id,
+        work_kind="candidate_verification",
+        task_id=reservation.task_id,
+        source_delivery_id=native.checkpoint.delivery_id,
+        source_task_id=reservation.source_task_id,
+        plan_sha256=reservation.plan_sha256,
+        title=f"Candidate verification · {_safe(native.intake.title)}",
+        scope=source_scope.model_copy(update={"delivery_id": verification_id}),
+        status=status,
+        checkpoint_stage="CANDIDATE_VERIFICATION",
+        terminal=terminal,
+        last_activity=last_activity,
+        blocker=blocker,
+        next_action=next_action,
+        candidate_revision=native.checkpoint.candidate_revision,
+        assignments=assignments,
+        # Verifier requests judge the immutable source Task/candidate.  The
+        # distinct reservation Task scopes leases and worktrees, while the
+        # invocation digest identifies the exact source-Task Run shown here.
+        runs=_read_runs(native, reservation.source_task_id, run_ids=run_ids),
+        documents=tuple(documents),
+    )
+
+
+def _read_task_details(native: _Native, cursor: DictCursor, base: TaskView) -> TaskView:
+    cp = native.checkpoint
     if cp.dispatch_commit_id is None:
         return base
     cursor.execute("SELECT * FROM dispatch_commits WHERE id = %s", (cp.dispatch_commit_id,))
     row = cursor.fetchone()
     if row is None:
         raise ValueError("missing committed dispatch")
-    dispatch = _decode_commit(row)
+    dispatch = _decode_allocation(row)
     if (
         dispatch.dispatch_sha256 != cp.dispatch_commit_sha256
         or dispatch.project_id != cp.project_id
@@ -432,8 +620,15 @@ def _read_task(native: _Native, request_id: str, scope: ScopeView, cursor: DictC
     blocker = base.blocker or (
         _safe(events[-1].reason) if task.status.value in {"BLOCKED", "FAILED"} and events else None
     )
+    continuation = dispatch if isinstance(dispatch, ContinuationDispatchRecord) else None
     return base.model_copy(
         update={
+            "work_kind": "remediation" if continuation is not None else base.work_kind,
+            "source_delivery_id": (
+                continuation.source_delivery_id if continuation is not None else None
+            ),
+            "source_task_id": (continuation.source_task_id if continuation is not None else None),
+            "plan_sha256": (continuation.continuation_sha256 if continuation is not None else None),
             "task_id": task.id,
             "status": task.status.value,
             "terminal": task.status.value in _TERMINAL or base.terminal,
@@ -457,7 +652,9 @@ def _read_task(native: _Native, request_id: str, scope: ScopeView, cursor: DictC
     )
 
 
-def _read_runs(native: _Native, task_id: str) -> tuple[RunView, ...]:
+def _read_runs(
+    native: _Native, task_id: str, *, run_ids: set[str] | None = None
+) -> tuple[RunView, ...]:
     root = model_route_root(native.sidecar)
     _reject_symlinks(root)
     if not root.exists():
@@ -467,7 +664,7 @@ def _read_runs(native: _Native, task_id: str) -> tuple[RunView, ...]:
     for directory in _directories(root, "run_*"):
         _files(directory, "*.json")  # reject symlinks before asking the typed store to decode
         for attempt in store.list_for_run(directory.name):
-            if attempt.task_id == task_id:
+            if attempt.task_id == task_id and (run_ids is None or attempt.run_id in run_ids):
                 runs.append(
                     RunView(
                         run_id=attempt.run_id,

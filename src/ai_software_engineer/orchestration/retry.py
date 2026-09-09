@@ -75,6 +75,7 @@ class BlockedResult(DomainModel):
     attempt: int
     artifact_ids: tuple[ArtifactId, ...]
     event_ids: tuple[EventId, ...]
+    candidate_revision: CommitSha | None = None
 
 
 class RetryDeliveryResult(DomainModel):
@@ -739,6 +740,11 @@ class RetryingOrchestrator(SerialOrchestrator):
             attempt=attempt,
             artifact_ids=artifact_ids,
             event_ids=tuple(event_ids),
+            candidate_revision=(
+                source_revision
+                if source_revision is not None and source_revision != task.base_ref
+                else None
+            ),
         )
 
     def _fail_platform(self, task: Task, attempt: int, reason: str) -> None:

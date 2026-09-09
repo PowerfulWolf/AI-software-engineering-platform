@@ -136,6 +136,7 @@ def test_native_source_is_verified_read_only_and_rejects_corruption(
     reader = NativeRecoverySourceReader(config, environment)
     arguments = {"failed_run_id": request.run_id, "failed_context_id": request.context_manifest_id}
     observed = reader.inspect(scope, **arguments)
+    assert reader.discover_failed_coder(scope) == observed
     assert observed.source.task_id == request.task_id
     assert observed.source.task_revision == cp.task_revision
     assert observed.source.checkpoint_sha256 == cp.checkpoint_sha256

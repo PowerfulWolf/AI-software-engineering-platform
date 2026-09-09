@@ -67,7 +67,8 @@ class NativeCandidateSourceReader:
         journal = FileProjectDeliveryCheckpointStore(
             root / "state/project-deliveries", read_only=True
         )
-        cp = journal.current(scope.delivery_id)
+        history = journal.list(scope.delivery_id)
+        cp = history[-1]
         intake = journal.get_intake(scope.delivery_id)
         if (
             cp.stage not in (DeliveryStage.BLOCKED, DeliveryStage.FAILED)
@@ -77,8 +78,16 @@ class NativeCandidateSourceReader:
             or intake.project_root != scope.project_root
         ):
             raise ValueError("not a terminal scoped delivery")
-        runtime = read_candidate_snapshot(self.config, self.environment, cp)
-        stages = read_approved_stages(self.config, root, scope, cp, runtime.task, runtime.dispatch)
+        runtime = read_candidate_snapshot(self.config, self.environment, cp, history)
+        stages = read_approved_stages(
+            self.config,
+            root,
+            scope,
+            cp,
+            runtime.task,
+            runtime.planner_dispatch,
+            current_dispatch=runtime.dispatch,
+        )
         parent_id, parent_sha = _parent(company, cp, stages.approval)
         artifacts = FileArtifactStore(root / "artifacts", read_only=True)
         implementation = artifacts.get(runtime.events[-2].artifact_ids[0])
@@ -128,9 +137,17 @@ class NativeCandidateSourceReader:
             prior_run_ids=tuple(sorted(run_ids)),
         )
         if (
-            journal.current(scope.delivery_id) != cp
-            or read_candidate_snapshot(self.config, self.environment, cp) != runtime
-            or read_approved_stages(self.config, root, scope, cp, runtime.task, runtime.dispatch)
+            journal.list(scope.delivery_id) != history
+            or read_candidate_snapshot(self.config, self.environment, cp, history) != runtime
+            or read_approved_stages(
+                self.config,
+                root,
+                scope,
+                cp,
+                runtime.task,
+                runtime.planner_dispatch,
+                current_dispatch=runtime.dispatch,
+            )
             != stages
             or _parent(company, cp, stages.approval) != (parent_id, parent_sha)
         ):

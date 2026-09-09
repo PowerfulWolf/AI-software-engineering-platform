@@ -146,6 +146,177 @@
       "title": "CapturedFile",
       "type": "object"
     },
+    "ContinuationDispatchRecord": {
+      "additionalProperties": false,
+      "description": "Fresh serial Task derived from a durable delivery result such as QA remediation.",
+      "properties": {
+        "kind": {
+          "const": "continuation_dispatch",
+          "default": "continuation_dispatch",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^dispatch_commit_[a-f0-9]{64}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "project_id": {
+          "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "project_request_id": {
+          "pattern": "^request_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Project Request Id",
+          "type": "string"
+        },
+        "execution_plan_id": {
+          "pattern": "^execution_plan_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Execution Plan Id",
+          "type": "string"
+        },
+        "execution_plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Execution Plan Sha256",
+          "type": "string"
+        },
+        "execution_plan_phase_ids": {
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "pattern": "^phase_[a-z0-9][a-z0-9_-]{1,63}$",
+              "type": "string"
+            },
+            {
+              "pattern": "^phase_[a-z0-9][a-z0-9_-]{1,63}$",
+              "type": "string"
+            },
+            {
+              "pattern": "^phase_[a-z0-9][a-z0-9_-]{1,63}$",
+              "type": "string"
+            }
+          ],
+          "title": "Execution Plan Phase Ids",
+          "type": "array"
+        },
+        "continuation_kind": {
+          "const": "verification_remediation",
+          "title": "Continuation Kind",
+          "type": "string"
+        },
+        "continuation_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Continuation Sha256",
+          "type": "string"
+        },
+        "continuation_plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Continuation Plan Sha256",
+          "type": "string"
+        },
+        "continuation_context_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Continuation Context Sha256",
+          "type": "string"
+        },
+        "target_preparation_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Target Preparation Sha256",
+          "type": "string"
+        },
+        "source_delivery_id": {
+          "minLength": 1,
+          "title": "Source Delivery Id",
+          "type": "string"
+        },
+        "source_task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Source Task Id",
+          "type": "string"
+        },
+        "source_base_revision": {
+          "pattern": "^[a-f0-9]{40,64}$",
+          "title": "Source Base Revision",
+          "type": "string"
+        },
+        "source_revision": {
+          "pattern": "^[a-f0-9]{40,64}$",
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "source_dispatch_id": {
+          "pattern": "^dispatch_commit_[a-f0-9]{64}$",
+          "title": "Source Dispatch Id",
+          "type": "string"
+        },
+        "workforce_snapshot_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Workforce Snapshot Sha256",
+          "type": "string"
+        },
+        "task": {
+          "$ref": "#/$defs/Task"
+        },
+        "phases": {
+          "items": {
+            "$ref": "#/$defs/DispatchPhaseCommit"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "title": "Phases",
+          "type": "array"
+        },
+        "committed_at": {
+          "format": "date-time",
+          "title": "Committed At",
+          "type": "string"
+        },
+        "dispatch_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Dispatch Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "project_id",
+        "task_id",
+        "project_request_id",
+        "execution_plan_id",
+        "execution_plan_sha256",
+        "execution_plan_phase_ids",
+        "continuation_kind",
+        "continuation_sha256",
+        "continuation_plan_sha256",
+        "continuation_context_sha256",
+        "target_preparation_sha256",
+        "source_delivery_id",
+        "source_task_id",
+        "source_base_revision",
+        "source_revision",
+        "source_dispatch_id",
+        "workforce_snapshot_sha256",
+        "task",
+        "phases",
+        "committed_at",
+        "dispatch_sha256"
+      ],
+      "title": "ContinuationDispatchRecord",
+      "type": "object"
+    },
     "DispatchPhaseCommit": {
       "additionalProperties": false,
       "description": "Concrete commit-time allocation for one serial delivery role.",
@@ -843,6 +1014,9 @@
   "anyOf": [
     {
       "$ref": "#/$defs/RecoveryDispatchRecord"
+    },
+    {
+      "$ref": "#/$defs/ContinuationDispatchRecord"
     },
     {
       "$ref": "#/$defs/RecoverySeedRecord"

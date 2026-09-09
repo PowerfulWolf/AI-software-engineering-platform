@@ -390,6 +390,16 @@
           "title": "Request Id",
           "type": "string"
         },
+        "work_kind": {
+          "default": "delivery",
+          "enum": [
+            "delivery",
+            "candidate_verification",
+            "remediation"
+          ],
+          "title": "Work Kind",
+          "type": "string"
+        },
         "task_id": {
           "anyOf": [
             {
@@ -401,6 +411,42 @@
           ],
           "default": null,
           "title": "Task Id"
+        },
+        "source_delivery_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Delivery Id"
+        },
+        "source_task_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Task Id"
+        },
+        "plan_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Plan Sha256"
         },
         "title": {
           "title": "Title",

@@ -21,6 +21,7 @@ from ai_software_engineer.domain.identity import ProjectId
 from ai_software_engineer.domain.task import TaskId
 from ai_software_engineer.planning.models import PlannerRunOutcome
 from ai_software_engineer.project_manager.dispatch import (
+    ContinuationDispatchRecord,
     DeliveryAllocation,
     DispatchAuthorityConflict,
     DispatchCommitConflict,
@@ -293,6 +294,64 @@ class MySqlDispatchAuthority:
             cursor.execute(
                 "INSERT INTO dispatch_commits "
                 "(id, project_id, task_id, payload_json, dispatch_sha256) VALUES (%s,%s,%s,%s,%s)",
+                (
+                    record.id,
+                    project_id,
+                    task_id,
+                    _encode(record),
+                    record.dispatch_sha256,
+                ),
+            )
+            self._current_snapshot(connection, project_id, task_id)
+            return record
+
+    def commit_continuation(
+        self,
+        *,
+        project_id: ProjectId,
+        task_id: TaskId,
+        continuation_sha256: DispatchSha256,
+        validate_current: Callable[[ContinuationDispatchRecord | None], None],
+        build: Callable[[DispatchWorkforceSnapshot], ContinuationDispatchRecord],
+    ) -> ContinuationDispatchRecord:
+        """Commit one deterministic successor Task under the shared allocation fence."""
+        commit_id = f"dispatch_commit_{continuation_sha256}"
+        with (
+            self._request_revisions.request_revision_fence(),
+            closing(open_mysql_connection(self._dsn)) as connection,
+            self._transaction(connection),
+            connection.cursor() as cursor,
+        ):
+            self._lock_authority(cursor)
+            cursor.execute("SELECT * FROM dispatch_commits WHERE id = %s FOR UPDATE", (commit_id,))
+            row = cast(Mapping[str, object] | None, cursor.fetchone())
+            if row is not None:
+                existing = _decode_allocation(row)
+                if not isinstance(existing, ContinuationDispatchRecord):
+                    raise DispatchCommitConflict(
+                        "continuation identity belongs to another dispatch kind"
+                    )
+                validate_current(existing)
+                return existing
+            validate_current(None)
+            snapshot = self._current_snapshot(connection, project_id, task_id)
+            record = build(snapshot)
+            record.validate_integrity()
+            if (
+                record.id != commit_id
+                or record.project_id != project_id
+                or record.task_id != task_id
+                or record.workforce_snapshot_sha256 != snapshot.snapshot_sha256
+            ):
+                raise DispatchAuthorityConflict(
+                    "continuation allocation differs from fenced inputs"
+                )
+            self._validate_reservations(record, snapshot)
+            validate_current(record)
+            cursor.execute(
+                "INSERT INTO dispatch_commits "
+                "(id, project_id, task_id, payload_json, dispatch_sha256) "
+                "VALUES (%s,%s,%s,%s,%s)",
                 (
                     record.id,
                     project_id,
@@ -617,6 +676,8 @@ def _decode_allocation(row: Mapping[str, object]) -> DeliveryAllocation:
         record: DeliveryAllocation
         if isinstance(payload, dict) and payload.get("kind") == "recovery_dispatch":
             record = RecoveryDispatchRecord.model_validate(payload)
+        elif isinstance(payload, dict) and payload.get("kind") == "continuation_dispatch":
+            record = ContinuationDispatchRecord.model_validate(payload)
         else:
             record = DispatchCommitRecord.model_validate(payload)
         record.validate_integrity()

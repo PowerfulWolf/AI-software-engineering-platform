@@ -486,6 +486,21 @@ class _InvalidPlannerBackend(_OfflineBackend):
         )
 
 
+class _TransientPlannerBackend(_OfflineBackend):
+    def __init__(self, platform: Path) -> None:
+        super().__init__(platform)
+        self.planner_calls = 0
+
+    def run_planner(self, checkpoint: ProjectDeliveryCheckpoint) -> PlanningStageResult:
+        self.planner_calls += 1
+        if self.planner_calls == 1:
+            raise DeliveryBackendFailure(
+                DeliveryFailureCode.TRANSIENT_PROVIDER_FAILURE,
+                "Planner provider quota is temporarily unavailable",
+            )
+        return super().run_planner(checkpoint)
+
+
 def _copy_fixture(tmp_path: Path, language: str) -> Path:
     source = Path(__file__).parents[2] / "fixtures" / "target-projects" / language
     target = tmp_path / "target"
@@ -711,3 +726,43 @@ def test_classified_invalid_output_becomes_a_safe_checkpoint(tmp_path: Path) -> 
     assert blocked.checkpoint.stage is DeliveryStage.BLOCKED
     assert blocked.checkpoint.failure_code is DeliveryFailureCode.INVALID_AGENT_OUTPUT
     assert blocked.checkpoint.failure_summary == "Planner output failed its typed contract"
+
+
+def test_resume_reenters_exact_transient_pre_task_stage(tmp_path: Path) -> None:
+    project = _copy_fixture(tmp_path, "python")
+    platform = tmp_path / "platform"
+    backend = _TransientPlannerBackend(platform)
+    service = UnifiedProjectEntryService(
+        backend=backend,
+        catalog=ProjectDeliveryCheckpointCatalog(platform / "projects"),
+    )
+    started = service.start(
+        StartProjectDelivery(
+            project_root=str(project.resolve()),
+            requirement="Add a resumable greeting.",
+            submitted_at=NOW,
+        )
+    )
+    blocked = service.approve(
+        ApproveProductSpec(
+            delivery_id=started.checkpoint.delivery_id,
+            expected_checkpoint_sha256=started.checkpoint.checkpoint_sha256,
+            approval_reference="transient-planner-test",
+            submitted_at=NOW + timedelta(minutes=1),
+        )
+    ).checkpoint
+
+    assert blocked.stage is DeliveryStage.BLOCKED
+    assert blocked.failed_stage is DeliveryStage.PLANNING
+    assert blocked.failure_code is DeliveryFailureCode.TRANSIENT_PROVIDER_FAILURE
+    completed = service.retry_interrupted_stage(
+        ResumeProjectDelivery(
+            delivery_id=blocked.delivery_id,
+            submitted_at=NOW + timedelta(minutes=2),
+        )
+    ).checkpoint
+
+    assert completed.stage is DeliveryStage.DONE
+    assert completed.failed_stage is None
+    assert completed.failure_code is None
+    assert backend.planner_calls == 2

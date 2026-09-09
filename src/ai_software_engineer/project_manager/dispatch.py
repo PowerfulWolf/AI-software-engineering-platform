@@ -80,6 +80,7 @@ from ai_software_engineer.scheduling.portfolio import PortfolioScheduler
 
 DispatchCommitId = Annotated[str, StringConstraints(pattern=r"^dispatch_commit_[a-f0-9]{64}$")]
 DispatchSha256 = Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
+CommitRevision = Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{40,64}$")]
 _TIER_RANK = {
     BrainTier.ECONOMY: 0,
     BrainTier.STANDARD: 1,
@@ -392,7 +393,84 @@ class RecoveryDispatchRecord(DomainModel):
             raise DispatchCommitCorruption("recovery dispatch digest mismatch")
 
 
-DeliveryAllocation = DispatchCommitRecord | RecoveryDispatchRecord
+class ContinuationDispatchRecord(DomainModel):
+    """Fresh serial Task derived from a durable delivery result such as QA remediation."""
+
+    kind: Literal["continuation_dispatch"] = "continuation_dispatch"
+    schema_version: Literal["v0.1"] = "v0.1"
+    id: DispatchCommitId
+    project_id: ProjectId
+    task_id: TaskId
+    project_request_id: ProjectRequestId
+    execution_plan_id: ExecutionPlanId
+    execution_plan_sha256: DispatchSha256
+    execution_plan_phase_ids: tuple[PlanPhaseId, PlanPhaseId, PlanPhaseId]
+    continuation_kind: Literal["verification_remediation"]
+    continuation_sha256: DispatchSha256
+    continuation_plan_sha256: DispatchSha256
+    continuation_context_sha256: DispatchSha256
+    target_preparation_sha256: DispatchSha256
+    source_delivery_id: NonEmptyStr
+    source_task_id: TaskId
+    source_base_revision: CommitRevision
+    source_revision: CommitRevision
+    source_dispatch_id: DispatchCommitId
+    workforce_snapshot_sha256: DispatchSha256
+    task: Task
+    phases: Annotated[tuple[DispatchPhaseCommit, ...], Field(min_length=3, max_length=3)]
+    committed_at: AwareDatetime
+    dispatch_sha256: DispatchSha256
+
+    @model_validator(mode="after")
+    def validate_record(self) -> Self:
+        expected = {
+            "continuation_kind": self.continuation_kind,
+            "continuation_sha256": self.continuation_sha256,
+            "continuation_plan_sha256": self.continuation_plan_sha256,
+            "continuation_context_sha256": self.continuation_context_sha256,
+            "continuation_target_preparation_sha256": self.target_preparation_sha256,
+            "continuation_of_delivery_id": self.source_delivery_id,
+            "continuation_of_task_id": self.source_task_id,
+            "continuation_source_base_revision": self.source_base_revision,
+            "continuation_source_revision": self.source_revision,
+            "continuation_source_dispatch_id": self.source_dispatch_id,
+            "project_id": self.project_id,
+            "project_request_id": self.project_request_id,
+            "execution_plan_id": self.execution_plan_id,
+            "execution_plan_sha256": self.execution_plan_sha256,
+        }
+        if (
+            self.task.id != self.task_id
+            or self.task.status is not TaskStatus.NEW
+            or self.task.attempts != 0
+            or self.task_id != f"task_continue_{self.continuation_sha256[:32]}"
+            or self.id != f"dispatch_commit_{self.continuation_sha256}"
+            or any(self.task.metadata.get(key) != value for key, value in expected.items())
+        ):
+            raise ValueError("continuation dispatch Task lineage mismatch")
+        if (
+            tuple(phase.role for phase in self.phases)
+            != (AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER)
+            or len({phase.agent_id for phase in self.phases}) != 3
+            or tuple(phase.phase_id for phase in self.phases) != self.execution_plan_phase_ids
+        ):
+            raise ValueError("continuation requires three independent serial phases")
+        _require_unique((phase.assignment.id for phase in self.phases), "Assignment IDs")
+        _require_unique((phase.lease.id for phase in self.phases), "Lease IDs")
+        if any(
+            phase.assignment.task_id != self.task_id
+            or phase.assignment.project_id != self.project_id
+            for phase in self.phases
+        ):
+            raise ValueError("continuation allocation scope mismatch")
+        return self
+
+    def validate_integrity(self) -> None:
+        if self.dispatch_sha256 != _record_digest(self):
+            raise DispatchCommitCorruption("continuation dispatch digest mismatch")
+
+
+DeliveryAllocation = DispatchCommitRecord | RecoveryDispatchRecord | ContinuationDispatchRecord
 
 
 class VerificationReservation(DomainModel):

@@ -15,6 +15,7 @@ from threading import Thread
 
 import pytest
 from jsonschema import Draft202012Validator, FormatChecker
+from pymysql.cursors import DictCursor
 from typer.testing import CliRunner
 
 from ai_software_engineer.agents import AgentRequest, AgentResult
@@ -31,8 +32,11 @@ from ai_software_engineer.project_manager.delivery import (
     ReplyToProduct,
     StartProjectDelivery,
 )
+from ai_software_engineer.project_manager.dispatch import VerificationReservation
+from ai_software_engineer.project_manager.mysql_dispatch_authority import _decode_commit
 from ai_software_engineer.project_manager.production_host import OrganizationTeamHost
 from ai_software_engineer.runtime_workspace import OrganizationWorkspace
+from ai_software_engineer.store.mysql_repository import open_mysql_connection
 from ai_software_engineer.team_view.models import TeamReadError, TeamSnapshot
 from ai_software_engineer.team_view.reader import ProductionTeamReader
 from ai_software_engineer.team_view.server import create_team_server
@@ -356,3 +360,101 @@ def test_single_repository_entry_remains_visible(tmp_path: Path) -> None:
     assert request.scopes[0].selected_paths == (".",)
     assert request.blocker and task.status == "WAITING_PRODUCT_APPROVAL"
     assert task.assignments == ()
+
+
+@pytest.mark.mysql
+def test_active_candidate_verification_is_visible_as_qa_work(tmp_path: Path) -> None:
+    config, environment, _, projects = setup_host(tmp_path)
+    host = OrganizationTeamHost(
+        config=config,
+        environment=environment,
+        structured_clients=_ScriptedClientFactory(),
+        delivery_route_adapters=_ScriptedDeliveryFactory(),
+    )
+    service = host.project_entry()
+    started = service.start(
+        StartProjectDelivery(
+            project_root=str(projects[0]),
+            requirement="Update greeting",
+            title="Visible candidate verification",
+        )
+    ).checkpoint
+    product = (
+        service.reply(
+            ReplyToProduct(
+                delivery_id=started.delivery_id,
+                expected_checkpoint_sha256=started.checkpoint_sha256,
+                message="Update greeting",
+            )
+        ).checkpoint
+        if started.stage == "WAITING_PRODUCT_REPLY"
+        else started
+    )
+    completed = service.approve(
+        ApproveProductSpec(
+            delivery_id=product.delivery_id,
+            expected_checkpoint_sha256=product.checkpoint_sha256,
+            approval_reference="human-verification-view",
+        )
+    ).checkpoint
+    assert completed.stage == "DONE"
+
+    dsn = config.require_mysql_dsn(environment)
+    with open_mysql_connection(dsn) as connection, connection.cursor(DictCursor) as cursor:
+        cursor.execute("SELECT * FROM dispatch_commits WHERE task_id = %s", (completed.task_id,))
+        row = cursor.fetchone()
+        assert row is not None
+        dispatch = _decode_commit(row)
+        suffix = hashlib.sha256(str(completed.task_id).encode()).hexdigest()[:16]
+        execution_task_id = f"task_verify_team_view_{suffix}"
+        phases = []
+        for index, phase in enumerate(dispatch.phases[1:]):
+            assignment_id = f"assignment_verify_team_view_{suffix}_{index}"
+            lease_id = f"lease_verify_team_view_{suffix}_{index}"
+            phases.append(
+                phase.model_copy(
+                    update={
+                        "assignment": phase.assignment.model_copy(
+                            update={
+                                "id": assignment_id,
+                                "lease_id": lease_id,
+                                "task_id": execution_task_id,
+                            }
+                        ),
+                        "lease": phase.lease.model_copy(
+                            update={
+                                "id": lease_id,
+                                "assignment_id": assignment_id,
+                                "task_id": execution_task_id,
+                            }
+                        ),
+                    }
+                )
+            )
+        reservation = VerificationReservation(
+            plan_sha256=hashlib.sha256(execution_task_id.encode()).hexdigest(),
+            project_id=dispatch.project_id,
+            source_task_id=dispatch.task_id,
+            task_id=execution_task_id,
+            workforce_snapshot_sha256=dispatch.workforce_snapshot_sha256,
+            phases=tuple(phases),
+            committed_at=datetime.now(UTC),
+        )
+        cursor.execute(
+            "INSERT INTO verification_reservations "
+            "(plan_sha256, payload_json, completion_sha256) VALUES (%s, %s, NULL)",
+            (reservation.plan_sha256, reservation.model_dump_json()),
+        )
+        connection.commit()
+
+    snapshot = ProductionTeamReader(config, environment).snapshot()
+    verification = next(task for task in snapshot.tasks if task.task_id == execution_task_id)
+    assert not verification.terminal
+    assert verification.status == "VERIFY_QA"
+    assert verification.scope.root == str(projects[0])
+    assert (
+        next(item for item in verification.assignments if item.current_stage).role is AgentRole.QA
+    )
+    qa = next(agent for agent in snapshot.agents if agent.id == "agent_team_qa")
+    assert verification.id in qa.assigned_delivery_ids
+    assert verification.id in qa.current_stage_delivery_ids

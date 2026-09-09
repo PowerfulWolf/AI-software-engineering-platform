@@ -1,9 +1,10 @@
 # 角色、权限与 Artifact 契约
 
 候选复核恢复另有内部契约：`schemas/candidate-verification.schema.json` 定义绑定原候选的
-计划、审批和调用凭据。它保留原 Task/实现报告身份，只允许新 QA→Reviewer，不重置终态，
-不把复核成功直接当作联合交付 DONE。目前尚无生产命令；详见
-[恢复规范 E1](../.trellis/spec/core/delivery-recovery.md)。
+计划、审批和调用凭据。它保留原 Task/实现报告身份，只允许新 QA→Reviewer，不重置终态。
+生产入口是 `ase request resume`；低层 `verify-*` 只用于 break-glass。复核通过先完成子 Delivery，
+联合需求仍需完整候选集合和联合验收；详见
+[恢复规范](../.trellis/spec/core/delivery-recovery.md)。
 
 ## 1. 角色总览
 
@@ -655,7 +656,9 @@ UNKNOWN；planned_model 不代替 ModelRouteAttempt 的实际模型。读取不�
 
 - `delivery-recovery.schema.json`：RecoveryPlan / RecoveryAuthorization，精确绑定人类批准的基线与修改。
 - `recovery-task-record.schema.json`：封存重新绑定 preparation 的 Request 与 NEW Task。
-- `recovery-execution.schema.json`：RecoveryDispatchRecord / RecoverySeedRecord / RecoveryInvocationRecord。
+- `recovery-execution.schema.json`：RecoveryDispatchRecord / ContinuationDispatchRecord /
+  RecoverySeedRecord / RecoveryInvocationRecord。Continuation 绑定被拒候选、验证 completion、当前
+  preparation、修复 Task 和新的 Coder/QA/Reviewer allocation。
   新分配进入同一个 MySQL 全局资源锁；种子记录绑定目标 worktree 捕获；调用记录防止重复放行 Coder。
 
 `ase recovery propose → inspect → approve → run` 是可信本地操作者入口，不是 Agent 工具。

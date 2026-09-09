@@ -48,7 +48,11 @@ class RunView(DomainModel):
 class TaskView(DomainModel):
     id: str
     request_id: str
+    work_kind: Literal["delivery", "candidate_verification", "remediation"] = "delivery"
     task_id: str | None = None
+    source_delivery_id: str | None = None
+    source_task_id: str | None = None
+    plan_sha256: str | None = None
     title: str
     scope: ScopeView
     status: str

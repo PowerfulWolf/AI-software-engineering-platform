@@ -161,6 +161,11 @@ flowchart LR
     R -- "APPROVE" --> DONE["Task DONE<br/>candidate SHA + evidence"]
 ```
 
+如果 Task 已因额度、进程或基础设施故障终止但已经存在 candidate，Delivery 级恢复不会重开旧
+Task：`resume → 独立候选验证 → PASS 则接纳；FAIL/REJECT 则创建关联修复 Task → 新 Candidate`。
+因此“模型调用不能重复”和“需求必须继续完成”并不冲突：前者约束单个 Run，后者通过新的、可审计的
+Run/Task 接续。
+
 每个方框都是独立 `work_item_id`。同一 Task 可以产生多个 Coder/QA/Reviewer Run；每次 Run 都重新
 经过 Scheduler 和 ModelRouter。续跑可设置 `preferred_agent_id` 保持上下文连续，但只有原成员仍具备
 能力和容量时才优先；实际代码现场属于 Task branch/worktree，不属于 Agent 的临时会话。
@@ -210,7 +215,7 @@ AI-software-engineering-platform/
 │   ├── context/ artifacts/ evidence/ # Context、Artifact、Evidence 的存储与校验
 │   ├── git/ role_workspace.py        # 分支/worktree、角色权限与受控命令执行
 │   ├── multi_directory/              # 多目录/多仓需求拆分和联合验收
-│   ├── recovery/                     # 失败 Coder 接手与既有 candidate 独立复核
+│   ├── recovery/                     # Delivery 统一续跑、失败 Coder 接手、候选复核与修复接续
 │   ├── store/                        # MySQL 生产事实；SQLite 底层兼容实现
 │   ├── projection/ team_view/        # 只读投影、HTTP API 和团队工作台
 │   ├── evaluation/                   # 事件重放、ADR 和 Handoff
@@ -223,7 +228,8 @@ AI-software-engineering-platform/
 │   ├── artifact.schema.json
 │   ├── work-queue.schema.json
 │   ├── delivery-recovery.schema.json
-│   └── candidate-verification.schema.json
+│   ├── candidate-verification.schema.json
+│   └── recovery-execution.schema.json
 ├── tests/                            # 与 src 分层对应；含真实 Git/MySQL 和离线模型契约测试
 ├── docs/
 │   ├── production-setup.md           # 完整部署与运维手册
@@ -414,44 +420,50 @@ uv run ase team serve --port 8765
 - **需要你回答或确认**：按 `checkpoint.next_action` 操作。
 - **中断或阻塞**：先看 `next_action` 和失败证据；`resume` 不会掩盖规范冲突或失败 verdict。
 - **Coder 单次运行未完成**：平台保存 `coder-progress`，自动执行
-  `CONTINUE_REQUIRED → QUEUED → IMPLEMENTING`；进程退出后用 `resume`，半成品不会进入 QA。
+  `CONTINUE_REQUIRED → QUEUED → IMPLEMENTING`；若最终无 candidate 但 worktree 有保留修改，
+  `resume` 会生成精确恢复计划，批准后创建新 Task 接续，半成品不会直接进入 QA。
 - **DONE**：`children` 给出各仓 candidate commit，`integration` 给出联合验收；人工复核后按原项目流程合并。
 
 平台不会自动合并、推送或部署，也不会把候选代码自动切换到目标项目当前分支。
 日常接单不需要 `ase task ...` 底层 Runtime，也不需要手工准备 sidecar、Agent 或 snapshot。
 
-### 4. 失败恢复：先判断有没有 candidate
+### 4. 中断或失败：日常只使用 `resume`
 
-`request resume` 只继续正常 checkpoint。终态失败需要显式恢复，且分两种情况：
-
-**Coder 尚未产生 candidate，但 worktree 有保留修改**：使用
-[失败 Coder 接手流程](docs/cli.md#显式接手失败-coder-的保留修改)。它创建新 Task 接手修改，
-不会重写旧失败历史。
-
-**Coder 已经提交 candidate，只是 QA/Reviewer 阶段因平台故障中断**：不要重跑 Coder，使用四步候选复核：
+无论停在 Product、Designer、Planner、Coder、QA、Reviewer 还是多仓联合验收，先执行同一个命令：
 
 ```bash
-# 1. 固定原 Task、candidate、artifact、当前 QA/Reviewer 分配；不调用模型
-uv run ase verify-propose --project /absolute/path/to/repository --delivery CHILD_DELIVERY_ID
-
-# 2. 查看计划、批准状态和已有结果；纯只读
-uv run ase verify-inspect --plan PLAN_FILE
-
-# 3. 人工确认输出中的 exact plan_sha256；仍不调用模型
-uv run ase verify-approve --plan PLAN_FILE --confirm PLAN_SHA256 \
-  --reference "human-approved-candidate-verification"
-
-# 4. 只运行独立 QA → Reviewer；不会运行 Coder，也不会改写原终态 Task
-uv run ase verify-run --plan PLAN_FILE
+uv run ase request resume DELIVERY_ID
 ```
 
-`verify-run` 使用独立的验证 Task/Assignment/Lease/worktree 身份，但报告仍绑定原 Task 和同一个
-candidate commit。QA FAIL 时不会调用 Reviewer；只有 QA PASS 且 Review APPROVE 才输出
-`verified=true`。重复或结果不确定的同角色调用会 fail closed，先用 `verify-inspect` 检查，不会偷偷重试。
-如果某个角色已经封存调用、但因限额、超时或进程中断没有生成完整报告，不要重跑同一个
-`PLAN_FILE`：再次执行 `verify-propose`（使用相同的 `--project` 与 `--delivery`），批准新计划摘要，
-再运行新计划。新计划复用同一个 candidate、生成新的验证 run，仍然不会调用 Coder。
-更详细的边界见 [CLI 手册](docs/cli.md) 与 [恢复规范](.trellis/spec/core/delivery-recovery.md)。
+平台读取 MySQL、sidecar、Git 和不可变 checkpoint，只执行下一项尚未完成且已获授权的工作：
+
+- 普通进程中断：直接从最近 checkpoint 继续；已完成的阶段和仓库不会重跑。
+- Coder 尚无 candidate、失败 worktree 存在修改：自动定位失败 Run/Context 并返回精确恢复计划；
+  批准后创建新 Task 接续旧修改，再走 `Coder → QA → Reviewer`；新的恢复/修复 Coder 若再次中断，
+  继续执行同一个 `resume`，平台会沿完整 Task/dispatch 历史创建下一次恢复，而不是卡死在第一轮。
+- Coder 已产生 candidate、QA/Reviewer 因额度或进程故障中断：先返回一个精确验证计划，**不会重跑 Coder**。
+- QA FAIL 或 Review REJECT：保留 Candidate V1 和原失败 Task，自动创建关联修复 Task，再走
+  `Coder → QA → Reviewer` 得到 Candidate V2。
+- 已完成 Task、checkpoint 尚未来得及写入：从 Task event 和 sealed artifacts 接管，零模型调用。
+- 规范冲突、需求歧义、权限/来源漂移：返回明确人工 gate，不会偷偷放宽规则。
+
+当输出为 `VERIFICATION_APPROVAL_REQUIRED` 或 `RECOVERY_APPROVAL_REQUIRED` 时，检查返回的 plan
+文件，确认 Agent、模型、candidate/保留修改和目录范围后，用输出中的完整摘要批准并继续：
+
+```bash
+uv run ase request resume DELIVERY_ID \
+  --approve-plan PLAN_SHA256 \
+  --approval-reference "human-approved-delivery-plan"
+```
+
+如果某个已批准的模型调用结果不确定，平台不会重复调用同一 Run；下一次 `resume` 会生成新的验证
+计划并再次要求确认。`verify-propose / verify-inspect / verify-approve / verify-run` 仍保留给诊断和
+break-glass 操作，日常交付不需要手工串这四个命令。
+
+低层 [失败 Coder 接手流程](docs/cli.md#显式接手失败-coder-的保留修改) 和 `verify-*` 仍保留给
+诊断与逐条审计；日常流程不需要切换命令。未知半成品不会被自动视为正确实现，`resume` 只负责
+封存并展示精确恢复计划，仍需人工批准后才能交给新的 Coder Task。详细断点矩阵见
+[CLI 手册](docs/cli.md) 与 [恢复规范](.trellis/spec/core/delivery-recovery.md)。
 
 ## 开发与验证
 
@@ -482,6 +494,7 @@ MySQL 集成测试需设置 `ASE_TEST_MYSQL_DSN`，指向专用测试数据库�
 | M11 持续团队与候选提交 | 七个组织级长期成员；显式 CandidateCommit Skill；CoderProgress Artifact；可重启的有界 Coder 续跑循环 |
 | M12 持久工作队列 | MySQL Run 级 WorkItem、Planner-owned Dispatcher tick、原子 Assignment/Lease/ModelSelection、owner-fenced 心跳/完成/等待/重试/过期回收；`ase request` 逐角色 Worker 接线仍待完成 |
 | M13 候选复核恢复 | 对已有 Coder candidate 提供 `verify-propose / inspect / approve / run`；使用独立 QA/Reviewer allocation、Lease 和 worktree，保留原失败 Task 与联合需求历史，不自动 merge/push/deploy |
+| M14 统一恢复与自动修复 | `request resume` 统一接管现有持久化阶段；候选复核可由同一入口批准和续跑；QA FAIL/Review REJECT 创建确定性修复 Task 并重新走 Coder→QA→Reviewer；看板显示验证与修复工作；终态 Task 可零调用补写 Delivery checkpoint |
 
 ## 文档导航
 

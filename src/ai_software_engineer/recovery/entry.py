@@ -2,6 +2,7 @@
 
 import json
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -14,6 +15,7 @@ from ai_software_engineer.git import GitWorktreeManager, WorktreeSpec
 from ai_software_engineer.orchestration import RetryResult
 from ai_software_engineer.planning import FileExecutionPlanStore
 from ai_software_engineer.product import FileProductRecordStore
+from ai_software_engineer.project_manager.delivery_checkpoint import ProjectDeliveryCheckpoint
 from ai_software_engineer.project_manager.dispatch import RecoveryDispatchRecord
 from ai_software_engineer.project_manager.mysql_dispatch_authority import (
     MySqlDispatchAuthority,
@@ -51,6 +53,15 @@ from ai_software_engineer.role_workspace import DispatchRoleWorktreeCoordinator,
 from ai_software_engineer.runtime_workspace import FileOrganizationWorkforceStore
 from ai_software_engineer.store import MySqlTaskRepository, TaskNotFound
 from ai_software_engineer.store.mysql_repository import _decode_task, open_mysql_connection
+
+
+@dataclass(frozen=True)
+class NativeRecoveryExecution:
+    """One approved recovery allocation plus its serial delivery result."""
+
+    plan: RecoveryPlan
+    dispatch: RecoveryDispatchRecord
+    delivery: RetryResult
 
 
 def open_recovery_plan(
@@ -213,6 +224,53 @@ class NativeRecoveryEntry:
             prepared.project_workspace_root
         ) / "state" / f"recovery-{delivery_id}" / f"plan-{plan.plan_sha256}.json"
 
+    def propose_delivery(self, checkpoint: ProjectDeliveryCheckpoint) -> tuple[RecoveryPlan, Path]:
+        """Discover the failed Coder identity and publish one exact recovery plan."""
+        scope = RecoveryScope(
+            company_id=self.config.company_id,
+            project_id=checkpoint.project_id,
+            project_root=checkpoint.project_root,
+            delivery_id=checkpoint.delivery_id,
+        )
+        source = NativeRecoverySourceReader(self.config, self.environment).discover_failed_coder(
+            scope
+        )
+        return self.propose(
+            project_root=checkpoint.project_root,
+            delivery_id=checkpoint.delivery_id,
+            failed_run_id=source.source.failed_run_id,
+            failed_context_id=source.source.failed_context_id,
+        )
+
+    def latest_delivery(
+        self, checkpoint: ProjectDeliveryCheckpoint
+    ) -> tuple[FileRecoveryStore, RecoveryPlan, Path] | None:
+        """Return the latest plan pinned to this exact terminal Delivery checkpoint."""
+        root = (
+            Path(self.config.platform_root)
+            / "companies"
+            / self.config.company_id
+            / "projects"
+            / checkpoint.project_id
+            / "state"
+            / f"recovery-{checkpoint.delivery_id}"
+        )
+        if not root.exists():
+            return None
+        _reject_symlinks(root)
+        matches: list[tuple[RecoveryPlan, Path, FileRecoveryStore]] = []
+        for path in sorted(root.glob("plan-*.json")):
+            store, plan = self.open_plan(path)
+            if plan.source.checkpoint_sha256 == checkpoint.checkpoint_sha256:
+                matches.append((plan, path, store))
+        if not matches:
+            return None
+        plan, path, store = max(
+            matches,
+            key=lambda item: (item[0].created_at, item[0].plan_sha256),
+        )
+        return store, plan, path
+
     def open_plan(self, path: Path) -> tuple[FileRecoveryStore, RecoveryPlan]:
         return open_recovery_plan(self.config, path)
 
@@ -268,6 +326,64 @@ class NativeRecoveryEntry:
         store, plan = self.open_plan(path)
         with store.execution_lock():
             return self._execute(store, plan, route_factory)
+
+    def resume_execution(self, path: Path) -> NativeRecoveryExecution:
+        """Execute an unconsumed recovery or adopt its already-terminal Task."""
+        store, plan = self.open_plan(path)
+        try:
+            store.get_invocation(plan.plan_sha256)
+        except RecoveryRecordMissing:
+            delivery = self.execute(path)
+        else:
+            task = read_recovery_task(self.config, self.environment, store, plan)
+            if task is None or task.status not in {
+                TaskStatus.DONE,
+                TaskStatus.BLOCKED,
+                TaskStatus.FAILED,
+            }:
+                raise RecoveryRejected(
+                    "recovery Coder invocation is uncertain; inspect its Task before a successor"
+                )
+            facts = NativeRecoveryFactsVerifier(self.config, self.environment).inspect(plan)
+            preparation = self.backend.prepare(plan.source.scope.project_root)
+            if preparation.preparation != facts.target:
+                raise RecoveryRejected("recovery target changed before terminal adoption")
+            dispatch = self._dispatch_for(store, plan)
+            delivery = self.backend.run_prepared_allocation(
+                dispatch,
+                preparation,
+                facts.original.product,
+                facts.original.design,
+                facts.original.plan,
+            )
+        return NativeRecoveryExecution(
+            plan=plan,
+            dispatch=self._dispatch_for(store, plan),
+            delivery=delivery,
+        )
+
+    def _dispatch_for(self, store: FileRecoveryStore, plan: RecoveryPlan) -> RecoveryDispatchRecord:
+        sidecar = (
+            Path(self.config.platform_root)
+            / "companies"
+            / self.config.company_id
+            / "projects"
+            / plan.source.scope.project_id
+        )
+        authority = MySqlDispatchAuthority(
+            self.config.require_mysql_dsn(self.environment),
+            request_revisions=FileProductRecordStore(sidecar / "state/product"),
+            planner_records=FileExecutionPlanStore(sidecar / "state/planning"),
+        )
+        dispatch = authority.get_allocation(f"dispatch_commit_{plan.plan_sha256}")
+        sealed = store.get_task_record(plan.plan_sha256)
+        if (
+            not isinstance(dispatch, RecoveryDispatchRecord)
+            or dispatch.task != sealed.task
+            or dispatch.recovery_task_record_sha256 != sealed.record_sha256
+        ):
+            raise RecoveryRejected("recovery allocation differs from the approved Task")
+        return dispatch
 
     def _execute(
         self,

@@ -1424,6 +1424,32 @@
           "default": null,
           "title": "Candidate Revision"
         },
+        "verification_plan_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Verification Plan Sha256"
+        },
+        "verification_completion_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Verification Completion Sha256"
+        },
         "stage": {
           "$ref": "#/$defs/DeliveryStage"
         },
@@ -1456,6 +1482,17 @@
           ],
           "default": null,
           "title": "Failure Summary"
+        },
+        "failed_stage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DeliveryStage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "checkpointed_at": {
           "format": "date-time",
@@ -2036,6 +2073,8 @@
       "type": "object"
     }
   },
+  "$id": "https://ai-software-engineer.local/schemas/requirement-project-checkpoint.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
     "delivery_id": {
@@ -2210,7 +2249,5 @@
     "checkpoint_sha256"
   ],
   "title": "JointCheckpoint",
-  "type": "object",
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ai-software-engineer.local/schemas/requirement-project-checkpoint.schema.json"
+  "type": "object"
 }

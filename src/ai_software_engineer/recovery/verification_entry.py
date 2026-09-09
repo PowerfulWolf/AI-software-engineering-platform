@@ -294,6 +294,7 @@ class CandidateVerificationEntry:
         backend: ProductionProjectDeliveryBackend,
     ) -> None:
         self.config, self.environment, self.backend = config, dict(environment), backend
+        self._route_factory = backend._delivery_route_adapters
 
     def _authority(self, source: NativeCandidateSource) -> MySqlDispatchAuthority:
         sidecar = Path(source.stages.preparation.project_workspace_root)
@@ -318,6 +319,44 @@ class CandidateVerificationEntry:
                 delivery_id=delivery_id,
             )
         )
+
+    def latest_project(
+        self, *, project_root: str, delivery_id: str
+    ) -> tuple[FileRecoveryStore, CandidateVerificationPlan, Path] | None:
+        """Return the newest sealed plan for the current terminal candidate, if any."""
+        prepared = self.backend.prepare(project_root).preparation
+        if prepared is None:
+            raise RecoveryRejected("project preparation needs human resolution")
+        scope = RecoveryScope(
+            company_id=self.config.company_id,
+            project_id=prepared.project_id,
+            project_root=prepared.project_root,
+            delivery_id=delivery_id,
+        )
+        source = NativeCandidateSourceReader(self.config, self.environment).inspect(scope)
+        root = verification_store_root(source)
+        if not root.exists():
+            return None
+        store = FileRecoveryStore(root, scope=scope)
+        plans: list[tuple[CandidateVerificationPlan, Path]] = []
+        for path in sorted(root.glob("verification-plan-*.json")):
+            _reject_symlinks(path)
+            prefix, suffix = "verification-plan-", ".json"
+            plan_sha256 = path.name.removeprefix(prefix).removesuffix(suffix)
+            if path.name != f"{prefix}{plan_sha256}{suffix}":
+                raise RecoveryRejected("candidate verification plan path is malformed")
+            plan = store.get_verification_plan(plan_sha256)
+            if plan.scope != scope:
+                raise RecoveryRejected("candidate verification plan scope drifted")
+            try:
+                NativeVerificationFacts(self.config, self.environment, store=store).validate(plan)
+            except RecoveryRejected:
+                continue
+            plans.append((plan, path))
+        if not plans:
+            return None
+        plan, path = max(plans, key=lambda item: (item[0].created_at, item[0].plan_sha256))
+        return store, plan, path
 
     def propose(self, scope: RecoveryScope) -> tuple[CandidateVerificationPlan, Path]:
         source = NativeCandidateSourceReader(self.config, self.environment).inspect(scope)
@@ -450,7 +489,9 @@ class CandidateVerificationEntry:
             project_workspace_root=sidecar,
             context_resolver=StoredContextResolver(contexts, artifacts),
             environment=self.environment,
-            route_adapters=route_factory or ConfiguredDeliveryRouteAdapterFactory(),
+            route_adapters=(
+                route_factory or self._route_factory or ConfiguredDeliveryRouteAdapterFactory()
+            ),
         )
         repository = MySqlTaskRepository(self.config.require_mysql_dsn(self.environment))
         try:

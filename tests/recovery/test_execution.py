@@ -374,6 +374,11 @@ def test_recovery_complete_native_delivery_and_preserve_failed_history(
     with pytest.raises(RecoveryRejected, match="already admitted"):
         recovery.execute(path, route_factory=factory)
     assert len(factories) == 1
+    adopted = recovery.resume_execution(path)
+    assert adopted.plan == plan
+    assert adopted.delivery == result
+    assert adopted.dispatch.task_id == result.task.id
+    assert len(factories) == 1
     repository = MySqlTaskRepository(mysql_dsn)
     try:
         assert repository.get(plan.source.task_id) == old_task

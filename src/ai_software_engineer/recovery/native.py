@@ -43,11 +43,15 @@ from ai_software_engineer.project_manager.delivery_checkpoint import (
     FileProjectDeliveryCheckpointStore,
     ProjectDeliveryCheckpoint,
 )
-from ai_software_engineer.project_manager.dispatch import DispatchCommitRecord
-from ai_software_engineer.project_manager.mysql_dispatch_authority import _decode_commit
+from ai_software_engineer.project_manager.dispatch import DeliveryAllocation, DispatchCommitRecord
+from ai_software_engineer.project_manager.mysql_dispatch_authority import _decode_allocation
 from ai_software_engineer.project_manager.production_backend import _designer_run_id
 from ai_software_engineer.project_manager.store import FileProjectPreparationStore
 from ai_software_engineer.project_workspace import ProjectWorkspaceManifest
+from ai_software_engineer.recovery.allocation_lineage import (
+    allocation_preparation_sha256,
+    resolve_planner_dispatch,
+)
 from ai_software_engineer.recovery.models import (
     RecoveryRejected,
     RecoveryScope,
@@ -96,6 +100,51 @@ class NativeRecoverySourceReader:
                 "original delivery facts are missing, unsafe or inconsistent"
             ) from error
 
+    def discover_failed_coder(self, scope: RecoveryScope) -> NativeRecoverySource:
+        """Locate the one terminal Coder run owned by a pre-candidate Delivery."""
+        try:
+            scope = RecoveryScope.model_validate(scope.to_wire())
+            company = CompanyWorkspace.initialize(
+                self._config.platform_root,
+                company_id=scope.company_id,
+                name=self._config.company_name,
+                read_only=True,
+            )
+            root = company.root / "projects" / scope.project_id
+            journal = FileProjectDeliveryCheckpointStore(
+                root / "state/project-deliveries", read_only=True
+            )
+            history = journal.list(scope.delivery_id)
+            checkpoint = history[-1]
+            task, _, _, _ = self._sql(checkpoint, history)
+            routes_root = model_route_root(root)
+            _reject_symlinks(routes_root)
+            store = FileModelRouteAttemptStore(routes_root, read_only=True)
+            candidates: list[tuple[str, str]] = []
+            for directory in sorted(routes_root.iterdir()):
+                if directory.is_symlink() or not directory.is_dir():
+                    raise ValueError("unsafe model route entry")
+                run_id = TypeAdapter(RunId).validate_python(directory.name)
+                attempts = store.list_for_run(run_id)
+                if not attempts:
+                    raise ValueError("empty model route directory")
+                final = attempts[-1]
+                if (
+                    final.task_id == task.id
+                    and final.role is AgentRole.CODER
+                    and final.outcome is RouteAttemptOutcome.FAILED
+                    and final.result.attempt == task.attempts
+                ):
+                    candidates.append((run_id, final.result.context_manifest_id))
+            if len(candidates) != 1:
+                raise ValueError("failed Coder run is missing or ambiguous")
+            run_id, context_id = candidates[0]
+            return self._inspect(scope, run_id, context_id)
+        except Exception as error:
+            raise RecoveryRejected(
+                "failed Coder identity is missing, unsafe or ambiguous"
+            ) from error
+
     def _inspect(self, scope: RecoveryScope, run_id: str, context_id: str) -> NativeRecoverySource:
         if scope.company_id != self._config.company_id:
             raise ValueError("company mismatch")
@@ -124,7 +173,8 @@ class NativeRecoverySourceReader:
         journal = FileProjectDeliveryCheckpointStore(
             root / "state/project-deliveries", read_only=True
         )
-        cp = journal.current(scope.delivery_id)
+        history = journal.list(scope.delivery_id)
+        cp = history[-1]
         intake = journal.get_intake(scope.delivery_id)
         if (
             cp.project_id != scope.project_id
@@ -136,8 +186,16 @@ class NativeRecoverySourceReader:
             or cp.candidate_revision is not None
         ):
             raise ValueError("not a failed pre-candidate delivery")
-        task, revision, dispatch = self._sql(cp)
-        stages = read_approved_stages(self._config, root, scope, cp, task, dispatch)
+        task, revision, dispatch, planner_dispatch = self._sql(cp, history)
+        stages = read_approved_stages(
+            self._config,
+            root,
+            scope,
+            cp,
+            task,
+            planner_dispatch,
+            current_dispatch=dispatch,
+        )
         preparation, product, approval = stages.preparation, stages.product, stages.approval
         design, plan = stages.design, stages.plan
         parent_id, parent_sha = _parent(company, cp, approval)
@@ -206,9 +264,25 @@ class NativeRecoverySourceReader:
             parent_delivery_id=parent_id,
             parent_checkpoint_sha256=parent_sha,
         )
-        if journal.current(scope.delivery_id) != cp or self._sql(cp) != (task, revision, dispatch):
+        if journal.list(scope.delivery_id) != history or self._sql(cp, history) != (
+            task,
+            revision,
+            dispatch,
+            planner_dispatch,
+        ):
             raise ValueError("source changed during inspection")
-        if read_approved_stages(self._config, root, scope, cp, task, dispatch) != stages:
+        if (
+            read_approved_stages(
+                self._config,
+                root,
+                scope,
+                cp,
+                task,
+                planner_dispatch,
+                current_dispatch=dispatch,
+            )
+            != stages
+        ):
             raise ValueError("approved request changed during inspection")
         if _parent(company, cp, approval) != (parent_id, parent_sha):
             raise ValueError("parent changed during inspection")
@@ -225,21 +299,40 @@ class NativeRecoverySourceReader:
             task,
         )
 
-    def _sql(self, cp: ProjectDeliveryCheckpoint) -> tuple[Task, int, DispatchCommitRecord]:
+    def _sql(
+        self,
+        cp: ProjectDeliveryCheckpoint,
+        history: tuple[ProjectDeliveryCheckpoint, ...],
+    ) -> tuple[Task, int, DeliveryAllocation, DispatchCommitRecord]:
         if cp.task_id is None or cp.dispatch_commit_id is None:
             raise ValueError("missing materialized Task")
+        if not history or history[-1] != cp:
+            raise ValueError("Delivery checkpoint history is incomplete")
         connection = open_mysql_connection(self._config.require_mysql_dsn(self._environment))
         try:
             with connection.cursor(DictCursor) as cursor:
                 cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
                 cursor.execute("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
-                cursor.execute(
-                    "SELECT * FROM dispatch_commits WHERE id = %s", (cp.dispatch_commit_id,)
-                )
-                row = cursor.fetchone()
-                if row is None:
-                    raise ValueError("missing dispatch")
-                dispatch = _decode_commit(row)
+                allocations: dict[str, DeliveryAllocation] = {}
+                for historic in history:
+                    commit_id = historic.dispatch_commit_id
+                    if commit_id is None or commit_id in allocations:
+                        continue
+                    cursor.execute("SELECT * FROM dispatch_commits WHERE id = %s", (commit_id,))
+                    row = cursor.fetchone()
+                    if row is None:
+                        raise ValueError("missing dispatch history")
+                    allocation = _decode_allocation(row)
+                    if (
+                        allocation.id != commit_id
+                        or allocation.dispatch_sha256 != historic.dispatch_commit_sha256
+                        or allocation.project_id != historic.project_id
+                        or allocation.task_id != historic.task_id
+                    ):
+                        raise ValueError("dispatch history mismatch")
+                    allocations[commit_id] = allocation
+                dispatch = allocations[cp.dispatch_commit_id]
+                planner_dispatch = resolve_planner_dispatch(dispatch, allocations, history)
                 cursor.execute("SELECT * FROM tasks WHERE id = %s", (cp.task_id,))
                 row = cursor.fetchone()
                 if row is None:
@@ -289,7 +382,7 @@ class NativeRecoverySourceReader:
                     or event.from_status is not TaskStatus.IMPLEMENTING
                 ):
                     raise ValueError("not an interrupted Coder")
-                return task, revision, dispatch
+                return task, revision, dispatch, planner_dispatch
         finally:
             connection.rollback()
             connection.close()
@@ -312,6 +405,8 @@ def read_approved_stages(
     cp: ProjectDeliveryCheckpoint,
     task: Task,
     dispatch: DispatchCommitRecord,
+    *,
+    current_dispatch: DeliveryAllocation | None = None,
 ) -> NativeApprovedStages:
     """Shared native approval-chain validation; no prepare or Task mutation."""
     product_store = FileProductRecordStore(root / "state/product", read_only=True)
@@ -357,7 +452,10 @@ def read_approved_stages(
         preparation.project_root != scope.project_root
         or preparation.project_workspace_root != str(root)
         or preparation.organization_root != str(Path(config.platform_root) / "organization")
-        or preparation.preparation_sha256 != cp.preparation_sha256
+        or allocation_preparation_sha256(
+            current_dispatch or dispatch, preparation.preparation_sha256
+        )
+        != cp.preparation_sha256
         or product.product_spec_sha256 != cp.product_spec_sha256
         or approval.approval_sha256 != cp.approval_sha256
         or design.technical_design_sha256 != cp.technical_design_sha256

@@ -68,7 +68,7 @@ def test_candidate_snapshot_accepts_stale_projection_not_changed_facts(
         "next_action": DeliveryNextAction.REQUEST_HUMAN,
     }
     checkpoint = _checkpoint(Path(task.repository), **fields)
-    snapshot = CandidateRuntimeSnapshot(task, 4, dispatch, events)
+    snapshot = CandidateRuntimeSnapshot(task, 4, dispatch, dispatch, events)
     if mutation in ("legacy_base", "foreign_revision"):
         snapshot = replace(
             snapshot,

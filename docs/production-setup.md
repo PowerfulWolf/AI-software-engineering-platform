@@ -191,8 +191,11 @@ uv run ase request resume delivery_multi_xxx
 的候选根；不传入 Host secrets。测试必须存在于候选中、符合项目命令 allowlist；不能用 echo、
 Git inspection 或无测试的成功退出冒充验收。平台保留独立候选，不自动 merge/push。
 
-中断后复用已记录的阶段和原生子交付；未落盘的模型响应可能重复调用，测试也可能重跑。
-BLOCKED 不会靠 resume 自动修复代码；检查 `next_action` 和子 checkpoint 的失败原因。
+中断后复用已记录的阶段和原生子交付。每次 provider 调用使用独立 Run；已封存但结果不确定的
+调用不会直接重放，`resume` 会要求批准新的验证计划。BLOCKED 且已有 candidate 时，`resume` 先做
+独立 QA/Reviewer 复核；QA FAIL 或 Review REJECT 会保留旧 Task/candidate，并创建关联修复 Task 继续
+Coder→QA→Reviewer。尚无 candidate 的失败 Coder 由 `resume` 自动发现和封存现场，批准精确恢复
+计划后创建新 Task 接续；规范、权限、来源冲突仍需人工处理。
 源 HEAD、选定规范或知识变化时，应重新准备新的需求项目，不能套用旧批准。
 
 下面保留原单仓一步式入口，方便兼容旧命令；新需求推荐上面的 `request` 流程。
@@ -240,7 +243,14 @@ uv run ase project resume delivery_xxx
 ```
 
 每个 CLI 命令都是独立进程。`status` 从 append-only checkpoint 读取当前事实；`resume` 先对照 Git、
-MySQL 和 sidecar 重算，不匹配就停止，不会覆盖现场。
+MySQL 和 sidecar 重算，不匹配就停止，不会覆盖现场。若返回
+`VERIFICATION_APPROVAL_REQUIRED`，检查 `verification_plan_file` 后使用同一入口批准：
+
+```bash
+uv run ase project resume delivery_xxx \
+  --approve-plan <full-plan-sha256> \
+  --approval-reference "human-approved-candidate-verification"
+```
 
 ### 6.3 检查候选变更
 

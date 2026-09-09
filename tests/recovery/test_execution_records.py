@@ -8,7 +8,11 @@ import pytest
 from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 
-from ai_software_engineer.project_manager.dispatch import RecoveryDispatchRecord, _record_digest
+from ai_software_engineer.project_manager.dispatch import (
+    ContinuationDispatchRecord,
+    RecoveryDispatchRecord,
+    _record_digest,
+)
 from ai_software_engineer.recovery import (
     CapturedChanges,
     FileRecoveryStore,
@@ -62,6 +66,62 @@ def allocation(tmp_path: Path) -> RecoveryDispatchRecord:
     return result.model_copy(update={"dispatch_sha256": _record_digest(result)})
 
 
+def continuation_allocation(tmp_path: Path) -> ContinuationDispatchRecord:
+    _, _, native, _, _ = _durable_facts(tmp_path)
+    sha = "6" * 64
+    task_id = f"task_continue_{sha[:32]}"
+    source = {
+        "continuation_kind": "verification_remediation",
+        "continuation_sha256": sha,
+        "continuation_plan_sha256": "5" * 64,
+        "continuation_context_sha256": "4" * 64,
+        "continuation_target_preparation_sha256": "3" * 64,
+        "continuation_of_delivery_id": "delivery_alpha",
+        "continuation_of_task_id": native.task_id,
+        "continuation_source_base_revision": native.task.base_ref,
+        "continuation_source_revision": "7" * 40,
+        "continuation_source_dispatch_id": native.id,
+    }
+    task = native.task.model_copy(
+        update={"id": task_id, "metadata": {**native.task.metadata, **source}}
+    )
+    phases = tuple(
+        p.model_copy(
+            update={
+                "assignment": p.assignment.model_copy(update={"task_id": task_id}),
+                "lease": p.lease.model_copy(update={"task_id": task_id}),
+            }
+        )
+        for p in native.phases
+    )
+    assert len(phases) == 3
+    result = ContinuationDispatchRecord(
+        id=f"dispatch_commit_{sha}",
+        project_id=native.project_id,
+        task_id=task_id,
+        project_request_id=native.project_request_id,
+        execution_plan_id=native.execution_plan_id,
+        execution_plan_sha256=native.execution_plan_sha256,
+        execution_plan_phase_ids=native.execution_plan_phase_ids,
+        continuation_kind="verification_remediation",
+        continuation_sha256=sha,
+        continuation_plan_sha256="5" * 64,
+        continuation_context_sha256="4" * 64,
+        target_preparation_sha256="3" * 64,
+        source_delivery_id="delivery_alpha",
+        source_task_id=native.task_id,
+        source_base_revision=native.task.base_ref,
+        source_revision="7" * 40,
+        source_dispatch_id=native.id,
+        workforce_snapshot_sha256="8" * 64,
+        task=task,
+        phases=phases,
+        committed_at=native.committed_at,
+        dispatch_sha256="0" * 64,
+    )
+    return result.model_copy(update={"dispatch_sha256": _record_digest(result)})
+
+
 def schema() -> Draft202012Validator:
     value = json.loads(
         (Path(__file__).parents[2] / "schemas/recovery-execution.schema.json").read_text()
@@ -90,6 +150,27 @@ def test_recovery_allocation_schema_and_no_fake_planner_provenance(tmp_path: Pat
     for phases in (tuple(reversed(record.phases)), (record.phases[0],) * 3):
         with pytest.raises(ValidationError):
             RecoveryDispatchRecord.model_validate({**payload, "phases": phases})
+    with pytest.raises(RuntimeError):
+        record.model_copy(update={"dispatch_sha256": "0" * 64}).validate_integrity()
+
+
+def test_continuation_allocation_binds_rejected_candidate_and_successor_task(
+    tmp_path: Path,
+) -> None:
+    record = continuation_allocation(tmp_path)
+
+    record.validate_integrity()
+    schema().validate(record.to_wire())
+    assert record.task.metadata["continuation_sha256"] == record.continuation_sha256
+    assert record.task.metadata["continuation_of_task_id"] == record.source_task_id
+    for field, value in (
+        ("source_delivery_id", "delivery_other"),
+        ("source_task_id", "task_other"),
+        ("source_revision", "9" * 40),
+        ("source_dispatch_id", "dispatch_commit_" + "1" * 64),
+    ):
+        with pytest.raises(ValidationError):
+            ContinuationDispatchRecord.model_validate({**record.to_wire(), field: value})
     with pytest.raises(RuntimeError):
         record.model_copy(update={"dispatch_sha256": "0" * 64}).validate_integrity()
 

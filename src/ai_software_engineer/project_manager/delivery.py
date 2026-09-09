@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Protocol
 
-from pydantic import AwareDatetime, Field, StringConstraints, field_validator
+from pydantic import AwareDatetime, Field, StringConstraints, field_validator, model_validator
 
 from ai_software_engineer.design import DesignerServiceResult
 from ai_software_engineer.domain import Task, TaskStatus
@@ -35,10 +35,19 @@ from ai_software_engineer.project_manager.delivery_checkpoint import (
     ProjectDeliveryCheckpointNotFound,
     ProjectDeliveryIntake,
 )
-from ai_software_engineer.project_manager.dispatch import DispatchCommitRecord
+from ai_software_engineer.project_manager.dispatch import (
+    ContinuationDispatchRecord,
+    DispatchCommitRecord,
+    RecoveryDispatchRecord,
+)
 from ai_software_engineer.project_manager.preparation import (
     PrepareProjectResult,
     PrepareProjectStatus,
+)
+from ai_software_engineer.recovery.models import RecoveryPlan
+from ai_software_engineer.recovery.verification_records import (
+    CandidateVerificationCompletion,
+    CandidateVerificationPlan,
 )
 
 CheckpointDigest = Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
@@ -123,7 +132,15 @@ class ApproveProductSpec(DomainModel):
 
 class ResumeProjectDelivery(DomainModel):
     delivery_id: DeliveryId
+    approved_plan_sha256: CheckpointDigest | None = None
+    approval_reference: NonEmptyStr | None = None
     submitted_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @model_validator(mode="after")
+    def require_complete_verification_approval(self) -> ResumeProjectDelivery:
+        if (self.approved_plan_sha256 is None) != (self.approval_reference is None):
+            raise ValueError("plan approval digest and reference must be supplied together")
+        return self
 
 
 class ProjectDeliveryResult(DomainModel):
@@ -433,6 +450,298 @@ class UnifiedProjectEntryService:
         self._backend.reconcile(current)
         return ProjectDeliveryResult(checkpoint=current)
 
+    def retry_interrupted_stage(self, command: ResumeProjectDelivery) -> ProjectDeliveryResult:
+        """Re-enter one exact pre-Task stage after a classified infrastructure stop."""
+        store, current = self._current(command.delivery_id)
+        self._backend.reconcile(current)
+        retryable = {
+            DeliveryFailureCode.PERMISSION_DENIED,
+            DeliveryFailureCode.RESOURCE_UNAVAILABLE,
+            DeliveryFailureCode.TRANSIENT_PROVIDER_FAILURE,
+            DeliveryFailureCode.INVARIANT_VIOLATION,
+        }
+        if (
+            current.stage not in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
+            or current.task_id is not None
+            or current.candidate_revision is not None
+            or current.failed_stage is None
+            or current.failure_code not in retryable
+        ):
+            return ProjectDeliveryResult(checkpoint=current)
+        next_actions = {
+            DeliveryStage.PREPARING: DeliveryNextAction.PREPARE_PROJECT,
+            DeliveryStage.PRODUCT_DISCOVERY: DeliveryNextAction.CONTINUE_PRODUCT_DISCOVERY,
+            DeliveryStage.WAITING_PRODUCT_REPLY: DeliveryNextAction.RECORD_PRODUCT_REPLY,
+            DeliveryStage.WAITING_PRODUCT_APPROVAL: DeliveryNextAction.APPROVE_PRODUCT_SPEC,
+            DeliveryStage.DESIGNING: DeliveryNextAction.RUN_DESIGNER,
+            DeliveryStage.PLANNING: DeliveryNextAction.RUN_PLANNER,
+            DeliveryStage.DISPATCHING: DeliveryNextAction.COMMIT_DISPATCH,
+        }
+        target = current.failed_stage
+        next_action = next_actions.get(target)
+        if next_action is None:
+            return ProjectDeliveryResult(checkpoint=current)
+        attempts = current.stage_attempts
+        if target is DeliveryStage.PRODUCT_DISCOVERY:
+            if attempts.for_stage(target) >= 100:
+                return ProjectDeliveryResult(checkpoint=current)
+            attempts = attempts.increment(target)
+        reopened = self._next(
+            store,
+            current,
+            stage=target,
+            next_action=next_action,
+            attempts=attempts,
+            at=command.submitted_at,
+        )
+        if target in {
+            DeliveryStage.WAITING_PRODUCT_REPLY,
+            DeliveryStage.WAITING_PRODUCT_APPROVAL,
+        }:
+            return ProjectDeliveryResult(checkpoint=reopened)
+        return self.resume(command)
+
+    def begin_continuation(
+        self,
+        dispatch: ContinuationDispatchRecord,
+        *,
+        at: datetime,
+    ) -> ProjectDeliveryResult:
+        """Attach one trusted successor Task to a terminal candidate Delivery."""
+        store, current = self._current(dispatch.source_delivery_id)
+        if current.dispatch_commit_id == dispatch.id:
+            if current.task_id != dispatch.task_id:
+                raise DeliveryCommandRejected("continuation replay Task mismatch")
+            return ProjectDeliveryResult(checkpoint=current)
+        if (
+            current.stage not in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
+            or current.task_id != dispatch.source_task_id
+            or current.candidate_revision != dispatch.source_revision
+        ):
+            raise DeliveryCommandRejected("continuation does not match the terminal candidate")
+        dispatch.validate_integrity()
+        checkpoint = self._next(
+            store,
+            current,
+            stage=DeliveryStage.DELIVERING,
+            next_action=DeliveryNextAction.RUN_DELIVERY,
+            preparation_sha256=dispatch.target_preparation_sha256,
+            dispatch_commit_id=dispatch.id,
+            dispatch_commit_sha256=dispatch.dispatch_sha256,
+            task_id=dispatch.task_id,
+            task_revision=0,
+            task_status=TaskStatus.NEW,
+            candidate_revision=None,
+            attempts=current.stage_attempts.increment(DeliveryStage.DELIVERING),
+            at=at,
+        )
+        return ProjectDeliveryResult(checkpoint=checkpoint)
+
+    def begin_recovery(
+        self,
+        plan: RecoveryPlan,
+        dispatch: RecoveryDispatchRecord,
+        *,
+        at: datetime,
+    ) -> ProjectDeliveryResult:
+        """Attach an exactly approved pre-candidate recovery Task to its Delivery."""
+        store, current = self._current(plan.source.scope.delivery_id)
+        if current.dispatch_commit_id == dispatch.id:
+            if current.task_id != dispatch.task_id:
+                raise DeliveryCommandRejected("recovery replay Task mismatch")
+            return ProjectDeliveryResult(checkpoint=current)
+        plan.validate_integrity()
+        dispatch.validate_integrity()
+        recovery_metadata = {
+            "recovery_of_task_id": plan.source.task_id,
+            "recovery_of_delivery_id": plan.source.scope.delivery_id,
+            "recovery_source_checkpoint_sha256": plan.source.checkpoint_sha256,
+            "recovery_target_preparation_sha256": plan.target_preparation_sha256,
+        }
+        if (
+            current.stage not in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
+            or current.checkpoint_sha256 != plan.source.checkpoint_sha256
+            or current.task_id != plan.source.task_id
+            or current.candidate_revision is not None
+            or dispatch.recovery_plan_sha256 != plan.plan_sha256
+            or dispatch.task_id != plan.new_task_id
+            or dispatch.project_id != plan.source.scope.project_id
+            or dispatch.task.repository != plan.source.scope.project_root
+            or dispatch.task.base_ref != plan.target_base_revision
+            or any(
+                dispatch.task.metadata.get(key) != value for key, value in recovery_metadata.items()
+            )
+        ):
+            raise DeliveryCommandRejected("recovery does not match the terminal Delivery")
+        checkpoint = self._next(
+            store,
+            current,
+            stage=DeliveryStage.DELIVERING,
+            next_action=DeliveryNextAction.RUN_DELIVERY,
+            preparation_sha256=plan.target_preparation_sha256,
+            dispatch_commit_id=dispatch.id,
+            dispatch_commit_sha256=dispatch.dispatch_sha256,
+            task_id=dispatch.task_id,
+            task_revision=0,
+            task_status=TaskStatus.NEW,
+            candidate_revision=None,
+            attempts=current.stage_attempts.increment(DeliveryStage.DELIVERING),
+            at=at,
+        )
+        return ProjectDeliveryResult(checkpoint=checkpoint)
+
+    def accept_verification(
+        self,
+        plan: CandidateVerificationPlan,
+        completion: CandidateVerificationCompletion,
+    ) -> ProjectDeliveryResult:
+        """Accept a terminal Task candidate only through sealed independent verdicts."""
+        store, current = self._current(plan.scope.delivery_id)
+        if (
+            current.stage is DeliveryStage.DONE
+            and current.verification_plan_sha256 == plan.plan_sha256
+            and current.verification_completion_sha256 == completion.completion_sha256
+        ):
+            return ProjectDeliveryResult(checkpoint=current)
+        plan.validate_integrity()
+        completion.validate_integrity()
+        if (
+            not completion.verified
+            or completion.plan_sha256 != plan.plan_sha256
+            or current.stage not in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
+            or current.checkpoint_sha256 != plan.native_checkpoint_sha256
+            or current.project_id != plan.scope.project_id
+            or current.project_root != plan.scope.project_root
+            or current.task_id != plan.inputs.task_id
+            or current.candidate_revision != plan.inputs.candidate_revision
+        ):
+            raise DeliveryCommandRejected("verification does not authorize this candidate")
+        checkpoint = self._next(
+            store,
+            current,
+            stage=DeliveryStage.DONE,
+            next_action=DeliveryNextAction.NONE,
+            verification_plan_sha256=plan.plan_sha256,
+            verification_completion_sha256=completion.completion_sha256,
+            at=completion.completed_at,
+        )
+        return ProjectDeliveryResult(checkpoint=checkpoint)
+
+    def finish_continuation(
+        self,
+        dispatch: ContinuationDispatchRecord,
+        delivery: RetryResult,
+        *,
+        at: datetime,
+    ) -> ProjectDeliveryResult:
+        """Seal a successor Task result into its original Delivery hash chain."""
+        store, current = self._current(dispatch.source_delivery_id)
+        if (
+            current.dispatch_commit_id != dispatch.id
+            or current.dispatch_commit_sha256 != dispatch.dispatch_sha256
+            or current.task_id != dispatch.task_id
+        ):
+            raise DeliveryCommandRejected("current Delivery does not own this continuation")
+        if current.stage in {DeliveryStage.DONE, DeliveryStage.BLOCKED, DeliveryStage.FAILED}:
+            if (
+                current.task_revision != len(delivery.event_ids)
+                or current.task_status is not delivery.task.status
+                or current.candidate_revision != delivery.candidate_revision
+            ):
+                raise DeliveryCommandRejected("continuation result replay differs from checkpoint")
+            return ProjectDeliveryResult(checkpoint=current, delivery=delivery)
+        if current.stage is not DeliveryStage.DELIVERING or delivery.task.id != dispatch.task_id:
+            raise DeliveryCommandRejected("continuation result does not match active Delivery")
+        if isinstance(delivery, RetryDeliveryResult):
+            checkpoint = self._next(
+                store,
+                current,
+                stage=DeliveryStage.DONE,
+                next_action=DeliveryNextAction.NONE,
+                task_revision=len(delivery.event_ids),
+                task_status=delivery.task.status,
+                candidate_revision=delivery.candidate_revision,
+                at=at,
+            )
+        else:
+            checkpoint = self._next(
+                store,
+                current,
+                stage=DeliveryStage.BLOCKED,
+                next_action=DeliveryNextAction.REQUEST_HUMAN,
+                task_revision=len(delivery.event_ids),
+                task_status=delivery.task.status,
+                candidate_revision=delivery.candidate_revision,
+                failure_code=(
+                    DeliveryFailureCode.INVALID_AGENT_OUTPUT
+                    if delivery.classification is RetryClassification.INVALID_OUTPUT
+                    else DeliveryFailureCode.RETRY_BUDGET_EXHAUSTED
+                ),
+                failure_summary=delivery.reason,
+                failed_stage=DeliveryStage.DELIVERING,
+                at=at,
+            )
+        return ProjectDeliveryResult(checkpoint=checkpoint, delivery=delivery)
+
+    def finish_recovery(
+        self,
+        plan: RecoveryPlan,
+        dispatch: RecoveryDispatchRecord,
+        delivery: RetryResult,
+        *,
+        at: datetime,
+    ) -> ProjectDeliveryResult:
+        """Seal an approved recovery Task result into the original Delivery chain."""
+        if dispatch.recovery_plan_sha256 != plan.plan_sha256:
+            raise DeliveryCommandRejected("recovery result plan mismatch")
+        store, current = self._current(plan.source.scope.delivery_id)
+        if (
+            current.dispatch_commit_id != dispatch.id
+            or current.dispatch_commit_sha256 != dispatch.dispatch_sha256
+            or current.task_id != dispatch.task_id
+        ):
+            raise DeliveryCommandRejected("current Delivery does not own this recovery")
+        if current.stage in {DeliveryStage.DONE, DeliveryStage.BLOCKED, DeliveryStage.FAILED}:
+            if (
+                current.task_revision != len(delivery.event_ids)
+                or current.task_status is not delivery.task.status
+                or current.candidate_revision != delivery.candidate_revision
+            ):
+                raise DeliveryCommandRejected("recovery result replay differs from checkpoint")
+            return ProjectDeliveryResult(checkpoint=current, delivery=delivery)
+        if current.stage is not DeliveryStage.DELIVERING or delivery.task.id != dispatch.task_id:
+            raise DeliveryCommandRejected("recovery result does not match active Delivery")
+        if isinstance(delivery, RetryDeliveryResult):
+            checkpoint = self._next(
+                store,
+                current,
+                stage=DeliveryStage.DONE,
+                next_action=DeliveryNextAction.NONE,
+                task_revision=len(delivery.event_ids),
+                task_status=delivery.task.status,
+                candidate_revision=delivery.candidate_revision,
+                at=at,
+            )
+        else:
+            checkpoint = self._next(
+                store,
+                current,
+                stage=DeliveryStage.BLOCKED,
+                next_action=DeliveryNextAction.REQUEST_HUMAN,
+                task_revision=len(delivery.event_ids),
+                task_status=delivery.task.status,
+                candidate_revision=delivery.candidate_revision,
+                failure_code=(
+                    DeliveryFailureCode.INVALID_AGENT_OUTPUT
+                    if delivery.classification is RetryClassification.INVALID_OUTPUT
+                    else DeliveryFailureCode.RETRY_BUDGET_EXHAUSTED
+                ),
+                failure_summary=delivery.reason,
+                failed_stage=DeliveryStage.DELIVERING,
+                at=at,
+            )
+        return ProjectDeliveryResult(checkpoint=checkpoint, delivery=delivery)
+
     def _continue_after_product(
         self,
         store: FileProjectDeliveryCheckpointStore,
@@ -551,6 +860,7 @@ class UnifiedProjectEntryService:
                     attempts=current.stage_attempts.increment(DeliveryStage.DELIVERING),
                     failure_code=error.code,
                     failure_summary=error.safe_summary,
+                    failed_stage=DeliveryStage.DELIVERING,
                     at=max(at, snapshot.task.updated_at),
                 )
                 return ProjectDeliveryResult(checkpoint=checkpoint, product=product)
@@ -564,6 +874,7 @@ class UnifiedProjectEntryService:
                 next_action=DeliveryNextAction.REQUEST_HUMAN,
                 task_revision=len(delivery.event_ids),
                 task_status=delivery.task.status,
+                candidate_revision=delivery.candidate_revision,
                 attempts=attempts,
                 failure_code=(
                     DeliveryFailureCode.INVALID_AGENT_OUTPUT
@@ -571,6 +882,7 @@ class UnifiedProjectEntryService:
                     else DeliveryFailureCode.RETRY_BUDGET_EXHAUSTED
                 ),
                 failure_summary=delivery.reason,
+                failed_stage=DeliveryStage.DELIVERING,
                 at=at,
             )
             return ProjectDeliveryResult(
@@ -660,6 +972,7 @@ class UnifiedProjectEntryService:
             next_action=DeliveryNextAction.REQUEST_HUMAN,
             failure_code=code,
             failure_summary=summary,
+            failed_stage=current.stage,
             product=product,
             at=at,
         )
@@ -745,6 +1058,7 @@ class UnifiedProjectEntryService:
             "next_action",
             "failure_code",
             "failure_summary",
+            "failed_stage",
             "checkpointed_at",
             "checkpoint_sha256",
         ):

@@ -49,6 +49,7 @@ from ai_software_engineer.project_manager.entrypoint import (
     project_entry,
     requirement_entry,
 )
+from ai_software_engineer.recovery import RecoveryRejected
 from ai_software_engineer.recovery.cli import (
     app as recovery_app,
 )
@@ -139,6 +140,11 @@ _PROJECT_ERRORS = (
     ProjectEntryNotConfigured,
     ProductionConfigError,
     StoreError,
+    AgentError,
+    ArtifactStoreError,
+    ContextError,
+    OrchestrationError,
+    RecoveryRejected,
 )
 
 
@@ -329,10 +335,36 @@ def approve_product_spec(
 @project_app.command("resume")
 def resume_project_delivery(
     delivery_id: Annotated[DeliveryId, typer.Argument(help="Delivery ID.")],
+    approve_plan: Annotated[
+        str | None,
+        typer.Option(
+            "--approve-plan",
+            help="Exact recovery or verification plan SHA-256 emitted by an earlier resume.",
+        ),
+    ] = None,
+    approval_reference: Annotated[
+        str | None,
+        typer.Option(
+            "--approval-reference",
+            help="Trusted approval audit reference; a local CLI reference is used by default.",
+        ),
+    ] = None,
 ) -> None:
-    """Reconcile native facts and continue the first incomplete automatic stage."""
+    """Continue any delivery interruption or return its exact human gate."""
     try:
-        result = _delivery_entry(delivery_id).resume(ResumeProjectDelivery(delivery_id=delivery_id))
+        from ai_software_engineer.project_manager.production_host import OrganizationTeamHost
+
+        result = OrganizationTeamHost.from_environment().resume_delivery(
+            ResumeProjectDelivery(
+                delivery_id=delivery_id,
+                approved_plan_sha256=approve_plan,
+                approval_reference=(
+                    (approval_reference or f"cli-delivery-plan-approval:{approve_plan}")
+                    if approve_plan is not None
+                    else approval_reference
+                ),
+            )
+        )
     except _PROJECT_ERRORS as error:
         _fail(error)
     _emit(result.to_wire())

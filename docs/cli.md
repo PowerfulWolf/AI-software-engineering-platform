@@ -33,7 +33,21 @@ ase request resume delivery_multi_xxx
 `create` 先 prepare 全部目录并停在 READY_FOR_DISCUSSION，不调用模型；目录可以只传一个。
 `discuss` 运行一个有界 Product turn；`discuss/approve` 必须引用 exact current checkpoint，旧操作
 不能覆盖新事实。批准联合产品后自动推进 Designer、Planner、每仓 dispatch 与 Coder→QA→Reviewer，
-最后在完整候选集合执行联合验收。进程中断后 `resume` 重算 durable facts 并继续。
+最后在完整候选集合执行联合验收。任何进程中断或终态失败都先使用 `resume`：它重算 durable
+facts，只执行下一项未完成工作。若输出 `RECOVERY_APPROVAL_REQUIRED` 或
+`VERIFICATION_APPROVAL_REQUIRED`，检查返回的精确计划后执行：
+
+```bash
+ase request resume delivery_child_xxx \
+  --approve-plan FULL_PLAN_SHA256 \
+  --approval-reference human-approved-delivery-plan
+```
+
+无 candidate 时，批准后同一入口创建恢复 Task 接续保留修改；已有 candidate 时运行独立
+QA/Reviewer，QA FAIL 或 Review REJECT 会创建关联修复 Task，并重新执行 Coder→QA→Reviewer。
+恢复/修复 Coder 再次失败时仍继续使用同一个 `request resume`，平台会保留每一轮 Task 并创建
+下一份精确恢复计划。旧终态 Task 和 Candidate V1 保留不变。已完成 Task 但尚未写入 Delivery checkpoint 的崩溃窗口
+由 `resume` 从 events/artifacts 接管，不重复调用模型。
 联合结果在 `checkpoint.children/integration/next_action`，不会自动合并候选。
 旧 `ase project start DIR... --requirement TEXT` 仍支持一步式接单。
 
@@ -124,8 +138,9 @@ Team Host 固定使用 MySQL。
 
 ## 显式接手失败 Coder 的保留修改
 
-若 Coder 已生成候选提交，下面的命令不适用；请使用下一节的 `verify-*` 命令。不要重置终态或
-重新运行 Coder 来代替候选复核，原候选和失败历史必须保留。
+日常入口仍是上面的 `request resume`：它会自动发现失败 Coder、封存 worktree 修改并返回精确
+恢复计划，批准后继续新 Task。下面的命令只在诊断或逐条审计统一入口时使用。若 Coder 已生成候选
+提交，则应走候选复核；不要重置终态或手工重新运行 Coder，原候选和失败历史必须保留。
 
 仅用于已停止、尚未产生 candidate 的失败 Coder。先保存现场；不要 reset、stash 或修改旧终态。
 原方案必须仍适用，目标项目需处于干净的、已包含平台修复的基线。
@@ -164,9 +179,10 @@ ase recovery propose --project /absolute/project --delivery delivery_ID \
 若在 seed 写入与 receipt 发布之间中断，保留新旧现场并拒绝盲目重放。旧父/子需求 checkpoint
 仍保持原记录；本命令不自动关联联合验收、不 merge/push/deploy，也不重启已失败的新恢复 Task。
 
-## 显式复核已有 candidate
+## 显式复核已有 candidate（break-glass）
 
-用于原 Coder 已完成 candidate commit，但 QA/Reviewer 因平台故障失败或中断的终态交付：
+日常交付请使用 `ase request resume`。下面四个低层命令仅用于诊断、逐条审计或统一入口本身不可用时
+的 break-glass 操作：
 
 ```bash
 ase verify-propose --project /absolute/project --delivery delivery_child_ID

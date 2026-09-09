@@ -180,11 +180,14 @@ class ProjectDeliveryCheckpoint(DomainModel):
     task_revision: int | None = Field(default=None, ge=0)
     task_status: TaskStatus | None = None
     candidate_revision: CommitSha | None = None
+    verification_plan_sha256: Sha256 | None = None
+    verification_completion_sha256: Sha256 | None = None
     stage: DeliveryStage
     stage_attempts: DeliveryStageAttempts
     next_action: DeliveryNextAction
     failure_code: DeliveryFailureCode | None = None
     failure_summary: str | None = Field(default=None, max_length=500)
+    failed_stage: DeliveryStage | None = None
     checkpointed_at: AwareDatetime
     checkpoint_sha256: Sha256
 
@@ -236,6 +239,11 @@ class ProjectDeliveryCheckpoint(DomainModel):
             self.dispatch_commit_sha256,
         )
         self._require_group("Task reference", self.task_id, self.task_revision, self.task_status)
+        self._require_pair(
+            "candidate verification reference",
+            self.verification_plan_sha256,
+            self.verification_completion_sha256,
+        )
         if self.approval_id is not None and self.product_spec_id is None:
             raise ValueError("approval requires a product specification reference")
         if self.technical_design_id is not None and self.approval_id is None:
@@ -250,12 +258,20 @@ class ProjectDeliveryCheckpoint(DomainModel):
             raise ValueError("Task reference requires dispatch commit")
         if self.candidate_revision is not None and self.task_id is None:
             raise ValueError("candidate revision requires Task reference")
+        if self.verification_plan_sha256 is not None and self.candidate_revision is None:
+            raise ValueError("candidate verification requires a candidate revision")
         if self.stage is DeliveryStage.DELIVERING and self.dispatch_commit_id is None:
             raise ValueError("DELIVERING requires a dispatch commit")
         if self.stage is DeliveryStage.DONE and (
-            self.task_status is not TaskStatus.DONE or self.candidate_revision is None
+            self.candidate_revision is None
+            or (
+                self.task_status is not TaskStatus.DONE
+                and self.verification_completion_sha256 is None
+            )
         ):
-            raise ValueError("DONE requires a DONE Task and candidate revision")
+            raise ValueError(
+                "DONE requires a candidate and either a DONE Task or independent verification"
+            )
         terminal_failure = self.stage in {
             DeliveryStage.WAITING_HUMAN,
             DeliveryStage.BLOCKED,
@@ -263,6 +279,17 @@ class ProjectDeliveryCheckpoint(DomainModel):
         }
         if terminal_failure != (self.failure_code is not None and self.failure_summary is not None):
             raise ValueError("failure details are required only for failure/wait stages")
+        if self.failed_stage is not None and (
+            not terminal_failure
+            or self.failed_stage
+            in {
+                DeliveryStage.BLOCKED,
+                DeliveryStage.FAILED,
+                DeliveryStage.DONE,
+                DeliveryStage.WAITING_HUMAN,
+            }
+        ):
+            raise ValueError("failed_stage must identify a resumable non-terminal stage")
         if self.stage is DeliveryStage.DONE and self.next_action is not DeliveryNextAction.NONE:
             raise ValueError("DONE has no next action")
         return self
@@ -286,6 +313,16 @@ class ProjectDeliveryCheckpoint(DomainModel):
     def recompute_sha256(self) -> Sha256:
         payload = self.to_wire()
         payload.pop("checkpoint_sha256", None)
+        # These optional continuation fields were added while v0.1
+        # checkpoints already existed.  Treat an absent legacy key and an
+        # explicit null identically so old journals remain verifiable.
+        for field in (
+            "verification_plan_sha256",
+            "verification_completion_sha256",
+            "failed_stage",
+        ):
+            if payload.get(field) is None:
+                payload.pop(field, None)
         return hashlib.sha256(_canonical_json(payload).encode()).hexdigest()
 
     def validate_integrity(self) -> None:

@@ -38,22 +38,33 @@ from ai_software_engineer.domain import (
     AgentPermissions,
     AgentProfile,
     AgentRole,
+    Artifact,
     ArtifactKind,
     ExecutionPlan,
+    ImplementationReportArtifact,
     ModelPolicy,
     NetworkAccess,
+    PlanArtifact,
     ProductApprovalDecision,
     ProductSpec,
+    QaReportArtifact,
+    QaReportStatus,
+    ReviewReportArtifact,
+    ReviewVerdict,
     RiskTier,
     TaskConstraints,
+    TaskStatus,
     TechnicalDesign,
     WorkItem,
     WorkItemStatus,
     derive_delivery_task,
 )
 from ai_software_engineer.orchestration import (
+    BlockedResult,
     DispatchTaskMaterializer,
     ExecutionPlanAgentAdapter,
+    RetryClassification,
+    RetryDeliveryResult,
     RetryResult,
 )
 from ai_software_engineer.planning import (
@@ -88,10 +99,12 @@ from ai_software_engineer.project_manager.delivery import (
 )
 from ai_software_engineer.project_manager.delivery_checkpoint import (
     DeliveryFailureCode,
+    FileProjectDeliveryCheckpointStore,
     ProjectDeliveryCheckpoint,
 )
 from ai_software_engineer.project_manager.dispatch import (
     CommitDispatchRequest,
+    ContinuationDispatchRecord,
     DeliveryAllocation,
     DispatchCommitRecord,
     DispatchError,
@@ -554,9 +567,41 @@ class ProductionProjectDeliveryBackend:
                     request_revisions=facts.product,
                     planner_records=facts.planning,
                 )
-                commit = authority.get_commit(checkpoint.dispatch_commit_id)
+                commit = authority.get_allocation(checkpoint.dispatch_commit_id)
                 if commit.dispatch_sha256 != checkpoint.dispatch_commit_sha256:
                     raise ValueError("Dispatch checkpoint drifted")
+            if checkpoint.verification_plan_sha256 is not None:
+                from ai_software_engineer.recovery.models import RecoveryScope
+                from ai_software_engineer.recovery.store import FileRecoveryStore
+
+                scope = RecoveryScope(
+                    company_id=self._config.company_id,
+                    project_id=checkpoint.project_id,
+                    project_root=checkpoint.project_root,
+                    delivery_id=checkpoint.delivery_id,
+                )
+                store = FileRecoveryStore(
+                    facts.workspace.root
+                    / "state"
+                    / f"candidate-verification-{checkpoint.delivery_id}",
+                    scope=scope,
+                )
+                verification_plan = store.get_verification_plan(checkpoint.verification_plan_sha256)
+                completion = store.get_verification_completion(verification_plan.plan_sha256)
+                journal = FileProjectDeliveryCheckpointStore(
+                    facts.workspace.root / "state/project-deliveries",
+                    read_only=True,
+                )
+                source = journal.get(checkpoint.delivery_id, checkpoint.sequence - 1)
+                if (
+                    not completion.verified
+                    or completion.completion_sha256 != checkpoint.verification_completion_sha256
+                    or verification_plan.native_checkpoint_sha256 != source.checkpoint_sha256
+                    or checkpoint.previous_checkpoint_sha256 != source.checkpoint_sha256
+                    or verification_plan.inputs.task_id != checkpoint.task_id
+                    or verification_plan.inputs.candidate_revision != checkpoint.candidate_revision
+                ):
+                    raise ValueError("accepted candidate verification drifted")
 
         self._guard("Reconciliation", execute)
 
@@ -703,18 +748,25 @@ class ProductionProjectDeliveryBackend:
             request_revisions=facts.product,
             planner_records=facts.planning,
         )
-        dispatch = authority.get_commit(cast(str, checkpoint.dispatch_commit_id))
+        dispatch = authority.get_allocation(cast(str, checkpoint.dispatch_commit_id))
         spec = facts.product.find_product_spec(cast(str, checkpoint.product_spec_id))
         design = facts.design.get_run(_designer_run_id(checkpoint.delivery_id)).technical_design
         if spec is None or design is None:
             raise ValueError("delivery plan inputs are missing")
-        return self.run_prepared_allocation(
+        extra_context = (
+            _continuation_context(self._config, facts, dispatch)
+            if isinstance(dispatch, ContinuationDispatchRecord)
+            else ()
+        )
+        result = self.run_prepared_allocation(
             dispatch,
             facts.preparation,
             spec,
             design,
             facts.planning.get_execution_plan(dispatch.execution_plan_id),
+            extra_context=extra_context,
         )
+        return result
 
     def run_prepared_allocation(
         self,
@@ -731,11 +783,19 @@ class ProductionProjectDeliveryBackend:
         facts = self._facts(preparation)
         if dispatch.project_id != facts.workspace.project_id:
             raise ValueError("allocation and preparation project mismatch")
+        paths = _runtime_paths(facts.workspace)
         repository = MySqlTaskRepository(self._dsn)
         try:
             DispatchTaskMaterializer(repository).materialize(dispatch)
+            terminal = _terminal_delivery_result(
+                repository,
+                FileArtifactStore(paths.artifacts),
+                dispatch.task_id,
+            )
         finally:
             repository.close()
+        if terminal is not None:
+            return terminal
         definitions = _agent_definitions(dispatch, _task_commands(facts.profile))
         plan_adapter = ExecutionPlanAgentAdapter(
             task=dispatch.task,
@@ -746,7 +806,6 @@ class ProductionProjectDeliveryBackend:
             agent_version=definitions[AgentRole.ORCHESTRATOR].version,
             created_at=dispatch.committed_at,
         )
-        paths = _runtime_paths(facts.workspace)
         resolver = StoredContextResolver(
             FileContextStore(paths.contexts),
             FileArtifactStore(paths.artifacts),
@@ -902,6 +961,98 @@ class ProductionProjectDeliveryBackend:
             ) from error
 
 
+def _terminal_delivery_result(
+    repository: MySqlTaskRepository,
+    artifacts: FileArtifactStore,
+    task_id: str,
+) -> RetryResult | None:
+    """Rebuild a sealed runtime result after Task completion beat checkpointing.
+
+    The Task event stream remains authoritative.  This seam performs no model call and
+    lets the Delivery journal adopt a result that was already durably completed by an
+    earlier process.
+    """
+    task = repository.get(task_id)
+    if task.status not in {TaskStatus.DONE, TaskStatus.BLOCKED, TaskStatus.FAILED}:
+        return None
+    events = repository.list_events(task.id)
+    revision = repository.current_revision(task.id)
+    if (
+        not events
+        or revision != len(events)
+        or events[-1].to_status is not task.status
+        or repository.get(task.id) != task
+    ):
+        raise ValueError("terminal Task event stream is inconsistent")
+    event_ids = tuple(event.event_id for event in events)
+    candidate = next(
+        (
+            event.source_revision
+            for event in reversed(events)
+            if event.reason in {"candidate_ready", "candidate_recovered"}
+            and event.source_revision != task.base_ref
+        ),
+        None,
+    )
+    if task.status is not TaskStatus.DONE:
+        classification, reason = _terminal_failure_reason(events[-1].reason)
+        artifact_ids = tuple(
+            dict.fromkeys(artifact_id for event in events for artifact_id in event.artifact_ids)
+        )
+        return BlockedResult(
+            task=task,
+            classification=classification,
+            reason=reason,
+            attempt=max(task.attempts, 1),
+            artifact_ids=artifact_ids,
+            event_ids=event_ids,
+            candidate_revision=candidate,
+        )
+    if events[-1].reason != "review_approved" or len(events[-1].artifact_ids) != 4:
+        raise ValueError("DONE Task has no complete review_approved artifact set")
+    result_artifacts: tuple[Artifact, ...] = tuple(
+        artifacts.get(artifact_id) for artifact_id in events[-1].artifact_ids
+    )
+    plan, implementation, qa, review = result_artifacts
+    if (
+        not isinstance(plan, PlanArtifact)
+        or not isinstance(implementation, ImplementationReportArtifact)
+        or not isinstance(qa, QaReportArtifact)
+        or not isinstance(review, ReviewReportArtifact)
+        or any(artifact.task_id != task.id for artifact in result_artifacts)
+        or candidate is None
+        or plan.source_revision != task.base_ref
+        or implementation.content.commit_sha != candidate
+        or implementation.source_revision != candidate
+        or plan.artifact_id not in implementation.parent_artifact_ids
+        or qa.content.status is not QaReportStatus.PASS
+        or qa.source_revision != candidate
+        or qa.parent_artifact_ids != (implementation.artifact_id,)
+        or review.content.verdict is not ReviewVerdict.APPROVE
+        or review.source_revision != candidate
+        or review.parent_artifact_ids != (qa.artifact_id,)
+    ):
+        raise ValueError("DONE Task artifact lineage is incomplete")
+    return RetryDeliveryResult(
+        task=task,
+        candidate_revision=candidate,
+        artifact_ids=events[-1].artifact_ids,
+        context_manifest_ids=tuple(item.context_manifest_id for item in result_artifacts),
+        run_ids=tuple(item.producer.run_id for item in result_artifacts),
+        event_ids=event_ids,
+    )
+
+
+def _terminal_failure_reason(reason: str) -> tuple[RetryClassification, str]:
+    prefix, separator, detail = reason.partition(": ")
+    try:
+        classification = RetryClassification(prefix)
+    except ValueError:
+        classification = RetryClassification.PLATFORM_BUG
+    safe_reason = detail if separator and detail else reason
+    return classification, safe_reason or "Terminal Task requires human inspection"
+
+
 def _suffix(delivery_id: str) -> str:
     return delivery_id.removeprefix("delivery_")
 
@@ -1024,6 +1175,48 @@ def _clean_git_head(project_root: Path) -> str:
     if len(revision) < 40:
         raise ValueError("target project has no durable Git commit")
     return revision
+
+
+def _continuation_context(
+    config: ProductionConfig,
+    facts: _ProjectFacts,
+    dispatch: ContinuationDispatchRecord,
+) -> tuple[ContextSource, ...]:
+    """Rebuild durable remediation input after a process restart."""
+    from ai_software_engineer.recovery.models import RecoveryScope, digest
+    from ai_software_engineer.recovery.remediation import remediation_context
+    from ai_software_engineer.recovery.store import FileRecoveryStore
+
+    scope = RecoveryScope(
+        company_id=config.company_id,
+        project_id=dispatch.project_id,
+        project_root=str(facts.workspace.project_root),
+        delivery_id=dispatch.source_delivery_id,
+    )
+    store = FileRecoveryStore(
+        facts.workspace.root / "state" / f"candidate-verification-{dispatch.source_delivery_id}",
+        scope=scope,
+    )
+    plan = store.get_verification_plan(dispatch.continuation_plan_sha256)
+    completion = store.get_verification_completion(plan.plan_sha256)
+    if (
+        completion.verified
+        or completion.completion_sha256 != dispatch.continuation_sha256
+        or plan.inputs.task_id != dispatch.source_task_id
+        or plan.inputs.candidate_revision != dispatch.source_revision
+    ):
+        raise ValueError("continuation verifier lineage drifted")
+    sources = remediation_context(
+        project_root=scope.project_root,
+        source_delivery_id=scope.delivery_id,
+        source_base_revision=dispatch.source_base_revision,
+        candidate_revision=dispatch.source_revision,
+        plan=plan,
+        completion=completion,
+    )
+    if digest([item.to_wire() for item in sources]) != dispatch.continuation_context_sha256:
+        raise ValueError("continuation context drifted")
+    return sources
 
 
 def _agent_definitions(

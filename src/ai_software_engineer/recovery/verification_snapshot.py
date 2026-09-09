@@ -14,8 +14,12 @@ from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.domain import Task, TaskStatus
 from ai_software_engineer.domain.event import StateEvent
 from ai_software_engineer.project_manager.delivery_checkpoint import ProjectDeliveryCheckpoint
-from ai_software_engineer.project_manager.dispatch import DispatchCommitRecord
-from ai_software_engineer.project_manager.mysql_dispatch_authority import _decode_commit
+from ai_software_engineer.project_manager.dispatch import (
+    DeliveryAllocation,
+    DispatchCommitRecord,
+)
+from ai_software_engineer.project_manager.mysql_dispatch_authority import _decode_allocation
+from ai_software_engineer.recovery.allocation_lineage import resolve_planner_dispatch
 from ai_software_engineer.recovery.models import RecoveryRejected
 from ai_software_engineer.store.mysql_repository import (
     _decode_event,
@@ -30,7 +34,8 @@ from ai_software_engineer.store.mysql_repository import (
 class CandidateRuntimeSnapshot:
     task: Task
     revision: int
-    dispatch: DispatchCommitRecord
+    dispatch: DeliveryAllocation
+    planner_dispatch: DispatchCommitRecord
     events: tuple[StateEvent, ...]
 
 
@@ -89,22 +94,38 @@ def read_candidate_snapshot(
     config: ProductionConfig,
     environment: Mapping[str, str],
     checkpoint: ProjectDeliveryCheckpoint,
+    history: tuple[ProjectDeliveryCheckpoint, ...],
 ) -> CandidateRuntimeSnapshot:
     """One consistent read-only transaction; no repository construction or DDL."""
     if checkpoint.task_id is None or checkpoint.dispatch_commit_id is None:
         raise RecoveryRejected("missing original Task or dispatch reference")
+    if not history or history[-1] != checkpoint:
+        raise RecoveryRejected("candidate checkpoint history is incomplete")
     connection = open_mysql_connection(config.require_mysql_dsn(environment))
     try:
         with connection.cursor(DictCursor) as cursor:
             cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
             cursor.execute("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
-            cursor.execute(
-                "SELECT * FROM dispatch_commits WHERE id = %s", (checkpoint.dispatch_commit_id,)
-            )
-            row = cursor.fetchone()
-            if row is None:
-                raise RecoveryRejected("original dispatch is missing")
-            dispatch = _decode_commit(row)
+            allocations: dict[str, DeliveryAllocation] = {}
+            for historic in history:
+                commit_id = historic.dispatch_commit_id
+                if commit_id is None or commit_id in allocations:
+                    continue
+                cursor.execute("SELECT * FROM dispatch_commits WHERE id = %s", (commit_id,))
+                row = cursor.fetchone()
+                if row is None:
+                    raise RecoveryRejected("candidate dispatch history is missing")
+                allocation = _decode_allocation(row)
+                if (
+                    allocation.id != commit_id
+                    or allocation.dispatch_sha256 != historic.dispatch_commit_sha256
+                    or allocation.project_id != historic.project_id
+                    or allocation.task_id != historic.task_id
+                ):
+                    raise RecoveryRejected("candidate dispatch history is inconsistent")
+                allocations[commit_id] = allocation
+            dispatch = allocations[checkpoint.dispatch_commit_id]
+            planner_dispatch = resolve_planner_dispatch(dispatch, allocations, history)
             cursor.execute("SELECT * FROM tasks WHERE id = %s", (checkpoint.task_id,))
             row = cursor.fetchone()
             if row is None:
@@ -124,7 +145,7 @@ def read_candidate_snapshot(
                 event.event_id != row["event_id"] for event, row in zip(events, rows, strict=True)
             ):
                 raise RecoveryRejected("candidate event identities disagree")
-            snapshot = CandidateRuntimeSnapshot(task, revision, dispatch, events)
+            snapshot = CandidateRuntimeSnapshot(task, revision, dispatch, planner_dispatch, events)
             validate_candidate_snapshot(checkpoint, snapshot)
             return snapshot
     finally:

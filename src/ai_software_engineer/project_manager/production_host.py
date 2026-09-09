@@ -11,13 +11,16 @@ from typing import TYPE_CHECKING
 from ai_software_engineer.company_workspace import CompanyWorkspace
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.context import ContextSource
+from ai_software_engineer.multi_directory.models import JointDeliveryResult, JointStage
 from ai_software_engineer.multi_directory.production import ProductionJointBackend
 from ai_software_engineer.multi_directory.service import JointDeliveryService
 from ai_software_engineer.product import HumanProductDecisionVerifier
 from ai_software_engineer.project_manager.delivery import (
     ProjectDeliveryCheckpointCatalog,
+    ResumeProjectDelivery,
     UnifiedProjectEntryService,
 )
+from ai_software_engineer.project_manager.delivery_checkpoint import DeliveryStage
 from ai_software_engineer.project_manager.organization_team import production_organization_team
 from ai_software_engineer.project_manager.production_backend import (
     ConfiguredStructuredClientFactory,
@@ -42,6 +45,10 @@ from ai_software_engineer.work_queue.models import LeaseWorkerId
 
 if TYPE_CHECKING:
     from ai_software_engineer.recovery.entry import NativeRecoveryEntry
+    from ai_software_engineer.recovery.resume import (
+        DeliveryResumeController,
+        DeliveryResumeResult,
+    )
     from ai_software_engineer.recovery.verification_entry import CandidateVerificationEntry
 
 
@@ -165,6 +172,44 @@ class OrganizationTeamHost:
             self._config,
             self._environment,
             self._recovery_backend,
+        )
+
+    def resume_delivery(
+        self, command: ResumeProjectDelivery
+    ) -> DeliveryResumeResult | JointDeliveryResult:
+        """Project Manager's single public continuation seam for native and joint work."""
+        if str(command.delivery_id).startswith("delivery_multi_"):
+            joint = self._requirements.status(command.delivery_id).checkpoint
+            if joint.stage is JointStage.BLOCKED and joint.integration is None:
+                for child in joint.children:
+                    if child.checkpoint.stage not in {
+                        DeliveryStage.BLOCKED,
+                        DeliveryStage.FAILED,
+                        DeliveryStage.DONE,
+                    }:
+                        continue
+                    if child.checkpoint.stage is DeliveryStage.DONE:
+                        continue
+                    child_result = self._resume_controller().resume(
+                        command.model_copy(update={"delivery_id": child.checkpoint.delivery_id})
+                    )
+                    if child_result.checkpoint.stage is not DeliveryStage.DONE:
+                        return child_result
+            elif command.approved_plan_sha256 is not None:
+                raise ValueError("joint delivery has no blocked child awaiting this approval")
+            return self._requirements.resume(command)
+        return self._resume_controller().resume(command)
+
+    def _resume_controller(self) -> DeliveryResumeController:
+        from ai_software_engineer.recovery.resume import DeliveryResumeController
+
+        return DeliveryResumeController(
+            config=self._config,
+            environment=self._environment,
+            backend=self._recovery_backend,
+            entry=self._entry,
+            recovery=self.recovery_entry(),
+            verification=self.verification_entry(),
         )
 
     @property

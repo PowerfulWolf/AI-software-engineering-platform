@@ -1,6 +1,6 @@
 # v0.1 开发里程碑与第一批可执行任务
 
-> 实施状态：T001–T032、T034 已完成，T033 Reporter 暂停；M5 已通过组织级 Scheduler/ModelRouter、ProjectProfile、
+> 实施状态：T001–T032、T034、T046–T047 已完成，T033 Reporter 暂停；M5 已通过组织级 Scheduler/ModelRouter、ProjectProfile、
 > SpecCompiler 与 Runtime workspace binding 达到退出条件。目标项目与外置 AI workspace 已有
 > 稳定绑定。M0–M5 的
 > v0.1 核心库退出条件已通过自动化测试验证。T014 提供配置驱动的串行运行入口，T015 提供
@@ -140,10 +140,11 @@ E2E 到达 DONE，目标主 checkout 零改动；提供显式 opt-in live GPT-5.
 | T033（暂停） | Reporter 决策与实现 | deterministic report 或 read-only Reporter Agent | 不创造事实/改 verdict/隐藏失败；输出可追溯 sources | T032 |
 | T034（已完成） | Production Team Host | 自动 Host、MySQL、Codex/Responses/fallback、真实隔离 delivery | 一次配置后目录+需求可运行；MySQL scripted E2E、全量质量门禁和 opt-in live smoke | T032 |
 | T046（已完成） | Persistent WorkQueue 与 Dispatcher | Run 级 MySQL queue、Planner-owned dispatcher、owner-fenced Lease lifecycle | 两个 Dispatcher 竞争只有一个 claim；过期 owner 不能提交；关闭当前与发布下一项原子 | T045 |
+| T047（已完成） | Delivery 统一恢复与候选修复循环 | `request resume` controller、Recovery/ContinuationDispatch、看板验证/修复投影 | pre-Task 精确重入；失败 Coder 恢复计划；QA FAIL/Review REJECT 关联修复 Task；终态 Task 零调用补写 checkpoint | T044/T046 |
 
 ## 第一批任务的执行顺序
 
-已完成：`T001 → ... → T032`、`T034`、`T046`。T033 暂停。HTTP/SSE、
+已完成：`T001 → ... → T032`、`T034`、`T046–T047`。T033 暂停。HTTP/SSE、
 逐角色后台 Worker、Reporter 和更复杂容量投影
 需要另行立项。opt-in live smoke 已验证真实 GPT-5.5 的 Product/Designer/Planner/dispatch；当前 Codex
 desktop 环境中的 Coder 被 macOS 嵌套 sandbox 限制阻止，不能把这次受限运行描述为完整 live DONE。
