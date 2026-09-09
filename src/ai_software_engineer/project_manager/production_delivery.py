@@ -121,7 +121,7 @@ class DispatchDeliveryAgentAdapter:
         *,
         dispatch: DeliveryAllocation | VerificationReservation,
         definitions: Mapping[AgentRole, AgentDefinition],
-        plan_adapter: ExecutionPlanAgentAdapter,
+        plan_adapter: ExecutionPlanAgentAdapter | None,
         config: ProductionConfig,
         project_root: str | Path,
         project_workspace_root: str | Path,
@@ -129,6 +129,13 @@ class DispatchDeliveryAgentAdapter:
         environment: Mapping[str, str] | None = None,
         route_adapters: DeliveryRouteAdapterFactory | None = None,
     ) -> None:
+        if isinstance(dispatch, VerificationReservation):
+            if plan_adapter is not None:
+                raise ProductionConfigError(
+                    "candidate verification must not configure a planning adapter"
+                )
+        elif plan_adapter is None:
+            raise ProductionConfigError("delivery requires a planning adapter")
         self._dispatch = dispatch
         self._definitions = dict(definitions)
         self._plan_adapter = plan_adapter
@@ -155,6 +162,8 @@ class DispatchDeliveryAgentAdapter:
 
     def run(self, request: AgentRequest) -> AgentResult:
         if request.role is AgentRole.ORCHESTRATOR:
+            if self._plan_adapter is None:
+                raise ProductionConfigError("candidate verification cannot invoke Orchestrator")
             return self._plan_adapter.run(request)
         binding = self._binding(request)
         adapter = self._adapters.get(request.role)

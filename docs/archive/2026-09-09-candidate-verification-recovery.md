@@ -35,6 +35,21 @@ joint integration automatically, merge, push or deploy a candidate. A completion
 association with the original demand; human/project delivery policy remains the final acceptance
 boundary. Provider invocation was deliberately not performed during implementation verification.
 
+## Post-release correction: terminal Task planning composition
+
+The first live `verify-run` safely stopped before any provider invocation with
+`approved planning lineage does not match the Task`. The stored request, Product/Design/Plan chain,
+candidate and approval were all current. The composition layer had incorrectly instantiated the
+normal `ExecutionPlanAgentAdapter`, whose valid contract requires a `NEW` Task, for the intentionally
+terminal source Task used by candidate verification.
+
+Candidate verification now composes `DispatchDeliveryAgentAdapter` with no planning adapter and
+explicitly refuses Orchestrator/Coder requests. Normal delivery still requires a planning adapter;
+constructor guards make the two modes mutually exclusive. A focused regression went red on the old
+`NoneType.run` behavior and green after the change. The real stored FAILED Task plus active
+verification reservation was then assembled read-only as `QA_REVIEWER_ONLY_READY`; no worktree or
+provider was created.
+
 ## Commit
 
 This archive is stored in the implementation commit; use that commit as the immutable baseline.

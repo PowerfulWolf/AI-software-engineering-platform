@@ -757,6 +757,7 @@ CandidateVerificationEntry.propose_project(project_root, delivery_id) -> (plan, 
 CandidateVerificationEntry.approve(path, confirmed_plan, reference) -> None
 CandidateVerificationEntry.execute(path) -> CandidateVerificationCompletion
 open_candidate_verification_plan(config, environment, path) -> (store, plan)
+DispatchDeliveryAgentAdapter(..., plan_adapter: ExecutionPlanAgentAdapter | None, ...)
 ```
 
 Top-level CLI commands are `verify-propose`, `verify-inspect`, `verify-approve`, and `verify-run`.
@@ -775,6 +776,13 @@ The adapter opens QA and Reviewer worktrees at the pinned candidate, disallows C
 clean worktrees. Original Task, events, dispatch, artifacts, candidate commit and parent checkpoint
 remain unchanged.
 
+Normal `DeliveryAllocation` composition requires a non-null `ExecutionPlanAgentAdapter` because it
+materializes the plan from a `NEW` Task. `VerificationReservation` composition requires
+`plan_adapter=None`: the approved PlanArtifact already exists and the source Task is intentionally
+terminal. Candidate verification must reject Orchestrator and Coder requests before worktree or
+provider creation. Never normalize the terminal source Task to `NEW` merely to satisfy the planning
+adapter; doing so would replace historical identity instead of verifying the preserved candidate.
+
 The plan binds optional joint parent delivery/checkpoint; completion binds that plan plus sealed
 invocation/report digests. This is the audit association with the original demand. It does not rewrite
 the historical child or parent checkpoint into DONE, run joint integration automatically, merge,
@@ -788,3 +796,33 @@ definitions. Invocation records are published before each provider call. Missing
 candidate drift, allocation difference, reused role admission, QA FAIL, Review REJECT and uncertain
 provider completion fail closed without Coder or terminal Task mutation. Exact approval and completion
 replay are idempotent; an admitted role with unknown result is not retried automatically.
+
+| Delivery adapter composition | Required result |
+|---|---|
+| Normal allocation + planning adapter | Planning/Coder/QA/Reviewer path remains available |
+| Normal allocation + no planning adapter | `ProductionConfigError` before any role run |
+| Verification reservation + no planning adapter | QA/Reviewer-only composition is valid |
+| Verification reservation + planning adapter | `ProductionConfigError`; do not validate terminal Task as `NEW` |
+| Verification reservation + Orchestrator/Coder request | Explicit refusal before worktree/provider |
+
+Good: a terminal candidate uses the existing sealed PlanArtifact and invokes only QA then Reviewer.
+Base: the normal delivery path still requires its planning adapter. Bad: constructing
+`ExecutionPlanAgentAdapter(task=terminal_task, ...)` inside candidate verification; its correct `NEW`
+guard reports a misleading planning-lineage failure before QA starts.
+
+`tests/project_manager/test_production_delivery.py` must assert both sides of the constructor
+invariant and the explicit verification Orchestrator refusal. Candidate verification regression must
+also keep QA/Reviewer invocation records empty when composition fails before provider admission.
+
+```python
+# Wrong: reuse initial-delivery planning composition for a terminal historical Task.
+plan_adapter = ExecutionPlanAgentAdapter(task=source.runtime.task, ...)
+
+# Correct: the sealed plan is already an input fact; compose only independent verifiers.
+adapter = DispatchDeliveryAgentAdapter(
+    dispatch=verification_reservation,
+    definitions=approved_definitions,
+    plan_adapter=None,
+    ...,
+)
+```

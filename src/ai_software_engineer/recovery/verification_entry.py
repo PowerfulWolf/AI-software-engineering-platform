@@ -14,7 +14,7 @@ from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.context import FileContextStore
 from ai_software_engineer.domain import AgentDefinition, AgentRole, WorkItem, WorkItemStatus
 from ai_software_engineer.git import GitWorktreeManager
-from ai_software_engineer.orchestration import ExecutionPlanAgentAdapter, FileRunContextBuilder
+from ai_software_engineer.orchestration import FileRunContextBuilder
 from ai_software_engineer.planning import FileExecutionPlanStore
 from ai_software_engineer.planning.preview import derive_phase_demands
 from ai_software_engineer.product import FileProductRecordStore
@@ -389,19 +389,10 @@ class CandidateVerificationEntry:
             FileArtifactStore(sidecar / "artifacts"),
             FileContextStore(sidecar / "contexts"),
         )
-        plan_adapter = ExecutionPlanAgentAdapter(
-            task=source.runtime.task,
-            product_spec=source.stages.product,
-            technical_design=source.stages.design,
-            execution_plan=source.stages.plan,
-            agent_id=definitions[AgentRole.ORCHESTRATOR].id,
-            agent_version=definitions[AgentRole.ORCHESTRATOR].version,
-            created_at=plan.created_at,
-        )
         adapter = DispatchDeliveryAgentAdapter(
             dispatch=reservation,
             definitions=definitions,
-            plan_adapter=plan_adapter,
+            plan_adapter=None,
             config=self.config,
             project_root=plan.scope.project_root,
             project_workspace_root=sidecar,
