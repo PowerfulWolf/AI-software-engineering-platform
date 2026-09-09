@@ -11,11 +11,13 @@ from typing import Annotated, Protocol
 from pydantic import AwareDatetime, Field, StringConstraints, field_validator
 
 from ai_software_engineer.design import DesignerServiceResult
-from ai_software_engineer.domain import TaskStatus
+from ai_software_engineer.domain import Task, TaskStatus
+from ai_software_engineer.domain.artifact import CommitSha
 from ai_software_engineer.domain.identity import ProjectId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.orchestration.retry import (
     BlockedResult,
+    RetryClassification,
     RetryDeliveryResult,
     RetryResult,
 )
@@ -58,10 +60,24 @@ class DeliveryCatalogError(UnifiedProjectEntryError):
     """The external project workspace catalog is missing, unsafe, or ambiguous."""
 
 
+class DeliveryFailureSnapshot(DomainModel):
+    """Read-back runtime facts, never a replacement for the Task event history."""
+
+    task: Task
+    task_revision: int = Field(ge=0)
+    candidate_revision: CommitSha | None = None
+
+
 class DeliveryBackendFailure(UnifiedProjectEntryError):
     """Expected native-stage failure already classified by the application backend."""
 
-    def __init__(self, code: DeliveryFailureCode, safe_summary: str) -> None:
+    def __init__(
+        self,
+        code: DeliveryFailureCode,
+        safe_summary: str,
+        *,
+        snapshot: DeliveryFailureSnapshot | None = None,
+    ) -> None:
         if (
             not safe_summary
             or len(safe_summary) > 500
@@ -71,6 +87,7 @@ class DeliveryBackendFailure(UnifiedProjectEntryError):
         super().__init__(safe_summary)
         self.code = code
         self.safe_summary = safe_summary
+        self.snapshot = snapshot
 
 
 class StartProjectDelivery(DomainModel):
@@ -513,6 +530,30 @@ class UnifiedProjectEntryService:
         try:
             delivery = self._backend.run_delivery(current)
         except DeliveryBackendFailure as error:
+            if error.snapshot is not None:
+                snapshot = error.snapshot
+                if (
+                    snapshot.task.id != current.task_id
+                    or snapshot.task.repository != current.project_root
+                    or snapshot.task_revision < (current.task_revision or 0)
+                ):
+                    raise DeliveryCommandRejected(
+                        "failure snapshot does not match delivery"
+                    ) from error
+                checkpoint = self._next(
+                    store,
+                    current,
+                    stage=DeliveryStage.BLOCKED,
+                    next_action=DeliveryNextAction.REQUEST_HUMAN,
+                    task_revision=snapshot.task_revision,
+                    task_status=snapshot.task.status,
+                    candidate_revision=snapshot.candidate_revision,
+                    attempts=current.stage_attempts.increment(DeliveryStage.DELIVERING),
+                    failure_code=error.code,
+                    failure_summary=error.safe_summary,
+                    at=max(at, snapshot.task.updated_at),
+                )
+                return ProjectDeliveryResult(checkpoint=checkpoint, product=product)
             return self._stage_failure(store, current, error.code, error.safe_summary, at)
         attempts = current.stage_attempts.increment(DeliveryStage.DELIVERING)
         if isinstance(delivery, BlockedResult):
@@ -524,7 +565,11 @@ class UnifiedProjectEntryService:
                 task_revision=len(delivery.event_ids),
                 task_status=delivery.task.status,
                 attempts=attempts,
-                failure_code=DeliveryFailureCode.RETRY_BUDGET_EXHAUSTED,
+                failure_code=(
+                    DeliveryFailureCode.INVALID_AGENT_OUTPUT
+                    if delivery.classification is RetryClassification.INVALID_OUTPUT
+                    else DeliveryFailureCode.RETRY_BUDGET_EXHAUSTED
+                ),
                 failure_summary=delivery.reason,
                 at=at,
             )

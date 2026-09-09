@@ -99,10 +99,15 @@ class AgentRequest(DomainModel):
     timeout_seconds: TimeoutSeconds
     continuation_checkpoint_id: ArtifactId | None = None
     continuation_changed_paths: tuple[NonEmptyStr, ...] = ()
+    expected_parent_artifact_ids: tuple[ArtifactId, ...] | None = None
 
     @model_validator(mode="after")
     def validate_artifact_ids(self) -> Self:
         ensure_unique(self.input_artifact_ids, "AgentRequest input_artifact_ids")
+        if self.expected_parent_artifact_ids is not None:
+            ensure_unique(self.expected_parent_artifact_ids, "expected parent Artifact IDs")
+            if not set(self.expected_parent_artifact_ids) <= set(self.input_artifact_ids):
+                raise ValueError("expected parents must belong to input Artifact IDs")
         expected_schema = ROLE_OUTPUT_SCHEMA[self.role]
         if self.output_schema != expected_schema:
             raise ValueError(

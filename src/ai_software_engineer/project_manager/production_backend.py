@@ -82,6 +82,7 @@ from ai_software_engineer.project_manager.baseline import (
 from ai_software_engineer.project_manager.delivery import (
     ApproveProductSpec,
     DeliveryBackendFailure,
+    DeliveryFailureSnapshot,
     ReplyToProduct,
     StartProjectDelivery,
 )
@@ -490,7 +491,43 @@ class ProductionProjectDeliveryBackend:
         return self._guard("Dispatch", lambda: self._commit_dispatch(checkpoint))
 
     def run_delivery(self, checkpoint: ProjectDeliveryCheckpoint) -> RetryResult:
-        return self._guard("Delivery", lambda: self._run_delivery(checkpoint))
+        try:
+            return self._guard("Delivery", lambda: self._run_delivery(checkpoint))
+        except DeliveryBackendFailure as error:
+            if checkpoint.task_id is None:
+                raise
+            repository = MySqlTaskRepository(self._dsn)
+            try:
+                task = repository.get(checkpoint.task_id)
+                events = repository.list_events(task.id)
+                revision = repository.current_revision(task.id)
+                if (
+                    revision != len(events)
+                    or repository.get(task.id) != task
+                    or repository.current_revision(task.id) != revision
+                    or (events and events[-1].to_status is not task.status)
+                ):
+                    raise ValueError("failure snapshot event revision mismatch")
+                candidate = next(
+                    (
+                        event.source_revision
+                        for event in reversed(events)
+                        if event.reason == "candidate_ready"
+                    ),
+                    None,
+                )
+                snapshot = DeliveryFailureSnapshot(
+                    task=task,
+                    task_revision=revision,
+                    candidate_revision=candidate,
+                )
+            finally:
+                repository.close()
+            raise DeliveryBackendFailure(
+                error.code,
+                error.safe_summary,
+                snapshot=snapshot,
+            ) from error
 
     def reconcile(self, checkpoint: ProjectDeliveryCheckpoint) -> None:
         def execute() -> None:

@@ -505,3 +505,47 @@ verification, commit, and Artifact sealing; the full repository test suite alone
 that budget. Prevention is three-layered: a pure role contract test, production adapter assertions,
 and recovery's offline command-runner assertion. Model latency must not be tested with wall-clock
 sleeps, and a future configurable/adaptive policy must preserve a bounded, approval-visible value.
+
+## Explicit output lineage and failure read-back (2026-09-09)
+
+Scope: delivery Agent requests/prompts and errors returned after runtime execution.
+`AgentRequest.expected_parent_artifact_ids: tuple[ArtifactId, ...] | None = None` distinguishes
+context inputs from direct parents. None preserves historical request serialization; orchestrators
+always supply the exact existing `expected_parents`, including empty for plan. Non-null parents
+must be unique and a subset of inputs. Both RequestPromptBuilder and ContextPromptBuilder include
+`output_contract.parent_artifact_ids`; Codex compiles these same messages. No Artifact schema or
+parent policy changes: QA parent is implementation only, Reviewer parent is QA only. Coder retry
+parents remain the exact runtime-selected set. Existing persisted requests are not rewritten.
+
+Wrong returned parents are non-transient `AgentRunFailed(INVALID_OUTPUT)` at the orchestration
+guard, not PLATFORM_BUG. The invalid report is not sealed; no Reviewer or automatic model fallback
+is allowed. Provider-level VALID evaluation records mean adapter validation, not final acceptance.
+The facade labels INVALID_OUTPUT as INVALID_AGENT_OUTPUT rather than retry-budget exhaustion.
+
+`DeliveryBackendFailure(..., snapshot: DeliveryFailureSnapshot | None = None)` may carry typed
+Task, task_revision and candidate_revision read after a runtime exception. Production run_delivery
+reads the exact Task and events, checks revision/count/status and rechecks for concurrent changes.
+Candidate comes only from a persisted candidate_ready event, never model prose. The facade checks
+task identity/repository/revision, then appends a BLOCKED checkpoint with actual Task status, revision,
+candidate and incremented delivery attempt; timestamp is at least Task.updated_at. It never rewrites
+Task state or previous checkpoints. Earlier-stage failures without a snapshot retain existing behavior.
+
+| Case | Required result |
+|---|---|
+| QA inputs contain plan + implementation | Prompt parents contain implementation only |
+| QA copies all inputs as parents | INVALID_OUTPUT/BLOCKED; no accepted QA or Reviewer |
+| Runtime exception after progress | Read-back status/revision/candidate, not stale NEW |
+| Snapshot wrong task/root, decreasing revision, concurrent drift | Reject, no fabricated parent facts |
+| Historical terminal delivery | Unchanged; this patch does not resurrect or auto-replay it |
+
+Good: explicit output contract plus immutable failure facts. Base: valid first delivery unchanged.
+Bad: silently repair QA parent IDs, accept a schema-valid report as final approval, or reset FAILED.
+Tests: `test_output_parent_contract.py` exercises the runtime and real failure pattern;
+`test_openai_compatible.py` asserts the production context prompt; `test_delivery_failure_snapshot.py`
+checks failure projection, timestamp, candidate preservation, wrong identity and reopen.
+Wrong: use all input_artifact_ids as direct parents and preserve pre-run NEW on exception.
+Correct: transmit exact parents, reject invalid output, and project checked durable runtime facts.
+Root cause (B/D/E): runtime kept lineage expectations private while exposing a larger context set;
+fake adapters already knew the expected chain. Exception conversion discarded post-run progress.
+Prevention: explicit contract tests at the adapter seam and facade failure tests, not weaker guards.
+Recovery of existing terminal Tasks remains a separate exact-candidate authorized operation.

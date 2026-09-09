@@ -9,6 +9,8 @@ from uuid import uuid4
 from ai_software_engineer.agents import (
     ROLE_OUTPUT_SCHEMA,
     AgentAdapter,
+    AgentErrorCode,
+    AgentFailure,
     AgentRequest,
     AgentResult,
     AgentRunStatus,
@@ -338,6 +340,7 @@ class SerialOrchestrator:
             source_revision=context.source_revision,
             context_manifest_id=context.context_id,
             input_artifact_ids=tuple(artifact.artifact_id for artifact in input_artifacts),
+            expected_parent_artifact_ids=expected_parents,
             permissions=definition.permissions,
             output_schema=ROLE_OUTPUT_SCHEMA[role],
             timeout_seconds=definition.timeout_seconds,
@@ -353,8 +356,20 @@ class SerialOrchestrator:
         if result.status is not AgentRunStatus.SUCCEEDED or result.artifact is None:
             raise AgentRunFailed(result)
         if result.artifact.parent_artifact_ids != expected_parents:
-            raise DeliveryContractViolation(
-                f"{role.value} Artifact parent lineage does not match its inputs"
+            raise AgentRunFailed(
+                result.model_copy(
+                    update={
+                        "status": AgentRunStatus.FAILED,
+                        "artifact": None,
+                        "error": AgentFailure(
+                            code=AgentErrorCode.INVALID_OUTPUT,
+                            message=(
+                                f"{role.value} Artifact parent lineage does not match its inputs"
+                            ),
+                            transient=False,
+                        ),
+                    }
+                )
             )
         required_supersedes = expected_supersedes
         if expected_supersedes_by_kind is not None:
