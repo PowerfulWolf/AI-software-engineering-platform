@@ -59,6 +59,9 @@ ase request resume DELIVERY_ID
 - Planner 只给有界串行顺序，不引入通用 DAG；依赖不得指向尚未完成的 write unit。
 - 各仓库候选、QA/Review、子 checkpoint 必须与联合 spec/design/plan 绑定；partial DONE
   不等于联合 DONE。集成验收引用完整 candidate set，在外置 detached worktrees 执行受控命令。
+- 父需求中的 child checkpoint 是已提交观察值，子交付可在父 checkpoint 之后继续追加。读取和恢复
+  必须确认该 child 是同一条已验证原生哈希链中的精确历史前缀；不得要求它等于最新 child，也不得
+  接受缺失、替换、超前或跨交付记录。只有 DONE child 仍要求父记录与当前原生候选完全一致。
 - 没有可执行的联合验收、命令失败、仓库不支持或事实漂移均不得宣称 DONE。
 - journal 使用不可变 hash-chain、CAS 和进程锁；重放已持久化完成阶段不重复模型调用或交付。
 - 原生子交付完成、父记录未保存的崩溃窗口由确定性子 ID 恢复，复用候选，不再次运行 Coder。

@@ -34,6 +34,7 @@ from ai_software_engineer.project_manager.delivery_checkpoint import (
     ProjectDeliveryCheckpointConflict,
     ProjectDeliveryCheckpointNotFound,
     ProjectDeliveryIntake,
+    checkpoint_sha256_is_ancestor,
 )
 from ai_software_engineer.project_manager.dispatch import (
     ContinuationDispatchRecord,
@@ -615,11 +616,14 @@ class UnifiedProjectEntryService:
             return ProjectDeliveryResult(checkpoint=current)
         plan.validate_integrity()
         completion.validate_integrity()
+        history = store.list(current.delivery_id)
         if (
             not completion.verified
             or completion.plan_sha256 != plan.plan_sha256
             or current.stage not in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
-            or current.checkpoint_sha256 != plan.native_checkpoint_sha256
+            or not history
+            or history[-1] != current
+            or not checkpoint_sha256_is_ancestor(history, plan.native_checkpoint_sha256)
             or current.project_id != plan.scope.project_id
             or current.project_root != plan.scope.project_root
             or current.task_id != plan.inputs.task_id

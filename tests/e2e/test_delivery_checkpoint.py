@@ -23,6 +23,8 @@ from ai_software_engineer.project_manager.delivery_checkpoint import (
     ProjectDeliveryCheckpointNotFound,
     ProjectDeliveryCheckpointPathError,
     ProjectDeliveryIntake,
+    checkpoint_is_ancestor,
+    checkpoint_sha256_is_ancestor,
 )
 
 NOW = datetime(2026, 9, 2, 8, 0, tzinfo=UTC)
@@ -180,6 +182,14 @@ def test_store_appends_chain_returns_current_and_replays_exactly(tmp_path: Path)
     assert store.get("delivery_alpha", 1) == first
     assert store.current("delivery_alpha") == second
     assert store.list("delivery_alpha") == (first, second)
+    history = store.list("delivery_alpha")
+    assert checkpoint_is_ancestor(history, first)
+    assert checkpoint_is_ancestor(history, second)
+    assert checkpoint_sha256_is_ancestor(history, first.checkpoint_sha256)
+    assert not checkpoint_is_ancestor(
+        history, first.model_copy(update={"checkpoint_sha256": "f" * 64})
+    )
+    assert not checkpoint_sha256_is_ancestor(history, "f" * 64)
 
 
 def test_store_exactly_persists_intake_outside_checkpoint_chain(tmp_path: Path) -> None:

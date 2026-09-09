@@ -8,7 +8,7 @@ import shutil
 import subprocess
 from collections.abc import Iterator
 from contextlib import closing
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from http.client import HTTPConnection
 from pathlib import Path
 from threading import Thread
@@ -32,6 +32,10 @@ from ai_software_engineer.project_manager.delivery import (
     ReplyToProduct,
     StartProjectDelivery,
 )
+from ai_software_engineer.project_manager.delivery_checkpoint import (
+    FileProjectDeliveryCheckpointStore,
+    ProjectDeliveryCheckpoint,
+)
 from ai_software_engineer.project_manager.dispatch import VerificationReservation
 from ai_software_engineer.project_manager.mysql_dispatch_authority import _decode_commit
 from ai_software_engineer.project_manager.production_host import OrganizationTeamHost
@@ -46,6 +50,7 @@ from tests.project_manager.test_production_backend import (
     _ScriptedDeliveryAdapter,
     _ScriptedDeliveryFactory,
 )
+from tests.recovery.test_native import InterruptedFactory
 
 
 def _bytes(root: Path) -> dict[str, str]:
@@ -85,6 +90,65 @@ def test_empty_company_needs_no_database_or_models(tmp_path: Path) -> None:
     snapshot = ProductionTeamReader(config, {}).snapshot()
     assert not snapshot.agents and not snapshot.tasks and not snapshot.requests
     assert _bytes(tmp_path) == before
+
+
+@pytest.mark.mysql
+def test_joint_reader_accepts_committed_child_checkpoint_as_a_valid_prefix(
+    tmp_path: Path,
+) -> None:
+    config, environment, models, projects = setup_host(tmp_path)
+    host = OrganizationTeamHost(
+        config=config,
+        environment=environment,
+        structured_clients=models,
+        delivery_route_adapters=InterruptedFactory(),
+    )
+    service = host.requirement_entry()
+    created = service.create(
+        CreateRequirementProject(
+            name="Advanced native child",
+            project_roots=tuple(map(str, projects)),
+        )
+    ).checkpoint
+    product = service.reply(
+        ReplyToProduct(
+            delivery_id=created.delivery_id,
+            expected_checkpoint_sha256=created.checkpoint_sha256,
+            message="Update both greetings",
+        )
+    ).checkpoint
+    parent = service.approve(
+        ApproveProductSpec(
+            delivery_id=product.delivery_id,
+            expected_checkpoint_sha256=product.checkpoint_sha256,
+            approval_reference="team-view-prefix",
+        )
+    ).checkpoint
+    assert parent.stage is JointStage.BLOCKED
+    child = parent.children[0].checkpoint
+    sidecar = (
+        host.company_workspace.root / "projects" / child.project_id / "state/project-deliveries"
+    )
+    store = FileProjectDeliveryCheckpointStore(sidecar)
+    values = child.to_wire()
+    values.pop("checkpoint_sha256")
+    advanced = store.put(
+        ProjectDeliveryCheckpoint.create(
+            **{
+                **values,
+                "sequence": child.sequence + 1,
+                "previous_checkpoint_sha256": child.checkpoint_sha256,
+                "checkpointed_at": child.checkpointed_at + timedelta(microseconds=1),
+            }
+        )
+    )
+    service.backend.reconcile(parent)
+
+    snapshot = ProductionTeamReader(config, environment).snapshot()
+
+    task = next(item for item in snapshot.tasks if item.id == child.delivery_id)
+    assert task.last_activity >= advanced.checkpointed_at
+    assert task.request_id == parent.delivery_id
 
 
 @pytest.mark.mysql

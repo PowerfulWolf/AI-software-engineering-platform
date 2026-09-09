@@ -51,7 +51,11 @@ from ai_software_engineer.project_manager.delivery import (
     StartProjectDelivery,
     UnifiedProjectEntryService,
 )
-from ai_software_engineer.project_manager.delivery_checkpoint import DeliveryStage
+from ai_software_engineer.project_manager.delivery_checkpoint import (
+    DeliveryStage,
+    FileProjectDeliveryCheckpointStore,
+    checkpoint_is_ancestor,
+)
 from ai_software_engineer.project_manager.preparation import PrepareProjectStatus
 from ai_software_engineer.project_manager.production_agents import (
     ProductDraft,
@@ -144,8 +148,16 @@ class ProductionJointBackend:
             # Resolve native facts, not just a claimed joint child status.
             service = self._entry(checkpoint, child.unit_id)
             actual = service.status(child.checkpoint.delivery_id).checkpoint
-            if actual.sequence < child.checkpoint.sequence:
-                raise ValueError("native child checkpoint history moved backwards")
+            history = FileProjectDeliveryCheckpointStore(
+                self.company.root / "projects" / actual.project_id / "state/project-deliveries",
+                read_only=True,
+            ).list(actual.delivery_id)
+            if (
+                not history
+                or history[-1] != actual
+                or not checkpoint_is_ancestor(history, child.checkpoint)
+            ):
+                raise ValueError("native child checkpoint is not a committed history prefix")
             if child.checkpoint.stage is DeliveryStage.DONE and actual != child.checkpoint:
                 raise ValueError("completed candidate checkpoint drift")
 

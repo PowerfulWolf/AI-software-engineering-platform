@@ -330,6 +330,26 @@ class ProjectDeliveryCheckpoint(DomainModel):
             raise ProjectDeliveryCheckpointCorruption("checkpoint digest does not match content")
 
 
+def checkpoint_is_ancestor(
+    history: tuple[ProjectDeliveryCheckpoint, ...],
+    checkpoint: ProjectDeliveryCheckpoint,
+) -> bool:
+    """Return whether an exact checkpoint is a prefix of one validated delivery history."""
+    return (
+        bool(history)
+        and history[-1].delivery_id == checkpoint.delivery_id
+        and checkpoint.sequence <= len(history)
+        and history[checkpoint.sequence - 1] == checkpoint
+    )
+
+
+def checkpoint_sha256_is_ancestor(
+    history: tuple[ProjectDeliveryCheckpoint, ...], checkpoint_sha256: str
+) -> bool:
+    """Return whether a digest identifies a checkpoint in one validated delivery history."""
+    return any(item.checkpoint_sha256 == checkpoint_sha256 for item in history)
+
+
 class ProjectDeliveryCheckpointError(RuntimeError):
     """Base error for the unified-delivery journal."""
 

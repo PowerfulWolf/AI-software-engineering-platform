@@ -18,6 +18,10 @@ from ai_software_engineer.orchestration import FileRunContextBuilder
 from ai_software_engineer.planning import FileExecutionPlanStore
 from ai_software_engineer.planning.preview import derive_phase_demands
 from ai_software_engineer.product import FileProductRecordStore
+from ai_software_engineer.project_manager.delivery_checkpoint import (
+    FileProjectDeliveryCheckpointStore,
+    checkpoint_sha256_is_ancestor,
+)
 from ai_software_engineer.project_manager.dispatch import (
     DispatchPhaseCommit,
     DispatchWorkforceSnapshot,
@@ -257,11 +261,17 @@ class NativeVerificationFacts(VerificationFacts):
 
     def validate(self, plan: CandidateVerificationPlan) -> None:
         source = NativeCandidateSourceReader(self.config, self.environment).inspect(plan.scope)
+        checkpoint_history = FileProjectDeliveryCheckpointStore(
+            Path(source.stages.preparation.project_workspace_root) / "state/project-deliveries",
+            read_only=True,
+        ).list(source.scope.delivery_id)
         if (
             not _verification_inputs_are_current(
                 plan.inputs, source.inputs, self._admitted_run_ids(plan)
             )
-            or source.checkpoint.checkpoint_sha256 != plan.native_checkpoint_sha256
+            or not checkpoint_history
+            or checkpoint_history[-1] != source.checkpoint
+            or not checkpoint_sha256_is_ancestor(checkpoint_history, plan.native_checkpoint_sha256)
             or source.runtime.dispatch.dispatch_sha256 != plan.dispatch_sha256
             or _stage_sha(source) != plan.approved_stage_chain_sha256
             or source.parent_delivery_id != plan.parent_delivery_id

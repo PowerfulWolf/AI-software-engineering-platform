@@ -96,6 +96,41 @@ reconciliation，再决定是否需要 recovery plan。
 场景可能实际启动生产 Host。该测试现在将 `ASE_CONFIG` 显式绑定到临时不存在文件；测试不得依赖
 开发者是否已为日常平台运行配置环境变量。
 
+## Bug Analysis：追加式 child checkpoint 被误判为事实漂移
+
+### 1. Root Cause Category
+
+- **B — Cross-Layer Contract**：联合父 checkpoint 保存的是 child 的已提交观察值，原生 child journal
+  保存的是持续追加的当前事实；read/recovery 层错误地把二者当成同一个 mutable latest pointer。
+- **D — Test Coverage Gap**：已有测试覆盖相等 checkpoint 和损坏 checkpoint，没有覆盖“父记录合法
+  落后、child 已继续”的正常恢复窗口。
+- **E — Implicit Assumption**：用 latest digest equality 代替了 append-only ancestry 校验。
+
+### 2. Why Earlier Coverage Failed
+
+单仓恢复、联合交付和看板各自测试都能通过，但没有让 child 在父 checkpoint 发布后继续追加。
+因此原生恢复已经产生了正确新事实，看板和联合来源校验却同时拒绝该事实；验证计划又因绑定瞬时
+Delivery checkpoint 摘要而被无意义作废。
+
+### 3. Prevention Mechanisms
+
+| Priority | Mechanism | Action | Status |
+|---|---|---|---|
+| P0 | Shared ancestry predicate | 统一使用 exact record-at-sequence 判断 checkpoint 是否属于当前已验证链 | DONE |
+| P0 | Cross-layer regressions | 覆盖 joint parent lag、native recovery lineage 和 verification plan continuity | DONE |
+| P1 | Executable spec | 明确 committed observation 与 mutable latest pointer 的区别及拒绝矩阵 | DONE |
+
+### 4. Systematic Expansion
+
+所有 append-only 聚合之间的引用都要先判断语义：如果引用代表“当时观察到的事实”，比较 ancestry；
+如果引用代表“不可再变化的完成结果”，比较 exact latest。不得默认把跨聚合引用实现成 latest equality。
+
+### 5. Knowledge Capture
+
+- `.trellis/spec/core/live-team-view.md`、`multi-directory-delivery.md`、`delivery-recovery.md` 已同步；
+- `docs/contracts.md` 已补充操作者可见行为；
+- 本项目没有 `src/templates/markdown/spec/`，因此没有可同步的规范模板。
+
 ## 当前边界
 
 - provider 已 admitted、Task 尚未形成可信终态的歧义窗口返回 `WAITING_HUMAN`，不会盲目重调；

@@ -42,6 +42,7 @@ from ai_software_engineer.project_manager.delivery_checkpoint import (
     DeliveryStage,
     FileProjectDeliveryCheckpointStore,
     ProjectDeliveryCheckpoint,
+    checkpoint_is_ancestor,
 )
 from ai_software_engineer.project_manager.dispatch import DeliveryAllocation, DispatchCommitRecord
 from ai_software_engineer.project_manager.mysql_dispatch_authority import _decode_allocation
@@ -517,10 +518,21 @@ def _parent(
             children = [
                 child for child in parent.children if child.checkpoint.delivery_id == cp.delivery_id
             ]
+            child_is_ancestor = False
+            if len(children) == 1:
+                native_history = FileProjectDeliveryCheckpointStore(
+                    company.root / "projects" / cp.project_id / "state/project-deliveries",
+                    read_only=True,
+                ).list(cp.delivery_id)
+                child_is_ancestor = (
+                    bool(native_history)
+                    and native_history[-1] == cp
+                    and checkpoint_is_ancestor(native_history, children[0].checkpoint)
+                )
             if (
                 parent.stage != "BLOCKED"
                 or len(children) != 1
-                or children[0].checkpoint != cp
+                or not child_is_ancestor
                 or approval.operator_id != "joint-human-approval-delegation"
                 or approval.rationale != derived.approval_reference
             ):

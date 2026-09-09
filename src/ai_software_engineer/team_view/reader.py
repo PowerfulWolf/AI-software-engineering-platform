@@ -24,6 +24,7 @@ from ai_software_engineer.project_manager.delivery_checkpoint import (
     FileProjectDeliveryCheckpointStore,
     ProjectDeliveryCheckpoint,
     ProjectDeliveryIntake,
+    checkpoint_is_ancestor,
 )
 from ai_software_engineer.project_manager.dispatch import (
     ContinuationDispatchRecord,
@@ -73,6 +74,7 @@ class _Native:
     checkpoint: ProjectDeliveryCheckpoint
     intake: ProjectDeliveryIntake
     sidecar: Path
+    history: tuple[ProjectDeliveryCheckpoint, ...]
 
 
 class ProductionTeamReader:
@@ -146,8 +148,7 @@ class ProductionTeamReader:
                 if (
                     stored is None
                     or child.checkpoint.delivery_id not in ownership
-                    or stored.checkpoint.sequence < child.checkpoint.sequence
-                    or stored.checkpoint.checkpoint_sha256 != child.checkpoint.checkpoint_sha256
+                    or not checkpoint_is_ancestor(stored.history, child.checkpoint)
                 ):
                     raise ValueError("committed child checkpoint mismatch")
             documents = tuple(
@@ -295,7 +296,7 @@ def _read_native(company: CompanyWorkspace) -> tuple[_Native, ...]:
                 or intake.project_root != cp.project_root
             ):
                 raise ValueError("native checkpoint project mismatch")
-            result.append(_Native(cp, intake, sidecar))
+            result.append(_Native(cp, intake, sidecar, records))
     if len({n.checkpoint.delivery_id for n in result}) != len(result):
         raise ValueError("ambiguous native delivery")
     return tuple(result)

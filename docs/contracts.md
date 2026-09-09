@@ -647,6 +647,9 @@ branch/detached 与 HEAD，dirty 现场不得清理。
 需求、目录范围、Task、分配、时间线、报告和已完成模型路由记录。不接受写入。成员的任务集合为多值，
 current_stage 来自 Task 状态与 Dispatch 的 role 匹配，不代表执行器在线。execution_liveness 仅
 UNKNOWN；planned_model 不代替 ModelRouteAttempt 的实际模型。读取不会初始化 store 或推进业务。
+联合父需求保存的 child checkpoint 是已提交观察值；child 后续恢复产生新 checkpoint 时，只要父引用
+仍是同一条已验证哈希链中的精确历史记录，看板就读取并展示最新 child。历史记录缺失、被替换、超前
+或属于其他交付时仍整体拒绝，不能把损坏数据降级为空列表。
 具体路径、错误矩阵、测试见 `.trellis/spec/core/live-team-view.md`。
 
 ## T044 显式恢复与串行执行

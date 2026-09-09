@@ -743,8 +743,29 @@ after completion. It uses a dedicated test database, never the production demand
 native checkpoint/intake, a read-only SQL runtime snapshot, sealed original artifacts and historical
 route run IDs. `read_approved_stages` is shared with pre-candidate recovery and retains the exact
 Product/approval/Design/Planner/dispatch provenance checks. Joint ownership is resolved through the
-existing derived-input and approval delegation checks. Source and upstream facts are checked again
-before return. The public reader wraps errors without exposing DSNs or provider output.
+existing derived-input and approval delegation checks. A blocked joint parent may legitimately retain
+an older child observation while the native child appends recovery checkpoints; that observation must
+be the exact record at its sequence in the validated native hash chain. Source and upstream facts are
+checked again before return. The public reader wraps errors without exposing DSNs or provider output.
+
+The shared ancestry predicates are:
+
+```python
+checkpoint_is_ancestor(
+    history: tuple[ProjectDeliveryCheckpoint, ...],
+    checkpoint: ProjectDeliveryCheckpoint,
+) -> bool
+
+checkpoint_sha256_is_ancestor(
+    history: tuple[ProjectDeliveryCheckpoint, ...],
+    checkpoint_sha256: str,
+) -> bool
+```
+
+Callers must load a fully validated, delivery-scoped history and confirm its final record is the
+current checkpoint before using either predicate. The object predicate is required when the caller
+has the historical checkpoint body; the digest predicate is only for sealed artifacts that bind the
+checkpoint digest.
 
 Legacy QA failure events may reference Task.base_ref; accept that or the exact candidate, but no
 third revision. Candidate identity must come from candidate_ready plus matching sealed implementation,
@@ -853,8 +874,11 @@ CandidateVerificationEntry.execute(path) -> CandidateVerificationCompletion
 - Every run ID pinned before proposal remains present. Its removal is source drift.
 - A run ID added after proposal is current only when an invocation for that exact plan and role was
   durably published before the provider call. An unrelated run remains source drift.
-- Candidate, Task revision/digest, artifact lineage, checkpoint, dispatch, stage chain, parent and
-  policy comparisons remain exact; the append-only exception applies only to `prior_run_ids`.
+- Candidate, Task revision/digest, artifact lineage, dispatch, stage chain, parent and policy
+  comparisons remain exact. `prior_run_ids` may add only runs admitted by this plan. The native
+  Delivery checkpoint may advance only when the plan-bound checkpoint is still an exact ancestor in
+  the validated hash chain and all pinned candidate inputs above remain unchanged; a digest that is
+  absent, replaced or from another delivery is drift.
 - A sealed completion may replay without another provider call. An invocation without a sealed
   completion has consumed that plan's at-most-once role slot and `verify-run` must stop before SQL
   allocation/worktree/provider effects with the run ID and successor-plan instruction.
@@ -871,9 +895,10 @@ CandidateVerificationEntry.execute(path) -> CandidateVerificationCompletion
 |---|---|
 | Exact approved inputs, no invocation | Current; first QA may be admitted |
 | Approved history plus this plan's admitted QA/Reviewer run | Current; continue/complete |
+| Native Delivery appended bookkeeping checkpoints; pinned candidate inputs unchanged | Current |
 | Invocation exists but no sealed completion | Refuse same plan before provider; propose successor |
 | Historical run removed or foreign run added | `verification source changed after proposal` |
-| Candidate/Task/artifact/checkpoint/policy changed | Existing exact drift rejection |
+| Candidate/Task/artifact/policy changed or bound checkpoint not in current chain | Exact drift rejection |
 
 #### Good / Base / Bad Cases
 

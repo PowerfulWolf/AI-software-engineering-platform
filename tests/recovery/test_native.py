@@ -2,6 +2,7 @@
 
 import os
 from collections.abc import Mapping
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,10 @@ from ai_software_engineer.multi_directory.service import CreateRequirementProjec
 from ai_software_engineer.planning import FileExecutionPlanStore
 from ai_software_engineer.product import FileProductRecordStore
 from ai_software_engineer.project_manager.delivery import ApproveProductSpec, StartProjectDelivery
+from ai_software_engineer.project_manager.delivery_checkpoint import (
+    FileProjectDeliveryCheckpointStore,
+    ProjectDeliveryCheckpoint,
+)
 from ai_software_engineer.project_manager.production_host import OrganizationTeamHost
 from ai_software_engineer.project_manager.store import FileProjectPreparationStore
 from ai_software_engineer.recovery import RecoveryRejected, RecoveryScope
@@ -273,6 +278,28 @@ def test_joint_parent_cannot_be_omitted_from_source_lineage(tmp_path: Path) -> N
     assert observed.source.parent_checkpoint_sha256 == parent.checkpoint_sha256
     assert _snapshot(Path(config.platform_root)) == before
     assert len(models.calls) == 3
+    sidecar = (
+        Path(config.platform_root) / "companies" / config.company_id / "projects" / cp.project_id
+    )
+    checkpoints = FileProjectDeliveryCheckpointStore(sidecar / "state/project-deliveries")
+    values = cp.to_wire()
+    values.pop("checkpoint_sha256")
+    advanced = checkpoints.put(
+        ProjectDeliveryCheckpoint.create(
+            **{
+                **values,
+                "sequence": cp.sequence + 1,
+                "previous_checkpoint_sha256": cp.checkpoint_sha256,
+                "checkpointed_at": cp.checkpointed_at + timedelta(microseconds=1),
+            }
+        )
+    )
+    observed_after_advance = reader.inspect(
+        scope, failed_run_id=request.run_id, failed_context_id=request.context_manifest_id
+    )
+    assert observed_after_advance.source.checkpoint_sha256 == advanced.checkpoint_sha256
+    assert observed_after_advance.source.parent_delivery_id == parent.delivery_id
+    assert observed_after_advance.source.parent_checkpoint_sha256 == parent.checkpoint_sha256
     parent_path = (
         Path(config.platform_root)
         / "companies"

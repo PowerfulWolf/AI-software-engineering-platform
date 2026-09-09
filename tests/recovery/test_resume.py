@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -33,7 +34,11 @@ from ai_software_engineer.project_manager.delivery import (
     ResumeProjectDelivery,
     StartProjectDelivery,
 )
-from ai_software_engineer.project_manager.delivery_checkpoint import DeliveryStage
+from ai_software_engineer.project_manager.delivery_checkpoint import (
+    DeliveryStage,
+    FileProjectDeliveryCheckpointStore,
+    ProjectDeliveryCheckpoint,
+)
 from ai_software_engineer.project_manager.production_delivery import (
     DeliveryRouteAdapterFactory,
 )
@@ -76,7 +81,7 @@ class _ResumeAdapter(AgentAdapter):
             self._owner.source_task_id = request.task_id
         if request.role is AgentRole.QA and request.task_id == self._owner.source_task_id:
             self._owner.source_qa_calls += 1
-            if self._owner.source_qa_calls <= 4:
+            if self._owner.source_qa_calls <= self._owner.transient_qa_failures:
                 return AgentResult(
                     run_id=request.run_id,
                     task_id=request.task_id,
@@ -94,23 +99,24 @@ class _ResumeAdapter(AgentAdapter):
             result = self._delegate.run(request)
             artifact = result.artifact
             assert isinstance(artifact, QaReportArtifact)
-            failed = artifact.content.criteria_results[0].model_copy(
-                update={"status": QaCriterionStatus.FAIL}
-            )
-            return result.model_copy(
-                update={
-                    "artifact": artifact.model_copy(
-                        update={
-                            "content": artifact.content.model_copy(
-                                update={
-                                    "status": QaReportStatus.FAIL,
-                                    "criteria_results": (failed,),
-                                }
-                            )
-                        }
-                    )
-                }
-            )
+            if self._owner.verification_fails:
+                failed = artifact.content.criteria_results[0].model_copy(
+                    update={"status": QaCriterionStatus.FAIL}
+                )
+                return result.model_copy(
+                    update={
+                        "artifact": artifact.model_copy(
+                            update={
+                                "content": artifact.content.model_copy(
+                                    update={
+                                        "status": QaReportStatus.FAIL,
+                                        "criteria_results": (failed,),
+                                    }
+                                )
+                            }
+                        )
+                    }
+                )
         result = self._delegate.run(request)
         if request.role is AgentRole.CODER and request.task_id.startswith("task_continue_"):
             artifact = result.artifact
@@ -133,10 +139,12 @@ class _ResumeAdapter(AgentAdapter):
 
 
 class _ResumeFactory(DeliveryRouteAdapterFactory):
-    def __init__(self) -> None:
+    def __init__(self, *, transient_qa_failures: int = 4, verification_fails: bool = True) -> None:
         self.requests: list[AgentRequest] = []
         self.source_task_id: str | None = None
         self.source_qa_calls = 0
+        self.transient_qa_failures = transient_qa_failures
+        self.verification_fails = verification_fails
 
     def create(
         self,
@@ -193,6 +201,32 @@ class _SeededInterruptedRecoveryFactory(DeliveryRouteAdapterFactory):
     ) -> AgentAdapter:
         del route, definition, context_resolver, config, environment
         return _SeededInterruptedRecoveryAdapter(self._seed, binding.worktree.path)
+
+
+def _append_equivalent_delivery_checkpoint(
+    config: ProductionConfig, checkpoint: ProjectDeliveryCheckpoint
+) -> ProjectDeliveryCheckpoint:
+    root = (
+        Path(config.platform_root)
+        / "companies"
+        / config.company_id
+        / "projects"
+        / checkpoint.project_id
+        / "state/project-deliveries"
+    )
+    store = FileProjectDeliveryCheckpointStore(root)
+    values = checkpoint.to_wire()
+    values.pop("checkpoint_sha256")
+    return store.put(
+        ProjectDeliveryCheckpoint.create(
+            **{
+                **values,
+                "sequence": checkpoint.sequence + 1,
+                "previous_checkpoint_sha256": checkpoint.checkpoint_sha256,
+                "checkpointed_at": checkpoint.checkpointed_at + timedelta(microseconds=1),
+            }
+        )
+    )
 
 
 @pytest.mark.mysql
@@ -385,6 +419,8 @@ def test_resume_verifies_failed_candidate_and_delivers_remediation(
     assert successor.verification_plan_sha256 is not None
     assert successor.verification_plan_sha256 != proposed.verification_plan_sha256
     assert len(routes.requests) == calls_after_uncertain_result
+    advanced = _append_equivalent_delivery_checkpoint(config, blocked)
+    assert entry.status(blocked.delivery_id).checkpoint == advanced
 
     finish_continuation = entry.finish_continuation
 
@@ -444,3 +480,66 @@ def test_resume_verifies_failed_candidate_and_delivers_remediation(
     assert isinstance(replay, DeliveryResumeResult)
     assert replay.checkpoint == delivered.checkpoint
     assert len(routes.requests) == call_count
+
+
+@pytest.mark.mysql
+def test_resume_accepts_verified_candidate_after_delivery_checkpoint_append(
+    tmp_path: Path,
+    mysql_dsn: str,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "hello.txt").write_text("hello\n", encoding="utf-8")
+    _git("init", "-b", "main", cwd=project)
+    _git("add", "hello.txt", cwd=project)
+    _git("commit", "-m", "initial", cwd=project)
+    config = ProductionConfig(
+        platform_root=str(tmp_path / "platform"),
+        live_model_execution=True,
+        model_routes=(
+            ProviderRouteConfig(
+                provider="codex",
+                model="gpt-5.6-terra",
+                kind=ModelProviderKind.CODEX_CLI,
+            ),
+        ),
+    )
+    environment = {"ASE_MYSQL_DSN": mysql_dsn, "PATH": os.environ.get("PATH", "")}
+    routes = _ResumeFactory(transient_qa_failures=3, verification_fails=False)
+    host = OrganizationTeamHost(
+        config=config,
+        environment=environment,
+        structured_clients=_ScriptedClientFactory(),
+        delivery_route_adapters=routes,
+    )
+    entry = host.project_entry()
+    started = entry.start(
+        StartProjectDelivery(project_root=str(project), requirement="Change the greeting.")
+    )
+    blocked = entry.approve(
+        ApproveProductSpec(
+            delivery_id=started.checkpoint.delivery_id,
+            expected_checkpoint_sha256=started.checkpoint.checkpoint_sha256,
+            approval_reference="resume-verified-prefix",
+        )
+    ).checkpoint
+    assert blocked.stage is DeliveryStage.BLOCKED
+    proposed = host.resume_delivery(ResumeProjectDelivery(delivery_id=blocked.delivery_id))
+    assert isinstance(proposed, DeliveryResumeResult)
+    assert proposed.outcome is DeliveryResumeOutcome.VERIFICATION_APPROVAL_REQUIRED
+    assert proposed.verification_plan_sha256 is not None
+    advanced = _append_equivalent_delivery_checkpoint(config, blocked)
+
+    verified = host.resume_delivery(
+        ResumeProjectDelivery(
+            delivery_id=blocked.delivery_id,
+            approved_plan_sha256=proposed.verification_plan_sha256,
+            approval_reference="resume-verified-prefix-approval",
+        )
+    )
+
+    assert isinstance(verified, DeliveryResumeResult)
+    assert verified.outcome is DeliveryResumeOutcome.VERIFIED
+    assert verified.checkpoint.stage is DeliveryStage.DONE
+    assert verified.checkpoint.previous_checkpoint_sha256 == advanced.checkpoint_sha256
+    assert entry.status(blocked.delivery_id).checkpoint == verified.checkpoint

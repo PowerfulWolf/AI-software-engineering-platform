@@ -21,6 +21,10 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
   rollback/close every connection on success and failure.
 - Discover only configured company; validate manifests, chain, intake, dispatch digest and normalized
   immutable Task identity. Reuse RunProjectionBuilder event validation.
+- A joint parent's child checkpoint is a committed observation, not a mutable latest pointer. When
+  the native child has advanced, accept the parent reference only when it is the exact record at its
+  sequence in the same fully validated native hash chain. Missing, replaced, future or cross-delivery
+  references reject the whole snapshot; the Task view uses the latest native checkpoint.
 - Match in-flight children with DerivedStageInputs + existing delivery identity, never titles/prose.
 - Capture file prefixes before SQL snapshot; event-linked artifacts support gate evidence. Completed
   model-route records can precede state transitions but cannot become verdict authority.
@@ -48,6 +52,8 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
 | Missing company / bad digest / path / unavailable DB | TeamReadError / HTTP 503, no init |
 | Prepared empty company | honest empty data; no DB/model needed without native deliveries |
 | Running child before parent publication | visible via deterministic identity |
+| Parent references an exact historical child; native child advanced | latest child remains visible |
+| Parent child record is absent/replaced or ahead of native history | reject snapshot |
 | Task/dispatch/event binding drift | reject snapshot, never hide corrupted records |
 | Terminal Task | history, no current-stage assignment |
 | Orchestrator plan artifact/run | Run/timeline 保留；不创建虚假组织成员，不抛角色转换异常 |

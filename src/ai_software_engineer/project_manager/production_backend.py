@@ -101,6 +101,7 @@ from ai_software_engineer.project_manager.delivery_checkpoint import (
     DeliveryFailureCode,
     FileProjectDeliveryCheckpointStore,
     ProjectDeliveryCheckpoint,
+    checkpoint_sha256_is_ancestor,
 )
 from ai_software_engineer.project_manager.dispatch import (
     CommitDispatchRequest,
@@ -592,11 +593,16 @@ class ProductionProjectDeliveryBackend:
                     facts.workspace.root / "state/project-deliveries",
                     read_only=True,
                 )
-                source = journal.get(checkpoint.delivery_id, checkpoint.sequence - 1)
+                history = journal.list(checkpoint.delivery_id)
+                if len(history) < 2 or history[-1] != checkpoint:
+                    raise ValueError("accepted candidate verification history drifted")
+                source = history[-2]
                 if (
                     not completion.verified
                     or completion.completion_sha256 != checkpoint.verification_completion_sha256
-                    or verification_plan.native_checkpoint_sha256 != source.checkpoint_sha256
+                    or not checkpoint_sha256_is_ancestor(
+                        history[:-1], verification_plan.native_checkpoint_sha256
+                    )
                     or checkpoint.previous_checkpoint_sha256 != source.checkpoint_sha256
                     or verification_plan.inputs.task_id != checkpoint.task_id
                     or verification_plan.inputs.candidate_revision != checkpoint.candidate_revision
