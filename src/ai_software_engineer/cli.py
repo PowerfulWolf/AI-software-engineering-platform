@@ -49,7 +49,15 @@ from ai_software_engineer.project_manager.entrypoint import (
     project_entry,
     requirement_entry,
 )
-from ai_software_engineer.recovery.cli import app as recovery_app
+from ai_software_engineer.recovery.cli import (
+    app as recovery_app,
+)
+from ai_software_engineer.recovery.cli import (
+    verify_approve,
+    verify_inspect,
+    verify_propose,
+    verify_run,
+)
 from ai_software_engineer.runtime import (
     RuntimeConfig,
     RuntimeConfigurationError,
@@ -82,6 +90,10 @@ app.add_typer(handoff_app, name="handoff")
 app.add_typer(project_app, name="project")
 app.add_typer(request_app, name="request")
 app.add_typer(recovery_app, name="recovery")
+app.command("verify-propose")(verify_propose)
+app.command("verify-inspect")(verify_inspect)
+app.command("verify-approve")(verify_approve)
+app.command("verify-run")(verify_run)
 team_app = typer.Typer(
     help="Observe the real team without modifying deliveries.", no_args_is_help=True
 )

@@ -16,6 +16,7 @@ Archive 是组织记忆的一部分，不依赖任何单个 Agent 的会话。�
 
 | 日期 | 基线 | 范围 | 记录 |
 |---|---|---|---|
+| 2026-09-09 | 本记录所在提交 | 已有 candidate 的独立 QA/Reviewer 复核入口；保留原失败历史 | [Candidate verification recovery](2026-09-09-candidate-verification-recovery.md) |
 | 2026-09-08 | 本记录所在提交 | T044 D3；显式 Coder 补丁重应用，真实交付仍待验证 | [T044 冲突恢复](2026-09-08-t044-coder-reapply.md) |
 | 2026-09-01 | `3ca68b4` | Bootstrap 至 T017；M0–M4 完成，M5 启动 | [v0.1 Foundation：T001–T017](2026-09-01-v0.1-foundation-t001-t017.md) |
 | 2026-09-01 | `400ac04` | T018；组织 Workforce foundation，M5 组织层启动 | [T018 Organization Workforce](2026-09-01-t018-organization-workforce.md) |

@@ -124,6 +124,9 @@ Team Host 固定使用 MySQL。
 
 ## 显式接手失败 Coder 的保留修改
 
+若 Coder 已生成候选提交，下面的命令不适用；请使用下一节的 `verify-*` 命令。不要重置终态或
+重新运行 Coder 来代替候选复核，原候选和失败历史必须保留。
+
 仅用于已停止、尚未产生 candidate 的失败 Coder。先保存现场；不要 reset、stash 或修改旧终态。
 原方案必须仍适用，目标项目需处于干净的、已包含平台修复的基线。
 
@@ -160,3 +163,25 @@ ase recovery propose --project /absolute/project --delivery delivery_ID \
 调用，重复 `run` 会拒绝并要求检查持久化记录，避免在结果不明时重复消耗模型额度。
 若在 seed 写入与 receipt 发布之间中断，保留新旧现场并拒绝盲目重放。旧父/子需求 checkpoint
 仍保持原记录；本命令不自动关联联合验收、不 merge/push/deploy，也不重启已失败的新恢复 Task。
+
+## 显式复核已有 candidate
+
+用于原 Coder 已完成 candidate commit，但 QA/Reviewer 因平台故障失败或中断的终态交付：
+
+```bash
+ase verify-propose --project /absolute/project --delivery delivery_child_ID
+ase verify-inspect --plan /absolute/sidecar/state/candidate-verification-delivery_child_ID/verification-plan-SHA.json
+ase verify-approve --plan /absolute/sidecar/state/candidate-verification-delivery_child_ID/verification-plan-SHA.json \
+  --confirm FULL_PLAN_SHA --reference human-approval-reference
+ase verify-run --plan /absolute/sidecar/state/candidate-verification-delivery_child_ID/verification-plan-SHA.json
+```
+
+`verify-propose` 从原生 Task/event/dispatch/artifact 和联合父需求读取当前事实，固定原 candidate、
+QA/Reviewer Agent、模型、权限及独立验证 Task；`verify-inspect` 纯只读。前三步不调用模型。
+`verify-run` 只调用 QA，再在 QA PASS 后调用 Reviewer；它使用新的 Assignment/Lease/worktree，
+但 report 的 Task 和 candidate 仍是原始身份，不创建假 Coder、不重置原 Task、不发布 DONE 事件。
+
+同一计划的每个角色在 provider 调用前先写入不可变 invocation。进程在调用后丢失结果时，该角色
+不能自动重跑；先执行 `verify-inspect`。QA FAIL 或 Review REJECT 返回退出码 3，安全拒绝或配置问题
+返回 2，只有 QA PASS + Review APPROVE 返回 0 和 `verified=true`。命令不 merge/push/deploy；计划中
+绑定的 parent delivery/checkpoint 与 completion 共同保留需求关联，旧 checkpoint 仍保持历史真实。

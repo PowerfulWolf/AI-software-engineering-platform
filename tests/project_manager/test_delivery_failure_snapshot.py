@@ -2,6 +2,7 @@
 
 from datetime import timedelta
 from pathlib import Path
+from typing import Never
 
 import pytest
 
@@ -26,7 +27,7 @@ from tests.e2e.test_unified_project_entry import NOW, _copy_fixture, _OfflineBac
 class FailedRuntimeBackend(_OfflineBackend):
     wrong_identity = False
 
-    def run_delivery(self, checkpoint: ProjectDeliveryCheckpoint):
+    def run_delivery(self, checkpoint: ProjectDeliveryCheckpoint) -> Never:
         assert self.dispatch is not None
         task = self.dispatch.task.model_copy(
             update={
@@ -106,7 +107,7 @@ def test_production_backend_reads_actual_runtime_events(
         def __init__(self) -> None:
             self._dsn = str(tmp_path / "state.sqlite3")
 
-        def _run_delivery(self, checkpoint: ProjectDeliveryCheckpoint):
+        def _run_delivery(self, checkpoint: ProjectDeliveryCheckpoint) -> Never:
             raise RuntimeError("private provider details")
 
     monkeypatch.setattr(production_backend, "MySqlTaskRepository", SqliteTaskRepository)

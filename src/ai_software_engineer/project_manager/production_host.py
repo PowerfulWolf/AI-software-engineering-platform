@@ -42,6 +42,7 @@ from ai_software_engineer.work_queue.models import LeaseWorkerId
 
 if TYPE_CHECKING:
     from ai_software_engineer.recovery.entry import NativeRecoveryEntry
+    from ai_software_engineer.recovery.verification_entry import CandidateVerificationEntry
 
 
 class OrganizationTeamHost:
@@ -155,6 +156,16 @@ class OrganizationTeamHost:
         from ai_software_engineer.recovery.entry import NativeRecoveryEntry
 
         return NativeRecoveryEntry(self._config, self._environment, self._recovery_backend)
+
+    def verification_entry(self) -> CandidateVerificationEntry:
+        """Independent QA/Reviewer verification of a pinned candidate; never reruns Coder."""
+        from ai_software_engineer.recovery.verification_entry import CandidateVerificationEntry
+
+        return CandidateVerificationEntry(
+            self._config,
+            self._environment,
+            self._recovery_backend,
+        )
 
     @property
     def work_queue(self) -> MySqlPersistentWorkQueue:

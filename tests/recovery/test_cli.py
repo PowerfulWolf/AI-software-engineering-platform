@@ -14,6 +14,22 @@ from ai_software_engineer.recovery.store import FileRecoveryStore
 from tests.recovery.test_authorization import make_plan
 
 
+def test_candidate_verification_commands_are_top_level_and_annotated() -> None:
+    runner = CliRunner()
+    root = runner.invoke(app, ["--help"])
+    assert root.exit_code == 0
+    for command, words in (
+        ("verify-propose", ("candidate", "model")),
+        ("verify-inspect", ("Inspect", "model")),
+        ("verify-approve", ("approval", "candidate")),
+        ("verify-run", ("QA", "Reviewer")),
+    ):
+        assert command in root.output
+        result = runner.invoke(app, [command, "--help"])
+        assert result.exit_code == 0
+        assert all(word in result.output for word in words)
+
+
 def test_inspect_is_read_only_and_approval_needs_exact_confirmation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -14,6 +14,8 @@ from typing import TypeVar
 
 from pydantic import TypeAdapter
 
+from ai_software_engineer.domain.artifact import QaReportArtifact, ReviewReportArtifact
+from ai_software_engineer.domain.enums import AgentRole
 from ai_software_engineer.domain.project_delivery import StageSha256
 from ai_software_engineer.recovery.models import (
     RecoveryAuthorization,
@@ -29,6 +31,11 @@ from ai_software_engineer.recovery.records import (
     RecoverySeedRecord,
     RecoveryTaskRecord,
 )
+from ai_software_engineer.recovery.verification_records import (
+    CandidateVerificationCompletion,
+    CandidateVerificationInvocation,
+    CandidateVerificationPlan,
+)
 
 MAX_RECORD_BYTES = 8_000_000
 _Record = TypeVar(
@@ -39,6 +46,9 @@ _Record = TypeVar(
     RecoveryTaskRecord,
     RecoverySeedRecord,
     RecoveryInvocationRecord,
+    CandidateVerificationPlan,
+    CandidateVerificationInvocation,
+    CandidateVerificationCompletion,
 )
 
 
@@ -133,6 +143,147 @@ class FileRecoveryStore:
         plan.validate_integrity()
         self._validate_scope(plan)
         return self._put("plan", plan.plan_sha256, plan, RecoveryPlan)
+
+    def put_verification_plan(self, plan: CandidateVerificationPlan) -> CandidateVerificationPlan:
+        plan.validate_integrity()
+        if plan.scope != self._scope:
+            raise RecoveryRejected("verification plan scope mismatch")
+        return self._put("verification-plan", plan.plan_sha256, plan, CandidateVerificationPlan)
+
+    def get_verification_plan(self, plan_sha256: str) -> CandidateVerificationPlan:
+        plan = self._get("verification-plan", plan_sha256, CandidateVerificationPlan)
+        if plan.scope != self._scope or plan.plan_sha256 != plan_sha256:
+            raise RecoveryRejected("verification plan identity mismatch")
+        return plan
+
+    def put_verification_authorization(
+        self, record: RecoveryAuthorization
+    ) -> RecoveryAuthorization:
+        record.validate_integrity()
+        plan = self.get_verification_plan(record.command.plan_sha256)
+        if record.command.submitted_at < plan.created_at:
+            raise RecoveryRejected("verification approval predates plan")
+        return self._put(
+            "verification-authorization", plan.plan_sha256, record, RecoveryAuthorization
+        )
+
+    def get_verification_authorization(self, plan_sha256: str) -> RecoveryAuthorization:
+        plan = self.get_verification_plan(plan_sha256)
+        record = self._get("verification-authorization", plan_sha256, RecoveryAuthorization)
+        if (
+            record.command.plan_sha256 != plan_sha256
+            or record.command.submitted_at < plan.created_at
+        ):
+            raise RecoveryRejected("verification authorization identity mismatch")
+        return record
+
+    def get_verification_invocation(
+        self, plan_sha256: str, role: AgentRole
+    ) -> CandidateVerificationInvocation:
+        if role not in (AgentRole.QA, AgentRole.REVIEWER):
+            raise RecoveryRejected("only verifier invocation records are supported")
+        record = self._get(
+            f"verification-{role.value}", plan_sha256, CandidateVerificationInvocation
+        )
+        self._validate_verification_invocation(record)
+        if record.plan_sha256 != plan_sha256 or record.request.role is not role:
+            raise RecoveryRejected("verification invocation filename identity mismatch")
+        return record
+
+    def put_verification_invocation(
+        self, record: CandidateVerificationInvocation
+    ) -> CandidateVerificationInvocation:
+        self._validate_verification_invocation(record)
+        return self._put(
+            f"verification-{record.request.role.value}",
+            record.plan_sha256,
+            record,
+            CandidateVerificationInvocation,
+        )
+
+    def _validate_verification_invocation(self, record: CandidateVerificationInvocation) -> None:
+        record.validate_integrity()
+        plan = self.get_verification_plan(record.plan_sha256)
+        authorization = self.get_verification_authorization(record.plan_sha256)
+        definition = next(d for d in plan.definitions if d.role is record.request.role)
+        if (
+            not authorization.decision.approved
+            or record.authorization_sha256 != authorization.authorization_sha256
+            or record.admitted_at < authorization.decision.decided_at
+            or record.request.task_id != plan.inputs.task_id
+            or record.request.source_revision != plan.inputs.candidate_revision
+            or record.request.permissions != definition.permissions
+            or record.request.timeout_seconds != definition.timeout_seconds
+            or record.request.run_id in plan.inputs.prior_run_ids
+            or record.request.continuation_checkpoint_id is not None
+        ):
+            raise RecoveryRejected("verification invocation is outside the approved plan")
+        prefix = (plan.inputs.plan_id, plan.inputs.implementation_id)
+        if record.request.role is AgentRole.QA:
+            if (
+                record.request.input_artifact_ids != prefix
+                or record.request.expected_parent_artifact_ids != prefix[1:]
+            ):
+                raise RecoveryRejected("persisted QA invocation has invalid input lineage")
+        else:
+            qa = self.get_verification_invocation(plan.plan_sha256, AgentRole.QA)
+            if (
+                len(record.request.input_artifact_ids) != 3
+                or record.request.input_artifact_ids[:2] != prefix
+                or record.request.expected_parent_artifact_ids
+                != record.request.input_artifact_ids[2:]
+                or record.request.run_id == qa.request.run_id
+                or record.admitted_at < qa.admitted_at
+            ):
+                raise RecoveryRejected("persisted Reviewer invocation has invalid input lineage")
+
+    def put_verification_completion(
+        self, record: CandidateVerificationCompletion
+    ) -> CandidateVerificationCompletion:
+        self._validate_verification_completion(record)
+        return self._put(
+            "verification-completion", record.plan_sha256, record, CandidateVerificationCompletion
+        )
+
+    def get_verification_completion(self, plan_sha256: str) -> CandidateVerificationCompletion:
+        record = self._get("verification-completion", plan_sha256, CandidateVerificationCompletion)
+        if record.plan_sha256 != plan_sha256:
+            raise RecoveryRejected("verification completion identity mismatch")
+        self._validate_verification_completion(record)
+        return record
+
+    def _validate_verification_completion(self, record: CandidateVerificationCompletion) -> None:
+        record.validate_integrity()
+        plan = self.get_verification_plan(record.plan_sha256)
+        authorization = self.get_verification_authorization(record.plan_sha256)
+        if record.authorization_sha256 != authorization.authorization_sha256:
+            raise RecoveryRejected("completion authorization mismatch")
+        reports: list[tuple[AgentRole, QaReportArtifact | ReviewReportArtifact, str | None]] = [
+            (AgentRole.QA, record.qa, record.qa_invocation_sha256)
+        ]
+        if record.review is not None:
+            reports.append((AgentRole.REVIEWER, record.review, record.reviewer_invocation_sha256))
+        for role, report, invocation_sha in reports:
+            invocation = self.get_verification_invocation(plan.plan_sha256, role)
+            request = invocation.request
+            definition = next(d for d in plan.definitions if d.role is role)
+            if (
+                invocation.invocation_sha256 != invocation_sha
+                or record.completed_at < invocation.admitted_at
+                or report.task_id != plan.inputs.task_id
+                or report.source_revision != plan.inputs.candidate_revision
+                or report.producer.run_id != request.run_id
+                or report.producer.agent_id != definition.id
+                or report.producer.role is not role
+                or report.context_manifest_id != request.context_manifest_id
+                or report.parent_artifact_ids != request.expected_parent_artifact_ids
+                or report.supersedes is not None
+            ):
+                raise RecoveryRejected("completion report differs from admitted verification")
+        if record.review is not None and record.review.parent_artifact_ids != (
+            record.qa.artifact_id,
+        ):
+            raise RecoveryRejected("completion Review does not reference its QA")
 
     def get_plan(self, plan_sha256: str) -> RecoveryPlan:
         plan = self._get("plan", plan_sha256, RecoveryPlan)
@@ -270,7 +421,19 @@ class FileRecoveryStore:
             TypeAdapter(StageSha256).validate_python(identity)
         except ValueError as error:
             raise RecoveryRejected("invalid recovery record identity") from error
-        if category not in ("scope", "plan", "authorization", "task", "seed", "invocation"):
+        if category not in (
+            "scope",
+            "plan",
+            "authorization",
+            "task",
+            "seed",
+            "invocation",
+            "verification-plan",
+            "verification-authorization",
+            "verification-qa",
+            "verification-reviewer",
+            "verification-completion",
+        ):
             raise RecoveryRejected("invalid recovery record category")
         if category == "scope":
             return "scope.json"

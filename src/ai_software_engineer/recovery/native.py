@@ -137,59 +137,9 @@ class NativeRecoverySourceReader:
         ):
             raise ValueError("not a failed pre-candidate delivery")
         task, revision, dispatch = self._sql(cp)
-        product_store = FileProductRecordStore(root / "state/product", read_only=True)
-        design_store = FileDesignRecordStore(root / "state/design", read_only=True)
-        planner_store = FileExecutionPlanStore(root / "state/planning", read_only=True)
-        if cp.product_spec_id is None or cp.approval_id is None:
-            raise ValueError("missing approved product")
-        product = product_store.find_product_spec(cp.product_spec_id)
-        approval = product_store.find_approval(cp.approval_id)
-        if product is None or approval is None:
-            raise ValueError("missing native product approval")
-        design_run = design_store.get_run(_designer_run_id(cp.delivery_id))
-        design_cp = design_store.get_checkpoint(design_run.run_id)
-        design = design_run.technical_design
-        planner_run = planner_store.get_run(dispatch.planner_run_id)
-        planner_cp = planner_store.get_checkpoint(dispatch.planner_run_id)
-        plan = planner_store.get_execution_plan(dispatch.execution_plan_id)
-        ready = product_store.current_request_revision(dispatch.project_request_id)
-        if design is None or design_run.planning_authorization is None:
-            raise ValueError("missing completed design")
-        if (
-            design_store.get_design(design.id) != design
-            or design_cp.run_record_sha256 != design_run.run_record_sha256
-            or design_cp.technical_design_sha256 != design.technical_design_sha256
-            or design_cp.checkpoint_sha256 != dispatch.design_checkpoint_sha256
-            or planner_run.design_checkpoint_sha256 != design_cp.checkpoint_sha256
-            or planner_run.input_request_revision_sha256 != design_cp.request_revision_sha256
-            or planner_run.planning_authorization_sha256
-            != design_run.planning_authorization.authorization_sha256
-            or planner_run.run_record_sha256 != dispatch.planner_run_record_sha256
-            or planner_run.ready_request_revision != ready
-            or planner_run.execution_plan != plan
-            or planner_cp.run_record_sha256 != planner_run.run_record_sha256
-            or planner_cp.checkpoint_sha256 != dispatch.planner_checkpoint_sha256
-            or planner_cp.ready_request_revision_sha256 != ready.request_revision_sha256
-            or dispatch.ready_request_revision_sha256 != ready.request_revision_sha256
-            or dispatch.ready_request_revision != ready.revision
-        ):
-            raise ValueError("upstream commit chain mismatch")
-        preparation = _preparation(root, scope.project_id, ready.request.preparation_sha256)
-        validate_stage_chain(preparation, ready.request, product, approval, design, plan)
-        if (
-            preparation.project_root != scope.project_root
-            or preparation.project_workspace_root != str(root)
-            or preparation.organization_root
-            != str(Path(self._config.platform_root) / "organization")
-            or preparation.preparation_sha256 != cp.preparation_sha256
-            or product.product_spec_sha256 != cp.product_spec_sha256
-            or approval.approval_sha256 != cp.approval_sha256
-            or design.technical_design_sha256 != cp.technical_design_sha256
-            or plan.execution_plan_sha256 != cp.execution_plan_sha256
-            or cp.request_id != ready.request.id
-            or task.acceptance_criteria != product.acceptance_criteria
-        ):
-            raise ValueError("checkpoint stage references mismatch")
+        stages = read_approved_stages(self._config, root, scope, cp, task, dispatch)
+        preparation, product, approval = stages.preparation, stages.product, stages.approval
+        design, plan = stages.design, stages.plan
         parent_id, parent_sha = _parent(company, cp, approval)
         _reject_symlinks(root / "contexts" / f"{context_id}.json")
         # Bounded regular-file preflight prevents a FIFO/oversized Context read.
@@ -258,7 +208,7 @@ class NativeRecoverySourceReader:
         )
         if journal.current(scope.delivery_id) != cp or self._sql(cp) != (task, revision, dispatch):
             raise ValueError("source changed during inspection")
-        if product_store.current_request_revision(ready.request.id) != ready:
+        if read_approved_stages(self._config, root, scope, cp, task, dispatch) != stages:
             raise ValueError("approved request changed during inspection")
         if _parent(company, cp, approval) != (parent_id, parent_sha):
             raise ValueError("parent changed during inspection")
@@ -271,7 +221,7 @@ class NativeRecoverySourceReader:
             approval,
             design,
             plan,
-            ready.request,
+            stages.request,
             task,
         )
 
@@ -343,6 +293,82 @@ class NativeRecoverySourceReader:
         finally:
             connection.rollback()
             connection.close()
+
+
+@dataclass(frozen=True)
+class NativeApprovedStages:
+    preparation: ProjectPreparation
+    product: ProductSpec
+    approval: ProductSpecApproval
+    design: TechnicalDesign
+    plan: ExecutionPlan
+    request: ProjectRequest
+
+
+def read_approved_stages(
+    config: ProductionConfig,
+    root: Path,
+    scope: RecoveryScope,
+    cp: ProjectDeliveryCheckpoint,
+    task: Task,
+    dispatch: DispatchCommitRecord,
+) -> NativeApprovedStages:
+    """Shared native approval-chain validation; no prepare or Task mutation."""
+    product_store = FileProductRecordStore(root / "state/product", read_only=True)
+    design_store = FileDesignRecordStore(root / "state/design", read_only=True)
+    planner_store = FileExecutionPlanStore(root / "state/planning", read_only=True)
+    if cp.product_spec_id is None or cp.approval_id is None:
+        raise ValueError("missing approved product")
+    product = product_store.find_product_spec(cp.product_spec_id)
+    approval = product_store.find_approval(cp.approval_id)
+    if product is None or approval is None:
+        raise ValueError("missing native product approval")
+    design_run = design_store.get_run(_designer_run_id(cp.delivery_id))
+    design_cp = design_store.get_checkpoint(design_run.run_id)
+    design = design_run.technical_design
+    planner_run = planner_store.get_run(dispatch.planner_run_id)
+    planner_cp = planner_store.get_checkpoint(dispatch.planner_run_id)
+    plan = planner_store.get_execution_plan(dispatch.execution_plan_id)
+    ready = product_store.current_request_revision(dispatch.project_request_id)
+    if design is None or design_run.planning_authorization is None:
+        raise ValueError("missing completed design")
+    if (
+        design_store.get_design(design.id) != design
+        or design_cp.run_record_sha256 != design_run.run_record_sha256
+        or design_cp.technical_design_sha256 != design.technical_design_sha256
+        or design_cp.checkpoint_sha256 != dispatch.design_checkpoint_sha256
+        or planner_run.design_checkpoint_sha256 != design_cp.checkpoint_sha256
+        or planner_run.input_request_revision_sha256 != design_cp.request_revision_sha256
+        or planner_run.planning_authorization_sha256
+        != design_run.planning_authorization.authorization_sha256
+        or planner_run.run_record_sha256 != dispatch.planner_run_record_sha256
+        or planner_run.ready_request_revision != ready
+        or planner_run.execution_plan != plan
+        or planner_cp.run_record_sha256 != planner_run.run_record_sha256
+        or planner_cp.checkpoint_sha256 != dispatch.planner_checkpoint_sha256
+        or planner_cp.ready_request_revision_sha256 != ready.request_revision_sha256
+        or dispatch.ready_request_revision_sha256 != ready.request_revision_sha256
+        or dispatch.ready_request_revision != ready.revision
+    ):
+        raise ValueError("upstream commit chain mismatch")
+    preparation = _preparation(root, scope.project_id, ready.request.preparation_sha256)
+    validate_stage_chain(preparation, ready.request, product, approval, design, plan)
+    if (
+        preparation.project_root != scope.project_root
+        or preparation.project_workspace_root != str(root)
+        or preparation.organization_root != str(Path(config.platform_root) / "organization")
+        or preparation.preparation_sha256 != cp.preparation_sha256
+        or product.product_spec_sha256 != cp.product_spec_sha256
+        or approval.approval_sha256 != cp.approval_sha256
+        or design.technical_design_sha256 != cp.technical_design_sha256
+        or plan.execution_plan_sha256 != cp.execution_plan_sha256
+        or cp.request_id != ready.request.id
+        or task.acceptance_criteria != product.acceptance_criteria
+    ):
+        raise ValueError("checkpoint stage references mismatch")
+    if product_store.current_request_revision(ready.request.id) != ready:
+        raise ValueError("approved request changed during inspection")
+    return NativeApprovedStages(preparation, product, approval, design, plan, ready.request)
 
 
 def _preparation(root: Path, project_id: str, expected: str) -> ProjectPreparation:

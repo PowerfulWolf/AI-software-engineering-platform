@@ -1,0 +1,1456 @@
+{
+  "$defs": {
+    "AgentDefinition": {
+      "additionalProperties": false,
+      "description": "Resolved single-role run configuration; the organization identity is AgentProfile.",
+      "properties": {
+        "id": {
+          "pattern": "^agent_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/AgentRole"
+        },
+        "version": {
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        },
+        "model": {
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider"
+        },
+        "system_prompt_ref": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "System Prompt Ref"
+        },
+        "permissions": {
+          "$ref": "#/$defs/AgentPermissions"
+        },
+        "input_artifacts": {
+          "items": {
+            "$ref": "#/$defs/ArtifactKind"
+          },
+          "title": "Input Artifacts",
+          "type": "array"
+        },
+        "output_artifacts": {
+          "items": {
+            "$ref": "#/$defs/ArtifactKind"
+          },
+          "title": "Output Artifacts",
+          "type": "array"
+        },
+        "max_retries": {
+          "maximum": 5,
+          "minimum": 0,
+          "title": "Max Retries",
+          "type": "integer"
+        },
+        "timeout_seconds": {
+          "maximum": 3600,
+          "minimum": 1,
+          "title": "Timeout Seconds",
+          "type": "integer"
+        },
+        "token_budget": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Token Budget"
+        },
+        "metadata": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Metadata",
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "role",
+        "version",
+        "model",
+        "permissions",
+        "input_artifacts",
+        "output_artifacts",
+        "max_retries",
+        "timeout_seconds"
+      ],
+      "title": "AgentDefinition",
+      "type": "object"
+    },
+    "AgentPermissions": {
+      "additionalProperties": false,
+      "description": "The executable path, command, network, and state capabilities of an Agent.",
+      "properties": {
+        "read_paths": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Read Paths",
+          "type": "array"
+        },
+        "write_paths": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Write Paths",
+          "type": "array"
+        },
+        "commands": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Commands",
+          "type": "array"
+        },
+        "network": {
+          "$ref": "#/$defs/NetworkAccess"
+        },
+        "can_change_state": {
+          "default": false,
+          "title": "Can Change State",
+          "type": "boolean"
+        },
+        "can_merge": {
+          "default": false,
+          "title": "Can Merge",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "read_paths",
+        "write_paths",
+        "commands",
+        "network"
+      ],
+      "title": "AgentPermissions",
+      "type": "object"
+    },
+    "AgentProducer": {
+      "additionalProperties": false,
+      "description": "The Agent Run identity that produced an Artifact.",
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/AgentRole"
+        },
+        "agent_id": {
+          "minLength": 1,
+          "title": "Agent Id",
+          "type": "string"
+        },
+        "agent_version": {
+          "minLength": 1,
+          "title": "Agent Version",
+          "type": "string"
+        },
+        "run_id": {
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "agent_id",
+        "agent_version",
+        "run_id"
+      ],
+      "title": "AgentProducer",
+      "type": "object"
+    },
+    "AgentRequest": {
+      "additionalProperties": false,
+      "description": "Immutable input envelope supplied to one Agent adapter invocation.",
+      "properties": {
+        "run_id": {
+          "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/AgentRole"
+        },
+        "attempt": {
+          "maximum": 10,
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "context_manifest_id": {
+          "pattern": "^ctx_[a-f0-9]{64}$",
+          "title": "Context Manifest Id",
+          "type": "string"
+        },
+        "input_artifact_ids": {
+          "items": {
+            "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+            "type": "string"
+          },
+          "title": "Input Artifact Ids",
+          "type": "array"
+        },
+        "permissions": {
+          "$ref": "#/$defs/AgentPermissions"
+        },
+        "output_schema": {
+          "minLength": 1,
+          "title": "Output Schema",
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "maximum": 3600,
+          "minimum": 1,
+          "title": "Timeout Seconds",
+          "type": "integer"
+        },
+        "continuation_checkpoint_id": {
+          "anyOf": [
+            {
+              "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Continuation Checkpoint Id"
+        },
+        "continuation_changed_paths": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Continuation Changed Paths",
+          "type": "array"
+        },
+        "expected_parent_artifact_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Parent Artifact Ids"
+        }
+      },
+      "required": [
+        "run_id",
+        "task_id",
+        "role",
+        "attempt",
+        "source_revision",
+        "context_manifest_id",
+        "input_artifact_ids",
+        "permissions",
+        "output_schema",
+        "timeout_seconds"
+      ],
+      "title": "AgentRequest",
+      "type": "object"
+    },
+    "AgentRole": {
+      "description": "Delivery-runtime roles bound to Task artifacts and state transitions.",
+      "enum": [
+        "orchestrator",
+        "coder",
+        "qa",
+        "reviewer"
+      ],
+      "title": "AgentRole",
+      "type": "string"
+    },
+    "ArtifactIntegrity": {
+      "additionalProperties": false,
+      "description": "ArtifactStore-owned validation state and content digest.",
+      "properties": {
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "validated": {
+          "title": "Validated",
+          "type": "boolean"
+        },
+        "validated_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Validated At"
+        }
+      },
+      "required": [
+        "sha256",
+        "validated"
+      ],
+      "title": "ArtifactIntegrity",
+      "type": "object"
+    },
+    "ArtifactKind": {
+      "enum": [
+        "plan",
+        "coder-progress",
+        "implementation-report",
+        "qa-report",
+        "review-report"
+      ],
+      "title": "ArtifactKind",
+      "type": "string"
+    },
+    "CandidateVerificationCompletion": {
+      "additionalProperties": false,
+      "description": "Immutable verifier reports; never a replacement Task success event.",
+      "properties": {
+        "kind": {
+          "const": "candidate_verification_completion",
+          "default": "candidate_verification_completion",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "authorization_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Authorization Sha256",
+          "type": "string"
+        },
+        "qa_invocation_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Qa Invocation Sha256",
+          "type": "string"
+        },
+        "reviewer_invocation_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reviewer Invocation Sha256"
+        },
+        "qa": {
+          "$ref": "#/$defs/QaReportArtifact"
+        },
+        "review": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReviewReportArtifact"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "completed_at": {
+          "format": "date-time",
+          "title": "Completed At",
+          "type": "string"
+        },
+        "completion_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Completion Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan_sha256",
+        "authorization_sha256",
+        "qa_invocation_sha256",
+        "qa",
+        "completed_at",
+        "completion_sha256"
+      ],
+      "title": "CandidateVerificationCompletion",
+      "type": "object"
+    },
+    "CandidateVerificationInputs": {
+      "additionalProperties": false,
+      "description": "Exact original facts; a matching digest is not an authorization.",
+      "properties": {
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "task_revision": {
+          "minimum": 1,
+          "title": "Task Revision",
+          "type": "integer"
+        },
+        "task_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Task Sha256",
+          "type": "string"
+        },
+        "plan_id": {
+          "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Plan Id",
+          "type": "string"
+        },
+        "plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "implementation_id": {
+          "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Implementation Id",
+          "type": "string"
+        },
+        "implementation_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Implementation Sha256",
+          "type": "string"
+        },
+        "candidate_revision": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Candidate Revision",
+          "type": "string"
+        },
+        "prior_run_ids": {
+          "default": [],
+          "items": {
+            "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+            "type": "string"
+          },
+          "title": "Prior Run Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "task_id",
+        "task_revision",
+        "task_sha256",
+        "plan_id",
+        "plan_sha256",
+        "implementation_id",
+        "implementation_sha256",
+        "candidate_revision"
+      ],
+      "title": "CandidateVerificationInputs",
+      "type": "object"
+    },
+    "CandidateVerificationInvocation": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "candidate_verification_invocation",
+          "default": "candidate_verification_invocation",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "authorization_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Authorization Sha256",
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/AgentRequest"
+        },
+        "admitted_at": {
+          "format": "date-time",
+          "title": "Admitted At",
+          "type": "string"
+        },
+        "invocation_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Invocation Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan_sha256",
+        "authorization_sha256",
+        "request",
+        "admitted_at",
+        "invocation_sha256"
+      ],
+      "title": "CandidateVerificationInvocation",
+      "type": "object"
+    },
+    "CandidateVerificationPlan": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "candidate_verification_plan",
+          "default": "candidate_verification_plan",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/RecoveryScope"
+        },
+        "inputs": {
+          "$ref": "#/$defs/CandidateVerificationInputs"
+        },
+        "execution_task_id": {
+          "default": "task_candidate_verification",
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Execution Task Id",
+          "type": "string"
+        },
+        "native_checkpoint_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Native Checkpoint Sha256",
+          "type": "string"
+        },
+        "dispatch_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Dispatch Sha256",
+          "type": "string"
+        },
+        "approved_stage_chain_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Approved Stage Chain Sha256",
+          "type": "string"
+        },
+        "current_policy_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Current Policy Sha256",
+          "type": "string"
+        },
+        "parent_delivery_id": {
+          "anyOf": [
+            {
+              "pattern": "^delivery_[a-z0-9][a-z0-9_-]{2,95}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Delivery Id"
+        },
+        "parent_checkpoint_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Checkpoint Sha256"
+        },
+        "definitions": {
+          "items": {
+            "$ref": "#/$defs/AgentDefinition"
+          },
+          "title": "Definitions",
+          "type": "array"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "inputs",
+        "native_checkpoint_sha256",
+        "dispatch_sha256",
+        "approved_stage_chain_sha256",
+        "current_policy_sha256",
+        "definitions",
+        "created_at",
+        "plan_sha256"
+      ],
+      "title": "CandidateVerificationPlan",
+      "type": "object"
+    },
+    "Evidence": {
+      "additionalProperties": false,
+      "description": "A stable reference to independently inspectable proof.",
+      "properties": {
+        "evidence_id": {
+          "pattern": "^ev_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Evidence Id",
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/EvidenceType"
+        },
+        "uri": {
+          "minLength": 1,
+          "title": "Uri",
+          "type": "string"
+        },
+        "locator": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Locator"
+        },
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "required": {
+          "default": false,
+          "title": "Required",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "evidence_id",
+        "type",
+        "uri",
+        "description",
+        "sha256"
+      ],
+      "title": "Evidence",
+      "type": "object"
+    },
+    "EvidenceType": {
+      "enum": [
+        "test",
+        "command",
+        "diff",
+        "file",
+        "log",
+        "metric"
+      ],
+      "title": "EvidenceType",
+      "type": "string"
+    },
+    "Finding": {
+      "additionalProperties": false,
+      "description": "A severity-rated issue linked to one or more Evidence entries.",
+      "properties": {
+        "finding_id": {
+          "minLength": 1,
+          "title": "Finding Id",
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/FindingSeverity"
+        },
+        "code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Code"
+        },
+        "message": {
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "File"
+        },
+        "line": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Line"
+        },
+        "evidence_ids": {
+          "items": {
+            "pattern": "^ev_[a-z0-9][a-z0-9_-]{2,63}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "recommendation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Recommendation"
+        }
+      },
+      "required": [
+        "finding_id",
+        "severity",
+        "message",
+        "evidence_ids"
+      ],
+      "title": "Finding",
+      "type": "object"
+    },
+    "FindingSeverity": {
+      "enum": [
+        "INFO",
+        "MINOR",
+        "MAJOR",
+        "BLOCKER"
+      ],
+      "title": "FindingSeverity",
+      "type": "string"
+    },
+    "JsonValue": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "NetworkAccess": {
+      "enum": [
+        "none",
+        "model_endpoint_only",
+        "allowlist"
+      ],
+      "title": "NetworkAccess",
+      "type": "string"
+    },
+    "QaCriterionResult": {
+      "additionalProperties": false,
+      "properties": {
+        "criterion_id": {
+          "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Criterion Id",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/QaCriterionStatus"
+        },
+        "evidence_ids": {
+          "items": {
+            "pattern": "^ev_[a-z0-9][a-z0-9_-]{2,63}$",
+            "type": "string"
+          },
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Notes"
+        }
+      },
+      "required": [
+        "criterion_id",
+        "status",
+        "evidence_ids"
+      ],
+      "title": "QaCriterionResult",
+      "type": "object"
+    },
+    "QaCriterionStatus": {
+      "enum": [
+        "PASS",
+        "FAIL",
+        "NOT_TESTED"
+      ],
+      "title": "QaCriterionStatus",
+      "type": "string"
+    },
+    "QaReportArtifact": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "qa-report",
+          "default": "qa-report",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "pattern": "^v[0-9]+\\.[0-9]+$",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "producer": {
+          "$ref": "#/$defs/AgentProducer"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "context_manifest_id": {
+          "minLength": 1,
+          "title": "Context Manifest Id",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "parent_artifact_ids": {
+          "items": {
+            "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+            "type": "string"
+          },
+          "title": "Parent Artifact Ids",
+          "type": "array"
+        },
+        "supersedes": {
+          "anyOf": [
+            {
+              "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Supersedes"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "content": {
+          "$ref": "#/$defs/QaReportContent"
+        },
+        "integrity": {
+          "$ref": "#/$defs/ArtifactIntegrity"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "task_id",
+        "schema_version",
+        "producer",
+        "source_revision",
+        "context_manifest_id",
+        "created_at",
+        "parent_artifact_ids",
+        "evidence",
+        "content",
+        "integrity"
+      ],
+      "title": "QaReportArtifact",
+      "type": "object"
+    },
+    "QaReportContent": {
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/QaReportStatus"
+        },
+        "criteria_results": {
+          "items": {
+            "$ref": "#/$defs/QaCriterionResult"
+          },
+          "minItems": 1,
+          "title": "Criteria Results",
+          "type": "array"
+        },
+        "tests_run": {
+          "items": {
+            "$ref": "#/$defs/QaTestRun"
+          },
+          "title": "Tests Run",
+          "type": "array"
+        },
+        "findings": {
+          "items": {
+            "$ref": "#/$defs/Finding"
+          },
+          "title": "Findings",
+          "type": "array"
+        },
+        "environment": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Environment"
+        }
+      },
+      "required": [
+        "status",
+        "criteria_results",
+        "tests_run",
+        "findings"
+      ],
+      "title": "QaReportContent",
+      "type": "object"
+    },
+    "QaReportStatus": {
+      "enum": [
+        "PASS",
+        "FAIL"
+      ],
+      "title": "QaReportStatus",
+      "type": "string"
+    },
+    "QaTestRun": {
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "minLength": 1,
+          "title": "Command",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/QaTestStatus"
+        },
+        "evidence_id": {
+          "pattern": "^ev_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Evidence Id",
+          "type": "string"
+        },
+        "duration_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration Ms"
+        }
+      },
+      "required": [
+        "command",
+        "status",
+        "evidence_id"
+      ],
+      "title": "QaTestRun",
+      "type": "object"
+    },
+    "QaTestStatus": {
+      "enum": [
+        "PASS",
+        "FAIL",
+        "ERROR"
+      ],
+      "title": "QaTestStatus",
+      "type": "string"
+    },
+    "RecoveryApprovalCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "operation_id": {
+          "pattern": "^[a-z][a-z0-9_-]{2,127}$",
+          "title": "Operation Id",
+          "type": "string"
+        },
+        "plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "approval_reference": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Approval Reference",
+          "type": "string"
+        },
+        "submitted_at": {
+          "format": "date-time",
+          "title": "Submitted At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id",
+        "plan_sha256",
+        "approval_reference",
+        "submitted_at"
+      ],
+      "title": "RecoveryApprovalCommand",
+      "type": "object"
+    },
+    "RecoveryAuthorization": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "recovery_authorization",
+          "default": "recovery_authorization",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "command": {
+          "$ref": "#/$defs/RecoveryApprovalCommand"
+        },
+        "decision": {
+          "$ref": "#/$defs/VerifiedRecoveryDecision"
+        },
+        "authorization_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Authorization Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command",
+        "decision",
+        "authorization_sha256"
+      ],
+      "title": "RecoveryAuthorization",
+      "type": "object"
+    },
+    "RecoveryScope": {
+      "additionalProperties": false,
+      "properties": {
+        "company_id": {
+          "pattern": "^company_[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Company Id",
+          "type": "string"
+        },
+        "project_id": {
+          "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "delivery_id": {
+          "pattern": "^delivery_[a-z0-9][a-z0-9_-]{2,95}$",
+          "title": "Delivery Id",
+          "type": "string"
+        },
+        "project_root": {
+          "pattern": "^/[^\\x00-\\x1f]*$",
+          "title": "Project Root",
+          "type": "string"
+        }
+      },
+      "required": [
+        "company_id",
+        "project_id",
+        "delivery_id",
+        "project_root"
+      ],
+      "title": "RecoveryScope",
+      "type": "object"
+    },
+    "ReviewDimension": {
+      "enum": [
+        "correctness",
+        "acceptance",
+        "regression",
+        "security",
+        "maintainability",
+        "performance",
+        "\u5951\u7ea6\u4e00\u81f4\u6027"
+      ],
+      "title": "ReviewDimension",
+      "type": "string"
+    },
+    "ReviewReportArtifact": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "review-report",
+          "default": "review-report",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "pattern": "^v[0-9]+\\.[0-9]+$",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "producer": {
+          "$ref": "#/$defs/AgentProducer"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "context_manifest_id": {
+          "minLength": 1,
+          "title": "Context Manifest Id",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "parent_artifact_ids": {
+          "items": {
+            "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+            "type": "string"
+          },
+          "title": "Parent Artifact Ids",
+          "type": "array"
+        },
+        "supersedes": {
+          "anyOf": [
+            {
+              "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Supersedes"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "content": {
+          "$ref": "#/$defs/ReviewReportContent"
+        },
+        "integrity": {
+          "$ref": "#/$defs/ArtifactIntegrity"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "task_id",
+        "schema_version",
+        "producer",
+        "source_revision",
+        "context_manifest_id",
+        "created_at",
+        "parent_artifact_ids",
+        "evidence",
+        "content",
+        "integrity"
+      ],
+      "title": "ReviewReportArtifact",
+      "type": "object"
+    },
+    "ReviewReportContent": {
+      "additionalProperties": false,
+      "properties": {
+        "verdict": {
+          "$ref": "#/$defs/ReviewVerdict"
+        },
+        "findings": {
+          "items": {
+            "$ref": "#/$defs/Finding"
+          },
+          "title": "Findings",
+          "type": "array"
+        },
+        "checked_dimensions": {
+          "items": {
+            "$ref": "#/$defs/ReviewDimension"
+          },
+          "minItems": 1,
+          "title": "Checked Dimensions",
+          "type": "array"
+        },
+        "evidence": {
+          "items": {
+            "pattern": "^ev_[a-z0-9][a-z0-9_-]{2,63}$",
+            "type": "string"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Summary"
+        }
+      },
+      "required": [
+        "verdict",
+        "findings",
+        "checked_dimensions",
+        "evidence"
+      ],
+      "title": "ReviewReportContent",
+      "type": "object"
+    },
+    "ReviewVerdict": {
+      "enum": [
+        "APPROVE",
+        "REJECT"
+      ],
+      "title": "ReviewVerdict",
+      "type": "string"
+    },
+    "VerifiedRecoveryDecision": {
+      "additionalProperties": false,
+      "properties": {
+        "plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "approval_reference": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Approval Reference",
+          "type": "string"
+        },
+        "approved": {
+          "title": "Approved",
+          "type": "boolean"
+        },
+        "operator_id": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Operator Id",
+          "type": "string"
+        },
+        "rationale": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        },
+        "decided_at": {
+          "format": "date-time",
+          "title": "Decided At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan_sha256",
+        "approval_reference",
+        "approved",
+        "operator_id",
+        "rationale",
+        "decided_at"
+      ],
+      "title": "VerifiedRecoveryDecision",
+      "type": "object"
+    }
+  },
+  "discriminator": {
+    "mapping": {
+      "candidate_verification_completion": "#/$defs/CandidateVerificationCompletion",
+      "candidate_verification_invocation": "#/$defs/CandidateVerificationInvocation",
+      "candidate_verification_plan": "#/$defs/CandidateVerificationPlan",
+      "recovery_authorization": "#/$defs/RecoveryAuthorization"
+    },
+    "propertyName": "kind"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/CandidateVerificationPlan"
+    },
+    {
+      "$ref": "#/$defs/CandidateVerificationInvocation"
+    },
+    {
+      "$ref": "#/$defs/CandidateVerificationCompletion"
+    },
+    {
+      "$ref": "#/$defs/RecoveryAuthorization"
+    }
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/candidate-verification.schema.json"
+}

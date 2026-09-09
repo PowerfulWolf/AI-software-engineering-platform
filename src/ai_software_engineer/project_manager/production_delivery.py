@@ -31,7 +31,10 @@ from ai_software_engineer.config import (
 from ai_software_engineer.domain import AgentDefinition, AgentRole
 from ai_software_engineer.git import GitWorktreeManager
 from ai_software_engineer.orchestration import ExecutionPlanAgentAdapter
-from ai_software_engineer.project_manager.dispatch import DeliveryAllocation
+from ai_software_engineer.project_manager.dispatch import (
+    DeliveryAllocation,
+    VerificationReservation,
+)
 from ai_software_engineer.role_workspace import (
     DispatchRoleWorktreeCoordinator,
     RoleWorktreeBinding,
@@ -116,7 +119,7 @@ class DispatchDeliveryAgentAdapter:
     def __init__(
         self,
         *,
-        dispatch: DeliveryAllocation,
+        dispatch: DeliveryAllocation | VerificationReservation,
         definitions: Mapping[AgentRole, AgentDefinition],
         plan_adapter: ExecutionPlanAgentAdapter,
         config: ProductionConfig,
@@ -173,6 +176,8 @@ class DispatchDeliveryAgentAdapter:
 
     def _binding(self, request: AgentRequest) -> RoleWorktreeBinding:
         if request.role is AgentRole.CODER:
+            if isinstance(self._dispatch, VerificationReservation):
+                raise ProductionConfigError("candidate verification cannot invoke Coder")
             if self._coder is None:
                 self._coder = self._coordinator.open_coder(
                     self._dispatch,

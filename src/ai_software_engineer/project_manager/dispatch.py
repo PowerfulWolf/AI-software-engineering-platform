@@ -395,6 +395,38 @@ class RecoveryDispatchRecord(DomainModel):
 DeliveryAllocation = DispatchCommitRecord | RecoveryDispatchRecord
 
 
+class VerificationReservation(DomainModel):
+    """Verifier execution lifetime is independent of the original terminal Task."""
+
+    plan_sha256: DispatchSha256
+    project_id: ProjectId
+    source_task_id: TaskId
+    task_id: TaskId
+    workforce_snapshot_sha256: DispatchSha256
+    phases: Annotated[tuple[DispatchPhaseCommit, ...], Field(min_length=2, max_length=2)]
+    committed_at: AwareDatetime
+
+    def validate_integrity(self) -> None:
+        type(self).model_validate(self.to_wire())
+
+    @model_validator(mode="after")
+    def validate_reservation(self) -> Self:
+        if tuple(p.role for p in self.phases) != (AgentRole.QA, AgentRole.REVIEWER):
+            raise ValueError("verification reserves only QA and Reviewer")
+        if len({p.agent_id for p in self.phases}) != 2:
+            raise ValueError("verification Agents must be independent")
+        _require_unique((p.assignment.id for p in self.phases), "Assignment IDs")
+        _require_unique((p.lease.id for p in self.phases), "Lease IDs")
+        if any(
+            p.assignment.task_id != self.task_id or p.assignment.project_id != self.project_id
+            for p in self.phases
+        ):
+            raise ValueError("verification reservation scope mismatch")
+        if self.source_task_id == self.task_id:
+            raise ValueError("verification reservation must use an isolated execution identity")
+        return self
+
+
 class CommitDispatchRequest(DomainModel):
     """Exact current facts required to authorize one dispatch commit."""
 

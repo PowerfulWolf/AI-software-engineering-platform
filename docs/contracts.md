@@ -1,5 +1,10 @@
 # 角色、权限与 Artifact 契约
 
+候选复核恢复另有内部契约：`schemas/candidate-verification.schema.json` 定义绑定原候选的
+计划、审批和调用凭据。它保留原 Task/实现报告身份，只允许新 QA→Reviewer，不重置终态，
+不把复核成功直接当作联合交付 DONE。目前尚无生产命令；详见
+[恢复规范 E1](../.trellis/spec/core/delivery-recovery.md)。
+
 ## 1. 角色总览
 
 下表是已经进入 Task delivery runtime 的四个岗位，即 `AgentRole`。组织长期成员可声明的

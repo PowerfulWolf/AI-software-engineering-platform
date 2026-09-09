@@ -193,226 +193,182 @@ WorkItem 与发布下一角色 WorkItem 在同一事务中完成，重复的相�
 ## 项目结构
 
 ```text
-ai-software-engineer/
-├── README.md
-├── AGENTS.md                         # Codex 项目级 bootstrap 指令
-├── CONTEXT.md                        # 领域统一语言
-├── pyproject.toml                    # Python 包、依赖与质量工具配置
-├── src/ai_software_engineer/         # 控制平面 Python 包
-│   ├── cli.py                        # ase 命令入口与 composition root
-│   ├── domain/                       # Task、Agent、Workforce、Artifact 强类型契约
-│   ├── store/                        # MySQL 生产存储与 SQLite 兼容存储
-│   ├── artifacts/                    # 原子 JSON ArtifactStore 与 SHA-256
-│   ├── git/                          # role worktree 隔离与 path/command policy
-│   ├── context/                      # 确定、脱敏、预算受限的 Context Builder/Router
-│   ├── agents/                       # Codex/Responses/Fallback/Fake typed adapters
-│   ├── orchestration/                # 串行 runner、Context composition 与状态机
-│   ├── scheduling/                   # 纯 PortfolioScheduler 与 run-scoped ModelRouter
-│   ├── work_queue/                   # MySQL PersistentWorkQueue、Dispatcher 与 Lease 生命周期
-│   ├── runtime.py                    # RuntimeConfig、角色路由与 task run composition
-│   ├── runtime_workspace.py           # 组织/项目 workspace 绑定与 workforce 解析
-│   ├── project_manager/               # prepare、阶段授权、当前事实重算与原子 dispatch
-│   ├── multi_directory/               # 联合 scope、产品/方案/计划、原生投影和候选集验收
-│   ├── company_workspace.py           # 公司 sidecar、项目子模块、按需知识选择
-│   ├── config/                        # 无 secret 的 Production Team Host 配置
-│   ├── product/                       # Product context/adapter、确认循环、不可变事实与重放
-│   ├── design/                        # Designer context/adapter、TechnicalDesign 与恢复 checkpoint
-│   ├── planning/                      # Planner context/adapter、ExecutionPlan store 与只读 preview
-│   ├── projection/                    # 从 durable facts 重算只读 Task/Run/Agent/Lease
-│   ├── read_api.py                    # transport-neutral GET-only projection API
-│   ├── visualization/                 # 底层静态只读 dashboard renderer
-│   ├── team_view/                     # 真实数据团队工作台、只读 HTTP 服务和网页
-│   ├── project_profile.py            # 技术栈、VCS 与项目原生规则只读发现
-│   ├── spec_compiler.py              # 三层规范编译、冲突与人工 resolution
-│   ├── execution.py                  # worktree 内受控 argv/subprocess 执行端口
-│   ├── evidence/                     # 脱敏、带 SHA 的 command/diff/test/usage 证据
-│   ├── tools/                        # role/run 绑定的 typed tool protocol
-│   ├── role_workspace.py             # Git worktree + executor 生命周期组合
-│   ├── project_workspace.py           # 目标项目与外置 AI sidecar workspace 绑定
-│   ├── evaluation/                   # Evaluation events、metrics/ADR、handoff
-│   └── prompts/                      # 后续：版本化 role prompt 模板
-├── docs/
-│   ├── architecture.md               # 分层、边界和部署形态
-│   ├── tech-stack.md                 # 技术选型与取舍
-│   ├── state-machine.md              # 状态、事件与迁移守卫
-│   ├── contracts.md                  # 角色与 artifact 契约
-│   ├── prompt-protocol.md            # 可直接模板化的 role prompts
-│   ├── context-routing.md            # Context Builder/Router
-│   ├── git-worktree.md               # 隔离、分支与合并策略
-│   ├── orchestration.md              # 核心流程与伪代码
-│   ├── failure-routing.md            # 失败分类、重试与升级
-│   ├── evaluation.md                 # 指标与 Autonomous Delivery Rate
-│   ├── cli.md                        # CLI 使用说明
-│   ├── runtime.md                    # Runtime 配置与 task run
-│   ├── tool-protocol.md              # T024 typed tool 与角色隔离
-│   ├── target-project-e2e.md          # T025 跨语言目标项目验证
-│   ├── projection.md                  # T026 事件驱动只读 projection/read API
-│   ├── visualization-implementation.md # T027 dashboard renderer
-│   ├── milestones.md                 # 里程碑与第一批任务
-│   ├── archive/                      # 已完成阶段的事实、验证与提交记录
-│   └── decisions/                    # 已接受的架构决策
-├── schemas/
+AI-software-engineering-platform/
+├── README.md                         # 项目边界、架构与主使用入口
+├── AGENTS.md                         # Codex/Trellis 项目级开发约束
+├── CONTEXT.md                        # 领域术语与组织统一语言
+├── pyproject.toml                    # Python 包、CLI、依赖和质量门禁
+├── config/                           # 不含密钥的 Team Host 配置示例
+├── src/ai_software_engineer/
+│   ├── cli.py                        # `ase` 顶层命令
+│   ├── config/                       # ProductionConfig 与模型路由契约
+│   ├── domain/                       # Task、Agent、Artifact、Workforce 强类型模型
+│   ├── product/ design/ planning/    # Product、Designer、Planner 阶段及不可变记录
+│   ├── project_manager/              # prepare、阶段门禁、dispatch、Team Host
+│   ├── scheduling/ work_queue/       # Scheduler、ModelRouter、持久队列和 Lease
+│   ├── orchestration/ agents/        # 串行状态机、角色请求与模型适配器
+│   ├── context/ artifacts/ evidence/ # Context、Artifact、Evidence 的存储与校验
+│   ├── git/ role_workspace.py        # 分支/worktree、角色权限与受控命令执行
+│   ├── multi_directory/              # 多目录/多仓需求拆分和联合验收
+│   ├── recovery/                     # 失败 Coder 接手与既有 candidate 独立复核
+│   ├── store/                        # MySQL 生产事实；SQLite 底层兼容实现
+│   ├── projection/ team_view/        # 只读投影、HTTP API 和团队工作台
+│   ├── evaluation/                   # 事件重放、ADR 和 Handoff
+│   ├── tools/                        # role/run 绑定的 typed Skill 协议
+│   ├── company_workspace.py          # Company sidecar 与知识选择
+│   ├── project_workspace.py          # 项目源码和外置 sidecar 的绑定
+│   └── runtime_workspace.py          # Organization/Project/Runtime 组合
+├── schemas/                          # 所有公开/持久化契约的 JSON Schema
 │   ├── task.schema.json
-│   ├── agent.schema.json
 │   ├── artifact.schema.json
-│   ├── plan.schema.json
-│   ├── implementation-report.schema.json
-│   ├── qa-report.schema.json
-│   ├── review-report.schema.json
-│   ├── context.schema.json
-│   ├── state-event.schema.json
-│   ├── evaluation-event.schema.json
-│   ├── handoff-bundle.schema.json
-│   ├── runtime-config.schema.json
-│   ├── project-workspace.schema.json
-│   ├── workforce.schema.json
-│   ├── project-profile.schema.json
-│   ├── spec-conflict.schema.json
-│   ├── spec-resolution.schema.json
-│   ├── runtime-workspace-binding.schema.json
-│   ├── evidence.schema.json
-│   ├── run-evidence-manifest.schema.json
-│   ├── tool-request.schema.json
-│   ├── tool-result.schema.json
-│   ├── projection-timeline.schema.json
-│   ├── projection-task.schema.json
-│   ├── projection-run.schema.json
-│   ├── projection-agent.schema.json
-│   ├── projection-lease.schema.json
-│   ├── team-snapshot.schema.json
-│   ├── projection-snapshot.schema.json
-│   ├── product-agent-run.schema.json
-│   ├── product-context.schema.json
-│   ├── product-dialogue.schema.json
-│   ├── product-discovery-checkpoint.schema.json
-│   ├── designer-context.schema.json
-│   ├── designer-agent-run.schema.json
-│   ├── planner-context.schema.json
-│   ├── planner-agent-run.schema.json
-│   ├── planner-preview.schema.json
-│   └── dispatch-commit.schema.json
-├── .trellis/
-│   ├── README.md
-│   └── spec/core/
-│       ├── architecture.md
-│       ├── contracts.md
-│       └── python-runtime.md
-├── tests/
-│   ├── domain/                       # 单对象不变量和权限边界
-│   ├── context/                      # 路由、预算、脱敏和注入边界
-│   ├── agents/                       # Fake/real AgentAdapter 共用契约
-│   ├── orchestration/                # 串行交付闭环与状态 checkpoint
-│   ├── evaluation/                   # 事件重放、ADR 与 DONE/BLOCKED handoff
-│   ├── runtime/                      # RuntimeSession 与 fake adapter composition
-│   ├── scheduling/                   # capacity、priority、independence 与模型路由
-│   ├── project_profile/              # 跨语言发现、完整性与路径边界
-│   ├── spec_compiler/                # 冲突、resolution 与不可变记录
-│   ├── runtime_workspace/            # workspace/binding/allocation 组合契约
-│   ├── project_manager/              # baseline、prepare/replay、stage gate 与跨语言接入
-│   ├── product/                      # Product model/store/context/adapter/service 契约
-│   ├── execution/                    # 命令 allowlist、环境和 timeout 测试
-│   ├── role_workspace/               # role worktree 与 executor 组合测试
-│   ├── evidence/                     # evidence capture、脱敏、重放和完整性
-│   ├── tools/                        # typed tool protocol 和角色隔离
-│   ├── e2e/                          # 跨语言目标项目串行交付
-│   └── contracts/                    # Python model ↔ JSON Schema 一致性
-└── artifacts/runs/                   # 运行产物（默认 gitignored）
+│   ├── work-queue.schema.json
+│   ├── delivery-recovery.schema.json
+│   └── candidate-verification.schema.json
+├── tests/                            # 与 src 分层对应；含真实 Git/MySQL 和离线模型契约测试
+├── docs/
+│   ├── production-setup.md           # 完整部署与运维手册
+│   ├── architecture.md               # 架构和边界
+│   ├── cli.md                        # CLI 与恢复命令
+│   ├── archive/                      # 阶段成果和提交证据
+│   └── decisions/                    # 已接受架构决策
+└── .trellis/
+    ├── spec/                         # 组织在本项目沉淀的可执行开发规范
+    ├── tasks/                        # PRD、Design、Implement 等任务事实
+    └── workspace/                    # 开发会话记录；不是生产 sidecar
 ```
+
+仓库中的 `src/` 是平台控制平面代码；运行平台后产生的数据不会写回这里，也不会写入目标项目。
+`schemas/` 必须与 Python DomainModel 同步，`tests/` 覆盖对应边界，`.trellis/spec/` 记录以后所有
+开发 Agent 都必须遵守的工程知识。
 
 ## Workspace 分工
 
-平台把代码、项目运行事实和组织成员彻底分开，避免污染目标项目，也避免把 Agent 错误地绑定给
-某一个项目。
+平台运行涉及五类位置。它们必须保持分离，特别是 `<platform_root>` 不能位于任一目标 Git
+仓库内，也不能与目标仓库互相包含。
 
-以下 `Company` 是当前实现中的知识隔离容器名称。初次使用可以保留默认 `company_default`，
-不必先定义真实公司或业务团队；需要服务不同公司时再分开配置知识库，Agent 仍由组织统一拥有。
-
-| 位置 | 保存内容 | 谁拥有 |
+| 位置 | 典型路径 | 职责与规范 |
 |---|---|---|
-| 目标项目目录 | 业务代码、测试、构建文件、项目原生规范 | 原项目 |
-| Company sidecar | 公司公共知识、项目知识子模块、需求项目记录 | 当前公司 |
-| 公司内的项目子模块 | ProjectProfile、原生规范引用、架构知识，以及每仓 Task/Artifact/Evidence 等运行事实 | 当前公司的项目 |
-| Organization workspace | AgentProfile、ModelPolicy 与组织级分配契约；WorkQueue、跨项目绩效的组织归属与扩展位置 | AI 软件工程团队 |
+| 平台源码仓库 | `/path/to/AI-software-engineering-platform` | `ase` 的实现、Schema、测试和 Trellis 规范；只在开发平台本身时修改 |
+| 目标项目目录 | `/path/to/backend`、`/path/to/frontend` | 原项目源码、测试、构建配置和原生开发规范；必须是绝对路径、Git HEAD 已提交、开始时工作树干净；平台不在其中创建 `.ase` |
+| 平台数据根 | `<platform_root>`，例如 `/data/ase` 或 `$HOME/.local/share/ase` | 所有组织/公司 sidecar 和临时 worktree 的共同外置根；必须持久化、备份并限制访问权限 |
+| MySQL | `ASE_MYSQL_DSN` 指向的 MySQL 8.0 | Task、StateEvent、dispatch、WorkItem、Assignment、Lease 等并发权威事实；不能与文件 sidecar 二选一，二者都要保存 |
+| 配置与密钥 | `ASE_CONFIG` + 环境变量 | JSON 只保存路径、模型名和密钥变量名；DSN/API key 正文只放环境或 secret manager，不写入仓库/sidecar |
 
-每家公司只需一个外置 sidecar，项目作为内部子模块收纳，不复制源码：
-
-```text
-<platform_root>/companies/<company_id>/
-├── company.json
-├── knowledge/                       # 公司级共享知识
-├── projects/<project-id>/            # 项目知识与每仓运行事实
-│   ├── workspace.json
-│   └── profile/ knowledge/ state/ contexts/ artifacts/ evidence/ ...
-└── requests/                        # 需求项目的联合记录
-```
-
-目标项目仍是代码、测试和构建命令的默认 cwd；sidecar 只保存项目元数据、Assignment 和可审计
-事实。AgentProfile 不属于项目，组织级数据采用独立 workspace：
+一个实际 `<platform_root>` 的职责如下：
 
 ```text
-<organization-workspace>/
-├── organization.json
-├── agents/ model-policies/ work-items/
-└── leases/ metrics/
+<platform_root>/
+├── organization/                    # 团队本身：跨公司、跨项目长期存在
+│   ├── organization.json
+│   ├── agents/                       # AgentProfile：成员身份、能力、并发容量
+│   ├── model-policies/               # ModelPolicy：允许模型和路由策略
+│   ├── work-items/ leases/ metrics/  # 组织级文件契约/扩展位置
+├── companies/<company_id>/           # 一家公司/知识域一个 sidecar
+│   ├── company.json
+│   ├── knowledge/                    # 显式选择的公司公共知识
+│   ├── projects/<project_id>/        # 每个已识别 Git 项目的 sidecar 子模块
+│   │   ├── workspace.json            # 项目源码绝对路径与 sidecar 身份绑定
+│   │   ├── profile/                  # ProjectProfile：语言、构建、VCS 发现事实
+│   │   ├── knowledge/ policy/        # 项目知识、编译规范、Runtime binding
+│   │   ├── state/                    # 阶段 checkpoint、dispatch、恢复/复核计划
+│   │   ├── contexts/ artifacts/      # 各角色明确输入和结构化输出
+│   │   ├── evidence/ evaluations/    # 命令、测试、diff、模型使用和评估证据
+│   │   └── runs/ locks/ logs/        # 模型路由记录、互斥和诊断日志
+│   └── requests/<delivery_multi_id>/ # 多目录需求的产品/设计/计划/子交付/联合验收
+└── worktrees/<project_id>/           # Coder、QA、Reviewer 的隔离 Git checkout
 ```
 
-生产 Task、Run 级 WorkItem、Assignment、Lease 和生命周期事件的权威事实保存在 MySQL；组织目录
-保存 AgentProfile/ModelPolicy 等不可变身份与策略。T046 已提供可由 Team Host 组合的 Dispatcher
-tick，进程监督负责重复调用；现有 `ase request` 兼容入口尚未切换为后台逐角色 Worker。
+目录规则：
 
-项目原生规范会被索引和引用，不会被平台静默覆盖；规范冲突会记录并等待人工处理。
-公司知识按显式选择加载，并做脱敏与来源校验；不会自动加载其他公司或无关项目的资料。
-`requests/` 保存一份联合产品文档、批准记录、技术方案、执行计划、各仓候选和联合验收证据。
-同仓多个模块合并执行，但写入不能超出所选范围；参考仓库可以只读，不必产生代码改动。
+- `organization/agents` 中的成员由组织拥有，需求只创建 Assignment/Lease，不为每个项目复制 Agent。
+- `companies/<company_id>` 是知识隔离边界；换公司时切换 sidecar，公司内所有项目作为子模块收纳。
+- `projects/<project_id>` 不复制源码；ProjectProfile 和规范引用发生漂移时旧批准失效，冲突交给人工处理。
+- `requests/` 保存跨仓需求的一份联合事实链；每个子项目仍拥有自己的 Task、candidate 和验证报告。
+- `worktrees/` 是平台管理的执行现场，不是备份目录。不得手工清空正在运行或待恢复的 worktree；
+  干净现场由平台回收，失败/脏现场保留供诊断。
+- Candidate 分支和提交属于目标 Git 仓库；平台不自动 merge、push 或 deploy。
+- MySQL 与整个 `<platform_root>` 共同构成可恢复状态，备份、迁移或清理时必须成套处理。
 
 ## 推荐的 v0.1 运行形态
 
-- 单机 `ase` CLI + Python Team Host；PersistentWorkQueue/Dispatcher 可由进程管理器常驻监督，
-  当前 `ase request` 兼容入口仍随命令装配并在中断后显式 resume；
-- MySQL 8.0 保存生产 Task、StateEvent、Assignment、Lease 和 dispatch fence；
-- 外置文件系统保存 organization workspace、项目 sidecar、Context、Artifact 和 Evidence；
-- Git worktree 隔离 Coder、QA、Reviewer，目标项目主 checkout 保持不变；
-- 已登录 Codex CLI 使用 `gpt-5.5`，备用优先级为 DeepSeek → Qianwen（千问），需显式配置 Responses-compatible 路由；
-- SQLite 只保留给底层 Runtime、离线测试和兼容场景，不是正常项目接单的生产存储。
+v0.1 推荐先以一台可信的 macOS/Linux 主机运行，不必先部署 Kubernetes 或分布式服务：
+
+- 一个 Python 3.12 `ase` CLI/Team Host 进程负责接单、恢复和查看；命令退出后事实仍持久化，
+  当前正常交付中断后由操作者显式执行 `request resume`；
+- 一个独立 MySQL 8.0 实例保存事务和并发权威；本地可使用仓库提供的 Docker Compose，
+  正式环境使用独立用户、强密码和持久卷；
+- 一个位于所有源码仓库之外的持久 `<platform_root>` 保存 organization、Company sidecar、
+  Artifact、Evidence 和 worktree；macOS 可使用自定义绝对目录，Linux 可使用 `/data/ase`；
+- 目标仓库仍按自身语言和工具构建，平台只要求 Git、干净主 checkout、允许的本地构建/测试命令；
+- Codex CLI 路由推荐以当前账号可用的 `gpt-5.6-terra` 为主，路由顺序由配置决定；需要时显式配置
+  DeepSeek、Qwen 的 Responses-compatible endpoint 作为备用，不能把禁用或占位路由当成自动降级；
+- Coder、QA、Reviewer 使用同一 candidate commit 的独立 worktree，QA/Reviewer 不提交业务代码；
+- SQLite 仅用于底层兼容命令和离线测试，不作为 `ase request` 生产入口的数据库。
+
+PersistentWorkQueue 和 Dispatcher/Lease 组件已经存在；v0.1 日常入口仍以同步 `ase request` 命令为主，
+不应把“组件存在”理解成已提供无需进程监督的分布式后台团队。
 
 具体选择和理由见 [`docs/tech-stack.md`](docs/tech-stack.md)。
 
 ## 最新使用方法
 
-**第一次配置好环境，以后只需要：选目录 → 聊需求 → 确认 → 查看交付。**
-现在通过 CLI 操作需求，网页用于查看进度；下面的命令都在平台仓库目录执行。
+主流程只有四步：**配置一次 → 选择目录并创建需求 → 与 Product Agent 讨论并批准 → 查看候选交付**。
+以下命令均在平台源码仓库执行；输出是 JSON，后一步只需要保存 `delivery_id` 和最新
+`checkpoint_sha256`。
 
 ### 1. 首次配置（只做一次）
 
-准备 Python 3.12+、uv、Git、MySQL 8.0，以及已登录的 Codex CLI，然后安装依赖：
+准备 Python 3.12+、uv、Git、MySQL 8.0 和已登录的 Codex CLI：
 
 ```bash
 uv sync
+uv run ase --version
+codex login status
 ```
 
-按 [首次配置指南](docs/production-setup.md) 完成以下三项，已有 MySQL 容器可以直接使用：
+复制并修改配置：
 
-- 连接 MySQL：设置 `ASE_MYSQL_DSN`。
-- 配置数据目录：复制示例配置，将 `platform_root` 设为所有代码目录之外的绝对路径；公司字段可先保留默认值。
-- 启用模型：将 `live_model_execution` 设为 true，默认使用 GPT-5.5；备用顺序为 DeepSeek、千问，需另行配置启用。
+```bash
+mkdir -p "$HOME/.config/ai-software-engineer"
+cp config/production.example.json "$HOME/.config/ai-software-engineer/config.json"
+```
 
-配置默认读取 `~/.config/ai-software-engineer/config.json`；其他位置用 `ASE_CONFIG` 指定。
-新终端需设置相同的环境变量。密钥不要写入配置文件或提交到仓库。
+配置文件至少确认：
+
+```json
+{
+  "platform_root": "/absolute/path/outside-all-code-repositories/ase-data",
+  "company_id": "company_ai",
+  "company_name": "AI company",
+  "live_model_execution": true
+}
+```
+
+再为当前 shell 设置 MySQL DSN；配置放在其他位置时同时设置 `ASE_CONFIG`：
+
+```bash
+export ASE_MYSQL_DSN='mysql+pymysql://USER:PASSWORD@127.0.0.1:3307/DATABASE'
+export ASE_CONFIG='/absolute/path/to/production-config.json' # 使用默认配置路径时可省略
+```
+
+把配置中的第一个已启用 `model_routes` 改成当前实际可用模型（推荐 Codex CLI 的
+`gpt-5.6-terra`）。密钥和 DSN 正文只放环境变量。完整 MySQL、模型 fallback 和安全配置见
+[生产配置指南](docs/production-setup.md)。
 
 ### 2. 日常使用：创建、讨论、确认
 
-**① 选择本次需求涉及的代码目录。**只改一个项目就传一个目录；涉及多个项目就一起传入：
+**① 创建需求项目。**一个需求可以传一个目录，也可以同时传多个不相邻仓库/模块：
 
 ```bash
 uv run ase request create /absolute/path/to/project-a /absolute/path/to/project-b \
   --name "你的需求名称"
 ```
 
-目录可以不相邻，也可以是仓库内的模块；目标 Git 仓库需有已提交的 HEAD 和干净工作树。
-平台先准备项目、读取规范，成功后返回 `READY_FOR_DISCUSSION`，这一步不调用模型。
+平台会注册项目、建立外置 sidecar、发现 ProjectProfile 和项目规范。成功输出
+`stage=READY_FOR_DISCUSSION`；这一步不调用模型。若规范冲突或源码 HEAD 发生变化，先处理冲突，
+不要拿旧 checkpoint 强行继续。
 
-**② 告诉产品 Agent 要做什么。**把以下 `DELIVERY_ID` 和 `CHECKPOINT` 分别替换为输出中
-`checkpoint.delivery_id` 和 `checkpoint.checkpoint_sha256` 的值：
+**② 讨论需求。**将 `DELIVERY_ID` 和 `CHECKPOINT` 替换为上一步输出值：
 
 ```bash
 uv run ase request discuss DELIVERY_ID \
@@ -420,53 +376,79 @@ uv run ase request discuss DELIVERY_ID \
   --message "描述你要解决的问题、期望结果，以及已知的限制和验收要求"
 ```
 
-如果产品 Agent 提问，继续用 discuss 回答；每次使用**最新返回的 CHECKPOINT**。
-问题在 `checkpoint.dialogue`，产品文档在 `checkpoint.product_spec`。
+Product Agent 如有问题就继续执行 `discuss`；每次必须使用最新 checkpoint。输出中的
+`dialogue` 是澄清记录，`product_spec` 是待评审产品文档。
 
-**③ 确认产品文档，启动交付。**状态为 `WAITING_PRODUCT_APPROVAL` 时，
-阅读范围和验收标准；需要修改就继续 discuss，确认无误后：
+**③ 批准产品文档并启动交付。**只有看到 `WAITING_PRODUCT_APPROVAL` 且范围、验收标准正确时执行：
 
 ```bash
 uv run ase request approve DELIVERY_ID --checkpoint CHECKPOINT
 ```
 
-批准后会直接推进技术方案、执行计划、各仓 `Coder → QA → Reviewer` 和联合验收，
-并消耗模型额度，不需要再手工分配 Agent 或创建 Task。
+这一步开始消耗模型额度。平台继续生成 TechnicalDesign、ExecutionPlan，为每个仓库执行
+`Coder → QA → Reviewer`，最后做多仓联合验收。正常路径无需手工创建 Task、Agent 或 worktree。
 
 ### 3. 查看进度和拿到结果
 
-另开终端，进入平台仓库并使用同一配置和数据库环境变量：
+命令行查看当前 checkpoint：
+
+```bash
+uv run ase request status DELIVERY_ID
+```
+
+若平台进程意外退出且没有并发执行者，再继续 durable checkpoint：
+
+```bash
+uv run ase request resume DELIVERY_ID
+```
+
+另开一个使用同样 `ASE_CONFIG`/`ASE_MYSQL_DSN` 的终端可启动只读工作台：
 
 ```bash
 uv run ase team serve --port 8765
 ```
 
-打开 **[团队工作台](http://127.0.0.1:8765)**，每 5 秒自动刷新：
-可以看到每个 Agent 的任务与阶段、需求涉及的目录、阻塞原因、模型调用和 QA/Review 报告。
-网页只读，不能讨论或批准需求；任务阶段也不等于进程在线。详见 [工作台说明](docs/visualization.md)。
-
-也可以直接查看状态；确认原交付进程已退出后，才使用恢复命令：
-
-```bash
-uv run ase request status DELIVERY_ID
-uv run ase request resume DELIVERY_ID
-```
+打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)，查看 Agent 当前任务、涉及目录、阶段、
+模型调用、阻塞原因和 QA/Review 报告。页面只读；它显示 durable facts，不承诺后台进程在线。
 
 - **需要你回答或确认**：按 `checkpoint.next_action` 操作。
-- **中断或阻塞**：先看 next_action 和失败证据；平台不会后台自动继续，resume 也不会自动解决规范冲突。
+- **中断或阻塞**：先看 `next_action` 和失败证据；`resume` 不会掩盖规范冲突或失败 verdict。
 - **Coder 单次运行未完成**：平台保存 `coder-progress`，自动执行
-  `CONTINUE_REQUIRED → QUEUED → IMPLEMENTING` 并在 attempt 预算内继续；若平台进程在 checkpoint
-  后退出，使用 `resume` 从该 checkpoint 继续，不会把半成品交给 QA。
-- **DONE**：`checkpoint.children` 给出各仓候选提交，`checkpoint.integration` 给出联合验收结果。人工复核后，按原项目流程合并。
+  `CONTINUE_REQUIRED → QUEUED → IMPLEMENTING`；进程退出后用 `resume`，半成品不会进入 QA。
+- **DONE**：`children` 给出各仓 candidate commit，`integration` 给出联合验收；人工复核后按原项目流程合并。
 
 平台不会自动合并、推送或部署，也不会把候选代码自动切换到目标项目当前分支。
-更详细的配置、恢复与候选复核步骤见 [使用手册](docs/production-setup.md)。
 日常接单不需要 `ase task ...` 底层 Runtime，也不需要手工准备 sidecar、Agent 或 snapshot。
 
-若 Coder 因中断留下未提交修改，且任务已终态阻塞，不能直接 `resume` 或清理现场。
-平台提供单独的[显式恢复流程](docs/cli.md#显式接手失败-coder-的保留修改)：人类确认原方案、
-新基线和保留修改后，新 Task 接手并重新经过 QA/Reviewer。恢复结果通过
-`ase recovery inspect --plan PLAN_FILE --runtime` 查看；旧需求记录和看板不会被静默改成成功。
+### 4. 失败恢复：先判断有没有 candidate
+
+`request resume` 只继续正常 checkpoint。终态失败需要显式恢复，且分两种情况：
+
+**Coder 尚未产生 candidate，但 worktree 有保留修改**：使用
+[失败 Coder 接手流程](docs/cli.md#显式接手失败-coder-的保留修改)。它创建新 Task 接手修改，
+不会重写旧失败历史。
+
+**Coder 已经提交 candidate，只是 QA/Reviewer 阶段因平台故障中断**：不要重跑 Coder，使用四步候选复核：
+
+```bash
+# 1. 固定原 Task、candidate、artifact、当前 QA/Reviewer 分配；不调用模型
+uv run ase verify-propose --project /absolute/path/to/repository --delivery CHILD_DELIVERY_ID
+
+# 2. 查看计划、批准状态和已有结果；纯只读
+uv run ase verify-inspect --plan PLAN_FILE
+
+# 3. 人工确认输出中的 exact plan_sha256；仍不调用模型
+uv run ase verify-approve --plan PLAN_FILE --confirm PLAN_SHA256 \
+  --reference "human-approved-candidate-verification"
+
+# 4. 只运行独立 QA → Reviewer；不会运行 Coder，也不会改写原终态 Task
+uv run ase verify-run --plan PLAN_FILE
+```
+
+`verify-run` 使用独立的验证 Task/Assignment/Lease/worktree 身份，但报告仍绑定原 Task 和同一个
+candidate commit。QA FAIL 时不会调用 Reviewer；只有 QA PASS 且 Review APPROVE 才输出
+`verified=true`。重复或结果不确定的同角色调用会 fail closed，先用 `verify-inspect` 检查，不会偷偷重试。
+更详细的边界见 [CLI 手册](docs/cli.md) 与 [恢复规范](.trellis/spec/core/delivery-recovery.md)。
 
 ## 开发与验证
 
@@ -482,7 +464,7 @@ uv build --offline
 MySQL 集成测试需设置 `ASE_TEST_MYSQL_DSN`，指向专用测试数据库。测试使用脚本化模型验证契约，
 不代表真实模型已完成业务验收。
 
-## 当前进度（2026-09-08）
+## 当前进度（2026-09-09）
 
 | 阶段 | 阶段性成果 |
 |---|---|
@@ -496,6 +478,7 @@ MySQL 集成测试需设置 `ASE_TEST_MYSQL_DSN`，指向专用测试数据库�
 | M10 公司知识与联合交付 | 公司统一 sidecar、按需知识加载；先准备后讨论的需求项目入口；多仓独立交付、联合候选验收与中断恢复 |
 | M11 持续团队与候选提交 | 七个组织级长期成员；显式 CandidateCommit Skill；CoderProgress Artifact；可重启的有界 Coder 续跑循环 |
 | M12 持久工作队列 | MySQL Run 级 WorkItem、Planner-owned Dispatcher tick、原子 Assignment/Lease/ModelSelection、owner-fenced 心跳/完成/等待/重试/过期回收；`ase request` 逐角色 Worker 接线仍待完成 |
+| M13 候选复核恢复 | 对已有 Coder candidate 提供 `verify-propose / inspect / approve / run`；使用独立 QA/Reviewer allocation、Lease 和 worktree，保留原失败 Task 与联合需求历史，不自动 merge/push/deploy |
 
 ## 文档导航
 

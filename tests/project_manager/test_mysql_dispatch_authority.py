@@ -20,7 +20,9 @@ from ai_software_engineer.project_manager.dispatch import (
     DispatchCommitConflict,
     DispatchCommitRecord,
     DispatchPreviewStale,
+    DispatchWorkforceSnapshot,
     ProjectManagerDispatchService,
+    VerificationReservation,
 )
 from ai_software_engineer.scheduling import PortfolioScheduler
 from ai_software_engineer.store.mysql_repository import MySqlTaskRepository, open_mysql_connection
@@ -74,6 +76,75 @@ def test_terminal_tasks_release_capacity_without_erasing_dispatch(
     assert after.assignments == before.assignments
     assert reopened.get_commit(record.id) == record
 
+    def build_verification(current: DispatchWorkforceSnapshot) -> VerificationReservation:
+        phases = []
+        for index, phase in enumerate(record.phases[1:]):
+            assignment_id = f"assignment_verify_{index}"
+            lease_id = f"lease_verify_{index}"
+            phases.append(
+                phase.model_copy(
+                    update={
+                        "assignment": phase.assignment.model_copy(
+                            update={
+                                "id": assignment_id,
+                                "lease_id": lease_id,
+                                "task_id": "task_verify_fixture",
+                            }
+                        ),
+                        "lease": phase.lease.model_copy(
+                            update={
+                                "id": lease_id,
+                                "assignment_id": assignment_id,
+                                "task_id": "task_verify_fixture",
+                            }
+                        ),
+                    }
+                )
+            )
+        return VerificationReservation(
+            plan_sha256="a" * 64,
+            project_id=record.project_id,
+            source_task_id=record.task_id,
+            task_id="task_verify_fixture",
+            workforce_snapshot_sha256=current.snapshot_sha256,
+            phases=tuple(phases),
+            committed_at=record.committed_at,
+        )
+
+    def validate_current(reservation: VerificationReservation | None) -> None:
+        if reservation is not None:
+            assert reservation.source_task_id == record.task_id
+
+    def reserve() -> VerificationReservation:
+        return reopened.reserve_verification(
+            project_id=record.project_id,
+            source_task_id=record.task_id,
+            plan_sha256="a" * 64,
+            validate_current=validate_current,
+            build=build_verification,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first, replay = tuple(pool.map(lambda _: reserve(), range(2)))
+    assert first == replay
+    active = reopened.current_snapshot(project_id=record.project_id, task_id=record.task_id)
+    assert {lease.id for lease in active.active_leases} == {p.lease.id for p in first.phases}
+
+    def validate_completion(reservation: VerificationReservation, digest: str) -> None:
+        assert reservation == first and digest == "b" * 64
+
+    for _ in range(2):
+        reopened.complete_verification(
+            plan_sha256="a" * 64,
+            completion_sha256="b" * 64,
+            validate_completion=validate_completion,
+        )
+    released = reopened.current_snapshot(project_id=record.project_id, task_id=record.task_id)
+    assert not released.active_leases
+    assert released.assignments == active.assignments
+    with pytest.raises(DispatchAuthorityConflict, match="already completed"):
+        reserve()
+
 
 @pytest.fixture
 def mysql_dsn() -> str:
@@ -83,6 +154,9 @@ def mysql_dsn() -> str:
     with closing(open_mysql_connection(value)) as connection:
         try:
             with connection.cursor() as cursor:
+                cursor.execute("SHOW TABLES LIKE 'verification_reservations'")
+                if cursor.fetchone() is not None:
+                    cursor.execute("DELETE FROM verification_reservations")
                 cursor.execute("DELETE FROM dispatch_commits")
                 cursor.execute("DELETE FROM dispatch_workforce_snapshots")
                 # This module's fixture has a fixed Task ID; remove only its prior run.

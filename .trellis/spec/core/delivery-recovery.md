@@ -623,3 +623,168 @@ assert fresh_coder.permissions == plan.permissions
 manager.verify_capture(plan.capture.to_capture(), plan.permissions)
 assert fresh_coder.permissions == plan.effective_target_permissions
 ```
+
+## E1: Candidate verification primitives (not a production entry)
+
+### Scope / signatures
+
+`recovery/verification.py`, `verification_records.py`, `verification_admission.py` implement:
+
+```python
+CandidateVerificationRunner.verify_candidate(inputs) -> CandidateVerificationResult
+CandidateVerificationAdmission.propose(plan) -> CandidateVerificationPlan
+CandidateVerificationAdmission.approve(command, *, human) -> RecoveryAuthorization
+CandidateVerificationAdmission.validate_configuration(inputs, definitions) -> None
+CandidateVerificationAdmission.admit(inputs, request) -> None
+CandidateVerificationAdmission.complete(result) -> CandidateVerificationCompletion
+VerificationFacts.validate(plan) -> None
+```
+
+### Contracts
+
+Inputs pin Task ID/revision/digest, original plan/implementation IDs/digests, full candidate SHA
+and historical run IDs. This first increment accepts only terminal QA failures directly following
+`candidate_ready` with initial non-superseding implementation. It checks event continuity, artifact
+kind/Task/base/parents/candidate/criteria, fresh run IDs and historical producer independence.
+Task and events remain unchanged: no terminal reset, record_attempt, synthetic Coder or DONE event.
+The runner reuses SerialOrchestrator's role invocation guards, not run_task/_transition. Context
+honestly contains the original terminal Task; only QA then Reviewer run. Identity/criteria validation
+precedes sealing. FAIL/REJECT stops, errors propagate, no automatic retry/Coder loop.
+`CandidateVerificationResult.verified` is not a Handoff or joint completion authority.
+
+`schemas/candidate-verification.schema.json` defines plan/invocation/completion/authorization union.
+Plan binds scope, inputs, native checkpoint/dispatch/approved-stage/current-policy hashes, optional
+paired parent ID/hash, exact role definitions and creation time. Production must independently resolve
+these hashes through VerificationFacts; they do not establish origin. Definitions including model,
+permissions and timeout must match approval. Verifiers cannot merge/change Task state.
+
+FileRecoveryStore adds separate verification-plan/verification-authorization/verification-qa/
+verification-reviewer categories using existing private bounded no-follow/exclusive publication.
+Old categories and records are unchanged. Approval calls a trusted human verifier, rechecks facts,
+and preserves exact command replay. The local verifier authorizes candidate verification only.
+Admission locks scope, revalidates facts/approval/inputs, refuses an existing role receipt and seals
+the complete request BEFORE provider invocation. Process loss after admission cannot authorize a
+repeat. Reviewer requires this plan's sealed QA PASS bound to the admitted QA run/context/Agent and
+candidate. Admission proves invocation, never completion. Production facts additionally check
+allocation, candidate/worktree and policy freshness through `NativeVerificationFacts` and the MySQL
+verification reservation boundary.
+
+### Validation matrix / examples
+
+| Case | Result |
+|---|---|
+| Exact candidate, QA PASS, Review APPROVE | Verification facts; original failure preserved |
+| Missing approval, stale input, changed model/permissions | No provider |
+| Invalid output/provider failure/QA FAIL/Review REJECT | Stop; no Coder or Task DONE |
+| Reopen after consumed admission, including process loss | Refuse repeat invocation |
+| Exact approval command replay | Original receipt; no repeat human callback |
+| Historical run reuse/self-review/foreign scope/digest tamper | Fail closed |
+
+Good: offline independent verifiers retain original candidate and report provenance. Base: rejection
+returns findings. Bad: reset FAILED or clone a report as a fake Coder output under a new Task.
+Correct: a separately authorized verification retains original identity and records each invocation.
+
+### Tests / production boundary
+
+`test_candidate_verification.py`: success, drift, authority, output/provider failures, rejection,
+self-review and run reuse; original Task/events unchanged. `test_verification_admission.py`: real
+file receipts, reopen/replay, interruption, stale facts, model binding and Schema parity. Existing
+store tests retain publication/path protections. Ruff, Mypy and regression remain required.
+
+Completion embeds sealed QA/Review reports and binds the exact authorization and per-role invocation
+digests. QA FAIL permits no Review; QA PASS requires Review before completion. Store read and write
+both check Task/candidate/producer/run/context/parents/time against admissions. `complete` independently
+checks artifact-store equality and approved plan/implementation digests, rejects conflicting replay,
+and returns an identical existing completion without creating another run. A completion is not a
+Task DONE event or a joint delivery success. Provider failure leaves an invocation with no completion.
+
+`verification_snapshot.read_candidate_snapshot` uses a consistent read-only MySQL transaction, never
+repository initialization/DDL. Legacy checkpoint Task status/revision may lag SQL; immutable dispatch
+identity must still match. Event count, continuity, timestamps and final post-candidate QA failure must
+match actual Task facts. A checkpoint revision ahead of SQL is rejected. This is not upstream approval
+validation and cannot independently authorize execution.
+
+The native source/current-fact resolver, fresh allocation/verifier worktrees, demand association and
+CLI are implemented by the production entry described below. E1 alone still neither changes
+production requirements nor proves a live model delivery.
+
+### Independent verification reservation
+
+`MySqlDispatchAuthority.reserve_verification(project_id, source_task_id, plan_sha256,
+validate_current, build)` serializes with ordinary dispatch using the global authority lock.
+The trusted builder must run Scheduler/ModelRouter against the supplied fresh snapshot; the
+current-fact callback must validate approval, original candidate and historical Agent independence.
+`VerificationReservation` permits exactly QA and Reviewer and distinct scoped assignments/leases.
+`verification_reservations` is an additive InnoDB table keyed by plan digest, with typed JSON and
+nullable completion digest. Original Task/events/dispatch are untouched.
+
+The shared snapshot always retains verification assignment history. An uncompleted reservation's
+leases remain in the capacity snapshot even when its original Task is terminal. Completion removes
+only active occupancy, not assignments or SQL history. Normal Task dispatch filtering is unchanged.
+`complete_verification(plan_sha256, completion_sha256, validate_completion)` uses the same lock;
+the trusted callback must resolve sealed completion and validate its invocation/allocation binding.
+Exact completion replay is allowed; conflicting completion and re-reservation after release reject.
+No completion means no implicit success/release; existing lease expiration policy still applies.
+
+Good: FAILED original Task plus live verification occupies both verifier leases. Base: completion
+releases those leases while retaining assignments. Bad: infer verification liveness from Task status,
+or call release with an unvalidated digest.
+`test_verification_reservation.py` exercises the shared SQL snapshot decoder with offline row fixtures.
+Real MySQL transaction/concurrency verification is still required before production use.
+
+The targeted MySQL reservation suite now covers terminal BLOCKED/FAILED/DONE origins, concurrent
+exact reservation replay, retained live occupancy, idempotent completion and rejection of reuse
+after completion. It uses a dedicated test database, never the production demand database.
+
+### Native candidate source inspection
+
+`NativeCandidateSourceReader.inspect(scope) -> NativeCandidateSource` reads company/project binding,
+native checkpoint/intake, a read-only SQL runtime snapshot, sealed original artifacts and historical
+route run IDs. `read_approved_stages` is shared with pre-candidate recovery and retains the exact
+Product/approval/Design/Planner/dispatch provenance checks. Joint ownership is resolved through the
+existing derived-input and approval delegation checks. Source and upstream facts are checked again
+before return. The public reader wraps errors without exposing DSNs or provider output.
+
+Legacy QA failure events may reference Task.base_ref; accept that or the exact candidate, but no
+third revision. Candidate identity must come from candidate_ready plus matching sealed implementation,
+not from a stale checkpoint or terminal failure event. Source inspection does not check current model
+allocation/worktree availability, create approval, invoke providers, or confer execution authority.
+
+## E2: Production candidate verification entry
+
+```python
+CandidateVerificationEntry.propose_project(project_root, delivery_id) -> (plan, path)
+CandidateVerificationEntry.approve(path, confirmed_plan, reference) -> None
+CandidateVerificationEntry.execute(path) -> CandidateVerificationCompletion
+open_candidate_verification_plan(config, environment, path) -> (store, plan)
+```
+
+Top-level CLI commands are `verify-propose`, `verify-inspect`, `verify-approve`, and `verify-run`.
+Proposal resolves the registered project, reads exact native/joint source facts, creates a distinct
+`execution_task_id`, recomputes QA/Reviewer Scheduler and ModelRouter decisions, and exclusively
+publishes a digest-bound plan. `current_policy_sha256` covers the exact role definitions and every
+enabled primary/fallback route, so changing a fallback model is approval drift. Inspection opens the
+exact company/project path with no-follow bounded
+reads and does not initialize Team Host or invoke models. Approval seals exact human confirmation.
+Only run invokes providers, and only in QA then Reviewer order.
+
+`VerificationReservation` contains both `source_task_id` and distinct `task_id`. The former binds the
+terminal Task/candidate; the latter scopes fresh Assignment/Lease/worktree identities so the shared
+capacity snapshot does not release active verifier work merely because the source Task is terminal.
+The adapter opens QA and Reviewer worktrees at the pinned candidate, disallows Coder, and closes only
+clean worktrees. Original Task, events, dispatch, artifacts, candidate commit and parent checkpoint
+remain unchanged.
+
+The plan binds optional joint parent delivery/checkpoint; completion binds that plan plus sealed
+invocation/report digests. This is the audit association with the original demand. It does not rewrite
+the historical child or parent checkpoint into DONE, run joint integration automatically, merge,
+push, or deploy. A caller may accept the independently verified candidate through its normal human
+delivery policy; future joint-projection support must consume this record explicitly rather than forge
+a successful native Task.
+
+Validation points: proposal and approval re-read native facts and candidate availability; run repeats
+that check inside the MySQL authority fence and requires current allocation to equal approved role
+definitions. Invocation records are published before each provider call. Missing approval, policy or
+candidate drift, allocation difference, reused role admission, QA FAIL, Review REJECT and uncertain
+provider completion fail closed without Coder or terminal Task mutation. Exact approval and completion
+replay are idempotent; an admitted role with unknown result is not retried automatically.

@@ -34,6 +34,7 @@ from ai_software_engineer.project_manager.dispatch import (
     DispatchSha256,
     DispatchWorkforceSnapshot,
     RecoveryDispatchRecord,
+    VerificationReservation,
 )
 from ai_software_engineer.project_manager.dispatch_authority import (
     DispatchRevisionAuthority,
@@ -97,6 +98,15 @@ class MySqlDispatchAuthority:
                             task_id VARCHAR(128) NOT NULL,
                             payload_json JSON NOT NULL,
                             dispatch_sha256 CHAR(64) NOT NULL
+                        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
+                        """
+                    )
+                    cursor.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS verification_reservations (
+                            plan_sha256 CHAR(64) PRIMARY KEY,
+                            payload_json JSON NOT NULL,
+                            completion_sha256 CHAR(64) NULL
                         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
                         """
                     )
@@ -283,10 +293,108 @@ class MySqlDispatchAuthority:
             cursor.execute(
                 "INSERT INTO dispatch_commits "
                 "(id, project_id, task_id, payload_json, dispatch_sha256) VALUES (%s,%s,%s,%s,%s)",
-                (record.id, project_id, task_id, _encode(record), record.dispatch_sha256),
+                (
+                    record.id,
+                    project_id,
+                    task_id,
+                    _encode(record),
+                    record.dispatch_sha256,
+                ),
             )
             self._current_snapshot(connection, project_id, task_id)
             return record
+
+    def reserve_verification(
+        self,
+        *,
+        project_id: ProjectId,
+        source_task_id: TaskId,
+        plan_sha256: DispatchSha256,
+        validate_current: Callable[[VerificationReservation | None], None],
+        build: Callable[[DispatchWorkforceSnapshot], VerificationReservation],
+    ) -> VerificationReservation:
+        """Reserve independent verification under the same global capacity fence."""
+        with (
+            self._request_revisions.request_revision_fence(),
+            closing(open_mysql_connection(self._dsn)) as connection,
+            self._transaction(connection),
+            connection.cursor() as cursor,
+        ):
+            self._lock_authority(cursor)
+            cursor.execute(
+                "SELECT * FROM verification_reservations WHERE plan_sha256=%s FOR UPDATE",
+                (plan_sha256,),
+            )
+            row = cast(Mapping[str, object] | None, cursor.fetchone())
+            if row is not None:
+                record = VerificationReservation.model_validate_json(_text(row, "payload_json"))
+                if (
+                    record.plan_sha256 != plan_sha256
+                    or record.project_id != project_id
+                    or record.source_task_id != source_task_id
+                ):
+                    raise DispatchAuthorityConflict("verification reservation identity mismatch")
+                if row["completion_sha256"] is not None:
+                    raise DispatchAuthorityConflict("verification reservation is already completed")
+                validate_current(record)
+                return record
+            validate_current(None)
+            snapshot = self._current_snapshot(connection, project_id, source_task_id)
+            record = build(snapshot)
+            record = VerificationReservation.model_validate(record.to_wire())
+            if (
+                record.plan_sha256 != plan_sha256
+                or record.project_id != project_id
+                or record.source_task_id != source_task_id
+                or record.workforce_snapshot_sha256 != snapshot.snapshot_sha256
+            ):
+                raise DispatchAuthorityConflict(
+                    "verification reservation differs from fenced inputs"
+                )
+            self._validate_reservations(record, snapshot)
+            validate_current(record)
+            cursor.execute(
+                "INSERT INTO verification_reservations (plan_sha256,payload_json) VALUES (%s,%s)",
+                (plan_sha256, record.model_dump_json()),
+            )
+            return record
+
+    def complete_verification(
+        self,
+        *,
+        plan_sha256: DispatchSha256,
+        completion_sha256: DispatchSha256,
+        validate_completion: Callable[[VerificationReservation, str], None],
+    ) -> None:
+        """Release only after the trusted caller validates sealed completion provenance."""
+        from pydantic import TypeAdapter
+
+        TypeAdapter(DispatchSha256).validate_python(completion_sha256)
+        with (
+            closing(open_mysql_connection(self._dsn)) as connection,
+            self._transaction(connection),
+            connection.cursor() as cursor,
+        ):
+            self._lock_authority(cursor)
+            cursor.execute(
+                "SELECT * FROM verification_reservations WHERE plan_sha256=%s FOR UPDATE",
+                (plan_sha256,),
+            )
+            row = cast(Mapping[str, object] | None, cursor.fetchone())
+            if row is None:
+                raise DispatchAuthorityConflict("verification reservation is missing")
+            record = VerificationReservation.model_validate_json(_text(row, "payload_json"))
+            if record.plan_sha256 != plan_sha256:
+                raise DispatchCommitCorruption("verification reservation identity mismatch")
+            if row["completion_sha256"] not in (None, completion_sha256):
+                raise DispatchAuthorityConflict(
+                    "verification completion conflicts with prior release"
+                )
+            validate_completion(record, completion_sha256)
+            cursor.execute(
+                "UPDATE verification_reservations SET completion_sha256=%s WHERE plan_sha256=%s",
+                (completion_sha256, plan_sha256),
+            )
 
     def _current_snapshot(
         self,
@@ -334,6 +442,11 @@ class MySqlDispatchAuthority:
                 in {TaskStatus.DONE, TaskStatus.BLOCKED, TaskStatus.FAILED}
             }
 
+            cursor.execute(
+                "SELECT plan_sha256,payload_json,completion_sha256 FROM verification_reservations"
+            )
+            verification_rows = cast(tuple[Mapping[str, object], ...], cursor.fetchall())
+
         assignments = {assignment.id: assignment for assignment in base.assignments}
         leases = {lease.id: lease for lease in base.active_leases}
         task_commit_time: datetime | None = None
@@ -353,14 +466,26 @@ class MySqlDispatchAuthority:
             work_item = work_item.model_copy(
                 update={"status": WorkItemStatus.LEASED, "updated_at": task_commit_time}
             )
+        active_leases = {
+            key: lease for key, lease in leases.items() if lease.task_id not in terminal_tasks
+        }
+        for row in verification_rows:
+            reservation = VerificationReservation.model_validate_json(_text(row, "payload_json"))
+            if reservation.plan_sha256 != row["plan_sha256"]:
+                raise DispatchCommitCorruption("verification reservation row identity mismatch")
+            for phase in reservation.phases:
+                if phase.assignment.id in assignments or phase.lease.id in leases:
+                    raise DispatchCommitCorruption("verification reservation identity collision")
+                assignments[phase.assignment.id] = phase.assignment
+                leases[phase.lease.id] = phase.lease
+                if row["completion_sha256"] is None:
+                    active_leases[phase.lease.id] = phase.lease
         return DispatchWorkforceSnapshot.create(
             project_id=base.project_id,
             task_id=base.task_id,
             work_item=work_item,
             agents=base.agents,
-            active_leases=(
-                lease for lease in leases.values() if lease.task_id not in terminal_tasks
-            ),
+            active_leases=active_leases.values(),
             assignments=assignments.values(),
             model_policies=base.model_policies,
         )
@@ -410,7 +535,7 @@ class MySqlDispatchAuthority:
 
     @staticmethod
     def _validate_reservations(
-        record: DeliveryAllocation,
+        record: DeliveryAllocation | VerificationReservation,
         snapshot: DispatchWorkforceSnapshot,
     ) -> None:
         assignment_ids = {assignment.id for assignment in snapshot.assignments}
