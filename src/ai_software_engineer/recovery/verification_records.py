@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Set
+from enum import StrEnum
 from typing import Literal, Self
 
 from pydantic import AwareDatetime, Field, StrictInt, model_validator
@@ -14,7 +16,13 @@ from ai_software_engineer.domain.artifact import (
     ReviewReportArtifact,
     Sha256,
 )
-from ai_software_engineer.domain.enums import AgentRole, QaReportStatus, ReviewVerdict
+from ai_software_engineer.domain.enums import (
+    AgentRole,
+    QaCriterionStatus,
+    QaReportStatus,
+    QaTestStatus,
+    ReviewVerdict,
+)
 from ai_software_engineer.domain.identity import RunId
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.domain.task import TaskId
@@ -40,6 +48,20 @@ class CandidateVerificationInputs(DomainModel):
         if len(set(self.prior_run_ids)) != len(self.prior_run_ids):
             raise ValueError("prior verifier run identities must be unique")
         return self
+
+
+def verification_inputs_are_current(
+    approved: CandidateVerificationInputs,
+    current: CandidateVerificationInputs,
+    admitted_run_ids: Set[str],
+) -> bool:
+    """Accept only append-only run facts durably admitted by the exact approved plan."""
+    approved_runs, current_runs = set(approved.prior_run_ids), set(current.prior_run_ids)
+    return (
+        current.model_copy(update={"prior_run_ids": approved.prior_run_ids}) == approved
+        and approved_runs <= current_runs
+        and current_runs - approved_runs <= set(admitted_run_ids)
+    )
 
 
 class CandidateVerificationPlan(DomainModel):
@@ -128,6 +150,14 @@ class CandidateVerificationInvocation(DomainModel):
         return self
 
 
+class CandidateVerificationDisposition(StrEnum):
+    """Typed next route for one sealed candidate verification completion."""
+
+    VERIFIED = "VERIFIED"
+    RETRY_VERIFICATION = "RETRY_VERIFICATION"
+    REMEDIATE_CANDIDATE = "REMEDIATE_CANDIDATE"
+
+
 class CandidateVerificationCompletion(DomainModel):
     """Immutable verifier reports; never a replacement Task success event."""
 
@@ -145,6 +175,20 @@ class CandidateVerificationCompletion(DomainModel):
     @property
     def verified(self) -> bool:
         return self.review is not None and self.review.content.verdict is ReviewVerdict.APPROVE
+
+    @property
+    def disposition(self) -> CandidateVerificationDisposition:
+        if self.verified:
+            return CandidateVerificationDisposition.VERIFIED
+        if self.review is not None:
+            return CandidateVerificationDisposition.REMEDIATE_CANDIDATE
+        criteria = tuple(item.status for item in self.qa.content.criteria_results)
+        tests = tuple(item.status for item in self.qa.content.tests_run)
+        if QaCriterionStatus.FAIL in criteria or QaTestStatus.FAIL in tests:
+            return CandidateVerificationDisposition.REMEDIATE_CANDIDATE
+        if QaCriterionStatus.NOT_TESTED in criteria or QaTestStatus.ERROR in tests:
+            return CandidateVerificationDisposition.RETRY_VERIFICATION
+        return CandidateVerificationDisposition.REMEDIATE_CANDIDATE
 
     @classmethod
     def create(cls, **values: object) -> Self:

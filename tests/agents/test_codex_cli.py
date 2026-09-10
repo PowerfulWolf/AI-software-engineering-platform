@@ -145,6 +145,42 @@ class _ArtifactOutputRunner:
         return CodexInvocationResult(returncode=0)
 
 
+class _QaRunner:
+    def __init__(self, request: AgentRequest, *, dirty_path: str | None = None) -> None:
+        self.request = request
+        self.dirty_path = dirty_path
+        self.argv: tuple[str, ...] | None = None
+
+    def run(
+        self,
+        argv: tuple[str, ...],
+        *,
+        cwd: Path,
+        environment: Mapping[str, str],
+        stdin: str,
+        timeout_seconds: float,
+    ) -> CodexInvocationResult:
+        del environment, stdin, timeout_seconds
+        self.argv = argv
+        if self.dirty_path is not None:
+            target = cwd / self.dirty_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("QA mutation\n", encoding="utf-8")
+        template = make_qa_artifact()
+        artifact = template.model_copy(
+            update={
+                "task_id": self.request.task_id,
+                "source_revision": self.request.source_revision,
+                "context_manifest_id": self.request.context_manifest_id,
+                "parent_artifact_ids": self.request.input_artifact_ids,
+                "producer": template.producer.model_copy(update={"run_id": self.request.run_id}),
+            }
+        )
+        output_path = Path(argv[argv.index("--output-last-message") + 1])
+        output_path.write_text(json.dumps(artifact.to_wire()), encoding="utf-8")
+        return CodexInvocationResult(returncode=0)
+
+
 class _DirtySuccessRunner:
     """Model-success fixture for linked worktrees whose Git metadata is sandbox-external."""
 
@@ -567,6 +603,51 @@ def test_qa_semantic_artifact_failure_has_safe_actionable_diagnostics(
     assert "Copy these exact envelope bindings" in runner.prompt
     assert "Every referenced evidence ID must exist exactly once" in runner.prompt
     assert "QA status PASS requires every criterion and test to PASS" in runner.prompt
+
+
+def test_qa_uses_writable_disposable_sandbox_but_candidate_stays_immutable(
+    tmp_path: Path,
+) -> None:
+    root, base = _repository(tmp_path)
+    request = _request(AgentRole.QA, run_id="run_qa_sandbox", source_revision=base)
+    runner = _QaRunner(request)
+    result = CodexCliAgentAdapter(
+        workspace_root=root,
+        model="gpt-5.6-terra",
+        agent_id="agent_qa_001",
+        agent_version="v0.1",
+        prompt_builder=StaticPromptBuilder(),
+        runner=runner,
+    ).run(request)
+
+    assert result.status is AgentRunStatus.SUCCEEDED
+    assert runner.argv is not None
+    sandbox_index = runner.argv.index("--sandbox")
+    assert runner.argv[sandbox_index + 1] == "workspace-write"
+    assert _git(root, "rev-parse", "HEAD") == base
+    assert _git(root, "status", "--porcelain") == ""
+
+    dirty_parent = tmp_path / "dirty"
+    dirty_parent.mkdir()
+    dirty_root, dirty_base = _repository(dirty_parent)
+    dirty_request = _request(
+        AgentRole.QA,
+        run_id="run_qa_dirty_sandbox",
+        source_revision=dirty_base,
+    )
+    dirty = CodexCliAgentAdapter(
+        workspace_root=dirty_root,
+        model="gpt-5.6-terra",
+        agent_id="agent_qa_001",
+        agent_version="v0.1",
+        prompt_builder=StaticPromptBuilder(),
+        runner=_QaRunner(dirty_request, dirty_path="src/forbidden.py"),
+    ).run(dirty_request)
+
+    assert dirty.status is AgentRunStatus.FAILED
+    assert dirty.error is not None
+    assert dirty.error.code is AgentErrorCode.POLICY_VIOLATION
+    assert _git(dirty_root, "rev-parse", "HEAD") == dirty_base
 
 
 def test_cli_failure_with_partial_changes_cannot_fallback(tmp_path: Path) -> None:

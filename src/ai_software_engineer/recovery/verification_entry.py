@@ -62,6 +62,7 @@ from ai_software_engineer.recovery.verification_records import (
     CandidateVerificationCompletion,
     CandidateVerificationInputs,
     CandidateVerificationPlan,
+    verification_inputs_are_current,
 )
 from ai_software_engineer.runtime_workspace import load_project_profile
 from ai_software_engineer.scheduling import ModelRouter, PortfolioScheduler
@@ -126,13 +127,8 @@ def _verification_inputs_are_current(
     current: CandidateVerificationInputs,
     admitted_run_ids: Set[str],
 ) -> bool:
-    """Accept only append-only run facts durably admitted by this exact plan."""
-    approved_runs, current_runs = set(approved.prior_run_ids), set(current.prior_run_ids)
-    return (
-        current.model_copy(update={"prior_run_ids": approved.prior_run_ids}) == approved
-        and approved_runs <= current_runs
-        and current_runs - approved_runs <= set(admitted_run_ids)
-    )
+    """Compatibility seam for the verification-facts contract and its focused tests."""
+    return verification_inputs_are_current(approved, current, admitted_run_ids)
 
 
 def _verification_allocation(
@@ -270,7 +266,7 @@ class NativeVerificationFacts(VerificationFacts):
                 plan.inputs, source.inputs, self._admitted_run_ids(plan)
             )
             or not checkpoint_history
-            or checkpoint_history[-1] != source.checkpoint
+            or checkpoint_history[-1] != source.terminal_checkpoint
             or not checkpoint_sha256_is_ancestor(checkpoint_history, plan.native_checkpoint_sha256)
             or source.runtime.dispatch.dispatch_sha256 != plan.dispatch_sha256
             or _stage_sha(source) != plan.approved_stage_chain_sha256

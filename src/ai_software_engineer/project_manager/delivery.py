@@ -237,12 +237,37 @@ def _verification_binds_terminal_candidate(
     plan.validate_integrity()
     completion.validate_integrity()
     candidate = plan.inputs.candidate_revision
-    cursor_matches = current.candidate_revision == candidate
-    retained_candidate = (
+    direct_retained_candidate = (
         current.candidate_revision is None
         and current.failed_stage is DeliveryStage.DELIVERING
         and current.task_status in {TaskStatus.BLOCKED, TaskStatus.FAILED}
     )
+    direct_cursor = (
+        current.task_id == plan.inputs.task_id
+        and current.dispatch_commit_sha256 == plan.dispatch_sha256
+        and (current.candidate_revision == candidate or direct_retained_candidate)
+    )
+    source_indices = tuple(
+        index
+        for index, checkpoint in enumerate(history)
+        if checkpoint.task_id == plan.inputs.task_id
+        and checkpoint.dispatch_commit_sha256 == plan.dispatch_sha256
+        and checkpoint.candidate_revision == candidate
+        and checkpoint.stage in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
+    )
+    successor_cursor = False
+    if source_indices:
+        tail = history[source_indices[-1] + 1 :]
+        successor_cursor = bool(tail) and all(
+            checkpoint.project_id == current.project_id
+            and checkpoint.project_root == current.project_root
+            and checkpoint.delivery_id == current.delivery_id
+            and checkpoint.task_id == current.task_id
+            and checkpoint.dispatch_commit_id == current.dispatch_commit_id
+            and checkpoint.dispatch_commit_sha256 == current.dispatch_commit_sha256
+            and checkpoint.candidate_revision is None
+            for checkpoint in tail
+        )
     qa = completion.qa
     review = completion.review
     return (
@@ -253,9 +278,7 @@ def _verification_binds_terminal_candidate(
         and current.project_id == plan.scope.project_id
         and current.project_root == plan.scope.project_root
         and current.delivery_id == plan.scope.delivery_id
-        and current.task_id == plan.inputs.task_id
-        and current.dispatch_commit_sha256 == plan.dispatch_sha256
-        and (cursor_matches or retained_candidate)
+        and (direct_cursor or successor_cursor)
         and qa.task_id == plan.inputs.task_id
         and qa.source_revision == candidate
         and qa.parent_artifact_ids == (plan.inputs.implementation_id,)

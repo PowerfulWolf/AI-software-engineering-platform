@@ -32,6 +32,7 @@ from ai_software_engineer.recovery.verification_native import (
 )
 from ai_software_engineer.recovery.verification_records import (
     CandidateVerificationCompletion,
+    CandidateVerificationDisposition,
     CandidateVerificationPlan,
 )
 
@@ -200,6 +201,15 @@ class DeliveryResumeController:
         )
         if source is None or source[1] != plan:
             raise ValueError("verification completion is no longer the current candidate result")
+        if completion.disposition is CandidateVerificationDisposition.RETRY_VERIFICATION:
+            current = self._entry.status(plan.scope.delivery_id).checkpoint
+            successor, path = self._verification.propose_project(
+                project_root=plan.scope.project_root,
+                delivery_id=plan.scope.delivery_id,
+            )
+            if successor.inputs.candidate_revision != plan.inputs.candidate_revision:
+                raise ValueError("successor verification changed the retained candidate")
+            return self._approval_required(current, successor, path)
         store = source[0]
         native = CandidateRemediationService(
             backend=self._backend,

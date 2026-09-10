@@ -1070,11 +1070,13 @@ dispatch_sha256
   another fresh recovery plan and Task instead of assuming only one recovery attempt.
 - A terminal Task with a durable candidate first gets independent QA/Reviewer verification. Missing
   approval returns `VERIFICATION_APPROVAL_REQUIRED` with the exact plan path/digest and next command.
-- A QA failure or Reviewer rejection routes the next Coder request from the preceding candidate
-  commit, not from the Task's original `base_ref`. The new implementation must still supersede the
-  preceding implementation Artifact and include the verdict Artifact as a parent. A transient
-  failure before the first candidate continues to use `task.base_ref`; a Coder-progress continuation
-  continues to use its checkpoint revision.
+- A conclusive QA criterion/test `FAIL` or Reviewer rejection routes the next Coder request from the
+  preceding candidate commit, not from the Task's original `base_ref`. A QA environment/tool
+  `ERROR` with no criterion/test `FAIL` is inconclusive and routes to a fresh verification plan,
+  never Coder. A remediating implementation must still supersede the preceding implementation
+  Artifact and include the verdict Artifact as a parent. A transient failure before the first
+  candidate continues to use `task.base_ref`; a Coder-progress continuation continues to use its
+  checkpoint revision.
 - A process restart may reopen an existing clean Coder worktree only when its HEAD equals the exact
   `AgentRequest.source_revision`. `open_coder(source_revision=None)` retains the first-run behavior
   and resolves to `task.base_ref`; recovery callers must pass the request revision explicitly.
@@ -1135,7 +1137,8 @@ dispatch_sha256
 | Approved plan, no invocation | QA; Reviewer only after QA PASS | 1–2 |
 | Admitted invocation, no completion | Publish successor plan; require approval | 0 |
 | PASS + APPROVE completion | Bind verified candidate and mark Delivery DONE | 0 |
-| QA FAIL / Review REJECT completion | Deterministic continuation dispatch and fresh serial Task | 3+ bounded retries |
+| QA criterion/test FAIL or Review REJECT completion | Deterministic continuation dispatch and fresh serial Task | 3+ bounded retries |
+| QA only NOT_TESTED/ERROR, no criterion/test FAIL | Fresh verification plan and exact approval | 0 |
 | Current cursor candidate null, exact retained-candidate plan/completion proof | Accept DONE or begin remediation according to verdict | 0 before the selected next operation |
 | Current cursor candidate null without terminal DELIVERING marker, ancestor, or exact lineage | `continuation does not match the terminal candidate` | 0 |
 | Successor Task terminal, Delivery still DELIVERING | Rebuild result and append checkpoint | 0 |
@@ -1246,3 +1249,109 @@ The original continuation test covered only a checkpoint that directly stored th
 cross-layer propagation gap survived. The prevention mechanism is a proof-carrying continuation
 signature plus paired positive/negative tests at the Delivery entry seam; never fix this by merely
 dropping the Candidate comparison or by rewriting historical checkpoints.
+
+## Scenario: QA environment-aware verification recovery
+
+### 1. Scope / Trigger
+
+Use when QA needs writable tool scratch, a sealed QA report is inconclusive because the verifier
+environment failed, or an older platform version already created a failed Coder continuation from
+such a report. This contract must not weaken candidate immutability or convert genuine defects into
+verification retries.
+
+### 2. Signatures
+
+```python
+_sandbox_mode(role: AgentRole) -> str
+CandidateVerificationCompletion.disposition -> CandidateVerificationDisposition
+retained_candidate_checkpoint(history, dispatch) -> ProjectDeliveryCheckpoint
+read_candidate_source_snapshot(config, environment, history) -> tuple[
+    ProjectDeliveryCheckpoint,             # candidate source
+    ProjectDeliveryCheckpoint,             # current terminal cursor
+    CandidateRuntimeSnapshot,
+    ContinuationDispatchRecord | None,
+]
+```
+
+`CandidateVerificationDisposition` has exactly `VERIFIED`, `RETRY_VERIFICATION`, and
+`REMEDIATE_CANDIDATE`.
+
+### 3. Contracts
+
+- Codex Coder and QA processes use `workspace-write`; Reviewer uses `read-only`. QA still has an
+  empty role `write_paths` policy and cannot merge or change Task state.
+- QA may create disposable ignored cache/build files. After every run, candidate HEAD must equal
+  `AgentRequest.source_revision` and `git status --porcelain` must be empty. Any Git-visible write or
+  HEAD change is `POLICY_VIOLATION`, regardless of report content.
+- A completion is `RETRY_VERIFICATION` only when Review did not run, no criterion/test is `FAIL`,
+  and at least one criterion is `NOT_TESTED` or test is `ERROR`. It creates a fresh plan/Run for the
+  same candidate and requires a new exact human approval. It never starts Coder.
+- Any criterion/test `FAIL`, Reviewer result, or malformed ambiguous combination remains
+  `REMEDIATE_CANDIDATE`; `PASS + APPROVE` remains `VERIFIED`.
+- For a legacy failed continuation with no Candidate V2, retained Candidate V1 may be reused only
+  when the exact current `ContinuationDispatchRecord` points to a sealed source plan/completion whose
+  disposition is `RETRY_VERIFICATION`. Scope, Task, dispatch, source candidate, plan, completion,
+  invocation, run additions, approved checkpoint ancestry, and current terminal runtime must all
+  match. A genuine remediation failure stays on failed-Coder recovery.
+- Historical Delivery, Task, Artifact, invocation, completion, and dispatch records are read and
+  validated; none are rewritten. The next successful `resume` only publishes a fresh verification
+  plan.
+
+### 4. Validation & Error Matrix
+
+| Facts | Route | Coder calls |
+|---|---|---:|
+| QA PASS, Review APPROVE | `VERIFIED` / Delivery DONE | 0 |
+| Criterion/test FAIL | `REMEDIATE_CANDIDATE` | 1+ |
+| Review REJECT | `REMEDIATE_CANDIDATE` | 1+ |
+| Only NOT_TESTED/ERROR | Fresh verification plan + approval | 0 |
+| QA Git-visible mutation or HEAD drift | `POLICY_VIOLATION` | 0 |
+| Failed legacy continuation from exact inconclusive completion | Reverify retained source Candidate | 0 |
+| Failed continuation from genuine code failure or broken lineage | Reject candidate fallback; use normal failed-Coder recovery | 0 before approval |
+
+### 5. Good / Base / Bad Cases
+
+- Good: pytest writes ignored cache in a detached QA worktree, tests pass, Git remains clean, then
+  Reviewer inspects the same commit.
+- Base: pytest cannot execute and QA seals only `NOT_TESTED`/`ERROR`; `resume` emits a new plan for
+  the same commit without calling Coder.
+- Good legacy recovery: an older version wrongly created a Candidate-empty continuation from that
+  inconclusive completion; current `resume` follows the exact dispatch back to Candidate V1.
+- Bad: QA edits a tracked test and hides it in a PASS report, or the platform sends an environment
+  failure to Coder so `CandidateCommitSkill` is asked to commit an empty worktree.
+
+### 6. Tests Required
+
+- `tests/agents/test_codex_cli.py`: QA gets `workspace-write`; clean ignored scratch is accepted;
+  Git-visible mutation fails with unchanged HEAD.
+- `tests/recovery/test_verification_disposition.py`: environment-only result retries verification;
+  criterion/test failures remediate.
+- `tests/recovery/test_delivery_continuation.py`: inconclusive result makes a successor plan with
+  zero Coder calls; retained Candidate may be accepted through the exact successor cursor.
+- `tests/recovery/test_resume.py`: real Git/MySQL recreates the legacy failed continuation and proves
+  public `resume` emits a different verification plan without another Agent call.
+- Targeted pytest, Ruff, strict Mypy and `git diff --check` must pass locally. The full dedicated-MySQL
+  regression remains the human release gate.
+
+### 7. Wrong vs Correct
+
+```python
+# Wrong: top-level FAIL is assumed to prove a code defect.
+if not completion.verified:
+    run_coder_remediation(completion)
+
+# Correct: route from criterion/test evidence, not the summary label alone.
+if completion.disposition is CandidateVerificationDisposition.RETRY_VERIFICATION:
+    return propose_fresh_verification(completion.qa.source_revision)
+run_coder_remediation(completion)
+```
+
+```python
+# Wrong: read-only process sandbox prevents pytest/ruff from creating necessary scratch.
+sandbox = "read-only"
+
+# Correct: disposable QA filesystem plus immutable Git postconditions.
+sandbox = "workspace-write"
+assert git_head == request.source_revision
+assert git_status_porcelain == ""
+```

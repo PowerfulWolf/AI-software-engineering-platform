@@ -6,8 +6,17 @@ from unittest.mock import Mock
 
 import pytest
 
-from ai_software_engineer.domain import QaCriterionStatus, QaReportStatus, TaskStatus
-from ai_software_engineer.orchestration import RetryDeliveryResult
+from ai_software_engineer.domain import (
+    QaCriterionStatus,
+    QaReportStatus,
+    QaTestStatus,
+    TaskStatus,
+)
+from ai_software_engineer.orchestration import (
+    BlockedResult,
+    RetryClassification,
+    RetryDeliveryResult,
+)
 from ai_software_engineer.project_manager.delivery import (
     DeliveryCommandRejected,
     ProjectDeliveryCheckpointCatalog,
@@ -26,12 +35,17 @@ from ai_software_engineer.project_manager.dispatch import (
     _record_digest,
 )
 from ai_software_engineer.recovery.models import RecoveryScope
+from ai_software_engineer.recovery.resume import (
+    DeliveryResumeController,
+    DeliveryResumeOutcome,
+)
 from ai_software_engineer.recovery.verification_records import (
     CandidateVerificationCompletion,
     CandidateVerificationInputs,
     CandidateVerificationPlan,
 )
-from tests.domain.factories import make_qa_artifact
+from ai_software_engineer.recovery.verification_snapshot import retained_candidate_checkpoint
+from tests.domain.factories import make_qa_artifact, make_review_artifact
 from tests.orchestration.test_retry import ScriptedAdapter
 from tests.orchestration.test_runner import _definitions
 from tests.recovery.test_candidate_verification import Admission, setup_verification
@@ -265,6 +279,135 @@ def test_continuation_rejects_empty_cursor_without_terminal_delivery_proof(
         DeliveryCommandRejected, match="continuation does not match the terminal candidate"
     ):
         service.begin_continuation(dispatch, plan, completion, at=NOW + timedelta(minutes=1))
+
+
+def test_failed_continuation_resolves_its_retained_source_candidate(tmp_path: Path) -> None:
+    dispatch = continuation_allocation(tmp_path)
+    service, store = _service(tmp_path, dispatch)
+    dispatch, plan, completion = _verification_for(store, dispatch)
+    service.begin_continuation(dispatch, plan, completion, at=NOW + timedelta(minutes=1))
+    blocked_task = dispatch.task.model_copy(
+        update={
+            "status": TaskStatus.BLOCKED,
+            "attempts": 1,
+            "updated_at": NOW + timedelta(minutes=2),
+        }
+    )
+    service.finish_continuation(
+        dispatch,
+        BlockedResult(
+            task=blocked_task,
+            classification=RetryClassification.INVALID_OUTPUT,
+            reason="Coder produced no candidate for an inconclusive QA result",
+            attempt=1,
+            artifact_ids=(),
+            event_ids=("evt_continuation_failed",),
+        ),
+        at=blocked_task.updated_at,
+    )
+    current = store.current(dispatch.source_delivery_id)
+
+    source = retained_candidate_checkpoint(store.list(current.delivery_id), dispatch)
+
+    assert source.task_id == dispatch.source_task_id
+    assert source.dispatch_commit_id == dispatch.source_dispatch_id
+    assert source.candidate_revision == dispatch.source_revision
+
+    qa = make_qa_artifact().model_copy(
+        update={
+            "task_id": plan.inputs.task_id,
+            "source_revision": plan.inputs.candidate_revision,
+            "parent_artifact_ids": (plan.inputs.implementation_id,),
+        }
+    )
+    review = make_review_artifact().model_copy(
+        update={
+            "task_id": plan.inputs.task_id,
+            "source_revision": plan.inputs.candidate_revision,
+            "parent_artifact_ids": (qa.artifact_id,),
+        }
+    )
+    verified = CandidateVerificationCompletion.create(
+        plan_sha256=plan.plan_sha256,
+        authorization_sha256="a" * 64,
+        qa_invocation_sha256="b" * 64,
+        reviewer_invocation_sha256="c" * 64,
+        qa=qa,
+        review=review,
+        completed_at=NOW + timedelta(minutes=3),
+    )
+
+    accepted = service.accept_verification(plan, verified)
+
+    assert accepted.checkpoint.stage is DeliveryStage.DONE
+    assert accepted.checkpoint.candidate_revision == dispatch.source_revision
+
+
+def test_inconclusive_verification_proposes_fresh_qa_without_coder(
+    tmp_path: Path,
+) -> None:
+    dispatch = continuation_allocation(tmp_path)
+    _, store = _service(tmp_path, dispatch)
+    _, plan, completion = _verification_for(store, dispatch)
+    qa = completion.qa
+    completion = CandidateVerificationCompletion.create(
+        plan_sha256=completion.plan_sha256,
+        authorization_sha256=completion.authorization_sha256,
+        qa_invocation_sha256=completion.qa_invocation_sha256,
+        qa=qa.model_copy(
+            update={
+                "content": qa.content.model_copy(
+                    update={
+                        "status": QaReportStatus.FAIL,
+                        "criteria_results": (
+                            qa.content.criteria_results[0].model_copy(
+                                update={"status": QaCriterionStatus.NOT_TESTED}
+                            ),
+                        ),
+                        "tests_run": (
+                            qa.content.tests_run[0].model_copy(
+                                update={"status": QaTestStatus.ERROR}
+                            ),
+                        ),
+                    }
+                )
+            }
+        ),
+        completed_at=completion.completed_at,
+    )
+    successor = CandidateVerificationPlan.create(
+        **{
+            **plan.model_dump(exclude={"plan_sha256"}),
+            "execution_task_id": "task_verify_inconclusive_successor",
+            "created_at": NOW + timedelta(minutes=3),
+        }
+    )
+    verification = Mock()
+    verification.latest_project.return_value = (Mock(), plan, tmp_path / "old-plan.json")
+    verification.propose_project.return_value = (successor, tmp_path / "successor-plan.json")
+    backend = Mock()
+    entry = Mock()
+    entry.status.return_value = type(
+        "Result", (), {"checkpoint": store.current(plan.scope.delivery_id)}
+    )()
+    controller = DeliveryResumeController(
+        config=Mock(),
+        environment={},
+        backend=backend,
+        entry=entry,
+        recovery=Mock(),
+        verification=verification,
+    )
+
+    result = controller._continue_completion(plan, completion)
+
+    assert result.outcome is DeliveryResumeOutcome.VERIFICATION_APPROVAL_REQUIRED
+    assert result.verification_plan_sha256 == successor.plan_sha256
+    verification.propose_project.assert_called_once_with(
+        project_root=plan.scope.project_root,
+        delivery_id=plan.scope.delivery_id,
+    )
+    backend.run_prepared_allocation.assert_not_called()
 
 
 @pytest.mark.parametrize("retain_candidate", [True, False])

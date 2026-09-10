@@ -6,7 +6,8 @@
 |---|---|---|
 | `TRANSIENT_INFRA` | 模型超时、临时网络错误、进程被中断 | 进入 `RETRY_SCHEDULED`，释放 Lease，退避后重试原角色 |
 | `INVALID_OUTPUT` | JSON 不符合 Schema、缺字段、哈希不匹配 | 重启同角色一次；退避期间释放 Lease，重复失败再终局 `BLOCKED` |
-| `QA_FINDING` | 测试失败、验收标准未满足 | 将 findings 原样路由给 Coder，创建新 attempt |
+| `QA_FINDING` | criterion/test 明确 `FAIL`、验收标准未满足 | 将 findings 原样路由给 Coder，创建新 attempt |
+| `QA_INCONCLUSIVE` | 无代码 `FAIL`，但测试为 `ERROR` 或标准为 `NOT_TESTED` | 为同一 Candidate 新建 QA verification plan，重新批准后重跑 QA；不调用 Coder |
 | `REVIEW_FINDING` | BLOCKER/MAJOR 代码问题 | 将 finding + evidence 路由给 Coder，创建新 attempt |
 | `POLICY_VIOLATION` | 越权写文件、篡改 verdict、执行禁用命令 | 立即终止 run，记录安全事件，`BLOCKED` |
 | `REQUIREMENT_AMBIGUITY` | 验收标准互相冲突或缺少关键输入 | WorkItem → `WAITING_HUMAN`，释放 Lease并请求澄清 |
@@ -19,7 +20,8 @@
 - 同一输入、同一模型、同一错误最多重试 2 次；超过即升级；
 - QA/Review finding 必须在新 Coder context 中可见，并带原 artifact ID；
 - 重试不得覆盖旧 artifact；新 artifact 通过 `supersedes` 和 `parent_artifact_ids` 关联；
-- 若失败来自环境而非代码，重试 Coder 没有意义，应重试原角色或阻塞。
+- 若失败来自环境而非代码，重试 Coder 没有意义。Candidate verification 必须生成新的、需明确
+  批准的 verification plan 后重试 QA；已经 admitted 的 Run 仍然遵守至多一次调用。
 
 ## 3. 路由矩阵
 
@@ -29,7 +31,7 @@
 | Coder 崩溃 | Coder | 相同 context manifest、attempt+1 |
 | Coder 主动返回未完成 checkpoint | `CONTINUE_REQUIRED → QUEUED → IMPLEMENTING` | coder-progress、精确 dirty paths、remaining steps、next actions |
 | QA 测试失败 | Coder → `IMPLEMENTING` | qa-report、失败命令、候选 diff |
-| QA 环境故障 | QA | 环境日志、原候选 SHA |
+| QA 环境故障 | 新 verification plan → QA | 环境日志、原候选 SHA、旧 completion 和新 plan SHA；Coder 调用数为 0 |
 | Review REJECT | Coder → `IMPLEMENTING` | review-report、QA report、候选 diff |
 | Review 证据不足 | Reviewer | 缺失证据清单 |
 | 权限越界 | `BLOCKED` | policy decision、命令/路径、日志 |

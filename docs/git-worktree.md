@@ -44,8 +44,11 @@ source ref 会先解析为完整 commit SHA。已有 target path 或 Coder branc
 ### QA
 
 - 从 Coder commit 创建干净 worktree；
-- 测试写入限定在 `tests/` 或 Task 指定的 QA 路径；
-- QA 结束后导出测试 diff，默认不并入候选分支。若某个测试必须保留，作为人类可见的独立 patch 提议。
+- Codex 进程使用 `workspace-write`，允许 pytest、Ruff、编译器在这个一次性 worktree 中创建被
+  Git 忽略的 cache/build scratch；这只是进程沙箱能力，不是候选代码写权限；
+- QA 的角色 `write_paths` 仍为空。运行后 HEAD 必须等于候选 SHA，且 `git status --porcelain`
+  必须为空；任何 tracked 或 untracked Git-visible 改动都按 `POLICY_VIOLATION` 失败并保留证据；
+- QA 不提交、不合并测试改动。需要新增或保留测试时，作为 finding 路由给 Coder 在下一候选中实现。
 
 ### Reviewer
 

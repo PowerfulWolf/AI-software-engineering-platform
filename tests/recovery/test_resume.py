@@ -44,12 +44,15 @@ from ai_software_engineer.project_manager.production_delivery import (
 )
 from ai_software_engineer.project_manager.production_host import OrganizationTeamHost
 from ai_software_engineer.recovery.entry import NativeRecoveryExecution
+from ai_software_engineer.recovery.models import RecoveryScope
+from ai_software_engineer.recovery.remediation import CandidateRemediationService
 from ai_software_engineer.recovery.resume import (
     DeliveryResumeController,
     DeliveryResumeOutcome,
     DeliveryResumeResult,
 )
 from ai_software_engineer.recovery.seed import RecoverySeedService
+from ai_software_engineer.recovery.verification_native import NativeCandidateSourceReader
 from ai_software_engineer.role_workspace import RoleWorktreeBinding
 from ai_software_engineer.store import MySqlTaskRepository
 from ai_software_engineer.team_view.reader import ProductionTeamReader
@@ -79,6 +82,25 @@ class _ResumeAdapter(AgentAdapter):
         self._owner.requests.append(request)
         if request.role is AgentRole.CODER and self._owner.source_task_id is None:
             self._owner.source_task_id = request.task_id
+        if (
+            request.role is AgentRole.CODER
+            and request.task_id.startswith("task_continue_")
+            and self._owner.remediation_no_candidate
+        ):
+            return AgentResult(
+                run_id=request.run_id,
+                task_id=request.task_id,
+                role=request.role,
+                attempt=request.attempt,
+                source_revision=request.source_revision,
+                context_manifest_id=request.context_manifest_id,
+                status=AgentRunStatus.FAILED,
+                error=AgentFailure(
+                    code=AgentErrorCode.INVALID_OUTPUT,
+                    message="offline Coder produced no candidate",
+                    transient=False,
+                ),
+            )
         if request.role is AgentRole.QA and request.task_id == self._owner.source_task_id:
             self._owner.source_qa_calls += 1
             if self._owner.source_qa_calls <= self._owner.transient_qa_failures:
@@ -99,6 +121,24 @@ class _ResumeAdapter(AgentAdapter):
             result = self._delegate.run(request)
             artifact = result.artifact
             assert isinstance(artifact, QaReportArtifact)
+            if self._owner.verification_inconclusive:
+                criterion = artifact.content.criteria_results[0].model_copy(
+                    update={"status": QaCriterionStatus.NOT_TESTED}
+                )
+                return result.model_copy(
+                    update={
+                        "artifact": artifact.model_copy(
+                            update={
+                                "content": artifact.content.model_copy(
+                                    update={
+                                        "status": QaReportStatus.FAIL,
+                                        "criteria_results": (criterion,),
+                                    }
+                                )
+                            }
+                        )
+                    }
+                )
             if self._owner.verification_fails:
                 failed = artifact.content.criteria_results[0].model_copy(
                     update={"status": QaCriterionStatus.FAIL}
@@ -139,12 +179,21 @@ class _ResumeAdapter(AgentAdapter):
 
 
 class _ResumeFactory(DeliveryRouteAdapterFactory):
-    def __init__(self, *, transient_qa_failures: int = 4, verification_fails: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        transient_qa_failures: int = 4,
+        verification_fails: bool = True,
+        verification_inconclusive: bool = False,
+        remediation_no_candidate: bool = False,
+    ) -> None:
         self.requests: list[AgentRequest] = []
         self.source_task_id: str | None = None
         self.source_qa_calls = 0
         self.transient_qa_failures = transient_qa_failures
         self.verification_fails = verification_fails
+        self.verification_inconclusive = verification_inconclusive
+        self.remediation_no_candidate = remediation_no_candidate
 
     def create(
         self,
@@ -563,3 +612,109 @@ def test_resume_accepts_verified_candidate_after_delivery_checkpoint_append(
     assert verified.checkpoint.stage is DeliveryStage.DONE
     assert verified.checkpoint.previous_checkpoint_sha256 == advanced.checkpoint_sha256
     assert entry.status(blocked.delivery_id).checkpoint == verified.checkpoint
+
+
+@pytest.mark.mysql
+def test_resume_reuses_retained_candidate_after_legacy_inconclusive_remediation(
+    tmp_path: Path,
+    mysql_dsn: str,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "hello.txt").write_text("hello\n", encoding="utf-8")
+    _git("init", "-b", "main", cwd=project)
+    _git("add", "hello.txt", cwd=project)
+    _git("commit", "-m", "initial", cwd=project)
+    config = ProductionConfig(
+        platform_root=str(tmp_path / "platform"),
+        live_model_execution=True,
+        model_routes=(
+            ProviderRouteConfig(
+                provider="codex",
+                model="gpt-5.6-terra",
+                kind=ModelProviderKind.CODEX_CLI,
+            ),
+        ),
+    )
+    environment = {"ASE_MYSQL_DSN": mysql_dsn, "PATH": os.environ.get("PATH", "")}
+    routes = _ResumeFactory(
+        transient_qa_failures=3,
+        verification_fails=False,
+        verification_inconclusive=True,
+        remediation_no_candidate=True,
+    )
+    host = OrganizationTeamHost(
+        config=config,
+        environment=environment,
+        structured_clients=_ScriptedClientFactory(),
+        delivery_route_adapters=routes,
+    )
+    entry = host.project_entry()
+    started = entry.start(
+        StartProjectDelivery(project_root=str(project), requirement="Change the greeting.")
+    )
+    blocked = entry.approve(
+        ApproveProductSpec(
+            delivery_id=started.checkpoint.delivery_id,
+            expected_checkpoint_sha256=started.checkpoint.checkpoint_sha256,
+            approval_reference="resume-inconclusive-source",
+        )
+    ).checkpoint
+    proposed = host.resume_delivery(ResumeProjectDelivery(delivery_id=blocked.delivery_id))
+    assert isinstance(proposed, DeliveryResumeResult)
+    assert proposed.verification_plan_sha256 is not None
+    assert proposed.verification_plan_file is not None
+    verification = host.verification_entry()
+    verification.approve(
+        Path(proposed.verification_plan_file),
+        confirmed_plan=proposed.verification_plan_sha256,
+        reference="resume-inconclusive-verification",
+    )
+    completion = verification.execute(Path(proposed.verification_plan_file))
+    assert not completion.verified
+
+    store, plan = verification.open(Path(proposed.verification_plan_file))
+    assert store.get_verification_completion(plan.plan_sha256) == completion
+    source = NativeCandidateSourceReader(config, environment).inspect(
+        RecoveryScope(
+            company_id=config.company_id,
+            project_id=blocked.project_id,
+            project_root=blocked.project_root,
+            delivery_id=blocked.delivery_id,
+        )
+    )
+    remediation = CandidateRemediationService(
+        backend=host._recovery_backend,
+        config=config,
+        environment=environment,
+    ).prepare(source=source, store=store, plan=plan, completion=completion)
+    entry.begin_continuation(
+        remediation.dispatch,
+        plan,
+        completion,
+        at=completion.completed_at,
+    )
+    delivery = host._recovery_backend.run_prepared_allocation(
+        remediation.dispatch,
+        remediation.preparation,
+        remediation.source.stages.product,
+        remediation.source.stages.design,
+        remediation.source.stages.plan,
+        extra_context=remediation.context_sources,
+    )
+    terminal = entry.finish_continuation(
+        remediation.dispatch,
+        delivery,
+        at=delivery.task.updated_at,
+    ).checkpoint
+    assert terminal.stage is DeliveryStage.BLOCKED
+    assert terminal.candidate_revision is None
+
+    calls = len(routes.requests)
+    resumed = host.resume_delivery(ResumeProjectDelivery(delivery_id=blocked.delivery_id))
+
+    assert isinstance(resumed, DeliveryResumeResult)
+    assert resumed.outcome is DeliveryResumeOutcome.VERIFICATION_APPROVAL_REQUIRED
+    assert resumed.verification_plan_sha256 is not None
+    assert resumed.verification_plan_sha256 != proposed.verification_plan_sha256
+    assert len(routes.requests) == calls

@@ -13,8 +13,12 @@ from pymysql.cursors import DictCursor
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.domain import Task, TaskStatus
 from ai_software_engineer.domain.event import StateEvent
-from ai_software_engineer.project_manager.delivery_checkpoint import ProjectDeliveryCheckpoint
+from ai_software_engineer.project_manager.delivery_checkpoint import (
+    DeliveryStage,
+    ProjectDeliveryCheckpoint,
+)
 from ai_software_engineer.project_manager.dispatch import (
+    ContinuationDispatchRecord,
     DeliveryAllocation,
     DispatchCommitRecord,
 )
@@ -28,6 +32,44 @@ from ai_software_engineer.store.mysql_repository import (
     _text,
     open_mysql_connection,
 )
+
+
+def retained_candidate_checkpoint(
+    history: tuple[ProjectDeliveryCheckpoint, ...],
+    dispatch: ContinuationDispatchRecord,
+) -> ProjectDeliveryCheckpoint:
+    """Resolve the exact source candidate retained by a failed continuation allocation."""
+    dispatch.validate_integrity()
+    if not history:
+        raise RecoveryRejected("continuation Delivery history is empty")
+    current = history[-1]
+    if (
+        current.stage not in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
+        or current.failed_stage is not DeliveryStage.DELIVERING
+        or current.task_status not in {TaskStatus.BLOCKED, TaskStatus.FAILED}
+        or current.candidate_revision is not None
+        or current.project_id != dispatch.project_id
+        or current.project_root != dispatch.task.repository
+        or current.delivery_id != dispatch.source_delivery_id
+        or current.task_id != dispatch.task_id
+        or current.dispatch_commit_id != dispatch.id
+        or current.dispatch_commit_sha256 != dispatch.dispatch_sha256
+    ):
+        raise RecoveryRejected("current Delivery is not the failed continuation")
+    matches = tuple(
+        checkpoint
+        for checkpoint in history[:-1]
+        if checkpoint.stage in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
+        and checkpoint.project_id == dispatch.project_id
+        and checkpoint.project_root == dispatch.task.repository
+        and checkpoint.delivery_id == dispatch.source_delivery_id
+        and checkpoint.task_id == dispatch.source_task_id
+        and checkpoint.dispatch_commit_id == dispatch.source_dispatch_id
+        and checkpoint.candidate_revision == dispatch.source_revision
+    )
+    if not matches:
+        raise RecoveryRejected("continuation source candidate is absent from Delivery history")
+    return matches[-1]
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,48 +209,159 @@ def read_candidate_snapshot(
         with connection.cursor(DictCursor) as cursor:
             cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
             cursor.execute("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
-            allocations: dict[str, DeliveryAllocation] = {}
-            for historic in history:
-                commit_id = historic.dispatch_commit_id
-                if commit_id is None or commit_id in allocations:
-                    continue
-                cursor.execute("SELECT * FROM dispatch_commits WHERE id = %s", (commit_id,))
-                row = cursor.fetchone()
-                if row is None:
-                    raise RecoveryRejected("candidate dispatch history is missing")
-                allocation = _decode_allocation(row)
-                if (
-                    allocation.id != commit_id
-                    or allocation.dispatch_sha256 != historic.dispatch_commit_sha256
-                    or allocation.project_id != historic.project_id
-                    or allocation.task_id != historic.task_id
-                ):
-                    raise RecoveryRejected("candidate dispatch history is inconsistent")
-                allocations[commit_id] = allocation
-            dispatch = allocations[checkpoint.dispatch_commit_id]
-            planner_dispatch = resolve_planner_dispatch(dispatch, allocations, history)
-            cursor.execute("SELECT * FROM tasks WHERE id = %s", (checkpoint.task_id,))
-            row = cursor.fetchone()
-            if row is None:
-                raise RecoveryRejected("original Task is missing")
-            task = _decode_task(checkpoint.task_id, _text(row, "payload_json"))
-            revision = _non_negative_int(row, "revision")
-            if _text(row, "status") != task.status.value:
-                raise RecoveryRejected("Task status columns disagree")
-            cursor.execute(
-                "SELECT * FROM state_events WHERE task_id = %s ORDER BY revision", (task.id,)
-            )
-            rows = cursor.fetchall()
-            if [r["revision"] for r in rows] != list(range(1, revision + 1)):
-                raise RecoveryRejected("candidate runtime event revisions have gaps")
-            events = tuple(_decode_event(_text(r, "payload_json")) for r in rows)
-            if any(
-                event.event_id != row["event_id"] for event, row in zip(events, rows, strict=True)
-            ):
-                raise RecoveryRejected("candidate event identities disagree")
-            snapshot = CandidateRuntimeSnapshot(task, revision, dispatch, planner_dispatch, events)
-            validate_candidate_snapshot(checkpoint, snapshot)
-            return snapshot
+            allocations = _read_allocations(cursor, history)
+            return _read_candidate_runtime(cursor, checkpoint, history, allocations)
     finally:
         connection.rollback()
         connection.close()
+
+
+def read_candidate_source_snapshot(
+    config: ProductionConfig,
+    environment: Mapping[str, str],
+    history: tuple[ProjectDeliveryCheckpoint, ...],
+) -> tuple[
+    ProjectDeliveryCheckpoint,
+    ProjectDeliveryCheckpoint,
+    CandidateRuntimeSnapshot,
+    ContinuationDispatchRecord | None,
+]:
+    """Read the current terminal cursor and its exact retained candidate in one SQL snapshot."""
+    if not history:
+        raise RecoveryRejected("candidate checkpoint history is incomplete")
+    current = history[-1]
+    if current.task_id is None or current.dispatch_commit_id is None:
+        raise RecoveryRejected("missing current Task or dispatch reference")
+    connection = open_mysql_connection(config.require_mysql_dsn(environment))
+    try:
+        with connection.cursor(DictCursor) as cursor:
+            cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+            cursor.execute("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
+            allocations = _read_allocations(cursor, history)
+            source = current
+            continuation: ContinuationDispatchRecord | None = None
+            if current.candidate_revision is None:
+                _, _, current_events = _read_task_facts(cursor, current)
+                if any(
+                    event.to_status is TaskStatus.QA
+                    and event.reason in {"candidate_ready", "candidate_recovered"}
+                    for event in current_events
+                ):
+                    snapshot = _read_candidate_runtime(cursor, current, history, allocations)
+                    return current, current, snapshot, None
+                current_dispatch = allocations[current.dispatch_commit_id]
+                if not isinstance(current_dispatch, ContinuationDispatchRecord):
+                    raise RecoveryRejected("terminal Delivery has no retained candidate")
+                _validate_failed_continuation_runtime(cursor, current, current_dispatch)
+                source = retained_candidate_checkpoint(history, current_dispatch)
+                continuation = current_dispatch
+            snapshot = _read_candidate_runtime(cursor, source, history, allocations)
+            return source, current, snapshot, continuation
+    finally:
+        connection.rollback()
+        connection.close()
+
+
+def _read_allocations(
+    cursor: DictCursor,
+    history: tuple[ProjectDeliveryCheckpoint, ...],
+) -> dict[str, DeliveryAllocation]:
+    allocations: dict[str, DeliveryAllocation] = {}
+    for historic in history:
+        commit_id = historic.dispatch_commit_id
+        if commit_id is None or commit_id in allocations:
+            continue
+        cursor.execute("SELECT * FROM dispatch_commits WHERE id = %s", (commit_id,))
+        row = cursor.fetchone()
+        if row is None:
+            raise RecoveryRejected("candidate dispatch history is missing")
+        allocation = _decode_allocation(row)
+        if (
+            allocation.id != commit_id
+            or allocation.dispatch_sha256 != historic.dispatch_commit_sha256
+            or allocation.project_id != historic.project_id
+            or allocation.task_id != historic.task_id
+        ):
+            raise RecoveryRejected("candidate dispatch history is inconsistent")
+        allocations[commit_id] = allocation
+    return allocations
+
+
+def _read_task_facts(
+    cursor: DictCursor,
+    checkpoint: ProjectDeliveryCheckpoint,
+) -> tuple[Task, int, tuple[StateEvent, ...]]:
+    assert checkpoint.task_id is not None
+    cursor.execute("SELECT * FROM tasks WHERE id = %s", (checkpoint.task_id,))
+    row = cursor.fetchone()
+    if row is None:
+        raise RecoveryRejected("original Task is missing")
+    task = _decode_task(checkpoint.task_id, _text(row, "payload_json"))
+    revision = _non_negative_int(row, "revision")
+    if _text(row, "status") != task.status.value:
+        raise RecoveryRejected("Task status columns disagree")
+    cursor.execute("SELECT * FROM state_events WHERE task_id = %s ORDER BY revision", (task.id,))
+    rows = cursor.fetchall()
+    if [item["revision"] for item in rows] != list(range(1, revision + 1)):
+        raise RecoveryRejected("candidate runtime event revisions have gaps")
+    events = tuple(_decode_event(_text(item, "payload_json")) for item in rows)
+    if any(event.event_id != item["event_id"] for event, item in zip(events, rows, strict=True)):
+        raise RecoveryRejected("candidate event identities disagree")
+    return task, revision, events
+
+
+def _read_candidate_runtime(
+    cursor: DictCursor,
+    checkpoint: ProjectDeliveryCheckpoint,
+    history: tuple[ProjectDeliveryCheckpoint, ...],
+    allocations: Mapping[str, DeliveryAllocation],
+) -> CandidateRuntimeSnapshot:
+    if checkpoint.task_id is None or checkpoint.dispatch_commit_id is None:
+        raise RecoveryRejected("missing original Task or dispatch reference")
+    dispatch = allocations[checkpoint.dispatch_commit_id]
+    planner_dispatch = resolve_planner_dispatch(dispatch, allocations, history)
+    task, revision, events = _read_task_facts(cursor, checkpoint)
+    snapshot = CandidateRuntimeSnapshot(task, revision, dispatch, planner_dispatch, events)
+    validate_candidate_snapshot(checkpoint, snapshot)
+    return snapshot
+
+
+def _validate_failed_continuation_runtime(
+    cursor: DictCursor,
+    checkpoint: ProjectDeliveryCheckpoint,
+    dispatch: ContinuationDispatchRecord,
+) -> None:
+    task, revision, events = _read_task_facts(cursor, checkpoint)
+    normalized = task.model_copy(
+        update={
+            "status": TaskStatus.NEW,
+            "attempts": 0,
+            "updated_at": dispatch.task.updated_at,
+        }
+    )
+    if (
+        normalized != dispatch.task
+        or checkpoint.task_status is not task.status
+        or checkpoint.task_revision != revision
+        or task.status not in {TaskStatus.BLOCKED, TaskStatus.FAILED}
+        or not events
+        or any(
+            event.to_status is TaskStatus.QA
+            and event.reason in {"candidate_ready", "candidate_recovered"}
+            for event in events
+        )
+    ):
+        raise RecoveryRejected("failed continuation runtime is inconsistent")
+    previous = TaskStatus.NEW
+    previous_time = task.created_at
+    for event in events:
+        if (
+            event.task_id != task.id
+            or event.from_status is not previous
+            or event.attempt > task.attempts
+            or event.occurred_at < previous_time
+        ):
+            raise RecoveryRejected("failed continuation event chain is inconsistent")
+        previous, previous_time = event.to_status, event.occurred_at
+    if previous is not task.status or previous_time != task.updated_at:
+        raise RecoveryRejected("failed continuation is not terminal")

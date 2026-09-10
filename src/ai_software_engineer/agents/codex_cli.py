@@ -299,7 +299,7 @@ class CodexCliAgentAdapter:
                     "--ephemeral",
                     "--ignore-user-config",
                     "--sandbox",
-                    "workspace-write" if request.role is AgentRole.CODER else "read-only",
+                    _sandbox_mode(request.role),
                     "--output-schema",
                     str(schema_path),
                     "--output-last-message",
@@ -573,8 +573,13 @@ def _compile_prompt(request: AgentRequest, messages: Sequence[object]) -> str:
         AgentRole.QA: (
             "Independently test the exact candidate without modifying it; return only qa-report. "
             "QA status PASS requires every criterion and test to PASS and forbids MAJOR or "
-            "BLOCKER findings; otherwise use FAIL. Do not cite an evidence ID unless its full "
-            "evidence record is present in the top-level evidence array."
+            "BLOCKER findings; otherwise use FAIL. Use test status ERROR only when the verifier "
+            "environment or test tool could not establish a code verdict. Candidate-caused test "
+            "failures must use FAIL and mark the affected criteria FAIL; environment/tool ERROR "
+            "must leave unverified criteria NOT_TESTED. Disposable ignored cache/build output is "
+            "allowed, but HEAD and every Git-visible path must remain unchanged. Do not cite an "
+            "evidence ID unless its full evidence record is present in the top-level evidence "
+            "array."
         ),
         AgentRole.REVIEWER: (
             "Independently review the exact candidate without modifying it; return review-report. "
@@ -622,6 +627,13 @@ def _safe_diagnostic_path(value: str | None) -> str | None:
 def _completion_reserve_seconds(timeout_seconds: int) -> int:
     proportional = max(10, timeout_seconds // 5)
     return min(300, proportional, max(0, timeout_seconds - 1))
+
+
+def _sandbox_mode(role: AgentRole) -> str:
+    """Allow QA tool scratch while immutable Git postconditions protect the candidate."""
+    if role in {AgentRole.CODER, AgentRole.QA}:
+        return "workspace-write"
+    return "read-only"
 
 
 def _normalize_producer(

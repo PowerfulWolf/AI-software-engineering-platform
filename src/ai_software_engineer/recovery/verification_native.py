@@ -2,25 +2,34 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 
 from ai_software_engineer.agents import FileModelRouteAttemptStore
 from ai_software_engineer.agents.fallback import model_route_root
 from ai_software_engineer.artifacts import FileArtifactStore, artifact_digest
 from ai_software_engineer.company_workspace import CompanyWorkspace, _read_regular, _reject_symlinks
 from ai_software_engineer.config import ProductionConfig
+from ai_software_engineer.domain import AgentRole
 from ai_software_engineer.domain.artifact import ImplementationReportArtifact, PlanArtifact
 from ai_software_engineer.project_manager.delivery_checkpoint import (
     DeliveryStage,
     FileProjectDeliveryCheckpointStore,
     ProjectDeliveryCheckpoint,
+    checkpoint_sha256_is_ancestor,
 )
+from ai_software_engineer.project_manager.dispatch import ContinuationDispatchRecord
 from ai_software_engineer.project_workspace import ProjectWorkspaceManifest
 from ai_software_engineer.recovery.models import RecoveryRejected, RecoveryScope, digest
 from ai_software_engineer.recovery.native import NativeApprovedStages, _parent, read_approved_stages
-from ai_software_engineer.recovery.verification_records import CandidateVerificationInputs
+from ai_software_engineer.recovery.store import FileRecoveryStore
+from ai_software_engineer.recovery.verification_records import (
+    CandidateVerificationDisposition,
+    CandidateVerificationInputs,
+    verification_inputs_are_current,
+)
 from ai_software_engineer.recovery.verification_snapshot import (
     CandidateRuntimeSnapshot,
-    read_candidate_snapshot,
+    read_candidate_source_snapshot,
     terminal_candidate_event,
 )
 
@@ -29,6 +38,7 @@ from ai_software_engineer.recovery.verification_snapshot import (
 class NativeCandidateSource:
     scope: RecoveryScope
     checkpoint: ProjectDeliveryCheckpoint
+    terminal_checkpoint: ProjectDeliveryCheckpoint
     runtime: CandidateRuntimeSnapshot
     stages: NativeApprovedStages
     inputs: CandidateVerificationInputs
@@ -69,17 +79,19 @@ class NativeCandidateSourceReader:
             root / "state/project-deliveries", read_only=True
         )
         history = journal.list(scope.delivery_id)
-        cp = history[-1]
+        current = history[-1]
         intake = journal.get_intake(scope.delivery_id)
         if (
-            cp.stage not in (DeliveryStage.BLOCKED, DeliveryStage.FAILED)
-            or cp.project_id != scope.project_id
-            or cp.project_root != scope.project_root
+            current.stage not in (DeliveryStage.BLOCKED, DeliveryStage.FAILED)
+            or current.project_id != scope.project_id
+            or current.project_root != scope.project_root
             or intake.project_id != scope.project_id
             or intake.project_root != scope.project_root
         ):
             raise ValueError("not a terminal scoped delivery")
-        runtime = read_candidate_snapshot(self.config, self.environment, cp, history)
+        cp, terminal, runtime, continuation = read_candidate_source_snapshot(
+            self.config, self.environment, history
+        )
         stages = read_approved_stages(
             self.config,
             root,
@@ -89,7 +101,7 @@ class NativeCandidateSourceReader:
             runtime.planner_dispatch,
             current_dispatch=runtime.dispatch,
         )
-        parent_id, parent_sha = _parent(company, cp, stages.approval)
+        parent_id, parent_sha = _parent(company, terminal, stages.approval)
         artifacts = FileArtifactStore(root / "artifacts", read_only=True)
         candidate_checkpoint = terminal_candidate_event(runtime.task, runtime.events)
         implementation = artifacts.get(candidate_checkpoint.artifact_ids[0])
@@ -138,9 +150,23 @@ class NativeCandidateSourceReader:
             candidate_revision=candidate,
             prior_run_ids=tuple(sorted(run_ids)),
         )
+        if continuation is not None:
+            _validate_inconclusive_continuation(
+                root,
+                scope,
+                history,
+                cp,
+                runtime,
+                inputs,
+                continuation,
+            )
+        replay_cp, replay_terminal, replay_runtime, replay_continuation = (
+            read_candidate_source_snapshot(self.config, self.environment, history)
+        )
         if (
             journal.list(scope.delivery_id) != history
-            or read_candidate_snapshot(self.config, self.environment, cp, history) != runtime
+            or (replay_cp, replay_terminal, replay_runtime, replay_continuation)
+            != (cp, terminal, runtime, continuation)
             or read_approved_stages(
                 self.config,
                 root,
@@ -151,7 +177,57 @@ class NativeCandidateSourceReader:
                 current_dispatch=runtime.dispatch,
             )
             != stages
-            or _parent(company, cp, stages.approval) != (parent_id, parent_sha)
+            or _parent(company, terminal, stages.approval) != (parent_id, parent_sha)
         ):
             raise ValueError("candidate source changed during inspection")
-        return NativeCandidateSource(scope, cp, runtime, stages, inputs, parent_id, parent_sha)
+        return NativeCandidateSource(
+            scope,
+            cp,
+            terminal,
+            runtime,
+            stages,
+            inputs,
+            parent_id,
+            parent_sha,
+        )
+
+
+def _validate_inconclusive_continuation(
+    sidecar: Path,
+    scope: RecoveryScope,
+    history: tuple[ProjectDeliveryCheckpoint, ...],
+    source_checkpoint: ProjectDeliveryCheckpoint,
+    runtime: CandidateRuntimeSnapshot,
+    inputs: CandidateVerificationInputs,
+    continuation: ContinuationDispatchRecord,
+) -> None:
+    """Allow retained-candidate reuse only for a legacy environment-only QA remediation."""
+    store = FileRecoveryStore(
+        sidecar / "state" / f"candidate-verification-{scope.delivery_id}",
+        scope=scope,
+    )
+    plan = store.get_verification_plan(continuation.continuation_plan_sha256)
+    completion = store.get_verification_completion(plan.plan_sha256)
+    qa_invocation = store.get_verification_invocation(plan.plan_sha256, AgentRole.QA)
+    admitted_run_ids = {qa_invocation.request.run_id}
+    if completion.review is not None:
+        reviewer_invocation = store.get_verification_invocation(
+            plan.plan_sha256, AgentRole.REVIEWER
+        )
+        admitted_run_ids.add(reviewer_invocation.request.run_id)
+    if (
+        continuation.source_delivery_id != scope.delivery_id
+        or continuation.source_task_id != inputs.task_id
+        or continuation.source_revision != inputs.candidate_revision
+        or continuation.source_dispatch_id != source_checkpoint.dispatch_commit_id
+        or continuation.continuation_plan_sha256 != plan.plan_sha256
+        or continuation.continuation_sha256 != completion.completion_sha256
+        or plan.scope != scope
+        or not checkpoint_sha256_is_ancestor(history, plan.native_checkpoint_sha256)
+        or plan.dispatch_sha256 != runtime.dispatch.dispatch_sha256
+        or not verification_inputs_are_current(plan.inputs, inputs, admitted_run_ids)
+        or completion.plan_sha256 != plan.plan_sha256
+        or completion.qa_invocation_sha256 != qa_invocation.invocation_sha256
+        or completion.disposition is not CandidateVerificationDisposition.RETRY_VERIFICATION
+    ):
+        raise RecoveryRejected("failed continuation does not retain an inconclusive candidate")
