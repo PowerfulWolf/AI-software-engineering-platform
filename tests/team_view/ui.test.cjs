@@ -62,6 +62,26 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
         assigned_delivery_ids: ["d1", "d2"],
         history_delivery_ids: [],
       },
+      {
+        id: "agent_qa",
+        name: "测试",
+        roles: ["qa"],
+        enabled: true,
+        max_parallel_assignments: 8,
+        current_stage_delivery_ids: [],
+        assigned_delivery_ids: ["d1"],
+        history_delivery_ids: [],
+      },
+      {
+        id: "agent_reviewer",
+        name: "评审",
+        roles: ["reviewer"],
+        enabled: true,
+        max_parallel_assignments: 8,
+        current_stage_delivery_ids: [],
+        assigned_delivery_ids: ["d1"],
+        history_delivery_ids: [],
+      },
     ],
     requests: [
       {
@@ -97,6 +117,24 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
           planned_model: "gpt-5.5",
           current_stage: !i,
         },
+        ...(i
+          ? []
+          : [
+              {
+                agent_id: "agent_qa",
+                role: "qa",
+                planned_provider: "codex",
+                planned_model: "gpt-5.5",
+                current_stage: false,
+              },
+              {
+                agent_id: "agent_reviewer",
+                role: "reviewer",
+                planned_provider: "codex",
+                planned_model: "gpt-5.5",
+                current_stage: false,
+              },
+            ]),
       ],
       timeline: [],
       runs: [
@@ -171,6 +209,27 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   assert.match(text(get("content")), /\/backend\/module-a/);
   assert.match(text(get("content")), /\/frontend/);
   assert.ok(text(get("content")).includes(malicious));
+  const agentCards = get("content").children.filter(
+    (node) => node.className === "agent",
+  );
+  assert.match(text(agentCards[0]), /实现中/);
+  assert.doesNotMatch(text(agentCards[1]), /实现中/);
+  assert.match(text(agentCards[1]), /等待测试阶段/);
+  assert.doesNotMatch(text(agentCards[2]), /实现中/);
+  assert.match(text(agentCards[2]), /等待评审阶段/);
+  fixture.tasks[0].status = "QA";
+  fixture.tasks[0].assignments[0].current_stage = false;
+  fixture.tasks[0].assignments[1].current_stage = true;
+  fixture.agents[0].current_stage_delivery_ids = [];
+  fixture.agents[1].current_stage_delivery_ids = ["d1"];
+  await interval.fn();
+  const qaStageCards = get("content").children.filter(
+    (node) => node.className === "agent",
+  );
+  assert.match(text(qaStageCards[0]), /本轮已完成/);
+  assert.doesNotMatch(text(qaStageCards[0]), /测试中/);
+  assert.match(text(qaStageCards[1]), /测试中/);
+  assert.match(text(qaStageCards[2]), /等待评审阶段/);
   get("nav-requests").events.click();
   assert.match(text(get("content")), /0\/2 个改造仓库任务完成/);
   vm.runInContext('showDetail("task","d1")', context);

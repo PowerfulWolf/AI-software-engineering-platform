@@ -29,6 +29,10 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
 - Capture file prefixes before SQL snapshot; event-linked artifacts support gate evidence. Completed
   model-route records can precede state transitions but cannot become verdict authority.
 - Current role is Task stage + committed assignment; terminal tasks are history, not active work.
+- Agent cards must render assignment-stage state, not copy the Task's global delivery status onto every
+  planned assignment. Only `AssignmentView.current_stage=true` may display the Task's active-stage label.
+  Earlier serial roles display `本轮已完成`, later roles display `等待<角色>阶段`, and a Task with no
+  current-stage assignment displays `已分配 · 等待调度`. Task detail keeps the complete assignment plan.
 - `AgentRole.ORCHESTRATOR` 是 legacy planning/control Run，可保留在 Task/Run timeline，但不是
   `OrganizationRole`。`RunProjectionBuilder` 只能把 Coder/QA/Reviewer delivery roles 映射成组织角色；
   没有 AgentProfile 且只含 orchestrator Run 的 synthetic identity 不得生成 Agent card。
@@ -56,6 +60,9 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
 | Parent child record is absent/replaced or ahead of native history | reject snapshot |
 | Task/dispatch/event binding drift | reject snapshot, never hide corrupted records |
 | Terminal Task | history, no current-stage assignment |
+| IMPLEMENTING with Coder current, QA/Reviewer planned | Coder `实现中`; QA `等待测试阶段`; Reviewer `等待评审阶段` |
+| QA with QA current | Coder `本轮已完成`; QA `测试中`; Reviewer `等待评审阶段` |
+| Non-terminal Task with no current assignment | every planned role `已分配 · 等待调度`; none shown as executing |
 | Orchestrator plan artifact/run | Run/timeline 保留；不创建虚假组织成员，不抛角色转换异常 |
 | Foreign Host/Origin | 403 before reader invocation |
 | Non-GET / unknown path or query | 405 / 404 |
@@ -73,6 +80,8 @@ tests/team_view: real MySQL/Git scripted providers, in-flight Coder/QA/Review, m
 no file writes, company isolation, tamper rejection; actual HTTP GET/assets/Host/Origin/write/errors;
 exact Schema model equality; Node DOM harness for multi-assignment/views/HTML safety/refresh/stale/
 expanded documents. No real models. Full regression, Ruff, strict Mypy and offline build required.
+The DOM harness must include one serial Task assigned to Coder/QA/Reviewer and assert that exactly the
+current assignment receives the active Task-stage label before and after a Coder-to-QA transition.
 `tests/projection/test_projector.py` 必须覆盖 orchestrator Run 可见但 `snapshot.agents` 不含虚假成员。
 
 ## Wrong vs Correct
@@ -84,6 +93,10 @@ MySQL transaction. Refresh observes, never advances delivery.
 Wrong: `OrganizationRole(run.role.value)` 对所有 delivery/control Run 强转。
 Correct: 仅显式映射 Coder/QA/Reviewer；Project Manager/Product/Designer/Planner 由 AgentProfile 提供，
 orchestrator 只作为控制 Run 留在时间线。
+
+Wrong: every Agent card renders `badge(task.status)`, so all three planned roles appear `实现中`.
+Correct: render the badge from `assignment.current_stage` plus serial role order; preserve
+`task.status` as the Task-level delivery state and never infer concurrent execution from a plan.
 
 ## Scenario: candidate verification and remediation visibility
 

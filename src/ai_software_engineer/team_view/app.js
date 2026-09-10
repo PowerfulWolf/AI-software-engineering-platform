@@ -34,6 +34,7 @@ const labels = {
   UNKNOWN: "未确认",
 };
 const label = (value) => labels[value] || value;
+const roleOrder = { coder: 0, qa: 1, reviewer: 2 };
 const el = (tag, text, className) => {
   const n = document.createElement(tag);
   if (text !== undefined) n.textContent = text;
@@ -58,6 +59,22 @@ const badge = (status) =>
           ? "blocked"
           : "current"),
   );
+function assignmentBadge(task, assignment) {
+  if (task.terminal) return badge(task.status);
+  if (assignment.current_stage) return badge(task.status);
+  const current = task.assignments.find((candidate) => candidate.current_stage);
+  if (!current)
+    return el("span", "已分配 · 等待调度", "badge");
+  const assignedOrder = roleOrder[assignment.role];
+  const currentOrder = roleOrder[current.role];
+  if (assignedOrder !== undefined && currentOrder !== undefined) {
+    if (assignedOrder < currentOrder)
+      return el("span", "本轮已完成", "badge done");
+    if (assignedOrder > currentOrder)
+      return el("span", `等待${label(assignment.role)}阶段`, "badge");
+  }
+  return el("span", "已分配 · 非当前阶段", "badge");
+}
 const taskById = (id) => snapshot.tasks.find((t) => t.id === id);
 const requestById = (id) => snapshot.requests.find((r) => r.id === id);
 function paths(scope) {
@@ -95,11 +112,11 @@ function taskRow(task, agentId) {
     button(request ? request.title : task.title, () =>
       showDetail("task", task.id),
     ),
-    badge(task.status),
   );
+  const a = task.assignments.find((a) => a.agent_id === agentId);
+  row.append(a ? assignmentBadge(task, a) : badge(task.status));
   n.append(row);
   n.append(el("p", paths(task.scope), "paths"));
-  const a = task.assignments.find((a) => a.agent_id === agentId);
   if (a)
     n.append(
       el(
