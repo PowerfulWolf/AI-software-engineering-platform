@@ -4,9 +4,12 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import Mock
 
-from ai_software_engineer.domain import TaskStatus
+import pytest
+
+from ai_software_engineer.domain import QaCriterionStatus, QaReportStatus, TaskStatus
 from ai_software_engineer.orchestration import RetryDeliveryResult
 from ai_software_engineer.project_manager.delivery import (
+    DeliveryCommandRejected,
     ProjectDeliveryCheckpointCatalog,
     UnifiedProjectEntryService,
 )
@@ -18,12 +21,17 @@ from ai_software_engineer.project_manager.delivery_checkpoint import (
     FileProjectDeliveryCheckpointStore,
     ProjectDeliveryCheckpoint,
 )
-from ai_software_engineer.project_manager.dispatch import ContinuationDispatchRecord
+from ai_software_engineer.project_manager.dispatch import (
+    ContinuationDispatchRecord,
+    _record_digest,
+)
 from ai_software_engineer.recovery.models import RecoveryScope
 from ai_software_engineer.recovery.verification_records import (
     CandidateVerificationCompletion,
+    CandidateVerificationInputs,
     CandidateVerificationPlan,
 )
+from tests.domain.factories import make_qa_artifact
 from tests.orchestration.test_retry import ScriptedAdapter
 from tests.orchestration.test_runner import _definitions
 from tests.recovery.test_candidate_verification import Admission, setup_verification
@@ -33,7 +41,11 @@ NOW = datetime(2026, 9, 9, 8, 0, tzinfo=UTC)
 
 
 def _service(
-    tmp_path: Path, dispatch: ContinuationDispatchRecord
+    tmp_path: Path,
+    dispatch: ContinuationDispatchRecord,
+    *,
+    retain_candidate: bool = True,
+    retained_failure: bool = True,
 ) -> tuple[UnifiedProjectEntryService, FileProjectDeliveryCheckpointStore]:
     registry = tmp_path / "registry"
     state = registry / dispatch.project_id / "state"
@@ -63,12 +75,13 @@ def _service(
         task_id=dispatch.source_task_id,
         task_revision=7,
         task_status=TaskStatus.BLOCKED,
-        candidate_revision=dispatch.source_revision,
+        candidate_revision=dispatch.source_revision if retain_candidate else None,
         stage=DeliveryStage.BLOCKED,
         stage_attempts=DeliveryStageAttempts(delivering=1),
         next_action=DeliveryNextAction.REQUEST_HUMAN,
         failure_code=DeliveryFailureCode.TRANSIENT_PROVIDER_FAILURE,
         failure_summary="QA provider stopped after the candidate was committed",
+        failed_stage=DeliveryStage.DELIVERING if retained_failure else None,
         checkpointed_at=NOW,
     )
     store.put(source)
@@ -81,16 +94,113 @@ def _service(
     )
 
 
+def _verification_for(
+    store: FileProjectDeliveryCheckpointStore,
+    dispatch: ContinuationDispatchRecord,
+) -> tuple[
+    ContinuationDispatchRecord,
+    CandidateVerificationPlan,
+    CandidateVerificationCompletion,
+]:
+    current = store.current(dispatch.source_delivery_id)
+    assert current.dispatch_commit_sha256 is not None
+    plan = CandidateVerificationPlan.create(
+        scope=RecoveryScope(
+            company_id="company_test",
+            project_id=current.project_id,
+            project_root=current.project_root,
+            delivery_id=current.delivery_id,
+        ),
+        inputs=CandidateVerificationInputs(
+            task_id=dispatch.source_task_id,
+            task_revision=current.task_revision or 1,
+            task_sha256="1" * 64,
+            plan_id="art_plan_source",
+            plan_sha256="2" * 64,
+            implementation_id="art_impl_source",
+            implementation_sha256="3" * 64,
+            candidate_revision=dispatch.source_revision,
+        ),
+        native_checkpoint_sha256=current.checkpoint_sha256,
+        dispatch_sha256=current.dispatch_commit_sha256,
+        approved_stage_chain_sha256="5" * 64,
+        current_policy_sha256="6" * 64,
+        definitions=tuple(_definitions().values()),
+        created_at=NOW,
+    )
+    qa = make_qa_artifact()
+    failed_criterion = qa.content.criteria_results[0].model_copy(
+        update={"status": QaCriterionStatus.FAIL}
+    )
+    qa = qa.model_copy(
+        update={
+            "task_id": dispatch.source_task_id,
+            "source_revision": dispatch.source_revision,
+            "parent_artifact_ids": (plan.inputs.implementation_id,),
+            "content": qa.content.model_copy(
+                update={
+                    "status": QaReportStatus.FAIL,
+                    "criteria_results": (failed_criterion,),
+                }
+            ),
+        }
+    )
+    completion = CandidateVerificationCompletion.create(
+        plan_sha256=plan.plan_sha256,
+        authorization_sha256="7" * 64,
+        qa_invocation_sha256="8" * 64,
+        qa=qa,
+        completed_at=NOW + timedelta(seconds=30),
+    )
+    task_id = f"task_continue_{completion.completion_sha256[:32]}"
+    continuation_metadata = {
+        "continuation_sha256": completion.completion_sha256,
+        "continuation_plan_sha256": plan.plan_sha256,
+    }
+    task = dispatch.task.model_copy(
+        update={
+            "id": task_id,
+            "metadata": {**dispatch.task.metadata, **continuation_metadata},
+        }
+    )
+    phases = tuple(
+        phase.model_copy(
+            update={
+                "assignment": phase.assignment.model_copy(update={"task_id": task_id}),
+                "lease": phase.lease.model_copy(update={"task_id": task_id}),
+            }
+        )
+        for phase in dispatch.phases
+    )
+    rebound = ContinuationDispatchRecord.model_validate(
+        {
+            **dispatch.to_wire(),
+            "id": f"dispatch_commit_{completion.completion_sha256}",
+            "task_id": task_id,
+            "task": task.to_wire(),
+            "phases": [phase.to_wire() for phase in phases],
+            **continuation_metadata,
+            "dispatch_sha256": "0" * 64,
+        }
+    )
+    rebound = rebound.model_copy(update={"dispatch_sha256": _record_digest(rebound)})
+    return rebound, plan, completion
+
+
 def test_continuation_is_attached_once_and_seals_successor_candidate(tmp_path: Path) -> None:
     dispatch = continuation_allocation(tmp_path)
     service, store = _service(tmp_path, dispatch)
+    dispatch, plan, completion = _verification_for(store, dispatch)
 
-    started = service.begin_continuation(dispatch, at=NOW + timedelta(minutes=1))
+    started = service.begin_continuation(dispatch, plan, completion, at=NOW + timedelta(minutes=1))
     assert started.checkpoint.stage is DeliveryStage.DELIVERING
     assert started.checkpoint.task_id == dispatch.task_id
     assert started.checkpoint.dispatch_commit_id == dispatch.id
     assert started.checkpoint.candidate_revision is None
-    assert service.begin_continuation(dispatch, at=NOW + timedelta(minutes=2)) == started
+    assert (
+        service.begin_continuation(dispatch, plan, completion, at=NOW + timedelta(minutes=2))
+        == started
+    )
 
     task = dispatch.task.model_copy(
         update={
@@ -121,7 +231,47 @@ def test_continuation_is_attached_once_and_seals_successor_candidate(tmp_path: P
     assert len(store.list(dispatch.source_delivery_id)) == 3
 
 
-def test_verified_candidate_accepts_unchanged_checkpoint_append(tmp_path: Path) -> None:
+def test_continuation_accepts_retained_candidate_when_terminal_cursor_is_empty(
+    tmp_path: Path,
+) -> None:
+    dispatch = continuation_allocation(tmp_path)
+    service, store = _service(tmp_path, dispatch, retain_candidate=False)
+    dispatch, plan, completion = _verification_for(store, dispatch)
+
+    started = service.begin_continuation(
+        dispatch,
+        plan,
+        completion,
+        at=NOW + timedelta(minutes=1),
+    )
+
+    assert started.checkpoint.stage is DeliveryStage.DELIVERING
+    assert started.checkpoint.task_id == dispatch.task_id
+
+
+def test_continuation_rejects_empty_cursor_without_terminal_delivery_proof(
+    tmp_path: Path,
+) -> None:
+    dispatch = continuation_allocation(tmp_path)
+    service, store = _service(
+        tmp_path,
+        dispatch,
+        retain_candidate=False,
+        retained_failure=False,
+    )
+    dispatch, plan, completion = _verification_for(store, dispatch)
+
+    with pytest.raises(
+        DeliveryCommandRejected, match="continuation does not match the terminal candidate"
+    ):
+        service.begin_continuation(dispatch, plan, completion, at=NOW + timedelta(minutes=1))
+
+
+@pytest.mark.parametrize("retain_candidate", [True, False])
+def test_verified_candidate_accepts_unchanged_checkpoint_append(
+    tmp_path: Path,
+    retain_candidate: bool,
+) -> None:
     (tmp_path / "verification").mkdir()
     inputs, repository, verifier = setup_verification(
         tmp_path / "verification", ScriptedAdapter(), Admission()
@@ -158,12 +308,13 @@ def test_verified_candidate_accepts_unchanged_checkpoint_append(tmp_path: Path) 
                 task_id=inputs.task_id,
                 task_revision=inputs.task_revision,
                 task_status=TaskStatus.BLOCKED,
-                candidate_revision=inputs.candidate_revision,
+                candidate_revision=inputs.candidate_revision if retain_candidate else None,
                 stage=DeliveryStage.BLOCKED,
                 stage_attempts=DeliveryStageAttempts(delivering=1),
                 next_action=DeliveryNextAction.REQUEST_HUMAN,
                 failure_code=DeliveryFailureCode.INVALID_AGENT_OUTPUT,
                 failure_summary="QA result needs independent verification",
+                failed_stage=DeliveryStage.DELIVERING,
                 checkpointed_at=NOW,
             )
         )

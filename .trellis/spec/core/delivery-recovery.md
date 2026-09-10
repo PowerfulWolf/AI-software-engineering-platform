@@ -956,7 +956,11 @@ OrganizationTeamHost.resume_delivery(
 
 DeliveryResumeController.resume(command: ResumeProjectDelivery) -> DeliveryResumeResult
 UnifiedProjectEntryService.begin_continuation(
-    dispatch: ContinuationDispatchRecord, *, at: datetime
+    dispatch: ContinuationDispatchRecord,
+    plan: CandidateVerificationPlan,
+    completion: CandidateVerificationCompletion,
+    *,
+    at: datetime,
 ) -> ProjectDeliveryResult
 UnifiedProjectEntryService.finish_continuation(
     dispatch: ContinuationDispatchRecord, delivery: RetryResult, *, at: datetime
@@ -1080,6 +1084,14 @@ dispatch_sha256
   either a direct QA/Reviewer terminal failure, or QA FAIL/Review REJECT routed to Coder followed by
   a terminal Coder failure. `resume` verifies that retained candidate before attempting dirty-worktree
   failed-Coder recovery.
+- A nullable Delivery checkpoint `candidate_revision` is a cursor projection, not Candidate authority.
+  `begin_continuation` and `accept_verification` may consume a retained Candidate only when the exact
+  verification plan and completion are supplied together: the plan's native checkpoint must be an
+  ancestor of the current validated Delivery hash chain; Delivery/project/Task/dispatch identities,
+  implementation parent, QA/Review candidate and direct-parent lineage must match. The current
+  checkpoint must identify a terminal `DELIVERING` failure with a BLOCKED/FAILED Task. If the cursor
+  contains a non-null Candidate, exact equality remains mandatory. Successful verification restores
+  the proven Candidate into the DONE checkpoint; remediation starts a new Candidate-empty Task.
 - An invocation with no sealed completion is ambiguous and cannot be replayed. A later `resume`
   proposes a new plan/Run for the same candidate and requires a new exact approval.
 - PASS + APPROVE may seal the original Delivery DONE without rewriting its terminal Task; the
@@ -1124,6 +1136,8 @@ dispatch_sha256
 | Admitted invocation, no completion | Publish successor plan; require approval | 0 |
 | PASS + APPROVE completion | Bind verified candidate and mark Delivery DONE | 0 |
 | QA FAIL / Review REJECT completion | Deterministic continuation dispatch and fresh serial Task | 3+ bounded retries |
+| Current cursor candidate null, exact retained-candidate plan/completion proof | Accept DONE or begin remediation according to verdict | 0 before the selected next operation |
+| Current cursor candidate null without terminal DELIVERING marker, ancestor, or exact lineage | `continuation does not match the terminal candidate` | 0 |
 | Successor Task terminal, Delivery still DELIVERING | Rebuild result and append checkpoint | 0 |
 | Project/preparation/policy/candidate/parent drift | Fail closed with safe error | 0 |
 | Candidate patch secret/non-UTF-8/>1 MiB | `RecoveryRejected` before allocation | 0 |
@@ -1153,7 +1167,9 @@ dispatch_sha256
   Task and attachment of its candidate to the original Delivery. It must also make the first recovery
   Coder fail, then prove a second `resume` creates a new plan/Task and reaches DONE.
 - `tests/recovery/test_delivery_continuation.py`: checkpoint attachment, target preparation adoption,
-  result sealing and exact replay without duplicate journal entries.
+  result sealing and exact replay without duplicate journal entries; both verification acceptance and
+  remediation must accept the exact retained Candidate when the latest cursor is null, while an empty
+  cursor without the terminal DELIVERING proof must fail closed.
 - `tests/e2e/test_unified_project_entry.py`: current and legacy Delivery-startup checkpoints with a
   pristine materialized Task resume through the public controller and never call recovery/verification.
 - `tests/recovery/test_execution_records.py`: continuation digest/metadata/phase validation plus
@@ -1197,6 +1213,15 @@ dispatch = authority.commit_continuation(
 ```
 
 ```python
+# Wrong: a nullable checkpoint projection erases a Candidate already proven by Task events/artifacts.
+if checkpoint.candidate_revision != dispatch.source_revision:
+    reject()
+
+# Correct: a non-null cursor must match; a null cursor needs the complete sealed proof chain.
+entry.begin_continuation(dispatch, verification_plan, completion, at=completion.completed_at)
+```
+
+```python
 # Wrong: every Coder attempt is declared to start from the original Task base.
 request = build_agent_request(candidate_revision=None)
 
@@ -1214,3 +1239,10 @@ return DeliveryResumeResult(outcome=REMEDIATED, checkpoint=blocked)
 if checkpoint.stage in HUMAN_GATED_OR_TERMINAL_FAILURE_STAGES:
     outcome = WAITING_HUMAN
 ```
+
+Root cause (B/C/D/E): retained-Candidate discovery was added at the Task event/Artifact layer, but
+the downstream Delivery entry still treated its nullable checkpoint projection as authoritative.
+The original continuation test covered only a checkpoint that directly stored the Candidate, so the
+cross-layer propagation gap survived. The prevention mechanism is a proof-carrying continuation
+signature plus paired positive/negative tests at the Delivery entry seam; never fix this by merely
+dropping the Candidate comparison or by rewriting historical checkpoints.

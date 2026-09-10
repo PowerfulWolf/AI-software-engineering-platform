@@ -206,7 +206,12 @@ class DeliveryResumeController:
             config=self._config,
             environment=self._environment,
         ).prepare(source=self._native_source(plan), store=store, plan=plan, completion=completion)
-        started = self._entry.begin_continuation(native.dispatch, at=completion.completed_at)
+        started = self._entry.begin_continuation(
+            native.dispatch,
+            plan,
+            completion,
+            at=completion.completed_at,
+        )
         if started.checkpoint.stage is not DeliveryStage.DELIVERING:
             return self._result(
                 DeliveryResumeOutcome.CONTINUED,

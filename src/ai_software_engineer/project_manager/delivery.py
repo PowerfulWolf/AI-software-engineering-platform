@@ -226,6 +226,50 @@ class ProjectDeliveryCheckpointCatalog:
         return matches[0]
 
 
+def _verification_binds_terminal_candidate(
+    *,
+    current: ProjectDeliveryCheckpoint,
+    history: tuple[ProjectDeliveryCheckpoint, ...],
+    plan: CandidateVerificationPlan,
+    completion: CandidateVerificationCompletion,
+) -> bool:
+    """Verify the sealed candidate proof when the latest cursor omits its projection."""
+    plan.validate_integrity()
+    completion.validate_integrity()
+    candidate = plan.inputs.candidate_revision
+    cursor_matches = current.candidate_revision == candidate
+    retained_candidate = (
+        current.candidate_revision is None
+        and current.failed_stage is DeliveryStage.DELIVERING
+        and current.task_status in {TaskStatus.BLOCKED, TaskStatus.FAILED}
+    )
+    qa = completion.qa
+    review = completion.review
+    return (
+        bool(history)
+        and history[-1] == current
+        and checkpoint_sha256_is_ancestor(history, plan.native_checkpoint_sha256)
+        and completion.plan_sha256 == plan.plan_sha256
+        and current.project_id == plan.scope.project_id
+        and current.project_root == plan.scope.project_root
+        and current.delivery_id == plan.scope.delivery_id
+        and current.task_id == plan.inputs.task_id
+        and current.dispatch_commit_sha256 == plan.dispatch_sha256
+        and (cursor_matches or retained_candidate)
+        and qa.task_id == plan.inputs.task_id
+        and qa.source_revision == candidate
+        and qa.parent_artifact_ids == (plan.inputs.implementation_id,)
+        and (
+            review is None
+            or (
+                review.task_id == plan.inputs.task_id
+                and review.source_revision == candidate
+                and review.parent_artifact_ids == (qa.artifact_id,)
+            )
+        )
+    )
+
+
 class UnifiedProjectEntryService:
     """Drive prepare → Product gate → Design → Plan → Dispatch → Delivery."""
 
@@ -515,6 +559,8 @@ class UnifiedProjectEntryService:
     def begin_continuation(
         self,
         dispatch: ContinuationDispatchRecord,
+        plan: CandidateVerificationPlan,
+        completion: CandidateVerificationCompletion,
         *,
         at: datetime,
     ) -> ProjectDeliveryResult:
@@ -524,13 +570,24 @@ class UnifiedProjectEntryService:
             if current.task_id != dispatch.task_id:
                 raise DeliveryCommandRejected("continuation replay Task mismatch")
             return ProjectDeliveryResult(checkpoint=current)
+        dispatch.validate_integrity()
+        history = store.list(current.delivery_id)
         if (
             current.stage not in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
             or current.task_id != dispatch.source_task_id
-            or current.candidate_revision != dispatch.source_revision
+            or current.dispatch_commit_id != dispatch.source_dispatch_id
+            or current.dispatch_commit_sha256 != plan.dispatch_sha256
+            or dispatch.continuation_plan_sha256 != plan.plan_sha256
+            or dispatch.continuation_sha256 != completion.completion_sha256
+            or completion.verified
+            or not _verification_binds_terminal_candidate(
+                current=current,
+                history=history,
+                plan=plan,
+                completion=completion,
+            )
         ):
             raise DeliveryCommandRejected("continuation does not match the terminal candidate")
-        dispatch.validate_integrity()
         checkpoint = self._next(
             store,
             current,
@@ -619,15 +676,13 @@ class UnifiedProjectEntryService:
         history = store.list(current.delivery_id)
         if (
             not completion.verified
-            or completion.plan_sha256 != plan.plan_sha256
             or current.stage not in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
-            or not history
-            or history[-1] != current
-            or not checkpoint_sha256_is_ancestor(history, plan.native_checkpoint_sha256)
-            or current.project_id != plan.scope.project_id
-            or current.project_root != plan.scope.project_root
-            or current.task_id != plan.inputs.task_id
-            or current.candidate_revision != plan.inputs.candidate_revision
+            or not _verification_binds_terminal_candidate(
+                current=current,
+                history=history,
+                plan=plan,
+                completion=completion,
+            )
         ):
             raise DeliveryCommandRejected("verification does not authorize this candidate")
         checkpoint = self._next(
@@ -635,6 +690,7 @@ class UnifiedProjectEntryService:
             current,
             stage=DeliveryStage.DONE,
             next_action=DeliveryNextAction.NONE,
+            candidate_revision=plan.inputs.candidate_revision,
             verification_plan_sha256=plan.plan_sha256,
             verification_completion_sha256=completion.completion_sha256,
             at=completion.completed_at,
