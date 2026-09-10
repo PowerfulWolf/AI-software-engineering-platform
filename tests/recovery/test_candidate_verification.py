@@ -146,6 +146,52 @@ def test_qa_failure_stops_without_coder_or_reviewer(tmp_path: Path) -> None:
         repository.close()
 
 
+def test_verifies_retained_candidate_after_routed_coder_failure(tmp_path: Path) -> None:
+    task, repository, delivery = _runner(
+        tmp_path,
+        ScriptedAdapter(qa_failures=(1,), coder_timeouts=(2, 3)),
+    )
+    blocked = delivery.run_task(task.id)
+    artifacts = FileArtifactStore(tmp_path / "artifacts")
+    plan = artifacts.get("art_plan_001")
+    implementation = artifacts.get("art_impl_001")
+    inputs = CandidateVerificationInputs(
+        task_id=task.id,
+        task_revision=repository.current_revision(task.id),
+        task_sha256=digest(repository.get(task.id).to_wire()),
+        plan_id=plan.artifact_id,
+        plan_sha256=artifact_digest(plan),
+        implementation_id=implementation.artifact_id,
+        implementation_sha256=artifact_digest(implementation),
+        candidate_revision="b" * 40,
+        prior_run_ids=tuple(
+            sorted(artifact.producer.run_id for artifact in artifacts.list_for_task(task.id))
+        ),
+    )
+    adapter = ScriptedAdapter()
+    verifier = CandidateVerificationRunner(
+        repository=repository,
+        artifact_store=artifacts,
+        context_builder=FileRunContextBuilder(tmp_path / "project"),
+        agent_adapter=adapter,
+        agent_definitions=_definitions(),
+        admission=Admission(),
+        clock=_clock,
+    )
+    before = repository.get(task.id), repository.list_events(task.id)
+    try:
+        assert blocked.task.status is TaskStatus.BLOCKED
+        result = verifier.verify_candidate(inputs)
+        assert result.verified
+        assert [request.role for request in adapter.requests] == [
+            AgentRole.QA,
+            AgentRole.REVIEWER,
+        ]
+        assert (repository.get(task.id), repository.list_events(task.id)) == before
+    finally:
+        repository.close()
+
+
 class FailureAdapter(ScriptedAdapter):
     def run(self, request: AgentRequest) -> AgentResult:
         self.requests.append(request)

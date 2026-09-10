@@ -101,6 +101,7 @@ _read_verifications(
     *,
     company_id: str,
 ) -> tuple[TaskView, ...]
+_native_task_sources(native: _Native) -> dict[str, _Native]
 _read_task_details(native: _Native, cursor: DictCursor, base: TaskView) -> TaskView
 ```
 
@@ -112,8 +113,20 @@ _read_task_details(native: _Native, cursor: DictCursor, base: TaskView) -> TaskV
 
 - Read `dispatch_commits`, `verification_reservations`, Tasks, events and route attempts inside the
   same repeatable-read transaction.
+- One Delivery may move from its original Task to recovery/remediation Tasks while historical
+  verification reservations continue to reference the original Task. Build the verification source
+  index from the complete validated native checkpoint history, keeping the latest committed
+  checkpoint for each Task. Render only the Delivery's current Task as ordinary work; historical Task
+  entries exist only to validate and project their associated verification records.
+- Every historical Task source must keep the same Delivery/project/root binding, have unambiguous
+  ownership, and still pass the normal dispatch, SQL Task, event and Artifact validation. History is
+  not permission to accept an orphaned or corrupted verification row.
 - An incomplete verification reservation is a first-class QA/Reviewer work item. Current role is QA
   until its invocation/report exists, then Reviewer; a sealed completion makes it terminal.
+- When a newer reservation for the same project and source Task has been committed, an older
+  completion-less reservation is a consumed, superseded plan rather than active Agent work. Keep its
+  runs and approval evidence visible with terminal `VERIFICATION_SUPERSEDED`; no assignment on that
+  card is current. Equal commit times for distinct plans are ambiguous and reject the snapshot.
 - Verification scope is the source repository directory and candidate. Assignment cards come from
   the reservation, not from the terminal source Task status.
 - The reservation's distinct `task_id` scopes Assignment/Lease/worktrees. QA/Reviewer provider
@@ -129,8 +142,12 @@ _read_task_details(native: _Native, cursor: DictCursor, base: TaskView) -> TaskV
 |---|---|
 | Active reservation, no QA invocation | QA current; source directory visible |
 | QA invocation/report, no completion | QA run visible; Reviewer current only after QA PASS |
+| Older incomplete reservation plus newer committed reservation for the same source | older is terminal `VERIFICATION_SUPERSEDED`; newer owns liveness |
 | Sealed QA FAIL | terminal verification with blocker; Reviewer not active |
 | Continuation dispatch | remediation work with fresh Task plus source lineage |
+| Current remediation Task plus reservation for its original Task | show both current remediation and historical verification |
+| Historical Task appears in the native chain and still matches SQL/dispatch/artifacts | valid verification source |
+| Historical checkpoint changes Delivery/project/root or one Task belongs to two deliveries | reject snapshot |
 | Reservation references missing/wrong source Task/project | reject snapshot; do not hide row |
 | Missing optional file record before reservation publication | reservation remains SQL-derived; no invented verdict |
 
@@ -139,14 +156,20 @@ _read_task_details(native: _Native, cursor: DictCursor, base: TaskView) -> TaskV
 - Good: during candidate verification the long-lived QA member shows the exact work item, route and
   repository directory; after QA FAIL the successor Coder remediation appears.
 - Base: a completed reservation remains auditable but no longer counts as active capacity.
-- Bad: query only `dispatch_commits`, or infer verification liveness from the BLOCKED source Task.
+- Base: an at-most-once provider failure remains auditable on its superseded plan, while only the
+  successor plan can show a current QA/Reviewer assignment.
+- Bad: index only the latest Delivery checkpoint Task. Once remediation changes `checkpoint.task_id`,
+  the still-valid original QA record becomes an apparent orphan and turns the whole API into 503.
 
 ### 6. Tests Required
 
 `tests/team_view/test_live.py` must insert a real MySQL verification reservation and assert its QA
 assignment, source identity, work kind and exact repository scope. The real resume suite must also
-interrupt an admitted QA verification and assert the card contains that exact QA Run. Existing schema
-equality, no-write, company isolation, HTTP and browser tests remain required.
+interrupt an admitted QA verification and assert the card contains that exact QA Run. It must then
+produce QA FAIL, begin the linked remediation Coder, call `ProductionTeamReader.snapshot()` before
+that Coder completes, and assert the remediation card retains the original `source_task_id`; the
+consumed predecessor plan must be terminal with no current assignment. Existing
+schema equality, no-write, company isolation, HTTP and browser tests remain required.
 
 ### 7. Wrong vs Correct
 
@@ -156,4 +179,11 @@ active = source_task.status not in TERMINAL
 
 # Correct: the reservation/completion lifecycle owns verification liveness.
 active = reservation.completion_sha256 is None
+
+# Wrong: only the Delivery's current Task can own verification history.
+native_by_task[native.checkpoint.task_id] = native
+
+# Correct: index the latest trusted checkpoint for every Task in the Delivery chain, then validate
+# the selected historical Task through the same SQL/dispatch/artifact path as the current Task.
+native_by_task.update(_native_task_sources(native))
 ```

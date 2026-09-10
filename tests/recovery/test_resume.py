@@ -300,7 +300,7 @@ def test_resume_discovers_approves_and_attaches_pre_candidate_coder_recovery(
             approval_reference="resume-pre-candidate-approved",
         )
     )
-    assert interrupted_recovery.outcome is DeliveryResumeOutcome.RECOVERED
+    assert interrupted_recovery.outcome is DeliveryResumeOutcome.WAITING_HUMAN
     assert interrupted_recovery.checkpoint.stage is DeliveryStage.BLOCKED
     assert interrupted_recovery.checkpoint.candidate_revision is None
     first_recovery_task = interrupted_recovery.checkpoint.task_id
@@ -428,6 +428,25 @@ def test_resume_verifies_failed_candidate_and_delivers_remediation(
         del args, kwargs
         raise RuntimeError("simulated process loss before Delivery checkpoint")
 
+    observed_remediation: list[str] = []
+    original_adapter_run = _ResumeAdapter.run
+
+    def observe_remediation(adapter: _ResumeAdapter, request: AgentRequest) -> AgentResult:
+        if request.role is AgentRole.CODER and request.task_id.startswith("task_continue_"):
+            live = ProductionTeamReader(config, environment).snapshot()
+            remediation = next(task for task in live.tasks if task.task_id == request.task_id)
+            assert remediation.work_kind == "remediation"
+            assert remediation.source_task_id == blocked.task_id
+            superseded = next(
+                task for task in live.tasks if task.plan_sha256 == proposed.verification_plan_sha256
+            )
+            assert superseded.status == "VERIFICATION_SUPERSEDED"
+            assert superseded.terminal
+            assert not any(item.current_stage for item in superseded.assignments)
+            observed_remediation.append(request.task_id)
+        return original_adapter_run(adapter, request)
+
+    monkeypatch.setattr(_ResumeAdapter, "run", observe_remediation)
     monkeypatch.setattr(entry, "finish_continuation", interrupt_after_terminal_task)
     with pytest.raises(RuntimeError, match="simulated process loss"):
         host.resume_delivery(
@@ -437,6 +456,7 @@ def test_resume_verifies_failed_candidate_and_delivers_remediation(
                 approval_reference="resume-integration-test-successor",
             )
         )
+    assert len(observed_remediation) == 1
     interrupted = entry.status(blocked.delivery_id).checkpoint
     assert interrupted.stage is DeliveryStage.DELIVERING
     assert interrupted.task_id is not None

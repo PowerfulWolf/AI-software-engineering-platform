@@ -22,7 +22,7 @@ from ai_software_engineer.project_manager.production_backend import (
     ProductionProjectDeliveryBackend,
 )
 from ai_software_engineer.recovery.entry import NativeRecoveryEntry
-from ai_software_engineer.recovery.models import RecoveryPlan, RecoveryRejected
+from ai_software_engineer.recovery.models import RecoveryPlan, RecoveryRejected, RecoveryScope
 from ai_software_engineer.recovery.remediation import CandidateRemediationService
 from ai_software_engineer.recovery.store import FileRecoveryStore, RecoveryRecordMissing
 from ai_software_engineer.recovery.verification_entry import CandidateVerificationEntry
@@ -127,7 +127,17 @@ class DeliveryResumeController:
                 ),
             )
         if current.candidate_revision is None:
-            return self._continue_coder_recovery(current, command)
+            try:
+                NativeCandidateSourceReader(self._config, self._environment).inspect(
+                    RecoveryScope(
+                        company_id=self._config.company_id,
+                        project_id=current.project_id,
+                        project_root=current.project_root,
+                        delivery_id=current.delivery_id,
+                    )
+                )
+            except RecoveryRejected:
+                return self._continue_coder_recovery(current, command)
 
         latest = self._verification.latest_project(
             project_root=current.project_root,
@@ -342,6 +352,14 @@ class DeliveryResumeController:
         next_action: str,
         completion: CandidateVerificationCompletion | None = None,
     ) -> DeliveryResumeResult:
+        if result.checkpoint.stage in {
+            DeliveryStage.WAITING_PRODUCT_REPLY,
+            DeliveryStage.WAITING_PRODUCT_APPROVAL,
+            DeliveryStage.WAITING_HUMAN,
+            DeliveryStage.BLOCKED,
+            DeliveryStage.FAILED,
+        }:
+            outcome = DeliveryResumeOutcome.WAITING_HUMAN
         return DeliveryResumeResult(
             outcome=outcome,
             checkpoint=result.checkpoint,

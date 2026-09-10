@@ -131,10 +131,95 @@ Delivery checkpoint 摘要而被无意义作废。
 - `docs/contracts.md` 已补充操作者可见行为；
 - 本项目没有 `src/templates/markdown/spec/`，因此没有可同步的规范模板。
 
+## Bug Analysis：Remediation 切换 Task 后看板误报 503
+
+### 1. Root Cause Category
+
+- **B — Cross-Layer Contract**：原始 Task 的候选验证记录与后续 remediation Task 同属一个 Delivery，
+  但读取层只为 Delivery 当前 checkpoint 的 `task_id` 建索引。
+- **D — Test Coverage Gap**：已有看板测试分别覆盖 verification 和 continuation，没有在 QA FAIL
+  启动 remediation Coder 的瞬间读取真实快照。
+- **E — Implicit Assumption**：错误假设一个 Delivery 生命周期里只会出现一个 Task。
+
+### 2. Why Earlier Coverage Failed
+
+验证计划在原 Task 上合法封存，remediation 启动后当前 checkpoint 改为 `task_continue_*`。两个功能
+单独运行都正确，但组合后读取器把仍需审计的原 Task 验证记录当成 orphan，最终将整个 HTTP API
+降级为 503。此前只在阶段结束前后读取，没有覆盖 Task 身份切换中的组合状态。
+
+### 3. Prevention Mechanisms
+
+| Priority | Mechanism | Action | Status |
+|---|---|---|---|
+| P0 | Historical Task index | 从完整 native checkpoint 链按 Task 保留最新可信记录 | DONE |
+| P0 | Preserve strict validation | 历史 Task 继续校验 Delivery/project/root、dispatch、SQL、event 和 Artifact | DONE |
+| P0 | Public-path regression | 在 QA FAIL → remediation Coder 执行期间读取生产看板快照 | DONE |
+| P0 | Successor liveness | 被新计划替代的 completion-less 旧计划标记为终态，不再占用 Agent 当前工作 | DONE |
+| P1 | Executable spec | 明确“当前工作投影”与“历史来源校验索引”是两个集合 | DONE |
+
+### 4. Systematic Expansion
+
+Delivery、Task 和 Run 不是一对一关系：恢复或修复会创建 successor Task，verification 又会保留原
+Task 作为不可变来源。任何跨生命周期读模型都必须分别定义“当前可执行实体”和“仍需解析的历史
+来源”，不能用当前指针替代历史索引，也不能为了兼容历史而绕过权威存储校验。
+
+### 5. Knowledge Capture
+
+- `.trellis/spec/core/live-team-view.md` 已加入签名、约束、拒绝矩阵、组合测试点和错误/正确示例；
+- `tests/recovery/test_resume.py` 已加入真实 resume 组合回归；
+- 本项目没有 `src/templates/markdown/spec/`，因此没有可同步的规范模板。
+
 ## 当前边界
 
 - provider 已 admitted、Task 尚未形成可信终态的歧义窗口返回 `WAITING_HUMAN`，不会盲目重调；
 - Dashboard 的 execution liveness 仍是 `UNKNOWN`；逐角色常驻 Worker/SSE 在线状态另行立项；
 - Reporter、自动 merge/push/deploy 不属于 v0.1，本阶段只交付候选 commit 和可审计证据。
+
+## Bug Analysis：QA 反馈后的 Coder 恢复错误绑定 Task base
+
+### 1. Root Cause Category
+
+- **B — Cross-Layer Contract**：Orchestrator 已把 QA verdict 和上一版 implementation 作为新 Coder 的
+  Artifact lineage，却仍把 `AgentRequest.source_revision` 固定为 Task 最初的 `base_ref`；Git worktree
+  则已合法停在 Candidate V1。
+- **D — Test Coverage Gap**：既有用例验证 Artifact supersedes/parents，也验证单角色 worktree 恢复，
+  但没有断言 verdict-driven Coder 请求的 Git 起点，更没有覆盖进程重启后的同一组合。
+- **E — Implicit Assumption**：错误假设一个 Task 生命周期里的所有 Coder attempt 都从同一 base 开始。
+
+### 2. Why Earlier Coverage Failed
+
+内存 scripted adapter 不操作真实 Git，因此 QA FAIL → Coder 的状态循环可以成功；worktree 测试只覆盖
+首次 Coder 和 verifier，又看不到 Orchestrator 的第二次请求。真实恢复把两层组合后，worktree HEAD
+是 Candidate V1、请求却声明原始 base，于是在模型调用前 fail closed。顶层 `resume` 又无条件保留
+`REMEDIATED` 标签，进一步掩盖了实际 BLOCKED 结果。
+
+### 3. Prevention Mechanisms
+
+| Priority | Mechanism | Action | Status |
+|---|---|---|---|
+| P0 | Request revision contract | QA FAIL/Review REJECT 后的 Coder 从上一 candidate revision 开始 | DONE |
+| P0 | Restart worktree contract | Coder worktree recovery 按当前 AgentRequest revision 校验 HEAD | DONE |
+| P0 | Retained-candidate discovery | 从验证过的 event + Artifact lineage 识别终态 Task 中的 Candidate V1 | DONE |
+| P0 | Honest resume outcome | BLOCKED/FAILED/human gate 统一对外返回 `WAITING_HUMAN` | DONE |
+| P0 | Incremental regressions | 分别锁定 request、worktree、snapshot 和 outcome 边界 | DONE |
+| P1 | Executable spec | 将 source revision、终态 tail 和 outcome 矩阵写入恢复规范 | DONE |
+
+### 4. Systematic Expansion
+
+Task base、当前 worktree HEAD、AgentRequest source revision 和 Artifact source revision 是四个相关但
+不同的事实。任何 retry、continue、recovery 或 remediation 路径都必须显式说明下一次 Agent 从哪个
+revision 开始，并同时验证 Git 与 Artifact lineage。不得再用 Task base 作为所有 attempt 的默认答案。
+
+终态 checkpoint 的快捷字段也不能替代完整事件链：当 Candidate V2 尚未形成时，Task 仍可能保留已
+封存的 Candidate V1。恢复决策应先解析可信历史，再决定走 candidate verification 还是 failed-Coder
+dirty-worktree recovery。
+
+### 5. Knowledge Capture
+
+- `.trellis/spec/core/delivery-recovery.md` 已补充签名、source revision 契约、错误矩阵、测试点和
+  Wrong/Correct 示例；
+- `tests/orchestration/test_retry.py`、`tests/role_workspace/test_role_workspace.py`、
+  `tests/recovery/test_verification_snapshot.py` 与 `tests/recovery/test_resume.py` 固化增量回归；
+- 本项目没有 `src/templates/markdown/spec/`，因此没有可同步的规范模板。
 
 Git 基线：本记录所在提交。

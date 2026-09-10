@@ -393,7 +393,8 @@ def test_restart_does_not_skip_attempt_reserved_while_queued(tmp_path: Path) -> 
 
 
 def test_qa_finding_routes_a_new_coder_with_superseding_lineage(tmp_path: Path) -> None:
-    task, repository, runner = _runner(tmp_path, ScriptedAdapter(qa_failures=(1,)))
+    adapter = ScriptedAdapter(qa_failures=(1,))
+    task, repository, runner = _runner(tmp_path, adapter)
     try:
         result = runner.run_task(task.id)
         assert result.task.status is TaskStatus.DONE
@@ -404,6 +405,13 @@ def test_qa_finding_routes_a_new_coder_with_superseding_lineage(tmp_path: Path) 
         assert isinstance(retry_impl, ImplementationReportArtifact)
         assert retry_impl.supersedes == "art_impl_001"
         assert retry_impl.parent_artifact_ids == ("art_plan_001", "art_qa_001")
+        coder_requests = tuple(
+            request for request in adapter.requests if request.role is AgentRole.CODER
+        )
+        assert tuple(request.source_revision for request in coder_requests) == (
+            task.base_ref,
+            "b" * 40,
+        )
         assert tuple(event.to_status for event in repository.list_events(task.id)) == (
             TaskStatus.PLANNING,
             TaskStatus.IMPLEMENTING,

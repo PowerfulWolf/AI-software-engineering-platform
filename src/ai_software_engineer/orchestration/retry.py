@@ -549,7 +549,9 @@ class RetryingOrchestrator(SerialOrchestrator):
                     self._repository.get(task.id),
                     AgentRole.CODER,
                     attempt=attempt,
-                    candidate_revision=None,
+                    candidate_revision=(
+                        previous.content.commit_sha if previous is not None else None
+                    ),
                     input_artifacts=inputs,
                     expected_parents=parents,
                     expected_supersedes_by_kind={

@@ -21,6 +21,7 @@ from ai_software_engineer.recovery.verification_records import CandidateVerifica
 from ai_software_engineer.recovery.verification_snapshot import (
     CandidateRuntimeSnapshot,
     read_candidate_snapshot,
+    terminal_candidate_event,
 )
 
 
@@ -90,14 +91,15 @@ class NativeCandidateSourceReader:
         )
         parent_id, parent_sha = _parent(company, cp, stages.approval)
         artifacts = FileArtifactStore(root / "artifacts", read_only=True)
-        implementation = artifacts.get(runtime.events[-2].artifact_ids[0])
+        candidate_checkpoint = terminal_candidate_event(runtime.task, runtime.events)
+        implementation = artifacts.get(candidate_checkpoint.artifact_ids[0])
         if (
             not isinstance(implementation, ImplementationReportArtifact)
             or len(implementation.parent_artifact_ids) != 1
         ):
             raise ValueError("missing original implementation lineage")
         plan = artifacts.get(implementation.parent_artifact_ids[0])
-        candidate = runtime.events[-2].source_revision
+        candidate = candidate_checkpoint.source_revision
         if (
             not isinstance(plan, PlanArtifact)
             or plan.task_id != runtime.task.id

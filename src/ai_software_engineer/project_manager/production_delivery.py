@@ -191,6 +191,7 @@ class DispatchDeliveryAgentAdapter:
                 self._coder = self._coordinator.open_coder(
                     self._dispatch,
                     self._definitions,
+                    source_revision=request.source_revision,
                     recover=self._worktree_exists(AgentRole.CODER),
                 )
             return self._coder

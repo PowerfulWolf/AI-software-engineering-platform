@@ -204,8 +204,15 @@ class ProductionTeamReader:
                             raise ValueError("child code scope mismatch")
                         view = _read_task(native, request_id, scope, cursor)
                         tasks.append(view)
-                        if view.task_id is not None:
-                            native_by_task[view.task_id] = (native, request_id, scope)
+                        for task_id, source_native in _native_task_sources(native).items():
+                            existing = native_by_task.get(task_id)
+                            if (
+                                existing is not None
+                                and existing[0].checkpoint.delivery_id
+                                != source_native.checkpoint.delivery_id
+                            ):
+                                raise ValueError("ambiguous native Task ownership")
+                            native_by_task[task_id] = (source_native, request_id, scope)
                         if cp.delivery_id not in ownership:
                             requests.append(
                                 RequestView(
@@ -302,6 +309,27 @@ def _read_native(company: CompanyWorkspace) -> tuple[_Native, ...]:
     return tuple(result)
 
 
+def _native_task_sources(native: _Native) -> dict[str, _Native]:
+    """Resolve the latest committed checkpoint for every Task used by one delivery."""
+    result: dict[str, _Native] = {}
+    for index, checkpoint in enumerate(native.history):
+        if (
+            checkpoint.delivery_id != native.checkpoint.delivery_id
+            or checkpoint.project_id != native.checkpoint.project_id
+            or checkpoint.project_root != native.checkpoint.project_root
+        ):
+            raise ValueError("native checkpoint history binding mismatch")
+        if checkpoint.task_id is None:
+            continue
+        result[checkpoint.task_id] = _Native(
+            checkpoint=checkpoint,
+            intake=native.intake,
+            sidecar=native.sidecar,
+            history=native.history[: index + 1],
+        )
+    return result
+
+
 def _safe(text: str) -> str:
     return redact_text(text).text
 
@@ -373,12 +401,26 @@ def _read_verifications(
         "SELECT plan_sha256,payload_json,completion_sha256 "
         "FROM verification_reservations ORDER BY plan_sha256"
     )
-    result: list[TaskView] = []
-    project_ids = {native.checkpoint.project_id for native, _, _ in native_by_task.values()}
+    reservations: list[tuple[VerificationReservation, str | None]] = []
+    latest_by_source: dict[tuple[str, str], VerificationReservation] = {}
     for row in cursor.fetchall():
         reservation = VerificationReservation.model_validate_json(_text(row, "payload_json"))
         if reservation.plan_sha256 != row["plan_sha256"]:
             raise ValueError("verification reservation row identity mismatch")
+        completion_sha256 = (
+            str(row["completion_sha256"]) if row["completion_sha256"] is not None else None
+        )
+        reservations.append((reservation, completion_sha256))
+        key = (str(reservation.project_id), str(reservation.source_task_id))
+        latest = latest_by_source.get(key)
+        if latest is None or reservation.committed_at > latest.committed_at:
+            latest_by_source[key] = reservation
+        elif reservation.committed_at == latest.committed_at:
+            raise ValueError("ambiguous verification reservation order")
+    result: list[TaskView] = []
+    validated_sources: set[str] = set()
+    project_ids = {native.checkpoint.project_id for native, _, _ in native_by_task.values()}
+    for reservation, completion_sha256 in reservations:
         source = native_by_task.get(str(reservation.source_task_id))
         if source is None:
             if reservation.project_id in project_ids:
@@ -387,13 +429,25 @@ def _read_verifications(
         native, request_id, source_scope = source
         if reservation.project_id != native.checkpoint.project_id:
             raise ValueError("verification reservation project mismatch")
+        if reservation.source_task_id not in validated_sources:
+            source_view = _read_task(native, request_id, source_scope, cursor)
+            if source_view.task_id != reservation.source_task_id:
+                raise ValueError("verification reservation source Task is missing")
+            validated_sources.add(reservation.source_task_id)
         result.append(
             _verification_view(
                 native,
                 request_id,
                 source_scope,
                 reservation,
-                str(row["completion_sha256"]) if row["completion_sha256"] is not None else None,
+                completion_sha256,
+                superseded=(
+                    completion_sha256 is None
+                    and latest_by_source[
+                        (str(reservation.project_id), str(reservation.source_task_id))
+                    ].plan_sha256
+                    != reservation.plan_sha256
+                ),
                 company_id=company_id,
             )
         )
@@ -407,6 +461,7 @@ def _verification_view(
     reservation: VerificationReservation,
     completion_sha256: str | None,
     *,
+    superseded: bool,
     company_id: str,
 ) -> TaskView:
     verification_id = f"verification_{reservation.plan_sha256[:32]}"
@@ -493,6 +548,10 @@ def _verification_view(
                 else "Review rejected; resume the delivery to create a linked Coder remediation."
             )
             next_action = blocker
+    elif superseded:
+        terminal = True
+        status = "VERIFICATION_SUPERSEDED"
+        next_action = "A successor verification plan replaced this consumed plan."
     assignments = tuple(
         AssignmentView(
             agent_id=phase.agent_id,

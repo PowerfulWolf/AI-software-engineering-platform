@@ -106,3 +106,63 @@ def test_candidate_snapshot_accepts_stale_projection_not_changed_facts(
     else:
         with pytest.raises(RecoveryRejected):
             validate_candidate_snapshot(checkpoint, snapshot)
+
+
+def test_candidate_snapshot_accepts_qa_finding_then_failed_coder(
+    tmp_path: Path,
+) -> None:
+    request, workforce = _facts(tmp_path)
+    dispatch = _service(RecordingDispatchStore(), workforce, request).commit_dispatch(request)
+    task = dispatch.task.model_copy(update={"status": TaskStatus.BLOCKED, "attempts": 2})
+    states = (
+        TaskStatus.NEW,
+        TaskStatus.PLANNING,
+        TaskStatus.IMPLEMENTING,
+        TaskStatus.QA,
+        TaskStatus.IMPLEMENTING,
+        TaskStatus.BLOCKED,
+    )
+    reasons = (
+        "task_validated",
+        "plan_validated",
+        "candidate_ready",
+        "qa_failed_route_to_coder",
+        "POLICY_VIOLATION: execution precondition",
+    )
+    events = tuple(
+        StateEvent(
+            event_id=f"evt_snapshot_retry_{index}",
+            task_id=task.id,
+            from_status=before,
+            to_status=after,
+            actor=AgentRole.ORCHESTRATOR,
+            reason=reasons[index],
+            artifact_ids=("art_impl_snapshot",) if after is TaskStatus.QA else (),
+            source_revision="b" * 40 if index in (2, 3) else task.base_ref,
+            attempt=1 if index < 4 else 2,
+            occurred_at=task.updated_at,
+        )
+        for index, (before, after) in enumerate(pairwise(states))
+    )
+    checkpoint = _checkpoint(
+        Path(task.repository),
+        **{
+            **_full_fields(),
+            "project_id": dispatch.project_id,
+            "dispatch_commit_id": dispatch.id,
+            "dispatch_commit_sha256": dispatch.dispatch_sha256,
+            "task_id": task.id,
+            "task_revision": len(events),
+            "task_status": task.status,
+            "candidate_revision": None,
+            "stage": DeliveryStage.BLOCKED,
+            "failure_code": DeliveryFailureCode.RETRY_BUDGET_EXHAUSTED,
+            "failure_summary": "Coder retry stopped before producing candidate v2",
+            "next_action": DeliveryNextAction.REQUEST_HUMAN,
+        },
+    )
+
+    validate_candidate_snapshot(
+        checkpoint,
+        CandidateRuntimeSnapshot(task, len(events), dispatch, dispatch, events),
+    )

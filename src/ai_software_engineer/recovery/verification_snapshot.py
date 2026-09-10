@@ -75,19 +75,80 @@ def validate_candidate_snapshot(
         ):
             raise RecoveryRejected("candidate runtime event chain is inconsistent")
         previous, previous_time = event.to_status, event.occurred_at
-    if (
-        previous is not task.status
-        or previous_time != task.updated_at
-        or events[-1].from_status is not TaskStatus.QA
-        or events[-2].to_status is not TaskStatus.QA
-        or events[-2].reason != "candidate_ready"
-        or len(events[-2].artifact_ids) != 1
-        or len(events[-2].source_revision) not in (40, 64)
-        or any(c not in "0123456789abcdef" for c in events[-2].source_revision)
-        # Legacy failure handling records Task.base_ref, not the accepted candidate.
-        or events[-1].source_revision not in (task.base_ref, events[-2].source_revision)
-    ):
+    terminal_candidate_event(task, events)
+    if previous is not task.status or previous_time != task.updated_at:
         raise RecoveryRejected("runtime is not a terminal post-candidate QA failure")
+
+
+def candidate_event(events: tuple[StateEvent, ...]) -> tuple[int, StateEvent]:
+    """Return the latest candidate checkpoint retained before a terminal retry failure."""
+    matches = tuple(
+        (index, event)
+        for index, event in enumerate(events)
+        if event.to_status is TaskStatus.QA
+        and event.reason in {"candidate_ready", "candidate_recovered"}
+    )
+    if not matches:
+        raise RecoveryRejected("terminal runtime has no candidate checkpoint")
+    index, event = matches[-1]
+    if (
+        len(event.artifact_ids) != 1
+        or len(event.source_revision) not in (40, 64)
+        or any(character not in "0123456789abcdef" for character in event.source_revision)
+    ):
+        raise RecoveryRejected("candidate checkpoint identity is invalid")
+    return index, event
+
+
+def terminal_candidate_event(task: Task, events: tuple[StateEvent, ...]) -> StateEvent:
+    """Return a candidate only when the remaining events form a valid terminal tail."""
+    index, candidate = candidate_event(events)
+    if not _valid_terminal_tail(task, events[index + 1 :], candidate):
+        raise RecoveryRejected("runtime is not a terminal post-candidate QA failure")
+    return candidate
+
+
+def _valid_terminal_tail(
+    task: Task,
+    tail: tuple[StateEvent, ...],
+    candidate: StateEvent,
+) -> bool:
+    if not tail:
+        return False
+    current = TaskStatus.QA
+    offset = 0
+    if (
+        tail[0].from_status is TaskStatus.QA
+        and tail[0].to_status is TaskStatus.REVIEW
+        and tail[0].reason == "qa_passed"
+    ):
+        if tail[0].source_revision != candidate.source_revision:
+            return False
+        current, offset = TaskStatus.REVIEW, 1
+    remaining = tail[offset:]
+    if len(remaining) == 1:
+        terminal = remaining[0]
+        return (
+            terminal.from_status is current
+            and terminal.to_status is task.status
+            and terminal.source_revision in (task.base_ref, candidate.source_revision)
+        )
+    feedback_reason = {
+        TaskStatus.QA: "qa_failed_route_to_coder",
+        TaskStatus.REVIEW: "review_rejected_route_to_coder",
+    }[current]
+    if len(remaining) != 2:
+        return False
+    feedback, terminal = remaining
+    return (
+        feedback.from_status is current
+        and feedback.to_status is TaskStatus.IMPLEMENTING
+        and feedback.reason == feedback_reason
+        and feedback.source_revision == candidate.source_revision
+        and terminal.from_status is TaskStatus.IMPLEMENTING
+        and terminal.to_status is task.status
+        and terminal.source_revision in (task.base_ref, candidate.source_revision)
+    )
 
 
 def read_candidate_snapshot(

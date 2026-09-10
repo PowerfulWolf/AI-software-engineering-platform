@@ -971,6 +971,31 @@ NativeRecoveryEntry.propose_delivery(
     checkpoint: ProjectDeliveryCheckpoint,
 ) -> tuple[RecoveryPlan, Path]
 NativeRecoveryEntry.resume_execution(path: Path) -> NativeRecoveryExecution
+RetryingOrchestrator._run_coder_with_retries(
+    task: Task,
+    plan: PlanArtifact,
+    previous: ImplementationReportArtifact | None,
+    qa: QaReportArtifact | None,
+    review: ReviewReportArtifact | None,
+    progress: CoderProgressArtifact | None,
+    seen_run_ids: set[str],
+    run_ids: list[str],
+    context_ids: list[str],
+) -> tuple[ImplementationReportArtifact | CoderProgressArtifact, Task, str] | BlockedResult
+DispatchRoleWorktreeCoordinator.open_coder(
+    dispatch: DeliveryAllocation,
+    definitions: Mapping[AgentRole, AgentDefinition],
+    *,
+    source_revision: str | None = None,
+    recover: bool = False,
+) -> RoleWorktreeBinding
+verification_snapshot.candidate_event(
+    events: tuple[StateEvent, ...],
+) -> tuple[int, StateEvent]
+verification_snapshot.terminal_candidate_event(
+    task: Task,
+    events: tuple[StateEvent, ...],
+) -> StateEvent
 resolve_planner_dispatch(
     current: DeliveryAllocation,
     allocations: Mapping[str, DeliveryAllocation],
@@ -1041,6 +1066,20 @@ dispatch_sha256
   another fresh recovery plan and Task instead of assuming only one recovery attempt.
 - A terminal Task with a durable candidate first gets independent QA/Reviewer verification. Missing
   approval returns `VERIFICATION_APPROVAL_REQUIRED` with the exact plan path/digest and next command.
+- A QA failure or Reviewer rejection routes the next Coder request from the preceding candidate
+  commit, not from the Task's original `base_ref`. The new implementation must still supersede the
+  preceding implementation Artifact and include the verdict Artifact as a parent. A transient
+  failure before the first candidate continues to use `task.base_ref`; a Coder-progress continuation
+  continues to use its checkpoint revision.
+- A process restart may reopen an existing clean Coder worktree only when its HEAD equals the exact
+  `AgentRequest.source_revision`. `open_coder(source_revision=None)` retains the first-run behavior
+  and resolves to `task.base_ref`; recovery callers must pass the request revision explicitly.
+- A terminal retry Task can retain a trustworthy Candidate V1 even when its latest checkpoint has
+  `candidate_revision = null`: the accepted candidate is the latest validated `candidate_ready` or
+  `candidate_recovered` event plus its sealed implementation/plan lineage. A valid terminal tail is
+  either a direct QA/Reviewer terminal failure, or QA FAIL/Review REJECT routed to Coder followed by
+  a terminal Coder failure. `resume` verifies that retained candidate before attempting dirty-worktree
+  failed-Coder recovery.
 - An invocation with no sealed completion is ambiguous and cannot be replayed. A later `resume`
   proposes a new plan/Run for the same candidate and requires a new exact approval.
 - PASS + APPROVE may seal the original Delivery DONE without rewriting its terminal Task; the
@@ -1059,6 +1098,10 @@ dispatch_sha256
   integration only after the complete candidate set exists.
 - No resume path merges, pushes, deploys, relaxes project policy, silently changes company knowledge,
   or overwrites historical Task/checkpoint/verdict records.
+- `DeliveryResumeResult.outcome` must reflect the returned checkpoint. Any
+  `WAITING_PRODUCT_REPLY`, `WAITING_PRODUCT_APPROVAL`, `WAITING_HUMAN`, `BLOCKED`, or `FAILED`
+  checkpoint is returned as `WAITING_HUMAN`; labels such as `RECOVERED` or `REMEDIATED` are forbidden
+  for these terminal/human-gated states.
 
 ### 4. Validation & Error Matrix
 
@@ -1071,6 +1114,8 @@ dispatch_sha256
 | BLOCKED/FAILED after Task materialization, Task `NEW` revision 0, no candidate/Delivery attempt | Reopen `DELIVERING`; legacy `failed_stage` may be absent | Normal runtime reconciliation |
 | BLOCKED/FAILED Coder, no candidate | Publish exact recovery plan | 0 |
 | Recovery/remediation Coder fails again without candidate | Follow allocation ancestry; publish next recovery plan | 0 |
+| QA/Review routed Coder restarts at old Task base while worktree retains Candidate V1 | Reject before provider admission; implementation bug | 0 |
+| Terminal retry Task retains a validated earlier candidate | Publish candidate-verification plan before failed-Coder recovery | 0 |
 | Approved recovery plan, no invocation | Fresh recovery Task: Coder → QA → Reviewer | 3+ bounded retries |
 | Recovery Task already terminal, Delivery not updated | Adopt terminal Task result | 0 |
 | Candidate, no current verification plan | Publish plan and exact approval command | 0 |
@@ -1093,8 +1138,11 @@ dispatch_sha256
   resume discovers the Run/Context and requires exact approval before reusing those edits.
 - Base: dispatch materialized a pristine Task and runtime composition stopped before admission;
   resume re-enters Delivery without asking failed-Coder recovery to invent a missing identity.
+- Base: QA fails Candidate V1, the routed Coder then stops before Candidate V2; resume discovers the
+  sealed Candidate V1 from Task events even though the latest Delivery checkpoint has no candidate.
 - Bad: reset the old Task to IMPLEMENTING, run Coder against Candidate V1 before independent
-  verification, reuse a consumed verifier request, or treat a digest supplied by CLI as authority.
+  verification, restart a routed Coder from `task.base_ref`, report `REMEDIATED` with a BLOCKED
+  checkpoint, reuse a consumed verifier request, or treat a digest supplied by CLI as authority.
 
 ### 6. Tests Required
 
@@ -1110,6 +1158,16 @@ dispatch_sha256
   pristine materialized Task resume through the public controller and never call recovery/verification.
 - `tests/recovery/test_execution_records.py`: continuation digest/metadata/phase validation plus
   Draft 2020-12 schema validation.
+- `tests/orchestration/test_retry.py`: after QA FAIL, the second Coder request is bound to Candidate
+  V1 while the first Coder request remains bound to `task.base_ref`.
+- `tests/role_workspace/test_role_workspace.py`: process restart reopens the Coder worktree against
+  the retry request revision rather than the frozen Task base.
+- `tests/recovery/test_verification_snapshot.py`: QA FAIL → Coder → terminal failure retains a valid,
+  discoverable prior candidate; malformed or foreign tails remain rejected.
+- `tests/recovery/test_candidate_verification.py`: the admitted QA/Reviewer runner consumes that same
+  shared terminal-tail interpretation and verifies the retained candidate without mutating the Task.
+- Resume tests must assert that a BLOCKED recovery result is `WAITING_HUMAN`, never `RECOVERED` or
+  `REMEDIATED`.
 - Joint tests must retain DONE children and continue only incomplete children before integration.
 - Source Mypy, Ruff/format, offline package build, and the full MySQL suite are release gates.
 
@@ -1136,4 +1194,23 @@ dispatch = authority.commit_continuation(
     validate_current=validate_current,
     build=build_successor,
 )
+```
+
+```python
+# Wrong: every Coder attempt is declared to start from the original Task base.
+request = build_agent_request(candidate_revision=None)
+
+# Correct: verdict-driven Coder work starts from the candidate that was actually reviewed.
+request = build_agent_request(
+    candidate_revision=(previous.content.commit_sha if previous is not None else None)
+)
+```
+
+```python
+# Wrong: a BLOCKED checkpoint is presented to the operator as successful remediation.
+return DeliveryResumeResult(outcome=REMEDIATED, checkpoint=blocked)
+
+# Correct: the checkpoint determines the externally visible wait state.
+if checkpoint.stage in HUMAN_GATED_OR_TERMINAL_FAILURE_STAGES:
+    outcome = WAITING_HUMAN
 ```

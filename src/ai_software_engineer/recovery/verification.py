@@ -30,6 +30,7 @@ from ai_software_engineer.orchestration.runner import (
 )
 from ai_software_engineer.recovery.models import RecoveryRejected, digest
 from ai_software_engineer.recovery.verification_records import CandidateVerificationInputs
+from ai_software_engineer.recovery.verification_snapshot import terminal_candidate_event
 from ai_software_engineer.store import TaskRepository
 
 
@@ -173,18 +174,15 @@ class CandidateVerificationRunner:
         task = self._repository.get(inputs.task_id)
         events = self._repository.list_events(task.id)
         revision = self._repository.current_revision(task.id)
+        candidate = terminal_candidate_event(task, events)
         if (
             task.status not in (TaskStatus.BLOCKED, TaskStatus.FAILED)
             or digest(task.to_wire()) != inputs.task_sha256
             or revision != inputs.task_revision
             or len(events) != revision
             or len(events) < 2
-            or events[-1].from_status is not TaskStatus.QA
-            or events[-1].to_status is not task.status
-            or events[-2].to_status is not TaskStatus.QA
-            or events[-2].reason != "candidate_ready"
-            or events[-2].source_revision != inputs.candidate_revision
-            or events[-2].artifact_ids != (inputs.implementation_id,)
+            or candidate.source_revision != inputs.candidate_revision
+            or candidate.artifact_ids != (inputs.implementation_id,)
             or len(inputs.candidate_revision) not in (40, 64)
             or any(c not in "0123456789abcdef" for c in inputs.candidate_revision)
         ):

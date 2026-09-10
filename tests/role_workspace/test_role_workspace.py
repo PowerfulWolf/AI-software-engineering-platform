@@ -308,6 +308,36 @@ def test_dispatch_bindings_enforce_assigned_roles_and_same_candidate(tmp_path: P
     coordinator.close(coder)
 
 
+def test_dispatch_coder_recovery_uses_the_retry_request_revision(tmp_path: Path) -> None:
+    repository = _fixture_repository(tmp_path)
+    dispatch = _dispatch(repository)
+    definitions = {
+        role: _agent(role) for role in (AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER)
+    }
+    worktree_root = tmp_path / "worktrees"
+    coordinator = DispatchRoleWorktreeCoordinator(
+        RoleWorktreeSession(GitWorktreeManager(repository, worktree_root))
+    )
+    coder = coordinator.open_coder(dispatch, definitions)
+    (coder.worktree.path / "src/app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _git(coder.worktree.path, "add", "src/app.py")
+    _git(coder.worktree.path, "commit", "-m", "candidate v1")
+    candidate = _git(coder.worktree.path, "rev-parse", "HEAD")
+
+    restarted = DispatchRoleWorktreeCoordinator(
+        RoleWorktreeSession(GitWorktreeManager(repository, worktree_root))
+    )
+    recovered = restarted.open_coder(
+        dispatch,
+        definitions,
+        source_revision=candidate,
+        recover=True,
+    )
+
+    assert recovered.worktree.head_revision == candidate
+    restarted.close(recovered)
+
+
 def test_dispatch_binding_rejects_model_drift_before_checkout(tmp_path: Path) -> None:
     repository = _fixture_repository(tmp_path)
     dispatch = _dispatch(repository)

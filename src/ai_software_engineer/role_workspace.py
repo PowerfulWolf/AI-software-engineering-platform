@@ -171,12 +171,14 @@ class DispatchRoleWorktreeCoordinator:
         dispatch: DeliveryAllocation,
         definitions: Mapping[AgentRole, AgentDefinition],
         *,
+        source_revision: str | None = None,
         recover: bool = False,
     ) -> RoleWorktreeBinding:
-        """Open the assigned Coder on the Dispatch Task's frozen base commit."""
+        """Open the assigned Coder on its request-bound base or prior candidate."""
         dispatch.validate_integrity()
         definition = self._definition(dispatch, AgentRole.CODER, definitions, attempt=1)
-        spec = self._spec(dispatch, AgentRole.CODER, dispatch.task.base_ref, attempt=1)
+        revision = dispatch.task.base_ref if source_revision is None else source_revision
+        spec = self._spec(dispatch, AgentRole.CODER, revision, attempt=1)
         return self._open(spec, definition, recover=recover)
 
     def open_verifiers(
