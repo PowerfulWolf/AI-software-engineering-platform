@@ -8,11 +8,18 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from pydantic import TypeAdapter
 from pymysql.cursors import DictCursor
 
 from ai_software_engineer.agents.fallback import FileModelRouteAttemptStore, model_route_root
 from ai_software_engineer.artifacts import FileArtifactStore
-from ai_software_engineer.company_workspace import CompanyWorkspace, _read_regular, _reject_symlinks
+from ai_software_engineer.company_workspace import (
+    CompanyId,
+    CompanyManifest,
+    CompanyWorkspace,
+    _read_regular,
+    _reject_symlinks,
+)
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.domain.enums import AgentRole, TaskStatus
 from ai_software_engineer.evaluation import FileEvaluationEventStore
@@ -51,6 +58,7 @@ from ai_software_engineer.store.mysql_repository import (
 from .models import (
     AgentView,
     AssignmentView,
+    CompanyView,
     DocumentView,
     RequestView,
     RunView,
@@ -86,22 +94,24 @@ class ProductionTeamReader:
     def from_environment(cls) -> ProductionTeamReader:
         return cls(ProductionConfig.from_environment(), os.environ)
 
-    def snapshot(self) -> TeamSnapshot:
+    def snapshot(self, company_id: str | None = None) -> TeamSnapshot:
         try:
-            return self._snapshot()
+            return self._snapshot(company_id)
         except Exception as error:
             # Read failure must not become a successful empty team or expose a DSN/path secret.
             raise TeamReadError(
                 "Team data unavailable; check configuration, MySQL and workspace integrity."
             ) from error
 
-    def _snapshot(self) -> TeamSnapshot:
-        company = CompanyWorkspace.initialize(
-            self.config.platform_root,
-            company_id=self.config.company_id,
-            name=self.config.company_name,
-            read_only=True,
+    def _snapshot(self, company_id: str | None) -> TeamSnapshot:
+        companies = self._companies()
+        selected_id = self.config.company_id if company_id is None else company_id
+        TypeAdapter(CompanyId).validate_python(selected_id)
+        company = next(
+            (item for item in companies if item.manifest.company_id == selected_id), None
         )
+        if company is None:
+            raise ValueError("company workspace has not been prepared")
         organization = OrganizationWorkspace.open(Path(self.config.platform_root) / "organization")
         workforce = FileOrganizationWorkforceStore(organization)
         profiles = tuple(
@@ -270,10 +280,39 @@ class ProductionTeamReader:
             as_of=datetime.now(UTC),
             company_id=company.manifest.company_id,
             company_name=_safe(company.manifest.name),
+            companies=tuple(
+                CompanyView(id=item.manifest.company_id, name=_safe(item.manifest.name))
+                for item in companies
+            ),
             agents=agents,
             requests=tuple(sorted(requests, key=lambda r: r.id)),
             tasks=tuple(sorted(tasks, key=lambda t: (t.last_activity, t.id), reverse=True)),
         )
+
+    def _companies(self) -> tuple[CompanyWorkspace, ...]:
+        root = Path(self.config.platform_root).expanduser().absolute().resolve() / "companies"
+        _reject_symlinks(root)
+        if not root.is_dir():
+            raise ValueError("company workspace has not been prepared")
+        companies: list[CompanyWorkspace] = []
+        for directory in _directories(root, "company_*"):
+            manifest_path = directory / "company.json"
+            _reject_symlinks(manifest_path)
+            if not manifest_path.is_file():
+                continue
+            manifest = CompanyManifest.model_validate_json(_read_regular(manifest_path, 16_000))
+            manifest.validate_integrity()
+            companies.append(
+                CompanyWorkspace.initialize(
+                    self.config.platform_root,
+                    company_id=manifest.company_id,
+                    name=manifest.name,
+                    read_only=True,
+                )
+            )
+        if not any(item.manifest.company_id == self.config.company_id for item in companies):
+            raise ValueError("configured company workspace has not been prepared")
+        return tuple(sorted(companies, key=lambda item: item.manifest.company_id))
 
 
 def _read_native(company: CompanyWorkspace) -> tuple[_Native, ...]:

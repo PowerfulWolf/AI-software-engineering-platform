@@ -50,7 +50,12 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   const fixture = {
     schema_version: "v0.1",
     as_of: "2026-09-05T01:00:00Z",
+    company_id: "company_fixture",
     company_name: "Fixture company",
+    companies: [
+      { id: "company_fixture", name: "Fixture company" },
+      { id: "company_other", name: "Other company" },
+    ],
     agents: [
       {
         id: "agent_coder",
@@ -80,6 +85,16 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
         max_parallel_assignments: 8,
         current_stage_delivery_ids: [],
         assigned_delivery_ids: ["d1"],
+        history_delivery_ids: [],
+      },
+      {
+        id: "agent_planner",
+        name: "规划",
+        roles: ["planner"],
+        enabled: true,
+        max_parallel_assignments: 8,
+        current_stage_delivery_ids: [],
+        assigned_delivery_ids: [],
         history_delivery_ids: [],
       },
     ],
@@ -170,8 +185,26 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
       ],
     })),
   };
+  fixture.tasks.push(
+    {
+      ...structuredClone(fixture.tasks[1]),
+      id: "d3",
+      status: "BLOCKED",
+      terminal: true,
+      blocker: "等待人工处理",
+      assignments: [],
+    },
+    {
+      ...structuredClone(fixture.tasks[1]),
+      id: "d4",
+      status: "DONE",
+      terminal: true,
+      assignments: [],
+    },
+  );
   let failure = false,
-    interval = null;
+    interval = null,
+    urls = [];
   const context = vm.createContext({
     document: {
       getElementById: get,
@@ -185,10 +218,13 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
               n.tag === "details" && (selector !== "details[open]" || n.open),
           ),
     },
-    fetch: async () => ({
-      ok: !failure,
-      json: async () => structuredClone(fixture),
-    }),
+    fetch: async (url) => {
+      urls.push(url);
+      return {
+        ok: !failure,
+        json: async () => structuredClone(fixture),
+      };
+    },
     setTimeout: () => 1,
     clearTimeout: () => {},
     setInterval: (fn, ms) => {
@@ -217,6 +253,11 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   assert.match(text(agentCards[1]), /等待测试阶段/);
   assert.doesNotMatch(text(agentCards[2]), /实现中/);
   assert.match(text(agentCards[2]), /等待评审阶段/);
+  assert.match(text(agentCards[3]), /空闲中/);
+  const companyTabs = get("companies").children;
+  assert.equal(companyTabs.length, 2);
+  await companyTabs[1].events.click();
+  assert.equal(urls.at(-1), "/api/v1/team/company_other");
   fixture.tasks[0].status = "QA";
   fixture.tasks[0].assignments[0].current_stage = false;
   fixture.tasks[0].assignments[1].current_stage = true;
@@ -231,7 +272,9 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   assert.match(text(qaStageCards[1]), /测试中/);
   assert.match(text(qaStageCards[2]), /等待评审阶段/);
   get("nav-requests").events.click();
-  assert.match(text(get("content")), /0\/2 个改造仓库任务完成/);
+  assert.match(text(get("content")), /执行中 2/);
+  assert.match(text(get("content")), /阻塞中 1/);
+  assert.match(text(get("content")), /已完成 1/);
   vm.runInContext('showDetail("task","d1")', context);
   assert.match(text(get("detail")), /任务详情/);
   assert.match(text(get("detail")), /codex \/ gpt-5.5/);

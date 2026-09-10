@@ -41,7 +41,7 @@ from ai_software_engineer.project_manager.mysql_dispatch_authority import _decod
 from ai_software_engineer.project_manager.production_host import OrganizationTeamHost
 from ai_software_engineer.runtime_workspace import OrganizationWorkspace
 from ai_software_engineer.store.mysql_repository import open_mysql_connection
-from ai_software_engineer.team_view.models import TeamReadError, TeamSnapshot
+from ai_software_engineer.team_view.models import CompanyView, TeamReadError, TeamSnapshot
 from ai_software_engineer.team_view.reader import ProductionTeamReader
 from ai_software_engineer.team_view.server import create_team_server
 from tests.e2e.test_joint_delivery import setup_host
@@ -245,14 +245,26 @@ def test_real_inflight_joint_and_terminal_reads(
 
 
 class _Reader:
-    fail = False
-    reads = 0
+    def __init__(self) -> None:
+        self.fail = False
+        self.reads = 0
+        self.selected: list[str | None] = []
 
-    def snapshot(self) -> TeamSnapshot:
+    def snapshot(self, company_id: str | None = None) -> TeamSnapshot:
         self.reads += 1
+        self.selected.append(company_id)
         if self.fail:
             raise RuntimeError("password=private-must-not-leak")
-        return TeamSnapshot(as_of=datetime.now(UTC), company_id="company_test", company_name="Test")
+        selected = company_id or "company_test"
+        return TeamSnapshot(
+            as_of=datetime.now(UTC),
+            company_id=selected,
+            company_name="Other" if selected == "company_other" else "Test",
+            companies=(
+                CompanyView(id="company_test", name="Test"),
+                CompanyView(id="company_other", name="Other"),
+            ),
+        )
 
 
 @pytest.fixture
@@ -288,6 +300,11 @@ def test_http_refresh_and_security(server: tuple[int, _Reader]) -> None:
             assert response.getheader("Cache-Control") == "no-store"
             assert "frame-ancestors 'none'" in str(response.getheader("Content-Security-Policy"))
             assert response.getheader("Access-Control-Allow-Origin") is None
+    with closing(HTTPConnection("127.0.0.1", port, timeout=5)) as client:
+        client.request("GET", "/api/v1/team/company_other")
+        response = client.getresponse()
+        assert response.status == 200
+        assert json.loads(response.read())["company_id"] == "company_other"
     for headers in (
         {"Host": "evil.example"},
         {"Origin": "https://evil.example"},
@@ -300,7 +317,8 @@ def test_http_refresh_and_security(server: tuple[int, _Reader]) -> None:
         with closing(HTTPConnection("127.0.0.1", port, timeout=5)) as client:
             client.request("GET", path)
             assert client.getresponse().status == 404
-    assert reader.reads == 1
+    assert reader.reads == 2
+    assert reader.selected == [None, "company_other"]
     reader.fail = True
     with closing(HTTPConnection("127.0.0.1", port, timeout=5)) as client:
         client.request("GET", "/api/v1/team")
@@ -327,6 +345,32 @@ def test_wire_schema_and_extra_fields() -> None:
     validator.validate(payload)
     payload["agents_online"] = 99
     assert list(validator.iter_errors(payload))
+
+
+def test_reader_selects_prepared_company_without_cross_company_writes(tmp_path: Path) -> None:
+    config = ProductionConfig(
+        platform_root=str(tmp_path),
+        company_id="company_test",
+        company_name="Test",
+        model_routes=(
+            ProviderRouteConfig(
+                provider="codex", model="gpt-5.5", kind=ModelProviderKind.CODEX_CLI
+            ),
+        ),
+    )
+    CompanyWorkspace.initialize(tmp_path, company_id="company_test", name="Test")
+    CompanyWorkspace.initialize(tmp_path, company_id="company_other", name="Other")
+    OrganizationWorkspace.initialize(
+        tmp_path / "organization", organization_id="organization_test", created_at=datetime.now(UTC)
+    )
+    before = _bytes(tmp_path)
+    snapshot = ProductionTeamReader(config, {}).snapshot("company_other")
+    assert snapshot.company_id == "company_other"
+    assert tuple((item.id, item.name) for item in snapshot.companies) == (
+        ("company_other", "Other"),
+        ("company_test", "Test"),
+    )
+    assert _bytes(tmp_path) == before
 
 
 def test_ui_contracts() -> None:

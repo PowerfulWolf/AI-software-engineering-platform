@@ -119,6 +119,25 @@
       "title": "AssignmentView",
       "type": "object"
     },
+    "CompanyView": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "title": "CompanyView",
+      "type": "object"
+    },
     "DocumentView": {
       "additionalProperties": false,
       "properties": {
@@ -670,6 +689,14 @@
     "company_name": {
       "title": "Company Name",
       "type": "string"
+    },
+    "companies": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/CompanyView"
+      },
+      "title": "Companies",
+      "type": "array"
     },
     "agents": {
       "default": [],

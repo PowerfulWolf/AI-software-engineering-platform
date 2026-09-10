@@ -93,11 +93,17 @@ class AgentView(DomainModel):
     history_delivery_ids: tuple[str, ...] = ()
 
 
+class CompanyView(DomainModel):
+    id: str
+    name: str
+
+
 class TeamSnapshot(DomainModel):
     schema_version: Literal["v0.1"] = "v0.1"
     as_of: AwareDatetime
     company_id: str
     company_name: str
+    companies: tuple[CompanyView, ...] = ()
     agents: tuple[AgentView, ...] = ()
     requests: tuple[RequestView, ...] = ()
     tasks: tuple[TaskView, ...] = ()

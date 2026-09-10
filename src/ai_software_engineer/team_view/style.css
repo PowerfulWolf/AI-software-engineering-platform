@@ -140,6 +140,29 @@ h3 {
   color: var(--muted);
   margin: 12px 0 26px;
 }
+.company-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 18px 0 0;
+}
+.company-tabs:empty {
+  display: none;
+}
+.company-tabs button[aria-selected="true"] {
+  border-color: var(--accent);
+  background: #e9effd;
+  color: #244fa7;
+  font-weight: 650;
+}
+.task-group {
+  margin: 24px 0 30px;
+}
+.task-group > h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .summary {
   display: flex;
   gap: 25px;

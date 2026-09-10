@@ -6,12 +6,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 from threading import Lock
 from typing import Protocol
+from urllib.parse import unquote
 
 from .models import TeamSnapshot
 
 
 class TeamReader(Protocol):
-    def snapshot(self) -> TeamSnapshot: ...
+    def snapshot(self, company_id: str | None = None) -> TeamSnapshot: ...
 
 
 def create_team_server(reader: TeamReader, *, port: int = 8765) -> ThreadingHTTPServer:
@@ -66,7 +67,13 @@ def create_team_server(reader: TeamReader, *, port: int = 8765) -> ThreadingHTTP
                 name, content_type = assets[self.path]
                 self._send(200, files(__package__).joinpath(name).read_bytes(), content_type)
                 return
-            if self.path != "/api/v1/team":
+            company_id: str | None = None
+            if self.path.startswith("/api/v1/team/"):
+                company_id = unquote(self.path.removeprefix("/api/v1/team/"))
+                if not company_id or "/" in company_id or "?" in company_id:
+                    self._send(404, b'{"error":"Not found"}', "application/json")
+                    return
+            elif self.path != "/api/v1/team":
                 self._send(404, b'{"error":"Not found"}', "application/json")
                 return
             if not gate.acquire(blocking=False):
@@ -74,7 +81,7 @@ def create_team_server(reader: TeamReader, *, port: int = 8765) -> ThreadingHTTP
                 return
             try:
                 try:
-                    snapshot = reader.snapshot()
+                    snapshot = reader.snapshot(company_id)
                     body = snapshot.model_dump_json().encode("utf-8")
                 except Exception:
                     self._send(503, b'{"error":"Team data unavailable"}', "application/json")

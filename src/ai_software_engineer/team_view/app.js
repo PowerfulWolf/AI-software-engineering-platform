@@ -77,6 +77,17 @@ function assignmentBadge(task, assignment) {
 }
 const taskById = (id) => snapshot.tasks.find((t) => t.id === id);
 const requestById = (id) => snapshot.requests.find((r) => r.id === id);
+function taskGroup(task) {
+  if (task.status === "DONE") return "completed";
+  if (
+    task.blocker ||
+    task.status.includes("WAITING") ||
+    ["BLOCKED", "FAILED"].includes(task.status)
+  )
+    return "blocked";
+  if (task.terminal) return "completed";
+  return "active";
+}
 function paths(scope) {
   return scope.selected_paths
     .map((p) => (p === "." ? scope.root : scope.root + "/" + p))
@@ -159,10 +170,14 @@ function renderTeam(content) {
       el("div", agent.roles.map(label).join(" / "), "muted"),
     );
     identity.append(el("div", agent.name.slice(0, 1), "avatar"), name);
-    head.append(
-      identity,
-      el("span", agent.enabled ? "已启用 · 运行状态未确认" : "已停用", "badge"),
-    );
+    const memberStatus = !agent.enabled
+      ? ["已停用", "badge"]
+      : agent.current_stage_delivery_ids.length
+        ? ["执行中", "badge current"]
+        : agent.assigned_delivery_ids.length
+          ? ["等待当前阶段", "badge"]
+          : ["空闲中", "badge done"];
+    head.append(identity, el("span", memberStatus[0], memberStatus[1]));
     card.append(head);
     card.append(
       el(
@@ -177,7 +192,7 @@ function renderTeam(content) {
       if (t) work.append(taskRow(t, agent.id));
     }
     if (!agent.assigned_delivery_ids.length)
-      work.append(el("p", "当前公司没有未结束的任务分配。", "muted"));
+      work.append(el("p", "当前公司没有分配给该成员的未结束任务。", "muted"));
     card.append(work);
     const history = el("details");
     history.dataset.key = agent.id;
@@ -194,10 +209,45 @@ function renderTeam(content) {
   content.append(
     el(
       "p",
-      "成员属于组织；这里的工作记录只统计当前公司。产品、设计、规划阶段可在需求中查看，尚未登记为独立 AgentProfile 的岗位不会虚构成员或在线状态。",
+      "成员属于组织；工作记录按上方选中的公司独立统计。“空闲中”只描述当前公司任务分配，不代表 Agent 进程在线。",
       "muted",
     ),
   );
+}
+function requestCard(request) {
+  const card = el("article", undefined, "request"),
+    head = el("div", undefined, "row");
+  head.append(
+    button(request.title, () => showDetail("request", request.id)),
+    badge(request.stage),
+  );
+  card.append(head);
+  const write = request.scopes.filter((s) => !s.reference_only),
+    done = write.filter((s) => taskById(s.delivery_id)?.status === "DONE").length;
+  card.append(
+    el(
+      "p",
+      `${request.scopes.length} 个代码目录范围 · ${done}/${write.length} 个改造仓库任务完成 · 联合需求以整体验收为准`,
+      "muted",
+    ),
+  );
+  for (const scope of request.scopes) {
+    card.append(el("p", paths(scope), "paths"));
+    const task = taskById(scope.delivery_id);
+    card.append(
+      el(
+        "span",
+        scope.reference_only
+          ? "只读参考"
+          : task
+            ? label(task.status)
+            : "尚未生成交付任务",
+        "badge",
+      ),
+    );
+  }
+  if (request.blocker) card.append(el("div", request.blocker, "blocker"));
+  return card;
 }
 function renderRequests(content) {
   if (!snapshot.requests.length) {
@@ -211,42 +261,22 @@ function renderRequests(content) {
     );
     content.append(n);
   }
-  for (const request of snapshot.requests) {
-    const card = el("article", undefined, "request"),
-      head = el("div", undefined, "row");
-    head.append(
-      button(request.title, () => showDetail("request", request.id)),
-      badge(request.stage),
-    );
-    card.append(head);
-    const write = request.scopes.filter((s) => !s.reference_only),
-      done = write.filter(
-        (s) => taskById(s.delivery_id)?.status === "DONE",
-      ).length;
-    card.append(
-      el(
-        "p",
-        `${request.scopes.length} 个代码目录范围 · ${done}/${write.length} 个改造仓库任务完成 · 联合需求以整体验收为准`,
-        "muted",
-      ),
-    );
-    for (const scope of request.scopes) {
-      card.append(el("p", paths(scope), "paths"));
-      const task = taskById(scope.delivery_id);
-      card.append(
-        el(
-          "span",
-          scope.reference_only
-            ? "只读参考"
-            : task
-              ? label(task.status)
-              : "尚未生成交付任务",
-          "badge",
-        ),
-      );
-    }
-    if (request.blocker) card.append(el("div", request.blocker, "blocker"));
-    content.append(card);
+  const materialized = new Set(snapshot.tasks.map((task) => task.request_id));
+  for (const request of snapshot.requests.filter((item) => !materialized.has(item.id)))
+    content.append(requestCard(request));
+  for (const [key, title] of [
+    ["active", "执行中"],
+    ["blocked", "阻塞中"],
+    ["completed", "已完成"],
+  ]) {
+    const group = el("section", undefined, "task-group");
+    const tasks = snapshot.tasks.filter((task) => taskGroup(task) === key);
+    const heading = el("h2");
+    heading.append(document.createTextNode(title), el("span", String(tasks.length), "badge"));
+    group.append(heading);
+    if (!tasks.length) group.append(el("p", `暂无${title}任务。`, "muted"));
+    for (const task of tasks) group.append(taskRow(task));
+    content.append(group);
   }
 }
 function showDetail(kind, id) {
@@ -354,6 +384,16 @@ function render() {
     [...document.querySelectorAll("details[open]")].map((n) => n.dataset.key),
   );
   document.getElementById("company").textContent = snapshot.company_name;
+  const companies = document.getElementById("companies");
+  companies.replaceChildren();
+  for (const company of snapshot.companies || []) {
+    const tab = button(company.name, () => refresh(company.id), "");
+    const active = company.id === snapshot.company_id;
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-selected", String(active));
+    if (active) tab.setAttribute("aria-current", "true");
+    companies.append(tab);
+  }
   document.getElementById("heading").textContent =
     page === "team" ? "团队成员" : "需求与交付";
   const content = document.getElementById("content");
@@ -376,7 +416,7 @@ for (const target of ["team", "requests"])
     }
     render();
   });
-async function refresh() {
+async function refresh(companyId) {
   if (refreshing) return;
   refreshing = true;
   document.getElementById("refresh").disabled = true;
@@ -384,7 +424,9 @@ async function refresh() {
   const controller = new AbortController(),
     timeout = setTimeout(() => controller.abort(), 40000);
   try {
-    const response = await fetch("/api/v1/team", {
+    const target = companyId || (snapshot && snapshot.company_id);
+    const url = target ? "/api/v1/team/" + encodeURIComponent(target) : "/api/v1/team";
+    const response = await fetch(url, {
       cache: "no-store",
       signal: controller.signal,
     });
