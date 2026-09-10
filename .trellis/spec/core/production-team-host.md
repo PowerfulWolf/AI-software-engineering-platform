@@ -549,3 +549,98 @@ Root cause (B/D/E): runtime kept lineage expectations private while exposing a l
 fake adapters already knew the expected chain. Exception conversion discarded post-run progress.
 Prevention: explicit contract tests at the adapter seam and facade failure tests, not weaker guards.
 Recovery of existing terminal Tasks remains a separate exact-candidate authorized operation.
+
+## Structured Agent output semantics and safe diagnostics (2026-09-10)
+
+### 1. Scope / Trigger
+
+This contract applies when Codex CLI exits successfully and writes structured Coder, QA, or Reviewer
+output. Provider JSON Schema admission is necessary but insufficient because Pydantic model validators
+also enforce evidence references, verdict coherence, role policy, and run identity.
+
+### 2. Signatures
+
+```python
+CodexCliAgentAdapter.run(request: AgentRequest) -> AgentResult
+_compile_prompt(request: AgentRequest, messages: Sequence[object]) -> str
+_validation_location(error: ValidationError) -> tuple[str | None, str | None]
+```
+
+No public wire field changes. A rejected output remains `FAILED + INVALID_OUTPUT`, has no Artifact,
+does not enter Reviewer/DONE, and is not eligible for provider fallback.
+
+### 3. Contracts
+
+- The compiled prompt contains exact task, source revision, context manifest, direct parent set,
+  producer role and producer run bindings from `AgentRequest`. Context inputs are not implicitly
+  promoted to parents.
+- Every content-level evidence reference must resolve to one unique record in the top-level
+  `evidence` array. QA `PASS`, Reviewer `APPROVE`, and Reviewer `REJECT` must obey the domain verdict
+  validators; the prompt states those conditions explicitly.
+- Provider output uses provisional integrity (`sha256=64 zeroes`, `validated=false`,
+  `validated_at=null`). Final validation and sealing remain platform-owned.
+- Invalid output diagnostics expose only a fixed cause, SHA-256 and UTF-8 byte count. Pydantic errors
+  may add a sanitized validation type and location path; raw model output, validation messages,
+  task prose, evidence descriptions and secrets must never be copied into `AgentFailure`.
+- Cause values are `JSON_DECODE`, `ARTIFACT_VALIDATION`, `ROLE_CONTRACT`, `GIT_CONTRACT`, or
+  `RUN_IDENTITY`. A historical generic error cannot be retroactively classified after its ephemeral
+  output file has been deleted.
+
+### 4. Validation & Error Matrix
+
+| Output state | Result / safe diagnostic |
+|---|---|
+| malformed JSON | `INVALID_OUTPUT; cause=JSON_DECODE` + output digest/bytes |
+| Schema-valid JSON with unknown evidence reference or incoherent verdict | `INVALID_OUTPUT; cause=ARTIFACT_VALIDATION` + sanitized type/path |
+| valid Artifact kind outside the assigned role | `INVALID_OUTPUT; cause=ROLE_CONTRACT; path=kind` |
+| Coder report does not bind the resulting Git candidate | `INVALID_OUTPUT; cause=GIT_CONTRACT` |
+| Artifact does not bind Task/run/context/source identity | `INVALID_OUTPUT; cause=RUN_IDENTITY` |
+| QA/Reviewer mutates its read-only worktree | existing `POLICY_VIOLATION`; never relabel as output failure |
+
+### 5. Good / Base / Bad Cases
+
+- **Good**: QA cites complete evidence, returns a coherent verdict and exact envelope bindings; the
+  typed Artifact proceeds to the existing lineage guard and store seal.
+- **Base**: a deterministic runner writes Schema-valid but semantically invalid QA JSON; the adapter
+  returns the exact safe cause/path/digest without retaining or disclosing the payload.
+- **Bad**: treat structured-output schema success as domain success, leak Pydantic messages or raw
+  output into logs, silently repair parents/verdict/evidence, or retry the consumed invocation.
+
+### 6. Tests Required
+
+`tests/agents/test_codex_cli.py` must exercise the public adapter seam with a real temporary Git
+repository and injected successful process runner. It must prove the semantic-invalid QA report is
+`INVALID_OUTPUT`, the diagnostic is actionable and secret-free, the digest binds the exact discarded
+payload, and the prompt contains the envelope/evidence/verdict rules. Existing Codex adapter and
+provider contract tests remain required. The next live attempt must use a fresh approved verification
+plan because the failed plan is at-most-once.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+payload = json.loads(raw_output)
+artifact = validate_artifact_payload(payload)  # every failure becomes one generic sentence
+```
+
+#### Correct
+
+```python
+try:
+    artifact = validate_artifact_payload(payload)
+except ValidationError as error:
+    validation_type, path = _validation_location(error)
+    raise _CodexOutputContractError(
+        cause="ARTIFACT_VALIDATION",
+        raw_output=raw_output,
+        validation_type=validation_type,
+        path=path,
+    ) from error
+```
+
+Root cause category is B/D/E: strict JSON Schema and domain validation are two different layers, but
+the model prompt described only the former and the adapter erased the latter's failure stage. Fast
+positive fixtures hid the semantic gap; ephemeral output deletion then made live diagnosis
+irreversible. Prevention combines an Agent-visible semantic contract, a negative adapter-seam test,
+stable secret-free diagnostics, and explicit fresh-plan recovery rather than silent replay.

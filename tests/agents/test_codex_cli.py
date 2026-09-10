@@ -22,12 +22,17 @@ from ai_software_engineer.agents.codex_cli import (
     _completion_reserve_seconds,
 )
 from ai_software_engineer.domain import (
+    AgentRole,
     ChangedFile,
     ChangeType,
     ImplementationReportArtifact,
 )
-from tests.agents.test_openai_compatible import StaticPromptBuilder, _coder_request
-from tests.domain.factories import make_coder_progress_artifact, make_implementation_artifact
+from tests.agents.test_openai_compatible import StaticPromptBuilder, _coder_request, _request
+from tests.domain.factories import (
+    make_coder_progress_artifact,
+    make_implementation_artifact,
+    make_qa_artifact,
+)
 
 
 def _git(root: Path, *arguments: str) -> str:
@@ -117,6 +122,27 @@ class _FailureRunner:
     ) -> CodexInvocationResult:
         del argv, cwd, environment, stdin, timeout_seconds
         return CodexInvocationResult(returncode=1, stderr="usage limit reached")
+
+
+class _ArtifactOutputRunner:
+    def __init__(self, payload: object) -> None:
+        self.raw_output = json.dumps(payload)
+        self.prompt = ""
+
+    def run(
+        self,
+        argv: tuple[str, ...],
+        *,
+        cwd: Path,
+        environment: Mapping[str, str],
+        stdin: str,
+        timeout_seconds: float,
+    ) -> CodexInvocationResult:
+        del cwd, environment, timeout_seconds
+        self.prompt = stdin
+        output_path = Path(argv[argv.index("--output-last-message") + 1])
+        output_path.write_text(self.raw_output, encoding="utf-8")
+        return CodexInvocationResult(returncode=0)
 
 
 class _DirtySuccessRunner:
@@ -494,6 +520,53 @@ def test_cli_usage_limit_is_typed_for_provider_fallback(tmp_path: Path) -> None:
     assert result.error is not None
     assert result.error.code is AgentErrorCode.QUOTA_EXHAUSTED
     assert result.error.transient is True
+
+
+def test_qa_semantic_artifact_failure_has_safe_actionable_diagnostics(
+    tmp_path: Path,
+) -> None:
+    root, base = _repository(tmp_path)
+    request = _request(
+        AgentRole.QA,
+        run_id="run_qa_invalid_evidence",
+        source_revision=base,
+    )
+    payload = json.loads(make_qa_artifact().model_dump_json())
+    payload.update(
+        {
+            "task_id": request.task_id,
+            "source_revision": request.source_revision,
+            "context_manifest_id": request.context_manifest_id,
+            "parent_artifact_ids": [],
+        }
+    )
+    payload["producer"]["run_id"] = request.run_id
+    payload["evidence"][0]["description"] = "private-provider-output"
+    payload["content"]["criteria_results"][0]["evidence_ids"] = ["ev_missing_output"]
+    runner = _ArtifactOutputRunner(payload)
+    adapter = CodexCliAgentAdapter(
+        workspace_root=root,
+        model="gpt-5.6-terra",
+        agent_id="agent_qa_001",
+        agent_version="v0.1",
+        prompt_builder=StaticPromptBuilder(),
+        runner=runner,
+    )
+
+    result = adapter.run(request)
+
+    assert result.status is AgentRunStatus.FAILED
+    assert result.error is not None
+    assert result.error.code is AgentErrorCode.INVALID_OUTPUT
+    assert result.error.transient is False
+    assert "cause=ARTIFACT_VALIDATION" in result.error.message
+    assert "validation_type=value_error" in result.error.message
+    assert "path=qa-report" in result.error.message
+    assert hashlib.sha256(runner.raw_output.encode()).hexdigest() in result.error.message
+    assert "private-provider-output" not in result.error.message
+    assert "Copy these exact envelope bindings" in runner.prompt
+    assert "Every referenced evidence ID must exist exactly once" in runner.prompt
+    assert "QA status PASS requires every criterion and test to PASS" in runner.prompt
 
 
 def test_cli_failure_with_partial_changes_cannot_fallback(tmp_path: Path) -> None:
