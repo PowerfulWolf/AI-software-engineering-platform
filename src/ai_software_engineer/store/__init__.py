@@ -4,6 +4,8 @@ from ai_software_engineer.store.mysql_repository import (
     MySqlConfigurationError,
     MySqlConnectionError,
     MySqlTaskRepository,
+    open_mysql_connection,
+    validate_mysql_dsn,
 )
 from ai_software_engineer.store.ports import TaskRepository
 from ai_software_engineer.store.repository import (
@@ -28,4 +30,6 @@ __all__ = [
     "TaskAlreadyExists",
     "TaskNotFound",
     "TaskRepository",
+    "open_mysql_connection",
+    "validate_mysql_dsn",
 ]

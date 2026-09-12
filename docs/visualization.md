@@ -66,9 +66,10 @@ ProductionTeamReader → TeamSnapshot → GET /api/v1/team → 工作台
 不创建 stores/schema、不扫描代码、不调用模型、不写 checkpoint。记录不一致返回 503。
 
 HTTP 仅绑定 loopback，校验 Host/Origin，关闭 CORS/缓存，采用 CSP 与 textContent。
-查询开放 assets、`/api/v1/team[/<team>]`、`/api/v1/console` 和 `/api/v1/operations[/<id>]`；唯一
-写入口是 typed JSON `POST /api/v1/operations`，限制 64 KB 并先持久化再异步执行。未知路径 404，
-错误不泄露 DSN。
+查询开放 assets、`/api/v1/team[/<team>]`、`/api/v1/console`、`/api/v1/operations[/<id>]` 和受控
+administration status/settings；交付写入口是 typed JSON `POST /api/v1/operations`，限制 64 KB 并
+先持久化再异步执行。管理面另有 Project、知识、write-only 运行变量和 MySQL probe 的 typed
+`/api/v1/admin/*` 边界。未知路径 404，错误不泄露 DSN。
 没有任意文件路由，不应通过反向代理公开到局域网或互联网。这不是带认证的多用户站点。
 
 正式 wire contract：[team-snapshot.schema.json](../schemas/team-snapshot.schema.json) 与

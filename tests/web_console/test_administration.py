@@ -7,12 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from ai_software_engineer.config import ProductionConfig
+from ai_software_engineer.config import LocalRuntimeEnvironmentStore, ProductionConfig
 from ai_software_engineer.team_workspace import TeamWorkspace, discover_team_workspaces
 from ai_software_engineer.web_console import (
     AdministrationError,
     CreateProjectRequest,
     LocalConsoleAdministration,
+    MySqlConnectionRequest,
     UpdateSettingsRequest,
 )
 
@@ -117,3 +118,86 @@ def test_team_catalog_uses_the_single_canonical_team_directory(tmp_path: Path) -
     (displaced / "team.json").write_bytes((team.root / "team.json").read_bytes())
 
     assert discover_team_workspaces(config.platform_root) == (team,)
+
+
+def test_runtime_values_are_write_only_and_feed_status(tmp_path: Path) -> None:
+    administration = _administration(tmp_path)
+    probed: list[str] = []
+    administration.mysql_probe = probed.append
+    dsn = "mysql+pymysql://user:changed@127.0.0.1:3307/database"
+
+    snapshot = administration.update_settings(
+        UpdateSettingsRequest.model_validate(
+            {
+                "config": administration.runtime_config.to_wire(),
+                "runtime_variables": [{"environment_name": "TEST_MYSQL_DSN", "value": dsn}],
+            }
+        )
+    )
+    connection = administration.test_mysql_connection(MySqlConnectionRequest())
+    status = administration.status()
+
+    assert snapshot.restart_required is True
+    assert snapshot.secret_status[1].environment_name == "TEST_MYSQL_DSN"
+    assert connection.connected is True
+    assert probed == [dsn, dsn]
+    assert status.database.connection == "CONNECTED"
+    assert status.database.source == "runtime.env"
+    assert status.live_model_execution is False
+    assert status.team_knowledge_imported == 0
+    assert status.team_knowledge_selected == 0
+    assert dsn not in snapshot.model_dump_json()
+    assert dsn not in status.model_dump_json()
+    assert dsn in (tmp_path / "runtime.env").read_text(encoding="utf-8")
+
+
+def test_runtime_update_rejects_unknown_variable_and_invalid_dsn(tmp_path: Path) -> None:
+    administration = _administration(tmp_path)
+
+    with pytest.raises(AdministrationError, match="not referenced"):
+        administration.update_settings(
+            UpdateSettingsRequest.model_validate(
+                {
+                    "config": administration.runtime_config.to_wire(),
+                    "runtime_variables": [
+                        {"environment_name": "UNRELATED_VALUE", "value": "unsafe"}
+                    ],
+                }
+            )
+        )
+    with pytest.raises(AdministrationError, match="DSN is invalid"):
+        administration.update_settings(
+            UpdateSettingsRequest.model_validate(
+                {
+                    "config": administration.runtime_config.to_wire(),
+                    "runtime_variables": [
+                        {"environment_name": "TEST_MYSQL_DSN", "value": "not-a-dsn"}
+                    ],
+                }
+            )
+        )
+
+    assert not (tmp_path / "runtime.env").exists()
+
+
+def test_mysql_connection_returns_safe_failure(tmp_path: Path) -> None:
+    administration = _administration(tmp_path)
+    administration.mysql_probe = lambda _: (_ for _ in ()).throw(OSError("secret"))
+
+    result = administration.test_mysql_connection(
+        MySqlConnectionRequest(dsn="mysql+pymysql://user:password@127.0.0.1:3307/database")
+    )
+
+    assert result.connected is False
+    assert "secret" not in result.message
+
+
+def test_preexisting_runtime_file_not_loaded_by_process_requires_restart(tmp_path: Path) -> None:
+    administration = _administration(tmp_path)
+    LocalRuntimeEnvironmentStore(tmp_path / "runtime.env").save(
+        {"TEST_MYSQL_DSN": "mysql+pymysql://user:password@127.0.0.1:3307/database"}
+    )
+
+    snapshot = administration.settings()
+
+    assert snapshot.restart_required is True

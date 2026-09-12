@@ -408,6 +408,17 @@ input[type="checkbox"] {
 .settings-subsection h3 {
   margin-bottom: 12px;
 }
+.status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.status-row:last-child {
+  border-bottom: 0;
+}
 .route-card {
   border: 1px solid var(--line);
   border-radius: 8px;

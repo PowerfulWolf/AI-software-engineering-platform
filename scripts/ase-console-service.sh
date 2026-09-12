@@ -7,6 +7,10 @@ PROJECT_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd -P)
 SERVICE_EXECUTABLE="$PROJECT_ROOT/.venv/bin/ase-console"
 DEFAULT_STATE_BASE=${XDG_STATE_HOME:-"${HOME:?HOME is required}/.local/state"}
 SERVICE_STATE_DIR=${ASE_SERVICE_STATE_DIR:-"$DEFAULT_STATE_BASE/ai-software-engineer"}
+DEFAULT_CONFIG_BASE=${XDG_CONFIG_HOME:-"${HOME:?HOME is required}/.config"}
+CONFIG_FILE=${ASE_CONFIG:-"$DEFAULT_CONFIG_BASE/ai-software-engineer/config.json"}
+CONFIG_DIRECTORY=$(dirname -- "$CONFIG_FILE")
+RUNTIME_ENV_FILE="$CONFIG_DIRECTORY/runtime.env"
 PID_FILE="$SERVICE_STATE_DIR/ase-console.pid"
 LOG_FILE="$SERVICE_STATE_DIR/ase-console.log"
 
@@ -42,6 +46,20 @@ read_pid() {
   printf '%s\n' "$pid"
 }
 
+load_runtime_environment() {
+  if [ ! -e "$RUNTIME_ENV_FILE" ]; then
+    return 0
+  fi
+  if [ -L "$RUNTIME_ENV_FILE" ] || [ ! -f "$RUNTIME_ENV_FILE" ]; then
+    echo "error: runtime environment is not a regular file: $RUNTIME_ENV_FILE" >&2
+    exit 2
+  fi
+  set -a
+  # The file is written by the typed Web Console store using canonical POSIX quoting.
+  . "$RUNTIME_ENV_FILE"
+  set +a
+}
+
 is_our_process() {
   candidate_pid=$1
   kill -0 "$candidate_pid" 2>/dev/null || return 1
@@ -62,6 +80,8 @@ start_service() {
     echo "error: $SERVICE_EXECUTABLE is missing; run 'uv sync' first" >&2
     exit 2
   fi
+  load_runtime_environment
+  export ASE_CONFIG="$CONFIG_FILE"
   : >>"$LOG_FILE"
   nohup "$SERVICE_EXECUTABLE" >>"$LOG_FILE" 2>&1 </dev/null &
   started_pid=$!

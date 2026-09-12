@@ -7,11 +7,19 @@ from ai_software_engineer.config.production import (
     ProductionDatabaseConfig,
     ProviderRouteConfig,
 )
+from ai_software_engineer.config.runtime_environment import (
+    LocalRuntimeEnvironmentStore,
+    RuntimeEnvironmentError,
+    runtime_environment_path,
+)
 
 __all__ = [
+    "LocalRuntimeEnvironmentStore",
     "ModelProviderKind",
     "ProductionConfig",
     "ProductionConfigError",
     "ProductionDatabaseConfig",
     "ProviderRouteConfig",
+    "RuntimeEnvironmentError",
+    "runtime_environment_path",
 ]

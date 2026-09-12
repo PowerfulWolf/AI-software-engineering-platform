@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from ai_software_engineer.config import ProductionConfig
+from ai_software_engineer.config import ProductionConfig, ProductionConfigError
 from ai_software_engineer.team_view.models import TeamSnapshot
 from ai_software_engineer.team_workspace import TeamWorkspace
 from ai_software_engineer.web_console import (
@@ -16,7 +16,7 @@ from ai_software_engineer.web_console import (
     LocalConsoleAdministration,
     create_console_app,
 )
-from ai_software_engineer.web_console.host import main
+from ai_software_engineer.web_console.host import production_console_app
 
 
 class _Console:
@@ -79,7 +79,9 @@ def test_web_transport_composes_assets_snapshot_and_durable_submission(tmp_path:
 
     with TestClient(app, base_url="http://127.0.0.1:8765") as client:
         assert client.get("/").status_code == 200
-        assert client.get("/api/v1/console").json()["team_id"] == "team_test"
+        console_info = client.get("/api/v1/console").json()
+        assert console_info["team_id"] == "team_test"
+        assert console_info["delivery_ready"] is True
         snapshot = client.get("/api/v1/team")
         submitted = client.post(
             "/api/v1/operations",
@@ -155,13 +157,62 @@ def test_web_transport_rejects_changed_idempotency_key_and_unknown_operation(
     assert missing.status_code == 404
 
 
-def test_console_host_missing_config_fails_without_traceback(
+def test_console_host_missing_config_starts_with_visible_defaults(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setenv("ASE_CONFIG", str(tmp_path / "missing.json"))
+    home = tmp_path / "home"
+    config_path = tmp_path / "config" / "missing.json"
+    monkeypatch.setattr("ai_software_engineer.config.production.Path.home", lambda: home)
+    app = production_console_app({"ASE_CONFIG": str(config_path), "PATH": "/missing"}, port=8765)
 
-    with pytest.raises(SystemExit, match=r"^error: cannot load production configuration:"):
-        main()
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        settings = client.get("/api/v1/admin/settings")
+        status = client.get("/api/v1/admin/status")
+        team = client.get("/api/v1/team")
+        delivery = client.post("/api/v1/operations", json=_payload(tmp_path))
+        assert not config_path.exists()
+        assert not home.exists()
+        saved = client.put(
+            "/api/v1/admin/settings",
+            json={
+                "config": settings.json()["config"],
+                "runtime_variables": [
+                    {
+                        "environment_name": "ASE_MYSQL_DSN",
+                        "value": ("mysql+pymysql://user:password@127.0.0.1:3307/database"),
+                    }
+                ],
+            },
+        )
+        prepared_team = client.get("/api/v1/admin/team")
+
+    assert settings.status_code == 200
+    assert settings.json()["config_source"] == "default"
+    assert settings.json()["config"]["console_port"] == 8765
+    assert status.json()["delivery_runtime"] == "SETUP_REQUIRED"
+    assert status.json()["live_model_execution"] is False
+    assert status.json()["database"]["connection"] == "NOT_CONFIGURED"
+    assert status.json()["team_prepared"] is False
+    assert team.status_code == 200
+    assert team.json()["team_id"] == "team_ai"
+    assert delivery.status_code == 503
+    assert delivery.json()["error"]["code"] == "SETUP_REQUIRED"
+    assert saved.status_code == 200
+    assert saved.json()["config_source"] == "saved"
+    assert saved.json()["restart_required"] is True
+    assert prepared_team.status_code == 200
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        assert client.get("/api/v1/console").json()["delivery_ready"] is False
+    assert config_path.is_file()
+    assert (home / ".ase" / "team" / "team.json").is_file()
+
+
+def test_console_host_rejects_existing_invalid_config(tmp_path: Path) -> None:
+    config_path = tmp_path / "invalid.json"
+    config_path.write_text("{", encoding="utf-8")
+
+    with pytest.raises(ProductionConfigError, match="cannot load production configuration"):
+        production_console_app({"ASE_CONFIG": str(config_path)}, port=8765)
 
 
 def test_administration_endpoints_create_project_import_document_and_save_settings(
@@ -182,6 +233,7 @@ def test_administration_endpoints_create_project_import_document_and_save_settin
         runtime_config=config,
         config_path=config_path,
         environment={"ASE_MYSQL_DSN": "mysql://user:secret@example.invalid/db"},
+        mysql_probe=lambda _: None,
     )
     app = create_console_app(
         _Console(),
@@ -205,6 +257,11 @@ def test_administration_endpoints_create_project_import_document_and_save_settin
         projects = client.get("/api/v1/admin/projects")
         knowledge = client.get("/api/v1/admin/team/knowledge")
         settings = client.get("/api/v1/admin/settings")
+        status = client.get("/api/v1/admin/status")
+        mysql = client.post(
+            "/api/v1/admin/settings/test-mysql",
+            json={"dsn": "mysql+pymysql://user:password@127.0.0.1:3307/database"},
+        )
         updated_config = settings.json()["config"]
         normalized_path = imported.json()["manifest"]["normalized_relative_path"]
         updated_config["team_knowledge_paths"] = [normalized_path]
@@ -226,6 +283,12 @@ def test_administration_endpoints_create_project_import_document_and_save_settin
     assert settings.json()["secret_status"] == [
         {"environment_name": "ASE_MYSQL_DSN", "configured": True}
     ]
+    assert status.status_code == 200
+    assert status.json()["database"]["connection"] == "CONNECTED"
+    assert status.json()["runtime_environment_path"].endswith("/runtime.env")
+    assert mysql.json() == {"connected": True, "message": "MySQL 连接成功。"}
+    assert "password" not in status.text
+    assert "password" not in mysql.text
     assert updated.status_code == 200
     assert updated.json()["restart_required"] is True
     assert rejected.status_code == 422

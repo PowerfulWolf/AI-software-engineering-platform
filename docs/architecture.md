@@ -175,7 +175,7 @@ Project directory + requirement
 | Handoff | 文件系统 JSON + Markdown | deterministic ID，等价重建保留首次观察时间 |
 | Repository workspace binding | Project-owned 外置 sidecar `workspace.json` + 固定目录 | 与目标代码路径和 Project lineage 绑定；不复制源码 |
 | Team knowledge documents | Team sidecar 原文件 + `content.md` + hashed manifest | 内容寻址、显式选择、来源和规范化摘要可验证；不递归自动加载 |
-| Production settings | `ASE_CONFIG` 指向的无密钥 JSON | Web Console 原子更新；运行时绑定变化要求重启，不热改 Host |
+| Production settings | `ASE_CONFIG` 无密钥 JSON + sibling `runtime.env` | Web Console 原子更新；运行变量 write-only、allowlist、`0600`；服务脚本启动时加载；绑定变化要求重启，不热改 Host |
 | Agent/Model workforce | singleton Team workspace + MySQL dispatch | AgentProfile/ModelPolicy 属于 Team；已提交 Assignment/Lease 与 dispatch fence 在 MySQL |
 | RepositoryProfile / Spec governance | Repository sidecar 文件记录 | profile 与 runtime binding 不可变；冲突/resolution 使用带 SHA 的 append-only 记录 |
 | Trellis 规则 | Git 中的 Markdown | 组织知识，评审后变更 |

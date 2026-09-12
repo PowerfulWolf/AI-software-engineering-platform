@@ -23,7 +23,12 @@ def _launcher(tmp_path: Path, *, executable: bool = True) -> tuple[Path, dict[st
         service.parent.mkdir(parents=True)
         service.write_text(
             f"#!{sys.executable}\n"
+            "import os\n"
             "import signal\n"
+            "from pathlib import Path\n"
+            "capture = os.environ.get('ASE_TEST_ENV_CAPTURE')\n"
+            "if capture:\n"
+            "    Path(capture).write_text(os.environ.get('ASE_MYSQL_DSN', 'missing'))\n"
             "def raise_exit():\n"
             "    raise SystemExit(0)\n"
             "signal.signal(signal.SIGTERM, lambda *_: raise_exit())\n"
@@ -96,3 +101,28 @@ def test_service_launcher_rejects_invalid_invocations(tmp_path: Path) -> None:
     unsafe_state = _run(launcher, unsafe_environment, "status")
     assert unsafe_state.returncode == 2
     assert "absolute path" in unsafe_state.stderr
+
+
+def test_service_launcher_loads_runtime_environment_next_to_config(tmp_path: Path) -> None:
+    launcher, environment = _launcher(tmp_path)
+    config = tmp_path / "config" / "production.json"
+    config.parent.mkdir()
+    config.write_text("{}", encoding="utf-8")
+    dsn = "mysql+pymysql://user:password@127.0.0.1:3307/database"
+    (config.parent / "runtime.env").write_text(
+        f"# managed\nASE_MYSQL_DSN='{dsn}'\n", encoding="utf-8"
+    )
+    capture = tmp_path / "captured.txt"
+    environment.update(
+        {
+            "ASE_CONFIG": str(config),
+            "ASE_TEST_ENV_CAPTURE": str(capture),
+        }
+    )
+
+    try:
+        started = _run(launcher, environment, "start")
+        assert started.returncode == 0, started.stderr
+        assert capture.read_text(encoding="utf-8") == dsn
+    finally:
+        _run(launcher, environment, "stop")

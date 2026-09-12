@@ -35,6 +35,7 @@ create_console_app(
     team_id: str,
     port: int = 8765,
     administration: ConsoleAdministration | None = None,
+    delivery_ready: bool = True,
 ) -> FastAPI
 production_console_app(
     environment: Mapping[str, str] | None = None,
@@ -93,8 +94,10 @@ production_console_app(
 - Repository 源码目录必须是唯一、无控制字符、无 lexical `..` 的绝对路径；真正的 Git/规范约束仍由
   Manager prepare 校验。
 - static assets 使用 `textContent` 渲染外部文本；CSP 禁止外部 script/style、frame 和 form action。
-- MySQL DSN/API key 不得写入浏览器、Operation、配置文件、plist 或 systemd unit。安全自动登录启动
-  必须先实现 macOS Keychain / Linux Secret Service 等 secret adapter。
+- MySQL DSN/API key 是 write-only 输入：不得出现在 API response、Operation、日志、普通配置 JSON、
+  plist 或 systemd unit。当前可信本机 MVP 可写入配置文件同目录的 `runtime.env`，必须 canonical
+  quote、原子替换、权限 `0600` 且只包含当前 ProductionConfig 引用的 allowlist 名称。未来
+  Keychain/Secret Service adapter 替换本地 store 时不得改变该 write-only API 契约。
 
 ### 3.5 User-visible flow
 
@@ -196,6 +199,10 @@ ConsoleAdministration.knowledge() -> tuple[KnowledgeDocumentView, ...]
 ConsoleAdministration.import_document(*, filename: str, content: bytes) -> KnowledgeDocumentView
 ConsoleAdministration.settings() -> SettingsSnapshot
 ConsoleAdministration.update_settings(request: UpdateSettingsRequest) -> SettingsSnapshot
+ConsoleAdministration.test_mysql_connection(request: MySqlConnectionRequest) -> MySqlConnectionResult
+ConsoleAdministration.status() -> RuntimeStatusSnapshot
+LocalRuntimeEnvironmentStore.load() -> dict[str, str]
+LocalRuntimeEnvironmentStore.save(values: Mapping[str, str]) -> None
 
 GET  /api/v1/admin/team
 GET  /api/v1/admin/projects
@@ -204,7 +211,12 @@ GET  /api/v1/admin/team/knowledge
 POST /api/v1/admin/team/knowledge?filename=<basename>
 GET  /api/v1/admin/settings
 PUT  /api/v1/admin/settings
+POST /api/v1/admin/settings/test-mysql
+GET  /api/v1/admin/status
 ```
+
+`RuntimeStatusSnapshot` 中的 MySQL connectivity 是显式探测结果：浏览器只在进入 Status 页或
+用户点击手动刷新时调用该查询；Team 的 5 秒轮询不得重复创建 MySQL 探测连接。
 
 ### 3. Contracts
 
@@ -221,9 +233,22 @@ PUT  /api/v1/admin/settings
   later preparation contexts through the existing Team knowledge guard.
 - Settings round-trip every current secret-free `ProductionConfig` field: platform root, active
   Team/name, selected knowledge, database backend/DSN environment name, ordered model routes,
-  Codex executable, live execution and Console port. Referenced secret values never enter the API;
-  responses expose only environment-variable name plus configured/unconfigured status.
-- A save uses same-directory temporary file, fsync and atomic replace. It validates the selected
+  Codex executable, live execution and Console port. `runtime_variables` accepts only names referenced
+  by that submitted config and is request-only; referenced values never enter a response. A blank UI
+  input means preserve the stored value, not erase it.
+- `runtime.env` is sibling to `ASE_CONFIG`, UTF-8, at most 64 KB and contains only canonical
+  `NAME='POSIX-quoted value'` entries. Names follow `EnvVarName`; duplicates, controls, noncanonical
+  quoting, symlinks and non-files fail closed. Save uses same-directory temporary file, fsync, atomic
+  replace and `0600`. This is an explicit ease-of-use trade-off for one trusted local operator.
+- MySQL test accepts a proposed DSN or the effective stored/process value, validates its scheme and
+  attempts one connection. Its response is only `{connected, message}` and must never echo the DSN,
+  driver exception, username or password.
+- Settings and Status are separate: Settings contains editable effective/default values; Status is
+  read-only and reports config source, restart requirement, MySQL readiness/source, Codex resolution,
+  actual delivery-runtime composition, live-model execution switch, Team preparation/knowledge
+  counts and per-route credential readiness. Zero knowledge is neutral. MySQL connectivity alone
+  must not imply the full delivery runtime is ready.
+- A config save uses same-directory temporary file, fsync and atomic replace. It validates the selected
   Team/name and every selected knowledge document before publication. Any changed saved config is
   marked `restart_required`; the already constructed Host is not mutated or hot-switched.
 - When an explicit save selects a new `platform_root` without that Team, initialize the selected
@@ -232,6 +257,13 @@ PUT  /api/v1/admin/settings
 - Administration endpoints are optional at the transport seam for read-only/contract fixtures, but
   `ase-console` production composition must provide them. Existing Delivery commands remain bound to
   the runtime-active Team until restart.
+- If the config file does not exist, `ase-console` uses visible `ProductionConfig.default()` values
+  without writing the config or workspace. MySQL absence leaves delivery in `SETUP_REQUIRED`;
+  Settings, Status and the safe Team shell remain available. An explicit valid Settings save is the
+  first writer that may initialize the Team. An existing invalid config never falls back to defaults.
+- `GET /api/v1/console` exposes secret-free `delivery_ready`; UI command controls require exact Team
+  identity and `delivery_ready=true`. Setup mode keeps navigation available but must not invite a
+  Requirement operation that can only fail.
 
 ### 4. Validation & Error Matrix
 
@@ -248,26 +280,35 @@ PUT  /api/v1/admin/settings
 | New platform root, current Team identity, empty knowledge selection | initialize that Team under the new root; save with restart required |
 | New platform root with old-root knowledge paths | 409; never copy or reinterpret the old files |
 | Plaintext DSN/API key in config payload | Pydantic/JSON Schema rejects unknown secret field |
+| Runtime variable name not referenced by submitted config | 409; neither config nor runtime.env changes |
+| Invalid DSN or control-bearing secret input | 409/422; no value persisted or reflected |
+| MySQL missing/unavailable on first run | Console starts setup surface; Status says NOT_CONFIGURED/UNAVAILABLE; delivery returns 503 SETUP_REQUIRED |
+| Existing config is invalid | Startup fails safely; do not replace it with built-in defaults |
 | Settings changed while Host is running | Persist plus `restart_required=true`; no hot mutation |
 
 ### 5. Good / Base / Bad Cases
 
-- Good: create a Project, upload a Team DOCX, inspect its content-addressed record, select `content.md`,
+- Good: start with no config/MySQL, view defaults, enter and test a full DSN, save `runtime.env`, restart,
+  create a Project, upload a Team DOCX, inspect its content-addressed record, select `content.md`,
   save, restart and prepare a new Requirement whose Team context digest binds that document.
-- Base: a Team with no documents is valid; no knowledge is loaded implicitly.
+- Base: a Team with no documents is valid and displayed neutrally; no knowledge is loaded implicitly.
 - Bad: let the browser submit `/etc/passwd`, recursively scan `knowledge/`, keep only an AI summary,
-  store a DSN in config, or change the active Team inside an already-running Delivery Host.
+  return a DSN from the API, accept arbitrary environment names, or change the active Team inside an
+  already-running Delivery Host.
 
 ### 6. Tests Required
 
 - `tests/knowledge/test_documents.py`: all four formats, exact replay, context readiness, invalid name,
   corrupt/empty input, source/manifest/content tamper and size bounds.
-- `tests/web_console/test_administration.py`: singleton Team, Project catalog/create, config write/read, selected
-  knowledge validation, secret status and restart semantics.
+- `tests/config/test_runtime_environment.py`: canonical quote round-trip, `0600`, atomic replacement,
+  duplicate/name/control/size/symlink rejection.
+- `tests/web_console/test_administration.py`: singleton Team, Project catalog/create, config write/read,
+  selected knowledge validation, write-only runtime values, safe MySQL probe, Status and restart semantics.
 - `tests/web_console/test_transport.py`: admin verbs, content types/body limits, typed errors and no
-  content/secret reflection.
+  content/secret reflection; missing config/MySQL must still expose Settings/Status while delivery is
+  `SETUP_REQUIRED`.
 - `tests/team_view/ui.test.cjs`: Project creation, Knowledge and Settings navigation, structured model
-  route fields, secret status, upload/selection wording and safe text rendering.
+  route fields, write-only DSN/key fields, separate Status tab, upload/selection wording and safe text rendering.
 - `tests/contracts/test_json_schema_contracts.py`: production config/port and knowledge manifest
   Python-to-Schema parity.
 
@@ -282,12 +323,12 @@ manifest = knowledge_store.import_document(filename=query.filename, content=awai
 ```
 
 ```python
-# Wrong: mutate a Host that was constructed with another Team/knowledge/model policy.
-running_host.config = submitted_config
+# Wrong: return secrets so the browser can pre-fill its controls.
+return {"config": config, "mysql_dsn": stored_dsn}
 
-# Correct: atomically persist, report the boundary, then reconstruct on restart.
-settings_store.save(submitted_config)
-return SettingsSnapshot(config=submitted_config, restart_required=True)
+# Correct: accept an allowlisted write-only update and return status only.
+runtime_store.save({config.database.dsn_env: submitted_dsn})
+return SettingsSnapshot(config=config, secret_status=(SecretStatus(...),))
 ```
 
 ## Scenario: local Web Console process lifecycle
@@ -310,17 +351,19 @@ The executable is the repository-local `.venv/bin/ase-console`. PID and log defa
 
 ### 3. Contracts
 
-- `start` requires an executable repository-local `ase-console`, inherits `ASE_CONFIG`,
-  `ASE_MYSQL_DSN` and provider environment, redirects stdio, records the child PID and verifies that
-  the same executable remains alive after startup.
+- `start` requires an executable repository-local `ase-console`, resolves `ASE_CONFIG` or its XDG
+  default, then loads sibling `runtime.env` with export semantics before launching. Existing process
+  environment remains available and the managed file wins for its declared names. It redirects stdio,
+  records the child PID and verifies that the same executable remains alive after startup.
 - `stop` sends TERM only when the PID is numeric, alive and its process command identifies this
   repository's executable. It waits up to 20 seconds and never escalates to KILL automatically.
 - `restart` is exact `stop` followed by `start`; `status` is read-only apart from preparing its safe
   state directory; `logs` tails the last 100 lines and follows the file.
 - The state directory must be absolute, not `/`, and not a symlink. PID-file symlinks are rejected.
   A stale or foreign PID never receives a signal.
-- This script does not persist secrets, install dependencies, initialize MySQL, register launchd/
-  systemd, or claim that a successful process start means the production Host is healthy.
+- This script does not author or mutate secrets, install dependencies, initialize MySQL, register
+  launchd/systemd, or claim that a successful process start means the production Host is healthy.
+  `runtime.env` is authored only by the typed administration store.
 
 ### 4. Validation & Error Matrix
 
@@ -328,6 +371,8 @@ The executable is the repository-local `.venv/bin/ase-console`. PID and log defa
 |---|---|
 | Missing verb or unknown verb | print usage to stderr; exit 2 |
 | Missing `.venv/bin/ase-console` | explain `uv sync`; exit 2; no PID record |
+| Missing config/runtime.env | start setup surface using visible defaults; do not synthesize either file |
+| runtime.env symlink/non-file | reject before starting child |
 | Existing matching live PID | idempotent start |
 | Missing PID on stop | report not running; success |
 | Non-numeric, dead or foreign PID | send no signal; fail safely or report stopped |
@@ -337,10 +382,11 @@ The executable is the repository-local `.venv/bin/ase-console`. PID and log defa
 
 ### 5. Good / Base / Bad Cases
 
-- Good: export production environment, start once, use `status`/`logs`, then restart after a saved
-  configuration change.
+- Good: start once with defaults, save DSN/provider keys in Settings, restart so the launcher exports
+  the canonical runtime file, then use `status`/`logs` for operations.
 - Base: stopping an already stopped service is idempotent.
-- Bad: use a PID file without process identity validation, store DSN in the script, or issue `kill -9`
+- Bad: use a PID file without process identity validation, hard-code DSN in the script, source an
+  arbitrary/symlink runtime file, or issue `kill -9`
   after a fixed delay.
 
 ### 6. Tests Required
@@ -349,6 +395,8 @@ The executable is the repository-local `.venv/bin/ase-console`. PID and log defa
 - No-argument invocation exits 2.
 - Focused process tests, when added, must use an isolated absolute `ASE_SERVICE_STATE_DIR` and a fake
   repository-local executable; they must never signal an unrelated host process.
+- The launcher test must prove that sibling `runtime.env` reaches the child environment without
+  printing its value.
 
 ### 7. Wrong vs Correct
 

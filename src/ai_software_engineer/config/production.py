@@ -102,6 +102,39 @@ class ProductionConfig(DomainModel):
     live_model_execution: StrictBool = False
     console_port: Annotated[StrictInt, Field(ge=1, le=65535)] = 8765
 
+    @classmethod
+    def default(cls) -> Self:
+        """Build the visible first-run defaults without writing operator state."""
+        return cls(
+            model_routes=(
+                ProviderRouteConfig(
+                    provider="codex",
+                    model="gpt-5.6-terra",
+                    kind=ModelProviderKind.CODEX_CLI,
+                    reasoning_effort="high",
+                ),
+                ProviderRouteConfig(
+                    provider="deepseek",
+                    model="YOUR_DEEPSEEK_MODEL",
+                    kind=ModelProviderKind.RESPONSES,
+                    endpoint="https://api.deepseek.com/v1/responses",
+                    api_key_env="DEEPSEEK_API_KEY",
+                    enabled=False,
+                ),
+                ProviderRouteConfig(
+                    provider="qwen",
+                    model="YOUR_QWEN_MODEL",
+                    kind=ModelProviderKind.RESPONSES,
+                    endpoint=(
+                        "https://YOUR_WORKSPACE_ID.cn-beijing.maas.aliyuncs.com/"
+                        "compatible-mode/v1/responses"
+                    ),
+                    api_key_env="DASHSCOPE_API_KEY",
+                    enabled=False,
+                ),
+            )
+        )
+
     @field_validator("platform_root", mode="before")
     @classmethod
     def expand_home_relative_platform_root(cls, value: object) -> object:

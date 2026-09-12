@@ -83,7 +83,7 @@ Environment contract:
 |---|---|---|
 | `ASE_CONFIG` | no | Secret-free JSON path；缺省 `~/.config/ai-software-engineer/config.json` |
 | `ASE_CONSOLE_PORT` | no | 兼容运维覆盖；未设置时使用 `ProductionConfig.console_port` |
-| `ASE_MYSQL_DSN` | yes by default | `mysql+pymysql://...`；实际 key 可由 `database.dsn_env` 改名 |
+| `ASE_MYSQL_DSN` | delivery yes | `mysql+pymysql://...`；可由设置页写入 sibling `runtime.env`，实际 key 可由 `database.dsn_env` 改名；缺失时 Web Console 降级启动 |
 | `DASHSCOPE_API_KEY` | only when enabled | Qwen Responses route secret；名称由 route 配置 |
 | `DEEPSEEK_API_KEY` | only when enabled | DeepSeek Responses route secret；名称由 route 配置 |
 | `ASE_RUN_LIVE_TESTS` | live smoke only | 必须 exact `1` 才允许消费真实模型额度 |
@@ -96,7 +96,9 @@ Environment contract:
   `platform_root` 时纯解析为当前用户的 `~/.ase`；显式绝对路径或安全的 `~/...` 优先，后者先展开
   再进入同一校验。任何显式路径中的 `..`、控制字符或非绝对结果都失败关闭，不得回退默认值；
   解析本身不得创建目录。至少一条 enabled route，`(provider, model)` 唯一；`console_port` 必须为
-  `1..65535`；secret 只能由环境变量间接引用。
+  `1..65535`；JSON 中 secret 只能由环境变量间接引用。`ProductionConfig.default()` 是 Web
+  Console 首次运行的内置可见配置；仅当配置文件不存在时使用，不写文件。已有但无效的配置不得
+  回退默认值。CLI 生产命令仍要求有效的显式/默认路径配置文件。
 - `codex_cli` route 不得声明 endpoint/API key；`responses` route 必须声明 endpoint 与
   `api_key_env`。示例默认 `live_model_execution=false`，生产执行必须显式改为 `true`。
 - 未注入测试 provider 时，`project_entry()` 惰性缓存
@@ -393,8 +395,9 @@ this does not authorize rebasing old approval or QA/Review evidence in place.
 
 | 输入/故障 | 检测点 | 结果 |
 |---|---|---|
-| 配置缺失、未知字段、相对/控制字符/含 `..` 的 `platform_root` | ProductionConfig/Schema | `ProductionConfigError`/ValidationError，不回退默认值、不创建目录、不连接模型 |
-| DSN env 缺失、MySQL 停止/认证失败 | Host/MySqlTaskRepository | 脱敏 StoreError，CLI exit 2，不创建 fake Host |
+| Web Console 配置文件不存在 | console composition | 使用 `ProductionConfig.default()` 启动设置/状态面；不创建配置文件；交付返回 `SETUP_REQUIRED` |
+| 已有配置未知字段、损坏、相对/控制字符/含 `..` 的 `platform_root` | ProductionConfig/Schema | `ProductionConfigError`/ValidationError，不回退默认值、不连接模型 |
+| DSN env 缺失、MySQL 停止/认证失败 | Host/MySqlTaskRepository | CLI 脱敏失败并 exit 2；Web Console 使用 setup runtime，设置/状态仍可访问，交付不可用 |
 | duplicate Task / unknown Task | MySQL repository | `TaskAlreadyExists` / `TaskNotFound` |
 | stale event status/revision 或 changed replay | locked append transaction | rollback；`InvalidStateEvent`/`EventIdempotencyConflict` |
 | stale workforce snapshot / capacity/Lease 冲突 | MySQL dispatch lock | rollback；不发布 partial dispatch |
@@ -417,13 +420,14 @@ body 或目标项目中的 secret。
 
 ## 5. Good / Base / Bad Cases
 
-- **Good**：macOS/Linux 省略 `platform_root` 时从不同 cwd 得到同一 `~/.ase`，加载配置和只读查看
-  不创建目录；显式 writer 才初始化 workspace。真实临时 Git 项目 + MySQL + scripted structured/delivery providers 完成
+- **Good**：macOS/Linux 首次运行 Web Console 时展示稳定默认配置，缺少 MySQL 仍可填写 DSN、测试
+  连接并查看状态；保存后由服务脚本加载 `runtime.env` 并重启为 delivery runtime。配置解析本身仍
+  不创建目录；显式 setup writer 才初始化 workspace。真实临时 Git 项目 + MySQL + scripted structured/delivery providers 完成
   prepare→Product approval→Design→Plan→dispatch→Coder diff/report→平台 candidate finalization→独立 QA/Review→DONE；main checkout 和
   target files 不变，candidate commit 可由 `git show` 复核。
 - **Base**：显式安全绝对路径或 `~/custom-ase` 覆盖默认值。缺少真实额度时，contract/E2E 使用注入的 deterministic providers；Production Host、MySQL、
   dispatch、worktree 和 typed artifact 仍走真实实现。只有显式 live smoke 才消费 GPT-5.5。
-- **Bad**：接受 `/tmp/root/../escape` 或配置失败后静默改用 `~/.ase`；在每个项目复制 AgentProfile；把 DSN/API key 写入 JSON；Planner 直接提交分配；让同一 Agent
+- **Bad**：接受 `/tmp/root/../escape` 或已有配置失败后静默改用默认值；在每个项目复制 AgentProfile；把 DSN/API key 写入 JSON、API response、日志或非 allowlist 环境变量；Planner 直接提交分配；让同一 Agent
   同时当 Coder 和 Reviewer；在 main checkout 写代码；auth/invalid output 后静默换模型；自动 merge。
 - **Role-budget Good**：复杂 Coder 在 1,800 秒硬上限内完成 intended diff/report，平台形成候选提交与 Artifact，随后由各自拥有
   1,200 秒上限的独立 QA、Reviewer 验证。
@@ -444,7 +448,7 @@ body 或目标项目中的 secret。
   Good: new intake/new snapshot with stable project identity. Bad: overwrite fixed profile or allow
   an old request to adopt new source facts. RuntimeWorkspaceError is a stable CLI error, not traceback.
 
-- `tests/config/test_production.py`：配置文件/env、route 条件、duplicate route、secret 不落盘；
+- `tests/config/test_production.py`：配置文件/env、首次运行默认值零写入、route 条件、duplicate route、secret 不落 JSON；
 - platform-root 配置测试必须覆盖省略值的 cwd 独立性、macOS/Linux 默认、显式绝对/`~/` 优先、
   绝对与 home-relative traversal 拒绝、模块导入/只读零创建，以及显式 writer 创建边界；
 - `tests/contracts/test_json_schema_contracts.py`：ProductionConfig positive/negative canonical schema；

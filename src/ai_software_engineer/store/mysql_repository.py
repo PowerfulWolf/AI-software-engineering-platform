@@ -317,6 +317,11 @@ def _parse_dsn(dsn: str) -> _ConnectionSettings:
     )
 
 
+def validate_mysql_dsn(dsn: str) -> None:
+    """Validate a DSN without opening a network connection or exposing its contents."""
+    _parse_dsn(dsn)
+
+
 def open_mysql_connection(dsn: str) -> Connection:
     """Open one bounded MySQL connection from a validated, never-logged DSN."""
     settings = _parse_dsn(dsn)

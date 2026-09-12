@@ -57,6 +57,46 @@ def test_environment_selects_config_path(tmp_path: Path) -> None:
     assert config.platform_root == str((tmp_path / "platform").resolve())
 
 
+def test_first_run_defaults_are_visible_without_writing_configuration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setattr("ai_software_engineer.config.production.Path.home", lambda: home)
+
+    config = ProductionConfig.default()
+
+    assert config.platform_root == str(home / ".ase")
+    assert config.team_id == "team_ai"
+    assert config.team_name == "AI Team"
+    assert config.console_port == 8765
+    assert [(route.provider, route.enabled) for route in config.model_routes] == [
+        ("codex", True),
+        ("deepseek", False),
+        ("qwen", False),
+    ]
+    assert not home.exists()
+
+
+def test_first_run_routes_match_the_committed_operator_example(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "ai_software_engineer.config.production.Path.home", lambda: tmp_path / "home"
+    )
+
+    defaults = ProductionConfig.default()
+    example = ProductionConfig.from_file(
+        Path(__file__).parents[2] / "config" / "production.example.json"
+    )
+
+    assert example.model_routes == defaults.model_routes
+    assert example.database == defaults.database
+    assert example.team_id == defaults.team_id
+    assert example.team_name == defaults.team_name
+    assert example.console_port == defaults.console_port
+    assert example.live_model_execution == defaults.live_model_execution
+
+
 def test_mysql_dsn_resolves_by_name_without_leaking_value(tmp_path: Path) -> None:
     config = ProductionConfig.model_validate(_payload(tmp_path))
     secret = "mysql://user:do-not-leak@example.invalid/database"

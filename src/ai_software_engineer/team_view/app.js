@@ -6,11 +6,16 @@ let refreshing = false;
 let operations = [];
 let consoleAvailable = null;
 let consoleTeamId = null;
+let consoleDeliveryReady = null;
 let administrationAvailable = null;
 let administrationProjects = [];
 let knowledgeDocuments = [];
 let settingsSnapshot = null;
 let settingsDraft = null;
+let runtimeVariablesDraft = {};
+let runtimeStatusSnapshot = null;
+let runtimeStatusError = null;
+let runtimeStatusLoading = false;
 let administrationNotice = null;
 let composing = false;
 let actionSerial = 0;
@@ -81,7 +86,11 @@ const pageCopy = {
   ],
   settings: [
     "设置",
-    "配置会写入无密钥生产配置文件。页面标记“需要重启”时，当前运行中的团队不会被热切换。",
+    "配置平台目录、数据库、模型与团队知识。保存后按页面提示重启本地服务。",
+  ],
+  status: [
+    "平台状态",
+    "查看当前配置、数据库、Codex、模型路由和团队知识是否已经准备就绪。",
   ],
 };
 const el = (tag, text, className) => {
@@ -144,6 +153,7 @@ const latestApproval = (deliveryId, checkpoint) => {
 const operationKey = () => `browser-${Date.now()}-${++actionSerial}`;
 const canControlCurrentTeam = () =>
   consoleAvailable === true &&
+  consoleDeliveryReady === true &&
   snapshot &&
   snapshot.team_id === consoleTeamId;
 function assignmentBadge(task, assignment) {
@@ -326,6 +336,16 @@ function renderOperationStatus() {
       el(
         "div",
         "当前连接的是只读看板。请启动后台 Web Console 后再创建或继续需求。",
+        "operation-error",
+      ),
+    );
+    return;
+  }
+  if (consoleAvailable === true && consoleDeliveryReady === false) {
+    panel.append(
+      el(
+        "div",
+        "控制台正在使用默认或待配置运行时。请先完成设置并重启，再创建或继续需求。",
         "operation-error",
       ),
     );
@@ -759,21 +779,40 @@ async function loadKnowledge() {
 }
 async function loadAdministration() {
   try {
-    const [projects, settings] = await Promise.all([
-      adminFetch("/api/v1/admin/projects"),
-      adminFetch("/api/v1/admin/settings"),
-    ]);
-    administrationProjects = projects;
+    const settings = await adminFetch("/api/v1/admin/settings");
     settingsSnapshot = settings;
     settingsDraft = structuredClone(settings.config);
-    await loadKnowledge();
+    runtimeVariablesDraft = {};
     administrationAvailable = true;
+    try {
+      administrationProjects = await adminFetch("/api/v1/admin/projects");
+    } catch {
+      administrationProjects = [];
+    }
+    try {
+      await loadKnowledge();
+    } catch {
+      knowledgeDocuments = [];
+    }
   } catch {
     administrationAvailable = false;
     administrationProjects = [];
     knowledgeDocuments = [];
     settingsSnapshot = null;
     settingsDraft = null;
+    runtimeVariablesDraft = {};
+    runtimeStatusSnapshot = null;
+    runtimeStatusError = null;
+  }
+}
+async function loadRuntimeStatus() {
+  try {
+    runtimeStatusSnapshot = await adminFetch("/api/v1/admin/status");
+    runtimeStatusError = null;
+  } catch (error) {
+    runtimeStatusSnapshot = null;
+    runtimeStatusError =
+      error instanceof Error ? error.message : "平台状态暂时无法读取。";
   }
 }
 function administrationUnavailable(content) {
@@ -959,12 +998,22 @@ function renderSettings(content) {
   }
   if (administrationNotice?.page === "settings")
     content.append(el("div", administrationNotice.text, "admin-notice"));
-  renderProjectCreator(content);
+  if (consoleDeliveryReady === true) renderProjectCreator(content);
+  else
+    content.append(
+      el(
+        "div",
+        "先保存运行配置并重启服务；交付运行时就绪后即可创建 Project。",
+        "admin-notice",
+      ),
+    );
   const panel = el("section", undefined, "admin-panel");
   const top = el("div", undefined, "row");
   top.append(
     el("h2", "平台运行配置"),
-    settingsSnapshot.restart_required
+    settingsSnapshot.config_source === "default"
+      ? el("span", "正在使用内置默认配置", "badge")
+      : settingsSnapshot.restart_required
       ? el("span", "已保存 · 需要重启", "badge blocked")
       : el("span", "当前配置已生效", "badge done"),
   );
@@ -985,11 +1034,6 @@ function renderSettings(content) {
   );
   const team = bindInput(el("input"), settingsDraft.team_name, () => {});
   team.disabled = true;
-  const dsn = bindInput(
-    el("input"),
-    settingsDraft.database.dsn_env,
-    (value) => (settingsDraft.database.dsn_env = value),
-  );
   const codex = bindInput(
     el("input"),
     settingsDraft.codex_executable,
@@ -1021,23 +1065,66 @@ function renderSettings(content) {
       team,
       `${settingsDraft.team_id}；Team 是长期团队，不随 Project 切换。`,
     ),
-    field("MySQL DSN 环境变量名", dsn, "页面只保存变量名，不读取或显示 DSN。"),
     field("Codex 可执行文件", codex),
     field("Web Console 端口", port, "修改端口后使用新地址重启。"),
     field("启用真实模型执行", live),
   );
   form.append(general);
-  const secrets = el("section", undefined, "settings-subsection");
-  secrets.append(el("h3", "密钥状态"));
-  for (const item of settingsSnapshot.secret_status)
-    secrets.append(
-      el(
-        "p",
-        `${item.environment_name} · ${item.configured ? "已提供" : "未提供"}`,
-        item.configured ? "badge done" : "badge blocked",
-      ),
-    );
-  form.append(secrets);
+  const database = el("section", undefined, "settings-subsection");
+  database.append(
+    el("h3", "MySQL 数据库"),
+    el(
+      "p",
+      "填写完整连接字符串。留空表示保留已经保存的值；页面不会回显密码。",
+      "muted",
+    ),
+  );
+  const dsnName = settingsDraft.database.dsn_env;
+  const dsn = bindInput(
+    el("input"),
+    runtimeVariablesDraft[dsnName] || "",
+    (value) => {
+      if (value) runtimeVariablesDraft[dsnName] = value;
+      else delete runtimeVariablesDraft[dsnName];
+    },
+    "password",
+  );
+  dsn.autocomplete = "new-password";
+  dsn.placeholder = settingsSnapshot.secret_status.some(
+    (item) => item.environment_name === dsnName && item.configured,
+  )
+    ? "已保存；输入新 DSN 可替换"
+    : "mysql+pymysql://用户名:密码@127.0.0.1:3307/数据库名";
+  const connectionFeedback = el("p", "", "form-feedback");
+  const testConnection = button("测试连接", async () => {
+    testConnection.disabled = true;
+    connectionFeedback.className = "form-feedback";
+    connectionFeedback.textContent = "正在连接 MySQL…";
+    try {
+      const result = await adminFetch("/api/v1/admin/settings/test-mysql", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dsn: runtimeVariablesDraft[dsnName] || null }),
+      });
+      connectionFeedback.className = result.connected
+        ? "form-feedback"
+        : "form-feedback error";
+      connectionFeedback.textContent = result.message;
+    } catch (error) {
+      connectionFeedback.className = "form-feedback error";
+      connectionFeedback.textContent =
+        error instanceof Error ? error.message : "MySQL 连接测试失败。";
+    } finally {
+      testConnection.disabled = false;
+    }
+  });
+  testConnection.type = "button";
+  database.append(
+    field("MySQL DSN", dsn, `启动变量 ${dsnName} 由服务脚本自动维护。`),
+    connectionFeedback,
+    testConnection,
+  );
+  form.append(database);
   const knowledge = el("section", undefined, "settings-subsection");
   knowledge.append(
     el("h3", "用于新需求的团队通用知识"),
@@ -1142,6 +1229,29 @@ function renderSettings(content) {
             (value) => (route.api_key_env = value),
           ),
         ),
+        field(
+          "API Key",
+          (() => {
+            const key = bindInput(
+              el("input"),
+              runtimeVariablesDraft[route.api_key_env] || "",
+              (value) => {
+                if (value) runtimeVariablesDraft[route.api_key_env] = value;
+                else delete runtimeVariablesDraft[route.api_key_env];
+              },
+              "password",
+            );
+            key.autocomplete = "new-password";
+            key.placeholder = settingsSnapshot.secret_status.some(
+              (item) =>
+                item.environment_name === route.api_key_env && item.configured,
+            )
+              ? "已保存；输入新值可替换"
+              : "填写该模型服务的 API Key";
+            return key;
+          })(),
+          "留空保留已保存值，页面不会回显。",
+        ),
       );
     const enabled = el("input");
     enabled.type = "checkbox";
@@ -1170,10 +1280,16 @@ function renderSettings(content) {
       const saved = await adminFetch("/api/v1/admin/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ config: settingsDraft }),
+        body: JSON.stringify({
+          config: settingsDraft,
+          runtime_variables: Object.entries(runtimeVariablesDraft).map(
+            ([environment_name, value]) => ({ environment_name, value }),
+          ),
+        }),
       });
       settingsSnapshot = saved;
       settingsDraft = structuredClone(saved.config);
+      runtimeVariablesDraft = {};
       administrationNotice = {
         page: "settings",
         text: saved.restart_required
@@ -1190,6 +1306,109 @@ function renderSettings(content) {
   });
   panel.append(form);
   content.append(panel);
+}
+function statusRow(title, value, ready) {
+  const row = el("div", undefined, "status-row");
+  row.append(
+    el("strong", title),
+    el(
+      "span",
+      value,
+      ready === true
+        ? "badge done"
+        : ready === false
+          ? "badge blocked"
+          : "badge",
+    ),
+  );
+  return row;
+}
+function renderStatus(content) {
+  if (runtimeStatusLoading) {
+    content.append(el("div", "正在读取平台运行状态…", "admin-notice"));
+    return;
+  }
+  if (!administrationAvailable) {
+    administrationUnavailable(content);
+    return;
+  }
+  if (!runtimeStatusSnapshot) {
+    content.append(
+      el(
+        "div",
+        runtimeStatusError || "平台状态暂时无法读取。",
+        "operation-error",
+      ),
+    );
+    return;
+  }
+  const value = runtimeStatusSnapshot;
+  const overview = el("section", undefined, "admin-panel");
+  overview.append(
+    el("h2", "配置与启动"),
+    statusRow(
+      "当前配置",
+      value.config_source === "default"
+        ? "内置默认配置"
+        : value.restart_required
+          ? "已保存，等待重启"
+          : "已生效",
+      value.config_source === "default" ? null : !value.restart_required,
+    ),
+    el("p", "配置文件 · " + value.config_path, "paths"),
+    el("p", "运行变量 · " + value.runtime_environment_path, "paths"),
+  );
+  const runtime = el("section", undefined, "admin-panel");
+  runtime.append(
+    el("h2", "运行依赖"),
+    statusRow(
+      "交付运行时",
+      value.delivery_runtime === "READY" ? "已就绪" : "待配置或重启",
+      value.delivery_runtime === "READY",
+    ),
+    statusRow(
+      "真实模型执行",
+      value.live_model_execution ? "已启用" : "未启用",
+      value.live_model_execution,
+    ),
+    statusRow(
+      "MySQL",
+      value.database.connection === "CONNECTED"
+        ? `连接正常 · ${value.database.source}`
+        : value.database.connection === "NOT_CONFIGURED"
+          ? "尚未配置"
+          : `连接失败 · ${value.database.source}`,
+      value.database.connection === "CONNECTED",
+    ),
+    statusRow(
+      "Codex CLI",
+      value.codex.available
+        ? `可执行 · ${value.codex.resolved_path}`
+        : `不可用 · ${value.codex.executable}`,
+      value.codex.available,
+    ),
+    statusRow(
+      "Team workspace",
+      value.team_prepared ? "已准备" : "尚未准备",
+      value.team_prepared,
+    ),
+    statusRow(
+      "团队知识",
+      `已导入 ${value.team_knowledge_imported} 份 · 已启用 ${value.team_knowledge_selected} 份`,
+      value.team_prepared ? null : false,
+    ),
+  );
+  const routes = el("section", undefined, "admin-panel");
+  routes.append(el("h2", "模型路由"));
+  for (const route of value.model_routes)
+    routes.append(
+      statusRow(
+        `${route.provider} / ${route.model}`,
+        !route.enabled ? "未启用" : route.ready ? "已就绪" : "缺少运行配置",
+        !route.enabled ? null : route.ready,
+      ),
+    );
+  content.append(overview, runtime, routes);
 }
 function showDetail(kind, id) {
   selected = { kind, id };
@@ -1319,7 +1538,8 @@ function render() {
   if (page === "team") renderTeam(content);
   else if (page === "requests") renderRequests(content);
   else if (page === "knowledge") renderKnowledge(content);
-  else renderSettings(content);
+  else if (page === "settings") renderSettings(content);
+  else renderStatus(content);
   renderComposer();
   renderOperationStatus();
   renderDetail();
@@ -1327,14 +1547,14 @@ function render() {
     if (expanded.has(node.dataset.key)) node.open = true;
 }
 function updateNavigation() {
-  for (const key of ["team", "requests", "knowledge", "settings"]) {
+  for (const key of ["team", "requests", "knowledge", "settings", "status"]) {
     const node = document.getElementById("nav-" + key);
     node.classList.toggle("selected", key === page);
     if (key === page) node.setAttribute("aria-current", "page");
     else node.removeAttribute("aria-current");
   }
 }
-for (const target of ["team", "requests", "knowledge", "settings"])
+for (const target of ["team", "requests", "knowledge", "settings", "status"])
   document
     .getElementById("nav-" + target)
     .addEventListener("click", async () => {
@@ -1344,6 +1564,14 @@ for (const target of ["team", "requests", "knowledge", "settings"])
       composing = false;
       if (target === "knowledge") await loadAdministration();
       if (target === "settings") await loadAdministration();
+      if (target === "status") {
+        runtimeStatusLoading = true;
+        updateNavigation();
+        render();
+        await loadAdministration();
+        if (administrationAvailable) await loadRuntimeStatus();
+        runtimeStatusLoading = false;
+      }
       updateNavigation();
       render();
     });
@@ -1364,19 +1592,22 @@ async function refreshOperations() {
     if (
       info.schema_version !== "v0.2" ||
       typeof info.team_id !== "string" ||
+      typeof info.delivery_ready !== "boolean" ||
       !Array.isArray(nextOperations)
     )
       throw new Error("invalid console response");
     consoleAvailable = true;
     consoleTeamId = info.team_id;
+    consoleDeliveryReady = info.delivery_ready;
     operations = nextOperations;
   } catch {
     consoleAvailable = false;
     consoleTeamId = null;
+    consoleDeliveryReady = null;
     operations = [];
   }
 }
-async function refresh(projectId) {
+async function refresh(projectId, includeRuntimeStatus = false) {
   if (refreshing) return;
   refreshing = true;
   document.getElementById("refresh").disabled = true;
@@ -1407,18 +1638,31 @@ async function refresh(projectId) {
         JSON.stringify({ ...next, as_of: null });
     const priorOperations = JSON.stringify(operations);
     const priorConsoleTeam = consoleTeamId;
+    const priorConsoleReady = consoleDeliveryReady;
+    const priorRuntimeStatus = JSON.stringify(runtimeStatusSnapshot);
     snapshot = next;
     await refreshOperations();
     if (page === "knowledge" && target !== undefined) await loadAdministration();
     if (
+      includeRuntimeStatus &&
+      page === "status" &&
+      administrationAvailable
+    )
+      await loadRuntimeStatus();
+    if (
       changed ||
       priorOperations !== JSON.stringify(operations) ||
-      priorConsoleTeam !== consoleTeamId
+      priorConsoleTeam !== consoleTeamId ||
+      priorConsoleReady !== consoleDeliveryReady ||
+      priorRuntimeStatus !== JSON.stringify(runtimeStatusSnapshot)
     )
       render();
     status.className = "";
     status.textContent = consoleAvailable
-      ? "团队与交付控制台已连接 · 最近读取 " +
+      ? (consoleDeliveryReady
+          ? "团队与交付控制台已连接"
+          : "设置控制台已连接 · 交付运行时待配置或重启") +
+        " · 最近读取 " +
         time(snapshot.as_of) +
         " · 每 5 秒刷新"
       : "只读团队记录已连接；交付控制台暂不可用。";
@@ -1433,6 +1677,8 @@ async function refresh(projectId) {
     document.getElementById("refresh").disabled = false;
   }
 }
-document.getElementById("refresh").addEventListener("click", refresh);
+document
+  .getElementById("refresh")
+  .addEventListener("click", () => refresh(undefined, true));
 refresh();
 setInterval(refresh, 5000);

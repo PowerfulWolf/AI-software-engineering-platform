@@ -3,23 +3,41 @@
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
-from typing import Annotated, Protocol
+from typing import Annotated, Literal, Protocol
 
-from pydantic import AwareDatetime, Field, StrictBool, StringConstraints
+from pydantic import (
+    AwareDatetime,
+    Field,
+    StrictBool,
+    StringConstraints,
+    field_validator,
+)
 
-from ai_software_engineer.config import ProductionConfig
+from ai_software_engineer.config import (
+    LocalRuntimeEnvironmentStore,
+    ProductionConfig,
+    RuntimeEnvironmentError,
+    runtime_environment_path,
+)
+from ai_software_engineer.config.production import (
+    EnvVarName,
+    ModelProviderKind,
+    ProviderRouteConfig,
+)
 from ai_software_engineer.domain.identity import ProjectId, TeamId
-from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
+from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.knowledge_documents import (
     KnowledgeDocumentManifest,
     TeamKnowledgeDocumentStore,
 )
 from ai_software_engineer.project_workspace import ProjectName, ProjectWorkspace
+from ai_software_engineer.store import StoreError, open_mysql_connection, validate_mysql_dsn
 from ai_software_engineer.team_workspace import (
     TeamName,
     TeamWorkspace,
@@ -56,15 +74,96 @@ class SecretStatus(DomainModel):
     configured: StrictBool
 
 
+RuntimeVariableValue = Annotated[str, StringConstraints(min_length=1, max_length=8_192)]
+
+
+class RuntimeVariableUpdate(DomainModel):
+    environment_name: EnvVarName
+    value: RuntimeVariableValue = Field(repr=False)
+
+    @field_validator("value")
+    @classmethod
+    def reject_control_characters(cls, value: str) -> str:
+        if any(ord(character) < 32 or ord(character) == 127 for character in value):
+            raise ValueError("runtime value cannot contain control characters")
+        return value
+
+
 class SettingsSnapshot(DomainModel):
     config: ProductionConfig
     config_path: NonEmptyStr
+    config_source: Literal["default", "saved"]
     secret_status: Annotated[tuple[SecretStatus, ...], Field(max_length=32)] = ()
     restart_required: StrictBool = False
 
 
 class UpdateSettingsRequest(DomainModel):
     config: ProductionConfig
+    runtime_variables: Annotated[tuple[RuntimeVariableUpdate, ...], Field(max_length=32)] = ()
+
+    @field_validator("runtime_variables")
+    @classmethod
+    def require_unique_runtime_variables(
+        cls, values: tuple[RuntimeVariableUpdate, ...]
+    ) -> tuple[RuntimeVariableUpdate, ...]:
+        ensure_unique((value.environment_name for value in values), "runtime environment updates")
+        return values
+
+
+class MySqlConnectionRequest(DomainModel):
+    dsn: RuntimeVariableValue | None = Field(default=None, repr=False)
+
+    @field_validator("dsn")
+    @classmethod
+    def reject_control_characters(cls, value: str | None) -> str | None:
+        if value is not None and any(
+            ord(character) < 32 or ord(character) == 127 for character in value
+        ):
+            raise ValueError("MySQL DSN cannot contain control characters")
+        return value
+
+
+class MySqlConnectionResult(DomainModel):
+    connected: StrictBool
+    message: NonEmptyStr
+
+
+class DatabaseRuntimeStatus(DomainModel):
+    environment_name: EnvVarName
+    configured: StrictBool
+    source: Literal["runtime.env", "process environment", "missing"]
+    connection: Literal["CONNECTED", "UNAVAILABLE", "NOT_CONFIGURED"]
+
+
+class CodexRuntimeStatus(DomainModel):
+    executable: NonEmptyStr
+    available: StrictBool
+    resolved_path: NonEmptyStr | None = None
+
+
+class ModelRouteRuntimeStatus(DomainModel):
+    provider: NonEmptyStr
+    model: NonEmptyStr
+    kind: ModelProviderKind
+    enabled: StrictBool
+    ready: StrictBool
+    credential_environment_name: EnvVarName | None = None
+    credential_configured: StrictBool | None = None
+
+
+class RuntimeStatusSnapshot(DomainModel):
+    config_path: NonEmptyStr
+    config_source: Literal["default", "saved"]
+    runtime_environment_path: NonEmptyStr
+    restart_required: StrictBool
+    delivery_runtime: Literal["READY", "SETUP_REQUIRED"]
+    live_model_execution: StrictBool
+    database: DatabaseRuntimeStatus
+    codex: CodexRuntimeStatus
+    team_prepared: StrictBool
+    team_knowledge_imported: int
+    team_knowledge_selected: int
+    model_routes: Annotated[tuple[ModelRouteRuntimeStatus, ...], Field(max_length=16)]
 
 
 class KnowledgeDocumentView(DomainModel):
@@ -80,6 +179,13 @@ class ConsoleAdministration(Protocol):
     def import_document(self, *, filename: str, content: bytes) -> KnowledgeDocumentView: ...
     def settings(self) -> SettingsSnapshot: ...
     def update_settings(self, request: UpdateSettingsRequest) -> SettingsSnapshot: ...
+    def test_mysql_connection(self, request: MySqlConnectionRequest) -> MySqlConnectionResult: ...
+    def status(self) -> RuntimeStatusSnapshot: ...
+
+
+def _probe_mysql(dsn: str) -> None:
+    connection = open_mysql_connection(dsn)
+    connection.close()
 
 
 @dataclass
@@ -87,12 +193,19 @@ class LocalConsoleAdministration:
     runtime_config: ProductionConfig
     config_path: Path
     environment: Mapping[str, str]
+    delivery_runtime_ready: bool = True
+    mysql_probe: Callable[[str], None] = _probe_mysql
     _saved_config: ProductionConfig = field(init=False)
+    _runtime_environment: LocalRuntimeEnvironmentStore = field(init=False)
+    _runtime_changed: bool = field(default=False, init=False)
     _lock: Lock = field(default_factory=Lock, init=False)
 
     def __post_init__(self) -> None:
         self.config_path = self.config_path.expanduser().absolute()
         self._saved_config = self.runtime_config
+        self._runtime_environment = LocalRuntimeEnvironmentStore(
+            runtime_environment_path(self.config_path)
+        )
 
     def team(self) -> TeamSummary:
         try:
@@ -157,23 +270,35 @@ class LocalConsoleAdministration:
         return SettingsSnapshot(
             config=self._saved_config,
             config_path=str(self.config_path),
+            config_source="saved" if self.config_path.is_file() else "default",
             secret_status=tuple(
-                SecretStatus(environment_name=name, configured=bool(self.environment.get(name)))
+                SecretStatus(
+                    environment_name=name,
+                    configured=self._runtime_variable(name)[0] is not None,
+                )
                 for name in sorted(names)
             ),
-            restart_required=self._saved_config != self.runtime_config,
+            restart_required=self._restart_required(),
         )
 
     def update_settings(self, request: UpdateSettingsRequest) -> SettingsSnapshot:
         config = request.config
-        try:
-            team = next(
-                item
-                for item in discover_team_workspaces(config.platform_root)
-                if item.manifest.team_id == config.team_id
+        updates = {item.environment_name: item.value for item in request.runtime_variables}
+        allowed_names = _runtime_variable_names(config)
+        if set(updates) - allowed_names:
+            raise AdministrationError(
+                "runtime environment update is not referenced by configuration"
             )
+        if config.database.dsn_env in updates:
+            try:
+                validate_mysql_dsn(updates[config.database.dsn_env])
+            except StoreError as error:
+                raise AdministrationError("MySQL DSN is invalid") from error
+        try:
+            teams = discover_team_workspaces(config.platform_root)
+            team = next(item for item in teams if item.manifest.team_id == config.team_id)
         except StopIteration as error:
-            if config.platform_root == self.runtime_config.platform_root:
+            if teams:
                 raise AdministrationError(
                     "selected team is not prepared under platform_root"
                 ) from error
@@ -200,9 +325,131 @@ class LocalConsoleAdministration:
         except (OSError, UnicodeError, ValueError) as error:
             raise AdministrationError("selected team knowledge is invalid") from error
         with self._lock:
-            _write_config(self.config_path, config)
-            self._saved_config = config
+            try:
+                current_runtime = self._runtime_environment.load()
+                next_runtime = {
+                    name: value for name, value in current_runtime.items() if name in allowed_names
+                }
+                next_runtime.update(updates)
+                if next_runtime != current_runtime:
+                    self._runtime_environment.save(next_runtime)
+                    self._runtime_changed = True
+                _write_config(self.config_path, config)
+                self._saved_config = config
+            except RuntimeEnvironmentError as error:
+                raise AdministrationError("runtime environment could not be saved") from error
         return self.settings()
+
+    def test_mysql_connection(self, request: MySqlConnectionRequest) -> MySqlConnectionResult:
+        dsn = request.dsn
+        if dsn is None:
+            dsn = self._runtime_variable(self._saved_config.database.dsn_env)[0]
+        if dsn is None:
+            return MySqlConnectionResult(
+                connected=False,
+                message="MySQL DSN 尚未配置。",
+            )
+        try:
+            validate_mysql_dsn(dsn)
+            self.mysql_probe(dsn)
+        except (OSError, StoreError, ValueError):
+            return MySqlConnectionResult(
+                connected=False,
+                message="MySQL 连接失败; 请检查地址、账号、密码和数据库。",
+            )
+        return MySqlConnectionResult(connected=True, message="MySQL 连接成功。")
+
+    def status(self) -> RuntimeStatusSnapshot:
+        dsn_name = self._saved_config.database.dsn_env
+        dsn, dsn_source = self._runtime_variable(dsn_name)
+        if dsn is None:
+            database_connection: Literal["CONNECTED", "UNAVAILABLE", "NOT_CONFIGURED"] = (
+                "NOT_CONFIGURED"
+            )
+        else:
+            database_connection = (
+                "CONNECTED"
+                if self.test_mysql_connection(MySqlConnectionRequest()).connected
+                else "UNAVAILABLE"
+            )
+        codex = _codex_status(self._saved_config.codex_executable, self.environment)
+        routes = tuple(
+            self._model_route_status(route, codex.available)
+            for route in self._saved_config.model_routes
+        )
+        try:
+            imported = len(TeamKnowledgeDocumentStore(self._team()).list())
+            team_prepared = True
+        except AdministrationError:
+            imported = 0
+            team_prepared = False
+        except (OSError, ValueError) as error:
+            raise AdministrationError("Team knowledge status is unavailable") from error
+        return RuntimeStatusSnapshot(
+            config_path=str(self.config_path),
+            config_source="saved" if self.config_path.is_file() else "default",
+            runtime_environment_path=str(self._runtime_environment.path),
+            restart_required=self._restart_required(),
+            delivery_runtime=("READY" if self.delivery_runtime_ready else "SETUP_REQUIRED"),
+            live_model_execution=self._saved_config.live_model_execution,
+            database=DatabaseRuntimeStatus(
+                environment_name=dsn_name,
+                configured=dsn is not None,
+                source=dsn_source,
+                connection=database_connection,
+            ),
+            codex=codex,
+            team_prepared=team_prepared,
+            team_knowledge_imported=imported,
+            team_knowledge_selected=len(self._saved_config.team_knowledge_paths),
+            model_routes=routes,
+        )
+
+    def _model_route_status(
+        self, route: ProviderRouteConfig, codex_available: bool
+    ) -> ModelRouteRuntimeStatus:
+        if route.kind is ModelProviderKind.CODEX_CLI:
+            return ModelRouteRuntimeStatus(
+                provider=route.provider,
+                model=route.model,
+                kind=route.kind,
+                enabled=route.enabled,
+                ready=not route.enabled or codex_available,
+            )
+        assert route.api_key_env is not None
+        configured = self._runtime_variable(route.api_key_env)[0] is not None
+        return ModelRouteRuntimeStatus(
+            provider=route.provider,
+            model=route.model,
+            kind=route.kind,
+            enabled=route.enabled,
+            ready=not route.enabled or configured,
+            credential_environment_name=route.api_key_env,
+            credential_configured=configured,
+        )
+
+    def _runtime_variable(
+        self, name: str
+    ) -> tuple[str | None, Literal["runtime.env", "process environment", "missing"]]:
+        try:
+            stored = self._runtime_environment.load().get(name)
+        except RuntimeEnvironmentError as error:
+            raise AdministrationError("runtime environment is invalid") from error
+        if stored:
+            return stored, "runtime.env"
+        process = self.environment.get(name)
+        if process:
+            return process, "process environment"
+        return None, "missing"
+
+    def _restart_required(self) -> bool:
+        if self._saved_config != self.runtime_config or self._runtime_changed:
+            return True
+        try:
+            stored = self._runtime_environment.load()
+        except RuntimeEnvironmentError as error:
+            raise AdministrationError("runtime environment is invalid") from error
+        return any(self.environment.get(name) != value for name, value in stored.items())
 
     def _team(self) -> TeamWorkspace:
         try:
@@ -253,13 +500,45 @@ def _write_config(path: Path, config: ProductionConfig) -> None:
         raise AdministrationError("production configuration could not be saved") from error
 
 
+def _runtime_variable_names(config: ProductionConfig) -> set[str]:
+    names = {config.database.dsn_env}
+    names.update(
+        route.api_key_env for route in config.model_routes if route.api_key_env is not None
+    )
+    return names
+
+
+def _codex_status(executable: str, environment: Mapping[str, str]) -> CodexRuntimeStatus:
+    if "/" in executable:
+        candidate = Path(executable).expanduser()
+        resolved = (
+            str(candidate.absolute())
+            if candidate.is_file() and os.access(candidate, os.X_OK)
+            else None
+        )
+    else:
+        resolved = shutil.which(executable, path=environment.get("PATH"))
+    return CodexRuntimeStatus(
+        executable=executable,
+        available=resolved is not None,
+        resolved_path=resolved,
+    )
+
+
 __all__ = [
     "AdministrationError",
+    "CodexRuntimeStatus",
     "ConsoleAdministration",
     "CreateProjectRequest",
+    "DatabaseRuntimeStatus",
     "KnowledgeDocumentView",
     "LocalConsoleAdministration",
+    "ModelRouteRuntimeStatus",
+    "MySqlConnectionRequest",
+    "MySqlConnectionResult",
     "ProjectSummary",
+    "RuntimeStatusSnapshot",
+    "RuntimeVariableUpdate",
     "SecretStatus",
     "SettingsSnapshot",
     "TeamSummary",

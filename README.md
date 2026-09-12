@@ -214,7 +214,7 @@ AI-software-engineering-platform/
 ├── config/                           # 不含密钥的 Team Host 配置示例
 ├── src/ai_software_engineer/
 │   ├── cli.py                        # `ase` 顶层命令
-│   ├── config/                       # ProductionConfig 与模型路由契约
+│   ├── config/                       # ProductionConfig、默认值、模型路由与受控 runtime.env
 │   ├── domain/                       # Task、Agent、Artifact、Workforce 强类型模型
 │   ├── product/ design/ planning/    # Product、Designer、Planner 阶段及不可变记录
 │   ├── manager/                      # prepare、阶段门禁、dispatch、Team Host
@@ -274,7 +274,7 @@ AI-software-engineering-platform/
 | 目标代码目录 | `/path/to/backend`、`/path/to/frontend` | Project 下的 Repository 或模块源码、测试、构建配置和原生规范；必须是绝对路径、Git HEAD 已提交、开始时工作树干净；平台不创建 `.ase` |
 | 平台数据根 | `<platform_root>`；macOS/Linux 缺省为 `~/.ase` | 唯一 Team、全部 Project sidecar 和隔离 worktree 的共同外置根；必须持久化、备份并限制访问权限 |
 | MySQL | `ASE_MYSQL_DSN` 指向的 MySQL 8.0 | Task、StateEvent、dispatch、WorkItem、Assignment、Lease 等并发权威事实；不能与文件 sidecar 二选一，二者都要保存 |
-| 配置与密钥 | `ASE_CONFIG` + 环境变量 | JSON 只保存路径、模型名和密钥变量名；DSN/API key 正文只放环境或 secret manager，不写入仓库/sidecar |
+| 配置与运行变量 | `ASE_CONFIG` + sibling `runtime.env` | JSON 保存普通设置；可信本机 MVP 将设置页提交的 DSN/API key 以 `0600` 写入 `runtime.env`，启动脚本自动加载；接口、页面、日志、仓库和 sidecar 不回显或保存正文 |
 
 一个实际 `<platform_root>` 的职责如下：
 
@@ -359,7 +359,7 @@ macOS Keychain / Linux Secret Service 适配，不能把 MySQL DSN 明文写入 
 
 ### 1. 首次启动服务
 
-完成下方“一次性配置”后，在平台源码仓库后台启动本地 Web Console：
+在平台源码仓库后台启动本地 Web Console：
 
 ```bash
 ./scripts/ase-console-service.sh start
@@ -373,13 +373,16 @@ Origin；它不是可直接暴露到局域网或公网的多用户系统。用 `
 
 首次进入当前环境时：
 
-1. 打开“设置”，确认唯一 Team 的名称、平台数据目录、MySQL 变量名、模型路由、Codex、真实模型
-   开关和 Console 端口。页面显示“需要重启”时执行 `./scripts/ase-console-service.sh restart`。
-2. 在设置页创建 Project。Project 表示一组长期共享业务背景、知识和开发规范的项目，不等于单个
+1. 打开“设置”。没有配置文件时页面展示内置默认值；按需修改平台数据目录、完整 MySQL DSN、
+   模型路由/API Key、Codex、真实模型开关和 Console 端口。先测试 MySQL 连接，再保存；页面显示
+   “需要重启”时执行 `./scripts/ase-console-service.sh restart`。
+2. 打开“状态”，确认 MySQL、Codex、Team workspace 和启用的模型路由已经就绪。Team 没有知识
+   文档是正常状态，不会被标记成故障。
+3. 在设置页创建 Project。Project 表示一组长期共享业务背景、知识和开发规范的项目，不等于单个
    Git 仓库，也不等于一次 Requirement；同一 Project 可以登记多个代码目录。
-3. 打开“团队知识库”，上传 Markdown、TXT、PDF 或 DOCX。平台保留原文件和来源信息，并生成稳定的
+4. 打开“团队知识库”，上传 Markdown、TXT、PDF 或 DOCX。平台保留原文件和来源信息，并生成稳定的
    `content.md`；不调用模型改写正文，也不会自动加载未选择的文档。
-4. 回到“设置”，勾选用于新 Requirement 的 Team 通用知识并保存。重启后，新建 Requirement 会把
+5. 回到“设置”，勾选用于新 Requirement 的 Team 通用知识并保存。重启后，新建 Requirement 会把
    这些内容绑定到准备摘要；
    已批准的旧需求不会被静默套用新知识。
 
@@ -425,20 +428,16 @@ branch，以及 QA/Reviewer/联合验收证据入口。人工确认后，仍按�
 
 ### 一次性配置
 
-准备 Python 3.12+、uv、Git、MySQL 8.0 和已登录的 Codex CLI。复制
-`config/production.example.json` 到用户配置目录，配置 Team、模型路由和位于源码之外的
-`platform_root`。这是管理页面能够启动之前唯一必须准备的 bootstrap；启动后可在“设置”中维护
-现有无密钥配置。每次启动服务的环境必须提供：
+准备 Python 3.12+、uv、Git、MySQL 8.0 和已登录的 Codex CLI，然后执行 `uv sync`。配置文件不存在
+或 MySQL 尚未配置时，Web Console 仍以 setup 模式启动，并在设置页展示稳定默认值；这时交付入口
+返回“待配置”，不会启动 Agent。第一次保存会创建默认路径
+`~/.config/ai-software-engineer/config.json` 及同目录 `runtime.env`。
 
-```bash
-export ASE_MYSQL_DSN='mysql+pymysql://USER:PASSWORD@127.0.0.1:3307/DATABASE'
-export ASE_CONFIG='/absolute/path/to/production-config.json' # 默认位置可省略
-```
-
-设置页只显示这些密钥变量“已提供/未提供”，不会读取或回显正文。密钥和 DSN 正文只放环境变量或
-secret manager，不写入配置、仓库或 sidecar。完整 MySQL、模型
-fallback 和安全配置见 [生产配置指南](docs/production-setup.md)。真正的自动登录启动要等
-macOS Keychain / Linux Secret Service 适配完成，当前不要把 DSN 明文写进 plist 或 systemd unit。
+设置页允许直接填写完整 MySQL DSN 和 Responses provider API Key；输入框留空表示保留原值，后端
+只返回已配置状态，不返回正文。当前可信本机 MVP 将这些运行变量以权限 `0600` 明文保存在
+`runtime.env`，启动脚本会自动加载；不要提交或共享该文件。未来可换成 Keychain/Secret Service，
+不改变页面工作流。完整 MySQL、模型 fallback 和配置边界见
+[生产配置指南](docs/production-setup.md)。
 
 `verify-*`、`request resume` 和底层 Task Runtime 仍作为诊断/break-glass 能力保留，不是日常用户
 流程。详细断点矩阵见 [CLI 手册](docs/cli.md) 与
@@ -638,6 +637,7 @@ MySQL 集成测试需设置 `ASE_TEST_MYSQL_DSN`，指向专用测试数据库�
 | M15 Web 交付控制台 | 浏览器完成 Project 选择、Requirement 创建、Product 对话与批准、统一继续/精确恢复计划批准和候选领取；操作先写入 Team sidecar，再由后台 Manager 执行，页面刷新不丢单；CLI 降为运维和 break-glass 入口 |
 | M16 平台管理面 | 浏览器创建/选择 Project，导入 Markdown/TXT/PDF/DOCX 为内容寻址的 Team 知识，并维护平台目录、知识选择、MySQL 引用、模型路由、Codex、执行开关和端口；运行时绑定变化明确要求重启 |
 | M17 Team–Project 边界 | 将唯一 Team 与多个 Project 设为并列聚合；Project 管理知识、规范、Repository 和 Requirement；增加 Web Console 后台启动、停止、重启、状态和日志脚本 |
+| M18 运行设置与状态 | Web Console 可零配置降级启动，展示内置默认值；设置页写入完整 MySQL DSN/Responses API Key，服务脚本加载受控 `runtime.env`；独立状态页显示 MySQL、Codex、Team、知识和模型路由就绪情况 |
 
 ## 文档导航
 

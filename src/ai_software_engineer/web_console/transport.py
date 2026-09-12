@@ -23,8 +23,10 @@ from .administration import (
     AdministrationError,
     ConsoleAdministration,
     CreateProjectRequest,
+    MySqlConnectionRequest,
     UpdateSettingsRequest,
 )
+from .core import ConsoleCommandRejected
 from .models import ConsoleIntent, ConsoleOperation, IdempotencyKey
 from .store import ConsoleOperationConflict, ConsoleOperationNotFound
 
@@ -60,6 +62,7 @@ def create_console_app(
     team_id: str,
     port: int = 8765,
     administration: ConsoleAdministration | None = None,
+    delivery_ready: bool = True,
 ) -> FastAPI:
     if isinstance(port, bool) or not 1 <= port <= 65535:
         raise ValueError("invalid console server port")
@@ -117,7 +120,13 @@ def create_console_app(
 
     @app.get("/api/v1/console")
     async def console_info() -> Response:
-        return JSONResponse({"schema_version": "v0.2", "team_id": command_team_id})
+        return JSONResponse(
+            {
+                "schema_version": "v0.2",
+                "team_id": command_team_id,
+                "delivery_ready": delivery_ready,
+            }
+        )
 
     @app.get("/api/v1/admin/team")
     async def configured_team() -> Response:
@@ -218,6 +227,32 @@ def create_console_app(
             return _error(409, "SETTINGS_REJECTED", "Settings could not be saved safely.")
         return JSONResponse(value.to_wire())
 
+    @app.post("/api/v1/admin/settings/test-mysql")
+    async def test_mysql_connection(request: Request) -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        payload = await _json_body(request)
+        if isinstance(payload, Response):
+            return payload
+        try:
+            command = MySqlConnectionRequest.model_validate_json(payload)
+            value = await run_in_threadpool(administration.test_mysql_connection, command)
+        except ValidationError:
+            return _error(422, "INVALID_REQUEST", "MySQL connection input is invalid.")
+        except AdministrationError:
+            return _error(503, "ADMIN_UNAVAILABLE", "MySQL connection test is unavailable.")
+        return JSONResponse(value.to_wire())
+
+    @app.get("/api/v1/admin/status")
+    async def runtime_status() -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        try:
+            value = await run_in_threadpool(administration.status)
+        except AdministrationError:
+            return _error(503, "ADMIN_UNAVAILABLE", "Runtime status is unavailable.")
+        return JSONResponse(value.to_wire())
+
     @app.get("/api/v1/operations/{operation_id}")
     async def operation(operation_id: str) -> Response:
         try:
@@ -250,6 +285,8 @@ def create_console_app(
             )
         except ValidationError:
             return _error(422, "INVALID_REQUEST", "Operation input is invalid.")
+        except ConsoleCommandRejected as error:
+            return _error(503, error.code, error.safe_summary)
         except ConsoleOperationConflict as error:
             return _error(409, "OPERATION_CONFLICT", str(error))
         return JSONResponse(value.to_wire(), status_code=202)

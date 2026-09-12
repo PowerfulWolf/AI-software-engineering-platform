@@ -207,10 +207,13 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     },
   );
   let failure = false,
+    deliveryReady = true,
     interval = null,
     urls = [],
     submittedIntents = [],
-    storedOperations = [];
+    storedOperations = [],
+    savedSettings = [],
+    mysqlTests = [];
   const settingsFixture = {
     config: {
       schema_version: "v0.2",
@@ -231,16 +234,67 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
           reasoning_effort: "high",
           enabled: true,
         },
+        {
+          provider: "deepseek",
+          model: "deepseek-v4",
+          kind: "responses",
+          endpoint: "https://example.invalid/v1/responses",
+          api_key_env: "DEEPSEEK_API_KEY",
+          reasoning_effort: "high",
+          enabled: false,
+        },
       ],
       codex_executable: "codex",
       live_model_execution: true,
       console_port: 8765,
     },
     config_path: "/config/production.json",
+    config_source: "saved",
     secret_status: [
       { environment_name: "ASE_MYSQL_DSN", configured: true },
+      { environment_name: "DEEPSEEK_API_KEY", configured: false },
     ],
     restart_required: false,
+  };
+  const statusFixture = {
+    config_path: "/config/production.json",
+    config_source: "saved",
+    runtime_environment_path: "/config/runtime.env",
+    restart_required: false,
+    delivery_runtime: "READY",
+    live_model_execution: true,
+    database: {
+      environment_name: "ASE_MYSQL_DSN",
+      configured: true,
+      source: "runtime.env",
+      connection: "CONNECTED",
+    },
+    codex: {
+      executable: "codex",
+      available: true,
+      resolved_path: "/usr/local/bin/codex",
+    },
+    team_prepared: true,
+    team_knowledge_imported: 1,
+    team_knowledge_selected: 1,
+    model_routes: [
+      {
+        provider: "codex",
+        model: "gpt-5.6-terra",
+        kind: "codex_cli",
+        enabled: true,
+        ready: true,
+      },
+      {
+        provider: "deepseek",
+        model: "deepseek-v4",
+        kind: "responses",
+        enabled: false,
+        ready: true,
+        credential_environment_name: "DEEPSEEK_API_KEY",
+        credential_configured: false,
+      },
+    ],
   };
   const knowledgeFixture = [
     {
@@ -290,8 +344,27 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
             created_at: "2026-09-12T00:00:00Z",
           })),
         };
+      if (url === "/api/v1/admin/settings" && options.method === "PUT") {
+        savedSettings.push(JSON.parse(options.body));
+        return {
+          ok: true,
+          json: async () => ({
+            ...structuredClone(settingsFixture),
+            restart_required: true,
+          }),
+        };
+      }
       if (url === "/api/v1/admin/settings")
         return { ok: true, json: async () => structuredClone(settingsFixture) };
+      if (url === "/api/v1/admin/settings/test-mysql") {
+        mysqlTests.push(JSON.parse(options.body));
+        return {
+          ok: true,
+          json: async () => ({ connected: true, message: "MySQL 连接成功。" }),
+        };
+      }
+      if (url === "/api/v1/admin/status")
+        return { ok: true, json: async () => structuredClone(statusFixture) };
       if (url === "/api/v1/admin/team/knowledge")
         return { ok: true, json: async () => structuredClone(knowledgeFixture) };
       if (url === "/api/v1/console")
@@ -300,6 +373,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
           json: async () => ({
             schema_version: "v0.2",
             team_id: "team_fixture",
+            delivery_ready: deliveryReady,
           }),
         };
       if (url === "/api/v1/operations" && options.method === "POST") {
@@ -373,7 +447,55 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   assert.match(text(get("content")), /创建 Project/);
   assert.match(text(get("content")), /平台数据目录/);
   assert.ok(descend(get("content")).some((node) => node.value === "gpt-5.6-terra"));
-  assert.match(text(get("content")), /ASE_MYSQL_DSN · 已提供/);
+  assert.match(text(get("content")), /MySQL DSN/);
+  assert.doesNotMatch(text(get("content")), /密钥状态/);
+  const runtimeInputs = descend(get("content")).filter(
+    (node) => node.tag === "input" && node.type === "password",
+  );
+  const dsnInput = runtimeInputs[0];
+  dsnInput.value = "mysql+pymysql://user:password@127.0.0.1:3307/database";
+  dsnInput.events.input();
+  runtimeInputs[1].value = "deepseek-key";
+  runtimeInputs[1].events.input();
+  const testConnection = descend(get("content")).find(
+    (node) => node.tag === "button" && node.textContent === "测试连接",
+  );
+  await testConnection.events.click();
+  assert.deepEqual(mysqlTests, [
+    { dsn: "mysql+pymysql://user:password@127.0.0.1:3307/database" },
+  ]);
+  const settingsForm = descend(get("content")).find(
+    (node) => node.tag === "form" && node.className === "settings-form",
+  );
+  await settingsForm.events.submit({ preventDefault() {} });
+  assert.deepEqual(savedSettings[0].runtime_variables, [
+    {
+      environment_name: "ASE_MYSQL_DSN",
+      value: "mysql+pymysql://user:password@127.0.0.1:3307/database",
+    },
+    {
+      environment_name: "DEEPSEEK_API_KEY",
+      value: "deepseek-key",
+    },
+  ]);
+  await get("nav-status").events.click();
+  assert.match(text(get("content")), /平台状态|配置与启动/);
+  assert.match(text(get("content")), /MySQL 连接正常/);
+  assert.match(text(get("content")), /已导入 1 份 · 已启用 1 份/);
+  assert.doesNotMatch(text(get("content")), /user:password/);
+  const statusReads = urls.filter((url) => url === "/api/v1/admin/status").length;
+  await interval.fn();
+  assert.equal(
+    urls.filter((url) => url === "/api/v1/admin/status").length,
+    statusReads,
+    "the five-second Team poll does not repeatedly probe MySQL",
+  );
+  await get("refresh").events.click();
+  assert.equal(
+    urls.filter((url) => url === "/api/v1/admin/status").length,
+    statusReads + 1,
+    "manual refresh updates runtime status",
+  );
   await get("nav-team").events.click();
   fixture.tasks[0].status = "QA";
   fixture.tasks[0].assignments[0].current_stage = false;
@@ -492,6 +614,21 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     descend(get("detail")).find((n) => n.tag === "details").open,
     true,
   );
+  deliveryReady = false;
+  await interval.fn();
+  assert.equal(get("new-request").hidden, true);
+  assert.match(text(get("operations")), /待配置运行时/);
+  await get("nav-settings").events.click();
+  assert.equal(
+    descend(get("content")).some(
+      (node) => node.tag === "h2" && node.textContent === "创建 Project",
+    ),
+    false,
+  );
+  assert.match(text(get("content")), /先保存运行配置并重启/);
+  await get("nav-team").events.click();
+  vm.runInContext('showDetail("task","d1")', context);
+  deliveryReady = true;
   failure = true;
   await interval.fn();
   assert.match(get("connection").textContent, /旧数据/);

@@ -62,10 +62,11 @@ docker compose ps
 ```
 
 默认服务绑定 `127.0.0.1:3307`，容器名为 `ase-mysql`，数据卷为
-`ai-software-engineer-mysql-data`。`.env` 会被 Compose 读取，但不会自动导出到运行 `ase` 的 shell；仍需：
+`ai-software-engineer-mysql-data`。`.env` 只供 Compose 创建数据库；平台连接串在 Web Console
+“设置”中填写：
 
-```bash
-export ASE_MYSQL_DSN='mysql+pymysql://ase:ase_local_change_me@127.0.0.1:3307/ai_software_engineer'
+```text
+mysql+pymysql://ase:ase_local_change_me@127.0.0.1:3307/ai_software_engineer
 ```
 
 这些默认密码只能用于 loopback 本地开发。正式部署应使用独立 MySQL 用户、强密码和 secret manager，
@@ -83,13 +84,15 @@ docker compose stop mysql
 ## 4. 配置 Team Host
 
 配置契约见 [`schemas/production-config.schema.json`](../schemas/production-config.schema.json)，示例见
-[`config/production.example.json`](../config/production.example.json)。默认读取：
+[`config/production.example.json`](../config/production.example.json)。Web Console 默认读取：
 
 ```text
 ~/.config/ai-software-engineer/config.json
 ```
 
-初始化：
+该文件不存在时，Web Console 使用页面可见的内置默认值并进入 setup 模式，不会自动写文件；MySQL
+尚未配置也不妨碍打开“设置”和“状态”。用户第一次保存才创建配置文件。已有文件损坏或不合法时仍
+会拒绝启动，不会用默认值覆盖。需要预先定制或使用兼容 CLI 时，也可以手工初始化：
 
 ```bash
 mkdir -p "$HOME/.config/ai-software-engineer"
@@ -118,7 +121,8 @@ cp config/production.example.json \
 `~/.ase`；解析不依赖当前工作目录，也不会创建该目录。显式绝对路径优先于默认值，且安全的 `~/custom-ase`
 会先展开为当前用户主目录下的绝对路径。相对路径、控制字符，以及绝对或 home-relative 路径中的
 `..` traversal 都会失败关闭，
-不会回退到默认目录。配置中只记录 DSN/API key 的环境变量名，不能写 secret。若配置文件位于其他位置：
+不会回退到默认目录。普通配置 JSON 只记录 DSN/API key 的环境变量名；设置页接收的完整值写入同目录
+`runtime.env`，接口和页面不会读取回显。若配置文件位于其他位置：
 
 ```bash
 export ASE_CONFIG='/absolute/path/to/production.json'
@@ -155,7 +159,8 @@ Team、Project 和 Repository sidecar 目录只在显式的 Host 初始化、Pro
 不是代码中按供应商名称强制排序，显式配置的数组顺序仍然有效。
 
 Codex 路由不接受 endpoint 或 API key 字段。Responses 路由必须同时配置 `endpoint` 和
-`api_key_env`，例如 `DASHSCOPE_API_KEY` 或 `DEEPSEEK_API_KEY`；密钥本身只存在于进程环境。
+`api_key_env`，例如 `DASHSCOPE_API_KEY` 或 `DEEPSEEK_API_KEY`；完整密钥可在设置页填写并由
+`runtime.env` 提供给下次启动的进程。
 Qwen/DeepSeek 的模型 ID 和 endpoint 必须以相应账户当前实际支持的值替换；平台不会猜测“免费”型号，
 也不把某个供应商的试用额度当成模型固有属性。
 
@@ -179,15 +184,18 @@ Agent，即使它们碰巧使用同一模型也不能互相代替或自我批准
 ./scripts/ase-console-service.sh start
 ```
 
-用同一脚本的 `status`、`logs`、`restart` 和 `stop` 管理后台进程。脚本继承当前 shell 的
-`ASE_CONFIG`、`ASE_MYSQL_DSN` 和 provider 环境，并要求先执行过 `uv sync`。
+用同一脚本的 `status`、`logs`、`restart` 和 `stop` 管理后台进程。脚本解析 `ASE_CONFIG` 或默认
+配置路径，自动加载同目录 `runtime.env`，并要求先执行过 `uv sync`。通常不再需要手工 export DSN
+或 provider key。
 
 打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)，先在网页完成管理准备：
 
-1. 在“设置”确认唯一 Team，并维护平台目录、MySQL 变量名、模型路由、Codex、执行开关和端口；
+1. 在“设置”查看内置/已保存配置，按需维护平台目录、完整 MySQL DSN、模型路由/API Key、Codex、
+   执行开关和端口；用“测试连接”验证 MySQL；
 2. 保存后若显示“需要重启”，执行 `./scripts/ase-console-service.sh restart`，让 Host 绑定新配置；
-3. 在“团队知识库”上传文档，回到设置页勾选需要用于新 Requirement 的知识并再次保存/重启；
-4. 在设置页创建或确认该业务上下文对应的 Project。
+3. 在“状态”确认 MySQL、Codex、Team workspace 和启用的模型路由已就绪；
+4. 在“团队知识库”上传文档，回到设置页勾选需要用于新 Requirement 的知识并再次保存/重启；
+5. 在设置页创建或确认该业务上下文对应的 Project。
 
 然后在“需求与交付”页完成：
 
@@ -202,8 +210,9 @@ Agent，即使它们碰巧使用同一模型也不能互相代替或自我批准
 再由后台 Manager 执行。刷新或关闭页面不会取消已接纳的操作；Host 重启会把遗留 RUNNING
 操作标成 INTERRUPTED，并要求用户基于最新 Delivery 事实重新“继续交付”，不会静默重放不确定调用。
 
-`ase-console` 只监听 loopback。自动登录启动尚未提供安全的 MySQL DSN 注入适配；不要把 DSN 明文
-写入 launchd plist 或 systemd unit，后续应接入 macOS Keychain / Linux Secret Service。
+`ase-console` 只监听 loopback。当前可信本机 MVP 为降低使用门槛，会把 DSN/API Key 以 `0600`
+明文保存在配置目录的 `runtime.env`；不要提交或共享该文件，也不要把值写入 launchd plist 或
+systemd unit。后续应以 macOS Keychain / Linux Secret Service 替换存储实现。
 
 <details>
 <summary>兼容 CLI 与逐条诊断流程</summary>
@@ -383,5 +392,6 @@ Codex CLI，内层 workspace sandbox 可能因操作系统禁止嵌套而返回 
 - HTTP Responses tool loop 只执行 allowlist 命令，但 v0.1 也不是容器级 OS sandbox；
 - 不自动 merge、deploy、处理数据库迁移或跨仓库事务；
 - T033 Reporter 暂停，当前用户交付是 typed JSON、candidate commit 和证据，而不是自动生成报告；
-- Web Console 是可信本地单用户入口；当前无远程访问、RBAC/SSO、原生目录选择器或安全自动登录启动；
+- Web Console 是可信本地单用户入口；当前无远程访问、RBAC/SSO、原生目录选择器、系统开机托管或
+  Keychain/Secret Service 加密凭证存储；
 - PostgreSQL repository adapter 保留为后续 TODO，当前生产实现固定 MySQL 8.0。

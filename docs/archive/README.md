@@ -16,6 +16,7 @@ Archive 是组织记忆的一部分，不依赖任何单个 Agent 的会话。�
 
 | 日期 | 基线 | 范围 | 记录 |
 |---|---|---|---|
+| 2026-09-12 | 本记录所在提交 | M18；零配置设置入口、受控运行变量与独立运行状态页 | [Runtime settings and status](2026-09-12-runtime-settings-status.md) |
 | 2026-09-12 | 本记录所在提交 | M16；Web Console 公司接入、本地文档知识库和无密钥生产设置 | [Company administration and document knowledge](2026-09-12-company-administration-document-knowledge.md) |
 | 2026-09-09 | 本记录所在提交 | T047；Delivery 统一 resume、失败 Coder 接手、候选复核/修复循环与实时看板 | [Universal delivery resume](2026-09-09-universal-delivery-resume.md) |
 | 2026-09-09 | 本记录所在提交 | 已有 candidate 的独立 QA/Reviewer 复核入口；保留原失败历史 | [Candidate verification recovery](2026-09-09-candidate-verification-recovery.md) |
