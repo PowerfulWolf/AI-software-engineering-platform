@@ -108,8 +108,10 @@ cp config/production.example.json \
 }
 ```
 
-`platform_root` 是平台外置数据根，必须为绝对路径，不应位于任一目标项目中。配置中只记录 DSN/API key
-的环境变量名，不能写 secret。若配置文件位于其他位置：
+`platform_root` 是平台外置数据根，不应位于任一目标项目中。在 macOS/Linux，省略它会解析为当前用户的
+`~/.ase`；解析不依赖当前工作目录，也不会创建该目录。显式绝对路径优先于默认值，且安全的 `~/custom-ase`
+会先展开为当前用户主目录下的绝对路径。相对路径、控制字符和不安全的 home-relative traversal 会失败关闭，
+不会回退到默认目录。配置中只记录 DSN/API key 的环境变量名，不能写 secret。若配置文件位于其他位置：
 
 ```bash
 export ASE_CONFIG='/absolute/path/to/production.json'
@@ -125,6 +127,8 @@ Agent。
 Host 需要的文档相对路径，例如 `["workflow.md"]`。这些资料是只读上下文，不会自动覆盖项目规范。
 已准备项目依赖的公司知识发生变化时，会拒绝继续旧交付，应检查变化并处理规范/上下文冲突。
 默认配置不读取任何额外公司文档，也不会自动迁移旧 `platform_root/projects/` 数据。
+平台、公司和项目 sidecar 目录只在显式的 Host 初始化、项目准备或交付写入流程中创建；加载配置和
+`ase team serve` 等只读查看不会创建目录。
 
 ## 5. 模型路由
 

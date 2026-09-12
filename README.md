@@ -393,7 +393,7 @@ uv sync
 按 [首次配置指南](docs/production-setup.md) 完成以下三项，已有 MySQL 容器可以直接使用：
 
 - 连接 MySQL：设置 `ASE_MYSQL_DSN`。
-- 配置数据目录：复制示例配置，将 `platform_root` 设为所有代码目录之外的绝对路径；公司字段可先保留默认值。
+- 配置数据目录：在 macOS/Linux 可省略 `platform_root`，它会稳定解析为当前用户的 `~/.ase`；也可显式设为所有代码目录之外的绝对路径或安全的 `~/` 路径，显式值优先。公司字段可先保留默认值。
 - 启用模型：将 `live_model_execution` 设为 true，默认使用 GPT-5.5；备用顺序为 DeepSeek、千问，需另行配置启用。
 
 配置默认读取 `~/.config/ai-software-engineer/config.json`；其他位置用 `ASE_CONFIG` 指定。

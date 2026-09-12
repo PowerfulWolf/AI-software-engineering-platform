@@ -64,6 +64,27 @@ def test_missing_workspace_never_initializes(tmp_path: Path) -> None:
     assert not Path(config.platform_root).exists()
 
 
+def test_default_workspace_reader_never_initializes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setattr("ai_software_engineer.config.production.Path.home", lambda: home)
+    monkeypatch.setattr("sys.platform", "linux")
+    config = ProductionConfig(
+        model_routes=(
+            ProviderRouteConfig(
+                provider="codex", model="gpt-5.5", kind=ModelProviderKind.CODEX_CLI
+            ),
+        ),
+    )
+
+    with pytest.raises(TeamReadError):
+        ProductionTeamReader(config, {}).snapshot()
+
+    assert config.platform_root == str(home / ".ase")
+    assert not (home / ".ase").exists()
+
+
 def test_empty_company_needs_no_database_or_models(tmp_path: Path) -> None:
     config = ProductionConfig(
         platform_root=str(tmp_path),

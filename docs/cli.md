@@ -7,6 +7,10 @@
 配置错误/端口占用返回 exit 2；数据不可用显示明确错误，不能被解释成没有任务。
 详见 [工作台说明](visualization.md)。
 
+在 macOS/Linux，省略生产配置中的 `platform_root` 会解析为当前用户的 `~/.ase`，与执行命令的目录无关。
+显式绝对路径或安全的 `~/custom-ase` 优先；配置加载和此只读命令都不会创建平台目录。目录仅在显式初始化、
+项目准备或交付写入流程中创建；无效显式路径会失败，不会回退到默认位置。
+
 正常用户入口是 `ase request ...`，旧 `ase project ...` 保留兼容：Production Team Host 自动从 `ASE_CONFIG`/默认配置和环境变量装配
 MySQL、组织团队、模型路由、项目 sidecar 与 worktree。`ase task ...`、`ase evaluation ...`、
 `ase handoff ...` 是保留给平台开发、兼容测试和诊断的低层命令。CLI 不绕过 Task、Artifact、

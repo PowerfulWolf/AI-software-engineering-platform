@@ -84,3 +84,72 @@ def test_duplicate_provider_model_route_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(ValidationError, match="provider/model routes"):
         ProductionConfig.model_validate(payload)
+
+
+@pytest.mark.parametrize("system", ["darwin", "linux"])
+def test_omitted_platform_root_uses_home_independent_of_cwd_without_creating_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, system: str
+) -> None:
+    home = tmp_path / "home"
+    first_cwd = tmp_path / "first"
+    second_cwd = tmp_path / "second"
+    first_cwd.mkdir()
+    second_cwd.mkdir()
+    monkeypatch.setattr("ai_software_engineer.config.production.Path.home", lambda: home)
+    monkeypatch.setattr("sys.platform", system)
+    payload = _payload(tmp_path)
+    payload.pop("platform_root")
+
+    monkeypatch.chdir(first_cwd)
+    first = ProductionConfig.model_validate(payload)
+    monkeypatch.chdir(second_cwd)
+    second = ProductionConfig.model_validate(payload)
+
+    expected = home / ".ase"
+    assert first.platform_root == str(expected)
+    assert second.platform_root == str(expected)
+    assert not expected.exists()
+
+
+def test_explicit_home_relative_platform_root_is_expanded_without_creation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setattr("ai_software_engineer.config.production.Path.home", lambda: home)
+    payload = _payload(tmp_path)
+    payload["platform_root"] = "~/custom-ase"
+
+    config = ProductionConfig.model_validate(payload)
+
+    expected = home / "custom-ase"
+    assert config.platform_root == str(expected)
+    assert not expected.exists()
+
+
+@pytest.mark.parametrize(
+    "platform_root",
+    ["relative", "~//escape", "~/../escape", "~/custom/../escape", "bad\x00path"],
+)
+def test_invalid_explicit_platform_root_rejects_without_default_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform_root: str
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setattr("ai_software_engineer.config.production.Path.home", lambda: home)
+    payload = _payload(tmp_path)
+    payload["platform_root"] = platform_root
+
+    with pytest.raises(ValidationError, match="platform_root must be an absolute safe path"):
+        ProductionConfig.model_validate(payload)
+
+    assert not (home / ".ase").exists()
+
+
+def test_omitted_platform_root_rejects_on_unsupported_platform(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("sys.platform", "win32")
+    payload = _payload(tmp_path)
+    payload.pop("platform_root")
+
+    with pytest.raises(ValueError, match="platform_root must be explicitly configured"):
+        ProductionConfig.model_validate(payload)

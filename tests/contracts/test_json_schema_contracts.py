@@ -150,6 +150,41 @@ def test_production_config_satisfies_the_canonical_schema(tmp_path: Path) -> Non
     _assert_valid(config.to_wire(), "production-config.schema.json")
 
 
+def test_production_config_schema_accepts_supported_home_relative_input() -> None:
+    payload = ProductionConfig.model_validate(
+        {
+            "platform_root": "~/custom-ase",
+            "model_routes": [{"provider": "codex", "model": "gpt-5.5", "kind": "codex_cli"}],
+        }
+    ).to_wire()
+
+    _assert_valid(payload, "production-config.schema.json")
+    raw_payload = dict(payload)
+    raw_payload["platform_root"] = "~/custom-ase"
+    _assert_valid(raw_payload, "production-config.schema.json")
+
+
+@pytest.mark.parametrize(
+    "platform_root",
+    ["relative", "~//escape", "~/../escape", "~/custom/../escape", "bad\x00path"],
+)
+def test_production_config_schema_rejects_unsafe_explicit_paths(platform_root: str) -> None:
+    payload: WirePayload = {
+        "platform_root": platform_root,
+        "model_routes": [{"provider": "codex", "model": "gpt-5.5", "kind": "codex_cli"}],
+    }
+
+    _assert_invalid(payload, "production-config.schema.json")
+
+
+def test_production_config_schema_allows_omitted_platform_root() -> None:
+    payload: WirePayload = {
+        "model_routes": [{"provider": "codex", "model": "gpt-5.5", "kind": "codex_cli"}],
+    }
+
+    _assert_valid(payload, "production-config.schema.json")
+
+
 def test_company_manifest_satisfies_canonical_schema(tmp_path: Path) -> None:
     workspace = CompanyWorkspace.initialize(tmp_path, company_id="company_test", name="Test")
     _assert_valid(workspace.manifest.to_wire(), "company-workspace.schema.json")
