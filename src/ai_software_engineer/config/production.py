@@ -4,17 +4,37 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from collections.abc import Mapping
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Literal, Self
 
-from pydantic import Field, StrictBool, StringConstraints, model_validator
+from pydantic import Field, StrictBool, StringConstraints, field_validator, model_validator
 
 from ai_software_engineer.company_workspace import CompanyId, CompanyName, validate_knowledge_path
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 
 EnvVarName = Annotated[str, StringConstraints(pattern=r"^[A-Z_][A-Z0-9_]{0,127}$")]
+
+
+def _default_platform_root() -> str:
+    """Return the supported platform default without creating it."""
+    if sys.platform not in {"darwin", "linux"}:
+        raise ValueError("platform_root must be explicitly configured on this platform")
+    return str(Path.home() / ".ase")
+
+
+def _normalize_platform_root(value: str) -> str:
+    """Reject lexical traversal and expand the supported home-relative form."""
+    suffix = value[2:] if value.startswith("~/") else value
+    if any(part == ".." for part in Path(suffix).parts):
+        raise ValueError("platform_root must be an absolute safe path")
+    if not value.startswith("~/"):
+        return value
+    if suffix.startswith("/"):
+        raise ValueError("platform_root must be an absolute safe path")
+    return str(Path.home() / suffix)
 
 
 class ProductionConfigError(RuntimeError):
@@ -60,7 +80,7 @@ class ProductionConfig(DomainModel):
     """Validated one-time Team Host configuration."""
 
     schema_version: Literal["v0.1"] = "v0.1"
-    platform_root: NonEmptyStr
+    platform_root: NonEmptyStr = Field(default_factory=_default_platform_root)
     company_id: CompanyId = "company_default"
     company_name: CompanyName = "Default company"
     company_knowledge_paths: tuple[NonEmptyStr, ...] = ()
@@ -69,9 +89,15 @@ class ProductionConfig(DomainModel):
     codex_executable: NonEmptyStr = "codex"
     live_model_execution: StrictBool = False
 
+    @field_validator("platform_root", mode="before")
+    @classmethod
+    def expand_home_relative_platform_root(cls, value: object) -> object:
+        """Normalize explicit ``~/`` input before the shared safety guard runs."""
+        return _normalize_platform_root(value) if isinstance(value, str) else value
+
     @model_validator(mode="after")
     def validate_production_contract(self) -> Self:
-        root = Path(self.platform_root).expanduser()
+        root = Path(self.platform_root)
         if not root.is_absolute() or any(ord(character) < 32 for character in self.platform_root):
             raise ValueError("platform_root must be an absolute safe path")
         ensure_unique(

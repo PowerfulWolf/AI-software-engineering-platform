@@ -17,6 +17,8 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
 ## Contracts
 
 - Company initialize(read_only=True) verifies existing state without creating a missing company.
+- macOS/Linux 的默认 `platform_root=~/.ase` 只在配置层纯解析；缺失 workspace 的 snapshot 读取必须
+  返回 `TeamReadError`，不得因默认值而创建平台、公司或项目目录。
 - Journal/checkpoint/artifact/evaluation/route-attempt read_only opens never mkdir; writes reject.
 - Never construct OrganizationTeamHost/MySqlTaskRepository/dispatch authority to read: constructors
   initialize schema/workspaces. Use REPEATABLE READ + WITH CONSISTENT SNAPSHOT, READ ONLY;

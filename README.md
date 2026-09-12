@@ -256,7 +256,7 @@ AI-software-engineering-platform/
 |---|---|---|
 | 平台源码仓库 | `/path/to/AI-software-engineering-platform` | `ase` 的实现、Schema、测试和 Trellis 规范；只在开发平台本身时修改 |
 | 目标项目目录 | `/path/to/backend`、`/path/to/frontend` | 原项目源码、测试、构建配置和原生开发规范；必须是绝对路径、Git HEAD 已提交、开始时工作树干净；平台不在其中创建 `.ase` |
-| 平台数据根 | `<platform_root>`，例如 `/data/ase` 或 `$HOME/.local/share/ase` | 所有组织/公司 sidecar 和临时 worktree 的共同外置根；必须持久化、备份并限制访问权限 |
+| 平台数据根 | `<platform_root>`；macOS/Linux 缺省为 `~/.ase` | 所有组织/公司 sidecar 和临时 worktree 的共同外置根；可显式配置绝对路径或安全的 `~/...` 路径，必须持久化、备份并限制访问权限 |
 | MySQL | `ASE_MYSQL_DSN` 指向的 MySQL 8.0 | Task、StateEvent、dispatch、WorkItem、Assignment、Lease 等并发权威事实；不能与文件 sidecar 二选一，二者都要保存 |
 | 配置与密钥 | `ASE_CONFIG` + 环境变量 | JSON 只保存路径、模型名和密钥变量名；DSN/API key 正文只放环境或 secret manager，不写入仓库/sidecar |
 
@@ -304,7 +304,7 @@ v0.1 推荐先以一台可信的 macOS/Linux 主机运行，不必先部署 Kube
 - 一个独立 MySQL 8.0 实例保存事务和并发权威；本地可使用仓库提供的 Docker Compose，
   正式环境使用独立用户、强密码和持久卷；
 - 一个位于所有源码仓库之外的持久 `<platform_root>` 保存 organization、Company sidecar、
-  Artifact、Evidence 和 worktree；macOS 可使用自定义绝对目录，Linux 可使用 `/data/ase`；
+  Artifact、Evidence 和 worktree；macOS/Linux 缺省为 `~/.ase`，也可显式配置安全的绝对路径或 `~/...`；
 - 目标仓库仍按自身语言和工具构建，平台只要求 Git、干净主 checkout、允许的本地构建/测试命令；
 - Codex CLI 路由推荐以当前账号可用的 `gpt-5.6-terra` 为主，路由顺序由配置决定；需要时显式配置
   DeepSeek、Qwen 的 Responses-compatible endpoint 作为备用，不能把禁用或占位路由当成自动降级；
@@ -339,11 +339,16 @@ mkdir -p "$HOME/.config/ai-software-engineer"
 cp config/production.example.json "$HOME/.config/ai-software-engineer/config.json"
 ```
 
-配置文件至少确认：
+配置时：
+
+- 连接 MySQL：设置 `ASE_MYSQL_DSN`。
+- 配置数据目录：macOS/Linux 可省略 `platform_root`，稳定使用当前用户的 `~/.ase`；如需自定义，可使用所有代码目录之外的绝对路径或安全的 `~/...`，显式值优先。
+- 启用模型：将 `live_model_execution` 设为 `true`，并把第一个启用路由改成当前可用模型。
+
+配置文件至少确认以下字段；`platform_root` 未列出时使用上述默认值：
 
 ```json
 {
-  "platform_root": "/absolute/path/outside-all-code-repositories/ase-data",
   "company_id": "company_ai",
   "company_name": "AI company",
   "live_model_execution": true

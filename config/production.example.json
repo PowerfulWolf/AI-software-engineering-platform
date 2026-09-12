@@ -1,6 +1,5 @@
 {
   "schema_version": "v0.1",
-  "platform_root": "/absolute/path/to/ase-data",
   "company_id": "company_default",
   "company_name": "Default company",
   "company_knowledge_paths": [],

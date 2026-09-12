@@ -5,7 +5,7 @@
   "description": "Secret-free operator configuration for the organization-owned Production Team Host.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["platform_root", "model_routes"],
+  "required": ["model_routes"],
   "$defs": {
     "env_var": {
       "type": "string",
@@ -63,7 +63,12 @@
   },
   "properties": {
     "schema_version": {"const": "v0.1", "default": "v0.1"},
-    "platform_root": {"type": "string", "minLength": 1},
+    "platform_root": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?:/(?!.*[\\u0000-\\u001F])(?!\\.\\.(?:/|$))(?!.*?/\\.\\.(?:/|$)).*|~/(?!.*[\\u0000-\\u001F])(?!/)(?!\\.\\.(?:/|$))(?!.*?/\\.\\.(?:/|$)).*)$",
+      "description": "Optional on macOS and Linux, where it defaults to ~/.ase. Explicit absolute paths and safe leading ~/ paths are supported; resolution does not create directories."
+    },
     "company_id": {"type": "string", "pattern": "^company_[a-z0-9][a-z0-9_-]{1,63}$", "default": "company_default"},
     "company_name": {"type": "string", "minLength": 1, "maxLength": 200, "default": "Default company"},
     "company_knowledge_paths": {

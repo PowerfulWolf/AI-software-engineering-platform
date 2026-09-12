@@ -16,6 +16,8 @@ ProductionConfig.from_environment(environment: Mapping[str, str] | None = None) 
 ProductionConfig.from_file(path: str | Path) -> ProductionConfig
 ProductionConfig.require_mysql_dsn(environment: Mapping[str, str]) -> str
 ProductionConfig.enabled_routes() -> tuple[ProviderRouteConfig, ...]
+_default_platform_root() -> str
+_normalize_platform_root(value: str) -> str
 
 OrganizationTeamHost.from_environment(
     environment: Mapping[str, str] | None = None,
@@ -88,8 +90,10 @@ Environment contract:
 
 ### 3.1 Configuration and composition
 
-- `ProductionConfig` 必须符合 `schemas/production-config.schema.json`；`platform_root` 是绝对、安全路径；
-  至少一条 enabled route，`(provider, model)` 唯一；secret 只能由环境变量间接引用。
+- `ProductionConfig` 必须符合 `schemas/production-config.schema.json`。macOS/Linux 省略
+  `platform_root` 时纯解析为当前用户的 `~/.ase`；显式绝对路径或安全的 `~/...` 优先，后者先展开
+  再进入同一校验。任何显式路径中的 `..`、控制字符或非绝对结果都失败关闭，不得回退默认值；
+  解析本身不得创建目录。至少一条 enabled route，`(provider, model)` 唯一；secret 只能由环境变量间接引用。
 - `codex_cli` route 不得声明 endpoint/API key；`responses` route 必须声明 endpoint 与
   `api_key_env`。示例默认 `live_model_execution=false`，生产执行必须显式改为 `true`。
 - 未注入测试 provider 时，`project_entry()` 惰性缓存
@@ -386,7 +390,7 @@ this does not authorize rebasing old approval or QA/Review evidence in place.
 
 | 输入/故障 | 检测点 | 结果 |
 |---|---|---|
-| 配置缺失、未知字段、相对 `platform_root` | ProductionConfig/Schema | `ProductionConfigError`/ValidationError，不连接模型 |
+| 配置缺失、未知字段、相对/控制字符/含 `..` 的 `platform_root` | ProductionConfig/Schema | `ProductionConfigError`/ValidationError，不回退默认值、不创建目录、不连接模型 |
 | DSN env 缺失、MySQL 停止/认证失败 | Host/MySqlTaskRepository | 脱敏 StoreError，CLI exit 2，不创建 fake Host |
 | duplicate Task / unknown Task | MySQL repository | `TaskAlreadyExists` / `TaskNotFound` |
 | stale event status/revision 或 changed replay | locked append transaction | rollback；`InvalidStateEvent`/`EventIdempotencyConflict` |
@@ -410,12 +414,13 @@ body 或目标项目中的 secret。
 
 ## 5. Good / Base / Bad Cases
 
-- **Good**：真实临时 Git 项目 + MySQL + scripted structured/delivery providers 完成
+- **Good**：macOS/Linux 省略 `platform_root` 时从不同 cwd 得到同一 `~/.ase`，加载配置和只读查看
+  不创建目录；显式 writer 才初始化 workspace。真实临时 Git 项目 + MySQL + scripted structured/delivery providers 完成
   prepare→Product approval→Design→Plan→dispatch→Coder diff/report→平台 candidate finalization→独立 QA/Review→DONE；main checkout 和
   target files 不变，candidate commit 可由 `git show` 复核。
-- **Base**：缺少真实额度时，contract/E2E 使用注入的 deterministic providers；Production Host、MySQL、
+- **Base**：显式安全绝对路径或 `~/custom-ase` 覆盖默认值。缺少真实额度时，contract/E2E 使用注入的 deterministic providers；Production Host、MySQL、
   dispatch、worktree 和 typed artifact 仍走真实实现。只有显式 live smoke 才消费 GPT-5.5。
-- **Bad**：在每个项目复制 AgentProfile；把 DSN/API key 写入 JSON；Planner 直接提交分配；让同一 Agent
+- **Bad**：接受 `/tmp/root/../escape` 或配置失败后静默改用 `~/.ase`；在每个项目复制 AgentProfile；把 DSN/API key 写入 JSON；Planner 直接提交分配；让同一 Agent
   同时当 Coder 和 Reviewer；在 main checkout 写代码；auth/invalid output 后静默换模型；自动 merge。
 - **Role-budget Good**：复杂 Coder 在 1,800 秒硬上限内完成 intended diff/report，平台形成候选提交与 Artifact，随后由各自拥有
   1,200 秒上限的独立 QA、Reviewer 验证。
@@ -437,6 +442,8 @@ body 或目标项目中的 secret。
   an old request to adopt new source facts. RuntimeWorkspaceError is a stable CLI error, not traceback.
 
 - `tests/config/test_production.py`：配置文件/env、route 条件、duplicate route、secret 不落盘；
+- platform-root 配置测试必须覆盖省略值的 cwd 独立性、macOS/Linux 默认、显式绝对/`~/` 优先、
+  绝对与 home-relative traversal 拒绝、模块导入/只读零创建，以及显式 writer 创建边界；
 - `tests/contracts/test_json_schema_contracts.py`：ProductionConfig positive/negative canonical schema；
 - `tests/store/test_mysql_repository.py`：与 SQLite 可观察行为一致、atomic append、replay/conflict、rollback、
   reopen；必须通过 `ASE_TEST_MYSQL_DSN` 显式 opt-in；
@@ -455,6 +462,31 @@ body 或目标项目中的 secret。
 - 合并门禁：full pytest、Ruff check/format、strict mypy、offline build、`git diff --check`。
 
 ## 7. Wrong vs Correct
+
+### Platform root normalization
+
+#### Wrong
+
+```python
+# `resolve()` hides lexical traversal and configuration loading performs a write.
+platform_root = Path(raw_value).expanduser().resolve()
+platform_root.mkdir(parents=True, exist_ok=True)
+```
+
+#### Correct
+
+```python
+# Validation rejects every lexical `..` component. Loading stays pure; an explicit
+# workspace writer owns directory creation later.
+config = ProductionConfig.model_validate({"platform_root": raw_value})
+CompanyWorkspace.initialize(config.platform_root, company_id)
+```
+
+`/tmp/platform/../escape` and `~/platform/../escape` are invalid even if filesystem normalization
+would produce an absolute path. `ProductionConfig` parsing and read-only projections never create
+`~/.ase`; only an explicit workspace writer may do so.
+
+### Production composition
 
 ### Wrong
 
