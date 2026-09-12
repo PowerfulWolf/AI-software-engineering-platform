@@ -42,7 +42,7 @@ from ai_software_engineer.project_manager.production_host import OrganizationTea
 from ai_software_engineer.runtime_workspace import OrganizationWorkspace
 from ai_software_engineer.store.mysql_repository import open_mysql_connection
 from ai_software_engineer.team_view.models import CompanyView, TeamReadError, TeamSnapshot
-from ai_software_engineer.team_view.reader import ProductionTeamReader
+from ai_software_engineer.team_view.reader import ProductionTeamReader, _candidate_branch
 from ai_software_engineer.team_view.server import create_team_server
 from tests.e2e.test_joint_delivery import setup_host
 from tests.project_manager.test_production_backend import (
@@ -57,6 +57,30 @@ def _bytes(root: Path) -> dict[str, str]:
     return {
         str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in root.rglob("*") if p.is_file()
     }
+
+
+def test_candidate_branch_is_read_from_the_exact_candidate_ref(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    subprocess.run(("git", "init", "-q"), cwd=repository, check=True)
+    subprocess.run(("git", "config", "user.email", "test@example.com"), cwd=repository, check=True)
+    subprocess.run(("git", "config", "user.name", "Test"), cwd=repository, check=True)
+    (repository / "README.md").write_text("candidate\n", encoding="utf-8")
+    subprocess.run(("git", "add", "README.md"), cwd=repository, check=True)
+    subprocess.run(("git", "commit", "-qm", "candidate"), cwd=repository, check=True)
+    candidate = subprocess.run(
+        ("git", "rev-parse", "HEAD"),
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    task_id = "task_console_candidate"
+    branch = f"ai/{task_id}/attempt-2"
+    subprocess.run(("git", "branch", branch), cwd=repository, check=True)
+
+    assert _candidate_branch(str(repository), task_id, candidate) == branch
+    assert _candidate_branch(str(repository), task_id, "f" * 40) is None
 
 
 def test_missing_workspace_never_initializes(tmp_path: Path) -> None:

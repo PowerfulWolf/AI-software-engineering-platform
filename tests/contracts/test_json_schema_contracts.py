@@ -2,6 +2,7 @@
 
 import json
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -17,6 +18,12 @@ from ai_software_engineer.domain.model import WirePayload
 from ai_software_engineer.evaluation import HandoffBuilder
 from ai_software_engineer.project_workspace import ProjectWorkspaceRegistry
 from ai_software_engineer.runtime import RuntimeConfig
+from ai_software_engineer.web_console import (
+    ConsoleCommandResult,
+    ConsoleOperation,
+    ConsoleOperationStatus,
+    CreateRequirementProjectIntent,
+)
 from tests.domain.factories import (
     make_agent,
     make_implementation_artifact,
@@ -392,3 +399,62 @@ def test_handoff_schema_rejects_missing_next_actions(tmp_path: Path) -> None:
     payload["next_actions"] = []
 
     _assert_invalid(payload, "handoff-bundle.schema.json")
+
+
+def test_console_operation_states_satisfy_the_canonical_schema(tmp_path: Path) -> None:
+    at = datetime(2026, 9, 12, tzinfo=UTC)
+    queued = ConsoleOperation.queued(
+        company_id="company_test",
+        idempotency_key="browser-action-0001",
+        intent=CreateRequirementProjectIntent(name="Web delivery", project_roots=(str(tmp_path),)),
+        requested_at=at,
+    )
+    running = queued.transition(
+        ConsoleOperationStatus.RUNNING, updated_at=at + timedelta(seconds=1)
+    )
+    succeeded = running.transition(
+        ConsoleOperationStatus.SUCCEEDED,
+        updated_at=at + timedelta(seconds=2),
+        result=ConsoleCommandResult(
+            delivery_id="delivery_multi_" + "a" * 40,
+            checkpoint_sha256="1" * 64,
+            stage="READY_FOR_DISCUSSION",
+            next_action="Discuss the requirement.",
+        ),
+    )
+
+    for operation in (queued, running, succeeded):
+        _assert_valid(operation.to_wire(), "console-operation.schema.json")
+
+
+def test_console_operation_schema_rejects_relative_roots_and_incoherent_status(
+    tmp_path: Path,
+) -> None:
+    operation = ConsoleOperation.queued(
+        company_id="company_test",
+        idempotency_key="browser-action-0001",
+        intent=CreateRequirementProjectIntent(name="Web delivery", project_roots=(str(tmp_path),)),
+        requested_at=datetime(2026, 9, 12, tzinfo=UTC),
+    ).to_wire()
+    intent = operation["intent"]
+    assert isinstance(intent, dict)
+    intent["project_roots"] = ["relative/project"]
+    _assert_invalid(operation, "console-operation.schema.json")
+
+    operation = ConsoleOperation.queued(
+        company_id="company_test",
+        idempotency_key="browser-action-0002",
+        intent=CreateRequirementProjectIntent(name="Web delivery", project_roots=(str(tmp_path),)),
+        requested_at=datetime(2026, 9, 12, tzinfo=UTC),
+    ).to_wire()
+    operation["status"] = "SUCCEEDED"
+    _assert_invalid(operation, "console-operation.schema.json")
+
+    operation = ConsoleOperation.queued(
+        company_id="company_test",
+        idempotency_key="browser-action-0003",
+        intent=CreateRequirementProjectIntent(name="Web delivery", project_roots=(str(tmp_path),)),
+        requested_at=datetime(2026, 9, 12, tzinfo=UTC),
+    ).to_wire()
+    operation["status"] = "RUNNING"
+    _assert_invalid(operation, "console-operation.schema.json")

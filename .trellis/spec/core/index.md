@@ -16,6 +16,8 @@
 11. 修改中断改动捕获或终态恢复时阅读 [`delivery-recovery.md`](delivery-recovery.md)。
 12. 修改组织队列、Dispatcher 或 Lease 生命周期时阅读
     [`persistent-work-queue.md`](persistent-work-queue.md)。
+13. 修改浏览器交付命令、Web Console Operation 或后台 Project Manager 执行时阅读
+    [`web-console.md`](web-console.md)。
 
 ## Quality Check
 
@@ -36,3 +38,4 @@
 - [`live-team-view.md`](live-team-view.md)
 - [`delivery-recovery.md`](delivery-recovery.md)
 - [`persistent-work-queue.md`](persistent-work-queue.md)
+- [`web-console.md`](web-console.md)

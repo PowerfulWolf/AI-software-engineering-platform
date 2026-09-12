@@ -27,6 +27,7 @@ class Element {
   setAttribute() {}
   removeAttribute() {}
   scrollIntoView() {}
+  focus() {}
   set innerHTML(value) {
     throw new Error("Unsafe HTML assignment: " + value);
   }
@@ -204,7 +205,9 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   );
   let failure = false,
     interval = null,
-    urls = [];
+    urls = [],
+    submittedIntents = [],
+    storedOperations = [];
   const context = vm.createContext({
     document: {
       getElementById: get,
@@ -218,8 +221,36 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
               n.tag === "details" && (selector !== "details[open]" || n.open),
           ),
     },
-    fetch: async (url) => {
+    fetch: async (url, options = {}) => {
       urls.push(url);
+      if (url === "/api/v1/console")
+        return {
+          ok: true,
+          json: async () => ({
+            schema_version: "v0.1",
+            company_id: "company_fixture",
+          }),
+        };
+      if (url === "/api/v1/operations" && options.method === "POST") {
+        const command = JSON.parse(options.body);
+        submittedIntents.push(command.intent);
+        const operation = {
+          operation_id: `operation_${String(storedOperations.length + 1).padStart(32, "0")}`,
+          company_id: "company_fixture",
+          idempotency_key: command.idempotency_key,
+          intent: command.intent,
+          status: "QUEUED",
+          requested_at: "2026-09-05T01:00:04Z",
+          updated_at: "2026-09-05T01:00:04Z",
+        };
+        storedOperations.push(operation);
+        return { ok: true, json: async () => structuredClone(operation) };
+      }
+      if (url === "/api/v1/operations")
+        return {
+          ok: true,
+          json: async () => structuredClone(storedOperations),
+        };
       return {
         ok: !failure,
         json: async () => structuredClone(fixture),
@@ -257,7 +288,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   const companyTabs = get("companies").children;
   assert.equal(companyTabs.length, 2);
   await companyTabs[1].events.click();
-  assert.equal(urls.at(-1), "/api/v1/team/company_other");
+  assert.ok(urls.includes("/api/v1/team/company_other"));
   fixture.tasks[0].status = "QA";
   fixture.tasks[0].assignments[0].current_stage = false;
   fixture.tasks[0].assignments[1].current_stage = true;
@@ -272,9 +303,83 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   assert.match(text(qaStageCards[1]), /测试中/);
   assert.match(text(qaStageCards[2]), /等待评审阶段/);
   get("nav-requests").events.click();
+  assert.equal(get("new-request").hidden, false);
   assert.match(text(get("content")), /执行中 2/);
   assert.match(text(get("content")), /阻塞中 1/);
   assert.match(text(get("content")), /已完成 1/);
+  get("new-request").events.click();
+  const projectForm = descend(get("composer")).find(
+    (node) => node.className === "project-form",
+  );
+  const projectName = descend(projectForm).find((node) => node.tag === "input");
+  const projectRoots = descend(projectForm).find(
+    (node) => node.tag === "textarea",
+  );
+  projectName.value = "跨仓登录升级";
+  projectRoots.value = "/backend/module-a\n/frontend";
+  await projectForm.events.submit({ preventDefault() {} });
+  assert.deepEqual(submittedIntents[0], {
+    action: "CREATE_REQUIREMENT_PROJECT",
+    name: "跨仓登录升级",
+    project_roots: ["/backend/module-a", "/frontend"],
+  });
+  assert.match(text(get("operations")), /等待 Project Manager/);
+  vm.runInContext('showDetail("request","r1")', context);
+  const continueButton = descend(get("detail")).find(
+    (node) => node.tag === "button" && node.textContent === "继续交付",
+  );
+  await continueButton.events.click();
+  assert.deepEqual(submittedIntents[1], {
+    action: "CONTINUE_DELIVERY",
+    delivery_id: "r1",
+    expected_checkpoint_sha256: "a".repeat(64),
+  });
+  assert.doesNotMatch(text(get("detail")), /a{64}/);
+
+  const planSha = "b".repeat(64);
+  storedOperations[1].status = "SUCCEEDED";
+  storedOperations[1].updated_at = "2026-09-05T01:00:05Z";
+  storedOperations[1].result = {
+    delivery_id: "r1",
+    checkpoint_sha256: "a".repeat(64),
+    stage: "WAITING_HUMAN",
+    next_action: "Approve exact recovery",
+    approval: {
+      kind: "coder_recovery",
+      plan_sha256: planSha,
+      title: "批准 Coder 恢复任务",
+      facts: ["保留改动 2 个文件"],
+    },
+  };
+  fixture.requests[0].stage = "WAITING_HUMAN";
+  await interval.fn();
+  vm.runInContext('showDetail("request","r1")', context);
+  const approvePlan = descend(get("detail")).find(
+    (node) => node.tag === "button" && node.textContent === "批准并继续",
+  );
+  assert.ok(approvePlan, "WAITING_HUMAN renders its exact recovery approval");
+  assert.doesNotMatch(text(get("detail")), /b{64}/);
+  await approvePlan.events.click();
+  assert.deepEqual(submittedIntents[2], {
+    action: "CONTINUE_DELIVERY",
+    delivery_id: "r1",
+    expected_checkpoint_sha256: "a".repeat(64),
+    approved_plan_sha256: planSha,
+  });
+
+  storedOperations[2].status = "FAILED";
+  storedOperations[2].updated_at = "2026-09-05T01:00:06Z";
+  storedOperations[2].error_summary = "Provider unavailable";
+  await interval.fn();
+  vm.runInContext('showDetail("request","r1")', context);
+  assert.ok(
+    descend(get("detail")).find(
+      (node) => node.tag === "button" && node.textContent === "继续交付",
+    ),
+    "a consumed exact plan is not offered again; unified continue can propose the next plan",
+  );
+  assert.doesNotMatch(text(get("detail")), /批准并继续/);
+
   vm.runInContext('showDetail("task","d1")', context);
   assert.match(text(get("detail")), /任务详情/);
   assert.match(text(get("detail")), /codex \/ gpt-5.5/);

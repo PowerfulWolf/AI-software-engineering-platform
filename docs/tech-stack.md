@@ -8,7 +8,8 @@
 |---|---|---|---|
 | 语言 | Python 3.12+ | CLI、JSON、Git、测试和模型 SDK 生态成熟，便于快速迭代 | 多语言微服务 |
 | 契约 | Pydantic v2 + JSON Schema | 运行时校验与跨语言文件契约兼顾；Schema 可供非 Python 工具使用 | 手写 dict 校验 |
-| CLI | Typer | 轻量、类型友好，适合 `task run/inspect/retry` | Web 控制台优先 |
+| Web 入口 | FastAPI + Uvicorn + 原生浏览器 JS | typed loopback API、lifespan 后台执行与现有 Python application ports 直接组合；Operation 先落盘，避免页面断开导致重复执行 | 前端框架、远程多租户控制面 |
+| CLI | Typer | 轻量、类型友好，保留部署、`task run/inspect/retry` 和 break-glass 诊断 | 作为日常用户入口 |
 | 状态存储 | MySQL 8.0（生产）+ SQLite（兼容/测试） | MySQL 提供 Task/事件/dispatch 行锁和跨进程恢复；SQLite 保留快速离线测试 | PostgreSQL、Redis |
 | Artifact | JSON + 文件系统 | 可 diff、可签名、可被人工检查，避免锁定数据库格式 | 二进制消息总线 |
 | 编排 | 进程内显式状态机 | 便于调试和回放，串行流程不需要队列 | Celery、Temporal、Kafka |
@@ -43,8 +44,9 @@ class ArtifactStore(Protocol):
     def get(self, artifact_id: ArtifactId) -> Artifact: ...
 ```
 
-实现应先写接口与 contract tests，再接入具体模型。T034 的生产入口默认通过 Codex CLI 使用当前
-账号的 GPT-5.5，并提供 Responses-compatible HTTP adapter 给显式配置的 Qwen/DeepSeek fallback；两类
+实现应先写接口与 contract tests，再接入具体模型。生产入口默认通过 Codex CLI 使用配置中的首个
+启用模型（当前推荐 `gpt-5.6-terra`），并提供 Responses-compatible HTTP adapter 给显式配置的
+Qwen/DeepSeek fallback；两类
 provider 都只能返回相同 typed output。transport、runner 与 PromptBuilder 均可注入，因此无网络或
 模型配额时仍能用 scripted/fake adapter 完整验证状态机、MySQL、worktree 和 artifact 边界。
 

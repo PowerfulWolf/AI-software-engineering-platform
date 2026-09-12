@@ -63,6 +63,7 @@ class TaskView(DomainModel):
     blocker: str | None = None
     next_action: str
     candidate_revision: str | None = None
+    candidate_branch: str | None = None
     assignments: tuple[AssignmentView, ...] = ()
     timeline: tuple[TimelineEntry, ...] = ()
     runs: tuple[RunView, ...] = ()

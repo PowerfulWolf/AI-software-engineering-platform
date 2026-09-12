@@ -9,19 +9,23 @@ description = "A Trellis-inspired, artifact-driven multi-agent software engineer
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "fastapi>=0.115,<1",
   "pydantic>=2,<3",
   "pymysql>=1.1,<2",
   "typer>=0.12,<1",
+  "uvicorn>=0.34,<1",
 ]
 
 [project.scripts]
 ase = "ai_software_engineer.cli:main"
+ase-console = "ai_software_engineer.web_console.host:main"
 
 [project.urls]
 Repository = "https://github.com/PowerfulWolf/AI-software-engineering-platform"
 
 [dependency-groups]
 dev = [
+  "httpx>=0.28,<1",
   "jsonschema[format]>=4,<5",
   "mypy>=1.13,<2",
   "pytest>=8,<10",

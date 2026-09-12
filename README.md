@@ -29,14 +29,15 @@
 - 一条自然语言需求；Product Agent 将其整理为可评审 Product Spec，并由用户确认；
 - 组织通用知识/AgentProfile/ModelPolicy，以及项目自身规范（由 sidecar 只读索引）。
 
-日常 `ase request ...` 入口的交付结果：
+日常 Web Console 入口的交付结果：
 
 - DONE 时的 `plan`、`implementation-report`、`qa-report`、`review-report` 四类终态 artifact；复杂实现
   还会保留一个或多个 `coder-progress` checkpoint；
 - ProductSpec/Approval、TechnicalDesign、ExecutionPlan 等上游团队交接 artifact；
 - 一个可审计的状态事件流；
 - 各仓通过 QA/Review 的候选提交与联合验收记录，或阻塞状态及其证据；
-- CLI 返回结构化 checkpoint，团队工作台提供任务、模型调用与报告的只读视图。
+- Web Console 展示需求 checkpoint、后台操作、成员当前阶段、模型调用与报告；CLI 仅作为部署、
+  诊断和 break-glass 入口保留。
 
 底层另外提供 Evaluation/ADR 重算与 JSON + Markdown Handoff 能力；不能据此认为日常
 request 命令已经自动生成完整评估与交付汇总报告。Reporter 仍暂不开发。
@@ -56,15 +57,17 @@ Agent 通过受控 Skills 调用确定性能力。用户先选择项目目录，
 完成项目准备；准备成功后，用户再与 Product Agent 讨论需求。后续由专业 Agent 按制度完成产品
 定义、技术设计、执行规划、开发、测试和审查，最后把可合并候选或明确阻塞证据交给人类。
 
-下图是 T046 后的控制平面边界。Planner 对流转和派发策略负责；Dispatcher 负责不依赖模型额度的
-有界轮询、领取事务和过期恢复，持有 Lease 的 Worker 负责启动、心跳与结果提交。正常状态按已批准
-规则推进，只有计划漂移、连续失败、资源冲突或人工门禁
-才重新启动 Planner Agent。当前 `ase request` 兼容入口仍同步执行整单交付；切换到逐角色 Worker
-后才会由后台 Dispatcher 自动运行整条队列链。
+下图是当前控制平面边界。浏览器只提交 typed intent；Web Console 先把操作写入 Company sidecar，
+再由后台 Project Manager 执行，因此刷新或关闭网页不会重复或取消已接纳的工作。Planner 对流转
+和派发策略负责；Dispatcher 负责不依赖模型额度的有界轮询、领取事务和过期恢复，持有 Lease 的
+Worker 负责启动、心跳与结果提交。正常状态按已批准规则推进，只有计划漂移、连续失败、资源冲突
+或人工门禁才重新启动 Planner Agent。
 
 ```mermaid
 flowchart TB
-    U["用户<br/>创建需求项目 · 选择一个或多个代码目录"] --> PM["Project Manager Agent<br/>团队领导"]
+    U["用户<br/>浏览器中创建、讨论、批准、继续"] --> WEB["Local Web Console<br/>typed intent · durable operation"]
+    WEB --> OPS[("Company sidecar<br/>QUEUED → RUNNING → terminal")]
+    OPS --> PM["Project Manager Agent<br/>团队领导"]
 
     PM --> ONBOARD["Project Preparation<br/>注册外置 workspace<br/>发现 ProjectProfile<br/>编译项目级规范"]
     ONBOARD --> READY["Project Prepared<br/>项目上下文与安全边界就绪"]
@@ -108,7 +111,8 @@ flowchart TB
     KNOWLEDGE --> ORCH
     KNOWLEDGE --> RUNNER
     ORCH --> FACTS["Durable Facts<br/>StateEvent · Context · Artifact · Evidence"]
-    FACTS --> VIEW["团队工作台<br/>自动读取真实记录，只读观察"]
+    FACTS --> VIEW["Read-only Projection<br/>从真实记录生成团队与交付视图"]
+    VIEW --> WEB
     REPORTER --> HUMAN["Human Boundary<br/>合并、冲突决策、最终业务判断"]
     DELIVERY --> HUMAN
     STOP --> HUMAN
@@ -124,6 +128,7 @@ flowchart TB
 | 层 | 核心职责 | 明确不能做 |
 |---|---|---|
 | Project Manager Agent | 团队领导；通过 prepare、advance、commit-dispatch、recover、deliver Skills 接单和推进整支团队 | 不能绕过 Skill 直接写状态、分配资源或批准代码 |
+| Web Console command module | 接受浏览器 typed intent，先持久化 Operation，再异步委托 Project Manager；把 exact checkpoint/plan digest 隐藏在 UI 控件中 | 不能直接改 Task、Artifact、Git 或判定交付成功 |
 | Product Agent | 与用户澄清需求，产出可评审、可追溯的版本化 Product Spec | 不能自己批准产品范围，不能持有人工决策验证权限，不能设计实现细节 |
 | Solution Designer Agent | 把已确认 Product Spec 转换为 Technical Design 和实施/测试规划 | 不能改写产品需求，不能直接提交业务实现 |
 | Planner Agent | 制定执行计划并拥有流转/派发策略；通过 QueueInspection、DispatchPlanning、ResultRouting、Reprioritize 等 typed Skills 决定下一步 | 不能亲自持有轮询、数据库锁、心跳或 Lease owner authority |
@@ -134,7 +139,7 @@ flowchart TB
 | Task Orchestrator | 按状态机串行推进一个 Task，校验 artifact 和 retry 条件 | 不能跳过 QA/Review，不能编写业务代码 |
 | Agent Runner / Coder / QA / Reviewer | Runner 持有本次 Lease owner token 并负责 start/heartbeat/result；成员在独立 Context、worktree 和权限下完成岗位工作 | 不能共享隐式记忆，不能批准自己的工作，不能使用别人的 Lease 提交 |
 | Knowledge + Evidence | 保存规范、上下文、artifact、命令、测试和模型使用证据 | 不能依赖某个 Agent 的临时会话 |
-| Projection + Dashboard | 从 durable facts 重算团队和交付状态 | 只读，不能迁移状态或修改 verdict |
+| Projection + Dashboard | 从 durable facts 重算团队和交付状态，向 Web Console 提供只读查询 | 只读，不能迁移状态或修改 verdict |
 | Reporter（暂不开发） | 后续从已验证 artifact/Handoff 生成面向用户的交付表达 | 不能创造事实、改变 verdict 或隐藏失败 |
 | Human Boundary | 处理规范冲突、业务歧义、保护分支合并与生产决策 | 人工动作必须留痕，不能静默改写历史 |
 
@@ -217,7 +222,8 @@ AI-software-engineering-platform/
 │   ├── multi_directory/              # 多目录/多仓需求拆分和联合验收
 │   ├── recovery/                     # Delivery 统一续跑、失败 Coder 接手、候选复核与修复接续
 │   ├── store/                        # MySQL 生产事实；SQLite 底层兼容实现
-│   ├── projection/ team_view/        # 只读投影、HTTP API 和团队工作台
+│   ├── projection/ team_view/        # 只读投影与兼容组件
+│   ├── web_console/                  # 浏览器命令、持久 Operation、Project Manager 适配和 HTTP Host
 │   ├── evaluation/                   # 事件重放、ADR 和 Handoff
 │   ├── tools/                        # role/run 绑定的 typed Skill 协议
 │   ├── company_workspace.py          # Company sidecar 与知识选择
@@ -229,6 +235,7 @@ AI-software-engineering-platform/
 │   ├── work-queue.schema.json
 │   ├── delivery-recovery.schema.json
 │   ├── candidate-verification.schema.json
+│   ├── console-operation.schema.json
 │   └── recovery-execution.schema.json
 ├── tests/                            # 与 src 分层对应；含真实 Git/MySQL 和离线模型契约测试
 ├── docs/
@@ -272,6 +279,7 @@ AI-software-engineering-platform/
 ├── companies/<company_id>/           # 一家公司/知识域一个 sidecar
 │   ├── company.json
 │   ├── knowledge/                    # 显式选择的公司公共知识
+│   ├── requests/_console_operations/ # 浏览器操作的不可变状态链；不是 Task/Delivery 真相替代物
 │   ├── projects/<project_id>/        # 每个已识别 Git 项目的 sidecar 子模块
 │   │   ├── workspace.json            # 项目源码绝对路径与 sidecar 身份绑定
 │   │   ├── profile/                  # ProjectProfile：语言、构建、VCS 发现事实
@@ -299,8 +307,8 @@ AI-software-engineering-platform/
 
 v0.1 推荐先以一台可信的 macOS/Linux 主机运行，不必先部署 Kubernetes 或分布式服务：
 
-- 一个 Python 3.12 `ase` CLI/Team Host 进程负责接单、恢复和查看；命令退出后事实仍持久化，
-  当前正常交付中断后由操作者显式执行 `request resume`；
+- 一个常驻的 Python 3.12 `ase-console` 进程同时提供本地 Web Console、只读团队投影和后台
+  Project Manager 操作执行；日常创建、讨论、批准、恢复和领取交付不使用命令行；
 - 一个独立 MySQL 8.0 实例保存事务和并发权威；本地可使用仓库提供的 Docker Compose，
   正式环境使用独立用户、强密码和持久卷；
 - 一个位于所有源码仓库之外的持久 `<platform_root>` 保存 organization、Company sidecar、
@@ -311,16 +319,89 @@ v0.1 推荐先以一台可信的 macOS/Linux 主机运行，不必先部署 Kube
 - Coder、QA、Reviewer 使用同一 candidate commit 的独立 worktree，QA/Reviewer 不提交业务代码；
 - SQLite 仅用于底层兼容命令和离线测试，不作为 `ase request` 生产入口的数据库。
 
-PersistentWorkQueue 和 Dispatcher/Lease 组件已经存在；v0.1 日常入口仍以同步 `ase request` 命令为主，
-不应把“组件存在”理解成已提供无需进程监督的分布式后台团队。
+浏览器提交的操作先以 append-only 事实保存为 `QUEUED`，后台执行时变为 `RUNNING`，最后变为
+`SUCCEEDED`、`FAILED` 或 `INTERRUPTED`。Host 重启不会静默重放不确定的模型调用；用户在同一页面
+按最新 durable delivery 事实“继续交付”。当前已具备后台进程形态，但自动随系统登录启动仍需要
+macOS Keychain / Linux Secret Service 适配，不能把 MySQL DSN 明文写入 launchd/systemd 配置。
 
 具体选择和理由见 [`docs/tech-stack.md`](docs/tech-stack.md)。
 
 ## 最新使用方法
 
-主流程只有四步：**配置一次 → 选择目录并创建需求 → 与 Product Agent 讨论并批准 → 查看候选交付**。
-以下命令均在平台源码仓库执行；输出是 JSON，后一步只需要保存 `delivery_id` 和最新
-`checkpoint_sha256`。
+日常主流程只有四步：**打开控制台 → 创建需求项目 → 与 Product Agent 讨论并批准 → 观察执行并领取候选分支**。
+浏览器会携带 exact checkpoint 和恢复计划身份，不需要复制 JSON、delivery ID 或 SHA。
+
+### 1. 首次启动服务
+
+完成下方“一次性配置”后，在平台源码仓库启动本地 Web Console：
+
+```bash
+uv run ase-console
+```
+
+打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)。服务只监听 loopback，并校验 Host 和
+Origin；它不是可直接暴露到局域网或公网的多用户系统。交付期间保持服务运行即可，关闭或刷新网页
+不会取消已接纳的后台工作。
+
+### 2. 日常操作全部在网页完成
+
+1. 进入“需求与交付”，点击“新建需求项目”。填写需求名称，并每行填写一个绝对代码目录；一个
+   需求可以覆盖同一仓库的多个模块，也可以跨多个仓库。
+2. Project Manager 先注册项目、建立外置 sidecar、发现 ProjectProfile 并编译项目规范。操作卡片
+   显示“已接单/执行中/成功/失败”；完成后点击“打开需求工作区”。
+3. 在需求详情中和 Product Agent 讨论。ProductSpec 准备好后先阅读“阶段产物”，确认范围和验收
+   标准，再点击“批准 ProductSpec 并开始交付”。
+4. Designer、Planner 和每个仓库的 `Coder → QA → Reviewer` 串行工作。团队成员页只把当前岗位
+   标成执行中，其他岗位显示已完成或等待；需求页同时展示涉及的所有目录和后台操作。
+
+网页每 5 秒读取 durable facts。提交后可以刷新、关闭页面或稍后回来；同一浏览器动作使用幂等键，
+同一 Delivery 同时只接纳一个活动操作。
+
+### 3. 中断、失败和人工门禁
+
+需求详情中的“继续交付”统一处理 Product、Designer、Planner、Coder、QA、Reviewer 和联合验收阶段：
+
+- 普通中断从最近 checkpoint 继续，已完成阶段和仓库不会重跑。
+- Candidate 已存在但 QA/Reviewer 未完成时，页面展示 exact 候选验证计划；阅读 Agent、模型和
+  candidate 后点击“批准并继续”，不会重跑 Coder。
+- Coder 无 Candidate 但保留了修改时，页面展示 exact 恢复计划；批准后创建新的关联 Task 接续，
+  未知半成品不会直接进入 QA。
+- QA FAIL 或 Reviewer REJECT 会保留旧 Candidate 和证据，创建修复 Task，重新执行
+  `Coder → QA → Reviewer`。
+- 规范冲突、来源漂移、权限或业务歧义仍会停止并要求人工处理；网页不会偷偷放宽制度。
+- 如果 Host 在操作执行中退出，该 Web Operation 会标记为 `INTERRUPTED`。重新启动服务后打开需求，
+  依据当前 Delivery 事实再次点击“继续交付”，不会盲目重放原模型调用。
+
+### 4. 领取交付结果
+
+需求进入 `DONE` 后，“交付结果”列出每个改造目录对应的 Candidate commit、可定位时的 Candidate
+branch，以及 QA/Reviewer/联合验收证据入口。人工确认后，仍按目标项目自己的 PR、保护分支、联调、
+发布和回滚流程交付。v0.1 不自动 merge、push 或 deploy，也不会切换目标项目当前 checkout。
+
+### 一次性配置
+
+准备 Python 3.12+、uv、Git、MySQL 8.0 和已登录的 Codex CLI。复制
+`config/production.example.json` 到用户配置目录，配置公司、模型路由和位于源码之外的
+`platform_root`。每次启动服务的环境必须提供：
+
+```bash
+export ASE_MYSQL_DSN='mysql+pymysql://USER:PASSWORD@127.0.0.1:3307/DATABASE'
+export ASE_CONFIG='/absolute/path/to/production-config.json' # 默认位置可省略
+```
+
+密钥和 DSN 正文只放环境变量或 secret manager，不写入配置、仓库或 sidecar。完整 MySQL、模型
+fallback 和安全配置见 [生产配置指南](docs/production-setup.md)。真正的自动登录启动要等
+macOS Keychain / Linux Secret Service 适配完成，当前不要把 DSN 明文写进 plist 或 systemd unit。
+
+`verify-*`、`request resume` 和底层 Task Runtime 仍作为诊断/break-glass 能力保留，不是日常用户
+流程。详细断点矩阵见 [CLI 手册](docs/cli.md) 与
+[恢复规范](.trellis/spec/core/delivery-recovery.md)。
+
+<details>
+<summary>运维与诊断：兼容 CLI 流程</summary>
+
+以下命令用于部署验证、逐条审计和 Web Console 不可用时的 break-glass 操作。日常使用无需保存
+`delivery_id` 或 `checkpoint_sha256`。
 
 ### 1. 首次配置（只做一次）
 
@@ -472,6 +553,8 @@ break-glass 操作，日常交付不需要手工串这四个命令。
 封存并展示精确恢复计划，仍需人工批准后才能交给新的 Coder Task。详细断点矩阵见
 [CLI 手册](docs/cli.md) 与 [恢复规范](.trellis/spec/core/delivery-recovery.md)。
 
+</details>
+
 ## 开发与验证
 
 ```bash
@@ -486,7 +569,7 @@ uv build --offline
 MySQL 集成测试需设置 `ASE_TEST_MYSQL_DSN`，指向专用测试数据库。测试使用脚本化模型验证契约，
 不代表真实模型已完成业务验收。
 
-## 当前进度（2026-09-09）
+## 当前进度（2026-09-12）
 
 | 阶段 | 阶段性成果 |
 |---|---|
@@ -502,6 +585,7 @@ MySQL 集成测试需设置 `ASE_TEST_MYSQL_DSN`，指向专用测试数据库�
 | M12 持久工作队列 | MySQL Run 级 WorkItem、Planner-owned Dispatcher tick、原子 Assignment/Lease/ModelSelection、owner-fenced 心跳/完成/等待/重试/过期回收；`ase request` 逐角色 Worker 接线仍待完成 |
 | M13 候选复核恢复 | 对已有 Coder candidate 提供 `verify-propose / inspect / approve / run`；使用独立 QA/Reviewer allocation、Lease 和 worktree，保留原失败 Task 与联合需求历史，不自动 merge/push/deploy |
 | M14 统一恢复与自动修复 | `request resume` 统一接管现有持久化阶段；候选复核可由同一入口批准和续跑；QA FAIL/Review REJECT 创建确定性修复 Task 并重新走 Coder→QA→Reviewer；看板显示验证与修复工作；终态 Task 可零调用补写 Delivery checkpoint |
+| M15 Web 交付控制台 | 浏览器完成多目录项目创建、Product 对话与批准、统一继续/精确恢复计划批准和候选领取；操作先写入 Company sidecar，再由后台 Project Manager 执行，页面刷新不丢单；CLI 降为运维和 break-glass 入口 |
 
 ## 文档导航
 

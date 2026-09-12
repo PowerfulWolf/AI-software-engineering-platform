@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/console-operation.schema.json",
+  "title": "ConsoleOperation",
+  "description": "Append-only browser intent and Project Manager operation status.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "operation_id",
+    "company_id",
+    "idempotency_key",
+    "intent",
+    "intent_sha256",
+    "status",
+    "sequence",
+    "requested_at",
+    "updated_at",
+    "operation_sha256"
+  ],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "delivery_id": {"type": "string", "pattern": "^delivery_[a-z0-9][a-z0-9_-]{2,127}$"},
+    "create": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "name", "project_roots"],
+      "properties": {
+        "action": {"const": "CREATE_REQUIREMENT_PROJECT"},
+        "name": {"type": "string", "minLength": 1, "maxLength": 200},
+        "project_roots": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^/(?!.*[\\u0000-\\u001F])(?!\\.\\.(?:/|$))(?!.*?/\\.\\.(?:/|$)).*$"
+          }
+        }
+      }
+    },
+    "reply": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "delivery_id", "expected_checkpoint_sha256", "message"],
+      "properties": {
+        "action": {"const": "PRODUCT_REPLY"},
+        "delivery_id": {"$ref": "#/$defs/delivery_id"},
+        "expected_checkpoint_sha256": {"$ref": "#/$defs/digest"},
+        "message": {"type": "string", "minLength": 1, "maxLength": 20000}
+      }
+    },
+    "product_approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "delivery_id", "expected_checkpoint_sha256"],
+      "properties": {
+        "action": {"const": "PRODUCT_APPROVAL"},
+        "delivery_id": {"$ref": "#/$defs/delivery_id"},
+        "expected_checkpoint_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "continue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "delivery_id", "expected_checkpoint_sha256"],
+      "properties": {
+        "action": {"const": "CONTINUE_DELIVERY"},
+        "delivery_id": {"$ref": "#/$defs/delivery_id"},
+        "expected_checkpoint_sha256": {"$ref": "#/$defs/digest"},
+        "approved_plan_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "plan_sha256", "title", "facts"],
+      "properties": {
+        "kind": {"enum": ["candidate_verification", "coder_recovery"]},
+        "plan_sha256": {"$ref": "#/$defs/digest"},
+        "title": {"type": "string", "minLength": 1},
+        "facts": {"type": "array", "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["delivery_id", "checkpoint_sha256", "stage", "next_action"],
+      "properties": {
+        "delivery_id": {"$ref": "#/$defs/delivery_id"},
+        "checkpoint_sha256": {"$ref": "#/$defs/digest"},
+        "stage": {"type": "string", "minLength": 1},
+        "next_action": {"type": "string", "minLength": 1},
+        "approval": {"$ref": "#/$defs/approval"}
+      }
+    }
+  },
+  "properties": {
+    "schema_version": {"const": "v0.1"},
+    "operation_id": {"type": "string", "pattern": "^operation_[a-f0-9]{32}$"},
+    "company_id": {"type": "string", "pattern": "^company_[a-z0-9][a-z0-9_-]{1,63}$"},
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]+$"
+    },
+    "intent": {
+      "oneOf": [
+        {"$ref": "#/$defs/create"},
+        {"$ref": "#/$defs/reply"},
+        {"$ref": "#/$defs/product_approval"},
+        {"$ref": "#/$defs/continue"}
+      ]
+    },
+    "intent_sha256": {"$ref": "#/$defs/digest"},
+    "status": {"enum": ["QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "INTERRUPTED"]},
+    "sequence": {"type": "integer", "minimum": 1},
+    "requested_at": {"type": "string", "format": "date-time"},
+    "updated_at": {"type": "string", "format": "date-time"},
+    "previous_operation_sha256": {"$ref": "#/$defs/digest"},
+    "result": {"$ref": "#/$defs/result"},
+    "error_code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{1,63}$"},
+    "error_summary": {"type": "string", "minLength": 1, "maxLength": 500},
+    "operation_sha256": {"$ref": "#/$defs/digest"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"sequence": {"const": 1}}, "required": ["sequence"]},
+      "then": {
+        "properties": {
+          "status": {"const": "QUEUED"},
+          "previous_operation_sha256": false
+        }
+      },
+      "else": {"required": ["previous_operation_sha256"]}
+    },
+    {
+      "if": {"properties": {"status": {"enum": ["QUEUED", "RUNNING"]}}, "required": ["status"]},
+      "then": {"properties": {"result": false, "error_code": false, "error_summary": false}}
+    },
+    {
+      "if": {"properties": {"status": {"const": "SUCCEEDED"}}, "required": ["status"]},
+      "then": {
+        "required": ["result"],
+        "properties": {"error_code": false, "error_summary": false}
+      }
+    },
+    {
+      "if": {
+        "properties": {"status": {"enum": ["FAILED", "INTERRUPTED"]}},
+        "required": ["status"]
+      },
+      "then": {"required": ["error_code", "error_summary"], "properties": {"result": false}}
+    }
+  ]
+}

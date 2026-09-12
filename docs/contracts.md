@@ -652,6 +652,20 @@ UNKNOWN；planned_model 不代替 ModelRouteAttempt 的实际模型。读取不�
 或属于其他交付时仍整体拒绝，不能把损坏数据降级为空列表。
 具体路径、错误矩阵、测试见 `.trellis/spec/core/live-team-view.md`。
 
+## Local Web Console command contract
+
+Web Console 不向只读 `TeamSnapshot` 投影塞入副作用，而是提供平级的 typed command module。
+`POST /api/v1/operations` 只接受多目录需求创建、Product 回复/批准和统一继续四类 intent；先在
+Company sidecar 追加 `QUEUED` Operation 并返回 202，后台 Project Manager 再推进原有 Delivery。
+Operation 的 `QUEUED → RUNNING → SUCCEEDED | FAILED | INTERRUPTED` 只描述一次浏览器操作，
+不能代替 Task/Delivery/Artifact/verdict 权威事实。
+
+同一幂等键必须绑定 exact intent，同一 Delivery 同时只允许一个活动 Operation。Host 重启把遗留
+RUNNING 标成 INTERRUPTED，不自动重放不确定模型调用；后续由用户在网页按最新 checkpoint 继续。
+Product 与恢复批准都绑定页面实际展示版本，checkpoint/plan 漂移必须拒绝。公开 wire contract 是
+`schemas/console-operation.schema.json`，完整签名、错误矩阵和测试见
+`.trellis/spec/core/web-console.md`。
+
 ## T044 显式恢复与串行执行
 
 恢复使用新的 Task，关联原失败 Task/checkpoint、批准的 Product/Design/Plan 和捕获的修改。

@@ -19,7 +19,7 @@
         </button>
         <button id="nav-requests">需求与交付</button>
       </nav>
-      <div class="side-note">只读工作台<br />不会启动 Agent 或修改任务</div>
+      <div class="side-note">本地团队工作台<br />需求操作由 Project Manager 接管</div>
     </aside>
     <main>
       <header>
@@ -27,16 +27,21 @@
           <p id="company">正在连接公司工作空间</p>
           <h1 id="heading">团队成员</h1>
         </div>
-        <button id="refresh">刷新</button>
+        <div class="header-actions">
+          <button id="new-request" class="primary" hidden>新建需求项目</button>
+          <button id="refresh">刷新</button>
+        </div>
       </header>
       <div id="connection" role="status" aria-live="polite">
         正在读取真实运行记录…
       </div>
       <div id="companies" class="company-tabs" role="tablist" aria-label="公司"></div>
       <p class="explanation">
-        “空闲中”表示该成员在当前公司没有未结束的任务分配；任务阶段来自持久化记录。
-        尚无执行器心跳，不能据此确认 Agent 在线或进程仍在运行。
+        项目、需求、批准和继续交付都在这里完成。任务阶段来自持久化记录；“空闲中”只表示
+        当前公司没有分配给该成员的未结束任务。
       </p>
+      <section id="composer" hidden aria-label="新建需求项目"></section>
+      <section id="operations" aria-live="polite" aria-label="操作状态"></section>
       <section id="content" aria-label="工作台内容"></section>
       <section id="detail" hidden aria-label="详情"></section>
     </main>

@@ -525,6 +525,18 @@
           "default": null,
           "title": "Candidate Revision"
         },
+        "candidate_branch": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Branch"
+        },
         "assignments": {
           "default": [],
           "items": {

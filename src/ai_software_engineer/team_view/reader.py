@@ -25,6 +25,7 @@ from ai_software_engineer.domain.enums import AgentRole, TaskStatus
 from ai_software_engineer.evaluation import FileEvaluationEventStore
 from ai_software_engineer.multi_directory.models import JointCheckpoint, digest
 from ai_software_engineer.multi_directory.production import DerivedStageInputs
+from ai_software_engineer.multi_directory.scope import git_read
 from ai_software_engineer.multi_directory.store import JointJournal
 from ai_software_engineer.project_manager.delivery import _delivery_id
 from ai_software_engineer.project_manager.delivery_checkpoint import (
@@ -424,6 +425,7 @@ def _read_task(native: _Native, request_id: str, scope: ScopeView, cursor: DictC
         blocker=_safe(cp.failure_summary or cp.next_action) if _waiting(cp.stage) else None,
         next_action=cp.next_action,
         candidate_revision=cp.candidate_revision,
+        candidate_branch=_candidate_branch(cp.project_root, cp.task_id, cp.candidate_revision),
         documents=_stage_refs(cp),
     )
     return _read_task_details(native, cursor, base)
@@ -618,6 +620,11 @@ def _verification_view(
         blocker=blocker,
         next_action=next_action,
         candidate_revision=native.checkpoint.candidate_revision,
+        candidate_branch=_candidate_branch(
+            native.checkpoint.project_root,
+            reservation.source_task_id,
+            native.checkpoint.candidate_revision,
+        ),
         assignments=assignments,
         # Verifier requests judge the immutable source Task/candidate.  The
         # distinct reservation Task scopes leases and worktrees, while the
@@ -780,3 +787,23 @@ def _read_runs(
                     )
                 )
     return tuple(sorted(runs, key=lambda r: (r.completed_at, r.run_id, r.route_index)))
+
+
+def _candidate_branch(
+    project_root: str, task_id: str | None, candidate_revision: str | None
+) -> str | None:
+    if task_id is None or candidate_revision is None:
+        return None
+    value = git_read(
+        Path(project_root),
+        "for-each-ref",
+        f"--points-at={candidate_revision}",
+        "--format=%(refname:short)",
+        f"refs/heads/ai/{task_id}",
+    )
+    if not value:
+        return None
+    branches = tuple(
+        branch for branch in value.splitlines() if branch.startswith(f"ai/{task_id}/attempt-")
+    )
+    return branches[0] if len(branches) == 1 else None

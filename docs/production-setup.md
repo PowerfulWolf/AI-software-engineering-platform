@@ -161,7 +161,32 @@ Agent，即使它们碰巧使用同一模型也不能互相代替或自我批准
 
 ## 6. 日常交付
 
-### 6.1 开始并讨论需求
+日常用户只需启动本地 Web Console：
+
+```bash
+uv run ase-console
+```
+
+打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)，在“需求与交付”页完成：
+
+1. 新建需求项目，每行输入一个绝对代码目录；
+2. 等待 Project Manager 完成注册、ProjectProfile 发现和规范编译；
+3. 在需求详情与 Product Agent 讨论并阅读 ProductSpec；
+4. 批准 ProductSpec，观察 Designer、Planner、Coder、QA、Reviewer 的串行进度；
+5. 中断后点击“继续交付”；页面出现候选复核或 Coder 恢复计划时，阅读摘要后点击“批准并继续”；
+6. DONE 后领取每个仓库的 candidate commit/branch 和 QA/Review 证据。
+
+浏览器命令先在 `companies/<company_id>/requests/_console_operations/` 写入 append-only Operation，
+再由后台 Project Manager 执行。刷新或关闭页面不会取消已接纳的操作；Host 重启会把遗留 RUNNING
+操作标成 INTERRUPTED，并要求用户基于最新 Delivery 事实重新“继续交付”，不会静默重放不确定调用。
+
+`ase-console` 只监听 loopback。自动登录启动尚未提供安全的 MySQL DSN 注入适配；不要把 DSN 明文
+写入 launchd plist 或 systemd unit，后续应接入 macOS Keychain / Linux Secret Service。
+
+<details>
+<summary>兼容 CLI 与逐条诊断流程</summary>
+
+### 6.1 开始并讨论需求（break-glass）
 
 先创建需求项目，目录可以只传一个，也可以传多个不相邻的仓库或模块目录：
 
@@ -240,7 +265,7 @@ uv run ase project approve delivery_xxx \
 CLI 的 `approve` 是 v0.1 的可信人工通道。它只批准返回值中 exact ProductSpec 的 ID + digest；旧
 checkpoint 会被拒绝。
 
-### 6.2 查看和恢复
+### 6.2 查看和恢复（break-glass）
 
 ```bash
 uv run ase project status delivery_xxx
@@ -257,7 +282,7 @@ uv run ase project resume delivery_xxx \
   --approval-reference "human-approved-candidate-verification"
 ```
 
-### 6.3 检查候选变更
+### 6.3 检查候选变更（break-glass）
 
 成功输出包含：
 
@@ -279,6 +304,8 @@ git -C /absolute/path/to/target-project branch --contains <candidate_revision>
 候选通常保留在 `ai/<task-id>/attempt-1`。平台不执行 merge；确认无误后，由项目自己的保护分支流程、
 PR 或人工 Git 命令完成交付。
 
+</details>
+
 ## 7. 数据位置与恢复责任
 
 ```text
@@ -291,6 +318,7 @@ PR 或人工 Git 命令完成交付。
 │   │   ├── workspace.json
 │   │   └── profile/ knowledge/ policy/ state/ contexts/ artifacts/ evidence/ ...
 │   └── requests/                # 联合产品/批准/方案/计划/候选与验收 journal
+│       └── _console_operations/ # Web 操作状态链；Delivery/Task 仍由原权威事实定义
 └── worktrees/<project-id>/       # 当前/保留的角色 worktree
 ```
 
@@ -327,4 +355,5 @@ Codex CLI，内层 workspace sandbox 可能因操作系统禁止嵌套而返回 
 - HTTP Responses tool loop 只执行 allowlist 命令，但 v0.1 也不是容器级 OS sandbox；
 - 不自动 merge、deploy、处理数据库迁移或跨仓库事务；
 - T033 Reporter 暂停，当前用户交付是 typed JSON、candidate commit 和证据，而不是自动生成报告；
+- Web Console 是可信本地单用户入口；当前无远程访问、RBAC/SSO、原生目录选择器或安全自动登录启动；
 - PostgreSQL repository adapter 保留为后续 TODO，当前生产实现固定 MySQL 8.0。
