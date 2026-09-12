@@ -208,6 +208,59 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     urls = [],
     submittedIntents = [],
     storedOperations = [];
+  const settingsFixture = {
+    config: {
+      schema_version: "v0.1",
+      platform_root: "/data/ase",
+      company_id: "company_fixture",
+      company_name: "Fixture company",
+      company_knowledge_paths: [
+        "documents/knowledge_document_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/content.md",
+      ],
+      database: { backend: "mysql", dsn_env: "ASE_MYSQL_DSN" },
+      model_routes: [
+        {
+          provider: "codex",
+          model: "gpt-5.6-terra",
+          kind: "codex_cli",
+          endpoint: null,
+          api_key_env: null,
+          reasoning_effort: "high",
+          enabled: true,
+        },
+      ],
+      codex_executable: "codex",
+      live_model_execution: true,
+      console_port: 8765,
+    },
+    config_path: "/config/production.json",
+    secret_status: [
+      { environment_name: "ASE_MYSQL_DSN", configured: true },
+    ],
+    restart_required: false,
+  };
+  const knowledgeFixture = [
+    {
+      selected: true,
+      manifest: {
+        schema_version: "v0.1",
+        document_id:
+          "knowledge_document_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        company_id: "company_fixture",
+        source_name: "team-guide.md",
+        media_type: "text/markdown",
+        source_relative_path: "source.md",
+        normalized_relative_path:
+          "documents/knowledge_document_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/content.md",
+        source_bytes: 42,
+        normalized_bytes: 42,
+        source_sha256: "a".repeat(64),
+        normalized_sha256: "b".repeat(64),
+        imported_at: "2026-09-12T01:00:00Z",
+        manifest_sha256: "c".repeat(64),
+      },
+    },
+  ];
   const context = vm.createContext({
     document: {
       getElementById: get,
@@ -223,6 +276,20 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     },
     fetch: async (url, options = {}) => {
       urls.push(url);
+      if (url === "/api/v1/admin/companies")
+        return {
+          ok: true,
+          json: async () => structuredClone(fixture.companies).map((item) => ({
+            company_id: item.id,
+            name: item.name,
+            active: item.id === "company_fixture",
+            created_at: "2026-09-12T00:00:00Z",
+          })),
+        };
+      if (url === "/api/v1/admin/settings")
+        return { ok: true, json: async () => structuredClone(settingsFixture) };
+      if (String(url).includes("/api/v1/admin/companies/company_fixture/knowledge"))
+        return { ok: true, json: async () => structuredClone(knowledgeFixture) };
       if (url === "/api/v1/console")
         return {
           ok: true,
@@ -262,6 +329,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
       interval = { fn, ms };
     },
     AbortController,
+    structuredClone,
   });
   vm.runInContext(
     fs.readFileSync(
@@ -289,6 +357,15 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   assert.equal(companyTabs.length, 2);
   await companyTabs[1].events.click();
   assert.ok(urls.includes("/api/v1/team/company_other"));
+  await get("nav-knowledge").events.click();
+  assert.match(text(get("content")), /team-guide.md/);
+  assert.match(text(get("content")), /已用于新需求/);
+  await get("nav-settings").events.click();
+  assert.match(text(get("content")), /接入新公司/);
+  assert.match(text(get("content")), /平台数据目录/);
+  assert.ok(descend(get("content")).some((node) => node.value === "gpt-5.6-terra"));
+  assert.match(text(get("content")), /ASE_MYSQL_DSN · 已提供/);
+  await get("nav-team").events.click();
   fixture.tasks[0].status = "QA";
   fixture.tasks[0].assignments[0].current_stage = false;
   fixture.tasks[0].assignments[1].current_stage = true;

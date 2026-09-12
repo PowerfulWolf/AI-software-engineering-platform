@@ -13,10 +13,20 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import TypeAdapter, ValidationError
 from starlette.middleware.base import RequestResponseEndpoint
 
-from ai_software_engineer.company_workspace import CompanyId
+from ai_software_engineer.company_workspace import (
+    MAX_COMPANY_KNOWLEDGE_SOURCE_BYTES,
+    CompanyId,
+)
 from ai_software_engineer.domain.model import DomainModel
+from ai_software_engineer.knowledge_documents import KnowledgeDocumentError
 from ai_software_engineer.team_view.models import TeamReadError, TeamSnapshot
 
+from .administration import (
+    AdministrationError,
+    ConsoleAdministration,
+    CreateCompanyRequest,
+    UpdateSettingsRequest,
+)
 from .models import ConsoleIntent, ConsoleOperation, IdempotencyKey
 from .store import ConsoleOperationConflict, ConsoleOperationNotFound
 
@@ -51,6 +61,7 @@ def create_console_app(
     *,
     company_id: str,
     port: int = 8765,
+    administration: ConsoleAdministration | None = None,
 ) -> FastAPI:
     if isinstance(port, bool) or not 1 <= port <= 65535:
         raise ValueError("invalid console server port")
@@ -114,6 +125,100 @@ def create_console_app(
     async def console_info() -> Response:
         return JSONResponse({"schema_version": "v0.1", "company_id": command_company_id})
 
+    @app.get("/api/v1/admin/companies")
+    async def companies() -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        try:
+            values = await run_in_threadpool(administration.companies)
+        except AdministrationError:
+            return _error(503, "ADMIN_UNAVAILABLE", "Company administration is unavailable.")
+        return JSONResponse([value.to_wire() for value in values])
+
+    @app.post("/api/v1/admin/companies", status_code=201)
+    async def create_company(request: Request) -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        payload = await _json_body(request)
+        if isinstance(payload, Response):
+            return payload
+        try:
+            command = CreateCompanyRequest.model_validate_json(payload)
+            value = await run_in_threadpool(administration.create_company, command)
+        except ValidationError:
+            return _error(422, "INVALID_REQUEST", "Company input is invalid.")
+        except AdministrationError:
+            return _error(409, "COMPANY_REJECTED", "Company could not be created safely.")
+        return JSONResponse(value.to_wire(), status_code=201)
+
+    @app.get("/api/v1/admin/companies/{company_id}/knowledge")
+    async def knowledge(company_id: str) -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        if not _valid_company_id(company_id):
+            return _error(404, "NOT_FOUND", "Company was not found.")
+        try:
+            values = await run_in_threadpool(administration.knowledge, company_id)
+        except (AdministrationError, KnowledgeDocumentError):
+            return _error(503, "KNOWLEDGE_UNAVAILABLE", "Company knowledge is unavailable.")
+        return JSONResponse([value.to_wire() for value in values])
+
+    @app.post("/api/v1/admin/companies/{company_id}/knowledge", status_code=201)
+    async def import_knowledge(company_id: str, request: Request, filename: str = "") -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        if not _valid_company_id(company_id):
+            return _error(404, "NOT_FOUND", "Company was not found.")
+        content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
+        if content_type != "application/octet-stream":
+            return _error(415, "BINARY_REQUIRED", "Use application/octet-stream.")
+        declared = request.headers.get("content-length")
+        if declared is not None:
+            try:
+                if int(declared) > MAX_COMPANY_KNOWLEDGE_SOURCE_BYTES:
+                    return _error(413, "DOCUMENT_TOO_LARGE", "Document exceeds the upload limit.")
+            except ValueError:
+                return _error(400, "INVALID_REQUEST", "Invalid request metadata.")
+        content = await request.body()
+        if len(content) > MAX_COMPANY_KNOWLEDGE_SOURCE_BYTES:
+            return _error(413, "DOCUMENT_TOO_LARGE", "Document exceeds the upload limit.")
+        try:
+            value = await run_in_threadpool(
+                administration.import_document,
+                company_id=company_id,
+                filename=filename,
+                content=content,
+            )
+        except (AdministrationError, KnowledgeDocumentError, ValidationError):
+            return _error(422, "DOCUMENT_REJECTED", "Document could not be imported safely.")
+        return JSONResponse(value.to_wire(), status_code=201)
+
+    @app.get("/api/v1/admin/settings")
+    async def settings() -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        try:
+            value = await run_in_threadpool(administration.settings)
+        except AdministrationError:
+            return _error(503, "ADMIN_UNAVAILABLE", "Settings are unavailable.")
+        return JSONResponse(value.to_wire())
+
+    @app.put("/api/v1/admin/settings")
+    async def update_settings(request: Request) -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        payload = await _json_body(request)
+        if isinstance(payload, Response):
+            return payload
+        try:
+            command = UpdateSettingsRequest.model_validate_json(payload)
+            value = await run_in_threadpool(administration.update_settings, command)
+        except ValidationError:
+            return _error(422, "INVALID_REQUEST", "Settings input is invalid.")
+        except AdministrationError:
+            return _error(409, "SETTINGS_REJECTED", "Settings could not be saved safely.")
+        return JSONResponse(value.to_wire())
+
     @app.get("/api/v1/operations/{operation_id}")
     async def operation(operation_id: str) -> Response:
         try:
@@ -151,6 +256,31 @@ def create_console_app(
         return JSONResponse(value.to_wire(), status_code=202)
 
     return app
+
+
+async def _json_body(request: Request) -> bytes | Response:
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type != "application/json":
+        return _error(415, "JSON_REQUIRED", "Use application/json.")
+    declared = request.headers.get("content-length")
+    if declared is not None:
+        try:
+            if int(declared) > _MAX_REQUEST_BYTES:
+                return _error(413, "REQUEST_TOO_LARGE", "Request is too large.")
+        except ValueError:
+            return _error(400, "INVALID_REQUEST", "Invalid request metadata.")
+    body = await request.body()
+    if len(body) > _MAX_REQUEST_BYTES:
+        return _error(413, "REQUEST_TOO_LARGE", "Request is too large.")
+    return body
+
+
+def _valid_company_id(company_id: str) -> bool:
+    try:
+        TypeAdapter(CompanyId).validate_python(company_id)
+    except ValidationError:
+        return False
+    return True
 
 
 async def _team_snapshot(reader: TeamReader, company_id: str | None) -> Response:

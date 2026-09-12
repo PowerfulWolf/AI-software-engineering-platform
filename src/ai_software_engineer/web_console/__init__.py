@@ -1,5 +1,16 @@
 """Browser-only Project Manager console."""
 
+from .administration import (
+    AdministrationError,
+    CompanySummary,
+    ConsoleAdministration,
+    CreateCompanyRequest,
+    KnowledgeDocumentView,
+    LocalConsoleAdministration,
+    SecretStatus,
+    SettingsSnapshot,
+    UpdateSettingsRequest,
+)
 from .core import ConsoleCommandRejected, ProjectConsole, ProjectManagerConsolePort
 from .models import (
     CONSOLE_INTENT_ADAPTER,
@@ -27,7 +38,10 @@ from .transport import ConsoleApplication, SubmitOperation, TeamReader, create_c
 
 __all__ = [
     "CONSOLE_INTENT_ADAPTER",
+    "AdministrationError",
+    "CompanySummary",
     "ConsoleAction",
+    "ConsoleAdministration",
     "ConsoleApplication",
     "ConsoleApprovalRequest",
     "ConsoleCommandRejected",
@@ -40,16 +54,22 @@ __all__ = [
     "ConsoleOperationStatus",
     "ConsoleOperationStore",
     "ContinueDeliveryIntent",
+    "CreateCompanyRequest",
     "CreateRequirementProjectIntent",
     "FileConsoleOperationStore",
     "InMemoryConsoleOperationStore",
+    "KnowledgeDocumentView",
+    "LocalConsoleAdministration",
     "OrganizationTeamConsoleHost",
     "ProductApprovalIntent",
     "ProductReplyIntent",
     "ProjectConsole",
     "ProjectManagerConsoleAdapter",
     "ProjectManagerConsolePort",
+    "SecretStatus",
+    "SettingsSnapshot",
     "SubmitOperation",
     "TeamReader",
+    "UpdateSettingsRequest",
     "create_console_app",
 ]

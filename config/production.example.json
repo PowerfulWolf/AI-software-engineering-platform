@@ -35,5 +35,6 @@
     }
   ],
   "codex_executable": "codex",
-  "live_model_execution": false
+  "live_model_execution": false,
+  "console_port": 8765
 }

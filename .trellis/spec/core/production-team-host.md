@@ -16,6 +16,7 @@ ProductionConfig.from_environment(environment: Mapping[str, str] | None = None) 
 ProductionConfig.from_file(path: str | Path) -> ProductionConfig
 ProductionConfig.require_mysql_dsn(environment: Mapping[str, str]) -> str
 ProductionConfig.enabled_routes() -> tuple[ProviderRouteConfig, ...]
+ProductionConfig.path_from_environment(environment: Mapping[str, str] | None = None) -> Path
 _default_platform_root() -> str
 _normalize_platform_root(value: str) -> str
 
@@ -81,6 +82,7 @@ Environment contract:
 | Key | Required | Contract |
 |---|---|---|
 | `ASE_CONFIG` | no | Secret-free JSON path；缺省 `~/.config/ai-software-engineer/config.json` |
+| `ASE_CONSOLE_PORT` | no | 兼容运维覆盖；未设置时使用 `ProductionConfig.console_port` |
 | `ASE_MYSQL_DSN` | yes by default | `mysql+pymysql://...`；实际 key 可由 `database.dsn_env` 改名 |
 | `DASHSCOPE_API_KEY` | only when enabled | Qwen Responses route secret；名称由 route 配置 |
 | `DEEPSEEK_API_KEY` | only when enabled | DeepSeek Responses route secret；名称由 route 配置 |
@@ -93,7 +95,8 @@ Environment contract:
 - `ProductionConfig` 必须符合 `schemas/production-config.schema.json`。macOS/Linux 省略
   `platform_root` 时纯解析为当前用户的 `~/.ase`；显式绝对路径或安全的 `~/...` 优先，后者先展开
   再进入同一校验。任何显式路径中的 `..`、控制字符或非绝对结果都失败关闭，不得回退默认值；
-  解析本身不得创建目录。至少一条 enabled route，`(provider, model)` 唯一；secret 只能由环境变量间接引用。
+  解析本身不得创建目录。至少一条 enabled route，`(provider, model)` 唯一；`console_port` 必须为
+  `1..65535`；secret 只能由环境变量间接引用。
 - `codex_cli` route 不得声明 endpoint/API key；`responses` route 必须声明 endpoint 与
   `api_key_env`。示例默认 `live_model_execution=false`，生产执行必须显式改为 `true`。
 - 未注入测试 provider 时，`project_entry()` 惰性缓存

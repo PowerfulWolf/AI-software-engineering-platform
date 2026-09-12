@@ -226,7 +226,8 @@ AI-software-engineering-platform/
 │   ├── web_console/                  # 浏览器命令、持久 Operation、Project Manager 适配和 HTTP Host
 │   ├── evaluation/                   # 事件重放、ADR 和 Handoff
 │   ├── tools/                        # role/run 绑定的 typed Skill 协议
-│   ├── company_workspace.py          # Company sidecar 与知识选择
+│   ├── company_workspace.py          # Company sidecar、公司发现与知识选择
+│   ├── knowledge_documents.py        # MD/TXT/PDF/DOCX 导入、规范化与不可变知识记录
 │   ├── project_workspace.py          # 项目源码和外置 sidecar 的绑定
 │   └── runtime_workspace.py          # Organization/Project/Runtime 组合
 ├── schemas/                          # 所有公开/持久化契约的 JSON Schema
@@ -236,6 +237,7 @@ AI-software-engineering-platform/
 │   ├── delivery-recovery.schema.json
 │   ├── candidate-verification.schema.json
 │   ├── console-operation.schema.json
+│   ├── knowledge-document.schema.json
 │   └── recovery-execution.schema.json
 ├── tests/                            # 与 src 分层对应；含真实 Git/MySQL 和离线模型契约测试
 ├── docs/
@@ -278,7 +280,8 @@ AI-software-engineering-platform/
 │   ├── work-items/ leases/ metrics/  # 组织级文件契约/扩展位置
 ├── companies/<company_id>/           # 一家公司/知识域一个 sidecar
 │   ├── company.json
-│   ├── knowledge/                    # 显式选择的公司公共知识
+│   ├── knowledge/                    # 公司公共知识；不会递归自动加载
+│   │   └── documents/<document_id>/  # 原文件、规范化 content.md 与不可变 manifest
 │   ├── requests/_console_operations/ # 浏览器操作的不可变状态链；不是 Task/Delivery 真相替代物
 │   ├── projects/<project_id>/        # 每个已识别 Git 项目的 sidecar 子模块
 │   │   ├── workspace.json            # 项目源码绝对路径与 sidecar 身份绑定
@@ -307,8 +310,9 @@ AI-software-engineering-platform/
 
 v0.1 推荐先以一台可信的 macOS/Linux 主机运行，不必先部署 Kubernetes 或分布式服务：
 
-- 一个常驻的 Python 3.12 `ase-console` 进程同时提供本地 Web Console、只读团队投影和后台
-  Project Manager 操作执行；日常创建、讨论、批准、恢复和领取交付不使用命令行；
+- 一个常驻的 Python 3.12 `ase-console` 进程同时提供本地 Web Console、公司/知识/设置管理、只读
+  团队投影和后台 Project Manager 操作执行；完成初始启动后，日常配置、创建、讨论、批准、恢复和
+  领取交付都在网页完成；
 - 一个独立 MySQL 8.0 实例保存事务和并发权威；本地可使用仓库提供的 Docker Compose，
   正式环境使用独立用户、强密码和持久卷；
 - 一个位于所有源码仓库之外的持久 `<platform_root>` 保存 organization、Company sidecar、
@@ -328,7 +332,7 @@ macOS Keychain / Linux Secret Service 适配，不能把 MySQL DSN 明文写入 
 
 ## 最新使用方法
 
-日常主流程只有四步：**打开控制台 → 创建需求项目 → 与 Product Agent 讨论并批准 → 观察执行并领取候选分支**。
+日常主流程只有四步：**选择公司和知识 → 创建需求项目 → 与 Product Agent 讨论并批准 → 观察执行并领取候选分支**。
 浏览器会携带 exact checkpoint 和恢复计划身份，不需要复制 JSON、delivery ID 或 SHA。
 
 ### 1. 首次启动服务
@@ -343,7 +347,25 @@ uv run ase-console
 Origin；它不是可直接暴露到局域网或公网的多用户系统。交付期间保持服务运行即可，关闭或刷新网页
 不会取消已接纳的后台工作。
 
-### 2. 日常操作全部在网页完成
+### 2. 在网页接入公司和知识
+
+首次进入当前环境，或者需要服务新的知识域时：
+
+1. 打开“设置”，在“接入新公司”中填写稳定的 `company_id`（例如 `company_acme`）和显示名称。
+   Company 是知识、项目和交付记录的隔离边界；同一支组织 Agent 团队继续为所有公司服务。
+2. 在“活动公司”中选择新公司，检查平台数据目录、MySQL 变量名、模型路由、Codex、真实模型开关和
+   Console 端口，然后保存。页面显示“需要重启”时重启 `ase-console`；运行中的 Host 不会被热切换。
+   切换到全新平台数据目录时只初始化当前公司，不自动搬迁旧目录中的知识、项目或需求事实。
+3. 打开“公司知识库”，上传 Markdown、TXT、PDF 或 DOCX。平台保留原文件和来源信息，并生成稳定的
+   `content.md`；不调用模型改写正文，也不会自动加载未选择的文档。
+4. 回到“设置”，勾选用于新需求的知识文档并保存。重启后，新建需求会把这些内容绑定到准备摘要；
+   已批准的旧需求不会被静默套用新知识。
+
+单文件原始大小上限为 10 MB，规范化正文上限为 256 KB。加密 PDF、无可提取文本、损坏文档、危险
+文件名和超限内容都会安全拒绝。原始文档位于
+`companies/<company_id>/knowledge/documents/<document_id>/`，不写入平台源码或目标项目。
+
+### 3. 日常需求交付全部在网页完成
 
 1. 进入“需求与交付”，点击“新建需求项目”。填写需求名称，并每行填写一个绝对代码目录；一个
    需求可以覆盖同一仓库的多个模块，也可以跨多个仓库。
@@ -357,7 +379,7 @@ Origin；它不是可直接暴露到局域网或公网的多用户系统。交�
 网页每 5 秒读取 durable facts。提交后可以刷新、关闭页面或稍后回来；同一浏览器动作使用幂等键，
 同一 Delivery 同时只接纳一个活动操作。
 
-### 3. 中断、失败和人工门禁
+### 4. 中断、失败和人工门禁
 
 需求详情中的“继续交付”统一处理 Product、Designer、Planner、Coder、QA、Reviewer 和联合验收阶段：
 
@@ -372,7 +394,7 @@ Origin；它不是可直接暴露到局域网或公网的多用户系统。交�
 - 如果 Host 在操作执行中退出，该 Web Operation 会标记为 `INTERRUPTED`。重新启动服务后打开需求，
   依据当前 Delivery 事实再次点击“继续交付”，不会盲目重放原模型调用。
 
-### 4. 领取交付结果
+### 5. 领取交付结果
 
 需求进入 `DONE` 后，“交付结果”列出每个改造目录对应的 Candidate commit、可定位时的 Candidate
 branch，以及 QA/Reviewer/联合验收证据入口。人工确认后，仍按目标项目自己的 PR、保护分支、联调、
@@ -382,14 +404,16 @@ branch，以及 QA/Reviewer/联合验收证据入口。人工确认后，仍按�
 
 准备 Python 3.12+、uv、Git、MySQL 8.0 和已登录的 Codex CLI。复制
 `config/production.example.json` 到用户配置目录，配置公司、模型路由和位于源码之外的
-`platform_root`。每次启动服务的环境必须提供：
+`platform_root`。这是管理页面能够启动之前唯一必须准备的 bootstrap；启动后可在“设置”中维护所有
+现有无密钥配置。每次启动服务的环境必须提供：
 
 ```bash
 export ASE_MYSQL_DSN='mysql+pymysql://USER:PASSWORD@127.0.0.1:3307/DATABASE'
 export ASE_CONFIG='/absolute/path/to/production-config.json' # 默认位置可省略
 ```
 
-密钥和 DSN 正文只放环境变量或 secret manager，不写入配置、仓库或 sidecar。完整 MySQL、模型
+设置页只显示这些密钥变量“已提供/未提供”，不会读取或回显正文。密钥和 DSN 正文只放环境变量或
+secret manager，不写入配置、仓库或 sidecar。完整 MySQL、模型
 fallback 和安全配置见 [生产配置指南](docs/production-setup.md)。真正的自动登录启动要等
 macOS Keychain / Linux Secret Service 适配完成，当前不要把 DSN 明文写进 plist 或 systemd unit。
 
@@ -586,6 +610,7 @@ MySQL 集成测试需设置 `ASE_TEST_MYSQL_DSN`，指向专用测试数据库�
 | M13 候选复核恢复 | 对已有 Coder candidate 提供 `verify-propose / inspect / approve / run`；使用独立 QA/Reviewer allocation、Lease 和 worktree，保留原失败 Task 与联合需求历史，不自动 merge/push/deploy |
 | M14 统一恢复与自动修复 | `request resume` 统一接管现有持久化阶段；候选复核可由同一入口批准和续跑；QA FAIL/Review REJECT 创建确定性修复 Task 并重新走 Coder→QA→Reviewer；看板显示验证与修复工作；终态 Task 可零调用补写 Delivery checkpoint |
 | M15 Web 交付控制台 | 浏览器完成多目录项目创建、Product 对话与批准、统一继续/精确恢复计划批准和候选领取；操作先写入 Company sidecar，再由后台 Project Manager 执行，页面刷新不丢单；CLI 降为运维和 break-glass 入口 |
+| M16 平台管理面 | 浏览器创建/选择公司，导入 Markdown/TXT/PDF/DOCX 为内容寻址的公司知识，并维护平台目录、活动公司、知识选择、MySQL 引用、模型路由、Codex、执行开关和端口；运行时绑定变化明确要求重启 |
 
 ## 文档导航
 

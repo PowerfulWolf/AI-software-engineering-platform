@@ -27,7 +27,12 @@ AgentProfile，也不能因模型额度耗尽而停止 Lease 安全维护。
 
 ### Knowledge Plane
 
-由 `.trellis/spec/`（组织级规则）、项目文档、任务 PRD/Design、历史 artifact 摘要和失败经验组成。`context/` 中的 Context Router/Builder 只读取声明过的来源并生成带哈希、脱敏、预算约束的 manifest；不把整仓库或整段历史盲目塞给模型。policy section 由机器权限生成并固定排在外部文本之前，仓库内容永远是数据而非新的系统指令。
+由 `.trellis/spec/`（组织级规则）、公司知识、项目文档、任务 PRD/Design、历史 artifact 摘要和失败
+经验组成。Web Console 可把本地 Markdown/TXT/PDF/DOCX 导入 Company sidecar：原文件、规范化
+Markdown 和 manifest 以内容寻址方式保存，仍需在设置中显式选择才会进入新需求。导入不调用模型
+改写正文。`context/` 中的 Context Router/Builder 只读取声明过的来源并生成带哈希、脱敏、预算约束的
+manifest；不把整仓库、整个公司目录或整段历史盲目塞给模型。policy section 由机器权限生成并固定
+排在外部文本之前，上传文档和仓库内容永远是数据而非新的系统指令。
 
 ### Project Binding 与外置 AI Workspace
 
@@ -169,6 +174,8 @@ Project directory + requirement
 | Evaluation events | 文件系统 canonical JSON | 一事件一文件，带内部 SHA-256，exact replay 幂等 |
 | Handoff | 文件系统 JSON + Markdown | deterministic ID，等价重建保留首次观察时间 |
 | Project workspace binding | 外置 sidecar `workspace.json` + 固定目录 | 目标项目外置、幂等、与项目路径绑定；不复制源码 |
+| Company knowledge documents | Company sidecar 原文件 + `content.md` + hashed manifest | 内容寻址、显式选择、来源和规范化摘要可验证；不递归自动加载 |
+| Production settings | `ASE_CONFIG` 指向的无密钥 JSON | Web Console 原子更新；运行时绑定变化要求重启，不热改 Host |
 | Agent/Model workforce | 组织 workspace + MySQL dispatch | AgentProfile/ModelPolicy 属于组织；已提交 Assignment/Lease 与 dispatch fence 在 MySQL |
 | ProjectProfile / Spec governance | Project sidecar 文件记录 | profile 与 runtime binding 不可变；冲突/resolution 使用带 SHA 的 append-only 记录 |
 | Trellis 规则 | Git 中的 Markdown | 组织知识，评审后变更 |

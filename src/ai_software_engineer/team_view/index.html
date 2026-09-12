@@ -18,8 +18,12 @@
           团队成员
         </button>
         <button id="nav-requests">需求与交付</button>
+        <button id="nav-knowledge">公司知识库</button>
+        <button id="nav-settings">设置</button>
       </nav>
-      <div class="side-note">本地团队工作台<br />需求操作由 Project Manager 接管</div>
+      <div class="side-note">
+        本地团队工作台<br />需求操作由 Project Manager 接管
+      </div>
     </aside>
     <main>
       <header>
@@ -35,13 +39,22 @@
       <div id="connection" role="status" aria-live="polite">
         正在读取真实运行记录…
       </div>
-      <div id="companies" class="company-tabs" role="tablist" aria-label="公司"></div>
-      <p class="explanation">
+      <div
+        id="companies"
+        class="company-tabs"
+        role="tablist"
+        aria-label="公司"
+      ></div>
+      <p id="explanation" class="explanation">
         项目、需求、批准和继续交付都在这里完成。任务阶段来自持久化记录；“空闲中”只表示
         当前公司没有分配给该成员的未结束任务。
       </p>
       <section id="composer" hidden aria-label="新建需求项目"></section>
-      <section id="operations" aria-live="polite" aria-label="操作状态"></section>
+      <section
+        id="operations"
+        aria-live="polite"
+        aria-label="操作状态"
+      ></section>
       <section id="content" aria-label="工作台内容"></section>
       <section id="detail" hidden aria-label="详情"></section>
     </main>

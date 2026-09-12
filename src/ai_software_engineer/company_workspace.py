@@ -24,7 +24,8 @@ CompanyId = Annotated[str, StringConstraints(pattern=r"^company_[a-z0-9][a-z0-9_
 CompanyName = Annotated[str, StringConstraints(min_length=1, max_length=200)]
 Digest = Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
 _DIRECTORIES = ("knowledge", "projects", "requests")
-_MAX_DOCUMENT_BYTES = 256_000
+MAX_COMPANY_KNOWLEDGE_SOURCE_BYTES = 10_000_000
+MAX_COMPANY_KNOWLEDGE_DOCUMENT_BYTES = 256_000
 _MAX_SELECTION_BYTES = 1_000_000
 
 
@@ -152,7 +153,7 @@ class CompanyWorkspace:
         for relative in sorted(relative_paths):
             validate_knowledge_path(relative)
             path = self.root / "knowledge" / relative
-            content = _read_regular(path, _MAX_DOCUMENT_BYTES)
+            content = _read_regular(path, MAX_COMPANY_KNOWLEDGE_DOCUMENT_BYTES)
             total += len(content)
             if total > _MAX_SELECTION_BYTES:
                 raise ValueError("company knowledge selection exceeds byte budget")
@@ -168,6 +169,38 @@ class CompanyWorkspace:
                 )
             )
         return tuple(sources)
+
+
+def discover_company_workspaces(platform_root: str | Path) -> tuple[CompanyWorkspace, ...]:
+    """Read and validate every prepared Company without creating platform state."""
+    configured = Path(platform_root).expanduser().absolute()
+    _reject_symlinks(configured)
+    companies_root = configured.resolve() / "companies"
+    _reject_symlinks(companies_root)
+    if not companies_root.is_dir():
+        return ()
+    companies: list[CompanyWorkspace] = []
+    for directory in sorted(companies_root.iterdir(), key=lambda path: path.name):
+        if directory.is_symlink():
+            raise ValueError("company workspace cannot traverse a symlink")
+        manifest_path = directory / "company.json"
+        if not directory.is_dir() or not directory.name.startswith("company_"):
+            continue
+        if not manifest_path.is_file():
+            raise ValueError("company workspace has a missing manifest")
+        manifest = CompanyManifest.model_validate_json(_read_regular(manifest_path, 16_000))
+        manifest.validate_integrity()
+        if directory.name != manifest.company_id:
+            raise ValueError("company workspace directory does not match its manifest")
+        companies.append(
+            CompanyWorkspace.initialize(
+                configured,
+                company_id=manifest.company_id,
+                name=manifest.name,
+                read_only=True,
+            )
+        )
+    return tuple(companies)
 
 
 class _CompanyProjectRegistry(ProjectWorkspaceRegistry):

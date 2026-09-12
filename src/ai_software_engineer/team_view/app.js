@@ -6,6 +6,12 @@ let refreshing = false;
 let operations = [];
 let consoleAvailable = null;
 let consoleCompanyId = null;
+let administrationAvailable = null;
+let administrationCompanies = [];
+let knowledgeDocuments = [];
+let settingsSnapshot = null;
+let settingsDraft = null;
+let administrationNotice = null;
 let composing = false;
 let actionSerial = 0;
 const labels = {
@@ -46,6 +52,24 @@ const labels = {
 };
 const label = (value) => labels[value] || value;
 const roleOrder = { coder: 0, qa: 1, reviewer: 2 };
+const pageCopy = {
+  team: [
+    "团队成员",
+    "任务阶段来自持久化记录；“空闲中”只表示当前公司没有分配给该成员的未结束任务。",
+  ],
+  requests: [
+    "需求与交付",
+    "项目、需求、批准和继续交付都在这里完成；一个任务内的 Coder、QA、Reviewer 串行工作。",
+  ],
+  knowledge: [
+    "公司知识库",
+    "上传的文档保存在公司 sidecar，转换为可校验的 Markdown；只有在设置中选中并重启后，文档才会进入新需求上下文。",
+  ],
+  settings: [
+    "设置",
+    "配置会写入无密钥生产配置文件。页面标记“需要重启”时，当前运行中的团队不会被热切换。",
+  ],
+};
 const el = (tag, text, className) => {
   const n = document.createElement(tag);
   if (text !== undefined) n.textContent = text;
@@ -102,8 +126,7 @@ const latestApproval = (deliveryId, checkpoint) => {
       )?.result.approval || null
   );
 };
-const operationKey = () =>
-  `browser-${Date.now()}-${++actionSerial}`;
+const operationKey = () => `browser-${Date.now()}-${++actionSerial}`;
 const canControlCurrentCompany = () =>
   consoleAvailable === true &&
   snapshot &&
@@ -112,8 +135,7 @@ function assignmentBadge(task, assignment) {
   if (task.terminal) return badge(task.status);
   if (assignment.current_stage) return badge(task.status);
   const current = task.assignments.find((candidate) => candidate.current_stage);
-  if (!current)
-    return el("span", "已分配 · 等待调度", "badge");
+  if (!current) return el("span", "已分配 · 等待调度", "badge");
   const assignedOrder = roleOrder[assignment.role];
   const currentOrder = roleOrder[current.role];
   if (assignedOrder !== undefined && currentOrder !== undefined) {
@@ -198,8 +220,7 @@ function renderComposer() {
   roots.name = "project_roots";
   roots.required = true;
   roots.rows = 5;
-  roots.placeholder =
-    "/absolute/path/to/backend\n/absolute/path/to/frontend";
+  roots.placeholder = "/absolute/path/to/backend\n/absolute/path/to/frontend";
   const feedback = el("p", "", "form-feedback");
   const submit = el("button", "创建并准备项目", "primary");
   submit.type = "submit";
@@ -261,7 +282,9 @@ async function submitOperation(intent) {
       throw new Error(message);
     }
     operations = [
-      ...operations.filter((item) => item.operation_id !== payload.operation_id),
+      ...operations.filter(
+        (item) => item.operation_id !== payload.operation_id,
+      ),
       payload,
     ];
     renderOperationStatus();
@@ -292,7 +315,11 @@ function renderOperationStatus() {
     );
     return;
   }
-  if (snapshot && consoleCompanyId && snapshot.company_id !== consoleCompanyId) {
+  if (
+    snapshot &&
+    consoleCompanyId &&
+    snapshot.company_id !== consoleCompanyId
+  ) {
     panel.append(
       el(
         "div",
@@ -444,7 +471,9 @@ function requestCard(request) {
   );
   card.append(head);
   const write = request.scopes.filter((s) => !s.reference_only),
-    done = write.filter((s) => taskById(s.delivery_id)?.status === "DONE").length;
+    done = write.filter(
+      (s) => taskById(s.delivery_id)?.status === "DONE",
+    ).length;
   card.append(
     el(
       "p",
@@ -572,11 +601,9 @@ function requestOperation(panel, request) {
     );
     panel.append(approval);
   } else if (
-    ![
-      "READY_FOR_DISCUSSION",
-      "WAITING_PRODUCT_REPLY",
-      "DONE",
-    ].includes(request.stage)
+    !["READY_FOR_DISCUSSION", "WAITING_PRODUCT_REPLY", "DONE"].includes(
+      request.stage,
+    )
   ) {
     panel.append(
       button(
@@ -614,13 +641,21 @@ function deliveryResult(panel, request) {
       el("p", "Candidate commit · " + task.candidate_revision, "paths"),
     );
     if (task.candidate_branch)
-      item.append(el("p", "Candidate branch · " + task.candidate_branch, "paths"));
-    item.append(button("查看 QA / Review 证据", () => showDetail("task", task.id)));
+      item.append(
+        el("p", "Candidate branch · " + task.candidate_branch, "paths"),
+      );
+    item.append(
+      button("查看 QA / Review 证据", () => showDetail("task", task.id)),
+    );
     result.append(item);
   }
   if (!delivered)
     result.append(
-      el("p", "该需求没有需要修改的仓库，或候选提交尚未进入当前快照。", "muted"),
+      el(
+        "p",
+        "该需求没有需要修改的仓库，或候选提交尚未进入当前快照。",
+        "muted",
+      ),
     );
   panel.append(result);
 }
@@ -651,7 +686,9 @@ function renderRequests(content) {
     content.append(n);
   }
   const materialized = new Set(snapshot.tasks.map((task) => task.request_id));
-  for (const request of snapshot.requests.filter((item) => !materialized.has(item.id)))
+  for (const request of snapshot.requests.filter(
+    (item) => !materialized.has(item.id),
+  ))
     content.append(requestCard(request));
   for (const [key, title] of [
     ["active", "执行中"],
@@ -661,12 +698,477 @@ function renderRequests(content) {
     const group = el("section", undefined, "task-group");
     const tasks = snapshot.tasks.filter((task) => taskGroup(task) === key);
     const heading = el("h2");
-    heading.append(document.createTextNode(title), el("span", String(tasks.length), "badge"));
+    heading.append(
+      document.createTextNode(title),
+      el("span", String(tasks.length), "badge"),
+    );
     group.append(heading);
     if (!tasks.length) group.append(el("p", `暂无${title}任务。`, "muted"));
     for (const task of tasks) group.append(taskRow(task));
     content.append(group);
   }
+}
+async function adminFetch(url, options = {}) {
+  const response = await fetch(url, { cache: "no-store", ...options });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error?.message || "管理操作失败。");
+  return payload;
+}
+async function loadKnowledge(companyId) {
+  knowledgeDocuments = await adminFetch(
+    "/api/v1/admin/companies/" + encodeURIComponent(companyId) + "/knowledge",
+  );
+}
+async function loadAdministration(companyId) {
+  try {
+    const [companies, settings] = await Promise.all([
+      adminFetch("/api/v1/admin/companies"),
+      adminFetch("/api/v1/admin/settings"),
+    ]);
+    administrationCompanies = companies;
+    settingsSnapshot = settings;
+    settingsDraft = structuredClone(settings.config);
+    await loadKnowledge(companyId || settings.config.company_id);
+    administrationAvailable = true;
+  } catch {
+    administrationAvailable = false;
+    administrationCompanies = [];
+    knowledgeDocuments = [];
+    settingsSnapshot = null;
+    settingsDraft = null;
+  }
+}
+function administrationUnavailable(content) {
+  content.append(
+    el(
+      "div",
+      "当前服务没有启用管理能力。请使用 ase-console 启动本地 Web Console。",
+      "operation-error",
+    ),
+  );
+}
+function renderKnowledge(content) {
+  if (!administrationAvailable) {
+    administrationUnavailable(content);
+    return;
+  }
+  if (administrationNotice?.page === "knowledge")
+    content.append(el("div", administrationNotice.text, "admin-notice"));
+  const top = el("div", undefined, "row request-heading");
+  top.append(
+    el("h2", `${snapshot.company_name} · 已导入文档`),
+    el("span", `${knowledgeDocuments.length} 份`, "badge"),
+  );
+  content.append(top);
+  const form = el("form", undefined, "knowledge-upload admin-panel");
+  const file = el("input");
+  file.type = "file";
+  file.accept = ".md,.txt,.pdf,.docx";
+  file.required = true;
+  const feedback = el("p", "", "form-feedback");
+  const submit = el("button", "上传并转换", "primary");
+  submit.type = "submit";
+  form.append(
+    field(
+      "选择本地文档",
+      file,
+      "支持 Markdown、TXT、PDF、DOCX；单个原文件最大 10 MB，转换后的正文最大 256 KB。",
+    ),
+    feedback,
+    submit,
+  );
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const selectedFile = file.files && file.files[0];
+    if (!selectedFile) return;
+    submit.disabled = true;
+    feedback.className = "form-feedback";
+    feedback.textContent = "正在读取并校验文档…";
+    try {
+      await adminFetch(
+        "/api/v1/admin/companies/" +
+          encodeURIComponent(snapshot.company_id) +
+          "/knowledge?filename=" +
+          encodeURIComponent(selectedFile.name),
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/octet-stream" },
+          body: selectedFile,
+        },
+      );
+      await loadKnowledge(snapshot.company_id);
+      administrationNotice = {
+        page: "knowledge",
+        text: "导入完成。请到设置页选择它并保存，重启后用于新需求。",
+      };
+      render();
+    } catch (error) {
+      feedback.className = "form-feedback error";
+      feedback.textContent =
+        error instanceof Error ? error.message : "文档导入失败。";
+      submit.disabled = false;
+    }
+  });
+  content.append(form);
+  if (!knowledgeDocuments.length) {
+    content.append(el("div", "尚未导入公司知识文档。", "empty"));
+    return;
+  }
+  for (const item of knowledgeDocuments) {
+    const manifest = item.manifest;
+    const card = el("article", undefined, "knowledge-card");
+    const head = el("div", undefined, "row");
+    head.append(
+      el("strong", manifest.source_name),
+      el(
+        "span",
+        item.selected
+          ? settingsSnapshot.restart_required
+            ? "已选择 · 重启后生效"
+            : "已用于新需求"
+          : "尚未启用",
+        item.selected ? "badge done" : "badge",
+      ),
+    );
+    card.append(
+      head,
+      el(
+        "p",
+        `类型 ${manifest.media_type} · 原文件 ${manifest.source_bytes} bytes · 正文 ${manifest.normalized_bytes} bytes`,
+        "muted",
+      ),
+      el("p", "来源 SHA-256 · " + manifest.source_sha256, "paths"),
+      el("p", "知识路径 · " + manifest.normalized_relative_path, "paths"),
+      el("p", "导入时间 · " + time(manifest.imported_at), "muted"),
+    );
+    if (!item.selected)
+      card.append(
+        button("前往设置并启用", async () => {
+          page = "settings";
+          await loadAdministration(settingsSnapshot.config.company_id);
+          updateNavigation();
+          render();
+        }),
+      );
+    content.append(card);
+  }
+}
+function bindInput(control, value, update, type = "text") {
+  control.type = type;
+  control.value = value ?? "";
+  control.addEventListener("input", () => update(control.value));
+  return control;
+}
+function selectInput(values, current, update) {
+  const control = el("select");
+  for (const [value, title] of values) {
+    const option = el("option", title);
+    option.value = value;
+    option.selected = value === current;
+    control.append(option);
+  }
+  control.value = current;
+  control.addEventListener("change", () => update(control.value));
+  return control;
+}
+function renderCompanyCreator(content) {
+  const panel = el("section", undefined, "admin-panel");
+  panel.append(el("h2", "接入新公司"));
+  const form = el("form", undefined, "settings-grid");
+  const companyId = el("input");
+  companyId.placeholder = "company_acme";
+  companyId.pattern = "company_[a-z0-9][a-z0-9_-]{1,63}";
+  companyId.required = true;
+  const name = el("input");
+  name.placeholder = "公司显示名称";
+  name.maxLength = 200;
+  name.required = true;
+  const feedback = el("p", "", "form-feedback full-row");
+  const submit = el("button", "创建公司", "primary");
+  submit.type = "submit";
+  form.append(
+    field("公司 ID", companyId, "创建后不可修改，用于隔离知识和交付事实。"),
+  );
+  form.append(field("公司名称", name));
+  form.append(feedback, submit);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    submit.disabled = true;
+    try {
+      await adminFetch("/api/v1/admin/companies", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          company_id: companyId.value.trim(),
+          name: name.value.trim(),
+        }),
+      });
+      await loadAdministration(settingsDraft.company_id);
+      administrationNotice = {
+        page: "settings",
+        text: "公司已创建。可在下方将它设为活动公司。",
+      };
+      render();
+    } catch (error) {
+      feedback.className = "form-feedback error full-row";
+      feedback.textContent =
+        error instanceof Error ? error.message : "公司创建失败。";
+      submit.disabled = false;
+    }
+  });
+  panel.append(form);
+  content.append(panel);
+}
+function renderSettings(content) {
+  if (!administrationAvailable || !settingsSnapshot || !settingsDraft) {
+    administrationUnavailable(content);
+    return;
+  }
+  if (administrationNotice?.page === "settings")
+    content.append(el("div", administrationNotice.text, "admin-notice"));
+  renderCompanyCreator(content);
+  const panel = el("section", undefined, "admin-panel");
+  const top = el("div", undefined, "row");
+  top.append(
+    el("h2", "平台运行配置"),
+    settingsSnapshot.restart_required
+      ? el("span", "已保存 · 需要重启", "badge blocked")
+      : el("span", "当前配置已生效", "badge done"),
+  );
+  panel.append(
+    top,
+    el("p", "配置文件 · " + settingsSnapshot.config_path, "paths"),
+  );
+  const form = el("form", undefined, "settings-form");
+  const general = el("div", undefined, "settings-grid");
+  const platformRoot = bindInput(
+    el("input"),
+    settingsDraft.platform_root,
+    (value) => {
+      if (value !== settingsDraft.platform_root)
+        settingsDraft.company_knowledge_paths = [];
+      settingsDraft.platform_root = value;
+    },
+  );
+  const company = selectInput(
+    administrationCompanies.map((item) => [
+      item.company_id,
+      `${item.name} · ${item.company_id}`,
+    ]),
+    settingsDraft.company_id,
+    async (value) => {
+      const selectedCompany = administrationCompanies.find(
+        (item) => item.company_id === value,
+      );
+      if (!selectedCompany) return;
+      settingsDraft.company_id = value;
+      settingsDraft.company_name = selectedCompany.name;
+      settingsDraft.company_knowledge_paths = [];
+      await loadKnowledge(value);
+      render();
+    },
+  );
+  const dsn = bindInput(
+    el("input"),
+    settingsDraft.database.dsn_env,
+    (value) => (settingsDraft.database.dsn_env = value),
+  );
+  const codex = bindInput(
+    el("input"),
+    settingsDraft.codex_executable,
+    (value) => (settingsDraft.codex_executable = value),
+  );
+  const port = bindInput(
+    el("input"),
+    String(settingsDraft.console_port),
+    (value) => (settingsDraft.console_port = Number(value)),
+    "number",
+  );
+  port.min = "1";
+  port.max = "65535";
+  const live = el("input");
+  live.type = "checkbox";
+  live.checked = settingsDraft.live_model_execution;
+  live.addEventListener(
+    "change",
+    () => (settingsDraft.live_model_execution = live.checked),
+  );
+  general.append(
+    field(
+      "平台数据目录",
+      platformRoot,
+      "必须是绝对路径；切换后会在新目录初始化当前公司，不迁移旧知识，并要求重启。",
+    ),
+    field("活动公司", company, "需求写操作只进入活动公司；切换后需要重启。"),
+    field("MySQL DSN 环境变量名", dsn, "页面只保存变量名，不读取或显示 DSN。"),
+    field("Codex 可执行文件", codex),
+    field("Web Console 端口", port, "修改端口后使用新地址重启。"),
+    field("启用真实模型执行", live),
+  );
+  form.append(general);
+  const secrets = el("section", undefined, "settings-subsection");
+  secrets.append(el("h3", "密钥状态"));
+  for (const item of settingsSnapshot.secret_status)
+    secrets.append(
+      el(
+        "p",
+        `${item.environment_name} · ${item.configured ? "已提供" : "未提供"}`,
+        item.configured ? "badge done" : "badge blocked",
+      ),
+    );
+  form.append(secrets);
+  const knowledge = el("section", undefined, "settings-subsection");
+  knowledge.append(
+    el("h3", "用于新需求的公司知识"),
+    el(
+      "p",
+      "知识选择变化会改变后续准备摘要；已经批准的交付不会被静默重解释。",
+      "muted",
+    ),
+  );
+  if (!knowledgeDocuments.length)
+    knowledge.append(el("p", "该公司尚未导入文档。", "muted"));
+  for (const item of knowledgeDocuments) {
+    const control = el("input");
+    const path = item.manifest.normalized_relative_path;
+    control.type = "checkbox";
+    control.checked = settingsDraft.company_knowledge_paths.includes(path);
+    control.addEventListener("change", () => {
+      const selected = new Set(settingsDraft.company_knowledge_paths);
+      if (control.checked) selected.add(path);
+      else selected.delete(path);
+      settingsDraft.company_knowledge_paths = [...selected].sort();
+    });
+    knowledge.append(field(item.manifest.source_name, control, path));
+  }
+  form.append(knowledge);
+  const routes = el("section", undefined, "settings-subsection");
+  const routesTop = el("div", undefined, "row");
+  routesTop.append(
+    el("h3", "模型路由（按顺序尝试）"),
+    button("添加路由", () => {
+      settingsDraft.model_routes.push({
+        provider: "provider",
+        model: "model",
+        kind: "responses",
+        endpoint: "https://example.invalid/v1/responses",
+        api_key_env: "MODEL_API_KEY",
+        reasoning_effort: "medium",
+        enabled: false,
+      });
+      render();
+    }),
+  );
+  routes.append(routesTop);
+  settingsDraft.model_routes.forEach((route, index) => {
+    const row = el("div", undefined, "route-card");
+    const fields = el("div", undefined, "settings-grid");
+    fields.append(
+      field(
+        "Provider",
+        bindInput(
+          el("input"),
+          route.provider,
+          (value) => (route.provider = value),
+        ),
+      ),
+      field(
+        "Model",
+        bindInput(el("input"), route.model, (value) => (route.model = value)),
+      ),
+      field(
+        "类型",
+        selectInput(
+          [
+            ["codex_cli", "Codex CLI"],
+            ["responses", "Responses API"],
+          ],
+          route.kind,
+          (value) => {
+            route.kind = value;
+            if (value === "codex_cli") {
+              route.endpoint = null;
+              route.api_key_env = null;
+            }
+            render();
+          },
+        ),
+      ),
+      field(
+        "Reasoning",
+        selectInput(
+          ["low", "medium", "high", "xhigh"].map((value) => [value, value]),
+          route.reasoning_effort,
+          (value) => (route.reasoning_effort = value),
+        ),
+      ),
+    );
+    if (route.kind === "responses")
+      fields.append(
+        field(
+          "Endpoint",
+          bindInput(
+            el("input"),
+            route.endpoint,
+            (value) => (route.endpoint = value),
+          ),
+        ),
+        field(
+          "API Key 环境变量名",
+          bindInput(
+            el("input"),
+            route.api_key_env,
+            (value) => (route.api_key_env = value),
+          ),
+        ),
+      );
+    const enabled = el("input");
+    enabled.type = "checkbox";
+    enabled.checked = route.enabled;
+    enabled.addEventListener("change", () => (route.enabled = enabled.checked));
+    row.append(fields, field("启用", enabled));
+    if (settingsDraft.model_routes.length > 1)
+      row.append(
+        button("移除路由", () => {
+          settingsDraft.model_routes.splice(index, 1);
+          render();
+        }),
+      );
+    routes.append(row);
+  });
+  form.append(routes);
+  const feedback = el("p", "", "form-feedback");
+  const save = el("button", "保存设置", "primary");
+  save.type = "submit";
+  form.append(feedback, save);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    save.disabled = true;
+    feedback.textContent = "正在校验并保存…";
+    try {
+      const saved = await adminFetch("/api/v1/admin/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ config: settingsDraft }),
+      });
+      settingsSnapshot = saved;
+      settingsDraft = structuredClone(saved.config);
+      administrationNotice = {
+        page: "settings",
+        text: saved.restart_required
+          ? "保存成功。请重启 Web Console 使新配置生效。"
+          : "保存成功，当前配置未改变。",
+      };
+      render();
+    } catch (error) {
+      feedback.className = "form-feedback error";
+      feedback.textContent =
+        error instanceof Error ? error.message : "设置保存失败。";
+      save.disabled = false;
+    }
+  });
+  panel.append(form);
+  content.append(panel);
 }
 function showDetail(kind, id) {
   selected = { kind, id };
@@ -787,33 +1289,43 @@ function render() {
     if (active) tab.setAttribute("aria-current", "true");
     companies.append(tab);
   }
-  document.getElementById("heading").textContent =
-    page === "team" ? "团队成员" : "需求与交付";
+  document.getElementById("heading").textContent = pageCopy[page][0];
+  document.getElementById("explanation").textContent = pageCopy[page][1];
   document.getElementById("new-request").hidden =
     page !== "requests" || !canControlCurrentCompany();
   const content = document.getElementById("content");
   content.replaceChildren();
   if (page === "team") renderTeam(content);
-  else renderRequests(content);
+  else if (page === "requests") renderRequests(content);
+  else if (page === "knowledge") renderKnowledge(content);
+  else renderSettings(content);
   renderComposer();
   renderOperationStatus();
   renderDetail();
   for (const node of document.querySelectorAll("details"))
     if (expanded.has(node.dataset.key)) node.open = true;
 }
-for (const target of ["team", "requests"])
-  document.getElementById("nav-" + target).addEventListener("click", () => {
-    page = target;
-    selected = null;
-    composing = false;
-    for (const key of ["team", "requests"]) {
-      const n = document.getElementById("nav-" + key);
-      n.classList.toggle("selected", key === page);
-      if (key === page) n.setAttribute("aria-current", "page");
-      else n.removeAttribute("aria-current");
-    }
-    render();
-  });
+function updateNavigation() {
+  for (const key of ["team", "requests", "knowledge", "settings"]) {
+    const node = document.getElementById("nav-" + key);
+    node.classList.toggle("selected", key === page);
+    if (key === page) node.setAttribute("aria-current", "page");
+    else node.removeAttribute("aria-current");
+  }
+}
+for (const target of ["team", "requests", "knowledge", "settings"])
+  document
+    .getElementById("nav-" + target)
+    .addEventListener("click", async () => {
+      administrationNotice = null;
+      page = target;
+      selected = null;
+      composing = false;
+      if (target === "knowledge") await loadAdministration(snapshot.company_id);
+      if (target === "settings") await loadAdministration();
+      updateNavigation();
+      render();
+    });
 document.getElementById("new-request").addEventListener("click", () => {
   composing = true;
   renderComposer();
@@ -852,7 +1364,9 @@ async function refresh(companyId) {
     timeout = setTimeout(() => controller.abort(), 40000);
   try {
     const target = companyId || (snapshot && snapshot.company_id);
-    const url = target ? "/api/v1/team/" + encodeURIComponent(target) : "/api/v1/team";
+    const url = target
+      ? "/api/v1/team/" + encodeURIComponent(target)
+      : "/api/v1/team";
     const response = await fetch(url, {
       cache: "no-store",
       signal: controller.signal,
@@ -874,6 +1388,8 @@ async function refresh(companyId) {
     const priorConsoleCompany = consoleCompanyId;
     snapshot = next;
     await refreshOperations();
+    if (page === "knowledge" && target !== undefined)
+      await loadAdministration(next.company_id);
     if (
       changed ||
       priorOperations !== JSON.stringify(operations) ||

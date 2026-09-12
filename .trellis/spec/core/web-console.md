@@ -34,11 +34,12 @@ create_console_app(
     *,
     company_id: str,
     port: int = 8765,
+    administration: ConsoleAdministration | None = None,
 ) -> FastAPI
 production_console_app(
     environment: Mapping[str, str] | None = None,
     *,
-    port: int = 8765,
+    port: int | None = None,
 ) -> FastAPI
 ```
 
@@ -174,4 +175,113 @@ prompt("plan sha256")
 
 // Correct: bind the exact digest to the button while rendering the facts being approved.
 submitOperation({ action: "CONTINUE_DELIVERY", approved_plan_sha256: approval.plan_sha256 })
+```
+
+## Scenario: Company, document knowledge and production settings administration
+
+### 1. Scope / Trigger
+
+Applies to `web_console.administration`, `/api/v1/admin/*`, Company creation, browser document upload,
+or mutation of the secret-free production configuration. It does not turn Team View into a write
+model and does not authorize remote/multi-user administration.
+
+### 2. Signatures
+
+```python
+ConsoleAdministration.companies() -> tuple[CompanySummary, ...]
+ConsoleAdministration.create_company(request: CreateCompanyRequest) -> CompanySummary
+ConsoleAdministration.knowledge(company_id: str) -> tuple[KnowledgeDocumentView, ...]
+ConsoleAdministration.import_document(*, company_id: str, filename: str,
+                                      content: bytes) -> KnowledgeDocumentView
+ConsoleAdministration.settings() -> SettingsSnapshot
+ConsoleAdministration.update_settings(request: UpdateSettingsRequest) -> SettingsSnapshot
+
+GET  /api/v1/admin/companies
+POST /api/v1/admin/companies
+GET  /api/v1/admin/companies/{company_id}/knowledge
+POST /api/v1/admin/companies/{company_id}/knowledge?filename=<basename>
+GET  /api/v1/admin/settings
+PUT  /api/v1/admin/settings
+```
+
+### 3. Contracts
+
+- Company creation uses `CompanyWorkspace.initialize`; ID/location/manifest replay and Company
+  isolation remain authoritative. The display name is fixed by the immutable Company manifest.
+- Document upload accepts only `application/octet-stream`, a safe basename and at most 10 MB.
+  Markdown/TXT must be UTF-8; PDF/DOCX are extracted by bounded dedicated parsers. Normalized output
+  must be non-empty and at most 256 KB. Original bytes, `content.md` and a digest-bound manifest are
+  published atomically under one content-addressed document directory.
+- Import never accepts a server-side source path and never calls a model, silently summarizes or
+  auto-selects a document. Only `ProductionConfig.company_knowledge_paths` selected in Settings enters
+  later preparation contexts through the existing Company knowledge guard.
+- Settings round-trip every current secret-free `ProductionConfig` field: platform root, active
+  Company/name, selected knowledge, database backend/DSN environment name, ordered model routes,
+  Codex executable, live execution and Console port. Referenced secret values never enter the API;
+  responses expose only environment-variable name plus configured/unconfigured status.
+- A save uses same-directory temporary file, fsync and atomic replace. It validates the selected
+  Company/name and every selected knowledge document before publication. Any changed saved config is
+  marked `restart_required`; the already constructed Host is not mutated or hot-switched.
+- When an explicit save selects a new `platform_root` without that Company, initialize the selected
+  immutable Company identity there. Do not migrate knowledge, projects, requests or organization
+  facts; knowledge selection must be empty until documents exist under the new root.
+- Administration endpoints are optional at the transport seam for read-only/contract fixtures, but
+  `ase-console` production composition must provide them. Existing Delivery commands remain bound to
+  the runtime-active Company until restart.
+
+### 4. Validation & Error Matrix
+
+| Case | Required result |
+|---|---|
+| Duplicate exact Company ID/name | Idempotent reopen; no manifest rewrite |
+| Existing Company ID with another name | 409 safe rejection |
+| Invalid/path-like Company ID | 422/404 before filesystem access |
+| Unsupported/dangerous filename or corrupt document | 422 generic safe error; no partial directory |
+| Upload over 10 MB or normalized body over 256 KB | 413/422; no published record |
+| Same document bytes uploaded twice | Return the original document identity |
+| Manifest/source/normalized digest or path drift | Entire knowledge listing fails closed |
+| Settings select unknown Company/name or invalid knowledge | 409; config file unchanged |
+| New platform root, current Company identity, empty knowledge selection | initialize that Company under the new root; save with restart required |
+| New platform root with old-root knowledge paths | 409; never copy or reinterpret the old files |
+| Plaintext DSN/API key in config payload | Pydantic/JSON Schema rejects unknown secret field |
+| Settings changed while Host is running | Persist plus `restart_required=true`; no hot mutation |
+
+### 5. Good / Base / Bad Cases
+
+- Good: create a Company, upload DOCX, inspect its content-addressed record, select `content.md`, save,
+  restart and prepare a new Delivery whose Company context digest binds that document.
+- Base: a Company with no documents is valid; no knowledge is loaded implicitly.
+- Bad: let the browser submit `/etc/passwd`, recursively scan `knowledge/`, keep only an AI summary,
+  store a DSN in config, or change the active Company inside an already-running Delivery Host.
+
+### 6. Tests Required
+
+- `tests/knowledge/test_documents.py`: all four formats, exact replay, context readiness, invalid name,
+  corrupt/empty input, source/manifest/content tamper and size bounds.
+- `tests/web_console/test_administration.py`: Company catalog/isolation, config write/read, selected
+  knowledge validation, secret status and restart semantics.
+- `tests/web_console/test_transport.py`: admin verbs, content types/body limits, typed errors and no
+  content/secret reflection.
+- `tests/team_view/ui.test.cjs`: Company creation, Knowledge and Settings navigation, structured model
+  route fields, secret status, upload/selection wording and safe text rendering.
+- `tests/contracts/test_json_schema_contracts.py`: production config/port and knowledge manifest
+  Python-to-Schema parity.
+
+### 7. Wrong vs Correct
+
+```python
+# Wrong: turns a local filename into ambient server filesystem authority.
+content = Path(request.json()["path"]).read_bytes()
+
+# Correct: the bounded browser body is the only source and becomes an immutable record.
+manifest = knowledge_store.import_document(filename=query.filename, content=await request.body())
+```
+
+```python
+# Wrong: mutate a Host that was constructed with another Company/knowledge/model policy.
+running_host.config = submitted_config
+
+# Correct: atomically persist, report the boundary, then reconstruct on restart.
+settings_store.save(submitted_config)
+return SettingsSnapshot(config=submitted_config, restart_required=True)
 ```

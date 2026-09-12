@@ -61,6 +61,12 @@ NEW → PLANNING → IMPLEMENTING ──complete──→ QA → REVIEW → DONE
 `.trellis/spec/core/company-workspace.md`。多仓入口和候选集验收见
 `.trellis/spec/core/multi-directory-delivery.md`；不得绕过联合批准或原生 QA/Review。
 
+Web Console 的公司管理只创建/打开经过 manifest 校验的 Company。知识上传只接受有界浏览器文件
+字节与安全 basename，不接受宿主机任意路径；Markdown/TXT/PDF/DOCX 必须保存原文件、规范化
+`content.md` 和内容寻址 manifest，且仍需在设置中显式选择。生产设置只持久化无密钥
+`ProductionConfig`；DSN/API key 只能显示环境变量是否已提供。活动公司、知识、目录、模型或端口
+变化必须提示重启并重新构造 Host，不得热改正在运行的 Delivery composition。
+
 平台可以接入任意本地项目；Task 的 `repository`/`project_root` 是目标项目的真实代码目录，
 也是默认命令 cwd。每个项目必须注册一个位于目标目录之外的 `ai_workspace_root`，由
 `ProjectWorkspaceRegistry` 建立固定 sidecar layout。ProjectProfile、项目级 prompt/规范、

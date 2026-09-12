@@ -10,7 +10,14 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Literal, Self
 
-from pydantic import Field, StrictBool, StringConstraints, field_validator, model_validator
+from pydantic import (
+    Field,
+    StrictBool,
+    StrictInt,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from ai_software_engineer.company_workspace import CompanyId, CompanyName, validate_knowledge_path
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
@@ -88,6 +95,7 @@ class ProductionConfig(DomainModel):
     model_routes: Annotated[tuple[ProviderRouteConfig, ...], Field(min_length=1, max_length=16)]
     codex_executable: NonEmptyStr = "codex"
     live_model_execution: StrictBool = False
+    console_port: Annotated[StrictInt, Field(ge=1, le=65535)] = 8765
 
     @field_validator("platform_root", mode="before")
     @classmethod
@@ -131,13 +139,18 @@ class ProductionConfig(DomainModel):
         environment: Mapping[str, str] | None = None,
     ) -> ProductionConfig:
         variables = environment if environment is not None else os.environ
+        return cls.from_file(cls.path_from_environment(variables))
+
+    @staticmethod
+    def path_from_environment(environment: Mapping[str, str] | None = None) -> Path:
+        """Resolve the operator-owned config path without reading or creating it."""
+        variables = environment if environment is not None else os.environ
         configured = variables.get("ASE_CONFIG")
-        path = (
+        return (
             Path(configured).expanduser()
             if configured
             else Path.home() / ".config" / "ai-software-engineer" / "config.json"
         )
-        return cls.from_file(path)
 
     def require_mysql_dsn(self, environment: Mapping[str, str]) -> str:
         """Resolve only the configured env name and never echo its value."""

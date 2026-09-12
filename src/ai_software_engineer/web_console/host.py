@@ -14,6 +14,7 @@ from ai_software_engineer.store import StoreError
 from ai_software_engineer.team_view.reader import ProductionTeamReader
 from ai_software_engineer.work_queue import QueueError
 
+from .administration import LocalConsoleAdministration
 from .core import ProjectConsole
 from .project_manager import ProjectManagerConsoleAdapter
 from .store import FileConsoleOperationStore
@@ -23,11 +24,12 @@ from .transport import create_console_app
 def production_console_app(
     environment: Mapping[str, str] | None = None,
     *,
-    port: int = 8765,
+    port: int | None = None,
 ) -> FastAPI:
-    _validate_port(port)
     variables = dict(environment if environment is not None else os.environ)
     config = ProductionConfig.from_environment(variables)
+    selected_port = config.console_port if port is None else port
+    _validate_port(selected_port)
     host = OrganizationTeamHost(config=config, environment=variables)
     store = FileConsoleOperationStore(
         host.company_workspace.requests_root / "_console_operations",
@@ -38,13 +40,25 @@ def production_console_app(
         executor=ProjectManagerConsoleAdapter(host),
     )
     reader = ProductionTeamReader(config, variables)
-    return create_console_app(console, reader, company_id=config.company_id, port=port)
+    administration = LocalConsoleAdministration(
+        runtime_config=config,
+        config_path=ProductionConfig.path_from_environment(variables),
+        environment=variables,
+    )
+    return create_console_app(
+        console,
+        reader,
+        company_id=config.company_id,
+        port=selected_port,
+        administration=administration,
+    )
 
 
 def main() -> None:
     try:
-        raw_port = os.environ.get("ASE_CONSOLE_PORT", "8765")
-        port = int(raw_port)
+        config = ProductionConfig.from_environment(os.environ)
+        raw_port = os.environ.get("ASE_CONSOLE_PORT")
+        port = int(raw_port) if raw_port is not None else config.console_port
         _validate_port(port)
         app = production_console_app(port=port)
     except (OSError, ProductionConfigError, QueueError, StoreError, ValueError) as error:

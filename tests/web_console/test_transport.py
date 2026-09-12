@@ -6,11 +6,14 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from ai_software_engineer.company_workspace import CompanyWorkspace
+from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.team_view.models import TeamSnapshot
 from ai_software_engineer.web_console import (
     ConsoleIntent,
     ConsoleOperation,
     InMemoryConsoleOperationStore,
+    LocalConsoleAdministration,
     create_console_app,
 )
 from ai_software_engineer.web_console.host import main
@@ -156,3 +159,72 @@ def test_console_host_missing_config_fails_without_traceback(
 
     with pytest.raises(SystemExit, match=r"^error: cannot load production configuration:"):
         main()
+
+
+def test_administration_endpoints_create_company_import_document_and_save_settings(
+    tmp_path: Path,
+) -> None:
+    config = ProductionConfig.model_validate(
+        {
+            "platform_root": str(tmp_path / "platform"),
+            "company_id": "company_test",
+            "company_name": "Test company",
+            "model_routes": [{"provider": "codex", "model": "gpt-5.6-terra", "kind": "codex_cli"}],
+        }
+    )
+    CompanyWorkspace.initialize(
+        config.platform_root, company_id=config.company_id, name=config.company_name
+    )
+    config_path = tmp_path / "config.json"
+    config_path.write_text(config.model_dump_json(indent=2), encoding="utf-8")
+    administration = LocalConsoleAdministration(
+        runtime_config=config,
+        config_path=config_path,
+        environment={"ASE_MYSQL_DSN": "mysql://user:secret@example.invalid/db"},
+    )
+    app = create_console_app(
+        _Console(),
+        _Reader(),
+        company_id="company_test",
+        port=8765,
+        administration=administration,
+    )
+
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        created = client.post(
+            "/api/v1/admin/companies",
+            json={"company_id": "company_other", "name": "Other company"},
+        )
+        imported = client.post(
+            "/api/v1/admin/companies/company_test/knowledge?filename=team-guide.md",
+            content=b"# Team guide\n",
+            headers={"Content-Type": "application/octet-stream"},
+        )
+        companies = client.get("/api/v1/admin/companies")
+        knowledge = client.get("/api/v1/admin/companies/company_test/knowledge")
+        settings = client.get("/api/v1/admin/settings")
+        updated_config = settings.json()["config"]
+        normalized_path = imported.json()["manifest"]["normalized_relative_path"]
+        updated_config["company_knowledge_paths"] = [normalized_path]
+        updated = client.put("/api/v1/admin/settings", json={"config": updated_config})
+        rejected = client.post(
+            "/api/v1/admin/companies/company_test/knowledge?filename=unsafe.exe",
+            content=b"binary",
+            headers={"Content-Type": "application/octet-stream"},
+        )
+
+    assert created.status_code == 201
+    assert imported.status_code == 201
+    assert companies.status_code == 200
+    assert [item["company_id"] for item in companies.json()] == [
+        "company_other",
+        "company_test",
+    ]
+    assert knowledge.json()[0]["manifest"]["source_name"] == "team-guide.md"
+    assert settings.json()["secret_status"] == [
+        {"environment_name": "ASE_MYSQL_DSN", "configured": True}
+    ]
+    assert updated.status_code == 200
+    assert updated.json()["restart_required"] is True
+    assert rejected.status_code == 422
+    assert "Team guide" not in imported.text

@@ -83,6 +83,7 @@
       "items": {"$ref": "#/$defs/route"}
     },
     "codex_executable": {"type": "string", "minLength": 1, "default": "codex"},
-    "live_model_execution": {"type": "boolean", "default": false}
+    "live_model_execution": {"type": "boolean", "default": false},
+    "console_port": {"type": "integer", "minimum": 1, "maximum": 65535, "default": 8765}
   }
 }

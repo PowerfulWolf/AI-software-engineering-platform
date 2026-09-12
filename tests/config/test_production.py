@@ -89,6 +89,15 @@ def test_duplicate_provider_model_route_is_rejected(tmp_path: Path) -> None:
         ProductionConfig.model_validate(payload)
 
 
+@pytest.mark.parametrize("console_port", [0, 65536, True])
+def test_console_port_is_bounded_and_strict(tmp_path: Path, console_port: object) -> None:
+    payload = _payload(tmp_path)
+    payload["console_port"] = console_port
+
+    with pytest.raises(ValidationError):
+        ProductionConfig.model_validate(payload)
+
+
 @pytest.mark.parametrize("system", ["darwin", "linux"])
 def test_omitted_platform_root_uses_home_independent_of_cwd_without_creating_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, system: str

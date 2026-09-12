@@ -16,6 +16,7 @@ from ai_software_engineer.context import ContextBudget, ContextSource, FileConte
 from ai_software_engineer.domain import AgentPermissions, AgentRole, NetworkAccess
 from ai_software_engineer.domain.model import WirePayload
 from ai_software_engineer.evaluation import HandoffBuilder
+from ai_software_engineer.knowledge_documents import CompanyKnowledgeDocumentStore
 from ai_software_engineer.project_workspace import ProjectWorkspaceRegistry
 from ai_software_engineer.runtime import RuntimeConfig
 from ai_software_engineer.web_console import (
@@ -200,12 +201,37 @@ def test_production_config_schema_allows_omitted_platform_root() -> None:
     _assert_valid(payload, "production-config.schema.json")
 
 
+@pytest.mark.parametrize("console_port", [0, 65536, True])
+def test_production_config_schema_rejects_invalid_console_port(console_port: int | bool) -> None:
+    payload: WirePayload = {
+        "model_routes": [{"provider": "codex", "model": "gpt-5.5", "kind": "codex_cli"}],
+        "console_port": console_port,
+    }
+
+    _assert_invalid(payload, "production-config.schema.json")
+
+
 def test_company_manifest_satisfies_canonical_schema(tmp_path: Path) -> None:
     workspace = CompanyWorkspace.initialize(tmp_path, company_id="company_test", name="Test")
     _assert_valid(workspace.manifest.to_wire(), "company-workspace.schema.json")
     malformed = workspace.manifest.to_wire()
     malformed["company_id"] = "../escape"
     _assert_invalid(malformed, "company-workspace.schema.json")
+
+
+def test_knowledge_document_manifest_satisfies_canonical_schema(tmp_path: Path) -> None:
+    company = CompanyWorkspace.initialize(tmp_path, company_id="company_test", name="Test")
+    manifest = CompanyKnowledgeDocumentStore(company).import_document(
+        filename="guide.md", content=b"# Guide\n"
+    )
+
+    _assert_valid(manifest.to_wire(), "knowledge-document.schema.json")
+    malformed = manifest.to_wire()
+    malformed["normalized_relative_path"] = "../escape.md"
+    _assert_invalid(malformed, "knowledge-document.schema.json")
+    missing_version = manifest.to_wire()
+    missing_version.pop("schema_version")
+    _assert_invalid(missing_version, "knowledge-document.schema.json")
 
 
 def test_production_config_schema_rejects_plaintext_secret(tmp_path: Path) -> None:

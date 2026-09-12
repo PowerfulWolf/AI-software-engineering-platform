@@ -16,6 +16,7 @@ Archive 是组织记忆的一部分，不依赖任何单个 Agent 的会话。�
 
 | 日期 | 基线 | 范围 | 记录 |
 |---|---|---|---|
+| 2026-09-12 | 本记录所在提交 | M16；Web Console 公司接入、本地文档知识库和无密钥生产设置 | [Company administration and document knowledge](2026-09-12-company-administration-document-knowledge.md) |
 | 2026-09-09 | 本记录所在提交 | T047；Delivery 统一 resume、失败 Coder 接手、候选复核/修复循环与实时看板 | [Universal delivery resume](2026-09-09-universal-delivery-resume.md) |
 | 2026-09-09 | 本记录所在提交 | 已有 candidate 的独立 QA/Reviewer 复核入口；保留原失败历史 | [Candidate verification recovery](2026-09-09-candidate-verification-recovery.md) |
 | 2026-09-08 | 本记录所在提交 | T044 D3；显式 Coder 补丁重应用，真实交付仍待验证 | [T044 冲突恢复](2026-09-08-t044-coder-reapply.md) |

@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/knowledge-document.schema.json",
+  "title": "KnowledgeDocumentManifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "document_id",
+    "company_id",
+    "source_name",
+    "media_type",
+    "source_relative_path",
+    "normalized_relative_path",
+    "source_bytes",
+    "normalized_bytes",
+    "source_sha256",
+    "normalized_sha256",
+    "imported_at",
+    "manifest_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "v0.1", "default": "v0.1"},
+    "document_id": {"type": "string", "pattern": "^knowledge_document_[a-f0-9]{32}$"},
+    "company_id": {"type": "string", "pattern": "^company_[a-z0-9][a-z0-9_-]{1,63}$"},
+    "source_name": {"type": "string", "minLength": 1, "maxLength": 200},
+    "media_type": {
+      "enum": ["text/markdown", "text/plain", "application/pdf", "application/docx"]
+    },
+    "source_relative_path": {
+      "type": "string",
+      "pattern": "^source\\.(?:md|txt|pdf|docx)$"
+    },
+    "normalized_relative_path": {
+      "type": "string",
+      "pattern": "^documents/knowledge_document_[a-f0-9]{32}/content\\.md$"
+    },
+    "source_bytes": {"type": "integer", "minimum": 1, "maximum": 10000000},
+    "normalized_bytes": {"type": "integer", "minimum": 1, "maximum": 256000},
+    "source_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "normalized_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "imported_at": {"type": "string", "format": "date-time"},
+    "manifest_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  }
+}

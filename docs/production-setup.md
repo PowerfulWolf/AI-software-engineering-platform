@@ -1,27 +1,27 @@
 # Production Team Host：部署与使用
 
-平台管理员配置一次组织 Team Host；之后用户创建需求项目、选择一个或多个代码目录，平台准备所有
-项目规范后再讨论需求。底层 `ase task ...` 不属于这条日常路径。
+平台管理员完成一次 bootstrap；之后用户从本地 Web Console 接入公司和知识、创建需求项目、选择
+一个或多个代码目录，平台准备所有项目规范后再讨论需求。底层 `ase task ...` 不属于日常路径。
 
 ## 1. 运行边界
 
 **Team Host 是团队运行的装配入口，不是一个 Agent，也不是 Docker 容器。**
 它读取组织配置，连接并初始化 MySQL，打开组织 workspace 与项目 sidecar 注册表，
-把模型适配器、Project Manager 工作流及隔离交付服务连接起来，提供给 CLI 使用。
+把模型适配器、Project Manager 工作流及隔离交付服务连接起来，提供给本地 Web Console 使用。
 Project Manager 负责推进工作；Host 负责让这些能力能够实际运行。
 
-当前 Host 是随 CLI 进程创建的 Python 对象，并非一直驻留后台的服务。命令退出后，
-工作进度保存在 MySQL 和外置 workspace；下一次命令重新装配 Host，再读取事实继续。
-因此“长期团队”指组织身份和工作记录持久化，不代表 Agent 或 Host 进程一直在线。
+`ase-console` 是当前推荐的常驻本机进程，Host 作为其中的 Python 组合对象存在；兼容 CLI
+仍会为一次诊断命令重新装配 Host。进程退出后，工作进度保存在 MySQL 和外置 workspace，重启后
+读取事实继续。因此“长期团队”指组织身份和工作记录持久化，不代表模型调用永远占用进程。
 
 ```text
 目标项目（代码与原生规范）
         │
         ▼
-ase request create / discuss / approve / resume
+浏览器：公司/知识/设置/需求与交付
         │
         ▼
-OrganizationTeamHost
+ase-console → OrganizationTeamHost
   ├── MySQL：Task、StateEvent、dispatch authority
   ├── organization workspace：AgentProfile、ModelPolicy、跨项目事实
   ├── company sidecar：公司知识、项目子模块、需求项目记录
@@ -104,7 +104,8 @@ cp config/production.example.json \
   "company_id": "company_default",
   "company_name": "Default company",
   "company_knowledge_paths": [],
-  "live_model_execution": true
+  "live_model_execution": true,
+  "console_port": 8765
 }
 ```
 
@@ -118,14 +119,20 @@ cp config/production.example.json \
 export ASE_CONFIG='/absolute/path/to/production.json'
 ```
 
+通过设置页切换到全新 `platform_root` 时，平台只在新根初始化当前 Company 身份；不会静默复制旧根的
+organization、知识、项目、需求或 worktree。旧知识选择会被清空，重启后应在新根重新导入并选择文档。
+
 `live_model_execution=false` 是示例文件的安全默认值；它会明确拒绝真实模型运行，不会偷偷切换 fake
 Agent。
 
 `company_id` 默认为 `company_default`，选定公司后项目自动收纳到它的 sidecar，无须每仓配置路径。
 这里的 Company 是知识和工作记录的隔离边界，不是特定业务团队；初次使用保留默认值即可。
 `company_name` 是首次注册的显示名；ID/名称与持久化 manifest 不一致时拒绝静默覆盖。
-公司知识文档放在 `companies/<company_id>/knowledge/`，`company_knowledge_paths` 只填写本次
-Host 需要的文档相对路径，例如 `["workflow.md"]`。这些资料是只读上下文，不会自动覆盖项目规范。
+日常通过 Web Console 的“公司知识库”上传 Markdown、TXT、PDF 或 DOCX。平台在
+`companies/<company_id>/knowledge/documents/<document_id>/` 保存原文件、不可变 manifest 和规范化
+`content.md`；`company_knowledge_paths` 只保存设置页明确勾选的规范化相对路径。兼容的手工 Markdown
+文件仍可放在 `knowledge/` 并显式填写路径，但不会被递归自动发现。这些资料是只读上下文，不会自动
+覆盖项目规范。
 已准备项目依赖的公司知识发生变化时，会拒绝继续旧交付，应检查变化并处理规范/上下文冲突。
 默认配置不读取任何额外公司文档，也不会自动迁移旧 `platform_root/projects/` 数据。
 平台、公司和项目 sidecar 目录只在显式的 Host 初始化、项目准备或交付写入流程中创建；加载配置和
@@ -167,7 +174,13 @@ Agent，即使它们碰巧使用同一模型也不能互相代替或自我批准
 uv run ase-console
 ```
 
-打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)，在“需求与交付”页完成：
+打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)，先在网页完成管理准备：
+
+1. 在“设置”创建公司，选择活动公司，并维护平台目录、MySQL 变量名、模型路由、Codex、执行开关和端口；
+2. 保存后若显示“需要重启”，重启 `ase-console`，让生产 Host 绑定新配置；
+3. 在“公司知识库”上传文档，回到设置页勾选需要用于新需求的知识并再次保存/重启。
+
+然后在“需求与交付”页完成：
 
 1. 新建需求项目，每行输入一个绝对代码目录；
 2. 等待 Project Manager 完成注册、ProjectProfile 发现和规范编译；
@@ -314,6 +327,7 @@ PR 或人工 Git 命令完成交付。
 ├── companies/<company_id>/      # 每个公司一个 sidecar
 │   ├── company.json
 │   ├── knowledge/               # 显式选择的公司共享资料
+│   │   └── documents/<id>/      # 上传原文件、content.md、manifest.json
 │   ├── projects/<project-id>/   # 项目知识及独立 per-repository 运行事实
 │   │   ├── workspace.json
 │   │   └── profile/ knowledge/ policy/ state/ contexts/ artifacts/ evidence/ ...

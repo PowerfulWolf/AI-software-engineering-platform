@@ -14,6 +14,9 @@ CompanyWorkspace.initialize(platform_root, *, company_id, name) -> CompanyWorksp
 CompanyWorkspace.project_registry() -> ProjectWorkspaceRegistry
 CompanyWorkspace.knowledge_sources(relative_paths: tuple[str, ...]) -> tuple[ContextSource, ...]
 CompanyWorkspace.requests_root -> Path
+discover_company_workspaces(platform_root) -> tuple[CompanyWorkspace, ...]
+CompanyKnowledgeDocumentStore(company).import_document(filename, content) -> KnowledgeDocumentManifest
+CompanyKnowledgeDocumentStore(company).list() -> tuple[KnowledgeDocumentManifest, ...]
 ProductionConfig.company_id: CompanyId = "company_default"
 ProductionConfig.company_name: str = "Default company"
 ProductionConfig.company_knowledge_paths: tuple[str, ...] = ()
@@ -46,6 +49,11 @@ and path checks. No migration/deletion of older top-level `projects/` is implici
 - Selected company knowledge is opaque context, bound by digest in the project baseline; it is
   not a higher-priority engineering rule and cannot override project-native rules. Natural-language
   conflicts still require human resolution, not automatic precedence inference.
+- Browser document import is content-addressed under `knowledge/documents/<document_id>/` and stores
+  the original source, normalized `content.md` and a hashed manifest. Supported v0.1 inputs are
+  UTF-8 Markdown/TXT, PDF and DOCX. Upload does not invoke a model or silently summarize content.
+  Exact source replay is idempotent; encrypted/unreadable/empty/oversized sources and records with
+  path, identity or digest drift fail closed.
 - Requirement Project journals live under the company's `requests/` and bind company identity and
   manifest digest. Input code scopes cannot overlap platform storage.
 - Company path names alone are not OS/multi-tenant access control. Strong tenant isolation remains
@@ -60,6 +68,9 @@ and path checks. No migration/deletion of older top-level `projects/` is implici
 | Same company reopened | Exact manifest replay; no overwrite |
 | Manifest drift, missing directory, symlink | Fail closed, preserve files |
 | Selected company document | Redacted content and digest-bound source only |
+| Imported Markdown/TXT/PDF/DOCX | Immutable source + normalized Markdown + manifest; explicit selection still required |
+| Duplicate source bytes | Return the original content-addressed document; do not create another version |
+| Invalid/encrypted/empty/oversized document | Reject before publishing a document directory |
 | Unselected project/company document | Not loaded |
 | Company knowledge changed after prepare | Existing preparation drift rejection, not silent context replacement |
 | Scope overlaps platform root | Reject before registering a module |
@@ -67,6 +78,7 @@ and path checks. No migration/deletion of older top-level `projects/` is implici
 ## Required tests
 
 Company workspace replay/corruption/path isolation; selected knowledge/redaction/budgets;
+document extractor success/failure, content replay, manifest/path/content tamper rejection;
 production config Schema; company-scoped delivery identity; production Host binding; existing
 single-repository delivery regression. Multi-directory production execution uses the separate
 `multi-directory-delivery.md` contract and real MySQL/Git joint E2E tests.
