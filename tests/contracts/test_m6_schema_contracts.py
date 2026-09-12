@@ -63,7 +63,7 @@ def _assert_valid(payload: Mapping[str, object], schema_name: str) -> None:
 
 def _identity() -> RunEvidenceIdentity:
     return RunEvidenceIdentity(
-        project_id="project_contract_m6",
+        repository_id="repository_contract_m6",
         task_id="task_contract_m6",
         run_id="run_contract_m6",
         agent_id="agent_contract_m6",
@@ -160,7 +160,7 @@ def test_projection_snapshot_wire_matches_projection_schemas() -> None:
         tasks=(
             TaskProjection(
                 task_id="task_contract_projection",
-                project_id="project_contract_projection",
+                repository_id="repository_contract_projection",
                 title="projection contract",
                 status=TaskStatus.DONE,
                 attempts=1,

@@ -1,4 +1,4 @@
-"""Organization-owned Agent workforce and run-allocation contracts."""
+"""Team-owned Agent workforce and run-allocation contracts."""
 
 from datetime import datetime
 from typing import Annotated, Literal, Self
@@ -10,11 +10,11 @@ from ai_software_engineer.domain.enums import (
     AgentRole,
     BrainTier,
     ModelRouteReason,
-    OrganizationRole,
     RiskTier,
+    TeamRole,
     WorkItemStatus,
 )
-from ai_software_engineer.domain.identity import ContextId, ProjectId, RunId
+from ai_software_engineer.domain.identity import ContextId, RepositoryId, RunId
 from ai_software_engineer.domain.model import DomainModel, JsonValue, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.task import AttemptCount, TaskId
 
@@ -51,7 +51,7 @@ class AgentProfile(DomainModel):
     version: AgentProfileVersion
     display_name: NonEmptyStr
     capabilities: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1)]
-    eligible_roles: Annotated[tuple[OrganizationRole, ...], Field(min_length=1)]
+    eligible_roles: Annotated[tuple[TeamRole, ...], Field(min_length=1)]
     max_parallel_assignments: ParallelAssignmentLimit
     default_model_policy_id: ModelPolicyId
     active: StrictBool = True
@@ -163,7 +163,7 @@ class WorkItem(DomainModel):
 
     kind: Literal["work_item"] = "work_item"
     task_id: TaskId
-    project_id: ProjectId
+    repository_id: RepositoryId
     status: WorkItemStatus
     priority: Priority
     risk: RiskTier
@@ -195,7 +195,7 @@ class RoleAssignment(DomainModel):
 
     kind: Literal["role_assignment"] = "role_assignment"
     id: AssignmentId
-    project_id: ProjectId
+    repository_id: RepositoryId
     task_id: TaskId
     agent_id: AgentId
     role: AgentRole
@@ -236,7 +236,7 @@ class AgentRunAllocation(DomainModel):
     kind: Literal["agent_run_allocation"] = "agent_run_allocation"
     run_id: RunId
     assignment_id: AssignmentId
-    project_id: ProjectId
+    repository_id: RepositoryId
     task_id: TaskId
     agent_id: AgentId
     role: AgentRole

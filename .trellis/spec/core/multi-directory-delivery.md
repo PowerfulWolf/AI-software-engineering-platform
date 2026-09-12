@@ -2,10 +2,11 @@
 
 ## 1. Scope / Trigger
 
-适用于 `multi_directory/`、Host/CLI、批准投影、候选集合及恢复。入口接受 1–32 个非相邻目录，不要求项目组、
-manifest 或共同父目录。一个 Git 仓库只形成一个 execution unit；保留用户所选模块目录的
-写入上界。联合事实保存在 `<platform_root>/companies/<company_id>/requests/<delivery_multi_id>/`，
-各仓库事实放在同公司 `projects/<project-id>/`。Agent 仍归组织，代码不复制、不污染。
+适用于 `multi_directory/`、Host/CLI、批准投影、候选集合及恢复。入口在一个已选择的 Project 中接受
+1–32 个非相邻目录，不要求共同父目录。一个 Git 仓库只形成一个 execution unit；保留用户所选模块
+目录的写入上界。联合事实保存在
+`<platform_root>/projects/<project_id>/requirements/<delivery_multi_id>/`，各 Repository 事实放在
+同一 Project 的 `repositories/<repository_id>/`。Agent 归唯一 Team，代码不复制、不污染。
 
 ## 2. Signatures
 
@@ -17,8 +18,8 @@ ase request status DELIVERY_ID
 ase request resume DELIVERY_ID
 ```
 
-`OrganizationTeamHost.requirement_entry() -> JointDeliveryService` 装配生产后端。
-`create(CreateRequirementProject) / reply(ReplyToProduct) / approve(ApproveProductSpec)
+`TeamHost.requirement_entry() -> JointDeliveryService` 装配生产后端。
+`create(CreateRequirement) / reply(ReplyToProduct) / approve(ApproveProductSpec)
 / resume(ResumeProjectDelivery) / status(str)` 均返回 `JointDeliveryResult(checkpoint=...)`。
 旧 `ase project start DIR... --requirement TEXT` 兼容：单根目录走原生、多目录走联合服务；
 单仓模块目录应使用 `request create`，由 scope discovery 归并为真实仓库根。
@@ -30,7 +31,7 @@ ase request resume DELIVERY_ID
 多目录不是多个互不相关的 Product 会话。子仓库 Product/Design/Plan 是已批准联合事实的确定性
 投影，不重新询问用户、不重新生成需求。每个子 Task 仍串行 Coder → QA → Reviewer。
 
-- create 准备所有目录后停在 READY_FOR_DISCUSSION，不调用模型。同名+同公司+同 scope（含
+- create 准备所有目录后停在 READY_FOR_DISCUSSION，不调用模型。同名+同 Project+同 scope（含
   base SHA）幂等恢复；新需求使用新名称。dialogue、product_spec、approval、design、plan、children、
   integration、attempts 和 next_action 都保存在带 sequence/前后 SHA 的 JointCheckpoint。
 - 主状态链：PREPARING → READY_FOR_DISCUSSION → PRODUCT_DISCOVERY → WAITING_PRODUCT_APPROVAL
@@ -42,7 +43,7 @@ ase request resume DELIVERY_ID
   dispatch、Task、worktree、独立 QA/Review 和 Artifact/Evidence 守卫不得绕过。
 - integration 使用全部 write candidate SHA 和 reference-only base SHA，在外置 detached worktrees
   执行。每条接口至少一个 check 同时消费 producer 和全部 consumers；证据绑定精确 plan/candidate set。
-- 测试 argv 必须同时匹配 ProjectProfile allowlist 和支持的测试前缀，禁止 shell/inline code、
+- 测试 argv 必须同时匹配 RepositoryProfile allowlist 和支持的测试前缀，禁止 shell/inline code、
   install/deploy、inspection 替代测试、常见 help/collect-only/skip-tests 参数；明确零测试的成功退出拒绝。
 - cwd 是 check.unit_id 的候选根；环境只有 PATH、PYTHONDONTWRITEBYTECODE 和
   `ASE_UNIT_<uppercase 16hex unit suffix>`（对应候选路径）。不传 Host secrets；输出脱敏、限长、有超时。
@@ -83,8 +84,8 @@ ase request resume DELIVERY_ID
 重新启动恢复、候选集漂移、部分成功、失败集成验收、单目录入口回归；生产桥接另用离线
 structured provider + 真实 Git worktree + MySQL 验证，不消耗真实模型额度。
 
-对应 `test_directory_scope.py`、`test_joint_contracts.py`、`test_company_workspace.py`、
-`test_company_host.py` 与 `tests/e2e/test_joint_delivery.py`。五份 joint/request canonical Schema
+对应 `test_directory_scope.py`、`test_joint_contracts.py`、`test_team_workspace.py`、
+`test_team_host.py` 与 `tests/e2e/test_joint_delivery.py`。五份 joint/request canonical Schema
 必须与 Pydantic 完全一致。全量 MySQL 回归不可由独立 E2E 或 skipped suite 替代。
 
 ## 7. Wrong vs Correct
@@ -122,14 +123,14 @@ unchanged. Bad: infer test coverage, silently add IDs, or retry without explaini
 Wrong: catch every exception and pass raw error text to the model. Correct: catch only the dedicated
 trusted coverage error, seal the diagnostic checkpoint, and preserve fail-closed behavior.
 
-Regression: `tests/project_manager/test_joint_planner_feedback.py` exercises service + real journal
+Regression: `tests/manager/test_joint_planner_feedback.py` exercises service + real journal
 with deterministic models, restart, exact input IDs, preserved approval, strict rejection, and
 attempt exhaustion. It does not claim live model success or independent QA/Review of feature code.
 
 ## 9. Exact integration command context (T039)
 
 Scope: Planner context and `ProductionJointBackend.validate_plan` command preflight. General
-ProjectProfile commands are broader than integration tests; neither list alone grants execution.
+RepositoryProfile commands are broader than integration tests; neither list alone grants execution.
 `integration_commands.planner_command_policy() -> dict[str, object]` returns a fresh copy of
 `test_prefixes`, `forbidden_options`, and the project-allowlist-intersection requirement.
 `is_test_command(argv: tuple[str, ...]) -> bool` enforces those same immutable constants. No prefix
@@ -189,7 +190,7 @@ the last DESIGNING checkpoint remains inspectable, with no accepted design or do
 
 Good: Designer corrects the complete document using durable `next_action`; Base: first valid
 design behaves as before; Bad: silently deduplicate consumers and approve the altered document.
-`tests/project_manager/test_joint_designer_feedback.py` uses a deterministic provider and real
+`tests/manager/test_joint_designer_feedback.py` uses a deterministic provider and real
 journal to assert exact rejection, correction before planning, preserved approval, interruption,
 budget exhaustion/reopen, safe diagnostics, and no retry for unrelated violations.
 

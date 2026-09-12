@@ -1,4 +1,4 @@
-"""Offline cross-language acceptance test for the unified Project Manager entry."""
+"""Offline cross-language acceptance test for the unified Manager entry."""
 
 from __future__ import annotations
 
@@ -36,6 +36,35 @@ from ai_software_engineer.domain import (
     TechnicalDesign,
     derive_delivery_task,
 )
+from ai_software_engineer.manager import (
+    FileProjectBaselineCompilationStore,
+    FileProjectDeliveryCheckpointStore,
+    FileProjectPreparationStore,
+    ManagerSkillService,
+    PrepareProjectRequest,
+    PrepareProjectResult,
+)
+from ai_software_engineer.manager.delivery import (
+    ApproveProductSpec,
+    DeliveryBackendFailure,
+    DeliveryCheckpointStale,
+    ProjectDeliveryCheckpointCatalog,
+    ReplyToProduct,
+    ResumeProjectDelivery,
+    StartProjectDelivery,
+    UnifiedProjectEntryService,
+)
+from ai_software_engineer.manager.delivery_checkpoint import (
+    DeliveryFailureCode,
+    DeliveryStage,
+    ProjectDeliveryCheckpoint,
+)
+from ai_software_engineer.manager.dispatch import DispatchCommitRecord
+from ai_software_engineer.manager.stages import (
+    ProjectStage,
+    ProjectStageAdvancer,
+    StageAdvanceRequest,
+)
 from ai_software_engineer.orchestration import (
     BlockedResult,
     RetryClassification,
@@ -50,49 +79,20 @@ from ai_software_engineer.product import (
     ProductDiscoveryStatus,
     ProjectRequestRevision,
 )
-from ai_software_engineer.project_manager import (
-    FileProjectBaselineCompilationStore,
-    FileProjectDeliveryCheckpointStore,
-    FileProjectPreparationStore,
-    PrepareProjectRequest,
-    PrepareProjectResult,
-    ProjectManagerSkillService,
-)
-from ai_software_engineer.project_manager.delivery import (
-    ApproveProductSpec,
-    DeliveryBackendFailure,
-    DeliveryCheckpointStale,
-    ProjectDeliveryCheckpointCatalog,
-    ReplyToProduct,
-    ResumeProjectDelivery,
-    StartProjectDelivery,
-    UnifiedProjectEntryService,
-)
-from ai_software_engineer.project_manager.delivery_checkpoint import (
-    DeliveryFailureCode,
-    DeliveryStage,
-    ProjectDeliveryCheckpoint,
-)
-from ai_software_engineer.project_manager.dispatch import DispatchCommitRecord
-from ai_software_engineer.project_manager.stages import (
-    ProjectStage,
-    ProjectStageAdvancer,
-    StageAdvanceRequest,
-)
-from ai_software_engineer.project_profile import ProjectProfile
-from ai_software_engineer.project_workspace import ProjectWorkspaceRegistry
 from ai_software_engineer.recovery.resume import (
     DeliveryResumeController,
     DeliveryResumeOutcome,
 )
-from ai_software_engineer.runtime_workspace import OrganizationWorkspace
+from ai_software_engineer.repository_profile import RepositoryProfile
+from ai_software_engineer.runtime_workspace import TeamWorkforceWorkspace
 from ai_software_engineer.spec_compiler import SpecRule, SpecRuleLayer
+from ai_software_engineer.team_workspace import TeamWorkspace
 
 NOW = datetime(2026, 9, 2, 10, 0, tzinfo=UTC)
 
 
 class _NoProjectRules:
-    def rules_for(self, profile: ProjectProfile) -> Sequence[SpecRule]:
+    def rules_for(self, profile: RepositoryProfile) -> Sequence[SpecRule]:
         del profile
         return ()
 
@@ -101,9 +101,19 @@ class _OfflineBackend:
     """Use the real preparation service and deterministic stage facts after it."""
 
     def __init__(self, platform: Path) -> None:
-        organization = OrganizationWorkspace.initialize(
-            platform / "organization",
-            organization_id="organization_unified_e2e",
+        team = TeamWorkspace.initialize(
+            platform,
+            team_id="team_unified_e2e",
+            name="Unified E2E Team",
+        )
+        project = team.project_registry().register(
+            project_id="project_unified_e2e",
+            name="Unified E2E Project",
+        )
+        self.repository_registry_root = project.repository_registry().registry_root
+        organization = TeamWorkforceWorkspace.initialize(
+            team.root,
+            team_id="team_unified_e2e",
             created_at=NOW,
         )
         hard_rule = SpecRule(
@@ -116,9 +126,9 @@ class _OfflineBackend:
             source_sha256="a" * 64,
             rationale="No Agent may approve its own work.",
         )
-        self._preparer = ProjectManagerSkillService(
+        self._preparer = ManagerSkillService(
             organization=organization,
-            registry=ProjectWorkspaceRegistry(platform / "projects"),
+            registry=project.repository_registry(),
             platform_rules=(hard_rule,),
             rule_provider=_NoProjectRules(),
             preparation_store_factory=FileProjectPreparationStore,
@@ -134,9 +144,9 @@ class _OfflineBackend:
         self.dispatch: DispatchCommitRecord | None = None
         self.reconciliations = 0
 
-    def prepare(self, project_root: str) -> PrepareProjectResult:
+    def prepare(self, repository_root: str) -> PrepareProjectResult:
         self.prepared = self._preparer.prepare_project(
-            PrepareProjectRequest(project_root=project_root)
+            PrepareProjectRequest(repository_root=repository_root)
         )
         return self.prepared
 
@@ -149,7 +159,7 @@ class _OfflineBackend:
         assert preparation.preparation is not None
         request = ProjectRequest.create(
             request_id=f"request_{delivery_id.removeprefix('delivery_')}",
-            project_id=preparation.project_id,
+            repository_id=preparation.repository_id,
             preparation_sha256=preparation.preparation.preparation_sha256,
             title=command.title,
             original_request=command.requirement,
@@ -172,7 +182,7 @@ class _OfflineBackend:
         spec = ProductSpec.create(
             spec_id=f"product_spec_{delivery_id.removeprefix('delivery_')}",
             request_id=request.id,
-            project_id=request.project_id,
+            repository_id=request.repository_id,
             version=1,
             status=ProductSpecStatus.READY_FOR_REVIEW,
             summary=command.requirement,
@@ -191,7 +201,7 @@ class _OfflineBackend:
         )
         checkpoint = ProductDiscoveryCheckpoint.create(
             request_id=request.id,
-            project_id=request.project_id,
+            repository_id=request.repository_id,
             revision=1,
             previous_checkpoint_sha256=None,
             request_revision=1,
@@ -235,7 +245,7 @@ class _OfflineBackend:
         prior = self.product.request_revision
         request = ProjectRequest.create(
             request_id=prior.request.id,
-            project_id=prior.request.project_id,
+            repository_id=prior.request.repository_id,
             preparation_sha256=prior.request.preparation_sha256,
             title=prior.request.title,
             original_request=prior.request.original_request,
@@ -251,7 +261,7 @@ class _OfflineBackend:
         )
         product_checkpoint = ProductDiscoveryCheckpoint.create(
             request_id=request.id,
-            project_id=request.project_id,
+            repository_id=request.repository_id,
             revision=2,
             previous_checkpoint_sha256=self.product.checkpoint.checkpoint_sha256,
             request_revision=revision.revision,
@@ -365,7 +375,7 @@ class _OfflineBackend:
         prior = self.product.request_revision
         request = ProjectRequest.create(
             request_id=prior.request.id,
-            project_id=prior.request.project_id,
+            repository_id=prior.request.repository_id,
             preparation_sha256=prior.request.preparation_sha256,
             title=prior.request.title,
             original_request=prior.request.original_request,
@@ -402,7 +412,7 @@ class _OfflineBackend:
             self.design,
             self.plan,
             task_id=f"task_{checkpoint.delivery_id.removeprefix('delivery_')}",
-            repository=self.prepared.preparation.project_root,
+            repository=self.prepared.preparation.repository_root,
             base_ref="a" * 40,
             max_attempts=1,
             created_at=checkpoint.checkpointed_at,
@@ -547,11 +557,11 @@ def test_directory_and_requirement_reach_done_without_polluting_target(
     backend = _OfflineBackend(platform)
     service = UnifiedProjectEntryService(
         backend=backend,
-        catalog=ProjectDeliveryCheckpointCatalog(platform / "projects"),
+        catalog=ProjectDeliveryCheckpointCatalog(backend.repository_registry_root),
     )
     started = service.start(
         StartProjectDelivery(
-            project_root=str(project.resolve()),
+            repository_root=str(project.resolve()),
             requirement="Add a deterministic greeting.",
             submitted_at=NOW,
         )
@@ -573,7 +583,7 @@ def test_directory_and_requirement_reach_done_without_polluting_target(
     assert _files(project) == before
     reopened = UnifiedProjectEntryService(
         backend=backend,
-        catalog=ProjectDeliveryCheckpointCatalog(platform / "projects"),
+        catalog=ProjectDeliveryCheckpointCatalog(backend.repository_registry_root),
     ).status(completed.checkpoint.delivery_id)
     assert reopened.checkpoint == completed.checkpoint
     assert backend.reconciliations >= 1
@@ -587,14 +597,14 @@ def test_resume_replays_durable_intake_after_product_start_interruption(
     backend = _InterruptedProductBackend(platform)
     service = UnifiedProjectEntryService(
         backend=backend,
-        catalog=ProjectDeliveryCheckpointCatalog(platform / "projects"),
+        catalog=ProjectDeliveryCheckpointCatalog(backend.repository_registry_root),
     )
     started_at = NOW - timedelta(minutes=5)
 
     with pytest.raises(RuntimeError, match="simulated process interruption"):
         service.start(
             StartProjectDelivery(
-                project_root=str(project.resolve()),
+                repository_root=str(project.resolve()),
                 requirement="Add a durable greeting.",
                 title="Durable greeting",
                 submitted_at=started_at,
@@ -603,7 +613,7 @@ def test_resume_replays_durable_intake_after_product_start_interruption(
 
     checkpoint = next(
         path.parent.name
-        for path in (platform / "projects").glob(
+        for path in backend.repository_registry_root.glob(
             "*/state/project-deliveries/delivery_*/0000000002.json"
         )
     )
@@ -624,7 +634,7 @@ def test_repeated_start_recovers_intake_published_before_first_checkpoint(
     backend = _OfflineBackend(platform)
     service = UnifiedProjectEntryService(
         backend=backend,
-        catalog=ProjectDeliveryCheckpointCatalog(platform / "projects"),
+        catalog=ProjectDeliveryCheckpointCatalog(backend.repository_registry_root),
     )
     original_put = FileProjectDeliveryCheckpointStore.put
 
@@ -637,7 +647,7 @@ def test_repeated_start_recovers_intake_published_before_first_checkpoint(
     monkeypatch.setattr(FileProjectDeliveryCheckpointStore, "put", interrupt_first_checkpoint)
     started_at = NOW - timedelta(minutes=10)
     command = StartProjectDelivery(
-        project_root=str(project.resolve()),
+        repository_root=str(project.resolve()),
         requirement="Add a recoverable greeting.",
         title="Recoverable greeting",
         submitted_at=started_at,
@@ -657,11 +667,11 @@ def test_stale_approval_has_zero_effects(tmp_path: Path) -> None:
     project = _copy_fixture(tmp_path, "python")
     platform = tmp_path / "platform"
     backend = _OfflineBackend(platform)
-    catalog = ProjectDeliveryCheckpointCatalog(platform / "projects")
+    catalog = ProjectDeliveryCheckpointCatalog(backend.repository_registry_root)
     service = UnifiedProjectEntryService(backend=backend, catalog=catalog)
     started = service.start(
         StartProjectDelivery(
-            project_root=str(project.resolve()),
+            repository_root=str(project.resolve()),
             requirement="Add a fenced greeting.",
             submitted_at=NOW,
         )
@@ -691,11 +701,11 @@ def test_delivery_budget_exhaustion_returns_stable_blocked_checkpoint(
     backend = _BlockedDeliveryBackend(platform)
     service = UnifiedProjectEntryService(
         backend=backend,
-        catalog=ProjectDeliveryCheckpointCatalog(platform / "projects"),
+        catalog=ProjectDeliveryCheckpointCatalog(backend.repository_registry_root),
     )
     started = service.start(
         StartProjectDelivery(
-            project_root=str(project.resolve()),
+            repository_root=str(project.resolve()),
             requirement="Add a bounded greeting.",
             submitted_at=NOW,
         )
@@ -725,11 +735,11 @@ def test_classified_invalid_output_becomes_a_safe_checkpoint(tmp_path: Path) -> 
     backend = _InvalidPlannerBackend(platform)
     service = UnifiedProjectEntryService(
         backend=backend,
-        catalog=ProjectDeliveryCheckpointCatalog(platform / "projects"),
+        catalog=ProjectDeliveryCheckpointCatalog(backend.repository_registry_root),
     )
     started = service.start(
         StartProjectDelivery(
-            project_root=str(project.resolve()),
+            repository_root=str(project.resolve()),
             requirement="Add a validated greeting.",
             submitted_at=NOW,
         )
@@ -755,11 +765,11 @@ def test_resume_reenters_exact_transient_pre_task_stage(tmp_path: Path) -> None:
     backend = _TransientPlannerBackend(platform)
     service = UnifiedProjectEntryService(
         backend=backend,
-        catalog=ProjectDeliveryCheckpointCatalog(platform / "projects"),
+        catalog=ProjectDeliveryCheckpointCatalog(backend.repository_registry_root),
     )
     started = service.start(
         StartProjectDelivery(
-            project_root=str(project.resolve()),
+            repository_root=str(project.resolve()),
             requirement="Add a resumable greeting.",
             submitted_at=NOW,
         )
@@ -797,11 +807,11 @@ def test_resume_retries_delivery_startup_before_any_coder_run(
     project = _copy_fixture(tmp_path, "python")
     platform = tmp_path / "platform"
     backend = _TransientDeliveryStartupBackend(platform)
-    catalog = ProjectDeliveryCheckpointCatalog(platform / "projects")
+    catalog = ProjectDeliveryCheckpointCatalog(backend.repository_registry_root)
     service = UnifiedProjectEntryService(backend=backend, catalog=catalog)
     started = service.start(
         StartProjectDelivery(
-            project_root=str(project.resolve()),
+            repository_root=str(project.resolve()),
             requirement="Add a resumable greeting.",
             submitted_at=NOW,
         )

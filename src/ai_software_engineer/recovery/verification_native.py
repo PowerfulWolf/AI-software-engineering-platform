@@ -7,18 +7,16 @@ from pathlib import Path
 from ai_software_engineer.agents import FileModelRouteAttemptStore
 from ai_software_engineer.agents.fallback import model_route_root
 from ai_software_engineer.artifacts import FileArtifactStore, artifact_digest
-from ai_software_engineer.company_workspace import CompanyWorkspace, _read_regular, _reject_symlinks
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.domain import AgentRole
 from ai_software_engineer.domain.artifact import ImplementationReportArtifact, PlanArtifact
-from ai_software_engineer.project_manager.delivery_checkpoint import (
+from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryStage,
     FileProjectDeliveryCheckpointStore,
     ProjectDeliveryCheckpoint,
     checkpoint_sha256_is_ancestor,
 )
-from ai_software_engineer.project_manager.dispatch import ContinuationDispatchRecord
-from ai_software_engineer.project_workspace import ProjectWorkspaceManifest
+from ai_software_engineer.manager.dispatch import ContinuationDispatchRecord
 from ai_software_engineer.recovery.models import RecoveryRejected, RecoveryScope, digest
 from ai_software_engineer.recovery.native import NativeApprovedStages, _parent, read_approved_stages
 from ai_software_engineer.recovery.store import FileRecoveryStore
@@ -32,6 +30,8 @@ from ai_software_engineer.recovery.verification_snapshot import (
     read_candidate_source_snapshot,
     terminal_candidate_event,
 )
+from ai_software_engineer.repository_workspace import RepositoryWorkspaceManifest
+from ai_software_engineer.team_workspace import TeamWorkspace, _read_regular, _reject_symlinks
 
 
 @dataclass(frozen=True)
@@ -59,21 +59,25 @@ class NativeCandidateSourceReader:
             ) from error
 
     def _inspect(self, scope: RecoveryScope) -> NativeCandidateSource:
-        if scope.company_id != self.config.company_id:
-            raise ValueError("company mismatch")
-        company = CompanyWorkspace.initialize(
+        if scope.team_id != self.config.team_id:
+            raise ValueError("team mismatch")
+        team = TeamWorkspace.initialize(
             self.config.platform_root,
-            company_id=scope.company_id,
-            name=self.config.company_name,
+            team_id=scope.team_id,
+            name=self.config.team_name,
             read_only=True,
         )
-        root = company.root / "projects" / scope.project_id
+        _, repository = team.project_registry().locate_repository(scope.repository_id)
+        root = repository.root
         _reject_symlinks(root)
-        manifest = ProjectWorkspaceManifest.model_validate_json(
+        manifest = RepositoryWorkspaceManifest.model_validate_json(
             _read_regular(root / "workspace.json", 64_000)
         )
         manifest.validate_binding(root)
-        if manifest.project_id != scope.project_id or manifest.project_root != scope.project_root:
+        if (
+            manifest.repository_id != scope.repository_id
+            or manifest.repository_root != scope.repository_root
+        ):
             raise ValueError("project binding mismatch")
         journal = FileProjectDeliveryCheckpointStore(
             root / "state/project-deliveries", read_only=True
@@ -83,10 +87,10 @@ class NativeCandidateSourceReader:
         intake = journal.get_intake(scope.delivery_id)
         if (
             current.stage not in (DeliveryStage.BLOCKED, DeliveryStage.FAILED)
-            or current.project_id != scope.project_id
-            or current.project_root != scope.project_root
-            or intake.project_id != scope.project_id
-            or intake.project_root != scope.project_root
+            or current.repository_id != scope.repository_id
+            or current.repository_root != scope.repository_root
+            or intake.repository_id != scope.repository_id
+            or intake.repository_root != scope.repository_root
         ):
             raise ValueError("not a terminal scoped delivery")
         cp, terminal, runtime, continuation = read_candidate_source_snapshot(
@@ -101,7 +105,7 @@ class NativeCandidateSourceReader:
             runtime.planner_dispatch,
             current_dispatch=runtime.dispatch,
         )
-        parent_id, parent_sha = _parent(company, terminal, stages.approval)
+        parent_id, parent_sha = _parent(team, terminal, stages.approval)
         artifacts = FileArtifactStore(root / "artifacts", read_only=True)
         candidate_checkpoint = terminal_candidate_event(runtime.task, runtime.events)
         implementation = artifacts.get(candidate_checkpoint.artifact_ids[0])
@@ -177,7 +181,7 @@ class NativeCandidateSourceReader:
                 current_dispatch=runtime.dispatch,
             )
             != stages
-            or _parent(company, terminal, stages.approval) != (parent_id, parent_sha)
+            or _parent(team, terminal, stages.approval) != (parent_id, parent_sha)
         ):
             raise ValueError("candidate source changed during inspection")
         return NativeCandidateSource(

@@ -39,7 +39,7 @@ CONTEXT_ID = "ctx_" + "c" * 64
 
 def _identity(*, role: AgentRole = AgentRole.CODER) -> RunEvidenceIdentity:
     return RunEvidenceIdentity(
-        project_id="project_evidence_001",
+        repository_id="repository_evidence_001",
         task_id="task_evidence_001",
         run_id="run_evidence_001",
         agent_id="agent_evidence_001",

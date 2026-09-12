@@ -155,16 +155,16 @@ h3 {
   color: var(--muted);
   margin: 12px 0 26px;
 }
-.company-tabs {
+.team-tabs {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
   margin: 18px 0 0;
 }
-.company-tabs:empty {
+.team-tabs:empty {
   display: none;
 }
-.company-tabs button[aria-selected="true"] {
+.team-tabs button[aria-selected="true"] {
   border-color: var(--accent);
   background: #e9effd;
   color: #244fa7;

@@ -13,63 +13,66 @@ from ai_software_engineer.domain import (
     BrainTier,
     ModelPolicy,
     ModelRoute,
-    OrganizationRole,
     RiskModelFloor,
     RiskTier,
     Task,
     TaskStatus,
+    TeamRole,
 )
-from ai_software_engineer.project_profile import ProjectProfile
-from ai_software_engineer.project_workspace import ProjectWorkspace, ProjectWorkspaceRegistry
+from ai_software_engineer.repository_profile import RepositoryProfile
+from ai_software_engineer.repository_workspace import RepositoryWorkspace
 from ai_software_engineer.runtime import RuntimeConfig
 from ai_software_engineer.runtime_workspace import (
-    ORGANIZATION_DIRECTORIES,
-    FileOrganizationWorkforceStore,
-    OrganizationWorkspace,
+    TEAM_WORKFORCE_DIRECTORIES,
+    FileTeamWorkforceStore,
     RuntimeWorkspaceBinder,
     RuntimeWorkspaceBinding,
     RuntimeWorkspaceConflict,
     RuntimeWorkspaceCorruption,
+    TeamWorkforceWorkspace,
 )
 from ai_software_engineer.spec_compiler import SpecCompiler, SpecRule, SpecRuleLayer
+from ai_software_engineer.team_workspace import TeamWorkspace
 
 NOW = datetime(2026, 9, 1, 14, 0, tzinfo=UTC)
 
 
-def project_workspace(tmp_path: Path) -> tuple[ProjectWorkspace, ProjectProfile, Path]:
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / "README.md").write_text("project-owned\n", encoding="utf-8")
-    workspace = ProjectWorkspaceRegistry(tmp_path / "project-sidecars").register(
-        project,
-        project_id="project_runtime_001",
+def repository_workspace(tmp_path: Path) -> tuple[RepositoryWorkspace, RepositoryProfile, Path]:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    (repository / "README.md").write_text("repository-owned\n", encoding="utf-8")
+    team = TeamWorkspace.initialize(
+        tmp_path / "platform", team_id="team_engineering_001", name="Engineering"
     )
-    profile = ProjectProfile.discover(
-        project,
-        project_id=workspace.project_id,
+    project = team.project_registry().register(
+        project_id="project_runtime_001", name="Runtime Project"
+    )
+    workspace = project.repository_registry().register(repository)
+    profile = RepositoryProfile.discover(
+        repository,
+        repository_id=workspace.repository_id,
         observed_at=NOW,
     )
-    return workspace, profile, project
+    return workspace, profile, repository
 
 
-def organization(tmp_path: Path) -> OrganizationWorkspace:
-    return OrganizationWorkspace.initialize(
-        tmp_path / "organization-workspace",
-        organization_id="organization_engineering_001",
-        created_at=NOW,
+def organization(tmp_path: Path) -> TeamWorkforceWorkspace:
+    team = TeamWorkspace.initialize(
+        tmp_path / "platform", team_id="team_engineering_001", name="Engineering"
     )
+    return TeamWorkforceWorkspace.from_team(team)
 
 
 def bind(
     tmp_path: Path,
 ) -> tuple[
-    OrganizationWorkspace,
-    ProjectWorkspace,
-    ProjectProfile,
+    TeamWorkforceWorkspace,
+    RepositoryWorkspace,
+    RepositoryProfile,
     Path,
     RuntimeWorkspaceBinding,
 ]:
-    workspace, profile, project = project_workspace(tmp_path)
+    workspace, profile, project = repository_workspace(tmp_path)
     org = organization(tmp_path)
     binding = RuntimeWorkspaceBinder().bind(org, workspace, profile, bound_at=NOW)
     return org, workspace, profile, project, binding
@@ -113,20 +116,20 @@ def runtime_task(project: Path) -> Task:
 def test_binding_places_platform_state_outside_target_and_matches_schema(tmp_path: Path) -> None:
     org, workspace, profile, project, binding = bind(tmp_path)
 
-    assert Path(binding.project_root) == project.resolve()
-    assert Path(binding.organization_root) == org.root
+    assert Path(binding.repository_root) == project.resolve()
+    assert Path(binding.team_root) == org.root
     assert Path(binding.paths.database).parent == workspace.directory("state")
     assert Path(binding.paths.artifacts) == workspace.directory("artifacts")
     assert Path(binding.paths.contexts) == workspace.directory("contexts")
     assert Path(binding.paths.evaluation_events) == workspace.directory("evaluations")
     assert Path(binding.paths.handoffs) == workspace.directory("handoffs")
-    assert set(path.name for path in org.root.iterdir()) == {
-        *ORGANIZATION_DIRECTORIES,
-        "organization.json",
-    }
+    assert {
+        *TEAM_WORKFORCE_DIRECTORIES,
+        "team.json",
+    } <= {path.name for path in org.root.iterdir()}
     assert set(path.name for path in project.iterdir()) == {"README.md"}
     assert not (project / ".ase").exists()
-    assert (workspace.directory("profile") / "project-profile.json").is_file()
+    assert (workspace.directory("profile") / "repository-profile.json").is_file()
     assert (workspace.directory("policy") / "runtime-workspace-binding.json").is_file()
     binding.validate_integrity()
     profile.validate_integrity()
@@ -157,15 +160,15 @@ def test_binding_replay_preserves_first_observation(tmp_path: Path) -> None:
 
 
 def test_binding_rejects_stale_profile_and_tampered_project_manifest(tmp_path: Path) -> None:
-    workspace, profile, project = project_workspace(tmp_path)
+    workspace, profile, project = repository_workspace(tmp_path)
     org = organization(tmp_path)
     (project / "pyproject.toml").write_text("[project]\nname='changed'\n", encoding="utf-8")
-    with pytest.raises(RuntimeWorkspaceConflict, match="current project facts"):
+    with pytest.raises(RuntimeWorkspaceConflict, match="current repository facts"):
         RuntimeWorkspaceBinder().bind(org, workspace, profile, bound_at=NOW)
 
-    fresh_profile = ProjectProfile.discover(
+    fresh_profile = RepositoryProfile.discover(
         project,
-        project_id=workspace.project_id,
+        repository_id=workspace.repository_id,
         observed_at=NOW,
     )
     payload = json.loads(workspace.manifest_path.read_text(encoding="utf-8"))
@@ -179,7 +182,7 @@ def test_compose_runtime_config_replaces_legacy_paths_and_injects_compiled_spec(
     tmp_path: Path,
 ) -> None:
     _org, _workspace, profile, _project, binding = bind(tmp_path)
-    task = runtime_task(Path(binding.project_root))
+    task = runtime_task(Path(binding.repository_root))
     compiled = SpecCompiler().compile(profile, task, (hard_rule(),), compiled_at=NOW)
     assert compiled.compiled_spec is not None
     config = RuntimeConfig(
@@ -196,17 +199,17 @@ def test_compose_runtime_config_replaces_legacy_paths_and_injects_compiled_spec(
     assert Path(bound.paths.database).is_absolute()
 
 
-def test_organization_workforce_store_is_idempotent_and_detects_tampering(
+def test_team_workforce_store_is_idempotent_and_detects_tampering(
     tmp_path: Path,
 ) -> None:
     org = organization(tmp_path)
-    store = FileOrganizationWorkforceStore(org)
+    store = FileTeamWorkforceStore(org)
     agent = AgentProfile(
         id="agent_runtime_coder_001",
         version="v1",
         display_name="Runtime Coder",
         capabilities=("python",),
-        eligible_roles=(OrganizationRole.CODER,),
+        eligible_roles=(TeamRole.CODER,),
         max_parallel_assignments=2,
         default_model_policy_id="model_policy_runtime_001",
     )
@@ -228,7 +231,7 @@ def test_organization_workforce_store_is_idempotent_and_detects_tampering(
 
 def test_policy_revisions_preserve_legacy_and_require_exact_version(tmp_path: Path) -> None:
     org = organization(tmp_path)
-    store = FileOrganizationWorkforceStore(org)
+    store = FileTeamWorkforceStore(org)
     old = model_policy()
     store.put_policy(old)
     legacy = org.directory("model-policies") / f"{old.id}.json"

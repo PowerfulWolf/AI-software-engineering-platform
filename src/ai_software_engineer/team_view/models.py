@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import AwareDatetime
 
-from ai_software_engineer.domain.enums import AgentRole, OrganizationRole
+from ai_software_engineer.domain.enums import AgentRole, TeamRole
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.projection.models import TimelineEntry
 
@@ -47,6 +47,7 @@ class RunView(DomainModel):
 
 class TaskView(DomainModel):
     id: str
+    project_id: str
     request_id: str
     work_kind: Literal["delivery", "candidate_verification", "remediation"] = "delivery"
     task_id: str | None = None
@@ -72,6 +73,7 @@ class TaskView(DomainModel):
 
 class RequestView(DomainModel):
     id: str
+    project_id: str
     title: str
     stage: str
     scopes: tuple[ScopeView, ...]
@@ -84,7 +86,7 @@ class RequestView(DomainModel):
 class AgentView(DomainModel):
     id: str
     name: str
-    roles: tuple[OrganizationRole, ...]
+    roles: tuple[TeamRole, ...]
     capabilities: tuple[str, ...]
     enabled: bool
     max_parallel_assignments: int
@@ -94,17 +96,20 @@ class AgentView(DomainModel):
     history_delivery_ids: tuple[str, ...] = ()
 
 
-class CompanyView(DomainModel):
+class ProjectView(DomainModel):
     id: str
     name: str
+    repository_count: int = 0
+    requirement_count: int = 0
 
 
 class TeamSnapshot(DomainModel):
-    schema_version: Literal["v0.1"] = "v0.1"
+    schema_version: Literal["v0.2"] = "v0.2"
     as_of: AwareDatetime
-    company_id: str
-    company_name: str
-    companies: tuple[CompanyView, ...] = ()
+    team_id: str
+    team_name: str
+    selected_project_id: str | None = None
+    projects: tuple[ProjectView, ...] = ()
     agents: tuple[AgentView, ...] = ()
     requests: tuple[RequestView, ...] = ()
     tasks: tuple[TaskView, ...] = ()

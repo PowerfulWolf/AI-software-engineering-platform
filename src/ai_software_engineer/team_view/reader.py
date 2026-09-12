@@ -8,46 +8,39 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from pydantic import TypeAdapter
 from pymysql.cursors import DictCursor
 
 from ai_software_engineer.agents.fallback import FileModelRouteAttemptStore, model_route_root
 from ai_software_engineer.artifacts import FileArtifactStore
-from ai_software_engineer.company_workspace import (
-    CompanyId,
-    CompanyManifest,
-    CompanyWorkspace,
-    _read_regular,
-    _reject_symlinks,
-)
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.domain.enums import AgentRole, TaskStatus
 from ai_software_engineer.evaluation import FileEvaluationEventStore
-from ai_software_engineer.multi_directory.models import JointCheckpoint, digest
-from ai_software_engineer.multi_directory.production import DerivedStageInputs
-from ai_software_engineer.multi_directory.scope import git_read
-from ai_software_engineer.multi_directory.store import JointJournal
-from ai_software_engineer.project_manager.delivery import _delivery_id
-from ai_software_engineer.project_manager.delivery_checkpoint import (
+from ai_software_engineer.manager.delivery import _delivery_id
+from ai_software_engineer.manager.delivery_checkpoint import (
     FileProjectDeliveryCheckpointStore,
     ProjectDeliveryCheckpoint,
     ProjectDeliveryIntake,
     checkpoint_is_ancestor,
 )
-from ai_software_engineer.project_manager.dispatch import (
+from ai_software_engineer.manager.dispatch import (
     ContinuationDispatchRecord,
     VerificationReservation,
 )
-from ai_software_engineer.project_manager.mysql_dispatch_authority import _decode_allocation
-from ai_software_engineer.project_workspace import ProjectWorkspaceManifest
+from ai_software_engineer.manager.mysql_dispatch_authority import _decode_allocation
+from ai_software_engineer.multi_directory.models import JointCheckpoint, digest
+from ai_software_engineer.multi_directory.production import DerivedStageInputs
+from ai_software_engineer.multi_directory.scope import git_read
+from ai_software_engineer.multi_directory.store import JointJournal
+from ai_software_engineer.project_workspace import ProjectWorkspace
 from ai_software_engineer.projection.models import ProjectionFacts
 from ai_software_engineer.projection.projector import RunProjectionBuilder
 from ai_software_engineer.recovery.models import RecoveryScope
 from ai_software_engineer.recovery.store import FileRecoveryStore, RecoveryRecordMissing
 from ai_software_engineer.redaction import redact_text
+from ai_software_engineer.repository_workspace import RepositoryWorkspaceManifest
 from ai_software_engineer.runtime_workspace import (
-    FileOrganizationWorkforceStore,
-    OrganizationWorkspace,
+    FileTeamWorkforceStore,
+    TeamWorkforceWorkspace,
 )
 from ai_software_engineer.store.mysql_repository import (
     _decode_event,
@@ -55,12 +48,17 @@ from ai_software_engineer.store.mysql_repository import (
     _text,
     open_mysql_connection,
 )
+from ai_software_engineer.team_workspace import (
+    _read_regular,
+    _reject_symlinks,
+    discover_team_workspaces,
+)
 
 from .models import (
     AgentView,
     AssignmentView,
-    CompanyView,
     DocumentView,
+    ProjectView,
     RequestView,
     RunView,
     ScopeView,
@@ -95,43 +93,61 @@ class ProductionTeamReader:
     def from_environment(cls) -> ProductionTeamReader:
         return cls(ProductionConfig.from_environment(), os.environ)
 
-    def snapshot(self, company_id: str | None = None) -> TeamSnapshot:
+    def snapshot(self, project_id: str | None = None) -> TeamSnapshot:
         try:
-            return self._snapshot(company_id)
+            return self._snapshot(project_id)
         except Exception as error:
             # Read failure must not become a successful empty team or expose a DSN/path secret.
             raise TeamReadError(
                 "Team data unavailable; check configuration, MySQL and workspace integrity."
             ) from error
 
-    def _snapshot(self, company_id: str | None) -> TeamSnapshot:
-        companies = self._companies()
-        selected_id = self.config.company_id if company_id is None else company_id
-        TypeAdapter(CompanyId).validate_python(selected_id)
-        company = next(
-            (item for item in companies if item.manifest.company_id == selected_id), None
+    def _snapshot(self, project_id: str | None) -> TeamSnapshot:
+        teams = discover_team_workspaces(self.config.platform_root)
+        if len(teams) != 1:
+            raise ValueError("team workspace has not been prepared")
+        team = teams[0]
+        if team.manifest.team_id != self.config.team_id:
+            raise ValueError("configured Team identity does not match the prepared Team")
+        projects = team.project_registry().discover()
+        selected_id = project_id or self.config.default_project_id
+        if selected_id is None and projects:
+            selected_id = projects[0].manifest.project_id
+        selected = next(
+            (item for item in projects if item.manifest.project_id == selected_id), None
         )
-        if company is None:
-            raise ValueError("company workspace has not been prepared")
-        organization = OrganizationWorkspace.open(Path(self.config.platform_root) / "organization")
-        workforce = FileOrganizationWorkforceStore(organization)
+        if selected_id is not None and selected is None:
+            raise ValueError("Project workspace has not been prepared")
+        workforce_workspace = TeamWorkforceWorkspace.from_team(team)
+        workforce = FileTeamWorkforceStore(workforce_workspace)
         profiles = tuple(
             workforce.get_agent(path.stem)
-            for path in _files(organization.directory("agents"), "*.json")
+            for path in _files(workforce_workspace.directory("agents"), "*.json")
         )
-        journal = JointJournal(company.requests_root, read_only=True)
+        journal = (
+            JointJournal(selected.requirements_root, read_only=True)
+            if selected is not None
+            else None
+        )
         joints: list[JointCheckpoint] = []
-        for path in _directories(company.requests_root, "delivery_multi_*"):
+        for path in _directories(
+            selected.requirements_root if selected is not None else Path("/nonexistent"),
+            "delivery_multi_*",
+        ):
+            assert journal is not None
+            assert selected is not None
             checkpoint = journal.current(path.name)
             if checkpoint is None:
                 continue  # an operation lock can precede the first committed checkpoint
             if (
-                checkpoint.company_id != company.manifest.company_id
-                or checkpoint.company_manifest_sha256 != company.manifest.manifest_sha256
+                checkpoint.team_id != team.manifest.team_id
+                or checkpoint.team_manifest_sha256 != team.manifest.manifest_sha256
+                or checkpoint.project_id != selected.manifest.project_id
+                or checkpoint.project_manifest_sha256 != selected.manifest.manifest_sha256
             ):
-                raise ValueError("request company mismatch")
+                raise ValueError("Requirement Team or Project mismatch")
             joints.append(checkpoint)
-        natives = _read_native(company)
+        natives = _read_native(selected) if selected is not None else ()
         by_id = {n.checkpoint.delivery_id: n for n in natives}
         ownership: dict[str, tuple[str, ScopeView]] = {}
         requests: list[RequestView] = []
@@ -143,7 +159,9 @@ class ProductionTeamReader:
                 if joint.plan is not None and not reference:
                     derived = DerivedStageInputs(joint, unit.id)
                     native_id = _delivery_id(
-                        derived.root, derived.requirement, namespace=joint.company_id
+                        derived.root,
+                        derived.requirement,
+                        namespace=joint.project_id,
                     )
                 scope = ScopeView(
                     root=unit.root,
@@ -180,6 +198,7 @@ class ProductionTeamReader:
             requests.append(
                 RequestView(
                     id=joint.delivery_id,
+                    project_id=joint.project_id,
                     title=_safe(joint.title),
                     stage=joint.stage,
                     scopes=tuple(scopes),
@@ -192,6 +211,7 @@ class ProductionTeamReader:
         tasks: list[TaskView] = []
         # Filesystem prefixes first, SQL snapshot second: SQL cannot lag the captured checkpoints.
         if natives:
+            assert selected is not None
             connection = open_mysql_connection(self.config.require_mysql_dsn(self._environment))
             try:
                 with connection.cursor(DictCursor) as cursor:
@@ -205,15 +225,21 @@ class ProductionTeamReader:
                             (
                                 cp.delivery_id,
                                 ScopeView(
-                                    root=cp.project_root,
+                                    root=cp.repository_root,
                                     selected_paths=(".",),
                                     delivery_id=cp.delivery_id,
                                 ),
                             ),
                         )
-                        if scope.root != cp.project_root:
+                        if scope.root != cp.repository_root:
                             raise ValueError("child code scope mismatch")
-                        view = _read_task(native, request_id, scope, cursor)
+                        view = _read_task(
+                            native,
+                            selected.manifest.project_id,
+                            request_id,
+                            scope,
+                            cursor,
+                        )
                         tasks.append(view)
                         for task_id, source_native in _native_task_sources(native).items():
                             existing = native_by_task.get(task_id)
@@ -228,6 +254,7 @@ class ProductionTeamReader:
                             requests.append(
                                 RequestView(
                                     id=cp.delivery_id,
+                                    project_id=selected.manifest.project_id,
                                     title=_safe(native.intake.title),
                                     stage=cp.stage,
                                     scopes=(scope,),
@@ -241,7 +268,8 @@ class ProductionTeamReader:
                         _read_verifications(
                             cursor,
                             native_by_task,
-                            company_id=company.manifest.company_id,
+                            team_id=team.manifest.team_id,
+                            project_id=selected.manifest.project_id,
                         )
                     )
             finally:
@@ -249,7 +277,7 @@ class ProductionTeamReader:
                 connection.close()
         known_agents = {p.id for p in profiles}
         if any(a.agent_id not in known_agents for t in tasks for a in t.assignments):
-            raise ValueError("assignment references an unknown organization member")
+            raise ValueError("assignment references an unknown Team member")
         agents = tuple(
             AgentView(
                 id=p.id,
@@ -279,52 +307,37 @@ class ProductionTeamReader:
         )
         return TeamSnapshot(
             as_of=datetime.now(UTC),
-            company_id=company.manifest.company_id,
-            company_name=_safe(company.manifest.name),
-            companies=tuple(
-                CompanyView(id=item.manifest.company_id, name=_safe(item.manifest.name))
-                for item in companies
+            team_id=team.manifest.team_id,
+            team_name=_safe(team.manifest.name),
+            selected_project_id=selected.manifest.project_id if selected is not None else None,
+            projects=tuple(
+                ProjectView(
+                    id=item.manifest.project_id,
+                    name=_safe(item.manifest.name),
+                    repository_count=len(item.repository_registry().discover()),
+                    requirement_count=len(_directories(item.requirements_root, "delivery_multi_*")),
+                )
+                for item in projects
             ),
             agents=agents,
             requests=tuple(sorted(requests, key=lambda r: r.id)),
             tasks=tuple(sorted(tasks, key=lambda t: (t.last_activity, t.id), reverse=True)),
         )
 
-    def _companies(self) -> tuple[CompanyWorkspace, ...]:
-        root = Path(self.config.platform_root).expanduser().absolute().resolve() / "companies"
-        _reject_symlinks(root)
-        if not root.is_dir():
-            raise ValueError("company workspace has not been prepared")
-        companies: list[CompanyWorkspace] = []
-        for directory in _directories(root, "company_*"):
-            manifest_path = directory / "company.json"
-            _reject_symlinks(manifest_path)
-            if not manifest_path.is_file():
-                continue
-            manifest = CompanyManifest.model_validate_json(_read_regular(manifest_path, 16_000))
-            manifest.validate_integrity()
-            companies.append(
-                CompanyWorkspace.initialize(
-                    self.config.platform_root,
-                    company_id=manifest.company_id,
-                    name=manifest.name,
-                    read_only=True,
-                )
-            )
-        if not any(item.manifest.company_id == self.config.company_id for item in companies):
-            raise ValueError("configured company workspace has not been prepared")
-        return tuple(sorted(companies, key=lambda item: item.manifest.company_id))
 
-
-def _read_native(company: CompanyWorkspace) -> tuple[_Native, ...]:
+def _read_native(project: ProjectWorkspace) -> tuple[_Native, ...]:
     result: list[_Native] = []
-    for sidecar in _directories(company.root / "projects", "project_*"):
-        manifest = ProjectWorkspaceManifest.model_validate_json(
+    for sidecar in _directories(project.root / "repositories", "repository_*"):
+        manifest = RepositoryWorkspaceManifest.model_validate_json(
             _read_regular(sidecar / "workspace.json", 64_000)
         )
         manifest.validate_binding(sidecar)
-        if manifest.project_id != sidecar.name:
-            raise ValueError("project directory identity mismatch")
+        if (
+            manifest.repository_id != sidecar.name
+            or manifest.project_id != project.manifest.project_id
+            or manifest.project_manifest_sha256 != project.manifest.manifest_sha256
+        ):
+            raise ValueError("Repository workspace Project binding mismatch")
         root = sidecar / "state" / "project-deliveries"
         _reject_symlinks(root)
         if not root.exists():
@@ -337,10 +350,10 @@ def _read_native(company: CompanyWorkspace) -> tuple[_Native, ...]:
             cp = records[-1]
             intake = store.get_intake(cp.delivery_id)
             if (
-                cp.project_id != manifest.project_id
-                or cp.project_root != manifest.project_root
-                or intake.project_id != cp.project_id
-                or intake.project_root != cp.project_root
+                cp.repository_id != manifest.repository_id
+                or cp.repository_root != manifest.repository_root
+                or intake.repository_id != cp.repository_id
+                or intake.repository_root != cp.repository_root
             ):
                 raise ValueError("native checkpoint project mismatch")
             result.append(_Native(cp, intake, sidecar, records))
@@ -355,8 +368,8 @@ def _native_task_sources(native: _Native) -> dict[str, _Native]:
     for index, checkpoint in enumerate(native.history):
         if (
             checkpoint.delivery_id != native.checkpoint.delivery_id
-            or checkpoint.project_id != native.checkpoint.project_id
-            or checkpoint.project_root != native.checkpoint.project_root
+            or checkpoint.repository_id != native.checkpoint.repository_id
+            or checkpoint.repository_root != native.checkpoint.repository_root
         ):
             raise ValueError("native checkpoint history binding mismatch")
         if checkpoint.task_id is None:
@@ -410,10 +423,17 @@ def _stage_refs(cp: ProjectDeliveryCheckpoint) -> tuple[DocumentView, ...]:
     )
 
 
-def _read_task(native: _Native, request_id: str, scope: ScopeView, cursor: DictCursor) -> TaskView:
+def _read_task(
+    native: _Native,
+    project_id: str,
+    request_id: str,
+    scope: ScopeView,
+    cursor: DictCursor,
+) -> TaskView:
     cp = native.checkpoint
     base = TaskView(
         id=cp.delivery_id,
+        project_id=project_id,
         request_id=request_id,
         task_id=cp.task_id,
         title=_safe(native.intake.title),
@@ -425,7 +445,7 @@ def _read_task(native: _Native, request_id: str, scope: ScopeView, cursor: DictC
         blocker=_safe(cp.failure_summary or cp.next_action) if _waiting(cp.stage) else None,
         next_action=cp.next_action,
         candidate_revision=cp.candidate_revision,
-        candidate_branch=_candidate_branch(cp.project_root, cp.task_id, cp.candidate_revision),
+        candidate_branch=_candidate_branch(cp.repository_root, cp.task_id, cp.candidate_revision),
         documents=_stage_refs(cp),
     )
     return _read_task_details(native, cursor, base)
@@ -435,7 +455,8 @@ def _read_verifications(
     cursor: DictCursor,
     native_by_task: Mapping[str, tuple[_Native, str, ScopeView]],
     *,
-    company_id: str,
+    team_id: str,
+    project_id: str,
 ) -> tuple[TaskView, ...]:
     """Project verification reservations as first-class read-side work items."""
     cursor.execute(
@@ -452,7 +473,7 @@ def _read_verifications(
             str(row["completion_sha256"]) if row["completion_sha256"] is not None else None
         )
         reservations.append((reservation, completion_sha256))
-        key = (str(reservation.project_id), str(reservation.source_task_id))
+        key = (str(reservation.repository_id), str(reservation.source_task_id))
         latest = latest_by_source.get(key)
         if latest is None or reservation.committed_at > latest.committed_at:
             latest_by_source[key] = reservation
@@ -460,18 +481,18 @@ def _read_verifications(
             raise ValueError("ambiguous verification reservation order")
     result: list[TaskView] = []
     validated_sources: set[str] = set()
-    project_ids = {native.checkpoint.project_id for native, _, _ in native_by_task.values()}
+    repository_ids = {native.checkpoint.repository_id for native, _, _ in native_by_task.values()}
     for reservation, completion_sha256 in reservations:
         source = native_by_task.get(str(reservation.source_task_id))
         if source is None:
-            if reservation.project_id in project_ids:
+            if reservation.repository_id in repository_ids:
                 raise ValueError("verification reservation source Task is missing")
             continue
         native, request_id, source_scope = source
-        if reservation.project_id != native.checkpoint.project_id:
+        if reservation.repository_id != native.checkpoint.repository_id:
             raise ValueError("verification reservation project mismatch")
         if reservation.source_task_id not in validated_sources:
-            source_view = _read_task(native, request_id, source_scope, cursor)
+            source_view = _read_task(native, project_id, request_id, source_scope, cursor)
             if source_view.task_id != reservation.source_task_id:
                 raise ValueError("verification reservation source Task is missing")
             validated_sources.add(reservation.source_task_id)
@@ -485,11 +506,12 @@ def _read_verifications(
                 superseded=(
                     completion_sha256 is None
                     and latest_by_source[
-                        (str(reservation.project_id), str(reservation.source_task_id))
+                        (str(reservation.repository_id), str(reservation.source_task_id))
                     ].plan_sha256
                     != reservation.plan_sha256
                 ),
-                company_id=company_id,
+                team_id=team_id,
+                project_id=project_id,
             )
         )
     return tuple(result)
@@ -503,7 +525,8 @@ def _verification_view(
     completion_sha256: str | None,
     *,
     superseded: bool,
-    company_id: str,
+    team_id: str,
+    project_id: str,
 ) -> TaskView:
     verification_id = f"verification_{reservation.plan_sha256[:32]}"
     current_role = AgentRole.QA
@@ -519,10 +542,10 @@ def _verification_view(
     completion = None
     if store_root.exists():
         scope = RecoveryScope(
-            company_id=company_id,
-            project_id=native.checkpoint.project_id,
+            team_id=team_id,
+            repository_id=native.checkpoint.repository_id,
             delivery_id=native.checkpoint.delivery_id,
-            project_root=native.checkpoint.project_root,
+            repository_root=native.checkpoint.repository_root,
         )
         store = FileRecoveryStore(store_root, scope=scope)
         plan = store.get_verification_plan(reservation.plan_sha256)
@@ -605,6 +628,7 @@ def _verification_view(
     )
     return TaskView(
         id=verification_id,
+        project_id=project_id,
         request_id=request_id,
         work_kind="candidate_verification",
         task_id=reservation.task_id,
@@ -621,7 +645,7 @@ def _verification_view(
         next_action=next_action,
         candidate_revision=native.checkpoint.candidate_revision,
         candidate_branch=_candidate_branch(
-            native.checkpoint.project_root,
+            native.checkpoint.repository_root,
             reservation.source_task_id,
             native.checkpoint.candidate_revision,
         ),
@@ -645,8 +669,8 @@ def _read_task_details(native: _Native, cursor: DictCursor, base: TaskView) -> T
     dispatch = _decode_allocation(row)
     if (
         dispatch.dispatch_sha256 != cp.dispatch_commit_sha256
-        or dispatch.project_id != cp.project_id
-        or dispatch.task.repository != cp.project_root
+        or dispatch.repository_id != cp.repository_id
+        or dispatch.task.repository != cp.repository_root
         or (cp.task_id is not None and dispatch.task_id != cp.task_id)
     ):
         raise ValueError("dispatch checkpoint mismatch")
@@ -790,12 +814,12 @@ def _read_runs(
 
 
 def _candidate_branch(
-    project_root: str, task_id: str | None, candidate_revision: str | None
+    repository_root: str, task_id: str | None, candidate_revision: str | None
 ) -> str | None:
     if task_id is None or candidate_revision is None:
         return None
     value = git_read(
-        Path(project_root),
+        Path(repository_root),
         "for-each-ref",
         f"--points-at={candidate_revision}",
         "--format=%(refname:short)",

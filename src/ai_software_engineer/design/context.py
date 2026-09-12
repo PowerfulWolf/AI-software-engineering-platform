@@ -1,4 +1,4 @@
-"""Task-free, digest-bound context routing for the Solution Designer."""
+"""Task-free, digest-bound context routing for the Designer."""
 
 from __future__ import annotations
 
@@ -17,16 +17,16 @@ from ai_software_engineer.domain import (
     ProjectRequestStatus,
     require_product_approval,
 )
-from ai_software_engineer.domain.identity import ContextId, ProjectId
+from ai_software_engineer.domain.identity import ContextId, RepositoryId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.project_delivery import ProjectRequestId, StageSha256
-from ai_software_engineer.project_manager.baseline import ProjectSpecBaseline
-from ai_software_engineer.project_manager.stages import ProjectStage, StageAdvanceAuthorization
-from ai_software_engineer.project_profile import ProjectProfile
+from ai_software_engineer.manager.baseline import ProjectSpecBaseline
+from ai_software_engineer.manager.stages import ProjectStage, StageAdvanceAuthorization
+from ai_software_engineer.repository_profile import RepositoryProfile
 
 type DesignLineage = tuple[
     ProjectPreparation,
-    ProjectProfile,
+    RepositoryProfile,
     ProjectSpecBaseline,
     ProjectRequest,
     ProductSpec,
@@ -35,7 +35,7 @@ type DesignLineage = tuple[
 ]
 type DesignSourceFacts = tuple[
     ProjectPreparation,
-    ProjectProfile,
+    RepositoryProfile,
     ProjectSpecBaseline,
     ProjectRequest,
     ProductSpec,
@@ -96,10 +96,10 @@ class DesignContextManifest(DomainModel):
     kind: Literal["design_context_manifest"] = "design_context_manifest"
     schema_version: Literal["v0.1"] = "v0.1"
     context_id: ContextId
-    project_id: ProjectId
+    repository_id: RepositoryId
     request_id: ProjectRequestId
     preparation: ProjectPreparation
-    project_profile: ProjectProfile
+    repository_profile: RepositoryProfile
     project_baseline: ProjectSpecBaseline
     project_request: ProjectRequest
     product_spec: ProductSpec
@@ -145,7 +145,7 @@ class DesignContextBuilder:
     def build(
         self,
         preparation: ProjectPreparation,
-        project_profile: ProjectProfile,
+        repository_profile: RepositoryProfile,
         project_baseline: ProjectSpecBaseline,
         project_request: ProjectRequest,
         product_spec: ProductSpec,
@@ -158,7 +158,7 @@ class DesignContextBuilder:
             raise DesignContextLineageError("built_at must be timezone-aware")
         lineage = (
             preparation,
-            project_profile,
+            repository_profile,
             project_baseline,
             project_request,
             product_spec,
@@ -175,10 +175,10 @@ class DesignContextBuilder:
         digest = _sha256(_canonical_json(identity))
         return DesignContextManifest(
             context_id=f"ctx_{digest}",
-            project_id=preparation.project_id,
+            repository_id=preparation.repository_id,
             request_id=project_request.id,
             preparation=preparation,
-            project_profile=project_profile,
+            repository_profile=repository_profile,
             project_baseline=project_baseline,
             project_request=project_request,
             product_spec=product_spec,
@@ -193,7 +193,7 @@ class DesignContextBuilder:
 
 def _validate_lineage(
     preparation: ProjectPreparation,
-    project_profile: ProjectProfile,
+    repository_profile: RepositoryProfile,
     project_baseline: ProjectSpecBaseline,
     project_request: ProjectRequest,
     product_spec: ProductSpec,
@@ -201,22 +201,22 @@ def _validate_lineage(
     authorization: StageAdvanceAuthorization,
 ) -> None:
     preparation.validate_integrity()
-    project_profile.validate_integrity()
+    repository_profile.validate_integrity()
     project_baseline.validate_integrity()
     project_request.validate_integrity()
     require_product_approval(product_spec, product_approval)
     authorization.validate_integrity()
     if (
-        project_profile.project_id != preparation.project_id
-        or project_profile.profile_sha256 != preparation.project_profile_sha256
-        or project_baseline.project_id != preparation.project_id
-        or project_baseline.project_profile_sha256 != project_profile.profile_sha256
+        repository_profile.repository_id != preparation.repository_id
+        or repository_profile.profile_sha256 != preparation.repository_profile_sha256
+        or project_baseline.repository_id != preparation.repository_id
+        or project_baseline.repository_profile_sha256 != repository_profile.profile_sha256
         or project_baseline.baseline_sha256 != preparation.baseline_spec_sha256
-        or project_request.project_id != preparation.project_id
+        or project_request.repository_id != preparation.repository_id
         or project_request.preparation_sha256 != preparation.preparation_sha256
         or project_request.status is not ProjectRequestStatus.DESIGNING
         or product_spec.request_id != project_request.id
-        or product_spec.project_id != project_request.project_id
+        or product_spec.repository_id != project_request.repository_id
     ):
         raise ValueError("Designer project/request/product lineage does not match")
     expected_inputs = (
@@ -227,7 +227,7 @@ def _validate_lineage(
     )
     if (
         authorization.target is not ProjectStage.SOLUTION_DESIGN
-        or authorization.project_id != preparation.project_id
+        or authorization.repository_id != preparation.repository_id
         or authorization.input_sha256s != expected_inputs
     ):
         raise ValueError("Designer launch authorization does not bind exact stage input")
@@ -235,7 +235,7 @@ def _validate_lineage(
 
 def _sources(
     preparation: ProjectPreparation,
-    project_profile: ProjectProfile,
+    repository_profile: RepositoryProfile,
     project_baseline: ProjectSpecBaseline,
     project_request: ProjectRequest,
     product_spec: ProductSpec,
@@ -249,15 +249,15 @@ def _sources(
             sha256=_sha256(_canonical_json(permissions.to_wire())),
         ),
         DesignContextSource(
-            uri=f"preparation://{preparation.project_id}",
+            uri=f"preparation://{preparation.repository_id}",
             sha256=preparation.preparation_sha256,
         ),
         DesignContextSource(
-            uri=f"project-profile://{preparation.project_id}",
-            sha256=project_profile.profile_sha256,
+            uri=f"repository-profile://{preparation.repository_id}",
+            sha256=repository_profile.profile_sha256,
         ),
         DesignContextSource(
-            uri=f"baseline://{preparation.project_id}",
+            uri=f"baseline://{preparation.repository_id}",
             sha256=project_baseline.baseline_sha256,
         ),
         DesignContextSource(
@@ -280,7 +280,7 @@ def _sources(
 def _lineage_from_manifest(manifest: DesignContextManifest) -> DesignLineage:
     return (
         manifest.preparation,
-        manifest.project_profile,
+        manifest.repository_profile,
         manifest.project_baseline,
         manifest.project_request,
         manifest.product_spec,
@@ -295,7 +295,7 @@ def _source_facts(manifest: DesignContextManifest) -> DesignSourceFacts:
 
 def _identity(
     preparation: ProjectPreparation,
-    project_profile: ProjectProfile,
+    repository_profile: RepositoryProfile,
     project_baseline: ProjectSpecBaseline,
     project_request: ProjectRequest,
     product_spec: ProductSpec,
@@ -307,10 +307,10 @@ def _identity(
     return {
         "kind": "design_context_manifest",
         "schema_version": "v0.1",
-        "project_id": preparation.project_id,
+        "repository_id": preparation.repository_id,
         "request_id": project_request.id,
         "preparation": preparation.to_wire(),
-        "project_profile": project_profile.to_wire(),
+        "repository_profile": repository_profile.to_wire(),
         "project_baseline": project_baseline.to_wire(),
         "project_request": project_request.to_wire(),
         "product_spec": product_spec.to_wire(),
@@ -326,7 +326,7 @@ def _manifest_digest(manifest: DesignContextManifest) -> str:
         _canonical_json(
             _identity(
                 manifest.preparation,
-                manifest.project_profile,
+                manifest.repository_profile,
                 manifest.project_baseline,
                 manifest.project_request,
                 manifest.product_spec,

@@ -8,7 +8,7 @@
   "properties": {
     "run_id": {"type": "string", "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$"},
     "task_id": {"type": "string", "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$"},
-    "project_id": {"type": "string", "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "repository_id": {"type": "string", "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$"},
     "agent_id": {"type": "string", "minLength": 1},
     "role": {"enum": ["orchestrator", "coder", "qa", "reviewer"]},
     "attempt": {"type": "integer", "minimum": 1, "maximum": 10},

@@ -87,7 +87,7 @@ def test_context_rejects_non_planning_request(tmp_path: Path) -> None:
     original = planning_request(preparation(tmp_path))
     request = ProjectRequest.create(
         request_id=original.id,
-        project_id=original.project_id,
+        repository_id=original.repository_id,
         preparation_sha256=original.preparation_sha256,
         title=original.title,
         original_request=original.original_request,
@@ -139,7 +139,7 @@ def test_fake_adapter_exact_replay_and_changed_run_conflict(tmp_path: Path) -> N
     )
     request = PlannerAgentRequest(
         run_id="run_planner_001",
-        project_id=context.project_id,
+        repository_id=context.repository_id,
         request_id=context.request_id,
         context=context,
     )
@@ -167,7 +167,7 @@ def test_fake_adapter_maps_timeout_and_rejects_stale_plan_version(tmp_path: Path
     ).run(
         PlannerAgentRequest(
             run_id="run_planner_invalid_001",
-            project_id=context.project_id,
+            repository_id=context.repository_id,
             request_id=context.request_id,
             context=context,
         )
@@ -180,7 +180,7 @@ def test_fake_adapter_maps_timeout_and_rejects_stale_plan_version(tmp_path: Path
     ).run(
         PlannerAgentRequest(
             run_id="run_planner_timeout_001",
-            project_id=context.project_id,
+            repository_id=context.repository_id,
             request_id=context.request_id,
             context=context,
         )

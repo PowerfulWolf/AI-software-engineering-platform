@@ -1,4 +1,4 @@
-"""Immutable, content-addressed Company knowledge documents."""
+"""Immutable, content-addressed Team knowledge documents."""
 
 from __future__ import annotations
 
@@ -20,15 +20,15 @@ from pydantic import AwareDatetime, Field, StringConstraints, model_validator
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
-from ai_software_engineer.company_workspace import (
-    MAX_COMPANY_KNOWLEDGE_DOCUMENT_BYTES,
-    MAX_COMPANY_KNOWLEDGE_SOURCE_BYTES,
-    CompanyId,
-    CompanyWorkspace,
+from ai_software_engineer.domain.identity import TeamId
+from ai_software_engineer.domain.model import DomainModel
+from ai_software_engineer.team_workspace import (
+    MAX_TEAM_KNOWLEDGE_DOCUMENT_BYTES,
+    MAX_TEAM_KNOWLEDGE_SOURCE_BYTES,
     Digest,
+    TeamWorkspace,
     validate_knowledge_path,
 )
-from ai_software_engineer.domain.model import DomainModel
 
 KnowledgeDocumentId = Annotated[
     str, StringConstraints(pattern=r"^knowledge_document_[a-f0-9]{32}$")
@@ -45,13 +45,13 @@ class KnowledgeDocumentError(RuntimeError):
 class KnowledgeDocumentManifest(DomainModel):
     schema_version: Literal["v0.1"] = "v0.1"
     document_id: KnowledgeDocumentId
-    company_id: CompanyId
+    team_id: TeamId
     source_name: SourceName
     media_type: KnowledgeMediaType
     source_relative_path: SourceName
     normalized_relative_path: Annotated[str, StringConstraints(min_length=1, max_length=300)]
-    source_bytes: Annotated[int, Field(ge=1, le=MAX_COMPANY_KNOWLEDGE_SOURCE_BYTES)]
-    normalized_bytes: Annotated[int, Field(ge=1, le=MAX_COMPANY_KNOWLEDGE_DOCUMENT_BYTES)]
+    source_bytes: Annotated[int, Field(ge=1, le=MAX_TEAM_KNOWLEDGE_SOURCE_BYTES)]
+    normalized_bytes: Annotated[int, Field(ge=1, le=MAX_TEAM_KNOWLEDGE_DOCUMENT_BYTES)]
     source_sha256: Digest
     normalized_sha256: Digest
     imported_at: AwareDatetime
@@ -88,15 +88,15 @@ class KnowledgeDocumentManifest(DomainModel):
 
 
 @dataclass(frozen=True)
-class CompanyKnowledgeDocumentStore:
-    company: CompanyWorkspace
+class TeamKnowledgeDocumentStore:
+    team: TeamWorkspace
 
     @property
     def root(self) -> Path:
-        return self.company.root / "knowledge" / "documents"
+        return self.team.root / "knowledge" / "documents"
 
     def list(self) -> tuple[KnowledgeDocumentManifest, ...]:
-        self.company.validate_current()
+        self.team.validate_current()
         if not self.root.exists():
             return ()
         _reject_symlink(self.root)
@@ -115,11 +115,11 @@ class CompanyKnowledgeDocumentStore:
         content: bytes,
         imported_at: datetime | None = None,
     ) -> KnowledgeDocumentManifest:
-        self.company.validate_current()
+        self.team.validate_current()
         source_name = _validate_source_name(filename)
         if not content:
             raise KnowledgeDocumentError("knowledge document is empty")
-        if len(content) > MAX_COMPANY_KNOWLEDGE_SOURCE_BYTES:
+        if len(content) > MAX_TEAM_KNOWLEDGE_SOURCE_BYTES:
             raise KnowledgeDocumentError("knowledge document exceeds upload limit")
         suffix = Path(source_name).suffix.lower()
         source_sha = hashlib.sha256(content).hexdigest()
@@ -128,7 +128,7 @@ class CompanyKnowledgeDocumentStore:
         normalized_bytes = normalized.encode("utf-8")
         if not normalized.strip():
             raise KnowledgeDocumentError("knowledge document contains no extractable text")
-        if len(normalized_bytes) > MAX_COMPANY_KNOWLEDGE_DOCUMENT_BYTES:
+        if len(normalized_bytes) > MAX_TEAM_KNOWLEDGE_DOCUMENT_BYTES:
             raise KnowledgeDocumentError("normalized knowledge document exceeds context limit")
         source_relative = f"source{suffix}"
         normalized_relative = f"documents/{document_id}/content.md"
@@ -139,7 +139,7 @@ class CompanyKnowledgeDocumentStore:
             raise KnowledgeDocumentError("knowledge import timestamp must include a timezone")
         provisional = KnowledgeDocumentManifest(
             document_id=document_id,
-            company_id=self.company.manifest.company_id,
+            team_id=self.team.manifest.team_id,
             source_name=source_name,
             media_type=media_type,
             source_relative_path=source_relative,
@@ -191,15 +191,12 @@ class CompanyKnowledgeDocumentStore:
         except ValueError as error:
             raise KnowledgeDocumentError("knowledge document manifest is invalid") from error
         manifest.validate_integrity()
-        if (
-            manifest.company_id != self.company.manifest.company_id
-            or directory.name != manifest.document_id
-        ):
+        if manifest.team_id != self.team.manifest.team_id or directory.name != manifest.document_id:
             raise KnowledgeDocumentError("knowledge document identity mismatch")
         source = directory / manifest.source_relative_path
         normalized = directory / "content.md"
-        source_bytes = _read_bounded(source, MAX_COMPANY_KNOWLEDGE_SOURCE_BYTES)
-        normalized_bytes = _read_bounded(normalized, MAX_COMPANY_KNOWLEDGE_DOCUMENT_BYTES)
+        source_bytes = _read_bounded(source, MAX_TEAM_KNOWLEDGE_SOURCE_BYTES)
+        normalized_bytes = _read_bounded(normalized, MAX_TEAM_KNOWLEDGE_DOCUMENT_BYTES)
         if (
             len(source_bytes) != manifest.source_bytes
             or len(normalized_bytes) != manifest.normalized_bytes
@@ -318,7 +315,7 @@ def _sync_directory(path: Path) -> None:
 
 
 __all__ = [
-    "CompanyKnowledgeDocumentStore",
     "KnowledgeDocumentError",
     "KnowledgeDocumentManifest",
+    "TeamKnowledgeDocumentStore",
 ]

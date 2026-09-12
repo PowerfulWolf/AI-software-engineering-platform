@@ -303,10 +303,10 @@ def test_mysql_runtime_requires_only_the_declared_dsn_environment_name(
 
 
 def test_runtime_session_rejects_changed_runtime_identity_for_existing_case(tmp_path: Path) -> None:
-    project_root = tmp_path / "project"
-    project_root.mkdir()
+    repository_root = tmp_path / "project"
+    repository_root.mkdir()
     config = _config(tmp_path)
-    task = make_task().model_copy(update={"repository": str(project_root)})
+    task = make_task().model_copy(update={"repository": str(repository_root)})
     case_id = "case_runtime_001"
     FileEvaluationEventStore(config.paths.evaluation_events).append(
         CaseStartedEvent(
@@ -332,11 +332,11 @@ def test_runtime_session_rejects_changed_runtime_identity_for_existing_case(tmp_
 
 
 def test_runtime_session_composes_serial_delivery_and_persists_case_facts(tmp_path: Path) -> None:
-    project_root = tmp_path / "project"
-    project_root.mkdir()
+    repository_root = tmp_path / "project"
+    repository_root.mkdir()
     adapter = RuntimeFixtureAdapter()
     config = _config(tmp_path)
-    task = make_task().model_copy(update={"repository": str(project_root)})
+    task = make_task().model_copy(update={"repository": str(repository_root)})
 
     with SqliteTaskRepository(config.paths.database) as repository:
         repository.create(task)

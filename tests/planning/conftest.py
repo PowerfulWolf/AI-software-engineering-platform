@@ -33,12 +33,12 @@ from ai_software_engineer.domain import (
     TechnicalDesign,
     derive_delivery_task,
 )
-from ai_software_engineer.product.models import ProjectRequestRevision
-from ai_software_engineer.project_manager.stages import (
+from ai_software_engineer.manager.stages import (
     ProjectStage,
     ProjectStageAdvancer,
     StageAdvanceRequest,
 )
+from ai_software_engineer.product.models import ProjectRequestRevision
 
 NOW = datetime(2026, 9, 2, 14, 0, tzinfo=UTC)
 
@@ -47,12 +47,14 @@ def preparation(tmp_path: Path) -> ProjectPreparation:
     project = tmp_path / "target"
     project.mkdir(exist_ok=True)
     return ProjectPreparation.create(
-        organization_id="organization_planning_001",
+        team_id="team_planning_001",
         project_id="project_planning_001",
-        project_root=str(project),
-        project_workspace_root=str(tmp_path / "sidecar"),
-        organization_root=str(tmp_path / "organization"),
-        project_profile_sha256="a" * 64,
+        project_manifest_sha256="d" * 64,
+        repository_id="repository_planning_001",
+        repository_root=str(project),
+        repository_workspace_root=str(tmp_path / "sidecar"),
+        team_root=str(tmp_path / "team"),
+        repository_profile_sha256="a" * 64,
         runtime_binding_sha256="b" * 64,
         baseline_spec_sha256="c" * 64,
         prepared_at=NOW,
@@ -62,7 +64,7 @@ def preparation(tmp_path: Path) -> ProjectPreparation:
 def planning_request(prepared: ProjectPreparation) -> ProjectRequest:
     return ProjectRequest.create(
         request_id="request_planning_001",
-        project_id=prepared.project_id,
+        repository_id=prepared.repository_id,
         preparation_sha256=prepared.preparation_sha256,
         title="Add planner preview",
         original_request="Plan delivery using current team capacity.",
@@ -85,7 +87,7 @@ def request_revision(request: ProjectRequest) -> ProjectRequestRevision:
 def designing_request_revision(request: ProjectRequest) -> ProjectRequestRevision:
     designing = ProjectRequest.create(
         request_id=request.id,
-        project_id=request.project_id,
+        repository_id=request.repository_id,
         preparation_sha256=request.preparation_sha256,
         title=request.title,
         original_request=request.original_request,
@@ -112,7 +114,7 @@ def product_spec(request: ProjectRequest) -> ProductSpec:
     return ProductSpec.create(
         spec_id="product_spec_planning_001",
         request_id=request.id,
-        project_id=request.project_id,
+        repository_id=request.repository_id,
         version=1,
         status=ProductSpecStatus.READY_FOR_REVIEW,
         summary="Preview delivery feasibility without reserving resources.",
@@ -122,7 +124,7 @@ def product_spec(request: ProjectRequest) -> ProductSpec:
                 id="req_planner_01",
                 statement="Planner must not persist concrete allocation.",
                 priority=RequirementPriority.MUST,
-                rationale="Project Manager remains the allocation authority.",
+                rationale="Manager remains the allocation authority.",
                 acceptance_criterion_ids=(criterion.id,),
             ),
         ),
@@ -204,7 +206,7 @@ def committed_design_handoff(
     assert current.supersedes_sha256 is not None
     record = DesignRunRecord.create(
         run_id="run_designer_planning_001",
-        project_id=current.request.project_id,
+        repository_id=current.request.repository_id,
         request_id=current.request.id,
         context_id="ctx_" + "a" * 64,
         input_sha256="b" * 64,
@@ -249,7 +251,7 @@ def execution_plan(spec: ProductSpec, design: TechnicalDesign) -> ExecutionPlan:
 def ready_request(request: ProjectRequest) -> ProjectRequest:
     return ProjectRequest.create(
         request_id=request.id,
-        project_id=request.project_id,
+        repository_id=request.repository_id,
         preparation_sha256=request.preparation_sha256,
         title=request.title,
         original_request=request.original_request,
@@ -275,7 +277,7 @@ def delivery_task(
         design,
         plan,
         task_id="task_planning_001",
-        repository=prepared.project_root,
+        repository=prepared.repository_root,
         base_ref="main",
         max_attempts=3,
         created_at=NOW + timedelta(minutes=5),

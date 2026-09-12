@@ -19,8 +19,10 @@ from pydantic import (
     model_validator,
 )
 
-from ai_software_engineer.company_workspace import CompanyId, CompanyName, validate_knowledge_path
+from ai_software_engineer.domain.identity import ProjectId, TeamId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
+from ai_software_engineer.project_workspace import ProjectName
+from ai_software_engineer.team_workspace import TeamName, validate_knowledge_path
 
 EnvVarName = Annotated[str, StringConstraints(pattern=r"^[A-Z_][A-Z0-9_]{0,127}$")]
 
@@ -86,11 +88,14 @@ class ProviderRouteConfig(DomainModel):
 class ProductionConfig(DomainModel):
     """Validated one-time Team Host configuration."""
 
-    schema_version: Literal["v0.1"] = "v0.1"
+    schema_version: Literal["v0.2"] = "v0.2"
     platform_root: NonEmptyStr = Field(default_factory=_default_platform_root)
-    company_id: CompanyId = "company_default"
-    company_name: CompanyName = "Default company"
-    company_knowledge_paths: tuple[NonEmptyStr, ...] = ()
+    team_id: TeamId = "team_ai"
+    team_name: TeamName = "AI Team"
+    team_knowledge_paths: tuple[NonEmptyStr, ...] = ()
+    default_project_id: ProjectId | None = None
+    default_project_name: ProjectName | None = None
+    project_knowledge_paths: tuple[NonEmptyStr, ...] = ()
     database: ProductionDatabaseConfig = ProductionDatabaseConfig()
     model_routes: Annotated[tuple[ProviderRouteConfig, ...], Field(min_length=1, max_length=16)]
     codex_executable: NonEmptyStr = "codex"
@@ -114,10 +119,19 @@ class ProductionConfig(DomainModel):
         )
         if not any(route.enabled for route in self.model_routes):
             raise ValueError("at least one production model route must be enabled")
-        ensure_unique(self.company_knowledge_paths, "company knowledge selection")
-        if len(self.company_knowledge_paths) > 64:
-            raise ValueError("company knowledge selection exceeds document budget")
-        for path in self.company_knowledge_paths:
+        ensure_unique(self.team_knowledge_paths, "team knowledge selection")
+        if len(self.team_knowledge_paths) > 64:
+            raise ValueError("team knowledge selection exceeds document budget")
+        for path in self.team_knowledge_paths:
+            validate_knowledge_path(path)
+        if (self.default_project_id is None) != (self.default_project_name is None):
+            raise ValueError(
+                "default_project_id and default_project_name must be configured together"
+            )
+        ensure_unique(self.project_knowledge_paths, "Project knowledge selection")
+        if len(self.project_knowledge_paths) > 64:
+            raise ValueError("Project knowledge selection exceeds document budget")
+        for path in self.project_knowledge_paths:
             validate_knowledge_path(path)
         return self
 

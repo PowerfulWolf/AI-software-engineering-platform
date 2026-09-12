@@ -45,7 +45,7 @@ provider 配置示例（endpoint 可以是 `https://api.openai.com/v1` 或完整
 
 ```python
 context_store = FileContextStore(runtime_root / "contexts")
-context_builder = FileRunContextBuilder(project_root, context_store=context_store)
+context_builder = FileRunContextBuilder(repository_root, context_store=context_store)
 context_resolver = StoredContextResolver(context_store, artifact_store)
 
 adapter = OpenAICompatibleAgentAdapter(

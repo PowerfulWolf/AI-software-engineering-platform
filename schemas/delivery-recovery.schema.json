@@ -320,14 +320,14 @@
     "RecoveryScope": {
       "additionalProperties": false,
       "properties": {
-        "company_id": {
-          "pattern": "^company_[a-z0-9][a-z0-9_-]{1,63}$",
-          "title": "Company Id",
+        "team_id": {
+          "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Team Id",
           "type": "string"
         },
-        "project_id": {
-          "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
-          "title": "Project Id",
+        "repository_id": {
+          "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Repository Id",
           "type": "string"
         },
         "delivery_id": {
@@ -335,17 +335,17 @@
           "title": "Delivery Id",
           "type": "string"
         },
-        "project_root": {
+        "repository_root": {
           "pattern": "^/[^\\x00-\\x1f]*$",
           "title": "Project Root",
           "type": "string"
         }
       },
       "required": [
-        "company_id",
-        "project_id",
+        "team_id",
+        "repository_id",
         "delivery_id",
-        "project_root"
+        "repository_root"
       ],
       "title": "RecoveryScope",
       "type": "object"

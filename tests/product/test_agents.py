@@ -21,15 +21,15 @@ from ai_software_engineer.product.agents import (
     ProductClarification,
 )
 from ai_software_engineer.product.context import ProductContextBuilder
+from tests.manager.test_contracts import NOW, product_spec, request
 from tests.product.factories import prepared_product_facts
-from tests.project_manager.test_contracts import NOW, product_spec, request
 
 SCHEMA_DIR = Path(__file__).parents[2] / "schemas"
 
 
 def _request(tmp_path: Path, *, run_id: str = "run_product_001") -> ProductAgentRequest:
     prepared, profile, baseline = prepared_product_facts(
-        tmp_path, project_id="project_delivery_001"
+        tmp_path, repository_id="repository_delivery_001"
     )
     project_request = request(prepared)
     context = ProductContextBuilder().build(
@@ -37,7 +37,7 @@ def _request(tmp_path: Path, *, run_id: str = "run_product_001") -> ProductAgent
     )
     return ProductAgentRequest(
         run_id=run_id,
-        project_id=prepared.project_id,
+        repository_id=prepared.repository_id,
         request_id=project_request.id,
         context=context,
     )
@@ -179,7 +179,7 @@ def test_request_rejects_context_or_permission_mismatch(tmp_path: Path) -> None:
     with pytest.raises(ValidationError, match="identity"):
         ProductAgentRequest(
             run_id="run_product_other",
-            project_id="project_another_001",
+            repository_id="repository_another_001",
             request_id=agent_request.request_id,
             context=agent_request.context,
         )
@@ -201,7 +201,7 @@ def test_result_and_scenario_enforce_exclusive_outputs(tmp_path: Path) -> None:
     with pytest.raises(ValidationError, match="exactly one output"):
         ProductAgentResult(
             run_id=agent_request.run_id,
-            project_id=agent_request.project_id,
+            repository_id=agent_request.repository_id,
             request_id=agent_request.request_id,
             context_id=agent_request.context.context_id,
             status=ProductAgentRunStatus.SUCCEEDED,

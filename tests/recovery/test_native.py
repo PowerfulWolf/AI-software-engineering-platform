@@ -20,22 +20,22 @@ from ai_software_engineer.config import ModelProviderKind, ProductionConfig, Pro
 from ai_software_engineer.context import FileContextStore
 from ai_software_engineer.design import FileDesignRecordStore
 from ai_software_engineer.domain import AgentDefinition, AgentRole
-from ai_software_engineer.multi_directory.service import CreateRequirementProject
-from ai_software_engineer.planning import FileExecutionPlanStore
-from ai_software_engineer.product import FileProductRecordStore
-from ai_software_engineer.project_manager.delivery import ApproveProductSpec, StartProjectDelivery
-from ai_software_engineer.project_manager.delivery_checkpoint import (
+from ai_software_engineer.manager.delivery import ApproveProductSpec, StartProjectDelivery
+from ai_software_engineer.manager.delivery_checkpoint import (
     FileProjectDeliveryCheckpointStore,
     ProjectDeliveryCheckpoint,
 )
-from ai_software_engineer.project_manager.production_host import OrganizationTeamHost
-from ai_software_engineer.project_manager.store import FileProjectPreparationStore
+from ai_software_engineer.manager.production_host import TeamHost
+from ai_software_engineer.manager.store import FileProjectPreparationStore
+from ai_software_engineer.multi_directory.service import CreateRequirement
+from ai_software_engineer.planning import FileExecutionPlanStore
+from ai_software_engineer.product import FileProductRecordStore
 from ai_software_engineer.recovery import RecoveryRejected, RecoveryScope
 from ai_software_engineer.recovery.native import NativeRecoverySourceReader
 from ai_software_engineer.role_workspace import RoleWorktreeBinding
 from tests.e2e.test_joint_delivery import setup_host
-from tests.project_manager.test_production_backend import _git, _ScriptedClientFactory
-from tests.project_manager.test_production_backend import mysql_dsn as mysql_dsn
+from tests.manager.test_production_backend import _git, _ScriptedClientFactory
+from tests.manager.test_production_backend import mysql_dsn as mysql_dsn
 
 
 class InterruptedCoder:
@@ -97,6 +97,8 @@ def test_native_source_is_verified_read_only_and_rejects_corruption(
     _git("commit", "-m", "initial", cwd=project)
     config = ProductionConfig(
         platform_root=str(tmp_path / "platform"),
+        default_project_id="project_test",
+        default_project_name="Test Project",
         model_routes=(
             ProviderRouteConfig(
                 provider="codex", model="gpt-5.5", kind=ModelProviderKind.CODEX_CLI
@@ -106,15 +108,16 @@ def test_native_source_is_verified_read_only_and_rejects_corruption(
     )
     environment = {"ASE_MYSQL_DSN": mysql_dsn, "PATH": os.environ.get("PATH", "")}
     factory = InterruptedFactory()
-    host = OrganizationTeamHost(
+    host = TeamHost(
         config=config,
         environment=environment,
         structured_clients=_ScriptedClientFactory(),
         delivery_route_adapters=factory,
     )
+    project_workspace = host.projects()[0]
     entry = host.project_entry()
     started = entry.start(
-        StartProjectDelivery(project_root=str(project), requirement="Change greeting.")
+        StartProjectDelivery(repository_root=str(project), requirement="Change greeting.")
     )
     failed = entry.approve(
         ApproveProductSpec(
@@ -128,14 +131,12 @@ def test_native_source_is_verified_read_only_and_rejects_corruption(
     assert len(factory.requests) == 1
     request = factory.requests[0]
     scope = RecoveryScope(
-        company_id=config.company_id,
-        project_id=cp.project_id,
-        project_root=str(project),
+        team_id=config.team_id,
+        repository_id=cp.repository_id,
+        repository_root=str(project),
         delivery_id=cp.delivery_id,
     )
-    sidecar = (
-        Path(config.platform_root) / "companies" / config.company_id / "projects" / cp.project_id
-    )
+    sidecar = project_workspace.root / "repositories" / cp.repository_id
     before = _snapshot(Path(config.platform_root))
     original = _snapshot(project)
     reader = NativeRecoverySourceReader(config, environment)
@@ -170,7 +171,7 @@ def test_native_source_is_verified_read_only_and_rejects_corruption(
     assert _snapshot(project) == original
     assert len(factory.requests) == 1
     with pytest.raises(RecoveryRejected):
-        reader.inspect(scope.model_copy(update={"company_id": "company_other"}), **arguments)
+        reader.inspect(scope.model_copy(update={"team_id": "team_other"}), **arguments)
     with pytest.raises(RecoveryRejected):
         reader.inspect(scope, **{**arguments, "failed_run_id": "run_missing"})
     with pytest.raises(RecoveryRejected):
@@ -201,10 +202,10 @@ def test_inspection_does_not_initialize_missing_platform(tmp_path: Path) -> None
         ),
     )
     scope = RecoveryScope(
-        company_id=config.company_id,
-        project_id="project_missing",
+        team_id=config.team_id,
+        repository_id="repository_missing",
         delivery_id="delivery_missing",
-        project_root=str(tmp_path / "project"),
+        repository_root=str(tmp_path / "project"),
     )
     with pytest.raises(RecoveryRejected):
         NativeRecoverySourceReader(config, {}).inspect(
@@ -233,18 +234,20 @@ def test_readonly_store_never_initializes(tmp_path: Path, kind: str) -> None:
 
 @pytest.mark.mysql
 def test_joint_parent_cannot_be_omitted_from_source_lineage(tmp_path: Path) -> None:
-    from ai_software_engineer.project_manager.delivery import ReplyToProduct
+    from ai_software_engineer.manager.delivery import ReplyToProduct
 
     config, environment, models, projects = setup_host(tmp_path)
     factory = InterruptedFactory()
-    entry = OrganizationTeamHost(
+    host = TeamHost(
         config=config,
         environment=environment,
         structured_clients=models,
         delivery_route_adapters=factory,
-    ).requirement_entry()
+    )
+    entry = host.requirement_entry()
+    project_workspace = host.projects()[0]
     created = entry.create(
-        CreateRequirementProject(name="Interrupted joint", project_roots=tuple(map(str, projects)))
+        CreateRequirement(name="Interrupted joint", repository_roots=tuple(map(str, projects)))
     ).checkpoint
     product = entry.reply(
         ReplyToProduct(
@@ -264,9 +267,9 @@ def test_joint_parent_cannot_be_omitted_from_source_lineage(tmp_path: Path) -> N
     cp = parent.children[0].checkpoint
     request = factory.requests[0]
     scope = RecoveryScope(
-        company_id=config.company_id,
-        project_id=cp.project_id,
-        project_root=cp.project_root,
+        team_id=config.team_id,
+        repository_id=cp.repository_id,
+        repository_root=cp.repository_root,
         delivery_id=cp.delivery_id,
     )
     before = _snapshot(Path(config.platform_root))
@@ -278,9 +281,7 @@ def test_joint_parent_cannot_be_omitted_from_source_lineage(tmp_path: Path) -> N
     assert observed.source.parent_checkpoint_sha256 == parent.checkpoint_sha256
     assert _snapshot(Path(config.platform_root)) == before
     assert len(models.calls) == 3
-    sidecar = (
-        Path(config.platform_root) / "companies" / config.company_id / "projects" / cp.project_id
-    )
+    sidecar = project_workspace.root / "repositories" / cp.repository_id
     checkpoints = FileProjectDeliveryCheckpointStore(sidecar / "state/project-deliveries")
     values = cp.to_wire()
     values.pop("checkpoint_sha256")
@@ -300,13 +301,7 @@ def test_joint_parent_cannot_be_omitted_from_source_lineage(tmp_path: Path) -> N
     assert observed_after_advance.source.checkpoint_sha256 == advanced.checkpoint_sha256
     assert observed_after_advance.source.parent_delivery_id == parent.delivery_id
     assert observed_after_advance.source.parent_checkpoint_sha256 == parent.checkpoint_sha256
-    parent_path = (
-        Path(config.platform_root)
-        / "companies"
-        / config.company_id
-        / "requests"
-        / parent.delivery_id
-    )
+    parent_path = project_workspace.requirements_root / parent.delivery_id
     original = next(parent_path.glob("*.json"))
     original.write_text("{}")
     with pytest.raises(RecoveryRejected):

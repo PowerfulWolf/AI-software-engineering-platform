@@ -19,12 +19,12 @@ from pydantic import AwareDatetime, Field, StrictBool, StrictInt, StringConstrai
 from ai_software_engineer.domain.artifact import Artifact, ArtifactId, EvidenceId
 from ai_software_engineer.domain.enums import (
     AgentRole,
-    OrganizationRole,
     TaskStatus,
+    TeamRole,
     WorkItemStatus,
 )
 from ai_software_engineer.domain.event import StateEvent
-from ai_software_engineer.domain.identity import ContextId, ProjectId, RunId
+from ai_software_engineer.domain.identity import ContextId, RepositoryId, RunId
 from ai_software_engineer.domain.model import DomainModel, JsonValue, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.task import Task, TaskId
 from ai_software_engineer.domain.workforce import (
@@ -93,7 +93,7 @@ class RunProjection(DomainModel):
 
     run_id: RunId
     task_id: TaskId
-    project_id: ProjectId | None = None
+    repository_id: RepositoryId | None = None
     agent_id: NonEmptyStr | None = None
     role: AgentRole | None = None
     attempt: StrictInt | None = Field(default=None, ge=1, le=10)
@@ -122,7 +122,7 @@ class LeaseProjection(DomainModel):
     lease_id: NonEmptyStr
     assignment_id: NonEmptyStr
     task_id: TaskId
-    project_id: ProjectId | None = None
+    repository_id: RepositoryId | None = None
     agent_id: NonEmptyStr
     role: AgentRole | None = None
     capacity_units: StrictInt = Field(ge=1)
@@ -137,7 +137,7 @@ class AgentProjection(DomainModel):
     agent_id: NonEmptyStr
     display_name: NonEmptyStr | None = None
     active: StrictBool | None = None
-    eligible_roles: tuple[OrganizationRole, ...] = ()
+    eligible_roles: tuple[TeamRole, ...] = ()
     run_ids: tuple[RunId, ...] = ()
     lease_ids: tuple[NonEmptyStr, ...] = ()
     models: tuple[NonEmptyStr, ...] = ()
@@ -155,7 +155,7 @@ class TaskProjection(DomainModel):
     """Current Task delivery checkpoint plus all source IDs needed for drill-down."""
 
     task_id: TaskId
-    project_id: ProjectId | None = None
+    repository_id: RepositoryId | None = None
     title: NonEmptyStr
     status: TaskStatus
     attempts: StrictInt = Field(ge=0)

@@ -8,7 +8,7 @@ import pytest
 
 from ai_software_engineer.domain import AgentRole, TaskStatus
 from ai_software_engineer.domain.event import StateEvent
-from ai_software_engineer.project_manager.delivery_checkpoint import (
+from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryFailureCode,
     DeliveryNextAction,
     DeliveryStage,
@@ -19,7 +19,7 @@ from ai_software_engineer.recovery.verification_snapshot import (
     validate_candidate_snapshot,
 )
 from tests.e2e.test_delivery_checkpoint import _checkpoint, _full_fields
-from tests.project_manager.test_dispatch import RecordingDispatchStore, _facts, _service
+from tests.manager.test_dispatch import RecordingDispatchStore, _facts, _service
 
 
 @pytest.mark.parametrize(
@@ -55,7 +55,7 @@ def test_candidate_snapshot_accepts_stale_projection_not_changed_facts(
     )
     fields = {
         **_full_fields(),
-        "project_id": dispatch.project_id,
+        "repository_id": dispatch.repository_id,
         "dispatch_commit_id": dispatch.id,
         "dispatch_commit_sha256": dispatch.dispatch_sha256,
         "task_id": task.id,
@@ -148,7 +148,7 @@ def test_candidate_snapshot_accepts_qa_finding_then_failed_coder(
         Path(task.repository),
         **{
             **_full_fields(),
-            "project_id": dispatch.project_id,
+            "repository_id": dispatch.repository_id,
             "dispatch_commit_id": dispatch.id,
             "dispatch_commit_sha256": dispatch.dispatch_sha256,
             "task_id": task.id,

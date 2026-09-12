@@ -10,20 +10,19 @@ import pytest
 from jsonschema import Draft202012Validator, FormatChecker
 from referencing import Registry, Resource
 
-from ai_software_engineer.company_workspace import CompanyWorkspace
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.context import ContextBudget, ContextSource, FileContextBuilder
 from ai_software_engineer.domain import AgentPermissions, AgentRole, NetworkAccess
 from ai_software_engineer.domain.model import WirePayload
 from ai_software_engineer.evaluation import HandoffBuilder
-from ai_software_engineer.knowledge_documents import CompanyKnowledgeDocumentStore
-from ai_software_engineer.project_workspace import ProjectWorkspaceRegistry
+from ai_software_engineer.knowledge_documents import TeamKnowledgeDocumentStore
 from ai_software_engineer.runtime import RuntimeConfig
+from ai_software_engineer.team_workspace import TeamWorkspace
 from ai_software_engineer.web_console import (
     ConsoleCommandResult,
     ConsoleOperation,
     ConsoleOperationStatus,
-    CreateRequirementProjectIntent,
+    CreateRequirementIntent,
 )
 from tests.domain.factories import (
     make_agent,
@@ -211,17 +210,17 @@ def test_production_config_schema_rejects_invalid_console_port(console_port: int
     _assert_invalid(payload, "production-config.schema.json")
 
 
-def test_company_manifest_satisfies_canonical_schema(tmp_path: Path) -> None:
-    workspace = CompanyWorkspace.initialize(tmp_path, company_id="company_test", name="Test")
-    _assert_valid(workspace.manifest.to_wire(), "company-workspace.schema.json")
+def test_team_manifest_satisfies_canonical_schema(tmp_path: Path) -> None:
+    workspace = TeamWorkspace.initialize(tmp_path, team_id="team_test", name="Test")
+    _assert_valid(workspace.manifest.to_wire(), "team-workspace.schema.json")
     malformed = workspace.manifest.to_wire()
-    malformed["company_id"] = "../escape"
-    _assert_invalid(malformed, "company-workspace.schema.json")
+    malformed["team_id"] = "../escape"
+    _assert_invalid(malformed, "team-workspace.schema.json")
 
 
 def test_knowledge_document_manifest_satisfies_canonical_schema(tmp_path: Path) -> None:
-    company = CompanyWorkspace.initialize(tmp_path, company_id="company_test", name="Test")
-    manifest = CompanyKnowledgeDocumentStore(company).import_document(
+    team = TeamWorkspace.initialize(tmp_path, team_id="team_test", name="Test")
+    manifest = TeamKnowledgeDocumentStore(team).import_document(
         filename="guide.md", content=b"# Guide\n"
     )
 
@@ -246,35 +245,42 @@ def test_production_config_schema_rejects_plaintext_secret(tmp_path: Path) -> No
     _assert_invalid(payload, "production-config.schema.json")
 
 
-def test_project_workspace_manifest_satisfies_the_canonical_schema(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    workspace = ProjectWorkspaceRegistry(tmp_path / "sidecars").register(project)
+def test_repository_workspace_manifest_satisfies_the_canonical_schema(tmp_path: Path) -> None:
+    team = TeamWorkspace.initialize(tmp_path / "platform", team_id="team_test", name="Test")
+    project = team.project_registry().register(project_id="project_test", name="Test Project")
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    workspace = project.repository_registry().register(repository)
 
-    _assert_valid(workspace.manifest.to_wire(), "project-workspace.schema.json")
+    _assert_valid(project.manifest.to_wire(), "project-workspace.schema.json")
+    _assert_valid(workspace.manifest.to_wire(), "repository-workspace.schema.json")
 
 
-def test_project_workspace_schema_rejects_layout_drift(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    workspace = ProjectWorkspaceRegistry(tmp_path / "sidecars").register(project)
+def test_repository_workspace_schema_rejects_layout_drift(tmp_path: Path) -> None:
+    team = TeamWorkspace.initialize(tmp_path / "platform", team_id="team_test", name="Test")
+    project = team.project_registry().register(project_id="project_test", name="Test Project")
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    workspace = project.repository_registry().register(repository)
     payload = workspace.manifest.to_wire()
     layout = payload["layout"]
     assert isinstance(layout, dict)
     layout["logs"] = "custom-logs"
 
-    _assert_invalid(payload, "project-workspace.schema.json")
+    _assert_invalid(payload, "repository-workspace.schema.json")
 
 
-def test_project_workspace_schema_rejects_project_owned_agents_directory(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    workspace = ProjectWorkspaceRegistry(tmp_path / "sidecars").register(project)
+def test_repository_workspace_schema_rejects_project_owned_agents_directory(tmp_path: Path) -> None:
+    team = TeamWorkspace.initialize(tmp_path / "platform", team_id="team_test", name="Test")
+    project = team.project_registry().register(project_id="project_test", name="Test Project")
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    workspace = project.repository_registry().register(repository)
     payload = workspace.manifest.to_wire()
     layout = payload["layout"]
     assert isinstance(layout, dict)
     layout["agents"] = layout.pop("assignments")
-    _assert_invalid(payload, "project-workspace.schema.json")
+    _assert_invalid(payload, "repository-workspace.schema.json")
 
 
 def test_runtime_config_schema_rejects_plaintext_api_key() -> None:
@@ -430,9 +436,13 @@ def test_handoff_schema_rejects_missing_next_actions(tmp_path: Path) -> None:
 def test_console_operation_states_satisfy_the_canonical_schema(tmp_path: Path) -> None:
     at = datetime(2026, 9, 12, tzinfo=UTC)
     queued = ConsoleOperation.queued(
-        company_id="company_test",
+        team_id="team_test",
         idempotency_key="browser-action-0001",
-        intent=CreateRequirementProjectIntent(name="Web delivery", project_roots=(str(tmp_path),)),
+        intent=CreateRequirementIntent(
+            project_id="project_test",
+            name="Web delivery",
+            repository_roots=(str(tmp_path),),
+        ),
         requested_at=at,
     )
     running = queued.transition(
@@ -442,6 +452,7 @@ def test_console_operation_states_satisfy_the_canonical_schema(tmp_path: Path) -
         ConsoleOperationStatus.SUCCEEDED,
         updated_at=at + timedelta(seconds=2),
         result=ConsoleCommandResult(
+            project_id="project_test",
             delivery_id="delivery_multi_" + "a" * 40,
             checkpoint_sha256="1" * 64,
             stage="READY_FOR_DISCUSSION",
@@ -457,29 +468,41 @@ def test_console_operation_schema_rejects_relative_roots_and_incoherent_status(
     tmp_path: Path,
 ) -> None:
     operation = ConsoleOperation.queued(
-        company_id="company_test",
+        team_id="team_test",
         idempotency_key="browser-action-0001",
-        intent=CreateRequirementProjectIntent(name="Web delivery", project_roots=(str(tmp_path),)),
+        intent=CreateRequirementIntent(
+            project_id="project_test",
+            name="Web delivery",
+            repository_roots=(str(tmp_path),),
+        ),
         requested_at=datetime(2026, 9, 12, tzinfo=UTC),
     ).to_wire()
     intent = operation["intent"]
     assert isinstance(intent, dict)
-    intent["project_roots"] = ["relative/project"]
+    intent["repository_roots"] = ["relative/project"]
     _assert_invalid(operation, "console-operation.schema.json")
 
     operation = ConsoleOperation.queued(
-        company_id="company_test",
+        team_id="team_test",
         idempotency_key="browser-action-0002",
-        intent=CreateRequirementProjectIntent(name="Web delivery", project_roots=(str(tmp_path),)),
+        intent=CreateRequirementIntent(
+            project_id="project_test",
+            name="Web delivery",
+            repository_roots=(str(tmp_path),),
+        ),
         requested_at=datetime(2026, 9, 12, tzinfo=UTC),
     ).to_wire()
     operation["status"] = "SUCCEEDED"
     _assert_invalid(operation, "console-operation.schema.json")
 
     operation = ConsoleOperation.queued(
-        company_id="company_test",
+        team_id="team_test",
         idempotency_key="browser-action-0003",
-        intent=CreateRequirementProjectIntent(name="Web delivery", project_roots=(str(tmp_path),)),
+        intent=CreateRequirementIntent(
+            project_id="project_test",
+            name="Web delivery",
+            repository_roots=(str(tmp_path),),
+        ),
         requested_at=datetime(2026, 9, 12, tzinfo=UTC),
     ).to_wire()
     operation["status"] = "RUNNING"

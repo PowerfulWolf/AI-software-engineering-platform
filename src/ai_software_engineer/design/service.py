@@ -34,16 +34,16 @@ from ai_software_engineer.domain import (
 from ai_software_engineer.domain.agent import TimeoutSeconds
 from ai_software_engineer.domain.identity import RunId
 from ai_software_engineer.domain.model import DomainModel
-from ai_software_engineer.product.models import ProjectRequestRevision
-from ai_software_engineer.product.store import ProductRecordLineageError, ProductRecordStore
-from ai_software_engineer.project_manager.baseline import ProjectSpecBaseline
-from ai_software_engineer.project_manager.stages import (
+from ai_software_engineer.manager.baseline import ProjectSpecBaseline
+from ai_software_engineer.manager.stages import (
     ProjectStage,
     ProjectStageError,
     StageAdvanceAuthorization,
     StageAdvanceRequest,
 )
-from ai_software_engineer.project_profile import ProjectProfile
+from ai_software_engineer.product.models import ProjectRequestRevision
+from ai_software_engineer.product.store import ProductRecordLineageError, ProductRecordStore
+from ai_software_engineer.repository_profile import RepositoryProfile
 
 
 class DesignerServiceError(RuntimeError):
@@ -63,11 +63,11 @@ class DesignerOutputRejected(DesignerServiceError):
 
 
 class DesignerExecutionError(DesignerServiceError):
-    """Raised when an adapter or Project Manager port violates its typed contract."""
+    """Raised when an adapter or Manager port violates its typed contract."""
 
 
 class ProjectStageAdvancePort(Protocol):
-    """Project Manager Skill port; it reopens current facts outside the Agent."""
+    """Manager Skill port; it reopens current facts outside the Agent."""
 
     def advance_stage(self, request: StageAdvanceRequest) -> StageAdvanceAuthorization: ...
 
@@ -79,7 +79,7 @@ class RunDesignerCommand(DomainModel):
     schema_version: Literal["v0.1"] = "v0.1"
     run_id: RunId
     preparation: ProjectPreparation
-    project_profile: ProjectProfile
+    repository_profile: RepositoryProfile
     project_baseline: ProjectSpecBaseline
     request_revision: ProjectRequestRevision
     product_spec: ProductSpec
@@ -162,7 +162,7 @@ class DesignerService:
         self._require_current_product_facts(command)
         context = self._context_builder.build(
             command.preparation,
-            command.project_profile,
+            command.repository_profile,
             command.project_baseline,
             command.request_revision.request,
             command.product_spec,
@@ -172,7 +172,7 @@ class DesignerService:
         )
         request = DesignerAgentRequest(
             run_id=command.run_id,
-            project_id=command.preparation.project_id,
+            repository_id=command.preparation.repository_id,
             request_id=command.request_revision.request.id,
             context=context,
             permissions=context.permissions,
@@ -216,7 +216,7 @@ class DesignerService:
         self._require_current_product_facts(command)
         receipt = DesignRunRecord.create(
             run_id=command.run_id,
-            project_id=command.preparation.project_id,
+            repository_id=command.preparation.repository_id,
             request_id=command.request_revision.request.id,
             context_id=context.context_id,
             input_sha256=input_sha256,
@@ -261,7 +261,7 @@ class DesignerService:
             authorization.validate_integrity()
         except (AttributeError, ProjectStageError, TypeError, ValueError) as error:
             raise DesignerExecutionError(
-                "Project Manager returned invalid planning authorization"
+                "Manager returned invalid planning authorization"
             ) from error
         expected = (
             command.preparation.preparation_sha256,
@@ -272,11 +272,11 @@ class DesignerService:
         )
         if (
             authorization.target is not ProjectStage.PLANNING
-            or authorization.project_id != command.preparation.project_id
+            or authorization.repository_id != command.preparation.repository_id
             or authorization.input_sha256s != expected
         ):
             raise DesignerExecutionError(
-                "Project Manager planning authorization does not bind exact output"
+                "Manager planning authorization does not bind exact output"
             )
         return authorization
 
@@ -291,7 +291,7 @@ class DesignerService:
             raise DesignerOutputRejected("failed Designer result has no typed error")
         receipt = DesignRunRecord.create(
             run_id=command.run_id,
-            project_id=command.preparation.project_id,
+            repository_id=command.preparation.repository_id,
             request_id=command.request_revision.request.id,
             context_id=context_id,
             input_sha256=input_sha256,
@@ -394,7 +394,7 @@ class DesignerService:
             raise DesignerOutputRejected("Designer adapter returned invalid output") from error
         if (
             result.run_id != request.run_id
-            or result.project_id != request.project_id
+            or result.repository_id != request.repository_id
             or result.request_id != request.request_id
             or result.context_id != request.context.context_id
         ):
@@ -406,7 +406,7 @@ def _request_with_status(
 ) -> ProjectRequest:
     return ProjectRequest.create(
         request_id=current.id,
-        project_id=current.project_id,
+        repository_id=current.repository_id,
         preparation_sha256=current.preparation_sha256,
         title=current.title,
         original_request=current.original_request,

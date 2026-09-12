@@ -5,9 +5,9 @@ let selected = null;
 let refreshing = false;
 let operations = [];
 let consoleAvailable = null;
-let consoleCompanyId = null;
+let consoleTeamId = null;
 let administrationAvailable = null;
-let administrationCompanies = [];
+let administrationProjects = [];
 let knowledgeDocuments = [];
 let settingsSnapshot = null;
 let settingsDraft = null;
@@ -39,31 +39,45 @@ const labels = {
   qa: "测试",
   reviewer: "评审",
   orchestrator: "任务编排",
+  manager: "团队管理",
+  product: "产品",
+  designer: "设计",
+  planner: "计划",
   SUCCEEDED: "执行成功",
   RUNNING: "执行中",
   INTERRUPTED: "执行已中断",
   INVALID: "输出无效",
   TIMED_OUT: "执行超时",
   UNKNOWN: "未确认",
-  CREATE_REQUIREMENT_PROJECT: "创建需求项目",
+  CREATE_PROJECT: "创建项目",
+  CREATE_REQUIREMENT: "创建需求",
   PRODUCT_REPLY: "提交需求说明",
   PRODUCT_APPROVAL: "批准产品文档",
   CONTINUE_DELIVERY: "继续交付",
 };
 const label = (value) => labels[value] || value;
-const roleOrder = { coder: 0, qa: 1, reviewer: 2 };
+const deliveryRoleOrder = { coder: 0, qa: 1, reviewer: 2 };
+const teamRoleOrder = {
+  manager: 0,
+  product: 1,
+  designer: 2,
+  planner: 3,
+  coder: 4,
+  qa: 5,
+  reviewer: 6,
+};
 const pageCopy = {
   team: [
     "团队成员",
-    "任务阶段来自持久化记录；“空闲中”只表示当前公司没有分配给该成员的未结束任务。",
+    "唯一 Team 服务所有 Project；“空闲中”只表示当前没有分配给该成员的未结束任务。",
   ],
   requests: [
     "需求与交付",
-    "项目、需求、批准和继续交付都在这里完成；一个任务内的 Coder、QA、Reviewer 串行工作。",
+    "先选择 Project，再创建 Requirement 并选择该 Project 下涉及的 1–N 个代码目录。",
   ],
   knowledge: [
-    "公司知识库",
-    "上传的文档保存在公司 sidecar，转换为可校验的 Markdown；只有在设置中选中并重启后，文档才会进入新需求上下文。",
+    "团队知识库",
+    "团队通用知识适用于多个 Project；Project 自有背景和规范保存在各自 Project workspace。",
   ],
   settings: [
     "设置",
@@ -96,6 +110,7 @@ const badge = (status) =>
   );
 const operationTarget = (operation) =>
   operation.intent.delivery_id || operation.result?.delivery_id || null;
+const currentProjectId = () => snapshot?.selected_project_id || null;
 const activeOperation = (deliveryId) =>
   operations.find(
     (operation) =>
@@ -127,17 +142,17 @@ const latestApproval = (deliveryId, checkpoint) => {
   );
 };
 const operationKey = () => `browser-${Date.now()}-${++actionSerial}`;
-const canControlCurrentCompany = () =>
+const canControlCurrentTeam = () =>
   consoleAvailable === true &&
   snapshot &&
-  snapshot.company_id === consoleCompanyId;
+  snapshot.team_id === consoleTeamId;
 function assignmentBadge(task, assignment) {
   if (task.terminal) return badge(task.status);
   if (assignment.current_stage) return badge(task.status);
   const current = task.assignments.find((candidate) => candidate.current_stage);
   if (!current) return el("span", "已分配 · 等待调度", "badge");
-  const assignedOrder = roleOrder[assignment.role];
-  const currentOrder = roleOrder[current.role];
+  const assignedOrder = deliveryRoleOrder[assignment.role];
+  const currentOrder = deliveryRoleOrder[current.role];
   if (assignedOrder !== undefined && currentOrder !== undefined) {
     if (assignedOrder < currentOrder)
       return el("span", "本轮已完成", "badge done");
@@ -200,7 +215,7 @@ function renderComposer() {
   if (!composing) return;
   const top = el("div", undefined, "row");
   top.append(
-    el("div", "新建需求项目", "section-title"),
+    el("div", "新建需求", "section-title"),
     button(
       "取消",
       () => {
@@ -217,19 +232,19 @@ function renderComposer() {
   name.maxLength = 200;
   name.placeholder = "例如：统一登录体验升级";
   const roots = el("textarea");
-  roots.name = "project_roots";
+  roots.name = "repository_roots";
   roots.required = true;
   roots.rows = 5;
   roots.placeholder = "/absolute/path/to/backend\n/absolute/path/to/frontend";
   const feedback = el("p", "", "form-feedback");
-  const submit = el("button", "创建并准备项目", "primary");
+  const submit = el("button", "创建并准备需求", "primary");
   submit.type = "submit";
   form.append(
-    field("需求项目名称", name),
+    field("需求名称", name),
     field(
       "涉及的代码目录",
       roots,
-      "每行一个绝对目录；同一仓库的多个模块和不同仓库可以一起填写。",
+      "每行一个绝对目录；目录必须登记在当前 Project，首次选择时由 Manager 完成登记。",
     ),
     feedback,
     submit,
@@ -241,17 +256,18 @@ function renderComposer() {
       .map((value) => value.trim())
       .filter(Boolean);
     if (!name.value.trim() || !projectRoots.length) {
-      feedback.textContent = "请填写项目名称和至少一个绝对代码目录。";
+      feedback.textContent = "请填写需求名称和至少一个绝对代码目录。";
       feedback.className = "form-feedback error";
       return;
     }
     submit.disabled = true;
     feedback.className = "form-feedback";
-    feedback.textContent = "Project Manager 正在接单…";
+    feedback.textContent = "Manager 正在接单…";
     const accepted = await submitOperation({
-      action: "CREATE_REQUIREMENT_PROJECT",
+      action: "CREATE_REQUIREMENT",
+      project_id: snapshot.selected_project_id,
       name: name.value.trim(),
-      project_roots: projectRoots,
+      repository_roots: projectRoots,
     });
     if (accepted) {
       composing = false;
@@ -317,13 +333,13 @@ function renderOperationStatus() {
   }
   if (
     snapshot &&
-    consoleCompanyId &&
-    snapshot.company_id !== consoleCompanyId
+    consoleTeamId &&
+    snapshot.team_id !== consoleTeamId
   ) {
     panel.append(
       el(
         "div",
-        "当前后台服务未绑定这个公司；此公司暂时只能查看，不能提交交付操作。",
+        "当前后台服务未绑定这个 Team；此工作台暂时只能查看，不能提交交付操作。",
         "operation-error",
       ),
     );
@@ -345,8 +361,8 @@ function renderOperationStatus() {
         el(
           "p",
           operation.status === "QUEUED"
-            ? "已安全接单，等待 Project Manager 执行。"
-            : "Project Manager 正在执行；可以刷新或关闭页面。",
+            ? "已安全接单，等待 Manager 执行。"
+            : "Manager 正在执行；可以刷新或关闭页面。",
           "muted",
         ),
       );
@@ -391,7 +407,7 @@ function taskRow(task, agentId) {
 function renderTeam(content) {
   const summary = el("div", undefined, "summary");
   for (const [count, title] of [
-    [snapshot.agents.length, "位组织成员"],
+    [snapshot.agents.length, "位团队成员"],
     [snapshot.tasks.filter((t) => !t.terminal).length, "项未结束任务"],
     [snapshot.requests.filter((r) => r.blocker).length, "项需求待处理"],
   ]) {
@@ -408,7 +424,19 @@ function renderTeam(content) {
         "empty",
       ),
     );
-  for (const agent of snapshot.agents) {
+  const orderedAgents = snapshot.agents
+    .map((agent, index) => ({ agent, index }))
+    .sort((left, right) => {
+      const leftOrder = Math.min(
+        ...left.agent.roles.map((role) => teamRoleOrder[role] ?? 1000),
+      );
+      const rightOrder = Math.min(
+        ...right.agent.roles.map((role) => teamRoleOrder[role] ?? 1000),
+      );
+      return leftOrder - rightOrder || left.index - right.index;
+    })
+    .map(({ agent }) => agent);
+  for (const agent of orderedAgents) {
     const card = el("article", undefined, "agent"),
       head = el("div", undefined, "row"),
       identity = el("div", undefined, "identity"),
@@ -430,7 +458,7 @@ function renderTeam(content) {
     card.append(
       el(
         "div",
-        `${agent.current_stage_delivery_ids.length} 项处于当前岗位阶段 · ${agent.assigned_delivery_ids.length} 项未结束分配 · 并发上限 ${agent.max_parallel_assignments}（组织配置，非实时占用）`,
+        `${agent.current_stage_delivery_ids.length} 项处于当前岗位阶段 · ${agent.assigned_delivery_ids.length} 项未结束分配 · 并发上限 ${agent.max_parallel_assignments}（团队配置，非实时占用）`,
         "muted",
       ),
     );
@@ -440,7 +468,7 @@ function renderTeam(content) {
       if (t) work.append(taskRow(t, agent.id));
     }
     if (!agent.assigned_delivery_ids.length)
-      work.append(el("p", "当前公司没有分配给该成员的未结束任务。", "muted"));
+      work.append(el("p", "当前没有分配给该成员的未结束任务。", "muted"));
     card.append(work);
     const history = el("details");
     history.dataset.key = agent.id;
@@ -457,7 +485,7 @@ function renderTeam(content) {
   content.append(
     el(
       "p",
-      "成员属于组织；工作记录按上方选中的公司独立统计。“空闲中”只描述当前公司任务分配，不代表 Agent 进程在线。",
+      "成员属于唯一 Team，并可跨 Project 持续工作。“空闲中”描述任务分配，不代表 Agent 进程在线。",
       "muted",
     ),
   );
@@ -500,15 +528,15 @@ function requestCard(request) {
   return card;
 }
 function requestOperation(panel, request) {
-  if (!canControlCurrentCompany()) return;
+  if (!canControlCurrentTeam()) return;
   const running = activeOperation(request.id);
   if (running) {
     panel.append(
       el(
         "div",
         running.status === "QUEUED"
-          ? "该需求操作已排队，等待 Project Manager。"
-          : "Project Manager 正在处理该需求，可以离开页面后再回来。",
+          ? "该需求操作已排队，等待 Manager。"
+          : "Manager 正在处理该需求，可以离开页面后再回来。",
         "operation-running",
       ),
     );
@@ -522,7 +550,7 @@ function requestOperation(panel, request) {
     box.append(
       el(
         "p",
-        "批准后平台只执行上方计划；页面会把精确计划身份安全地带回 Project Manager。",
+        "批准后平台只执行上方计划；页面会把精确计划身份安全地带回 Manager。",
         "muted",
       ),
       button(
@@ -530,6 +558,7 @@ function requestOperation(panel, request) {
         () =>
           submitOperation({
             action: "CONTINUE_DELIVERY",
+            project_id: request.project_id,
             delivery_id: request.id,
             expected_checkpoint_sha256: request.checkpoint_sha256,
             approved_plan_sha256: approval.plan_sha256,
@@ -571,6 +600,7 @@ function requestOperation(panel, request) {
       feedback.textContent = "已提交，等待 Product Agent…";
       const accepted = await submitOperation({
         action: "PRODUCT_REPLY",
+        project_id: request.project_id,
         delivery_id: request.id,
         expected_checkpoint_sha256: request.checkpoint_sha256,
         message: message.value.trim(),
@@ -593,6 +623,7 @@ function requestOperation(panel, request) {
         () =>
           submitOperation({
             action: "PRODUCT_APPROVAL",
+            project_id: request.project_id,
             delivery_id: request.id,
             expected_checkpoint_sha256: request.checkpoint_sha256,
           }),
@@ -611,6 +642,7 @@ function requestOperation(panel, request) {
         () =>
           submitOperation({
             action: "CONTINUE_DELIVERY",
+            project_id: request.project_id,
             delivery_id: request.id,
             expected_checkpoint_sha256: request.checkpoint_sha256,
           }),
@@ -662,10 +694,13 @@ function deliveryResult(panel, request) {
 function renderRequests(content) {
   const top = el("div", undefined, "row request-heading");
   top.append(
-    el("h2", "需求项目"),
-    canControlCurrentCompany()
+    el(
+      "h2",
+      snapshot.selected_project_id ? "当前 Project 的需求" : "请先创建或选择 Project",
+    ),
+    canControlCurrentTeam() && snapshot.selected_project_id
       ? button(
-          "新建需求项目",
+          "新建需求",
           () => {
             composing = true;
             renderComposer();
@@ -681,7 +716,12 @@ function renderRequests(content) {
   if (!snapshot.requests.length) {
     const n = el("div", undefined, "empty");
     n.append(
-      el("p", "还没有需求。点击“新建需求项目”，选择涉及的代码目录后开始讨论。"),
+      el(
+        "p",
+        snapshot.selected_project_id
+          ? "还没有需求。点击“新建需求”，选择涉及的代码目录后开始讨论。"
+          : "还没有 Project。请在设置页先创建 Project。",
+      ),
     );
     content.append(n);
   }
@@ -714,25 +754,23 @@ async function adminFetch(url, options = {}) {
   if (!response.ok) throw new Error(payload.error?.message || "管理操作失败。");
   return payload;
 }
-async function loadKnowledge(companyId) {
-  knowledgeDocuments = await adminFetch(
-    "/api/v1/admin/companies/" + encodeURIComponent(companyId) + "/knowledge",
-  );
+async function loadKnowledge() {
+  knowledgeDocuments = await adminFetch("/api/v1/admin/team/knowledge");
 }
-async function loadAdministration(companyId) {
+async function loadAdministration() {
   try {
-    const [companies, settings] = await Promise.all([
-      adminFetch("/api/v1/admin/companies"),
+    const [projects, settings] = await Promise.all([
+      adminFetch("/api/v1/admin/projects"),
       adminFetch("/api/v1/admin/settings"),
     ]);
-    administrationCompanies = companies;
+    administrationProjects = projects;
     settingsSnapshot = settings;
     settingsDraft = structuredClone(settings.config);
-    await loadKnowledge(companyId || settings.config.company_id);
+    await loadKnowledge();
     administrationAvailable = true;
   } catch {
     administrationAvailable = false;
-    administrationCompanies = [];
+    administrationProjects = [];
     knowledgeDocuments = [];
     settingsSnapshot = null;
     settingsDraft = null;
@@ -756,7 +794,7 @@ function renderKnowledge(content) {
     content.append(el("div", administrationNotice.text, "admin-notice"));
   const top = el("div", undefined, "row request-heading");
   top.append(
-    el("h2", `${snapshot.company_name} · 已导入文档`),
+    el("h2", `${snapshot.team_name} · 已导入文档`),
     el("span", `${knowledgeDocuments.length} 份`, "badge"),
   );
   content.append(top);
@@ -786,9 +824,7 @@ function renderKnowledge(content) {
     feedback.textContent = "正在读取并校验文档…";
     try {
       await adminFetch(
-        "/api/v1/admin/companies/" +
-          encodeURIComponent(snapshot.company_id) +
-          "/knowledge?filename=" +
+        "/api/v1/admin/team/knowledge?filename=" +
           encodeURIComponent(selectedFile.name),
         {
           method: "POST",
@@ -796,7 +832,7 @@ function renderKnowledge(content) {
           body: selectedFile,
         },
       );
-      await loadKnowledge(snapshot.company_id);
+      await loadKnowledge();
       administrationNotice = {
         page: "knowledge",
         text: "导入完成。请到设置页选择它并保存，重启后用于新需求。",
@@ -811,7 +847,7 @@ function renderKnowledge(content) {
   });
   content.append(form);
   if (!knowledgeDocuments.length) {
-    content.append(el("div", "尚未导入公司知识文档。", "empty"));
+    content.append(el("div", "尚未导入团队知识文档。", "empty"));
     return;
   }
   for (const item of knowledgeDocuments) {
@@ -845,7 +881,7 @@ function renderKnowledge(content) {
       card.append(
         button("前往设置并启用", async () => {
           page = "settings";
-          await loadAdministration(settingsSnapshot.config.company_id);
+          await loadAdministration();
           updateNavigation();
           render();
         }),
@@ -871,48 +907,45 @@ function selectInput(values, current, update) {
   control.addEventListener("change", () => update(control.value));
   return control;
 }
-function renderCompanyCreator(content) {
+function renderProjectCreator(content) {
   const panel = el("section", undefined, "admin-panel");
-  panel.append(el("h2", "接入新公司"));
+  panel.append(el("h2", "创建 Project"));
   const form = el("form", undefined, "settings-grid");
-  const companyId = el("input");
-  companyId.placeholder = "company_acme";
-  companyId.pattern = "company_[a-z0-9][a-z0-9_-]{1,63}";
-  companyId.required = true;
   const name = el("input");
-  name.placeholder = "公司显示名称";
+  name.placeholder = "Project 显示名称";
   name.maxLength = 200;
   name.required = true;
   const feedback = el("p", "", "form-feedback full-row");
-  const submit = el("button", "创建公司", "primary");
+  const submit = el("button", "创建 Project", "primary");
   submit.type = "submit";
   form.append(
-    field("公司 ID", companyId, "创建后不可修改，用于隔离知识和交付事实。"),
+    field(
+      "Project 名称",
+      name,
+      "平台会生成稳定 Project ID；之后可登记多个代码仓库并创建多个 Requirement。",
+    ),
   );
-  form.append(field("公司名称", name));
   form.append(feedback, submit);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     submit.disabled = true;
     try {
-      await adminFetch("/api/v1/admin/companies", {
+      const created = await adminFetch("/api/v1/admin/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          company_id: companyId.value.trim(),
-          name: name.value.trim(),
-        }),
+        body: JSON.stringify({ name: name.value.trim() }),
       });
-      await loadAdministration(settingsDraft.company_id);
+      await loadAdministration();
       administrationNotice = {
         page: "settings",
-        text: "公司已创建。可在下方将它设为活动公司。",
+        text: "Project 已创建。现在可以切换到该 Project 并创建 Requirement。",
       };
+      await refresh(created.project_id);
       render();
     } catch (error) {
       feedback.className = "form-feedback error full-row";
       feedback.textContent =
-        error instanceof Error ? error.message : "公司创建失败。";
+        error instanceof Error ? error.message : "Project 创建失败。";
       submit.disabled = false;
     }
   });
@@ -926,7 +959,7 @@ function renderSettings(content) {
   }
   if (administrationNotice?.page === "settings")
     content.append(el("div", administrationNotice.text, "admin-notice"));
-  renderCompanyCreator(content);
+  renderProjectCreator(content);
   const panel = el("section", undefined, "admin-panel");
   const top = el("div", undefined, "row");
   top.append(
@@ -946,28 +979,12 @@ function renderSettings(content) {
     settingsDraft.platform_root,
     (value) => {
       if (value !== settingsDraft.platform_root)
-        settingsDraft.company_knowledge_paths = [];
+        settingsDraft.team_knowledge_paths = [];
       settingsDraft.platform_root = value;
     },
   );
-  const company = selectInput(
-    administrationCompanies.map((item) => [
-      item.company_id,
-      `${item.name} · ${item.company_id}`,
-    ]),
-    settingsDraft.company_id,
-    async (value) => {
-      const selectedCompany = administrationCompanies.find(
-        (item) => item.company_id === value,
-      );
-      if (!selectedCompany) return;
-      settingsDraft.company_id = value;
-      settingsDraft.company_name = selectedCompany.name;
-      settingsDraft.company_knowledge_paths = [];
-      await loadKnowledge(value);
-      render();
-    },
-  );
+  const team = bindInput(el("input"), settingsDraft.team_name, () => {});
+  team.disabled = true;
   const dsn = bindInput(
     el("input"),
     settingsDraft.database.dsn_env,
@@ -997,9 +1014,13 @@ function renderSettings(content) {
     field(
       "平台数据目录",
       platformRoot,
-      "必须是绝对路径；切换后会在新目录初始化当前公司，不迁移旧知识，并要求重启。",
+      "必须是绝对路径；Team、Projects、worktrees 与 quarantine 都保存在该目录。",
     ),
-    field("活动公司", company, "需求写操作只进入活动公司；切换后需要重启。"),
+    field(
+      "唯一 Team",
+      team,
+      `${settingsDraft.team_id}；Team 是长期团队，不随 Project 切换。`,
+    ),
     field("MySQL DSN 环境变量名", dsn, "页面只保存变量名，不读取或显示 DSN。"),
     field("Codex 可执行文件", codex),
     field("Web Console 端口", port, "修改端口后使用新地址重启。"),
@@ -1019,7 +1040,7 @@ function renderSettings(content) {
   form.append(secrets);
   const knowledge = el("section", undefined, "settings-subsection");
   knowledge.append(
-    el("h3", "用于新需求的公司知识"),
+    el("h3", "用于新需求的团队通用知识"),
     el(
       "p",
       "知识选择变化会改变后续准备摘要；已经批准的交付不会被静默重解释。",
@@ -1027,17 +1048,17 @@ function renderSettings(content) {
     ),
   );
   if (!knowledgeDocuments.length)
-    knowledge.append(el("p", "该公司尚未导入文档。", "muted"));
+    knowledge.append(el("p", "Team 尚未导入通用知识文档。", "muted"));
   for (const item of knowledgeDocuments) {
     const control = el("input");
     const path = item.manifest.normalized_relative_path;
     control.type = "checkbox";
-    control.checked = settingsDraft.company_knowledge_paths.includes(path);
+    control.checked = settingsDraft.team_knowledge_paths.includes(path);
     control.addEventListener("change", () => {
-      const selected = new Set(settingsDraft.company_knowledge_paths);
+      const selected = new Set(settingsDraft.team_knowledge_paths);
       if (control.checked) selected.add(path);
       else selected.delete(path);
-      settingsDraft.company_knowledge_paths = [...selected].sort();
+      settingsDraft.team_knowledge_paths = [...selected].sort();
     });
     knowledge.append(field(item.manifest.source_name, control, path));
   }
@@ -1278,21 +1299,21 @@ function render() {
   const expanded = new Set(
     [...document.querySelectorAll("details[open]")].map((n) => n.dataset.key),
   );
-  document.getElementById("company").textContent = snapshot.company_name;
-  const companies = document.getElementById("companies");
-  companies.replaceChildren();
-  for (const company of snapshot.companies || []) {
-    const tab = button(company.name, () => refresh(company.id), "");
-    const active = company.id === snapshot.company_id;
+  document.getElementById("team").textContent = snapshot.team_name;
+  const projects = document.getElementById("projects");
+  projects.replaceChildren();
+  for (const project of snapshot.projects || []) {
+    const tab = button(project.name, () => refresh(project.id), "");
+    const active = project.id === snapshot.selected_project_id;
     tab.setAttribute("role", "tab");
     tab.setAttribute("aria-selected", String(active));
     if (active) tab.setAttribute("aria-current", "true");
-    companies.append(tab);
+    projects.append(tab);
   }
   document.getElementById("heading").textContent = pageCopy[page][0];
   document.getElementById("explanation").textContent = pageCopy[page][1];
   document.getElementById("new-request").hidden =
-    page !== "requests" || !canControlCurrentCompany();
+    page !== "requests" || !canControlCurrentTeam() || !currentProjectId();
   const content = document.getElementById("content");
   content.replaceChildren();
   if (page === "team") renderTeam(content);
@@ -1321,7 +1342,7 @@ for (const target of ["team", "requests", "knowledge", "settings"])
       page = target;
       selected = null;
       composing = false;
-      if (target === "knowledge") await loadAdministration(snapshot.company_id);
+      if (target === "knowledge") await loadAdministration();
       if (target === "settings") await loadAdministration();
       updateNavigation();
       render();
@@ -1341,21 +1362,21 @@ async function refreshOperations() {
     const info = await infoResponse.json();
     const nextOperations = await operationsResponse.json();
     if (
-      info.schema_version !== "v0.1" ||
-      typeof info.company_id !== "string" ||
+      info.schema_version !== "v0.2" ||
+      typeof info.team_id !== "string" ||
       !Array.isArray(nextOperations)
     )
       throw new Error("invalid console response");
     consoleAvailable = true;
-    consoleCompanyId = info.company_id;
+    consoleTeamId = info.team_id;
     operations = nextOperations;
   } catch {
     consoleAvailable = false;
-    consoleCompanyId = null;
+    consoleTeamId = null;
     operations = [];
   }
 }
-async function refresh(companyId) {
+async function refresh(projectId) {
   if (refreshing) return;
   refreshing = true;
   document.getElementById("refresh").disabled = true;
@@ -1363,9 +1384,9 @@ async function refresh(companyId) {
   const controller = new AbortController(),
     timeout = setTimeout(() => controller.abort(), 40000);
   try {
-    const target = companyId || (snapshot && snapshot.company_id);
+    const target = projectId || (snapshot && snapshot.selected_project_id);
     const url = target
-      ? "/api/v1/team/" + encodeURIComponent(target)
+      ? "/api/v1/team?project_id=" + encodeURIComponent(target)
       : "/api/v1/team";
     const response = await fetch(url, {
       cache: "no-store",
@@ -1374,7 +1395,7 @@ async function refresh(companyId) {
     if (!response.ok) throw new Error("read failed");
     const next = await response.json();
     if (
-      next.schema_version !== "v0.1" ||
+      next.schema_version !== "v0.2" ||
       !Array.isArray(next.tasks) ||
       !Array.isArray(next.agents) ||
       !Array.isArray(next.requests)
@@ -1385,15 +1406,14 @@ async function refresh(companyId) {
       JSON.stringify({ ...snapshot, as_of: null }) !==
         JSON.stringify({ ...next, as_of: null });
     const priorOperations = JSON.stringify(operations);
-    const priorConsoleCompany = consoleCompanyId;
+    const priorConsoleTeam = consoleTeamId;
     snapshot = next;
     await refreshOperations();
-    if (page === "knowledge" && target !== undefined)
-      await loadAdministration(next.company_id);
+    if (page === "knowledge" && target !== undefined) await loadAdministration();
     if (
       changed ||
       priorOperations !== JSON.stringify(operations) ||
-      priorConsoleCompany !== consoleCompanyId
+      priorConsoleTeam !== consoleTeamId
     )
       render();
     status.className = "";
@@ -1406,7 +1426,7 @@ async function refresh(companyId) {
     status.className = "error";
     status.textContent = snapshot
       ? "刷新失败，以下为旧数据 · 上次成功读取 " + time(snapshot.as_of)
-      : "暂时无法读取数据。请检查生产配置、MySQL 连接，以及公司工作空间是否已准备。";
+      : "暂时无法读取数据。请检查生产配置、MySQL 连接，以及 Team/Project workspace 是否已准备。";
   } finally {
     clearTimeout(timeout);
     refreshing = false;

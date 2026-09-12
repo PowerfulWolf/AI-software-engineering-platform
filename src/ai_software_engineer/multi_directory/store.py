@@ -11,9 +11,9 @@ from pathlib import Path
 
 from pydantic import TypeAdapter
 
+from ai_software_engineer.manager.delivery import DeliveryCheckpointStale
+from ai_software_engineer.manager.delivery_checkpoint import DeliveryId
 from ai_software_engineer.multi_directory.models import JointCheckpoint
-from ai_software_engineer.project_manager.delivery import DeliveryCheckpointStale
-from ai_software_engineer.project_manager.delivery_checkpoint import DeliveryId
 
 
 class JointJournal:
@@ -113,8 +113,10 @@ def _validate_successor(previous: JointCheckpoint | None, item: JointCheckpoint)
         raise ValueError("joint journal hash chain is broken")
     for field in (
         "delivery_id",
-        "company_id",
-        "company_manifest_sha256",
+        "team_id",
+        "team_manifest_sha256",
+        "project_id",
+        "project_manifest_sha256",
         "scope",
         "title",
         "requirement",

@@ -17,9 +17,8 @@ from pydantic import (
     model_validator,
 )
 
-from ai_software_engineer.company_workspace import CompanyId
 from ai_software_engineer.domain import AgentPermissions, AgentRole
-from ai_software_engineer.domain.identity import ContextId, ProjectId, RunId
+from ai_software_engineer.domain.identity import ContextId, RepositoryId, RunId, TeamId
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.domain.project_delivery import StageSha256
 from ai_software_engineer.domain.task import TaskId
@@ -29,7 +28,7 @@ from ai_software_engineer.git.capture import (
     WorktreeChangeCapture,
 )
 from ai_software_engineer.git.ports import AttemptNumber, WorktreeRef
-from ai_software_engineer.project_manager.delivery_checkpoint import DeliveryId
+from ai_software_engineer.manager.delivery_checkpoint import DeliveryId
 from ai_software_engineer.redaction import redact_text
 
 
@@ -164,10 +163,10 @@ class CapturedChanges(DomainModel):
 
 
 class RecoveryScope(DomainModel):
-    company_id: CompanyId
-    project_id: ProjectId
+    team_id: TeamId
+    repository_id: RepositoryId
     delivery_id: DeliveryId
-    project_root: AbsolutePath
+    repository_root: AbsolutePath
 
 
 class RecoverySource(DomainModel):

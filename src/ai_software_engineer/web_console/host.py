@@ -9,14 +9,14 @@ import uvicorn
 from fastapi import FastAPI
 
 from ai_software_engineer.config import ProductionConfig, ProductionConfigError
-from ai_software_engineer.project_manager.production_host import OrganizationTeamHost
+from ai_software_engineer.manager.production_host import TeamHost
 from ai_software_engineer.store import StoreError
 from ai_software_engineer.team_view.reader import ProductionTeamReader
 from ai_software_engineer.work_queue import QueueError
 
 from .administration import LocalConsoleAdministration
 from .core import ProjectConsole
-from .project_manager import ProjectManagerConsoleAdapter
+from .manager import ManagerConsoleAdapter
 from .store import FileConsoleOperationStore
 from .transport import create_console_app
 
@@ -30,14 +30,14 @@ def production_console_app(
     config = ProductionConfig.from_environment(variables)
     selected_port = config.console_port if port is None else port
     _validate_port(selected_port)
-    host = OrganizationTeamHost(config=config, environment=variables)
+    host = TeamHost(config=config, environment=variables)
     store = FileConsoleOperationStore(
-        host.company_workspace.requests_root / "_console_operations",
-        company_id=config.company_id,
+        host.team_workspace.directory("work-items") / "console-operations",
+        team_id=config.team_id,
     )
     console = ProjectConsole(
         store=store,
-        executor=ProjectManagerConsoleAdapter(host),
+        executor=ManagerConsoleAdapter(host),
     )
     reader = ProductionTeamReader(config, variables)
     administration = LocalConsoleAdministration(
@@ -48,7 +48,7 @@ def production_console_app(
     return create_console_app(
         console,
         reader,
-        company_id=config.company_id,
+        team_id=config.team_id,
         port=selected_port,
         administration=administration,
     )

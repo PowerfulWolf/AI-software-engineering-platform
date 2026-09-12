@@ -10,7 +10,7 @@ from pydantic import Field, StrictBool, StrictInt, model_validator
 
 from ai_software_engineer.domain import ProductSpec, ProductSpecStatus
 from ai_software_engineer.domain.agent import TimeoutSeconds
-from ai_software_engineer.domain.identity import ContextId, ProjectId, RunId
+from ai_software_engineer.domain.identity import ContextId, RepositoryId, RunId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.project_delivery import ProjectRequestId
 from ai_software_engineer.product.context import (
@@ -80,7 +80,7 @@ class ProductAgentRequest(DomainModel):
     kind: Literal["product_agent_request"] = "product_agent_request"
     schema_version: Literal["v0.1"] = "v0.1"
     run_id: RunId
-    project_id: ProjectId
+    repository_id: RepositoryId
     request_id: ProjectRequestId
     context: ProductContextManifest
     permissions: ProductAgentPermissions = PRODUCT_AGENT_PERMISSIONS
@@ -90,7 +90,10 @@ class ProductAgentRequest(DomainModel):
     @model_validator(mode="after")
     def validate_context_identity(self) -> Self:
         self.context.validate_integrity()
-        if self.project_id != self.context.project_id or self.request_id != self.context.request_id:
+        if (
+            self.repository_id != self.context.repository_id
+            or self.request_id != self.context.request_id
+        ):
             raise ValueError("ProductAgentRequest identity does not match context")
         if self.permissions != self.context.permissions:
             raise ValueError("ProductAgentRequest permissions do not match context policy")
@@ -103,7 +106,7 @@ class ProductAgentResult(DomainModel):
     kind: Literal["product_agent_result"] = "product_agent_result"
     schema_version: Literal["v0.1"] = "v0.1"
     run_id: RunId
-    project_id: ProjectId
+    repository_id: RepositoryId
     request_id: ProjectRequestId
     context_id: ContextId
     status: ProductAgentRunStatus
@@ -231,7 +234,7 @@ class FakeProductAgentAdapter:
                 raise ProductAgentConfigurationError("CLARIFY scenario has no clarification")
             return ProductAgentResult(
                 run_id=request.run_id,
-                project_id=request.project_id,
+                repository_id=request.repository_id,
                 request_id=request.request_id,
                 context_id=request.context.context_id,
                 status=ProductAgentRunStatus.SUCCEEDED,
@@ -252,7 +255,7 @@ class FakeProductAgentAdapter:
             )
         return ProductAgentResult(
             run_id=request.run_id,
-            project_id=request.project_id,
+            repository_id=request.repository_id,
             request_id=request.request_id,
             context_id=request.context.context_id,
             status=ProductAgentRunStatus.SUCCEEDED,
@@ -268,7 +271,7 @@ def _product_spec_mismatch(request: ProductAgentRequest, product_spec: ProductSp
         return "fake ProductSpec integrity does not match content"
     context = request.context
     if (
-        product_spec.project_id != request.project_id
+        product_spec.repository_id != request.repository_id
         or product_spec.request_id != request.request_id
     ):
         return "fake ProductSpec project/request does not match ProductAgentRequest"
@@ -292,7 +295,7 @@ def _failure_result(
 ) -> ProductAgentResult:
     return ProductAgentResult(
         run_id=request.run_id,
-        project_id=request.project_id,
+        repository_id=request.repository_id,
         request_id=request.request_id,
         context_id=request.context.context_id,
         status=status,

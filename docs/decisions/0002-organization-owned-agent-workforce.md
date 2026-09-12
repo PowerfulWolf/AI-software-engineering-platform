@@ -1,4 +1,4 @@
-# Organization-owned Agents and run-scoped model allocation
+# Team-owned Agents and run-scoped model allocation
 
 Agent 是组织拥有的长期团队成员，Project 只拥有工作、规范、访问授权和执行记录；Task 通过
 Role Assignment 与有期限的 Task Lease 使用 Agent 容量。每个 Assignment 的实际执行必须创建

@@ -1,17 +1,19 @@
-"""Browser-only Project Manager console."""
+"""Browser-only Manager console."""
 
 from .administration import (
     AdministrationError,
-    CompanySummary,
     ConsoleAdministration,
-    CreateCompanyRequest,
+    CreateProjectRequest,
     KnowledgeDocumentView,
     LocalConsoleAdministration,
+    ProjectSummary,
     SecretStatus,
     SettingsSnapshot,
+    TeamSummary,
     UpdateSettingsRequest,
 )
-from .core import ConsoleCommandRejected, ProjectConsole, ProjectManagerConsolePort
+from .core import ConsoleCommandRejected, ManagerConsolePort, ProjectConsole
+from .manager import ManagerConsoleAdapter, TeamConsoleHost
 from .models import (
     CONSOLE_INTENT_ADAPTER,
     ConsoleAction,
@@ -21,11 +23,11 @@ from .models import (
     ConsoleOperation,
     ConsoleOperationStatus,
     ContinueDeliveryIntent,
-    CreateRequirementProjectIntent,
+    CreateProjectIntent,
+    CreateRequirementIntent,
     ProductApprovalIntent,
     ProductReplyIntent,
 )
-from .project_manager import OrganizationTeamConsoleHost, ProjectManagerConsoleAdapter
 from .store import (
     ConsoleOperationConflict,
     ConsoleOperationError,
@@ -39,7 +41,6 @@ from .transport import ConsoleApplication, SubmitOperation, TeamReader, create_c
 __all__ = [
     "CONSOLE_INTENT_ADAPTER",
     "AdministrationError",
-    "CompanySummary",
     "ConsoleAction",
     "ConsoleAdministration",
     "ConsoleApplication",
@@ -54,22 +55,25 @@ __all__ = [
     "ConsoleOperationStatus",
     "ConsoleOperationStore",
     "ContinueDeliveryIntent",
-    "CreateCompanyRequest",
-    "CreateRequirementProjectIntent",
+    "CreateProjectIntent",
+    "CreateProjectRequest",
+    "CreateRequirementIntent",
     "FileConsoleOperationStore",
     "InMemoryConsoleOperationStore",
     "KnowledgeDocumentView",
     "LocalConsoleAdministration",
-    "OrganizationTeamConsoleHost",
+    "ManagerConsoleAdapter",
+    "ManagerConsolePort",
     "ProductApprovalIntent",
     "ProductReplyIntent",
     "ProjectConsole",
-    "ProjectManagerConsoleAdapter",
-    "ProjectManagerConsolePort",
+    "ProjectSummary",
     "SecretStatus",
     "SettingsSnapshot",
     "SubmitOperation",
+    "TeamConsoleHost",
     "TeamReader",
+    "TeamSummary",
     "UpdateSettingsRequest",
     "create_console_app",
 ]

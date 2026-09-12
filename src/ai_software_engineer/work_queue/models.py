@@ -71,7 +71,7 @@ class QueueClaim(DomainModel):
             raise ValueError("QueueClaim requires a LEASED WorkItem")
         if (
             self.assignment.task_id != self.work_item.task_id
-            or self.assignment.project_id != self.work_item.project_id
+            or self.assignment.repository_id != self.work_item.repository_id
             or self.assignment.role is not self.work_item.role
             or self.assignment.attempt != self.work_item.attempt
             or self.lease.assignment_id != self.assignment.id

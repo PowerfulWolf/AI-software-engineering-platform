@@ -9,7 +9,7 @@ from typing import Annotated, Literal, Protocol, Self
 from pydantic import Field, StrictBool, StrictInt, model_validator
 
 from ai_software_engineer.domain.agent import TimeoutSeconds
-from ai_software_engineer.domain.identity import ContextId, ProjectId, RunId
+from ai_software_engineer.domain.identity import ContextId, RepositoryId, RunId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.domain.project_delivery import (
     ExecutionPlan,
@@ -64,7 +64,7 @@ class PlannerAgentRequest(DomainModel):
     kind: Literal["planner_agent_request"] = "planner_agent_request"
     schema_version: Literal["v0.1"] = "v0.1"
     run_id: RunId
-    project_id: ProjectId
+    repository_id: RepositoryId
     request_id: ProjectRequestId
     context: PlannerContextManifest
     permissions: PlannerAgentPermissions = PLANNER_AGENT_PERMISSIONS
@@ -76,7 +76,10 @@ class PlannerAgentRequest(DomainModel):
     @model_validator(mode="after")
     def validate_context_identity(self) -> Self:
         self.context.validate_integrity()
-        if self.project_id != self.context.project_id or self.request_id != self.context.request_id:
+        if (
+            self.repository_id != self.context.repository_id
+            or self.request_id != self.context.request_id
+        ):
             raise ValueError("PlannerAgentRequest identity does not match context")
         if self.permissions != self.context.permissions:
             raise ValueError("PlannerAgentRequest permissions do not match context policy")
@@ -89,7 +92,7 @@ class PlannerAgentResult(DomainModel):
     kind: Literal["planner_agent_result"] = "planner_agent_result"
     schema_version: Literal["v0.1"] = "v0.1"
     run_id: RunId
-    project_id: ProjectId
+    repository_id: RepositoryId
     request_id: ProjectRequestId
     context_id: ContextId
     status: PlannerAgentRunStatus
@@ -219,7 +222,7 @@ class FakePlannerAgentAdapter:
             )
         return PlannerAgentResult(
             run_id=request.run_id,
-            project_id=request.project_id,
+            repository_id=request.repository_id,
             request_id=request.request_id,
             context_id=request.context.context_id,
             status=PlannerAgentRunStatus.SUCCEEDED,
@@ -235,7 +238,7 @@ def validate_planner_result(
     """Guard adapter identity and return the exact successful abstract plan."""
     if (
         result.run_id != request.run_id
-        or result.project_id != request.project_id
+        or result.repository_id != request.repository_id
         or result.request_id != request.request_id
         or result.context_id != request.context.context_id
     ):
@@ -253,7 +256,7 @@ def _validate_plan_output(request: PlannerAgentRequest, plan: ExecutionPlan) -> 
     context = request.context
     validate_execution_plan(context.product_spec, context.technical_design, plan)
     if (
-        plan.project_id != request.project_id
+        plan.repository_id != request.repository_id
         or plan.request_id != request.request_id
         or plan.version != context.expected_execution_plan_version
     ):
@@ -271,7 +274,7 @@ def _failure_result(
 ) -> PlannerAgentResult:
     return PlannerAgentResult(
         run_id=request.run_id,
-        project_id=request.project_id,
+        repository_id=request.repository_id,
         request_id=request.request_id,
         context_id=request.context.context_id,
         status=status,

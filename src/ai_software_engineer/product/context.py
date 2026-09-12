@@ -15,16 +15,16 @@ from typing import Annotated, Literal, Self
 from pydantic import AwareDatetime, Field, StrictInt, StringConstraints, model_validator
 
 from ai_software_engineer.domain import ProductSpec, ProjectPreparation, ProjectRequest
-from ai_software_engineer.domain.identity import ContextId, ProjectId
+from ai_software_engineer.domain.identity import ContextId, RepositoryId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.project_delivery import (
     ProductSpecId,
     ProjectRequestId,
     StageSha256,
 )
+from ai_software_engineer.manager.baseline import ProjectSpecBaseline
 from ai_software_engineer.product.models import ProductDialogueActor
-from ai_software_engineer.project_manager.baseline import ProjectSpecBaseline
-from ai_software_engineer.project_profile import ProjectProfile
+from ai_software_engineer.repository_profile import RepositoryProfile
 
 ProductDialogueSha256 = Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
 
@@ -88,10 +88,10 @@ class ProductContextManifest(DomainModel):
     kind: Literal["product_context_manifest"] = "product_context_manifest"
     schema_version: Literal["v0.1"] = "v0.1"
     context_id: ContextId
-    project_id: ProjectId
+    repository_id: RepositoryId
     request_id: ProjectRequestId
     preparation: ProjectPreparation
-    project_profile: ProjectProfile
+    repository_profile: RepositoryProfile
     project_baseline: ProjectSpecBaseline
     project_request: ProjectRequest
     dialogue: tuple[ProductDialogueContextItem, ...] = ()
@@ -109,7 +109,7 @@ class ProductContextManifest(DomainModel):
         self._validate_lineage()
         expected_sources = _context_sources(
             self.preparation,
-            self.project_profile,
+            self.repository_profile,
             self.project_baseline,
             self.project_request,
             self.dialogue,
@@ -128,7 +128,7 @@ class ProductContextManifest(DomainModel):
     def _validate_lineage(self) -> None:
         try:
             self.preparation.validate_integrity()
-            self.project_profile.validate_integrity()
+            self.repository_profile.validate_integrity()
             self.project_baseline.validate_integrity()
             self.project_request.validate_integrity()
             if self.current_product_spec is not None:
@@ -136,14 +136,15 @@ class ProductContextManifest(DomainModel):
         except RuntimeError as error:
             raise ValueError("Product context contains an invalid stage document") from error
         if (
-            self.project_id != self.preparation.project_id
-            or self.project_profile.project_id != self.project_id
-            or self.project_baseline.project_id != self.project_id
-            or self.project_profile.profile_sha256 != self.preparation.project_profile_sha256
-            or self.project_baseline.project_profile_sha256 != self.project_profile.profile_sha256
+            self.repository_id != self.preparation.repository_id
+            or self.repository_profile.repository_id != self.repository_id
+            or self.project_baseline.repository_id != self.repository_id
+            or self.repository_profile.profile_sha256 != self.preparation.repository_profile_sha256
+            or self.project_baseline.repository_profile_sha256
+            != self.repository_profile.profile_sha256
             or self.project_baseline.baseline_sha256 != self.preparation.baseline_spec_sha256
             or self.request_id != self.project_request.id
-            or self.project_request.project_id != self.project_id
+            or self.project_request.repository_id != self.repository_id
             or self.project_request.preparation_sha256 != self.preparation.preparation_sha256
         ):
             raise ValueError("Product context preparation/request lineage does not match")
@@ -152,7 +153,7 @@ class ProductContextManifest(DomainModel):
         expected_version = 1 if current is None else current.version + 1
         expected_supersedes = None if current is None else current.id
         if current is not None and (
-            current.project_id != self.project_id or current.request_id != self.request_id
+            current.repository_id != self.repository_id or current.request_id != self.request_id
         ):
             raise ValueError("current ProductSpec belongs to another request")
         if (
@@ -167,7 +168,7 @@ class ProductContextManifest(DomainModel):
             self._validate_lineage()
             if self.sources != _context_sources(
                 self.preparation,
-                self.project_profile,
+                self.repository_profile,
                 self.project_baseline,
                 self.project_request,
                 self.dialogue,
@@ -192,7 +193,7 @@ class ProductContextBuilder:
     def build(
         self,
         preparation: ProjectPreparation,
-        project_profile: ProjectProfile,
+        repository_profile: RepositoryProfile,
         project_baseline: ProjectSpecBaseline,
         project_request: ProjectRequest,
         *,
@@ -205,7 +206,7 @@ class ProductContextBuilder:
             raise ProductContextLineageError("built_at must be timezone-aware")
         try:
             preparation.validate_integrity()
-            project_profile.validate_integrity()
+            repository_profile.validate_integrity()
             project_baseline.validate_integrity()
             project_request.validate_integrity()
             if current_product_spec is not None:
@@ -213,11 +214,11 @@ class ProductContextBuilder:
         except RuntimeError as error:
             raise ProductContextLineageError("Product context stage integrity failed") from error
         if (
-            project_request.project_id != preparation.project_id
-            or project_profile.project_id != preparation.project_id
-            or project_baseline.project_id != preparation.project_id
-            or project_profile.profile_sha256 != preparation.project_profile_sha256
-            or project_baseline.project_profile_sha256 != project_profile.profile_sha256
+            project_request.repository_id != preparation.repository_id
+            or repository_profile.repository_id != preparation.repository_id
+            or project_baseline.repository_id != preparation.repository_id
+            or repository_profile.profile_sha256 != preparation.repository_profile_sha256
+            or project_baseline.repository_profile_sha256 != repository_profile.profile_sha256
             or project_baseline.baseline_sha256 != preparation.baseline_spec_sha256
             or project_request.preparation_sha256 != preparation.preparation_sha256
         ):
@@ -229,7 +230,7 @@ class ProductContextBuilder:
         except ValueError as error:
             raise ProductContextLineageError(str(error)) from error
         if current_product_spec is not None and (
-            current_product_spec.project_id != project_request.project_id
+            current_product_spec.repository_id != project_request.repository_id
             or current_product_spec.request_id != project_request.id
         ):
             raise ProductContextLineageError("current ProductSpec belongs to another request")
@@ -237,7 +238,7 @@ class ProductContextBuilder:
         permissions = PRODUCT_AGENT_PERMISSIONS
         sources = _context_sources(
             preparation,
-            project_profile,
+            repository_profile,
             project_baseline,
             project_request,
             dialogue,
@@ -247,10 +248,10 @@ class ProductContextBuilder:
         expected_version = 1 if current_product_spec is None else current_product_spec.version + 1
         expected_supersedes = None if current_product_spec is None else current_product_spec.id
         identity = _manifest_identity(
-            project_id=preparation.project_id,
+            repository_id=preparation.repository_id,
             request_id=project_request.id,
             preparation=preparation,
-            project_profile=project_profile,
+            repository_profile=repository_profile,
             project_baseline=project_baseline,
             project_request=project_request,
             dialogue=dialogue,
@@ -263,10 +264,10 @@ class ProductContextBuilder:
         digest = _sha256(_canonical_json(identity))
         return ProductContextManifest(
             context_id=f"ctx_{digest}",
-            project_id=preparation.project_id,
+            repository_id=preparation.repository_id,
             request_id=project_request.id,
             preparation=preparation,
-            project_profile=project_profile,
+            repository_profile=repository_profile,
             project_baseline=project_baseline,
             project_request=project_request,
             dialogue=dialogue,
@@ -291,7 +292,7 @@ def _validate_dialogue_chain(dialogue: tuple[ProductDialogueContextItem, ...]) -
 
 def _context_sources(
     preparation: ProjectPreparation,
-    project_profile: ProjectProfile,
+    repository_profile: RepositoryProfile,
     project_baseline: ProjectSpecBaseline,
     project_request: ProjectRequest,
     dialogue: tuple[ProductDialogueContextItem, ...],
@@ -304,15 +305,15 @@ def _context_sources(
             sha256=_sha256(_canonical_json(permissions.to_wire())),
         ),
         ProductContextSource(
-            uri=f"preparation://{preparation.project_id}",
+            uri=f"preparation://{preparation.repository_id}",
             sha256=preparation.preparation_sha256,
         ),
         ProductContextSource(
-            uri=f"project-profile://{preparation.project_id}",
-            sha256=project_profile.profile_sha256,
+            uri=f"repository-profile://{preparation.repository_id}",
+            sha256=repository_profile.profile_sha256,
         ),
         ProductContextSource(
-            uri=f"baseline://{preparation.project_id}",
+            uri=f"baseline://{preparation.repository_id}",
             sha256=project_baseline.baseline_sha256,
         ),
         ProductContextSource(
@@ -344,10 +345,10 @@ def _context_sources(
 
 def _manifest_identity(
     *,
-    project_id: str,
+    repository_id: str,
     request_id: str,
     preparation: ProjectPreparation,
-    project_profile: ProjectProfile,
+    repository_profile: RepositoryProfile,
     project_baseline: ProjectSpecBaseline,
     project_request: ProjectRequest,
     dialogue: tuple[ProductDialogueContextItem, ...],
@@ -360,10 +361,10 @@ def _manifest_identity(
     return {
         "kind": "product_context_manifest",
         "schema_version": "v0.1",
-        "project_id": project_id,
+        "repository_id": repository_id,
         "request_id": request_id,
         "preparation": preparation.to_wire(),
-        "project_profile": project_profile.to_wire(),
+        "repository_profile": repository_profile.to_wire(),
         "project_baseline": project_baseline.to_wire(),
         "project_request": project_request.to_wire(),
         "dialogue": [item.to_wire() for item in dialogue],
@@ -379,10 +380,10 @@ def _manifest_identity(
 
 def _manifest_digest(manifest: ProductContextManifest) -> str:
     identity = _manifest_identity(
-        project_id=manifest.project_id,
+        repository_id=manifest.repository_id,
         request_id=manifest.request_id,
         preparation=manifest.preparation,
-        project_profile=manifest.project_profile,
+        repository_profile=manifest.repository_profile,
         project_baseline=manifest.project_baseline,
         project_request=manifest.project_request,
         dialogue=manifest.dialogue,

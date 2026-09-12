@@ -1,51 +1,63 @@
 # AI Software Engineering Context
 
-This context defines the shared language for auditable software delivery performed by constrained AI roles. These terms are organization-owned and remain stable even when an individual model or Agent implementation changes.
+This context defines the shared language for auditable software delivery performed by constrained AI roles. These terms are Team-owned and remain stable even when an individual model or Agent implementation changes.
 
 ## Language
 
-**Company**:
-The client knowledge and confidentiality boundary within which the engineering team works. A Company owns shared knowledge, Project Knowledge Modules, and Requirement Projects, but does not own the platform's Agents.
-_Avoid_: Agent organization, code repository
+**Team**:
+A long-lived AI software engineering unit that owns its Agents, model policies, capacity and reusable Team Knowledge while serving one or more Projects.
+_Avoid_: Company, tenant, code repository
 
-**Company Sidecar**:
-The unified external workspace holding one Company's shared knowledge, Project Knowledge Modules, and Requirement Project records. Physical co-location does not grant access to every module or make company guidance override project rules.
-_Avoid_: Source checkout, Agent memory, per-repository top-level sidecar
+**Team Workspace**:
+The external workspace holding the platform's one Team, its members, policies, Team Knowledge, Team Specs and Skills. It is a sibling of the Project catalog and is never stored inside a target code repository.
+_Avoid_: Company Sidecar, Project workspace, source checkout
 
-**Project Knowledge Module**:
-A company-scoped collection of project facts, native-rule references, architecture knowledge, and historical decisions associated with code directories. It is reused by relevant Requirement Projects rather than copied into each request.
-_Avoid_: Code clone, Agent team, Requirement Project
+**Team Knowledge**:
+Reusable knowledge that applies across the Team's Projects and is explicitly selected during context compilation.
+_Avoid_: Company knowledge, universal prompt, implicit Agent memory
 
-**Requirement Project**:
-A named collaboration space within one Company whose selected code scope is prepared before requirement discussion begins. It owns the discussion, approved product definition, technical design, execution plan, and joint delivery facts, and may involve several code repositories.
-_Avoid_: Code repository, Project group, single-repository Task
+**Project**:
+A stable product or business context served by the Team. It owns Project Knowledge, Project Specs, a Repository catalog and its Requirements; it is not synonymous with one code repository.
+_Avoid_: Team, Requirement Project, code checkout
 
-**Project Request**:
-A durable product-level request tied to one Project, containing the evolving user intent before it is specific enough to become a Delivery Task.
-_Avoid_: Raw prompt, Task, chat session
+**Project Knowledge**:
+A Project-scoped collection of domain facts, architecture knowledge, native-rule references and historical decisions reused by relevant Requirements.
+_Avoid_: Project Knowledge Module, code clone, Requirement evidence
 
-**Project Preparation**:
-The deterministic pre-conversation checkpoint proving that a Project has an external sidecar, a verified Project Profile, an organization binding, and a conflict-free project-level spec baseline.
-_Avoid_: Requirement intake, Task planning, repository scan chat
+**Requirement**:
+One user objective within a Project. It owns product discovery, technical design, execution planning, Tasks, Artifacts, Evidence, recovery and delivery facts, and may select several Repositories or directory scopes.
+_Avoid_: Requirement Project, code repository, Project, single-repository Task
 
-**Project Manager**:
-The organization-owned Agent that leads the team, accepts work, communicates with the user, advances stages, coordinates specialist Agents, and delivers results. Its privileged actions are exposed as policy-bound Skills backed by deterministic application services; the Agent cannot bypass their validation or stores.
-_Avoid_: Super-agent, autonomous judge, Scheduler
+**Repository**:
+A stable code resource registered beneath one Project and described by an integrity-checked Repository Profile. A Requirement references one or more Repositories and narrows each to an allowed directory scope.
+_Avoid_: Project, Requirement, transient worktree
+
+**Requirement Request**:
+A durable request tied to one Requirement, containing evolving user intent before it is specific enough to become delivery Tasks.
+_Avoid_: Project Request, raw prompt, Task, chat session
+
+**Requirement Preparation**:
+The deterministic pre-conversation checkpoint proving that the Requirement's selected Repositories, directory scopes, Repository Profiles and applicable Team/Project/native rules are bound and conflict-free.
+_Avoid_: Project Preparation, requirement discussion, Task planning
+
+**Manager**:
+The Team-owned Agent that leads the Team, accepts work, communicates with the user, advances stages, coordinates specialist Agents and delivers results. Its privileged actions are exposed as policy-bound Skills backed by deterministic application services; the Agent cannot bypass their validation or stores.
+_Avoid_: Project Manager, super-agent, autonomous judge, Scheduler
 
 **Agent Skill**:
 A typed, policy-bound capability an Agent may invoke for its role. A Skill delegates authoritative work to deterministic services and returns verifiable results; it is not prompt prose and does not grant ambient access to stores, state, or subprocesses.
 _Avoid_: Prompt instruction, hidden authority, arbitrary tool call
 
 **Product Agent**:
-An organization-owned Agent eligible for the Product Role, responsible for clarifying user intent and producing a reviewable Product Spec.
+A Team-owned Agent eligible for the Product Role, responsible for clarifying user intent and producing a reviewable Product Spec.
 _Avoid_: Producter Agent, Task creator, requirements chatbot
 
 **Product Spec**:
 An immutable, versioned product definition containing goals, non-goals, requirements, acceptance criteria, assumptions, open questions, and traceable user decisions for one Project Request.
 _Avoid_: Prompt summary, Task description, informal PRD
 
-**Solution Designer Agent**:
-An organization-owned Agent eligible for the Designer Role, responsible for turning a frozen Product Spec and verified Project facts into a Technical Design. It is a technical solution role, not a UI/UX visual-design role.
+**Designer Agent**:
+A Team-owned Agent eligible for the Designer Role, responsible for turning a frozen Product Spec and verified Project facts into a Technical Design. It is a technical solution role, not a UI/UX visual-design role.
 _Avoid_: UI designer, Coder, planning-mode Orchestrator
 
 **Technical Design**:
@@ -53,11 +65,11 @@ An immutable, versioned implementation contract mapping Product Spec requirement
 _Avoid_: Coding notes, Product Spec, unstructured plan
 
 **Planner Agent**:
-An organization-owned Agent eligible for the Planner Role, responsible for producing an Execution Plan from verified product, design, project, and organization facts. It may use read-only Scheduler/ModelRouter preview Skills to test feasibility, but it cannot commit concrete Agents, models, Assignments, or Leases.
-_Avoid_: Project Manager Service, Scheduler, super-agent
+A Team-owned Agent eligible for the Planner Role, responsible for producing an Execution Plan from verified product, design, Project and Team facts. It may use read-only Scheduler/ModelRouter preview Skills to test feasibility, but it cannot commit concrete Agents, models, Assignments, or Leases.
+_Avoid_: Manager Service, Scheduler, super-agent
 
 **Dispatch Commit**:
-The Project Manager Agent's policy-bound action that revalidates an approved Execution Plan through the deterministic Scheduler and ModelRouter, persists Role Assignments, Leases, and Model Selections, and only then starts eligible Agent Runs.
+The Manager Agent's policy-bound action that revalidates an approved Execution Plan through the deterministic Scheduler and ModelRouter, persists Role Assignments, Leases, and Model Selections, and only then starts eligible Agent Runs.
 _Avoid_: Planner suggestion, self-assignment, prompt routing
 
 **Execution Plan**:
@@ -73,11 +85,11 @@ A uniquely identified, independently verifiable condition that a Task must satis
 _Avoid_: Requirement item, checklist entry
 
 **Agent**:
-A long-lived, organization-owned team member with stable identity, capabilities, role eligibility, capacity, and performance history. An Agent is not owned by a Project and is not a model process.
+A long-lived, Team-owned member with stable identity, capabilities, role eligibility, capacity and performance history. An Agent is not owned by a Project or Requirement and is not a model process.
 _Avoid_: Project agent, bot, model instance
 
 **Agent Profile**:
-The versioned organization record describing one Agent's capabilities, eligible roles, capacity, trust, and default Model Policy. It does not contain project-specific permissions or a concrete model selection.
+The versioned Team record describing one Agent's capabilities, eligible roles, capacity, trust and default Model Policy. It does not contain Project-specific permissions or a concrete model selection.
 _Avoid_: Agent Definition, role config
 
 **Role Assignment**:
@@ -92,9 +104,9 @@ _Avoid_: Lock, ownership
 The schedulable representation of a Task, carrying priority, required capabilities, risk, availability, and waiting state independently from delivery status.
 _Avoid_: Task status, queue message
 
-**Project Profile**:
-An immutable, integrity-checked observation of one project's language markers, build systems, VCS revision, and project-native rule sources. It records facts and URI/hash references; it does not guess test commands or interpret Markdown semantics.
-_Avoid_: Generated project policy, Agent memory
+**Repository Profile**:
+An immutable, integrity-checked observation of one Repository's language markers, build systems, VCS revision and native rule sources. It records facts and URI/hash references; it does not guess test commands or interpret Markdown semantics.
+_Avoid_: Project Profile, generated policy, Agent memory
 
 **Compiled Spec**:
 The deterministic set of explicit structured organization, project, and Task rules admitted for one project delivery after conflict checks. It is injected into Context as one required, hash-addressed source.
@@ -108,16 +120,16 @@ _Avoid_: Warning, Agent choice
 An evidence-backed human decision that resolves or terminates one Spec Conflict without rewriting its history.
 _Avoid_: Chat approval, silent priority override
 
-**Organization Workspace**:
-The external durable root owned by the AI engineering organization for Agent Profiles, Model Policies, Work Items, Leases, and metrics. It never lives inside or belongs to a target project.
-_Avoid_: Project workspace, source checkout
+**Platform Workspace**:
+The external durable root containing Team Workspaces and platform-level operational metadata. It never lives inside or belongs to a target code repository.
+_Avoid_: Organization Workspace, Project workspace, source checkout
 
 **Runtime Workspace Binding**:
-The integrity-checked composition fact connecting one Organization Workspace, one Project sidecar, one Project Profile, fixed Runtime paths, and the exact target project root.
+The integrity-checked composition fact connecting one Team, one Project, one Requirement, selected Repository Profiles, fixed Runtime paths and exact target roots.
 _Avoid_: Current working directory, CLI defaults
 
 **Model Policy**:
-An organization-owned rule set that defines eligible models, a default Brain Tier, risk floors, and escalation signals for Agent Runs.
+A Team-owned rule set that defines eligible models, a default Brain Tier, risk floors and escalation signals for Agent Runs.
 _Avoid_: Agent model, provider config
 
 **Run Demand**:

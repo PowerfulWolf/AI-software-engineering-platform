@@ -2,7 +2,7 @@
 
 ## 1. Scope / Trigger
 
-修改 `web_console/`、浏览器交付操作、Team View 中的写入口、后台 Project Manager 执行、
+修改 `web_console/`、浏览器交付操作、Team View 中的写入口、后台 Manager 执行、
 Operation 持久化或 `ase-console` 生产装配时必须遵守本规范。只读投影仍同时遵守
 [`live-team-view.md`](live-team-view.md)，Delivery 恢复仍同时遵守
 [`delivery-recovery.md`](delivery-recovery.md)。
@@ -27,12 +27,12 @@ ConsoleOperationStore.succeed(...) -> ConsoleOperation
 ConsoleOperationStore.fail(...) -> ConsoleOperation
 ConsoleOperationStore.interrupt_running(...) -> tuple[ConsoleOperation, ...]
 
-ProjectManagerConsoleAdapter.execute(intent: ConsoleIntent) -> ConsoleCommandResult
+ManagerConsoleAdapter.execute(intent: ConsoleIntent) -> ConsoleCommandResult
 create_console_app(
     console: ConsoleApplication,
     reader: TeamReader,
     *,
-    company_id: str,
+    team_id: str,
     port: int = 8765,
     administration: ConsoleAdministration | None = None,
 ) -> FastAPI
@@ -45,10 +45,11 @@ production_console_app(
 
 `ConsoleIntent` 当前只允许：
 
-- `CREATE_REQUIREMENT_PROJECT(name, project_roots)`；
-- `PRODUCT_REPLY(delivery_id, expected_checkpoint_sha256, message)`；
-- `PRODUCT_APPROVAL(delivery_id, expected_checkpoint_sha256)`；
-- `CONTINUE_DELIVERY(delivery_id, expected_checkpoint_sha256, approved_plan_sha256?)`。
+- `CREATE_PROJECT(name, project_id?)`；
+- `CREATE_REQUIREMENT(project_id, name, repository_roots)`；
+- `PRODUCT_REPLY(project_id, delivery_id, expected_checkpoint_sha256, message)`；
+- `PRODUCT_APPROVAL(project_id, delivery_id, expected_checkpoint_sha256)`；
+- `CONTINUE_DELIVERY(project_id, delivery_id, expected_checkpoint_sha256, approved_plan_sha256?)`。
 
 公开持久化契约是 `schemas/console-operation.schema.json`。
 
@@ -57,22 +58,22 @@ production_console_app(
 ### 3.1 Command/query separation
 
 - `ProductionTeamReader` 和 Team View projection 永远只读；不得为了方便在 snapshot/GET 中装配
-  `OrganizationTeamHost`、初始化数据库、创建 workspace 或推进 Delivery。
+  `TeamHost`、初始化数据库、创建 workspace 或推进 Delivery。
 - 浏览器命令只能进入 `ProjectConsole`；它不重新实现 Product、Designer、Planner、Delivery、QA、
-  Reviewer 或 recovery 规则，只委托现有 Project Manager application interfaces。
+  Reviewer 或 recovery 规则，只委托现有 Manager application interfaces。
 - Operation 是“浏览器操作执行状态”，不是 Task、Delivery、Artifact 或 verdict 的替代权威。
   成功、失败或重启后继续都必须重新读取 durable Delivery facts。
 
 ### 3.2 Persist before execution
 
 - HTTP 先校验 typed intent，再将 `QUEUED` Operation 追加到
-  `companies/<company_id>/requests/_console_operations/operation_<id>/000001.json`，最后返回 `202`。
+  `team/work-items/console-operations/operation_<id>/000001.json`，最后返回 `202`。
 - HTTP request handler 不执行 provider；后台 dispatcher 领取后追加 `RUNNING`，完成后追加一个终态。
 - Operation 状态只允许：
   `QUEUED → RUNNING → SUCCEEDED | FAILED | INTERRUPTED`。
 - 每个 record 包含 previous digest、immutable intent digest 和自身 digest；文件名必须等于六位 sequence。
   生产写使用进程锁、exclusive append 和 fsync，不覆盖历史。
-- operation ID 由 company + browser idempotency key 稳定派生。同一个 key + exact intent 返回同一
+- operation ID 由 team + browser idempotency key 稳定派生。同一个 key + exact intent 返回同一
   Operation；同 key 不同 intent 拒绝。同一 Delivery 同时只允许一个非终态 Operation。
 
 ### 3.3 Recovery and at-most-once boundary
@@ -80,7 +81,7 @@ production_console_app(
 - Host 启动时把遗留 `RUNNING` 标记为 `INTERRUPTED`，不得自动再次调用 provider。
 - 用户在 UI 点击统一“继续交付”时，新的 Operation 根据当前 Delivery checkpoint 决定下一动作；
   已完成阶段不重跑，不确定模型调用遵守既有 recovery/verification approval 规则。
-- UI 只能批准 Project Manager 返回并验证过的 exact recovery/verification plan SHA。SHA 可以隐藏在
+- UI 只能批准 Manager 返回并验证过的 exact recovery/verification plan SHA。SHA 可以隐藏在
   控件中，但批准前必须显示候选提交、Agent/模型或保留修改/目标基线等可理解事实。
 - checkpoint 或 plan 已变化时必须拒绝；刷新最新投影后重新提交，不得自动替换用户批准对象。
 
@@ -89,15 +90,15 @@ production_console_app(
 - Uvicorn 只监听 `127.0.0.1`；transport 要求 exact `Host=127.0.0.1:<port>`，Origin 缺省或同源。
 - POST 只接受 `application/json`，body 最大 64,000 bytes；输入错误返回稳定小型 error envelope，
   不回显完整 payload、traceback、secret 或未经边界验证的模型文本。
-- 项目目录必须是唯一、无控制字符、无 lexical `..` 的绝对路径；真正的源码/Git/规范约束仍由
-  Project Manager prepare 校验。
+- Repository 源码目录必须是唯一、无控制字符、无 lexical `..` 的绝对路径；真正的 Git/规范约束仍由
+  Manager prepare 校验。
 - static assets 使用 `textContent` 渲染外部文本；CSP 禁止外部 script/style、frame 和 form action。
 - MySQL DSN/API key 不得写入浏览器、Operation、配置文件、plist 或 systemd unit。安全自动登录启动
   必须先实现 macOS Keychain / Linux Secret Service 等 secret adapter。
 
 ### 3.5 User-visible flow
 
-- 日常用户可在网页完成：多目录需求项目创建、Product 对话、ProductSpec 批准、统一继续、exact
+- 日常用户可在网页完成：Project 创建/选择、带 1–N 个 Repository 目录的 Requirement 创建、Product 对话、ProductSpec 批准、统一继续、exact
   recovery/verification 计划批准、进度观察和 Candidate 领取。
 - 一个 Task 的 Coder/QA/Reviewer 串行。UI 只把 `current_stage=true` 的 assignment 标成执行中；
   已完成/未来角色不得同时显示为运行。
@@ -109,7 +110,7 @@ production_console_app(
 
 | Case | Required result |
 |---|---|
-| Valid new request, one or many absolute roots | persist QUEUED, return 202, background Project Manager prepares it |
+| Valid Project or new Requirement with one or many absolute roots | persist QUEUED, return 202, background Manager performs the typed action |
 | Browser refresh/disconnect after 202 | accepted Operation continues; repeated same key returns same identity |
 | Same idempotency key, changed intent | 409; original Operation unchanged |
 | Second active command for same Delivery | 409; no second provider call |
@@ -118,7 +119,7 @@ production_console_app(
 | Recovery/verification approval required | SUCCEEDED Operation carries safe facts plus exact hidden plan digest |
 | Host exits during RUNNING | next startup appends INTERRUPTED; never silently replay |
 | Executor raises an unexpected exception | terminal FAILED with generic safe summary; no traceback in browser |
-| Missing production config/MySQL/company | startup/read fails safely; no fake workspace or data |
+| Missing production config/MySQL/team | startup/read fails safely; no fake workspace or data |
 | Foreign Host/Origin, non-JSON or oversized body | 403 / 415 / 413 before command execution |
 | Read-only legacy Team server | UI remains read-only and explicitly reports console unavailable |
 | DONE with unique `ai/<task>/attempt-*` ref | display exact candidate branch; ambiguous/missing branch stays omitted |
@@ -135,7 +136,7 @@ production_console_app(
 
 - `tests/web_console/test_core.py`：memory/file store 幂等、单 Delivery admission、persist-before-run、
   safe failure、重开 hash chain 与 orphan RUNNING interruption。
-- `tests/web_console/test_project_manager.py`：四类 typed intent 委托、exact checkpoint、stale 拒绝、
+- `tests/web_console/test_manager.py`：五类 typed intent 委托、Project 边界、exact checkpoint、stale 拒绝、
   recovery/verification plan digest 和 safe facts。
 - `tests/web_console/test_transport.py`：lifespan、assets/query、202 submit、operation query、Host/Origin、
   content type、body/input limit、409/404 和安全 headers。
@@ -177,92 +178,95 @@ prompt("plan sha256")
 submitOperation({ action: "CONTINUE_DELIVERY", approved_plan_sha256: approval.plan_sha256 })
 ```
 
-## Scenario: Company, document knowledge and production settings administration
+## Scenario: singleton Team, Project, document knowledge and production settings administration
 
 ### 1. Scope / Trigger
 
-Applies to `web_console.administration`, `/api/v1/admin/*`, Company creation, browser document upload,
+Applies to `web_console.administration`, `/api/v1/admin/*`, Project creation, browser document upload,
 or mutation of the secret-free production configuration. It does not turn Team View into a write
 model and does not authorize remote/multi-user administration.
 
 ### 2. Signatures
 
 ```python
-ConsoleAdministration.companies() -> tuple[CompanySummary, ...]
-ConsoleAdministration.create_company(request: CreateCompanyRequest) -> CompanySummary
-ConsoleAdministration.knowledge(company_id: str) -> tuple[KnowledgeDocumentView, ...]
-ConsoleAdministration.import_document(*, company_id: str, filename: str,
-                                      content: bytes) -> KnowledgeDocumentView
+ConsoleAdministration.team() -> TeamSummary
+ConsoleAdministration.projects() -> tuple[ProjectSummary, ...]
+ConsoleAdministration.create_project(request: CreateProjectRequest) -> ProjectSummary
+ConsoleAdministration.knowledge() -> tuple[KnowledgeDocumentView, ...]
+ConsoleAdministration.import_document(*, filename: str, content: bytes) -> KnowledgeDocumentView
 ConsoleAdministration.settings() -> SettingsSnapshot
 ConsoleAdministration.update_settings(request: UpdateSettingsRequest) -> SettingsSnapshot
 
-GET  /api/v1/admin/companies
-POST /api/v1/admin/companies
-GET  /api/v1/admin/companies/{company_id}/knowledge
-POST /api/v1/admin/companies/{company_id}/knowledge?filename=<basename>
+GET  /api/v1/admin/team
+GET  /api/v1/admin/projects
+POST /api/v1/admin/projects
+GET  /api/v1/admin/team/knowledge
+POST /api/v1/admin/team/knowledge?filename=<basename>
 GET  /api/v1/admin/settings
 PUT  /api/v1/admin/settings
 ```
 
 ### 3. Contracts
 
-- Company creation uses `CompanyWorkspace.initialize`; ID/location/manifest replay and Company
-  isolation remain authoritative. The display name is fixed by the immutable Company manifest.
+- The configured Team is the single long-lived workforce. Administration may read it but does not
+  create or switch Teams at runtime. The display name is fixed by the immutable Team manifest.
+- Project creation uses `ProjectWorkspaceRegistry.create/register`; every Project is bound to the
+  exact Team manifest and owns its Project knowledge, Repository catalog and Requirement root.
 - Document upload accepts only `application/octet-stream`, a safe basename and at most 10 MB.
   Markdown/TXT must be UTF-8; PDF/DOCX are extracted by bounded dedicated parsers. Normalized output
   must be non-empty and at most 256 KB. Original bytes, `content.md` and a digest-bound manifest are
   published atomically under one content-addressed document directory.
 - Import never accepts a server-side source path and never calls a model, silently summarizes or
-  auto-selects a document. Only `ProductionConfig.company_knowledge_paths` selected in Settings enters
-  later preparation contexts through the existing Company knowledge guard.
+  auto-selects a document. Only `ProductionConfig.team_knowledge_paths` selected in Settings enters
+  later preparation contexts through the existing Team knowledge guard.
 - Settings round-trip every current secret-free `ProductionConfig` field: platform root, active
-  Company/name, selected knowledge, database backend/DSN environment name, ordered model routes,
+  Team/name, selected knowledge, database backend/DSN environment name, ordered model routes,
   Codex executable, live execution and Console port. Referenced secret values never enter the API;
   responses expose only environment-variable name plus configured/unconfigured status.
 - A save uses same-directory temporary file, fsync and atomic replace. It validates the selected
-  Company/name and every selected knowledge document before publication. Any changed saved config is
+  Team/name and every selected knowledge document before publication. Any changed saved config is
   marked `restart_required`; the already constructed Host is not mutated or hot-switched.
-- When an explicit save selects a new `platform_root` without that Company, initialize the selected
-  immutable Company identity there. Do not migrate knowledge, projects, requests or organization
+- When an explicit save selects a new `platform_root` without that Team, initialize the selected
+  immutable Team identity there. Do not migrate Team knowledge, Projects, Requirements or execution
   facts; knowledge selection must be empty until documents exist under the new root.
 - Administration endpoints are optional at the transport seam for read-only/contract fixtures, but
   `ase-console` production composition must provide them. Existing Delivery commands remain bound to
-  the runtime-active Company until restart.
+  the runtime-active Team until restart.
 
 ### 4. Validation & Error Matrix
 
 | Case | Required result |
 |---|---|
-| Duplicate exact Company ID/name | Idempotent reopen; no manifest rewrite |
-| Existing Company ID with another name | 409 safe rejection |
-| Invalid/path-like Company ID | 422/404 before filesystem access |
+| Duplicate exact Project name or ID/name | Idempotent reopen; no manifest rewrite |
+| Existing Project ID with another name | 409 safe rejection |
+| Invalid/path-like Project ID | 422/404 before filesystem access |
 | Unsupported/dangerous filename or corrupt document | 422 generic safe error; no partial directory |
 | Upload over 10 MB or normalized body over 256 KB | 413/422; no published record |
 | Same document bytes uploaded twice | Return the original document identity |
 | Manifest/source/normalized digest or path drift | Entire knowledge listing fails closed |
-| Settings select unknown Company/name or invalid knowledge | 409; config file unchanged |
-| New platform root, current Company identity, empty knowledge selection | initialize that Company under the new root; save with restart required |
+| Settings select another Team/name or invalid knowledge | 409; config file unchanged |
+| New platform root, current Team identity, empty knowledge selection | initialize that Team under the new root; save with restart required |
 | New platform root with old-root knowledge paths | 409; never copy or reinterpret the old files |
 | Plaintext DSN/API key in config payload | Pydantic/JSON Schema rejects unknown secret field |
 | Settings changed while Host is running | Persist plus `restart_required=true`; no hot mutation |
 
 ### 5. Good / Base / Bad Cases
 
-- Good: create a Company, upload DOCX, inspect its content-addressed record, select `content.md`, save,
-  restart and prepare a new Delivery whose Company context digest binds that document.
-- Base: a Company with no documents is valid; no knowledge is loaded implicitly.
+- Good: create a Project, upload a Team DOCX, inspect its content-addressed record, select `content.md`,
+  save, restart and prepare a new Requirement whose Team context digest binds that document.
+- Base: a Team with no documents is valid; no knowledge is loaded implicitly.
 - Bad: let the browser submit `/etc/passwd`, recursively scan `knowledge/`, keep only an AI summary,
-  store a DSN in config, or change the active Company inside an already-running Delivery Host.
+  store a DSN in config, or change the active Team inside an already-running Delivery Host.
 
 ### 6. Tests Required
 
 - `tests/knowledge/test_documents.py`: all four formats, exact replay, context readiness, invalid name,
   corrupt/empty input, source/manifest/content tamper and size bounds.
-- `tests/web_console/test_administration.py`: Company catalog/isolation, config write/read, selected
+- `tests/web_console/test_administration.py`: singleton Team, Project catalog/create, config write/read, selected
   knowledge validation, secret status and restart semantics.
 - `tests/web_console/test_transport.py`: admin verbs, content types/body limits, typed errors and no
   content/secret reflection.
-- `tests/team_view/ui.test.cjs`: Company creation, Knowledge and Settings navigation, structured model
+- `tests/team_view/ui.test.cjs`: Project creation, Knowledge and Settings navigation, structured model
   route fields, secret status, upload/selection wording and safe text rendering.
 - `tests/contracts/test_json_schema_contracts.py`: production config/port and knowledge manifest
   Python-to-Schema parity.
@@ -278,10 +282,81 @@ manifest = knowledge_store.import_document(filename=query.filename, content=awai
 ```
 
 ```python
-# Wrong: mutate a Host that was constructed with another Company/knowledge/model policy.
+# Wrong: mutate a Host that was constructed with another Team/knowledge/model policy.
 running_host.config = submitted_config
 
 # Correct: atomically persist, report the boundary, then reconstruct on restart.
 settings_store.save(submitted_config)
 return SettingsSnapshot(config=submitted_config, restart_required=True)
+```
+
+## Scenario: local Web Console process lifecycle
+
+### 1. Scope / Trigger
+
+Applies to `scripts/ase-console-service.sh`. It is the supported macOS/Linux foreground-independent
+launcher for one trusted local Host; it is not a system boot service or multi-instance supervisor.
+
+### 2. Signatures
+
+```text
+./scripts/ase-console-service.sh start|stop|restart|status|logs
+ASE_SERVICE_STATE_DIR=/absolute/path   # optional
+XDG_STATE_HOME=/absolute/path          # optional fallback
+```
+
+The executable is the repository-local `.venv/bin/ase-console`. PID and log default to
+`${XDG_STATE_HOME:-$HOME/.local/state}/ai-software-engineer/`.
+
+### 3. Contracts
+
+- `start` requires an executable repository-local `ase-console`, inherits `ASE_CONFIG`,
+  `ASE_MYSQL_DSN` and provider environment, redirects stdio, records the child PID and verifies that
+  the same executable remains alive after startup.
+- `stop` sends TERM only when the PID is numeric, alive and its process command identifies this
+  repository's executable. It waits up to 20 seconds and never escalates to KILL automatically.
+- `restart` is exact `stop` followed by `start`; `status` is read-only apart from preparing its safe
+  state directory; `logs` tails the last 100 lines and follows the file.
+- The state directory must be absolute, not `/`, and not a symlink. PID-file symlinks are rejected.
+  A stale or foreign PID never receives a signal.
+- This script does not persist secrets, install dependencies, initialize MySQL, register launchd/
+  systemd, or claim that a successful process start means the production Host is healthy.
+
+### 4. Validation & Error Matrix
+
+| Case | Required result |
+|---|---|
+| Missing verb or unknown verb | print usage to stderr; exit 2 |
+| Missing `.venv/bin/ase-console` | explain `uv sync`; exit 2; no PID record |
+| Existing matching live PID | idempotent start |
+| Missing PID on stop | report not running; success |
+| Non-numeric, dead or foreign PID | send no signal; fail safely or report stopped |
+| Child exits during startup | remove its PID record, show bounded log tail, exit 1 |
+| TERM does not stop in 20 seconds | leave process and PID intact; exit 1 |
+| Relative/root/symlink state directory | reject before creating or deleting files |
+
+### 5. Good / Base / Bad Cases
+
+- Good: export production environment, start once, use `status`/`logs`, then restart after a saved
+  configuration change.
+- Base: stopping an already stopped service is idempotent.
+- Bad: use a PID file without process identity validation, store DSN in the script, or issue `kill -9`
+  after a fixed delay.
+
+### 6. Tests Required
+
+- `sh -n scripts/ase-console-service.sh`.
+- No-argument invocation exits 2.
+- Focused process tests, when added, must use an isolated absolute `ASE_SERVICE_STATE_DIR` and a fake
+  repository-local executable; they must never signal an unrelated host process.
+
+### 7. Wrong vs Correct
+
+```sh
+# Wrong: trust a stale PID and force kill an arbitrary process.
+kill -9 "$(cat "$PID_FILE")"
+
+# Correct: require numeric PID + exact executable identity, request TERM, and fail without escalation.
+is_our_process "$current_pid" || exit 1
+kill -TERM "$current_pid"
 ```

@@ -16,10 +16,10 @@ from ai_software_engineer.domain import (
     BrainTier,
     ModelPolicy,
     ModelRoute,
-    OrganizationRole,
     RiskModelFloor,
     RiskTier,
     RunDemand,
+    TeamRole,
     WorkItemStatus,
 )
 from ai_software_engineer.scheduling import ModelRouter, PortfolioScheduler
@@ -71,7 +71,7 @@ def queued_item(
     return QueuedWorkItem(
         id=f"work_delivery_{name}_001",
         task_id="task_queue_delivery_001",
-        project_id="project_platform_001",
+        repository_id="repository_platform_001",
         role=role,
         attempt=attempt,
         checkpoint_sequence=checkpoint_sequence,
@@ -94,7 +94,7 @@ def agents() -> tuple[AgentProfile, ...]:
             version="v1",
             display_name=role.value,
             capabilities=("delivery",),
-            eligible_roles=(OrganizationRole(role.value),),
+            eligible_roles=(TeamRole(role.value),),
             max_parallel_assignments=1,
             default_model_policy_id="model_policy_queue_001",
         )

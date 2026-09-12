@@ -7,30 +7,29 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
-from ai_software_engineer.company_workspace import _read_regular, _reject_symlinks
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig
 from ai_software_engineer.context import ContextSource, FileContextStore
 from ai_software_engineer.domain import AgentRole, Task, TaskStatus
 from ai_software_engineer.git import GitWorktreeManager, WorktreeSpec
-from ai_software_engineer.orchestration import RetryResult
-from ai_software_engineer.planning import FileExecutionPlanStore
-from ai_software_engineer.product import FileProductRecordStore
-from ai_software_engineer.project_manager.delivery_checkpoint import ProjectDeliveryCheckpoint
-from ai_software_engineer.project_manager.dispatch import RecoveryDispatchRecord
-from ai_software_engineer.project_manager.mysql_dispatch_authority import (
+from ai_software_engineer.manager.delivery_checkpoint import ProjectDeliveryCheckpoint
+from ai_software_engineer.manager.dispatch import RecoveryDispatchRecord
+from ai_software_engineer.manager.mysql_dispatch_authority import (
     MySqlDispatchAuthority,
     _decode_allocation,
 )
-from ai_software_engineer.project_manager.production_backend import (
+from ai_software_engineer.manager.production_backend import (
     ProductionProjectDeliveryBackend,
     _agent_definitions,
     _delivery_role_permissions,
     _task_commands,
 )
-from ai_software_engineer.project_manager.production_delivery import (
+from ai_software_engineer.manager.production_delivery import (
     ConfiguredDeliveryRouteAdapterFactory,
     DeliveryRouteAdapterFactory,
 )
+from ai_software_engineer.orchestration import RetryResult
+from ai_software_engineer.planning import FileExecutionPlanStore
+from ai_software_engineer.product import FileProductRecordStore
 from ai_software_engineer.recovery.allocation import RecoveryAllocator
 from ai_software_engineer.recovery.context import recovery_context_sources
 from ai_software_engineer.recovery.current import NativeRecoveryFactsVerifier
@@ -50,9 +49,10 @@ from ai_software_engineer.recovery.service import RecoveryAuthorizationService
 from ai_software_engineer.recovery.store import FileRecoveryStore, RecoveryRecordMissing
 from ai_software_engineer.recovery.task import AuthorizedRecoveryTaskBuilder
 from ai_software_engineer.role_workspace import DispatchRoleWorktreeCoordinator, RoleWorktreeSession
-from ai_software_engineer.runtime_workspace import FileOrganizationWorkforceStore
+from ai_software_engineer.runtime_workspace import FileTeamWorkforceStore
 from ai_software_engineer.store import MySqlTaskRepository, TaskNotFound
 from ai_software_engineer.store.mysql_repository import _decode_task, open_mysql_connection
+from ai_software_engineer.team_workspace import TeamWorkspace, _read_regular, _reject_symlinks
 
 
 @dataclass(frozen=True)
@@ -64,25 +64,32 @@ class NativeRecoveryExecution:
     delivery: RetryResult
 
 
+def _repository_sidecar(config: ProductionConfig, repository_id: str) -> Path:
+    team = TeamWorkspace.initialize(
+        config.platform_root,
+        team_id=config.team_id,
+        name=config.team_name,
+        read_only=True,
+    )
+    _, repository = team.project_registry().locate_repository(repository_id)
+    return repository.root
+
+
 def open_recovery_plan(
     config: ProductionConfig, path: Path
 ) -> tuple[FileRecoveryStore, RecoveryPlan]:
-    """Read-only exact company/store resolution, usable without constructing Team Host."""
+    """Read-only exact team/store resolution, usable without constructing Team Host."""
     _reject_symlinks(path)
     envelope = json.loads(_read_regular(path, 8_000_000))
     plan = RecoveryPlan.model_validate(envelope["record"])
     expected = (
-        Path(config.platform_root)
-        / "companies"
-        / config.company_id
-        / "projects"
-        / plan.source.scope.project_id
+        _repository_sidecar(config, plan.source.scope.repository_id)
         / "state"
         / f"recovery-{plan.source.scope.delivery_id}"
         / f"plan-{plan.plan_sha256}.json"
     )
-    if path != expected or plan.source.scope.company_id != config.company_id:
-        raise RecoveryRejected("plan is outside the selected company recovery store")
+    if path != expected or plan.source.scope.team_id != config.team_id:
+        raise RecoveryRejected("plan is outside the selected team recovery store")
     store = FileRecoveryStore(path.parent, scope=plan.source.scope)
     return store, store.get_plan(plan.plan_sha256)
 
@@ -164,20 +171,20 @@ class NativeRecoveryEntry:
     def propose(
         self,
         *,
-        project_root: str,
+        repository_root: str,
         delivery_id: str,
         failed_run_id: str,
         failed_context_id: str,
         input_mode: RecoveryInputMode | None = None,
     ) -> tuple[RecoveryPlan, Path]:
-        prepared_result = self.backend.prepare(project_root)
+        prepared_result = self.backend.prepare(repository_root)
         prepared = prepared_result.preparation
         if prepared is None:
             raise RecoveryRejected("project preparation needs human resolution")
         scope = RecoveryScope(
-            company_id=self.config.company_id,
-            project_id=prepared.project_id,
-            project_root=prepared.project_root,
+            team_id=self.config.team_id,
+            repository_id=prepared.repository_id,
+            repository_root=prepared.repository_root,
             delivery_id=delivery_id,
         )
         original = NativeRecoverySourceReader(self.config, self.environment).inspect(
@@ -208,7 +215,7 @@ class NativeRecoveryEntry:
             input_mode=input_mode,
             source=original.source,
             capture=CapturedChanges.from_capture(capture),
-            target_base_revision=manager._run_git(("rev-parse", "HEAD"), cwd=Path(project_root)),
+            target_base_revision=manager._run_git(("rev-parse", "HEAD"), cwd=Path(repository_root)),
             target_preparation_sha256=prepared.preparation_sha256,
             permissions=original.permissions,
             target_permissions=target_permissions,
@@ -216,27 +223,27 @@ class NativeRecoveryEntry:
             created_at=datetime.now(UTC),
         )
         store = FileRecoveryStore.initialize(
-            Path(prepared.project_workspace_root) / "state" / f"recovery-{delivery_id}",
+            Path(prepared.repository_workspace_root) / "state" / f"recovery-{delivery_id}",
             scope=scope,
         )
         self._services(store, plan, None)[0].propose(plan)
         return plan, Path(
-            prepared.project_workspace_root
+            prepared.repository_workspace_root
         ) / "state" / f"recovery-{delivery_id}" / f"plan-{plan.plan_sha256}.json"
 
     def propose_delivery(self, checkpoint: ProjectDeliveryCheckpoint) -> tuple[RecoveryPlan, Path]:
         """Discover the failed Coder identity and publish one exact recovery plan."""
         scope = RecoveryScope(
-            company_id=self.config.company_id,
-            project_id=checkpoint.project_id,
-            project_root=checkpoint.project_root,
+            team_id=self.config.team_id,
+            repository_id=checkpoint.repository_id,
+            repository_root=checkpoint.repository_root,
             delivery_id=checkpoint.delivery_id,
         )
         source = NativeRecoverySourceReader(self.config, self.environment).discover_failed_coder(
             scope
         )
         return self.propose(
-            project_root=checkpoint.project_root,
+            repository_root=checkpoint.repository_root,
             delivery_id=checkpoint.delivery_id,
             failed_run_id=source.source.failed_run_id,
             failed_context_id=source.source.failed_context_id,
@@ -247,11 +254,7 @@ class NativeRecoveryEntry:
     ) -> tuple[FileRecoveryStore, RecoveryPlan, Path] | None:
         """Return the latest plan pinned to this exact terminal Delivery checkpoint."""
         root = (
-            Path(self.config.platform_root)
-            / "companies"
-            / self.config.company_id
-            / "projects"
-            / checkpoint.project_id
+            _repository_sidecar(self.config, checkpoint.repository_id)
             / "state"
             / f"recovery-{checkpoint.delivery_id}"
         )
@@ -293,7 +296,8 @@ class NativeRecoveryEntry:
 
     def _manager(self, scope: RecoveryScope) -> GitWorktreeManager:
         return GitWorktreeManager(
-            scope.project_root, Path(self.config.platform_root) / "worktrees" / scope.project_id
+            scope.repository_root,
+            Path(self.config.platform_root) / "worktrees" / scope.repository_id,
         )
 
     def _services(
@@ -345,7 +349,7 @@ class NativeRecoveryEntry:
                     "recovery Coder invocation is uncertain; inspect its Task before a successor"
                 )
             facts = NativeRecoveryFactsVerifier(self.config, self.environment).inspect(plan)
-            preparation = self.backend.prepare(plan.source.scope.project_root)
+            preparation = self.backend.prepare(plan.source.scope.repository_root)
             if preparation.preparation != facts.target:
                 raise RecoveryRejected("recovery target changed before terminal adoption")
             dispatch = self._dispatch_for(store, plan)
@@ -363,13 +367,7 @@ class NativeRecoveryEntry:
         )
 
     def _dispatch_for(self, store: FileRecoveryStore, plan: RecoveryPlan) -> RecoveryDispatchRecord:
-        sidecar = (
-            Path(self.config.platform_root)
-            / "companies"
-            / self.config.company_id
-            / "projects"
-            / plan.source.scope.project_id
-        )
+        sidecar = _repository_sidecar(self.config, plan.source.scope.repository_id)
         authority = MySqlDispatchAuthority(
             self.config.require_mysql_dsn(self.environment),
             request_revisions=FileProductRecordStore(sidecar / "state/product"),
@@ -420,17 +418,17 @@ class NativeRecoveryEntry:
         finally:
             repository.close()
         draft = builder.build(plan.plan_sha256)
-        preparation = self.backend.prepare(draft.facts.target.project_root)
+        preparation = self.backend.prepare(draft.facts.target.repository_root)
         if preparation.preparation != draft.facts.target:
             raise RecoveryRejected("prepared target changed before execution")
-        sidecar = Path(draft.facts.target.project_workspace_root)
+        sidecar = Path(draft.facts.target.repository_workspace_root)
         authority = MySqlDispatchAuthority(
             dsn,
             request_revisions=FileProductRecordStore(sidecar / "state/product"),
             planner_records=FileExecutionPlanStore(sidecar / "state/planning"),
         )
         agents, policy = self.backend._workforce()
-        workforce = FileOrganizationWorkforceStore(self.backend._organization)
+        workforce = FileTeamWorkforceStore(self.backend._organization)
         saved_agents = tuple(workforce.put_agent(a) for a in agents)
         policy = workforce.put_policy(policy, versioned=True)
         dispatch = RecoveryAllocator(
@@ -450,7 +448,7 @@ class NativeRecoveryEntry:
         target_path = (
             Path(self.config.platform_root)
             / "worktrees"
-            / dispatch.project_id
+            / dispatch.repository_id
             / dispatch.task_id
             / "coder-attempt-01"
         )

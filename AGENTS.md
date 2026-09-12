@@ -12,19 +12,20 @@
 
 ## 组织形态：Knowledge Plane + Agent Team + Skills
 
-- Knowledge Plane 由组织通用知识库和每个项目的外置 sidecar 组成；前者保存通用规范、Skills、
-  AgentProfile 与历史经验，后者保存 ProjectProfile、项目规范、Product/Design/Plan artifacts 和运行事实；
-- Project Manager 是组织级团队领导 Agent，负责接单、推进、协调和交付。它只能通过 typed、
+- Knowledge Plane 由 Team workspace 与 Project catalog 组成；前者保存团队知识、规范、Skills、
+  AgentProfile 与历史经验，后者按 Project 保存项目知识/规范、Repository catalog、Requirement
+  artifacts 和运行事实；
+- Manager 是 Team 拥有的团队领导 Agent，负责接单、推进、协调和交付。它只能通过 typed、
   policy-bound Skills 调用 deterministic application services，不能从 prompt 获得 store/state/shell
   或启动其他 Agent 的 ambient authority；
 - Product Agent 产出 ProductSpec，但不能批准自己的工作。只有用户对 exact spec ID/digest 的
-  ProductSpecApproval(APPROVED) 才能进入 Solution Designer；
-- Solution Designer Agent 产出精确覆盖 requirement/acceptance IDs 的 TechnicalDesign；Planner
+  ProductSpecApproval(APPROVED) 才能进入 Designer；
+- Designer Agent 产出精确覆盖 requirement/acceptance IDs 的 TechnicalDesign；Planner
   Agent 产出 ExecutionPlan，可以使用只读 Scheduler/ModelRouter preview Skills 检查可行性；
 - Planner preview 不产生具体 Assignment/Lease/ModelSelection。Planner 对流转和派发策略负责，
   通过 typed Queue/Dispatch Skills 产生可审计意图；Dispatcher service 基于当前 facts 重新调用同一
   deterministic engines，并在 MySQL fence 中提交分配；
-- T028 stage contract 已固定 `ProjectPreparation → ProjectRequest → ProductSpec/Approval →
+- 上游 stage contract 固定为 `RequirementPreparation → RequirementRequest → ProductSpec/Approval →
   TechnicalDesign → ExecutionPlan → NEW Task`。现有 AgentAdapter 暂仍覆盖 Delivery 四角色；扩展
   Product/Designer/Planner producer/run/context lineage 时不得绕过这些 stage contract。
 
@@ -53,30 +54,30 @@ NEW → PLANNING → IMPLEMENTING ──complete──→ QA → REVIEW → DONE
 
 ## 目标项目与外置 AI Workspace
 
-生产 Host 的外置收纳边界现在是 Company：`<platform_root>/companies/<company_id>/`。
-`knowledge/` 保存选定公司公共知识，`projects/<project-id>/` 保留项目知识及每仓运行契约，
-`requests/` 保存需求项目联合记录。下文 per-project sidecar 指公司内的子模块，不代表用户需要
-管理多个独立顶层 workspace。AgentProfile 仍在 organization workspace；Company 不拥有 Agent。
-公司身份必须参与 project/delivery ID，不能只靠目录区分共享 MySQL 中的事实。详见
-`.trellis/spec/core/company-workspace.md`。多仓入口和候选集验收见
+生产 Host 只拥有一个长期 Team；`<platform_root>/team/` 与 `<platform_root>/projects/` 并列。
+Team 保存 Agent、团队知识/规范、Skills、ModelPolicy、WorkItem、Lease 与团队指标；每个
+`projects/<project-id>/` 保存 Project Knowledge/Specs、Repository catalog 和 Requirements。
+Project 不复制或拥有 Agent。Team/Project/Repository/Requirement 身份必须进入相应持久化契约，
+不能只靠目录区分共享 MySQL 中的事实。详见 `.trellis/spec/core/team-workspace.md`。多仓入口和候选集验收见
 `.trellis/spec/core/multi-directory-delivery.md`；不得绕过联合批准或原生 QA/Review。
 
-Web Console 的公司管理只创建/打开经过 manifest 校验的 Company。知识上传只接受有界浏览器文件
+Web Console 的 Team 设置只操作经过 manifest 校验的唯一 Team；Project 管理创建/打开业务 Project。
+知识上传只接受有界浏览器文件
 字节与安全 basename，不接受宿主机任意路径；Markdown/TXT/PDF/DOCX 必须保存原文件、规范化
 `content.md` 和内容寻址 manifest，且仍需在设置中显式选择。生产设置只持久化无密钥
-`ProductionConfig`；DSN/API key 只能显示环境变量是否已提供。活动公司、知识、目录、模型或端口
+`ProductionConfig`；DSN/API key 只能显示环境变量是否已提供。知识、目录、模型或端口
 变化必须提示重启并重新构造 Host，不得热改正在运行的 Delivery composition。
 
-平台可以接入任意本地项目；Task 的 `repository`/`project_root` 是目标项目的真实代码目录，
-也是默认命令 cwd。每个项目必须注册一个位于目标目录之外的 `ai_workspace_root`，由
-`ProjectWorkspaceRegistry` 建立固定 sidecar layout。ProjectProfile、项目级 prompt/规范、
-Assignment、Task/StateEvent、Context、Artifact、Evidence、Evaluation、Handoff、运行日志和锁
-只能写入该 sidecar；不得在目标项目创建 `.ase`、AI 日志或数据库，也不得默认复制源码。
-AgentProfile、ModelPolicy、全局 WorkQueue 和团队绩效属于组织 workspace，不复制进项目 sidecar。
+平台可以接入任意本地代码 Repository；Task 的 `repository`/`repository_root` 是真实代码目录，
+也是默认命令 cwd。Repository 必须先注册到所属 Project，并由 `RepositoryWorkspaceRegistry`
+在 Project 下建立外置 v0.2 sidecar。RepositoryProfile、Assignment、Task/StateEvent、Context、
+Artifact、Evidence、Evaluation、Handoff、运行日志和锁只能写入该 sidecar；不得在代码仓库创建
+`.ase`、AI 日志或数据库，也不得默认复制源码。Product/Design/Plan 等联合 Requirement 事实写入
+Project 的 `requirements/`；AgentProfile、ModelPolicy、全局 WorkQueue 和团队绩效只属于 Team。
 
-T022 的 `RuntimeWorkspaceBinding` 是 Python composition seam：它将组织 workspace、项目 sidecar、
-ProjectProfile、CompiledSpec 和 RuntimePaths 绑定，并校验 Task.repository 精确等于 project_root。
-生产 CLI 由 Team Host 根据公司配置自动注册项目子模块并完成准备；低层 Python binding 仍保留
+`RuntimeWorkspaceBinding` 是 Python composition seam：它将 Team workspace、Repository sidecar、
+RepositoryProfile、CompiledSpec 和 RuntimePaths 绑定，并校验 Task.repository 精确等于
+repository_root。生产入口由 Team Host 在选定 Project 下注册 Repository 并完成准备；低层 binding 保留
 精确根目录校验。`ase request create DIR... --name NAME` 先归并目录、准备所有仓库，再允许讨论。
 
 目标项目自身的 `AGENTS.md`、`CONTRIBUTING`、README、CI、`.editorconfig`、`.trellis/spec/` 等
@@ -85,7 +86,7 @@ ProjectProfile、CompiledSpec 和 RuntimePaths 绑定，并校验 Task.repositor
 规范放宽；工程约定或 Task 约束发生冲突时生成 `SPEC_CONFLICT`，WorkItem 进入
 `WAITING_HUMAN`、释放 Lease 并交人工；只有决定终止本次交付时 Task 才进入 `BLOCKED`。
 人工决定必须写入 `HumanActionEvent`/resolution artifact；不能只修改聊天记录或让 Agent 自行选边。
-`ProjectProfile` 只发现语言、构建系统、VCS 与原生规则来源，不猜测测试入口；Markdown 规范正文
+`RepositoryProfile` 只发现语言、构建系统、VCS 与原生规则来源，不猜测测试入口；Markdown 规范正文
 保持 URI/hash 引用，只有显式结构化 `SpecRule` 才参与自动冲突判断。
 
 后续可选的 role Git worktree 是临时代码 checkout，不是 AI metadata workspace；逻辑项目仍由
@@ -100,8 +101,9 @@ durable StateEvent、Evaluation、Artifact、Evidence、Assignment、Lease 和 H
 未被事实支持的字段必须显示 unknown，不得猜测。恶意任务文本只能以 textContent 安全渲染。
 
 T036 `ase team serve` 的 socket 由独立 `team_view.server` composition 持有；旧 Renderer 仍是纯读组件。
-ProductionTeamReader 不构造 Team Host，不 prepare/reconcile 或初始化数据库，只读取当前公司的已验证
-journal、MySQL Task/events/dispatch 和组织成员。详见 `.trellis/spec/core/live-team-view.md`。
+ProductionTeamReader 不构造 Team Host，不 prepare/reconcile 或初始化数据库，只读取选定 Project 的
+已验证 Requirement journal、MySQL Task/events/dispatch 和 Team 成员。详见
+`.trellis/spec/core/live-team-view.md`。
 Task 阶段、模型调用结束、执行器在线是不同事实；没有心跳时只能显示 UNKNOWN，分配模型也不能冒充
 降级后的实际模型。
 

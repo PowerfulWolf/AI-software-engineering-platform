@@ -32,7 +32,7 @@ def _request(
 ) -> ProjectRequest:
     return ProjectRequest.create(
         request_id="request_product_001",
-        project_id="project_product_001",
+        repository_id="repository_product_001",
         preparation_sha256="a" * 64,
         title="Add safe export",
         original_request="Let users export one report.",
@@ -50,7 +50,7 @@ def _dialogue(
 ) -> ProductDialogueRecord:
     return ProductDialogueRecord.create(
         request_id="request_product_001",
-        project_id="project_product_001",
+        repository_id="repository_product_001",
         sequence=sequence,
         actor=actor,
         content="CSV is required."
@@ -83,7 +83,7 @@ def test_dialogue_requires_exact_chain_shape_and_aware_time() -> None:
     with pytest.raises(ValidationError, match="timezone"):
         ProductDialogueRecord.create(
             request_id="request_product_001",
-            project_id="project_product_001",
+            repository_id="repository_product_001",
             sequence=1,
             actor=ProductDialogueActor.HUMAN,
             content="Need an export.",
@@ -99,7 +99,7 @@ def test_request_revision_seals_nested_request_and_supersedes_digest() -> None:
     first.validate_integrity()
     second_request = ProjectRequest.create(
         request_id=first.request.id,
-        project_id=first.request.project_id,
+        repository_id=first.request.repository_id,
         preparation_sha256=first.request.preparation_sha256,
         title=first.request.title,
         original_request=first.request.original_request,
@@ -127,7 +127,7 @@ def test_request_revision_seals_nested_request_and_supersedes_digest() -> None:
 def test_checkpoint_shapes_are_status_specific_and_digest_bound() -> None:
     initial = ProductDiscoveryCheckpoint.create(
         request_id="request_product_001",
-        project_id="project_product_001",
+        repository_id="repository_product_001",
         revision=1,
         previous_checkpoint_sha256=None,
         request_revision=1,
@@ -142,7 +142,7 @@ def test_checkpoint_shapes_are_status_specific_and_digest_bound() -> None:
     with pytest.raises(ValidationError, match="requires only a current ProductSpec"):
         ProductDiscoveryCheckpoint.create(
             request_id=initial.request_id,
-            project_id=initial.project_id,
+            repository_id=initial.repository_id,
             revision=2,
             previous_checkpoint_sha256=initial.checkpoint_sha256,
             request_revision=1,
@@ -179,7 +179,7 @@ def test_operation_receipt_is_an_exact_digest_bound_replay_key() -> None:
             "product-discovery-checkpoint.schema.json",
             ProductDiscoveryCheckpoint.create(
                 request_id="request_product_001",
-                project_id="project_product_001",
+                repository_id="repository_product_001",
                 revision=1,
                 previous_checkpoint_sha256=None,
                 request_revision=1,
@@ -212,7 +212,7 @@ def test_schemas_reject_extra_and_incomplete_status_fields() -> None:
     )
     checkpoint = ProductDiscoveryCheckpoint.create(
         request_id="request_product_001",
-        project_id="project_product_001",
+        repository_id="repository_product_001",
         revision=1,
         previous_checkpoint_sha256=None,
         request_revision=1,

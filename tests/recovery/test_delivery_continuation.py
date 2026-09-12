@@ -12,17 +12,12 @@ from ai_software_engineer.domain import (
     QaTestStatus,
     TaskStatus,
 )
-from ai_software_engineer.orchestration import (
-    BlockedResult,
-    RetryClassification,
-    RetryDeliveryResult,
-)
-from ai_software_engineer.project_manager.delivery import (
+from ai_software_engineer.manager.delivery import (
     DeliveryCommandRejected,
     ProjectDeliveryCheckpointCatalog,
     UnifiedProjectEntryService,
 )
-from ai_software_engineer.project_manager.delivery_checkpoint import (
+from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryFailureCode,
     DeliveryNextAction,
     DeliveryStage,
@@ -30,9 +25,14 @@ from ai_software_engineer.project_manager.delivery_checkpoint import (
     FileProjectDeliveryCheckpointStore,
     ProjectDeliveryCheckpoint,
 )
-from ai_software_engineer.project_manager.dispatch import (
+from ai_software_engineer.manager.dispatch import (
     ContinuationDispatchRecord,
     _record_digest,
+)
+from ai_software_engineer.orchestration import (
+    BlockedResult,
+    RetryClassification,
+    RetryDeliveryResult,
 )
 from ai_software_engineer.recovery.allocation_lineage import resolve_planner_dispatch
 from ai_software_engineer.recovery.models import RecoveryRejected, RecoveryScope
@@ -47,9 +47,9 @@ from ai_software_engineer.recovery.verification_records import (
 )
 from ai_software_engineer.recovery.verification_snapshot import retained_candidate_checkpoint
 from tests.domain.factories import make_qa_artifact, make_review_artifact
+from tests.manager.test_dispatch_authority import _durable_facts
 from tests.orchestration.test_retry import ScriptedAdapter
 from tests.orchestration.test_runner import _definitions
-from tests.project_manager.test_dispatch_authority import _durable_facts
 from tests.recovery.test_candidate_verification import Admission, setup_verification
 from tests.recovery.test_execution_records import continuation_allocation
 
@@ -64,14 +64,14 @@ def _service(
     retained_failure: bool = True,
 ) -> tuple[UnifiedProjectEntryService, FileProjectDeliveryCheckpointStore]:
     registry = tmp_path / "registry"
-    state = registry / dispatch.project_id / "state"
+    state = registry / dispatch.repository_id / "state"
     state.mkdir(parents=True)
     store = FileProjectDeliveryCheckpointStore(state / "project-deliveries")
     source = ProjectDeliveryCheckpoint.create(
         delivery_id=dispatch.source_delivery_id,
         sequence=1,
-        project_id=dispatch.project_id,
-        project_root=dispatch.task.repository,
+        repository_id=dispatch.repository_id,
+        repository_root=dispatch.task.repository,
         preparation_sha256="1" * 64,
         request_id=dispatch.project_request_id,
         request_revision=1,
@@ -122,9 +122,9 @@ def _verification_for(
     assert current.dispatch_commit_sha256 is not None
     plan = CandidateVerificationPlan.create(
         scope=RecoveryScope(
-            company_id="company_test",
-            project_id=current.project_id,
-            project_root=current.project_root,
+            team_id="team_test",
+            repository_id=current.repository_id,
+            repository_root=current.repository_root,
             delivery_id=current.delivery_id,
         ),
         inputs=CandidateVerificationInputs(
@@ -361,7 +361,7 @@ def test_continuation_ancestry_accepts_nullable_terminal_source_cursor(tmp_path:
     planner_dispatch = planner_dispatch.model_copy(
         update={
             "id": dispatch.source_dispatch_id,
-            "project_id": dispatch.project_id,
+            "repository_id": dispatch.repository_id,
             "task_id": dispatch.source_task_id,
             "project_request_id": dispatch.project_request_id,
             "execution_plan_id": dispatch.execution_plan_id,
@@ -400,7 +400,7 @@ def test_continuation_ancestry_rejects_nullable_nonterminal_source_cursor(
     planner_dispatch = planner_dispatch.model_copy(
         update={
             "id": dispatch.source_dispatch_id,
-            "project_id": dispatch.project_id,
+            "repository_id": dispatch.repository_id,
             "project_request_id": dispatch.project_request_id,
             "execution_plan_id": dispatch.execution_plan_id,
             "execution_plan_sha256": dispatch.execution_plan_sha256,
@@ -476,7 +476,7 @@ def test_inconclusive_verification_proposes_fresh_qa_without_coder(
     assert result.outcome is DeliveryResumeOutcome.VERIFICATION_APPROVAL_REQUIRED
     assert result.verification_plan_sha256 == successor.plan_sha256
     verification.propose_project.assert_called_once_with(
-        project_root=plan.scope.project_root,
+        repository_root=plan.scope.repository_root,
         delivery_id=plan.scope.delivery_id,
     )
     backend.run_prepared_allocation.assert_not_called()
@@ -502,8 +502,8 @@ def test_verified_candidate_accepts_unchanged_checkpoint_append(
             ProjectDeliveryCheckpoint.create(
                 delivery_id="delivery_test",
                 sequence=1,
-                project_id="project_test",
-                project_root=str((tmp_path / "verification/project").resolve()),
+                repository_id="repository_test",
+                repository_root=str((tmp_path / "verification/project").resolve()),
                 preparation_sha256="1" * 64,
                 request_id="request_test",
                 request_revision=1,
@@ -536,9 +536,9 @@ def test_verified_candidate_accepts_unchanged_checkpoint_append(
         assert source.dispatch_commit_sha256 is not None
         plan = CandidateVerificationPlan.create(
             scope=RecoveryScope(
-                company_id="company_test",
-                project_id=source.project_id,
-                project_root=source.project_root,
+                team_id="team_test",
+                repository_id=source.repository_id,
+                repository_root=source.repository_root,
                 delivery_id=source.delivery_id,
             ),
             inputs=inputs,

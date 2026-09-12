@@ -20,32 +20,31 @@ from typer.testing import CliRunner
 
 from ai_software_engineer.agents import AgentRequest, AgentResult
 from ai_software_engineer.cli import app
-from ai_software_engineer.company_workspace import CompanyWorkspace
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
-from ai_software_engineer.domain.enums import AgentRole, OrganizationRole
-from ai_software_engineer.multi_directory.models import JointCheckpoint, JointStage
-from ai_software_engineer.multi_directory.scope import DirectoryScope, DirectoryUnit
-from ai_software_engineer.multi_directory.service import CreateRequirementProject
-from ai_software_engineer.multi_directory.store import JointJournal
-from ai_software_engineer.project_manager.delivery import (
+from ai_software_engineer.domain.enums import AgentRole, TeamRole
+from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
     ReplyToProduct,
     StartProjectDelivery,
 )
-from ai_software_engineer.project_manager.delivery_checkpoint import (
+from ai_software_engineer.manager.delivery_checkpoint import (
     FileProjectDeliveryCheckpointStore,
     ProjectDeliveryCheckpoint,
 )
-from ai_software_engineer.project_manager.dispatch import VerificationReservation
-from ai_software_engineer.project_manager.mysql_dispatch_authority import _decode_commit
-from ai_software_engineer.project_manager.production_host import OrganizationTeamHost
-from ai_software_engineer.runtime_workspace import OrganizationWorkspace
+from ai_software_engineer.manager.dispatch import VerificationReservation
+from ai_software_engineer.manager.mysql_dispatch_authority import _decode_commit
+from ai_software_engineer.manager.production_host import TeamHost
+from ai_software_engineer.multi_directory.models import JointCheckpoint, JointStage
+from ai_software_engineer.multi_directory.scope import DirectoryScope, DirectoryUnit
+from ai_software_engineer.multi_directory.service import CreateRequirement
+from ai_software_engineer.multi_directory.store import JointJournal
 from ai_software_engineer.store.mysql_repository import open_mysql_connection
-from ai_software_engineer.team_view.models import CompanyView, TeamReadError, TeamSnapshot
+from ai_software_engineer.team_view.models import ProjectView, TeamReadError, TeamSnapshot
 from ai_software_engineer.team_view.reader import ProductionTeamReader, _candidate_branch
 from ai_software_engineer.team_view.server import create_team_server
+from ai_software_engineer.team_workspace import TeamWorkspace
 from tests.e2e.test_joint_delivery import setup_host
-from tests.project_manager.test_production_backend import (
+from tests.manager.test_production_backend import (
     _ScriptedClientFactory,
     _ScriptedDeliveryAdapter,
     _ScriptedDeliveryFactory,
@@ -117,16 +116,16 @@ def test_default_workspace_reader_never_initializes(
     assert config.platform_root == str(home / ".ase")
     assert not (home / ".ase").exists()
 
-    CompanyWorkspace.initialize(
+    TeamWorkspace.initialize(
         config.platform_root,
-        company_id=config.company_id,
-        name=config.company_name,
+        team_id=config.team_id,
+        name=config.team_name,
     )
 
-    assert (home / ".ase" / "companies" / config.company_id).is_dir()
+    assert (home / ".ase" / "team").is_dir()
 
 
-def test_empty_company_needs_no_database_or_models(tmp_path: Path) -> None:
+def test_empty_team_needs_no_database_or_models(tmp_path: Path) -> None:
     config = ProductionConfig(
         platform_root=str(tmp_path),
         model_routes=(
@@ -135,10 +134,7 @@ def test_empty_company_needs_no_database_or_models(tmp_path: Path) -> None:
             ),
         ),
     )
-    CompanyWorkspace.initialize(tmp_path, company_id=config.company_id, name=config.company_name)
-    OrganizationWorkspace.initialize(
-        tmp_path / "organization", organization_id="organization_test", created_at=datetime.now(UTC)
-    )
+    TeamWorkspace.initialize(tmp_path, team_id=config.team_id, name=config.team_name)
     before = _bytes(tmp_path)
     snapshot = ProductionTeamReader(config, {}).snapshot()
     assert not snapshot.agents and not snapshot.tasks and not snapshot.requests
@@ -150,7 +146,7 @@ def test_joint_reader_accepts_committed_child_checkpoint_as_a_valid_prefix(
     tmp_path: Path,
 ) -> None:
     config, environment, models, projects = setup_host(tmp_path)
-    host = OrganizationTeamHost(
+    host = TeamHost(
         config=config,
         environment=environment,
         structured_clients=models,
@@ -158,9 +154,9 @@ def test_joint_reader_accepts_committed_child_checkpoint_as_a_valid_prefix(
     )
     service = host.requirement_entry()
     created = service.create(
-        CreateRequirementProject(
+        CreateRequirement(
             name="Advanced native child",
-            project_roots=tuple(map(str, projects)),
+            repository_roots=tuple(map(str, projects)),
         )
     ).checkpoint
     product = service.reply(
@@ -179,9 +175,8 @@ def test_joint_reader_accepts_committed_child_checkpoint_as_a_valid_prefix(
     ).checkpoint
     assert parent.stage is JointStage.BLOCKED
     child = parent.children[0].checkpoint
-    sidecar = (
-        host.company_workspace.root / "projects" / child.project_id / "state/project-deliveries"
-    )
+    project = host.projects()[0]
+    sidecar = project.root / "repositories" / child.repository_id / "state/project-deliveries"
     store = FileProjectDeliveryCheckpointStore(sidecar)
     values = child.to_wire()
     values.pop("checkpoint_sha256")
@@ -210,7 +205,7 @@ def test_real_inflight_joint_and_terminal_reads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config, environment, models, projects = setup_host(tmp_path)
-    host = OrganizationTeamHost(
+    host = TeamHost(
         config=config,
         environment=environment,
         structured_clients=models,
@@ -222,9 +217,9 @@ def test_real_inflight_joint_and_terminal_reads(
     seen: list[tuple[AgentRole, TeamSnapshot]] = []
 
     def observe(adapter: _ScriptedDeliveryAdapter, request: AgentRequest) -> AgentResult:
-        before = _bytes(Path(config.platform_root) / "companies")
+        before = _bytes(Path(config.platform_root) / "team")
         snapshot = reader.snapshot()
-        assert _bytes(Path(config.platform_root) / "companies") == before
+        assert _bytes(Path(config.platform_root) / "team") == before
         current = next(t for t in snapshot.tasks if t.task_id == request.task_id)
         assert sum(a.current_stage for a in current.assignments) == 1
         assert next(a.role for a in current.assignments if a.current_stage) == request.role
@@ -237,9 +232,9 @@ def test_real_inflight_joint_and_terminal_reads(
     monkeypatch.setattr(_ScriptedDeliveryAdapter, "run", observe)
     for index in range(2):
         created = service.create(
-            CreateRequirementProject(
+            CreateRequirement(
                 name=f"Live team request {index}",
-                project_roots=tuple(map(str, projects)),
+                repository_roots=tuple(map(str, projects)),
             )
         ).checkpoint
         initial = reader.snapshot()
@@ -270,8 +265,7 @@ def test_real_inflight_joint_and_terminal_reads(
     delivery_agents = tuple(
         agent
         for agent in final.agents
-        if set(agent.roles)
-        & {OrganizationRole.CODER, OrganizationRole.QA, OrganizationRole.REVIEWER}
+        if set(agent.roles) & {TeamRole.CODER, TeamRole.QA, TeamRole.REVIEWER}
     )
     upstream_agents = tuple(agent for agent in final.agents if agent not in delivery_agents)
     assert all(len(a.history_delivery_ids) == 4 for a in delivery_agents)
@@ -281,17 +275,17 @@ def test_real_inflight_joint_and_terminal_reads(
     assert all(len(t.runs) == 3 and all(r.model == "gpt-5.5" for r in t.runs) for t in final.tasks)
     assert all(len(r.scopes) == 2 and len(r.documents) == 4 for r in final.requests)
 
-    # Other company requests are not scanned, even if corrupted.
-    foreign = Path(config.platform_root) / "companies" / "company_foreign" / "requests"
+    # Unrecognized top-level directories are not treated as Projects.
+    foreign = Path(config.platform_root) / "unrelated" / "requirements"
     foreign.mkdir(parents=True)
     (foreign / "bad.json").write_text("bad")
     assert reader.snapshot().tasks == final.tasks
 
-    company = host._company
-    journal = JointJournal(company.requests_root, read_only=True)
+    project = host.projects()[0]
+    journal = JointJournal(project.requirements_root, read_only=True)
     with pytest.raises(ValueError, match="read-only"):
         journal.append(done, expected=done.checkpoint_sha256)
-    checkpoint_file = next(company.requests_root.glob("delivery_multi_*/*.json"))
+    checkpoint_file = next(project.requirements_root.glob("delivery_multi_*/*.json"))
     checkpoint_file.write_text("{}")
     with pytest.raises(TeamReadError):
         reader.snapshot()
@@ -303,19 +297,20 @@ class _Reader:
         self.reads = 0
         self.selected: list[str | None] = []
 
-    def snapshot(self, company_id: str | None = None) -> TeamSnapshot:
+    def snapshot(self, project_id: str | None = None) -> TeamSnapshot:
         self.reads += 1
-        self.selected.append(company_id)
+        self.selected.append(project_id)
         if self.fail:
             raise RuntimeError("password=private-must-not-leak")
-        selected = company_id or "company_test"
+        selected = project_id or "project_test"
         return TeamSnapshot(
             as_of=datetime.now(UTC),
-            company_id=selected,
-            company_name="Other" if selected == "company_other" else "Test",
-            companies=(
-                CompanyView(id="company_test", name="Test"),
-                CompanyView(id="company_other", name="Other"),
+            team_id="team_test",
+            team_name="Test",
+            selected_project_id=selected,
+            projects=(
+                ProjectView(id="project_test", name="Test"),
+                ProjectView(id="project_other", name="Other"),
             ),
         )
 
@@ -354,10 +349,10 @@ def test_http_refresh_and_security(server: tuple[int, _Reader]) -> None:
             assert "frame-ancestors 'none'" in str(response.getheader("Content-Security-Policy"))
             assert response.getheader("Access-Control-Allow-Origin") is None
     with closing(HTTPConnection("127.0.0.1", port, timeout=5)) as client:
-        client.request("GET", "/api/v1/team/company_other")
+        client.request("GET", "/api/v1/team?project_id=project_other")
         response = client.getresponse()
         assert response.status == 200
-        assert json.loads(response.read())["company_id"] == "company_other"
+        assert json.loads(response.read())["selected_project_id"] == "project_other"
     for headers in (
         {"Host": "evil.example"},
         {"Origin": "https://evil.example"},
@@ -371,7 +366,7 @@ def test_http_refresh_and_security(server: tuple[int, _Reader]) -> None:
             client.request("GET", path)
             assert client.getresponse().status == 404
     assert reader.reads == 2
-    assert reader.selected == [None, "company_other"]
+    assert reader.selected == [None, "project_other"]
     reader.fail = True
     with closing(HTTPConnection("127.0.0.1", port, timeout=5)) as client:
         client.request("GET", "/api/v1/team")
@@ -400,28 +395,27 @@ def test_wire_schema_and_extra_fields() -> None:
     assert list(validator.iter_errors(payload))
 
 
-def test_reader_selects_prepared_company_without_cross_company_writes(tmp_path: Path) -> None:
+def test_reader_selects_project_without_cross_project_writes(tmp_path: Path) -> None:
     config = ProductionConfig(
         platform_root=str(tmp_path),
-        company_id="company_test",
-        company_name="Test",
+        team_id="team_test",
+        team_name="Test",
         model_routes=(
             ProviderRouteConfig(
                 provider="codex", model="gpt-5.5", kind=ModelProviderKind.CODEX_CLI
             ),
         ),
     )
-    CompanyWorkspace.initialize(tmp_path, company_id="company_test", name="Test")
-    CompanyWorkspace.initialize(tmp_path, company_id="company_other", name="Other")
-    OrganizationWorkspace.initialize(
-        tmp_path / "organization", organization_id="organization_test", created_at=datetime.now(UTC)
-    )
+    team = TeamWorkspace.initialize(tmp_path, team_id="team_test", name="Test")
+    team.project_registry().register(project_id="project_test", name="Test")
+    team.project_registry().register(project_id="project_other", name="Other")
     before = _bytes(tmp_path)
-    snapshot = ProductionTeamReader(config, {}).snapshot("company_other")
-    assert snapshot.company_id == "company_other"
-    assert tuple((item.id, item.name) for item in snapshot.companies) == (
-        ("company_other", "Other"),
-        ("company_test", "Test"),
+    snapshot = ProductionTeamReader(config, {}).snapshot("project_other")
+    assert snapshot.team_id == "team_test"
+    assert snapshot.selected_project_id == "project_other"
+    assert tuple((item.id, item.name) for item in snapshot.projects) == (
+        ("project_other", "Other"),
+        ("project_test", "Test"),
     )
     assert _bytes(tmp_path) == before
 
@@ -449,19 +443,17 @@ def test_selected_modules_waiting_and_symlink_rejection(tmp_path: Path) -> None:
             ),
         ),
     )
-    company = CompanyWorkspace.initialize(
-        config.platform_root, company_id=config.company_id, name=config.company_name
+    team = TeamWorkspace.initialize(
+        config.platform_root, team_id=config.team_id, name=config.team_name
     )
-    OrganizationWorkspace.initialize(
-        Path(config.platform_root) / "organization",
-        organization_id="organization_test",
-        created_at=datetime.now(UTC),
-    )
+    project = team.project_registry().register(project_id="project_test", name="Test Project")
     checkpoint = JointCheckpoint.seal(
         {
             "delivery_id": "delivery_multi_" + "a" * 32,
-            "company_id": company.manifest.company_id,
-            "company_manifest_sha256": company.manifest.manifest_sha256,
+            "team_id": team.manifest.team_id,
+            "team_manifest_sha256": team.manifest.manifest_sha256,
+            "project_id": project.manifest.project_id,
+            "project_manifest_sha256": project.manifest.manifest_sha256,
             "sequence": 1,
             "stage": JointStage.WAITING_HUMAN,
             "scope": DirectoryScope(
@@ -479,14 +471,14 @@ def test_selected_modules_waiting_and_symlink_rejection(tmp_path: Path) -> None:
             "next_action": "SPEC_CONFLICT: human decision required",
         }
     )
-    JointJournal(company.requests_root).append(checkpoint, expected=None)
+    JointJournal(project.requirements_root).append(checkpoint, expected=None)
     reader = ProductionTeamReader(config, {})
     view = reader.snapshot()
     assert view.requests[0].scopes[0].selected_paths == ("module-a", "module-b")
     assert view.requests[0].blocker == checkpoint.next_action
     assert "hidden_secret" not in view.model_dump_json()
     assert not view.tasks
-    link = company.requests_root / ("delivery_multi_" + "c" * 32)
+    link = project.requirements_root / ("delivery_multi_" + "c" * 32)
     link.symlink_to(tmp_path, target_is_directory=True)
     with pytest.raises(TeamReadError):
         reader.snapshot()
@@ -495,7 +487,7 @@ def test_selected_modules_waiting_and_symlink_rejection(tmp_path: Path) -> None:
 @pytest.mark.mysql
 def test_single_repository_entry_remains_visible(tmp_path: Path) -> None:
     config, environment, _, projects = setup_host(tmp_path)
-    host = OrganizationTeamHost(
+    host = TeamHost(
         config=config,
         environment=environment,
         structured_clients=_ScriptedClientFactory(),
@@ -505,7 +497,7 @@ def test_single_repository_entry_remains_visible(tmp_path: Path) -> None:
         host.project_entry()
         .start(
             StartProjectDelivery(
-                project_root=str(projects[0]),
+                repository_root=str(projects[0]),
                 requirement="Update greeting",
                 title="Single repository",
             )
@@ -526,7 +518,7 @@ def test_single_repository_entry_remains_visible(tmp_path: Path) -> None:
 @pytest.mark.mysql
 def test_active_candidate_verification_is_visible_as_qa_work(tmp_path: Path) -> None:
     config, environment, _, projects = setup_host(tmp_path)
-    host = OrganizationTeamHost(
+    host = TeamHost(
         config=config,
         environment=environment,
         structured_clients=_ScriptedClientFactory(),
@@ -535,7 +527,7 @@ def test_active_candidate_verification_is_visible_as_qa_work(tmp_path: Path) -> 
     service = host.project_entry()
     started = service.start(
         StartProjectDelivery(
-            project_root=str(projects[0]),
+            repository_root=str(projects[0]),
             requirement="Update greeting",
             title="Visible candidate verification",
         )
@@ -594,7 +586,7 @@ def test_active_candidate_verification_is_visible_as_qa_work(tmp_path: Path) -> 
             )
         reservation = VerificationReservation(
             plan_sha256=hashlib.sha256(execution_task_id.encode()).hexdigest(),
-            project_id=dispatch.project_id,
+            repository_id=dispatch.repository_id,
             source_task_id=dispatch.task_id,
             task_id=execution_task_id,
             workforce_snapshot_sha256=dispatch.workforce_snapshot_sha256,

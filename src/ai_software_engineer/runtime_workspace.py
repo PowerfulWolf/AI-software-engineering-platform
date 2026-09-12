@@ -1,4 +1,4 @@
-"""Organization/project workspace binding and run-scoped workforce resolution."""
+"""Team workforce/repository binding and run-scoped workforce resolution."""
 
 from __future__ import annotations
 
@@ -9,12 +9,10 @@ import tempfile
 from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Final, Literal, Self, cast
+from typing import Final, Literal, Self, cast
 
 from pydantic import (
     AwareDatetime,
-    Field,
-    StringConstraints,
     TypeAdapter,
     ValidationError,
     field_validator,
@@ -22,9 +20,9 @@ from pydantic import (
 )
 
 from ai_software_engineer.context import ContextStoreError, FileContextStore
-from ai_software_engineer.domain import AgentDefinition, OrganizationRole, WorkItemStatus
+from ai_software_engineer.domain import AgentDefinition, TeamRole, WorkItemStatus
 from ai_software_engineer.domain.agent import AgentId
-from ai_software_engineer.domain.identity import ContextId, ProjectId
+from ai_software_engineer.domain.identity import ContextId, ProjectId, RepositoryId, TeamId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, WirePayload
 from ai_software_engineer.domain.workforce import (
     AgentProfile,
@@ -38,28 +36,28 @@ from ai_software_engineer.domain.workforce import (
     is_waiting,
     lease_is_active,
 )
-from ai_software_engineer.project_profile import ProjectProfile, Sha256
-from ai_software_engineer.project_workspace import (
-    ProjectWorkspace,
-    ProjectWorkspaceError,
-    ProjectWorkspaceManifest,
+from ai_software_engineer.project_workspace import ProjectManifest
+from ai_software_engineer.repository_profile import RepositoryProfile, Sha256
+from ai_software_engineer.repository_workspace import (
+    RepositoryWorkspace,
+    RepositoryWorkspaceError,
+    RepositoryWorkspaceManifest,
 )
 from ai_software_engineer.runtime import RuntimeConfig, RuntimePaths
 from ai_software_engineer.spec_compiler import CompiledSpec
+from ai_software_engineer.team_workspace import TeamManifest, TeamWorkspace
 
-OrganizationId = Annotated[
-    str, StringConstraints(pattern=r"^organization_[a-z0-9][a-z0-9_-]{2,63}$")
-]
-
-ORGANIZATION_MANIFEST_NAME: Final = "organization.json"
-ORGANIZATION_DIRECTORIES: Final[tuple[str, ...]] = (
+# Team workforce records live directly in the single Team workspace.  These names
+# remain exported while v0.2 callers migrate from the former nested workforce root.
+TEAM_WORKFORCE_MANIFEST_NAME: Final = "team.json"
+TEAM_WORKFORCE_DIRECTORIES: Final[tuple[str, ...]] = (
     "agents",
     "model-policies",
     "work-items",
     "leases",
     "metrics",
 )
-PROJECT_PROFILE_NAME: Final = "project-profile.json"
+REPOSITORY_PROFILE_NAME: Final = "repository-profile.json"
 RUNTIME_BINDING_NAME: Final = "runtime-workspace-binding.json"
 
 
@@ -78,25 +76,25 @@ def _record_read_path(directory: Path, name: str, sha256: str) -> Path:
     return target
 
 
-def load_project_profile(sidecar: Path, profile_sha256: str) -> ProjectProfile:
+def load_repository_profile(sidecar: Path, profile_sha256: str) -> RepositoryProfile:
     """Read the exact profile snapshot; legacy fallback must match the requested digest."""
-    path = _record_read_path(sidecar / "profile", PROJECT_PROFILE_NAME, profile_sha256)
+    path = _record_read_path(sidecar / "profile", REPOSITORY_PROFILE_NAME, profile_sha256)
     try:
-        profile = ProjectProfile.model_validate_json(path.read_text(encoding="utf-8"))
+        profile = RepositoryProfile.model_validate_json(path.read_text(encoding="utf-8"))
         profile.validate_integrity()
     except (OSError, UnicodeError, ValueError) as error:
-        raise RuntimeWorkspaceCorruption("project profile record is invalid") from error
+        raise RuntimeWorkspaceCorruption("repository profile record is invalid") from error
     if profile.profile_sha256 != profile_sha256:
-        raise RuntimeWorkspaceConflict("ProjectProfile snapshot digest does not match")
+        raise RuntimeWorkspaceConflict("RepositoryProfile snapshot digest does not match")
     return profile
 
 
 class RuntimeWorkspaceError(RuntimeError):
-    """Base error for organization/project composition failures."""
+    """Base error for Team workforce/repository composition failures."""
 
 
-class OrganizationWorkspaceError(RuntimeWorkspaceError):
-    """Raised when the organization workspace is missing or untrusted."""
+class TeamWorkforceWorkspaceError(RuntimeWorkspaceError):
+    """Raised when the Team workforce workspace is missing or untrusted."""
 
 
 class RuntimeWorkspaceConflict(RuntimeWorkspaceError):
@@ -111,167 +109,117 @@ class RuntimeAllocationError(RuntimeWorkspaceError):
     """Raised when workforce facts cannot safely authorize an Agent Run."""
 
 
-class OrganizationLayout(DomainModel):
-    """Fixed organization-owned facts, separate from every project sidecar."""
+class TeamWorkforceWorkspace:
+    """Compatibility facade exposing workforce stores from the single Team root.
 
-    agents: Literal["agents"] = "agents"
-    model_policies: Literal["model-policies"] = "model-policies"
-    work_items: Literal["work-items"] = "work-items"
-    leases: Literal["leases"] = "leases"
-    metrics: Literal["metrics"] = "metrics"
+    This is deliberately not another aggregate or filesystem layer.  New code should
+    pass :class:`TeamWorkspace` directly where possible.
+    """
 
-    def values(self) -> tuple[str, ...]:
-        return (
-            self.agents,
-            self.model_policies,
-            self.work_items,
-            self.leases,
-            self.metrics,
-        )
+    def __init__(self, workspace: TeamWorkspace) -> None:
+        self._workspace = workspace
+        self.manifest = workspace.manifest
 
-
-class OrganizationWorkspaceManifest(DomainModel):
-    """Durable identity and layout for the organization-owned team workspace."""
-
-    kind: Literal["organization_workspace"] = "organization_workspace"
-    schema_version: Literal["v0.1"] = "v0.1"
-    organization_id: OrganizationId
-    root: NonEmptyStr
-    layout: OrganizationLayout = Field(default_factory=OrganizationLayout)
-    created_at: AwareDatetime
-    manifest_sha256: Sha256
-
-    @field_validator("root")
     @classmethod
-    def validate_root(cls, value: str) -> str:
-        if not Path(value).is_absolute() or any(ord(character) < 32 for character in value):
-            raise ValueError("organization root must be absolute and contain no controls")
-        return value
-
-    def validate_integrity(self) -> None:
-        if self.manifest_sha256 != _organization_digest(self):
-            raise RuntimeWorkspaceCorruption("organization manifest digest does not match content")
-
-
-class OrganizationWorkspace:
-    """Validated handle for long-lived AgentProfile and ModelPolicy facts."""
-
-    def __init__(self, manifest: OrganizationWorkspaceManifest) -> None:
-        self.manifest = manifest
+    def from_team(cls, workspace: TeamWorkspace) -> TeamWorkforceWorkspace:
+        workspace.validate_current()
+        return cls(workspace)
 
     @classmethod
     def initialize(
         cls,
         root: str | Path,
         *,
-        organization_id: OrganizationId | str,
+        team_id: TeamId | str,
         created_at: datetime,
-    ) -> OrganizationWorkspace:
-        """Atomically initialize or reopen one organization workspace."""
-        _require_aware(created_at, "organization created_at")
-        configured = Path(root).expanduser()
-        if configured.is_symlink():
-            raise OrganizationWorkspaceError("organization root cannot be a symlink")
-        resolved = configured.resolve(strict=False)
-        if resolved.exists():
-            return cls.open(resolved, organization_id=organization_id)
-        validated_id = TypeAdapter(OrganizationId).validate_python(organization_id)
-        resolved.parent.mkdir(parents=True, exist_ok=True)
-        staging = Path(tempfile.mkdtemp(prefix=f".{resolved.name}.", dir=resolved.parent))
-        pending: Path | None = staging
-        try:
-            for directory in ORGANIZATION_DIRECTORIES:
-                (staging / directory).mkdir()
-            provisional = OrganizationWorkspaceManifest(
-                organization_id=validated_id,
-                root=str(resolved),
-                created_at=created_at,
-                manifest_sha256="0" * 64,
+    ) -> TeamWorkforceWorkspace:
+        """Open the Team at ``root``; retained for source compatibility only."""
+        _require_aware(created_at, "Team workforce created_at")
+        resolved = Path(root).expanduser().resolve(strict=False)
+        if resolved.name != "team":
+            raise TeamWorkforceWorkspaceError("Team workforce root must be the Team root")
+        manifest_path = resolved / TEAM_WORKFORCE_MANIFEST_NAME
+        if not manifest_path.is_file():
+            raise TeamWorkforceWorkspaceError(
+                "initialize the TeamWorkspace before opening its workforce stores"
             )
-            manifest = provisional.model_copy(
-                update={"manifest_sha256": _organization_digest(provisional)}
-            )
-            _atomic_json_write(staging / ORGANIZATION_MANIFEST_NAME, manifest.to_wire())
-            staging.rename(resolved)
-            pending = None
-        except OSError as error:
-            raise OrganizationWorkspaceError(
-                f"cannot initialize organization workspace: {resolved}"
-            ) from error
-        finally:
-            if pending is not None:
-                _remove_staging(pending)
-        return cls.open(resolved, organization_id=validated_id)
+        return cls.open(resolved, team_id=team_id)
 
     @classmethod
     def open(
         cls,
         root: str | Path,
         *,
-        organization_id: OrganizationId | str | None = None,
-    ) -> OrganizationWorkspace:
-        configured = Path(root).expanduser()
-        if configured.is_symlink():
-            raise OrganizationWorkspaceError("organization root cannot be a symlink")
-        resolved = configured.resolve(strict=False)
-        manifest_path = resolved / ORGANIZATION_MANIFEST_NAME
+        team_id: TeamId | str | None = None,
+    ) -> TeamWorkforceWorkspace:
+        resolved = Path(root).expanduser().resolve(strict=False)
+        manifest_path = resolved / TEAM_WORKFORCE_MANIFEST_NAME
         try:
-            manifest = OrganizationWorkspaceManifest.model_validate(
-                json.loads(manifest_path.read_text(encoding="utf-8"))
-            )
+            manifest = TeamManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
             manifest.validate_integrity()
-        except (OSError, UnicodeError, json.JSONDecodeError, ValidationError) as error:
+            workspace = TeamWorkspace.initialize(
+                manifest.platform_root,
+                team_id=manifest.team_id,
+                name=manifest.name,
+                read_only=True,
+            )
+        except (OSError, UnicodeError, ValueError, ValidationError) as error:
             raise RuntimeWorkspaceCorruption(
-                f"organization manifest is invalid: {manifest_path}"
+                f"Team workforce manifest is invalid: {manifest_path}"
             ) from error
-        if Path(manifest.root) != resolved:
-            raise RuntimeWorkspaceCorruption("organization manifest root does not match its path")
-        if organization_id is not None:
-            expected = TypeAdapter(OrganizationId).validate_python(organization_id)
-            if manifest.organization_id != expected:
-                raise RuntimeWorkspaceConflict("organization ID does not match existing workspace")
-        for directory in manifest.layout.values():
+        if workspace.root != resolved:
+            raise RuntimeWorkspaceCorruption("Team workforce manifest root does not match its path")
+        if team_id is not None:
+            expected = TypeAdapter(TeamId).validate_python(team_id)
+            if manifest.team_id != expected:
+                raise RuntimeWorkspaceConflict(
+                    "Team ID does not match existing workforce workspace"
+                )
+        for directory in TEAM_WORKFORCE_DIRECTORIES:
             path = resolved / directory
             if path.is_symlink() or not path.is_dir():
                 raise RuntimeWorkspaceCorruption(
-                    f"organization layout is missing or unsafe: {directory}"
+                    f"Team workforce layout is missing or unsafe: {directory}"
                 )
-        return cls(manifest)
+        return cls(workspace)
 
     @property
     def root(self) -> Path:
-        return Path(self.manifest.root)
+        return self._workspace.root
 
     @property
-    def organization_id(self) -> OrganizationId:
-        return self.manifest.organization_id
+    def team_id(self) -> TeamId:
+        return self.manifest.team_id
 
     def directory(
         self, name: Literal["agents", "model-policies", "work-items", "leases", "metrics"]
     ) -> Path:
-        if name not in self.manifest.layout.values():
-            raise OrganizationWorkspaceError(f"unknown organization directory: {name}")
-        return self.root / name
+        if name not in TEAM_WORKFORCE_DIRECTORIES:
+            raise TeamWorkforceWorkspaceError(f"unknown Team workforce directory: {name}")
+        return self._workspace.directory(name)
 
 
 class RuntimeWorkspaceBinding(DomainModel):
-    """Immutable binding between organization facts, project code, and sidecar stores."""
+    """Immutable binding between Team facts, repository code and sidecar stores."""
 
     kind: Literal["runtime_workspace_binding"] = "runtime_workspace_binding"
-    schema_version: Literal["v0.1"] = "v0.1"
-    organization_id: OrganizationId
-    organization_root: NonEmptyStr
-    organization_manifest_sha256: Sha256
+    schema_version: Literal["v0.2"] = "v0.2"
+    team_id: TeamId
+    team_root: NonEmptyStr
+    team_manifest_sha256: Sha256
     project_id: ProjectId
     project_root: NonEmptyStr
-    project_workspace_root: NonEmptyStr
     project_manifest_sha256: Sha256
-    project_profile_sha256: Sha256
+    repository_id: RepositoryId
+    repository_root: NonEmptyStr
+    repository_workspace_root: NonEmptyStr
+    repository_manifest_sha256: Sha256
+    repository_profile_sha256: Sha256
     paths: RuntimePaths
     bound_at: AwareDatetime
     binding_sha256: Sha256
 
-    @field_validator("organization_root", "project_root", "project_workspace_root")
+    @field_validator("team_root", "project_root", "repository_root", "repository_workspace_root")
     @classmethod
     def validate_absolute_path(cls, value: str) -> str:
         if not Path(value).is_absolute() or any(ord(character) < 32 for character in value):
@@ -281,15 +229,18 @@ class RuntimeWorkspaceBinding(DomainModel):
     @model_validator(mode="after")
     def validate_bound_paths(self) -> Self:
         project = Path(self.project_root)
-        sidecar = Path(self.project_workspace_root)
-        organization = Path(self.organization_root)
-        if _paths_overlap(project, sidecar):
-            raise ValueError("project root and sidecar must not overlap")
-        if _paths_overlap(project, organization) or _paths_overlap(sidecar, organization):
-            raise ValueError("organization root must not overlap project or sidecar")
+        repository = Path(self.repository_root)
+        sidecar = Path(self.repository_workspace_root)
+        workforce = Path(self.team_root)
+        if sidecar.parent.parent != project:
+            raise ValueError("Repository sidecar must belong to the bound Project")
+        if _paths_overlap(repository, sidecar):
+            raise ValueError("repository root and sidecar must not overlap")
+        if _paths_overlap(repository, workforce) or _paths_overlap(sidecar, workforce):
+            raise ValueError("Team root must not overlap repository or sidecar")
         expected = _runtime_paths(sidecar)
         if self.paths != expected:
-            raise ValueError("RuntimePaths do not match the fixed project sidecar layout")
+            raise ValueError("RuntimePaths do not match the fixed repository sidecar layout")
         return self
 
     def validate_integrity(self) -> None:
@@ -299,20 +250,36 @@ class RuntimeWorkspaceBinding(DomainModel):
     def validate_environment(self) -> None:
         """Reopen every durable boundary and reject stale or tampered bindings."""
         self.validate_integrity()
-        organization = OrganizationWorkspace.open(
-            self.organization_root,
-            organization_id=self.organization_id,
+        workforce = TeamWorkforceWorkspace.open(
+            self.team_root,
+            team_id=self.team_id,
         )
-        if organization.manifest.manifest_sha256 != self.organization_manifest_sha256:
-            raise RuntimeWorkspaceConflict("organization manifest changed after binding")
-        sidecar = Path(self.project_workspace_root)
+        if workforce.manifest.manifest_sha256 != self.team_manifest_sha256:
+            raise RuntimeWorkspaceConflict("Team manifest changed after binding")
+        project_root = Path(self.project_root)
+        try:
+            project_manifest = ProjectManifest.model_validate_json(
+                (project_root / "project.json").read_text(encoding="utf-8")
+            )
+            project_manifest.validate_integrity()
+        except (OSError, UnicodeError, ValueError, ValidationError) as error:
+            raise RuntimeWorkspaceCorruption("Project workspace record is invalid") from error
+        if (
+            project_manifest.team_id != self.team_id
+            or project_manifest.team_manifest_sha256 != self.team_manifest_sha256
+            or project_manifest.project_id != self.project_id
+            or project_manifest.project_root != self.project_root
+            or project_manifest.manifest_sha256 != self.project_manifest_sha256
+        ):
+            raise RuntimeWorkspaceConflict("Project manifest changed after binding")
+        sidecar = Path(self.repository_workspace_root)
         manifest_path = sidecar / "workspace.json"
         try:
-            manifest = ProjectWorkspaceManifest.model_validate(
+            manifest = RepositoryWorkspaceManifest.model_validate(
                 json.loads(manifest_path.read_text(encoding="utf-8"))
             )
             manifest.validate_binding(sidecar)
-            profile = load_project_profile(sidecar, self.project_profile_sha256)
+            profile = load_repository_profile(sidecar, self.repository_profile_sha256)
             persisted = RuntimeWorkspaceBinding.model_validate(
                 json.loads(
                     _record_read_path(
@@ -326,35 +293,37 @@ class RuntimeWorkspaceBinding(DomainModel):
             UnicodeError,
             json.JSONDecodeError,
             ValidationError,
-            ProjectWorkspaceError,
+            RepositoryWorkspaceError,
         ) as error:
             raise RuntimeWorkspaceCorruption("runtime workspace records are invalid") from error
         if (
-            manifest.project_id != self.project_id
-            or manifest.project_root != self.project_root
-            or manifest.ai_workspace_root != self.project_workspace_root
-            or manifest.manifest_sha256 != self.project_manifest_sha256
+            manifest.repository_id != self.repository_id
+            or manifest.project_id != self.project_id
+            or manifest.project_manifest_sha256 != self.project_manifest_sha256
+            or manifest.repository_root != self.repository_root
+            or manifest.ai_workspace_root != self.repository_workspace_root
+            or manifest.manifest_sha256 != self.repository_manifest_sha256
         ):
             raise RuntimeWorkspaceConflict("project manifest changed after binding")
         if (
-            profile.project_id != self.project_id
-            or profile.profile_sha256 != self.project_profile_sha256
+            profile.repository_id != self.repository_id
+            or profile.profile_sha256 != self.repository_profile_sha256
         ):
-            raise RuntimeWorkspaceConflict("ProjectProfile changed after binding")
+            raise RuntimeWorkspaceConflict("RepositoryProfile changed after binding")
         if persisted != self:
             raise RuntimeWorkspaceConflict("persisted RuntimeWorkspaceBinding does not match")
-        observed = ProjectProfile.discover(
-            self.project_root,
-            project_id=self.project_id,
+        observed = RepositoryProfile.discover(
+            self.repository_root,
+            repository_id=self.repository_id,
             observed_at=self.bound_at,
         )
-        if observed.profile_sha256 != self.project_profile_sha256:
-            raise RuntimeWorkspaceConflict("target project facts changed after binding")
+        if observed.profile_sha256 != self.repository_profile_sha256:
+            raise RuntimeWorkspaceConflict("target repository facts changed after binding")
 
     def validate_task_repository(self, repository: str | Path) -> Path:
         resolved = Path(repository).expanduser().resolve(strict=False)
-        if resolved != Path(self.project_root) or not resolved.is_dir():
-            raise RuntimeWorkspaceConflict("Task repository does not match bound project root")
+        if resolved != Path(self.repository_root) or not resolved.is_dir():
+            raise RuntimeWorkspaceConflict("Task repository does not match bound repository root")
         return resolved
 
     def compose_runtime_config(
@@ -365,8 +334,8 @@ class RuntimeWorkspaceBinding(DomainModel):
         """Bind configured stores to the sidecar and inject the exact compiled spec source."""
         self.validate_environment()
         compiled_spec.validate_integrity()
-        if compiled_spec.project_id != self.project_id:
-            raise RuntimeWorkspaceConflict("CompiledSpec belongs to another project")
+        if compiled_spec.repository_id != self.repository_id:
+            raise RuntimeWorkspaceConflict("CompiledSpec belongs to another repository")
         source = compiled_spec.to_context_source()
         if any(item.source_id == source.source_id for item in config.context_sources):
             raise RuntimeWorkspaceConflict("runtime config already declares compiled.spec source")
@@ -381,73 +350,80 @@ class RuntimeWorkspaceBinding(DomainModel):
 
 
 class RuntimeWorkspaceBinder:
-    """Validate and persist one organization/project RuntimeWorkspaceBinding."""
+    """Validate and persist one Team workforce/repository RuntimeWorkspaceBinding."""
 
     def __init__(self, *, versioned: bool = False) -> None:
         self._versioned = versioned
 
     def bind(
         self,
-        organization: OrganizationWorkspace,
-        project: ProjectWorkspace,
-        profile: ProjectProfile,
+        workforce: TeamWorkforceWorkspace,
+        repository: RepositoryWorkspace,
+        profile: RepositoryProfile,
         *,
         bound_at: datetime,
     ) -> RuntimeWorkspaceBinding:
         _require_aware(bound_at, "binding time")
-        organization = OrganizationWorkspace.open(
-            organization.root,
-            organization_id=organization.organization_id,
+        workforce = TeamWorkforceWorkspace.open(
+            workforce.root,
+            team_id=workforce.team_id,
         )
         try:
-            disk_manifest = ProjectWorkspaceManifest.model_validate(
-                json.loads(project.manifest_path.read_text(encoding="utf-8"))
+            disk_manifest = RepositoryWorkspaceManifest.model_validate(
+                json.loads(repository.manifest_path.read_text(encoding="utf-8"))
             )
-            disk_manifest.validate_binding(project.root)
+            disk_manifest.validate_binding(repository.root)
         except (
             OSError,
             UnicodeError,
             json.JSONDecodeError,
             ValidationError,
-            ProjectWorkspaceError,
+            RepositoryWorkspaceError,
         ) as error:
             raise RuntimeWorkspaceCorruption("project workspace manifest is invalid") from error
-        if disk_manifest != project.manifest:
-            raise RuntimeWorkspaceConflict("project workspace handle does not match disk manifest")
+        if disk_manifest != repository.manifest:
+            raise RuntimeWorkspaceConflict(
+                "repository workspace handle does not match disk manifest"
+            )
         profile.validate_integrity()
-        if profile.project_id != project.project_id:
-            raise RuntimeWorkspaceConflict("ProjectProfile belongs to another project")
-        observed = ProjectProfile.discover(
-            project.project_root,
-            project_id=project.project_id,
+        if profile.repository_id != repository.repository_id:
+            raise RuntimeWorkspaceConflict("RepositoryProfile belongs to another repository")
+        observed = RepositoryProfile.discover(
+            repository.repository_root,
+            repository_id=repository.repository_id,
             observed_at=bound_at,
         )
         if observed.profile_sha256 != profile.profile_sha256:
-            raise RuntimeWorkspaceConflict("ProjectProfile does not match current project facts")
+            raise RuntimeWorkspaceConflict(
+                "RepositoryProfile does not match current repository facts"
+            )
         provisional = RuntimeWorkspaceBinding(
-            organization_id=organization.organization_id,
-            organization_root=str(organization.root),
-            organization_manifest_sha256=organization.manifest.manifest_sha256,
-            project_id=project.project_id,
-            project_root=str(project.project_root),
-            project_workspace_root=str(project.root),
-            project_manifest_sha256=project.manifest.manifest_sha256,
-            project_profile_sha256=profile.profile_sha256,
-            paths=_runtime_paths(project.root),
+            team_id=workforce.team_id,
+            team_root=str(workforce.root),
+            team_manifest_sha256=workforce.manifest.manifest_sha256,
+            project_id=repository.manifest.project_id,
+            project_root=str(repository.root.parent.parent),
+            project_manifest_sha256=repository.manifest.project_manifest_sha256,
+            repository_id=repository.repository_id,
+            repository_root=str(repository.repository_root),
+            repository_workspace_root=str(repository.root),
+            repository_manifest_sha256=repository.manifest.manifest_sha256,
+            repository_profile_sha256=profile.profile_sha256,
+            paths=_runtime_paths(repository.root),
             bound_at=bound_at,
             binding_sha256="0" * 64,
         )
         binding = provisional.model_copy(update={"binding_sha256": _binding_digest(provisional)})
         binding.validate_integrity()
-        profile_path = project.directory("profile") / PROJECT_PROFILE_NAME
-        binding_path = project.directory("policy") / RUNTIME_BINDING_NAME
+        profile_path = repository.directory("profile") / REPOSITORY_PROFILE_NAME
+        binding_path = repository.directory("policy") / RUNTIME_BINDING_NAME
         if self._versioned:
             if profile_path.is_symlink():
                 raise RuntimeWorkspaceCorruption("legacy profile cannot be a symlink")
             legacy = None
             if profile_path.exists():
                 try:
-                    legacy = ProjectProfile.model_validate_json(
+                    legacy = RepositoryProfile.model_validate_json(
                         profile_path.read_text(encoding="utf-8")
                     )
                     legacy.validate_integrity()
@@ -455,10 +431,10 @@ class RuntimeWorkspaceBinder:
                     raise RuntimeWorkspaceCorruption("legacy profile record is invalid") from error
             if legacy is None or legacy.profile_sha256 != profile.profile_sha256:
                 profile_path = _versioned_record_path(
-                    project.directory("profile"), PROJECT_PROFILE_NAME, profile.profile_sha256
+                    repository.directory("profile"), REPOSITORY_PROFILE_NAME, profile.profile_sha256
                 )
                 binding_path = _versioned_record_path(
-                    project.directory("policy"), RUNTIME_BINDING_NAME, binding.binding_sha256
+                    repository.directory("policy"), RUNTIME_BINDING_NAME, binding.binding_sha256
                 )
         _put_immutable_model(
             profile_path,
@@ -475,13 +451,13 @@ class RuntimeWorkspaceBinder:
         return resolved
 
 
-class FileOrganizationWorkforceStore:
-    """Organization-owned, integrity-wrapped AgentProfile and ModelPolicy records."""
+class FileTeamWorkforceStore:
+    """Team-owned, integrity-wrapped AgentProfile and ModelPolicy records."""
 
-    def __init__(self, workspace: OrganizationWorkspace) -> None:
-        self._workspace = OrganizationWorkspace.open(
+    def __init__(self, workspace: TeamWorkforceWorkspace) -> None:
+        self._workspace = TeamWorkforceWorkspace.open(
             workspace.root,
-            organization_id=workspace.organization_id,
+            team_id=workspace.team_id,
         )
 
     def put_agent(self, profile: AgentProfile) -> AgentProfile:
@@ -549,14 +525,12 @@ class FileOrganizationWorkforceStore:
         if path.is_symlink():
             raise RuntimeWorkspaceCorruption("workforce record cannot be a symlink")
         if path.exists():
-            existing = FileOrganizationWorkforceStore._get(kind, object_id, root)
+            existing = FileTeamWorkforceStore._get(kind, object_id, root)
             if existing != payload:
-                raise RuntimeWorkspaceConflict(
-                    f"organization workforce record already exists: {object_id}"
-                )
+                raise RuntimeWorkspaceConflict(f"Team workforce record already exists: {object_id}")
             return model
         if not _atomic_json_write(path, envelope, overwrite=False):
-            return FileOrganizationWorkforceStore._put(kind, object_id, model, root)
+            return FileTeamWorkforceStore._put(kind, object_id, model, root)
         return model
 
     @staticmethod
@@ -565,19 +539,15 @@ class FileOrganizationWorkforceStore:
         if path.is_symlink():
             raise RuntimeWorkspaceCorruption("workforce record cannot be a symlink")
         if not path.is_file():
-            raise RuntimeWorkspaceCorruption(
-                f"organization workforce record is missing: {object_id}"
-            )
+            raise RuntimeWorkspaceCorruption(f"Team workforce record is missing: {object_id}")
         try:
             envelope = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as error:
             raise RuntimeWorkspaceCorruption(
-                f"organization workforce record is invalid: {object_id}"
+                f"Team workforce record is invalid: {object_id}"
             ) from error
         if not isinstance(envelope, dict):
-            raise RuntimeWorkspaceCorruption(
-                f"organization workforce record is invalid: {object_id}"
-            )
+            raise RuntimeWorkspaceCorruption(f"Team workforce record is invalid: {object_id}")
         payload = envelope.get("payload")
         if (
             envelope.get("kind") != kind
@@ -585,14 +555,12 @@ class FileOrganizationWorkforceStore:
             or not isinstance(payload, dict)
             or envelope.get("sha256") != _sha256(_canonical_json(payload))
         ):
-            raise RuntimeWorkspaceCorruption(
-                f"organization workforce record integrity failed: {object_id}"
-            )
+            raise RuntimeWorkspaceCorruption(f"Team workforce record integrity failed: {object_id}")
         return cast(WirePayload, payload)
 
 
 class RuntimeAgentRun(DomainModel):
-    """Resolved existing AgentDefinition plus its auditable organization allocation."""
+    """Resolved existing AgentDefinition plus its auditable Team allocation."""
 
     kind: Literal["runtime_agent_run"] = "runtime_agent_run"
     allocation: AgentRunAllocation
@@ -614,12 +582,12 @@ class RuntimeAgentRun(DomainModel):
 
 
 class RuntimeWorkforceResolver:
-    """Resolve persisted organization facts into one existing runtime AgentDefinition."""
+    """Resolve persisted Team facts into one existing runtime AgentDefinition."""
 
     def __init__(
         self,
         binding: RuntimeWorkspaceBinding,
-        workforce: FileOrganizationWorkforceStore,
+        workforce: FileTeamWorkforceStore,
         config: RuntimeConfig,
     ) -> None:
         binding.validate_environment()
@@ -646,7 +614,7 @@ class RuntimeWorkforceResolver:
         self._validate_workforce(agent, policy, work_item, assignment, selection, allocated_at)
         compiled_spec.validate_integrity()
         if (
-            compiled_spec.project_id != self._binding.project_id
+            compiled_spec.repository_id != self._binding.repository_id
             or compiled_spec.task_id != assignment.task_id
         ):
             raise RuntimeAllocationError("CompiledSpec does not match allocation project/Task")
@@ -676,7 +644,7 @@ class RuntimeWorkforceResolver:
                 "provider": selection.provider,
                 "metadata": {
                     **base_definition.metadata,
-                    "organization_id": self._binding.organization_id,
+                    "team_id": self._binding.team_id,
                     "agent_profile_version": agent.version,
                     "model_policy_id": policy.id,
                     "model_policy_version": policy.version,
@@ -685,7 +653,7 @@ class RuntimeWorkforceResolver:
         )
         policy_payload = definition.permissions.to_wire()
         tool_policy_ref = (
-            f"policy://{self._binding.project_id}/{assignment.role.value}/"
+            f"policy://{self._binding.repository_id}/{assignment.role.value}/"
             f"{_sha256(_canonical_json(policy_payload))}"
         )
         run_seed = {
@@ -699,7 +667,7 @@ class RuntimeWorkforceResolver:
         allocation = AgentRunAllocation(
             run_id=f"run_{_sha256(_canonical_json(run_seed))[:32]}",
             assignment_id=assignment.id,
-            project_id=assignment.project_id,
+            repository_id=assignment.repository_id,
             task_id=assignment.task_id,
             agent_id=assignment.agent_id,
             role=assignment.role,
@@ -714,7 +682,7 @@ class RuntimeWorkforceResolver:
         return RuntimeAgentRun(
             allocation=allocation,
             agent_definition=definition,
-            code_root=self._binding.project_root,
+            code_root=self._binding.repository_root,
         )
 
     def _validate_scheduling(
@@ -724,8 +692,11 @@ class RuntimeWorkforceResolver:
         lease: TaskLease,
         allocated_at: datetime,
     ) -> None:
-        if item.project_id != self._binding.project_id or assignment.project_id != item.project_id:
-            raise RuntimeAllocationError("WorkItem/Assignment belongs to another project")
+        if (
+            item.repository_id != self._binding.repository_id
+            or assignment.repository_id != item.repository_id
+        ):
+            raise RuntimeAllocationError("WorkItem/Assignment belongs to another repository")
         if item.task_id != assignment.task_id:
             raise RuntimeAllocationError("WorkItem and Assignment Task IDs do not match")
         if is_waiting(item.status) or item.status is WorkItemStatus.CLOSED:
@@ -756,7 +727,7 @@ class RuntimeWorkforceResolver:
     ) -> None:
         if not agent.active or agent.id != assignment.agent_id:
             raise RuntimeAllocationError("AgentProfile is inactive or identity-mismatched")
-        if OrganizationRole(assignment.role.value) not in agent.eligible_roles:
+        if TeamRole(assignment.role.value) not in agent.eligible_roles:
             raise RuntimeAllocationError("AgentProfile is not eligible for assignment role")
         missing = set(item.required_capabilities) - set(agent.capabilities)
         if missing:
@@ -793,11 +764,6 @@ def _runtime_paths(sidecar: Path) -> RuntimePaths:
 
 def _paths_overlap(left: Path, right: Path) -> bool:
     return left == right or left.is_relative_to(right) or right.is_relative_to(left)
-
-
-def _organization_digest(manifest: OrganizationWorkspaceManifest) -> Sha256:
-    payload = manifest.model_dump(mode="json", exclude={"created_at", "manifest_sha256"})
-    return _sha256(_canonical_json(payload))
 
 
 def _binding_digest(binding: RuntimeWorkspaceBinding) -> Sha256:
@@ -894,14 +860,9 @@ def _require_aware(value: datetime, label: str) -> None:
 
 
 __all__ = [
-    "ORGANIZATION_DIRECTORIES",
-    "ORGANIZATION_MANIFEST_NAME",
-    "FileOrganizationWorkforceStore",
-    "OrganizationId",
-    "OrganizationLayout",
-    "OrganizationWorkspace",
-    "OrganizationWorkspaceError",
-    "OrganizationWorkspaceManifest",
+    "TEAM_WORKFORCE_DIRECTORIES",
+    "TEAM_WORKFORCE_MANIFEST_NAME",
+    "FileTeamWorkforceStore",
     "RuntimeAgentRun",
     "RuntimeAllocationError",
     "RuntimeWorkforceResolver",
@@ -910,4 +871,7 @@ __all__ = [
     "RuntimeWorkspaceConflict",
     "RuntimeWorkspaceCorruption",
     "RuntimeWorkspaceError",
+    "TeamId",
+    "TeamWorkforceWorkspace",
+    "TeamWorkforceWorkspaceError",
 ]

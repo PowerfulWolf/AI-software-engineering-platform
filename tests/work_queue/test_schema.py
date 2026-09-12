@@ -51,7 +51,7 @@ def _ready_item() -> QueuedWorkItem:
     return QueuedWorkItem(
         id="work_schema_coder_001",
         task_id="task_schema_queue_001",
-        project_id="project_schema_queue_001",
+        repository_id="repository_schema_queue_001",
         role=AgentRole.CODER,
         attempt=1,
         checkpoint_sequence=0,
@@ -71,7 +71,7 @@ def test_queue_item_claim_and_completion_match_canonical_schema() -> None:
     leased = ready.model_copy(update={"status": WorkItemStatus.LEASED})
     assignment = RoleAssignment(
         id="assignment_schema_queue_001",
-        project_id=ready.project_id,
+        repository_id=ready.repository_id,
         task_id=ready.task_id,
         agent_id="agent_schema_coder_001",
         role=ready.role,

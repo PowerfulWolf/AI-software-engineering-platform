@@ -7,7 +7,7 @@
   "required": [
     "schema_version",
     "document_id",
-    "company_id",
+    "team_id",
     "source_name",
     "media_type",
     "source_relative_path",
@@ -22,7 +22,7 @@
   "properties": {
     "schema_version": {"const": "v0.1", "default": "v0.1"},
     "document_id": {"type": "string", "pattern": "^knowledge_document_[a-f0-9]{32}$"},
-    "company_id": {"type": "string", "pattern": "^company_[a-z0-9][a-z0-9_-]{1,63}$"},
+    "team_id": {"type": "string", "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$"},
     "source_name": {"type": "string", "minLength": 1, "maxLength": 200},
     "media_type": {
       "enum": ["text/markdown", "text/plain", "application/pdf", "application/docx"]

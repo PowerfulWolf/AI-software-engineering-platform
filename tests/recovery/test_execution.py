@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-import ai_software_engineer.project_manager.production_backend as production_backend
+import ai_software_engineer.manager.production_backend as production_backend
 from ai_software_engineer.agents import (
     AgentAdapter,
     AgentRequest,
@@ -22,19 +22,19 @@ from ai_software_engineer.context import FileContextBuilder, FileContextStore
 from ai_software_engineer.domain import AgentDefinition, AgentRole, TaskStatus
 from ai_software_engineer.evaluation import CaseStartedEvent, FileEvaluationEventStore
 from ai_software_engineer.git import WorktreeCaptureRejected, WorktreeSeedRejected
-from ai_software_engineer.multi_directory.service import CreateRequirementProject
-from ai_software_engineer.multi_directory.store import JointJournal
-from ai_software_engineer.orchestration.retry import RetryDeliveryResult
-from ai_software_engineer.planning import FileExecutionPlanStore
-from ai_software_engineer.product import FileProductRecordStore
-from ai_software_engineer.project_manager.delivery import (
+from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
     ReplyToProduct,
     StartProjectDelivery,
 )
-from ai_software_engineer.project_manager.dispatch import DispatchCommitCorruption
-from ai_software_engineer.project_manager.mysql_dispatch_authority import MySqlDispatchAuthority
-from ai_software_engineer.project_manager.production_host import OrganizationTeamHost
+from ai_software_engineer.manager.dispatch import DispatchCommitCorruption
+from ai_software_engineer.manager.mysql_dispatch_authority import MySqlDispatchAuthority
+from ai_software_engineer.manager.production_host import TeamHost
+from ai_software_engineer.multi_directory.service import CreateRequirement
+from ai_software_engineer.multi_directory.store import JointJournal
+from ai_software_engineer.orchestration.retry import RetryDeliveryResult
+from ai_software_engineer.planning import FileExecutionPlanStore
+from ai_software_engineer.product import FileProductRecordStore
 from ai_software_engineer.recovery import RecoveryRejected
 from ai_software_engineer.recovery.entry import read_recovery_task
 from ai_software_engineer.recovery.native import NativeRecoverySourceReader
@@ -45,12 +45,12 @@ from ai_software_engineer.runtime import _default_case_id
 from ai_software_engineer.store import MySqlTaskRepository
 from tests.e2e.test_joint_delivery import setup_host
 from tests.git.test_capture import git
-from tests.project_manager.test_production_backend import (
+from tests.manager.test_production_backend import (
     _git,
     _ScriptedClientFactory,
     _ScriptedDeliveryAdapter,
 )
-from tests.project_manager.test_production_backend import mysql_dsn as mysql_dsn
+from tests.manager.test_production_backend import mysql_dsn as mysql_dsn
 from tests.recovery.test_native import InterruptedFactory, _snapshot
 
 
@@ -223,6 +223,8 @@ def test_recovery_complete_native_delivery_and_preserve_failed_history(
     _git("commit", "-m", "initial", cwd=project)
     config = ProductionConfig(
         platform_root=str(tmp_path / "platform"),
+        default_project_id="project_test",
+        default_project_name="Test Project",
         live_model_execution=True,
         model_routes=(
             ProviderRouteConfig(
@@ -241,7 +243,7 @@ def test_recovery_complete_native_delivery_and_preserve_failed_history(
             ),
         )
     interrupted = InterruptedFactory()
-    host = OrganizationTeamHost(
+    host = TeamHost(
         config=config,
         environment=environment,
         structured_clients=_ScriptedClientFactory(),
@@ -249,7 +251,7 @@ def test_recovery_complete_native_delivery_and_preserve_failed_history(
     )
     entry = host.project_entry()
     started = entry.start(
-        StartProjectDelivery(project_root=str(project), requirement="Change greeting.")
+        StartProjectDelivery(repository_root=str(project), requirement="Change greeting.")
     )
     failed = entry.approve(
         ApproveProductSpec(
@@ -269,7 +271,7 @@ def test_recovery_complete_native_delivery_and_preserve_failed_history(
         _git("add", "hello.txt", cwd=project)
     _git("commit", "-m", "platform fixes", cwd=project)
     plan, path = recovery.propose(
-        project_root=str(project),
+        repository_root=str(project),
         delivery_id=failed.delivery_id,
         failed_run_id=original_run.run_id,
         failed_context_id=original_run.context_manifest_id,
@@ -325,7 +327,7 @@ def test_recovery_complete_native_delivery_and_preserve_failed_history(
             authority.get_commit(seed.dispatch.id)
         # Original Task's workforce snapshot sees the new reservations as well.
         shared = authority.current_snapshot(
-            project_id=dispatch.project_id, task_id=plan.source.task_id
+            repository_id=dispatch.repository_id, task_id=plan.source.task_id
         )
         assert {p.lease.id for p in dispatch.phases} <= {lease.id for lease in shared.active_leases}
         assert not any(lease.task_id == plan.source.task_id for lease in shared.active_leases)
@@ -393,7 +395,7 @@ def test_joint_child_recovery_retains_approved_parent_context(tmp_path: Path) ->
     config, environment, models, projects = setup_host(tmp_path)
     config = config.model_copy(update={"live_model_execution": True})
     interrupted = InterruptedFactory()
-    host = OrganizationTeamHost(
+    host = TeamHost(
         config=config,
         environment=environment,
         structured_clients=models,
@@ -401,9 +403,9 @@ def test_joint_child_recovery_retains_approved_parent_context(tmp_path: Path) ->
     )
     joint = host.requirement_entry()
     created = joint.create(
-        CreateRequirementProject(
+        CreateRequirement(
             name="Recovery parent",
-            project_roots=tuple(map(str, projects)),
+            repository_roots=tuple(map(str, projects)),
         )
     ).checkpoint
     product = joint.reply(
@@ -423,7 +425,7 @@ def test_joint_child_recovery_retains_approved_parent_context(tmp_path: Path) ->
     child, run = parent.children[0].checkpoint, interrupted.requests[0]
     recovery = host.recovery_entry()
     plan, path = recovery.propose(
-        project_root=child.project_root,
+        repository_root=child.repository_root,
         delivery_id=child.delivery_id,
         failed_run_id=run.run_id,
         failed_context_id=run.context_manifest_id,
@@ -437,7 +439,7 @@ def test_joint_child_recovery_retains_approved_parent_context(tmp_path: Path) ->
         context = contexts.get(context_id)
         assert any(s.name == "source:joint.approved_context" for s in context.sections)
     assert (
-        JointJournal(host.company_workspace.root / "requests", read_only=True).current(
+        JointJournal(host.projects()[0].requirements_root, read_only=True).current(
             parent.delivery_id
         )
         == parent

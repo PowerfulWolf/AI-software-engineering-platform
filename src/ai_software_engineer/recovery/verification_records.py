@@ -26,7 +26,7 @@ from ai_software_engineer.domain.enums import (
 from ai_software_engineer.domain.identity import RunId
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.domain.task import TaskId
-from ai_software_engineer.project_manager.delivery_checkpoint import DeliveryId
+from ai_software_engineer.manager.delivery_checkpoint import DeliveryId
 from ai_software_engineer.recovery.models import FullCommit, RecoveryScope, _safe_text, digest
 
 

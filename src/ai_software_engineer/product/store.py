@@ -158,7 +158,7 @@ class FileProductRecordStore:
         if record.sequence > 1:
             previous = self.get_dialogue(record.request_id, record.sequence - 1)
             if (
-                previous.project_id != record.project_id
+                previous.repository_id != record.repository_id
                 or record.previous_dialogue_sha256 != previous.dialogue_sha256
                 or record.recorded_at < previous.recorded_at
             ):
@@ -176,7 +176,7 @@ class FileProductRecordStore:
         if sequence > 1:
             previous = self.get_dialogue(request_id, sequence - 1)
             if (
-                record.project_id != previous.project_id
+                record.repository_id != previous.repository_id
                 or record.previous_dialogue_sha256 != previous.dialogue_sha256
                 or record.recorded_at < previous.recorded_at
             ):
@@ -198,7 +198,7 @@ class FileProductRecordStore:
                 if record.previous_dialogue_sha256 is not None:
                     raise ProductRecordCorruption("first dialogue record has a previous digest")
             elif (
-                record.project_id != previous.project_id
+                record.repository_id != previous.repository_id
                 or record.previous_dialogue_sha256 != previous.dialogue_sha256
             ):
                 raise ProductRecordCorruption("ProductDialogueRecord chain is broken")
@@ -334,7 +334,7 @@ class FileProductRecordStore:
     def put_product_spec(self, spec: ProductSpec) -> ProductSpec:
         _validate_record(spec)
         request = self.current_request_revision(spec.request_id).request
-        if request.project_id != spec.project_id:
+        if request.repository_id != spec.repository_id:
             raise ProductRecordLineageError("ProductSpec does not bind the stored ProjectRequest")
         if spec.version == 1:
             if spec.supersedes is not None:
@@ -342,7 +342,7 @@ class FileProductRecordStore:
         else:
             previous = self.get_product_spec(spec.request_id, spec.version - 1)
             if (
-                spec.project_id != previous.project_id
+                spec.repository_id != previous.repository_id
                 or spec.supersedes != previous.id
                 or spec.request_id != previous.request_id
             ):
@@ -357,7 +357,7 @@ class FileProductRecordStore:
             raise ProductRecordCorruption("ProductSpec filename identity mismatch")
         if version > 1:
             previous = self.get_product_spec(request_id, version - 1)
-            if record.project_id != previous.project_id or record.supersedes != previous.id:
+            if record.repository_id != previous.repository_id or record.supersedes != previous.id:
                 raise ProductRecordCorruption("ProductSpec version chain is broken")
         return record
 
@@ -397,7 +397,7 @@ class FileProductRecordStore:
             if previous is None:
                 if record.supersedes is not None:
                     raise ProductRecordCorruption("first ProductSpec has invalid supersedes")
-            elif record.project_id != previous.project_id or record.supersedes != previous.id:
+            elif record.repository_id != previous.repository_id or record.supersedes != previous.id:
                 raise ProductRecordCorruption("ProductSpec version chain is broken")
             previous = record
         return records
@@ -407,7 +407,7 @@ class FileProductRecordStore:
         spec = self.find_product_spec(approval.product_spec_id)
         if spec is None or (
             approval.request_id != spec.request_id
-            or approval.project_id != spec.project_id
+            or approval.repository_id != spec.repository_id
             or approval.product_spec_sha256 != spec.product_spec_sha256
         ):
             raise ProductRecordLineageError(
@@ -467,7 +467,7 @@ class FileProductRecordStore:
         if checkpoint.revision > 1:
             previous = self.get_checkpoint(checkpoint.request_id, checkpoint.revision - 1)
             if (
-                previous.project_id != checkpoint.project_id
+                previous.repository_id != checkpoint.repository_id
                 or checkpoint.previous_checkpoint_sha256 != previous.checkpoint_sha256
                 or checkpoint.updated_at < previous.updated_at
             ):
@@ -488,7 +488,7 @@ class FileProductRecordStore:
         if revision > 1:
             previous = self.get_checkpoint(request_id, revision - 1)
             if (
-                record.project_id != previous.project_id
+                record.repository_id != previous.repository_id
                 or record.previous_checkpoint_sha256 != previous.checkpoint_sha256
                 or record.updated_at < previous.updated_at
             ):
@@ -576,7 +576,7 @@ class FileProductRecordStore:
             checkpoint.request_id, checkpoint.request_revision
         )
         if (
-            request_revision.request.project_id != checkpoint.project_id
+            request_revision.request.repository_id != checkpoint.repository_id
             or request_revision.request.request_sha256 != checkpoint.request_sha256
         ):
             raise ProductRecordLineageError("checkpoint ProjectRequest reference mismatch")
@@ -604,7 +604,7 @@ class FileProductRecordStore:
                 checkpoint.request_id, checkpoint.current_product_spec_version
             )
             if (
-                spec.project_id != checkpoint.project_id
+                spec.repository_id != checkpoint.repository_id
                 or spec.id != checkpoint.current_product_spec_id
                 or spec.product_spec_sha256 != checkpoint.current_product_spec_sha256
             ):
@@ -637,7 +637,7 @@ class FileProductRecordStore:
         spec = self.find_product_spec(approval.product_spec_id)
         if spec is None or (
             spec.request_id != approval.request_id
-            or spec.project_id != approval.project_id
+            or spec.repository_id != approval.repository_id
             or spec.product_spec_sha256 != approval.product_spec_sha256
         ):
             raise ProductRecordCorruption("ProductSpecApproval does not bind a durable ProductSpec")

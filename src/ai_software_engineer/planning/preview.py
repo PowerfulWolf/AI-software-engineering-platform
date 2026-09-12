@@ -204,8 +204,11 @@ class PlanningPreviewService:
             raise PlanningPreviewInputError("Planner preview requires a NEW derived Task")
         if task.id != work_item.task_id:
             raise PlanningPreviewInputError("Task and WorkItem identity do not match")
-        project_id = task.metadata.get("project_id")
-        if project_id != work_item.project_id or project_id != execution_plan.project_id:
+        repository_id = task.metadata.get("repository_id")
+        if (
+            repository_id != work_item.repository_id
+            or repository_id != execution_plan.repository_id
+        ):
             raise PlanningPreviewInputError(
                 "Task, WorkItem, and ExecutionPlan project do not match"
             )

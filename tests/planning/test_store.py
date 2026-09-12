@@ -61,7 +61,7 @@ def _planner_record(tmp_path: Path) -> PlannerRunRecord:
     )
     return PlannerRunRecord.create(
         run_id="run_planner_store_001",
-        project_id=request.project_id,
+        repository_id=request.repository_id,
         request_id=request.id,
         context_id="ctx_" + "a" * 64,
         input_sha256="b" * 64,
@@ -163,7 +163,7 @@ def test_planner_checkpoint_requires_exact_durable_run(tmp_path: Path) -> None:
 
     forged_run = PlannerRunRecord.create(
         run_id=run.run_id,
-        project_id=run.project_id,
+        repository_id=run.repository_id,
         request_id=run.request_id,
         context_id=run.context_id,
         input_sha256=run.input_sha256,

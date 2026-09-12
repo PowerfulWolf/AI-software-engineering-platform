@@ -8,11 +8,11 @@
     "contextId": {"type": "string", "pattern": "^ctx_[a-f0-9]{64}$"},
     "request": {
       "type": "object", "additionalProperties": false,
-      "required": ["kind", "schema_version", "run_id", "project_id", "request_id", "context", "permissions", "output_schema", "timeout_seconds"],
+      "required": ["kind", "schema_version", "run_id", "repository_id", "request_id", "context", "permissions", "output_schema", "timeout_seconds"],
       "properties": {
         "kind": {"const": "designer_agent_request"}, "schema_version": {"const": "v0.1"},
         "run_id": {"$ref": "#/$defs/runId"},
-        "project_id": {"$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/projectId"},
+        "repository_id": {"$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/repositoryId"},
         "request_id": {"$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/requestId"},
         "context": {"$ref": "https://ai-software-engineer.local/schemas/designer-context.schema.json"},
         "permissions": {"$ref": "https://ai-software-engineer.local/schemas/designer-context.schema.json#/$defs/permissions"},
@@ -29,11 +29,11 @@
     },
     "result": {
       "type": "object", "additionalProperties": false,
-      "required": ["kind", "schema_version", "run_id", "project_id", "request_id", "context_id", "status", "duration_ms"],
+      "required": ["kind", "schema_version", "run_id", "repository_id", "request_id", "context_id", "status", "duration_ms"],
       "properties": {
         "kind": {"const": "designer_agent_result"}, "schema_version": {"const": "v0.1"},
         "run_id": {"$ref": "#/$defs/runId"},
-        "project_id": {"$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/projectId"},
+        "repository_id": {"$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/repositoryId"},
         "request_id": {"$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/requestId"},
         "context_id": {"$ref": "#/$defs/contextId"},
         "status": {"enum": ["SUCCEEDED", "FAILED", "TIMED_OUT"]},

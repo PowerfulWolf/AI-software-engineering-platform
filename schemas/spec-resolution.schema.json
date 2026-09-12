@@ -10,7 +10,7 @@
     "id",
     "conflict_id",
     "conflict_sha256",
-    "project_id",
+    "repository_id",
     "task_id",
     "action",
     "operator_id",
@@ -25,7 +25,7 @@
     "id": {"type": "string", "pattern": "^spec_resolution_[a-f0-9]{64}$"},
     "conflict_id": {"type": "string", "pattern": "^spec_conflict_[a-f0-9]{64}$"},
     "conflict_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
-    "project_id": {"type": "string", "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "repository_id": {"type": "string", "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$"},
     "task_id": {"type": "string", "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$"},
     "action": {
       "enum": ["SELECT_RULE", "KEEP_HARD_POLICY", "UPDATE_LOWER_RULE", "TERMINATE_DELIVERY"]

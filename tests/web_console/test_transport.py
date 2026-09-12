@@ -6,9 +6,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from ai_software_engineer.company_workspace import CompanyWorkspace
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.team_view.models import TeamSnapshot
+from ai_software_engineer.team_workspace import TeamWorkspace
 from ai_software_engineer.web_console import (
     ConsoleIntent,
     ConsoleOperation,
@@ -21,7 +21,7 @@ from ai_software_engineer.web_console.host import main
 
 class _Console:
     def __init__(self) -> None:
-        self.store = InMemoryConsoleOperationStore("company_test")
+        self.store = InMemoryConsoleOperationStore("team_test")
         self.started = False
         self.closed = False
 
@@ -48,14 +48,15 @@ class _Console:
 
 class _Reader:
     def __init__(self) -> None:
-        self.company_ids: list[str | None] = []
+        self.project_ids: list[str | None] = []
 
-    def snapshot(self, company_id: str | None = None) -> TeamSnapshot:
-        self.company_ids.append(company_id)
+    def snapshot(self, project_id: str | None = None) -> TeamSnapshot:
+        self.project_ids.append(project_id)
         return TeamSnapshot(
             as_of=datetime(2026, 9, 12, tzinfo=UTC),
-            company_id=company_id or "company_test",
-            company_name="Test company",
+            team_id="team_test",
+            team_name="Test team",
+            selected_project_id=project_id,
         )
 
 
@@ -63,9 +64,10 @@ def _payload(tmp_path: Path, *, name: str = "Frontend delivery") -> dict[str, ob
     return {
         "idempotency_key": "browser-action-0001",
         "intent": {
-            "action": "CREATE_REQUIREMENT_PROJECT",
+            "action": "CREATE_REQUIREMENT",
+            "project_id": "project_web",
             "name": name,
-            "project_roots": [str(tmp_path)],
+            "repository_roots": [str(tmp_path)],
         },
     }
 
@@ -73,11 +75,11 @@ def _payload(tmp_path: Path, *, name: str = "Frontend delivery") -> dict[str, ob
 def test_web_transport_composes_assets_snapshot_and_durable_submission(tmp_path: Path) -> None:
     console = _Console()
     reader = _Reader()
-    app = create_console_app(console, reader, company_id="company_test", port=8765)
+    app = create_console_app(console, reader, team_id="team_test", port=8765)
 
     with TestClient(app, base_url="http://127.0.0.1:8765") as client:
         assert client.get("/").status_code == 200
-        assert client.get("/api/v1/console").json()["company_id"] == "company_test"
+        assert client.get("/api/v1/console").json()["team_id"] == "team_test"
         snapshot = client.get("/api/v1/team")
         submitted = client.post(
             "/api/v1/operations",
@@ -88,7 +90,7 @@ def test_web_transport_composes_assets_snapshot_and_durable_submission(tmp_path:
         fetched = client.get(f"/api/v1/operations/{operation_id}")
 
         assert snapshot.status_code == 200
-        assert snapshot.json()["company_id"] == "company_test"
+        assert snapshot.json()["team_id"] == "team_test"
         assert submitted.status_code == 202
         assert submitted.json()["status"] == "QUEUED"
         assert fetched.json() == submitted.json()
@@ -100,7 +102,7 @@ def test_web_transport_composes_assets_snapshot_and_durable_submission(tmp_path:
 
 
 def test_web_transport_rejects_cross_origin_non_json_and_invalid_payload(tmp_path: Path) -> None:
-    app = create_console_app(_Console(), _Reader(), company_id="company_test", port=8765)
+    app = create_console_app(_Console(), _Reader(), team_id="team_test", port=8765)
 
     with TestClient(app, base_url="http://127.0.0.1:8765") as client:
         cross_origin = client.post(
@@ -118,9 +120,10 @@ def test_web_transport_rejects_cross_origin_non_json_and_invalid_payload(tmp_pat
             json={
                 **_payload(tmp_path),
                 "intent": {
-                    "action": "CREATE_REQUIREMENT_PROJECT",
+                    "action": "CREATE_REQUIREMENT",
+                    "project_id": "project_web",
                     "name": "Invalid relative directory",
-                    "project_roots": ["relative/project"],
+                    "repository_roots": ["relative/project"],
                 },
             },
         )
@@ -140,7 +143,7 @@ def test_web_transport_rejects_cross_origin_non_json_and_invalid_payload(tmp_pat
 def test_web_transport_rejects_changed_idempotency_key_and_unknown_operation(
     tmp_path: Path,
 ) -> None:
-    app = create_console_app(_Console(), _Reader(), company_id="company_test", port=8765)
+    app = create_console_app(_Console(), _Reader(), team_id="team_test", port=8765)
 
     with TestClient(app, base_url="http://127.0.0.1:8765") as client:
         first = client.post("/api/v1/operations", json=_payload(tmp_path))
@@ -161,20 +164,18 @@ def test_console_host_missing_config_fails_without_traceback(
         main()
 
 
-def test_administration_endpoints_create_company_import_document_and_save_settings(
+def test_administration_endpoints_create_project_import_document_and_save_settings(
     tmp_path: Path,
 ) -> None:
     config = ProductionConfig.model_validate(
         {
             "platform_root": str(tmp_path / "platform"),
-            "company_id": "company_test",
-            "company_name": "Test company",
+            "team_id": "team_test",
+            "team_name": "Test team",
             "model_routes": [{"provider": "codex", "model": "gpt-5.6-terra", "kind": "codex_cli"}],
         }
     )
-    CompanyWorkspace.initialize(
-        config.platform_root, company_id=config.company_id, name=config.company_name
-    )
+    TeamWorkspace.initialize(config.platform_root, team_id=config.team_id, name=config.team_name)
     config_path = tmp_path / "config.json"
     config_path.write_text(config.model_dump_json(indent=2), encoding="utf-8")
     administration = LocalConsoleAdministration(
@@ -185,41 +186,42 @@ def test_administration_endpoints_create_company_import_document_and_save_settin
     app = create_console_app(
         _Console(),
         _Reader(),
-        company_id="company_test",
+        team_id="team_test",
         port=8765,
         administration=administration,
     )
 
     with TestClient(app, base_url="http://127.0.0.1:8765") as client:
         created = client.post(
-            "/api/v1/admin/companies",
-            json={"company_id": "company_other", "name": "Other company"},
+            "/api/v1/admin/projects",
+            json={"project_id": "project_web", "name": "Web Project"},
         )
         imported = client.post(
-            "/api/v1/admin/companies/company_test/knowledge?filename=team-guide.md",
+            "/api/v1/admin/team/knowledge?filename=team-guide.md",
             content=b"# Team guide\n",
             headers={"Content-Type": "application/octet-stream"},
         )
-        companies = client.get("/api/v1/admin/companies")
-        knowledge = client.get("/api/v1/admin/companies/company_test/knowledge")
+        team = client.get("/api/v1/admin/team")
+        projects = client.get("/api/v1/admin/projects")
+        knowledge = client.get("/api/v1/admin/team/knowledge")
         settings = client.get("/api/v1/admin/settings")
         updated_config = settings.json()["config"]
         normalized_path = imported.json()["manifest"]["normalized_relative_path"]
-        updated_config["company_knowledge_paths"] = [normalized_path]
+        updated_config["team_knowledge_paths"] = [normalized_path]
         updated = client.put("/api/v1/admin/settings", json={"config": updated_config})
         rejected = client.post(
-            "/api/v1/admin/companies/company_test/knowledge?filename=unsafe.exe",
+            "/api/v1/admin/team/knowledge?filename=unsafe.exe",
             content=b"binary",
             headers={"Content-Type": "application/octet-stream"},
         )
 
     assert created.status_code == 201
+    assert created.json()["project_id"] == "project_web"
     assert imported.status_code == 201
-    assert companies.status_code == 200
-    assert [item["company_id"] for item in companies.json()] == [
-        "company_other",
-        "company_test",
-    ]
+    assert team.status_code == 200
+    assert team.json()["team_id"] == "team_test"
+    assert projects.status_code == 200
+    assert [item["project_id"] for item in projects.json()] == ["project_web"]
     assert knowledge.json()[0]["manifest"]["source_name"] == "team-guide.md"
     assert settings.json()["secret_status"] == [
         {"environment_name": "ASE_MYSQL_DSN", "configured": True}

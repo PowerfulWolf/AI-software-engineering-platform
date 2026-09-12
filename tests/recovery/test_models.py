@@ -124,12 +124,12 @@ def test_secret_reference_never_enters_authorization_record(tmp_path: Path) -> N
 
 
 @pytest.mark.parametrize(
-    "field", ["read_paths", "write_paths", "commands", "denied_paths", "project_root"]
+    "field", ["read_paths", "write_paths", "commands", "denied_paths", "repository_root"]
 )
 def test_secret_metadata_never_enters_plan(tmp_path: Path, field: str) -> None:
     wire = json.loads(json.dumps(make_plan(tmp_path / "project").to_wire()))
     sensitive = "Bearer " + "x" * 24
-    if field == "project_root":
+    if field == "repository_root":
         wire["source"]["scope"][field] = "/project/" + sensitive
     elif field == "denied_paths":
         wire[field] = [sensitive]

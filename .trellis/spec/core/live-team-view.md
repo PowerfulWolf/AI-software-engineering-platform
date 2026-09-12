@@ -7,27 +7,26 @@ Existing DashboardRenderer stays pure; socket lives in separate server compositi
 
 ## Signatures
 
-`ProductionTeamReader(config: ProductionConfig, environment: Mapping[str,str]).snapshot(company_id: str | None = None) -> TeamSnapshot`
+`ProductionTeamReader(config: ProductionConfig, environment: Mapping[str,str]).snapshot(project_id: str | None = None) -> TeamSnapshot`
 `create_team_server(reader: TeamReader, *, port: int = 8765) -> ThreadingHTTPServer`
-`ase team serve --port 8765`; `GET /api/v1/team` reads the configured company and
-`GET /api/v1/team/<company_id>` reads one prepared company. Both return
-`team-snapshot.schema.json`, including the safe company-tab catalog.
+`ase team serve --port 8765`; `GET /api/v1/team?project_id=<project_id>` reads one Project through
+the configured singleton Team. The response is `team-snapshot.schema.json`, including the safe
+Project-tab catalog and the common Agent roster.
 Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by reads.
 
 ## Contracts
 
-- Company initialize(read_only=True) verifies existing state without creating a missing company.
+- Team initialize(read_only=True) verifies existing state without creating a missing team.
 - macOS/Linux 的默认 `platform_root=~/.ase` 只在配置层纯解析；缺失 workspace 的 snapshot 读取必须
-  返回 `TeamReadError`，不得因默认值而创建平台、公司或项目目录。
+  返回 `TeamReadError`，不得因默认值而创建 Team、Project 或 Repository 目录。
 - Journal/checkpoint/artifact/evaluation/route-attempt read_only opens never mkdir; writes reject.
-- Never construct OrganizationTeamHost/MySqlTaskRepository/dispatch authority to read: constructors
+- Never construct TeamHost/MySqlTaskRepository/dispatch authority to read: constructors
   initialize schema/workspaces. Use REPEATABLE READ + WITH CONSISTENT SNAPSHOT, READ ONLY;
   rollback/close every connection on success and failure.
-- Discover prepared company workspaces only from direct `platform_root/companies/company_*`
-  children. Validate each included manifest and binding; a directory without `company.json` is not a
-  company. The configured company must exist. A requested company ID must satisfy `CompanyId` and
-  match the discovered catalog before any company facts are read.
-- Read one selected company per snapshot; never aggregate its requests/tasks into another company.
+- Discover the single prepared Team only from direct `platform_root/team`, then discover Projects
+  from sibling `platform_root/projects/project_*`. Validate every included manifest and Team lineage.
+  A requested Project ID must satisfy `ProjectId` and match the discovered catalog before facts are read.
+- Read one selected Project per snapshot; never aggregate its Requirements/Tasks into another Project.
   Validate chain, intake, dispatch digest and normalized immutable Task identity. Reuse
   RunProjectionBuilder event validation.
 - A joint parent's child checkpoint is a committed observation, not a mutable latest pointer. When
@@ -43,18 +42,18 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
   Earlier serial roles display `本轮已完成`, later roles display `等待<角色>阶段`, and a Task with no
   current-stage assignment displays `已分配 · 等待调度`. Task detail keeps the complete assignment plan.
 - `AgentRole.ORCHESTRATOR` 是 legacy planning/control Run，可保留在 Task/Run timeline，但不是
-  `OrganizationRole`。`RunProjectionBuilder` 只能把 Coder/QA/Reviewer delivery roles 映射成组织角色；
+  `TeamRole`。`RunProjectionBuilder` 只能把 Coder/QA/Reviewer delivery roles 映射成组织角色；
   没有 AgentProfile 且只含 orchestrator Run 的 synthetic identity 不得生成 Agent card。
-- execution_liveness stays UNKNOWN without heartbeat. Enabled/capacity configuration and company counts
+- execution_liveness stays UNKNOWN without heartbeat. Enabled/capacity configuration and team counts
   are not online, utilization or organization-global workload.
 - Member display state is assignment-derived: current-stage assignment = `执行中`; non-current active
-  assignment = `等待当前阶段`; no non-terminal assignment in the selected company = `空闲中`.
-  `空闲中` is a company workload statement, never a process-online statement.
-- The task page renders every selected-company Task in exactly one UI group: `DONE` is `已完成`;
+  assignment = `等待当前阶段`; no non-terminal assignment in the selected Project = `空闲中`.
+  `空闲中` is a team workload statement, never a process-online statement.
+- The task page renders every selected-Project Task in exactly one UI group: `DONE` is `已完成`;
   blocker/`WAITING_*`/`BLOCKED`/`FAILED` is `阻塞中`; other non-terminal work is `执行中`;
   any remaining audit-terminal status is `已完成`.
 - Planned models come from dispatch; actual completed calls from validated ModelRouteAttempt.
-- Delivery writer and reader must use `agents.fallback.model_route_root(project_workspace_root)`:
+- Delivery writer and reader must use `agents.fallback.model_route_root(repository_workspace_root)`:
   `<project-sidecar>/runs/model-routes/<run-id>/<route-index:02d>.json`. Do not reconstruct ledger
   paths from prose. A scripted successful Coder/QA/Reviewer delivery must expose all three completed
   model calls; asserting only an empty-compatible list misses broken read/write wiring.
@@ -68,8 +67,8 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
 | Case | Result |
 |---|---|
 | Missing config / occupied port | safe CLI exit 2 |
-| Missing company / bad digest / path / unavailable DB | TeamReadError / HTTP 503, no init |
-| Prepared empty company | honest empty data; no DB/model needed without native deliveries |
+| Missing team / bad digest / path / unavailable DB | TeamReadError / HTTP 503, no init |
+| Prepared empty team | honest empty data; no DB/model needed without native deliveries |
 | Running child before parent publication | visible via deterministic identity |
 | Parent references an exact historical child; native child advanced | latest child remains visible |
 | Parent child record is absent/replaced or ahead of native history | reject snapshot |
@@ -80,9 +79,9 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
 | Non-terminal Task with no current assignment | every planned role `已分配 · 等待调度`; none shown as executing |
 | Orchestrator plan artifact/run | Run/timeline 保留；不创建虚假组织成员，不抛角色转换异常 |
 | Foreign Host/Origin | 403 before reader invocation |
-| Valid prepared company tab | one isolated snapshot for that company |
-| Invalid/path-like/unknown company ID | safe 404 or unavailable response; no path traversal |
-| Enabled member without selected-company assignment | `空闲中`; no online claim |
+| Valid prepared Project tab | one isolated snapshot for that Project plus the common Team roster |
+| Invalid/path-like/unknown Project ID | safe 404 or unavailable response; no path traversal |
+| Enabled member without selected-Project assignment | `空闲中`; no online claim |
 | Active, blocked and done Tasks | exactly one matching task section each |
 | Non-GET / unknown path or query | 405 / 404 |
 | Malicious HTML / secret in title | redacted text, no executable markup |
@@ -90,15 +89,15 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
 
 ## Good / Base / Bad
 
-Good: current QA visible with exact modules before joint child writeback. Base: empty company has no
+Good: current QA visible with exact modules before joint child writeback. Base: empty team has no
 fake members. Bad: initialize Host on GET or label old IMPLEMENTING checkpoint as Agent online.
 
 ## Tests Required
 
 tests/team_view: real MySQL/Git scripted providers, in-flight Coder/QA/Review, multi-request history,
-no file writes, company isolation, tamper rejection; actual HTTP GET/assets/Host/Origin/write/errors;
+no file writes, Project isolation, tamper rejection; actual HTTP GET/assets/Host/Origin/write/errors;
 exact Schema model equality; Node DOM harness for multi-assignment/views/HTML safety/refresh/stale/
-expanded documents, company tabs, member workload state and three task groups. No real models. Full
+expanded documents, Project tabs, member workload state and three task groups. No real models. Full
 regression, Ruff, strict Mypy and offline build required.
 The DOM harness must include one serial Task assigned to Coder/QA/Reviewer and assert that exactly the
 current assignment receives the active Task-stage label before and after a Coder-to-QA transition.
@@ -106,12 +105,12 @@ current assignment receives the active Task-stage label before and after a Coder
 
 ## Wrong vs Correct
 
-Wrong: `OrganizationTeamHost.from_environment().project_entry().status(id)` on every refresh.
+Wrong: `TeamHost.from_environment().project_entry().status(id)` on every refresh.
 Correct: `ProductionTeamReader(config, environment).snapshot()` with read-only opens and a read-only
 MySQL transaction. Refresh observes, never advances delivery.
 
-Wrong: `OrganizationRole(run.role.value)` 对所有 delivery/control Run 强转。
-Correct: 仅显式映射 Coder/QA/Reviewer；Project Manager/Product/Designer/Planner 由 AgentProfile 提供，
+Wrong: `TeamRole(run.role.value)` 对所有 delivery/control Run 强转。
+Correct: 仅显式映射 Coder/QA/Reviewer；Manager/Product/Designer/Planner 由 AgentProfile 提供，
 orchestrator 只作为控制 Run 留在时间线。
 
 Wrong: every Agent card renders `badge(task.status)`, so all three planned roles appear `实现中`.
@@ -119,12 +118,12 @@ Correct: render the badge from `assignment.current_stage` plus serial role order
 `task.status` as the Task-level delivery state and never infer concurrent execution from a plan.
 
 Wrong: label every enabled profile `已启用 · 运行状态未确认`, or call it online/idle without scope.
-Correct: derive `执行中 / 等待当前阶段 / 空闲中` from selected-company assignments and separately
+Correct: derive `执行中 / 等待当前阶段 / 空闲中` from selected-Project assignments and separately
 state that process liveness remains unknown.
 
-Wrong: render company tabs while every tab still fetches the configured company's snapshot.
-Correct: each tab calls `GET /api/v1/team/<company_id>` and the reader validates that company against
-the prepared-company catalog before reading its isolated facts.
+Wrong: render Project tabs while every tab still fetches the same default Project snapshot.
+Correct: each tab calls `GET /api/v1/team?project_id=<project_id>` and the reader validates that
+Project against the configured Team's catalog before reading isolated Requirement facts.
 
 ## Scenario: candidate verification and remediation visibility
 
@@ -140,7 +139,7 @@ _read_verifications(
     cursor: DictCursor,
     native_by_task: Mapping[str, tuple[_Native, str, ScopeView]],
     *,
-    company_id: str,
+    team_id: str,
 ) -> tuple[TaskView, ...]
 _native_task_sources(native: _Native) -> dict[str, _Native]
 _read_task_details(native: _Native, cursor: DictCursor, base: TaskView) -> TaskView
@@ -210,7 +209,7 @@ interrupt an admitted QA verification and assert the card contains that exact QA
 produce QA FAIL, begin the linked remediation Coder, call `ProductionTeamReader.snapshot()` before
 that Coder completes, and assert the remediation card retains the original `source_task_id`; the
 consumed predecessor plan must be terminal with no current assignment. Existing
-schema equality, no-write, company isolation, HTTP and browser tests remain required.
+schema equality, no-write, Project isolation, HTTP and browser tests remain required.
 
 ### 7. Wrong vs Correct
 

@@ -12,8 +12,8 @@ from hashlib import sha256
 from ai_software_engineer.domain.agent import AgentId
 from ai_software_engineer.domain.enums import (
     AgentRole,
-    OrganizationRole,
     RiskTier,
+    TeamRole,
     WorkItemStatus,
 )
 from ai_software_engineer.domain.task import AttemptCount, TaskId
@@ -156,7 +156,7 @@ class PortfolioScheduler:
             if not agent.active:
                 rejection_code = AssignmentRejectionCode.INACTIVE_AGENT
                 message = f"Agent {agent.id} is inactive"
-            elif OrganizationRole(role.value) not in agent.eligible_roles:
+            elif TeamRole(role.value) not in agent.eligible_roles:
                 rejection_code = AssignmentRejectionCode.ROLE_NOT_ELIGIBLE
                 message = f"Agent {agent.id} is not eligible for role {role.value}"
             elif missing:
@@ -180,7 +180,7 @@ class PortfolioScheduler:
                     return AssignmentDecision(
                         status=AssignmentDecisionStatus.ASSIGNED,
                         task_id=work_item.task_id,
-                        project_id=work_item.project_id,
+                        repository_id=work_item.repository_id,
                         role=role,
                         attempt=attempt,
                         agent_id=agent.id,
@@ -307,7 +307,7 @@ class PortfolioScheduler:
         lease_id = _stable_id("lease", assignment_id)
         return RoleAssignment(
             id=assignment_id,
-            project_id=item.project_id,
+            repository_id=item.repository_id,
             task_id=item.task_id,
             agent_id=agent_id,
             role=role,
@@ -339,7 +339,7 @@ class PortfolioScheduler:
         return AssignmentDecision(
             status=AssignmentDecisionStatus.REJECTED,
             task_id=item.task_id,
-            project_id=item.project_id,
+            repository_id=item.repository_id,
             role=role,
             attempt=attempt,
             reasons=reasons,

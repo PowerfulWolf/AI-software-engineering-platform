@@ -6,7 +6,7 @@ from ai_software_engineer.agents import AgentRequest
 from ai_software_engineer.context import FileContextStore
 from ai_software_engineer.domain import AgentPermissions, AgentRole
 from ai_software_engineer.git import GitWorktreeManager, WorktreeRef
-from ai_software_engineer.project_manager.dispatch import RecoveryDispatchRecord
+from ai_software_engineer.manager.dispatch import RecoveryDispatchRecord
 from ai_software_engineer.recovery.context import validate_reapply_context
 from ai_software_engineer.recovery.models import CapturedChanges, RecoveryRejected
 from ai_software_engineer.recovery.records import RecoveryInvocationRecord, RecoverySeedRecord

@@ -10,14 +10,14 @@ from ai_software_engineer.web_console import (
     ConsoleCommandResult,
     ConsoleOperationConflict,
     ConsoleOperationStatus,
-    CreateRequirementProjectIntent,
+    CreateRequirementIntent,
     FileConsoleOperationStore,
     InMemoryConsoleOperationStore,
     ProductReplyIntent,
     ProjectConsole,
 )
 
-COMPANY_ID = "company_test"
+TEAM_ID = "team_test"
 CHECKPOINT = "1" * 64
 
 
@@ -41,6 +41,7 @@ class _Executor:
         if self.failure is not None:
             raise self.failure
         return ConsoleCommandResult(
+            project_id="project_test",
             delivery_id="delivery_multi_" + "a" * 40,
             checkpoint_sha256="2" * 64,
             stage="READY_FOR_DISCUSSION",
@@ -48,14 +49,17 @@ class _Executor:
         )
 
 
-def _create_intent(
-    tmp_path: Path, *, name: str = "Console delivery"
-) -> CreateRequirementProjectIntent:
-    return CreateRequirementProjectIntent(name=name, project_roots=(str(tmp_path),))
+def _create_intent(tmp_path: Path, *, name: str = "Console delivery") -> CreateRequirementIntent:
+    return CreateRequirementIntent(
+        project_id="project_test",
+        name=name,
+        repository_roots=(str(tmp_path),),
+    )
 
 
 def _reply_intent(*, message: str = "Use the external workspace") -> ProductReplyIntent:
     return ProductReplyIntent(
+        project_id="project_test",
         delivery_id="delivery_multi_" + "a" * 40,
         expected_checkpoint_sha256=CHECKPOINT,
         message=message,
@@ -67,9 +71,9 @@ def test_submit_is_idempotent_and_changed_intent_is_rejected(
     tmp_path: Path, store_kind: str
 ) -> None:
     store = (
-        InMemoryConsoleOperationStore(COMPANY_ID)
+        InMemoryConsoleOperationStore(TEAM_ID)
         if store_kind == "memory"
-        else FileConsoleOperationStore(tmp_path / "operations", company_id=COMPANY_ID)
+        else FileConsoleOperationStore(tmp_path / "operations", team_id=TEAM_ID)
     )
     at = datetime(2026, 9, 12, tzinfo=UTC)
 
@@ -92,9 +96,9 @@ def test_submit_is_idempotent_and_changed_intent_is_rejected(
 @pytest.mark.parametrize("store_kind", ["memory", "file"])
 def test_one_delivery_admits_only_one_active_operation(tmp_path: Path, store_kind: str) -> None:
     store = (
-        InMemoryConsoleOperationStore(COMPANY_ID)
+        InMemoryConsoleOperationStore(TEAM_ID)
         if store_kind == "memory"
-        else FileConsoleOperationStore(tmp_path / "operations", company_id=COMPANY_ID)
+        else FileConsoleOperationStore(tmp_path / "operations", team_id=TEAM_ID)
     )
     at = datetime(2026, 9, 12, tzinfo=UTC)
     store.submit(intent=_reply_intent(), idempotency_key="browser-action-0001", requested_at=at)
@@ -108,7 +112,7 @@ def test_one_delivery_admits_only_one_active_operation(tmp_path: Path, store_kin
 
 
 def test_console_persists_before_execution_and_returns_terminal_result(tmp_path: Path) -> None:
-    store = InMemoryConsoleOperationStore(COMPANY_ID)
+    store = InMemoryConsoleOperationStore(TEAM_ID)
     executor = _Executor()
     console = ProjectConsole(store=store, executor=executor, clock=_Clock())
 
@@ -128,7 +132,7 @@ def test_console_persists_before_execution_and_returns_terminal_result(tmp_path:
 def test_console_records_only_safe_rejection(tmp_path: Path) -> None:
     rejection = ConsoleCommandRejected("STALE_CHECKPOINT", "The displayed request changed.")
     console = ProjectConsole(
-        store=InMemoryConsoleOperationStore(COMPANY_ID),
+        store=InMemoryConsoleOperationStore(TEAM_ID),
         executor=_Executor(failure=rejection),
         clock=_Clock(),
     )
@@ -147,14 +151,14 @@ def test_console_records_only_safe_rejection(tmp_path: Path) -> None:
 def test_file_store_reopens_hash_chain_and_interrupts_orphan(tmp_path: Path) -> None:
     root = tmp_path / "operations"
     at = datetime(2026, 9, 12, tzinfo=UTC)
-    store = FileConsoleOperationStore(root, company_id=COMPANY_ID)
+    store = FileConsoleOperationStore(root, team_id=TEAM_ID)
     queued = store.submit(
         intent=_create_intent(tmp_path), idempotency_key="browser-action-0001", requested_at=at
     )
     running = store.claim_next(at=at + timedelta(seconds=1))
     assert running is not None
 
-    reopened = FileConsoleOperationStore(root, company_id=COMPANY_ID)
+    reopened = FileConsoleOperationStore(root, team_id=TEAM_ID)
     interrupted = reopened.interrupt_running(at=at + timedelta(seconds=2))
 
     assert len(interrupted) == 1
@@ -168,7 +172,7 @@ def test_file_store_reopens_hash_chain_and_interrupts_orphan(tmp_path: Path) -> 
 def test_file_store_rejects_rehashed_illegal_transition(tmp_path: Path) -> None:
     root = tmp_path / "operations"
     at = datetime(2026, 9, 12, tzinfo=UTC)
-    store = FileConsoleOperationStore(root, company_id=COMPANY_ID)
+    store = FileConsoleOperationStore(root, team_id=TEAM_ID)
     queued = store.submit(
         intent=_create_intent(tmp_path), idempotency_key="browser-action-0001", requested_at=at
     )
@@ -188,4 +192,4 @@ def test_file_store_rejects_rehashed_illegal_transition(tmp_path: Path) -> None:
     record.write_text(illegal.model_dump_json(indent=2), encoding="utf-8")
 
     with pytest.raises(ConsoleOperationConflict, match="transition is invalid"):
-        FileConsoleOperationStore(root, company_id=COMPANY_ID).get(queued.operation_id)
+        FileConsoleOperationStore(root, team_id=TEAM_ID).get(queued.operation_id)

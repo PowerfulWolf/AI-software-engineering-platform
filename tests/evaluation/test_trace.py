@@ -1,4 +1,4 @@
-"""Trace assembly from the three durable organization-owned stores."""
+"""Trace assembly from the three durable Team-owned stores."""
 
 from pathlib import Path
 

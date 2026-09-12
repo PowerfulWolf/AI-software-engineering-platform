@@ -8,7 +8,7 @@ import pytest
 from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 
-from ai_software_engineer.project_manager.dispatch import (
+from ai_software_engineer.manager.dispatch import (
     ContinuationDispatchRecord,
     RecoveryDispatchRecord,
     _record_digest,
@@ -20,7 +20,7 @@ from ai_software_engineer.recovery import (
     RecoveryRejected,
 )
 from ai_software_engineer.recovery.records import RecoveryInvocationRecord, RecoverySeedRecord
-from tests.project_manager.test_dispatch_authority import _durable_facts
+from tests.manager.test_dispatch_authority import _durable_facts
 from tests.recovery.test_authorization import Human, approval, make_plan
 from tests.recovery.test_task_record import record_for
 
@@ -49,7 +49,7 @@ def allocation(tmp_path: Path) -> RecoveryDispatchRecord:
     )
     result = RecoveryDispatchRecord(
         id=f"dispatch_commit_{sha}",
-        project_id=native.project_id,
+        repository_id=native.repository_id,
         task_id=task_id,
         project_request_id=native.project_request_id,
         execution_plan_id=native.execution_plan_id,
@@ -97,7 +97,7 @@ def continuation_allocation(tmp_path: Path) -> ContinuationDispatchRecord:
     assert len(phases) == 3
     result = ContinuationDispatchRecord(
         id=f"dispatch_commit_{sha}",
-        project_id=native.project_id,
+        repository_id=native.repository_id,
         task_id=task_id,
         project_request_id=native.project_request_id,
         execution_plan_id=native.execution_plan_id,
@@ -139,7 +139,7 @@ def test_recovery_allocation_schema_and_no_fake_planner_provenance(tmp_path: Pat
     assert "planner_run_id" not in record.to_wire()
     for field, value in (
         ("task_id", "task_wrong"),
-        ("project_id", "project_wrong"),
+        ("repository_id", "project_wrong"),
         ("id", "dispatch_commit_" + "1" * 64),
         ("recovery_plan_sha256", "1" * 64),
         ("project_request_id", "request_wrong"),

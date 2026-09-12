@@ -13,18 +13,18 @@ from ai_software_engineer.domain import (
     BrainTier,
     ModelRouteReason,
     ModelSelection,
-    OrganizationRole,
     RiskTier,
     RoleAssignment,
     Task,
     TaskLease,
+    TeamRole,
     WorkItem,
     WorkItemStatus,
 )
 from ai_software_engineer.evaluation import CaseStartedEvent, FileEvaluationEventStore
 from ai_software_engineer.runtime import RuntimeConfig, RuntimeConfigurationError, RuntimeSession
 from ai_software_engineer.runtime_workspace import (
-    FileOrganizationWorkforceStore,
+    FileTeamWorkforceStore,
     RuntimeAllocationError,
     RuntimeWorkforceResolver,
     RuntimeWorkspaceBinding,
@@ -56,13 +56,13 @@ class AllocationFacts(NamedTuple):
 
 def allocation_facts(tmp_path: Path, *, versioned: bool = False) -> AllocationFacts:
     org, _workspace, profile, project, binding = bind(tmp_path)
-    store = FileOrganizationWorkforceStore(org)
+    store = FileTeamWorkforceStore(org)
     agent = AgentProfile(
         id="agent_runtime_coder_001",
         version="v1",
         display_name="Runtime Coder",
         capabilities=("python",),
-        eligible_roles=(OrganizationRole.CODER,),
+        eligible_roles=(TeamRole.CODER,),
         max_parallel_assignments=2,
         default_model_policy_id="model_policy_runtime_001",
     )
@@ -92,7 +92,7 @@ def allocation_facts(tmp_path: Path, *, versioned: bool = False) -> AllocationFa
     FileContextStore(binding.paths.contexts).put(context)
     item = WorkItem(
         task_id=task.id,
-        project_id=binding.project_id,
+        repository_id=binding.repository_id,
         status=WorkItemStatus.READY,
         priority=800,
         risk=RiskTier.NORMAL,
@@ -102,7 +102,7 @@ def allocation_facts(tmp_path: Path, *, versioned: bool = False) -> AllocationFa
     )
     assignment = RoleAssignment(
         id="assignment_runtime_coder_001",
-        project_id=binding.project_id,
+        repository_id=binding.repository_id,
         task_id=task.id,
         agent_id=agent.id,
         role=AgentRole.CODER,
@@ -186,8 +186,8 @@ def test_resolver_builds_auditable_allocation_and_existing_agent_definition(
     assert first.agent_definition.id == assignment.agent_id
     assert first.agent_definition.model == selection.model
     assert first.agent_definition.provider == selection.provider
-    assert first.code_root == binding.project_root
-    assert first.allocation.tool_policy_ref.startswith(f"policy://{binding.project_id}/coder/")
+    assert first.code_root == binding.repository_root
+    assert first.allocation.tool_policy_ref.startswith(f"policy://{binding.repository_id}/coder/")
 
 
 def test_waiting_or_expired_work_does_not_allocate_or_mutate_delivery_state(
@@ -288,7 +288,7 @@ def test_bound_runtime_session_rejects_task_from_another_project(tmp_path: Path)
             config,
             environment={},
             agent_adapter=RuntimeFixtureAdapter(),
-            project_root=binding.project_root,
+            repository_root=binding.repository_root,
         ) as session,
         pytest.raises(RuntimeConfigurationError, match="bound project root"),
     ):
@@ -319,7 +319,7 @@ def test_bound_runtime_uses_workforce_definitions_and_records_model_set_identity
         environment={},
         agent_adapter=RuntimeFixtureAdapter(),
         agent_definitions=definitions,
-        project_root=binding.project_root,
+        repository_root=binding.repository_root,
     ) as session:
         result = session.run_task(task.id)
 

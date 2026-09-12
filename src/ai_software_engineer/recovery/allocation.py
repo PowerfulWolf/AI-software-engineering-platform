@@ -3,15 +3,15 @@
 from datetime import UTC, datetime
 
 from ai_software_engineer.domain import AgentProfile, ModelPolicy, WorkItem, WorkItemStatus
-from ai_software_engineer.planning import PlanningPreviewService
-from ai_software_engineer.project_manager.dispatch import (
+from ai_software_engineer.manager.dispatch import (
     DispatchPhaseCommit,
     DispatchWorkforceSnapshot,
     RecoveryDispatchRecord,
     _record_digest,
 )
-from ai_software_engineer.project_manager.mysql_dispatch_authority import MySqlDispatchAuthority
-from ai_software_engineer.project_manager.production_backend import _maximum_risk
+from ai_software_engineer.manager.mysql_dispatch_authority import MySqlDispatchAuthority
+from ai_software_engineer.manager.production_backend import _maximum_risk
+from ai_software_engineer.planning import PlanningPreviewService
 from ai_software_engineer.recovery.models import RecoveryRejected
 from ai_software_engineer.recovery.sealing import RecoveryTaskSealingService
 from ai_software_engineer.recovery.task import AuthorizedRecoveryTaskBuilder
@@ -36,10 +36,10 @@ class RecoveryAllocator:
         draft = self._builder.build(plan_sha256)
         task, plan = sealed.task, draft.facts.original.plan
         snapshot = DispatchWorkforceSnapshot.create(
-            project_id=plan.project_id,
+            repository_id=plan.repository_id,
             task_id=task.id,
             work_item=WorkItem(
-                project_id=plan.project_id,
+                repository_id=plan.repository_id,
                 task_id=task.id,
                 status=WorkItemStatus.READY,
                 priority=500,
@@ -106,7 +106,7 @@ class RecoveryAllocator:
                 )
             result = RecoveryDispatchRecord(
                 id=f"dispatch_commit_{plan_sha256}",
-                project_id=plan.project_id,
+                repository_id=plan.repository_id,
                 task_id=task.id,
                 project_request_id=sealed.rebound_request.id,
                 execution_plan_id=plan.id,
@@ -123,7 +123,7 @@ class RecoveryAllocator:
             return result.model_copy(update={"dispatch_sha256": _record_digest(result)})
 
         return self._authority.commit_recovery(
-            project_id=plan.project_id,
+            repository_id=plan.repository_id,
             task_id=task.id,
             plan_sha256=plan_sha256,
             validate_current=validate,

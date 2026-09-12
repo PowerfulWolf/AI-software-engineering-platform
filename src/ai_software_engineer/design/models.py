@@ -11,15 +11,15 @@ from typing import Literal, Self
 from pydantic import AwareDatetime, model_validator
 
 from ai_software_engineer.domain import ProjectRequestStatus, TechnicalDesign
-from ai_software_engineer.domain.identity import ContextId, ProjectId, RunId
+from ai_software_engineer.domain.identity import ContextId, RepositoryId, RunId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.domain.project_delivery import (
     ProjectRequestId,
     StageSha256,
     TechnicalDesignId,
 )
+from ai_software_engineer.manager.stages import ProjectStage, StageAdvanceAuthorization
 from ai_software_engineer.product.models import ProjectRequestRevision
-from ai_software_engineer.project_manager.stages import ProjectStage, StageAdvanceAuthorization
 
 
 class DesignRecordError(RuntimeError):
@@ -48,7 +48,7 @@ class DesignRunRecord(DomainModel):
     kind: Literal["design_run_record"] = "design_run_record"
     schema_version: Literal["v0.1"] = "v0.1"
     run_id: RunId
-    project_id: ProjectId
+    repository_id: RepositoryId
     request_id: ProjectRequestId
     context_id: ContextId
     input_sha256: StageSha256
@@ -95,14 +95,14 @@ class DesignRunRecord(DomainModel):
         revision.validate_integrity()
         authorization.validate_integrity()
         if (
-            design.project_id != self.project_id
+            design.repository_id != self.repository_id
             or design.request_id != self.request_id
             or revision.request.id != self.request_id
-            or revision.request.project_id != self.project_id
+            or revision.request.repository_id != self.repository_id
             or revision.request.status is not ProjectRequestStatus.PLANNING
             or revision.supersedes_sha256 != self.input_request_revision_sha256
             or authorization.target is not ProjectStage.PLANNING
-            or authorization.project_id != self.project_id
+            or authorization.repository_id != self.repository_id
             or authorization.input_sha256s[1] != revision.request.request_sha256
             or authorization.input_sha256s[-1] != design.technical_design_sha256
         ):
@@ -113,7 +113,7 @@ class DesignRunRecord(DomainModel):
         cls,
         *,
         run_id: RunId,
-        project_id: ProjectId,
+        repository_id: RepositoryId,
         request_id: ProjectRequestId,
         context_id: ContextId,
         input_sha256: StageSha256,
@@ -128,7 +128,7 @@ class DesignRunRecord(DomainModel):
     ) -> DesignRunRecord:
         provisional = cls(
             run_id=run_id,
-            project_id=project_id,
+            repository_id=repository_id,
             request_id=request_id,
             context_id=context_id,
             input_sha256=input_sha256,
@@ -160,7 +160,7 @@ class DesignCommitCheckpoint(DomainModel):
     kind: Literal["design_commit_checkpoint"] = "design_commit_checkpoint"
     schema_version: Literal["v0.1"] = "v0.1"
     run_id: RunId
-    project_id: ProjectId
+    repository_id: RepositoryId
     request_id: ProjectRequestId
     run_record_sha256: StageSha256
     technical_design_id: TechnicalDesignId
@@ -188,7 +188,7 @@ class DesignCommitCheckpoint(DomainModel):
         assert design is not None and revision is not None and authorization is not None
         provisional = cls(
             run_id=record.run_id,
-            project_id=record.project_id,
+            repository_id=record.repository_id,
             request_id=record.request_id,
             run_record_sha256=record.run_record_sha256,
             technical_design_id=design.id,

@@ -1,4 +1,4 @@
-"""Typed loopback Web transport for the Project Manager console."""
+"""Typed loopback Web transport for the Manager console."""
 
 from __future__ import annotations
 
@@ -13,18 +13,16 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import TypeAdapter, ValidationError
 from starlette.middleware.base import RequestResponseEndpoint
 
-from ai_software_engineer.company_workspace import (
-    MAX_COMPANY_KNOWLEDGE_SOURCE_BYTES,
-    CompanyId,
-)
+from ai_software_engineer.domain.identity import ProjectId, TeamId
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.knowledge_documents import KnowledgeDocumentError
 from ai_software_engineer.team_view.models import TeamReadError, TeamSnapshot
+from ai_software_engineer.team_workspace import MAX_TEAM_KNOWLEDGE_SOURCE_BYTES
 
 from .administration import (
     AdministrationError,
     ConsoleAdministration,
-    CreateCompanyRequest,
+    CreateProjectRequest,
     UpdateSettingsRequest,
 )
 from .models import ConsoleIntent, ConsoleOperation, IdempotencyKey
@@ -39,7 +37,7 @@ _ASSETS = {
 
 
 class TeamReader(Protocol):
-    def snapshot(self, company_id: str | None = None) -> TeamSnapshot: ...
+    def snapshot(self, project_id: str | None = None) -> TeamSnapshot: ...
 
 
 class ConsoleApplication(Protocol):
@@ -59,7 +57,7 @@ def create_console_app(
     console: ConsoleApplication,
     reader: TeamReader,
     *,
-    company_id: str,
+    team_id: str,
     port: int = 8765,
     administration: ConsoleAdministration | None = None,
 ) -> FastAPI:
@@ -67,7 +65,7 @@ def create_console_app(
         raise ValueError("invalid console server port")
     expected_host = f"127.0.0.1:{port}"
     expected_origin = f"http://{expected_host}"
-    command_company_id = TypeAdapter(CompanyId).validate_python(company_id)
+    command_team_id = TypeAdapter(TeamId).validate_python(team_id)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -107,14 +105,10 @@ def create_console_app(
         )
 
     @app.get("/api/v1/team")
-    async def team() -> Response:
-        return await _team_snapshot(reader, None)
-
-    @app.get("/api/v1/team/{company_id}")
-    async def company_team(company_id: str) -> Response:
-        if not company_id or "/" in company_id or "?" in company_id:
-            return _error(404, "NOT_FOUND", "Workspace not found.")
-        return await _team_snapshot(reader, company_id)
+    async def team(project_id: str | None = None) -> Response:
+        if project_id is not None and not _valid_project_id(project_id):
+            return _error(404, "NOT_FOUND", "Project was not found.")
+        return await _team_snapshot(reader, project_id)
 
     @app.get("/api/v1/operations")
     async def operations() -> Response:
@@ -123,69 +117,74 @@ def create_console_app(
 
     @app.get("/api/v1/console")
     async def console_info() -> Response:
-        return JSONResponse({"schema_version": "v0.1", "company_id": command_company_id})
+        return JSONResponse({"schema_version": "v0.2", "team_id": command_team_id})
 
-    @app.get("/api/v1/admin/companies")
-    async def companies() -> Response:
+    @app.get("/api/v1/admin/team")
+    async def configured_team() -> Response:
         if administration is None:
             return _error(404, "NOT_AVAILABLE", "Administration is not available.")
         try:
-            values = await run_in_threadpool(administration.companies)
+            value = await run_in_threadpool(administration.team)
         except AdministrationError:
-            return _error(503, "ADMIN_UNAVAILABLE", "Company administration is unavailable.")
+            return _error(503, "ADMIN_UNAVAILABLE", "Team administration is unavailable.")
+        return JSONResponse(value.to_wire())
+
+    @app.get("/api/v1/admin/projects")
+    async def projects() -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        try:
+            values = await run_in_threadpool(administration.projects)
+        except AdministrationError:
+            return _error(503, "ADMIN_UNAVAILABLE", "Project administration is unavailable.")
         return JSONResponse([value.to_wire() for value in values])
 
-    @app.post("/api/v1/admin/companies", status_code=201)
-    async def create_company(request: Request) -> Response:
+    @app.post("/api/v1/admin/projects", status_code=201)
+    async def create_project(request: Request) -> Response:
         if administration is None:
             return _error(404, "NOT_AVAILABLE", "Administration is not available.")
         payload = await _json_body(request)
         if isinstance(payload, Response):
             return payload
         try:
-            command = CreateCompanyRequest.model_validate_json(payload)
-            value = await run_in_threadpool(administration.create_company, command)
+            command = CreateProjectRequest.model_validate_json(payload)
+            value = await run_in_threadpool(administration.create_project, command)
         except ValidationError:
-            return _error(422, "INVALID_REQUEST", "Company input is invalid.")
+            return _error(422, "INVALID_REQUEST", "Project input is invalid.")
         except AdministrationError:
-            return _error(409, "COMPANY_REJECTED", "Company could not be created safely.")
+            return _error(409, "PROJECT_REJECTED", "Project could not be created safely.")
         return JSONResponse(value.to_wire(), status_code=201)
 
-    @app.get("/api/v1/admin/companies/{company_id}/knowledge")
-    async def knowledge(company_id: str) -> Response:
+    @app.get("/api/v1/admin/team/knowledge")
+    async def knowledge() -> Response:
         if administration is None:
             return _error(404, "NOT_AVAILABLE", "Administration is not available.")
-        if not _valid_company_id(company_id):
-            return _error(404, "NOT_FOUND", "Company was not found.")
         try:
-            values = await run_in_threadpool(administration.knowledge, company_id)
+            values = await run_in_threadpool(administration.knowledge)
         except (AdministrationError, KnowledgeDocumentError):
-            return _error(503, "KNOWLEDGE_UNAVAILABLE", "Company knowledge is unavailable.")
+            return _error(503, "KNOWLEDGE_UNAVAILABLE", "Team knowledge is unavailable.")
         return JSONResponse([value.to_wire() for value in values])
 
-    @app.post("/api/v1/admin/companies/{company_id}/knowledge", status_code=201)
-    async def import_knowledge(company_id: str, request: Request, filename: str = "") -> Response:
+    @app.post("/api/v1/admin/team/knowledge", status_code=201)
+    async def import_knowledge(request: Request, filename: str = "") -> Response:
         if administration is None:
             return _error(404, "NOT_AVAILABLE", "Administration is not available.")
-        if not _valid_company_id(company_id):
-            return _error(404, "NOT_FOUND", "Company was not found.")
         content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
         if content_type != "application/octet-stream":
             return _error(415, "BINARY_REQUIRED", "Use application/octet-stream.")
         declared = request.headers.get("content-length")
         if declared is not None:
             try:
-                if int(declared) > MAX_COMPANY_KNOWLEDGE_SOURCE_BYTES:
+                if int(declared) > MAX_TEAM_KNOWLEDGE_SOURCE_BYTES:
                     return _error(413, "DOCUMENT_TOO_LARGE", "Document exceeds the upload limit.")
             except ValueError:
                 return _error(400, "INVALID_REQUEST", "Invalid request metadata.")
         content = await request.body()
-        if len(content) > MAX_COMPANY_KNOWLEDGE_SOURCE_BYTES:
+        if len(content) > MAX_TEAM_KNOWLEDGE_SOURCE_BYTES:
             return _error(413, "DOCUMENT_TOO_LARGE", "Document exceeds the upload limit.")
         try:
             value = await run_in_threadpool(
                 administration.import_document,
-                company_id=company_id,
                 filename=filename,
                 content=content,
             )
@@ -275,17 +274,17 @@ async def _json_body(request: Request) -> bytes | Response:
     return body
 
 
-def _valid_company_id(company_id: str) -> bool:
+def _valid_project_id(project_id: str) -> bool:
     try:
-        TypeAdapter(CompanyId).validate_python(company_id)
+        TypeAdapter(ProjectId).validate_python(project_id)
     except ValidationError:
         return False
     return True
 
 
-async def _team_snapshot(reader: TeamReader, company_id: str | None) -> Response:
+async def _team_snapshot(reader: TeamReader, project_id: str | None) -> Response:
     try:
-        snapshot = await run_in_threadpool(reader.snapshot, company_id)
+        snapshot = await run_in_threadpool(reader.snapshot, project_id)
     except TeamReadError:
         return _error(503, "TEAM_UNAVAILABLE", "Team data is temporarily unavailable.")
     return JSONResponse(snapshot.to_wire())

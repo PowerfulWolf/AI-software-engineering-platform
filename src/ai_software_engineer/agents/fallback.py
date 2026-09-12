@@ -32,9 +32,9 @@ Sha256 = Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
 _UNSEALED = "0" * 64
 
 
-def model_route_root(project_workspace_root: Path) -> Path:
+def model_route_root(repository_workspace_root: Path) -> Path:
     """Shared production ledger location for delivery writers and read projections."""
-    return project_workspace_root / "runs" / "model-routes"
+    return repository_workspace_root / "runs" / "model-routes"
 
 
 class RouteAttemptOutcome(StrEnum):

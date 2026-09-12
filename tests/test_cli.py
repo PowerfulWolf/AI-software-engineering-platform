@@ -143,9 +143,9 @@ def test_evaluation_report_missing_case_is_a_stable_cli_error(tmp_path: Path) ->
 
 
 def test_task_run_missing_runtime_secret_is_a_stable_cli_error(tmp_path: Path) -> None:
-    project_root = tmp_path / "project"
-    project_root.mkdir()
-    task = make_task().model_copy(update={"repository": str(project_root)})
+    repository_root = tmp_path / "project"
+    repository_root.mkdir()
+    task = make_task().model_copy(update={"repository": str(repository_root)})
     database = tmp_path / "state.sqlite3"
     config_file = tmp_path / "runtime.json"
     config_file.write_text(

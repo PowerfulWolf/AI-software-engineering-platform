@@ -58,7 +58,7 @@ class CandidateCommitResult(DomainModel):
 
 
 class CandidateCommitSkill(Protocol):
-    """Least-authority Project Manager Skill for one role worktree."""
+    """Least-authority Manager Skill for one role worktree."""
 
     def changed_paths(self) -> tuple[str, ...]: ...
 

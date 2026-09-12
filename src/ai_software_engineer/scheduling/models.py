@@ -12,7 +12,7 @@ from pydantic import AwareDatetime, Field, StrictInt, model_validator
 
 from ai_software_engineer.domain.agent import AgentId
 from ai_software_engineer.domain.enums import AgentRole, BrainTier
-from ai_software_engineer.domain.identity import ProjectId
+from ai_software_engineer.domain.identity import RepositoryId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.task import TaskId
 from ai_software_engineer.domain.workforce import ModelSelection, RoleAssignment, TaskLease
@@ -64,7 +64,7 @@ class AssignmentDecision(DomainModel):
     kind: Literal["assignment_decision"] = "assignment_decision"
     status: AssignmentDecisionStatus
     task_id: TaskId
-    project_id: ProjectId
+    repository_id: RepositoryId
     role: AgentRole
     attempt: StrictInt = Field(ge=1, le=10)
     agent_id: AgentId | None = None
@@ -82,7 +82,7 @@ class AssignmentDecision(DomainModel):
                 raise ValueError("ASSIGNED decision cannot carry rejection reasons")
             if (
                 self.assignment.task_id != self.task_id
-                or self.assignment.project_id != self.project_id
+                or self.assignment.repository_id != self.repository_id
             ):
                 raise ValueError("assignment does not match decision task/project")
             if self.assignment.agent_id != self.agent_id or self.assignment.role is not self.role:

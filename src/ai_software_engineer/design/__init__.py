@@ -1,4 +1,4 @@
-"""Public Solution Designer contracts."""
+"""Public Designer contracts."""
 
 from ai_software_engineer.design.agents import (
     DesignerAgentAdapter,

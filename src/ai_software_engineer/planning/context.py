@@ -11,7 +11,7 @@ from pydantic import AwareDatetime, model_validator
 
 from ai_software_engineer.design.models import DesignCommitCheckpoint
 from ai_software_engineer.domain.enums import ProjectRequestStatus
-from ai_software_engineer.domain.identity import ContextId, ProjectId
+from ai_software_engineer.domain.identity import ContextId, RepositoryId
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.domain.project_delivery import (
     ProductSpec,
@@ -24,8 +24,8 @@ from ai_software_engineer.domain.project_delivery import (
     require_product_approval,
     validate_technical_design,
 )
+from ai_software_engineer.manager.stages import ProjectStage, StageAdvanceAuthorization
 from ai_software_engineer.product.models import ProjectRequestRevision
-from ai_software_engineer.project_manager.stages import ProjectStage, StageAdvanceAuthorization
 
 
 class PlannerContextError(RuntimeError):
@@ -64,7 +64,7 @@ class PlannerContextManifest(DomainModel):
     kind: Literal["planner_context_manifest"] = "planner_context_manifest"
     schema_version: Literal["v0.1"] = "v0.1"
     context_id: ContextId
-    project_id: ProjectId
+    repository_id: RepositoryId
     request_id: ProjectRequestId
     project_request_revision: ProjectRequestRevision
     product_spec: ProductSpec
@@ -138,7 +138,7 @@ class PlannerContextBuilder:
         project_request = project_request_revision.request
         provisional = PlannerContextManifest(
             context_id=f"ctx_{'0' * 64}",
-            project_id=project_request.project_id,
+            repository_id=project_request.repository_id,
             request_id=project_request.id,
             project_request_revision=project_request_revision,
             product_spec=product_spec,
@@ -174,14 +174,14 @@ def _validate_lineage(
         raise PlannerContextLineageError("Planner requires a ProjectRequest in PLANNING")
     if (
         request.id != product_spec.request_id
-        or request.project_id != product_spec.project_id
-        or request.project_id != design.project_id
+        or request.repository_id != product_spec.repository_id
+        or request.repository_id != design.repository_id
     ):
         raise PlannerContextLineageError("Planner stage inputs do not match request/project")
     checkpoint.validate_integrity()
     authorization.validate_integrity()
     if (
-        checkpoint.project_id != request.project_id
+        checkpoint.repository_id != request.repository_id
         or checkpoint.request_id != request.id
         or checkpoint.technical_design_id != design.id
         or checkpoint.technical_design_sha256 != design.technical_design_sha256
@@ -190,7 +190,7 @@ def _validate_lineage(
         or checkpoint.request_revision_sha256 != request_revision.request_revision_sha256
         or checkpoint.planning_authorization_sha256 != authorization.authorization_sha256
         or authorization.target is not ProjectStage.PLANNING
-        or authorization.project_id != request.project_id
+        or authorization.repository_id != request.repository_id
         or authorization.input_sha256s[1:]
         != (
             request.request_sha256,

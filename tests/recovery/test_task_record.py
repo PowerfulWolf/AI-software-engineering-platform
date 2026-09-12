@@ -28,7 +28,7 @@ from tests.recovery.test_authorization import Human, approval, make_plan
 def record_for(plan: RecoveryPlan, authorization: RecoveryAuthorization) -> RecoveryTaskRecord:
     request = ProjectRequest.create(
         request_id="request_record",
-        project_id=plan.source.scope.project_id,
+        repository_id=plan.source.scope.repository_id,
         preparation_sha256=plan.target_preparation_sha256,
         title="Recovery",
         original_request="Change greeting",
@@ -39,7 +39,7 @@ def record_for(plan: RecoveryPlan, authorization: RecoveryAuthorization) -> Reco
         id=plan.new_task_id,
         title=request.title,
         description="fixture",
-        repository=plan.source.scope.project_root,
+        repository=plan.source.scope.repository_root,
         base_ref=plan.target_base_revision,
         acceptance_criteria=(
             AcceptanceCriterion(
@@ -51,7 +51,7 @@ def record_for(plan: RecoveryPlan, authorization: RecoveryAuthorization) -> Reco
         created_at=plan.created_at,
         updated_at=plan.created_at,
         metadata={
-            "project_id": request.project_id,
+            "repository_id": request.repository_id,
             "project_request_id": request.id,
             "recovery_plan_sha256": plan.plan_sha256,
             "recovery_rebound_request_sha256": request.request_sha256,

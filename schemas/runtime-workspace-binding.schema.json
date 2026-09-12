@@ -7,27 +7,30 @@
   "required": [
     "kind",
     "schema_version",
-    "organization_id",
-    "organization_root",
-    "organization_manifest_sha256",
+    "team_id",
+    "team_root",
+    "team_manifest_sha256",
     "project_id",
     "project_root",
-    "project_workspace_root",
     "project_manifest_sha256",
-    "project_profile_sha256",
+    "repository_id",
+    "repository_root",
+    "repository_workspace_root",
+    "repository_manifest_sha256",
+    "repository_profile_sha256",
     "paths",
     "bound_at",
     "binding_sha256"
   ],
   "properties": {
     "kind": {"const": "runtime_workspace_binding"},
-    "schema_version": {"const": "v0.1"},
-    "organization_id": {
+    "schema_version": {"const": "v0.2"},
+    "team_id": {
       "type": "string",
-      "pattern": "^organization_[a-z0-9][a-z0-9_-]{2,63}$"
+      "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$"
     },
-    "organization_root": {"type": "string", "pattern": "^/", "minLength": 2},
-    "organization_manifest_sha256": {
+    "team_root": {"type": "string", "pattern": "^/", "minLength": 2},
+    "team_manifest_sha256": {
       "type": "string",
       "pattern": "^[a-f0-9]{64}$"
     },
@@ -36,9 +39,18 @@
       "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"
     },
     "project_root": {"type": "string", "pattern": "^/", "minLength": 2},
-    "project_workspace_root": {"type": "string", "pattern": "^/", "minLength": 2},
-    "project_manifest_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
-    "project_profile_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "project_manifest_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "repository_id": {
+      "type": "string",
+      "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$"
+    },
+    "repository_root": {"type": "string", "pattern": "^/", "minLength": 2},
+    "repository_workspace_root": {"type": "string", "pattern": "^/", "minLength": 2},
+    "repository_manifest_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "repository_profile_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
     "paths": {
       "type": "object",
       "additionalProperties": false,

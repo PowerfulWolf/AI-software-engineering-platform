@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/team-workspace.schema.json",
+  "title": "TeamManifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["team_id", "name", "platform_root", "team_root", "created_at", "manifest_sha256"],
+  "properties": {
+    "schema_version": {"const": "v0.2", "default": "v0.2"},
+    "team_id": {"type": "string", "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$"},
+    "name": {"type": "string", "minLength": 1, "maxLength": 200},
+    "platform_root": {"type": "string", "minLength": 1},
+    "team_root": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "format": "date-time"},
+    "manifest_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  }
+}

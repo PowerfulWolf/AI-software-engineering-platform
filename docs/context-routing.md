@@ -7,9 +7,9 @@ Context Builder 把组织规则、项目事实、Task 意图、角色说明和�
 v0.1 的本地实现是 `FileContextBuilder`，路由器是无 I/O 的 `ContextRouter`。Builder 绑定一个 role worktree root，并复用 T006 `WorkspacePolicy` 读取文件来源。应用层的 `FileRunContextBuilder` 根据 AgentDefinition 权限创建 Builder，并把 ArtifactStore 已读回的显式上游 Artifact 编译成 required `artifact://<artifact_id>` inline source；它不接受隐式 Agent 消息。T011 可为它注入 `ContextStore`，将返回的 manifest 先登记/持久化，再由真实 provider adapter 按 `context_manifest_id` 解析。
 
 T021 的 `CompiledSpec.to_context_source()` 产生唯一 required `compiled.spec` source；T022 的
-`RuntimeWorkspaceBinding.compose_runtime_config(...)` 只在校验 ProjectProfile、sidecar binding 和
+`RuntimeWorkspaceBinding.compose_runtime_config(...)` 只在校验 RepositoryProfile、sidecar binding 和
 CompiledSpec 完整性后注入它。Runtime 配置若已声明同名 source 会 fail closed，避免规范重复或
-覆盖。项目 Markdown 规则仍以 URI/hash 留在 ProjectProfile，不在 Context 层做语义猜测。
+覆盖。项目 Markdown 规则仍以 URI/hash 留在 RepositoryProfile，不在 Context 层做语义猜测。
 
 ## 2. 公共接口
 
@@ -73,10 +73,10 @@ Builder 始终生成并优先交付 `policy`、`task`、`role`；提供且不同
 `RuntimeConfig.context_max_input_tokens` 显式传到 `FileRunContextBuilder`，默认仍为 12,000；
 生产 Team Host 的交付阶段设置 32,000，输出预留仍为 4,000。它是本地确定性估算上限，
 不是供应商真实 tokenizer 或模型 context window 的声明；不会因超限自动扩大或重试。
-生产 `project.profile` source 使用 `project_profile_context(profile)`：只把语言识别的完整
+生产 `project.profile` source 使用 `repository_profile_context(profile)`：只把语言识别的完整
 marker 清单替换为 `marker_count` 和最多三个排序样例，保留所有 build-system/native-rule
-事实和完整 profile digest。`kind=project_profile_context` 明确它是阅读投影，不可写回为
-ProjectProfile。批准方案、Task、规则引用和上游 Artifact 不因压缩而省略。
+事实和完整 profile digest。`kind=repository_profile_context` 明确它是阅读投影，不可写回为
+RepositoryProfile。批准方案、Task、规则引用和上游 Artifact 不因压缩而省略。
 
 状态迁移后的 Task 快照属于 Context identity 的一部分：例如 planning run 的 Task section 是 `PLANNING`，Coder run 是 `IMPLEMENTING`。重放或离线 Fake scenario 必须使用对应 durable checkpoint 构建 manifest，不能拿 `NEW` 快照冒充后续输入。
 
@@ -101,7 +101,7 @@ Builder 覆盖 OpenAI 风格 key、AWS access key、GitHub token、Bearer token�
 运行时 `RetryingOrchestrator` 将 `ContextBudgetExceeded` 转为已有的
 `BUDGET_EXHAUSTED → BLOCKED` 事件和结果，保留当时的 Task attempt、事件、制品引用与
 source revision。不会调用超限角色、自动扩大预算或伪造 verdict；终态不可自动恢复。
-Project Manager 从该结果记录真实的 Task 状态与版本，历史失败记录不原地改写。
+Manager 从该结果记录真实的 Task 状态与版本，历史失败记录不原地改写。
 
 ## 7. Good / Base / Bad
 

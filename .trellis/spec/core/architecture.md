@@ -52,9 +52,9 @@ EvaluationTraceBuilder.build(case_id: EvaluationCaseId) -> EvaluationTrace
 EvaluationEngine.evaluate(traces: tuple[EvaluationTrace, ...]) -> EvaluationReport
 HandoffBuilder.build(task_id: TaskId) -> HandoffBundle
 FileHandoffStore.put(bundle: HandoffBundle) -> HandoffRef
-ProjectWorkspaceRegistry.register(project_root: str | Path, *,
-                                   project_id: ProjectId | str | None = None) -> ProjectWorkspace
-project_id_for_root(project_root: str | Path) -> ProjectId
+RepositoryWorkspaceRegistry.register(repository_root: str | Path, *,
+                                   repository_id: RepositoryId | str | None = None) -> RepositoryWorkspace
+repository_id_for_root(repository_root: str | Path) -> RepositoryId
 ```
 
 这些接口必须是幂等或显式拒绝重复操作；实现不得通过全局可变状态绕过 Task/attempt 关联。
@@ -106,7 +106,7 @@ project_id_for_root(project_root: str | Path) -> ProjectId
 
 ### Project workspace and visualization boundary
 
-- `ProjectWorkspaceRegistry` 只读 canonical `project_root`，并在外置 registry root 原子初始化
+- `RepositoryWorkspaceRegistry` 只读 canonical `repository_root`，并在外置 registry root 原子初始化
   固定 sidecar layout；目标项目永远是默认代码 cwd，sidecar 保存平台元数据，不复制源码。
 - manifest、registry path、project path 必须通过 lexical + resolved containment 校验；sidecar
   与 project root 重叠、existing symlink、ID collision、manifest/layout 损坏都 fail closed。
@@ -142,11 +142,11 @@ project_id_for_root(project_root: str | Path) -> ProjectId
 | DONE 缺回归观察 | EvaluationEngine | `ADR=PENDING`，仍在分母 |
 | 非终态或 DONE 断链请求 handoff | HandoffBuilder | `HandoffNotReady` / `HandoffContractError` |
 | Handoff JSON/Markdown/identity 被篡改 | FileHandoffStore | `HandoffCorruption`，不返回半可信内容 |
-| project root 缺失或不是目录 | ProjectWorkspaceRegistry | `ProjectRootNotFound`；不创建 registry/sidecar |
-| registry/sidecar 与 project 重叠或 registry 是 symlink | ProjectWorkspaceRegistry | `WorkspacePlacementError`/`WorkspaceRootError`；目标项目保持不变 |
-| Project ID 已绑定另一 project root | ProjectWorkspaceRegistry | `ProjectWorkspaceConflict`；不覆盖首次 manifest |
-| workspace manifest/layout 缺失、digest/Schema 非法或路径不匹配 | ProjectWorkspaceRegistry | `ProjectWorkspaceCorruption`；不自动修复组织状态 |
-| staging 初始化失败 | ProjectWorkspaceRegistry | `ProjectWorkspaceError`；清理本轮隐藏 staging，不发布半成品 |
+| project root 缺失或不是目录 | RepositoryWorkspaceRegistry | `RepositoryRootNotFound`；不创建 registry/sidecar |
+| registry/sidecar 与 project 重叠或 registry 是 symlink | RepositoryWorkspaceRegistry | `WorkspacePlacementError`/`WorkspaceRootError`；目标项目保持不变 |
+| Project ID 已绑定另一 project root | RepositoryWorkspaceRegistry | `RepositoryWorkspaceConflict`；不覆盖首次 manifest |
+| workspace manifest/layout 缺失、digest/Schema 非法或路径不匹配 | RepositoryWorkspaceRegistry | `RepositoryWorkspaceCorruption`；不自动修复组织状态 |
+| staging 初始化失败 | RepositoryWorkspaceRegistry | `RepositoryWorkspaceError`；清理本轮隐藏 staging，不发布半成品 |
 
 ## 5. Good / Base / Bad Cases
 
@@ -168,7 +168,7 @@ project_id_for_root(project_root: str | Path) -> ProjectId
   或 force-remove dirty role worktree。
 - **T017 Good**：同一 canonical project root 重复注册返回首次 `workspace.json`，目标项目内容
   不变，14 个平台目录全部位于外置 sidecar；当前初始 v0.1 layout 使用 `assignments/`，不复制 Agent。
-- **T017 Base**：一个尚无语言/构建描述的空本地目录也能注册；ProjectProfile 发现属于 T020。
+- **T017 Base**：一个尚无语言/构建描述的空本地目录也能注册；RepositoryProfile 发现属于 T020。
 - **T017 Bad**：在目标项目创建 `.ase`、把源码复制到 sidecar、复用已绑定的 Project ID，或
   发现旧 layout 缺失时静默补目录。
 
@@ -189,7 +189,7 @@ project_id_for_root(project_root: str | Path) -> ProjectId
   candidate、固定 executor cwd、role mismatch、dirty/clean cleanup 和初始化失败回收。
 - Project workspace：真实临时目录覆盖 stable ID、幂等 replay、目标目录无写入、固定 layout、
   ID collision、registry symlink、project overlap、manifest/layout corruption 和 staging cleanup；
-  `ProjectWorkspaceManifest.to_wire()` 必须通过 canonical JSON Schema 正反 fixture，Schema-valid
+  `RepositoryWorkspaceManifest.to_wire()` 必须通过 canonical JSON Schema 正反 fixture，Schema-valid
   正文篡改也必须由 manifest SHA-256 检出。
 
 ## 7. Wrong vs Correct
@@ -219,11 +219,11 @@ transition(
 
 ```python
 # Wrong: platform metadata pollutes the target project.
-state_database = project_root / ".ase" / "state.sqlite3"
+state_database = repository_root / ".ase" / "state.sqlite3"
 
 # Correct: code cwd and platform state have distinct, typed roots.
-workspace = ProjectWorkspaceRegistry(registry_root).register(project_root)
-code_cwd = workspace.project_root
+workspace = RepositoryWorkspaceRegistry(registry_root).register(repository_root)
+code_cwd = workspace.repository_root
 state_database = workspace.directory("state") / "state.sqlite3"
 ```
 
@@ -275,8 +275,8 @@ PortfolioScheduler.match(work_item, role, agents, active_leases, assignments=(),
 PortfolioScheduler.schedule(work_items, role, agents, active_leases, assignments=(), *,
                             now, attempt=1) -> tuple[AssignmentDecision, ...]
 ModelRouter.route(demand, agent, policy, *, now) -> ModelRoutingDecision
-ProjectProfile.discover(project_root, *, project_id=None, observed_at=None,
-                        revision=None) -> ProjectProfile
+RepositoryProfile.discover(repository_root, *, repository_id=None, observed_at=None,
+                        revision=None) -> RepositoryProfile
 SpecCompiler.compile(profile, task, rules, *, compiled_at,
                      resolutions=()) -> SpecCompilation
 RuntimeWorkspaceBinder.bind(organization, project, profile, *,
@@ -287,7 +287,7 @@ RuntimeWorkforceResolver.resolve(*, work_item, assignment, lease, selection,
 ```
 
 Scheduler 只返回 WorkItem/capacity/Assignment/Lease 决策，不迁移 TaskStatus；ModelRouter 只返回
-带 reason 的 ModelSelection/refusal，不调用 provider。ProjectProfile 是只读观察，不执行构建或
+带 reason 的 ModelSelection/refusal，不调用 provider。RepositoryProfile 是只读观察，不执行构建或
 猜测测试入口。SpecCompiler 只自动合并显式结构化规则；冲突不按层级静默覆盖。Runtime binding
 固定 organization/project/sidecar 边界并在重开时检测漂移。TaskOrchestrator 继续固定一个 Task
 内角色顺序。T046 的 PersistentWorkQueue 以一次可执行角色 Run 为队列粒度，Dispatcher 仅执行
@@ -295,13 +295,13 @@ Planner 批准的调度/路由规则；模型会话不负责轮询、事务、�
 
 ### 10.3 Required invariants
 
-1. AgentProfile 属于 organization，不属于 Project；
+1. AgentProfile 属于唯一 Team，不属于 Project 或 Requirement；
 2. 同一 Task 历史中的 Coder、QA、Reviewer agent_id 两两独立；
 3. active Lease 不超过 AgentProfile.max_parallel_assignments；
 4. 每个 AgentRunAllocation 绑定 Agent、Assignment、ModelSelection、Context、Prompt、Spec 和 tool policy；
 5. 跨 Task 并发不能共享 Context、worktree、Artifact lineage 或可变模型会话；
 6. 模型评价按 Agent × Model × Role × Task class × Risk 归因。
-7. Organization workspace、Project sidecar 和 project_root 两两不重叠；AI metadata 不写目标项目；
+7. Team root、Project root、Repository sidecar 和 repository_root 满足固定归属且不与源码重叠；AI metadata 不写目标项目；
 8. CompiledSpec 冲突时不得产生 runnable allocation；hard safety resolution 不可放宽；
 9. RuntimeAgentRun 必须同时验证 WorkItem、Assignment、active Lease、AgentProfile、ModelSelection、
    CompiledSpec、Context 和 Task repository 身份。

@@ -45,16 +45,16 @@ class FileContextBuilder:
 
     def __init__(
         self,
-        project_root: str | Path,
+        repository_root: str | Path,
         permissions: AgentPermissions,
         *,
         sources: tuple[ContextSource, ...] = (),
         budget: ContextBudget = DEFAULT_CONTEXT_BUDGET,
         role_instructions: Mapping[AgentRole, str] | None = None,
     ) -> None:
-        self._project_root = Path(project_root).resolve()
-        if not self._project_root.is_dir():
-            raise ContextSourceError(f"project root is not a directory: {self._project_root}")
+        self._repository_root = Path(repository_root).resolve()
+        if not self._repository_root.is_dir():
+            raise ContextSourceError(f"project root is not a directory: {self._repository_root}")
         if any(source.priority == 0 for source in sources):
             raise ContextSourceError("ContextSource priority 0 is reserved for machine policy")
         self._permissions = permissions
@@ -81,7 +81,7 @@ class FileContextBuilder:
         _validate_revision(source_revision)
         task_denied_paths = task.constraints.denied_paths if task.constraints else ()
         policy = WorkspacePolicy(
-            self._project_root,
+            self._repository_root,
             self._permissions,
             denied_paths=task_denied_paths,
         )
@@ -219,7 +219,7 @@ class FileContextBuilder:
             raise ContextSourceDenied(
                 f"source path is outside Context read policy: {source.relative_path}"
             ) from error
-        path = self._project_root / normalized
+        path = self._repository_root / normalized
         if not path.is_file():
             if source.required:
                 raise ContextSourceNotFound(str(path))

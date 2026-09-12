@@ -26,7 +26,7 @@ class EvaluationTraceContractError(EvaluationTraceError):
 
 
 class EvaluationTraceBuilder:
-    """Read organization-owned stores without mutating their delivery facts."""
+    """Read Team-owned stores without mutating their delivery facts."""
 
     def __init__(
         self,

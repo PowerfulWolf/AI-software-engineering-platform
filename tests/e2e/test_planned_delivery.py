@@ -15,14 +15,14 @@ from ai_software_engineer.domain import (
     TaskStatus,
     derive_delivery_task,
 )
+from ai_software_engineer.manager.dispatch import DispatchCommitRecord
 from ai_software_engineer.orchestration.planned_delivery import (
     DispatchTaskConflict,
     DispatchTaskMaterializer,
     ExecutionPlanAgentAdapter,
 )
-from ai_software_engineer.project_manager.dispatch import DispatchCommitRecord
 from ai_software_engineer.store import SqliteTaskRepository
-from tests.project_manager.test_contracts import NOW, stage_chain
+from tests.manager.test_contracts import NOW, stage_chain
 
 
 class _Dispatch:
@@ -43,7 +43,7 @@ def _facts(tmp_path: Path):  # type: ignore[no-untyped-def]
         design,
         plan,
         task_id="task_planned_delivery_001",
-        repository=prepared.project_root,
+        repository=prepared.repository_root,
         base_ref="a" * 40,
         max_attempts=3,
         created_at=NOW + timedelta(minutes=5),
@@ -73,7 +73,7 @@ def test_execution_plan_is_mechanically_materialized_as_task_plan(tmp_path: Path
         product_spec=spec,
         technical_design=design,
         execution_plan=plan,
-        agent_id="agent_project_manager_001",
+        agent_id="agent_manager_001",
         agent_version="v0.1",
         created_at=NOW + timedelta(minutes=6),
     )
@@ -114,7 +114,7 @@ def test_planning_adapter_rejects_a_non_planning_role(tmp_path: Path) -> None:
         product_spec=spec,
         technical_design=design,
         execution_plan=plan,
-        agent_id="agent_project_manager_001",
+        agent_id="agent_manager_001",
         agent_version="v0.1",
         created_at=NOW,
     )

@@ -21,21 +21,21 @@ from ai_software_engineer.domain import (
     WorkItemStatus,
 )
 from ai_software_engineer.domain.project_delivery import derive_delivery_task
-from ai_software_engineer.planning import PlanningPreviewService
-from ai_software_engineer.product import FileProductRecordStore
-from ai_software_engineer.project_manager.dispatch import (
+from ai_software_engineer.manager.dispatch import (
     ContinuationDispatchRecord,
     DispatchPhaseCommit,
     DispatchWorkforceSnapshot,
     _record_digest,
 )
-from ai_software_engineer.project_manager.mysql_dispatch_authority import MySqlDispatchAuthority
-from ai_software_engineer.project_manager.preparation import PrepareProjectResult
-from ai_software_engineer.project_manager.production_backend import (
+from ai_software_engineer.manager.mysql_dispatch_authority import MySqlDispatchAuthority
+from ai_software_engineer.manager.preparation import PrepareProjectResult
+from ai_software_engineer.manager.production_backend import (
     ProductionProjectDeliveryBackend,
     _clean_git_head,
     _maximum_risk,
 )
+from ai_software_engineer.planning import PlanningPreviewService
+from ai_software_engineer.product import FileProductRecordStore
 from ai_software_engineer.recovery.models import RecoveryRejected, digest
 from ai_software_engineer.recovery.store import FileRecoveryStore
 from ai_software_engineer.recovery.verification_entry import NativeVerificationFacts
@@ -48,7 +48,7 @@ from ai_software_engineer.recovery.verification_records import (
     CandidateVerificationPlan,
 )
 from ai_software_engineer.redaction import redact_text
-from ai_software_engineer.runtime_workspace import FileOrganizationWorkforceStore
+from ai_software_engineer.runtime_workspace import FileTeamWorkforceStore
 from ai_software_engineer.scheduling import ModelRouter, PortfolioScheduler
 
 
@@ -70,7 +70,7 @@ class CandidateRemediationService:
         config: ProductionConfig,
         environment: Mapping[str, str],
     ) -> None:
-        # Keep this service behind OrganizationTeamHost; callers never supply stores or authority.
+        # Keep this service behind TeamHost; callers never supply stores or authority.
         self._backend = backend
         self._config = config
         self._environment = dict(environment)
@@ -87,7 +87,7 @@ class CandidateRemediationService:
             raise RecoveryRejected("verified candidates do not require Coder remediation")
         self._validate_current(source, store, plan, completion)
         context_sources = remediation_context(
-            project_root=source.scope.project_root,
+            repository_root=source.scope.repository_root,
             source_delivery_id=source.scope.delivery_id,
             source_base_revision=source.runtime.task.base_ref,
             candidate_revision=source.inputs.candidate_revision,
@@ -95,7 +95,7 @@ class CandidateRemediationService:
             completion=completion,
         )
         context_sha256 = digest([item.to_wire() for item in context_sources])
-        preparation = self._backend.prepare(source.scope.project_root)
+        preparation = self._backend.prepare(source.scope.repository_root)
         prepared = preparation.preparation
         if prepared is None:
             raise RecoveryRejected("project preparation needs human resolution before remediation")
@@ -105,7 +105,7 @@ class CandidateRemediationService:
         original_request = source.stages.request
         rebound_request = ProjectRequest.create(
             request_id=original_request.id,
-            project_id=original_request.project_id,
+            repository_id=original_request.repository_id,
             preparation_sha256=prepared.preparation_sha256,
             title=original_request.title,
             original_request=original_request.original_request,
@@ -122,8 +122,8 @@ class CandidateRemediationService:
             source.stages.design,
             source.stages.plan,
             task_id=task_id,
-            repository=prepared.project_root,
-            base_ref=_clean_git_head(Path(prepared.project_root)),
+            repository=prepared.repository_root,
+            base_ref=_clean_git_head(Path(prepared.repository_root)),
             max_attempts=source.runtime.task.max_attempts,
             created_at=now,
             constraints=source.runtime.task.constraints,
@@ -152,10 +152,10 @@ class CandidateRemediationService:
             }
         )
         agents, policy = self._backend._workforce()
-        workforce = FileOrganizationWorkforceStore(self._backend._organization)
+        workforce = FileTeamWorkforceStore(self._backend._organization)
         saved_agents = tuple(workforce.put_agent(agent) for agent in agents)
         saved_policy = workforce.put_policy(policy, versioned=True)
-        sidecar = Path(prepared.project_workspace_root)
+        sidecar = Path(prepared.repository_workspace_root)
         authority = MySqlDispatchAuthority(
             self._config.require_mysql_dsn(self._environment),
             request_revisions=FileProductRecordStore(sidecar / "state/product"),
@@ -164,7 +164,7 @@ class CandidateRemediationService:
         snapshot = _snapshot(
             task,
             source.stages.plan,
-            prepared.project_id,
+            prepared.repository_id,
             saved_agents,
             (saved_policy,),
         )
@@ -237,7 +237,7 @@ class CandidateRemediationService:
             phase_ids = (plan_phases[0].id, plan_phases[1].id, plan_phases[2].id)
             value = ContinuationDispatchRecord(
                 id=f"dispatch_commit_{completion.completion_sha256}",
-                project_id=prepared.project_id,
+                repository_id=prepared.repository_id,
                 task_id=task.id,
                 project_request_id=rebound_request.id,
                 execution_plan_id=source.stages.plan.id,
@@ -262,7 +262,7 @@ class CandidateRemediationService:
             return value.model_copy(update={"dispatch_sha256": _record_digest(value)})
 
         dispatch = authority.commit_continuation(
-            project_id=prepared.project_id,
+            repository_id=prepared.repository_id,
             task_id=task.id,
             continuation_sha256=completion.completion_sha256,
             validate_current=validate,
@@ -295,16 +295,16 @@ class CandidateRemediationService:
 def _snapshot(
     task: Task,
     plan: ExecutionPlan,
-    project_id: str,
+    repository_id: str,
     agents: tuple[AgentProfile, ...],
     policies: tuple[ModelPolicy, ...],
 ) -> DispatchWorkforceSnapshot:
     phases = plan.phases
     return DispatchWorkforceSnapshot.create(
-        project_id=project_id,
+        repository_id=repository_id,
         task_id=task.id,
         work_item=WorkItem(
-            project_id=project_id,
+            repository_id=repository_id,
             task_id=task.id,
             status=WorkItemStatus.READY,
             priority=500,
@@ -324,7 +324,7 @@ def _snapshot(
 
 def remediation_context(
     *,
-    project_root: str,
+    repository_root: str,
     source_delivery_id: str,
     source_base_revision: str,
     candidate_revision: str,
@@ -345,7 +345,7 @@ def remediation_context(
             f"{source_base_revision}..{candidate_revision}",
             "--",
         ),
-        cwd=project_root,
+        cwd=repository_root,
         env={"PATH": os.defpath, "LANG": "C", "LC_ALL": "C"},
         capture_output=True,
         timeout=30,

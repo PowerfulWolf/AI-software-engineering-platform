@@ -1,0 +1,35 @@
+{
+  "additionalProperties": false,
+  "description": "Name one Requirement and its Repository scope before product discussion.",
+  "properties": {
+    "name": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Name",
+      "type": "string"
+    },
+    "repository_roots": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 32,
+      "minItems": 1,
+      "title": "Repository Roots",
+      "type": "array"
+    },
+    "submitted_at": {
+      "format": "date-time",
+      "title": "Submitted At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "repository_roots"
+  ],
+  "title": "CreateRequirement",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/requirement-create.schema.json"
+}

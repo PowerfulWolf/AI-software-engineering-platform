@@ -14,7 +14,7 @@ from ai_software_engineer.domain.artifact import (
     QaReportArtifact,
     ReviewReportArtifact,
 )
-from ai_software_engineer.domain.enums import AgentRole, OrganizationRole
+from ai_software_engineer.domain.enums import AgentRole, TeamRole
 from ai_software_engineer.domain.event import StateEvent
 from ai_software_engineer.domain.task import Task, TaskId
 from ai_software_engineer.domain.workforce import (
@@ -63,10 +63,10 @@ _RUN_STATUS_BY_OUTPUT: Final[dict[ArtifactOutputStatus, RunProjectionStatus]] = 
     ArtifactOutputStatus.NOT_PRODUCED: RunProjectionStatus.FAILED,
 }
 
-_ORGANIZATION_ROLE_BY_DELIVERY_ROLE: Final[dict[AgentRole, OrganizationRole]] = {
-    AgentRole.CODER: OrganizationRole.CODER,
-    AgentRole.QA: OrganizationRole.QA,
-    AgentRole.REVIEWER: OrganizationRole.REVIEWER,
+_ORGANIZATION_ROLE_BY_DELIVERY_ROLE: Final[dict[AgentRole, TeamRole]] = {
+    AgentRole.CODER: TeamRole.CODER,
+    AgentRole.QA: TeamRole.QA,
+    AgentRole.REVIEWER: TeamRole.REVIEWER,
 }
 
 
@@ -224,10 +224,10 @@ class RunProjectionBuilder:
         candidate = _latest_candidate(artifacts)
         latest_qa = _latest_qa(artifacts)
         latest_review = _latest_review(artifacts)
-        project_id = work_item.project_id if work_item is not None else _first_project(runs)
+        repository_id = work_item.repository_id if work_item is not None else _first_project(runs)
         return TaskProjection(
             task_id=task.id,
-            project_id=project_id,
+            repository_id=repository_id,
             title=task.title,
             status=task.status,
             attempts=task.attempts,
@@ -301,13 +301,13 @@ class RunProjectionBuilder:
                 ],
                 "task_id",
             )
-            project_id = _optional_single_value(
+            repository_id = _optional_single_value(
                 run_id,
                 [
-                    allocation.project_id if allocation else None,
-                    *(item.identity.project_id for item in evidence),
+                    allocation.repository_id if allocation else None,
+                    *(item.identity.repository_id for item in evidence),
                 ],
-                "project_id",
+                "repository_id",
             )
             role = (
                 allocation.role
@@ -388,7 +388,7 @@ class RunProjectionBuilder:
                 RunProjection(
                     run_id=run_id,
                     task_id=task_id,
-                    project_id=project_id,
+                    repository_id=repository_id,
                     agent_id=agent_id,
                     role=role,
                     attempt=attempt,
@@ -413,7 +413,7 @@ class RunProjectionBuilder:
     def _build_lease(
         self, lease: TaskLease, assignment: object, *, as_of: datetime | None
     ) -> LeaseProjection:
-        project_id = getattr(assignment, "project_id", None)
+        repository_id = getattr(assignment, "repository_id", None)
         role = getattr(assignment, "role", None)
         status = LeaseProjectionStatus.UNKNOWN
         if as_of is not None:
@@ -428,7 +428,7 @@ class RunProjectionBuilder:
             lease_id=lease.id,
             assignment_id=lease.assignment_id,
             task_id=lease.task_id,
-            project_id=project_id,
+            repository_id=repository_id,
             agent_id=lease.agent_id,
             role=role,
             capacity_units=lease.capacity_units,
@@ -457,22 +457,20 @@ class RunProjectionBuilder:
             agent_leases = sorted(lease_by_agent.get(agent_id, ()), key=lambda item: item.lease_id)
             roles = set(profile.eligible_roles if profile else ())
             roles.update(
-                organization_role
+                team_role
                 for item in agent_runs
                 if item.role is not None
-                and (organization_role := _ORGANIZATION_ROLE_BY_DELIVERY_ROLE.get(item.role))
-                is not None
+                and (team_role := _ORGANIZATION_ROLE_BY_DELIVERY_ROLE.get(item.role)) is not None
             )
             roles.update(
-                organization_role
+                team_role
                 for item in agent_leases
                 if item.role is not None
-                and (organization_role := _ORGANIZATION_ROLE_BY_DELIVERY_ROLE.get(item.role))
-                is not None
+                and (team_role := _ORGANIZATION_ROLE_BY_DELIVERY_ROLE.get(item.role)) is not None
             )
             # The legacy planning-mode orchestrator is a deterministic control identity, not a
             # long-lived organization member. Keep its Run in Task history without inventing an
-            # Agent card or reintroducing OrganizationRole.ORCHESTRATOR.
+            # Agent card or reintroducing TeamRole.ORCHESTRATOR.
             if profile is None and not roles:
                 continue
             models = {item.model for item in agent_runs if item.model is not None}
@@ -611,7 +609,7 @@ def _allocation_revision(allocation: AgentRunAllocation) -> str | None:
 
 
 def _first_project(runs: tuple[RunProjection, ...]) -> str | None:
-    projects = tuple(run.project_id for run in runs if run.project_id is not None)
+    projects = tuple(run.repository_id for run in runs if run.repository_id is not None)
     return projects[0] if projects else None
 
 

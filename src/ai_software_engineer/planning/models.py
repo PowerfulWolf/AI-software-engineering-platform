@@ -13,7 +13,7 @@ from pydantic import AwareDatetime, StringConstraints, model_validator
 
 from ai_software_engineer.domain.agent import AgentId
 from ai_software_engineer.domain.enums import AgentRole
-from ai_software_engineer.domain.identity import ContextId, ProjectId, RunId
+from ai_software_engineer.domain.identity import ContextId, RepositoryId, RunId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.domain.project_delivery import (
     ExecutionPlan,
@@ -69,7 +69,7 @@ class PlannerRunRecord(DomainModel):
     kind: Literal["planner_run_record"] = "planner_run_record"
     schema_version: Literal["v0.1"] = "v0.1"
     run_id: RunId
-    project_id: ProjectId
+    repository_id: RepositoryId
     request_id: ProjectRequestId
     context_id: ContextId
     input_sha256: StageSha256
@@ -116,9 +116,9 @@ class PlannerRunRecord(DomainModel):
         plan.validate_integrity()
         revision.validate_integrity()
         if (
-            plan.project_id != self.project_id
+            plan.repository_id != self.repository_id
             or plan.request_id != self.request_id
-            or revision.request.project_id != self.project_id
+            or revision.request.repository_id != self.repository_id
             or revision.request.id != self.request_id
             or revision.request.status.value != "READY_FOR_DELIVERY"
             or revision.supersedes_sha256 != self.input_request_revision_sha256
@@ -130,7 +130,7 @@ class PlannerRunRecord(DomainModel):
         cls,
         *,
         run_id: RunId,
-        project_id: ProjectId,
+        repository_id: RepositoryId,
         request_id: ProjectRequestId,
         context_id: ContextId,
         input_sha256: StageSha256,
@@ -146,7 +146,7 @@ class PlannerRunRecord(DomainModel):
     ) -> PlannerRunRecord:
         provisional = cls(
             run_id=run_id,
-            project_id=project_id,
+            repository_id=repository_id,
             request_id=request_id,
             context_id=context_id,
             input_sha256=input_sha256,
@@ -183,7 +183,7 @@ class PlannerCommitCheckpoint(DomainModel):
     kind: Literal["planner_commit_checkpoint"] = "planner_commit_checkpoint"
     schema_version: Literal["v0.1"] = "v0.1"
     run_id: RunId
-    project_id: ProjectId
+    repository_id: RepositoryId
     request_id: ProjectRequestId
     run_record_sha256: StageSha256
     design_checkpoint_sha256: StageSha256
@@ -211,7 +211,7 @@ class PlannerCommitCheckpoint(DomainModel):
         assert plan is not None and revision is not None
         provisional = cls(
             run_id=record.run_id,
-            project_id=record.project_id,
+            repository_id=record.repository_id,
             request_id=record.request_id,
             run_record_sha256=record.run_record_sha256,
             design_checkpoint_sha256=record.design_checkpoint_sha256,
@@ -284,7 +284,7 @@ class PlanningPreview(DomainModel):
     kind: Literal["planning_preview"] = "planning_preview"
     schema_version: Literal["v0.1"] = "v0.1"
     id: PlanningPreviewId
-    project_id: ProjectId
+    repository_id: RepositoryId
     task_id: TaskId
     task_sha256: StageSha256
     work_item_sha256: StageSha256
@@ -313,8 +313,8 @@ class PlanningPreview(DomainModel):
             if assignment is None or lease is None:
                 raise ValueError("PlanningPreview phase assignment is incomplete")
             if (
-                decision.project_id != self.project_id
-                or assignment.project_id != self.project_id
+                decision.repository_id != self.repository_id
+                or assignment.repository_id != self.repository_id
                 or decision.task_id != self.task_id
                 or assignment.task_id != self.task_id
                 or lease.task_id != self.task_id
@@ -340,7 +340,7 @@ class PlanningPreview(DomainModel):
     ) -> PlanningPreview:
         provisional = cls(
             id=f"planning_preview_{'0' * 64}",
-            project_id=work_item.project_id,
+            repository_id=work_item.repository_id,
             task_id=task.id,
             task_sha256=delivery_task_digest(task),
             work_item_sha256=work_item_digest(work_item),

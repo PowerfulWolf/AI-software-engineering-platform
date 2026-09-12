@@ -132,7 +132,7 @@ class FileRecoveryStore:
         target = Path(root)
         if not target.is_absolute() or ".." in target.parts or target == Path("/"):
             raise RecoveryRejected("recovery root must be a specific absolute directory")
-        project = Path(scope.project_root)
+        project = Path(scope.repository_root)
         # Resolve only for placement comparison; all actual opens reject symlinks.
         resolved, project_resolved = target.resolve(), project.resolve()
         if resolved.is_relative_to(project_resolved) or project_resolved.is_relative_to(resolved):
@@ -319,7 +319,7 @@ class FileRecoveryStore:
 
     def _validate_scope(self, plan: RecoveryPlan) -> None:
         if plan.source.scope != self._scope:
-            raise RecoveryRejected("recovery belongs to another company, project or delivery")
+            raise RecoveryRejected("recovery belongs to another team, project or delivery")
         if self._get("scope", digest(self._scope.to_wire()), RecoveryScope) != self._scope:
             raise RecoveryRejected("recovery scope manifest changed")
 

@@ -9,7 +9,6 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from ai_software_engineer.agents import StructuredModelClient, StructuredModelResult
-from ai_software_engineer.company_workspace import CompanyWorkspace
 from ai_software_engineer.context import ContextSource
 from ai_software_engineer.domain import (
     AgentPermissions,
@@ -24,6 +23,28 @@ from ai_software_engineer.git import (
     WorktreeAlreadyExists,
     WorktreeRef,
     WorktreeSpec,
+)
+from ai_software_engineer.manager.delivery import (
+    ApproveProductSpec,
+    ProjectDeliveryCheckpointCatalog,
+    ResumeProjectDelivery,
+    StartProjectDelivery,
+    UnifiedProjectEntryService,
+)
+from ai_software_engineer.manager.delivery_checkpoint import (
+    DeliveryStage,
+    FileProjectDeliveryCheckpointStore,
+    checkpoint_is_ancestor,
+)
+from ai_software_engineer.manager.preparation import PrepareProjectStatus
+from ai_software_engineer.manager.production_agents import (
+    ProductDraft,
+    TechnicalDesignDraft,
+)
+from ai_software_engineer.manager.production_backend import (
+    ProductionProjectDeliveryBackend,
+    StructuredClientFactory,
+    _task_commands,
 )
 from ai_software_engineer.multi_directory.integration_commands import (
     is_test_command as _test_command,
@@ -44,30 +65,10 @@ from ai_software_engineer.product import (
     HumanProductDecisionVerifier,
     VerifiedHumanProductDecision,
 )
-from ai_software_engineer.project_manager.delivery import (
-    ApproveProductSpec,
-    ProjectDeliveryCheckpointCatalog,
-    ResumeProjectDelivery,
-    StartProjectDelivery,
-    UnifiedProjectEntryService,
-)
-from ai_software_engineer.project_manager.delivery_checkpoint import (
-    DeliveryStage,
-    FileProjectDeliveryCheckpointStore,
-    checkpoint_is_ancestor,
-)
-from ai_software_engineer.project_manager.preparation import PrepareProjectStatus
-from ai_software_engineer.project_manager.production_agents import (
-    ProductDraft,
-    TechnicalDesignDraft,
-)
-from ai_software_engineer.project_manager.production_backend import (
-    ProductionProjectDeliveryBackend,
-    StructuredClientFactory,
-    _task_commands,
-)
-from ai_software_engineer.project_profile import ProjectProfile
+from ai_software_engineer.project_workspace import ProjectWorkspace
 from ai_software_engineer.redaction import redact_text
+from ai_software_engineer.repository_profile import RepositoryProfile
+from ai_software_engineer.team_workspace import TeamWorkspace
 
 BackendFactory = Callable[
     [StructuredClientFactory, tuple[ContextSource, ...], HumanProductDecisionVerifier],
@@ -82,20 +83,22 @@ class ProductionJointBackend:
         native: ProductionProjectDeliveryBackend,
         factory: BackendFactory,
         clients: StructuredClientFactory,
-        company: CompanyWorkspace,
+        team: TeamWorkspace,
+        project: ProjectWorkspace,
         environment: Mapping[str, str],
     ) -> None:
         self.native = native
         self.factory = factory
         self.clients = clients
-        self.company = company
+        self.team = team
+        self.project = project
         self.environment = dict(environment)
 
     def prepare(self, unit: DirectoryUnit) -> PreparedUnit:
         result = self.native.prepare(unit.root)
         if result.status is not PrepareProjectStatus.PREPARED:
             return PreparedUnit(unit_id=unit.id, result=result)
-        profile = ProjectProfile.discover(unit.root, project_id=result.project_id)
+        profile = RepositoryProfile.discover(unit.root, repository_id=result.repository_id)
         sources = list(self.native.prepared_context(result))
         for index, source in enumerate(profile.native_rules):
             path = Path(unit.root) / source.relative_path
@@ -128,7 +131,7 @@ class ProductionJointBackend:
 
     def reconcile(self, checkpoint: JointCheckpoint) -> None:
         for unit in checkpoint.scope.units:
-            self.company.validate_code_root(unit.root)
+            self.team.validate_code_root(unit.root)
             if (
                 git_read(Path(unit.root), "rev-parse", "--verify", "HEAD^{commit}")
                 != unit.base_revision
@@ -143,13 +146,16 @@ class ProductionJointBackend:
                 raise ValueError("joint preparation or knowledge drift")
         for child in checkpoint.children:
             unit = next(u for u in checkpoint.scope.units if u.id == child.unit_id)
-            if child.checkpoint.project_root != unit.root:
+            if child.checkpoint.repository_root != unit.root:
                 raise ValueError("child checkpoint belongs to another repository")
             # Resolve native facts, not just a claimed joint child status.
             service = self._entry(checkpoint, child.unit_id)
             actual = service.status(child.checkpoint.delivery_id).checkpoint
             history = FileProjectDeliveryCheckpointStore(
-                self.company.root / "projects" / actual.project_id / "state/project-deliveries",
+                self.project.root
+                / "repositories"
+                / actual.repository_id
+                / "state/project-deliveries",
                 read_only=True,
             ).list(actual.delivery_id)
             if (
@@ -183,8 +189,8 @@ class ProductionJointBackend:
         )
         return UnifiedProjectEntryService(
             backend=self.factory(projection, (source,), projection),
-            catalog=ProjectDeliveryCheckpointCatalog(self.company.root / "projects"),
-            delivery_namespace=self.company.manifest.company_id,
+            catalog=ProjectDeliveryCheckpointCatalog(self.project.root / "repositories"),
+            delivery_namespace=self.project.manifest.project_id,
         )
 
     def deliver(self, checkpoint: JointCheckpoint, unit_id: str) -> ChildDelivery:
@@ -193,7 +199,7 @@ class ProductionJointBackend:
         service = self._entry(checkpoint, unit_id)
         result = service.start(
             StartProjectDelivery(
-                project_root=projection.root,
+                repository_root=projection.root,
                 requirement=projection.requirement,
                 title=checkpoint.title,
                 submitted_at=checkpoint.submitted_at,
@@ -263,7 +269,11 @@ class ProductionJointBackend:
             for unit, candidate in zip(checkpoint.scope.units, candidates, strict=True):
                 manager = GitWorktreeManager(
                     unit.root,
-                    self.company.requests_root / checkpoint.delivery_id / "integration" / unit.id,
+                    Path(self.team.manifest.platform_root)
+                    / "worktrees"
+                    / checkpoint.delivery_id
+                    / "integration"
+                    / unit.id,
                 )
                 spec = WorktreeSpec(
                     task_id="task_joint_"
@@ -383,8 +393,8 @@ class DerivedStageInputs(
             f"joint-approval:{checkpoint.delivery_id}:{digest(checkpoint.approval)}:{unit_id}"
         )
 
-    def for_project(self, project_root: Path) -> StructuredModelClient:
-        if str(project_root.resolve()) != self.root:
+    def for_project(self, repository_root: Path) -> StructuredModelClient:
+        if str(repository_root.resolve()) != self.root:
             raise ValueError("derived documents are bound to another repository")
         return self
 

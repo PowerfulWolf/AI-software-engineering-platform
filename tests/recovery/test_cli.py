@@ -8,9 +8,10 @@ from typer.testing import CliRunner
 
 from ai_software_engineer.cli import app
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
-from ai_software_engineer.project_manager.production_host import OrganizationTeamHost
+from ai_software_engineer.manager.production_host import TeamHost
 from ai_software_engineer.recovery import RecoveryPlan
 from ai_software_engineer.recovery.store import FileRecoveryStore
+from ai_software_engineer.team_workspace import TeamWorkspace
 from tests.recovery.test_authorization import make_plan
 
 
@@ -33,41 +34,54 @@ def test_candidate_verification_commands_are_top_level_and_annotated() -> None:
 def test_inspect_is_read_only_and_approval_needs_exact_confirmation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    plan = make_plan(tmp_path / "project")
+    repository_root = tmp_path / "repository"
+    repository_root.mkdir()
     config = ProductionConfig(
         platform_root=str(tmp_path / "platform"),
-        company_id=plan.source.scope.company_id,
         model_routes=(
             ProviderRouteConfig(
                 provider="codex", model="gpt-5.5", kind=ModelProviderKind.CODEX_CLI
             ),
         ),
     )
-    root = (
-        Path(config.platform_root)
-        / "companies"
-        / config.company_id
-        / "projects"
-        / plan.source.scope.project_id
-        / "state"
-        / f"recovery-{plan.source.scope.delivery_id}"
+    team = TeamWorkspace.initialize(
+        config.platform_root,
+        team_id=config.team_id,
+        name=config.team_name,
     )
-    root.parent.mkdir(parents=True)
+    project = team.project_registry().register(
+        project_id="project_test",
+        name="Test Project",
+    )
+    repository = project.repository_registry().register(repository_root)
+    plan = make_plan(repository_root, repository_id=repository.repository_id)
+    root = repository.root / "state" / f"recovery-{plan.source.scope.delivery_id}"
     store = FileRecoveryStore.initialize(root, scope=plan.source.scope)
     store.put_plan(plan)
     config_file = tmp_path / "config.json"
     config_file.write_text(config.model_dump_json())
     monkeypatch.setenv("ASE_CONFIG", str(config_file))
     path = root / f"plan-{plan.plan_sha256}.json"
-    before = {p.name: p.read_bytes() for p in root.iterdir()}
+    before = {
+        str(item.relative_to(config.platform_root)): item.read_bytes()
+        for item in Path(config.platform_root).rglob("*")
+        if item.is_file()
+    }
     result = CliRunner().invoke(app, ["recovery", "inspect", "--plan", str(path)])
     assert result.exit_code == 0, result.output
     assert plan.plan_sha256 in result.output and '"patch"' not in result.output
-    assert before == {p.name: p.read_bytes() for p in root.iterdir()}
-    assert not (Path(config.platform_root) / "organization").exists()
+    assert before == {
+        str(item.relative_to(config.platform_root)): item.read_bytes()
+        for item in Path(config.platform_root).rglob("*")
+        if item.is_file()
+    }
     missing = CliRunner().invoke(app, ["recovery", "approve", "--plan", str(path)])
     assert missing.exit_code == 2
-    assert before == {p.name: p.read_bytes() for p in root.iterdir()}
+    assert before == {
+        str(item.relative_to(config.platform_root)): item.read_bytes()
+        for item in Path(config.platform_root).rglob("*")
+        if item.is_file()
+    }
     failed = CliRunner().invoke(app, ["recovery", "inspect", "--plan", str(tmp_path / "missing")])
     assert failed.exit_code == 2 and "Traceback" not in failed.output
     assert not (tmp_path / "missing").exists()
@@ -83,7 +97,7 @@ def test_proposal_mode_is_explicit_and_printed(
     )
     host = Mock()
     host.recovery_entry.return_value.propose.return_value = (plan, tmp_path / "plan.json")
-    monkeypatch.setattr(OrganizationTeamHost, "from_environment", lambda: host)
+    monkeypatch.setattr(TeamHost, "from_environment", lambda: host)
     args = [
         "recovery",
         "propose",

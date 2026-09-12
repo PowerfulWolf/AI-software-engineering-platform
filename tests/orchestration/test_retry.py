@@ -200,10 +200,10 @@ class CrashAfterCheckpointOrchestrator(RetryingOrchestrator):
 def _runner(
     tmp_path: Path, adapter: ScriptedAdapter, *, max_attempts: int = 3
 ) -> tuple[Task, SqliteTaskRepository, RetryingOrchestrator]:
-    project_root = tmp_path / "project"
-    project_root.mkdir()
-    task = _task(project_root).model_copy(
-        update={"max_attempts": max_attempts, "constraints": _task(project_root).constraints}
+    repository_root = tmp_path / "project"
+    repository_root.mkdir()
+    task = _task(repository_root).model_copy(
+        update={"max_attempts": max_attempts, "constraints": _task(repository_root).constraints}
     )
     if max_attempts != 3:
         task = task.model_copy(
@@ -221,7 +221,7 @@ def _runner(
         RetryingOrchestrator(
             repository=repository,
             artifact_store=FileArtifactStore(tmp_path / "artifacts"),
-            context_builder=FileRunContextBuilder(project_root),
+            context_builder=FileRunContextBuilder(repository_root),
             agent_adapter=adapter,
             agent_definitions=_definitions(),
             identities=AttemptIdentityFactory(),
@@ -290,9 +290,9 @@ def test_coder_checkpoint_is_requeued_and_resumed_before_qa(tmp_path: Path) -> N
 
 
 def test_restart_resumes_a_durable_coder_checkpoint(tmp_path: Path) -> None:
-    project_root = tmp_path / "project"
-    project_root.mkdir()
-    task = _task(project_root)
+    repository_root = tmp_path / "project"
+    repository_root.mkdir()
+    task = _task(repository_root)
     artifacts = FileArtifactStore(tmp_path / "artifacts")
     database = tmp_path / "state.sqlite3"
     with SqliteTaskRepository(database) as repository:
@@ -300,7 +300,7 @@ def test_restart_resumes_a_durable_coder_checkpoint(tmp_path: Path) -> None:
         first = CrashAfterCheckpointOrchestrator(
             repository=repository,
             artifact_store=artifacts,
-            context_builder=FileRunContextBuilder(project_root),
+            context_builder=FileRunContextBuilder(repository_root),
             agent_adapter=ScriptedAdapter(coder_progress=(1,)),
             agent_definitions=_definitions(),
             identities=AttemptIdentityFactory(),
@@ -315,7 +315,7 @@ def test_restart_resumes_a_durable_coder_checkpoint(tmp_path: Path) -> None:
         resumed = RetryingOrchestrator(
             repository=repository,
             artifact_store=artifacts,
-            context_builder=FileRunContextBuilder(project_root),
+            context_builder=FileRunContextBuilder(repository_root),
             agent_adapter=adapter,
             agent_definitions=_definitions(),
             identities=AttemptIdentityFactory(),
@@ -331,9 +331,9 @@ def test_restart_resumes_a_durable_coder_checkpoint(tmp_path: Path) -> None:
 
 
 def test_restart_does_not_skip_attempt_reserved_while_queued(tmp_path: Path) -> None:
-    project_root = tmp_path / "project"
-    project_root.mkdir()
-    task = _task(project_root)
+    repository_root = tmp_path / "project"
+    repository_root.mkdir()
+    task = _task(repository_root)
     artifacts = FileArtifactStore(tmp_path / "artifacts")
     database = tmp_path / "state.sqlite3"
     with SqliteTaskRepository(database) as repository:
@@ -341,7 +341,7 @@ def test_restart_does_not_skip_attempt_reserved_while_queued(tmp_path: Path) -> 
         interrupted = CrashAfterCheckpointOrchestrator(
             repository=repository,
             artifact_store=artifacts,
-            context_builder=FileRunContextBuilder(project_root),
+            context_builder=FileRunContextBuilder(repository_root),
             agent_adapter=ScriptedAdapter(coder_progress=(1,)),
             agent_definitions=_definitions(),
             identities=AttemptIdentityFactory(),
@@ -358,7 +358,7 @@ def test_restart_does_not_skip_attempt_reserved_while_queued(tmp_path: Path) -> 
         queued, _ = RetryingOrchestrator(
             repository=repository,
             artifact_store=artifacts,
-            context_builder=FileRunContextBuilder(project_root),
+            context_builder=FileRunContextBuilder(repository_root),
             agent_adapter=ScriptedAdapter(),
             agent_definitions=_definitions(),
             identities=AttemptIdentityFactory(),
@@ -378,7 +378,7 @@ def test_restart_does_not_skip_attempt_reserved_while_queued(tmp_path: Path) -> 
         resumed = RetryingOrchestrator(
             repository=repository,
             artifact_store=artifacts,
-            context_builder=FileRunContextBuilder(project_root),
+            context_builder=FileRunContextBuilder(repository_root),
             agent_adapter=adapter,
             agent_definitions=_definitions(),
             identities=AttemptIdentityFactory(),
@@ -439,15 +439,15 @@ def test_attempt_budget_exhaustion_returns_durable_blocked_result(tmp_path: Path
 
 
 def test_restart_recovers_t009_qa_checkpoint_and_continues(tmp_path: Path) -> None:
-    project_root = tmp_path / "project"
-    project_root.mkdir()
-    task = _task(project_root)
+    repository_root = tmp_path / "project"
+    repository_root.mkdir()
+    task = _task(repository_root)
     artifacts = FileArtifactStore(tmp_path / "artifacts")
     first_repository = SqliteTaskRepository(tmp_path / "state.sqlite3")
     first = SerialOrchestrator(
         repository=first_repository,
         artifact_store=artifacts,
-        context_builder=FileRunContextBuilder(project_root),
+        context_builder=FileRunContextBuilder(repository_root),
         agent_adapter=ScriptedAdapter(qa_failures=(1,)),
         agent_definitions=_definitions(),
         identities=AttemptIdentityFactory(),
@@ -465,7 +465,7 @@ def test_restart_recovers_t009_qa_checkpoint_and_continues(tmp_path: Path) -> No
         runner = RetryingOrchestrator(
             repository=repository,
             artifact_store=artifacts,
-            context_builder=FileRunContextBuilder(project_root),
+            context_builder=FileRunContextBuilder(repository_root),
             agent_adapter=adapter,
             agent_definitions=_definitions(),
             identities=AttemptIdentityFactory(),

@@ -4,13 +4,13 @@ import json
 
 from ai_software_engineer.context.models import ContextSource
 from ai_software_engineer.domain.model import WirePayload
-from ai_software_engineer.project_profile import ProjectProfile
+from ai_software_engineer.repository_profile import RepositoryProfile
 
 
-def project_profile_context(profile: ProjectProfile) -> ContextSource:
+def repository_profile_context(profile: RepositoryProfile) -> ContextSource:
     """Retain native rules and provenance without repeating every language marker."""
     payload: WirePayload = profile.to_wire()
-    payload["kind"] = "project_profile_context"
+    payload["kind"] = "repository_profile_context"
     payload["languages"] = [
         {
             "language": fact.language.value,
@@ -21,7 +21,7 @@ def project_profile_context(profile: ProjectProfile) -> ContextSource:
     ]
     return ContextSource(
         source_id="project.profile",
-        uri=f"profile://{profile.project_id}/{profile.profile_sha256}",
+        uri=f"profile://{profile.repository_id}/{profile.profile_sha256}",
         content=json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
         priority=20,
         required=True,

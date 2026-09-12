@@ -28,6 +28,13 @@ from ai_software_engineer.domain.project_delivery import (
     ProjectRequestId,
     StageSha256,
 )
+from ai_software_engineer.manager.baseline import ProjectSpecBaseline
+from ai_software_engineer.manager.stages import (
+    ProjectStage,
+    ProjectStageError,
+    StageAdvanceAuthorization,
+    StageAdvanceRequest,
+)
 from ai_software_engineer.product.agents import (
     ProductAgentAdapter,
     ProductAgentErrorCode,
@@ -53,14 +60,7 @@ from ai_software_engineer.product.models import (
     ProjectRequestRevision,
 )
 from ai_software_engineer.product.store import ProductRecordNotFound, ProductRecordStore
-from ai_software_engineer.project_manager.baseline import ProjectSpecBaseline
-from ai_software_engineer.project_manager.stages import (
-    ProjectStage,
-    ProjectStageError,
-    StageAdvanceAuthorization,
-    StageAdvanceRequest,
-)
-from ai_software_engineer.project_profile import ProjectProfile
+from ai_software_engineer.repository_profile import RepositoryProfile
 
 Clock = Callable[[], datetime]
 CommandId = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_-]{2,127}$")]
@@ -100,7 +100,7 @@ class ProductAgentExecutionError(ProductDiscoveryError):
 
 
 class ProjectStageAdvancePort(Protocol):
-    """Project Manager Skill port that revalidates current project facts."""
+    """Manager Skill port that revalidates current project facts."""
 
     def advance_stage(self, request: StageAdvanceRequest) -> StageAdvanceAuthorization: ...
 
@@ -259,7 +259,7 @@ class ProductDiscoveryService:
         self,
         *,
         preparation: ProjectPreparation,
-        project_profile: ProjectProfile,
+        repository_profile: RepositoryProfile,
         project_baseline: ProjectSpecBaseline,
         store: ProductRecordStore,
         adapter: ProductAgentAdapter,
@@ -269,20 +269,20 @@ class ProductDiscoveryService:
         clock: Clock | None = None,
     ) -> None:
         preparation.validate_integrity()
-        project_profile.validate_integrity()
+        repository_profile.validate_integrity()
         project_baseline.validate_integrity()
         if (
-            project_profile.project_id != preparation.project_id
-            or project_profile.profile_sha256 != preparation.project_profile_sha256
-            or project_baseline.project_id != preparation.project_id
-            or project_baseline.project_profile_sha256 != project_profile.profile_sha256
+            repository_profile.repository_id != preparation.repository_id
+            or repository_profile.profile_sha256 != preparation.repository_profile_sha256
+            or project_baseline.repository_id != preparation.repository_id
+            or project_baseline.repository_profile_sha256 != repository_profile.profile_sha256
             or project_baseline.baseline_sha256 != preparation.baseline_spec_sha256
         ):
             raise ProductDiscoveryError(
                 "Product project knowledge does not match ProjectPreparation"
             )
         self._preparation = preparation
-        self._project_profile = project_profile
+        self._repository_profile = repository_profile
         self._project_baseline = project_baseline
         self._store = store
         self._adapter = adapter
@@ -308,7 +308,7 @@ class ProductDiscoveryService:
         now = command.submitted_at
         request = ProjectRequest.create(
             request_id=command.request_id,
-            project_id=self._preparation.project_id,
+            repository_id=self._preparation.repository_id,
             preparation_sha256=self._preparation.preparation_sha256,
             title=command.title,
             original_request=command.initial_requirement,
@@ -320,7 +320,7 @@ class ProductDiscoveryService:
         )
         dialogue = ProductDialogueRecord.create(
             request_id=request.id,
-            project_id=request.project_id,
+            repository_id=request.repository_id,
             sequence=1,
             actor=ProductDialogueActor.HUMAN,
             content=command.initial_requirement,
@@ -329,7 +329,7 @@ class ProductDiscoveryService:
         )
         checkpoint = ProductDiscoveryCheckpoint.create(
             request_id=request.id,
-            project_id=request.project_id,
+            repository_id=request.repository_id,
             revision=1,
             previous_checkpoint_sha256=None,
             request_revision=1,
@@ -420,7 +420,7 @@ class ProductDiscoveryService:
         now = command.submitted_at
         context = self._context_builder.build(
             self._preparation,
-            self._project_profile,
+            self._repository_profile,
             self._project_baseline,
             revision.request,
             dialogue=tuple(
@@ -434,7 +434,7 @@ class ProductDiscoveryService:
         )
         agent_request = ProductAgentRequest(
             run_id=command.run_id,
-            project_id=checkpoint.project_id,
+            repository_id=checkpoint.repository_id,
             request_id=checkpoint.request_id,
             context=context,
             permissions=context.permissions,
@@ -556,7 +556,7 @@ class ProductDiscoveryService:
                 )
             except (AttributeError, ProjectStageError, TypeError, ValueError) as error:
                 raise ProductDiscoveryStateError(
-                    "Project Manager returned an invalid solution-design authorization"
+                    "Manager returned an invalid solution-design authorization"
                 ) from error
         dialogue: ProductDialogueRecord | None = None
         if verified.decision is ProductApprovalDecision.REQUEST_CHANGES:
@@ -565,7 +565,7 @@ class ProductDiscoveryService:
             )
         advanced = ProductDiscoveryCheckpoint.create(
             request_id=checkpoint.request_id,
-            project_id=checkpoint.project_id,
+            repository_id=checkpoint.repository_id,
             revision=checkpoint.revision + 1,
             previous_checkpoint_sha256=checkpoint.checkpoint_sha256,
             request_revision=next_revision.revision,
@@ -717,7 +717,7 @@ class ProductDiscoveryService:
         )
         advanced = ProductDiscoveryCheckpoint.create(
             request_id=checkpoint.request_id,
-            project_id=checkpoint.project_id,
+            repository_id=checkpoint.repository_id,
             revision=checkpoint.revision + 1,
             previous_checkpoint_sha256=checkpoint.checkpoint_sha256,
             request_revision=next_revision.revision,
@@ -761,8 +761,8 @@ class ProductDiscoveryService:
         dialogue = self._store.list_dialogue(request_id)[: checkpoint.dialogue_count]
         expected_head = None if not dialogue else dialogue[-1].dialogue_sha256
         if (
-            checkpoint.project_id != self._preparation.project_id
-            or revision.request.project_id != self._preparation.project_id
+            checkpoint.repository_id != self._preparation.repository_id
+            or revision.request.repository_id != self._preparation.repository_id
             or revision.request.preparation_sha256 != self._preparation.preparation_sha256
             or checkpoint.request_revision != revision.revision
             or checkpoint.request_sha256 != revision.request.request_sha256
@@ -824,7 +824,7 @@ class ProductDiscoveryService:
     ) -> ProductDialogueRecord:
         return ProductDialogueRecord.create(
             request_id=checkpoint.request_id,
-            project_id=checkpoint.project_id,
+            repository_id=checkpoint.repository_id,
             sequence=checkpoint.dialogue_count + 1,
             actor=actor,
             content=content,
@@ -841,7 +841,7 @@ class ProductDiscoveryService:
     ) -> ProductDiscoveryCheckpoint:
         return ProductDiscoveryCheckpoint.create(
             request_id=previous.request_id,
-            project_id=previous.project_id,
+            repository_id=previous.repository_id,
             revision=previous.revision + 1,
             previous_checkpoint_sha256=previous.checkpoint_sha256,
             request_revision=revision.revision,
@@ -866,7 +866,7 @@ class ProductDiscoveryService:
             raise ProductAgentOutputRejected("adapter returned invalid output") from error
         if (
             result.run_id != request.run_id
-            or result.project_id != request.project_id
+            or result.repository_id != request.repository_id
             or result.request_id != request.request_id
             or result.context_id != request.context.context_id
         ):
@@ -878,7 +878,7 @@ class ProductDiscoveryService:
         except RuntimeError as error:
             raise ProductAgentOutputRejected("ProductSpec integrity is invalid") from error
         if (
-            spec.project_id != context.project_id
+            spec.repository_id != context.repository_id
             or spec.request_id != context.request_id
             or spec.status is not ProductSpecStatus.READY_FOR_REVIEW
             or spec.version != context.expected_product_spec_version
@@ -1075,7 +1075,7 @@ def _validate_solution_design_authorization(
     )
     if (
         authorization.target is not ProjectStage.SOLUTION_DESIGN
-        or authorization.project_id != preparation.project_id
+        or authorization.repository_id != preparation.repository_id
         or authorization.input_sha256s != expected_inputs
     ):
         raise ProjectStageError(
@@ -1098,7 +1098,7 @@ def _request_with_status(
 ) -> ProjectRequest:
     return ProjectRequest.create(
         request_id=current.id,
-        project_id=current.project_id,
+        repository_id=current.repository_id,
         preparation_sha256=current.preparation_sha256,
         title=current.title,
         original_request=current.original_request,

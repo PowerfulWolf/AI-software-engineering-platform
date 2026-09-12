@@ -20,8 +20,8 @@ from ai_software_engineer.product.context import (
     ProductDialogueActor,
     ProductDialogueContextItem,
 )
+from tests.manager.test_contracts import NOW, product_spec, request
 from tests.product.factories import prepared_product_facts
-from tests.project_manager.test_contracts import NOW, product_spec, request
 
 SCHEMA_DIR = Path(__file__).parents[2] / "schemas"
 
@@ -47,7 +47,7 @@ def _dialogue() -> tuple[ProductDialogueContextItem, ...]:
 
 def _manifest(tmp_path: Path, *, with_spec: bool = False) -> ProductContextManifest:
     prepared, profile, baseline = prepared_product_facts(
-        tmp_path, project_id="project_delivery_001"
+        tmp_path, repository_id="repository_delivery_001"
     )
     project_request = request(prepared)
     current = product_spec(project_request) if with_spec else None
@@ -78,7 +78,7 @@ def test_context_is_task_independent_deterministic_and_fail_closed(tmp_path: Pat
     manifest = _manifest(tmp_path)
     rebuilt = ProductContextBuilder().build(
         manifest.preparation,
-        manifest.project_profile,
+        manifest.repository_profile,
         manifest.project_baseline,
         manifest.project_request,
         dialogue=manifest.dialogue,
@@ -95,15 +95,15 @@ def test_context_is_task_independent_deterministic_and_fail_closed(tmp_path: Pat
     assert manifest.permissions.execute_shell is False
     assert manifest.permissions.change_project_state is False
     assert manifest.permissions.approve_product_spec is False
-    assert manifest.project_profile.languages[0].language.value == "python"
+    assert manifest.repository_profile.languages[0].language.value == "python"
     assert manifest.project_baseline.rules[0].layer.value == "platform_hard"
     assert manifest.project_baseline.rules[0].field == "safety.self_approval"
     assert not hasattr(manifest, "task_id")
     assert [item.uri for item in manifest.sources[:5]] == [
         "policy://product-agent/v0.1",
-        f"preparation://{manifest.project_id}",
-        f"project-profile://{manifest.project_id}",
-        f"baseline://{manifest.project_id}",
+        f"preparation://{manifest.repository_id}",
+        f"repository-profile://{manifest.repository_id}",
+        f"baseline://{manifest.repository_id}",
         f"request://{manifest.request_id}",
     ]
     manifest.validate_integrity()
@@ -121,14 +121,18 @@ def test_context_routes_current_spec_as_next_version(tmp_path: Path) -> None:
 def test_context_does_not_reuse_aggregate_digest_for_native_source_uris(
     tmp_path: Path,
 ) -> None:
-    base, profile, baseline = prepared_product_facts(tmp_path, project_id="project_delivery_001")
+    base, profile, baseline = prepared_product_facts(
+        tmp_path, repository_id="repository_delivery_001"
+    )
     prepared = ProjectPreparation.create(
-        organization_id=base.organization_id,
+        team_id=base.team_id,
         project_id=base.project_id,
-        project_root=base.project_root,
-        project_workspace_root=base.project_workspace_root,
-        organization_root=base.organization_root,
-        project_profile_sha256=base.project_profile_sha256,
+        project_manifest_sha256=base.project_manifest_sha256,
+        repository_id=base.repository_id,
+        repository_root=base.repository_root,
+        repository_workspace_root=base.repository_workspace_root,
+        team_root=base.team_root,
+        repository_profile_sha256=base.repository_profile_sha256,
         runtime_binding_sha256=base.runtime_binding_sha256,
         baseline_spec_sha256=base.baseline_spec_sha256,
         baseline_source_uris=("project://rules/AGENTS.md",),
@@ -147,7 +151,7 @@ def test_context_does_not_reuse_aggregate_digest_for_native_source_uris(
         next(
             source.sha256
             for source in manifest.sources
-            if source.uri == f"baseline://{prepared.project_id}"
+            if source.uri == f"baseline://{prepared.repository_id}"
         )
         == prepared.baseline_spec_sha256
     )
@@ -159,9 +163,11 @@ def test_context_rejects_cross_project_and_broken_dialogue(tmp_path: Path) -> No
     first_root.mkdir()
     second_root.mkdir()
     prepared, profile, baseline = prepared_product_facts(
-        first_root, project_id="project_delivery_001"
+        first_root, repository_id="repository_delivery_001"
     )
-    other_prepared, _, _ = prepared_product_facts(second_root, project_id="project_delivery_002")
+    other_prepared, _, _ = prepared_product_facts(
+        second_root, repository_id="repository_delivery_002"
+    )
     other_request = request(other_prepared)
 
     with pytest.raises(ProductContextLineageError, match="ProjectRequest"):
@@ -187,7 +193,7 @@ def test_context_rejects_cross_project_and_broken_dialogue(tmp_path: Path) -> No
 
 def test_context_rejects_naive_clock_and_integrity_tamper(tmp_path: Path) -> None:
     prepared, profile, baseline = prepared_product_facts(
-        tmp_path, project_id="project_delivery_001"
+        tmp_path, repository_id="repository_delivery_001"
     )
     project_request = request(prepared)
     with pytest.raises(ProductContextLineageError, match="timezone-aware"):

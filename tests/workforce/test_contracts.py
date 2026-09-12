@@ -1,4 +1,4 @@
-"""Organization-owned Agent, scheduling, lease, and model-allocation contracts."""
+"""Team-owned Agent, scheduling, lease, and model-allocation contracts."""
 
 import json
 from datetime import UTC, datetime, timedelta
@@ -18,12 +18,12 @@ from ai_software_engineer.domain import (
     ModelRoute,
     ModelRouteReason,
     ModelSelection,
-    OrganizationRole,
     RiskModelFloor,
     RiskTier,
     RoleAssignment,
     RunDemand,
     TaskLease,
+    TeamRole,
     WorkItem,
     WorkItemStatus,
     is_waiting,
@@ -41,7 +41,7 @@ def make_agent_profile() -> AgentProfile:
         version="v1",
         display_name="Alpha",
         capabilities=("python", "contract-testing", "architecture"),
-        eligible_roles=(OrganizationRole.CODER, OrganizationRole.QA, OrganizationRole.REVIEWER),
+        eligible_roles=(TeamRole.CODER, TeamRole.QA, TeamRole.REVIEWER),
         max_parallel_assignments=3,
         default_model_policy_id="model_policy_engineering_default",
         metadata={"team": "platform"},
@@ -83,7 +83,7 @@ def make_work_item(*, status: WorkItemStatus = WorkItemStatus.READY) -> WorkItem
     waiting = is_waiting(status)
     return WorkItem(
         task_id="task_workforce_001",
-        project_id="project_platform_001",
+        repository_id="repository_platform_001",
         status=status,
         priority=900,
         risk=RiskTier.HIGH,
@@ -105,7 +105,7 @@ def make_assignment(
 ) -> RoleAssignment:
     return RoleAssignment(
         id=f"assignment_{role.value}_{attempt:03d}",
-        project_id="project_platform_001",
+        repository_id="repository_platform_001",
         task_id="task_workforce_001",
         agent_id=agent_id,
         role=role,
@@ -130,7 +130,7 @@ def make_run_allocation() -> AgentRunAllocation:
     return AgentRunAllocation(
         run_id="run_workforce_coder_001",
         assignment_id="assignment_coder_001",
-        project_id="project_platform_001",
+        repository_id="repository_platform_001",
         task_id="task_workforce_001",
         agent_id="agent_engineer_alpha",
         role=AgentRole.CODER,
@@ -144,13 +144,13 @@ def make_run_allocation() -> AgentRunAllocation:
     )
 
 
-def test_agent_profile_is_organization_owned_and_not_a_concrete_model_config() -> None:
+def test_agent_profile_is_team_owned_and_not_a_concrete_model_config() -> None:
     profile = make_agent_profile()
 
     assert profile.eligible_roles == (
-        OrganizationRole.CODER,
-        OrganizationRole.QA,
-        OrganizationRole.REVIEWER,
+        TeamRole.CODER,
+        TeamRole.QA,
+        TeamRole.REVIEWER,
     )
     assert profile.max_parallel_assignments == 3
     payload = profile.to_wire()
@@ -159,21 +159,21 @@ def test_agent_profile_is_organization_owned_and_not_a_concrete_model_config() -
         AgentProfile.model_validate(payload)
 
 
-def test_agent_profile_declares_product_as_an_organization_role_only() -> None:
+def test_agent_profile_declares_product_as_an_team_role_only() -> None:
     profile = make_agent_profile().model_copy(
         update={
             "eligible_roles": (
-                OrganizationRole.PROJECT_MANAGER,
-                OrganizationRole.PRODUCT,
-                OrganizationRole.DESIGNER,
+                TeamRole.MANAGER,
+                TeamRole.PRODUCT,
+                TeamRole.DESIGNER,
             )
         }
     )
 
     assert profile.eligible_roles == (
-        OrganizationRole.PROJECT_MANAGER,
-        OrganizationRole.PRODUCT,
-        OrganizationRole.DESIGNER,
+        TeamRole.MANAGER,
+        TeamRole.PRODUCT,
+        TeamRole.DESIGNER,
     )
     schema = json.loads(
         (Path(__file__).parents[2] / "schemas" / "workforce.schema.json").read_text(

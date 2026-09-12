@@ -100,8 +100,8 @@ def _clock() -> datetime:
     return DELIVERY_TIME
 
 
-def _task(project_root: Path) -> Task:
-    return make_task().model_copy(update={"repository": str(project_root)})
+def _task(repository_root: Path) -> Task:
+    return make_task().model_copy(update={"repository": str(repository_root)})
 
 
 def _definitions() -> dict[AgentRole, AgentDefinition]:
@@ -249,11 +249,11 @@ def _successful_adapter(
 def test_fixture_task_reaches_done_with_replayable_events_and_artifacts(
     tmp_path: Path,
 ) -> None:
-    project_root = tmp_path / "project"
-    project_root.mkdir()
-    task = _task(project_root)
+    repository_root = tmp_path / "project"
+    repository_root.mkdir()
+    task = _task(repository_root)
     definitions = _definitions()
-    contexts = FileRunContextBuilder(project_root)
+    contexts = FileRunContextBuilder(repository_root)
     adapter, expected_context_ids = _successful_adapter(task, definitions, contexts)
     database = tmp_path / "state.sqlite3"
     artifacts = FileArtifactStore(tmp_path / "artifacts")
@@ -313,16 +313,16 @@ def test_fixture_task_reaches_done_with_replayable_events_and_artifacts(
 def test_agent_failure_stops_at_the_current_checkpoint_without_an_artifact(
     tmp_path: Path,
 ) -> None:
-    project_root = tmp_path / "project"
-    project_root.mkdir()
-    task = _task(project_root)
+    repository_root = tmp_path / "project"
+    repository_root.mkdir()
+    task = _task(repository_root)
     artifacts = FileArtifactStore(tmp_path / "artifacts")
     with SqliteTaskRepository(tmp_path / "state.sqlite3") as repository:
         repository.create(task)
         runner = SerialOrchestrator(
             repository=repository,
             artifact_store=artifacts,
-            context_builder=FileRunContextBuilder(project_root),
+            context_builder=FileRunContextBuilder(repository_root),
             agent_adapter=FakeAgentAdapter(default=FakeScenario(behavior=FakeBehavior.TIMEOUT)),
             agent_definitions=_definitions(),
             identities=FixedIdentityFactory(),
@@ -340,11 +340,11 @@ def test_agent_failure_stops_at_the_current_checkpoint_without_an_artifact(
 
 
 def test_qa_fail_is_persisted_but_cannot_advance_to_review(tmp_path: Path) -> None:
-    project_root = tmp_path / "project"
-    project_root.mkdir()
-    task = _task(project_root)
+    repository_root = tmp_path / "project"
+    repository_root.mkdir()
+    task = _task(repository_root)
     definitions = _definitions()
-    contexts = FileRunContextBuilder(project_root)
+    contexts = FileRunContextBuilder(repository_root)
     adapter, _ = _successful_adapter(
         task,
         definitions,
@@ -377,11 +377,11 @@ def test_qa_fail_is_persisted_but_cannot_advance_to_review(tmp_path: Path) -> No
 
 
 def test_missing_plan_criterion_cannot_advance_to_implementation(tmp_path: Path) -> None:
-    project_root = tmp_path / "project"
-    project_root.mkdir()
-    task = _task(project_root)
+    repository_root = tmp_path / "project"
+    repository_root.mkdir()
+    task = _task(repository_root)
     definitions = _definitions()
-    contexts = FileRunContextBuilder(project_root)
+    contexts = FileRunContextBuilder(repository_root)
     adapter, _ = _successful_adapter(
         task,
         definitions,
@@ -411,11 +411,11 @@ def test_missing_plan_criterion_cannot_advance_to_implementation(tmp_path: Path)
 
 
 def test_duplicate_run_identity_stops_before_the_second_agent(tmp_path: Path) -> None:
-    project_root = tmp_path / "project"
-    project_root.mkdir()
-    task = _task(project_root)
+    repository_root = tmp_path / "project"
+    repository_root.mkdir()
+    task = _task(repository_root)
     definitions = _definitions()
-    contexts = FileRunContextBuilder(project_root)
+    contexts = FileRunContextBuilder(repository_root)
     adapter, _ = _successful_adapter(task, definitions, contexts)
     artifacts = FileArtifactStore(tmp_path / "artifacts")
     with SqliteTaskRepository(tmp_path / "state.sqlite3") as repository:
@@ -441,15 +441,15 @@ def test_duplicate_run_identity_stops_before_the_second_agent(tmp_path: Path) ->
 
 
 def test_non_new_task_is_rejected_without_new_events(tmp_path: Path) -> None:
-    project_root = tmp_path / "project"
-    project_root.mkdir()
-    task = _task(project_root).model_copy(update={"status": TaskStatus.PLANNING})
+    repository_root = tmp_path / "project"
+    repository_root.mkdir()
+    task = _task(repository_root).model_copy(update={"status": TaskStatus.PLANNING})
     with SqliteTaskRepository(tmp_path / "state.sqlite3") as repository:
         repository.create(task)
         runner = SerialOrchestrator(
             repository=repository,
             artifact_store=FileArtifactStore(tmp_path / "artifacts"),
-            context_builder=FileRunContextBuilder(project_root),
+            context_builder=FileRunContextBuilder(repository_root),
             agent_adapter=FakeAgentAdapter(default=FakeScenario(behavior=FakeBehavior.TIMEOUT)),
             agent_definitions=_definitions(),
             identities=FixedIdentityFactory(),

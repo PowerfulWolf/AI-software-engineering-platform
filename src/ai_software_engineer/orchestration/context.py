@@ -37,13 +37,13 @@ class FileRunContextBuilder:
 
     def __init__(
         self,
-        project_root: str | Path,
+        repository_root: str | Path,
         *,
         sources: tuple[ContextSource, ...] = (),
         context_store: ContextStore | None = None,
         budget: ContextBudget = DEFAULT_CONTEXT_BUDGET,
     ) -> None:
-        self._project_root = Path(project_root)
+        self._repository_root = Path(repository_root)
         self._sources = sources
         self._context_store = context_store
         self._budget = budget
@@ -60,7 +60,7 @@ class FileRunContextBuilder:
         """Compile machine policy, Task, role and persisted Artifact wire payloads."""
         artifact_sources = self._artifact_sources(task, agent, input_artifacts)
         builder = FileContextBuilder(
-            self._project_root,
+            self._repository_root,
             agent.permissions,
             sources=self._sources + artifact_sources,
             budget=self._budget,

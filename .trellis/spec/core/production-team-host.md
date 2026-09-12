@@ -20,12 +20,12 @@ ProductionConfig.path_from_environment(environment: Mapping[str, str] | None = N
 _default_platform_root() -> str
 _normalize_platform_root(value: str) -> str
 
-OrganizationTeamHost.from_environment(
+TeamHost.from_environment(
     environment: Mapping[str, str] | None = None,
-) -> OrganizationTeamHost
-OrganizationTeamHost.project_entry() -> UnifiedProjectEntryService
-OrganizationTeamHost.work_queue -> MySqlPersistentWorkQueue
-OrganizationTeamHost.planner_dispatcher(*, demand_builder, worker_id,
+) -> TeamHost
+TeamHost.project_entry() -> UnifiedProjectEntryService
+TeamHost.work_queue -> MySqlPersistentWorkQueue
+TeamHost.planner_dispatcher(*, demand_builder, worker_id,
                                         owner_token_factory=None) -> DispatcherLoop
 project_entry() -> UnifiedProjectEntryService
 
@@ -40,7 +40,7 @@ MySqlTaskRepository.current_revision(task_id: TaskId) -> int
 MySqlDispatchAuthority.seed_snapshot(
     snapshot: DispatchWorkforceSnapshot,
 ) -> DispatchWorkforceSnapshot
-MySqlDispatchAuthority.current_snapshot(*, project_id: ProjectId,
+MySqlDispatchAuthority.current_snapshot(*, repository_id: RepositoryId,
                                         task_id: TaskId) -> DispatchWorkforceSnapshot
 MySqlDispatchAuthority.commit_if_current(
     record: DispatchCommitRecord,
@@ -55,7 +55,7 @@ StructuredModelClient.complete(*, instructions: str,
 AgentAdapter.run(request: AgentRequest) -> AgentResult
 ModelRouteAttemptStore.append(attempt: ModelRouteAttempt) -> ModelRouteAttempt
 
-ProductionProjectDeliveryBackend.prepare(project_root: str) -> PrepareProjectResult
+ProductionProjectDeliveryBackend.prepare(repository_root: str) -> PrepareProjectResult
 ProductionProjectDeliveryBackend.start_product(...) -> ProductDiscoveryResult
 ProductionProjectDeliveryBackend.reply_product(...) -> ProductDiscoveryResult
 ProductionProjectDeliveryBackend.approve_product(...) -> ProductDiscoveryResult
@@ -100,14 +100,14 @@ Environment contract:
 - `codex_cli` route 不得声明 endpoint/API key；`responses` route 必须声明 endpoint 与
   `api_key_env`。示例默认 `live_model_execution=false`，生产执行必须显式改为 `true`。
 - 未注入测试 provider 时，`project_entry()` 惰性缓存
-  `OrganizationTeamHost.from_environment().project_entry()`；不得要求每个 CLI 进程手工调用
+  `TeamHost.from_environment().project_entry()`；不得要求每个 CLI 进程手工调用
   `configure_project_entry(...)`，也不得因配置失败回退 fake Agent。
-- Host 创建时必须先验证 MySQL 并幂等初始化 schema，再打开 organization workspace 和 project
+- Host 创建时必须先验证 MySQL 并幂等初始化 schema，再打开唯一 Team workspace 和 sibling Project
   registry。`platform_root`/sidecar/worktree 不得写入目标项目。
-- project registry 现在由 `CompanyWorkspace.project_registry()` 装配，位于
-  `companies/<company_id>/projects/`；`company_knowledge_paths` 显式选择的资料作为只读、
-  脱敏、digest-bound 的公司上下文纳入 baseline。公司归属契约见 `company-workspace.md`。
-- 组织稳定拥有三个不同的 Coder、QA、Reviewer AgentProfile；model/provider 是每次 Run 的
+- Project registry 由 `TeamWorkspace.project_registry()` 装配，位于
+  `<platform_root>/projects/`；`team_knowledge_paths` 显式选择的资料作为只读、
+  脱敏、digest-bound 的 Team 上下文纳入 baseline。所有权契约见 `team-workspace.md`。
+- Team 稳定拥有三个不同的 Coder、QA、Reviewer AgentProfile；model/provider 是每次 Run 的
   `ModelSelection`，不能成为 Agent 身份。
 - Host 装配组织级 `MySqlPersistentWorkQueue`；Planner 拥有流转与派发策略，Dispatcher 只执行有界、
   确定性的 tick。完整事务和 Lease fence 见 `persistent-work-queue.md`。
@@ -137,16 +137,16 @@ Environment contract:
 
 #### Immutable policy revisions (2026-09-08)
 
-Scope: changing the configured primary model in an already initialized organization, both native
+Scope: changing the configured primary model in an already initialized Team, both native
 and recovery dispatch. `AgentProfile.id` and `default_model_policy_id` must remain stable.
 
-Signatures: `FileOrganizationWorkforceStore.put_policy(policy, *, versioned=False)` and
+Signatures: `FileTeamWorkforceStore.put_policy(policy, *, versioned=False)` and
 `get_policy(policy_id, *, version=None)`. Production callers opt into versioned writes. `_workforce`
 sets `ModelPolicy.version = "v0.1-" + sha256(canonical_policy_without_version)`; canonical encoding is
 UTF-8, sorted JSON keys, compact separators, ensure_ascii=False. Full policy content participates.
 ModelSelection already contains policy_version; no wire or SQL schema changes are required.
 
-Versioned files use `<policy-id>__<sha256(version)>.json` in organization/model-policies, with the
+Versioned files use `<policy-id>__<sha256(version)>.json` in `team/model-policies`, with the
 same key as envelope object_id. Their payload retains the logical policy ID/version. Legacy
 `<policy-id>.json` remains unchanged. No latest pointer or implicit policy promotion is introduced.
 Exact-version reads select the versioned file, otherwise accept legacy only if its version matches.
@@ -355,24 +355,24 @@ module while the Agent owns implementation decisions.
 
 ### 3.4 Worktree and delivery
 
-Production preparation uses `ProjectManagerSkillService(versioned_preparations=True)` and
-`RuntimeWorkspaceBinder(versioned=True)`. A stable project ID is not a single immutable baseline:
-new profiles are stored at `profile/project-profile-<profile_sha256>.json`, bindings at
+Production preparation uses `ManagerSkillService(versioned_preparations=True)` and
+`RuntimeWorkspaceBinder(versioned=True)`. A stable Repository ID is not a single immutable baseline:
+new profiles are stored at `profile/repository-profile-<profile_sha256>.json`, bindings at
 `policy/runtime-workspace-binding-<binding_sha256>.json`, and preparation records under
-`policy/preparations-<profile_sha256>/`. All stay inside the same company project module.
+`policy/preparations-<profile_sha256>/`. All stay inside the same Project-owned Repository sidecar.
 Matching legacy fixed-name records are replayed with their original timestamps; other legacy
 records remain untouched. New snapshots are exclusively published, never replace concurrent winners.
-`load_project_profile(sidecar, profile_sha256)` must read the requested hash, not a mutable latest
+`load_repository_profile(sidecar, profile_sha256)` must read the requested hash, not a mutable latest
 pointer. A legacy fallback must pass that exact hash; corrupt/symlink snapshots never fall back.
 Low-level composition remains legacy by default. New production intakes may prepare newer facts,
 but existing delivery/product/stage gates still compare their exact preparation and source revision;
 this does not authorize rebasing old approval or QA/Review evidence in place.
 
 - dispatch 后才可 materialize Task；Task repository、Artifact/Context/Evidence roots、Agent definitions
-  和 dispatch bundle 必须来自同一 project sidecar 与 exact revision lineage。
+  和 dispatch bundle 必须来自同一 Repository sidecar 与 exact Project/revision lineage。
 - 目标项目必须是真实目录、Git root、clean working tree 且 HEAD 为 full commit。Task `allowed_paths`
-  来自 TechnicalDesign affected paths，commands 来自确定性 ProjectProfile build-system allowlist。
-- Coder worktree 位于 `<platform_root>/worktrees/<project-id>/<task-id>/coder-attempt-01` 并使用
+  来自 TechnicalDesign affected paths，commands 来自确定性 RepositoryProfile build-system allowlist。
+- Coder worktree 位于 `<platform_root>/worktrees/<repository-id>/<task-id>/coder-attempt-01` 并使用
   `ai/<task-id>/attempt-1` branch；QA、Reviewer 在 exact candidate SHA 的不同 detached worktree。
 - Coder 必须留下完整 intended diff 和 provisional report；平台 finalizer 形成 clean candidate commit，
   且 changed paths 不越权。QA/Reviewer 不得改变 HEAD 或工作树。
@@ -450,14 +450,14 @@ body 或目标项目中的 secret。
 - `tests/contracts/test_json_schema_contracts.py`：ProductionConfig positive/negative canonical schema；
 - `tests/store/test_mysql_repository.py`：与 SQLite 可观察行为一致、atomic append、replay/conflict、rollback、
   reopen；必须通过 `ASE_TEST_MYSQL_DSN` 显式 opt-in；
-- `tests/project_manager/test_mysql_dispatch_authority.py`：snapshot/commit 幂等、stale fence、reservation、
+- `tests/manager/test_mysql_dispatch_authority.py`：snapshot/commit 幂等、stale fence、reservation、
   corruption、跨连接恢复；三种 Task 终态释放容量而不删除分配事实，非终态仍占容量；
 - `tests/e2e/test_joint_delivery.py`：一个 Host 连续完成五次双仓需求（10 个原生 Task），超过
   Agent 的 8 个并行槽位仍可串行交付，不能通过增加 capacity 或等待 15 分钟掩盖 Lease 泄漏；
 - `tests/agents/test_codex_cli.py`、`test_responses.py`、`test_fallback.py`、
   `test_openai_compatible.py`：request/response、Git、tool、error mapping、fallback allowlist 和 attempt replay；
-- `tests/project_manager/test_production_agents.py`：Product/Designer/Planner typed draft 和 exact lineage；
-- `tests/project_manager/test_production_backend.py`：真实 MySQL + 临时 Git + scripted team 到 DONE，独立
+- `tests/manager/test_production_agents.py`：Product/Designer/Planner typed draft 和 exact lineage；
+- `tests/manager/test_production_backend.py`：真实 MySQL + 临时 Git + scripted team 到 DONE，独立
   verifier worktrees 检查 exact candidate，主 checkout 零污染，并断言三个 delivery role 的生产预算；
 - `tests/recovery/test_execution.py`：offline Codex runner 直接断言 recovery 将相同 role timeout 传入
   subprocess seam；
@@ -482,7 +482,7 @@ platform_root.mkdir(parents=True, exist_ok=True)
 # Validation rejects every lexical `..` component. Loading stays pure; an explicit
 # workspace writer owns directory creation later.
 config = ProductionConfig.model_validate({"platform_root": raw_value})
-CompanyWorkspace.initialize(config.platform_root, company_id)
+TeamWorkspace.initialize(config.platform_root, team_id)
 ```
 
 `/tmp/platform/../escape` and `~/platform/../escape` are invalid even if filesystem normalization
@@ -496,7 +496,7 @@ would produce an absolute path. `ProductionConfig` parsing and read-only project
 ```python
 # Per-command manual composition, plaintext secret, and fake fallback.
 config = {"mysql_dsn": "mysql://user:password@host/db"}
-configure_project_entry(lambda: fake_team(project_root))
+configure_project_entry(lambda: fake_team(repository_root))
 result = planner.choose_and_commit_agent_and_model()
 ```
 
@@ -504,13 +504,13 @@ result = planner.choose_and_commit_agent_and_model()
 
 ```python
 config = ProductionConfig.from_environment()
-host = OrganizationTeamHost(config=config, environment=os.environ)
+host = TeamHost(config=config, environment=os.environ)
 entry = host.project_entry()
-result = entry.start(StartProjectDelivery(project_root=absolute_git_root, requirement=requirement))
+result = entry.start(StartProjectDelivery(repository_root=absolute_git_root, requirement=requirement))
 ```
 
 前者让 secret、fake 执行和调度权限穿透用户入口；后者由唯一 production composition root 加载环境
-secret、MySQL、organization-owned team 和 policy-bound adapters，Planner 仍只能 preview，Project
+secret、MySQL、Team-owned team 和 policy-bound adapters，Planner 仍只能 preview，Project
 Manager 在 MySQL authority 下重新校验后 commit dispatch。
 
 ### Role timeout budget

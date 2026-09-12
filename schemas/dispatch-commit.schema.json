@@ -3,11 +3,11 @@
   "$id": "https://ai-software-engineer.local/schemas/dispatch-commit.schema.json",
   "title": "DispatchCommitRecord",
   "type": "object", "additionalProperties": false,
-  "required": ["kind", "schema_version", "id", "project_id", "task_id", "project_request_id", "execution_plan_id", "execution_plan_sha256", "execution_plan_phase_ids", "ready_request_revision", "ready_request_revision_sha256", "planner_run_id", "planner_run_record_sha256", "design_checkpoint_sha256", "planning_authorization_sha256", "planner_checkpoint_sha256", "planning_preview_id", "planning_preview_sha256", "workforce_snapshot_sha256", "stage_authorization_sha256", "task", "phases", "committed_at", "dispatch_sha256"],
+  "required": ["kind", "schema_version", "id", "repository_id", "task_id", "project_request_id", "execution_plan_id", "execution_plan_sha256", "execution_plan_phase_ids", "ready_request_revision", "ready_request_revision_sha256", "planner_run_id", "planner_run_record_sha256", "design_checkpoint_sha256", "planning_authorization_sha256", "planner_checkpoint_sha256", "planning_preview_id", "planning_preview_sha256", "workforce_snapshot_sha256", "stage_authorization_sha256", "task", "phases", "committed_at", "dispatch_sha256"],
   "properties": {
     "kind": {"const": "dispatch_commit"}, "schema_version": {"const": "v0.1"},
     "id": {"type": "string", "pattern": "^dispatch_commit_[a-f0-9]{64}$"},
-    "project_id": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/projectId"},
+    "repository_id": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/repositoryId"},
     "task_id": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/taskId"},
     "project_request_id": {"type": "string", "pattern": "^request_[a-z0-9][a-z0-9_-]{2,63}$"},
     "execution_plan_id": {"$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/executionPlanId"},

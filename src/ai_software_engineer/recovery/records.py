@@ -117,7 +117,7 @@ class RecoveryTaskRecord(DomainModel):
             "recovery_rebound_request_sha256": self.rebound_request.request_sha256,
             "recovery_target_preparation_sha256": self.rebound_request.preparation_sha256,
             "project_request_id": self.rebound_request.id,
-            "project_id": self.rebound_request.project_id,
+            "repository_id": self.rebound_request.repository_id,
         }
         if any(self.task.metadata.get(key) != value for key, value in expected.items()):
             raise ValueError("recovery Task/request metadata mismatch")
@@ -150,11 +150,11 @@ class RecoveryTaskRecord(DomainModel):
             or authorization.command.plan_sha256 != plan.plan_sha256
             or self.authorization_sha256 != authorization.authorization_sha256
             or not authorization.decision.approved
-            or self.task.repository != plan.source.scope.project_root
+            or self.task.repository != plan.source.scope.repository_root
             or self.task.base_ref != plan.target_base_revision
             or self.task.created_at != plan.created_at
             or self.task.updated_at != plan.created_at
-            or self.rebound_request.project_id != plan.source.scope.project_id
+            or self.rebound_request.repository_id != plan.source.scope.repository_id
             or self.rebound_request.preparation_sha256 != plan.target_preparation_sha256
             or any(self.task.metadata.get(key) != value for key, value in expected.items())
         ):

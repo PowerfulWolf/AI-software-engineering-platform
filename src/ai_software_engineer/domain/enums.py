@@ -54,10 +54,10 @@ class AgentRole(StrEnum):
     REVIEWER = "reviewer"
 
 
-class OrganizationRole(StrEnum):
-    """Long-lived roles that an organization-owned AgentProfile may declare."""
+class TeamRole(StrEnum):
+    """Long-lived roles that a Team-owned AgentProfile may declare."""
 
-    PROJECT_MANAGER = "project_manager"
+    MANAGER = "manager"
     PRODUCT = "product"
     DESIGNER = "designer"
     PLANNER = "planner"

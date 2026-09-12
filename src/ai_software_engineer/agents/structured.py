@@ -107,18 +107,18 @@ class CodexCliStructuredModelClient:
     def __init__(
         self,
         *,
-        project_root: str | Path,
+        repository_root: str | Path,
         model: str,
         executable: str = "codex",
         reasoning_effort: str = "medium",
         environment: Mapping[str, str] | None = None,
     ) -> None:
-        root = Path(project_root).expanduser().resolve(strict=False)
+        root = Path(repository_root).expanduser().resolve(strict=False)
         if not root.is_dir() or root.is_symlink():
             raise ValueError("Codex structured project root must be an existing real directory")
         if reasoning_effort not in {"low", "medium", "high", "xhigh"}:
             raise ValueError("unsupported Codex reasoning effort")
-        self._project_root = root
+        self._repository_root = root
         self._model = _safe_text(model, "model")
         self._executable = _safe_text(executable, "executable")
         self._reasoning_effort = reasoning_effort
@@ -160,10 +160,10 @@ class CodexCliStructuredModelClient:
                         "-c",
                         f'model_reasoning_effort="{self._reasoning_effort}"',
                         "-C",
-                        str(self._project_root),
+                        str(self._repository_root),
                         "-",
                     ),
-                    cwd=self._project_root,
+                    cwd=self._repository_root,
                     env=self._environment,
                     input=prompt,
                     capture_output=True,

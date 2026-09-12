@@ -1,0 +1,2277 @@
+{
+  "$defs": {
+    "AcceptanceDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "verification": {
+          "minLength": 1,
+          "title": "Verification",
+          "type": "string"
+        },
+        "test_ids": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Test Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "description",
+        "verification"
+      ],
+      "title": "AcceptanceDraft",
+      "type": "object"
+    },
+    "AcceptanceMappingDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "acceptance_criterion_id": {
+          "minLength": 1,
+          "title": "Acceptance Criterion Id",
+          "type": "string"
+        },
+        "verification_strategy": {
+          "minLength": 1,
+          "title": "Verification Strategy",
+          "type": "string"
+        },
+        "test_levels": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Test Levels",
+          "type": "array"
+        }
+      },
+      "required": [
+        "acceptance_criterion_id",
+        "verification_strategy",
+        "test_levels"
+      ],
+      "title": "AcceptanceMappingDraft",
+      "type": "object"
+    },
+    "AgentRole": {
+      "description": "Delivery-runtime roles bound to Task artifacts and state transitions.",
+      "enum": [
+        "orchestrator",
+        "coder",
+        "qa",
+        "reviewer"
+      ],
+      "title": "AgentRole",
+      "type": "string"
+    },
+    "BrainTier": {
+      "enum": [
+        "economy",
+        "standard",
+        "reasoning",
+        "critical"
+      ],
+      "title": "BrainTier",
+      "type": "string"
+    },
+    "Candidate": {
+      "additionalProperties": false,
+      "properties": {
+        "unit_id": {
+          "pattern": "^unit_[a-f0-9]{16}$",
+          "title": "Unit Id",
+          "type": "string"
+        },
+        "revision": {
+          "minLength": 1,
+          "title": "Revision",
+          "type": "string"
+        }
+      },
+      "required": [
+        "unit_id",
+        "revision"
+      ],
+      "title": "Candidate",
+      "type": "object"
+    },
+    "ChildDelivery": {
+      "additionalProperties": false,
+      "properties": {
+        "unit_id": {
+          "pattern": "^unit_[a-f0-9]{16}$",
+          "title": "Unit Id",
+          "type": "string"
+        },
+        "checkpoint": {
+          "$ref": "#/$defs/ProjectDeliveryCheckpoint"
+        }
+      },
+      "required": [
+        "unit_id",
+        "checkpoint"
+      ],
+      "title": "ChildDelivery",
+      "type": "object"
+    },
+    "CommandResult": {
+      "additionalProperties": false,
+      "description": "Bounded, serializable evidence returned by one command invocation.",
+      "properties": {
+        "argv": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Argv",
+          "type": "array"
+        },
+        "cwd": {
+          "minLength": 1,
+          "title": "Cwd",
+          "type": "string"
+        },
+        "returncode": {
+          "title": "Returncode",
+          "type": "integer"
+        },
+        "stdout": {
+          "title": "Stdout",
+          "type": "string"
+        },
+        "stderr": {
+          "title": "Stderr",
+          "type": "string"
+        },
+        "duration_ms": {
+          "minimum": 0,
+          "title": "Duration Ms",
+          "type": "integer"
+        },
+        "stdout_truncated": {
+          "default": false,
+          "title": "Stdout Truncated",
+          "type": "boolean"
+        },
+        "stderr_truncated": {
+          "default": false,
+          "title": "Stderr Truncated",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "argv",
+        "cwd",
+        "returncode",
+        "stdout",
+        "stderr",
+        "duration_ms"
+      ],
+      "title": "CommandResult",
+      "type": "object"
+    },
+    "ComponentDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Key",
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "responsibility": {
+          "minLength": 1,
+          "title": "Responsibility",
+          "type": "string"
+        },
+        "affected_paths": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Affected Paths",
+          "type": "array"
+        }
+      },
+      "required": [
+        "key",
+        "name",
+        "responsibility",
+        "affected_paths"
+      ],
+      "title": "ComponentDraft",
+      "type": "object"
+    },
+    "ContextSource": {
+      "additionalProperties": false,
+      "description": "A declared inline or root-relative source eligible for role routing.",
+      "properties": {
+        "source_id": {
+          "pattern": "^[a-z][a-z0-9_.:-]{0,127}$",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "uri": {
+          "minLength": 1,
+          "title": "Uri",
+          "type": "string"
+        },
+        "content": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content"
+        },
+        "relative_path": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relative Path"
+        },
+        "roles": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/AgentRole"
+          },
+          "title": "Roles",
+          "type": "array"
+        },
+        "priority": {
+          "default": 100,
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Priority",
+          "type": "integer"
+        },
+        "required": {
+          "default": false,
+          "title": "Required",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "source_id",
+        "uri"
+      ],
+      "title": "ContextSource",
+      "type": "object"
+    },
+    "DeliveryFailureCode": {
+      "enum": [
+        "PROJECT_SPEC_CONFLICT",
+        "PERMISSION_DENIED",
+        "RESOURCE_UNAVAILABLE",
+        "TRANSIENT_PROVIDER_FAILURE",
+        "INVALID_AGENT_OUTPUT",
+        "RETRY_BUDGET_EXHAUSTED",
+        "CHECKPOINT_DRIFT",
+        "TASK_COLLISION",
+        "WORKTREE_DRIFT",
+        "INVARIANT_VIOLATION"
+      ],
+      "title": "DeliveryFailureCode",
+      "type": "string"
+    },
+    "DeliveryNextAction": {
+      "enum": [
+        "PREPARE_PROJECT",
+        "CONTINUE_PRODUCT_DISCOVERY",
+        "RECORD_PRODUCT_REPLY",
+        "APPROVE_PRODUCT_SPEC",
+        "RUN_DESIGNER",
+        "RUN_PLANNER",
+        "COMMIT_DISPATCH",
+        "RUN_DELIVERY",
+        "REQUEST_HUMAN",
+        "RETRY_STAGE",
+        "NONE"
+      ],
+      "title": "DeliveryNextAction",
+      "type": "string"
+    },
+    "DeliveryStage": {
+      "enum": [
+        "PREPARING",
+        "PRODUCT_DISCOVERY",
+        "WAITING_PRODUCT_REPLY",
+        "WAITING_PRODUCT_APPROVAL",
+        "DESIGNING",
+        "PLANNING",
+        "DISPATCHING",
+        "DELIVERING",
+        "DONE",
+        "WAITING_HUMAN",
+        "BLOCKED",
+        "FAILED"
+      ],
+      "title": "DeliveryStage",
+      "type": "string"
+    },
+    "DeliveryStageAttempts": {
+      "additionalProperties": false,
+      "description": "Bounded attempt counters kept independently for every resumable stage.",
+      "properties": {
+        "preparing": {
+          "default": 0,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Preparing",
+          "type": "integer"
+        },
+        "product_discovery": {
+          "default": 0,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Product Discovery",
+          "type": "integer"
+        },
+        "designing": {
+          "default": 0,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Designing",
+          "type": "integer"
+        },
+        "planning": {
+          "default": 0,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Planning",
+          "type": "integer"
+        },
+        "dispatching": {
+          "default": 0,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Dispatching",
+          "type": "integer"
+        },
+        "delivering": {
+          "default": 0,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Delivering",
+          "type": "integer"
+        }
+      },
+      "title": "DeliveryStageAttempts",
+      "type": "object"
+    },
+    "DesignRiskDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Key",
+          "type": "string"
+        },
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "tier": {
+          "$ref": "#/$defs/RiskTier"
+        },
+        "mitigation": {
+          "minLength": 1,
+          "title": "Mitigation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "description",
+        "tier",
+        "mitigation"
+      ],
+      "title": "DesignRiskDraft",
+      "type": "object"
+    },
+    "DesignStepDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Key",
+          "type": "string"
+        },
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "component_keys": {
+          "items": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Component Keys",
+          "type": "array"
+        },
+        "verification": {
+          "minLength": 1,
+          "title": "Verification",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "description",
+        "component_keys",
+        "verification"
+      ],
+      "title": "DesignStepDraft",
+      "type": "object"
+    },
+    "DialogueMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "speaker": {
+          "title": "Speaker",
+          "type": "string"
+        },
+        "text": {
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "speaker",
+        "text"
+      ],
+      "title": "DialogueMessage",
+      "type": "object"
+    },
+    "DirectoryScope": {
+      "additionalProperties": false,
+      "properties": {
+        "units": {
+          "items": {
+            "$ref": "#/$defs/DirectoryUnit"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Units",
+          "type": "array"
+        }
+      },
+      "required": [
+        "units"
+      ],
+      "title": "DirectoryScope",
+      "type": "object"
+    },
+    "DirectoryUnit": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^unit_[a-f0-9]{16}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "root": {
+          "minLength": 1,
+          "title": "Root",
+          "type": "string"
+        },
+        "selected_paths": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Selected Paths",
+          "type": "array"
+        },
+        "base_revision": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{40,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Base Revision"
+        }
+      },
+      "required": [
+        "id",
+        "root",
+        "selected_paths",
+        "base_revision"
+      ],
+      "title": "DirectoryUnit",
+      "type": "object"
+    },
+    "ExecutionPlanDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "phases": {
+          "items": {
+            "$ref": "#/$defs/PhaseDraft"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "title": "Phases",
+          "type": "array"
+        }
+      },
+      "required": [
+        "phases"
+      ],
+      "title": "ExecutionPlanDraft",
+      "type": "object"
+    },
+    "IntegrationCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "unit_id": {
+          "pattern": "^unit_[a-f0-9]{16}$",
+          "title": "Unit Id",
+          "type": "string"
+        },
+        "consumes": {
+          "items": {
+            "pattern": "^unit_[a-f0-9]{16}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Consumes",
+          "type": "array"
+        },
+        "acceptance_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Acceptance Ids",
+          "type": "array"
+        },
+        "interface_ids": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Interface Ids",
+          "type": "array"
+        },
+        "argv": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Argv",
+          "type": "array"
+        },
+        "timeout_seconds": {
+          "default": 120,
+          "maximum": 600,
+          "minimum": 1,
+          "title": "Timeout Seconds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "unit_id",
+        "consumes",
+        "acceptance_ids",
+        "argv"
+      ],
+      "title": "IntegrationCheck",
+      "type": "object"
+    },
+    "IntegrationEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/Candidate"
+          },
+          "title": "Candidates",
+          "type": "array"
+        },
+        "checks": {
+          "items": {
+            "$ref": "#/$defs/CommandResult"
+          },
+          "title": "Checks",
+          "type": "array"
+        }
+      },
+      "required": [
+        "plan_sha256",
+        "candidates",
+        "checks"
+      ],
+      "title": "IntegrationEvidence",
+      "type": "object"
+    },
+    "InterfaceContract": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "producer": {
+          "pattern": "^unit_[a-f0-9]{16}$",
+          "title": "Producer",
+          "type": "string"
+        },
+        "consumers": {
+          "items": {
+            "pattern": "^unit_[a-f0-9]{16}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Consumers",
+          "type": "array"
+        },
+        "specification": {
+          "minLength": 1,
+          "title": "Specification",
+          "type": "string"
+        },
+        "compatibility": {
+          "minLength": 1,
+          "title": "Compatibility",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "producer",
+        "consumers",
+        "specification",
+        "compatibility"
+      ],
+      "title": "InterfaceContract",
+      "type": "object"
+    },
+    "JointApproval": {
+      "additionalProperties": false,
+      "properties": {
+        "product_spec_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Product Spec Sha256",
+          "type": "string"
+        },
+        "checkpoint_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Checkpoint Sha256",
+          "type": "string"
+        },
+        "reference": {
+          "minLength": 1,
+          "title": "Reference",
+          "type": "string"
+        },
+        "approved_at": {
+          "format": "date-time",
+          "title": "Approved At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "product_spec_sha256",
+        "checkpoint_sha256",
+        "reference",
+        "approved_at"
+      ],
+      "title": "JointApproval",
+      "type": "object"
+    },
+    "JointExecutionPlan": {
+      "additionalProperties": false,
+      "properties": {
+        "design_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Design Sha256",
+          "type": "string"
+        },
+        "units": {
+          "items": {
+            "$ref": "#/$defs/UnitPlan"
+          },
+          "minItems": 1,
+          "title": "Units",
+          "type": "array"
+        },
+        "integration_checks": {
+          "items": {
+            "$ref": "#/$defs/IntegrationCheck"
+          },
+          "minItems": 1,
+          "title": "Integration Checks",
+          "type": "array"
+        }
+      },
+      "required": [
+        "design_sha256",
+        "units",
+        "integration_checks"
+      ],
+      "title": "JointExecutionPlan",
+      "type": "object"
+    },
+    "JointProductSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "scope_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Scope Sha256",
+          "type": "string"
+        },
+        "version": {
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "product": {
+          "$ref": "#/$defs/ProductDraft"
+        }
+      },
+      "required": [
+        "scope_sha256",
+        "version",
+        "product"
+      ],
+      "title": "JointProductSpec",
+      "type": "object"
+    },
+    "JointStage": {
+      "enum": [
+        "PREPARING",
+        "READY_FOR_DISCUSSION",
+        "PRODUCT_DISCOVERY",
+        "WAITING_PRODUCT_REPLY",
+        "WAITING_PRODUCT_APPROVAL",
+        "DESIGNING",
+        "PLANNING",
+        "DELIVERING",
+        "INTEGRATING",
+        "DONE",
+        "WAITING_HUMAN",
+        "BLOCKED"
+      ],
+      "title": "JointStage",
+      "type": "string"
+    },
+    "JointTechnicalDesign": {
+      "additionalProperties": false,
+      "properties": {
+        "product_spec_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Product Spec Sha256",
+          "type": "string"
+        },
+        "summary": {
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        },
+        "units": {
+          "items": {
+            "$ref": "#/$defs/UnitDesign"
+          },
+          "minItems": 1,
+          "title": "Units",
+          "type": "array"
+        },
+        "reference_only": {
+          "default": [],
+          "items": {
+            "pattern": "^unit_[a-f0-9]{16}$",
+            "type": "string"
+          },
+          "title": "Reference Only",
+          "type": "array"
+        },
+        "interfaces": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/InterfaceContract"
+          },
+          "title": "Interfaces",
+          "type": "array"
+        }
+      },
+      "required": [
+        "product_spec_sha256",
+        "summary",
+        "units"
+      ],
+      "title": "JointTechnicalDesign",
+      "type": "object"
+    },
+    "JsonValue": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "PhaseDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "enum": [
+            "coder",
+            "qa",
+            "reviewer"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "objective": {
+          "minLength": 1,
+          "title": "Objective",
+          "type": "string"
+        },
+        "required_capabilities": {
+          "items": {
+            "enum": [
+              "implementation",
+              "testing",
+              "review",
+              "security",
+              "contract-validation",
+              "python",
+              "java",
+              "cpp",
+              "go",
+              "typescript"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Required Capabilities",
+          "type": "array"
+        },
+        "risk": {
+          "$ref": "#/$defs/RiskTier"
+        },
+        "minimum_brain_tier": {
+          "$ref": "#/$defs/BrainTier"
+        },
+        "checkpoints": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Checkpoints",
+          "type": "array"
+        }
+      },
+      "required": [
+        "role",
+        "objective",
+        "required_capabilities",
+        "risk",
+        "minimum_brain_tier",
+        "checkpoints"
+      ],
+      "title": "PhaseDraft",
+      "type": "object"
+    },
+    "PrepareProjectResult": {
+      "additionalProperties": false,
+      "description": "Prepared checkpoint or an explicit project-level human wait route.",
+      "properties": {
+        "kind": {
+          "const": "prepare_project_result",
+          "default": "prepare_project_result",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/PrepareProjectStatus"
+        },
+        "repository_id": {
+          "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "baseline_compilation_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Baseline Compilation Sha256",
+          "type": "string"
+        },
+        "preparation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RepositoryPreparation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "conflicts": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ProjectSpecConflict"
+          },
+          "title": "Conflicts",
+          "type": "array"
+        },
+        "route": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProjectWaitingHumanRoute"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "status",
+        "repository_id",
+        "baseline_compilation_sha256"
+      ],
+      "title": "PrepareProjectResult",
+      "type": "object"
+    },
+    "PrepareProjectStatus": {
+      "description": "Exclusive outcomes visible to the Manager Agent.",
+      "enum": [
+        "PREPARED",
+        "WAITING_HUMAN"
+      ],
+      "title": "PrepareProjectStatus",
+      "type": "string"
+    },
+    "PreparedUnit": {
+      "additionalProperties": false,
+      "properties": {
+        "unit_id": {
+          "pattern": "^unit_[a-f0-9]{16}$",
+          "title": "Unit Id",
+          "type": "string"
+        },
+        "result": {
+          "$ref": "#/$defs/PrepareProjectResult"
+        },
+        "context_sources": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ContextSource"
+          },
+          "title": "Context Sources",
+          "type": "array"
+        },
+        "commands": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Commands",
+          "type": "array"
+        }
+      },
+      "required": [
+        "unit_id",
+        "result"
+      ],
+      "title": "PreparedUnit",
+      "type": "object"
+    },
+    "ProductDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "clarify",
+            "ready"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "summary": {
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        },
+        "questions": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Questions",
+          "type": "array"
+        },
+        "goals": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Goals",
+          "type": "array"
+        },
+        "non_goals": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Non Goals",
+          "type": "array"
+        },
+        "assumptions": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Assumptions",
+          "type": "array"
+        },
+        "requirements": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RequirementDraft"
+          },
+          "title": "Requirements",
+          "type": "array"
+        }
+      },
+      "required": [
+        "action",
+        "summary"
+      ],
+      "title": "ProductDraft",
+      "type": "object"
+    },
+    "ProjectDeliveryCheckpoint": {
+      "additionalProperties": false,
+      "description": "One immutable delivery cursor containing only verified native fact references.",
+      "properties": {
+        "kind": {
+          "default": "project_delivery_checkpoint",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "delivery_id": {
+          "pattern": "^delivery_[a-z0-9][a-z0-9_-]{2,95}$",
+          "title": "Delivery Id",
+          "type": "string"
+        },
+        "sequence": {
+          "minimum": 1,
+          "title": "Sequence",
+          "type": "integer"
+        },
+        "previous_checkpoint_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Previous Checkpoint Sha256"
+        },
+        "repository_id": {
+          "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "repository_root": {
+          "minLength": 1,
+          "title": "Repository Root",
+          "type": "string"
+        },
+        "preparation_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Preparation Sha256"
+        },
+        "request_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Request Id"
+        },
+        "request_revision": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Request Revision"
+        },
+        "product_checkpoint_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Product Checkpoint Sha256"
+        },
+        "product_spec_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Product Spec Id"
+        },
+        "product_spec_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Product Spec Sha256"
+        },
+        "approval_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Approval Id"
+        },
+        "approval_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Approval Sha256"
+        },
+        "technical_design_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Technical Design Id"
+        },
+        "technical_design_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Technical Design Sha256"
+        },
+        "execution_plan_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Plan Id"
+        },
+        "execution_plan_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Plan Sha256"
+        },
+        "planning_preview_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Planning Preview Id"
+        },
+        "planning_preview_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Planning Preview Sha256"
+        },
+        "dispatch_commit_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dispatch Commit Id"
+        },
+        "dispatch_commit_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dispatch Commit Sha256"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Id"
+        },
+        "task_revision": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Revision"
+        },
+        "task_status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "candidate_revision": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{40,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Revision"
+        },
+        "verification_plan_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Verification Plan Sha256"
+        },
+        "verification_completion_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Verification Completion Sha256"
+        },
+        "stage": {
+          "$ref": "#/$defs/DeliveryStage"
+        },
+        "stage_attempts": {
+          "$ref": "#/$defs/DeliveryStageAttempts"
+        },
+        "next_action": {
+          "$ref": "#/$defs/DeliveryNextAction"
+        },
+        "failure_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DeliveryFailureCode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "failure_summary": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failure Summary"
+        },
+        "failed_stage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DeliveryStage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "checkpointed_at": {
+          "format": "date-time",
+          "title": "Checkpointed At",
+          "type": "string"
+        },
+        "checkpoint_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Checkpoint Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "delivery_id",
+        "sequence",
+        "repository_id",
+        "repository_root",
+        "stage",
+        "stage_attempts",
+        "next_action",
+        "checkpointed_at",
+        "checkpoint_sha256"
+      ],
+      "title": "ProjectDeliveryCheckpoint",
+      "type": "object"
+    },
+    "ProjectSpecConflict": {
+      "additionalProperties": false,
+      "description": "Project-scoped conflict discovered before a Delivery Task exists.",
+      "properties": {
+        "kind": {
+          "const": "PROJECT_SPEC_CONFLICT",
+          "default": "PROJECT_SPEC_CONFLICT",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^project_spec_conflict_[a-f0-9]{64}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "repository_id": {
+          "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "repository_profile_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Repository Profile Sha256",
+          "type": "string"
+        },
+        "field": {
+          "pattern": "^[a-z][a-z0-9_.-]{0,127}$",
+          "title": "Field",
+          "type": "string"
+        },
+        "classification": {
+          "$ref": "#/$defs/SpecConflictClass"
+        },
+        "rules": {
+          "items": {
+            "$ref": "#/$defs/SpecRule"
+          },
+          "minItems": 2,
+          "title": "Rules",
+          "type": "array"
+        },
+        "reason": {
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "human_question": {
+          "minLength": 1,
+          "title": "Human Question",
+          "type": "string"
+        },
+        "recovery_conditions": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Recovery Conditions",
+          "type": "array"
+        },
+        "detected_at": {
+          "format": "date-time",
+          "title": "Detected At",
+          "type": "string"
+        },
+        "conflict_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Conflict Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "repository_id",
+        "repository_profile_sha256",
+        "field",
+        "classification",
+        "rules",
+        "reason",
+        "human_question",
+        "recovery_conditions",
+        "detected_at",
+        "conflict_sha256"
+      ],
+      "title": "ProjectSpecConflict",
+      "type": "object"
+    },
+    "ProjectWaitingHumanRoute": {
+      "additionalProperties": false,
+      "description": "Pure routing fact that prevents product discovery from starting.",
+      "properties": {
+        "kind": {
+          "const": "project_spec_waiting_human_route",
+          "default": "project_spec_waiting_human_route",
+          "title": "Kind",
+          "type": "string"
+        },
+        "work_item_status": {
+          "const": "WAITING_HUMAN",
+          "default": "WAITING_HUMAN",
+          "title": "Work Item Status",
+          "type": "string"
+        },
+        "reason": {
+          "const": "PROJECT_SPEC_CONFLICT",
+          "default": "PROJECT_SPEC_CONFLICT",
+          "title": "Reason",
+          "type": "string"
+        },
+        "conflict_ids": {
+          "items": {
+            "pattern": "^project_spec_conflict_[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Conflict Ids",
+          "type": "array"
+        },
+        "product_agent_start_allowed": {
+          "const": false,
+          "default": false,
+          "title": "Product Agent Start Allowed",
+          "type": "boolean"
+        },
+        "recovery_conditions": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Recovery Conditions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "conflict_ids",
+        "recovery_conditions"
+      ],
+      "title": "ProjectWaitingHumanRoute",
+      "type": "object"
+    },
+    "RepositoryPreparation": {
+      "additionalProperties": false,
+      "description": "Proof that one Project-owned Repository and its rule baseline are ready.",
+      "properties": {
+        "kind": {
+          "const": "repository_preparation",
+          "default": "repository_preparation",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.2",
+          "default": "v0.2",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "team_id": {
+          "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Team Id",
+          "type": "string"
+        },
+        "project_id": {
+          "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "project_manifest_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Project Manifest Sha256",
+          "type": "string"
+        },
+        "repository_id": {
+          "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "repository_root": {
+          "minLength": 1,
+          "title": "Repository Root",
+          "type": "string"
+        },
+        "repository_workspace_root": {
+          "minLength": 1,
+          "title": "Repository Workspace Root",
+          "type": "string"
+        },
+        "team_root": {
+          "minLength": 1,
+          "title": "Team Root",
+          "type": "string"
+        },
+        "repository_profile_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Repository Profile Sha256",
+          "type": "string"
+        },
+        "runtime_binding_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Runtime Binding Sha256",
+          "type": "string"
+        },
+        "baseline_spec_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Baseline Spec Sha256",
+          "type": "string"
+        },
+        "baseline_source_uris": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Baseline Source Uris",
+          "type": "array"
+        },
+        "status": {
+          "const": "PREPARED",
+          "default": "PREPARED",
+          "title": "Status",
+          "type": "string"
+        },
+        "prepared_at": {
+          "format": "date-time",
+          "title": "Prepared At",
+          "type": "string"
+        },
+        "preparation_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Preparation Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "team_id",
+        "project_id",
+        "project_manifest_sha256",
+        "repository_id",
+        "repository_root",
+        "repository_workspace_root",
+        "team_root",
+        "repository_profile_sha256",
+        "runtime_binding_sha256",
+        "baseline_spec_sha256",
+        "prepared_at",
+        "preparation_sha256"
+      ],
+      "title": "RepositoryPreparation",
+      "type": "object"
+    },
+    "RequirementDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "statement": {
+          "minLength": 1,
+          "title": "Statement",
+          "type": "string"
+        },
+        "priority": {
+          "$ref": "#/$defs/RequirementPriority",
+          "default": "MUST"
+        },
+        "rationale": {
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        },
+        "acceptance": {
+          "items": {
+            "$ref": "#/$defs/AcceptanceDraft"
+          },
+          "minItems": 1,
+          "title": "Acceptance",
+          "type": "array"
+        }
+      },
+      "required": [
+        "statement",
+        "rationale",
+        "acceptance"
+      ],
+      "title": "RequirementDraft",
+      "type": "object"
+    },
+    "RequirementMappingDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "requirement_id": {
+          "minLength": 1,
+          "title": "Requirement Id",
+          "type": "string"
+        },
+        "component_keys": {
+          "items": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Component Keys",
+          "type": "array"
+        },
+        "approach": {
+          "minLength": 1,
+          "title": "Approach",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requirement_id",
+        "component_keys",
+        "approach"
+      ],
+      "title": "RequirementMappingDraft",
+      "type": "object"
+    },
+    "RequirementPriority": {
+      "enum": [
+        "MUST",
+        "SHOULD",
+        "COULD"
+      ],
+      "title": "RequirementPriority",
+      "type": "string"
+    },
+    "RiskTier": {
+      "enum": [
+        "low",
+        "normal",
+        "high",
+        "critical"
+      ],
+      "title": "RiskTier",
+      "type": "string"
+    },
+    "SpecConflictClass": {
+      "description": "Whether a conflict touches an immutable safety boundary.",
+      "enum": [
+        "HARD_SAFETY",
+        "ENGINEERING"
+      ],
+      "title": "SpecConflictClass",
+      "type": "string"
+    },
+    "SpecRule": {
+      "additionalProperties": false,
+      "description": "One structured rule with provenance and an explicit applicability scope.",
+      "properties": {
+        "kind": {
+          "const": "spec_rule",
+          "default": "spec_rule",
+          "title": "Kind",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^rule_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "field": {
+          "pattern": "^[a-z][a-z0-9_.-]{0,127}$",
+          "title": "Field",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/JsonValue"
+        },
+        "layer": {
+          "$ref": "#/$defs/SpecRuleLayer"
+        },
+        "priority": {
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Priority",
+          "type": "integer"
+        },
+        "scopes": {
+          "default": [
+            "*"
+          ],
+          "items": {
+            "pattern": "^(\\*|[a-z][a-z0-9_.:-]{0,127})$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Scopes",
+          "type": "array"
+        },
+        "source_uri": {
+          "minLength": 1,
+          "title": "Source Uri",
+          "type": "string"
+        },
+        "source_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        },
+        "rationale": {
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "field",
+        "value",
+        "layer",
+        "priority",
+        "source_uri",
+        "source_sha256",
+        "rationale"
+      ],
+      "title": "SpecRule",
+      "type": "object"
+    },
+    "SpecRuleLayer": {
+      "description": "Governance layer that authored a structured rule.",
+      "enum": [
+        "platform_hard",
+        "platform_engineering",
+        "project",
+        "task"
+      ],
+      "title": "SpecRuleLayer",
+      "type": "string"
+    },
+    "TaskStatus": {
+      "enum": [
+        "NEW",
+        "PLANNING",
+        "IMPLEMENTING",
+        "CONTINUE_REQUIRED",
+        "QUEUED",
+        "QA",
+        "REVIEW",
+        "DONE",
+        "BLOCKED",
+        "FAILED"
+      ],
+      "title": "TaskStatus",
+      "type": "string"
+    },
+    "TechnicalDesignDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "summary": {
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        },
+        "components": {
+          "items": {
+            "$ref": "#/$defs/ComponentDraft"
+          },
+          "minItems": 1,
+          "title": "Components",
+          "type": "array"
+        },
+        "requirement_mappings": {
+          "items": {
+            "$ref": "#/$defs/RequirementMappingDraft"
+          },
+          "minItems": 1,
+          "title": "Requirement Mappings",
+          "type": "array"
+        },
+        "acceptance_mappings": {
+          "items": {
+            "$ref": "#/$defs/AcceptanceMappingDraft"
+          },
+          "minItems": 1,
+          "title": "Acceptance Mappings",
+          "type": "array"
+        },
+        "implementation_steps": {
+          "items": {
+            "$ref": "#/$defs/DesignStepDraft"
+          },
+          "minItems": 1,
+          "title": "Implementation Steps",
+          "type": "array"
+        },
+        "risks": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DesignRiskDraft"
+          },
+          "title": "Risks",
+          "type": "array"
+        }
+      },
+      "required": [
+        "summary",
+        "components",
+        "requirement_mappings",
+        "acceptance_mappings",
+        "implementation_steps"
+      ],
+      "title": "TechnicalDesignDraft",
+      "type": "object"
+    },
+    "UnitDesign": {
+      "additionalProperties": false,
+      "properties": {
+        "unit_id": {
+          "pattern": "^unit_[a-f0-9]{16}$",
+          "title": "Unit Id",
+          "type": "string"
+        },
+        "requirement_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Requirement Ids",
+          "type": "array"
+        },
+        "design": {
+          "$ref": "#/$defs/TechnicalDesignDraft"
+        }
+      },
+      "required": [
+        "unit_id",
+        "requirement_ids",
+        "design"
+      ],
+      "title": "UnitDesign",
+      "type": "object"
+    },
+    "UnitPlan": {
+      "additionalProperties": false,
+      "properties": {
+        "unit_id": {
+          "pattern": "^unit_[a-f0-9]{16}$",
+          "title": "Unit Id",
+          "type": "string"
+        },
+        "depends_on": {
+          "default": [],
+          "items": {
+            "pattern": "^unit_[a-f0-9]{16}$",
+            "type": "string"
+          },
+          "title": "Depends On",
+          "type": "array"
+        },
+        "plan": {
+          "$ref": "#/$defs/ExecutionPlanDraft"
+        }
+      },
+      "required": [
+        "unit_id",
+        "plan"
+      ],
+      "title": "UnitPlan",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "delivery_id": {
+      "pattern": "^delivery_[a-z0-9][a-z0-9_-]{2,95}$",
+      "title": "Delivery Id",
+      "type": "string"
+    },
+    "team_id": {
+      "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$",
+      "title": "Team Id",
+      "type": "string"
+    },
+    "team_manifest_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Team Manifest Sha256",
+      "type": "string"
+    },
+    "project_id": {
+      "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
+      "title": "Project Id",
+      "type": "string"
+    },
+    "project_manifest_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Project Manifest Sha256",
+      "type": "string"
+    },
+    "sequence": {
+      "minimum": 1,
+      "title": "Sequence",
+      "type": "integer"
+    },
+    "previous_checkpoint_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Previous Checkpoint Sha256"
+    },
+    "stage": {
+      "$ref": "#/$defs/JointStage"
+    },
+    "scope": {
+      "$ref": "#/$defs/DirectoryScope"
+    },
+    "title": {
+      "minLength": 1,
+      "title": "Title",
+      "type": "string"
+    },
+    "requirement": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Requirement"
+    },
+    "submitted_at": {
+      "format": "date-time",
+      "title": "Submitted At",
+      "type": "string"
+    },
+    "preparations": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/PreparedUnit"
+      },
+      "title": "Preparations",
+      "type": "array"
+    },
+    "dialogue": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/DialogueMessage"
+      },
+      "title": "Dialogue",
+      "type": "array"
+    },
+    "product_spec": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JointProductSpec"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "approval": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JointApproval"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "design": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JointTechnicalDesign"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "plan": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JointExecutionPlan"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "children": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ChildDelivery"
+      },
+      "title": "Children",
+      "type": "array"
+    },
+    "integration": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/IntegrationEvidence"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "attempts": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "title": "Attempts",
+      "type": "object"
+    },
+    "next_action": {
+      "minLength": 1,
+      "title": "Next Action",
+      "type": "string"
+    },
+    "checkpoint_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Checkpoint Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "delivery_id",
+    "team_id",
+    "team_manifest_sha256",
+    "project_id",
+    "project_manifest_sha256",
+    "sequence",
+    "stage",
+    "scope",
+    "title",
+    "submitted_at",
+    "next_action",
+    "checkpoint_sha256"
+  ],
+  "title": "JointCheckpoint",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/requirement-checkpoint.schema.json"
+}

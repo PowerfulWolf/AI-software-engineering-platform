@@ -9,8 +9,8 @@ import pytest
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
 from ai_software_engineer.domain import AgentRole
 from ai_software_engineer.git import GitWorktreeManager, WorktreeSpec
-from ai_software_engineer.project_manager.delivery import ApproveProductSpec, StartProjectDelivery
-from ai_software_engineer.project_manager.production_host import OrganizationTeamHost
+from ai_software_engineer.manager.delivery import ApproveProductSpec, StartProjectDelivery
+from ai_software_engineer.manager.production_host import TeamHost
 from ai_software_engineer.recovery import (
     CapturedChanges,
     FileRecoveryStore,
@@ -26,8 +26,8 @@ from ai_software_engineer.recovery.native import NativeRecoverySourceReader
 from ai_software_engineer.recovery.sealing import RecoveryTaskSealingService
 from ai_software_engineer.recovery.task import AuthorizedRecoveryTaskBuilder
 from tests.git.test_capture import git
-from tests.project_manager.test_production_backend import _git, _ScriptedClientFactory
-from tests.project_manager.test_production_backend import mysql_dsn as mysql_dsn
+from tests.manager.test_production_backend import _git, _ScriptedClientFactory
+from tests.manager.test_production_backend import mysql_dsn as mysql_dsn
 from tests.recovery.test_authorization import make_plan
 from tests.recovery.test_native import InterruptedFactory, _snapshot
 
@@ -56,6 +56,8 @@ def test_native_current_gate_and_authorization_preserve_history(
     _git("commit", "-m", "initial", cwd=project)
     config = ProductionConfig(
         platform_root=str(tmp_path / "platform"),
+        default_project_id="project_test",
+        default_project_name="Test Project",
         live_model_execution=True,
         model_routes=(
             ProviderRouteConfig(
@@ -65,7 +67,7 @@ def test_native_current_gate_and_authorization_preserve_history(
     )
     environment = {"ASE_MYSQL_DSN": mysql_dsn, "PATH": os.environ.get("PATH", "")}
     factory = InterruptedFactory()
-    host = OrganizationTeamHost(
+    host = TeamHost(
         config=config,
         environment=environment,
         structured_clients=_ScriptedClientFactory(),
@@ -73,7 +75,7 @@ def test_native_current_gate_and_authorization_preserve_history(
     )
     entry = host.project_entry()
     started = entry.start(
-        StartProjectDelivery(project_root=str(project), requirement="Change greeting.")
+        StartProjectDelivery(repository_root=str(project), requirement="Change greeting.")
     )
     cp = entry.approve(
         ApproveProductSpec(
@@ -84,15 +86,17 @@ def test_native_current_gate_and_authorization_preserve_history(
     ).checkpoint
     run = factory.requests[0]
     scope = RecoveryScope(
-        company_id=config.company_id,
-        project_id=cp.project_id,
-        project_root=str(project),
+        team_id=config.team_id,
+        repository_id=cp.repository_id,
+        repository_root=str(project),
         delivery_id=cp.delivery_id,
     )
     original = NativeRecoverySourceReader(config, environment).inspect(
         scope, failed_run_id=run.run_id, failed_context_id=run.context_manifest_id
     )
-    manager = GitWorktreeManager(project, Path(config.platform_root) / "worktrees" / cp.project_id)
+    manager = GitWorktreeManager(
+        project, Path(config.platform_root) / "worktrees" / cp.repository_id
+    )
     worktree = manager.recover(
         WorktreeSpec(
             task_id=run.task_id,
@@ -140,7 +144,7 @@ def test_native_current_gate_and_authorization_preserve_history(
     assert (_snapshot(Path(config.platform_root)), _snapshot(project)) == before
 
     # Concrete facts verifier plugs into the existing authorization service.
-    sidecar = Path(prepared.project_workspace_root)
+    sidecar = Path(prepared.repository_workspace_root)
     store = FileRecoveryStore.initialize(sidecar / "recovery-test", scope=scope)
     service = RecoveryAuthorizationService(
         store, facts=verifier, captures=manager, human=OfflineHuman()
@@ -192,7 +196,7 @@ def test_native_current_gate_and_authorization_preserve_history(
     ):
         with pytest.raises(RecoveryRejected):
             verifier.validate(RecoveryPlan.create(**{**plan.to_wire(), **change}))
-    # Ordinary uncommitted code does not necessarily change ProjectProfile; Git must catch it.
+    # Ordinary uncommitted code does not necessarily change RepositoryProfile; Git must catch it.
     (project / "hello.txt").write_text("uncommitted\n")
     with pytest.raises(RecoveryRejected):
         service.require_current_authorization(plan.plan_sha256)
@@ -204,14 +208,14 @@ def test_native_current_gate_and_authorization_preserve_history(
     with pytest.raises(RecoveryRejected):
         verifier.validate(plan)
     (project / "untracked.txt").unlink()
-    # Company context selection/content must be recompiled, not trusted from old baseline.
-    knowledge = host.company_workspace.root / "knowledge/current.md"
-    knowledge.write_text("new company guidance\n")
+    # Team context selection/content must be recompiled, not trusted from old baseline.
+    knowledge = host.team_workspace.root / "knowledge/current.md"
+    knowledge.write_text("new team guidance\n")
     with pytest.raises(RecoveryRejected):
         NativeRecoveryFactsVerifier(
-            config.model_copy(update={"company_knowledge_paths": ("current.md",)}), environment
+            config.model_copy(update={"team_knowledge_paths": ("current.md",)}), environment
         ).validate(plan)
-    profile_file = next((sidecar / "profile").glob(f"*{prepared.project_profile_sha256}*.json"))
+    profile_file = next((sidecar / "profile").glob(f"*{prepared.repository_profile_sha256}*.json"))
     content = profile_file.read_bytes()
     profile_file.write_text("{}")
     with pytest.raises(RecoveryRejected):

@@ -2,13 +2,15 @@
 
 一个基于 Trellis 思想与 Multi-Agent 协作的、可审计的通用 AI 软件工程团队平台。
 
-团队不绑定某家公司、业务领域或技术栈。你提供项目目录和需求，团队学习对应项目的规范后开展工作；
-同一支 Agent 团队可以服务不同项目，项目之间的知识、上下文和交付记录保持隔离。
+团队不绑定某个业务领域或技术栈。你先接入一个 Project，再为 Requirement 选择该 Project
+涉及的一个或多个代码目录；同一支长期 Agent 团队服务所有 Project，而每个 Project 的知识、规范、
+Repository 目录和 Requirement 交付事实保持隔离。
 
 它的目标不是演示多个 Agent 互相对话，而是逐步建立一个有制度、有岗位边界、有组织记忆、
 能够持续交付和自我改进的数字研发团队。
 
-> 先为一个需求选择一个或多个代码目录，平台准备好项目规范后再与你聊需求。你确认产品文档后，团队按仓库执行 `Coder → QA → Reviewer`，最后联合验证，交付候选提交和证据，或明确的阻塞原因。
+> Manager 先准备 Project 和所选 Repository，再让 Product 与你澄清 Requirement。你确认产品文档后，
+> 团队按 Repository 串行执行 `Coder → QA → Reviewer`，最后交付可合并候选分支与验证证据，或明确的阻塞原因。
 
 ## 设计原则
 
@@ -25,9 +27,9 @@
 
 输入：
 
-- 一个或多个已有本地代码目录，可以属于同一仓库、不同仓库或不同业务项目（当前交付使用 Git）；
+- 一个已选择的 Project，以及该 Requirement 涉及的一个或多个本地代码目录（当前交付使用 Git）；
 - 一条自然语言需求；Product Agent 将其整理为可评审 Product Spec，并由用户确认；
-- 组织通用知识/AgentProfile/ModelPolicy，以及项目自身规范（由 sidecar 只读索引）。
+- Team 通用知识、AgentProfile、ModelPolicy，以及 Project 自身知识和 Repository 原生规范。
 
 日常 Web Console 入口的交付结果：
 
@@ -50,15 +52,16 @@ request 命令已经自动生成完整评估与交付汇总报告。Reporter 仍
 
 ## 总体架构
 
-平台由通用知识库、可切换的工作知识库和组织长期拥有的 Agent 团队组成。
-当前实现用 Company sidecar 收纳服务对象的共享知识、项目知识子模块和需求记录，
-它是知识与工作记录的隔离边界，不是把团队绑定到某家公司的产品限制。
-Agent 通过受控 Skills 调用确定性能力。用户先选择项目目录，Project Manager Agent
-完成项目准备；准备成功后，用户再与 Product Agent 讨论需求。后续由专业 Agent 按制度完成产品
-定义、技术设计、执行规划、开发、测试和审查，最后把可合并候选或明确阻塞证据交给人类。
+平台只有一支长期存在的 Team，但可接入多个 Project。`<platform_root>/team` 保存团队成员、通用
+规范、Skills 和模型策略；`<platform_root>/projects/<project_id>` 保存该 Project 的知识、规范、
+Repository sidecar 和 Requirement 事实。Team 与 Projects 是同一数据根下的并列边界，不互相包含。
 
-下图是当前控制平面边界。浏览器只提交 typed intent；Web Console 先把操作写入 Company sidecar，
-再由后台 Project Manager 执行，因此刷新或关闭网页不会重复或取消已接纳的工作。Planner 对流转
+Agent 通过受控 Skills 调用确定性能力。Manager 领导全队；Product 定义需求，Designer 形成技术方案，
+Planner 制定并派发执行计划，Coder、QA、Reviewer 对每个 Repository 串行交付。一个 Requirement
+可以涉及 1–N 个 Repository，但始终只属于一个 Project，并且只读取该 Project 与 Team 的知识。
+
+下图是当前控制平面边界。浏览器只提交 typed intent；Web Console 先把操作写入 Team sidecar，
+再由后台 Manager 执行，因此刷新或关闭网页不会重复或取消已接纳的工作。Planner 对流转
 和派发策略负责；Dispatcher 负责不依赖模型额度的有界轮询、领取事务和过期恢复，持有 Lease 的
 Worker 负责启动、心跳与结果提交。正常状态按已批准规则推进，只有计划漂移、连续失败、资源冲突
 或人工门禁才重新启动 Planner Agent。
@@ -66,16 +69,16 @@ Worker 负责启动、心跳与结果提交。正常状态按已批准规则推�
 ```mermaid
 flowchart TB
     U["用户<br/>浏览器中创建、讨论、批准、继续"] --> WEB["Local Web Console<br/>typed intent · durable operation"]
-    WEB --> OPS[("Company sidecar<br/>QUEUED → RUNNING → terminal")]
-    OPS --> PM["Project Manager Agent<br/>团队领导"]
+    WEB --> OPS[("Team sidecar<br/>QUEUED → RUNNING → terminal")]
+    OPS --> PM["Manager Agent<br/>团队领导"]
 
-    PM --> ONBOARD["Project Preparation<br/>注册外置 workspace<br/>发现 ProjectProfile<br/>编译项目级规范"]
-    ONBOARD --> READY["Project Prepared<br/>项目上下文与安全边界就绪"]
+    PM --> ONBOARD["Project Preparation<br/>选择 Project · 注册 Repository sidecar<br/>发现 RepositoryProfile · 编译规范"]
+    ONBOARD --> READY["Requirement Ready<br/>Project 与 Repository 边界就绪"]
     READY --> PRODUCT["Product Agent<br/>与用户澄清需求、维护需求对话"]
     U -. "准备完成后讨论需求" .-> PRODUCT
     PRODUCT --> PRODUCT_SPEC["Product Spec<br/>目标、范围、需求、验收标准"]
     PRODUCT_SPEC --> PRODUCT_REVIEW["Human Product Review<br/>可信人工通道验证 exact spec ID + digest"]
-    PRODUCT_REVIEW --> DESIGNER["Solution Designer Agent<br/>技术方案与实施规划"]
+    PRODUCT_REVIEW --> DESIGNER["Designer Agent<br/>技术方案与实施规划"]
     DESIGNER --> TECH_DESIGN["Technical Design<br/>架构、步骤、测试策略、风险"]
     TECH_DESIGN --> PLANNER["Planner Agent<br/>整体执行计划、能力与风险需求"]
     PLANNER --> EXEC_PLAN["Execution Plan<br/>阶段、检查点、角色与 BrainTier 需求"]
@@ -102,8 +105,8 @@ flowchart TB
     JOINT -- "FAIL" --> STOP
     DELIVERY -. "后续扩展" .-> REPORTER["Reporter（暂不开发）<br/>后续按需组织交付视图"]
 
-    COMMON_KNOWLEDGE["Organization Knowledge<br/>通用规范 · Skills · 历史经验"] --> KNOWLEDGE["Knowledge Plane"]
-    SIDECAR_KNOWLEDGE["Company Sidecar<br/>公司知识 · 项目子模块 · 需求记录"] --> KNOWLEDGE
+    COMMON_KNOWLEDGE["Team Knowledge<br/>通用规范 · Skills · 历史经验"] --> KNOWLEDGE["Knowledge Plane"]
+    SIDECAR_KNOWLEDGE["Project Knowledge<br/>项目背景 · 规范 · Repository/Requirement 事实"] --> KNOWLEDGE
     KNOWLEDGE --> PM
     KNOWLEDGE --> PRODUCT
     KNOWLEDGE --> DESIGNER
@@ -127,10 +130,10 @@ flowchart TB
 
 | 层 | 核心职责 | 明确不能做 |
 |---|---|---|
-| Project Manager Agent | 团队领导；通过 prepare、advance、commit-dispatch、recover、deliver Skills 接单和推进整支团队 | 不能绕过 Skill 直接写状态、分配资源或批准代码 |
-| Web Console command module | 接受浏览器 typed intent，先持久化 Operation，再异步委托 Project Manager；把 exact checkpoint/plan digest 隐藏在 UI 控件中 | 不能直接改 Task、Artifact、Git 或判定交付成功 |
+| Manager Agent | 团队领导；通过 prepare、advance、commit-dispatch、recover、deliver Skills 接单和推进整支团队 | 不能绕过 Skill 直接写状态、分配资源或批准代码 |
+| Web Console command module | 接受浏览器 typed intent，先持久化 Operation，再异步委托 Manager；把 exact checkpoint/plan digest 隐藏在 UI 控件中 | 不能直接改 Task、Artifact、Git 或判定交付成功 |
 | Product Agent | 与用户澄清需求，产出可评审、可追溯的版本化 Product Spec | 不能自己批准产品范围，不能持有人工决策验证权限，不能设计实现细节 |
-| Solution Designer Agent | 把已确认 Product Spec 转换为 Technical Design 和实施/测试规划 | 不能改写产品需求，不能直接提交业务实现 |
+| Designer Agent | 把已确认 Product Spec 转换为 Technical Design 和实施/测试规划 | 不能改写产品需求，不能直接提交业务实现 |
 | Planner Agent | 制定执行计划并拥有流转/派发策略；通过 QueueInspection、DispatchPlanning、ResultRouting、Reprioritize 等 typed Skills 决定下一步 | 不能亲自持有轮询、数据库锁、心跳或 Lease owner authority |
 | Agent Skills | Agent 按角色调用的 typed、policy-bound 能力接口；把请求委托给确定性 service 并返回可验证结果 | 不是 Prompt 指令，不授予 ambient store/shell 权限 |
 | PersistentWorkQueue | 在 MySQL 保存 Run 级 WorkItem、Assignment、Lease 和生命周期事件 | 不解释 Artifact，不修改 Task verdict，不保存模型会话 |
@@ -143,8 +146,8 @@ flowchart TB
 | Reporter（暂不开发） | 后续从已验证 artifact/Handoff 生成面向用户的交付表达 | 不能创造事实、改变 verdict 或隐藏失败 |
 | Human Boundary | 处理规范冲突、业务歧义、保护分支合并与生产决策 | 人工动作必须留痕，不能静默改写历史 |
 
-Project Manager、Product、Solution Designer、Planner、Coder、QA、Reviewer 都是组织 workspace
-中持久化的长期成员；需求只产生 Assignment、Lease、独立 Context 和运行记录，不临时复制一套
+Manager、Product、Designer、Planner、Coder、QA、Reviewer 都是 Team workspace
+中持久化的长期成员；Requirement 只产生 Assignment、Lease、独立 Context 和运行记录，不临时复制一套
 AgentProfile。Scheduler、ModelRouter 和 Task Orchestrator 是这些成员调用的确定性能力，不作为
 会聊天、会自我判断的新成员。
 
@@ -214,7 +217,7 @@ AI-software-engineering-platform/
 │   ├── config/                       # ProductionConfig 与模型路由契约
 │   ├── domain/                       # Task、Agent、Artifact、Workforce 强类型模型
 │   ├── product/ design/ planning/    # Product、Designer、Planner 阶段及不可变记录
-│   ├── project_manager/              # prepare、阶段门禁、dispatch、Team Host
+│   ├── manager/                      # prepare、阶段门禁、dispatch、Team Host
 │   ├── scheduling/ work_queue/       # Scheduler、ModelRouter、持久队列和 Lease
 │   ├── orchestration/ agents/        # 串行状态机、角色请求与模型适配器
 │   ├── context/ artifacts/ evidence/ # Context、Artifact、Evidence 的存储与校验
@@ -223,13 +226,17 @@ AI-software-engineering-platform/
 │   ├── recovery/                     # Delivery 统一续跑、失败 Coder 接手、候选复核与修复接续
 │   ├── store/                        # MySQL 生产事实；SQLite 底层兼容实现
 │   ├── projection/ team_view/        # 只读投影与兼容组件
-│   ├── web_console/                  # 浏览器命令、持久 Operation、Project Manager 适配和 HTTP Host
+│   ├── web_console/                  # 浏览器命令、持久 Operation、Manager 适配和 HTTP Host
 │   ├── evaluation/                   # 事件重放、ADR 和 Handoff
 │   ├── tools/                        # role/run 绑定的 typed Skill 协议
-│   ├── company_workspace.py          # Company sidecar、公司发现与知识选择
+│   ├── team_workspace.py             # 唯一 Team workspace、通用知识与 Project registry
+│   ├── project_workspace.py          # Project、知识、Requirement 和 Repository catalog
+│   ├── repository_workspace.py       # 代码目录与外置 Repository sidecar 的绑定
+│   ├── repository_profile.py         # 语言、构建系统、VCS 和原生规范发现
 │   ├── knowledge_documents.py        # MD/TXT/PDF/DOCX 导入、规范化与不可变知识记录
-│   ├── project_workspace.py          # 项目源码和外置 sidecar 的绑定
-│   └── runtime_workspace.py          # Organization/Project/Runtime 组合
+│   └── runtime_workspace.py          # Team/Project/Repository Runtime 组合与校验
+├── scripts/
+│   └── ase-console-service.sh        # Web Console 后台启动、停止、重启、状态和日志
 ├── schemas/                          # 所有公开/持久化契约的 JSON Schema
 │   ├── task.schema.json
 │   ├── artifact.schema.json
@@ -247,7 +254,7 @@ AI-software-engineering-platform/
 │   ├── archive/                      # 阶段成果和提交证据
 │   └── decisions/                    # 已接受架构决策
 └── .trellis/
-    ├── spec/                         # 组织在本项目沉淀的可执行开发规范
+    ├── spec/                         # 团队在本项目沉淀的可执行开发规范
     ├── tasks/                        # PRD、Design、Implement 等任务事实
     └── workspace/                    # 开发会话记录；不是生产 sidecar
 ```
@@ -258,14 +265,14 @@ AI-software-engineering-platform/
 
 ## Workspace 分工
 
-平台运行涉及五类位置。它们必须保持分离，特别是 `<platform_root>` 不能位于任一目标 Git
-仓库内，也不能与目标仓库互相包含。
+平台运行涉及五类位置。最重要的约束是：`<platform_root>` 与所有目标代码目录必须分离，不能互相
+包含；Team、Projects 和 worktrees 都位于 `<platform_root>`，目标 Git 仓库只保留项目自己的文件。
 
 | 位置 | 典型路径 | 职责与规范 |
 |---|---|---|
 | 平台源码仓库 | `/path/to/AI-software-engineering-platform` | `ase` 的实现、Schema、测试和 Trellis 规范；只在开发平台本身时修改 |
-| 目标项目目录 | `/path/to/backend`、`/path/to/frontend` | 原项目源码、测试、构建配置和原生开发规范；必须是绝对路径、Git HEAD 已提交、开始时工作树干净；平台不在其中创建 `.ase` |
-| 平台数据根 | `<platform_root>`；macOS/Linux 缺省为 `~/.ase` | 所有组织/公司 sidecar 和临时 worktree 的共同外置根；可显式配置绝对路径或安全的 `~/...` 路径，必须持久化、备份并限制访问权限 |
+| 目标代码目录 | `/path/to/backend`、`/path/to/frontend` | Project 下的 Repository 或模块源码、测试、构建配置和原生规范；必须是绝对路径、Git HEAD 已提交、开始时工作树干净；平台不创建 `.ase` |
+| 平台数据根 | `<platform_root>`；macOS/Linux 缺省为 `~/.ase` | 唯一 Team、全部 Project sidecar 和隔离 worktree 的共同外置根；必须持久化、备份并限制访问权限 |
 | MySQL | `ASE_MYSQL_DSN` 指向的 MySQL 8.0 | Task、StateEvent、dispatch、WorkItem、Assignment、Lease 等并发权威事实；不能与文件 sidecar 二选一，二者都要保存 |
 | 配置与密钥 | `ASE_CONFIG` + 环境变量 | JSON 只保存路径、模型名和密钥变量名；DSN/API key 正文只放环境或 secret manager，不写入仓库/sidecar |
 
@@ -273,55 +280,69 @@ AI-software-engineering-platform/
 
 ```text
 <platform_root>/
-├── organization/                    # 团队本身：跨公司、跨项目长期存在
-│   ├── organization.json
-│   ├── agents/                       # AgentProfile：成员身份、能力、并发容量
-│   ├── model-policies/               # ModelPolicy：允许模型和路由策略
-│   ├── work-items/ leases/ metrics/  # 组织级文件契约/扩展位置
-├── companies/<company_id>/           # 一家公司/知识域一个 sidecar
-│   ├── company.json
-│   ├── knowledge/                    # 公司公共知识；不会递归自动加载
-│   │   └── documents/<document_id>/  # 原文件、规范化 content.md 与不可变 manifest
-│   ├── requests/_console_operations/ # 浏览器操作的不可变状态链；不是 Task/Delivery 真相替代物
-│   ├── projects/<project_id>/        # 每个已识别 Git 项目的 sidecar 子模块
-│   │   ├── workspace.json            # 项目源码绝对路径与 sidecar 身份绑定
-│   │   ├── profile/                  # ProjectProfile：语言、构建、VCS 发现事实
-│   │   ├── knowledge/ policy/        # 项目知识、编译规范、Runtime binding
-│   │   ├── state/                    # 阶段 checkpoint、dispatch、恢复/复核计划
-│   │   ├── contexts/ artifacts/      # 各角色明确输入和结构化输出
-│   │   ├── evidence/ evaluations/    # 命令、测试、diff、模型使用和评估证据
-│   │   └── runs/ locks/ logs/        # 模型路由记录、互斥和诊断日志
-│   └── requests/<delivery_multi_id>/ # 多目录需求的产品/设计/计划/子交付/联合验收
-└── worktrees/<project_id>/           # Coder、QA、Reviewer 的隔离 Git checkout
+├── team/                              # 唯一、长期存在的 AI 团队
+│   ├── team.json                      # Team 身份和数据根绑定
+│   ├── agents/                        # 七个长期 AgentProfile 与能力/容量
+│   ├── knowledge/                     # 跨 Project 通用知识；按选择加载
+│   ├── specs/ skills/                 # 团队办事规范和可调用 Skills
+│   ├── model-policies/                # 模型路由和风险策略
+│   └── work-items/ leases/ metrics/   # 团队级工作、租约和指标事实
+├── projects/                          # 与 team/ 并列；一个目录一个 Project
+│   └── <project_id>/
+│       ├── project.json               # Project 身份及所属 Team lineage
+│       ├── knowledge/ specs/          # 项目背景知识和项目级规范
+│       ├── repositories/              # 该 Project 可使用的代码目录 catalog
+│       │   └── <repository_id>/
+│       │       ├── workspace.json      # 源码绝对路径与 Project/sidecar 绑定
+│       │       ├── profile/ policy/    # RepositoryProfile、编译规范、Runtime binding
+│       │       ├── state/ contexts/    # checkpoint、dispatch、恢复计划、角色上下文
+│       │       ├── artifacts/ evidence/ # 结构化交接物和验证证据
+│       │       └── runs/ locks/ logs/  # 模型运行、互斥和诊断记录
+│       └── requirements/
+│           ├── _console_operations/   # 浏览器操作状态链
+│           └── <delivery_multi_id>/   # 一项 Requirement 的讨论、计划、子交付和联合验收
+└── worktrees/                         # Coder、QA、Reviewer 的隔离 Git checkout
+    └── <repository_id>/...
 ```
 
 目录规则：
 
-- `organization/agents` 中的成员由组织拥有，需求只创建 Assignment/Lease，不为每个项目复制 Agent。
-- `companies/<company_id>` 是知识隔离边界；换公司时切换 sidecar，公司内所有项目作为子模块收纳。
-- `projects/<project_id>` 不复制源码；ProjectProfile 和规范引用发生漂移时旧批准失效，冲突交给人工处理。
-- `requests/` 保存跨仓需求的一份联合事实链；每个子项目仍拥有自己的 Task、candidate 和验证报告。
+- `team/` 只有一个，拥有 Agent、通用知识、Skills 和团队规则；Project/Requirement 不复制成员。
+- `projects/<project_id>` 是项目知识与交付隔离边界；一个 Team 可长期服务多个 Project。
+- `repositories/<repository_id>` 只绑定源码位置，不复制源码；RepositoryProfile 或规范漂移会使旧批准失效。
+- `requirements/<delivery_multi_id>` 保存一项 Requirement 的联合事实链；它可选择该 Project 下 1–N 个
+  Repository，每个 Repository 仍拥有独立 Task、candidate 和验证报告。
 - `worktrees/` 是平台管理的执行现场，不是备份目录。不得手工清空正在运行或待恢复的 worktree；
   干净现场由平台回收，失败/脏现场保留供诊断。
-- Candidate 分支和提交属于目标 Git 仓库；平台不自动 merge、push 或 deploy。
+- Candidate 分支和提交属于目标 Git 仓库；通过 QA/Reviewer 后交付可合并分支，平台不自动 merge、push 或 deploy。
 - MySQL 与整个 `<platform_root>` 共同构成可恢复状态，备份、迁移或清理时必须成套处理。
 
 ## 推荐的 v0.1 运行形态
 
 v0.1 推荐先以一台可信的 macOS/Linux 主机运行，不必先部署 Kubernetes 或分布式服务：
 
-- 一个常驻的 Python 3.12 `ase-console` 进程同时提供本地 Web Console、公司/知识/设置管理、只读
-  团队投影和后台 Project Manager 操作执行；完成初始启动后，日常配置、创建、讨论、批准、恢复和
+- 一个常驻的 Python 3.12 `ase-console` 进程同时提供本地 Web Console、Project/知识/设置管理、只读
+  团队投影和后台 Manager 操作执行；完成初始启动后，日常接入 Project、创建 Requirement、讨论、批准、恢复和
   领取交付都在网页完成；
 - 一个独立 MySQL 8.0 实例保存事务和并发权威；本地可使用仓库提供的 Docker Compose，
   正式环境使用独立用户、强密码和持久卷；
-- 一个位于所有源码仓库之外的持久 `<platform_root>` 保存 organization、Company sidecar、
-  Artifact、Evidence 和 worktree；macOS/Linux 缺省为 `~/.ase`，也可显式配置安全的绝对路径或 `~/...`；
+- 一个位于所有源码仓库之外的持久 `<platform_root>` 保存唯一 Team、全部 Project/Repository sidecar、
+  Requirement、Artifact、Evidence 和 worktree；macOS/Linux 缺省为 `~/.ase`；
 - 目标仓库仍按自身语言和工具构建，平台只要求 Git、干净主 checkout、允许的本地构建/测试命令；
 - Codex CLI 路由推荐以当前账号可用的 `gpt-5.6-terra` 为主，路由顺序由配置决定；需要时显式配置
   DeepSeek、Qwen 的 Responses-compatible endpoint 作为备用，不能把禁用或占位路由当成自动降级；
 - Coder、QA、Reviewer 使用同一 candidate commit 的独立 worktree，QA/Reviewer 不提交业务代码；
 - SQLite 仅用于底层兼容命令和离线测试，不作为 `ase request` 生产入口的数据库。
+
+推荐用仓库脚本管理后台进程，而不是长期占用一个终端：
+
+```bash
+./scripts/ase-console-service.sh start
+./scripts/ase-console-service.sh status
+./scripts/ase-console-service.sh logs
+./scripts/ase-console-service.sh restart
+./scripts/ase-console-service.sh stop
+```
 
 浏览器提交的操作先以 append-only 事实保存为 `QUEUED`，后台执行时变为 `RUNNING`，最后变为
 `SUCCEEDED`、`FAILED` 或 `INTERRUPTED`。Host 重启不会静默重放不确定的模型调用；用户在同一页面
@@ -332,48 +353,50 @@ macOS Keychain / Linux Secret Service 适配，不能把 MySQL DSN 明文写入 
 
 ## 最新使用方法
 
-日常主流程只有四步：**选择公司和知识 → 创建需求项目 → 与 Product Agent 讨论并批准 → 观察执行并领取候选分支**。
+日常主流程只有四步：**选择或创建 Project → 创建 Requirement 并选择代码目录 → 与 Product Agent
+讨论并批准 → 观察执行并领取候选分支**。
 浏览器会携带 exact checkpoint 和恢复计划身份，不需要复制 JSON、delivery ID 或 SHA。
 
 ### 1. 首次启动服务
 
-完成下方“一次性配置”后，在平台源码仓库启动本地 Web Console：
+完成下方“一次性配置”后，在平台源码仓库后台启动本地 Web Console：
 
 ```bash
-uv run ase-console
+./scripts/ase-console-service.sh start
 ```
 
 打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)。服务只监听 loopback，并校验 Host 和
-Origin；它不是可直接暴露到局域网或公网的多用户系统。交付期间保持服务运行即可，关闭或刷新网页
-不会取消已接纳的后台工作。
+Origin；它不是可直接暴露到局域网或公网的多用户系统。用 `status` 查看状态、`logs` 跟踪日志、
+`restart` 重启、`stop` 停止。关闭或刷新网页不会取消已接纳的后台工作。
 
-### 2. 在网页接入公司和知识
+### 2. 在网页准备 Team、Project 和知识
 
-首次进入当前环境，或者需要服务新的知识域时：
+首次进入当前环境时：
 
-1. 打开“设置”，在“接入新公司”中填写稳定的 `company_id`（例如 `company_acme`）和显示名称。
-   Company 是知识、项目和交付记录的隔离边界；同一支组织 Agent 团队继续为所有公司服务。
-2. 在“活动公司”中选择新公司，检查平台数据目录、MySQL 变量名、模型路由、Codex、真实模型开关和
-   Console 端口，然后保存。页面显示“需要重启”时重启 `ase-console`；运行中的 Host 不会被热切换。
-   切换到全新平台数据目录时只初始化当前公司，不自动搬迁旧目录中的知识、项目或需求事实。
-3. 打开“公司知识库”，上传 Markdown、TXT、PDF 或 DOCX。平台保留原文件和来源信息，并生成稳定的
+1. 打开“设置”，确认唯一 Team 的名称、平台数据目录、MySQL 变量名、模型路由、Codex、真实模型
+   开关和 Console 端口。页面显示“需要重启”时执行 `./scripts/ase-console-service.sh restart`。
+2. 在设置页创建 Project。Project 表示一组长期共享业务背景、知识和开发规范的项目，不等于单个
+   Git 仓库，也不等于一次 Requirement；同一 Project 可以登记多个代码目录。
+3. 打开“团队知识库”，上传 Markdown、TXT、PDF 或 DOCX。平台保留原文件和来源信息，并生成稳定的
    `content.md`；不调用模型改写正文，也不会自动加载未选择的文档。
-4. 回到“设置”，勾选用于新需求的知识文档并保存。重启后，新建需求会把这些内容绑定到准备摘要；
+4. 回到“设置”，勾选用于新 Requirement 的 Team 通用知识并保存。重启后，新建 Requirement 会把
+   这些内容绑定到准备摘要；
    已批准的旧需求不会被静默套用新知识。
 
 单文件原始大小上限为 10 MB，规范化正文上限为 256 KB。加密 PDF、无可提取文本、损坏文档、危险
 文件名和超限内容都会安全拒绝。原始文档位于
-`companies/<company_id>/knowledge/documents/<document_id>/`，不写入平台源码或目标项目。
+`<platform_root>/team/knowledge/documents/<document_id>/`，不写入平台源码或目标项目。
 
 ### 3. 日常需求交付全部在网页完成
 
-1. 进入“需求与交付”，点击“新建需求项目”。填写需求名称，并每行填写一个绝对代码目录；一个
-   需求可以覆盖同一仓库的多个模块，也可以跨多个仓库。
-2. Project Manager 先注册项目、建立外置 sidecar、发现 ProjectProfile 并编译项目规范。操作卡片
+1. 进入“需求与交付”，先选择 Project，再点击“新建需求”。填写 Requirement 名称，并每行填写
+   一个绝对代码目录；一个 Requirement 可以覆盖同一仓库的多个模块，也可以跨多个 Git 仓库。
+2. Manager 将这些目录注册为该 Project 的 Repository，建立外置 sidecar、发现 RepositoryProfile
+   并编译 Team + Project + Repository 规范。操作卡片
    显示“已接单/执行中/成功/失败”；完成后点击“打开需求工作区”。
 3. 在需求详情中和 Product Agent 讨论。ProductSpec 准备好后先阅读“阶段产物”，确认范围和验收
    标准，再点击“批准 ProductSpec 并开始交付”。
-4. Designer、Planner 和每个仓库的 `Coder → QA → Reviewer` 串行工作。团队成员页只把当前岗位
+4. Designer、Planner 和每个 Repository 的 `Coder → QA → Reviewer` 串行工作。团队成员页只把当前岗位
    标成执行中，其他岗位显示已完成或等待；需求页同时展示涉及的所有目录和后台操作。
 
 网页每 5 秒读取 durable facts。提交后可以刷新、关闭页面或稍后回来；同一浏览器动作使用幂等键，
@@ -403,8 +426,8 @@ branch，以及 QA/Reviewer/联合验收证据入口。人工确认后，仍按�
 ### 一次性配置
 
 准备 Python 3.12+、uv、Git、MySQL 8.0 和已登录的 Codex CLI。复制
-`config/production.example.json` 到用户配置目录，配置公司、模型路由和位于源码之外的
-`platform_root`。这是管理页面能够启动之前唯一必须准备的 bootstrap；启动后可在“设置”中维护所有
+`config/production.example.json` 到用户配置目录，配置 Team、模型路由和位于源码之外的
+`platform_root`。这是管理页面能够启动之前唯一必须准备的 bootstrap；启动后可在“设置”中维护
 现有无密钥配置。每次启动服务的环境必须提供：
 
 ```bash
@@ -447,15 +470,16 @@ cp config/production.example.json "$HOME/.config/ai-software-engineer/config.jso
 配置时：
 
 - 连接 MySQL：设置 `ASE_MYSQL_DSN`。
-- 配置数据目录：macOS/Linux 可省略 `platform_root`，稳定使用当前用户的 `~/.ase`；如需自定义，可使用所有代码目录之外的绝对路径或安全的 `~/...`，显式值优先。
+- 配置数据目录：macOS/Linux 可省略 `platform_root`，稳定使用当前用户的 `~/.ase`；如需自定义，必须使用所有代码目录之外的安全绝对路径。
 - 启用模型：将 `live_model_execution` 设为 `true`，并把第一个启用路由改成当前可用模型。
 
 配置文件至少确认以下字段；`platform_root` 未列出时使用上述默认值：
 
 ```json
 {
-  "company_id": "company_ai",
-  "company_name": "AI company",
+  "team_id": "team_ai",
+  "team_name": "AI Team",
+  "team_knowledge_paths": [],
   "live_model_execution": true
 }
 ```
@@ -473,14 +497,16 @@ export ASE_CONFIG='/absolute/path/to/production-config.json' # 使用默认配�
 
 ### 2. 日常使用：创建、讨论、确认
 
-**① 创建需求项目。**一个需求可以传一个目录，也可以同时传多个不相邻仓库/模块：
+兼容 CLI 入口要求配置 `default_project_id` 与 `default_project_name`；日常网页流程不需要默认 Project。
+
+**① 创建 Requirement。**一个 Requirement 可以传一个目录，也可以同时传多个不相邻仓库/模块：
 
 ```bash
 uv run ase request create /absolute/path/to/project-a /absolute/path/to/project-b \
   --name "你的需求名称"
 ```
 
-平台会注册项目、建立外置 sidecar、发现 ProjectProfile 和项目规范。成功输出
+平台会注册项目、建立外置 sidecar、发现 RepositoryProfile 和项目规范。成功输出
 `stage=READY_FOR_DISCUSSION`；这一步不调用模型。若规范冲突或源码 HEAD 发生变化，先处理冲突，
 不要拿旧 checkpoint 强行继续。
 
@@ -599,18 +625,19 @@ MySQL 集成测试需设置 `ASE_TEST_MYSQL_DSN`，指向专用测试数据库�
 |---|---|
 | M0–M2 平台基础 | 完成架构、强类型契约、状态机、Artifact、Context 和 Git 隔离 |
 | M3–M4 串行交付 | 完成底层 `Coder → QA → Reviewer`、有界恢复、Evaluation/ADR 与 Handoff 组件；不等于生产入口已启用全部能力 |
-| M5 组织与项目接入 | 完成组织拥有的 Workforce、确定性调度算法、ProjectProfile、SpecCompiler 和外置 sidecar |
+| M5 团队与项目接入 | 完成 Team-owned Workforce、确定性调度算法、RepositoryProfile、SpecCompiler 和外置 sidecar |
 | M6 可执行与可审计 | 完成受控命令、typed tools、Evidence、跨语言边界和只读 API |
-| M7 团队可视化 | 本地只读团队工作台，自动读取当前公司多目录需求、成员分配、执行历史和报告；旧静态组件保留为底层工具 |
+| M7 团队可视化 | 本地只读团队工作台，跨 Project 读取 Requirement、成员分配、涉及目录、执行历史和报告；旧静态组件保留为底层工具 |
 | M8 接单与推进 | 接通 Product、Designer、Planner、原子 dispatch 和可恢复 CLI 入口；产品批准与必要澄清仍由人工完成 |
 | M9 Production Team Host | 完成命令级自动装配、MySQL 存储、配置驱动的模型路由与隔离交付；Coder 支持有界 checkpoint/续跑，真实模型验收需另行执行 |
-| M10 公司知识与联合交付 | 公司统一 sidecar、按需知识加载；先准备后讨论的需求项目入口；多仓独立交付、联合候选验收与中断恢复 |
-| M11 持续团队与候选提交 | 七个组织级长期成员；显式 CandidateCommit Skill；CoderProgress Artifact；可重启的有界 Coder 续跑循环 |
-| M12 持久工作队列 | MySQL Run 级 WorkItem、Planner-owned Dispatcher tick、原子 Assignment/Lease/ModelSelection、owner-fenced 心跳/完成/等待/重试/过期回收；`ase request` 逐角色 Worker 接线仍待完成 |
+| M10 知识与联合交付 | Team 通用知识、Project 专属知识按需加载；Requirement 先准备后讨论；多 Repository 独立交付、联合候选验收与中断恢复 |
+| M11 持续团队与候选提交 | 七个 Team 级长期成员；显式 CandidateCommit Skill；CoderProgress Artifact；可重启的有界 Coder 续跑循环 |
+| M12 持久工作队列 | MySQL Run 级 WorkItem、Planner-owned Dispatcher tick、原子 Assignment/Lease/ModelSelection、owner-fenced 心跳/完成/等待/重试/过期回收，并接入逐角色交付流程 |
 | M13 候选复核恢复 | 对已有 Coder candidate 提供 `verify-propose / inspect / approve / run`；使用独立 QA/Reviewer allocation、Lease 和 worktree，保留原失败 Task 与联合需求历史，不自动 merge/push/deploy |
 | M14 统一恢复与自动修复 | `request resume` 统一接管现有持久化阶段；候选复核可由同一入口批准和续跑；QA FAIL/Review REJECT 创建确定性修复 Task 并重新走 Coder→QA→Reviewer；看板显示验证与修复工作；终态 Task 可零调用补写 Delivery checkpoint |
-| M15 Web 交付控制台 | 浏览器完成多目录项目创建、Product 对话与批准、统一继续/精确恢复计划批准和候选领取；操作先写入 Company sidecar，再由后台 Project Manager 执行，页面刷新不丢单；CLI 降为运维和 break-glass 入口 |
-| M16 平台管理面 | 浏览器创建/选择公司，导入 Markdown/TXT/PDF/DOCX 为内容寻址的公司知识，并维护平台目录、活动公司、知识选择、MySQL 引用、模型路由、Codex、执行开关和端口；运行时绑定变化明确要求重启 |
+| M15 Web 交付控制台 | 浏览器完成 Project 选择、Requirement 创建、Product 对话与批准、统一继续/精确恢复计划批准和候选领取；操作先写入 Team sidecar，再由后台 Manager 执行，页面刷新不丢单；CLI 降为运维和 break-glass 入口 |
+| M16 平台管理面 | 浏览器创建/选择 Project，导入 Markdown/TXT/PDF/DOCX 为内容寻址的 Team 知识，并维护平台目录、知识选择、MySQL 引用、模型路由、Codex、执行开关和端口；运行时绑定变化明确要求重启 |
+| M17 Team–Project 边界 | 将唯一 Team 与多个 Project 设为并列聚合；Project 管理知识、规范、Repository 和 Requirement；增加 Web Console 后台启动、停止、重启、状态和日志脚本 |
 
 ## 文档导航
 

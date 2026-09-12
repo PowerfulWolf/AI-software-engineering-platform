@@ -23,9 +23,9 @@ ContextBuilder.build(task: Task, role: AgentRole, *, attempt: int,
 ContextStore.put(context: ContextBundle) -> ContextBundle
 ContextStore.get(context_id: ContextId) -> ContextBundle
 validate_artifact(payload: object, kind: ArtifactKind) -> Artifact
-ProjectWorkspaceRegistry.register(project_root: str | Path, *,
-                                   project_id: ProjectId | str | None = None) -> ProjectWorkspace
-ProjectWorkspace.directory(name: WorkspaceDirectory) -> Path
+RepositoryWorkspaceRegistry.register(repository_root: str | Path, *,
+                                   repository_id: RepositoryId | str | None = None) -> RepositoryWorkspace
+RepositoryWorkspace.directory(name: WorkspaceDirectory) -> Path
 ```
 
 `AgentRequest` 必须携带 `task_id`、`run_id`、`attempt`、`source_revision`、`context_manifest_id`、permissions 和 output schema；`AgentResult` 不能直接改变 Task 状态。
@@ -41,10 +41,10 @@ finalizer 在机器策略校验后创建新 commit。最终 implementation-repor
 
 ### Project binding and sidecar workspace
 
-`ProjectWorkspaceManifest` 的 wire contract 是 `schemas/project-workspace.schema.json`。它固定
-`project_id`、canonical absolute `project_root`、external `ai_workspace_root`、layout version、
+`RepositoryWorkspaceManifest` 的 wire contract 是 `schemas/project-workspace.schema.json`。它固定
+`repository_id`、canonical absolute `repository_root`、external `ai_workspace_root`、layout version、
 创建时间和排除自身字段计算的 `manifest_sha256`。当前初始 `layout_version=v0.1`；
-`ProjectWorkspaceRegistry` 在 sidecar 中创建 `workspace.json` 以及 profile/assignments/
+`RepositoryWorkspaceRegistry` 在 sidecar 中创建 `workspace.json` 以及 profile/assignments/
 knowledge/policy/state/artifacts/contexts/evidence/evaluations/handoffs/runs/locks/logs/
 spec-conflicts 目录；所有目录先 staging + fsync，再以 rename 发布。重复注册返回首次 manifest，
 不会覆盖或修复现有 workspace。
@@ -113,8 +113,8 @@ Artifact ID 映射到受控 root 下的单一 JSON 文件。相同 ID/相同正�
 | parent/supersedes 缺失或越界 | `ArtifactParentError`，不落盘 | 否 |
 | 相同 artifact ID 的正文变化 | `ArtifactAlreadyExists`，保留旧正文 | 否 |
 | Project root 缺失 / sidecar 与项目重叠 | registry 拒绝初始化，目标项目保持不变 | 否 |
-| Project ID 已绑定另一目录 | `ProjectWorkspaceConflict`，保留首次 manifest | 否 |
-| manifest/layout 损坏或缺失 | `ProjectWorkspaceCorruption`，不自动修复 | 否 |
+| Project ID 已绑定另一目录 | `RepositoryWorkspaceConflict`，保留首次 manifest | 否 |
+| manifest/layout 损坏或缺失 | `RepositoryWorkspaceCorruption`，不自动修复 | 否 |
 
 ## 5. Good / Base / Bad Cases
 
@@ -122,7 +122,7 @@ Artifact ID 映射到受控 root 下的单一 JSON 文件。相同 ID/相同正�
 - **Base**：模型输出额外字段时 adapter 先过滤/拒绝，绝不把未定义字段当作授权信息。
 - **Bad**：Coder 在报告中写 `qa_status=PASS`，Orchestrator 直接采信；这属于自我裁判和契约越界。
 - **Project workspace Good**：注册只在外置 sidecar 发布固定 layout，重复调用返回首次 manifest。
-- **Project workspace Base**：空本地目录可以注册，语言、构建和规范发现留给 ProjectProfile。
+- **Project workspace Base**：空本地目录可以注册，语言、构建和规范发现留给 RepositoryProfile。
 - **Project workspace Bad**：把平台 SQLite/Artifact/Agent 日志写到目标项目，或自动修补损坏 layout。
 
 ## 6. Tests Required
@@ -223,15 +223,15 @@ validate_assignment_independence(candidate: RoleAssignment,
 PortfolioScheduler.match(...) -> AssignmentDecision
 PortfolioScheduler.schedule(...) -> tuple[AssignmentDecision, ...]
 ModelRouter.route(...) -> ModelRoutingDecision
-ProjectProfile.discover(...) -> ProjectProfile
+RepositoryProfile.discover(...) -> RepositoryProfile
 SpecCompiler.compile(...) -> SpecCompilation
 RuntimeWorkforceResolver.resolve(...) -> RuntimeAgentRun
 ```
 
-Wire contract 是 `schemas/workforce.schema.json` 的 discriminated union。`AgentProfile` 是组织成员
-身份，不包含 project path 或 concrete model；`AgentDefinition` 仍是 TaskOrchestrator 消费的
-resolved single-role run config。Project sidecar 只持久化 `assignments/`，AgentProfile、
-ModelPolicy、全局 WorkQueue 和绩效属于组织 workspace。
+Wire contract 是 `schemas/workforce.schema.json` 的 discriminated union。`AgentProfile` 是 Team 成员
+身份，不包含 Repository path 或 concrete model；`AgentDefinition` 仍是 TaskOrchestrator 消费的
+resolved single-role run config。Repository sidecar 只持久化该代码目录的运行事实，AgentProfile、
+ModelPolicy、全局 WorkQueue 和绩效属于唯一 Team workspace。
 
 `RunDemand` 是 ModelRouter 的输入事实：它记录 role/risk、required capabilities、context token
 估计、计划文件数、受影响架构层、历史失败/QA 驳回/Review 驳回次数和是否触及 critical path。计数
@@ -248,11 +248,11 @@ ModelPolicy、全局 WorkQueue 和绩效属于组织 workspace。
 | Lease expiry 不晚于 acquired_at，或用 naive datetime 评估 | 拒绝 |
 | 同一 Task 历史的 Coder/QA/Reviewer 使用同一 agent_id | `AssignmentConflict` |
 | AgentRunAllocation 缺 Agent/Model/Context/Prompt/Spec/tool policy 任一归因 | Schema 拒绝 |
-| project sidecar 声明 `agents/` | ProjectWorkspace 拒绝结构漂移；AgentProfile 只能存在于 organization workspace |
+| Repository sidecar 声明 `agents/` | RepositoryWorkspace 拒绝结构漂移；AgentProfile 只能存在于 Team workspace |
 | waiting/future retry/closed WorkItem | Scheduler 返回 typed rejection，不创建 Assignment/Lease |
 | batch 内新 Lease 将导致 capacity 超限 | 后续 WorkItem 返回 `CAPACITY_EXHAUSTED` |
 | route 无显式 context capacity 或没有满足 tier 的 route | ModelRouter typed refusal，不能猜测 |
-| ProjectProfile 遇到 symlink escape、非 UTF-8 rule、revision mismatch | typed error，不返回 partial profile |
+| RepositoryProfile 遇到 symlink escape、非 UTF-8 rule、revision mismatch | typed error，不返回 partial profile |
 | 结构化规范冲突 | `SpecCompilation.status=CONFLICT` + `WAITING_HUMAN`；不按层级静默覆盖 |
 | resolution 尝试放宽 hard safety 或缺 evidence | `SpecResolutionRejected` |
 | runtime workspace 重叠、manifest/profile/binding 漂移 | RuntimeWorkspace typed conflict/corruption |
@@ -269,11 +269,11 @@ ModelPolicy、全局 WorkQueue 和绩效属于组织 workspace。
 
 - `tests/workforce/test_contracts.py` 覆盖 organization identity、risk floor、waiting reason、lease
   window、自审冲突、run attribution 和 Python ↔ JSON Schema；
-- `tests/project_workspace/` 与 `tests/contracts/` 覆盖当前 v0.1 assignments layout 和
+- `tests/repository_workspace/` 与 `tests/contracts/` 覆盖当前 v0.1 assignments layout 和
   project-owned agents 结构拒绝；
 - `tests/scheduling/` 覆盖 capacity aggregate、Lease release/expiry、priority/age/risk、batch 新 Lease、
   no-self-review、deterministic ModelRouter 和 typed refusal；
-- `tests/project_profile/`、`tests/spec_compiler/`、`tests/runtime_workspace/` 覆盖跨语言发现、规则
+- `tests/repository_profile/`、`tests/spec_compiler/`、`tests/runtime_workspace/` 覆盖跨语言发现、规则
   完整性、人工冲突治理、workspace 隔离和 allocation cross-object guards。
 
 ### 10.5 Wrong vs Correct
@@ -282,7 +282,7 @@ ModelPolicy、全局 WorkQueue 和绩效属于组织 workspace。
 
 ```python
 # Project owns a copied Agent and one mutable session multiplexes unrelated Tasks.
-project_agents[project_id] = AgentDefinition(model="largest-model", role="coder", ...)
+project_agents[repository_id] = AgentDefinition(model="largest-model", role="coder", ...)
 shared_session.run(task_a)
 shared_session.run(task_b)
 ```
@@ -290,7 +290,7 @@ shared_session.run(task_b)
 #### Correct
 
 ```python
-profile = AgentProfile.model_validate(organization_agent_payload)
+profile = AgentProfile.model_validate(team_agent_payload)
 assignment = RoleAssignment.model_validate(project_assignment_payload)
 validate_assignment_independence(assignment, existing_assignments)
 allocation = AgentRunAllocation.model_validate(run_allocation_payload)
@@ -301,9 +301,9 @@ assert allocation.assignment_id == assignment.id
 前者复制组织身份、把 model 固化到成员并产生跨 Task 上下文串扰；后者让 Project 只保存
 Assignment，每个 Run 显式记录成员、模型、Context 与 policy。
 
-## 11. T028 Project Manager Agent, Skills, and stage artifacts
+## 11. T028 Manager Agent, Skills, and stage artifacts
 
-Project Manager 是组织级团队领导 Agent，不是与 Agent 并列的用户可见 Service。它只能通过 typed、
+Manager 是组织级团队领导 Agent，不是与 Agent 并列的用户可见 Service。它只能通过 typed、
 policy-bound Skills 执行 `prepare_project`、`advance_stage`、`commit_dispatch`、`route_failure` 和
 `deliver_result`；每个 Skill 由 deterministic application service 实现，并只持有完成该能力所需的
 最小 ports。Prompt 不授予状态、store、shell 或启动其他 Agent 的 ambient authority。
@@ -325,7 +325,7 @@ requirement/acceptance IDs；ExecutionPlan v0.1 固定 Coder→QA→Reviewer，�
 provider/Lease 字段。完整 chain 通过 `derive_delivery_task` 后，现有 Task/Artifact/Orchestrator contract
 才开始生效。
 
-## 12. T029 Project Manager preparation Skill
+## 12. T029 Manager preparation Skill
 
 ### 12.1 Scope / Trigger
 
@@ -336,21 +336,21 @@ provider/Lease 字段。完整 chain 通过 `derive_delivery_task` 后，现有 
 ### 12.2 Signatures
 
 ```python
-class ProjectManagerSkill(Protocol):
+class ManagerSkill(Protocol):
     def prepare_project(self, request: PrepareProjectRequest) -> PrepareProjectResult: ...
     def require_product_context(self, result: PrepareProjectResult) -> ProjectPreparation: ...
     def advance_stage(self, request: StageAdvanceRequest) -> StageAdvanceAuthorization: ...
 
 ProjectBaselineCompiler.compile(
-    profile: ProjectProfile,
+    profile: RepositoryProfile,
     rules: Sequence[SpecRule],
     *,
     compiled_at: datetime,
 ) -> ProjectBaselineCompilation
 
 FileProjectPreparationStore.put(preparation: ProjectPreparation) -> ProjectPreparation
-FileProjectPreparationStore.get(project_id: ProjectId | str) -> ProjectPreparation
-FileProjectPreparationStore.find(project_id: ProjectId | str) -> ProjectPreparation | None
+FileProjectPreparationStore.get(repository_id: RepositoryId | str) -> ProjectPreparation
+FileProjectPreparationStore.find(repository_id: RepositoryId | str) -> ProjectPreparation | None
 ```
 
 Agent-visible wire schema：`schemas/agent-skill-project-manager.schema.json`。Project baseline wire
@@ -358,10 +358,10 @@ schema：`schemas/project-baseline.schema.json`。
 
 ### 12.3 Contracts
 
-- public request 只允许无控制字符的绝对 `project_root`；organization、registry、rules、clock、
+- public request 只允许无控制字符的绝对 `repository_root`；organization、registry、rules、clock、
   binder 和 stores 为 policy-bound dependencies，不从 Agent payload 取得；
 - 基线只接受 `PLATFORM_HARD/PLATFORM_ENGINEERING/PROJECT`，必须包含 hard safety，
-  `TASK` rule 一律拒绝；PROJECT rule 必须绑定 current ProjectProfile URI + digest；
+  `TASK` rule 一律拒绝；PROJECT rule 必须绑定 current RepositoryProfile URI + digest；
 - native project document 在没有显式 adapter 时只作为 opaque source；不从 Markdown 自动推断结构化
   rule；
 - 成功结果只有 `PREPARED + ProjectPreparation`；冲突结果只有 `WAITING_HUMAN +
@@ -399,13 +399,13 @@ schema：`schemas/project-baseline.schema.json`。
 
 ### 12.6 Tests Required
 
-- `tests/project_manager/test_baseline.py`：Task-free/稳定排序、Schema、hard safety、scope overlap、
+- `tests/manager/test_baseline.py`：Task-free/稳定排序、Schema、hard safety、scope overlap、
   source provenance、WAITING_HUMAN、append-once/tamper；
-- `tests/project_manager/test_store.py`：exact replay、changed identity、atomic failure、digest/envelope
+- `tests/manager/test_store.py`：exact replay、changed identity、atomic failure、digest/envelope
   corruption、symlink/path boundary；
-- `tests/project_manager/test_preparation.py`：Python/Java/C++ 仅目录接入、零污染、首次时间重放、
+- `tests/manager/test_preparation.py`：Python/Java/C++ 仅目录接入、零污染、首次时间重放、
   profile drift、recorder mismatch、重新验证 Product gate；
-- `tests/project_manager/test_stages.py`：exact prefix、approval/lineage、authorization digest 和无修改边界；
+- `tests/manager/test_stages.py`：exact prefix、approval/lineage、authorization digest 和无修改边界；
 - targeted pytest 与全量 pytest、Ruff check/format、strict Mypy、offline build、
   `git diff --check` 都是合并门禁。
 
@@ -418,16 +418,16 @@ fake_task = Task(description="unknown request", acceptance_criteria=())
 baseline = SpecCompiler().compile(fake_task, platform_rules, project_rules, ())
 if baseline.conflicts:
     baseline = prefer_project_rules(baseline)
-start_product_agent(project_root)
+start_product_agent(repository_root)
 ```
 
 #### Correct
 
 ```python
-request = PrepareProjectRequest(project_root=str(project_root.resolve()))
-result = project_manager.prepare_project(request)
-preparation = project_manager.require_product_context(result)
-authorization = project_manager.advance_stage(
+request = PrepareProjectRequest(repository_root=str(repository_root.resolve()))
+result = manager.prepare_project(request)
+preparation = manager.require_product_context(result)
+authorization = manager.advance_stage(
     StageAdvanceRequest(
         target=ProjectStage.PRODUCT_DISCOVERY,
         preparation=preparation,
@@ -446,7 +446,7 @@ ProjectPreparation 才能解锁 Product Agent。
 重放或 Designer gate 时必须遵守本契约。Product discovery 是 Task-free 上游阶段：不得创建假
 Delivery Task，也不得复用 Coder/QA/Reviewer 的 `AgentRole`、ContextBundle 或审批能力。
 
-`OrganizationRole` 表示长期团队岗位；`AgentRole` 只表示现有 Delivery runtime 的
+`TeamRole` 表示长期团队岗位；`AgentRole` 只表示现有 Delivery runtime 的
 `ORCHESTRATOR/CODER/QA/REVIEWER`。Product Agent 是组织成员，但不是 Delivery verdict participant。
 
 ### 13.2 Public signatures
@@ -482,7 +482,7 @@ Wire schemas：`schemas/product-context.schema.json`、`schemas/product-agent-ru
 
 - 四类 command 都必须带调用方生成的 aware `submitted_at`；command identity 包含完整 typed
   input。相同 operation/run ID + 相同 input 是 exact replay，不同 input 是 conflict；
-- Product context 必须携带并绑定 exact `ProjectProfile`、`ProjectSpecBaseline`、preparation、request
+- Product context 必须携带并绑定 exact `RepositoryProfile`、`ProjectSpecBaseline`、preparation、request
   revision、checkpoint 所引用的 dialogue prefix、current ProductSpec 和 fail-closed permissions；Agent
   不能只收到无内容的 hash 引用。独立 source 只有在存在独立 digest 时才能单独声明，项目 baseline
   作为一个 verified aggregate source；
@@ -491,7 +491,7 @@ Wire schemas：`schemas/product-context.schema.json`、`schemas/product-agent-ru
   `version=current+1`、`supersedes=current.id`；
 - 人类 decision command 只携带可信 channel reference。只有 `HumanProductDecisionVerifier` 返回的
   `VerifiedHumanProductDecision` 才能创建 Approval；Product Agent 不能构造 decision/operator/rationale；
-- APPROVED 必须在写入审批事实前调用 Project Manager 的 `advance_stage(request)`，由该 Skill
+- APPROVED 必须在写入审批事实前调用 Manager 的 `advance_stage(request)`，由该 Skill
   重新检查 current project facts；旧 preparation、旧 spec ID/digest 或 project drift 全部 fail closed；
 - Dialogue、ProjectRequestRevision、ProductSpec、Approval、Operation、Checkpoint 都 append-only。
   adapter/verifier/advancer 输出在内存中校验后，第一个 durable write 必须是携带完整 effect bundle、
@@ -520,7 +520,7 @@ Wire schemas：`schemas/product-context.schema.json`、`schemas/product-agent-ru
 ### 13.5 Good / Base / Bad Cases
 
 - **Good**：PREPARED 项目收到需求，Product Agent 多轮澄清并生成 v1 ProductSpec；可信人类通道
-  批准 exact ID/digest，Project Manager 重验 current facts 后解锁 Designer。
+  批准 exact ID/digest，Manager 重验 current facts 后解锁 Designer。
 - **Base**：adapter timeout 只形成 typed failure receipt；current discovery checkpoint 不变，后续可重试。
 - **Bad**：Product Agent 自批、从会话记忆猜用户决定、用最新文件替代 checkpoint prefix、把旧 preview
   当授权、在目标项目写对话/状态，或在 restart 时再次执行外部审批副作用。
@@ -570,8 +570,8 @@ assert approved.authorization is not None
 ### 14.1 Scope / Trigger
 
 修改 approved ProductSpec 到 Delivery Task 之间的 Designer、Planner、Scheduler/ModelRouter preview
-或 Project Manager dispatch 边界时，必须遵守本节。Designer/Planner 是
-`OrganizationRole`；它们不能加入只承载交付 verdict 的 `AgentRole`，也不能复用 Delivery
+或 Manager dispatch 边界时，必须遵守本节。Designer/Planner 是
+`TeamRole`；它们不能加入只承载交付 verdict 的 `AgentRole`，也不能复用 Delivery
 `ContextBundle`。
 
 ### 14.2 Signatures
@@ -586,15 +586,15 @@ FileExecutionPlanStore.put_execution_plan(plan) -> ExecutionPlan
 FileExecutionPlanStore.find_for_request(request_id) -> ExecutionPlan | None
 FileExecutionPlanStore.put_run(record) -> PlannerRunRecord
 FileExecutionPlanStore.put_checkpoint(checkpoint) -> PlannerCommitCheckpoint
-ProjectManagerDispatchService.commit_dispatch(request) -> DispatchCommitRecord
-DispatchAuthority.current_snapshot(project_id, task_id) -> DispatchWorkforceSnapshot
+ManagerDispatchService.commit_dispatch(request) -> DispatchCommitRecord
+DispatchAuthority.current_snapshot(repository_id, task_id) -> DispatchWorkforceSnapshot
 DispatchAuthority.commit_if_current(record, expected_snapshot_sha256) -> DispatchCommitRecord
 SqliteDispatchAuthority.seed_snapshot(snapshot) -> DispatchWorkforceSnapshot
 ```
 
-`src/ai_software_engineer/project_manager/dispatch_authority.py` owns two SQLite tables:
-`dispatch_workforce_snapshots(project_id, task_id, payload_json, snapshot_sha256)` and
-`dispatch_commits(id, project_id, task_id, payload_json, dispatch_sha256)`. The latter row is the
+`src/ai_software_engineer/manager/dispatch_authority.py` owns two SQLite tables:
+`dispatch_workforce_snapshots(repository_id, task_id, payload_json, snapshot_sha256)` and
+`dispatch_commits(id, repository_id, task_id, payload_json, dispatch_sha256)`. The latter row is the
 single allocation commit point; Assignment/Lease projections are rebuilt from its exact typed payload.
 
 Wire contracts：`designer-context.schema.json`、`designer-agent-run.schema.json`、
@@ -604,7 +604,7 @@ Wire contracts：`designer-context.schema.json`、`designer-agent-run.schema.jso
 
 ### 14.3 Contracts
 
-- Designer context 必须携带完整 ProjectPreparation、ProjectProfile、ProjectSpecBaseline、当前
+- Designer context 必须携带完整 ProjectPreparation、RepositoryProfile、ProjectSpecBaseline、当前
   DESIGNING request revision 和 exact approved ProductSpec/Approval；URI/hash 不能代替 Agent 需要的正文；
 - Designer 只能生成 TechnicalDesign。成功结果必须精确覆盖所有 requirement/acceptance IDs；
   receipt 必须先于任何 effect；PLANNING revision 使用 expected-predecessor CAS 发布，随后发布 design
@@ -657,7 +657,7 @@ Wire contracts：`designer-context.schema.json`、`designer-agent-run.schema.jso
   commit → 一个包含三个独立 Agent 分配的 dispatch record；两个 authority 实例竞争时只有一个 commit。
 - **Base**：当前没有满足 context/risk/minimum tier 的 route，preview 明确拒绝；更新组织 policy/facts
   后重新 preview，不把不可行计划伪装成可执行。
-- **Bad**：Planner 把 agent/model 写进 ExecutionPlan，或 Project Manager 逐阶段写 store 后才发现
+- **Bad**：Planner 把 agent/model 写进 ExecutionPlan，或 Manager 逐阶段写 store 后才发现
   Reviewer 无容量；这会让建议越权并留下半提交事实。
 
 ### 14.6 Tests Required
@@ -684,7 +684,7 @@ for phase in plan.phases:
 
 ```python
 preview = planner_preview.preview(snapshot)  # pure/read-only evidence
-record = project_manager.commit_dispatch(exact_handoff.with_preview(preview))
+record = manager.commit_dispatch(exact_handoff.with_preview(preview))
 # service 自行读取权威 facts；全部成功后仅调用一次 authority.commit_if_current(...)
 ```
 
@@ -692,7 +692,7 @@ record = project_manager.commit_dispatch(exact_handoff.with_preview(preview))
 
 ### 15.1 Scope / Trigger
 
-修改“项目目录 + 需求”入口、Project Manager delivery checkpoint、Dispatch 到 Task runtime 的桥接，
+修改“项目目录 + 需求”入口、Manager delivery checkpoint、Dispatch 到 Task runtime 的桥接，
 或 role worktree 恢复规则时，必须遵守本节。T032 只组合既有阶段；不得在 bridge 中重新做产品、
 设计、资源规划，也不得把 Runtime 内部路径暴露成每次接单的业务参数。
 
@@ -715,8 +715,8 @@ project_entry() -> UnifiedProjectEntryService
 ```
 
 CLI 合同固定为 `ase project start/reply/approve/resume/status`。测试宿主可以显式绑定
-organization-owned team composition；T034 后，未注入测试 provider 时 `project_entry()` 必须惰性创建
-`OrganizationTeamHost.from_environment()`。配置、MySQL 或 provider 前置条件失败时以稳定错误退出，不得
+Team-owned team composition；T034 后，未注入测试 provider 时 `project_entry()` 必须惰性创建
+`TeamHost.from_environment()`。配置、MySQL 或 provider 前置条件失败时以稳定错误退出，不得
 回退伪造 Agent。
 
 ### 15.3 Contracts
@@ -740,8 +740,8 @@ organization-owned team composition；T034 后，未注入测试 provider 时 `p
 - role runtime 必须消费 dispatch 内的 exact Agent/model/provider/Assignment/Lease。Coder 从 Task 的
   full base SHA 创建 branch worktree；QA 与 Reviewer 从同一 full candidate SHA 创建互相独立的 detached
   worktree；恢复必须核对 common-dir、path、role、attempt、branch/detached 和 HEAD，dirty 现场保留；
-- CLI 每次接单只需要 project root、requirement 和可选 title。数据库、artifact、context、evidence、
-  evaluation、handoff、worktree roots 由 application host 从 project sidecar/organization workspace
+- 兼容 CLI 每次接单只需要已配置默认 Project、Repository roots、Requirement 和可选 title。数据库、artifact、context、evidence、
+  evaluation、handoff、worktree roots 由 application host 从 Repository sidecar/Team workspace
   组合，不能由用户逐次拼装；
 - checkpoint/intake 文件使用 canonical digest envelope、exclusive publish、write-all、root/directory
   inode 与 symlink/path 检查；changed replay 和篡改不能覆盖首次事实。
@@ -797,16 +797,16 @@ qa = git.checkout("candidate")  # movable ref，未消费 dispatch
 #### Correct
 
 ```python
-result = project_manager.start(StartProjectDelivery(project_root=root, requirement=text))
+result = manager.start(StartProjectDelivery(repository_root=root, requirement=text))
 # host 从 sidecar/organization 自动组合内部路径；人工只确认 exact Product checkpoint
 bindings = worktrees.open_verifiers(dispatch, full_candidate_sha, assigned_definitions)
 ```
 
-## 16. Scenario: bounded Coder continuation and organization-owned production team
+## 16. Scenario: bounded Coder continuation and Team-owned production team
 
 ### 16.1 Scope / Trigger
 
-当 Coder 无法在一次有界 Run 内完成实现，或 production Host 创建/打开组织 workspace 时适用。
+当 Coder 无法在一次有界 Run 内完成实现，或 production Host 创建/打开 Team workspace 时适用。
 目标是保留可验证的实现进度并重新调度同一长期成员，同时把“保存草稿”和“创建候选提交”拆成
 两个明确权限边界。单 Task 仍严格串行，不引入 DAG、后台消息队列或自动 merge。
 
@@ -816,7 +816,7 @@ bindings = worktrees.open_verifiers(dispatch, full_candidate_sha, assigned_defin
 CandidateCommitSkill.changed_paths() -> tuple[str, ...]
 CandidateCommitSkill.finalize(request: CandidateCommitRequest) -> CandidateCommitResult
 validate_artifact_payload(payload: object) -> Artifact
-production_organization_team(config: ProductionConfig) \
+production_team_roster(config: ProductionConfig) \
     -> tuple[tuple[AgentProfile, ...], ModelPolicy]
 RetryingOrchestrator.run_task(task_id: TaskId) -> RetryResult
 ```
@@ -835,8 +835,8 @@ RetryingOrchestrator.run_task(task_id: TaskId) -> RetryResult
 - `CandidateCommitSkill` 只在 implementation-report 完成路径运行。它精确校验 HEAD、reported/observed
   paths 与 `AgentPermissions`，使用固定 hook-free Git 参数创建一个 commit，并验证最终 clean 和
   base..candidate path inventory。Coder 模型不能自行取得这一 authority。
-- production roster 固定持久化 Project Manager、Product、Designer、Planner、Coder、QA、Reviewer
-  七个 `AgentProfile`。`OrganizationRole` 不包含 Orchestrator；Scheduler、ModelRouter、Orchestrator
+- production roster 固定持久化 Manager、Product、Designer、Planner、Coder、QA、Reviewer
+  七个 `AgentProfile`。`TeamRole` 不包含 Orchestrator；Scheduler、ModelRouter、Orchestrator
   是确定性能力，不创建 AgentProfile。
   需求仅创建 Assignment/Lease/Run/Context，不复制团队成员身份。
 
@@ -859,7 +859,7 @@ RetryingOrchestrator.run_task(task_id: TaskId) -> RetryResult
   完成后平台创建 candidate，再由独立 QA/Reviewer 验证。
 - **Base**：Coder 一次完成，直接经过 CandidateCommit，状态不经过 continuation loop。
 - **Bad**：超时后直接把 dirty worktree 提交给 QA；让 Coder 执行 git commit；每个需求临时创建
-  Project Manager/Product/Designer/Planner profile；把 Orchestrator 当可自主演化的团队成员。
+  Manager/Product/Designer/Planner profile；把 Orchestrator 当可自主演化的团队成员。
 
 ### 16.6 Tests Required
 

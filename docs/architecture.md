@@ -27,29 +27,29 @@ AgentProfile，也不能因模型额度耗尽而停止 Lease 安全维护。
 
 ### Knowledge Plane
 
-由 `.trellis/spec/`（组织级规则）、公司知识、项目文档、任务 PRD/Design、历史 artifact 摘要和失败
-经验组成。Web Console 可把本地 Markdown/TXT/PDF/DOCX 导入 Company sidecar：原文件、规范化
+由 `.trellis/spec/`（Team 规则）、Team 通用知识、Project 文档、Requirement PRD/Design、历史 artifact 摘要和失败
+经验组成。Web Console 可把本地 Markdown/TXT/PDF/DOCX 导入 Team sidecar：原文件、规范化
 Markdown 和 manifest 以内容寻址方式保存，仍需在设置中显式选择才会进入新需求。导入不调用模型
 改写正文。`context/` 中的 Context Router/Builder 只读取声明过的来源并生成带哈希、脱敏、预算约束的
-manifest；不把整仓库、整个公司目录或整段历史盲目塞给模型。policy section 由机器权限生成并固定
+manifest；不把整仓库、整个 Project 目录或整段历史盲目塞给模型。policy section 由机器权限生成并固定
 排在外部文本之前，上传文档和仓库内容永远是数据而非新的系统指令。
 
 ### Project Binding 与外置 AI Workspace
 
-生产装配以 Company 为外置 workspace 的收纳边界：
-`companies/<company_id>/knowledge/` 保存共享知识，`projects/` 保存项目知识与每仓运行子模块，
-`requests/` 保存需求项目联合记录。`CompanyWorkspace.project_registry()` 复用下述 per-repository
-绑定协议，并把公司身份纳入项目和交付 ID；organization workspace 仍独立拥有 Agent 与调度事实。
-这不是要求用户建立业务项目组，也不是 OS 级多租户沙箱。公司资料只按显式选择加载，不自动覆盖
-项目原生规范。需求项目先准备全部目录，再维护一份联合产品文档和批准链；联合设计/计划投影为
-原生单仓 Task。各仓独立 QA/Review 后，使用完整候选集合执行联合验收，全部通过才是整体 DONE。
+生产装配在同一外置 `platform_root` 下建立两个并列边界：`team/` 保存唯一团队的 Agent、Skills、
+通用知识和调度事实；`projects/<project_id>/` 保存 Project 知识、规范、Repository catalog 和
+Requirement 联合记录。`TeamWorkspace.project_registry()` 只打开这个 sibling Project registry，
+Project 再通过 `repository_registry()` 绑定代码目录。Team 不是 OS 级多租户沙箱；Team/Project 资料
+只按显式选择加载，不自动覆盖 Repository 原生规范。Requirement 先准备所选 1–N 个 Repository，
+再维护一份联合产品文档和批准链；联合设计/计划投影为各 Repository 的原生 Task。各仓独立
+QA/Review 后，使用完整候选集合执行联合验收，全部通过才是整体 DONE。
 
-`ProjectWorkspaceRegistry` 将操作者给出的本地 `project_root` 绑定到目标目录之外的
+`RepositoryWorkspaceRegistry` 将操作者给出的本地 `repository_root` 绑定到目标目录之外的
 `ai_workspace_root`。目标项目仍是实际代码、测试、构建和默认命令 cwd；sidecar 保存
-`ProjectProfile`、Assignment/规范、Task/StateEvent、Context、Artifact、Evidence、Evaluation、
+`RepositoryProfile`、Assignment/规范、Task/StateEvent、Context、Artifact、Evidence、Evaluation、
 Handoff、run metadata 和日志。当前初始 v0.1 layout 使用 `assignments/` 而不是 `agents/`，因为 Agent
 身份属于组织而不是项目。manifest 与固定 layout 是后续 Runtime/Context/Visualization
-共享的路径契约，注册过程不会复制源码或在目标项目写入平台文件。T020 的 `ProjectProfile`
+共享的路径契约，注册过程不会复制源码或在目标项目写入平台文件。T020 的 `RepositoryProfile`
 确定性发现语言、构建系统、VCS 和原生规则来源；T022 的 `RuntimeWorkspaceBinding` 将这些事实与
 组织 workspace、固定 RuntimePaths 绑定并在重开时校验完整性。
 
@@ -62,13 +62,13 @@ project-native rules 只读发现并以 URI/hash 引用。平台 hard safety pol
 结构化规则参与自动冲突检测。
 
 后续可选的 role worktree 是临时代码 checkout，与 sidecar 元数据分离；逻辑项目绑定仍指向给定
-`project_root`。Agent 工作可视化只从 sidecar durable facts 和目标项目只读 Git inspection 生成
+`repository_root`。Agent 工作可视化只从 sidecar durable facts 和目标项目只读 Git inspection 生成
 read projection，不成为第二个状态写入者，详见 [`docs/visualization.md`](visualization.md)。
 
-### Organization Workforce Plane
+### Team Workforce Plane
 
-组织 workspace 保存 `AgentProfile`、`ModelPolicy`、WorkQueue 和跨项目绩效；项目 sidecar 只保存
-Assignment、project access/policy override 和运行事实。一个 AgentProfile 可以声明多个可担任
+Team workspace 保存 `AgentProfile`、`ModelPolicy`、WorkQueue 和跨 Project 绩效；Repository sidecar 保存
+Project lineage、运行策略与运行事实。一个 AgentProfile 可以声明多个可担任
 Role 和 `max_parallel_assignments`，但每个 RoleAssignment 都必须有独立 TaskLease、Context、
 worktree、Artifact lineage 和 AgentRunAllocation。
 
@@ -173,11 +173,11 @@ Project directory + requirement
 | 运行日志 | 文件系统文本 | 脱敏、截断、由 evidence 引用 |
 | Evaluation events | 文件系统 canonical JSON | 一事件一文件，带内部 SHA-256，exact replay 幂等 |
 | Handoff | 文件系统 JSON + Markdown | deterministic ID，等价重建保留首次观察时间 |
-| Project workspace binding | 外置 sidecar `workspace.json` + 固定目录 | 目标项目外置、幂等、与项目路径绑定；不复制源码 |
-| Company knowledge documents | Company sidecar 原文件 + `content.md` + hashed manifest | 内容寻址、显式选择、来源和规范化摘要可验证；不递归自动加载 |
+| Repository workspace binding | Project-owned 外置 sidecar `workspace.json` + 固定目录 | 与目标代码路径和 Project lineage 绑定；不复制源码 |
+| Team knowledge documents | Team sidecar 原文件 + `content.md` + hashed manifest | 内容寻址、显式选择、来源和规范化摘要可验证；不递归自动加载 |
 | Production settings | `ASE_CONFIG` 指向的无密钥 JSON | Web Console 原子更新；运行时绑定变化要求重启，不热改 Host |
-| Agent/Model workforce | 组织 workspace + MySQL dispatch | AgentProfile/ModelPolicy 属于组织；已提交 Assignment/Lease 与 dispatch fence 在 MySQL |
-| ProjectProfile / Spec governance | Project sidecar 文件记录 | profile 与 runtime binding 不可变；冲突/resolution 使用带 SHA 的 append-only 记录 |
+| Agent/Model workforce | singleton Team workspace + MySQL dispatch | AgentProfile/ModelPolicy 属于 Team；已提交 Assignment/Lease 与 dispatch fence 在 MySQL |
+| RepositoryProfile / Spec governance | Repository sidecar 文件记录 | profile 与 runtime binding 不可变；冲突/resolution 使用带 SHA 的 append-only 记录 |
 | Trellis 规则 | Git 中的 Markdown | 组织知识，评审后变更 |
 
 Task 快照和状态事件的 Python 入口分别是 `Task` 与 `StateEvent`。Production Team Host 使用

@@ -8,10 +8,10 @@
     "kind",
     "schema_version",
     "context_id",
-    "project_id",
+    "repository_id",
     "request_id",
     "preparation",
-    "project_profile",
+    "repository_profile",
     "project_baseline",
     "project_request",
     "dialogue",
@@ -25,8 +25,8 @@
     "kind": {"const": "product_context_manifest"},
     "schema_version": {"const": "v0.1"},
     "context_id": {"type": "string", "pattern": "^ctx_[a-f0-9]{64}$"},
-    "project_id": {
-      "$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/projectId"
+    "repository_id": {
+      "$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/repositoryId"
     },
     "request_id": {
       "$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/requestId"
@@ -34,8 +34,8 @@
     "preparation": {
       "$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/ProjectPreparation"
     },
-    "project_profile": {
-      "$ref": "https://ai-software-engineer.local/schemas/project-profile.schema.json"
+    "repository_profile": {
+      "$ref": "https://ai-software-engineer.local/schemas/repository-profile.schema.json"
     },
     "project_baseline": {
       "$ref": "https://ai-software-engineer.local/schemas/project-baseline.schema.json#/$defs/ProjectSpecBaseline"

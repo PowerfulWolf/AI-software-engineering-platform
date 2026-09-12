@@ -13,12 +13,12 @@ from ai_software_engineer.domain import (
     ExecutionPlan,
     ModelPolicy,
     ModelRoute,
-    OrganizationRole,
     RiskModelFloor,
     RiskTier,
     Task,
     TaskConstraints,
     TaskLease,
+    TeamRole,
     WorkItem,
     WorkItemStatus,
 )
@@ -68,7 +68,7 @@ def _agents() -> tuple[AgentProfile, AgentProfile, AgentProfile]:
             version="v1",
             display_name=role.value,
             capabilities=("python",),
-            eligible_roles=(OrganizationRole(role.value),),
+            eligible_roles=(TeamRole(role.value),),
             max_parallel_assignments=1,
             default_model_policy_id="model_policy_planning_001",
         )
@@ -93,7 +93,7 @@ def _facts(
     task = delivery_task(prepared, request, spec, approved, design, plan)
     item = WorkItem(
         task_id=task.id,
-        project_id=prepared.project_id,
+        repository_id=prepared.repository_id,
         status=WorkItemStatus.READY,
         priority=500,
         risk=RiskTier.NORMAL,

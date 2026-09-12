@@ -219,13 +219,13 @@ class RuntimeSession:
         environment: Mapping[str, str] | None = None,
         agent_adapter: AgentAdapter | None = None,
         agent_definitions: Mapping[AgentRole, AgentDefinition] | None = None,
-        project_root: str | Path | None = None,
+        repository_root: str | Path | None = None,
     ) -> None:
         self._config = config
         self._agent_definitions = _validate_agent_definitions(
             agent_definitions if agent_definitions is not None else config.agent_definitions()
         )
-        self._project_root = _validated_project_root(project_root)
+        self._repository_root = _validated_repository_root(repository_root)
         self._case_model_id = _model_identity(self._agent_definitions)
         variables = environment if environment is not None else os.environ
         api_key = variables.get(config.api_key_env)
@@ -266,14 +266,14 @@ class RuntimeSession:
     ) -> RuntimeRunResult:
         """Record a CaseStartedEvent and run the existing bounded serial orchestrator."""
         task = self._repository.get(task_id)
-        project_root = Path(task.repository).expanduser().resolve(strict=False)
-        if self._project_root is not None and project_root != self._project_root:
+        repository_root = Path(task.repository).expanduser().resolve(strict=False)
+        if self._repository_root is not None and repository_root != self._repository_root:
             raise RuntimeConfigurationError(
                 f"Task {task.id} repository does not match bound project root"
             )
-        if not project_root.is_dir():
+        if not repository_root.is_dir():
             raise RuntimeConfigurationError(
-                f"Task {task.id} repository is not an existing directory: {project_root}"
+                f"Task {task.id} repository is not an existing directory: {repository_root}"
             )
         if task.status in {TaskStatus.DONE, TaskStatus.BLOCKED, TaskStatus.FAILED}:
             raise TaskNotRunnable(f"Task {task.id} is terminal at {task.status.value}")
@@ -287,7 +287,7 @@ class RuntimeSession:
             included="recovery_of_task_id" not in task.metadata,
         )
         context_builder = FileRunContextBuilder(
-            project_root,
+            repository_root,
             sources=self._config.context_sources,
             context_store=self._context_store,
             budget=ContextBudget(
@@ -442,10 +442,10 @@ def _case_started_event_id(case_id: str) -> str:
     return f"evalevt_case_started_{digest}"
 
 
-def _validated_project_root(project_root: str | Path | None) -> Path | None:
-    if project_root is None:
+def _validated_repository_root(repository_root: str | Path | None) -> Path | None:
+    if repository_root is None:
         return None
-    resolved = Path(project_root).expanduser().resolve(strict=False)
+    resolved = Path(repository_root).expanduser().resolve(strict=False)
     if not resolved.is_dir():
         raise RuntimeConfigurationError(f"bound project root is not a directory: {resolved}")
     return resolved

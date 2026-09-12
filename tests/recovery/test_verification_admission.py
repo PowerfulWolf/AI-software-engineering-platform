@@ -83,10 +83,10 @@ def test_consumed_failed_invocation_requires_a_new_plan_without_calling_provider
     adapter = InterruptedAdapter()
     inputs, repository, _ = setup_verification(tmp_path, adapter, Admission())
     scope = RecoveryScope(
-        company_id="company_test",
-        project_id="project_test",
+        team_id="team_test",
+        repository_id="repository_test",
         delivery_id="delivery_test",
-        project_root=str(tmp_path / "project"),
+        repository_root=str(tmp_path / "project"),
     )
     plan = CandidateVerificationPlan.create(
         scope=scope,
@@ -191,10 +191,10 @@ def test_durable_admission_reopens_without_repeating_provider(tmp_path: Path, ca
     adapter = InterruptedAdapter() if case == "interrupted" else ScriptedAdapter()
     inputs, repository, _ = setup_verification(tmp_path, adapter, Admission())
     scope = RecoveryScope(
-        company_id="company_test",
-        project_id="project_test",
+        team_id="team_test",
+        repository_id="repository_test",
         delivery_id="delivery_test",
-        project_root=str(tmp_path / "project"),
+        repository_root=str(tmp_path / "project"),
     )
     plan = CandidateVerificationPlan.create(
         scope=scope,

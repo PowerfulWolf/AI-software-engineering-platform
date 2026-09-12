@@ -2,7 +2,7 @@
 
 Opaque project documents remain declared Context sources; this module does not pretend to
 understand arbitrary Markdown. Adapters may emit structured ``SpecRule`` values for facts they
-can prove, and every project rule is checked against a URI/hash from ``ProjectProfile``.
+can prove, and every project rule is checked against a URI/hash from ``RepositoryProfile``.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ from pydantic import (
 )
 
 from ai_software_engineer.context.models import ContextSource
-from ai_software_engineer.domain.identity import ProjectId
+from ai_software_engineer.domain.identity import RepositoryId
 from ai_software_engineer.domain.model import (
     DomainModel,
     JsonValue,
@@ -40,7 +40,7 @@ from ai_software_engineer.domain.model import (
     ensure_unique,
 )
 from ai_software_engineer.domain.task import AcceptanceCriterionId, Task, TaskId
-from ai_software_engineer.project_profile import ProjectProfile, Sha256
+from ai_software_engineer.repository_profile import RepositoryProfile, Sha256
 
 SpecRuleId = Annotated[str, StringConstraints(pattern=r"^rule_[a-z0-9][a-z0-9_-]{2,63}$")]
 SpecConflictId = Annotated[str, StringConstraints(pattern=r"^spec_conflict_[a-f0-9]{64}$")]
@@ -55,7 +55,7 @@ class SpecCompilerError(RuntimeError):
 
 
 class SpecSourceMismatch(SpecCompilerError):
-    """Raised when a structured project rule is not backed by ProjectProfile."""
+    """Raised when a structured project rule is not backed by RepositoryProfile."""
 
 
 class HardPolicyMissing(SpecCompilerError):
@@ -157,7 +157,7 @@ class SpecConflict(DomainModel):
     kind: Literal["SPEC_CONFLICT"] = "SPEC_CONFLICT"
     schema_version: Literal["v0.1"] = "v0.1"
     id: SpecConflictId
-    project_id: ProjectId
+    repository_id: RepositoryId
     task_id: TaskId
     field: RuleField
     classification: SpecConflictClass
@@ -224,7 +224,7 @@ class SpecResolution(DomainModel):
     id: SpecResolutionId
     conflict_id: SpecConflictId
     conflict_sha256: Sha256
-    project_id: ProjectId
+    repository_id: RepositoryId
     task_id: TaskId
     action: SpecResolutionAction
     selected_rule_id: SpecRuleId | None = None
@@ -272,7 +272,7 @@ class SpecResolution(DomainModel):
             id=record_id,
             conflict_id=conflict.id,
             conflict_sha256=conflict.conflict_sha256,
-            project_id=conflict.project_id,
+            repository_id=conflict.repository_id,
             task_id=conflict.task_id,
             action=action,
             selected_rule_id=selected_rule_id,
@@ -301,7 +301,7 @@ class CompiledSpec(DomainModel):
 
     kind: Literal["compiled_spec"] = "compiled_spec"
     schema_version: Literal["v0.1"] = "v0.1"
-    project_id: ProjectId
+    repository_id: RepositoryId
     task_id: TaskId
     rules: Annotated[tuple[SpecRule, ...], Field(min_length=1)]
     opaque_project_sources: tuple[SpecSourceRef, ...] = ()
@@ -328,7 +328,7 @@ class CompiledSpec(DomainModel):
         self.validate_integrity()
         return ContextSource(
             source_id="compiled.spec",
-            uri=f"spec://{self.project_id}/{self.task_id}/{self.compiled_sha256}",
+            uri=f"spec://{self.repository_id}/{self.task_id}/{self.compiled_sha256}",
             content=_canonical_json(self.to_wire()),
             priority=10,
             required=True,
@@ -340,7 +340,7 @@ class SpecCompilation(DomainModel):
 
     kind: Literal["spec_compilation"] = "spec_compilation"
     status: SpecCompilationStatus
-    project_id: ProjectId
+    repository_id: RepositoryId
     task_id: TaskId
     compiled_spec: CompiledSpec | None = None
     conflicts: tuple[SpecConflict, ...] = ()
@@ -354,7 +354,7 @@ class SpecCompilation(DomainModel):
             if self.compiled_spec is None or self.conflicts or self.route is not None:
                 raise ValueError("COMPILED result requires only compiled_spec")
             if (
-                self.compiled_spec.project_id != self.project_id
+                self.compiled_spec.repository_id != self.repository_id
                 or self.compiled_spec.task_id != self.task_id
             ):
                 raise ValueError("compiled_spec does not match compilation project/Task")
@@ -362,7 +362,7 @@ class SpecCompilation(DomainModel):
             raise ValueError("CONFLICT result requires conflicts and WAITING_HUMAN route")
         else:
             if any(
-                conflict.project_id != self.project_id or conflict.task_id != self.task_id
+                conflict.repository_id != self.repository_id or conflict.task_id != self.task_id
                 for conflict in self.conflicts
             ):
                 raise ValueError("conflict does not match compilation project/Task")
@@ -385,7 +385,7 @@ class SpecCompiler:
 
     def compile(
         self,
-        profile: ProjectProfile,
+        profile: RepositoryProfile,
         task: Task,
         rules: Sequence[SpecRule],
         *,
@@ -401,7 +401,7 @@ class SpecCompiler:
         ensure_unique((rule.id for rule in all_rules), "SpecRule IDs")
         self._validate_rule_sources(profile, task, all_rules)
         ordered = tuple(sorted(all_rules, key=_rule_sort_key))
-        conflicts = self._detect_conflicts(profile.project_id, task, ordered, compiled_at)
+        conflicts = self._detect_conflicts(profile.repository_id, task, ordered, compiled_at)
         ensure_unique(
             (resolution.conflict_id for resolution in resolutions),
             "SpecResolution conflict IDs",
@@ -452,7 +452,7 @@ class SpecCompiler:
             return _seal_compilation(
                 SpecCompilation(
                     status=SpecCompilationStatus.CONFLICT,
-                    project_id=profile.project_id,
+                    repository_id=profile.repository_id,
                     task_id=task.id,
                     conflicts=tuple(unresolved),
                     route=route,
@@ -466,7 +466,7 @@ class SpecCompiler:
             SpecSourceRef(uri=source.uri, sha256=source.sha256) for source in profile.native_rules
         )
         provisional = CompiledSpec(
-            project_id=profile.project_id,
+            repository_id=profile.repository_id,
             task_id=task.id,
             rules=effective,
             opaque_project_sources=opaque_sources,
@@ -477,7 +477,7 @@ class SpecCompiler:
         return _seal_compilation(
             SpecCompilation(
                 status=SpecCompilationStatus.COMPILED,
-                project_id=profile.project_id,
+                repository_id=profile.repository_id,
                 task_id=task.id,
                 compiled_spec=compiled,
                 compiled_at=compiled_at,
@@ -487,7 +487,7 @@ class SpecCompiler:
 
     @staticmethod
     def _validate_rule_sources(
-        profile: ProjectProfile,
+        profile: RepositoryProfile,
         task: Task,
         rules: Iterable[SpecRule],
     ) -> None:
@@ -513,7 +513,7 @@ class SpecCompiler:
 
     @staticmethod
     def _detect_conflicts(
-        project_id: ProjectId,
+        repository_id: RepositoryId,
         task: Task,
         rules: tuple[SpecRule, ...],
         detected_at: datetime,
@@ -534,7 +534,7 @@ class SpecCompiler:
             )
             provisional = SpecConflict(
                 id=f"spec_conflict_{'0' * 64}",
-                project_id=project_id,
+                repository_id=repository_id,
                 task_id=task.id,
                 field=field,
                 classification=classification,
@@ -567,7 +567,7 @@ def validate_resolution(conflict: SpecConflict, resolution: SpecResolution) -> N
     if (
         resolution.conflict_id != conflict.id
         or resolution.conflict_sha256 != conflict.conflict_sha256
-        or resolution.project_id != conflict.project_id
+        or resolution.repository_id != conflict.repository_id
         or resolution.task_id != conflict.task_id
     ):
         raise SpecResolutionRejected("resolution does not bind the exact conflict identity")

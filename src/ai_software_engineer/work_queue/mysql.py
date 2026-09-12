@@ -623,7 +623,7 @@ class MySqlPersistentWorkQueue:
             CREATE TABLE IF NOT EXISTS work_queue_items (
                 id VARCHAR(128) PRIMARY KEY,
                 task_id VARCHAR(128) NOT NULL,
-                project_id VARCHAR(128) NOT NULL,
+                repository_id VARCHAR(128) NOT NULL,
                 role VARCHAR(32) NOT NULL,
                 attempt SMALLINT UNSIGNED NOT NULL,
                 checkpoint_sequence INT UNSIGNED NOT NULL,
@@ -704,14 +704,14 @@ class MySqlPersistentWorkQueue:
             typed.execute(
                 """
                 INSERT INTO work_queue_items
-                    (id,task_id,project_id,role,attempt,checkpoint_sequence,status,priority,
+                    (id,task_id,repository_id,role,attempt,checkpoint_sequence,status,priority,
                      risk_rank,available_at,payload_json,created_at,updated_at)
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 """,
                 (
                     item.id,
                     item.task_id,
-                    item.project_id,
+                    item.repository_id,
                     item.role.value,
                     item.attempt,
                     item.checkpoint_sequence,
@@ -906,7 +906,7 @@ class MySqlPersistentWorkQueue:
     ) -> None:
         if (
             assignment.task_id != item.task_id
-            or assignment.project_id != item.project_id
+            or assignment.repository_id != item.repository_id
             or assignment.role is not item.role
             or assignment.attempt != item.attempt
             or lease.assignment_id != assignment.id

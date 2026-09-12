@@ -5,12 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from ai_software_engineer.project_profile import ProjectProfile
+from ai_software_engineer.repository_profile import RepositoryProfile
 from ai_software_engineer.runtime_workspace import (
     RuntimeWorkspaceBinder,
     RuntimeWorkspaceConflict,
     RuntimeWorkspaceCorruption,
-    load_project_profile,
+    load_repository_profile,
 )
 from tests.runtime_workspace.test_binding import NOW, bind
 
@@ -24,16 +24,18 @@ def test_versioned_binding_preserves_legacy_and_rejects_damage(tmp_path: Path, d
         binder.bind(org, workspace, old_profile, bound_at=NOW + timedelta(hours=1)) == old_binding
     )
     (project / "README.md").write_text("second baseline\n")
-    profile = ProjectProfile.discover(project, project_id=workspace.project_id, observed_at=NOW)
+    profile = RepositoryProfile.discover(
+        project, repository_id=workspace.repository_id, observed_at=NOW
+    )
     current = binder.bind(org, workspace, profile, bound_at=NOW + timedelta(hours=2))
-    assert current.project_id == old_binding.project_id
+    assert current.repository_id == old_binding.repository_id
     assert current.binding_sha256 != old_binding.binding_sha256
     assert all(p.read_bytes() == content for p, content in before.items())
-    assert load_project_profile(workspace.root, old_profile.profile_sha256) == old_profile
+    assert load_repository_profile(workspace.root, old_profile.profile_sha256) == old_profile
     assert binder.bind(org, workspace, profile, bound_at=NOW + timedelta(hours=3)) == current
-    with pytest.raises(RuntimeWorkspaceConflict, match="target project facts changed"):
+    with pytest.raises(RuntimeWorkspaceConflict, match="target repository facts changed"):
         old_binding.validate_environment()
-    record = workspace.directory("profile") / f"project-profile-{profile.profile_sha256}.json"
+    record = workspace.directory("profile") / f"repository-profile-{profile.profile_sha256}.json"
     if damage == "corrupt":
         record.write_text("{}")
     else:

@@ -9,36 +9,35 @@ from pathlib import Path
 
 from ai_software_engineer.agents import StoredContextResolver
 from ai_software_engineer.artifacts import FileArtifactStore
-from ai_software_engineer.company_workspace import _read_regular, _reject_symlinks
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.context import FileContextStore
 from ai_software_engineer.domain import AgentDefinition, AgentRole, WorkItem, WorkItemStatus
 from ai_software_engineer.git import GitWorktreeManager
-from ai_software_engineer.orchestration import FileRunContextBuilder
-from ai_software_engineer.planning import FileExecutionPlanStore
-from ai_software_engineer.planning.preview import derive_phase_demands
-from ai_software_engineer.product import FileProductRecordStore
-from ai_software_engineer.project_manager.delivery_checkpoint import (
+from ai_software_engineer.manager.delivery_checkpoint import (
     FileProjectDeliveryCheckpointStore,
     checkpoint_sha256_is_ancestor,
 )
-from ai_software_engineer.project_manager.dispatch import (
+from ai_software_engineer.manager.dispatch import (
     DispatchPhaseCommit,
     DispatchWorkforceSnapshot,
     VerificationReservation,
 )
-from ai_software_engineer.project_manager.mysql_dispatch_authority import MySqlDispatchAuthority
-from ai_software_engineer.project_manager.production_backend import (
+from ai_software_engineer.manager.mysql_dispatch_authority import MySqlDispatchAuthority
+from ai_software_engineer.manager.production_backend import (
     ProductionProjectDeliveryBackend,
     _agent_definitions,
     _delivery_role_permissions,
     _task_commands,
 )
-from ai_software_engineer.project_manager.production_delivery import (
+from ai_software_engineer.manager.production_delivery import (
     ConfiguredDeliveryRouteAdapterFactory,
     DeliveryRouteAdapterFactory,
     DispatchDeliveryAgentAdapter,
 )
+from ai_software_engineer.orchestration import FileRunContextBuilder
+from ai_software_engineer.planning import FileExecutionPlanStore
+from ai_software_engineer.planning.preview import derive_phase_demands
+from ai_software_engineer.product import FileProductRecordStore
 from ai_software_engineer.recovery.models import (
     RecoveryApprovalCommand,
     RecoveryRejected,
@@ -64,18 +63,19 @@ from ai_software_engineer.recovery.verification_records import (
     CandidateVerificationPlan,
     verification_inputs_are_current,
 )
-from ai_software_engineer.runtime_workspace import load_project_profile
+from ai_software_engineer.runtime_workspace import load_repository_profile
 from ai_software_engineer.scheduling import ModelRouter, PortfolioScheduler
 from ai_software_engineer.scheduling.models import (
     AssignmentDecisionStatus,
     ModelRoutingDecisionStatus,
 )
 from ai_software_engineer.store import MySqlTaskRepository
+from ai_software_engineer.team_workspace import _read_regular, _reject_symlinks
 
 
 def verification_store_root(source: NativeCandidateSource) -> Path:
     return (
-        Path(source.stages.preparation.project_workspace_root)
+        Path(source.stages.preparation.repository_workspace_root)
         / "state"
         / f"candidate-verification-{source.scope.delivery_id}"
     )
@@ -92,7 +92,7 @@ def open_candidate_verification_plan(
     plan = CandidateVerificationPlan.model_validate(envelope["record"])
     source = NativeCandidateSourceReader(config, environment).inspect(plan.scope)
     expected = verification_store_root(source) / f"verification-plan-{plan.plan_sha256}.json"
-    if path != expected or plan.scope.company_id != config.company_id:
+    if path != expected or plan.scope.team_id != config.team_id:
         raise RecoveryRejected("verification plan is outside its scoped store")
     store = FileRecoveryStore(path.parent, scope=plan.scope)
     return store, store.get_verification_plan(plan.plan_sha256)
@@ -155,7 +155,7 @@ def _verification_allocation(
     for phase, demand in zip(source.stages.plan.phases[1:], demands[1:], strict=True):
         item = WorkItem(
             task_id=execution_task_id,
-            project_id=source.scope.project_id,
+            repository_id=source.scope.repository_id,
             status=WorkItemStatus.READY,
             priority=500,
             risk=phase.risk,
@@ -199,7 +199,7 @@ def _verification_allocation(
         leases = (*leases, decision.lease)
     return VerificationReservation(
         plan_sha256=plan_sha256,
-        project_id=source.scope.project_id,
+        repository_id=source.scope.repository_id,
         source_task_id=source.inputs.task_id,
         task_id=execution_task_id,
         workforce_snapshot_sha256=snapshot.snapshot_sha256,
@@ -211,9 +211,9 @@ def _verification_allocation(
 def _definitions(
     source: NativeCandidateSource, reservation: VerificationReservation
 ) -> dict[AgentRole, AgentDefinition]:
-    profile = load_project_profile(
-        Path(source.stages.preparation.project_workspace_root),
-        source.stages.preparation.project_profile_sha256,
+    profile = load_repository_profile(
+        Path(source.stages.preparation.repository_workspace_root),
+        source.stages.preparation.repository_profile_sha256,
     )
     commands = _task_commands(profile)
     result = _agent_definitions(source.runtime.dispatch, commands)
@@ -258,7 +258,7 @@ class NativeVerificationFacts(VerificationFacts):
     def validate(self, plan: CandidateVerificationPlan) -> None:
         source = NativeCandidateSourceReader(self.config, self.environment).inspect(plan.scope)
         checkpoint_history = FileProjectDeliveryCheckpointStore(
-            Path(source.stages.preparation.project_workspace_root) / "state/project-deliveries",
+            Path(source.stages.preparation.repository_workspace_root) / "state/project-deliveries",
             read_only=True,
         ).list(source.scope.delivery_id)
         if (
@@ -275,14 +275,14 @@ class NativeVerificationFacts(VerificationFacts):
         ):
             raise RecoveryRejected("verification source changed after proposal")
         manager = GitWorktreeManager(
-            source.scope.project_root,
-            Path(self.config.platform_root) / "worktrees" / source.scope.project_id,
+            source.scope.repository_root,
+            Path(self.config.platform_root) / "worktrees" / source.scope.repository_id,
         )
         manager._validate_repository()
         if (
             manager._run_git(
                 ("rev-parse", f"{source.inputs.candidate_revision}^{{commit}}"),
-                cwd=Path(source.scope.project_root),
+                cwd=Path(source.scope.repository_root),
             )
             != source.inputs.candidate_revision
         ):
@@ -303,7 +303,7 @@ class CandidateVerificationEntry:
         self._route_factory = backend._delivery_route_adapters
 
     def _authority(self, source: NativeCandidateSource) -> MySqlDispatchAuthority:
-        sidecar = Path(source.stages.preparation.project_workspace_root)
+        sidecar = Path(source.stages.preparation.repository_workspace_root)
         return MySqlDispatchAuthority(
             self.config.require_mysql_dsn(self.environment),
             request_revisions=FileProductRecordStore(sidecar / "state/product"),
@@ -311,32 +311,32 @@ class CandidateVerificationEntry:
         )
 
     def propose_project(
-        self, *, project_root: str, delivery_id: str
+        self, *, repository_root: str, delivery_id: str
     ) -> tuple[CandidateVerificationPlan, Path]:
         """Resolve the registered project and propose verification without invoking a model."""
-        prepared = self.backend.prepare(project_root).preparation
+        prepared = self.backend.prepare(repository_root).preparation
         if prepared is None:
             raise RecoveryRejected("project preparation needs human resolution")
         return self.propose(
             RecoveryScope(
-                company_id=self.config.company_id,
-                project_id=prepared.project_id,
-                project_root=prepared.project_root,
+                team_id=self.config.team_id,
+                repository_id=prepared.repository_id,
+                repository_root=prepared.repository_root,
                 delivery_id=delivery_id,
             )
         )
 
     def latest_project(
-        self, *, project_root: str, delivery_id: str
+        self, *, repository_root: str, delivery_id: str
     ) -> tuple[FileRecoveryStore, CandidateVerificationPlan, Path] | None:
         """Return the newest sealed plan for the current terminal candidate, if any."""
-        prepared = self.backend.prepare(project_root).preparation
+        prepared = self.backend.prepare(repository_root).preparation
         if prepared is None:
             raise RecoveryRejected("project preparation needs human resolution")
         scope = RecoveryScope(
-            company_id=self.config.company_id,
-            project_id=prepared.project_id,
-            project_root=prepared.project_root,
+            team_id=self.config.team_id,
+            repository_id=prepared.repository_id,
+            repository_root=prepared.repository_root,
             delivery_id=delivery_id,
         )
         source = NativeCandidateSourceReader(self.config, self.environment).inspect(scope)
@@ -371,7 +371,7 @@ class CandidateVerificationEntry:
             f"task_verify_{digest({'task': source.inputs.task_id, 'time': now.isoformat()})[:32]}"
         )
         snapshot = self._authority(source).current_snapshot(
-            project_id=scope.project_id, task_id=source.inputs.task_id
+            repository_id=scope.repository_id, task_id=source.inputs.task_id
         )
         preview = _verification_allocation(
             source, snapshot, execution_task_id=execution_id, plan_sha256="0" * 64, now=now
@@ -396,7 +396,7 @@ class CandidateVerificationEntry:
             plan_sha256=plan.plan_sha256,
             facts=NativeVerificationFacts(self.config, self.environment, store=store),
             artifacts=FileArtifactStore(
-                Path(source.stages.preparation.project_workspace_root) / "artifacts"
+                Path(source.stages.preparation.repository_workspace_root) / "artifacts"
             ),
             clock=lambda: datetime.now(UTC),
         ).propose(plan)
@@ -473,7 +473,7 @@ class CandidateVerificationEntry:
             return value
 
         reservation = authority.reserve_verification(
-            project_id=plan.scope.project_id,
+            repository_id=plan.scope.repository_id,
             source_task_id=plan.inputs.task_id,
             plan_sha256=plan.plan_sha256,
             validate_current=lambda _: NativeVerificationFacts(
@@ -481,7 +481,7 @@ class CandidateVerificationEntry:
             ).validate(plan),
             build=build,
         )
-        sidecar = Path(source.stages.preparation.project_workspace_root)
+        sidecar = Path(source.stages.preparation.repository_workspace_root)
         artifacts, contexts = (
             FileArtifactStore(sidecar / "artifacts"),
             FileContextStore(sidecar / "contexts"),
@@ -491,8 +491,8 @@ class CandidateVerificationEntry:
             definitions=definitions,
             plan_adapter=None,
             config=self.config,
-            project_root=plan.scope.project_root,
-            project_workspace_root=sidecar,
+            repository_root=plan.scope.repository_root,
+            repository_workspace_root=sidecar,
             context_resolver=StoredContextResolver(contexts, artifacts),
             environment=self.environment,
             route_adapters=(
@@ -505,7 +505,7 @@ class CandidateVerificationEntry:
                 repository=repository,
                 artifact_store=artifacts,
                 context_builder=FileRunContextBuilder(
-                    plan.scope.project_root, context_store=contexts
+                    plan.scope.repository_root, context_store=contexts
                 ),
                 agent_adapter=adapter,
                 agent_definitions=definitions,
@@ -533,7 +533,7 @@ class CandidateVerificationEntry:
             plan_sha256=plan.plan_sha256,
             facts=NativeVerificationFacts(self.config, self.environment, store=store),
             artifacts=FileArtifactStore(
-                Path(source.stages.preparation.project_workspace_root) / "artifacts"
+                Path(source.stages.preparation.repository_workspace_root) / "artifacts"
             ),
             clock=lambda: datetime.now(UTC),
         )

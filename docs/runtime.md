@@ -1,7 +1,7 @@
 # Runtime 配置与任务执行
 
-> 日常使用请从 [`production-setup.md`](production-setup.md) 的 `ase project ...` 开始。Production Team
-> Host 自动使用 MySQL、组织 Workforce、项目 sidecar、GPT-5.5 路由和隔离 worktree，不需要手工构造
+> 日常使用请从 [`production-setup.md`](production-setup.md) 的 Web Console 或 `ase request ...` 开始。
+> Production Team Host 自动使用 MySQL、Team Workforce、Project/Repository sidecar、模型路由和隔离 worktree，不需要手工构造
 > 本文的 RuntimeConfig。本文描述的是可独立调试的低层 Task Runtime。
 
 T014 把已经通过测试的 Domain、Context、Artifact、Evaluation 和 `RetryingOrchestrator`
@@ -121,7 +121,7 @@ T018 后，上述 `role_overrides` 和 `RuntimeConfig.agent_definitions()` 只�
 T022 的 `RuntimeWorkforceResolver` 已从 AgentProfile、RoleAssignment、active TaskLease、
 ModelSelection、CompiledSpec、Context 与 project policy 解析同一结构；具体 model 按 AgentRun
 分配，不永久写入 AgentProfile。`RuntimeSession` 接受该 resolved definitions 和绑定 project root，
-并拒绝 Task.repository 漂移。T032 的 Project Manager 入口消费 T031 已提交的 Assignment/Lease；T034
+并拒绝 Task.repository 漂移。T032 的 Manager 入口消费 T031 已提交的 Assignment/Lease；T034
 的 Production Team Host 已将该入口绑定到 MySQL 与真实 Codex/Responses adapters。低层
 `ase task run` 兼容命令仍不会创建 Assignment/Lease、准备项目或跨 Task 调度。
 

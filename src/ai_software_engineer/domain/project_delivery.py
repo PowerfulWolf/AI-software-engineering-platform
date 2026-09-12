@@ -1,7 +1,7 @@
 """Upstream product, design, and planning contracts for one project delivery.
 
 These immutable documents are the explicit hand-off boundary between the Product,
-Solution Designer, Planner, and delivery roles.  They deliberately precede the
+Designer, Planner, and delivery roles.  They deliberately precede the
 existing Delivery ``Task`` and never rely on shared Agent conversation memory.
 """
 
@@ -25,7 +25,7 @@ from ai_software_engineer.domain.enums import (
     RiskTier,
     TaskStatus,
 )
-from ai_software_engineer.domain.identity import ProjectId
+from ai_software_engineer.domain.identity import ProjectId, RepositoryId, TeamId
 from ai_software_engineer.domain.model import DomainModel, JsonValue, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.task import (
     AcceptanceCriterion,
@@ -56,9 +56,6 @@ DesignComponentId = Annotated[
 DesignStepId = Annotated[str, StringConstraints(pattern=r"^design_step_[a-z0-9][a-z0-9_-]{1,63}$")]
 DesignRiskId = Annotated[str, StringConstraints(pattern=r"^design_risk_[a-z0-9][a-z0-9_-]{1,63}$")]
 PlanPhaseId = Annotated[str, StringConstraints(pattern=r"^phase_[a-z0-9][a-z0-9_-]{1,63}$")]
-OrganizationId = Annotated[
-    str, StringConstraints(pattern=r"^organization_[a-z0-9][a-z0-9_-]{2,63}$")
-]
 StageVersion = Annotated[StrictInt, Field(ge=1)]
 
 
@@ -78,17 +75,19 @@ class ProductApprovalRequired(StageContractError):
     """Raised when design or delivery is attempted without exact user approval."""
 
 
-class ProjectPreparation(DomainModel):
-    """Proof that project facts and the project-level rule baseline are ready."""
+class RepositoryPreparation(DomainModel):
+    """Proof that one Project-owned Repository and its rule baseline are ready."""
 
-    kind: Literal["project_preparation"] = "project_preparation"
-    schema_version: Literal["v0.1"] = "v0.1"
-    organization_id: OrganizationId
+    kind: Literal["repository_preparation"] = "repository_preparation"
+    schema_version: Literal["v0.2"] = "v0.2"
+    team_id: TeamId
     project_id: ProjectId
-    project_root: NonEmptyStr
-    project_workspace_root: NonEmptyStr
-    organization_root: NonEmptyStr
-    project_profile_sha256: StageSha256
+    project_manifest_sha256: StageSha256
+    repository_id: RepositoryId
+    repository_root: NonEmptyStr
+    repository_workspace_root: NonEmptyStr
+    team_root: NonEmptyStr
+    repository_profile_sha256: StageSha256
     runtime_binding_sha256: StageSha256
     baseline_spec_sha256: StageSha256
     baseline_source_uris: tuple[NonEmptyStr, ...] = ()
@@ -100,16 +99,16 @@ class ProjectPreparation(DomainModel):
     def validate_preparation(self) -> Self:
         roots = tuple(
             Path(value)
-            for value in (self.project_root, self.project_workspace_root, self.organization_root)
+            for value in (self.repository_root, self.repository_workspace_root, self.team_root)
         )
         if any(not root.is_absolute() for root in roots):
-            raise ValueError("ProjectPreparation roots must be absolute")
+            raise ValueError("RepositoryPreparation roots must be absolute")
         if any(
             _paths_overlap(left, right)
             for index, left in enumerate(roots)
             for right in roots[index + 1 :]
         ):
-            raise ValueError("ProjectPreparation roots must not overlap")
+            raise ValueError("RepositoryPreparation roots must not overlap")
         ensure_unique(self.baseline_source_uris, "baseline_source_uris")
         return self
 
@@ -117,24 +116,28 @@ class ProjectPreparation(DomainModel):
     def create(
         cls,
         *,
-        organization_id: OrganizationId,
+        team_id: TeamId,
         project_id: ProjectId,
-        project_root: str,
-        project_workspace_root: str,
-        organization_root: str,
-        project_profile_sha256: StageSha256,
+        project_manifest_sha256: StageSha256,
+        repository_id: RepositoryId,
+        repository_root: str,
+        repository_workspace_root: str,
+        team_root: str,
+        repository_profile_sha256: StageSha256,
         runtime_binding_sha256: StageSha256,
         baseline_spec_sha256: StageSha256,
         baseline_source_uris: tuple[str, ...] = (),
         prepared_at: datetime,
-    ) -> ProjectPreparation:
+    ) -> RepositoryPreparation:
         provisional = cls(
-            organization_id=organization_id,
+            team_id=team_id,
             project_id=project_id,
-            project_root=project_root,
-            project_workspace_root=project_workspace_root,
-            organization_root=organization_root,
-            project_profile_sha256=project_profile_sha256,
+            project_manifest_sha256=project_manifest_sha256,
+            repository_id=repository_id,
+            repository_root=repository_root,
+            repository_workspace_root=repository_workspace_root,
+            team_root=team_root,
+            repository_profile_sha256=repository_profile_sha256,
             runtime_binding_sha256=runtime_binding_sha256,
             baseline_spec_sha256=baseline_spec_sha256,
             baseline_source_uris=baseline_source_uris,
@@ -149,13 +152,18 @@ class ProjectPreparation(DomainModel):
         _require_digest(self, "preparation_sha256", self.preparation_sha256)
 
 
+# The repository-delivery engine still imports this historic symbol internally.  It is
+# an alias, not a second domain concept or persisted contract.
+ProjectPreparation = RepositoryPreparation
+
+
 class ProjectRequest(DomainModel):
     """Durable product request before it becomes a Delivery Task."""
 
     kind: Literal["project_request"] = "project_request"
     schema_version: Literal["v0.1"] = "v0.1"
     id: ProjectRequestId
-    project_id: ProjectId
+    repository_id: RepositoryId
     preparation_sha256: StageSha256
     title: Annotated[str, StringConstraints(min_length=1, max_length=200)]
     original_request: NonEmptyStr
@@ -175,7 +183,7 @@ class ProjectRequest(DomainModel):
         cls,
         *,
         request_id: ProjectRequestId,
-        project_id: ProjectId,
+        repository_id: RepositoryId,
         preparation_sha256: StageSha256,
         title: str,
         original_request: str,
@@ -185,7 +193,7 @@ class ProjectRequest(DomainModel):
     ) -> ProjectRequest:
         provisional = cls(
             id=request_id,
-            project_id=project_id,
+            repository_id=repository_id,
             preparation_sha256=preparation_sha256,
             title=title,
             original_request=original_request,
@@ -235,7 +243,7 @@ class ProductSpec(DomainModel):
     schema_version: Literal["v0.1"] = "v0.1"
     id: ProductSpecId
     request_id: ProjectRequestId
-    project_id: ProjectId
+    repository_id: RepositoryId
     version: StageVersion
     status: ProductSpecStatus
     summary: NonEmptyStr
@@ -284,7 +292,7 @@ class ProductSpec(DomainModel):
         *,
         spec_id: ProductSpecId,
         request_id: ProjectRequestId,
-        project_id: ProjectId,
+        repository_id: RepositoryId,
         version: int,
         status: ProductSpecStatus,
         summary: str,
@@ -301,7 +309,7 @@ class ProductSpec(DomainModel):
         provisional = cls(
             id=spec_id,
             request_id=request_id,
-            project_id=project_id,
+            repository_id=repository_id,
             version=version,
             status=status,
             summary=summary,
@@ -342,7 +350,7 @@ class ProductSpecApproval(DomainModel):
     schema_version: Literal["v0.1"] = "v0.1"
     id: ProductApprovalId
     request_id: ProjectRequestId
-    project_id: ProjectId
+    repository_id: RepositoryId
     product_spec_id: ProductSpecId
     product_spec_sha256: StageSha256
     decision: ProductApprovalDecision
@@ -365,7 +373,7 @@ class ProductSpecApproval(DomainModel):
         identity = _canonical_json(
             {
                 "request_id": product_spec.request_id,
-                "project_id": product_spec.project_id,
+                "repository_id": product_spec.repository_id,
                 "product_spec_id": product_spec.id,
                 "product_spec_sha256": product_spec.product_spec_sha256,
                 "decision": decision.value,
@@ -377,7 +385,7 @@ class ProductSpecApproval(DomainModel):
         provisional = cls(
             id=f"product_approval_{hashlib.sha256(identity.encode()).hexdigest()}",
             request_id=product_spec.request_id,
-            project_id=product_spec.project_id,
+            repository_id=product_spec.repository_id,
             product_spec_id=product_spec.id,
             product_spec_sha256=product_spec.product_spec_sha256,
             decision=decision,
@@ -454,7 +462,7 @@ class TechnicalDesign(DomainModel):
     schema_version: Literal["v0.1"] = "v0.1"
     id: TechnicalDesignId
     request_id: ProjectRequestId
-    project_id: ProjectId
+    repository_id: RepositoryId
     product_spec_id: ProductSpecId
     product_spec_sha256: StageSha256
     product_approval_id: ProductApprovalId
@@ -517,7 +525,7 @@ class TechnicalDesign(DomainModel):
         provisional = cls(
             id=design_id,
             request_id=product_spec.request_id,
-            project_id=product_spec.project_id,
+            repository_id=product_spec.repository_id,
             product_spec_id=product_spec.id,
             product_spec_sha256=product_spec.product_spec_sha256,
             product_approval_id=approval.id,
@@ -578,7 +586,7 @@ class ExecutionPlan(DomainModel):
     schema_version: Literal["v0.1"] = "v0.1"
     id: ExecutionPlanId
     request_id: ProjectRequestId
-    project_id: ProjectId
+    repository_id: RepositoryId
     product_spec_id: ProductSpecId
     product_spec_sha256: StageSha256
     technical_design_id: TechnicalDesignId
@@ -615,7 +623,7 @@ class ExecutionPlan(DomainModel):
         provisional = cls(
             id=plan_id,
             request_id=product_spec.request_id,
-            project_id=product_spec.project_id,
+            repository_id=product_spec.repository_id,
             product_spec_id=product_spec.id,
             product_spec_sha256=product_spec.product_spec_sha256,
             technical_design_id=technical_design.id,
@@ -658,13 +666,13 @@ def require_product_approval(
         raise ProductApprovalRequired("ProductSpec approval requested changes")
     expected = (
         product_spec.request_id,
-        product_spec.project_id,
+        product_spec.repository_id,
         product_spec.id,
         product_spec.product_spec_sha256,
     )
     observed = (
         approval.request_id,
-        approval.project_id,
+        approval.repository_id,
         approval.product_spec_id,
         approval.product_spec_sha256,
     )
@@ -684,14 +692,14 @@ def validate_technical_design(
     technical_design.validate_integrity()
     expected = (
         product_spec.request_id,
-        product_spec.project_id,
+        product_spec.repository_id,
         product_spec.id,
         product_spec.product_spec_sha256,
         approval.id,
     )
     observed = (
         technical_design.request_id,
-        technical_design.project_id,
+        technical_design.repository_id,
         technical_design.product_spec_id,
         technical_design.product_spec_sha256,
         technical_design.product_approval_id,
@@ -725,14 +733,14 @@ def validate_execution_plan(
     execution_plan.validate_integrity()
     if (
         technical_design.request_id != product_spec.request_id
-        or technical_design.project_id != product_spec.project_id
+        or technical_design.repository_id != product_spec.repository_id
         or technical_design.product_spec_id != product_spec.id
         or technical_design.product_spec_sha256 != product_spec.product_spec_sha256
     ):
         raise StageContractMismatch("TechnicalDesign does not match ProductSpec")
     expected = (
         product_spec.request_id,
-        product_spec.project_id,
+        product_spec.repository_id,
         product_spec.id,
         product_spec.product_spec_sha256,
         technical_design.id,
@@ -740,7 +748,7 @@ def validate_execution_plan(
     )
     observed = (
         execution_plan.request_id,
-        execution_plan.project_id,
+        execution_plan.repository_id,
         execution_plan.product_spec_id,
         execution_plan.product_spec_sha256,
         execution_plan.technical_design_id,
@@ -764,10 +772,10 @@ def validate_stage_chain(
     if request.status is not ProjectRequestStatus.READY_FOR_DELIVERY:
         raise StageContractMismatch("ProjectRequest is not ready for Delivery Task creation")
     if (
-        request.project_id != preparation.project_id
+        request.repository_id != preparation.repository_id
         or request.preparation_sha256 != preparation.preparation_sha256
         or product_spec.request_id != request.id
-        or product_spec.project_id != request.project_id
+        or product_spec.repository_id != request.repository_id
     ):
         raise StageContractMismatch("ProjectPreparation, Request, and ProductSpec do not match")
     validate_technical_design(product_spec, approval, technical_design)
@@ -801,10 +809,10 @@ def derive_delivery_task(
         execution_plan,
     )
     resolved_repository = Path(repository).expanduser().resolve(strict=False)
-    if resolved_repository != Path(preparation.project_root):
+    if resolved_repository != Path(preparation.repository_root):
         raise StageContractMismatch("Delivery Task repository does not match prepared project root")
     metadata: dict[str, JsonValue] = {
-        "project_id": preparation.project_id,
+        "repository_id": preparation.repository_id,
         "project_request_id": request.id,
         "product_spec_id": product_spec.id,
         "product_spec_sha256": product_spec.product_spec_sha256,

@@ -1,6 +1,6 @@
 # v0.1 开发里程碑与第一批可执行任务
 
-> 实施状态：T001–T032、T034、T046–T047 已完成，T033 Reporter 暂停；M5 已通过组织级 Scheduler/ModelRouter、ProjectProfile、
+> 实施状态：T001–T032、T034、T046–T047 已完成，T033 Reporter 暂停；M5 已通过组织级 Scheduler/ModelRouter、RepositoryProfile、
 > SpecCompiler 与 Runtime workspace binding 达到退出条件。目标项目与外置 AI workspace 已有
 > 稳定绑定。M0–M5 的
 > v0.1 核心库退出条件已通过自动化测试验证。T014 提供配置驱动的串行运行入口，T015 提供
@@ -46,7 +46,7 @@ Agent 由组织长期拥有，通过 Assignment/Lease 服务多个 Project；模
 进入外置 sidecar，AgentProfile/ModelPolicy/WorkQueue 留在组织 workspace。项目规范冲突进入
 `WAITING_HUMAN` 并释放 Lease，禁止 Agent 静默选择。
 
-退出条件：调度和模型选择可确定重放；ProjectProfile 只读发现项目事实；结构化规范冲突必须
+退出条件：调度和模型选择可确定重放；RepositoryProfile 只读发现项目事实；结构化规范冲突必须
 进入人工 resolution；Runtime 可从组织/项目 workspace 解析完整 AgentRunAllocation，且所有
 sidecar 路径与目标源码目录分离。T019–T022 已满足这些条件。
 
@@ -65,30 +65,30 @@ Agent detail 和 Human inbox。可视化只消费 durable StateEvent、AgentRunE
 Evidence 和 Handoff，不成为第二个状态写入者。实现细节见 [`docs/projection.md`](projection.md)、
 [`docs/visualization-implementation.md`](visualization-implementation.md)。
 
-### M8 — Project Manager 统一接单与完整 Agent 团队
+### M8 — Manager 统一接单与完整 Agent 团队
 
-以“组织通用知识库 + 项目 sidecar + organization-owned Agent Team + policy-bound Skills”为产品
-架构。Project Manager Agent 是团队领导；Product、Solution Designer、Planner、Coder、QA、
+以“Team Knowledge + Project Knowledge/Specs + Repository sidecar + Team-owned Agents + policy-bound Skills”为产品
+架构。Manager Agent 是团队领导；Product、Designer、Planner、Coder、QA、
 Reviewer 和可选 Reporter 通过 immutable stage/delivery artifacts 协作。Planner 可做只读资源预演，
-T031 的兼容入口由 Project Manager commit-dispatch Skill 复核预演结果；T046 起 Planner 拥有运行期
+T031 的兼容入口由 Manager commit-dispatch Skill 复核预演结果；T046 起 Planner 拥有运行期
 流转和派发策略，确定性 Dispatcher 在当前 MySQL facts 下提交每次 Run 的
 Assignment/Lease/ModelSelection。
 
 退出条件：用户只给项目目录与需求即可完成 prepare、Product Spec 用户确认、Technical Design、
 Execution Plan、团队分配和串行交付；流程可 resume，目标项目保持干净，规范冲突与失败有明确人工
-checkpoint。T028 已完成上游 typed contract 基线，T029 已完成 Project Manager
+checkpoint。T028 已完成上游 typed contract 基线，T029 已完成 Manager
 preparation seam，T030 已完成 Product Agent 需求澄清、人工确认与崩溃恢复；T031 已完成
-Designer/Planner、只读资源预演与 Project Manager 原子 dispatch；T032 已完成统一入口、durable intake/
+Designer/Planner、只读资源预演与 Manager 原子 dispatch；T032 已完成统一入口、durable intake/
 checkpoint、Dispatch→Task/Plan bridge 与严格 role worktree consumer。T033 暂不执行。
 
-T029 已将“只给绝对项目目录”封装为 Project Manager Agent 的 Python Skill seam：
-注册/重开 sidecar、发现 ProjectProfile、绑定组织、编译 task-free baseline，或在项目级
+T029 已将“只给绝对项目目录”封装为 Manager Agent 的 Python Skill seam：
+注册/重开 sidecar、发现 RepositoryProfile、绑定组织、编译 task-free baseline，或在项目级
 规范冲突时返回 `WAITING_HUMAN`。T032 已把它组合进统一 CLI/application 入口。
 
 T030 在 prepare 结果之上增加 task-free Product context、Product Agent adapter 与
 `ProductDiscoveryService`。对话、ProjectRequest 修订、ProductSpec/Approval、checkpoint 与
 operation receipt 均为 append-only 事实；只有 trusted human verifier 解析的 exact spec
-决策能通过 Project Manager stage gate。T031 已在此基础上补齐 design、plan 和 dispatch。
+决策能通过 Manager stage gate。T031 已在此基础上补齐 design、plan 和 dispatch。
 
 ### M9 — Production Team Host
 
@@ -121,10 +121,10 @@ E2E 到达 DONE，目标主 checkout 零改动；提供显式 opt-in live GPT-5.
 | T014 | 组装配置驱动的 Task run | `src/ai_software_engineer/runtime.py`、`ase task run`、RuntimeConfig Schema | 真实 adapter 与 fake adapter 共用 composition seam；自动记录 CaseStarted/AgentRun；缺少密钥、非法配置和终态 Task fail closed | T010–T013 |
 | T015 | 实现受控命令执行器 | `src/ai_software_engineer/execution.py`、命令契约测试 | argv allowlist、固定 worktree cwd、最小环境、超时进程组终止和输出截断均 fail closed | T006/T014 |
 | T016 | 接入 role worktree 与受控执行生命周期 | `src/ai_software_engineer/role_workspace.py`、组合契约测试 | 同角色 AgentDefinition 才能绑定 manager-owned worktree；命令 cwd 固定；dirty cleanup 保留现场 | T006/T015 |
-| T017 | 建立外置 Project Workspace 注册与初始化 | `src/ai_software_engineer/project_workspace.py`、workspace Schema、contract tests | 任意本地项目获得稳定 sidecar；不复制源码、不污染目标项目；幂等和边界 fail closed | T016 |
+| T017 | 建立外置 Project Workspace 注册与初始化 | `src/ai_software_engineer/repository_workspace.py`、workspace Schema、contract tests | 任意本地项目获得稳定 sidecar；不复制源码、不污染目标项目；幂等和边界 fail closed | T016 |
 | T018 | 组织级 Agent workforce 与 run-scoped model 契约 | `workforce.py`、workforce Schema、ADR、sidecar assignments layout | Agent 不归 Project；Assignment/Lease/WorkItem/ModelPolicy/RunDemand 可校验；等待不等于 BLOCKED | T017 |
 | T019 | PortfolioScheduler 与 ModelRouter | scheduler/model router ports + deterministic fake | capability/priority/age/risk/capacity 可重放分配；自审和超容量拒绝；等待释放 Lease | T018 |
-| T020 | 发现 ProjectProfile 与项目原生规范 | `project_profile.py`、native-rule index、profile Schema | 识别语言/构建/VCS/规范来源并保存 URI/hash；未知或冲突事实不猜测 | T017/T018 |
+| T020 | 发现 RepositoryProfile 与项目原生规范 | `repository_profile.py`、native-rule index、profile Schema | 识别语言/构建/VCS/规范来源并保存 URI/hash；未知或冲突事实不猜测 | T017/T018 |
 | T021 | SpecCompiler 与人工冲突治理 | `spec_compiler.py`、`spec-conflict` artifact、resolution event | 三层规范可审计合并；工程冲突进入 `WAITING_HUMAN`，终止时才 BLOCKED | T020 |
 | T022 | Runtime 绑定 organization/project workspace | Runtime/CLI composition tests | 代码 cwd/sidecar/组织 workforce 分离；AgentRunAllocation 连接 Assignment、Model 与运行事实 | T019/T021 |
 | T023 | 命令、diff、测试与 Agent usage evidence capture | `evidence/`、`runs/` durable contracts | 每次运行产出可定位、脱敏、带 SHA 的证据；超时/拒绝也可回放 | T015/T022 |
@@ -133,9 +133,9 @@ E2E 到达 DONE，目标主 checkout 零改动；提供显式 opt-in live GPT-5.
 | T026 | 事件驱动 RunProjection 与只读 read API | projection models/API contract | 重算 Task/WorkItem/Agent/Model/Lease timeline；API 不迁移状态、不写 verdict | T012/T018/T022/T023 |
 | T027 | 本地 Agent 工作可视化 dashboard | Task board、team capacity、timeline、agent detail、human inbox | 同时看到交付/调度状态、模型理由、成本、证据、等待和冲突 | T026 |
 | T028 | 上游阶段与用户确认合同 | ProjectPreparation/Request、ProductSpec/Approval、TechnicalDesign、ExecutionPlan Schema 与 Task 派生 guard | exact 用户批准、Design 全覆盖、Plan 无 concrete allocation、完整 lineage 才能创建 Task | T019–T025 |
-| T029（已完成） | Project Manager Agent Skills | `prepare_project`、project baseline、typed Skill facade | 只给目录完成 prepare；冲突 WAITING_HUMAN；目标项目零污染 | T028 |
+| T029（已完成） | Manager Agent Skills | `prepare_project`、project baseline、typed Skill facade | 只给目录完成 prepare；冲突 WAITING_HUMAN；目标项目零污染 | T028 |
 | T030（已完成） | Product Agent 与确认循环 | product role/context/adapter、版本化 ProductSpec/Approval、恢复 checkpoint | Agent 不能自批；只信任已验证人工决策；修改生成新版本；对话/操作可重放 | T029 |
-| T031（已完成） | Designer/Planner 与调度 Skills | TechnicalDesign/ExecutionPlan producer、preview/兼容 commit dispatch | Planner preview 只读；Project Manager 对交付启动授权重新校验 | T030 |
+| T031（已完成） | Designer/Planner 与调度 Skills | TechnicalDesign/ExecutionPlan producer、preview/兼容 commit dispatch | Planner preview 只读；Manager 对交付启动授权重新校验 | T030 |
 | T032（已完成） | 统一项目接单入口 | CLI/application facade、resume、跨语言 E2E | 项目目录 + 需求走通 prepare→delivery，不手拼 Runtime paths | T031 |
 | T033（暂停） | Reporter 决策与实现 | deterministic report 或 read-only Reporter Agent | 不创造事实/改 verdict/隐藏失败；输出可追溯 sources | T032 |
 | T034（已完成） | Production Team Host | 自动 Host、MySQL、Codex/Responses/fallback、真实隔离 delivery | 一次配置后目录+需求可运行；MySQL scripted E2E、全量质量门禁和 opt-in live smoke | T032 |

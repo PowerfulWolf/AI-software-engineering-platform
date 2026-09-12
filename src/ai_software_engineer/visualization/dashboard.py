@@ -58,7 +58,7 @@ class DashboardRenderer:
     def _task_card(task: TaskProjection) -> dict[str, object]:
         return {
             "task_id": task.task_id,
-            "project_id": task.project_id,
+            "repository_id": task.repository_id,
             "title": task.title,
             "status": task.status.value,
             "attempts": task.attempts,

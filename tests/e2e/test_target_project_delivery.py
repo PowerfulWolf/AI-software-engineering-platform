@@ -1,7 +1,7 @@
 """Cross-language target-project delivery through the v0.1 public seams.
 
 The fixture projects are deliberately tiny and dependency-free.  The test still uses
-the real ProjectProfile, sidecar workspace, typed tool registry, evidence store, and
+the real RepositoryProfile, sidecar workspace, typed tool registry, evidence store, and
 serial Orchestrator.  A language runtime is an optional local capability: when it is
 not installed, the profile and delivery contract remain tested and only the command
 evidence assertion is skipped.
@@ -53,13 +53,13 @@ from ai_software_engineer.orchestration import (
     OrchestrationIdentityFactory,
     SerialOrchestrator,
 )
-from ai_software_engineer.project_profile import BuildSystem, ProjectLanguage, ProjectProfile
-from ai_software_engineer.project_workspace import ProjectWorkspaceRegistry
+from ai_software_engineer.repository_profile import BuildSystem, ProjectLanguage, RepositoryProfile
 from ai_software_engineer.runtime_workspace import (
-    OrganizationWorkspace,
     RuntimeWorkspaceBinder,
+    TeamWorkforceWorkspace,
 )
 from ai_software_engineer.store import SqliteTaskRepository
+from ai_software_engineer.team_workspace import TeamWorkspace
 from ai_software_engineer.tools import (
     PolicyBoundToolRegistry,
     ReadFileRequest,
@@ -231,12 +231,12 @@ def _agent_definitions(case: TargetProjectCase) -> dict[AgentRole, AgentDefiniti
     return definitions
 
 
-def _task(project_root: Path, case: TargetProjectCase) -> Task:
+def _task(repository_root: Path, case: TargetProjectCase) -> Task:
     task = make_task()
     criterion = task.acceptance_criteria[0].model_copy(
         update={
             "description": (
-                f"ProjectProfile detects {case.language.value} and delivery is independently "
+                f"RepositoryProfile detects {case.language.value} and delivery is independently "
                 "reviewed."
             ),
             "verification": f"Read {case.source_path} and run the local {case.runtime} probe.",
@@ -247,7 +247,7 @@ def _task(project_root: Path, case: TargetProjectCase) -> Task:
         update={
             "id": f"task_t025_{case.language.value}",
             "title": f"Deliver {case.language.value} target fixture",
-            "repository": str(project_root.resolve()),
+            "repository": str(repository_root.resolve()),
             "base_ref": "main",
             "acceptance_criteria": (criterion,),
             "constraints": TaskConstraints(
@@ -397,38 +397,43 @@ def _copy_fixture(case: TargetProjectCase, destination: Path) -> Path:
 
 @pytest.mark.parametrize("case", CASES, ids=lambda item: item.language.value)
 def test_target_project_serial_delivery_matrix(tmp_path: Path, case: TargetProjectCase) -> None:
-    project_root = _copy_fixture(case, tmp_path / "targets")
-    sidecars = tmp_path / "sidecars"
-    workspace = ProjectWorkspaceRegistry(sidecars).register(
-        project_root,
-        project_id=f"project_t025_{case.language.value}",
+    repository_root = _copy_fixture(case, tmp_path / "targets")
+    team = TeamWorkspace.initialize(
+        tmp_path / "platform",
+        team_id="team_t025_001",
+        name="Target Project Team",
     )
-    profile = ProjectProfile.discover(
-        project_root,
-        project_id=workspace.project_id,
+    project = team.project_registry().register(
+        project_id="project_t025",
+        name="Target Project",
+    )
+    workspace = project.repository_registry().register(repository_root)
+    profile = RepositoryProfile.discover(
+        repository_root,
+        repository_id=workspace.repository_id,
         observed_at=NOW,
     )
     assert {fact.language for fact in profile.languages} >= {case.language}
     assert {fact.system for fact in profile.build_systems} >= {case.build_system}
-    assert workspace.project_root == project_root.resolve()
-    assert not (project_root / ".ase").exists()
+    assert workspace.repository_root == repository_root.resolve()
+    assert not (repository_root / ".ase").exists()
 
-    organization = OrganizationWorkspace.initialize(
-        tmp_path / "organization",
-        organization_id="organization_t025_001",
+    organization = TeamWorkforceWorkspace.initialize(
+        team.root,
+        team_id="team_t025_001",
         created_at=NOW,
     )
     binding = RuntimeWorkspaceBinder().bind(organization, workspace, profile, bound_at=NOW)
-    assert Path(binding.project_root) == project_root.resolve()
-    assert Path(binding.project_workspace_root) == workspace.root
+    assert Path(binding.repository_root) == repository_root.resolve()
+    assert Path(binding.repository_workspace_root) == workspace.root
     assert workspace.directory("evidence").is_dir()
     assert workspace.directory("runs").is_dir()
 
-    task = _task(project_root, case)
+    task = _task(repository_root, case)
     definitions = _agent_definitions(case)
     tool_run_id = f"run_t025_{case.language.value}_tool"
     tool_registry = PolicyBoundToolRegistry(
-        project_root,
+        repository_root,
         definitions[AgentRole.CODER],
         run_id=tool_run_id,
     )
@@ -445,7 +450,7 @@ def test_target_project_serial_delivery_matrix(tmp_path: Path, case: TargetProje
 
     if shutil.which(case.runtime) is not None:
         evidence_identity = RunEvidenceIdentity(
-            project_id=workspace.project_id,
+            repository_id=workspace.repository_id,
             task_id=task.id,
             run_id=tool_run_id,
             agent_id=definitions[AgentRole.CODER].id,
@@ -461,7 +466,7 @@ def test_target_project_serial_delivery_matrix(tmp_path: Path, case: TargetProje
         evidence_session = RunEvidenceSession(
             evidence_store,
             evidence_identity,
-            workspace_root=project_root,
+            workspace_root=repository_root,
             clock=lambda: NOW,
         )
         command_evidence = evidence_session.capture_command(
@@ -487,7 +492,7 @@ def test_target_project_serial_delivery_matrix(tmp_path: Path, case: TargetProje
         assert evidence_store.get_run(tool_run_id) == manifest
 
     contexts = FileRunContextBuilder(
-        project_root,
+        repository_root,
         context_store=FileContextStore(workspace.directory("contexts")),
     )
     adapter = _build_adapter(task, case, definitions, contexts)

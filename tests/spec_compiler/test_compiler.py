@@ -15,7 +15,7 @@ from ai_software_engineer.domain import (
     TaskStatus,
 )
 from ai_software_engineer.domain.model import JsonValue
-from ai_software_engineer.project_profile import ProjectProfile
+from ai_software_engineer.repository_profile import RepositoryProfile
 from ai_software_engineer.spec_compiler import (
     FileSpecRecordStore,
     HardPolicyMissing,
@@ -57,13 +57,13 @@ def task(*, constraints: TaskConstraints | None = None) -> Task:
     )
 
 
-def profile(tmp_path: Path) -> ProjectProfile:
+def profile(tmp_path: Path) -> RepositoryProfile:
     project = tmp_path / "project"
     project.mkdir()
     (project / "AGENTS.md").write_text("Use four spaces.\n", encoding="utf-8")
-    return ProjectProfile.discover(
+    return RepositoryProfile.discover(
         project,
-        project_id="project_spec_001",
+        repository_id="repository_spec_001",
         observed_at=NOW,
     )
 
@@ -98,8 +98,8 @@ def engineering_rule(
     )
 
 
-def project_rule(project_profile: ProjectProfile, *, value: JsonValue = 88) -> SpecRule:
-    source = project_profile.native_rules[0]
+def project_rule(repository_profile: RepositoryProfile, *, value: JsonValue = 88) -> SpecRule:
+    source = repository_profile.native_rules[0]
     return SpecRule(
         id="rule_line_length_project_001",
         field="style.line_length",
@@ -121,13 +121,13 @@ def _schema(name: str) -> Draft202012Validator:
 
 
 def test_conflict_free_compilation_is_stable_and_context_ready(tmp_path: Path) -> None:
-    project_profile = profile(tmp_path)
+    repository_profile = profile(tmp_path)
     compiler = SpecCompiler()
     rules = (hard_rule(), engineering_rule())
 
-    first = compiler.compile(project_profile, task(), rules, compiled_at=NOW)
+    first = compiler.compile(repository_profile, task(), rules, compiled_at=NOW)
     replay = compiler.compile(
-        project_profile,
+        repository_profile,
         task(),
         rules,
         compiled_at=NOW + timedelta(hours=1),
@@ -140,17 +140,17 @@ def test_conflict_free_compilation_is_stable_and_context_ready(tmp_path: Path) -
     assert first.compiled_spec.opaque_project_sources[0].uri.endswith("/AGENTS.md")
     source = first.compiled_spec.to_context_source()
     assert source.required and source.priority == 10
-    assert source.uri.startswith("spec://project_spec_001/task_spec_001/")
+    assert source.uri.startswith("spec://repository_spec_001/task_spec_001/")
 
 
 def test_engineering_conflict_routes_waiting_human_with_full_provenance(tmp_path: Path) -> None:
-    project_profile = profile(tmp_path)
+    repository_profile = profile(tmp_path)
     compiler = SpecCompiler()
-    rules = (hard_rule(), engineering_rule(), project_rule(project_profile))
+    rules = (hard_rule(), engineering_rule(), project_rule(repository_profile))
 
-    first = compiler.compile(project_profile, task(), rules, compiled_at=NOW)
+    first = compiler.compile(repository_profile, task(), rules, compiled_at=NOW)
     replay = compiler.compile(
-        project_profile,
+        repository_profile,
         task(),
         rules,
         compiled_at=NOW + timedelta(minutes=5),
@@ -165,19 +165,19 @@ def test_engineering_conflict_routes_waiting_human_with_full_provenance(tmp_path
     assert conflict.affected_criteria == ("ac_rules_01",)
     assert {rule.source_uri for rule in conflict.rules} == {
         "platform://python/style-v1",
-        project_profile.native_rules[0].uri,
+        repository_profile.native_rules[0].uri,
     }
     assert conflict.conflict_sha256 == replay.conflicts[0].conflict_sha256
     assert list(_schema("spec-conflict.schema.json").iter_errors(conflict.to_wire())) == []
 
 
 def test_project_rule_requires_profile_uri_and_exact_hash(tmp_path: Path) -> None:
-    project_profile = profile(tmp_path)
-    untrusted = project_rule(project_profile).model_copy(update={"source_sha256": "f" * 64})
+    repository_profile = profile(tmp_path)
+    untrusted = project_rule(repository_profile).model_copy(update={"source_sha256": "f" * 64})
 
     with pytest.raises(SpecSourceMismatch, match="hash-mismatched"):
         SpecCompiler().compile(
-            project_profile,
+            repository_profile,
             task(),
             (hard_rule(), untrusted),
             compiled_at=NOW,
@@ -197,15 +197,15 @@ def test_missing_hard_policy_fails_closed(tmp_path: Path) -> None:
 def test_hard_conflict_cannot_select_lower_rule_but_can_keep_hard_policy(
     tmp_path: Path,
 ) -> None:
-    project_profile = profile(tmp_path)
+    repository_profile = profile(tmp_path)
     lower = SpecRule(
         id="rule_allow_self_approval_001",
         field="safety.self_approval",
         value=True,
         layer=SpecRuleLayer.PROJECT,
         priority=200,
-        source_uri=project_profile.native_rules[0].uri,
-        source_sha256=project_profile.native_rules[0].sha256,
+        source_uri=repository_profile.native_rules[0].uri,
+        source_sha256=repository_profile.native_rules[0].sha256,
         rationale="Unsafe project rule used to verify fail-closed behavior.",
     )
     compiler = SpecCompiler()
@@ -216,7 +216,7 @@ def test_hard_conflict_cannot_select_lower_rule_but_can_keep_hard_policy(
         }
     )
     initial = compiler.compile(
-        project_profile,
+        repository_profile,
         task(),
         (hard_rule(), backup_hard, lower),
         compiled_at=NOW,
@@ -245,7 +245,7 @@ def test_hard_conflict_cannot_select_lower_rule_but_can_keep_hard_policy(
         resolved_at=NOW,
     )
     compiled = compiler.compile(
-        project_profile,
+        repository_profile,
         task(),
         (hard_rule(), backup_hard, lower),
         compiled_at=NOW,
@@ -260,12 +260,12 @@ def test_hard_conflict_cannot_select_lower_rule_but_can_keep_hard_policy(
 
 
 def test_engineering_resolution_requires_evidence_and_is_schema_valid(tmp_path: Path) -> None:
-    project_profile = profile(tmp_path)
+    repository_profile = profile(tmp_path)
     compiler = SpecCompiler()
     initial = compiler.compile(
-        project_profile,
+        repository_profile,
         task(),
-        (hard_rule(), engineering_rule(), project_rule(project_profile)),
+        (hard_rule(), engineering_rule(), project_rule(repository_profile)),
         compiled_at=NOW,
     )
     conflict = initial.conflicts[0]
@@ -273,7 +273,7 @@ def test_engineering_resolution_requires_evidence_and_is_schema_valid(tmp_path: 
         SpecResolution.create(
             conflict,
             action=SpecResolutionAction.SELECT_RULE,
-            selected_rule_id=project_rule(project_profile).id,
+            selected_rule_id=project_rule(repository_profile).id,
             operator_id="human_architect",
             rationale="Use project convention.",
             evidence_uris=(),
@@ -283,7 +283,7 @@ def test_engineering_resolution_requires_evidence_and_is_schema_valid(tmp_path: 
     resolution = SpecResolution.create(
         conflict,
         action=SpecResolutionAction.SELECT_RULE,
-        selected_rule_id=project_rule(project_profile).id,
+        selected_rule_id=project_rule(repository_profile).id,
         operator_id="human_architect",
         rationale="The project convention is deliberate and documented.",
         evidence_uris=("evidence://decision/3",),
@@ -291,21 +291,21 @@ def test_engineering_resolution_requires_evidence_and_is_schema_valid(tmp_path: 
     )
     assert list(_schema("spec-resolution.schema.json").iter_errors(resolution.to_wire())) == []
     resolved = compiler.compile(
-        project_profile,
+        repository_profile,
         task(),
-        (hard_rule(), engineering_rule(), project_rule(project_profile)),
+        (hard_rule(), engineering_rule(), project_rule(repository_profile)),
         compiled_at=NOW,
         resolutions=(resolution,),
     )
     assert resolved.status is SpecCompilationStatus.COMPILED
     assert resolved.compiled_spec is not None
-    assert project_rule(project_profile).id in {rule.id for rule in resolved.compiled_spec.rules}
+    assert project_rule(repository_profile).id in {rule.id for rule in resolved.compiled_spec.rules}
     assert engineering_rule().id not in {rule.id for rule in resolved.compiled_spec.rules}
 
 
 def test_task_constraints_are_structured_and_conflicting_values_wait(tmp_path: Path) -> None:
-    project_profile = profile(tmp_path)
-    source = project_profile.native_rules[0]
+    repository_profile = profile(tmp_path)
+    source = repository_profile.native_rules[0]
     task_rule = SpecRule(
         id="rule_project_allowed_paths_001",
         field="task.allowed_paths",
@@ -319,7 +319,7 @@ def test_task_constraints_are_structured_and_conflicting_values_wait(tmp_path: P
     constrained = task(constraints=TaskConstraints(allowed_paths=("tests/**",)))
 
     result = SpecCompiler().compile(
-        project_profile,
+        repository_profile,
         constrained,
         (hard_rule(), task_rule),
         compiled_at=NOW,
@@ -350,18 +350,18 @@ def test_non_overlapping_scopes_do_not_conflict(tmp_path: Path) -> None:
 
 
 def test_file_store_is_append_only_and_detects_tampering(tmp_path: Path) -> None:
-    project_profile = profile(tmp_path)
+    repository_profile = profile(tmp_path)
     result = SpecCompiler().compile(
-        project_profile,
+        repository_profile,
         task(),
-        (hard_rule(), engineering_rule(), project_rule(project_profile)),
+        (hard_rule(), engineering_rule(), project_rule(repository_profile)),
         compiled_at=NOW,
     )
     conflict = result.conflicts[0]
     resolution = SpecResolution.create(
         conflict,
         action=SpecResolutionAction.SELECT_RULE,
-        selected_rule_id=project_rule(project_profile).id,
+        selected_rule_id=project_rule(repository_profile).id,
         operator_id="human_architect",
         rationale="Choose the documented project convention.",
         evidence_uris=("evidence://decision/4",),
@@ -387,11 +387,11 @@ def test_file_store_is_append_only_and_detects_tampering(tmp_path: Path) -> None
 
 
 def test_store_rejects_changed_replay_for_same_conflict_identity(tmp_path: Path) -> None:
-    project_profile = profile(tmp_path)
+    repository_profile = profile(tmp_path)
     result = SpecCompiler().compile(
-        project_profile,
+        repository_profile,
         task(),
-        (hard_rule(), engineering_rule(), project_rule(project_profile)),
+        (hard_rule(), engineering_rule(), project_rule(repository_profile)),
         compiled_at=NOW,
     )
     conflict = result.conflicts[0]

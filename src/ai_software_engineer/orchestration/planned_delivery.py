@@ -32,7 +32,7 @@ from ai_software_engineer.domain import (
 from ai_software_engineer.store import TaskNotFound, TaskRepository
 
 if TYPE_CHECKING:
-    from ai_software_engineer.project_manager.dispatch import DeliveryAllocation
+    from ai_software_engineer.manager.dispatch import DeliveryAllocation
 
 
 class PlannedDeliveryError(RuntimeError):

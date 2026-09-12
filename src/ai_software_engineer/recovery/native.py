@@ -15,7 +15,6 @@ from pymysql.cursors import DictCursor
 
 from ai_software_engineer.agents import FileModelRouteAttemptStore
 from ai_software_engineer.agents.fallback import RouteAttemptOutcome, model_route_root
-from ai_software_engineer.company_workspace import CompanyWorkspace, _read_regular, _reject_symlinks
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.context import FileContextStore
 from ai_software_engineer.design import FileDesignRecordStore
@@ -33,22 +32,21 @@ from ai_software_engineer.domain import (
 )
 from ai_software_engineer.domain.identity import ContextId, RunId
 from ai_software_engineer.domain.project_delivery import validate_stage_chain
-from ai_software_engineer.multi_directory.production import DerivedStageInputs
-from ai_software_engineer.multi_directory.store import JointJournal
-from ai_software_engineer.planning import FileExecutionPlanStore
-from ai_software_engineer.product import FileProductRecordStore
-from ai_software_engineer.project_manager.delivery import _delivery_id
-from ai_software_engineer.project_manager.delivery_checkpoint import (
+from ai_software_engineer.manager.delivery import _delivery_id
+from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryStage,
     FileProjectDeliveryCheckpointStore,
     ProjectDeliveryCheckpoint,
     checkpoint_is_ancestor,
 )
-from ai_software_engineer.project_manager.dispatch import DeliveryAllocation, DispatchCommitRecord
-from ai_software_engineer.project_manager.mysql_dispatch_authority import _decode_allocation
-from ai_software_engineer.project_manager.production_backend import _designer_run_id
-from ai_software_engineer.project_manager.store import FileProjectPreparationStore
-from ai_software_engineer.project_workspace import ProjectWorkspaceManifest
+from ai_software_engineer.manager.dispatch import DeliveryAllocation, DispatchCommitRecord
+from ai_software_engineer.manager.mysql_dispatch_authority import _decode_allocation
+from ai_software_engineer.manager.production_backend import _designer_run_id
+from ai_software_engineer.manager.store import FileProjectPreparationStore
+from ai_software_engineer.multi_directory.production import DerivedStageInputs
+from ai_software_engineer.multi_directory.store import JointJournal
+from ai_software_engineer.planning import FileExecutionPlanStore
+from ai_software_engineer.product import FileProductRecordStore
 from ai_software_engineer.recovery.allocation_lineage import (
     allocation_preparation_sha256,
     resolve_planner_dispatch,
@@ -59,6 +57,7 @@ from ai_software_engineer.recovery.models import (
     RecoverySource,
     digest,
 )
+from ai_software_engineer.repository_workspace import RepositoryWorkspaceManifest
 from ai_software_engineer.store.mysql_repository import (
     _decode_event,
     _decode_task,
@@ -66,6 +65,7 @@ from ai_software_engineer.store.mysql_repository import (
     _text,
     open_mysql_connection,
 )
+from ai_software_engineer.team_workspace import TeamWorkspace, _read_regular, _reject_symlinks
 
 
 @dataclass(frozen=True)
@@ -105,13 +105,14 @@ class NativeRecoverySourceReader:
         """Locate the one terminal Coder run owned by a pre-candidate Delivery."""
         try:
             scope = RecoveryScope.model_validate(scope.to_wire())
-            company = CompanyWorkspace.initialize(
+            team = TeamWorkspace.initialize(
                 self._config.platform_root,
-                company_id=scope.company_id,
-                name=self._config.company_name,
+                team_id=scope.team_id,
+                name=self._config.team_name,
                 read_only=True,
             )
-            root = company.root / "projects" / scope.project_id
+            _, repository = team.project_registry().locate_repository(scope.repository_id)
+            root = repository.root
             journal = FileProjectDeliveryCheckpointStore(
                 root / "state/project-deliveries", read_only=True
             )
@@ -147,15 +148,16 @@ class NativeRecoverySourceReader:
             ) from error
 
     def _inspect(self, scope: RecoveryScope, run_id: str, context_id: str) -> NativeRecoverySource:
-        if scope.company_id != self._config.company_id:
-            raise ValueError("company mismatch")
-        company = CompanyWorkspace.initialize(
+        if scope.team_id != self._config.team_id:
+            raise ValueError("team mismatch")
+        team = TeamWorkspace.initialize(
             self._config.platform_root,
-            company_id=scope.company_id,
-            name=self._config.company_name,
+            team_id=scope.team_id,
+            name=self._config.team_name,
             read_only=True,
         )
-        root = company.root / "projects" / scope.project_id
+        _, repository = team.project_registry().locate_repository(scope.repository_id)
+        root = repository.root
         for relative in (
             "state/product",
             "state/design",
@@ -165,11 +167,14 @@ class NativeRecoverySourceReader:
             "policy",
         ):
             _reject_symlinks(root / relative)
-        manifest = ProjectWorkspaceManifest.model_validate_json(
+        manifest = RepositoryWorkspaceManifest.model_validate_json(
             _read_regular(root / "workspace.json", 64_000)
         )
         manifest.validate_binding(root)
-        if manifest.project_id != scope.project_id or manifest.project_root != scope.project_root:
+        if (
+            manifest.repository_id != scope.repository_id
+            or manifest.repository_root != scope.repository_root
+        ):
             raise ValueError("project scope mismatch")
         journal = FileProjectDeliveryCheckpointStore(
             root / "state/project-deliveries", read_only=True
@@ -178,10 +183,10 @@ class NativeRecoverySourceReader:
         cp = history[-1]
         intake = journal.get_intake(scope.delivery_id)
         if (
-            cp.project_id != scope.project_id
-            or cp.project_root != scope.project_root
-            or intake.project_id != scope.project_id
-            or intake.project_root != scope.project_root
+            cp.repository_id != scope.repository_id
+            or cp.repository_root != scope.repository_root
+            or intake.repository_id != scope.repository_id
+            or intake.repository_root != scope.repository_root
             or cp.stage is not DeliveryStage.BLOCKED
             or cp.task_status is not TaskStatus.BLOCKED
             or cp.candidate_revision is not None
@@ -199,7 +204,7 @@ class NativeRecoverySourceReader:
         )
         preparation, product, approval = stages.preparation, stages.product, stages.approval
         design, plan = stages.design, stages.plan
-        parent_id, parent_sha = _parent(company, cp, approval)
+        parent_id, parent_sha = _parent(team, cp, approval)
         _reject_symlinks(root / "contexts" / f"{context_id}.json")
         # Bounded regular-file preflight prevents a FIFO/oversized Context read.
         _read_regular(root / "contexts" / f"{context_id}.json", 8_000_000)
@@ -285,7 +290,7 @@ class NativeRecoverySourceReader:
             != stages
         ):
             raise ValueError("approved request changed during inspection")
-        if _parent(company, cp, approval) != (parent_id, parent_sha):
+        if _parent(team, cp, approval) != (parent_id, parent_sha):
             raise ValueError("parent changed during inspection")
         return NativeRecoverySource(
             source,
@@ -327,7 +332,7 @@ class NativeRecoverySourceReader:
                     if (
                         allocation.id != commit_id
                         or allocation.dispatch_sha256 != historic.dispatch_commit_sha256
-                        or allocation.project_id != historic.project_id
+                        or allocation.repository_id != historic.repository_id
                         or allocation.task_id != historic.task_id
                     ):
                         raise ValueError("dispatch history mismatch")
@@ -354,8 +359,8 @@ class NativeRecoverySourceReader:
                     or revision != cp.task_revision
                     or normalized != dispatch.task
                     or dispatch.task_id != cp.task_id
-                    or dispatch.project_id != cp.project_id
-                    or dispatch.task.repository != cp.project_root
+                    or dispatch.repository_id != cp.repository_id
+                    or dispatch.task.repository != cp.repository_root
                     or dispatch.dispatch_sha256 != cp.dispatch_commit_sha256
                 ):
                     raise ValueError("Task dispatch mismatch")
@@ -447,12 +452,20 @@ def read_approved_stages(
         or dispatch.ready_request_revision != ready.revision
     ):
         raise ValueError("upstream commit chain mismatch")
-    preparation = _preparation(root, scope.project_id, ready.request.preparation_sha256)
+    preparation = _preparation(root, scope.repository_id, ready.request.preparation_sha256)
     validate_stage_chain(preparation, ready.request, product, approval, design, plan)
     if (
-        preparation.project_root != scope.project_root
-        or preparation.project_workspace_root != str(root)
-        or preparation.organization_root != str(Path(config.platform_root) / "organization")
+        preparation.repository_root != scope.repository_root
+        or preparation.repository_workspace_root != str(root)
+        or preparation.team_root
+        != str(
+            TeamWorkspace.initialize(
+                config.platform_root,
+                team_id=config.team_id,
+                name=config.team_name,
+                read_only=True,
+            ).root
+        )
         or allocation_preparation_sha256(
             current_dispatch or dispatch, preparation.preparation_sha256
         )
@@ -470,18 +483,18 @@ def read_approved_stages(
     return NativeApprovedStages(preparation, product, approval, design, plan, ready.request)
 
 
-def _preparation(root: Path, project_id: str, expected: str) -> ProjectPreparation:
+def _preparation(root: Path, repository_id: str, expected: str) -> ProjectPreparation:
     policy = root / "policy"
     _reject_symlinks(policy)
     directories = (policy, *sorted(policy.glob("preparations-*")))
     matches: list[ProjectPreparation] = []
     for directory in directories:
         _reject_symlinks(directory)
-        path = directory / f"project-preparation-{project_id}.json"
+        path = directory / f"project-preparation-{repository_id}.json"
         if not path.exists() and not path.is_symlink():
             continue
         _read_regular(path, 1_000_000)
-        record = FileProjectPreparationStore(directory, read_only=True).get(project_id)
+        record = FileProjectPreparationStore(directory, read_only=True).get(repository_id)
         if record.preparation_sha256 == expected:
             matches.append(record)
     if len(matches) != 1:
@@ -490,11 +503,12 @@ def _preparation(root: Path, project_id: str, expected: str) -> ProjectPreparati
 
 
 def _parent(
-    company: CompanyWorkspace, cp: ProjectDeliveryCheckpoint, approval: ProductSpecApproval
+    team: TeamWorkspace, cp: ProjectDeliveryCheckpoint, approval: ProductSpecApproval
 ) -> tuple[str | None, str | None]:
-    journal = JointJournal(company.requests_root, read_only=True)
+    project, repository = team.project_registry().locate_repository(cp.repository_id)
+    journal = JointJournal(project.requirements_root, read_only=True)
     matches: list[tuple[str, str]] = []
-    for directory in sorted(company.requests_root.glob("delivery_multi_*")):
+    for directory in sorted(project.requirements_root.glob("delivery_multi_*")):
         _reject_symlinks(directory)
         for path in directory.glob("*.json"):
             _read_regular(path, 8_000_000)
@@ -502,16 +516,22 @@ def _parent(
         if parent is None:
             continue
         if (
-            parent.company_id != company.manifest.company_id
-            or parent.company_manifest_sha256 != company.manifest.manifest_sha256
+            parent.team_id != team.manifest.team_id
+            or parent.team_manifest_sha256 != team.manifest.manifest_sha256
+            or parent.project_id != project.manifest.project_id
+            or parent.project_manifest_sha256 != project.manifest.manifest_sha256
         ):
-            raise ValueError("joint company mismatch")
+            raise ValueError("joint team mismatch")
         if parent.plan is None or parent.design is None:
             continue
         for unit in parent.plan.units:
             derived = DerivedStageInputs(parent, unit.unit_id)
             if (
-                _delivery_id(derived.root, derived.requirement, namespace=parent.company_id)
+                _delivery_id(
+                    derived.root,
+                    derived.requirement,
+                    namespace=parent.project_id,
+                )
                 != cp.delivery_id
             ):
                 continue
@@ -521,7 +541,7 @@ def _parent(
             child_is_ancestor = False
             if len(children) == 1:
                 native_history = FileProjectDeliveryCheckpointStore(
-                    company.root / "projects" / cp.project_id / "state/project-deliveries",
+                    repository.root / "state/project-deliveries",
                     read_only=True,
                 ).list(cp.delivery_id)
                 child_is_ancestor = (

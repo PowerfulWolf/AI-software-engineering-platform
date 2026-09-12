@@ -18,8 +18,8 @@ sidecar, typed source-read, evidence setup, or the serial delivery assertions.
 
 ## What the test proves
 
-1. `ProjectProfile.discover` reads language/build/native-rule facts without writing the target.
-2. `ProjectWorkspaceRegistry` and `RuntimeWorkspaceBinder` place state, contexts, artifacts,
+1. `RepositoryProfile.discover` reads language/build/native-rule facts without writing the target.
+2. `RepositoryWorkspaceRegistry` and `RuntimeWorkspaceBinder` place state, contexts, artifacts,
    evidence, runs, and SQLite outside the target source directory.
 3. `PolicyBoundToolRegistry` exposes only typed file/argv operations.  A command probe is adapted
    to `RunEvidenceSession`, which persists command and test records plus a sealed run manifest.

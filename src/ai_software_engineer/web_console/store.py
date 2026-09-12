@@ -1,4 +1,4 @@
-"""Operation-store adapters for browser-submitted Project Manager work."""
+"""Operation-store adapters for browser-submitted Manager work."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from typing import Protocol
 
 from pydantic import TypeAdapter
 
-from ai_software_engineer.company_workspace import _read_regular
+from ai_software_engineer.team_workspace import _read_regular
 
 from .models import (
     ConsoleCommandResult,
@@ -65,8 +65,8 @@ class ConsoleOperationStore(Protocol):
 
 
 class InMemoryConsoleOperationStore:
-    def __init__(self, company_id: str) -> None:
-        self.company_id = company_id
+    def __init__(self, team_id: str) -> None:
+        self.team_id = team_id
         self._histories: dict[str, list[ConsoleOperation]] = {}
         self._lock = Lock()
 
@@ -74,7 +74,7 @@ class InMemoryConsoleOperationStore:
         self, *, intent: ConsoleIntent, idempotency_key: str, requested_at: datetime
     ) -> ConsoleOperation:
         operation = ConsoleOperation.queued(
-            company_id=self.company_id,
+            team_id=self.team_id,
             idempotency_key=idempotency_key,
             intent=intent,
             requested_at=requested_at,
@@ -200,11 +200,11 @@ class InMemoryConsoleOperationStore:
 
 
 class FileConsoleOperationStore:
-    """Append-only company-sidecar adapter with process-safe admission."""
+    """Append-only team-sidecar adapter with process-safe admission."""
 
-    def __init__(self, root: Path, *, company_id: str) -> None:
+    def __init__(self, root: Path, *, team_id: str) -> None:
         self.root = root.absolute()
-        self.company_id = company_id
+        self.team_id = team_id
         _reject_symlinks(self.root)
         self.root.mkdir(parents=True, exist_ok=True)
 
@@ -213,7 +213,7 @@ class FileConsoleOperationStore:
     ) -> ConsoleOperation:
         TypeAdapter(IdempotencyKey).validate_python(idempotency_key)
         proposed = ConsoleOperation.queued(
-            company_id=self.company_id,
+            team_id=self.team_id,
             idempotency_key=idempotency_key,
             intent=intent,
             requested_at=requested_at,
@@ -399,7 +399,7 @@ class FileConsoleOperationStore:
 
 def _same_submission(current: ConsoleOperation, proposed: ConsoleOperation) -> ConsoleOperation:
     if (
-        current.company_id != proposed.company_id
+        current.team_id != proposed.team_id
         or current.idempotency_key != proposed.idempotency_key
         or current.intent_sha256 != proposed.intent_sha256
         or current.intent != proposed.intent
@@ -430,7 +430,7 @@ def _validate_successor(previous: ConsoleOperation | None, operation: ConsoleOpe
         raise ConsoleOperationConflict("console operation transition is invalid")
     for field in (
         "operation_id",
-        "company_id",
+        "team_id",
         "idempotency_key",
         "intent",
         "intent_sha256",

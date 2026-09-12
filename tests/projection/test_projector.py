@@ -26,7 +26,7 @@ NOW = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
 
 def _evidence(*, run_id: str = "run_projection_001") -> CommandEvidenceRecord:
     identity = RunEvidenceIdentity(
-        project_id="project_projection_001",
+        repository_id="repository_projection_001",
         task_id="task_domain_001",
         run_id=run_id,
         agent_id="agent_projection_001",

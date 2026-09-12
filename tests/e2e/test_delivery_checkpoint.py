@@ -11,7 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 from ai_software_engineer.domain.enums import TaskStatus
-from ai_software_engineer.project_manager.delivery_checkpoint import (
+from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryFailureCode,
     DeliveryNextAction,
     DeliveryStage,
@@ -38,8 +38,8 @@ def _checkpoint(
         "delivery_id": "delivery_alpha",
         "sequence": 1,
         "previous_checkpoint_sha256": None,
-        "project_id": "project_alpha",
-        "project_root": str(root.resolve()),
+        "repository_id": "repository_alpha",
+        "repository_root": str(root.resolve()),
         "stage": DeliveryStage.PREPARING,
         "stage_attempts": DeliveryStageAttempts(),
         "next_action": DeliveryNextAction.PREPARE_PROJECT,
@@ -89,8 +89,8 @@ def _full_fields() -> dict[str, object]:
 def _intake(root: Path, **updates: object) -> ProjectDeliveryIntake:
     values: dict[str, object] = {
         "delivery_id": "delivery_alpha",
-        "project_id": "project_alpha",
-        "project_root": str(root.resolve()),
+        "repository_id": "repository_alpha",
+        "repository_root": str(root.resolve()),
         "title": "Deliver alpha",
         "requirement": "Add deterministic alpha behavior.",
         "submitted_at": NOW,
@@ -112,7 +112,7 @@ def test_checkpoint_has_canonical_identity_and_strict_typed_shape(tmp_path: Path
         )
 
     with pytest.raises(ValidationError):
-        _checkpoint(tmp_path, project_root="relative/project")
+        _checkpoint(tmp_path, repository_root="relative/project")
 
 
 def test_checkpoint_requires_complete_ordered_native_fact_references(tmp_path: Path) -> None:

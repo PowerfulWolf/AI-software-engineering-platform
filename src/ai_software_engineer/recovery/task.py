@@ -32,7 +32,7 @@ class AuthorizedRecoveryTaskBuilder:
             raise RecoveryRejected("recovery plan predates the approved request")
         rebound = ProjectRequest.create(
             request_id=request.id,
-            project_id=request.project_id,
+            repository_id=request.repository_id,
             preparation_sha256=facts.target.preparation_sha256,
             title=request.title,
             original_request=request.original_request,
@@ -48,7 +48,7 @@ class AuthorizedRecoveryTaskBuilder:
             original.design,
             original.plan,
             task_id=plan.new_task_id,
-            repository=facts.target.project_root,
+            repository=facts.target.repository_root,
             base_ref=plan.target_base_revision,
             max_attempts=original.task.max_attempts,
             created_at=plan.created_at,

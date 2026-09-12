@@ -7,7 +7,7 @@
   "required": ["task_id", "title", "status", "attempts", "state_revision", "state_event_ids", "run_ids", "artifact_ids", "evidence_ids", "evaluation_event_ids", "timeline"],
   "properties": {
     "task_id": {"type": "string", "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$"},
-    "project_id": {"type": "string", "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "repository_id": {"type": "string", "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$"},
     "title": {"type": "string", "minLength": 1},
     "status": {"enum": ["NEW", "PLANNING", "IMPLEMENTING", "CONTINUE_REQUIRED", "QUEUED", "QA", "REVIEW", "DONE", "BLOCKED", "FAILED"]},
     "attempts": {"type": "integer", "minimum": 0},

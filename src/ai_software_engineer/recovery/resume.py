@@ -1,4 +1,4 @@
-"""Project Manager controller for normal delivery continuation and candidate remediation."""
+"""Manager controller for normal delivery continuation and candidate remediation."""
 
 from __future__ import annotations
 
@@ -9,16 +9,16 @@ from pathlib import Path
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.domain import AgentRole
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
-from ai_software_engineer.project_manager.delivery import (
+from ai_software_engineer.manager.delivery import (
     ProjectDeliveryResult,
     ResumeProjectDelivery,
     UnifiedProjectEntryService,
 )
-from ai_software_engineer.project_manager.delivery_checkpoint import (
+from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryStage,
     ProjectDeliveryCheckpoint,
 )
-from ai_software_engineer.project_manager.production_backend import (
+from ai_software_engineer.manager.production_backend import (
     ProductionProjectDeliveryBackend,
 )
 from ai_software_engineer.recovery.entry import NativeRecoveryEntry
@@ -131,9 +131,9 @@ class DeliveryResumeController:
             try:
                 NativeCandidateSourceReader(self._config, self._environment).inspect(
                     RecoveryScope(
-                        company_id=self._config.company_id,
-                        project_id=current.project_id,
-                        project_root=current.project_root,
+                        team_id=self._config.team_id,
+                        repository_id=current.repository_id,
+                        repository_root=current.repository_root,
                         delivery_id=current.delivery_id,
                     )
                 )
@@ -141,12 +141,12 @@ class DeliveryResumeController:
                 return self._continue_coder_recovery(current, command)
 
         latest = self._verification.latest_project(
-            project_root=current.project_root,
+            repository_root=current.repository_root,
             delivery_id=current.delivery_id,
         )
         if latest is None:
             plan, path = self._verification.propose_project(
-                project_root=current.project_root,
+                repository_root=current.repository_root,
                 delivery_id=current.delivery_id,
             )
             return self._approval_required(current, plan, path)
@@ -174,7 +174,7 @@ class DeliveryResumeController:
             completion = None
         if completion is None and self._has_admitted_invocation(store, plan):
             successor, successor_path = self._verification.propose_project(
-                project_root=current.project_root,
+                repository_root=current.repository_root,
                 delivery_id=current.delivery_id,
             )
             return self._approval_required(current, successor, successor_path)
@@ -196,7 +196,7 @@ class DeliveryResumeController:
                 completion=completion,
             )
         source = self._verification.latest_project(
-            project_root=plan.scope.project_root,
+            repository_root=plan.scope.repository_root,
             delivery_id=plan.scope.delivery_id,
         )
         if source is None or source[1] != plan:
@@ -204,7 +204,7 @@ class DeliveryResumeController:
         if completion.disposition is CandidateVerificationDisposition.RETRY_VERIFICATION:
             current = self._entry.status(plan.scope.delivery_id).checkpoint
             successor, path = self._verification.propose_project(
-                project_root=plan.scope.project_root,
+                repository_root=plan.scope.repository_root,
                 delivery_id=plan.scope.delivery_id,
             )
             if successor.inputs.candidate_revision != plan.inputs.candidate_revision:

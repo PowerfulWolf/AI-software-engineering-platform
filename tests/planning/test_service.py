@@ -334,7 +334,7 @@ def test_stale_request_revision_is_rejected_before_agent_or_plan_write(tmp_path:
     # Rebuild the digest rather than relying on an unchecked model copy.
     newer_request = type(current.request).create(
         request_id=newer_request.id,
-        project_id=newer_request.project_id,
+        repository_id=newer_request.repository_id,
         preparation_sha256=newer_request.preparation_sha256,
         title=newer_request.title,
         original_request=newer_request.original_request,

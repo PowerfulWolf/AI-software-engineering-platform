@@ -4,7 +4,7 @@ from collections.abc import Mapping
 
 from jsonschema import Draft202012Validator
 
-from ai_software_engineer.domain import AgentProfile, OrganizationRole
+from ai_software_engineer.domain import AgentProfile, TeamRole
 from ai_software_engineer.projection import ProjectionFacts, RunProjectionBuilder
 from ai_software_engineer.read_api import ReadOnlyProjectionApi
 from tests.contracts.test_json_schema_contracts import REGISTRY, SCHEMAS
@@ -32,17 +32,17 @@ def test_read_api_list_payload_contains_schema_version_and_typed_item() -> None:
     _assert_valid(items[0], "projection-task.schema.json")
 
 
-def test_agent_projection_preserves_non_delivery_organization_roles() -> None:
+def test_agent_projection_preserves_non_delivery_team_roles() -> None:
     profile = AgentProfile(
         id="agent_product_alpha",
         version="v1",
         display_name="Product Alpha",
         capabilities=("requirements", "acceptance-criteria"),
-        eligible_roles=(OrganizationRole.PRODUCT,),
+        eligible_roles=(TeamRole.PRODUCT,),
         max_parallel_assignments=2,
         default_model_policy_id="model_policy_product_default",
     )
     snapshot = RunProjectionBuilder().build(ProjectionFacts(agent_profiles=(profile,)))
 
-    assert snapshot.agents[0].eligible_roles == (OrganizationRole.PRODUCT,)
+    assert snapshot.agents[0].eligible_roles == (TeamRole.PRODUCT,)
     _assert_valid(snapshot.agents[0].to_wire(), "projection-agent.schema.json")

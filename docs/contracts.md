@@ -9,7 +9,7 @@
 ## 1. 角色总览
 
 下表是已经进入 Task delivery runtime 的四个岗位，即 `AgentRole`。组织长期成员可声明的
-`OrganizationRole` 还包含 `project_manager/product/designer/planner`；这些上游岗位不能被
+`TeamRole` 还包含 `manager/product/designer/planner`；这些上游岗位不能被
 伪装成 delivery `AgentRole` 以绕过各自的 stage/context/approval 契约。
 
 | 角色 | 读取 | 写入 | 可执行 | 不能做 | 输出 |
@@ -21,12 +21,12 @@
 
 权限必须由机器可验证的 policy 表达；自然语言 prompt 只是解释，不是授权来源。
 
-## Project Manager、Agent Skills 与上游交接
+## Manager、Agent Skills 与上游交接
 
-Project Manager 是用户看到的组织级团队领导 Agent。项目准备、阶段推进、提交调度、失败路由和
+Manager 是用户看到的组织级团队领导 Agent。项目准备、阶段推进、提交调度、失败路由和
 交付通过 typed、policy-bound Skills 执行；Skill 背后是确定性 application service 与最小 ports，
 而不是 Prompt 中的自由授权。Planner 可以调用只读 Scheduler/ModelRouter preview Skills 检查计划
-可行性，但 preview 不写 Assignment/Lease/ModelSelection；只有 Project Manager 的
+可行性，但 preview 不写 Assignment/Lease/ModelSelection；只有 Manager 的
 `commit_dispatch` Skill 重新校验当前 facts 后才能提交具体分配。
 
 进入现有 TaskOrchestrator 前，上游交接链固定为：
@@ -57,7 +57,7 @@ T018 的 [`schemas/workforce.schema.json`](../schemas/workforce.schema.json) 定
 - `AgentRunAllocation`：把 Agent、Assignment、Model、Context、Prompt、Spec 和 tool policy 绑定到
   唯一 `run_id`。
 
-`AgentProfile.eligible_roles` 使用 `OrganizationRole`，可表达 Project Manager、Product、
+`AgentProfile.eligible_roles` 使用 `TeamRole`，可表达 Manager、Product、
 Designer、Planner 与 Coder/QA/Reviewer 三个 delivery 岗位的长期胜任资格。Orchestrator 是
 确定性控制能力，不是 `AgentProfile`。`RoleAssignment`、`RunDemand` 和
 现有 TaskOrchestrator 仍使用只含 `orchestrator/coder/qa/reviewer` 的 `AgentRole`；只有进入
@@ -105,29 +105,29 @@ ADR 不由 `Task.status == DONE` 单独决定。`EvaluationEngine` 还要求最�
 链、独立 run、candidate revision、required criterion evidence、无越权人工动作/策略放宽，
 以及交付后的 regression window PASS。观察窗口未完成返回 `PENDING` 并保守地留在 ADR 分母。
 
-## Project Workspace 契约
+## Repository Workspace 契约
 
-`ProjectWorkspaceRegistry(registry_root).register(project_root, project_id=None)` 把一个 canonical
-本地目标项目绑定到外置 sidecar，并返回 typed `ProjectWorkspace`。目标项目仍是实际代码、测试
+`ProjectWorkspace.repository_registry().register(repository_root, repository_id=None)` 把一个 canonical
+本地代码仓库绑定到所属 Project 的外置 sidecar，并返回 typed `RepositoryWorkspace`。目标仓库仍是代码、测试
 和构建命令 cwd；sidecar 只承载平台状态。`workspace.json` 的 wire contract 是
-`schemas/project-workspace.schema.json`，固定字段为：
+`schemas/repository-workspace.schema.json`，固定字段为：
 
-- `schema_version=v0.1`、`layout_version=v0.1`；这是使用 `assignments/` 的唯一初始布局；
-- `project_id`、absolute `project_root`、absolute `ai_workspace_root`；
+- `schema_version=v0.2`、`layout_version=v0.2`；这是当前唯一布局；
+- `project_id`、`project_manifest_sha256`、`repository_id`、absolute `repository_root`、absolute `ai_workspace_root`；
 - 14 个固定 layout 名称，其中 `assignments/` 保存项目相关分配事实，不保存 Agent 本体；
 - UTC `created_at` 和排除自身字段计算的 canonical `manifest_sha256`。
 
 初始化先在 registry root 下建立隐藏 staging、写入并 `fsync` manifest，再以目录 rename 发布。
-同一绑定重放返回首次 manifest；Project ID collision、registry symlink、目标项目内 sidecar、缺失
-project、manifest digest/Schema/path mismatch 或 layout 缺失均 fail closed。注册不复制源码，也不
-在目标项目创建 `.ase`、数据库、Agent 日志、Artifact 或 Evidence。T022 的 Python
-`RuntimeWorkspaceBinding` 已能把 Runtime paths 固定到 `ProjectWorkspace.directory(...)` 下；
-生产 Host 已自动注册并装配公司 sidecar 下的项目子模块；底层 RuntimeConfig 仍显式使用这些路径。
+同一绑定重放返回首次 manifest；Repository ID collision、registry symlink、代码仓库内 sidecar、缺失
+repository、manifest digest/Schema/path mismatch 或 layout 缺失均 fail closed。注册不复制源码，也不
+在代码仓库创建 `.ase`、数据库、Agent 日志、Artifact 或 Evidence。Python
+`RuntimeWorkspaceBinding` 已能把 Runtime paths 固定到 `RepositoryWorkspace.directory(...)` 下；
+生产 Host 在选定 Project 下自动注册并装配 Repository；底层 RuntimeConfig 仍显式使用这些路径。
 
 Runtime wire 可选字段 `context_max_input_tokens` 为严格整数（1..2,000,000），默认 12,000；
 生产交付显式配置 32,000。它必须传到各角色 ContextBundle 的 budget，不会因 required source
 超限自动增加。生产 Profile 阅读投影只压缩语言 marker 清单，保留完整规范引用及原始 profile
-digest；投影不是可写回的 ProjectProfile。详见 [上下文契约](context-routing.md)。
+digest；投影不是可写回的 RepositoryProfile。详见 [上下文契约](context-routing.md)。
 
 ### 联合需求项目
 
@@ -136,14 +136,14 @@ digest；投影不是可写回的 ProjectProfile。详见 [上下文契约](cont
 Task.repository/source_revision 的单仓含义。子仓完成后必须验证完整 pinned candidate set；
 子仓 DONE 不等于联合 DONE。
 
-新增 wire contracts：`requirement-project-create.schema.json`、
-`requirement-project-checkpoint.schema.json`、`joint-product-spec.schema.json`、
+新增 wire contracts：`requirement-create.schema.json`、
+`requirement-checkpoint.schema.json`、`joint-product-spec.schema.json`、
 `joint-technical-design.schema.json`、`joint-execution-plan.schema.json`。
 Python 入口在 `multi_directory/models.py`、`service.py`，生产桥接在 `production.py`。
 完整签名、授权投影、路径/命令校验和恢复矩阵见
 [`多目录交付 code-spec`](../.trellis/spec/core/multi-directory-delivery.md)。
 
-AgentProfile、ModelPolicy、全局 WorkQueue 和团队绩效位于组织 workspace。T020 的 ProjectProfile
+AgentProfile、ModelPolicy、全局 WorkQueue 和团队绩效位于组织 workspace。T020 的 RepositoryProfile
 只读发现语言、构建、VCS 和原生规范来源并记录 URI/hash；T021 的 `SpecCompiler` 对显式结构化
 规则产生 `SPEC_CONFLICT` 和 `WAITING_HUMAN` route，人工 resolution 以不可变 SHA 记录。
 Markdown 正文不会被模型猜测式解析。只有决定终止本次交付时 Task 才进入 `BLOCKED`；hard
@@ -358,19 +358,19 @@ Coder 可输出 `coder-progress` 或 `implementation-report`。前者绑定输�
 ## 9. Python 领域入口
 
 `src/ai_software_engineer/domain/` 是 Python 控制平面的唯一领域类型入口。`TaskStatus`、
-`WorkItemStatus`、`OrganizationRole`、`AgentRole`、`BrainTier`、`RiskTier` 和 `ArtifactKind` 不能在 store、agent adapter
+`WorkItemStatus`、`TeamRole`、`AgentRole`、`BrainTier`、`RiskTier` 和 `ArtifactKind` 不能在 store、agent adapter
 或 orchestrator 中重复定义。`to_wire()` 负责生成 JSON-compatible payload 并省略不存在的
 optional 字段；cross-language 消费者仍以 `schemas/*.json` 为准。
 
 Pydantic validator 只处理单个对象可判断的规则；Task required criterion 与 QA 结果是否一一对应、四类 Artifact 是否属于同一 candidate revision、各 verdict 是否来自独立 run 等跨对象规则，由后续 ArtifactStore/Orchestrator guard 执行。
 
-## 10. Project Manager preparation Skill（T029）
+## 10. Manager preparation Skill（T029）
 
-T029 把项目注册、ProjectProfile 发现、organization binding 和项目级规范编译收口为
-Project Manager Agent 的 typed Skill：
+T029 把项目注册、RepositoryProfile 发现、organization binding 和项目级规范编译收口为
+Manager Agent 的 typed Skill：
 
 ```python
-class ProjectManagerSkill(Protocol):
+class ManagerSkill(Protocol):
     def prepare_project(self, request: PrepareProjectRequest) -> PrepareProjectResult: ...
     def require_product_context(self, result: PrepareProjectResult) -> ProjectPreparation: ...
     def advance_stage(self, request: StageAdvanceRequest) -> StageAdvanceAuthorization: ...
@@ -378,7 +378,7 @@ class ProjectManagerSkill(Protocol):
 
 Agent-visible request/result/authorization 的 wire contract 是
 `schemas/agent-skill-project-manager.schema.json`。`PrepareProjectRequest` 的唯一业务输入是
-无控制字符的绝对 `project_root`。organization identity、sidecar registry、platform rules、
+无控制字符的绝对 `repository_root`。organization identity、sidecar registry、platform rules、
 rule provider、clock 和 stores 都是 Skill runtime
 按 policy 注入的依赖，不是 Agent 可以传入或替换的 ambient authority。
 
@@ -386,7 +386,7 @@ rule provider、clock 和 stores 都是 Skill runtime
 
 ```text
 register/reopen external sidecar
-  → discover and integrity-check ProjectProfile
+  → discover and integrity-check RepositoryProfile
   → bind organization + project + exact profile
   → compile PLATFORM_HARD/PLATFORM_ENGINEERING/PROJECT baseline
   → append compilation record
@@ -394,7 +394,7 @@ register/reopen external sidecar
 ```
 
 项目基线是 task-free 的：必须包含至少一条 `PLATFORM_HARD` 规则，拒绝 `TASK` 规则，
-不会虚构 Task/acceptance criteria。结构化 PROJECT rule 必须绑定当前 ProjectProfile 中精确的
+不会虚构 Task/acceptance criteria。结构化 PROJECT rule 必须绑定当前 RepositoryProfile 中精确的
 source URI + SHA-256；未有显式 adapter 解释的原生规范只作为 opaque source 引用。
 重叠 scope 下同一 field 的不同 value 不按优先级静默覆盖，而是生成 project-scoped
 `ProjectSpecConflict` 和 `WAITING_HUMAN`，且 `product_agent_start_allowed=false`。
@@ -449,7 +449,7 @@ Delivery Task 状态、ProductSpecApproval 和 stage authorization。Fake adapte
 
 `REQUEST_CHANGES` 会写入 exact ProductSpecApproval、新 ProjectRequest revision 和人类理由对话，
 再回到需求澄清。`APPROVED` 除写入同样的不可变批准事实外，还必须调用
-Project Manager `advance_stage(StageAdvanceRequest)`；该 Skill 使用当前 facts 重新校验
+Manager `advance_stage(StageAdvanceRequest)`；该 Skill 使用当前 facts 重新校验
 `PRODUCT_SPEC_APPROVED → SOLUTION_DESIGN`，不接受调用方伪造时间或 authorization。
 
 ### 不可变事实、崩溃恢复与重放
@@ -478,12 +478,12 @@ Python typed boundary 上验证；后续若跨进程暴露，必须先补 wire s
 
 T031 把 approved ProductSpec 到现有 Delivery Task 之间的空档实现为三个相互隔离的边界：
 Designer 产出 TechnicalDesign；Planner 产出不含具体分配的 ExecutionPlan，并使用只读 preview
-检查当前可行性；Project Manager 根据提交时的当前事实重算并一次提交三阶段分配。三个边界都不
+检查当前可行性；Manager 根据提交时的当前事实重算并一次提交三阶段分配。三个边界都不
 复用 Delivery `ContextBundle`，也不会直接运行 Coder、QA 或 Reviewer。
 
 ### Designer：完整项目知识、最小权限和提交点
 
-`RunDesignerCommand` 携带完整且可读的 `ProjectPreparation`、`ProjectProfile`、
+`RunDesignerCommand` 携带完整且可读的 `ProjectPreparation`、`RepositoryProfile`、
 `ProjectSpecBaseline`、当前 `ProjectRequestRevision`、approved ProductSpec/Approval、
 `SOLUTION_DESIGN` authorization 和稳定 `submitted_at`。`DesignContextBuilder` 由这些事实生成
 task-free `DesignContextManifest`；相同内容的 identity 不含 `built_at`，因此可确定重建。
@@ -512,7 +512,7 @@ DesignRunRecord receipt（包含完整预期效果）
 
 只有 `DesignCommitCheckpoint` 存在才表示 Planner handoff 完整。若进程在 receipt 后、revision 或
 checkpoint 前中断，相同 command replay 从 receipt 补齐效果，不重复调用 Designer adapter 或
-Project Manager stage advancer。相同 run ID 改变 command digest、Product store 当前 revision/spec/
+Manager stage advancer。相同 run ID 改变 command digest、Product store 当前 revision/spec/
 approval 漂移、授权或 coverage 不一致、append-only identity 冲突和读回不一致均 fail closed。
 
 ### Planner：抽象 ExecutionPlan 与不可写 preview
@@ -548,10 +548,10 @@ ExecutionPlan digest、排序规范化的 workforce snapshot digest、`previewed
 capacity 或 model route 不可行时抛带 exact decision evidence 的 `PlanningPreviewRejected`，不会伪造
 可行性或写入组织/项目 store。
 
-### Project Manager commit-dispatch：当前事实重算与单次原子写
+### Manager commit-dispatch：当前事实重算与单次原子写
 
 ```python
-ProjectManagerDispatchService.commit_dispatch(
+ManagerDispatchService.commit_dispatch(
     CommitDispatchRequest,
 ) -> DispatchCommitRecord
 DispatchCommitStore.commit(DispatchCommitRecord) -> DispatchCommitRecord
@@ -561,8 +561,8 @@ SqliteDispatchAuthority.commit_if_current(record, *, expected_snapshot_sha256) -
 ```
 
 SQLite authority 的持久化结构是
-`dispatch_workforce_snapshots(project_id, task_id, payload_json, snapshot_sha256)` 与
-`dispatch_commits(id, project_id, task_id, payload_json, dispatch_sha256)`。commit row 是单一原子提交点；
+`dispatch_workforce_snapshots(repository_id, task_id, payload_json, snapshot_sha256)` 与
+`dispatch_commits(id, repository_id, task_id, payload_json, dispatch_sha256)`。commit row 是单一原子提交点；
 三组 Assignment/Lease 从经过完整性校验的 typed record 投影，不另写可能半成功的子记录。
 
 `CommitDispatchRequest` 必须携带完整 prepared-to-plan stage chain、exact READY revision、durable
@@ -590,7 +590,7 @@ inode/root 校验；相同 record 重放幂等，changed identity、篡改、sym
 
 T031 的 commit record 本身是原子 dispatch bundle；T032 由 `DispatchTaskMaterializer` 将其中的 NEW
 Task exact-create-or-compare 到现有 TaskRepository，并由统一入口启动 Delivery。Planner preview
-不能代替 commit，Project Manager commit 也不授权自动 merge 或部署。
+不能代替 commit，Manager commit 也不授权自动 merge 或部署。
 
 ### T031 失败矩阵
 
@@ -630,7 +630,7 @@ Design/Plan/Dispatch/Task references 与 digests；人工 reply/approve 使用�
 effects。可预期的 native stage 失败由 backend 分类为 `DeliveryBackendFailure`，只把 typed code 与安全
 摘要写入 BLOCKED checkpoint；未分类异常保留当前 checkpoint 供 resume。正常 CLI 不要求应用宿主
 手工注入 composition：未注入测试 provider 时，`project_entry()` 会从配置和环境变量惰性创建
-`OrganizationTeamHost`。配置、MySQL 或模型 route 不可用时明确失败，不会默选 fake Agent。
+`TeamHost`。配置、MySQL 或模型 route 不可用时明确失败，不会默选 fake Agent。
 
 Dispatch 到 Delivery 的 bridge 有三个约束：`DispatchTaskMaterializer` 只允许 NEW Task exact create 或
 合法已推进 Task 的 immutable replay；`ExecutionPlanAgentAdapter` 只把 approved organization plan 机械
@@ -643,7 +643,7 @@ branch/detached 与 HEAD，dirty 现场不得清理。
 
 ## T036 TeamSnapshot read contract
 
-`GET /api/v1/team` 输出 `schemas/team-snapshot.schema.json`：company/as_of、组织成员、当前公司
+`GET /api/v1/team` 输出 `schemas/team-snapshot.schema.json`：team/as_of、Team 成员、选定 Project 的
 需求、目录范围、Task、分配、时间线、报告和已完成模型路由记录。不接受写入。成员的任务集合为多值，
 current_stage 来自 Task 状态与 Dispatch 的 role 匹配，不代表执行器在线。execution_liveness 仅
 UNKNOWN；planned_model 不代替 ModelRouteAttempt 的实际模型。读取不会初始化 store 或推进业务。
@@ -656,7 +656,7 @@ UNKNOWN；planned_model 不代替 ModelRouteAttempt 的实际模型。读取不�
 
 Web Console 不向只读 `TeamSnapshot` 投影塞入副作用，而是提供平级的 typed command module。
 `POST /api/v1/operations` 只接受多目录需求创建、Product 回复/批准和统一继续四类 intent；先在
-Company sidecar 追加 `QUEUED` Operation 并返回 202，后台 Project Manager 再推进原有 Delivery。
+Team sidecar 追加 `QUEUED` Operation 并返回 202，后台 Manager 再推进原有 Delivery。
 Operation 的 `QUEUED → RUNNING → SUCCEEDED | FAILED | INTERRUPTED` 只描述一次浏览器操作，
 不能代替 Task/Delivery/Artifact/verdict 权威事实。
 

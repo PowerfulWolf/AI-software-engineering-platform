@@ -11,7 +11,7 @@ def _api() -> ReadOnlyProjectionApi:
             tasks=(
                 TaskProjection(
                     task_id="task_read_api_001",
-                    project_id="project_read_api_001",
+                    repository_id="repository_read_api_001",
                     title="Read model",
                     status=TaskStatus.DONE,
                     attempts=1,

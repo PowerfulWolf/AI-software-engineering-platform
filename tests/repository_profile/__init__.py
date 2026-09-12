@@ -1,0 +1,1 @@
+"""RepositoryProfile contract tests."""

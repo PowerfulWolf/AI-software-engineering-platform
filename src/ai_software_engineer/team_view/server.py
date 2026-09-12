@@ -6,13 +6,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 from threading import Lock
 from typing import Protocol
-from urllib.parse import unquote
+from urllib.parse import parse_qs, urlsplit
 
 from .models import TeamSnapshot
 
 
 class TeamReader(Protocol):
-    def snapshot(self, company_id: str | None = None) -> TeamSnapshot: ...
+    def snapshot(self, project_id: str | None = None) -> TeamSnapshot: ...
 
 
 def create_team_server(reader: TeamReader, *, port: int = 8765) -> ThreadingHTTPServer:
@@ -67,13 +67,20 @@ def create_team_server(reader: TeamReader, *, port: int = 8765) -> ThreadingHTTP
                 name, content_type = assets[self.path]
                 self._send(200, files(__package__).joinpath(name).read_bytes(), content_type)
                 return
-            company_id: str | None = None
-            if self.path.startswith("/api/v1/team/"):
-                company_id = unquote(self.path.removeprefix("/api/v1/team/"))
-                if not company_id or "/" in company_id or "?" in company_id:
-                    self._send(404, b'{"error":"Not found"}', "application/json")
-                    return
-            elif self.path != "/api/v1/team":
+            parsed = urlsplit(self.path)
+            if parsed.path != "/api/v1/team":
+                self._send(404, b'{"error":"Not found"}', "application/json")
+                return
+            query = parse_qs(parsed.query, keep_blank_values=True)
+            if set(query) - {"project_id"} or len(query.get("project_id", ())) > 1:
+                self._send(404, b'{"error":"Not found"}', "application/json")
+                return
+            project_id = query.get("project_id", [None])[0]
+            if project_id is not None and (
+                not project_id.startswith("project_")
+                or "/" in project_id
+                or any(ord(character) < 32 for character in project_id)
+            ):
                 self._send(404, b'{"error":"Not found"}', "application/json")
                 return
             if not gate.acquire(blocking=False):
@@ -81,7 +88,7 @@ def create_team_server(reader: TeamReader, *, port: int = 8765) -> ThreadingHTTP
                 return
             try:
                 try:
-                    snapshot = reader.snapshot(company_id)
+                    snapshot = reader.snapshot(project_id)
                     body = snapshot.model_dump_json().encode("utf-8")
                 except Exception:
                     self._send(503, b'{"error":"Team data unavailable"}', "application/json")

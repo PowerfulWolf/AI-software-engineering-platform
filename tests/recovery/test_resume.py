@@ -28,21 +28,21 @@ from ai_software_engineer.domain import (
     QaReportStatus,
     TaskStatus,
 )
-from ai_software_engineer.orchestration import AgentRunFailed
-from ai_software_engineer.project_manager.delivery import (
+from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
     ResumeProjectDelivery,
     StartProjectDelivery,
 )
-from ai_software_engineer.project_manager.delivery_checkpoint import (
+from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryStage,
     FileProjectDeliveryCheckpointStore,
     ProjectDeliveryCheckpoint,
 )
-from ai_software_engineer.project_manager.production_delivery import (
+from ai_software_engineer.manager.production_delivery import (
     DeliveryRouteAdapterFactory,
 )
-from ai_software_engineer.project_manager.production_host import OrganizationTeamHost
+from ai_software_engineer.manager.production_host import TeamHost
+from ai_software_engineer.orchestration import AgentRunFailed
 from ai_software_engineer.recovery.entry import NativeRecoveryExecution
 from ai_software_engineer.recovery.models import RecoveryScope
 from ai_software_engineer.recovery.remediation import CandidateRemediationService
@@ -56,13 +56,13 @@ from ai_software_engineer.recovery.verification_native import NativeCandidateSou
 from ai_software_engineer.role_workspace import RoleWorktreeBinding
 from ai_software_engineer.store import MySqlTaskRepository
 from ai_software_engineer.team_view.reader import ProductionTeamReader
-from tests.project_manager.test_production_backend import (
+from tests.manager.test_production_backend import (
     _git,
     _git_output,
     _ScriptedClientFactory,
     _ScriptedDeliveryAdapter,
 )
-from tests.project_manager.test_production_backend import mysql_dsn as mysql_dsn
+from tests.manager.test_production_backend import mysql_dsn as mysql_dsn
 from tests.recovery.test_execution import OfflineFactory
 from tests.recovery.test_native import InterruptedFactory
 
@@ -255,12 +255,14 @@ class _SeededInterruptedRecoveryFactory(DeliveryRouteAdapterFactory):
 def _append_equivalent_delivery_checkpoint(
     config: ProductionConfig, checkpoint: ProjectDeliveryCheckpoint
 ) -> ProjectDeliveryCheckpoint:
+    if config.default_project_id is None:
+        raise AssertionError("test fixture requires a default Project")
     root = (
         Path(config.platform_root)
-        / "companies"
-        / config.company_id
         / "projects"
-        / checkpoint.project_id
+        / config.default_project_id
+        / "repositories"
+        / checkpoint.repository_id
         / "state/project-deliveries"
     )
     store = FileProjectDeliveryCheckpointStore(root)
@@ -292,6 +294,8 @@ def test_resume_discovers_approves_and_attaches_pre_candidate_coder_recovery(
     _git("commit", "-m", "initial", cwd=project)
     config = ProductionConfig(
         platform_root=str(tmp_path / "platform"),
+        default_project_id="project_test",
+        default_project_name="Test Project",
         live_model_execution=True,
         model_routes=(
             ProviderRouteConfig(
@@ -303,7 +307,7 @@ def test_resume_discovers_approves_and_attaches_pre_candidate_coder_recovery(
     )
     environment = {"ASE_MYSQL_DSN": mysql_dsn, "PATH": os.environ.get("PATH", "")}
     interrupted = InterruptedFactory()
-    host = OrganizationTeamHost(
+    host = TeamHost(
         config=config,
         environment=environment,
         structured_clients=_ScriptedClientFactory(),
@@ -311,7 +315,7 @@ def test_resume_discovers_approves_and_attaches_pre_candidate_coder_recovery(
     )
     entry = host.project_entry()
     started = entry.start(
-        StartProjectDelivery(project_root=str(project), requirement="Change the greeting.")
+        StartProjectDelivery(repository_root=str(project), requirement="Change the greeting.")
     )
     blocked = entry.approve(
         ApproveProductSpec(
@@ -327,7 +331,7 @@ def test_resume_discovers_approves_and_attaches_pre_candidate_coder_recovery(
     controller = DeliveryResumeController(
         config=config,
         environment=environment,
-        backend=host._recovery_backend,
+        backend=recovery.backend,
         entry=entry,
         recovery=recovery,
         verification=host.verification_entry(),
@@ -404,6 +408,8 @@ def test_resume_verifies_failed_candidate_and_delivers_remediation(
     _git("commit", "-m", "initial", cwd=project)
     config = ProductionConfig(
         platform_root=str(tmp_path / "platform"),
+        default_project_id="project_test",
+        default_project_name="Test Project",
         live_model_execution=True,
         model_routes=(
             ProviderRouteConfig(
@@ -415,7 +421,7 @@ def test_resume_verifies_failed_candidate_and_delivers_remediation(
     )
     environment = {"ASE_MYSQL_DSN": mysql_dsn, "PATH": os.environ.get("PATH", "")}
     routes = _ResumeFactory()
-    host = OrganizationTeamHost(
+    host = TeamHost(
         config=config,
         environment=environment,
         structured_clients=_ScriptedClientFactory(),
@@ -423,7 +429,7 @@ def test_resume_verifies_failed_candidate_and_delivers_remediation(
     )
     entry = host.project_entry()
     started = entry.start(
-        StartProjectDelivery(project_root=str(project), requirement="Change the greeting.")
+        StartProjectDelivery(repository_root=str(project), requirement="Change the greeting.")
     )
     blocked = entry.approve(
         ApproveProductSpec(
@@ -564,6 +570,8 @@ def test_resume_accepts_verified_candidate_after_delivery_checkpoint_append(
     _git("commit", "-m", "initial", cwd=project)
     config = ProductionConfig(
         platform_root=str(tmp_path / "platform"),
+        default_project_id="project_test",
+        default_project_name="Test Project",
         live_model_execution=True,
         model_routes=(
             ProviderRouteConfig(
@@ -575,7 +583,7 @@ def test_resume_accepts_verified_candidate_after_delivery_checkpoint_append(
     )
     environment = {"ASE_MYSQL_DSN": mysql_dsn, "PATH": os.environ.get("PATH", "")}
     routes = _ResumeFactory(transient_qa_failures=3, verification_fails=False)
-    host = OrganizationTeamHost(
+    host = TeamHost(
         config=config,
         environment=environment,
         structured_clients=_ScriptedClientFactory(),
@@ -583,7 +591,7 @@ def test_resume_accepts_verified_candidate_after_delivery_checkpoint_append(
     )
     entry = host.project_entry()
     started = entry.start(
-        StartProjectDelivery(project_root=str(project), requirement="Change the greeting.")
+        StartProjectDelivery(repository_root=str(project), requirement="Change the greeting.")
     )
     blocked = entry.approve(
         ApproveProductSpec(
@@ -627,6 +635,8 @@ def test_resume_reuses_retained_candidate_after_legacy_inconclusive_remediation(
     _git("commit", "-m", "initial", cwd=project)
     config = ProductionConfig(
         platform_root=str(tmp_path / "platform"),
+        default_project_id="project_test",
+        default_project_name="Test Project",
         live_model_execution=True,
         model_routes=(
             ProviderRouteConfig(
@@ -643,7 +653,7 @@ def test_resume_reuses_retained_candidate_after_legacy_inconclusive_remediation(
         verification_inconclusive=True,
         remediation_no_candidate=True,
     )
-    host = OrganizationTeamHost(
+    host = TeamHost(
         config=config,
         environment=environment,
         structured_clients=_ScriptedClientFactory(),
@@ -651,7 +661,7 @@ def test_resume_reuses_retained_candidate_after_legacy_inconclusive_remediation(
     )
     entry = host.project_entry()
     started = entry.start(
-        StartProjectDelivery(project_root=str(project), requirement="Change the greeting.")
+        StartProjectDelivery(repository_root=str(project), requirement="Change the greeting.")
     )
     blocked = entry.approve(
         ApproveProductSpec(
@@ -677,14 +687,15 @@ def test_resume_reuses_retained_candidate_after_legacy_inconclusive_remediation(
     assert store.get_verification_completion(plan.plan_sha256) == completion
     source = NativeCandidateSourceReader(config, environment).inspect(
         RecoveryScope(
-            company_id=config.company_id,
-            project_id=blocked.project_id,
-            project_root=blocked.project_root,
+            team_id=config.team_id,
+            repository_id=blocked.repository_id,
+            repository_root=blocked.repository_root,
             delivery_id=blocked.delivery_id,
         )
     )
+    backend = host.recovery_entry().backend
     remediation = CandidateRemediationService(
-        backend=host._recovery_backend,
+        backend=backend,
         config=config,
         environment=environment,
     ).prepare(source=source, store=store, plan=plan, completion=completion)
@@ -694,7 +705,7 @@ def test_resume_reuses_retained_candidate_after_legacy_inconclusive_remediation(
         completion,
         at=completion.completed_at,
     )
-    delivery = host._recovery_backend.run_prepared_allocation(
+    delivery = backend.run_prepared_allocation(
         remediation.dispatch,
         remediation.preparation,
         remediation.source.stages.product,

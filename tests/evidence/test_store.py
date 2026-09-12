@@ -26,7 +26,7 @@ from ai_software_engineer.evidence import (
 
 def _record() -> CommandEvidenceRecord:
     identity = RunEvidenceIdentity(
-        project_id="project_store_001",
+        repository_id="repository_store_001",
         task_id="task_store_001",
         run_id="run_store_001",
         agent_id="agent_store_001",

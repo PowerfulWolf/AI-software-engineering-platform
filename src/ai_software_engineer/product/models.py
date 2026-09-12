@@ -10,7 +10,7 @@ from typing import Annotated, Literal, Self
 
 from pydantic import AwareDatetime, Field, StrictInt, StringConstraints, model_validator
 
-from ai_software_engineer.domain.identity import ProjectId
+from ai_software_engineer.domain.identity import RepositoryId
 from ai_software_engineer.domain.model import DomainModel, JsonValue
 from ai_software_engineer.domain.project_delivery import (
     ProductApprovalId,
@@ -68,7 +68,7 @@ class ProductDialogueRecord(DomainModel):
     schema_version: Literal["v0.1"] = "v0.1"
     id: ProductDialogueId
     request_id: ProjectRequestId
-    project_id: ProjectId
+    repository_id: RepositoryId
     sequence: ProductRecordSequence
     actor: ProductDialogueActor
     content: DialogueContent
@@ -89,7 +89,7 @@ class ProductDialogueRecord(DomainModel):
         cls,
         *,
         request_id: ProjectRequestId,
-        project_id: ProjectId,
+        repository_id: RepositoryId,
         sequence: int,
         actor: ProductDialogueActor,
         content: str,
@@ -99,7 +99,7 @@ class ProductDialogueRecord(DomainModel):
         provisional = cls(
             id=f"product_dialogue_{'0' * 64}",
             request_id=request_id,
-            project_id=project_id,
+            repository_id=repository_id,
             sequence=sequence,
             actor=actor,
             content=content,
@@ -180,7 +180,7 @@ class ProductDiscoveryCheckpoint(DomainModel):
     kind: Literal["product_discovery_checkpoint"] = "product_discovery_checkpoint"
     schema_version: Literal["v0.1"] = "v0.1"
     request_id: ProjectRequestId
-    project_id: ProjectId
+    repository_id: RepositoryId
     revision: ProductRecordSequence
     previous_checkpoint_sha256: StageSha256 | None = None
     request_revision: ProductRecordSequence
@@ -238,7 +238,7 @@ class ProductDiscoveryCheckpoint(DomainModel):
         cls,
         *,
         request_id: ProjectRequestId,
-        project_id: ProjectId,
+        repository_id: RepositoryId,
         revision: int,
         previous_checkpoint_sha256: StageSha256 | None,
         request_revision: int,
@@ -255,7 +255,7 @@ class ProductDiscoveryCheckpoint(DomainModel):
     ) -> ProductDiscoveryCheckpoint:
         provisional = cls(
             request_id=request_id,
-            project_id=project_id,
+            repository_id=repository_id,
             revision=revision,
             previous_checkpoint_sha256=previous_checkpoint_sha256,
             request_revision=request_revision,

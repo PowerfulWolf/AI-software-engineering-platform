@@ -24,7 +24,7 @@ from ai_software_engineer.recovery import (
 NOW = datetime(2026, 9, 6, 12, tzinfo=UTC)
 
 
-def make_plan(project: Path) -> RecoveryPlan:
+def make_plan(project: Path, *, repository_id: str = "repository_example") -> RecoveryPlan:
     capture = WorktreeChangeCapture(
         worktree=WorktreeRef(
             task_id="task_original",
@@ -40,10 +40,10 @@ def make_plan(project: Path) -> RecoveryPlan:
         file_sha256s=(),
     )
     scope = RecoveryScope(
-        company_id="company_ai",
-        project_id="project_example",
+        team_id="team_ai",
+        repository_id=repository_id,
         delivery_id="delivery_example",
-        project_root=str(project),
+        repository_root=str(project),
     )
     return RecoveryPlan.create(
         source=RecoverySource(

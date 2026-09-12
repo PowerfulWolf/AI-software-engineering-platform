@@ -12,10 +12,10 @@ from ai_software_engineer.domain import (
     BrainTier,
     ModelPolicy,
     ModelRoute,
-    OrganizationRole,
     RiskModelFloor,
     RiskTier,
     RunDemand,
+    TeamRole,
     WorkItemStatus,
 )
 from ai_software_engineer.domain.workforce import ModelSelection, RoleAssignment, TaskLease
@@ -36,7 +36,7 @@ def item(**updates: object) -> QueuedWorkItem:
     values: dict[str, object] = {
         "id": "work_delivery_coder_001",
         "task_id": "task_delivery_001",
-        "project_id": "project_platform_001",
+        "repository_id": "repository_platform_001",
         "role": AgentRole.CODER,
         "attempt": 1,
         "checkpoint_sequence": 0,
@@ -59,7 +59,7 @@ def agent(name: str, *, capacity: int = 1) -> AgentProfile:
         version="v1",
         display_name=name,
         capabilities=("python",),
-        eligible_roles=(OrganizationRole.CODER,),
+        eligible_roles=(TeamRole.CODER,),
         max_parallel_assignments=capacity,
         default_model_policy_id="model_policy_default_001",
     )

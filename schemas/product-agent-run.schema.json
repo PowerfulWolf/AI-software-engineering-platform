@@ -7,8 +7,8 @@
     {"$ref": "#/$defs/result"}
   ],
   "$defs": {
-    "projectId": {
-      "$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/projectId"
+    "repositoryId": {
+      "$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/repositoryId"
     },
     "requestId": {
       "$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/requestId"
@@ -22,7 +22,7 @@
         "kind",
         "schema_version",
         "run_id",
-        "project_id",
+        "repository_id",
         "request_id",
         "context",
         "permissions",
@@ -33,7 +33,7 @@
         "kind": {"const": "product_agent_request"},
         "schema_version": {"const": "v0.1"},
         "run_id": {"$ref": "#/$defs/runId"},
-        "project_id": {"$ref": "#/$defs/projectId"},
+        "repository_id": {"$ref": "#/$defs/repositoryId"},
         "request_id": {"$ref": "#/$defs/requestId"},
         "context": {
           "$ref": "https://ai-software-engineer.local/schemas/product-context.schema.json"
@@ -78,7 +78,7 @@
         "kind",
         "schema_version",
         "run_id",
-        "project_id",
+        "repository_id",
         "request_id",
         "context_id",
         "status",
@@ -88,7 +88,7 @@
         "kind": {"const": "product_agent_result"},
         "schema_version": {"const": "v0.1"},
         "run_id": {"$ref": "#/$defs/runId"},
-        "project_id": {"$ref": "#/$defs/projectId"},
+        "repository_id": {"$ref": "#/$defs/repositoryId"},
         "request_id": {"$ref": "#/$defs/requestId"},
         "context_id": {"$ref": "#/$defs/contextId"},
         "status": {"enum": ["SUCCEEDED", "FAILED", "TIMED_OUT"]},

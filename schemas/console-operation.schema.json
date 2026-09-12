@@ -2,13 +2,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ai-software-engineer.local/schemas/console-operation.schema.json",
   "title": "ConsoleOperation",
-  "description": "Append-only browser intent and Project Manager operation status.",
+  "description": "Append-only browser intent and Manager operation status.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schema_version",
     "operation_id",
-    "company_id",
+    "team_id",
     "idempotency_key",
     "intent",
     "intent_sha256",
@@ -20,15 +20,33 @@
   ],
   "$defs": {
     "digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
-    "delivery_id": {"type": "string", "pattern": "^delivery_[a-z0-9][a-z0-9_-]{2,127}$"},
-    "create": {
+    "project_id": {
+      "type": "string",
+      "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"
+    },
+    "delivery_id": {
+      "type": "string",
+      "pattern": "^delivery_[a-z0-9][a-z0-9_-]{2,127}$"
+    },
+    "create_project": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["action", "name", "project_roots"],
+      "required": ["action", "name"],
       "properties": {
-        "action": {"const": "CREATE_REQUIREMENT_PROJECT"},
+        "action": {"const": "CREATE_PROJECT"},
         "name": {"type": "string", "minLength": 1, "maxLength": 200},
-        "project_roots": {
+        "project_id": {"$ref": "#/$defs/project_id"}
+      }
+    },
+    "create_requirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "project_id", "name", "repository_roots"],
+      "properties": {
+        "action": {"const": "CREATE_REQUIREMENT"},
+        "project_id": {"$ref": "#/$defs/project_id"},
+        "name": {"type": "string", "minLength": 1, "maxLength": 200},
+        "repository_roots": {
           "type": "array",
           "minItems": 1,
           "maxItems": 32,
@@ -44,9 +62,16 @@
     "reply": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["action", "delivery_id", "expected_checkpoint_sha256", "message"],
+      "required": [
+        "action",
+        "project_id",
+        "delivery_id",
+        "expected_checkpoint_sha256",
+        "message"
+      ],
       "properties": {
         "action": {"const": "PRODUCT_REPLY"},
+        "project_id": {"$ref": "#/$defs/project_id"},
         "delivery_id": {"$ref": "#/$defs/delivery_id"},
         "expected_checkpoint_sha256": {"$ref": "#/$defs/digest"},
         "message": {"type": "string", "minLength": 1, "maxLength": 20000}
@@ -55,9 +80,15 @@
     "product_approval": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["action", "delivery_id", "expected_checkpoint_sha256"],
+      "required": [
+        "action",
+        "project_id",
+        "delivery_id",
+        "expected_checkpoint_sha256"
+      ],
       "properties": {
         "action": {"const": "PRODUCT_APPROVAL"},
+        "project_id": {"$ref": "#/$defs/project_id"},
         "delivery_id": {"$ref": "#/$defs/delivery_id"},
         "expected_checkpoint_sha256": {"$ref": "#/$defs/digest"}
       }
@@ -65,9 +96,15 @@
     "continue": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["action", "delivery_id", "expected_checkpoint_sha256"],
+      "required": [
+        "action",
+        "project_id",
+        "delivery_id",
+        "expected_checkpoint_sha256"
+      ],
       "properties": {
         "action": {"const": "CONTINUE_DELIVERY"},
+        "project_id": {"$ref": "#/$defs/project_id"},
         "delivery_id": {"$ref": "#/$defs/delivery_id"},
         "expected_checkpoint_sha256": {"$ref": "#/$defs/digest"},
         "approved_plan_sha256": {"$ref": "#/$defs/digest"}
@@ -87,20 +124,37 @@
     "result": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["delivery_id", "checkpoint_sha256", "stage", "next_action"],
+      "required": ["project_id", "stage", "next_action"],
       "properties": {
+        "project_id": {"$ref": "#/$defs/project_id"},
         "delivery_id": {"$ref": "#/$defs/delivery_id"},
         "checkpoint_sha256": {"$ref": "#/$defs/digest"},
         "stage": {"type": "string", "minLength": 1},
         "next_action": {"type": "string", "minLength": 1},
         "approval": {"$ref": "#/$defs/approval"}
-      }
+      },
+      "oneOf": [
+        {
+          "required": ["delivery_id", "checkpoint_sha256"],
+          "properties": {}
+        },
+        {
+          "properties": {
+            "delivery_id": false,
+            "checkpoint_sha256": false,
+            "approval": false
+          }
+        }
+      ]
     }
   },
   "properties": {
-    "schema_version": {"const": "v0.1"},
+    "schema_version": {"const": "v0.2"},
     "operation_id": {"type": "string", "pattern": "^operation_[a-f0-9]{32}$"},
-    "company_id": {"type": "string", "pattern": "^company_[a-z0-9][a-z0-9_-]{1,63}$"},
+    "team_id": {
+      "type": "string",
+      "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$"
+    },
     "idempotency_key": {
       "type": "string",
       "minLength": 8,
@@ -109,14 +163,17 @@
     },
     "intent": {
       "oneOf": [
-        {"$ref": "#/$defs/create"},
+        {"$ref": "#/$defs/create_project"},
+        {"$ref": "#/$defs/create_requirement"},
         {"$ref": "#/$defs/reply"},
         {"$ref": "#/$defs/product_approval"},
         {"$ref": "#/$defs/continue"}
       ]
     },
     "intent_sha256": {"$ref": "#/$defs/digest"},
-    "status": {"enum": ["QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "INTERRUPTED"]},
+    "status": {
+      "enum": ["QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "INTERRUPTED"]
+    },
     "sequence": {"type": "integer", "minimum": 1},
     "requested_at": {"type": "string", "format": "date-time"},
     "updated_at": {"type": "string", "format": "date-time"},
@@ -138,11 +195,19 @@
       "else": {"required": ["previous_operation_sha256"]}
     },
     {
-      "if": {"properties": {"status": {"enum": ["QUEUED", "RUNNING"]}}, "required": ["status"]},
-      "then": {"properties": {"result": false, "error_code": false, "error_summary": false}}
+      "if": {
+        "properties": {"status": {"enum": ["QUEUED", "RUNNING"]}},
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {"result": false, "error_code": false, "error_summary": false}
+      }
     },
     {
-      "if": {"properties": {"status": {"const": "SUCCEEDED"}}, "required": ["status"]},
+      "if": {
+        "properties": {"status": {"const": "SUCCEEDED"}},
+        "required": ["status"]
+      },
       "then": {
         "required": ["result"],
         "properties": {"error_code": false, "error_summary": false}
@@ -153,7 +218,10 @@
         "properties": {"status": {"enum": ["FAILED", "INTERRUPTED"]}},
         "required": ["status"]
       },
-      "then": {"required": ["error_code", "error_summary"], "properties": {"result": false}}
+      "then": {
+        "required": ["error_code", "error_summary"],
+        "properties": {"result": false}
+      }
     }
   ]
 }

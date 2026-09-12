@@ -9,7 +9,7 @@ import typer
 
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.domain import AgentRole, TaskStatus
-from ai_software_engineer.project_manager.production_host import OrganizationTeamHost
+from ai_software_engineer.manager.production_host import TeamHost
 from ai_software_engineer.recovery.entry import open_recovery_plan, read_recovery_task
 from ai_software_engineer.recovery.store import RecoveryRecordMissing
 from ai_software_engineer.recovery.verification_entry import open_candidate_verification_plan
@@ -43,10 +43,10 @@ def propose(
     """Prepare current base and capture the stopped original executor; no model call."""
     try:
         plan, path = (
-            OrganizationTeamHost.from_environment()
+            TeamHost.from_environment()
             .recovery_entry()
             .propose(
-                project_root=project,
+                repository_root=project,
                 delivery_id=delivery,
                 failed_run_id=run,
                 failed_context_id=context,
@@ -107,7 +107,7 @@ def approve(
 ) -> None:
     """Human confirms exact plan digest, original solution reuse, base and captured edits."""
     try:
-        OrganizationTeamHost.from_environment().recovery_entry().approve(
+        TeamHost.from_environment().recovery_entry().approve(
             plan,
             confirmed_plan=confirm,
             reference=reference,
@@ -121,7 +121,7 @@ def approve(
 def run_recovery(plan: Annotated[Path, typer.Option()]) -> None:
     """Allocate, seed and run a fresh serial Coder → QA → Reviewer attempt."""
     try:
-        result = OrganizationTeamHost.from_environment().recovery_entry().execute(plan)
+        result = TeamHost.from_environment().recovery_entry().execute(plan)
     except Exception as error:
         _error(error)
     typer.echo(json.dumps(result.to_wire(), ensure_ascii=False, indent=2))
@@ -140,9 +140,9 @@ def verify_propose(
     """Pin the existing Coder candidate and current verifier allocation; no model call."""
     try:
         plan, path = (
-            OrganizationTeamHost.from_environment()
+            TeamHost.from_environment()
             .verification_entry()
-            .propose_project(project_root=project, delivery_id=delivery)
+            .propose_project(repository_root=project, delivery_id=delivery)
         )
     except Exception as error:
         _error(error)
@@ -241,7 +241,7 @@ def verify_approve(
 ) -> None:
     """Seal explicit human approval for exactly one candidate verification plan."""
     try:
-        OrganizationTeamHost.from_environment().verification_entry().approve(
+        TeamHost.from_environment().verification_entry().approve(
             plan,
             confirmed_plan=confirm,
             reference=reference,
@@ -255,7 +255,7 @@ def verify_approve(
 def verify_run(plan: Annotated[Path, typer.Option()]) -> None:
     """Run only independent QA then Reviewer against the pinned candidate commit."""
     try:
-        completion = OrganizationTeamHost.from_environment().verification_entry().execute(plan)
+        completion = TeamHost.from_environment().verification_entry().execute(plan)
     except Exception as error:
         _error(error)
     typer.echo(

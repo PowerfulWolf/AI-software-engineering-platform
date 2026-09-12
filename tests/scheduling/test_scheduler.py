@@ -11,12 +11,12 @@ from ai_software_engineer.domain import (
     ModelPolicy,
     ModelRoute,
     ModelRouteReason,
-    OrganizationRole,
     RiskModelFloor,
     RiskTier,
     RoleAssignment,
     RunDemand,
     TaskLease,
+    TeamRole,
     WorkItem,
     WorkItemStatus,
 )
@@ -38,10 +38,10 @@ def agent(
     name: str = "alpha",
     *,
     capabilities: tuple[str, ...] = ("python",),
-    roles: tuple[OrganizationRole, ...] = (
-        OrganizationRole.CODER,
-        OrganizationRole.QA,
-        OrganizationRole.REVIEWER,
+    roles: tuple[TeamRole, ...] = (
+        TeamRole.CODER,
+        TeamRole.QA,
+        TeamRole.REVIEWER,
     ),
     max_parallel_assignments: int = 1,
     active: bool = True,
@@ -75,7 +75,7 @@ def work_item(
     }
     return WorkItem(
         task_id=f"task_{name}_001",
-        project_id="project_platform_001",
+        repository_id="repository_platform_001",
         status=status,
         priority=priority,
         risk=risk,
@@ -96,7 +96,7 @@ def assignment(
 ) -> RoleAssignment:
     return RoleAssignment(
         id=f"assignment_{role.value}_{attempt:03d}",
-        project_id="project_platform_001",
+        repository_id="repository_platform_001",
         task_id=task_id,
         agent_id=agent_id,
         role=role,
@@ -228,7 +228,7 @@ def test_retry_scheduled_item_becomes_ready_at_its_available_time() -> None:
 def test_agent_eligibility_failures_are_structured(
     role: AgentRole, expected: AssignmentRejectionCode
 ) -> None:
-    profile = agent(capabilities=("java",), roles=(OrganizationRole.CODER,))
+    profile = agent(capabilities=("java",), roles=(TeamRole.CODER,))
     requested = work_item(capabilities=("python",)) if role is AgentRole.CODER else work_item()
 
     decision = PortfolioScheduler().match(requested, role, [profile], [], now=NOW)

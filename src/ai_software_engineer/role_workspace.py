@@ -21,7 +21,7 @@ from ai_software_engineer.git import (
 )
 
 if TYPE_CHECKING:
-    from ai_software_engineer.project_manager.dispatch import (
+    from ai_software_engineer.manager.dispatch import (
         DeliveryAllocation,
         VerificationReservation,
     )

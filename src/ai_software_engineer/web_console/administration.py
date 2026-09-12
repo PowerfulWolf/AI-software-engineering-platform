@@ -1,4 +1,4 @@
-"""Typed local administration for Companies, knowledge documents and settings."""
+"""Typed local administration for Teams, knowledge documents and settings."""
 
 from __future__ import annotations
 
@@ -12,17 +12,18 @@ from typing import Annotated, Protocol
 
 from pydantic import AwareDatetime, Field, StrictBool, StringConstraints
 
-from ai_software_engineer.company_workspace import (
-    CompanyId,
-    CompanyName,
-    CompanyWorkspace,
-    discover_company_workspaces,
-)
 from ai_software_engineer.config import ProductionConfig
+from ai_software_engineer.domain.identity import ProjectId, TeamId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.knowledge_documents import (
-    CompanyKnowledgeDocumentStore,
     KnowledgeDocumentManifest,
+    TeamKnowledgeDocumentStore,
+)
+from ai_software_engineer.project_workspace import ProjectName, ProjectWorkspace
+from ai_software_engineer.team_workspace import (
+    TeamName,
+    TeamWorkspace,
+    discover_team_workspaces,
 )
 
 
@@ -30,16 +31,24 @@ class AdministrationError(RuntimeError):
     """Stable operator-facing administration failure."""
 
 
-class CompanySummary(DomainModel):
-    company_id: CompanyId
-    name: CompanyName
+class TeamSummary(DomainModel):
+    team_id: TeamId
+    name: TeamName
     active: StrictBool
     created_at: AwareDatetime
 
 
-class CreateCompanyRequest(DomainModel):
-    company_id: CompanyId
-    name: CompanyName
+class ProjectSummary(DomainModel):
+    project_id: ProjectId
+    name: ProjectName
+    repository_count: int
+    requirement_count: int
+    created_at: AwareDatetime
+
+
+class CreateProjectRequest(DomainModel):
+    name: ProjectName
+    project_id: ProjectId | None = None
 
 
 class SecretStatus(DomainModel):
@@ -64,12 +73,11 @@ class KnowledgeDocumentView(DomainModel):
 
 
 class ConsoleAdministration(Protocol):
-    def companies(self) -> tuple[CompanySummary, ...]: ...
-    def create_company(self, request: CreateCompanyRequest) -> CompanySummary: ...
-    def knowledge(self, company_id: str) -> tuple[KnowledgeDocumentView, ...]: ...
-    def import_document(
-        self, *, company_id: str, filename: str, content: bytes
-    ) -> KnowledgeDocumentView: ...
+    def team(self) -> TeamSummary: ...
+    def projects(self) -> tuple[ProjectSummary, ...]: ...
+    def create_project(self, request: CreateProjectRequest) -> ProjectSummary: ...
+    def knowledge(self) -> tuple[KnowledgeDocumentView, ...]: ...
+    def import_document(self, *, filename: str, content: bytes) -> KnowledgeDocumentView: ...
     def settings(self) -> SettingsSnapshot: ...
     def update_settings(self, request: UpdateSettingsRequest) -> SettingsSnapshot: ...
 
@@ -86,63 +94,57 @@ class LocalConsoleAdministration:
         self.config_path = self.config_path.expanduser().absolute()
         self._saved_config = self.runtime_config
 
-    def companies(self) -> tuple[CompanySummary, ...]:
+    def team(self) -> TeamSummary:
+        try:
+            team = self._team()
+            return TeamSummary(
+                team_id=team.manifest.team_id,
+                name=team.manifest.name,
+                active=True,
+                created_at=team.manifest.created_at,
+            )
+        except (OSError, ValueError) as error:
+            raise AdministrationError("Team workspace is invalid") from error
+
+    def projects(self) -> tuple[ProjectSummary, ...]:
         try:
             return tuple(
-                CompanySummary(
-                    company_id=company.manifest.company_id,
-                    name=company.manifest.name,
-                    active=company.manifest.company_id == self._saved_config.company_id,
-                    created_at=company.manifest.created_at,
-                )
-                for company in discover_company_workspaces(self.runtime_config.platform_root)
+                self._project_summary(project)
+                for project in self._team().project_registry().discover()
             )
         except (OSError, ValueError) as error:
-            raise AdministrationError("company catalog is invalid") from error
+            raise AdministrationError("Project catalog is invalid") from error
 
-    def create_company(self, request: CreateCompanyRequest) -> CompanySummary:
+    def create_project(self, request: CreateProjectRequest) -> ProjectSummary:
         try:
-            company = CompanyWorkspace.initialize(
-                self.runtime_config.platform_root,
-                company_id=request.company_id,
-                name=request.name,
+            registry = self._team().project_registry()
+            project = (
+                registry.create(name=request.name)
+                if request.project_id is None
+                else registry.register(project_id=request.project_id, name=request.name)
             )
+            return self._project_summary(project)
         except (OSError, ValueError) as error:
-            raise AdministrationError("company could not be created or reopened safely") from error
-        return CompanySummary(
-            company_id=company.manifest.company_id,
-            name=company.manifest.name,
-            active=company.manifest.company_id == self._saved_config.company_id,
-            created_at=company.manifest.created_at,
-        )
+            raise AdministrationError("Project could not be created safely") from error
 
-    def knowledge(self, company_id: str) -> tuple[KnowledgeDocumentView, ...]:
-        company = self._company(company_id)
-        selected = (
-            set(self._saved_config.company_knowledge_paths)
-            if company_id == self._saved_config.company_id
-            else set()
-        )
+    def knowledge(self) -> tuple[KnowledgeDocumentView, ...]:
+        team = self._team()
+        selected = set(self._saved_config.team_knowledge_paths)
         return tuple(
             KnowledgeDocumentView(
                 manifest=manifest,
                 selected=manifest.normalized_relative_path in selected,
             )
-            for manifest in CompanyKnowledgeDocumentStore(company).list()
+            for manifest in TeamKnowledgeDocumentStore(team).list()
         )
 
-    def import_document(
-        self, *, company_id: str, filename: str, content: bytes
-    ) -> KnowledgeDocumentView:
-        company = self._company(company_id)
-        manifest = CompanyKnowledgeDocumentStore(company).import_document(
+    def import_document(self, *, filename: str, content: bytes) -> KnowledgeDocumentView:
+        team = self._team()
+        manifest = TeamKnowledgeDocumentStore(team).import_document(
             filename=filename,
             content=content,
         )
-        selected = (
-            company_id == self._saved_config.company_id
-            and manifest.normalized_relative_path in self._saved_config.company_knowledge_paths
-        )
+        selected = manifest.normalized_relative_path in self._saved_config.team_knowledge_paths
         return KnowledgeDocumentView(manifest=manifest, selected=selected)
 
     def settings(self) -> SettingsSnapshot:
@@ -165,54 +167,67 @@ class LocalConsoleAdministration:
     def update_settings(self, request: UpdateSettingsRequest) -> SettingsSnapshot:
         config = request.config
         try:
-            company = next(
+            team = next(
                 item
-                for item in discover_company_workspaces(config.platform_root)
-                if item.manifest.company_id == config.company_id
+                for item in discover_team_workspaces(config.platform_root)
+                if item.manifest.team_id == config.team_id
             )
         except StopIteration as error:
             if config.platform_root == self.runtime_config.platform_root:
                 raise AdministrationError(
-                    "selected company is not prepared under platform_root"
+                    "selected team is not prepared under platform_root"
                 ) from error
-            if config.company_knowledge_paths:
+            if config.team_knowledge_paths:
                 raise AdministrationError(
-                    "company knowledge must be cleared when starting a new platform_root"
+                    "team knowledge must be cleared when starting a new platform_root"
                 ) from error
             try:
-                company = CompanyWorkspace.initialize(
+                team = TeamWorkspace.initialize(
                     config.platform_root,
-                    company_id=config.company_id,
-                    name=config.company_name,
+                    team_id=config.team_id,
+                    name=config.team_name,
                 )
             except (OSError, ValueError) as initialization_error:
                 raise AdministrationError(
-                    "selected company could not be prepared under the new platform_root"
+                    "selected team could not be prepared under the new platform_root"
                 ) from initialization_error
         except (OSError, ValueError) as error:
-            raise AdministrationError("configured company workspace is invalid") from error
-        if company.manifest.name != config.company_name:
-            raise AdministrationError("company name must match its immutable Company record")
+            raise AdministrationError("configured team workspace is invalid") from error
+        if team.manifest.name != config.team_name:
+            raise AdministrationError("team name must match its immutable Team record")
         try:
-            company.knowledge_sources(config.company_knowledge_paths)
+            team.knowledge_sources(config.team_knowledge_paths)
         except (OSError, UnicodeError, ValueError) as error:
-            raise AdministrationError("selected company knowledge is invalid") from error
+            raise AdministrationError("selected team knowledge is invalid") from error
         with self._lock:
             _write_config(self.config_path, config)
             self._saved_config = config
         return self.settings()
 
-    def _company(self, company_id: str) -> CompanyWorkspace:
+    def _team(self) -> TeamWorkspace:
         try:
-            return next(
-                company
-                for company in discover_company_workspaces(self.runtime_config.platform_root)
-                if company.manifest.company_id == company_id
-            )
+            teams = discover_team_workspaces(self.runtime_config.platform_root)
+            if len(teams) != 1 or teams[0].manifest.team_id != self._saved_config.team_id:
+                raise ValueError("configured Team is not the prepared Team")
+            return teams[0]
         except StopIteration as error:
-            raise AdministrationError("company workspace was not found") from error
+            raise AdministrationError("team workspace was not found") from error
         except (OSError, ValueError) as error:
-            raise AdministrationError("company workspace is invalid") from error
+            raise AdministrationError("team workspace is invalid") from error
+
+    @staticmethod
+    def _project_summary(project: ProjectWorkspace) -> ProjectSummary:
+        return ProjectSummary(
+            project_id=project.manifest.project_id,
+            name=project.manifest.name,
+            repository_count=len(project.repository_registry().discover()),
+            requirement_count=sum(
+                1
+                for path in project.requirements_root.iterdir()
+                if path.is_dir() and not path.is_symlink()
+            ),
+            created_at=project.manifest.created_at,
+        )
 
 
 def _write_config(path: Path, config: ProductionConfig) -> None:
@@ -240,12 +255,13 @@ def _write_config(path: Path, config: ProductionConfig) -> None:
 
 __all__ = [
     "AdministrationError",
-    "CompanySummary",
     "ConsoleAdministration",
-    "CreateCompanyRequest",
+    "CreateProjectRequest",
     "KnowledgeDocumentView",
     "LocalConsoleAdministration",
+    "ProjectSummary",
     "SecretStatus",
     "SettingsSnapshot",
+    "TeamSummary",
     "UpdateSettingsRequest",
 ]

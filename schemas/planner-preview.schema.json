@@ -3,11 +3,11 @@
   "$id": "https://ai-software-engineer.local/schemas/planner-preview.schema.json",
   "title": "PlanningPreview",
   "type": "object", "additionalProperties": false,
-  "required": ["kind", "schema_version", "id", "project_id", "task_id", "task_sha256", "work_item_sha256", "execution_plan_id", "execution_plan_sha256", "workforce_snapshot_sha256", "phases", "previewed_at", "valid_until", "preview_sha256"],
+  "required": ["kind", "schema_version", "id", "repository_id", "task_id", "task_sha256", "work_item_sha256", "execution_plan_id", "execution_plan_sha256", "workforce_snapshot_sha256", "phases", "previewed_at", "valid_until", "preview_sha256"],
   "properties": {
     "kind": {"const": "planning_preview"}, "schema_version": {"const": "v0.1"},
     "id": {"type": "string", "pattern": "^planning_preview_[a-f0-9]{64}$"},
-    "project_id": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/projectId"},
+    "repository_id": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/repositoryId"},
     "task_id": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/taskId"},
     "task_sha256": {"$ref": "#/$defs/sha256"}, "work_item_sha256": {"$ref": "#/$defs/sha256"},
     "execution_plan_id": {"$ref": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json#/$defs/executionPlanId"},
@@ -44,11 +44,11 @@
     },
     "assignedDecision": {
       "type": "object", "additionalProperties": false,
-      "required": ["kind", "status", "task_id", "project_id", "role", "attempt", "agent_id", "assignment", "lease", "reasons", "decided_at"],
+      "required": ["kind", "status", "task_id", "repository_id", "role", "attempt", "agent_id", "assignment", "lease", "reasons", "decided_at"],
       "properties": {
         "kind": {"const": "assignment_decision"}, "status": {"const": "ASSIGNED"},
         "task_id": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/taskId"},
-        "project_id": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/projectId"},
+        "repository_id": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/repositoryId"},
         "role": {"enum": ["coder", "qa", "reviewer"]}, "attempt": {"type": "integer", "minimum": 1, "maximum": 10},
         "agent_id": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/agentId"},
         "assignment": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/roleAssignment"},

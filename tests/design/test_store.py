@@ -24,7 +24,7 @@ def test_design_and_failure_receipt_round_trip_exact_replay(tmp_path: Path) -> N
     design = design_for(command)
     receipt = DesignRunRecord.create(
         run_id=command.run_id,
-        project_id=command.preparation.project_id,
+        repository_id=command.preparation.repository_id,
         request_id=command.request_revision.request.id,
         context_id="ctx_" + "a" * 64,
         input_sha256="b" * 64,

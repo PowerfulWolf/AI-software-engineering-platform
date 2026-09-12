@@ -10,14 +10,14 @@ uv run ase-console
 
 打开 **http://127.0.0.1:8765**（使用该地址，不使用 localhost 别名）。页面可以创建多目录需求、
 与 Product Agent 讨论和批准、继续中断交付、批准 exact 恢复计划，以及领取 Candidate。
-Ctrl+C 会停止控制台和它的后台 Project Manager dispatcher；已经提交的 Operation、Delivery、Task
+Ctrl+C 会停止控制台和它的后台 Manager dispatcher；已经提交的 Operation、Delivery、Task
 和 Artifact 仍然持久化。页面每 5 秒读取已提交数据，不要求手工拼装 ProjectionFacts。
-配置缺失或端口占用时 CLI 安全退出；公司未准备、数据库不可用或记录校验失败时页面报错，
-不伪装成空团队。真正空的已准备公司显示接单提示。
+配置缺失或端口占用时 CLI 安全退出；Team 未准备、数据库不可用或记录校验失败时页面报错，
+不伪装成空团队。真正空的已准备 Team 显示创建 Project/接单提示。
 
 ## 三条阅读路径
 
-1. **团队成员**：组织成员、岗位、启用配置、当前公司多项分配、当前岗位阶段、分配模型与历史任务。
+1. **团队成员**：Team 成员、岗位、启用配置、跨 Project 多项分配、当前岗位阶段、分配模型与历史任务。
    一个 Agent 不随项目复制，当前任务也不是单值字段。
 2. **需求与交付**：所有选定代码目录/模块、只读参考目录、各仓进度和整体验收状态。
    点击需求看联合 ProductSpec、TechnicalDesign、ExecutionPlan、IntegrationEvidence，并执行当前唯一
@@ -34,7 +34,7 @@ Ctrl+C 会停止控制台和它的后台 Project Manager dispatcher；已经提�
 - IMPLEMENTING / QA / REVIEW 是交付 checkpoint，不是进程存活证明。
 - 当前岗位由 Task 状态和 DispatchPhaseCommit 对齐；预分配 QA 不会提前标为正在测试。
 - enabled、max_parallel_assignments 是配置，不代表在线状态或实时全组织容量占用。
-- 当前公司视图不统计其他公司工作，不把公司范围计数当成组织总负载。
+- Project 过滤只影响需求与交付视图；Team 成员与总负载仍属于唯一 Team。
 - 没有 heartbeat 时 execution_liveness=UNKNOWN，不能仅靠超时猜测进程失败。
 - 分配模型来自 ModelSelection；实际调用模型来自 ModelRouteAttempt，降级记录不会被原始分配覆盖。
 - 调用成功不等于 QA/Review gate 通过；一个子仓 DONE 不等于多仓需求 DONE。
@@ -46,7 +46,7 @@ Ctrl+C 会停止控制台和它的后台 Project Manager dispatcher；已经提�
 ## 数据链与接口
 
 ```text
-当前公司 manifest + requests journal + projects 原生 checkpoint
+Team manifest + 选定 Project 的 requirements journal + Repository 原生 checkpoint
                       ↓
 MySQL 一致性只读事务：Task / StateEvent / Dispatch
                       ↓
@@ -56,7 +56,7 @@ ProductionTeamReader → TeamSnapshot → GET /api/v1/team → 工作台
 
 浏览器 typed intent → POST /api/v1/operations → append-only ConsoleOperation
                                               ↓
-                                  Project Manager application ports
+                                  Manager application ports
                                               ↓
                                      上述 Delivery durable facts
 ```
@@ -66,7 +66,7 @@ ProductionTeamReader → TeamSnapshot → GET /api/v1/team → 工作台
 不创建 stores/schema、不扫描代码、不调用模型、不写 checkpoint。记录不一致返回 503。
 
 HTTP 仅绑定 loopback，校验 Host/Origin，关闭 CORS/缓存，采用 CSP 与 textContent。
-查询开放 assets、`/api/v1/team[/<company>]`、`/api/v1/console` 和 `/api/v1/operations[/<id>]`；唯一
+查询开放 assets、`/api/v1/team[/<team>]`、`/api/v1/console` 和 `/api/v1/operations[/<id>]`；唯一
 写入口是 typed JSON `POST /api/v1/operations`，限制 64 KB 并先持久化再异步执行。未知路径 404，
 错误不泄露 DSN。
 没有任意文件路由，不应通过反向代理公开到局域网或互联网。这不是带认证的多用户站点。

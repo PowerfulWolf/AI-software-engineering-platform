@@ -22,6 +22,7 @@ from ai_software_engineer.domain.project_delivery import (
     TechnicalDesign,
     validate_execution_plan,
 )
+from ai_software_engineer.manager.stages import StageAdvanceAuthorization
 from ai_software_engineer.planning.agents import (
     PlannerAgentAdapter,
     PlannerAgentError,
@@ -37,7 +38,6 @@ from ai_software_engineer.planning.models import (
 )
 from ai_software_engineer.product.models import ProjectRequestRevision
 from ai_software_engineer.product.store import ProductRecordLineageError
-from ai_software_engineer.project_manager.stages import StageAdvanceAuthorization
 
 
 class PlanningStageError(RuntimeError):
@@ -162,7 +162,7 @@ class PlannerStageService:
         )
         request = PlannerAgentRequest(
             run_id=command.run_id,
-            project_id=current_request.project_id,
+            repository_id=current_request.repository_id,
             request_id=current_request.id,
             context=context,
         )
@@ -180,7 +180,7 @@ class PlannerStageService:
                 raise PlanningStageError("failed Planner result has no typed error")
             failed = PlannerRunRecord.create(
                 run_id=command.run_id,
-                project_id=current_request.project_id,
+                repository_id=current_request.repository_id,
                 request_id=current_request.id,
                 context_id=context.context_id,
                 input_sha256=input_sha256,
@@ -214,7 +214,7 @@ class PlannerStageService:
         self._require_current_input(command)
         receipt = PlannerRunRecord.create(
             run_id=command.run_id,
-            project_id=current_request.project_id,
+            repository_id=current_request.repository_id,
             request_id=current_request.id,
             context_id=context.context_id,
             input_sha256=input_sha256,
@@ -347,7 +347,7 @@ class PlannerStageService:
 def _ready_request(request: ProjectRequest, *, transitioned_at: AwareDatetime) -> ProjectRequest:
     return ProjectRequest.create(
         request_id=request.id,
-        project_id=request.project_id,
+        repository_id=request.repository_id,
         preparation_sha256=request.preparation_sha256,
         title=request.title,
         original_request=request.original_request,

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ai-software-engineer.local/schemas/production-config.schema.json",
   "title": "ProductionConfig",
-  "description": "Secret-free operator configuration for the organization-owned Production Team Host.",
+  "description": "Secret-free operator configuration for the Team-owned Production Team Host.",
   "type": "object",
   "additionalProperties": false,
   "required": ["model_routes"],
@@ -62,16 +62,34 @@
     }
   },
   "properties": {
-    "schema_version": {"const": "v0.1", "default": "v0.1"},
+    "schema_version": {"const": "v0.2", "default": "v0.2"},
     "platform_root": {
       "type": "string",
       "minLength": 1,
       "pattern": "^(?:/(?!.*[\\u0000-\\u001F])(?!\\.\\.(?:/|$))(?!.*?/\\.\\.(?:/|$)).*|~/(?!.*[\\u0000-\\u001F])(?!/)(?!\\.\\.(?:/|$))(?!.*?/\\.\\.(?:/|$)).*)$",
       "description": "Optional on macOS and Linux, where it defaults to ~/.ase. Explicit absolute paths and safe leading ~/ paths are supported; resolution does not create directories."
     },
-    "company_id": {"type": "string", "pattern": "^company_[a-z0-9][a-z0-9_-]{1,63}$", "default": "company_default"},
-    "company_name": {"type": "string", "minLength": 1, "maxLength": 200, "default": "Default company"},
-    "company_knowledge_paths": {
+    "team_id": {"type": "string", "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$", "default": "team_ai"},
+    "team_name": {"type": "string", "minLength": 1, "maxLength": 200, "default": "AI Team"},
+    "team_knowledge_paths": {
+      "type": "array", "maxItems": 64, "uniqueItems": true, "default": [],
+      "items": {"type": "string", "minLength": 1}
+    },
+    "default_project_id": {
+      "anyOf": [
+        {"type": "string", "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"},
+        {"type": "null"}
+      ],
+      "default": null
+    },
+    "default_project_name": {
+      "anyOf": [
+        {"type": "string", "minLength": 1, "maxLength": 200},
+        {"type": "null"}
+      ],
+      "default": null
+    },
+    "project_knowledge_paths": {
       "type": "array", "maxItems": 64, "uniqueItems": true, "default": [],
       "items": {"type": "string", "minLength": 1}
     },
@@ -85,5 +103,15 @@
     "codex_executable": {"type": "string", "minLength": 1, "default": "codex"},
     "live_model_execution": {"type": "boolean", "default": false},
     "console_port": {"type": "integer", "minimum": 1, "maximum": 65535, "default": 8765}
-  }
+  },
+  "allOf": [
+    {
+      "if": {"required": ["default_project_id"]},
+      "then": {"required": ["default_project_name"]}
+    },
+    {
+      "if": {"required": ["default_project_name"]},
+      "then": {"required": ["default_project_id"]}
+    }
+  ]
 }

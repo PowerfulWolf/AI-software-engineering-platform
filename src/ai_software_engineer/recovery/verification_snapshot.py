@@ -13,16 +13,16 @@ from pymysql.cursors import DictCursor
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.domain import Task, TaskStatus
 from ai_software_engineer.domain.event import StateEvent
-from ai_software_engineer.project_manager.delivery_checkpoint import (
+from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryStage,
     ProjectDeliveryCheckpoint,
 )
-from ai_software_engineer.project_manager.dispatch import (
+from ai_software_engineer.manager.dispatch import (
     ContinuationDispatchRecord,
     DeliveryAllocation,
     DispatchCommitRecord,
 )
-from ai_software_engineer.project_manager.mysql_dispatch_authority import _decode_allocation
+from ai_software_engineer.manager.mysql_dispatch_authority import _decode_allocation
 from ai_software_engineer.recovery.allocation_lineage import (
     continuation_source_checkpoints,
     resolve_planner_dispatch,
@@ -51,8 +51,8 @@ def retained_candidate_checkpoint(
         or current.failed_stage is not DeliveryStage.DELIVERING
         or current.task_status not in {TaskStatus.BLOCKED, TaskStatus.FAILED}
         or current.candidate_revision is not None
-        or current.project_id != dispatch.project_id
-        or current.project_root != dispatch.task.repository
+        or current.repository_id != dispatch.repository_id
+        or current.repository_root != dispatch.task.repository
         or current.delivery_id != dispatch.source_delivery_id
         or current.task_id != dispatch.task_id
         or current.dispatch_commit_id != dispatch.id
@@ -90,8 +90,8 @@ def validate_candidate_snapshot(
         checkpoint.task_id != task.id
         or checkpoint.dispatch_commit_id != dispatch.id
         or checkpoint.dispatch_commit_sha256 != dispatch.dispatch_sha256
-        or checkpoint.project_id != dispatch.project_id
-        or checkpoint.project_root != task.repository
+        or checkpoint.repository_id != dispatch.repository_id
+        or checkpoint.repository_root != task.repository
         or normalized != dispatch.task
         or task.status not in (TaskStatus.FAILED, TaskStatus.BLOCKED)
         or snapshot.revision != len(events)
@@ -272,7 +272,7 @@ def _read_allocations(
         if (
             allocation.id != commit_id
             or allocation.dispatch_sha256 != historic.dispatch_commit_sha256
-            or allocation.project_id != historic.project_id
+            or allocation.repository_id != historic.repository_id
             or allocation.task_id != historic.task_id
         ):
             raise RecoveryRejected("candidate dispatch history is inconsistent")

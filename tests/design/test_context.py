@@ -23,7 +23,7 @@ def test_context_carries_full_task_free_facts_and_fail_closed_policy(tmp_path: P
     builder = DesignContextBuilder()
     context = builder.build(
         command.preparation,
-        command.project_profile,
+        command.repository_profile,
         command.project_baseline,
         command.request_revision.request,
         command.product_spec,
@@ -33,7 +33,7 @@ def test_context_carries_full_task_free_facts_and_fail_closed_policy(tmp_path: P
     )
     replay = builder.build(
         context.preparation,
-        context.project_profile,
+        context.repository_profile,
         context.project_baseline,
         context.project_request,
         context.product_spec,
@@ -52,7 +52,7 @@ def test_context_carries_full_task_free_facts_and_fail_closed_policy(tmp_path: P
     assert context.permissions.advance_project_stage is False
     assert not hasattr(context, "task_id")
     assert len(context.sources) == 8
-    assert context.project_profile.languages
+    assert context.repository_profile.languages
     assert context.project_baseline.rules
     context.validate_integrity()
 
@@ -64,7 +64,7 @@ def test_context_rejects_stale_request_broken_authorization_and_tamper(tmp_path:
     with pytest.raises(DesignContextLineageError):
         builder.build(
             command.preparation,
-            command.project_profile,
+            command.repository_profile,
             command.project_baseline,
             stale_request,
             command.product_spec,
@@ -76,7 +76,7 @@ def test_context_rejects_stale_request_broken_authorization_and_tamper(tmp_path:
     with pytest.raises(DesignContextLineageError):
         builder.build(
             command.preparation,
-            command.project_profile,
+            command.repository_profile,
             command.project_baseline,
             command.request_revision.request,
             command.product_spec,
@@ -89,7 +89,7 @@ def test_context_rejects_stale_request_broken_authorization_and_tamper(tmp_path:
 
     context = builder.build(
         command.preparation,
-        command.project_profile,
+        command.repository_profile,
         command.project_baseline,
         command.request_revision.request,
         command.product_spec,
@@ -106,7 +106,7 @@ def test_context_rejects_naive_time_and_permission_widening(tmp_path: Path) -> N
     with pytest.raises(DesignContextLineageError, match="timezone-aware"):
         DesignContextBuilder().build(
             command.preparation,
-            command.project_profile,
+            command.repository_profile,
             command.project_baseline,
             command.request_revision.request,
             command.product_spec,
@@ -117,7 +117,7 @@ def test_context_rejects_naive_time_and_permission_widening(tmp_path: Path) -> N
 
     context = DesignContextBuilder().build(
         command.preparation,
-        command.project_profile,
+        command.repository_profile,
         command.project_baseline,
         command.request_revision.request,
         command.product_spec,

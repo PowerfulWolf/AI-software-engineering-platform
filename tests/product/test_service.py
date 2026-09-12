@@ -15,6 +15,11 @@ from ai_software_engineer.domain import (
     ProjectPreparation,
     RequirementPriority,
 )
+from ai_software_engineer.manager import ProjectPreparationDrift
+from ai_software_engineer.manager.stages import (
+    ProjectStage,
+    ProjectStageAdvancer,
+)
 from ai_software_engineer.product.agents import (
     FakeProductAgentAdapter,
     FakeProductBehavior,
@@ -42,40 +47,35 @@ from ai_software_engineer.product.store import (
     FileProductRecordStore,
     ProductRecordNotFound,
 )
-from ai_software_engineer.project_manager import ProjectPreparationDrift
-from ai_software_engineer.project_manager.stages import (
-    ProjectStage,
-    ProjectStageAdvancer,
-)
 from tests.product.factories import prepared_product_facts, product_knowledge
 
 NOW = datetime(2026, 9, 2, 10, 0, tzinfo=UTC)
 REQUEST_ID = "request_product_001"
 
 
-class _ProjectManagerStageSkill:
-    """Test double for the current-fact-revalidating Project Manager Skill."""
+class _ManagerStageSkill:
+    """Test double for the current-fact-revalidating Manager Skill."""
 
     def advance_stage(self, request):  # type: ignore[no-untyped-def]
         return ProjectStageAdvancer().advance_stage(request, authorized_at=NOW)
 
 
-class _DriftedProjectManagerStageSkill:
+class _DriftedManagerStageSkill:
     def advance_stage(self, request):  # type: ignore[no-untyped-def]
         del request
         raise ProjectPreparationDrift("project facts changed after Product discovery")
 
 
-class _UnavailableProjectManagerStageSkill:
+class _UnavailableManagerStageSkill:
     def advance_stage(self, request):  # type: ignore[no-untyped-def]
         del request
         raise AssertionError("completed approval replay must not reauthorize")
 
 
-class _CorruptProjectManagerStageSkill:
+class _CorruptManagerStageSkill:
     def advance_stage(self, request):  # type: ignore[no-untyped-def]
         valid = ProjectStageAdvancer().advance_stage(request, authorized_at=NOW)
-        return valid.model_copy(update={"project_id": "project_wrong_001"})
+        return valid.model_copy(update={"repository_id": "repository_wrong_001"})
 
 
 class _HumanDecisionVerifier:
@@ -173,7 +173,7 @@ def _spec(
     return ProductSpec.create(
         spec_id=f"product_spec_product_00{version}",
         request_id=REQUEST_ID,
-        project_id=preparation.project_id,
+        repository_id=preparation.repository_id,
         version=version,
         status=ProductSpecStatus.READY_FOR_REVIEW,
         summary="A reviewable product contract.",
@@ -199,10 +199,7 @@ def _service(
     scenarios: dict[str, FakeProductScenario],
     *,
     stage_advancer: (
-        _ProjectManagerStageSkill
-        | _DriftedProjectManagerStageSkill
-        | _CorruptProjectManagerStageSkill
-        | None
+        _ManagerStageSkill | _DriftedManagerStageSkill | _CorruptManagerStageSkill | None
     ) = None,
     store: FileProductRecordStore | None = None,
 ) -> tuple[ProductDiscoveryService, FileProductRecordStore]:
@@ -211,11 +208,11 @@ def _service(
     return (
         ProductDiscoveryService(
             preparation=preparation,
-            project_profile=profile,
+            repository_profile=profile,
             project_baseline=baseline,
             store=store,
             adapter=FakeProductAgentAdapter(scenarios=scenarios),
-            stage_advancer=stage_advancer or _ProjectManagerStageSkill(),
+            stage_advancer=stage_advancer or _ManagerStageSkill(),
             human_decision_verifier=_HumanDecisionVerifier(),
             clock=lambda: NOW,
         ),
@@ -550,7 +547,7 @@ def test_project_drift_blocks_approval_before_any_approval_fact_is_written(
                 product_spec=spec,
             )
         },
-        stage_advancer=_DriftedProjectManagerStageSkill(),
+        stage_advancer=_DriftedManagerStageSkill(),
     )
     ready = _ready(service, _start(service).checkpoint.checkpoint_sha256)
 
@@ -600,11 +597,11 @@ def test_completed_approval_replays_without_external_verifier_or_reauthorization
     approved = service.decide_as_human(command)
     restarted = ProductDiscoveryService(
         preparation=preparation,
-        project_profile=product_knowledge(preparation)[0],
+        repository_profile=product_knowledge(preparation)[0],
         project_baseline=product_knowledge(preparation)[1],
         store=store,
         adapter=FakeProductAgentAdapter(),
-        stage_advancer=_UnavailableProjectManagerStageSkill(),
+        stage_advancer=_UnavailableManagerStageSkill(),
         human_decision_verifier=_UnavailableHumanDecisionVerifier(),
         clock=lambda: NOW,
     )
@@ -680,11 +677,11 @@ def test_receipt_recovers_effects_without_reinvoking_product_agent(tmp_path: Pat
 
     restarted = ProductDiscoveryService(
         preparation=preparation,
-        project_profile=product_knowledge(preparation)[0],
+        repository_profile=product_knowledge(preparation)[0],
         project_baseline=product_knowledge(preparation)[1],
         store=store,
         adapter=FakeProductAgentAdapter(),
-        stage_advancer=_UnavailableProjectManagerStageSkill(),
+        stage_advancer=_UnavailableManagerStageSkill(),
         human_decision_verifier=_UnavailableHumanDecisionVerifier(),
     )
     recovered = restarted.run_product(command)
@@ -727,11 +724,11 @@ def test_receipt_recovers_approval_without_reverification_or_reauthorization(
 
     restarted = ProductDiscoveryService(
         preparation=preparation,
-        project_profile=product_knowledge(preparation)[0],
+        repository_profile=product_knowledge(preparation)[0],
         project_baseline=product_knowledge(preparation)[1],
         store=store,
         adapter=FakeProductAgentAdapter(),
-        stage_advancer=_UnavailableProjectManagerStageSkill(),
+        stage_advancer=_UnavailableManagerStageSkill(),
         human_decision_verifier=_UnavailableHumanDecisionVerifier(),
     )
     recovered = restarted.decide_as_human(command)
@@ -754,7 +751,7 @@ def test_invalid_stage_authorization_cannot_approve_product_spec(tmp_path: Path)
                 product_spec=spec,
             )
         },
-        stage_advancer=_CorruptProjectManagerStageSkill(),
+        stage_advancer=_CorruptManagerStageSkill(),
     )
     ready = _ready(service, _start(service).checkpoint.checkpoint_sha256)
 

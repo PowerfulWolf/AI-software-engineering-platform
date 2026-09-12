@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from ai_software_engineer.project_manager.delivery_checkpoint import (
+from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryStage,
     ProjectDeliveryCheckpoint,
     terminal_candidate_cursor_matches,
 )
-from ai_software_engineer.project_manager.dispatch import (
+from ai_software_engineer.manager.dispatch import (
     ContinuationDispatchRecord,
     DeliveryAllocation,
     DispatchCommitRecord,
@@ -27,8 +27,8 @@ def continuation_source_checkpoints(
     return tuple(
         checkpoint
         for checkpoint in history
-        if checkpoint.project_id == allocation.project_id
-        and checkpoint.project_root == allocation.task.repository
+        if checkpoint.repository_id == allocation.repository_id
+        and checkpoint.repository_root == allocation.task.repository
         and checkpoint.delivery_id == allocation.source_delivery_id
         and checkpoint.dispatch_commit_id == allocation.source_dispatch_id
         and checkpoint.task_id == allocation.source_task_id
@@ -75,7 +75,7 @@ def resolve_planner_dispatch(
             raise RecoveryRejected("candidate successor ancestry is incomplete")
         parent = allocations[source_id]
         if (
-            parent.project_id != allocation.project_id
+            parent.repository_id != allocation.repository_id
             or parent.project_request_id != allocation.project_request_id
             or parent.execution_plan_id != allocation.execution_plan_id
             or parent.execution_plan_sha256 != allocation.execution_plan_sha256

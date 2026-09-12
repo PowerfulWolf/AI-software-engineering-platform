@@ -21,7 +21,7 @@ def _request(tmp_path: Path) -> tuple[DesignerAgentRequest, RunDesignerCommand]:
     command, _, _ = approved_facts(tmp_path)
     context = DesignContextBuilder().build(
         command.preparation,
-        command.project_profile,
+        command.repository_profile,
         command.project_baseline,
         command.request_revision.request,
         command.product_spec,
@@ -32,7 +32,7 @@ def _request(tmp_path: Path) -> tuple[DesignerAgentRequest, RunDesignerCommand]:
     return (
         DesignerAgentRequest(
             run_id=command.run_id,
-            project_id=command.preparation.project_id,
+            repository_id=command.preparation.repository_id,
             request_id=command.request_revision.request.id,
             context=context,
         ),

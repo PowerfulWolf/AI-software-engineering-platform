@@ -167,9 +167,9 @@
           "title": "Id",
           "type": "string"
         },
-        "project_id": {
-          "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
-          "title": "Project Id",
+        "repository_id": {
+          "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Repository Id",
           "type": "string"
         },
         "task_id": {
@@ -292,7 +292,7 @@
       },
       "required": [
         "id",
-        "project_id",
+        "repository_id",
         "task_id",
         "project_request_id",
         "execution_plan_id",
@@ -486,9 +486,9 @@
           "title": "Id",
           "type": "string"
         },
-        "project_id": {
-          "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
-          "title": "Project Id",
+        "repository_id": {
+          "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Repository Id",
           "type": "string"
         },
         "task_id": {
@@ -571,7 +571,7 @@
       },
       "required": [
         "id",
-        "project_id",
+        "repository_id",
         "task_id",
         "project_request_id",
         "execution_plan_id",
@@ -698,9 +698,9 @@
           "title": "Id",
           "type": "string"
         },
-        "project_id": {
-          "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
-          "title": "Project Id",
+        "repository_id": {
+          "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Repository Id",
           "type": "string"
         },
         "task_id": {
@@ -742,7 +742,7 @@
       },
       "required": [
         "id",
-        "project_id",
+        "repository_id",
         "task_id",
         "agent_id",
         "role",

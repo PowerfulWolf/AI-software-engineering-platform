@@ -131,7 +131,7 @@ requires APPROVED and revalidates current source/target/capture. New Task identi
 digest, not the old Task ID. No completed plan or receipt may be overwritten.
 
 Store opens existing root without writes; initialize creates one directory under an existing sidecar.
-Persist `scope.json` binding company/project/delivery and canonical project root, including after
+Persist `scope.json` binding team/project/delivery and canonical project root, including after
 restart; a constructor argument alone cannot establish durable ownership. Reject overlapping/symlinked paths, inode
 replacement, nonregular files, invalid identity/digest and bounded-size violations. Use private files,
 dirfd/no-follow operations, write-all, fsync and exclusive publication. Plan embeds the patch so no
@@ -145,7 +145,7 @@ single full receipt. Crash before receipt depends on verifier's own command idem
 | Verifier mismatches plan/reference or time | Refuse before receipt |
 | Current facts or capture changed | Refuse at proposal/approval/execution gate |
 | Human rejects | Durable rejection, no execution authorization |
-| Tampered digest/patch/filename or cross-company/source | Fail closed |
+| Tampered digest/patch/filename or cross-team/source | Fail closed |
 | Concurrent differing decisions | One exclusive winner; loser cannot overwrite |
 | Read-only open / denied root / secret | No project writes; no raw secret in error |
 
@@ -184,7 +184,7 @@ NativeRecoverySourceReader.inspect(
 
 The frozen in-process result contains `source: RecoverySource`, original `permissions/denied_paths`
 and typed `preparation/product/approval/design/plan`. It is not a new wire Artifact or approval.
-Company is selected by config; manifests must bind the exact company/project/code directory. Read
+Team is selected by config; manifests must bind the exact team/project/code directory. Read
 the terminal native journal and one MySQL REPEATABLE READ / CONSISTENT SNAPSHOT / READ ONLY
 transaction for `tasks`, `state_events` and `dispatch_commits`; no repository constructor/DDL,
 prepare, model, Task mutation or dispatch call. Reuse existing SQL row decoders and stage validators.
@@ -196,7 +196,7 @@ digests, original preparation and semantic coverage through `validate_stage_chai
 Coder route and its exact ContextBundle, rather than accepting caller-supplied permissions. Missing
 or successful routes, wrong role/base/attempt/context and route index gaps reject.
 
-Discover parent ownership from company joint journals and deterministic child identity. A delegated
+Discover parent ownership from team joint journals and deterministic child identity. A delegated
 joint approval must match the parent approval reference and exact stored child checkpoint; callers
 cannot opt out of parent lineage. Recheck native checkpoint, SQL Task/dispatch, current request and
 parent at the end. This detects observed drift, not a cross-filesystem/database transaction or lock.
@@ -223,7 +223,7 @@ Base: no platform exists, rejection creates nothing. Bad: feeding the returned s
 dispatch without separately authorizing new preparation and recovery intent.
 
 Tests: `tests/recovery/test_native.py` covers single/joint production fixtures, read-only store modes,
-cross-company/missing run/context, corrupted Product/approval/Designer/Planner/parent records and
+cross-team/missing run/context, corrupted Product/approval/Designer/Planner/parent records and
 byte snapshots of project/sidecar. Dedicated MySQL test DB only; real source observation is separately
 recorded and is not independent QA/Review evidence for the original feature.
 
@@ -302,10 +302,10 @@ The concrete facts verifier resolves the C1 original chain and requires exact Re
 source Coder permissions and deny list. It independently compiles the current target Coder policy and
 requires exact equality with approved `effective_target_permissions`; only the plan model's conservative
 exact-token subset rule permits policy tightening. It never infers glob containment or permits expansion.
-Resolve the exact persisted target preparation using versioned native stores; company/project and
+Resolve the exact persisted target preparation using versioned native stores; team/project and
 organization roots/IDs cannot move. Load bounded regular profile/binding records, establish scope
 before following embedded paths, and use native binding environment validation. Recompile current
-company knowledge and project source baseline using `production_rules(company, knowledge)`, shared
+team knowledge and project source baseline using `production_rules(team, knowledge)`, shared
 with Production Host; construction preserves previous rule fields and digests. Production currently
 has no structured project-rule provider; native documents remain opaque hash-bound references.
 
@@ -340,8 +340,8 @@ fresh allocation, then admit the seed; current draft is not executable dispatch 
 | Case | Result |
 |---|---|
 | Exact same base/preparation or clean newer prepared descendant | Verified facts, original approved content retained |
-| Wrong source/company/permissions/denies/preparation/binding/profile/base | Safe `RecoveryRejected` |
-| Project code dirty, untracked file, rule/company knowledge drift | Reject current execution even after approval |
+| Wrong source/team/permissions/denies/preparation/binding/profile/base | Safe `RecoveryRejected` |
+| Project code dirty, untracked file, rule/team knowledge drift | Reject current execution even after approval |
 | Missing environment | Reject without initializing directories or DB |
 | No approved recovery decision | Task draft rejected |
 | Authorized exact replay | Equal NEW Task draft and request; no writes or models |
@@ -353,7 +353,7 @@ old history or feeding a draft directly to runtime without sealed fresh dispatch
 
 Tests: `tests/recovery/test_current.py` uses real temporary Git/MySQL, fake Agents and human verifier;
 assert missing approval, same/new base, stale base, narrowed permissions/denies, target dirt/untracked,
-company knowledge selection, corrupted profile, unchanged source, deterministic draft and zero-write
+team knowledge selection, corrupted profile, unchanged source, deterministic draft and zero-write
 snapshots. Existing native single/joint tests and Host regression cover shared rule extraction.
 
 ## Increment D1 — sealed Task input (not dispatch)
@@ -437,10 +437,10 @@ delivery outcomes are separately recorded, not inferred from offline tests. No a
 
 ### Implemented entry signatures and storage
 
-`OrganizationTeamHost.recovery_entry() -> NativeRecoveryEntry` in `recovery/entry.py`:
+`TeamHost.recovery_entry() -> NativeRecoveryEntry` in `recovery/entry.py`:
 
 ```python
-propose(*, project_root, delivery_id, failed_run_id, failed_context_id) -> tuple[RecoveryPlan, Path]
+propose(*, repository_root, delivery_id, failed_run_id, failed_context_id) -> tuple[RecoveryPlan, Path]
 open_recovery_plan(config: ProductionConfig, path: Path) -> tuple[FileRecoveryStore, RecoveryPlan]
 approve(path: Path, *, confirmed_plan: str, reference: str) -> None
 execute(path: Path, *, route_factory=None) -> RetryResult
@@ -455,7 +455,7 @@ guard remains unchanged when this dependency is absent. Public errors never incl
 text/secrets; CLI returns 2 for admission failures, 3 for a non-DONE runtime result, 0 for DONE.
 Recovery currently admits exactly one CODEX_CLI route and requires live_model_execution=true.
 
-Records live at `company/projects/<project>/state/recovery-<old-delivery>/` with plan/authorization/
+Records live at `team/projects/<project>/state/recovery-<old-delivery>/` with plan/authorization/
 task/seed/invocation `<plan-sha>` names plus scoped manifest and nonblocking advisory execution lock.
 The lock covers all plans for this old delivery, not just one new Task. The trusted operator must
 still stop the old executor and other code writers; this is not an OS sandbox or distributed lock.
@@ -570,7 +570,7 @@ _delivery_role_permissions(role, allowed_paths, commands) -> AgentPermissions
 - `permissions` remains the only policy used to verify/capture the original dirty worktree and to read
   historical plans. `target_permissions` is used for the fresh AgentDefinition, target seed, Context,
   tool policy and provider admission.
-- New proposals compile target permissions from the current ProjectProfile and original Task allowed
+- New proposals compile target permissions from the current RepositoryProfile and original Task allowed
   paths. Both proposal and execution independently recompute that target policy through the same
   deterministic compiler and require exact equality with the approved value.
 - A non-null target may only use exact read/write/command entries present in the source and must retain
@@ -711,7 +711,7 @@ production requirements nor proves a live model delivery.
 
 ### Independent verification reservation
 
-`MySqlDispatchAuthority.reserve_verification(project_id, source_task_id, plan_sha256,
+`MySqlDispatchAuthority.reserve_verification(repository_id, source_task_id, plan_sha256,
 validate_current, build)` serializes with ordinary dispatch using the global authority lock.
 The trusted builder must run Scheduler/ModelRouter against the supplied fresh snapshot; the
 current-fact callback must validate approval, original candidate and historical Agent independence.
@@ -739,7 +739,7 @@ after completion. It uses a dedicated test database, never the production demand
 
 ### Native candidate source inspection
 
-`NativeCandidateSourceReader.inspect(scope) -> NativeCandidateSource` reads company/project binding,
+`NativeCandidateSourceReader.inspect(scope) -> NativeCandidateSource` reads team/project binding,
 native checkpoint/intake, a read-only SQL runtime snapshot, sealed original artifacts and historical
 route run IDs. `read_approved_stages` is shared with pre-candidate recovery and retains the exact
 Product/approval/Design/Planner/dispatch provenance checks. Joint ownership is resolved through the
@@ -775,7 +775,7 @@ allocation/worktree availability, create approval, invoke providers, or confer e
 ## E2: Production candidate verification entry
 
 ```python
-CandidateVerificationEntry.propose_project(project_root, delivery_id) -> (plan, path)
+CandidateVerificationEntry.propose_project(repository_root, delivery_id) -> (plan, path)
 CandidateVerificationEntry.approve(path, confirmed_plan, reference) -> None
 CandidateVerificationEntry.execute(path) -> CandidateVerificationCompletion
 open_candidate_verification_plan(config, environment, path) -> (store, plan)
@@ -787,7 +787,7 @@ Proposal resolves the registered project, reads exact native/joint source facts,
 `execution_task_id`, recomputes QA/Reviewer Scheduler and ModelRouter decisions, and exclusively
 publishes a digest-bound plan. `current_policy_sha256` covers the exact role definitions and every
 enabled primary/fallback route, so changing a fallback model is approval drift. Inspection opens the
-exact company/project path with no-follow bounded
+exact team/project path with no-follow bounded
 reads and does not initialize Team Host or invoke models. Approval seals exact human confirmation.
 Only run invokes providers, and only in QA then Reviewer order.
 
@@ -832,7 +832,7 @@ Base: the normal delivery path still requires its planning adapter. Bad: constru
 `ExecutionPlanAgentAdapter(task=terminal_task, ...)` inside candidate verification; its correct `NEW`
 guard reports a misleading planning-lineage failure before QA starts.
 
-`tests/project_manager/test_production_delivery.py` must assert both sides of the constructor
+`tests/manager/test_production_delivery.py` must assert both sides of the constructor
 invariant and the explicit verification Orchestrator refusal. Candidate verification regression must
 also keep QA/Reviewer invocation records empty when composition fails before provider admission.
 
@@ -936,7 +936,7 @@ if not _verification_inputs_are_current(
 
 ### 1. Scope / Trigger
 
-Use this contract whenever the public Project Manager continuation entry, candidate verification,
+Use this contract whenever the public Manager continuation entry, candidate verification,
 post-verdict remediation, joint-child recovery, or adoption of a terminal Task result changes. The
 unit of continuation is a Delivery aggregate. One already-admitted provider invocation remains
 at-most-once; `resume` may create a new plan, Run, or successor Task but must never replay that
@@ -950,7 +950,7 @@ class ResumeProjectDelivery(DomainModel):
     approved_plan_sha256: Sha256 | None = None
     approval_reference: NonEmptyStr | None = None
 
-OrganizationTeamHost.resume_delivery(
+TeamHost.resume_delivery(
     command: ResumeProjectDelivery,
 ) -> DeliveryResumeResult | JointDeliveryResult
 
@@ -1110,7 +1110,7 @@ dispatch_sha256
   adopted.
 - A joint parent resumes one incomplete child at a time, retains DONE children, then re-enters joint
   integration only after the complete candidate set exists.
-- No resume path merges, pushes, deploys, relaxes project policy, silently changes company knowledge,
+- No resume path merges, pushes, deploys, relaxes project policy, silently changes team knowledge,
   or overwrites historical Task/checkpoint/verdict records.
 - `DeliveryResumeResult.outcome` must reflect the returned checkpoint. Any
   `WAITING_PRODUCT_REPLY`, `WAITING_PRODUCT_APPROVAL`, `WAITING_HUMAN`, `BLOCKED`, or `FAILED`

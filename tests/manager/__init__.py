@@ -1,0 +1,1 @@
+"""Manager stage contract tests."""

@@ -109,7 +109,7 @@ v0.1 不自动 merge。交付物是：
 
 ## CandidateCommit Skill
 
-`CandidateCommitSkill` 是平台/Project Manager 持有的最小 Git 权限 seam，Coder 模型本身不持有
+`CandidateCommitSkill` 是平台/Manager 持有的最小 Git 权限 seam，Coder 模型本身不持有
 Git 元数据写权限：
 
 ```python

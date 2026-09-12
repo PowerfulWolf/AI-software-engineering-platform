@@ -2,7 +2,7 @@
 
 ## 团队工作台
 
-`ase team serve --port 8765` 使用同一生产配置，在 http://127.0.0.1:8765 提供当前公司的只读团队、
+`ase team serve --port 8765` 使用同一生产配置，在 http://127.0.0.1:8765 提供 Team、Projects、
 多目录需求和任务详情。每 5 秒自动刷新，不初始化 workspace/schema、不调用模型、不修改交付。
 配置错误/端口占用返回 exit 2；数据不可用显示明确错误，不能被解释成没有任务。
 详见 [工作台说明](visualization.md)。
@@ -12,7 +12,7 @@
 项目准备或交付写入流程中创建；无效显式路径会失败，不会回退到默认位置。
 
 正常用户入口是 `ase request ...`，旧 `ase project ...` 保留兼容：Production Team Host 自动从 `ASE_CONFIG`/默认配置和环境变量装配
-MySQL、组织团队、模型路由、项目 sidecar 与 worktree。`ase task ...`、`ase evaluation ...`、
+MySQL、Team、模型路由、Project/Repository sidecar 与 worktree。`ase task ...`、`ase evaluation ...`、
 `ase handoff ...` 是保留给平台开发、兼容测试和诊断的低层命令。CLI 不绕过 Task、Artifact、
 StateEvent、EvaluationEvent 或 Handoff 的 typed contract。
 
@@ -56,7 +56,7 @@ QA/Reviewer，QA FAIL 或 Review REJECT 会创建关联修复 Task，并重新�
 旧 `ase project start DIR... --requirement TEXT` 仍支持一步式接单。
 
 未调用测试注入的 `configure_project_entry(...)` 时，CLI 会惰性创建
-`OrganizationTeamHost.from_environment()`；缺配置、MySQL 不可达、`live_model_execution=false` 或模型
+`TeamHost.from_environment()`；缺配置、MySQL 不可达、`live_model_execution=false` 或模型
 路由不可用时返回退出码 2，绝不回退 fake Agent，也不会输出 DSN/API key。
 
 成功时返回 `checkpoint.stage=DONE` 和 `checkpoint.candidate_revision`。CLI 不自动 merge/deploy；目标

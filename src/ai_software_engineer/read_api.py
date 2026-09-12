@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Final, Protocol
 
 from ai_software_engineer.domain.enums import AgentRole
-from ai_software_engineer.domain.identity import ProjectId, RunId
+from ai_software_engineer.domain.identity import RepositoryId, RunId
 from ai_software_engineer.domain.model import WirePayload
 from ai_software_engineer.domain.task import TaskId
 from ai_software_engineer.projection.models import ProjectionSnapshot
@@ -60,7 +60,7 @@ class ReadOnlyProjectionApi:
     def list_tasks(
         self,
         *,
-        project_id: ProjectId | str | None = None,
+        repository_id: RepositoryId | str | None = None,
         status: str | None = None,
         page: int = 1,
         page_size: int = _PAGE_SIZE_DEFAULT,
@@ -68,7 +68,7 @@ class ReadOnlyProjectionApi:
         items = tuple(
             item
             for item in self._snapshot.tasks
-            if (project_id is None or item.project_id == project_id)
+            if (repository_id is None or item.repository_id == repository_id)
             and (status is None or item.status.value == status)
         )
         return _page_response("tasks", items, page=page, page_size=page_size)
@@ -81,7 +81,7 @@ class ReadOnlyProjectionApi:
     def list_runs(
         self,
         *,
-        project_id: ProjectId | str | None = None,
+        repository_id: RepositoryId | str | None = None,
         task_id: TaskId | str | None = None,
         role: AgentRole | str | None = None,
         candidate_revision: str | None = None,
@@ -92,7 +92,7 @@ class ReadOnlyProjectionApi:
         items = tuple(
             item
             for item in self._snapshot.runs
-            if (project_id is None or item.project_id == project_id)
+            if (repository_id is None or item.repository_id == repository_id)
             and (task_id is None or item.task_id == task_id)
             and (role_value is None or (item.role is not None and item.role.value == role_value))
             and (candidate_revision is None or item.source_revision == candidate_revision)
@@ -136,7 +136,7 @@ class ReadOnlyProjectionApi:
         try:
             if parts in {("api", "v1", "tasks"), ("tasks",)}:
                 return self.list_tasks(
-                    project_id=params.get("project_id"),
+                    repository_id=params.get("repository_id"),
                     status=params.get("status"),
                     page=_int_param(params, "page", 1),
                     page_size=_int_param(params, "page_size", self._PAGE_SIZE_DEFAULT),
@@ -145,7 +145,7 @@ class ReadOnlyProjectionApi:
                 return self.get_task(parts[3])
             if parts in {("api", "v1", "runs"), ("runs",)}:
                 return self.list_runs(
-                    project_id=params.get("project_id"),
+                    repository_id=params.get("repository_id"),
                     task_id=params.get("task_id"),
                     role=params.get("role"),
                     candidate_revision=params.get("candidate_revision"),

@@ -1,1 +1,1 @@
-"""Company-scoped, read-only live team workspace."""
+"""Team-scoped, read-only live team workspace."""

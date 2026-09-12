@@ -24,14 +24,14 @@ from ai_software_engineer.domain import (
     RiskTier,
     TechnicalDesign,
 )
-from ai_software_engineer.product.models import ProjectRequestRevision
-from ai_software_engineer.product.store import FileProductRecordStore
-from ai_software_engineer.project_manager.stages import (
+from ai_software_engineer.manager.stages import (
     ProjectStage,
     ProjectStageAdvancer,
     StageAdvanceAuthorization,
     StageAdvanceRequest,
 )
+from ai_software_engineer.product.models import ProjectRequestRevision
+from ai_software_engineer.product.store import FileProductRecordStore
 from tests.product.factories import prepared_product_facts
 
 NOW = datetime(2026, 9, 2, 12, 0, tzinfo=UTC)
@@ -56,11 +56,11 @@ def approved_facts(
     BoundStageAdvancer,
 ]:
     preparation, profile, baseline = prepared_product_facts(
-        tmp_path, project_id="project_design_001"
+        tmp_path, repository_id="repository_design_001"
     )
     request = ProjectRequest.create(
         request_id="request_design_001",
-        project_id=preparation.project_id,
+        repository_id=preparation.repository_id,
         preparation_sha256=preparation.preparation_sha256,
         title="Design auditable delivery",
         original_request="Produce an exact technical design from approved intent.",
@@ -83,7 +83,7 @@ def approved_facts(
     spec = ProductSpec.create(
         spec_id="product_spec_design_001",
         request_id=request.id,
-        project_id=request.project_id,
+        repository_id=request.repository_id,
         version=1,
         status=ProductSpecStatus.READY_FOR_REVIEW,
         summary="Turn approved product intent into an implementation-ready design.",
@@ -124,7 +124,7 @@ def approved_facts(
     command = RunDesignerCommand(
         run_id="run_designer_001",
         preparation=preparation,
-        project_profile=profile,
+        repository_profile=profile,
         project_baseline=baseline,
         request_revision=revision,
         product_spec=spec,

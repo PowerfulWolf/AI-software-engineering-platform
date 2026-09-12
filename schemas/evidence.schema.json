@@ -10,7 +10,7 @@
     {"$ref": "#/$defs/agentUsageRecord"}
   ],
   "$defs": {
-    "projectId": {"type": "string", "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "repositoryId": {"type": "string", "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$"},
     "taskId": {"type": "string", "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$"},
     "runId": {"type": "string", "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$"},
     "contextId": {"type": "string", "pattern": "^ctx_[a-f0-9]{64}$"},
@@ -20,9 +20,9 @@
     "identity": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["project_id", "task_id", "run_id", "agent_id", "role", "attempt", "source_revision", "context_manifest_id"],
+      "required": ["repository_id", "task_id", "run_id", "agent_id", "role", "attempt", "source_revision", "context_manifest_id"],
       "properties": {
-        "project_id": {"$ref": "#/$defs/projectId"},
+        "repository_id": {"$ref": "#/$defs/repositoryId"},
         "task_id": {"$ref": "#/$defs/taskId"},
         "run_id": {"$ref": "#/$defs/runId"},
         "agent_id": {"type": "string", "minLength": 1},

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ai-software-engineer.local/schemas/workforce.schema.json",
-  "title": "Organization workforce contract",
+  "title": "Team workforce contract",
   "oneOf": [
     {"$ref": "#/$defs/agentProfile"},
     {"$ref": "#/$defs/modelPolicy"},
@@ -16,13 +16,13 @@
   "$defs": {
     "agentId": {"type": "string", "pattern": "^agent_[a-z0-9][a-z0-9_-]{2,63}$"},
     "taskId": {"type": "string", "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$"},
-    "projectId": {"type": "string", "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "repositoryId": {"type": "string", "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$"},
     "workItemId": {"type": "string", "pattern": "^work_[a-z0-9][a-z0-9_-]{2,95}$"},
     "assignmentId": {"type": "string", "pattern": "^assignment_[a-z0-9][a-z0-9_-]{2,63}$"},
     "leaseId": {"type": "string", "pattern": "^lease_[a-z0-9][a-z0-9_-]{2,63}$"},
     "modelPolicyId": {"type": "string", "pattern": "^model_policy_[a-z0-9][a-z0-9_-]{2,63}$"},
     "deliveryRole": {"enum": ["orchestrator", "coder", "qa", "reviewer"]},
-    "organizationRole": {"enum": ["project_manager", "product", "designer", "planner", "coder", "qa", "reviewer"]},
+    "organizationRole": {"enum": ["manager", "product", "designer", "planner", "coder", "qa", "reviewer"]},
     "brainTier": {"enum": ["economy", "standard", "reasoning", "critical"]},
     "riskTier": {"enum": ["low", "normal", "high", "critical"]},
     "nonNegativeCount": {"type": "integer", "minimum": 0, "maximum": 10000000},
@@ -136,11 +136,11 @@
     "workItem": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "task_id", "project_id", "status", "priority", "risk", "required_capabilities", "created_at", "updated_at"],
+      "required": ["kind", "task_id", "repository_id", "status", "priority", "risk", "required_capabilities", "created_at", "updated_at"],
       "properties": {
         "kind": {"const": "work_item"},
         "task_id": {"$ref": "#/$defs/taskId"},
-        "project_id": {"$ref": "#/$defs/projectId"},
+        "repository_id": {"$ref": "#/$defs/repositoryId"},
         "status": {"enum": ["READY", "LEASED", "RUNNING", "WAITING_HUMAN", "WAITING_DEPENDENCY", "RETRY_SCHEDULED", "CLOSED"]},
         "priority": {"type": "integer", "minimum": 0, "maximum": 1000},
         "risk": {"$ref": "#/$defs/riskTier"},
@@ -167,7 +167,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "kind", "id", "task_id", "project_id", "role", "attempt",
+        "kind", "id", "task_id", "repository_id", "role", "attempt",
         "checkpoint_sequence", "dispatch_sequence", "repository_scopes", "status", "priority", "risk",
         "required_capabilities", "created_at", "updated_at"
       ],
@@ -175,7 +175,7 @@
         "kind": {"const": "work_item"},
         "id": {"$ref": "#/$defs/workItemId"},
         "task_id": {"$ref": "#/$defs/taskId"},
-        "project_id": {"$ref": "#/$defs/projectId"},
+        "repository_id": {"$ref": "#/$defs/repositoryId"},
         "role": {"enum": ["coder", "qa", "reviewer"]},
         "attempt": {"type": "integer", "minimum": 1, "maximum": 10},
         "checkpoint_sequence": {"type": "integer", "minimum": 0, "maximum": 10000},
@@ -210,11 +210,11 @@
     "roleAssignment": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "id", "project_id", "task_id", "agent_id", "role", "attempt", "lease_id", "capacity_units", "assigned_at"],
+      "required": ["kind", "id", "repository_id", "task_id", "agent_id", "role", "attempt", "lease_id", "capacity_units", "assigned_at"],
       "properties": {
         "kind": {"const": "role_assignment"},
         "id": {"$ref": "#/$defs/assignmentId"},
-        "project_id": {"$ref": "#/$defs/projectId"},
+        "repository_id": {"$ref": "#/$defs/repositoryId"},
         "task_id": {"$ref": "#/$defs/taskId"},
         "agent_id": {"$ref": "#/$defs/agentId"},
         "role": {"$ref": "#/$defs/deliveryRole"},
@@ -242,12 +242,12 @@
     "agentRunAllocation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "run_id", "assignment_id", "project_id", "task_id", "agent_id", "role", "attempt", "model_selection", "context_manifest_id", "prompt_version", "spec_version", "tool_policy_ref", "allocated_at"],
+      "required": ["kind", "run_id", "assignment_id", "repository_id", "task_id", "agent_id", "role", "attempt", "model_selection", "context_manifest_id", "prompt_version", "spec_version", "tool_policy_ref", "allocated_at"],
       "properties": {
         "kind": {"const": "agent_run_allocation"},
         "run_id": {"type": "string", "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$"},
         "assignment_id": {"$ref": "#/$defs/assignmentId"},
-        "project_id": {"$ref": "#/$defs/projectId"},
+        "repository_id": {"$ref": "#/$defs/repositoryId"},
         "task_id": {"$ref": "#/$defs/taskId"},
         "agent_id": {"$ref": "#/$defs/agentId"},
         "role": {"$ref": "#/$defs/deliveryRole"},

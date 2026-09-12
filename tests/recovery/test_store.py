@@ -30,7 +30,7 @@ def test_read_only_open_does_not_initialize_and_scope_is_durable(tmp_path: Path)
     before = {p.name: p.read_bytes() for p in root.iterdir()}
     assert FileRecoveryStore(root, scope=plan.source.scope).get_plan(plan.plan_sha256) == plan
     assert {p.name: p.read_bytes() for p in root.iterdir()} == before
-    foreign = plan.source.scope.model_copy(update={"company_id": "company_other"})
+    foreign = plan.source.scope.model_copy(update={"team_id": "team_other"})
     with pytest.raises(RecoveryRejected):
         FileRecoveryStore(root, scope=foreign)
     with pytest.raises(RecoveryRejected):

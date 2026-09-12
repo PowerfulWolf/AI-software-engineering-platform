@@ -14,22 +14,22 @@ from typer.testing import CliRunner
 from ai_software_engineer.agents import StructuredModelClient, StructuredModelResult
 from ai_software_engineer.cli import app
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
-from ai_software_engineer.multi_directory.models import JointCheckpoint, JointStage
-from ai_software_engineer.multi_directory.scope import DirectoryScope
-from ai_software_engineer.multi_directory.service import CreateRequirementProject
-from ai_software_engineer.project_manager.delivery import (
+from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
     DeliveryCheckpointStale,
     ReplyToProduct,
     ResumeProjectDelivery,
 )
-from ai_software_engineer.project_manager.production_agents import (
+from ai_software_engineer.manager.production_agents import (
     ExecutionPlanDraft,
     TechnicalDesignDraft,
 )
-from ai_software_engineer.project_manager.production_backend import StructuredClientFactory
-from ai_software_engineer.project_manager.production_host import OrganizationTeamHost
-from tests.project_manager.test_production_backend import (
+from ai_software_engineer.manager.production_backend import StructuredClientFactory
+from ai_software_engineer.manager.production_host import TeamHost
+from ai_software_engineer.multi_directory.models import JointCheckpoint, JointStage
+from ai_software_engineer.multi_directory.scope import DirectoryScope
+from ai_software_engineer.multi_directory.service import CreateRequirement
+from tests.manager.test_production_backend import (
     _git,
     _git_output,
     _ScriptedDeliveryFactory,
@@ -41,7 +41,7 @@ class JointModels(StructuredClientFactory, StructuredModelClient):
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    def for_project(self, project_root: Path) -> StructuredModelClient:
+    def for_project(self, repository_root: Path) -> StructuredModelClient:
         return self
 
     def complete(
@@ -149,6 +149,8 @@ def setup_host(
         _git("commit", "-m", "base", cwd=project)
     config = ProductionConfig(
         platform_root=str(tmp_path / "platform"),
+        default_project_id="project_test",
+        default_project_name="Test Project",
         model_routes=(
             ProviderRouteConfig(
                 provider="codex", model="gpt-5.5", kind=ModelProviderKind.CODEX_CLI
@@ -169,7 +171,7 @@ def test_joint_cli_to_candidates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fail_integration: bool
 ) -> None:
     config, environment, models, projects = setup_host(tmp_path, fail_integration=fail_integration)
-    host = OrganizationTeamHost(
+    host = TeamHost(
         config=config,
         environment=environment,
         structured_clients=models,
@@ -210,7 +212,7 @@ def test_joint_cli_to_candidates(
         )
     assert models.calls == ["ProductDraft"]
     # Restart the entire Host before approval, not merely the Python service object.
-    reopened = OrganizationTeamHost(
+    reopened = TeamHost(
         config=config,
         environment=environment,
         structured_clients=models,
@@ -230,7 +232,7 @@ def test_joint_cli_to_candidates(
     assert checkpoint.integration is not None
     assert (checkpoint.integration.checks[0].returncode != 0) == fail_integration
     for child in checkpoint.children:
-        root = Path(child.checkpoint.project_root)
+        root = Path(child.checkpoint.repository_root)
         assert child.checkpoint.candidate_revision
         assert (root / "hello.txt").read_text() == "hello\n"
         assert _git_output("status", "--porcelain", cwd=root) == ""
@@ -246,7 +248,7 @@ def test_joint_cli_to_candidates(
 @pytest.mark.mysql
 def test_serial_joint_deliveries_do_not_exhaust_finished_agent_capacity(tmp_path: Path) -> None:
     config, environment, models, projects = setup_host(tmp_path)
-    service = OrganizationTeamHost(
+    service = TeamHost(
         config=config,
         environment=environment,
         structured_clients=models,
@@ -255,8 +257,8 @@ def test_serial_joint_deliveries_do_not_exhaust_finished_agent_capacity(tmp_path
     # Ten native Tasks exceed the eight slots of each organization Agent before lease expiry.
     for index in range(5):
         created = service.create(
-            CreateRequirementProject(
-                name=f"Continuous delivery {index}", project_roots=tuple(map(str, projects))
+            CreateRequirement(
+                name=f"Continuous delivery {index}", repository_roots=tuple(map(str, projects))
             )
         ).checkpoint
         product = service.reply(
@@ -283,14 +285,14 @@ def test_native_completed_child_is_reused_after_parent_checkpoint_crash(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config, environment, models, projects = setup_host(tmp_path)
-    service = OrganizationTeamHost(
+    service = TeamHost(
         config=config,
         environment=environment,
         structured_clients=models,
         delivery_route_adapters=_ScriptedDeliveryFactory(),
     ).requirement_entry()
     created = service.create(
-        CreateRequirementProject(name="Recover joint", project_roots=tuple(map(str, projects)))
+        CreateRequirement(name="Recover joint", repository_roots=tuple(map(str, projects)))
     )
     product = service.reply(
         ReplyToProduct(
@@ -316,7 +318,7 @@ def test_native_completed_child_is_reused_after_parent_checkpoint_crash(
                 approval_reference="approved",
             )
         )
-    reopened = OrganizationTeamHost(
+    reopened = TeamHost(
         config=config,
         environment=environment,
         structured_clients=models,

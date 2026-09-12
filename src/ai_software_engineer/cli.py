@@ -27,12 +27,7 @@ from ai_software_engineer.evaluation import (
 )
 from ai_software_engineer.execution import CommandExecutionError
 from ai_software_engineer.git import GitWorkspaceError, WorkspacePolicyError
-from ai_software_engineer.multi_directory.service import (
-    CreateRequirementProject,
-    JointDeliveryService,
-)
-from ai_software_engineer.orchestration import OrchestrationError
-from ai_software_engineer.project_manager.delivery import (
+from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
     ReplyToProduct,
     ResumeProjectDelivery,
@@ -40,15 +35,20 @@ from ai_software_engineer.project_manager.delivery import (
     UnifiedProjectEntryError,
     UnifiedProjectEntryService,
 )
-from ai_software_engineer.project_manager.delivery_checkpoint import (
+from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryId,
     ProjectDeliveryCheckpointError,
 )
-from ai_software_engineer.project_manager.entrypoint import (
+from ai_software_engineer.manager.entrypoint import (
     ProjectEntryNotConfigured,
     project_entry,
     requirement_entry,
 )
+from ai_software_engineer.multi_directory.service import (
+    CreateRequirement,
+    JointDeliveryService,
+)
+from ai_software_engineer.orchestration import OrchestrationError
 from ai_software_engineer.recovery import RecoveryRejected
 from ai_software_engineer.recovery.cli import (
     app as recovery_app,
@@ -81,7 +81,7 @@ evaluation_app = typer.Typer(help="Recompute replayable evaluation reports.", no
 handoff_app = typer.Typer(
     help="Build human-readable terminal delivery handoffs.", no_args_is_help=True
 )
-project_app = typer.Typer(help="Start and resume Project Manager deliveries.", no_args_is_help=True)
+project_app = typer.Typer(help="Start and resume Manager deliveries.", no_args_is_help=True)
 request_app = typer.Typer(
     help="Prepare a named requirement project, then discuss and deliver.", no_args_is_help=True
 )
@@ -103,7 +103,7 @@ app.add_typer(team_app, name="team")
 
 @team_app.command("serve")
 def serve_team(port: Annotated[int, typer.Option(min=1, max=65535)] = 8765) -> None:
-    """Serve the current company's read-only team workspace on loopback."""
+    """Serve the current team's read-only team workspace on loopback."""
     try:
         reader = ProductionTeamReader.from_environment()
         with create_team_server(reader, port=port) as server:
@@ -256,7 +256,7 @@ def run_task(
 
 @project_app.command("start")
 def start_project_delivery(
-    project_root: Annotated[
+    repository_root: Annotated[
         list[Path], typer.Argument(help="One or more absolute code directories.")
     ],
     requirement: Annotated[
@@ -268,11 +268,11 @@ def start_project_delivery(
 ) -> None:
     """Prepare a project and run Product discovery to its human gate."""
     try:
-        entry = requirement_entry() if len(project_root) > 1 else project_entry()
+        entry = requirement_entry() if len(repository_root) > 1 else project_entry()
         result = entry.start(
             StartProjectDelivery(
-                project_root=str(project_root[0]),
-                additional_project_roots=tuple(str(p) for p in project_root[1:]),
+                repository_root=str(repository_root[0]),
+                additional_repository_roots=tuple(str(p) for p in repository_root[1:]),
                 requirement=requirement,
                 title=title,
             )
@@ -352,9 +352,9 @@ def resume_project_delivery(
 ) -> None:
     """Continue any delivery interruption or return its exact human gate."""
     try:
-        from ai_software_engineer.project_manager.production_host import OrganizationTeamHost
+        from ai_software_engineer.manager.production_host import TeamHost
 
-        result = OrganizationTeamHost.from_environment().resume_delivery(
+        result = TeamHost.from_environment().resume_delivery(
             ResumeProjectDelivery(
                 delivery_id=delivery_id,
                 approved_plan_sha256=approve_plan,
@@ -391,9 +391,7 @@ def create_requirement_project(
     """Register and prepare all code scopes before any requirement/model conversation."""
     try:
         result = requirement_entry().create(
-            CreateRequirementProject(
-                name=name, project_roots=tuple(str(path) for path in directories)
-            )
+            CreateRequirement(name=name, repository_roots=tuple(str(path) for path in directories))
         )
     except _PROJECT_ERRORS as error:
         _fail(error)

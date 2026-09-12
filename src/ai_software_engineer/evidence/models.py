@@ -19,7 +19,7 @@ from pydantic import (
 from ai_software_engineer.agents import AgentErrorCode, AgentRunStatus, AgentUsage
 from ai_software_engineer.domain.artifact import Evidence, EvidenceId, Sha256
 from ai_software_engineer.domain.enums import AgentRole, EvidenceType
-from ai_software_engineer.domain.identity import ContextId, ProjectId, RunId
+from ai_software_engineer.domain.identity import ContextId, RepositoryId, RunId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, WirePayload, ensure_unique
 from ai_software_engineer.domain.task import TaskId
 
@@ -62,7 +62,7 @@ class RedactionFact(DomainModel):
 
 
 class RunEvidenceIdentity(DomainModel):
-    project_id: ProjectId
+    repository_id: RepositoryId
     task_id: TaskId
     run_id: RunId
     agent_id: NonEmptyStr
@@ -172,7 +172,7 @@ class EvidenceRecordEnvelope[PayloadT: DomainModel](DomainModel):
     @property
     def uri(self) -> str:
         return (
-            f"evidence://{self.identity.project_id}/{self.identity.task_id}/"
+            f"evidence://{self.identity.repository_id}/{self.identity.task_id}/"
             f"{self.identity.run_id}/{self.evidence_id}"
         )
 

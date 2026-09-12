@@ -40,7 +40,6 @@ from ai_software_engineer.domain.enums import (
     ImplementationTestStatus,
     ModelRouteReason,
     NetworkAccess,
-    OrganizationRole,
     ProductApprovalDecision,
     ProductSpecStatus,
     ProjectRequestStatus,
@@ -52,10 +51,11 @@ from ai_software_engineer.domain.enums import (
     ReviewVerdict,
     RiskTier,
     TaskStatus,
+    TeamRole,
     WorkItemStatus,
 )
 from ai_software_engineer.domain.event import StateEvent
-from ai_software_engineer.domain.identity import ContextId, ProjectId, RunId
+from ai_software_engineer.domain.identity import ContextId, RepositoryId, RunId
 from ai_software_engineer.domain.project_delivery import (
     AcceptanceDesignMapping,
     DesignComponent,
@@ -141,7 +141,6 @@ __all__ = [
     "ModelRouteReason",
     "ModelSelection",
     "NetworkAccess",
-    "OrganizationRole",
     "PlanAcceptanceMapping",
     "PlanArtifact",
     "PlanContent",
@@ -155,7 +154,6 @@ __all__ = [
     "ProductSpec",
     "ProductSpecApproval",
     "ProductSpecStatus",
-    "ProjectId",
     "ProjectPreparation",
     "ProjectRequest",
     "ProjectRequestStatus",
@@ -166,6 +164,7 @@ __all__ = [
     "QaReportStatus",
     "QaTestRun",
     "QaTestStatus",
+    "RepositoryId",
     "RequirementDesignMapping",
     "RequirementPriority",
     "ReviewDimension",
@@ -185,6 +184,7 @@ __all__ = [
     "TaskConstraints",
     "TaskLease",
     "TaskStatus",
+    "TeamRole",
     "TechnicalDesign",
     "WorkItem",
     "WorkItemStatus",

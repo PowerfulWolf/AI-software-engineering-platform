@@ -3,7 +3,7 @@
 from typing import cast
 
 from ai_software_engineer.agents.json_schema import strict_output_schema
-from ai_software_engineer.project_manager.production_agents import ProductDraft
+from ai_software_engineer.manager.production_agents import ProductDraft
 
 
 def test_strict_schema_requires_every_property_recursively_without_mutating_source() -> None:

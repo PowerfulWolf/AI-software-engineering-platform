@@ -7,7 +7,7 @@ import pytest
 from typer.testing import CliRunner
 
 from ai_software_engineer.cli import app
-from ai_software_engineer.project_manager.production_host import OrganizationTeamHost
+from ai_software_engineer.manager.production_host import TeamHost
 from ai_software_engineer.recovery import RecoveryRejected
 
 runner = CliRunner()
@@ -17,7 +17,7 @@ def test_project_commands_expose_only_business_inputs() -> None:
     result = runner.invoke(app, ["project", "start", "--help"])
 
     assert result.exit_code == 0
-    assert "project_root" in result.stdout
+    assert "repository_root" in result.stdout
     assert "--requirement" in result.stdout
     assert "--database" not in result.stdout
     assert "--artifacts" not in result.stdout
@@ -51,7 +51,7 @@ def test_request_resume_exposes_exact_plan_approval_and_safe_errors(
 
     host = Mock()
     host.resume_delivery.side_effect = RecoveryRejected("verification source drifted")
-    monkeypatch.setattr(OrganizationTeamHost, "from_environment", lambda: host)
+    monkeypatch.setattr(TeamHost, "from_environment", lambda: host)
     failed = runner.invoke(
         app,
         [
@@ -74,7 +74,7 @@ def test_request_resume_rejects_approval_reference_without_plan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     host = Mock()
-    monkeypatch.setattr(OrganizationTeamHost, "from_environment", lambda: host)
+    monkeypatch.setattr(TeamHost, "from_environment", lambda: host)
 
     result = runner.invoke(
         app,

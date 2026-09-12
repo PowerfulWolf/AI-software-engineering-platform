@@ -22,7 +22,7 @@ from ai_software_engineer.git import (
     WorktreeSnapshot,
     WorktreeSpec,
 )
-from ai_software_engineer.project_manager.dispatch import DispatchCommitRecord
+from ai_software_engineer.manager.dispatch import DispatchCommitRecord
 from ai_software_engineer.role_workspace import (
     DispatchRoleBindingMismatch,
     DispatchRoleWorktreeCoordinator,

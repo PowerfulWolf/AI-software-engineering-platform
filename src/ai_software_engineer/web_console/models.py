@@ -1,4 +1,4 @@
-"""Durable browser intents and operation facts for the Project Manager console."""
+"""Durable browser intents and operation facts for the Manager console."""
 
 from __future__ import annotations
 
@@ -17,10 +17,11 @@ from pydantic import (
     model_validator,
 )
 
-from ai_software_engineer.company_workspace import CompanyId
+from ai_software_engineer.domain.identity import ProjectId, TeamId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
-from ai_software_engineer.project_manager.delivery import CheckpointDigest
-from ai_software_engineer.project_manager.delivery_checkpoint import DeliveryId
+from ai_software_engineer.manager.delivery import CheckpointDigest
+from ai_software_engineer.manager.delivery_checkpoint import DeliveryId
+from ai_software_engineer.project_workspace import ProjectName
 
 OperationId = Annotated[str, StringConstraints(pattern=r"^operation_[a-f0-9]{32}$")]
 IdempotencyKey = Annotated[
@@ -30,7 +31,8 @@ IdempotencyKey = Annotated[
 
 
 class ConsoleAction(StrEnum):
-    CREATE_REQUIREMENT_PROJECT = "CREATE_REQUIREMENT_PROJECT"
+    CREATE_PROJECT = "CREATE_PROJECT"
+    CREATE_REQUIREMENT = "CREATE_REQUIREMENT"
     PRODUCT_REPLY = "PRODUCT_REPLY"
     PRODUCT_APPROVAL = "PRODUCT_APPROVAL"
     CONTINUE_DELIVERY = "CONTINUE_DELIVERY"
@@ -44,14 +46,19 @@ class ConsoleOperationStatus(StrEnum):
     INTERRUPTED = "INTERRUPTED"
 
 
-class CreateRequirementProjectIntent(DomainModel):
-    action: Literal[ConsoleAction.CREATE_REQUIREMENT_PROJECT] = (
-        ConsoleAction.CREATE_REQUIREMENT_PROJECT
-    )
-    name: Annotated[str, StringConstraints(min_length=1, max_length=200)]
-    project_roots: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1, max_length=32)]
+class CreateProjectIntent(DomainModel):
+    action: Literal[ConsoleAction.CREATE_PROJECT] = ConsoleAction.CREATE_PROJECT
+    name: ProjectName
+    project_id: ProjectId | None = None
 
-    @field_validator("project_roots")
+
+class CreateRequirementIntent(DomainModel):
+    action: Literal[ConsoleAction.CREATE_REQUIREMENT] = ConsoleAction.CREATE_REQUIREMENT
+    project_id: ProjectId
+    name: Annotated[str, StringConstraints(min_length=1, max_length=200)]
+    repository_roots: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1, max_length=32)]
+
+    @field_validator("repository_roots")
     @classmethod
     def absolute_unique_roots(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         if len(set(values)) != len(values):
@@ -68,6 +75,7 @@ class CreateRequirementProjectIntent(DomainModel):
 
 class ProductReplyIntent(DomainModel):
     action: Literal[ConsoleAction.PRODUCT_REPLY] = ConsoleAction.PRODUCT_REPLY
+    project_id: ProjectId
     delivery_id: DeliveryId
     expected_checkpoint_sha256: CheckpointDigest
     message: Annotated[str, StringConstraints(min_length=1, max_length=20_000)]
@@ -75,19 +83,22 @@ class ProductReplyIntent(DomainModel):
 
 class ProductApprovalIntent(DomainModel):
     action: Literal[ConsoleAction.PRODUCT_APPROVAL] = ConsoleAction.PRODUCT_APPROVAL
+    project_id: ProjectId
     delivery_id: DeliveryId
     expected_checkpoint_sha256: CheckpointDigest
 
 
 class ContinueDeliveryIntent(DomainModel):
     action: Literal[ConsoleAction.CONTINUE_DELIVERY] = ConsoleAction.CONTINUE_DELIVERY
+    project_id: ProjectId
     delivery_id: DeliveryId
     expected_checkpoint_sha256: CheckpointDigest
     approved_plan_sha256: CheckpointDigest | None = None
 
 
 ConsoleIntent = Annotated[
-    CreateRequirementProjectIntent
+    CreateProjectIntent
+    | CreateRequirementIntent
     | ProductReplyIntent
     | ProductApprovalIntent
     | ContinueDeliveryIntent,
@@ -104,17 +115,26 @@ class ConsoleApprovalRequest(DomainModel):
 
 
 class ConsoleCommandResult(DomainModel):
-    delivery_id: DeliveryId
-    checkpoint_sha256: CheckpointDigest
+    project_id: ProjectId
+    delivery_id: DeliveryId | None = None
+    checkpoint_sha256: CheckpointDigest | None = None
     stage: NonEmptyStr
     next_action: NonEmptyStr
     approval: ConsoleApprovalRequest | None = None
 
+    @model_validator(mode="after")
+    def validate_resource_result(self) -> Self:
+        if (self.delivery_id is None) != (self.checkpoint_sha256 is None):
+            raise ValueError("delivery result requires both delivery ID and checkpoint")
+        if self.approval is not None and self.delivery_id is None:
+            raise ValueError("approval can only belong to a delivery result")
+        return self
+
 
 class ConsoleOperation(DomainModel):
-    schema_version: Literal["v0.1"] = "v0.1"
+    schema_version: Literal["v0.2"] = "v0.2"
     operation_id: OperationId
-    company_id: CompanyId
+    team_id: TeamId
     idempotency_key: IdempotencyKey
     intent: ConsoleIntent
     intent_sha256: CheckpointDigest
@@ -144,7 +164,7 @@ class ConsoleOperation(DomainModel):
     def queued(
         cls,
         *,
-        company_id: str,
+        team_id: str,
         idempotency_key: str,
         intent: ConsoleIntent,
         requested_at: AwareDatetime,
@@ -152,12 +172,11 @@ class ConsoleOperation(DomainModel):
         intent_payload = intent.model_dump(mode="json", exclude_none=True)
         intent_sha256 = _digest(intent_payload)
         operation_id = (
-            "operation_"
-            + hashlib.sha256(f"{company_id}\n{idempotency_key}".encode()).hexdigest()[:32]
+            "operation_" + hashlib.sha256(f"{team_id}\n{idempotency_key}".encode()).hexdigest()[:32]
         )
         provisional = cls(
             operation_id=operation_id,
-            company_id=company_id,
+            team_id=team_id,
             idempotency_key=idempotency_key,
             intent=intent,
             intent_sha256=intent_sha256,
@@ -263,7 +282,8 @@ __all__ = [
     "ConsoleOperation",
     "ConsoleOperationStatus",
     "ContinueDeliveryIntent",
-    "CreateRequirementProjectIntent",
+    "CreateProjectIntent",
+    "CreateRequirementIntent",
     "IdempotencyKey",
     "OperationId",
     "ProductApprovalIntent",

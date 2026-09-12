@@ -9,22 +9,22 @@ from typing import Annotated, Self
 
 from pydantic import AwareDatetime, Field, model_validator
 
-from ai_software_engineer.company_workspace import CompanyId
 from ai_software_engineer.context import ContextSource
+from ai_software_engineer.domain.identity import ProjectId, TeamId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.execution import CommandResult
-from ai_software_engineer.multi_directory.scope import Digest, DirectoryScope, UnitId
-from ai_software_engineer.project_manager.delivery_checkpoint import (
+from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryId,
     DeliveryStage,
     ProjectDeliveryCheckpoint,
 )
-from ai_software_engineer.project_manager.preparation import PrepareProjectResult
-from ai_software_engineer.project_manager.production_agents import (
+from ai_software_engineer.manager.preparation import PrepareProjectResult
+from ai_software_engineer.manager.production_agents import (
     ExecutionPlanDraft,
     ProductDraft,
     TechnicalDesignDraft,
 )
+from ai_software_engineer.multi_directory.scope import Digest, DirectoryScope, UnitId
 
 
 def digest(model: DomainModel) -> str:
@@ -291,8 +291,10 @@ class IntegrationEvidence(DomainModel):
 
 class JointCheckpoint(DomainModel):
     delivery_id: DeliveryId
-    company_id: CompanyId
-    company_manifest_sha256: Digest
+    team_id: TeamId
+    team_manifest_sha256: Digest
+    project_id: ProjectId
+    project_manifest_sha256: Digest
     sequence: Annotated[int, Field(ge=1)]
     previous_checkpoint_sha256: Digest | None = None
     stage: JointStage

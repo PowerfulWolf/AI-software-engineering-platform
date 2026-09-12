@@ -27,7 +27,7 @@ class RecoveryStore(Protocol):
 class RecoveryFactsVerifier(Protocol):
     """Trusted composition must resolve native facts, not trust supplied hashes.
 
-    Validate company/project/current failed checkpoint and terminal Task, dispatch,
+    Validate team/project/current failed checkpoint and terminal Task, dispatch,
     approved Product/Design/Plan, failed run/context and effective permissions. Also
     resolve target preparation/base and detect rule/approval drift. No Agent can
     implement/inject this port. Validation must have no state mutation side effects.

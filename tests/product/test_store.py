@@ -45,7 +45,7 @@ from ai_software_engineer.product.store import (
 
 NOW = datetime(2026, 9, 2, 12, 0, tzinfo=UTC)
 REQUEST_ID = "request_product_001"
-PROJECT_ID = "project_product_001"
+REPOSITORY_ID = "repository_product_001"
 
 
 def _request(
@@ -55,7 +55,7 @@ def _request(
 ) -> ProjectRequest:
     return ProjectRequest.create(
         request_id=REQUEST_ID,
-        project_id=PROJECT_ID,
+        repository_id=REPOSITORY_ID,
         preparation_sha256="a" * 64,
         title="Add safe export",
         original_request="Let users export one report.",
@@ -88,7 +88,7 @@ def _dialogue(
 ) -> ProductDialogueRecord:
     return ProductDialogueRecord.create(
         request_id=REQUEST_ID,
-        project_id=PROJECT_ID,
+        repository_id=REPOSITORY_ID,
         sequence=sequence,
         actor=actor,
         content="CSV is required." if actor is ProductDialogueActor.HUMAN else "Include headers?",
@@ -108,7 +108,7 @@ def _spec(*, version: int = 1, previous: ProductSpec | None = None) -> ProductSp
     return ProductSpec.create(
         spec_id=f"product_spec_export_{version:03d}",
         request_id=REQUEST_ID,
-        project_id=PROJECT_ID,
+        repository_id=REPOSITORY_ID,
         version=version,
         status=ProductSpecStatus.READY_FOR_REVIEW,
         summary="Export a report without changing source data.",
@@ -140,7 +140,7 @@ def _checkpoint(
 ) -> ProductDiscoveryCheckpoint:
     return ProductDiscoveryCheckpoint.create(
         request_id=REQUEST_ID,
-        project_id=PROJECT_ID,
+        repository_id=REPOSITORY_ID,
         revision=revision,
         previous_checkpoint_sha256=previous.checkpoint_sha256 if previous else None,
         request_revision=request_revision.revision,
@@ -202,7 +202,7 @@ def test_changed_identity_conflicts_and_invalid_digest_never_writes(tmp_path: Pa
 
     changed = ProductDialogueRecord.create(
         request_id=REQUEST_ID,
-        project_id=PROJECT_ID,
+        repository_id=REPOSITORY_ID,
         sequence=1,
         actor=ProductDialogueActor.HUMAN,
         content="JSON is required.",
@@ -225,7 +225,7 @@ def test_store_enforces_request_dialogue_and_spec_lineage(tmp_path: Path) -> Non
     wrong_second = ProjectRequestRevision.create(
         ProjectRequest.create(
             request_id=REQUEST_ID,
-            project_id=PROJECT_ID,
+            repository_id=REPOSITORY_ID,
             preparation_sha256="a" * 64,
             title="Changed immutable title",
             original_request="Let users export one report.",
@@ -316,7 +316,7 @@ def test_approval_and_checkpoint_reject_missing_or_changed_references(tmp_path: 
     store.put_product_spec(spec)
     bad_checkpoint = ProductDiscoveryCheckpoint.create(
         request_id=REQUEST_ID,
-        project_id=PROJECT_ID,
+        repository_id=REPOSITORY_ID,
         revision=1,
         previous_checkpoint_sha256=None,
         request_revision=1,

@@ -1,4 +1,4 @@
-"""Deep application module for durable browser-submitted Project Manager work."""
+"""Deep application module for durable browser-submitted Manager work."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ class ConsoleCommandRejected(RuntimeError):
         self.safe_summary = safe_summary
 
 
-class ProjectManagerConsolePort(Protocol):
+class ManagerConsolePort(Protocol):
     def execute(self, intent: ConsoleIntent) -> ConsoleCommandResult: ...
 
 
@@ -32,7 +32,7 @@ class ProjectConsole:
         self,
         *,
         store: ConsoleOperationStore,
-        executor: ProjectManagerConsolePort,
+        executor: ManagerConsolePort,
         clock: Clock | None = None,
         poll_seconds: float = 0.25,
     ) -> None:
@@ -80,8 +80,8 @@ class ProjectConsole:
             return self._store.fail(
                 running.operation_id,
                 expected=running.operation_sha256,
-                error_code="PROJECT_MANAGER_FAILURE",
-                error_summary="Project Manager operation failed; inspect durable delivery facts.",
+                error_code="MANAGER_FAILURE",
+                error_summary="Manager operation failed; inspect durable delivery facts.",
                 at=self._clock(),
             )
         return self._store.succeed(
@@ -121,6 +121,6 @@ class ProjectConsole:
 
 __all__ = [
     "ConsoleCommandRejected",
+    "ManagerConsolePort",
     "ProjectConsole",
-    "ProjectManagerConsolePort",
 ]

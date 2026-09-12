@@ -49,13 +49,14 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   };
   const malicious = '<img src=x onerror="alert(1)">';
   const fixture = {
-    schema_version: "v0.1",
+    schema_version: "v0.2",
     as_of: "2026-09-05T01:00:00Z",
-    company_id: "company_fixture",
-    company_name: "Fixture company",
-    companies: [
-      { id: "company_fixture", name: "Fixture company" },
-      { id: "company_other", name: "Other company" },
+    team_id: "team_fixture",
+    team_name: "Fixture team",
+    selected_project_id: "project_fixture",
+    projects: [
+      { id: "project_fixture", name: "Fixture project" },
+      { id: "project_other", name: "Other project" },
     ],
     agents: [
       {
@@ -102,6 +103,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     requests: [
       {
         id: "r1",
+        project_id: "project_fixture",
         title: malicious,
         stage: "DELIVERING",
         next_action: "Continue",
@@ -115,6 +117,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     ],
     tasks: ["d1", "d2"].map((id, i) => ({
       id,
+      project_id: "project_fixture",
       request_id: "r1",
       title: malicious,
       status: i ? "NEW" : "IMPLEMENTING",
@@ -210,11 +213,11 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     storedOperations = [];
   const settingsFixture = {
     config: {
-      schema_version: "v0.1",
+      schema_version: "v0.2",
       platform_root: "/data/ase",
-      company_id: "company_fixture",
-      company_name: "Fixture company",
-      company_knowledge_paths: [
+      team_id: "team_fixture",
+      team_name: "Fixture team",
+      team_knowledge_paths: [
         "documents/knowledge_document_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/content.md",
       ],
       database: { backend: "mysql", dsn_env: "ASE_MYSQL_DSN" },
@@ -246,7 +249,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
         schema_version: "v0.1",
         document_id:
           "knowledge_document_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        company_id: "company_fixture",
+        team_id: "team_fixture",
         source_name: "team-guide.md",
         media_type: "text/markdown",
         source_relative_path: "source.md",
@@ -276,26 +279,27 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     },
     fetch: async (url, options = {}) => {
       urls.push(url);
-      if (url === "/api/v1/admin/companies")
+      if (url === "/api/v1/admin/projects")
         return {
           ok: true,
-          json: async () => structuredClone(fixture.companies).map((item) => ({
-            company_id: item.id,
+          json: async () => structuredClone(fixture.projects).map((item) => ({
+            project_id: item.id,
             name: item.name,
-            active: item.id === "company_fixture",
+            repository_count: 1,
+            requirement_count: 1,
             created_at: "2026-09-12T00:00:00Z",
           })),
         };
       if (url === "/api/v1/admin/settings")
         return { ok: true, json: async () => structuredClone(settingsFixture) };
-      if (String(url).includes("/api/v1/admin/companies/company_fixture/knowledge"))
+      if (url === "/api/v1/admin/team/knowledge")
         return { ok: true, json: async () => structuredClone(knowledgeFixture) };
       if (url === "/api/v1/console")
         return {
           ok: true,
           json: async () => ({
-            schema_version: "v0.1",
-            company_id: "company_fixture",
+            schema_version: "v0.2",
+            team_id: "team_fixture",
           }),
         };
       if (url === "/api/v1/operations" && options.method === "POST") {
@@ -303,7 +307,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
         submittedIntents.push(command.intent);
         const operation = {
           operation_id: `operation_${String(storedOperations.length + 1).padStart(32, "0")}`,
-          company_id: "company_fixture",
+          team_id: "team_fixture",
           idempotency_key: command.idempotency_key,
           intent: command.intent,
           status: "QUEUED",
@@ -320,7 +324,12 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
         };
       return {
         ok: !failure,
-        json: async () => structuredClone(fixture),
+        json: async () => {
+          const value = structuredClone(fixture);
+          if (String(url).includes("project_id=project_other"))
+            value.selected_project_id = "project_other";
+          return value;
+        },
       };
     },
     setTimeout: () => 1,
@@ -347,21 +356,21 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   const agentCards = get("content").children.filter(
     (node) => node.className === "agent",
   );
-  assert.match(text(agentCards[0]), /实现中/);
-  assert.doesNotMatch(text(agentCards[1]), /实现中/);
-  assert.match(text(agentCards[1]), /等待测试阶段/);
+  assert.match(text(agentCards[0]), /空闲中/);
+  assert.match(text(agentCards[1]), /实现中/);
   assert.doesNotMatch(text(agentCards[2]), /实现中/);
-  assert.match(text(agentCards[2]), /等待评审阶段/);
-  assert.match(text(agentCards[3]), /空闲中/);
-  const companyTabs = get("companies").children;
-  assert.equal(companyTabs.length, 2);
-  await companyTabs[1].events.click();
-  assert.ok(urls.includes("/api/v1/team/company_other"));
+  assert.match(text(agentCards[2]), /等待测试阶段/);
+  assert.doesNotMatch(text(agentCards[3]), /实现中/);
+  assert.match(text(agentCards[3]), /等待评审阶段/);
+  const projectTabs = get("projects").children;
+  assert.equal(projectTabs.length, 2);
+  await projectTabs[1].events.click();
+  assert.ok(urls.includes("/api/v1/team?project_id=project_other"));
   await get("nav-knowledge").events.click();
   assert.match(text(get("content")), /team-guide.md/);
   assert.match(text(get("content")), /已用于新需求/);
   await get("nav-settings").events.click();
-  assert.match(text(get("content")), /接入新公司/);
+  assert.match(text(get("content")), /创建 Project/);
   assert.match(text(get("content")), /平台数据目录/);
   assert.ok(descend(get("content")).some((node) => node.value === "gpt-5.6-terra"));
   assert.match(text(get("content")), /ASE_MYSQL_DSN · 已提供/);
@@ -375,10 +384,10 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   const qaStageCards = get("content").children.filter(
     (node) => node.className === "agent",
   );
-  assert.match(text(qaStageCards[0]), /本轮已完成/);
-  assert.doesNotMatch(text(qaStageCards[0]), /测试中/);
-  assert.match(text(qaStageCards[1]), /测试中/);
-  assert.match(text(qaStageCards[2]), /等待评审阶段/);
+  assert.match(text(qaStageCards[1]), /本轮已完成/);
+  assert.doesNotMatch(text(qaStageCards[1]), /测试中/);
+  assert.match(text(qaStageCards[2]), /测试中/);
+  assert.match(text(qaStageCards[3]), /等待评审阶段/);
   get("nav-requests").events.click();
   assert.equal(get("new-request").hidden, false);
   assert.match(text(get("content")), /执行中 2/);
@@ -396,11 +405,12 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   projectRoots.value = "/backend/module-a\n/frontend";
   await projectForm.events.submit({ preventDefault() {} });
   assert.deepEqual(submittedIntents[0], {
-    action: "CREATE_REQUIREMENT_PROJECT",
+    action: "CREATE_REQUIREMENT",
+    project_id: "project_other",
     name: "跨仓登录升级",
-    project_roots: ["/backend/module-a", "/frontend"],
+    repository_roots: ["/backend/module-a", "/frontend"],
   });
-  assert.match(text(get("operations")), /等待 Project Manager/);
+  assert.match(text(get("operations")), /等待 Manager/);
   vm.runInContext('showDetail("request","r1")', context);
   const continueButton = descend(get("detail")).find(
     (node) => node.tag === "button" && node.textContent === "继续交付",
@@ -408,6 +418,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   await continueButton.events.click();
   assert.deepEqual(submittedIntents[1], {
     action: "CONTINUE_DELIVERY",
+    project_id: "project_fixture",
     delivery_id: "r1",
     expected_checkpoint_sha256: "a".repeat(64),
   });
@@ -417,6 +428,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   storedOperations[1].status = "SUCCEEDED";
   storedOperations[1].updated_at = "2026-09-05T01:00:05Z";
   storedOperations[1].result = {
+    project_id: "project_fixture",
     delivery_id: "r1",
     checkpoint_sha256: "a".repeat(64),
     stage: "WAITING_HUMAN",
@@ -439,6 +451,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   await approvePlan.events.click();
   assert.deepEqual(submittedIntents[2], {
     action: "CONTINUE_DELIVERY",
+    project_id: "project_fixture",
     delivery_id: "r1",
     expected_checkpoint_sha256: "a".repeat(64),
     approved_plan_sha256: planSha,

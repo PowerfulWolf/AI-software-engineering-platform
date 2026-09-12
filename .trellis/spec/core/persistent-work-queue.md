@@ -43,7 +43,7 @@ PersistentWorkQueue.make_ready(work_item_id, *, now) -> QueuedWorkItem
 PersistentWorkQueue.reclaim_expired(*, now, retry_at) -> tuple[QueuedWorkItem, ...]
 
 DispatcherLoop.tick(*, now: datetime) -> DispatcherTickResult
-OrganizationTeamHost.planner_dispatcher(*, demand_builder, worker_id,
+TeamHost.planner_dispatcher(*, demand_builder, worker_id,
                                         owner_token_factory=None) -> DispatcherLoop
 ```
 
@@ -51,7 +51,7 @@ MySQL 8.0/InnoDB tables:
 
 ```text
 work_queue_authority_lock(id PK)
-work_queue_items(id PK, task_id, project_id, role, attempt, checkpoint_sequence,
+work_queue_items(id PK, task_id, repository_id, role, attempt, checkpoint_sequence,
                  status, priority, risk_rank, available_at, payload_json, version,
                  UNIQUE(task_id, role, attempt, checkpoint_sequence))
 work_queue_claims(lease_id PK, work_item_id FK, task_id, agent_id, worker_id,

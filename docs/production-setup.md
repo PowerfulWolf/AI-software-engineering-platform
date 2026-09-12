@@ -1,30 +1,31 @@
 # Production Team Host：部署与使用
 
-平台管理员完成一次 bootstrap；之后用户从本地 Web Console 接入公司和知识、创建需求项目、选择
-一个或多个代码目录，平台准备所有项目规范后再讨论需求。底层 `ase task ...` 不属于日常路径。
+平台管理员完成一次 bootstrap；之后用户从本地 Web Console 创建或选择 Project、创建 Requirement、
+选择一个或多个代码目录，平台准备 Team、Project 与 Repository 规范后再讨论需求。底层
+`ase task ...` 不属于日常路径。
 
 ## 1. 运行边界
 
 **Team Host 是团队运行的装配入口，不是一个 Agent，也不是 Docker 容器。**
-它读取组织配置，连接并初始化 MySQL，打开组织 workspace 与项目 sidecar 注册表，
-把模型适配器、Project Manager 工作流及隔离交付服务连接起来，提供给本地 Web Console 使用。
-Project Manager 负责推进工作；Host 负责让这些能力能够实际运行。
+它读取 Team 配置，连接并初始化 MySQL，打开唯一 Team workspace 与 sibling Project registry，
+把模型适配器、Manager 工作流及隔离交付服务连接起来，提供给本地 Web Console 使用。
+Manager 负责推进工作；Host 负责让这些能力能够实际运行。
 
 `ase-console` 是当前推荐的常驻本机进程，Host 作为其中的 Python 组合对象存在；兼容 CLI
 仍会为一次诊断命令重新装配 Host。进程退出后，工作进度保存在 MySQL 和外置 workspace，重启后
-读取事实继续。因此“长期团队”指组织身份和工作记录持久化，不代表模型调用永远占用进程。
+读取事实继续。因此“长期团队”指 Team 身份和工作记录持久化，不代表模型调用永远占用进程。
 
 ```text
-目标项目（代码与原生规范）
+目标 Repository（代码与原生规范）
         │
         ▼
-浏览器：公司/知识/设置/需求与交付
+浏览器：Project / Team 知识 / 设置 / Requirement 与交付
         │
         ▼
-ase-console → OrganizationTeamHost
+ase-console → TeamHost
   ├── MySQL：Task、StateEvent、dispatch authority
-  ├── organization workspace：AgentProfile、ModelPolicy、跨项目事实
-  ├── company sidecar：公司知识、项目子模块、需求项目记录
+  ├── team/：AgentProfile、ModelPolicy、通用知识、工作项与租约
+  ├── projects/<project_id>/：Project 知识、Repository sidecar、Requirement 记录
   └── Git worktrees：Coder、QA、Reviewer 的隔离 checkout
 ```
 
@@ -79,7 +80,7 @@ docker compose stop mysql
 
 不要用 `docker compose down -v`，除非明确要删除本项目的 MySQL 数据卷。
 
-## 4. 配置组织 Team Host
+## 4. 配置 Team Host
 
 配置契约见 [`schemas/production-config.schema.json`](../schemas/production-config.schema.json)，示例见
 [`config/production.example.json`](../config/production.example.json)。默认读取：
@@ -96,14 +97,18 @@ cp config/production.example.json \
   "$HOME/.config/ai-software-engineer/config.json"
 ```
 
-至少确认模型执行开关；公司字段可按知识隔离需要修改。macOS/Linux 使用默认 `~/.ase` 时无需填写
+至少确认 Team 身份和模型执行开关。macOS/Linux 使用默认 `~/.ase` 时无需填写
 `platform_root`，只有自定义数据根时才添加该字段：
 
 ```json
 {
-  "company_id": "company_default",
-  "company_name": "Default company",
-  "company_knowledge_paths": [],
+  "schema_version": "v0.2",
+  "team_id": "team_ai",
+  "team_name": "AI Team",
+  "team_knowledge_paths": [],
+  "default_project_id": null,
+  "default_project_name": null,
+  "project_knowledge_paths": [],
   "live_model_execution": true,
   "console_port": 8765
 }
@@ -119,30 +124,30 @@ cp config/production.example.json \
 export ASE_CONFIG='/absolute/path/to/production.json'
 ```
 
-通过设置页切换到全新 `platform_root` 时，平台只在新根初始化当前 Company 身份；不会静默复制旧根的
-organization、知识、项目、需求或 worktree。旧知识选择会被清空，重启后应在新根重新导入并选择文档。
+通过设置页切换到全新 `platform_root` 时，平台只在新根初始化当前 Team 身份；不会静默复制旧根的
+Team 知识、Projects、Requirements 或 worktree。旧知识选择会被清空，重启后应在新根重新导入并选择文档。
 
 `live_model_execution=false` 是示例文件的安全默认值；它会明确拒绝真实模型运行，不会偷偷切换 fake
 Agent。
 
-`company_id` 默认为 `company_default`，选定公司后项目自动收纳到它的 sidecar，无须每仓配置路径。
-这里的 Company 是知识和工作记录的隔离边界，不是特定业务团队；初次使用保留默认值即可。
-`company_name` 是首次注册的显示名；ID/名称与持久化 manifest 不一致时拒绝静默覆盖。
-日常通过 Web Console 的“公司知识库”上传 Markdown、TXT、PDF 或 DOCX。平台在
-`companies/<company_id>/knowledge/documents/<document_id>/` 保存原文件、不可变 manifest 和规范化
-`content.md`；`company_knowledge_paths` 只保存设置页明确勾选的规范化相对路径。兼容的手工 Markdown
+`team_id` 默认为 `team_ai`。v0.1 只有一个长期 Team，它可以服务多个 sibling Project；Project 不复制
+AgentProfile，也不代表单个 Git 仓库或一次 Requirement。
+`team_name` 是首次注册的显示名；ID/名称与持久化 manifest 不一致时拒绝静默覆盖。
+日常通过 Web Console 的“团队知识库”上传 Markdown、TXT、PDF 或 DOCX。平台在
+`team/knowledge/documents/<document_id>/` 保存原文件、不可变 manifest 和规范化
+`content.md`；`team_knowledge_paths` 只保存设置页明确勾选的规范化相对路径。兼容的手工 Markdown
 文件仍可放在 `knowledge/` 并显式填写路径，但不会被递归自动发现。这些资料是只读上下文，不会自动
-覆盖项目规范。
-已准备项目依赖的公司知识发生变化时，会拒绝继续旧交付，应检查变化并处理规范/上下文冲突。
-默认配置不读取任何额外公司文档，也不会自动迁移旧 `platform_root/projects/` 数据。
-平台、公司和项目 sidecar 目录只在显式的 Host 初始化、项目准备或交付写入流程中创建；加载配置和
+覆盖 Project 或 Repository 规范。
+已准备 Requirement 依赖的 Team/Project 知识发生变化时，会拒绝继续旧交付，应检查变化并处理规范/上下文冲突。
+默认配置不读取任何额外 Team 文档，也不会自动迁移其他 `platform_root` 数据。
+Team、Project 和 Repository sidecar 目录只在显式的 Host 初始化、Project/Requirement 准备或交付写入流程中创建；加载配置和
 `ase team serve` 等只读查看不会创建目录。
 
 ## 5. 模型路由
 
 `model_routes` 的数组顺序就是冻结后的尝试顺序。示例配置的初始顺序是：
 
-1. `codex / gpt-5.5 / codex_cli`；
+1. `codex / gpt-5.6-terra / codex_cli`；
 2. `deepseek / YOUR_DEEPSEEK_MODEL / responses`（替换占位符并显式启用后）；
 3. `qwen / YOUR_QWEN_MODEL / responses`（千问，替换占位符并显式启用后）。
 
@@ -156,11 +161,11 @@ Qwen/DeepSeek 的模型 ID 和 endpoint 必须以相应账户当前实际支持�
 
 只有额度耗尽、rate limit、timeout 或临时 provider unavailable 会触发下一路由。认证失败、无效 JSON/
 Artifact、policy violation、产品歧义或规范冲突不会靠换模型掩盖。每次 delivery role 路由尝试都会以
-脱敏事实写入项目 sidecar，可在恢复时重放。上游 Product/Designer/Planner 已完成的 stage artifact 会
+脱敏事实写入 Repository sidecar，可在恢复时重放。上游 Product/Designer/Planner 已完成的 stage artifact 会
 直接复用；当前仍存在“provider 已返回但 stage artifact 尚未落盘时进程崩溃可能重复计费”的小窗口，
 这是后续 durable upstream-attempt ledger 的工作。
 
-模型是某次 AgentRun 使用的“大脑”，不是 Agent 身份。Coder、QA、Reviewer 始终是三个不同的组织
+模型是某次 AgentRun 使用的“大脑”，不是 Agent 身份。Coder、QA、Reviewer 始终是三个不同的 Team
 Agent，即使它们碰巧使用同一模型也不能互相代替或自我批准。
 
 当前生产 Host 将首个启用路由构造为主模型策略，各风险等级使用同一档位；底层 ModelRouter
@@ -171,26 +176,30 @@ Agent，即使它们碰巧使用同一模型也不能互相代替或自我批准
 日常用户只需启动本地 Web Console：
 
 ```bash
-uv run ase-console
+./scripts/ase-console-service.sh start
 ```
+
+用同一脚本的 `status`、`logs`、`restart` 和 `stop` 管理后台进程。脚本继承当前 shell 的
+`ASE_CONFIG`、`ASE_MYSQL_DSN` 和 provider 环境，并要求先执行过 `uv sync`。
 
 打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)，先在网页完成管理准备：
 
-1. 在“设置”创建公司，选择活动公司，并维护平台目录、MySQL 变量名、模型路由、Codex、执行开关和端口；
-2. 保存后若显示“需要重启”，重启 `ase-console`，让生产 Host 绑定新配置；
-3. 在“公司知识库”上传文档，回到设置页勾选需要用于新需求的知识并再次保存/重启。
+1. 在“设置”确认唯一 Team，并维护平台目录、MySQL 变量名、模型路由、Codex、执行开关和端口；
+2. 保存后若显示“需要重启”，执行 `./scripts/ase-console-service.sh restart`，让 Host 绑定新配置；
+3. 在“团队知识库”上传文档，回到设置页勾选需要用于新 Requirement 的知识并再次保存/重启；
+4. 在设置页创建或确认该业务上下文对应的 Project。
 
 然后在“需求与交付”页完成：
 
-1. 新建需求项目，每行输入一个绝对代码目录；
-2. 等待 Project Manager 完成注册、ProjectProfile 发现和规范编译；
+1. 先选择 Project，再新建 Requirement，每行输入一个绝对代码目录；
+2. 等待 Manager 完成注册、RepositoryProfile 发现和规范编译；
 3. 在需求详情与 Product Agent 讨论并阅读 ProductSpec；
 4. 批准 ProductSpec，观察 Designer、Planner、Coder、QA、Reviewer 的串行进度；
 5. 中断后点击“继续交付”；页面出现候选复核或 Coder 恢复计划时，阅读摘要后点击“批准并继续”；
 6. DONE 后领取每个仓库的 candidate commit/branch 和 QA/Review 证据。
 
-浏览器命令先在 `companies/<company_id>/requests/_console_operations/` 写入 append-only Operation，
-再由后台 Project Manager 执行。刷新或关闭页面不会取消已接纳的操作；Host 重启会把遗留 RUNNING
+浏览器命令先在 `team/work-items/console-operations/` 写入 append-only Operation，
+再由后台 Manager 执行。刷新或关闭页面不会取消已接纳的操作；Host 重启会把遗留 RUNNING
 操作标成 INTERRUPTED，并要求用户基于最新 Delivery 事实重新“继续交付”，不会静默重放不确定调用。
 
 `ase-console` 只监听 loopback。自动登录启动尚未提供安全的 MySQL DSN 注入适配；不要把 DSN 明文
@@ -201,7 +210,8 @@ uv run ase-console
 
 ### 6.1 开始并讨论需求（break-glass）
 
-先创建需求项目，目录可以只传一个，也可以传多个不相邻的仓库或模块目录：
+先为兼容 CLI 配置 `default_project_id/default_project_name`，再创建 Requirement。目录可以只传一个，
+也可以传多个不相邻的 Repository 或模块目录：
 
 ```bash
 uv run ase request create /absolute/path/to/backend /another/path/to/frontend \
@@ -239,7 +249,7 @@ Git inspection 或无测试的成功退出冒充验收。平台保留独立候�
 独立 QA/Reviewer 复核；QA FAIL 或 Review REJECT 会保留旧 Task/candidate，并创建关联修复 Task 继续
 Coder→QA→Reviewer。尚无 candidate 的失败 Coder 由 `resume` 自动发现和封存现场，批准精确恢复
 计划后创建新 Task 接续；规范、权限、来源冲突仍需人工处理。
-源 HEAD、选定规范或知识变化时，应重新准备新的需求项目，不能套用旧批准。
+源 HEAD、选定规范或知识变化时，应在同一 Project 下创建新的 Requirement，不能套用旧批准。
 
 下面保留原单仓一步式入口，方便兼容旧命令；新需求推荐上面的 `request` 流程。
 
@@ -323,24 +333,27 @@ PR 或人工 Git 命令完成交付。
 
 ```text
 <platform_root>/
-├── organization/                 # 组织 AgentProfile、ModelPolicy、跨项目事实
-├── companies/<company_id>/      # 每个公司一个 sidecar
-│   ├── company.json
-│   ├── knowledge/               # 显式选择的公司共享资料
-│   │   └── documents/<id>/      # 上传原文件、content.md、manifest.json
-│   ├── projects/<project-id>/   # 项目知识及独立 per-repository 运行事实
-│   │   ├── workspace.json
-│   │   └── profile/ knowledge/ policy/ state/ contexts/ artifacts/ evidence/ ...
-│   └── requests/                # 联合产品/批准/方案/计划/候选与验收 journal
-│       └── _console_operations/ # Web 操作状态链；Delivery/Task 仍由原权威事实定义
-└── worktrees/<project-id>/       # 当前/保留的角色 worktree
+├── team/                              # 唯一长期 Team
+│   ├── team.json
+│   ├── agents/ model-policies/        # AgentProfile 与模型策略
+│   ├── knowledge/documents/<id>/      # 通用知识原文件、content.md、manifest
+│   ├── specs/ skills/                  # Team 规范与 Skills
+│   └── work-items/ leases/ metrics/   # 调度、Web Operation、租约与指标
+├── projects/<project_id>/             # 与 team/ 并列；一个目录一个 Project
+│   ├── project.json
+│   ├── knowledge/ specs/              # Project 知识和规范
+│   ├── repositories/<repository_id>/  # 代码目录绑定与 per-Repository 运行事实
+│   │   └── profile/ policy/ state/ contexts/ artifacts/ evidence/ runs/ ...
+│   └── requirements/<delivery_id>/    # Product/批准/方案/计划/子交付/联合验收
+└── worktrees/<repository_id>/         # 当前或保留的角色隔离 checkout
 ```
 
 MySQL 和整个 `platform_root` 都是恢复所需数据，应一起备份。不要只备份目标 Git 项目。干净 worktree 可
 回收；dirty/漂移 worktree 会保留给人工取证。
 
-项目 ID 与 delivery ID 包含公司命名空间，多个公司即使显式登记同一源码路径也不共用交付记录。
-这不代替 OS 级访问控制；有宿主文件系统权限的管理员仍能访问各目录。
+Project/Repository/Delivery identity 都绑定唯一 Team 和所属 Project；同一源码路径登记到不同 Project
+时不会共用 Repository sidecar 或 Requirement 记录。这不代替 OS 级访问控制；有宿主文件系统权限的
+管理员仍能访问各目录。
 
 ## 8. Live smoke
 
@@ -363,7 +376,8 @@ Codex CLI，内层 workspace sandbox 可能因操作系统禁止嵌套而返回 
 ## 9. 当前限制
 
 - 单个 Task 仍固定串行 `Coder → QA → Reviewer`，没有复杂 DAG；
-- 当前 production delivery 每个角色只尝试一次；无法安全继续时进入人工处理；
+- 每个 Run 都有有界调用预算；Coder checkpoint、候选复核和修复 Task 可通过统一 `resume` 接续，
+  但来源/规范/权限漂移或无唯一安全现场时仍进入人工处理；
 - Codex CLI 的 Coder 隔离由 Git worktree、Codex sandbox 和运行后 changed-path/commit 校验共同提供，
   不是容器级强隔离；
 - HTTP Responses tool loop 只执行 allowlist 命令，但 v0.1 也不是容器级 OS sandbox；

@@ -1,4 +1,4 @@
-"""Company document imports are immutable, bounded and directly usable as context."""
+"""Team document imports are immutable, bounded and directly usable as context."""
 
 from __future__ import annotations
 
@@ -10,20 +10,18 @@ from pathlib import Path
 import pytest
 from docx import Document
 
-from ai_software_engineer.company_workspace import (
-    CompanyWorkspace,
-    discover_company_workspaces,
-)
 from ai_software_engineer.knowledge_documents import (
-    CompanyKnowledgeDocumentStore,
     KnowledgeDocumentError,
+    TeamKnowledgeDocumentStore,
+)
+from ai_software_engineer.team_workspace import (
+    TeamWorkspace,
+    discover_team_workspaces,
 )
 
 
-def _company(tmp_path: Path) -> CompanyWorkspace:
-    return CompanyWorkspace.initialize(
-        tmp_path / "platform", company_id="company_test", name="Test company"
-    )
+def _team(tmp_path: Path) -> TeamWorkspace:
+    return TeamWorkspace.initialize(tmp_path / "platform", team_id="team_test", name="Test team")
 
 
 def _docx(text: str) -> bytes:
@@ -66,19 +64,19 @@ def _pdf(text: str) -> bytes:
     return bytes(output)
 
 
-def test_company_catalog_and_markdown_import_are_stable_and_context_ready(
+def test_team_catalog_and_markdown_import_are_stable_and_context_ready(
     tmp_path: Path,
 ) -> None:
-    company = _company(tmp_path)
-    store = CompanyKnowledgeDocumentStore(company)
+    team = _team(tmp_path)
+    store = TeamKnowledgeDocumentStore(team)
 
     first = store.import_document(filename="team-guide.md", content=b"# Team\n\nReview first.\n")
     replay = store.import_document(filename="renamed.md", content=b"# Team\n\nReview first.\n")
 
     assert replay == first
     assert store.list() == (first,)
-    assert discover_company_workspaces(tmp_path / "platform") == (company,)
-    sources = company.knowledge_sources((first.normalized_relative_path,))
+    assert discover_team_workspaces(tmp_path / "platform") == (team,)
+    sources = team.knowledge_sources((first.normalized_relative_path,))
     assert sources[0].content == "# Team\n\nReview first.\n"
     assert first.source_sha256 != "0" * 64
     assert (
@@ -99,7 +97,7 @@ def test_company_catalog_and_markdown_import_are_stable_and_context_ready(
 def test_supported_documents_are_normalized(
     tmp_path: Path, filename: str, content: bytes, expected: str
 ) -> None:
-    store = CompanyKnowledgeDocumentStore(_company(tmp_path))
+    store = TeamKnowledgeDocumentStore(_team(tmp_path))
 
     manifest = store.import_document(filename=filename, content=content)
 
@@ -111,13 +109,13 @@ def test_supported_documents_are_normalized(
 @pytest.mark.parametrize("filename", ["../guide.md", ".env", "guide.exe", "secrets.txt"])
 def test_unsafe_document_names_are_rejected(tmp_path: Path, filename: str) -> None:
     with pytest.raises(KnowledgeDocumentError, match="unsafe"):
-        CompanyKnowledgeDocumentStore(_company(tmp_path)).import_document(
+        TeamKnowledgeDocumentStore(_team(tmp_path)).import_document(
             filename=filename, content=b"content"
         )
 
 
 def test_empty_invalid_and_tampered_documents_fail_closed(tmp_path: Path) -> None:
-    store = CompanyKnowledgeDocumentStore(_company(tmp_path))
+    store = TeamKnowledgeDocumentStore(_team(tmp_path))
     with pytest.raises(KnowledgeDocumentError, match="empty"):
         store.import_document(filename="empty.txt", content=b"")
     with pytest.raises(KnowledgeDocumentError, match="decoded"):
@@ -129,7 +127,7 @@ def test_empty_invalid_and_tampered_documents_fail_closed(tmp_path: Path) -> Non
 
 
 def test_source_upload_limit_is_enforced_before_extraction(tmp_path: Path) -> None:
-    store = CompanyKnowledgeDocumentStore(_company(tmp_path))
+    store = TeamKnowledgeDocumentStore(_team(tmp_path))
 
     with pytest.raises(KnowledgeDocumentError, match="upload limit"):
         store.import_document(filename="large.txt", content=b"x" * 10_000_001)
@@ -138,7 +136,7 @@ def test_source_upload_limit_is_enforced_before_extraction(tmp_path: Path) -> No
 def test_oversized_normalized_content_and_resealed_path_escape_are_rejected(
     tmp_path: Path,
 ) -> None:
-    store = CompanyKnowledgeDocumentStore(_company(tmp_path))
+    store = TeamKnowledgeDocumentStore(_team(tmp_path))
     with pytest.raises(KnowledgeDocumentError, match="context limit"):
         store.import_document(filename="large.txt", content=b"x" * 256_001)
     manifest = store.import_document(filename="guide.md", content=b"# Guide\n")
@@ -158,7 +156,7 @@ def test_oversized_normalized_content_and_resealed_path_escape_are_rejected(
 
 
 def test_resealed_source_name_suffix_drift_is_rejected(tmp_path: Path) -> None:
-    store = CompanyKnowledgeDocumentStore(_company(tmp_path))
+    store = TeamKnowledgeDocumentStore(_team(tmp_path))
     manifest = store.import_document(filename="guide.md", content=b"# Guide\n")
     manifest_path = store.root / manifest.document_id / "manifest.json"
     payload = json.loads(manifest_path.read_text())
