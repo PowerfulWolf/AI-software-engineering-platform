@@ -46,6 +46,11 @@ records are not rewritten or deleted.
 - **C/D — Propagation and coverage:** Candidate V1 remained valid in immutable history after the
   wrongly created continuation failed, but source resolution only understood the latest Task. Unit
   tests covered direct candidates, not this complete legacy sequence.
+- **B/D/E — Recursive lineage gap:** continuation ancestry treated every historic Delivery
+  `candidate_revision` projection as candidate authority. Real multi-generation history contained a
+  valid terminal source cursor with `candidate_revision=null`; the candidate was present only in the
+  Task event/artifact chain. Fixtures incorrectly stored the SHA directly in that cursor, so the
+  recursive production path was never exercised.
 
 ### Why earlier fixes did not close the loop
 
@@ -61,6 +66,8 @@ fallback to the source verification disposition. Both were surface/incomplete-sc
 | P0 | Runtime guard | QA may write scratch, while HEAD and Git-visible inventory remain immutable | DONE |
 | P0 | Provenance | Legacy fallback verifies exact continuation → plan → completion → invocation lineage | DONE |
 | P0 | Integration test | Real Git/MySQL recreates the complete failed-continuation sequence | DONE |
+| P0 | Shared runtime predicate | Planner ancestry and retained-candidate lookup share the same strict nullable terminal source-cursor rule | DONE |
+| P0 | Regression test | Nullable terminal ancestry is accepted; nullable non-terminal ancestry is rejected | DONE |
 | P1 | Documentation | Recovery and worktree specs contain signatures, matrices and wrong/correct cases | DONE |
 
 The project has no separate `.trellis/spec/guides/` or generated spec-template tree; knowledge is

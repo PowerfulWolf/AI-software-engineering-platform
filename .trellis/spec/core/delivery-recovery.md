@@ -1271,6 +1271,9 @@ read_candidate_source_snapshot(config, environment, history) -> tuple[
     CandidateRuntimeSnapshot,
     ContinuationDispatchRecord | None,
 ]
+continuation_source_checkpoints(history, allocation) \
+    -> tuple[ProjectDeliveryCheckpoint, ...]
+terminal_candidate_cursor_matches(checkpoint, candidate_revision) -> bool
 ```
 
 `CandidateVerificationDisposition` has exactly `VERIFIED`, `RETRY_VERIFICATION`, and
@@ -1293,6 +1296,13 @@ read_candidate_source_snapshot(config, environment, history) -> tuple[
   disposition is `RETRY_VERIFICATION`. Scope, Task, dispatch, source candidate, plan, completion,
   invocation, run additions, approved checkpoint ancestry, and current terminal runtime must all
   match. A genuine remediation failure stays on failed-Coder recovery.
+- `resolve_planner_dispatch` and retained-candidate lookup must use the same source-cursor predicate
+  at every continuation generation. A historic source cursor may omit `candidate_revision` only when
+  it is a terminal `BLOCKED/FAILED` checkpoint with `failed_stage=DELIVERING` and a terminal
+  `BLOCKED/FAILED` Task. That cursor only locates allocation ancestry and cannot itself be returned as
+  candidate proof. Whenever resume actually reuses a candidate, the selected current/source Task's
+  validated `candidate_ready`/`candidate_recovered` event and sealed implementation lineage remain
+  authoritative. This rule must work recursively across multiple continuation allocations.
 - Historical Delivery, Task, Artifact, invocation, completion, and dispatch records are read and
   validated; none are rewritten. The next successful `resume` only publishes a fresh verification
   plan.
@@ -1307,6 +1317,8 @@ read_candidate_source_snapshot(config, environment, history) -> tuple[
 | Only NOT_TESTED/ERROR | Fresh verification plan + approval | 0 |
 | QA Git-visible mutation or HEAD drift | `POLICY_VIOLATION` | 0 |
 | Failed legacy continuation from exact inconclusive completion | Reverify retained source Candidate | 0 |
+| Multi-generation continuation has nullable terminal source cursor | Follow dispatch ancestry, then prove the candidate actually selected for reuse from Task events/artifacts | 0 |
+| Nullable source cursor lacks terminal DELIVERING/Task marker | Reject ancestry as incomplete | 0 |
 | Failed continuation from genuine code failure or broken lineage | Reject candidate fallback; use normal failed-Coder recovery | 0 before approval |
 
 ### 5. Good / Base / Bad Cases
@@ -1317,6 +1329,9 @@ read_candidate_source_snapshot(config, environment, history) -> tuple[
   the same commit without calling Coder.
 - Good legacy recovery: an older version wrongly created a Candidate-empty continuation from that
   inconclusive completion; current `resume` follows the exact dispatch back to Candidate V1.
+- Good recursive recovery: Candidate V3 is retained by the current Task while an older continuation
+  source checkpoint projects `candidate_revision=null`; planner ancestry resolves through the typed
+  terminal cursor, then V3 is independently proven from current Task events and artifacts.
 - Bad: QA edits a tracked test and hides it in a PASS report, or the platform sends an environment
   failure to Coder so `CandidateCommitSkill` is asked to commit an empty worktree.
 
@@ -1327,7 +1342,9 @@ read_candidate_source_snapshot(config, environment, history) -> tuple[
 - `tests/recovery/test_verification_disposition.py`: environment-only result retries verification;
   criterion/test failures remediate.
 - `tests/recovery/test_delivery_continuation.py`: inconclusive result makes a successor plan with
-  zero Coder calls; retained Candidate may be accepted through the exact successor cursor.
+  zero Coder calls; retained Candidate may be accepted through the exact successor cursor; recursive
+  allocation ancestry accepts only a nullable terminal DELIVERING source cursor and rejects a
+  nullable non-terminal cursor.
 - `tests/recovery/test_resume.py`: real Git/MySQL recreates the legacy failed continuation and proves
   public `resume` emits a different verification plan without another Agent call.
 - Targeted pytest, Ruff, strict Mypy and `git diff --check` must pass locally. The full dedicated-MySQL
@@ -1354,4 +1371,16 @@ sandbox = "read-only"
 sandbox = "workspace-write"
 assert git_head == request.source_revision
 assert git_status_porcelain == ""
+```
+
+```python
+# Wrong: every historic Delivery cursor is treated as candidate authority.
+if checkpoint.candidate_revision != continuation.source_revision:
+    reject_ancestry()
+
+# Correct: a strict nullable terminal cursor locates ancestry; selected runtime facts prove reuse.
+source = continuation_source_checkpoints(history, continuation)[-1]
+candidate = terminal_candidate_event(selected_task, selected_events)
+assert source.dispatch_commit_id == continuation.source_dispatch_id
+assert candidate.source_revision == verification_plan.inputs.candidate_revision
 ```

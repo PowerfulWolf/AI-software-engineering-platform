@@ -23,7 +23,10 @@ from ai_software_engineer.project_manager.dispatch import (
     DispatchCommitRecord,
 )
 from ai_software_engineer.project_manager.mysql_dispatch_authority import _decode_allocation
-from ai_software_engineer.recovery.allocation_lineage import resolve_planner_dispatch
+from ai_software_engineer.recovery.allocation_lineage import (
+    continuation_source_checkpoints,
+    resolve_planner_dispatch,
+)
 from ai_software_engineer.recovery.models import RecoveryRejected
 from ai_software_engineer.store.mysql_repository import (
     _decode_event,
@@ -56,17 +59,7 @@ def retained_candidate_checkpoint(
         or current.dispatch_commit_sha256 != dispatch.dispatch_sha256
     ):
         raise RecoveryRejected("current Delivery is not the failed continuation")
-    matches = tuple(
-        checkpoint
-        for checkpoint in history[:-1]
-        if checkpoint.stage in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
-        and checkpoint.project_id == dispatch.project_id
-        and checkpoint.project_root == dispatch.task.repository
-        and checkpoint.delivery_id == dispatch.source_delivery_id
-        and checkpoint.task_id == dispatch.source_task_id
-        and checkpoint.dispatch_commit_id == dispatch.source_dispatch_id
-        and checkpoint.candidate_revision == dispatch.source_revision
-    )
+    matches = continuation_source_checkpoints(history[:-1], dispatch)
     if not matches:
         raise RecoveryRejected("continuation source candidate is absent from Delivery history")
     return matches[-1]

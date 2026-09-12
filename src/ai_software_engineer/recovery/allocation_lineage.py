@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from ai_software_engineer.project_manager.delivery_checkpoint import (
     DeliveryStage,
     ProjectDeliveryCheckpoint,
+    terminal_candidate_cursor_matches,
 )
 from ai_software_engineer.project_manager.dispatch import (
     ContinuationDispatchRecord,
@@ -15,6 +16,25 @@ from ai_software_engineer.project_manager.dispatch import (
     RecoveryDispatchRecord,
 )
 from ai_software_engineer.recovery.models import RecoveryRejected
+
+
+def continuation_source_checkpoints(
+    history: tuple[ProjectDeliveryCheckpoint, ...],
+    allocation: ContinuationDispatchRecord,
+) -> tuple[ProjectDeliveryCheckpoint, ...]:
+    """Locate source cursors; candidate authority remains in Task events/artifacts."""
+    allocation.validate_integrity()
+    return tuple(
+        checkpoint
+        for checkpoint in history
+        if checkpoint.project_id == allocation.project_id
+        and checkpoint.project_root == allocation.task.repository
+        and checkpoint.delivery_id == allocation.source_delivery_id
+        and checkpoint.dispatch_commit_id == allocation.source_dispatch_id
+        and checkpoint.task_id == allocation.source_task_id
+        and checkpoint.stage in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
+        and terminal_candidate_cursor_matches(checkpoint, allocation.source_revision)
+    )
 
 
 def resolve_planner_dispatch(
@@ -31,14 +51,7 @@ def resolve_planner_dispatch(
         seen.add(allocation.id)
         source_id: str | None = None
         if isinstance(allocation, ContinuationDispatchRecord):
-            matches = tuple(
-                checkpoint
-                for checkpoint in history
-                if checkpoint.dispatch_commit_id == allocation.source_dispatch_id
-                and checkpoint.task_id == allocation.source_task_id
-                and checkpoint.candidate_revision == allocation.source_revision
-                and checkpoint.stage in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
-            )
+            matches = continuation_source_checkpoints(history, allocation)
             if not matches:
                 raise RecoveryRejected("continuation source is absent from Delivery history")
             source_id = allocation.source_dispatch_id
@@ -87,4 +100,8 @@ def allocation_preparation_sha256(
     return original_preparation_sha256
 
 
-__all__ = ["allocation_preparation_sha256", "resolve_planner_dispatch"]
+__all__ = [
+    "allocation_preparation_sha256",
+    "continuation_source_checkpoints",
+    "resolve_planner_dispatch",
+]

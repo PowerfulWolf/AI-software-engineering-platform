@@ -330,6 +330,19 @@ class ProjectDeliveryCheckpoint(DomainModel):
             raise ProjectDeliveryCheckpointCorruption("checkpoint digest does not match content")
 
 
+def terminal_candidate_cursor_matches(
+    checkpoint: ProjectDeliveryCheckpoint,
+    candidate_revision: str,
+) -> bool:
+    """Match a candidate projection, retaining strict proof requirements for null cursors."""
+    return checkpoint.candidate_revision == candidate_revision or (
+        checkpoint.candidate_revision is None
+        and checkpoint.stage in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
+        and checkpoint.failed_stage is DeliveryStage.DELIVERING
+        and checkpoint.task_status in {TaskStatus.BLOCKED, TaskStatus.FAILED}
+    )
+
+
 def checkpoint_is_ancestor(
     history: tuple[ProjectDeliveryCheckpoint, ...],
     checkpoint: ProjectDeliveryCheckpoint,
@@ -665,4 +678,5 @@ __all__ = [
     "ProjectDeliveryCheckpointNotFound",
     "ProjectDeliveryCheckpointPathError",
     "ProjectDeliveryIntake",
+    "terminal_candidate_cursor_matches",
 ]

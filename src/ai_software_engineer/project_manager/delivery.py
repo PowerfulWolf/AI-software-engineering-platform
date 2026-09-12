@@ -35,6 +35,7 @@ from ai_software_engineer.project_manager.delivery_checkpoint import (
     ProjectDeliveryCheckpointNotFound,
     ProjectDeliveryIntake,
     checkpoint_sha256_is_ancestor,
+    terminal_candidate_cursor_matches,
 )
 from ai_software_engineer.project_manager.dispatch import (
     ContinuationDispatchRecord,
@@ -237,23 +238,18 @@ def _verification_binds_terminal_candidate(
     plan.validate_integrity()
     completion.validate_integrity()
     candidate = plan.inputs.candidate_revision
-    direct_retained_candidate = (
-        current.candidate_revision is None
-        and current.failed_stage is DeliveryStage.DELIVERING
-        and current.task_status in {TaskStatus.BLOCKED, TaskStatus.FAILED}
-    )
     direct_cursor = (
         current.task_id == plan.inputs.task_id
         and current.dispatch_commit_sha256 == plan.dispatch_sha256
-        and (current.candidate_revision == candidate or direct_retained_candidate)
+        and terminal_candidate_cursor_matches(current, candidate)
     )
     source_indices = tuple(
         index
         for index, checkpoint in enumerate(history)
         if checkpoint.task_id == plan.inputs.task_id
         and checkpoint.dispatch_commit_sha256 == plan.dispatch_sha256
-        and checkpoint.candidate_revision == candidate
         and checkpoint.stage in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
+        and terminal_candidate_cursor_matches(checkpoint, candidate)
     )
     successor_cursor = False
     if source_indices:

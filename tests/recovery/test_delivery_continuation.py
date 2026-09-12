@@ -34,7 +34,8 @@ from ai_software_engineer.project_manager.dispatch import (
     ContinuationDispatchRecord,
     _record_digest,
 )
-from ai_software_engineer.recovery.models import RecoveryScope
+from ai_software_engineer.recovery.allocation_lineage import resolve_planner_dispatch
+from ai_software_engineer.recovery.models import RecoveryRejected, RecoveryScope
 from ai_software_engineer.recovery.resume import (
     DeliveryResumeController,
     DeliveryResumeOutcome,
@@ -48,6 +49,7 @@ from ai_software_engineer.recovery.verification_snapshot import retained_candida
 from tests.domain.factories import make_qa_artifact, make_review_artifact
 from tests.orchestration.test_retry import ScriptedAdapter
 from tests.orchestration.test_runner import _definitions
+from tests.project_manager.test_dispatch_authority import _durable_facts
 from tests.recovery.test_candidate_verification import Admission, setup_verification
 from tests.recovery.test_execution_records import continuation_allocation
 
@@ -283,7 +285,7 @@ def test_continuation_rejects_empty_cursor_without_terminal_delivery_proof(
 
 def test_failed_continuation_resolves_its_retained_source_candidate(tmp_path: Path) -> None:
     dispatch = continuation_allocation(tmp_path)
-    service, store = _service(tmp_path, dispatch)
+    service, store = _service(tmp_path, dispatch, retain_candidate=False)
     dispatch, plan, completion = _verification_for(store, dispatch)
     service.begin_continuation(dispatch, plan, completion, at=NOW + timedelta(minutes=1))
     blocked_task = dispatch.task.model_copy(
@@ -311,7 +313,7 @@ def test_failed_continuation_resolves_its_retained_source_candidate(tmp_path: Pa
 
     assert source.task_id == dispatch.source_task_id
     assert source.dispatch_commit_id == dispatch.source_dispatch_id
-    assert source.candidate_revision == dispatch.source_revision
+    assert source.candidate_revision is None
 
     qa = make_qa_artifact().model_copy(
         update={
@@ -341,6 +343,76 @@ def test_failed_continuation_resolves_its_retained_source_candidate(tmp_path: Pa
 
     assert accepted.checkpoint.stage is DeliveryStage.DONE
     assert accepted.checkpoint.candidate_revision == dispatch.source_revision
+
+
+def test_continuation_ancestry_accepts_nullable_terminal_source_cursor(tmp_path: Path) -> None:
+    dispatch = continuation_allocation(tmp_path)
+    _, store = _service(tmp_path, dispatch, retain_candidate=False)
+    planner_root = tmp_path / "planner-source"
+    planner_root.mkdir()
+    _, _, planner_dispatch, _, _ = _durable_facts(planner_root)
+    source_task = planner_dispatch.task.model_copy(
+        update={
+            "id": dispatch.source_task_id,
+            "repository": dispatch.task.repository,
+            "base_ref": dispatch.source_base_revision,
+        }
+    )
+    planner_dispatch = planner_dispatch.model_copy(
+        update={
+            "id": dispatch.source_dispatch_id,
+            "project_id": dispatch.project_id,
+            "task_id": dispatch.source_task_id,
+            "project_request_id": dispatch.project_request_id,
+            "execution_plan_id": dispatch.execution_plan_id,
+            "execution_plan_sha256": dispatch.execution_plan_sha256,
+            "execution_plan_phase_ids": dispatch.execution_plan_phase_ids,
+            "task": source_task,
+            "dispatch_sha256": "0" * 64,
+        }
+    )
+    planner_dispatch = planner_dispatch.model_copy(
+        update={"dispatch_sha256": _record_digest(planner_dispatch)}
+    )
+
+    resolved = resolve_planner_dispatch(
+        dispatch,
+        {dispatch.id: dispatch, planner_dispatch.id: planner_dispatch},
+        store.list(dispatch.source_delivery_id),
+    )
+
+    assert resolved == planner_dispatch
+
+
+def test_continuation_ancestry_rejects_nullable_nonterminal_source_cursor(
+    tmp_path: Path,
+) -> None:
+    dispatch = continuation_allocation(tmp_path)
+    _, store = _service(
+        tmp_path,
+        dispatch,
+        retain_candidate=False,
+        retained_failure=False,
+    )
+    planner_root = tmp_path / "planner-source"
+    planner_root.mkdir()
+    _, _, planner_dispatch, _, _ = _durable_facts(planner_root)
+    planner_dispatch = planner_dispatch.model_copy(
+        update={
+            "id": dispatch.source_dispatch_id,
+            "project_id": dispatch.project_id,
+            "project_request_id": dispatch.project_request_id,
+            "execution_plan_id": dispatch.execution_plan_id,
+            "execution_plan_sha256": dispatch.execution_plan_sha256,
+        }
+    )
+
+    with pytest.raises(RecoveryRejected, match="continuation source is absent"):
+        resolve_planner_dispatch(
+            dispatch,
+            {dispatch.id: dispatch, planner_dispatch.id: planner_dispatch},
+            store.list(dispatch.source_delivery_id),
+        )
 
 
 def test_inconclusive_verification_proposes_fresh_qa_without_coder(
