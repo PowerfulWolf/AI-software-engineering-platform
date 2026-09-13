@@ -108,10 +108,8 @@ cp config/production.example.json \
   "schema_version": "v0.2",
   "team_id": "team_ai",
   "team_name": "AI Team",
-  "team_knowledge_paths": [],
   "default_project_id": null,
   "default_project_name": null,
-  "project_knowledge_paths": [],
   "live_model_execution": true,
   "console_port": 8765
 }
@@ -129,7 +127,7 @@ export ASE_CONFIG='/absolute/path/to/production.json'
 ```
 
 通过设置页切换到全新 `platform_root` 时，平台只在新根初始化当前 Team 身份；不会静默复制旧根的
-Team 知识、Projects、Requirements 或 worktree。旧知识选择会被清空，重启后应在新根重新导入并选择文档。
+Team 知识、Projects、Requirements 或 worktree。重启到新根后，应在新 workspace 重新导入并选择文档。
 
 `live_model_execution=false` 是示例文件的安全默认值；它会明确拒绝真实模型运行，不会偷偷切换 fake
 Agent。
@@ -137,11 +135,12 @@ Agent。
 `team_id` 默认为 `team_ai`。v0.1 只有一个长期 Team，它可以服务多个 sibling Project；Project 不复制
 AgentProfile，也不代表单个 Git 仓库或一次 Requirement。
 `team_name` 是首次注册的显示名；ID/名称与持久化 manifest 不一致时拒绝静默覆盖。
-日常通过 Web Console 的“团队知识库”上传 Markdown、TXT、PDF 或 DOCX。平台在
-`team/knowledge/documents/<document_id>/` 保存原文件、不可变 manifest 和规范化
-`content.md`；`team_knowledge_paths` 只保存设置页明确勾选的规范化相对路径。兼容的手工 Markdown
-文件仍可放在 `knowledge/` 并显式填写路径，但不会被递归自动发现。这些资料是只读上下文，不会自动
-覆盖 Project 或 Repository 规范。
+日常通过 Web Console 的“知识库”上传 Markdown、TXT、PDF 或 DOCX。“团队通用知识”保存在
+`team/knowledge/documents/<document_id>/`；“当前 Project 知识”保存在
+`projects/<project_id>/knowledge/documents/<document_id>/`。两个作用域分别用同目录下的
+`selection.json` 保存明确启用的文档；启停立即影响之后的新需求，不需要重启。兼容配置中的
+`team_knowledge_paths` / `project_knowledge_paths` 只在 selection 文件尚不存在时作为旧入口回退；
+不会递归自动发现文件。这些资料是只读上下文，不会自动覆盖 Repository 原生规范。
 已准备 Requirement 依赖的 Team/Project 知识发生变化时，会拒绝继续旧交付，应检查变化并处理规范/上下文冲突。
 默认配置不读取任何额外 Team 文档，也不会自动迁移其他 `platform_root` 数据。
 Team、Project 和 Repository sidecar 目录只在显式的 Host 初始化、Project/Requirement 准备或交付写入流程中创建；加载配置和
@@ -194,7 +193,8 @@ Agent，即使它们碰巧使用同一模型也不能互相代替或自我批准
    执行开关和端口；用“测试连接”验证 MySQL；
 2. 保存后若显示“需要重启”，执行 `./scripts/ase-console-service.sh restart`，让 Host 绑定新配置；
 3. 在“状态”确认 MySQL、Codex、Team workspace 和启用的模型路由已就绪；
-4. 在“团队知识库”上传文档，回到设置页勾选需要用于新 Requirement 的知识并再次保存/重启；
+4. 在“知识库”分别切换“团队通用知识”和“当前 Project 知识”，上传并启用需要用于新 Requirement
+   的文档；知识选择无需重启；
 5. 在设置页创建或确认该业务上下文对应的 Project。
 
 然后在“需求与交付”页完成：

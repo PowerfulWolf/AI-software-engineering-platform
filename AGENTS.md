@@ -64,12 +64,14 @@ Project 不复制或拥有 Agent。Team/Project/Repository/Requirement 身份必
 Web Console 的 Team 设置只操作经过 manifest 校验的唯一 Team；Project 管理创建/打开业务 Project。
 知识上传只接受有界浏览器文件
 字节与安全 basename，不接受宿主机任意路径；Markdown/TXT/PDF/DOCX 必须保存原文件、规范化
-`content.md` 和内容寻址 manifest，且仍需在设置中显式选择。生产设置只持久化无密钥
+`content.md` 和内容寻址 manifest。Team 与 Project 分别在自己的 `knowledge/selection.json` 中显式
+选择；选择变更即时影响之后的新需求，不要求重启，且不得静默改变已准备/批准需求。生产设置只持久化无密钥
 `ProductionConfig`；可信本机的早期版本允许设置页把完整 DSN/API key 写入配置文件同目录的
 `runtime.env`，权限必须为 `0600`，且只能保存当前配置显式引用的环境变量。密钥值不得由 API
 返回、在页面回显、写入 Operation/日志、仓库或 sidecar。服务脚本负责在启动前加载该文件；
-知识、目录、模型、凭证或端口变化必须提示重启并重新构造 Host，不得热改正在运行的 Delivery
-composition。未来接入 Keychain/Secret Service 时应替换 store，不改变 Settings API 的 write-only
+平台目录、模型、凭证、Codex 路径、真实执行开关或端口变化必须提示重启并重新构造 Host；知识选择
+不是进程配置，TeamHost 在下一次 Project runtime 访问时按作用域重解析。未来接入 Keychain/Secret
+Service 时应替换 store，不改变 Settings API 的 write-only
 语义。
 
 平台可以接入任意本地代码 Repository；Task 的 `repository`/`repository_root` 是真实代码目录，

@@ -24,6 +24,7 @@ from .administration import (
     ConsoleAdministration,
     CreateProjectRequest,
     MySqlConnectionRequest,
+    UpdateKnowledgeSelectionRequest,
     UpdateSettingsRequest,
 )
 from .core import ConsoleCommandRejected
@@ -178,19 +179,9 @@ def create_console_app(
     async def import_knowledge(request: Request, filename: str = "") -> Response:
         if administration is None:
             return _error(404, "NOT_AVAILABLE", "Administration is not available.")
-        content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
-        if content_type != "application/octet-stream":
-            return _error(415, "BINARY_REQUIRED", "Use application/octet-stream.")
-        declared = request.headers.get("content-length")
-        if declared is not None:
-            try:
-                if int(declared) > MAX_TEAM_KNOWLEDGE_SOURCE_BYTES:
-                    return _error(413, "DOCUMENT_TOO_LARGE", "Document exceeds the upload limit.")
-            except ValueError:
-                return _error(400, "INVALID_REQUEST", "Invalid request metadata.")
-        content = await request.body()
-        if len(content) > MAX_TEAM_KNOWLEDGE_SOURCE_BYTES:
-            return _error(413, "DOCUMENT_TOO_LARGE", "Document exceeds the upload limit.")
+        content = await _knowledge_document_body(request)
+        if isinstance(content, Response):
+            return content
         try:
             value = await run_in_threadpool(
                 administration.import_document,
@@ -200,6 +191,80 @@ def create_console_app(
         except (AdministrationError, KnowledgeDocumentError, ValidationError):
             return _error(422, "DOCUMENT_REJECTED", "Document could not be imported safely.")
         return JSONResponse(value.to_wire(), status_code=201)
+
+    @app.put("/api/v1/admin/team/knowledge/selection")
+    async def update_team_knowledge_selection(request: Request) -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        payload = await _json_body(request)
+        if isinstance(payload, Response):
+            return payload
+        try:
+            command = UpdateKnowledgeSelectionRequest.model_validate_json(payload)
+            values = await run_in_threadpool(
+                administration.update_team_knowledge_selection, command
+            )
+        except ValidationError:
+            return _error(422, "INVALID_REQUEST", "Knowledge selection is invalid.")
+        except (AdministrationError, KnowledgeDocumentError):
+            return _error(409, "KNOWLEDGE_REJECTED", "Knowledge selection was rejected.")
+        return JSONResponse([value.to_wire() for value in values])
+
+    @app.get("/api/v1/admin/projects/{project_id}/knowledge")
+    async def project_knowledge(project_id: str) -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        if not _valid_project_id(project_id):
+            return _error(404, "NOT_FOUND", "Project was not found.")
+        try:
+            values = await run_in_threadpool(administration.project_knowledge, project_id)
+        except (AdministrationError, KnowledgeDocumentError):
+            return _error(503, "KNOWLEDGE_UNAVAILABLE", "Project knowledge is unavailable.")
+        return JSONResponse([value.to_wire() for value in values])
+
+    @app.post("/api/v1/admin/projects/{project_id}/knowledge", status_code=201)
+    async def import_project_knowledge(
+        project_id: str, request: Request, filename: str = ""
+    ) -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        if not _valid_project_id(project_id):
+            return _error(404, "NOT_FOUND", "Project was not found.")
+        content = await _knowledge_document_body(request)
+        if isinstance(content, Response):
+            return content
+        try:
+            value = await run_in_threadpool(
+                administration.import_project_document,
+                project_id,
+                filename=filename,
+                content=content,
+            )
+        except (AdministrationError, KnowledgeDocumentError, ValidationError):
+            return _error(422, "DOCUMENT_REJECTED", "Document could not be imported safely.")
+        return JSONResponse(value.to_wire(), status_code=201)
+
+    @app.put("/api/v1/admin/projects/{project_id}/knowledge/selection")
+    async def update_project_knowledge_selection(project_id: str, request: Request) -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        if not _valid_project_id(project_id):
+            return _error(404, "NOT_FOUND", "Project was not found.")
+        payload = await _json_body(request)
+        if isinstance(payload, Response):
+            return payload
+        try:
+            command = UpdateKnowledgeSelectionRequest.model_validate_json(payload)
+            values = await run_in_threadpool(
+                administration.update_project_knowledge_selection,
+                project_id,
+                command,
+            )
+        except ValidationError:
+            return _error(422, "INVALID_REQUEST", "Knowledge selection is invalid.")
+        except (AdministrationError, KnowledgeDocumentError):
+            return _error(409, "KNOWLEDGE_REJECTED", "Knowledge selection was rejected.")
+        return JSONResponse([value.to_wire() for value in values])
 
     @app.get("/api/v1/admin/settings")
     async def settings() -> Response:
@@ -309,6 +374,23 @@ async def _json_body(request: Request) -> bytes | Response:
     if len(body) > _MAX_REQUEST_BYTES:
         return _error(413, "REQUEST_TOO_LARGE", "Request is too large.")
     return body
+
+
+async def _knowledge_document_body(request: Request) -> bytes | Response:
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
+    if content_type != "application/octet-stream":
+        return _error(415, "BINARY_REQUIRED", "Use application/octet-stream.")
+    declared = request.headers.get("content-length")
+    if declared is not None:
+        try:
+            if int(declared) > MAX_TEAM_KNOWLEDGE_SOURCE_BYTES:
+                return _error(413, "DOCUMENT_TOO_LARGE", "Document exceeds the upload limit.")
+        except ValueError:
+            return _error(400, "INVALID_REQUEST", "Invalid request metadata.")
+    content = await request.body()
+    if len(content) > MAX_TEAM_KNOWLEDGE_SOURCE_BYTES:
+        return _error(413, "DOCUMENT_TOO_LARGE", "Document exceeds the upload limit.")
+    return content
 
 
 def _valid_project_id(project_id: str) -> bool:

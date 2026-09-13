@@ -253,6 +253,19 @@ def test_administration_endpoints_create_project_import_document_and_save_settin
             content=b"# Team guide\n",
             headers={"Content-Type": "application/octet-stream"},
         )
+        project_imported = client.post(
+            "/api/v1/admin/projects/project_web/knowledge?filename=project-guide.md",
+            content=b"# Project guide\n",
+            headers={"Content-Type": "application/octet-stream"},
+        )
+        team_selection = client.put(
+            "/api/v1/admin/team/knowledge/selection",
+            json={"document_ids": [imported.json()["manifest"]["document_id"]]},
+        )
+        project_selection = client.put(
+            "/api/v1/admin/projects/project_web/knowledge/selection",
+            json={"document_ids": [project_imported.json()["manifest"]["document_id"]]},
+        )
         team = client.get("/api/v1/admin/team")
         projects = client.get("/api/v1/admin/projects")
         knowledge = client.get("/api/v1/admin/team/knowledge")
@@ -263,8 +276,6 @@ def test_administration_endpoints_create_project_import_document_and_save_settin
             json={"dsn": "mysql+pymysql://user:password@127.0.0.1:3307/database"},
         )
         updated_config = settings.json()["config"]
-        normalized_path = imported.json()["manifest"]["normalized_relative_path"]
-        updated_config["team_knowledge_paths"] = [normalized_path]
         updated = client.put("/api/v1/admin/settings", json={"config": updated_config})
         rejected = client.post(
             "/api/v1/admin/team/knowledge?filename=unsafe.exe",
@@ -275,6 +286,13 @@ def test_administration_endpoints_create_project_import_document_and_save_settin
     assert created.status_code == 201
     assert created.json()["project_id"] == "project_web"
     assert imported.status_code == 201
+    assert project_imported.status_code == 201
+    assert project_imported.json()["project_id"] == "project_web"
+    assert team_selection.status_code == 200
+    assert team_selection.json()[0]["selected"] is True
+    assert project_selection.status_code == 200
+    assert project_selection.json()[0]["selected"] is True
+    assert project_selection.json()[0]["scope"] == "project"
     assert team.status_code == 200
     assert team.json()["team_id"] == "team_test"
     assert projects.status_code == 200
@@ -290,6 +308,6 @@ def test_administration_endpoints_create_project_import_document_and_save_settin
     assert "password" not in status.text
     assert "password" not in mysql.text
     assert updated.status_code == 200
-    assert updated.json()["restart_required"] is True
+    assert updated.json()["restart_required"] is False
     assert rejected.status_code == 422
     assert "Team guide" not in imported.text

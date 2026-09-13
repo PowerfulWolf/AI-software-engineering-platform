@@ -197,6 +197,10 @@ ConsoleAdministration.projects() -> tuple[ProjectSummary, ...]
 ConsoleAdministration.create_project(request: CreateProjectRequest) -> ProjectSummary
 ConsoleAdministration.knowledge() -> tuple[KnowledgeDocumentView, ...]
 ConsoleAdministration.import_document(*, filename: str, content: bytes) -> KnowledgeDocumentView
+ConsoleAdministration.update_team_knowledge_selection(request) -> tuple[KnowledgeDocumentView, ...]
+ConsoleAdministration.project_knowledge(project_id) -> tuple[KnowledgeDocumentView, ...]
+ConsoleAdministration.import_project_document(project_id, *, filename, content) -> KnowledgeDocumentView
+ConsoleAdministration.update_project_knowledge_selection(project_id, request) -> tuple[KnowledgeDocumentView, ...]
 ConsoleAdministration.settings() -> SettingsSnapshot
 ConsoleAdministration.update_settings(request: UpdateSettingsRequest) -> SettingsSnapshot
 ConsoleAdministration.test_mysql_connection(request: MySqlConnectionRequest) -> MySqlConnectionResult
@@ -209,6 +213,10 @@ GET  /api/v1/admin/projects
 POST /api/v1/admin/projects
 GET  /api/v1/admin/team/knowledge
 POST /api/v1/admin/team/knowledge?filename=<basename>
+PUT  /api/v1/admin/team/knowledge/selection
+GET  /api/v1/admin/projects/<project_id>/knowledge
+POST /api/v1/admin/projects/<project_id>/knowledge?filename=<basename>
+PUT  /api/v1/admin/projects/<project_id>/knowledge/selection
 GET  /api/v1/admin/settings
 PUT  /api/v1/admin/settings
 POST /api/v1/admin/settings/test-mysql
@@ -229,10 +237,15 @@ GET  /api/v1/admin/status
   must be non-empty and at most 256 KB. Original bytes, `content.md` and a digest-bound manifest are
   published atomically under one content-addressed document directory.
 - Import never accepts a server-side source path and never calls a model, silently summarizes or
-  auto-selects a document. Only `ProductionConfig.team_knowledge_paths` selected in Settings enters
-  later preparation contexts through the existing Team knowledge guard.
+  auto-selects a document. The Knowledge page exposes separate `团队通用知识` and `当前 Project 知识`
+  scopes. Selection is an explicit document-ID set and atomically publishes `knowledge/selection.json`
+  under the owning Team or Project sidecar.
+- Team selection applies to every Project; Project selection applies only to that Project. A missing
+  selection record may read legacy `ProductionConfig.*_knowledge_paths` only as a compatibility
+  fallback. Once the browser writes a selection record, that sidecar is authoritative, including an
+  explicitly empty selection.
 - Settings round-trip every current secret-free `ProductionConfig` field: platform root, active
-  Team/name, selected knowledge, database backend/DSN environment name, ordered model routes,
+  Team/name, database backend/DSN environment name, ordered model routes,
   Codex executable, live execution and Console port. `runtime_variables` accepts only names referenced
   by that submitted config and is request-only; referenced values never enter a response. A blank UI
   input means preserve the stored value, not erase it.
@@ -249,8 +262,9 @@ GET  /api/v1/admin/status
   counts and per-route credential readiness. Zero knowledge is neutral. MySQL connectivity alone
   must not imply the full delivery runtime is ready.
 - A config save uses same-directory temporary file, fsync and atomic replace. It validates the selected
-  Team/name and every selected knowledge document before publication. Any changed saved config is
-  marked `restart_required`; the already constructed Host is not mutated or hot-switched.
+  Team/name before publication. Any changed saved config or write-only runtime variable is marked
+  `restart_required`; the already constructed Host is not mutated or hot-switched. Knowledge upload
+  and sidecar selection are not config saves and do not require restart.
 - When an explicit save selects a new `platform_root` without that Team, initialize the selected
   immutable Team identity there. Do not migrate Team knowledge, Projects, Requirements or execution
   facts; knowledge selection must be empty until documents exist under the new root.
@@ -276,6 +290,10 @@ GET  /api/v1/admin/status
 | Upload over 10 MB or normalized body over 256 KB | 413/422; no published record |
 | Same document bytes uploaded twice | Return the original document identity |
 | Manifest/source/normalized digest or path drift | Entire knowledge listing fails closed |
+| Unknown document ID, copied cross-scope record or invalid selection digest | 409/503 safe rejection; prior selection remains |
+| Team selection changed | next Project runtime re-resolves Team context; no process restart |
+| Project A selection changed | only Project A runtime is replaced; Project B stays unchanged |
+| Knowledge changed after an operation prepared its context | existing preparation guard stops on drift; never reinterpret approval |
 | Settings select another Team/name or invalid knowledge | 409; config file unchanged |
 | New platform root, current Team identity, empty knowledge selection | initialize that Team under the new root; save with restart required |
 | New platform root with old-root knowledge paths | 409; never copy or reinterpret the old files |
@@ -284,13 +302,13 @@ GET  /api/v1/admin/status
 | Invalid DSN or control-bearing secret input | 409/422; no value persisted or reflected |
 | MySQL missing/unavailable on first run | Console starts setup surface; Status says NOT_CONFIGURED/UNAVAILABLE; delivery returns 503 SETUP_REQUIRED |
 | Existing config is invalid | Startup fails safely; do not replace it with built-in defaults |
-| Settings changed while Host is running | Persist plus `restart_required=true`; no hot mutation |
+| Settings/runtime variable changed while Host is running | Persist plus `restart_required=true`; no hot mutation |
 
 ### 5. Good / Base / Bad Cases
 
 - Good: start with no config/MySQL, view defaults, enter and test a full DSN, save `runtime.env`, restart,
-  create a Project, upload a Team DOCX, inspect its content-addressed record, select `content.md`,
-  save, restart and prepare a new Requirement whose Team context digest binds that document.
+  create a Project, upload one Team DOCX and one Project Markdown document, explicitly enable both
+  without restart, then prepare a new Requirement whose context digest binds both scopes.
 - Base: a Team with no documents is valid and displayed neutrally; no knowledge is loaded implicitly.
 - Bad: let the browser submit `/etc/passwd`, recursively scan `knowledge/`, keep only an AI summary,
   return a DSN from the API, accept arbitrary environment names, or change the active Team inside an
@@ -298,8 +316,8 @@ GET  /api/v1/admin/status
 
 ### 6. Tests Required
 
-- `tests/knowledge/test_documents.py`: all four formats, exact replay, context readiness, invalid name,
-  corrupt/empty input, source/manifest/content tamper and size bounds.
+- `tests/knowledge/test_documents.py` and `test_selection.py`: all four formats, Team/Project owner
+  binding, exact replay, atomic selection, compatibility fallback, tamper and cross-Project rejection.
 - `tests/config/test_runtime_environment.py`: canonical quote round-trip, `0600`, atomic replacement,
   duplicate/name/control/size/symlink rejection.
 - `tests/web_console/test_administration.py`: singleton Team, Project catalog/create, config write/read,
@@ -307,9 +325,9 @@ GET  /api/v1/admin/status
 - `tests/web_console/test_transport.py`: admin verbs, content types/body limits, typed errors and no
   content/secret reflection; missing config/MySQL must still expose Settings/Status while delivery is
   `SETUP_REQUIRED`.
-- `tests/team_view/ui.test.cjs`: Project creation, Knowledge and Settings navigation, structured model
-  route fields, write-only DSN/key fields, separate Status tab, upload/selection wording and safe text rendering.
-- `tests/contracts/test_json_schema_contracts.py`: production config/port and knowledge manifest
+- `tests/team_view/ui.test.cjs`: Project creation, scoped Knowledge navigation/live selection,
+  Settings, write-only DSN/key fields, separate Status tab and safe text rendering.
+- `tests/contracts/test_json_schema_contracts.py`: production config/port, both knowledge manifests and selection
   Python-to-Schema parity.
 
 ### 7. Wrong vs Correct
@@ -329,6 +347,14 @@ return {"config": config, "mysql_dsn": stored_dsn}
 # Correct: accept an allowlisted write-only update and return status only.
 runtime_store.save({config.database.dsn_env: submitted_dsn})
 return SettingsSnapshot(config=config, secret_status=(SecretStatus(...),))
+```
+
+```python
+# Wrong: treat knowledge enablement as process configuration and require a restart.
+config.team_knowledge_paths = selected_paths
+
+# Correct: publish a scope-owned selection; the next runtime access re-resolves it.
+TeamKnowledgeSelectionStore(team).save(selected_paths)
 ```
 
 ## Scenario: local Web Console process lifecycle

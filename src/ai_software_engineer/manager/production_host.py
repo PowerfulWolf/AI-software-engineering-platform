@@ -11,6 +11,10 @@ from typing import TYPE_CHECKING
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.context import ContextSource
 from ai_software_engineer.domain.identity import ProjectId
+from ai_software_engineer.knowledge_selection import (
+    effective_project_knowledge_paths,
+    effective_team_knowledge_paths,
+)
 from ai_software_engineer.manager.delivery import (
     ProjectDeliveryCheckpointCatalog,
     ResumeProjectDelivery,
@@ -57,6 +61,7 @@ if TYPE_CHECKING:
 @dataclass(frozen=True, slots=True)
 class _ProjectRuntime:
     project: ProjectWorkspace
+    knowledge: tuple[ContextSource, ...]
     backend: ProductionProjectDeliveryBackend
     entry: UnifiedProjectEntryService
     requirements: JointDeliveryService
@@ -185,24 +190,19 @@ class TeamHost:
 
     def _runtime(self, project_id: ProjectId | str) -> _ProjectRuntime:
         identity = str(project_id)
+        project = self._projects.open(project_id)
+        knowledge = self._knowledge_sources(project)
         cached = self._project_runtimes.get(identity)
         if cached is not None:
             cached.project.validate_current()
-            return cached
-        project = self._projects.open(project_id)
+            if cached.knowledge == knowledge:
+                return cached
         registry = project.repository_registry()
-        knowledge = (
-            *self._team.knowledge_sources(self._config.team_knowledge_paths),
-            *project.knowledge_sources(self._config.project_knowledge_paths),
-        )
         rules = production_rules(self._team, knowledge)
 
         def validate_context() -> None:
             project.validate_current()
-            current = (
-                *self._team.knowledge_sources(self._config.team_knowledge_paths),
-                *project.knowledge_sources(self._config.project_knowledge_paths),
-            )
+            current = self._knowledge_sources(project)
             if current != knowledge:
                 raise ValueError(
                     "Team or Project knowledge changed; re-prepare and resolve context drift"
@@ -255,9 +255,22 @@ class TeamHost:
                 environment=self._environment,
             ),
         )
-        runtime = _ProjectRuntime(project, backend, entry, requirements)
+        runtime = _ProjectRuntime(project, knowledge, backend, entry, requirements)
         self._project_runtimes[identity] = runtime
         return runtime
+
+    def _knowledge_sources(self, project: ProjectWorkspace) -> tuple[ContextSource, ...]:
+        project_fallback = (
+            self._config.project_knowledge_paths
+            if self._config.default_project_id == project.manifest.project_id
+            else ()
+        )
+        team_paths = effective_team_knowledge_paths(self._team, self._config.team_knowledge_paths)
+        project_paths = effective_project_knowledge_paths(project, project_fallback)
+        return (
+            *self._team.knowledge_sources(team_paths),
+            *project.knowledge_sources(project_paths),
+        )
 
     def _resolve_project_id(
         self,

@@ -37,6 +37,13 @@ ProjectWorkspace.repository_registry() -> RepositoryWorkspaceRegistry
 ProjectWorkspace.knowledge_sources(relative_paths) -> tuple[ContextSource, ...]
 ProjectWorkspace.requirements_root -> Path
 
+TeamKnowledgeDocumentStore(team).import_document(...) -> KnowledgeDocumentManifest
+ProjectKnowledgeDocumentStore(project).import_document(...) -> ProjectKnowledgeDocumentManifest
+TeamKnowledgeSelectionStore(team).save(selected_paths) -> KnowledgeSelection
+ProjectKnowledgeSelectionStore(project).save(selected_paths) -> KnowledgeSelection
+effective_team_knowledge_paths(team, fallback=()) -> tuple[str, ...]
+effective_project_knowledge_paths(project, fallback=()) -> tuple[str, ...]
+
 ProductionConfig.schema_version: Literal["v0.2"]
 ProductionConfig.team_id: TeamId = "team_ai"
 ProductionConfig.team_name: TeamName = "AI Team"
@@ -46,7 +53,9 @@ ProductionConfig.default_project_name: ProjectName | None = None
 
 Public persistent contracts are `team-workspace.schema.json`, `project-workspace.schema.json`,
 `repository-workspace.schema.json`, `runtime-workspace-binding.schema.json` and
-`production-config.schema.json`.
+`production-config.schema.json`. Knowledge records additionally use
+`knowledge-document.schema.json`, `project-knowledge-document.schema.json` and
+`knowledge-selection.schema.json`.
 
 ## 3. Contracts
 
@@ -65,9 +74,15 @@ Public persistent contracts are `team-workspace.schema.json`, `project-workspace
   location, lineage, required directories, regular files and symlink-free ancestry.
 - `platform_root` and every source scope must be disjoint in both directions. Source checkouts must
   not receive `.ase`, sidecar, Agent or Requirement files.
-- Team and Project knowledge selections are explicit, unique, bounded, safe relative paths. Reads
+- Team stores immutable documents below `team/knowledge/documents/` and its current selection at
+  `team/knowledge/selection.json`. Each Project owns the same two-part layout below its own
+  `projects/<project_id>/knowledge/`; Project manifests and selections bind exact Team + Project IDs.
+- Team and Project knowledge selections are explicit, unique, sorted, bounded, safe relative paths. Reads
   reject traversal, hidden/path-like entries, symlinks, non-regular files, invalid UTF-8 and size
   overflow; selected content is redacted and digest-bound in Context.
+- Selection publication is atomic and live for future runtime access. An absent selection record may
+  use the corresponding `ProductionConfig` list as a compatibility fallback; a present empty record
+  explicitly means no selected knowledge. This is not a process-level configuration mutation.
 - Team knowledge has common scope; Project knowledge and Repository-native rules refine the selected
   Project. Natural-language conflicts stop for human resolution; path location never silently decides
   semantic precedence.
@@ -91,6 +106,8 @@ Public persistent contracts are `team-workspace.schema.json`, `project-workspace
 | Source contains platform root, or inverse | reject before sidecar publication |
 | Manifest/path/lineage drift or symlink | fail closed and preserve records |
 | Explicit selected knowledge | return redacted, digest-bound ContextSource only |
+| Project document/selection copied into another Project | reject owner identity even if content/digest is otherwise valid |
+| Team/Project selection saved | atomic sidecar publication; next new/re-prepared Requirement sees it without restart |
 | Changed selected knowledge after prepare | reject old preparation; never replace context silently |
 | Only one default Project field set | configuration validation error |
 
@@ -109,6 +126,8 @@ Public persistent contracts are `team-workspace.schema.json`, `project-workspace
   symlink guards, knowledge selection/redaction/budgets.
 - `tests/project_workspace/`: deterministic create/register/open/discover, Team lineage, Project
   knowledge, Project-owned Repository registration and missing/ambiguous lookup.
+- `tests/knowledge/`: immutable Team/Project documents, owner binding, atomic selection, explicit
+  empty selection, legacy fallback and integrity failure.
 - `tests/repository_workspace/` and `tests/runtime_workspace/`: Repository manifest and
   Team/Project/Repository runtime lineage.
 - `tests/config/test_production.py`: v0.2 schema, singleton Team defaults and optional/default Project
@@ -126,6 +145,14 @@ registry = RepositoryWorkspaceRegistry(platform_root / "teams" / team_id / "proj
 team = TeamWorkspace.initialize(platform_root, team_id="team_ai", name="AI Team")
 project = team.project_registry().create(name="Payments")
 repository = project.repository_registry().register(absolute_code_root)
+```
+
+```python
+# Wrong: one global mutable knowledge list silently applies to every Project.
+config.project_knowledge_paths = selected_paths
+
+# Correct: selection is owned by the exact Project sidecar.
+ProjectKnowledgeSelectionStore(project).save(selected_paths)
 ```
 
 ```python

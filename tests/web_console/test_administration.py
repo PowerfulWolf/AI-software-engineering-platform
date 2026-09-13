@@ -14,6 +14,7 @@ from ai_software_engineer.web_console import (
     CreateProjectRequest,
     LocalConsoleAdministration,
     MySqlConnectionRequest,
+    UpdateKnowledgeSelectionRequest,
     UpdateSettingsRequest,
 )
 
@@ -52,31 +53,52 @@ def _administration(tmp_path: Path) -> LocalConsoleAdministration:
     )
 
 
-def test_project_creation_and_team_document_selection_round_trip(tmp_path: Path) -> None:
+def test_team_and_project_document_selections_are_live_and_independent(
+    tmp_path: Path,
+) -> None:
     administration = _administration(tmp_path)
     created = administration.create_project(
         CreateProjectRequest(project_id="project_web", name="Web Project")
     )
-    imported = administration.import_document(filename="guide.md", content=b"# Guide\n")
-    changed = administration.runtime_config.model_copy(
-        update={
-            "team_knowledge_paths": (imported.manifest.normalized_relative_path,),
-            "console_port": 8877,
-        }
+    team_document = administration.import_document(filename="team-guide.md", content=b"# Team\n")
+    project_document = administration.import_project_document(
+        "project_web", filename="project-guide.md", content=b"# Project\n"
     )
 
-    snapshot = administration.update_settings(UpdateSettingsRequest(config=changed))
+    team_values = administration.update_team_knowledge_selection(
+        UpdateKnowledgeSelectionRequest(document_ids=(team_document.manifest.document_id,))
+    )
+    project_values = administration.update_project_knowledge_selection(
+        "project_web",
+        UpdateKnowledgeSelectionRequest(document_ids=(project_document.manifest.document_id,)),
+    )
 
     assert created.project_id == "project_web"
     assert [project.project_id for project in administration.projects()] == ["project_web"]
-    assert administration.knowledge()[0].selected is True
-    assert snapshot.restart_required is True
-    assert snapshot.config.console_port == 8877
-    statuses = {item.environment_name: item.configured for item in snapshot.secret_status}
+    assert team_values[0].scope == "team"
+    assert team_values[0].selected is True
+    assert team_values[0].project_id is None
+    assert project_values[0].scope == "project"
+    assert project_values[0].project_id == "project_web"
+    assert project_values[0].selected is True
+    assert administration.settings().restart_required is False
+    statuses = {
+        item.environment_name: item.configured for item in administration.settings().secret_status
+    }
     assert statuses == {"DEEPSEEK_API_KEY": False, "TEST_MYSQL_DSN": True}
     persisted = json.loads(administration.config_path.read_text())
-    assert persisted["team_knowledge_paths"] == [imported.manifest.normalized_relative_path]
+    assert persisted["team_knowledge_paths"] == []
     assert "secret@example" not in administration.config_path.read_text()
+
+
+def test_runtime_configuration_change_requires_restart(tmp_path: Path) -> None:
+    administration = _administration(tmp_path)
+    changed = administration.runtime_config.model_copy(update={"console_port": 8877})
+
+    snapshot = administration.update_settings(UpdateSettingsRequest(config=changed))
+
+    assert snapshot.restart_required is True
+    assert snapshot.config.console_port == 8877
 
 
 def test_settings_reject_team_identity_and_name_drift(tmp_path: Path) -> None:

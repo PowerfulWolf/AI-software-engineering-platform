@@ -8,6 +8,14 @@ import pytest
 
 from ai_software_engineer.agents import StructuredModelClient, StructuredModelResult
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
+from ai_software_engineer.knowledge_documents import (
+    ProjectKnowledgeDocumentStore,
+    TeamKnowledgeDocumentStore,
+)
+from ai_software_engineer.knowledge_selection import (
+    ProjectKnowledgeSelectionStore,
+    TeamKnowledgeSelectionStore,
+)
 from ai_software_engineer.manager.delivery import (
     DeliveryBackendFailure,
     StartProjectDelivery,
@@ -144,3 +152,41 @@ def test_team_config_rejects_invalid_selection(tmp_path: Path, field: str, value
     payload[field] = value
     with pytest.raises(ValueError):
         ProductionConfig.model_validate(payload)
+
+
+def test_team_host_hot_reloads_scope_owned_knowledge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "ai_software_engineer.manager.production_host.MySqlTaskRepository",
+        _ConnectivityStub,
+    )
+    monkeypatch.setattr(
+        "ai_software_engineer.manager.production_host.MySqlPersistentWorkQueue",
+        _ConnectivityStub,
+    )
+    platform = tmp_path / "platform"
+    host = TeamHost(
+        config=_config(platform, "team_alpha"),
+        environment={"ASE_MYSQL_DSN": "connectivity-only"},
+        structured_clients=_RecordingFactory(),
+    )
+    alpha = host.project_registry.open("project_alpha")
+    host.create_project(name="Beta", project_id="project_beta")
+    alpha_entry = host.project_entry("project_alpha")
+    beta_entry = host.project_entry("project_beta")
+    alpha_document = ProjectKnowledgeDocumentStore(alpha).import_document(
+        filename="alpha.md", content=b"# Alpha\n"
+    )
+
+    ProjectKnowledgeSelectionStore(alpha).save((alpha_document.normalized_relative_path,))
+
+    assert host.project_entry("project_alpha") is not alpha_entry
+    assert host.project_entry("project_beta") is beta_entry
+
+    team_document = TeamKnowledgeDocumentStore(host.team_workspace).import_document(
+        filename="team.md", content=b"# Team\n"
+    )
+    TeamKnowledgeSelectionStore(host.team_workspace).save((team_document.normalized_relative_path,))
+
+    assert host.project_entry("project_beta") is not beta_entry

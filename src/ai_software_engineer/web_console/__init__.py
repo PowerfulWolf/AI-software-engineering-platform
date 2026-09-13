@@ -17,6 +17,7 @@ from .administration import (
     SecretStatus,
     SettingsSnapshot,
     TeamSummary,
+    UpdateKnowledgeSelectionRequest,
     UpdateSettingsRequest,
 )
 from .core import ConsoleCommandRejected, ManagerConsolePort, ProjectConsole
@@ -88,6 +89,7 @@ __all__ = [
     "TeamConsoleHost",
     "TeamReader",
     "TeamSummary",
+    "UpdateKnowledgeSelectionRequest",
     "UpdateSettingsRequest",
     "create_console_app",
 ]

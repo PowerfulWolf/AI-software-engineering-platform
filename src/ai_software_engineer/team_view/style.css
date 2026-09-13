@@ -391,6 +391,24 @@ input[type="checkbox"] {
   display: grid;
   gap: 14px;
 }
+.scope-switch {
+  display: inline-flex;
+  gap: 6px;
+  padding: 4px;
+  margin-bottom: 20px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #f4f6fa;
+}
+.scope-switch button {
+  border-color: transparent;
+  background: transparent;
+}
+.scope-switch button.selected {
+  border-color: #b8c3d2;
+  background: white;
+  color: var(--accent);
+}
 .settings-form {
   display: grid;
   gap: 24px;

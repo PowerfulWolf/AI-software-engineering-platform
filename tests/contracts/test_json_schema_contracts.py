@@ -15,7 +15,14 @@ from ai_software_engineer.context import ContextBudget, ContextSource, FileConte
 from ai_software_engineer.domain import AgentPermissions, AgentRole, NetworkAccess
 from ai_software_engineer.domain.model import WirePayload
 from ai_software_engineer.evaluation import HandoffBuilder
-from ai_software_engineer.knowledge_documents import TeamKnowledgeDocumentStore
+from ai_software_engineer.knowledge_documents import (
+    ProjectKnowledgeDocumentStore,
+    TeamKnowledgeDocumentStore,
+)
+from ai_software_engineer.knowledge_selection import (
+    ProjectKnowledgeSelectionStore,
+    TeamKnowledgeSelectionStore,
+)
 from ai_software_engineer.runtime import RuntimeConfig
 from ai_software_engineer.team_workspace import TeamWorkspace
 from ai_software_engineer.web_console import (
@@ -231,6 +238,32 @@ def test_knowledge_document_manifest_satisfies_canonical_schema(tmp_path: Path) 
     missing_version = manifest.to_wire()
     missing_version.pop("schema_version")
     _assert_invalid(missing_version, "knowledge-document.schema.json")
+
+
+def test_project_knowledge_and_scope_selections_satisfy_schemas(
+    tmp_path: Path,
+) -> None:
+    team = TeamWorkspace.initialize(tmp_path, team_id="team_test", name="Test")
+    project = team.project_registry().register(project_id="project_test", name="Project")
+    team_document = TeamKnowledgeDocumentStore(team).import_document(
+        filename="team.md", content=b"# Team\n"
+    )
+    project_document = ProjectKnowledgeDocumentStore(project).import_document(
+        filename="project.md", content=b"# Project\n"
+    )
+    team_selection = TeamKnowledgeSelectionStore(team).save(
+        (team_document.normalized_relative_path,)
+    )
+    project_selection = ProjectKnowledgeSelectionStore(project).save(
+        (project_document.normalized_relative_path,)
+    )
+
+    _assert_valid(project_document.to_wire(), "project-knowledge-document.schema.json")
+    _assert_valid(team_selection.to_wire(), "knowledge-selection.schema.json")
+    _assert_valid(project_selection.to_wire(), "knowledge-selection.schema.json")
+    malformed = team_selection.to_wire()
+    malformed["project_id"] = "project_test"
+    _assert_invalid(malformed, "knowledge-selection.schema.json")
 
 
 def test_production_config_schema_rejects_plaintext_secret(tmp_path: Path) -> None:

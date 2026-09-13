@@ -107,8 +107,11 @@ Environment contract:
 - Host 创建时必须先验证 MySQL 并幂等初始化 schema，再打开唯一 Team workspace 和 sibling Project
   registry。`platform_root`/sidecar/worktree 不得写入目标项目。
 - Project registry 由 `TeamWorkspace.project_registry()` 装配，位于
-  `<platform_root>/projects/`；`team_knowledge_paths` 显式选择的资料作为只读、
-  脱敏、digest-bound 的 Team 上下文纳入 baseline。所有权契约见 `team-workspace.md`。
+  `<platform_root>/projects/`。每次 `_runtime(project_id)` 先从 Team 与该 Project 的
+  `knowledge/selection.json` 解析只读、脱敏、digest-bound 上下文；仅在 selection 记录缺失时
+  使用配置字段兼容旧入口。缓存只可在 exact `ContextSource` tuple 未变化时复用；Project 选择
+  变化只能替换该 Project runtime，Team 选择变化会在各 Project 下次访问时分别替换。所有权
+  契约见 `team-workspace.md`。
 - Team 稳定拥有三个不同的 Coder、QA、Reviewer AgentProfile；model/provider 是每次 Run 的
   `ModelSelection`，不能成为 Agent 身份。
 - Host 装配组织级 `MySqlPersistentWorkQueue`；Planner 拥有流转与派发策略，Dispatcher 只执行有界、
@@ -407,6 +410,8 @@ this does not authorize rebasing old approval or QA/Review evidence in place.
 | Product 缺关键决策 | Product Agent | `WAITING_PRODUCT_REPLY`，要求 exact checkpoint reply |
 | ProductSpec 未获 exact human approval | Product gate | `WAITING_PRODUCT_APPROVAL`，不运行 Designer |
 | 项目规则冲突 | SpecCompiler | `WAITING_HUMAN`，不静默选边 |
+| Team/Project knowledge selection 在新需求前变化 | TeamHost runtime lookup | 重建受影响 Project runtime，无需进程重启 |
+| 已 prepare 的交付所绑定知识发生变化 | preparation guard | 安全停止并要求重新 prepare；不沿用旧批准 |
 | target project dirty/not Git/HEAD 漂移 | delivery precondition | stable failure + preserved project/worktree |
 | Coder provisional report/diff 不匹配、越权路径或 finalization 后 dirty | Codex Git guard | policy/invalid-output failure；不进入 QA |
 | Coder 返回合法未完成 checkpoint | artifact/worktree/state guards | 保存 progress，重新排队下一次 Coder；不进入 QA |

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/knowledge-selection.schema.json",
+  "title": "KnowledgeSelection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "scope", "team_id", "selected_paths", "selection_sha256"],
+  "properties": {
+    "schema_version": {"const": "v0.1", "default": "v0.1"},
+    "scope": {"enum": ["team", "project"]},
+    "team_id": {"type": "string", "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$"},
+    "project_id": {"type": "string", "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "selected_paths": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^(?!/)(?!.*(?:^|/)(?:\\.{1,2}|\\.git)(?:/|$))(?!.*[\\\\*?\\[])[^\\u0000-\\u001f]+\\.(?:md|txt|json|yaml|yml|toml)$"
+      }
+    },
+    "selection_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"scope": {"const": "project"}}, "required": ["scope"]},
+      "then": {"required": ["project_id"]},
+      "else": {"not": {"required": ["project_id"]}}
+    }
+  ]
+}

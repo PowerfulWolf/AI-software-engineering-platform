@@ -7,6 +7,10 @@ from pathlib import Path
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.domain import AgentRole, ProjectPreparation
 from ai_software_engineer.git import GitWorktreeManager
+from ai_software_engineer.knowledge_selection import (
+    effective_project_knowledge_paths,
+    effective_team_knowledge_paths,
+)
 from ai_software_engineer.manager.baseline import (
     ProjectBaselineCompiler,
     ProjectSpecBaseline,
@@ -87,7 +91,7 @@ class NativeRecoveryFactsVerifier:
             name=config.team_name,
             read_only=True,
         )
-        _, repository = team.project_registry().locate_repository(source.scope.repository_id)
+        project, repository = team.project_registry().locate_repository(source.scope.repository_id)
         sidecar = repository.root
         target = _preparation(sidecar, source.scope.repository_id, plan.target_preparation_sha256)
         previous = original.preparation
@@ -139,7 +143,19 @@ class NativeRecoveryFactsVerifier:
         _reject_symlinks(Path(target.team_root))
         _read_regular(Path(target.team_root) / "team.json", 1_000_000)
         binding.validate_environment()
-        knowledge = team.knowledge_sources(config.team_knowledge_paths)
+        project_fallback = (
+            config.project_knowledge_paths
+            if config.default_project_id == project.manifest.project_id
+            else ()
+        )
+        knowledge = (
+            *team.knowledge_sources(
+                effective_team_knowledge_paths(team, config.team_knowledge_paths)
+            ),
+            *project.knowledge_sources(
+                effective_project_knowledge_paths(project, project_fallback)
+            ),
+        )
         compiled = ProjectBaselineCompiler().compile(
             profile, production_rules(team, knowledge), compiled_at=target.prepared_at
         )

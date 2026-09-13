@@ -213,7 +213,8 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     submittedIntents = [],
     storedOperations = [],
     savedSettings = [],
-    mysqlTests = [];
+    mysqlTests = [],
+    knowledgeSelections = [];
   const settingsFixture = {
     config: {
       schema_version: "v0.2",
@@ -298,6 +299,8 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   };
   const knowledgeFixture = [
     {
+      scope: "team",
+      project_id: null,
       selected: true,
       manifest: {
         schema_version: "v0.1",
@@ -315,6 +318,19 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
         normalized_sha256: "b".repeat(64),
         imported_at: "2026-09-12T01:00:00Z",
         manifest_sha256: "c".repeat(64),
+      },
+    },
+  ];
+  const projectKnowledgeFixture = [
+    {
+      ...structuredClone(knowledgeFixture[0]),
+      scope: "project",
+      project_id: "project_other",
+      selected: false,
+      manifest: {
+        ...structuredClone(knowledgeFixture[0].manifest),
+        project_id: "project_other",
+        source_name: "project-guide.md",
       },
     },
   ];
@@ -367,6 +383,22 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
         return { ok: true, json: async () => structuredClone(statusFixture) };
       if (url === "/api/v1/admin/team/knowledge")
         return { ok: true, json: async () => structuredClone(knowledgeFixture) };
+      if (url === "/api/v1/admin/projects/project_other/knowledge")
+        return {
+          ok: true,
+          json: async () => structuredClone(projectKnowledgeFixture),
+        };
+      if (
+        url === "/api/v1/admin/projects/project_other/knowledge/selection" &&
+        options.method === "PUT"
+      ) {
+        knowledgeSelections.push(JSON.parse(options.body));
+        projectKnowledgeFixture[0].selected = true;
+        return {
+          ok: true,
+          json: async () => structuredClone(projectKnowledgeFixture),
+        };
+      }
       if (url === "/api/v1/console")
         return {
           ok: true,
@@ -443,6 +475,24 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   await get("nav-knowledge").events.click();
   assert.match(text(get("content")), /team-guide.md/);
   assert.match(text(get("content")), /已用于新需求/);
+  const projectKnowledge = descend(get("content")).find(
+    (node) =>
+      node.tag === "button" && node.textContent === "当前 Project 知识",
+  );
+  await projectKnowledge.events.click();
+  assert.match(text(get("content")), /project-guide.md/);
+  const enableProjectKnowledge = descend(get("content")).find(
+    (node) => node.tag === "button" && node.textContent === "用于新需求",
+  );
+  await enableProjectKnowledge.events.click();
+  assert.deepEqual(knowledgeSelections, [
+    {
+      document_ids: [
+        "knowledge_document_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      ],
+    },
+  ]);
+  assert.match(text(get("content")), /无需重启/);
   await get("nav-settings").events.click();
   assert.match(text(get("content")), /创建 Project/);
   assert.match(text(get("content")), /平台数据目录/);

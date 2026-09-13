@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from io import BytesIO
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from docx import Document
 
 from ai_software_engineer.knowledge_documents import (
     KnowledgeDocumentError,
+    ProjectKnowledgeDocumentStore,
     TeamKnowledgeDocumentStore,
 )
 from ai_software_engineer.team_workspace import (
@@ -171,3 +173,27 @@ def test_resealed_source_name_suffix_drift_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(KnowledgeDocumentError, match="manifest is invalid"):
         store.list()
+
+
+def test_project_documents_are_bound_to_one_project(tmp_path: Path) -> None:
+    team = _team(tmp_path)
+    first = team.project_registry().register(project_id="project_first", name="First")
+    second = team.project_registry().register(project_id="project_second", name="Second")
+    first_store = ProjectKnowledgeDocumentStore(first)
+    manifest = first_store.import_document(
+        filename="project-guide.md", content=b"# Project guide\n"
+    )
+
+    assert manifest.project_id == first.manifest.project_id
+    assert first.knowledge_sources((manifest.normalized_relative_path,))[0].content == (
+        "# Project guide\n"
+    )
+
+    second_store = ProjectKnowledgeDocumentStore(second)
+    second_store.root.mkdir(parents=True)
+    shutil.copytree(
+        first_store.root / manifest.document_id,
+        second_store.root / manifest.document_id,
+    )
+    with pytest.raises(KnowledgeDocumentError, match="identity mismatch"):
+        second_store.list()

@@ -20,8 +20,9 @@ from pydantic import AwareDatetime, Field, StringConstraints, model_validator
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
-from ai_software_engineer.domain.identity import TeamId
+from ai_software_engineer.domain.identity import ProjectId, TeamId
 from ai_software_engineer.domain.model import DomainModel
+from ai_software_engineer.project_workspace import ProjectWorkspace
 from ai_software_engineer.team_workspace import (
     MAX_TEAM_KNOWLEDGE_DOCUMENT_BYTES,
     MAX_TEAM_KNOWLEDGE_SOURCE_BYTES,
@@ -87,20 +88,48 @@ class KnowledgeDocumentManifest(DomainModel):
             raise KnowledgeDocumentError("knowledge document manifest digest mismatch")
 
 
-@dataclass(frozen=True)
-class TeamKnowledgeDocumentStore:
-    team: TeamWorkspace
+class ProjectKnowledgeDocumentManifest(KnowledgeDocumentManifest):
+    """Immutable document identity additionally bound to its owning Project."""
 
+    project_id: ProjectId
+
+
+class _KnowledgeDocumentStore[ManifestT: KnowledgeDocumentManifest]:
     @property
     def root(self) -> Path:
-        return self.team.root / "knowledge" / "documents"
+        raise NotImplementedError
 
-    def list(self) -> tuple[KnowledgeDocumentManifest, ...]:
-        self.team.validate_current()
+    def _validate_workspace(self) -> None:
+        raise NotImplementedError
+
+    def _new_manifest(
+        self,
+        *,
+        document_id: str,
+        source_name: str,
+        media_type: KnowledgeMediaType,
+        source_relative_path: str,
+        normalized_relative_path: str,
+        source_bytes: int,
+        normalized_bytes: int,
+        source_sha256: str,
+        normalized_sha256: str,
+        imported_at: datetime,
+    ) -> ManifestT:
+        raise NotImplementedError
+
+    def _parse_manifest(self, payload: bytes) -> ManifestT:
+        raise NotImplementedError
+
+    def _validate_owner(self, manifest: ManifestT) -> None:
+        raise NotImplementedError
+
+    def list(self) -> tuple[ManifestT, ...]:
+        self._validate_workspace()
         if not self.root.exists():
             return ()
         _reject_symlink(self.root)
-        manifests: list[KnowledgeDocumentManifest] = []
+        manifests: list[ManifestT] = []
         for directory in self.root.iterdir():
             if directory.is_symlink():
                 raise KnowledgeDocumentError("knowledge document storage cannot traverse a symlink")
@@ -114,8 +143,8 @@ class TeamKnowledgeDocumentStore:
         filename: str,
         content: bytes,
         imported_at: datetime | None = None,
-    ) -> KnowledgeDocumentManifest:
-        self.team.validate_current()
+    ) -> ManifestT:
+        self._validate_workspace()
         source_name = _validate_source_name(filename)
         if not content:
             raise KnowledgeDocumentError("knowledge document is empty")
@@ -137,9 +166,8 @@ class TeamKnowledgeDocumentStore:
         timestamp = imported_at or datetime.now(UTC)
         if timestamp.tzinfo is None:
             raise KnowledgeDocumentError("knowledge import timestamp must include a timezone")
-        provisional = KnowledgeDocumentManifest(
+        provisional = self._new_manifest(
             document_id=document_id,
-            team_id=self.team.manifest.team_id,
             source_name=source_name,
             media_type=media_type,
             source_relative_path=source_relative,
@@ -149,7 +177,6 @@ class TeamKnowledgeDocumentStore:
             source_sha256=source_sha,
             normalized_sha256=hashlib.sha256(normalized_bytes).hexdigest(),
             imported_at=timestamp,
-            manifest_sha256="0" * 64,
         )
         manifest = provisional.model_copy(
             update={"manifest_sha256": provisional.recompute_digest()}
@@ -179,7 +206,7 @@ class TeamKnowledgeDocumentStore:
                 shutil.rmtree(staging)
         return self._read(target)
 
-    def _read(self, directory: Path) -> KnowledgeDocumentManifest:
+    def _read(self, directory: Path) -> ManifestT:
         _reject_symlink(directory)
         manifest_path = directory / "manifest.json"
         try:
@@ -187,11 +214,12 @@ class TeamKnowledgeDocumentStore:
         except OSError as error:
             raise KnowledgeDocumentError("knowledge document record is incomplete") from error
         try:
-            manifest = KnowledgeDocumentManifest.model_validate_json(payload)
+            manifest = self._parse_manifest(payload)
         except ValueError as error:
             raise KnowledgeDocumentError("knowledge document manifest is invalid") from error
         manifest.validate_integrity()
-        if manifest.team_id != self.team.manifest.team_id or directory.name != manifest.document_id:
+        self._validate_owner(manifest)
+        if directory.name != manifest.document_id:
             raise KnowledgeDocumentError("knowledge document identity mismatch")
         source = directory / manifest.source_relative_path
         normalized = directory / "content.md"
@@ -205,6 +233,106 @@ class TeamKnowledgeDocumentStore:
         ):
             raise KnowledgeDocumentError("knowledge document content integrity mismatch")
         return manifest
+
+
+@dataclass(frozen=True)
+class TeamKnowledgeDocumentStore(_KnowledgeDocumentStore[KnowledgeDocumentManifest]):
+    team: TeamWorkspace
+
+    @property
+    def root(self) -> Path:
+        return self.team.root / "knowledge" / "documents"
+
+    def _validate_workspace(self) -> None:
+        self.team.validate_current()
+
+    def _new_manifest(
+        self,
+        *,
+        document_id: str,
+        source_name: str,
+        media_type: KnowledgeMediaType,
+        source_relative_path: str,
+        normalized_relative_path: str,
+        source_bytes: int,
+        normalized_bytes: int,
+        source_sha256: str,
+        normalized_sha256: str,
+        imported_at: datetime,
+    ) -> KnowledgeDocumentManifest:
+        return KnowledgeDocumentManifest(
+            document_id=document_id,
+            team_id=self.team.manifest.team_id,
+            source_name=source_name,
+            media_type=media_type,
+            source_relative_path=source_relative_path,
+            normalized_relative_path=normalized_relative_path,
+            source_bytes=source_bytes,
+            normalized_bytes=normalized_bytes,
+            source_sha256=source_sha256,
+            normalized_sha256=normalized_sha256,
+            imported_at=imported_at,
+            manifest_sha256="0" * 64,
+        )
+
+    def _parse_manifest(self, payload: bytes) -> KnowledgeDocumentManifest:
+        return KnowledgeDocumentManifest.model_validate_json(payload)
+
+    def _validate_owner(self, manifest: KnowledgeDocumentManifest) -> None:
+        if manifest.team_id != self.team.manifest.team_id:
+            raise KnowledgeDocumentError("knowledge document identity mismatch")
+
+
+@dataclass(frozen=True)
+class ProjectKnowledgeDocumentStore(_KnowledgeDocumentStore[ProjectKnowledgeDocumentManifest]):
+    project: ProjectWorkspace
+
+    @property
+    def root(self) -> Path:
+        return self.project.root / "knowledge" / "documents"
+
+    def _validate_workspace(self) -> None:
+        self.project.validate_current()
+
+    def _new_manifest(
+        self,
+        *,
+        document_id: str,
+        source_name: str,
+        media_type: KnowledgeMediaType,
+        source_relative_path: str,
+        normalized_relative_path: str,
+        source_bytes: int,
+        normalized_bytes: int,
+        source_sha256: str,
+        normalized_sha256: str,
+        imported_at: datetime,
+    ) -> ProjectKnowledgeDocumentManifest:
+        return ProjectKnowledgeDocumentManifest(
+            document_id=document_id,
+            team_id=self.project.manifest.team_id,
+            project_id=self.project.manifest.project_id,
+            source_name=source_name,
+            media_type=media_type,
+            source_relative_path=source_relative_path,
+            normalized_relative_path=normalized_relative_path,
+            source_bytes=source_bytes,
+            normalized_bytes=normalized_bytes,
+            source_sha256=source_sha256,
+            normalized_sha256=normalized_sha256,
+            imported_at=imported_at,
+            manifest_sha256="0" * 64,
+        )
+
+    def _parse_manifest(self, payload: bytes) -> ProjectKnowledgeDocumentManifest:
+        return ProjectKnowledgeDocumentManifest.model_validate_json(payload)
+
+    def _validate_owner(self, manifest: ProjectKnowledgeDocumentManifest) -> None:
+        if (
+            manifest.team_id != self.project.manifest.team_id
+            or manifest.project_id != self.project.manifest.project_id
+        ):
+            raise KnowledgeDocumentError("knowledge document identity mismatch")
 
 
 def _validate_source_name(value: str) -> str:
@@ -317,5 +445,7 @@ def _sync_directory(path: Path) -> None:
 __all__ = [
     "KnowledgeDocumentError",
     "KnowledgeDocumentManifest",
+    "ProjectKnowledgeDocumentManifest",
+    "ProjectKnowledgeDocumentStore",
     "TeamKnowledgeDocumentStore",
 ]

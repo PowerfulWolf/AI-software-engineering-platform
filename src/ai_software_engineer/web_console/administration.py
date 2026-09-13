@@ -33,8 +33,18 @@ from ai_software_engineer.config.production import (
 from ai_software_engineer.domain.identity import ProjectId, TeamId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.knowledge_documents import (
+    KnowledgeDocumentId,
     KnowledgeDocumentManifest,
+    ProjectKnowledgeDocumentManifest,
+    ProjectKnowledgeDocumentStore,
     TeamKnowledgeDocumentStore,
+)
+from ai_software_engineer.knowledge_selection import (
+    KnowledgeSelectionError,
+    ProjectKnowledgeSelectionStore,
+    TeamKnowledgeSelectionStore,
+    effective_project_knowledge_paths,
+    effective_team_knowledge_paths,
 )
 from ai_software_engineer.project_workspace import ProjectName, ProjectWorkspace
 from ai_software_engineer.store import StoreError, open_mysql_connection, validate_mysql_dsn
@@ -167,8 +177,22 @@ class RuntimeStatusSnapshot(DomainModel):
 
 
 class KnowledgeDocumentView(DomainModel):
-    manifest: KnowledgeDocumentManifest
+    scope: Literal["team", "project"]
+    project_id: ProjectId | None = None
+    manifest: KnowledgeDocumentManifest | ProjectKnowledgeDocumentManifest
     selected: StrictBool
+
+
+class UpdateKnowledgeSelectionRequest(DomainModel):
+    document_ids: Annotated[tuple[KnowledgeDocumentId, ...], Field(max_length=64)] = ()
+
+    @field_validator("document_ids")
+    @classmethod
+    def require_unique_document_ids(
+        cls, values: tuple[KnowledgeDocumentId, ...]
+    ) -> tuple[KnowledgeDocumentId, ...]:
+        ensure_unique(values, "knowledge document selection")
+        return values
 
 
 class ConsoleAdministration(Protocol):
@@ -177,6 +201,16 @@ class ConsoleAdministration(Protocol):
     def create_project(self, request: CreateProjectRequest) -> ProjectSummary: ...
     def knowledge(self) -> tuple[KnowledgeDocumentView, ...]: ...
     def import_document(self, *, filename: str, content: bytes) -> KnowledgeDocumentView: ...
+    def update_team_knowledge_selection(
+        self, request: UpdateKnowledgeSelectionRequest
+    ) -> tuple[KnowledgeDocumentView, ...]: ...
+    def project_knowledge(self, project_id: str) -> tuple[KnowledgeDocumentView, ...]: ...
+    def import_project_document(
+        self, project_id: str, *, filename: str, content: bytes
+    ) -> KnowledgeDocumentView: ...
+    def update_project_knowledge_selection(
+        self, project_id: str, request: UpdateKnowledgeSelectionRequest
+    ) -> tuple[KnowledgeDocumentView, ...]: ...
     def settings(self) -> SettingsSnapshot: ...
     def update_settings(self, request: UpdateSettingsRequest) -> SettingsSnapshot: ...
     def test_mysql_connection(self, request: MySqlConnectionRequest) -> MySqlConnectionResult: ...
@@ -242,9 +276,12 @@ class LocalConsoleAdministration:
 
     def knowledge(self) -> tuple[KnowledgeDocumentView, ...]:
         team = self._team()
-        selected = set(self._saved_config.team_knowledge_paths)
+        selected = set(
+            effective_team_knowledge_paths(team, self._saved_config.team_knowledge_paths)
+        )
         return tuple(
             KnowledgeDocumentView(
+                scope="team",
                 manifest=manifest,
                 selected=manifest.normalized_relative_path in selected,
             )
@@ -257,8 +294,73 @@ class LocalConsoleAdministration:
             filename=filename,
             content=content,
         )
-        selected = manifest.normalized_relative_path in self._saved_config.team_knowledge_paths
-        return KnowledgeDocumentView(manifest=manifest, selected=selected)
+        selected = manifest.normalized_relative_path in effective_team_knowledge_paths(
+            team, self._saved_config.team_knowledge_paths
+        )
+        return KnowledgeDocumentView(scope="team", manifest=manifest, selected=selected)
+
+    def update_team_knowledge_selection(
+        self, request: UpdateKnowledgeSelectionRequest
+    ) -> tuple[KnowledgeDocumentView, ...]:
+        team = self._team()
+        manifests = TeamKnowledgeDocumentStore(team).list()
+        paths = _selected_document_paths(manifests, request.document_ids)
+        try:
+            with self._lock:
+                TeamKnowledgeSelectionStore(team).save(paths)
+        except KnowledgeSelectionError as error:
+            raise AdministrationError("Team knowledge selection could not be saved") from error
+        return self.knowledge()
+
+    def project_knowledge(self, project_id: str) -> tuple[KnowledgeDocumentView, ...]:
+        project = self._project(project_id)
+        selected = set(
+            effective_project_knowledge_paths(
+                project,
+                self._legacy_project_knowledge_paths(project),
+            )
+        )
+        return tuple(
+            KnowledgeDocumentView(
+                scope="project",
+                project_id=project.manifest.project_id,
+                manifest=manifest,
+                selected=manifest.normalized_relative_path in selected,
+            )
+            for manifest in ProjectKnowledgeDocumentStore(project).list()
+        )
+
+    def import_project_document(
+        self, project_id: str, *, filename: str, content: bytes
+    ) -> KnowledgeDocumentView:
+        project = self._project(project_id)
+        manifest = ProjectKnowledgeDocumentStore(project).import_document(
+            filename=filename,
+            content=content,
+        )
+        selected = manifest.normalized_relative_path in effective_project_knowledge_paths(
+            project,
+            self._legacy_project_knowledge_paths(project),
+        )
+        return KnowledgeDocumentView(
+            scope="project",
+            project_id=project.manifest.project_id,
+            manifest=manifest,
+            selected=selected,
+        )
+
+    def update_project_knowledge_selection(
+        self, project_id: str, request: UpdateKnowledgeSelectionRequest
+    ) -> tuple[KnowledgeDocumentView, ...]:
+        project = self._project(project_id)
+        manifests = ProjectKnowledgeDocumentStore(project).list()
+        paths = _selected_document_paths(manifests, request.document_ids)
+        try:
+            with self._lock:
+                ProjectKnowledgeSelectionStore(project).save(paths)
+        except KnowledgeSelectionError as error:
+            raise AdministrationError("Project knowledge selection could not be saved") from error
+        return self.project_knowledge(project_id)
 
     def settings(self) -> SettingsSnapshot:
         names = {self._saved_config.database.dsn_env}
@@ -378,12 +480,17 @@ class LocalConsoleAdministration:
             for route in self._saved_config.model_routes
         )
         try:
-            imported = len(TeamKnowledgeDocumentStore(self._team()).list())
+            team = self._team()
+            imported = len(TeamKnowledgeDocumentStore(team).list())
+            selected = len(
+                effective_team_knowledge_paths(team, self._saved_config.team_knowledge_paths)
+            )
             team_prepared = True
         except AdministrationError:
             imported = 0
+            selected = 0
             team_prepared = False
-        except (OSError, ValueError) as error:
+        except (KnowledgeSelectionError, OSError, ValueError) as error:
             raise AdministrationError("Team knowledge status is unavailable") from error
         return RuntimeStatusSnapshot(
             config_path=str(self.config_path),
@@ -401,7 +508,7 @@ class LocalConsoleAdministration:
             codex=codex,
             team_prepared=team_prepared,
             team_knowledge_imported=imported,
-            team_knowledge_selected=len(self._saved_config.team_knowledge_paths),
+            team_knowledge_selected=selected,
             model_routes=routes,
         )
 
@@ -462,6 +569,19 @@ class LocalConsoleAdministration:
         except (OSError, ValueError) as error:
             raise AdministrationError("team workspace is invalid") from error
 
+    def _project(self, project_id: str) -> ProjectWorkspace:
+        try:
+            return self._team().project_registry().open(project_id)
+        except (OSError, ValueError) as error:
+            raise AdministrationError("Project workspace is invalid") from error
+
+    def _legacy_project_knowledge_paths(self, project: ProjectWorkspace) -> tuple[str, ...]:
+        return (
+            self._saved_config.project_knowledge_paths
+            if self._saved_config.default_project_id == project.manifest.project_id
+            else ()
+        )
+
     @staticmethod
     def _project_summary(project: ProjectWorkspace) -> ProjectSummary:
         return ProjectSummary(
@@ -508,6 +628,19 @@ def _runtime_variable_names(config: ProductionConfig) -> set[str]:
     return names
 
 
+def _selected_document_paths(
+    manifests: tuple[KnowledgeDocumentManifest, ...] | tuple[ProjectKnowledgeDocumentManifest, ...],
+    document_ids: tuple[KnowledgeDocumentId, ...],
+) -> tuple[str, ...]:
+    available = {manifest.document_id: manifest for manifest in manifests}
+    unknown = sorted(set(document_ids) - set(available))
+    if unknown:
+        raise AdministrationError("knowledge selection contains an unknown document")
+    return tuple(
+        sorted(available[document_id].normalized_relative_path for document_id in document_ids)
+    )
+
+
 def _codex_status(executable: str, environment: Mapping[str, str]) -> CodexRuntimeStatus:
     if "/" in executable:
         candidate = Path(executable).expanduser()
@@ -542,5 +675,6 @@ __all__ = [
     "SecretStatus",
     "SettingsSnapshot",
     "TeamSummary",
+    "UpdateKnowledgeSelectionRequest",
     "UpdateSettingsRequest",
 ]

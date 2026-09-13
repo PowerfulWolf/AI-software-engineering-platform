@@ -10,6 +10,7 @@ let consoleDeliveryReady = null;
 let administrationAvailable = null;
 let administrationProjects = [];
 let knowledgeDocuments = [];
+let knowledgeScope = "team";
 let settingsSnapshot = null;
 let settingsDraft = null;
 let runtimeVariablesDraft = {};
@@ -81,12 +82,12 @@ const pageCopy = {
     "先选择 Project，再创建 Requirement 并选择该 Project 下涉及的 1–N 个代码目录。",
   ],
   knowledge: [
-    "团队知识库",
-    "团队通用知识适用于多个 Project；Project 自有背景和规范保存在各自 Project workspace。",
+    "知识库",
+    "团队通用知识适用于所有 Project；当前 Project 知识只用于该 Project 的新需求。",
   ],
   settings: [
     "设置",
-    "配置平台目录、数据库、模型与团队知识。保存后按页面提示重启本地服务。",
+    "配置平台目录、数据库与模型。保存后按页面提示决定是否重启本地服务。",
   ],
   status: [
     "平台状态",
@@ -775,6 +776,17 @@ async function adminFetch(url, options = {}) {
   return payload;
 }
 async function loadKnowledge() {
+  if (knowledgeScope === "project") {
+    const projectId = currentProjectId();
+    knowledgeDocuments = projectId
+      ? await adminFetch(
+          "/api/v1/admin/projects/" +
+            encodeURIComponent(projectId) +
+            "/knowledge",
+        )
+      : [];
+    return;
+  }
   knowledgeDocuments = await adminFetch("/api/v1/admin/team/knowledge");
 }
 async function loadAdministration() {
@@ -831,12 +843,56 @@ function renderKnowledge(content) {
   }
   if (administrationNotice?.page === "knowledge")
     content.append(el("div", administrationNotice.text, "admin-notice"));
+
+  const scopeSwitch = el("div", undefined, "scope-switch");
+  for (const [scope, title] of [
+    ["team", "团队通用知识"],
+    ["project", "当前 Project 知识"],
+  ]) {
+    const control = button(
+      title,
+      async () => {
+        knowledgeScope = scope;
+        administrationNotice = null;
+        await loadKnowledge();
+        render();
+      },
+      knowledgeScope === scope ? "selected" : "",
+    );
+    control.setAttribute("aria-pressed", String(knowledgeScope === scope));
+    scopeSwitch.append(control);
+  }
+  content.append(scopeSwitch);
+  if (knowledgeScope === "project" && !currentProjectId()) {
+    content.append(el("div", "请先在页面顶部选择一个 Project。", "empty"));
+    return;
+  }
+
+  const project = snapshot.projects.find(
+    (item) => item.id === currentProjectId(),
+  );
+  const ownerName =
+    knowledgeScope === "team"
+      ? snapshot.team_name
+      : project?.name || currentProjectId();
   const top = el("div", undefined, "row request-heading");
   top.append(
-    el("h2", `${snapshot.team_name} · 已导入文档`),
+    el(
+      "h2",
+      `${ownerName} · ${knowledgeScope === "team" ? "团队通用知识" : "Project 知识"}`,
+    ),
     el("span", `${knowledgeDocuments.length} 份`, "badge"),
   );
   content.append(top);
+  content.append(
+    el(
+      "p",
+      knowledgeScope === "team"
+        ? "启用后用于所有 Project 的新需求。"
+        : "启用后只用于当前 Project 的新需求，不影响其他 Project。",
+      "muted",
+    ),
+  );
   const form = el("form", undefined, "knowledge-upload admin-panel");
   const file = el("input");
   file.type = "file";
@@ -862,9 +918,14 @@ function renderKnowledge(content) {
     feedback.className = "form-feedback";
     feedback.textContent = "正在读取并校验文档…";
     try {
+      const base =
+        knowledgeScope === "team"
+          ? "/api/v1/admin/team/knowledge"
+          : "/api/v1/admin/projects/" +
+            encodeURIComponent(currentProjectId()) +
+            "/knowledge";
       await adminFetch(
-        "/api/v1/admin/team/knowledge?filename=" +
-          encodeURIComponent(selectedFile.name),
+        base + "?filename=" + encodeURIComponent(selectedFile.name),
         {
           method: "POST",
           headers: { "Content-Type": "application/octet-stream" },
@@ -874,7 +935,7 @@ function renderKnowledge(content) {
       await loadKnowledge();
       administrationNotice = {
         page: "knowledge",
-        text: "导入完成。请到设置页选择它并保存，重启后用于新需求。",
+        text: "导入完成。启用后会立即用于之后的新需求，无需重启。",
       };
       render();
     } catch (error) {
@@ -886,7 +947,15 @@ function renderKnowledge(content) {
   });
   content.append(form);
   if (!knowledgeDocuments.length) {
-    content.append(el("div", "尚未导入团队知识文档。", "empty"));
+    content.append(
+      el(
+        "div",
+        knowledgeScope === "team"
+          ? "尚未导入团队通用知识文档。"
+          : "当前 Project 尚未导入知识文档。",
+        "empty",
+      ),
+    );
     return;
   }
   for (const item of knowledgeDocuments) {
@@ -897,11 +966,7 @@ function renderKnowledge(content) {
       el("strong", manifest.source_name),
       el(
         "span",
-        item.selected
-          ? settingsSnapshot.restart_required
-            ? "已选择 · 重启后生效"
-            : "已用于新需求"
-          : "尚未启用",
+        item.selected ? "已用于新需求" : "尚未启用",
         item.selected ? "badge done" : "badge",
       ),
     );
@@ -916,15 +981,42 @@ function renderKnowledge(content) {
       el("p", "知识路径 · " + manifest.normalized_relative_path, "paths"),
       el("p", "导入时间 · " + time(manifest.imported_at), "muted"),
     );
-    if (!item.selected)
-      card.append(
-        button("前往设置并启用", async () => {
-          page = "settings";
-          await loadAdministration();
-          updateNavigation();
-          render();
-        }),
-      );
+    const toggle = button(item.selected ? "停用" : "用于新需求", async () => {
+      toggle.disabled = true;
+      const documentIds = knowledgeDocuments
+        .filter(
+          (candidate) =>
+            candidate.manifest.document_id !== manifest.document_id &&
+            candidate.selected,
+        )
+        .map((candidate) => candidate.manifest.document_id);
+      if (!item.selected) documentIds.push(manifest.document_id);
+      const endpoint =
+        knowledgeScope === "team"
+          ? "/api/v1/admin/team/knowledge/selection"
+          : "/api/v1/admin/projects/" +
+            encodeURIComponent(currentProjectId()) +
+            "/knowledge/selection";
+      try {
+        knowledgeDocuments = await adminFetch(endpoint, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ document_ids: documentIds }),
+        });
+        administrationNotice = {
+          page: "knowledge",
+          text: "知识选择已生效，无需重启；已存在需求不会被静默改写。",
+        };
+        render();
+      } catch (error) {
+        administrationNotice = {
+          page: "knowledge",
+          text: error instanceof Error ? error.message : "知识选择保存失败。",
+        };
+        render();
+      }
+    });
+    card.append(toggle);
     content.append(card);
   }
 }
@@ -1125,31 +1217,6 @@ function renderSettings(content) {
     testConnection,
   );
   form.append(database);
-  const knowledge = el("section", undefined, "settings-subsection");
-  knowledge.append(
-    el("h3", "用于新需求的团队通用知识"),
-    el(
-      "p",
-      "知识选择变化会改变后续准备摘要；已经批准的交付不会被静默重解释。",
-      "muted",
-    ),
-  );
-  if (!knowledgeDocuments.length)
-    knowledge.append(el("p", "Team 尚未导入通用知识文档。", "muted"));
-  for (const item of knowledgeDocuments) {
-    const control = el("input");
-    const path = item.manifest.normalized_relative_path;
-    control.type = "checkbox";
-    control.checked = settingsDraft.team_knowledge_paths.includes(path);
-    control.addEventListener("change", () => {
-      const selected = new Set(settingsDraft.team_knowledge_paths);
-      if (control.checked) selected.add(path);
-      else selected.delete(path);
-      settingsDraft.team_knowledge_paths = [...selected].sort();
-    });
-    knowledge.append(field(item.manifest.source_name, control, path));
-  }
-  form.append(knowledge);
   const routes = el("section", undefined, "settings-subsection");
   const routesTop = el("div", undefined, "row");
   routesTop.append(
