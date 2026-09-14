@@ -35,6 +35,24 @@
           "default": null,
           "title": "Provider"
         },
+        "reasoning_effort": {
+          "anyOf": [
+            {
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "xhigh"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reasoning Effort"
+        },
         "system_prompt_ref": {
           "anyOf": [
             {

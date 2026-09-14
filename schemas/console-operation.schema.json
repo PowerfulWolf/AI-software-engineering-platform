@@ -28,6 +28,10 @@
       "type": "string",
       "pattern": "^delivery_[a-z0-9][a-z0-9_-]{2,127}$"
     },
+    "attachment_id": {
+      "type": "string",
+      "pattern": "^requirement_attachment_[a-f0-9]{40}$"
+    },
     "create_project": {
       "type": "object",
       "additionalProperties": false,
@@ -67,15 +71,26 @@
         "project_id",
         "delivery_id",
         "expected_checkpoint_sha256",
-        "message"
+        "message",
+        "screenshot_ids"
       ],
       "properties": {
         "action": {"const": "PRODUCT_REPLY"},
         "project_id": {"$ref": "#/$defs/project_id"},
         "delivery_id": {"$ref": "#/$defs/delivery_id"},
         "expected_checkpoint_sha256": {"$ref": "#/$defs/digest"},
-        "message": {"type": "string", "minLength": 1, "maxLength": 20000}
-      }
+        "message": {"type": "string", "maxLength": 20000},
+        "screenshot_ids": {
+          "type": "array",
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/attachment_id"}
+        }
+      },
+      "anyOf": [
+        {"properties": {"message": {"minLength": 1}}},
+        {"properties": {"screenshot_ids": {"minItems": 1}}}
+      ]
     },
     "product_approval": {
       "type": "object",

@@ -11,9 +11,11 @@ from ai_software_engineer.domain import (
     ModelPolicy,
     ModelRoute,
     ModelRouteReason,
+    ModelRouteReference,
     RiskModelFloor,
     RiskTier,
     RoleAssignment,
+    RoleModelRoutes,
     RunDemand,
     TaskLease,
     TeamRole,
@@ -295,6 +297,50 @@ def test_model_router_selects_default_and_risk_floor_deterministically() -> None
     assert high.selection.tier is BrainTier.REASONING
     assert ModelRouteReason.RISK_FLOOR in high.selection.reasons
     assert low.to_wire() == router.route(demand(), agent(), policy(), now=NOW).to_wire()
+
+
+def test_model_router_selects_exact_reasoning_route_for_same_model() -> None:
+    base = policy()
+    routes = (
+        ModelRoute(
+            provider="provider_a",
+            model="shared_model",
+            reasoning_effort="medium",
+            tier=BrainTier.STANDARD,
+        ),
+        ModelRoute(
+            provider="provider_a",
+            model="shared_model",
+            reasoning_effort="high",
+            tier=BrainTier.STANDARD,
+        ),
+    )
+    configured = base.model_copy(
+        update={
+            "routes": routes,
+            "role_routes": (
+                RoleModelRoutes(
+                    role=AgentRole.CODER,
+                    routes=(
+                        ModelRouteReference(
+                            provider="provider_a",
+                            model="shared_model",
+                            reasoning_effort="high",
+                        ),
+                    ),
+                ),
+            ),
+            "risk_floors": tuple(
+                floor.model_copy(update={"minimum_tier": BrainTier.STANDARD})
+                for floor in base.risk_floors
+            ),
+        }
+    )
+
+    selected = ModelRouter().select(demand(), agent(), configured, now=NOW)
+
+    assert selected.model == "shared_model"
+    assert selected.reasoning_effort == "high"
 
 
 def test_model_router_escalates_for_complexity_and_prior_failures() -> None:

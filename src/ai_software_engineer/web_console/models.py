@@ -21,6 +21,7 @@ from ai_software_engineer.domain.identity import ProjectId, TeamId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.manager.delivery import CheckpointDigest
 from ai_software_engineer.manager.delivery_checkpoint import DeliveryId
+from ai_software_engineer.multi_directory.attachments import RequirementAttachmentId
 from ai_software_engineer.project_workspace import ProjectName
 
 OperationId = Annotated[str, StringConstraints(pattern=r"^operation_[a-f0-9]{32}$")]
@@ -78,7 +79,16 @@ class ProductReplyIntent(DomainModel):
     project_id: ProjectId
     delivery_id: DeliveryId
     expected_checkpoint_sha256: CheckpointDigest
-    message: Annotated[str, StringConstraints(min_length=1, max_length=20_000)]
+    message: Annotated[str, StringConstraints(max_length=20_000)] = ""
+    screenshot_ids: Annotated[tuple[RequirementAttachmentId, ...], Field(max_length=4)] = ()
+
+    @model_validator(mode="after")
+    def require_reply_content(self) -> Self:
+        if not self.message.strip() and not self.screenshot_ids:
+            raise ValueError("Product reply requires text or screenshots")
+        if len(set(self.screenshot_ids)) != len(self.screenshot_ids):
+            raise ValueError("Product reply screenshots must be unique")
+        return self
 
 
 class ProductApprovalIntent(DomainModel):

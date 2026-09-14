@@ -28,7 +28,7 @@ from ai_software_engineer.config import (
     ProductionConfigError,
     ProviderRouteConfig,
 )
-from ai_software_engineer.domain import AgentDefinition, AgentRole
+from ai_software_engineer.domain import AgentDefinition, AgentRole, TeamRole
 from ai_software_engineer.git import GitWorktreeManager
 from ai_software_engineer.manager.dispatch import (
     DeliveryAllocation,
@@ -103,6 +103,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             endpoint=route.endpoint,
             api_key=api_key,
             model=route.model,
+            reasoning_effort=route.reasoning_effort,
             agent=definition,
             prompt_builder=prompt_builder,
         )
@@ -228,6 +229,7 @@ class DispatchDeliveryAgentAdapter:
                     provider=route.provider,
                     model=route.model,
                     adapter=adapter,
+                    reasoning_effort=route.reasoning_effort,
                 )
             )
         return FallbackAgentAdapter(
@@ -241,15 +243,21 @@ class DispatchDeliveryAgentAdapter:
         self,
         definition: AgentDefinition,
     ) -> tuple[ProviderRouteConfig, ...]:
-        routes = self._config.enabled_routes()
+        routes = self._config.routes_for(TeamRole(definition.role.value))
         primary = tuple(
             route
             for route in routes
-            if route.provider == definition.provider and route.model == definition.model
+            if route.provider == definition.provider
+            and route.model == definition.model
+            and (
+                definition.reasoning_effort is None
+                or route.reasoning_effort == definition.reasoning_effort
+            )
         )
         if len(primary) != 1:
             raise ProductionConfigError(
-                f"dispatch route is not enabled: {definition.provider}/{definition.model}"
+                "dispatch route is unavailable or ambiguous: "
+                f"{definition.provider}/{definition.model}@{definition.reasoning_effort}"
             )
         selected = primary[0]
         return (selected, *(route for route in routes if route is not selected))

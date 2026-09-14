@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.requests import Request
+from starlette.responses import Response
+from starlette.types import Message, Scope
 
 from ai_software_engineer.config import ProductionConfig, ProductionConfigError
+from ai_software_engineer.multi_directory.attachments import RequirementScreenshot
 from ai_software_engineer.team_view.models import TeamSnapshot
 from ai_software_engineer.team_workspace import TeamWorkspace
 from ai_software_engineer.web_console import (
@@ -17,6 +22,7 @@ from ai_software_engineer.web_console import (
     create_console_app,
 )
 from ai_software_engineer.web_console.host import production_console_app
+from ai_software_engineer.web_console.transport import _screenshot_body
 
 
 class _Console:
@@ -60,6 +66,43 @@ class _Reader:
         )
 
 
+class _DirectoryChooser:
+    def __init__(self, *values: Path) -> None:
+        self.values = tuple(str(value) for value in values)
+
+    def choose(self) -> tuple[str, ...]:
+        return self.values
+
+
+class _ScreenshotAdministration:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, str, str, bytes]] = []
+
+    def upload_requirement_screenshot(
+        self,
+        project_id: str,
+        delivery_id: str,
+        expected_checkpoint_sha256: str,
+        *,
+        filename: str,
+        content: bytes,
+    ) -> RequirementScreenshot:
+        self.calls.append((project_id, delivery_id, expected_checkpoint_sha256, filename, content))
+        provisional = RequirementScreenshot(
+            id="requirement_attachment_" + "a" * 40,
+            project_id=project_id,
+            delivery_id=delivery_id,
+            source_name=filename,
+            media_type="image/png",
+            source_bytes=len(content),
+            source_sha256="b" * 64,
+            source_relative_path="attachments/fixture/source.png",
+            uploaded_at=datetime(2026, 9, 12, tzinfo=UTC),
+            manifest_sha256="0" * 64,
+        )
+        return provisional.model_copy(update={"manifest_sha256": provisional.recompute_digest()})
+
+
 def _payload(tmp_path: Path, *, name: str = "Frontend delivery") -> dict[str, object]:
     return {
         "idempotency_key": "browser-action-0001",
@@ -99,8 +142,82 @@ def test_web_transport_composes_assets_snapshot_and_durable_submission(tmp_path:
         assert client.get("/api/v1/operations").json() == [submitted.json()]
         assert submitted.headers["cache-control"] == "no-store"
         assert "form-action 'none'" in submitted.headers["content-security-policy"]
+        assert "img-src 'self' blob: data:" in submitted.headers["content-security-policy"]
 
     assert console.started and console.closed
+
+
+def test_directory_picker_and_requirement_screenshot_use_local_bounded_endpoints(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "backend"
+    second = tmp_path / "frontend"
+    first.mkdir()
+    second.mkdir()
+    administration = _ScreenshotAdministration()
+    app = create_console_app(
+        _Console(),
+        _Reader(),
+        team_id="team_test",
+        port=8765,
+        directory_chooser=_DirectoryChooser(first, second),
+        administration=administration,  # type: ignore[arg-type]
+    )
+    screenshot = b"\x89PNG\r\n\x1a\nfixture"
+    delivery_id = "delivery_multi_" + "a" * 40
+    checkpoint = "c" * 64
+
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        selected = client.post("/api/v1/admin/directories/select")
+        uploaded = client.post(
+            "/api/v1/admin/projects/project_web/requirements/"
+            + delivery_id
+            + "/screenshots?filename=checkout.png&checkpoint="
+            + checkpoint,
+            content=screenshot,
+            headers={"Content-Type": "application/octet-stream"},
+        )
+
+    assert selected.json() == {
+        "directories": [str(first), str(second)],
+        "cancelled": False,
+    }
+    assert uploaded.status_code == 201
+    assert uploaded.json()["id"] == "requirement_attachment_" + "a" * 40
+    assert administration.calls == [
+        ("project_web", delivery_id, checkpoint, "checkout.png", screenshot)
+    ]
+
+
+def test_screenshot_stream_stops_at_limit_without_content_length(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "ai_software_engineer.web_console.transport.MAX_REQUIREMENT_SCREENSHOT_BYTES", 4
+    )
+    scope: Scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/screenshots",
+        "headers": [(b"content-type", b"application/octet-stream")],
+        "query_string": b"",
+        "scheme": "http",
+        "server": ("127.0.0.1", 8765),
+        "client": ("127.0.0.1", 1234),
+        "http_version": "1.1",
+    }
+    events: list[Message] = [
+        {"type": "http.request", "body": b"123", "more_body": True},
+        {"type": "http.request", "body": b"45", "more_body": False},
+    ]
+
+    async def receive() -> Message:
+        return events.pop(0)
+
+    result = asyncio.run(_screenshot_body(Request(scope, receive)))
+
+    assert isinstance(result, Response)
+    assert result.status_code == 413
 
 
 def test_web_transport_rejects_cross_origin_non_json_and_invalid_payload(tmp_path: Path) -> None:
@@ -377,6 +494,16 @@ def test_administration_endpoints_create_project_import_document_and_save_settin
     assert status.status_code == 200
     assert status.json()["database"]["connection"] == "CONNECTED"
     assert status.json()["runtime_environment_path"].endswith("/runtime.env")
+    assert [item["role"] for item in status.json()["agent_model_routes"]] == [
+        "manager",
+        "product",
+        "designer",
+        "planner",
+        "coder",
+        "qa",
+        "reviewer",
+    ]
+    assert status.json()["agent_model_routes"][0]["policy_source"] == "global_default"
     assert mysql.json() == {"connected": True, "message": "MySQL 连接成功。"}
     assert "password" not in status.text
     assert "password" not in mysql.text

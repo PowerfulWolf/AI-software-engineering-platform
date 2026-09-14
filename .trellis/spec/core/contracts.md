@@ -636,7 +636,8 @@ Wire contracts：`designer-context.schema.json`、`designer-agent-run.schema.jso
   policy snapshot；collection 排序不影响 identity，phase 顺序必须影响 identity；
 - commit-dispatch 必须从权威端口验证 exact current READY revision 和 durable Planner run/plan/checkpoint，验证
   未过期 preview，并由 `DispatchAuthority` 读取 current workforce snapshot；调用方不能自报 current facts；
-- commit 在内存中重新运行相同 engines，并比较 Agent 与 policy/version/provider/model/tier 语义；
+- commit 在内存中重新运行相同 engines，并比较 Agent 与
+  policy/version/provider/model/reasoning-effort/tier 语义；
   RunDemand 必须由 exact Task + ExecutionPlan 机械派生，不能由调用方注入；
 - 三阶段全部成功后，必须再次读取 current READY 与完整 Planner handoff，再只调用一次
   `DispatchAuthority.commit_if_current`。生产实现必须先获取所有 request revision writer 共享的 Product

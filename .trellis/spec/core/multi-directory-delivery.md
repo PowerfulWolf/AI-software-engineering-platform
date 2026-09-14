@@ -21,6 +21,8 @@ ase request resume DELIVERY_ID
 `TeamHost.requirement_entry() -> JointDeliveryService` 装配生产后端。
 `create(CreateRequirement) / reply(ReplyToProduct) / approve(ApproveProductSpec)
 / resume(ResumeProjectDelivery) / status(str)` 均返回 `JointDeliveryResult(checkpoint=...)`。
+`ReplyToProduct` 接受可为空的 `message` 和最多 4 个 `screenshot_ids`，但两者不能同时为空。
+`RequirementAttachmentStore.put/get/source_path` 管理 Project Requirement sidecar 中的截图。
 旧 `ase project start DIR... --requirement TEXT` 兼容：单根目录走原生、多目录走联合服务；
 单仓模块目录应使用 `request create`，由 scope discovery 归并为真实仓库根。
 
@@ -34,6 +36,12 @@ ase request resume DELIVERY_ID
 - create 准备所有目录后停在 READY_FOR_DISCUSSION，不调用模型。同名+同 Project+同 scope（含
   base SHA）幂等恢复；新需求使用新名称。dialogue、product_spec、approval、design、plan、children、
   integration、attempts 和 next_action 都保存在带 sequence/前后 SHA 的 JointCheckpoint。
+- 截图先作为不可变 `RequirementScreenshot` 存入
+  `requirements/<delivery_id>/attachments/<attachment_id>/`；ID 绑定 Project、Delivery、文件名和
+  内容 digest。Dialogue 保存 manifest 而不是宿主临时路径。Product 调用时平台重新验证 manifest、
+  source digest 和 owner lineage，再将真实路径作为 provider image input；Designer/Planner 不接收图片。
+- 单次回复最多 4 张、单张最多 10 MB、整个 Product 对话最多 12 张；支持 PNG/JPEG/WebP。
+  相同来源重传幂等返回原 identity，时间戳不参与来源冲突判断。
 - 主状态链：PREPARING → READY_FOR_DISCUSSION → PRODUCT_DISCOVERY → WAITING_PRODUCT_APPROVAL
   → DESIGNING → PLANNING → DELIVERING → INTEGRATING → DONE；另有 WAITING_PRODUCT_REPLY、
   WAITING_HUMAN 和 BLOCKED。Task 的原生状态机不变。
@@ -55,6 +63,8 @@ ase request resume DELIVERY_ID
 - 输入必须是存在的绝对目录；规范化别名、重复和父子选择，同一仓库合并 scope。
 - 所有目录先发现/编译规范；任何规范冲突阻止 Product，交由人类处理。
 - Product ID/digest 精确批准；旧 checkpoint 的 reply/approve 不得改变新事实。
+- 空文字只有在提供有效截图时允许；附件必须属于 exact Project/Delivery，stale checkpoint、已进入
+  Design/Delivery 的需求、缺失/篡改/foreign attachment 均失败关闭且不调用 Product。
 - Design 必须划分全部 unit 为 write 或 reference-only；覆盖全部产品 requirement IDs；
   component paths 不得扩大 selected scopes。接口的 producer/consumer 必须属于本次输入。
 - Planner 只给有界串行顺序，不引入通用 DAG；依赖不得指向尚未完成的 write unit。
@@ -75,8 +85,8 @@ ase request resume DELIVERY_ID
 ## 5. Good / Base / Bad Cases
 
 - Good：后端与非相邻前端，一次批准、独立候选、读完整候选集的联合测试通过后 DONE。
-- Base：一个目录使用同一 request 入口；参考目录不创建无意义 Coder Task。
-- Bad：分别发起产品会话，或用两个单仓 PASS 冒充接口兼容验证。
+- Base：一个目录使用同一 request 入口；纯文字 Product 对话保持兼容；参考目录不创建无意义 Coder Task。
+- Bad：分别发起产品会话、把截图转成未校验路径塞进 prompt，或用两个单仓 PASS 冒充接口兼容验证。
 
 ## 6. Tests Required
 
@@ -85,7 +95,7 @@ ase request resume DELIVERY_ID
 structured provider + 真实 Git worktree + MySQL 验证，不消耗真实模型额度。
 
 对应 `test_directory_scope.py`、`test_joint_contracts.py`、`test_team_workspace.py`、
-`test_team_host.py` 与 `tests/e2e/test_joint_delivery.py`。五份 joint/request canonical Schema
+`test_team_host.py`、`test_requirement_attachments.py` 与 `tests/e2e/test_joint_delivery.py`。五份 joint/request canonical Schema
 必须与 Pydantic 完全一致。全量 MySQL 回归不可由独立 E2E 或 skipped suite 替代。
 
 ## 7. Wrong vs Correct
@@ -94,6 +104,10 @@ Wrong：`for root in roots: native.start(root, same_requirement)`，各自产品
 
 Correct：联合 Product + 人工批准 → 联合 Design/Plan → 确定性原生投影 → 各仓独立 QA/Review
 → pinned integration evidence → joint DONE。
+
+Wrong：`client.complete(input_payload={"screenshot_path": browser_text})`。
+
+Correct：`attachment_store.get(...) → digest/owner validation → client.complete(input_images=...)`。
 
 ## 8. Planner coverage rejection feedback (T038)
 

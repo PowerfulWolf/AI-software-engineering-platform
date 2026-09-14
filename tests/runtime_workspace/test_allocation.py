@@ -186,6 +186,7 @@ def test_resolver_builds_auditable_allocation_and_existing_agent_definition(
     assert first.agent_definition.id == assignment.agent_id
     assert first.agent_definition.model == selection.model
     assert first.agent_definition.provider == selection.provider
+    assert first.agent_definition.reasoning_effort == selection.reasoning_effort
     assert first.code_root == binding.repository_root
     assert first.allocation.tool_policy_ref.startswith(f"policy://{binding.repository_id}/coder/")
 
@@ -259,6 +260,17 @@ def test_resolver_rejects_policy_route_and_context_mismatches(tmp_path: Path) ->
             assignment=assignment,
             lease=lease,
             selection=invalid_selection,
+            context_manifest_id=context.context_id,
+            compiled_spec=compiled,
+            allocated_at=NOW + timedelta(minutes=1),
+        )
+    invalid_reasoning = selection.model_copy(update={"reasoning_effort": "high"})
+    with pytest.raises(RuntimeAllocationError, match="absent from ModelPolicy"):
+        resolver.resolve(
+            work_item=item,
+            assignment=assignment,
+            lease=lease,
+            selection=invalid_reasoning,
             context_manifest_id=context.context_id,
             compiled_spec=compiled,
             allocated_at=NOW + timedelta(minutes=1),

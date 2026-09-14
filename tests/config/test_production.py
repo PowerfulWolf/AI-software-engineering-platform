@@ -12,6 +12,7 @@ import pytest
 from pydantic import ValidationError
 
 from ai_software_engineer.config import ProductionConfig, ProductionConfigError
+from ai_software_engineer.domain import TeamRole
 
 
 def _payload(tmp_path: Path) -> dict[str, object]:
@@ -119,13 +120,138 @@ def test_codex_route_rejects_embedded_endpoint_or_key(tmp_path: Path) -> None:
         ProductionConfig.model_validate(payload)
 
 
-def test_duplicate_provider_model_route_is_rejected(tmp_path: Path) -> None:
+def test_same_provider_model_supports_multiple_reasoning_efforts(tmp_path: Path) -> None:
+    payload = _payload(tmp_path)
+    routes = payload["model_routes"]
+    assert isinstance(routes, list)
+    routes.append({**routes[0], "reasoning_effort": "high"})
+
+    config = ProductionConfig.model_validate(payload)
+
+    assert [route.reasoning_effort for route in config.enabled_routes()] == [
+        "medium",
+        "high",
+    ]
+
+
+def test_duplicate_provider_model_reasoning_route_is_rejected(tmp_path: Path) -> None:
     payload = _payload(tmp_path)
     routes = payload["model_routes"]
     assert isinstance(routes, list)
     routes.append(dict(routes[0]))
 
-    with pytest.raises(ValidationError, match="provider/model routes"):
+    with pytest.raises(ValidationError, match="provider/model/reasoning routes"):
+        ProductionConfig.model_validate(payload)
+
+
+def test_each_agent_can_have_an_independent_primary_and_fallback_order(
+    tmp_path: Path,
+) -> None:
+    payload = _payload(tmp_path)
+    routes = payload["model_routes"]
+    assert isinstance(routes, list)
+    second = routes[1]
+    assert isinstance(second, dict)
+    second["enabled"] = True
+    roles = ["manager", "product", "designer", "planner", "coder", "qa", "reviewer"]
+    payload["agent_model_routes"] = [
+        {
+            "role": role,
+            "routes": (
+                [
+                    {"provider": "qwen", "model": "qwen3.8-max"},
+                    {"provider": "codex", "model": "gpt-5.5"},
+                ]
+                if role == "product"
+                else [
+                    {"provider": "codex", "model": "gpt-5.5"},
+                    {"provider": "qwen", "model": "qwen3.8-max"},
+                ]
+            ),
+        }
+        for role in roles
+    ]
+
+    config = ProductionConfig.model_validate(payload)
+
+    assert [route.model for route in config.routes_for(TeamRole.PRODUCT)] == [
+        "qwen3.8-max",
+        "gpt-5.5",
+    ]
+    assert [route.model for route in config.routes_for(TeamRole.CODER)] == [
+        "gpt-5.5",
+        "qwen3.8-max",
+    ]
+
+
+def test_each_agent_can_select_a_distinct_reasoning_effort_for_the_same_model(
+    tmp_path: Path,
+) -> None:
+    payload = _payload(tmp_path)
+    routes = payload["model_routes"]
+    assert isinstance(routes, list)
+    routes.append({**routes[0], "reasoning_effort": "high"})
+    roles = ["manager", "product", "designer", "planner", "coder", "qa", "reviewer"]
+    payload["agent_model_routes"] = [
+        {
+            "role": role,
+            "routes": [
+                {
+                    "provider": "codex",
+                    "model": "gpt-5.5",
+                    "reasoning_effort": "high" if role == "coder" else "medium",
+                }
+            ],
+        }
+        for role in roles
+    ]
+
+    config = ProductionConfig.model_validate(payload)
+
+    assert config.routes_for(TeamRole.CODER)[0].reasoning_effort == "high"
+    assert config.routes_for(TeamRole.QA)[0].reasoning_effort == "medium"
+
+
+def test_legacy_agent_route_without_reasoning_requires_an_unambiguous_model(
+    tmp_path: Path,
+) -> None:
+    payload = _payload(tmp_path)
+    routes = payload["model_routes"]
+    assert isinstance(routes, list)
+    routes.append({**routes[0], "reasoning_effort": "high"})
+    payload["agent_model_routes"] = [
+        {
+            "role": role,
+            "routes": [{"provider": "codex", "model": "gpt-5.5"}],
+        }
+        for role in ("manager", "product", "designer", "planner", "coder", "qa", "reviewer")
+    ]
+
+    with pytest.raises(ValidationError, match="ambiguous without reasoning_effort"):
+        ProductionConfig.model_validate(payload)
+
+
+def test_agent_model_routes_require_all_roles_and_enabled_catalog_entries(
+    tmp_path: Path,
+) -> None:
+    payload = _payload(tmp_path)
+    payload["agent_model_routes"] = [
+        {
+            "role": "product",
+            "routes": [{"provider": "codex", "model": "gpt-5.5"}],
+        }
+    ]
+    with pytest.raises(ValidationError, match="cover every Team role"):
+        ProductionConfig.model_validate(payload)
+
+    payload["agent_model_routes"] = [
+        {
+            "role": role,
+            "routes": [{"provider": "qwen", "model": "qwen3.8-max"}],
+        }
+        for role in ("manager", "product", "designer", "planner", "coder", "qa", "reviewer")
+    ]
+    with pytest.raises(ValidationError, match="reference enabled model routes"):
         ProductionConfig.model_validate(payload)
 
 

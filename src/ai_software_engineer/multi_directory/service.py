@@ -10,6 +10,7 @@ from typing import Annotated, Protocol, TypeVar
 from pydantic import AwareDatetime, Field
 
 from ai_software_engineer.agents import StructuredModelClient
+from ai_software_engineer.domain.enums import TeamRole
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
@@ -21,6 +22,10 @@ from ai_software_engineer.manager.delivery import (
 from ai_software_engineer.manager.delivery_checkpoint import DeliveryStage
 from ai_software_engineer.manager.preparation import PrepareProjectStatus
 from ai_software_engineer.manager.production_agents import ProductDraft
+from ai_software_engineer.multi_directory.attachments import (
+    MAX_REQUIREMENT_SCREENSHOTS,
+    RequirementAttachmentStore,
+)
 from ai_software_engineer.multi_directory.integration_commands import planner_command_policy
 from ai_software_engineer.multi_directory.models import (
     ChildDelivery,
@@ -57,7 +62,7 @@ _POLICY = (
 
 class JointBackend(Protocol):
     def prepare(self, unit: DirectoryUnit) -> PreparedUnit: ...
-    def client(self, scope: DirectoryScope) -> StructuredModelClient: ...
+    def client(self, scope: DirectoryScope, role: TeamRole) -> StructuredModelClient: ...
     def deliver(self, checkpoint: JointCheckpoint, unit_id: str) -> ChildDelivery: ...
     def integrate(self, checkpoint: JointCheckpoint) -> IntegrationEvidence: ...
     def reconcile(self, checkpoint: JointCheckpoint) -> None: ...
@@ -86,6 +91,10 @@ class JointDeliveryService:
         if project.team.manifest != team.manifest:
             raise ValueError("Project is not served by this Team")
         self.journal = JointJournal(project.requirements_root)
+        self.attachments = RequirementAttachmentStore(
+            project.requirements_root,
+            project_id=project.manifest.project_id,
+        )
 
     def start(self, command: StartProjectDelivery) -> JointDeliveryResult:
         scope = discover_scope((command.repository_root, *command.additional_repository_roots))
@@ -154,13 +163,24 @@ class JointDeliveryService:
                 raise ValueError("joint Product is not accepting replies")
             if len(checkpoint.dialogue) >= 40:
                 raise ValueError("Product dialogue turn budget exhausted")
+            screenshots = tuple(
+                self.attachments.get(command.delivery_id, attachment_id)
+                for attachment_id in command.screenshot_ids
+            )
+            existing_screenshots = sum(len(message.screenshots) for message in checkpoint.dialogue)
+            if existing_screenshots + len(screenshots) > MAX_REQUIREMENT_SCREENSHOTS:
+                raise ValueError("Product screenshot budget exhausted")
             checkpoint = self._save(
                 checkpoint,
                 stage=JointStage.PRODUCT_DISCOVERY,
                 product_spec=None,
                 dialogue=(
                     *checkpoint.dialogue,
-                    DialogueMessage(speaker="user", text=command.message),
+                    DialogueMessage(
+                        speaker="user",
+                        text=command.message,
+                        screenshots=screenshots,
+                    ),
                 ),
                 next_action="Revise the unified ProductSpec.",
             )
@@ -451,12 +471,38 @@ class JointDeliveryService:
                 "write_unit_ids": [unit.unit_id for unit in checkpoint.design.units],
                 "interface_ids": [interface.id for interface in checkpoint.design.interfaces],
             }
-        result = self.backend.client(checkpoint.scope).complete(
-            instructions=_POLICY + instructions,
-            input_payload=payload,
-            output_schema=model.model_json_schema(),
-            timeout_seconds=600,
+        image_paths = (
+            tuple(
+                self.attachments.source_path(screenshot)
+                for message in checkpoint.dialogue
+                for screenshot in message.screenshots
+            )
+            if model is ProductDraft
+            else ()
         )
+        role = (
+            TeamRole.PRODUCT
+            if model is ProductDraft
+            else TeamRole.DESIGNER
+            if model is JointTechnicalDesign
+            else TeamRole.PLANNER
+        )
+        client = self.backend.client(checkpoint.scope, role)
+        if image_paths:
+            result = client.complete(
+                instructions=_POLICY + instructions,
+                input_payload=payload,
+                output_schema=model.model_json_schema(),
+                timeout_seconds=600,
+                input_images=image_paths,
+            )
+        else:
+            result = client.complete(
+                instructions=_POLICY + instructions,
+                input_payload=payload,
+                output_schema=model.model_json_schema(),
+                timeout_seconds=600,
+            )
         return model.model_validate(result.payload)
 
     def _attempt(self, checkpoint: JointCheckpoint, name: str, limit: int = 3) -> JointCheckpoint:

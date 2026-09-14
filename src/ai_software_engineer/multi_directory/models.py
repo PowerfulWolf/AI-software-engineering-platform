@@ -24,6 +24,7 @@ from ai_software_engineer.manager.production_agents import (
     ProductDraft,
     TechnicalDesignDraft,
 )
+from ai_software_engineer.multi_directory.attachments import RequirementScreenshot
 from ai_software_engineer.multi_directory.scope import Digest, DirectoryScope, UnitId
 
 
@@ -59,7 +60,15 @@ class PreparedUnit(DomainModel):
 
 class DialogueMessage(DomainModel):
     speaker: str
-    text: NonEmptyStr
+    text: Annotated[str, Field(max_length=20_000)] = ""
+    screenshots: tuple[RequirementScreenshot, ...] = ()
+
+    @model_validator(mode="after")
+    def require_content(self) -> Self:
+        if not self.text.strip() and not self.screenshots:
+            raise ValueError("dialogue message requires text or screenshots")
+        ensure_unique((item.id for item in self.screenshots), "dialogue screenshots")
+        return self
 
 
 class JointProductSpec(DomainModel):

@@ -38,6 +38,7 @@ from ai_software_engineer.web_console import (
     ConsoleOperation,
     ConsoleOperationStatus,
     CreateRequirementIntent,
+    ProductReplyIntent,
 )
 from tests.domain.factories import (
     make_agent,
@@ -171,6 +172,25 @@ def test_production_config_satisfies_the_canonical_schema(tmp_path: Path) -> Non
     )
 
     _assert_valid(config.to_wire(), "production-config.schema.json")
+
+
+def test_production_config_schema_requires_complete_agent_model_policy(
+    tmp_path: Path,
+) -> None:
+    payload = ProductionConfig.model_validate(
+        {
+            "platform_root": str((tmp_path / "platform").resolve()),
+            "model_routes": [{"provider": "codex", "model": "gpt-5.5", "kind": "codex_cli"}],
+        }
+    ).to_wire()
+    payload["agent_model_routes"] = [
+        {
+            "role": "product",
+            "routes": [{"provider": "codex", "model": "gpt-5.5"}],
+        }
+    ]
+
+    _assert_invalid(payload, "production-config.schema.json")
 
 
 def test_production_config_schema_accepts_supported_home_relative_input() -> None:
@@ -566,6 +586,25 @@ def test_console_operation_states_satisfy_the_canonical_schema(tmp_path: Path) -
 
     for operation in (queued, running, succeeded):
         _assert_valid(operation.to_wire(), "console-operation.schema.json")
+
+    product_reply = ConsoleOperation.queued(
+        team_id="team_test",
+        idempotency_key="browser-action-reply-0001",
+        intent=ProductReplyIntent(
+            project_id="project_test",
+            delivery_id="delivery_multi_" + "a" * 40,
+            expected_checkpoint_sha256="2" * 64,
+            screenshot_ids=("requirement_attachment_" + "b" * 40,),
+        ),
+        requested_at=at,
+    )
+    _assert_valid(product_reply.to_wire(), "console-operation.schema.json")
+
+    missing_reply_content = product_reply.to_wire()
+    intent = missing_reply_content["intent"]
+    assert isinstance(intent, dict)
+    intent["screenshot_ids"] = []
+    _assert_invalid(missing_reply_content, "console-operation.schema.json")
 
 
 def test_console_operation_schema_rejects_relative_roots_and_incoherent_status(

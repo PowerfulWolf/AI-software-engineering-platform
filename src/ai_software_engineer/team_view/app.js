@@ -28,6 +28,7 @@ let requestFilter = "active";
 let settingsSection = "general";
 let selectedAgentId = null;
 let creatingProject = false;
+let knowledgeImportMode = null;
 let editingKnowledgeDocument = null;
 let editingSpecDocument = null;
 const maxKnowledgeImportFiles = 20;
@@ -107,6 +108,23 @@ const specStageOptions = [
   ["review", "独立评审"],
   ["integrating", "联合验收"],
 ];
+const agentModelRoles = [
+  [
+    "manager",
+    "Manager Agent",
+    "团队管理；当前版本主要使用确定性能力，模型配置为后续智能决策预留。",
+  ],
+  [
+    "product",
+    "Product Agent",
+    "梳理需求并生成 ProductSpec；需要看懂需求截图。",
+  ],
+  ["designer", "Designer Agent", "根据已批准的产品文档生成技术设计。"],
+  ["planner", "Planner Agent", "拆解执行计划并安排交付顺序。"],
+  ["coder", "Coder Agent", "在隔离 worktree 中实现候选提交。"],
+  ["qa", "QA Agent", "独立验证候选提交和验收标准。"],
+  ["reviewer", "Reviewer Agent", "独立审查质量、风险和规范符合性。"],
+];
 const pageCopy = {
   team: [
     "团队成员",
@@ -118,7 +136,7 @@ const pageCopy = {
   ],
   knowledge: [
     "知识库",
-    "背景知识帮助团队理解业务；开发规范是必须遵守的工程契约；学习建议必须经人工批准。",
+    "团队通用知识和项目背景知识用于理解上下文；开发规范是必须遵守的工程契约；学习建议必须经人工批准。",
   ],
   settings: [
     "设置",
@@ -129,6 +147,8 @@ const pageCopy = {
     "查看当前配置、数据库、Codex、模型路由和团队知识是否已经准备就绪。",
   ],
 };
+const knowledgeLabelForScope = (scope) =>
+  scope === "team" ? "通用知识" : "背景知识";
 const projectName = () =>
   snapshot?.projects?.find((item) => item.id === currentProjectId())?.name ||
   "尚未选择 Project";
@@ -345,6 +365,7 @@ function renderComposer() {
   panel.hidden =
     !composing &&
     !creatingProject &&
+    !knowledgeImportMode &&
     !pendingConfirmation &&
     !editingKnowledgeDocument &&
     !editingSpecDocument;
@@ -452,20 +473,27 @@ function renderComposer() {
         );
         editingKnowledgeDocument = null;
         await loadKnowledge();
+        const knowledgeLabel = knowledgeLabelForScope(editing.scope);
         administrationNotice = {
           page: "knowledge",
-          text: "背景知识已更新；原启用状态已继承，只影响之后准备的新需求。",
+          text: `${knowledgeLabel}已更新；原启用状态已继承，只影响之后准备的新需求。`,
         };
         render();
       } catch (error) {
         feedback.className = "form-feedback error";
         feedback.textContent =
-          error instanceof Error ? error.message : "背景知识更新失败。";
+          error instanceof Error
+            ? error.message
+            : `${knowledgeLabelForScope(editing.scope)}更新失败。`;
         submit.disabled = false;
       }
     });
     dialog.append(
-      el("div", "更新背景知识", "section-title"),
+      el(
+        "div",
+        `更新${knowledgeLabelForScope(editing.scope)}`,
+        "section-title",
+      ),
       el("p", editing.source_name, "muted modal-introduction"),
       form,
     );
@@ -592,6 +620,16 @@ function renderComposer() {
     content.focus();
     return;
   }
+  if (knowledgeImportMode === "background") {
+    renderBackgroundKnowledgeImport(dialog);
+    panel.append(dialog);
+    return;
+  }
+  if (knowledgeImportMode === "specs") {
+    renderSpecImport(dialog);
+    panel.append(dialog);
+    return;
+  }
   const top = el("div", undefined, "row");
   top.append(
     el("div", creatingProject ? "新建 Project" : "新建需求", "section-title"),
@@ -665,11 +703,60 @@ function renderComposer() {
   name.required = true;
   name.maxLength = 200;
   name.placeholder = "例如：统一登录体验升级";
-  const roots = el("textarea");
-  roots.name = "repository_roots";
-  roots.required = true;
-  roots.rows = 5;
-  roots.placeholder = "/absolute/path/to/backend\n/absolute/path/to/frontend";
+  const selectedRoots = [];
+  const roots = el("div", undefined, "directory-selection");
+  const rootList = el("div", undefined, "directory-chip-list");
+  const chooseRoots = button(
+    "选择代码目录",
+    async () => {
+      chooseRoots.disabled = true;
+      feedback.className = "form-feedback";
+      feedback.textContent = "正在打开本机目录选择器…";
+      try {
+        const result = await adminFetch("/api/v1/admin/directories/select", {
+          method: "POST",
+        });
+        let exceededDirectoryLimit = false;
+        for (const path of result.directories || []) {
+          if (selectedRoots.includes(path)) continue;
+          if (selectedRoots.length >= 32) exceededDirectoryLimit = true;
+          else selectedRoots.push(path);
+        }
+        renderSelectedRoots();
+        feedback.textContent = result.cancelled
+          ? "未选择新目录。"
+          : exceededDirectoryLimit
+            ? "一次需求最多选择 32 个目录，超出部分未添加。"
+            : "代码目录已选择。";
+      } catch (error) {
+        feedback.className = "form-feedback error";
+        feedback.textContent =
+          error instanceof Error ? error.message : "无法打开目录选择器。";
+      } finally {
+        chooseRoots.disabled = false;
+      }
+    },
+    "secondary",
+  );
+  chooseRoots.type = "button";
+  const renderSelectedRoots = () => {
+    rootList.replaceChildren();
+    if (!selectedRoots.length)
+      rootList.append(el("p", "尚未选择代码目录。", "muted"));
+    selectedRoots.forEach((path) => {
+      const chip = el("div", undefined, "directory-chip");
+      chip.append(
+        el("span", path, "paths"),
+        button("移除", () => {
+          selectedRoots.splice(selectedRoots.indexOf(path), 1);
+          renderSelectedRoots();
+        }),
+      );
+      rootList.append(chip);
+    });
+  };
+  roots.append(chooseRoots, rootList);
+  renderSelectedRoots();
   const feedback = el("p", "", "form-feedback");
   const submit = el("button", "创建并准备需求", "primary");
   submit.type = "submit";
@@ -678,17 +765,14 @@ function renderComposer() {
     field(
       "涉及的代码目录",
       roots,
-      "每行一个绝对目录；目录必须登记在当前 Project，首次选择时由 Manager 完成登记。",
+      "可一次选择多个目录；目录必须属于当前电脑，首次选择时由 Manager 完成登记。",
     ),
     feedback,
     submit,
   );
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const projectRoots = roots.value
-      .split(/\r?\n/)
-      .map((value) => value.trim())
-      .filter(Boolean);
+    const projectRoots = [...selectedRoots];
     if (!name.value.trim() || !projectRoots.length) {
       feedback.textContent = "请填写需求名称和至少一个绝对代码目录。";
       feedback.className = "form-feedback error";
@@ -727,6 +811,7 @@ function renderComposer() {
 function confirmMutation(title, message, confirmText, action) {
   composing = false;
   creatingProject = false;
+  knowledgeImportMode = null;
   editingKnowledgeDocument = null;
   editingSpecDocument = null;
   pendingConfirmation = { title, message, confirmText, action };
@@ -1104,7 +1189,6 @@ function requestOperation(panel, request) {
   ) {
     const form = el("form", undefined, "discussion-form");
     const message = el("textarea");
-    message.required = true;
     message.rows = 5;
     message.maxLength = 20000;
     message.placeholder =
@@ -1112,26 +1196,157 @@ function requestOperation(panel, request) {
         ? "描述你要完成的需求、业务背景和验收预期…"
         : "补充信息，或说明需要 Product Agent 修改的内容…";
     const feedback = el("p", "", "form-feedback");
+    let selectedScreenshots = [];
+    let screenshotPreviewUrls = [];
+    const screenshotSection = el("div", undefined, "pasted-screenshot-section");
+    const screenshotList = el("div", undefined, "screenshot-list");
+    screenshotSection.append(el("strong", "已粘贴的需求截图"), screenshotList);
+    const revokeScreenshotPreviews = () => {
+      if (typeof URL === "undefined" || !URL.revokeObjectURL) return;
+      screenshotPreviewUrls.forEach((url) => URL.revokeObjectURL(url));
+      screenshotPreviewUrls = [];
+    };
+    const renderScreenshots = () => {
+      revokeScreenshotPreviews();
+      screenshotList.replaceChildren();
+      screenshotSection.hidden = !selectedScreenshots.length;
+      selectedScreenshots.forEach((item, index) => {
+        const card = el("div", undefined, "screenshot-chip");
+        if (typeof URL !== "undefined" && URL.createObjectURL) {
+          const preview = el("img");
+          const previewUrl = URL.createObjectURL(item.file);
+          screenshotPreviewUrls.push(previewUrl);
+          preview.src = previewUrl;
+          preview.alt = item.name;
+          card.append(preview);
+        }
+        card.append(
+          el("span", `${item.name} · ${Math.ceil(item.file.size / 1024)} KB`),
+          button("移除", () => {
+            selectedScreenshots.splice(index, 1);
+            feedback.className = "form-feedback";
+            feedback.textContent = "";
+            renderScreenshots();
+          }),
+        );
+        screenshotList.append(card);
+      });
+    };
+    const addPastedScreenshots = (files) => {
+      const invalid = files.find(
+        (file) =>
+          !["image/png", "image/jpeg", "image/webp"].includes(file.type) ||
+          file.size > 10000000,
+      );
+      if (invalid) {
+        feedback.className = "form-feedback error";
+        feedback.textContent =
+          "截图仅支持 PNG、JPEG、WebP，且单张不能超过 10 MB。";
+        return;
+      }
+      const available = Math.max(0, 4 - selectedScreenshots.length);
+      const accepted = files.slice(0, available).map((file, index) => {
+        const suffix = {
+          "image/png": "png",
+          "image/jpeg": "jpg",
+          "image/webp": "webp",
+        }[file.type];
+        return {
+          file,
+          name:
+            file.name?.trim() ||
+            `clipboard-${Date.now()}-${selectedScreenshots.length + index + 1}.${suffix}`,
+        };
+      });
+      selectedScreenshots.push(...accepted);
+      feedback.className = "form-feedback";
+      feedback.textContent =
+        files.length > available
+          ? "一次回复最多提交 4 张截图。"
+          : "截图已添加。";
+      renderScreenshots();
+    };
+    message.addEventListener("paste", (event) => {
+      const clipboard = event.clipboardData;
+      if (!clipboard) return;
+      const files = clipboard.items
+        ? [...clipboard.items]
+            .filter(
+              (item) => item.kind === "file" && item.type.startsWith("image/"),
+            )
+            .map((item) => item.getAsFile())
+            .filter(Boolean)
+        : [...(clipboard.files || [])].filter((file) =>
+            file.type.startsWith("image/"),
+          );
+      if (files.length) addPastedScreenshots(files);
+    });
+    renderScreenshots();
     const submit = el(
       "button",
       request.stage === "READY_FOR_DISCUSSION" ? "提交需求" : "提交补充说明",
       "primary",
     );
     submit.type = "submit";
-    form.append(field("和 Product Agent 讨论需求", message), feedback, submit);
+    form.append(
+      field(
+        "和 Product Agent 讨论需求",
+        message,
+        "输入文字，或将截图直接粘贴到这里；两者至少提供一项。",
+      ),
+      screenshotSection,
+      feedback,
+      submit,
+    );
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      if (!message.value.trim()) return;
+      if (!message.value.trim() && !selectedScreenshots.length) {
+        feedback.className = "form-feedback error";
+        feedback.textContent = "请填写需求说明或添加至少一张截图。";
+        return;
+      }
       submit.disabled = true;
-      feedback.textContent = "已提交，等待 Product Agent…";
-      const accepted = await submitOperation({
-        action: "PRODUCT_REPLY",
-        project_id: request.project_id,
-        delivery_id: request.id,
-        expected_checkpoint_sha256: request.checkpoint_sha256,
-        message: message.value.trim(),
-      });
-      if (!accepted) submit.disabled = false;
+      feedback.className = "form-feedback";
+      feedback.textContent = selectedScreenshots.length
+        ? "正在保存截图…"
+        : "已提交，等待 Product Agent…";
+      try {
+        const uploaded = [];
+        for (const item of selectedScreenshots) {
+          const attachment = await adminFetch(
+            "/api/v1/admin/projects/" +
+              encodeURIComponent(request.project_id) +
+              "/requirements/" +
+              encodeURIComponent(request.id) +
+              "/screenshots?filename=" +
+              encodeURIComponent(item.name) +
+              "&checkpoint=" +
+              encodeURIComponent(request.checkpoint_sha256),
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/octet-stream" },
+              body: item.file,
+            },
+          );
+          uploaded.push(attachment.id);
+        }
+        feedback.textContent = "已提交，等待 Product Agent…";
+        const accepted = await submitOperation({
+          action: "PRODUCT_REPLY",
+          project_id: request.project_id,
+          delivery_id: request.id,
+          expected_checkpoint_sha256: request.checkpoint_sha256,
+          message: message.value.trim(),
+          screenshot_ids: uploaded,
+        });
+        if (accepted) revokeScreenshotPreviews();
+        else submit.disabled = false;
+      } catch (error) {
+        feedback.className = "form-feedback error";
+        feedback.textContent =
+          error instanceof Error ? error.message : "截图保存失败。";
+        submit.disabled = false;
+      }
     });
     panel.append(form);
   }
@@ -1374,6 +1589,7 @@ async function loadAdministration() {
     const settings = await adminFetch("/api/v1/admin/settings");
     settingsSnapshot = settings;
     settingsDraft = structuredClone(settings.config);
+    normalizeAgentModelRoutes(settingsDraft);
     runtimeVariablesDraft = {};
     administrationAvailable = true;
     try {
@@ -1429,7 +1645,10 @@ function renderKnowledge(content) {
     content.append(el("div", administrationNotice.text, "admin-notice"));
 
   const descriptions = {
-    background: "帮助团队理解业务和项目背景，不作为强制工程规则。",
+    background:
+      knowledgeScope === "team"
+        ? "跨 Project 共享的团队知识，不作为强制工程规则。"
+        : "帮助团队理解当前 Project 的业务与技术背景，不作为强制工程规则。",
     specs: "新需求必须遵守的工程规则；验证方式可在明确后补充。",
     learning: "从 QA 失败和 Review 拒绝中提炼，经人工批准后再沉淀。",
   };
@@ -1498,7 +1717,11 @@ function renderKnowledge(content) {
     projectTabs.setAttribute("aria-label", "Project 知识库");
     for (const project of snapshot.projects || []) {
       const active = project.id === currentProjectId();
-      const control = button(project.name, () => refresh(project.id), "");
+      const control = button(
+        project.name,
+        () => refresh(project.id),
+        active ? "selected" : "",
+      );
       control.setAttribute("role", "tab");
       control.setAttribute("aria-selected", String(active));
       if (active) control.setAttribute("aria-current", "true");
@@ -1528,7 +1751,7 @@ function renderKnowledge(content) {
   modeSwitch.setAttribute("role", "tablist");
   modeSwitch.setAttribute("aria-label", "知识内容类型");
   const modes = [
-    ["background", "背景知识"],
+    ["background", knowledgeLabelForScope(knowledgeScope)],
     ["specs", "开发规范"],
   ];
   if (knowledgeScope === "project") modes.push(["learning", "学习改进"]);
@@ -1566,50 +1789,31 @@ function renderKnowledge(content) {
   renderBackgroundKnowledge(body);
 }
 
-function renderBackgroundKnowledge(content) {
-  if (knowledgeScope === "project" && !currentProjectId()) {
-    content.append(el("div", "请先在页面顶部选择一个 Project。", "empty"));
-    return;
-  }
-
-  const project = snapshot.projects.find(
-    (item) => item.id === currentProjectId(),
-  );
-  const ownerName =
-    knowledgeScope === "team"
-      ? snapshot.team_name
-      : project?.name || currentProjectId();
-  const top = el("div", undefined, "row request-heading");
+function renderKnowledgeImportHeader(dialog, title, description) {
+  dialog.className = "modal-dialog modal-dialog-wide";
+  const top = el("div", undefined, "row");
   top.append(
-    el(
-      "h2",
-      `${ownerName} · ${knowledgeScope === "team" ? "团队通用知识" : "Project 知识"}`,
-    ),
-    el("span", `${knowledgeDocuments.length} 份`, "badge"),
-  );
-  content.append(top);
-  content.append(
-    el(
-      "p",
-      knowledgeScope === "team"
-        ? "启用后用于所有 Project 的新需求。"
-        : "启用后只用于当前 Project 的新需求，不影响其他 Project。",
-      "muted",
+    el("div", title, "section-title"),
+    button(
+      "取消",
+      () => {
+        knowledgeImportMode = null;
+        renderComposer();
+      },
+      "",
     ),
   );
-  const editor = el(
-    "section",
-    undefined,
-    "admin-panel knowledge-editor background-editor",
-  );
-  editor.dataset.key = `${knowledgeScope}-background-editor`;
-  editor.append(
-    el("h3", "导入背景知识"),
-    el(
-      "p",
-      "可一次选择多份文档。若文件名与现有文档相同，平台会在替换前明确提示覆盖风险。",
-      "muted",
-    ),
+  dialog.append(top, el("p", description, "muted modal-introduction"));
+}
+
+function renderBackgroundKnowledgeImport(dialog) {
+  const scope = knowledgeScope;
+  const projectId = scope === "project" ? currentProjectId() : null;
+  const knowledgeLabel = knowledgeLabelForScope(scope);
+  renderKnowledgeImportHeader(
+    dialog,
+    `导入${knowledgeLabel}`,
+    "可一次选择多份文档。若文件名与现有文档相同，平台会在替换前明确提示覆盖风险。",
   );
   const form = el("form", undefined, "knowledge-upload");
   const file = el("input");
@@ -1631,10 +1835,10 @@ function renderBackgroundKnowledge(content) {
   );
   const uploadFiles = async (selectedFiles, replacements = new Map()) => {
     const base =
-      knowledgeScope === "team"
+      scope === "team"
         ? "/api/v1/admin/team/knowledge"
         : "/api/v1/admin/projects/" +
-          encodeURIComponent(currentProjectId()) +
+          encodeURIComponent(projectId) +
           "/knowledge";
     const failures = [];
     let imported = 0;
@@ -1661,14 +1865,15 @@ function renderBackgroundKnowledge(content) {
         );
       }
     }
+    knowledgeImportMode = null;
     await loadKnowledge();
     administrationNotice = {
       page: "knowledge",
       text: failures.length
         ? `已导入 ${imported}/${selectedFiles.length} 份；${failures.length} 份失败。${failures[0]}`
         : replacements.size
-          ? `已导入 ${imported} 份背景知识，其中 ${replacements.size} 份同名文档已更新；原启用状态已继承。`
-          : `已导入 ${imported} 份背景知识。启用后会立即用于之后的新需求，无需重启。`,
+          ? `已导入 ${imported} 份${knowledgeLabel}，其中 ${replacements.size} 份同名文档已更新；原启用状态已继承。`
+          : `已导入 ${imported} 份${knowledgeLabel}。启用后会立即用于之后的新需求，无需重启。`,
     };
     render();
   };
@@ -1724,8 +1929,54 @@ function renderBackgroundKnowledge(content) {
       submit.disabled = false;
     }
   });
-  editor.append(form);
-  content.append(editor);
+  dialog.append(form);
+  file.focus();
+}
+
+function renderBackgroundKnowledge(content) {
+  if (knowledgeScope === "project" && !currentProjectId()) {
+    content.append(el("div", "请先在页面顶部选择一个 Project。", "empty"));
+    return;
+  }
+
+  const project = snapshot.projects.find(
+    (item) => item.id === currentProjectId(),
+  );
+  const ownerName =
+    knowledgeScope === "team"
+      ? snapshot.team_name
+      : project?.name || currentProjectId();
+  const knowledgeLabel = knowledgeLabelForScope(knowledgeScope);
+  const top = el("div", undefined, "row request-heading");
+  const actions = el("div", undefined, "row knowledge-heading-actions");
+  actions.append(
+    el("span", `${knowledgeDocuments.length} 份`, "badge"),
+    button(
+      `导入${knowledgeLabel}`,
+      () => {
+        knowledgeImportMode = "background";
+        renderComposer();
+      },
+      "primary",
+    ),
+  );
+  top.append(
+    el(
+      "h2",
+      `${ownerName} · ${knowledgeScope === "team" ? "团队通用知识" : "Project 知识"}`,
+    ),
+    actions,
+  );
+  content.append(top);
+  content.append(
+    el(
+      "p",
+      knowledgeScope === "team"
+        ? "启用后用于所有 Project 的新需求。"
+        : "启用后只用于当前 Project 的新需求，不影响其他 Project。",
+      "muted",
+    ),
+  );
   if (!knowledgeDocuments.length) {
     content.append(
       el(
@@ -1815,8 +2066,7 @@ function renderBackgroundKnowledge(content) {
       } catch (error) {
         administrationNotice = {
           page: "knowledge",
-          text:
-            error instanceof Error ? error.message : "无法读取文档正文。",
+          text: error instanceof Error ? error.message : "无法读取文档正文。",
         };
         render();
       }
@@ -1825,7 +2075,7 @@ function renderBackgroundKnowledge(content) {
       "删除",
       () =>
         confirmMutation(
-          "删除背景知识",
+          `删除${knowledgeLabel}`,
           `“${manifest.source_name}”将从当前知识库和后续需求上下文中移除；历史交付仍保留原引用。`,
           "确认删除",
           async () => {
@@ -1841,7 +2091,7 @@ function renderBackgroundKnowledge(content) {
             );
             administrationNotice = {
               page: "knowledge",
-              text: "背景知识已删除；历史交付引用保持不变。",
+              text: `${knowledgeLabel}已删除；历史交付引用保持不变。`,
             };
           },
         ),
@@ -1875,7 +2125,10 @@ function suggestedSpecKey(filename) {
   return value.slice(0, 64);
 }
 function suggestedSpecTitle(filename) {
-  return filename.replace(/\.[^.]+$/, "").replace(/[-_.]+/g, " ").trim();
+  return filename
+    .replace(/\.[^.]+$/, "")
+    .replace(/[-_.]+/g, " ")
+    .trim();
 }
 function latestSpecs(values) {
   const latest = new Map();
@@ -1889,45 +2142,14 @@ function latestSpecs(values) {
   );
 }
 
-function renderSpecs(content) {
-  if (knowledgeScope === "project" && !currentProjectId()) {
-    content.append(el("div", "请先在页面顶部选择一个 Project。", "empty"));
-    return;
-  }
-  const project = snapshot.projects.find(
-    (item) => item.id === currentProjectId(),
-  );
-  const ownerName =
-    knowledgeScope === "team"
-      ? snapshot.team_name
-      : project?.name || currentProjectId();
+function renderSpecImport(dialog) {
+  const scope = knowledgeScope;
+  const projectId = scope === "project" ? currentProjectId() : null;
   const logicalSpecs = latestSpecs(specDocuments);
-  const top = el("div", undefined, "row request-heading");
-  top.append(
-    el("h2", `${ownerName} · 强约束开发规范`),
-    el("span", `${logicalSpecs.length} 条规范`, "badge"),
-  );
-  content.append(
-    top,
-    el(
-      "p",
-      "只有明确启用的规范才进入新需求。Team、Project 与仓库原生规范冲突时会停止并交给人工处理。",
-      "muted",
-    ),
-  );
-  const editor = el(
-    "section",
-    undefined,
-    "admin-panel knowledge-editor spec-editor",
-  );
-  editor.dataset.key = `${knowledgeScope}-spec-editor`;
-  editor.append(
-    el("h3", "导入开发规范"),
-    el(
-      "p",
-      "可一次导入多份 Markdown/TXT。每个文件成为一条独立规范，并共用下方的适用范围。",
-      "muted",
-    ),
+  renderKnowledgeImportHeader(
+    dialog,
+    "导入开发规范",
+    "可一次导入多份 Markdown/TXT。每个文件成为一条独立规范，并共用下方的适用范围。",
   );
   const form = el("form", undefined, "knowledge-upload spec-create-form");
   const file = el("input");
@@ -1938,14 +2160,14 @@ function renderSpecs(content) {
   const roles = multiSelectField(
     "适用角色",
     "支持多选；至少选择一个角色。",
-    `${knowledgeScope}-spec-roles`,
+    `${scope}-spec-roles`,
     specRoleOptions,
     specRoleOptions.map(([value]) => value),
   );
   const stages = multiSelectField(
     "适用阶段",
     "支持多选；至少选择一个交付阶段。",
-    `${knowledgeScope}-spec-stages`,
+    `${scope}-spec-stages`,
     specStageOptions,
     ["implementing", "qa", "review"],
   );
@@ -1973,7 +2195,7 @@ function renderSpecs(content) {
     stages.control,
     field("适用仓库", repositories),
     field("适用路径", paths, "每行一个相对 glob。"),
-    field("验证方式", verification),
+    field("验证方式", verification, "可以暂时留空。"),
     feedback,
     submit,
   );
@@ -1996,15 +2218,16 @@ function renderSpecs(content) {
     const keys = selectedFiles.map((item) => suggestedSpecKey(item.name));
     if (new Set(keys).size !== keys.length) {
       feedback.className = "form-feedback error";
-      feedback.textContent = "所选文件会生成重复的规范标识，请调整文件名后再导入。";
+      feedback.textContent =
+        "所选文件会生成重复的规范标识，请调整文件名后再导入。";
       return;
     }
     const importSpecs = async () => {
       const endpoint =
-        knowledgeScope === "team"
+        scope === "team"
           ? "/api/v1/admin/team/specs"
           : "/api/v1/admin/projects/" +
-            encodeURIComponent(currentProjectId()) +
+            encodeURIComponent(projectId) +
             "/specs";
       const failures = [];
       let imported = 0;
@@ -2032,6 +2255,7 @@ function renderSpecs(content) {
           );
         }
       }
+      knowledgeImportMode = null;
       await loadKnowledge();
       administrationNotice = {
         page: "knowledge",
@@ -2064,8 +2288,45 @@ function renderSpecs(content) {
       submit.disabled = false;
     }
   });
-  editor.append(form);
-  content.append(editor);
+  dialog.append(form);
+  file.focus();
+}
+
+function renderSpecs(content) {
+  if (knowledgeScope === "project" && !currentProjectId()) {
+    content.append(el("div", "请先在页面顶部选择一个 Project。", "empty"));
+    return;
+  }
+  const project = snapshot.projects.find(
+    (item) => item.id === currentProjectId(),
+  );
+  const ownerName =
+    knowledgeScope === "team"
+      ? snapshot.team_name
+      : project?.name || currentProjectId();
+  const logicalSpecs = latestSpecs(specDocuments);
+  const top = el("div", undefined, "row request-heading");
+  const actions = el("div", undefined, "row knowledge-heading-actions");
+  actions.append(
+    el("span", `${logicalSpecs.length} 条规范`, "badge"),
+    button(
+      "导入开发规范",
+      () => {
+        knowledgeImportMode = "specs";
+        renderComposer();
+      },
+      "primary",
+    ),
+  );
+  top.append(el("h2", `${ownerName} · 强约束开发规范`), actions);
+  content.append(
+    top,
+    el(
+      "p",
+      "只有明确启用的规范才进入新需求。Team、Project 与仓库原生规范冲突时会停止并交给人工处理。",
+      "muted",
+    ),
+  );
   if (!logicalSpecs.length) {
     content.append(el("div", "当前范围尚未创建开发规范。", "empty"));
     return;
@@ -2346,17 +2607,145 @@ function bindInput(control, value, update, type = "text") {
   control.addEventListener("input", () => update(control.value));
   return control;
 }
-function selectInput(values, current, update) {
-  const control = el("select");
+function selectInput(values, current, update, key, disabled = false) {
+  const control = el(
+    "details",
+    undefined,
+    `single-select${disabled ? " disabled" : ""}`,
+  );
+  control.dataset.key = key;
+  control.dataset.value = current;
+  const selected = values.find(([value]) => value === current);
+  const selectedLabel = el(
+    "span",
+    selected?.[1] || "暂无可用选项",
+    "single-select-value",
+  );
+  const summary = el("summary", undefined, "single-select-trigger");
+  summary.append(selectedLabel, el("span", "", "single-select-chevron"));
+  const menu = el("div", undefined, "single-select-menu");
+  menu.setAttribute("role", "listbox");
+  const optionNodes = [];
   for (const [value, title] of values) {
-    const option = el("option", title);
-    option.value = value;
-    option.selected = value === current;
-    control.append(option);
+    const option = button(
+      title,
+      () => {
+        if (disabled) return;
+        control.dataset.value = value;
+        selectedLabel.textContent = title;
+        for (const [candidate, candidateValue] of optionNodes) {
+          const active = candidateValue === value;
+          candidate.className = `single-select-option${active ? " selected" : ""}`;
+          candidate.setAttribute("aria-selected", String(active));
+        }
+        control.open = false;
+        update(value);
+      },
+      `single-select-option${value === current ? " selected" : ""}`,
+    );
+    option.type = "button";
+    option.setAttribute("role", "option");
+    option.setAttribute("aria-selected", String(value === current));
+    optionNodes.push([option, value]);
+    menu.append(option);
   }
-  control.value = current;
-  control.addEventListener("change", () => update(control.value));
+  if (!values.length)
+    menu.append(el("p", "请先启用至少一条模型路由。", "muted"));
+  if (disabled) {
+    control.setAttribute("aria-disabled", "true");
+    summary.addEventListener("click", (event) => event.preventDefault());
+  }
+  control.append(summary, menu);
   return control;
+}
+function modelRouteKey(route) {
+  return `${route.provider}\u0000${route.model}\u0000${route.reasoning_effort || "medium"}`;
+}
+function modelRouteValidationMessage(config) {
+  const firstRouteByKey = new Map();
+  for (const [index, route] of (config.model_routes || []).entries()) {
+    const provider = route.provider.trim();
+    const model = route.model.trim();
+    if (!provider || !model)
+      return `第 ${index + 1} 条模型路由必须填写 Provider 和 Model。`;
+    const reasoning = route.reasoning_effort || "medium";
+    const key = modelRouteKey({ provider, model, reasoning_effort: reasoning });
+    const firstIndex = firstRouteByKey.get(key);
+    if (firstIndex !== undefined)
+      return `第 ${index + 1} 条模型路由（${provider} / ${model} · ${reasoning}）与第 ${firstIndex + 1} 条重复。每个 Provider + Model + Reasoning 组合只能配置一次；请修改已有路由或删除重复项。`;
+    firstRouteByKey.set(key, index);
+  }
+  return null;
+}
+function modelRouteReference(route) {
+  return {
+    provider: route.provider,
+    model: route.model,
+    reasoning_effort: route.reasoning_effort || "medium",
+  };
+}
+function resolveModelRouteReference(reference, enabled) {
+  const exact = enabled.find(
+    (route) => modelRouteKey(route) === modelRouteKey(reference),
+  );
+  if (reference.reasoning_effort) return exact;
+  const legacy = enabled.filter(
+    (route) =>
+      route.provider === reference.provider && route.model === reference.model,
+  );
+  return legacy.length === 1 ? legacy[0] : undefined;
+}
+function normalizeAgentModelRoutes(config) {
+  if (!config) return;
+  const enabled = (config.model_routes || []).filter((route) => route.enabled);
+  if (!enabled.length) {
+    config.agent_model_routes = [];
+    return;
+  }
+  const existing = new Map(
+    (config.agent_model_routes || []).map((policy) => [policy.role, policy]),
+  );
+  config.agent_model_routes = agentModelRoles.map(([role]) => {
+    const current = existing.get(role)?.routes || [];
+    const primary = current
+      .map((reference) => resolveModelRouteReference(reference, enabled))
+      .find(Boolean);
+    const ordered = primary
+      ? [
+          modelRouteReference(primary),
+          ...enabled
+            .filter((route) => modelRouteKey(route) !== modelRouteKey(primary))
+            .map(modelRouteReference),
+        ]
+      : enabled.map(modelRouteReference);
+    return { role, routes: ordered };
+  });
+}
+function selectAgentPrimaryModel(role, key) {
+  const enabled = settingsDraft.model_routes.filter((route) => route.enabled);
+  const selectedRoute = enabled.find((route) => modelRouteKey(route) === key);
+  if (!selectedRoute) return;
+  const policy = settingsDraft.agent_model_routes.find(
+    (candidate) => candidate.role === role,
+  );
+  policy.routes = [
+    modelRouteReference(selectedRoute),
+    ...enabled
+      .filter((route) => modelRouteKey(route) !== key)
+      .map(modelRouteReference),
+  ];
+}
+function updateModelRouteIdentity(route, property, value) {
+  const previous = modelRouteKey(route);
+  route[property] = value;
+  for (const policy of settingsDraft.agent_model_routes || []) {
+    for (const reference of policy.routes || []) {
+      if (modelRouteKey(reference) !== previous) continue;
+      reference.provider = route.provider;
+      reference.model = route.model;
+      reference.reasoning_effort = route.reasoning_effort || "medium";
+    }
+  }
 }
 function renderProjectPicker(content) {
   const values = snapshot.projects || [];
@@ -2502,9 +2891,16 @@ function renderSettings(content) {
   form.append(saveBar);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    const modelRouteError = modelRouteValidationMessage(settingsDraft);
+    if (modelRouteError) {
+      feedback.className = "form-feedback error";
+      feedback.textContent = modelRouteError;
+      return;
+    }
     save.disabled = true;
     feedback.textContent = "正在校验并保存…";
     try {
+      normalizeAgentModelRoutes(settingsDraft);
       const saved = await adminFetch("/api/v1/admin/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -2528,6 +2924,7 @@ function renderSettings(content) {
       });
       settingsSnapshot = saved;
       settingsDraft = structuredClone(saved.config);
+      normalizeAgentModelRoutes(settingsDraft);
       runtimeVariablesDraft = {};
       administrationNotice = {
         page: "settings",
@@ -2657,7 +3054,11 @@ function renderDatabaseSettings(form) {
 function renderModelSettings(form) {
   const routesTop = el("div", undefined, "row");
   routesTop.append(
-    el("p", "按页面顺序尝试可用模型。", "muted"),
+    el(
+      "p",
+      "按页面顺序尝试可用模型；同一模型可配置不同推理程度，每个 Provider + Model + Reasoning 组合只能出现一次。",
+      "muted",
+    ),
     button("添加路由", () => {
       settingsDraft.model_routes.push({
         provider: "provider",
@@ -2666,6 +3067,7 @@ function renderModelSettings(form) {
         endpoint: "https://example.invalid/v1/responses",
         api_key_env: "MODEL_API_KEY",
         reasoning_effort: "medium",
+        image_input: false,
         enabled: false,
       });
       render();
@@ -2678,15 +3080,15 @@ function renderModelSettings(form) {
     fields.append(
       field(
         "Provider",
-        bindInput(
-          el("input"),
-          route.provider,
-          (value) => (route.provider = value),
+        bindInput(el("input"), route.provider, (value) =>
+          updateModelRouteIdentity(route, "provider", value),
         ),
       ),
       field(
         "Model",
-        bindInput(el("input"), route.model, (value) => (route.model = value)),
+        bindInput(el("input"), route.model, (value) =>
+          updateModelRouteIdentity(route, "model", value),
+        ),
       ),
       field(
         "类型",
@@ -2704,6 +3106,7 @@ function renderModelSettings(form) {
             }
             render();
           },
+          `model-route-${index}-kind`,
         ),
       ),
       field(
@@ -2711,7 +3114,11 @@ function renderModelSettings(form) {
         selectInput(
           ["low", "medium", "high", "xhigh"].map((value) => [value, value]),
           route.reasoning_effort,
-          (value) => (route.reasoning_effort = value),
+          (value) => {
+            updateModelRouteIdentity(route, "reasoning_effort", value);
+            render();
+          },
+          `model-route-${index}-reasoning`,
         ),
       ),
     );
@@ -2757,10 +3164,30 @@ function renderModelSettings(form) {
           "留空保留已保存值，页面不会回显。",
         ),
       );
+    if (route.kind === "responses") {
+      const imageInput = el("input");
+      imageInput.type = "checkbox";
+      imageInput.checked = route.image_input === true;
+      imageInput.addEventListener(
+        "change",
+        () => (route.image_input = imageInput.checked),
+      );
+      fields.append(
+        field(
+          "支持图片输入",
+          imageInput,
+          "只有兼容 Responses 图片输入格式的服务才应开启。Codex CLI 默认支持。",
+        ),
+      );
+    }
     const enabled = el("input");
     enabled.type = "checkbox";
     enabled.checked = route.enabled;
-    enabled.addEventListener("change", () => (route.enabled = enabled.checked));
+    enabled.addEventListener("change", () => {
+      route.enabled = enabled.checked;
+      normalizeAgentModelRoutes(settingsDraft);
+      render();
+    });
     row.append(fields, field("启用", enabled));
     if (settingsDraft.model_routes.length > 1)
       row.append(
@@ -2771,6 +3198,65 @@ function renderModelSettings(form) {
       );
     form.append(row);
   });
+  normalizeAgentModelRoutes(settingsDraft);
+  const enabledRoutes = settingsDraft.model_routes.filter(
+    (route) => route.enabled,
+  );
+  const assignments = el("section", undefined, "agent-model-settings");
+  assignments.append(
+    el("h3", "Agent 模型分配"),
+    el(
+      "p",
+      "每个 Agent 可选择不同的首选模型；首选模型不可用时，按上方其他已启用路由的顺序降级。",
+      "muted",
+    ),
+  );
+  const grid = el("div", undefined, "agent-model-grid");
+  for (const [role, title, description] of agentModelRoles) {
+    const policy = settingsDraft.agent_model_routes.find(
+      (candidate) => candidate.role === role,
+    );
+    const card = el("div", undefined, "agent-model-card");
+    card.dataset.role = role;
+    const primary = policy?.routes?.[0];
+    const primaryKey = primary ? modelRouteKey(primary) : "";
+    const choices = enabledRoutes.map((route) => [
+      modelRouteKey(route),
+      `${route.provider} / ${route.model} · ${route.reasoning_effort}`,
+    ]);
+    const selector = selectInput(
+      choices,
+      primaryKey,
+      (value) => {
+        selectAgentPrimaryModel(role, value);
+        render();
+      },
+      `agent-primary-model-${role}`,
+      !choices.length,
+    );
+    card.append(
+      el("strong", title),
+      el("p", description, "muted"),
+      field("首选模型", selector),
+      el(
+        "small",
+        policy?.routes?.length > 1
+          ? "降级顺序 · " +
+              policy.routes
+                .slice(1)
+                .map(
+                  (route) =>
+                    `${route.provider}/${route.model} · ${route.reasoning_effort || "medium"}`,
+                )
+                .join(" → ")
+          : "当前没有可用的降级模型。",
+        "muted",
+      ),
+    );
+    grid.append(card);
+  }
+  assignments.append(grid);
+  form.append(assignments);
 }
 function statusRow(title, value, ready) {
   const row = el("div", undefined, "status-row");
@@ -2787,6 +3273,74 @@ function statusRow(title, value, ready) {
     ),
   );
   return row;
+}
+function modelRouteReadiness(route) {
+  if (!route.enabled) return ["未启用", null];
+  if (route.ready) return ["已就绪", true];
+  return ["缺少运行配置", false];
+}
+function renderAgentModelRouteStatus(value) {
+  const panel = el("section", undefined, "admin-panel");
+  panel.append(
+    el("h2", "Agent 模型路由"),
+    el(
+      "p",
+      "展示每位长期成员当前配置的主模型与降级顺序；这是路由就绪状态，不代表 Agent 正在调用模型。",
+      "muted",
+    ),
+  );
+  const policies = value.agent_model_routes || [];
+  if (!policies.length) {
+    panel.append(el("div", "当前服务尚未提供 Agent 模型路由状态。", "empty"));
+    return panel;
+  }
+  const grid = el("div", undefined, "agent-route-status-grid");
+  for (const [role, title] of agentModelRoles) {
+    const policy = policies.find((candidate) => candidate.role === role);
+    const card = el("article", undefined, "agent-route-status-card");
+    const head = el("div", undefined, "row");
+    head.append(
+      el("strong", title),
+      el(
+        "span",
+        policy?.policy_source === "agent_policy" ? "独立策略" : "继承全局顺序",
+        "badge",
+      ),
+    );
+    card.append(head);
+    if (!policy?.routes?.length) {
+      card.append(el("p", "未配置可用模型。", "muted"));
+      grid.append(card);
+      continue;
+    }
+    const list = el("div", undefined, "agent-route-status-list");
+    policy.routes.forEach((route, index) => {
+      const [readiness, ready] = modelRouteReadiness(route);
+      const row = el("div", undefined, "agent-route-status-row");
+      row.append(
+        el("span", index === 0 ? "主模型" : `备用 ${index}`, "route-position"),
+        el(
+          "span",
+          `${route.provider} / ${route.model} · ${route.reasoning_effort}`,
+          "agent-route-identity",
+        ),
+        el(
+          "span",
+          readiness,
+          ready === true
+            ? "badge done"
+            : ready === false
+              ? "badge blocked"
+              : "badge",
+        ),
+      );
+      list.append(row);
+    });
+    card.append(list);
+    grid.append(card);
+  }
+  panel.append(grid);
+  return panel;
 }
 function renderStatus(content) {
   if (runtimeStatusLoading) {
@@ -2884,19 +3438,27 @@ function renderStatus(content) {
       value.team_prepared ? null : false,
     ),
   );
+  const agentRoutes = renderAgentModelRouteStatus(value);
   const routes = el("section", undefined, "admin-panel");
-  routes.append(el("h2", "模型路由"));
+  routes.append(
+    el("h2", "可用模型目录"),
+    el(
+      "p",
+      "这里检查 Provider、模型执行器和凭证是否可用；具体由哪位 Agent 优先使用，请以上方策略为准。",
+      "muted",
+    ),
+  );
   for (const route of value.model_routes)
     routes.append(
       statusRow(
-        `${route.provider} / ${route.model}`,
+        `${route.provider} / ${route.model} · ${route.reasoning_effort}`,
         !route.enabled ? "未启用" : route.ready ? "已就绪" : "缺少运行配置",
         !route.enabled ? null : route.ready,
       ),
     );
   const grid = el("div", undefined, "status-grid");
   grid.append(overview, runtime);
-  content.append(summary, grid, routes);
+  content.append(summary, grid, agentRoutes, routes);
 }
 function showDetail(kind, id) {
   selected = { kind, id };
@@ -3113,6 +3675,7 @@ for (const target of ["team", "requests", "knowledge", "settings", "status"])
       selected = null;
       composing = false;
       creatingProject = false;
+      knowledgeImportMode = null;
       pendingConfirmation = null;
       editingKnowledgeDocument = null;
       editingSpecDocument = null;
@@ -3199,6 +3762,7 @@ async function refresh(projectId, includeRuntimeStatus = false) {
     const modalActive =
       composing ||
       creatingProject ||
+      knowledgeImportMode ||
       pendingConfirmation ||
       editingKnowledgeDocument ||
       editingSpecDocument;

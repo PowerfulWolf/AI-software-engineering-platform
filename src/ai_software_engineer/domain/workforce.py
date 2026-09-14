@@ -15,7 +15,13 @@ from ai_software_engineer.domain.enums import (
     WorkItemStatus,
 )
 from ai_software_engineer.domain.identity import ContextId, RepositoryId, RunId
-from ai_software_engineer.domain.model import DomainModel, JsonValue, NonEmptyStr, ensure_unique
+from ai_software_engineer.domain.model import (
+    DomainModel,
+    JsonValue,
+    NonEmptyStr,
+    ReasoningEffort,
+    ensure_unique,
+)
 from ai_software_engineer.domain.task import AttemptCount, TaskId
 
 AgentProfileVersion = NonEmptyStr
@@ -69,6 +75,7 @@ class ModelRoute(DomainModel):
 
     provider: NonEmptyStr
     model: NonEmptyStr
+    reasoning_effort: ReasoningEffort | None = None
     tier: BrainTier
     capabilities: tuple[NonEmptyStr, ...] = ()
 
@@ -85,6 +92,28 @@ class RiskModelFloor(DomainModel):
     minimum_tier: BrainTier
 
 
+class ModelRouteReference(DomainModel):
+    provider: NonEmptyStr
+    model: NonEmptyStr
+    reasoning_effort: ReasoningEffort | None = None
+
+
+class RoleModelRoutes(DomainModel):
+    role: AgentRole
+    routes: Annotated[tuple[ModelRouteReference, ...], Field(min_length=1)]
+
+    @model_validator(mode="after")
+    def validate_routes(self) -> Self:
+        ensure_unique(
+            (
+                (route.provider, route.model, route.reasoning_effort)
+                for route in self.routes
+            ),
+            f"{self.role.value} role model routes",
+        )
+        return self
+
+
 class ModelPolicy(DomainModel):
     """Organization rule set from which a ModelRouter can make an auditable selection."""
 
@@ -94,12 +123,15 @@ class ModelPolicy(DomainModel):
     default_tier: BrainTier
     routes: Annotated[tuple[ModelRoute, ...], Field(min_length=1)]
     risk_floors: Annotated[tuple[RiskModelFloor, ...], Field(min_length=4, max_length=4)]
+    role_routes: tuple[RoleModelRoutes, ...] = ()
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_policy(self) -> Self:
-        route_keys = tuple((route.provider, route.model) for route in self.routes)
-        ensure_unique(route_keys, "ModelPolicy provider/model routes")
+        route_keys = tuple(
+            (route.provider, route.model, route.reasoning_effort) for route in self.routes
+        )
+        ensure_unique(route_keys, "ModelPolicy provider/model/reasoning routes")
         route_tiers = {route.tier for route in self.routes}
         if self.default_tier not in route_tiers:
             raise ValueError("ModelPolicy default_tier requires an eligible route")
@@ -114,7 +146,37 @@ class ModelPolicy(DomainModel):
             raise ValueError(
                 "ModelPolicy risk floor has no eligible route: " + ", ".join(unavailable)
             )
+        ensure_unique((item.role for item in self.role_routes), "ModelPolicy role routes")
+        for role_policy in self.role_routes:
+            resolved = tuple(
+                self.resolve_route_reference(reference) for reference in role_policy.routes
+            )
+            ensure_unique(
+                (
+                    (route.provider, route.model, route.reasoning_effort)
+                    for route in resolved
+                ),
+                f"{role_policy.role.value} resolved role model routes",
+            )
         return self
+
+    def resolve_route_reference(self, reference: ModelRouteReference) -> ModelRoute:
+        """Resolve an exact route or one unambiguous legacy provider/model reference."""
+        candidates = tuple(
+            route
+            for route in self.routes
+            if route.provider == reference.provider
+            and route.model == reference.model
+            and (
+                reference.reasoning_effort is None
+                or route.reasoning_effort == reference.reasoning_effort
+            )
+        )
+        if not candidates:
+            raise ValueError("ModelPolicy role routes reference an unavailable route")
+        if len(candidates) > 1:
+            raise ValueError("ModelPolicy role route is ambiguous without reasoning_effort")
+        return candidates[0]
 
 
 class ModelSelection(DomainModel):
@@ -125,6 +187,7 @@ class ModelSelection(DomainModel):
     policy_version: NonEmptyStr
     provider: NonEmptyStr
     model: NonEmptyStr
+    reasoning_effort: ReasoningEffort | None = None
     tier: BrainTier
     reasons: Annotated[tuple[ModelRouteReason, ...], Field(min_length=1)]
     selected_at: AwareDatetime
@@ -295,9 +358,11 @@ __all__ = [
     "ModelPolicy",
     "ModelPolicyId",
     "ModelRoute",
+    "ModelRouteReference",
     "ModelSelection",
     "RiskModelFloor",
     "RoleAssignment",
+    "RoleModelRoutes",
     "RunDemand",
     "RunId",
     "TaskLease",

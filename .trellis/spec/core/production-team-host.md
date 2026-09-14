@@ -16,6 +16,7 @@ ProductionConfig.from_environment(environment: Mapping[str, str] | None = None) 
 ProductionConfig.from_file(path: str | Path) -> ProductionConfig
 ProductionConfig.require_mysql_dsn(environment: Mapping[str, str]) -> str
 ProductionConfig.enabled_routes() -> tuple[ProviderRouteConfig, ...]
+ProductionConfig.routes_for(role: TeamRole) -> tuple[ProviderRouteConfig, ...]
 ProductionConfig.path_from_environment(environment: Mapping[str, str] | None = None) -> Path
 _default_platform_root() -> str
 _normalize_platform_root(value: str) -> str
@@ -51,7 +52,8 @@ MySqlDispatchAuthority.commit_if_current(
 StructuredModelClient.complete(*, instructions: str,
                                input_payload: Mapping[str, object],
                                output_schema: Mapping[str, object],
-                               timeout_seconds: int) -> StructuredModelResult
+                               timeout_seconds: int,
+                               input_images: tuple[Path, ...] = ()) -> StructuredModelResult
 AgentAdapter.run(request: AgentRequest) -> AgentResult
 ModelRouteAttemptStore.append(attempt: ModelRouteAttempt) -> ModelRouteAttempt
 
@@ -95,12 +97,23 @@ Environment contract:
 - `ProductionConfig` 必须符合 `schemas/production-config.schema.json`。macOS/Linux 省略
   `platform_root` 时纯解析为当前用户的 `~/.ase`；显式绝对路径或安全的 `~/...` 优先，后者先展开
   再进入同一校验。任何显式路径中的 `..`、控制字符或非绝对结果都失败关闭，不得回退默认值；
-  解析本身不得创建目录。至少一条 enabled route，`(provider, model)` 唯一；`console_port` 必须为
+  解析本身不得创建目录。至少一条 enabled route，`(provider, model, reasoning_effort)` 唯一；`console_port` 必须为
   `1..65535`；JSON 中 secret 只能由环境变量间接引用。`ProductionConfig.default()` 是 Web
   Console 首次运行的内置可见配置；仅当配置文件不存在时使用，不写文件。已有但无效的配置不得
   回退默认值。CLI 生产命令仍要求有效的显式/默认路径配置文件。
 - `codex_cli` route 不得声明 endpoint/API key；`responses` route 必须声明 endpoint 与
   `api_key_env`。示例默认 `live_model_execution=false`，生产执行必须显式改为 `true`。
+- `agent_model_routes` 为空时兼容旧配置并对所有角色使用 enabled `model_routes` 顺序；非空时必须
+  精确覆盖 Manager/Product/Designer/Planner/Coder/QA/Reviewer 七个角色，每个引用只可指向启用且
+  唯一的 provider/model/reasoning effort。首项是该 Agent 主模型，后续项是冻结后的降级顺序；
+  同一模型的不同推理程度是可独立选择的路由。旧引用缺少 `reasoning_effort` 时，仅允许其
+  provider/model 在启用目录中唯一，否则按歧义配置失败关闭。
+- 新生成的 `ModelSelection`、`AgentDefinition` 和 `ModelRouteAttempt` 必须固化精确的
+  `reasoning_effort`。升级前已持久化且缺少该字段的 Artifact 保留为“未指定”，仅当同一
+  provider/model 在当前冻结路由中唯一时才可恢复；不得静默把旧记录解释为 `medium`。
+- `image_input` 可显式声明 Responses route 的图片能力；省略时 Codex CLI 为 true、Responses 为
+  false。带截图的 Product 调用跳过不支持图片的 route；没有可用图片 route 时返回非瞬态 typed
+  provider error，不得丢图退化成纯文字。
 - 未注入测试 provider 时，`project_entry()` 惰性缓存
   `TeamHost.from_environment().project_entry()`；不得要求每个 CLI 进程手工调用
   `configure_project_entry(...)`，也不得因配置失败回退 fake Agent。
@@ -286,6 +299,84 @@ and completed a broad pytest subprocess, yet timed out dirty before commit/Artif
 test can prevent prompt regression; only live delivery can test model compliance. If this contract is
 still insufficient, the next architectural step is staged/checkpointed Coder execution, not unbounded
 timeouts or silent adoption of dirty work.
+
+## Scenario: per-Agent model routes and Product image input
+
+### 1. Scope / Trigger
+
+Applies when Settings changes a Team member's primary model, a configured provider advertises image
+support, or Product receives Requirement screenshots. Agent identity and approval independence do not
+change when the model changes.
+
+### 2. Signatures
+
+```python
+ProductionConfig.routes_for(role: TeamRole) -> tuple[ProviderRouteConfig, ...]
+ProviderRouteConfig.accepts_image_input() -> bool
+ConfiguredStructuredClientFactory.for_project(
+    repository_root: Path,
+    role: TeamRole = TeamRole.PRODUCT,
+) -> StructuredModelClient
+StructuredModelClient.complete(..., input_images: tuple[Path, ...] = ())
+```
+
+### 3. Contracts
+
+- `model_routes` is the enabled route catalog. `agent_model_routes` is the seven-role ordered policy;
+  the first route is primary and every following route is fallback. Route identity is
+  `(provider, model, reasoning_effort)`, so one model may expose multiple independently selectable
+  reasoning levels.
+- Product, Designer and Planner resolve their own TeamRole at the structured-client seam. Coder, QA
+  and Reviewer preserve the same order in the content-versioned ModelPolicy used by dispatch.
+- Settings may materialize an explicit seven-role policy from a legacy empty policy, but it may not
+  mint new Agent IDs. Manager's route is persisted/displayed even though current Manager decisions use
+  deterministic Skills and do not invoke a model.
+- The read-only runtime Status projection resolves the same seven role policies through
+  `ProductionConfig.routes_for(role)` and joins each exact route triple with catalog readiness. It
+  preserves primary/fallback order and labels whether the policy is explicit or inherited; it does
+  not claim that any route is currently executing.
+- Codex CLI receives one `--image <verified-path>` pair per Product screenshot. Responses receives
+  standard `input_image` data URLs only when the operator explicitly marks that route image-capable.
+
+### 4. Validation & Error Matrix
+
+| Case | Required result |
+|---|---|
+| Legacy config without `agent_model_routes` | every role inherits enabled catalog order |
+| Explicit policy missing a role or containing duplicate/disabled/unknown route | reject config |
+| Legacy policy reference omits effort and matches multiple enabled routes | reject as ambiguous |
+| Same provider/model with different efforts | preserve both routes and the Agent's exact selection |
+| Status projects explicit or inherited policy | seven ordered role records with exact effort and matching readiness |
+| Product route 1 lacks image support, route 2 supports it | skip route 1; invoke route 2 with images |
+| No configured route supports images | typed non-transient failure; do not omit screenshots |
+| Coder primary differs from QA primary | each dispatch/model attempt records its role-specific route |
+| Provider/model/reasoning edited in Settings | update matching policy references before validation |
+
+### 5. Good / Base / Bad Cases
+
+- Good: Product uses a vision-capable model while Coder and Reviewer use different preferred brains;
+  quota fallback stays within each Agent's frozen list.
+- Base: one enabled Codex route serves all seven members exactly as before.
+- Bad: encode the model into Agent identity, silently send a screenshot to a text-only endpoint, or
+  use a global first route after an explicit role policy exists.
+
+### 6. Tests Required
+
+- `tests/config/test_production.py`: full role coverage, enabled references and independent ordering.
+- `tests/manager/test_team_roster.py`: delivery role order survives ModelPolicy compilation.
+- `tests/agents/test_structured_models.py`: Codex `--image` binding and unsupported-route skipping.
+- `tests/team_view/ui.test.cjs`: seven role selectors and distinct Product/Coder primary values in the
+  saved config.
+
+### 7. Wrong vs Correct
+
+```python
+# Wrong: every role ignores its configured policy.
+routes = config.enabled_routes()
+
+# Correct: role resolution happens before constructing provider adapters.
+routes = config.routes_for(role)
+```
 
 #### Platform-owned Coder candidate finalization
 

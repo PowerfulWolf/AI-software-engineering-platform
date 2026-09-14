@@ -12,6 +12,13 @@
     "version": {"type": "string", "minLength": 1},
     "model": {"type": "string", "minLength": 1},
     "provider": {"type": "string"},
+    "reasoning_effort": {
+      "anyOf": [
+        {"enum": ["low", "medium", "high", "xhigh"]},
+        {"type": "null"}
+      ],
+      "default": null
+    },
     "system_prompt_ref": {"type": "string", "minLength": 1},
     "permissions": {
       "type": "object",

@@ -7,6 +7,7 @@ from typing import NoReturn
 import pytest
 
 from ai_software_engineer.agents import StructuredModelClient, StructuredModelResult
+from ai_software_engineer.domain import TeamRole
 from ai_software_engineer.manager.delivery import ResumeProjectDelivery
 from ai_software_engineer.multi_directory.models import (
     IntegrationCommandError,
@@ -31,7 +32,8 @@ class PlanningBackend:
         self.inputs: list[Mapping[str, object]] = []
         self.command_error = False
 
-    def client(self, scope: DirectoryScope) -> StructuredModelClient:
+    def client(self, scope: DirectoryScope, role: TeamRole) -> StructuredModelClient:
+        del scope, role
         return self
 
     def complete(
@@ -41,7 +43,9 @@ class PlanningBackend:
         input_payload: Mapping[str, object],
         output_schema: Mapping[str, object],
         timeout_seconds: int,
+        input_images: tuple[Path, ...] = (),
     ) -> StructuredModelResult:
+        del instructions, timeout_seconds, input_images
         self.inputs.append(input_payload)
         return StructuredModelResult(payload=self.plan.to_wire(), duration_ms=0)
 

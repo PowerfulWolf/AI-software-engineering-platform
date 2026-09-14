@@ -1,12 +1,13 @@
 """Shared primitives for strict domain models and JSON wire payloads."""
 
 from collections.abc import Hashable, Iterable
-from typing import Annotated, cast
+from typing import Annotated, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, StringConstraints
 
 type JsonValue = str | int | float | bool | list[JsonValue] | dict[str, JsonValue] | None
 type WirePayload = dict[str, JsonValue]
+type ReasoningEffort = Literal["low", "medium", "high", "xhigh"]
 
 NonEmptyStr = Annotated[str, StringConstraints(min_length=1)]
 

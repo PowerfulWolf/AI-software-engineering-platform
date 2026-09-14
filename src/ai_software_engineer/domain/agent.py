@@ -5,7 +5,13 @@ from typing import Annotated, Final, Self
 from pydantic import Field, StrictBool, StrictInt, StringConstraints, model_validator
 
 from ai_software_engineer.domain.enums import AgentRole, ArtifactKind, NetworkAccess
-from ai_software_engineer.domain.model import DomainModel, JsonValue, NonEmptyStr, ensure_unique
+from ai_software_engineer.domain.model import (
+    DomainModel,
+    JsonValue,
+    NonEmptyStr,
+    ReasoningEffort,
+    ensure_unique,
+)
 
 AgentId = Annotated[str, StringConstraints(pattern=r"^agent_[a-z0-9][a-z0-9_-]{2,63}$")]
 RetryLimit = Annotated[StrictInt, Field(ge=0, le=5)]
@@ -62,6 +68,7 @@ class AgentDefinition(DomainModel):
     version: NonEmptyStr
     model: NonEmptyStr
     provider: NonEmptyStr | None = None
+    reasoning_effort: ReasoningEffort | None = None
     system_prompt_ref: NonEmptyStr | None = None
     permissions: AgentPermissions
     input_artifacts: tuple[ArtifactKind, ...]

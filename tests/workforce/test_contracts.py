@@ -17,10 +17,12 @@ from ai_software_engineer.domain import (
     ModelPolicy,
     ModelRoute,
     ModelRouteReason,
+    ModelRouteReference,
     ModelSelection,
     RiskModelFloor,
     RiskTier,
     RoleAssignment,
+    RoleModelRoutes,
     RunDemand,
     TaskLease,
     TeamRole,
@@ -73,6 +75,7 @@ def make_model_selection() -> ModelSelection:
         policy_version="v1",
         provider="provider-a",
         model="model-reasoning",
+        reasoning_effort="medium",
         tier=BrainTier.REASONING,
         reasons=(ModelRouteReason.RISK_FLOOR, ModelRouteReason.TASK_COMPLEXITY),
         selected_at=NOW,
@@ -199,6 +202,103 @@ def test_model_policy_requires_every_risk_floor_and_an_available_route() -> None
         ModelPolicy.model_validate(payload)
 
 
+def test_model_policy_distinguishes_same_model_by_reasoning_effort() -> None:
+    base = make_model_policy()
+    shared = ModelRoute(
+        provider="provider-a",
+        model="model-shared",
+        reasoning_effort="medium",
+        tier=BrainTier.STANDARD,
+    )
+    stronger = shared.model_copy(update={"reasoning_effort": "high"})
+    policy = base.model_copy(
+        update={
+            "routes": (*base.routes, shared, stronger),
+            "role_routes": (
+                RoleModelRoutes(
+                    role=AgentRole.CODER,
+                    routes=(
+                        ModelRouteReference(
+                            provider="provider-a",
+                            model="model-shared",
+                            reasoning_effort="high",
+                        ),
+                    ),
+                ),
+            ),
+        }
+    )
+
+    validated = ModelPolicy.model_validate(policy.to_wire())
+
+    assert validated.role_routes[0].routes[0].reasoning_effort == "high"
+
+
+def test_model_policy_accepts_unique_legacy_route_reference_without_reasoning_effort() -> None:
+    base = make_model_policy()
+    policy = base.model_copy(
+        update={
+            "role_routes": (
+                RoleModelRoutes(
+                    role=AgentRole.CODER,
+                    routes=(
+                        ModelRouteReference(
+                            provider="provider-a",
+                            model="model-reasoning",
+                        ),
+                    ),
+                ),
+            ),
+        }
+    )
+
+    validated = ModelPolicy.model_validate(policy.to_wire())
+
+    assert validated.role_routes[0].routes[0].reasoning_effort is None
+
+
+def test_model_policy_rejects_ambiguous_legacy_route_reference() -> None:
+    base = make_model_policy()
+    shared = ModelRoute(
+        provider="provider-a",
+        model="model-shared",
+        reasoning_effort="medium",
+        tier=BrainTier.STANDARD,
+    )
+    policy = base.model_copy(
+        update={
+            "routes": (
+                *base.routes,
+                shared,
+                shared.model_copy(update={"reasoning_effort": "high"}),
+            ),
+            "role_routes": (
+                RoleModelRoutes(
+                    role=AgentRole.CODER,
+                    routes=(
+                        ModelRouteReference(
+                            provider="provider-a",
+                            model="model-shared",
+                        ),
+                    ),
+                ),
+            ),
+        }
+    )
+
+    with pytest.raises(ValidationError, match="ambiguous without reasoning_effort"):
+        ModelPolicy.model_validate(policy.to_wire())
+
+
+def test_legacy_model_selection_keeps_missing_reasoning_effort_unspecified() -> None:
+    payload = make_model_selection().to_wire()
+    payload.pop("reasoning_effort")
+
+    selection = ModelSelection.model_validate(payload)
+
+    assert selection.reasoning_effort is None
+
+
 @pytest.mark.parametrize(
     "status",
     (
@@ -304,6 +404,7 @@ def test_run_allocation_makes_agent_model_and_policy_attributable() -> None:
 
     assert allocation.agent_id == "agent_engineer_alpha"
     assert allocation.model_selection.tier is BrainTier.REASONING
+    assert allocation.model_selection.reasoning_effort == "medium"
     assert allocation.context_manifest_id == "ctx_" + "c" * 64
 
 

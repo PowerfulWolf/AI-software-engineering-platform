@@ -30,8 +30,14 @@ from ai_software_engineer.config.production import (
     ModelProviderKind,
     ProviderRouteConfig,
 )
+from ai_software_engineer.domain.enums import TeamRole
 from ai_software_engineer.domain.identity import ProjectId, TeamId
-from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
+from ai_software_engineer.domain.model import (
+    DomainModel,
+    NonEmptyStr,
+    ReasoningEffort,
+    ensure_unique,
+)
 from ai_software_engineer.knowledge_documents import (
     KnowledgeDocumentId,
     KnowledgeDocumentManifest,
@@ -51,6 +57,15 @@ from ai_software_engineer.learning import (
     LearningProposalView,
     ProjectLearningStore,
 )
+from ai_software_engineer.manager.delivery import CheckpointDigest
+from ai_software_engineer.manager.delivery_checkpoint import DeliveryId
+from ai_software_engineer.multi_directory.attachments import (
+    RequirementAttachmentError,
+    RequirementAttachmentStore,
+    RequirementScreenshot,
+)
+from ai_software_engineer.multi_directory.models import JointStage
+from ai_software_engineer.multi_directory.store import JointJournal
 from ai_software_engineer.project_workspace import ProjectName, ProjectWorkspace
 from ai_software_engineer.spec_documents import (
     CreateSpecDocument,
@@ -167,11 +182,18 @@ class CodexRuntimeStatus(DomainModel):
 class ModelRouteRuntimeStatus(DomainModel):
     provider: NonEmptyStr
     model: NonEmptyStr
+    reasoning_effort: ReasoningEffort
     kind: ModelProviderKind
     enabled: StrictBool
     ready: StrictBool
     credential_environment_name: EnvVarName | None = None
     credential_configured: StrictBool | None = None
+
+
+class AgentModelRouteRuntimeStatus(DomainModel):
+    role: TeamRole
+    policy_source: Literal["agent_policy", "global_default"]
+    routes: Annotated[tuple[ModelRouteRuntimeStatus, ...], Field(min_length=1, max_length=16)]
 
 
 class RuntimeStatusSnapshot(DomainModel):
@@ -187,6 +209,9 @@ class RuntimeStatusSnapshot(DomainModel):
     team_knowledge_imported: int
     team_knowledge_selected: int
     model_routes: Annotated[tuple[ModelRouteRuntimeStatus, ...], Field(max_length=16)]
+    agent_model_routes: Annotated[
+        tuple[AgentModelRouteRuntimeStatus, ...], Field(min_length=7, max_length=7)
+    ]
 
 
 class KnowledgeDocumentView(DomainModel):
@@ -242,6 +267,15 @@ class ConsoleAdministration(Protocol):
     def team(self) -> TeamSummary: ...
     def projects(self) -> tuple[ProjectSummary, ...]: ...
     def create_project(self, request: CreateProjectRequest) -> ProjectSummary: ...
+    def upload_requirement_screenshot(
+        self,
+        project_id: str,
+        delivery_id: DeliveryId | str,
+        expected_checkpoint_sha256: CheckpointDigest | str,
+        *,
+        filename: str,
+        content: bytes,
+    ) -> RequirementScreenshot: ...
     def knowledge(self) -> tuple[KnowledgeDocumentView, ...]: ...
     def document_content(self, document_id: str) -> KnowledgeDocumentContentView: ...
     def import_document(self, *, filename: str, content: bytes) -> KnowledgeDocumentView: ...
@@ -354,6 +388,41 @@ class LocalConsoleAdministration:
             return self._project_summary(project)
         except (OSError, ValueError) as error:
             raise AdministrationError("Project could not be created safely") from error
+
+    def upload_requirement_screenshot(
+        self,
+        project_id: str,
+        delivery_id: DeliveryId | str,
+        expected_checkpoint_sha256: CheckpointDigest | str,
+        *,
+        filename: str,
+        content: bytes,
+    ) -> RequirementScreenshot:
+        project = self._project(project_id)
+        try:
+            checkpoint = JointJournal(project.requirements_root, read_only=True).current(
+                str(delivery_id)
+            )
+            if checkpoint is None:
+                raise ValueError("Requirement was not found")
+            if checkpoint.checkpoint_sha256 != str(expected_checkpoint_sha256):
+                raise ValueError("Requirement checkpoint changed")
+            if checkpoint.stage not in {
+                JointStage.READY_FOR_DISCUSSION,
+                JointStage.WAITING_PRODUCT_REPLY,
+                JointStage.WAITING_PRODUCT_APPROVAL,
+            }:
+                raise ValueError("Requirement is not accepting Product screenshots")
+            return RequirementAttachmentStore(
+                project.requirements_root,
+                project_id=project.manifest.project_id,
+            ).put(
+                delivery_id,
+                filename=filename,
+                content=content,
+            )
+        except (OSError, RequirementAttachmentError, ValueError) as error:
+            raise AdministrationError("Requirement screenshot could not be stored") from error
 
     def knowledge(self) -> tuple[KnowledgeDocumentView, ...]:
         team = self._team()
@@ -773,6 +842,24 @@ class LocalConsoleAdministration:
             self._model_route_status(route, codex.available)
             for route in self._saved_config.model_routes
         )
+        route_statuses = {
+            (route.provider, route.model, route.reasoning_effort): status
+            for route, status in zip(self._saved_config.model_routes, routes, strict=True)
+        }
+        policy_source: Literal["agent_policy", "global_default"] = (
+            "agent_policy" if self._saved_config.agent_model_routes else "global_default"
+        )
+        agent_routes = tuple(
+            AgentModelRouteRuntimeStatus(
+                role=role,
+                policy_source=policy_source,
+                routes=tuple(
+                    route_statuses[(route.provider, route.model, route.reasoning_effort)]
+                    for route in self._saved_config.routes_for(role)
+                ),
+            )
+            for role in TeamRole
+        )
         try:
             team = self._team()
             imported = len(TeamKnowledgeDocumentStore(team).list())
@@ -804,6 +891,7 @@ class LocalConsoleAdministration:
             team_knowledge_imported=imported,
             team_knowledge_selected=selected,
             model_routes=routes,
+            agent_model_routes=agent_routes,
         )
 
     def _model_route_status(
@@ -813,6 +901,7 @@ class LocalConsoleAdministration:
             return ModelRouteRuntimeStatus(
                 provider=route.provider,
                 model=route.model,
+                reasoning_effort=route.reasoning_effort,
                 kind=route.kind,
                 enabled=route.enabled,
                 ready=not route.enabled or codex_available,
@@ -822,6 +911,7 @@ class LocalConsoleAdministration:
         return ModelRouteRuntimeStatus(
             provider=route.provider,
             model=route.model,
+            reasoning_effort=route.reasoning_effort,
             kind=route.kind,
             enabled=route.enabled,
             ready=not route.enabled or configured,
@@ -964,6 +1054,7 @@ def _codex_status(executable: str, environment: Mapping[str, str]) -> CodexRunti
 
 __all__ = [
     "AdministrationError",
+    "AgentModelRouteRuntimeStatus",
     "CodexRuntimeStatus",
     "ConsoleAdministration",
     "CreateProjectRequest",

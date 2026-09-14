@@ -299,9 +299,93 @@ def test_runtime_values_are_write_only_and_feed_status(tmp_path: Path) -> None:
     assert status.live_model_execution is False
     assert status.team_knowledge_imported == 0
     assert status.team_knowledge_selected == 0
+    assert status.model_routes[0].reasoning_effort == "medium"
+    assert [item.role.value for item in status.agent_model_routes] == [
+        "manager",
+        "product",
+        "designer",
+        "planner",
+        "coder",
+        "qa",
+        "reviewer",
+    ]
+    assert all(item.policy_source == "global_default" for item in status.agent_model_routes)
     assert dsn not in snapshot.model_dump_json()
     assert dsn not in status.model_dump_json()
     assert dsn in (tmp_path / "runtime.env").read_text(encoding="utf-8")
+
+
+def test_status_reports_each_agent_exact_model_route_and_readiness(tmp_path: Path) -> None:
+    roles = ("manager", "product", "designer", "planner", "coder", "qa", "reviewer")
+    medium = {
+        "provider": "codex",
+        "model": "gpt-5.6-terra",
+        "reasoning_effort": "medium",
+    }
+    high = {**medium, "reasoning_effort": "high"}
+    deepseek = {
+        "provider": "deepseek",
+        "model": "deepseek-v4",
+        "reasoning_effort": "high",
+    }
+    config = ProductionConfig.model_validate(
+        {
+            "platform_root": str(tmp_path / "platform"),
+            "team_id": "team_test",
+            "team_name": "Test team",
+            "database": {"dsn_env": "TEST_MYSQL_DSN"},
+            "codex_executable": "/bin/sh",
+            "model_routes": [
+                {**medium, "kind": "codex_cli"},
+                {**high, "kind": "codex_cli"},
+                {
+                    **deepseek,
+                    "kind": "responses",
+                    "endpoint": "https://example.invalid/v1/responses",
+                    "api_key_env": "DEEPSEEK_API_KEY",
+                },
+            ],
+            "agent_model_routes": [
+                {
+                    "role": role,
+                    "routes": (
+                        [deepseek, medium, high]
+                        if role == "product"
+                        else [high, medium, deepseek]
+                        if role == "coder"
+                        else [medium, high, deepseek]
+                    ),
+                }
+                for role in roles
+            ],
+        }
+    )
+    TeamWorkspace.initialize(
+        config.platform_root,
+        team_id=config.team_id,
+        name=config.team_name,
+    )
+    administration = LocalConsoleAdministration(
+        runtime_config=config,
+        config_path=tmp_path / "config.json",
+        environment={
+            "TEST_MYSQL_DSN": "mysql+pymysql://user:secret@example.invalid/database",
+        },
+        mysql_probe=lambda _: None,
+    )
+
+    status = administration.status()
+    by_role = {item.role.value: item for item in status.agent_model_routes}
+
+    assert all(item.policy_source == "agent_policy" for item in by_role.values())
+    assert [route.reasoning_effort for route in by_role["coder"].routes[:2]] == [
+        "high",
+        "medium",
+    ]
+    assert by_role["coder"].routes[0].ready is True
+    assert by_role["product"].routes[0].provider == "deepseek"
+    assert by_role["product"].routes[0].ready is False
+    assert by_role["product"].routes[0].credential_configured is False
 
 
 def test_runtime_update_rejects_unknown_variable_and_invalid_dsn(tmp_path: Path) -> None:

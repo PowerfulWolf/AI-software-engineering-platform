@@ -2,6 +2,7 @@
 
 from .administration import (
     AdministrationError,
+    AgentModelRouteRuntimeStatus,
     CodexRuntimeStatus,
     ConsoleAdministration,
     CreateProjectRequest,
@@ -52,6 +53,7 @@ from .transport import ConsoleApplication, SubmitOperation, TeamReader, create_c
 __all__ = [
     "CONSOLE_INTENT_ADAPTER",
     "AdministrationError",
+    "AgentModelRouteRuntimeStatus",
     "CodexRuntimeStatus",
     "ConsoleAction",
     "ConsoleAdministration",

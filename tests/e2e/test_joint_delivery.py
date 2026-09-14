@@ -14,6 +14,7 @@ from typer.testing import CliRunner
 from ai_software_engineer.agents import StructuredModelClient, StructuredModelResult
 from ai_software_engineer.cli import app
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
+from ai_software_engineer.domain import TeamRole
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
     DeliveryCheckpointStale,
@@ -41,7 +42,12 @@ class JointModels(StructuredClientFactory, StructuredModelClient):
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    def for_project(self, repository_root: Path) -> StructuredModelClient:
+    def for_project(
+        self,
+        repository_root: Path,
+        role: TeamRole = TeamRole.PRODUCT,
+    ) -> StructuredModelClient:
+        del role
         return self
 
     def complete(
@@ -51,7 +57,9 @@ class JointModels(StructuredClientFactory, StructuredModelClient):
         input_payload: Mapping[str, object],
         output_schema: Mapping[str, object],
         timeout_seconds: int,
+        input_images: tuple[Path, ...] = (),
     ) -> StructuredModelResult:
+        del input_images
         title = str(output_schema["title"])
         self.calls.append(title)
         simple = _ScriptedStructuredClient()

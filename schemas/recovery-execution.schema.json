@@ -436,6 +436,24 @@
           "title": "Model",
           "type": "string"
         },
+        "reasoning_effort": {
+          "anyOf": [
+            {
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "xhigh"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reasoning Effort"
+        },
         "tier": {
           "$ref": "#/$defs/BrainTier"
         },

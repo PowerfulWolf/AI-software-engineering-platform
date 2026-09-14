@@ -262,6 +262,7 @@ class DispatchRoleWorktreeCoordinator:
             or definition.id != phase.agent_id
             or definition.provider != phase.model_selection.provider
             or definition.model != phase.model_selection.model
+            or definition.reasoning_effort != phase.model_selection.reasoning_effort
             or phase.assignment.attempt != attempt
             or phase.assignment.task_id != dispatch.task_id
             or phase.lease.task_id != dispatch.task_id

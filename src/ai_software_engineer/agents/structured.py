@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import subprocess
@@ -20,7 +21,12 @@ from ai_software_engineer.agents.openai_compatible import (
     HttpTransport,
     UrllibHttpTransport,
 )
-from ai_software_engineer.domain.model import JsonValue, WirePayload, ensure_unique
+from ai_software_engineer.domain.model import (
+    JsonValue,
+    ReasoningEffort,
+    WirePayload,
+    ensure_unique,
+)
 
 
 class StructuredModelError(RuntimeError):
@@ -50,6 +56,7 @@ class StructuredModelClient(Protocol):
         input_payload: Mapping[str, object],
         output_schema: Mapping[str, object],
         timeout_seconds: int,
+        input_images: tuple[Path, ...] = (),
     ) -> StructuredModelResult: ...
 
 
@@ -58,10 +65,14 @@ class StructuredModelRoute:
     provider: str
     model: str
     client: StructuredModelClient
+    reasoning_effort: ReasoningEffort = "medium"
+    supports_images: bool = True
 
     def __post_init__(self) -> None:
         if not self.provider.strip() or not self.model.strip():
             raise ValueError("structured model route requires provider and model")
+        if self.reasoning_effort not in {"low", "medium", "high", "xhigh"}:
+            raise ValueError("structured model route requires a supported reasoning effort")
 
 
 class FallbackStructuredModelClient:
@@ -71,8 +82,11 @@ class FallbackStructuredModelClient:
         if not routes:
             raise ValueError("structured fallback requires at least one route")
         ensure_unique(
-            ((route.provider, route.model) for route in routes),
-            "structured provider/model routes",
+            (
+                (route.provider, route.model, route.reasoning_effort)
+                for route in routes
+            ),
+            "structured provider/model/reasoning routes",
         )
         self._routes = routes
 
@@ -83,10 +97,28 @@ class FallbackStructuredModelClient:
         input_payload: Mapping[str, object],
         output_schema: Mapping[str, object],
         timeout_seconds: int,
+        input_images: tuple[Path, ...] = (),
     ) -> StructuredModelResult:
+        candidates = tuple(
+            route for route in self._routes if not input_images or route.supports_images
+        )
+        if not candidates:
+            raise StructuredModelError(
+                AgentErrorCode.PROVIDER_ERROR,
+                "No configured structured model route accepts image input",
+                transient=False,
+            )
         last: StructuredModelError | None = None
-        for index, route in enumerate(self._routes):
+        for index, route in enumerate(candidates):
             try:
+                if input_images:
+                    return route.client.complete(
+                        instructions=instructions,
+                        input_payload=input_payload,
+                        output_schema=output_schema,
+                        timeout_seconds=timeout_seconds,
+                        input_images=input_images,
+                    )
                 return route.client.complete(
                     instructions=instructions,
                     input_payload=input_payload,
@@ -95,7 +127,7 @@ class FallbackStructuredModelClient:
                 )
             except StructuredModelError as error:
                 last = error
-                if index == len(self._routes) - 1 or not _allows_fallback(error):
+                if index == len(candidates) - 1 or not _allows_fallback(error):
                     raise
         assert last is not None
         raise last
@@ -110,7 +142,7 @@ class CodexCliStructuredModelClient:
         repository_root: str | Path,
         model: str,
         executable: str = "codex",
-        reasoning_effort: str = "medium",
+        reasoning_effort: ReasoningEffort = "medium",
         environment: Mapping[str, str] | None = None,
     ) -> None:
         root = Path(repository_root).expanduser().resolve(strict=False)
@@ -131,6 +163,7 @@ class CodexCliStructuredModelClient:
         input_payload: Mapping[str, object],
         output_schema: Mapping[str, object],
         timeout_seconds: int,
+        input_images: tuple[Path, ...] = (),
     ) -> StructuredModelResult:
         started = time.monotonic()
         prompt = _prompt(instructions, input_payload)
@@ -143,6 +176,11 @@ class CodexCliStructuredModelClient:
                 encoding="utf-8",
             )
             try:
+                image_arguments = tuple(
+                    argument
+                    for image in _verified_images(input_images)
+                    for argument in ("--image", str(image))
+                )
                 completed = subprocess.run(
                     (
                         self._executable,
@@ -155,6 +193,7 @@ class CodexCliStructuredModelClient:
                         str(schema_path),
                         "--output-last-message",
                         str(output_path),
+                        *image_arguments,
                         "-m",
                         self._model,
                         "-c",
@@ -216,11 +255,15 @@ class ResponsesStructuredModelClient:
         endpoint: str,
         api_key: str,
         model: str,
+        reasoning_effort: ReasoningEffort = "medium",
         transport: HttpTransport | None = None,
     ) -> None:
         self._endpoint = _normalize_endpoint(endpoint)
         self._api_key = _safe_text(api_key, "api_key")
         self._model = _safe_text(model, "model")
+        if reasoning_effort not in {"low", "medium", "high", "xhigh"}:
+            raise ValueError("unsupported Responses reasoning effort")
+        self._reasoning_effort = reasoning_effort
         self._transport = transport or UrllibHttpTransport()
 
     def complete(
@@ -230,17 +273,39 @@ class ResponsesStructuredModelClient:
         input_payload: Mapping[str, object],
         output_schema: Mapping[str, object],
         timeout_seconds: int,
+        input_images: tuple[Path, ...] = (),
     ) -> StructuredModelResult:
         started = time.monotonic()
+        user_content: JsonValue
+        if input_images:
+            user_content = cast(
+                JsonValue,
+                [
+                    {
+                        "type": "input_text",
+                        "text": json.dumps(input_payload, ensure_ascii=False, sort_keys=True),
+                    },
+                    *(
+                        {
+                            "type": "input_image",
+                            "image_url": _image_data_url(image),
+                        }
+                        for image in _verified_images(input_images)
+                    ),
+                ],
+            )
+        else:
+            user_content = json.dumps(input_payload, ensure_ascii=False, sort_keys=True)
         body: WirePayload = {
             "model": self._model,
+            "reasoning": {"effort": self._reasoning_effort},
             "input": cast(
                 JsonValue,
                 [
                     {"role": "system", "content": instructions},
                     {
                         "role": "user",
-                        "content": json.dumps(input_payload, ensure_ascii=False, sort_keys=True),
+                        "content": user_content,
                     },
                 ],
             ),
@@ -315,6 +380,65 @@ _FALLBACK_CODES = frozenset(
 
 def _allows_fallback(error: StructuredModelError) -> bool:
     return error.transient and error.code in _FALLBACK_CODES
+
+
+def _verified_images(values: tuple[Path, ...]) -> tuple[Path, ...]:
+    images: list[Path] = []
+    for value in values:
+        if value.is_symlink():
+            raise StructuredModelError(
+                AgentErrorCode.POLICY_VIOLATION,
+                "Structured model image input is invalid",
+                transient=False,
+            )
+        try:
+            path = value.resolve(strict=True)
+        except OSError as error:
+            raise StructuredModelError(
+                AgentErrorCode.POLICY_VIOLATION,
+                "Structured model image input is unavailable",
+                transient=False,
+            ) from error
+        if path.is_symlink() or not path.is_file():
+            raise StructuredModelError(
+                AgentErrorCode.POLICY_VIOLATION,
+                "Structured model image input is invalid",
+                transient=False,
+            )
+        images.append(path)
+    try:
+        ensure_unique((str(path) for path in images), "structured model image inputs")
+    except ValueError as error:
+        raise StructuredModelError(
+            AgentErrorCode.POLICY_VIOLATION,
+            "Structured model image inputs must be unique",
+            transient=False,
+        ) from error
+    return tuple(images)
+
+
+def _image_data_url(path: Path) -> str:
+    try:
+        content = path.read_bytes()
+    except OSError as error:
+        raise StructuredModelError(
+            AgentErrorCode.POLICY_VIOLATION,
+            "Structured model image input is unavailable",
+            transient=False,
+        ) from error
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        media_type = "image/png"
+    elif content.startswith(b"\xff\xd8\xff"):
+        media_type = "image/jpeg"
+    elif len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+        media_type = "image/webp"
+    else:
+        raise StructuredModelError(
+            AgentErrorCode.POLICY_VIOLATION,
+            "Structured model image type is unsupported",
+            transient=False,
+        )
+    return f"data:{media_type};base64,{base64.b64encode(content).decode('ascii')}"
 
 
 def _prompt(instructions: str, payload: Mapping[str, object]) -> str:

@@ -32,8 +32,9 @@ def _next_tier(tier: BrainTier) -> BrainTier:
     return _TIER_ORDER[min(_TIER_RANK[tier] + 1, len(_TIER_ORDER) - 1)]
 
 
-def _route_name(provider: str, model: str) -> str:
-    return f"{provider}/{model}"
+def _route_name(provider: str, model: str, reasoning_effort: str | None) -> str:
+    suffix = f"@{reasoning_effort}" if reasoning_effort is not None else ""
+    return f"{provider}/{model}{suffix}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,12 +132,27 @@ class ModelRouter:
         if complexity or objective_escalation:
             target_tier = _next_tier(target_tier)
 
-        routes = tuple(
-            sorted(
-                policy.routes,
-                key=lambda route: (_TIER_RANK[route.tier], route.provider, route.model),
-            )
+        role_policy = next(
+            (item for item in policy.role_routes if item.role == demand.role),
+            None,
         )
+        if role_policy is None:
+            routes = tuple(
+                sorted(
+                    policy.routes,
+                    key=lambda route: (
+                        _TIER_RANK[route.tier],
+                        route.provider,
+                        route.model,
+                        route.reasoning_effort or "",
+                    ),
+                )
+            )
+        else:
+            routes = tuple(
+                policy.resolve_route_reference(reference)
+                for reference in role_policy.routes
+            )
         capacity_routes = tuple(
             route
             for route in routes
@@ -152,7 +168,12 @@ class ModelRouter:
                     message=f"No policy route can hold {demand.context_tokens} context tokens",
                     required_tier=target_tier,
                     considered_routes=tuple(
-                        _route_name(route.provider, route.model) for route in routes
+                        _route_name(
+                            route.provider,
+                            route.model,
+                            route.reasoning_effort,
+                        )
+                        for route in routes
                     ),
                 ),
             )
@@ -169,7 +190,12 @@ class ModelRouter:
                     message=f"No route satisfies minimum BrainTier {target_tier.value}",
                     required_tier=target_tier,
                     considered_routes=tuple(
-                        _route_name(route.provider, route.model) for route in capacity_routes
+                        _route_name(
+                            route.provider,
+                            route.model,
+                            route.reasoning_effort,
+                        )
+                        for route in capacity_routes
                     ),
                 ),
             )
@@ -193,6 +219,7 @@ class ModelRouter:
             policy_version=policy.version,
             provider=selected.provider,
             model=selected.model,
+            reasoning_effort=selected.reasoning_effort,
             tier=selected.tier,
             reasons=tuple(reasons),
             selected_at=now,

@@ -8,6 +8,7 @@ import pytest
 
 from ai_software_engineer.agents import StructuredModelClient, StructuredModelResult
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
+from ai_software_engineer.domain import TeamRole
 from ai_software_engineer.knowledge_documents import (
     ProjectKnowledgeDocumentStore,
     TeamKnowledgeDocumentStore,
@@ -47,7 +48,12 @@ class _RecordingFactory(StructuredClientFactory, StructuredModelClient):
     def __init__(self) -> None:
         self.payloads: list[Mapping[str, object]] = []
 
-    def for_project(self, repository_root: Path) -> StructuredModelClient:
+    def for_project(
+        self,
+        repository_root: Path,
+        role: TeamRole = TeamRole.PRODUCT,
+    ) -> StructuredModelClient:
+        del role
         assert repository_root.is_dir()
         return self
 
@@ -58,7 +64,9 @@ class _RecordingFactory(StructuredClientFactory, StructuredModelClient):
         input_payload: Mapping[str, object],
         output_schema: Mapping[str, object],
         timeout_seconds: int,
+        input_images: tuple[Path, ...] = (),
     ) -> StructuredModelResult:
+        del input_images
         self.payloads.append(input_payload)
         return _ScriptedStructuredClient().complete(
             instructions=instructions,

@@ -19,8 +19,14 @@ from pydantic import (
     model_validator,
 )
 
+from ai_software_engineer.domain.enums import TeamRole
 from ai_software_engineer.domain.identity import ProjectId, TeamId
-from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
+from ai_software_engineer.domain.model import (
+    DomainModel,
+    NonEmptyStr,
+    ReasoningEffort,
+    ensure_unique,
+)
 from ai_software_engineer.project_workspace import ProjectName
 from ai_software_engineer.team_workspace import TeamName, validate_knowledge_path
 
@@ -70,7 +76,8 @@ class ProviderRouteConfig(DomainModel):
     kind: ModelProviderKind
     endpoint: NonEmptyStr | None = None
     api_key_env: EnvVarName | None = None
-    reasoning_effort: Literal["low", "medium", "high", "xhigh"] = "medium"
+    reasoning_effort: ReasoningEffort = "medium"
+    image_input: StrictBool | None = None
     enabled: StrictBool = True
 
     @model_validator(mode="after")
@@ -82,6 +89,33 @@ class ProviderRouteConfig(DomainModel):
             raise ValueError("Responses route requires endpoint and api_key_env")
         if self.endpoint is not None and any(ord(character) < 32 for character in self.endpoint):
             raise ValueError("provider endpoint cannot contain control characters")
+        return self
+
+    def accepts_image_input(self) -> bool:
+        if self.image_input is not None:
+            return self.image_input
+        return self.kind is ModelProviderKind.CODEX_CLI
+
+
+class ProviderRouteReference(DomainModel):
+    provider: NonEmptyStr
+    model: NonEmptyStr
+    reasoning_effort: ReasoningEffort | None = None
+
+
+class AgentModelRoutePolicy(DomainModel):
+    role: TeamRole
+    routes: Annotated[tuple[ProviderRouteReference, ...], Field(min_length=1, max_length=16)]
+
+    @model_validator(mode="after")
+    def validate_routes(self) -> Self:
+        ensure_unique(
+            (
+                (route.provider, route.model, route.reasoning_effort)
+                for route in self.routes
+            ),
+            f"{self.role.value} Agent model routes",
+        )
         return self
 
 
@@ -98,6 +132,7 @@ class ProductionConfig(DomainModel):
     project_knowledge_paths: tuple[NonEmptyStr, ...] = ()
     database: ProductionDatabaseConfig = ProductionDatabaseConfig()
     model_routes: Annotated[tuple[ProviderRouteConfig, ...], Field(min_length=1, max_length=16)]
+    agent_model_routes: Annotated[tuple[AgentModelRoutePolicy, ...], Field(max_length=7)] = ()
     codex_executable: NonEmptyStr = "codex"
     live_model_execution: StrictBool = False
     console_port: Annotated[StrictInt, Field(ge=1, le=65535)] = 8765
@@ -147,11 +182,33 @@ class ProductionConfig(DomainModel):
         if not root.is_absolute() or any(ord(character) < 32 for character in self.platform_root):
             raise ValueError("platform_root must be an absolute safe path")
         ensure_unique(
-            ((route.provider, route.model) for route in self.model_routes),
-            "production provider/model routes",
+            (
+                (route.provider, route.model, route.reasoning_effort)
+                for route in self.model_routes
+            ),
+            "production provider/model/reasoning routes",
         )
         if not any(route.enabled for route in self.model_routes):
             raise ValueError("at least one production model route must be enabled")
+        ensure_unique(
+            (policy.role for policy in self.agent_model_routes),
+            "Agent model route roles",
+        )
+        if self.agent_model_routes and {policy.role for policy in self.agent_model_routes} != set(
+            TeamRole
+        ):
+            raise ValueError("Agent model routes must cover every Team role")
+        for policy in self.agent_model_routes:
+            resolved = tuple(
+                self._resolve_route_reference(reference) for reference in policy.routes
+            )
+            ensure_unique(
+                (
+                    (route.provider, route.model, route.reasoning_effort)
+                    for route in resolved
+                ),
+                f"{policy.role.value} resolved Agent model routes",
+            )
         ensure_unique(self.team_knowledge_paths, "team knowledge selection")
         if len(self.team_knowledge_paths) > 64:
             raise ValueError("team knowledge selection exceeds document budget")
@@ -210,3 +267,36 @@ class ProductionConfig(DomainModel):
 
     def enabled_routes(self) -> tuple[ProviderRouteConfig, ...]:
         return tuple(route for route in self.model_routes if route.enabled)
+
+    def routes_for(self, role: TeamRole) -> tuple[ProviderRouteConfig, ...]:
+        """Return the role's frozen primary/fallback order, or the legacy global order."""
+        policy = next((item for item in self.agent_model_routes if item.role == role), None)
+        if policy is None:
+            return self.enabled_routes()
+        return tuple(self._resolve_route_reference(reference) for reference in policy.routes)
+
+    def _resolve_route_reference(
+        self,
+        reference: ProviderRouteReference,
+    ) -> ProviderRouteConfig:
+        candidates = tuple(
+            route
+            for route in self.enabled_routes()
+            if route.provider == reference.provider
+            and route.model == reference.model
+            and (
+                reference.reasoning_effort is None
+                or route.reasoning_effort == reference.reasoning_effort
+            )
+        )
+        if not candidates:
+            raise ValueError(
+                "Agent routes must reference enabled model routes: "
+                f"{reference.provider}/{reference.model}"
+            )
+        if len(candidates) > 1:
+            raise ValueError(
+                f"Agent route {reference.provider}/{reference.model} is ambiguous without "
+                "reasoning_effort"
+            )
+        return candidates[0]

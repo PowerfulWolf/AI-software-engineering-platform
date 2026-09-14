@@ -97,6 +97,29 @@ def test_quota_exhaustion_falls_back_and_persists_both_routes(tmp_path: Path) ->
     assert attempts[1].outcome is RouteAttemptOutcome.SUCCEEDED
 
 
+def test_same_model_with_distinct_reasoning_efforts_are_distinct_routes(
+    tmp_path: Path,
+) -> None:
+    request = _coder_request()
+    medium = _ResultAdapter(_failed(request, AgentErrorCode.RATE_LIMITED, transient=True))
+    high = _ResultAdapter(_success(request))
+    store = FileModelRouteAttemptStore(tmp_path / "routes")
+    adapter = FallbackAgentAdapter(
+        (
+            ProviderAgentRoute("codex", "gpt-5.6-sol", medium, "medium"),
+            ProviderAgentRoute("codex", "gpt-5.6-sol", high, "high"),
+        ),
+        attempt_store=store,
+        clock=_Clock(),
+    )
+
+    assert adapter.run(request).status is AgentRunStatus.SUCCEEDED
+    assert tuple(item.reasoning_effort for item in store.list_for_run(request.run_id)) == (
+        "medium",
+        "high",
+    )
+
+
 @pytest.mark.parametrize(
     "code",
     (AgentErrorCode.RATE_LIMITED, AgentErrorCode.PROVIDER_UNAVAILABLE, AgentErrorCode.TIMEOUT),

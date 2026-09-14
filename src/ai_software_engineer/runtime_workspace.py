@@ -574,6 +574,8 @@ class RuntimeAgentRun(DomainModel):
             or self.agent_definition.role is not self.allocation.role
             or self.agent_definition.model != self.allocation.model_selection.model
             or self.agent_definition.provider != self.allocation.model_selection.provider
+            or self.agent_definition.reasoning_effort
+            != self.allocation.model_selection.reasoning_effort
         ):
             raise ValueError("AgentDefinition does not match AgentRunAllocation")
         if not Path(self.code_root).is_absolute():
@@ -642,6 +644,7 @@ class RuntimeWorkforceResolver:
                 "version": agent.version,
                 "model": selection.model,
                 "provider": selection.provider,
+                "reasoning_effort": selection.reasoning_effort,
                 "metadata": {
                     **base_definition.metadata,
                     "team_id": self._binding.team_id,
@@ -740,12 +743,18 @@ class RuntimeWorkforceResolver:
             raise RuntimeAllocationError("ModelSelection does not match ModelPolicy version")
         if selection.selected_at > allocated_at:
             raise RuntimeAllocationError("ModelSelection occurs after allocation time")
-        if not any(
-            route.provider == selection.provider
+        candidates = tuple(
+            route
+            for route in policy.routes
+            if route.provider == selection.provider
             and route.model == selection.model
             and route.tier is selection.tier
-            for route in policy.routes
-        ):
+            and (
+                selection.reasoning_effort is None
+                or route.reasoning_effort == selection.reasoning_effort
+            )
+        )
+        if len(candidates) != 1:
             raise RuntimeAllocationError("ModelSelection route is absent from ModelPolicy")
 
 

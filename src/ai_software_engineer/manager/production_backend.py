@@ -54,6 +54,7 @@ from ai_software_engineer.domain import (
     RiskTier,
     TaskConstraints,
     TaskStatus,
+    TeamRole,
     TechnicalDesign,
     WorkItem,
     WorkItemStatus,
@@ -194,7 +195,11 @@ _ROLE_OUTPUTS = {
 
 
 class StructuredClientFactory(Protocol):
-    def for_project(self, repository_root: Path) -> StructuredModelClient: ...
+    def for_project(
+        self,
+        repository_root: Path,
+        role: TeamRole = TeamRole.PRODUCT,
+    ) -> StructuredModelClient: ...
 
 
 class ConfiguredStructuredClientFactory:
@@ -208,13 +213,17 @@ class ConfiguredStructuredClientFactory:
         self._config = config
         self._environment = dict(environment)
 
-    def for_project(self, repository_root: Path) -> StructuredModelClient:
+    def for_project(
+        self,
+        repository_root: Path,
+        role: TeamRole = TeamRole.PRODUCT,
+    ) -> StructuredModelClient:
         if not self._config.live_model_execution:
             raise ProductionConfigError(
                 "live_model_execution is disabled in the production configuration"
             )
         routes: list[StructuredModelRoute] = []
-        for route in self._config.enabled_routes():
+        for route in self._config.routes_for(role):
             if route.kind is ModelProviderKind.CODEX_CLI:
                 client: StructuredModelClient = CodexCliStructuredModelClient(
                     repository_root=repository_root,
@@ -235,12 +244,15 @@ class ConfiguredStructuredClientFactory:
                     endpoint=route.endpoint,
                     api_key=api_key,
                     model=route.model,
+                    reasoning_effort=route.reasoning_effort,
                 )
             routes.append(
                 StructuredModelRoute(
                     provider=route.provider,
                     model=route.model,
                     client=client,
+                    reasoning_effort=route.reasoning_effort,
+                    supports_images=route.accepts_image_input(),
                 )
             )
         return FallbackStructuredModelClient(tuple(routes))
@@ -444,7 +456,10 @@ class ProductionProjectDeliveryBackend:
                 design_store=facts.design,
                 product_store=facts.product,
                 adapter=StructuredDesignerAgentAdapter(
-                    self._structured_clients.for_project(facts.workspace.repository_root)
+                    self._structured_clients.for_project(
+                        facts.workspace.repository_root,
+                        TeamRole.DESIGNER,
+                    )
                 ),
                 stage_advancer=self._preparer,
             )
@@ -485,7 +500,10 @@ class ProductionProjectDeliveryBackend:
             service = PlannerStageService(
                 context_builder=PlannerContextBuilder(),
                 adapter=StructuredPlannerAgentAdapter(
-                    self._structured_clients.for_project(facts.workspace.repository_root)
+                    self._structured_clients.for_project(
+                        facts.workspace.repository_root,
+                        TeamRole.PLANNER,
+                    )
                 ),
                 execution_plans=facts.planning,
                 request_revisions=facts.product,
@@ -694,7 +712,7 @@ class ProductionProjectDeliveryBackend:
         )
         router = ModelRouter(
             route_context_capacities={
-                (policy.routes[0].provider, policy.routes[0].model): 2_000_000
+                (route.provider, route.model): 2_000_000 for route in policy.routes
             }
         )
         scheduler = PortfolioScheduler()
@@ -833,7 +851,7 @@ class ProductionProjectDeliveryBackend:
             environment=self._environment,
             route_adapters=route_adapters or self._delivery_route_adapters,
         )
-        primary = self._config.enabled_routes()[0]
+        primary = self._config.routes_for(TeamRole.CODER)[0]
         runtime_config = RuntimeConfig(
             endpoint="https://runtime.invalid/v1/responses",
             model=primary.model,
@@ -919,7 +937,10 @@ class ProductionProjectDeliveryBackend:
             project_baseline=facts.baseline,
             store=facts.product,
             adapter=StructuredProductAgentAdapter(
-                self._structured_clients.for_project(facts.workspace.repository_root)
+                self._structured_clients.for_project(
+                    facts.workspace.repository_root,
+                    TeamRole.PRODUCT,
+                )
             ),
             stage_advancer=self._preparer,
             human_decision_verifier=self._human_decision_verifier,
@@ -1264,6 +1285,7 @@ def _agent_definitions(
             version="v0.1",
             model=phase.model_selection.model,
             provider=phase.model_selection.provider,
+            reasoning_effort=phase.model_selection.reasoning_effort,
             permissions=_delivery_role_permissions(phase.role, allowed_paths, commands),
             input_artifacts=_ROLE_INPUTS[phase.role],
             output_artifacts=_ROLE_OUTPUTS[phase.role],

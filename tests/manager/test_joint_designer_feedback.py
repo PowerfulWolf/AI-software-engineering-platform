@@ -35,7 +35,9 @@ class DesigningBackend(PlanningBackend):
         input_payload: Mapping[str, object],
         output_schema: Mapping[str, object],
         timeout_seconds: int,
+        input_images: tuple[Path, ...] = (),
     ) -> StructuredModelResult:
+        del input_images
         if output_schema.get("title") == "JointTechnicalDesign":
             self.design_inputs.append(input_payload)
             result = self.designs.pop(0)

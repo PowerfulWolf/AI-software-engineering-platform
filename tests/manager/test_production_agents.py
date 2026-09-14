@@ -31,7 +31,9 @@ class _StructuredClient:
         input_payload: Mapping[str, object],
         output_schema: Mapping[str, object],
         timeout_seconds: int,
+        input_images: tuple[Path, ...] = (),
     ) -> StructuredModelResult:
+        assert not input_images
         assert instructions and input_payload and timeout_seconds > 0
         self.schemas.append(output_schema)
         return StructuredModelResult(payload=self.payload, duration_ms=7)

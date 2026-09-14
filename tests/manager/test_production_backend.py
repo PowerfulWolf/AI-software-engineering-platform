@@ -45,6 +45,7 @@ from ai_software_engineer.domain import (
     ReviewReportArtifact,
     ReviewReportContent,
     ReviewVerdict,
+    TeamRole,
 )
 from ai_software_engineer.manager import production_backend
 from ai_software_engineer.manager.delivery import (
@@ -72,7 +73,9 @@ class _ScriptedStructuredClient(StructuredModelClient):
         input_payload: Mapping[str, object],
         output_schema: Mapping[str, object],
         timeout_seconds: int,
+        input_images: tuple[Path, ...] = (),
     ) -> StructuredModelResult:
+        del input_images
         del instructions, input_payload, timeout_seconds
         properties = output_schema["properties"]
         assert isinstance(properties, Mapping)
@@ -162,7 +165,12 @@ class _ScriptedStructuredClient(StructuredModelClient):
 
 
 class _ScriptedClientFactory(StructuredClientFactory):
-    def for_project(self, repository_root: Path) -> StructuredModelClient:
+    def for_project(
+        self,
+        repository_root: Path,
+        role: TeamRole = TeamRole.PRODUCT,
+    ) -> StructuredModelClient:
+        del role
         assert repository_root.is_dir()
         return _ScriptedStructuredClient()
 

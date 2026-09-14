@@ -8,11 +8,14 @@ import json
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.domain import (
     AgentProfile,
+    AgentRole,
     BrainTier,
     ModelPolicy,
     ModelRoute,
+    ModelRouteReference,
     RiskModelFloor,
     RiskTier,
+    RoleModelRoutes,
     TeamRole,
 )
 from ai_software_engineer.domain.model import JsonValue
@@ -54,18 +57,33 @@ def production_team_roster(
     config: ProductionConfig,
 ) -> tuple[tuple[AgentProfile, ...], ModelPolicy]:
     """Return the stable seven-member roster and its immutable default model policy."""
-    primary = config.enabled_routes()[0]
     policy = ModelPolicy(
         id="model_policy_delivery_default",
         version="v0.1",
         default_tier=BrainTier.CRITICAL,
-        routes=(
+        routes=tuple(
             ModelRoute(
-                provider=primary.provider,
-                model=primary.model,
+                provider=route.provider,
+                model=route.model,
+                reasoning_effort=route.reasoning_effort,
                 tier=BrainTier.CRITICAL,
                 capabilities=TEAM_CAPABILITIES,
-            ),
+            )
+            for route in config.enabled_routes()
+        ),
+        role_routes=tuple(
+            RoleModelRoutes(
+                role=AgentRole(role.value),
+                routes=tuple(
+                    ModelRouteReference(
+                        provider=route.provider,
+                        model=route.model,
+                        reasoning_effort=route.reasoning_effort,
+                    )
+                    for route in config.routes_for(role)
+                ),
+            )
+            for role in (TeamRole.CODER, TeamRole.QA, TeamRole.REVIEWER)
         ),
         risk_floors=tuple(
             RiskModelFloor(risk=risk, minimum_tier=BrainTier.CRITICAL) for risk in RiskTier

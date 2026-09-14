@@ -19,6 +19,39 @@
         "dsn_env": {"$ref": "#/$defs/env_var", "default": "ASE_MYSQL_DSN"}
       }
     },
+    "route_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "model"],
+      "properties": {
+        "provider": {"type": "string", "minLength": 1},
+        "model": {"type": "string", "minLength": 1},
+        "reasoning_effort": {
+          "anyOf": [
+            {"enum": ["low", "medium", "high", "xhigh"]},
+            {"type": "null"}
+          ],
+          "default": null
+        }
+      }
+    },
+    "agent_model_route_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "routes"],
+      "properties": {
+        "role": {
+          "enum": ["manager", "product", "designer", "planner", "coder", "qa", "reviewer"]
+        },
+        "routes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/route_reference"}
+        }
+      }
+    },
     "route": {
       "type": "object",
       "additionalProperties": false,
@@ -38,6 +71,10 @@
         "reasoning_effort": {
           "enum": ["low", "medium", "high", "xhigh"],
           "default": "medium"
+        },
+        "image_input": {
+          "anyOf": [{"type": "boolean"}, {"type": "null"}],
+          "default": null
         },
         "enabled": {"type": "boolean", "default": true}
       },
@@ -99,6 +136,29 @@
       "minItems": 1,
       "maxItems": 16,
       "items": {"$ref": "#/$defs/route"}
+    },
+    "agent_model_routes": {
+      "type": "array",
+      "maxItems": 7,
+      "uniqueItems": true,
+      "default": [],
+      "items": {"$ref": "#/$defs/agent_model_route_policy"},
+      "oneOf": [
+        {"maxItems": 0},
+        {
+          "minItems": 7,
+          "maxItems": 7,
+          "allOf": [
+            {"contains": {"properties": {"role": {"const": "manager"}}, "required": ["role"]}, "minContains": 1, "maxContains": 1},
+            {"contains": {"properties": {"role": {"const": "product"}}, "required": ["role"]}, "minContains": 1, "maxContains": 1},
+            {"contains": {"properties": {"role": {"const": "designer"}}, "required": ["role"]}, "minContains": 1, "maxContains": 1},
+            {"contains": {"properties": {"role": {"const": "planner"}}, "required": ["role"]}, "minContains": 1, "maxContains": 1},
+            {"contains": {"properties": {"role": {"const": "coder"}}, "required": ["role"]}, "minContains": 1, "maxContains": 1},
+            {"contains": {"properties": {"role": {"const": "qa"}}, "required": ["role"]}, "minContains": 1, "maxContains": 1},
+            {"contains": {"properties": {"role": {"const": "reviewer"}}, "required": ["role"]}, "minContains": 1, "maxContains": 1}
+          ]
+        }
+      ]
     },
     "codex_executable": {"type": "string", "minLength": 1, "default": "codex"},
     "live_model_execution": {"type": "boolean", "default": false},

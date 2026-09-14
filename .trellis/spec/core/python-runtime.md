@@ -1459,8 +1459,10 @@ allocation 的唯一 Python 领域入口；正式 wire contract 是 `schemas/wor
 - 所有 model 继承 frozen/extra-forbid `DomainModel`，ID 使用 typed regex，时间必须带时区；
 - AgentProfile 声明 capabilities、eligible_roles、max_parallel_assignments 和 default ModelPolicy；
   不允许 concrete model/project permissions；
-- ModelPolicy 的 provider/model route 必须唯一，完整覆盖四个 RiskTier，default/floor BrainTier
-  必须有 route；ModelSelection 至少一个 machine-readable reason；
+- ModelPolicy 的 provider/model/reasoning route 必须唯一，完整覆盖四个 RiskTier，default/floor
+  BrainTier 必须有 route；同一 provider/model 的不同 reasoning effort 可并存；ModelSelection
+  在新 Run 中必须携带 exact reasoning effort 和至少一个 machine-readable reason；旧持久化
+  selection 可缺失 effort，但只在 provider/model 唯一时允许恢复，歧义时失败关闭；
 - RunDemand 只携带可观测的 role/risk、上下文规模、计划变更规模、受影响层和失败计数，供后续
   ModelRouter 做 deterministic selection；不得把具体模型固化到 AgentProfile；
 - waiting WorkItem 必须有 wait_reason；RETRY_SCHEDULED 还必须有 future available_at；非 waiting

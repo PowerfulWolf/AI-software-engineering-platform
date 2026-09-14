@@ -29,8 +29,8 @@ Repository 目录和 Requirement 交付事实保持隔离。
 
 - 一个已选择的 Project，以及该 Requirement 涉及的一个或多个本地代码目录（当前交付使用 Git）；
 - 一条自然语言需求；Product Agent 将其整理为可评审 Product Spec，并由用户确认；
-- Team/Project 背景知识、必须遵守的 Team/Project Spec、Repository 原生规范，以及
-  AgentProfile 与 ModelPolicy。背景知识用于理解，Spec 用于约束和验收，两者不再混放。
+- Team 通用知识、Project 背景知识、必须遵守的 Team/Project Spec、Repository 原生规范，以及
+  AgentProfile 与 ModelPolicy。知识用于理解，Spec 用于约束和验收，两者不再混放。
 
 日常 Web Console 入口的交付结果：
 
@@ -53,7 +53,7 @@ request 命令已经自动生成完整评估与交付汇总报告。Reporter 仍
 
 ## 总体架构
 
-平台只有一支长期存在的 Team，但可接入多个 Project。`<platform_root>/team` 保存团队成员、背景知识、
+平台只有一支长期存在的 Team，但可接入多个 Project。`<platform_root>/team` 保存团队成员、通用知识、
 团队 Spec、Skills 和模型策略；`<platform_root>/projects/<project_id>` 保存该 Project 的背景知识、Spec、
 Repository sidecar 和 Requirement 事实。Team 与 Projects 是同一数据根下的并列边界，不互相包含。
 
@@ -124,9 +124,11 @@ flowchart TB
     VIEW --> HUMAN
 ```
 
-模型路由引擎具备风险与能力约束，但当前生产 Host 使用配置中首个启用模型作为主模型，
-默认策略对各风险等级采用同一档位；额度或临时故障时才按规则尝试备用路由。
-这不是已经实现按任务难度自动选择不同成本/能力模型的完整策略。
+模型路由由“可用模型目录 + 每个 Agent 的有序策略”组成。Manager、Product、Designer、Planner、
+Coder、QA、Reviewer 可以分别配置主模型和备用顺序；额度、限流或临时故障只会在该 Agent 自己的
+策略内回退。同一模型可以用不同 Reasoning 配置成多条独立路由，例如 Product 选择 `medium`、Coder
+选择 `high`；Agent 的选择会同时绑定 provider、model 和 reasoning。旧配置未指定角色策略时，七个成员继续共享全局启用顺序。当前仍未实现根据任务难度
+自动调整成本/能力档位的完整动态策略。
 
 ### 各层只负责什么
 
@@ -295,7 +297,7 @@ AI-software-engineering-platform/
 ├── team/                              # 唯一、长期存在的 AI 团队
 │   ├── team.json                      # Team 身份和数据根绑定
 │   ├── agents/                        # 七个长期 AgentProfile 与能力/容量
-│   ├── knowledge/                     # 跨 Project 背景知识，只用于理解上下文
+│   ├── knowledge/                     # 跨 Project 通用知识，只用于理解上下文
 │   │   ├── documents/<id>/            # 原文件、规范化正文和不可变 manifest
 │   │   └── selection.json             # 当前显式启用集合；修改无需重启
 │   ├── specs/                         # 团队级强制开发规范
@@ -359,7 +361,7 @@ v0.1 推荐先以一台可信的 macOS/Linux 主机运行，不必先部署 Kube
 - Codex CLI 路由推荐以当前账号可用的 `gpt-5.6-terra` 为主，路由顺序由配置决定；需要时显式配置
   DeepSeek、Qwen 的 Responses-compatible endpoint 作为备用，不能把禁用或占位路由当成自动降级；
 - Coder、QA、Reviewer 使用同一 candidate commit 的独立 worktree，QA/Reviewer 不提交业务代码；
-- Team/Project 背景知识和 Spec 的创建/启停由 sidecar 即时提供给之后的新需求，无需重启；已准备
+- Team 通用知识、Project 背景知识和 Spec 的创建/启停由 sidecar 即时提供给之后的新需求，无需重启；已准备
   Requirement 绑定精确版本，不会被静默重解释；运行配置改变仍需重启；
 - SQLite 仅用于底层兼容命令和离线测试，不作为 `ase request` 生产入口的数据库。
 
@@ -403,17 +405,23 @@ Origin；它不是可直接暴露到局域网或公网的多用户系统。用 `
 首次进入当前环境时：
 
 1. 打开“设置”。没有配置文件时页面展示内置默认值；按需修改平台数据目录、完整 MySQL DSN、
-   模型路由/API Key、Codex、真实模型开关和 Console 端口。先测试 MySQL 连接，再保存；页面显示
+   模型路由/API Key、七个 Agent 各自的主模型与备用顺序、Codex、真实模型开关和 Console 端口。
+   先测试 MySQL 连接，再保存；页面显示
    “需要重启”时执行 `./scripts/ase-console-service.sh restart`。
-2. 打开“状态”，确认 MySQL、Codex、Team workspace 和启用的模型路由已经就绪。Team 没有知识
-   文档是正常状态，不会被标记成故障。
+2. 打开“状态”，确认 MySQL、Codex、Team workspace 和启用的模型路由已经就绪。“Agent 模型路由”
+   按团队固定顺序展示七名成员各自的主模型、备用顺序、Reasoning 和就绪情况；这是当前配置状态，
+   不表示 Agent 正在调用模型。“可用模型目录”用于检查底层 Provider/凭证。Team 没有知识文档是
+   正常状态，不会被标记成故障。
 3. 打开“需求与交付”，在本页创建或选择 Project。Project 表示一组长期共享业务背景、知识和开发
    规范的项目，不等于单个 Git 仓库，也不等于一次 Requirement；同一 Project 可以登记多个代码目录。
 4. 打开“知识库”，先选择独立的“团队知识库”或“项目知识库”，再选择内容类型。团队知识库只维护
    一份，不挂在任何 Project 下面；项目知识库会要求选择具体 Project：
-   - “背景知识”：上传业务背景、术语和架构说明；支持 Markdown、TXT、PDF、DOCX。
-   - “开发规范”：创建必须遵守的工程规则，填写稳定 `spec_key`、适用角色/阶段/Repository/
-     路径和可验证的检查方法。创建只生成新版本，必须再点击启用；同一 `spec_key` 同时只启用一个版本。
+   - 团队“通用知识”与项目“背景知识”：页面默认只展示已导入资产；点击对应导入按钮，在弹窗中一次
+     选择多份跨 Project 共享知识或当前 Project 的业务背景、术语和架构说明。支持 Markdown、TXT、
+     PDF、DOCX。
+   - “开发规范”：页面默认只展示现有规范；点击“导入开发规范”，在弹窗中批量选择 Markdown/TXT，
+     并配置适用角色、阶段、Repository、路径和可选验证方法。稳定 `spec_key` 由平台根据文件名生成并在
+     后续更新中复用，不需要用户填写。创建只生成未启用的新版本，检查后必须显式启用。
    - “学习改进”只在项目知识库出现：扫描当前 Project 已持久化的 QA FAIL 与 Review REJECT，查看复发次数和证据；
      人工可拒绝，或批准沉淀为背景知识、Project Spec 或非执行性的 Skill 设计建议。
 5. 背景知识和 Spec 启停会立即用于之后的新需求，不需要重启；已经准备或批准的需求不会被静默套用
@@ -423,8 +431,8 @@ Origin；它不是可直接暴露到局域网或公网的多用户系统。用 `
 
 | 操作 | 是否重启 |
 |---|---|
-| 上传/启停 Team 或 Project 背景知识、创建/启停 Spec、处理学习改进、创建/切换 Project | 不需要 |
-| 修改平台数据目录、MySQL DSN、模型路由/API Key、Codex 路径、真实执行开关或端口 | 需要；页面会显示“需要重启” |
+| 上传/启停 Team 通用知识或 Project 背景知识、创建/启停 Spec、处理学习改进、创建/切换 Project | 不需要 |
+| 修改平台数据目录、MySQL DSN、模型路由/API Key、Agent 模型策略、Codex 路径、真实执行开关或端口 | 需要；页面会显示“需要重启” |
 
 单文件原始大小上限为 10 MB，规范化正文上限为 256 KB。加密 PDF、无可提取文本、损坏文档、危险
 文件名和超限内容都会安全拒绝。原始文档位于
@@ -434,13 +442,15 @@ Spec 位于对应 scope 的 `specs/documents/<spec_id>/`，当前启用集合写
 
 ### 3. 日常需求交付全部在网页完成
 
-1. 进入“需求与交付”，在同一页创建或选择 Project，再点击“新建需求”。填写 Requirement 名称，并每行填写
-   一个绝对代码目录；一个 Requirement 可以覆盖同一仓库的多个模块，也可以跨多个 Git 仓库。
+1. 进入“需求与交付”，在同一页创建或选择 Project，再点击“新建需求”。填写 Requirement 名称，点击
+   “选择代码目录”打开系统目录弹窗，一次选择一个或多个本地目录；选中的绝对路径会显示为可移除标签，
+   无需手工输入。一个 Requirement 可以覆盖同一仓库的多个模块，也可以跨多个 Git 仓库。
 2. Manager 将这些目录注册为该 Project 的 Repository，建立外置 sidecar、发现 RepositoryProfile
    并编译 Team + Project + Repository 规范。操作卡片
    显示“已接单/执行中/成功/失败”；完成后点击“打开需求工作区”。
-3. 在需求详情中和 Product Agent 讨论。ProductSpec 准备好后先阅读“阶段产物”，确认范围和验收
-   标准，再点击“批准 ProductSpec 并开始交付”。
+3. 在需求详情中和 Product Agent 讨论，可输入文字，也可直接在输入框粘贴最多 4 张 PNG、JPEG 或 WebP 截图；
+   截图会绑定当前 Requirement/checkpoint，只提供给 Product Agent。ProductSpec 准备好后先阅读
+   “阶段产物”，确认范围和验收标准，再点击“批准 ProductSpec 并开始交付”。
 4. Designer、Planner 和每个 Repository 的 `Coder → QA → Reviewer` 串行工作。团队成员页只把当前岗位
    标成执行中，其他岗位显示已完成或等待；需求页同时展示涉及的所有目录和后台操作。
 
@@ -524,7 +534,7 @@ cp config/production.example.json "$HOME/.config/ai-software-engineer/config.jso
 }
 ```
 
-背景知识选择由 Web Console 写入 Team/Project sidecar；配置中的旧 `*_knowledge_paths` 字段仅供兼容入口，
+知识选择由 Web Console 写入 Team/Project sidecar；配置中的旧 `*_knowledge_paths` 字段仅供兼容入口，
 新部署无需填写。
 
 再为当前 shell 设置 MySQL DSN；配置放在其他位置时同时设置 `ASE_CONFIG`：
@@ -682,7 +692,9 @@ MySQL 集成测试需设置 `ASE_TEST_MYSQL_DSN`，指向专用测试数据库�
 | M16 平台管理面 | 浏览器创建/选择 Project，分别管理内容寻址的 Team 通用知识与 Project 知识，并维护平台目录、MySQL、模型路由、Codex、执行开关和端口；知识选择即时生效，运行配置变化明确要求重启 |
 | M17 Team–Project 边界 | 将唯一 Team 与多个 Project 设为并列聚合；Project 管理知识、规范、Repository 和 Requirement；增加 Web Console 后台启动、停止、重启、状态和日志脚本 |
 | M18 运行设置与状态 | Web Console 可零配置降级启动，展示内置默认值；设置页写入完整 MySQL DSN/Responses API Key，服务脚本加载受控 `runtime.env`；独立状态页显示 MySQL、Codex、Team、知识和模型路由就绪情况；知识管理不混入设置页 |
-| M19 Spec Center 与持续学习 | 背景知识与强制 Spec 分离；Team/Project Spec 支持不可变版本、显式启用、适用范围和验证方法，并进入 production baseline/context；QA/Review 失败可生成证据化 Learning proposal，经人工审批后沉淀为背景知识、Project Spec 或非执行性 Skill 设计建议 |
+| M19 Spec Center 与持续学习 | 通用/背景知识与强制 Spec 分离；Team/Project Spec 支持不可变版本、显式启用、适用范围和验证方法，并进入 production baseline/context；QA/Review 失败可生成证据化 Learning proposal，经人工审批后沉淀为背景知识、Project Spec 或非执行性 Skill 设计建议 |
+| M20 需求输入与 Agent 模型策略 | 新建 Requirement 使用 macOS/Linux 原生目录选择器；Product 对话支持有界、不可变、可追溯的截图附件；七个长期 Agent 可分别配置主模型与备用顺序，运行事实保留实际选择 |
+| M21 知识导入与路由状态 | 知识库改为资产列表优先，通用知识、背景知识和开发规范通过作用域明确的弹窗批量导入；状态页分别展示七名 Agent 的精确模型策略与底层可用模型目录 |
 
 ## 文档导航
 

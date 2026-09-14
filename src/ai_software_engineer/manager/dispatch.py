@@ -861,6 +861,7 @@ class ManagerDispatchService:
             preview.selection.policy_version,
             preview.selection.provider,
             preview.selection.model,
+            preview.selection.reasoning_effort,
             preview.selection.tier,
         )
         current_semantics = (
@@ -868,6 +869,7 @@ class ManagerDispatchService:
             current.selection.policy_version,
             current.selection.provider,
             current.selection.model,
+            current.selection.reasoning_effort,
             current.selection.tier,
         )
         if preview_semantics != current_semantics:

@@ -129,7 +129,7 @@ The integrity-checked composition fact connecting one Team, one Project, one Req
 _Avoid_: Current working directory, CLI defaults
 
 **Model Policy**:
-A Team-owned rule set that defines eligible models, a default Brain Tier, risk floors and escalation signals for Agent Runs.
+A Team-owned rule set that defines eligible provider/model/reasoning routes, a default Brain Tier, risk floors and escalation signals for Agent Runs.
 _Avoid_: Agent model, provider config
 
 **Run Demand**:
@@ -137,7 +137,7 @@ The objective, run-scoped routing facts derived from a Task, Context, Artifact, 
 _Avoid_: model guess, confidence score
 
 **Model Selection**:
-The concrete provider, model, Brain Tier, policy version, and reasons allocated to one Agent Run.
+The concrete provider, model, reasoning effort, Brain Tier, policy version, and reasons allocated to one Agent Run.
 _Avoid_: Agent brain, default model
 
 **Agent Run**:

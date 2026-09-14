@@ -18,6 +18,10 @@ from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.knowledge_documents import KnowledgeDocumentError
 from ai_software_engineer.knowledge_selection import KnowledgeSelectionError
 from ai_software_engineer.learning import DecideLearningProposal, LearningError
+from ai_software_engineer.multi_directory.attachments import (
+    MAX_REQUIREMENT_SCREENSHOT_BYTES,
+    RequirementAttachmentError,
+)
 from ai_software_engineer.spec_documents import CreateSpecDocument, SpecDocumentError
 from ai_software_engineer.team_view.models import TeamReadError, TeamSnapshot
 from ai_software_engineer.team_workspace import MAX_TEAM_KNOWLEDGE_SOURCE_BYTES
@@ -32,6 +36,7 @@ from .administration import (
     UpdateSpecActivationRequest,
 )
 from .core import ConsoleCommandRejected
+from .directories import DirectoryChooser, DirectorySelectionError
 from .models import ConsoleIntent, ConsoleOperation, IdempotencyKey
 from .store import ConsoleOperationConflict, ConsoleOperationNotFound
 
@@ -68,6 +73,7 @@ def create_console_app(
     team_id: str,
     port: int = 8765,
     administration: ConsoleAdministration | None = None,
+    directory_chooser: DirectoryChooser | None = None,
     delivery_ready: bool = True,
 ) -> FastAPI:
     if isinstance(port, bool) or not 1 <= port <= 65535:
@@ -153,6 +159,47 @@ def create_console_app(
         except AdministrationError:
             return _error(503, "ADMIN_UNAVAILABLE", "Project administration is unavailable.")
         return JSONResponse([value.to_wire() for value in values])
+
+    @app.post("/api/v1/admin/directories/select")
+    async def select_directories() -> Response:
+        if directory_chooser is None:
+            return _error(404, "NOT_AVAILABLE", "Directory selection is not available.")
+        try:
+            values = await run_in_threadpool(directory_chooser.choose)
+        except DirectorySelectionError:
+            return _error(503, "CHOOSER_UNAVAILABLE", "Directory selection could not be opened.")
+        return JSONResponse({"directories": list(values), "cancelled": not values})
+
+    @app.post(
+        "/api/v1/admin/projects/{project_id}/requirements/{delivery_id}/screenshots",
+        status_code=201,
+    )
+    async def upload_requirement_screenshot(
+        project_id: str,
+        delivery_id: str,
+        request: Request,
+        filename: str = "",
+        checkpoint: str = "",
+    ) -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        if not _valid_project_id(project_id):
+            return _error(404, "NOT_FOUND", "Project was not found.")
+        content = await _screenshot_body(request)
+        if isinstance(content, Response):
+            return content
+        try:
+            value = await run_in_threadpool(
+                administration.upload_requirement_screenshot,
+                project_id,
+                delivery_id,
+                checkpoint,
+                filename=filename,
+                content=content,
+            )
+        except (AdministrationError, RequirementAttachmentError, ValidationError):
+            return _error(422, "SCREENSHOT_REJECTED", "Screenshot could not be stored safely.")
+        return JSONResponse(value.to_wire(), status_code=201)
 
     @app.post("/api/v1/admin/projects", status_code=201)
     async def create_project(request: Request) -> Response:
@@ -683,6 +730,25 @@ async def _knowledge_document_body(request: Request) -> bytes | Response:
     return content
 
 
+async def _screenshot_body(request: Request) -> bytes | Response:
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
+    if content_type != "application/octet-stream":
+        return _error(415, "BINARY_REQUIRED", "Use application/octet-stream.")
+    declared = request.headers.get("content-length")
+    if declared is not None:
+        try:
+            if int(declared) > MAX_REQUIREMENT_SCREENSHOT_BYTES:
+                return _error(413, "SCREENSHOT_TOO_LARGE", "Screenshot exceeds the upload limit.")
+        except ValueError:
+            return _error(400, "INVALID_REQUEST", "Invalid request metadata.")
+    content = bytearray()
+    async for chunk in request.stream():
+        if len(content) + len(chunk) > MAX_REQUIREMENT_SCREENSHOT_BYTES:
+            return _error(413, "SCREENSHOT_TOO_LARGE", "Screenshot exceeds the upload limit.")
+        content.extend(chunk)
+    return bytes(content)
+
+
 def _valid_project_id(project_id: str) -> bool:
     try:
         TypeAdapter(ProjectId).validate_python(project_id)
@@ -718,7 +784,7 @@ def _security_headers(response: Response) -> None:
     response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
     response.headers["Content-Security-Policy"] = (
         "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
-        "base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
+        "img-src 'self' blob: data:; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
     )
 
 

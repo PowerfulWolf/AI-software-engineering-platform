@@ -20,6 +20,7 @@ from ai_software_engineer.work_queue import QueueError
 
 from .administration import LocalConsoleAdministration
 from .core import ConsoleCommandRejected, ProjectConsole
+from .directories import NativeDirectoryChooser
 from .manager import ManagerConsoleAdapter
 from .models import ConsoleIntent, ConsoleOperation
 from .store import ConsoleOperationNotFound, FileConsoleOperationStore
@@ -137,6 +138,7 @@ def production_console_app(
         team_id=config.team_id,
         port=selected_port,
         administration=administration,
+        directory_chooser=NativeDirectoryChooser(),
         delivery_ready=delivery_runtime_ready,
     )
 

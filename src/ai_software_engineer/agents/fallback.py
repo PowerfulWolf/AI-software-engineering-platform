@@ -24,7 +24,13 @@ from ai_software_engineer.agents.models import (
 from ai_software_engineer.agents.ports import AgentAdapter, AgentRequestConflict
 from ai_software_engineer.domain.enums import AgentRole
 from ai_software_engineer.domain.identity import RunId
-from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, WirePayload, ensure_unique
+from ai_software_engineer.domain.model import (
+    DomainModel,
+    NonEmptyStr,
+    ReasoningEffort,
+    WirePayload,
+    ensure_unique,
+)
 from ai_software_engineer.domain.task import TaskId
 
 Clock = Callable[[], datetime]
@@ -46,7 +52,7 @@ class RouteAttemptOutcome(StrEnum):
 
 
 class ModelRouteAttempt(DomainModel):
-    """Immutable evidence for one provider/model attempt within an Agent Run."""
+    """Immutable evidence for one provider/model/reasoning attempt within an Agent Run."""
 
     kind: str = "model_route_attempt"
     run_id: RunId
@@ -55,6 +61,7 @@ class ModelRouteAttempt(DomainModel):
     route_index: Annotated[StrictInt, Field(ge=1, le=16)]
     provider: NonEmptyStr
     model: NonEmptyStr
+    reasoning_effort: ReasoningEffort | None = None
     request_sha256: Sha256
     started_at: AwareDatetime
     completed_at: AwareDatetime
@@ -100,6 +107,7 @@ class ModelRouteAttempt(DomainModel):
         route_index: int,
         provider: str,
         model: str,
+        reasoning_effort: ReasoningEffort = "medium",
         started_at: datetime,
         completed_at: datetime,
         result: AgentResult,
@@ -120,6 +128,7 @@ class ModelRouteAttempt(DomainModel):
             route_index=route_index,
             provider=provider,
             model=model,
+            reasoning_effort=reasoning_effort,
             request_sha256=_digest_request(request),
             started_at=started_at,
             completed_at=completed_at,
@@ -225,11 +234,12 @@ class FileModelRouteAttemptStore:
 
 @dataclass(frozen=True, slots=True)
 class ProviderAgentRoute:
-    """One ordered provider/model adapter candidate."""
+    """One ordered provider/model/reasoning adapter candidate."""
 
     provider: str
     model: str
     adapter: AgentAdapter
+    reasoning_effort: ReasoningEffort = "medium"
 
     def __post_init__(self) -> None:
         if not self.provider.strip() or not self.model.strip():
@@ -249,8 +259,11 @@ class FallbackAgentAdapter:
         if not routes:
             raise ValueError("fallback adapter requires at least one route")
         ensure_unique(
-            ((route.provider, route.model) for route in routes),
-            "fallback provider/model routes",
+            (
+                (route.provider, route.model, route.reasoning_effort)
+                for route in routes
+            ),
+            "fallback provider/model/reasoning routes",
         )
         self._routes = routes
         self._attempt_store = attempt_store
@@ -285,6 +298,7 @@ class FallbackAgentAdapter:
                     route_index=index,
                     provider=route.provider,
                     model=route.model,
+                    reasoning_effort=route.reasoning_effort,
                     started_at=started_at,
                     completed_at=completed_at,
                     result=result,
@@ -309,6 +323,10 @@ class FallbackAgentAdapter:
                 attempt.route_index != index
                 or attempt.provider != route.provider
                 or attempt.model != route.model
+                or (
+                    attempt.reasoning_effort is not None
+                    and attempt.reasoning_effort != route.reasoning_effort
+                )
                 or attempt.request_sha256 != _digest_request(request)
                 or result.run_id != request.run_id
                 or result.task_id != request.task_id

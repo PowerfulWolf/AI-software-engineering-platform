@@ -1,4 +1,6 @@
 {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/requirement-checkpoint.schema.json",
   "$defs": {
     "AcceptanceDraft": {
       "additionalProperties": false,
@@ -460,14 +462,22 @@
           "type": "string"
         },
         "text": {
-          "minLength": 1,
+          "default": "",
+          "maxLength": 20000,
           "title": "Text",
           "type": "string"
+        },
+        "screenshots": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RequirementScreenshot"
+          },
+          "title": "Screenshots",
+          "type": "array"
         }
       },
       "required": [
-        "speaker",
-        "text"
+        "speaker"
       ],
       "title": "DialogueMessage",
       "type": "object"
@@ -1849,6 +1859,92 @@
       "title": "RequirementPriority",
       "type": "string"
     },
+    "RequirementScreenshot": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "requirement_screenshot",
+          "default": "requirement_screenshot",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^requirement_attachment_[a-f0-9]{40}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "project_id": {
+          "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "delivery_id": {
+          "pattern": "^delivery_[a-z0-9][a-z0-9_-]{2,95}$",
+          "title": "Delivery Id",
+          "type": "string"
+        },
+        "source_name": {
+          "minLength": 1,
+          "title": "Source Name",
+          "type": "string"
+        },
+        "media_type": {
+          "enum": [
+            "image/png",
+            "image/jpeg",
+            "image/webp"
+          ],
+          "title": "Media Type",
+          "type": "string"
+        },
+        "source_bytes": {
+          "maximum": 10000000,
+          "minimum": 1,
+          "title": "Source Bytes",
+          "type": "integer"
+        },
+        "source_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        },
+        "source_relative_path": {
+          "minLength": 1,
+          "title": "Source Relative Path",
+          "type": "string"
+        },
+        "uploaded_at": {
+          "format": "date-time",
+          "title": "Uploaded At",
+          "type": "string"
+        },
+        "manifest_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Manifest Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "project_id",
+        "delivery_id",
+        "source_name",
+        "media_type",
+        "source_bytes",
+        "source_sha256",
+        "source_relative_path",
+        "uploaded_at",
+        "manifest_sha256"
+      ],
+      "title": "RequirementScreenshot",
+      "type": "object"
+    },
     "RiskTier": {
       "enum": [
         "low",
@@ -2271,7 +2367,5 @@
     "checkpoint_sha256"
   ],
   "title": "JointCheckpoint",
-  "type": "object",
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ai-software-engineer.local/schemas/requirement-checkpoint.schema.json"
+  "type": "object"
 }

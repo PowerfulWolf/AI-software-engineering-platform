@@ -83,6 +83,7 @@ class ManagerConsoleAdapter:
                         delivery_id=intent.delivery_id,
                         expected_checkpoint_sha256=intent.expected_checkpoint_sha256,
                         message=intent.message,
+                        screenshot_ids=intent.screenshot_ids,
                     )
                 )
                 return _summarize(replied, project_id=intent.project_id)

@@ -15,6 +15,7 @@ from ai_software_engineer.domain import (
     AgentRole,
     NetworkAccess,
     ProductApprovalDecision,
+    TeamRole,
 )
 from ai_software_engineer.execution import CommandResult, SubprocessCommandExecutor
 from ai_software_engineer.git import (
@@ -126,8 +127,8 @@ class ProductionJointBackend:
             commands=_task_commands(profile),
         )
 
-    def client(self, scope: DirectoryScope) -> StructuredModelClient:
-        return self.clients.for_project(Path(scope.units[0].root))
+    def client(self, scope: DirectoryScope, role: TeamRole) -> StructuredModelClient:
+        return self.clients.for_project(Path(scope.units[0].root), role)
 
     def reconcile(self, checkpoint: JointCheckpoint) -> None:
         for unit in checkpoint.scope.units:
@@ -393,7 +394,12 @@ class DerivedStageInputs(
             f"joint-approval:{checkpoint.delivery_id}:{digest(checkpoint.approval)}:{unit_id}"
         )
 
-    def for_project(self, repository_root: Path) -> StructuredModelClient:
+    def for_project(
+        self,
+        repository_root: Path,
+        role: TeamRole = TeamRole.PRODUCT,
+    ) -> StructuredModelClient:
+        del role
         if str(repository_root.resolve()) != self.root:
             raise ValueError("derived documents are bound to another repository")
         return self
@@ -405,8 +411,9 @@ class DerivedStageInputs(
         input_payload: Mapping[str, object],
         output_schema: Mapping[str, object],
         timeout_seconds: int,
+        input_images: tuple[Path, ...] = (),
     ) -> StructuredModelResult:
-        del instructions, input_payload, timeout_seconds
+        del instructions, input_payload, timeout_seconds, input_images
         title = output_schema.get("title")
         if title == ProductDraft.__name__:
             document = self.product.to_wire()

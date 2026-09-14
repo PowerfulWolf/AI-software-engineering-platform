@@ -46,10 +46,7 @@ const descend = (node) => [
 
 test("long Requirement identifiers cannot expand the master column", () => {
   const styles = fs.readFileSync(
-    path.join(
-      __dirname,
-      "../../src/ai_software_engineer/team_view/style.css",
-    ),
+    path.join(__dirname, "../../src/ai_software_engineer/team_view/style.css"),
     "utf8",
   );
   assert.match(
@@ -66,6 +63,18 @@ test("long Requirement identifiers cannot expand the master column", () => {
     styles,
     /\.request-id\s*\{[^}]*overflow-wrap:\s*anywhere;/s,
     "opaque Requirement identifiers must wrap before crossing into detail",
+  );
+});
+
+test("long selected directory paths cannot turn actions vertical", () => {
+  const styles = fs.readFileSync(
+    path.join(__dirname, "../../src/ai_software_engineer/team_view/style.css"),
+    "utf8",
+  );
+  assert.match(
+    styles,
+    /\.directory-chip > button\s*\{[^}]*flex-shrink:\s*0;[^}]*white-space:\s*nowrap;/s,
+    "the remove action must keep its readable horizontal width",
   );
 });
 
@@ -252,7 +261,8 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     specActivations = [],
     createdSpecs = [],
     specDeletes = [],
-    learningDecisions = [];
+    learningDecisions = [],
+    screenshotUploads = [];
   const settingsFixture = {
     config: {
       schema_version: "v0.2",
@@ -271,6 +281,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
           endpoint: null,
           api_key_env: null,
           reasoning_effort: "high",
+          image_input: null,
           enabled: true,
         },
         {
@@ -280,6 +291,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
           endpoint: "https://example.invalid/v1/responses",
           api_key_env: "DEEPSEEK_API_KEY",
           reasoning_effort: "high",
+          image_input: true,
           enabled: false,
         },
       ],
@@ -320,6 +332,15 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
       {
         provider: "codex",
         model: "gpt-5.6-terra",
+        reasoning_effort: "high",
+        kind: "codex_cli",
+        enabled: true,
+        ready: true,
+      },
+      {
+        provider: "codex",
+        model: "gpt-5.6-terra",
+        reasoning_effort: "medium",
         kind: "codex_cli",
         enabled: true,
         ready: true,
@@ -327,6 +348,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
       {
         provider: "deepseek",
         model: "deepseek-v4",
+        reasoning_effort: "high",
         kind: "responses",
         enabled: false,
         ready: true,
@@ -334,6 +356,36 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
         credential_configured: false,
       },
     ],
+    agent_model_routes: [
+      "manager",
+      "product",
+      "designer",
+      "planner",
+      "coder",
+      "qa",
+      "reviewer",
+    ].map((role) => ({
+      role,
+      policy_source: "agent_policy",
+      routes: [
+        {
+          provider: "codex",
+          model: "gpt-5.6-terra",
+          reasoning_effort: role === "coder" ? "high" : "medium",
+          kind: "codex_cli",
+          enabled: true,
+          ready: true,
+        },
+        {
+          provider: "codex",
+          model: "gpt-5.6-terra",
+          reasoning_effort: role === "coder" ? "medium" : "high",
+          kind: "codex_cli",
+          enabled: true,
+          ready: true,
+        },
+      ],
+    })),
   };
   const knowledgeFixture = [
     {
@@ -442,6 +494,26 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     },
     fetch: async (url, options = {}) => {
       urls.push(url);
+      if (url === "/api/v1/admin/directories/select")
+        return {
+          ok: true,
+          json: async () => ({
+            directories: ["/backend/module-a", "/frontend"],
+            cancelled: false,
+          }),
+        };
+      if (
+        String(url).includes("/requirements/") &&
+        String(url).includes("/screenshots?")
+      ) {
+        screenshotUploads.push({ url: String(url), body: options.body });
+        return {
+          ok: true,
+          json: async () => ({
+            id: "requirement_attachment_" + "e".repeat(40),
+          }),
+        };
+      }
       if (url === "/api/v1/admin/projects" && options.method === "POST") {
         createdProjects.push(JSON.parse(options.body));
         return {
@@ -494,7 +566,9 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
           json: async () => structuredClone(knowledgeFixture),
         };
       if (
-        String(url).endsWith("/knowledge_document_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/content") &&
+        String(url).endsWith(
+          "/knowledge_document_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/content",
+        ) &&
         (!options.method || options.method === "GET")
       ) {
         knowledgeContentReads.push(String(url));
@@ -733,11 +807,18 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     (node) => node.className === "knowledge-content-navigation",
   );
   assert.match(text(teamContentNavigation), /内容类型/);
-  assert.match(text(teamContentNavigation), /背景知识/);
+  assert.match(text(teamContentNavigation), /通用知识/);
+  assert.doesNotMatch(text(teamContentNavigation), /背景知识/);
   assert.match(text(teamContentNavigation), /开发规范/);
   assert.doesNotMatch(text(teamContentNavigation), /学习改进/);
   assert.match(text(get("content")), /team-guide.md/);
   assert.match(text(get("content")), /已用于新需求/);
+  assert.ok(
+    descend(get("content")).some(
+      (node) => node.tag === "button" && node.textContent === "导入通用知识",
+    ),
+    "Team knowledge exposes the Team-specific import action",
+  );
   const projectKnowledge = descend(get("content")).find(
     (node) => node.tag === "button" && node.textContent === "项目知识库",
   );
@@ -748,18 +829,34 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   );
   assert.match(text(projectSelector), /选择 Project/);
   assert.match(text(projectSelector), /Other project/);
+  const selectedKnowledgeProject = descend(projectSelector).find(
+    (node) => node.tag === "button" && node.textContent === "Other project",
+  );
+  assert.match(
+    selectedKnowledgeProject.className,
+    /selected/,
+    "the active knowledge Project remains visibly selected",
+  );
+  const projectContentNavigation = descend(get("content")).find(
+    (node) => node.className === "knowledge-content-navigation",
+  );
+  assert.match(text(projectContentNavigation), /背景知识/);
+  assert.doesNotMatch(text(projectContentNavigation), /通用知识/);
   assert.match(text(get("content")), /学习改进/);
   assert.match(text(get("content")), /project-guide.md/);
-  const knowledgeEditor = descend(get("content")).find((node) =>
-    node.className.includes("knowledge-editor"),
-  );
   assert.equal(
-    knowledgeEditor.tag,
-    "section",
-    "knowledge import stays expanded",
+    descend(get("content")).some(
+      (node) => node.className === "knowledge-upload",
+    ),
+    false,
+    "the knowledge page defaults to its imported document inventory",
   );
-  assert.match(text(knowledgeEditor), /选择本地文档/);
-  const backgroundFiles = descend(knowledgeEditor).find(
+  const importBackgroundKnowledge = descend(get("content")).find(
+    (node) => node.tag === "button" && node.textContent === "导入背景知识",
+  );
+  await importBackgroundKnowledge.events.click();
+  assert.match(text(get("composer")), /导入背景知识/);
+  const backgroundFiles = descend(get("composer")).find(
     (node) => node.tag === "input" && node.type === "file",
   );
   assert.equal(
@@ -768,13 +865,14 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     "background import accepts multiple files",
   );
   backgroundFiles.files = [{ name: "one.md" }, { name: "two.txt" }];
-  const backgroundForm = descend(knowledgeEditor).find(
+  const backgroundForm = descend(get("composer")).find(
     (node) => node.className === "knowledge-upload",
   );
-  assert.doesNotMatch(text(knowledgeEditor), /维护方式/);
+  assert.doesNotMatch(text(get("composer")), /维护方式/);
   await backgroundForm.events.submit({ preventDefault() {} });
   assert.equal(knowledgeImports.length, 2);
   assert.match(text(get("content")), /已导入 2 份背景知识/);
+  assert.equal(get("composer").hidden, true);
   const enableProjectKnowledge = descend(get("content")).find(
     (node) => node.tag === "button" && node.textContent === "用于新需求",
   );
@@ -785,10 +883,11 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     },
   ]);
   assert.match(text(get("content")), /无需重启/);
-  const refreshedKnowledgeEditor = descend(get("content")).find((node) =>
-    node.className.includes("background-editor"),
+  const refreshedImportBackgroundKnowledge = descend(get("content")).find(
+    (node) => node.tag === "button" && node.textContent === "导入背景知识",
   );
-  const refreshedKnowledgeForm = descend(refreshedKnowledgeEditor).find(
+  await refreshedImportBackgroundKnowledge.events.click();
+  const refreshedKnowledgeForm = descend(get("composer")).find(
     (node) => node.className === "knowledge-upload",
   );
   const refreshedKnowledgeFiles = descend(refreshedKnowledgeForm).find(
@@ -796,7 +895,11 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   );
   refreshedKnowledgeFiles.files = [{ name: "project-guide.md" }];
   await refreshedKnowledgeForm.events.submit({ preventDefault() {} });
-  assert.equal(knowledgeUpdates.length, 0, "same-name upload waits for approval");
+  assert.equal(
+    knowledgeUpdates.length,
+    0,
+    "same-name upload waits for approval",
+  );
   assert.match(text(get("composer")), /覆盖风险/);
   const confirmKnowledgeReplacement = descend(get("composer")).find(
     (node) => node.tag === "button" && node.textContent === "确认替换并上传",
@@ -816,7 +919,8 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     updateKnowledgeContent.value,
     "# Existing project guide\n\nCurrent content.\n",
   );
-  updateKnowledgeContent.value = "# Edited project guide\n\nSaved in the browser.\n";
+  updateKnowledgeContent.value =
+    "# Edited project guide\n\nSaved in the browser.\n";
   updateKnowledgeContent.events.input();
   await interval.fn();
   assert.equal(
@@ -826,8 +930,8 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     "# Edited project guide\n\nSaved in the browser.\n",
     "automatic refresh must not discard modal edits",
   );
-  const updateKnowledgeForm = descend(get("composer")).find(
-    (node) => node.className.includes("knowledge-content-edit-form"),
+  const updateKnowledgeForm = descend(get("composer")).find((node) =>
+    node.className.includes("knowledge-content-edit-form"),
   );
   await updateKnowledgeForm.events.submit({ preventDefault() {} });
   assert.equal(knowledgeUpdates.length, 2);
@@ -854,11 +958,19 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   assert.match(text(get("content")), /Python testing/);
   assert.match(text(get("content")), /强约束开发规范/);
   assert.doesNotMatch(text(get("content")), /规范键/);
-  const specEditor = descend(get("content")).find((node) =>
-    node.className.includes("spec-editor"),
+  assert.equal(
+    descend(get("content")).some((node) =>
+      node.className.includes("spec-create-form"),
+    ),
+    false,
+    "the Spec page defaults to its existing Spec inventory",
   );
-  assert.equal(specEditor.tag, "section", "Spec creation stays expanded");
-  const multiSelects = descend(specEditor).filter((node) =>
+  const importSpecs = descend(get("content")).find(
+    (node) => node.tag === "button" && node.textContent === "导入开发规范",
+  );
+  await importSpecs.events.click();
+  assert.match(text(get("composer")), /导入开发规范/);
+  const multiSelects = descend(get("composer")).filter((node) =>
     node.className.includes("multi-select"),
   );
   assert.equal(
@@ -866,19 +978,19 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     2,
     "roles and stages use multi-select dropdowns",
   );
-  const verificationInput = descend(specEditor).find(
+  const verificationInput = descend(get("composer")).find(
     (node) =>
       node.tag === "textarea" && String(node.placeholder).startsWith("可选"),
   );
   assert.notEqual(verificationInput.required, true);
-  const specForm = descend(specEditor).find(
+  const specForm = descend(get("composer")).find(
     (node) => node.className === "knowledge-upload spec-create-form",
   );
   const specFile = descend(specForm).find(
     (node) => node.tag === "input" && node.type === "file",
   );
   assert.equal(specFile.multiple, true, "Spec import accepts multiple files");
-  assert.doesNotMatch(text(specEditor), /维护方式/);
+  assert.doesNotMatch(text(get("composer")), /维护方式/);
   const roleChoices = descend(
     multiSelects.find((node) => node.tag === "details"),
   ).filter((node) => node.tag === "input" && node.type === "checkbox");
@@ -892,7 +1004,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   }
   await specForm.events.submit({ preventDefault() {} });
   assert.equal(createdSpecs.length, 0);
-  assert.match(text(specEditor), /至少需要选择一项/);
+  assert.match(text(get("composer")), /至少需要选择一项/);
   for (const choice of roleChoices.filter((item) => item.value !== "manager")) {
     choice.checked = true;
     choice.events.change();
@@ -916,8 +1028,8 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   );
   await updateSpec.events.click();
   assert.match(text(get("composer")), /更新开发规范/);
-  const updateSpecForm = descend(get("composer")).find(
-    (node) => node.className.includes("spec-content-edit-form"),
+  const updateSpecForm = descend(get("composer")).find((node) =>
+    node.className.includes("spec-content-edit-form"),
   );
   const updateSpecContent = descend(updateSpecForm).find(
     (node) => node.className === "spec-content-editor",
@@ -965,7 +1077,104 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   assert.ok(
     descend(get("content")).some((node) => node.value === "gpt-5.6-terra"),
   );
+  const modelSelects = descend(get("content")).filter((node) =>
+    node.className.split(" ").includes("single-select"),
+  );
+  assert.ok(modelSelects.length > 0);
+  assert.ok(
+    modelSelects.every((node) => node.tag === "details"),
+    "every Model Routing dropdown uses the shared styled disclosure",
+  );
+  const duplicateRouteMessage = vm.runInContext(
+    `modelRouteValidationMessage({ model_routes: [
+      { provider: "codex", model: "gpt-5.6-sol", reasoning_effort: "high", enabled: true },
+      { provider: " codex ", model: "gpt-5.6-sol ", reasoning_effort: "high", enabled: true }
+    ] })`,
+    context,
+  );
+  assert.match(duplicateRouteMessage, /第 2 条模型路由/);
+  assert.match(duplicateRouteMessage, /第 1 条重复/);
+  assert.match(duplicateRouteMessage, /codex \/ gpt-5\.6-sol/);
+  const distinctReasoningMessage = vm.runInContext(
+    `modelRouteValidationMessage({ model_routes: [
+      { provider: "codex", model: "gpt-5.6-sol", reasoning_effort: "medium", enabled: true },
+      { provider: "codex", model: "gpt-5.6-sol", reasoning_effort: "high", enabled: true }
+    ] })`,
+    context,
+  );
+  assert.equal(distinctReasoningMessage, null);
+  vm.runInContext(
+    `settingsDraft.model_routes.push({
+      provider: "codex",
+      model: "gpt-5.6-terra",
+      kind: "codex_cli",
+      endpoint: null,
+      api_key_env: null,
+      reasoning_effort: "high",
+      image_input: null,
+      enabled: true
+    }); render();`,
+    context,
+  );
+  const duplicateSettingsForm = descend(get("content")).find(
+    (node) => node.tag === "form" && node.className === "settings-form",
+  );
+  await duplicateSettingsForm.events.submit({ preventDefault() {} });
+  assert.equal(
+    savedSettings.length,
+    0,
+    "duplicate model routes are rejected before the Settings API is called",
+  );
+  assert.match(text(duplicateSettingsForm), /第 3 条模型路由/);
+  assert.match(text(duplicateSettingsForm), /第 1 条重复/);
+  vm.runInContext("settingsDraft.model_routes.pop(); render();", context);
+  vm.runInContext(
+    `settingsDraft.model_routes.push({
+      provider: "codex",
+      model: "gpt-5.6-terra",
+      kind: "codex_cli",
+      endpoint: null,
+      api_key_env: null,
+      reasoning_effort: "medium",
+      image_input: null,
+      enabled: true
+    }); render();`,
+    context,
+  );
+  const coderReasoningChoices = descend(get("content"))
+    .find((node) => node.dataset.role === "coder")
+    .children.flatMap(descend)
+    .filter((node) => node.tag === "button")
+    .map((node) => node.textContent);
+  assert.ok(coderReasoningChoices.includes("codex / gpt-5.6-terra · high"));
+  assert.ok(coderReasoningChoices.includes("codex / gpt-5.6-terra · medium"));
+  vm.runInContext("settingsDraft.model_routes.pop(); render();", context);
   assert.doesNotMatch(text(get("content")), /密钥状态/);
+  assert.match(text(get("content")), /Agent 模型分配/);
+  assert.equal(
+    descend(get("content")).filter((node) =>
+      node.className.includes("agent-model-card"),
+    ).length,
+    7,
+  );
+  const responseRoute = descend(get("content")).filter(
+    (node) => node.className === "route-card",
+  )[1];
+  const enableResponseRoute = descend(responseRoute)
+    .filter((node) => node.tag === "input" && node.type === "checkbox")
+    .at(-1);
+  enableResponseRoute.checked = true;
+  enableResponseRoute.events.change();
+  const productModel = descend(get("content"))
+    .find((node) => node.dataset.role === "product")
+    .children.flatMap(descend)
+    .find((node) => node.dataset.key === "agent-primary-model-product");
+  const deepseekModelOption = descend(productModel).find(
+    (node) =>
+      node.tag === "button" &&
+      node.textContent === "deepseek / deepseek-v4 · high",
+  );
+  await deepseekModelOption.events.click();
   const modelRuntimeInputs = descend(get("content")).filter(
     (node) => node.tag === "input" && node.type === "password",
   );
@@ -1002,11 +1211,27 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
       value: "deepseek-key",
     },
   ]);
+  const agentRoutes = Object.fromEntries(
+    savedSettings[0].config.agent_model_routes.map((policy) => [
+      policy.role,
+      policy.routes,
+    ]),
+  );
+  assert.equal(agentRoutes.product[0].model, "deepseek-v4");
+  assert.equal(agentRoutes.coder[0].model, "gpt-5.6-terra");
+  assert.equal(agentRoutes.coder[0].reasoning_effort, "high");
   await get("nav-status").events.click();
   assert.equal(get("scope-label").textContent, "平台级");
   assert.match(text(get("content")), /平台状态|配置与启动/);
   assert.match(text(get("content")), /MySQL 连接正常/);
   assert.match(text(get("content")), /已导入 1 份 · 已启用 1 份/);
+  assert.match(text(get("content")), /Agent 模型路由/);
+  assert.match(text(get("content")), /Manager Agent/);
+  assert.match(text(get("content")), /Coder Agent/);
+  assert.match(text(get("content")), /独立策略/);
+  assert.match(text(get("content")), /主模型 codex \/ gpt-5.6-terra · high/);
+  assert.match(text(get("content")), /备用 1 codex \/ gpt-5.6-terra · medium/);
+  assert.match(text(get("content")), /可用模型目录/);
   assert.doesNotMatch(text(get("content")), /user:password/);
   const statusReads = urls.filter(
     (url) => url === "/api/v1/admin/status",
@@ -1076,11 +1301,13 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     (node) => node.className === "project-form",
   );
   const projectName = descend(projectForm).find((node) => node.tag === "input");
-  const projectRoots = descend(projectForm).find(
-    (node) => node.tag === "textarea",
+  const chooseProjectRoots = descend(projectForm).find(
+    (node) => node.tag === "button" && node.textContent === "选择代码目录",
   );
   projectName.value = "跨仓登录升级";
-  projectRoots.value = "/backend/module-a\n/frontend";
+  await chooseProjectRoots.events.click();
+  assert.match(text(projectForm), /\/backend\/module-a/);
+  assert.match(text(projectForm), /\/frontend/);
   await projectForm.events.submit({ preventDefault() {} });
   assert.deepEqual(submittedIntents[0], {
     action: "CREATE_REQUIREMENT",
@@ -1197,4 +1424,82 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   failure = false;
   await interval.fn();
   assert.equal(get("connection").className, "");
+
+  fixture.requests[0].stage = "READY_FOR_DISCUSSION";
+  await interval.fn();
+  vm.runInContext('showDetail("request","r1")', context);
+  const discussionForm = descend(get("detail")).find(
+    (node) => node.className === "discussion-form",
+  );
+  assert.equal(
+    descend(discussionForm).some(
+      (node) => node.tag === "input" && node.type === "file",
+    ),
+    false,
+    "Product screenshots are pasted directly instead of selected through a file field",
+  );
+  const discussion = descend(discussionForm).find(
+    (node) => node.tag === "textarea",
+  );
+  const pastedScreenshotSection = descend(discussionForm).find(
+    (node) => node.className === "pasted-screenshot-section",
+  );
+  assert.equal(
+    pastedScreenshotSection.hidden,
+    true,
+    "the screenshot preview stays hidden before an image is pasted",
+  );
+  const pastedScreenshot = {
+    name: "checkout.png",
+    type: "image/png",
+    size: 1024,
+  };
+  discussion.events.paste({
+    clipboardData: {
+      items: [
+        {
+          kind: "file",
+          type: "image/png",
+          getAsFile: () => pastedScreenshot,
+        },
+      ],
+    },
+  });
+  assert.equal(pastedScreenshotSection.hidden, false);
+  assert.match(text(discussionForm), /checkout.png/);
+  const removeScreenshot = descend(pastedScreenshotSection).find(
+    (node) => node.tag === "button" && node.textContent === "移除",
+  );
+  await removeScreenshot.events.click();
+  assert.equal(
+    pastedScreenshotSection.hidden,
+    true,
+    "removing the last pasted screenshot hides the preview",
+  );
+  assert.doesNotMatch(
+    text(discussionForm),
+    /截图已添加/,
+    "removing the last pasted screenshot clears the stale success feedback",
+  );
+  discussion.events.paste({
+    clipboardData: {
+      items: [
+        {
+          kind: "file",
+          type: "image/png",
+          getAsFile: () => pastedScreenshot,
+        },
+      ],
+    },
+  });
+  await discussionForm.events.submit({ preventDefault() {} });
+  assert.equal(screenshotUploads.length, 1);
+  assert.deepEqual(submittedIntents.at(-1), {
+    action: "PRODUCT_REPLY",
+    project_id: "project_fixture",
+    delivery_id: "r1",
+    expected_checkpoint_sha256: "a".repeat(64),
+    message: "",
+    screenshot_ids: ["requirement_attachment_" + "e".repeat(40)],
+  });
 });

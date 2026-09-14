@@ -135,7 +135,8 @@ Agent。
 `team_id` 默认为 `team_ai`。v0.1 只有一个长期 Team，它可以服务多个 sibling Project；Project 不复制
 AgentProfile，也不代表单个 Git 仓库或一次 Requirement。
 `team_name` 是首次注册的显示名；ID/名称与持久化 manifest 不一致时拒绝静默覆盖。
-日常通过 Web Console 的“知识库”上传 Markdown、TXT、PDF 或 DOCX。“团队通用知识”保存在
+日常通过 Web Console 的“知识库”管理 Markdown、TXT、PDF 或 DOCX。页面默认展示已导入资产；
+点击作用域对应的导入按钮后，在弹窗中一次选择多份文档。“团队通用知识”保存在
 `team/knowledge/documents/<document_id>/`；“当前 Project 知识”保存在
 `projects/<project_id>/knowledge/documents/<document_id>/`。两个作用域分别用同目录下的
 `selection.json` 保存明确启用的文档；启停立即影响之后的新需求，不需要重启。兼容配置中的
@@ -157,9 +158,22 @@ Team、Project 和 Repository sidecar 目录只在显式的 Host 初始化、Pro
 即 **GPT → DeepSeek → Qianwen（千问）**。禁用的路由直接跳过；这是默认配置优先级，
 不是代码中按供应商名称强制排序，显式配置的数组顺序仍然有效。
 
+`agent_model_routes` 在这个可用模型目录之上，为 Manager、Product、Designer、Planner、Coder、QA、
+Reviewer 分别保存有序策略：第一项是该 Agent 的主模型，后续项是备用路由。设置页会为七个成员分别
+展示选择器；可以让 Product 使用支持截图的模型、Coder 使用偏实现的模型、QA/Reviewer 使用不同模型。
+一条路由的完整身份是 `provider + model + reasoning_effort`；因此同一个模型可以同时配置 `medium`
+和 `high`，并由不同 Agent 分别选择。完全相同的三项组合不能重复。
+旧配置没有 `agent_model_routes` 时，所有成员继承全局启用顺序；一旦显式配置，就必须覆盖七个角色且
+只能引用已启用路由。旧的 Agent 引用若缺少推理程度，只在 provider/model 唯一时兼容；存在多个推理
+程度时会要求明确选择。Manager 当前只调用确定性 Skills，不直接发起模型调用，但仍保留完整策略。
+升级前的交付 Artifact 若尚未记录推理程度，也只在 provider/model 唯一时允许恢复；系统不会把它们
+静默当作 `medium`。新执行会始终记录完整三元组。
+
 Codex 路由不接受 endpoint 或 API key 字段。Responses 路由必须同时配置 `endpoint` 和
 `api_key_env`，例如 `DASHSCOPE_API_KEY` 或 `DEEPSEEK_API_KEY`；完整密钥可在设置页填写并由
 `runtime.env` 提供给下次启动的进程。
+Codex CLI 默认声明支持截图。Responses 路由只有在设置页显式启用“支持图片输入”后，才能接收 Product
+截图；含截图的调用会跳过不支持图片的备用路由，而不是假装模型已经看过图片。
 Qwen/DeepSeek 的模型 ID 和 endpoint 必须以相应账户当前实际支持的值替换；平台不会猜测“免费”型号，
 也不把某个供应商的试用额度当成模型固有属性。
 
@@ -172,8 +186,8 @@ Artifact、policy violation、产品歧义或规范冲突不会靠换模型掩�
 模型是某次 AgentRun 使用的“大脑”，不是 Agent 身份。Coder、QA、Reviewer 始终是三个不同的 Team
 Agent，即使它们碰巧使用同一模型也不能互相代替或自我批准。
 
-当前生产 Host 将首个启用路由构造为主模型策略，各风险等级使用同一档位；底层 ModelRouter
-虽然支持风险/能力约束，生产入口尚未配置按任务难度差异化选模的完整策略。
+生产 Host 会先按 Agent 角色冻结主模型/备用顺序，再由底层 ModelRouter 执行能力、额度和失败路由。
+风险等级目前仍使用相同的角色策略，尚未实现按任务难度动态升降模型档位。
 
 ## 6. 日常交付
 
@@ -189,19 +203,24 @@ Agent，即使它们碰巧使用同一模型也不能互相代替或自我批准
 
 打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)，先在网页完成管理准备：
 
-1. 在“设置”查看内置/已保存配置，按需维护平台目录、完整 MySQL DSN、模型路由/API Key、Codex、
-   执行开关和端口；用“测试连接”验证 MySQL；
+1. 在“设置”查看内置/已保存配置，按需维护平台目录、完整 MySQL DSN、模型路由/API Key、七个 Agent
+   各自的主模型/备用顺序、Codex、执行开关和端口；用“测试连接”验证 MySQL；
 2. 保存后若显示“需要重启”，执行 `./scripts/ase-console-service.sh restart`，让 Host 绑定新配置；
-3. 在“状态”确认 MySQL、Codex、Team workspace 和启用的模型路由已就绪；
+3. 在“状态”确认 MySQL、Codex、Team workspace 和启用的模型路由已就绪；逐个检查七名 Agent 的
+   主模型、备用顺序、Reasoning 和就绪情况，再用独立的“可用模型目录”检查 Provider/凭证；这些是
+   配置状态，不代表 Agent 正在执行；
 4. 在“需求与交付”创建或确认该业务上下文对应的 Project；
-5. 在“知识库”先进入独立的“团队知识库”或“项目知识库”，再维护背景知识和开发规范；项目知识库
-   还提供基于 QA/Review 证据的学习改进。上传、启用和选择都无需重启。
+5. 在“知识库”先进入独立的“团队知识库”或“项目知识库”，再分别维护团队通用知识、项目背景知识和
+   开发规范；页面默认只展示现有资产，通过“导入…”按钮打开弹窗并支持多文件选择。项目知识库还提供
+   基于 QA/Review 证据的学习改进。上传、启用和选择都无需重启。
 
 然后在“需求与交付”页完成：
 
-1. 在同一页创建或选择 Project，再新建 Requirement，每行输入一个绝对代码目录；
+1. 在同一页创建或选择 Project，再新建 Requirement；点击“选择代码目录”打开系统弹窗，一次选择一个
+   或多个本地代码目录，并在提交前通过路径标签检查或移除；
 2. 等待 Manager 完成注册、RepositoryProfile 发现和规范编译；
-3. 在需求详情与 Product Agent 讨论并阅读 ProductSpec；
+3. 在需求详情与 Product Agent 讨论，可提交文字，也可直接在输入框粘贴最多 4 张 PNG/JPEG/WebP 截图，
+   再阅读 ProductSpec；
 4. 批准 ProductSpec，观察 Designer、Planner、Coder、QA、Reviewer 的串行进度；
 5. 中断后点击“继续交付”；页面出现候选复核或 Coder 恢复计划时，阅读摘要后点击“批准并继续”；
 6. DONE 后领取每个仓库的 candidate commit/branch 和 QA/Review 证据。
@@ -392,6 +411,6 @@ Codex CLI，内层 workspace sandbox 可能因操作系统禁止嵌套而返回 
 - HTTP Responses tool loop 只执行 allowlist 命令，但 v0.1 也不是容器级 OS sandbox；
 - 不自动 merge、deploy、处理数据库迁移或跨仓库事务；
 - T033 Reporter 暂停，当前用户交付是 typed JSON、candidate commit 和证据，而不是自动生成报告；
-- Web Console 是可信本地单用户入口；当前无远程访问、RBAC/SSO、原生目录选择器、系统开机托管或
+- Web Console 是可信本地单用户入口；当前无远程访问、RBAC/SSO、远程浏览器目录选择、系统开机托管或
   Keychain/Secret Service 加密凭证存储；
 - PostgreSQL repository adapter 保留为后续 TODO，当前生产实现固定 MySQL 8.0。

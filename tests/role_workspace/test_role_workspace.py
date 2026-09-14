@@ -85,6 +85,7 @@ def _agent(role: AgentRole) -> AgentDefinition:
         version="v0.1",
         model=f"fixture-{role.value}",
         provider="local",
+        reasoning_effort="medium",
         permissions=AgentPermissions(
             read_paths=("**",),
             write_paths=("src/**", "tests/**") if role is AgentRole.CODER else (),
@@ -267,7 +268,11 @@ def _dispatch(repository: Path) -> DispatchCommitRecord:
             agent_id=_agent(role).id,
             assignment=SimpleNamespace(attempt=1, task_id=task.id),
             lease=SimpleNamespace(task_id=task.id),
-            model_selection=SimpleNamespace(provider="local", model=f"fixture-{role.value}"),
+            model_selection=SimpleNamespace(
+                provider="local",
+                model=f"fixture-{role.value}",
+                reasoning_effort="medium",
+            ),
         )
         for role in (AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER)
     )

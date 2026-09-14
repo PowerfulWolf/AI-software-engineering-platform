@@ -27,10 +27,11 @@ AgentProfile，也不能因模型额度耗尽而停止 Lease 安全维护。
 
 ### Knowledge Plane
 
-Knowledge Plane 明确分成三类事实：Team/Project `knowledge/` 保存业务背景、术语和架构说明；
+Knowledge Plane 明确分成三类事实：Team `knowledge/` 保存跨 Project 通用知识，Project `knowledge/`
+保存本项目业务背景、术语和架构说明；
 Team/Project `specs/` 保存必须遵守且可验证的开发规范；Project `specs/learning/` 保存从 QA FAIL
 与 Review REJECT 证据生成的学习建议和人工决策。Web Console 可把本地 Markdown/TXT/PDF/DOCX
-导入背景知识，以内容寻址方式保存原文件、规范化 Markdown 和 owner-bound manifest，并通过各自的
+分别导入通用知识或背景知识，以内容寻址方式保存原文件、规范化 Markdown 和 owner-bound manifest，并通过各自的
 `knowledge/selection.json` 显式启用。Spec 使用不可变版本和独立 `activation.json`，创建不会自动
 启用。同一 `spec_key` 每个 scope 同时至多启用一个版本。两类选择对之后的新需求即时生效，无需
 重启；已准备的 Requirement 仍绑定 exact 快照。导入不调用模型改写正文。
@@ -86,6 +87,12 @@ T046 的队列项使用独立 `work_item_id + role + attempt + checkpoint_sequen
 AgentRun 返回一个带 policy version 与 reasons 的 `ModelSelection`。当前 `AgentDefinition` 保留为
 解析后的单角色运行配置：
 
+生产配置把 `model_routes` 作为启用模型目录，把 `agent_model_routes` 作为七个长期成员各自的有序
+主模型/备用策略。Product、Designer、Planner 在创建 structured client 前按角色解析；Coder、QA、
+Reviewer 的顺序编译进内容寻址的 `ModelPolicy`，再由 Dispatcher/ModelRouter 为具体 Run 选择并记录。
+Manager 当前使用确定性 Skills，没有直接模型调用，但仍是策略中的正式成员。未配置角色策略的旧配置
+继续让所有成员继承全局启用顺序。
+
 ```text
 AgentProfile + WorkItem + Project policy
         → PortfolioScheduler → RoleAssignment + TaskLease
@@ -107,6 +114,10 @@ AgentProfile + WorkItem + Project policy
 request 身份对齐的 typed Artifact，或不含 Artifact 的 typed failure；模型供应商可以更换，但角色
 契约不能由模型自行修改。T034 默认用 Codex CLI + GPT-5.5，另有 Responses-compatible adapter 和
 durable delivery-route fallback evidence；fake/scripted adapter 只用于离线 contract/E2E。
+
+Product 对话截图先写入 Project/Requirement sidecar 的不可变附件，再以附件 ID 进入对话 lineage。
+只有 Product Agent 收到经校验的本地图片路径；Codex CLI 使用原生 `--image`，Responses 路由必须由
+操作者显式声明图片能力。不支持图片的路由会被跳过，Designer/Planner 不会继承未声明的截图路径。
 
 ### Command Execution Boundary
 

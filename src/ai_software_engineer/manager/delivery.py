@@ -6,7 +6,7 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Protocol
+from typing import Annotated, Protocol, Self
 
 from pydantic import AwareDatetime, Field, StringConstraints, field_validator, model_validator
 
@@ -14,7 +14,7 @@ from ai_software_engineer.design import DesignerServiceResult
 from ai_software_engineer.domain import Task, TaskStatus
 from ai_software_engineer.domain.artifact import CommitSha
 from ai_software_engineer.domain.identity import RepositoryId
-from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
+from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryFailureCode,
     DeliveryId,
@@ -38,6 +38,7 @@ from ai_software_engineer.manager.preparation import (
     PrepareProjectResult,
     PrepareProjectStatus,
 )
+from ai_software_engineer.multi_directory.attachments import RequirementAttachmentId
 from ai_software_engineer.orchestration.retry import (
     BlockedResult,
     RetryClassification,
@@ -121,8 +122,16 @@ class StartProjectDelivery(DomainModel):
 class ReplyToProduct(DomainModel):
     delivery_id: DeliveryId
     expected_checkpoint_sha256: CheckpointDigest
-    message: Annotated[str, StringConstraints(min_length=1, max_length=20_000)]
+    message: Annotated[str, StringConstraints(max_length=20_000)] = ""
+    screenshot_ids: Annotated[tuple[RequirementAttachmentId, ...], Field(max_length=4)] = ()
     submitted_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @model_validator(mode="after")
+    def require_reply_content(self) -> Self:
+        if not self.message.strip() and not self.screenshot_ids:
+            raise ValueError("Product reply requires text or screenshots")
+        ensure_unique(self.screenshot_ids, "Product reply screenshots")
+        return self
 
 
 class ApproveProductSpec(DomainModel):

@@ -467,13 +467,23 @@ def _validate_agent_definitions(
 def _model_identity(definitions: Mapping[AgentRole, AgentDefinition]) -> str:
     routes = tuple(
         sorted(
-            (role.value, definition.provider or "unknown", definition.model)
+            (
+                role.value,
+                definition.provider or "unknown",
+                definition.model,
+                definition.reasoning_effort or "unspecified",
+            )
             for role, definition in definitions.items()
         )
     )
-    models = {(provider, model) for _, provider, model in routes}
+    models = {
+        (provider, model, reasoning_effort)
+        for _, provider, model, reasoning_effort in routes
+    }
     if len(models) == 1:
-        return next(iter(models))[1]
+        provider, model, reasoning_effort = next(iter(models))
+        del provider
+        return model if reasoning_effort == "unspecified" else f"{model}@{reasoning_effort}"
     encoded = json.dumps(routes, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     return f"model-set-{hashlib.sha256(encoded).hexdigest()[:24]}"
 

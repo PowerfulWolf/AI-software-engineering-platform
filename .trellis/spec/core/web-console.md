@@ -35,8 +35,16 @@ create_console_app(
     team_id: str,
     port: int = 8765,
     administration: ConsoleAdministration | None = None,
+    directory_chooser: DirectoryChooser | None = None,
     delivery_ready: bool = True,
 ) -> FastAPI
+NativeDirectoryChooser.choose() -> tuple[str, ...]
+ConsoleAdministration.upload_requirement_screenshot(
+    project_id: str,
+    delivery_id: DeliveryId | str,
+    expected_checkpoint_sha256: CheckpointDigest | str,
+    *, filename: str, content: bytes,
+) -> RequirementScreenshot
 production_console_app(
     environment: Mapping[str, str] | None = None,
     *,
@@ -48,7 +56,7 @@ production_console_app(
 
 - `CREATE_PROJECT(name, project_id?)`；
 - `CREATE_REQUIREMENT(project_id, name, repository_roots)`；
-- `PRODUCT_REPLY(project_id, delivery_id, expected_checkpoint_sha256, message)`；
+- `PRODUCT_REPLY(project_id, delivery_id, expected_checkpoint_sha256, message, screenshot_ids)`；
 - `PRODUCT_APPROVAL(project_id, delivery_id, expected_checkpoint_sha256)`；
 - `CONTINUE_DELIVERY(project_id, delivery_id, expected_checkpoint_sha256, approved_plan_sha256?)`。
 
@@ -93,6 +101,12 @@ production_console_app(
   不回显完整 payload、traceback、secret 或未经边界验证的模型文本。
 - Repository 源码目录必须是唯一、无控制字符、无 lexical `..` 的绝对路径；真正的 Git/规范约束仍由
   Manager prepare 校验。
+- Requirement 页面不得接受自由文本目录。`POST /api/v1/admin/directories/select` 只调用平台固定的
+  macOS/Linux 本机目录选择器命令，返回真实、非 symlink、规范化的绝对目录；浏览器只移除或提交
+  这些返回值，取消选择不是错误。
+- Requirement 截图使用 `application/octet-stream` 上传到当前 Project/Delivery/checkpoint 的固定
+  endpoint；单张不超过 10 MB，只接受 PNG/JPEG/WebP magic bytes。回复只提交最多 4 个已验证
+  attachment ID，不能提交文件路径或 data URL。CSP 只额外允许本机 blob/data 图片预览。
 - static assets 使用 `textContent` 渲染外部文本；CSP 禁止外部 script/style、frame 和 form action。
 - MySQL DSN/API key 是 write-only 输入：不得出现在 API response、Operation、日志、普通配置 JSON、
   plist 或 systemd unit。当前可信本机 MVP 可写入配置文件同目录的 `runtime.env`，必须 canonical
@@ -103,6 +117,13 @@ production_console_app(
 
 - 日常用户可在网页完成：Project 创建/选择、带 1–N 个 Repository 目录的 Requirement 创建、Product 对话、ProductSpec 批准、统一继续、exact
   recovery/verification 计划批准、进度观察和 Candidate 领取。
+- 新建 Requirement 通过本机弹窗一次选择多个代码目录；Product 对话支持文字、直接粘贴截图或两者组合，
+  不显示截图文件选择控件。截图增删后，预览、已选集合和瞬时反馈必须同步；移除截图不得继续显示
+  “截图已添加”，移除最后一张后预览区必须隐藏。
+- Project 知识库的 Project selector 必须同时用可见 `selected` 样式和 `aria-selected/aria-current`
+  标识当前 Project；切换后资产列表与选中态使用同一个 `selected_project_id` 重绘。
+- UI 术语固定为 Team `通用知识`、Project `背景知识`；两者底层仍复用内容寻址的 knowledge document
+  契约，不能因为展示名称不同而复制存储或选择逻辑。
 - Requirements 页把 Project 创建放在 Project 上下文区，把 Requirement 创建放在需求列表标题与
   数量旁；两者不得作为脱离所有权上下文的全局页头动作。
 - 一个 Task 的 Coder/QA/Reviewer 串行。UI 只把 `current_stage=true` 的 assignment 标成执行中；
@@ -120,6 +141,11 @@ production_console_app(
 | Same idempotency key, changed intent | 409; original Operation unchanged |
 | Second active command for same Delivery | 409; no second provider call |
 | Relative/duplicate/lexical-parent path | 422 before persistence or project access |
+| Directory picker cancelled | return an empty successful selection; do not create a Requirement |
+| Picker executable missing/fails or returns relative/symlink/missing path | 503; no browser text fallback |
+| Empty Product text with 1–4 valid screenshot IDs | accept and bind immutable attachments into dialogue |
+| Empty text and no screenshot / duplicate or foreign attachment ID | 422; no Product invocation |
+| Screenshot over 10 MB, unsupported magic, stale checkpoint or wrong stage | 413/422; no dialogue mutation |
 | Stale displayed checkpoint | terminal FAILED with `STALE_CHECKPOINT`; no model call |
 | Recovery/verification approval required | SUCCEEDED Operation carries safe facts plus exact hidden plan digest |
 | Host exits during RUNNING | next startup appends INTERRUPTED; never silently replay |
@@ -146,7 +172,7 @@ production_console_app(
 - `tests/web_console/test_transport.py`：lifespan、assets/query、202 submit、operation query、Host/Origin、
   content type、body/input limit、409/404 和安全 headers。
 - `tests/team_view/ui.test.cjs`：多目录创建、Product/继续/批准操作、操作状态、刷新保持、hidden digest
-  不直接渲染、只读 fallback、单 Task 串行角色状态和安全文本。
+  不直接渲染、只读 fallback、单 Task 串行角色状态、安全文本，以及粘贴截图移除后的预览和反馈同步。
 - `tests/team_view/test_live.py`：candidate branch 必须从 exact candidate ref 唯一推导，不能猜测。
 - `tests/contracts/test_json_schema_contracts.py`：Python/JSON Schema 的 QUEUED/RUNNING/terminal 状态和
   path 约束一致。
@@ -281,16 +307,19 @@ GET  /api/v1/admin/status
   fallback. Once the browser writes a selection record, that sidecar is authoritative, including an
   explicitly empty selection.
 - The Knowledge page presents Team Knowledge and Project Knowledge as independent primary modules.
-  Each module contains Background Knowledge and engineering Specs; Project Knowledge additionally
-  contains Learning improvements and its own Project selector. The global Project tabs are not shown
+  Team Knowledge contains `通用知识` and engineering Specs; Project Knowledge contains `背景知识`,
+  engineering Specs, Learning improvements and its own Project selector. The global Project tabs are not shown
   over Team Knowledge, so Team-owned assets cannot look duplicated under every Project. Learning
   evidence is always Project-owned. A Spec POST accepts bounded JSON up to 512 KB,
   creates an immutable inactive version and returns its digest. Activation is a separate PUT carrying
   the exact selected IDs; there is never an implicit latest-version switch.
-- Background import and Spec creation are directly visible maintenance forms rather than collapsed
-  disclosures. Neither form contains a separate maintenance-mode selector. Background import may
-  select at most 20 files per browser action, but each file still crosses the existing bounded
-  single-document API independently; partial failures report the successful count and first failure.
+- The Knowledge workspace is inventory-first: the page directly renders only current documents or
+  Specs plus a scope-aware import button. `导入通用知识` / `导入背景知识` and `导入开发规范` open
+  focused modal forms, using the same interaction boundary as Project/Requirement creation. Import
+  forms must not remain inline beneath every inventory. Neither modal contains a separate
+  maintenance-mode selector. Background import may select at most 20 files per browser action, but
+  each file still crosses the existing bounded single-document API independently; partial failures
+  report the successful count and first failure.
   An exact normalized filename match with current inventory pauses before the first write and shows
   an explicit replacement-risk confirmation. Duplicate filenames inside one batch and ambiguous
   multiple existing matches are rejected before upload.
@@ -320,6 +349,12 @@ GET  /api/v1/admin/status
   Codex executable, live execution and Console port. `runtime_variables` accepts only names referenced
   by that submitted config and is request-only; referenced values never enter a response. A blank UI
   input means preserve the stored value, not erase it.
+- Model routes use `(provider, model, reasoning_effort)` as their stable reference identity. The
+  browser must detect a duplicate normalized triple before calling the Settings API and identify both
+  conflicting route positions; the backend uniqueness validator remains authoritative. The same
+  provider/model may appear more than once when each route has a distinct reasoning effort, and every
+  Agent policy reference must preserve that effort. A legacy reference without effort is accepted only
+  when its provider/model resolves to exactly one enabled route.
 - `runtime.env` is sibling to `ASE_CONFIG`, UTF-8, at most 64 KB and contains only canonical
   `NAME='POSIX-quoted value'` entries. Names follow `EnvVarName`; duplicates, controls, noncanonical
   quoting, symlinks and non-files fail closed. Save uses same-directory temporary file, fsync, atomic
@@ -330,8 +365,12 @@ GET  /api/v1/admin/status
 - Settings and Status are separate: Settings contains editable effective/default values; Status is
   read-only and reports config source, restart requirement, MySQL readiness/source, Codex resolution,
   actual delivery-runtime composition, live-model execution switch, Team preparation/knowledge
-  counts and per-route credential readiness. Zero knowledge is neutral. MySQL connectivity alone
-  must not imply the full delivery runtime is ready.
+  counts and per-route credential readiness. `RuntimeStatusSnapshot.agent_model_routes` contains the
+  fixed seven roles in organization order. Every role reports `policy_source` and its exact ordered
+  `(provider, model, reasoning_effort)` routes enriched with the catalog readiness facts. This is
+  configuration readiness, not evidence that the Agent is currently running or calling that model.
+  The separate `model_routes` catalog remains visible as “可用模型目录”. Zero knowledge is neutral.
+  MySQL connectivity alone must not imply the full delivery runtime is ready.
 - Full Console operation cards are rendered only on `需求与交付`. The browser may keep loading the
   durable operation facts because Requirement detail/recovery uses them, but successful operation
   history must not be repeated on Team, Knowledge, Settings or Status pages.
@@ -352,11 +391,15 @@ GET  /api/v1/admin/status
   Artifact and commit identifiers must not contribute a minimum content width: owning grid items use
   `min-width: 0`, while identifier text uses `overflow-wrap: anywhere`, so no child can cross from the
   master column into detail.
-- Knowledge uses ownership navigation beside one content workspace. Background import and Spec
-  creation stay directly visible as the primary maintenance actions; only existing document bodies
-  and other secondary evidence may remain collapsed. Settings similarly
+- Knowledge uses ownership navigation beside one content workspace. The existing asset inventory is
+  the primary page content; scope-aware import buttons open focused modals for knowledge and Specs.
+  Only existing document bodies and other secondary evidence may remain collapsed. Settings similarly
   uses local Basic/MySQL/Model navigation over one shared draft and one atomic save action. Status is
   read-only and leads with a readiness conclusion before individual runtime facts.
+- Model Routing uses one shared compact disclosure/listbox control for route type, reasoning effort
+  and each Agent's primary route. The control must keep focus visibility, disabled state, exact
+  selected value and button keyboard activation while avoiding the unstyleable operating-system
+  native option menu.
 - Project creation is rendered in `需求与交付`, next to Project selection and Requirement work. The
   Settings page contains only process/runtime configuration and never presents Project creation as a
   configuration field.
@@ -418,6 +461,11 @@ GET  /api/v1/admin/status
 | New platform root, current Team identity, empty knowledge selection | initialize that Team under the new root; save with restart required |
 | New platform root with old-root knowledge paths | 409; never copy or reinterpret the old files |
 | Plaintext DSN/API key in config payload | Pydantic/JSON Schema rejects unknown secret field |
+| Duplicate `(provider, model, reasoning_effort)` route, including whitespace-only provider/model differences | browser shows both route positions and sends no PUT; direct API remains rejected |
+| Same provider/model with distinct reasoning efforts | both routes remain selectable and each Agent policy stores the exact effort |
+| Legacy Agent route omits effort while provider/model has multiple enabled efforts | reject as ambiguous; do not guess a route |
+| Status reads an explicit per-Agent policy | render the seven roles in organization order with exact route order, effort and readiness |
+| Status reads a legacy config without per-Agent policies | show every role as `global_default` with the same enabled global route order |
 | Runtime variable name not referenced by submitted config | 409; neither config nor runtime.env changes |
 | Invalid DSN or control-bearing secret input | 409/422; no value persisted or reflected |
 | MySQL missing/unavailable on first run | Console starts setup surface; Status says NOT_CONFIGURED/UNAVAILABLE; delivery returns 503 SETUP_REQUIRED |
@@ -445,16 +493,22 @@ GET  /api/v1/admin/status
   selected knowledge replacement/retirement, Spec retirement, write-only runtime values, safe MySQL
   probe, Status and restart semantics.
 - `tests/web_console/test_transport.py`: admin verbs, content types/body limits, typed errors and no
-  content/secret reflection, plus verified normalized-content reads; missing config/MySQL must still
-  expose Settings/Status while delivery is `SETUP_REQUIRED`.
+  content/secret reflection, native chooser endpoint and screenshot upload, plus verified
+  normalized-content reads; missing config/MySQL must still expose Settings/Status while delivery is
+  `SETUP_REQUIRED`.
+- `tests/web_console/test_directories.py`: canonical/unique directory output and relative, missing,
+  symlink rejection.
+- `tests/manager/test_requirement_attachments.py`: content addressing, tamper detection, exact
+  dialogue binding and Product image-path delivery.
 - `tests/specs/`: Spec/Learning stores and publication contracts; Web administration/transport tests
   cover both scopes, activation and Learning collection/decision endpoints.
 - `tests/team_view/ui.test.cjs`: Project creation, scoped Knowledge navigation/live selection,
   selected-Agent queue grouping, searchable Project picker, modal Project/Requirement creation,
-  master/detail Requirements, sectioned Settings, write-only DSN/key fields, expanded knowledge forms,
-  same-name replacement confirmation, modal content editing resilient to auto-refresh, bounded
-  Background/Spec multi-file selection, role/stage multi-selects, optional verification, separate
-  Status tab, safe text rendering and long opaque identifier containment.
+  master/detail Requirements, sectioned Settings, write-only DSN/key fields,
+  same-name replacement confirmation, modal content editing resilient to auto-refresh, inventory-first
+  Knowledge pages, modal bounded Background/Spec multi-file selection, role/stage multi-selects,
+  optional verification, separate Status tab with seven per-Agent policies and route catalog, shared
+  Model Routing selector styling, safe text rendering and long opaque identifier containment.
 - `tests/contracts/test_json_schema_contracts.py`: production config/port, knowledge manifests,
   selection/retirement and Spec document/activation/retirement Python-to-Schema parity.
 
@@ -466,6 +520,14 @@ content = Path(request.json()["path"]).read_bytes()
 
 # Correct: the bounded browser body is the only source and becomes an immutable record.
 manifest = knowledge_store.import_document(filename=query.filename, content=await request.body())
+```
+
+```javascript
+// Wrong: trust a browser text field as host filesystem authority.
+intent.repository_roots = textarea.value.split("\n")
+
+// Correct: the browser can submit only canonical paths returned by the fixed native picker.
+intent.repository_roots = selectedDirectories
 ```
 
 ```python
@@ -497,11 +559,12 @@ administration.update_project_spec_activation(
 ```
 
 ```javascript
-// Wrong: hide routine knowledge maintenance behind repeated disclosures or treat a batch as one
-// oversized upload with ambiguous partial-failure semantics.
+// Wrong: repeat a large import form beneath every inventory or treat a batch as one oversized upload
+// with ambiguous partial-failure semantics.
 uploadAll(files)
 
-// Correct: keep the maintenance form visible and reuse the bounded one-document API per file.
+// Correct: open one focused modal from the current scope and reuse the bounded one-document API.
+openKnowledgeImportModal(currentScope)
 for (const file of files.slice(0, 20)) await importDocument(file)
 ```
 

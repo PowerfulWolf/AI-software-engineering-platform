@@ -227,6 +227,7 @@ def _definitions(
                 "id": phase.agent_id,
                 "provider": phase.model_selection.provider,
                 "model": phase.model_selection.model,
+                "reasoning_effort": phase.model_selection.reasoning_effort,
                 "permissions": _delivery_role_permissions(phase.role, allowed, commands),
             }
         )

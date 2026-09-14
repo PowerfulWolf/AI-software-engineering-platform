@@ -45,7 +45,7 @@ from ai_software_engineer.domain.artifact import (
     ReviewReportArtifact,
     validate_artifact_payload,
 )
-from ai_software_engineer.domain.model import JsonValue, WirePayload
+from ai_software_engineer.domain.model import JsonValue, ReasoningEffort, WirePayload
 from ai_software_engineer.git import (
     CandidateCommitError,
     CandidateCommitRequest,
@@ -80,6 +80,7 @@ class ResponsesAgentAdapter:
         endpoint: str,
         api_key: str,
         model: str,
+        reasoning_effort: ReasoningEffort = "medium",
         agent: AgentDefinition,
         prompt_builder: PromptBuilder | None = None,
         context_resolver: ContextResolver | None = None,
@@ -97,12 +98,15 @@ class ResponsesAgentAdapter:
             raise ResponsesAgentConfigurationError("Responses API key is missing or invalid")
         if not model.strip() or any(ord(character) < 32 for character in model):
             raise ResponsesAgentConfigurationError("Responses model is invalid")
+        if reasoning_effort not in {"low", "medium", "high", "xhigh"}:
+            raise ResponsesAgentConfigurationError("Responses reasoning effort is invalid")
         if not 1 <= max_turns <= 100 or not 1 <= max_tool_calls <= 500:
             raise ResponsesAgentConfigurationError("Responses loop bounds are invalid")
         self._workspace_root = root
         self._endpoint = _normalize_endpoint(endpoint)
         self._api_key = api_key
         self._model = model
+        self._reasoning_effort = reasoning_effort
         self._agent = agent
         self._prompt_builder = prompt_builder or RequestPromptBuilder()
         if context_resolver is not None and prompt_builder is not None:
@@ -214,6 +218,7 @@ class ResponsesAgentAdapter:
                 self._model,
                 input_items,
                 request.role,
+                reasoning_effort=self._reasoning_effort,
                 previous_response_id=previous_response_id,
             )
             response = self._transport.post(
@@ -306,10 +311,12 @@ def _request_body(
     input_items: list[WirePayload],
     role: AgentRole,
     *,
+    reasoning_effort: ReasoningEffort,
     previous_response_id: str | None,
 ) -> bytes:
     payload: WirePayload = {
         "model": model,
+        "reasoning": {"effort": reasoning_effort},
         "input": cast(JsonValue, input_items),
         "tools": cast(JsonValue, _tool_definitions(role)),
         "text": {

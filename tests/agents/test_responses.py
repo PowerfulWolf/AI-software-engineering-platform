@@ -190,6 +190,7 @@ def test_responses_tool_loop_creates_and_validates_coder_commit(tmp_path: Path) 
         endpoint="https://example.invalid/v1/responses",
         api_key="test-key",
         model="qwen3.8-max",
+        reasoning_effort="high",
         agent=definition,
         prompt_builder=StaticPromptBuilder(),
         transport=transport,
@@ -201,6 +202,7 @@ def test_responses_tool_loop_creates_and_validates_coder_commit(tmp_path: Path) 
     assert result.artifact is not None
     assert result.artifact.source_revision == _git(root, "rev-parse", "HEAD")
     assert result.usage is not None and result.usage.total_tokens == 30
+    assert transport.calls[0]["reasoning"] == {"effort": "high"}
     assert transport.calls[1]["previous_response_id"] == "resp_tool_001"
     outputs = transport.calls[1]["input"]
     assert isinstance(outputs, list) and len(outputs) == 3

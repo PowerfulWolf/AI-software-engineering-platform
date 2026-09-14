@@ -3,11 +3,13 @@
 from pathlib import Path
 
 from ai_software_engineer.config import (
+    AgentModelRoutePolicy,
     ModelProviderKind,
     ProductionConfig,
     ProviderRouteConfig,
+    ProviderRouteReference,
 )
-from ai_software_engineer.domain import TeamRole
+from ai_software_engineer.domain import AgentRole, TeamRole
 from ai_software_engineer.manager.team_roster import (
     production_team_roster,
 )
@@ -66,3 +68,87 @@ def test_roster_uses_the_user_facing_team_order_and_names(
         profile.metadata == {"ownership": "team", "member_type": "model_agent"}
         for profile in profiles
     )
+
+
+def test_delivery_model_policy_preserves_each_agent_route_order(tmp_path: Path) -> None:
+    routes = (
+        ProviderRouteConfig(
+            provider="codex",
+            model="coder-model",
+            kind=ModelProviderKind.CODEX_CLI,
+        ),
+        ProviderRouteConfig(
+            provider="codex",
+            model="qa-model",
+            kind=ModelProviderKind.CODEX_CLI,
+        ),
+    )
+    policies = tuple(
+        AgentModelRoutePolicy(
+            role=role,
+            routes=tuple(
+                ProviderRouteReference(provider=route.provider, model=route.model)
+                for route in (tuple(reversed(routes)) if role is TeamRole.QA else routes)
+            ),
+        )
+        for role in TeamRole
+    )
+    config = ProductionConfig(
+        platform_root=str(tmp_path / "platform"),
+        model_routes=routes,
+        agent_model_routes=policies,
+    )
+
+    _, policy = production_team_roster(config)
+
+    role_routes = {item.role: item.routes for item in policy.role_routes}
+    assert [item.model for item in role_routes[AgentRole.CODER]] == [
+        "coder-model",
+        "qa-model",
+    ]
+    assert [item.model for item in role_routes[AgentRole.QA]] == [
+        "qa-model",
+        "coder-model",
+    ]
+
+
+def test_roster_preserves_same_model_with_distinct_reasoning_efforts(tmp_path: Path) -> None:
+    routes = (
+        ProviderRouteConfig(
+            provider="codex",
+            model="gpt-5.6-sol",
+            kind=ModelProviderKind.CODEX_CLI,
+            reasoning_effort="medium",
+        ),
+        ProviderRouteConfig(
+            provider="codex",
+            model="gpt-5.6-sol",
+            kind=ModelProviderKind.CODEX_CLI,
+            reasoning_effort="high",
+        ),
+    )
+    policies = tuple(
+        AgentModelRoutePolicy(
+            role=role,
+            routes=(
+                ProviderRouteReference(
+                    provider="codex",
+                    model="gpt-5.6-sol",
+                    reasoning_effort="high" if role is TeamRole.CODER else "medium",
+                ),
+            ),
+        )
+        for role in TeamRole
+    )
+    config = ProductionConfig(
+        platform_root=str(tmp_path / "platform"),
+        model_routes=routes,
+        agent_model_routes=policies,
+    )
+
+    _, policy = production_team_roster(config)
+
+    coder = next(item for item in policy.role_routes if item.role is AgentRole.CODER)
+    qa = next(item for item in policy.role_routes if item.role is AgentRole.QA)
+    assert coder.routes[0].reasoning_effort == "high"
+    assert qa.routes[0].reasoning_effort == "medium"
