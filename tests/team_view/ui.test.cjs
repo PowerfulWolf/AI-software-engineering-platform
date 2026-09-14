@@ -13,6 +13,9 @@ class Element {
     this.dataset = {};
     this.textContent = "";
     this.className = "";
+    this.value = "";
+    this.checked = false;
+    this.hidden = false;
     this.classList = { toggle() {} };
   }
   append(...nodes) {
@@ -40,6 +43,31 @@ const descend = (node) => [
   node,
   ...node.children.filter((n) => typeof n !== "string").flatMap(descend),
 ];
+
+test("long Requirement identifiers cannot expand the master column", () => {
+  const styles = fs.readFileSync(
+    path.join(
+      __dirname,
+      "../../src/ai_software_engineer/team_view/style.css",
+    ),
+    "utf8",
+  );
+  assert.match(
+    styles,
+    /\.request-list\s*\{[^}]*min-width:\s*0;/s,
+    "the Requirement list must be allowed to shrink inside its grid column",
+  );
+  assert.match(
+    styles,
+    /\.request-list \.request\s*\{[^}]*min-width:\s*0;/s,
+    "a Requirement card must not use its opaque ID as a minimum width",
+  );
+  assert.match(
+    styles,
+    /\.request-id\s*\{[^}]*overflow-wrap:\s*anywhere;/s,
+    "opaque Requirement identifiers must wrap before crossing into detail",
+  );
+});
 
 test("team, multi-directory requests, detail, refresh preservation and stale errors", async () => {
   const nodes = new Map();
@@ -216,7 +244,14 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     savedSettings = [],
     mysqlTests = [],
     knowledgeSelections = [],
+    knowledgeImports = [],
+    knowledgeUpdates = [],
+    knowledgeUpdateBodies = [],
+    knowledgeContentReads = [],
+    knowledgeDeletes = [],
     specActivations = [],
+    createdSpecs = [],
+    specDeletes = [],
     learningDecisions = [];
   const settingsFixture = {
     config: {
@@ -458,16 +493,88 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
           ok: true,
           json: async () => structuredClone(knowledgeFixture),
         };
+      if (
+        String(url).endsWith("/knowledge_document_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/content") &&
+        (!options.method || options.method === "GET")
+      ) {
+        knowledgeContentReads.push(String(url));
+        return {
+          ok: true,
+          json: async () => ({
+            scope: "project",
+            project_id: "project_other",
+            document_id: "knowledge_document_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            source_name: projectKnowledgeFixture[0].manifest.source_name,
+            content_markdown: "# Existing project guide\n\nCurrent content.\n",
+          }),
+        };
+      }
+      if (
+        String(url).startsWith(
+          "/api/v1/admin/projects/project_other/knowledge?filename=",
+        ) &&
+        options.method === "POST"
+      ) {
+        knowledgeImports.push(String(url));
+        return {
+          ok: true,
+          json: async () => structuredClone(projectKnowledgeFixture[0]),
+        };
+      }
+      if (
+        String(url).startsWith(
+          "/api/v1/admin/projects/project_other/knowledge/knowledge_document_",
+        ) &&
+        options.method === "PUT"
+      ) {
+        knowledgeUpdates.push(String(url));
+        knowledgeUpdateBodies.push(options.body);
+        projectKnowledgeFixture[0].manifest.source_name = decodeURIComponent(
+          String(url).split("filename=")[1],
+        );
+        return {
+          ok: true,
+          json: async () => structuredClone(projectKnowledgeFixture[0]),
+        };
+      }
+      if (
+        String(url).startsWith(
+          "/api/v1/admin/projects/project_other/knowledge/knowledge_document_",
+        ) &&
+        options.method === "DELETE"
+      ) {
+        knowledgeDeletes.push(String(url));
+        projectKnowledgeFixture.splice(0);
+        return { ok: true, json: async () => [] };
+      }
       if (url === "/api/v1/admin/projects/project_other/knowledge")
         return {
           ok: true,
           json: async () => structuredClone(projectKnowledgeFixture),
         };
+      if (
+        url === "/api/v1/admin/projects/project_other/specs" &&
+        options.method === "POST"
+      ) {
+        createdSpecs.push(JSON.parse(options.body));
+        return {
+          ok: true,
+          json: async () => structuredClone(projectSpecFixture[0]),
+        };
+      }
       if (url === "/api/v1/admin/projects/project_other/specs")
         return {
           ok: true,
           json: async () => structuredClone(projectSpecFixture),
         };
+      if (
+        url === "/api/v1/admin/projects/project_other/specs/python.testing" &&
+        options.method === "DELETE"
+      ) {
+        specDeletes.push(String(url));
+        projectSpecFixture.splice(0);
+        return { ok: true, json: async () => [] };
+      }
       if (
         url === "/api/v1/admin/projects/project_other/specs/activation" &&
         options.method === "PUT"
@@ -591,9 +698,18 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   await agentCards[2].events.click();
   assert.match(text(get("content")), /测试 · 任务队列/);
   assert.match(text(get("content")), /待完成 1/);
-  const projectTabs = get("projects").children;
-  assert.equal(projectTabs.length, 2);
-  await projectTabs[1].events.click();
+  const projectPicker = get("projects").children[0];
+  assert.equal(projectPicker.className, "project-picker");
+  assert.match(text(projectPicker), /2 个 Project · 可搜索切换/);
+  const projectSearch = descend(projectPicker).find(
+    (node) => node.tag === "input" && node.type === "search",
+  );
+  projectSearch.value = "Other";
+  await projectSearch.events.input();
+  const otherProject = descend(projectPicker).find(
+    (node) => node.tag === "button" && node.textContent === "Other project",
+  );
+  await otherProject.events.click();
   assert.ok(urls.includes("/api/v1/team?project_id=project_other"));
   await get("nav-knowledge").events.click();
   assert.equal(get("scope-label").textContent, "Team 知识");
@@ -637,7 +753,28 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   const knowledgeEditor = descend(get("content")).find((node) =>
     node.className.includes("knowledge-editor"),
   );
-  assert.notEqual(knowledgeEditor.open, true, "long editors start collapsed");
+  assert.equal(
+    knowledgeEditor.tag,
+    "section",
+    "knowledge import stays expanded",
+  );
+  assert.match(text(knowledgeEditor), /选择本地文档/);
+  const backgroundFiles = descend(knowledgeEditor).find(
+    (node) => node.tag === "input" && node.type === "file",
+  );
+  assert.equal(
+    backgroundFiles.multiple,
+    true,
+    "background import accepts multiple files",
+  );
+  backgroundFiles.files = [{ name: "one.md" }, { name: "two.txt" }];
+  const backgroundForm = descend(knowledgeEditor).find(
+    (node) => node.className === "knowledge-upload",
+  );
+  assert.doesNotMatch(text(knowledgeEditor), /维护方式/);
+  await backgroundForm.events.submit({ preventDefault() {} });
+  assert.equal(knowledgeImports.length, 2);
+  assert.match(text(get("content")), /已导入 2 份背景知识/);
   const enableProjectKnowledge = descend(get("content")).find(
     (node) => node.tag === "button" && node.textContent === "用于新需求",
   );
@@ -648,18 +785,157 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     },
   ]);
   assert.match(text(get("content")), /无需重启/);
+  const refreshedKnowledgeEditor = descend(get("content")).find((node) =>
+    node.className.includes("background-editor"),
+  );
+  const refreshedKnowledgeForm = descend(refreshedKnowledgeEditor).find(
+    (node) => node.className === "knowledge-upload",
+  );
+  const refreshedKnowledgeFiles = descend(refreshedKnowledgeForm).find(
+    (node) => node.tag === "input" && node.type === "file",
+  );
+  refreshedKnowledgeFiles.files = [{ name: "project-guide.md" }];
+  await refreshedKnowledgeForm.events.submit({ preventDefault() {} });
+  assert.equal(knowledgeUpdates.length, 0, "same-name upload waits for approval");
+  assert.match(text(get("composer")), /覆盖风险/);
+  const confirmKnowledgeReplacement = descend(get("composer")).find(
+    (node) => node.tag === "button" && node.textContent === "确认替换并上传",
+  );
+  await confirmKnowledgeReplacement.events.click();
+  assert.equal(knowledgeUpdates.length, 1);
+  const updateKnowledge = descend(get("content")).find(
+    (node) => node.tag === "button" && node.textContent === "更新文档",
+  );
+  await updateKnowledge.events.click();
+  assert.equal(knowledgeContentReads.length, 1);
+  assert.match(text(get("composer")), /更新背景知识/);
+  const updateKnowledgeContent = descend(get("composer")).find(
+    (node) => node.className === "knowledge-content-editor",
+  );
+  assert.equal(
+    updateKnowledgeContent.value,
+    "# Existing project guide\n\nCurrent content.\n",
+  );
+  updateKnowledgeContent.value = "# Edited project guide\n\nSaved in the browser.\n";
+  updateKnowledgeContent.events.input();
+  await interval.fn();
+  assert.equal(
+    descend(get("composer")).find(
+      (node) => node.className === "knowledge-content-editor",
+    ).value,
+    "# Edited project guide\n\nSaved in the browser.\n",
+    "automatic refresh must not discard modal edits",
+  );
+  const updateKnowledgeForm = descend(get("composer")).find(
+    (node) => node.className.includes("knowledge-content-edit-form"),
+  );
+  await updateKnowledgeForm.events.submit({ preventDefault() {} });
+  assert.equal(knowledgeUpdates.length, 2);
+  assert.match(knowledgeUpdates[1], /filename=project-guide.md/);
+  assert.equal(
+    knowledgeUpdateBodies[1],
+    "# Edited project guide\n\nSaved in the browser.\n",
+  );
+  assert.match(text(get("content")), /背景知识已更新/);
+  const deleteKnowledge = descend(get("content")).find(
+    (node) => node.tag === "button" && node.textContent === "删除",
+  );
+  await deleteKnowledge.events.click();
+  assert.match(text(get("composer")), /历史交付仍保留原引用/);
+  const confirmKnowledgeDelete = descend(get("composer")).find(
+    (node) => node.tag === "button" && node.textContent === "确认删除",
+  );
+  await confirmKnowledgeDelete.events.click();
+  assert.equal(knowledgeDeletes.length, 1);
   const specsMode = descend(get("content")).find(
     (node) => node.tag === "button" && node.textContent === "开发规范",
   );
   await specsMode.events.click();
   assert.match(text(get("content")), /Python testing/);
   assert.match(text(get("content")), /强约束开发规范/);
+  assert.doesNotMatch(text(get("content")), /规范键/);
+  const specEditor = descend(get("content")).find((node) =>
+    node.className.includes("spec-editor"),
+  );
+  assert.equal(specEditor.tag, "section", "Spec creation stays expanded");
+  const multiSelects = descend(specEditor).filter((node) =>
+    node.className.includes("multi-select"),
+  );
+  assert.equal(
+    multiSelects.filter((node) => node.tag === "details").length,
+    2,
+    "roles and stages use multi-select dropdowns",
+  );
+  const verificationInput = descend(specEditor).find(
+    (node) =>
+      node.tag === "textarea" && String(node.placeholder).startsWith("可选"),
+  );
+  assert.notEqual(verificationInput.required, true);
+  const specForm = descend(specEditor).find(
+    (node) => node.className === "knowledge-upload spec-create-form",
+  );
+  const specFile = descend(specForm).find(
+    (node) => node.tag === "input" && node.type === "file",
+  );
+  assert.equal(specFile.multiple, true, "Spec import accepts multiple files");
+  assert.doesNotMatch(text(specEditor), /维护方式/);
+  const roleChoices = descend(
+    multiSelects.find((node) => node.tag === "details"),
+  ).filter((node) => node.tag === "input" && node.type === "checkbox");
+  specFile.files = [
+    { name: "quality.md", text: async () => "# Quality\n\nFollow the rule." },
+    { name: "security.txt", text: async () => "# Security\n\nCheck inputs." },
+  ];
+  for (const choice of roleChoices) {
+    choice.checked = false;
+    choice.events.change();
+  }
+  await specForm.events.submit({ preventDefault() {} });
+  assert.equal(createdSpecs.length, 0);
+  assert.match(text(specEditor), /至少需要选择一项/);
+  for (const choice of roleChoices.filter((item) => item.value !== "manager")) {
+    choice.checked = true;
+    choice.events.change();
+  }
+  await specForm.events.submit({ preventDefault() {} });
+  assert.equal(createdSpecs[0].spec_key, "quality");
+  assert.equal(createdSpecs[1].spec_key, "security");
+  assert.equal(createdSpecs[0].verification, "");
+  assert.deepEqual(createdSpecs[0].stages, ["implementing", "qa", "review"]);
+  assert.equal(createdSpecs[0].roles.length, 6);
+  assert.equal(createdSpecs[0].roles.includes("manager"), false);
   const enableSpec = descend(get("content")).find(
-    (node) => node.tag === "button" && node.textContent === "启用此版本",
+    (node) => node.tag === "button" && node.textContent === "启用规范",
   );
   await enableSpec.events.click();
   assert.deepEqual(specActivations, [
     { spec_ids: ["spec_document_" + "d".repeat(32)] },
+  ]);
+  const updateSpec = descend(get("content")).find(
+    (node) => node.tag === "button" && node.textContent === "更新规范",
+  );
+  await updateSpec.events.click();
+  assert.match(text(get("composer")), /更新开发规范/);
+  const updateSpecForm = descend(get("composer")).find(
+    (node) => node.className.includes("spec-content-edit-form"),
+  );
+  const updateSpecContent = descend(updateSpecForm).find(
+    (node) => node.className === "spec-content-editor",
+  );
+  updateSpecContent.value = "# Updated testing rule\n";
+  await updateSpecForm.events.submit({ preventDefault() {} });
+  assert.equal(createdSpecs[2].spec_key, "python.testing");
+  const deleteSpec = descend(get("content")).find(
+    (node) => node.tag === "button" && node.textContent === "删除",
+  );
+  await deleteSpec.events.click();
+  assert.match(text(get("composer")), /历史交付仍保留原规范引用/);
+  const confirmSpecDelete = descend(get("composer")).find(
+    (node) => node.tag === "button" && node.textContent === "确认删除",
+  );
+  await confirmSpecDelete.events.click();
+  assert.deepEqual(specDeletes, [
+    "/api/v1/admin/projects/project_other/specs/python.testing",
   ]);
   const learningMode = descend(get("content")).find(
     (node) => node.tag === "button" && node.textContent === "学习改进",
@@ -769,10 +1045,16 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     true,
     "successful or empty operation history does not dominate the page",
   );
-  assert.match(text(get("content")), /创建新 Project/);
-  const projectCreator = descend(get("content")).find(
-    (node) => node.className === "admin-panel project-creator",
+  assert.doesNotMatch(text(get("content")), /创建 Project/);
+  assert.match(text(get("project-creator")), /新建 Project/);
+  const openProjectCreator = descend(get("project-creator")).find(
+    (node) => node.tag === "button" && node.textContent === "新建 Project",
   );
+  await openProjectCreator.events.click();
+  const projectCreator = descend(get("composer")).find(
+    (node) => node.className === "modal-dialog",
+  );
+  assert.match(text(projectCreator), /新建 Project/);
   const createProjectForm = descend(projectCreator).find(
     (node) => node.tag === "form",
   );
@@ -780,13 +1062,16 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     "New product";
   await createProjectForm.events.submit({ preventDefault() {} });
   assert.deepEqual(createdProjects, [{ name: "New product" }]);
-  assert.equal(get("new-request").hidden, false);
-  assert.match(text(get("content")), /执行中 2/);
-  assert.match(text(get("content")), /阻塞中 1/);
-  assert.match(text(get("content")), /已完成 1/);
+  const newRequest = descend(get("content")).find(
+    (node) => node.tag === "button" && node.textContent === "新建需求",
+  );
+  assert.ok(newRequest, "new Requirement action is beside the list count");
+  assert.match(text(get("content")), /进行中 1/);
+  assert.match(text(get("content")), /阻塞中 0/);
+  assert.match(text(get("content")), /已完成 0/);
   assert.equal(get("detail").hidden, false);
   assert.match(text(get("detail")), /交付流程/);
-  get("new-request").events.click();
+  newRequest.events.click();
   const projectForm = descend(get("composer")).find(
     (node) => node.className === "project-form",
   );
@@ -887,7 +1172,12 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   );
   deliveryReady = false;
   await interval.fn();
-  assert.equal(get("new-request").hidden, true);
+  assert.equal(
+    descend(get("content")).some(
+      (node) => node.tag === "button" && node.textContent === "新建需求",
+    ),
+    false,
+  );
   assert.match(text(get("operations")), /待配置运行时/);
   await get("nav-settings").events.click();
   assert.equal(

@@ -30,6 +30,7 @@ SpecScope = Literal["team", "project"]
 _MAX_SPEC_BYTES = 256_000
 _MAX_RECORD_BYTES = 512_000
 _MAX_ACTIVATION_BYTES = 128_000
+_MAX_RETIREMENT_BYTES = 64_000
 _SAFE_KEY = re.compile(r"[^a-z0-9_.-]+")
 
 
@@ -51,7 +52,7 @@ class CreateSpecDocument(DomainModel):
     )
     repository_ids: Annotated[tuple[RepositoryId, ...], Field(max_length=32)] = ()
     path_globs: Annotated[tuple[NonEmptyStr, ...], Field(max_length=64)] = ("*",)
-    verification: Annotated[str, StringConstraints(min_length=1, max_length=8_000)]
+    verification: Annotated[str, StringConstraints(max_length=8_000)]
 
     @model_validator(mode="after")
     def validate_applicability(self) -> Self:
@@ -84,7 +85,7 @@ class SpecDocument(DomainModel):
     stages: Annotated[tuple[SpecStage, ...], Field(min_length=1, max_length=16)]
     repository_ids: Annotated[tuple[RepositoryId, ...], Field(max_length=32)] = ()
     path_globs: Annotated[tuple[NonEmptyStr, ...], Field(max_length=64)]
-    verification: Annotated[str, StringConstraints(min_length=1, max_length=8_000)]
+    verification: Annotated[str, StringConstraints(max_length=8_000)]
     created_at: AwareDatetime
     spec_sha256: Digest
 
@@ -152,6 +153,33 @@ class SpecActivation(DomainModel):
             raise SpecDocumentError("Spec activation digest mismatch")
 
 
+class SpecRetirement(DomainModel):
+    """Logical Specs excluded from future context while old revisions remain immutable."""
+
+    schema_version: Literal["v0.1"] = "v0.1"
+    scope: SpecScope
+    team_id: TeamId
+    project_id: ProjectId | None = None
+    retired_spec_keys: Annotated[tuple[SpecKey, ...], Field(max_length=128)] = ()
+    retirement_sha256: Digest
+
+    @model_validator(mode="after")
+    def validate_record(self) -> Self:
+        if (self.scope == "project") != (self.project_id is not None):
+            raise ValueError("Spec retirement scope and Project identity do not match")
+        ensure_unique(self.retired_spec_keys, "retired Spec keys")
+        if tuple(sorted(self.retired_spec_keys)) != self.retired_spec_keys:
+            raise ValueError("retired Spec keys must be sorted")
+        return self
+
+    def recompute_digest(self) -> str:
+        return _sha256(self.model_dump(mode="json", exclude={"retirement_sha256"}))
+
+    def validate_integrity(self) -> None:
+        if self.retirement_sha256 != self.recompute_digest():
+            raise SpecDocumentError("Spec retirement digest mismatch")
+
+
 class UpdateSpecActivation(DomainModel):
     spec_ids: Annotated[tuple[SpecDocumentId, ...], Field(max_length=128)] = ()
 
@@ -186,6 +214,10 @@ class _SpecDocumentStore:
 
     def list(self) -> tuple[SpecDocument, ...]:
         self._validate_workspace()
+        retired = set(self.retirement().retired_spec_keys)
+        return tuple(item for item in self._list_all() if item.spec_key not in retired)
+
+    def _list_all(self) -> tuple[SpecDocument, ...]:
         documents = self.root / "documents"
         if not documents.exists():
             return ()
@@ -197,6 +229,49 @@ class _SpecDocumentStore:
         )
         return tuple(sorted(values, key=lambda value: (value.spec_key, value.version)))
 
+    def retirement(self) -> SpecRetirement:
+        self._validate_workspace()
+        path = self.root / "retirement.json"
+        if not path.exists():
+            return self._new_retirement(())
+        try:
+            retirement = SpecRetirement.model_validate_json(
+                _read_regular(path, _MAX_RETIREMENT_BYTES)
+            )
+        except ValueError as error:
+            raise SpecDocumentError("Spec retirement is invalid") from error
+        retirement.validate_integrity()
+        if (
+            retirement.scope != self.scope
+            or retirement.team_id != self.team_id
+            or retirement.project_id != self.project_id
+        ):
+            raise SpecDocumentError("Spec retirement owner mismatch")
+        known = {document.spec_key for document in self._list_all()}
+        if not set(retirement.retired_spec_keys).issubset(known):
+            raise SpecDocumentError("Spec retirement references an unknown key")
+        return retirement
+
+    def retire(self, spec_key: str) -> SpecRetirement:
+        self._validate_workspace()
+        key = TypeAdapter(SpecKey).validate_python(spec_key)
+        if key not in {document.spec_key for document in self._list_all()}:
+            raise SpecDocumentError("Spec was not found")
+        if any(reference.spec_key == key for reference in self.activation().active):
+            raise SpecDocumentError("active Spec must be deactivated before deletion")
+        current = self.retirement()
+        return self._save_retirement((*current.retired_spec_keys, key))
+
+    def restore(self, spec_key: str) -> SpecRetirement:
+        self._validate_workspace()
+        key = TypeAdapter(SpecKey).validate_python(spec_key)
+        current = self.retirement()
+        if key not in current.retired_spec_keys:
+            return current
+        return self._save_retirement(
+            tuple(item for item in current.retired_spec_keys if item != key)
+        )
+
     def create(
         self,
         command: CreateSpecDocument,
@@ -205,13 +280,14 @@ class _SpecDocumentStore:
     ) -> SpecDocument:
         self._validate_workspace()
         self._validate_command(command)
-        existing = self.list()
+        existing = self._list_all()
         fingerprint = _draft_digest(command)
         for document in existing:
             if (
                 document.spec_key == command.spec_key
                 and _document_draft_digest(document) == fingerprint
             ):
+                self.restore(document.spec_key)
                 return document
         version = 1 + max(
             (document.version for document in existing if document.spec_key == command.spec_key),
@@ -253,7 +329,9 @@ class _SpecDocumentStore:
         finally:
             if staging.exists():
                 shutil.rmtree(staging)
-        return self._read(target)
+        persisted = self._read(target)
+        self.restore(persisted.spec_key)
+        return persisted
 
     def activation(self) -> SpecActivation:
         self._validate_workspace()
@@ -321,6 +399,26 @@ class _SpecDocumentStore:
             activation_sha256="0" * 64,
         )
         return provisional.model_copy(update={"activation_sha256": provisional.recompute_digest()})
+
+    def _new_retirement(self, spec_keys: tuple[str, ...]) -> SpecRetirement:
+        provisional = SpecRetirement(
+            scope=self.scope,
+            team_id=self.team_id,
+            project_id=self.project_id,
+            retired_spec_keys=tuple(sorted(set(spec_keys))),
+            retirement_sha256="0" * 64,
+        )
+        return provisional.model_copy(update={"retirement_sha256": provisional.recompute_digest()})
+
+    def _save_retirement(self, spec_keys: tuple[str, ...]) -> SpecRetirement:
+        retirement = self._new_retirement(spec_keys)
+        self.root.mkdir(parents=True, exist_ok=True)
+        _require_directory(self.root)
+        _atomic_write(
+            self.root / "retirement.json",
+            retirement.model_dump_json(indent=2).encode(),
+        )
+        return self.retirement()
 
     def _validate_activation_owner(self, activation: SpecActivation) -> None:
         if (
@@ -534,6 +632,7 @@ __all__ = [
     "SpecDocumentError",
     "SpecDocumentId",
     "SpecKey",
+    "SpecRetirement",
     "TeamSpecDocumentStore",
     "UpdateSpecActivation",
     "suggested_spec_key",

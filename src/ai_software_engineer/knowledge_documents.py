@@ -16,7 +16,7 @@ from typing import Annotated, Literal, Self
 from zipfile import BadZipFile, ZipFile
 
 from docx import Document
-from pydantic import AwareDatetime, Field, StringConstraints, model_validator
+from pydantic import AwareDatetime, Field, StringConstraints, TypeAdapter, model_validator
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
@@ -36,7 +36,9 @@ KnowledgeDocumentId = Annotated[
 ]
 SourceName = Annotated[str, StringConstraints(min_length=1, max_length=200)]
 KnowledgeMediaType = Literal["text/markdown", "text/plain", "application/pdf", "application/docx"]
+KnowledgeScope = Literal["team", "project"]
 _ALLOWED_SUFFIXES = {".md", ".txt", ".pdf", ".docx"}
+_MAX_RETIREMENT_BYTES = 64_000
 
 
 class KnowledgeDocumentError(RuntimeError):
@@ -94,9 +96,52 @@ class ProjectKnowledgeDocumentManifest(KnowledgeDocumentManifest):
     project_id: ProjectId
 
 
+class KnowledgeRetirement(DomainModel):
+    """Current-library exclusions without destroying historical documents."""
+
+    schema_version: Literal["v0.1"] = "v0.1"
+    scope: KnowledgeScope
+    team_id: TeamId
+    project_id: ProjectId | None = None
+    retired_document_ids: Annotated[tuple[KnowledgeDocumentId, ...], Field(max_length=1_024)] = ()
+    retirement_sha256: Digest
+
+    @model_validator(mode="after")
+    def validate_record(self) -> Self:
+        if (self.scope == "project") != (self.project_id is not None):
+            raise ValueError("knowledge retirement scope and Project identity do not match")
+        if len(set(self.retired_document_ids)) != len(self.retired_document_ids):
+            raise ValueError("retired knowledge document IDs must be unique")
+        if tuple(sorted(self.retired_document_ids)) != self.retired_document_ids:
+            raise ValueError("retired knowledge document IDs must be sorted")
+        return self
+
+    def recompute_digest(self) -> str:
+        payload = self.model_dump(mode="json", exclude={"retirement_sha256"})
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
+    def validate_integrity(self) -> None:
+        if self.retirement_sha256 != self.recompute_digest():
+            raise KnowledgeDocumentError("knowledge retirement digest mismatch")
+
+
 class _KnowledgeDocumentStore[ManifestT: KnowledgeDocumentManifest]:
     @property
     def root(self) -> Path:
+        raise NotImplementedError
+
+    @property
+    def scope(self) -> KnowledgeScope:
+        raise NotImplementedError
+
+    @property
+    def team_id(self) -> TeamId:
+        raise NotImplementedError
+
+    @property
+    def project_id(self) -> ProjectId | None:
         raise NotImplementedError
 
     def _validate_workspace(self) -> None:
@@ -126,6 +171,32 @@ class _KnowledgeDocumentStore[ManifestT: KnowledgeDocumentManifest]:
 
     def list(self) -> tuple[ManifestT, ...]:
         self._validate_workspace()
+        retired = set(self.retirement().retired_document_ids)
+        return tuple(item for item in self._list_all() if item.document_id not in retired)
+
+    def read_content(self, document_id: str) -> str:
+        """Return the verified normalized Markdown for one active document."""
+
+        identity = TypeAdapter(KnowledgeDocumentId).validate_python(document_id)
+        try:
+            manifest = next(item for item in self.list() if item.document_id == identity)
+        except StopIteration as error:
+            raise KnowledgeDocumentError("knowledge document was not found") from error
+        normalized = _read_bounded(
+            self.root / identity / "content.md",
+            MAX_TEAM_KNOWLEDGE_DOCUMENT_BYTES,
+        )
+        if (
+            len(normalized) != manifest.normalized_bytes
+            or hashlib.sha256(normalized).hexdigest() != manifest.normalized_sha256
+        ):
+            raise KnowledgeDocumentError("knowledge document content integrity mismatch")
+        try:
+            return normalized.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise KnowledgeDocumentError("knowledge document content is not UTF-8") from error
+
+    def _list_all(self) -> tuple[ManifestT, ...]:
         if not self.root.exists():
             return ()
         _reject_symlink(self.root)
@@ -136,6 +207,47 @@ class _KnowledgeDocumentStore[ManifestT: KnowledgeDocumentManifest]:
             if directory.is_dir() and not directory.name.startswith(".knowledge-"):
                 manifests.append(self._read(directory))
         return tuple(sorted(manifests, key=lambda item: (item.imported_at, item.document_id)))
+
+    def retirement(self) -> KnowledgeRetirement:
+        self._validate_workspace()
+        path = self.root.parent / "retirement.json"
+        if not path.exists():
+            return self._new_retirement(())
+        try:
+            record = KnowledgeRetirement.model_validate_json(
+                _read_bounded(path, _MAX_RETIREMENT_BYTES)
+            )
+        except ValueError as error:
+            raise KnowledgeDocumentError("knowledge retirement is invalid") from error
+        record.validate_integrity()
+        if (
+            record.scope != self.scope
+            or record.team_id != self.team_id
+            or record.project_id != self.project_id
+        ):
+            raise KnowledgeDocumentError("knowledge retirement owner mismatch")
+        known = {item.document_id for item in self._list_all()}
+        if not set(record.retired_document_ids).issubset(known):
+            raise KnowledgeDocumentError("knowledge retirement references an unknown document")
+        return record
+
+    def retire(self, document_id: str) -> KnowledgeRetirement:
+        self._validate_workspace()
+        identity = TypeAdapter(KnowledgeDocumentId).validate_python(document_id)
+        if identity not in {item.document_id for item in self._list_all()}:
+            raise KnowledgeDocumentError("knowledge document was not found")
+        current = self.retirement()
+        return self._save_retirement((*current.retired_document_ids, identity))
+
+    def restore(self, document_id: str) -> KnowledgeRetirement:
+        self._validate_workspace()
+        identity = TypeAdapter(KnowledgeDocumentId).validate_python(document_id)
+        current = self.retirement()
+        if identity not in current.retired_document_ids:
+            return current
+        return self._save_retirement(
+            tuple(item for item in current.retired_document_ids if item != identity)
+        )
 
     def import_document(
         self,
@@ -186,6 +298,7 @@ class _KnowledgeDocumentStore[ManifestT: KnowledgeDocumentManifest]:
             existing = self._read(target)
             if existing.source_sha256 != source_sha:
                 raise KnowledgeDocumentError("knowledge document identity collision")
+            self.restore(existing.document_id)
             return existing
         self.root.mkdir(parents=True, exist_ok=True)
         _reject_symlink(self.root)
@@ -204,7 +317,27 @@ class _KnowledgeDocumentStore[ManifestT: KnowledgeDocumentManifest]:
         finally:
             if staging.exists():
                 shutil.rmtree(staging)
-        return self._read(target)
+        persisted = self._read(target)
+        self.restore(persisted.document_id)
+        return persisted
+
+    def _new_retirement(self, document_ids: tuple[str, ...]) -> KnowledgeRetirement:
+        provisional = KnowledgeRetirement(
+            scope=self.scope,
+            team_id=self.team_id,
+            project_id=self.project_id,
+            retired_document_ids=tuple(sorted(set(document_ids))),
+            retirement_sha256="0" * 64,
+        )
+        return provisional.model_copy(update={"retirement_sha256": provisional.recompute_digest()})
+
+    def _save_retirement(self, document_ids: tuple[str, ...]) -> KnowledgeRetirement:
+        record = self._new_retirement(document_ids)
+        path = self.root.parent / "retirement.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _reject_symlink(path.parent)
+        _atomic_write(path, record.model_dump_json(indent=2).encode())
+        return self.retirement()
 
     def _read(self, directory: Path) -> ManifestT:
         _reject_symlink(directory)
@@ -242,6 +375,18 @@ class TeamKnowledgeDocumentStore(_KnowledgeDocumentStore[KnowledgeDocumentManife
     @property
     def root(self) -> Path:
         return self.team.root / "knowledge" / "documents"
+
+    @property
+    def scope(self) -> KnowledgeScope:
+        return "team"
+
+    @property
+    def team_id(self) -> TeamId:
+        return self.team.manifest.team_id
+
+    @property
+    def project_id(self) -> None:
+        return None
 
     def _validate_workspace(self) -> None:
         self.team.validate_current()
@@ -290,6 +435,18 @@ class ProjectKnowledgeDocumentStore(_KnowledgeDocumentStore[ProjectKnowledgeDocu
     @property
     def root(self) -> Path:
         return self.project.root / "knowledge" / "documents"
+
+    @property
+    def scope(self) -> KnowledgeScope:
+        return "project"
+
+    @property
+    def team_id(self) -> TeamId:
+        return self.project.manifest.team_id
+
+    @property
+    def project_id(self) -> ProjectId:
+        return self.project.manifest.project_id
 
     def _validate_workspace(self) -> None:
         self.project.validate_current()
@@ -419,6 +576,22 @@ def _write_new(path: Path, content: bytes) -> None:
         os.fsync(stream.fileno())
 
 
+def _atomic_write(path: Path, content: bytes) -> None:
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        _sync_directory(path.parent)
+    except OSError as error:
+        raise KnowledgeDocumentError("knowledge retirement could not be published") from error
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def _read_bounded(path: Path, limit: int) -> bytes:
     _reject_symlink(path)
     try:
@@ -445,6 +618,7 @@ def _sync_directory(path: Path) -> None:
 __all__ = [
     "KnowledgeDocumentError",
     "KnowledgeDocumentManifest",
+    "KnowledgeRetirement",
     "ProjectKnowledgeDocumentManifest",
     "ProjectKnowledgeDocumentStore",
     "TeamKnowledgeDocumentStore",

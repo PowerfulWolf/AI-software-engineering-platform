@@ -103,6 +103,8 @@ production_console_app(
 
 - 日常用户可在网页完成：Project 创建/选择、带 1–N 个 Repository 目录的 Requirement 创建、Product 对话、ProductSpec 批准、统一继续、exact
   recovery/verification 计划批准、进度观察和 Candidate 领取。
+- Requirements 页把 Project 创建放在 Project 上下文区，把 Requirement 创建放在需求列表标题与
+  数量旁；两者不得作为脱离所有权上下文的全局页头动作。
 - 一个 Task 的 Coder/QA/Reviewer 串行。UI 只把 `current_stage=true` 的 assignment 标成执行中；
   已完成/未来角色不得同时显示为运行。
 - DONE 只展示已经由 durable facts 证明的 candidate commit、可唯一定位的 branch 和验证证据。
@@ -196,16 +198,24 @@ ConsoleAdministration.team() -> TeamSummary
 ConsoleAdministration.projects() -> tuple[ProjectSummary, ...]
 ConsoleAdministration.create_project(request: CreateProjectRequest) -> ProjectSummary
 ConsoleAdministration.knowledge() -> tuple[KnowledgeDocumentView, ...]
+ConsoleAdministration.document_content(document_id) -> KnowledgeDocumentContentView
 ConsoleAdministration.import_document(*, filename: str, content: bytes) -> KnowledgeDocumentView
+ConsoleAdministration.replace_document(document_id, *, filename, content) -> KnowledgeDocumentView
+ConsoleAdministration.delete_document(document_id) -> tuple[KnowledgeDocumentView, ...]
 ConsoleAdministration.update_team_knowledge_selection(request) -> tuple[KnowledgeDocumentView, ...]
 ConsoleAdministration.project_knowledge(project_id) -> tuple[KnowledgeDocumentView, ...]
+ConsoleAdministration.project_document_content(project_id, document_id) -> KnowledgeDocumentContentView
 ConsoleAdministration.import_project_document(project_id, *, filename, content) -> KnowledgeDocumentView
+ConsoleAdministration.replace_project_document(project_id, document_id, *, filename, content) -> KnowledgeDocumentView
+ConsoleAdministration.delete_project_document(project_id, document_id) -> tuple[KnowledgeDocumentView, ...]
 ConsoleAdministration.update_project_knowledge_selection(project_id, request) -> tuple[KnowledgeDocumentView, ...]
 ConsoleAdministration.team_specs() -> tuple[SpecDocumentView, ...]
 ConsoleAdministration.create_team_spec(request: CreateSpecDocument) -> SpecDocumentView
+ConsoleAdministration.delete_team_spec(spec_key) -> tuple[SpecDocumentView, ...]
 ConsoleAdministration.update_team_spec_activation(request) -> tuple[SpecDocumentView, ...]
 ConsoleAdministration.project_specs(project_id) -> tuple[SpecDocumentView, ...]
 ConsoleAdministration.create_project_spec(project_id, request) -> SpecDocumentView
+ConsoleAdministration.delete_project_spec(project_id, spec_key) -> tuple[SpecDocumentView, ...]
 ConsoleAdministration.update_project_spec_activation(project_id, request) -> tuple[SpecDocumentView, ...]
 ConsoleAdministration.project_learnings(project_id) -> tuple[LearningProposalView, ...]
 ConsoleAdministration.collect_project_learnings(project_id) -> tuple[LearningProposalView, ...]
@@ -222,16 +232,24 @@ GET  /api/v1/admin/projects
 POST /api/v1/admin/projects
 GET  /api/v1/admin/team/knowledge
 POST /api/v1/admin/team/knowledge?filename=<basename>
+GET  /api/v1/admin/team/knowledge/<document_id>/content
 PUT  /api/v1/admin/team/knowledge/selection
+PUT  /api/v1/admin/team/knowledge/<document_id>?filename=<basename>
+DELETE /api/v1/admin/team/knowledge/<document_id>
 GET  /api/v1/admin/projects/<project_id>/knowledge
 POST /api/v1/admin/projects/<project_id>/knowledge?filename=<basename>
+GET  /api/v1/admin/projects/<project_id>/knowledge/<document_id>/content
 PUT  /api/v1/admin/projects/<project_id>/knowledge/selection
+PUT  /api/v1/admin/projects/<project_id>/knowledge/<document_id>?filename=<basename>
+DELETE /api/v1/admin/projects/<project_id>/knowledge/<document_id>
 GET  /api/v1/admin/team/specs
 POST /api/v1/admin/team/specs
 PUT  /api/v1/admin/team/specs/activation
+DELETE /api/v1/admin/team/specs/<spec_key>
 GET  /api/v1/admin/projects/<project_id>/specs
 POST /api/v1/admin/projects/<project_id>/specs
 PUT  /api/v1/admin/projects/<project_id>/specs/activation
+DELETE /api/v1/admin/projects/<project_id>/specs/<spec_key>
 GET  /api/v1/admin/projects/<project_id>/learnings
 POST /api/v1/admin/projects/<project_id>/learnings/collect
 POST /api/v1/admin/projects/<project_id>/learnings/<proposal_id>/decision
@@ -269,6 +287,29 @@ GET  /api/v1/admin/status
   evidence is always Project-owned. A Spec POST accepts bounded JSON up to 512 KB,
   creates an immutable inactive version and returns its digest. Activation is a separate PUT carrying
   the exact selected IDs; there is never an implicit latest-version switch.
+- Background import and Spec creation are directly visible maintenance forms rather than collapsed
+  disclosures. Neither form contains a separate maintenance-mode selector. Background import may
+  select at most 20 files per browser action, but each file still crosses the existing bounded
+  single-document API independently; partial failures report the successful count and first failure.
+  An exact normalized filename match with current inventory pauses before the first write and shows
+  an explicit replacement-risk confirmation. Duplicate filenames inside one batch and ambiguous
+  multiple existing matches are rejected before upload.
+- `更新文档` fetches only the verified normalized Markdown through the scope-owned content GET, then
+  opens a modal editor. Saving publishes a replacement through the existing PUT; PDF/DOCX source
+  content is deliberately saved as Markdown after human editing. Auto-refresh may refresh in-memory
+  facts while a modal is open but must not rebuild the DOM and discard unsaved input.
+- Spec import accepts 1–20 Markdown/TXT files. Every file becomes one independent inactive Spec using
+  a stable internal key and human-readable title derived from its filename; the batch shares roles,
+  stages, Repository IDs, path globs and optional verification guidance. A key collision requires
+  explicit confirmation because it creates a new immutable version. Roles and stages are explicit
+  multi-selects with at least one selected value.
+  Verification guidance may be empty when no proof method has been defined; the API still carries
+  the field and enforces its maximum size.
+- Background update transfers the previous enabled state and retires the old content-addressed ID.
+  Spec card update opens a modal with the existing body and applicability, hides/reuses the stable key
+  and publishes an inactive next version. UI delete requires confirmation; the API removes selection/activation first and then writes
+  a digest-bound retirement record. Retired records leave current inventory and future Context but
+  immutable source/version files remain available to already-bound historical deliveries.
 - Learning collection reads only persisted failed QA/rejected Review artifacts. Before publication,
   an immutable authorization must bind the exact proposal SHA, action, target, operator and rationale;
   the completion decision is also immutable. An interrupted publication exposes the authorization and
@@ -303,11 +344,17 @@ GET  /api/v1/admin/status
   `进行中` requires the exact current-stage assignment, `待完成` is a non-current active assignment,
   and terminal history must not be presented as live work. The board states that its workload is
   limited to the selected Project snapshot.
-- Requirements use a wide-screen master/detail layout: Project actions and filtered Requirement/Task
-  lists are the master side, while exact delivery stage, next action, repository scope, candidate and
-  evidence stay in the detail side. Narrow screens stack the same content without changing commands.
-- Knowledge uses ownership navigation beside one content workspace. Document and Spec editors remain
-  explicit but collapsed until opened, so existing assets are the primary view. Settings similarly
+- Requirements use a wide-screen master/detail layout: a searchable Project picker scales beyond a
+  handful of Projects; Project and Requirement creation use focused modal dialogs. Filtered top-level
+  Requirements are the master side, while Repository Tasks, exact delivery stage, next action,
+  repository scope, candidate and evidence stay in detail. With no Requirements, hide the blank detail
+  panel. Narrow screens stack the same content without changing commands. Opaque Requirement, Task,
+  Artifact and commit identifiers must not contribute a minimum content width: owning grid items use
+  `min-width: 0`, while identifier text uses `overflow-wrap: anywhere`, so no child can cross from the
+  master column into detail.
+- Knowledge uses ownership navigation beside one content workspace. Background import and Spec
+  creation stay directly visible as the primary maintenance actions; only existing document bodies
+  and other secondary evidence may remain collapsed. Settings similarly
   uses local Basic/MySQL/Model navigation over one shared draft and one atomic save action. Status is
   read-only and leads with a readiness conclusion before individual runtime facts.
 - Project creation is rendered in `需求与交付`, next to Project selection and Requirement work. The
@@ -342,13 +389,29 @@ GET  /api/v1/admin/status
 | Unsupported/dangerous filename or corrupt document | 422 generic safe error; no partial directory |
 | Upload over 10 MB or normalized body over 256 KB | 413/422; no published record |
 | Same document bytes uploaded twice | Return the original document identity |
+| Browser batch contains a current filename | show exact replacement risk and issue no write before confirmation |
+| Browser batch contains duplicate filenames or an ambiguous current filename | reject before the first write |
+| Replace selected document | publish new document, transfer selection, retire old ID and return new view |
+| Read active document content for editing | return verified normalized Markdown plus scope/name/identity only |
+| Read retired, missing or tampered content | 404 safe error; no source bytes or unchecked text |
+| Delete document | require confirmation in UI; remove it from selection and current inventory; retain files |
 | Manifest/source/normalized digest or path drift | Entire knowledge listing fails closed |
 | Unknown document ID, copied cross-scope record or invalid selection digest | 409/503 safe rejection; prior selection remains |
 | Team selection changed | next Project runtime re-resolves Team context; no process restart |
 | Project A selection changed | only Project A runtime is replaced; Project B stays unchanged |
 | Knowledge changed after an operation prepared its context | existing preparation guard stops on drift; never reinterpret approval |
 | Spec JSON over 512 KB, invalid glob/role/stage or unknown ID | 413/422/409; no draft/activation publication |
+| Spec verification is empty | accept and preserve `verification=""`; mandatory platform QA/Review gates remain unchanged |
+| Spec roles or stages have no selection | browser blocks before POST; direct API returns 422 |
 | New Spec version created | inactive until explicit activation; older versions remain immutable |
+| Update existing Spec | reuse hidden stable key, create next inactive version; never overwrite or auto-activate |
+| Delete logical Spec | remove active version, retire the key and hide all versions; retain immutable records |
+| Retirement digest/owner/reference drift | 409/503 safe failure; no destructive cleanup |
+| Browser selects 1–20 valid background documents | issue one bounded POST per document, then refresh the inventory once |
+| Browser selects over 20 background documents | reject before the first POST |
+| One document in a batch fails | continue independent documents; report success count, failure count and first safe error |
+| Browser selects 1–20 valid Spec documents | issue one bounded POST per file; create independent inactive Specs |
+| Spec batch derives a current stable key | require explicit new-version confirmation; never auto-activate |
 | Active Team/Project Spec changes | next relevant Project runtime rebuilds without restart; old preparation stops on drift |
 | Learning decision uses stale proposal SHA or differs from existing authorization/decision | 409; first authorization/decision/publication remains |
 | Settings select another Team/name or invalid knowledge | 409; config file unchanged |
@@ -364,9 +427,10 @@ GET  /api/v1/admin/status
 ### 5. Good / Base / Bad Cases
 
 - Good: start with no config/MySQL, view defaults, enter and test a full DSN, save `runtime.env`, restart,
-  create a Project, upload one Team DOCX and one Project Markdown document, explicitly enable both
+  create a Project, batch-upload Team DOCX/Markdown and Project Spec documents, explicitly enable them
   without restart, then prepare a new Requirement whose context digest binds both scopes.
-- Base: a Team with no documents is valid and displayed neutrally; no knowledge is loaded implicitly.
+- Base: a Team with no documents is valid and displayed neutrally; a Spec with empty verification
+  guidance remains enforceable through its body and the normal QA/Review gates.
 - Bad: let the browser submit `/etc/passwd`, recursively scan `knowledge/`, keep only an AI summary,
   return a DSN from the API, accept arbitrary environment names, or change the active Team inside an
   already-running Delivery Host.
@@ -378,17 +442,21 @@ GET  /api/v1/admin/status
 - `tests/config/test_runtime_environment.py`: canonical quote round-trip, `0600`, atomic replacement,
   duplicate/name/control/size/symlink rejection.
 - `tests/web_console/test_administration.py`: singleton Team, Project catalog/create, config write/read,
-  selected knowledge validation, write-only runtime values, safe MySQL probe, Status and restart semantics.
+  selected knowledge replacement/retirement, Spec retirement, write-only runtime values, safe MySQL
+  probe, Status and restart semantics.
 - `tests/web_console/test_transport.py`: admin verbs, content types/body limits, typed errors and no
-  content/secret reflection; missing config/MySQL must still expose Settings/Status while delivery is
-  `SETUP_REQUIRED`.
+  content/secret reflection, plus verified normalized-content reads; missing config/MySQL must still
+  expose Settings/Status while delivery is `SETUP_REQUIRED`.
 - `tests/specs/`: Spec/Learning stores and publication contracts; Web administration/transport tests
   cover both scopes, activation and Learning collection/decision endpoints.
 - `tests/team_view/ui.test.cjs`: Project creation, scoped Knowledge navigation/live selection,
-  selected-Agent queue grouping, master/detail Requirements, sectioned Settings, write-only DSN/key
-  fields, separate Status tab and safe text rendering.
-- `tests/contracts/test_json_schema_contracts.py`: production config/port, both knowledge manifests and selection
-  Python-to-Schema parity.
+  selected-Agent queue grouping, searchable Project picker, modal Project/Requirement creation,
+  master/detail Requirements, sectioned Settings, write-only DSN/key fields, expanded knowledge forms,
+  same-name replacement confirmation, modal content editing resilient to auto-refresh, bounded
+  Background/Spec multi-file selection, role/stage multi-selects, optional verification, separate
+  Status tab, safe text rendering and long opaque identifier containment.
+- `tests/contracts/test_json_schema_contracts.py`: production config/port, knowledge manifests,
+  selection/retirement and Spec document/activation/retirement Python-to-Schema parity.
 
 ### 7. Wrong vs Correct
 
@@ -426,6 +494,33 @@ view = administration.create_project_spec(project_id, command)
 administration.update_project_spec_activation(
     project_id, UpdateSpecActivationRequest(spec_ids=(view.document.spec_id,))
 )
+```
+
+```javascript
+// Wrong: hide routine knowledge maintenance behind repeated disclosures or treat a batch as one
+// oversized upload with ambiguous partial-failure semantics.
+uploadAll(files)
+
+// Correct: keep the maintenance form visible and reuse the bounded one-document API per file.
+for (const file of files.slice(0, 20)) await importDocument(file)
+```
+
+```javascript
+// Wrong: a card click mutates an upload selector that the 5-second render immediately resets.
+target.value = documentId
+
+// Correct: load verified normalized text into durable modal state and publish an immutable replacement.
+editingKnowledgeDocument = await readDocumentContent(documentId)
+await replaceDocument(documentId, editingKnowledgeDocument.content_markdown)
+```
+
+```python
+# Wrong: erase a source/version that a completed delivery may still reference.
+shutil.rmtree(document_directory)
+
+# Correct: remove current selection/activation and retire the stable identity; keep immutable history.
+selection_store.save(paths_without_old_document)
+knowledge_store.retire(old_document_id)
 ```
 
 ## Scenario: local Web Console process lifecycle

@@ -266,10 +266,14 @@ def test_project_knowledge_and_scope_selections_satisfy_schemas(
     project_selection = ProjectKnowledgeSelectionStore(project).save(
         (project_document.normalized_relative_path,)
     )
+    team_retirement = TeamKnowledgeDocumentStore(team).retire(team_document.document_id)
+    project_retirement = ProjectKnowledgeDocumentStore(project).retire(project_document.document_id)
 
     _assert_valid(project_document.to_wire(), "project-knowledge-document.schema.json")
     _assert_valid(team_selection.to_wire(), "knowledge-selection.schema.json")
     _assert_valid(project_selection.to_wire(), "knowledge-selection.schema.json")
+    _assert_valid(team_retirement.to_wire(), "knowledge-retirement.schema.json")
+    _assert_valid(project_retirement.to_wire(), "knowledge-retirement.schema.json")
     malformed = team_selection.to_wire()
     malformed["project_id"] = "project_test"
     _assert_invalid(malformed, "knowledge-selection.schema.json")
@@ -289,9 +293,19 @@ def test_spec_document_and_activation_satisfy_canonical_schemas(tmp_path: Path) 
         )
     )
     activation = store.activate((document.spec_id,))
+    store.activate(())
+    retirement = store.retire(document.spec_key)
 
     _assert_valid(document.to_wire(), "spec-document.schema.json")
+    without_verification_guidance = document.to_wire()
+    without_verification_guidance["verification"] = ""
+    without_verification_guidance["spec_sha256"] = "0" * 64
+    _assert_valid(without_verification_guidance, "spec-document.schema.json")
+    oversized_verification = document.to_wire()
+    oversized_verification["verification"] = "x" * 8_001
+    _assert_invalid(oversized_verification, "spec-document.schema.json")
     _assert_valid(activation.to_wire(), "spec-activation.schema.json")
+    _assert_valid(retirement.to_wire(), "spec-retirement.schema.json")
     malformed = document.to_wire()
     malformed["scope"] = "unknown"
     _assert_invalid(malformed, "spec-document.schema.json")

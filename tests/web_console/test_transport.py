@@ -258,6 +258,16 @@ def test_administration_endpoints_create_project_import_document_and_save_settin
             content=b"# Project guide\n",
             headers={"Content-Type": "application/octet-stream"},
         )
+        team_content = client.get(
+            "/api/v1/admin/team/knowledge/"
+            + imported.json()["manifest"]["document_id"]
+            + "/content"
+        )
+        project_content = client.get(
+            "/api/v1/admin/projects/project_web/knowledge/"
+            + project_imported.json()["manifest"]["document_id"]
+            + "/content"
+        )
         team_selection = client.put(
             "/api/v1/admin/team/knowledge/selection",
             json={"document_ids": [imported.json()["manifest"]["document_id"]]},
@@ -291,6 +301,31 @@ def test_administration_endpoints_create_project_import_document_and_save_settin
         team = client.get("/api/v1/admin/team")
         projects = client.get("/api/v1/admin/projects")
         knowledge = client.get("/api/v1/admin/team/knowledge")
+        team_replaced = client.put(
+            "/api/v1/admin/team/knowledge/"
+            + imported.json()["manifest"]["document_id"]
+            + "?filename=team-guide.md",
+            content=b"# Team guide v2\n",
+            headers={"Content-Type": "application/octet-stream"},
+        )
+        project_replaced = client.put(
+            "/api/v1/admin/projects/project_web/knowledge/"
+            + project_imported.json()["manifest"]["document_id"]
+            + "?filename=project-guide.md",
+            content=b"# Project guide v2\n",
+            headers={"Content-Type": "application/octet-stream"},
+        )
+        team_deleted = client.delete(
+            "/api/v1/admin/team/knowledge/" + team_replaced.json()["manifest"]["document_id"]
+        )
+        project_deleted = client.delete(
+            "/api/v1/admin/projects/project_web/knowledge/"
+            + project_replaced.json()["manifest"]["document_id"]
+        )
+        team_spec_deleted = client.delete("/api/v1/admin/team/specs/python.testing")
+        project_spec_deleted = client.delete(
+            "/api/v1/admin/projects/project_web/specs/python.testing"
+        )
         settings = client.get("/api/v1/admin/settings")
         status = client.get("/api/v1/admin/status")
         mysql = client.post(
@@ -310,6 +345,8 @@ def test_administration_endpoints_create_project_import_document_and_save_settin
     assert imported.status_code == 201
     assert project_imported.status_code == 201
     assert project_imported.json()["project_id"] == "project_web"
+    assert team_content.json()["content_markdown"] == "# Team guide\n"
+    assert project_content.json()["content_markdown"] == "# Project guide\n"
     assert team_selection.status_code == 200
     assert team_selection.json()[0]["selected"] is True
     assert project_selection.status_code == 200
@@ -326,6 +363,14 @@ def test_administration_endpoints_create_project_import_document_and_save_settin
     assert projects.status_code == 200
     assert [item["project_id"] for item in projects.json()] == ["project_web"]
     assert knowledge.json()[0]["manifest"]["source_name"] == "team-guide.md"
+    assert team_replaced.status_code == 200
+    assert team_replaced.json()["selected"] is True
+    assert project_replaced.status_code == 200
+    assert project_replaced.json()["selected"] is True
+    assert team_deleted.json() == []
+    assert project_deleted.json() == []
+    assert team_spec_deleted.json() == []
+    assert project_spec_deleted.json() == []
     assert settings.json()["secret_status"] == [
         {"environment_name": "ASE_MYSQL_DSN", "configured": True}
     ]

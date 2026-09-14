@@ -39,6 +39,8 @@ ProjectWorkspace.requirements_root -> Path
 
 TeamKnowledgeDocumentStore(team).import_document(...) -> KnowledgeDocumentManifest
 ProjectKnowledgeDocumentStore(project).import_document(...) -> ProjectKnowledgeDocumentManifest
+TeamKnowledgeDocumentStore(team).read_content(document_id) -> str
+ProjectKnowledgeDocumentStore(project).read_content(document_id) -> str
 TeamKnowledgeSelectionStore(team).save(selected_paths) -> KnowledgeSelection
 ProjectKnowledgeSelectionStore(project).save(selected_paths) -> KnowledgeSelection
 effective_team_knowledge_paths(team, fallback=()) -> tuple[str, ...]
@@ -60,9 +62,10 @@ ProductionConfig.default_project_name: ProjectName | None = None
 Public persistent contracts are `team-workspace.schema.json`, `project-workspace.schema.json`,
 `repository-workspace.schema.json`, `runtime-workspace-binding.schema.json` and
 `production-config.schema.json`. Knowledge records additionally use
-`knowledge-document.schema.json`, `project-knowledge-document.schema.json` and
-`knowledge-selection.schema.json`. Strict specifications and learning facts additionally use
-`spec-document.schema.json`, `spec-activation.schema.json`, `learning-proposal.schema.json`,
+`knowledge-document.schema.json`, `project-knowledge-document.schema.json`,
+`knowledge-selection.schema.json` and `knowledge-retirement.schema.json`. Strict specifications and
+learning facts additionally use `spec-document.schema.json`, `spec-activation.schema.json`,
+`spec-retirement.schema.json`, `learning-proposal.schema.json`,
 `learning-authorization.schema.json` and `learning-decision.schema.json`.
 
 ## 3. Contracts
@@ -85,6 +88,13 @@ Public persistent contracts are `team-workspace.schema.json`, `project-workspace
 - Team stores immutable documents below `team/knowledge/documents/` and its current selection at
   `team/knowledge/selection.json`. Each Project owns the same two-part layout below its own
   `projects/<project_id>/knowledge/`; Project manifests and selections bind exact Team + Project IDs.
+- Knowledge update publishes a new content-addressed document and may transfer the old selection to
+  the replacement. Delete removes the document from selection and records its ID in digest-bound
+  `knowledge/retirement.json`. Retired documents are excluded from current inventory and future
+  context, but their immutable files remain for historical delivery provenance.
+- `read_content(document_id)` exposes only one active document's normalized Markdown after owner,
+  path, size and digest validation. Retired, missing, tampered or non-UTF-8 content fails closed; the
+  original source file is never returned through this editing seam.
 - Team and Project knowledge selections are explicit, unique, sorted, bounded, safe relative paths. Reads
   reject traversal, hidden/path-like entries, symlinks, non-regular files, invalid UTF-8 and size
   overflow; selected content is redacted and digest-bound in Context.
@@ -97,8 +107,13 @@ Public persistent contracts are `team-workspace.schema.json`, `project-workspace
 - `knowledge/` is descriptive context. Mandatory engineering rules belong to `specs/`: immutable
   `documents/<spec_id>/spec.json` records plus one atomic `activation.json` per Team/Project scope.
   Creating a Spec never activates it. One scope may activate at most one version per stable `spec_key`.
+- Spec update reuses the stable internal key and publishes the next immutable version. Logical delete
+  removes any active reference and records the key in digest-bound `specs/retirement.json`; it never
+  erases historical versions. Publishing that key again restores it to the current library.
 - A Spec declares exact Team/Project ownership, version, roles, stages, optional Repository IDs,
-  safe root-relative path globs and a human-authored verification contract. Active Team Specs apply
+  safe root-relative path globs and optional human-authored verification guidance. An empty
+  verification value means the Team has not defined a proof method yet; it does not weaken the Spec
+  body or the platform's mandatory QA/Review gates. Active Team Specs apply
   across Projects; active Project Specs are isolated to their owner and filtered by Repository ID.
 - `projects/<project_id>/specs/learning/` stores evidence-backed QA/Review proposals and one immutable
   human decision per proposal. Approval may publish Project background knowledge, a Project Spec, or
@@ -125,8 +140,14 @@ Public persistent contracts are `team-workspace.schema.json`, `project-workspace
 | Explicit selected knowledge | return redacted, digest-bound ContextSource only |
 | Project document/selection copied into another Project | reject owner identity even if content/digest is otherwise valid |
 | Team/Project selection saved | atomic sidecar publication; next new/re-prepared Requirement sees it without restart |
+| Replace selected knowledge | publish replacement, transfer selection, retire old ID; immutable old file remains |
+| Delete selected knowledge | remove selection before retirement; future context excludes it |
+| Retirement record owner/digest/unknown ID drift | fail closed; do not reinterpret the current library |
+| Read active normalized content | return exact verified UTF-8 Markdown; never return unchecked source bytes |
+| Read retired/missing/tampered normalized content | reject; do not expose stale or unverified text |
 | Changed selected knowledge after prepare | reject old preparation; never replace context silently |
 | Create a new Spec version | preserve all older versions; do not activate implicitly |
+| Delete active logical Spec | deactivate its key, retire it and preserve every version |
 | Activate two versions of one `spec_key` or unknown/cross-owner ID | reject; prior activation remains |
 | Active Spec changes after prepare | reject old preparation; require a new exact baseline |
 | Team/Project/Repository rules disagree on one field | produce conflict and route to human; never choose by priority |
@@ -151,8 +172,9 @@ Public persistent contracts are `team-workspace.schema.json`, `project-workspace
   symlink guards, knowledge selection/redaction/budgets.
 - `tests/project_workspace/`: deterministic create/register/open/discover, Team lineage, Project
   knowledge, Project-owned Repository registration and missing/ambiguous lookup.
-- `tests/knowledge/`: immutable Team/Project documents, owner binding, atomic selection, explicit
-  empty selection, legacy fallback and integrity failure.
+- `tests/knowledge/`: immutable Team/Project documents, owner binding, atomic selection/retirement,
+  replacement selection inheritance, verified normalized-content reads, explicit empty selection,
+  legacy fallback and integrity failure.
 - `tests/specs/`: immutable Spec versioning/activation/provenance, Project isolation, repository
   filtering, evidence-backed Learning collection, exact decisions and safe publication.
 - `tests/repository_workspace/` and `tests/runtime_workspace/`: Repository manifest and

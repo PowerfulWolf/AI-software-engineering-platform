@@ -16,6 +16,7 @@ from starlette.middleware.base import RequestResponseEndpoint
 from ai_software_engineer.domain.identity import ProjectId, TeamId
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.knowledge_documents import KnowledgeDocumentError
+from ai_software_engineer.knowledge_selection import KnowledgeSelectionError
 from ai_software_engineer.learning import DecideLearningProposal, LearningError
 from ai_software_engineer.spec_documents import CreateSpecDocument, SpecDocumentError
 from ai_software_engineer.team_view.models import TeamReadError, TeamSnapshot
@@ -192,9 +193,24 @@ def create_console_app(
                 filename=filename,
                 content=content,
             )
-        except (AdministrationError, KnowledgeDocumentError, ValidationError):
+        except (
+            AdministrationError,
+            KnowledgeDocumentError,
+            KnowledgeSelectionError,
+            ValidationError,
+        ):
             return _error(422, "DOCUMENT_REJECTED", "Document could not be imported safely.")
         return JSONResponse(value.to_wire(), status_code=201)
+
+    @app.get("/api/v1/admin/team/knowledge/{document_id}/content")
+    async def team_knowledge_content(document_id: str) -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        try:
+            value = await run_in_threadpool(administration.document_content, document_id)
+        except (AdministrationError, KnowledgeDocumentError, ValidationError):
+            return _error(404, "DOCUMENT_NOT_FOUND", "Document was not found.")
+        return JSONResponse(value.to_wire())
 
     @app.put("/api/v1/admin/team/knowledge/selection")
     async def update_team_knowledge_selection(request: Request) -> Response:
@@ -212,6 +228,44 @@ def create_console_app(
             return _error(422, "INVALID_REQUEST", "Knowledge selection is invalid.")
         except (AdministrationError, KnowledgeDocumentError):
             return _error(409, "KNOWLEDGE_REJECTED", "Knowledge selection was rejected.")
+        return JSONResponse([value.to_wire() for value in values])
+
+    @app.put("/api/v1/admin/team/knowledge/{document_id}")
+    async def replace_knowledge(document_id: str, request: Request, filename: str = "") -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        content = await _knowledge_document_body(request)
+        if isinstance(content, Response):
+            return content
+        try:
+            value = await run_in_threadpool(
+                administration.replace_document,
+                document_id,
+                filename=filename,
+                content=content,
+            )
+        except (
+            AdministrationError,
+            KnowledgeDocumentError,
+            KnowledgeSelectionError,
+            ValidationError,
+        ):
+            return _error(422, "DOCUMENT_REJECTED", "Document could not be updated safely.")
+        return JSONResponse(value.to_wire())
+
+    @app.delete("/api/v1/admin/team/knowledge/{document_id}")
+    async def delete_knowledge(document_id: str) -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        try:
+            values = await run_in_threadpool(administration.delete_document, document_id)
+        except (
+            AdministrationError,
+            KnowledgeDocumentError,
+            KnowledgeSelectionError,
+            ValidationError,
+        ):
+            return _error(409, "DOCUMENT_REJECTED", "Document could not be deleted safely.")
         return JSONResponse([value.to_wire() for value in values])
 
     @app.get("/api/v1/admin/projects/{project_id}/knowledge")
@@ -244,9 +298,30 @@ def create_console_app(
                 filename=filename,
                 content=content,
             )
-        except (AdministrationError, KnowledgeDocumentError, ValidationError):
+        except (
+            AdministrationError,
+            KnowledgeDocumentError,
+            KnowledgeSelectionError,
+            ValidationError,
+        ):
             return _error(422, "DOCUMENT_REJECTED", "Document could not be imported safely.")
         return JSONResponse(value.to_wire(), status_code=201)
+
+    @app.get("/api/v1/admin/projects/{project_id}/knowledge/{document_id}/content")
+    async def project_knowledge_content(project_id: str, document_id: str) -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        if not _valid_project_id(project_id):
+            return _error(404, "NOT_FOUND", "Project was not found.")
+        try:
+            value = await run_in_threadpool(
+                administration.project_document_content,
+                project_id,
+                document_id,
+            )
+        except (AdministrationError, KnowledgeDocumentError, ValidationError):
+            return _error(404, "DOCUMENT_NOT_FOUND", "Document was not found.")
+        return JSONResponse(value.to_wire())
 
     @app.put("/api/v1/admin/projects/{project_id}/knowledge/selection")
     async def update_project_knowledge_selection(project_id: str, request: Request) -> Response:
@@ -268,6 +343,58 @@ def create_console_app(
             return _error(422, "INVALID_REQUEST", "Knowledge selection is invalid.")
         except (AdministrationError, KnowledgeDocumentError):
             return _error(409, "KNOWLEDGE_REJECTED", "Knowledge selection was rejected.")
+        return JSONResponse([value.to_wire() for value in values])
+
+    @app.put("/api/v1/admin/projects/{project_id}/knowledge/{document_id}")
+    async def replace_project_knowledge(
+        project_id: str,
+        document_id: str,
+        request: Request,
+        filename: str = "",
+    ) -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        if not _valid_project_id(project_id):
+            return _error(404, "NOT_FOUND", "Project was not found.")
+        content = await _knowledge_document_body(request)
+        if isinstance(content, Response):
+            return content
+        try:
+            value = await run_in_threadpool(
+                administration.replace_project_document,
+                project_id,
+                document_id,
+                filename=filename,
+                content=content,
+            )
+        except (
+            AdministrationError,
+            KnowledgeDocumentError,
+            KnowledgeSelectionError,
+            ValidationError,
+        ):
+            return _error(422, "DOCUMENT_REJECTED", "Document could not be updated safely.")
+        return JSONResponse(value.to_wire())
+
+    @app.delete("/api/v1/admin/projects/{project_id}/knowledge/{document_id}")
+    async def delete_project_knowledge(project_id: str, document_id: str) -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        if not _valid_project_id(project_id):
+            return _error(404, "NOT_FOUND", "Project was not found.")
+        try:
+            values = await run_in_threadpool(
+                administration.delete_project_document,
+                project_id,
+                document_id,
+            )
+        except (
+            AdministrationError,
+            KnowledgeDocumentError,
+            KnowledgeSelectionError,
+            ValidationError,
+        ):
+            return _error(409, "DOCUMENT_REJECTED", "Document could not be deleted safely.")
         return JSONResponse([value.to_wire() for value in values])
 
     @app.get("/api/v1/admin/team/specs")
@@ -306,6 +433,16 @@ def create_console_app(
             values = await run_in_threadpool(administration.update_team_spec_activation, command)
         except (ValidationError, AdministrationError, SpecDocumentError):
             return _error(409, "SPEC_REJECTED", "Team Spec activation was rejected.")
+        return JSONResponse([value.to_wire() for value in values])
+
+    @app.delete("/api/v1/admin/team/specs/{spec_key}")
+    async def delete_team_spec(spec_key: str) -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        try:
+            values = await run_in_threadpool(administration.delete_team_spec, spec_key)
+        except (ValidationError, AdministrationError, SpecDocumentError):
+            return _error(409, "SPEC_REJECTED", "Team Spec could not be deleted safely.")
         return JSONResponse([value.to_wire() for value in values])
 
     @app.get("/api/v1/admin/projects/{project_id}/specs")
@@ -354,6 +491,22 @@ def create_console_app(
             )
         except (ValidationError, AdministrationError, SpecDocumentError):
             return _error(409, "SPEC_REJECTED", "Project Spec activation was rejected.")
+        return JSONResponse([value.to_wire() for value in values])
+
+    @app.delete("/api/v1/admin/projects/{project_id}/specs/{spec_key}")
+    async def delete_project_spec(project_id: str, spec_key: str) -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        if not _valid_project_id(project_id):
+            return _error(404, "NOT_FOUND", "Project was not found.")
+        try:
+            values = await run_in_threadpool(
+                administration.delete_project_spec,
+                project_id,
+                spec_key,
+            )
+        except (ValidationError, AdministrationError, SpecDocumentError):
+            return _error(409, "SPEC_REJECTED", "Project Spec could not be deleted safely.")
         return JSONResponse([value.to_wire() for value in values])
 
     @app.get("/api/v1/admin/projects/{project_id}/learnings")

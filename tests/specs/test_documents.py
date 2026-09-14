@@ -1,5 +1,6 @@
 """Strict Specs are immutable, versioned, scoped and explicitly activated."""
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -119,3 +120,55 @@ def test_spec_rejects_repository_outside_its_owner_scope(tmp_path: Path) -> None
         ProjectSpecDocumentStore(project).create(command, created_at=NOW)
     with pytest.raises(SpecDocumentError, match="outside its owner scope"):
         TeamSpecDocumentStore(team).create(command, created_at=NOW)
+
+
+def test_spec_allows_verification_to_be_defined_later(tmp_path: Path) -> None:
+    store = TeamSpecDocumentStore(_team(tmp_path))
+
+    document = store.create(_command().model_copy(update={"verification": ""}), created_at=NOW)
+
+    assert document.verification == ""
+    document.validate_integrity()
+
+    with pytest.raises(ValueError):
+        CreateSpecDocument(
+            spec_key="delivery.qa-gate",
+            title="QA gate",
+            body_markdown="Never merge without QA evidence.",
+            verification="x" * 8_001,
+        )
+
+
+def test_retired_spec_leaves_current_library_but_keeps_revision_history(
+    tmp_path: Path,
+) -> None:
+    store = TeamSpecDocumentStore(_team(tmp_path))
+    first = store.create(_command(), created_at=NOW)
+    store.activate((first.spec_id,))
+
+    with pytest.raises(SpecDocumentError, match="deactivated"):
+        store.retire(first.spec_key)
+
+    store.activate(())
+    retirement = store.retire(first.spec_key)
+    assert retirement.retired_spec_keys == (first.spec_key,)
+    assert store.list() == ()
+    assert (store.root / "documents" / first.spec_id / "spec.json").is_file()
+
+    updated = store.create(_command("Updated QA rule."), created_at=NOW)
+    assert updated.version == 2
+    assert store.list() == (first, updated)
+    assert store.retirement().retired_spec_keys == ()
+
+
+def test_tampered_spec_retirement_fails_closed(tmp_path: Path) -> None:
+    store = TeamSpecDocumentStore(_team(tmp_path))
+    document = store.create(_command(), created_at=NOW)
+    store.retire(document.spec_key)
+    path = store.root / "retirement.json"
+    payload = json.loads(path.read_text())
+    payload["retirement_sha256"] = "0" * 64
+    path.write_text(json.dumps(payload))
+
+    with pytest.raises(SpecDocumentError, match="digest mismatch"):
+        store.list()

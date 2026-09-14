@@ -61,6 +61,7 @@ from ai_software_engineer.spec_documents import (
 )
 from ai_software_engineer.store import StoreError, open_mysql_connection, validate_mysql_dsn
 from ai_software_engineer.team_workspace import (
+    MAX_TEAM_KNOWLEDGE_DOCUMENT_BYTES,
     TeamName,
     TeamWorkspace,
     discover_team_workspaces,
@@ -195,6 +196,17 @@ class KnowledgeDocumentView(DomainModel):
     selected: StrictBool
 
 
+class KnowledgeDocumentContentView(DomainModel):
+    scope: Literal["team", "project"]
+    project_id: ProjectId | None = None
+    document_id: KnowledgeDocumentId
+    source_name: NonEmptyStr
+    content_markdown: Annotated[
+        str,
+        StringConstraints(min_length=1, max_length=MAX_TEAM_KNOWLEDGE_DOCUMENT_BYTES),
+    ]
+
+
 class UpdateKnowledgeSelectionRequest(DomainModel):
     document_ids: Annotated[tuple[KnowledgeDocumentId, ...], Field(max_length=64)] = ()
 
@@ -231,19 +243,34 @@ class ConsoleAdministration(Protocol):
     def projects(self) -> tuple[ProjectSummary, ...]: ...
     def create_project(self, request: CreateProjectRequest) -> ProjectSummary: ...
     def knowledge(self) -> tuple[KnowledgeDocumentView, ...]: ...
+    def document_content(self, document_id: str) -> KnowledgeDocumentContentView: ...
     def import_document(self, *, filename: str, content: bytes) -> KnowledgeDocumentView: ...
+    def replace_document(
+        self, document_id: str, *, filename: str, content: bytes
+    ) -> KnowledgeDocumentView: ...
+    def delete_document(self, document_id: str) -> tuple[KnowledgeDocumentView, ...]: ...
     def update_team_knowledge_selection(
         self, request: UpdateKnowledgeSelectionRequest
     ) -> tuple[KnowledgeDocumentView, ...]: ...
     def project_knowledge(self, project_id: str) -> tuple[KnowledgeDocumentView, ...]: ...
+    def project_document_content(
+        self, project_id: str, document_id: str
+    ) -> KnowledgeDocumentContentView: ...
     def import_project_document(
         self, project_id: str, *, filename: str, content: bytes
     ) -> KnowledgeDocumentView: ...
+    def replace_project_document(
+        self, project_id: str, document_id: str, *, filename: str, content: bytes
+    ) -> KnowledgeDocumentView: ...
+    def delete_project_document(
+        self, project_id: str, document_id: str
+    ) -> tuple[KnowledgeDocumentView, ...]: ...
     def update_project_knowledge_selection(
         self, project_id: str, request: UpdateKnowledgeSelectionRequest
     ) -> tuple[KnowledgeDocumentView, ...]: ...
     def team_specs(self) -> tuple[SpecDocumentView, ...]: ...
     def create_team_spec(self, request: CreateSpecDocument) -> SpecDocumentView: ...
+    def delete_team_spec(self, spec_key: str) -> tuple[SpecDocumentView, ...]: ...
     def update_team_spec_activation(
         self, request: UpdateSpecActivationRequest
     ) -> tuple[SpecDocumentView, ...]: ...
@@ -251,6 +278,9 @@ class ConsoleAdministration(Protocol):
     def create_project_spec(
         self, project_id: str, request: CreateSpecDocument
     ) -> SpecDocumentView: ...
+    def delete_project_spec(
+        self, project_id: str, spec_key: str
+    ) -> tuple[SpecDocumentView, ...]: ...
     def update_project_spec_activation(
         self, project_id: str, request: UpdateSpecActivationRequest
     ) -> tuple[SpecDocumentView, ...]: ...
@@ -350,6 +380,53 @@ class LocalConsoleAdministration:
         )
         return KnowledgeDocumentView(scope="team", manifest=manifest, selected=selected)
 
+    def document_content(self, document_id: str) -> KnowledgeDocumentContentView:
+        store = TeamKnowledgeDocumentStore(self._team())
+        manifest = _knowledge_document(store.list(), document_id)
+        return KnowledgeDocumentContentView(
+            scope="team",
+            document_id=manifest.document_id,
+            source_name=manifest.source_name,
+            content_markdown=store.read_content(manifest.document_id),
+        )
+
+    def replace_document(
+        self, document_id: str, *, filename: str, content: bytes
+    ) -> KnowledgeDocumentView:
+        team = self._team()
+        store = TeamKnowledgeDocumentStore(team)
+        with self._lock:
+            current = _knowledge_document(store.list(), document_id)
+            selected = set(
+                effective_team_knowledge_paths(team, self._saved_config.team_knowledge_paths)
+            )
+            replacement = store.import_document(filename=filename, content=content)
+            if current.document_id != replacement.document_id:
+                if current.normalized_relative_path in selected:
+                    selected.remove(current.normalized_relative_path)
+                    selected.add(replacement.normalized_relative_path)
+                    TeamKnowledgeSelectionStore(team).save(tuple(sorted(selected)))
+                store.retire(current.document_id)
+        return KnowledgeDocumentView(
+            scope="team",
+            manifest=replacement,
+            selected=replacement.normalized_relative_path in selected,
+        )
+
+    def delete_document(self, document_id: str) -> tuple[KnowledgeDocumentView, ...]:
+        team = self._team()
+        store = TeamKnowledgeDocumentStore(team)
+        with self._lock:
+            current = _knowledge_document(store.list(), document_id)
+            selected = set(
+                effective_team_knowledge_paths(team, self._saved_config.team_knowledge_paths)
+            )
+            if current.normalized_relative_path in selected:
+                selected.remove(current.normalized_relative_path)
+                TeamKnowledgeSelectionStore(team).save(tuple(sorted(selected)))
+            store.retire(current.document_id)
+        return self.knowledge()
+
     def update_team_knowledge_selection(
         self, request: UpdateKnowledgeSelectionRequest
     ) -> tuple[KnowledgeDocumentView, ...]:
@@ -400,6 +477,66 @@ class LocalConsoleAdministration:
             selected=selected,
         )
 
+    def project_document_content(
+        self, project_id: str, document_id: str
+    ) -> KnowledgeDocumentContentView:
+        project = self._project(project_id)
+        store = ProjectKnowledgeDocumentStore(project)
+        manifest = _knowledge_document(store.list(), document_id)
+        return KnowledgeDocumentContentView(
+            scope="project",
+            project_id=project.manifest.project_id,
+            document_id=manifest.document_id,
+            source_name=manifest.source_name,
+            content_markdown=store.read_content(manifest.document_id),
+        )
+
+    def replace_project_document(
+        self, project_id: str, document_id: str, *, filename: str, content: bytes
+    ) -> KnowledgeDocumentView:
+        project = self._project(project_id)
+        store = ProjectKnowledgeDocumentStore(project)
+        with self._lock:
+            current = _knowledge_document(store.list(), document_id)
+            selected = set(
+                effective_project_knowledge_paths(
+                    project,
+                    self._legacy_project_knowledge_paths(project),
+                )
+            )
+            replacement = store.import_document(filename=filename, content=content)
+            if current.document_id != replacement.document_id:
+                if current.normalized_relative_path in selected:
+                    selected.remove(current.normalized_relative_path)
+                    selected.add(replacement.normalized_relative_path)
+                    ProjectKnowledgeSelectionStore(project).save(tuple(sorted(selected)))
+                store.retire(current.document_id)
+        return KnowledgeDocumentView(
+            scope="project",
+            project_id=project.manifest.project_id,
+            manifest=replacement,
+            selected=replacement.normalized_relative_path in selected,
+        )
+
+    def delete_project_document(
+        self, project_id: str, document_id: str
+    ) -> tuple[KnowledgeDocumentView, ...]:
+        project = self._project(project_id)
+        store = ProjectKnowledgeDocumentStore(project)
+        with self._lock:
+            current = _knowledge_document(store.list(), document_id)
+            selected = set(
+                effective_project_knowledge_paths(
+                    project,
+                    self._legacy_project_knowledge_paths(project),
+                )
+            )
+            if current.normalized_relative_path in selected:
+                selected.remove(current.normalized_relative_path)
+                ProjectKnowledgeSelectionStore(project).save(tuple(sorted(selected)))
+            store.retire(current.document_id)
+        return self.project_knowledge(project_id)
+
     def update_project_knowledge_selection(
         self, project_id: str, request: UpdateKnowledgeSelectionRequest
     ) -> tuple[KnowledgeDocumentView, ...]:
@@ -430,6 +567,18 @@ class LocalConsoleAdministration:
             document=document,
             active=document.spec_id in {item.spec_id for item in store.activation().active},
         )
+
+    def delete_team_spec(self, spec_key: str) -> tuple[SpecDocumentView, ...]:
+        with self._lock:
+            store = TeamSpecDocumentStore(self._team())
+            remaining = tuple(
+                reference.spec_id
+                for reference in store.activation().active
+                if reference.spec_key != spec_key
+            )
+            store.activate(remaining)
+            store.retire(spec_key)
+        return self.team_specs()
 
     def update_team_spec_activation(
         self, request: UpdateSpecActivationRequest
@@ -466,6 +615,19 @@ class LocalConsoleAdministration:
             document=document,
             active=document.spec_id in {item.spec_id for item in store.activation().active},
         )
+
+    def delete_project_spec(self, project_id: str, spec_key: str) -> tuple[SpecDocumentView, ...]:
+        with self._lock:
+            project = self._project(project_id)
+            store = ProjectSpecDocumentStore(project)
+            remaining = tuple(
+                reference.spec_id
+                for reference in store.activation().active
+                if reference.spec_key != spec_key
+            )
+            store.activate(remaining)
+            store.retire(spec_key)
+        return self.project_specs(project_id)
 
     def update_project_spec_activation(
         self, project_id: str, request: UpdateSpecActivationRequest
@@ -773,6 +935,16 @@ def _selected_document_paths(
     )
 
 
+def _knowledge_document(
+    manifests: tuple[KnowledgeDocumentManifest, ...] | tuple[ProjectKnowledgeDocumentManifest, ...],
+    document_id: str,
+) -> KnowledgeDocumentManifest | ProjectKnowledgeDocumentManifest:
+    try:
+        return next(manifest for manifest in manifests if manifest.document_id == document_id)
+    except StopIteration as error:
+        raise AdministrationError("knowledge document was not found") from error
+
+
 def _codex_status(executable: str, environment: Mapping[str, str]) -> CodexRuntimeStatus:
     if "/" in executable:
         candidate = Path(executable).expanduser()
@@ -796,6 +968,7 @@ __all__ = [
     "ConsoleAdministration",
     "CreateProjectRequest",
     "DatabaseRuntimeStatus",
+    "KnowledgeDocumentContentView",
     "KnowledgeDocumentView",
     "LearningProposalView",
     "LocalConsoleAdministration",

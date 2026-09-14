@@ -88,6 +88,20 @@ def test_team_catalog_and_markdown_import_are_stable_and_context_ready(
     )
 
 
+def test_normalized_content_can_be_read_for_human_editing(tmp_path: Path) -> None:
+    store = TeamKnowledgeDocumentStore(_team(tmp_path))
+    manifest = store.import_document(
+        filename="team-guide.md",
+        content=b"# Team\n\nReview first.\n",
+    )
+
+    assert store.read_content(manifest.document_id) == "# Team\n\nReview first.\n"
+
+    store.retire(manifest.document_id)
+    with pytest.raises(KnowledgeDocumentError, match="not found"):
+        store.read_content(manifest.document_id)
+
+
 @pytest.mark.parametrize(
     ("filename", "content", "expected"),
     [
@@ -197,3 +211,37 @@ def test_project_documents_are_bound_to_one_project(tmp_path: Path) -> None:
     )
     with pytest.raises(KnowledgeDocumentError, match="identity mismatch"):
         second_store.list()
+
+
+def test_retired_document_leaves_current_library_but_can_be_restored(tmp_path: Path) -> None:
+    store = TeamKnowledgeDocumentStore(_team(tmp_path))
+    manifest = store.import_document(filename="guide.md", content=b"# Guide\n")
+
+    retirement = store.retire(manifest.document_id)
+
+    assert retirement.retired_document_ids == (manifest.document_id,)
+    assert store.list() == ()
+    assert (store.root / manifest.document_id / "content.md").is_file()
+    assert store.import_document(filename="guide.md", content=b"# Guide\n") == manifest
+    assert store.list() == (manifest,)
+    assert store.retirement().retired_document_ids == ()
+
+
+def test_retirement_rejects_unknown_document(tmp_path: Path) -> None:
+    store = TeamKnowledgeDocumentStore(_team(tmp_path))
+
+    with pytest.raises(KnowledgeDocumentError, match="not found"):
+        store.retire("knowledge_document_" + "f" * 32)
+
+
+def test_tampered_retirement_fails_closed(tmp_path: Path) -> None:
+    store = TeamKnowledgeDocumentStore(_team(tmp_path))
+    manifest = store.import_document(filename="guide.md", content=b"# Guide\n")
+    store.retire(manifest.document_id)
+    path = store.root.parent / "retirement.json"
+    payload = json.loads(path.read_text())
+    payload["retirement_sha256"] = "0" * 64
+    path.write_text(json.dumps(payload))
+
+    with pytest.raises(KnowledgeDocumentError, match="digest mismatch"):
+        store.list()

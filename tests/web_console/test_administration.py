@@ -67,6 +67,19 @@ def test_team_and_project_document_selections_are_live_and_independent(
         "project_web", filename="project-guide.md", content=b"# Project\n"
     )
 
+    assert administration.document_content(team_document.manifest.document_id).to_wire() == {
+        "scope": "team",
+        "document_id": team_document.manifest.document_id,
+        "source_name": "team-guide.md",
+        "content_markdown": "# Team\n",
+    }
+    assert (
+        administration.project_document_content(
+            "project_web", project_document.manifest.document_id
+        ).content_markdown
+        == "# Project\n"
+    )
+
     team_values = administration.update_team_knowledge_selection(
         UpdateKnowledgeSelectionRequest(document_ids=(team_document.manifest.document_id,))
     )
@@ -125,6 +138,88 @@ def test_team_and_project_specs_are_versioned_and_activated_independently(
     assert project_values[0].active is True
     assert project_values[0].project_id == "project_web"
     assert administration.settings().restart_required is False
+
+
+def test_background_knowledge_can_be_replaced_and_retired_without_losing_history(
+    tmp_path: Path,
+) -> None:
+    administration = _administration(tmp_path)
+    administration.create_project(
+        CreateProjectRequest(project_id="project_web", name="Web Project")
+    )
+    original = administration.import_project_document(
+        "project_web", filename="architecture.md", content=b"# Architecture v1\n"
+    )
+    administration.update_project_knowledge_selection(
+        "project_web",
+        UpdateKnowledgeSelectionRequest(document_ids=(original.manifest.document_id,)),
+    )
+
+    replacement = administration.replace_project_document(
+        "project_web",
+        original.manifest.document_id,
+        filename="architecture.md",
+        content=b"# Architecture v2\n",
+    )
+
+    assert replacement.selected is True
+    assert replacement.manifest.document_id != original.manifest.document_id
+    assert [
+        item.manifest.document_id for item in administration.project_knowledge("project_web")
+    ] == [replacement.manifest.document_id]
+    original_path = (
+        Path(administration.runtime_config.platform_root)
+        / "projects"
+        / "project_web"
+        / "knowledge"
+        / original.manifest.normalized_relative_path
+    )
+    assert original_path.is_file()
+
+    assert (
+        administration.delete_project_document("project_web", replacement.manifest.document_id)
+        == ()
+    )
+    assert original_path.is_file()
+
+
+def test_spec_delete_retires_all_versions_and_deactivates_current_version(
+    tmp_path: Path,
+) -> None:
+    administration = _administration(tmp_path)
+    first = administration.create_team_spec(
+        CreateSpecDocument(
+            spec_key="python.testing",
+            title="Python testing",
+            body_markdown="# Testing v1\n",
+            verification="",
+        )
+    )
+    second = administration.create_team_spec(
+        CreateSpecDocument.model_validate(
+            first.document.model_copy(update={"body_markdown": "# Testing v2\n"}).model_dump(
+                include={
+                    "spec_key",
+                    "title",
+                    "body_markdown",
+                    "roles",
+                    "stages",
+                    "repository_ids",
+                    "path_globs",
+                    "verification",
+                }
+            )
+        )
+    )
+    administration.update_team_spec_activation(
+        UpdateSpecActivationRequest(spec_ids=(second.document.spec_id,))
+    )
+
+    assert administration.delete_team_spec("python.testing") == ()
+
+    spec_root = Path(administration.runtime_config.platform_root) / "team" / "specs"
+    assert (spec_root / "documents" / first.document.spec_id / "spec.json").is_file()
+    assert (spec_root / "documents" / second.document.spec_id / "spec.json").is_file()
 
 
 def test_runtime_configuration_change_requires_restart(tmp_path: Path) -> None:

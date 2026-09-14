@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/spec-retirement.schema.json",
+  "title": "SpecRetirement",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "scope",
+    "team_id",
+    "retired_spec_keys",
+    "retirement_sha256"
+  ],
+  "properties": {
+    "schema_version": { "const": "v0.1", "default": "v0.1" },
+    "scope": { "enum": ["team", "project"] },
+    "team_id": {
+      "type": "string",
+      "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$"
+    },
+    "project_id": {
+      "type": "string",
+      "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"
+    },
+    "retired_spec_keys": {
+      "type": "array",
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9_.-]{1,63}$" }
+    },
+    "retirement_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "scope": { "const": "project" } },
+        "required": ["scope"]
+      },
+      "then": { "required": ["project_id"] },
+      "else": { "not": { "required": ["project_id"] } }
+    }
+  ]
+}

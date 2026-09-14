@@ -22,10 +22,15 @@ let runtimeStatusError = null;
 let runtimeStatusLoading = false;
 let administrationNotice = null;
 let composing = false;
+let pendingConfirmation = null;
 let actionSerial = 0;
 let requestFilter = "active";
 let settingsSection = "general";
 let selectedAgentId = null;
+let creatingProject = false;
+let editingKnowledgeDocument = null;
+let editingSpecDocument = null;
+const maxKnowledgeImportFiles = 20;
 const labels = {
   NEW: "待启动",
   PREPARING: "准备项目",
@@ -82,6 +87,26 @@ const teamRoleOrder = {
   qa: 5,
   reviewer: 6,
 };
+const specRoleOptions = [
+  ["manager", "团队管理"],
+  ["product", "产品"],
+  ["designer", "设计"],
+  ["planner", "计划"],
+  ["coder", "实现"],
+  ["qa", "测试"],
+  ["reviewer", "评审"],
+];
+const specStageOptions = [
+  ["preparing", "项目准备"],
+  ["product_discovery", "产品梳理"],
+  ["designing", "技术设计"],
+  ["planning", "计划编排"],
+  ["dispatching", "成员分配"],
+  ["implementing", "代码实现"],
+  ["qa", "质量验证"],
+  ["review", "独立评审"],
+  ["integrating", "联合验收"],
+];
 const pageCopy = {
   team: [
     "团队成员",
@@ -218,6 +243,16 @@ function taskGroup(task) {
   if (task.terminal) return "completed";
   return "active";
 }
+function requestGroup(request) {
+  if (request.stage === "DONE") return "completed";
+  if (
+    request.blocker ||
+    request.stage.includes("WAITING") ||
+    ["BLOCKED", "FAILED"].includes(request.stage)
+  )
+    return "blocked";
+  return "active";
+}
 function paths(scope) {
   return scope.selected_paths
     .map((p) => (p === "." ? scope.root : scope.root + "/" + p))
@@ -252,23 +287,378 @@ function field(labelText, control, hint) {
   wrapper.append(control);
   return wrapper;
 }
+function multiSelectField(labelText, hint, key, options, initialValues) {
+  const selectedValues = new Set(initialValues);
+  const checkboxes = new Map();
+  const wrapper = el("div", undefined, "field");
+  wrapper.append(el("span", labelText));
+  if (hint) wrapper.append(el("small", hint));
+  const control = el("details", undefined, "multi-select");
+  control.dataset.key = key;
+  const summary = el("summary");
+  const updateSummary = () => {
+    const selectedTitles = options
+      .filter(([value]) => selectedValues.has(value))
+      .map(([, title]) => title);
+    summary.textContent = selectedTitles.length
+      ? `${selectedTitles.join("、")}（${selectedTitles.length}）`
+      : "请选择";
+  };
+  updateSummary();
+  const choices = el("div", undefined, "multi-select-options");
+  for (const [value, title] of options) {
+    const choice = el("label", undefined, "multi-select-option");
+    const checkbox = el("input");
+    checkbox.type = "checkbox";
+    checkbox.value = value;
+    checkbox.checked = selectedValues.has(value);
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) selectedValues.add(value);
+      else selectedValues.delete(value);
+      updateSummary();
+    });
+    checkboxes.set(value, checkbox);
+    choice.append(checkbox, el("span", title));
+    choices.append(choice);
+  }
+  control.append(summary, choices);
+  wrapper.append(control);
+  return {
+    control: wrapper,
+    values: () =>
+      options
+        .map(([value]) => value)
+        .filter((value) => selectedValues.has(value)),
+    setValues: (values) => {
+      selectedValues.clear();
+      for (const value of values) selectedValues.add(value);
+      for (const [value, checkbox] of checkboxes)
+        checkbox.checked = selectedValues.has(value);
+      updateSummary();
+    },
+  };
+}
 function renderComposer() {
   const panel = document.getElementById("composer");
   panel.replaceChildren();
-  panel.hidden = !composing;
-  if (!composing) return;
+  panel.className = "";
+  panel.hidden =
+    !composing &&
+    !creatingProject &&
+    !pendingConfirmation &&
+    !editingKnowledgeDocument &&
+    !editingSpecDocument;
+  if (panel.hidden) return;
+  panel.className = "modal-backdrop";
+  const dialog = el("section", undefined, "modal-dialog");
+  dialog.setAttribute("role", "dialog");
+  dialog.setAttribute("aria-modal", "true");
+  if (pendingConfirmation) {
+    const confirmation = pendingConfirmation;
+    const feedback = el("p", "", "form-feedback");
+    const cancel = button("取消", () => {
+      pendingConfirmation = null;
+      renderComposer();
+    });
+    const proceed = button(
+      confirmation.confirmText,
+      async () => {
+        proceed.disabled = true;
+        try {
+          await confirmation.action();
+          pendingConfirmation = null;
+          render();
+        } catch (error) {
+          feedback.className = "form-feedback error";
+          feedback.textContent =
+            error instanceof Error ? error.message : "操作失败。";
+          proceed.disabled = false;
+        }
+      },
+      "danger",
+    );
+    const actions = el("div", undefined, "modal-actions");
+    actions.append(cancel, proceed);
+    dialog.append(
+      el("div", confirmation.title, "section-title"),
+      el("p", confirmation.message, "modal-introduction"),
+      feedback,
+      actions,
+    );
+    panel.append(dialog);
+    return;
+  }
+  if (editingKnowledgeDocument) {
+    dialog.className = "modal-dialog modal-dialog-wide";
+    const editing = editingKnowledgeDocument;
+    const form = el(
+      "form",
+      undefined,
+      "knowledge-content-edit-form knowledge-upload",
+    );
+    const content = el("textarea", undefined, "knowledge-content-editor");
+    content.rows = 18;
+    content.required = true;
+    content.value = editing.content_markdown;
+    content.addEventListener("input", () => {
+      editing.content_markdown = content.value;
+    });
+    const feedback = el("p", "", "form-feedback");
+    const cancel = button("取消", () => {
+      editingKnowledgeDocument = null;
+      renderComposer();
+    });
+    const submit = el("button", "保存更新", "primary");
+    submit.type = "submit";
+    const actions = el("div", undefined, "modal-actions");
+    actions.append(cancel, submit);
+    form.append(
+      field(
+        "Markdown 正文",
+        content,
+        "保存后会发布一份新记录并保留历史版本；已启用状态会自动继承。",
+      ),
+      feedback,
+      actions,
+    );
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!content.value.trim()) {
+        feedback.className = "form-feedback error";
+        feedback.textContent = "文档正文不能为空。";
+        return;
+      }
+      submit.disabled = true;
+      try {
+        const base =
+          editing.scope === "team"
+            ? "/api/v1/admin/team/knowledge"
+            : "/api/v1/admin/projects/" +
+              encodeURIComponent(editing.project_id) +
+              "/knowledge";
+        const markdownName =
+          editing.source_name.replace(/\.[^.]+$/, "") + ".md";
+        await adminFetch(
+          base +
+            "/" +
+            encodeURIComponent(editing.document_id) +
+            "?filename=" +
+            encodeURIComponent(markdownName),
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/octet-stream" },
+            body: content.value,
+          },
+        );
+        editingKnowledgeDocument = null;
+        await loadKnowledge();
+        administrationNotice = {
+          page: "knowledge",
+          text: "背景知识已更新；原启用状态已继承，只影响之后准备的新需求。",
+        };
+        render();
+      } catch (error) {
+        feedback.className = "form-feedback error";
+        feedback.textContent =
+          error instanceof Error ? error.message : "背景知识更新失败。";
+        submit.disabled = false;
+      }
+    });
+    dialog.append(
+      el("div", "更新背景知识", "section-title"),
+      el("p", editing.source_name, "muted modal-introduction"),
+      form,
+    );
+    panel.append(dialog);
+    content.focus();
+    return;
+  }
+  if (editingSpecDocument) {
+    dialog.className = "modal-dialog modal-dialog-wide";
+    const editing = editingSpecDocument;
+    const spec = editing.document;
+    const form = el(
+      "form",
+      undefined,
+      "spec-content-edit-form knowledge-upload",
+    );
+    const title = el("input");
+    title.value = spec.title;
+    title.required = true;
+    title.maxLength = 200;
+    const content = el("textarea", undefined, "spec-content-editor");
+    content.rows = 18;
+    content.required = true;
+    content.value = spec.body_markdown;
+    const roles = multiSelectField(
+      "适用角色",
+      "支持多选；至少选择一个角色。",
+      `${editing.scope}-edit-spec-roles`,
+      specRoleOptions,
+      spec.roles,
+    );
+    const stages = multiSelectField(
+      "适用阶段",
+      "支持多选；至少选择一个交付阶段。",
+      `${editing.scope}-edit-spec-stages`,
+      specStageOptions,
+      spec.stages,
+    );
+    const repositories = el("textarea");
+    repositories.rows = 2;
+    repositories.value = spec.repository_ids.join("\n");
+    const paths = el("textarea");
+    paths.rows = 2;
+    paths.value = spec.path_globs.join("\n");
+    const verification = el("textarea");
+    verification.rows = 3;
+    verification.placeholder = "可选：测试命令、静态检查或评审证据";
+    verification.value = spec.verification;
+    const feedback = el("p", "", "form-feedback");
+    const cancel = button("取消", () => {
+      editingSpecDocument = null;
+      renderComposer();
+    });
+    const submit = el("button", "保存规范更新", "primary");
+    submit.type = "submit";
+    const actions = el("div", undefined, "modal-actions");
+    actions.append(cancel, submit);
+    form.append(
+      field("规范名称", title),
+      field("规范正文", content),
+      roles.control,
+      stages.control,
+      field("适用仓库", repositories, "留空表示当前范围内全部仓库。"),
+      field("适用路径", paths, "每行一个相对 glob。"),
+      field("验证方式", verification, "可以暂时留空。"),
+      feedback,
+      actions,
+    );
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const selectedRoles = roles.values();
+      const selectedStages = stages.values();
+      if (!selectedRoles.length || !selectedStages.length) {
+        feedback.className = "form-feedback error";
+        feedback.textContent = "适用角色和适用阶段都至少需要选择一项。";
+        return;
+      }
+      submit.disabled = true;
+      try {
+        const endpoint =
+          editing.scope === "team"
+            ? "/api/v1/admin/team/specs"
+            : "/api/v1/admin/projects/" +
+              encodeURIComponent(editing.project_id) +
+              "/specs";
+        await adminFetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            spec_key: spec.spec_key,
+            title: title.value.trim(),
+            body_markdown: content.value,
+            roles: selectedRoles,
+            stages: selectedStages,
+            repository_ids: csvValues(repositories.value).sort(),
+            path_globs: csvValues(paths.value),
+            verification: verification.value.trim(),
+          }),
+        });
+        editingSpecDocument = null;
+        await loadKnowledge();
+        administrationNotice = {
+          page: "knowledge",
+          text: "开发规范更新已保存但尚未启用。请检查后再启用更新。",
+        };
+        render();
+      } catch (error) {
+        feedback.className = "form-feedback error";
+        feedback.textContent =
+          error instanceof Error ? error.message : "开发规范更新失败。";
+        submit.disabled = false;
+      }
+    });
+    dialog.append(
+      el("div", "更新开发规范", "section-title"),
+      el(
+        "p",
+        "保存会创建可追溯的新版本，不会改写历史交付。",
+        "muted modal-introduction",
+      ),
+      form,
+    );
+    panel.append(dialog);
+    content.focus();
+    return;
+  }
   const top = el("div", undefined, "row");
   top.append(
-    el("div", "新建需求", "section-title"),
+    el("div", creatingProject ? "新建 Project" : "新建需求", "section-title"),
     button(
       "取消",
       () => {
         composing = false;
+        creatingProject = false;
         renderComposer();
       },
       "",
     ),
   );
+  if (creatingProject) {
+    const form = el("form", undefined, "project-form project-create-form");
+    const name = el("input");
+    name.placeholder = "例如：订单履约平台";
+    name.maxLength = 200;
+    name.required = true;
+    const feedback = el("p", "", "form-feedback");
+    const submit = el("button", "创建 Project", "primary");
+    submit.type = "submit";
+    form.append(
+      field(
+        "Project 名称",
+        name,
+        "Project 用于归集代码目录、需求、背景知识和开发规范。",
+      ),
+      feedback,
+      submit,
+    );
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      submit.disabled = true;
+      try {
+        const created = await adminFetch("/api/v1/admin/projects", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: name.value.trim() }),
+        });
+        administrationNotice = {
+          page: "requests",
+          text: "Project 已创建并选中，现在可以创建 Requirement。",
+        };
+        creatingProject = false;
+        await refresh(created.project_id);
+        render();
+      } catch (error) {
+        feedback.className = "form-feedback error";
+        feedback.textContent =
+          error instanceof Error ? error.message : "Project 创建失败。";
+        submit.disabled = false;
+      }
+    });
+    dialog.append(
+      top,
+      el(
+        "p",
+        "创建后可继续登记一个或多个代码目录，并维护独立的项目知识与规范。",
+        "muted modal-introduction",
+      ),
+      form,
+    );
+    panel.append(dialog);
+    name.focus();
+    return;
+  }
   const form = el("form", undefined, "project-form");
   const name = el("input");
   name.name = "name";
@@ -322,8 +712,25 @@ function renderComposer() {
       submit.disabled = false;
     }
   });
-  panel.append(top, form);
+  dialog.append(
+    top,
+    el(
+      "p",
+      `需求归属当前 Project：${projectName()}。创建后由 Manager 从产品澄清开始推进。`,
+      "muted modal-introduction",
+    ),
+    form,
+  );
+  panel.append(dialog);
   name.focus();
+}
+function confirmMutation(title, message, confirmText, action) {
+  composing = false;
+  creatingProject = false;
+  editingKnowledgeDocument = null;
+  editingSpecDocument = null;
+  pendingConfirmation = { title, message, confirmText, action };
+  renderComposer();
 }
 async function submitOperation(intent) {
   try {
@@ -465,8 +872,14 @@ function renderTeam(content) {
   const summary = el("section", undefined, "summary team-summary");
   for (const [count, title] of [
     [snapshot.agents.length, "位团队成员"],
-    [snapshot.tasks.filter((t) => !t.terminal).length, "项当前 Project 未结束任务"],
-    [snapshot.requests.filter((r) => r.blocker).length, "项当前 Project 待处理需求"],
+    [
+      snapshot.tasks.filter((t) => !t.terminal).length,
+      "项当前 Project 未结束任务",
+    ],
+    [
+      snapshot.requests.filter((r) => r.blocker).length,
+      "项当前 Project 待处理需求",
+    ],
   ]) {
     const n = el("span", undefined, "summary-card");
     n.append(el("strong", String(count)), document.createTextNode(title));
@@ -538,11 +951,7 @@ function renderTeam(content) {
   const boardHeading = el("div", undefined, "row agent-board-heading");
   boardHeading.append(
     el("div", `${agent.name} · 任务队列`, "section-title"),
-    el(
-      "span",
-      `并发上限 ${agent.max_parallel_assignments}（配置值）`,
-      "badge",
-    ),
+    el("span", `并发上限 ${agent.max_parallel_assignments}（配置值）`, "badge"),
   );
   board.append(boardHeading);
   const assigned = agent.assigned_delivery_ids.map(taskById).filter(Boolean);
@@ -618,13 +1027,18 @@ function renderTeam(content) {
   );
 }
 function requestCard(request) {
-  const card = el("article", undefined, "request"),
+  const isSelected = selected?.kind === "request" && selected.id === request.id;
+  const card = el(
+      "article",
+      undefined,
+      isSelected ? "request request-selected" : "request",
+    ),
     head = el("div", undefined, "row");
   head.append(
     button(request.title, () => showDetail("request", request.id)),
     badge(request.stage),
   );
-  card.append(head);
+  card.append(el("p", request.id, "request-id"), head);
   const write = request.scopes.filter((s) => !s.reference_only),
     done = write.filter(
       (s) => taskById(s.delivery_id)?.status === "DONE",
@@ -632,25 +1046,10 @@ function requestCard(request) {
   card.append(
     el(
       "p",
-      `${request.scopes.length} 个代码目录范围 · ${done}/${write.length} 个改造仓库任务完成 · 联合需求以整体验收为准`,
-      "muted",
+      `${request.scopes.length} 个代码目录 · ${done}/${write.length} 个改造任务完成`,
+      "muted request-summary",
     ),
   );
-  for (const scope of request.scopes) {
-    card.append(el("p", paths(scope), "paths"));
-    const task = taskById(scope.delivery_id);
-    card.append(
-      el(
-        "span",
-        scope.reference_only
-          ? "只读参考"
-          : task
-            ? label(task.status)
-            : "尚未生成交付任务",
-        "badge",
-      ),
-    );
-  }
   if (request.blocker) card.append(el("div", request.blocker, "blocker"));
   return card;
 }
@@ -819,20 +1218,34 @@ function deliveryResult(panel, request) {
   panel.append(result);
 }
 function renderRequests(content) {
+  content.className = "request-master-panel";
   if (administrationNotice?.page === "requests")
     content.append(el("div", administrationNotice.text, "admin-notice"));
-  if (canControlCurrentTeam()) renderProjectCreator(content);
   const top = el("div", undefined, "row request-heading");
-  top.append(
-    el(
-      "h2",
-      snapshot.selected_project_id
-        ? "需求列表"
-        : "请先创建或选择 Project",
-    ),
+  const actions = el("div", undefined, "request-heading-actions");
+  actions.append(
     snapshot.selected_project_id
       ? el("span", `${snapshot.requests.length} 个需求`, "badge")
       : el("span", "尚未选择", "badge blocked"),
+  );
+  if (canControlCurrentTeam() && currentProjectId())
+    actions.append(
+      button(
+        "新建需求",
+        () => {
+          creatingProject = false;
+          composing = true;
+          renderComposer();
+        },
+        "primary",
+      ),
+    );
+  top.append(
+    el(
+      "h2",
+      snapshot.selected_project_id ? "需求列表" : "请先创建或选择 Project",
+    ),
+    actions,
   );
   content.append(top);
   if (
@@ -842,36 +1255,45 @@ function renderRequests(content) {
       : requestById(selected.id))
   )
     selected = null;
-  if (!selected && snapshot.requests.length)
-    selected = { kind: "request", id: snapshot.requests[0].id };
   if (!snapshot.requests.length) {
-    const n = el("div", undefined, "empty");
+    selected = null;
+    const n = el("div", undefined, "empty request-empty");
     n.append(
+      el("div", "还没有需求", "section-title"),
       el(
         "p",
         snapshot.selected_project_id
-          ? "还没有需求。点击“新建需求”，选择涉及的代码目录后开始讨论。"
+          ? "创建需求并选择涉及的代码目录，团队会从产品澄清开始推进。"
           : "还没有 Project。请在本页创建 Project 后再提交需求。",
       ),
     );
+    if (canControlCurrentTeam() && currentProjectId())
+      n.append(
+        button(
+          "新建第一个需求",
+          () => {
+            creatingProject = false;
+            composing = true;
+            renderComposer();
+          },
+          "primary",
+        ),
+      );
     content.append(n);
     return;
   }
-  const materialized = new Set(snapshot.tasks.map((task) => task.request_id));
   const groups = [
-    ["active", "执行中"],
+    ["active", "进行中"],
     ["blocked", "阻塞中"],
     ["completed", "已完成"],
   ];
   const counts = Object.fromEntries(
     groups.map(([key]) => [
       key,
-      snapshot.tasks.filter((task) => taskGroup(task) === key).length,
+      snapshot.requests.filter((request) => requestGroup(request) === key)
+        .length,
     ]),
   );
-  counts.active += snapshot.requests.filter(
-    (item) => !materialized.has(item.id),
-  ).length;
   const navigation = el("div", undefined, "request-filter scope-switch");
   navigation.setAttribute("role", "tablist");
   navigation.setAttribute("aria-label", "需求状态");
@@ -891,17 +1313,18 @@ function renderRequests(content) {
   content.append(navigation);
   const group = el("section", undefined, "task-group request-list");
   const currentTitle = groups.find(([key]) => key === requestFilter)?.[1];
-  if (requestFilter === "active")
-    for (const request of snapshot.requests.filter(
-      (item) => !materialized.has(item.id),
-    ))
-      group.append(requestCard(request));
-  const tasks = snapshot.tasks.filter(
-    (task) => taskGroup(task) === requestFilter,
+  const requests = snapshot.requests.filter(
+    (request) => requestGroup(request) === requestFilter,
   );
-  if (!tasks.length && !group.children.length)
-    group.append(el("p", `暂无${currentTitle}任务。`, "muted"));
-  for (const task of tasks) group.append(taskRow(task));
+  const selectedRequestId =
+    selected?.kind === "task"
+      ? taskById(selected.id)?.request_id
+      : selected?.id;
+  if (!requests.some((request) => request.id === selectedRequestId))
+    selected = requests.length ? { kind: "request", id: requests[0].id } : null;
+  if (!requests.length)
+    group.append(el("p", `暂无${currentTitle}需求。`, "muted"));
+  for (const request of requests) group.append(requestCard(request));
   content.append(group);
 }
 async function adminFetch(url, options = {}) {
@@ -1007,7 +1430,7 @@ function renderKnowledge(content) {
 
   const descriptions = {
     background: "帮助团队理解业务和项目背景，不作为强制工程规则。",
-    specs: "新需求必须遵守的工程规则，并需要提供可验证证据。",
+    specs: "新需求必须遵守的工程规则；验证方式可在明确后补充。",
     learning: "从 QA 失败和 Review 拒绝中提炼，经人工批准后再沉淀。",
   };
   const workspace = el("div", undefined, "knowledge-workspace");
@@ -1061,11 +1484,7 @@ function renderKnowledge(content) {
       undefined,
       "knowledge-project-selector",
     );
-    const selectorHeader = el(
-      "div",
-      undefined,
-      "knowledge-navigation-header",
-    );
+    const selectorHeader = el("div", undefined, "knowledge-navigation-header");
     selectorHeader.append(
       el("strong", "选择 Project", "knowledge-navigation-title"),
       el("span", "下方只展示所选 Project 的资产", "muted"),
@@ -1178,13 +1597,25 @@ function renderBackgroundKnowledge(content) {
       "muted",
     ),
   );
-  const editor = el("details", undefined, "admin-panel knowledge-editor");
+  const editor = el(
+    "section",
+    undefined,
+    "admin-panel knowledge-editor background-editor",
+  );
   editor.dataset.key = `${knowledgeScope}-background-editor`;
-  editor.append(el("summary", "导入背景知识", "project-creator-summary"));
+  editor.append(
+    el("h3", "导入背景知识"),
+    el(
+      "p",
+      "可一次选择多份文档。若文件名与现有文档相同，平台会在替换前明确提示覆盖风险。",
+      "muted",
+    ),
+  );
   const form = el("form", undefined, "knowledge-upload");
   const file = el("input");
   file.type = "file";
   file.accept = ".md,.txt,.pdf,.docx";
+  file.multiple = true;
   file.required = true;
   const feedback = el("p", "", "form-feedback");
   const submit = el("button", "上传并转换", "primary");
@@ -1193,39 +1624,99 @@ function renderBackgroundKnowledge(content) {
     field(
       "选择本地文档",
       file,
-      "支持 Markdown、TXT、PDF、DOCX；单个原文件最大 10 MB，转换后的正文最大 256 KB。",
+      "支持一次选择多个 Markdown、TXT、PDF、DOCX；单次最多 20 份，单个原文件最大 10 MB，转换后的正文最大 256 KB。",
     ),
     feedback,
     submit,
   );
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const selectedFile = file.files && file.files[0];
-    if (!selectedFile) return;
-    submit.disabled = true;
-    feedback.className = "form-feedback";
-    feedback.textContent = "正在读取并校验文档…";
-    try {
-      const base =
-        knowledgeScope === "team"
-          ? "/api/v1/admin/team/knowledge"
-          : "/api/v1/admin/projects/" +
-            encodeURIComponent(currentProjectId()) +
-            "/knowledge";
-      await adminFetch(
-        base + "?filename=" + encodeURIComponent(selectedFile.name),
-        {
-          method: "POST",
+  const uploadFiles = async (selectedFiles, replacements = new Map()) => {
+    const base =
+      knowledgeScope === "team"
+        ? "/api/v1/admin/team/knowledge"
+        : "/api/v1/admin/projects/" +
+          encodeURIComponent(currentProjectId()) +
+          "/knowledge";
+    const failures = [];
+    let imported = 0;
+    for (const [index, selectedFile] of selectedFiles.entries()) {
+      feedback.textContent = `正在导入第 ${index + 1}/${selectedFiles.length} 份：${selectedFile.name}`;
+      try {
+        const replacement = replacements.get(selectedFile);
+        const endpoint = replacement
+          ? base +
+            "/" +
+            encodeURIComponent(replacement.manifest.document_id) +
+            "?filename=" +
+            encodeURIComponent(selectedFile.name)
+          : base + "?filename=" + encodeURIComponent(selectedFile.name);
+        await adminFetch(endpoint, {
+          method: replacement ? "PUT" : "POST",
           headers: { "Content-Type": "application/octet-stream" },
           body: selectedFile,
-        },
+        });
+        imported += 1;
+      } catch (error) {
+        failures.push(
+          `${selectedFile.name}：${error instanceof Error ? error.message : "导入失败"}`,
+        );
+      }
+    }
+    await loadKnowledge();
+    administrationNotice = {
+      page: "knowledge",
+      text: failures.length
+        ? `已导入 ${imported}/${selectedFiles.length} 份；${failures.length} 份失败。${failures[0]}`
+        : replacements.size
+          ? `已导入 ${imported} 份背景知识，其中 ${replacements.size} 份同名文档已更新；原启用状态已继承。`
+          : `已导入 ${imported} 份背景知识。启用后会立即用于之后的新需求，无需重启。`,
+    };
+    render();
+  };
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const selectedFiles = [...(file.files || [])];
+    if (!selectedFiles.length) return;
+    if (selectedFiles.length > maxKnowledgeImportFiles) {
+      feedback.className = "form-feedback error";
+      feedback.textContent = `单次最多导入 ${maxKnowledgeImportFiles} 份文档。`;
+      return;
+    }
+    const normalizedNames = selectedFiles.map((item) =>
+      item.name.normalize("NFC").toLowerCase(),
+    );
+    if (new Set(normalizedNames).size !== normalizedNames.length) {
+      feedback.className = "form-feedback error";
+      feedback.textContent = "同一批文件中存在重名文档，请保留一份后再上传。";
+      return;
+    }
+    const replacements = new Map();
+    for (const selectedFile of selectedFiles) {
+      const matches = knowledgeDocuments.filter(
+        (item) =>
+          item.manifest.source_name.normalize("NFC").toLowerCase() ===
+          selectedFile.name.normalize("NFC").toLowerCase(),
       );
-      await loadKnowledge();
-      administrationNotice = {
-        page: "knowledge",
-        text: "导入完成。启用后会立即用于之后的新需求，无需重启。",
-      };
-      render();
+      if (matches.length > 1) {
+        feedback.className = "form-feedback error";
+        feedback.textContent = `“${selectedFile.name}”对应多份现有文档，无法安全判断替换目标。`;
+        return;
+      }
+      if (matches.length === 1) replacements.set(selectedFile, matches[0]);
+    }
+    if (replacements.size) {
+      const names = [...replacements.keys()].map((item) => `“${item.name}”`);
+      confirmMutation(
+        "同名文档存在覆盖风险",
+        `${names.join("、")}与现有文档同名。继续后会发布新内容、保留旧记录，并继承原启用状态。`,
+        "确认替换并上传",
+        () => uploadFiles(selectedFiles, replacements),
+      );
+      return;
+    }
+    submit.disabled = true;
+    feedback.className = "form-feedback";
+    try {
+      await uploadFiles(selectedFiles);
     } catch (error) {
       feedback.className = "form-feedback error";
       feedback.textContent =
@@ -1305,7 +1796,59 @@ function renderBackgroundKnowledge(content) {
         render();
       }
     });
-    card.append(toggle);
+    const actions = el("div", undefined, "knowledge-card-actions");
+    const update = button("更新文档", async () => {
+      update.disabled = true;
+      const endpoint =
+        knowledgeScope === "team"
+          ? "/api/v1/admin/team/knowledge/" +
+            encodeURIComponent(manifest.document_id) +
+            "/content"
+          : "/api/v1/admin/projects/" +
+            encodeURIComponent(currentProjectId()) +
+            "/knowledge/" +
+            encodeURIComponent(manifest.document_id) +
+            "/content";
+      try {
+        editingKnowledgeDocument = await adminFetch(endpoint);
+        renderComposer();
+      } catch (error) {
+        administrationNotice = {
+          page: "knowledge",
+          text:
+            error instanceof Error ? error.message : "无法读取文档正文。",
+        };
+        render();
+      }
+    });
+    const remove = button(
+      "删除",
+      () =>
+        confirmMutation(
+          "删除背景知识",
+          `“${manifest.source_name}”将从当前知识库和后续需求上下文中移除；历史交付仍保留原引用。`,
+          "确认删除",
+          async () => {
+            const base =
+              knowledgeScope === "team"
+                ? "/api/v1/admin/team/knowledge"
+                : "/api/v1/admin/projects/" +
+                  encodeURIComponent(currentProjectId()) +
+                  "/knowledge";
+            knowledgeDocuments = await adminFetch(
+              base + "/" + encodeURIComponent(manifest.document_id),
+              { method: "DELETE" },
+            );
+            administrationNotice = {
+              page: "knowledge",
+              text: "背景知识已删除；历史交付引用保持不变。",
+            };
+          },
+        ),
+      "danger-link",
+    );
+    actions.append(update, toggle, remove);
+    card.append(actions);
     content.append(card);
   }
 }
@@ -1315,6 +1858,35 @@ function csvValues(value) {
     .split(/[\n,]/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+function suggestedSpecKey(filename) {
+  const stem = filename.replace(/\.[^.]+$/, "").toLowerCase();
+  let value = stem
+    .replace(/[^a-z0-9_.-]+/g, "-")
+    .replace(/^[-._]+|[-._]+$/g, "");
+  if (value.length < 2 || !/^[a-z]/.test(value)) {
+    let hash = 2166136261;
+    for (const character of stem) {
+      hash ^= character.codePointAt(0);
+      hash = Math.imul(hash, 16777619);
+    }
+    value = `spec-${(hash >>> 0).toString(36)}`;
+  }
+  return value.slice(0, 64);
+}
+function suggestedSpecTitle(filename) {
+  return filename.replace(/\.[^.]+$/, "").replace(/[-_.]+/g, " ").trim();
+}
+function latestSpecs(values) {
+  const latest = new Map();
+  for (const item of values) {
+    const current = latest.get(item.document.spec_key);
+    if (!current || current.document.version < item.document.version)
+      latest.set(item.document.spec_key, item);
+  }
+  return [...latest.values()].sort((left, right) =>
+    left.document.title.localeCompare(right.document.title),
+  );
 }
 
 function renderSpecs(content) {
@@ -1329,49 +1901,54 @@ function renderSpecs(content) {
     knowledgeScope === "team"
       ? snapshot.team_name
       : project?.name || currentProjectId();
+  const logicalSpecs = latestSpecs(specDocuments);
   const top = el("div", undefined, "row request-heading");
   top.append(
     el("h2", `${ownerName} · 强约束开发规范`),
-    el("span", `${specDocuments.length} 个版本`, "badge"),
+    el("span", `${logicalSpecs.length} 条规范`, "badge"),
   );
   content.append(
     top,
     el(
       "p",
-      "只有明确启用的版本才进入新需求。Team、Project 与仓库原生规范冲突时会停止并交给人工处理。",
+      "只有明确启用的规范才进入新需求。Team、Project 与仓库原生规范冲突时会停止并交给人工处理。",
       "muted",
     ),
   );
-  const editor = el("details", undefined, "admin-panel knowledge-editor");
+  const editor = el(
+    "section",
+    undefined,
+    "admin-panel knowledge-editor spec-editor",
+  );
   editor.dataset.key = `${knowledgeScope}-spec-editor`;
-  editor.append(el("summary", "新增规范版本", "project-creator-summary"));
-  const form = el("form", undefined, "knowledge-upload");
+  editor.append(
+    el("h3", "导入开发规范"),
+    el(
+      "p",
+      "可一次导入多份 Markdown/TXT。每个文件成为一条独立规范，并共用下方的适用范围。",
+      "muted",
+    ),
+  );
+  const form = el("form", undefined, "knowledge-upload spec-create-form");
   const file = el("input");
   file.type = "file";
   file.accept = ".md,.txt";
+  file.multiple = true;
   file.required = true;
-  const key = el("input");
-  key.placeholder = "例如：python.testing";
-  key.pattern = "[a-z][a-z0-9_.-]{1,63}";
-  key.required = true;
-  const title = el("input");
-  title.placeholder = "规范名称";
-  title.maxLength = 200;
-  title.required = true;
-  file.addEventListener("change", () => {
-    const selectedFile = file.files && file.files[0];
-    if (!selectedFile) return;
-    const stem = selectedFile.name.replace(/\.[^.]+$/, "").toLowerCase();
-    if (!key.value)
-      key.value = stem
-        .replace(/[^a-z0-9_.-]+/g, "-")
-        .replace(/^([^a-z])/, "spec-$1");
-    if (!title.value) title.value = stem.replace(/[-_.]+/g, " ");
-  });
-  const roles = el("input");
-  roles.value = "manager,product,designer,planner,coder,qa,reviewer";
-  const stages = el("input");
-  stages.value = "implementing,qa,review";
+  const roles = multiSelectField(
+    "适用角色",
+    "支持多选；至少选择一个角色。",
+    `${knowledgeScope}-spec-roles`,
+    specRoleOptions,
+    specRoleOptions.map(([value]) => value),
+  );
+  const stages = multiSelectField(
+    "适用阶段",
+    "支持多选；至少选择一个交付阶段。",
+    `${knowledgeScope}-spec-stages`,
+    specStageOptions,
+    ["implementing", "qa", "review"],
+  );
   const repositories = el("textarea");
   repositories.rows = 2;
   repositories.placeholder =
@@ -1381,22 +1958,19 @@ function renderSpecs(content) {
   paths.value = "*";
   const verification = el("textarea");
   verification.rows = 3;
-  verification.required = true;
   verification.placeholder =
-    "如何证明已遵守这条规范，例如测试命令、静态检查或评审证据";
+    "可选：如何证明已遵守这条规范，例如测试命令、静态检查或评审证据";
   const feedback = el("p", "", "form-feedback");
-  const submit = el("button", "创建新版本", "primary");
+  const submit = el("button", "导入规范", "primary");
   submit.type = "submit";
   form.append(
     field(
-      "规范文件",
+      "选择规范文档",
       file,
-      "支持 Markdown/TXT，正文不会被模型自动解释成其他规则。",
+      "支持一次选择多份 Markdown/TXT，单次最多 20 份；规范名称从文件名生成，之后可单独编辑。",
     ),
-    field("规范键", key, "同一个键代表同一条规范；再次创建会产生新版本。"),
-    field("标题", title),
-    field("适用角色", roles, "逗号分隔。"),
-    field("适用阶段", stages, "逗号分隔。"),
+    roles.control,
+    stages.control,
     field("适用仓库", repositories),
     field("适用路径", paths, "每行一个相对 glob。"),
     field("验证方式", verification),
@@ -1405,38 +1979,84 @@ function renderSpecs(content) {
   );
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const selectedFile = file.files && file.files[0];
-    if (!selectedFile) return;
-    submit.disabled = true;
-    feedback.textContent = "正在创建不可变 Spec 版本…";
-    try {
-      const body = await selectedFile.text();
+    const selectedFiles = [...(file.files || [])];
+    if (!selectedFiles.length) return;
+    if (selectedFiles.length > maxKnowledgeImportFiles) {
+      feedback.className = "form-feedback error";
+      feedback.textContent = `单次最多导入 ${maxKnowledgeImportFiles} 份开发规范。`;
+      return;
+    }
+    const selectedRoles = roles.values();
+    const selectedStages = stages.values();
+    if (!selectedRoles.length || !selectedStages.length) {
+      feedback.className = "form-feedback error";
+      feedback.textContent = "适用角色和适用阶段都至少需要选择一项。";
+      return;
+    }
+    const keys = selectedFiles.map((item) => suggestedSpecKey(item.name));
+    if (new Set(keys).size !== keys.length) {
+      feedback.className = "form-feedback error";
+      feedback.textContent = "所选文件会生成重复的规范标识，请调整文件名后再导入。";
+      return;
+    }
+    const importSpecs = async () => {
       const endpoint =
         knowledgeScope === "team"
           ? "/api/v1/admin/team/specs"
           : "/api/v1/admin/projects/" +
             encodeURIComponent(currentProjectId()) +
             "/specs";
-      await adminFetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          spec_key: key.value.trim(),
-          title: title.value.trim(),
-          body_markdown: body,
-          roles: csvValues(roles.value),
-          stages: csvValues(stages.value),
-          repository_ids: csvValues(repositories.value).sort(),
-          path_globs: csvValues(paths.value),
-          verification: verification.value.trim(),
-        }),
-      });
+      const failures = [];
+      let imported = 0;
+      for (const [index, selectedFile] of selectedFiles.entries()) {
+        feedback.textContent = `正在导入第 ${index + 1}/${selectedFiles.length} 份规范：${selectedFile.name}`;
+        try {
+          await adminFetch(endpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              spec_key: suggestedSpecKey(selectedFile.name),
+              title: suggestedSpecTitle(selectedFile.name),
+              body_markdown: await selectedFile.text(),
+              roles: selectedRoles,
+              stages: selectedStages,
+              repository_ids: csvValues(repositories.value).sort(),
+              path_globs: csvValues(paths.value),
+              verification: verification.value.trim(),
+            }),
+          });
+          imported += 1;
+        } catch (error) {
+          failures.push(
+            `${selectedFile.name}：${error instanceof Error ? error.message : "导入失败"}`,
+          );
+        }
+      }
       await loadKnowledge();
       administrationNotice = {
         page: "knowledge",
-        text: "Spec 新版本已创建，但尚未启用。请检查适用范围和验证方式后再启用。",
+        text: failures.length
+          ? `已导入 ${imported}/${selectedFiles.length} 份开发规范；${failures.length} 份失败。${failures[0]}`
+          : `已导入 ${imported} 份开发规范但尚未启用。请检查适用范围后再启用。`,
       };
       render();
+    };
+    const collisions = logicalSpecs.filter((item) =>
+      keys.includes(item.document.spec_key),
+    );
+    if (collisions.length) {
+      confirmMutation(
+        "同名规范存在新版本风险",
+        `${collisions.map((item) => `“${item.document.title}”`).join("、")}已存在。继续会创建新版本，但不会自动启用或改写历史交付。`,
+        "确认导入新版本",
+        importSpecs,
+      );
+      return;
+    }
+    submit.disabled = true;
+    feedback.className = "form-feedback";
+    try {
+      await importSpecs();
     } catch (error) {
       feedback.className = "form-feedback error";
       feedback.textContent =
@@ -1446,25 +2066,29 @@ function renderSpecs(content) {
   });
   editor.append(form);
   content.append(editor);
-  if (!specDocuments.length) {
+  if (!logicalSpecs.length) {
     content.append(el("div", "当前范围尚未创建开发规范。", "empty"));
     return;
   }
-  for (const item of specDocuments) {
+  for (const item of logicalSpecs) {
     const spec = item.document;
+    const activeVersion = specDocuments.find(
+      (candidate) =>
+        candidate.active && candidate.document.spec_key === spec.spec_key,
+    );
+    const isCurrent = item.active;
     const card = el("article", undefined, "knowledge-card spec-card");
     const head = el("div", undefined, "row");
     head.append(
-      el("strong", `${spec.title} · v${spec.version}`),
+      el("strong", spec.title),
       el(
         "span",
-        item.active ? "已启用" : "未启用",
-        item.active ? "badge done" : "badge",
+        isCurrent ? "已启用" : activeVersion ? "有待启用更新" : "未启用",
+        isCurrent ? "badge done" : "badge",
       ),
     );
     card.append(
       head,
-      el("p", `规范键 · ${spec.spec_key}`, "paths"),
       el(
         "p",
         `角色 · ${spec.roles.map(label).join(" / ")} · 阶段 · ${spec.stages.map(label).join(" / ")}`,
@@ -1472,45 +2096,84 @@ function renderSpecs(content) {
       ),
       el("p", `仓库 · ${spec.repository_ids.join(", ") || "全部"}`, "paths"),
       el("p", `路径 · ${spec.path_globs.join(", ")}`, "paths"),
-      el("p", `验证 · ${spec.verification}`, "muted"),
+      el("p", `验证 · ${spec.verification || "暂未设置"}`, "muted"),
     );
     const detail = el("details");
     detail.append(el("summary", "查看规范正文"), el("pre", spec.body_markdown));
     card.append(detail);
-    const toggle = button(item.active ? "停用" : "启用此版本", async () => {
-      toggle.disabled = true;
-      const ids = specDocuments
-        .filter(
-          (candidate) =>
-            candidate.active && candidate.document.spec_key !== spec.spec_key,
-        )
-        .map((candidate) => candidate.document.spec_id);
-      if (!item.active) ids.push(spec.spec_id);
-      const endpoint =
-        knowledgeScope === "team"
-          ? "/api/v1/admin/team/specs/activation"
-          : "/api/v1/admin/projects/" +
-            encodeURIComponent(currentProjectId()) +
-            "/specs/activation";
-      try {
-        specDocuments = await adminFetch(endpoint, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ spec_ids: ids }),
-        });
-        administrationNotice = {
-          page: "knowledge",
-          text: "Spec 激活状态已更新；只影响之后重新准备的新需求，无需重启服务。",
-        };
-      } catch (error) {
-        administrationNotice = {
-          page: "knowledge",
-          text: error instanceof Error ? error.message : "Spec 激活失败。",
-        };
-      }
-      render();
+    const actions = el("div", undefined, "knowledge-card-actions");
+    const update = button("更新规范", () => {
+      editingSpecDocument = {
+        scope: knowledgeScope,
+        project_id: knowledgeScope === "project" ? currentProjectId() : null,
+        document: structuredClone(spec),
+      };
+      renderComposer();
     });
-    card.append(toggle);
+    const toggle = button(
+      isCurrent ? "停用" : activeVersion ? "启用更新" : "启用规范",
+      async () => {
+        toggle.disabled = true;
+        const ids = specDocuments
+          .filter(
+            (candidate) =>
+              candidate.active && candidate.document.spec_key !== spec.spec_key,
+          )
+          .map((candidate) => candidate.document.spec_id);
+        if (!isCurrent) ids.push(spec.spec_id);
+        const endpoint =
+          knowledgeScope === "team"
+            ? "/api/v1/admin/team/specs/activation"
+            : "/api/v1/admin/projects/" +
+              encodeURIComponent(currentProjectId()) +
+              "/specs/activation";
+        try {
+          specDocuments = await adminFetch(endpoint, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ spec_ids: ids }),
+          });
+          administrationNotice = {
+            page: "knowledge",
+            text: "Spec 激活状态已更新；只影响之后重新准备的新需求，无需重启服务。",
+          };
+        } catch (error) {
+          administrationNotice = {
+            page: "knowledge",
+            text: error instanceof Error ? error.message : "Spec 激活失败。",
+          };
+        }
+        render();
+      },
+    );
+    const remove = button(
+      "删除",
+      () =>
+        confirmMutation(
+          "删除开发规范",
+          `“${spec.title}”将停止用于后续需求并从当前规范列表移除；历史交付仍保留原规范引用。`,
+          "确认删除",
+          async () => {
+            const base =
+              knowledgeScope === "team"
+                ? "/api/v1/admin/team/specs"
+                : "/api/v1/admin/projects/" +
+                  encodeURIComponent(currentProjectId()) +
+                  "/specs";
+            specDocuments = await adminFetch(
+              base + "/" + encodeURIComponent(spec.spec_key),
+              { method: "DELETE" },
+            );
+            administrationNotice = {
+              page: "knowledge",
+              text: "开发规范已删除；历史交付引用保持不变。",
+            };
+          },
+        ),
+      "danger-link",
+    );
+    actions.append(update, toggle, remove);
+    card.append(actions);
     content.append(card);
   }
 }
@@ -1695,56 +2358,71 @@ function selectInput(values, current, update) {
   control.addEventListener("change", () => update(control.value));
   return control;
 }
-function renderProjectCreator(content) {
-  const panel = el("details", undefined, "admin-panel project-creator");
-  panel.append(
-    el("summary", "创建新 Project", "project-creator-summary"),
-    el(
-      "p",
-      "Project 用来归集自己的代码目录、需求、背景知识和开发规范。",
-      "muted",
-    ),
+function renderProjectPicker(content) {
+  const values = snapshot.projects || [];
+  const current = values.find((item) => item.id === currentProjectId());
+  const picker = el("details", undefined, "project-picker");
+  picker.dataset.key = `project-picker-${page}`;
+  const summary = el("summary", undefined, "project-picker-summary");
+  const summaryText = el("span");
+  summaryText.append(
+    el("strong", current?.name || "尚未选择 Project"),
+    el("small", `${values.length} 个 Project · 可搜索切换`, "muted"),
   );
-  const form = el("form", undefined, "settings-grid");
-  const name = el("input");
-  name.placeholder = "Project 显示名称";
-  name.maxLength = 200;
-  name.required = true;
-  const feedback = el("p", "", "form-feedback full-row");
-  const submit = el("button", "创建 Project", "primary");
-  submit.type = "submit";
-  form.append(
-    field(
-      "Project 名称",
-      name,
-      "平台会生成稳定 Project ID；之后可登记多个代码仓库并创建多个 Requirement。",
-    ),
-  );
-  form.append(feedback, submit);
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    submit.disabled = true;
-    try {
-      const created = await adminFetch("/api/v1/admin/projects", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.value.trim() }),
+  summary.append(summaryText, el("span", "⌄", "project-picker-chevron"));
+  const menu = el("div", undefined, "project-picker-menu");
+  const search = el("input");
+  search.type = "search";
+  search.placeholder = "搜索 Project";
+  const options = el("div", undefined, "project-picker-options");
+  const renderOptions = () => {
+    options.replaceChildren();
+    const query = search.value.trim().toLowerCase();
+    const matches = values
+      .filter((item) => item.name.toLowerCase().includes(query))
+      .sort((left, right) => {
+        if (left.id === currentProjectId()) return -1;
+        if (right.id === currentProjectId()) return 1;
+        return left.name.localeCompare(right.name);
       });
-      administrationNotice = {
-        page: "requests",
-        text: "Project 已创建并选中，现在可以创建 Requirement。",
-      };
-      await refresh(created.project_id);
-      render();
-    } catch (error) {
-      feedback.className = "form-feedback error full-row";
-      feedback.textContent =
-        error instanceof Error ? error.message : "Project 创建失败。";
-      submit.disabled = false;
+    if (!matches.length) {
+      options.append(el("p", "没有匹配的 Project。", "muted"));
+      return;
     }
-  });
-  panel.append(form);
-  content.append(panel);
+    for (const project of matches) {
+      const option = button(
+        project.name,
+        () => {
+          picker.open = false;
+          refresh(project.id);
+        },
+        project.id === currentProjectId()
+          ? "project-picker-option selected"
+          : "project-picker-option",
+      );
+      if (project.id === currentProjectId())
+        option.append(el("span", "当前", "badge current"));
+      options.append(option);
+    }
+  };
+  search.addEventListener("input", renderOptions);
+  renderOptions();
+  menu.append(search, options);
+  picker.append(summary, menu);
+  content.append(picker);
+}
+function renderProjectCreator(content) {
+  content.append(
+    button(
+      "新建 Project",
+      () => {
+        composing = false;
+        creatingProject = true;
+        renderComposer();
+      },
+      "primary",
+    ),
+  );
 }
 function renderSettings(content) {
   if (!administrationAvailable || !settingsSnapshot || !settingsDraft) {
@@ -2266,7 +2944,10 @@ function renderDetail() {
   const panel = document.getElementById("detail");
   panel.replaceChildren();
   panel.className = "";
-  panel.hidden = !selected && page !== "requests";
+  panel.hidden =
+    (!selected && page !== "requests") ||
+    (page === "requests" && !snapshot.requests.length);
+  if (panel.hidden) return;
   if (!selected) {
     if (page === "requests") {
       panel.className = "detail-placeholder";
@@ -2308,17 +2989,26 @@ function renderDetail() {
   if (item.blocker) panel.append(el("div", item.blocker, "blocker"));
   panel.append(el("p", "下一步 · " + item.next_action, "muted"));
   if (selected.kind === "request") {
-    panel.append(el("h2", "交付流程"), deliveryFlow(item));
+    panel.className = "request-detail-panel";
+    const flow = el("section", undefined, "detail-section");
+    flow.append(el("h2", "交付流程"), deliveryFlow(item));
+    panel.append(flow);
+    const scopes = el("section", undefined, "detail-section");
+    scopes.append(el("h2", "涉及代码目录"));
     for (const scope of item.scopes) {
-      panel.append(el("p", paths(scope), "paths"));
+      const scopeCard = el("div", undefined, "request-scope-card");
+      scopeCard.append(el("p", paths(scope), "paths"));
       const task = taskById(scope.delivery_id);
       if (task)
-        panel.append(
+        scopeCard.append(
           button("查看仓库任务 · " + label(task.status), () =>
             showDetail("task", task.id),
           ),
         );
+      else scopeCard.append(el("span", "尚未生成交付任务", "badge"));
+      scopes.append(scopeCard);
     }
+    panel.append(scopes);
     requestOperation(panel, item);
     deliveryResult(panel, item);
     panel.append(el("h2", "阶段产物"));
@@ -2382,23 +3072,19 @@ function render() {
   document.getElementById("main").dataset.page = page;
   const projects = document.getElementById("projects");
   projects.replaceChildren();
-  for (const project of snapshot.projects || []) {
-    const tab = button(project.name, () => refresh(project.id), "");
-    const active = project.id === snapshot.selected_project_id;
-    tab.setAttribute("role", "tab");
-    tab.setAttribute("aria-selected", String(active));
-    if (active) tab.setAttribute("aria-current", "true");
-    projects.append(tab);
-  }
+  renderProjectPicker(projects);
   projects.hidden = !["team", "requests"].includes(page);
   document.getElementById("context-controls").hidden = projects.hidden;
+  const projectCreator = document.getElementById("project-creator");
+  projectCreator.replaceChildren();
+  projectCreator.hidden = page !== "requests" || !canControlCurrentTeam();
+  if (!projectCreator.hidden) renderProjectCreator(projectCreator);
   document.getElementById("heading").textContent = pageCopy[page][0];
   document.getElementById("explanation").textContent = pageCopy[page][1];
   updatePageContext();
-  document.getElementById("new-request").hidden =
-    page !== "requests" || !canControlCurrentTeam() || !currentProjectId();
   const content = document.getElementById("content");
   content.replaceChildren();
+  content.className = "";
   if (page === "team") renderTeam(content);
   else if (page === "requests") renderRequests(content);
   else if (page === "knowledge") renderKnowledge(content);
@@ -2426,6 +3112,10 @@ for (const target of ["team", "requests", "knowledge", "settings", "status"])
       page = target;
       selected = null;
       composing = false;
+      creatingProject = false;
+      pendingConfirmation = null;
+      editingKnowledgeDocument = null;
+      editingSpecDocument = null;
       if (target === "knowledge") await loadAdministration();
       if (target === "settings") await loadAdministration();
       if (target === "status") {
@@ -2439,10 +3129,6 @@ for (const target of ["team", "requests", "knowledge", "settings", "status"])
       updateNavigation();
       render();
     });
-document.getElementById("new-request").addEventListener("click", () => {
-  composing = true;
-  renderComposer();
-});
 async function refreshOperations() {
   try {
     const [infoResponse, operationsResponse] = await Promise.all([
@@ -2510,12 +3196,19 @@ async function refresh(projectId, includeRuntimeStatus = false) {
       await loadAdministration();
     if (includeRuntimeStatus && page === "status" && administrationAvailable)
       await loadRuntimeStatus();
+    const modalActive =
+      composing ||
+      creatingProject ||
+      pendingConfirmation ||
+      editingKnowledgeDocument ||
+      editingSpecDocument;
     if (
-      changed ||
-      priorOperations !== JSON.stringify(operations) ||
-      priorConsoleTeam !== consoleTeamId ||
-      priorConsoleReady !== consoleDeliveryReady ||
-      priorRuntimeStatus !== JSON.stringify(runtimeStatusSnapshot)
+      !modalActive &&
+      (changed ||
+        priorOperations !== JSON.stringify(operations) ||
+        priorConsoleTeam !== consoleTeamId ||
+        priorConsoleReady !== consoleDeliveryReady ||
+        priorRuntimeStatus !== JSON.stringify(runtimeStatusSnapshot))
     )
       render();
     status.className = "";
