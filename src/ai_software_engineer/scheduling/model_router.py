@@ -150,8 +150,7 @@ class ModelRouter:
             )
         else:
             routes = tuple(
-                policy.resolve_route_reference(reference)
-                for reference in role_policy.routes
+                policy.resolve_route_reference(reference) for reference in role_policy.routes
             )
         capacity_routes = tuple(
             route

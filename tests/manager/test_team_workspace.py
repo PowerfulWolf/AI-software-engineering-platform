@@ -82,6 +82,7 @@ def test_selected_knowledge_is_separate_at_team_and_project_levels(tmp_path: Pat
     assert "REDACTED" in str(team_sources)
     assert team_sources[0].uri.startswith("team://team_ai/")
     assert project_sources[0].uri.startswith(f"project://{project.manifest.project_id}/")
+    assert project_sources[0].content is not None
     assert "Project uses Python" in project_sources[0].content
 
 

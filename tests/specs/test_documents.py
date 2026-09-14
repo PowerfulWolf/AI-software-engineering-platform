@@ -84,6 +84,7 @@ def test_team_and_project_specs_compile_with_exact_provenance(tmp_path: Path) ->
     assert team_rule.source_uri.startswith("platform://team/team_specs/specs/")
     assert project_rule.source_uri == source.uri
     assert project_rule.source_sha256 == source.sha256 == project_spec.spec_sha256
+    assert isinstance(project_rule.value, dict)
     assert project_rule.value["verification"] == project_spec.verification
 
 

@@ -615,7 +615,9 @@ result = planner.choose_and_commit_agent_and_model()
 config = ProductionConfig.from_environment()
 host = TeamHost(config=config, environment=os.environ)
 entry = host.project_entry()
-result = entry.start(StartProjectDelivery(repository_root=absolute_git_root, requirement=requirement))
+result = entry.start(
+    StartProjectDelivery(repository_root=absolute_git_root, requirement=requirement)
+)
 ```
 
 前者让 secret、fake 执行和调度权限穿透用户入口；后者由唯一 production composition root 加载环境

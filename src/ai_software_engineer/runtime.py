@@ -477,8 +477,7 @@ def _model_identity(definitions: Mapping[AgentRole, AgentDefinition]) -> str:
         )
     )
     models = {
-        (provider, model, reasoning_effort)
-        for _, provider, model, reasoning_effort in routes
+        (provider, model, reasoning_effort) for _, provider, model, reasoning_effort in routes
     }
     if len(models) == 1:
         provider, model, reasoning_effort = next(iter(models))

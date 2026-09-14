@@ -110,10 +110,7 @@ class AgentModelRoutePolicy(DomainModel):
     @model_validator(mode="after")
     def validate_routes(self) -> Self:
         ensure_unique(
-            (
-                (route.provider, route.model, route.reasoning_effort)
-                for route in self.routes
-            ),
+            ((route.provider, route.model, route.reasoning_effort) for route in self.routes),
             f"{self.role.value} Agent model routes",
         )
         return self
@@ -182,10 +179,7 @@ class ProductionConfig(DomainModel):
         if not root.is_absolute() or any(ord(character) < 32 for character in self.platform_root):
             raise ValueError("platform_root must be an absolute safe path")
         ensure_unique(
-            (
-                (route.provider, route.model, route.reasoning_effort)
-                for route in self.model_routes
-            ),
+            ((route.provider, route.model, route.reasoning_effort) for route in self.model_routes),
             "production provider/model/reasoning routes",
         )
         if not any(route.enabled for route in self.model_routes):
@@ -203,10 +197,7 @@ class ProductionConfig(DomainModel):
                 self._resolve_route_reference(reference) for reference in policy.routes
             )
             ensure_unique(
-                (
-                    (route.provider, route.model, route.reasoning_effort)
-                    for route in resolved
-                ),
+                ((route.provider, route.model, route.reasoning_effort) for route in resolved),
                 f"{policy.role.value} resolved Agent model routes",
             )
         ensure_unique(self.team_knowledge_paths, "team knowledge selection")

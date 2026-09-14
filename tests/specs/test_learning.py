@@ -20,6 +20,7 @@ from ai_software_engineer.learning import (
     LearningTarget,
     ProjectLearningStore,
 )
+from ai_software_engineer.project_workspace import ProjectWorkspace
 from ai_software_engineer.spec_documents import ProjectSpecDocumentStore
 from ai_software_engineer.team_workspace import TeamWorkspace
 from tests.domain.factories import (
@@ -31,7 +32,7 @@ from tests.domain.factories import (
 NOW = datetime(2026, 9, 14, 12, 0, tzinfo=UTC)
 
 
-def _project_with_failure(tmp_path: Path):
+def _project_with_failure(tmp_path: Path) -> ProjectWorkspace:
     team = TeamWorkspace.initialize(tmp_path / "platform", team_id="team_learn", name="Learn")
     project = team.project_registry().register(project_id="project_learn", name="Learn")
     code = tmp_path / "code"

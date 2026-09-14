@@ -82,10 +82,7 @@ class FallbackStructuredModelClient:
         if not routes:
             raise ValueError("structured fallback requires at least one route")
         ensure_unique(
-            (
-                (route.provider, route.model, route.reasoning_effort)
-                for route in routes
-            ),
+            ((route.provider, route.model, route.reasoning_effort) for route in routes),
             "structured provider/model/reasoning routes",
         )
         self._routes = routes

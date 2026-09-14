@@ -14,13 +14,14 @@ from ai_software_engineer.repository_workspace import (
     RepositoryWorkspaceCorruption,
     RepositoryWorkspaceError,
     RepositoryWorkspaceManifest,
+    RepositoryWorkspaceRegistry,
     WorkspacePlacementError,
     WorkspaceRootError,
 )
 from ai_software_engineer.team_workspace import TeamWorkspace
 
 
-def registry(tmp_path: Path):
+def registry(tmp_path: Path) -> RepositoryWorkspaceRegistry:
     team = TeamWorkspace.initialize(
         tmp_path / "platform",
         team_id="team_test",

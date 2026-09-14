@@ -105,10 +105,7 @@ class RoleModelRoutes(DomainModel):
     @model_validator(mode="after")
     def validate_routes(self) -> Self:
         ensure_unique(
-            (
-                (route.provider, route.model, route.reasoning_effort)
-                for route in self.routes
-            ),
+            ((route.provider, route.model, route.reasoning_effort) for route in self.routes),
             f"{self.role.value} role model routes",
         )
         return self
@@ -152,10 +149,7 @@ class ModelPolicy(DomainModel):
                 self.resolve_route_reference(reference) for reference in role_policy.routes
             )
             ensure_unique(
-                (
-                    (route.provider, route.model, route.reasoning_effort)
-                    for route in resolved
-                ),
+                ((route.provider, route.model, route.reasoning_effort) for route in resolved),
                 f"{role_policy.role.value} resolved role model routes",
             )
         return self

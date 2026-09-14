@@ -8,7 +8,8 @@ from jsonschema import Draft202012Validator
 from pydantic import TypeAdapter, ValidationError
 
 from ai_software_engineer.config import ProductionConfig
-from ai_software_engineer.team_workspace import TeamId, TeamWorkspace
+from ai_software_engineer.domain.identity import TeamId
+from ai_software_engineer.team_workspace import TeamWorkspace
 
 
 @pytest.mark.parametrize(
