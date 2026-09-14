@@ -262,8 +262,11 @@ GET  /api/v1/admin/status
   selection record may read legacy `ProductionConfig.*_knowledge_paths` only as a compatibility
   fallback. Once the browser writes a selection record, that sidecar is authoritative, including an
   explicitly empty selection.
-- The Knowledge page has three distinct modes: descriptive background knowledge, mandatory
-  engineering Specs, and Project Learning proposals. A Spec POST accepts bounded JSON up to 512 KB,
+- The Knowledge page presents Team Knowledge and Project Knowledge as independent primary modules.
+  Each module contains Background Knowledge and engineering Specs; Project Knowledge additionally
+  contains Learning improvements and its own Project selector. The global Project tabs are not shown
+  over Team Knowledge, so Team-owned assets cannot look duplicated under every Project. Learning
+  evidence is always Project-owned. A Spec POST accepts bounded JSON up to 512 KB,
   creates an immutable inactive version and returns its digest. Activation is a separate PUT carrying
   the exact selected IDs; there is never an implicit latest-version switch.
 - Learning collection reads only persisted failed QA/rejected Review artifacts. Before publication,
@@ -288,6 +291,12 @@ GET  /api/v1/admin/status
   actual delivery-runtime composition, live-model execution switch, Team preparation/knowledge
   counts and per-route credential readiness. Zero knowledge is neutral. MySQL connectivity alone
   must not imply the full delivery runtime is ready.
+- Full Console operation cards are rendered only on `需求与交付`. The browser may keep loading the
+  durable operation facts because Requirement detail/recovery uses them, but successful operation
+  history must not be repeated on Team, Knowledge, Settings or Status pages.
+- Project creation is rendered in `需求与交付`, next to Project selection and Requirement work. The
+  Settings page contains only process/runtime configuration and never presents Project creation as a
+  configuration field.
 - A config save uses same-directory temporary file, fsync and atomic replace. It validates the selected
   Team/name before publication. Any changed saved config or write-only runtime variable is marked
   `restart_required`; the already constructed Host is not mutated or hot-switched. Knowledge upload

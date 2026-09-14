@@ -193,13 +193,13 @@ Agent，即使它们碰巧使用同一模型也不能互相代替或自我批准
    执行开关和端口；用“测试连接”验证 MySQL；
 2. 保存后若显示“需要重启”，执行 `./scripts/ase-console-service.sh restart`，让 Host 绑定新配置；
 3. 在“状态”确认 MySQL、Codex、Team workspace 和启用的模型路由已就绪；
-4. 在“知识库”分别切换“团队通用知识”和“当前 Project 知识”，上传并启用需要用于新 Requirement
-   的文档；知识选择无需重启；
-5. 在设置页创建或确认该业务上下文对应的 Project。
+4. 在“需求与交付”创建或确认该业务上下文对应的 Project；
+5. 在“知识库”先进入独立的“团队知识库”或“项目知识库”，再维护背景知识和开发规范；项目知识库
+   还提供基于 QA/Review 证据的学习改进。上传、启用和选择都无需重启。
 
 然后在“需求与交付”页完成：
 
-1. 先选择 Project，再新建 Requirement，每行输入一个绝对代码目录；
+1. 在同一页创建或选择 Project，再新建 Requirement，每行输入一个绝对代码目录；
 2. 等待 Manager 完成注册、RepositoryProfile 发现和规范编译；
 3. 在需求详情与 Product Agent 讨论并阅读 ProductSpec；
 4. 批准 ProductSpec，观察 Designer、Planner、Coder、QA、Reviewer 的串行进度；

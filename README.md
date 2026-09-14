@@ -407,14 +407,14 @@ Origin；它不是可直接暴露到局域网或公网的多用户系统。用 `
    “需要重启”时执行 `./scripts/ase-console-service.sh restart`。
 2. 打开“状态”，确认 MySQL、Codex、Team workspace 和启用的模型路由已经就绪。Team 没有知识
    文档是正常状态，不会被标记成故障。
-3. 在设置页创建 Project。Project 表示一组长期共享业务背景、知识和开发规范的项目，不等于单个
-   Git 仓库，也不等于一次 Requirement；同一 Project 可以登记多个代码目录。
-4. 打开“知识库”，先选择用途：
-   - “背景知识”：上传业务背景、术语和架构说明。Team 范围供全部 Project 理解，Project 范围只供
-     当前 Project 使用；支持 Markdown、TXT、PDF、DOCX。
-   - “开发规范 Spec”：创建必须遵守的工程规则，填写稳定 `spec_key`、适用角色/阶段/Repository/
+3. 打开“需求与交付”，在本页创建或选择 Project。Project 表示一组长期共享业务背景、知识和开发
+   规范的项目，不等于单个 Git 仓库，也不等于一次 Requirement；同一 Project 可以登记多个代码目录。
+4. 打开“知识库”，先选择独立的“团队知识库”或“项目知识库”，再选择内容类型。团队知识库只维护
+   一份，不挂在任何 Project 下面；项目知识库会要求选择具体 Project：
+   - “背景知识”：上传业务背景、术语和架构说明；支持 Markdown、TXT、PDF、DOCX。
+   - “开发规范”：创建必须遵守的工程规则，填写稳定 `spec_key`、适用角色/阶段/Repository/
      路径和可验证的检查方法。创建只生成新版本，必须再点击启用；同一 `spec_key` 同时只启用一个版本。
-   - “学习建议”：扫描当前 Project 已持久化的 QA FAIL 与 Review REJECT，查看复发次数和证据；
+   - “学习改进”只在项目知识库出现：扫描当前 Project 已持久化的 QA FAIL 与 Review REJECT，查看复发次数和证据；
      人工可拒绝，或批准沉淀为背景知识、Project Spec 或非执行性的 Skill 设计建议。
 5. 背景知识和 Spec 启停会立即用于之后的新需求，不需要重启；已经准备或批准的需求不会被静默套用
    新版本。绑定事实变化时会安全停止并要求重新准备；Team、Project 或 Repository 规则冲突时由人工决策。
@@ -423,7 +423,7 @@ Origin；它不是可直接暴露到局域网或公网的多用户系统。用 `
 
 | 操作 | 是否重启 |
 |---|---|
-| 上传/启停 Team 或 Project 背景知识、创建/启停 Spec、处理学习建议、创建/切换 Project | 不需要 |
+| 上传/启停 Team 或 Project 背景知识、创建/启停 Spec、处理学习改进、创建/切换 Project | 不需要 |
 | 修改平台数据目录、MySQL DSN、模型路由/API Key、Codex 路径、真实执行开关或端口 | 需要；页面会显示“需要重启” |
 
 单文件原始大小上限为 10 MB，规范化正文上限为 256 KB。加密 PDF、无可提取文本、损坏文档、危险
@@ -434,7 +434,7 @@ Spec 位于对应 scope 的 `specs/documents/<spec_id>/`，当前启用集合写
 
 ### 3. 日常需求交付全部在网页完成
 
-1. 进入“需求与交付”，先选择 Project，再点击“新建需求”。填写 Requirement 名称，并每行填写
+1. 进入“需求与交付”，在同一页创建或选择 Project，再点击“新建需求”。填写 Requirement 名称，并每行填写
    一个绝对代码目录；一个 Requirement 可以覆盖同一仓库的多个模块，也可以跨多个 Git 仓库。
 2. Manager 将这些目录注册为该 Project 的 Repository，建立外置 sidecar、发现 RepositoryProfile
    并编译 Team + Project + Repository 规范。操作卡片

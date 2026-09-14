@@ -339,6 +339,8 @@ async function submitOperation(intent) {
 function renderOperationStatus() {
   const panel = document.getElementById("operations");
   panel.replaceChildren();
+  panel.hidden = page !== "requests";
+  if (panel.hidden) return;
   if (consoleAvailable === false) {
     panel.append(
       el(
@@ -716,6 +718,9 @@ function deliveryResult(panel, request) {
   panel.append(result);
 }
 function renderRequests(content) {
+  if (administrationNotice?.page === "requests")
+    content.append(el("div", administrationNotice.text, "admin-notice"));
+  if (canControlCurrentTeam()) renderProjectCreator(content);
   const top = el("div", undefined, "row request-heading");
   top.append(
     el(
@@ -746,7 +751,7 @@ function renderRequests(content) {
         "p",
         snapshot.selected_project_id
           ? "还没有需求。点击“新建需求”，选择涉及的代码目录后开始讨论。"
-          : "还没有 Project。请在设置页先创建 Project。",
+          : "还没有 Project。请在本页创建 Project 后再提交需求。",
       ),
     );
     content.append(n);
@@ -875,27 +880,132 @@ function renderKnowledge(content) {
   if (administrationNotice?.page === "knowledge")
     content.append(el("div", administrationNotice.text, "admin-notice"));
 
-  const modeSwitch = el("div", undefined, "scope-switch knowledge-mode-switch");
-  for (const [mode, title] of [
-    ["background", "背景知识"],
-    ["specs", "开发规范 Spec"],
-    ["learning", "学习建议"],
+  const descriptions = {
+    background: "帮助团队理解业务和项目背景，不作为强制工程规则。",
+    specs: "新需求必须遵守的工程规则，并需要提供可验证证据。",
+    learning: "从 QA 失败和 Review 拒绝中提炼，经人工批准后再沉淀。",
+  };
+  const ownership = el("section", undefined, "knowledge-navigation");
+  const ownershipHeader = el("div", undefined, "knowledge-navigation-header");
+  ownershipHeader.append(
+    el("strong", "知识库归属", "knowledge-navigation-title"),
+    el("span", "团队资产与项目资产独立管理", "muted"),
+  );
+  const ownershipSwitch = el(
+    "div",
+    undefined,
+    "scope-switch knowledge-ownership-switch",
+  );
+  ownershipSwitch.setAttribute("role", "tablist");
+  ownershipSwitch.setAttribute("aria-label", "知识库归属");
+  for (const [scope, title] of [
+    ["team", "团队知识库"],
+    ["project", "项目知识库"],
   ]) {
     const control = button(
       title,
       async () => {
+        knowledgeScope = scope;
+        if (scope === "team" && knowledgeMode === "learning")
+          knowledgeMode = "background";
+        administrationNotice = null;
+        await loadKnowledge();
+        render();
+      },
+      knowledgeScope === scope ? "selected" : "",
+    );
+    control.setAttribute("role", "tab");
+    control.setAttribute("aria-selected", String(knowledgeScope === scope));
+    ownershipSwitch.append(control);
+  }
+  ownership.append(
+    ownershipHeader,
+    ownershipSwitch,
+    el(
+      "p",
+      knowledgeScope === "team"
+        ? "整个 Team 共享一次，适用于所有 Project，不随 Project 切换而复制。"
+        : "每个 Project 独立保存自己的背景、工程规范与学习记录。",
+      "knowledge-navigation-hint",
+    ),
+  );
+  content.append(ownership);
+
+  if (knowledgeScope === "project") {
+    const projectSelector = el(
+      "section",
+      undefined,
+      "knowledge-project-selector",
+    );
+    const selectorHeader = el(
+      "div",
+      undefined,
+      "knowledge-navigation-header",
+    );
+    selectorHeader.append(
+      el("strong", "选择 Project", "knowledge-navigation-title"),
+      el("span", "下方只展示所选 Project 的资产", "muted"),
+    );
+    const projectTabs = el(
+      "div",
+      undefined,
+      "team-tabs knowledge-project-tabs",
+    );
+    projectTabs.setAttribute("role", "tablist");
+    projectTabs.setAttribute("aria-label", "Project 知识库");
+    for (const project of snapshot.projects || []) {
+      const active = project.id === currentProjectId();
+      const control = button(project.name, () => refresh(project.id), "");
+      control.setAttribute("role", "tab");
+      control.setAttribute("aria-selected", String(active));
+      if (active) control.setAttribute("aria-current", "true");
+      projectTabs.append(control);
+    }
+    projectSelector.append(selectorHeader, projectTabs);
+    content.append(projectSelector);
+    if (!currentProjectId()) {
+      content.append(
+        el("div", "请先在“需求与交付”中创建并选择一个 Project。", "empty"),
+      );
+      return;
+    }
+  }
+
+  const navigation = el("section", undefined, "knowledge-content-navigation");
+  const navigationHeader = el("div", undefined, "knowledge-navigation-header");
+  navigationHeader.append(
+    el("strong", "内容类型", "knowledge-navigation-title"),
+    el("span", "选择要查看和维护的内容", "muted"),
+  );
+  const modeSwitch = el("div", undefined, "scope-switch knowledge-mode-switch");
+  modeSwitch.setAttribute("role", "tablist");
+  modeSwitch.setAttribute("aria-label", "知识内容类型");
+  const modes = [
+    ["background", "背景知识"],
+    ["specs", "开发规范"],
+  ];
+  if (knowledgeScope === "project") modes.push(["learning", "学习改进"]);
+  for (const [mode, title] of modes) {
+    const control = button(
+      title,
+      async () => {
         knowledgeMode = mode;
-        if (mode === "learning") knowledgeScope = "project";
         administrationNotice = null;
         await loadKnowledge();
         render();
       },
       knowledgeMode === mode ? "selected" : "",
     );
-    control.setAttribute("aria-pressed", String(knowledgeMode === mode));
+    control.setAttribute("role", "tab");
+    control.setAttribute("aria-selected", String(knowledgeMode === mode));
     modeSwitch.append(control);
   }
-  content.append(modeSwitch);
+  navigation.append(
+    navigationHeader,
+    modeSwitch,
+    el("p", descriptions[knowledgeMode], "knowledge-navigation-hint"),
+  );
+  content.append(navigation);
   if (knowledgeMode === "specs") {
     renderSpecs(content);
     return;
@@ -907,33 +1017,7 @@ function renderKnowledge(content) {
   renderBackgroundKnowledge(content);
 }
 
-function renderScopeSwitch(content) {
-  const scopeSwitch = el("div", undefined, "scope-switch");
-  for (const [scope, title] of [
-    ["team", knowledgeMode === "specs" ? "团队通用规范" : "团队通用知识"],
-    [
-      "project",
-      knowledgeMode === "specs" ? "当前 Project 规范" : "当前 Project 知识",
-    ],
-  ]) {
-    const control = button(
-      title,
-      async () => {
-        knowledgeScope = scope;
-        administrationNotice = null;
-        await loadKnowledge();
-        render();
-      },
-      knowledgeScope === scope ? "selected" : "",
-    );
-    control.setAttribute("aria-pressed", String(knowledgeScope === scope));
-    scopeSwitch.append(control);
-  }
-  content.append(scopeSwitch);
-}
-
 function renderBackgroundKnowledge(content) {
-  renderScopeSwitch(content);
   if (knowledgeScope === "project" && !currentProjectId()) {
     content.append(el("div", "请先在页面顶部选择一个 Project。", "empty"));
     return;
@@ -1100,7 +1184,6 @@ function csvValues(value) {
 }
 
 function renderSpecs(content) {
-  renderScopeSwitch(content);
   if (knowledgeScope === "project" && !currentProjectId()) {
     content.append(el("div", "请先在页面顶部选择一个 Project。", "empty"));
     return;
@@ -1475,8 +1558,15 @@ function selectInput(values, current, update) {
   return control;
 }
 function renderProjectCreator(content) {
-  const panel = el("section", undefined, "admin-panel");
-  panel.append(el("h2", "创建 Project"));
+  const panel = el("details", undefined, "admin-panel project-creator");
+  panel.append(
+    el("summary", "创建新 Project", "project-creator-summary"),
+    el(
+      "p",
+      "Project 用来归集自己的代码目录、需求、背景知识和开发规范。",
+      "muted",
+    ),
+  );
   const form = el("form", undefined, "settings-grid");
   const name = el("input");
   name.placeholder = "Project 显示名称";
@@ -1502,10 +1592,9 @@ function renderProjectCreator(content) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: name.value.trim() }),
       });
-      await loadAdministration();
       administrationNotice = {
-        page: "settings",
-        text: "Project 已创建。现在可以切换到该 Project 并创建 Requirement。",
+        page: "requests",
+        text: "Project 已创建并选中，现在可以创建 Requirement。",
       };
       await refresh(created.project_id);
       render();
@@ -1526,12 +1615,11 @@ function renderSettings(content) {
   }
   if (administrationNotice?.page === "settings")
     content.append(el("div", administrationNotice.text, "admin-notice"));
-  if (consoleDeliveryReady === true) renderProjectCreator(content);
-  else
+  if (consoleDeliveryReady !== true)
     content.append(
       el(
         "div",
-        "先保存运行配置并重启服务；交付运行时就绪后即可创建 Project。",
+        "当前交付运行时尚未就绪；请检查下方配置，保存后按提示重启服务。",
         "admin-notice",
       ),
     );
@@ -2032,6 +2120,7 @@ function render() {
     if (active) tab.setAttribute("aria-current", "true");
     projects.append(tab);
   }
+  projects.hidden = !["team", "requests"].includes(page);
   document.getElementById("heading").textContent = pageCopy[page][0];
   document.getElementById("explanation").textContent = pageCopy[page][1];
   document.getElementById("new-request").hidden =

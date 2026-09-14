@@ -392,8 +392,60 @@ input[type="checkbox"] {
   gap: 14px;
 }
 
-.knowledge-mode-switch {
-  margin-bottom: 0.75rem;
+.knowledge-navigation,
+.knowledge-project-selector,
+.knowledge-content-navigation {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: white;
+  padding: 16px 18px;
+  margin: 0 0 14px;
+}
+
+.knowledge-navigation {
+  border-left: 4px solid var(--accent);
+}
+
+.knowledge-project-selector,
+.knowledge-content-navigation {
+  margin-left: 22px;
+  background: #f8faff;
+}
+
+.knowledge-navigation-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.knowledge-navigation-title {
+  font-size: 1rem;
+}
+
+.knowledge-mode-switch,
+.knowledge-ownership-switch {
+  margin-bottom: 0;
+}
+
+.knowledge-navigation-hint {
+  color: var(--muted);
+  font-size: 0.875rem;
+  margin: 10px 0 0;
+}
+
+.knowledge-project-tabs {
+  margin: 0;
+}
+
+.project-creator-summary {
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.project-creator .settings-grid {
+  margin-top: 16px;
 }
 
 .spec-card pre {
@@ -549,5 +601,13 @@ code {
   }
   .settings-grid {
     grid-template-columns: 1fr;
+  }
+  .knowledge-project-selector,
+  .knowledge-content-navigation {
+    margin-left: 10px;
+  }
+  .scope-switch {
+    display: flex;
+    flex-wrap: wrap;
   }
 }

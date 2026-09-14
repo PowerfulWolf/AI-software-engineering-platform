@@ -212,6 +212,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     urls = [],
     submittedIntents = [],
     storedOperations = [],
+    createdProjects = [],
     savedSettings = [],
     mysqlTests = [],
     knowledgeSelections = [],
@@ -406,6 +407,19 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     },
     fetch: async (url, options = {}) => {
       urls.push(url);
+      if (url === "/api/v1/admin/projects" && options.method === "POST") {
+        createdProjects.push(JSON.parse(options.body));
+        return {
+          ok: true,
+          json: async () => ({
+            project_id: "project_other",
+            name: createdProjects.at(-1).name,
+            repository_count: 0,
+            requirement_count: 0,
+            created_at: "2026-09-14T00:00:00Z",
+          }),
+        };
+      }
       if (url === "/api/v1/admin/projects")
         return {
           ok: true,
@@ -572,12 +586,41 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   await projectTabs[1].events.click();
   assert.ok(urls.includes("/api/v1/team?project_id=project_other"));
   await get("nav-knowledge").events.click();
+  assert.equal(
+    get("operations").hidden,
+    true,
+    "full operation cards stay on the Requirements page",
+  );
+  assert.equal(
+    get("projects").hidden,
+    true,
+    "Team Knowledge is not presented under the global Project selector",
+  );
+  const knowledgeNavigation = descend(get("content")).find(
+    (node) => node.className === "knowledge-navigation",
+  );
+  assert.match(text(knowledgeNavigation), /知识库归属/);
+  assert.match(text(knowledgeNavigation), /团队知识库/);
+  assert.match(text(knowledgeNavigation), /项目知识库/);
+  const teamContentNavigation = descend(get("content")).find(
+    (node) => node.className === "knowledge-content-navigation",
+  );
+  assert.match(text(teamContentNavigation), /内容类型/);
+  assert.match(text(teamContentNavigation), /背景知识/);
+  assert.match(text(teamContentNavigation), /开发规范/);
+  assert.doesNotMatch(text(teamContentNavigation), /学习改进/);
   assert.match(text(get("content")), /team-guide.md/);
   assert.match(text(get("content")), /已用于新需求/);
   const projectKnowledge = descend(get("content")).find(
-    (node) => node.tag === "button" && node.textContent === "当前 Project 知识",
+    (node) => node.tag === "button" && node.textContent === "项目知识库",
   );
   await projectKnowledge.events.click();
+  const projectSelector = descend(get("content")).find(
+    (node) => node.className === "knowledge-project-selector",
+  );
+  assert.match(text(projectSelector), /选择 Project/);
+  assert.match(text(projectSelector), /Other project/);
+  assert.match(text(get("content")), /学习改进/);
   assert.match(text(get("content")), /project-guide.md/);
   const enableProjectKnowledge = descend(get("content")).find(
     (node) => node.tag === "button" && node.textContent === "用于新需求",
@@ -590,7 +633,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   ]);
   assert.match(text(get("content")), /无需重启/);
   const specsMode = descend(get("content")).find(
-    (node) => node.tag === "button" && node.textContent === "开发规范 Spec",
+    (node) => node.tag === "button" && node.textContent === "开发规范",
   );
   await specsMode.events.click();
   assert.match(text(get("content")), /Python testing/);
@@ -603,9 +646,11 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     { spec_ids: ["spec_document_" + "d".repeat(32)] },
   ]);
   const learningMode = descend(get("content")).find(
-    (node) => node.tag === "button" && node.textContent === "学习建议",
+    (node) => node.tag === "button" && node.textContent === "学习改进",
   );
   await learningMode.events.click();
+  assert.match(text(get("content")), /项目知识库/);
+  assert.doesNotMatch(text(get("content")), /团队通用知识/);
   assert.match(text(get("content")), /MISSING_REGRESSION/);
   assert.match(text(get("content")), /重复出现 2 次/);
   const approveLearning = descend(get("content")).find(
@@ -616,7 +661,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   assert.equal(learningDecisions[0].action, "APPROVE");
   assert.equal(learningDecisions[0].target, "SPEC");
   await get("nav-settings").events.click();
-  assert.match(text(get("content")), /创建 Project/);
+  assert.doesNotMatch(text(get("content")), /创建新 Project/);
   assert.match(text(get("content")), /平台数据目录/);
   assert.ok(
     descend(get("content")).some((node) => node.value === "gpt-5.6-terra"),
@@ -687,6 +732,18 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   assert.match(text(qaStageCards[2]), /测试中/);
   assert.match(text(qaStageCards[3]), /等待评审阶段/);
   get("nav-requests").events.click();
+  assert.equal(get("operations").hidden, false);
+  assert.match(text(get("content")), /创建新 Project/);
+  const projectCreator = descend(get("content")).find(
+    (node) => node.className === "admin-panel project-creator",
+  );
+  const createProjectForm = descend(projectCreator).find(
+    (node) => node.tag === "form",
+  );
+  descend(createProjectForm).find((node) => node.tag === "input").value =
+    "New product";
+  await createProjectForm.events.submit({ preventDefault() {} });
+  assert.deepEqual(createdProjects, [{ name: "New product" }]);
   assert.equal(get("new-request").hidden, false);
   assert.match(text(get("content")), /执行中 2/);
   assert.match(text(get("content")), /阻塞中 1/);
@@ -801,7 +858,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     ),
     false,
   );
-  assert.match(text(get("content")), /先保存运行配置并重启/);
+  assert.match(text(get("content")), /交付运行时尚未就绪/);
   await get("nav-team").events.click();
   vm.runInContext('showDetail("task","d1")', context);
   deliveryReady = true;
