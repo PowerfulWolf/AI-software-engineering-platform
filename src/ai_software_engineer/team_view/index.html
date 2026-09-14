@@ -12,21 +12,32 @@
       <div class="brand">
         <span class="monogram">ae</span><span>AI Software<br />Engineer</span>
       </div>
-      <p class="nav-label">团队工作台</p>
       <nav aria-label="主导航">
-        <button id="nav-team" class="selected" aria-current="page">
-          团队成员
-        </button>
-        <button id="nav-requests">需求与交付</button>
-        <button id="nav-knowledge">知识库</button>
-        <button id="nav-settings">设置</button>
-        <button id="nav-status">状态</button>
+        <section class="nav-group" aria-labelledby="nav-group-team">
+          <p id="nav-group-team" class="nav-label">团队</p>
+          <button id="nav-team" class="selected" aria-current="page">
+            团队成员
+          </button>
+        </section>
+        <section class="nav-group" aria-labelledby="nav-group-project">
+          <p id="nav-group-project" class="nav-label">项目工作</p>
+          <button id="nav-requests">需求与交付</button>
+        </section>
+        <section class="nav-group" aria-labelledby="nav-group-knowledge">
+          <p id="nav-group-knowledge" class="nav-label">知识资产</p>
+          <button id="nav-knowledge">知识库</button>
+        </section>
+        <section class="nav-group" aria-labelledby="nav-group-system">
+          <p id="nav-group-system" class="nav-label">系统</p>
+          <button id="nav-settings">设置</button>
+          <button id="nav-status">状态</button>
+        </section>
       </nav>
       <div class="side-note">
         本地团队工作台<br />需求操作由 Manager 接管
       </div>
     </aside>
-    <main>
+    <main id="main" data-page="team">
       <header>
         <div>
           <p id="team">正在连接 Team 工作空间</p>
@@ -40,24 +51,38 @@
       <div id="connection" role="status" aria-live="polite">
         正在读取真实运行记录…
       </div>
-      <div
-        id="projects"
-        class="team-tabs"
-        role="tablist"
-        aria-label="Projects"
-      ></div>
-      <p id="explanation" class="explanation">
-        项目、需求、批准和继续交付都在这里完成。任务阶段来自持久化记录；“空闲中”只表示
-        当前没有分配给该成员的未结束任务。
-      </p>
+      <section id="page-context" class="page-context" aria-label="页面作用域">
+        <div class="context-heading">
+          <span id="scope-label" class="scope-label">Team 级</span>
+          <div>
+            <strong id="scope-title">AI Team</strong>
+            <p id="explanation" class="explanation">
+              团队成员属于唯一 Team；Project 仅用于筛选工作负载。
+            </p>
+          </div>
+        </div>
+        <div id="context-controls" class="context-controls">
+          <span id="project-context-label" class="context-control-label"
+            >工作负载筛选</span
+          >
+          <div
+            id="projects"
+            class="team-tabs"
+            role="tablist"
+            aria-label="Projects"
+          ></div>
+        </div>
+      </section>
       <section id="composer" hidden aria-label="新建需求"></section>
       <section
         id="operations"
         aria-live="polite"
         aria-label="操作状态"
       ></section>
-      <section id="content" aria-label="工作台内容"></section>
-      <section id="detail" hidden aria-label="详情"></section>
+      <div id="workspace" class="workspace">
+        <section id="content" aria-label="工作台内容"></section>
+        <section id="detail" hidden aria-label="详情"></section>
+      </div>
     </main>
   </body>
 </html>

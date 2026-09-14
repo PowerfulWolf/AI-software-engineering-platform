@@ -23,6 +23,9 @@ let runtimeStatusLoading = false;
 let administrationNotice = null;
 let composing = false;
 let actionSerial = 0;
+let requestFilter = "active";
+let settingsSection = "general";
+let selectedAgentId = null;
 const labels = {
   NEW: "待启动",
   PREPARING: "准备项目",
@@ -101,6 +104,29 @@ const pageCopy = {
     "查看当前配置、数据库、Codex、模型路由和团队知识是否已经准备就绪。",
   ],
 };
+const projectName = () =>
+  snapshot?.projects?.find((item) => item.id === currentProjectId())?.name ||
+  "尚未选择 Project";
+function updatePageContext() {
+  const scope = document.getElementById("scope-label");
+  const title = document.getElementById("scope-title");
+  const projectLabel = document.getElementById("project-context-label");
+  const contexts = {
+    team: ["Team 级", snapshot.team_name, "工作负载筛选"],
+    requests: ["Project 级", projectName(), "当前 Project"],
+    knowledge:
+      knowledgeScope === "team"
+        ? ["Team 知识", snapshot.team_name, ""]
+        : ["Project 知识", projectName(), ""],
+    settings: ["平台级", "当前 Team Host", ""],
+    status: ["平台级", "当前 Team Host", ""],
+  };
+  const [scopeText, titleText, projectText] = contexts[page];
+  scope.textContent = scopeText;
+  title.textContent = titleText;
+  projectLabel.textContent = projectText;
+  projectLabel.hidden = !projectText;
+}
 const el = (tag, text, className) => {
   const n = document.createElement(tag);
   if (text !== undefined) n.textContent = text;
@@ -372,8 +398,13 @@ function renderOperationStatus() {
     return;
   }
   const visible = [...operations]
+    .filter((operation) => operation.status !== "SUCCEEDED")
     .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
     .slice(0, 5);
+  if (!visible.length) {
+    panel.hidden = true;
+    return;
+  }
   for (const operation of visible) {
     const card = el("div", undefined, "operation-status");
     const row = el("div", undefined, "row");
@@ -431,13 +462,13 @@ function taskRow(task, agentId) {
   return n;
 }
 function renderTeam(content) {
-  const summary = el("div", undefined, "summary");
+  const summary = el("section", undefined, "summary team-summary");
   for (const [count, title] of [
     [snapshot.agents.length, "位团队成员"],
-    [snapshot.tasks.filter((t) => !t.terminal).length, "项未结束任务"],
-    [snapshot.requests.filter((r) => r.blocker).length, "项需求待处理"],
+    [snapshot.tasks.filter((t) => !t.terminal).length, "项当前 Project 未结束任务"],
+    [snapshot.requests.filter((r) => r.blocker).length, "项当前 Project 待处理需求"],
   ]) {
-    const n = el("span");
+    const n = el("span", undefined, "summary-card");
     n.append(el("strong", String(count)), document.createTextNode(title));
     summary.append(n);
   }
@@ -462,16 +493,21 @@ function renderTeam(content) {
       return leftOrder - rightOrder || left.index - right.index;
     })
     .map(({ agent }) => agent);
+  if (!orderedAgents.length) return;
+  if (!orderedAgents.some((agent) => agent.id === selectedAgentId))
+    selectedAgentId =
+      orderedAgents.find((agent) => agent.current_stage_delivery_ids.length)
+        ?.id || orderedAgents[0].id;
+  const heading = el("div", undefined, "section-heading");
+  heading.append(
+    el("div", "长期团队成员", "section-title"),
+    el("span", `工作负载 · ${projectName()}`, "badge"),
+  );
+  content.append(heading);
+  const workspace = el("div", undefined, "agent-workspace");
+  const roster = el("aside", undefined, "agent-roster");
+  roster.setAttribute("aria-label", "团队成员列表");
   for (const agent of orderedAgents) {
-    const card = el("article", undefined, "agent"),
-      head = el("div", undefined, "row"),
-      identity = el("div", undefined, "identity"),
-      name = el("div");
-    name.append(
-      el("h2", agent.name),
-      el("div", agent.roles.map(label).join(" / "), "muted"),
-    );
-    identity.append(el("div", agent.name.slice(0, 1), "avatar"), name);
     const memberStatus = !agent.enabled
       ? ["已停用", "badge"]
       : agent.current_stage_delivery_ids.length
@@ -479,35 +515,100 @@ function renderTeam(content) {
         : agent.assigned_delivery_ids.length
           ? ["等待当前阶段", "badge"]
           : ["空闲中", "badge done"];
-    head.append(identity, el("span", memberStatus[0], memberStatus[1]));
-    card.append(head);
-    card.append(
-      el(
-        "div",
-        `${agent.current_stage_delivery_ids.length} 项处于当前岗位阶段 · ${agent.assigned_delivery_ids.length} 项未结束分配 · 并发上限 ${agent.max_parallel_assignments}（团队配置，非实时占用）`,
-        "muted",
-      ),
+    const control = button(
+      "",
+      () => {
+        selectedAgentId = agent.id;
+        render();
+      },
+      selectedAgentId === agent.id ? "agent selected" : "agent",
     );
-    const work = el("div", undefined, "work");
-    for (const id of agent.assigned_delivery_ids) {
-      const t = taskById(id);
-      if (t) work.append(taskRow(t, agent.id));
-    }
-    if (!agent.assigned_delivery_ids.length)
-      work.append(el("p", "当前没有分配给该成员的未结束任务。", "muted"));
-    card.append(work);
-    const history = el("details");
-    history.dataset.key = agent.id;
-    history.append(
-      el("summary", `历史任务 · ${agent.history_delivery_ids.length}`),
+    const identity = el("span", undefined, "identity");
+    const name = el("span");
+    name.append(
+      el("strong", agent.name),
+      el("small", agent.roles.map(label).join(" / "), "muted"),
     );
-    for (const id of agent.history_delivery_ids) {
-      const t = taskById(id);
-      if (t) history.append(taskRow(t, agent.id));
-    }
-    card.append(history);
-    content.append(card);
+    identity.append(el("span", agent.name.slice(0, 1), "avatar"), name);
+    control.append(identity, el("span", memberStatus[0], memberStatus[1]));
+    roster.append(control);
   }
+  const agent = orderedAgents.find((item) => item.id === selectedAgentId);
+  const board = el("section", undefined, "agent-board");
+  const boardHeading = el("div", undefined, "row agent-board-heading");
+  boardHeading.append(
+    el("div", `${agent.name} · 任务队列`, "section-title"),
+    el(
+      "span",
+      `并发上限 ${agent.max_parallel_assignments}（配置值）`,
+      "badge",
+    ),
+  );
+  board.append(boardHeading);
+  const assigned = agent.assigned_delivery_ids.map(taskById).filter(Boolean);
+  const history = agent.history_delivery_ids.map(taskById).filter(Boolean);
+  const blockedIds = new Set(
+    [...assigned, ...history]
+      .filter((task) => taskGroup(task) === "blocked")
+      .map((task) => task.id),
+  );
+  const queues = [
+    [
+      "待完成",
+      assigned.filter(
+        (task) =>
+          !blockedIds.has(task.id) &&
+          !agent.current_stage_delivery_ids.includes(task.id),
+      ),
+      "waiting",
+    ],
+    [
+      "进行中",
+      assigned.filter(
+        (task) =>
+          !blockedIds.has(task.id) &&
+          agent.current_stage_delivery_ids.includes(task.id),
+      ),
+      "active",
+    ],
+    [
+      "已阻塞",
+      [...assigned, ...history].filter(
+        (task, index, items) =>
+          blockedIds.has(task.id) &&
+          items.findIndex((candidate) => candidate.id === task.id) === index,
+      ),
+      "blocked",
+    ],
+    [
+      "已完成",
+      history.filter((task) => taskGroup(task) === "completed"),
+      "completed",
+    ],
+  ];
+  const columns = el("div", undefined, "agent-queue-board");
+  for (const [title, tasks, state] of queues) {
+    const column = el("section", undefined, `agent-queue ${state}`);
+    const columnHeading = el("div", undefined, "agent-queue-heading");
+    columnHeading.append(
+      el("strong", title),
+      el("span", String(tasks.length), "badge"),
+    );
+    column.append(columnHeading);
+    if (!tasks.length) column.append(el("p", `暂无${title}任务。`, "muted"));
+    for (const task of tasks) column.append(taskRow(task, agent.id));
+    columns.append(column);
+  }
+  board.append(
+    el(
+      "p",
+      `仅展示 ${projectName()} 的任务；Agent 仍归唯一 Team 所有。`,
+      "muted",
+    ),
+    columns,
+  );
+  workspace.append(roster, board);
+  content.append(workspace);
   content.append(
     el(
       "p",
@@ -726,24 +827,23 @@ function renderRequests(content) {
     el(
       "h2",
       snapshot.selected_project_id
-        ? "当前 Project 的需求"
+        ? "需求列表"
         : "请先创建或选择 Project",
     ),
-    canControlCurrentTeam() && snapshot.selected_project_id
-      ? button(
-          "新建需求",
-          () => {
-            composing = true;
-            renderComposer();
-            document
-              .getElementById("composer")
-              .scrollIntoView({ behavior: "smooth", block: "start" });
-          },
-          "primary",
-        )
-      : el("span", "控制台未连接", "badge blocked"),
+    snapshot.selected_project_id
+      ? el("span", `${snapshot.requests.length} 个需求`, "badge")
+      : el("span", "尚未选择", "badge blocked"),
   );
   content.append(top);
+  if (
+    selected &&
+    !(selected.kind === "task"
+      ? taskById(selected.id)
+      : requestById(selected.id))
+  )
+    selected = null;
+  if (!selected && snapshot.requests.length)
+    selected = { kind: "request", id: snapshot.requests[0].id };
   if (!snapshot.requests.length) {
     const n = el("div", undefined, "empty");
     n.append(
@@ -755,29 +855,54 @@ function renderRequests(content) {
       ),
     );
     content.append(n);
+    return;
   }
   const materialized = new Set(snapshot.tasks.map((task) => task.request_id));
-  for (const request of snapshot.requests.filter(
-    (item) => !materialized.has(item.id),
-  ))
-    content.append(requestCard(request));
-  for (const [key, title] of [
+  const groups = [
     ["active", "执行中"],
     ["blocked", "阻塞中"],
     ["completed", "已完成"],
-  ]) {
-    const group = el("section", undefined, "task-group");
-    const tasks = snapshot.tasks.filter((task) => taskGroup(task) === key);
-    const heading = el("h2");
-    heading.append(
-      document.createTextNode(title),
-      el("span", String(tasks.length), "badge"),
+  ];
+  const counts = Object.fromEntries(
+    groups.map(([key]) => [
+      key,
+      snapshot.tasks.filter((task) => taskGroup(task) === key).length,
+    ]),
+  );
+  counts.active += snapshot.requests.filter(
+    (item) => !materialized.has(item.id),
+  ).length;
+  const navigation = el("div", undefined, "request-filter scope-switch");
+  navigation.setAttribute("role", "tablist");
+  navigation.setAttribute("aria-label", "需求状态");
+  for (const [key, title] of groups) {
+    const control = button(
+      `${title} ${counts[key]}`,
+      () => {
+        requestFilter = key;
+        render();
+      },
+      requestFilter === key ? "selected" : "",
     );
-    group.append(heading);
-    if (!tasks.length) group.append(el("p", `暂无${title}任务。`, "muted"));
-    for (const task of tasks) group.append(taskRow(task));
-    content.append(group);
+    control.setAttribute("role", "tab");
+    control.setAttribute("aria-selected", String(requestFilter === key));
+    navigation.append(control);
   }
+  content.append(navigation);
+  const group = el("section", undefined, "task-group request-list");
+  const currentTitle = groups.find(([key]) => key === requestFilter)?.[1];
+  if (requestFilter === "active")
+    for (const request of snapshot.requests.filter(
+      (item) => !materialized.has(item.id),
+    ))
+      group.append(requestCard(request));
+  const tasks = snapshot.tasks.filter(
+    (task) => taskGroup(task) === requestFilter,
+  );
+  if (!tasks.length && !group.children.length)
+    group.append(el("p", `暂无${currentTitle}任务。`, "muted"));
+  for (const task of tasks) group.append(taskRow(task));
+  content.append(group);
 }
 async function adminFetch(url, options = {}) {
   const response = await fetch(url, { cache: "no-store", ...options });
@@ -885,16 +1010,17 @@ function renderKnowledge(content) {
     specs: "新需求必须遵守的工程规则，并需要提供可验证证据。",
     learning: "从 QA 失败和 Review 拒绝中提炼，经人工批准后再沉淀。",
   };
-  const ownership = el("section", undefined, "knowledge-navigation");
+  const workspace = el("div", undefined, "knowledge-workspace");
+  const ownership = el("aside", undefined, "knowledge-navigation");
   const ownershipHeader = el("div", undefined, "knowledge-navigation-header");
   ownershipHeader.append(
     el("strong", "知识库归属", "knowledge-navigation-title"),
-    el("span", "团队资产与项目资产独立管理", "muted"),
+    el("span", "先选择资产属于谁", "muted"),
   );
   const ownershipSwitch = el(
     "div",
     undefined,
-    "scope-switch knowledge-ownership-switch",
+    "knowledge-module-switch knowledge-ownership-switch",
   );
   ownershipSwitch.setAttribute("role", "tablist");
   ownershipSwitch.setAttribute("aria-label", "知识库归属");
@@ -929,8 +1055,6 @@ function renderKnowledge(content) {
       "knowledge-navigation-hint",
     ),
   );
-  content.append(ownership);
-
   if (knowledgeScope === "project") {
     const projectSelector = el(
       "section",
@@ -962,15 +1086,19 @@ function renderKnowledge(content) {
       projectTabs.append(control);
     }
     projectSelector.append(selectorHeader, projectTabs);
-    content.append(projectSelector);
+    ownership.append(projectSelector);
     if (!currentProjectId()) {
-      content.append(
+      const missing = el("section", undefined, "knowledge-main");
+      missing.append(
         el("div", "请先在“需求与交付”中创建并选择一个 Project。", "empty"),
       );
+      workspace.append(ownership, missing);
+      content.append(workspace);
       return;
     }
   }
 
+  const body = el("section", undefined, "knowledge-main");
   const navigation = el("section", undefined, "knowledge-content-navigation");
   const navigationHeader = el("div", undefined, "knowledge-navigation-header");
   navigationHeader.append(
@@ -1005,16 +1133,18 @@ function renderKnowledge(content) {
     modeSwitch,
     el("p", descriptions[knowledgeMode], "knowledge-navigation-hint"),
   );
-  content.append(navigation);
+  body.append(navigation);
+  workspace.append(ownership, body);
+  content.append(workspace);
   if (knowledgeMode === "specs") {
-    renderSpecs(content);
+    renderSpecs(body);
     return;
   }
   if (knowledgeMode === "learning") {
-    renderLearning(content);
+    renderLearning(body);
     return;
   }
-  renderBackgroundKnowledge(content);
+  renderBackgroundKnowledge(body);
 }
 
 function renderBackgroundKnowledge(content) {
@@ -1048,7 +1178,10 @@ function renderBackgroundKnowledge(content) {
       "muted",
     ),
   );
-  const form = el("form", undefined, "knowledge-upload admin-panel");
+  const editor = el("details", undefined, "admin-panel knowledge-editor");
+  editor.dataset.key = `${knowledgeScope}-background-editor`;
+  editor.append(el("summary", "导入背景知识", "project-creator-summary"));
+  const form = el("form", undefined, "knowledge-upload");
   const file = el("input");
   file.type = "file";
   file.accept = ".md,.txt,.pdf,.docx";
@@ -1100,7 +1233,8 @@ function renderBackgroundKnowledge(content) {
       submit.disabled = false;
     }
   });
-  content.append(form);
+  editor.append(form);
+  content.append(editor);
   if (!knowledgeDocuments.length) {
     content.append(
       el(
@@ -1208,7 +1342,10 @@ function renderSpecs(content) {
       "muted",
     ),
   );
-  const form = el("form", undefined, "knowledge-upload admin-panel");
+  const editor = el("details", undefined, "admin-panel knowledge-editor");
+  editor.dataset.key = `${knowledgeScope}-spec-editor`;
+  editor.append(el("summary", "新增规范版本", "project-creator-summary"));
+  const form = el("form", undefined, "knowledge-upload");
   const file = el("input");
   file.type = "file";
   file.accept = ".md,.txt";
@@ -1307,7 +1444,8 @@ function renderSpecs(content) {
       submit.disabled = false;
     }
   });
-  content.append(form);
+  editor.append(form);
+  content.append(editor);
   if (!specDocuments.length) {
     content.append(el("div", "当前范围尚未创建开发规范。", "empty"));
     return;
@@ -1623,10 +1761,42 @@ function renderSettings(content) {
         "admin-notice",
       ),
     );
-  const panel = el("section", undefined, "admin-panel");
+
+  const workspace = el("div", undefined, "settings-workspace");
+  const navigation = el("aside", undefined, "settings-navigation");
+  navigation.append(
+    el("strong", "平台设置", "settings-navigation-title"),
+    el("p", "这些配置作用于当前 Team Host，不随 Project 切换。", "muted"),
+  );
+  for (const [key, title, description] of [
+    ["general", "基础配置", "目录、Team、Codex 与端口"],
+    ["database", "MySQL", "任务与运行事实数据库"],
+    ["models", "模型路由", "Provider、模型与凭证"],
+  ]) {
+    const control = button(
+      title,
+      () => {
+        settingsSection = key;
+        administrationNotice = null;
+        render();
+      },
+      settingsSection === key ? "selected" : "",
+    );
+    control.append(el("small", description));
+    navigation.append(control);
+  }
+
+  const panel = el("section", undefined, "admin-panel settings-panel");
   const top = el("div", undefined, "row");
   top.append(
-    el("h2", "平台运行配置"),
+    el(
+      "h2",
+      settingsSection === "general"
+        ? "基础配置"
+        : settingsSection === "database"
+          ? "MySQL 数据库"
+          : "模型路由",
+    ),
     settingsSnapshot.config_source === "default"
       ? el("span", "正在使用内置默认配置", "badge")
       : settingsSnapshot.restart_required
@@ -1638,6 +1808,69 @@ function renderSettings(content) {
     el("p", "配置文件 · " + settingsSnapshot.config_path, "paths"),
   );
   const form = el("form", undefined, "settings-form");
+  if (settingsSection === "general") renderGeneralSettings(form);
+  else if (settingsSection === "database") renderDatabaseSettings(form);
+  else renderModelSettings(form);
+
+  const feedback = el("p", "", "form-feedback");
+  const save = el("button", "保存设置", "primary");
+  save.type = "submit";
+  const saveBar = el("div", undefined, "settings-save-bar");
+  saveBar.append(
+    el("span", "保存运行配置后需要重启服务；知识选择不需要重启。", "muted"),
+    feedback,
+    save,
+  );
+  form.append(saveBar);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    save.disabled = true;
+    feedback.textContent = "正在校验并保存…";
+    try {
+      const saved = await adminFetch("/api/v1/admin/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          config: settingsDraft,
+          runtime_variables: Object.entries(runtimeVariablesDraft)
+            .sort(([left], [right]) => {
+              const order = [
+                settingsDraft.database.dsn_env,
+                ...settingsDraft.model_routes
+                  .map((route) => route.api_key_env)
+                  .filter(Boolean),
+              ];
+              return order.indexOf(left) - order.indexOf(right);
+            })
+            .map(([environment_name, value]) => ({
+              environment_name,
+              value,
+            })),
+        }),
+      });
+      settingsSnapshot = saved;
+      settingsDraft = structuredClone(saved.config);
+      runtimeVariablesDraft = {};
+      administrationNotice = {
+        page: "settings",
+        text: saved.restart_required
+          ? "保存成功。请重启 Web Console 使新配置生效。"
+          : "保存成功，当前配置未改变。",
+      };
+      render();
+    } catch (error) {
+      feedback.className = "form-feedback error";
+      feedback.textContent =
+        error instanceof Error ? error.message : "设置保存失败。";
+      save.disabled = false;
+    }
+  });
+  panel.append(form);
+  workspace.append(navigation, panel);
+  content.append(workspace);
+}
+
+function renderGeneralSettings(form) {
   const general = el("div", undefined, "settings-grid");
   const platformRoot = bindInput(
     el("input"),
@@ -1686,9 +1919,10 @@ function renderSettings(content) {
     field("启用真实模型执行", live),
   );
   form.append(general);
-  const database = el("section", undefined, "settings-subsection");
-  database.append(
-    el("h3", "MySQL 数据库"),
+}
+
+function renderDatabaseSettings(form) {
+  form.append(
     el(
       "p",
       "填写完整连接字符串。留空表示保留已经保存的值；页面不会回显密码。",
@@ -1735,16 +1969,17 @@ function renderSettings(content) {
     }
   });
   testConnection.type = "button";
-  database.append(
+  form.append(
     field("MySQL DSN", dsn, `启动变量 ${dsnName} 由服务脚本自动维护。`),
     connectionFeedback,
     testConnection,
   );
-  form.append(database);
-  const routes = el("section", undefined, "settings-subsection");
+}
+
+function renderModelSettings(form) {
   const routesTop = el("div", undefined, "row");
   routesTop.append(
-    el("h3", "模型路由（按顺序尝试）"),
+    el("p", "按页面顺序尝试可用模型。", "muted"),
     button("添加路由", () => {
       settingsDraft.model_routes.push({
         provider: "provider",
@@ -1758,7 +1993,7 @@ function renderSettings(content) {
       render();
     }),
   );
-  routes.append(routesTop);
+  form.append(routesTop);
   settingsDraft.model_routes.forEach((route, index) => {
     const row = el("div", undefined, "route-card");
     const fields = el("div", undefined, "settings-grid");
@@ -1856,47 +2091,8 @@ function renderSettings(content) {
           render();
         }),
       );
-    routes.append(row);
+    form.append(row);
   });
-  form.append(routes);
-  const feedback = el("p", "", "form-feedback");
-  const save = el("button", "保存设置", "primary");
-  save.type = "submit";
-  form.append(feedback, save);
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    save.disabled = true;
-    feedback.textContent = "正在校验并保存…";
-    try {
-      const saved = await adminFetch("/api/v1/admin/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          config: settingsDraft,
-          runtime_variables: Object.entries(runtimeVariablesDraft).map(
-            ([environment_name, value]) => ({ environment_name, value }),
-          ),
-        }),
-      });
-      settingsSnapshot = saved;
-      settingsDraft = structuredClone(saved.config);
-      runtimeVariablesDraft = {};
-      administrationNotice = {
-        page: "settings",
-        text: saved.restart_required
-          ? "保存成功。请重启 Web Console 使新配置生效。"
-          : "保存成功，当前配置未改变。",
-      };
-      render();
-    } catch (error) {
-      feedback.className = "form-feedback error";
-      feedback.textContent =
-        error instanceof Error ? error.message : "设置保存失败。";
-      save.disabled = false;
-    }
-  });
-  panel.append(form);
-  content.append(panel);
 }
 function statusRow(title, value, ready) {
   const row = el("div", undefined, "status-row");
@@ -1934,6 +2130,27 @@ function renderStatus(content) {
     return;
   }
   const value = runtimeStatusSnapshot;
+  const ready =
+    value.delivery_runtime === "READY" &&
+    value.database.connection === "CONNECTED" &&
+    value.team_prepared;
+  const summary = el(
+    "section",
+    undefined,
+    ready
+      ? "status-summary status-summary-ready"
+      : "status-summary status-summary-blocked",
+  );
+  summary.append(
+    el("strong", ready ? "平台可以接收交付任务" : "平台仍有待处理配置"),
+    el(
+      "p",
+      ready
+        ? "数据库、Team workspace 与交付运行时均已就绪。"
+        : "请根据下方橙色状态处理配置或重启问题。",
+      "muted",
+    ),
+  );
   const overview = el("section", undefined, "admin-panel");
   overview.append(
     el("h2", "配置与启动"),
@@ -1999,7 +2216,9 @@ function renderStatus(content) {
         !route.enabled ? null : route.ready,
       ),
     );
-  content.append(overview, runtime, routes);
+  const grid = el("div", undefined, "status-grid");
+  grid.append(overview, runtime);
+  content.append(summary, grid, routes);
 }
 function showDetail(kind, id) {
   selected = { kind, id };
@@ -2008,11 +2227,60 @@ function showDetail(kind, id) {
     .getElementById("detail")
     .scrollIntoView({ behavior: "smooth", block: "start" });
 }
+function deliveryFlow(request) {
+  const steps = ["产品", "设计", "计划", "实现", "测试", "评审", "交付"];
+  const requestStages = {
+    READY_FOR_DISCUSSION: 0,
+    PRODUCT_DISCOVERY: 0,
+    WAITING_PRODUCT_REPLY: 0,
+    WAITING_PRODUCT_APPROVAL: 0,
+    DESIGNING: 1,
+    PLANNING: 2,
+    DISPATCHING: 2,
+    DELIVERING: 3,
+    INTEGRATING: 5,
+    DONE: 6,
+  };
+  let current = requestStages[request.stage] ?? 0;
+  const taskStatuses = request.scopes
+    .map((scope) => taskById(scope.delivery_id)?.status)
+    .filter(Boolean);
+  if (taskStatuses.includes("REVIEW")) current = 5;
+  else if (taskStatuses.includes("QA")) current = 4;
+  else if (
+    taskStatuses.some((status) =>
+      ["IMPLEMENTING", "CONTINUE_REQUIRED", "QUEUED"].includes(status),
+    )
+  )
+    current = 3;
+  const flow = el("ol", undefined, "delivery-flow");
+  steps.forEach((title, index) => {
+    const step = el("li", undefined, index < current ? "done" : "");
+    if (index === current) step.className = "current";
+    step.append(el("span", String(index + 1)), el("strong", title));
+    flow.append(step);
+  });
+  return flow;
+}
 function renderDetail() {
   const panel = document.getElementById("detail");
   panel.replaceChildren();
-  panel.hidden = !selected;
-  if (!selected) return;
+  panel.className = "";
+  panel.hidden = !selected && page !== "requests";
+  if (!selected) {
+    if (page === "requests") {
+      panel.className = "detail-placeholder";
+      panel.append(
+        el("h2", "交付详情"),
+        el(
+          "p",
+          "从左侧选择一个需求或仓库任务，查看交付阶段、下一步操作、候选分支和验证证据。",
+          "muted",
+        ),
+      );
+    }
+    return;
+  }
   const item =
     selected.kind === "task" ? taskById(selected.id) : requestById(selected.id);
   if (!item) {
@@ -2040,6 +2308,7 @@ function renderDetail() {
   if (item.blocker) panel.append(el("div", item.blocker, "blocker"));
   panel.append(el("p", "下一步 · " + item.next_action, "muted"));
   if (selected.kind === "request") {
+    panel.append(el("h2", "交付流程"), deliveryFlow(item));
     for (const scope of item.scopes) {
       panel.append(el("p", paths(scope), "paths"));
       const task = taskById(scope.delivery_id);
@@ -2110,6 +2379,7 @@ function render() {
     [...document.querySelectorAll("details[open]")].map((n) => n.dataset.key),
   );
   document.getElementById("team").textContent = snapshot.team_name;
+  document.getElementById("main").dataset.page = page;
   const projects = document.getElementById("projects");
   projects.replaceChildren();
   for (const project of snapshot.projects || []) {
@@ -2121,8 +2391,10 @@ function render() {
     projects.append(tab);
   }
   projects.hidden = !["team", "requests"].includes(page);
+  document.getElementById("context-controls").hidden = projects.hidden;
   document.getElementById("heading").textContent = pageCopy[page][0];
   document.getElementById("explanation").textContent = pageCopy[page][1];
+  updatePageContext();
   document.getElementById("new-request").hidden =
     page !== "requests" || !canControlCurrentTeam() || !currentProjectId();
   const content = document.getElementById("content");

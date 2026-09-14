@@ -294,6 +294,22 @@ GET  /api/v1/admin/status
 - Full Console operation cards are rendered only on `需求与交付`. The browser may keep loading the
   durable operation facts because Requirement detail/recovery uses them, but successful operation
   history must not be repeated on Team, Knowledge, Settings or Status pages.
+- The global navigation is grouped by ownership: Team, Project work, Knowledge assets and System.
+  Every page renders an explicit `Team / Project / Platform` context band. The Team page Project
+  control is labelled as a workload filter; it must never imply that AgentProfile belongs to a
+  Project. Settings and Status are Platform Host pages and never render a Project selector.
+- The Team page keeps the fixed organization role order and renders one selected Agent queue from
+  existing assignment/history facts. Queue columns are `待完成 / 进行中 / 已阻塞 / 已完成`;
+  `进行中` requires the exact current-stage assignment, `待完成` is a non-current active assignment,
+  and terminal history must not be presented as live work. The board states that its workload is
+  limited to the selected Project snapshot.
+- Requirements use a wide-screen master/detail layout: Project actions and filtered Requirement/Task
+  lists are the master side, while exact delivery stage, next action, repository scope, candidate and
+  evidence stay in the detail side. Narrow screens stack the same content without changing commands.
+- Knowledge uses ownership navigation beside one content workspace. Document and Spec editors remain
+  explicit but collapsed until opened, so existing assets are the primary view. Settings similarly
+  uses local Basic/MySQL/Model navigation over one shared draft and one atomic save action. Status is
+  read-only and leads with a readiness conclusion before individual runtime facts.
 - Project creation is rendered in `需求与交付`, next to Project selection and Requirement work. The
   Settings page contains only process/runtime configuration and never presents Project creation as a
   configuration field.
@@ -369,7 +385,8 @@ GET  /api/v1/admin/status
 - `tests/specs/`: Spec/Learning stores and publication contracts; Web administration/transport tests
   cover both scopes, activation and Learning collection/decision endpoints.
 - `tests/team_view/ui.test.cjs`: Project creation, scoped Knowledge navigation/live selection,
-  Settings, write-only DSN/key fields, separate Status tab and safe text rendering.
+  selected-Agent queue grouping, master/detail Requirements, sectioned Settings, write-only DSN/key
+  fields, separate Status tab and safe text rendering.
 - `tests/contracts/test_json_schema_contracts.py`: production config/port, both knowledge manifests and selection
   Python-to-Schema parity.
 

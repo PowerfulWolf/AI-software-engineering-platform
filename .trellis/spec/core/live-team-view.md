@@ -49,6 +49,10 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
 - Member display state is assignment-derived: current-stage assignment = `执行中`; non-current active
   assignment = `等待当前阶段`; no non-terminal assignment in the selected Project = `空闲中`.
   `空闲中` is a team workload statement, never a process-online statement.
+- The Team page may project the selected member into a four-column queue without adding new state:
+  current-stage assignments are `进行中`, other non-terminal assignments are `待完成`, blocker or
+  waiting/failed work is `已阻塞`, and terminal audit history is `已完成`. The queue is explicitly
+  scoped to the selected Project snapshot; it is not an organization-global capacity claim.
 - The task page renders every selected-Project Task in exactly one UI group: `DONE` is `已完成`;
   blocker/`WAITING_*`/`BLOCKED`/`FAILED` is `阻塞中`; other non-terminal work is `执行中`;
   any remaining audit-terminal status is `已完成`.

@@ -67,7 +67,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
         max_parallel_assignments: 8,
         current_stage_delivery_ids: ["d1"],
         assigned_delivery_ids: ["d1", "d2"],
-        history_delivery_ids: [],
+        history_delivery_ids: ["d3", "d4"],
       },
       {
         id: "agent_qa",
@@ -568,24 +568,35 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   );
   await new Promise(setImmediate);
   assert.equal(interval.ms, 5000);
-  assert.match(text(get("content")), /2 项未结束分配/);
+  assert.equal(get("scope-label").textContent, "Team 级");
+  assert.equal(get("scope-title").textContent, "Fixture team");
+  assert.equal(get("project-context-label").textContent, "工作负载筛选");
+  assert.match(text(get("content")), /2 项当前 Project 未结束任务/);
   assert.match(text(get("content")), /\/backend\/module-a/);
   assert.match(text(get("content")), /\/frontend/);
   assert.ok(text(get("content")).includes(malicious));
-  const agentCards = get("content").children.filter(
-    (node) => node.className === "agent",
+  const roster = descend(get("content")).find(
+    (node) => node.className === "agent-roster",
   );
-  assert.match(text(agentCards[0]), /空闲中/);
-  assert.match(text(agentCards[1]), /实现中/);
-  assert.doesNotMatch(text(agentCards[2]), /实现中/);
-  assert.match(text(agentCards[2]), /等待测试阶段/);
-  assert.doesNotMatch(text(agentCards[3]), /实现中/);
-  assert.match(text(agentCards[3]), /等待评审阶段/);
+  const agentCards = roster.children;
+  assert.match(text(agentCards[0]), /规划/);
+  assert.match(text(agentCards[1]), /实现/);
+  assert.match(text(agentCards[2]), /测试/);
+  assert.match(text(agentCards[3]), /评审/);
+  assert.match(text(get("content")), /实现 · 任务队列/);
+  assert.match(text(get("content")), /待完成 1/);
+  assert.match(text(get("content")), /进行中 1/);
+  assert.match(text(get("content")), /已阻塞 1/);
+  assert.match(text(get("content")), /已完成 1/);
+  await agentCards[2].events.click();
+  assert.match(text(get("content")), /测试 · 任务队列/);
+  assert.match(text(get("content")), /待完成 1/);
   const projectTabs = get("projects").children;
   assert.equal(projectTabs.length, 2);
   await projectTabs[1].events.click();
   assert.ok(urls.includes("/api/v1/team?project_id=project_other"));
   await get("nav-knowledge").events.click();
+  assert.equal(get("scope-label").textContent, "Team 知识");
   assert.equal(
     get("operations").hidden,
     true,
@@ -615,6 +626,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     (node) => node.tag === "button" && node.textContent === "项目知识库",
   );
   await projectKnowledge.events.click();
+  assert.equal(get("scope-label").textContent, "Project 知识");
   const projectSelector = descend(get("content")).find(
     (node) => node.className === "knowledge-project-selector",
   );
@@ -622,6 +634,10 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   assert.match(text(projectSelector), /Other project/);
   assert.match(text(get("content")), /学习改进/);
   assert.match(text(get("content")), /project-guide.md/);
+  const knowledgeEditor = descend(get("content")).find((node) =>
+    node.className.includes("knowledge-editor"),
+  );
+  assert.notEqual(knowledgeEditor.open, true, "long editors start collapsed");
   const enableProjectKnowledge = descend(get("content")).find(
     (node) => node.tag === "button" && node.textContent === "用于新需求",
   );
@@ -661,21 +677,34 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   assert.equal(learningDecisions[0].action, "APPROVE");
   assert.equal(learningDecisions[0].target, "SPEC");
   await get("nav-settings").events.click();
+  assert.equal(get("scope-label").textContent, "平台级");
+  assert.equal(get("context-controls").hidden, true);
   assert.doesNotMatch(text(get("content")), /创建新 Project/);
   assert.match(text(get("content")), /平台数据目录/);
+  assert.doesNotMatch(text(get("content")), /MySQL DSN/);
+  const modelSettings = descend(get("content")).find(
+    (node) => node.tag === "button" && node.textContent === "模型路由",
+  );
+  await modelSettings.events.click();
   assert.ok(
     descend(get("content")).some((node) => node.value === "gpt-5.6-terra"),
   );
-  assert.match(text(get("content")), /MySQL DSN/);
   assert.doesNotMatch(text(get("content")), /密钥状态/);
-  const runtimeInputs = descend(get("content")).filter(
+  const modelRuntimeInputs = descend(get("content")).filter(
     (node) => node.tag === "input" && node.type === "password",
   );
-  const dsnInput = runtimeInputs[0];
+  modelRuntimeInputs[0].value = "deepseek-key";
+  modelRuntimeInputs[0].events.input();
+  const mysqlSettings = descend(get("content")).find(
+    (node) => node.tag === "button" && node.textContent === "MySQL",
+  );
+  await mysqlSettings.events.click();
+  assert.match(text(get("content")), /MySQL DSN/);
+  const dsnInput = descend(get("content")).find(
+    (node) => node.tag === "input" && node.type === "password",
+  );
   dsnInput.value = "mysql+pymysql://user:password@127.0.0.1:3307/database";
   dsnInput.events.input();
-  runtimeInputs[1].value = "deepseek-key";
-  runtimeInputs[1].events.input();
   const testConnection = descend(get("content")).find(
     (node) => node.tag === "button" && node.textContent === "测试连接",
   );
@@ -698,6 +727,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     },
   ]);
   await get("nav-status").events.click();
+  assert.equal(get("scope-label").textContent, "平台级");
   assert.match(text(get("content")), /平台状态|配置与启动/);
   assert.match(text(get("content")), /MySQL 连接正常/);
   assert.match(text(get("content")), /已导入 1 份 · 已启用 1 份/);
@@ -724,15 +754,21 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   fixture.agents[0].current_stage_delivery_ids = [];
   fixture.agents[1].current_stage_delivery_ids = ["d1"];
   await interval.fn();
-  const qaStageCards = get("content").children.filter(
-    (node) => node.className === "agent",
+  const qaStageRoster = descend(get("content")).find(
+    (node) => node.className === "agent-roster",
   );
-  assert.match(text(qaStageCards[1]), /本轮已完成/);
-  assert.doesNotMatch(text(qaStageCards[1]), /测试中/);
-  assert.match(text(qaStageCards[2]), /测试中/);
-  assert.match(text(qaStageCards[3]), /等待评审阶段/);
+  assert.match(text(qaStageRoster.children[1]), /等待当前阶段/);
+  assert.match(text(qaStageRoster.children[2]), /执行中/);
+  assert.match(text(get("content")), /测试 · 任务队列/);
+  assert.match(text(get("content")), /进行中 1/);
   get("nav-requests").events.click();
-  assert.equal(get("operations").hidden, false);
+  assert.equal(get("scope-label").textContent, "Project 级");
+  assert.equal(get("scope-title").textContent, "Other project");
+  assert.equal(
+    get("operations").hidden,
+    true,
+    "successful or empty operation history does not dominate the page",
+  );
   assert.match(text(get("content")), /创建新 Project/);
   const projectCreator = descend(get("content")).find(
     (node) => node.className === "admin-panel project-creator",
@@ -748,6 +784,8 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   assert.match(text(get("content")), /执行中 2/);
   assert.match(text(get("content")), /阻塞中 1/);
   assert.match(text(get("content")), /已完成 1/);
+  assert.equal(get("detail").hidden, false);
+  assert.match(text(get("detail")), /交付流程/);
   get("new-request").events.click();
   const projectForm = descend(get("composer")).find(
     (node) => node.className === "project-form",
