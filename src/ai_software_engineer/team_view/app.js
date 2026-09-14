@@ -11,6 +11,9 @@ let administrationAvailable = null;
 let administrationProjects = [];
 let knowledgeDocuments = [];
 let knowledgeScope = "team";
+let knowledgeMode = "background";
+let specDocuments = [];
+let learningProposals = [];
 let settingsSnapshot = null;
 let settingsDraft = null;
 let runtimeVariablesDraft = {};
@@ -60,6 +63,10 @@ const labels = {
   PRODUCT_REPLY: "提交需求说明",
   PRODUCT_APPROVAL: "批准产品文档",
   CONTINUE_DELIVERY: "继续交付",
+  QA_FAILURE: "QA 失败",
+  REVIEW_REJECTION: "Review 拒绝",
+  APPROVE: "已批准",
+  REJECT: "已拒绝",
 };
 const label = (value) => labels[value] || value;
 const deliveryRoleOrder = { coder: 0, qa: 1, reviewer: 2 };
@@ -83,7 +90,7 @@ const pageCopy = {
   ],
   knowledge: [
     "知识库",
-    "团队通用知识适用于所有 Project；当前 Project 知识只用于该 Project 的新需求。",
+    "背景知识帮助团队理解业务；开发规范是必须遵守的工程契约；学习建议必须经人工批准。",
   ],
   settings: [
     "设置",
@@ -352,11 +359,7 @@ function renderOperationStatus() {
     );
     return;
   }
-  if (
-    snapshot &&
-    consoleTeamId &&
-    snapshot.team_id !== consoleTeamId
-  ) {
+  if (snapshot && consoleTeamId && snapshot.team_id !== consoleTeamId) {
     panel.append(
       el(
         "div",
@@ -717,7 +720,9 @@ function renderRequests(content) {
   top.append(
     el(
       "h2",
-      snapshot.selected_project_id ? "当前 Project 的需求" : "请先创建或选择 Project",
+      snapshot.selected_project_id
+        ? "当前 Project 的需求"
+        : "请先创建或选择 Project",
     ),
     canControlCurrentTeam() && snapshot.selected_project_id
       ? button(
@@ -776,6 +781,28 @@ async function adminFetch(url, options = {}) {
   return payload;
 }
 async function loadKnowledge() {
+  if (knowledgeMode === "specs") {
+    const base =
+      knowledgeScope === "team"
+        ? "/api/v1/admin/team/specs"
+        : currentProjectId()
+          ? "/api/v1/admin/projects/" +
+            encodeURIComponent(currentProjectId()) +
+            "/specs"
+          : null;
+    specDocuments = base ? await adminFetch(base) : [];
+    return;
+  }
+  if (knowledgeMode === "learning") {
+    learningProposals = currentProjectId()
+      ? await adminFetch(
+          "/api/v1/admin/projects/" +
+            encodeURIComponent(currentProjectId()) +
+            "/learnings",
+        )
+      : [];
+    return;
+  }
   if (knowledgeScope === "project") {
     const projectId = currentProjectId();
     knowledgeDocuments = projectId
@@ -805,11 +832,15 @@ async function loadAdministration() {
       await loadKnowledge();
     } catch {
       knowledgeDocuments = [];
+      specDocuments = [];
+      learningProposals = [];
     }
   } catch {
     administrationAvailable = false;
     administrationProjects = [];
     knowledgeDocuments = [];
+    specDocuments = [];
+    learningProposals = [];
     settingsSnapshot = null;
     settingsDraft = null;
     runtimeVariablesDraft = {};
@@ -844,10 +875,46 @@ function renderKnowledge(content) {
   if (administrationNotice?.page === "knowledge")
     content.append(el("div", administrationNotice.text, "admin-notice"));
 
+  const modeSwitch = el("div", undefined, "scope-switch knowledge-mode-switch");
+  for (const [mode, title] of [
+    ["background", "背景知识"],
+    ["specs", "开发规范 Spec"],
+    ["learning", "学习建议"],
+  ]) {
+    const control = button(
+      title,
+      async () => {
+        knowledgeMode = mode;
+        if (mode === "learning") knowledgeScope = "project";
+        administrationNotice = null;
+        await loadKnowledge();
+        render();
+      },
+      knowledgeMode === mode ? "selected" : "",
+    );
+    control.setAttribute("aria-pressed", String(knowledgeMode === mode));
+    modeSwitch.append(control);
+  }
+  content.append(modeSwitch);
+  if (knowledgeMode === "specs") {
+    renderSpecs(content);
+    return;
+  }
+  if (knowledgeMode === "learning") {
+    renderLearning(content);
+    return;
+  }
+  renderBackgroundKnowledge(content);
+}
+
+function renderScopeSwitch(content) {
   const scopeSwitch = el("div", undefined, "scope-switch");
   for (const [scope, title] of [
-    ["team", "团队通用知识"],
-    ["project", "当前 Project 知识"],
+    ["team", knowledgeMode === "specs" ? "团队通用规范" : "团队通用知识"],
+    [
+      "project",
+      knowledgeMode === "specs" ? "当前 Project 规范" : "当前 Project 知识",
+    ],
   ]) {
     const control = button(
       title,
@@ -863,6 +930,10 @@ function renderKnowledge(content) {
     scopeSwitch.append(control);
   }
   content.append(scopeSwitch);
+}
+
+function renderBackgroundKnowledge(content) {
+  renderScopeSwitch(content);
   if (knowledgeScope === "project" && !currentProjectId()) {
     content.append(el("div", "请先在页面顶部选择一个 Project。", "empty"));
     return;
@@ -1020,6 +1091,371 @@ function renderKnowledge(content) {
     content.append(card);
   }
 }
+
+function csvValues(value) {
+  return value
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function renderSpecs(content) {
+  renderScopeSwitch(content);
+  if (knowledgeScope === "project" && !currentProjectId()) {
+    content.append(el("div", "请先在页面顶部选择一个 Project。", "empty"));
+    return;
+  }
+  const project = snapshot.projects.find(
+    (item) => item.id === currentProjectId(),
+  );
+  const ownerName =
+    knowledgeScope === "team"
+      ? snapshot.team_name
+      : project?.name || currentProjectId();
+  const top = el("div", undefined, "row request-heading");
+  top.append(
+    el("h2", `${ownerName} · 强约束开发规范`),
+    el("span", `${specDocuments.length} 个版本`, "badge"),
+  );
+  content.append(
+    top,
+    el(
+      "p",
+      "只有明确启用的版本才进入新需求。Team、Project 与仓库原生规范冲突时会停止并交给人工处理。",
+      "muted",
+    ),
+  );
+  const form = el("form", undefined, "knowledge-upload admin-panel");
+  const file = el("input");
+  file.type = "file";
+  file.accept = ".md,.txt";
+  file.required = true;
+  const key = el("input");
+  key.placeholder = "例如：python.testing";
+  key.pattern = "[a-z][a-z0-9_.-]{1,63}";
+  key.required = true;
+  const title = el("input");
+  title.placeholder = "规范名称";
+  title.maxLength = 200;
+  title.required = true;
+  file.addEventListener("change", () => {
+    const selectedFile = file.files && file.files[0];
+    if (!selectedFile) return;
+    const stem = selectedFile.name.replace(/\.[^.]+$/, "").toLowerCase();
+    if (!key.value)
+      key.value = stem
+        .replace(/[^a-z0-9_.-]+/g, "-")
+        .replace(/^([^a-z])/, "spec-$1");
+    if (!title.value) title.value = stem.replace(/[-_.]+/g, " ");
+  });
+  const roles = el("input");
+  roles.value = "manager,product,designer,planner,coder,qa,reviewer";
+  const stages = el("input");
+  stages.value = "implementing,qa,review";
+  const repositories = el("textarea");
+  repositories.rows = 2;
+  repositories.placeholder =
+    "留空表示当前范围内全部仓库；也可每行一个 repository_id";
+  const paths = el("textarea");
+  paths.rows = 2;
+  paths.value = "*";
+  const verification = el("textarea");
+  verification.rows = 3;
+  verification.required = true;
+  verification.placeholder =
+    "如何证明已遵守这条规范，例如测试命令、静态检查或评审证据";
+  const feedback = el("p", "", "form-feedback");
+  const submit = el("button", "创建新版本", "primary");
+  submit.type = "submit";
+  form.append(
+    field(
+      "规范文件",
+      file,
+      "支持 Markdown/TXT，正文不会被模型自动解释成其他规则。",
+    ),
+    field("规范键", key, "同一个键代表同一条规范；再次创建会产生新版本。"),
+    field("标题", title),
+    field("适用角色", roles, "逗号分隔。"),
+    field("适用阶段", stages, "逗号分隔。"),
+    field("适用仓库", repositories),
+    field("适用路径", paths, "每行一个相对 glob。"),
+    field("验证方式", verification),
+    feedback,
+    submit,
+  );
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const selectedFile = file.files && file.files[0];
+    if (!selectedFile) return;
+    submit.disabled = true;
+    feedback.textContent = "正在创建不可变 Spec 版本…";
+    try {
+      const body = await selectedFile.text();
+      const endpoint =
+        knowledgeScope === "team"
+          ? "/api/v1/admin/team/specs"
+          : "/api/v1/admin/projects/" +
+            encodeURIComponent(currentProjectId()) +
+            "/specs";
+      await adminFetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          spec_key: key.value.trim(),
+          title: title.value.trim(),
+          body_markdown: body,
+          roles: csvValues(roles.value),
+          stages: csvValues(stages.value),
+          repository_ids: csvValues(repositories.value).sort(),
+          path_globs: csvValues(paths.value),
+          verification: verification.value.trim(),
+        }),
+      });
+      await loadKnowledge();
+      administrationNotice = {
+        page: "knowledge",
+        text: "Spec 新版本已创建，但尚未启用。请检查适用范围和验证方式后再启用。",
+      };
+      render();
+    } catch (error) {
+      feedback.className = "form-feedback error";
+      feedback.textContent =
+        error instanceof Error ? error.message : "Spec 创建失败。";
+      submit.disabled = false;
+    }
+  });
+  content.append(form);
+  if (!specDocuments.length) {
+    content.append(el("div", "当前范围尚未创建开发规范。", "empty"));
+    return;
+  }
+  for (const item of specDocuments) {
+    const spec = item.document;
+    const card = el("article", undefined, "knowledge-card spec-card");
+    const head = el("div", undefined, "row");
+    head.append(
+      el("strong", `${spec.title} · v${spec.version}`),
+      el(
+        "span",
+        item.active ? "已启用" : "未启用",
+        item.active ? "badge done" : "badge",
+      ),
+    );
+    card.append(
+      head,
+      el("p", `规范键 · ${spec.spec_key}`, "paths"),
+      el(
+        "p",
+        `角色 · ${spec.roles.map(label).join(" / ")} · 阶段 · ${spec.stages.map(label).join(" / ")}`,
+        "muted",
+      ),
+      el("p", `仓库 · ${spec.repository_ids.join(", ") || "全部"}`, "paths"),
+      el("p", `路径 · ${spec.path_globs.join(", ")}`, "paths"),
+      el("p", `验证 · ${spec.verification}`, "muted"),
+    );
+    const detail = el("details");
+    detail.append(el("summary", "查看规范正文"), el("pre", spec.body_markdown));
+    card.append(detail);
+    const toggle = button(item.active ? "停用" : "启用此版本", async () => {
+      toggle.disabled = true;
+      const ids = specDocuments
+        .filter(
+          (candidate) =>
+            candidate.active && candidate.document.spec_key !== spec.spec_key,
+        )
+        .map((candidate) => candidate.document.spec_id);
+      if (!item.active) ids.push(spec.spec_id);
+      const endpoint =
+        knowledgeScope === "team"
+          ? "/api/v1/admin/team/specs/activation"
+          : "/api/v1/admin/projects/" +
+            encodeURIComponent(currentProjectId()) +
+            "/specs/activation";
+      try {
+        specDocuments = await adminFetch(endpoint, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ spec_ids: ids }),
+        });
+        administrationNotice = {
+          page: "knowledge",
+          text: "Spec 激活状态已更新；只影响之后重新准备的新需求，无需重启服务。",
+        };
+      } catch (error) {
+        administrationNotice = {
+          page: "knowledge",
+          text: error instanceof Error ? error.message : "Spec 激活失败。",
+        };
+      }
+      render();
+    });
+    card.append(toggle);
+    content.append(card);
+  }
+}
+
+function renderLearning(content) {
+  if (!currentProjectId()) {
+    content.append(el("div", "请先在页面顶部选择一个 Project。", "empty"));
+    return;
+  }
+  const top = el("div", undefined, "row request-heading");
+  top.append(
+    el("h2", "当前 Project · 学习建议"),
+    button(
+      "扫描 QA / Review 失败",
+      async () => {
+        try {
+          learningProposals = await adminFetch(
+            "/api/v1/admin/projects/" +
+              encodeURIComponent(currentProjectId()) +
+              "/learnings/collect",
+            { method: "POST" },
+          );
+          administrationNotice = {
+            page: "knowledge",
+            text: "扫描完成。学习建议仍需人工逐条批准，不会自动改变知识或规范。",
+          };
+        } catch (error) {
+          administrationNotice = {
+            page: "knowledge",
+            text: error instanceof Error ? error.message : "学习建议扫描失败。",
+          };
+        }
+        render();
+      },
+      "primary",
+    ),
+  );
+  content.append(
+    top,
+    el(
+      "p",
+      "建议来自已持久化的 QA FAIL / Review REJECT Artifact。批准后才会形成新知识、Spec 版本或 Skill 设计稿。",
+      "muted",
+    ),
+  );
+  if (!learningProposals.length) {
+    content.append(el("div", "尚无学习建议，可先扫描已有失败证据。", "empty"));
+    return;
+  }
+  for (const view of learningProposals) {
+    const proposal = view.proposal;
+    const card = el("article", undefined, "knowledge-card learning-card");
+    const head = el("div", undefined, "row");
+    head.append(
+      el("strong", proposal.title),
+      el(
+        "span",
+        view.decision
+          ? label(view.decision.action)
+          : view.authorization
+            ? "已授权，等待完成"
+            : "待人工判断",
+        view.decision?.action === "APPROVE" ? "badge done" : "badge",
+      ),
+    );
+    card.append(
+      head,
+      el("p", proposal.observation),
+      el("p", `建议 · ${proposal.proposed_improvement}`, "muted"),
+      el(
+        "p",
+        `重复出现 ${proposal.occurrence_count} 次 · 来源 ${label(proposal.trigger)}`,
+        "muted",
+      ),
+      el("p", `验证 · ${proposal.verification}`, "muted"),
+    );
+    for (const evidence of proposal.evidence)
+      card.append(
+        el(
+          "p",
+          `${evidence.repository_id} / ${evidence.task_id} / ${evidence.artifact_id}`,
+          "paths",
+        ),
+      );
+    if (!view.decision) {
+      const actions = el("div", undefined, "learning-actions");
+      const available = view.authorization
+        ? [
+            [
+              view.authorization.target,
+              view.authorization.action === "APPROVE"
+                ? "继续完成已授权发布"
+                : "继续完成拒绝记录",
+            ],
+          ]
+        : [
+            ["SPEC", "批准为 Project Spec"],
+            ["KNOWLEDGE", "保存为背景知识"],
+            ["SKILL", "批准为 Skill 设计稿"],
+          ];
+      for (const [target, title] of available)
+        actions.append(
+          button(title, () =>
+            decideLearning(
+              proposal,
+              view.authorization?.action || "APPROVE",
+              target,
+            ),
+          ),
+        );
+      if (!view.authorization)
+        actions.append(
+          button("拒绝建议", () => decideLearning(proposal, "REJECT", "SPEC")),
+        );
+      card.append(actions);
+    } else {
+      card.append(
+        el(
+          "p",
+          view.decision.published_uri || view.decision.rationale,
+          "paths",
+        ),
+      );
+    }
+    content.append(card);
+  }
+}
+
+async function decideLearning(proposal, action, target) {
+  try {
+    const endpoint =
+      "/api/v1/admin/projects/" +
+      encodeURIComponent(currentProjectId()) +
+      "/learnings/" +
+      encodeURIComponent(proposal.proposal_id) +
+      "/decision";
+    await adminFetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        proposal_sha256: proposal.proposal_sha256,
+        action,
+        target,
+        operator_id: "console-user",
+        rationale:
+          action === "APPROVE"
+            ? "Approved in the Web Console after reviewing source evidence."
+            : "Rejected in the Web Console after reviewing source evidence.",
+      }),
+    });
+    await loadKnowledge();
+    administrationNotice = {
+      page: "knowledge",
+      text:
+        action === "APPROVE"
+          ? "学习建议已批准并发布；只影响未来重新准备的需求。"
+          : "学习建议已拒绝并保留审计记录。",
+    };
+  } catch (error) {
+    administrationNotice = {
+      page: "knowledge",
+      text: error instanceof Error ? error.message : "学习建议决策失败。",
+    };
+  }
+  render();
+}
 function bindInput(control, value, update, type = "text") {
   control.type = type;
   control.value = value ?? "";
@@ -1106,8 +1542,8 @@ function renderSettings(content) {
     settingsSnapshot.config_source === "default"
       ? el("span", "正在使用内置默认配置", "badge")
       : settingsSnapshot.restart_required
-      ? el("span", "已保存 · 需要重启", "badge blocked")
-      : el("span", "当前配置已生效", "badge done"),
+        ? el("span", "已保存 · 需要重启", "badge blocked")
+        : el("span", "当前配置已生效", "badge done"),
   );
   panel.append(
     top,
@@ -1709,12 +2145,9 @@ async function refresh(projectId, includeRuntimeStatus = false) {
     const priorRuntimeStatus = JSON.stringify(runtimeStatusSnapshot);
     snapshot = next;
     await refreshOperations();
-    if (page === "knowledge" && target !== undefined) await loadAdministration();
-    if (
-      includeRuntimeStatus &&
-      page === "status" &&
-      administrationAvailable
-    )
+    if (page === "knowledge" && target !== undefined)
+      await loadAdministration();
+    if (includeRuntimeStatus && page === "status" && administrationAvailable)
       await loadRuntimeStatus();
     if (
       changed ||

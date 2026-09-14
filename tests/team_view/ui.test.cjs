@@ -214,7 +214,9 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     storedOperations = [],
     savedSettings = [],
     mysqlTests = [],
-    knowledgeSelections = [];
+    knowledgeSelections = [],
+    specActivations = [],
+    learningDecisions = [];
   const settingsFixture = {
     config: {
       schema_version: "v0.2",
@@ -304,8 +306,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
       selected: true,
       manifest: {
         schema_version: "v0.1",
-        document_id:
-          "knowledge_document_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        document_id: "knowledge_document_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         team_id: "team_fixture",
         source_name: "team-guide.md",
         media_type: "text/markdown",
@@ -334,6 +335,62 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
       },
     },
   ];
+  const projectSpecFixture = [
+    {
+      scope: "project",
+      project_id: "project_other",
+      active: false,
+      document: {
+        schema_version: "v0.1",
+        spec_id: "spec_document_" + "d".repeat(32),
+        scope: "project",
+        team_id: "team_fixture",
+        project_id: "project_other",
+        spec_key: "python.testing",
+        version: 1,
+        title: "Python testing",
+        body_markdown: "# Testing\n\nRun focused tests.",
+        roles: ["coder", "qa", "reviewer"],
+        stages: ["implementing", "qa", "review"],
+        repository_ids: [],
+        path_globs: ["*"],
+        verification: "Record passing pytest evidence.",
+        created_at: "2026-09-14T00:00:00Z",
+        spec_sha256: "e".repeat(64),
+      },
+    },
+  ];
+  const learningFixture = [
+    {
+      proposal: {
+        schema_version: "v0.1",
+        proposal_id: "learning_proposal_" + "f".repeat(32),
+        team_id: "team_fixture",
+        project_id: "project_other",
+        trigger: "QA_FAILURE",
+        recurrence_key: "a".repeat(64),
+        occurrence_count: 2,
+        title: "Prevent recurrence: MISSING_REGRESSION",
+        observation: "The edge case has no regression test.",
+        proposed_improvement: "Require a regression test.",
+        verification: "Record passing regression evidence.",
+        suggested_target: "SPEC",
+        evidence: [
+          {
+            repository_id: "repository_fixture",
+            task_id: "task_fixture",
+            artifact_id: "art_qa_fixture",
+            artifact_sha256: "b".repeat(64),
+            finding_id: "finding_regression",
+            evidence_uris: ["evidence://qa"],
+          },
+        ],
+        created_at: "2026-09-14T00:00:00Z",
+        proposal_sha256: "c".repeat(64),
+      },
+      decision: null,
+    },
+  ];
   const context = vm.createContext({
     document: {
       getElementById: get,
@@ -352,13 +409,14 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
       if (url === "/api/v1/admin/projects")
         return {
           ok: true,
-          json: async () => structuredClone(fixture.projects).map((item) => ({
-            project_id: item.id,
-            name: item.name,
-            repository_count: 1,
-            requirement_count: 1,
-            created_at: "2026-09-12T00:00:00Z",
-          })),
+          json: async () =>
+            structuredClone(fixture.projects).map((item) => ({
+              project_id: item.id,
+              name: item.name,
+              repository_count: 1,
+              requirement_count: 1,
+              created_at: "2026-09-12T00:00:00Z",
+            })),
         };
       if (url === "/api/v1/admin/settings" && options.method === "PUT") {
         savedSettings.push(JSON.parse(options.body));
@@ -382,12 +440,53 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
       if (url === "/api/v1/admin/status")
         return { ok: true, json: async () => structuredClone(statusFixture) };
       if (url === "/api/v1/admin/team/knowledge")
-        return { ok: true, json: async () => structuredClone(knowledgeFixture) };
+        return {
+          ok: true,
+          json: async () => structuredClone(knowledgeFixture),
+        };
       if (url === "/api/v1/admin/projects/project_other/knowledge")
         return {
           ok: true,
           json: async () => structuredClone(projectKnowledgeFixture),
         };
+      if (url === "/api/v1/admin/projects/project_other/specs")
+        return {
+          ok: true,
+          json: async () => structuredClone(projectSpecFixture),
+        };
+      if (
+        url === "/api/v1/admin/projects/project_other/specs/activation" &&
+        options.method === "PUT"
+      ) {
+        specActivations.push(JSON.parse(options.body));
+        projectSpecFixture[0].active = true;
+        return {
+          ok: true,
+          json: async () => structuredClone(projectSpecFixture),
+        };
+      }
+      if (url === "/api/v1/admin/projects/project_other/learnings")
+        return {
+          ok: true,
+          json: async () => structuredClone(learningFixture),
+        };
+      if (
+        String(url).endsWith("/decision") &&
+        String(url).includes("/learnings/") &&
+        options.method === "POST"
+      ) {
+        learningDecisions.push(JSON.parse(options.body));
+        learningFixture[0].decision = {
+          action: "APPROVE",
+          target: "SPEC",
+          published_uri: "project://project_other/specs/spec_document_new",
+          rationale: "Approved",
+        };
+        return {
+          ok: true,
+          json: async () => structuredClone(learningFixture[0]),
+        };
+      }
       if (
         url === "/api/v1/admin/projects/project_other/knowledge/selection" &&
         options.method === "PUT"
@@ -476,8 +575,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   assert.match(text(get("content")), /team-guide.md/);
   assert.match(text(get("content")), /已用于新需求/);
   const projectKnowledge = descend(get("content")).find(
-    (node) =>
-      node.tag === "button" && node.textContent === "当前 Project 知识",
+    (node) => node.tag === "button" && node.textContent === "当前 Project 知识",
   );
   await projectKnowledge.events.click();
   assert.match(text(get("content")), /project-guide.md/);
@@ -487,16 +585,42 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   await enableProjectKnowledge.events.click();
   assert.deepEqual(knowledgeSelections, [
     {
-      document_ids: [
-        "knowledge_document_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      ],
+      document_ids: ["knowledge_document_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
     },
   ]);
   assert.match(text(get("content")), /无需重启/);
+  const specsMode = descend(get("content")).find(
+    (node) => node.tag === "button" && node.textContent === "开发规范 Spec",
+  );
+  await specsMode.events.click();
+  assert.match(text(get("content")), /Python testing/);
+  assert.match(text(get("content")), /强约束开发规范/);
+  const enableSpec = descend(get("content")).find(
+    (node) => node.tag === "button" && node.textContent === "启用此版本",
+  );
+  await enableSpec.events.click();
+  assert.deepEqual(specActivations, [
+    { spec_ids: ["spec_document_" + "d".repeat(32)] },
+  ]);
+  const learningMode = descend(get("content")).find(
+    (node) => node.tag === "button" && node.textContent === "学习建议",
+  );
+  await learningMode.events.click();
+  assert.match(text(get("content")), /MISSING_REGRESSION/);
+  assert.match(text(get("content")), /重复出现 2 次/);
+  const approveLearning = descend(get("content")).find(
+    (node) =>
+      node.tag === "button" && node.textContent === "批准为 Project Spec",
+  );
+  await approveLearning.events.click();
+  assert.equal(learningDecisions[0].action, "APPROVE");
+  assert.equal(learningDecisions[0].target, "SPEC");
   await get("nav-settings").events.click();
   assert.match(text(get("content")), /创建 Project/);
   assert.match(text(get("content")), /平台数据目录/);
-  assert.ok(descend(get("content")).some((node) => node.value === "gpt-5.6-terra"));
+  assert.ok(
+    descend(get("content")).some((node) => node.value === "gpt-5.6-terra"),
+  );
   assert.match(text(get("content")), /MySQL DSN/);
   assert.doesNotMatch(text(get("content")), /密钥状态/);
   const runtimeInputs = descend(get("content")).filter(
@@ -533,7 +657,9 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   assert.match(text(get("content")), /MySQL 连接正常/);
   assert.match(text(get("content")), /已导入 1 份 · 已启用 1 份/);
   assert.doesNotMatch(text(get("content")), /user:password/);
-  const statusReads = urls.filter((url) => url === "/api/v1/admin/status").length;
+  const statusReads = urls.filter(
+    (url) => url === "/api/v1/admin/status",
+  ).length;
   await interval.fn();
   assert.equal(
     urls.filter((url) => url === "/api/v1/admin/status").length,

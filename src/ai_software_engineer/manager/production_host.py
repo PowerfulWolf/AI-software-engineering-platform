@@ -32,6 +32,7 @@ from ai_software_engineer.manager.production_delivery import (
 from ai_software_engineer.manager.production_rules import (
     production_rules,
 )
+from ai_software_engineer.manager.spec_rules import ProductionProjectRuleProvider
 from ai_software_engineer.manager.team_roster import production_team_roster
 from ai_software_engineer.multi_directory.models import JointDeliveryResult, JointStage
 from ai_software_engineer.multi_directory.production import ProductionJointBackend
@@ -43,6 +44,11 @@ from ai_software_engineer.runtime_workspace import (
     TeamWorkforceWorkspace,
 )
 from ai_software_engineer.scheduling import ModelRouter, PortfolioScheduler
+from ai_software_engineer.spec_documents import (
+    ProjectSpecDocumentStore,
+    SpecDocument,
+    TeamSpecDocumentStore,
+)
 from ai_software_engineer.store import MySqlTaskRepository
 from ai_software_engineer.team_workspace import TeamWorkspace
 from ai_software_engineer.work_queue import DispatcherLoop, MySqlPersistentWorkQueue
@@ -62,6 +68,7 @@ if TYPE_CHECKING:
 class _ProjectRuntime:
     project: ProjectWorkspace
     knowledge: tuple[ContextSource, ...]
+    specs: tuple[SpecDocument, ...]
     backend: ProductionProjectDeliveryBackend
     entry: UnifiedProjectEntryService
     requirements: JointDeliveryService
@@ -192,20 +199,25 @@ class TeamHost:
         identity = str(project_id)
         project = self._projects.open(project_id)
         knowledge = self._knowledge_sources(project)
+        specs = self._spec_documents(project)
         cached = self._project_runtimes.get(identity)
         if cached is not None:
             cached.project.validate_current()
-            if cached.knowledge == knowledge:
+            if cached.knowledge == knowledge and cached.specs == specs:
                 return cached
         registry = project.repository_registry()
-        rules = production_rules(self._team, knowledge)
+        team_specs = tuple(spec for spec in specs if spec.scope == "team")
+        project_specs = tuple(spec for spec in specs if spec.scope == "project")
+        rules = production_rules(self._team, knowledge, team_specs)
+        project_rule_provider = ProductionProjectRuleProvider(project_specs)
 
         def validate_context() -> None:
             project.validate_current()
             current = self._knowledge_sources(project)
-            if current != knowledge:
+            current_specs = self._spec_documents(project)
+            if current != knowledge or current_specs != specs:
                 raise ValueError(
-                    "Team or Project knowledge changed; re-prepare and resolve context drift"
+                    "Team/Project knowledge or Specs changed; re-prepare and resolve context drift"
                 )
 
         backend = ProductionProjectDeliveryBackend(
@@ -214,6 +226,7 @@ class TeamHost:
             organization=self._workforce_workspace,
             registry=registry,
             platform_rules=rules,
+            project_rule_provider=project_rule_provider,
             structured_clients=self._structured_clients,
             delivery_route_adapters=self._delivery_route_adapters,
             preparation_guard=validate_context,
@@ -230,6 +243,7 @@ class TeamHost:
                 organization=self._workforce_workspace,
                 registry=registry,
                 platform_rules=rules,
+                project_rule_provider=project_rule_provider,
                 structured_clients=clients,
                 delivery_route_adapters=self._delivery_route_adapters,
                 preparation_guard=validate_context,
@@ -255,7 +269,7 @@ class TeamHost:
                 environment=self._environment,
             ),
         )
-        runtime = _ProjectRuntime(project, knowledge, backend, entry, requirements)
+        runtime = _ProjectRuntime(project, knowledge, specs, backend, entry, requirements)
         self._project_runtimes[identity] = runtime
         return runtime
 
@@ -270,6 +284,12 @@ class TeamHost:
         return (
             *self._team.knowledge_sources(team_paths),
             *project.knowledge_sources(project_paths),
+        )
+
+    def _spec_documents(self, project: ProjectWorkspace) -> tuple[SpecDocument, ...]:
+        return (
+            *TeamSpecDocumentStore(self._team).active(),
+            *ProjectSpecDocumentStore(project).active(),
         )
 
     def _resolve_project_id(

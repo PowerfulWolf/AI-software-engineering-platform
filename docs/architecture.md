@@ -27,10 +27,13 @@ AgentProfile，也不能因模型额度耗尽而停止 Lease 安全维护。
 
 ### Knowledge Plane
 
-由 `.trellis/spec/`（Team 规则）、Team 通用知识、Project 文档、Requirement PRD/Design、历史 artifact 摘要和失败
-经验组成。Web Console 可把本地 Markdown/TXT/PDF/DOCX 分别导入 Team 或当前 Project sidecar：
-原文件、规范化 Markdown 和 owner-bound manifest 以内容寻址方式保存；各作用域通过自己的
-`knowledge/selection.json` 显式启用，之后的新需求无需重启即可读取。导入不调用模型改写正文。
+Knowledge Plane 明确分成三类事实：Team/Project `knowledge/` 保存业务背景、术语和架构说明；
+Team/Project `specs/` 保存必须遵守且可验证的开发规范；Project `specs/learning/` 保存从 QA FAIL
+与 Review REJECT 证据生成的学习建议和人工决策。Web Console 可把本地 Markdown/TXT/PDF/DOCX
+导入背景知识，以内容寻址方式保存原文件、规范化 Markdown 和 owner-bound manifest，并通过各自的
+`knowledge/selection.json` 显式启用。Spec 使用不可变版本和独立 `activation.json`，创建不会自动
+启用。同一 `spec_key` 每个 scope 同时至多启用一个版本。两类选择对之后的新需求即时生效，无需
+重启；已准备的 Requirement 仍绑定 exact 快照。导入不调用模型改写正文。
 `context/` 中的 Context Router/Builder 只读取声明过的来源并生成带哈希、脱敏、预算约束的
 manifest；不把整仓库、整个 Project 目录或整段历史盲目塞给模型。policy section 由机器权限生成并固定
 排在外部文本之前，上传文档和仓库内容永远是数据而非新的系统指令。
@@ -176,6 +179,8 @@ Project directory + requirement
 | Handoff | 文件系统 JSON + Markdown | deterministic ID，等价重建保留首次观察时间 |
 | Repository workspace binding | Project-owned 外置 sidecar `workspace.json` + 固定目录 | 与目标代码路径和 Project lineage 绑定；不复制源码 |
 | Team/Project knowledge | 各作用域 sidecar 的原文件 + `content.md` + owner-bound manifest + `selection.json` | 内容寻址、显式选择、来源和正文可验证；选择对后续新需求即时生效，已绑定上下文漂移失败关闭 |
+| Team/Project Specs | `specs/documents/<spec_id>/spec.json` + `activation.json` | 不可变版本、显式启用、角色/阶段/Repository/路径适用范围和验证方法；进入 production baseline |
+| Learning proposals | Project `specs/learning/<proposal_id>/{proposal,authorization,decision}.json` | QA/Review 失败证据、发布前人工授权、可恢复完成与复发统计；不能自动修改可执行 Skill |
 | Production settings | `ASE_CONFIG` 无密钥 JSON + sibling `runtime.env` | Web Console 原子更新；运行变量 write-only、allowlist、`0600`；服务脚本启动时加载；进程配置变化要求重启 |
 | Agent/Model workforce | singleton Team workspace + MySQL dispatch | AgentProfile/ModelPolicy 属于 Team；已提交 Assignment/Lease 与 dispatch fence 在 MySQL |
 | RepositoryProfile / Spec governance | Repository sidecar 文件记录 | profile 与 runtime binding 不可变；冲突/resolution 使用带 SHA 的 append-only 记录 |

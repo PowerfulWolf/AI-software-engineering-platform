@@ -26,6 +26,11 @@ from ai_software_engineer.manager.delivery_checkpoint import (
 )
 from ai_software_engineer.manager.production_backend import StructuredClientFactory
 from ai_software_engineer.manager.production_host import TeamHost
+from ai_software_engineer.spec_documents import (
+    CreateSpecDocument,
+    ProjectSpecDocumentStore,
+    TeamSpecDocumentStore,
+)
 from ai_software_engineer.team_workspace import TeamWorkspace
 from tests.manager.test_production_backend import _git, _ScriptedStructuredClient
 
@@ -188,5 +193,46 @@ def test_team_host_hot_reloads_scope_owned_knowledge(
         filename="team.md", content=b"# Team\n"
     )
     TeamKnowledgeSelectionStore(host.team_workspace).save((team_document.normalized_relative_path,))
+
+    assert host.project_entry("project_beta") is not beta_entry
+
+
+def test_team_host_hot_reloads_active_specs_at_their_owner_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "ai_software_engineer.manager.production_host.MySqlTaskRepository",
+        _ConnectivityStub,
+    )
+    monkeypatch.setattr(
+        "ai_software_engineer.manager.production_host.MySqlPersistentWorkQueue",
+        _ConnectivityStub,
+    )
+    platform = tmp_path / "platform"
+    host = TeamHost(
+        config=_config(platform, "team_alpha"),
+        environment={"ASE_MYSQL_DSN": "connectivity-only"},
+        structured_clients=_RecordingFactory(),
+    )
+    alpha = host.project_registry.open("project_alpha")
+    host.create_project(name="Beta", project_id="project_beta")
+    alpha_entry = host.project_entry("project_alpha")
+    beta_entry = host.project_entry("project_beta")
+    command = CreateSpecDocument(
+        spec_key="python.testing",
+        title="Python testing",
+        body_markdown="# Testing\n",
+        verification="Record passing pytest evidence.",
+    )
+    project_store = ProjectSpecDocumentStore(alpha)
+    project_spec = project_store.create(command)
+    project_store.activate((project_spec.spec_id,))
+
+    assert host.project_entry("project_alpha") is not alpha_entry
+    assert host.project_entry("project_beta") is beta_entry
+
+    team_store = TeamSpecDocumentStore(host.team_workspace)
+    team_spec = team_store.create(command)
+    team_store.activate((team_spec.spec_id,))
 
     assert host.project_entry("project_beta") is not beta_entry

@@ -26,6 +26,10 @@ validate_artifact(payload: object, kind: ArtifactKind) -> Artifact
 RepositoryWorkspaceRegistry.register(repository_root: str | Path, *,
                                    repository_id: RepositoryId | str | None = None) -> RepositoryWorkspace
 RepositoryWorkspace.directory(name: WorkspaceDirectory) -> Path
+TeamSpecDocumentStore(team).create(command: CreateSpecDocument) -> SpecDocument
+ProjectSpecDocumentStore(project).activate(spec_ids: tuple[str, ...]) -> SpecActivation
+ProjectLearningStore(project).collect() -> tuple[LearningProposalView, ...]
+ProjectLearningStore(project).decide(proposal_id, command) -> LearningProposalView
 ```
 
 `AgentRequest` 必须携带 `task_id`、`run_id`、`attempt`、`source_revision`、`context_manifest_id`、permissions 和 output schema；`AgentResult` 不能直接改变 Task 状态。
@@ -77,6 +81,12 @@ Artifact 通过 `schemas/artifact.schema.json` 的共同 envelope 传递；业�
 `review-report.schema.json` 约束；Coder 的二选一输出入口为 `coder-output.schema.json`。Schema 变化
 必须同步更新 `docs/contracts.md`、`AGENTS.md` 和 contract fixtures。
 
+Team/Project 开发规范由 `spec-document.schema.json` 与 `spec-activation.schema.json` 约束：文档版本
+不可变，创建与启用分离，activation 同一 `spec_key` 至多选择一个 exact 版本。持续学习事实由
+`learning-proposal.schema.json`、`learning-authorization.schema.json` 与
+`learning-decision.schema.json` 约束：proposal 必须引用失败 QA/Review artifact 的 exact digest；
+authorization 在发布前持久化 exact 人工授权；decision 绑定 proposal digest 且只能完成一次。
+
 `FileArtifactStore` 只接受 `schema_version=v0.1`、typed union 校验通过、`integrity.validated=true` 且 canonical digest 匹配的 Artifact。Digest 排除顶层 `integrity` 避免循环；`seal_artifact` 返回带 digest 和 `validated_at` 的新 immutable Artifact。
 
 Artifact ID 映射到受控 root 下的单一 JSON 文件。相同 ID/相同正文重放幂等，相同 ID/不同正文拒绝覆盖；parent/supersedes 必须先存在且属于同一 Task，`supersedes` 还必须同 kind。写入采用同目录临时文件、`fsync` 和原子 rename。
@@ -114,6 +124,8 @@ Artifact ID 映射到受控 root 下的单一 JSON 文件。相同 ID/相同正�
 | 相同 artifact ID 的正文变化 | `ArtifactAlreadyExists`，保留旧正文 | 否 |
 | Project root 缺失 / sidecar 与项目重叠 | registry 拒绝初始化，目标项目保持不变 | 否 |
 | Project ID 已绑定另一目录 | `RepositoryWorkspaceConflict`，保留首次 manifest | 否 |
+| Spec activation 引用 unknown/cross-owner/同 key 多版本 | `SpecDocumentError`，保留旧 activation | 否 |
+| Learning decision 引用 stale proposal 或已有不同 decision | `LearningError`，保留首次事实 | 否 |
 | manifest/layout 损坏或缺失 | `RepositoryWorkspaceCorruption`，不自动修复 | 否 |
 
 ## 5. Good / Base / Bad Cases
@@ -135,6 +147,8 @@ Artifact ID 映射到受控 root 下的单一 JSON 文件。相同 ID/相同正�
 - 原子写入、exact replay、digest 篡改、缺失/跨 Task lineage 和损坏文件测试。
 - Project workspace stable ID、外置边界、固定 layout、幂等、collision、symlink、损坏 manifest、
   staging cleanup 和 Python model ↔ JSON Schema 正反契约测试。
+- Spec/Learning Python model ↔ JSON Schema parity、不可变版本、activation、证据 lineage、exact
+  decision 和 publication 测试。
 
 ## 7. Wrong vs Correct
 

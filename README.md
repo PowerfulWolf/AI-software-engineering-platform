@@ -29,7 +29,8 @@ Repository 目录和 Requirement 交付事实保持隔离。
 
 - 一个已选择的 Project，以及该 Requirement 涉及的一个或多个本地代码目录（当前交付使用 Git）；
 - 一条自然语言需求；Product Agent 将其整理为可评审 Product Spec，并由用户确认；
-- Team 通用知识、AgentProfile、ModelPolicy，以及 Project 自身知识和 Repository 原生规范。
+- Team/Project 背景知识、必须遵守的 Team/Project Spec、Repository 原生规范，以及
+  AgentProfile 与 ModelPolicy。背景知识用于理解，Spec 用于约束和验收，两者不再混放。
 
 日常 Web Console 入口的交付结果：
 
@@ -52,8 +53,8 @@ request 命令已经自动生成完整评估与交付汇总报告。Reporter 仍
 
 ## 总体架构
 
-平台只有一支长期存在的 Team，但可接入多个 Project。`<platform_root>/team` 保存团队成员、通用
-规范、Skills 和模型策略；`<platform_root>/projects/<project_id>` 保存该 Project 的知识、规范、
+平台只有一支长期存在的 Team，但可接入多个 Project。`<platform_root>/team` 保存团队成员、背景知识、
+团队 Spec、Skills 和模型策略；`<platform_root>/projects/<project_id>` 保存该 Project 的背景知识、Spec、
 Repository sidecar 和 Requirement 事实。Team 与 Projects 是同一数据根下的并列边界，不互相包含。
 
 Agent 通过受控 Skills 调用确定性能力。Manager 领导全队；Product 定义需求，Designer 形成技术方案，
@@ -105,8 +106,9 @@ flowchart TB
     JOINT -- "FAIL" --> STOP
     DELIVERY -. "后续扩展" .-> REPORTER["Reporter（暂不开发）<br/>后续按需组织交付视图"]
 
-    COMMON_KNOWLEDGE["Team Knowledge<br/>通用规范 · Skills · 历史经验"] --> KNOWLEDGE["Knowledge Plane"]
-    SIDECAR_KNOWLEDGE["Project Knowledge<br/>项目背景 · 规范 · Repository/Requirement 事实"] --> KNOWLEDGE
+    COMMON_KNOWLEDGE["Background Knowledge<br/>Team 通识 · Project 业务背景"] --> KNOWLEDGE["Knowledge Plane"]
+    STRICT_SPECS["Engineering Specs<br/>Team/Project 强制规范 · Repository 原生规则"] --> KNOWLEDGE
+    LEARNING["Learning Loop<br/>QA/Review 失败证据 · 人工审批"] --> KNOWLEDGE
     KNOWLEDGE --> PM
     KNOWLEDGE --> PRODUCT
     KNOWLEDGE --> DESIGNER
@@ -235,6 +237,8 @@ AI-software-engineering-platform/
 │   ├── repository_profile.py         # 语言、构建系统、VCS 和原生规范发现
 │   ├── knowledge_documents.py        # MD/TXT/PDF/DOCX 导入、规范化与不可变知识记录
 │   ├── knowledge_selection.py        # Team/Project 知识选择、完整性与即时解析
+│   ├── spec_documents.py             # Team/Project 强制 Spec 的不可变版本和显式启用集合
+│   ├── learning.py                   # QA/Review 失败归纳、人工决策与知识/Spec/Skill 建议发布
 │   └── runtime_workspace.py          # Team/Project/Repository Runtime 组合与校验
 ├── scripts/
 │   └── ase-console-service.sh        # Web Console 后台启动、停止、重启、状态和日志
@@ -248,6 +252,11 @@ AI-software-engineering-platform/
 │   ├── knowledge-document.schema.json
 │   ├── project-knowledge-document.schema.json
 │   ├── knowledge-selection.schema.json
+│   ├── spec-document.schema.json
+│   ├── spec-activation.schema.json
+│   ├── learning-proposal.schema.json
+│   ├── learning-authorization.schema.json
+│   ├── learning-decision.schema.json
 │   └── recovery-execution.schema.json
 ├── tests/                            # 与 src 分层对应；含真实 Git/MySQL 和离线模型契约测试
 ├── docs/
@@ -286,19 +295,26 @@ AI-software-engineering-platform/
 ├── team/                              # 唯一、长期存在的 AI 团队
 │   ├── team.json                      # Team 身份和数据根绑定
 │   ├── agents/                        # 七个长期 AgentProfile 与能力/容量
-│   ├── knowledge/                     # 跨 Project 通用知识
+│   ├── knowledge/                     # 跨 Project 背景知识，只用于理解上下文
 │   │   ├── documents/<id>/            # 原文件、规范化正文和不可变 manifest
 │   │   └── selection.json             # 当前显式启用集合；修改无需重启
-│   ├── specs/ skills/                 # 团队办事规范和可调用 Skills
+│   ├── specs/                         # 团队级强制开发规范
+│   │   ├── documents/<spec_id>/       # 同一 spec_key 的不可变版本
+│   │   └── activation.json            # 每个 key 至多启用一个版本
+│   ├── skills/
+│   │   └── learning-proposals/        # 人工批准的 Skill 设计建议；不会自动变成可执行 Skill
 │   ├── model-policies/                # 模型路由和风险策略
 │   └── work-items/ leases/ metrics/   # 团队级工作、租约和指标事实
 ├── projects/                          # 与 team/ 并列；一个目录一个 Project
 │   └── <project_id>/
 │       ├── project.json               # Project 身份及所属 Team lineage
-│       ├── knowledge/                 # 仅属于该 Project 的知识
+│       ├── knowledge/                 # 仅属于该 Project 的业务背景知识
 │       │   ├── documents/<id>/        # Project-bound 文档记录
 │       │   └── selection.json         # 该 Project 的启用集合
-│       ├── specs/                     # 项目级规范
+│       ├── specs/                     # 项目级强制规范与持续学习事实
+│       │   ├── documents/<spec_id>/   # Project Spec 不可变版本
+│       │   ├── activation.json        # 当前启用版本集合
+│       │   └── learning/<proposal_id>/ # QA/Review 建议、发布前授权及完成决策
 │       ├── repositories/              # 该 Project 可使用的代码目录 catalog
 │       │   └── <repository_id>/
 │       │       ├── workspace.json      # 源码绝对路径与 Project/sidecar 绑定
@@ -317,6 +333,9 @@ AI-software-engineering-platform/
 
 - `team/` 只有一个，拥有 Agent、通用知识、Skills 和团队规则；Project/Requirement 不复制成员。
 - `projects/<project_id>` 是项目知识与交付隔离边界；一个 Team 可长期服务多个 Project。
+- `knowledge/` 是描述性背景，不是强制规则；`specs/` 才是编译进 Requirement baseline 的强制规范。
+  Team Spec 作用于所有 Project，Project Spec 只作用于所属 Project，还可按角色、阶段、Repository
+  和路径声明适用范围。同一字段规则冲突时停止交付并交由人工处理。
 - `repositories/<repository_id>` 只绑定源码位置，不复制源码；RepositoryProfile 或规范漂移会使旧批准失效。
 - `requirements/<delivery_multi_id>` 保存一项 Requirement 的联合事实链；它可选择该 Project 下 1–N 个
   Repository，每个 Repository 仍拥有独立 Task、candidate 和验证报告。
@@ -340,7 +359,8 @@ v0.1 推荐先以一台可信的 macOS/Linux 主机运行，不必先部署 Kube
 - Codex CLI 路由推荐以当前账号可用的 `gpt-5.6-terra` 为主，路由顺序由配置决定；需要时显式配置
   DeepSeek、Qwen 的 Responses-compatible endpoint 作为备用，不能把禁用或占位路由当成自动降级；
 - Coder、QA、Reviewer 使用同一 candidate commit 的独立 worktree，QA/Reviewer 不提交业务代码；
-- Team/Project 知识导入与启停由 sidecar 即时提供给之后的新需求，无需重启；运行配置改变仍需重启；
+- Team/Project 背景知识和 Spec 的创建/启停由 sidecar 即时提供给之后的新需求，无需重启；已准备
+  Requirement 绑定精确版本，不会被静默重解释；运行配置改变仍需重启；
 - SQLite 仅用于底层兼容命令和离线测试，不作为 `ase request` 生产入口的数据库。
 
 推荐用仓库脚本管理后台进程，而不是长期占用一个终端：
@@ -378,7 +398,7 @@ macOS Keychain / Linux Secret Service 适配，不能把 MySQL DSN 明文写入 
 Origin；它不是可直接暴露到局域网或公网的多用户系统。用 `status` 查看状态、`logs` 跟踪日志、
 `restart` 重启、`stop` 停止。关闭或刷新网页不会取消已接纳的后台工作。
 
-### 2. 在网页准备 Team、Project 和知识
+### 2. 在网页准备 Team、Project、知识和规范
 
 首次进入当前环境时：
 
@@ -389,23 +409,28 @@ Origin；它不是可直接暴露到局域网或公网的多用户系统。用 `
    文档是正常状态，不会被标记成故障。
 3. 在设置页创建 Project。Project 表示一组长期共享业务背景、知识和开发规范的项目，不等于单个
    Git 仓库，也不等于一次 Requirement；同一 Project 可以登记多个代码目录。
-4. 打开“知识库”。在“团队通用知识”上传并启用跨 Project 共用的制度；切换到“当前 Project 知识”
-   上传并启用只属于所选 Project 的背景和规范。支持 Markdown、TXT、PDF、DOCX；平台保留原文件和
-   来源信息，并生成稳定 `content.md`，不调用模型改写正文。
-5. 知识启停会立即用于之后的新需求，不需要重启；已经准备或批准的需求不会被静默套用新知识，
-   若其绑定知识发生变化会安全停止并要求重新准备。
+4. 打开“知识库”，先选择用途：
+   - “背景知识”：上传业务背景、术语和架构说明。Team 范围供全部 Project 理解，Project 范围只供
+     当前 Project 使用；支持 Markdown、TXT、PDF、DOCX。
+   - “开发规范 Spec”：创建必须遵守的工程规则，填写稳定 `spec_key`、适用角色/阶段/Repository/
+     路径和可验证的检查方法。创建只生成新版本，必须再点击启用；同一 `spec_key` 同时只启用一个版本。
+   - “学习建议”：扫描当前 Project 已持久化的 QA FAIL 与 Review REJECT，查看复发次数和证据；
+     人工可拒绝，或批准沉淀为背景知识、Project Spec 或非执行性的 Skill 设计建议。
+5. 背景知识和 Spec 启停会立即用于之后的新需求，不需要重启；已经准备或批准的需求不会被静默套用
+   新版本。绑定事实变化时会安全停止并要求重新准备；Team、Project 或 Repository 规则冲突时由人工决策。
 
 是否重启以“是否改变进程基础依赖”为准：
 
 | 操作 | 是否重启 |
 |---|---|
-| 上传/启停 Team 或 Project 知识、创建/切换 Project | 不需要 |
+| 上传/启停 Team 或 Project 背景知识、创建/启停 Spec、处理学习建议、创建/切换 Project | 不需要 |
 | 修改平台数据目录、MySQL DSN、模型路由/API Key、Codex 路径、真实执行开关或端口 | 需要；页面会显示“需要重启” |
 
 单文件原始大小上限为 10 MB，规范化正文上限为 256 KB。加密 PDF、无可提取文本、损坏文档、危险
 文件名和超限内容都会安全拒绝。原始文档位于
 `<platform_root>/team/knowledge/documents/<document_id>/` 或
 `<platform_root>/projects/<project_id>/knowledge/documents/<document_id>/`，不写入平台源码或目标项目。
+Spec 位于对应 scope 的 `specs/documents/<spec_id>/`，当前启用集合写入 `specs/activation.json`。
 
 ### 3. 日常需求交付全部在网页完成
 
@@ -499,7 +524,7 @@ cp config/production.example.json "$HOME/.config/ai-software-engineer/config.jso
 }
 ```
 
-知识选择由 Web Console 写入 Team/Project sidecar；配置中的旧 `*_knowledge_paths` 字段仅供兼容入口，
+背景知识选择由 Web Console 写入 Team/Project sidecar；配置中的旧 `*_knowledge_paths` 字段仅供兼容入口，
 新部署无需填写。
 
 再为当前 shell 设置 MySQL DSN；配置放在其他位置时同时设置 `ASE_CONFIG`：
@@ -637,7 +662,7 @@ uv build --offline
 MySQL 集成测试需设置 `ASE_TEST_MYSQL_DSN`，指向专用测试数据库。测试使用脚本化模型验证契约，
 不代表真实模型已完成业务验收。
 
-## 当前进度（2026-09-12）
+## 当前进度（2026-09-14）
 
 | 阶段 | 阶段性成果 |
 |---|---|
@@ -657,6 +682,7 @@ MySQL 集成测试需设置 `ASE_TEST_MYSQL_DSN`，指向专用测试数据库�
 | M16 平台管理面 | 浏览器创建/选择 Project，分别管理内容寻址的 Team 通用知识与 Project 知识，并维护平台目录、MySQL、模型路由、Codex、执行开关和端口；知识选择即时生效，运行配置变化明确要求重启 |
 | M17 Team–Project 边界 | 将唯一 Team 与多个 Project 设为并列聚合；Project 管理知识、规范、Repository 和 Requirement；增加 Web Console 后台启动、停止、重启、状态和日志脚本 |
 | M18 运行设置与状态 | Web Console 可零配置降级启动，展示内置默认值；设置页写入完整 MySQL DSN/Responses API Key，服务脚本加载受控 `runtime.env`；独立状态页显示 MySQL、Codex、Team、知识和模型路由就绪情况；知识管理不混入设置页 |
+| M19 Spec Center 与持续学习 | 背景知识与强制 Spec 分离；Team/Project Spec 支持不可变版本、显式启用、适用范围和验证方法，并进入 production baseline/context；QA/Review 失败可生成证据化 Learning proposal，经人工审批后沉淀为背景知识、Project Spec 或非执行性 Skill 设计建议 |
 
 ## 文档导航
 

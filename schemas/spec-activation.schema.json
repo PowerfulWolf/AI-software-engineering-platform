@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/spec-activation.schema.json",
+  "title": "SpecActivation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "scope", "team_id", "active", "activation_sha256"],
+  "properties": {
+    "schema_version": {"const": "v0.1", "default": "v0.1"},
+    "scope": {"enum": ["team", "project"]},
+    "team_id": {"type": "string", "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$"},
+    "project_id": {"type": "string", "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "active": {
+      "type": "array", "maxItems": 128, "uniqueItems": true,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["spec_key", "spec_id", "version", "spec_sha256"],
+        "properties": {
+          "spec_key": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{1,63}$"},
+          "spec_id": {"type": "string", "pattern": "^spec_document_[a-f0-9]{32}$"},
+          "version": {"type": "integer", "minimum": 1},
+          "spec_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+        }
+      }
+    },
+    "activation_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"scope": {"const": "project"}}, "required": ["scope"]},
+      "then": {"required": ["project_id"]},
+      "else": {"not": {"required": ["project_id"]}}
+    }
+  ]
+}

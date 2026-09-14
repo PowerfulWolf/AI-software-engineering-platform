@@ -216,10 +216,13 @@ class ManagerSkillService:
                 "organization, project, and sidecar roots cannot overlap"
             ) from error
         rules = (*self._platform_rules, *tuple(self._rule_provider.rules_for(profile)))
+        source_resolver = getattr(self._rule_provider, "sources_for", None)
+        authorized_sources = tuple(source_resolver(profile)) if callable(source_resolver) else ()
         compilation = self._baseline_compiler.compile(
             profile,
             rules,
             compiled_at=observed_at,
+            authorized_project_sources=authorized_sources,
         )
         compilation.validate_integrity()
         recorded = self._baseline_recorder.record(workspace, compilation)

@@ -16,9 +16,11 @@ from .administration import (
     RuntimeVariableUpdate,
     SecretStatus,
     SettingsSnapshot,
+    SpecDocumentView,
     TeamSummary,
     UpdateKnowledgeSelectionRequest,
     UpdateSettingsRequest,
+    UpdateSpecActivationRequest,
 )
 from .core import ConsoleCommandRejected, ManagerConsolePort, ProjectConsole
 from .manager import ManagerConsoleAdapter, TeamConsoleHost
@@ -85,11 +87,13 @@ __all__ = [
     "RuntimeVariableUpdate",
     "SecretStatus",
     "SettingsSnapshot",
+    "SpecDocumentView",
     "SubmitOperation",
     "TeamConsoleHost",
     "TeamReader",
     "TeamSummary",
     "UpdateKnowledgeSelectionRequest",
     "UpdateSettingsRequest",
+    "UpdateSpecActivationRequest",
     "create_console_app",
 ]

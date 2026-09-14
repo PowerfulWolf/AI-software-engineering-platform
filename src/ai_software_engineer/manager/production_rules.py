@@ -6,11 +6,16 @@ import json
 from ai_software_engineer.context import ContextSource
 from ai_software_engineer.domain.model import WirePayload
 from ai_software_engineer.spec_compiler import SpecRule, SpecRuleLayer
+from ai_software_engineer.spec_documents import SpecDocument
 from ai_software_engineer.team_workspace import TeamWorkspace
+
+from .spec_rules import team_spec_rules
 
 
 def production_rules(
-    team: TeamWorkspace, knowledge: tuple[ContextSource, ...]
+    team: TeamWorkspace,
+    knowledge: tuple[ContextSource, ...],
+    specs: tuple[SpecDocument, ...] = (),
 ) -> tuple[SpecRule, ...]:
     team_id = team.manifest.team_id
     context: WirePayload = {
@@ -37,6 +42,7 @@ def production_rules(
             source_sha256=context_digest,
             rationale="Host-bound opaque team context; no inferred rule precedence.",
         ),
+        *team_spec_rules(specs),
     )
 
 

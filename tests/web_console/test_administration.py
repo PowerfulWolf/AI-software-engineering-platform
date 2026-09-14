@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from ai_software_engineer.config import LocalRuntimeEnvironmentStore, ProductionConfig
+from ai_software_engineer.spec_documents import CreateSpecDocument
 from ai_software_engineer.team_workspace import TeamWorkspace, discover_team_workspaces
 from ai_software_engineer.web_console import (
     AdministrationError,
@@ -16,6 +17,7 @@ from ai_software_engineer.web_console import (
     MySqlConnectionRequest,
     UpdateKnowledgeSelectionRequest,
     UpdateSettingsRequest,
+    UpdateSpecActivationRequest,
 )
 
 
@@ -89,6 +91,40 @@ def test_team_and_project_document_selections_are_live_and_independent(
     persisted = json.loads(administration.config_path.read_text())
     assert persisted["team_knowledge_paths"] == []
     assert "secret@example" not in administration.config_path.read_text()
+
+
+def test_team_and_project_specs_are_versioned_and_activated_independently(
+    tmp_path: Path,
+) -> None:
+    administration = _administration(tmp_path)
+    administration.create_project(
+        CreateProjectRequest(project_id="project_web", name="Web Project")
+    )
+    command = CreateSpecDocument(
+        spec_key="python.testing",
+        title="Python testing",
+        body_markdown="# Testing\n\nRun focused tests.",
+        verification="Record the pytest command and passing evidence.",
+    )
+
+    team = administration.create_team_spec(command)
+    project = administration.create_project_spec(
+        "project_web",
+        command.model_copy(update={"body_markdown": "# Testing\n\nRun Project tests."}),
+    )
+    team_values = administration.update_team_spec_activation(
+        UpdateSpecActivationRequest(spec_ids=(team.document.spec_id,))
+    )
+    project_values = administration.update_project_spec_activation(
+        "project_web",
+        UpdateSpecActivationRequest(spec_ids=(project.document.spec_id,)),
+    )
+
+    assert team_values[0].active is True
+    assert team_values[0].project_id is None
+    assert project_values[0].active is True
+    assert project_values[0].project_id == "project_web"
+    assert administration.settings().restart_required is False
 
 
 def test_runtime_configuration_change_requires_restart(tmp_path: Path) -> None:

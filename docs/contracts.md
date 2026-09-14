@@ -701,3 +701,26 @@ Coder 的当前权限。新权限只能按精确 token 收紧 read/write/command
 恢复事件仍完整记录，但其 CaseStartedEvent 使用 `included=false`，避免将同一需求恢复成功
 再计入一个新自主交付样本；原失败评估记录保留。恢复批准及 Task metadata 提供人工决策归属。
 完整签名、错误矩阵和限制见 [恢复规范](../.trellis/spec/core/delivery-recovery.md)。
+
+## Spec Center 与持续学习契约
+
+背景知识和强制规范是不同契约。`TeamKnowledgeDocumentStore` / `ProjectKnowledgeDocumentStore`
+保存描述性上下文；`TeamSpecDocumentStore` / `ProjectSpecDocumentStore` 保存带稳定 `spec_key`、
+版本、角色、阶段、Repository、路径 glob 和 verification 的强制规则。`create()` 只发布不可变
+版本，`activate()` 才原子替换当前 scope 的 exact 启用集合；同一 key 不允许同时启用两个版本。
+
+Production TeamHost 将 active Team Spec 编译为 `PLATFORM_ENGINEERING` rule，将适用于当前
+Repository 的 active Project Spec 编译为 `PROJECT` rule。Project-sidecar source URI/hash 必须由
+`ProjectRuleProvider.sources_for()` 精确授权后才能进入 baseline；Repository 原生规范仍使用
+RepositoryProfile provenance。三者对同一字段给出不同值时生成冲突并等待人工，不按优先级猜测。
+知识或 Spec 快照变化只重建相关 Project runtime，不要求进程重启，但旧 preparation 不能静默沿用。
+
+`ProjectLearningStore.collect()` 只读取已经持久化且完整性有效的 QA FAIL / Review REJECT
+Artifact，按 finding 生成确定性、证据化 proposal 与 recurrence count。`decide()` 要求 exact
+proposal SHA，并且每个 proposal 只允许一个不可变人工决定。批准可发布为 Project 背景知识、
+Project Spec，或 Team 下的非执行性 Skill 设计建议；后者不会安装 Skill 或修改运行时代码。
+
+公开 wire contracts：`spec-document.schema.json`、`spec-activation.schema.json`、
+`learning-proposal.schema.json`、`learning-authorization.schema.json`、
+`learning-decision.schema.json`。实现与回归点见
+`.trellis/spec/core/team-workspace.md`、`web-console.md` 和 `python-runtime.md`。

@@ -43,6 +43,12 @@ TeamKnowledgeSelectionStore(team).save(selected_paths) -> KnowledgeSelection
 ProjectKnowledgeSelectionStore(project).save(selected_paths) -> KnowledgeSelection
 effective_team_knowledge_paths(team, fallback=()) -> tuple[str, ...]
 effective_project_knowledge_paths(project, fallback=()) -> tuple[str, ...]
+TeamSpecDocumentStore(team).create(command) -> SpecDocument
+ProjectSpecDocumentStore(project).create(command) -> SpecDocument
+TeamSpecDocumentStore(team).activate(spec_ids) -> SpecActivation
+ProjectSpecDocumentStore(project).activate(spec_ids) -> SpecActivation
+ProjectLearningStore(project).collect() -> tuple[LearningProposalView, ...]
+ProjectLearningStore(project).decide(proposal_id, command) -> LearningProposalView
 
 ProductionConfig.schema_version: Literal["v0.2"]
 ProductionConfig.team_id: TeamId = "team_ai"
@@ -55,7 +61,9 @@ Public persistent contracts are `team-workspace.schema.json`, `project-workspace
 `repository-workspace.schema.json`, `runtime-workspace-binding.schema.json` and
 `production-config.schema.json`. Knowledge records additionally use
 `knowledge-document.schema.json`, `project-knowledge-document.schema.json` and
-`knowledge-selection.schema.json`.
+`knowledge-selection.schema.json`. Strict specifications and learning facts additionally use
+`spec-document.schema.json`, `spec-activation.schema.json`, `learning-proposal.schema.json`,
+`learning-authorization.schema.json` and `learning-decision.schema.json`.
 
 ## 3. Contracts
 
@@ -86,6 +94,15 @@ Public persistent contracts are `team-workspace.schema.json`, `project-workspace
 - Team knowledge has common scope; Project knowledge and Repository-native rules refine the selected
   Project. Natural-language conflicts stop for human resolution; path location never silently decides
   semantic precedence.
+- `knowledge/` is descriptive context. Mandatory engineering rules belong to `specs/`: immutable
+  `documents/<spec_id>/spec.json` records plus one atomic `activation.json` per Team/Project scope.
+  Creating a Spec never activates it. One scope may activate at most one version per stable `spec_key`.
+- A Spec declares exact Team/Project ownership, version, roles, stages, optional Repository IDs,
+  safe root-relative path globs and a human-authored verification contract. Active Team Specs apply
+  across Projects; active Project Specs are isolated to their owner and filtered by Repository ID.
+- `projects/<project_id>/specs/learning/` stores evidence-backed QA/Review proposals and one immutable
+  human decision per proposal. Approval may publish Project background knowledge, a Project Spec, or
+  a non-executable Team Skill design proposal. Collection never mutates an executable Skill.
 - The default Project pair is optional for the Web flow and must be configured together for the
   compatibility CLI. Creating a Project is an explicit administration action.
 - `discover_team_workspaces()` returns zero or one item. Catalog callers keep a tuple seam, but this
@@ -109,6 +126,12 @@ Public persistent contracts are `team-workspace.schema.json`, `project-workspace
 | Project document/selection copied into another Project | reject owner identity even if content/digest is otherwise valid |
 | Team/Project selection saved | atomic sidecar publication; next new/re-prepared Requirement sees it without restart |
 | Changed selected knowledge after prepare | reject old preparation; never replace context silently |
+| Create a new Spec version | preserve all older versions; do not activate implicitly |
+| Activate two versions of one `spec_key` or unknown/cross-owner ID | reject; prior activation remains |
+| Active Spec changes after prepare | reject old preparation; require a new exact baseline |
+| Team/Project/Repository rules disagree on one field | produce conflict and route to human; never choose by priority |
+| QA FAIL/Review REJECT collected twice | same proposal identity and first observation; no duplicate publication |
+| Approve exact Learning proposal | persist immutable authorization before publication, then one completion decision; stale digest is rejected |
 | Only one default Project field set | configuration validation error |
 
 ## 5. Good / Base / Bad Cases
@@ -119,6 +142,8 @@ Public persistent contracts are `team-workspace.schema.json`, `project-workspace
   Team/Project knowledge selection is valid.
 - Bad: store Projects under `team/projects`, create one Agent roster per Project, or infer a Project
   by scanning all registered source paths.
+- Bad: upload a mandatory rule as descriptive knowledge, auto-enable a draft Spec, or let a Learning
+  proposal rewrite an executable Skill without human approval and implementation review.
 
 ## 6. Tests Required
 
@@ -128,6 +153,8 @@ Public persistent contracts are `team-workspace.schema.json`, `project-workspace
   knowledge, Project-owned Repository registration and missing/ambiguous lookup.
 - `tests/knowledge/`: immutable Team/Project documents, owner binding, atomic selection, explicit
   empty selection, legacy fallback and integrity failure.
+- `tests/specs/`: immutable Spec versioning/activation/provenance, Project isolation, repository
+  filtering, evidence-backed Learning collection, exact decisions and safe publication.
 - `tests/repository_workspace/` and `tests/runtime_workspace/`: Repository manifest and
   Team/Project/Repository runtime lineage.
 - `tests/config/test_production.py`: v0.2 schema, singleton Team defaults and optional/default Project
@@ -153,6 +180,16 @@ config.project_knowledge_paths = selected_paths
 
 # Correct: selection is owned by the exact Project sidecar.
 ProjectKnowledgeSelectionStore(project).save(selected_paths)
+```
+
+```python
+# Wrong: treat descriptive background text as an enforceable rule.
+ProjectKnowledgeDocumentStore(project).import_document(filename="rules.md", content=body)
+
+# Correct: create a versioned Spec, then explicitly activate the exact version.
+store = ProjectSpecDocumentStore(project)
+spec = store.create(CreateSpecDocument(...))
+store.activate((spec.spec_id,))
 ```
 
 ```python

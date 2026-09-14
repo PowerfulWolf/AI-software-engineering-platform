@@ -29,6 +29,7 @@ from ai_software_engineer.spec_compiler import (
     SpecRule,
     SpecRuleLayer,
     SpecSourceMismatch,
+    SpecSourceRef,
 )
 
 NOW = datetime(2026, 9, 2, 10, 0, tzinfo=UTC)
@@ -96,6 +97,49 @@ def project_rule(
         source_sha256=source.sha256,
         rationale="Explicitly interpreted project-native rule.",
     )
+
+
+def sidecar_project_rule(repository_profile: RepositoryProfile) -> tuple[SpecRule, SpecSourceRef]:
+    source = SpecSourceRef(
+        uri=f"project://{repository_profile.repository_id}/.ase/specs/spec_document_test",
+        sha256="c" * 64,
+    )
+    return (
+        SpecRule(
+            id="rule_sidecar_project_spec_001",
+            field="delivery.qa-gate",
+            value={"required": True},
+            layer=SpecRuleLayer.PROJECT,
+            priority=200,
+            source_uri=source.uri,
+            source_sha256=source.sha256,
+            rationale="Explicit Project sidecar Spec.",
+        ),
+        source,
+    )
+
+
+def test_compiler_accepts_only_exact_authorized_sidecar_project_sources(
+    tmp_path: Path,
+) -> None:
+    repository_profile = profile(tmp_path)
+    rule, source = sidecar_project_rule(repository_profile)
+
+    result = ProjectBaselineCompiler().compile(
+        repository_profile,
+        (hard_rule(), rule),
+        compiled_at=NOW,
+        authorized_project_sources=(source,),
+    )
+
+    assert result.status is ProjectBaselineCompilationStatus.COMPILED
+    with pytest.raises(SpecSourceMismatch):
+        ProjectBaselineCompiler().compile(
+            repository_profile,
+            (hard_rule(), rule),
+            compiled_at=NOW,
+            authorized_project_sources=(source.model_copy(update={"sha256": "d" * 64}),),
+        )
 
 
 def test_compiles_stable_task_free_baseline_with_opaque_native_sources(

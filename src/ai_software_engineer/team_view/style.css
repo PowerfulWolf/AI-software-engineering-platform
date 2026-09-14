@@ -391,6 +391,21 @@ input[type="checkbox"] {
   display: grid;
   gap: 14px;
 }
+
+.knowledge-mode-switch {
+  margin-bottom: 0.75rem;
+}
+
+.spec-card pre {
+  white-space: pre-wrap;
+}
+
+.learning-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 0.8rem;
+}
 .scope-switch {
   display: inline-flex;
   gap: 6px;

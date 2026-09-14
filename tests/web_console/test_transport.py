@@ -266,6 +266,28 @@ def test_administration_endpoints_create_project_import_document_and_save_settin
             "/api/v1/admin/projects/project_web/knowledge/selection",
             json={"document_ids": [project_imported.json()["manifest"]["document_id"]]},
         )
+        spec_payload = {
+            "spec_key": "python.testing",
+            "title": "Python testing",
+            "body_markdown": "# Testing\n\nRun focused tests.",
+            "roles": ["coder", "qa", "reviewer"],
+            "stages": ["implementing", "qa", "review"],
+            "repository_ids": [],
+            "path_globs": ["*"],
+            "verification": "Record passing pytest evidence.",
+        }
+        team_spec = client.post("/api/v1/admin/team/specs", json=spec_payload)
+        project_spec = client.post("/api/v1/admin/projects/project_web/specs", json=spec_payload)
+        team_spec_activation = client.put(
+            "/api/v1/admin/team/specs/activation",
+            json={"spec_ids": [team_spec.json()["document"]["spec_id"]]},
+        )
+        project_spec_activation = client.put(
+            "/api/v1/admin/projects/project_web/specs/activation",
+            json={"spec_ids": [project_spec.json()["document"]["spec_id"]]},
+        )
+        learning = client.get("/api/v1/admin/projects/project_web/learnings")
+        collected = client.post("/api/v1/admin/projects/project_web/learnings/collect")
         team = client.get("/api/v1/admin/team")
         projects = client.get("/api/v1/admin/projects")
         knowledge = client.get("/api/v1/admin/team/knowledge")
@@ -293,6 +315,12 @@ def test_administration_endpoints_create_project_import_document_and_save_settin
     assert project_selection.status_code == 200
     assert project_selection.json()[0]["selected"] is True
     assert project_selection.json()[0]["scope"] == "project"
+    assert team_spec.status_code == 201
+    assert team_spec_activation.json()[0]["active"] is True
+    assert project_spec.status_code == 201
+    assert project_spec_activation.json()[0]["active"] is True
+    assert learning.json() == []
+    assert collected.json() == []
     assert team.status_code == 200
     assert team.json()["team_id"] == "team_test"
     assert projects.status_code == 200

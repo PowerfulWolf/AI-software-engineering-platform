@@ -201,6 +201,15 @@ ConsoleAdministration.update_team_knowledge_selection(request) -> tuple[Knowledg
 ConsoleAdministration.project_knowledge(project_id) -> tuple[KnowledgeDocumentView, ...]
 ConsoleAdministration.import_project_document(project_id, *, filename, content) -> KnowledgeDocumentView
 ConsoleAdministration.update_project_knowledge_selection(project_id, request) -> tuple[KnowledgeDocumentView, ...]
+ConsoleAdministration.team_specs() -> tuple[SpecDocumentView, ...]
+ConsoleAdministration.create_team_spec(request: CreateSpecDocument) -> SpecDocumentView
+ConsoleAdministration.update_team_spec_activation(request) -> tuple[SpecDocumentView, ...]
+ConsoleAdministration.project_specs(project_id) -> tuple[SpecDocumentView, ...]
+ConsoleAdministration.create_project_spec(project_id, request) -> SpecDocumentView
+ConsoleAdministration.update_project_spec_activation(project_id, request) -> tuple[SpecDocumentView, ...]
+ConsoleAdministration.project_learnings(project_id) -> tuple[LearningProposalView, ...]
+ConsoleAdministration.collect_project_learnings(project_id) -> tuple[LearningProposalView, ...]
+ConsoleAdministration.decide_project_learning(project_id, proposal_id, request) -> LearningProposalView
 ConsoleAdministration.settings() -> SettingsSnapshot
 ConsoleAdministration.update_settings(request: UpdateSettingsRequest) -> SettingsSnapshot
 ConsoleAdministration.test_mysql_connection(request: MySqlConnectionRequest) -> MySqlConnectionResult
@@ -217,6 +226,15 @@ PUT  /api/v1/admin/team/knowledge/selection
 GET  /api/v1/admin/projects/<project_id>/knowledge
 POST /api/v1/admin/projects/<project_id>/knowledge?filename=<basename>
 PUT  /api/v1/admin/projects/<project_id>/knowledge/selection
+GET  /api/v1/admin/team/specs
+POST /api/v1/admin/team/specs
+PUT  /api/v1/admin/team/specs/activation
+GET  /api/v1/admin/projects/<project_id>/specs
+POST /api/v1/admin/projects/<project_id>/specs
+PUT  /api/v1/admin/projects/<project_id>/specs/activation
+GET  /api/v1/admin/projects/<project_id>/learnings
+POST /api/v1/admin/projects/<project_id>/learnings/collect
+POST /api/v1/admin/projects/<project_id>/learnings/<proposal_id>/decision
 GET  /api/v1/admin/settings
 PUT  /api/v1/admin/settings
 POST /api/v1/admin/settings/test-mysql
@@ -244,6 +262,15 @@ GET  /api/v1/admin/status
   selection record may read legacy `ProductionConfig.*_knowledge_paths` only as a compatibility
   fallback. Once the browser writes a selection record, that sidecar is authoritative, including an
   explicitly empty selection.
+- The Knowledge page has three distinct modes: descriptive background knowledge, mandatory
+  engineering Specs, and Project Learning proposals. A Spec POST accepts bounded JSON up to 512 KB,
+  creates an immutable inactive version and returns its digest. Activation is a separate PUT carrying
+  the exact selected IDs; there is never an implicit latest-version switch.
+- Learning collection reads only persisted failed QA/rejected Review artifacts. Before publication,
+  an immutable authorization must bind the exact proposal SHA, action, target, operator and rationale;
+  the completion decision is also immutable. An interrupted publication exposes the authorization and
+  only the exact action can resume. Publishing to `SKILL` means a non-executable design record; it
+  never installs or changes runtime code.
 - Settings round-trip every current secret-free `ProductionConfig` field: platform root, active
   Team/name, database backend/DSN environment name, ordered model routes,
   Codex executable, live execution and Console port. `runtime_variables` accepts only names referenced
@@ -264,7 +291,8 @@ GET  /api/v1/admin/status
 - A config save uses same-directory temporary file, fsync and atomic replace. It validates the selected
   Team/name before publication. Any changed saved config or write-only runtime variable is marked
   `restart_required`; the already constructed Host is not mutated or hot-switched. Knowledge upload
-  and sidecar selection are not config saves and do not require restart.
+  and sidecar selection, Spec activation and Learning decisions are not config saves and do not
+  require restart.
 - When an explicit save selects a new `platform_root` without that Team, initialize the selected
   immutable Team identity there. Do not migrate Team knowledge, Projects, Requirements or execution
   facts; knowledge selection must be empty until documents exist under the new root.
@@ -294,6 +322,10 @@ GET  /api/v1/admin/status
 | Team selection changed | next Project runtime re-resolves Team context; no process restart |
 | Project A selection changed | only Project A runtime is replaced; Project B stays unchanged |
 | Knowledge changed after an operation prepared its context | existing preparation guard stops on drift; never reinterpret approval |
+| Spec JSON over 512 KB, invalid glob/role/stage or unknown ID | 413/422/409; no draft/activation publication |
+| New Spec version created | inactive until explicit activation; older versions remain immutable |
+| Active Team/Project Spec changes | next relevant Project runtime rebuilds without restart; old preparation stops on drift |
+| Learning decision uses stale proposal SHA or differs from existing authorization/decision | 409; first authorization/decision/publication remains |
 | Settings select another Team/name or invalid knowledge | 409; config file unchanged |
 | New platform root, current Team identity, empty knowledge selection | initialize that Team under the new root; save with restart required |
 | New platform root with old-root knowledge paths | 409; never copy or reinterpret the old files |
@@ -325,6 +357,8 @@ GET  /api/v1/admin/status
 - `tests/web_console/test_transport.py`: admin verbs, content types/body limits, typed errors and no
   content/secret reflection; missing config/MySQL must still expose Settings/Status while delivery is
   `SETUP_REQUIRED`.
+- `tests/specs/`: Spec/Learning stores and publication contracts; Web administration/transport tests
+  cover both scopes, activation and Learning collection/decision endpoints.
 - `tests/team_view/ui.test.cjs`: Project creation, scoped Knowledge navigation/live selection,
   Settings, write-only DSN/key fields, separate Status tab and safe text rendering.
 - `tests/contracts/test_json_schema_contracts.py`: production config/port, both knowledge manifests and selection
@@ -355,6 +389,17 @@ config.team_knowledge_paths = selected_paths
 
 # Correct: publish a scope-owned selection; the next runtime access re-resolves it.
 TeamKnowledgeSelectionStore(team).save(selected_paths)
+```
+
+```python
+# Wrong: uploading a Spec silently makes it govern live work.
+administration.create_project_spec(project_id, command)
+
+# Correct: publication and activation are separate human-visible operations.
+view = administration.create_project_spec(project_id, command)
+administration.update_project_spec_activation(
+    project_id, UpdateSpecActivationRequest(spec_ids=(view.document.spec_id,))
+)
 ```
 
 ## Scenario: local Web Console process lifecycle

@@ -46,7 +46,19 @@ from ai_software_engineer.knowledge_selection import (
     effective_project_knowledge_paths,
     effective_team_knowledge_paths,
 )
+from ai_software_engineer.learning import (
+    DecideLearningProposal,
+    LearningProposalView,
+    ProjectLearningStore,
+)
 from ai_software_engineer.project_workspace import ProjectName, ProjectWorkspace
+from ai_software_engineer.spec_documents import (
+    CreateSpecDocument,
+    ProjectSpecDocumentStore,
+    SpecDocument,
+    SpecDocumentId,
+    TeamSpecDocumentStore,
+)
 from ai_software_engineer.store import StoreError, open_mysql_connection, validate_mysql_dsn
 from ai_software_engineer.team_workspace import (
     TeamName,
@@ -195,6 +207,25 @@ class UpdateKnowledgeSelectionRequest(DomainModel):
         return values
 
 
+class SpecDocumentView(DomainModel):
+    scope: Literal["team", "project"]
+    project_id: ProjectId | None = None
+    document: SpecDocument
+    active: StrictBool
+
+
+class UpdateSpecActivationRequest(DomainModel):
+    spec_ids: Annotated[tuple[SpecDocumentId, ...], Field(max_length=128)] = ()
+
+    @field_validator("spec_ids")
+    @classmethod
+    def require_unique_spec_ids(
+        cls, values: tuple[SpecDocumentId, ...]
+    ) -> tuple[SpecDocumentId, ...]:
+        ensure_unique(values, "Spec activation IDs")
+        return values
+
+
 class ConsoleAdministration(Protocol):
     def team(self) -> TeamSummary: ...
     def projects(self) -> tuple[ProjectSummary, ...]: ...
@@ -211,6 +242,26 @@ class ConsoleAdministration(Protocol):
     def update_project_knowledge_selection(
         self, project_id: str, request: UpdateKnowledgeSelectionRequest
     ) -> tuple[KnowledgeDocumentView, ...]: ...
+    def team_specs(self) -> tuple[SpecDocumentView, ...]: ...
+    def create_team_spec(self, request: CreateSpecDocument) -> SpecDocumentView: ...
+    def update_team_spec_activation(
+        self, request: UpdateSpecActivationRequest
+    ) -> tuple[SpecDocumentView, ...]: ...
+    def project_specs(self, project_id: str) -> tuple[SpecDocumentView, ...]: ...
+    def create_project_spec(
+        self, project_id: str, request: CreateSpecDocument
+    ) -> SpecDocumentView: ...
+    def update_project_spec_activation(
+        self, project_id: str, request: UpdateSpecActivationRequest
+    ) -> tuple[SpecDocumentView, ...]: ...
+    def project_learnings(self, project_id: str) -> tuple[LearningProposalView, ...]: ...
+    def collect_project_learnings(self, project_id: str) -> tuple[LearningProposalView, ...]: ...
+    def decide_project_learning(
+        self,
+        project_id: str,
+        proposal_id: str,
+        request: DecideLearningProposal,
+    ) -> LearningProposalView: ...
     def settings(self) -> SettingsSnapshot: ...
     def update_settings(self, request: UpdateSettingsRequest) -> SettingsSnapshot: ...
     def test_mysql_connection(self, request: MySqlConnectionRequest) -> MySqlConnectionResult: ...
@@ -361,6 +412,87 @@ class LocalConsoleAdministration:
         except KnowledgeSelectionError as error:
             raise AdministrationError("Project knowledge selection could not be saved") from error
         return self.project_knowledge(project_id)
+
+    def team_specs(self) -> tuple[SpecDocumentView, ...]:
+        store = TeamSpecDocumentStore(self._team())
+        active = {item.spec_id for item in store.activation().active}
+        return tuple(
+            SpecDocumentView(scope="team", document=document, active=document.spec_id in active)
+            for document in store.list()
+        )
+
+    def create_team_spec(self, request: CreateSpecDocument) -> SpecDocumentView:
+        with self._lock:
+            store = TeamSpecDocumentStore(self._team())
+            document = store.create(request)
+        return SpecDocumentView(
+            scope="team",
+            document=document,
+            active=document.spec_id in {item.spec_id for item in store.activation().active},
+        )
+
+    def update_team_spec_activation(
+        self, request: UpdateSpecActivationRequest
+    ) -> tuple[SpecDocumentView, ...]:
+        try:
+            with self._lock:
+                TeamSpecDocumentStore(self._team()).activate(request.spec_ids)
+        except ValueError as error:
+            raise AdministrationError("Team Spec activation could not be saved") from error
+        return self.team_specs()
+
+    def project_specs(self, project_id: str) -> tuple[SpecDocumentView, ...]:
+        project = self._project(project_id)
+        store = ProjectSpecDocumentStore(project)
+        active = {item.spec_id for item in store.activation().active}
+        return tuple(
+            SpecDocumentView(
+                scope="project",
+                project_id=project.manifest.project_id,
+                document=document,
+                active=document.spec_id in active,
+            )
+            for document in store.list()
+        )
+
+    def create_project_spec(self, project_id: str, request: CreateSpecDocument) -> SpecDocumentView:
+        with self._lock:
+            project = self._project(project_id)
+            store = ProjectSpecDocumentStore(project)
+            document = store.create(request)
+        return SpecDocumentView(
+            scope="project",
+            project_id=project.manifest.project_id,
+            document=document,
+            active=document.spec_id in {item.spec_id for item in store.activation().active},
+        )
+
+    def update_project_spec_activation(
+        self, project_id: str, request: UpdateSpecActivationRequest
+    ) -> tuple[SpecDocumentView, ...]:
+        project = self._project(project_id)
+        try:
+            with self._lock:
+                ProjectSpecDocumentStore(project).activate(request.spec_ids)
+        except ValueError as error:
+            raise AdministrationError("Project Spec activation could not be saved") from error
+        return self.project_specs(project_id)
+
+    def project_learnings(self, project_id: str) -> tuple[LearningProposalView, ...]:
+        return ProjectLearningStore(self._project(project_id)).list()
+
+    def collect_project_learnings(self, project_id: str) -> tuple[LearningProposalView, ...]:
+        with self._lock:
+            return ProjectLearningStore(self._project(project_id)).collect()
+
+    def decide_project_learning(
+        self,
+        project_id: str,
+        proposal_id: str,
+        request: DecideLearningProposal,
+    ) -> LearningProposalView:
+        with self._lock:
+            return ProjectLearningStore(self._project(project_id)).decide(proposal_id, request)
 
     def settings(self) -> SettingsSnapshot:
         names = {self._saved_config.database.dsn_env}
@@ -665,6 +797,7 @@ __all__ = [
     "CreateProjectRequest",
     "DatabaseRuntimeStatus",
     "KnowledgeDocumentView",
+    "LearningProposalView",
     "LocalConsoleAdministration",
     "ModelRouteRuntimeStatus",
     "MySqlConnectionRequest",
@@ -674,7 +807,9 @@ __all__ = [
     "RuntimeVariableUpdate",
     "SecretStatus",
     "SettingsSnapshot",
+    "SpecDocumentView",
     "TeamSummary",
     "UpdateKnowledgeSelectionRequest",
     "UpdateSettingsRequest",
+    "UpdateSpecActivationRequest",
 ]

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/learning-decision.schema.json",
+  "title": "LearningDecision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "decision_id", "proposal_id", "proposal_sha256", "action", "target",
+    "operator_id", "rationale", "decided_at", "decision_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "v0.1", "default": "v0.1"},
+    "decision_id": {"type": "string", "pattern": "^learning_decision_[a-f0-9]{32}$"},
+    "proposal_id": {"type": "string", "pattern": "^learning_proposal_[a-f0-9]{32}$"},
+    "proposal_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "action": {"enum": ["APPROVE", "REJECT"]},
+    "target": {"enum": ["KNOWLEDGE", "SPEC", "SKILL"]},
+    "operator_id": {"type": "string", "minLength": 1},
+    "rationale": {"type": "string", "minLength": 1},
+    "published_uri": {"type": "string", "minLength": 1},
+    "decided_at": {"type": "string", "format": "date-time"},
+    "decision_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"action": {"const": "APPROVE"}}, "required": ["action"]},
+      "then": {"required": ["published_uri"]},
+      "else": {"not": {"required": ["published_uri"]}}
+    }
+  ]
+}

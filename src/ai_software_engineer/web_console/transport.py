@@ -16,6 +16,8 @@ from starlette.middleware.base import RequestResponseEndpoint
 from ai_software_engineer.domain.identity import ProjectId, TeamId
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.knowledge_documents import KnowledgeDocumentError
+from ai_software_engineer.learning import DecideLearningProposal, LearningError
+from ai_software_engineer.spec_documents import CreateSpecDocument, SpecDocumentError
 from ai_software_engineer.team_view.models import TeamReadError, TeamSnapshot
 from ai_software_engineer.team_workspace import MAX_TEAM_KNOWLEDGE_SOURCE_BYTES
 
@@ -26,12 +28,14 @@ from .administration import (
     MySqlConnectionRequest,
     UpdateKnowledgeSelectionRequest,
     UpdateSettingsRequest,
+    UpdateSpecActivationRequest,
 )
 from .core import ConsoleCommandRejected
 from .models import ConsoleIntent, ConsoleOperation, IdempotencyKey
 from .store import ConsoleOperationConflict, ConsoleOperationNotFound
 
 _MAX_REQUEST_BYTES = 64_000
+_MAX_SPEC_REQUEST_BYTES = 512_000
 _ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
@@ -266,6 +270,139 @@ def create_console_app(
             return _error(409, "KNOWLEDGE_REJECTED", "Knowledge selection was rejected.")
         return JSONResponse([value.to_wire() for value in values])
 
+    @app.get("/api/v1/admin/team/specs")
+    async def team_specs() -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        try:
+            values = await run_in_threadpool(administration.team_specs)
+        except (AdministrationError, SpecDocumentError):
+            return _error(503, "SPEC_UNAVAILABLE", "Team Specs are unavailable.")
+        return JSONResponse([value.to_wire() for value in values])
+
+    @app.post("/api/v1/admin/team/specs", status_code=201)
+    async def create_team_spec(request: Request) -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        payload = await _json_body(request, maximum=_MAX_SPEC_REQUEST_BYTES)
+        if isinstance(payload, Response):
+            return payload
+        try:
+            command = CreateSpecDocument.model_validate_json(payload)
+            value = await run_in_threadpool(administration.create_team_spec, command)
+        except (ValidationError, AdministrationError, SpecDocumentError):
+            return _error(422, "SPEC_REJECTED", "Team Spec could not be created safely.")
+        return JSONResponse(value.to_wire(), status_code=201)
+
+    @app.put("/api/v1/admin/team/specs/activation")
+    async def activate_team_specs(request: Request) -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        payload = await _json_body(request)
+        if isinstance(payload, Response):
+            return payload
+        try:
+            command = UpdateSpecActivationRequest.model_validate_json(payload)
+            values = await run_in_threadpool(administration.update_team_spec_activation, command)
+        except (ValidationError, AdministrationError, SpecDocumentError):
+            return _error(409, "SPEC_REJECTED", "Team Spec activation was rejected.")
+        return JSONResponse([value.to_wire() for value in values])
+
+    @app.get("/api/v1/admin/projects/{project_id}/specs")
+    async def project_specs(project_id: str) -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        if not _valid_project_id(project_id):
+            return _error(404, "NOT_FOUND", "Project was not found.")
+        try:
+            values = await run_in_threadpool(administration.project_specs, project_id)
+        except (AdministrationError, SpecDocumentError):
+            return _error(503, "SPEC_UNAVAILABLE", "Project Specs are unavailable.")
+        return JSONResponse([value.to_wire() for value in values])
+
+    @app.post("/api/v1/admin/projects/{project_id}/specs", status_code=201)
+    async def create_project_spec(project_id: str, request: Request) -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        if not _valid_project_id(project_id):
+            return _error(404, "NOT_FOUND", "Project was not found.")
+        payload = await _json_body(request, maximum=_MAX_SPEC_REQUEST_BYTES)
+        if isinstance(payload, Response):
+            return payload
+        try:
+            command = CreateSpecDocument.model_validate_json(payload)
+            value = await run_in_threadpool(administration.create_project_spec, project_id, command)
+        except (ValidationError, AdministrationError, SpecDocumentError):
+            return _error(422, "SPEC_REJECTED", "Project Spec could not be created safely.")
+        return JSONResponse(value.to_wire(), status_code=201)
+
+    @app.put("/api/v1/admin/projects/{project_id}/specs/activation")
+    async def activate_project_specs(project_id: str, request: Request) -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        if not _valid_project_id(project_id):
+            return _error(404, "NOT_FOUND", "Project was not found.")
+        payload = await _json_body(request)
+        if isinstance(payload, Response):
+            return payload
+        try:
+            command = UpdateSpecActivationRequest.model_validate_json(payload)
+            values = await run_in_threadpool(
+                administration.update_project_spec_activation,
+                project_id,
+                command,
+            )
+        except (ValidationError, AdministrationError, SpecDocumentError):
+            return _error(409, "SPEC_REJECTED", "Project Spec activation was rejected.")
+        return JSONResponse([value.to_wire() for value in values])
+
+    @app.get("/api/v1/admin/projects/{project_id}/learnings")
+    async def project_learnings(project_id: str) -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        if not _valid_project_id(project_id):
+            return _error(404, "NOT_FOUND", "Project was not found.")
+        try:
+            values = await run_in_threadpool(administration.project_learnings, project_id)
+        except (AdministrationError, LearningError):
+            return _error(503, "LEARNING_UNAVAILABLE", "Learning proposals are unavailable.")
+        return JSONResponse([value.to_wire() for value in values])
+
+    @app.post("/api/v1/admin/projects/{project_id}/learnings/collect")
+    async def collect_project_learnings(project_id: str) -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        if not _valid_project_id(project_id):
+            return _error(404, "NOT_FOUND", "Project was not found.")
+        try:
+            values = await run_in_threadpool(administration.collect_project_learnings, project_id)
+        except (AdministrationError, LearningError):
+            return _error(409, "LEARNING_REJECTED", "Learning collection was rejected.")
+        return JSONResponse([value.to_wire() for value in values])
+
+    @app.post("/api/v1/admin/projects/{project_id}/learnings/{proposal_id}/decision")
+    async def decide_project_learning(
+        project_id: str, proposal_id: str, request: Request
+    ) -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        if not _valid_project_id(project_id):
+            return _error(404, "NOT_FOUND", "Project was not found.")
+        payload = await _json_body(request)
+        if isinstance(payload, Response):
+            return payload
+        try:
+            command = DecideLearningProposal.model_validate_json(payload)
+            value = await run_in_threadpool(
+                administration.decide_project_learning,
+                project_id,
+                proposal_id,
+                command,
+            )
+        except (ValidationError, AdministrationError, LearningError, SpecDocumentError):
+            return _error(409, "LEARNING_REJECTED", "Learning decision was rejected.")
+        return JSONResponse(value.to_wire())
+
     @app.get("/api/v1/admin/settings")
     async def settings() -> Response:
         if administration is None:
@@ -359,19 +496,19 @@ def create_console_app(
     return app
 
 
-async def _json_body(request: Request) -> bytes | Response:
+async def _json_body(request: Request, *, maximum: int = _MAX_REQUEST_BYTES) -> bytes | Response:
     content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
     if content_type != "application/json":
         return _error(415, "JSON_REQUIRED", "Use application/json.")
     declared = request.headers.get("content-length")
     if declared is not None:
         try:
-            if int(declared) > _MAX_REQUEST_BYTES:
+            if int(declared) > maximum:
                 return _error(413, "REQUEST_TOO_LARGE", "Request is too large.")
         except ValueError:
             return _error(400, "INVALID_REQUEST", "Invalid request metadata.")
     body = await request.body()
-    if len(body) > _MAX_REQUEST_BYTES:
+    if len(body) > maximum:
         return _error(413, "REQUEST_TOO_LARGE", "Request is too large.")
     return body
 

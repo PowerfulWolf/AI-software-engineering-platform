@@ -1995,6 +1995,10 @@ Deterministic service/port boundary：
 class ProjectRuleProvider(Protocol):
     def rules_for(self, profile: RepositoryProfile) -> Sequence[SpecRule]: ...
 
+class ProjectRuleSourceProvider(ProjectRuleProvider, Protocol):
+    # Optional production extension; legacy providers remain rules-only.
+    def sources_for(self, profile: RepositoryProfile) -> Sequence[SpecSourceRef]: ...
+
 class ProjectPreparationStore(Protocol):
     def put(self, preparation: ProjectPreparation) -> ProjectPreparation: ...
     def get(self, repository_id: RepositoryId | str) -> ProjectPreparation: ...
@@ -2012,6 +2016,7 @@ ProjectBaselineCompiler.compile(
     rules: Sequence[SpecRule],
     *,
     compiled_at: datetime,
+    authorized_project_sources: Sequence[SpecSourceRef] = (),
 ) -> ProjectBaselineCompilation
 
 ProjectStageAdvancer.advance_stage(
@@ -2044,7 +2049,12 @@ stage advancer/aware clock 可替换测试实现，但不能从 Agent request �
 - `ProjectBaselineCompiler` 只允许 `PLATFORM_HARD`、`PLATFORM_ENGINEERING`、`PROJECT`规则，
   且至少一条 `PLATFORM_HARD`；`TASK` rule 无条件拒绝；
 - structured PROJECT rule 的 `source_uri/source_sha256` 必须与 current RepositoryProfile 原生规范条目
-  exact match；没有 adapter 解释的 native rule 记录为 `opaque_project_sources`；
+  或调用方显式注入的 Project-sidecar `authorized_project_sources` exact match；生产
+  `ProjectRuleProvider.sources_for(profile)` 只能返回当前 Project 中已启用且适用于该 Repository 的
+  immutable Spec 引用。没有 adapter 解释的 native rule 记录为 `opaque_project_sources`；
+- Team Spec 编译为 `PLATFORM_ENGINEERING`，Project Spec 编译为 `PROJECT`，字段固定为
+  `governance.<spec_key>`，value 必须包含 exact `spec_id/version/body/roles/stages/repository_ids/
+  path_globs/verification`。同字段不同 value 仍生成冲突，不因 scope 或优先级静默覆盖；
 - 排序和 digest 不依赖输入顺序或 `compiled_at`，所以 exact facts 在不同时间重放产生同一
   `baseline_sha256/compilation_sha256`；
 - overlapping scopes 下同 field 的不同 values 生成不带 `task_id` 的 `ProjectSpecConflict`；
@@ -2090,7 +2100,8 @@ extra-forbid typed model 并带 canonical digest/identity guard。
 | naive clock | service/compiler/advancer aware-time guard | error，不形成可信 record |
 | 缺 `PLATFORM_HARD` | compiler | `HardPolicyMissing` |
 | 任意 `TASK` rule | compiler | `TaskScopedRuleRejected` |
-| PROJECT rule URI/hash 不属于 exact profile | provenance guard | `SpecSourceMismatch` |
+| PROJECT rule URI/hash 不属于 exact native profile 或 authorized sidecar Spec | provenance guard | `SpecSourceMismatch` |
+| duplicate authorized Project Spec URI 或 URI/hash 不匹配 | provenance guard | `SpecSourceMismatch`；不编译 |
 | overlapping scope 下 field values 不同 | conflict detector | durable `CONFLICT/WAITING_HUMAN`，无 preparation |
 | old conflict exact replay | compilation recorder | 返回首次 durable conflict/compiled_at |
 | old PREPARED 后 profile/binding/baseline 漂移 | binder + candidate comparison | `RuntimeWorkspaceConflict` / `ProjectPreparationDrift` |
@@ -2109,7 +2120,7 @@ extra-forbid typed model 并带 canonical digest/identity guard。
 - **Good**：给 Python/Java/C++ fixture 一个绝对目录，得到 Schema-valid
   ProjectPreparation；重放使用首次时间；Product gate 再次观测项目事实后才授权。
 - **Base**：项目 native rules 只作 URI/hash 索引，仅对有明确 adapter provenance 的条目产生
-  structured PROJECT rule。
+  structured PROJECT rule；Project sidecar Spec 必须由当前 activation 快照显式授权。
 - **Bad**：构造假 Task 复用 `SpecCompiler`；冲突时按 priority 猜一个 winner；只检查旧
   result 的 digest 就启动 Product Agent；原地覆盖 preparation；或在 target root 写 `.ase`。
 
@@ -2117,7 +2128,7 @@ extra-forbid typed model 并带 canonical digest/identity guard。
 
 - `tests/manager/test_baseline.py`
   - 断言 input-order/time-independent digest、opaque native sources 和 JSON Schema；
-  - 断言 hard safety 必需、TASK rule 拒绝、PROJECT provenance exact match；
+  - 断言 hard safety 必需、TASK rule 拒绝、native/sidecar PROJECT provenance exact match；
   - 断言 overlap 冲突/none-overlap、classification、WAITING_HUMAN/Product block；
   - 断言 success/conflict store 分路、首记录重放和 tamper rejection。
 - `tests/manager/test_store.py`

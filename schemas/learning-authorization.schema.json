@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/learning-authorization.schema.json",
+  "title": "LearningAuthorization",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "authorization_id", "proposal_id", "proposal_sha256", "action",
+    "target", "operator_id", "rationale", "authorized_at", "authorization_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "v0.1", "default": "v0.1"},
+    "authorization_id": {"type": "string", "pattern": "^learning_authorization_[a-f0-9]{32}$"},
+    "proposal_id": {"type": "string", "pattern": "^learning_proposal_[a-f0-9]{32}$"},
+    "proposal_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "action": {"enum": ["APPROVE", "REJECT"]},
+    "target": {"enum": ["KNOWLEDGE", "SPEC", "SKILL"]},
+    "operator_id": {"type": "string", "minLength": 1},
+    "rationale": {"type": "string", "minLength": 1},
+    "authorized_at": {"type": "string", "format": "date-time"},
+    "authorization_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  }
+}

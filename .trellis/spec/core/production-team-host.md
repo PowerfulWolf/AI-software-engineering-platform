@@ -393,6 +393,10 @@ this does not authorize rebasing old approval or QA/Review evidence in place.
 - T042 production context 使用显式 32,000 input / 4,000 output reserve；完整规范索引和批准文档
   不截断，语言 marker 清单仅作 context-only 投影。低层 Runtime 默认仍为 12,000 input。
   签名、错误矩阵与回归点见 `python-runtime.md` 的 T042 小节；旧 manifest/审批不改写。
+- Production TeamHost 每次按 Project 读取 active Team/Project Spec 快照。Team Spec 进入
+  `PLATFORM_ENGINEERING` rules；Project Spec 由 `ProductionProjectRuleProvider` 按 Repository
+  过滤并提供 exact URI/hash provenance。缓存身份同时包含知识和 Spec 快照：任何一方变化只重建
+  受影响 Project runtime，不要求进程重启，也不允许已 prepare 的交付静默采用新版本。
 
 ## 4. Validation & Error Matrix
 
@@ -412,6 +416,9 @@ this does not authorize rebasing old approval or QA/Review evidence in place.
 | 项目规则冲突 | SpecCompiler | `WAITING_HUMAN`，不静默选边 |
 | Team/Project knowledge selection 在新需求前变化 | TeamHost runtime lookup | 重建受影响 Project runtime，无需进程重启 |
 | 已 prepare 的交付所绑定知识发生变化 | preparation guard | 安全停止并要求重新 prepare；不沿用旧批准 |
+| Team Spec activation 变化 | TeamHost runtime lookup | 各 Project 下一次访问重建 runtime；无进程重启 |
+| Project A Spec activation 变化 | Project-scoped cache identity | 只重建 Project A；Project B 保持原 runtime |
+| 已 prepare 的交付所绑定 Spec 发生变化 | preparation guard | 安全停止并要求重新 prepare；不沿用旧批准 |
 | target project dirty/not Git/HEAD 漂移 | delivery precondition | stable failure + preserved project/worktree |
 | Coder provisional report/diff 不匹配、越权路径或 finalization 后 dirty | Codex Git guard | policy/invalid-output failure；不进入 QA |
 | Coder 返回合法未完成 checkpoint | artifact/worktree/state guards | 保存 progress，重新排队下一次 Coder；不进入 QA |
@@ -468,6 +475,8 @@ body 或目标项目中的 secret。
 - `tests/manager/test_production_agents.py`：Product/Designer/Planner typed draft 和 exact lineage；
 - `tests/manager/test_production_backend.py`：真实 MySQL + 临时 Git + scripted team 到 DONE，独立
   verifier worktrees 检查 exact candidate，主 checkout 零污染，并断言三个 delivery role 的生产预算；
+- `tests/manager/test_team_host.py`：active Team Spec 变化使所有 Project cache 失效，Project Spec
+  变化只使所属 Project cache 失效；新 baseline 绑定 exact sidecar provenance；
 - `tests/recovery/test_execution.py`：offline Codex runner 直接断言 recovery 将相同 role timeout 传入
   subprocess seam；
 - `scripts/smoke-live-gpt55.sh`：只有 `ASE_RUN_LIVE_TESTS=1` 才运行，不进默认 CI，不自动 merge；

@@ -259,6 +259,7 @@ class ProjectBaselineCompiler:
         rules: Sequence[SpecRule],
         *,
         compiled_at: datetime,
+        authorized_project_sources: Sequence[SpecSourceRef] = (),
     ) -> ProjectBaselineCompilation:
         """Compile platform/project rules without manufacturing a Task."""
         _require_aware(compiled_at, "compiled_at")
@@ -270,7 +271,7 @@ class ProjectBaselineCompiler:
         if not any(rule.layer is SpecRuleLayer.PLATFORM_HARD for rule in rules):
             raise HardPolicyMissing("at least one PLATFORM_HARD rule is required")
         ensure_unique((rule.id for rule in rules), "SpecRule IDs")
-        _validate_project_rule_sources(profile, rules)
+        _validate_project_rule_sources(profile, rules, authorized_project_sources)
         ordered = tuple(sorted(rules, key=_rule_sort_key))
         conflicts = _detect_conflicts(profile, ordered, compiled_at)
         if conflicts:
@@ -479,8 +480,13 @@ class FileProjectBaselineCompilationStore:
 def _validate_project_rule_sources(
     profile: RepositoryProfile,
     rules: Sequence[SpecRule],
+    authorized_project_sources: Sequence[SpecSourceRef] = (),
 ) -> None:
     project_sources = {source.uri: source.sha256 for source in profile.native_rules}
+    for source in authorized_project_sources:
+        if source.uri in project_sources:
+            raise ValueError(f"project rule source URI is duplicated: {source.uri}")
+        project_sources[source.uri] = source.sha256
     for rule in rules:
         if rule.layer is SpecRuleLayer.PROJECT and (
             project_sources.get(rule.source_uri) != rule.source_sha256

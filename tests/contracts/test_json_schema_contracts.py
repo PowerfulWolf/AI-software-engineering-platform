@@ -23,7 +23,15 @@ from ai_software_engineer.knowledge_selection import (
     ProjectKnowledgeSelectionStore,
     TeamKnowledgeSelectionStore,
 )
+from ai_software_engineer.learning import (
+    DecideLearningProposal,
+    LearningAuthorization,
+    LearningDecisionAction,
+    LearningTarget,
+    ProjectLearningStore,
+)
 from ai_software_engineer.runtime import RuntimeConfig
+from ai_software_engineer.spec_documents import CreateSpecDocument, TeamSpecDocumentStore
 from ai_software_engineer.team_workspace import TeamWorkspace
 from ai_software_engineer.web_console import (
     ConsoleCommandResult,
@@ -47,6 +55,7 @@ from tests.evaluation.factories import (
     make_regression_check,
 )
 from tests.evaluation.test_handoff import _persist_trace
+from tests.specs.test_learning import _project_with_failure
 
 SCHEMA_DIR = Path(__file__).parents[2] / "schemas"
 
@@ -264,6 +273,54 @@ def test_project_knowledge_and_scope_selections_satisfy_schemas(
     malformed = team_selection.to_wire()
     malformed["project_id"] = "project_test"
     _assert_invalid(malformed, "knowledge-selection.schema.json")
+
+
+def test_spec_document_and_activation_satisfy_canonical_schemas(tmp_path: Path) -> None:
+    team = TeamWorkspace.initialize(
+        tmp_path / "platform", team_id="team_schema", name="Schema team"
+    )
+    store = TeamSpecDocumentStore(team)
+    document = store.create(
+        CreateSpecDocument(
+            spec_key="python.testing",
+            title="Python testing",
+            body_markdown="# Testing\n",
+            verification="Record passing pytest evidence.",
+        )
+    )
+    activation = store.activate((document.spec_id,))
+
+    _assert_valid(document.to_wire(), "spec-document.schema.json")
+    _assert_valid(activation.to_wire(), "spec-activation.schema.json")
+    malformed = document.to_wire()
+    malformed["scope"] = "unknown"
+    _assert_invalid(malformed, "spec-document.schema.json")
+
+
+def test_learning_proposal_and_decision_satisfy_canonical_schemas(tmp_path: Path) -> None:
+    project = _project_with_failure(tmp_path)
+    store = ProjectLearningStore(project)
+    proposal = store.collect()[0].proposal
+    view = store.decide(
+        proposal.proposal_id,
+        DecideLearningProposal(
+            proposal_sha256=proposal.proposal_sha256,
+            action=LearningDecisionAction.REJECT,
+            target=LearningTarget.SPEC,
+            operator_id="schema_operator",
+            rationale="Not a reusable rule.",
+        ),
+    )
+
+    _assert_valid(proposal.to_wire(), "learning-proposal.schema.json")
+    authorization = LearningAuthorization.model_validate_json(
+        (
+            project.root / "specs" / "learning" / proposal.proposal_id / "authorization.json"
+        ).read_text()
+    )
+    _assert_valid(authorization.to_wire(), "learning-authorization.schema.json")
+    assert view.decision is not None
+    _assert_valid(view.decision.to_wire(), "learning-decision.schema.json")
 
 
 def test_production_config_schema_rejects_plaintext_secret(tmp_path: Path) -> None:
