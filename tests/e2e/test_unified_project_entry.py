@@ -532,6 +532,21 @@ class _TransientDeliveryStartupBackend(_OfflineBackend):
         return super().run_delivery(checkpoint)
 
 
+class _LegacyTransientDispatchBackend(_OfflineBackend):
+    def __init__(self, platform: Path) -> None:
+        super().__init__(platform)
+        self.dispatch_calls = 0
+
+    def commit_dispatch(self, checkpoint: ProjectDeliveryCheckpoint) -> DispatchCommitRecord:
+        self.dispatch_calls += 1
+        if self.dispatch_calls == 1:
+            raise DeliveryBackendFailure(
+                DeliveryFailureCode.CHECKPOINT_DRIFT,
+                "Dispatch rejected stale or inconsistent facts: MySQL dispatch transaction failed",
+            )
+        return super().commit_dispatch(checkpoint)
+
+
 def _copy_fixture(tmp_path: Path, language: str) -> Path:
     source = Path(__file__).parents[2] / "fixtures" / "target-projects" / language
     target = tmp_path / "target"
@@ -797,6 +812,47 @@ def test_resume_reenters_exact_transient_pre_task_stage(tmp_path: Path) -> None:
     assert completed.failed_stage is None
     assert completed.failure_code is None
     assert backend.planner_calls == 2
+
+
+def test_resume_retries_legacy_mysql_dispatch_failure_before_task(tmp_path: Path) -> None:
+    project = _copy_fixture(tmp_path, "python")
+    platform = tmp_path / "platform"
+    backend = _LegacyTransientDispatchBackend(platform)
+    service = UnifiedProjectEntryService(
+        backend=backend,
+        catalog=ProjectDeliveryCheckpointCatalog(backend.repository_registry_root),
+    )
+    started = service.start(
+        StartProjectDelivery(
+            repository_root=str(project.resolve()),
+            requirement="Add a resumable greeting.",
+            submitted_at=NOW,
+        )
+    )
+    blocked = service.approve(
+        ApproveProductSpec(
+            delivery_id=started.checkpoint.delivery_id,
+            expected_checkpoint_sha256=started.checkpoint.checkpoint_sha256,
+            approval_reference="legacy-mysql-dispatch-retry-test",
+            submitted_at=NOW + timedelta(minutes=1),
+        )
+    ).checkpoint
+
+    assert blocked.stage is DeliveryStage.BLOCKED
+    assert blocked.failed_stage is DeliveryStage.DISPATCHING
+    assert blocked.task_id is None
+    assert blocked.failure_code is DeliveryFailureCode.CHECKPOINT_DRIFT
+
+    completed = service.retry_interrupted_stage(
+        ResumeProjectDelivery(
+            delivery_id=blocked.delivery_id,
+            submitted_at=NOW + timedelta(minutes=2),
+        )
+    ).checkpoint
+
+    assert completed.stage is DeliveryStage.DONE
+    assert completed.failure_code is None
+    assert backend.dispatch_calls == 2
 
 
 @pytest.mark.parametrize("legacy_without_failed_stage", (False, True))

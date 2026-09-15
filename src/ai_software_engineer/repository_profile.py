@@ -29,7 +29,7 @@ ProjectRevision = Annotated[str, StringConstraints(pattern=r"^(unknown|[a-f0-9]{
 RelativePath = Annotated[str, StringConstraints(min_length=1, max_length=512)]
 DetectorVersion = Annotated[str, StringConstraints(pattern=r"^t020-v[0-9]+$")]
 
-DETECTOR_VERSION: Final[DetectorVersion] = "t020-v1"
+DETECTOR_VERSION: Final[DetectorVersion] = "t020-v2"
 UNKNOWN: Final[str] = "unknown"
 
 
@@ -343,6 +343,10 @@ _LANGUAGE_SUFFIXES: Final[Mapping[str, ProjectLanguage]] = {
     ".ts": ProjectLanguage.TYPESCRIPT,
     ".tsx": ProjectLanguage.TYPESCRIPT,
     ".d.ts": ProjectLanguage.TYPESCRIPT,
+    ".js": ProjectLanguage.TYPESCRIPT,
+    ".jsx": ProjectLanguage.TYPESCRIPT,
+    ".mjs": ProjectLanguage.TYPESCRIPT,
+    ".cjs": ProjectLanguage.TYPESCRIPT,
     ".cpp": ProjectLanguage.CPP,
     ".cc": ProjectLanguage.CPP,
     ".cxx": ProjectLanguage.CPP,

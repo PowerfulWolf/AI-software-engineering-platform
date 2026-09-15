@@ -14,11 +14,78 @@ from ai_software_engineer.context import ContextBudget, ContextBudgetExceeded, F
 from ai_software_engineer.domain import AgentRole
 from ai_software_engineer.recovery import RecoveryAuthorization, RecoveryPlan, RecoveryRejected
 from ai_software_engineer.recovery.context import recovery_context_sources, validate_reapply_context
+from ai_software_engineer.recovery.entry import _rebind_missing_write_paths
 from ai_software_engineer.recovery.models import CapturedChanges, digest
 from ai_software_engineer.recovery.records import RecoverySeedRecord
 from ai_software_engineer.recovery.store import FileRecoveryStore
 from tests.recovery.test_authorization import Human, approval, make_plan
 from tests.recovery.test_task_record import record_for
+
+
+def test_missing_write_path_is_rebound_only_to_one_safe_tracked_match() -> None:
+    stale = "src/ai_software_engineer/web_console/static/app.js"
+    actual = "src/ai_software_engineer/team_view/app.js"
+    unchanged = "tests/team_view/ui.test.cjs"
+
+    paths, rebindings = _rebind_missing_write_paths(
+        (stale, unchanged),
+        tracked_paths=(actual, unchanged),
+        captured_paths=(),
+        denied_paths=(),
+    )
+
+    assert paths == (actual, unchanged)
+    assert tuple((item.source_path, item.target_path) for item in rebindings) == ((stale, actual),)
+    for tracked, captured, denied in (
+        ((actual, "legacy/app.js", unchanged), (), ()),
+        ((actual, unchanged), (stale,), ()),
+        ((actual, unchanged), (), ("src/**",)),
+    ):
+        paths, rebindings = _rebind_missing_write_paths(
+            (stale, unchanged),
+            tracked_paths=tracked,
+            captured_paths=captured,
+            denied_paths=denied,
+        )
+        assert paths == (stale, unchanged)
+        assert rebindings == ()
+    paths, rebindings = _rebind_missing_write_paths(
+        ("src/**/app.js",),
+        tracked_paths=(actual,),
+        captured_paths=(),
+        denied_paths=(),
+    )
+    assert paths == ("src/**/app.js",)
+    assert rebindings == ()
+
+
+def test_approved_path_rebinding_is_visible_in_recovery_context(tmp_path: Path) -> None:
+    stale = "src/ai_software_engineer/web_console/static/app.js"
+    actual = "src/ai_software_engineer/team_view/app.js"
+    old = make_plan(tmp_path / "project")
+    source_permissions = old.permissions.model_copy(update={"write_paths": (stale,)})
+    target_permissions = source_permissions.model_copy(update={"write_paths": (actual,)})
+    plan = RecoveryPlan.create(
+        **{
+            **old.to_wire(),
+            "permissions": source_permissions,
+            "target_permissions": target_permissions,
+            "path_rebindings": (
+                {
+                    "source_path": stale,
+                    "target_path": actual,
+                    "reason": "missing_source_path_unique_match",
+                },
+            ),
+        }
+    )
+
+    origin = recovery_context_sources(plan)[0]
+
+    assert origin.content is not None
+    assert stale in origin.content
+    assert actual in origin.content
+    assert "follow the target path" in origin.content
 
 
 def test_mode_is_explicit_hash_bound_and_legacy_digest_unchanged(tmp_path: Path) -> None:

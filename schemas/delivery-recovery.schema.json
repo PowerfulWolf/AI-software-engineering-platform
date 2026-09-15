@@ -213,6 +213,32 @@
       "title": "RecoveryAuthorization",
       "type": "object"
     },
+    "RecoveryPathRebinding": {
+      "additionalProperties": false,
+      "properties": {
+        "source_path": {
+          "minLength": 1,
+          "pattern": "^[^\\u0000-\\u001f]+$",
+          "title": "Source Path",
+          "type": "string"
+        },
+        "target_path": {
+          "minLength": 1,
+          "pattern": "^[^\\u0000-\\u001f]+$",
+          "title": "Target Path",
+          "type": "string"
+        },
+        "reason": {
+          "const": "missing_source_path_unique_match",
+          "default": "missing_source_path_unique_match",
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": ["source_path", "target_path"],
+      "title": "RecoveryPathRebinding",
+      "type": "object"
+    },
     "RecoveryPlan": {
       "additionalProperties": false,
       "properties": {
@@ -284,6 +310,17 @@
           ],
           "default": null,
           "title": "Target Permissions"
+        },
+        "path_rebindings": {
+          "anyOf": [
+            {
+              "items": {"$ref": "#/$defs/RecoveryPathRebinding"},
+              "type": "array"
+            },
+            {"type": "null"}
+          ],
+          "default": null,
+          "title": "Path Rebindings"
         },
         "denied_paths": {
           "items": {

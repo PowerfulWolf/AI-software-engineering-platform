@@ -12,6 +12,7 @@ from ai_software_engineer.domain import NetworkAccess
 from ai_software_engineer.recovery import (
     CapturedChanges,
     RecoveryAuthorization,
+    RecoveryPathRebinding,
     RecoveryPlan,
     RecoveryRejected,
 )
@@ -102,6 +103,62 @@ def test_target_permissions_are_hash_bound_and_may_only_narrow_source(tmp_path: 
                     "target_permissions": expanded,
                 }
             )
+
+
+def test_exact_path_rebinding_is_hash_bound_and_does_not_allow_ambient_expansion(
+    tmp_path: Path,
+) -> None:
+    old = make_plan(tmp_path / "project")
+    source = old.permissions.model_copy(
+        update={
+            "write_paths": (
+                "src/ai_software_engineer/web_console/static/app.js",
+                "tests/team_view/ui.test.cjs",
+            )
+        }
+    )
+    target = source.model_copy(
+        update={
+            "write_paths": (
+                "src/ai_software_engineer/team_view/app.js",
+                "tests/team_view/ui.test.cjs",
+            )
+        }
+    )
+    rebinding = RecoveryPathRebinding(
+        source_path="src/ai_software_engineer/web_console/static/app.js",
+        target_path="src/ai_software_engineer/team_view/app.js",
+    )
+    plan = RecoveryPlan.create(
+        **{
+            **old.to_wire(),
+            "permissions": source,
+            "target_permissions": target,
+            "path_rebindings": (rebinding,),
+        }
+    )
+    VALIDATOR.validate(plan.to_wire())
+    assert plan.rebound_write_paths(source.write_paths) == target.write_paths
+    assert plan.plan_sha256 != old.plan_sha256
+    with pytest.raises(ValidationError, match="approved path rebindings"):
+        RecoveryPlan.create(
+            **{
+                **old.to_wire(),
+                "permissions": source,
+                "target_permissions": target,
+            }
+        )
+    with pytest.raises(ValidationError, match="approved path rebindings"):
+        RecoveryPlan.create(
+            **{
+                **old.to_wire(),
+                "permissions": source,
+                "target_permissions": target.model_copy(
+                    update={"write_paths": (*target.write_paths, "docs/**")}
+                ),
+                "path_rebindings": (rebinding,),
+            }
+        )
 
 
 def test_capture_tamper_and_cross_task_are_rejected(tmp_path: Path) -> None:

@@ -28,8 +28,13 @@ from ai_software_engineer.manager.delivery import (
     StartProjectDelivery,
 )
 from ai_software_engineer.manager.delivery_checkpoint import (
+    DeliveryFailureCode,
+    DeliveryNextAction,
+    DeliveryStage,
+    DeliveryStageAttempts,
     FileProjectDeliveryCheckpointStore,
     ProjectDeliveryCheckpoint,
+    ProjectDeliveryIntake,
 )
 from ai_software_engineer.manager.dispatch import VerificationReservation
 from ai_software_engineer.manager.mysql_dispatch_authority import _decode_commit
@@ -45,8 +50,19 @@ from ai_software_engineer.multi_directory.scope import DirectoryScope, Directory
 from ai_software_engineer.multi_directory.service import CreateRequirement
 from ai_software_engineer.multi_directory.store import JointJournal
 from ai_software_engineer.store.mysql_repository import open_mysql_connection
-from ai_software_engineer.team_view.models import ProjectView, TeamReadError, TeamSnapshot
-from ai_software_engineer.team_view.reader import ProductionTeamReader, _candidate_branch
+from ai_software_engineer.team_view.models import (
+    ProjectView,
+    RequestView,
+    ScopeView,
+    TaskView,
+    TeamReadError,
+    TeamSnapshot,
+)
+from ai_software_engineer.team_view.reader import (
+    ProductionTeamReader,
+    _candidate_branch,
+    _request_with_current_work,
+)
 from ai_software_engineer.team_view.server import create_team_server
 from ai_software_engineer.team_workspace import TeamWorkspace
 from tests.e2e.test_joint_delivery import setup_host
@@ -86,6 +102,42 @@ def test_candidate_branch_is_read_from_the_exact_candidate_ref(tmp_path: Path) -
 
     assert _candidate_branch(str(repository), task_id, candidate) == branch
     assert _candidate_branch(str(repository), task_id, "f" * 40) is None
+
+
+def test_active_child_task_supersedes_stale_blocked_requirement_projection() -> None:
+    scope = ScopeView(
+        root="/workspace/repository",
+        selected_paths=(".",),
+        delivery_id="delivery_child_active",
+    )
+    request = RequestView(
+        id="delivery_multi_stale_parent",
+        project_id="project_test",
+        title="Active recovery",
+        stage="BLOCKED",
+        scopes=(scope,),
+        next_action="Inspect the old blocked checkpoint.",
+        blocker="Repository is BLOCKED.",
+        checkpoint_sha256="a" * 64,
+    )
+    task = TaskView(
+        id="delivery_child_active",
+        project_id="project_test",
+        request_id=request.id,
+        title=request.title,
+        scope=scope,
+        status="IMPLEMENTING",
+        checkpoint_stage="DELIVERING",
+        terminal=False,
+        last_activity=datetime.now(UTC),
+        next_action="RUN_DELIVERY",
+    )
+
+    projected = _request_with_current_work(request, [task])
+
+    assert projected.stage == "DELIVERING"
+    assert projected.blocker is None
+    assert projected.next_action == "RUN_DELIVERY"
 
 
 def test_missing_workspace_never_initializes(tmp_path: Path) -> None:
@@ -145,6 +197,61 @@ def test_empty_team_needs_no_database_or_models(tmp_path: Path) -> None:
     snapshot = ProductionTeamReader(config, {}).snapshot()
     assert not snapshot.agents and not snapshot.tasks and not snapshot.requests
     assert _bytes(tmp_path) == before
+
+
+def test_pre_dispatch_failure_needs_no_database(tmp_path: Path) -> None:
+    config = ProductionConfig(
+        platform_root=str(tmp_path / "platform"),
+        model_routes=(
+            ProviderRouteConfig(
+                provider="codex", model="gpt-5.5", kind=ModelProviderKind.CODEX_CLI
+            ),
+        ),
+    )
+    team = TeamWorkspace.initialize(
+        config.platform_root, team_id=config.team_id, name=config.team_name
+    )
+    project = team.project_registry().register(project_id="project_test", name="Test Project")
+    repository_root = tmp_path / "repository"
+    repository_root.mkdir()
+    repository = project.repository_registry().register(repository_root)
+    store = FileProjectDeliveryCheckpointStore(repository.root / "state" / "project-deliveries")
+    now = datetime.now(UTC)
+    delivery_id = "delivery_pre_dispatch_failure"
+    store.put_intake(
+        ProjectDeliveryIntake.create(
+            delivery_id=delivery_id,
+            repository_id=repository.repository_id,
+            repository_root=str(repository_root),
+            title="Dispatch failed before Task creation",
+            requirement="Show the durable failure without inventing an Assignment.",
+            submitted_at=now,
+        )
+    )
+    store.put(
+        ProjectDeliveryCheckpoint.create(
+            delivery_id=delivery_id,
+            sequence=1,
+            repository_id=repository.repository_id,
+            repository_root=str(repository_root),
+            stage=DeliveryStage.BLOCKED,
+            stage_attempts=DeliveryStageAttempts(dispatching=1),
+            next_action=DeliveryNextAction.REQUEST_HUMAN,
+            failure_code=DeliveryFailureCode.CHECKPOINT_DRIFT,
+            failure_summary="Dispatch rejected stale or inconsistent facts.",
+            failed_stage=DeliveryStage.DISPATCHING,
+            checkpointed_at=now,
+        )
+    )
+
+    snapshot = ProductionTeamReader(config, {}).snapshot(project.manifest.project_id)
+
+    assert len(snapshot.tasks) == 1
+    task = snapshot.tasks[0]
+    assert task.status == "BLOCKED"
+    assert task.terminal
+    assert task.task_id is None
+    assert task.assignments == ()
 
 
 @pytest.mark.mysql

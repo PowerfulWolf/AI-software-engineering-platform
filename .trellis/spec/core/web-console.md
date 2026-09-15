@@ -149,6 +149,9 @@ production_console_app(
   操作/批准、交付结果、阶段产物。所有同级 section 使用 `--detail-section-space` 作为分割线两侧的
   唯一垂直间距，标题统一为 `h2`；子级需求名称使用 `h3`，ID、状态和下一步保持辅助信息层级。
   section 不得再叠加独立 `margin-top`，流程组件也不得通过额外底部 margin 改变下一条分割线的位置。
+- `CONTINUE_DELIVERY` 的 `QUEUED`/`RUNNING` 提示属于“交付流程”，不能作为 Product Agent 回复或
+  需求讨论状态展示。当前子 Task 已开始时，Requirement 列表/摘要优先显示子 Task 阶段并隐藏旧父
+  checkpoint blocker；需求讨论只保留已提交的双方消息。活动子 Task 存在时不得再次显示“继续交付”。
 - 设置页的模型路由分为可用模型目录和 Agent 策略。启用目录路由只使其可选，不自动成为
   备用模型；每个 Agent 选择一个主模型，并可从目录中显式添加、移除、上移或下移 0–N 个备用模型。
 - 一个 Task 的 Coder/QA/Reviewer 串行。UI 只把 `current_stage=true` 的 assignment 标成执行中；
@@ -158,6 +161,13 @@ production_console_app(
 - FAILED/INTERRUPTED Operation 是不可变审计事实，但通知卡不是永久页面状态。用户可在浏览器关闭
   该卡；同一 Requirement/动作出现更新的成功 Operation 后，旧失败卡自动隐藏。关闭只写入有界的
   本地 UI 偏好，不修改 Operation 日志、Delivery checkpoint 或错误证据。
+- `SUCCEEDED` 只表示 Manager 命令已完整返回，不等于 Delivery 已推进。若 result stage 仍是
+  `WAITING_HUMAN/BLOCKED/FAILED` 且没有可批准计划，需求页必须保留可关闭的结果卡并显示 safe
+  `next_action`；同一 Requirement 只显示最新一张需要人工关注的成功结果，避免历史阻塞卡堆叠。
+- 阻塞原因只在 Requirement 详情的“阻塞信息”同级 section 展示。该 section 合并相同子仓原因，
+  按“当前阻塞 / 最近一次恢复 / 建议操作”呈现，并把已知内部英文状态转换为面向用户的说明。
+  顶部 Operation 卡只提示前往该 section；“打开需求工作区”必须切换到需求页、选中 exact target
+  Requirement 并滚动到详情。Team 队列卡和 Requirement 列表卡不得重复完整阻塞文本。
 - `ase request`、`verify-*` 和底层 Runtime 保留作运维/诊断/break-glass，不是 README 的日常入口。
 
 ## 4. Validation & Error Matrix
@@ -188,6 +198,9 @@ production_console_app(
 | Executor raises an unexpected exception | terminal FAILED with generic safe summary; no traceback in browser |
 | User closes a FAILED/INTERRUPTED notification | hide the card locally; keep durable Operation query/audit unchanged |
 | Later success for same action and Requirement target | suppress the older failure card automatically |
+| SUCCEEDED continue returns BLOCKED/FAILED without approval | keep the latest dismissible card and show its safe next action; never appear unresponsive |
+| Same blocker appears on parent, child and latest Operation | one consolidated blocker section; operation card only links to it |
+| Operation shortcut targets a Requirement from another visible tab | switch to Requirements, select exact target and scroll its detail into view |
 | Missing production config/MySQL/team | startup/read fails safely; no fake workspace or data |
 | Foreign Host/Origin, non-JSON or oversized body | 403 / 415 / 413 before command execution |
 | Read-only legacy Team server | UI remains read-only and explicitly reports console unavailable |
@@ -213,7 +226,8 @@ production_console_app(
 - `tests/team_view/ui.test.cjs`：多目录创建、Product/继续/批准操作、操作状态、刷新保持、hidden digest
   不直接渲染、只读 fallback、单 Task 串行角色状态、安全文本、Requirement 详情统一标题/分割节奏，
   粘贴截图移除后的预览和反馈同步、READY draft 编辑、Product 批准前删除、source-drift 重建，
-  以及失败通知关闭/成功替代。
+  以及失败通知关闭/成功替代、successful-but-blocked 反馈、同 Requirement 去重、阻塞信息唯一入口与
+  Operation 快捷跳转。
 - `tests/team_view/test_live.py`：candidate branch 必须从 exact candidate ref 唯一推导，不能猜测。
 - `tests/contracts/test_json_schema_contracts.py`：Python/JSON Schema 的 QUEUED/RUNNING/terminal 状态和
   path 约束一致。
@@ -731,11 +745,13 @@ class DialogueAttachmentView(DomainModel):
     source_bytes: int
     sha256: str
 
+
 class DialogueTurnView(DomainModel):
     sequence: int
     speaker: Literal["user", "product"]
     text: str
     attachments: tuple[DialogueAttachmentView, ...]
+
 
 class RequestView(DomainModel):
     dialogue: tuple[DialogueTurnView, ...]

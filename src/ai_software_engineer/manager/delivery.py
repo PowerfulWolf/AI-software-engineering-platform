@@ -542,10 +542,20 @@ class UnifiedProjectEntryService:
             and current.failed_stage in {None, DeliveryStage.DELIVERING}
         )
         pre_task_stage = current.task_id is None and current.failed_stage is not None
+        legacy_mysql_dispatch_failure = (
+            pre_task_stage
+            and current.failed_stage is DeliveryStage.DISPATCHING
+            and current.failure_code is DeliveryFailureCode.CHECKPOINT_DRIFT
+            and current.failure_summary
+            in {
+                "Dispatch rejected stale or inconsistent facts: MySQL dispatch transaction failed",
+                "Dispatch rejected stale or inconsistent facts: MySQL dispatch commit failed",
+            }
+        )
         if (
             current.stage not in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
             or current.candidate_revision is not None
-            or current.failure_code not in retryable
+            or (current.failure_code not in retryable and not legacy_mysql_dispatch_failure)
             or not (pre_task_stage or pristine_delivery_start)
         ):
             return ProjectDeliveryResult(checkpoint=current)

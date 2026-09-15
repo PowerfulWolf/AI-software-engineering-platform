@@ -42,6 +42,182 @@ _RISK_RANK = {"low": 0, "normal": 1, "high": 2, "critical": 3}
 _ACTIVE_STATUSES = frozenset({WorkItemStatus.LEASED, WorkItemStatus.RUNNING})
 _WAIT_STATUSES = frozenset({WorkItemStatus.WAITING_HUMAN, WorkItemStatus.WAITING_DEPENDENCY})
 _WORKER_ADAPTER = TypeAdapter(LeaseWorkerId)
+_ITEM_COLUMNS = frozenset(
+    {
+        "id",
+        "task_id",
+        "repository_id",
+        "role",
+        "attempt",
+        "checkpoint_sequence",
+        "status",
+        "priority",
+        "risk_rank",
+        "available_at",
+        "payload_json",
+        "version",
+        "created_at",
+        "updated_at",
+    }
+)
+_LEGACY_ITEM_COLUMNS = (_ITEM_COLUMNS - {"repository_id"}) | {"project_id"}
+_CLAIM_COLUMNS = frozenset(
+    {
+        "lease_id",
+        "work_item_id",
+        "task_id",
+        "agent_id",
+        "worker_id",
+        "owner_token_sha256",
+        "assignment_json",
+        "lease_json",
+        "model_selection_json",
+        "capacity_units",
+        "state",
+        "acquired_at",
+        "expires_at",
+        "last_heartbeat_at",
+        "ended_at",
+    }
+)
+_EVENT_COLUMNS = frozenset(
+    {
+        "sequence",
+        "work_item_id",
+        "event_type",
+        "from_status",
+        "to_status",
+        "lease_id",
+        "payload_json",
+        "occurred_at",
+    }
+)
+_LEGACY_TABLES = {
+    "work_queue_items": "work_queue_items_legacy_project_v01",
+    "work_queue_claims": "work_queue_claims_legacy_project_v01",
+    "work_queue_events": "work_queue_events_legacy_project_v01",
+}
+
+
+def _ensure_current_queue_tables(cursor: object) -> None:
+    """Preserve pre-Repository queue facts and publish the current schema."""
+    typed = cast("pymysql.cursors.DictCursor", cursor)
+    table_names = (*_LEGACY_TABLES, *_LEGACY_TABLES.values())
+    placeholders = ",".join("%s" for _ in table_names)
+    typed.execute(
+        "SELECT TABLE_NAME, COLUMN_NAME FROM information_schema.COLUMNS "
+        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (" + placeholders + ")",
+        table_names,
+    )
+    columns: dict[str, set[str]] = {}
+    for row in cast(tuple[Mapping[str, object], ...], typed.fetchall()):
+        table = MySqlPersistentWorkQueue._text(row, "TABLE_NAME")
+        columns.setdefault(table, set()).add(MySqlPersistentWorkQueue._text(row, "COLUMN_NAME"))
+
+    items = frozenset(columns.get("work_queue_items", set()))
+    claims = frozenset(columns.get("work_queue_claims", set()))
+    events = frozenset(columns.get("work_queue_events", set()))
+    archive_columns = {
+        source: frozenset(columns.get(archive, set())) for source, archive in _LEGACY_TABLES.items()
+    }
+    expected_archives = {
+        "work_queue_items": _LEGACY_ITEM_COLUMNS,
+        "work_queue_claims": _CLAIM_COLUMNS,
+        "work_queue_events": _EVENT_COLUMNS,
+    }
+    for source, existing in archive_columns.items():
+        if existing and existing != expected_archives[source]:
+            raise QueueCorruption(
+                f"legacy MySQL WorkQueue archive {source} has an unexpected schema"
+            )
+    archive_presence = tuple(bool(existing) for existing in archive_columns.values())
+    if any(archive_presence) and not all(archive_presence):
+        raise QueueCorruption("legacy MySQL WorkQueue archive is incomplete")
+
+    current_missing = not items and not claims and not events
+    current_ready = items == _ITEM_COLUMNS and claims == _CLAIM_COLUMNS and events == _EVENT_COLUMNS
+    legacy_ready = (
+        items == _LEGACY_ITEM_COLUMNS and claims == _CLAIM_COLUMNS and events == _EVENT_COLUMNS
+    )
+    if legacy_ready:
+        if any(archive_columns.values()):
+            raise QueueCorruption("legacy and active MySQL WorkQueue tables are both present")
+        typed.execute(
+            "RENAME TABLE "
+            "work_queue_items TO work_queue_items_legacy_project_v01, "
+            "work_queue_claims TO work_queue_claims_legacy_project_v01, "
+            "work_queue_events TO work_queue_events_legacy_project_v01"
+        )
+    elif not current_ready and not current_missing:
+        raise QueueCorruption("MySQL WorkQueue tables have an ambiguous schema")
+
+    typed.execute(
+        """
+        CREATE TABLE IF NOT EXISTS work_queue_items (
+            id VARCHAR(128) PRIMARY KEY,
+            task_id VARCHAR(128) NOT NULL,
+            repository_id VARCHAR(128) NOT NULL,
+            role VARCHAR(32) NOT NULL,
+            attempt SMALLINT UNSIGNED NOT NULL,
+            checkpoint_sequence INT UNSIGNED NOT NULL,
+            status VARCHAR(32) NOT NULL,
+            priority SMALLINT UNSIGNED NOT NULL,
+            risk_rank TINYINT UNSIGNED NOT NULL,
+            available_at VARCHAR(40) NULL,
+            payload_json JSON NOT NULL,
+            version INT UNSIGNED NOT NULL DEFAULT 0,
+            created_at VARCHAR(40) NOT NULL,
+            updated_at VARCHAR(40) NOT NULL,
+            UNIQUE KEY uq_work_queue_run
+                (task_id,role,attempt,checkpoint_sequence),
+            KEY ix_work_queue_schedulable
+                (status,available_at,priority,risk_rank,created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
+        """
+    )
+    typed.execute(
+        """
+        CREATE TABLE IF NOT EXISTS work_queue_claims (
+            lease_id VARCHAR(128) PRIMARY KEY,
+            work_item_id VARCHAR(128) NOT NULL,
+            task_id VARCHAR(128) NOT NULL,
+            agent_id VARCHAR(128) NOT NULL,
+            worker_id VARCHAR(128) NOT NULL,
+            owner_token_sha256 CHAR(64) NOT NULL,
+            assignment_json JSON NOT NULL,
+            lease_json JSON NOT NULL,
+            model_selection_json JSON NOT NULL,
+            capacity_units TINYINT UNSIGNED NOT NULL,
+            state VARCHAR(16) NOT NULL,
+            acquired_at VARCHAR(40) NOT NULL,
+            expires_at VARCHAR(40) NOT NULL,
+            last_heartbeat_at VARCHAR(40) NOT NULL,
+            ended_at VARCHAR(40) NULL,
+            KEY ix_work_queue_active_agent (agent_id,state,expires_at),
+            KEY ix_work_queue_item_claims (work_item_id,state),
+            KEY ix_work_queue_task_claims (task_id),
+            CONSTRAINT fk_work_queue_claim_item_repository_v02 FOREIGN KEY (work_item_id)
+                REFERENCES work_queue_items(id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
+        """
+    )
+    typed.execute(
+        """
+        CREATE TABLE IF NOT EXISTS work_queue_events (
+            sequence BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            work_item_id VARCHAR(128) NOT NULL,
+            event_type VARCHAR(32) NOT NULL,
+            from_status VARCHAR(32) NULL,
+            to_status VARCHAR(32) NOT NULL,
+            lease_id VARCHAR(128) NULL,
+            payload_json JSON NOT NULL,
+            occurred_at VARCHAR(40) NOT NULL,
+            KEY ix_work_queue_events_item (work_item_id,sequence),
+            CONSTRAINT fk_work_queue_event_item_repository_v02 FOREIGN KEY (work_item_id)
+                REFERENCES work_queue_items(id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
+        """
+    )
 
 
 class MySqlPersistentWorkQueue:
@@ -619,73 +795,13 @@ class MySqlPersistentWorkQueue:
             VALUES (1,'persistent-work-queue')
             ON DUPLICATE KEY UPDATE purpose=VALUES(purpose)
             """,
-            """
-            CREATE TABLE IF NOT EXISTS work_queue_items (
-                id VARCHAR(128) PRIMARY KEY,
-                task_id VARCHAR(128) NOT NULL,
-                repository_id VARCHAR(128) NOT NULL,
-                role VARCHAR(32) NOT NULL,
-                attempt SMALLINT UNSIGNED NOT NULL,
-                checkpoint_sequence INT UNSIGNED NOT NULL,
-                status VARCHAR(32) NOT NULL,
-                priority SMALLINT UNSIGNED NOT NULL,
-                risk_rank TINYINT UNSIGNED NOT NULL,
-                available_at VARCHAR(40) NULL,
-                payload_json JSON NOT NULL,
-                version INT UNSIGNED NOT NULL DEFAULT 0,
-                created_at VARCHAR(40) NOT NULL,
-                updated_at VARCHAR(40) NOT NULL,
-                UNIQUE KEY uq_work_queue_run
-                    (task_id,role,attempt,checkpoint_sequence),
-                KEY ix_work_queue_schedulable
-                    (status,available_at,priority,risk_rank,created_at)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS work_queue_claims (
-                lease_id VARCHAR(128) PRIMARY KEY,
-                work_item_id VARCHAR(128) NOT NULL,
-                task_id VARCHAR(128) NOT NULL,
-                agent_id VARCHAR(128) NOT NULL,
-                worker_id VARCHAR(128) NOT NULL,
-                owner_token_sha256 CHAR(64) NOT NULL,
-                assignment_json JSON NOT NULL,
-                lease_json JSON NOT NULL,
-                model_selection_json JSON NOT NULL,
-                capacity_units TINYINT UNSIGNED NOT NULL,
-                state VARCHAR(16) NOT NULL,
-                acquired_at VARCHAR(40) NOT NULL,
-                expires_at VARCHAR(40) NOT NULL,
-                last_heartbeat_at VARCHAR(40) NOT NULL,
-                ended_at VARCHAR(40) NULL,
-                KEY ix_work_queue_active_agent (agent_id,state,expires_at),
-                KEY ix_work_queue_item_claims (work_item_id,state),
-                KEY ix_work_queue_task_claims (task_id),
-                CONSTRAINT fk_work_queue_claim_item FOREIGN KEY (work_item_id)
-                    REFERENCES work_queue_items(id)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS work_queue_events (
-                sequence BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-                work_item_id VARCHAR(128) NOT NULL,
-                event_type VARCHAR(32) NOT NULL,
-                from_status VARCHAR(32) NULL,
-                to_status VARCHAR(32) NOT NULL,
-                lease_id VARCHAR(128) NULL,
-                payload_json JSON NOT NULL,
-                occurred_at VARCHAR(40) NOT NULL,
-                KEY ix_work_queue_events_item (work_item_id,sequence),
-                CONSTRAINT fk_work_queue_event_item FOREIGN KEY (work_item_id)
-                    REFERENCES work_queue_items(id)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
-            """,
         )
         with closing(open_mysql_connection(self._dsn)) as connection:
             try:
                 with self._transaction(connection), connection.cursor() as cursor:
                     for statement in statements:
                         cursor.execute(statement)
+                    _ensure_current_queue_tables(cursor)
             except pymysql.MySQLError as error:
                 raise QueueError("cannot initialize PersistentWorkQueue") from error
 

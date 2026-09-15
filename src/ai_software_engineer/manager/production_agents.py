@@ -234,7 +234,10 @@ class StructuredDesignerAgentAdapter(DesignerAgentAdapter):
                 instructions=(
                     "Act as Designer. Use the approved ProductSpec and discovered project "
                     "facts to produce a minimal implementable design. Cover every exact "
-                    "requirement and acceptance ID and use repository-relative affected path globs."
+                    "requirement and acceptance ID. When modifying an existing file, reuse its "
+                    "exact repository-relative path from the project profile; never invent a new "
+                    "directory for it. Use a repository-relative glob only for a genuinely broad "
+                    "component scope."
                 ),
                 input_payload=cast(dict[str, object], request.context.to_wire()),
                 output_schema=TechnicalDesignDraft.model_json_schema(),

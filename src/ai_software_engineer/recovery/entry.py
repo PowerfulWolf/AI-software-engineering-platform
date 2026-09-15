@@ -4,7 +4,8 @@ import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
+from fnmatch import fnmatchcase
+from pathlib import Path, PurePosixPath
 from typing import cast
 
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig
@@ -37,6 +38,7 @@ from ai_software_engineer.recovery.models import (
     CapturedChanges,
     RecoveryApprovalCommand,
     RecoveryInputMode,
+    RecoveryPathRebinding,
     RecoveryPlan,
     RecoveryRejected,
     RecoveryScope,
@@ -62,6 +64,40 @@ class NativeRecoveryExecution:
     plan: RecoveryPlan
     dispatch: RecoveryDispatchRecord
     delivery: RetryResult
+
+
+def _rebind_missing_write_paths(
+    allowed_paths: tuple[str, ...],
+    *,
+    tracked_paths: tuple[str, ...],
+    captured_paths: tuple[str, ...],
+    denied_paths: tuple[str, ...],
+) -> tuple[tuple[str, ...], tuple[RecoveryPathRebinding, ...]]:
+    """Replace only a missing exact path with one uniquely matching tracked basename."""
+
+    tracked = set(tracked_paths)
+    captured = set(captured_paths)
+    replacements: dict[str, str] = {}
+    rebindings: list[RecoveryPathRebinding] = []
+    for source in allowed_paths:
+        if any(token in source for token in "*?[") or source in tracked or source in captured:
+            continue
+        name = PurePosixPath(source).name
+        candidates = tuple(
+            path
+            for path in tracked_paths
+            if PurePosixPath(path).name == name
+            and not any(fnmatchcase(path, pattern) for pattern in denied_paths)
+        )
+        if len(candidates) != 1 or candidates[0] in allowed_paths:
+            continue
+        target = candidates[0]
+        replacements[source] = target
+        rebindings.append(RecoveryPathRebinding(source_path=source, target_path=target))
+    return (
+        tuple(replacements.get(path, path) for path in allowed_paths),
+        tuple(rebindings),
+    )
 
 
 def _repository_sidecar(config: ProductionConfig, repository_id: str) -> Path:
@@ -206,9 +242,20 @@ class NativeRecoveryEntry:
         )
         constraints = original.task.constraints
         allowed_paths = constraints.allowed_paths if constraints is not None else ()
+        tracked_paths = tuple(
+            path
+            for path in manager._run_git(("ls-files", "-z"), cwd=Path(repository_root)).split("\0")
+            if path
+        )
+        rebound_paths, path_rebindings = _rebind_missing_write_paths(
+            allowed_paths,
+            tracked_paths=tracked_paths,
+            captured_paths=tuple(path for path, _ in capture.file_sha256s),
+            denied_paths=original.denied_paths,
+        )
         target_permissions = _delivery_role_permissions(
             AgentRole.CODER,
-            allowed_paths,
+            rebound_paths,
             _task_commands(self.backend._facts(prepared_result).profile),
         )
         plan = RecoveryPlan.create(
@@ -219,6 +266,7 @@ class NativeRecoveryEntry:
             target_preparation_sha256=prepared.preparation_sha256,
             permissions=original.permissions,
             target_permissions=target_permissions,
+            path_rebindings=path_rebindings or None,
             denied_paths=original.denied_paths,
             created_at=datetime.now(UTC),
         )

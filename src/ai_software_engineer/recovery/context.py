@@ -10,6 +10,11 @@ from ai_software_engineer.recovery.models import RecoveryPlan, RecoveryRejected
 def recovery_context_sources(plan: RecoveryPlan) -> tuple[ContextSource, ...]:
     plan.validate_integrity()
     reapply = plan.input_mode == "coder_reapply"
+    path_corrections = "".join(
+        f"The approved recovery policy replaces stale path {item.source_path} with "
+        f"{item.target_path}; follow the target path. "
+        for item in plan.effective_path_rebindings
+    )
     origin = ContextSource(
         source_id="recovery.origin",
         uri=f"recovery://{plan.plan_sha256}",
@@ -27,6 +32,7 @@ def recovery_context_sources(plan: RecoveryPlan) -> tuple[ContextSource, ...]:
                 else "The worktree is seeded with approved interrupted edits. "
                 "Inspect and finish them. "
             )
+            + path_corrections
             + "Verify, commit a candidate and produce your own report. Old edits are not a "
             "completed implementation or QA/Review verdict."
         ),

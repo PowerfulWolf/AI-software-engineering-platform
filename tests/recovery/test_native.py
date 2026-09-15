@@ -14,12 +14,14 @@ from ai_software_engineer.agents import (
     AgentRequest,
     AgentResult,
     AgentRunStatus,
+    FileModelRouteAttemptStore,
+    RouteAttemptOutcome,
     StoredContextResolver,
 )
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
 from ai_software_engineer.context import FileContextStore
 from ai_software_engineer.design import FileDesignRecordStore
-from ai_software_engineer.domain import AgentDefinition, AgentRole
+from ai_software_engineer.domain import AgentDefinition, AgentRole, ChangedFile, ChangeType
 from ai_software_engineer.manager.delivery import ApproveProductSpec, StartProjectDelivery
 from ai_software_engineer.manager.delivery_checkpoint import (
     FileProjectDeliveryCheckpointStore,
@@ -33,6 +35,7 @@ from ai_software_engineer.product import FileProductRecordStore
 from ai_software_engineer.recovery import RecoveryRejected, RecoveryScope
 from ai_software_engineer.recovery.native import NativeRecoverySourceReader
 from ai_software_engineer.role_workspace import RoleWorktreeBinding
+from tests.domain.factories import make_coder_progress_artifact
 from tests.e2e.test_joint_delivery import setup_host
 from tests.manager.test_production_backend import _git, _ScriptedClientFactory
 from tests.manager.test_production_backend import mysql_dsn as mysql_dsn
@@ -77,6 +80,72 @@ class InterruptedFactory:
         environment: Mapping[str, str],
     ) -> AgentAdapter:
         return InterruptedCoder(binding.worktree.path, self.requests)
+
+
+class ContinuedCoder:
+    def __init__(self, root: Path, requests: list[AgentRequest]) -> None:
+        self.root, self.requests = root, requests
+
+    def run(self, request: AgentRequest) -> AgentResult:
+        assert request.role is AgentRole.CODER
+        self.requests.append(request)
+        (self.root / "hello.txt").write_text("partially implemented\n")
+        template = make_coder_progress_artifact()
+        artifact = template.model_copy(
+            update={
+                "artifact_id": f"art_progress_native_{request.attempt:02d}",
+                "task_id": request.task_id,
+                "source_revision": request.source_revision,
+                "context_manifest_id": request.context_manifest_id,
+                "producer": template.producer.model_copy(update={"run_id": request.run_id}),
+                "parent_artifact_ids": request.expected_parent_artifact_ids or (),
+                "supersedes": request.continuation_checkpoint_id,
+                "content": template.content.model_copy(
+                    update={
+                        "checkpoint_sequence": request.attempt,
+                        "changed_files": (
+                            ChangedFile(
+                                path="hello.txt",
+                                change=ChangeType.MODIFIED,
+                                lines_added=1,
+                                lines_deleted=1,
+                            ),
+                        ),
+                        "completed_step_ids": (),
+                        "remaining_step_ids": ("finish_change",),
+                        "tests_run": (),
+                        "next_actions": ("Continue the bounded implementation.",),
+                    }
+                ),
+            }
+        )
+        return AgentResult(
+            run_id=request.run_id,
+            task_id=request.task_id,
+            role=request.role,
+            attempt=request.attempt,
+            source_revision=request.source_revision,
+            context_manifest_id=request.context_manifest_id,
+            status=AgentRunStatus.SUCCEEDED,
+            artifact=artifact,
+        )
+
+
+class ContinuedFactory:
+    def __init__(self) -> None:
+        self.requests: list[AgentRequest] = []
+
+    def create(
+        self,
+        *,
+        route: ProviderRouteConfig,
+        definition: AgentDefinition,
+        binding: RoleWorktreeBinding,
+        context_resolver: StoredContextResolver,
+        config: ProductionConfig,
+        environment: Mapping[str, str],
+    ) -> AgentAdapter:
+        return ContinuedCoder(binding.worktree.path, self.requests)
 
 
 def _snapshot(root: Path) -> dict[str, bytes]:
@@ -190,6 +259,80 @@ def test_native_source_is_verified_read_only_and_rejects_corruption(
         record.write_bytes(original_bytes)
     assert reader.inspect(scope, **arguments) == observed
     assert _snapshot(project) == original
+
+
+@pytest.mark.mysql
+def test_budget_exhausted_coder_progress_is_a_recoverable_native_source(
+    tmp_path: Path, mysql_dsn: str
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "hello.txt").write_text("hello\n")
+    _git("init", "-b", "main", cwd=project)
+    _git("add", "hello.txt", cwd=project)
+    _git("commit", "-m", "initial", cwd=project)
+    config = ProductionConfig(
+        platform_root=str(tmp_path / "platform"),
+        default_project_id="project_test",
+        default_project_name="Test Project",
+        model_routes=(
+            ProviderRouteConfig(
+                provider="codex", model="gpt-5.5", kind=ModelProviderKind.CODEX_CLI
+            ),
+        ),
+        live_model_execution=True,
+    )
+    environment = {"ASE_MYSQL_DSN": mysql_dsn, "PATH": os.environ.get("PATH", "")}
+    factory = ContinuedFactory()
+    host = TeamHost(
+        config=config,
+        environment=environment,
+        structured_clients=_ScriptedClientFactory(),
+        delivery_route_adapters=factory,
+    )
+    workspace = host.projects()[0]
+    entry = host.project_entry()
+    started = entry.start(
+        StartProjectDelivery(repository_root=str(project), requirement="Change greeting.")
+    )
+    blocked = entry.approve(
+        ApproveProductSpec(
+            delivery_id=started.checkpoint.delivery_id,
+            expected_checkpoint_sha256=started.checkpoint.checkpoint_sha256,
+            approval_reference="test-approval",
+        )
+    )
+    checkpoint = blocked.checkpoint
+    assert checkpoint.stage.value == "BLOCKED"
+    assert checkpoint.failure_code is not None
+    assert len(factory.requests) == 3, (
+        checkpoint.failure_code,
+        checkpoint.failure_summary,
+        checkpoint.next_action,
+        checkpoint.failed_stage,
+    )
+    source = NativeRecoverySourceReader(config, environment).discover_failed_coder(
+        RecoveryScope(
+            team_id=config.team_id,
+            repository_id=checkpoint.repository_id,
+            repository_root=str(project),
+            delivery_id=checkpoint.delivery_id,
+        )
+    )
+    assert source.task.attempts == source.task.max_attempts == 3
+    assert source.source.failed_run_id == factory.requests[-1].run_id
+    assert source.source.failed_context_id == factory.requests[-1].context_manifest_id
+    plan, plan_path = host.recovery_entry().propose_delivery(checkpoint)
+    assert plan.source.failed_run_id == factory.requests[-1].run_id
+    assert plan.source.failed_context_id == factory.requests[-1].context_manifest_id
+    assert plan_path.is_file()
+    sidecar = workspace.root / "repositories" / checkpoint.repository_id
+    routes = FileModelRouteAttemptStore(sidecar / "runs/model-routes", read_only=True).list_for_run(
+        source.source.failed_run_id
+    )
+    assert routes[-1].outcome is RouteAttemptOutcome.SUCCEEDED
+    assert routes[-1].result.artifact is not None
+    assert routes[-1].result.artifact.kind.value == "coder-progress"
 
 
 def test_inspection_does_not_initialize_missing_platform(tmp_path: Path) -> None:

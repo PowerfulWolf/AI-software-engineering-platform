@@ -56,6 +56,8 @@ def test_multistack_markers_are_retained_in_stable_order(tmp_path: Path) -> None
         "worker/go.mod",
         "web/package.json",
         "web/tsconfig.json",
+        "web/src/app.js",
+        "web/tests/app.test.cjs",
         "native/CMakeLists.txt",
     ):
         path = project / relative
@@ -169,7 +171,7 @@ def test_profile_integrity_detects_schema_valid_tampering(tmp_path: Path) -> Non
     project = tmp_path / "project"
     project.mkdir()
     original = discover_repository_profile(project, observed_at=OBSERVED)
-    tampered = original.model_copy(update={"detector_version": "t020-v2"})
+    tampered = original.model_copy(update={"detector_version": "t020-v3"})
 
     with pytest.raises(RepositoryProfileMetadataError, match="profile_sha256"):
         tampered.validate_integrity()

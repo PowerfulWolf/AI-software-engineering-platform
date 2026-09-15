@@ -17,7 +17,7 @@ from ai_software_engineer.design import (
     FakeDesignerScenario,
     FileDesignRecordStore,
 )
-from ai_software_engineer.domain import ProjectRequestStatus
+from ai_software_engineer.domain import ProjectRequestStatus, TechnicalDesign
 from ai_software_engineer.domain.project_delivery import StageSha256
 from ai_software_engineer.product.models import ProjectRequestRevision
 from ai_software_engineer.product.store import FileProductRecordStore
@@ -275,3 +275,46 @@ def test_stale_product_facts_run_conflict_and_bad_coverage_fail_closed(tmp_path:
     )
     with pytest.raises(DesignerOutputRejected, match=r"invalid output|coverage"):
         bad_service.run(bad_command)
+
+
+def test_designer_rejects_invented_location_for_an_existing_source_file(
+    tmp_path: Path,
+) -> None:
+    case = tmp_path / "wrong-existing-path"
+    actual = case / "project/src/ai_software_engineer/team_view/app.js"
+    actual.parent.mkdir(parents=True)
+    actual.write_text("'use strict';\n", encoding="utf-8")
+    command, product_store, advancer = approved_facts(case)
+    original = design_for(command)
+    component = original.components[0].model_copy(
+        update={"affected_paths": ("src/ai_software_engineer/web_console/static/app.js",)}
+    )
+    design = TechnicalDesign.create(
+        command.product_spec,
+        command.product_approval,
+        design_id=original.id,
+        version=original.version,
+        summary=original.summary,
+        components=(component,),
+        requirement_mappings=original.requirement_mappings,
+        acceptance_mappings=original.acceptance_mappings,
+        implementation_steps=original.implementation_steps,
+        risks=original.risks,
+        created_at=original.created_at,
+    )
+    service = _service(
+        case,
+        product_store,
+        FakeDesignerAgentAdapter(
+            default=FakeDesignerScenario(
+                behavior=FakeDesignerBehavior.READY,
+                technical_design=design,
+            )
+        ),
+        advancer,
+    )
+
+    with pytest.raises(DesignerOutputRejected, match="invents a location"):
+        service.run(command)
+
+    assert advancer.calls == 0

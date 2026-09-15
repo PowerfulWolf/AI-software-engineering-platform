@@ -219,6 +219,10 @@ def _summarize(
                     f"源任务 {recovery_plan.source.task_id}",
                     f"保留改动 {len(recovery_plan.capture.files)} 个文件",
                     f"目标基线 {recovery_plan.target_base_revision}",
+                    *(
+                        f"写入目录修正 {item.source_path} → {item.target_path}"
+                        for item in recovery_plan.effective_path_rebindings
+                    ),
                 ),
             )
             next_action = "Review and approve the exact Coder recovery plan."

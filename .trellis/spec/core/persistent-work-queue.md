@@ -107,6 +107,20 @@ work_queue_events(sequence PK, work_item_id FK, event_type, from_status,
 - Queue 只保存 Artifact receipt，不解释 Artifact 内容或 verdict；TaskOrchestrator 仍是 Task 交付状态
   的唯一写入者。
 
+### 3.5 Legacy Project schema upgrade
+
+- `MySqlPersistentWorkQueue.__init__` 必须在任何 queue read/write 前检查
+  `work_queue_items/work_queue_claims/work_queue_events` 的 exact column set。
+- 当前结构使用 `work_queue_items.repository_id`。若三张活动表完整匹配旧 v0.1
+  `project_id` 结构，必须使用一次原子 `RENAME TABLE` 将整个 FK 聚合归档为对应的
+  `*_legacy_project_v01`，随后创建空的 Repository 结构；不得单改索引列或重写旧 JSON，因为旧
+  WorkItem/Assignment/Lease payload 的 canonical hash 与 Project 身份绑定。
+- 崩溃发生在原子 rename 后、current create 前时，下一次初始化可在完整 archive 旁重建 current
+  表。活动表、archive 任一 partial/mixed/unexpected schema 必须 `QueueCorruption` fail closed。
+- current FK 使用 `fk_work_queue_claim_item_repository_v02` 与
+  `fk_work_queue_event_item_repository_v02`，避免完整 legacy archive 保留旧 FK 名时发生 schema 级
+  constraint-name 冲突。authority lock 不含 Project/Repository 身份，继续复用。
+
 ## 4. Validation & Error Matrix
 
 | 输入/当前事实 | 检测点 | 必须行为 |
@@ -125,6 +139,8 @@ work_queue_events(sequence PK, work_item_id FK, event_type, from_status,
 | CLOSED exact completion replay | completion event | 返回原始 completion/时间 |
 | CLOSED changed replay | completion event | `QueueConflict` |
 | 持久 payload/claim/event 不能通过模型校验 | decode boundary | `QueueCorruption`，不猜测修复 |
+| exact legacy `project_id` queue aggregate | initialization | atomic archive whole aggregate, then create empty current tables |
+| partial/mixed legacy/current tables or archive | initialization | `QueueCorruption`; no guessed migration |
 
 ## 5. Good / Base / Bad Cases
 
@@ -143,6 +159,8 @@ work_queue_events(sequence PK, work_item_id FK, event_type, from_status,
 - `tests/work_queue/test_mysql_queue.py` 使用真实 MySQL：exact enqueue replay、wrong owner、start、renew、
   atomic close+next enqueue、completion replay/conflict、wait/make_ready、retry、expiry reaper、旧 owner
   拒绝、两个 Dispatcher 竞争只有一个 winner。
+- `tests/work_queue/test_mysql_schema_upgrade.py`：fresh/current idempotence、exact legacy aggregate rename、
+  partial/mixed schema 与 incomplete archive fail closed；不依赖真实数据库。
 - 合并前运行全量 Ruff、strict Mypy、pytest、offline build 和 `git diff --check`。
 
 ## 7. Wrong vs Correct

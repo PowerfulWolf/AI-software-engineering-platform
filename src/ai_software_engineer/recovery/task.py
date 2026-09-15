@@ -40,6 +40,15 @@ class AuthorizedRecoveryTaskBuilder:
             created_at=request.created_at,
             updated_at=plan.created_at,
         )
+        constraints = original.task.constraints
+        if constraints is not None:
+            target_permissions = plan.effective_target_permissions
+            constraints = constraints.model_copy(
+                update={
+                    "allowed_paths": target_permissions.write_paths,
+                    "allowed_commands": target_permissions.commands,
+                }
+            )
         task = derive_delivery_task(
             facts.target,
             rebound,
@@ -52,7 +61,7 @@ class AuthorizedRecoveryTaskBuilder:
             base_ref=plan.target_base_revision,
             max_attempts=original.task.max_attempts,
             created_at=plan.created_at,
-            constraints=original.task.constraints,
+            constraints=constraints,
             owner=original.task.owner,
             labels=original.task.labels,
         )

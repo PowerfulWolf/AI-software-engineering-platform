@@ -381,5 +381,7 @@ checkpoint = checkpoint.model_copy(update={"title": new_name})
 
 # Correct: publish the ordinary content-addressed replacement, then retire the old identity.
 replacement = service.create(CreateRequirement(name=new_name, repository_roots=roots))
-retirements.retire(old, reason="replaced", replacement_delivery_id=replacement.checkpoint.delivery_id)
+retirements.retire(
+    old, reason="replaced", replacement_delivery_id=replacement.checkpoint.delivery_id
+)
 ```

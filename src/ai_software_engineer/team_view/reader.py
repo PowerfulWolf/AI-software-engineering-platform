@@ -237,61 +237,64 @@ class ProductionTeamReader:
                 )
             )
         tasks: list[TaskView] = []
-        # Filesystem prefixes first, SQL snapshot second: SQL cannot lag the captured checkpoints.
+        native_views: list[tuple[_Native, TaskView]] = []
+        native_by_task: dict[str, tuple[_Native, str, ScopeView]] = {}
         if natives:
+            assert selected is not None
+            for native in natives:
+                cp = native.checkpoint
+                request_id, scope = ownership.get(
+                    cp.delivery_id,
+                    (
+                        cp.delivery_id,
+                        ScopeView(
+                            root=cp.repository_root,
+                            selected_paths=(".",),
+                            delivery_id=cp.delivery_id,
+                        ),
+                    ),
+                )
+                if scope.root != cp.repository_root:
+                    raise ValueError("child code scope mismatch")
+                native_views.append(
+                    (
+                        native,
+                        _task_base(
+                            native,
+                            selected.manifest.project_id,
+                            request_id,
+                            scope,
+                        ),
+                    )
+                )
+                for task_id, source_native in _native_task_sources(native).items():
+                    existing = native_by_task.get(task_id)
+                    if (
+                        existing is not None
+                        and existing[0].checkpoint.delivery_id
+                        != source_native.checkpoint.delivery_id
+                    ):
+                        raise ValueError("ambiguous native Task ownership")
+                    native_by_task[task_id] = (source_native, request_id, scope)
+
+        # Filesystem prefixes first, SQL snapshot second: SQL cannot lag the captured checkpoints.
+        # A pre-dispatch failure has no SQL Task, Assignment or verification source to enrich.
+        # Its durable filesystem checkpoint is sufficient for an honest blocked work card.
+        requires_sql = bool(native_by_task) or any(
+            native.checkpoint.dispatch_commit_id is not None for native in natives
+        )
+        projected_native_views: list[tuple[_Native, TaskView]] = []
+        if requires_sql:
             assert selected is not None
             connection = open_mysql_connection(self.config.require_mysql_dsn(self._environment))
             try:
                 with connection.cursor(DictCursor) as cursor:
                     cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
                     cursor.execute("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
-                    native_by_task: dict[str, tuple[_Native, str, ScopeView]] = {}
-                    for native in natives:
-                        cp = native.checkpoint
-                        request_id, scope = ownership.get(
-                            cp.delivery_id,
-                            (
-                                cp.delivery_id,
-                                ScopeView(
-                                    root=cp.repository_root,
-                                    selected_paths=(".",),
-                                    delivery_id=cp.delivery_id,
-                                ),
-                            ),
-                        )
-                        if scope.root != cp.repository_root:
-                            raise ValueError("child code scope mismatch")
-                        view = _read_task(
-                            native,
-                            selected.manifest.project_id,
-                            request_id,
-                            scope,
-                            cursor,
-                        )
+                    for native, base in native_views:
+                        view = _read_task_details(native, cursor, base)
                         tasks.append(view)
-                        for task_id, source_native in _native_task_sources(native).items():
-                            existing = native_by_task.get(task_id)
-                            if (
-                                existing is not None
-                                and existing[0].checkpoint.delivery_id
-                                != source_native.checkpoint.delivery_id
-                            ):
-                                raise ValueError("ambiguous native Task ownership")
-                            native_by_task[task_id] = (source_native, request_id, scope)
-                        if cp.delivery_id not in ownership:
-                            requests.append(
-                                RequestView(
-                                    id=cp.delivery_id,
-                                    project_id=selected.manifest.project_id,
-                                    title=_safe(native.intake.title),
-                                    stage=cp.stage,
-                                    scopes=(scope,),
-                                    next_action=view.next_action,
-                                    blocker=view.blocker,
-                                    documents=_stage_refs(cp),
-                                    checkpoint_sha256=cp.checkpoint_sha256,
-                                )
-                            )
+                        projected_native_views.append((native, view))
                     tasks.extend(
                         _read_verifications(
                             cursor,
@@ -303,6 +306,30 @@ class ProductionTeamReader:
             finally:
                 connection.rollback()
                 connection.close()
+        else:
+            for native, base in native_views:
+                tasks.append(base)
+                projected_native_views.append((native, base))
+
+        if projected_native_views:
+            assert selected is not None
+            for native, view in projected_native_views:
+                cp = native.checkpoint
+                if cp.delivery_id not in ownership:
+                    requests.append(
+                        RequestView(
+                            id=cp.delivery_id,
+                            project_id=selected.manifest.project_id,
+                            title=_safe(native.intake.title),
+                            stage=cp.stage,
+                            scopes=(view.scope,),
+                            next_action=view.next_action,
+                            blocker=view.blocker,
+                            documents=_stage_refs(cp),
+                            checkpoint_sha256=cp.checkpoint_sha256,
+                        )
+                    )
+        requests = [_request_with_current_work(request, tasks) for request in requests]
         known_agents = {p.id for p in profiles}
         if any(a.agent_id not in known_agents for t in tasks for a in t.assignments):
             raise ValueError("assignment references an unknown Team member")
@@ -439,6 +466,31 @@ def _waiting(stage: str) -> bool:
     return stage.startswith("WAITING_") or stage in {"BLOCKED", "FAILED"}
 
 
+def _request_with_current_work(request: RequestView, tasks: list[TaskView]) -> RequestView:
+    """Prefer a newer active child Task over a stale terminal joint observation."""
+    if not (_waiting(request.stage) or request.stage in {"DELIVERING", "INTEGRATING"}):
+        return request
+    active = tuple(
+        task
+        for task in tasks
+        if task.request_id == request.id
+        and not task.terminal
+        and task.blocker is None
+        and not _waiting(task.status)
+    )
+    if not active:
+        return request
+    current = max(active, key=lambda task: (task.last_activity, task.id))
+    stage = "INTEGRATING" if current.work_kind == "candidate_verification" else "DELIVERING"
+    return request.model_copy(
+        update={
+            "stage": stage,
+            "next_action": current.next_action,
+            "blocker": None,
+        }
+    )
+
+
 def _directories(root: Path, pattern: str) -> tuple[Path, ...]:
     _reject_symlinks(root)
     paths = tuple(sorted(root.glob(pattern)))
@@ -478,8 +530,21 @@ def _read_task(
     scope: ScopeView,
     cursor: DictCursor,
 ) -> TaskView:
+    return _read_task_details(
+        native,
+        cursor,
+        _task_base(native, project_id, request_id, scope),
+    )
+
+
+def _task_base(
+    native: _Native,
+    project_id: str,
+    request_id: str,
+    scope: ScopeView,
+) -> TaskView:
     cp = native.checkpoint
-    base = TaskView(
+    return TaskView(
         id=cp.delivery_id,
         project_id=project_id,
         request_id=request_id,
@@ -496,7 +561,6 @@ def _read_task(
         candidate_branch=_candidate_branch(cp.repository_root, cp.task_id, cp.candidate_revision),
         documents=_stage_refs(cp),
     )
-    return _read_task_details(native, cursor, base)
 
 
 def _read_verifications(

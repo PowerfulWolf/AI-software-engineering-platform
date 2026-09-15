@@ -392,7 +392,7 @@ h3 {
 }
 .agent-queue-board {
   display: grid;
-  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  grid-template-columns: repeat(4, minmax(270px, 1fr));
   gap: 12px;
   overflow-x: auto;
   padding-bottom: 4px;
@@ -422,10 +422,74 @@ h3 {
 }
 .agent-queue .work-row {
   margin-top: 8px;
-  padding: 12px;
+  min-width: 0;
+  padding: 14px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: white;
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    transform 120ms ease;
+}
+.agent-queue .work-row:hover {
+  border-color: #9eb7ed;
+  box-shadow: 0 5px 14px rgba(31, 64, 121, 0.1);
+  transform: translateY(-1px);
+}
+.agent-queue .work-row:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, 0.25);
+  outline-offset: 2px;
+}
+.work-row-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+}
+.work-row-title {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 1rem;
+  font-weight: 650;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.work-row-overview {
+  min-width: 0;
+  margin-top: 12px;
+}
+.work-row-role {
+  display: inline-block;
+  margin-bottom: 7px;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+.work-row-scope {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #f6f8fc;
+}
+.work-row-scope-label {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+.work-row-path {
+  min-width: 0;
+  overflow: hidden;
+  color: #4b5c72;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 0.8125rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .row {
   display: flex;
@@ -661,6 +725,71 @@ main[data-page="requests"] #detail {
 }
 .request-detail-next {
   margin: 10px 0 0;
+}
+.request-blocking-section > .muted {
+  margin: -4px 0 14px;
+}
+.request-blocking-primary {
+  padding: 16px 18px;
+  border-left: 3px solid #cf7a20;
+  border-radius: 0 9px 9px 0;
+  background: #fff8ed;
+}
+.request-blocking-primary + .request-blocking-primary {
+  margin-top: 10px;
+}
+.request-blocking-kicker {
+  display: inline-block;
+  color: #95500d;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.request-blocking-reason {
+  margin: 7px 0 0;
+  font-size: 1rem;
+  font-weight: 620;
+  line-height: 1.6;
+}
+.request-blocking-scope {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.request-recovery-note {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 12px;
+  margin-top: 10px;
+  padding: 12px 14px;
+  border: 1px solid #eadfcd;
+  border-radius: 8px;
+  background: #fffdf9;
+}
+.request-recovery-note strong {
+  color: #6b4d2e;
+}
+.request-recovery-note p {
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.request-blocking-next {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.request-blocking-next p {
+  margin: -2px 0 0;
+  line-height: 1.55;
 }
 .request-detail-panel > .detail-section h2 {
   margin: 0 0 12px;
@@ -1537,6 +1666,24 @@ summary {
   margin-top: 24px;
   scroll-margin-top: 15px;
 }
+main #detail.task-detail-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  align-items: start;
+  justify-items: center;
+  overflow-y: auto;
+  margin: 0;
+  padding: 60px 24px;
+  border: 0;
+  border-radius: 0;
+  background: rgba(20, 35, 55, 0.48);
+}
+.task-detail-dialog {
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+}
 pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -1638,7 +1785,7 @@ code {
     max-height: none;
   }
   .agent-queue-board {
-    grid-template-columns: repeat(4, minmax(245px, 1fr));
+    grid-template-columns: repeat(4, minmax(270px, 1fr));
   }
   .scope-switch {
     display: flex;

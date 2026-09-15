@@ -84,6 +84,7 @@ from ai_software_engineer.manager.dispatch import (
     DispatchCommitRecord,
     DispatchError,
     DispatchRejected,
+    DispatchStoreUnavailable,
     DispatchWorkforceSnapshot,
     ManagerDispatchService,
 )
@@ -981,6 +982,11 @@ class ProductionProjectDeliveryBackend:
             raise DeliveryBackendFailure(
                 DeliveryFailureCode.RESOURCE_UNAVAILABLE,
                 f"{label} has no eligible organization resource",
+            ) from error
+        except DispatchStoreUnavailable as error:
+            raise DeliveryBackendFailure(
+                DeliveryFailureCode.RESOURCE_UNAVAILABLE,
+                f"{label} is temporarily unavailable",
             ) from error
         except DispatchError as error:
             raise DeliveryBackendFailure(

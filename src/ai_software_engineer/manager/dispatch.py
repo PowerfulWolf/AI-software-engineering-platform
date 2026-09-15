@@ -122,6 +122,10 @@ class DispatchStoreError(DispatchError):
     """Base error for immutable dispatch persistence."""
 
 
+class DispatchStoreUnavailable(DispatchStoreError):
+    """The dispatch authority could not be reached or committed."""
+
+
 class DispatchCommitConflict(DispatchStoreError):
     """An existing commit identity contains different content."""
 
@@ -1077,6 +1081,7 @@ __all__ = [
     "DispatchRequestRevisionReader",
     "DispatchStageMismatch",
     "DispatchStoreError",
+    "DispatchStoreUnavailable",
     "DispatchWorkforceSnapshot",
     "FileDispatchCommitStore",
     "ManagerDispatchService",

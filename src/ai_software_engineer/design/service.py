@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime
+from pathlib import PurePosixPath
 from typing import Literal, Protocol, Self
 
 from pydantic import model_validator
@@ -199,6 +200,7 @@ class DesignerService:
             raise DesignerOutputRejected(
                 "TechnicalDesign lineage or requirement/acceptance coverage is invalid"
             ) from error
+        _validate_affected_paths(command.repository_profile, design)
         if design.version != 1:
             raise DesignerOutputRejected("v0.1 Designer supports one immutable design version")
         next_request = _request_with_status(
@@ -399,6 +401,39 @@ class DesignerService:
             or result.context_id != request.context.context_id
         ):
             raise DesignerOutputRejected("Designer result identity does not match request")
+
+
+def _validate_affected_paths(profile: RepositoryProfile, design: TechnicalDesign) -> None:
+    """Reject invented locations for files already observed in the repository."""
+
+    known_paths = (
+        {marker for fact in profile.languages for marker in fact.markers}
+        | {marker for fact in profile.build_systems for marker in fact.markers}
+        | {source.relative_path for source in profile.native_rules}
+    )
+    known_by_name: dict[str, set[str]] = {}
+    for known_path in known_paths:
+        known_by_name.setdefault(PurePosixPath(known_path).name, set()).add(known_path)
+    for component in design.components:
+        for value in component.affected_paths:
+            path = PurePosixPath(value)
+            if (
+                path.is_absolute()
+                or str(path) != value
+                or any(part in {"", ".", ".."} for part in path.parts)
+                or "\\" in value
+            ):
+                raise DesignerOutputRejected(
+                    "TechnicalDesign affected paths must be canonical repository-relative paths"
+                )
+            if value in known_paths or any(
+                known.startswith(value.rstrip("/") + "/") for known in known_paths
+            ):
+                continue
+            if not any(token in value for token in "*?[") and known_by_name.get(path.name):
+                raise DesignerOutputRejected(
+                    "TechnicalDesign affected path invents a location for an existing file"
+                )
 
 
 def _request_with_status(

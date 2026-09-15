@@ -60,6 +60,15 @@ class DeliveryResumeResult(DomainModel):
     recovery_plan_sha256: str | None = None
 
 
+def _checkpoint_next_action(checkpoint: ProjectDeliveryCheckpoint) -> str:
+    if (
+        checkpoint.stage in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
+        and checkpoint.failure_summary is not None
+    ):
+        return checkpoint.failure_summary
+    return str(checkpoint.next_action)
+
+
 class DeliveryResumeController:
     """Classify one native Delivery and execute only its next authorized operation."""
 
@@ -97,7 +106,7 @@ class DeliveryResumeController:
             return self._result(
                 outcome,
                 result,
-                next_action=str(result.checkpoint.next_action),
+                next_action=_checkpoint_next_action(result.checkpoint),
             )
         retried = self._entry.retry_interrupted_stage(command)
         if retried.checkpoint != current:
@@ -116,7 +125,7 @@ class DeliveryResumeController:
             return self._result(
                 outcome,
                 retried,
-                next_action=str(retried.checkpoint.next_action),
+                next_action=_checkpoint_next_action(retried.checkpoint),
             )
         if current.task_id is None:
             return self._result(
@@ -226,7 +235,7 @@ class DeliveryResumeController:
             return self._result(
                 DeliveryResumeOutcome.CONTINUED,
                 started,
-                next_action=str(started.checkpoint.next_action),
+                next_action=_checkpoint_next_action(started.checkpoint),
                 completion=completion,
             )
         delivered = self._backend.run_prepared_allocation(
@@ -245,7 +254,7 @@ class DeliveryResumeController:
         return self._result(
             DeliveryResumeOutcome.REMEDIATED,
             result,
-            next_action=str(result.checkpoint.next_action),
+            next_action=_checkpoint_next_action(result.checkpoint),
             completion=completion,
         )
 
@@ -288,7 +297,7 @@ class DeliveryResumeController:
             return self._result(
                 DeliveryResumeOutcome.CONTINUED,
                 started,
-                next_action=str(started.checkpoint.next_action),
+                next_action=_checkpoint_next_action(started.checkpoint),
             )
         result = self._entry.finish_recovery(
             execution.plan,
@@ -299,7 +308,7 @@ class DeliveryResumeController:
         return self._result(
             DeliveryResumeOutcome.RECOVERED,
             result,
-            next_action=str(result.checkpoint.next_action),
+            next_action=_checkpoint_next_action(result.checkpoint),
         )
 
     @staticmethod

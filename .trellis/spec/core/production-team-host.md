@@ -805,3 +805,114 @@ the model prompt described only the former and the adapter erased the latter's f
 positive fixtures hid the semantic gap; ephemeral output deletion then made live diagnosis
 irreversible. Prevention combines an Agent-visible semantic contract, a negative adapter-seam test,
 stable secret-free diagnostics, and explicit fresh-plan recovery rather than silent replay.
+
+## Scenario: legacy Project dispatch authority upgrade
+
+### 1. Scope / Trigger
+
+This contract applies when `MySqlDispatchAuthority` opens a database created before dispatch
+identity changed from the old code-directory `project_id` to the current Project-owned
+`repository_id`. It also governs the browser result of retrying a pre-Task dispatch interruption.
+
+### 2. Signatures
+
+```python
+MySqlDispatchAuthority.__init__(dsn, *, request_revisions, planner_records)
+_ensure_current_dispatch_tables(cursor) -> None
+UnifiedProjectEntryService.retry_interrupted_stage(command) -> ProjectDeliveryResult
+DeliveryResumeController.resume(command) -> DeliveryResumeResult
+```
+
+Current and archived database shapes are exact:
+
+```text
+dispatch_workforce_snapshots(repository_id, task_id, payload_json, snapshot_sha256)
+dispatch_commits(id, repository_id, task_id, payload_json, dispatch_sha256)
+verification_reservations(plan_sha256, payload_json, completion_sha256)
+
+dispatch_workforce_snapshots_legacy_project_v01(project_id, ...)
+dispatch_commits_legacy_project_v01(id, project_id, ...)
+```
+
+### 3. Contracts
+
+- Initialization reads `information_schema.COLUMNS` before using the dispatch tables. A current
+  exact schema and a fresh database are idempotent no-ops apart from `CREATE TABLE IF NOT EXISTS`.
+- The identity-bearing legacy snapshot/commit pair must be present as one exact set. One atomic MySQL
+  `RENAME TABLE` preserves that pair under the fixed `_legacy_project_v01` names; new empty current
+  tables are then created. Legacy JSON and digests remain byte-for-byte historical facts and are not
+  relabelled or decoded as Repository records.
+- `verification_reservations` never carried Project/Repository identity. It may be absent on older
+  installations or already have the current exact schema; it is created or retained, never renamed
+  with the identity migration. Any other verification schema fails closed.
+- A restart between rename and create is recoverable: a complete two-table archive plus absent current
+  identity tables creates the current set. Partial archives, mixed Project/Repository columns,
+  unexpected columns, or simultaneous legacy active and archive sets fail closed as
+  `DispatchCommitCorruption`.
+- MySQL connection/transaction/commit failures use `DispatchStoreUnavailable`, which the production
+  backend exposes as retryable `RESOURCE_UNAVAILABLE`; structural/schema drift remains non-transient.
+- Existing pre-upgrade checkpoints that recorded the exact old pre-Task DISPATCHING MySQL transaction
+  or commit summary as `CHECKPOINT_DRIFT` may re-enter that stage. Other `CHECKPOINT_DRIFT` failures
+  remain ineligible for automatic retry.
+- If a continue Operation finishes but its returned checkpoint is still BLOCKED/FAILED, the public
+  next action uses its safe `failure_summary`, not the opaque `REQUEST_HUMAN` enum.
+
+### 4. Validation & Error Matrix
+
+| Stored state / failure | Required result |
+|---|---|
+| No dispatch tables | create the three current tables |
+| Exact current tables, with or without a complete archive | idempotent reopen |
+| Exact legacy snapshot/commit pair, verification absent/current, no archive | atomically archive the identity pair; create/retain current verification table |
+| Complete archive and no current tables after interrupted startup | create current set; preserve archive |
+| Verification table has unexpected columns | `DispatchCommitCorruption`; do not rename or reinterpret it |
+| Mixed columns, partial archive, or unexpected archive shape | `DispatchCommitCorruption`; do not guess or rewrite facts |
+| MySQL temporarily unavailable during dispatch | BLOCKED `RESOURCE_UNAVAILABLE`; one explicit continue may retry |
+| Exact old pre-Task MySQL `CHECKPOINT_DRIFT` summary | bounded compatibility retry of DISPATCHING |
+| Any other `CHECKPOINT_DRIFT` | remain blocked for explicit human diagnosis |
+
+### 5. Good / Base / Bad Cases
+
+- **Good**: 18 old Project-based commits are retained in the archive; a blocked current Repository
+  Requirement creates one new snapshot/commit and advances to Coder implementation.
+- **Base**: a fresh database or already upgraded database opens repeatedly without renaming tables.
+- **Bad**: rename only the SQL column, rewrite `project_id` JSON to `repository_id`, or recompute old
+  digests. The old ID value names a different domain object and this would forge audit history.
+
+### 6. Tests Required
+
+- `tests/manager/test_mysql_dispatch_schema.py`: fresh/current idempotence, exact two-table identity
+  archive with verification present or absent, rename-before-create ordering, mixed schema rejection
+  and incomplete archive rejection.
+- `tests/manager/test_production_backend.py`: unavailable dispatch storage maps to
+  `RESOURCE_UNAVAILABLE`, not `CHECKPOINT_DRIFT`.
+- `tests/e2e/test_unified_project_entry.py`: only the exact legacy pre-Task MySQL failure can retry.
+- Manual production check: after restart, assert the six table names/column sets and row preservation,
+  then continue the real blocked Requirement and observe its Repository Task enter implementation.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```sql
+ALTER TABLE dispatch_commits CHANGE project_id repository_id VARCHAR(128);
+UPDATE dispatch_commits SET payload_json = JSON_REPLACE(...);
+```
+
+#### Correct
+
+```sql
+RENAME TABLE
+  dispatch_commits TO dispatch_commits_legacy_project_v01,
+  dispatch_workforce_snapshots TO dispatch_workforce_snapshots_legacy_project_v01;
+-- Retain/create verification_reservations independently; it has no Project identity.
+-- Create clean Repository-identity tables; retain old hash-bound allocation facts unchanged.
+```
+
+Bug analysis: this was primarily **C — change propagation failure**, reinforced by **D — test
+coverage gap** and **E — implicit assumption**. The Team/Project/Requirement refactor changed domain
+models and queries while `CREATE TABLE IF NOT EXISTS` silently retained the old schema. The first
+surface fix made the error retryable, but could not make the incompatible store usable. Prevention is
+exact startup schema inspection, lossless archive migration, a negative migration test, typed
+transient failure classification, and a browser assertion that a completed-but-blocked command is
+never rendered as no response.

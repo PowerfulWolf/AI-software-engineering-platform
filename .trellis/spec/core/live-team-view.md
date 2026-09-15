@@ -36,7 +36,18 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
 - Match in-flight children with DerivedStageInputs + existing delivery identity, never titles/prose.
 - Capture file prefixes before SQL snapshot; event-linked artifacts support gate evidence. Completed
   model-route records can precede state transitions but cannot become verdict authority.
+- Open the MySQL read snapshot only when at least one native delivery has a current dispatch commit or
+  a historical Task source. A pre-dispatch terminal checkpoint with no `dispatch_commit_id` and no
+  historical `task_id` is fully projected from its validated filesystem checkpoint: it remains a
+  blocked work card with no Assignment, and does not require MySQL merely because a native delivery
+  directory exists. Once any current or historical Task lineage exists, SQL remains mandatory and
+  unavailable/corrupt SQL facts fail the selected Project closed.
 - Current role is Task stage + committed assignment; terminal tasks are history, not active work.
+- Requirement 状态是联合 checkpoint 与其子 Task 的只读组合投影。若联合 checkpoint 仍是旧的
+  `BLOCKED`/waiting 观察，但同一 Requirement 已有更新的、无 blocker 的非终态子 Task，列表和详情
+  必须优先展示子 Task 正在交付（delivery/remediation 为 `DELIVERING`，candidate verification 为
+  `INTEGRATING`），清除旧 blocker，并使用子 Task 的 `next_action`。子 Task 再次终止或阻塞后才恢复
+  展示联合 checkpoint 的阻塞事实；不得把旧父记录覆盖回存储。
 - Agent cards must render assignment-stage state, not copy the Task's global delivery status onto every
   planned assignment. Only `AssignmentView.current_stage=true` may display the Task's active-stage label.
   Earlier serial roles display `本轮已完成`, later roles display `等待<角色>阶段`, and a Task with no
@@ -53,6 +64,11 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
   current-stage assignments are `进行中`, other non-terminal assignments are `待完成`, blocker or
   waiting/failed work is `已阻塞`, and terminal audit history is `已完成`. The queue is explicitly
   scoped to the selected Project snapshot; it is not an organization-global capacity claim.
+- 四列队列必须为任务卡保留可读的最小宽度，空间不足时由队列横向滚动，不能把路径和操作压成逐字
+  断行。列标题已经表达任务状态，因此队列卡只展示需求名、当前角色和紧凑代码目录，并作为整卡可
+  点击/键盘操作的概览入口；
+  模型、最近活动、完整目录、阻塞原因和审计记录统一进入任务详情弹窗。代码目录在卡片中可单行省略，
+  但必须保留完整值供悬停查看。
 - The task page renders every selected-Project Task in exactly one UI group: `DONE` is `已完成`;
   blocker/`WAITING_*`/`BLOCKED`/`FAILED` is `阻塞中`; other non-terminal work is `执行中`;
   any remaining audit-terminal status is `已完成`.
@@ -76,7 +92,10 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
 | Missing config / occupied port | safe CLI exit 2 |
 | Missing team / bad digest / path / unavailable DB | TeamReadError / HTTP 503, no init |
 | Prepared empty team | honest empty data; no DB/model needed without native deliveries |
+| Pre-dispatch `BLOCKED` native delivery, no current/historical Task | show the blocked work card with zero assignments; do not open MySQL |
+| Any current/historical Task or dispatch lineage | require one read-only MySQL snapshot; unavailable or inconsistent facts reject the snapshot |
 | Running child before parent publication | visible via deterministic identity |
+| Joint parent remains `BLOCKED`, current child is `IMPLEMENTING` | Requirement is active/`DELIVERING`; stale parent blocker is hidden |
 | Parent references an exact historical child; native child advanced | latest child remains visible |
 | Parent child record is absent/replaced or ahead of native history | reject snapshot |
 | Task/dispatch/event binding drift | reject snapshot, never hide corrupted records |
@@ -90,6 +109,7 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
 | Invalid/path-like/unknown Project ID | safe 404 or unavailable response; no path traversal |
 | Enabled member without selected-Project assignment | `空闲中`; no online claim |
 | Active, blocked and done Tasks | exactly one matching task section each |
+| Narrow Team queue with a long Repository path | readable overview card; compact single-line path; full metadata in the task-detail modal |
 | Non-GET / unknown path or query | 405 / 404 |
 | Malicious HTML / secret in title or Product dialogue | redacted text, no executable markup |
 | Product clarification with screenshot | preserve user/Product order and safe attachment metadata |
@@ -98,7 +118,9 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
 ## Good / Base / Bad
 
 Good: current QA visible with exact modules before joint child writeback. Base: empty team has no
-fake members. Bad: initialize Host on GET or label old IMPLEMENTING checkpoint as Agent online.
+fake members; a dispatch failure before Task creation is visible without inventing SQL state or Agent
+work. Bad: initialize Host on GET, open MySQL solely because a pre-dispatch checkpoint directory
+exists, or label old IMPLEMENTING checkpoint as Agent online.
 
 ## Tests Required
 
@@ -107,6 +129,9 @@ no file writes, Project isolation, tamper rejection; actual HTTP GET/assets/Host
 exact Schema model equality; Node DOM harness for multi-assignment/views/HTML safety/refresh/stale/
 expanded documents, Project tabs, member workload state and three task groups. No real models. Full
 regression, Ruff, strict Mypy and offline build required.
+The reader suite must also create a real repository sidecar containing a pre-dispatch terminal native
+checkpoint and assert that `snapshot()` succeeds without a DSN, returns the blocked card, and exposes
+no Task ID or Assignment.
 The DOM harness must include one serial Task assigned to Coder/QA/Reviewer and assert that exactly the
 current assignment receives the active Task-stage label before and after a Coder-to-QA transition.
 `tests/projection/test_projector.py` 必须覆盖 orchestrator Run 可见但 `snapshot.agents` 不含虚假成员。
@@ -132,6 +157,35 @@ state that process liveness remains unknown.
 Wrong: render Project tabs while every tab still fetches the same default Project snapshot.
 Correct: each tab calls `GET /api/v1/team?project_id=<project_id>` and the reader validates that
 Project against the configured Team's catalog before reading isolated Requirement facts.
+
+Wrong: `if natives: open_mysql_connection(...)`; a filesystem delivery may have failed before a
+Task or dispatch commit existed.
+Correct: build validated filesystem base views first, derive current/historical Task lineage, and open
+the read-only SQL snapshot only when that lineage requires enrichment or verification projection.
+
+## Bug analysis: pre-dispatch failure made the selected Project unreadable
+
+1. **Root cause (D/E)**: the Reader used “at least one native delivery directory exists” as a proxy
+   for “SQL Task facts exist”. A `CHECKPOINT_DRIFT` during dispatch persisted a valid terminal native
+   checkpoint before any Task, Assignment or dispatch commit, so the proxy was false and an unrelated
+   SQL read failure replaced the useful blocked checkpoint with a generic HTTP 503.
+2. **Why earlier tests missed it**: the empty-Team test proved no database was needed before any native
+   delivery, while in-flight tests always created a real dispatched Task and configured MySQL. No test
+   covered the boundary state between those cases: native delivery present, Task lineage absent.
+3. **Prevention mechanisms**:
+
+   | Priority | Mechanism | Concrete action | Status |
+   |---|---|---|---|
+   | P0 | Architecture | Separate filesystem base projection from optional SQL enrichment; derive the SQL requirement from dispatch/Task lineage | DONE |
+   | P0 | Regression | Persist a real pre-dispatch `BLOCKED` checkpoint and assert snapshot success without a DSN or assignments | DONE |
+   | P0 | Integrity | Keep SQL fail-closed behavior unchanged whenever current or historical Task lineage exists | DONE |
+   | P1 | Operations | Preserve a safe server-side root-cause code for future TeamReadError diagnosis without exposing DSN or record content | TODO |
+
+4. **Systematic expansion**: storage existence is not proof that facts owned by another storage plane
+   exist. Read models that join filesystem and SQL must make each cross-plane join conditional on a
+   typed lineage reference, never on a directory count or broad lifecycle stage.
+5. **Knowledge capture**: the contracts, matrix, regression point and wrong/correct pair above are the
+   executable guard. This repository has no `src/templates/markdown/spec/` mirror to synchronize.
 
 ## Scenario: candidate verification and remediation visibility
 

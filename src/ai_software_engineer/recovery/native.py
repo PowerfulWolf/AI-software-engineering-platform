@@ -13,7 +13,7 @@ from pathlib import Path
 from pydantic import TypeAdapter
 from pymysql.cursors import DictCursor
 
-from ai_software_engineer.agents import FileModelRouteAttemptStore
+from ai_software_engineer.agents import FileModelRouteAttemptStore, ModelRouteAttempt
 from ai_software_engineer.agents.fallback import RouteAttemptOutcome, model_route_root
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.context import FileContextStore
@@ -21,6 +21,7 @@ from ai_software_engineer.design import FileDesignRecordStore
 from ai_software_engineer.domain import (
     AgentPermissions,
     AgentRole,
+    CoderProgressArtifact,
     ExecutionPlan,
     ProductSpec,
     ProductSpecApproval,
@@ -34,6 +35,7 @@ from ai_software_engineer.domain.identity import ContextId, RunId
 from ai_software_engineer.domain.project_delivery import validate_stage_chain
 from ai_software_engineer.manager.delivery import _delivery_id
 from ai_software_engineer.manager.delivery_checkpoint import (
+    DeliveryFailureCode,
     DeliveryStage,
     FileProjectDeliveryCheckpointStore,
     ProjectDeliveryCheckpoint,
@@ -82,6 +84,29 @@ class NativeRecoverySource:
     task: Task
 
 
+def _is_recoverable_terminal_coder_route(
+    route: ModelRouteAttempt,
+    task: Task,
+    checkpoint: ProjectDeliveryCheckpoint,
+) -> bool:
+    if (
+        route.task_id != task.id
+        or route.role is not AgentRole.CODER
+        or route.result.attempt != task.attempts
+    ):
+        return False
+    if route.outcome is RouteAttemptOutcome.FAILED:
+        return True
+    artifact = route.result.artifact
+    return (
+        route.outcome is RouteAttemptOutcome.SUCCEEDED
+        and isinstance(artifact, CoderProgressArtifact)
+        and artifact.content.checkpoint_sequence == task.attempts
+        and task.attempts == task.max_attempts
+        and checkpoint.failure_code is DeliveryFailureCode.RETRY_BUDGET_EXHAUSTED
+    )
+
+
 class NativeRecoverySourceReader:
     def __init__(self, config: ProductionConfig, environment: Mapping[str, str]) -> None:
         self._config = config
@@ -102,7 +127,7 @@ class NativeRecoverySourceReader:
             ) from error
 
     def discover_failed_coder(self, scope: RecoveryScope) -> NativeRecoverySource:
-        """Locate the one terminal Coder run owned by a pre-candidate Delivery."""
+        """Locate the one recoverable terminal Coder run for a pre-candidate Delivery."""
         try:
             scope = RecoveryScope.model_validate(scope.to_wire())
             team = TeamWorkspace.initialize(
@@ -134,17 +159,17 @@ class NativeRecoverySourceReader:
                 if (
                     final.task_id == task.id
                     and final.role is AgentRole.CODER
-                    and final.outcome is RouteAttemptOutcome.FAILED
                     and final.result.attempt == task.attempts
+                    and _is_recoverable_terminal_coder_route(final, task, checkpoint)
                 ):
                     candidates.append((run_id, final.result.context_manifest_id))
             if len(candidates) != 1:
-                raise ValueError("failed Coder run is missing or ambiguous")
+                raise ValueError("recoverable Coder run is missing or ambiguous")
             run_id, context_id = candidates[0]
             return self._inspect(scope, run_id, context_id)
         except Exception as error:
             raise RecoveryRejected(
-                "failed Coder identity is missing, unsafe or ambiguous"
+                "recoverable Coder identity is missing, unsafe or ambiguous"
             ) from error
 
     def _inspect(self, scope: RecoveryScope, run_id: str, context_id: str) -> NativeRecoverySource:
@@ -217,21 +242,24 @@ class NativeRecoverySourceReader:
             run_id
         )
         if not routes:
-            raise ValueError("missing failed route")
+            raise ValueError("missing terminal Coder route")
         if tuple(route.route_index for route in routes) != tuple(range(1, len(routes) + 1)):
             raise ValueError("failed route history has gaps")
+        final_route = routes[-1]
         for route in routes:
             route.validate_integrity()
             result = route.result
             if (
                 route.role is not AgentRole.CODER
                 or route.task_id != task.id
-                or route.outcome is RouteAttemptOutcome.SUCCEEDED
                 or result.context_manifest_id != context_id
                 or result.source_revision != task.base_ref
                 or result.attempt != task.attempts
+                or (route is not final_route and route.outcome is not RouteAttemptOutcome.FALLBACK)
             ):
-                raise ValueError("route does not belong to failed Coder")
+                raise ValueError("route does not belong to terminal Coder")
+        if not _is_recoverable_terminal_coder_route(final_route, task, cp):
+            raise ValueError("terminal Coder route is not recoverable")
         if (
             context.task_id != task.id
             or context.role is not AgentRole.CODER
@@ -355,7 +383,7 @@ class NativeRecoverySourceReader:
                 if (
                     task.status is not TaskStatus.BLOCKED
                     or _text(row, "status") != task.status.value
-                    or task.attempts != 1
+                    or not 1 <= task.attempts <= task.max_attempts
                     or revision != cp.task_revision
                     or normalized != dispatch.task
                     or dispatch.task_id != cp.task_id
@@ -371,21 +399,31 @@ class NativeRecoverySourceReader:
                 if [r["revision"] for r in rows] != list(range(1, revision + 1)):
                     raise ValueError("event revision gap")
                 previous = TaskStatus.NEW
+                previous_attempt = 0
                 for event_row in rows:
                     event = _decode_event(_text(event_row, "payload_json"))
                     if (
                         event.task_id != task.id
                         or event.event_id != event_row["event_id"]
                         or event.from_status is not previous
-                        or event.attempt != task.attempts
+                        or event.attempt < max(previous_attempt, 1)
+                        or event.attempt > previous_attempt + 1
+                        or event.attempt > task.attempts
                         or event.source_revision != task.base_ref
                     ):
                         raise ValueError("event chain mismatch")
                     previous = event.to_status
+                    previous_attempt = event.attempt
                 if (
                     not rows
                     or previous is not TaskStatus.BLOCKED
-                    or event.from_status is not TaskStatus.IMPLEMENTING
+                    or event.attempt != task.attempts
+                    or event.from_status
+                    not in {TaskStatus.IMPLEMENTING, TaskStatus.CONTINUE_REQUIRED}
+                    or (
+                        event.from_status is TaskStatus.CONTINUE_REQUIRED
+                        and cp.failure_code is not DeliveryFailureCode.RETRY_BUDGET_EXHAUSTED
+                    )
                 ):
                     raise ValueError("not an interrupted Coder")
                 return task, revision, dispatch, planner_dispatch

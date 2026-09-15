@@ -356,6 +356,7 @@ def test_resume_discovers_approves_and_attaches_pre_candidate_coder_recovery(
     assert interrupted_recovery.outcome is DeliveryResumeOutcome.WAITING_HUMAN
     assert interrupted_recovery.checkpoint.stage is DeliveryStage.BLOCKED
     assert interrupted_recovery.checkpoint.candidate_revision is None
+    assert interrupted_recovery.next_action == interrupted_recovery.checkpoint.failure_summary
     first_recovery_task = interrupted_recovery.checkpoint.task_id
     assert first_recovery_task is not None and first_recovery_task.startswith("task_recovery_")
 

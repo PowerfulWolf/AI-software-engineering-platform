@@ -117,6 +117,7 @@ class NativeRecoveryFactsVerifier:
             raise ValueError("target profile mismatch")
         constraints = original.task.constraints
         allowed_paths = constraints.allowed_paths if constraints is not None else ()
+        allowed_paths = plan.rebound_write_paths(allowed_paths)
         expected_target_permissions = _delivery_role_permissions(
             AgentRole.CODER, allowed_paths, _task_commands(profile)
         )

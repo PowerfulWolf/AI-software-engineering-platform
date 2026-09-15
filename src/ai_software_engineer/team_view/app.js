@@ -235,6 +235,10 @@ const latestOperation = (deliveryId) =>
     .filter((operation) => operationTarget(operation) === deliveryId)
     .sort((left, right) => right.updated_at.localeCompare(left.updated_at))[0] ||
   null;
+const operationNeedsHumanAttention = (operation) =>
+  operation?.status === "SUCCEEDED" &&
+  ["WAITING_HUMAN", "BLOCKED", "FAILED"].includes(operation.result?.stage) &&
+  !operation.result?.approval;
 const isSourceRevisionDrift = (operation) =>
   operation?.status === "FAILED" &&
   (operation.error_code === "SOURCE_REVISION_DRIFT" ||
@@ -300,19 +304,207 @@ function taskGroup(task) {
   return "active";
 }
 function requestGroup(request) {
-  if (request.stage === "DONE") return "completed";
+  return requestPresentation(request).group;
+}
+function requestTasks(request) {
+  return snapshot.tasks.filter((task) => task.request_id === request.id);
+}
+function activeRequestTask(request) {
+  if (
+    !(
+      request.stage.includes("WAITING") ||
+      ["BLOCKED", "FAILED", "DELIVERING", "INTEGRATING"].includes(
+        request.stage,
+      )
+    )
+  )
+    return null;
+  return (
+    requestTasks(request)
+      .filter((task) => taskGroup(task) === "active")
+      .sort((left, right) =>
+        right.last_activity.localeCompare(left.last_activity),
+      )[0] || null
+  );
+}
+function requestPresentation(request) {
+  const running = activeOperation(request.id);
+  const activeTask = activeRequestTask(request);
+  if (running || activeTask) {
+    const operationStage =
+      running?.intent.action === "PRODUCT_REPLY"
+        ? "PRODUCT_DISCOVERY"
+        : running?.intent.action === "PRODUCT_APPROVAL"
+          ? "DESIGNING"
+          : "DELIVERING";
+    return {
+      group: "active",
+      status: activeTask?.status || operationStage,
+      blocker: null,
+      nextAction:
+        activeTask?.next_action ||
+        (running?.status === "QUEUED"
+          ? "当前操作已排队，等待 Manager 执行。"
+          : "当前操作正在执行。"),
+    };
+  }
+  if (request.stage === "DONE")
+    return {
+      group: "completed",
+      status: request.stage,
+      blocker: null,
+      nextAction: request.next_action,
+    };
   if (
     request.blocker ||
     request.stage.includes("WAITING") ||
     ["BLOCKED", "FAILED"].includes(request.stage)
   )
-    return "blocked";
-  return "active";
+    return {
+      group: "blocked",
+      status: request.stage,
+      blocker: request.blocker,
+      nextAction: request.next_action,
+    };
+  return {
+    group: "active",
+    status: request.stage,
+    blocker: null,
+    nextAction: request.next_action,
+  };
+}
+function requestBlockingSummary(request) {
+  if (requestPresentation(request).group !== "blocked") return null;
+  const blockedTasks = requestTasks(request).filter(
+    (task) => taskGroup(task) === "blocked",
+  );
+  const reasons = new Map();
+  for (const task of blockedTasks) {
+    if (!task.blocker) continue;
+    const scopes = reasons.get(task.blocker) || [];
+    scopes.push(paths(task.scope));
+    reasons.set(task.blocker, scopes);
+  }
+  if (!reasons.size && request.blocker) reasons.set(request.blocker, []);
+  const operation = latestOperation(request.id);
+  const operationReason =
+    operation?.status === "FAILED"
+      ? operation.error_summary
+      : operationNeedsHumanAttention(operation)
+        ? operation.result?.next_action
+        : null;
+  const nextActions = blockedTasks.map((task) => task.next_action).filter(
+    (value, index, values) =>
+      value &&
+      !reasons.has(value) &&
+      value !== operationReason &&
+      values.indexOf(value) === index,
+  );
+  const suggestedAction = operation?.result?.approval
+    ? "审核恢复计划后，点击“批准并继续”。"
+    : blockedTasks.some((task) =>
+          String(task.blocker || "").includes(
+            "requested continuation after the configured run budget",
+          ),
+        )
+      ? "点击下方“继续交付”，系统会基于当前 checkpoint 创建新的 Coder 恢复任务。"
+      : nextActions.length
+        ? nextActions.map(humanizeBlockingText).join("；")
+        : "处理上述原因后，再点击“继续交付”。";
+  return {
+    reasons: [...reasons.entries()].map(([reason, scopes]) => ({
+      reason,
+      scopes: [...new Set(scopes)],
+    })),
+    operationReason,
+    suggestedAction,
+  };
+}
+function humanizeBlockingText(value) {
+  const text = String(value || "").trim();
+  if (!text) return "暂未记录具体原因。";
+  if (
+    text.includes("Coder requested continuation after the configured run budget")
+  )
+    return "Coder 已用完本轮连续执行次数，但实现尚未完成，需要创建恢复任务后继续。";
+  if (
+    text.includes(
+      "failed Coder identity is missing, unsafe or ambiguous",
+    ) ||
+    text.includes(
+      "recoverable Coder identity is missing, unsafe or ambiguous",
+    )
+  )
+    return "系统未能确认唯一且可信的 Coder 执行记录，本次自动恢复已安全停止。";
+  if (text === "REQUEST_HUMAN") return "需要人工处理后再继续交付。";
+  if (text.startsWith("Repository ") && text.includes(" is BLOCKED"))
+    return "至少一个代码仓库任务仍处于阻塞状态，联合交付尚未完成。";
+  return text;
+}
+function requestBlockerSection(request) {
+  const summary = requestBlockingSummary(request);
+  if (!summary) return null;
+  const section = el(
+    "section",
+    undefined,
+    "detail-section request-blocking-section",
+  );
+  section.append(
+    el("h2", "阻塞信息"),
+    el(
+      "p",
+      "当前原因、最近恢复结果和建议操作都集中在这里。",
+      "muted",
+    ),
+  );
+  for (const item of summary.reasons) {
+    const card = el("div", undefined, "request-blocking-primary");
+    card.append(
+      el("span", "当前阻塞", "request-blocking-kicker"),
+      el("p", humanizeBlockingText(item.reason), "request-blocking-reason"),
+    );
+    if (item.scopes.length)
+      card.append(
+        el(
+          "p",
+          item.scopes.length === 1
+            ? `影响目录 · ${item.scopes[0]}`
+            : `涉及 ${item.scopes.length} 个仓库任务`,
+          "request-blocking-scope paths",
+        ),
+      );
+    section.append(card);
+  }
+  if (summary.operationReason) {
+    const recovery = el("div", undefined, "request-recovery-note");
+    recovery.append(
+      el("strong", "最近一次恢复"),
+      el("p", humanizeBlockingText(summary.operationReason)),
+    );
+    section.append(recovery);
+  }
+  const next = el("div", undefined, "request-blocking-next");
+  next.append(
+    el("span", "建议操作", "request-blocking-kicker"),
+    el("p", summary.suggestedAction),
+  );
+  section.append(next);
+  return section;
 }
 function paths(scope) {
   return scope.selected_paths
     .map((p) => (p === "." ? scope.root : scope.root + "/" + p))
     .join("\n");
+}
+function compactPath(value) {
+  const parts = value.split("/").filter(Boolean);
+  if (parts.length <= 3) return value;
+  return `…/${parts.slice(-2).join("/")}`;
+}
+function compactPaths(value) {
+  const values = value.split("\n");
+  if (values.length === 1) return compactPath(values[0]);
+  return `${compactPath(values[0])} 等 ${values.length} 个目录`;
 }
 function documentList(parent, documents) {
   if (!documents.length) {
@@ -1023,8 +1215,15 @@ function renderOperationStatus() {
   const visible = [...operations]
     .filter((operation) => {
       if (
-        operation.status === "SUCCEEDED" ||
+        (operation.status === "SUCCEEDED" &&
+          !operationNeedsHumanAttention(operation)) ||
         dismissedOperationIds.has(operation.operation_id)
+      )
+        return false;
+      if (
+        operationNeedsHumanAttention(operation) &&
+        latestOperation(operationTarget(operation))?.operation_id !==
+          operation.operation_id
       )
         return false;
       if (!["FAILED", "INTERRUPTED"].includes(operation.status)) return true;
@@ -1043,11 +1242,17 @@ function renderOperationStatus() {
     return;
   }
   for (const operation of visible) {
+    const needsHumanAttention = operationNeedsHumanAttention(operation);
     const card = el("div", undefined, "operation-status");
     const row = el("div", undefined, "row");
     const state = el("div", undefined, "operation-status-actions");
-    state.append(badge(operation.status));
-    if (["FAILED", "INTERRUPTED"].includes(operation.status))
+    state.append(
+      badge(needsHumanAttention ? operation.result.stage : operation.status),
+    );
+    if (
+      ["FAILED", "INTERRUPTED"].includes(operation.status) ||
+      needsHumanAttention
+    )
       state.append(
         button("关闭", () => {
           dismissedOperationIds.add(operation.operation_id);
@@ -1074,42 +1279,59 @@ function renderOperationStatus() {
           "muted",
         ),
       );
-    if (operation.error_summary)
+    const target = operationTarget(operation);
+    if (
+      target &&
+      (needsHumanAttention || ["FAILED", "INTERRUPTED"].includes(operation.status))
+    )
+      card.append(
+        el(
+          "p",
+          "操作需要处理，具体原因已归入需求详情的“阻塞信息”。",
+          "muted",
+        ),
+      );
+    else if (operation.error_summary)
       card.append(el("div", operation.error_summary, "blocker"));
-    if (operation.result?.delivery_id)
+    if (target)
       card.append(
         button("打开需求工作区", () => {
           page = "requests";
-          selected = { kind: "request", id: operation.result.delivery_id };
-          render();
+          updateNavigation();
+          showDetail("request", target);
         }),
       );
     panel.append(card);
   }
 }
 function taskRow(task, agentId) {
-  const n = el("div", undefined, "work-row");
-  const row = el("div", undefined, "row");
+  const n = el("article", undefined, "work-row");
+  n.setAttribute("role", "button");
+  n.setAttribute("tabindex", "0");
+  n.setAttribute("aria-label", `查看任务详情：${task.title}`);
+  const openTask = () => showDetail("task", task.id);
+  n.addEventListener("click", openTask);
+  n.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    openTask();
+  });
+  const row = el("div", undefined, "work-row-heading");
   const request = requestById(task.request_id);
-  row.append(
-    button(request ? request.title : task.title, () =>
-      showDetail("task", task.id),
-    ),
-  );
+  row.append(el("strong", request ? request.title : task.title, "work-row-title"));
   const a = task.assignments.find((a) => a.agent_id === agentId);
-  row.append(a ? assignmentBadge(task, a) : badge(task.status));
   n.append(row);
-  n.append(el("p", paths(task.scope), "paths"));
-  if (a)
-    n.append(
-      el(
-        "div",
-        `${label(a.role)} · ${a.current_stage ? "当前交付阶段" : "已分配"} · 分配模型 ${a.planned_provider} / ${a.planned_model}`,
-        "muted",
-      ),
-    );
-  n.append(el("div", "最近活动 " + time(task.last_activity), "muted"));
-  if (task.blocker) n.append(el("div", task.blocker, "blocker"));
+  const fullPath = paths(task.scope);
+  const scope = el("div", undefined, "work-row-scope");
+  scope.append(
+    el("span", "目录", "work-row-scope-label"),
+    el("span", compactPaths(fullPath), "work-row-path"),
+  );
+  scope.setAttribute("title", fullPath);
+  const overview = el("div", undefined, "work-row-overview");
+  if (a) overview.append(el("span", label(a.role), "work-row-role"));
+  overview.append(scope);
+  n.append(overview);
   return n;
 }
 function renderTeam(content) {
@@ -1271,6 +1493,7 @@ function renderTeam(content) {
   );
 }
 function requestCard(request) {
+  const presentation = requestPresentation(request);
   const isSelected = selected?.kind === "request" && selected.id === request.id;
   const card = el(
       "article",
@@ -1288,7 +1511,10 @@ function requestCard(request) {
     event.preventDefault();
     open();
   });
-  head.append(el("strong", request.title, "request-title"), badge(request.stage));
+  head.append(
+    el("strong", request.title, "request-title"),
+    badge(presentation.status),
+  );
   card.append(el("p", request.id, "request-id"), head);
   const write = request.scopes.filter((s) => !s.reference_only),
     done = write.filter(
@@ -1301,10 +1527,9 @@ function requestCard(request) {
       "muted request-summary",
     ),
   );
-  if (request.blocker) card.append(el("div", request.blocker, "blocker"));
   return card;
 }
-function requestOperation(panel, request, discussionSection) {
+function requestOperation(panel, request, discussionSection, flowSection) {
   if (!canControlCurrentTeam()) return;
   const appendOperation = (content) => {
     const section = el(
@@ -1320,18 +1545,31 @@ function requestOperation(panel, request, discussionSection) {
     else appendOperation(content);
   };
   const running = activeOperation(request.id);
+  const activeTask = activeRequestTask(request);
   const isProductDiscussion = productDiscussionStages.has(request.stage);
   const sourceRevisionDrift = isSourceRevisionDrift(
     latestOperation(request.id),
   );
   const approvingProduct = running?.intent.action === "PRODUCT_APPROVAL";
   if (running && !isProductDiscussion) {
-    appendOperation(
+    flowSection.append(
       el(
         "div",
         running.status === "QUEUED"
-          ? "该需求操作已排队，等待 Manager。"
-          : "Manager 正在处理该需求，可以离开页面后再回来。",
+          ? "继续交付已排队，等待 Manager 调度。"
+          : activeTask
+            ? `${label(activeTask.status)}，可以离开页面后再回来。`
+            : "Manager 正在恢复交付，可以离开页面后再回来。",
+        "operation-running",
+      ),
+    );
+    return;
+  }
+  if (activeTask && !isProductDiscussion) {
+    flowSection.append(
+      el(
+        "div",
+        `${label(activeTask.status)}，平台会按串行阶段继续推进。`,
         "operation-running",
       ),
     );
@@ -1639,7 +1877,10 @@ function requestOperation(panel, request, discussionSection) {
     });
     appendDiscussionContent(form);
   }
-  if (!productDiscussionStages.has(request.stage) && request.stage !== "DONE") {
+  if (
+    !productDiscussionStages.has(request.stage) &&
+    request.stage !== "DONE"
+  ) {
     const action = button(
       "继续交付",
       () =>
@@ -3949,23 +4190,26 @@ function renderDetail() {
     topActions,
   );
   if (selected.kind === "request") {
+    const presentation = requestPresentation(item);
     panel.className = "request-detail-panel";
     const overview = el("section", undefined, "request-detail-overview");
     overview.append(
       top,
       el("h3", item.title, "request-detail-title"),
       el("p", item.id, "paths request-detail-id"),
-      badge(item.status || item.stage),
+      badge(presentation.status),
     );
-    if (item.blocker) overview.append(el("div", item.blocker, "blocker"));
-    overview.append(
-      el(
-        "p",
-        "下一步 · " + item.next_action,
-        "muted request-detail-next",
-      ),
-    );
+    if (presentation.group !== "blocked")
+      overview.append(
+        el(
+          "p",
+          "下一步 · " + presentation.nextAction,
+          "muted request-detail-next",
+        ),
+      );
     panel.append(overview);
+    const blocking = requestBlockerSection(item);
+    if (blocking) panel.append(blocking);
     const flow = el("section", undefined, "detail-section");
     flow.append(el("h2", "交付流程"), deliveryFlow(item));
     panel.append(flow);
@@ -3986,7 +4230,7 @@ function renderDetail() {
     }
     panel.append(scopes);
     const discussionSection = requestDialogue(panel, item);
-    requestOperation(panel, item, discussionSection);
+    requestOperation(panel, item, discussionSection, flow);
     deliveryResult(panel, item);
     const artifacts = el("section", undefined, "detail-section stage-artifacts");
     artifacts.append(el("h2", "阶段产物"));
@@ -3994,31 +4238,38 @@ function renderDetail() {
     panel.append(artifacts);
     return;
   }
-  panel.append(
+  panel.className = "task-detail-modal";
+  const dialog = el(
+    "section",
+    undefined,
+    "modal-dialog modal-dialog-wide task-detail-dialog",
+  );
+  dialog.setAttribute("role", "dialog");
+  dialog.setAttribute("aria-modal", "true");
+  dialog.setAttribute("aria-label", "任务详情");
+  dialog.append(
     top,
     el("h3", item.title),
     el("p", item.id, "paths"),
     badge(item.status || item.stage),
   );
-  if (item.blocker) panel.append(el("div", item.blocker, "blocker"));
-  panel.append(el("p", "下一步 · " + item.next_action, "muted"));
-  panel.append(
+  dialog.append(
     el("p", paths(item.scope), "paths"),
     el("p", "最近活动 · " + time(item.last_activity), "muted"),
   );
   if (item.candidate_revision)
-    panel.append(el("p", "候选版本 · " + item.candidate_revision, "paths"));
+    dialog.append(el("p", "候选版本 · " + item.candidate_revision, "paths"));
   if (item.candidate_branch)
-    panel.append(el("p", "候选分支 · " + item.candidate_branch, "paths"));
-  panel.append(el("h2", "成员与分配模型"));
+    dialog.append(el("p", "候选分支 · " + item.candidate_branch, "paths"));
+  dialog.append(el("h2", "成员与分配模型"));
   for (const a of item.assignments)
-    panel.append(
+    dialog.append(
       el(
         "p",
         `${snapshot.agents.find((x) => x.id === a.agent_id)?.name || a.agent_id} · ${label(a.role)} · ${a.planned_provider} / ${a.planned_model}${a.current_stage ? " · 当前阶段" : ""}`,
       ),
     );
-  panel.append(el("h2", "执行与阶段时间线"));
+  dialog.append(el("h2", "执行与阶段时间线"));
   const list = el("ol");
   for (const entry of item.timeline) {
     const li = el("li");
@@ -4029,26 +4280,27 @@ function renderDetail() {
     );
     list.append(li);
   }
-  panel.append(list);
-  panel.append(el("h2", "已完成的模型调用"));
+  dialog.append(list);
+  dialog.append(el("h2", "已完成的模型调用"));
   if (!item.runs.length)
-    panel.append(
+    dialog.append(
       el("p", "暂无已提交调用记录；进行中的调用完成后才会出现。", "muted"),
     );
   for (const run of item.runs) {
-    panel.append(
+    dialog.append(
       el(
         "p",
         `${label(run.role)} · ${run.provider} / ${run.model} · 第 ${run.route_index} 路 · ${label(run.outcome)} · ${(run.duration_ms / 1000).toFixed(1)} 秒`,
       ),
     );
-    if (run.error_code) panel.append(el("div", run.error_code, "blocker"));
-    panel.append(
+    if (run.error_code) dialog.append(el("div", run.error_code, "blocker"));
+    dialog.append(
       el("div", time(run.completed_at) + " · " + run.source_uri, "paths"),
     );
   }
-  panel.append(el("h2", "产物与报告"));
-  documentList(panel, item.documents);
+  dialog.append(el("h2", "产物与报告"));
+  documentList(dialog, item.documents);
+  panel.append(dialog);
 }
 function render() {
   if (!snapshot) return;

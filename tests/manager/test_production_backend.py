@@ -7,6 +7,7 @@ import subprocess
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Never
 
 import pytest
 
@@ -50,11 +51,14 @@ from ai_software_engineer.domain import (
 from ai_software_engineer.manager import production_backend
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
+    DeliveryBackendFailure,
     StartProjectDelivery,
 )
 from ai_software_engineer.manager.delivery_checkpoint import (
+    DeliveryFailureCode,
     DeliveryStage,
 )
+from ai_software_engineer.manager.dispatch import DispatchStoreUnavailable
 from ai_software_engineer.manager.production_backend import StructuredClientFactory
 from ai_software_engineer.manager.production_delivery import (
     DeliveryRouteAdapterFactory,
@@ -335,6 +339,17 @@ def test_production_delivery_timeout_is_bounded_by_role(role: AgentRole, expecte
 def test_production_delivery_timeout_rejects_unsupported_role() -> None:
     with pytest.raises(ValueError, match="unsupported production delivery role: orchestrator"):
         production_backend._delivery_timeout_seconds(AgentRole.ORCHESTRATOR)
+
+
+def test_mysql_dispatch_unavailable_is_classified_as_retryable() -> None:
+    def fail() -> Never:
+        raise DispatchStoreUnavailable("private MySQL details")
+
+    with pytest.raises(DeliveryBackendFailure) as caught:
+        production_backend.ProductionProjectDeliveryBackend._guard("Dispatch", fail)
+
+    assert caught.value.code is DeliveryFailureCode.RESOURCE_UNAVAILABLE
+    assert caught.value.safe_summary == "Dispatch is temporarily unavailable"
 
 
 @pytest.fixture

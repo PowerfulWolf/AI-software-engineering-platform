@@ -87,6 +87,69 @@ manager.verify_capture(capture, assigned_permissions, denied_paths=denied)
 # Neither call creates Task, approval or candidate.
 ```
 
+## Scenario: retry a pre-Task stage interruption
+
+### 1. Scope / Trigger
+
+Use this path only when a Delivery is terminal before any Agent Task or candidate was admitted. It is
+normal continuation for a known transient stage interruption, not candidate recovery.
+
+### 2. Signatures
+
+```python
+UnifiedProjectEntryService.retry_interrupted_stage(
+    command: ResumeProjectDelivery,
+) -> ProjectDeliveryResult
+DeliveryResumeController.resume(command: ResumeProjectDelivery) -> DeliveryResumeResult
+```
+
+### 3. Contracts
+
+- Eligible checkpoints are BLOCKED/FAILED, candidate-free, and either have no Task with an exact
+  `failed_stage`, or have one pristine NEW Task at revision/attempt zero before the first Coder run.
+- Current retryable codes are `PERMISSION_DENIED`, `RESOURCE_UNAVAILABLE`,
+  `TRANSIENT_PROVIDER_FAILURE`, and `INVARIANT_VIOLATION`.
+- Compatibility is deliberately narrower than the current code set: only an old pre-Task
+  DISPATCHING `CHECKPOINT_DRIFT` with the exact historical MySQL transaction/commit failure summary
+  may retry. No other checkpoint drift is reclassified.
+- If re-entry returns another BLOCKED/FAILED checkpoint, `DeliveryResumeResult.next_action` is the
+  safe failure summary. Candidate verification/recovery discovery does not run for that attempt.
+
+### 4. Validation & Error Matrix
+
+| Checkpoint | Result |
+|---|---|
+| transient pre-Task failure | reopen exact failed stage and execute once |
+| exact historical MySQL dispatch failure | compatibility reopen of DISPATCHING |
+| task/candidate already admitted or stage unknown | no automatic stage retry; use normal recovery classification |
+| retry returns terminal failure | `WAITING_HUMAN` with actionable safe failure summary |
+| unrelated checkpoint drift | remain blocked; no provider invocation |
+
+### 5. Good / Base / Bad Cases
+
+- **Good**: a schema-upgraded authority retries the exact interrupted dispatch and starts Coder.
+- **Base**: MySQL is still unavailable; the result stays visible as a retryable storage failure.
+- **Bad**: treating every `CHECKPOINT_DRIFT` as transient or falling through into candidate recovery
+  when no Task exists.
+
+### 6. Tests Required
+
+`tests/e2e/test_unified_project_entry.py` proves the bounded legacy retry. Production-backend tests
+prove the new transient classification, and Team View UI tests prove a still-blocked result remains
+visible with one latest notification per Requirement.
+
+### 7. Wrong vs Correct
+
+```python
+# Wrong: schema drift, source drift and store outages all retry forever.
+if checkpoint.failure_code is CHECKPOINT_DRIFT:
+    retry(checkpoint.failed_stage)
+
+# Correct: retry current transient codes plus one exact historical compatibility signature.
+if failure_code in retryable or is_exact_legacy_mysql_dispatch_failure(checkpoint):
+    retry_once(checkpoint.failed_stage)
+```
+
 ## Production recovery roadmap
 
 1. Increment B below implements the append-only plan/receipt and authorization service seam.
@@ -189,12 +252,18 @@ the terminal native journal and one MySQL REPEATABLE READ / CONSISTENT SNAPSHOT 
 transaction for `tasks`, `state_events` and `dispatch_commits`; no repository constructor/DDL,
 prepare, model, Task mutation or dispatch call. Reuse existing SQL row decoders and stage validators.
 
-Require BLOCKED before candidate creation, attempt 1, exact Task revision, unchanged immutable
-dispatch intent and contiguous state events ending IMPLEMENTING→BLOCKED. Read the native completed
+Require BLOCKED before candidate creation, `1 <= task.attempts <= task.max_attempts`, exact Task
+revision, unchanged immutable dispatch intent and contiguous state events whose attempt numbers are
+monotonic. The terminal transition may be IMPLEMENTING→BLOCKED, or CONTINUE_REQUIRED→BLOCKED only
+when the checkpoint failure code is `RETRY_BUDGET_EXHAUSTED`. Read the native completed
 Product approval, Designer/Planner commits and authoritative READY request revision; verify stage
-digests, original preparation and semantic coverage through `validate_stage_chain`. Read the failed
-Coder route and its exact ContextBundle, rather than accepting caller-supplied permissions. Missing
-or successful routes, wrong role/base/attempt/context and route index gaps reject.
+digests, original preparation and semantic coverage through `validate_stage_chain`. Read the
+terminal Coder route and its exact ContextBundle, rather than accepting caller-supplied permissions.
+A failed final route remains recoverable. A successful final route is recoverable only when it
+contains the exact terminal `CoderProgressArtifact`, attempt/checkpoint sequence match the Task, the
+Task exhausted its configured attempts, and the checkpoint is `RETRY_BUDGET_EXHAUSTED`. Missing
+routes, successful non-progress routes, wrong role/base/attempt/context and route index gaps reject;
+non-final routes must be `FALLBACK`.
 
 Discover parent ownership from team joint journals and deterministic child identity. A delegated
 joint approval must match the parent approval reference and exact stored child checkpoint; callers
@@ -214,6 +283,9 @@ come only from `config.database.dsn_env`; public failure is safe `RecoveryReject
 | Joint child failed Coder | Same plus mandatory verified parent ID/checkpoint |
 | Missing platform/root/record/approval | Reject; never initialize or fabricate facts |
 | Wrong scope, Task revision/status, run/context, dispatch or upstream digest | Reject |
+| Final failed Coder route | Recoverable terminal source when all lineage checks match |
+| Final successful CoderProgress at exact exhausted budget | Recoverable terminal source; preserve its checkpoint revision |
+| Other successful route or non-exhausted progress | Reject; do not invent a failure identity |
 | Rejected/changed approval, later READY revision, tampered stage commit | Reject |
 | Read-only put/fence | Typed native store error before file/lock publication |
 | Complete result replay | Same facts, no Agent/model calls |
@@ -226,6 +298,88 @@ Tests: `tests/recovery/test_native.py` covers single/joint production fixtures, 
 cross-team/missing run/context, corrupted Product/approval/Designer/Planner/parent records and
 byte snapshots of project/sidecar. Dedicated MySQL test DB only; real source observation is separately
 recorded and is not independent QA/Review evidence for the original feature.
+
+## Scenario: exact stale-path rebinding in a recovery plan
+
+### 1. Scope / Trigger
+
+Use only while proposing recovery when an exact, non-glob Coder write path no longer exists in the
+current repository profile and the repository contains exactly one safe tracked file with the same
+basename. This repairs an obsolete Designer location without broadening Coder authority silently.
+
+### 2. Signatures
+
+```python
+class RecoveryPathRebinding(DomainModel):
+    source_path: RelativePath
+    target_path: RelativePath
+    reason: Literal["missing_source_path_unique_match"]
+
+class RecoveryPlan(DomainModel):
+    path_rebindings: tuple[RecoveryPathRebinding, ...] | None
+
+RecoveryPlan.rebound_write_paths(source_paths: tuple[str, ...]) -> tuple[str, ...]
+```
+
+`path_rebindings=None` is omitted from the canonical wire form so previously approved plan digests
+remain valid. A new plan binds every replacement into `plan_sha256` and requires the normal explicit
+human approval before any recovery Task is created.
+
+### 3. Contracts
+
+- Only an exact missing write path can be replaced. Globs, existing source paths and paths present in
+  the captured patch are never rebound.
+- Candidate discovery uses the current repository's tracked-file inventory. It requires exactly one
+  same-basename match outside denied globs; zero or multiple matches leave the original policy
+  unchanged so later validation fails closed.
+- Rebinding is one-to-one, source and target must differ, and duplicate sources/targets reject.
+- The target Coder permissions, current-facts verifier, rebound ProjectRequest, execution Task
+  constraints and recovery Context must all use the same `rebound_write_paths(...)` result. The
+  Context names every approved `source_path -> target_path` correction explicitly.
+- Rebinding cannot expand read paths, commands, network, merge or state-change privileges.
+
+### 4. Validation & Error Matrix
+
+| Current repository fact | Result |
+|---|---|
+| Missing `web_console/static/app.js`, unique tracked `team_view/app.js` | bind exact replacement in the plan |
+| Source exists or is captured | preserve source path; no rebinding |
+| Source is a glob | preserve glob; no basename inference |
+| Zero/multiple same-basename matches | preserve source; target-policy verification rejects if invalid |
+| Unique match is denied | preserve source; never authorize denied target |
+| Tampered/duplicate/cyclic replacement | plan validation rejects before persistence |
+
+### 5. Good / Base / Bad Cases
+
+- Good: the user sees and approves one exact stale-to-current file correction, then the fresh Coder
+  Task can edit only that target.
+- Base: all planned paths still exist; `path_rebindings` remains absent and legacy digest behavior is
+  unchanged.
+- Bad: replace by directory similarity, silently add both paths, or turn the basename into `**/app.js`.
+
+### 6. Tests Required
+
+- `tests/recovery/test_models.py`: plan digest, legacy omission, exact permission mapping and invalid
+  duplicate/authority expansion.
+- `tests/recovery/test_reapply.py`: unique tracked match, ambiguous/captured/denied/glob cases and
+  recovery task/context use of the approved target.
+- `tests/recovery/test_native.py`: an exhausted multi-attempt CoderProgress source can produce a
+  recovery plan without rewriting its original Task or checkpoint.
+
+### 7. Wrong vs Correct
+
+```python
+# Wrong: silently broaden a stale file permission.
+target_permissions.write_paths += ("**/app.js",)
+
+# Correct: bind one auditable exact replacement into the human-approved plan.
+plan.path_rebindings = (
+    RecoveryPathRebinding(
+        source_path="src/web_console/static/app.js",
+        target_path="src/team_view/app.js",
+    ),
+)
+```
 
 Wrong: assume `route.completed_at <= checkpoint.checkpointed_at` proves ownership. Legacy native
 checkpoints retain the initiating command timestamp, which may precede a run. Correct: bind explicit

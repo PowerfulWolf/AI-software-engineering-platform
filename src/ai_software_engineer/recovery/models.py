@@ -94,6 +94,7 @@ SafeText = Annotated[
 ]
 
 RecoveryInputMode = Literal["coder_reapply"]
+RecoveryPathRebindingReason = Literal["missing_source_path_unique_match"]
 
 
 class CapturedFile(DomainModel):
@@ -197,6 +198,20 @@ class RecoverySource(DomainModel):
         return self
 
 
+class RecoveryPathRebinding(DomainModel):
+    """Exact stale-to-current write path replacement requiring human approval."""
+
+    source_path: RelativePath
+    target_path: RelativePath
+    reason: RecoveryPathRebindingReason = "missing_source_path_unique_match"
+
+    @model_validator(mode="after")
+    def validate_rebinding(self) -> Self:
+        if self.source_path == self.target_path:
+            raise ValueError("recovery path rebinding must change the path")
+        return self
+
+
 class RecoveryPlan(DomainModel):
     kind: Literal["recovery_plan"] = "recovery_plan"
     schema_version: Literal["v0.1"] = "v0.1"
@@ -211,6 +226,8 @@ class RecoveryPlan(DomainModel):
     # without silently expanding what the new Coder may do.
     permissions: AgentPermissions
     target_permissions: AgentPermissions | None = None
+    # None is omitted from wire/digest so historical plans retain their identity.
+    path_rebindings: tuple[RecoveryPathRebinding, ...] | None = None
     denied_paths: tuple[str, ...]
     created_at: AwareDatetime
     plan_sha256: StageSha256
@@ -229,6 +246,16 @@ class RecoveryPlan(DomainModel):
         """Return the approved target policy, preserving legacy plan semantics."""
         return self.target_permissions or self.permissions
 
+    @property
+    def effective_path_rebindings(self) -> tuple[RecoveryPathRebinding, ...]:
+        return self.path_rebindings or ()
+
+    def rebound_write_paths(self, source_paths: tuple[str, ...]) -> tuple[str, ...]:
+        replacements = {
+            item.source_path: item.target_path for item in self.effective_path_rebindings
+        }
+        return tuple(replacements.get(path, path) for path in source_paths)
+
     @model_validator(mode="after")
     def validate_lineage(self) -> Self:
         if (
@@ -244,13 +271,30 @@ class RecoveryPlan(DomainModel):
             or target.can_merge
         ):
             raise ValueError("recovery cannot grant Coder state or merge authority")
+        rebindings = self.effective_path_rebindings
+        source_rebindings = tuple(item.source_path for item in rebindings)
+        target_rebindings = tuple(item.target_path for item in rebindings)
+        if len(set(source_rebindings)) != len(source_rebindings) or len(
+            set(target_rebindings)
+        ) != len(target_rebindings):
+            raise ValueError("recovery path rebindings must be one-to-one")
+        if not set(source_rebindings).issubset(self.permissions.write_paths):
+            raise ValueError("recovery path rebinding must replace an approved source path")
+        permitted_target_writes = set(self.permissions.write_paths) | set(target_rebindings)
         if self.target_permissions is not None and (
             not set(target.read_paths).issubset(self.permissions.read_paths)
-            or not set(target.write_paths).issubset(self.permissions.write_paths)
+            or not set(target.write_paths).issubset(permitted_target_writes)
             or not set(target.commands).issubset(self.permissions.commands)
             or target.network is not self.permissions.network
         ):
-            raise ValueError("recovery target permissions may only narrow source permissions")
+            raise ValueError(
+                "recovery target permissions may only narrow source permissions or use exact "
+                "approved path rebindings"
+            )
+        if rebindings and set(target.write_paths) != set(
+            self.rebound_write_paths(self.permissions.write_paths)
+        ):
+            raise ValueError("recovery target permissions do not match path rebindings")
         for value in (
             *self.permissions.read_paths,
             *self.permissions.write_paths,

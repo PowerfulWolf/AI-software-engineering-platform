@@ -10,6 +10,7 @@ class Element {
     this.tag = tag;
     this.children = [];
     this.events = {};
+    this.attributes = {};
     this.dataset = {};
     this.textContent = "";
     this.className = "";
@@ -27,9 +28,15 @@ class Element {
   addEventListener(key, fn) {
     this.events[key] = fn;
   }
-  setAttribute() {}
-  removeAttribute() {}
-  scrollIntoView() {}
+  setAttribute(key, value) {
+    this.attributes[key] = value;
+  }
+  removeAttribute(key) {
+    delete this.attributes[key];
+  }
+  scrollIntoView() {
+    this.scrollCount = (this.scrollCount || 0) + 1;
+  }
   focus() {}
   set innerHTML(value) {
     throw new Error("Unsafe HTML assignment: " + value);
@@ -75,6 +82,33 @@ test("long selected directory paths cannot turn actions vertical", () => {
     styles,
     /\.directory-chip > button\s*\{[^}]*flex-shrink:\s*0;[^}]*white-space:\s*nowrap;/s,
     "the remove action must keep its readable horizontal width",
+  );
+});
+
+test("agent queue cards keep long task metadata readable", () => {
+  const styles = fs.readFileSync(
+    path.join(__dirname, "../../src/ai_software_engineer/team_view/style.css"),
+    "utf8",
+  );
+  assert.match(
+    styles,
+    /\.agent-queue-board\s*\{[^}]*grid-template-columns:\s*repeat\(4, minmax\(270px, 1fr\)\);[^}]*overflow-x:\s*auto;/s,
+    "queue columns must scroll before shrinking cards below a readable width",
+  );
+  assert.match(
+    styles,
+    /\.work-row-path\s*\{[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;[^}]*white-space:\s*nowrap;/s,
+    "long repository paths must use a single truncated line",
+  );
+  assert.match(
+    styles,
+    /main #detail\.task-detail-modal\s*\{[^}]*position:\s*fixed;[^}]*background:\s*rgba\(20, 35, 55, 0\.48\);/s,
+    "task details must open in a focused modal instead of extending the queue page",
+  );
+  assert.match(
+    styles,
+    /\.agent-queue \.work-row\s*\{[^}]*cursor:\s*pointer;/s,
+    "overview cards must visibly communicate that the full card opens task details",
   );
 });
 
@@ -785,6 +819,20 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     context,
   );
   await new Promise(setImmediate);
+  assert.equal(
+    vm.runInContext(
+      'humanizeBlockingText("Coder requested continuation after the configured run budget")',
+      context,
+    ),
+    "Coder 已用完本轮连续执行次数，但实现尚未完成，需要创建恢复任务后继续。",
+  );
+  assert.equal(
+    vm.runInContext(
+      'humanizeBlockingText("Coder recovery stopped safely: failed Coder identity is missing, unsafe or ambiguous")',
+      context,
+    ),
+    "系统未能确认唯一且可信的 Coder 执行记录，本次自动恢复已安全停止。",
+  );
   assert.equal(interval.ms, 5000);
   assert.equal(get("scope-label").textContent, "Team 级");
   assert.equal(get("scope-title").textContent, "Fixture team");
@@ -806,6 +854,34 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   assert.match(text(get("content")), /进行中 1/);
   assert.match(text(get("content")), /已阻塞 1/);
   assert.match(text(get("content")), /已完成 1/);
+  const activeQueueCard = descend(get("content")).find(
+    (node) =>
+      node.className === "work-row" &&
+      text(node).includes(malicious) &&
+      text(node).includes("/backend/module-a"),
+  );
+  assert.match(text(activeQueueCard), /目录 \/backend\/module-a/);
+  assert.match(text(activeQueueCard), /实现/);
+  assert.doesNotMatch(text(activeQueueCard), /实现中|查看详情|等待人工处理/);
+  assert.doesNotMatch(text(activeQueueCard), /模型 codex \/ gpt-5\.5/);
+  assert.doesNotMatch(text(activeQueueCard), /最近活动/);
+  assert.doesNotMatch(text(activeQueueCard), /当前交付阶段/);
+  assert.equal(activeQueueCard.attributes.role, "button");
+  assert.equal(activeQueueCard.attributes.tabindex, "0");
+  await activeQueueCard.events.click();
+  assert.equal(get("detail").className, "task-detail-modal");
+  assert.match(text(get("detail")), /任务详情/);
+  assert.match(text(get("detail")), /成员与分配模型/);
+  descend(get("detail")).find(
+    (node) => node.tag === "button" && node.textContent === "关闭",
+  ).events.click();
+  assert.equal(
+    vm.runInContext(
+      'compactPath("/Users/example/workspace/code/ai-workspace/example-project")',
+      context,
+    ),
+    "…/ai-workspace/example-project",
+  );
   await agentCards[2].events.click();
   assert.match(text(get("content")), /测试 · 任务队列/);
   assert.match(text(get("content")), /待完成 1/);
@@ -1465,6 +1541,12 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     repository_roots: ["/backend/module-a", "/frontend"],
   });
   assert.match(text(get("operations")), /等待 Manager/);
+  fixture.tasks.slice(0, 2).forEach((task) => {
+    task.status = "BLOCKED";
+    task.terminal = true;
+    task.blocker = "Waiting for recovery";
+  });
+  await interval.fn();
   vm.runInContext('showDetail("request","r1")', context);
   const continueButton = descend(get("detail")).find(
     (node) => node.tag === "button" && node.textContent === "继续交付",
@@ -1478,9 +1560,99 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   });
   assert.doesNotMatch(text(get("detail")), /a{64}/);
 
+  fixture.requests[0].stage = "BLOCKED";
+  fixture.requests[0].blocker = "Old joint blocker";
+  fixture.requests[0].next_action = "Inspect the old blocked checkpoint.";
+  fixture.requests[0].dialogue = [
+    { sequence: 1, speaker: "user", text: "Clarified requirement", attachments: [] },
+  ];
+  fixture.tasks[0].status = "IMPLEMENTING";
+  fixture.tasks[0].terminal = false;
+  delete fixture.tasks[0].blocker;
+  fixture.tasks[1].status = "NEW";
+  fixture.tasks[1].terminal = false;
+  delete fixture.tasks[1].blocker;
+  storedOperations[1].status = "RUNNING";
+  await interval.fn();
+  assert.match(text(get("content")), /进行中 1/);
+  assert.match(text(get("content")), /阻塞中 0/);
+  const activeRequirementCard = descend(get("content")).find(
+    (node) =>
+      node.tag === "article" &&
+      node.className.includes("request") &&
+      text(node).includes(malicious),
+  );
+  assert.match(text(activeRequirementCard), /实现中/);
+  assert.doesNotMatch(text(activeRequirementCard), /Old joint blocker/);
+  const activeDeliveryFlow = descend(get("detail")).find(
+    (node) =>
+      node.className === "detail-section" && text(node).includes("交付流程"),
+  );
+  assert.match(text(activeDeliveryFlow), /实现中/);
+  const completedDiscussion = descend(get("detail")).find(
+    (node) => node.className === "detail-section product-dialogue",
+  );
+  assert.doesNotMatch(
+    text(completedDiscussion),
+    /Manager 正在处理该需求|Product Agent 正在回复/,
+    "delivery recovery must not be rendered as Product discussion activity",
+  );
+  fixture.tasks.slice(0, 2).forEach((task) => {
+    task.status = "BLOCKED";
+    task.terminal = true;
+    task.blocker = "Waiting for recovery";
+  });
+
   const planSha = "b".repeat(64);
   storedOperations[1].status = "SUCCEEDED";
   storedOperations[1].updated_at = "2026-09-05T01:00:05Z";
+  storedOperations[1].result = {
+    project_id: "project_fixture",
+    delivery_id: "r1",
+    checkpoint_sha256: "a".repeat(64),
+    stage: "BLOCKED",
+    next_action: "No automatic continuation is available.",
+  };
+  await interval.fn();
+  assert.doesNotMatch(text(get("operations")), /No automatic continuation is available/);
+  assert.match(
+    text(get("operations")),
+    /具体原因已归入需求详情的“阻塞信息”/,
+    "the operation area points to the one authoritative blocker surface",
+  );
+  const openRequirementWorkspace = descend(get("operations")).find(
+    (node) => node.tag === "button" && node.textContent === "打开需求工作区",
+  );
+  await openRequirementWorkspace.events.click();
+  assert.equal(get("detail").className, "request-detail-panel");
+  assert.ok(get("detail").scrollCount > 0, "the operation shortcut scrolls to Requirement detail");
+  assert.doesNotMatch(text(get("content")), /Waiting for recovery/);
+  vm.runInContext('showDetail("request","r1")', context);
+  const blockedDetail = text(get("detail"));
+  assert.equal(
+    blockedDetail.match(/阻塞信息/g)?.length,
+    1,
+    "Requirement detail owns exactly one blocker module",
+  );
+  assert.equal(
+    blockedDetail.match(/Waiting for recovery/g)?.length,
+    1,
+    "identical repository blockers are deduplicated",
+  );
+  assert.match(blockedDetail, /No automatic continuation is available/);
+  assert.doesNotMatch(blockedDetail, /Old joint blocker/);
+  const olderBlocked = JSON.parse(JSON.stringify(storedOperations[1]));
+  olderBlocked.operation_id = "operation_older_blocked";
+  olderBlocked.updated_at = "2026-09-05T01:00:04Z";
+  storedOperations.push(olderBlocked);
+  await interval.fn();
+  assert.equal(
+    text(get("operations")).match(/具体原因已归入需求详情的“阻塞信息”/g)?.length,
+    1,
+    "only the latest result that needs human attention is shown per Requirement",
+  );
+  storedOperations.pop();
+
   storedOperations[1].result = {
     project_id: "project_fixture",
     delivery_id: "r1",

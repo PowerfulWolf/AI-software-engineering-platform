@@ -23,6 +23,7 @@ class _StructuredClient:
     def __init__(self, payload: Mapping[str, object]) -> None:
         self.payload = payload
         self.schemas: list[Mapping[str, object]] = []
+        self.instructions: list[str] = []
 
     def complete(
         self,
@@ -35,6 +36,7 @@ class _StructuredClient:
     ) -> StructuredModelResult:
         assert not input_images
         assert instructions and input_payload and timeout_seconds > 0
+        self.instructions.append(instructions)
         self.schemas.append(output_schema)
         return StructuredModelResult(payload=self.payload, duration_ms=7)
 
@@ -77,48 +79,49 @@ def test_designer_draft_must_cover_exact_approved_ids(tmp_path: Path) -> None:
     spec = request.context.product_spec
     requirement_id = spec.requirements[0].id
     acceptance_id = spec.acceptance_criteria[0].id
-    result = StructuredDesignerAgentAdapter(
-        _StructuredClient(
-            {
-                "summary": "Change the focused module and verify it independently.",
-                "components": [
-                    {
-                        "key": "target",
-                        "name": "Target module",
-                        "responsibility": "Implement the approved behavior.",
-                        "affected_paths": ["src/**", "tests/**"],
-                    }
-                ],
-                "requirement_mappings": [
-                    {
-                        "requirement_id": requirement_id,
-                        "component_keys": ["target"],
-                        "approach": "Follow the discovered project conventions.",
-                    }
-                ],
-                "acceptance_mappings": [
-                    {
-                        "acceptance_criterion_id": acceptance_id,
-                        "verification_strategy": "Run focused unit tests.",
-                        "test_levels": ["unit"],
-                    }
-                ],
-                "implementation_steps": [
-                    {
-                        "key": "implement",
-                        "description": "Implement the focused change.",
-                        "component_keys": ["target"],
-                        "verification": "Run focused unit tests.",
-                    }
-                ],
-            }
-        )
-    ).run(request)
+    client = _StructuredClient(
+        {
+            "summary": "Change the focused module and verify it independently.",
+            "components": [
+                {
+                    "key": "target",
+                    "name": "Target module",
+                    "responsibility": "Implement the approved behavior.",
+                    "affected_paths": ["src/**", "tests/**"],
+                }
+            ],
+            "requirement_mappings": [
+                {
+                    "requirement_id": requirement_id,
+                    "component_keys": ["target"],
+                    "approach": "Follow the discovered project conventions.",
+                }
+            ],
+            "acceptance_mappings": [
+                {
+                    "acceptance_criterion_id": acceptance_id,
+                    "verification_strategy": "Run focused unit tests.",
+                    "test_levels": ["unit"],
+                }
+            ],
+            "implementation_steps": [
+                {
+                    "key": "implement",
+                    "description": "Implement the focused change.",
+                    "component_keys": ["target"],
+                    "verification": "Run focused unit tests.",
+                }
+            ],
+        }
+    )
+    result = StructuredDesignerAgentAdapter(client).run(request)
 
     assert result.status is DesignerAgentRunStatus.SUCCEEDED
     assert result.technical_design is not None
     result.technical_design.validate_integrity()
     assert result.technical_design.product_spec_sha256 == spec.product_spec_sha256
+    assert "reuse its exact repository-relative path" in client.instructions[0]
+    assert "never invent a new directory" in client.instructions[0]
 
 
 def test_planner_draft_remains_abstract_and_serial(tmp_path: Path) -> None:

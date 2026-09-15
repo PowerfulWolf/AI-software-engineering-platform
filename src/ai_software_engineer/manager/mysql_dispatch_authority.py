@@ -27,11 +27,11 @@ from ai_software_engineer.manager.dispatch import (
     DispatchCommitCorruption,
     DispatchCommitId,
     DispatchCommitNotFound,
-    DispatchCommitPathError,
     DispatchCommitRecord,
     DispatchPlannerRecordReader,
     DispatchPreviewStale,
     DispatchSha256,
+    DispatchStoreUnavailable,
     DispatchWorkforceSnapshot,
     RecoveryDispatchRecord,
     VerificationReservation,
@@ -45,6 +45,110 @@ from ai_software_engineer.store.mysql_repository import (
     _decode_task,
     open_mysql_connection,
 )
+
+_SNAPSHOT_COLUMNS = frozenset({"repository_id", "task_id", "payload_json", "snapshot_sha256"})
+_LEGACY_SNAPSHOT_COLUMNS = frozenset({"project_id", "task_id", "payload_json", "snapshot_sha256"})
+_COMMIT_COLUMNS = frozenset({"id", "repository_id", "task_id", "payload_json", "dispatch_sha256"})
+_LEGACY_COMMIT_COLUMNS = frozenset(
+    {"id", "project_id", "task_id", "payload_json", "dispatch_sha256"}
+)
+_VERIFICATION_COLUMNS = frozenset({"plan_sha256", "payload_json", "completion_sha256"})
+_LEGACY_TABLES = {
+    "dispatch_workforce_snapshots": "dispatch_workforce_snapshots_legacy_project_v01",
+    "dispatch_commits": "dispatch_commits_legacy_project_v01",
+}
+
+
+def _ensure_current_dispatch_tables(cursor: object) -> None:
+    """Preserve pre-Repository allocation facts and publish the current schema."""
+    typed = cast("pymysql.cursors.DictCursor", cursor)
+    table_names = (
+        *_LEGACY_TABLES,
+        "verification_reservations",
+        *_LEGACY_TABLES.values(),
+    )
+    placeholders = ",".join("%s" for _ in table_names)
+    typed.execute(
+        "SELECT TABLE_NAME, COLUMN_NAME FROM information_schema.COLUMNS "
+        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (" + placeholders + ")",
+        table_names,
+    )
+    columns: dict[str, set[str]] = {}
+    for row in cast(tuple[Mapping[str, object], ...], typed.fetchall()):
+        table = _text(row, "TABLE_NAME")
+        columns.setdefault(table, set()).add(_text(row, "COLUMN_NAME"))
+
+    snapshot = frozenset(columns.get("dispatch_workforce_snapshots", set()))
+    commits = frozenset(columns.get("dispatch_commits", set()))
+    verification = frozenset(columns.get("verification_reservations", set()))
+    archive_columns = {
+        source: frozenset(columns.get(archive, set())) for source, archive in _LEGACY_TABLES.items()
+    }
+    expected_archives = {
+        "dispatch_workforce_snapshots": _LEGACY_SNAPSHOT_COLUMNS,
+        "dispatch_commits": _LEGACY_COMMIT_COLUMNS,
+    }
+    for source, existing in archive_columns.items():
+        if existing and existing != expected_archives[source]:
+            raise DispatchCommitCorruption(
+                f"legacy MySQL dispatch archive {source} has an unexpected schema"
+            )
+    archive_presence = tuple(bool(existing) for existing in archive_columns.values())
+    if any(archive_presence) and not all(archive_presence):
+        raise DispatchCommitCorruption("legacy MySQL dispatch archive is incomplete")
+
+    if verification not in (frozenset(), _VERIFICATION_COLUMNS):
+        raise DispatchCommitCorruption(
+            "MySQL verification reservations table has an ambiguous schema"
+        )
+    current_missing = not snapshot and not commits
+    current_ready = snapshot == _SNAPSHOT_COLUMNS and commits == _COMMIT_COLUMNS
+    legacy_ready = snapshot == _LEGACY_SNAPSHOT_COLUMNS and commits == _LEGACY_COMMIT_COLUMNS
+    if legacy_ready:
+        if any(archive_columns.values()):
+            raise DispatchCommitCorruption(
+                "legacy and active MySQL dispatch tables are both present"
+            )
+        typed.execute(
+            "RENAME TABLE "
+            "dispatch_workforce_snapshots TO "
+            "dispatch_workforce_snapshots_legacy_project_v01, "
+            "dispatch_commits TO dispatch_commits_legacy_project_v01"
+        )
+    elif not current_ready and not current_missing:
+        raise DispatchCommitCorruption("MySQL dispatch tables have an ambiguous schema")
+
+    typed.execute(
+        """
+        CREATE TABLE IF NOT EXISTS dispatch_workforce_snapshots (
+            repository_id VARCHAR(128) NOT NULL,
+            task_id VARCHAR(128) NOT NULL,
+            payload_json JSON NOT NULL,
+            snapshot_sha256 CHAR(64) NOT NULL,
+            PRIMARY KEY (repository_id, task_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
+        """
+    )
+    typed.execute(
+        """
+        CREATE TABLE IF NOT EXISTS dispatch_commits (
+            id VARCHAR(96) PRIMARY KEY,
+            repository_id VARCHAR(128) NOT NULL,
+            task_id VARCHAR(128) NOT NULL,
+            payload_json JSON NOT NULL,
+            dispatch_sha256 CHAR(64) NOT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
+        """
+    )
+    typed.execute(
+        """
+        CREATE TABLE IF NOT EXISTS verification_reservations (
+            plan_sha256 CHAR(64) PRIMARY KEY,
+            payload_json JSON NOT NULL,
+            completion_sha256 CHAR(64) NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
+        """
+    )
 
 
 class MySqlDispatchAuthority:
@@ -80,39 +184,9 @@ class MySqlDispatchAuthority:
                         ON DUPLICATE KEY UPDATE purpose = VALUES(purpose)
                         """
                     )
-                    cursor.execute(
-                        """
-                        CREATE TABLE IF NOT EXISTS dispatch_workforce_snapshots (
-                            repository_id VARCHAR(128) NOT NULL,
-                            task_id VARCHAR(128) NOT NULL,
-                            payload_json JSON NOT NULL,
-                            snapshot_sha256 CHAR(64) NOT NULL,
-                            PRIMARY KEY (repository_id, task_id)
-                        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
-                        """
-                    )
-                    cursor.execute(
-                        """
-                        CREATE TABLE IF NOT EXISTS dispatch_commits (
-                            id VARCHAR(96) PRIMARY KEY,
-                            repository_id VARCHAR(128) NOT NULL,
-                            task_id VARCHAR(128) NOT NULL,
-                            payload_json JSON NOT NULL,
-                            dispatch_sha256 CHAR(64) NOT NULL
-                        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
-                        """
-                    )
-                    cursor.execute(
-                        """
-                        CREATE TABLE IF NOT EXISTS verification_reservations (
-                            plan_sha256 CHAR(64) PRIMARY KEY,
-                            payload_json JSON NOT NULL,
-                            completion_sha256 CHAR(64) NULL
-                        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
-                        """
-                    )
+                    _ensure_current_dispatch_tables(cursor)
             except pymysql.MySQLError as error:
-                raise DispatchCommitPathError(
+                raise DispatchStoreUnavailable(
                     "cannot initialize MySQL dispatch authority"
                 ) from error
 
@@ -247,7 +321,7 @@ class MySqlDispatchAuthority:
                     )
                     row = cast(Mapping[str, object] | None, cursor.fetchone())
             except pymysql.MySQLError as error:
-                raise DispatchCommitPathError("cannot read MySQL dispatch commit") from error
+                raise DispatchStoreUnavailable("cannot read MySQL dispatch commit") from error
         if row is None:
             raise DispatchCommitNotFound(f"dispatch commit {commit_id} was not found")
         return _decode_allocation(row)
@@ -627,7 +701,7 @@ class MySqlDispatchAuthority:
             raise
         except pymysql.MySQLError as error:
             connection.rollback()
-            raise DispatchCommitPathError("MySQL dispatch transaction failed") from error
+            raise DispatchStoreUnavailable("MySQL dispatch transaction failed") from error
         except BaseException:
             connection.rollback()
             raise
@@ -636,7 +710,7 @@ class MySqlDispatchAuthority:
                 connection.commit()
             except pymysql.MySQLError as error:
                 connection.rollback()
-                raise DispatchCommitPathError("MySQL dispatch commit failed") from error
+                raise DispatchStoreUnavailable("MySQL dispatch commit failed") from error
 
 
 def _encode(model: DispatchWorkforceSnapshot | DeliveryAllocation) -> str:
