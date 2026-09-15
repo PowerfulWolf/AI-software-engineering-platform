@@ -347,6 +347,13 @@ recoveryApprovalBox(request, approval) -> HTMLElement
   recovery-plan wording. The digest remains bound to the button and is never rendered.
 - The joint parent may remain `BLOCKED` while the child returns the approval. UI state is derived
   from the successful Operation plus exact checkpoint, not from a synthetic stage transition.
+- Closing a recovery bug requires an explicit existing-data disposition. If durable facts are
+  internally inconsistent, repair only the exact resolved records under their transaction/integrity
+  gates, preserve immutable history, and report before/after verification. If the durable facts are
+  valid and continuation is waiting for human scope or plan authorization, do not mutate MySQL or
+  journals to simulate approval; report that no database repair is required and provide the exact UI
+  actions from the current approval through the next executable stage. A code fix alone is not a
+  complete handoff while an existing Requirement has no actionable continuation path.
 
 ### 4. Validation & Error Matrix
 
@@ -357,6 +364,8 @@ recoveryApprovalBox(request, approval) -> HTMLElement
 | Approval digest already submitted | Old approval disappears; normal continue/current result is shown |
 | Failed continue Operation | Failure remains the latest recovery result; no approval is fabricated |
 | Approval checkpoint differs from current checkpoint | Approval is stale and not rendered |
+| Existing facts are consistent and an exact scope/plan approval is pending | No database rewrite; handoff names the visible approval action and every subsequent step needed to resume |
+| Existing facts violate a mutable projection/index contract | Repair only resolved derived records, preserve immutable journals/evidence, then verify both source facts and rebuilt UI projection |
 
 ### 5. Good / Base / Bad Cases
 
@@ -365,6 +374,8 @@ recoveryApprovalBox(request, approval) -> HTMLElement
 - Base: no approval exists; the durable current blocker and normal continue action remain visible.
 - Bad: leave the old raw Coder failure under `当前阻塞` and place the actual approval below the
   discussion, making a successful continuation look like the same error repeated.
+- Bad: declare the bug fixed because new code is correct while the reporter's existing Requirement
+  remains blocked with neither a bounded data repair nor an exact operator recovery sequence.
 
 ### 6. Tests Required
 
