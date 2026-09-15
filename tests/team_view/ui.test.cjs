@@ -205,7 +205,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
         max_parallel_assignments: 8,
         current_stage_delivery_ids: [],
         assigned_delivery_ids: [],
-        history_delivery_ids: [],
+        history_delivery_ids: ["r1"],
       },
     ],
     requests: [
@@ -833,6 +833,13 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     ),
     "系统未能确认唯一且可信的 Coder 执行记录，本次自动恢复已安全停止。",
   );
+  assert.equal(
+    vm.runInContext(
+      'humanizeBlockingText("QA verification could not complete in the current environment; the candidate is retained for fresh verification")',
+      context,
+    ),
+    "QA 未能在当前环境完成验证；候选代码已保留，继续交付时只会重新执行 QA/Review。",
+  );
   assert.equal(interval.ms, 5000);
   assert.equal(get("scope-label").textContent, "Team 级");
   assert.equal(get("scope-title").textContent, "Fixture team");
@@ -875,6 +882,19 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   descend(get("detail")).find(
     (node) => node.tag === "button" && node.textContent === "关闭",
   ).events.click();
+  await agentCards[0].events.click();
+  assert.match(text(get("content")), /规划 · 任务队列/);
+  assert.match(text(get("content")), /已完成 1/);
+  const plannedRequirementCard = descend(get("content")).find(
+    (node) => node.className === "work-row" && text(node).includes(malicious),
+  );
+  assert.ok(
+    plannedRequirementCard,
+    "upstream Agent queues resolve Requirement work items as well as repository Tasks",
+  );
+  await plannedRequirementCard.events.click();
+  assert.equal(get("detail").className, "request-detail-panel");
+  assert.match(text(get("detail")), /需求详情/);
   assert.equal(
     vm.runInContext(
       'compactPath("/Users/example/workspace/code/ai-workspace/example-project")',
@@ -1588,7 +1608,12 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     (node) =>
       node.className === "detail-section" && text(node).includes("交付流程"),
   );
-  assert.match(text(activeDeliveryFlow), /实现中/);
+  assert.match(text(activeDeliveryFlow), /产品.*设计.*计划.*实现.*测试.*评审.*交付/);
+  assert.doesNotMatch(
+    text(activeDeliveryFlow),
+    /Manager|正在|可以离开|平台会按串行阶段继续推进/,
+    "the delivery flow contains node states only",
+  );
   const completedDiscussion = descend(get("detail")).find(
     (node) => node.className === "detail-section product-dialogue",
   );
@@ -1641,6 +1666,18 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   );
   assert.match(blockedDetail, /No automatic continuation is available/);
   assert.doesNotMatch(blockedDetail, /Old joint blocker/);
+  assert.ok(
+    descend(get("detail")).find(
+      (node) => node.tag === "button" && node.textContent === "关闭需求",
+    ),
+    "blocked Requirements can be closed without losing their history",
+  );
+  assert.ok(
+    descend(get("detail")).find(
+      (node) => node.tag === "button" && node.textContent === "删除需求",
+    ),
+    "blocked Requirements can be retired from the Project view",
+  );
   const olderBlocked = JSON.parse(JSON.stringify(storedOperations[1]));
   olderBlocked.operation_id = "operation_older_blocked";
   olderBlocked.updated_at = "2026-09-05T01:00:04Z";

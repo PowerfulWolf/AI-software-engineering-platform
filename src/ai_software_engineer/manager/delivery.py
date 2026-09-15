@@ -72,6 +72,15 @@ class DeliveryCatalogError(UnifiedProjectEntryError):
     """The external project workspace catalog is missing, unsafe, or ambiguous."""
 
 
+def _blocked_failure_code(delivery: BlockedResult) -> DeliveryFailureCode:
+    """Keep the durable Delivery failure aligned with the retry classification."""
+    if delivery.classification is RetryClassification.INVALID_OUTPUT:
+        return DeliveryFailureCode.INVALID_AGENT_OUTPUT
+    if delivery.classification is RetryClassification.VERIFICATION_INCONCLUSIVE:
+        return DeliveryFailureCode.VERIFICATION_INCONCLUSIVE
+    return DeliveryFailureCode.RETRY_BUDGET_EXHAUSTED
+
+
 class DeliveryFailureSnapshot(DomainModel):
     """Read-back runtime facts, never a replacement for the Task event history."""
 
@@ -780,11 +789,7 @@ class UnifiedProjectEntryService:
                 task_revision=len(delivery.event_ids),
                 task_status=delivery.task.status,
                 candidate_revision=delivery.candidate_revision,
-                failure_code=(
-                    DeliveryFailureCode.INVALID_AGENT_OUTPUT
-                    if delivery.classification is RetryClassification.INVALID_OUTPUT
-                    else DeliveryFailureCode.RETRY_BUDGET_EXHAUSTED
-                ),
+                failure_code=_blocked_failure_code(delivery),
                 failure_summary=delivery.reason,
                 failed_stage=DeliveryStage.DELIVERING,
                 at=at,
@@ -839,11 +844,7 @@ class UnifiedProjectEntryService:
                 task_revision=len(delivery.event_ids),
                 task_status=delivery.task.status,
                 candidate_revision=delivery.candidate_revision,
-                failure_code=(
-                    DeliveryFailureCode.INVALID_AGENT_OUTPUT
-                    if delivery.classification is RetryClassification.INVALID_OUTPUT
-                    else DeliveryFailureCode.RETRY_BUDGET_EXHAUSTED
-                ),
+                failure_code=_blocked_failure_code(delivery),
                 failure_summary=delivery.reason,
                 failed_stage=DeliveryStage.DELIVERING,
                 at=at,
@@ -984,11 +985,7 @@ class UnifiedProjectEntryService:
                 task_status=delivery.task.status,
                 candidate_revision=delivery.candidate_revision,
                 attempts=attempts,
-                failure_code=(
-                    DeliveryFailureCode.INVALID_AGENT_OUTPUT
-                    if delivery.classification is RetryClassification.INVALID_OUTPUT
-                    else DeliveryFailureCode.RETRY_BUDGET_EXHAUSTED
-                ),
+                failure_code=_blocked_failure_code(delivery),
                 failure_summary=delivery.reason,
                 failed_stage=DeliveryStage.DELIVERING,
                 at=at,

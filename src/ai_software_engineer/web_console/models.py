@@ -35,6 +35,7 @@ class ConsoleAction(StrEnum):
     CREATE_PROJECT = "CREATE_PROJECT"
     CREATE_REQUIREMENT = "CREATE_REQUIREMENT"
     UPDATE_REQUIREMENT = "UPDATE_REQUIREMENT"
+    CLOSE_REQUIREMENT = "CLOSE_REQUIREMENT"
     DELETE_REQUIREMENT = "DELETE_REQUIREMENT"
     PRODUCT_REPLY = "PRODUCT_REPLY"
     PRODUCT_APPROVAL = "PRODUCT_APPROVAL"
@@ -88,6 +89,13 @@ class DeleteRequirementIntent(DomainModel):
     expected_checkpoint_sha256: CheckpointDigest
 
 
+class CloseRequirementIntent(DomainModel):
+    action: Literal[ConsoleAction.CLOSE_REQUIREMENT] = ConsoleAction.CLOSE_REQUIREMENT
+    project_id: ProjectId
+    delivery_id: DeliveryId
+    expected_checkpoint_sha256: CheckpointDigest
+
+
 class ProductReplyIntent(DomainModel):
     action: Literal[ConsoleAction.PRODUCT_REPLY] = ConsoleAction.PRODUCT_REPLY
     project_id: ProjectId
@@ -124,6 +132,7 @@ ConsoleIntent = Annotated[
     CreateProjectIntent
     | CreateRequirementIntent
     | UpdateRequirementIntent
+    | CloseRequirementIntent
     | DeleteRequirementIntent
     | ProductReplyIntent
     | ProductApprovalIntent
@@ -314,6 +323,7 @@ def _absolute_unique_roots(values: tuple[str, ...]) -> tuple[str, ...]:
 
 __all__ = [
     "CONSOLE_INTENT_ADAPTER",
+    "CloseRequirementIntent",
     "ConsoleAction",
     "ConsoleApprovalRequest",
     "ConsoleCommandResult",

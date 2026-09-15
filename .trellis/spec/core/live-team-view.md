@@ -163,6 +163,81 @@ Task or dispatch commit existed.
 Correct: build validated filesystem base views first, derive current/historical Task lineage, and open
 the read-only SQL snapshot only when that lineage requires enrichment or verification projection.
 
+## Scenario: Requirement-stage work in upstream Agent queues
+
+### 1. Scope / Trigger
+
+Applies when Manager, Product, Designer, or Planner queue projection changes. These roles execute
+before native Repository Tasks exist, so their work identity is the Project Requirement rather than a
+synthetic Coder/QA/Reviewer Task.
+
+### 2. Signatures
+
+```python
+_agent_views(
+    profiles: tuple[AgentProfile, ...],
+    requests: list[RequestView],
+    tasks: list[TaskView],
+) -> tuple[AgentView, ...]
+_upstream_request_state(request: RequestView, role: TeamRole) -> str | None
+```
+
+`AgentView.assigned_delivery_ids`, `current_stage_delivery_ids`, and
+`history_delivery_ids` may reference either a `TaskView.id` or `RequestView.id`; the browser must
+resolve both typed inventories and never invent a second work record.
+
+### 3. Contracts
+
+- `PREPARING` is current Manager work; `PRODUCT_DISCOVERY` is current Product work; `DESIGNING` is
+  current Designer work; `PLANNING` is current Planner work. Earlier stages become role history and
+  later stages are absent from that role's queue.
+- `READY_FOR_DISCUSSION`, `WAITING_PRODUCT_REPLY`, and `WAITING_PRODUCT_APPROVAL` remain assigned to
+  Product but are not execution liveness. They render in the waiting queue until Product work resumes
+  or approval advances the Requirement.
+- A joint `BLOCKED`/`WAITING_HUMAN` Requirement is assigned to Manager as blocked coordination work.
+  `DONE` and `CLOSED` are history for all four upstream roles.
+- Repository Task assignments continue to come only from committed dispatch facts. Upstream
+  Requirement projection cannot create SQL assignments, leases, model selections, or process-online
+  claims.
+- Queue IDs are deduplicated in stable snapshot order. A queue card renders the Requirement title,
+  owning role and compact scope; clicking or keyboard activation opens that exact Requirement detail.
+
+### 4. Validation & Error Matrix
+
+| Requirement stage | Queue result |
+|---|---|
+| PREPARING | Manager current |
+| PRODUCT_DISCOVERY | Manager history; Product current |
+| READY / WAITING_PRODUCT_* | Product assigned/waiting |
+| DESIGNING | Manager/Product history; Designer current |
+| PLANNING | Manager/Product/Designer history; Planner current |
+| DELIVERING / INTEGRATING | four upstream roles in history; native Task roles own current work |
+| BLOCKED / WAITING_HUMAN | Manager blocked; no invented upstream executor |
+| DONE / CLOSED | four upstream roles in history |
+
+### 5. Good / Base / Bad Cases
+
+- Good: while Designer is running, Designer shows one current Requirement and Product shows the same
+  Requirement under completed history.
+- Base: Product is waiting for a user reply; the Requirement is queued, not labelled as actively
+  executing.
+- Bad: show all four roles as idle until Coder Task creation, or synthesize four SQL Task records for
+  one Requirement.
+
+### 6. Tests Required
+
+- `tests/team_view/test_live.py` covers stage-to-role current/assigned/history projection, including
+  DONE/CLOSED and Manager-owned blocker states.
+- `tests/team_view/ui.test.cjs` includes an upstream Requirement ID in a member queue, asserts its
+  group/count, and opens exact Requirement detail from the overview card.
+
+### 7. Wrong vs Correct
+
+Wrong: resolve every Agent queue ID only through `taskById`, silently dropping all pre-Coder work.
+
+Correct: resolve through the Task inventory first, then the Requirement inventory, and render each
+using its authoritative detail view.
+
 ## Bug analysis: pre-dispatch failure made the selected Project unreadable
 
 1. **Root cause (D/E)**: the Reader used “at least one native delivery directory exists” as a proxy

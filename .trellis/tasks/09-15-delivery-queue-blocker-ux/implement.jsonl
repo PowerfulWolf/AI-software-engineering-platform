@@ -1,0 +1,6 @@
+{"path":".trellis/spec/core/delivery-recovery.md","reason":"QA evidence disposition and continuation contract"}
+{"path":".trellis/spec/core/live-team-view.md","reason":"Team member queue projection contract"}
+{"path":".trellis/spec/core/web-console.md","reason":"Requirement controls and browser rendering"}
+{"path":".trellis/spec/core/persistent-work-queue.md","reason":"Agent queue ownership and liveness"}
+{"path":"src/ai_software_engineer","reason":"Cross-layer implementation"}
+{"path":"tests","reason":"Regression coverage"}

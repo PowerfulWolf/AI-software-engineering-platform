@@ -61,6 +61,7 @@ production_console_app(
 - `CREATE_PROJECT(name, project_id?)`；
 - `CREATE_REQUIREMENT(project_id, name, repository_roots)`；
 - `UPDATE_REQUIREMENT(project_id, delivery_id, expected_checkpoint_sha256, name, repository_roots)`；
+- `CLOSE_REQUIREMENT(project_id, delivery_id, expected_checkpoint_sha256)`；
 - `DELETE_REQUIREMENT(project_id, delivery_id, expected_checkpoint_sha256)`；
 - `PRODUCT_REPLY(project_id, delivery_id, expected_checkpoint_sha256, message, screenshot_ids)`；
 - `PRODUCT_APPROVAL(project_id, delivery_id, expected_checkpoint_sha256)`；
@@ -136,6 +137,9 @@ production_console_app(
   ProductSpec 批准前的 READY/Product 对话阶段均可逻辑删除。编辑复用预填名称与精确目录的弹窗；
   目录新增仍只来自原生目录选择器。删除必须先确认。
   UPDATE 成功后选中返回的 replacement Delivery；DELETE 成功后清除已退休选择。
+- 终态 `BLOCKED` Requirement 可在 exact checkpoint fence 下“关闭需求”或直接“删除需求”。关闭追加
+  `CLOSED` checkpoint、停止继续交付并保留在可见历史；删除只追加 Project retirement 记录，完整
+  journal、子 Task 与证据不擦除。活动中的批准后 Requirement 仍不得删除。
 - Repository HEAD 与 Requirement 固定基线不一致时，Manager 必须把 typed
   `RequirementSourceRevisionDrift` 映射为 `SOURCE_REVISION_DRIFT`。Team View 也必须识别升级前已经
   持久化的 legacy `COMMAND_REJECTED` source-drift summary。此时不得继续显示可恢复 composer、
@@ -149,9 +153,11 @@ production_console_app(
   操作/批准、交付结果、阶段产物。所有同级 section 使用 `--detail-section-space` 作为分割线两侧的
   唯一垂直间距，标题统一为 `h2`；子级需求名称使用 `h3`，ID、状态和下一步保持辅助信息层级。
   section 不得再叠加独立 `margin-top`，流程组件也不得通过额外底部 margin 改变下一条分割线的位置。
-- `CONTINUE_DELIVERY` 的 `QUEUED`/`RUNNING` 提示属于“交付流程”，不能作为 Product Agent 回复或
-  需求讨论状态展示。当前子 Task 已开始时，Requirement 列表/摘要优先显示子 Task 阶段并隐藏旧父
-  checkpoint blocker；需求讨论只保留已提交的双方消息。活动子 Task 存在时不得再次显示“继续交付”。
+- “交付流程”section 只展示七个节点及其当前/已完成状态，不追加 `QUEUED`/`RUNNING`、Manager
+  恢复、离开页面或串行推进文案。Operation 状态只在全局操作/结果入口展示，Product 处理状态只在
+  需求讨论 composer 内展示。当前子 Task 已开始时，Requirement 列表/摘要优先显示子 Task 阶段并
+  隐藏旧父 checkpoint blocker；需求讨论只保留已提交的双方消息。活动子 Task 存在时不得再次显示
+  “继续交付”。
 - 设置页的模型路由分为可用模型目录和 Agent 策略。启用目录路由只使其可选，不自动成为
   备用模型；每个 Agent 选择一个主模型，并可从目录中显式添加、移除、上移或下移 0–N 个备用模型。
 - 一个 Task 的 Coder/QA/Reviewer 串行。UI 只把 `current_stage=true` 的 assignment 标成执行中；
@@ -177,7 +183,9 @@ production_console_app(
 | Valid Project or new Requirement with one or many absolute roots | persist QUEUED, return 202, background Manager performs the typed action |
 | Exact idle READY Requirement edit | persist UPDATE; Manager publishes replacement and retires original |
 | Exact idle pre-approval Requirement delete after confirmation | persist DELETE; original leaves current inventory but dialogue/history remains |
-| Edit after Product discussion, delete after ProductSpec approval, or stale checkpoint | terminal safe failure; no retirement or history mutation |
+| Exact BLOCKED Requirement close | append CLOSED successor; retain Requirement and all history; disable continuation |
+| Exact BLOCKED/CLOSED Requirement delete | retire from current inventory; preserve journal, child Tasks and evidence |
+| Edit after Product discussion, delete an active post-approval Requirement, or stale checkpoint | terminal safe failure; no retirement or history mutation |
 | Browser refresh/disconnect after 202 | accepted Operation continues; repeated same key returns same identity |
 | Same idempotency key, changed intent | 409; original Operation unchanged |
 | Second active command for same Delivery | 409; no second provider call |
@@ -188,6 +196,7 @@ production_console_app(
 | Empty text and no screenshot / duplicate or foreign attachment ID | 422; no Product invocation |
 | Two Requirements in the same visible group | clicking either card body opens and marks that exact Requirement as the sole selection; polling preserves it |
 | Requirement detail contains empty or populated Product/artifact modules | every module heading remains the same level and every divider has the same spacing on both sides |
+| Delivery has active continue Operation or child Task | seven flow nodes only; no Manager/operation prose in the flow section |
 | Enabled model exists in catalog but is not selected by an Agent | save succeeds; it is never serialized or shown as that Agent's fallback |
 | Screenshot over 10 MB, unsupported magic, stale checkpoint or wrong stage | 413/422; no dialogue mutation |
 | Stale displayed checkpoint | terminal FAILED with `STALE_CHECKPOINT`; no model call |
@@ -219,13 +228,14 @@ production_console_app(
 
 - `tests/web_console/test_core.py`：memory/file store 幂等、单 Delivery admission、persist-before-run、
   safe failure、重开 hash chain 与 orphan RUNNING interruption。
-- `tests/web_console/test_manager.py`：五类 typed intent 委托、Project 边界、exact checkpoint、stale 拒绝、
+- `tests/web_console/test_manager.py`：全部 typed intent 委托、Project 边界、exact checkpoint、stale 拒绝、
   source-drift 专用错误码、recovery/verification plan digest 和 safe facts。
 - `tests/web_console/test_transport.py`：lifespan、assets/query、202 submit、operation query、Host/Origin、
   content type、body/input limit、409/404 和安全 headers。
 - `tests/team_view/ui.test.cjs`：多目录创建、Product/继续/批准操作、操作状态、刷新保持、hidden digest
   不直接渲染、只读 fallback、单 Task 串行角色状态、安全文本、Requirement 详情统一标题/分割节奏，
-  粘贴截图移除后的预览和反馈同步、READY draft 编辑、Product 批准前删除、source-drift 重建，
+  粘贴截图移除后的预览和反馈同步、READY draft 编辑、Product 批准前删除、阻塞需求关闭/删除、
+  仅含节点状态的交付流程、source-drift 重建，
   以及失败通知关闭/成功替代、successful-but-blocked 反馈、同 Requirement 去重、阻塞信息唯一入口与
   Operation 快捷跳转。
 - `tests/team_view/test_live.py`：candidate branch 必须从 exact candidate ref 唯一推导，不能猜测。
@@ -262,6 +272,15 @@ prompt("plan sha256")
 
 // Correct: bind the exact digest to the button while rendering the facts being approved.
 submitOperation({ action: "CONTINUE_DELIVERY", approved_plan_sha256: approval.plan_sha256 })
+```
+
+```javascript
+// Wrong: keep appending orchestration prose beside durable delivery nodes.
+flow.append("Manager 正在重新交付，可以离开页面后再回来")
+
+// Correct: flow is status-only; operation state has its own durable presentation.
+flow.append(deliveryFlow(request))
+renderOperationStatus(latestOperation(request.id))
 ```
 
 ```javascript

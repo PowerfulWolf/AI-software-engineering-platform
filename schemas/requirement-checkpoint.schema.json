@@ -290,6 +290,7 @@
         "RESOURCE_UNAVAILABLE",
         "TRANSIENT_PROVIDER_FAILURE",
         "INVALID_AGENT_OUTPUT",
+        "VERIFICATION_INCONCLUSIVE",
         "RETRY_BUDGET_EXHAUSTED",
         "CHECKPOINT_DRIFT",
         "TASK_COLLISION",
@@ -810,6 +811,7 @@
         "DELIVERING",
         "INTEGRATING",
         "DONE",
+        "CLOSED",
         "WAITING_HUMAN",
         "BLOCKED"
       ],

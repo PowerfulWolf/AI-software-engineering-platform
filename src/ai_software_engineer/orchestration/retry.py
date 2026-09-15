@@ -14,10 +14,12 @@ from ai_software_engineer.domain.artifact import (
     PlanArtifact,
     QaReportArtifact,
     ReviewReportArtifact,
+    classify_qa_failure,
 )
 from ai_software_engineer.domain.enums import (
     AgentRole,
     ArtifactKind,
+    QaFailureDisposition,
     QaReportStatus,
     ReviewVerdict,
     TaskStatus,
@@ -39,6 +41,7 @@ class RetryClassification(StrEnum):
     TRANSIENT_INFRA = "TRANSIENT_INFRA"
     INVALID_OUTPUT = "INVALID_OUTPUT"
     QA_FINDING = "QA_FINDING"
+    VERIFICATION_INCONCLUSIVE = "VERIFICATION_INCONCLUSIVE"
     REVIEW_FINDING = "REVIEW_FINDING"
     POLICY_VIOLATION = "POLICY_VIOLATION"
     REQUIREMENT_AMBIGUITY = "REQUIREMENT_AMBIGUITY"
@@ -358,6 +361,17 @@ class RetryingOrchestrator(SerialOrchestrator):
                 else:
                     qa = current_qa
                 if qa.content.status is QaReportStatus.FAIL:
+                    if classify_qa_failure(qa.content) is QaFailureDisposition.RETRY_VERIFICATION:
+                        return self._blocked(
+                            task,
+                            RetryClassification.VERIFICATION_INCONCLUSIVE,
+                            "QA verification could not complete in the current environment; "
+                            "the candidate is retained for fresh verification",
+                            task.attempts,
+                            event_ids,
+                            (qa.artifact_id,),
+                            source_revision=implementation.content.commit_sha,
+                        )
                     if task.attempts >= task.max_attempts:
                         return self._blocked(
                             task,

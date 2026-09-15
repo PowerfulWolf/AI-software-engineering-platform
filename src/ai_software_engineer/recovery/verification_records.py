@@ -15,12 +15,12 @@ from ai_software_engineer.domain.artifact import (
     QaReportArtifact,
     ReviewReportArtifact,
     Sha256,
+    classify_qa_failure,
 )
 from ai_software_engineer.domain.enums import (
     AgentRole,
-    QaCriterionStatus,
+    QaFailureDisposition,
     QaReportStatus,
-    QaTestStatus,
     ReviewVerdict,
 )
 from ai_software_engineer.domain.identity import RunId
@@ -182,11 +182,7 @@ class CandidateVerificationCompletion(DomainModel):
             return CandidateVerificationDisposition.VERIFIED
         if self.review is not None:
             return CandidateVerificationDisposition.REMEDIATE_CANDIDATE
-        criteria = tuple(item.status for item in self.qa.content.criteria_results)
-        tests = tuple(item.status for item in self.qa.content.tests_run)
-        if QaCriterionStatus.FAIL in criteria or QaTestStatus.FAIL in tests:
-            return CandidateVerificationDisposition.REMEDIATE_CANDIDATE
-        if QaCriterionStatus.NOT_TESTED in criteria or QaTestStatus.ERROR in tests:
+        if classify_qa_failure(self.qa.content) is QaFailureDisposition.RETRY_VERIFICATION:
             return CandidateVerificationDisposition.RETRY_VERIFICATION
         return CandidateVerificationDisposition.REMEDIATE_CANDIDATE
 

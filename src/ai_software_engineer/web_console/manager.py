@@ -20,6 +20,7 @@ from ai_software_engineer.manager.delivery_checkpoint import (
 from ai_software_engineer.multi_directory.errors import RequirementSourceRevisionDrift
 from ai_software_engineer.multi_directory.models import JointDeliveryResult
 from ai_software_engineer.multi_directory.service import (
+    CloseRequirement,
     CreateRequirement,
     DeleteRequirement,
     JointDeliveryService,
@@ -33,6 +34,7 @@ from ai_software_engineer.runtime_workspace import RuntimeWorkspaceError
 
 from .core import ConsoleCommandRejected
 from .models import (
+    CloseRequirementIntent,
     ConsoleApprovalRequest,
     ConsoleCommandResult,
     ConsoleIntent,
@@ -92,6 +94,14 @@ class ManagerConsoleAdapter:
                     )
                 )
                 return _summarize(updated, project_id=intent.project_id)
+            if isinstance(intent, CloseRequirementIntent):
+                closed = self._host.requirement_entry(intent.project_id).close_requirement(
+                    CloseRequirement(
+                        delivery_id=intent.delivery_id,
+                        expected_checkpoint_sha256=intent.expected_checkpoint_sha256,
+                    )
+                )
+                return _summarize(closed, project_id=intent.project_id)
             if isinstance(intent, DeleteRequirementIntent):
                 self._host.requirement_entry(intent.project_id).delete_requirement(
                     DeleteRequirement(

@@ -97,6 +97,14 @@ class DeleteRequirement(DomainModel):
     submitted_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class CloseRequirement(DomainModel):
+    """Close a blocked Requirement while preserving its visible journal history."""
+
+    delivery_id: DeliveryId
+    expected_checkpoint_sha256: CheckpointDigest
+    submitted_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class JointDeliveryService:
     def __init__(
         self,
@@ -159,7 +167,7 @@ class JointDeliveryService:
             return replacement
 
     def delete_requirement(self, command: DeleteRequirement) -> JointDeliveryResult:
-        """Retire the exact displayed pre-approval Requirement without deleting its journal."""
+        """Retire the exact displayed Requirement without deleting its journal."""
         with self.journal.lock(command.delivery_id):
             checkpoint = self._current(command.delivery_id)
             self._expected(checkpoint, command.expected_checkpoint_sha256)
@@ -170,6 +178,20 @@ class JointDeliveryService:
                 retired_at=command.submitted_at,
             )
             return JointDeliveryResult(checkpoint=checkpoint)
+
+    def close_requirement(self, command: CloseRequirement) -> JointDeliveryResult:
+        """Close the exact displayed blocker without erasing delivery evidence."""
+        with self.journal.lock(command.delivery_id):
+            checkpoint = self._current(command.delivery_id)
+            self._expected(checkpoint, command.expected_checkpoint_sha256)
+            if checkpoint.stage is not JointStage.BLOCKED:
+                raise ValueError("Requirement can only be closed while blocked")
+            closed = self._save(
+                checkpoint,
+                stage=JointStage.CLOSED,
+                next_action="Requirement closed by user; delivery history is retained.",
+            )
+            return JointDeliveryResult(checkpoint=closed)
 
     def _intake(
         self,
@@ -657,6 +679,8 @@ class JointDeliveryService:
 
     @staticmethod
     def _require_deletable(checkpoint: JointCheckpoint) -> None:
+        if checkpoint.stage in {JointStage.BLOCKED, JointStage.CLOSED}:
+            return
         if (
             checkpoint.stage
             not in {

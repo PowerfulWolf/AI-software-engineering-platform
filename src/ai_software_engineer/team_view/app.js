@@ -67,6 +67,7 @@ const labels = {
   QA: "测试中",
   REVIEW: "评审中",
   DONE: "已完成",
+  CLOSED: "已关闭",
   BLOCKED: "已阻塞",
   FAILED: "失败",
   WAITING_HUMAN: "等待人工",
@@ -87,6 +88,7 @@ const labels = {
   CREATE_PROJECT: "创建项目",
   CREATE_REQUIREMENT: "创建需求",
   UPDATE_REQUIREMENT: "编辑需求",
+  CLOSE_REQUIREMENT: "关闭需求",
   DELETE_REQUIREMENT: "删除需求",
   PRODUCT_REPLY: "提交需求说明",
   PRODUCT_APPROVAL: "批准产品文档",
@@ -292,6 +294,12 @@ function assignmentBadge(task, assignment) {
 }
 const taskById = (id) => snapshot.tasks.find((t) => t.id === id);
 const requestById = (id) => snapshot.requests.find((r) => r.id === id);
+const agentWorkById = (id) => {
+  const task = taskById(id);
+  if (task) return { kind: "task", id, item: task };
+  const request = requestById(id);
+  return request ? { kind: "request", id, item: request } : null;
+};
 function taskGroup(task) {
   if (task.status === "DONE") return "completed";
   if (
@@ -348,7 +356,7 @@ function requestPresentation(request) {
           : "当前操作正在执行。"),
     };
   }
-  if (request.stage === "DONE")
+  if (["DONE", "CLOSED"].includes(request.stage))
     return {
       group: "completed",
       status: request.stage,
@@ -404,6 +412,12 @@ function requestBlockingSummary(request) {
     ? "审核恢复计划后，点击“批准并继续”。"
     : blockedTasks.some((task) =>
           String(task.blocker || "").includes(
+            "QA verification could not complete in the current environment",
+          ),
+        )
+      ? "点击下方“继续交付”，系统会保留现有候选代码并重新执行 QA/Review。"
+    : blockedTasks.some((task) =>
+          String(task.blocker || "").includes(
             "requested continuation after the configured run budget",
           ),
         )
@@ -427,6 +441,12 @@ function humanizeBlockingText(value) {
     text.includes("Coder requested continuation after the configured run budget")
   )
     return "Coder 已用完本轮连续执行次数，但实现尚未完成，需要创建恢复任务后继续。";
+  if (
+    text.includes(
+      "QA verification could not complete in the current environment",
+    )
+  )
+    return "QA 未能在当前环境完成验证；候选代码已保留，继续交付时只会重新执行 QA/Review。";
   if (
     text.includes(
       "failed Coder identity is missing, unsafe or ambiguous",
@@ -1304,12 +1324,19 @@ function renderOperationStatus() {
     panel.append(card);
   }
 }
-function taskRow(task, agentId) {
+function agentWorkGroup(work) {
+  return work.kind === "task" ? taskGroup(work.item) : requestGroup(work.item);
+}
+function taskRow(work, agentId) {
+  const task = work.item;
   const n = el("article", undefined, "work-row");
   n.setAttribute("role", "button");
   n.setAttribute("tabindex", "0");
-  n.setAttribute("aria-label", `查看任务详情：${task.title}`);
-  const openTask = () => showDetail("task", task.id);
+  n.setAttribute(
+    "aria-label",
+    `查看${work.kind === "task" ? "任务" : "需求"}详情：${task.title}`,
+  );
+  const openTask = () => showDetail(work.kind, task.id);
   n.addEventListener("click", openTask);
   n.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" && event.key !== " ") return;
@@ -1317,11 +1344,15 @@ function taskRow(task, agentId) {
     openTask();
   });
   const row = el("div", undefined, "work-row-heading");
-  const request = requestById(task.request_id);
+  const request =
+    work.kind === "request" ? task : requestById(task.request_id);
   row.append(el("strong", request ? request.title : task.title, "work-row-title"));
-  const a = task.assignments.find((a) => a.agent_id === agentId);
+  const a = task.assignments?.find((a) => a.agent_id === agentId);
   n.append(row);
-  const fullPath = paths(task.scope);
+  const fullPath =
+    work.kind === "task"
+      ? paths(task.scope)
+      : task.scopes.map((scope) => paths(scope)).join(" · ");
   const scope = el("div", undefined, "work-row-scope");
   scope.append(
     el("span", "目录", "work-row-scope-label"),
@@ -1330,6 +1361,13 @@ function taskRow(task, agentId) {
   scope.setAttribute("title", fullPath);
   const overview = el("div", undefined, "work-row-overview");
   if (a) overview.append(el("span", label(a.role), "work-row-role"));
+  else {
+    const agent = snapshot.agents.find((candidate) => candidate.id === agentId);
+    if (agent?.roles.length)
+      overview.append(
+        el("span", agent.roles.map(label).join(" / "), "work-row-role"),
+      );
+  }
   overview.append(scope);
   n.append(overview);
   return n;
@@ -1420,44 +1458,44 @@ function renderTeam(content) {
     el("span", `并发上限 ${agent.max_parallel_assignments}（配置值）`, "badge"),
   );
   board.append(boardHeading);
-  const assigned = agent.assigned_delivery_ids.map(taskById).filter(Boolean);
-  const history = agent.history_delivery_ids.map(taskById).filter(Boolean);
+  const assigned = agent.assigned_delivery_ids.map(agentWorkById).filter(Boolean);
+  const history = agent.history_delivery_ids.map(agentWorkById).filter(Boolean);
   const blockedIds = new Set(
     [...assigned, ...history]
-      .filter((task) => taskGroup(task) === "blocked")
-      .map((task) => task.id),
+      .filter((work) => agentWorkGroup(work) === "blocked")
+      .map((work) => work.id),
   );
   const queues = [
     [
       "待完成",
       assigned.filter(
-        (task) =>
-          !blockedIds.has(task.id) &&
-          !agent.current_stage_delivery_ids.includes(task.id),
+        (work) =>
+          !blockedIds.has(work.id) &&
+          !agent.current_stage_delivery_ids.includes(work.id),
       ),
       "waiting",
     ],
     [
       "进行中",
       assigned.filter(
-        (task) =>
-          !blockedIds.has(task.id) &&
-          agent.current_stage_delivery_ids.includes(task.id),
+        (work) =>
+          !blockedIds.has(work.id) &&
+          agent.current_stage_delivery_ids.includes(work.id),
       ),
       "active",
     ],
     [
       "已阻塞",
       [...assigned, ...history].filter(
-        (task, index, items) =>
-          blockedIds.has(task.id) &&
-          items.findIndex((candidate) => candidate.id === task.id) === index,
+        (work, index, items) =>
+          blockedIds.has(work.id) &&
+          items.findIndex((candidate) => candidate.id === work.id) === index,
       ),
       "blocked",
     ],
     [
       "已完成",
-      history.filter((task) => taskGroup(task) === "completed"),
+      history.filter((work) => !blockedIds.has(work.id)),
       "completed",
     ],
   ];
@@ -1529,7 +1567,7 @@ function requestCard(request) {
   );
   return card;
 }
-function requestOperation(panel, request, discussionSection, flowSection) {
+function requestOperation(panel, request, discussionSection) {
   if (!canControlCurrentTeam()) return;
   const appendOperation = (content) => {
     const section = el(
@@ -1551,30 +1589,7 @@ function requestOperation(panel, request, discussionSection, flowSection) {
     latestOperation(request.id),
   );
   const approvingProduct = running?.intent.action === "PRODUCT_APPROVAL";
-  if (running && !isProductDiscussion) {
-    flowSection.append(
-      el(
-        "div",
-        running.status === "QUEUED"
-          ? "继续交付已排队，等待 Manager 调度。"
-          : activeTask
-            ? `${label(activeTask.status)}，可以离开页面后再回来。`
-            : "Manager 正在恢复交付，可以离开页面后再回来。",
-        "operation-running",
-      ),
-    );
-    return;
-  }
-  if (activeTask && !isProductDiscussion) {
-    flowSection.append(
-      el(
-        "div",
-        `${label(activeTask.status)}，平台会按串行阶段继续推进。`,
-        "operation-running",
-      ),
-    );
-    return;
-  }
+  if ((running || activeTask) && !isProductDiscussion) return;
   if (running) {
     appendDiscussionContent(
       el(
@@ -4077,6 +4092,7 @@ function deliveryFlow(request) {
     DELIVERING: 3,
     INTEGRATING: 5,
     DONE: 6,
+    CLOSED: 6,
   };
   let current = requestStages[request.stage] ?? 0;
   const taskStatuses = request.scopes
@@ -4148,7 +4164,32 @@ function renderDetail() {
           "secondary",
         ),
       );
-    if (productDiscussionStages.has(item.stage))
+    if (item.stage === "BLOCKED")
+      topActions.append(
+        button(
+          "关闭需求",
+          () =>
+            confirmMutation(
+              "关闭需求",
+              `确认关闭“${item.title}”吗？交付会停止，需求与交付历史仍会保留。`,
+              "确认关闭",
+              async () => {
+                const accepted = await submitOperation({
+                  action: "CLOSE_REQUIREMENT",
+                  project_id: item.project_id,
+                  delivery_id: item.id,
+                  expected_checkpoint_sha256: item.checkpoint_sha256,
+                });
+                if (!accepted) throw new Error("关闭操作未被接受。");
+              },
+            ),
+          "secondary",
+        ),
+      );
+    if (
+      productDiscussionStages.has(item.stage) ||
+      ["BLOCKED", "CLOSED"].includes(item.stage)
+    )
       topActions.append(
         button(
           "删除需求",
@@ -4173,7 +4214,7 @@ function renderDetail() {
   }
   topActions.append(
     button(
-      "关闭",
+      selected.kind === "request" ? "关闭详情" : "关闭",
       () => {
         selected = null;
         render();
@@ -4230,7 +4271,7 @@ function renderDetail() {
     }
     panel.append(scopes);
     const discussionSection = requestDialogue(panel, item);
-    requestOperation(panel, item, discussionSection, flow);
+    requestOperation(panel, item, discussionSection);
     deliveryResult(panel, item);
     const artifacts = el("section", undefined, "detail-section stage-artifacts");
     artifacts.append(el("h2", "阶段产物"));

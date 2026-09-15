@@ -1417,6 +1417,8 @@ verification retries.
 
 ```python
 _sandbox_mode(role: AgentRole) -> str
+classify_qa_failure(content: QaReportContent) -> QaFailureDisposition
+RetryingOrchestrator.run(task_id: TaskId) -> RetryResult
 CandidateVerificationCompletion.disposition -> CandidateVerificationDisposition
 retained_candidate_checkpoint(history, dispatch) -> ProjectDeliveryCheckpoint
 read_candidate_source_snapshot(config, environment, history) -> tuple[
@@ -1443,6 +1445,11 @@ terminal_candidate_cursor_matches(checkpoint, candidate_revision) -> bool
 - A completion is `RETRY_VERIFICATION` only when Review did not run, no criterion/test is `FAIL`,
   and at least one criterion is `NOT_TESTED` or test is `ERROR`. It creates a fresh plan/Run for the
   same candidate and requires a new exact human approval. It never starts Coder.
+- The initial serial QA gate and post-terminal Candidate verification must use the same
+  `classify_qa_failure` rule. An initial environment-only failure transitions the Task directly from
+  QA to BLOCKED with `RetryClassification.VERIFICATION_INCONCLUSIVE`, retains the exact candidate
+  revision, and publishes `DeliveryFailureCode.VERIFICATION_INCONCLUSIVE`; it must not take the
+  `qa_failed_route_to_coder` transition.
 - Any criterion/test `FAIL`, Reviewer result, or malformed ambiguous combination remains
   `REMEDIATE_CANDIDATE`; `PASS + APPROVE` remains `VERIFIED`.
 - For a legacy failed continuation with no Candidate V2, retained Candidate V1 may be reused only
@@ -1469,6 +1476,7 @@ terminal_candidate_cursor_matches(checkpoint, candidate_revision) -> bool
 | Criterion/test FAIL | `REMEDIATE_CANDIDATE` | 1+ |
 | Review REJECT | `REMEDIATE_CANDIDATE` | 1+ |
 | Only NOT_TESTED/ERROR | Fresh verification plan + approval | 0 |
+| Initial QA reports only NOT_TESTED/ERROR | Candidate retained as `VERIFICATION_INCONCLUSIVE`; resume proposes fresh verification | 0 |
 | QA Git-visible mutation or HEAD drift | `POLICY_VIOLATION` | 0 |
 | Failed legacy continuation from exact inconclusive completion | Reverify retained source Candidate | 0 |
 | Multi-generation continuation has nullable terminal source cursor | Follow dispatch ancestry, then prove the candidate actually selected for reuse from Task events/artifacts | 0 |
@@ -1481,6 +1489,8 @@ terminal_candidate_cursor_matches(checkpoint, candidate_revision) -> bool
   Reviewer inspects the same commit.
 - Base: pytest cannot execute and QA seals only `NOT_TESTED`/`ERROR`; `resume` emits a new plan for
   the same commit without calling Coder.
+- Base initial delivery: a focused check passes but an unrelated project command cannot run; the
+  candidate is retained for fresh QA/Review and CandidateCommit is not invoked on an empty retry.
 - Good legacy recovery: an older version wrongly created a Candidate-empty continuation from that
   inconclusive completion; current `resume` follows the exact dispatch back to Candidate V1.
 - Good recursive recovery: Candidate V3 is retained by the current Task while an older continuation
@@ -1495,6 +1505,10 @@ terminal_candidate_cursor_matches(checkpoint, candidate_revision) -> bool
   Git-visible mutation fails with unchanged HEAD.
 - `tests/recovery/test_verification_disposition.py`: environment-only result retries verification;
   criterion/test failures remediate.
+- `tests/orchestration/test_retry.py`: initial environment-only QA failure preserves the Candidate,
+  emits `VERIFICATION_INCONCLUSIVE`, and performs exactly one Coder call.
+- `tests/e2e/test_unified_project_entry.py`: the new retry classification survives the Delivery
+  checkpoint boundary as `DeliveryFailureCode.VERIFICATION_INCONCLUSIVE`.
 - `tests/recovery/test_delivery_continuation.py`: inconclusive result makes a successor plan with
   zero Coder calls; retained Candidate may be accepted through the exact successor cursor; recursive
   allocation ancestry accepts only a nullable terminal DELIVERING source cursor and rejects a
@@ -1507,14 +1521,14 @@ terminal_candidate_cursor_matches(checkpoint, candidate_revision) -> bool
 ### 7. Wrong vs Correct
 
 ```python
-# Wrong: top-level FAIL is assumed to prove a code defect.
-if not completion.verified:
-    run_coder_remediation(completion)
+# Wrong: top-level FAIL is assumed to prove a code defect in either QA path.
+if qa.content.status is QaReportStatus.FAIL:
+    run_coder_remediation(qa)
 
-# Correct: route from criterion/test evidence, not the summary label alone.
-if completion.disposition is CandidateVerificationDisposition.RETRY_VERIFICATION:
-    return propose_fresh_verification(completion.qa.source_revision)
-run_coder_remediation(completion)
+# Correct: both initial delivery and later verification route from the same evidence rule.
+if classify_qa_failure(qa.content) is QaFailureDisposition.RETRY_VERIFICATION:
+    return retain_candidate_for_fresh_verification(qa.source_revision)
+run_coder_remediation(qa)
 ```
 
 ```python

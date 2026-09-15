@@ -165,6 +165,13 @@ class QaTestStatus(StrEnum):
     ERROR = "ERROR"
 
 
+class QaFailureDisposition(StrEnum):
+    """Whether a failed QA report invalidates code or only its verification."""
+
+    REMEDIATE_CANDIDATE = "REMEDIATE_CANDIDATE"
+    RETRY_VERIFICATION = "RETRY_VERIFICATION"
+
+
 class ReviewVerdict(StrEnum):
     APPROVE = "APPROVE"
     REJECT = "REJECT"

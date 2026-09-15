@@ -459,8 +459,10 @@ Spec 位于对应 scope 的 `specs/documents/<spec_id>/`，当前启用集合写
    Requirement/checkpoint，只提供给 Product Agent。ProductSpec 准备好后先阅读“阶段产物”：内容仍需
    调整就继续讨论，确认范围和验收标准后再点击“批准 ProductSpec 并开始交付”。
 4. Designer、Planner 和每个 Repository 的 `Coder → QA → Reviewer` 串行工作。团队成员页只把当前岗位
-   标成执行中，其他岗位显示已完成或等待；每列使用紧凑的需求任务概览卡，点击整张卡可查看模型、
-   完整目录和执行时间线。需求页同时展示涉及的所有目录和后台操作。
+   标成执行中，其他岗位显示已完成或等待；Manager、Product、Designer、Planner 的 Requirement 阶段
+   也会进入各自任务队列，不再等到 Coder Task 创建后才出现。每列使用紧凑的需求任务概览卡，点击
+   整张卡可查看模型、完整目录和执行时间线。需求页同时展示涉及的所有目录和后台操作；交付流程区
+   只显示七个节点状态，不重复显示 Manager 运行文案。
 
 网页每 5 秒读取 durable facts。提交后可以刷新、关闭页面或稍后回来；同一浏览器动作使用幂等键，
 同一 Delivery 同时只接纳一个活动操作。
@@ -476,6 +478,8 @@ Spec 位于对应 scope 的 `specs/documents/<spec_id>/`，当前启用集合写
   未知半成品不会直接进入 QA。
 - QA FAIL 或 Reviewer REJECT 会保留旧 Candidate 和证据，创建修复 Task，重新执行
   `Coder → QA → Reviewer`。
+- QA 只有 `NOT_TESTED`/命令环境 `ERROR`、没有任何验收项或测试 `FAIL` 时，不再误派给 Coder；
+  Candidate 会保留，继续交付只创建新的 QA/Reviewer 验证计划。
 - 规范冲突、来源漂移、权限或业务歧义仍会停止并要求人工处理；网页不会偷偷放宽制度。
 - 如果 Host 在操作执行中退出，该 Web Operation 会标记为 `INTERRUPTED`。重新启动服务后打开需求，
   依据当前 Delivery 事实再次点击“继续交付”，不会盲目重放原模型调用。
@@ -483,6 +487,8 @@ Spec 位于对应 scope 的 `specs/documents/<spec_id>/`，当前启用集合写
   隐藏旧失败提示。关闭只影响界面，Operation 和失败证据仍保留用于审计。
 - 阻塞原因统一收口在需求详情的“阻塞信息”，按当前阻塞、最近恢复结果和建议操作展示；页顶操作卡
   只提供“打开需求工作区”入口，任务队列和需求列表不重复铺陈同一段阻塞文本。
+- 阻塞需求可显式关闭或删除。关闭会停止继续交付但保留需求与全部交付历史；删除只从当前 Project
+  清单中移除，底层 checkpoint、Task 和证据仍保留审计。
 
 ### 5. 领取交付结果
 

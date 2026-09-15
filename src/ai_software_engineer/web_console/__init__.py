@@ -28,6 +28,7 @@ from .core import ConsoleCommandRejected, ManagerConsolePort, ProjectConsole
 from .manager import ManagerConsoleAdapter, TeamConsoleHost
 from .models import (
     CONSOLE_INTENT_ADAPTER,
+    CloseRequirementIntent,
     ConsoleAction,
     ConsoleApprovalRequest,
     ConsoleCommandResult,
@@ -56,6 +57,7 @@ __all__ = [
     "CONSOLE_INTENT_ADAPTER",
     "AdministrationError",
     "AgentModelRouteRuntimeStatus",
+    "CloseRequirementIntent",
     "CodexRuntimeStatus",
     "ConsoleAction",
     "ConsoleAdministration",

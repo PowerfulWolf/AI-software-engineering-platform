@@ -20,6 +20,7 @@ from ai_software_engineer.multi_directory.models import (
 )
 from ai_software_engineer.multi_directory.scope import DirectoryScope, DirectoryUnit
 from ai_software_engineer.multi_directory.service import (
+    CloseRequirement,
     CreateRequirement,
     DeleteRequirement,
     JointDeliveryService,
@@ -27,6 +28,7 @@ from ai_software_engineer.multi_directory.service import (
 )
 from ai_software_engineer.team_workspace import TeamWorkspace
 from ai_software_engineer.web_console import (
+    CloseRequirementIntent,
     ConsoleCommandRejected,
     ContinueDeliveryIntent,
     CreateProjectIntent,
@@ -92,6 +94,12 @@ class _Entry:
     def delete_requirement(self, command: DeleteRequirement) -> JointDeliveryResult:
         self.commands.append(command)
         return JointDeliveryResult(checkpoint=self.checkpoint)
+
+    def close_requirement(self, command: CloseRequirement) -> JointDeliveryResult:
+        self.commands.append(command)
+        return JointDeliveryResult(
+            checkpoint=self.checkpoint.model_copy(update={"stage": JointStage.CLOSED})
+        )
 
     def reply(self, command: ReplyToProduct) -> JointDeliveryResult:
         self.commands.append(command)
@@ -211,6 +219,24 @@ def test_update_and_delete_requirement_bind_the_displayed_draft(tmp_path: Path) 
     assert updated.delivery_id == DELIVERY_ID
     assert deleted.delivery_id is None
     assert deleted.stage == "REQUIREMENT_DELETED"
+
+
+def test_close_requirement_binds_the_displayed_blocker(tmp_path: Path) -> None:
+    adapter, _, entry = _adapter(tmp_path)
+    checkpoint = entry.checkpoint.checkpoint_sha256
+
+    closed = adapter.execute(
+        CloseRequirementIntent(
+            project_id=PROJECT_ID,
+            delivery_id=DELIVERY_ID,
+            expected_checkpoint_sha256=checkpoint,
+        )
+    )
+
+    command = cast(CloseRequirement, entry.commands[0])
+    assert command.expected_checkpoint_sha256 == checkpoint
+    assert closed.delivery_id == DELIVERY_ID
+    assert closed.stage == "CLOSED"
 
 
 def test_reply_and_approval_bind_the_displayed_checkpoint(tmp_path: Path) -> None:

@@ -34,6 +34,7 @@ from ai_software_engineer.runtime import RuntimeConfig
 from ai_software_engineer.spec_documents import CreateSpecDocument, TeamSpecDocumentStore
 from ai_software_engineer.team_workspace import TeamWorkspace
 from ai_software_engineer.web_console import (
+    CloseRequirementIntent,
     ConsoleCommandResult,
     ConsoleOperation,
     ConsoleOperationStatus,
@@ -626,6 +627,17 @@ def test_console_operation_states_satisfy_the_canonical_schema(tmp_path: Path) -
     )
     _assert_valid(update_requirement.to_wire(), "console-operation.schema.json")
     _assert_valid(delete_requirement.to_wire(), "console-operation.schema.json")
+    close_requirement = ConsoleOperation.queued(
+        team_id="team_test",
+        idempotency_key="browser-action-close-0001",
+        intent=CloseRequirementIntent(
+            project_id="project_test",
+            delivery_id="delivery_multi_" + "a" * 40,
+            expected_checkpoint_sha256="2" * 64,
+        ),
+        requested_at=at,
+    )
+    _assert_valid(close_requirement.to_wire(), "console-operation.schema.json")
 
     missing_reply_content = product_reply.to_wire()
     intent = missing_reply_content["intent"]

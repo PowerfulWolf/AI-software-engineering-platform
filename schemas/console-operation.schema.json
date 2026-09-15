@@ -109,6 +109,22 @@
         "expected_checkpoint_sha256": {"$ref": "#/$defs/digest"}
       }
     },
+    "close_requirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "project_id",
+        "delivery_id",
+        "expected_checkpoint_sha256"
+      ],
+      "properties": {
+        "action": {"const": "CLOSE_REQUIREMENT"},
+        "project_id": {"$ref": "#/$defs/project_id"},
+        "delivery_id": {"$ref": "#/$defs/delivery_id"},
+        "expected_checkpoint_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
     "reply": {
       "type": "object",
       "additionalProperties": false,
@@ -227,6 +243,7 @@
         {"$ref": "#/$defs/create_project"},
         {"$ref": "#/$defs/create_requirement"},
         {"$ref": "#/$defs/update_requirement"},
+        {"$ref": "#/$defs/close_requirement"},
         {"$ref": "#/$defs/delete_requirement"},
         {"$ref": "#/$defs/reply"},
         {"$ref": "#/$defs/product_approval"},

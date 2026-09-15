@@ -1,0 +1,5 @@
+{"path":".trellis/spec/core/delivery-recovery.md","reason":"Verify recovery semantics"}
+{"path":".trellis/spec/core/live-team-view.md","reason":"Verify queue projection semantics"}
+{"path":".trellis/spec/core/web-console.md","reason":"Verify command and UI semantics"}
+{"path":"src/ai_software_engineer","reason":"Review implementation"}
+{"path":"tests","reason":"Review regression coverage"}

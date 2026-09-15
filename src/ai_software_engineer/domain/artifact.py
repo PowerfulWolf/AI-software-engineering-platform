@@ -22,6 +22,7 @@ from ai_software_engineer.domain.enums import (
     FindingSeverity,
     ImplementationTestStatus,
     QaCriterionStatus,
+    QaFailureDisposition,
     QaReportStatus,
     QaTestStatus,
     ReviewDimension,
@@ -247,6 +248,19 @@ class QaReportContent(DomainModel):
                     "with no major findings"
                 )
         return self
+
+
+def classify_qa_failure(content: QaReportContent) -> QaFailureDisposition:
+    """Classify one QA FAIL without treating infrastructure gaps as code defects."""
+    if content.status is not QaReportStatus.FAIL:
+        raise ValueError("QA failure classification requires a failed report")
+    criteria = tuple(item.status for item in content.criteria_results)
+    tests = tuple(item.status for item in content.tests_run)
+    if QaCriterionStatus.FAIL in criteria or QaTestStatus.FAIL in tests:
+        return QaFailureDisposition.REMEDIATE_CANDIDATE
+    if QaCriterionStatus.NOT_TESTED in criteria or QaTestStatus.ERROR in tests:
+        return QaFailureDisposition.RETRY_VERIFICATION
+    return QaFailureDisposition.REMEDIATE_CANDIDATE
 
 
 class ReviewReportContent(DomainModel):

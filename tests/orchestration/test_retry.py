@@ -19,6 +19,7 @@ from ai_software_engineer.domain import (
     CoderProgressArtifact,
     ImplementationReportArtifact,
     QaReportStatus,
+    QaTestStatus,
     Task,
     TaskStatus,
 )
@@ -63,10 +64,12 @@ class ScriptedAdapter:
         coder_timeouts: tuple[int, ...] = (),
         coder_progress: tuple[int, ...] = (),
         qa_failures: tuple[int, ...] = (),
+        qa_environment_errors: tuple[int, ...] = (),
     ) -> None:
         self.coder_timeouts = set(coder_timeouts)
         self.coder_progress = set(coder_progress)
         self.qa_failures = set(qa_failures)
+        self.qa_environment_errors = set(qa_environment_errors)
         self.requests: list[AgentRequest] = []
 
     def run(self, request: AgentRequest) -> AgentResult:
@@ -158,8 +161,21 @@ class ScriptedAdapter:
             )
         if request.role is AgentRole.QA:
             status = (
-                QaReportStatus.FAIL if request.attempt in self.qa_failures else QaReportStatus.PASS
+                QaReportStatus.FAIL
+                if request.attempt in self.qa_failures
+                or request.attempt in self.qa_environment_errors
+                else QaReportStatus.PASS
             )
+            content = make_qa_artifact().content.model_copy(update={"status": status})
+            if request.attempt in self.qa_environment_errors:
+                content = content.model_copy(
+                    update={
+                        "tests_run": tuple(
+                            test.model_copy(update={"status": QaTestStatus.ERROR})
+                            for test in content.tests_run
+                        )
+                    }
+                )
             return make_qa_artifact().model_copy(
                 update={
                     "artifact_id": f"art_qa_{request.attempt:03d}",
@@ -170,7 +186,7 @@ class ScriptedAdapter:
                     "producer": make_qa_artifact().producer.model_copy(
                         update={"run_id": request.run_id}
                     ),
-                    "content": make_qa_artifact().content.model_copy(update={"status": status}),
+                    "content": content,
                 }
             )
         return make_review_artifact().model_copy(
@@ -421,6 +437,26 @@ def test_qa_finding_routes_a_new_coder_with_superseding_lineage(tmp_path: Path) 
             TaskStatus.REVIEW,
             TaskStatus.DONE,
         )
+    finally:
+        repository.close()
+
+
+def test_qa_environment_error_preserves_candidate_for_fresh_verification(
+    tmp_path: Path,
+) -> None:
+    adapter = ScriptedAdapter(qa_environment_errors=(1,))
+    task, repository, runner = _runner(tmp_path, adapter)
+    try:
+        result = runner.run_task(task.id)
+
+        assert isinstance(result, BlockedResult)
+        assert result.classification.value == "VERIFICATION_INCONCLUSIVE"
+        assert result.candidate_revision == "b" * 40
+        assert tuple(
+            request.role for request in adapter.requests if request.role is AgentRole.CODER
+        ) == (AgentRole.CODER,)
+        assert result.task.status is TaskStatus.BLOCKED
+        assert repository.list_events(task.id)[-1].artifact_ids == ("art_qa_001",)
     finally:
         repository.close()
 

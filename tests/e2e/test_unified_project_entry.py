@@ -493,6 +493,18 @@ class _BlockedDeliveryBackend(_OfflineBackend):
         )
 
 
+class _VerificationInconclusiveBackend(_BlockedDeliveryBackend):
+    def run_delivery(self, checkpoint: ProjectDeliveryCheckpoint) -> BlockedResult:
+        blocked = super().run_delivery(checkpoint)
+        return blocked.model_copy(
+            update={
+                "classification": RetryClassification.VERIFICATION_INCONCLUSIVE,
+                "reason": "QA verification could not complete in the current environment",
+                "candidate_revision": "b" * 40,
+            }
+        )
+
+
 class _InvalidPlannerBackend(_OfflineBackend):
     def run_planner(self, checkpoint: ProjectDeliveryCheckpoint) -> PlanningStageResult:
         del checkpoint
@@ -742,6 +754,38 @@ def test_delivery_budget_exhaustion_returns_stable_blocked_checkpoint(
     assert blocked.delivery.reason == "delivery retry budget exhausted"
     reopened = service.status(blocked.checkpoint.delivery_id)
     assert reopened.checkpoint == blocked.checkpoint
+
+
+def test_environment_only_qa_failure_preserves_candidate_for_verification(
+    tmp_path: Path,
+) -> None:
+    project = _copy_fixture(tmp_path, "python")
+    platform = tmp_path / "platform"
+    backend = _VerificationInconclusiveBackend(platform)
+    service = UnifiedProjectEntryService(
+        backend=backend,
+        catalog=ProjectDeliveryCheckpointCatalog(backend.repository_registry_root),
+    )
+    started = service.start(
+        StartProjectDelivery(
+            repository_root=str(project.resolve()),
+            requirement="Keep a valid candidate when QA infrastructure is unavailable.",
+            submitted_at=NOW,
+        )
+    )
+
+    blocked = service.approve(
+        ApproveProductSpec(
+            delivery_id=started.checkpoint.delivery_id,
+            expected_checkpoint_sha256=started.checkpoint.checkpoint_sha256,
+            approval_reference="e2e-verification-inconclusive",
+            submitted_at=NOW + timedelta(minutes=1),
+        )
+    )
+
+    assert blocked.checkpoint.stage is DeliveryStage.BLOCKED
+    assert blocked.checkpoint.candidate_revision == "b" * 40
+    assert blocked.checkpoint.failure_code is DeliveryFailureCode.VERIFICATION_INCONCLUSIVE
 
 
 def test_classified_invalid_output_becomes_a_safe_checkpoint(tmp_path: Path) -> None:

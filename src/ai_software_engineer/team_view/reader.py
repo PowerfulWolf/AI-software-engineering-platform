@@ -13,7 +13,8 @@ from pymysql.cursors import DictCursor
 from ai_software_engineer.agents.fallback import FileModelRouteAttemptStore, model_route_root
 from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.config import ProductionConfig
-from ai_software_engineer.domain.enums import AgentRole, TaskStatus
+from ai_software_engineer.domain.enums import AgentRole, TaskStatus, TeamRole
+from ai_software_engineer.domain.workforce import AgentProfile
 from ai_software_engineer.evaluation import FileEvaluationEventStore
 from ai_software_engineer.manager.delivery import _delivery_id
 from ai_software_engineer.manager.delivery_checkpoint import (
@@ -333,33 +334,7 @@ class ProductionTeamReader:
         known_agents = {p.id for p in profiles}
         if any(a.agent_id not in known_agents for t in tasks for a in t.assignments):
             raise ValueError("assignment references an unknown Team member")
-        agents = tuple(
-            AgentView(
-                id=p.id,
-                name=_safe(p.display_name),
-                roles=p.eligible_roles,
-                capabilities=tuple(_safe(c) for c in p.capabilities),
-                enabled=p.active,
-                max_parallel_assignments=p.max_parallel_assignments,
-                assigned_delivery_ids=tuple(
-                    t.id
-                    for t in tasks
-                    if not t.terminal and any(a.agent_id == p.id for a in t.assignments)
-                ),
-                current_stage_delivery_ids=tuple(
-                    t.id
-                    for t in tasks
-                    if not t.terminal
-                    and any(a.agent_id == p.id and a.current_stage for a in t.assignments)
-                ),
-                history_delivery_ids=tuple(
-                    t.id
-                    for t in tasks
-                    if t.terminal and any(a.agent_id == p.id for a in t.assignments)
-                ),
-            )
-            for p in profiles
-        )
+        agents = _agent_views(profiles, requests, tasks)
         return TeamSnapshot(
             as_of=datetime.now(UTC),
             team_id=team.manifest.team_id,
@@ -387,6 +362,109 @@ class ProductionTeamReader:
             requests=tuple(sorted(requests, key=lambda r: r.id)),
             tasks=tuple(sorted(tasks, key=lambda t: (t.last_activity, t.id), reverse=True)),
         )
+
+
+_UPSTREAM_ROLE_INDEX = {
+    TeamRole.MANAGER: 0,
+    TeamRole.PRODUCT: 1,
+    TeamRole.DESIGNER: 2,
+    TeamRole.PLANNER: 3,
+}
+_REQUEST_STAGE_INDEX = {
+    "PREPARING": 0,
+    "READY_FOR_DISCUSSION": 1,
+    "PRODUCT_DISCOVERY": 1,
+    "WAITING_PRODUCT_REPLY": 1,
+    "WAITING_PRODUCT_APPROVAL": 1,
+    "DESIGNING": 2,
+    "PLANNING": 3,
+    "DELIVERING": 4,
+    "INTEGRATING": 4,
+    "DONE": 5,
+    "CLOSED": 5,
+}
+_CURRENT_REQUEST_STAGE = {
+    TeamRole.MANAGER: "PREPARING",
+    TeamRole.PRODUCT: "PRODUCT_DISCOVERY",
+    TeamRole.DESIGNER: "DESIGNING",
+    TeamRole.PLANNER: "PLANNING",
+}
+
+
+def _upstream_request_state(request: RequestView, role: TeamRole) -> str | None:
+    role_index = _UPSTREAM_ROLE_INDEX.get(role)
+    if role_index is None:
+        return None
+    if request.stage in {"BLOCKED", "WAITING_HUMAN"}:
+        return "assigned" if role is TeamRole.MANAGER else None
+    stage_index = _REQUEST_STAGE_INDEX.get(request.stage)
+    if stage_index is None or stage_index < role_index:
+        return None
+    if stage_index > role_index:
+        return "history"
+    return "current" if request.stage == _CURRENT_REQUEST_STAGE[role] else "assigned"
+
+
+def _agent_views(
+    profiles: tuple[AgentProfile, ...],
+    requests: list[RequestView],
+    tasks: list[TaskView],
+) -> tuple[AgentView, ...]:
+    """Project Requirement stages and native Task assignments share one Agent queue."""
+
+    def unique(values: list[str]) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(values))
+
+    views: list[AgentView] = []
+    for profile in profiles:
+        assigned = [
+            task.id
+            for task in tasks
+            if not task.terminal
+            and any(assignment.agent_id == profile.id for assignment in task.assignments)
+        ]
+        current = [
+            task.id
+            for task in tasks
+            if not task.terminal
+            and any(
+                assignment.agent_id == profile.id and assignment.current_stage
+                for assignment in task.assignments
+            )
+        ]
+        history = [
+            task.id
+            for task in tasks
+            if task.terminal
+            and any(assignment.agent_id == profile.id for assignment in task.assignments)
+        ]
+        for request in requests:
+            states = {
+                state
+                for role in profile.eligible_roles
+                if (state := _upstream_request_state(request, role)) is not None
+            }
+            if "current" in states:
+                assigned.append(request.id)
+                current.append(request.id)
+            elif "assigned" in states:
+                assigned.append(request.id)
+            elif "history" in states:
+                history.append(request.id)
+        views.append(
+            AgentView(
+                id=profile.id,
+                name=_safe(profile.display_name),
+                roles=profile.eligible_roles,
+                capabilities=tuple(_safe(capability) for capability in profile.capabilities),
+                enabled=profile.active,
+                max_parallel_assignments=profile.max_parallel_assignments,
+                assigned_delivery_ids=unique(assigned),
+                current_stage_delivery_ids=unique(current),
+                history_delivery_ids=unique(history),
+            )
+        )
+    return tuple(views)
 
 
 def _retired_requirement_ids(project: ProjectWorkspace, journal: JointJournal) -> frozenset[str]:

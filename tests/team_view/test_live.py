@@ -21,6 +21,7 @@ from typer.testing import CliRunner
 from ai_software_engineer.agents import AgentRequest, AgentResult
 from ai_software_engineer.cli import app
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
+from ai_software_engineer.domain import AgentProfile
 from ai_software_engineer.domain.enums import AgentRole, TeamRole
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
@@ -60,6 +61,7 @@ from ai_software_engineer.team_view.models import (
 )
 from ai_software_engineer.team_view.reader import (
     ProductionTeamReader,
+    _agent_views,
     _candidate_branch,
     _request_with_current_work,
 )
@@ -138,6 +140,72 @@ def test_active_child_task_supersedes_stale_blocked_requirement_projection() -> 
     assert projected.stage == "DELIVERING"
     assert projected.blocker is None
     assert projected.next_action == "RUN_DELIVERY"
+
+
+def test_requirement_stages_populate_upstream_agent_queues() -> None:
+    profiles = tuple(
+        AgentProfile(
+            id=f"agent_team_{role.value}",
+            version="v0.1",
+            display_name=f"{role.value} Agent",
+            capabilities=(role.value,),
+            eligible_roles=(role,),
+            max_parallel_assignments=8,
+            default_model_policy_id="model_policy_test",
+        )
+        for role in (
+            TeamRole.MANAGER,
+            TeamRole.PRODUCT,
+            TeamRole.DESIGNER,
+            TeamRole.PLANNER,
+        )
+    )
+    scope = ScopeView(root="/workspace/repository", selected_paths=(".",))
+
+    def request(identifier: str, stage: str) -> RequestView:
+        return RequestView(
+            id=identifier,
+            project_id="project_test",
+            title=stage,
+            stage=stage,
+            scopes=(scope,),
+            next_action="Continue.",
+            checkpoint_sha256="a" * 64,
+        )
+
+    requests = [
+        request("request_preparing", "PREPARING"),
+        request("request_product", "PRODUCT_DISCOVERY"),
+        request("request_product_waiting", "WAITING_PRODUCT_REPLY"),
+        request("request_design", "DESIGNING"),
+        request("request_plan", "PLANNING"),
+        request("request_blocked", "BLOCKED"),
+        request("request_done", "DONE"),
+        request("request_closed", "CLOSED"),
+    ]
+
+    views = {view.roles[0]: view for view in _agent_views(profiles, requests, [])}
+
+    assert views[TeamRole.MANAGER].current_stage_delivery_ids == ("request_preparing",)
+    assert views[TeamRole.PRODUCT].current_stage_delivery_ids == ("request_product",)
+    assert "request_product_waiting" in views[TeamRole.PRODUCT].assigned_delivery_ids
+    assert views[TeamRole.DESIGNER].current_stage_delivery_ids == ("request_design",)
+    assert views[TeamRole.PLANNER].current_stage_delivery_ids == ("request_plan",)
+    assert "request_blocked" in views[TeamRole.MANAGER].assigned_delivery_ids
+    assert "request_blocked" not in views[TeamRole.MANAGER].current_stage_delivery_ids
+    assert all(
+        "request_blocked" not in views[role].assigned_delivery_ids
+        for role in (TeamRole.PRODUCT, TeamRole.DESIGNER, TeamRole.PLANNER)
+    )
+    assert all(
+        {"request_done", "request_closed"}.issubset(views[role].history_delivery_ids)
+        for role in (
+            TeamRole.MANAGER,
+            TeamRole.PRODUCT,
+            TeamRole.DESIGNER,
+            TeamRole.PLANNER,
+        )
+    )
 
 
 def test_missing_workspace_never_initializes(tmp_path: Path) -> None:
@@ -382,7 +450,7 @@ def test_real_inflight_joint_and_terminal_reads(
     )
     upstream_agents = tuple(agent for agent in final.agents if agent not in delivery_agents)
     assert all(len(a.history_delivery_ids) == 4 for a in delivery_agents)
-    assert all(not a.history_delivery_ids for a in upstream_agents)
+    assert all(len(a.history_delivery_ids) == 2 for a in upstream_agents)
     assert all(t.candidate_revision and len(t.assignments) == 3 for t in final.tasks)
     assert all(t.timeline and t.documents for t in final.tasks)
     assert all(len(t.runs) == 3 and all(r.model == "gpt-5.5" for r in t.runs) for t in final.tasks)
