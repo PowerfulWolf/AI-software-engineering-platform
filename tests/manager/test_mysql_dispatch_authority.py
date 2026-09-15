@@ -28,6 +28,7 @@ from ai_software_engineer.scheduling import PortfolioScheduler
 from ai_software_engineer.store.mysql_repository import MySqlTaskRepository, open_mysql_connection
 from tests.manager.test_dispatch import _router
 from tests.manager.test_dispatch_authority import _durable_facts
+from tests.mysql_safety import require_isolated_mysql_test_database
 
 pytestmark = pytest.mark.mysql
 
@@ -151,6 +152,7 @@ def mysql_dsn() -> str:
     value = os.environ.get("ASE_TEST_MYSQL_DSN")
     if not value:
         pytest.skip("ASE_TEST_MYSQL_DSN is not configured")
+    value = require_isolated_mysql_test_database(value)
     with closing(open_mysql_connection(value)) as connection:
         try:
             with connection.cursor() as cursor:

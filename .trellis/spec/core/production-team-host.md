@@ -576,7 +576,9 @@ body 或目标项目中的 secret。
   绝对与 home-relative traversal 拒绝、模块导入/只读零创建，以及显式 writer 创建边界；
 - `tests/contracts/test_json_schema_contracts.py`：ProductionConfig positive/negative canonical schema；
 - `tests/store/test_mysql_repository.py`：与 SQLite 可观察行为一致、atomic append、replay/conflict、rollback、
-  reopen；必须通过 `ASE_TEST_MYSQL_DSN` 显式 opt-in；
+  reopen；必须通过 `ASE_TEST_MYSQL_DSN` 显式 opt-in；所有 `mysql` 标记测试在 fixture 执行前必须校验
+  database 名称属于 `test_*`、`*_test` 或 `*_tests` 专用测试库，非测试库 fail closed，错误不得回显
+  DSN 凭据；
 - `tests/manager/test_mysql_dispatch_authority.py`：snapshot/commit 幂等、stale fence、reservation、
   corruption、跨连接恢复；三种 Task 终态释放容量而不删除分配事实，非终态仍占容量；
 - `tests/e2e/test_joint_delivery.py`：一个 Host 连续完成五次双仓需求（10 个原生 Task），超过
@@ -921,3 +923,127 @@ surface fix made the error retryable, but could not make the incompatible store 
 exact startup schema inspection, lossless archive migration, a negative migration test, typed
 transient failure classification, and a browser assertion that a completed-but-blocked command is
 never rendered as no response.
+
+## Scenario: MySQL integration-test database isolation
+
+### 1. Scope / Trigger
+
+Apply whenever pytest code reads `ASE_TEST_MYSQL_DSN`, especially fixtures that reset shared dispatch,
+verification or work-queue tables. A test-prefixed environment variable is not proof that its value
+points to disposable storage.
+
+### 2. Signatures
+
+```python
+require_isolated_mysql_test_database(dsn: str) -> str
+pytest_runtest_setup(item: pytest.Item) -> None
+```
+
+Implementation locations are `tests/mysql_safety.py`, the repository-wide `tests/conftest.py`, and
+the destructive fixtures in `tests/manager/test_mysql_dispatch_authority.py` and
+`tests/work_queue/test_mysql_queue.py`.
+
+### 3. Contracts
+
+- Every test marked `mysql` must pass the repository-wide guard before pytest constructs any fixture
+  or opens a MySQL connection. Fixtures that reset aggregate-wide tables must repeat the guard at the
+  point of use as defense in depth.
+- An absent `ASE_TEST_MYSQL_DSN` retains the existing opt-in behavior: the individual fixture skips
+  the integration test.
+- A configured DSN is accepted only when its decoded database name is a safe identifier matching
+  `test_*`, `*_test` or `*_tests`. The database naming rule is an explicit disposable-storage fence.
+- Rejection aborts the test session before SQL. Its message may include the safe database name but
+  must never include the DSN, user name, password, host, query or control characters.
+- Broad fixture cleanup remains permitted only behind this guard. Production runtime configuration
+  uses `ASE_MYSQL_DSN` and must never be copied into `ASE_TEST_MYSQL_DSN` unless it points to a separate
+  test-named database.
+
+### 4. Validation & Error Matrix
+
+| Input / state | Required result |
+|---|---|
+| `ASE_TEST_MYSQL_DSN` absent | MySQL fixture skips; non-MySQL tests continue |
+| database `ase_self_iteration_test`, `test_ase` or `platform_tests` | allow the marked test to construct fixtures |
+| database `ase_self_iteration`, `production` or `staging_copy` | abort before fixture setup and before SQL |
+| malformed scheme, missing database, nested path or unsafe/control text | abort with a bounded `<invalid>` name |
+| credentials embedded in rejected DSN | no credential substring in the guard error or session exit message |
+
+### 5. Good / Base / Bad Cases
+
+- **Good**: full pytest receives `ASE_TEST_MYSQL_DSN=.../ase_self_iteration_test`; destructive fixture
+  reset is confined to that disposable schema.
+- **Base**: a developer runs focused unit tests without a MySQL DSN; MySQL cases skip as before.
+- **Bad**: set `ASE_TEST_MYSQL_DSN` to the Web Console's `ase_self_iteration` schema because both are
+  local. Dispatch and queue fixture cleanup then deletes live allocation facts while filesystem
+  checkpoints and SQL Tasks survive, making Team View fail closed with a missing dispatch.
+
+### 6. Tests Required
+
+- `tests/test_mysql_test_safety.py` must cover accepted and rejected database names, malformed unsafe
+  names, and credential redaction.
+- A focused pytest invocation against one `mysql`-marked case with a non-test database must terminate
+  before its fixture executes; the output must contain only the safe database name.
+- Dispatch and queue integration tests still run only against a separately provisioned test-named
+  schema. They must not be used as verification against production data.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+dsn = os.environ["ASE_TEST_MYSQL_DSN"]
+cursor.execute("DELETE FROM dispatch_commits")
+```
+
+#### Correct
+
+```python
+# Repository-wide hook runs before fixture setup.
+dsn = require_isolated_mysql_test_database(os.environ["ASE_TEST_MYSQL_DSN"])
+# Destructive fixture reset is now confined to an explicitly disposable database.
+```
+
+## Bug Analysis: full regression deleted live dispatch and queue facts
+
+### 1. Root Cause Category
+
+- **Category**: E — Implicit Assumption, reinforced by D — Test Coverage Gap.
+- **Specific cause**: MySQL fixtures trusted the variable name `ASE_TEST_MYSQL_DSN` but never validated
+  the target database. A full regression was run with the live `ase_self_iteration` database. The
+  dispatch fixture deleted all workforce snapshots and commits, and the queue fixture deleted all
+  queue items, claims and events. SQL Tasks and filesystem checkpoints were stored elsewhere and
+  survived, leaving a cross-store lineage that correctly failed closed on read.
+
+### 2. Why Fixes Failed
+
+1. Restarting the Console could not help because configuration and connectivity were healthy; the
+   durable allocation row itself was gone.
+2. Treating the 503 as a Reader compatibility issue would only hide corruption and weaken the
+   filesystem/SQL integrity contract.
+3. Documentation already said “专用测试数据库”, but prose without an executable pre-fixture guard
+   did not prevent the destructive command.
+
+### 3. Prevention Mechanisms
+
+| Priority | Mechanism | Specific action | Status |
+|---|---|---|---|
+| P0 | Runtime test guard | Reject non-test database names before every `mysql` fixture | DONE |
+| P0 | Regression | Cover accepted/rejected names and secret-safe errors | DONE |
+| P0 | Documentation | State the exact naming fence and destructive-table reason in README/spec | DONE |
+| P1 | Operations | Provision `ase_self_iteration_test` separately for local full regression | HUMAN SETUP |
+
+### 4. Systematic Expansion
+
+- **Similar issues**: both dispatch authority and persistent queue fixtures performed aggregate-wide
+  cleanup; guarding only one fixture would leave the other capable of damaging live state.
+- **Design improvement**: database disposability is now checked once at the repository pytest
+  boundary instead of relying on each future fixture author to remember it.
+- **Process improvement**: a production DSN must never be reused to gain MySQL coverage during a full
+  regression; absent isolated storage, leave MySQL tests skipped.
+
+### 5. Knowledge Capture
+
+- The executable isolation contract, validation matrix and test locations are recorded above.
+- README names the allowed test database patterns and explains why the guard exists.
+- This repository has no `.trellis/spec/guides/` or `src/templates/markdown/spec/` mirror; there is no
+  guide or template file to synchronize.

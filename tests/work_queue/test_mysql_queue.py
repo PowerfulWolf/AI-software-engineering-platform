@@ -32,6 +32,7 @@ from ai_software_engineer.work_queue import (
     QueueConflict,
     QueuedWorkItem,
 )
+from tests.mysql_safety import require_isolated_mysql_test_database
 
 pytestmark = pytest.mark.mysql
 
@@ -44,6 +45,7 @@ def mysql_queue() -> Iterator[MySqlPersistentWorkQueue]:
     dsn = os.environ.get("ASE_TEST_MYSQL_DSN")
     if not dsn:
         pytest.skip("ASE_TEST_MYSQL_DSN is not configured")
+    dsn = require_isolated_mysql_test_database(dsn)
     queue = MySqlPersistentWorkQueue(dsn)
     _clear_queue(dsn)
     yield queue

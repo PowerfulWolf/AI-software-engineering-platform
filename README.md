@@ -706,8 +706,10 @@ uv run mypy src tests
 uv build --offline
 ```
 
-MySQL 集成测试需设置 `ASE_TEST_MYSQL_DSN`，指向专用测试数据库。测试使用脚本化模型验证契约，
-不代表真实模型已完成业务验收。
+MySQL 集成测试需设置 `ASE_TEST_MYSQL_DSN`，并且必须指向名称为 `test_*`、`*_test` 或
+`*_tests` 的专用测试数据库（例如 `ase_self_iteration_test`）。测试会重置共享的调度和工作队列表；
+pytest 会在任何 MySQL fixture 执行前拒绝生产库名称。测试使用脚本化模型验证契约，不代表真实模型
+已完成业务验收。
 
 ## 当前进度（2026-09-14）
 

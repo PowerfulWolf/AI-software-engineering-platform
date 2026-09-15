@@ -156,9 +156,10 @@ work_queue_events(sequence PK, work_item_id FK, event_type, from_status,
   owner token 不序列化、worker ID/aware clock 校验。
 - `tests/work_queue/test_schema.py`：QueuedWorkItem、QueueClaim、QueueCompletion、DispatcherTickResult wire payload 通过
   canonical Draft 2020-12 schemas。
-- `tests/work_queue/test_mysql_queue.py` 使用真实 MySQL：exact enqueue replay、wrong owner、start、renew、
-  atomic close+next enqueue、completion replay/conflict、wait/make_ready、retry、expiry reaper、旧 owner
-  拒绝、两个 Dispatcher 竞争只有一个 winner。
+- `tests/work_queue/test_mysql_queue.py` 使用真实 MySQL 专用测试库：exact enqueue replay、wrong owner、
+  start、renew、atomic close+next enqueue、completion replay/conflict、wait/make_ready、retry、expiry
+  reaper、旧 owner 拒绝、两个 Dispatcher 竞争只有一个 winner。因为 fixture 会重置整组 queue 表，
+  pytest 必须在 fixture 执行前拒绝不带显式测试库命名的 `ASE_TEST_MYSQL_DSN`。
 - `tests/work_queue/test_mysql_schema_upgrade.py`：fresh/current idempotence、exact legacy aggregate rename、
   partial/mixed schema 与 incomplete archive fail closed；不依赖真实数据库。
 - 合并前运行全量 Ruff、strict Mypy、pytest、offline build 和 `git diff --check`。
