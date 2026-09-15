@@ -12,6 +12,7 @@ from ai_software_engineer.manager.delivery import (
     ResumeProjectDelivery,
     UnifiedProjectEntryService,
 )
+from ai_software_engineer.multi_directory.errors import RequirementSourceRevisionDrift
 from ai_software_engineer.multi_directory.models import (
     JointCheckpoint,
     JointDeliveryResult,
@@ -237,6 +238,32 @@ def test_reply_and_approval_bind_the_displayed_checkpoint(tmp_path: Path) -> Non
     assert reply.expected_checkpoint_sha256 == checkpoint
     assert approval.expected_checkpoint_sha256 == checkpoint
     assert approval.approval_reference == "web-console-product:" + checkpoint
+
+
+def test_source_revision_drift_has_a_dedicated_browser_error_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter, _, entry = _adapter(tmp_path)
+
+    def reject_reply(command: ReplyToProduct) -> JointDeliveryResult:
+        del command
+        raise RequirementSourceRevisionDrift(
+            "source revision changed after Requirement preparation; create a new Requirement"
+        )
+
+    monkeypatch.setattr(entry, "reply", reject_reply)
+    with pytest.raises(ConsoleCommandRejected) as captured:
+        adapter.execute(
+            ProductReplyIntent(
+                project_id=PROJECT_ID,
+                delivery_id=DELIVERY_ID,
+                expected_checkpoint_sha256=entry.checkpoint.checkpoint_sha256,
+                message="Continue",
+            )
+        )
+
+    assert captured.value.code == "SOURCE_REVISION_DRIFT"
+    assert "source revision changed" in captured.value.safe_summary
 
 
 def test_continue_rejects_a_stale_browser_without_resuming(tmp_path: Path) -> None:

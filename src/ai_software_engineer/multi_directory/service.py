@@ -90,7 +90,7 @@ class UpdateRequirement(DomainModel):
 
 
 class DeleteRequirement(DomainModel):
-    """Retire an unstarted Requirement from the current Project view."""
+    """Retire a Requirement before ProductSpec approval from the current Project view."""
 
     delivery_id: DeliveryId
     expected_checkpoint_sha256: CheckpointDigest
@@ -159,11 +159,11 @@ class JointDeliveryService:
             return replacement
 
     def delete_requirement(self, command: DeleteRequirement) -> JointDeliveryResult:
-        """Retire the exact displayed draft without deleting its journal."""
+        """Retire the exact displayed pre-approval Requirement without deleting its journal."""
         with self.journal.lock(command.delivery_id):
             checkpoint = self._current(command.delivery_id)
             self._expected(checkpoint, command.expected_checkpoint_sha256)
-            self._require_editable(checkpoint)
+            self._require_deletable(checkpoint)
             self.retirements.retire(
                 checkpoint,
                 reason="deleted",
@@ -653,9 +653,26 @@ class JointDeliveryService:
             or checkpoint.children
             or checkpoint.integration is not None
         ):
-            raise ValueError(
-                "Requirement can only be edited or deleted before Product discussion starts"
-            )
+            raise ValueError("Requirement can only be edited before Product discussion starts")
+
+    @staticmethod
+    def _require_deletable(checkpoint: JointCheckpoint) -> None:
+        if (
+            checkpoint.stage
+            not in {
+                JointStage.READY_FOR_DISCUSSION,
+                JointStage.PRODUCT_DISCOVERY,
+                JointStage.WAITING_PRODUCT_REPLY,
+                JointStage.WAITING_PRODUCT_APPROVAL,
+            }
+            or checkpoint.requirement is not None
+            or checkpoint.approval is not None
+            or checkpoint.design is not None
+            or checkpoint.plan is not None
+            or checkpoint.children
+            or checkpoint.integration is not None
+        ):
+            raise ValueError("Requirement can only be deleted before ProductSpec approval")
 
     def _team_binding(self, checkpoint: JointCheckpoint) -> None:
         self.project.validate_current()

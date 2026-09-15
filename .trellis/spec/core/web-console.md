@@ -28,6 +28,10 @@ ConsoleOperationStore.fail(...) -> ConsoleOperation
 ConsoleOperationStore.interrupt_running(...) -> tuple[ConsoleOperation, ...]
 
 ManagerConsoleAdapter.execute(intent: ConsoleIntent) -> ConsoleCommandResult
+RequirementSourceRevisionDrift -> ConsoleCommandRejected(
+    code="SOURCE_REVISION_DRIFT",
+    safe_summary=<stable source-drift message>,
+)
 create_console_app(
     console: ConsoleApplication,
     reader: TeamReader,
@@ -128,9 +132,16 @@ production_console_app(
   契约，不能因为展示名称不同而复制存储或选择逻辑。
 - Requirements 页把 Project 创建放在 Project 上下文区，把 Requirement 创建放在需求列表标题与
   数量旁；两者不得作为脱离所有权上下文的全局页头动作。
-- 只有尚未开始 Product 对话且无活动 Operation 的 `READY_FOR_DISCUSSION` Requirement 显示编辑和
-  删除。编辑复用预填名称与精确目录的弹窗；目录新增仍只来自原生目录选择器。删除必须先确认。
+- 只有尚未开始 Product 对话且无活动 Operation 的 `READY_FOR_DISCUSSION` Requirement 显示编辑；
+  ProductSpec 批准前的 READY/Product 对话阶段均可逻辑删除。编辑复用预填名称与精确目录的弹窗；
+  目录新增仍只来自原生目录选择器。删除必须先确认。
   UPDATE 成功后选中返回的 replacement Delivery；DELETE 成功后清除已退休选择。
+- Repository HEAD 与 Requirement 固定基线不一致时，Manager 必须把 typed
+  `RequirementSourceRevisionDrift` 映射为 `SOURCE_REVISION_DRIFT`。Team View 也必须识别升级前已经
+  持久化的 legacy `COMMAND_REJECTED` source-drift summary。此时不得继续显示可恢复 composer、
+  Product 批准或“继续交付”，而应说明旧需求不可继续，并打开一个预填需求名称、Project 与精确目录的
+  “基于当前代码新建需求”弹窗。创建走普通 `CREATE_REQUIREMENT`，不修改旧 journal；旧需求只有在
+  ProductSpec 批准前才可另行逻辑删除。
 - 需求列表中的整张 Requirement card 是一个选择控件，而不是只有标题文字可点：click 与键盘
   `Enter`/`Space` 必须打开同一个详情；详情、唯一 `aria-current` 与可见 selected 样式必须同步指向
   同一 Requirement，轮询不得把它们恢复到列表第一项。
@@ -155,8 +166,8 @@ production_console_app(
 |---|---|
 | Valid Project or new Requirement with one or many absolute roots | persist QUEUED, return 202, background Manager performs the typed action |
 | Exact idle READY Requirement edit | persist UPDATE; Manager publishes replacement and retires original |
-| Exact idle READY Requirement delete after confirmation | persist DELETE; original leaves current inventory but history remains |
-| Edit/delete after Product discussion or with stale checkpoint | terminal safe failure; no retirement or history mutation |
+| Exact idle pre-approval Requirement delete after confirmation | persist DELETE; original leaves current inventory but dialogue/history remains |
+| Edit after Product discussion, delete after ProductSpec approval, or stale checkpoint | terminal safe failure; no retirement or history mutation |
 | Browser refresh/disconnect after 202 | accepted Operation continues; repeated same key returns same identity |
 | Same idempotency key, changed intent | 409; original Operation unchanged |
 | Second active command for same Delivery | 409; no second provider call |
@@ -170,6 +181,8 @@ production_console_app(
 | Enabled model exists in catalog but is not selected by an Agent | save succeeds; it is never serialized or shown as that Agent's fallback |
 | Screenshot over 10 MB, unsupported magic, stale checkpoint or wrong stage | 413/422; no dialogue mutation |
 | Stale displayed checkpoint | terminal FAILED with `STALE_CHECKPOINT`; no model call |
+| Pinned Repository HEAD differs from the current revision | terminal FAILED with `SOURCE_REVISION_DRIFT`; offer prefilled CREATE, never retry the old Requirement |
+| Existing legacy source-drift Operation uses `COMMAND_REJECTED` | recognize its bounded summary as the same terminal UI state without rewriting the Operation |
 | Recovery/verification approval required | SUCCEEDED Operation carries safe facts plus exact hidden plan digest |
 | Host exits during RUNNING | next startup appends INTERRUPTED; never silently replay |
 | Executor raises an unexpected exception | terminal FAILED with generic safe summary; no traceback in browser |
@@ -187,18 +200,20 @@ production_console_app(
 - Base: 没有需求时显示空团队/空需求；旧 `ase team serve` 提供只读视图，写按钮禁用。
 - Bad: POST handler 直接同步运行 Product/Coder，浏览器断开造成结果未知且再次点击重复扣额度。
 - Bad: Host 重启把 RUNNING 改回 QUEUED 并重放同一个 provider Run。
+- Bad: 把 source revision drift 显示成普通中断并继续提交 `CONTINUE_DELIVERY`；这会在模型调用前重复失败。
 
 ## 6. Tests Required
 
 - `tests/web_console/test_core.py`：memory/file store 幂等、单 Delivery admission、persist-before-run、
   safe failure、重开 hash chain 与 orphan RUNNING interruption。
 - `tests/web_console/test_manager.py`：五类 typed intent 委托、Project 边界、exact checkpoint、stale 拒绝、
-  recovery/verification plan digest 和 safe facts。
+  source-drift 专用错误码、recovery/verification plan digest 和 safe facts。
 - `tests/web_console/test_transport.py`：lifespan、assets/query、202 submit、operation query、Host/Origin、
   content type、body/input limit、409/404 和安全 headers。
 - `tests/team_view/ui.test.cjs`：多目录创建、Product/继续/批准操作、操作状态、刷新保持、hidden digest
   不直接渲染、只读 fallback、单 Task 串行角色状态、安全文本、Requirement 详情统一标题/分割节奏，
-  粘贴截图移除后的预览和反馈同步、READY draft 编辑/删除，以及失败通知关闭/成功替代。
+  粘贴截图移除后的预览和反馈同步、READY draft 编辑、Product 批准前删除、source-drift 重建，
+  以及失败通知关闭/成功替代。
 - `tests/team_view/test_live.py`：candidate branch 必须从 exact candidate ref 唯一推导，不能猜测。
 - `tests/contracts/test_json_schema_contracts.py`：Python/JSON Schema 的 QUEUED/RUNNING/terminal 状态和
   path 约束一致。
@@ -233,6 +248,14 @@ prompt("plan sha256")
 
 // Correct: bind the exact digest to the button while rendering the facts being approved.
 submitOperation({ action: "CONTINUE_DELIVERY", approved_plan_sha256: approval.plan_sha256 })
+```
+
+```javascript
+// Wrong: source drift is terminal for the pinned Requirement, so recovery only repeats the failure.
+submitOperation({ action: "CONTINUE_DELIVERY", delivery_id: drifted.id })
+
+// Correct: preserve the old audit trail and create a new identity from current Repository HEAD facts.
+openRequirementModal({ source: drifted, action: "CREATE_REQUIREMENT" })
 ```
 
 ## Scenario: singleton Team, Project, document knowledge and production settings administration
@@ -739,7 +762,9 @@ PRODUCT_APPROVAL(project_id, delivery_id, expected_checkpoint_sha256)
   不再使用 `detail-section` 分割线。composer 在 READY/WAITING reply/approval 可输入；
   `PRODUCT_DISCOVERY` 或同 Requirement Operation 运行时仍保持可见但禁用，显示
   “Product Agent 正在回复”。中断且没有 active Operation 时显示“继续需求讨论”，不得使用
-  “继续交付”。进入 Designer 以后保留历史只读，但不允许修改已批准 ProductSpec。
+  “继续交付”。但 `SOURCE_REVISION_DRIFT`（含 legacy summary）不是可恢复中断：隐藏 composer 和
+  Product 批准入口，显示预填的“基于当前代码新建需求”动作。进入 Designer 以后保留历史只读，但
+  不允许修改已批准 ProductSpec。
 - 历史截图只显示安全元数据，不从浏览器拼接 sidecar 路径；所有文本继续用 `textContent`。
 - Product Agent 不能批准自己生成的 ProductSpec；只有用户明确点击批准才进入 Designer。
 
@@ -753,6 +778,7 @@ PRODUCT_APPROVAL(project_id, delivery_id, expected_checkpoint_sha256)
 | ProductSpec 已生成且用户批准 | 只批准 exact current checkpoint，进入 Designer |
 | `PRODUCT_DISCOVERY` 正在运行 | 历史和禁用 composer 保持在同一 section；显示 Product Agent 处理状态 |
 | `PRODUCT_DISCOVERY` 没有 active Operation | 显示“继续需求讨论”；不得显示通用“继续交付”或第二条内部分割线 |
+| 任一阶段最新 Operation 是 source revision drift | 显示终态解释和预填新建入口；不提交旧 Delivery 的继续/回复/批准动作 |
 | unknown speaker / malformed attachment metadata | read model validation fails closed；不猜角色 |
 | stale checkpoint / duplicate active Operation | 既有 409/FAILED 规则生效；不追加重复 turn |
 | 对话含 secret 或 HTML | Reader 清洗，浏览器 text-only 渲染 |
@@ -772,7 +798,7 @@ PRODUCT_APPROVAL(project_id, delivery_id, expected_checkpoint_sha256)
   并验证 `team-snapshot.schema.json` 与 Pydantic 一致。
 - `tests/team_view/ui.test.cjs`：双方气泡顺序、空对话隐藏、截图元数据、澄清阶段回复控件，以及
   ProductSpec 阶段同时存在批准与继续讨论入口；`PRODUCT_DISCOVERY` 必须保留同 section 的禁用
-  composer，并把中断恢复标为“继续需求讨论”。
+  composer，并把普通中断恢复标为“继续需求讨论”；source drift 必须替换成新建 Requirement 入口。
 - `tests/manager/test_joint_contracts.py`：Requirement checkpoint Schema 限制 speaker union，并与模型一致。
 
 ### 7. Wrong vs Correct
@@ -792,3 +818,30 @@ if (stage !== "WAITING_PRODUCT_REPLY") renderContinueDelivery()
 // Correct: one Product discussion section owns history, state and composer until approval.
 renderProductDiscussion({ dialogue, composerDisabled: stage === "PRODUCT_DISCOVERY" })
 ```
+
+### 8. Bug analysis: source drift shown as a recoverable Product interruption
+
+1. **Root cause (B/D/E)**: the UI inferred recovery solely from
+   `request.stage === PRODUCT_DISCOVERY && no active Operation`. It ignored the latest terminal
+   Operation cause, so a fail-closed Git lineage rejection looked identical to an interrupted model
+   call. The broad backend `ValueError → COMMAND_REJECTED` mapping also erased the distinction.
+2. **Why the earlier recovery UI was insufficient**: keeping the composer visible and adding
+   “继续需求讨论” solved ordinary dispatcher interruption, but there was no test combining a
+   durable PRODUCT_DISCOVERY checkpoint with a failed source-drift Operation. Retrying therefore
+   reproduced the same pre-model rejection and appeared permanently stuck.
+3. **Prevention mechanisms**:
+
+   | Priority | Mechanism | Concrete action | Status |
+   |---|---|---|---|
+   | P0 | Architecture | Raise typed `RequirementSourceRevisionDrift` and preserve it as `SOURCE_REVISION_DRIFT` across the Manager boundary | DONE |
+   | P0 | UI state matrix | Derive actions from checkpoint stage plus active/terminal Operation cause; source drift replaces recovery with prefilled CREATE | DONE |
+   | P0 | Backward compatibility | Recognize only the bounded legacy source-drift summaries already persisted under `COMMAND_REJECTED` | DONE |
+   | P0 | Regression | Test dedicated mapping, legacy rendering, no stale recovery action, prefilled scope and pre-approval retirement | DONE |
+   | P1 | Audit | Review other broad `COMMAND_REJECTED` causes before adding any new terminal-specific UI; introduce typed codes one by one | TODO |
+
+4. **Systematic expansion**: not every failed Operation is resumable, and not every unchanged
+   checkpoint means a process is still active. Future failure-specific controls must use a typed,
+   bounded error code; parsing text is allowed only for migration of known immutable legacy records.
+5. **Knowledge capture**: this section, the recovery/error matrix above and
+   `multi-directory-delivery.md` form the executable contract. This repository has no
+   `src/templates/markdown/spec/` mirror to synchronize.

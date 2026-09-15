@@ -29,6 +29,7 @@ let settingsSection = "general";
 let selectedAgentId = null;
 let creatingProject = false;
 let editingRequirement = null;
+let recreatingRequirement = null;
 let knowledgeImportMode = null;
 let editingKnowledgeDocument = null;
 let editingSpecDocument = null;
@@ -229,6 +230,17 @@ const activeOperation = (deliveryId) =>
       operationTarget(operation) === deliveryId &&
       ["QUEUED", "RUNNING"].includes(operation.status),
   );
+const latestOperation = (deliveryId) =>
+  [...operations]
+    .filter((operation) => operationTarget(operation) === deliveryId)
+    .sort((left, right) => right.updated_at.localeCompare(left.updated_at))[0] ||
+  null;
+const isSourceRevisionDrift = (operation) =>
+  operation?.status === "FAILED" &&
+  (operation.error_code === "SOURCE_REVISION_DRIFT" ||
+    /source revision (?:drift|changed after Requirement preparation)/i.test(
+      operation.error_summary || "",
+    ));
 const latestApproval = (deliveryId, checkpoint) => {
   const consumedPlans = new Set(
     operations
@@ -430,6 +442,7 @@ function renderComposer() {
     !composing &&
     !creatingProject &&
     !editingRequirement &&
+    !recreatingRequirement &&
     !knowledgeImportMode &&
     !pendingConfirmation &&
     !editingKnowledgeDocument &&
@@ -696,6 +709,7 @@ function renderComposer() {
     return;
   }
   const isEditingRequirement = Boolean(editingRequirement);
+  const isRecreatingRequirement = Boolean(recreatingRequirement);
   const top = el("div", undefined, "row");
   top.append(
     el(
@@ -704,7 +718,9 @@ function renderComposer() {
         ? "新建 Project"
         : isEditingRequirement
           ? "编辑需求"
-          : "新建需求",
+          : isRecreatingRequirement
+            ? "基于当前代码新建需求"
+            : "新建需求",
       "section-title",
     ),
     button(
@@ -713,6 +729,7 @@ function renderComposer() {
         composing = false;
         creatingProject = false;
         editingRequirement = null;
+        recreatingRequirement = null;
         renderComposer();
       },
       "",
@@ -778,9 +795,10 @@ function renderComposer() {
   name.required = true;
   name.maxLength = 200;
   name.placeholder = "例如：统一登录体验升级";
-  if (isEditingRequirement) name.value = editingRequirement.title;
-  const selectedRoots = isEditingRequirement
-    ? editingRequirement.scopes.flatMap((scope) =>
+  const sourceRequirement = editingRequirement || recreatingRequirement;
+  if (sourceRequirement) name.value = sourceRequirement.title;
+  const selectedRoots = sourceRequirement
+    ? sourceRequirement.scopes.flatMap((scope) =>
         scope.selected_paths.map((selectedPath) =>
           selectedPath === "."
             ? scope.root
@@ -844,7 +862,11 @@ function renderComposer() {
   const feedback = el("p", "", "form-feedback");
   const submit = el(
     "button",
-    isEditingRequirement ? "保存需求修改" : "创建并准备需求",
+    isEditingRequirement
+      ? "保存需求修改"
+      : isRecreatingRequirement
+        ? "基于当前代码创建"
+        : "创建并准备需求",
     "primary",
   );
   submit.type = "submit";
@@ -882,7 +904,8 @@ function renderComposer() {
           }
         : {
             action: "CREATE_REQUIREMENT",
-            project_id: snapshot.selected_project_id,
+            project_id:
+              recreatingRequirement?.project_id || snapshot.selected_project_id,
             name: name.value.trim(),
             repository_roots: projectRoots,
           },
@@ -890,6 +913,7 @@ function renderComposer() {
     if (accepted) {
       composing = false;
       editingRequirement = null;
+      recreatingRequirement = null;
       renderComposer();
     } else {
       feedback.textContent = "创建失败，请查看上方操作状态后重试。";
@@ -903,7 +927,9 @@ function renderComposer() {
       "p",
       isEditingRequirement
         ? "保存后会生成新的需求版本并替换当前草稿；原始记录仍保留用于审计。"
-        : `需求归属当前 Project：${projectName()}。创建后由 Manager 从产品澄清开始推进。`,
+        : isRecreatingRequirement
+          ? "使用当前 Repository HEAD 创建新的 Requirement；旧需求及其讨论记录仍保留，创建成功后可删除旧需求。"
+          : `需求归属当前 Project：${projectName()}。创建后由 Manager 从产品澄清开始推进。`,
       "muted modal-introduction",
     ),
     form,
@@ -915,6 +941,7 @@ function confirmMutation(title, message, confirmText, action) {
   composing = false;
   creatingProject = false;
   editingRequirement = null;
+  recreatingRequirement = null;
   knowledgeImportMode = null;
   editingKnowledgeDocument = null;
   editingSpecDocument = null;
@@ -1294,6 +1321,9 @@ function requestOperation(panel, request, discussionSection) {
   };
   const running = activeOperation(request.id);
   const isProductDiscussion = productDiscussionStages.has(request.stage);
+  const sourceRevisionDrift = isSourceRevisionDrift(
+    latestOperation(request.id),
+  );
   const approvingProduct = running?.intent.action === "PRODUCT_APPROVAL";
   if (running && !isProductDiscussion) {
     appendOperation(
@@ -1321,6 +1351,34 @@ function requestOperation(panel, request, discussionSection) {
         "operation-running",
       ),
     );
+  }
+  if (sourceRevisionDrift && !running) {
+    const box = el("div", undefined, "operation-error");
+    box.append(
+      el("h3", "代码版本已变化"),
+      el(
+        "p",
+        "该需求绑定的代码版本与当前 Repository HEAD 不一致，不能继续当前流程。请基于当前代码创建一个新需求。",
+      ),
+      el(
+        "p",
+        "旧需求及讨论记录会继续保留，确认新需求创建成功后可以删除旧需求。",
+        "muted",
+      ),
+      button(
+        "基于当前代码新建需求",
+        () => {
+          creatingProject = false;
+          editingRequirement = null;
+          recreatingRequirement = request;
+          composing = true;
+          renderComposer();
+        },
+        "primary",
+      ),
+    );
+    appendDiscussionContent(box);
+    return;
   }
   const approval = latestApproval(request.id, request.checkpoint_sha256);
   if (approval && !running) {
@@ -3832,41 +3890,45 @@ function renderDetail() {
   const topActions = el("div", undefined, "detail-heading-actions");
   if (
     selected.kind === "request" &&
-    item.stage === "READY_FOR_DISCUSSION" &&
     !activeOperation(item.id) &&
     canControlCurrentTeam()
   ) {
-    topActions.append(
-      button(
-        "编辑需求",
-        () => {
-          creatingProject = false;
-          editingRequirement = item;
-          composing = true;
-          renderComposer();
-        },
-        "secondary",
-      ),
-      button(
-        "删除需求",
-        () =>
-          confirmMutation(
-            "删除需求",
-            `确认从当前 Project 删除“${item.title}”吗？历史记录会保留，但该需求将不能继续交付。`,
-            "确认删除",
-            async () => {
-              const accepted = await submitOperation({
-                action: "DELETE_REQUIREMENT",
-                project_id: item.project_id,
-                delivery_id: item.id,
-                expected_checkpoint_sha256: item.checkpoint_sha256,
-              });
-              if (!accepted) throw new Error("删除操作未被接受。");
-            },
-          ),
-        "danger",
-      ),
-    );
+    if (item.stage === "READY_FOR_DISCUSSION")
+      topActions.append(
+        button(
+          "编辑需求",
+          () => {
+            creatingProject = false;
+            recreatingRequirement = null;
+            editingRequirement = item;
+            composing = true;
+            renderComposer();
+          },
+          "secondary",
+        ),
+      );
+    if (productDiscussionStages.has(item.stage))
+      topActions.append(
+        button(
+          "删除需求",
+          () =>
+            confirmMutation(
+              "删除需求",
+              `确认从当前 Project 删除“${item.title}”吗？历史记录会保留，但该需求将不能继续交付。`,
+              "确认删除",
+              async () => {
+                const accepted = await submitOperation({
+                  action: "DELETE_REQUIREMENT",
+                  project_id: item.project_id,
+                  delivery_id: item.id,
+                  expected_checkpoint_sha256: item.checkpoint_sha256,
+                });
+                if (!accepted) throw new Error("删除操作未被接受。");
+              },
+            ),
+          "danger",
+        ),
+      );
   }
   topActions.append(
     button(
@@ -4039,6 +4101,7 @@ for (const target of ["team", "requests", "knowledge", "settings", "status"])
       composing = false;
       creatingProject = false;
       editingRequirement = null;
+      recreatingRequirement = null;
       knowledgeImportMode = null;
       pendingConfirmation = null;
       editingKnowledgeDocument = null;
@@ -4146,6 +4209,7 @@ async function refresh(projectId, includeRuntimeStatus = false) {
       composing ||
       creatingProject ||
       editingRequirement ||
+      recreatingRequirement ||
       knowledgeImportMode ||
       pendingConfirmation ||
       editingKnowledgeDocument ||

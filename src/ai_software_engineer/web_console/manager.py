@@ -17,6 +17,7 @@ from ai_software_engineer.manager.delivery import (
 from ai_software_engineer.manager.delivery_checkpoint import (
     ProjectDeliveryCheckpointError,
 )
+from ai_software_engineer.multi_directory.errors import RequirementSourceRevisionDrift
 from ai_software_engineer.multi_directory.models import JointDeliveryResult
 from ai_software_engineer.multi_directory.service import (
     CreateRequirement,
@@ -150,6 +151,11 @@ class ManagerConsoleAdapter:
             raise ConsoleCommandRejected(
                 "STALE_CHECKPOINT",
                 "The displayed delivery changed. Refresh the workspace and try again.",
+            ) from error
+        except RequirementSourceRevisionDrift as error:
+            raise ConsoleCommandRejected(
+                "SOURCE_REVISION_DRIFT",
+                _safe_summary(error),
             ) from error
         except (
             ProjectDeliveryCheckpointError,

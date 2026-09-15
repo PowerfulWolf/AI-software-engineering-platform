@@ -6,6 +6,7 @@ import pytest
 
 from ai_software_engineer.manager.delivery import ResumeProjectDelivery
 from ai_software_engineer.manager.production_host import TeamHost
+from ai_software_engineer.multi_directory.errors import RequirementSourceRevisionDrift
 from ai_software_engineer.multi_directory.models import JointStage
 from ai_software_engineer.multi_directory.service import CreateRequirement
 from tests.e2e.test_joint_delivery import setup_host
@@ -46,6 +47,6 @@ def test_new_git_baseline_prepares_but_old_request_stays_pinned(tmp_path: Path) 
     assert all(path.read_bytes() == body for path, body in prior.items())
     assert not models.calls
     assert host().requirement_entry().create(request).checkpoint == second
-    with pytest.raises(ValueError, match="source revision changed"):
+    with pytest.raises(RequirementSourceRevisionDrift, match="source revision changed"):
         service.resume(ResumeProjectDelivery(delivery_id=first.delivery_id))
     assert not models.calls

@@ -1746,6 +1746,60 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     "Product discovery must not be presented as implementation delivery",
   );
 
+  storedOperations = [
+    {
+      operation_id: "operation_source_revision_drift",
+      status: "FAILED",
+      updated_at: "2026-09-05T01:00:06Z",
+      error_code: "COMMAND_REJECTED",
+      error_summary: "source revision drift: use a new requirement project",
+      intent: {
+        action: "PRODUCT_REPLY",
+        project_id: "project_fixture",
+        delivery_id: "r1",
+        expected_checkpoint_sha256: "a".repeat(64),
+      },
+    },
+  ];
+  await interval.fn();
+  vm.runInContext('showDetail("request","r1")', context);
+  const driftDetail = get("detail");
+  assert.match(text(driftDetail), /代码版本已变化/);
+  assert.doesNotMatch(
+    text(driftDetail),
+    /上次 Product Agent 执行已中断/,
+    "source drift must not be presented as a resumable interrupted run",
+  );
+  assert.ok(
+    descend(driftDetail).find(
+      (node) => node.tag === "button" && node.textContent === "删除需求",
+    ),
+    "a pre-approval drifted Requirement can be retired from the Project view",
+  );
+  const recreateRequirement = descend(driftDetail).find(
+    (node) =>
+      node.tag === "button" && node.textContent === "基于当前代码新建需求",
+  );
+  await recreateRequirement.events.click();
+  const recreateForm = descend(get("composer")).find(
+    (node) => node.tag === "form" && node.className === "project-form",
+  );
+  assert.match(text(get("composer")), /基于当前代码新建需求/);
+  assert.equal(
+    descend(recreateForm).find((node) => node.tag === "input").value,
+    malicious,
+    "the replacement Requirement keeps the displayed name editable",
+  );
+  assert.match(text(recreateForm), /\/backend\/module-a/);
+  assert.match(text(recreateForm), /\/frontend/);
+  await recreateForm.events.submit({ preventDefault() {} });
+  assert.deepEqual(submittedIntents.at(-1), {
+    action: "CREATE_REQUIREMENT",
+    project_id: "project_fixture",
+    name: malicious,
+    repository_roots: ["/backend/module-a", "/frontend"],
+  });
+
   fixture.requests[0].stage = "READY_FOR_DISCUSSION";
   storedOperations = [
     {

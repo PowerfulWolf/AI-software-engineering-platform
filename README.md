@@ -450,9 +450,10 @@ Spec 位于对应 scope 的 `specs/documents/<spec_id>/`，当前启用集合写
 2. Manager 将这些目录注册为该 Project 的 Repository，建立外置 sidecar、发现 RepositoryProfile
    并编译 Team + Project + Repository 规范。操作卡片
    显示“已接单/执行中/成功/失败”；完成后点击“打开需求工作区”。
-   Product 对话开始前，可在需求详情中编辑名称/目录或删除需求：编辑会生成新的不可变需求版本并
-   保留旧记录，删除只从当前 Project 列表中移除，不擦除审计历史。Product 对话开始后不允许改写
-   已绑定的需求，需创建新 Requirement。
+   Product 对话开始前，可在需求详情中编辑名称/目录；ProductSpec 批准前都可以逻辑删除需求。
+   编辑会生成新的不可变需求版本并保留旧记录，删除只从当前 Project 列表中移除，不擦除对话和
+   审计历史。Product 对话开始后不允许改写已绑定的需求，需创建新 Requirement。如果代码 HEAD
+   已偏离该 Requirement 准备时的固定基线，页面会停止旧流程并提供预填的“基于当前代码新建需求”。
 3. 在需求详情中和 Product Agent 多轮讨论，可输入文字，也可直接在输入框粘贴最多 4 张 PNG、JPEG 或
    WebP 截图。Product Agent 的追问和你的每次回复都会保存在同一条时间线中；截图会绑定当前
    Requirement/checkpoint，只提供给 Product Agent。ProductSpec 准备好后先阅读“阶段产物”：内容仍需
@@ -703,7 +704,7 @@ MySQL 集成测试需设置 `ASE_TEST_MYSQL_DSN`，指向专用测试数据库�
 | M19 Spec Center 与持续学习 | 通用/背景知识与强制 Spec 分离；Team/Project Spec 支持不可变版本、显式启用、适用范围和验证方法，并进入 production baseline/context；QA/Review 失败可生成证据化 Learning proposal，经人工审批后沉淀为背景知识、Project Spec 或非执行性 Skill 设计建议 |
 | M20 需求输入与 Agent 模型策略 | 新建 Requirement 使用 macOS/Linux 原生目录选择器；Product 对话支持有界、不可变、可追溯的截图附件；七个长期 Agent 可分别配置主模型与备用顺序，运行事实保留实际选择 |
 | M21 知识导入与路由状态 | 知识库改为资产列表优先，通用知识、背景知识和开发规范通过作用域明确的弹窗批量导入；状态页分别展示七名 Agent 的精确模型策略与底层可用模型目录 |
-| M22 需求草稿维护 | Product 对话开始前可编辑 Requirement 名称与代码目录或逻辑删除；编辑发布替代需求、删除只改变当前可见性，旧 checkpoint 与 Operation 继续保留审计；失败提示可关闭但不擦除事实 |
+| M22 需求维护 | Product 对话开始前可编辑 Requirement 名称与代码目录，ProductSpec 批准前可逻辑删除；编辑发布替代需求、删除只改变当前可见性，旧 checkpoint、对话与 Operation 继续保留审计；代码基线漂移时停止无效恢复并预填新 Requirement；失败提示可关闭但不擦除事实 |
 
 ## 文档导航
 

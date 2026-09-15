@@ -14,12 +14,20 @@ from ai_software_engineer.domain import TeamRole
 from ai_software_engineer.domain.project_delivery import ProjectPreparation
 from ai_software_engineer.manager.delivery import DeliveryCheckpointStale
 from ai_software_engineer.manager.preparation import PrepareProjectResult, PrepareProjectStatus
+from ai_software_engineer.manager.production_agents import (
+    AcceptanceDraft,
+    ProductDraft,
+    RequirementDraft,
+)
 from ai_software_engineer.multi_directory.models import (
     DialogueMessage,
+    JointApproval,
     JointCheckpoint,
     JointExecutionPlan,
+    JointProductSpec,
     JointStage,
     PreparedUnit,
+    digest,
 )
 from ai_software_engineer.multi_directory.retirement import (
     RequirementRetirementError,
@@ -113,6 +121,30 @@ def _service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[JointDeli
     )
 
 
+def _product_spec(checkpoint: JointCheckpoint) -> JointProductSpec:
+    return JointProductSpec(
+        scope_sha256=digest(checkpoint.scope),
+        version=1,
+        product=ProductDraft(
+            action="ready",
+            summary="Ready for approval",
+            goals=("Ship safely",),
+            requirements=(
+                RequirementDraft(
+                    statement="Implement the requested behavior",
+                    rationale="The user requested it",
+                    acceptance=(
+                        AcceptanceDraft(
+                            description="The behavior works",
+                            verification="Run the focused regression",
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
 def test_edit_replaces_exact_draft_and_preserves_original_journal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -171,7 +203,7 @@ def test_delete_is_logical_and_exact_checkpoint_bound(
     assert retired is not None and retired.reason == "deleted"
 
 
-def test_started_or_unchanged_requirement_cannot_be_mutated(
+def test_started_requirement_cannot_be_edited_but_can_be_deleted_before_approval(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service, repository = _service(tmp_path, monkeypatch)
@@ -195,13 +227,83 @@ def test_started_or_unchanged_requirement_cannot_be_mutated(
         dialogue=(DialogueMessage(speaker="user", text="Start"),),
     )
     with pytest.raises(ValueError, match="before Product discussion"):
-        service.delete_requirement(
-            DeleteRequirement(
+        service.update_requirement(
+            UpdateRequirement(
                 delivery_id=started.delivery_id,
                 expected_checkpoint_sha256=started.checkpoint_sha256,
+                name="Too late to edit",
+                repository_roots=(str(repository),),
                 submitted_at=NOW,
             )
         )
+    service.delete_requirement(
+        DeleteRequirement(
+            delivery_id=started.delivery_id,
+            expected_checkpoint_sha256=started.checkpoint_sha256,
+            submitted_at=NOW,
+        )
+    )
+    assert service.retirements.entry(started.delivery_id) is not None
+
+
+def test_requirement_cannot_be_deleted_after_product_approval_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, repository = _service(tmp_path, monkeypatch)
+    checkpoint = service.create(
+        CreateRequirement(name="Delivering", repository_roots=(str(repository),), submitted_at=NOW)
+    ).checkpoint
+    product_spec = _product_spec(checkpoint)
+    awaiting_approval = service._save(
+        checkpoint,
+        stage=JointStage.WAITING_PRODUCT_APPROVAL,
+        dialogue=(DialogueMessage(speaker="user", text="Start"),),
+        product_spec=product_spec,
+    )
+    delivering = service._save(
+        awaiting_approval,
+        stage=JointStage.DESIGNING,
+        approval=JointApproval(
+            product_spec_sha256=digest(product_spec),
+            checkpoint_sha256=awaiting_approval.checkpoint_sha256,
+            reference="human:test",
+            approved_at=NOW,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="before ProductSpec approval"):
+        service.delete_requirement(
+            DeleteRequirement(
+                delivery_id=delivering.delivery_id,
+                expected_checkpoint_sha256=delivering.checkpoint_sha256,
+                submitted_at=NOW,
+            )
+        )
+
+
+def test_unapproved_product_spec_can_be_logically_deleted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, repository = _service(tmp_path, monkeypatch)
+    checkpoint = service.create(
+        CreateRequirement(name="Unapproved", repository_roots=(str(repository),), submitted_at=NOW)
+    ).checkpoint
+    awaiting_approval = service._save(
+        checkpoint,
+        stage=JointStage.WAITING_PRODUCT_APPROVAL,
+        dialogue=(DialogueMessage(speaker="user", text="Start"),),
+        product_spec=_product_spec(checkpoint),
+    )
+
+    service.delete_requirement(
+        DeleteRequirement(
+            delivery_id=awaiting_approval.delivery_id,
+            expected_checkpoint_sha256=awaiting_approval.checkpoint_sha256,
+            submitted_at=NOW,
+        )
+    )
+
+    assert service.retirements.entry(awaiting_approval.delivery_id) is not None
 
 
 def test_edit_cannot_converge_on_an_existing_started_requirement(

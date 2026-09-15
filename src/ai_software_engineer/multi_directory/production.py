@@ -47,6 +47,7 @@ from ai_software_engineer.manager.production_backend import (
     StructuredClientFactory,
     _task_commands,
 )
+from ai_software_engineer.multi_directory.errors import RequirementSourceRevisionDrift
 from ai_software_engineer.multi_directory.integration_commands import (
     is_test_command as _test_command,
 )
@@ -137,7 +138,7 @@ class ProductionJointBackend:
                 git_read(Path(unit.root), "rev-parse", "--verify", "HEAD^{commit}")
                 != unit.base_revision
             ):
-                raise ValueError(
+                raise RequirementSourceRevisionDrift(
                     "source revision changed after Requirement preparation; "
                     "create a new Requirement"
                 )

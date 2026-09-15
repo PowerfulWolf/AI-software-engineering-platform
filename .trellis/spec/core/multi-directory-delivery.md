@@ -71,6 +71,7 @@ ase request resume DELIVERY_ID
 - 所有目录先发现/编译规范；任何规范冲突阻止 Product，交由人类处理。
 - Product ID/digest 精确批准；旧 checkpoint 的 reply/approve 不得改变新事实。
 - Requirement 准备后的 Repository HEAD 发生变化时，reply 必须返回
+  typed `RequirementSourceRevisionDrift`，其稳定安全摘要为
   `source revision changed after Requirement preparation; create a new Requirement`；journal current
   checkpoint、Dialogue 与模型调用次数保持不变，禁止静默 rebase 或把失败回复持久化为新序列。
 - 空文字只有在提供有效截图时允许；附件必须属于 exact Project/Delivery，stale checkpoint、已进入
@@ -283,7 +284,8 @@ tests, not relaxing the validator. Other semantic failures remain fail-closed pe
 ### 1. Scope / Trigger
 
 Applies when a browser user corrects the title or Repository scope of an unstarted Requirement, or
-removes it from the current Project inventory. Joint intake identity includes title and scope, and
+removes a Requirement before ProductSpec approval from the current Project inventory. Joint intake
+identity includes title and scope, and
 checkpoint intake fields are immutable, so an edit must publish a replacement rather than rewrite a
 journal. Delete is visibility retirement, never evidence erasure.
 
@@ -312,9 +314,13 @@ The public storage contract is `schemas/requirement-retirement.schema.json` at
 
 ### 3. Contracts
 
-- Mutation accepts only exact `READY_FOR_DISCUSSION` checkpoints produced by named Requirement
+- Update accepts only exact `READY_FOR_DISCUSSION` checkpoints produced by named Requirement
   creation, with no initial requirement text, dialogue, ProductSpec, approval, Design, Plan, child or
   integration facts. Once Product discussion starts, correction requires a new Requirement.
+- Delete accepts exact named Requirements in `READY_FOR_DISCUSSION`, `PRODUCT_DISCOVERY`,
+  `WAITING_PRODUCT_REPLY` or `WAITING_PRODUCT_APPROVAL`, provided approval, Design, Plan, children
+  and integration facts are absent. Unapproved ProductSpec and Dialogue are preserved in the retired
+  journal. ProductSpec approval closes the deletion boundary.
 - Update discovers and validates the new 1–32 directory scope, derives its normal content-addressed
   Delivery ID, creates/reopens that replacement through `_intake`, then retires the original. A
   replacement failure leaves the original visible. If this update created a partial replacement
@@ -339,7 +345,9 @@ The public storage contract is `schemas/requirement-retirement.schema.json` at
 | READY draft + identical title/scope | reject; no journal or retirement mutation |
 | Edit identity collides with a Requirement that already started Product discussion | reject while holding replacement lock; original remains visible |
 | stale digest | `DeliveryCheckpointStale`; no replacement/retirement |
-| Product discussion or later facts exist | reject; immutable approved lineage remains visible |
+| Edit after Product discussion starts | reject; create a new Requirement instead |
+| Delete during Product discussion or with an unapproved ProductSpec | retire current visibility; preserve Dialogue/ProductSpec history |
+| Delete after ProductSpec approval or delivery facts exist | reject; immutable approved lineage remains visible |
 | exact repeated delete/replace | return current retirement record; do not duplicate entry |
 | different retirement for the same Delivery | reject conflict |
 | retirement digest/owner/checkpoint drift | fail the read and command closed |
@@ -352,14 +360,16 @@ The public storage contract is `schemas/requirement-retirement.schema.json` at
 
 - Good: rename an untouched draft; the replacement opens automatically while the original immutable
   checkpoint remains auditable.
-- Base: delete an untouched draft and remove it from current Project inventory/counts.
+- Base: delete an untouched draft or irrecoverable pre-approval Product discussion and remove it from
+  current Project inventory/counts without erasing history.
 - Bad: mutate `JointCheckpoint.title`, delete its directory, or hide a replacement record without
   proving the referenced replacement journal exists.
 
 ### 6. Tests Required
 
 `tests/manager/test_requirement_retirement.py` covers replacement, logical delete, stale and stage
-guards, idempotent retries, replacement existence and tamper failure. Manager/schema tests assert
+guards including pre-approval delete and post-approval rejection, idempotent retries, replacement
+existence and tamper failure. Manager/schema tests assert
 typed intent delegation and Python-to-JSON-Schema parity. Reader tests assert retired Requirements
 leave both the selected list and Project count without deleting the source journal.
 
