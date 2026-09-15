@@ -23,6 +23,21 @@ class ScopeView(DomainModel):
     delivery_id: str | None = None
 
 
+class DialogueAttachmentView(DomainModel):
+    id: str
+    name: str
+    media_type: Literal["image/png", "image/jpeg", "image/webp"]
+    source_bytes: int
+    sha256: str
+
+
+class DialogueTurnView(DomainModel):
+    sequence: int
+    speaker: Literal["user", "product"]
+    text: str = ""
+    attachments: tuple[DialogueAttachmentView, ...] = ()
+
+
 class AssignmentView(DomainModel):
     agent_id: str
     role: AgentRole
@@ -79,6 +94,7 @@ class RequestView(DomainModel):
     scopes: tuple[ScopeView, ...]
     next_action: str
     blocker: str | None = None
+    dialogue: tuple[DialogueTurnView, ...] = ()
     documents: tuple[DocumentView, ...] = ()
     checkpoint_sha256: str
 

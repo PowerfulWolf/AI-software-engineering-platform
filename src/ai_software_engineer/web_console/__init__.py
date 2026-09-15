@@ -37,8 +37,10 @@ from .models import (
     ContinueDeliveryIntent,
     CreateProjectIntent,
     CreateRequirementIntent,
+    DeleteRequirementIntent,
     ProductApprovalIntent,
     ProductReplyIntent,
+    UpdateRequirementIntent,
 )
 from .store import (
     ConsoleOperationConflict,
@@ -72,6 +74,7 @@ __all__ = [
     "CreateProjectIntent",
     "CreateProjectRequest",
     "CreateRequirementIntent",
+    "DeleteRequirementIntent",
     "DatabaseRuntimeStatus",
     "FileConsoleOperationStore",
     "InMemoryConsoleOperationStore",
@@ -97,6 +100,7 @@ __all__ = [
     "TeamReader",
     "TeamSummary",
     "UpdateKnowledgeSelectionRequest",
+    "UpdateRequirementIntent",
     "UpdateSettingsRequest",
     "UpdateSpecActivationRequest",
     "create_console_app",

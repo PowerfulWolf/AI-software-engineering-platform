@@ -56,6 +56,8 @@ production_console_app(
 
 - `CREATE_PROJECT(name, project_id?)`；
 - `CREATE_REQUIREMENT(project_id, name, repository_roots)`；
+- `UPDATE_REQUIREMENT(project_id, delivery_id, expected_checkpoint_sha256, name, repository_roots)`；
+- `DELETE_REQUIREMENT(project_id, delivery_id, expected_checkpoint_sha256)`；
 - `PRODUCT_REPLY(project_id, delivery_id, expected_checkpoint_sha256, message, screenshot_ids)`；
 - `PRODUCT_APPROVAL(project_id, delivery_id, expected_checkpoint_sha256)`；
 - `CONTINUE_DELIVERY(project_id, delivery_id, expected_checkpoint_sha256, approved_plan_sha256?)`。
@@ -126,10 +128,25 @@ production_console_app(
   契约，不能因为展示名称不同而复制存储或选择逻辑。
 - Requirements 页把 Project 创建放在 Project 上下文区，把 Requirement 创建放在需求列表标题与
   数量旁；两者不得作为脱离所有权上下文的全局页头动作。
+- 只有尚未开始 Product 对话且无活动 Operation 的 `READY_FOR_DISCUSSION` Requirement 显示编辑和
+  删除。编辑复用预填名称与精确目录的弹窗；目录新增仍只来自原生目录选择器。删除必须先确认。
+  UPDATE 成功后选中返回的 replacement Delivery；DELETE 成功后清除已退休选择。
+- 需求列表中的整张 Requirement card 是一个选择控件，而不是只有标题文字可点：click 与键盘
+  `Enter`/`Space` 必须打开同一个详情；详情、唯一 `aria-current` 与可见 selected 样式必须同步指向
+  同一 Requirement，轮询不得把它们恢复到列表第一项。
+- Requirement 详情必须使用一个稳定摘要区和同级 section：交付流程、涉及代码目录、Product 对话/输入、
+  操作/批准、交付结果、阶段产物。所有同级 section 使用 `--detail-section-space` 作为分割线两侧的
+  唯一垂直间距，标题统一为 `h2`；子级需求名称使用 `h3`，ID、状态和下一步保持辅助信息层级。
+  section 不得再叠加独立 `margin-top`，流程组件也不得通过额外底部 margin 改变下一条分割线的位置。
+- 设置页的模型路由分为可用模型目录和 Agent 策略。启用目录路由只使其可选，不自动成为
+  备用模型；每个 Agent 选择一个主模型，并可从目录中显式添加、移除、上移或下移 0–N 个备用模型。
 - 一个 Task 的 Coder/QA/Reviewer 串行。UI 只把 `current_stage=true` 的 assignment 标成执行中；
   已完成/未来角色不得同时显示为运行。
 - DONE 只展示已经由 durable facts 证明的 candidate commit、可唯一定位的 branch 和验证证据。
   v0.1 不自动 merge、push 或 deploy。
+- FAILED/INTERRUPTED Operation 是不可变审计事实，但通知卡不是永久页面状态。用户可在浏览器关闭
+  该卡；同一 Requirement/动作出现更新的成功 Operation 后，旧失败卡自动隐藏。关闭只写入有界的
+  本地 UI 偏好，不修改 Operation 日志、Delivery checkpoint 或错误证据。
 - `ase request`、`verify-*` 和底层 Runtime 保留作运维/诊断/break-glass，不是 README 的日常入口。
 
 ## 4. Validation & Error Matrix
@@ -137,6 +154,9 @@ production_console_app(
 | Case | Required result |
 |---|---|
 | Valid Project or new Requirement with one or many absolute roots | persist QUEUED, return 202, background Manager performs the typed action |
+| Exact idle READY Requirement edit | persist UPDATE; Manager publishes replacement and retires original |
+| Exact idle READY Requirement delete after confirmation | persist DELETE; original leaves current inventory but history remains |
+| Edit/delete after Product discussion or with stale checkpoint | terminal safe failure; no retirement or history mutation |
 | Browser refresh/disconnect after 202 | accepted Operation continues; repeated same key returns same identity |
 | Same idempotency key, changed intent | 409; original Operation unchanged |
 | Second active command for same Delivery | 409; no second provider call |
@@ -145,11 +165,16 @@ production_console_app(
 | Picker executable missing/fails or returns relative/symlink/missing path | 503; no browser text fallback |
 | Empty Product text with 1–4 valid screenshot IDs | accept and bind immutable attachments into dialogue |
 | Empty text and no screenshot / duplicate or foreign attachment ID | 422; no Product invocation |
+| Two Requirements in the same visible group | clicking either card body opens and marks that exact Requirement as the sole selection; polling preserves it |
+| Requirement detail contains empty or populated Product/artifact modules | every module heading remains the same level and every divider has the same spacing on both sides |
+| Enabled model exists in catalog but is not selected by an Agent | save succeeds; it is never serialized or shown as that Agent's fallback |
 | Screenshot over 10 MB, unsupported magic, stale checkpoint or wrong stage | 413/422; no dialogue mutation |
 | Stale displayed checkpoint | terminal FAILED with `STALE_CHECKPOINT`; no model call |
 | Recovery/verification approval required | SUCCEEDED Operation carries safe facts plus exact hidden plan digest |
 | Host exits during RUNNING | next startup appends INTERRUPTED; never silently replay |
 | Executor raises an unexpected exception | terminal FAILED with generic safe summary; no traceback in browser |
+| User closes a FAILED/INTERRUPTED notification | hide the card locally; keep durable Operation query/audit unchanged |
+| Later success for same action and Requirement target | suppress the older failure card automatically |
 | Missing production config/MySQL/team | startup/read fails safely; no fake workspace or data |
 | Foreign Host/Origin, non-JSON or oversized body | 403 / 415 / 413 before command execution |
 | Read-only legacy Team server | UI remains read-only and explicitly reports console unavailable |
@@ -172,7 +197,8 @@ production_console_app(
 - `tests/web_console/test_transport.py`：lifespan、assets/query、202 submit、operation query、Host/Origin、
   content type、body/input limit、409/404 和安全 headers。
 - `tests/team_view/ui.test.cjs`：多目录创建、Product/继续/批准操作、操作状态、刷新保持、hidden digest
-  不直接渲染、只读 fallback、单 Task 串行角色状态、安全文本，以及粘贴截图移除后的预览和反馈同步。
+  不直接渲染、只读 fallback、单 Task 串行角色状态、安全文本、Requirement 详情统一标题/分割节奏，
+  粘贴截图移除后的预览和反馈同步、READY draft 编辑/删除，以及失败通知关闭/成功替代。
 - `tests/team_view/test_live.py`：candidate branch 必须从 exact candidate ref 唯一推导，不能猜测。
 - `tests/contracts/test_json_schema_contracts.py`：Python/JSON Schema 的 QUEUED/RUNNING/terminal 状态和
   path 约束一致。
@@ -662,4 +688,107 @@ kill -9 "$(cat "$PID_FILE")"
 # Correct: require numeric PID + exact executable identity, request TERM, and fail without escalation.
 is_our_process "$current_pid" || exit 1
 kill -TERM "$current_pid"
+```
+
+## Scenario: Product Agent 多轮需求讨论
+
+### 1. Scope / Trigger
+
+修改 Requirement 的 Product 对话投影、聊天界面、回复/批准控件或
+`team-snapshot.schema.json` 时适用。写权威仍是 `JointDeliveryService`；浏览器和 Team View 不创建第二套
+对话状态。
+
+### 2. Signatures
+
+```python
+class DialogueAttachmentView(DomainModel):
+    id: str
+    name: str
+    media_type: Literal["image/png", "image/jpeg", "image/webp"]
+    source_bytes: int
+    sha256: str
+
+class DialogueTurnView(DomainModel):
+    sequence: int
+    speaker: Literal["user", "product"]
+    text: str
+    attachments: tuple[DialogueAttachmentView, ...]
+
+class RequestView(DomainModel):
+    dialogue: tuple[DialogueTurnView, ...]
+```
+
+写入仍只使用既有命令：
+
+```text
+PRODUCT_REPLY(project_id, delivery_id, expected_checkpoint_sha256, message, screenshot_ids)
+PRODUCT_APPROVAL(project_id, delivery_id, expected_checkpoint_sha256)
+```
+
+### 3. Contracts
+
+- `JointCheckpoint.dialogue` 是唯一 Product 对话事实；Reader 按 tuple 顺序派生从 1 开始的 sequence，
+  不从 Operation、ProductSpec 或 UI 内存重建消息。
+- `READY_FOR_DISCUSSION` 接收首条需求；`WAITING_PRODUCT_REPLY` 接收对 Product Agent 的回答；
+  `WAITING_PRODUCT_APPROVAL` 同时允许批准 exact ProductSpec 或继续回复并使未批准候选失效。
+- Product Agent 返回 `clarify` 时追加 `speaker=product` 的问题并停在
+  `WAITING_PRODUCT_REPLY`；返回 `ready` 时发布 ProductSpec 并停在 `WAITING_PRODUCT_APPROVAL`。
+- 对话 UI 按顺序显示 `你` 与 `Product Agent`。没有消息时不显示空聊天容器；换页、刷新和服务重启
+  都从 checkpoint 恢复相同消息。
+- Product 尚未批准时，历史、批准提示和输入 composer 属于同一个“需求讨论” detail section，内部
+  不再使用 `detail-section` 分割线。composer 在 READY/WAITING reply/approval 可输入；
+  `PRODUCT_DISCOVERY` 或同 Requirement Operation 运行时仍保持可见但禁用，显示
+  “Product Agent 正在回复”。中断且没有 active Operation 时显示“继续需求讨论”，不得使用
+  “继续交付”。进入 Designer 以后保留历史只读，但不允许修改已批准 ProductSpec。
+- 历史截图只显示安全元数据，不从浏览器拼接 sidecar 路径；所有文本继续用 `textContent`。
+- Product Agent 不能批准自己生成的 ProductSpec；只有用户明确点击批准才进入 Designer。
+
+### 4. Validation & Error Matrix
+
+| Case | Required result |
+|---|---|
+| Product 返回 clarification | 持久化 Product turn，显示问题和回复输入框，不显示为已批准 |
+| 用户连续回复多轮 | 每次提交 exact current checkpoint；刷新后顺序、角色和附件元数据不变 |
+| ProductSpec 已生成但用户继续讨论 | 清除未批准候选，追加用户 turn，重新运行 Product Agent |
+| ProductSpec 已生成且用户批准 | 只批准 exact current checkpoint，进入 Designer |
+| `PRODUCT_DISCOVERY` 正在运行 | 历史和禁用 composer 保持在同一 section；显示 Product Agent 处理状态 |
+| `PRODUCT_DISCOVERY` 没有 active Operation | 显示“继续需求讨论”；不得显示通用“继续交付”或第二条内部分割线 |
+| unknown speaker / malformed attachment metadata | read model validation fails closed；不猜角色 |
+| stale checkpoint / duplicate active Operation | 既有 409/FAILED 规则生效；不追加重复 turn |
+| 对话含 secret 或 HTML | Reader 清洗，浏览器 text-only 渲染 |
+
+### 5. Good / Base / Bad Cases
+
+- Good：用户描述需求，Product Agent 连续追问两轮，用户逐次回答；第三次生成 ProductSpec，用户阅读后
+  批准，刷新前后完整会话一致。
+- Base：简单需求首轮直接生成 ProductSpec；仍显示用户原始消息，并允许批准前继续讨论。
+- Bad：只把 Product 问题放在一次 Operation 的 result 中，Operation 结束或刷新后问题消失；或 UI
+  根据 `WAITING_PRODUCT_REPLY` 自己虚构一条 Agent 消息；或把聊天历史和 composer 拆成两个带
+  divider 的 detail section，再把 Product 恢复动作标成“继续交付”。
+
+### 6. Tests Required
+
+- `tests/team_view/test_live.py`：从真实 `JointCheckpoint.dialogue` 投影双方顺序、清洗文本和截图元数据，
+  并验证 `team-snapshot.schema.json` 与 Pydantic 一致。
+- `tests/team_view/ui.test.cjs`：双方气泡顺序、空对话隐藏、截图元数据、澄清阶段回复控件，以及
+  ProductSpec 阶段同时存在批准与继续讨论入口；`PRODUCT_DISCOVERY` 必须保留同 section 的禁用
+  composer，并把中断恢复标为“继续需求讨论”。
+- `tests/manager/test_joint_contracts.py`：Requirement checkpoint Schema 限制 speaker union，并与模型一致。
+
+### 7. Wrong vs Correct
+
+```javascript
+// Wrong: Operation 消失后 Product 问题也消失。
+renderQuestion(lastOperation.result.next_action)
+
+// Correct: 对话只来自当前 checkpoint 的不可变投影。
+for (const turn of request.dialogue) renderDialogueTurn(turn)
+```
+
+```javascript
+// Wrong: Product processing drops the composer and falls through to a delivery action section.
+if (stage !== "WAITING_PRODUCT_REPLY") renderContinueDelivery()
+
+// Correct: one Product discussion section owns history, state and composer until approval.
+renderProductDiscussion({ dialogue, composerDisabled: stage === "PRODUCT_DISCOVERY" })
 ```

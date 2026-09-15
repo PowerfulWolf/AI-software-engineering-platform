@@ -149,18 +149,21 @@ Team、Project 和 Repository sidecar 目录只在显式的 Host 初始化、Pro
 
 ## 5. 模型路由
 
-`model_routes` 的数组顺序就是冻结后的尝试顺序。示例配置的初始顺序是：
+`model_routes` 是平台的可用模型目录，不代表每个 Agent 都会自动使用其中所有模型。
+示例配置的初始目录顺序是：
 
 1. `codex / gpt-5.6-terra / codex_cli`；
 2. `deepseek / YOUR_DEEPSEEK_MODEL / responses`（替换占位符并显式启用后）；
 3. `qwen / YOUR_QWEN_MODEL / responses`（千问，替换占位符并显式启用后）。
 
-即 **GPT → DeepSeek → Qianwen（千问）**。禁用的路由直接跳过；这是默认配置优先级，
-不是代码中按供应商名称强制排序，显式配置的数组顺序仍然有效。
+即默认可选模型依次列出 GPT、DeepSeek 和 Qianwen（千问）。禁用的路由不可选；这不是
+代码中按供应商名称强制排序。只有没有 `agent_model_routes` 的旧配置才会临时继承该全局顺序。
 
 `agent_model_routes` 在这个可用模型目录之上，为 Manager、Product、Designer、Planner、Coder、QA、
-Reviewer 分别保存有序策略：第一项是该 Agent 的主模型，后续项是备用路由。设置页会为七个成员分别
-展示选择器；可以让 Product 使用支持截图的模型、Coder 使用偏实现的模型、QA/Reviewer 使用不同模型。
+Reviewer 分别保存可用目录的有序子集：第一项是该 Agent 的主模型，后续项是人工选择的
+0–N 个备用路由。设置页可添加、移除、上移和下移备用模型；只是在目录中启用一个模型，
+不会让它自动成为任何 Agent 的备用模型。可以让 Product 使用支持截图的模型、Coder 使用偏实现的模型、
+QA/Reviewer 使用不同模型。
 一条路由的完整身份是 `provider + model + reasoning_effort`；因此同一个模型可以同时配置 `medium`
 和 `high`，并由不同 Agent 分别选择。完全相同的三项组合不能重复。
 旧配置没有 `agent_model_routes` 时，所有成员继承全局启用顺序；一旦显式配置，就必须覆盖七个角色且
@@ -219,8 +222,9 @@ Agent，即使它们碰巧使用同一模型也不能互相代替或自我批准
 1. 在同一页创建或选择 Project，再新建 Requirement；点击“选择代码目录”打开系统弹窗，一次选择一个
    或多个本地代码目录，并在提交前通过路径标签检查或移除；
 2. 等待 Manager 完成注册、RepositoryProfile 发现和规范编译；
-3. 在需求详情与 Product Agent 讨论，可提交文字，也可直接在输入框粘贴最多 4 张 PNG/JPEG/WebP 截图，
-   再阅读 ProductSpec；
+3. 在需求详情与 Product Agent 多轮讨论，可提交文字，也可直接在输入框粘贴最多 4 张 PNG/JPEG/WebP
+   截图；页面按顺序保留双方消息。Product Agent 需要澄清时继续回复，ProductSpec 生成后可继续提出
+   修改，也可进入批准；
 4. 批准 ProductSpec，观察 Designer、Planner、Coder、QA、Reviewer 的串行进度；
 5. 中断后点击“继续交付”；页面出现候选复核或 Coder 恢复计划时，阅读摘要后点击“批准并继续”；
 6. DONE 后领取每个仓库的 candidate commit/branch 和 QA/Review 证据。

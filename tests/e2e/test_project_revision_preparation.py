@@ -46,6 +46,6 @@ def test_new_git_baseline_prepares_but_old_request_stays_pinned(tmp_path: Path) 
     assert all(path.read_bytes() == body for path, body in prior.items())
     assert not models.calls
     assert host().requirement_entry().create(request).checkpoint == second
-    with pytest.raises(ValueError, match="source revision drift"):
+    with pytest.raises(ValueError, match="source revision changed"):
         service.resume(ResumeProjectDelivery(delivery_id=first.delivery_id))
     assert not models.calls

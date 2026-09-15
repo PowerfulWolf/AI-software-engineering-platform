@@ -29,6 +29,7 @@ from ai_software_engineer.manager.dispatch import (
 from ai_software_engineer.manager.mysql_dispatch_authority import _decode_allocation
 from ai_software_engineer.multi_directory.models import JointCheckpoint, digest
 from ai_software_engineer.multi_directory.production import DerivedStageInputs
+from ai_software_engineer.multi_directory.retirement import RequirementRetirementStore
 from ai_software_engineer.multi_directory.scope import git_read
 from ai_software_engineer.multi_directory.store import JointJournal
 from ai_software_engineer.project_workspace import ProjectWorkspace
@@ -57,6 +58,8 @@ from ai_software_engineer.team_workspace import (
 from .models import (
     AgentView,
     AssignmentView,
+    DialogueAttachmentView,
+    DialogueTurnView,
     DocumentView,
     ProjectView,
     RequestView,
@@ -129,11 +132,18 @@ class ProductionTeamReader:
             if selected is not None
             else None
         )
+        retired = (
+            _retired_requirement_ids(selected, journal)
+            if selected is not None and journal is not None
+            else frozenset()
+        )
         joints: list[JointCheckpoint] = []
         for path in _directories(
             selected.requirements_root if selected is not None else Path("/nonexistent"),
             "delivery_multi_*",
         ):
+            if path.name in retired:
+                continue
             assert journal is not None
             assert selected is not None
             checkpoint = journal.current(path.name)
@@ -204,6 +214,24 @@ class ProductionTeamReader:
                     scopes=tuple(scopes),
                     next_action=_safe(joint.next_action),
                     blocker=_safe(joint.next_action) if _waiting(joint.stage) else None,
+                    dialogue=tuple(
+                        DialogueTurnView(
+                            sequence=sequence,
+                            speaker=message.speaker,
+                            text=_safe(message.text),
+                            attachments=tuple(
+                                DialogueAttachmentView(
+                                    id=screenshot.id,
+                                    name=_safe(screenshot.source_name),
+                                    media_type=screenshot.media_type,
+                                    source_bytes=screenshot.source_bytes,
+                                    sha256=screenshot.source_sha256,
+                                )
+                                for screenshot in message.screenshots
+                            ),
+                        )
+                        for sequence, message in enumerate(joint.dialogue, 1)
+                    ),
                     documents=documents,
                     checkpoint_sha256=joint.checkpoint_sha256,
                 )
@@ -315,7 +343,16 @@ class ProductionTeamReader:
                     id=item.manifest.project_id,
                     name=_safe(item.manifest.name),
                     repository_count=len(item.repository_registry().discover()),
-                    requirement_count=len(_directories(item.requirements_root, "delivery_multi_*")),
+                    requirement_count=len(
+                        set(
+                            path.name
+                            for path in _directories(item.requirements_root, "delivery_multi_*")
+                        )
+                        - _retired_requirement_ids(
+                            item,
+                            JointJournal(item.requirements_root, read_only=True),
+                        )
+                    ),
                 )
                 for item in projects
             ),
@@ -323,6 +360,17 @@ class ProductionTeamReader:
             requests=tuple(sorted(requests, key=lambda r: r.id)),
             tasks=tuple(sorted(tasks, key=lambda t: (t.last_activity, t.id), reverse=True)),
         )
+
+
+def _retired_requirement_ids(project: ProjectWorkspace, journal: JointJournal) -> frozenset[str]:
+    return RequirementRetirementStore(
+        project.requirements_root,
+        team_id=project.team.manifest.team_id,
+        team_manifest_sha256=project.team.manifest.manifest_sha256,
+        project_id=project.manifest.project_id,
+        project_manifest_sha256=project.manifest.manifest_sha256,
+        read_only=True,
+    ).retired_delivery_ids(journal)
 
 
 def _read_native(project: ProjectWorkspace) -> tuple[_Native, ...]:

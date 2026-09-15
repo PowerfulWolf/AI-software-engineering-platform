@@ -88,7 +88,8 @@ AgentRun 返回一个带 policy version 与 reasons 的 `ModelSelection`。当�
 解析后的单角色运行配置：
 
 生产配置把 `model_routes` 作为启用模型目录，把 `agent_model_routes` 作为七个长期成员各自的有序
-主模型/备用策略。Product、Designer、Planner 在创建 structured client 前按角色解析；Coder、QA、
+子集：一个主模型和显式选择的 0–N 个备用模型。模型只是进入可用目录，不会自动进入 Agent 的
+降级链。Product、Designer、Planner 在创建 structured client 前按角色解析；Coder、QA、
 Reviewer 的顺序编译进内容寻址的 `ModelPolicy`，再由 Dispatcher/ModelRouter 为具体 Run 选择并记录。
 Manager 当前使用确定性 Skills，没有直接模型调用，但仍是策略中的正式成员。未配置角色策略的旧配置
 继续让所有成员继承全局启用顺序。

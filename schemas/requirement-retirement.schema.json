@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/requirement-retirement.schema.json",
+  "$defs": {
+    "RequirementRetirementEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "delivery_id": {
+          "pattern": "^delivery_[a-z0-9][a-z0-9_-]{2,95}$",
+          "title": "Delivery Id",
+          "type": "string"
+        },
+        "checkpoint_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Checkpoint Sha256",
+          "type": "string"
+        },
+        "reason": {
+          "enum": ["deleted", "replaced"],
+          "title": "Reason",
+          "type": "string"
+        },
+        "replacement_delivery_id": {
+          "anyOf": [
+            {
+              "pattern": "^delivery_[a-z0-9][a-z0-9_-]{2,95}$",
+              "type": "string"
+            },
+            {"type": "null"}
+          ],
+          "default": null,
+          "title": "Replacement Delivery Id"
+        },
+        "retired_at": {
+          "format": "date-time",
+          "title": "Retired At",
+          "type": "string"
+        }
+      },
+      "required": ["delivery_id", "checkpoint_sha256", "reason", "retired_at"],
+      "title": "RequirementRetirementEntry",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Project-owned exclusions without erasing immutable Requirement history.",
+  "properties": {
+    "schema_version": {
+      "const": "v0.1",
+      "default": "v0.1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "team_id": {
+      "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$",
+      "title": "Team Id",
+      "type": "string"
+    },
+    "team_manifest_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Team Manifest Sha256",
+      "type": "string"
+    },
+    "project_id": {
+      "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
+      "title": "Project Id",
+      "type": "string"
+    },
+    "project_manifest_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Project Manifest Sha256",
+      "type": "string"
+    },
+    "entries": {
+      "default": [],
+      "items": {"$ref": "#/$defs/RequirementRetirementEntry"},
+      "maxItems": 1024,
+      "title": "Entries",
+      "type": "array"
+    },
+    "retirement_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Retirement Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "team_id",
+    "team_manifest_sha256",
+    "project_id",
+    "project_manifest_sha256",
+    "retirement_sha256"
+  ],
+  "title": "RequirementRetirement",
+  "type": "object"
+}

@@ -65,6 +65,10 @@ from ai_software_engineer.multi_directory.attachments import (
     RequirementScreenshot,
 )
 from ai_software_engineer.multi_directory.models import JointStage
+from ai_software_engineer.multi_directory.retirement import (
+    RequirementRetirementError,
+    RequirementRetirementStore,
+)
 from ai_software_engineer.multi_directory.store import JointJournal
 from ai_software_engineer.project_workspace import ProjectName, ProjectWorkspace
 from ai_software_engineer.spec_documents import (
@@ -374,7 +378,7 @@ class LocalConsoleAdministration:
                 self._project_summary(project)
                 for project in self._team().project_registry().discover()
             )
-        except (OSError, ValueError) as error:
+        except (OSError, RequirementRetirementError, ValueError) as error:
             raise AdministrationError("Project catalog is invalid") from error
 
     def create_project(self, request: CreateProjectRequest) -> ProjectSummary:
@@ -386,7 +390,7 @@ class LocalConsoleAdministration:
                 else registry.register(project_id=request.project_id, name=request.name)
             )
             return self._project_summary(project)
-        except (OSError, ValueError) as error:
+        except (OSError, RequirementRetirementError, ValueError) as error:
             raise AdministrationError("Project could not be created safely") from error
 
     def upload_requirement_screenshot(
@@ -400,9 +404,18 @@ class LocalConsoleAdministration:
     ) -> RequirementScreenshot:
         project = self._project(project_id)
         try:
-            checkpoint = JointJournal(project.requirements_root, read_only=True).current(
-                str(delivery_id)
-            )
+            journal = JointJournal(project.requirements_root, read_only=True)
+            retired = RequirementRetirementStore(
+                project.requirements_root,
+                team_id=project.team.manifest.team_id,
+                team_manifest_sha256=project.team.manifest.manifest_sha256,
+                project_id=project.manifest.project_id,
+                project_manifest_sha256=project.manifest.manifest_sha256,
+                read_only=True,
+            ).retired_delivery_ids(journal)
+            if str(delivery_id) in retired:
+                raise ValueError("Requirement is retired")
+            checkpoint = journal.current(str(delivery_id))
             if checkpoint is None:
                 raise ValueError("Requirement was not found")
             if checkpoint.checkpoint_sha256 != str(expected_checkpoint_sha256):
@@ -421,7 +434,12 @@ class LocalConsoleAdministration:
                 filename=filename,
                 content=content,
             )
-        except (OSError, RequirementAttachmentError, ValueError) as error:
+        except (
+            OSError,
+            RequirementAttachmentError,
+            RequirementRetirementError,
+            ValueError,
+        ) as error:
             raise AdministrationError("Requirement screenshot could not be stored") from error
 
     def knowledge(self) -> tuple[KnowledgeDocumentView, ...]:
@@ -968,6 +986,15 @@ class LocalConsoleAdministration:
 
     @staticmethod
     def _project_summary(project: ProjectWorkspace) -> ProjectSummary:
+        journal = JointJournal(project.requirements_root, read_only=True)
+        retired = RequirementRetirementStore(
+            project.requirements_root,
+            team_id=project.team.manifest.team_id,
+            team_manifest_sha256=project.team.manifest.manifest_sha256,
+            project_id=project.manifest.project_id,
+            project_manifest_sha256=project.manifest.manifest_sha256,
+            read_only=True,
+        ).retired_delivery_ids(journal)
         return ProjectSummary(
             project_id=project.manifest.project_id,
             name=project.manifest.name,
@@ -975,7 +1002,10 @@ class LocalConsoleAdministration:
             requirement_count=sum(
                 1
                 for path in project.requirements_root.iterdir()
-                if path.is_dir() and not path.is_symlink()
+                if path.is_dir()
+                and not path.is_symlink()
+                and path.name.startswith("delivery_multi_")
+                and path.name not in retired
             ),
             created_at=project.manifest.created_at,
         )

@@ -20,7 +20,9 @@ from ai_software_engineer.multi_directory.models import (
 from ai_software_engineer.multi_directory.scope import DirectoryScope, DirectoryUnit
 from ai_software_engineer.multi_directory.service import (
     CreateRequirement,
+    DeleteRequirement,
     JointDeliveryService,
+    UpdateRequirement,
 )
 from ai_software_engineer.team_workspace import TeamWorkspace
 from ai_software_engineer.web_console import (
@@ -28,9 +30,11 @@ from ai_software_engineer.web_console import (
     ContinueDeliveryIntent,
     CreateProjectIntent,
     CreateRequirementIntent,
+    DeleteRequirementIntent,
     ManagerConsoleAdapter,
     ProductApprovalIntent,
     ProductReplyIntent,
+    UpdateRequirementIntent,
 )
 from ai_software_engineer.web_console.manager import TeamConsoleHost
 
@@ -77,6 +81,14 @@ class _Entry:
         self.commands: list[object] = []
 
     def create(self, command: CreateRequirement) -> JointDeliveryResult:
+        self.commands.append(command)
+        return JointDeliveryResult(checkpoint=self.checkpoint)
+
+    def update_requirement(self, command: UpdateRequirement) -> JointDeliveryResult:
+        self.commands.append(command)
+        return JointDeliveryResult(checkpoint=self.checkpoint)
+
+    def delete_requirement(self, command: DeleteRequirement) -> JointDeliveryResult:
         self.commands.append(command)
         return JointDeliveryResult(checkpoint=self.checkpoint)
 
@@ -167,6 +179,37 @@ def test_create_requirement_delegates_and_returns_small_cursor(tmp_path: Path) -
     assert result.project_id == PROJECT_ID
     assert result.stage == "READY_FOR_DISCUSSION"
     assert result.checkpoint_sha256 == entry.checkpoint.checkpoint_sha256
+
+
+def test_update_and_delete_requirement_bind_the_displayed_draft(tmp_path: Path) -> None:
+    adapter, _, entry = _adapter(tmp_path)
+    checkpoint = entry.checkpoint.checkpoint_sha256
+
+    updated = adapter.execute(
+        UpdateRequirementIntent(
+            project_id=PROJECT_ID,
+            delivery_id=DELIVERY_ID,
+            expected_checkpoint_sha256=checkpoint,
+            name="Renamed delivery",
+            repository_roots=(str(tmp_path),),
+        )
+    )
+    deleted = adapter.execute(
+        DeleteRequirementIntent(
+            project_id=PROJECT_ID,
+            delivery_id=DELIVERY_ID,
+            expected_checkpoint_sha256=checkpoint,
+        )
+    )
+
+    update_command = cast(UpdateRequirement, entry.commands[0])
+    delete_command = cast(DeleteRequirement, entry.commands[1])
+    assert update_command.expected_checkpoint_sha256 == checkpoint
+    assert update_command.name == "Renamed delivery"
+    assert delete_command.expected_checkpoint_sha256 == checkpoint
+    assert updated.delivery_id == DELIVERY_ID
+    assert deleted.delivery_id is None
+    assert deleted.stage == "REQUIREMENT_DELETED"
 
 
 def test_reply_and_approval_bind_the_displayed_checkpoint(tmp_path: Path) -> None:

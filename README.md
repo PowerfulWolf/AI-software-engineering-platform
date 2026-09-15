@@ -126,7 +126,8 @@ flowchart TB
 
 模型路由由“可用模型目录 + 每个 Agent 的有序策略”组成。Manager、Product、Designer、Planner、
 Coder、QA、Reviewer 可以分别配置主模型和备用顺序；额度、限流或临时故障只会在该 Agent 自己的
-策略内回退。同一模型可以用不同 Reasoning 配置成多条独立路由，例如 Product 选择 `medium`、Coder
+策略内回退。全局启用的模型只是可选模型池；每个 Agent 只会使用自己显式选中的 0–N 个备用模型，
+并按人工调整后的优先级尝试。同一模型可以用不同 Reasoning 配置成多条独立路由，例如 Product 选择 `medium`、Coder
 选择 `high`；Agent 的选择会同时绑定 provider、model 和 reasoning。旧配置未指定角色策略时，七个成员继续共享全局启用顺序。当前仍未实现根据任务难度
 自动调整成本/能力档位的完整动态策略。
 
@@ -326,6 +327,7 @@ AI-software-engineering-platform/
 │       │       └── runs/ locks/ logs/  # 模型运行、互斥和诊断记录
 │       └── requirements/
 │           ├── _console_operations/   # 浏览器操作状态链
+│           ├── retirement.json        # 已删除/被编辑替换需求的完整性绑定可见性索引
 │           └── <delivery_multi_id>/   # 一项 Requirement 的讨论、计划、子交付和联合验收
 └── worktrees/                         # Coder、QA、Reviewer 的隔离 Git checkout
     └── <repository_id>/...
@@ -358,8 +360,8 @@ v0.1 推荐先以一台可信的 macOS/Linux 主机运行，不必先部署 Kube
 - 一个位于所有源码仓库之外的持久 `<platform_root>` 保存唯一 Team、全部 Project/Repository sidecar、
   Requirement、Artifact、Evidence 和 worktree；macOS/Linux 缺省为 `~/.ase`；
 - 目标仓库仍按自身语言和工具构建，平台只要求 Git、干净主 checkout、允许的本地构建/测试命令；
-- Codex CLI 路由推荐以当前账号可用的 `gpt-5.6-terra` 为主，路由顺序由配置决定；需要时显式配置
-  DeepSeek、Qwen 的 Responses-compatible endpoint 作为备用，不能把禁用或占位路由当成自动降级；
+- Codex CLI 路由推荐以当前账号可用的 `gpt-5.6-terra` 为主；需要时可把 DeepSeek、Qwen 的
+  Responses-compatible endpoint 加入可选模型池，再为具体 Agent 显式选择是否作为备用及其优先级；
 - Coder、QA、Reviewer 使用同一 candidate commit 的独立 worktree，QA/Reviewer 不提交业务代码；
 - Team 通用知识、Project 背景知识和 Spec 的创建/启停由 sidecar 即时提供给之后的新需求，无需重启；已准备
   Requirement 绑定精确版本，不会被静默重解释；运行配置改变仍需重启；
@@ -405,7 +407,7 @@ Origin；它不是可直接暴露到局域网或公网的多用户系统。用 `
 首次进入当前环境时：
 
 1. 打开“设置”。没有配置文件时页面展示内置默认值；按需修改平台数据目录、完整 MySQL DSN、
-   模型路由/API Key、七个 Agent 各自的主模型与备用顺序、Codex、真实模型开关和 Console 端口。
+   模型路由/API Key、七个 Agent 各自的主模型、可选备用模型与优先级、Codex、真实模型开关和 Console 端口。
    先测试 MySQL 连接，再保存；页面显示
    “需要重启”时执行 `./scripts/ase-console-service.sh restart`。
 2. 打开“状态”，确认 MySQL、Codex、Team workspace 和启用的模型路由已经就绪。“Agent 模型路由”
@@ -448,9 +450,13 @@ Spec 位于对应 scope 的 `specs/documents/<spec_id>/`，当前启用集合写
 2. Manager 将这些目录注册为该 Project 的 Repository，建立外置 sidecar、发现 RepositoryProfile
    并编译 Team + Project + Repository 规范。操作卡片
    显示“已接单/执行中/成功/失败”；完成后点击“打开需求工作区”。
-3. 在需求详情中和 Product Agent 讨论，可输入文字，也可直接在输入框粘贴最多 4 张 PNG、JPEG 或 WebP 截图；
-   截图会绑定当前 Requirement/checkpoint，只提供给 Product Agent。ProductSpec 准备好后先阅读
-   “阶段产物”，确认范围和验收标准，再点击“批准 ProductSpec 并开始交付”。
+   Product 对话开始前，可在需求详情中编辑名称/目录或删除需求：编辑会生成新的不可变需求版本并
+   保留旧记录，删除只从当前 Project 列表中移除，不擦除审计历史。Product 对话开始后不允许改写
+   已绑定的需求，需创建新 Requirement。
+3. 在需求详情中和 Product Agent 多轮讨论，可输入文字，也可直接在输入框粘贴最多 4 张 PNG、JPEG 或
+   WebP 截图。Product Agent 的追问和你的每次回复都会保存在同一条时间线中；截图会绑定当前
+   Requirement/checkpoint，只提供给 Product Agent。ProductSpec 准备好后先阅读“阶段产物”：内容仍需
+   调整就继续讨论，确认范围和验收标准后再点击“批准 ProductSpec 并开始交付”。
 4. Designer、Planner 和每个 Repository 的 `Coder → QA → Reviewer` 串行工作。团队成员页只把当前岗位
    标成执行中，其他岗位显示已完成或等待；需求页同时展示涉及的所有目录和后台操作。
 
@@ -471,6 +477,8 @@ Spec 位于对应 scope 的 `specs/documents/<spec_id>/`，当前启用集合写
 - 规范冲突、来源漂移、权限或业务歧义仍会停止并要求人工处理；网页不会偷偷放宽制度。
 - 如果 Host 在操作执行中退出，该 Web Operation 会标记为 `INTERRUPTED`。重新启动服务后打开需求，
   依据当前 Delivery 事实再次点击“继续交付”，不会盲目重放原模型调用。
+- 失败或中断的操作提示可以关闭；浏览器会记住关闭状态，同一需求的同类动作后续成功时也会自动
+  隐藏旧失败提示。关闭只影响界面，Operation 和失败证据仍保留用于审计。
 
 ### 5. 领取交付结果
 
@@ -695,6 +703,7 @@ MySQL 集成测试需设置 `ASE_TEST_MYSQL_DSN`，指向专用测试数据库�
 | M19 Spec Center 与持续学习 | 通用/背景知识与强制 Spec 分离；Team/Project Spec 支持不可变版本、显式启用、适用范围和验证方法，并进入 production baseline/context；QA/Review 失败可生成证据化 Learning proposal，经人工审批后沉淀为背景知识、Project Spec 或非执行性 Skill 设计建议 |
 | M20 需求输入与 Agent 模型策略 | 新建 Requirement 使用 macOS/Linux 原生目录选择器；Product 对话支持有界、不可变、可追溯的截图附件；七个长期 Agent 可分别配置主模型与备用顺序，运行事实保留实际选择 |
 | M21 知识导入与路由状态 | 知识库改为资产列表优先，通用知识、背景知识和开发规范通过作用域明确的弹窗批量导入；状态页分别展示七名 Agent 的精确模型策略与底层可用模型目录 |
+| M22 需求草稿维护 | Product 对话开始前可编辑 Requirement 名称与代码目录或逻辑删除；编辑发布替代需求、删除只改变当前可见性，旧 checkpoint 与 Operation 继续保留审计；失败提示可关闭但不擦除事实 |
 
 ## 文档导航
 

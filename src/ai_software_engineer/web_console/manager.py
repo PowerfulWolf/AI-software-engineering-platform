@@ -20,7 +20,9 @@ from ai_software_engineer.manager.delivery_checkpoint import (
 from ai_software_engineer.multi_directory.models import JointDeliveryResult
 from ai_software_engineer.multi_directory.service import (
     CreateRequirement,
+    DeleteRequirement,
     JointDeliveryService,
+    UpdateRequirement,
 )
 from ai_software_engineer.project_workspace import ProjectWorkspace
 from ai_software_engineer.recovery import RecoveryPlan, RecoveryRejected
@@ -36,8 +38,10 @@ from .models import (
     ContinueDeliveryIntent,
     CreateProjectIntent,
     CreateRequirementIntent,
+    DeleteRequirementIntent,
     ProductApprovalIntent,
     ProductReplyIntent,
+    UpdateRequirementIntent,
 )
 
 
@@ -77,6 +81,28 @@ class ManagerConsoleAdapter:
                     )
                 )
                 return _summarize(created, project_id=intent.project_id)
+            if isinstance(intent, UpdateRequirementIntent):
+                updated = self._host.requirement_entry(intent.project_id).update_requirement(
+                    UpdateRequirement(
+                        delivery_id=intent.delivery_id,
+                        expected_checkpoint_sha256=intent.expected_checkpoint_sha256,
+                        name=intent.name,
+                        repository_roots=intent.repository_roots,
+                    )
+                )
+                return _summarize(updated, project_id=intent.project_id)
+            if isinstance(intent, DeleteRequirementIntent):
+                self._host.requirement_entry(intent.project_id).delete_requirement(
+                    DeleteRequirement(
+                        delivery_id=intent.delivery_id,
+                        expected_checkpoint_sha256=intent.expected_checkpoint_sha256,
+                    )
+                )
+                return ConsoleCommandResult(
+                    project_id=intent.project_id,
+                    stage="REQUIREMENT_DELETED",
+                    next_action="Requirement removed from the current Project view.",
+                )
             if isinstance(intent, ProductReplyIntent):
                 replied = self._entry(intent.project_id, intent.delivery_id).reply(
                     ReplyToProduct(

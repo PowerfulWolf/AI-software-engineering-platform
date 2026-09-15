@@ -14,12 +14,13 @@ from ai_software_engineer.domain.enums import TeamRole
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
+    CheckpointDigest,
     DeliveryCheckpointStale,
     ReplyToProduct,
     ResumeProjectDelivery,
     StartProjectDelivery,
 )
-from ai_software_engineer.manager.delivery_checkpoint import DeliveryStage
+from ai_software_engineer.manager.delivery_checkpoint import DeliveryId, DeliveryStage
 from ai_software_engineer.manager.preparation import PrepareProjectStatus
 from ai_software_engineer.manager.production_agents import ProductDraft
 from ai_software_engineer.multi_directory.attachments import (
@@ -45,6 +46,7 @@ from ai_software_engineer.multi_directory.models import (
     PreparedUnit,
     digest,
 )
+from ai_software_engineer.multi_directory.retirement import RequirementRetirementStore
 from ai_software_engineer.multi_directory.scope import DirectoryScope, DirectoryUnit, discover_scope
 from ai_software_engineer.multi_directory.store import JointJournal
 from ai_software_engineer.project_workspace import ProjectWorkspace
@@ -77,6 +79,24 @@ class CreateRequirement(DomainModel):
     submitted_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class UpdateRequirement(DomainModel):
+    """Replace an unstarted Requirement while retaining its immutable history."""
+
+    delivery_id: DeliveryId
+    expected_checkpoint_sha256: CheckpointDigest
+    name: Annotated[str, Field(min_length=1, max_length=200)]
+    repository_roots: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1, max_length=32)]
+    submitted_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class DeleteRequirement(DomainModel):
+    """Retire an unstarted Requirement from the current Project view."""
+
+    delivery_id: DeliveryId
+    expected_checkpoint_sha256: CheckpointDigest
+    submitted_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class JointDeliveryService:
     def __init__(
         self,
@@ -91,6 +111,13 @@ class JointDeliveryService:
         if project.team.manifest != team.manifest:
             raise ValueError("Project is not served by this Team")
         self.journal = JointJournal(project.requirements_root)
+        self.retirements = RequirementRetirementStore(
+            project.requirements_root,
+            team_id=team.manifest.team_id,
+            team_manifest_sha256=team.manifest.manifest_sha256,
+            project_id=project.manifest.project_id,
+            project_manifest_sha256=project.manifest.manifest_sha256,
+        )
         self.attachments = RequirementAttachmentStore(
             project.requirements_root,
             project_id=project.manifest.project_id,
@@ -106,29 +133,64 @@ class JointDeliveryService:
             discover_scope(command.repository_roots), command.name, None, command.submitted_at
         )
 
+    def update_requirement(self, command: UpdateRequirement) -> JointDeliveryResult:
+        """Create the edited draft before retiring the exact displayed draft."""
+        scope = discover_scope(command.repository_roots)
+        replacement_id = self._delivery_id(scope, command.name, None)
+        with self.journal.lock(command.delivery_id):
+            checkpoint = self._current(command.delivery_id)
+            self._expected(checkpoint, command.expected_checkpoint_sha256)
+            self._require_editable(checkpoint)
+            if replacement_id == checkpoint.delivery_id:
+                raise ValueError("Requirement edit did not change its name or code directories")
+            replacement = self._intake(
+                scope,
+                command.name,
+                None,
+                command.submitted_at,
+                require_editable_result=True,
+            )
+            self.retirements.retire(
+                checkpoint,
+                reason="replaced",
+                replacement_delivery_id=replacement.checkpoint.delivery_id,
+                retired_at=command.submitted_at,
+            )
+            return replacement
+
+    def delete_requirement(self, command: DeleteRequirement) -> JointDeliveryResult:
+        """Retire the exact displayed draft without deleting its journal."""
+        with self.journal.lock(command.delivery_id):
+            checkpoint = self._current(command.delivery_id)
+            self._expected(checkpoint, command.expected_checkpoint_sha256)
+            self._require_editable(checkpoint)
+            self.retirements.retire(
+                checkpoint,
+                reason="deleted",
+                retired_at=command.submitted_at,
+            )
+            return JointDeliveryResult(checkpoint=checkpoint)
+
     def _intake(
-        self, scope: DirectoryScope, title: str, requirement: str | None, submitted_at: datetime
+        self,
+        scope: DirectoryScope,
+        title: str,
+        requirement: str | None,
+        submitted_at: datetime,
+        *,
+        require_editable_result: bool = False,
     ) -> JointDeliveryResult:
+        retired_delivery_ids = self.retirements.retired_delivery_ids(self.journal)
         for unit in scope.units:
             self.team.validate_code_root(unit.root)
             if self.journal.root.is_relative_to(Path(unit.root)):
                 raise ValueError("Team delivery workspace must be outside target repositories")
-        identity = hashlib.sha256(
-            (
-                self.team.manifest.team_id
-                + "\n"
-                + self.project.manifest.project_id
-                + "\n"
-                + digest(scope)
-                + "\n"
-                + (requirement or "")
-                + "\n"
-                + title
-            ).encode()
-        ).hexdigest()[:40]
-        delivery_id = f"delivery_multi_{identity}"
+        delivery_id = self._delivery_id(scope, title, requirement)
         with self.journal.lock(delivery_id):
             checkpoint = self.journal.current(delivery_id)
+            created_here = checkpoint is None
+            if checkpoint is not None and require_editable_result:
+                self._require_editable(checkpoint)
             if checkpoint is None:
                 checkpoint = self.journal.append(
                     JointCheckpoint.seal(
@@ -149,7 +211,30 @@ class JointDeliveryService:
                     ),
                     expected=None,
                 )
-            return JointDeliveryResult(checkpoint=self._advance(checkpoint))
+            try:
+                result = JointDeliveryResult(checkpoint=self._advance(checkpoint))
+                if require_editable_result:
+                    self._require_editable(result.checkpoint)
+            except Exception:
+                if require_editable_result and created_here:
+                    failed_replacement = self.journal.current(delivery_id)
+                    if failed_replacement is not None:
+                        self.retirements.retire(
+                            failed_replacement,
+                            reason="deleted",
+                            retired_at=submitted_at,
+                        )
+                raise
+            retirement = self.retirements.entry(delivery_id)
+            if (
+                delivery_id in retired_delivery_ids
+                and retirement is not None
+                and retirement.reason == "deleted"
+            ):
+                self.retirements.restore(delivery_id)
+            elif delivery_id in retired_delivery_ids:
+                raise ValueError("Requirement input was superseded by a newer draft")
+            return result
 
     def reply(self, command: ReplyToProduct) -> JointDeliveryResult:
         with self.journal.lock(command.delivery_id):
@@ -163,6 +248,11 @@ class JointDeliveryService:
                 raise ValueError("joint Product is not accepting replies")
             if len(checkpoint.dialogue) >= 40:
                 raise ValueError("Product dialogue turn budget exhausted")
+            # Preflight current project facts before committing the user's message.
+            # _advance() repeats this fence after the checkpoint write and before
+            # invoking Product, closing the validation-to-execution gap.
+            self._team_binding(checkpoint)
+            self.backend.reconcile(checkpoint)
             screenshots = tuple(
                 self.attachments.get(command.delivery_id, attachment_id)
                 for attachment_id in command.screenshot_ids
@@ -213,6 +303,7 @@ class JointDeliveryService:
         with self.journal.lock(command.delivery_id):
             checkpoint = self._current(command.delivery_id)
             if checkpoint.stage is JointStage.BLOCKED and checkpoint.integration is None:
+                self.backend.reconcile(checkpoint)
                 checkpoint = self._save(
                     checkpoint,
                     stage=JointStage.DELIVERING,
@@ -528,7 +619,43 @@ class JointDeliveryService:
         if result is None:
             raise ValueError("joint delivery not found")
         self._team_binding(result)
+        retired_delivery_ids = self.retirements.retired_delivery_ids(self.journal)
+        if delivery_id in retired_delivery_ids:
+            raise ValueError("Requirement is retired")
         return result
+
+    def _delivery_id(self, scope: DirectoryScope, title: str, requirement: str | None) -> str:
+        identity = hashlib.sha256(
+            (
+                self.team.manifest.team_id
+                + "\n"
+                + self.project.manifest.project_id
+                + "\n"
+                + digest(scope)
+                + "\n"
+                + (requirement or "")
+                + "\n"
+                + title
+            ).encode()
+        ).hexdigest()[:40]
+        return f"delivery_multi_{identity}"
+
+    @staticmethod
+    def _require_editable(checkpoint: JointCheckpoint) -> None:
+        if (
+            checkpoint.stage is not JointStage.READY_FOR_DISCUSSION
+            or checkpoint.requirement is not None
+            or checkpoint.dialogue
+            or checkpoint.product_spec is not None
+            or checkpoint.approval is not None
+            or checkpoint.design is not None
+            or checkpoint.plan is not None
+            or checkpoint.children
+            or checkpoint.integration is not None
+        ):
+            raise ValueError(
+                "Requirement can only be edited or deleted before Product discussion starts"
+            )
 
     def _team_binding(self, checkpoint: JointCheckpoint) -> None:
         self.project.validate_current()

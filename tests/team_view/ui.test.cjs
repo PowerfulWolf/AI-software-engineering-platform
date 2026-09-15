@@ -78,6 +78,43 @@ test("long selected directory paths cannot turn actions vertical", () => {
   );
 });
 
+test("Requirement detail uses one heading hierarchy and section rhythm", () => {
+  const styles = fs.readFileSync(
+    path.join(__dirname, "../../src/ai_software_engineer/team_view/style.css"),
+    "utf8",
+  );
+  assert.match(
+    styles,
+    /\.request-detail-panel\s*\{[^}]*--detail-section-space:\s*18px;[^}]*padding:\s*20px;/s,
+    "the Requirement detail panel must define one shared section spacing token",
+  );
+  assert.match(
+    styles,
+    /\.detail-section\s*\{[^}]*margin:\s*0;[^}]*padding:\s*var\(--detail-section-space\) 0;[^}]*border-top:\s*1px solid var\(--line\);/s,
+    "every Requirement module must use the shared divider rhythm",
+  );
+  assert.match(
+    styles,
+    /\.request-detail-panel > \.detail-section h2\s*\{[^}]*font-size:\s*1\.2rem;[^}]*line-height:\s*1\.4;/s,
+    "all Requirement module headings must have the same typography",
+  );
+  assert.match(
+    styles,
+    /\.discussion-form\s*\{[^}]*margin:\s*0;/s,
+    "the Product discussion form must not add spacing outside the section rhythm",
+  );
+  assert.match(
+    styles,
+    /\.discussion-form \.form-feedback:empty\s*\{[^}]*display:\s*none;/s,
+    "empty Product feedback must not leave a large gap above the submit button",
+  );
+  assert.match(
+    styles,
+    /\.stage-artifacts\s*\{[^}]*margin:\s*0;/s,
+    "the stage-artifact divider must use the same spacing rhythm as other sections",
+  );
+});
+
 test("team, multi-directory requests, detail, refresh preservation and stale errors", async () => {
   const nodes = new Map();
   const get = (id) => {
@@ -1148,7 +1185,6 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     .map((node) => node.textContent);
   assert.ok(coderReasoningChoices.includes("codex / gpt-5.6-terra · high"));
   assert.ok(coderReasoningChoices.includes("codex / gpt-5.6-terra · medium"));
-  vm.runInContext("settingsDraft.model_routes.pop(); render();", context);
   assert.doesNotMatch(text(get("content")), /密钥状态/);
   assert.match(text(get("content")), /Agent 模型分配/);
   assert.equal(
@@ -1165,6 +1201,15 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     .at(-1);
   enableResponseRoute.checked = true;
   enableResponseRoute.events.change();
+  const coderCardBeforeFallback = descend(get("content")).find(
+    (node) => node.dataset.role === "coder",
+  );
+  assert.match(text(coderCardBeforeFallback), /当前未配置备用模型/);
+  assert.doesNotMatch(
+    text(coderCardBeforeFallback),
+    /备用 1/,
+    "enabling a catalog route must not silently add it to an Agent fallback policy",
+  );
   const productModel = descend(get("content"))
     .find((node) => node.dataset.role === "product")
     .children.flatMap(descend)
@@ -1175,6 +1220,43 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
       node.textContent === "deepseek / deepseek-v4 · high",
   );
   await deepseekModelOption.events.click();
+  const addProductFallback = async (label) => {
+    const productCard = descend(get("content")).find(
+      (node) => node.dataset.role === "product",
+    );
+    const fallbackSelect = descend(productCard).find(
+      (node) => node.dataset.key === "agent-fallback-model-product",
+    );
+    const option = descend(fallbackSelect).find(
+      (node) => node.tag === "button" && node.textContent === label,
+    );
+    await option.events.click();
+  };
+  await addProductFallback("codex / gpt-5.6-terra · high");
+  await addProductFallback("codex / gpt-5.6-terra · medium");
+  const productCardWithFallbacks = descend(get("content")).find(
+    (node) => node.dataset.role === "product",
+  );
+  const secondFallback = descend(productCardWithFallbacks).find(
+    (node) => node.dataset.fallbackIndex === "2",
+  );
+  await descend(secondFallback).find(
+    (node) => node.tag === "button" && node.textContent === "上移",
+  ).events.click();
+  const productCardAfterMove = descend(get("content")).find(
+    (node) => node.dataset.role === "product",
+  );
+  const removableFallback = descend(productCardAfterMove).find(
+    (node) => node.dataset.fallbackIndex === "2",
+  );
+  await descend(removableFallback).find(
+    (node) => node.tag === "button" && node.textContent === "移除",
+  ).events.click();
+  const productCardAfterRemove = descend(get("content")).find(
+    (node) => node.dataset.role === "product",
+  );
+  assert.doesNotMatch(text(productCardAfterRemove), /备用 2/);
+  await addProductFallback("codex / gpt-5.6-terra · high");
   const modelRuntimeInputs = descend(get("content")).filter(
     (node) => node.tag === "input" && node.type === "password",
   );
@@ -1218,8 +1300,17 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     ]),
   );
   assert.equal(agentRoutes.product[0].model, "deepseek-v4");
+  assert.deepEqual(
+    agentRoutes.product.slice(1).map((route) => route.reasoning_effort),
+    ["medium", "high"],
+  );
   assert.equal(agentRoutes.coder[0].model, "gpt-5.6-terra");
   assert.equal(agentRoutes.coder[0].reasoning_effort, "high");
+  assert.equal(
+    agentRoutes.coder.length,
+    1,
+    "unselected catalog routes are not serialized as Coder fallbacks",
+  );
   await get("nav-status").events.click();
   assert.equal(get("scope-label").textContent, "平台级");
   assert.match(text(get("content")), /平台状态|配置与启动/);
@@ -1262,7 +1353,65 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   assert.match(text(qaStageRoster.children[2]), /执行中/);
   assert.match(text(get("content")), /测试 · 任务队列/);
   assert.match(text(get("content")), /进行中 1/);
+  fixture.requests.push({
+    ...structuredClone(fixture.requests[0]),
+    id: "r2",
+    title: "第二个需求",
+    checkpoint_sha256: "c".repeat(64),
+  });
+  await interval.fn();
   get("nav-requests").events.click();
+  const secondRequirementCard = descend(get("content")).find(
+    (node) =>
+      node.tag === "article" &&
+      node.className.includes("request") &&
+      text(node).includes("第二个需求"),
+  );
+  assert.equal(
+    typeof secondRequirementCard.events.click,
+    "function",
+    "the whole Requirement card must open its detail, not only its title",
+  );
+  await secondRequirementCard.events.click();
+  assert.match(text(get("detail")), /第二个需求/);
+  const selectedRequirementCards = descend(get("content")).filter(
+    (node) =>
+      node.tag === "article" &&
+      node.className.split(" ").includes("request-selected"),
+  );
+  assert.equal(
+    selectedRequirementCards.length,
+    1,
+    "exactly one Requirement card must show the selected state",
+  );
+  assert.match(
+    text(selectedRequirementCards[0]),
+    /第二个需求/,
+    "the selected card must follow the Requirement opened in detail",
+  );
+  await interval.fn();
+  assert.match(
+    text(get("detail")),
+    /第二个需求/,
+    "polling preserves the selected Requirement",
+  );
+  const firstRequirementCard = descend(get("content")).find(
+    (node) =>
+      node.tag === "article" &&
+      node.className.includes("request") &&
+      text(node).includes(malicious),
+  );
+  let keyboardDefaultPrevented = false;
+  await firstRequirementCard.events.keydown({
+    key: "Enter",
+    preventDefault() {
+      keyboardDefaultPrevented = true;
+    },
+  });
+  assert.equal(keyboardDefaultPrevented, true);
+  assert.ok(text(get("detail")).includes(malicious));
+  fixture.requests.pop();
+  await interval.fn();
   assert.equal(get("scope-label").textContent, "Project 级");
   assert.equal(get("scope-title").textContent, "Other project");
   assert.equal(
@@ -1366,6 +1515,12 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   storedOperations[2].updated_at = "2026-09-05T01:00:06Z";
   storedOperations[2].error_summary = "Provider unavailable";
   await interval.fn();
+  const closeFailure = descend(get("operations")).find(
+    (node) => node.tag === "button" && node.textContent === "关闭",
+  );
+  assert.ok(closeFailure, "a durable failed operation can be dismissed from the page");
+  await closeFailure.events.click();
+  assert.doesNotMatch(text(get("operations")), /Provider unavailable/);
   vm.runInContext('showDetail("request","r1")', context);
   assert.ok(
     descend(get("detail")).find(
@@ -1425,12 +1580,63 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   await interval.fn();
   assert.equal(get("connection").className, "");
 
-  fixture.requests[0].stage = "READY_FOR_DISCUSSION";
+  fixture.requests[0].stage = "WAITING_PRODUCT_REPLY";
+  fixture.requests[0].dialogue = [
+    {
+      sequence: 1,
+      speaker: "user",
+      text: "结算页需要支持新的折扣说明。",
+      attachments: [
+        {
+          id: "requirement_attachment_" + "e".repeat(40),
+          name: "checkout.png",
+          media_type: "image/png",
+          source_bytes: 2048,
+          sha256: "f".repeat(64),
+        },
+      ],
+    },
+    {
+      sequence: 2,
+      speaker: "product",
+      text: "折扣说明需要支持哪些端？\n是否需要兼容旧数据？",
+      attachments: [],
+    },
+  ];
   await interval.fn();
   vm.runInContext('showDetail("request","r1")', context);
+  const detailOverview = descend(get("detail")).find(
+    (node) => node.className === "request-detail-overview",
+  );
+  assert.ok(detailOverview, "Requirement identity is grouped into a stable overview");
+  assert.equal(
+    descend(detailOverview).find((node) => node.tag === "h2")?.textContent,
+    "需求详情",
+  );
+  const productDialogue = descend(get("detail")).find(
+    (node) => node.className === "detail-section product-dialogue",
+  );
+  assert.ok(productDialogue, "durable Product dialogue is rendered");
+  assert.match(text(productDialogue), /你.*结算页需要支持新的折扣说明/);
+  assert.match(text(productDialogue), /Product Agent.*折扣说明需要支持哪些端/);
+  assert.match(text(productDialogue), /截图 · checkout.png · 2 KB/);
   const discussionForm = descend(get("detail")).find(
     (node) => node.className === "discussion-form",
   );
+  assert.match(text(discussionForm), /回复 Product Agent/);
+  assert.equal(
+    descend(discussionForm).find((node) => node.tag === "h3")?.textContent,
+    "回复 Product Agent",
+    "the composer is subordinate to the shared Product discussion section",
+  );
+  const stageArtifacts = descend(get("detail")).find(
+    (node) => node.className === "detail-section stage-artifacts",
+  );
+  assert.ok(
+    stageArtifacts,
+    "stage artifacts must be a separated detail section after Requirement actions",
+  );
+  assert.match(text(stageArtifacts), /阶段产物/);
   assert.equal(
     descend(discussionForm).some(
       (node) => node.tag === "input" && node.type === "file",
@@ -1501,5 +1707,152 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     expected_checkpoint_sha256: "a".repeat(64),
     message: "",
     screenshot_ids: ["requirement_attachment_" + "e".repeat(40)],
+  });
+
+  storedOperations = [];
+  fixture.requests[0].stage = "PRODUCT_DISCOVERY";
+  fixture.requests[0].dialogue = [fixture.requests[0].dialogue[0]];
+  await interval.fn();
+  vm.runInContext('showDetail("request","r1")', context);
+  const processingDialogue = descend(get("detail")).find(
+    (node) => node.className === "detail-section product-dialogue",
+  );
+  assert.ok(processingDialogue, "Product processing keeps the discussion module visible");
+  const processingComposer = descend(processingDialogue).find(
+    (node) => node.className === "discussion-form",
+  );
+  assert.ok(
+    processingComposer,
+    "Product processing keeps the composer inside the same discussion module",
+  );
+  assert.equal(
+    descend(get("detail")).some(
+      (node) => node.className === "detail-section discussion-form",
+    ),
+    false,
+    "dialogue history and composer must not be split by another detail divider",
+  );
+  assert.ok(
+    descend(processingComposer).find(
+      (node) => node.tag === "button" && node.textContent === "继续需求讨论",
+    ),
+    "an interrupted Product run uses a discussion-specific recovery action",
+  );
+  assert.equal(
+    descend(get("detail")).some(
+      (node) => node.tag === "button" && node.textContent === "继续交付",
+    ),
+    false,
+    "Product discovery must not be presented as implementation delivery",
+  );
+
+  fixture.requests[0].stage = "READY_FOR_DISCUSSION";
+  storedOperations = [
+    {
+      operation_id: "operation_product_reply",
+      status: "RUNNING",
+      updated_at: "2026-09-05T01:00:07Z",
+      intent: {
+        action: "PRODUCT_REPLY",
+        project_id: "project_fixture",
+        delivery_id: "r1",
+        expected_checkpoint_sha256: "a".repeat(64),
+      },
+    },
+  ];
+  await interval.fn();
+  vm.runInContext('showDetail("request","r1")', context);
+  const runningComposer = descend(get("detail")).find(
+    (node) => node.className === "discussion-form",
+  );
+  assert.equal(
+    descend(runningComposer).find((node) => node.tag === "textarea").disabled,
+    true,
+    "the composer stays visible but disabled while Product is replying",
+  );
+  assert.equal(
+    descend(runningComposer).find(
+      (node) => node.tag === "button" && node.textContent === "Product Agent 正在回复",
+    ).disabled,
+    true,
+  );
+
+  storedOperations = [];
+  fixture.requests[0].stage = "WAITING_PRODUCT_APPROVAL";
+  fixture.requests[0].checkpoint_sha256 = "b".repeat(64);
+  await interval.fn();
+  vm.runInContext('showDetail("request","r1")', context);
+  assert.match(text(get("detail")), /批准 ProductSpec 并开始交付/);
+  assert.match(text(get("detail")), /继续讨论并修订/);
+
+  fixture.requests[0].stage = "READY_FOR_DISCUSSION";
+  fixture.requests[0].dialogue = [];
+  fixture.requests[0].checkpoint_sha256 = "a".repeat(64);
+  storedOperations = [];
+  await interval.fn();
+  vm.runInContext('showDetail("request","r1")', context);
+  const editRequirement = descend(get("detail")).find(
+    (node) => node.tag === "button" && node.textContent === "编辑需求",
+  );
+  const deleteRequirement = descend(get("detail")).find(
+    (node) => node.tag === "button" && node.textContent === "删除需求",
+  );
+  assert.ok(editRequirement && deleteRequirement);
+  await editRequirement.events.click();
+  const editForm = descend(get("composer")).find(
+    (node) => node.className === "project-form",
+  );
+  const editName = descend(editForm).find((node) => node.tag === "input");
+  assert.equal(editName.value, malicious);
+  assert.match(text(editForm), /\/backend\/module-a/);
+  assert.match(text(editForm), /\/frontend/);
+  editName.value = "更新后的需求";
+  await editForm.events.submit({ preventDefault() {} });
+  assert.deepEqual(submittedIntents.at(-1), {
+    action: "UPDATE_REQUIREMENT",
+    project_id: "project_fixture",
+    delivery_id: "r1",
+    expected_checkpoint_sha256: "a".repeat(64),
+    name: "更新后的需求",
+    repository_roots: ["/backend/module-a", "/frontend"],
+  });
+
+  const replacement = {
+    ...structuredClone(fixture.requests[0]),
+    id: "r-edited",
+    title: "更新后的需求",
+    checkpoint_sha256: "d".repeat(64),
+  };
+  fixture.requests = [replacement];
+  storedOperations[0].status = "SUCCEEDED";
+  storedOperations[0].updated_at = "2026-09-05T01:00:08Z";
+  storedOperations[0].result = {
+    project_id: "project_fixture",
+    delivery_id: "r-edited",
+    checkpoint_sha256: "d".repeat(64),
+    stage: "READY_FOR_DISCUSSION",
+    next_action: "Discuss the requirement.",
+  };
+  await interval.fn();
+  assert.match(
+    text(get("detail")),
+    /更新后的需求/,
+    "successful editing follows the replacement Requirement",
+  );
+
+  const deleteEdited = descend(get("detail")).find(
+    (node) => node.tag === "button" && node.textContent === "删除需求",
+  );
+  await deleteEdited.events.click();
+  assert.match(text(get("composer")), /历史记录会保留/);
+  const confirmDelete = descend(get("composer")).find(
+    (node) => node.tag === "button" && node.textContent === "确认删除",
+  );
+  await confirmDelete.events.click();
+  assert.deepEqual(submittedIntents.at(-1), {
+    action: "DELETE_REQUIREMENT",
+    project_id: "project_fixture",
+    delivery_id: "r-edited",
+    expected_checkpoint_sha256: "d".repeat(64),
   });
 });

@@ -534,6 +534,11 @@ h3 {
 .operation-status p {
   margin-bottom: 0;
 }
+.operation-status-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .workspace {
   min-width: 0;
 }
@@ -565,6 +570,7 @@ main[data-page="requests"] #detail {
   padding: 16px;
 }
 .request-detail-panel {
+  --detail-section-space: 18px;
   padding: 20px;
 }
 .request-filter {
@@ -584,16 +590,21 @@ main[data-page="requests"] #detail {
   padding: 13px 14px;
   border-color: transparent;
   background: #f8f9fb;
+  cursor: pointer;
 }
 .request-list .request:hover,
 .request-list .request-selected {
   border-color: #9cb8f6;
   background: #eef3ff;
 }
+.request-list .request:focus-visible {
+  outline: 3px solid rgba(45, 95, 210, 0.28);
+  outline-offset: 2px;
+}
 .request-list .request .row {
   align-items: flex-start;
 }
-.request-list .request .link {
+.request-list .request-title {
   color: var(--ink);
   font-size: 0.96rem;
 }
@@ -618,11 +629,48 @@ main[data-page="requests"] #detail {
   margin: 0;
 }
 .detail-section {
-  padding: 18px 0;
+  margin: 0;
+  padding: var(--detail-section-space) 0;
   border-top: 1px solid var(--line);
 }
-.detail-section:first-of-type {
-  margin-top: 18px;
+.request-detail-overview {
+  padding-bottom: var(--detail-section-space);
+}
+.request-detail-overview > .row {
+  align-items: flex-start;
+}
+.detail-heading-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.detail-panel-heading {
+  margin: 0;
+  line-height: 1.4;
+}
+.request-detail-title {
+  margin: 10px 0 2px;
+  font-size: 1.05rem;
+  line-height: 1.45;
+}
+.request-detail-id {
+  margin: 0 0 8px;
+  font-size: 0.75rem;
+}
+.request-detail-next {
+  margin: 10px 0 0;
+}
+.request-detail-panel > .detail-section h2 {
+  margin: 0 0 12px;
+  font-size: 1.2rem;
+  line-height: 1.4;
+}
+.request-detail-panel .operation-running,
+.request-detail-panel .approval-box,
+.request-detail-panel .delivery-result {
+  margin: 0;
 }
 .request-scope-card {
   display: flex;
@@ -668,6 +716,69 @@ main[data-page="requests"] #detail {
   display: grid;
   gap: 16px;
   margin-top: 18px;
+}
+.discussion-form {
+  gap: 12px;
+  margin: 0;
+}
+.discussion-form .form-feedback:empty {
+  display: none;
+}
+.discussion-field h3 {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.45;
+}
+.stage-artifacts {
+  margin: 0;
+}
+.product-dialogue {
+  display: grid;
+  gap: 12px;
+}
+.product-dialogue .row h2 {
+  margin: 0;
+}
+.dialogue-timeline {
+  display: grid;
+  gap: 12px;
+}
+.dialogue-message {
+  width: min(84%, 720px);
+  display: grid;
+  gap: 7px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+}
+.dialogue-user {
+  justify-self: end;
+  border-color: #abc0f5;
+  background: #f3f6ff;
+}
+.dialogue-product {
+  justify-self: start;
+  border-color: #b9d9ce;
+  background: #f4fbf8;
+}
+.dialogue-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.dialogue-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.dialogue-attachment {
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.8);
+  font-size: 0.86rem;
+  overflow-wrap: anywhere;
 }
 .directory-selection,
 .directory-chip-list {
@@ -1249,7 +1360,7 @@ main[data-page="requests"] .page-context {
   grid-template-columns: repeat(7, minmax(58px, 1fr));
   gap: 8px;
   padding: 0;
-  margin: 14px 0 22px;
+  margin: 14px 0 0;
   list-style: none;
 }
 .delivery-flow li {
@@ -1327,6 +1438,44 @@ main[data-page="requests"] .page-context {
 .agent-model-card p,
 .agent-model-card small {
   margin: 0;
+}
+.agent-fallback-settings {
+  display: grid;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+.agent-fallback-title {
+  font-size: 0.9rem;
+}
+.agent-fallback-empty {
+  font-size: 0.82rem;
+}
+.agent-fallback-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line);
+}
+.agent-fallback-identity {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  overflow-wrap: anywhere;
+  font-size: 0.85rem;
+}
+.agent-fallback-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+}
+.agent-fallback-actions button {
+  padding: 0.24rem 0.48rem;
+  white-space: nowrap;
+  font-size: 0.78rem;
 }
 .full-row {
   grid-column: 1 / -1;

@@ -34,7 +34,13 @@ from ai_software_engineer.manager.delivery_checkpoint import (
 from ai_software_engineer.manager.dispatch import VerificationReservation
 from ai_software_engineer.manager.mysql_dispatch_authority import _decode_commit
 from ai_software_engineer.manager.production_host import TeamHost
-from ai_software_engineer.multi_directory.models import JointCheckpoint, JointStage
+from ai_software_engineer.multi_directory.attachments import RequirementScreenshot
+from ai_software_engineer.multi_directory.models import (
+    DialogueMessage,
+    JointCheckpoint,
+    JointStage,
+)
+from ai_software_engineer.multi_directory.retirement import RequirementRetirementStore
 from ai_software_engineer.multi_directory.scope import DirectoryScope, DirectoryUnit
 from ai_software_engineer.multi_directory.service import CreateRequirement
 from ai_software_engineer.multi_directory.store import JointJournal
@@ -482,6 +488,139 @@ def test_selected_modules_waiting_and_symlink_rejection(tmp_path: Path) -> None:
     link.symlink_to(tmp_path, target_is_directory=True)
     with pytest.raises(TeamReadError):
         reader.snapshot()
+
+
+def test_retired_requirement_is_hidden_and_excluded_from_project_count(tmp_path: Path) -> None:
+    config = ProductionConfig(
+        platform_root=str(tmp_path / "platform"),
+        model_routes=(
+            ProviderRouteConfig(
+                provider="codex", model="gpt-5.5", kind=ModelProviderKind.CODEX_CLI
+            ),
+        ),
+    )
+    team = TeamWorkspace.initialize(
+        config.platform_root, team_id=config.team_id, name=config.team_name
+    )
+    project = team.project_registry().register(project_id="project_test", name="Test Project")
+    checkpoint = JointCheckpoint.seal(
+        {
+            "delivery_id": "delivery_multi_" + "a" * 40,
+            "team_id": team.manifest.team_id,
+            "team_manifest_sha256": team.manifest.manifest_sha256,
+            "project_id": project.manifest.project_id,
+            "project_manifest_sha256": project.manifest.manifest_sha256,
+            "sequence": 1,
+            "stage": JointStage.READY_FOR_DISCUSSION,
+            "scope": DirectoryScope(
+                units=(
+                    DirectoryUnit(
+                        id="unit_" + "a" * 16,
+                        root=str(tmp_path / "code"),
+                        selected_paths=(".",),
+                        base_revision="b" * 40,
+                    ),
+                )
+            ),
+            "title": "Retired draft",
+            "submitted_at": datetime.now(UTC),
+            "next_action": "Discuss the Requirement.",
+        }
+    )
+    journal = JointJournal(project.requirements_root)
+    journal.append(checkpoint, expected=None)
+    RequirementRetirementStore(
+        project.requirements_root,
+        team_id=team.manifest.team_id,
+        team_manifest_sha256=team.manifest.manifest_sha256,
+        project_id=project.manifest.project_id,
+        project_manifest_sha256=project.manifest.manifest_sha256,
+    ).retire(checkpoint, reason="deleted", retired_at=datetime.now(UTC))
+
+    snapshot = ProductionTeamReader(config, {}).snapshot()
+
+    assert snapshot.requests == ()
+    selected = next(item for item in snapshot.projects if item.id == project.manifest.project_id)
+    assert selected.requirement_count == 0
+
+
+def test_product_dialogue_is_projected_in_order_with_safe_attachment_metadata(
+    tmp_path: Path,
+) -> None:
+    config = ProductionConfig(
+        platform_root=str(tmp_path / "platform"),
+        model_routes=(
+            ProviderRouteConfig(
+                provider="codex", model="gpt-5.5", kind=ModelProviderKind.CODEX_CLI
+            ),
+        ),
+    )
+    team = TeamWorkspace.initialize(
+        config.platform_root, team_id=config.team_id, name=config.team_name
+    )
+    project = team.project_registry().register(project_id="project_test", name="Test Project")
+    delivery_id = "delivery_multi_" + "d" * 32
+    provisional = RequirementScreenshot(
+        id="requirement_attachment_" + "e" * 40,
+        project_id=project.manifest.project_id,
+        delivery_id=delivery_id,
+        source_name="checkout.png",
+        media_type="image/png",
+        source_bytes=2048,
+        source_sha256="f" * 64,
+        source_relative_path=("attachments/requirement_attachment_" + "e" * 40 + "/source.png"),
+        uploaded_at=datetime.now(UTC),
+        manifest_sha256="0" * 64,
+    )
+    screenshot = provisional.model_copy(update={"manifest_sha256": provisional.recompute_digest()})
+    checkpoint = JointCheckpoint.seal(
+        {
+            "delivery_id": delivery_id,
+            "team_id": team.manifest.team_id,
+            "team_manifest_sha256": team.manifest.manifest_sha256,
+            "project_id": project.manifest.project_id,
+            "project_manifest_sha256": project.manifest.manifest_sha256,
+            "sequence": 1,
+            "stage": JointStage.WAITING_PRODUCT_REPLY,
+            "scope": DirectoryScope(
+                units=(
+                    DirectoryUnit(
+                        id="unit_" + "d" * 16,
+                        root=str(tmp_path / "code"),
+                        selected_paths=(".",),
+                        base_revision=None,
+                    ),
+                )
+            ),
+            "title": "Checkout flow",
+            "requirement": "Improve checkout",
+            "dialogue": (
+                DialogueMessage(
+                    speaker="user",
+                    text="Support password=private-secret",
+                    screenshots=(screenshot,),
+                ),
+                DialogueMessage(
+                    speaker="product",
+                    text="Which environments must be supported?",
+                ),
+            ),
+            "submitted_at": datetime.now(UTC),
+            "next_action": "Reply to the Product Agent questions.",
+        }
+    )
+    JointJournal(project.requirements_root).append(checkpoint, expected=None)
+
+    request = ProductionTeamReader(config, {}).snapshot().requests[0]
+
+    assert tuple((turn.sequence, turn.speaker) for turn in request.dialogue) == (
+        (1, "user"),
+        (2, "product"),
+    )
+    assert "private-secret" not in request.dialogue[0].text
+    assert request.dialogue[0].attachments[0].name == "checkout.png"
+    assert request.dialogue[0].attachments[0].sha256 == "f" * 64
+    assert request.dialogue[1].text == "Which environments must be supported?"
 
 
 @pytest.mark.mysql

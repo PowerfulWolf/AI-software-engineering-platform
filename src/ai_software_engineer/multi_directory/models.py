@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from enum import StrEnum
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import AwareDatetime, Field, model_validator
 
@@ -59,7 +59,7 @@ class PreparedUnit(DomainModel):
 
 
 class DialogueMessage(DomainModel):
-    speaker: str
+    speaker: Literal["user", "product"]
     text: Annotated[str, Field(max_length=20_000)] = ""
     screenshots: tuple[RequirementScreenshot, ...] = ()
 

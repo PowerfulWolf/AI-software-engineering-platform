@@ -137,7 +137,10 @@ class ProductionJointBackend:
                 git_read(Path(unit.root), "rev-parse", "--verify", "HEAD^{commit}")
                 != unit.base_revision
             ):
-                raise ValueError("source revision drift: use a new requirement project")
+                raise ValueError(
+                    "source revision changed after Requirement preparation; "
+                    "create a new Requirement"
+                )
             if unit.base_revision and git_read(Path(unit.root), "status", "--porcelain"):
                 raise ValueError("source checkout is dirty; preserve changes before continuing")
         for prepared in checkpoint.preparations:

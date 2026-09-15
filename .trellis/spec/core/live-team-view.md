@@ -63,6 +63,9 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
   model calls; asserting only an empty-compatible list misses broken read/write wiring.
 - HTTP only 127.0.0.1, exact Host and optional same-origin Origin, no CORS/downloads/write APIs or models.
 - Redact displayed text. Render with textContent; URI/digests are text, not arbitrary navigation URLs.
+- Requirement read model 必须从 exact current `JointCheckpoint.dialogue` 投影有序
+  `DialogueTurnView`；只暴露已清洗的双方文本和截图 ID/名称/类型/大小/hash，不暴露 sidecar
+  相对路径、绝对路径或图片字节。空对话保持空数组，不能用 `next_action` 猜测 Product Agent 消息。
 - Failed polls preserve explicitly stale data; unchanged polls preserve DOM, changed ones preserve open
   reports/history. UI never infers percentage, success or process liveness.
 
@@ -88,7 +91,8 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
 | Enabled member without selected-Project assignment | `空闲中`; no online claim |
 | Active, blocked and done Tasks | exactly one matching task section each |
 | Non-GET / unknown path or query | 405 / 404 |
-| Malicious HTML / secret in title | redacted text, no executable markup |
+| Malicious HTML / secret in title or Product dialogue | redacted text, no executable markup |
+| Product clarification with screenshot | preserve user/Product order and safe attachment metadata |
 | Failed poll then recovery | stale banner then clear banner after valid read |
 
 ## Good / Base / Bad
@@ -231,3 +235,49 @@ native_by_task[native.checkpoint.task_id] = native
 # the selected historical Task through the same SQL/dispatch/artifact path as the current Task.
 native_by_task.update(_native_task_sources(native))
 ```
+
+## Scenario: retired Requirement visibility
+
+### 1. Scope / Trigger
+
+Applies when Project Requirement inventory/counts consume `requirements/retirement.json`.
+
+### 2. Signatures
+
+```python
+_retired_requirement_ids(ProjectWorkspace, JointJournal) -> frozenset[str]
+RequirementRetirementStore(..., read_only=True).retired_delivery_ids(journal)
+```
+
+### 3. Contracts
+
+- Snapshot reads and Project summaries exclude retired `delivery_multi_*` identities from current
+  Requirement lists and counts, while leaving immutable journal files untouched.
+- The reader validates the retirement digest, Team/Project lineage, exact retired checkpoint and any
+  replacement journal before filtering. A malformed exclusion list is corruption, not permission to
+  hide arbitrary work.
+- The read path remains read-only and must not create, repair or restore a retirement record.
+
+### 4. Validation & Error Matrix
+
+| Record | Projection |
+|---|---|
+| absent or valid empty record | existing Requirements unchanged |
+| valid deleted/replaced entry | exclude exact original from list and count |
+| valid replacement | replacement remains visible; original excluded |
+| digest/owner/checkpoint/replacement drift | snapshot fails closed |
+
+### 5. Good / Base / Bad Cases
+
+Good: an edited draft appears once under its new identity. Base: a deleted draft disappears while its
+journal remains inspectable. Bad: subtract a raw JSON ID without verifying its journal binding.
+
+### 6. Tests Required
+
+`tests/team_view/test_live.py` must assert a retired Requirement is absent and the owning Project count
+is reduced, using a real read-only journal and retirement record.
+
+### 7. Wrong vs Correct
+
+Wrong: delete Requirement directories to make the dashboard count smaller. Correct: validate the
+Project-owned retirement index, then filter only the exact bound identities in the read projection.

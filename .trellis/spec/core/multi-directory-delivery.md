@@ -42,6 +42,13 @@ ase request resume DELIVERY_ID
   source digest 和 owner lineage，再将真实路径作为 provider image input；Designer/Planner 不接收图片。
 - 单次回复最多 4 张、单张最多 10 MB、整个 Product 对话最多 12 张；支持 PNG/JPEG/WebP。
   相同来源重传幂等返回原 identity，时间戳不参与来源冲突判断。
+- `reply` 在追加用户 Dialogue 前必须先执行 Team binding 与 backend reconcile preflight；若任一
+  Repository HEAD、dirty 状态、已准备事实或知识选择发生漂移，不得追加 checkpoint、Dialogue，
+  也不得调用 Product Agent。成功写入 `PRODUCT_DISCOVERY` 后，`_advance` 在调用模型前再次
+  reconcile，作为 validation-to-execution fence，不能用前置 preflight 替换该栅栏。
+- `resume` 将 `BLOCKED` 重新排入 `DELIVERING` 前也必须 reconcile；漂移时保留原 BLOCKED
+  checkpoint，不能先持久化伪恢复状态。`start/create` 的首次 PREPARING intake 是用于崩溃恢复的
+  明确 commit point，不受该规则影响。
 - 主状态链：PREPARING → READY_FOR_DISCUSSION → PRODUCT_DISCOVERY → WAITING_PRODUCT_APPROVAL
   → DESIGNING → PLANNING → DELIVERING → INTEGRATING → DONE；另有 WAITING_PRODUCT_REPLY、
   WAITING_HUMAN 和 BLOCKED。Task 的原生状态机不变。
@@ -63,6 +70,9 @@ ase request resume DELIVERY_ID
 - 输入必须是存在的绝对目录；规范化别名、重复和父子选择，同一仓库合并 scope。
 - 所有目录先发现/编译规范；任何规范冲突阻止 Product，交由人类处理。
 - Product ID/digest 精确批准；旧 checkpoint 的 reply/approve 不得改变新事实。
+- Requirement 准备后的 Repository HEAD 发生变化时，reply 必须返回
+  `source revision changed after Requirement preparation; create a new Requirement`；journal current
+  checkpoint、Dialogue 与模型调用次数保持不变，禁止静默 rebase 或把失败回复持久化为新序列。
 - 空文字只有在提供有效截图时允许；附件必须属于 exact Project/Delivery，stale checkpoint、已进入
   Design/Delivery 的需求、缺失/篡改/foreign attachment 均失败关闭且不调用 Product。
 - Design 必须划分全部 unit 为 write 或 reference-only；覆盖全部产品 requirement IDs；
@@ -86,13 +96,19 @@ ase request resume DELIVERY_ID
 
 - Good：后端与非相邻前端，一次批准、独立候选、读完整候选集的联合测试通过后 DONE。
 - Base：一个目录使用同一 request 入口；纯文字 Product 对话保持兼容；参考目录不创建无意义 Coder Task。
-- Bad：分别发起产品会话、把截图转成未校验路径塞进 prompt，或用两个单仓 PASS 冒充接口兼容验证。
+- Bad：分别发起产品会话、把截图转成未校验路径塞进 prompt、先保存用户回复再检查代码基线，
+  或用两个单仓 PASS 冒充接口兼容验证。
 
 ## 6. Tests Required
 
 多目录/同仓库多模块/非相邻目录、重复和 symlink、越界写路径、reference-only、stale approval、
 重新启动恢复、候选集漂移、部分成功、失败集成验收、单目录入口回归；生产桥接另用离线
 structured provider + 真实 Git worktree + MySQL 验证，不消耗真实模型额度。
+
+`test_product_reply_rejects_source_drift_before_persisting_dialogue` 与
+`test_resume_rejects_source_drift_before_unblocking_requirement` 必须使用真实 JointJournal 断言：
+reconcile 拒绝时 current checkpoint 仍是输入 seed；reply 的 Dialogue 未增加且 Product client
+未被选择，resume 仍保持 BLOCKED。
 
 对应 `test_directory_scope.py`、`test_joint_contracts.py`、`test_team_workspace.py`、
 `test_team_host.py`、`test_requirement_attachments.py` 与 `tests/e2e/test_joint_delivery.py`。五份 joint/request canonical Schema
@@ -108,6 +124,11 @@ Correct：联合 Product + 人工批准 → 联合 Design/Plan → 确定性原�
 Wrong：`client.complete(input_payload={"screenshot_path": browser_text})`。
 
 Correct：`attachment_store.get(...) → digest/owner validation → client.complete(input_images=...)`。
+
+Wrong：`save(user_dialogue) → reconcile() → Product`，漂移时留下伪成功的用户消息 checkpoint。
+
+Correct：`validate command → reconcile preflight → save(user_dialogue) → reconcile fence → Product`；
+任一 reconcile 失败都不能调用模型，前置失败还必须保持 journal 完全不变。
 
 ## 8. Planner coverage rejection feedback (T038)
 
@@ -256,3 +277,99 @@ existing scope/contract tests preserve module containment and schema parity.
 Root cause (B/D): semantic path rejection lacked a safe service feedback contract. Consumer-only
 repair did not cover this independent validator. Prevention is typed diagnostics plus service/journal
 tests, not relaxing the validator. Other semantic failures remain fail-closed pending explicit contracts.
+
+## 12. READY Requirement replacement and logical retirement
+
+### 1. Scope / Trigger
+
+Applies when a browser user corrects the title or Repository scope of an unstarted Requirement, or
+removes it from the current Project inventory. Joint intake identity includes title and scope, and
+checkpoint intake fields are immutable, so an edit must publish a replacement rather than rewrite a
+journal. Delete is visibility retirement, never evidence erasure.
+
+### 2. Signatures
+
+```python
+class UpdateRequirement(DomainModel):
+    delivery_id: DeliveryId
+    expected_checkpoint_sha256: CheckpointDigest
+    name: str
+    repository_roots: tuple[NonEmptyStr, ...]
+    submitted_at: AwareDatetime
+
+class DeleteRequirement(DomainModel):
+    delivery_id: DeliveryId
+    expected_checkpoint_sha256: CheckpointDigest
+    submitted_at: AwareDatetime
+
+JointDeliveryService.update_requirement(UpdateRequirement) -> JointDeliveryResult
+JointDeliveryService.delete_requirement(DeleteRequirement) -> JointDeliveryResult
+RequirementRetirementStore.retired_delivery_ids(JointJournal) -> frozenset[str]
+```
+
+The public storage contract is `schemas/requirement-retirement.schema.json` at
+`<project>/requirements/retirement.json`.
+
+### 3. Contracts
+
+- Mutation accepts only exact `READY_FOR_DISCUSSION` checkpoints produced by named Requirement
+  creation, with no initial requirement text, dialogue, ProductSpec, approval, Design, Plan, child or
+  integration facts. Once Product discussion starts, correction requires a new Requirement.
+- Update discovers and validates the new 1–32 directory scope, derives its normal content-addressed
+  Delivery ID, creates/reopens that replacement through `_intake`, then retires the original. A
+  replacement failure leaves the original visible. If this update created a partial replacement
+  journal before preparation failed, the service logically retires that partial identity so it does
+  not appear as a second current Requirement; its failure evidence is still preserved.
+- Delete records `reason=deleted` and returns the original checkpoint; it never removes checkpoints,
+  attachments, Repository sidecars or Git state.
+- The retirement record binds exact Team/Project manifest digests. Every entry binds the retired
+  Delivery and its current checkpoint digest; a replacement entry additionally binds an existing
+  replacement journal owned by the same Team/Project. The record is sorted, unique, digest-sealed,
+  atomically replaced under a process lock and fsynced.
+- Retrying the same logical retirement is idempotent even if `retired_at` differs. A changed reason,
+  checkpoint or replacement identity is a conflict.
+- Recreating the exact input of an explicitly deleted draft restores it. A draft superseded by edit
+  cannot be silently reopened under the old identity.
+
+### 4. Validation & Error Matrix
+
+| Case | Required result |
+|---|---|
+| READY draft + exact digest + changed title/scope | create/reopen replacement, then retire original |
+| READY draft + identical title/scope | reject; no journal or retirement mutation |
+| Edit identity collides with a Requirement that already started Product discussion | reject while holding replacement lock; original remains visible |
+| stale digest | `DeliveryCheckpointStale`; no replacement/retirement |
+| Product discussion or later facts exist | reject; immutable approved lineage remains visible |
+| exact repeated delete/replace | return current retirement record; do not duplicate entry |
+| different retirement for the same Delivery | reject conflict |
+| retirement digest/owner/checkpoint drift | fail the read and command closed |
+| replacement journal missing or foreign | fail closed; do not hide corruption |
+| newly-created replacement preparation blocks/fails | original remains visible; partial replacement is retired, not erased |
+| recreate exact deleted input | restore exact draft after normal intake validation |
+| recreate superseded input | reject as superseded |
+
+### 5. Good / Base / Bad Cases
+
+- Good: rename an untouched draft; the replacement opens automatically while the original immutable
+  checkpoint remains auditable.
+- Base: delete an untouched draft and remove it from current Project inventory/counts.
+- Bad: mutate `JointCheckpoint.title`, delete its directory, or hide a replacement record without
+  proving the referenced replacement journal exists.
+
+### 6. Tests Required
+
+`tests/manager/test_requirement_retirement.py` covers replacement, logical delete, stale and stage
+guards, idempotent retries, replacement existence and tamper failure. Manager/schema tests assert
+typed intent delegation and Python-to-JSON-Schema parity. Reader tests assert retired Requirements
+leave both the selected list and Project count without deleting the source journal.
+
+### 7. Wrong vs Correct
+
+```python
+# Wrong: change identity-bearing intake fields inside an existing hash chain.
+checkpoint = checkpoint.model_copy(update={"title": new_name})
+
+# Correct: publish the ordinary content-addressed replacement, then retire the old identity.
+replacement = service.create(CreateRequirement(name=new_name, repository_roots=roots))
+retirements.retire(old, reason="replaced", replacement_delivery_id=replacement.checkpoint.delivery_id)
+```

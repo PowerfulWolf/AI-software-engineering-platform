@@ -11,6 +11,7 @@ from ai_software_engineer.execution import CommandResult
 from ai_software_engineer.manager.production_agents import ProductDraft
 from ai_software_engineer.multi_directory.integration_commands import is_test_command
 from ai_software_engineer.multi_directory.models import (
+    DialogueMessage,
     JointApproval,
     JointCheckpoint,
     JointExecutionPlan,
@@ -23,6 +24,7 @@ from ai_software_engineer.multi_directory.production import (
     DerivedStageInputs,
     _require_nonempty_test_run,
 )
+from ai_software_engineer.multi_directory.retirement import RequirementRetirement
 from ai_software_engineer.multi_directory.scope import DirectoryScope, DirectoryUnit
 from ai_software_engineer.multi_directory.service import CreateRequirement
 from tests.e2e.test_joint_delivery import JointModels
@@ -194,6 +196,7 @@ def test_reference_only_unit_needs_no_native_delivery(tmp_path: Path) -> None:
 def test_joint_schemas_are_in_sync_with_models() -> None:
     models: dict[str, type[DomainModel]] = {
         "requirement-create": CreateRequirement,
+        "requirement-retirement": RequirementRetirement,
         "requirement-checkpoint": JointCheckpoint,
         "joint-product-spec": JointProductSpec,
         "joint-technical-design": JointTechnicalDesign,
@@ -206,3 +209,8 @@ def test_joint_schemas_are_in_sync_with_models() -> None:
         schema.pop("$id")
         schema.pop("$schema")
         assert schema == model.model_json_schema()
+
+
+def test_product_dialogue_rejects_unknown_speaker() -> None:
+    with pytest.raises(ValueError):
+        DialogueMessage.model_validate({"speaker": "reviewer", "text": "Untrusted role"})

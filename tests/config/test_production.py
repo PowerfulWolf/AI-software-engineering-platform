@@ -210,6 +210,8 @@ def test_each_agent_can_select_a_distinct_reasoning_effort_for_the_same_model(
 
     assert config.routes_for(TeamRole.CODER)[0].reasoning_effort == "high"
     assert config.routes_for(TeamRole.QA)[0].reasoning_effort == "medium"
+    assert len(config.routes_for(TeamRole.CODER)) == 1
+    assert len(config.routes_for(TeamRole.QA)) == 1
 
 
 def test_legacy_agent_route_without_reasoning_requires_an_unambiguous_model(

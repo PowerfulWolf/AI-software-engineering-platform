@@ -41,6 +41,9 @@ requirements with Product Agent, and assigning suitable model routes to each lon
 - `model_routes` remains the provider/model/credential catalog.
 - A new role-policy configuration assigns an ordered subset of enabled catalog routes to Manager,
   Product, Designer, Planner, Coder, QA and Reviewer.
+- Enabling a catalog route never opts it into an Agent fallback policy. Each Agent chooses one
+  primary and zero or more explicit fallbacks from the catalog; fallbacks can be added, removed and
+  reordered independently.
 - Product/Designer/Planner construct their structured fallback clients from their own role policy.
   Coder/QA/Reviewer dispatch and provider fallback use the same role policy and keep the chosen
   provider/model in durable run facts.
@@ -86,6 +89,7 @@ requirements with Product Agent, and assigning suitable model routes to each lon
 - [x] Screenshot bytes are bounded, typed, persisted and digest-bound before Product Agent use.
 - [x] Product Agent context contains only the exact approved discussion attachments.
 - [x] Each long-lived Agent can select its own primary model and ordered fallbacks.
+- [x] Unselected catalog routes never become implicit fallbacks; fallback priority is editable.
 - [x] Invalid/disabled Agent routes fail before a model run starts.
 - [x] Status shows each Agent's exact primary/fallback route and reasoning effort.
 - [x] Team/Project knowledge and Spec imports use focused modal flows.

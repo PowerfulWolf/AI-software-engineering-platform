@@ -34,6 +34,8 @@ IdempotencyKey = Annotated[
 class ConsoleAction(StrEnum):
     CREATE_PROJECT = "CREATE_PROJECT"
     CREATE_REQUIREMENT = "CREATE_REQUIREMENT"
+    UPDATE_REQUIREMENT = "UPDATE_REQUIREMENT"
+    DELETE_REQUIREMENT = "DELETE_REQUIREMENT"
     PRODUCT_REPLY = "PRODUCT_REPLY"
     PRODUCT_APPROVAL = "PRODUCT_APPROVAL"
     CONTINUE_DELIVERY = "CONTINUE_DELIVERY"
@@ -62,16 +64,28 @@ class CreateRequirementIntent(DomainModel):
     @field_validator("repository_roots")
     @classmethod
     def absolute_unique_roots(cls, values: tuple[str, ...]) -> tuple[str, ...]:
-        if len(set(values)) != len(values):
-            raise ValueError("project directories must be unique")
-        for value in values:
-            if (
-                not Path(value).is_absolute()
-                or any(ord(character) < 32 for character in value)
-                or any(part == ".." for part in Path(value).parts)
-            ):
-                raise ValueError("project directories must be absolute safe paths")
-        return values
+        return _absolute_unique_roots(values)
+
+
+class UpdateRequirementIntent(DomainModel):
+    action: Literal[ConsoleAction.UPDATE_REQUIREMENT] = ConsoleAction.UPDATE_REQUIREMENT
+    project_id: ProjectId
+    delivery_id: DeliveryId
+    expected_checkpoint_sha256: CheckpointDigest
+    name: Annotated[str, StringConstraints(min_length=1, max_length=200)]
+    repository_roots: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1, max_length=32)]
+
+    @field_validator("repository_roots")
+    @classmethod
+    def absolute_unique_roots(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        return _absolute_unique_roots(values)
+
+
+class DeleteRequirementIntent(DomainModel):
+    action: Literal[ConsoleAction.DELETE_REQUIREMENT] = ConsoleAction.DELETE_REQUIREMENT
+    project_id: ProjectId
+    delivery_id: DeliveryId
+    expected_checkpoint_sha256: CheckpointDigest
 
 
 class ProductReplyIntent(DomainModel):
@@ -109,6 +123,8 @@ class ContinueDeliveryIntent(DomainModel):
 ConsoleIntent = Annotated[
     CreateProjectIntent
     | CreateRequirementIntent
+    | UpdateRequirementIntent
+    | DeleteRequirementIntent
     | ProductReplyIntent
     | ProductApprovalIntent
     | ContinueDeliveryIntent,
@@ -283,6 +299,19 @@ def _digest(value: object) -> str:
     ).hexdigest()
 
 
+def _absolute_unique_roots(values: tuple[str, ...]) -> tuple[str, ...]:
+    if len(set(values)) != len(values):
+        raise ValueError("project directories must be unique")
+    for value in values:
+        if (
+            not Path(value).is_absolute()
+            or any(ord(character) < 32 for character in value)
+            or any(part == ".." for part in Path(value).parts)
+        ):
+            raise ValueError("project directories must be absolute safe paths")
+    return values
+
+
 __all__ = [
     "CONSOLE_INTENT_ADAPTER",
     "ConsoleAction",
@@ -294,8 +323,10 @@ __all__ = [
     "ContinueDeliveryIntent",
     "CreateProjectIntent",
     "CreateRequirementIntent",
+    "DeleteRequirementIntent",
     "IdempotencyKey",
     "OperationId",
     "ProductApprovalIntent",
     "ProductReplyIntent",
+    "UpdateRequirementIntent",
 ]

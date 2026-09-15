@@ -8,7 +8,7 @@ import pytest
 
 from ai_software_engineer.agents import StructuredModelClient, StructuredModelResult
 from ai_software_engineer.domain import TeamRole
-from ai_software_engineer.manager.delivery import ReplyToProduct
+from ai_software_engineer.manager.delivery import ReplyToProduct, ResumeProjectDelivery
 from ai_software_engineer.multi_directory.attachments import (
     RequirementAttachmentError,
     RequirementAttachmentStore,
@@ -70,6 +70,7 @@ class _ProductBackend(StructuredModelClient):
         self.models = JointModels()
         self.roles: list[TeamRole] = []
         self.images: tuple[Path, ...] = ()
+        self.reconcile_error: str | None = None
 
     def client(self, scope: DirectoryScope, role: TeamRole) -> StructuredModelClient:
         del scope
@@ -95,6 +96,8 @@ class _ProductBackend(StructuredModelClient):
 
     def reconcile(self, checkpoint: JointCheckpoint) -> None:
         del checkpoint
+        if self.reconcile_error is not None:
+            raise ValueError(self.reconcile_error)
 
     def prepare(self, unit: DirectoryUnit) -> NoReturn:
         del unit
@@ -158,3 +161,84 @@ def test_product_agent_receives_only_bound_screenshot_paths(tmp_path: Path) -> N
     assert backend.roles == [TeamRole.PRODUCT]
     assert len(backend.images) == 1
     assert backend.images[0].read_bytes().startswith(b"\x89PNG")
+
+
+def test_product_reply_rejects_source_drift_before_persisting_dialogue(tmp_path: Path) -> None:
+    base = checkpoint(tmp_path)
+    team = TeamWorkspace.initialize(tmp_path / "platform", team_id="team_test", name="Test")
+    project = team.project_registry().register(project_id="project_test", name="Test Project")
+    backend = _ProductBackend()
+    service = JointDeliveryService(backend=backend, team=team, project=project)
+    seed = JointCheckpoint.seal(
+        {
+            **base.to_wire(),
+            "team_manifest_sha256": team.manifest.manifest_sha256,
+            "project_manifest_sha256": project.manifest.manifest_sha256,
+            "sequence": 1,
+            "previous_checkpoint_sha256": None,
+            "stage": JointStage.READY_FOR_DISCUSSION,
+            "preparations": (),
+            "dialogue": (),
+            "product_spec": None,
+            "approval": None,
+            "design": None,
+            "plan": None,
+            "children": (),
+            "integration": None,
+            "attempts": {},
+            "next_action": "Discuss the Requirement.",
+        }
+    )
+    service.journal.append(seed, expected=None)
+    backend.reconcile_error = (
+        "source revision changed after Requirement preparation; create a new Requirement"
+    )
+
+    with pytest.raises(ValueError, match="source revision changed"):
+        service.reply(
+            ReplyToProduct(
+                delivery_id=seed.delivery_id,
+                expected_checkpoint_sha256=seed.checkpoint_sha256,
+                message="Add a success notification after saving settings.",
+            )
+        )
+
+    assert service.journal.current(seed.delivery_id) == seed
+    assert backend.roles == []
+
+
+def test_resume_rejects_source_drift_before_unblocking_requirement(tmp_path: Path) -> None:
+    base = checkpoint(tmp_path)
+    team = TeamWorkspace.initialize(tmp_path / "platform", team_id="team_test", name="Test")
+    project = team.project_registry().register(project_id="project_test", name="Test Project")
+    backend = _ProductBackend()
+    service = JointDeliveryService(backend=backend, team=team, project=project)
+    seed = JointCheckpoint.seal(
+        {
+            **base.to_wire(),
+            "team_manifest_sha256": team.manifest.manifest_sha256,
+            "project_manifest_sha256": project.manifest.manifest_sha256,
+            "sequence": 1,
+            "previous_checkpoint_sha256": None,
+            "stage": JointStage.BLOCKED,
+            "preparations": (),
+            "dialogue": (),
+            "product_spec": None,
+            "approval": None,
+            "design": None,
+            "plan": None,
+            "children": (),
+            "integration": None,
+            "attempts": {},
+            "next_action": "Inspect the blocked Requirement.",
+        }
+    )
+    service.journal.append(seed, expected=None)
+    backend.reconcile_error = (
+        "source revision changed after Requirement preparation; create a new Requirement"
+    )
+
+    with pytest.raises(ValueError, match="source revision changed"):
+        service.resume(ResumeProjectDelivery(delivery_id=seed.delivery_id))
+
+    assert service.journal.current(seed.delivery_id) == seed

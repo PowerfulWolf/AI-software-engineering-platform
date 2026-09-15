@@ -28,9 +28,25 @@ let requestFilter = "active";
 let settingsSection = "general";
 let selectedAgentId = null;
 let creatingProject = false;
+let editingRequirement = null;
 let knowledgeImportMode = null;
 let editingKnowledgeDocument = null;
 let editingSpecDocument = null;
+const dismissedOperationIds = new Set(
+  (() => {
+    try {
+      const stored = globalThis.localStorage?.getItem(
+        "ase-dismissed-console-operations",
+      );
+      const parsed = stored ? JSON.parse(stored) : [];
+      return Array.isArray(parsed) && parsed.every((value) => typeof value === "string")
+        ? parsed.slice(-100)
+        : [];
+    } catch {
+      return [];
+    }
+  })(),
+);
 const maxKnowledgeImportFiles = 20;
 const labels = {
   NEW: "待启动",
@@ -69,6 +85,8 @@ const labels = {
   UNKNOWN: "未确认",
   CREATE_PROJECT: "创建项目",
   CREATE_REQUIREMENT: "创建需求",
+  UPDATE_REQUIREMENT: "编辑需求",
+  DELETE_REQUIREMENT: "删除需求",
   PRODUCT_REPLY: "提交需求说明",
   PRODUCT_APPROVAL: "批准产品文档",
   CONTINUE_DELIVERY: "继续交付",
@@ -78,6 +96,12 @@ const labels = {
   REJECT: "已拒绝",
 };
 const label = (value) => labels[value] || value;
+const productDiscussionStages = new Set([
+  "READY_FOR_DISCUSSION",
+  "PRODUCT_DISCOVERY",
+  "WAITING_PRODUCT_REPLY",
+  "WAITING_PRODUCT_APPROVAL",
+]);
 const deliveryRoleOrder = { coder: 0, qa: 1, reviewer: 2 };
 const teamRoleOrder = {
   manager: 0,
@@ -300,6 +324,46 @@ function documentList(parent, documents) {
     parent.append(d);
   }
 }
+function requestDialogue(parent, request) {
+  const turns = request.dialogue || [];
+  if (!turns.length && !productDiscussionStages.has(request.stage)) return null;
+  const section = el("section", undefined, "detail-section product-dialogue");
+  const heading = el("div", undefined, "row");
+  heading.append(el("h2", "需求讨论"));
+  if (turns.length) heading.append(el("span", `${turns.length} 轮消息`, "badge"));
+  section.append(heading);
+  if (turns.length) {
+    const timeline = el("div", undefined, "dialogue-timeline");
+    for (const turn of turns) {
+      const message = el(
+        "article",
+        undefined,
+        `dialogue-message ${turn.speaker === "user" ? "dialogue-user" : "dialogue-product"}`,
+      );
+      message.append(
+        el("strong", turn.speaker === "user" ? "你" : "Product Agent"),
+      );
+      if (turn.text) message.append(el("p", turn.text, "dialogue-text"));
+      if (turn.attachments?.length) {
+        const attachments = el("div", undefined, "dialogue-attachments");
+        for (const attachment of turn.attachments) {
+          attachments.append(
+            el(
+              "span",
+              `截图 · ${attachment.name} · ${Math.ceil(attachment.source_bytes / 1024)} KB`,
+              "dialogue-attachment",
+            ),
+          );
+        }
+        message.append(attachments);
+      }
+      timeline.append(message);
+    }
+    section.append(timeline);
+  }
+  parent.append(section);
+  return section;
+}
 function field(labelText, control, hint) {
   const wrapper = el("label", undefined, "field");
   wrapper.append(el("span", labelText));
@@ -365,6 +429,7 @@ function renderComposer() {
   panel.hidden =
     !composing &&
     !creatingProject &&
+    !editingRequirement &&
     !knowledgeImportMode &&
     !pendingConfirmation &&
     !editingKnowledgeDocument &&
@@ -630,14 +695,24 @@ function renderComposer() {
     panel.append(dialog);
     return;
   }
+  const isEditingRequirement = Boolean(editingRequirement);
   const top = el("div", undefined, "row");
   top.append(
-    el("div", creatingProject ? "新建 Project" : "新建需求", "section-title"),
+    el(
+      "div",
+      creatingProject
+        ? "新建 Project"
+        : isEditingRequirement
+          ? "编辑需求"
+          : "新建需求",
+      "section-title",
+    ),
     button(
       "取消",
       () => {
         composing = false;
         creatingProject = false;
+        editingRequirement = null;
         renderComposer();
       },
       "",
@@ -703,7 +778,16 @@ function renderComposer() {
   name.required = true;
   name.maxLength = 200;
   name.placeholder = "例如：统一登录体验升级";
-  const selectedRoots = [];
+  if (isEditingRequirement) name.value = editingRequirement.title;
+  const selectedRoots = isEditingRequirement
+    ? editingRequirement.scopes.flatMap((scope) =>
+        scope.selected_paths.map((selectedPath) =>
+          selectedPath === "."
+            ? scope.root
+            : scope.root.replace(/\/$/, "") + "/" + selectedPath,
+        ),
+      )
+    : [];
   const roots = el("div", undefined, "directory-selection");
   const rootList = el("div", undefined, "directory-chip-list");
   const chooseRoots = button(
@@ -758,7 +842,11 @@ function renderComposer() {
   roots.append(chooseRoots, rootList);
   renderSelectedRoots();
   const feedback = el("p", "", "form-feedback");
-  const submit = el("button", "创建并准备需求", "primary");
+  const submit = el(
+    "button",
+    isEditingRequirement ? "保存需求修改" : "创建并准备需求",
+    "primary",
+  );
   submit.type = "submit";
   form.append(
     field("需求名称", name),
@@ -781,14 +869,27 @@ function renderComposer() {
     submit.disabled = true;
     feedback.className = "form-feedback";
     feedback.textContent = "Manager 正在接单…";
-    const accepted = await submitOperation({
-      action: "CREATE_REQUIREMENT",
-      project_id: snapshot.selected_project_id,
-      name: name.value.trim(),
-      repository_roots: projectRoots,
-    });
+    const accepted = await submitOperation(
+      isEditingRequirement
+        ? {
+            action: "UPDATE_REQUIREMENT",
+            project_id: editingRequirement.project_id,
+            delivery_id: editingRequirement.id,
+            expected_checkpoint_sha256:
+              editingRequirement.checkpoint_sha256,
+            name: name.value.trim(),
+            repository_roots: projectRoots,
+          }
+        : {
+            action: "CREATE_REQUIREMENT",
+            project_id: snapshot.selected_project_id,
+            name: name.value.trim(),
+            repository_roots: projectRoots,
+          },
+    );
     if (accepted) {
       composing = false;
+      editingRequirement = null;
       renderComposer();
     } else {
       feedback.textContent = "创建失败，请查看上方操作状态后重试。";
@@ -800,7 +901,9 @@ function renderComposer() {
     top,
     el(
       "p",
-      `需求归属当前 Project：${projectName()}。创建后由 Manager 从产品澄清开始推进。`,
+      isEditingRequirement
+        ? "保存后会生成新的需求版本并替换当前草稿；原始记录仍保留用于审计。"
+        : `需求归属当前 Project：${projectName()}。创建后由 Manager 从产品澄清开始推进。`,
       "muted modal-introduction",
     ),
     form,
@@ -811,6 +914,7 @@ function renderComposer() {
 function confirmMutation(title, message, confirmText, action) {
   composing = false;
   creatingProject = false;
+  editingRequirement = null;
   knowledgeImportMode = null;
   editingKnowledgeDocument = null;
   editingSpecDocument = null;
@@ -890,7 +994,21 @@ function renderOperationStatus() {
     return;
   }
   const visible = [...operations]
-    .filter((operation) => operation.status !== "SUCCEEDED")
+    .filter((operation) => {
+      if (
+        operation.status === "SUCCEEDED" ||
+        dismissedOperationIds.has(operation.operation_id)
+      )
+        return false;
+      if (!["FAILED", "INTERRUPTED"].includes(operation.status)) return true;
+      return !operations.some(
+        (candidate) =>
+          candidate.status === "SUCCEEDED" &&
+          candidate.intent.action === operation.intent.action &&
+          operationTarget(candidate) === operationTarget(operation) &&
+          candidate.updated_at > operation.updated_at,
+      );
+    })
     .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
     .slice(0, 5);
   if (!visible.length) {
@@ -900,10 +1018,24 @@ function renderOperationStatus() {
   for (const operation of visible) {
     const card = el("div", undefined, "operation-status");
     const row = el("div", undefined, "row");
-    row.append(
-      el("strong", label(operation.intent.action)),
-      badge(operation.status),
-    );
+    const state = el("div", undefined, "operation-status-actions");
+    state.append(badge(operation.status));
+    if (["FAILED", "INTERRUPTED"].includes(operation.status))
+      state.append(
+        button("关闭", () => {
+          dismissedOperationIds.add(operation.operation_id);
+          try {
+            globalThis.localStorage?.setItem(
+              "ase-dismissed-console-operations",
+              JSON.stringify([...dismissedOperationIds].slice(-100)),
+            );
+          } catch {
+            // Browser storage is optional; the current page can still dismiss it.
+          }
+          renderOperationStatus();
+        }),
+      );
+    row.append(el("strong", label(operation.intent.action)), state);
     card.append(row);
     if (["QUEUED", "RUNNING"].includes(operation.status))
       card.append(
@@ -1119,10 +1251,17 @@ function requestCard(request) {
       isSelected ? "request request-selected" : "request",
     ),
     head = el("div", undefined, "row");
-  head.append(
-    button(request.title, () => showDetail("request", request.id)),
-    badge(request.stage),
-  );
+  const open = () => showDetail("request", request.id);
+  card.setAttribute("role", "button");
+  card.setAttribute("tabindex", "0");
+  if (isSelected) card.setAttribute("aria-current", "true");
+  card.addEventListener("click", open);
+  card.addEventListener("keydown", (event) => {
+    if (!["Enter", " "].includes(event.key)) return;
+    event.preventDefault();
+    open();
+  });
+  head.append(el("strong", request.title, "request-title"), badge(request.stage));
   card.append(el("p", request.id, "request-id"), head);
   const write = request.scopes.filter((s) => !s.reference_only),
     done = write.filter(
@@ -1138,11 +1277,26 @@ function requestCard(request) {
   if (request.blocker) card.append(el("div", request.blocker, "blocker"));
   return card;
 }
-function requestOperation(panel, request) {
+function requestOperation(panel, request, discussionSection) {
   if (!canControlCurrentTeam()) return;
+  const appendOperation = (content) => {
+    const section = el(
+      "section",
+      undefined,
+      "detail-section request-operation",
+    );
+    section.append(content);
+    panel.append(section);
+  };
+  const appendDiscussionContent = (content) => {
+    if (discussionSection) discussionSection.append(content);
+    else appendOperation(content);
+  };
   const running = activeOperation(request.id);
-  if (running) {
-    panel.append(
+  const isProductDiscussion = productDiscussionStages.has(request.stage);
+  const approvingProduct = running?.intent.action === "PRODUCT_APPROVAL";
+  if (running && !isProductDiscussion) {
+    appendOperation(
       el(
         "div",
         running.status === "QUEUED"
@@ -1153,9 +1307,24 @@ function requestOperation(panel, request) {
     );
     return;
   }
+  if (running) {
+    appendDiscussionContent(
+      el(
+        "div",
+        running.status === "QUEUED"
+          ? approvingProduct
+            ? "ProductSpec 批准操作已排队，等待 Manager。"
+            : "需求讨论已排队，等待 Product Agent。"
+          : approvingProduct
+            ? "Manager 正在批准 ProductSpec。"
+            : "Product Agent 正在回复，可以离开页面后再回来。",
+        "operation-running",
+      ),
+    );
+  }
   const approval = latestApproval(request.id, request.checkpoint_sha256);
-  if (approval) {
-    const box = el("section", undefined, "approval-box");
+  if (approval && !running) {
+    const box = el("div", undefined, "approval-box");
     box.append(el("h3", approval.title));
     for (const fact of approval.facts) box.append(el("p", fact, "paths"));
     box.append(
@@ -1177,24 +1346,68 @@ function requestOperation(panel, request) {
         "primary",
       ),
     );
-    panel.append(box);
+    appendOperation(box);
     return;
   }
-  if (
-    [
-      "READY_FOR_DISCUSSION",
-      "WAITING_PRODUCT_REPLY",
-      "WAITING_PRODUCT_APPROVAL",
-    ].includes(request.stage)
-  ) {
+  if (request.stage === "WAITING_PRODUCT_APPROVAL" && !running) {
+    const approval = el("div", undefined, "approval-box");
+    approval.append(
+      el("h3", "产品文档已准备好"),
+      el(
+        "p",
+        "请先阅读下方 ProductSpec。确认内容准确后批准；如果仍需调整，可在下方继续和 Product Agent 讨论。",
+        "muted",
+      ),
+      button(
+        "批准 ProductSpec 并开始交付",
+        () =>
+          submitOperation({
+            action: "PRODUCT_APPROVAL",
+            project_id: request.project_id,
+            delivery_id: request.id,
+            expected_checkpoint_sha256: request.checkpoint_sha256,
+          }),
+        "primary",
+      ),
+    );
+    appendDiscussionContent(approval);
+  }
+  if (isProductDiscussion) {
     const form = el("form", undefined, "discussion-form");
     const message = el("textarea");
+    let discussionTitle = "等待 Product Agent 回复";
+    let messagePlaceholder =
+      "上一条消息正在处理中，收到 Product Agent 回复后可继续输入。";
+    let submitLabel = "继续需求讨论";
+    if (running) {
+      discussionTitle = approvingProduct
+        ? "ProductSpec 批准处理中"
+        : "等待 Product Agent 回复";
+      messagePlaceholder = approvingProduct
+        ? "ProductSpec 正在批准，完成前不能继续修改。"
+        : "Product Agent 正在处理上一条消息，完成后可继续输入。";
+      submitLabel = approvingProduct
+        ? "正在批准 ProductSpec"
+        : "Product Agent 正在回复";
+    } else if (request.stage === "READY_FOR_DISCUSSION") {
+      discussionTitle = "向 Product Agent 描述需求";
+      messagePlaceholder = "描述你要完成的需求、业务背景和验收预期…";
+      submitLabel = "提交需求";
+    } else if (request.stage === "WAITING_PRODUCT_REPLY") {
+      discussionTitle = "回复 Product Agent";
+      messagePlaceholder = "回答 Product Agent 的问题，或继续补充需求信息…";
+      submitLabel = "回复 Product Agent";
+    } else if (request.stage === "WAITING_PRODUCT_APPROVAL") {
+      discussionTitle = "继续讨论并修订";
+      messagePlaceholder = "说明 ProductSpec 需要修改或补充的内容…";
+      submitLabel = "提交修改并重新生成 ProductSpec";
+    }
+    const replyEnabled = request.stage !== "PRODUCT_DISCOVERY" && !running;
     message.rows = 5;
     message.maxLength = 20000;
-    message.placeholder =
-      request.stage === "READY_FOR_DISCUSSION"
-        ? "描述你要完成的需求、业务背景和验收预期…"
-        : "补充信息，或说明需要 Product Agent 修改的内容…";
+    message.disabled = !replyEnabled;
+    message.setAttribute("aria-label", discussionTitle);
+    message.placeholder = messagePlaceholder;
     const feedback = el("p", "", "form-feedback");
     let selectedScreenshots = [];
     let screenshotPreviewUrls = [];
@@ -1233,6 +1446,7 @@ function requestOperation(panel, request) {
       });
     };
     const addPastedScreenshots = (files) => {
+      if (!replyEnabled) return;
       const invalid = files.find(
         (file) =>
           !["image/png", "image/jpeg", "image/webp"].includes(file.type) ||
@@ -1282,24 +1496,41 @@ function requestOperation(panel, request) {
       if (files.length) addPastedScreenshots(files);
     });
     renderScreenshots();
-    const submit = el(
-      "button",
-      request.stage === "READY_FOR_DISCUSSION" ? "提交需求" : "提交补充说明",
-      "primary",
-    );
-    submit.type = "submit";
-    form.append(
-      field(
-        "和 Product Agent 讨论需求",
-        message,
-        "输入文字，或将截图直接粘贴到这里；两者至少提供一项。",
+    const submit = el("button", submitLabel, "primary");
+    submit.type = request.stage === "PRODUCT_DISCOVERY" ? "button" : "submit";
+    submit.disabled = Boolean(running);
+    const discussionField = el("div", undefined, "field discussion-field");
+    discussionField.append(
+      el("h3", discussionTitle),
+      el(
+        "small",
+        replyEnabled
+          ? "输入文字，或将截图直接粘贴到这里；两者至少提供一项。"
+          : running
+            ? "Product Agent 正在处理上一条消息，完成后可继续输入。"
+            : "上次 Product Agent 执行已中断，先恢复本轮回复后再继续输入。",
       ),
+      message,
+    );
+    form.append(
+      discussionField,
       screenshotSection,
       feedback,
       submit,
     );
+    if (request.stage === "PRODUCT_DISCOVERY" && !running) {
+      submit.addEventListener("click", () =>
+        submitOperation({
+          action: "CONTINUE_DELIVERY",
+          project_id: request.project_id,
+          delivery_id: request.id,
+          expected_checkpoint_sha256: request.checkpoint_sha256,
+        }),
+      );
+    }
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
+      if (!replyEnabled) return;
       if (!message.value.trim() && !selectedScreenshots.length) {
         feedback.className = "form-feedback error";
         feedback.textContent = "请填写需求说明或添加至少一张截图。";
@@ -1348,53 +1579,27 @@ function requestOperation(panel, request) {
         submit.disabled = false;
       }
     });
-    panel.append(form);
+    appendDiscussionContent(form);
   }
-  if (request.stage === "WAITING_PRODUCT_APPROVAL") {
-    const approval = el("section", undefined, "approval-box");
-    approval.append(
-      el("h3", "产品文档已准备好"),
-      el(
-        "p",
-        "请先阅读下方 ProductSpec。批准后 Designer、Planner、Coder、QA 和 Reviewer 将按该版本工作。",
-        "muted",
-      ),
-      button(
-        "批准 ProductSpec 并开始交付",
-        () =>
-          submitOperation({
-            action: "PRODUCT_APPROVAL",
-            project_id: request.project_id,
-            delivery_id: request.id,
-            expected_checkpoint_sha256: request.checkpoint_sha256,
-          }),
-        "primary",
-      ),
+  if (!productDiscussionStages.has(request.stage) && request.stage !== "DONE") {
+    const action = button(
+      "继续交付",
+      () =>
+        submitOperation({
+          action: "CONTINUE_DELIVERY",
+          project_id: request.project_id,
+          delivery_id: request.id,
+          expected_checkpoint_sha256: request.checkpoint_sha256,
+        }),
+      "primary",
     );
-    panel.append(approval);
-  } else if (
-    !["READY_FOR_DISCUSSION", "WAITING_PRODUCT_REPLY", "DONE"].includes(
-      request.stage,
-    )
-  ) {
-    panel.append(
-      button(
-        "继续交付",
-        () =>
-          submitOperation({
-            action: "CONTINUE_DELIVERY",
-            project_id: request.project_id,
-            delivery_id: request.id,
-            expected_checkpoint_sha256: request.checkpoint_sha256,
-          }),
-        "primary",
-      ),
-    );
+    appendOperation(action);
   }
 }
 function deliveryResult(panel, request) {
   if (request.stage !== "DONE") return;
-  const result = el("section", undefined, "delivery-result");
+  const section = el("section", undefined, "detail-section");
+  const result = el("div", undefined, "delivery-result");
   result.append(
     el("h2", "交付结果"),
     el(
@@ -1430,7 +1635,8 @@ function deliveryResult(panel, request) {
         "muted",
       ),
     );
-  panel.append(result);
+  section.append(result);
+  panel.append(section);
 }
 function renderRequests(content) {
   content.className = "request-master-panel";
@@ -2707,18 +2913,16 @@ function normalizeAgentModelRoutes(config) {
   );
   config.agent_model_routes = agentModelRoles.map(([role]) => {
     const current = existing.get(role)?.routes || [];
-    const primary = current
-      .map((reference) => resolveModelRouteReference(reference, enabled))
-      .find(Boolean);
-    const ordered = primary
-      ? [
-          modelRouteReference(primary),
-          ...enabled
-            .filter((route) => modelRouteKey(route) !== modelRouteKey(primary))
-            .map(modelRouteReference),
-        ]
-      : enabled.map(modelRouteReference);
-    return { role, routes: ordered };
+    const seen = new Set();
+    const selected = [];
+    for (const reference of current) {
+      const route = resolveModelRouteReference(reference, enabled);
+      if (!route || seen.has(modelRouteKey(route))) continue;
+      seen.add(modelRouteKey(route));
+      selected.push(modelRouteReference(route));
+    }
+    if (!selected.length) selected.push(modelRouteReference(enabled[0]));
+    return { role, routes: selected };
   });
 }
 function selectAgentPrimaryModel(role, key) {
@@ -2730,10 +2934,43 @@ function selectAgentPrimaryModel(role, key) {
   );
   policy.routes = [
     modelRouteReference(selectedRoute),
-    ...enabled
-      .filter((route) => modelRouteKey(route) !== key)
-      .map(modelRouteReference),
+    ...policy.routes
+      .slice(1)
+      .filter((route) => modelRouteKey(route) !== key),
   ];
+}
+function addAgentFallbackModel(role, key) {
+  const enabled = settingsDraft.model_routes.filter((route) => route.enabled);
+  const selectedRoute = enabled.find((route) => modelRouteKey(route) === key);
+  const policy = settingsDraft.agent_model_routes.find(
+    (candidate) => candidate.role === role,
+  );
+  if (
+    !selectedRoute ||
+    !policy ||
+    policy.routes.some((route) => modelRouteKey(route) === key)
+  )
+    return;
+  policy.routes.push(modelRouteReference(selectedRoute));
+}
+function moveAgentFallbackModel(role, index, offset) {
+  const policy = settingsDraft.agent_model_routes.find(
+    (candidate) => candidate.role === role,
+  );
+  const target = index + offset;
+  if (!policy || index < 1 || target < 1 || target >= policy.routes.length)
+    return;
+  [policy.routes[index], policy.routes[target]] = [
+    policy.routes[target],
+    policy.routes[index],
+  ];
+}
+function removeAgentFallbackModel(role, index) {
+  const policy = settingsDraft.agent_model_routes.find(
+    (candidate) => candidate.role === role,
+  );
+  if (!policy || index < 1 || index >= policy.routes.length) return;
+  policy.routes.splice(index, 1);
 }
 function updateModelRouteIdentity(route, property, value) {
   const previous = modelRouteKey(route);
@@ -3207,7 +3444,7 @@ function renderModelSettings(form) {
     el("h3", "Agent 模型分配"),
     el(
       "p",
-      "每个 Agent 可选择不同的首选模型；首选模型不可用时，按上方其他已启用路由的顺序降级。",
+      "每个 Agent 必须选择一个主模型；备用模型可选，且只会按该 Agent 显式配置的顺序降级。",
       "muted",
     ),
   );
@@ -3234,24 +3471,78 @@ function renderModelSettings(form) {
       `agent-primary-model-${role}`,
       !choices.length,
     );
+    const fallbacks = el("div", undefined, "agent-fallback-settings");
+    fallbacks.append(el("strong", "备用模型（可选）", "agent-fallback-title"));
+    const fallbackRoutes = policy?.routes?.slice(1) || [];
+    if (!fallbackRoutes.length)
+      fallbacks.append(
+        el(
+          "p",
+          "当前未配置备用模型；主模型不可用时不会自动尝试模型池中的其他模型。",
+          "muted agent-fallback-empty",
+        ),
+      );
+    fallbackRoutes.forEach((route, fallbackOffset) => {
+      const index = fallbackOffset + 1;
+      const row = el("div", undefined, "agent-fallback-row");
+      row.dataset.fallbackIndex = String(index);
+      const identity = el("div", undefined, "agent-fallback-identity");
+      identity.append(
+        el("span", `备用 ${index}`, "route-position"),
+        el(
+          "span",
+          `${route.provider} / ${route.model} · ${route.reasoning_effort || "medium"}`,
+        ),
+      );
+      const actions = el("div", undefined, "agent-fallback-actions");
+      const moveUp = button("上移", () => {
+        moveAgentFallbackModel(role, index, -1);
+        render();
+      });
+      moveUp.disabled = index === 1;
+      const moveDown = button("下移", () => {
+        moveAgentFallbackModel(role, index, 1);
+        render();
+      });
+      moveDown.disabled = index === policy.routes.length - 1;
+      actions.append(
+        moveUp,
+        moveDown,
+        button("移除", () => {
+          removeAgentFallbackModel(role, index);
+          render();
+        }),
+      );
+      row.append(identity, actions);
+      fallbacks.append(row);
+    });
+    const selectedKeys = new Set(
+      (policy?.routes || []).map((route) => modelRouteKey(route)),
+    );
+    const fallbackChoices = enabledRoutes
+      .filter((route) => !selectedKeys.has(modelRouteKey(route)))
+      .map((route) => [
+        modelRouteKey(route),
+        `${route.provider} / ${route.model} · ${route.reasoning_effort}`,
+      ]);
+    if (fallbackChoices.length)
+      fallbacks.append(
+        selectInput(
+          [["", "添加备用模型"], ...fallbackChoices],
+          "",
+          (value) => {
+            if (!value) return;
+            addAgentFallbackModel(role, value);
+            render();
+          },
+          `agent-fallback-model-${role}`,
+        ),
+      );
     card.append(
       el("strong", title),
       el("p", description, "muted"),
-      field("首选模型", selector),
-      el(
-        "small",
-        policy?.routes?.length > 1
-          ? "降级顺序 · " +
-              policy.routes
-                .slice(1)
-                .map(
-                  (route) =>
-                    `${route.provider}/${route.model} · ${route.reasoning_effort || "medium"}`,
-                )
-                .join(" → ")
-          : "当前没有可用的降级模型。",
-        "muted",
-      ),
+      field("主模型", selector),
+      fallbacks,
     );
     grid.append(card);
   }
@@ -3462,7 +3753,14 @@ function renderStatus(content) {
 }
 function showDetail(kind, id) {
   selected = { kind, id };
-  renderDetail();
+  if (page === "requests") {
+    const request =
+      kind === "request"
+        ? requestById(id)
+        : requestById(taskById(id)?.request_id);
+    if (request) requestFilter = requestGroup(request);
+  }
+  render();
   document
     .getElementById("detail")
     .scrollIntoView({ behavior: "smooth", block: "start" });
@@ -3531,27 +3829,81 @@ function renderDetail() {
     return;
   }
   const top = el("div", undefined, "row");
-  top.append(
-    el("h2", selected.kind === "task" ? "任务详情" : "需求详情"),
+  const topActions = el("div", undefined, "detail-heading-actions");
+  if (
+    selected.kind === "request" &&
+    item.stage === "READY_FOR_DISCUSSION" &&
+    !activeOperation(item.id) &&
+    canControlCurrentTeam()
+  ) {
+    topActions.append(
+      button(
+        "编辑需求",
+        () => {
+          creatingProject = false;
+          editingRequirement = item;
+          composing = true;
+          renderComposer();
+        },
+        "secondary",
+      ),
+      button(
+        "删除需求",
+        () =>
+          confirmMutation(
+            "删除需求",
+            `确认从当前 Project 删除“${item.title}”吗？历史记录会保留，但该需求将不能继续交付。`,
+            "确认删除",
+            async () => {
+              const accepted = await submitOperation({
+                action: "DELETE_REQUIREMENT",
+                project_id: item.project_id,
+                delivery_id: item.id,
+                expected_checkpoint_sha256: item.checkpoint_sha256,
+              });
+              if (!accepted) throw new Error("删除操作未被接受。");
+            },
+          ),
+        "danger",
+      ),
+    );
+  }
+  topActions.append(
     button(
       "关闭",
       () => {
         selected = null;
-        renderDetail();
+        render();
       },
       "",
     ),
   );
-  panel.append(
-    top,
-    el("h3", item.title),
-    el("p", item.id, "paths"),
-    badge(item.status || item.stage),
+  top.append(
+    el(
+      "h2",
+      selected.kind === "task" ? "任务详情" : "需求详情",
+      selected.kind === "request" ? "detail-panel-heading" : "",
+    ),
+    topActions,
   );
-  if (item.blocker) panel.append(el("div", item.blocker, "blocker"));
-  panel.append(el("p", "下一步 · " + item.next_action, "muted"));
   if (selected.kind === "request") {
     panel.className = "request-detail-panel";
+    const overview = el("section", undefined, "request-detail-overview");
+    overview.append(
+      top,
+      el("h3", item.title, "request-detail-title"),
+      el("p", item.id, "paths request-detail-id"),
+      badge(item.status || item.stage),
+    );
+    if (item.blocker) overview.append(el("div", item.blocker, "blocker"));
+    overview.append(
+      el(
+        "p",
+        "下一步 · " + item.next_action,
+        "muted request-detail-next",
+      ),
+    );
+    panel.append(overview);
     const flow = el("section", undefined, "detail-section");
     flow.append(el("h2", "交付流程"), deliveryFlow(item));
     panel.append(flow);
@@ -3571,12 +3923,23 @@ function renderDetail() {
       scopes.append(scopeCard);
     }
     panel.append(scopes);
-    requestOperation(panel, item);
+    const discussionSection = requestDialogue(panel, item);
+    requestOperation(panel, item, discussionSection);
     deliveryResult(panel, item);
-    panel.append(el("h2", "阶段产物"));
-    documentList(panel, item.documents);
+    const artifacts = el("section", undefined, "detail-section stage-artifacts");
+    artifacts.append(el("h2", "阶段产物"));
+    documentList(artifacts, item.documents);
+    panel.append(artifacts);
     return;
   }
+  panel.append(
+    top,
+    el("h3", item.title),
+    el("p", item.id, "paths"),
+    badge(item.status || item.stage),
+  );
+  if (item.blocker) panel.append(el("div", item.blocker, "blocker"));
+  panel.append(el("p", "下一步 · " + item.next_action, "muted"));
   panel.append(
     el("p", paths(item.scope), "paths"),
     el("p", "最近活动 · " + time(item.last_activity), "muted"),
@@ -3675,6 +4038,7 @@ for (const target of ["team", "requests", "knowledge", "settings", "status"])
       selected = null;
       composing = false;
       creatingProject = false;
+      editingRequirement = null;
       knowledgeImportMode = null;
       pendingConfirmation = null;
       editingKnowledgeDocument = null;
@@ -3753,8 +4117,27 @@ async function refresh(projectId, includeRuntimeStatus = false) {
     const priorConsoleTeam = consoleTeamId;
     const priorConsoleReady = consoleDeliveryReady;
     const priorRuntimeStatus = JSON.stringify(runtimeStatusSnapshot);
+    const selectedBeforeRefresh = selected;
     snapshot = next;
     await refreshOperations();
+    if (
+      selectedBeforeRefresh?.kind === "request" &&
+      !requestById(selectedBeforeRefresh.id)
+    ) {
+      const replacement = [...operations]
+        .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
+        .find(
+          (operation) =>
+            operation.status === "SUCCEEDED" &&
+            operation.intent.action === "UPDATE_REQUIREMENT" &&
+            operation.intent.delivery_id === selectedBeforeRefresh.id &&
+            operation.result?.delivery_id &&
+            requestById(operation.result.delivery_id),
+        );
+      selected = replacement
+        ? { kind: "request", id: replacement.result.delivery_id }
+        : null;
+    }
     if (page === "knowledge" && target !== undefined)
       await loadAdministration();
     if (includeRuntimeStatus && page === "status" && administrationAvailable)
@@ -3762,6 +4145,7 @@ async function refresh(projectId, includeRuntimeStatus = false) {
     const modalActive =
       composing ||
       creatingProject ||
+      editingRequirement ||
       knowledgeImportMode ||
       pendingConfirmation ||
       editingKnowledgeDocument ||

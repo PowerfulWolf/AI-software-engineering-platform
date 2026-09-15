@@ -106,6 +106,7 @@ Environment contract:
 - `agent_model_routes` 为空时兼容旧配置并对所有角色使用 enabled `model_routes` 顺序；非空时必须
   精确覆盖 Manager/Product/Designer/Planner/Coder/QA/Reviewer 七个角色，每个引用只可指向启用且
   唯一的 provider/model/reasoning effort。首项是该 Agent 主模型，后续项是冻结后的降级顺序；
+  显式策略是可用模型目录的有序子集，未被该 Agent 选中的启用模型不得自动成为备用路由。
   同一模型的不同推理程度是可独立选择的路由。旧引用缺少 `reasoning_effort` 时，仅允许其
   provider/model 在启用目录中唯一，否则按歧义配置失败关闭。
 - 新生成的 `ModelSelection`、`AgentDefinition` 和 `ModelRouteAttempt` 必须固化精确的
@@ -323,14 +324,17 @@ StructuredModelClient.complete(..., input_images: tuple[Path, ...] = ())
 ### 3. Contracts
 
 - `model_routes` is the enabled route catalog. `agent_model_routes` is the seven-role ordered policy;
-  the first route is primary and every following route is fallback. Route identity is
+  the first route is primary and every following route is an explicitly selected fallback. The
+  catalog does not implicitly expand a role policy. Route identity is
   `(provider, model, reasoning_effort)`, so one model may expose multiple independently selectable
   reasoning levels.
 - Product, Designer and Planner resolve their own TeamRole at the structured-client seam. Coder, QA
   and Reviewer preserve the same order in the content-versioned ModelPolicy used by dispatch.
-- Settings may materialize an explicit seven-role policy from a legacy empty policy, but it may not
-  mint new Agent IDs. Manager's route is persisted/displayed even though current Manager decisions use
-  deterministic Skills and do not invoke a model.
+- Settings may materialize an explicit seven-role policy from a legacy empty policy by selecting only
+  the first enabled route as each role's primary. It must not copy every enabled catalog route into
+  fallbacks, and it may not mint new Agent IDs. Operators may add, remove and reorder zero or more
+  fallbacks per Agent. Manager's route is persisted/displayed even though current Manager decisions
+  use deterministic Skills and do not invoke a model.
 - The read-only runtime Status projection resolves the same seven role policies through
   `ProductionConfig.routes_for(role)` and joins each exact route triple with catalog readiness. It
   preserves primary/fallback order and labels whether the policy is explicit or inherited; it does
@@ -343,7 +347,9 @@ StructuredModelClient.complete(..., input_images: tuple[Path, ...] = ())
 | Case | Required result |
 |---|---|
 | Legacy config without `agent_model_routes` | every role inherits enabled catalog order |
+| Settings materializes a legacy policy | first enabled route becomes primary; no fallback is inferred |
 | Explicit policy missing a role or containing duplicate/disabled/unknown route | reject config |
+| Enabled catalog route is not selected by one Agent | route remains available but never runs for that Agent |
 | Legacy policy reference omits effort and matches multiple enabled routes | reject as ambiguous |
 | Same provider/model with different efforts | preserve both routes and the Agent's exact selection |
 | Status projects explicit or inherited policy | seven ordered role records with exact effort and matching readiness |
@@ -355,18 +361,19 @@ StructuredModelClient.complete(..., input_images: tuple[Path, ...] = ())
 ### 5. Good / Base / Bad Cases
 
 - Good: Product uses a vision-capable model while Coder and Reviewer use different preferred brains;
-  quota fallback stays within each Agent's frozen list.
-- Base: one enabled Codex route serves all seven members exactly as before.
+  quota fallback stays within each Agent's explicitly selected and ordered list.
+- Base: one enabled Codex route serves all seven members with primary-only policies.
 - Bad: encode the model into Agent identity, silently send a screenshot to a text-only endpoint, or
-  use a global first route after an explicit role policy exists.
+  copy every enabled catalog route into fallbacks after an explicit role policy exists.
 
 ### 6. Tests Required
 
 - `tests/config/test_production.py`: full role coverage, enabled references and independent ordering.
 - `tests/manager/test_team_roster.py`: delivery role order survives ModelPolicy compilation.
 - `tests/agents/test_structured_models.py`: Codex `--image` binding and unsupported-route skipping.
-- `tests/team_view/ui.test.cjs`: seven role selectors and distinct Product/Coder primary values in the
-  saved config.
+- `tests/team_view/ui.test.cjs`: seven role selectors, distinct Product/Coder primary values, no
+  inferred fallback after catalog enablement, and explicit fallback add/remove/reorder in the saved
+  config.
 
 ### 7. Wrong vs Correct
 
@@ -376,6 +383,14 @@ routes = config.enabled_routes()
 
 # Correct: role resolution happens before constructing provider adapters.
 routes = config.routes_for(role)
+```
+
+```javascript
+// Wrong: the catalog is silently expanded into every Agent policy.
+policy.routes = enabledRoutes.map(modelRouteReference)
+
+// Correct: keep one required primary plus only operator-selected fallbacks.
+policy.routes = [selectedPrimary, ...explicitFallbacks]
 ```
 
 #### Platform-owned Coder candidate finalization
