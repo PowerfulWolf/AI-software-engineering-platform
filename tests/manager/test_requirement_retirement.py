@@ -39,6 +39,7 @@ from ai_software_engineer.multi_directory.service import (
     CreateRequirement,
     DeleteRequirement,
     JointDeliveryService,
+    RestartRequirement,
     UpdateRequirement,
 )
 from ai_software_engineer.project_workspace import ProjectWorkspace
@@ -282,7 +283,7 @@ def test_requirement_cannot_be_deleted_after_product_approval_stage(
         )
 
 
-def test_blocked_requirement_can_be_closed_then_logically_deleted(
+def test_blocked_requirement_can_be_closed_restarted_then_logically_deleted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service, repository = _service(tmp_path, monkeypatch)
@@ -308,14 +309,33 @@ def test_blocked_requirement_can_be_closed_then_logically_deleted(
     assert service.journal.current(blocked.delivery_id) == closed
     assert service.retirements.entry(blocked.delivery_id) is None
 
-    service.delete_requirement(
-        DeleteRequirement(
+    restarted = service.restart_requirement(
+        RestartRequirement(
             delivery_id=closed.delivery_id,
             expected_checkpoint_sha256=closed.checkpoint_sha256,
             submitted_at=NOW,
         )
+    ).checkpoint
+
+    assert restarted.stage is JointStage.BLOCKED
+    assert restarted.previous_checkpoint_sha256 == closed.checkpoint_sha256
+    assert "restarted" in restarted.next_action.lower()
+
+    closed_again = service.close_requirement(
+        CloseRequirement(
+            delivery_id=restarted.delivery_id,
+            expected_checkpoint_sha256=restarted.checkpoint_sha256,
+            submitted_at=NOW,
+        )
+    ).checkpoint
+    service.delete_requirement(
+        DeleteRequirement(
+            delivery_id=closed_again.delivery_id,
+            expected_checkpoint_sha256=closed_again.checkpoint_sha256,
+            submitted_at=NOW,
+        )
     )
-    assert service.retirements.entry(closed.delivery_id) is not None
+    assert service.retirements.entry(closed_again.delivery_id) is not None
 
 
 def test_only_blocked_requirement_can_be_closed(
@@ -329,6 +349,15 @@ def test_only_blocked_requirement_can_be_closed(
     with pytest.raises(ValueError, match="only be closed while blocked"):
         service.close_requirement(
             CloseRequirement(
+                delivery_id=checkpoint.delivery_id,
+                expected_checkpoint_sha256=checkpoint.checkpoint_sha256,
+                submitted_at=NOW,
+            )
+        )
+
+    with pytest.raises(ValueError, match="only be restarted while closed"):
+        service.restart_requirement(
+            RestartRequirement(
                 delivery_id=checkpoint.delivery_id,
                 expected_checkpoint_sha256=checkpoint.checkpoint_sha256,
                 submitted_at=NOW,

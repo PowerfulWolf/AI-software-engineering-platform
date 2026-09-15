@@ -16,6 +16,11 @@ the Requirement from the active Project view, without mutating immutable deliver
   checkpoint journal, attachments, or repository sidecars.
 - A retired Requirement is excluded from Project counts and Team snapshots, and cannot be resumed,
   discussed, approved, edited, or deleted again.
+- Deleting a Requirement also removes every native child Task derived from that Requirement from
+  Agent queues and current Project projections; immutable sidecars remain audit evidence only.
+- Closing a blocked Requirement is a reversible pause. It remains visible under a dedicated
+  `已关闭` filter and can be explicitly restarted from the exact closed checkpoint.
+- Queued close, restart and delete operations must not masquerade as active delivery work.
 - Editing or deleting after Product discussion has started is rejected. Later-stage requirement
   changes require a new Requirement so approved Product/Design/Plan lineage is never reinterpreted.
 - All mutations bind the exact currently displayed checkpoint digest and use durable Console
@@ -30,6 +35,8 @@ the Requirement from the active Project view, without mutating immutable deliver
 - [x] Stale checkpoint, unchanged edit, retired input, invalid roots, or non-READY stage fails closed.
 - [x] A second active operation for the Requirement remains rejected.
 - [x] Python models and public JSON Schemas remain aligned.
+- [x] Closed Requirements are distinct from completed Requirements and can be restarted safely.
+- [x] Deleted Requirements and all of their derived Agent queue entries disappear together.
 
 ## Definition of Done
 

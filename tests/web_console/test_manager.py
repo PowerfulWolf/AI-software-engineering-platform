@@ -24,6 +24,7 @@ from ai_software_engineer.multi_directory.service import (
     CreateRequirement,
     DeleteRequirement,
     JointDeliveryService,
+    RestartRequirement,
     UpdateRequirement,
 )
 from ai_software_engineer.team_workspace import TeamWorkspace
@@ -37,6 +38,7 @@ from ai_software_engineer.web_console import (
     ManagerConsoleAdapter,
     ProductApprovalIntent,
     ProductReplyIntent,
+    RestartRequirementIntent,
     UpdateRequirementIntent,
 )
 from ai_software_engineer.web_console.manager import TeamConsoleHost
@@ -99,6 +101,12 @@ class _Entry:
         self.commands.append(command)
         return JointDeliveryResult(
             checkpoint=self.checkpoint.model_copy(update={"stage": JointStage.CLOSED})
+        )
+
+    def restart_requirement(self, command: RestartRequirement) -> JointDeliveryResult:
+        self.commands.append(command)
+        return JointDeliveryResult(
+            checkpoint=self.checkpoint.model_copy(update={"stage": JointStage.BLOCKED})
         )
 
     def reply(self, command: ReplyToProduct) -> JointDeliveryResult:
@@ -237,6 +245,24 @@ def test_close_requirement_binds_the_displayed_blocker(tmp_path: Path) -> None:
     assert command.expected_checkpoint_sha256 == checkpoint
     assert closed.delivery_id == DELIVERY_ID
     assert closed.stage == "CLOSED"
+
+
+def test_restart_requirement_binds_the_displayed_closed_checkpoint(tmp_path: Path) -> None:
+    adapter, _, entry = _adapter(tmp_path)
+    checkpoint = entry.checkpoint.checkpoint_sha256
+
+    restarted = adapter.execute(
+        RestartRequirementIntent(
+            project_id=PROJECT_ID,
+            delivery_id=DELIVERY_ID,
+            expected_checkpoint_sha256=checkpoint,
+        )
+    )
+
+    command = cast(RestartRequirement, entry.commands[0])
+    assert command.expected_checkpoint_sha256 == checkpoint
+    assert restarted.delivery_id == DELIVERY_ID
+    assert restarted.stage == "BLOCKED"
 
 
 def test_reply_and_approval_bind_the_displayed_checkpoint(tmp_path: Path) -> None:

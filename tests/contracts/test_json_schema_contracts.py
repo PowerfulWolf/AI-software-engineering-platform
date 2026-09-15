@@ -41,6 +41,7 @@ from ai_software_engineer.web_console import (
     CreateRequirementIntent,
     DeleteRequirementIntent,
     ProductReplyIntent,
+    RestartRequirementIntent,
     UpdateRequirementIntent,
 )
 from tests.domain.factories import (
@@ -638,6 +639,17 @@ def test_console_operation_states_satisfy_the_canonical_schema(tmp_path: Path) -
         requested_at=at,
     )
     _assert_valid(close_requirement.to_wire(), "console-operation.schema.json")
+    restart_requirement = ConsoleOperation.queued(
+        team_id="team_test",
+        idempotency_key="browser-action-restart-0001",
+        intent=RestartRequirementIntent(
+            project_id="project_test",
+            delivery_id="delivery_multi_" + "a" * 40,
+            expected_checkpoint_sha256="2" * 64,
+        ),
+        requested_at=at,
+    )
+    _assert_valid(restart_requirement.to_wire(), "console-operation.schema.json")
 
     missing_reply_content = product_reply.to_wire()
     intent = missing_reply_content["intent"]

@@ -42,6 +42,7 @@ from ai_software_engineer.manager.mysql_dispatch_authority import _decode_commit
 from ai_software_engineer.manager.production_host import TeamHost
 from ai_software_engineer.multi_directory.attachments import RequirementScreenshot
 from ai_software_engineer.multi_directory.models import (
+    ChildDelivery,
     DialogueMessage,
     JointCheckpoint,
     JointStage,
@@ -50,6 +51,10 @@ from ai_software_engineer.multi_directory.retirement import RequirementRetiremen
 from ai_software_engineer.multi_directory.scope import DirectoryScope, DirectoryUnit
 from ai_software_engineer.multi_directory.service import CreateRequirement
 from ai_software_engineer.multi_directory.store import JointJournal
+from ai_software_engineer.runtime_workspace import (
+    FileTeamWorkforceStore,
+    TeamWorkforceWorkspace,
+)
 from ai_software_engineer.store.mysql_repository import open_mysql_connection
 from ai_software_engineer.team_view.models import (
     ProjectView,
@@ -677,7 +682,52 @@ def test_retired_requirement_is_hidden_and_excluded_from_project_count(tmp_path:
     team = TeamWorkspace.initialize(
         config.platform_root, team_id=config.team_id, name=config.team_name
     )
+    FileTeamWorkforceStore(TeamWorkforceWorkspace.from_team(team)).put_agent(
+        AgentProfile(
+            id="agent_team_manager",
+            version="v0.1",
+            display_name="Manager",
+            capabilities=("manager",),
+            eligible_roles=(TeamRole.MANAGER,),
+            max_parallel_assignments=8,
+            default_model_policy_id="model_policy_test",
+        )
+    )
     project = team.project_registry().register(project_id="project_test", name="Test Project")
+    repository_root = tmp_path / "code"
+    repository_root.mkdir()
+    repository = project.repository_registry().register(repository_root)
+    native_store = FileProjectDeliveryCheckpointStore(
+        repository.root / "state" / "project-deliveries"
+    )
+    native_delivery_id = "delivery_retired_child"
+    now = datetime.now(UTC)
+    native_store.put_intake(
+        ProjectDeliveryIntake.create(
+            delivery_id=native_delivery_id,
+            repository_id=repository.repository_id,
+            repository_root=str(repository_root),
+            title="Retired child",
+            requirement="Must disappear with its parent Requirement.",
+            submitted_at=now,
+        )
+    )
+    native_checkpoint = native_store.put(
+        ProjectDeliveryCheckpoint.create(
+            delivery_id=native_delivery_id,
+            sequence=1,
+            repository_id=repository.repository_id,
+            repository_root=str(repository_root),
+            stage=DeliveryStage.BLOCKED,
+            stage_attempts=DeliveryStageAttempts(dispatching=1),
+            next_action=DeliveryNextAction.REQUEST_HUMAN,
+            failure_code=DeliveryFailureCode.CHECKPOINT_DRIFT,
+            failure_summary="Retired child failure.",
+            failed_stage=DeliveryStage.DISPATCHING,
+            checkpointed_at=now,
+        )
+    )
+    unit_id = "unit_" + "a" * 16
     checkpoint = JointCheckpoint.seal(
         {
             "delivery_id": "delivery_multi_" + "a" * 40,
@@ -686,20 +736,21 @@ def test_retired_requirement_is_hidden_and_excluded_from_project_count(tmp_path:
             "project_id": project.manifest.project_id,
             "project_manifest_sha256": project.manifest.manifest_sha256,
             "sequence": 1,
-            "stage": JointStage.READY_FOR_DISCUSSION,
+            "stage": JointStage.BLOCKED,
             "scope": DirectoryScope(
                 units=(
                     DirectoryUnit(
-                        id="unit_" + "a" * 16,
-                        root=str(tmp_path / "code"),
+                        id=unit_id,
+                        root=str(repository_root),
                         selected_paths=(".",),
                         base_revision="b" * 40,
                     ),
                 )
             ),
             "title": "Retired draft",
-            "submitted_at": datetime.now(UTC),
-            "next_action": "Discuss the Requirement.",
+            "submitted_at": now,
+            "children": (ChildDelivery(unit_id=unit_id, checkpoint=native_checkpoint),),
+            "next_action": "Retired Requirement is blocked.",
         }
     )
     journal = JointJournal(project.requirements_root)
@@ -715,6 +766,11 @@ def test_retired_requirement_is_hidden_and_excluded_from_project_count(tmp_path:
     snapshot = ProductionTeamReader(config, {}).snapshot()
 
     assert snapshot.requests == ()
+    assert snapshot.tasks == ()
+    assert len(snapshot.agents) == 1
+    assert snapshot.agents[0].assigned_delivery_ids == ()
+    assert snapshot.agents[0].current_stage_delivery_ids == ()
+    assert snapshot.agents[0].history_delivery_ids == ()
     selected = next(item for item in snapshot.projects if item.id == project.manifest.project_id)
     assert selected.requirement_count == 0
 

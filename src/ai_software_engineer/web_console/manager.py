@@ -24,6 +24,7 @@ from ai_software_engineer.multi_directory.service import (
     CreateRequirement,
     DeleteRequirement,
     JointDeliveryService,
+    RestartRequirement,
     UpdateRequirement,
 )
 from ai_software_engineer.project_workspace import ProjectWorkspace
@@ -44,6 +45,7 @@ from .models import (
     DeleteRequirementIntent,
     ProductApprovalIntent,
     ProductReplyIntent,
+    RestartRequirementIntent,
     UpdateRequirementIntent,
 )
 
@@ -102,6 +104,14 @@ class ManagerConsoleAdapter:
                     )
                 )
                 return _summarize(closed, project_id=intent.project_id)
+            if isinstance(intent, RestartRequirementIntent):
+                restarted = self._host.requirement_entry(intent.project_id).restart_requirement(
+                    RestartRequirement(
+                        delivery_id=intent.delivery_id,
+                        expected_checkpoint_sha256=intent.expected_checkpoint_sha256,
+                    )
+                )
+                return _summarize(restarted, project_id=intent.project_id)
             if isinstance(intent, DeleteRequirementIntent):
                 self._host.requirement_entry(intent.project_id).delete_requirement(
                     DeleteRequirement(

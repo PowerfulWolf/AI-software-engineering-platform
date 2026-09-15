@@ -279,7 +279,7 @@ Root cause (B/D): semantic path rejection lacked a safe service feedback contrac
 repair did not cover this independent validator. Prevention is typed diagnostics plus service/journal
 tests, not relaxing the validator. Other semantic failures remain fail-closed pending explicit contracts.
 
-## 12. READY Requirement replacement and logical retirement
+## 12. Requirement replacement, close/restart and logical retirement
 
 ### 1. Scope / Trigger
 
@@ -304,8 +304,18 @@ class DeleteRequirement(DomainModel):
     expected_checkpoint_sha256: CheckpointDigest
     submitted_at: AwareDatetime
 
+class CloseRequirement(DomainModel):
+    delivery_id: DeliveryId
+    expected_checkpoint_sha256: CheckpointDigest
+
+class RestartRequirement(DomainModel):
+    delivery_id: DeliveryId
+    expected_checkpoint_sha256: CheckpointDigest
+
 JointDeliveryService.update_requirement(UpdateRequirement) -> JointDeliveryResult
 JointDeliveryService.delete_requirement(DeleteRequirement) -> JointDeliveryResult
+JointDeliveryService.close_requirement(CloseRequirement) -> JointDeliveryResult
+JointDeliveryService.restart_requirement(RestartRequirement) -> JointDeliveryResult
 RequirementRetirementStore.retired_delivery_ids(JointJournal) -> frozenset[str]
 ```
 
@@ -328,6 +338,12 @@ The public storage contract is `schemas/requirement-retirement.schema.json` at
   not appear as a second current Requirement; its failure evidence is still preserved.
 - Delete records `reason=deleted` and returns the original checkpoint; it never removes checkpoints,
   attachments, Repository sidecars or Git state.
+- A BLOCKED close appends `CLOSED`. Restart accepts only the exact current `CLOSED` checkpoint and
+  appends `BLOCKED`; it does not call a provider or resume work. The existing resume command remains
+  the explicit execution boundary.
+- Deletion of BLOCKED/CLOSED Requirements is allowed. Current read projections must remove the joint
+  Requirement plus all child/native Tasks it owns, including Agent queue entries, while preserving
+  their journals and sidecars for audit.
 - The retirement record binds exact Team/Project manifest digests. Every entry binds the retired
   Delivery and its current checkpoint digest; a replacement entry additionally binds an existing
   replacement journal owned by the same Team/Project. The record is sorted, unique, digest-sealed,
@@ -347,7 +363,11 @@ The public storage contract is `schemas/requirement-retirement.schema.json` at
 | stale digest | `DeliveryCheckpointStale`; no replacement/retirement |
 | Edit after Product discussion starts | reject; create a new Requirement instead |
 | Delete during Product discussion or with an unapproved ProductSpec | retire current visibility; preserve Dialogue/ProductSpec history |
-| Delete after ProductSpec approval or delivery facts exist | reject; immutable approved lineage remains visible |
+| Delete an active post-approval Requirement | reject; immutable approved lineage remains visible |
+| BLOCKED close + exact digest | append CLOSED and keep visible under closed inventory |
+| CLOSED restart + exact digest | append BLOCKED; wait for explicit continue |
+| restart a non-CLOSED Requirement | reject without mutation |
+| delete BLOCKED/CLOSED Requirement | retire parent and suppress all derived current-work projections |
 | exact repeated delete/replace | return current retirement record; do not duplicate entry |
 | different retirement for the same Delivery | reject conflict |
 | retirement digest/owner/checkpoint drift | fail the read and command closed |
@@ -371,7 +391,8 @@ The public storage contract is `schemas/requirement-retirement.schema.json` at
 guards including pre-approval delete and post-approval rejection, idempotent retries, replacement
 existence and tamper failure. Manager/schema tests assert
 typed intent delegation and Python-to-JSON-Schema parity. Reader tests assert retired Requirements
-leave both the selected list and Project count without deleting the source journal.
+leave the selected list, Project count, native Task projection and Agent queues without deleting the
+source journal or Repository sidecar.
 
 ### 7. Wrong vs Correct
 

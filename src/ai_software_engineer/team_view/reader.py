@@ -138,13 +138,11 @@ class ProductionTeamReader:
             if selected is not None and journal is not None
             else frozenset()
         )
-        joints: list[JointCheckpoint] = []
+        all_joints: list[JointCheckpoint] = []
         for path in _directories(
             selected.requirements_root if selected is not None else Path("/nonexistent"),
             "delivery_multi_*",
         ):
-            if path.name in retired:
-                continue
             assert journal is not None
             assert selected is not None
             checkpoint = journal.current(path.name)
@@ -157,8 +155,23 @@ class ProductionTeamReader:
                 or checkpoint.project_manifest_sha256 != selected.manifest.manifest_sha256
             ):
                 raise ValueError("Requirement Team or Project mismatch")
-            joints.append(checkpoint)
-        natives = _read_native(selected) if selected is not None else ()
+            all_joints.append(checkpoint)
+        retired_native_ids = frozenset(
+            native_id
+            for joint in all_joints
+            if joint.delivery_id in retired
+            for native_id in _owned_native_delivery_ids(joint)
+        )
+        joints = [joint for joint in all_joints if joint.delivery_id not in retired]
+        natives = (
+            tuple(
+                native
+                for native in _read_native(selected)
+                if native.checkpoint.delivery_id not in retired_native_ids
+            )
+            if selected is not None
+            else ()
+        )
         by_id = {n.checkpoint.delivery_id: n for n in natives}
         ownership: dict[str, tuple[str, ScopeView]] = {}
         requests: list[RequestView] = []
@@ -476,6 +489,24 @@ def _retired_requirement_ids(project: ProjectWorkspace, journal: JointJournal) -
         project_manifest_sha256=project.manifest.manifest_sha256,
         read_only=True,
     ).retired_delivery_ids(journal)
+
+
+def _owned_native_delivery_ids(joint: JointCheckpoint) -> frozenset[str]:
+    """Return every native delivery identity derived from one joint Requirement."""
+    result = {child.checkpoint.delivery_id for child in joint.children}
+    for unit in joint.scope.units:
+        reference = joint.design is not None and unit.id in joint.design.reference_only
+        if joint.plan is None or reference:
+            continue
+        derived = DerivedStageInputs(joint, unit.id)
+        result.add(
+            _delivery_id(
+                derived.root,
+                derived.requirement,
+                namespace=joint.project_id,
+            )
+        )
+    return frozenset(result)
 
 
 def _read_native(project: ProjectWorkspace) -> tuple[_Native, ...]:

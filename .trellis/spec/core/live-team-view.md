@@ -382,6 +382,9 @@ RequirementRetirementStore(..., read_only=True).retired_delivery_ids(journal)
 
 - Snapshot reads and Project summaries exclude retired `delivery_multi_*` identities from current
   Requirement lists and counts, while leaving immutable journal files untouched.
+- The reader derives every owned native Delivery from the retired joint checkpoint's committed
+  children and execution plan, then excludes those native Tasks before standalone fallback and Agent
+  queue projection. Audit sidecars remain on disk but cannot reappear as unrelated current work.
 - The reader validates the retirement digest, Team/Project lineage, exact retired checkpoint and any
   replacement journal before filtering. A malformed exclusion list is corruption, not permission to
   hide arbitrary work.
@@ -393,6 +396,7 @@ RequirementRetirementStore(..., read_only=True).retired_delivery_ids(journal)
 |---|---|
 | absent or valid empty record | existing Requirements unchanged |
 | valid deleted/replaced entry | exclude exact original from list and count |
+| retired parent with child/native delivery | exclude parent, native Task and Agent queue entry |
 | valid replacement | replacement remains visible; original excluded |
 | digest/owner/checkpoint/replacement drift | snapshot fails closed |
 
@@ -403,10 +407,12 @@ journal remains inspectable. Bad: subtract a raw JSON ID without verifying its j
 
 ### 6. Tests Required
 
-`tests/team_view/test_live.py` must assert a retired Requirement is absent and the owning Project count
-is reduced, using a real read-only journal and retirement record.
+`tests/team_view/test_live.py` must assert a retired Requirement is absent, its native child Task is
+absent and the owning Project count is reduced, using a real read-only journal, Repository sidecar and
+retirement record.
 
 ### 7. Wrong vs Correct
 
-Wrong: delete Requirement directories to make the dashboard count smaller. Correct: validate the
-Project-owned retirement index, then filter only the exact bound identities in the read projection.
+Wrong: hide only the parent Requirement and let its child sidecars reappear as standalone Agent work.
+Correct: validate the Project-owned retirement index, derive its owned native Delivery identities,
+then filter parent and children before Request/Task/Agent projection.

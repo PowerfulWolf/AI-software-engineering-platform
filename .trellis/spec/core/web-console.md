@@ -62,6 +62,7 @@ production_console_app(
 - `CREATE_REQUIREMENT(project_id, name, repository_roots)`；
 - `UPDATE_REQUIREMENT(project_id, delivery_id, expected_checkpoint_sha256, name, repository_roots)`；
 - `CLOSE_REQUIREMENT(project_id, delivery_id, expected_checkpoint_sha256)`；
+- `RESTART_REQUIREMENT(project_id, delivery_id, expected_checkpoint_sha256)`；
 - `DELETE_REQUIREMENT(project_id, delivery_id, expected_checkpoint_sha256)`；
 - `PRODUCT_REPLY(project_id, delivery_id, expected_checkpoint_sha256, message, screenshot_ids)`；
 - `PRODUCT_APPROVAL(project_id, delivery_id, expected_checkpoint_sha256)`；
@@ -138,8 +139,13 @@ production_console_app(
   目录新增仍只来自原生目录选择器。删除必须先确认。
   UPDATE 成功后选中返回的 replacement Delivery；DELETE 成功后清除已退休选择。
 - 终态 `BLOCKED` Requirement 可在 exact checkpoint fence 下“关闭需求”或直接“删除需求”。关闭追加
-  `CLOSED` checkpoint、停止继续交付并保留在可见历史；删除只追加 Project retirement 记录，完整
-  journal、子 Task 与证据不擦除。活动中的批准后 Requirement 仍不得删除。
+  `CLOSED` checkpoint、停止继续交付并进入独立“已关闭”清单；`CLOSED` 可通过
+  `RESTART_REQUIREMENT` 追加 `BLOCKED` checkpoint，之后再由现有“继续交付”显式恢复执行。删除只追加
+  Project retirement 记录，完整 journal、子 Task 与证据不擦除，但父需求及其所有派生子 Task 必须
+  同时退出当前 Project 与 Agent 队列投影。活动中的批准后 Requirement 仍不得删除。
+- `CLOSE_REQUIREMENT`、`RESTART_REQUIREMENT`、`DELETE_REQUIREMENT` 的 QUEUED/RUNNING Operation
+  只表示生命周期命令正在处理，不得把原本阻塞或关闭的 Requirement 显示成“进行中”。只有
+  `PRODUCT_REPLY`、`PRODUCT_APPROVAL`、`CONTINUE_DELIVERY` 或真实活动子 Task 可以覆盖交付展示阶段。
 - Repository HEAD 与 Requirement 固定基线不一致时，Manager 必须把 typed
   `RequirementSourceRevisionDrift` 映射为 `SOURCE_REVISION_DRIFT`。Team View 也必须识别升级前已经
   持久化的 legacy `COMMAND_REJECTED` source-drift summary。此时不得继续显示可恢复 composer、
@@ -184,7 +190,10 @@ production_console_app(
 | Exact idle READY Requirement edit | persist UPDATE; Manager publishes replacement and retires original |
 | Exact idle pre-approval Requirement delete after confirmation | persist DELETE; original leaves current inventory but dialogue/history remains |
 | Exact BLOCKED Requirement close | append CLOSED successor; retain Requirement and all history; disable continuation |
+| Exact CLOSED Requirement restart | append BLOCKED successor; retain history; wait for explicit continue |
 | Exact BLOCKED/CLOSED Requirement delete | retire from current inventory; preserve journal, child Tasks and evidence |
+| Retired Requirement owns native child deliveries | omit parent, children and their Agent queue entries from current projection |
+| Close/restart/delete Operation is queued or running | keep the durable blocked/closed presentation; never show active delivery |
 | Edit after Product discussion, delete an active post-approval Requirement, or stale checkpoint | terminal safe failure; no retirement or history mutation |
 | Browser refresh/disconnect after 202 | accepted Operation continues; repeated same key returns same identity |
 | Same idempotency key, changed intent | 409; original Operation unchanged |
@@ -235,10 +244,12 @@ production_console_app(
 - `tests/team_view/ui.test.cjs`：多目录创建、Product/继续/批准操作、操作状态、刷新保持、hidden digest
   不直接渲染、只读 fallback、单 Task 串行角色状态、安全文本、Requirement 详情统一标题/分割节奏，
   粘贴截图移除后的预览和反馈同步、READY draft 编辑、Product 批准前删除、阻塞需求关闭/删除、
+  已关闭需求独立筛选与重启、生命周期 Operation 不冒充活动交付、
   仅含节点状态的交付流程、source-drift 重建，
   以及失败通知关闭/成功替代、successful-but-blocked 反馈、同 Requirement 去重、阻塞信息唯一入口与
   Operation 快捷跳转。
-- `tests/team_view/test_live.py`：candidate branch 必须从 exact candidate ref 唯一推导，不能猜测。
+- `tests/team_view/test_live.py`：candidate branch 必须从 exact candidate ref 唯一推导；退休父需求的
+  native child deliveries 与 Agent 队列投影必须同时消失。
 - `tests/contracts/test_json_schema_contracts.py`：Python/JSON Schema 的 QUEUED/RUNNING/terminal 状态和
   path 约束一致。
 

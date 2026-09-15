@@ -105,6 +105,14 @@ class CloseRequirement(DomainModel):
     submitted_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class RestartRequirement(DomainModel):
+    """Reopen a closed Requirement at its retained delivery checkpoint."""
+
+    delivery_id: DeliveryId
+    expected_checkpoint_sha256: CheckpointDigest
+    submitted_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class JointDeliveryService:
     def __init__(
         self,
@@ -192,6 +200,22 @@ class JointDeliveryService:
                 next_action="Requirement closed by user; delivery history is retained.",
             )
             return JointDeliveryResult(checkpoint=closed)
+
+    def restart_requirement(self, command: RestartRequirement) -> JointDeliveryResult:
+        """Reopen the exact displayed closed Requirement without starting execution."""
+        with self.journal.lock(command.delivery_id):
+            checkpoint = self._current(command.delivery_id)
+            self._expected(checkpoint, command.expected_checkpoint_sha256)
+            if checkpoint.stage is not JointStage.CLOSED:
+                raise ValueError("Requirement can only be restarted while closed")
+            restarted = self._save(
+                checkpoint,
+                stage=JointStage.BLOCKED,
+                next_action=(
+                    "Requirement restarted; continue delivery from the retained checkpoint."
+                ),
+            )
+            return JointDeliveryResult(checkpoint=restarted)
 
     def _intake(
         self,

@@ -2103,6 +2103,83 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     "successful editing follows the replacement Requirement",
   );
 
+  fixture.requests[0].stage = "BLOCKED";
+  fixture.requests[0].blocker = "Waiting for a human decision.";
+  fixture.requests[0].next_action = "Inspect the retained checkpoint.";
+  await interval.fn();
+  vm.runInContext('showDetail("request","r-edited")', context);
+  const closeEdited = descend(get("detail")).find(
+    (node) => node.tag === "button" && node.textContent === "关闭需求",
+  );
+  await closeEdited.events.click();
+  await descend(get("composer"))
+    .find((node) => node.tag === "button" && node.textContent === "确认关闭")
+    .events.click();
+  assert.deepEqual(submittedIntents.at(-1), {
+    action: "CLOSE_REQUIREMENT",
+    project_id: "project_fixture",
+    delivery_id: "r-edited",
+    expected_checkpoint_sha256: "d".repeat(64),
+  });
+  assert.equal(
+    vm.runInContext('requestGroup(snapshot.requests[0])', context),
+    "blocked",
+    "a queued close operation must not move a blocked Requirement to active",
+  );
+
+  storedOperations.at(-1).status = "SUCCEEDED";
+  storedOperations.at(-1).result = {
+    project_id: "project_fixture",
+    delivery_id: "r-edited",
+    checkpoint_sha256: "e".repeat(64),
+    stage: "CLOSED",
+    next_action: "Requirement closed by user.",
+  };
+  fixture.requests[0].stage = "CLOSED";
+  fixture.requests[0].blocker = null;
+  fixture.requests[0].checkpoint_sha256 = "e".repeat(64);
+  await interval.fn();
+  assert.equal(
+    vm.runInContext('requestGroup(snapshot.requests[0])', context),
+    "closed",
+  );
+  vm.runInContext('page="requests"; requestFilter="closed"; render()', context);
+  assert.match(text(get("content")), /已关闭 1/);
+  vm.runInContext('showDetail("request","r-edited")', context);
+  const restartEdited = descend(get("detail")).find(
+    (node) => node.tag === "button" && node.textContent === "重新启动需求",
+  );
+  await restartEdited.events.click();
+  await descend(get("composer"))
+    .find(
+      (node) => node.tag === "button" && node.textContent === "确认重新启动",
+    )
+    .events.click();
+  assert.deepEqual(submittedIntents.at(-1), {
+    action: "RESTART_REQUIREMENT",
+    project_id: "project_fixture",
+    delivery_id: "r-edited",
+    expected_checkpoint_sha256: "e".repeat(64),
+  });
+  assert.equal(
+    vm.runInContext('requestGroup(snapshot.requests[0])', context),
+    "closed",
+    "a queued restart operation must not pretend that delivery already resumed",
+  );
+
+  storedOperations.at(-1).status = "SUCCEEDED";
+  storedOperations.at(-1).result = {
+    project_id: "project_fixture",
+    delivery_id: "r-edited",
+    checkpoint_sha256: "f".repeat(64),
+    stage: "BLOCKED",
+    next_action: "Requirement restarted; continue delivery.",
+  };
+  fixture.requests[0].stage = "BLOCKED";
+  fixture.requests[0].blocker = "Requirement restarted; continue delivery.";
+  fixture.requests[0].checkpoint_sha256 = "f".repeat(64);
+  await interval.fn();
+  vm.runInContext('showDetail("request","r-edited")', context);
   const deleteEdited = descend(get("detail")).find(
     (node) => node.tag === "button" && node.textContent === "删除需求",
   );
@@ -2116,6 +2193,21 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     action: "DELETE_REQUIREMENT",
     project_id: "project_fixture",
     delivery_id: "r-edited",
-    expected_checkpoint_sha256: "d".repeat(64),
+    expected_checkpoint_sha256: "f".repeat(64),
   });
+  assert.equal(
+    vm.runInContext('requestGroup(snapshot.requests[0])', context),
+    "blocked",
+    "a queued delete operation must not move a blocked Requirement to active",
+  );
+
+  storedOperations.at(-1).status = "SUCCEEDED";
+  storedOperations.at(-1).result = {
+    project_id: "project_fixture",
+    stage: "REQUIREMENT_DELETED",
+    next_action: "Requirement removed from the current Project view.",
+  };
+  fixture.requests = [];
+  await interval.fn();
+  assert.doesNotMatch(text(get("content")), /更新后的需求/);
 });

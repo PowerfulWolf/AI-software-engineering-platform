@@ -36,6 +36,7 @@ class ConsoleAction(StrEnum):
     CREATE_REQUIREMENT = "CREATE_REQUIREMENT"
     UPDATE_REQUIREMENT = "UPDATE_REQUIREMENT"
     CLOSE_REQUIREMENT = "CLOSE_REQUIREMENT"
+    RESTART_REQUIREMENT = "RESTART_REQUIREMENT"
     DELETE_REQUIREMENT = "DELETE_REQUIREMENT"
     PRODUCT_REPLY = "PRODUCT_REPLY"
     PRODUCT_APPROVAL = "PRODUCT_APPROVAL"
@@ -96,6 +97,13 @@ class CloseRequirementIntent(DomainModel):
     expected_checkpoint_sha256: CheckpointDigest
 
 
+class RestartRequirementIntent(DomainModel):
+    action: Literal[ConsoleAction.RESTART_REQUIREMENT] = ConsoleAction.RESTART_REQUIREMENT
+    project_id: ProjectId
+    delivery_id: DeliveryId
+    expected_checkpoint_sha256: CheckpointDigest
+
+
 class ProductReplyIntent(DomainModel):
     action: Literal[ConsoleAction.PRODUCT_REPLY] = ConsoleAction.PRODUCT_REPLY
     project_id: ProjectId
@@ -133,6 +141,7 @@ ConsoleIntent = Annotated[
     | CreateRequirementIntent
     | UpdateRequirementIntent
     | CloseRequirementIntent
+    | RestartRequirementIntent
     | DeleteRequirementIntent
     | ProductReplyIntent
     | ProductApprovalIntent
@@ -338,5 +347,6 @@ __all__ = [
     "OperationId",
     "ProductApprovalIntent",
     "ProductReplyIntent",
+    "RestartRequirementIntent",
     "UpdateRequirementIntent",
 ]

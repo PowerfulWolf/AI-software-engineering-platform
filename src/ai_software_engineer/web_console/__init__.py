@@ -41,6 +41,7 @@ from .models import (
     DeleteRequirementIntent,
     ProductApprovalIntent,
     ProductReplyIntent,
+    RestartRequirementIntent,
     UpdateRequirementIntent,
 )
 from .store import (
@@ -92,6 +93,7 @@ __all__ = [
     "ProductReplyIntent",
     "ProjectConsole",
     "ProjectSummary",
+    "RestartRequirementIntent",
     "RuntimeStatusSnapshot",
     "RuntimeVariableUpdate",
     "SecretStatus",

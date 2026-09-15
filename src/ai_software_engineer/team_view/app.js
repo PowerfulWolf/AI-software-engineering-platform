@@ -89,6 +89,7 @@ const labels = {
   CREATE_REQUIREMENT: "创建需求",
   UPDATE_REQUIREMENT: "编辑需求",
   CLOSE_REQUIREMENT: "关闭需求",
+  RESTART_REQUIREMENT: "重新启动需求",
   DELETE_REQUIREMENT: "删除需求",
   PRODUCT_REPLY: "提交需求说明",
   PRODUCT_APPROVAL: "批准产品文档",
@@ -104,6 +105,11 @@ const productDiscussionStages = new Set([
   "PRODUCT_DISCOVERY",
   "WAITING_PRODUCT_REPLY",
   "WAITING_PRODUCT_APPROVAL",
+]);
+const deliveryOperationActions = new Set([
+  "PRODUCT_REPLY",
+  "PRODUCT_APPROVAL",
+  "CONTINUE_DELIVERY",
 ]);
 const deliveryRoleOrder = { coder: 0, qa: 1, reviewer: 2 };
 const teamRoleOrder = {
@@ -217,7 +223,7 @@ const badge = (status) =>
     "span",
     label(status),
     "badge " +
-      (status === "DONE"
+      (["DONE", "CLOSED"].includes(status)
         ? "done"
         : status.includes("WAITING") || ["BLOCKED", "FAILED"].includes(status)
           ? "blocked"
@@ -337,12 +343,16 @@ function activeRequestTask(request) {
 }
 function requestPresentation(request) {
   const running = activeOperation(request.id);
+  const deliveryOperation =
+    running && deliveryOperationActions.has(running.intent.action)
+      ? running
+      : null;
   const activeTask = activeRequestTask(request);
-  if (running || activeTask) {
+  if (deliveryOperation || activeTask) {
     const operationStage =
-      running?.intent.action === "PRODUCT_REPLY"
+      deliveryOperation?.intent.action === "PRODUCT_REPLY"
         ? "PRODUCT_DISCOVERY"
-        : running?.intent.action === "PRODUCT_APPROVAL"
+        : deliveryOperation?.intent.action === "PRODUCT_APPROVAL"
           ? "DESIGNING"
           : "DELIVERING";
     return {
@@ -351,12 +361,19 @@ function requestPresentation(request) {
       blocker: null,
       nextAction:
         activeTask?.next_action ||
-        (running?.status === "QUEUED"
+        (deliveryOperation?.status === "QUEUED"
           ? "当前操作已排队，等待 Manager 执行。"
           : "当前操作正在执行。"),
     };
   }
-  if (["DONE", "CLOSED"].includes(request.stage))
+  if (request.stage === "CLOSED")
+    return {
+      group: "closed",
+      status: request.stage,
+      blocker: null,
+      nextAction: request.next_action,
+    };
+  if (request.stage === "DONE")
     return {
       group: "completed",
       status: request.stage,
@@ -2020,6 +2037,7 @@ function renderRequests(content) {
   const groups = [
     ["active", "进行中"],
     ["blocked", "阻塞中"],
+    ["closed", "已关闭"],
     ["completed", "已完成"],
   ];
   const counts = Object.fromEntries(
@@ -4184,6 +4202,28 @@ function renderDetail() {
               },
             ),
           "secondary",
+        ),
+      );
+    if (item.stage === "CLOSED")
+      topActions.append(
+        button(
+          "重新启动需求",
+          () =>
+            confirmMutation(
+              "重新启动需求",
+              `确认重新启动“${item.title}”吗？需求会回到待继续交付状态，并保留此前的全部交付历史。`,
+              "确认重新启动",
+              async () => {
+                const accepted = await submitOperation({
+                  action: "RESTART_REQUIREMENT",
+                  project_id: item.project_id,
+                  delivery_id: item.id,
+                  expected_checkpoint_sha256: item.checkpoint_sha256,
+                });
+                if (!accepted) throw new Error("重新启动操作未被接受。");
+              },
+            ),
+          "primary",
         ),
       );
     if (
