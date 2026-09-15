@@ -344,7 +344,7 @@ WorkspacePolicy.authorize_command(arguments: tuple[str, ...]) -> tuple[str, ...]
 - `remove` 先检查 staged、unstaged 和 untracked paths，dirty worktree 抛 `DirtyWorktree(changed_paths)` 并保留现场，clean cleanup 不删除 branch/commit；
 - Git subprocess 只使用 argv、`shell=False`、固定 timeout、明确 cwd 和最小 env；每次 invocation 覆盖 `core.hooksPath=/dev/null`、`core.fsmonitor=false`；
 - repository-local `filter.*.(clean|smudge|process)` 可能在 checkout 运行外部程序，v0.1 在 create 前以 `UnsafeRepositoryConfiguration` fail closed；diff inspection 传 `--no-ext-diff --no-textconv`；
-- `WorkspacePolicy` 必须绑定实际 role worktree root。路径先做 POSIX lexical validation，再解析已有 symlink parents 并验证仍在 root 内且不指向 `.git`；deny glob 优先于 role read/write allowlist；
+- `WorkspacePolicy` 必须绑定实际 role worktree root。路径先做 POSIX lexical validation，再解析已有 symlink parents 并验证仍在 root 内且不指向 `.git`；deny glob 优先于 role read/write allowlist；遗漏路径不得由文件类型或包结构隐式扩权，只能通过显式恢复范围审批；
 - command allowlist entry 用 `shlex.split` 解析成完整 token prefix。运行时只接受预先 tokenized argv；空命令、shell 控制 token、换行、`$()`、backtick 或未匹配 prefix 都拒绝；
 - path/command policy 是 application guard，不替代未来的 OS/container sandbox、network isolation、resource limit 和 command-argument-specific controls。
 
@@ -374,7 +374,7 @@ WorkspacePolicy.authorize_command(arguments: tuple[str, ...]) -> tuple[str, ...]
 - 真实 temporary Git fixture 断言 Coder branch、QA/Reviewer detached SHA、目录隔离和 main checkout 不变；
 - inspection 同时断言 staged、unstaged、untracked path；cleanup 断言 dirty preserve、clean remove、branch retain；
 - 反例覆盖 invalid role/repository/root/revision、symlinked task directory escape、target/branch collision 和 forged ref；
-- policy 覆盖 read/write separation、deny precedence、absolute/`..`/`.git`、symlink escape、empty Reviewer writes、command token prefix collision 和 shell-like argv；
+- policy 覆盖 read/write separation、deny precedence、遗漏路径拒绝、absolute/`..`/`.git`、symlink escape、empty Reviewer writes、command token prefix collision 和 shell-like argv；
 - executable `post-checkout` hook 的 sentinel 必须不生成；external smudge/process filter 必须在执行前被拒绝；
 - Ruff、strict mypy、完整 pytest、lock、build 和 `git diff --check` 全部通过。
 

@@ -80,6 +80,25 @@ def test_seed_preserves_new_base_and_original_source(
     manager.verify_capture(seeded, permissions)
 
 
+def test_seed_preserves_new_files_and_original_source(
+    workspace: tuple[GitWorktreeManager, WorktreeRef, AgentPermissions], tmp_path: Path
+) -> None:
+    manager, source, target, permissions = prepare(workspace, tmp_path)
+    created = source.path / "src/new.py"
+    created.write_text("NEW = 1\n", encoding="utf-8")
+    capture = manager.capture_changes(source, permissions)
+
+    seeded = manager.seed_changes(capture, target, permissions, permissions)
+
+    assert (target.path / "src/new.py").read_text(encoding="utf-8") == "NEW = 1\n"
+    assert seeded.changed_paths == ("src/app.py", "src/new.py")
+    manager.verify_capture(capture, permissions)
+    manager.verify_capture(seeded, permissions)
+    assert created.read_text(encoding="utf-8") == "NEW = 1\n"
+    assert git(target.path, "rev-parse", "HEAD") == target.head_revision
+    assert git(source.path, "rev-parse", "HEAD") == source.head_revision
+
+
 def test_conflict_preflight_leaves_target_unchanged(
     workspace: tuple[GitWorktreeManager, WorktreeRef, AgentPermissions], tmp_path: Path
 ) -> None:

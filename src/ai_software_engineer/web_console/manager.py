@@ -157,9 +157,21 @@ class ManagerConsoleAdapter:
                     ResumeProjectDelivery(
                         delivery_id=intent.delivery_id,
                         approved_plan_sha256=intent.approved_plan_sha256,
+                        approved_scope_sha256=intent.approved_scope_sha256,
                         approval_reference=(
-                            "web-console-plan:" + intent.approved_plan_sha256
-                            if intent.approved_plan_sha256 is not None
+                            (
+                                "web-console-scope:"
+                                if intent.approved_scope_sha256 is not None
+                                else "web-console-plan:"
+                            )
+                            + cast(
+                                str,
+                                intent.approved_plan_sha256 or intent.approved_scope_sha256,
+                            )
+                            if (
+                                intent.approved_plan_sha256 is not None
+                                or intent.approved_scope_sha256 is not None
+                            )
                             else None
                         ),
                     ),
@@ -240,12 +252,31 @@ def _summarize(
                     f"保留改动 {len(recovery_plan.capture.files)} 个文件",
                     f"目标基线 {recovery_plan.target_base_revision}",
                     *(
+                        f"已补充文件范围 {path}"
+                        for path in (
+                            recovery_plan.scope_supplement.paths
+                            if recovery_plan.scope_supplement is not None
+                            else ()
+                        )
+                    ),
+                    *(
                         f"写入目录修正 {item.source_path} → {item.target_path}"
                         for item in recovery_plan.effective_path_rebindings
                     ),
                 ),
             )
             next_action = "Review and approve the exact Coder recovery plan."
+        elif result.scope_supplement_sha256 is not None:
+            approval = ConsoleApprovalRequest(
+                kind="coder_scope",
+                plan_sha256=result.scope_supplement_sha256,
+                title="批准补充 Coder 文件范围",
+                facts=(
+                    "以下改动文件不在原任务授权范围内。批准仅对本次恢复生效。",
+                    *(f"待补充文件 {path}" for path in result.scope_supplement_paths),
+                ),
+            )
+            next_action = "Review and approve the exact omitted file paths."
     return ConsoleCommandResult(
         project_id=project_id,
         delivery_id=checkpoint.delivery_id,

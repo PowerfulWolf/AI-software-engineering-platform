@@ -230,9 +230,9 @@ class GitWorktreeManager:
     ) -> WorktreeChangeCapture:
         """Observe preserved Coder modifications without changing files, index or refs.
 
-        v1 deliberately accepts only modifications to existing regular text files;
-        added/deleted/renamed/untracked files, mode changes and partial commits need a
-        later explicit recovery contract. A capture is not authorization to resume.
+        v1 accepts modifications and additions of bounded regular UTF-8 text files;
+        deleted/renamed files, mode changes and partial commits need a later explicit
+        recovery contract. A capture is not authorization to resume.
         The caller must ensure the old executor has stopped before taking this fact.
         """
         if worktree.role is not AgentRole.CODER:
@@ -301,11 +301,17 @@ class GitWorktreeManager:
                 policy.authorize_write(path)
                 if Path(path).name == ".gitattributes":
                     raise WorktreeSeedRejected("seed cannot change its own merge attributes")
-                read_capture_file(
-                    target.path,
-                    path,
-                    executable=bool((target.path / path).lstat().st_mode & 0o100),
-                )
+                target_path = target.path / path
+                if target_path.exists() or target_path.is_symlink():
+                    read_capture_file(
+                        target.path,
+                        path,
+                        executable=bool(target_path.lstat().st_mode & 0o100),
+                    )
+                elif self._path_exists_at_revision(
+                    capture.worktree.path, capture.worktree.head_revision, path
+                ):
+                    raise WorktreeSeedRejected("seed target is missing a captured base file")
             self._validate_seed_configuration(target, capture.changed_paths)
             arguments = (
                 "-c",
@@ -394,8 +400,9 @@ class GitWorktreeManager:
         )
         root = worktree.path
         policy = WorkspacePolicy(root, permissions, denied_paths=denied_paths)
-        if self._run_git_bytes(("ls-files", "--others", "--exclude-standard", "-z"), cwd=root):
-            raise WorktreeCaptureRejected("untracked files require a separate recovery contract")
+        untracked_paths = _decode_nul_paths(
+            self._run_git_bytes(("ls-files", "--others", "--exclude-standard", "-z"), cwd=root)
+        )
         flags = self._run_git_bytes(("ls-files", "-v", "-z"), cwd=root)
         if any(entry and entry[:1] != b"H" for entry in flags.split(b"\0")):
             raise WorktreeCaptureRejected("nonstandard index flags are not supported")
@@ -410,39 +417,66 @@ class GitWorktreeManager:
             (*arguments, "--raw", "--no-abbrev", "-z", "HEAD", "--"), cwd=root
         )
         entries = raw.split(b"\0")[:-1]
-        if len(entries) % 2 or len(entries) // 2 > MAX_CAPTURE_FILES:
+        if len(entries) % 2 or len(entries) // 2 + len(untracked_paths) > MAX_CAPTURE_FILES:
             raise WorktreeCaptureRejected("unsupported capture file inventory")
-        files: list[tuple[str, str]] = []
+        files: dict[str, str] = {}
         total_bytes = 0
         for header, raw_path in zip(entries[::2], entries[1::2], strict=True):
             fields = header.split()
-            if (
-                len(fields) != 5
-                or fields[0] not in (b":100644", b":100755")
-                or fields[0][1:] != fields[1]
-                or fields[4] != b"M"
-            ):
-                raise WorktreeCaptureRejected("capture supports regular-file modifications only")
+            if len(fields) != 5:
+                raise WorktreeCaptureRejected("unsupported capture file inventory")
+            modified = (
+                fields[4] == b"M"
+                and fields[0] in (b":100644", b":100755")
+                and fields[0][1:] == fields[1]
+            )
+            added = (
+                fields[4] == b"A"
+                and fields[0] == b":000000"
+                and fields[1] in (b"100644", b"100755")
+            )
+            if not modified and not added:
+                raise WorktreeCaptureRejected(
+                    "capture supports regular-file modifications and additions only"
+                )
             try:
                 path = raw_path.decode("utf-8")
                 policy.authorize_read(path)
                 policy.authorize_write(path)
                 content = read_capture_file(root, path, executable=fields[1] == b"100755")
-                base_size = int(
-                    self._run_git(("cat-file", "-s", fields[2].decode("ascii")), cwd=root)
+                base_size = (
+                    int(self._run_git(("cat-file", "-s", fields[2].decode("ascii")), cwd=root))
+                    if modified
+                    else 0
                 )
                 total_bytes += len(content) + base_size
                 if total_bytes > MAX_CAPTURE_BYTES:
                     raise WorktreeCaptureRejected("capture content exceeds byte limit")
             except (OSError, UnicodeError, ValueError) as error:
                 raise WorktreeCaptureRejected("capture cannot read a regular UTF-8 file") from error
-            files.append((path, hashlib.sha256(content).hexdigest()))
+            files[path] = hashlib.sha256(content).hexdigest()
+        for path in sorted(untracked_paths):
+            if path in files:
+                raise WorktreeCaptureRejected("duplicate capture path")
+            try:
+                policy.authorize_read(path)
+                policy.authorize_write(path)
+                candidate = root / path
+                content = read_capture_file(
+                    root, path, executable=bool(candidate.lstat().st_mode & 0o100)
+                )
+                total_bytes += len(content)
+                if total_bytes > MAX_CAPTURE_BYTES:
+                    raise WorktreeCaptureRejected("capture content exceeds byte limit")
+            except (OSError, UnicodeError, ValueError) as error:
+                raise WorktreeCaptureRejected("capture cannot read a regular UTF-8 file") from error
+            files[path] = hashlib.sha256(content).hexdigest()
         staged_paths = _decode_nul_paths(
             self._run_git_bytes(
                 (*arguments, "--cached", "--name-only", "-z", "HEAD", "--"), cwd=root
             )
         )
-        if not staged_paths.issubset({path for path, _ in files}):
+        if not staged_paths.issubset(files):
             raise WorktreeCaptureRejected("index-only changes require a separate recovery contract")
         patch_arguments = (
             *arguments,
@@ -455,6 +489,12 @@ class GitWorktreeManager:
             "--dst-prefix=b/",
         )
         patch = without_hunk_labels(self._run_git_bytes((*patch_arguments, "HEAD", "--"), cwd=root))
+        for path in sorted(untracked_paths):
+            patch += without_hunk_labels(
+                self._run_git_diff_bytes(
+                    (*patch_arguments, "--no-index", "--", "/dev/null", path), cwd=root
+                )
+            )
         staged = without_hunk_labels(
             self._run_git_bytes((*patch_arguments, "--cached", "HEAD", "--"), cwd=root)
         )
@@ -473,8 +513,16 @@ class GitWorktreeManager:
             worktree=worktree,
             patch=patch,
             index_diff_sha256=hashlib.sha256(staged).hexdigest(),
-            file_sha256s=tuple(sorted(files)),
+            file_sha256s=tuple(sorted(files.items())),
         )
+
+    def _path_exists_at_revision(self, root: Path, revision: str, path: str) -> bool:
+        observed = _decode_nul_paths(
+            self._run_git_bytes(("ls-tree", "-z", "--name-only", revision, "--", path), cwd=root)
+        )
+        if observed not in (set(), {path}):
+            raise GitCommandError("Git returned an unexpected tree path")
+        return observed == {path}
 
     def _validate_repository(self) -> None:
         if self._git is None or not self._repository.is_dir():
@@ -682,6 +730,30 @@ class GitWorktreeManager:
         if completed.returncode != 0:
             message = completed.stderr.decode("utf-8", errors="replace").strip()
             raise GitCommandError(message or "Git command failed")
+        return completed.stdout
+
+    def _run_git_diff_bytes(self, arguments: tuple[str, ...], *, cwd: Path) -> bytes:
+        """Run a read-only diff command where Git uses status 1 to mean differences."""
+        if self._git is None:
+            raise InvalidRepository("Git executable is unavailable")
+        try:
+            completed = subprocess.run(
+                (self._git, *_GIT_SAFETY_CONFIG, *arguments),
+                cwd=cwd,
+                env=_GIT_ENV,
+                check=False,
+                capture_output=True,
+                text=False,
+                timeout=self._command_timeout_seconds,
+                shell=False,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise GitCommandTimeout("Git diff command timed out") from error
+        except OSError as error:
+            raise GitCommandError("Git diff command could not start") from error
+        if completed.returncode not in (0, 1):
+            message = completed.stderr.decode("utf-8", errors="replace").strip()
+            raise GitCommandError(message or "Git diff command failed")
         return completed.stdout
 
     def _invoke_git(

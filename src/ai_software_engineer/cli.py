@@ -342,6 +342,13 @@ def resume_project_delivery(
             help="Exact recovery or verification plan SHA-256 emitted by an earlier resume.",
         ),
     ] = None,
+    approve_scope: Annotated[
+        str | None,
+        typer.Option(
+            "--approve-scope",
+            help="Exact omitted-path scope SHA-256 emitted by an earlier resume.",
+        ),
+    ] = None,
     approval_reference: Annotated[
         str | None,
         typer.Option(
@@ -358,9 +365,10 @@ def resume_project_delivery(
             ResumeProjectDelivery(
                 delivery_id=delivery_id,
                 approved_plan_sha256=approve_plan,
+                approved_scope_sha256=approve_scope,
                 approval_reference=(
-                    (approval_reference or f"cli-delivery-plan-approval:{approve_plan}")
-                    if approve_plan is not None
+                    (approval_reference or f"cli-delivery-approval:{approve_plan or approve_scope}")
+                    if approve_plan is not None or approve_scope is not None
                     else approval_reference
                 ),
             )

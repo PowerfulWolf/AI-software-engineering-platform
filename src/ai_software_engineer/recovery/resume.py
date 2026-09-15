@@ -22,7 +22,12 @@ from ai_software_engineer.manager.production_backend import (
     ProductionProjectDeliveryBackend,
 )
 from ai_software_engineer.recovery.entry import NativeRecoveryEntry
-from ai_software_engineer.recovery.models import RecoveryPlan, RecoveryRejected, RecoveryScope
+from ai_software_engineer.recovery.models import (
+    RecoveryPlan,
+    RecoveryRejected,
+    RecoveryScope,
+    RecoveryScopeSupplement,
+)
 from ai_software_engineer.recovery.remediation import CandidateRemediationService
 from ai_software_engineer.recovery.store import FileRecoveryStore, RecoveryRecordMissing
 from ai_software_engineer.recovery.verification_entry import CandidateVerificationEntry
@@ -42,6 +47,7 @@ class DeliveryResumeOutcome(StrEnum):
     WAITING_HUMAN = "WAITING_HUMAN"
     VERIFICATION_APPROVAL_REQUIRED = "VERIFICATION_APPROVAL_REQUIRED"
     RECOVERY_APPROVAL_REQUIRED = "RECOVERY_APPROVAL_REQUIRED"
+    SCOPE_APPROVAL_REQUIRED = "SCOPE_APPROVAL_REQUIRED"
     VERIFIED = "VERIFIED"
     RECOVERED = "RECOVERED"
     REMEDIATED = "REMEDIATED"
@@ -58,6 +64,8 @@ class DeliveryResumeResult(DomainModel):
     verification_completion_sha256: str | None = None
     recovery_plan_file: NonEmptyStr | None = None
     recovery_plan_sha256: str | None = None
+    scope_supplement_sha256: str | None = None
+    scope_supplement_paths: tuple[NonEmptyStr, ...] = ()
 
 
 def _checkpoint_next_action(checkpoint: ProjectDeliveryCheckpoint) -> str:
@@ -265,8 +273,32 @@ class DeliveryResumeController:
     ) -> DeliveryResumeResult:
         try:
             latest = self._recovery.latest_delivery(current)
+            if latest is not None:
+                try:
+                    self._recovery.require_current_plan(latest[2])
+                except RecoveryRejected:
+                    # Immutable stale plans remain as evidence. Recompute the exact
+                    # scope and plan instead of asking the user to approve stale facts.
+                    latest = None
             if latest is None:
-                plan, path = self._recovery.propose_delivery(current)
+                supplement = self._recovery.scope_supplement(current)
+                if supplement is not None and (
+                    command.approved_scope_sha256 != supplement.supplement_sha256
+                ):
+                    return self._scope_approval_required(current, supplement)
+                if supplement is None and command.approved_scope_sha256 is not None:
+                    return self._recovery_human_gate(
+                        current, "recovery scope approval no longer matches current changed paths"
+                    )
+                plan, path = self._recovery.propose_delivery(
+                    current,
+                    approved_scope_sha256=command.approved_scope_sha256,
+                    scope_approval_reference=(
+                        command.approval_reference
+                        if command.approved_scope_sha256 is not None
+                        else None
+                    ),
+                )
                 return self._recovery_approval_required(current, plan, path)
         except RecoveryRejected as error:
             return self._recovery_human_gate(current, str(error))
@@ -336,6 +368,19 @@ class DeliveryResumeController:
             ),
             recovery_plan_file=str(path),
             recovery_plan_sha256=plan.plan_sha256,
+        )
+
+    @staticmethod
+    def _scope_approval_required(
+        checkpoint: ProjectDeliveryCheckpoint,
+        supplement: RecoveryScopeSupplement,
+    ) -> DeliveryResumeResult:
+        return DeliveryResumeResult(
+            outcome=DeliveryResumeOutcome.SCOPE_APPROVAL_REQUIRED,
+            checkpoint=checkpoint,
+            next_action="Approve the exact omitted file paths before capturing retained work.",
+            scope_supplement_sha256=supplement.supplement_sha256,
+            scope_supplement_paths=supplement.paths,
         )
 
     def _native_source(self, plan: CandidateVerificationPlan) -> NativeCandidateSource:

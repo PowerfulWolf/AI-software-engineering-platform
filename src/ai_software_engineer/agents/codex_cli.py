@@ -46,6 +46,7 @@ from ai_software_engineer.git import (
     WorkspacePolicy,
     WorkspacePolicyError,
 )
+from ai_software_engineer.redaction import redact_text
 
 
 class CodexCliError(AgentError):
@@ -216,11 +217,12 @@ class CodexCliAgentAdapter:
         started = time.monotonic()
         try:
             result = self._execute(request, started)
-        except WorkspacePolicyError:
+        except WorkspacePolicyError as error:
             result = _failure(
                 request,
                 AgentErrorCode.POLICY_VIOLATION,
-                "Codex worktree changes violated the machine policy",
+                "Codex worktree changes violated the machine policy: "
+                + _workspace_policy_diagnostic(error),
                 transient=False,
                 duration_ms=_elapsed_ms(started),
             )
@@ -622,6 +624,12 @@ def _safe_diagnostic_path(value: str | None) -> str | None:
         return None
     bounded = value[:200]
     return re.sub(r"[^A-Za-z0-9_.\[\]-]", "?", bounded)
+
+
+def _workspace_policy_diagnostic(error: WorkspacePolicyError) -> str:
+    """Keep stable policy detail while excluding control characters and unbounded text."""
+    detail = re.sub(r"[\x00-\x1f\x7f]", "?", str(error).strip())[:400]
+    return redact_text(detail).text or "workspace authorization failed"
 
 
 def _completion_reserve_seconds(timeout_seconds: int) -> int:

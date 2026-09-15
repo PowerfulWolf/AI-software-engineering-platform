@@ -460,6 +460,7 @@ def test_platform_does_not_finalize_unauthorized_coder_draft(tmp_path: Path) -> 
     assert result.status is AgentRunStatus.FAILED
     assert result.error is not None
     assert result.error.code is AgentErrorCode.POLICY_VIOLATION
+    assert "docs/unauthorized.md" in result.error.message
     assert _git(root, "rev-parse", "HEAD") == base
     assert _git(root, "status", "--porcelain") == "?? docs/"
 

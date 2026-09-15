@@ -662,7 +662,8 @@ Operation 的 `QUEUED → RUNNING → SUCCEEDED | FAILED | INTERRUPTED` 只描�
 
 同一幂等键必须绑定 exact intent，同一 Delivery 同时只允许一个活动 Operation。Host 重启把遗留
 RUNNING 标成 INTERRUPTED，不自动重放不确定模型调用；后续由用户在网页按最新 checkpoint 继续。
-Product 与恢复批准都绑定页面实际展示版本，checkpoint/plan 漂移必须拒绝。公开 wire contract 是
+Product 与恢复批准都绑定页面实际展示版本。Coder 现场恢复分成精确遗漏路径范围审批和后续恢复
+计划审批，两次浏览器意图一次只能携带一个 digest；checkpoint、范围或 plan 漂移必须拒绝。公开 wire contract 是
 `schemas/console-operation.schema.json`，完整签名、错误矩阵和测试见
 `.trellis/spec/core/web-console.md`。
 
@@ -671,7 +672,8 @@ Product 与恢复批准都绑定页面实际展示版本，checkpoint/plan 漂�
 恢复使用新的 Task，关联原失败 Task/checkpoint、批准的 Product/Design/Plan 和捕获的修改。
 旧终态、批准与 Coder 现场不变，不把原 Planner 记录伪装成新规划。
 
-- `delivery-recovery.schema.json`：RecoveryPlan / RecoveryAuthorization，精确绑定人类批准的基线与修改。
+- `delivery-recovery.schema.json`：RecoveryScopeSupplement / RecoveryPlan / RecoveryAuthorization；
+  先精确绑定人类批准的遗漏文件路径，再绑定获准捕获的基线与修改。
 - `recovery-task-record.schema.json`：封存重新绑定 preparation 的 Request 与 NEW Task。
 - `recovery-execution.schema.json`：RecoveryDispatchRecord / ContinuationDispatchRecord /
   RecoverySeedRecord / RecoveryInvocationRecord。Continuation 绑定被拒候选、验证 completion、当前
@@ -679,8 +681,10 @@ Product 与恢复批准都绑定页面实际展示版本，checkpoint/plan 漂�
   新分配进入同一个 MySQL 全局资源锁；种子记录绑定目标 worktree 捕获；调用记录防止重复放行 Coder。
 
 `ase recovery propose → inspect → approve → run` 是可信本地操作者入口，不是 Agent 工具。
-`inspect` 只读；`propose` 会通过正常入口准备当前项目并持久化提案，不调用模型。
-批准必须确认 exact plan SHA、原方案在新基线上的复用和捕获修改。执行前再核对原始与当前事实。
+`inspect` 只读；`propose` 会通过正常入口准备当前项目并持久化提案，不调用模型。统一
+`ase request resume` 若发现原权限遗漏 dirty path，必须先返回 `SCOPE_APPROVAL_REQUIRED` 与精确路径；
+人类通过 `--approve-scope` 批准 exact supplement digest 后平台才可读取/捕获这些内容。范围批准不
+启动 Agent，随后仍须批准 exact recovery plan SHA。执行前两道批准都要重新核对原始与当前事实。
 
 `RecoveryPlan.input_mode` 可显式为 `coder_reapply`：在干净新基线启动 Coder，通过 required、
 Coder-only 的 `recovery.patch` ContextSource 交付完整旧补丁，让 Coder 适配冲突。模式参与 plan SHA；
@@ -691,6 +695,11 @@ Coder-only 的 `recovery.patch` ContextSource 交付完整旧补丁，让 Coder 
 Coder 的当前权限。新权限只能按精确 token 收紧 read/write/command，network 必须不变，且两者都
 不能改状态或 merge。旧记录省略新字段并保持原 SHA；如果平台权限已经收紧，旧批准会安全失效，
 必须重新提案并由人类批准 exact 新 SHA，不能在执行时静默换权限。
+
+`RecoveryScopeSupplement` 只允许把 Git inventory 中、原 allowlist 遗漏且不命中 deny-list 的排序
+exact paths 补入本次恢复的 read/write 权限。它不能引入 glob、目录推断、文件类型惯例、命令、网络、
+状态或 merge 权限；明确 denied、非法、symlink、敏感或其他不安全路径继续 fail closed。补充范围和
+批准引用一并封入 `RecoveryPlan`，retained worktree 新增路径或任一绑定事实变化时旧计划失效。
 
 执行复用既有 Scheduler/ModelRouter、Task materializer、RuntimeSession 和角色 worktree。
 只有匹配 seed receipt 的 Coder 初始修改可获准，普通任务仍要求干净工作树。

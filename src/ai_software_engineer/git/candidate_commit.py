@@ -103,7 +103,7 @@ class GitCandidateCommitSkill:
             for path in observed:
                 policy.authorize_write(path)
         except WorkspacePolicyError as error:
-            raise CandidateCommitRejected("candidate path is outside Coder authority") from error
+            raise CandidateCommitRejected(str(error)) from error
 
         self._git(
             "-c",

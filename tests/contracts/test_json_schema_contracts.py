@@ -35,9 +35,11 @@ from ai_software_engineer.spec_documents import CreateSpecDocument, TeamSpecDocu
 from ai_software_engineer.team_workspace import TeamWorkspace
 from ai_software_engineer.web_console import (
     CloseRequirementIntent,
+    ConsoleApprovalRequest,
     ConsoleCommandResult,
     ConsoleOperation,
     ConsoleOperationStatus,
+    ContinueDeliveryIntent,
     CreateRequirementIntent,
     DeleteRequirementIntent,
     ProductReplyIntent,
@@ -650,6 +652,44 @@ def test_console_operation_states_satisfy_the_canonical_schema(tmp_path: Path) -
         requested_at=at,
     )
     _assert_valid(restart_requirement.to_wire(), "console-operation.schema.json")
+
+    scope_approval = ConsoleOperation.queued(
+        team_id="team_test",
+        idempotency_key="browser-action-scope-approval-0001",
+        intent=ContinueDeliveryIntent(
+            project_id="project_test",
+            delivery_id="delivery_multi_" + "a" * 40,
+            expected_checkpoint_sha256="2" * 64,
+            approved_scope_sha256="3" * 64,
+        ),
+        requested_at=at,
+    )
+    _assert_valid(scope_approval.to_wire(), "console-operation.schema.json")
+
+    scope_result = running.transition(
+        ConsoleOperationStatus.SUCCEEDED,
+        updated_at=at + timedelta(seconds=2),
+        result=ConsoleCommandResult(
+            project_id="project_test",
+            delivery_id="delivery_multi_" + "a" * 40,
+            checkpoint_sha256="2" * 64,
+            stage="BLOCKED",
+            next_action="Approve the exact omitted paths.",
+            approval=ConsoleApprovalRequest(
+                kind="coder_scope",
+                plan_sha256="3" * 64,
+                title="Approve file scope",
+                facts=("docs/omitted.md",),
+            ),
+        ),
+    )
+    _assert_valid(scope_result.to_wire(), "console-operation.schema.json")
+
+    conflicting_approvals = scope_approval.to_wire()
+    conflicting_intent = conflicting_approvals["intent"]
+    assert isinstance(conflicting_intent, dict)
+    conflicting_intent["approved_plan_sha256"] = "4" * 64
+    _assert_invalid(conflicting_approvals, "console-operation.schema.json")
 
     missing_reply_content = product_reply.to_wire()
     intent = missing_reply_content["intent"]

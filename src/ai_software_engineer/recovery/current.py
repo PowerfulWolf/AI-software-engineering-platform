@@ -26,6 +26,10 @@ from ai_software_engineer.recovery.native import (
     NativeRecoverySourceReader,
     _preparation,
 )
+from ai_software_engineer.recovery.scope import (
+    expanded_recovery_permissions,
+    inspect_recovery_scope_supplement,
+)
 from ai_software_engineer.repository_profile import RepositoryProfile
 from ai_software_engineer.runtime_workspace import (
     REPOSITORY_PROFILE_NAME,
@@ -78,11 +82,7 @@ class NativeRecoveryFactsVerifier:
             failed_run_id=source.failed_run_id,
             failed_context_id=source.failed_context_id,
         )
-        if (
-            original.source != source
-            or original.permissions != plan.permissions
-            or original.denied_paths != plan.denied_paths
-        ):
+        if original.source != source or original.denied_paths != plan.denied_paths:
             raise ValueError("original source or policy changed")
         config = self._config
         team = TeamWorkspace.initialize(
@@ -117,6 +117,18 @@ class NativeRecoveryFactsVerifier:
             raise ValueError("target profile mismatch")
         constraints = original.task.constraints
         allowed_paths = constraints.allowed_paths if constraints is not None else ()
+        manager = GitWorktreeManager(
+            target.repository_root, Path(config.platform_root) / "worktrees" / target.repository_id
+        )
+        old = plan.capture.to_capture().worktree
+        supplement = inspect_recovery_scope_supplement(manager, old, original)
+        if (
+            supplement != plan.scope_supplement
+            or expanded_recovery_permissions(original.permissions, supplement) != plan.permissions
+        ):
+            raise ValueError("approved source Coder permissions are no longer current")
+        if supplement is not None:
+            allowed_paths = (*allowed_paths, *supplement.paths)
         allowed_paths = plan.rebound_write_paths(allowed_paths)
         expected_target_permissions = _delivery_role_permissions(
             AgentRole.CODER, allowed_paths, _task_commands(profile)
@@ -168,9 +180,6 @@ class NativeRecoveryFactsVerifier:
             or baseline.source_uris != target.baseline_source_uris
         ):
             raise ValueError("current rules or team knowledge changed")
-        manager = GitWorktreeManager(
-            target.repository_root, Path(config.platform_root) / "worktrees" / target.repository_id
-        )
         # Reuse the fixed-environment/no-hooks Git boundary. No user-supplied argv.
         manager._validate_repository()
         manager._validate_repository_filters()
@@ -186,6 +195,6 @@ class NativeRecoveryFactsVerifier:
             cwd=root,
         )
         manager.verify_capture(
-            plan.capture.to_capture(), original.permissions, denied_paths=original.denied_paths
+            plan.capture.to_capture(), plan.permissions, denied_paths=original.denied_paths
         )
         return NativeRecoveryFacts(original, target, profile, baseline)

@@ -47,6 +47,7 @@ def test_request_resume_exposes_exact_plan_approval_and_safe_errors(
     help_result = runner.invoke(app, ["request", "resume", "--help"])
     assert help_result.exit_code == 0
     assert "--approve-plan" in help_result.output
+    assert "--approve-scope" in help_result.output
     assert "--approval-reference" in help_result.output
 
     host = Mock()
@@ -88,5 +89,5 @@ def test_request_resume_rejects_approval_reference_without_plan(
     )
 
     assert result.exit_code == 2
-    assert "plan approval digest and reference must be supplied together" in result.stderr
+    assert "approval digest and reference must be supplied together" in result.stderr
     host.resume_delivery.assert_not_called()

@@ -8,6 +8,8 @@ from fnmatch import fnmatchcase
 from pathlib import Path, PurePosixPath
 from typing import cast
 
+from pydantic import TypeAdapter, ValidationError
+
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig
 from ai_software_engineer.context import ContextSource, FileContextStore
 from ai_software_engineer.domain import AgentRole, Task, TaskStatus
@@ -42,9 +44,15 @@ from ai_software_engineer.recovery.models import (
     RecoveryPlan,
     RecoveryRejected,
     RecoveryScope,
+    RecoveryScopeSupplement,
+    SafeText,
     VerifiedRecoveryDecision,
 )
 from ai_software_engineer.recovery.native import NativeRecoverySourceReader
+from ai_software_engineer.recovery.scope import (
+    expanded_recovery_permissions,
+    inspect_recovery_scope_supplement,
+)
 from ai_software_engineer.recovery.sealing import RecoveryTaskSealingService
 from ai_software_engineer.recovery.seed import RecoverySeedService
 from ai_software_engineer.recovery.service import RecoveryAuthorizationService
@@ -98,6 +106,10 @@ def _rebind_missing_write_paths(
         tuple(replacements.get(path, path) for path in allowed_paths),
         tuple(rebindings),
     )
+
+
+def _append_exact_paths(current: tuple[str, ...], additions: tuple[str, ...]) -> tuple[str, ...]:
+    return (*current, *(path for path in additions if path not in current))
 
 
 def _repository_sidecar(config: ProductionConfig, repository_id: str) -> Path:
@@ -212,6 +224,8 @@ class NativeRecoveryEntry:
         failed_run_id: str,
         failed_context_id: str,
         input_mode: RecoveryInputMode | None = None,
+        approved_scope_sha256: str | None = None,
+        scope_approval_reference: str | None = None,
     ) -> tuple[RecoveryPlan, Path]:
         prepared_result = self.backend.prepare(repository_root)
         prepared = prepared_result.preparation
@@ -237,11 +251,31 @@ class NativeRecoveryEntry:
                 source_revision=original.source.base_revision,
             )
         )
+        supplement = inspect_recovery_scope_supplement(manager, old, original)
+        if supplement is not None:
+            if (
+                approved_scope_sha256 != supplement.supplement_sha256
+                or not scope_approval_reference
+            ):
+                raise RecoveryRejected(
+                    "explicit approval of the exact recovery scope supplement is required"
+                )
+            try:
+                scope_approval_reference = TypeAdapter(SafeText).validate_python(
+                    scope_approval_reference
+                )
+            except ValidationError as error:
+                raise RecoveryRejected("recovery scope approval reference is unsafe") from error
+        elif approved_scope_sha256 is not None or scope_approval_reference is not None:
+            raise RecoveryRejected("recovery scope approval does not match current changed paths")
+        source_permissions = expanded_recovery_permissions(original.permissions, supplement)
         capture = manager.capture_changes(
-            old, original.permissions, denied_paths=original.denied_paths
+            old, source_permissions, denied_paths=original.denied_paths
         )
         constraints = original.task.constraints
         allowed_paths = constraints.allowed_paths if constraints is not None else ()
+        if supplement is not None:
+            allowed_paths = _append_exact_paths(allowed_paths, supplement.paths)
         tracked_paths = tuple(
             path
             for path in manager._run_git(("ls-files", "-z"), cwd=Path(repository_root)).split("\0")
@@ -264,7 +298,9 @@ class NativeRecoveryEntry:
             capture=CapturedChanges.from_capture(capture),
             target_base_revision=manager._run_git(("rev-parse", "HEAD"), cwd=Path(repository_root)),
             target_preparation_sha256=prepared.preparation_sha256,
-            permissions=original.permissions,
+            scope_supplement=supplement,
+            scope_approval_reference=scope_approval_reference if supplement is not None else None,
+            permissions=source_permissions,
             target_permissions=target_permissions,
             path_rebindings=path_rebindings or None,
             denied_paths=original.denied_paths,
@@ -279,7 +315,37 @@ class NativeRecoveryEntry:
             prepared.repository_workspace_root
         ) / "state" / f"recovery-{delivery_id}" / f"plan-{plan.plan_sha256}.json"
 
-    def propose_delivery(self, checkpoint: ProjectDeliveryCheckpoint) -> tuple[RecoveryPlan, Path]:
+    def scope_supplement(
+        self, checkpoint: ProjectDeliveryCheckpoint
+    ) -> RecoveryScopeSupplement | None:
+        """Discover exact omitted changed paths without reading their file contents."""
+        scope = RecoveryScope(
+            team_id=self.config.team_id,
+            repository_id=checkpoint.repository_id,
+            repository_root=checkpoint.repository_root,
+            delivery_id=checkpoint.delivery_id,
+        )
+        original = NativeRecoverySourceReader(self.config, self.environment).discover_failed_coder(
+            scope
+        )
+        manager = self._manager(scope)
+        old = manager.recover(
+            WorktreeSpec(
+                task_id=original.task.id,
+                role=AgentRole.CODER,
+                attempt=1,
+                source_revision=original.source.base_revision,
+            )
+        )
+        return inspect_recovery_scope_supplement(manager, old, original)
+
+    def propose_delivery(
+        self,
+        checkpoint: ProjectDeliveryCheckpoint,
+        *,
+        approved_scope_sha256: str | None = None,
+        scope_approval_reference: str | None = None,
+    ) -> tuple[RecoveryPlan, Path]:
         """Discover the failed Coder identity and publish one exact recovery plan."""
         scope = RecoveryScope(
             team_id=self.config.team_id,
@@ -295,6 +361,8 @@ class NativeRecoveryEntry:
             delivery_id=checkpoint.delivery_id,
             failed_run_id=source.source.failed_run_id,
             failed_context_id=source.source.failed_context_id,
+            approved_scope_sha256=approved_scope_sha256,
+            scope_approval_reference=scope_approval_reference,
         )
 
     def latest_delivery(
@@ -324,6 +392,12 @@ class NativeRecoveryEntry:
 
     def open_plan(self, path: Path) -> tuple[FileRecoveryStore, RecoveryPlan]:
         return open_recovery_plan(self.config, path)
+
+    def require_current_plan(self, path: Path) -> RecoveryPlan:
+        """Reject a plan whose retained work, policy, target, or scope approval drifted."""
+        _, plan = self.open_plan(path)
+        NativeRecoveryFactsVerifier(self.config, self.environment).validate(plan)
+        return plan
 
     def approve(self, path: Path, *, confirmed_plan: str, reference: str) -> None:
         store, plan = self.open_plan(path)

@@ -198,6 +198,41 @@ class RecoverySource(DomainModel):
         return self
 
 
+class RecoveryScopeSupplement(DomainModel):
+    """Deterministic request to approve exact changed paths missing from Coder policy."""
+
+    kind: Literal["recovery_scope_supplement"] = "recovery_scope_supplement"
+    schema_version: Literal["v0.1"] = "v0.1"
+    scope: RecoveryScope
+    task_id: TaskId
+    task_revision: Annotated[StrictInt, Field(ge=1)]
+    checkpoint_sha256: StageSha256
+    base_revision: FullCommit
+    permissions_sha256: StageSha256
+    denied_paths_sha256: StageSha256
+    paths: tuple[RelativePath, ...] = Field(min_length=1, max_length=MAX_CAPTURE_FILES)
+    supplement_sha256: StageSha256
+
+    @classmethod
+    def create(cls, **values: object) -> RecoveryScopeSupplement:
+        provisional = cls.model_validate({**values, "supplement_sha256": "0" * 64})
+        return provisional.model_copy(update={"supplement_sha256": provisional.recompute_sha256()})
+
+    @model_validator(mode="after")
+    def validate_paths(self) -> Self:
+        if self.paths != tuple(sorted(set(self.paths))):
+            raise ValueError("recovery scope supplement paths must be sorted and unique")
+        return self
+
+    def recompute_sha256(self) -> str:
+        return digest(self.model_dump(mode="json", exclude={"supplement_sha256"}))
+
+    def validate_integrity(self) -> None:
+        RecoveryScopeSupplement.model_validate(self.to_wire())
+        if self.supplement_sha256 != self.recompute_sha256():
+            raise RecoveryRejected("recovery scope supplement integrity mismatch")
+
+
 class RecoveryPathRebinding(DomainModel):
     """Exact stale-to-current write path replacement requiring human approval."""
 
@@ -221,9 +256,10 @@ class RecoveryPlan(DomainModel):
     capture: CapturedChanges
     target_base_revision: FullCommit
     target_preparation_sha256: StageSha256
-    # Source permissions prove the captured historical worktree. A separately
-    # approved target policy lets recovery survive later security tightening
-    # without silently expanding what the new Coder may do.
+    # Source permissions prove the captured historical worktree. They may contain
+    # only the original policy plus a digest-bound, explicitly approved supplement.
+    scope_supplement: RecoveryScopeSupplement | None = None
+    scope_approval_reference: SafeText | None = None
     permissions: AgentPermissions
     target_permissions: AgentPermissions | None = None
     # None is omitted from wire/digest so historical plans retain their identity.
@@ -231,6 +267,29 @@ class RecoveryPlan(DomainModel):
     denied_paths: tuple[str, ...]
     created_at: AwareDatetime
     plan_sha256: StageSha256
+
+    @model_validator(mode="after")
+    def validate_scope_approval(self) -> Self:
+        if (self.scope_supplement is None) != (self.scope_approval_reference is None):
+            raise ValueError("recovery scope supplement and approval must appear together")
+        supplement = self.scope_supplement
+        if supplement is None:
+            return self
+        if supplement.supplement_sha256 != supplement.recompute_sha256():
+            raise ValueError("recovery scope supplement integrity mismatch")
+        source = self.source
+        if (
+            supplement.scope != source.scope
+            or supplement.task_id != source.task_id
+            or supplement.task_revision != source.task_revision
+            or supplement.checkpoint_sha256 != source.checkpoint_sha256
+            or supplement.base_revision != source.base_revision
+            or supplement.denied_paths_sha256 != digest(self.denied_paths)
+            or any(path not in self.permissions.read_paths for path in supplement.paths)
+            or any(path not in self.permissions.write_paths for path in supplement.paths)
+        ):
+            raise ValueError("recovery scope approval does not bind this plan")
+        return self
 
     @classmethod
     def create(cls, **values: object) -> RecoveryPlan:

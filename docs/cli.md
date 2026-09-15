@@ -38,8 +38,17 @@ ase request resume delivery_multi_xxx
 `discuss` 运行一个有界 Product turn；`discuss/approve` 必须引用 exact current checkpoint，旧操作
 不能覆盖新事实。批准联合产品后自动推进 Designer、Planner、每仓 dispatch 与 Coder→QA→Reviewer，
 最后在完整候选集合执行联合验收。任何进程中断或终态失败都先使用 `resume`：它重算 durable
-facts，只执行下一项未完成工作。若输出 `RECOVERY_APPROVAL_REQUIRED` 或
-`VERIFICATION_APPROVAL_REQUIRED`，检查返回的精确计划后执行：
+facts，只执行下一项未完成工作。若输出 `SCOPE_APPROVAL_REQUIRED`，先核对列出的每个遗漏路径，
+再批准本次恢复所需的精确文件范围：
+
+```bash
+ase request resume delivery_child_xxx \
+  --approve-scope FULL_SCOPE_SHA256 \
+  --approval-reference human-approved-exact-file-scope
+```
+
+范围审批只允许平台在既有安全限制下捕获这些路径，不会启动 Agent。随后输出
+`RECOVERY_APPROVAL_REQUIRED` 或 `VERIFICATION_APPROVAL_REQUIRED`，检查返回的精确计划后执行：
 
 ```bash
 ase request resume delivery_child_xxx \
@@ -47,7 +56,8 @@ ase request resume delivery_child_xxx \
   --approval-reference human-approved-delivery-plan
 ```
 
-无 candidate 时，批准后同一入口创建恢复 Task 接续保留修改；已有 candidate 时运行独立
+无 candidate 时，遗漏路径审批和恢复计划审批是两个独立 gate；两者都通过后同一入口才创建恢复
+Task 接续保留修改。路径集合、保留内容或当前事实变化会要求新的摘要和审批；已有 candidate 时运行独立
 QA/Reviewer，QA FAIL 或 Review REJECT 会创建关联修复 Task，并重新执行 Coder→QA→Reviewer。
 恢复/修复 Coder 再次失败时仍继续使用同一个 `request resume`，平台会保留每一轮 Task 并创建
 下一份精确恢复计划。旧终态 Task 和 Candidate V1 保留不变。已完成 Task 但尚未写入 Delivery checkpoint 的崩溃窗口
@@ -142,8 +152,9 @@ Team Host 固定使用 MySQL。
 
 ## 显式接手失败 Coder 的保留修改
 
-日常入口仍是上面的 `request resume`：它会自动发现失败 Coder、封存 worktree 修改并返回精确
-恢复计划，批准后继续新 Task。下面的命令只在诊断或逐条审计统一入口时使用。若 Coder 已生成候选
+日常入口仍是上面的 `request resume`：它会自动发现失败 Coder；若存在原权限遗漏路径，会先列出
+精确路径并要求范围审批，再封存 worktree 修改并返回精确恢复计划，计划批准后继续新 Task。下面的
+命令只在诊断或逐条审计统一入口时使用。若 Coder 已生成候选
 提交，则应走候选复核；不要重置终态或手工重新运行 Coder，原候选和失败历史必须保留。
 
 仅用于已停止、尚未产生 candidate 的失败 Coder。先保存现场；不要 reset、stash 或修改旧终态。

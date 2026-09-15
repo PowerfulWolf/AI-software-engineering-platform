@@ -134,6 +134,13 @@ class ContinueDeliveryIntent(DomainModel):
     delivery_id: DeliveryId
     expected_checkpoint_sha256: CheckpointDigest
     approved_plan_sha256: CheckpointDigest | None = None
+    approved_scope_sha256: CheckpointDigest | None = None
+
+    @model_validator(mode="after")
+    def require_one_approval(self) -> Self:
+        if self.approved_plan_sha256 is not None and self.approved_scope_sha256 is not None:
+            raise ValueError("only one continuation approval may be submitted")
+        return self
 
 
 ConsoleIntent = Annotated[
@@ -152,7 +159,7 @@ CONSOLE_INTENT_ADAPTER: TypeAdapter[ConsoleIntent] = TypeAdapter(ConsoleIntent)
 
 
 class ConsoleApprovalRequest(DomainModel):
-    kind: Literal["candidate_verification", "coder_recovery"]
+    kind: Literal["candidate_verification", "coder_recovery", "coder_scope"]
     plan_sha256: CheckpointDigest
     title: NonEmptyStr
     facts: tuple[NonEmptyStr, ...]

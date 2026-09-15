@@ -9,6 +9,7 @@ from ai_software_engineer.recovery.models import (
     RecoveryPlan,
     RecoveryRejected,
     RecoveryScope,
+    RecoveryScopeSupplement,
     RecoverySource,
     VerifiedRecoveryDecision,
 )
@@ -27,6 +28,7 @@ __all__ = [
     "RecoveryRecordMissing",
     "RecoveryRejected",
     "RecoveryScope",
+    "RecoveryScopeSupplement",
     "RecoverySource",
     "VerifiedRecoveryDecision",
 ]

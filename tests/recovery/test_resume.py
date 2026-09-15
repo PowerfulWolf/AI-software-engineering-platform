@@ -252,6 +252,49 @@ class _SeededInterruptedRecoveryFactory(DeliveryRouteAdapterFactory):
         return _SeededInterruptedRecoveryAdapter(self._seed, binding.worktree.path)
 
 
+class _OutOfScopeInterruptedAdapter(AgentAdapter):
+    def __init__(self, owner: _OutOfScopeInterruptedFactory, workspace: Path) -> None:
+        self._owner = owner
+        self._workspace = workspace
+
+    def run(self, request: AgentRequest) -> AgentResult:
+        assert request.role is AgentRole.CODER
+        self._owner.requests.append(request)
+        (self._workspace / "omitted.txt").write_text("retained work\n", encoding="utf-8")
+        return AgentResult(
+            run_id=request.run_id,
+            task_id=request.task_id,
+            role=request.role,
+            attempt=request.attempt,
+            source_revision=request.source_revision,
+            context_manifest_id=request.context_manifest_id,
+            status=AgentRunStatus.FAILED,
+            error=AgentFailure(
+                code=AgentErrorCode.POLICY_VIOLATION,
+                message="Coder worktree changes violated the machine policy: omitted.txt",
+                transient=False,
+            ),
+        )
+
+
+class _OutOfScopeInterruptedFactory(DeliveryRouteAdapterFactory):
+    def __init__(self) -> None:
+        self.requests: list[AgentRequest] = []
+
+    def create(
+        self,
+        *,
+        route: ProviderRouteConfig,
+        definition: AgentDefinition,
+        binding: RoleWorktreeBinding,
+        context_resolver: StoredContextResolver,
+        config: ProductionConfig,
+        environment: Mapping[str, str],
+    ) -> AgentAdapter:
+        del route, definition, context_resolver, config, environment
+        return _OutOfScopeInterruptedAdapter(self, binding.worktree.path)
+
+
 def _append_equivalent_delivery_checkpoint(
     config: ProductionConfig, checkpoint: ProjectDeliveryCheckpoint
 ) -> ProjectDeliveryCheckpoint:
@@ -393,6 +436,103 @@ def test_resume_discovers_approves_and_attaches_pre_candidate_coder_recovery(
         assert repository.get(completed.checkpoint.task_id).status is TaskStatus.DONE
     finally:
         repository.close()
+
+
+@pytest.mark.mysql
+def test_resume_requires_exact_scope_approval_before_capturing_omitted_files(
+    tmp_path: Path,
+    mysql_dsn: str,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "hello.txt").write_text("hello\n", encoding="utf-8")
+    _git("init", "-b", "main", cwd=project)
+    _git("add", "hello.txt", cwd=project)
+    _git("commit", "-m", "initial", cwd=project)
+    config = ProductionConfig(
+        platform_root=str(tmp_path / "platform"),
+        default_project_id="project_test",
+        default_project_name="Test Project",
+        live_model_execution=True,
+        model_routes=(
+            ProviderRouteConfig(
+                provider="codex",
+                model="gpt-5.6-terra",
+                kind=ModelProviderKind.CODEX_CLI,
+            ),
+        ),
+    )
+    environment = {"ASE_MYSQL_DSN": mysql_dsn, "PATH": os.environ.get("PATH", "")}
+    interrupted = _OutOfScopeInterruptedFactory()
+    host = TeamHost(
+        config=config,
+        environment=environment,
+        structured_clients=_ScriptedClientFactory(),
+        delivery_route_adapters=interrupted,
+    )
+    entry = host.project_entry()
+    started = entry.start(
+        StartProjectDelivery(repository_root=str(project), requirement="Change the greeting.")
+    )
+    blocked = entry.approve(
+        ApproveProductSpec(
+            delivery_id=started.checkpoint.delivery_id,
+            expected_checkpoint_sha256=started.checkpoint.checkpoint_sha256,
+            approval_reference="scope-supplement-test",
+        )
+    ).checkpoint
+    assert blocked.stage is DeliveryStage.BLOCKED
+    assert interrupted.requests[0].permissions.write_paths == ("hello.txt",)
+
+    requested = host.resume_delivery(ResumeProjectDelivery(delivery_id=blocked.delivery_id))
+    assert requested.outcome is DeliveryResumeOutcome.SCOPE_APPROVAL_REQUIRED
+    assert requested.scope_supplement_paths == ("omitted.txt",)
+    assert requested.scope_supplement_sha256 is not None
+
+    stale = host.resume_delivery(
+        ResumeProjectDelivery(
+            delivery_id=blocked.delivery_id,
+            approved_scope_sha256="0" * 64,
+            approval_reference="wrong-scope",
+        )
+    )
+    assert stale.outcome is DeliveryResumeOutcome.SCOPE_APPROVAL_REQUIRED
+    assert stale.scope_supplement_sha256 == requested.scope_supplement_sha256
+
+    proposed = host.resume_delivery(
+        ResumeProjectDelivery(
+            delivery_id=blocked.delivery_id,
+            approved_scope_sha256=requested.scope_supplement_sha256,
+            approval_reference="approved-exact-omitted-file",
+        )
+    )
+    assert proposed.outcome is DeliveryResumeOutcome.RECOVERY_APPROVAL_REQUIRED
+    assert proposed.recovery_plan_file is not None
+    _, plan = host.recovery_entry().open_plan(Path(proposed.recovery_plan_file))
+    assert plan.scope_supplement is not None
+    assert plan.scope_supplement.paths == ("omitted.txt",)
+    assert plan.scope_approval_reference == "approved-exact-omitted-file"
+    assert "omitted.txt" in plan.permissions.read_paths
+    assert "omitted.txt" in plan.permissions.write_paths
+    assert tuple(file.path for file in plan.capture.files) == ("omitted.txt",)
+    recovery = host.recovery_entry()
+    recovery.approve(
+        Path(proposed.recovery_plan_file),
+        confirmed_plan=plan.plan_sha256,
+        reference="approved-captured-recovery-plan",
+    )
+    store, _ = recovery.open_plan(Path(proposed.recovery_plan_file))
+    task_record = store.get_task_record(plan.plan_sha256)
+    assert task_record.task.constraints is not None
+    assert "omitted.txt" in task_record.task.constraints.allowed_paths
+
+    (Path(plan.capture.worktree_path) / "second.txt").write_text(
+        "late retained work\n", encoding="utf-8"
+    )
+    refreshed = host.resume_delivery(ResumeProjectDelivery(delivery_id=blocked.delivery_id))
+    assert refreshed.outcome is DeliveryResumeOutcome.SCOPE_APPROVAL_REQUIRED
+    assert refreshed.scope_supplement_paths == ("omitted.txt", "second.txt")
+    assert refreshed.scope_supplement_sha256 != requested.scope_supplement_sha256
 
 
 @pytest.mark.mysql

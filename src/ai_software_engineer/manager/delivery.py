@@ -153,13 +153,21 @@ class ApproveProductSpec(DomainModel):
 class ResumeProjectDelivery(DomainModel):
     delivery_id: DeliveryId
     approved_plan_sha256: CheckpointDigest | None = None
+    approved_scope_sha256: CheckpointDigest | None = None
     approval_reference: NonEmptyStr | None = None
     submitted_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
 
     @model_validator(mode="after")
     def require_complete_verification_approval(self) -> ResumeProjectDelivery:
-        if (self.approved_plan_sha256 is None) != (self.approval_reference is None):
-            raise ValueError("plan approval digest and reference must be supplied together")
+        approvals = tuple(
+            value
+            for value in (self.approved_plan_sha256, self.approved_scope_sha256)
+            if value is not None
+        )
+        if len(approvals) > 1:
+            raise ValueError("only one delivery approval may be supplied at a time")
+        if bool(approvals) != (self.approval_reference is not None):
+            raise ValueError("approval digest and reference must be supplied together")
         return self
 
 

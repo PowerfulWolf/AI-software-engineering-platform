@@ -114,3 +114,22 @@ SQLite 中 Task 快照和 StateEvent 必须在同一个 `BEGIN IMMEDIATE` 事务
 如果最后状态是 `CONTINUE_REQUIRED`，恢复器先重新读取并校验对应 `coder-progress`；如果最后状态
 是 `QUEUED`，则在持久化下一个 attempt 后进入 `IMPLEMENTING`。checkpoint 缺失、changed paths
 漂移或 worktree HEAD 改变都 fail closed，不允许重新生成一份“看起来等价”的草稿。
+
+## 8. 终态 Coder 现场的两道人工门禁
+
+`SCOPE_APPROVAL_REQUIRED` 与 `RECOVERY_APPROVAL_REQUIRED` 是 `DeliveryResumeOutcome`，不是新的
+`TaskStatus`，也不允许原 `BLOCKED/FAILED` Task 反向迁移。恢复始终创建关联的新 Task：
+
+```text
+BLOCKED/FAILED + retained dirty Coder worktree
+  ├─ 原权限已完整覆盖 changed paths ───────────────> RECOVERY_APPROVAL_REQUIRED
+  └─ 存在原权限遗漏路径 ─> SCOPE_APPROVAL_REQUIRED
+       └─ exact scope digest + audit reference approved
+          └─ capture current facts ───────────────────> RECOVERY_APPROVAL_REQUIRED
+               └─ exact plan digest + audit reference approved ─> new Task / IMPLEMENTING
+```
+
+范围审批只授权读取和捕获页面列出的精确遗漏路径，不启动 Agent；恢复计划审批才允许以捕获结果和
+当前基线创建新 Task。每次继续都重新计算 retained worktree、原 Task/revision、checkpoint/base、原
+permissions 和 deny-list。任一事实或路径变化使旧 scope/plan digest 失效，旧不可变记录只保留为
+审计证据，不能被自动替换或沿用。

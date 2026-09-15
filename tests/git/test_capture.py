@@ -112,6 +112,57 @@ def test_capture_binds_staged_and_unstaged_content_without_writes(
     assert index.read_bytes() == index_bytes
 
 
+@pytest.mark.parametrize("staged", [False, True])
+def test_capture_supports_new_regular_text_files_without_writes(
+    workspace: tuple[GitWorktreeManager, WorktreeRef, AgentPermissions],
+    staged: bool,
+) -> None:
+    manager, ref, permissions = workspace
+    source = ref.path / "src/new.py"
+    source.write_text("NEW = 1\n", encoding="utf-8")
+    if staged:
+        git(ref.path, "add", "src/new.py")
+    before_status = git(ref.path, "status", "--porcelain")
+
+    capture = manager.capture_changes(ref, permissions)
+
+    assert capture.changed_paths == ("src/new.py",)
+    assert capture.file_sha256s == (
+        ("src/new.py", hashlib.sha256(source.read_bytes()).hexdigest()),
+    )
+    assert b"new file mode 100644" in capture.patch
+    assert b"--- /dev/null" in capture.patch
+    assert b"+++ b/src/new.py" in capture.patch
+    manager.verify_capture(capture, permissions)
+    assert git(ref.path, "status", "--porcelain") == before_status
+
+
+@pytest.mark.parametrize("change", ["binary", "encoding", "symlink", "large", "secret"])
+def test_capture_rejects_unsafe_new_files_and_preserves_them(
+    workspace: tuple[GitWorktreeManager, WorktreeRef, AgentPermissions],
+    change: str,
+) -> None:
+    manager, ref, permissions = workspace
+    source = ref.path / "src/new.py"
+    if change == "binary":
+        source.write_bytes(b"abc\0def")
+    elif change == "encoding":
+        source.write_bytes(b"\xff\xfe")
+    elif change == "symlink":
+        source.symlink_to("missing.py")
+    elif change == "large":
+        source.write_bytes(b"x" * (MAX_CAPTURE_BYTES + 1))
+    else:
+        source.write_text('api_key = "sk-' + "x" * 24 + '"\n', encoding="utf-8")
+
+    with pytest.raises(WorktreeCaptureRejected) as error:
+        manager.capture_changes(ref, permissions)
+
+    assert "sk-" not in str(error.value)
+    assert source.exists() or source.is_symlink()
+    assert git(ref.path, "rev-parse", "HEAD") == ref.head_revision
+
+
 @pytest.mark.parametrize("change", ["bytes", "staging", "payload", "head"])
 def test_capture_rejects_drift(
     workspace: tuple[GitWorktreeManager, WorktreeRef, AgentPermissions],
@@ -138,8 +189,6 @@ def test_capture_rejects_drift(
 @pytest.mark.parametrize(
     "change",
     [
-        "untracked",
-        "added",
         "deleted",
         "mode",
         "binary",
@@ -160,11 +209,7 @@ def test_capture_refuses_unsupported_or_unsafe_work_and_preserves_it(
     manager, ref, permissions = workspace
     source = ref.path / "src/app.py"
     source.write_text("VALUE = 2\n", encoding="utf-8")
-    if change in ("untracked", "added"):
-        (ref.path / "src/new.py").write_text("NEW = 1\n", encoding="utf-8")
-        if change == "added":
-            git(ref.path, "add", "src/new.py")
-    elif change == "deleted":
+    if change == "deleted":
         source.unlink()
     elif change == "mode":
         source.chmod(0o755)

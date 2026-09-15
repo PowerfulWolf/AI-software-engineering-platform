@@ -255,15 +255,20 @@ const isSourceRevisionDrift = (operation) =>
       operation.error_summary || "",
     ));
 const latestApproval = (deliveryId, checkpoint) => {
-  const consumedPlans = new Set(
+  const consumedApprovals = new Set(
     operations
       .filter(
         (operation) =>
           operationTarget(operation) === deliveryId &&
           operation.intent.action === "CONTINUE_DELIVERY" &&
-          operation.intent.approved_plan_sha256,
+          (operation.intent.approved_plan_sha256 ||
+            operation.intent.approved_scope_sha256),
       )
-      .map((operation) => operation.intent.approved_plan_sha256),
+      .map(
+        (operation) =>
+          operation.intent.approved_plan_sha256 ||
+          operation.intent.approved_scope_sha256,
+      ),
   );
   return (
     [...operations]
@@ -274,7 +279,7 @@ const latestApproval = (deliveryId, checkpoint) => {
           operation.status === "SUCCEEDED" &&
           operation.result?.approval &&
           operation.intent.expected_checkpoint_sha256 === checkpoint &&
-          !consumedPlans.has(operation.result.approval.plan_sha256),
+          !consumedApprovals.has(operation.result.approval.plan_sha256),
       )?.result.approval || null
   );
 };
@@ -1697,18 +1702,22 @@ function requestOperation(panel, request, discussionSection) {
     box.append(
       el(
         "p",
-        "批准后平台只执行上方计划；页面会把精确计划身份安全地带回 Manager。",
+        approval.kind === "coder_scope"
+          ? "批准后平台只会捕获上方精确文件，不会启动 Agent；捕获完成后仍需审批恢复计划。"
+          : "批准后平台只执行上方计划；页面会把精确计划身份安全地带回 Manager。",
         "muted",
       ),
       button(
-        "批准并继续",
+        approval.kind === "coder_scope" ? "批准文件范围" : "批准并继续",
         () =>
           submitOperation({
             action: "CONTINUE_DELIVERY",
             project_id: request.project_id,
             delivery_id: request.id,
             expected_checkpoint_sha256: request.checkpoint_sha256,
-            approved_plan_sha256: approval.plan_sha256,
+            ...(approval.kind === "coder_scope"
+              ? { approved_scope_sha256: approval.plan_sha256 }
+              : { approved_plan_sha256: approval.plan_sha256 }),
           }),
         "primary",
       ),

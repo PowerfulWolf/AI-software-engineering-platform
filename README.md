@@ -392,7 +392,7 @@ macOS Keychain / Linux Secret Service 适配，不能把 MySQL DSN 明文写入 
 
 日常主流程只有四步：**选择或创建 Project → 创建 Requirement 并选择代码目录 → 与 Product Agent
 讨论并批准 → 观察执行并领取候选分支**。
-浏览器会携带 exact checkpoint 和恢复计划身份，不需要复制 JSON、delivery ID 或 SHA。
+浏览器会携带 exact checkpoint、恢复范围和恢复计划身份，不需要复制 JSON、delivery ID 或 SHA。
 
 ### 1. 首次启动服务
 
@@ -480,13 +480,15 @@ Spec 位于对应 scope 的 `specs/documents/<spec_id>/`，当前启用集合写
 - 普通中断从最近 checkpoint 继续，已完成阶段和仓库不会重跑。
 - Candidate 已存在但 QA/Reviewer 未完成时，页面展示 exact 候选验证计划；阅读 Agent、模型和
   candidate 后点击“批准并继续”，不会重跑 Coder。
-- Coder 无 Candidate 但保留了修改时，页面展示 exact 恢复计划；批准后创建新的关联 Task 接续，
-  未知半成品不会直接进入 QA。
+- Coder 无 Candidate 但保留了修改时，如果现场含原需求未授权的文件，页面先逐条展示具体路径并
+  要求一次“补充文件范围”审批；这里只批准本次恢复读取这些精确路径，不批准目录或通配符。
+  随后页面展示包含实际修改的 exact 恢复计划并要求第二次审批，之后才创建新的关联 Task 接续；
+  路径或现场变化会使旧审批失效，未知半成品不会直接进入 QA。
 - QA FAIL 或 Reviewer REJECT 会保留旧 Candidate 和证据，创建修复 Task，重新执行
   `Coder → QA → Reviewer`。
 - QA 只有 `NOT_TESTED`/命令环境 `ERROR`、没有任何验收项或测试 `FAIL` 时，不再误派给 Coder；
   Candidate 会保留，继续交付只创建新的 QA/Reviewer 验证计划。
-- 规范冲突、来源漂移、权限或业务歧义仍会停止并要求人工处理；网页不会偷偷放宽制度。
+- 显式 deny、规范冲突、来源漂移或业务歧义仍会停止并要求人工处理；网页不会偷偷放宽制度。
 - 如果 Host 在操作执行中退出，该 Web Operation 会标记为 `INTERRUPTED`。重新启动服务后打开需求，
   依据当前 Delivery 事实再次点击“继续交付”，不会盲目重放原模型调用。
 - 失败或中断的操作提示可以关闭；浏览器会记住关闭状态，同一需求的同类动作后续成功时也会自动
@@ -654,8 +656,9 @@ uv run ase request resume DELIVERY_ID
 - 普通进程中断：直接从最近 checkpoint 继续；已完成的阶段和仓库不会重跑。
 - Dispatch 已创建 Task、但 Runtime 尚未接纳任何 Agent 时：若 Task 仍是
   `NEW / revision 0 / candidate=null`，直接重入 Delivery；这不是 Coder 失败，不需要恢复计划。
-- Coder 尚无 candidate、失败 worktree 存在修改：自动定位失败 Run/Context 并返回精确恢复计划；
-  批准后创建新 Task 接续旧修改，再走 `Coder → QA → Reviewer`；新的恢复/修复 Coder 若再次中断，
+- Coder 尚无 candidate、失败 worktree 存在修改：自动定位失败 Run/Context；若存在遗漏授权的文件，
+  先返回 `SCOPE_APPROVAL_REQUIRED` 和精确路径，使用 `--approve-scope` 批准本次恢复范围后才捕获内容；
+  随后返回精确恢复计划，批准后创建新 Task 接续旧修改，再走 `Coder → QA → Reviewer`；新的恢复/修复 Coder 若再次中断，
   继续执行同一个 `resume`，平台会沿完整 Task/dispatch 历史创建下一次恢复，而不是卡死在第一轮。
 - Coder 已产生 candidate、QA/Reviewer 因额度或进程故障中断：先返回一个精确验证计划，**不会重跑 Coder**。
 - QA FAIL 或 Review REJECT：保留 Candidate V1 和原失败 Task，自动创建关联修复 Task，再走
@@ -663,7 +666,16 @@ uv run ase request resume DELIVERY_ID
 - 已完成 Task、checkpoint 尚未来得及写入：从 Task event 和 sealed artifacts 接管，零模型调用。
 - 规范冲突、需求歧义、权限/来源漂移：返回明确人工 gate，不会偷偷放宽规则。
 
-当输出为 `VERIFICATION_APPROVAL_REQUIRED` 或 `RECOVERY_APPROVAL_REQUIRED` 时，检查返回的 plan
+当输出为 `SCOPE_APPROVAL_REQUIRED` 时，先核对列出的每个遗漏文件路径，再批准该精确范围：
+
+```bash
+uv run ase request resume DELIVERY_ID \
+  --approve-scope SCOPE_SHA256 \
+  --approval-reference "human-approved-exact-file-scope"
+```
+
+这一步只允许平台安全捕获保留现场，不能启动 Agent。随后输出
+`VERIFICATION_APPROVAL_REQUIRED` 或 `RECOVERY_APPROVAL_REQUIRED` 时，检查返回的 plan
 文件，确认 Agent、模型、candidate/保留修改和目录范围后，用输出中的完整摘要批准并继续：
 
 ```bash

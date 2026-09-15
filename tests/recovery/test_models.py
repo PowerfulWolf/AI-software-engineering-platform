@@ -15,7 +15,9 @@ from ai_software_engineer.recovery import (
     RecoveryPathRebinding,
     RecoveryPlan,
     RecoveryRejected,
+    RecoveryScopeSupplement,
 )
+from ai_software_engineer.recovery.models import digest
 from tests.recovery.test_authorization import Human, approval, make_plan
 
 ADAPTER: TypeAdapter[RecoveryPlan | RecoveryAuthorization] = TypeAdapter(
@@ -103,6 +105,46 @@ def test_target_permissions_are_hash_bound_and_may_only_narrow_source(tmp_path: 
                     "target_permissions": expanded,
                 }
             )
+
+
+def test_scope_supplement_and_approval_are_hash_bound_into_the_plan(tmp_path: Path) -> None:
+    old = make_plan(tmp_path / "project")
+    supplement = RecoveryScopeSupplement.create(
+        scope=old.source.scope,
+        task_id=old.source.task_id,
+        task_revision=old.source.task_revision,
+        checkpoint_sha256=old.source.checkpoint_sha256,
+        base_revision=old.source.base_revision,
+        permissions_sha256=digest(old.permissions.to_wire()),
+        denied_paths_sha256=digest(old.denied_paths),
+        paths=("src/omitted.py",),
+    )
+    expanded = old.permissions.model_copy(
+        update={
+            "read_paths": (*old.permissions.read_paths, *supplement.paths),
+            "write_paths": (*old.permissions.write_paths, *supplement.paths),
+        }
+    )
+    plan = RecoveryPlan.create(
+        **{
+            **old.to_wire(),
+            "scope_supplement": supplement,
+            "scope_approval_reference": "console-scope-approval",
+            "permissions": expanded,
+        }
+    )
+
+    VALIDATOR.validate(plan.to_wire())
+    assert plan.plan_sha256 != old.plan_sha256
+    assert RecoveryPlan.model_validate(plan.to_wire()) == plan
+    for invalid in (
+        {"scope_approval_reference": None},
+        {"scope_supplement": None},
+        {"permissions": old.permissions},
+        {"scope_supplement": supplement.model_copy(update={"supplement_sha256": "0" * 64})},
+    ):
+        with pytest.raises((ValidationError, ValueError)):
+            RecoveryPlan.create(**{**plan.to_wire(), **invalid})
 
 
 def test_exact_path_rebinding_is_hash_bound_and_does_not_allow_ambient_expansion(

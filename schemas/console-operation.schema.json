@@ -200,7 +200,11 @@
         "project_id": {"$ref": "#/$defs/project_id"},
         "delivery_id": {"$ref": "#/$defs/delivery_id"},
         "expected_checkpoint_sha256": {"$ref": "#/$defs/digest"},
-        "approved_plan_sha256": {"$ref": "#/$defs/digest"}
+        "approved_plan_sha256": {"$ref": "#/$defs/digest"},
+        "approved_scope_sha256": {"$ref": "#/$defs/digest"}
+      },
+      "not": {
+        "required": ["approved_plan_sha256", "approved_scope_sha256"]
       }
     },
     "approval": {
@@ -208,7 +212,7 @@
       "additionalProperties": false,
       "required": ["kind", "plan_sha256", "title", "facts"],
       "properties": {
-        "kind": {"enum": ["candidate_verification", "coder_recovery"]},
+        "kind": {"enum": ["candidate_verification", "coder_recovery", "coder_scope"]},
         "plan_sha256": {"$ref": "#/$defs/digest"},
         "title": {"type": "string", "minLength": 1},
         "facts": {"type": "array", "items": {"type": "string", "minLength": 1}}

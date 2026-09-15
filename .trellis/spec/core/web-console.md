@@ -66,7 +66,8 @@ production_console_app(
 - `DELETE_REQUIREMENT(project_id, delivery_id, expected_checkpoint_sha256)`；
 - `PRODUCT_REPLY(project_id, delivery_id, expected_checkpoint_sha256, message, screenshot_ids)`；
 - `PRODUCT_APPROVAL(project_id, delivery_id, expected_checkpoint_sha256)`；
-- `CONTINUE_DELIVERY(project_id, delivery_id, expected_checkpoint_sha256, approved_plan_sha256?)`。
+- `CONTINUE_DELIVERY(project_id, delivery_id, expected_checkpoint_sha256,
+  approved_scope_sha256?, approved_plan_sha256?)`；一次只能提交一个 approval digest。
 
 公开持久化契约是 `schemas/console-operation.schema.json`。
 
@@ -98,9 +99,13 @@ production_console_app(
 - Host 启动时把遗留 `RUNNING` 标记为 `INTERRUPTED`，不得自动再次调用 provider。
 - 用户在 UI 点击统一“继续交付”时，新的 Operation 根据当前 Delivery checkpoint 决定下一动作；
   已完成阶段不重跑，不确定模型调用遵守既有 recovery/verification approval 规则。
-- UI 只能批准 Manager 返回并验证过的 exact recovery/verification plan SHA。SHA 可以隐藏在
-  控件中，但批准前必须显示候选提交、Agent/模型或保留修改/目标基线等可理解事实。
-- checkpoint 或 plan 已变化时必须拒绝；刷新最新投影后重新提交，不得自动替换用户批准对象。
+- Coder 现场存在原 Task 权限遗漏路径时，Manager 必须先返回 `coder_scope` 审批请求，列出 exact
+  relative paths 并绑定 scope digest。UI 的“批准文件范围”只提交 `approved_scope_sha256`，这一步
+  不能启动 Agent；平台获准捕获后必须再返回独立的 `coder_recovery` plan 审批。
+- UI 只能批准 Manager 返回并验证过的 exact scope/recovery/verification SHA。SHA 可以隐藏在
+  控件中，但批准前必须显示精确遗漏路径、候选提交、Agent/模型或保留修改/目标基线等可理解事实。
+- checkpoint、retained paths、原 permissions/deny-list、scope 或 plan 已变化时必须拒绝；刷新最新
+  投影后重新提交，不得自动替换用户批准对象。
 
 ### 3.4 Security and process boundary
 
@@ -124,7 +129,7 @@ production_console_app(
 ### 3.5 User-visible flow
 
 - 日常用户可在网页完成：Project 创建/选择、带 1–N 个 Repository 目录的 Requirement 创建、Product 对话、ProductSpec 批准、统一继续、exact
-  recovery/verification 计划批准、进度观察和 Candidate 领取。
+  Coder 文件范围补充审批、recovery/verification 计划批准、进度观察和 Candidate 领取。
 - 新建 Requirement 通过本机弹窗一次选择多个代码目录；Product 对话支持文字、直接粘贴截图或两者组合，
   不显示截图文件选择控件。截图增删后，预览、已选集合和瞬时反馈必须同步；移除截图不得继续显示
   “截图已添加”，移除最后一张后预览区必须隐藏。
@@ -211,6 +216,10 @@ production_console_app(
 | Configured checkout HEAD advances after Requirement intake | old Requirement stays actionable against its retained baseline; no error card |
 | Retained Requirement baseline commit/worktree drifts | terminal FAILED with `SOURCE_REVISION_DRIFT`; explain restore path and optionally offer prefilled CREATE |
 | Existing legacy source-drift Operation uses `COMMAND_REJECTED` | recognize its bounded summary as the same terminal UI state without rewriting the Operation |
+| Coder dirty inventory contains paths omitted by original policy | SUCCEEDED Operation carries `coder_scope`, exact visible paths and hidden scope digest; no content capture or Agent run yet |
+| Scope approval submitted with exact current digest | capture is allowed only for those paths; next response still requires an independent recovery plan approval |
+| Scope paths, checkpoint, original permissions or deny-list drift | old approval is rejected; recompute and show the current exact scope |
+| Scope request targets denied, invalid, symlink, sensitive or otherwise unsafe path | fail closed; never offer an approval that broadens hard safety policy |
 | Recovery/verification approval required | SUCCEEDED Operation carries safe facts plus exact hidden plan digest |
 | Host exits during RUNNING | next startup appends INTERRUPTED; never silently replay |
 | Executor raises an unexpected exception | terminal FAILED with generic safe summary; no traceback in browser |
@@ -238,7 +247,7 @@ production_console_app(
 - `tests/web_console/test_core.py`：memory/file store 幂等、单 Delivery admission、persist-before-run、
   safe failure、重开 hash chain 与 orphan RUNNING interruption。
 - `tests/web_console/test_manager.py`：全部 typed intent 委托、Project 边界、exact checkpoint、stale 拒绝、
-  source-drift 专用错误码、recovery/verification plan digest 和 safe facts。
+  source-drift 专用错误码、separate scope/recovery/verification digest forwarding 和 safe facts。
 - `tests/web_console/test_transport.py`：lifespan、assets/query、202 submit、operation query、Host/Origin、
   content type、body/input limit、409/404 和安全 headers。
 - `tests/team_view/ui.test.cjs`：多目录创建、Product/继续/批准操作、操作状态、刷新保持、hidden digest
@@ -250,8 +259,8 @@ production_console_app(
   Operation 快捷跳转。
 - `tests/team_view/test_live.py`：candidate branch 必须从 exact candidate ref 唯一推导；退休父需求的
   native child deliveries 与 Agent 队列投影必须同时消失。
-- `tests/contracts/test_json_schema_contracts.py`：Python/JSON Schema 的 QUEUED/RUNNING/terminal 状态和
-  path 约束一致。
+- `tests/contracts/test_json_schema_contracts.py`：Python/JSON Schema 的 QUEUED/RUNNING/terminal 状态、
+  mutually exclusive scope/plan approvals、`coder_scope` result 和 path 约束一致。
 
 全量回归由人工按项目流程执行；实现 Agent 只运行本次改动的 focused cases、Ruff、strict Mypy、
 schema/example 检查和离线构建。
@@ -278,7 +287,16 @@ store.interrupt_running(at=clock())
 ```
 
 ```javascript
-// Wrong: ask the user to copy a 64-character checkpoint or plan digest.
+// Wrong: silently treat every configured path or a whole directory as recovery authority.
+submitOperation({ action: "CONTINUE_DELIVERY", approved_plan_sha256: broadRecoveryPlan })
+
+// Correct: bind the exact omitted paths to the first button; a later button approves the plan.
+submitOperation({ action: "CONTINUE_DELIVERY", approved_scope_sha256: approval.plan_sha256 })
+submitOperation({ action: "CONTINUE_DELIVERY", approved_plan_sha256: recovery.plan_sha256 })
+```
+
+```javascript
+// Wrong: ask the user to copy a 64-character checkpoint, scope or plan digest.
 prompt("plan sha256")
 
 // Correct: bind the exact digest to the button while rendering the facts being approved.

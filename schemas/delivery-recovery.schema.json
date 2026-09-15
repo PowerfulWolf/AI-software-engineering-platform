@@ -239,6 +239,80 @@
       "title": "RecoveryPathRebinding",
       "type": "object"
     },
+    "RecoveryScopeSupplement": {
+      "additionalProperties": false,
+      "description": "Deterministic request to approve exact changed paths missing from Coder policy.",
+      "properties": {
+        "kind": {
+          "const": "recovery_scope_supplement",
+          "default": "recovery_scope_supplement",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "scope": {"$ref": "#/$defs/RecoveryScope"},
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "task_revision": {"minimum": 1, "title": "Task Revision", "type": "integer"},
+        "checkpoint_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Checkpoint Sha256",
+          "type": "string"
+        },
+        "base_revision": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Base Revision",
+          "type": "string"
+        },
+        "permissions_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Permissions Sha256",
+          "type": "string"
+        },
+        "denied_paths_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Denied Paths Sha256",
+          "type": "string"
+        },
+        "paths": {
+          "items": {
+            "minLength": 1,
+            "pattern": "^[^\\u0000-\\u001f]+$",
+            "type": "string"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Paths",
+          "type": "array"
+        },
+        "supplement_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Supplement Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "task_id",
+        "task_revision",
+        "checkpoint_sha256",
+        "base_revision",
+        "permissions_sha256",
+        "denied_paths_sha256",
+        "paths",
+        "supplement_sha256"
+      ],
+      "title": "RecoveryScopeSupplement",
+      "type": "object"
+    },
     "RecoveryPlan": {
       "additionalProperties": false,
       "properties": {
@@ -277,6 +351,21 @@
           "pattern": "^[a-f0-9]{64}$",
           "title": "Target Preparation Sha256",
           "type": "string"
+        },
+        "scope_supplement": {
+          "anyOf": [
+            {"$ref": "#/$defs/RecoveryScopeSupplement"},
+            {"type": "null"}
+          ],
+          "default": null
+        },
+        "scope_approval_reference": {
+          "anyOf": [
+            {"maxLength": 2000, "minLength": 1, "type": "string"},
+            {"type": "null"}
+          ],
+          "default": null,
+          "title": "Scope Approval Reference"
         },
         "permissions": {
           "$ref": "#/$defs/AgentPermissions",

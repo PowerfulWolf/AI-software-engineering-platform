@@ -352,3 +352,23 @@ def test_continue_hides_the_plan_reference_inside_manager_command(
     command = host.resume_commands[0]
     assert command.approved_plan_sha256 == "4" * 64
     assert command.approval_reference == "web-console-plan:" + "4" * 64
+
+
+def test_continue_sends_an_exact_scope_approval_separately_from_plan_approval(
+    tmp_path: Path,
+) -> None:
+    adapter, host, entry = _adapter(tmp_path)
+
+    adapter.execute(
+        ContinueDeliveryIntent(
+            project_id=PROJECT_ID,
+            delivery_id=DELIVERY_ID,
+            expected_checkpoint_sha256=entry.checkpoint.checkpoint_sha256,
+            approved_scope_sha256="5" * 64,
+        )
+    )
+
+    command = host.resume_commands[0]
+    assert command.approved_scope_sha256 == "5" * 64
+    assert command.approved_plan_sha256 is None
+    assert command.approval_reference == "web-console-scope:" + "5" * 64

@@ -1674,6 +1674,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   });
 
   const planSha = "b".repeat(64);
+  const scopeSha = "c".repeat(64);
   storedOperations[1].status = "SUCCEEDED";
   storedOperations[1].updated_at = "2026-09-05T01:00:05Z";
   storedOperations[1].result = {
@@ -1740,24 +1741,56 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     delivery_id: "r1",
     checkpoint_sha256: "a".repeat(64),
     stage: "WAITING_HUMAN",
-    next_action: "Approve exact recovery",
+    next_action: "Approve exact omitted paths",
     approval: {
-      kind: "coder_recovery",
-      plan_sha256: planSha,
-      title: "批准 Coder 恢复任务",
-      facts: ["保留改动 2 个文件"],
+      kind: "coder_scope",
+      plan_sha256: scopeSha,
+      title: "批准补充 Coder 文件范围",
+      facts: ["待补充文件 src/pkg/__init__.py"],
     },
   };
   fixture.requests[0].stage = "WAITING_HUMAN";
   await interval.fn();
   vm.runInContext('showDetail("request","r1")', context);
+  const approveScope = descend(get("detail")).find(
+    (node) => node.tag === "button" && node.textContent === "批准文件范围",
+  );
+  assert.ok(approveScope, "WAITING_HUMAN renders its exact scope approval");
+  assert.match(text(get("detail")), /src\/pkg\/__init__\.py/);
+  assert.match(text(get("detail")), /不会启动 Agent.*仍需审批恢复计划/);
+  assert.doesNotMatch(text(get("detail")), /c{64}/);
+  await approveScope.events.click();
+  assert.deepEqual(submittedIntents[2], {
+    action: "CONTINUE_DELIVERY",
+    project_id: "project_fixture",
+    delivery_id: "r1",
+    expected_checkpoint_sha256: "a".repeat(64),
+    approved_scope_sha256: scopeSha,
+  });
+
+  storedOperations[2].status = "SUCCEEDED";
+  storedOperations[2].updated_at = "2026-09-05T01:00:06Z";
+  storedOperations[2].result = {
+    project_id: "project_fixture",
+    delivery_id: "r1",
+    checkpoint_sha256: "a".repeat(64),
+    stage: "WAITING_HUMAN",
+    next_action: "Approve exact recovery",
+    approval: {
+      kind: "coder_recovery",
+      plan_sha256: planSha,
+      title: "批准 Coder 恢复任务",
+      facts: ["保留改动 2 个文件", "已补充文件范围 src/pkg/__init__.py"],
+    },
+  };
+  await interval.fn();
+  vm.runInContext('showDetail("request","r1")', context);
   const approvePlan = descend(get("detail")).find(
     (node) => node.tag === "button" && node.textContent === "批准并继续",
   );
-  assert.ok(approvePlan, "WAITING_HUMAN renders its exact recovery approval");
-  assert.doesNotMatch(text(get("detail")), /b{64}/);
+  assert.ok(approvePlan, "scope approval is followed by exact recovery plan approval");
   await approvePlan.events.click();
-  assert.deepEqual(submittedIntents[2], {
+  assert.deepEqual(submittedIntents[3], {
     action: "CONTINUE_DELIVERY",
     project_id: "project_fixture",
     delivery_id: "r1",
@@ -1765,9 +1798,9 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     approved_plan_sha256: planSha,
   });
 
-  storedOperations[2].status = "FAILED";
-  storedOperations[2].updated_at = "2026-09-05T01:00:06Z";
-  storedOperations[2].error_summary = "Provider unavailable";
+  storedOperations[3].status = "FAILED";
+  storedOperations[3].updated_at = "2026-09-05T01:00:07Z";
+  storedOperations[3].error_summary = "Provider unavailable";
   await interval.fn();
   const closeFailure = descend(get("operations")).find(
     (node) => node.tag === "button" && node.textContent === "关闭",

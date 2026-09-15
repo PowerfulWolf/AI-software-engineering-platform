@@ -172,14 +172,21 @@ candidate SHA 创建两个独立 detached worktree。`recover=True` 不做 check
 现有路径、Git common-dir、role/attempt layout、branch/detached 状态和 HEAD 全部吻合；dirty 文件作为
 中断 evidence 保留。恢复检查失败时上层进入人工处理，不能悄悄创建另一份环境继续。
 
-T044 第一阶段增加只读 Python 接口 `GitWorktreeManager.capture_changes/verify_capture`，用于识别
-中断 Coder 留下的既有文本文件修改，绑定原 HEAD、分支、patch、文件摘要与暂存区摘要。
-它不保存或应用补丁，不修改旧工作树，也不恢复终态 Task。新增/删除/二进制/越权或敏感改动等
-不支持的情况明确拒绝；细节见 [恢复契约](../.trellis/spec/core/delivery-recovery.md)。生产恢复入口、
-授权后的新执行和基线更新仍需后续实现，不能用捕获成功代替候选提交及独立 QA/Review。
+T044 的只读 Python 接口 `GitWorktreeManager.capture_changes/verify_capture` 用于识别中断 Coder
+留下的既有文本修改及新增文本文件，绑定原 HEAD、分支、patch、文件摘要与暂存区摘要。新增文件
+必须是非忽略、非 symlink、UTF-8、大小受限的普通文件，并使用 `/dev/null` no-index patch 表达；
+删除、重命名、二进制、编码异常、超限或敏感改动明确拒绝。接口不修改旧工作树，也不恢复终态
+Task；细节见 [恢复契约](../.trellis/spec/core/delivery-recovery.md)。
 
-T044 C2 增加 `seed_changes(capture, target, source_permissions, target_permissions, ...)`，
-在原改动和双方权限校验后，将文本修改三方应用到另一个新 Task 的干净 Coder worktree。
-新基线必须包含旧基线；冲突先在临时暂存区检出，不污染目标文件。旧 worktree 不变，
-应用后只返回改动捕获，不提交代码、不生成 verdict。它目前仅由临时 Git 测试验证；
-生产授权、Task/dispatch、恢复入口及 provider 接续仍需接入，不能直接拿它恢复旧终态 Task。
+如果 dirty inventory 中存在原 Task read/write allowlist 未覆盖的路径，平台只能先读取 Git 路径清单，
+不能读取这些文件正文。恢复控制器返回绑定原 Task/revision、checkpoint/base、原权限与 deny-list
+digest 的 `RecoveryScopeSupplement`，由人类批准其排序后的精确路径和 digest。批准只把这些 exact
+paths 补入本次恢复捕获权限；不批准目录、glob、后缀、语言惯例、命令、网络、状态或 merge 权限。
+任何路径、原权限、deny-list、checkpoint、基线或 retained worktree 变化都会让旧批准失效并要求
+重新审批。明确 denied、非法或敏感路径不能通过范围补充审批放行。
+
+T044 C2 的 `seed_changes(capture, target, source_permissions, target_permissions, ...)` 在原改动和
+双方权限校验后，将文本修改或已捕获的新增文件应用到另一个新 Task 的干净 Coder worktree。
+新基线必须包含旧基线；冲突先在临时暂存区检出，不污染目标文件。若 capture 声明新增文件而目标
+已存在，或 capture 声明修改文件而目标缺少基线文件，必须拒绝。旧 worktree 不变，应用后只返回
+改动捕获，不提交代码、不生成 verdict；恢复 Task 仍必须经过独立 Coder、QA、Reviewer 契约。

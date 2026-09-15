@@ -30,13 +30,14 @@ and the patch SHA. No timestamp, approval, Task status or verdict is included.
   Reject partial commits/HEAD drift, not guess a baseline.
 - Reuse WorkspacePolicy read **and** write permissions with explicit deny globs. Changed-file reads
   use no-follow directory descriptors; final open is nonblocking, regular-file-only and bounded.
-- v1 supports only modifications to existing regular UTF-8 text files with unchanged mode. Clean
-  captures are allowed but prove no delivery. New/deleted/renamed/untracked files, binary, index-only
-  changes, assume-unchanged/skip-worktree flags and submodules fail closed. Ignored build scratch is
+- v1 supports modifications and additions of regular UTF-8 text files with unchanged mode. Added
+  files may be staged or nonignored/untracked; their complete content is represented as a bounded
+  `/dev/null` Git patch. Clean captures are allowed but prove no delivery. Deleted/renamed files,
+  binary, index-only changes, assume-unchanged/skip-worktree flags and submodules fail closed. Ignored build scratch is
   not copied. Limit: 256 changed files; 1,000,000 combined before/current content bytes; 1,000,000 bytes
   per captured diff. No truncation. Git diff disables optional locks, hooks, fsmonitor, external diff
   and textconv. Repository checkout filters remain rejected by existing guards.
-- Staged and unstaged edits combine into the HEAD-to-working-tree patch; staging has a separate
+- Staged, unstaged and nonignored added files combine into the HEAD-to-working-tree patch; staging has a separate
   digest. Capture never stages, commits, stashes, rebases, applies or deletes files.
 - Diffs use zero context (`--unified=0 --inter-hunk-context=0`) and full blob IDs, so unchanged nearby
   secrets/test fixtures are not copied. Strip optional source labels after hunk `@@` ranges as they
@@ -53,7 +54,7 @@ and the patch SHA. No timestamp, approval, Task status or verdict is included.
 
 | Input / failure | Result |
 |---|---|
-| Non-Coder, unsupported change, UTF-8/binary/size/secret failure | `WorktreeCaptureRejected`; no effects |
+| Non-Coder, deletion/rename/unsupported change, UTF-8/binary/size/secret failure | `WorktreeCaptureRejected`; no effects |
 | Read/write/deny failure | Existing `PathPolicyViolation`; rejected file not read |
 | Forged path/common-dir/ref | Existing ownership/identity error; source retained |
 | HEAD no longer original full SHA | `WorktreeRevisionDrift`; no checkout/reset |
@@ -62,7 +63,7 @@ and the patch SHA. No timestamp, approval, Task status or verdict is included.
 
 ## Good / Base / Bad Cases
 
-- Good: preserve staged + unstaged edits, exact replay returns the same capture and index digest.
+- Good: preserve staged + unstaged edits and bounded new text files; exact replay returns the same capture and index digest.
 - Base: clean worktree yields empty patch, with no implied candidate or passing verdict.
 - Bad: treating capture as implementation report, arbitrary dirty adoption, or resetting BLOCKED
   Task attempts/status because quota returned.
@@ -71,7 +72,7 @@ and the patch SHA. No timestamp, approval, Task status or verdict is included.
 
 `tests/git/test_capture.py` uses real temporary Git without model/network/DB. Assert patch/file hashes,
 index bytes/HEAD/main checkout unchanged, replay, content/staging/HEAD/payload drift, permissions,
-role/forged root, unsupported changes, symlink/FIFO, secret and size rejection. Full regression,
+role/forged root, new-file staged/untracked capture, unsupported changes, symlink/FIFO, secret and size rejection. Full regression,
 Ruff, strict Mypy, lock/build and diff checks remain gates.
 
 ## Wrong vs Correct
@@ -181,8 +182,10 @@ FileRecoveryStore.get_authorization(plan_sha256: str) -> RecoveryAuthorization
 ```
 
 `RecoveryPlan` contains failed-source lineage, embedded `CapturedChanges`, target base/preparation,
-source/target permissions, denies, aware creation time and `plan_sha256`. `permissions` proves the
-historical capture; optional `target_permissions` binds the current Coder policy. `RecoveryAuthorization` contains the exact
+source/target permissions, optional explicit scope supplement/approval reference, denies, aware
+creation time and `plan_sha256`. `permissions` proves the historical capture under the original
+policy plus only a digest-bound approved supplement; optional `target_permissions` binds the current
+Coder policy. `RecoveryAuthorization` contains the exact
 approval command plus verifier-issued decision and `authorization_sha256`; one decision per plan.
 `schemas/delivery-recovery.schema.json` describes plan/authorization union; model and wire validation
 both reject extras. Integrity is not trusted origin: application ports must independently verify facts.
@@ -401,8 +404,10 @@ GitWorktreeManager.seed_changes(
 Caller must first authorize exact recovery/target preparation, create a fresh Task and exclusively
 hold both worktrees with the previous executor stopped. Require different Task IDs, target Coder
 attempt 1, registered full-SHA identity, clean target and target base descending from source base.
-Revalidate original capture and both read/write/deny policies; target paths must be bounded regular
-UTF-8 files. Reject effective external filter/merge-driver configuration and merge attributes.
+Revalidate original capture and both read/write/deny policies; an existing target path must be a
+bounded regular UTF-8 file. A captured addition may be absent from the target and is created only by
+the verified patch application; a captured base file missing from the target is rejected. Reject
+effective external filter/merge-driver configuration and merge attributes.
 Reject `.gitattributes` edits so the applied patch cannot change its own merge behavior.
 No model, state, dispatch, approval, commit, ref rewrite, reset or old worktree write occurs here.
 
@@ -415,7 +420,7 @@ source is checked again. Observation is not an OS lock against concurrent hostil
 
 | Case | Result |
 |---|---|
-| Compatible newer base or same base | Target capture; source content/index/HEAD unchanged |
+| Compatible newer base or same base, including added regular text files | Target capture; source content/index/HEAD unchanged |
 | Empty source or changes already in new base | Empty capture, not a candidate or delivery |
 | Conflict, old/unrelated base, dirty/wrong identity, denied path or merge driver | `WorktreeSeedRejected`; retain source and target |
 | Preflight failure | Original target files/index unchanged; temporary index disposed |
@@ -425,7 +430,7 @@ source is checked again. Observation is not an OS lock against concurrent hostil
 Good: source changes VALUE, newer base changes FOOTER, result retains both. Base: empty capture.
 Bad: use returned capture as implementation-report or bypass provider dirty-worktree admission.
 `tests/git/test_seed.py` uses real temporary Git: both bases, empty/already-applied, conflicts,
-source drift, dirty/forged role/root/Task, narrowed permission/deny, external driver/attribute,
+source drift, dirty/forged role/root/Task, new-file replay, narrowed permission/deny, external driver/attribute,
 preflight/post-apply process loss, source/index/ref preservation and dirty replay.
 
 Wrong: successful `git apply --check --3way` means no conflict. A real Git test demonstrated that
@@ -594,7 +599,10 @@ delivery outcomes are separately recorded, not inferred from offline tests. No a
 `TeamHost.recovery_entry() -> NativeRecoveryEntry` in `recovery/entry.py`:
 
 ```python
-propose(*, repository_root, delivery_id, failed_run_id, failed_context_id) -> tuple[RecoveryPlan, Path]
+scope_supplement(checkpoint: ProjectDeliveryCheckpoint) -> RecoveryScopeSupplement | None
+propose(*, repository_root, delivery_id, failed_run_id, failed_context_id,
+        approved_scope_sha256=None, scope_approval_reference=None) -> tuple[RecoveryPlan, Path]
+require_current_plan(path: Path) -> RecoveryPlan
 open_recovery_plan(config: ProductionConfig, path: Path) -> tuple[FileRecoveryStore, RecoveryPlan]
 approve(path: Path, *, confirmed_plan: str, reference: str) -> None
 execute(path: Path, *, route_factory=None) -> RetryResult
@@ -713,7 +721,7 @@ safe policy tightening without treating historical capture authority as current 
 ### Signatures
 
 ```python
-RecoveryPlan.permissions: AgentPermissions                 # exact historical/source policy
+RecoveryPlan.permissions: AgentPermissions                 # original source + approved supplement
 RecoveryPlan.target_permissions: AgentPermissions | None   # approved current target policy
 RecoveryPlan.effective_target_permissions -> AgentPermissions
 _delivery_role_permissions(role, allowed_paths, commands) -> AgentPermissions
@@ -722,8 +730,9 @@ _delivery_role_permissions(role, allowed_paths, commands) -> AgentPermissions
 ### Contracts
 
 - `permissions` remains the only policy used to verify/capture the original dirty worktree and to read
-  historical plans. `target_permissions` is used for the fresh AgentDefinition, target seed, Context,
-  tool policy and provider admission.
+  historical plans. It equals the original policy unless D5 binds a separately approved exact-path
+  supplement. `target_permissions` is used for the fresh AgentDefinition, target seed, Context, tool
+  policy and provider admission.
 - New proposals compile target permissions from the current RepositoryProfile and original Task allowed
   paths. Both proposal and execution independently recompute that target policy through the same
   deterministic compiler and require exact equality with the approved value.
@@ -778,6 +787,81 @@ assert fresh_coder.permissions == plan.permissions
 manager.verify_capture(plan.capture.to_capture(), plan.permissions)
 assert fresh_coder.permissions == plan.effective_target_permissions
 ```
+
+## D5: Explicit recovery scope supplementation
+
+### Scope / Signatures
+
+Use this contract only when a retained failed Coder worktree contains changed paths omitted from the
+original Task policy. This is a recovery-only exception, not a general package, suffix, directory or
+language rule.
+
+```python
+inspect_recovery_scope_supplement(
+    manager: GitWorktreeManager,
+    worktree: WorktreeRef,
+    original: NativeRecoverySource,
+) -> RecoveryScopeSupplement | None
+expanded_recovery_permissions(
+    original: AgentPermissions,
+    supplement: RecoveryScopeSupplement | None,
+) -> AgentPermissions
+NativeRecoveryEntry.scope_supplement(checkpoint) -> RecoveryScopeSupplement | None
+ResumeProjectDelivery.approved_scope_sha256: CheckpointDigest | None
+DeliveryResumeOutcome.SCOPE_APPROVAL_REQUIRED
+```
+
+`RecoveryScopeSupplement` binds team/project/delivery, Task ID/revision, source checkpoint/base,
+original permission digest, deny-list digest, sorted unique exact relative paths and its own digest.
+An approved recovery plan embeds both that object and a nonempty `scope_approval_reference`; both
+participate in the plan digest. Omission preserves historical plan identity.
+
+### Contracts
+
+- Discovery may inspect only Git path names. It must not read content from a path that the original
+  read/write policy rejects. Every omitted path is displayed directly in the approval request.
+- An explicit deny, invalid path, symlink escape or `.git` path is never approvable. Missing allowlist
+  entries are the only eligible case. Approval adds those exact file paths to read and write policy;
+  it never adds a glob, parent directory, command, network, merge or state-change authority.
+- The Manager recomputes the complete supplement immediately before capture. A missing/wrong digest,
+  changed path set, changed Task/checkpoint/base/policy/deny list or absent approval reference rejects.
+- Scope approval permits bounded capture only. After capture, the separate `RecoveryPlan` approval is
+  still required before creating or invoking a recovery Coder. The plan displays captured file count,
+  target base and every supplemented path.
+- Current-fact admission recomputes the supplement from the retained worktree and requires exact
+  equality with the embedded supplement and expanded source permissions. It verifies the capture with
+  that approved policy. Stale immutable plans remain audit evidence but are not offered for approval;
+  the UI requests a fresh scope/plan approval instead.
+- Bounded staged or nonignored/untracked regular UTF-8 additions use the same capture, secret, size,
+  no-follow and seed rules as D1/D2. Approval never makes an unsafe file capturable.
+
+### Validation matrix / examples
+
+| Case | Required result |
+|---|---|
+| One omitted regular path | `SCOPE_APPROVAL_REQUIRED` with exact path and digest; no content read |
+| Exact scope digest + reference | New plan captures the file and embeds approval; plan approval still required |
+| Wrong digest or another omitted path appears | Recompute and request fresh scope approval |
+| Capture bytes/index/HEAD/target facts change | Stale plan not executable; fresh approvals required |
+| Explicit deny, symlink, secret, binary or oversized addition | Reject; never broaden or capture |
+| No omitted paths | Normal recovery proposal; stale scope approval rejects |
+
+Good: approve `src/pkg/__init__.py` as one exact omitted path, then separately inspect/approve the
+captured recovery plan. Base: every changed path was already authorized, so no supplement exists.
+Bad: infer `__init__.py`, `*.py`, a package directory or every changed path as ambient authority.
+
+### Tests / Wrong vs Correct
+
+`tests/recovery/test_scope.py` proves no pre-approval content capture, exact expansion, digest change
+when another path appears and deny precedence. `tests/recovery/test_models.py` covers plan/schema
+binding and tamper. `tests/recovery/test_resume.py` uses real Git/MySQL to prove scope approval precedes
+capture/plan approval and stale retained paths require a new digest. Web Manager and UI tests prove
+the scope digest is submitted separately from a recovery plan digest. Capture/seed suites cover
+staged/untracked additions and unsafe-file rejection.
+
+Wrong: add `src/pkg/__init__.py` automatically because another file in `src/pkg` was authorized.
+Correct: display that exact path, require its current supplement digest, capture under the expanded
+policy, then require a second digest-bound recovery-plan approval before execution.
 
 ## E1: Candidate verification primitives (not a production entry)
 
@@ -1179,6 +1263,8 @@ CLI:
 
 ```text
 ase request resume DELIVERY_ID
+ase request resume DELIVERY_ID --approve-scope SCOPE_SHA256 \
+  --approval-reference AUDIT_REFERENCE
 ase request resume DELIVERY_ID --approve-plan PLAN_SHA256 \
   --approval-reference AUDIT_REFERENCE
 ```
