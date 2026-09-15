@@ -76,6 +76,42 @@ def test_codex_structured_command_binds_verified_images(
     assert commands[0][commands[0].index("--image") + 1] == str(screenshot)
 
 
+def test_codex_structured_command_mounts_additional_requirement_baselines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    primary = tmp_path / "primary"
+    additional = tmp_path / "additional"
+    primary.mkdir()
+    additional.mkdir()
+    commands: list[tuple[str, ...]] = []
+
+    def run(command: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        commands.append(command)
+        output = Path(command[command.index("--output-last-message") + 1])
+        output.write_text(json.dumps({"result": "ok"}), encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr("ai_software_engineer.agents.structured.subprocess.run", run)
+    client = CodexCliStructuredModelClient(
+        repository_root=primary,
+        additional_repository_roots=(additional,),
+        model="gpt-test",
+        environment={"PATH": "/usr/bin"},
+    )
+
+    client.complete(
+        instructions="Return a result.",
+        input_payload={},
+        output_schema={"type": "object"},
+        timeout_seconds=30,
+    )
+
+    command = commands[0]
+    assert command[command.index("-C") + 1] == str(primary)
+    assert command[command.index("--add-dir") + 1] == str(additional)
+
+
 def test_image_request_skips_routes_without_image_support(tmp_path: Path) -> None:
     screenshot = tmp_path / "screen.webp"
     screenshot.write_bytes(b"RIFFxxxxWEBPfixture")

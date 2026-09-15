@@ -502,7 +502,9 @@ this does not authorize rebasing old approval or QA/Review evidence in place.
 - Production TeamHost 每次按 Project 读取 active Team/Project Spec 快照。Team Spec 进入
   `PLATFORM_ENGINEERING` rules；Project Spec 由 `ProductionProjectRuleProvider` 按 Repository
   过滤并提供 exact URI/hash provenance。缓存身份同时包含知识和 Spec 快照：任何一方变化只重建
-  受影响 Project runtime，不要求进程重启，也不允许已 prepare 的交付静默采用新版本。
+  受影响 Project runtime，不要求进程重启，也不允许已 prepare 的交付静默采用新版本。联合
+  Requirement 的 derived delivery 显式重放该 Requirement 已封存的 preparation/spec/context；新版本
+  只进入之后创建的 Requirement。
 
 ## 4. Validation & Error Matrix
 
@@ -521,11 +523,14 @@ this does not authorize rebasing old approval or QA/Review evidence in place.
 | ProductSpec 未获 exact human approval | Product gate | `WAITING_PRODUCT_APPROVAL`，不运行 Designer |
 | 项目规则冲突 | SpecCompiler | `WAITING_HUMAN`，不静默选边 |
 | Team/Project knowledge selection 在新需求前变化 | TeamHost runtime lookup | 重建受影响 Project runtime，无需进程重启 |
-| 已 prepare 的交付所绑定知识发生变化 | preparation guard | 安全停止并要求重新 prepare；不沿用旧批准 |
+| standalone 已 prepare 交付所绑定知识发生变化 | preparation guard | 安全停止并要求重新 prepare；不沿用旧批准 |
+| Requirement 创建后知识/Spec 或主 checkout 更新 | frozen preparation + retained baseline | 旧 Requirement 继续使用封存版本；新 Requirement 使用新版本 |
 | Team Spec activation 变化 | TeamHost runtime lookup | 各 Project 下一次访问重建 runtime；无进程重启 |
 | Project A Spec activation 变化 | Project-scoped cache identity | 只重建 Project A；Project B 保持原 runtime |
-| 已 prepare 的交付所绑定 Spec 发生变化 | preparation guard | 安全停止并要求重新 prepare；不沿用旧批准 |
-| target project dirty/not Git/HEAD 漂移 | delivery precondition | stable failure + preserved project/worktree |
+| standalone 已 prepare 交付所绑定 Spec 发生变化 | preparation guard | 安全停止并要求重新 prepare；不沿用旧批准 |
+| 新 intake 的 target project dirty/not Git/HEAD 在准备期间漂移 | delivery precondition | stable failure + preserved project/worktree |
+| 已有 Requirement 的配置 checkout HEAD 前进或 dirty | Requirement-owned baseline | 不影响旧交付；Task.base_ref 仍为封存 revision |
+| Requirement baseline worktree/commit 漂移 | reconciliation | typed source drift；保留现场，不 fallback 到配置 checkout |
 | Coder provisional report/diff 不匹配、越权路径或 finalization 后 dirty | Codex Git guard | policy/invalid-output failure；不进入 QA |
 | Coder 返回合法未完成 checkpoint | artifact/worktree/state guards | 保存 progress，重新排队下一次 Coder；不进入 QA |
 | Coder continuation 预算耗尽或 checkpoint 漂移 | retry/runtime admission | BLOCKED，保留 progress 和 worktree evidence |

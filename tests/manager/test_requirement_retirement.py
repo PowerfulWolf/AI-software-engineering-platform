@@ -33,7 +33,7 @@ from ai_software_engineer.multi_directory.retirement import (
     RequirementRetirementError,
     RequirementRetirementStore,
 )
-from ai_software_engineer.multi_directory.scope import DirectoryScope, DirectoryUnit
+from ai_software_engineer.multi_directory.scope import DirectoryUnit
 from ai_software_engineer.multi_directory.service import (
     CloseRequirement,
     CreateRequirement,
@@ -81,8 +81,8 @@ class _PreparationBackend:
     def reconcile(self, checkpoint: JointCheckpoint) -> None:
         del checkpoint
 
-    def client(self, scope: DirectoryScope, role: TeamRole) -> StructuredModelClient:
-        del scope, role
+    def client(self, checkpoint: JointCheckpoint, role: TeamRole) -> StructuredModelClient:
+        del checkpoint, role
         raise AssertionError("draft mutation must not invoke a model")
 
     def deliver(self, checkpoint: JointCheckpoint, unit_id: str) -> NoReturn:

@@ -16,7 +16,7 @@ from ai_software_engineer.multi_directory.models import (
     JointStage,
     digest,
 )
-from ai_software_engineer.multi_directory.scope import DirectoryScope, DirectoryUnit
+from ai_software_engineer.multi_directory.scope import DirectoryUnit
 from ai_software_engineer.multi_directory.service import JointDeliveryService
 from ai_software_engineer.team_workspace import TeamWorkspace
 from tests.manager.test_joint_contracts import checkpoint
@@ -32,8 +32,8 @@ class PlanningBackend:
         self.inputs: list[Mapping[str, object]] = []
         self.command_error = False
 
-    def client(self, scope: DirectoryScope, role: TeamRole) -> StructuredModelClient:
-        del scope, role
+    def client(self, checkpoint: JointCheckpoint, role: TeamRole) -> StructuredModelClient:
+        del checkpoint, role
         return self
 
     def complete(

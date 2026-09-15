@@ -21,6 +21,7 @@ from ai_software_engineer.manager.delivery import (
     UnifiedProjectEntryService,
 )
 from ai_software_engineer.manager.delivery_checkpoint import DeliveryStage
+from ai_software_engineer.manager.preparation import PrepareProjectResult
 from ai_software_engineer.manager.production_backend import (
     ConfiguredStructuredClientFactory,
     ProductionProjectDeliveryBackend,
@@ -173,7 +174,16 @@ class TeamHost:
                         continue
                     if child.checkpoint.stage is DeliveryStage.DONE:
                         continue
-                    child_result = self._resume_controller(runtime).resume(
+                    if not isinstance(runtime.requirements.backend, ProductionJointBackend):
+                        raise ValueError("joint delivery backend cannot rebuild child runtime")
+                    child_backend, child_entry = runtime.requirements.backend.delivery_runtime(
+                        joint, child.unit_id
+                    )
+                    child_result = self._resume_controller(
+                        runtime,
+                        backend=child_backend,
+                        entry=child_entry,
+                    ).resume(
                         command.model_copy(update={"delivery_id": child.checkpoint.delivery_id})
                     )
                     if child_result.checkpoint.stage is not DeliveryStage.DONE:
@@ -183,16 +193,30 @@ class TeamHost:
             return runtime.requirements.resume(command)
         return self._resume_controller(runtime).resume(command)
 
-    def _resume_controller(self, runtime: _ProjectRuntime) -> DeliveryResumeController:
+    def _resume_controller(
+        self,
+        runtime: _ProjectRuntime,
+        *,
+        backend: ProductionProjectDeliveryBackend | None = None,
+        entry: UnifiedProjectEntryService | None = None,
+    ) -> DeliveryResumeController:
+        from ai_software_engineer.recovery.entry import NativeRecoveryEntry
         from ai_software_engineer.recovery.resume import DeliveryResumeController
+        from ai_software_engineer.recovery.verification_entry import CandidateVerificationEntry
+
+        selected_backend = backend or runtime.backend
 
         return DeliveryResumeController(
             config=self._config,
             environment=self._environment,
-            backend=runtime.backend,
-            entry=runtime.entry,
-            recovery=self.recovery_entry(runtime.project.manifest.project_id),
-            verification=self.verification_entry(runtime.project.manifest.project_id),
+            backend=selected_backend,
+            entry=entry or runtime.entry,
+            recovery=NativeRecoveryEntry(self._config, self._environment, selected_backend),
+            verification=CandidateVerificationEntry(
+                self._config,
+                self._environment,
+                selected_backend,
+            ),
         )
 
     def _runtime(self, project_id: ProjectId | str) -> _ProjectRuntime:
@@ -236,6 +260,8 @@ class TeamHost:
             clients: StructuredClientFactory,
             sources: tuple[ContextSource, ...],
             verifier: HumanProductDecisionVerifier,
+            frozen_preparation: PrepareProjectResult,
+            frozen_source_revision: str,
         ) -> ProductionProjectDeliveryBackend:
             return ProductionProjectDeliveryBackend(
                 config=self._config,
@@ -249,6 +275,8 @@ class TeamHost:
                 preparation_guard=validate_context,
                 delivery_context_sources=sources,
                 human_decision_verifier=verifier,
+                frozen_preparation=frozen_preparation,
+                frozen_source_revision=frozen_source_revision,
             )
 
         entry = UnifiedProjectEntryService(

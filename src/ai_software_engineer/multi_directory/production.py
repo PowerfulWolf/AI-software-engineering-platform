@@ -19,6 +19,7 @@ from ai_software_engineer.domain import (
 )
 from ai_software_engineer.execution import CommandResult, SubprocessCommandExecutor
 from ai_software_engineer.git import (
+    GitWorkspaceError,
     GitWorktreeManager,
     WorkspacePolicy,
     WorktreeAlreadyExists,
@@ -37,12 +38,13 @@ from ai_software_engineer.manager.delivery_checkpoint import (
     FileProjectDeliveryCheckpointStore,
     checkpoint_is_ancestor,
 )
-from ai_software_engineer.manager.preparation import PrepareProjectStatus
+from ai_software_engineer.manager.preparation import PrepareProjectResult, PrepareProjectStatus
 from ai_software_engineer.manager.production_agents import (
     ProductDraft,
     TechnicalDesignDraft,
 )
 from ai_software_engineer.manager.production_backend import (
+    MultiRepositoryStructuredClientFactory,
     ProductionProjectDeliveryBackend,
     StructuredClientFactory,
     _task_commands,
@@ -58,10 +60,11 @@ from ai_software_engineer.multi_directory.models import (
     IntegrationEvidence,
     JointCheckpoint,
     JointExecutionPlan,
+    JointStage,
     PreparedUnit,
     digest,
 )
-from ai_software_engineer.multi_directory.scope import DirectoryScope, DirectoryUnit, git_read
+from ai_software_engineer.multi_directory.scope import DirectoryUnit, git_read
 from ai_software_engineer.product import (
     HumanProductDecisionCommand,
     HumanProductDecisionVerifier,
@@ -73,7 +76,13 @@ from ai_software_engineer.repository_profile import RepositoryProfile
 from ai_software_engineer.team_workspace import TeamWorkspace
 
 BackendFactory = Callable[
-    [StructuredClientFactory, tuple[ContextSource, ...], HumanProductDecisionVerifier],
+    [
+        StructuredClientFactory,
+        tuple[ContextSource, ...],
+        HumanProductDecisionVerifier,
+        PrepareProjectResult,
+        str,
+    ],
     ProductionProjectDeliveryBackend,
 ]
 
@@ -97,6 +106,7 @@ class ProductionJointBackend:
         self.environment = dict(environment)
 
     def prepare(self, unit: DirectoryUnit) -> PreparedUnit:
+        self._require_intake_source(unit)
         result = self.native.prepare(unit.root)
         if result.status is not PrepareProjectStatus.PREPARED:
             return PreparedUnit(unit_id=unit.id, result=result)
@@ -121,6 +131,7 @@ class ProductionJointBackend:
             )
         if sum(len(s.content or "") for s in sources) > 1_000_000:
             raise ValueError("prepared joint context exceeds budget")
+        self._require_intake_source(unit)
         return PreparedUnit(
             unit_id=unit.id,
             result=result,
@@ -128,27 +139,24 @@ class ProductionJointBackend:
             commands=_task_commands(profile),
         )
 
-    def client(self, scope: DirectoryScope, role: TeamRole) -> StructuredModelClient:
-        return self.clients.for_project(Path(scope.units[0].root), role)
+    def client(self, checkpoint: JointCheckpoint, role: TeamRole) -> StructuredModelClient:
+        roots = self._baseline_paths(checkpoint)
+        if isinstance(self.clients, MultiRepositoryStructuredClientFactory):
+            return self.clients.for_projects(roots, role)
+        return self.clients.for_project(roots[0], role)
 
     def reconcile(self, checkpoint: JointCheckpoint) -> None:
+        prepared_unit_ids = {prepared.unit_id for prepared in checkpoint.preparations}
         for unit in checkpoint.scope.units:
             self.team.validate_code_root(unit.root)
-            if (
-                git_read(Path(unit.root), "rev-parse", "--verify", "HEAD^{commit}")
-                != unit.base_revision
-            ):
-                raise RequirementSourceRevisionDrift(
-                    "source revision changed after Requirement preparation; "
-                    "create a new Requirement"
-                )
-            if unit.base_revision and git_read(Path(unit.root), "status", "--porcelain"):
-                raise ValueError("source checkout is dirty; preserve changes before continuing")
+            if checkpoint.stage is JointStage.PREPARING and unit.id not in prepared_unit_ids:
+                self._require_intake_source(unit)
+        if all(unit.base_revision is not None for unit in checkpoint.scope.units):
+            self._baseline_paths(checkpoint)
         for prepared in checkpoint.preparations:
-            unit = next(u for u in checkpoint.scope.units if u.id == prepared.unit_id)
-            current = self.prepare(unit)
-            if current != prepared:
-                raise ValueError("joint preparation or knowledge drift")
+            expected = self.native.prepared_context(prepared.result)
+            if prepared.context_sources[: len(expected)] != expected:
+                raise ValueError("sealed Requirement preparation facts drifted")
         for child in checkpoint.children:
             unit = next(u for u in checkpoint.scope.units if u.id == child.unit_id)
             if child.checkpoint.repository_root != unit.root:
@@ -172,7 +180,17 @@ class ProductionJointBackend:
             if child.checkpoint.stage is DeliveryStage.DONE and actual != child.checkpoint:
                 raise ValueError("completed candidate checkpoint drift")
 
-    def _entry(self, checkpoint: JointCheckpoint, unit_id: str) -> UnifiedProjectEntryService:
+    def delivery_runtime(
+        self, checkpoint: JointCheckpoint, unit_id: str
+    ) -> tuple[ProductionProjectDeliveryBackend, UnifiedProjectEntryService]:
+        """Rebuild the exact native runtime owned by one Requirement unit."""
+
+        backend = self._derived_backend(checkpoint, unit_id)
+        return backend, self._entry(checkpoint, unit_id, backend=backend)
+
+    def _derived_backend(
+        self, checkpoint: JointCheckpoint, unit_id: str
+    ) -> ProductionProjectDeliveryBackend:
         projection = DerivedStageInputs(checkpoint, unit_id)
         shared = {
             "requirement_project": checkpoint.delivery_id,
@@ -192,11 +210,77 @@ class ProductionJointBackend:
             required=True,
             priority=5,
         )
+        return self.factory(
+            projection,
+            (source,),
+            projection,
+            projection.preparation,
+            projection.base_revision,
+        )
+
+    def _entry(
+        self,
+        checkpoint: JointCheckpoint,
+        unit_id: str,
+        *,
+        backend: ProductionProjectDeliveryBackend | None = None,
+    ) -> UnifiedProjectEntryService:
         return UnifiedProjectEntryService(
-            backend=self.factory(projection, (source,), projection),
+            backend=backend or self._derived_backend(checkpoint, unit_id),
             catalog=ProjectDeliveryCheckpointCatalog(self.project.root / "repositories"),
             delivery_namespace=self.project.manifest.project_id,
         )
+
+    def _require_intake_source(self, unit: DirectoryUnit) -> None:
+        if unit.base_revision is None:
+            return
+        root = Path(unit.root)
+        if git_read(root, "rev-parse", "--verify", "HEAD^{commit}") != unit.base_revision:
+            raise RequirementSourceRevisionDrift(
+                "source changed while the Requirement baseline was being prepared"
+            )
+        if git_read(root, "status", "--porcelain"):
+            raise ValueError("source checkout must be clean during Requirement intake")
+
+    def _baseline_paths(self, checkpoint: JointCheckpoint) -> tuple[Path, ...]:
+        return tuple(self._baseline(checkpoint, unit).path for unit in checkpoint.scope.units)
+
+    def _baseline(self, checkpoint: JointCheckpoint, unit: DirectoryUnit) -> WorktreeRef:
+        if unit.base_revision is None:
+            raise RequirementSourceRevisionDrift(
+                "Requirement source baseline requires a committed Git revision"
+            )
+        manager = GitWorktreeManager(
+            unit.root,
+            Path(self.team.manifest.platform_root)
+            / "worktrees"
+            / "requirements"
+            / checkpoint.delivery_id
+            / unit.id,
+        )
+        spec = WorktreeSpec(
+            task_id="task_baseline_"
+            + hashlib.sha256(f"{checkpoint.delivery_id}:{unit.id}".encode()).hexdigest()[:32],
+            role=AgentRole.REVIEWER,
+            attempt=1,
+            source_revision=unit.base_revision,
+        )
+        try:
+            try:
+                worktree = manager.create(spec)
+            except WorktreeAlreadyExists:
+                worktree = manager.recover(spec)
+            snapshot = manager.inspect(worktree)
+            if snapshot.dirty or snapshot.head_revision != unit.base_revision:
+                raise RequirementSourceRevisionDrift(
+                    "Requirement source baseline worktree changed; restore it before continuing"
+                )
+            return worktree
+        except GitWorkspaceError as error:
+            raise RequirementSourceRevisionDrift(
+                "Requirement source baseline is unavailable; restore the recorded commit "
+                "or baseline worktree before continuing"
+            ) from error
 
     def deliver(self, checkpoint: JointCheckpoint, unit_id: str) -> ChildDelivery:
         self.reconcile(checkpoint)
@@ -356,7 +440,21 @@ class DerivedStageInputs(
             or checkpoint.plan is None
         ):
             raise ValueError("native projection requires the approved joint artifact chain")
-        self.root = next(u.root for u in checkpoint.scope.units if u.id == unit_id)
+        unit = next(u for u in checkpoint.scope.units if u.id == unit_id)
+        prepared = next(
+            (item for item in checkpoint.preparations if item.unit_id == unit_id),
+            None,
+        )
+        if (
+            prepared is None
+            or prepared.result.preparation is None
+            or unit.base_revision is None
+            or prepared.result.status is not PrepareProjectStatus.PREPARED
+        ):
+            raise ValueError("native projection requires a prepared Git source baseline")
+        self.root = unit.root
+        self.preparation = prepared.result
+        self.base_revision = unit.base_revision
         design = next(u for u in checkpoint.design.units if u.unit_id == unit_id)
         planned = next(p for p in checkpoint.plan.units if p.unit_id == unit_id)
         self.dependencies = planned.depends_on

@@ -50,6 +50,16 @@ class JointModels(StructuredClientFactory, StructuredModelClient):
         del role
         return self
 
+    def for_projects(
+        self,
+        repository_roots: tuple[Path, ...],
+        role: TeamRole = TeamRole.PRODUCT,
+    ) -> StructuredModelClient:
+        del role
+        assert repository_roots
+        assert all(repository_root.is_dir() for repository_root in repository_roots)
+        return self
+
     def complete(
         self,
         *,

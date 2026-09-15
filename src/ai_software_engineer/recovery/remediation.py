@@ -31,7 +31,6 @@ from ai_software_engineer.manager.mysql_dispatch_authority import MySqlDispatchA
 from ai_software_engineer.manager.preparation import PrepareProjectResult
 from ai_software_engineer.manager.production_backend import (
     ProductionProjectDeliveryBackend,
-    _clean_git_head,
     _maximum_risk,
 )
 from ai_software_engineer.planning import PlanningPreviewService
@@ -123,7 +122,7 @@ class CandidateRemediationService:
             source.stages.plan,
             task_id=task_id,
             repository=prepared.repository_root,
-            base_ref=_clean_git_head(Path(prepared.repository_root)),
+            base_ref=self._backend.delivery_base_revision(Path(prepared.repository_root)),
             max_attempts=source.runtime.task.max_attempts,
             created_at=now,
             constraints=source.runtime.task.constraints,

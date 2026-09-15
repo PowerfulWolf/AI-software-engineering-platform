@@ -281,7 +281,10 @@ Git inspection 或无测试的成功退出冒充验收。平台保留独立候�
 独立 QA/Reviewer 复核；QA FAIL 或 Review REJECT 会保留旧 Task/candidate，并创建关联修复 Task 继续
 Coder→QA→Reviewer。尚无 candidate 的失败 Coder 由 `resume` 自动发现和封存现场，批准精确恢复
 计划后创建新 Task 接续；规范、权限、来源冲突仍需人工处理。
-源 HEAD、选定规范或知识变化时，应在同一 Project 下创建新的 Requirement，不能套用旧批准。
+每个 Requirement 都保留创建时的代码、规范和知识基线。配置 checkout 的 HEAD、选定规范或知识之后
+变化，只影响新 Requirement；旧 Requirement 继续从自己的 detached baseline 创建子 Task。只有该
+需求的 retained commit/worktree 无法验证时才停止并要求恢复。平台仍不自动 merge；最终候选合入
+最新目标分支时由人工或后续发布流程解决冲突。
 
 下面保留原单仓一步式入口，方便兼容旧命令；新需求推荐上面的 `request` 流程。
 

@@ -7,7 +7,9 @@ from pathlib import Path
 import pytest
 
 from ai_software_engineer.domain.model import DomainModel
+from ai_software_engineer.domain.project_delivery import ProjectPreparation
 from ai_software_engineer.execution import CommandResult
+from ai_software_engineer.manager.preparation import PrepareProjectResult, PrepareProjectStatus
 from ai_software_engineer.manager.production_agents import ProductDraft
 from ai_software_engineer.multi_directory.integration_commands import is_test_command
 from ai_software_engineer.multi_directory.models import (
@@ -18,6 +20,7 @@ from ai_software_engineer.multi_directory.models import (
     JointProductSpec,
     JointStage,
     JointTechnicalDesign,
+    PreparedUnit,
     digest,
 )
 from ai_software_engineer.multi_directory.production import (
@@ -31,6 +34,7 @@ from tests.e2e.test_joint_delivery import JointModels
 
 
 def checkpoint(tmp_path: Path) -> JointCheckpoint:
+    now = datetime.now(UTC)
     scope = DirectoryScope(
         units=tuple(
             DirectoryUnit(
@@ -68,6 +72,30 @@ def checkpoint(tmp_path: Path) -> JointCheckpoint:
             timeout_seconds=1,
         ).payload
     )
+    preparations = tuple(
+        PreparedUnit(
+            unit_id=unit.id,
+            result=PrepareProjectResult(
+                status=PrepareProjectStatus.PREPARED,
+                repository_id=f"repository_contract_{index}",
+                baseline_compilation_sha256=str(index) * 64,
+                preparation=ProjectPreparation.create(
+                    team_id="team_test",
+                    project_id="project_test",
+                    project_manifest_sha256="1" * 64,
+                    repository_id=f"repository_contract_{index}",
+                    repository_root=unit.root,
+                    repository_workspace_root=str(tmp_path / f"sidecar-{index}"),
+                    team_root=str(tmp_path / f"team-{index}"),
+                    repository_profile_sha256="2" * 64,
+                    runtime_binding_sha256="3" * 64,
+                    baseline_spec_sha256="4" * 64,
+                    prepared_at=now,
+                ),
+            ),
+        )
+        for index, unit in enumerate(scope.units, 1)
+    )
     return JointCheckpoint.seal(
         {
             "delivery_id": "delivery_multi_contract",
@@ -77,15 +105,16 @@ def checkpoint(tmp_path: Path) -> JointCheckpoint:
             "project_manifest_sha256": "1" * 64,
             "sequence": 1,
             "scope": scope,
+            "preparations": preparations,
             "title": "Test",
-            "submitted_at": datetime.now(UTC),
+            "submitted_at": now,
             "stage": JointStage.DELIVERING,
             "product_spec": product,
             "approval": JointApproval(
                 product_spec_sha256=digest(product),
                 checkpoint_sha256="0" * 64,
                 reference="approved",
-                approved_at=datetime.now(UTC),
+                approved_at=now,
             ),
             "design": design,
             "plan": plan,
@@ -140,6 +169,11 @@ def test_projection_is_deterministic_and_requires_exact_root(tmp_path: Path) -> 
     assert first.design.requirement_mappings[0].requirement_id == "req_001"
     with pytest.raises(ValueError, match="another repository"):
         first.for_project(tmp_path / "foreign")
+    with pytest.raises(ValueError, match="prepared Git source baseline"):
+        DerivedStageInputs(
+            JointCheckpoint.seal({**cp.to_wire(), "preparations": []}),
+            unit.id,
+        )
 
 
 @pytest.mark.parametrize(

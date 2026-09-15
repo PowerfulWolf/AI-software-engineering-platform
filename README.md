@@ -453,8 +453,9 @@ Spec 位于对应 scope 的 `specs/documents/<spec_id>/`，当前启用集合写
    Product 对话开始前，可在需求详情中编辑名称/目录；ProductSpec 批准前都可以逻辑删除需求。
    编辑会生成新的不可变需求版本并保留旧记录，删除只从当前 Project 列表中移除，不擦除对话和
    审计历史；需求删除后，其派生仓库 Task 也会同时退出团队成员的当前任务队列。Product 对话开始后
-   不允许改写已绑定的需求，需创建新 Requirement。如果代码 HEAD
-   已偏离该 Requirement 准备时的固定基线，页面会停止旧流程并提供预填的“基于当前代码新建需求”。
+   不允许改写已绑定的需求，需创建新 Requirement。每个 Requirement 会保留独立、只读的代码基线；
+   即使主分支之后合入其他需求或工作目录更新，旧需求仍从自己的基线继续。只有该基线提交或 worktree
+   损坏时才会安全停止并提示恢复；最终 Review 通过后的合并冲突在合入最新目标分支时处理。
 3. 在需求详情中和 Product Agent 多轮讨论，可输入文字，也可直接在输入框粘贴最多 4 张 PNG、JPEG 或
    WebP 截图。Product Agent 的追问和你的每次回复都会保存在同一条时间线中；截图会绑定当前
    Requirement/checkpoint，只提供给 Product Agent。ProductSpec 准备好后先阅读“阶段产物”：内容仍需

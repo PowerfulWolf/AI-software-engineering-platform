@@ -137,6 +137,7 @@ class CodexCliStructuredModelClient:
         self,
         *,
         repository_root: str | Path,
+        additional_repository_roots: tuple[str | Path, ...] = (),
         model: str,
         executable: str = "codex",
         reasoning_effort: ReasoningEffort = "medium",
@@ -145,9 +146,18 @@ class CodexCliStructuredModelClient:
         root = Path(repository_root).expanduser().resolve(strict=False)
         if not root.is_dir() or root.is_symlink():
             raise ValueError("Codex structured project root must be an existing real directory")
+        additional_roots = tuple(
+            Path(candidate).expanduser().resolve(strict=False)
+            for candidate in additional_repository_roots
+        )
+        if any(not candidate.is_dir() or candidate.is_symlink() for candidate in additional_roots):
+            raise ValueError("Codex additional project roots must be existing real directories")
+        if root in additional_roots or len(set(additional_roots)) != len(additional_roots):
+            raise ValueError("Codex structured project roots must be unique")
         if reasoning_effort not in {"low", "medium", "high", "xhigh"}:
             raise ValueError("unsupported Codex reasoning effort")
         self._repository_root = root
+        self._additional_repository_roots = additional_roots
         self._model = _safe_text(model, "model")
         self._executable = _safe_text(executable, "executable")
         self._reasoning_effort = reasoning_effort
@@ -178,6 +188,11 @@ class CodexCliStructuredModelClient:
                     for image in _verified_images(input_images)
                     for argument in ("--image", str(image))
                 )
+                additional_directory_arguments = tuple(
+                    argument
+                    for repository in self._additional_repository_roots
+                    for argument in ("--add-dir", str(repository))
+                )
                 completed = subprocess.run(
                     (
                         self._executable,
@@ -191,6 +206,7 @@ class CodexCliStructuredModelClient:
                         "--output-last-message",
                         str(output_path),
                         *image_arguments,
+                        *additional_directory_arguments,
                         "-m",
                         self._model,
                         "-c",

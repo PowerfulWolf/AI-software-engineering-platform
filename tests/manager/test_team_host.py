@@ -19,6 +19,7 @@ from ai_software_engineer.knowledge_selection import (
 )
 from ai_software_engineer.manager.delivery import (
     DeliveryBackendFailure,
+    ReplyToProduct,
     StartProjectDelivery,
 )
 from ai_software_engineer.manager.delivery_checkpoint import (
@@ -27,13 +28,16 @@ from ai_software_engineer.manager.delivery_checkpoint import (
 )
 from ai_software_engineer.manager.production_backend import StructuredClientFactory
 from ai_software_engineer.manager.production_host import TeamHost
+from ai_software_engineer.multi_directory.errors import RequirementSourceRevisionDrift
+from ai_software_engineer.multi_directory.models import JointStage
+from ai_software_engineer.multi_directory.service import CreateRequirement
 from ai_software_engineer.spec_documents import (
     CreateSpecDocument,
     ProjectSpecDocumentStore,
     TeamSpecDocumentStore,
 )
 from ai_software_engineer.team_workspace import TeamWorkspace
-from tests.manager.test_production_backend import _git, _ScriptedStructuredClient
+from tests.manager.test_production_backend import _git, _git_output, _ScriptedStructuredClient
 
 
 class _ConnectivityStub:
@@ -47,6 +51,7 @@ class _ConnectivityStub:
 class _RecordingFactory(StructuredClientFactory, StructuredModelClient):
     def __init__(self) -> None:
         self.payloads: list[Mapping[str, object]] = []
+        self.project_roots: list[tuple[Path, ...]] = []
 
     def for_project(
         self,
@@ -55,6 +60,18 @@ class _RecordingFactory(StructuredClientFactory, StructuredModelClient):
     ) -> StructuredModelClient:
         del role
         assert repository_root.is_dir()
+        self.project_roots.append((repository_root,))
+        return self
+
+    def for_projects(
+        self,
+        repository_roots: tuple[Path, ...],
+        role: TeamRole = TeamRole.PRODUCT,
+    ) -> StructuredModelClient:
+        del role
+        assert repository_roots
+        assert all(root.is_dir() for root in repository_roots)
+        self.project_roots.append(repository_roots)
         return self
 
     def complete(
@@ -149,6 +166,103 @@ def test_team_host_scopes_product_catalog_and_context(
         reopened.project_entry().status(first.checkpoint.delivery_id)
     assert len(models.payloads) == 2
     assert (repo / "hello.txt").read_text() == "hello\n"
+
+
+def test_requirement_product_keeps_its_source_baseline_after_checkout_advances(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "ai_software_engineer.manager.production_host.MySqlTaskRepository",
+        _ConnectivityStub,
+    )
+    monkeypatch.setattr(
+        "ai_software_engineer.manager.production_host.MySqlPersistentWorkQueue",
+        _ConnectivityStub,
+    )
+    repo = tmp_path / "code"
+    repo.mkdir()
+    _git("init", cwd=repo)
+    (repo / "hello.txt").write_text("requirement baseline\n", encoding="utf-8")
+    _git("add", ".", cwd=repo)
+    _git("commit", "-m", "base", cwd=repo)
+    original_revision = _git_output("rev-parse", "HEAD", cwd=repo)
+    models = _RecordingFactory()
+    host = TeamHost(
+        config=_config(tmp_path / "platform", "team_alpha"),
+        environment={"ASE_MYSQL_DSN": "connectivity-only"},
+        structured_clients=models,
+    )
+    service = host.requirement_entry()
+    created = service.create(
+        CreateRequirement(name="Pinned source", repository_roots=(str(repo),))
+    ).checkpoint
+
+    (repo / "hello.txt").write_text("new master\n", encoding="utf-8")
+    _git("add", "hello.txt", cwd=repo)
+    _git("commit", "-m", "advance master", cwd=repo)
+    discussed = service.reply(
+        ReplyToProduct(
+            delivery_id=created.delivery_id,
+            expected_checkpoint_sha256=created.checkpoint_sha256,
+            message="Keep working on the original requirement.",
+        )
+    ).checkpoint
+
+    assert discussed.stage is JointStage.WAITING_PRODUCT_APPROVAL
+    assert created.scope.units[0].base_revision == original_revision
+    assert models.project_roots
+    product_root = models.project_roots[-1][0]
+    assert product_root != repo
+    assert (product_root / "hello.txt").read_text(encoding="utf-8") == "requirement baseline\n"
+    assert _git_output("rev-parse", "HEAD", cwd=product_root) == original_revision
+
+    later = service.create(
+        CreateRequirement(name="New source", repository_roots=(str(repo),))
+    ).checkpoint
+    service.reply(
+        ReplyToProduct(
+            delivery_id=later.delivery_id,
+            expected_checkpoint_sha256=later.checkpoint_sha256,
+            message="Discuss the requirement against the newer source.",
+        )
+    )
+    later_product_root = models.project_roots[-1][0]
+    assert later_product_root != product_root
+    assert (later_product_root / "hello.txt").read_text(encoding="utf-8") == "new master\n"
+    assert (repo / "hello.txt").read_text(encoding="utf-8") == "new master\n"
+
+
+def test_requirement_rejects_a_modified_retained_source_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "ai_software_engineer.manager.production_host.MySqlTaskRepository",
+        _ConnectivityStub,
+    )
+    monkeypatch.setattr(
+        "ai_software_engineer.manager.production_host.MySqlPersistentWorkQueue",
+        _ConnectivityStub,
+    )
+    repo = tmp_path / "code"
+    repo.mkdir()
+    _git("init", cwd=repo)
+    (repo / "hello.txt").write_text("baseline\n", encoding="utf-8")
+    _git("add", ".", cwd=repo)
+    _git("commit", "-m", "base", cwd=repo)
+    platform = tmp_path / "platform"
+    service = TeamHost(
+        config=_config(platform, "team_alpha"),
+        environment={"ASE_MYSQL_DSN": "connectivity-only"},
+        structured_clients=_RecordingFactory(),
+    ).requirement_entry()
+    created = service.create(
+        CreateRequirement(name="Pinned source", repository_roots=(str(repo),))
+    ).checkpoint
+    baseline = next((platform / "worktrees" / "requirements").rglob("reviewer-attempt-01"))
+    (baseline / "hello.txt").write_text("tampered\n", encoding="utf-8")
+
+    with pytest.raises(RequirementSourceRevisionDrift, match="baseline worktree changed"):
+        service.status(created.delivery_id)
 
 
 @pytest.mark.parametrize(

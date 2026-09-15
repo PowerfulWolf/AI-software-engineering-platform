@@ -18,7 +18,7 @@ from ai_software_engineer.multi_directory.models import (
     JointExecutionPlan,
     JointStage,
 )
-from ai_software_engineer.multi_directory.scope import DirectoryScope, DirectoryUnit
+from ai_software_engineer.multi_directory.scope import DirectoryUnit
 from ai_software_engineer.multi_directory.service import JointDeliveryService
 from ai_software_engineer.team_workspace import TeamWorkspace
 from tests.e2e.test_joint_delivery import JointModels
@@ -72,8 +72,8 @@ class _ProductBackend(StructuredModelClient):
         self.images: tuple[Path, ...] = ()
         self.reconcile_error: str | None = None
 
-    def client(self, scope: DirectoryScope, role: TeamRole) -> StructuredModelClient:
-        del scope
+    def client(self, checkpoint: JointCheckpoint, role: TeamRole) -> StructuredModelClient:
+        del checkpoint
         self.roles.append(role)
         return self
 
@@ -163,7 +163,7 @@ def test_product_agent_receives_only_bound_screenshot_paths(tmp_path: Path) -> N
     assert backend.images[0].read_bytes().startswith(b"\x89PNG")
 
 
-def test_product_reply_rejects_source_drift_before_persisting_dialogue(tmp_path: Path) -> None:
+def test_product_reply_rejects_baseline_drift_before_persisting_dialogue(tmp_path: Path) -> None:
     base = checkpoint(tmp_path)
     team = TeamWorkspace.initialize(tmp_path / "platform", team_id="team_test", name="Test")
     project = team.project_registry().register(project_id="project_test", name="Test Project")
@@ -190,11 +190,9 @@ def test_product_reply_rejects_source_drift_before_persisting_dialogue(tmp_path:
         }
     )
     service.journal.append(seed, expected=None)
-    backend.reconcile_error = (
-        "source revision changed after Requirement preparation; create a new Requirement"
-    )
+    backend.reconcile_error = "Requirement source baseline worktree identity drifted"
 
-    with pytest.raises(ValueError, match="source revision changed"):
+    with pytest.raises(ValueError, match="baseline worktree identity drifted"):
         service.reply(
             ReplyToProduct(
                 delivery_id=seed.delivery_id,
@@ -207,7 +205,7 @@ def test_product_reply_rejects_source_drift_before_persisting_dialogue(tmp_path:
     assert backend.roles == []
 
 
-def test_resume_rejects_source_drift_before_unblocking_requirement(tmp_path: Path) -> None:
+def test_resume_rejects_baseline_drift_before_unblocking_requirement(tmp_path: Path) -> None:
     base = checkpoint(tmp_path)
     team = TeamWorkspace.initialize(tmp_path / "platform", team_id="team_test", name="Test")
     project = team.project_registry().register(project_id="project_test", name="Test Project")
@@ -234,11 +232,9 @@ def test_resume_rejects_source_drift_before_unblocking_requirement(tmp_path: Pat
         }
     )
     service.journal.append(seed, expected=None)
-    backend.reconcile_error = (
-        "source revision changed after Requirement preparation; create a new Requirement"
-    )
+    backend.reconcile_error = "Requirement source baseline worktree identity drifted"
 
-    with pytest.raises(ValueError, match="source revision changed"):
+    with pytest.raises(ValueError, match="baseline worktree identity drifted"):
         service.resume(ResumeProjectDelivery(delivery_id=seed.delivery_id))
 
     assert service.journal.current(seed.delivery_id) == seed

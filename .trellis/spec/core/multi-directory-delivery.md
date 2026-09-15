@@ -43,8 +43,9 @@ ase request resume DELIVERY_ID
 - 单次回复最多 4 张、单张最多 10 MB、整个 Product 对话最多 12 张；支持 PNG/JPEG/WebP。
   相同来源重传幂等返回原 identity，时间戳不参与来源冲突判断。
 - `reply` 在追加用户 Dialogue 前必须先执行 Team binding 与 backend reconcile preflight；若任一
-  Repository HEAD、dirty 状态、已准备事实或知识选择发生漂移，不得追加 checkpoint、Dialogue，
-  也不得调用 Product Agent。成功写入 `PRODUCT_DISCOVERY` 后，`_advance` 在调用模型前再次
+  Requirement retained baseline worktree、已准备事实或知识选择发生漂移，不得追加 checkpoint、
+  Dialogue，也不得调用 Product Agent。配置的主 checkout 后续前进或变脏不属于旧 Requirement
+  漂移。成功写入 `PRODUCT_DISCOVERY` 后，`_advance` 在调用模型前再次
   reconcile，作为 validation-to-execution fence，不能用前置 preflight 替换该栅栏。
 - `resume` 将 `BLOCKED` 重新排入 `DELIVERING` 前也必须 reconcile；漂移时保留原 BLOCKED
   checkpoint，不能先持久化伪恢复状态。`start/create` 的首次 PREPARING intake 是用于崩溃恢复的
@@ -70,10 +71,10 @@ ase request resume DELIVERY_ID
 - 输入必须是存在的绝对目录；规范化别名、重复和父子选择，同一仓库合并 scope。
 - 所有目录先发现/编译规范；任何规范冲突阻止 Product，交由人类处理。
 - Product ID/digest 精确批准；旧 checkpoint 的 reply/approve 不得改变新事实。
-- Requirement 准备后的 Repository HEAD 发生变化时，reply 必须返回
-  typed `RequirementSourceRevisionDrift`，其稳定安全摘要为
-  `source revision changed after Requirement preparation; create a new Requirement`；journal current
-  checkpoint、Dialogue 与模型调用次数保持不变，禁止静默 rebase 或把失败回复持久化为新序列。
+- Requirement 准备后的配置 Repository HEAD 可以正常前进；旧 Requirement 必须继续读取其 retained
+  baseline worktree，并让原生子 Task 从 `DirectoryUnit.base_revision` 创建 Coder worktree。只有该
+  retained baseline 的 commit、worktree identity、HEAD 或 clean 状态不可验证时，reply 才返回 typed
+  `RequirementSourceRevisionDrift`；journal current checkpoint、Dialogue 与模型调用次数保持不变。
 - 空文字只有在提供有效截图时允许；附件必须属于 exact Project/Delivery，stale checkpoint、已进入
   Design/Delivery 的需求、缺失/篡改/foreign attachment 均失败关闭且不调用 Product。
 - Design 必须划分全部 unit 为 write 或 reference-only；覆盖全部产品 requirement IDs；
@@ -89,16 +90,17 @@ ase request resume DELIVERY_ID
 - 原生子交付完成、父记录未保存的崩溃窗口由确定性子 ID 恢复，复用候选，不再次运行 Coder。
 - Product 最多 20 次、Design/Plan/Integration 各 3 次调用，调用前记录尝试。模型响应到文档落盘
   的窗口可能重复计费；崩溃后的测试可能重跑，不承诺 exactly-once。
-- 子仓 BLOCKED/FAILED 或联合测试非零：保留候选与证据，父需求 BLOCKED。规范/基线改变需重新
-  准备新需求；不自动扩大已批准范围或引入修复 DAG。错误/漂移必须 fail closed，不能覆盖历史。
+- 子仓 BLOCKED/FAILED 或联合测试非零：保留候选与证据，父需求 BLOCKED。当前 checkout、规范或
+  知识变化只影响新需求；旧需求继续使用已封存准备事实和代码基线。不自动扩大已批准范围或引入修复
+  DAG。旧需求自己的 retained baseline 漂移必须 fail closed，不能覆盖历史。
 - 不自动 merge/push，不承诺跨仓库原子提交；dirty worktree 保留，不强制删除。
 
 ## 5. Good / Base / Bad Cases
 
 - Good：后端与非相邻前端，一次批准、独立候选、读完整候选集的联合测试通过后 DONE。
 - Base：一个目录使用同一 request 入口；纯文字 Product 对话保持兼容；参考目录不创建无意义 Coder Task。
-- Bad：分别发起产品会话、把截图转成未校验路径塞进 prompt、先保存用户回复再检查代码基线，
-  或用两个单仓 PASS 冒充接口兼容验证。
+- Bad：分别发起产品会话、让 Product/Coder 读取不断前进的主 checkout、把截图转成未校验路径塞进
+  prompt、先保存用户回复再检查 retained baseline，或用两个单仓 PASS 冒充接口兼容验证。
 
 ## 6. Tests Required
 
@@ -106,10 +108,10 @@ ase request resume DELIVERY_ID
 重新启动恢复、候选集漂移、部分成功、失败集成验收、单目录入口回归；生产桥接另用离线
 structured provider + 真实 Git worktree + MySQL 验证，不消耗真实模型额度。
 
-`test_product_reply_rejects_source_drift_before_persisting_dialogue` 与
-`test_resume_rejects_source_drift_before_unblocking_requirement` 必须使用真实 JointJournal 断言：
-reconcile 拒绝时 current checkpoint 仍是输入 seed；reply 的 Dialogue 未增加且 Product client
-未被选择，resume 仍保持 BLOCKED。
+`test_requirement_product_keeps_its_source_baseline_after_checkout_advances` 必须断言主 checkout 前进后
+旧 Requirement 仍可继续、Product 收到 detached baseline root 且读取旧内容。
+`test_requirement_rejects_a_modified_retained_source_baseline` 必须断言 baseline worktree 被修改时
+reconcile fail closed。reply/reconcile 拒绝时 current checkpoint 不得增加 Dialogue 或调用模型。
 
 对应 `test_directory_scope.py`、`test_joint_contracts.py`、`test_team_workspace.py`、
 `test_team_host.py`、`test_requirement_attachments.py` 与 `tests/e2e/test_joint_delivery.py`。五份 joint/request canonical Schema
@@ -130,6 +132,76 @@ Wrong：`save(user_dialogue) → reconcile() → Product`，漂移时留下伪�
 
 Correct：`validate command → reconcile preflight → save(user_dialogue) → reconcile fence → Product`；
 任一 reconcile 失败都不能调用模型，前置失败还必须保持 journal 完全不变。
+
+## Scenario: Requirement-owned source baselines
+
+### 1. Scope / Trigger
+
+同一 Repository 可以并行存在多个 Requirement，配置的主 checkout 可以在任一 Requirement 交付期间
+前进。触发范围包括联合 Product/Designer/Planner 代码读取、原生子 Task dispatch 与恢复校验。
+
+### 2. Signatures
+
+```python
+JointBackend.client(checkpoint: JointCheckpoint, role: TeamRole) -> StructuredModelClient
+ConfiguredStructuredClientFactory.for_projects(
+    repository_roots: tuple[Path, ...], role: TeamRole
+) -> StructuredModelClient
+ProductionProjectDeliveryBackend(
+    *, frozen_preparation: PrepareProjectResult | None,
+    frozen_source_revision: str | None,
+)
+```
+
+Codex CLI 的第一个 baseline root 通过 `-C` 绑定，其余 baseline roots 通过重复的 `--add-dir` 只读挂载。
+
+### 3. Contracts
+
+- intake 在读取准备事实前后都要求配置 checkout clean 且 HEAD 等于 `DirectoryUnit.base_revision`。
+- 每个 Requirement/Repository 在
+  `<platform_root>/worktrees/requirements/<delivery_id>/<unit_id>/.../reviewer-attempt-01`
+  拥有确定性 detached baseline；不同 Requirement 不共享该目录。
+- Product/Designer/Planner 只读取这些 retained baselines。知识、规范、RepositoryProfile 和
+  `PrepareProjectResult` 使用 Requirement checkpoint 中已封存的版本。
+- 原生子 Task 的 `Task.base_ref` 必须等于该 unit 的 `base_revision`，不能在 dispatch 时重新读取主
+  checkout HEAD。Coder 仍拥有独立可写 Task branch/worktree；QA/Reviewer 仍验证 candidate SHA。
+- v0.1 不自动 merge。最终 Review 后由人类/后续发布边界把 candidate 合入最新目标分支并解决冲突。
+
+### 4. Validation & Error Matrix
+
+| Case | Required result |
+|---|---|
+| 主 checkout 在 Requirement 创建后新增提交 | 旧 Requirement 继续，读取旧 baseline；新 Requirement 读取新 HEAD |
+| 两个 Requirement 同时修改同一 Repository | 使用不同 baseline/Task worktree；互不改写；最终 merge 处理冲突 |
+| 主 checkout 在旧 Requirement 运行时 dirty | 不影响旧 retained baseline；新 intake 仍拒绝 dirty source |
+| baseline worktree identity/HEAD/clean 漂移 | `RequirementSourceRevisionDrift`；保留现场，不调用模型/dispatch |
+| recorded commit 不可解析 | `RequirementSourceRevisionDrift`；要求恢复 commit/worktree |
+| frozen preparation 与 unit revision 不一致 | fail closed；不得回退到当前准备事实 |
+
+### 5. Good / Base / Bad Cases
+
+- Good：需求 A 从 commit A 编码；A 合入 main 后需求 B 仍从自己的 commit B 继续，最终合并时处理冲突。
+- Base：单 Requirement 单 Repository 仍使用一份 detached baseline 和一个独立 Coder worktree。
+- Bad：每次 reply/resume/dispatch 都读取主 checkout HEAD，并把正常分支更新误判为 Requirement 漂移。
+
+### 6. Tests Required
+
+- Unit：Codex structured command 包含精确 `-C`/`--add-dir` baseline roots。
+- Manager：主 checkout 前进后旧 Product 对话读取旧内容；baseline dirty 时拒绝。
+- MySQL E2E：创建旧 Requirement、推进 main、创建新 Requirement，再完成旧 Requirement；每个 candidate
+  的 parent commit 等于旧 unit `base_revision`，主 checkout 内容不被回退或污染。
+
+### 7. Wrong vs Correct
+
+```python
+# Wrong: dispatch/read identity follows mutable integration checkout.
+task_base = clean_git_head(configured_checkout)
+product = clients.for_project(configured_checkout, TeamRole.PRODUCT)
+
+# Correct: both identities come from the immutable Requirement checkpoint.
+task_base = unit.base_revision
+product = clients.for_projects(requirement_baseline_roots, TeamRole.PRODUCT)
+```
 
 ## 8. Planner coverage rejection feedback (T038)
 

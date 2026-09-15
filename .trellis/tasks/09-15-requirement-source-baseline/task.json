@@ -1,0 +1,10 @@
+{
+  "id": "requirement-source-baseline",
+  "title": "Keep each Requirement on its own immutable source baseline",
+  "status": "in_progress",
+  "phase": "ready_for_review",
+  "created_at": "2026-09-15",
+  "remaining": [
+    "rerun the complete localhost socket and MySQL suite outside the restricted sandbox"
+  ]
+}

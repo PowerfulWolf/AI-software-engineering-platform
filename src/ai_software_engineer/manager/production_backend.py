@@ -9,7 +9,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Protocol, TypeVar, cast
+from typing import Protocol, TypeVar, cast, runtime_checkable
 
 from ai_software_engineer.agents import (
     CodexCliStructuredModelClient,
@@ -203,6 +203,17 @@ class StructuredClientFactory(Protocol):
     ) -> StructuredModelClient: ...
 
 
+@runtime_checkable
+class MultiRepositoryStructuredClientFactory(Protocol):
+    """Optional structured-client seam for one Requirement spanning repositories."""
+
+    def for_projects(
+        self,
+        repository_roots: tuple[Path, ...],
+        role: TeamRole = TeamRole.PRODUCT,
+    ) -> StructuredModelClient: ...
+
+
 class ConfiguredStructuredClientFactory:
     """Build the configured upstream route chain without persisting credentials."""
 
@@ -219,6 +230,15 @@ class ConfiguredStructuredClientFactory:
         repository_root: Path,
         role: TeamRole = TeamRole.PRODUCT,
     ) -> StructuredModelClient:
+        return self.for_projects((repository_root,), role)
+
+    def for_projects(
+        self,
+        repository_roots: tuple[Path, ...],
+        role: TeamRole = TeamRole.PRODUCT,
+    ) -> StructuredModelClient:
+        if not repository_roots:
+            raise ValueError("structured model execution requires a project root")
         if not self._config.live_model_execution:
             raise ProductionConfigError(
                 "live_model_execution is disabled in the production configuration"
@@ -227,7 +247,8 @@ class ConfiguredStructuredClientFactory:
         for route in self._config.routes_for(role):
             if route.kind is ModelProviderKind.CODEX_CLI:
                 client: StructuredModelClient = CodexCliStructuredModelClient(
-                    repository_root=repository_root,
+                    repository_root=repository_roots[0],
+                    additional_repository_roots=repository_roots[1:],
                     model=route.model,
                     executable=self._config.codex_executable,
                     reasoning_effort=route.reasoning_effort,
@@ -292,6 +313,19 @@ class _ProjectFacts:
     planning: FileExecutionPlanStore
 
 
+@dataclass(frozen=True, slots=True)
+class _FrozenPreparationStageAdvancer:
+    """Advance an already sealed Requirement without re-reading a mutable checkout."""
+
+    preparation: PrepareProjectResult
+    clock: Clock
+
+    def advance_stage(self, request: StageAdvanceRequest) -> StageAdvanceAuthorization:
+        if request.preparation != self.preparation.preparation:
+            raise ValueError("stage advancement uses another Requirement preparation")
+        return ProjectStageAdvancer().advance_stage(request, authorized_at=self.clock())
+
+
 class ProductionProjectDeliveryBackend:
     """Compose native stage services behind the unified Manager facade."""
 
@@ -310,7 +344,19 @@ class ProductionProjectDeliveryBackend:
         preparation_guard: Callable[[], None] | None = None,
         delivery_context_sources: tuple[ContextSource, ...] = (),
         human_decision_verifier: HumanProductDecisionVerifier | None = None,
+        frozen_preparation: PrepareProjectResult | None = None,
+        frozen_source_revision: str | None = None,
     ) -> None:
+        if (frozen_preparation is None) != (frozen_source_revision is None):
+            raise ValueError("frozen preparation and source revision must be supplied together")
+        if frozen_preparation is not None:
+            if (
+                frozen_preparation.status is not PrepareProjectStatus.PREPARED
+                or frozen_preparation.preparation is None
+            ):
+                raise ValueError("frozen delivery requires a prepared project checkpoint")
+            if not _is_durable_git_revision(cast(str, frozen_source_revision)):
+                raise ValueError("frozen delivery requires a durable Git source revision")
         self._config = config
         self._environment = dict(environment)
         self._organization = organization
@@ -319,6 +365,8 @@ class ProductionProjectDeliveryBackend:
         self._preparation_guard = preparation_guard
         self._delivery_context_sources = delivery_context_sources
         self._human_decision_verifier = human_decision_verifier or _CliHumanDecisionVerifier()
+        self._frozen_preparation = frozen_preparation
+        self._frozen_source_revision = frozen_source_revision
         self._baseline_store = FileProjectBaselineCompilationStore()
         self._preparer = ManagerSkillService(
             organization=organization,
@@ -330,6 +378,11 @@ class ProductionProjectDeliveryBackend:
             clock=self._clock,
             versioned_preparations=True,
         )
+        self._stage_advancer = (
+            self._preparer
+            if frozen_preparation is None
+            else _FrozenPreparationStageAdvancer(frozen_preparation, self._clock)
+        )
         self._structured_clients = structured_clients or ConfiguredStructuredClientFactory(
             config, self._environment
         )
@@ -337,6 +390,12 @@ class ProductionProjectDeliveryBackend:
         self._dsn = config.require_mysql_dsn(self._environment)
 
     def prepare(self, repository_root: str) -> PrepareProjectResult:
+        if self._frozen_preparation is not None:
+            prepared = self._frozen_preparation.preparation
+            assert prepared is not None
+            if Path(repository_root).resolve() != Path(prepared.repository_root).resolve():
+                raise ValueError("frozen preparation belongs to another repository")
+            return self._frozen_preparation
         if self._preparation_guard is not None:
             self._preparation_guard()
         return self._preparer.prepare_project(
@@ -355,6 +414,18 @@ class ProductionProjectDeliveryBackend:
                 required=True,
             ),
         )
+
+    def delivery_base_revision(self, repository_root: Path) -> str:
+        """Resolve Task base from a frozen Requirement or a standalone clean checkout."""
+
+        if self._frozen_source_revision is None:
+            return _clean_git_head(repository_root)
+        prepared = self._frozen_preparation
+        assert prepared is not None and prepared.preparation is not None
+        if repository_root.resolve() != Path(prepared.preparation.repository_root).resolve():
+            raise ValueError("frozen source revision belongs to another repository")
+        _require_git_revision(repository_root, self._frozen_source_revision)
+        return self._frozen_source_revision
 
     def start_product(
         self,
@@ -462,7 +533,7 @@ class ProductionProjectDeliveryBackend:
                         TeamRole.DESIGNER,
                     )
                 ),
-                stage_advancer=self._preparer,
+                stage_advancer=self._stage_advancer,
             )
             preparation = facts.preparation.preparation
             assert preparation is not None
@@ -653,7 +724,7 @@ class ProductionProjectDeliveryBackend:
         if spec is None or approval is None:
             raise ValueError("Dispatch Product handoff is incomplete")
         task_id = f"task_{_suffix(checkpoint.delivery_id)}"
-        base_ref = _clean_git_head(facts.workspace.repository_root)
+        base_ref = self.delivery_base_revision(facts.workspace.repository_root)
         constraints = _task_constraints(facts.profile, design)
         task = derive_delivery_task(
             preparation,
@@ -904,6 +975,11 @@ class ProductionProjectDeliveryBackend:
         profile = load_repository_profile(workspace.root, prepared.repository_profile_sha256)
         if profile.repository_id != prepared.repository_id:
             raise ValueError("prepared profile belongs to another project")
+        if (
+            self._frozen_source_revision is not None
+            and profile.source_revision != self._frozen_source_revision
+        ):
+            raise ValueError("frozen preparation does not match the Requirement source revision")
         compilation = self._baseline_store.get(workspace, preparation.baseline_compilation_sha256)
         baseline = compilation.compiled_spec
         if baseline is None:
@@ -943,7 +1019,7 @@ class ProductionProjectDeliveryBackend:
                     TeamRole.PRODUCT,
                 )
             ),
-            stage_advancer=self._preparer,
+            stage_advancer=self._stage_advancer,
             human_decision_verifier=self._human_decision_verifier,
         )
 
@@ -1182,6 +1258,30 @@ def _delivery_role_permissions(
         commands=commands,
         network=NetworkAccess.MODEL_ENDPOINT_ONLY,
     )
+
+
+def _is_durable_git_revision(value: str) -> bool:
+    return len(value) in {40, 64} and all(character in "0123456789abcdef" for character in value)
+
+
+def _require_git_revision(repository_root: Path, revision: str) -> None:
+    completed = subprocess.run(
+        ("git", "rev-parse", "--verify", "--end-of-options", f"{revision}^{{commit}}"),
+        cwd=repository_root,
+        env={
+            "PATH": os.environ.get("PATH", os.defpath),
+            "LANG": "C",
+            "LC_ALL": "C",
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_CONFIG_NOSYSTEM": "1",
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if completed.returncode != 0 or completed.stdout.strip() != revision:
+        raise ValueError("Requirement source revision is no longer available")
 
 
 def _clean_git_head(repository_root: Path) -> str:
