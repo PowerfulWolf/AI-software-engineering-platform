@@ -46,6 +46,15 @@ read_pid() {
   printf '%s\n' "$pid"
 }
 
+read_managed_executable() {
+  [ -f "$PID_FILE" ] || return 1
+  managed_executable=$(sed -n '2p' "$PID_FILE")
+  case "$managed_executable" in
+    /*/.venv/bin/ase-console) printf '%s\n' "$managed_executable" ;;
+    *) return 1 ;;
+  esac
+}
+
 load_runtime_environment() {
   if [ ! -e "$RUNTIME_ENV_FILE" ]; then
     return 0
@@ -65,21 +74,41 @@ process_exists() {
   kill -0 "$candidate_pid" 2>/dev/null || return 1
 }
 
-is_our_process() {
+process_matches_executable() {
   candidate_pid=$1
+  candidate_executable=$2
   process_exists "$candidate_pid" || return 1
   command_line=$(ps -p "$candidate_pid" -o command= 2>/dev/null || true)
   case "$command_line" in
-    *"$SERVICE_EXECUTABLE"*) return 0 ;;
+    *"$candidate_executable"*) return 0 ;;
     *) return 1 ;;
   esac
 }
 
+is_our_process() {
+  process_matches_executable "$1" "$SERVICE_EXECUTABLE"
+}
+
+is_managed_process() {
+  candidate_pid=$1
+  managed_executable=$(read_managed_executable) || return 1
+  process_matches_executable "$candidate_pid" "$managed_executable"
+}
+
 start_service() {
   require_safe_state_dir
-  if current_pid=$(read_pid 2>/dev/null) && is_our_process "$current_pid"; then
-    echo "ase-console is already running (pid $current_pid)"
-    return 0
+  if current_pid=$(read_pid 2>/dev/null) && process_exists "$current_pid"; then
+    if is_our_process "$current_pid"; then
+      echo "ase-console is already running (pid $current_pid)"
+      return 0
+    fi
+    if is_managed_process "$current_pid"; then
+      managed_executable=$(read_managed_executable)
+      echo "ase-console is already running from $managed_executable (pid $current_pid)"
+      return 0
+    fi
+    echo "error: PID file does not identify a managed ase-console; no process replaced" >&2
+    exit 1
   fi
   if [ ! -x "$SERVICE_EXECUTABLE" ]; then
     echo "error: $SERVICE_EXECUTABLE is missing; run 'uv sync' first" >&2
@@ -90,7 +119,10 @@ start_service() {
   : >>"$LOG_FILE"
   nohup "$SERVICE_EXECUTABLE" >>"$LOG_FILE" 2>&1 </dev/null &
   started_pid=$!
-  printf '%s\n' "$started_pid" >"$PID_FILE"
+  {
+    printf '%s\n' "$started_pid"
+    printf '%s\n' "$SERVICE_EXECUTABLE"
+  } >"$PID_FILE"
   sleep 1
   if ! is_our_process "$started_pid"; then
     rm -f "$PID_FILE"
@@ -113,10 +145,14 @@ stop_service() {
     echo "ase-console is not running (removed stale PID $current_pid)"
     return 0
   fi
-  if ! is_our_process "$current_pid"; then
+  if ! is_our_process "$current_pid" && ! is_managed_process "$current_pid"; then
     echo "error: PID file does not identify this project's ase-console; no signal sent" >&2
     echo "remove the stale PID file after inspecting it: $PID_FILE" >&2
     exit 1
+  fi
+  if ! is_our_process "$current_pid"; then
+    managed_executable=$(read_managed_executable)
+    echo "stopping managed ase-console from $managed_executable"
   fi
   kill -TERM "$current_pid"
   remaining=80
@@ -134,10 +170,18 @@ stop_service() {
 
 status_service() {
   require_safe_state_dir
-  if current_pid=$(read_pid 2>/dev/null) && is_our_process "$current_pid"; then
-    echo "ase-console is running (pid $current_pid)"
-    echo "log: $LOG_FILE"
-    return 0
+  if current_pid=$(read_pid 2>/dev/null); then
+    if is_our_process "$current_pid"; then
+      echo "ase-console is running (pid $current_pid)"
+      echo "log: $LOG_FILE"
+      return 0
+    fi
+    if is_managed_process "$current_pid"; then
+      managed_executable=$(read_managed_executable)
+      echo "ase-console is running from $managed_executable (pid $current_pid)"
+      echo "log: $LOG_FILE"
+      return 0
+    fi
   fi
   echo "ase-console is not running"
   return 1

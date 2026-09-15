@@ -707,6 +707,11 @@ XDG_STATE_HOME=/absolute/path          # optional fallback
 The executable is the repository-local `.venv/bin/ase-console`. PID and log default to
 `${XDG_STATE_HOME:-$HOME/.local/state}/ai-software-engineer/`.
 
+```text
+ase-console.pid line 1 = numeric child PID
+ase-console.pid line 2 = absolute repository-local executable that created the record
+```
+
 ### 3. Contracts
 
 - `start` requires an executable repository-local `ase-console`, resolves `ASE_CONFIG` or its XDG
@@ -714,9 +719,15 @@ The executable is the repository-local `.venv/bin/ase-console`. PID and log defa
   environment remains available and the managed file wins for its declared names. It redirects stdio,
   records the child PID and verifies that the same executable remains alive after startup.
 - `stop` sends TERM only when the PID is numeric, alive and its process command identifies this
-  repository's executable. A numeric PID with no live process is a safe stale record: `stop` removes
+  repository's executable, or when line 2 identifies a live `*/.venv/bin/ase-console` previously
+  written by this launcher in another checkout sharing the same state directory. The latter is a
+  managed checkout handoff: `restart` stops the verified old executable and starts the current
+  repository executable. A numeric PID with no live process is a safe stale record: `stop` removes
   only that PID file and succeeds, allowing `restart` to continue. It waits up to 20 seconds and never
   escalates to KILL automatically.
+- `start` writes both PID and executable identity, treats a verified managed process from another
+  checkout as already running, and never overwrites a live unverified PID record with a second
+  process. `status` reports the recorded executable when another checkout owns the managed process.
 - `restart` is exact `stop` followed by `start`; `status` is read-only apart from preparing its safe
   state directory; `logs` tails the last 100 lines and follows the file.
 - The state directory must be absolute, not `/`, and not a symlink. PID-file symlinks are rejected.
@@ -737,7 +748,8 @@ The executable is the repository-local `.venv/bin/ase-console`. PID and log defa
 | Missing PID on stop | report not running; success |
 | Non-numeric PID | send no signal; report stopped without trusting the record |
 | Numeric PID with no live process | remove only the stale PID file; report stopped; allow restart |
-| Live PID whose command does not identify this repository executable | send no signal; retain PID file; fail safely |
+| Live PID and recorded executable identify another checkout's managed Console | `restart` stops that exact process, then starts the current checkout |
+| Live PID has no valid recorded executable or command does not match it | send no signal; retain PID file; fail safely |
 | Child exits during startup | remove its PID record, show bounded log tail, exit 1 |
 | TERM does not stop in 20 seconds | leave process and PID intact; exit 1 |
 | Relative/root/symlink state directory | reject before creating or deleting files |
@@ -747,9 +759,10 @@ The executable is the repository-local `.venv/bin/ase-console`. PID and log defa
 - Good: start once with defaults, save DSN/provider keys in Settings, restart so the launcher exports
   the canonical runtime file, then use `status`/`logs` for operations.
 - Base: stopping an already stopped service is idempotent; a dead numeric PID is cleaned without
-  signaling any process, then `restart` starts a fresh child.
+  signaling any process, then `restart` starts a fresh child. A legacy one-line PID remains valid for
+  the checkout whose exact executable is running, but cannot authorize a cross-checkout handoff.
 - Bad: use a PID file without process identity validation, hard-code DSN in the script, source an
-  arbitrary/symlink runtime file, or issue `kill -9`
+  arbitrary/symlink runtime file, treat every `ase-console` command as managed, or issue `kill -9`
   after a fixed delay.
 
 ### 6. Tests Required
@@ -757,8 +770,9 @@ The executable is the repository-local `.venv/bin/ase-console`. PID and log defa
 - `sh -n scripts/ase-console-service.sh`.
 - No-argument invocation exits 2.
 - Focused process tests use an isolated absolute `ASE_SERVICE_STATE_DIR` and a fake repository-local
-  executable. They prove dead-PID restart recovery and that a live unrelated process remains alive
-  with its PID record intact.
+  executable. They prove dead-PID restart recovery, safe handoff between two checkout executables
+  sharing one state directory, and that a live unrelated process remains alive with its PID record
+  intact.
 - The launcher test must prove that sibling `runtime.env` reaches the child environment without
   printing its value.
 
@@ -768,11 +782,34 @@ The executable is the repository-local `.venv/bin/ase-console`. PID and log defa
 # Wrong: trust a stale PID and force kill an arbitrary process.
 kill -9 "$(cat "$PID_FILE")"
 
-# Correct: remove a dead record without signaling; require exact identity before TERM.
+# Correct: remove a dead record without signaling; require recorded exact identity before TERM.
 process_exists "$current_pid" || { rm -f "$PID_FILE"; exit 0; }
-is_our_process "$current_pid" || exit 1
+(is_our_process "$current_pid" || is_managed_process "$current_pid") || exit 1
 kill -TERM "$current_pid"
 ```
+
+### 8. Bug analysis: checkout-local identity behind a shared PID file
+
+1. **Root cause category**: implicit assumption plus test-coverage gap. The state directory was
+   intentionally Host-global, while process ownership was inferred only from the checkout executing
+   the current command. A second checkout therefore made a healthy managed Console look foreign.
+2. **Why the previous guard was insufficient**: validating only the current repository executable
+   prevented signaling arbitrary PIDs, but discarded the executable identity known at launch time.
+   Removing the PID manually would hide the symptom and could orphan the still-running service.
+3. **Prevention mechanisms**:
+
+   | Priority | Mechanism | Concrete action | Status |
+   |---|---|---|---|
+   | P0 | Runtime identity | Persist PID plus canonical repository executable and verify both against the live command | DONE |
+   | P0 | Regression | Start from checkout A, restart from checkout B through one state directory, and assert B owns the successor | DONE |
+   | P0 | Safety regression | Keep a live unrelated process and prove restart neither signals it nor overwrites its PID record | DONE |
+   | P1 | Operations | Keep `ASE_CONFIG` consistent when intentionally handing the singleton Host between checkouts | DOCUMENTED |
+
+4. **Systematic expansion**: every host-global lifecycle record that controls checkout-local resources
+   needs both stable singleton identity and the concrete resource identity captured at creation. A PID
+   alone proves neither ownership nor which code/config instance the browser is observing.
+5. **Knowledge capture**: this executable contract, the production guide, README and isolated launcher
+   regression are the maintained prevention boundary; no parallel template tree exists in this repo.
 
 ## Scenario: Product Agent 多轮需求讨论
 
