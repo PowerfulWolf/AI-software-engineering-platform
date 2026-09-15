@@ -322,6 +322,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     storedOperations = [],
     createdProjects = [],
     savedSettings = [],
+    settingsSaveFailure = null,
     mysqlTests = [],
     knowledgeSelections = [],
     knowledgeImports = [],
@@ -611,6 +612,13 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
             })),
         };
       if (url === "/api/v1/admin/settings" && options.method === "PUT") {
+        if (settingsSaveFailure)
+          return {
+            ok: false,
+            json: async () => ({
+              error: { message: settingsSaveFailure },
+            }),
+          };
         savedSettings.push(JSON.parse(options.body));
         return {
           ok: true,
@@ -1379,6 +1387,13 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     (node) => node.tag === "form" && node.className === "settings-form",
   );
   await settingsForm.events.submit({ preventDefault() {} });
+  assert.match(text(get("composer")), /设置保存成功/);
+  assert.match(text(get("composer")), /请重启 Web Console/);
+  const acknowledgeSettingsSuccess = descend(get("composer")).find(
+    (node) => node.tag === "button" && node.textContent === "知道了",
+  );
+  await acknowledgeSettingsSuccess.events.click();
+  assert.equal(get("composer").hidden, true);
   assert.deepEqual(savedSettings[0].runtime_variables, [
     {
       environment_name: "ASE_MYSQL_DSN",
@@ -1407,6 +1422,36 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     1,
     "unselected catalog routes are not serialized as Coder fallbacks",
   );
+  settingsSaveFailure = "模型路由凭证无效。";
+  const failedSettingsForm = descend(get("content")).find(
+    (node) => node.tag === "form" && node.className === "settings-form",
+  );
+  vm.runInContext(
+    "settingsDraft.model_routes.push(structuredClone(settingsDraft.model_routes[0]))",
+    context,
+  );
+  await failedSettingsForm.events.submit({ preventDefault() {} });
+  assert.match(text(get("composer")), /设置保存失败/);
+  assert.match(text(get("composer")), /每个 Provider \+ Model \+ Reasoning 组合只能配置一次/);
+  assert.equal(savedSettings.length, 1, "client validation must send no PUT");
+  await descend(get("composer"))
+    .find((node) => node.tag === "button" && node.textContent === "知道了")
+    .events.click();
+  vm.runInContext("settingsDraft.model_routes.pop()", context);
+  await failedSettingsForm.events.submit({ preventDefault() {} });
+  assert.match(text(get("composer")), /设置保存失败/);
+  assert.match(text(get("composer")), /模型路由凭证无效/);
+  assert.equal(
+    get("composer").children[0].attributes.role,
+    "alertdialog",
+    "save failures must be announced as an alert dialog",
+  );
+  assert.equal(savedSettings.length, 1);
+  settingsSaveFailure = null;
+  const acknowledgeSettingsFailure = descend(get("composer")).find(
+    (node) => node.tag === "button" && node.textContent === "知道了",
+  );
+  await acknowledgeSettingsFailure.events.click();
   await get("nav-status").events.click();
   assert.equal(get("scope-label").textContent, "平台级");
   assert.match(text(get("content")), /平台状态|配置与启动/);

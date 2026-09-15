@@ -501,6 +501,11 @@ GET  /api/v1/admin/status
   `restart_required`; the already constructed Host is not mutated or hot-switched. Knowledge upload
   and sidecar selection, Spec activation and Learning decisions are not config saves and do not
   require restart.
+- Every submitted Settings save has an explicit modal result. A successful PUT opens a success dialog
+  that states whether Web Console restart is required. A failed PUT opens an `alertdialog` containing
+  the bounded server `error.message` (or the generic client fallback), re-enables save and preserves
+  the current draft so the operator can close the result and correct it. Inline progress text is not
+  the terminal save result and must not be the only feedback.
 - When an explicit save selects a new `platform_root` without that Team, initialize the selected
   immutable Team identity there. Do not migrate Team knowledge, Projects, Requirements or execution
   facts; knowledge selection must be empty until documents exist under the new root.
@@ -564,6 +569,8 @@ GET  /api/v1/admin/status
 | MySQL missing/unavailable on first run | Console starts setup surface; Status says NOT_CONFIGURED/UNAVAILABLE; delivery returns 503 SETUP_REQUIRED |
 | Existing config is invalid | Startup fails safely; do not replace it with built-in defaults |
 | Settings/runtime variable changed while Host is running | Persist plus `restart_required=true`; no hot mutation |
+| Settings PUT succeeds | show a success dialog and the exact restart requirement returned by `SettingsSnapshot` |
+| Settings browser validation or PUT fails safely | show its exact safe message in an `alertdialog`; keep the draft and allow retry |
 
 ### 5. Good / Base / Bad Cases
 
@@ -572,6 +579,8 @@ GET  /api/v1/admin/status
   without restart, then prepare a new Requirement whose context digest binds both scopes.
 - Base: a Team with no documents is valid and displayed neutrally; a Spec with empty verification
   guidance remains enforceable through its body and the normal QA/Review gates.
+- Base: an invalid Settings submission keeps the edited values in place after its error dialog is
+  dismissed, so the operator can correct only the rejected field and retry.
 - Bad: let the browser submit `/etc/passwd`, recursively scan `knowledge/`, keep only an AI summary,
   return a DSN from the API, accept arbitrary environment names, or change the active Team inside an
   already-running Delivery Host.
@@ -601,7 +610,8 @@ GET  /api/v1/admin/status
   same-name replacement confirmation, modal content editing resilient to auto-refresh, inventory-first
   Knowledge pages, modal bounded Background/Spec multi-file selection, role/stage multi-selects,
   optional verification, separate Status tab with seven per-Agent policies and route catalog, shared
-  Model Routing selector styling, safe text rendering and long opaque identifier containment.
+  Model Routing selector styling, Settings success/error result dialogs with draft-preserving retry,
+  safe text rendering and long opaque identifier containment.
 - `tests/contracts/test_json_schema_contracts.py`: production config/port, knowledge manifests,
   selection/retirement and Spec document/activation/retirement Python-to-Schema parity.
 

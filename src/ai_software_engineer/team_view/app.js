@@ -26,6 +26,7 @@ let pendingConfirmation = null;
 let actionSerial = 0;
 let requestFilter = "active";
 let settingsSection = "general";
+let settingsSaveResult = null;
 let selectedAgentId = null;
 let creatingProject = false;
 let editingRequirement = null;
@@ -674,6 +675,7 @@ function renderComposer() {
     !recreatingRequirement &&
     !knowledgeImportMode &&
     !pendingConfirmation &&
+    !settingsSaveResult &&
     !editingKnowledgeDocument &&
     !editingSpecDocument;
   if (panel.hidden) return;
@@ -681,6 +683,43 @@ function renderComposer() {
   const dialog = el("section", undefined, "modal-dialog");
   dialog.setAttribute("role", "dialog");
   dialog.setAttribute("aria-modal", "true");
+  if (settingsSaveResult) {
+    const result = settingsSaveResult;
+    const success = result.kind === "success";
+    dialog.className = "modal-dialog settings-result-dialog";
+    dialog.setAttribute("role", success ? "dialog" : "alertdialog");
+    dialog.setAttribute(
+      "aria-label",
+      success ? "设置保存成功" : "设置保存失败",
+    );
+    const header = el("div", undefined, "settings-result-header");
+    header.append(
+      el(
+        "span",
+        success ? "✓" : "!",
+        `settings-result-icon ${success ? "success" : "error"}`,
+      ),
+      el("div", success ? "设置保存成功" : "设置保存失败", "section-title"),
+    );
+    const close = button(
+      "知道了",
+      () => {
+        settingsSaveResult = null;
+        renderComposer();
+      },
+      success ? "primary" : "",
+    );
+    const actions = el("div", undefined, "modal-actions");
+    actions.append(close);
+    dialog.append(
+      header,
+      el("p", result.message, "settings-result-message"),
+      actions,
+    );
+    panel.append(dialog);
+    close.focus();
+    return;
+  }
   if (pendingConfirmation) {
     const confirmation = pendingConfirmation;
     const feedback = el("p", "", "form-feedback");
@@ -3464,9 +3503,12 @@ function renderSettings(content) {
     if (modelRouteError) {
       feedback.className = "form-feedback error";
       feedback.textContent = modelRouteError;
+      settingsSaveResult = { kind: "error", message: modelRouteError };
+      renderComposer();
       return;
     }
     save.disabled = true;
+    feedback.className = "form-feedback";
     feedback.textContent = "正在校验并保存…";
     try {
       normalizeAgentModelRoutes(settingsDraft);
@@ -3495,18 +3537,21 @@ function renderSettings(content) {
       settingsDraft = structuredClone(saved.config);
       normalizeAgentModelRoutes(settingsDraft);
       runtimeVariablesDraft = {};
-      administrationNotice = {
-        page: "settings",
-        text: saved.restart_required
+      administrationNotice = null;
+      settingsSaveResult = {
+        kind: "success",
+        message: saved.restart_required
           ? "保存成功。请重启 Web Console 使新配置生效。"
           : "保存成功，当前配置未改变。",
       };
       render();
     } catch (error) {
+      const message = error instanceof Error ? error.message : "设置保存失败。";
       feedback.className = "form-feedback error";
-      feedback.textContent =
-        error instanceof Error ? error.message : "设置保存失败。";
+      feedback.textContent = message;
       save.disabled = false;
+      settingsSaveResult = { kind: "error", message };
+      renderComposer();
     }
   });
   panel.append(form);
@@ -4437,6 +4482,7 @@ for (const target of ["team", "requests", "knowledge", "settings", "status"])
       recreatingRequirement = null;
       knowledgeImportMode = null;
       pendingConfirmation = null;
+      settingsSaveResult = null;
       editingKnowledgeDocument = null;
       editingSpecDocument = null;
       if (target === "knowledge") await loadAdministration();
@@ -4545,6 +4591,7 @@ async function refresh(projectId, includeRuntimeStatus = false) {
       recreatingRequirement ||
       knowledgeImportMode ||
       pendingConfirmation ||
+      settingsSaveResult ||
       editingKnowledgeDocument ||
       editingSpecDocument;
     if (

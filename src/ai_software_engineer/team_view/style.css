@@ -1641,6 +1641,39 @@ main[data-page="requests"] .page-context {
 .modal-dialog-wide {
   width: min(920px, 100%);
 }
+.settings-result-dialog {
+  width: min(520px, 100%);
+}
+.settings-result-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.settings-result-icon {
+  display: grid;
+  flex: 0 0 38px;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 1.1rem;
+  font-weight: 750;
+}
+.settings-result-icon.success {
+  background: #e6f5ed;
+  color: #147a4b;
+}
+.settings-result-icon.error {
+  background: #fff0e2;
+  color: #9a4812;
+}
+.settings-result-message {
+  margin: 16px 0 4px;
+  color: var(--muted);
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
 .modal-introduction {
   margin: 6px 0 0;
 }
