@@ -418,6 +418,7 @@ function requestBlockingSummary(request) {
   }
   if (!reasons.size && request.blocker) reasons.set(request.blocker, []);
   const operation = latestOperation(request.id);
+  const approval = latestApproval(request.id, request.checkpoint_sha256);
   const operationReason =
     operation?.status === "FAILED"
       ? operation.error_summary
@@ -431,29 +432,41 @@ function requestBlockingSummary(request) {
       value !== operationReason &&
       values.indexOf(value) === index,
   );
-  const suggestedAction = operation?.result?.approval
-    ? "审核恢复计划后，点击“批准并继续”。"
-    : blockedTasks.some((task) =>
-          String(task.blocker || "").includes(
-            "QA verification could not complete in the current environment",
-          ),
-        )
-      ? "点击下方“继续交付”，系统会保留现有候选代码并重新执行 QA/Review。"
-    : blockedTasks.some((task) =>
-          String(task.blocker || "").includes(
-            "requested continuation after the configured run budget",
-          ),
-        )
-      ? "点击下方“继续交付”，系统会基于当前 checkpoint 创建新的 Coder 恢复任务。"
-      : nextActions.length
-        ? nextActions.map(humanizeBlockingText).join("；")
-        : "处理上述原因后，再点击“继续交付”。";
+  let suggestedAction = "处理上述原因后，再点击“继续交付”。";
+  if (approval?.kind === "coder_scope")
+    suggestedAction =
+      "确认下方精确文件范围后点击“批准文件范围”；平台随后会生成恢复计划，并再次请求审批。";
+  else if (approval?.kind === "coder_recovery")
+    suggestedAction = "确认下方恢复任务信息后点击“批准并继续”。";
+  else if (approval?.kind === "candidate_verification")
+    suggestedAction = "确认下方独立验证计划后点击“批准并继续”。";
+  else if (
+    blockedTasks.some((task) =>
+      String(task.blocker || "").includes(
+        "QA verification could not complete in the current environment",
+      ),
+    )
+  )
+    suggestedAction =
+      "点击下方“继续交付”，系统会保留现有候选代码并重新执行 QA/Review。";
+  else if (
+    blockedTasks.some((task) =>
+      String(task.blocker || "").includes(
+        "requested continuation after the configured run budget",
+      ),
+    )
+  )
+    suggestedAction =
+      "点击下方“继续交付”，系统会基于当前 checkpoint 创建新的 Coder 恢复任务。";
+  else if (nextActions.length)
+    suggestedAction = nextActions.map(humanizeBlockingText).join("；");
   return {
     reasons: [...reasons.entries()].map(([reason, scopes]) => ({
       reason,
       scopes: [...new Set(scopes)],
     })),
     operationReason,
+    approval,
     suggestedAction,
   };
 }
@@ -502,9 +515,20 @@ function requestBlockerSection(request) {
   );
   for (const item of summary.reasons) {
     const card = el("div", undefined, "request-blocking-primary");
+    const scopeApproval = summary.approval?.kind === "coder_scope";
     card.append(
-      el("span", "当前阻塞", "request-blocking-kicker"),
-      el("p", humanizeBlockingText(item.reason), "request-blocking-reason"),
+      el(
+        "span",
+        summary.approval ? "原始阻塞" : "当前阻塞",
+        "request-blocking-kicker",
+      ),
+      el(
+        "p",
+        scopeApproval
+          ? "Coder 的文件改动超出原任务授权范围，平台已保留工作现场并进入文件范围审批。"
+          : humanizeBlockingText(item.reason),
+        "request-blocking-reason",
+      ),
     );
     if (item.scopes.length)
       card.append(
@@ -532,7 +556,39 @@ function requestBlockerSection(request) {
     el("p", summary.suggestedAction),
   );
   section.append(next);
+  if (summary.approval)
+    section.append(recoveryApprovalBox(request, summary.approval));
   return section;
+}
+
+function recoveryApprovalBox(request, approval) {
+  const box = el("div", undefined, "approval-box request-blocking-approval");
+  box.append(el("h3", approval.title));
+  for (const fact of approval.facts) box.append(el("p", fact, "paths"));
+  box.append(
+    el(
+      "p",
+      approval.kind === "coder_scope"
+        ? "批准后平台只会捕获上方精确文件，不会启动 Agent；捕获完成后仍需审批恢复计划。"
+        : "批准后平台只执行上方计划；页面会把精确计划身份安全地带回 Manager。",
+      "muted",
+    ),
+    button(
+      approval.kind === "coder_scope" ? "批准文件范围" : "批准并继续",
+      () =>
+        submitOperation({
+          action: "CONTINUE_DELIVERY",
+          project_id: request.project_id,
+          delivery_id: request.id,
+          expected_checkpoint_sha256: request.checkpoint_sha256,
+          ...(approval.kind === "coder_scope"
+            ? { approved_scope_sha256: approval.plan_sha256 }
+            : { approved_plan_sha256: approval.plan_sha256 }),
+        }),
+      "primary",
+    ),
+  );
+  return box;
 }
 function paths(scope) {
   return scope.selected_paths
@@ -1696,33 +1752,8 @@ function requestOperation(panel, request, discussionSection) {
   }
   const approval = latestApproval(request.id, request.checkpoint_sha256);
   if (approval && !running) {
-    const box = el("div", undefined, "approval-box");
-    box.append(el("h3", approval.title));
-    for (const fact of approval.facts) box.append(el("p", fact, "paths"));
-    box.append(
-      el(
-        "p",
-        approval.kind === "coder_scope"
-          ? "批准后平台只会捕获上方精确文件，不会启动 Agent；捕获完成后仍需审批恢复计划。"
-          : "批准后平台只执行上方计划；页面会把精确计划身份安全地带回 Manager。",
-        "muted",
-      ),
-      button(
-        approval.kind === "coder_scope" ? "批准文件范围" : "批准并继续",
-        () =>
-          submitOperation({
-            action: "CONTINUE_DELIVERY",
-            project_id: request.project_id,
-            delivery_id: request.id,
-            expected_checkpoint_sha256: request.checkpoint_sha256,
-            ...(approval.kind === "coder_scope"
-              ? { approved_scope_sha256: approval.plan_sha256 }
-              : { approved_plan_sha256: approval.plan_sha256 }),
-          }),
-        "primary",
-      ),
-    );
-    appendOperation(box);
+    if (requestPresentation(request).group !== "blocked")
+      appendOperation(recoveryApprovalBox(request, approval));
     return;
   }
   if (request.stage === "WAITING_PRODUCT_APPROVAL" && !running) {

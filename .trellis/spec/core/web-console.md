@@ -320,6 +320,71 @@ if (configuredHead !== requirement.baseRevision) markSourceDrift(requirement)
 verifyRetainedBaseline(requirement.id, requirement.baseRevision)
 ```
 
+## Scenario: blocked Requirement enters an explicit recovery approval
+
+### 1. Scope / Trigger
+
+Use when a successful `CONTINUE_DELIVERY` Operation returns `result.approval` while the durable
+Requirement/child checkpoint intentionally remains `BLOCKED`. This is expected for `coder_scope`,
+`coder_recovery`, and `candidate_verification`; an approval request is a new operator action, not a
+new delivery failure.
+
+### 2. Signatures
+
+```javascript
+latestApproval(deliveryId, checkpointSha256) -> ConsoleApprovalRequest | null
+requestBlockingSummary(request) -> { reasons, operationReason, approval, suggestedAction } | null
+recoveryApprovalBox(request, approval) -> HTMLElement
+```
+
+### 3. Contracts
+
+- The unconsumed approval must be rendered inside the Requirement's single `阻塞信息` module,
+  adjacent to the retained blocker and before unrelated discussion/artifact modules.
+- Once an approval exists, retained Task failure text is labelled `原始阻塞`; it must not be shown
+  as though the just-completed continue Operation failed again.
+- `coder_scope` names every exact omitted path and renders `批准文件范围`; it must not use generic
+  recovery-plan wording. The digest remains bound to the button and is never rendered.
+- The joint parent may remain `BLOCKED` while the child returns the approval. UI state is derived
+  from the successful Operation plus exact checkpoint, not from a synthetic stage transition.
+
+### 4. Validation & Error Matrix
+
+| Snapshot / Operation | Required UI |
+|---|---|
+| BLOCKED + successful unconsumed `coder_scope` | Original blocker is humanized; exact paths, explanation and approval button appear in `阻塞信息` |
+| BLOCKED + successful unconsumed recovery/verification plan | Plan-specific suggestion and `批准并继续` appear in `阻塞信息` |
+| Approval digest already submitted | Old approval disappears; normal continue/current result is shown |
+| Failed continue Operation | Failure remains the latest recovery result; no approval is fabricated |
+| Approval checkpoint differs from current checkpoint | Approval is stale and not rendered |
+
+### 5. Good / Base / Bad Cases
+
+- Good: the first continue click discovers one omitted file; the page clearly asks for that exact
+  scope approval without implying Coder ran twice.
+- Base: no approval exists; the durable current blocker and normal continue action remain visible.
+- Bad: leave the old raw Coder failure under `当前阻塞` and place the actual approval below the
+  discussion, making a successful continuation look like the same error repeated.
+
+### 6. Tests Required
+
+`tests/team_view/ui.test.cjs` must combine a durable BLOCKED snapshot carrying the original machine
+policy failure with a successful, same-checkpoint `coder_scope` Operation. Assert the approval button
+is a descendant of `request-blocking-section`, exact paths are visible, digests/raw failure text are
+hidden, and the button submits only `approved_scope_sha256`.
+
+### 7. Wrong vs Correct
+
+```javascript
+// Wrong: checkpoint stage alone decides what the last click did.
+showCurrentError(request.blocker)
+appendApprovalAfterDiscussion(operation.result.approval)
+
+// Correct: preserve history while presenting the successful next operator gate in one place.
+const approval = latestApproval(request.id, request.checkpoint_sha256)
+showOriginalBlockerAndApproval(request.blocker, recoveryApprovalBox(request, approval))
+```
+
 ## Scenario: singleton Team, Project, document knowledge and production settings administration
 
 ### 1. Scope / Trigger

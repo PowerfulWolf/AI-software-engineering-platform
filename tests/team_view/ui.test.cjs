@@ -1749,13 +1749,30 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
       facts: ["待补充文件 src/pkg/__init__.py"],
     },
   };
-  fixture.requests[0].stage = "WAITING_HUMAN";
+  fixture.requests[0].stage = "BLOCKED";
+  fixture.tasks.forEach((task) => {
+    task.blocker =
+      "Coder failed at attempt 1: coder run run_fixture failed: Codex worktree changes violated the machine policy";
+  });
   await interval.fn();
   vm.runInContext('showDetail("request","r1")', context);
+  const scopeBlockerSection = descend(get("detail")).find((node) =>
+    node.className.includes("request-blocking-section"),
+  );
   const approveScope = descend(get("detail")).find(
     (node) => node.tag === "button" && node.textContent === "批准文件范围",
   );
   assert.ok(approveScope, "WAITING_HUMAN renders its exact scope approval");
+  assert.ok(
+    descend(scopeBlockerSection).includes(approveScope),
+    "the pending recovery action is rendered beside the blocker instead of below the discussion",
+  );
+  assert.doesNotMatch(
+    text(scopeBlockerSection),
+    /Coder failed at attempt 1|Codex worktree changes violated the machine policy/,
+    "a successful continue operation must not look like the original failure happened again",
+  );
+  assert.match(text(scopeBlockerSection), /原始阻塞.*文件改动超出原任务授权范围/s);
   assert.match(text(get("detail")), /src\/pkg\/__init__\.py/);
   assert.match(text(get("detail")), /不会启动 Agent.*仍需审批恢复计划/);
   assert.doesNotMatch(text(get("detail")), /c{64}/);
