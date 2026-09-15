@@ -60,9 +60,14 @@ load_runtime_environment() {
   set +a
 }
 
-is_our_process() {
+process_exists() {
   candidate_pid=$1
   kill -0 "$candidate_pid" 2>/dev/null || return 1
+}
+
+is_our_process() {
+  candidate_pid=$1
+  process_exists "$candidate_pid" || return 1
   command_line=$(ps -p "$candidate_pid" -o command= 2>/dev/null || true)
   case "$command_line" in
     *"$SERVICE_EXECUTABLE"*) return 0 ;;
@@ -101,6 +106,11 @@ stop_service() {
   require_safe_state_dir
   if ! current_pid=$(read_pid 2>/dev/null); then
     echo "ase-console is not running"
+    return 0
+  fi
+  if ! process_exists "$current_pid"; then
+    rm -f "$PID_FILE"
+    echo "ase-console is not running (removed stale PID $current_pid)"
     return 0
   fi
   if ! is_our_process "$current_pid"; then

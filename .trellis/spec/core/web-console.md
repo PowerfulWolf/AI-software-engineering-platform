@@ -693,7 +693,9 @@ The executable is the repository-local `.venv/bin/ase-console`. PID and log defa
   environment remains available and the managed file wins for its declared names. It redirects stdio,
   records the child PID and verifies that the same executable remains alive after startup.
 - `stop` sends TERM only when the PID is numeric, alive and its process command identifies this
-  repository's executable. It waits up to 20 seconds and never escalates to KILL automatically.
+  repository's executable. A numeric PID with no live process is a safe stale record: `stop` removes
+  only that PID file and succeeds, allowing `restart` to continue. It waits up to 20 seconds and never
+  escalates to KILL automatically.
 - `restart` is exact `stop` followed by `start`; `status` is read-only apart from preparing its safe
   state directory; `logs` tails the last 100 lines and follows the file.
 - The state directory must be absolute, not `/`, and not a symlink. PID-file symlinks are rejected.
@@ -712,7 +714,9 @@ The executable is the repository-local `.venv/bin/ase-console`. PID and log defa
 | runtime.env symlink/non-file | reject before starting child |
 | Existing matching live PID | idempotent start |
 | Missing PID on stop | report not running; success |
-| Non-numeric, dead or foreign PID | send no signal; fail safely or report stopped |
+| Non-numeric PID | send no signal; report stopped without trusting the record |
+| Numeric PID with no live process | remove only the stale PID file; report stopped; allow restart |
+| Live PID whose command does not identify this repository executable | send no signal; retain PID file; fail safely |
 | Child exits during startup | remove its PID record, show bounded log tail, exit 1 |
 | TERM does not stop in 20 seconds | leave process and PID intact; exit 1 |
 | Relative/root/symlink state directory | reject before creating or deleting files |
@@ -721,7 +725,8 @@ The executable is the repository-local `.venv/bin/ase-console`. PID and log defa
 
 - Good: start once with defaults, save DSN/provider keys in Settings, restart so the launcher exports
   the canonical runtime file, then use `status`/`logs` for operations.
-- Base: stopping an already stopped service is idempotent.
+- Base: stopping an already stopped service is idempotent; a dead numeric PID is cleaned without
+  signaling any process, then `restart` starts a fresh child.
 - Bad: use a PID file without process identity validation, hard-code DSN in the script, source an
   arbitrary/symlink runtime file, or issue `kill -9`
   after a fixed delay.
@@ -730,8 +735,9 @@ The executable is the repository-local `.venv/bin/ase-console`. PID and log defa
 
 - `sh -n scripts/ase-console-service.sh`.
 - No-argument invocation exits 2.
-- Focused process tests, when added, must use an isolated absolute `ASE_SERVICE_STATE_DIR` and a fake
-  repository-local executable; they must never signal an unrelated host process.
+- Focused process tests use an isolated absolute `ASE_SERVICE_STATE_DIR` and a fake repository-local
+  executable. They prove dead-PID restart recovery and that a live unrelated process remains alive
+  with its PID record intact.
 - The launcher test must prove that sibling `runtime.env` reaches the child environment without
   printing its value.
 
@@ -741,7 +747,8 @@ The executable is the repository-local `.venv/bin/ase-console`. PID and log defa
 # Wrong: trust a stale PID and force kill an arbitrary process.
 kill -9 "$(cat "$PID_FILE")"
 
-# Correct: require numeric PID + exact executable identity, request TERM, and fail without escalation.
+# Correct: remove a dead record without signaling; require exact identity before TERM.
+process_exists "$current_pid" || { rm -f "$PID_FILE"; exit 0; }
 is_our_process "$current_pid" || exit 1
 kill -TERM "$current_pid"
 ```

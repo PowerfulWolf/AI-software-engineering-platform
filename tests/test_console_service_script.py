@@ -86,6 +86,51 @@ def test_service_launcher_starts_reports_and_stops_isolated_process(tmp_path: Pa
         _run(launcher, environment, "stop")
 
 
+def test_service_launcher_restart_recovers_from_dead_pid_record(tmp_path: Path) -> None:
+    launcher, environment = _launcher(tmp_path)
+    state = Path(environment["ASE_SERVICE_STATE_DIR"])
+    state.mkdir()
+    pid_file = state / "ase-console.pid"
+    dead_pid = "99999999"
+    pid_file.write_text(dead_pid + "\n", encoding="utf-8")
+
+    try:
+        restarted = _run(launcher, environment, "restart")
+
+        assert restarted.returncode == 0, restarted.stderr
+        assert "removed stale PID" in restarted.stdout
+        assert "ase-console started" in restarted.stdout
+        assert pid_file.read_text(encoding="utf-8").strip() != dead_pid
+        assert _run(launcher, environment, "status").returncode == 0
+    finally:
+        _run(launcher, environment, "stop")
+
+
+def test_service_launcher_restart_never_signals_live_foreign_pid(tmp_path: Path) -> None:
+    launcher, environment = _launcher(tmp_path)
+    environment["PATH"] = os.environ["PATH"]
+    state = Path(environment["ASE_SERVICE_STATE_DIR"])
+    state.mkdir()
+    pid_file = state / "ase-console.pid"
+    foreign = subprocess.Popen(
+        (sys.executable, "-c", "import signal; signal.pause()"),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    pid_file.write_text(f"{foreign.pid}\n", encoding="utf-8")
+
+    try:
+        restarted = _run(launcher, environment, "restart")
+
+        assert restarted.returncode == 1
+        assert "does not identify this project's ase-console" in restarted.stderr
+        assert foreign.poll() is None
+        assert pid_file.read_text(encoding="utf-8").strip() == str(foreign.pid)
+    finally:
+        foreign.terminate()
+        foreign.wait(timeout=5)
+
+
 def test_service_launcher_rejects_invalid_invocations(tmp_path: Path) -> None:
     launcher, environment = _launcher(tmp_path, executable=False)
 
