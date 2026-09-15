@@ -3,6 +3,8 @@
 import json
 from collections.abc import Mapping
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -107,6 +109,27 @@ def _config(root: Path, team_id: str, paths: tuple[str, ...] = ()) -> Production
             ),
         ),
     )
+
+
+def test_recovery_uses_current_project_backend_when_child_delivery_is_frozen(
+    tmp_path: Path,
+) -> None:
+    host = object.__new__(TeamHost)
+    host._config = _config(tmp_path / "platform", "team_alpha")
+    host._environment = {"ASE_MYSQL_DSN": "connectivity-only"}
+    current_backend = cast(Any, SimpleNamespace(_delivery_route_adapters=None))
+    frozen_child_backend = cast(Any, SimpleNamespace(_delivery_route_adapters=None))
+    runtime = cast(Any, SimpleNamespace(backend=current_backend, entry=object()))
+
+    controller = host._resume_controller(
+        runtime,
+        backend=frozen_child_backend,
+        entry=cast(Any, object()),
+    )
+
+    assert controller._backend is frozen_child_backend
+    assert controller._recovery.backend is current_backend
+    assert controller._verification.backend is current_backend
 
 
 def test_team_host_scopes_product_catalog_and_context(

@@ -345,6 +345,11 @@ recoveryApprovalBox(request, approval) -> HTMLElement
   as though the just-completed continue Operation failed again.
 - `coder_scope` names every exact omitted path and renders `批准文件范围`; it must not use generic
   recovery-plan wording. The digest remains bound to the button and is never rendered.
+- An approval is consumed only relative to the Operation that issued it. A later
+  `CONTINUE_DELIVERY` intent carrying that digest consumes that issuance, but a newer successful
+  Operation may reissue the same digest after a safe failure. `latestApproval(...)` must compare
+  Operation times and render the newest issuance; a global set of every historically submitted
+  digest would hide the user's only recovery action forever.
 - The joint parent may remain `BLOCKED` while the child returns the approval. UI state is derived
   from the successful Operation plus exact checkpoint, not from a synthetic stage transition.
 - Closing a recovery bug requires an explicit existing-data disposition. If durable facts are
@@ -363,6 +368,7 @@ recoveryApprovalBox(request, approval) -> HTMLElement
 | BLOCKED + successful unconsumed recovery/verification plan | Plan-specific suggestion and `批准并继续` appear in `阻塞信息` |
 | Approval digest already submitted | Old approval disappears; normal continue/current result is shown |
 | Failed continue Operation | Failure remains the latest recovery result; no approval is fabricated |
+| Scope/plan approval fails safely, then a newer Operation reissues the same digest | Newer issuance is actionable and rendered; the older submission does not consume it |
 | Approval checkpoint differs from current checkpoint | Approval is stale and not rendered |
 | Existing facts are consistent and an exact scope/plan approval is pending | No database rewrite; handoff names the visible approval action and every subsequent step needed to resume |
 | Existing facts violate a mutable projection/index contract | Repair only resolved derived records, preserve immutable journals/evidence, then verify both source facts and rebuilt UI projection |

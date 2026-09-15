@@ -208,17 +208,22 @@ class TeamHost:
         from ai_software_engineer.recovery.verification_entry import CandidateVerificationEntry
 
         selected_backend = backend or runtime.backend
+        current_target_backend = runtime.backend
 
         return DeliveryResumeController(
             config=self._config,
             environment=self._environment,
             backend=selected_backend,
             entry=entry or runtime.entry,
-            recovery=NativeRecoveryEntry(self._config, self._environment, selected_backend),
+            recovery=NativeRecoveryEntry(
+                self._config,
+                self._environment,
+                current_target_backend,
+            ),
             verification=CandidateVerificationEntry(
                 self._config,
                 self._environment,
-                selected_backend,
+                current_target_backend,
             ),
         )
 

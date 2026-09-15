@@ -30,6 +30,7 @@ from ai_software_engineer.domain import (
 )
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
+    ReplyToProduct,
     ResumeProjectDelivery,
     StartProjectDelivery,
 )
@@ -42,6 +43,7 @@ from ai_software_engineer.manager.production_delivery import (
     DeliveryRouteAdapterFactory,
 )
 from ai_software_engineer.manager.production_host import TeamHost
+from ai_software_engineer.multi_directory.service import CreateRequirement
 from ai_software_engineer.orchestration import AgentRunFailed
 from ai_software_engineer.recovery.entry import NativeRecoveryExecution
 from ai_software_engineer.recovery.models import RecoveryScope
@@ -56,6 +58,7 @@ from ai_software_engineer.recovery.verification_native import NativeCandidateSou
 from ai_software_engineer.role_workspace import RoleWorktreeBinding
 from ai_software_engineer.store import MySqlTaskRepository
 from ai_software_engineer.team_view.reader import ProductionTeamReader
+from tests.e2e.test_joint_delivery import setup_host
 from tests.manager.test_production_backend import (
     _git,
     _git_output,
@@ -485,6 +488,7 @@ def test_resume_requires_exact_scope_approval_before_capturing_omitted_files(
     assert interrupted.requests[0].permissions.write_paths == ("hello.txt",)
 
     requested = host.resume_delivery(ResumeProjectDelivery(delivery_id=blocked.delivery_id))
+    assert isinstance(requested, DeliveryResumeResult)
     assert requested.outcome is DeliveryResumeOutcome.SCOPE_APPROVAL_REQUIRED
     assert requested.scope_supplement_paths == ("omitted.txt",)
     assert requested.scope_supplement_sha256 is not None
@@ -506,6 +510,7 @@ def test_resume_requires_exact_scope_approval_before_capturing_omitted_files(
             approval_reference="approved-exact-omitted-file",
         )
     )
+    assert isinstance(proposed, DeliveryResumeResult)
     assert proposed.outcome is DeliveryResumeOutcome.RECOVERY_APPROVAL_REQUIRED
     assert proposed.recovery_plan_file is not None
     _, plan = host.recovery_entry().open_plan(Path(proposed.recovery_plan_file))
@@ -533,6 +538,64 @@ def test_resume_requires_exact_scope_approval_before_capturing_omitted_files(
     assert refreshed.outcome is DeliveryResumeOutcome.SCOPE_APPROVAL_REQUIRED
     assert refreshed.scope_supplement_paths == ("omitted.txt", "second.txt")
     assert refreshed.scope_supplement_sha256 != requested.scope_supplement_sha256
+
+
+@pytest.mark.mysql
+def test_joint_scope_recovery_targets_current_preparation_after_main_advances(
+    tmp_path: Path,
+) -> None:
+    config, environment, models, projects = setup_host(tmp_path)
+    config = config.model_copy(update={"live_model_execution": True})
+    interrupted = _OutOfScopeInterruptedFactory()
+    host = TeamHost(
+        config=config,
+        environment=environment,
+        structured_clients=models,
+        delivery_route_adapters=interrupted,
+    )
+    entry = host.requirement_entry()
+    created = entry.create(
+        CreateRequirement(
+            name="Recover after main advances",
+            repository_roots=(str(projects[0]),),
+        )
+    ).checkpoint
+    product = entry.reply(
+        ReplyToProduct(
+            delivery_id=created.delivery_id,
+            expected_checkpoint_sha256=created.checkpoint_sha256,
+            message="Update the greeting and retain interrupted work.",
+        )
+    ).checkpoint
+    blocked = entry.approve(
+        ApproveProductSpec(
+            delivery_id=product.delivery_id,
+            expected_checkpoint_sha256=product.checkpoint_sha256,
+            approval_reference="joint-scope-recovery",
+        )
+    ).checkpoint
+    assert blocked.stage.value == "BLOCKED"
+
+    (projects[0] / "main-update.txt").write_text("new baseline\n", encoding="utf-8")
+    _git("add", "main-update.txt", cwd=projects[0])
+    _git("commit", "-m", "Advance main while requirement is blocked", cwd=projects[0])
+    current_head = _git_output("rev-parse", "HEAD", cwd=projects[0])
+
+    requested = host.resume_delivery(ResumeProjectDelivery(delivery_id=blocked.delivery_id))
+    assert requested.outcome is DeliveryResumeOutcome.SCOPE_APPROVAL_REQUIRED
+    assert requested.scope_supplement_sha256 is not None
+
+    proposed = host.resume_delivery(
+        ResumeProjectDelivery(
+            delivery_id=blocked.delivery_id,
+            approved_scope_sha256=requested.scope_supplement_sha256,
+            approval_reference="approve-current-target",
+        )
+    )
+    assert proposed.outcome is DeliveryResumeOutcome.RECOVERY_APPROVAL_REQUIRED
+    assert proposed.recovery_plan_file is not None
+    _, plan = host.recovery_entry().open_plan(Path(proposed.recovery_plan_file))
+    assert plan.target_base_revision == current_head
 
 
 @pytest.mark.mysql

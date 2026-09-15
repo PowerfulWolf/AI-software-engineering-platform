@@ -1350,6 +1350,11 @@ dispatch_sha256
   adopted.
 - A joint parent resumes one incomplete child at a time, retains DONE children, then re-enters joint
   integration only after the complete candidate set exists.
+- For a joint child, source inspection and its native Delivery entry remain pinned to the Requirement's
+  frozen preparation, while recovery/verification target preparation uses the current Project backend.
+  `target_preparation.repository_profile_sha256` must resolve to a profile whose `source_revision`
+  equals `RecoveryPlan.target_base_revision`. Advancing the configured checkout after intake is a
+  supported target-base change, not a reason to reuse the frozen source preparation as the target.
 - No resume path merges, pushes, deploys, relaxes project policy, silently changes team knowledge,
   or overwrites historical Task/checkpoint/verdict records.
 - `DeliveryResumeResult.outcome` must reflect the returned checkpoint. Any
@@ -1368,6 +1373,7 @@ dispatch_sha256
 | BLOCKED/FAILED after Task materialization, Task `NEW` revision 0, no candidate/Delivery attempt | Reopen `DELIVERING`; legacy `failed_stage` may be absent | Normal runtime reconciliation |
 | BLOCKED/FAILED Coder, no candidate | Publish exact recovery plan | 0 |
 | Recovery/remediation Coder fails again without candidate | Follow allocation ancestry; publish next recovery plan | 0 |
+| Joint child source is frozen and configured checkout advanced | Keep frozen source lineage; build target preparation and plan from the current Project backend/current clean HEAD | 0 |
 | QA/Review routed Coder restarts at old Task base while worktree retains Candidate V1 | Reject before provider admission; implementation bug | 0 |
 | Terminal retry Task retains a validated earlier candidate | Publish candidate-verification plan before failed-Coder recovery | 0 |
 | Approved recovery plan, no invocation | Fresh recovery Task: Coder → QA → Reviewer | 3+ bounded retries |
@@ -1409,6 +1415,10 @@ dispatch_sha256
 - The same suite must cover failed-Coder discovery, recovery-plan approval, a fresh serial recovery
   Task and attachment of its candidate to the original Delivery. It must also make the first recovery
   Coder fail, then prove a second `resume` creates a new plan/Task and reaches DONE.
+- `tests/manager/test_team_host.py` must prove `_resume_controller(...)` keeps the selected frozen
+  child backend for the native entry while injecting the current Project backend into recovery and
+  verification. `tests/recovery/test_resume.py` must advance main after a joint child is BLOCKED and
+  assert the generated recovery plan targets that new HEAD rather than the frozen source profile.
 - `tests/recovery/test_delivery_continuation.py`: checkpoint attachment, target preparation adoption,
   result sealing and exact replay without duplicate journal entries; both verification acceptance and
   remediation must accept the exact retained Candidate when the latest cursor is null, while an empty
@@ -1431,6 +1441,21 @@ dispatch_sha256
 - Source Mypy, Ruff/format, offline package build, and the full MySQL suite are release gates.
 
 ### 7. Wrong vs Correct
+
+```python
+# Wrong: the frozen Requirement source backend also prepares the current recovery target.
+controller = DeliveryResumeController(
+    backend=frozen_child_backend,
+    recovery=NativeRecoveryEntry(config, environment, frozen_child_backend),
+)
+
+# Correct: inspect the frozen source, but prepare/verify the target from current Project runtime.
+controller = DeliveryResumeController(
+    backend=frozen_child_backend,
+    recovery=NativeRecoveryEntry(config, environment, runtime.backend),
+    verification=CandidateVerificationEntry(config, environment, runtime.backend),
+)
+```
 
 ```python
 # Wrong: the Task finished before the Delivery checkpoint, so invoke Runtime again.

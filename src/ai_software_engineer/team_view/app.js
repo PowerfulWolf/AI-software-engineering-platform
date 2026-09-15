@@ -255,31 +255,31 @@ const isSourceRevisionDrift = (operation) =>
       operation.error_summary || "",
     ));
 const latestApproval = (deliveryId, checkpoint) => {
-  const consumedApprovals = new Set(
-    operations
-      .filter(
-        (operation) =>
-          operationTarget(operation) === deliveryId &&
-          operation.intent.action === "CONTINUE_DELIVERY" &&
-          (operation.intent.approved_plan_sha256 ||
-            operation.intent.approved_scope_sha256),
-      )
-      .map(
-        (operation) =>
-          operation.intent.approved_plan_sha256 ||
-          operation.intent.approved_scope_sha256,
-      ),
-  );
   return (
     [...operations]
       .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
       .find(
-        (operation) =>
-          operationTarget(operation) === deliveryId &&
-          operation.status === "SUCCEEDED" &&
-          operation.result?.approval &&
-          operation.intent.expected_checkpoint_sha256 === checkpoint &&
-          !consumedApprovals.has(operation.result.approval.plan_sha256),
+        (operation) => {
+          const approval = operation.result?.approval;
+          if (
+            operationTarget(operation) !== deliveryId ||
+            operation.status !== "SUCCEEDED" ||
+            !approval ||
+            operation.intent.expected_checkpoint_sha256 !== checkpoint
+          )
+            return false;
+          return !operations.some((candidate) => {
+            const submittedApproval =
+              candidate.intent.approved_plan_sha256 ||
+              candidate.intent.approved_scope_sha256;
+            return (
+              operationTarget(candidate) === deliveryId &&
+              candidate.intent.action === "CONTINUE_DELIVERY" &&
+              submittedApproval === approval.plan_sha256 &&
+              candidate.updated_at.localeCompare(operation.updated_at) > 0
+            );
+          });
+        },
       )?.result.approval || null
   );
 };

@@ -505,6 +505,12 @@ this does not authorize rebasing old approval or QA/Review evidence in place.
   受影响 Project runtime，不要求进程重启，也不允许已 prepare 的交付静默采用新版本。联合
   Requirement 的 derived delivery 显式重放该 Requirement 已封存的 preparation/spec/context；新版本
   只进入之后创建的 Requirement。
+- Joint Requirement 的 child backend 可以冻结在 intake 时的 preparation/source revision，用于继续验证
+  原 Product/Design/Plan 和失败 Coder lineage；但 `TeamHost._resume_controller(...)` 装配的
+  `NativeRecoveryEntry` 与 `CandidateVerificationEntry` 必须使用当前 Project runtime backend。恢复计划的
+  `target_preparation_sha256`、RepositoryProfile `source_revision` 与 `target_base_revision` 必须来自同一
+  当前 clean HEAD。禁止用 frozen child backend 产生 target preparation 后再把当前 HEAD 写入计划；否则
+  主分支正常前进后，所有旧 Requirement 都会稳定失败为 `target profile mismatch`。
 
 ## 4. Validation & Error Matrix
 
@@ -530,6 +536,7 @@ this does not authorize rebasing old approval or QA/Review evidence in place.
 | standalone 已 prepare 交付所绑定 Spec 发生变化 | preparation guard | 安全停止并要求重新 prepare；不沿用旧批准 |
 | 新 intake 的 target project dirty/not Git/HEAD 在准备期间漂移 | delivery precondition | stable failure + preserved project/worktree |
 | 已有 Requirement 的配置 checkout HEAD 前进或 dirty | Requirement-owned baseline | 不影响旧交付；Task.base_ref 仍为封存 revision |
+| frozen Requirement child 阻塞后，配置 checkout HEAD 前进 | recovery composition | source/entry 保留旧基线；recovery/verification target 使用当前 Project backend 并生成同一 HEAD 的 profile、preparation 与 plan |
 | Requirement baseline worktree/commit 漂移 | reconciliation | typed source drift；保留现场，不 fallback 到配置 checkout |
 | Coder provisional report/diff 不匹配、越权路径或 finalization 后 dirty | Codex Git guard | policy/invalid-output failure；不进入 QA |
 | Coder 返回合法未完成 checkpoint | artifact/worktree/state guards | 保存 progress，重新排队下一次 Coder；不进入 QA |

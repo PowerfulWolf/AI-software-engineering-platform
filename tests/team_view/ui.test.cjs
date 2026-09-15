@@ -1791,6 +1791,30 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     project_id: "project_fixture",
     delivery_id: "r1",
     checkpoint_sha256: "a".repeat(64),
+    stage: "BLOCKED",
+    next_action: "Current recovery source or target facts do not match",
+  };
+  storedOperations.push({
+    ...structuredClone(storedOperations[1]),
+    operation_id: "operation_reissued_scope",
+    updated_at: "2026-09-05T01:00:07Z",
+  });
+  await interval.fn();
+  vm.runInContext('showDetail("request","r1")', context);
+  assert.ok(
+    descend(get("detail")).find(
+      (node) => node.tag === "button" && node.textContent === "批准文件范围",
+    ),
+    "a failed scope approval must not consume a later reissued approval with the same digest",
+  );
+  storedOperations.pop();
+
+  storedOperations[2].status = "SUCCEEDED";
+  storedOperations[2].updated_at = "2026-09-05T01:00:08Z";
+  storedOperations[2].result = {
+    project_id: "project_fixture",
+    delivery_id: "r1",
+    checkpoint_sha256: "a".repeat(64),
     stage: "WAITING_HUMAN",
     next_action: "Approve exact recovery",
     approval: {
@@ -1816,7 +1840,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   });
 
   storedOperations[3].status = "FAILED";
-  storedOperations[3].updated_at = "2026-09-05T01:00:07Z";
+  storedOperations[3].updated_at = "2026-09-05T01:00:09Z";
   storedOperations[3].error_summary = "Provider unavailable";
   await interval.fn();
   const closeFailure = descend(get("operations")).find(
