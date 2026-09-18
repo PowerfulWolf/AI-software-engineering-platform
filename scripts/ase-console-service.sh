@@ -79,8 +79,10 @@ process_matches_executable() {
   candidate_executable=$2
   process_exists "$candidate_pid" || return 1
   command_line=$(ps -p "$candidate_pid" -o command= 2>/dev/null || true)
+  candidate_project_root=${candidate_executable%/.venv/bin/ase-console}
   case "$command_line" in
     *"$candidate_executable"*) return 0 ;;
+    *"$candidate_project_root/.venv/bin/python"*".venv/bin/ase-console"*) return 0 ;;
     *) return 1 ;;
   esac
 }

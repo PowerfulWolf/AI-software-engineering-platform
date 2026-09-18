@@ -13,7 +13,7 @@ from pydantic import TypeAdapter
 
 from ai_software_engineer.manager.delivery import DeliveryCheckpointStale
 from ai_software_engineer.manager.delivery_checkpoint import DeliveryId
-from ai_software_engineer.multi_directory.models import JointCheckpoint
+from ai_software_engineer.multi_directory.models import JointCheckpoint, JointStage
 
 
 class JointJournal:
@@ -52,7 +52,12 @@ class JointJournal:
             os.close(fd)
 
     def current(self, delivery_id: str) -> JointCheckpoint | None:
+        history = self.history(delivery_id)
+        return history[-1] if history else None
+
+    def history(self, delivery_id: str) -> tuple[JointCheckpoint, ...]:
         previous: JointCheckpoint | None = None
+        history: list[JointCheckpoint] = []
         for path in sorted(self.directory(delivery_id).glob("*.json")):
             _no_symlinks(path)
             item = JointCheckpoint.model_validate_json(path.read_text(encoding="utf-8"))
@@ -61,7 +66,8 @@ class JointJournal:
                 raise ValueError("joint journal identity mismatch")
             _validate_successor(previous, item)
             previous = item
-        return previous
+            history.append(item)
+        return tuple(history)
 
     def append(self, checkpoint: JointCheckpoint, *, expected: str | None) -> JointCheckpoint:
         if self._read_only:
@@ -128,10 +134,43 @@ def _validate_successor(previous: JointCheckpoint | None, item: JointCheckpoint)
         item.product_spec != previous.product_spec or item.approval != previous.approval
     ):
         raise ValueError("approved joint product is immutable")
-    for field in ("design", "plan"):
-        if getattr(previous, field) is not None and getattr(item, field) != getattr(
-            previous, field
+    if item.integration_retry_approval != previous.integration_retry_approval:
+        approval = item.integration_retry_approval
+        if (
+            previous.integration_retry_approval is not None
+            or approval is None
+            or approval.proposal.checkpoint_sha256 != previous.checkpoint_sha256
+            or previous.attempts.get("integration", 0) != 3
+            or previous.integration is None
+            or not any(check.returncode != 0 for check in previous.integration.checks)
+            or previous.stage not in {JointStage.BLOCKED, JointStage.PLANNING}
+            or item.children != previous.children
+            or item.attempts != previous.attempts
+            or item.plan != previous.plan
+            or item.integration != previous.integration
+            or item.stage != previous.stage
         ):
+            raise ValueError("integration retry requires an exact immutable approval")
+    if previous.design is not None and item.design != previous.design:
+        raise ValueError("committed joint design and plan are immutable")
+    if previous.integration_retry_approval is not None and item.attempts.get(
+        "integration", 0
+    ) < previous.attempts.get("integration", 0):
+        raise ValueError("approved integration attempts cannot be reset")
+    if (
+        previous.single_repository_acceptance is not None
+        and item.single_repository_acceptance != previous.single_repository_acceptance
+    ):
+        raise ValueError("single-repository acceptance is immutable")
+    if previous.plan is not None and item.plan != previous.plan:
+        explicit_integration_replan = (
+            previous.stage is JointStage.BLOCKED
+            and previous.integration is not None
+            and item.stage is JointStage.PLANNING
+            and item.plan is None
+            and item.integration == previous.integration
+        )
+        if not explicit_integration_replan:
             raise ValueError("committed joint design and plan are immutable")
     if previous.stage == "DONE":
         raise ValueError("completed joint delivery is immutable")

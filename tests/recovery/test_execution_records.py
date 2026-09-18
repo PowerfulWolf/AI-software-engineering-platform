@@ -12,6 +12,7 @@ from ai_software_engineer.manager.dispatch import (
     ContinuationDispatchRecord,
     RecoveryDispatchRecord,
     _record_digest,
+    continuation_attempt_identity,
 )
 from ai_software_engineer.recovery import (
     CapturedChanges,
@@ -120,6 +121,55 @@ def continuation_allocation(tmp_path: Path) -> ContinuationDispatchRecord:
         dispatch_sha256="0" * 64,
     )
     return result.model_copy(update={"dispatch_sha256": _record_digest(result)})
+
+
+def test_continuation_retry_has_a_fresh_append_only_identity(tmp_path: Path) -> None:
+    previous = continuation_allocation(tmp_path)
+    identity = continuation_attempt_identity(
+        previous.continuation_sha256,
+        attempt=2,
+        retry_of_task_id=previous.task_id,
+        retry_of_dispatch_id=previous.id,
+    )
+    task_id = f"task_continue_{identity[:32]}"
+    task = previous.task.model_copy(
+        update={
+            "id": task_id,
+            "metadata": {
+                **previous.task.metadata,
+                "continuation_attempt": 2,
+                "continuation_retry_of_task_id": previous.task_id,
+                "continuation_retry_of_dispatch_id": previous.id,
+            },
+        }
+    )
+    phases = tuple(
+        phase.model_copy(
+            update={
+                "assignment": phase.assignment.model_copy(update={"task_id": task_id}),
+                "lease": phase.lease.model_copy(update={"task_id": task_id}),
+            }
+        )
+        for phase in previous.phases
+    )
+    retry = previous.model_copy(
+        update={
+            "id": f"dispatch_commit_{identity}",
+            "task_id": task_id,
+            "continuation_attempt": 2,
+            "retry_of_task_id": previous.task_id,
+            "retry_of_dispatch_id": previous.id,
+            "task": task,
+            "phases": phases,
+            "dispatch_sha256": "0" * 64,
+        }
+    )
+    retry = retry.model_copy(update={"dispatch_sha256": _record_digest(retry)})
+
+    retry.validate_integrity()
+    schema().validate(retry.to_wire())
+    assert retry.task_id != previous.task_id
+    assert retry.id != previous.id
 
 
 def schema() -> Draft202012Validator:

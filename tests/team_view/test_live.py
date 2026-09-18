@@ -6,7 +6,7 @@ import hashlib
 import json
 import shutil
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from http.client import HTTPConnection
@@ -18,7 +18,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 from pymysql.cursors import DictCursor
 from typer.testing import CliRunner
 
-from ai_software_engineer.agents import AgentRequest, AgentResult
+from ai_software_engineer.agents import AgentRequest, AgentResult, StructuredModelResult
 from ai_software_engineer.cli import app
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
 from ai_software_engineer.domain import AgentProfile
@@ -26,6 +26,7 @@ from ai_software_engineer.domain.enums import AgentRole, TeamRole
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
     ReplyToProduct,
+    ResumeProjectDelivery,
     StartProjectDelivery,
 )
 from ai_software_engineer.manager.delivery_checkpoint import (
@@ -44,11 +45,15 @@ from ai_software_engineer.multi_directory.attachments import RequirementScreensh
 from ai_software_engineer.multi_directory.models import (
     ChildDelivery,
     DialogueMessage,
+    IntegrationEvidence,
     JointCheckpoint,
+    JointDeliveryResult,
+    JointExecutionPlan,
     JointStage,
+    digest,
 )
 from ai_software_engineer.multi_directory.retirement import RequirementRetirementStore
-from ai_software_engineer.multi_directory.scope import DirectoryScope, DirectoryUnit
+from ai_software_engineer.multi_directory.scope import DirectoryScope, DirectoryUnit, git_read
 from ai_software_engineer.multi_directory.service import CreateRequirement
 from ai_software_engineer.multi_directory.store import JointJournal
 from ai_software_engineer.runtime_workspace import (
@@ -383,6 +388,195 @@ def test_joint_reader_accepts_committed_child_checkpoint_as_a_valid_prefix(
     task = next(item for item in snapshot.tasks if item.id == child.delivery_id)
     assert task.last_activity >= advanced.checkpointed_at
     assert task.request_id == parent.delivery_id
+
+
+@pytest.mark.mysql
+@pytest.mark.parametrize("extra_attempt", [False, True])
+def test_joint_reader_preserves_child_ownership_through_integration_replanning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    extra_attempt: bool,
+) -> None:
+    config, environment, models, projects = setup_host(tmp_path)
+    host = TeamHost(
+        config=config,
+        environment=environment,
+        structured_clients=models,
+        delivery_route_adapters=_ScriptedDeliveryFactory(),
+    )
+    service = host.requirement_entry()
+    reader = ProductionTeamReader(config, environment)
+    original_complete = models.complete
+    original_for_projects = models.for_projects
+    observed: list[str] = []
+    planning_revisions: list[tuple[str | None, ...]] = []
+    plan_count = 0
+
+    def for_projects(roots: tuple[Path, ...], role: TeamRole = TeamRole.PRODUCT) -> object:
+        if role is TeamRole.PLANNER:
+            planning_revisions.append(tuple(git_read(root, "rev-parse", "HEAD") for root in roots))
+            assert all(git_read(root, "status", "--porcelain") == "" for root in roots)
+        return original_for_projects(roots, role)
+
+    monkeypatch.setattr(models, "for_projects", for_projects)
+
+    def observe(expected_stage: str) -> None:
+        before = _bytes(Path(config.platform_root))
+        snapshot = reader.snapshot()
+        assert _bytes(Path(config.platform_root)) == before
+        assert len(snapshot.requests) == 1
+        parent = snapshot.requests[0]
+        assert parent.stage == expected_stage
+        assert len(snapshot.tasks) == 2
+        assert {task.request_id for task in snapshot.tasks} == {parent.id}
+        assert {scope.delivery_id for scope in parent.scopes} == {
+            task.id for task in snapshot.tasks
+        }
+        assert all(task.terminal and task.status == "DONE" for task in snapshot.tasks)
+        observed.append(expected_stage)
+
+    def complete(
+        *,
+        instructions: str,
+        input_payload: Mapping[str, object],
+        output_schema: Mapping[str, object],
+        timeout_seconds: int,
+        input_images: tuple[Path, ...] = (),
+    ) -> StructuredModelResult:
+        nonlocal plan_count
+        result = original_complete(
+            instructions=instructions,
+            input_payload=input_payload,
+            output_schema=output_schema,
+            timeout_seconds=timeout_seconds,
+            input_images=input_images,
+        )
+        if output_schema["title"] != "JointExecutionPlan":
+            return result
+        plan_count += 1
+        plan = JointExecutionPlan.model_validate(result.payload)
+        if plan_count == 1:
+            check = plan.integration_checks[0].model_copy(
+                update={"argv": (*plan.integration_checks[0].argv, "-p", "missing_*.py")}
+            )
+        else:
+            assert input_payload.get("plan") is None
+            observe("PLANNING")
+            check = plan.integration_checks[0].model_copy(update={"id": "joint_retry"})
+        return StructuredModelResult(
+            payload=plan.model_copy(update={"integration_checks": (check,)}).to_wire(),
+            duration_ms=0,
+        )
+
+    monkeypatch.setattr(models, "complete", complete)
+    created = service.create(
+        CreateRequirement(name="Integration retry", repository_roots=tuple(map(str, projects)))
+    ).checkpoint
+    product = service.reply(
+        ReplyToProduct(
+            delivery_id=created.delivery_id,
+            expected_checkpoint_sha256=created.checkpoint_sha256,
+            message="Update both greetings",
+        )
+    ).checkpoint
+    blocked = service.approve(
+        ApproveProductSpec(
+            delivery_id=product.delivery_id,
+            expected_checkpoint_sha256=product.checkpoint_sha256,
+            approval_reference="integration-reader-test",
+        )
+    ).checkpoint
+    assert blocked.stage is JointStage.BLOCKED
+    assert all(child.checkpoint.stage is DeliveryStage.DONE for child in blocked.children)
+    if extra_attempt:
+        blocked = service.journal.append(
+            JointCheckpoint.seal(
+                {
+                    **blocked.to_wire(),
+                    "sequence": blocked.sequence + 1,
+                    "previous_checkpoint_sha256": blocked.checkpoint_sha256,
+                    "attempts": {**blocked.attempts, "integration": 3},
+                }
+            ),
+            expected=blocked.checkpoint_sha256,
+        )
+    original_integrate = service.backend.integrate
+
+    def integrate(checkpoint: JointCheckpoint) -> IntegrationEvidence:
+        observe("INTEGRATING")
+        return original_integrate(checkpoint)
+
+    def reject_rerun(*args: object, **kwargs: object) -> None:
+        raise AssertionError("completed repository Agents must not rerun")
+
+    monkeypatch.setattr(service.backend, "integrate", integrate)
+    monkeypatch.setattr(_ScriptedDeliveryAdapter, "run", reject_rerun)
+    command = ResumeProjectDelivery(delivery_id=blocked.delivery_id)
+    if extra_attempt:
+        proposed = host.resume_delivery(command)
+        assert isinstance(proposed, JointDeliveryResult)
+        proposal = proposed.integration_retry_proposal
+        assert proposal is not None
+        command = command.model_copy(
+            update={
+                "approved_plan_sha256": digest(proposal),
+                "approval_reference": "one-extra-integration-test",
+            }
+        )
+    result = host.resume_delivery(command).checkpoint
+    assert result.stage is JointStage.DONE
+    assert result.children == blocked.children
+    assert planning_revisions[0] == tuple(unit.base_revision for unit in result.scope.units)
+    assert planning_revisions[1] == tuple(c.checkpoint.candidate_revision for c in result.children)
+    assert planning_revisions[0] != planning_revisions[1]
+    observe("DONE")
+    assert observed == ["PLANNING", "INTEGRATING", "DONE"]
+
+    original_current = JointJournal.current
+    first, second = result.children
+    future_values = first.checkpoint.to_wire()
+    future_values.pop("checkpoint_sha256")
+    future_values.update(
+        sequence=first.checkpoint.sequence + 1,
+        previous_checkpoint_sha256=first.checkpoint.checkpoint_sha256,
+    )
+    corrupt_children = (
+        (
+            first.model_copy(update={"unit_id": second.unit_id}),
+            second.model_copy(update={"unit_id": first.unit_id}),
+        ),
+        (
+            first.model_copy(
+                update={"checkpoint": ProjectDeliveryCheckpoint.create(**future_values)}
+            ),
+            second,
+        ),
+        (first.model_copy(update={"unit_id": "unit_" + "f" * 16}), second),
+    )
+    for children in corrupt_children:
+        corrupt = JointCheckpoint.seal(
+            {
+                **result.to_wire(),
+                "stage": JointStage.PLANNING,
+                "plan": None,
+                "children": children,
+                "integration_retry_approval": None,
+            }
+        )
+
+        def current(
+            journal: JointJournal,
+            delivery_id: str,
+            captured: JointCheckpoint = corrupt,
+        ) -> JointCheckpoint | None:
+            if delivery_id == result.delivery_id:
+                return captured
+            return original_current(journal, delivery_id)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(JointJournal, "current", current)
+            with pytest.raises(TeamReadError):
+                reader.snapshot()
 
 
 @pytest.mark.mysql

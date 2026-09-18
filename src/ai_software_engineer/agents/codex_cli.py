@@ -199,6 +199,7 @@ class CodexCliAgentAdapter:
         self._environment = _filtered_environment(environment or os.environ)
         self._runner = runner or SubprocessCodexCommandRunner()
         self._initial_admission = initial_workspace_admission
+        self._initial_admission_consumed = False
         self._candidate_commit = candidate_commit_skill or GitCandidateCommitSkill(
             root, environment=environment
         )
@@ -265,11 +266,12 @@ class CodexCliAgentAdapter:
         )
         if initial_head != expected_head:
             raise CodexCliError("worktree HEAD does not match AgentRequest source revision")
-        if self._initial_admission is not None:
+        if self._initial_admission is not None and not self._initial_admission_consumed:
             try:
                 self._initial_admission.authorize(request, self._workspace_root)
             except Exception as error:
                 raise CodexCliError("recovery seed admission rejected") from error
+            self._initial_admission_consumed = True
         else:
             initial_changed = self._candidate_commit.changed_paths()
             if request.continuation_checkpoint_id is None:
@@ -285,7 +287,15 @@ class CodexCliAgentAdapter:
                     policy.authorize_write(path)
 
         prompt = self._prompt_builder.build(request)
-        compiled_prompt = _compile_prompt(request, prompt.to_messages())
+        qa_runner = _manager_provisioned_qa_runner(request, self._workspace_root)
+        compiled_prompt = _compile_prompt(
+            request,
+            prompt.to_messages(),
+            manager_qa_runner=qa_runner,
+        )
+        invocation_environment = dict(self._environment)
+        if qa_runner is not None:
+            invocation_environment["ASE_PROJECT_PYTEST"] = str(qa_runner)
         with tempfile.TemporaryDirectory(prefix="ase-codex-") as temporary:
             temporary_root = Path(temporary)
             schema_path = temporary_root / "output-schema.json"
@@ -315,7 +325,7 @@ class CodexCliAgentAdapter:
                     "-",
                 ),
                 cwd=self._workspace_root,
-                environment=self._environment,
+                environment=invocation_environment,
                 stdin=compiled_prompt,
                 timeout_seconds=float(request.timeout_seconds),
             )
@@ -524,7 +534,12 @@ def _artifact_schema(role: AgentRole) -> dict[str, object]:
     return strict_output_schema(cast(dict[str, object], schema))
 
 
-def _compile_prompt(request: AgentRequest, messages: Sequence[object]) -> str:
+def _compile_prompt(
+    request: AgentRequest,
+    messages: Sequence[object],
+    *,
+    manager_qa_runner: Path | None = None,
+) -> str:
     completion_reserve = _completion_reserve_seconds(request.timeout_seconds)
     execution_budget = (
         f"The hard execution limit is {request.timeout_seconds} seconds. "
@@ -537,12 +552,24 @@ def _compile_prompt(request: AgentRequest, messages: Sequence[object]) -> str:
     )
     output_bindings = json.dumps(
         {
+            "artifact_id": _expected_artifact_id(request),
             "task_id": request.task_id,
             "source_revision": request.source_revision,
             "context_manifest_id": request.context_manifest_id,
             "parent_artifact_ids": expected_parents,
             "producer_role": request.role.value,
             "producer_run_id": request.run_id,
+            "supersedes_by_kind": (
+                {
+                    kind.value: artifact_id
+                    for kind, artifact_id in sorted(
+                        request.expected_supersedes_by_kind.items(),
+                        key=lambda item: item[0].value,
+                    )
+                }
+                if request.expected_supersedes_by_kind is not None
+                else {}
+            ),
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -550,10 +577,19 @@ def _compile_prompt(request: AgentRequest, messages: Sequence[object]) -> str:
     artifact_instruction = (
         "Copy these exact envelope bindings into the Artifact: "
         f"OUTPUT_BINDINGS={output_bindings}. "
+        "Set Artifact.supersedes to the value selected by the Artifact kind from "
+        "OUTPUT_BINDINGS.supersedes_by_kind, including null. "
         "Every referenced evidence ID must exist exactly once in the top-level evidence array. "
         "Keep artifact, parent, evidence, finding, criterion, and test identities unique within "
         "their scopes. Use provisional integrity with sha256 set to 64 zeroes, validated=false, "
         "and validated_at=null; the platform owns final validation and sealing. "
+    )
+    qa_runner_instruction = (
+        "Manager provisioned the exact QA runner "
+        f"`{manager_qa_runner}` in `ASE_PROJECT_PYTEST`. Use that absolute executable from the "
+        "current candidate worktree before declaring the verifier environment unavailable. "
+        if manager_qa_runner is not None
+        else ""
     )
     role_instruction = {
         AgentRole.ORCHESTRATOR: "Produce only the plan Artifact; do not modify the repository.",
@@ -574,6 +610,17 @@ def _compile_prompt(request: AgentRequest, messages: Sequence[object]) -> str:
         ),
         AgentRole.QA: (
             "Independently test the exact candidate without modifying it; return only qa-report. "
+            + qa_runner_instruction
+            + "Before declaring the verifier environment unavailable, read the registered "
+            "repository "
+            "root from the supplied Task/context. If that root has an existing project-local "
+            "`.venv/bin/pytest`, run that absolute executable from the current candidate worktree "
+            "instead of creating a new environment or resolving dependencies from the network. "
+            "The external virtual environment is read-only support tooling; tests and imports must "
+            "still target the exact candidate worktree. "
+            "Run only focused tests mapped to the Task acceptance criteria by default. Do not run "
+            "the repository-wide test suite unless the approved execution plan explicitly requires "
+            "that suite; broader optional regression remains the human release gate. "
             "QA status PASS requires every criterion and test to PASS and forbids MAJOR or "
             "BLOCKER findings; otherwise use FAIL. Use test status ERROR only when the verifier "
             "environment or test tool could not establish a code verdict. Candidate-caused test "
@@ -596,6 +643,40 @@ def _compile_prompt(request: AgentRequest, messages: Sequence[object]) -> str:
         "prompt are binding. Never merge, push, deploy, or access unrelated paths. "
         f"{execution_budget}{artifact_instruction}{role_instruction}\nPROMPT_MESSAGES={payload}"
     )
+
+
+def _manager_provisioned_qa_runner(request: AgentRequest, workspace_root: Path) -> Path | None:
+    """Resolve trusted project test tooling without mutating the detached QA worktree."""
+    if request.role is not AgentRole.QA:
+        return None
+    try:
+        common_dir = Path(
+            _git(
+                workspace_root,
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-common-dir",
+            )
+        )
+        if not common_dir.is_absolute():
+            common_dir = workspace_root / common_dir
+        common_dir = common_dir.resolve(strict=True)
+    except (CodexCliError, OSError):
+        return None
+    if common_dir.name != ".git" or common_dir.is_symlink():
+        return None
+    project_root = common_dir.parent
+    virtual_environment = project_root / ".venv"
+    runner = virtual_environment / "bin" / "pytest"
+    if (
+        virtual_environment.is_symlink()
+        or not virtual_environment.is_dir()
+        or runner.is_symlink()
+        or not runner.is_file()
+        or not os.access(runner, os.X_OK)
+    ):
+        return None
+    return runner
 
 
 def _validation_location(error: ValidationError) -> tuple[str | None, str | None]:
@@ -658,7 +739,19 @@ def _normalize_producer(
             "run_id": request.run_id,
         }
     )
-    return artifact.model_copy(update={"producer": producer})
+    return artifact.model_copy(
+        update={
+            "artifact_id": _expected_artifact_id(request),
+            "producer": producer,
+        }
+    )
+
+
+def _expected_artifact_id(request: AgentRequest) -> str:
+    """Bind generated Artifact identity to the unique admitted Agent Run."""
+
+    identity = hashlib.sha256(request.run_id.encode("utf-8")).hexdigest()[:32]
+    return f"art_{request.role.value}_{identity}"
 
 
 def _require_full_revision(value: str) -> str:

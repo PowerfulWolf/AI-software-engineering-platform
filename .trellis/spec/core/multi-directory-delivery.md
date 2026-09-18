@@ -61,8 +61,10 @@ ase request resume DELIVERY_ID
   执行。每条接口至少一个 check 同时消费 producer 和全部 consumers；证据绑定精确 plan/candidate set。
 - 测试 argv 必须同时匹配 RepositoryProfile allowlist 和支持的测试前缀，禁止 shell/inline code、
   install/deploy、inspection 替代测试、常见 help/collect-only/skip-tests 参数；明确零测试的成功退出拒绝。
-- cwd 是 check.unit_id 的候选根；环境只有 PATH、PYTHONDONTWRITEBYTECODE 和
-  `ASE_UNIT_<uppercase 16hex unit suffix>`（对应候选路径）。不传 Host secrets；输出脱敏、限长、有超时。
+- cwd 是 check.unit_id 的候选根；环境包含 PATH、PYTHONDONTWRITEBYTECODE 和
+  `ASE_UNIT_<uppercase 16hex unit suffix>`（对应候选路径）。直接 Python/pytest 命令优先使用目标
+  仓库既有 `.venv/bin`，并仅把候选 `src`/根目录放入 PYTHONPATH；不继承 Host PYTHONPATH 或
+  secrets，不自动安装依赖。输出脱敏、限长、有超时。
 - 每条命令后检查全部候选 HEAD/clean；仅清理未变化 worktree，保留异常现场。这是应用 guard，
   不替代 OS/container sandbox；只运行可信项目代码，测试的业务充分性仍依赖设计和独立 QA/Review。
 
@@ -88,11 +90,27 @@ ase request resume DELIVERY_ID
 - 没有可执行的联合验收、命令失败、仓库不支持或事实漂移均不得宣称 DONE。
 - journal 使用不可变 hash-chain、CAS 和进程锁；重放已持久化完成阶段不重复模型调用或交付。
 - 原生子交付完成、父记录未保存的崩溃窗口由确定性子 ID 恢复，复用候选，不再次运行 Coder。
+- 已有 child 的 `deliver(checkpoint, unit_id)` 必须经 `delivery_runtime()` 重建当前原生
+  checkpoint 精确绑定的 preparation/source revision，再调用原生 `status()`。恢复可能已经采用
+  新 preparation，不能重新用父需求最初的 preparation 调用 `start()`。DONE 观察值直接追加回
+  父 journal 并进入候选集验收，不重跑该 child 的 Coder/QA/Reviewer；BLOCKED/FAILED 仍保留，
+  不在此入口绕过恢复审批。没有 child 观察值时继续使用确定性 `start()` 恢复首次派发窗口。
 - Product 最多 20 次、Design/Plan/Integration 各 3 次调用，调用前记录尝试。模型响应到文档落盘
   的窗口可能重复计费；崩溃后的测试可能重跑，不承诺 exactly-once。
 - 子仓 BLOCKED/FAILED 或联合测试非零：保留候选与证据，父需求 BLOCKED。当前 checkout、规范或
   知识变化只影响新需求；旧需求继续使用已封存准备事实和代码基线。不自动扩大已批准范围或引入修复
   DAG。旧需求自己的 retained baseline 漂移必须 fail closed，不能覆盖历史。
+- 联合验收命令无法启动、超时或报告零测试时，Production backend 必须把稳定的失败类别封存为
+  `CommandResult`；不得让 Manager facade 把异常降级为无证据的 `MANAGER_FAILURE`。父需求随后进入
+  `BLOCKED`，失败命令和候选集合仍可读。
+- `BLOCKED` 且带失败 `integration` evidence 的继续交付是唯一的联合计划替代入口：平台追加一个
+  保留旧 plan/evidence 的 `PLANNING` checkpoint，Planner 在原有有界预算内生成完整新计划。Journal
+  只允许这个精确前置条件清空当前 plan；旧计划永远保留在历史中。新计划通过所有验证后，已完成
+  child 不重跑，父需求重新进入 `INTEGRATING`。
+- 重规划 checkpoint 在 Planner 运行前可能暂时为 `PLANNING + plan=null`，但仍保留已完成 child。
+  该窗口的 reconcile 必须直接读取并校验 child 原生 journal 的精确历史前缀；不得构造要求当前
+  plan 的 `DerivedStageInputs`，也不得因此让只读 status 失败。只有新 plan 封存后，后续 child
+  runtime 才重新绑定新的联合 plan。
 - 不自动 merge/push，不承诺跨仓库原子提交；dirty worktree 保留，不强制删除。
 
 ## 5. Good / Base / Bad Cases
@@ -101,12 +119,26 @@ ase request resume DELIVERY_ID
 - Base：一个目录使用同一 request 入口；纯文字 Product 对话保持兼容；参考目录不创建无意义 Coder Task。
 - Bad：分别发起产品会话、让 Product/Coder 读取不断前进的主 checkout、把截图转成未校验路径塞进
   prompt、先保存用户回复再检查 retained baseline，或用两个单仓 PASS 冒充接口兼容验证。
+- Recovery Good：父 child 仍指向旧 BLOCKED 前缀，而原生链已基于另一个获批 preparation 完成；
+  `reconcile` 和 `deliver` 使用同一 `delivery_runtime`，取回最新 DONE，父继续 integration。
+  Recovery Bad：preflight 用当前 child runtime 通过后，execution 又从父 preparation 新建 runtime，
+  将合法恢复误报为 `delivery preparation checkpoint drifted`。
+- Integration Recovery Good：测试可执行文件缺失时先封存 `command could not start` 和候选集合，
+  父需求显示 BLOCKED；用户继续后 Planner 产生引用候选中已有测试的新计划，子仓库仍保持原
+  Reviewer candidate。
+- Integration Recovery Bad：捕获异常后直接重跑同一错误 argv、覆盖旧 plan/evidence，或把成功但零
+  测试的退出当作联合 PASS。
 
 ## 6. Tests Required
 
 多目录/同仓库多模块/非相邻目录、重复和 symlink、越界写路径、reference-only、stale approval、
 重新启动恢复、候选集漂移、部分成功、失败集成验收、单目录入口回归；生产桥接另用离线
 structured provider + 真实 Git worktree + MySQL 验证，不消耗真实模型额度。
+
+`test_joint_scope_recovery_targets_current_preparation_after_main_advances` 覆盖恢复再次中断与恢复
+完成两种结果。完成分支必须证明父交付 DONE、集成证据存在、采用获批的新 preparation，且只有
+未完成仓库运行角色。重复 resume 保留相同候选和 checkpoint，不增加角色调用。真实运行检查
+应比较父/子 journal 前后哈希，只观察已完成 child，不代替用户执行联合集成。
 
 `test_requirement_product_keeps_its_source_baseline_after_checkout_advances` 必须断言主 checkout 前进后
 旧 Requirement 仍可继续、Product 收到 detached baseline root 且读取旧内容。
@@ -116,6 +148,9 @@ reconcile fail closed。reply/reconcile 拒绝时 current checkpoint 不得增�
 对应 `test_directory_scope.py`、`test_joint_contracts.py`、`test_team_workspace.py`、
 `test_team_host.py`、`test_requirement_attachments.py` 与 `tests/e2e/test_joint_delivery.py`。五份 joint/request canonical Schema
 必须与 Pydantic 完全一致。全量 MySQL 回归不可由独立 E2E 或 skipped suite 替代。
+
+联合验收恢复还必须覆盖：启动失败、超时、非零退出、零测试成功、失败 evidence 脱敏、
+`BLOCKED + integration evidence → PLANNING` 的唯一计划替代，以及重规划后不重复执行 DONE child。
 
 ## 7. Wrong vs Correct
 
@@ -161,7 +196,9 @@ Codex CLI 的第一个 baseline root 通过 `-C` 绑定，其余 baseline roots 
 - 每个 Requirement/Repository 在
   `<platform_root>/worktrees/requirements/<delivery_id>/<unit_id>/.../reviewer-attempt-01`
   拥有确定性 detached baseline；不同 Requirement 不共享该目录。
-- Product/Designer/Planner 只读取这些 retained baselines。知识、规范、RepositoryProfile 和
+- Product/Designer/首次 Planner 只读取这些 retained baselines；保留 DONE child 的联合验收
+  重规划读取候选 SHA 对应的只读 worktree，reference-only unit 仍读取原 baseline。
+  知识、规范、RepositoryProfile 和
   `PrepareProjectResult` 使用 Requirement checkpoint 中已封存的版本。
 - 原生子 Task 的 `Task.base_ref` 必须等于该 unit 的 `base_revision`，不能在 dispatch 时重新读取主
   checkout HEAD。Coder 仍拥有独立可写 Task branch/worktree；QA/Reviewer 仍验证 candidate SHA。
@@ -351,6 +388,75 @@ Root cause (B/D): semantic path rejection lacked a safe service feedback contrac
 repair did not cover this independent validator. Prevention is typed diagnostics plus service/journal
 tests, not relaxing the validator. Other semantic failures remain fail-closed pending explicit contracts.
 
+## Scenario: one audited supplemental integration attempt
+
+### 1. Scope / Trigger
+
+Three integration attempts were spent, failed command evidence remains, and every modified child
+is DONE. This recovers infrastructure/plan failures after native Review; it does not approve code.
+
+### 2. Signatures
+
+`JointDeliveryResult.integration_retry_proposal: IntegrationRetryProposal | None` contains
+`checkpoint_sha256`, reviewed child `candidates`, and `next_attempt=4`.
+`resume(ResumeProjectDelivery(approved_plan_sha256=digest(proposal), approval_reference=...))`
+appends `JointCheckpoint.integration_retry_approval` with the proposal, reference and timestamp.
+Console exports `approval.kind=joint_integration` and the browser returns the exact digest through
+the existing `CONTINUE_DELIVERY` approval seam.
+
+### 3. Contracts
+
+- Only BLOCKED/PLANNING + three spent attempts + failed integration evidence + all DONE children
+  can propose this opportunity. Merely requesting the proposal writes nothing and calls no models.
+- Exact digest approval is required; lock/CAS rejects stale proposals. The original three attempts,
+  plan, evidence and child histories are never erased. Approval cannot be replaced or removed,
+  candidate identities cannot change, and integration attempts cannot decrease afterwards.
+- One extra execution raises the limit to four; it does not reset Planner's original three-call
+  budget. A failed/interrupted fourth execution cannot automatically become a fifth. CLOSED remains
+  closed, DONE remains immutable, and no native Coder/QA/Reviewer is re-executed.
+- Planner recovery reads clean detached candidate worktrees for DONE children and the sealed baseline
+  for reference-only units. It must preserve full acceptance/interface coverage and select actual
+  candidate tests. No source edits, synthesized tests or relaxed command policies are permitted.
+- `validate_plan` rejects explicit pytest `.py[::node]` selectors absent from the candidate tree or
+  escaping the repository before accepting the replacement plan. `IntegrationCommandError` persists
+  only safe reason/index/argv hash. Initial planning before implementation is unaffected.
+- Existing Python tooling may be borrowed from the target repository's nonsymlink `.venv/bin`.
+  Candidate paths, not the mutable main checkout, own cwd/imports. No credentials or auto-install.
+
+### 4. Validation & Error Matrix
+
+| Input | Result |
+|---|---|
+| Exhausted failed integration, exact reviewed children | Stable proposal, no execution |
+| Stale proposal digest / candidate drift | Reject before approval or test execution |
+| Exact human approval | Append audit checkpoint; at most attempt four |
+| Fourth failure / repeated continue | Keep BLOCKED and evidence; no extra model/test run |
+| Approval removal or attempt reset | Journal successor validation rejects |
+| CLOSED resume | Remains CLOSED; explicit restart still required |
+| Pytest file only on newer main or nonexistent | Reject plan with safe durable feedback |
+
+### 5. Good / Base / Bad Cases
+
+Good: repair environment, approve once, replan against reviewed candidates, verify integration.
+Base: a request below the default budget follows existing bounded recovery.
+Bad: clear counters or mark native/parent DONE to make the UI look successful.
+
+### 6. Tests Required
+
+`test_failed_integration_replans_without_redelivering_done_children` asserts proposal idempotency,
+exact approval, retained history, success/failure, no fifth run and no counter reset.
+`test_integration_uses_project_tooling_and_imports_candidate_sources` runs a real isolated command;
+`test_integration_pytest_paths_are_bound_to_candidate` excludes newer-main/missing tests.
+`test_joint_reader_preserves_child_ownership_through_integration_replanning` uses real Git/MySQL and
+scripted providers to prove Planner candidate roots, full recovery, and read-only ownership.
+Console/schema tests plus `ui.test.cjs` assert exact approval digest submission from PLANNING.
+
+### 7. Wrong vs Correct
+
+Wrong: edit `attempts.integration=0` in the production journal and repeat the same missing command.
+Correct: retain facts, fix tooling/context, publish a candidate-bound proposal, record explicit
+approval, then execute a bounded test through the unchanged evidence/verdict guards.
+
 ## 12. Requirement replacement, close/restart and logical retirement
 
 ### 1. Scope / Trigger
@@ -478,3 +584,72 @@ retirements.retire(
     old, reason="replaced", replacement_delivery_id=replacement.checkpoint.delivery_id
 )
 ```
+
+## Scenario: single-repository acceptance versus joint integration
+
+### 1. Scope / Trigger
+
+Applies after every modified native child is DONE. The number of selected repositories determines
+the acceptance path; a one-repository Requirement is not a degenerate multi-repository integration.
+
+### 2. Signatures
+
+```python
+class SingleRepositoryAcceptance(DomainModel):
+    unit_id: UnitId
+    child_checkpoint_sha256: Digest
+    candidate_revision: NonEmptyStr
+    product_spec_sha256: Digest
+    acceptance_ids: tuple[NonEmptyStr, ...]
+    native_evidence_references: tuple[NonEmptyStr, ...]
+
+ProductionProjectDeliveryBackend.accepted_delivery_evidence(
+    ProjectDeliveryCheckpoint,
+) -> tuple[str, ...]
+ProductionJointBackend.accept_single_repository(
+    JointCheckpoint,
+) -> SingleRepositoryAcceptance
+JointJournal.history(delivery_id) -> tuple[JointCheckpoint, ...]
+```
+
+### 3. Contracts
+
+- A one-repository plan may use `integration_checks=()`. The native delivery already requires the
+  complete approved criteria, QA PASS and Reviewer APPROVE for one exact candidate.
+- Parent DONE requires an immutable proof bound to the only scope unit, exact child checkpoint,
+  candidate revision, ProductSpec digest and complete ordered acceptance-ID set.
+- Production acceptance reconciles the native checkpoint and reads its sealed terminal artifact
+  chain or candidate-verification plan/completion. A parent `DONE` label alone is never evidence.
+- A retained `PLANNING + plan=null` checkpoint may recover its last approved plan from the same
+  append-only parent history only to rebuild the read-only native runtime. It does not call Planner,
+  reset attempts, replace the child or rewrite the journal.
+- Two or more repositories still require non-empty joint checks covering every acceptance ID,
+  modified unit and cross-repository interface. They reach DONE only after those commands pass on
+  the complete pinned candidate set.
+
+### 4. Validation & Error Matrix
+
+| State | Required result |
+|---|---|
+| one repository, exact native DONE + accepted evidence | append single proof and parent DONE |
+| one repository, retained failed integration history | preserve failure/attempts; verify native evidence and finish |
+| one repository, missing or stale candidate/evidence | fail closed; no parent mutation |
+| multiple repositories, empty integration checks | reject plan |
+| multiple repositories, incomplete coverage or failed command | BLOCKED; retain candidates and evidence |
+| repeated resume after parent DONE | no execution; completed journal is immutable |
+
+### 5. Good / Base / Bad Cases
+
+- Good: the only native child has exact QA/Review evidence; Manager appends the bound proof and
+  completes the parent without invoking another Agent.
+- Base: a historical single-repository checkpoint is waiting in integration recovery; Manager
+  reconstructs its approved validation context and preserves all old attempt/failure records.
+- Bad: treat child `DONE` as sufficient without reading native evidence, fabricate a successful
+  integration command, or allow the single-repository shortcut for a multi-repository scope.
+
+### 6. Tests Required
+
+`tests/manager/test_single_repository_acceptance.py` covers legacy recovery without Agent calls,
+candidate-proof drift and the unchanged multi-repository check requirement. Production-backend,
+schema and browser tests cover native terminal evidence, generated schema parity and final-delivery
+stage presentation.

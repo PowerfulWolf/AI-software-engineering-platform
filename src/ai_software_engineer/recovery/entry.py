@@ -10,10 +10,14 @@ from typing import cast
 
 from pydantic import TypeAdapter, ValidationError
 
-from ai_software_engineer.config import ModelProviderKind, ProductionConfig
+from ai_software_engineer.config import (
+    ModelProviderKind,
+    ProductionConfig,
+    ProviderRouteConfig,
+)
 from ai_software_engineer.context import ContextSource, FileContextStore
-from ai_software_engineer.domain import AgentRole, Task, TaskStatus
-from ai_software_engineer.git import GitWorktreeManager, WorktreeSpec
+from ai_software_engineer.domain import AgentRole, Task, TaskStatus, TeamRole
+from ai_software_engineer.git import GitWorktreeManager, WorktreeNotFound, WorktreeSpec
 from ai_software_engineer.manager.delivery_checkpoint import ProjectDeliveryCheckpoint
 from ai_software_engineer.manager.dispatch import RecoveryDispatchRecord
 from ai_software_engineer.manager.mysql_dispatch_authority import (
@@ -30,6 +34,8 @@ from ai_software_engineer.manager.production_delivery import (
     ConfiguredDeliveryRouteAdapterFactory,
     DeliveryRouteAdapterFactory,
 )
+from ai_software_engineer.multi_directory.production import approved_joint_context_source
+from ai_software_engineer.multi_directory.store import JointJournal
 from ai_software_engineer.orchestration import RetryResult
 from ai_software_engineer.planning import FileExecutionPlanStore
 from ai_software_engineer.product import FileProductRecordStore
@@ -47,6 +53,7 @@ from ai_software_engineer.recovery.models import (
     RecoveryScopeSupplement,
     SafeText,
     VerifiedRecoveryDecision,
+    digest,
 )
 from ai_software_engineer.recovery.native import NativeRecoverySourceReader
 from ai_software_engineer.recovery.scope import (
@@ -72,6 +79,18 @@ class NativeRecoveryExecution:
     plan: RecoveryPlan
     dispatch: RecoveryDispatchRecord
     delivery: RetryResult
+
+
+def _require_seed_recovery_route(config: ProductionConfig) -> ProviderRouteConfig:
+    """Select one policy-ordered Codex route for the approved recovery execution."""
+    routes = tuple(
+        route
+        for route in config.routes_for(TeamRole.CODER)
+        if route.kind is ModelProviderKind.CODEX_CLI
+    )
+    if not routes:
+        raise RecoveryRejected("seed recovery requires an explicit Coder Codex route")
+    return routes[0]
 
 
 def _rebind_missing_write_paths(
@@ -121,6 +140,53 @@ def _repository_sidecar(config: ProductionConfig, repository_id: str) -> Path:
     )
     _, repository = team.project_registry().locate_repository(repository_id)
     return repository.root
+
+
+def _approved_parent_context(
+    config: ProductionConfig, plan: RecoveryPlan
+) -> tuple[ContextSource, ...]:
+    """Rebuild exact joint context from its durable approved parent checkpoint.
+
+    A remediation Coder context may contain only the verification verdict and patch.
+    Recovery therefore cannot assume the immediately failed context still embeds the
+    original parent payload.  The parent IDs sealed into RecoverySource identify the
+    authoritative joint checkpoint from which the canonical context is reconstructed.
+    """
+    parent_id = plan.source.parent_delivery_id
+    parent_sha256 = plan.source.parent_checkpoint_sha256
+    if parent_id is None:
+        return ()
+    if parent_sha256 is None:
+        raise RecoveryRejected("joint recovery source is incomplete")
+    team = TeamWorkspace.initialize(
+        config.platform_root,
+        team_id=config.team_id,
+        name=config.team_name,
+        read_only=True,
+    )
+    project, repository = team.project_registry().locate_repository(plan.source.scope.repository_id)
+    if str(repository.repository_root) != plan.source.scope.repository_root:
+        raise RecoveryRejected("joint recovery repository binding changed")
+    parent = JointJournal(project.requirements_root, read_only=True).current(parent_id)
+    if (
+        parent is None
+        or parent.checkpoint_sha256 != parent_sha256
+        or parent.team_id != team.manifest.team_id
+        or parent.team_manifest_sha256 != team.manifest.manifest_sha256
+        or parent.project_id != project.manifest.project_id
+        or parent.project_manifest_sha256 != project.manifest.manifest_sha256
+    ):
+        raise RecoveryRejected("approved joint parent checkpoint changed")
+    children = tuple(
+        child
+        for child in parent.children
+        if child.checkpoint.delivery_id == plan.source.scope.delivery_id
+        and child.checkpoint.repository_id == plan.source.scope.repository_id
+        and child.checkpoint.repository_root == plan.source.scope.repository_root
+    )
+    if len(children) != 1:
+        raise RecoveryRejected("joint recovery unit is missing or ambiguous")
+    return (approved_joint_context_source(parent, children[0].unit_id),)
 
 
 def open_recovery_plan(
@@ -243,14 +309,20 @@ class NativeRecoveryEntry:
             failed_context_id=failed_context_id,
         )
         manager = self._manager(scope)
-        old = manager.recover(
-            WorktreeSpec(
-                task_id=original.task.id,
-                role=AgentRole.CODER,
-                attempt=1,
-                source_revision=original.source.base_revision,
-            )
+        source_spec = WorktreeSpec(
+            task_id=original.task.id,
+            role=AgentRole.CODER,
+            attempt=1,
+            source_revision=original.worktree_revision,
         )
+        restored_clean_source = False
+        try:
+            old = manager.recover(source_spec)
+        except WorktreeNotFound:
+            old = manager.restore_clean_coder(source_spec)
+            restored_clean_source = True
+        if restored_clean_source:
+            input_mode = "coder_reapply"
         supplement = inspect_recovery_scope_supplement(manager, old, original)
         if supplement is not None:
             if (
@@ -270,7 +342,10 @@ class NativeRecoveryEntry:
             raise RecoveryRejected("recovery scope approval does not match current changed paths")
         source_permissions = expanded_recovery_permissions(original.permissions, supplement)
         capture = manager.capture_changes(
-            old, source_permissions, denied_paths=original.denied_paths
+            old,
+            source_permissions,
+            denied_paths=original.denied_paths,
+            base_revision=original.source.base_revision,
         )
         constraints = original.task.constraints
         allowed_paths = constraints.allowed_paths if constraints is not None else ()
@@ -329,14 +404,20 @@ class NativeRecoveryEntry:
             scope
         )
         manager = self._manager(scope)
-        old = manager.recover(
-            WorktreeSpec(
-                task_id=original.task.id,
-                role=AgentRole.CODER,
-                attempt=1,
-                source_revision=original.source.base_revision,
+        try:
+            old = manager.recover(
+                WorktreeSpec(
+                    task_id=original.task.id,
+                    role=AgentRole.CODER,
+                    attempt=1,
+                    source_revision=original.worktree_revision,
+                )
             )
-        )
+        except WorktreeNotFound:
+            # A clean terminal provider failure is removed by normal workspace cleanup.
+            # Proposal performs the bounded branch-identity repair; scope inspection has
+            # no omitted changed paths when no worktree evidence remains.
+            return None
         return inspect_recovery_scope_supplement(manager, old, original)
 
     def propose_delivery(
@@ -446,15 +527,14 @@ class NativeRecoveryEntry:
         """One fresh serial attempt. Uncertain prior provider invocation requires inspection."""
         if not self.config.live_model_execution:
             raise RecoveryRejected("live model execution is disabled")
-        routes = self.config.enabled_routes()
-        if len(routes) != 1 or routes[0].kind is not ModelProviderKind.CODEX_CLI:
-            raise RecoveryRejected("seed recovery currently requires one explicit Codex route")
+        recovery_route = _require_seed_recovery_route(self.config)
         store, plan = self.open_plan(path)
         with store.execution_lock():
-            return self._execute(store, plan, route_factory)
+            return self._execute(store, plan, route_factory, recovery_route)
 
     def resume_execution(self, path: Path) -> NativeRecoveryExecution:
         """Execute an unconsumed recovery or adopt its already-terminal Task."""
+        recovery_route = _require_seed_recovery_route(self.config)
         store, plan = self.open_plan(path)
         try:
             store.get_invocation(plan.plan_sha256)
@@ -481,6 +561,7 @@ class NativeRecoveryEntry:
                 facts.original.product,
                 facts.original.design,
                 facts.original.plan,
+                route_scope=(recovery_route,),
             )
         return NativeRecoveryExecution(
             plan=plan,
@@ -510,6 +591,7 @@ class NativeRecoveryEntry:
         store: FileRecoveryStore,
         plan: RecoveryPlan,
         route_factory: Callable[[RecoverySeedService], DeliveryRouteAdapterFactory] | None,
+        recovery_route: ProviderRouteConfig,
     ) -> RetryResult:
         _, builder, sealing = self._services(store, plan, None)
         sealed = sealing.require_current(plan.plan_sha256)
@@ -550,6 +632,22 @@ class NativeRecoveryEntry:
             planner_records=FileExecutionPlanStore(sidecar / "state/planning"),
         )
         agents, policy = self.backend._workforce()
+        selected_routes = tuple(
+            route
+            for route in policy.routes
+            if route.provider == recovery_route.provider
+            and route.model == recovery_route.model
+            and route.reasoning_effort == recovery_route.reasoning_effort
+        )
+        if len(selected_routes) != 1:
+            raise RecoveryRejected("selected recovery route is absent or ambiguous in policy")
+        policy = policy.model_copy(update={"routes": selected_routes, "role_routes": ()})
+        policy = policy.model_copy(
+            update={
+                "version": "v0.1-recovery-"
+                + digest(policy.model_dump(mode="json", exclude={"version"}))
+            }
+        )
         workforce = FileTeamWorkforceStore(self.backend._organization)
         saved_agents = tuple(workforce.put_agent(a) for a in agents)
         policy = workforce.put_policy(policy, versioned=True)
@@ -585,20 +683,7 @@ class NativeRecoveryEntry:
             contexts=contexts,
         )
         seed.seed(binding.worktree)
-        old_context = contexts.get(plan.source.failed_context_id)
-        extra = tuple(
-            ContextSource(
-                source_id="joint.approved_context",
-                uri=s.uri,
-                content=s.content,
-                priority=s.priority,
-                required=True,
-            )
-            for s in old_context.sections
-            if s.name == "source:joint.approved_context"
-        )
-        if plan.source.parent_delivery_id is not None and not extra:
-            raise RecoveryRejected("recovery lost approved joint context")
+        extra = _approved_parent_context(self.config, plan)
         # Test factories must explicitly honor the same admission port; real Codex receives it here.
         factory = (
             route_factory(seed)
@@ -613,4 +698,5 @@ class NativeRecoveryEntry:
             draft.facts.original.plan,
             route_adapters=factory,
             extra_context=(*extra, *recovery_context_sources(plan)),
+            route_scope=(recovery_route,),
         )

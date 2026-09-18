@@ -159,7 +159,7 @@ CONSOLE_INTENT_ADAPTER: TypeAdapter[ConsoleIntent] = TypeAdapter(ConsoleIntent)
 
 
 class ConsoleApprovalRequest(DomainModel):
-    kind: Literal["candidate_verification", "coder_recovery", "coder_scope"]
+    kind: Literal["candidate_verification", "coder_recovery", "coder_scope", "joint_integration"]
     plan_sha256: CheckpointDigest
     title: NonEmptyStr
     facts: tuple[NonEmptyStr, ...]

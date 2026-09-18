@@ -14,7 +14,11 @@ from ai_software_engineer.agents import (
 )
 from ai_software_engineer.artifacts import FileArtifactStore, artifact_digest
 from ai_software_engineer.domain import AgentDefinition, AgentRole, Artifact, TaskStatus
-from ai_software_engineer.domain.artifact import Finding
+from ai_software_engineer.domain.artifact import (
+    Finding,
+    ImplementationReportArtifact,
+    QaReportArtifact,
+)
 from ai_software_engineer.domain.enums import FindingSeverity, ReviewVerdict
 from ai_software_engineer.orchestration import (
     AgentRunFailed,
@@ -25,7 +29,10 @@ from ai_software_engineer.recovery.models import RecoveryRejected, digest
 from ai_software_engineer.recovery.verification import (
     CandidateVerificationRunner,
 )
-from ai_software_engineer.recovery.verification_records import CandidateVerificationInputs
+from ai_software_engineer.recovery.verification_records import (
+    AcceptedQaReport,
+    CandidateVerificationInputs,
+)
 from ai_software_engineer.store import SqliteTaskRepository
 from tests.domain.factories import make_review_artifact
 from tests.orchestration.test_output_parent_contract import AllInputsAsParentsAdapter
@@ -104,6 +111,126 @@ def test_verifies_original_candidate_without_changing_terminal_history(tmp_path:
         with pytest.raises(RecoveryRejected):
             verifier.verify_candidate(inputs)
         assert len(adapter.requests) == 2
+    finally:
+        repository.close()
+
+
+class ReviewerProviderFailureAdapter(ScriptedAdapter):
+    def run(self, request: AgentRequest) -> AgentResult:
+        if request.role is not AgentRole.REVIEWER:
+            return super().run(request)
+        self.requests.append(request)
+        return AgentResult(
+            run_id=request.run_id,
+            task_id=request.task_id,
+            role=request.role,
+            attempt=request.attempt,
+            source_revision=request.source_revision,
+            context_manifest_id=request.context_manifest_id,
+            status=AgentRunStatus.FAILED,
+            error=AgentFailure(
+                code=AgentErrorCode.PROVIDER_ERROR,
+                message="offline Reviewer provider failure",
+                transient=True,
+            ),
+        )
+
+
+def setup_reviewer_only_verification(
+    tmp_path: Path,
+) -> tuple[
+    CandidateVerificationInputs,
+    SqliteTaskRepository,
+    FileArtifactStore,
+    QaReportArtifact,
+]:
+    task, repository, delivery = _runner(tmp_path, ReviewerProviderFailureAdapter())
+    blocked = delivery.run_task(task.id)
+    artifacts = FileArtifactStore(tmp_path / "artifacts")
+    history = artifacts.list_for_task(task.id)
+    plan = artifacts.get("art_plan_001")
+    implementation = artifacts.get("art_impl_001")
+    assert isinstance(implementation, ImplementationReportArtifact)
+    qa = next(artifact for artifact in history if isinstance(artifact, QaReportArtifact))
+    inputs = CandidateVerificationInputs(
+        task_id=task.id,
+        task_revision=repository.current_revision(task.id),
+        task_sha256=digest(repository.get(task.id).to_wire()),
+        plan_id=plan.artifact_id,
+        plan_sha256=artifact_digest(plan),
+        implementation_id=implementation.artifact_id,
+        implementation_sha256=artifact_digest(implementation),
+        candidate_revision=implementation.content.commit_sha,
+        accepted_qa=AcceptedQaReport(
+            artifact_id=qa.artifact_id,
+            artifact_sha256=artifact_digest(qa),
+        ),
+        prior_run_ids=tuple(sorted(artifact.producer.run_id for artifact in history)),
+    )
+    assert blocked.task.status is TaskStatus.BLOCKED
+    return inputs, repository, artifacts, qa
+
+
+@pytest.mark.parametrize("new_qa_assignment", [False, True])
+def test_reuses_terminal_qa_pass_and_invokes_only_reviewer(
+    tmp_path: Path, new_qa_assignment: bool
+) -> None:
+    inputs, repository, artifacts, qa = setup_reviewer_only_verification(tmp_path)
+    adapter = ScriptedAdapter()
+    definitions = _definitions()
+    if new_qa_assignment:
+        definitions[AgentRole.QA] = definitions[AgentRole.QA].model_copy(
+            update={"id": "agent_qa_replacement"}
+        )
+    verifier = CandidateVerificationRunner(
+        repository=repository,
+        artifact_store=artifacts,
+        context_builder=FileRunContextBuilder(tmp_path / "project"),
+        agent_adapter=adapter,
+        agent_definitions=definitions,
+        admission=Admission(),
+        clock=_clock,
+    )
+    try:
+        result = verifier.verify_candidate(inputs)
+
+        assert result.verified
+        assert result.qa == qa
+        assert result.review is not None
+        assert result.review.parent_artifact_ids == (qa.artifact_id,)
+        assert [request.role for request in adapter.requests] == [AgentRole.REVIEWER]
+    finally:
+        repository.close()
+
+
+@pytest.mark.parametrize("case", ["missing", "digest_drift"])
+def test_terminal_qa_pass_drift_refuses_before_provider(tmp_path: Path, case: str) -> None:
+    inputs, repository, artifacts, _ = setup_reviewer_only_verification(tmp_path)
+    changed = (
+        inputs.model_copy(update={"accepted_qa": None})
+        if case == "missing"
+        else inputs.model_copy(
+            update={
+                "accepted_qa": inputs.accepted_qa.model_copy(update={"artifact_sha256": "f" * 64})
+                if inputs.accepted_qa is not None
+                else None
+            }
+        )
+    )
+    adapter = ScriptedAdapter()
+    verifier = CandidateVerificationRunner(
+        repository=repository,
+        artifact_store=artifacts,
+        context_builder=FileRunContextBuilder(tmp_path / "project"),
+        agent_adapter=adapter,
+        agent_definitions=_definitions(),
+        admission=Admission(),
+        clock=_clock,
+    )
+    try:
+        with pytest.raises(RecoveryRejected, match="accepted QA"):
+            verifier.verify_candidate(changed)
+        assert not adapter.requests
     finally:
         repository.close()
 

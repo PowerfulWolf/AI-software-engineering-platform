@@ -112,6 +112,44 @@ def test_capture_binds_staged_and_unstaged_content_without_writes(
     assert index.read_bytes() == index_bytes
 
 
+def test_capture_since_task_base_keeps_candidate_commit_and_later_coder_edits(
+    workspace: tuple[GitWorktreeManager, WorktreeRef, AgentPermissions],
+) -> None:
+    manager, initial_ref, permissions = workspace
+    base_revision = initial_ref.head_revision
+    source = initial_ref.path / "src/app.py"
+    source.write_text("VALUE = 2\n", encoding="utf-8")
+    git(initial_ref.path, "add", "src/app.py")
+    git(initial_ref.path, "commit", "-m", "candidate")
+    candidate_revision = git(initial_ref.path, "rev-parse", "HEAD")
+    candidate_ref = replace(initial_ref, head_revision=candidate_revision)
+    source.write_text("VALUE = 3\n", encoding="utf-8")
+
+    capture = manager.capture_changes(
+        candidate_ref,
+        permissions,
+        base_revision=base_revision,
+    )
+
+    assert capture.worktree.head_revision == candidate_revision
+    assert capture.effective_base_revision == base_revision
+    assert capture.changed_paths == ("src/app.py",)
+    assert b"-VALUE = 1" in capture.patch and b"+VALUE = 3" in capture.patch
+    manager.verify_capture(capture, permissions)
+
+    target = manager.create(
+        WorktreeSpec(
+            task_id="task_capture_post_feedback",
+            role=AgentRole.CODER,
+            attempt=1,
+            source_revision=base_revision,
+        )
+    )
+    seeded = manager.seed_changes(capture, target, permissions, permissions)
+    assert seeded.changed_paths == ("src/app.py",)
+    assert (target.path / "src/app.py").read_text(encoding="utf-8") == "VALUE = 3\n"
+
+
 @pytest.mark.parametrize("staged", [False, True])
 def test_capture_supports_new_regular_text_files_without_writes(
     workspace: tuple[GitWorktreeManager, WorktreeRef, AgentPermissions],
@@ -135,6 +173,41 @@ def test_capture_supports_new_regular_text_files_without_writes(
     assert b"+++ b/src/new.py" in capture.patch
     manager.verify_capture(capture, permissions)
     assert git(ref.path, "status", "--porcelain") == before_status
+
+
+def test_capture_does_not_double_count_the_committed_base_blob(tmp_path: Path) -> None:
+    repo = tmp_path / "large-repo"
+    repo.mkdir()
+    git(repo, "init", "--initial-branch=main")
+    git(repo, "config", "user.name", "Fixture")
+    git(repo, "config", "user.email", "fixture@example.invalid")
+    (repo / "src").mkdir()
+    source = repo / "src/large.txt"
+    source.write_bytes(b"x\n" * 300_000)
+    git(repo, "add", "src/large.txt")
+    git(repo, "commit", "-m", "large base")
+    manager = GitWorktreeManager(repo, tmp_path / "large-roles")
+    ref = manager.create(
+        WorktreeSpec(
+            task_id="task_capture_large_tracked",
+            role=AgentRole.CODER,
+            attempt=1,
+            source_revision=git(repo, "rev-parse", "HEAD"),
+        )
+    )
+    permissions = AgentPermissions(
+        read_paths=("src/**",),
+        write_paths=("src/**",),
+        commands=(),
+        network=NetworkAccess.NONE,
+    )
+    changed = ref.path / "src/large.txt"
+    changed.write_bytes(b"y\n" + b"x\n" * 299_999)
+
+    capture = manager.capture_changes(ref, permissions)
+
+    assert capture.changed_paths == ("src/large.txt",)
+    assert len(capture.patch) < MAX_CAPTURE_BYTES
 
 
 @pytest.mark.parametrize("change", ["binary", "encoding", "symlink", "large", "secret"])

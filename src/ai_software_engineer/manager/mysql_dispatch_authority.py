@@ -52,7 +52,8 @@ _COMMIT_COLUMNS = frozenset({"id", "repository_id", "task_id", "payload_json", "
 _LEGACY_COMMIT_COLUMNS = frozenset(
     {"id", "project_id", "task_id", "payload_json", "dispatch_sha256"}
 )
-_VERIFICATION_COLUMNS = frozenset({"plan_sha256", "payload_json", "completion_sha256"})
+_LEGACY_VERIFICATION_COLUMNS = frozenset({"plan_sha256", "payload_json", "completion_sha256"})
+_VERIFICATION_COLUMNS = frozenset({*_LEGACY_VERIFICATION_COLUMNS, "abandonment_sha256"})
 _LEGACY_TABLES = {
     "dispatch_workforce_snapshots": "dispatch_workforce_snapshots_legacy_project_v01",
     "dispatch_commits": "dispatch_commits_legacy_project_v01",
@@ -97,9 +98,18 @@ def _ensure_current_dispatch_tables(cursor: object) -> None:
     if any(archive_presence) and not all(archive_presence):
         raise DispatchCommitCorruption("legacy MySQL dispatch archive is incomplete")
 
-    if verification not in (frozenset(), _VERIFICATION_COLUMNS):
+    if verification not in (
+        frozenset(),
+        _LEGACY_VERIFICATION_COLUMNS,
+        _VERIFICATION_COLUMNS,
+    ):
         raise DispatchCommitCorruption(
             "MySQL verification reservations table has an ambiguous schema"
+        )
+    if verification == _LEGACY_VERIFICATION_COLUMNS:
+        typed.execute(
+            "ALTER TABLE verification_reservations "
+            "ADD COLUMN abandonment_sha256 CHAR(64) NULL AFTER completion_sha256"
         )
     current_missing = not snapshot and not commits
     current_ready = snapshot == _SNAPSHOT_COLUMNS and commits == _COMMIT_COLUMNS
@@ -145,7 +155,8 @@ def _ensure_current_dispatch_tables(cursor: object) -> None:
         CREATE TABLE IF NOT EXISTS verification_reservations (
             plan_sha256 CHAR(64) PRIMARY KEY,
             payload_json JSON NOT NULL,
-            completion_sha256 CHAR(64) NULL
+            completion_sha256 CHAR(64) NULL,
+            abandonment_sha256 CHAR(64) NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
         """
     )
@@ -468,8 +479,8 @@ class MySqlDispatchAuthority:
                     or record.source_task_id != source_task_id
                 ):
                     raise DispatchAuthorityConflict("verification reservation identity mismatch")
-                if row["completion_sha256"] is not None:
-                    raise DispatchAuthorityConflict("verification reservation is already completed")
+                if row["completion_sha256"] is not None or row["abandonment_sha256"] is not None:
+                    raise DispatchAuthorityConflict("verification reservation is already released")
                 validate_current(record)
                 return record
             validate_current(None)
@@ -520,6 +531,8 @@ class MySqlDispatchAuthority:
             record = VerificationReservation.model_validate_json(_text(row, "payload_json"))
             if record.plan_sha256 != plan_sha256:
                 raise DispatchCommitCorruption("verification reservation identity mismatch")
+            if row["abandonment_sha256"] is not None:
+                raise DispatchAuthorityConflict("verification reservation was abandoned")
             if row["completion_sha256"] not in (None, completion_sha256):
                 raise DispatchAuthorityConflict(
                     "verification completion conflicts with prior release"
@@ -528,6 +541,48 @@ class MySqlDispatchAuthority:
             cursor.execute(
                 "UPDATE verification_reservations SET completion_sha256=%s WHERE plan_sha256=%s",
                 (completion_sha256, plan_sha256),
+            )
+
+    def abandon_verification(
+        self,
+        *,
+        plan_sha256: DispatchSha256,
+        abandonment_sha256: DispatchSha256,
+    ) -> None:
+        """Release capacity after a verification plan terminates without a completion.
+
+        An admitted verification plan remains at-most-once and cannot be replayed.  Its
+        capacity reservation must nevertheless be released when setup or provider execution
+        raises before a sealed completion can be written.
+        """
+        from pydantic import TypeAdapter
+
+        TypeAdapter(DispatchSha256).validate_python(abandonment_sha256)
+        with (
+            closing(open_mysql_connection(self._dsn)) as connection,
+            self._transaction(connection),
+            connection.cursor() as cursor,
+        ):
+            self._lock_authority(cursor)
+            cursor.execute(
+                "SELECT * FROM verification_reservations WHERE plan_sha256=%s FOR UPDATE",
+                (plan_sha256,),
+            )
+            row = cast(Mapping[str, object] | None, cursor.fetchone())
+            if row is None:
+                raise DispatchAuthorityConflict("verification reservation is missing")
+            record = VerificationReservation.model_validate_json(_text(row, "payload_json"))
+            if record.plan_sha256 != plan_sha256:
+                raise DispatchCommitCorruption("verification reservation identity mismatch")
+            if row["completion_sha256"] is not None:
+                raise DispatchAuthorityConflict("verification reservation was completed")
+            if row["abandonment_sha256"] not in (None, abandonment_sha256):
+                raise DispatchAuthorityConflict(
+                    "verification abandonment conflicts with prior release"
+                )
+            cursor.execute(
+                "UPDATE verification_reservations SET abandonment_sha256=%s WHERE plan_sha256=%s",
+                (abandonment_sha256, plan_sha256),
             )
 
     def _current_snapshot(
@@ -577,7 +632,8 @@ class MySqlDispatchAuthority:
             }
 
             cursor.execute(
-                "SELECT plan_sha256,payload_json,completion_sha256 FROM verification_reservations"
+                "SELECT plan_sha256,payload_json,completion_sha256,abandonment_sha256 "
+                "FROM verification_reservations"
             )
             verification_rows = cast(tuple[Mapping[str, object], ...], cursor.fetchall())
 
@@ -612,7 +668,7 @@ class MySqlDispatchAuthority:
                     raise DispatchCommitCorruption("verification reservation identity collision")
                 assignments[phase.assignment.id] = phase.assignment
                 leases[phase.lease.id] = phase.lease
-                if row["completion_sha256"] is None:
+                if row["completion_sha256"] is None and row["abandonment_sha256"] is None:
                     active_leases[phase.lease.id] = phase.lease
         return DispatchWorkforceSnapshot.create(
             repository_id=base.repository_id,

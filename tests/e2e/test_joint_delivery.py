@@ -259,8 +259,14 @@ def test_joint_cli_to_candidates(
             == "hello from the team"
         )
     replay = reopened.resume(ResumeProjectDelivery(delivery_id=checkpoint.delivery_id))
-    assert replay.checkpoint == checkpoint
-    assert len(models.calls) == 3
+    if fail_integration:
+        assert replay.checkpoint.stage is JointStage.BLOCKED
+        assert replay.checkpoint.integration is not None
+        assert replay.checkpoint.children == checkpoint.children
+        assert len(models.calls) == 4
+    else:
+        assert replay.checkpoint == checkpoint
+        assert len(models.calls) == 3
 
 
 @pytest.mark.mysql

@@ -33,6 +33,14 @@ class WorktreeChangeCapture:
     patch: bytes
     index_diff_sha256: str
     file_sha256s: tuple[tuple[str, str], ...]
+    # None preserves the historical HEAD-to-working-tree capture.  Post-feedback
+    # Coder recovery binds the original Task base explicitly so committed candidate
+    # work and later uncommitted edits are recovered as one snapshot.
+    base_revision: str | None = None
+
+    @property
+    def effective_base_revision(self) -> str:
+        return self.base_revision or self.worktree.head_revision
 
     @property
     def changed_paths(self) -> tuple[str, ...]:
@@ -55,6 +63,9 @@ class WorktreeChangeCapture:
             "index_diff_sha256": self.index_diff_sha256,
             "file_sha256s": self.file_sha256s,
         }
+        if self.base_revision is not None:
+            payload["base_revision"] = self.base_revision
+            payload["version"] = 2
         return hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
                 "utf-8"

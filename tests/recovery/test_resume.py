@@ -43,9 +43,10 @@ from ai_software_engineer.manager.production_delivery import (
     DeliveryRouteAdapterFactory,
 )
 from ai_software_engineer.manager.production_host import TeamHost
+from ai_software_engineer.multi_directory.models import JointDeliveryResult
 from ai_software_engineer.multi_directory.service import CreateRequirement
 from ai_software_engineer.orchestration import AgentRunFailed
-from ai_software_engineer.recovery.entry import NativeRecoveryExecution
+from ai_software_engineer.recovery.entry import NativeRecoveryEntry, NativeRecoveryExecution
 from ai_software_engineer.recovery.models import RecoveryScope
 from ai_software_engineer.recovery.remediation import CandidateRemediationService
 from ai_software_engineer.recovery.resume import (
@@ -66,7 +67,7 @@ from tests.manager.test_production_backend import (
     _ScriptedDeliveryAdapter,
 )
 from tests.manager.test_production_backend import mysql_dsn as mysql_dsn
-from tests.recovery.test_execution import OfflineFactory
+from tests.recovery.test_execution import OfflineAdapter, OfflineFactory
 from tests.recovery.test_native import InterruptedFactory
 
 
@@ -85,6 +86,30 @@ class _ResumeAdapter(AgentAdapter):
         self._owner.requests.append(request)
         if request.role is AgentRole.CODER and self._owner.source_task_id is None:
             self._owner.source_task_id = request.task_id
+        continuation = request.task_id.startswith("task_continue_")
+        if request.role is AgentRole.CODER and continuation:
+            self._owner.continuation_coder_calls += 1
+            if (
+                self._owner.continuation_coder_fails_after_feedback
+                and self._owner.continuation_coder_calls > 1
+            ):
+                (self._workspace / "hello.txt").write_text(
+                    "retained post-QA Coder work\n", encoding="utf-8"
+                )
+                return AgentResult(
+                    run_id=request.run_id,
+                    task_id=request.task_id,
+                    role=request.role,
+                    attempt=request.attempt,
+                    source_revision=request.source_revision,
+                    context_manifest_id=request.context_manifest_id,
+                    status=AgentRunStatus.FAILED,
+                    error=AgentFailure(
+                        code=AgentErrorCode.POLICY_VIOLATION,
+                        message="offline Coder interrupted after QA feedback",
+                        transient=False,
+                    ),
+                )
         if (
             request.role is AgentRole.CODER
             and request.task_id.startswith("task_continue_")
@@ -161,6 +186,26 @@ class _ResumeAdapter(AgentAdapter):
                     }
                 )
         result = self._delegate.run(request)
+        if request.role is AgentRole.QA and continuation and self._owner.continuation_qa_rejects:
+            artifact = result.artifact
+            assert isinstance(artifact, QaReportArtifact)
+            failed = artifact.content.criteria_results[0].model_copy(
+                update={"status": QaCriterionStatus.FAIL}
+            )
+            return result.model_copy(
+                update={
+                    "artifact": artifact.model_copy(
+                        update={
+                            "content": artifact.content.model_copy(
+                                update={
+                                    "status": QaReportStatus.FAIL,
+                                    "criteria_results": (failed,),
+                                }
+                            )
+                        }
+                    )
+                }
+            )
         if request.role is AgentRole.CODER and request.task_id.startswith("task_continue_"):
             artifact = result.artifact
             assert isinstance(artifact, ImplementationReportArtifact)
@@ -189,6 +234,8 @@ class _ResumeFactory(DeliveryRouteAdapterFactory):
         verification_fails: bool = True,
         verification_inconclusive: bool = False,
         remediation_no_candidate: bool = False,
+        continuation_qa_rejects: bool = False,
+        continuation_coder_fails_after_feedback: bool = False,
     ) -> None:
         self.requests: list[AgentRequest] = []
         self.source_task_id: str | None = None
@@ -197,6 +244,9 @@ class _ResumeFactory(DeliveryRouteAdapterFactory):
         self.verification_fails = verification_fails
         self.verification_inconclusive = verification_inconclusive
         self.remediation_no_candidate = remediation_no_candidate
+        self.continuation_qa_rejects = continuation_qa_rejects
+        self.continuation_coder_fails_after_feedback = continuation_coder_fails_after_feedback
+        self.continuation_coder_calls = 0
 
     def create(
         self,
@@ -253,6 +303,38 @@ class _SeededInterruptedRecoveryFactory(DeliveryRouteAdapterFactory):
     ) -> AgentAdapter:
         del route, definition, context_resolver, config, environment
         return _SeededInterruptedRecoveryAdapter(self._seed, binding.worktree.path)
+
+
+class _SeededCompleteRecoveryAdapter(AgentAdapter):
+    def __init__(
+        self, seed: RecoverySeedService, definition: AgentDefinition, workspace: Path
+    ) -> None:
+        self._seed = seed
+        self._workspace = workspace
+        self._delegate = _ScriptedDeliveryAdapter(definition, workspace)
+
+    def run(self, request: AgentRequest) -> AgentResult:
+        if request.role is AgentRole.CODER:
+            self._seed.authorize(request, self._workspace)
+        return self._delegate.run(request)
+
+
+class _SeededCompleteRecoveryFactory(DeliveryRouteAdapterFactory):
+    def __init__(self, seed: RecoverySeedService) -> None:
+        self._seed = seed
+
+    def create(
+        self,
+        *,
+        route: ProviderRouteConfig,
+        definition: AgentDefinition,
+        binding: RoleWorktreeBinding,
+        context_resolver: StoredContextResolver,
+        config: ProductionConfig,
+        environment: Mapping[str, str],
+    ) -> AgentAdapter:
+        del route, context_resolver, config, environment
+        return _SeededCompleteRecoveryAdapter(self._seed, definition, binding.worktree.path)
 
 
 class _OutOfScopeInterruptedAdapter(AgentAdapter):
@@ -411,6 +493,35 @@ def test_resume_discovers_approves_and_attaches_pre_candidate_coder_recovery(
     assert reproposed.recovery_plan_sha256 is not None
     assert reproposed.recovery_plan_sha256 != proposed.recovery_plan_sha256
 
+    observed_live_recovery: list[AgentRole] = []
+    original_offline_run = OfflineAdapter.run
+
+    def observe_live_recovery(adapter: OfflineAdapter, request: AgentRequest) -> AgentResult:
+        snapshot = ProductionTeamReader(config, environment).snapshot("project_test")
+        current = next(task for task in snapshot.tasks if task.id == blocked.delivery_id)
+        parent = next(item for item in snapshot.requests if item.id == blocked.delivery_id)
+        agent = next(
+            member for member in snapshot.agents if member.id == f"agent_team_{request.role.value}"
+        )
+        assert current.task_id == request.task_id
+        assert (
+            current.status
+            == {
+                AgentRole.CODER: "IMPLEMENTING",
+                AgentRole.QA: "QA",
+                AgentRole.REVIEWER: "REVIEW",
+            }[request.role]
+        )
+        assert not current.terminal and current.blocker is None
+        assert parent.stage == "DELIVERING" and parent.blocker is None
+        assert current.id in agent.assigned_delivery_ids
+        assert current.id in agent.current_stage_delivery_ids
+        assert [item.role for item in current.assignments if item.current_stage] == [request.role]
+        observed_live_recovery.append(request.role)
+        return original_offline_run(adapter, request)
+
+    monkeypatch.setattr(OfflineAdapter, "run", observe_live_recovery)
+
     def execute_offline(path: Path) -> NativeRecoveryExecution:
         store, plan = recovery.open_plan(path)
         delivery = recovery.execute(path, route_factory=OfflineFactory)
@@ -430,6 +541,7 @@ def test_resume_discovers_approves_and_attaches_pre_candidate_coder_recovery(
     assert completed.checkpoint.task_id.startswith("task_recovery_")
     assert completed.checkpoint.candidate_revision is not None
     assert entry.status(blocked.delivery_id).checkpoint == completed.checkpoint
+    assert observed_live_recovery == [AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER]
 
     repository = MySqlTaskRepository(mysql_dsn)
     try:
@@ -489,7 +601,7 @@ def test_resume_requires_exact_scope_approval_before_capturing_omitted_files(
 
     requested = host.resume_delivery(ResumeProjectDelivery(delivery_id=blocked.delivery_id))
     assert isinstance(requested, DeliveryResumeResult)
-    assert requested.outcome is DeliveryResumeOutcome.SCOPE_APPROVAL_REQUIRED
+    assert requested.outcome is DeliveryResumeOutcome.SCOPE_APPROVAL_REQUIRED, requested.next_action
     assert requested.scope_supplement_paths == ("omitted.txt",)
     assert requested.scope_supplement_sha256 is not None
 
@@ -500,6 +612,7 @@ def test_resume_requires_exact_scope_approval_before_capturing_omitted_files(
             approval_reference="wrong-scope",
         )
     )
+    assert isinstance(stale, DeliveryResumeResult)
     assert stale.outcome is DeliveryResumeOutcome.SCOPE_APPROVAL_REQUIRED
     assert stale.scope_supplement_sha256 == requested.scope_supplement_sha256
 
@@ -535,14 +648,18 @@ def test_resume_requires_exact_scope_approval_before_capturing_omitted_files(
         "late retained work\n", encoding="utf-8"
     )
     refreshed = host.resume_delivery(ResumeProjectDelivery(delivery_id=blocked.delivery_id))
+    assert isinstance(refreshed, DeliveryResumeResult)
     assert refreshed.outcome is DeliveryResumeOutcome.SCOPE_APPROVAL_REQUIRED
     assert refreshed.scope_supplement_paths == ("omitted.txt", "second.txt")
     assert refreshed.scope_supplement_sha256 != requested.scope_supplement_sha256
 
 
 @pytest.mark.mysql
+@pytest.mark.parametrize("complete_recovery", [False, True])
 def test_joint_scope_recovery_targets_current_preparation_after_main_advances(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    complete_recovery: bool,
 ) -> None:
     config, environment, models, projects = setup_host(tmp_path)
     config = config.model_copy(update={"live_model_execution": True})
@@ -557,7 +674,7 @@ def test_joint_scope_recovery_targets_current_preparation_after_main_advances(
     created = entry.create(
         CreateRequirement(
             name="Recover after main advances",
-            repository_roots=(str(projects[0]),),
+            repository_roots=tuple(map(str, projects)),
         )
     ).checkpoint
     product = entry.reply(
@@ -582,7 +699,8 @@ def test_joint_scope_recovery_targets_current_preparation_after_main_advances(
     current_head = _git_output("rev-parse", "HEAD", cwd=projects[0])
 
     requested = host.resume_delivery(ResumeProjectDelivery(delivery_id=blocked.delivery_id))
-    assert requested.outcome is DeliveryResumeOutcome.SCOPE_APPROVAL_REQUIRED
+    assert isinstance(requested, DeliveryResumeResult)
+    assert requested.outcome is DeliveryResumeOutcome.SCOPE_APPROVAL_REQUIRED, requested.next_action
     assert requested.scope_supplement_sha256 is not None
 
     proposed = host.resume_delivery(
@@ -592,10 +710,158 @@ def test_joint_scope_recovery_targets_current_preparation_after_main_advances(
             approval_reference="approve-current-target",
         )
     )
+    assert isinstance(proposed, DeliveryResumeResult)
     assert proposed.outcome is DeliveryResumeOutcome.RECOVERY_APPROVAL_REQUIRED
     assert proposed.recovery_plan_file is not None
     _, plan = host.recovery_entry().open_plan(Path(proposed.recovery_plan_file))
     assert plan.target_base_revision == current_head
+
+    def execute_interrupted(recovery: NativeRecoveryEntry, path: Path) -> NativeRecoveryExecution:
+        store, selected = recovery.open_plan(path)
+        delivery = recovery.execute(
+            path,
+            route_factory=(
+                _SeededCompleteRecoveryFactory
+                if complete_recovery
+                else _SeededInterruptedRecoveryFactory
+            ),
+        )
+        return NativeRecoveryExecution(
+            selected,
+            recovery._dispatch_for(store, selected),
+            delivery,
+        )
+
+    monkeypatch.setattr(NativeRecoveryEntry, "resume_execution", execute_interrupted)
+
+    if complete_recovery:
+        # Reopen the host; only the second repository may run new delivery roles.
+        remaining_routes = _ResumeFactory(transient_qa_failures=0, verification_fails=False)
+        host = TeamHost(
+            config=config,
+            environment=environment,
+            structured_clients=models,
+            delivery_route_adapters=remaining_routes,
+        )
+
+    interrupted_recovery = host.resume_delivery(
+        ResumeProjectDelivery(
+            delivery_id=blocked.delivery_id,
+            approved_plan_sha256=plan.plan_sha256,
+            approval_reference="approve-current-target-plan",
+        )
+    )
+    if complete_recovery:
+        assert isinstance(interrupted_recovery, JointDeliveryResult)
+        assert interrupted_recovery.checkpoint.stage.value == "DONE"
+        recovered = next(
+            child.checkpoint
+            for child in interrupted_recovery.checkpoint.children
+            if child.unit_id == blocked.children[0].unit_id
+        )
+        assert recovered.preparation_sha256 == plan.target_preparation_sha256
+        assert recovered.preparation_sha256 != blocked.children[0].checkpoint.preparation_sha256
+        assert recovered.task_id != blocked.children[0].checkpoint.task_id
+        assert recovered.stage is DeliveryStage.DONE
+        assert interrupted_recovery.checkpoint.integration is not None
+        assert [request.role for request in remaining_routes.requests] == [
+            AgentRole.CODER,
+            AgentRole.QA,
+            AgentRole.REVIEWER,
+        ]
+        assert all(request.task_id != recovered.task_id for request in remaining_routes.requests)
+        assert len(models.calls) == 3
+        assert (
+            host.resume_delivery(ResumeProjectDelivery(delivery_id=blocked.delivery_id)).checkpoint
+            == interrupted_recovery.checkpoint
+        )
+        assert len(remaining_routes.requests) == 3
+        return
+    assert isinstance(interrupted_recovery, DeliveryResumeResult)
+    assert interrupted_recovery.outcome is DeliveryResumeOutcome.WAITING_HUMAN
+    assert interrupted_recovery.checkpoint.preparation_sha256 == plan.target_preparation_sha256
+
+    reproposed = host.resume_delivery(ResumeProjectDelivery(delivery_id=blocked.delivery_id))
+    assert isinstance(reproposed, DeliveryResumeResult)
+    assert reproposed.outcome is DeliveryResumeOutcome.RECOVERY_APPROVAL_REQUIRED
+    assert reproposed.recovery_plan_sha256 is not None
+    assert reproposed.recovery_plan_sha256 != plan.plan_sha256
+
+
+@pytest.mark.mysql
+def test_resume_recovers_post_feedback_coder_workspace_before_old_candidate_verification(
+    tmp_path: Path,
+    mysql_dsn: str,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "hello.txt").write_text("hello\n", encoding="utf-8")
+    _git("init", "-b", "main", cwd=project)
+    _git("add", "hello.txt", cwd=project)
+    _git("commit", "-m", "initial", cwd=project)
+    config = ProductionConfig(
+        platform_root=str(tmp_path / "platform"),
+        default_project_id="project_test",
+        default_project_name="Test Project",
+        live_model_execution=True,
+        model_routes=(
+            ProviderRouteConfig(
+                provider="codex",
+                model="gpt-5.6-terra",
+                kind=ModelProviderKind.CODEX_CLI,
+            ),
+        ),
+    )
+    environment = {"ASE_MYSQL_DSN": mysql_dsn, "PATH": os.environ.get("PATH", "")}
+    routes = _ResumeFactory(
+        transient_qa_failures=3,
+        continuation_qa_rejects=True,
+        continuation_coder_fails_after_feedback=True,
+    )
+    host = TeamHost(
+        config=config,
+        environment=environment,
+        structured_clients=_ScriptedClientFactory(),
+        delivery_route_adapters=routes,
+    )
+    entry = host.project_entry()
+    started = entry.start(
+        StartProjectDelivery(repository_root=str(project), requirement="Change the greeting.")
+    )
+    source = entry.approve(
+        ApproveProductSpec(
+            delivery_id=started.checkpoint.delivery_id,
+            expected_checkpoint_sha256=started.checkpoint.checkpoint_sha256,
+            approval_reference="post-feedback-recovery-source",
+        )
+    ).checkpoint
+    proposed = host.resume_delivery(ResumeProjectDelivery(delivery_id=source.delivery_id))
+    assert isinstance(proposed, DeliveryResumeResult)
+    assert proposed.outcome is DeliveryResumeOutcome.VERIFICATION_APPROVAL_REQUIRED
+    assert proposed.verification_plan_sha256 is not None
+
+    remediated = host.resume_delivery(
+        ResumeProjectDelivery(
+            delivery_id=source.delivery_id,
+            approved_plan_sha256=proposed.verification_plan_sha256,
+            approval_reference="post-feedback-verification",
+        )
+    )
+    assert isinstance(remediated, DeliveryResumeResult)
+    assert remediated.checkpoint.stage is DeliveryStage.BLOCKED
+    assert remediated.checkpoint.task_id is not None
+    assert remediated.checkpoint.task_id.startswith("task_continue_")
+    assert routes.continuation_coder_calls == 2
+
+    resumed = host.resume_delivery(ResumeProjectDelivery(delivery_id=source.delivery_id))
+
+    assert isinstance(resumed, DeliveryResumeResult)
+    assert resumed.outcome is DeliveryResumeOutcome.RECOVERY_APPROVAL_REQUIRED, resumed.next_action
+    assert resumed.verification_plan_sha256 is None
+    assert resumed.recovery_plan_file is not None
+    _, recovery_plan = host.recovery_entry().open_plan(Path(resumed.recovery_plan_file))
+    assert "hello.txt" in {item.path for item in recovery_plan.capture.files}
+    assert recovery_plan.capture.patch
 
 
 @pytest.mark.mysql

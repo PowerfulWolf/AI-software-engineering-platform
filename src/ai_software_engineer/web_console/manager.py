@@ -18,7 +18,7 @@ from ai_software_engineer.manager.delivery_checkpoint import (
     ProjectDeliveryCheckpointError,
 )
 from ai_software_engineer.multi_directory.errors import RequirementSourceRevisionDrift
-from ai_software_engineer.multi_directory.models import JointDeliveryResult
+from ai_software_engineer.multi_directory.models import JointDeliveryResult, digest
 from ai_software_engineer.multi_directory.service import (
     CloseRequirement,
     CreateRequirement,
@@ -28,9 +28,10 @@ from ai_software_engineer.multi_directory.service import (
     UpdateRequirement,
 )
 from ai_software_engineer.project_workspace import ProjectWorkspace
-from ai_software_engineer.recovery import RecoveryPlan, RecoveryRejected
+from ai_software_engineer.recovery import RecoveryRejected
+from ai_software_engineer.recovery.entry import NativeRecoveryEntry
 from ai_software_engineer.recovery.resume import DeliveryResumeResult
-from ai_software_engineer.recovery.verification_records import CandidateVerificationPlan
+from ai_software_engineer.recovery.verification_entry import CandidateVerificationEntry
 from ai_software_engineer.runtime_workspace import RuntimeWorkspaceError
 
 from .core import ConsoleCommandRejected
@@ -54,6 +55,8 @@ class TeamConsoleHost(Protocol):
     def create_project(self, *, name: str, project_id: str | None = None) -> ProjectWorkspace: ...
     def project_entry(self, project_id: str | None = None) -> UnifiedProjectEntryService: ...
     def requirement_entry(self, project_id: str | None = None) -> JointDeliveryService: ...
+    def recovery_entry(self, project_id: str | None = None) -> NativeRecoveryEntry: ...
+    def verification_entry(self, project_id: str | None = None) -> CandidateVerificationEntry: ...
 
     def resume_delivery(
         self, command: ResumeProjectDelivery, *, project_id: str | None = None
@@ -177,7 +180,11 @@ class ManagerConsoleAdapter:
                     ),
                     project_id=intent.project_id,
                 )
-                return _summarize(continued, project_id=intent.project_id)
+                return _summarize(
+                    continued,
+                    project_id=intent.project_id,
+                    host=self._host,
+                )
             raise ConsoleCommandRejected("INVALID_INTENT", "Unsupported console operation.")
         except DeliveryCheckpointStale as error:
             raise ConsoleCommandRejected(
@@ -210,37 +217,75 @@ def _summarize(
     result: JointDeliveryResult | ProjectDeliveryResult | DeliveryResumeResult,
     *,
     project_id: str,
+    host: TeamConsoleHost | None = None,
 ) -> ConsoleCommandResult:
     checkpoint = result.checkpoint
     approval: ConsoleApprovalRequest | None = None
     next_action = str(checkpoint.next_action)
+    if isinstance(result, JointDeliveryResult) and result.integration_retry_proposal is not None:
+        proposal = result.integration_retry_proposal
+        approval = ConsoleApprovalRequest(
+            kind="joint_integration",
+            plan_sha256=digest(proposal),
+            title="批准一次补充联合验收",
+            facts=(
+                "原有 3 次验收记录完整保留。仅为以下已通过 QA/Review 的候选增加 1 次机会。",
+                "平台可能重新规划验收命令。不会重新执行已完成仓库的 Coder、QA 或 Reviewer。",
+                *(
+                    f"候选 {candidate.unit_id}: {candidate.revision}"
+                    for candidate in proposal.candidates
+                ),
+            ),
+        )
+        next_action = "联合验收预算已用完。请确认候选并批准一次补充验收。"
     if isinstance(result, DeliveryResumeResult):
         next_action = result.next_action
         if result.verification_plan_sha256 is not None:
-            verification_plan = CandidateVerificationPlan.model_validate_json(
-                Path(cast(str, result.verification_plan_file)).read_text(encoding="utf-8")
+            if host is None:
+                raise ValueError("verification approval requires a trusted plan reader")
+            _, verification_plan = host.verification_entry(project_id).open_plan(
+                Path(cast(str, result.verification_plan_file))
             )
-            verification_plan.validate_integrity()
             if verification_plan.plan_sha256 != result.verification_plan_sha256:
                 raise ValueError("verification approval plan identity mismatch")
+            accepted_qa = verification_plan.inputs.accepted_qa
+            reviewer_only = accepted_qa is not None
             roles = tuple(
                 f"{definition.role.value}: "
                 f"{definition.provider or 'configured'} / {definition.model}"
                 for definition in verification_plan.definitions
-                if definition.role.value in {"qa", "reviewer"}
+                if definition.role.value in ({"reviewer"} if reviewer_only else {"qa", "reviewer"})
+            )
+            qa_facts = (
+                (f"复用已封存 QA PASS {accepted_qa.artifact_id}",)
+                if accepted_qa is not None
+                else ()
             )
             approval = ConsoleApprovalRequest(
                 kind="candidate_verification",
                 plan_sha256=verification_plan.plan_sha256,
-                title="批准独立 QA 与 Reviewer 验证",
-                facts=(f"候选提交 {verification_plan.inputs.candidate_revision}", *roles),
+                title=(
+                    "复用已通过 QA 并只重新执行 Reviewer"
+                    if reviewer_only
+                    else "批准独立 QA 与 Reviewer 验证"
+                ),
+                facts=(
+                    f"候选提交 {verification_plan.inputs.candidate_revision}",
+                    *qa_facts,
+                    *roles,
+                ),
             )
-            next_action = "Review and approve the exact candidate verification plan."
+            next_action = (
+                "请检查并批准仅重新执行 Reviewer 的精确验证计划。"
+                if reviewer_only
+                else "Review and approve the exact candidate verification plan."
+            )
         elif result.recovery_plan_sha256 is not None:
-            recovery_plan = RecoveryPlan.model_validate_json(
-                Path(cast(str, result.recovery_plan_file)).read_text(encoding="utf-8")
+            if host is None:
+                raise ValueError("Coder recovery approval requires a trusted plan reader")
+            _, recovery_plan = host.recovery_entry(project_id).open_plan(
+                Path(cast(str, result.recovery_plan_file))
             )
-            recovery_plan.validate_integrity()
             if recovery_plan.plan_sha256 != result.recovery_plan_sha256:
                 raise ValueError("Coder recovery plan identity mismatch")
             approval = ConsoleApprovalRequest(

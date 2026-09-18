@@ -24,6 +24,7 @@ from ai_software_engineer.config import (
     ModelProviderKind,
     ProductionConfig,
     ProductionConfigError,
+    ProviderRouteConfig,
 )
 from ai_software_engineer.context import ContextBudget, ContextSource, FileContextStore
 from ai_software_engineer.context.profile import repository_profile_context
@@ -73,6 +74,7 @@ from ai_software_engineer.manager.delivery import (
 )
 from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryFailureCode,
+    DeliveryStage,
     FileProjectDeliveryCheckpointStore,
     ProjectDeliveryCheckpoint,
     checkpoint_sha256_is_ancestor,
@@ -168,7 +170,7 @@ from ai_software_engineer.store import MySqlTaskRepository
 Clock = Callable[[], datetime]
 ResultT = TypeVar("ResultT")
 PRODUCTION_DELIVERY_CONTEXT_BUDGET = ContextBudget(
-    max_input_tokens=32_000, reserved_output_tokens=4_000
+    max_input_tokens=64_000, reserved_output_tokens=4_000
 )
 PRODUCTION_DELIVERY_MAX_ATTEMPTS = 3
 _ALL_CAPABILITIES = DELIVERY_CAPABILITIES
@@ -707,6 +709,40 @@ class ProductionProjectDeliveryBackend:
 
         self._guard("Reconciliation", execute)
 
+    def accepted_delivery_evidence(self, checkpoint: ProjectDeliveryCheckpoint) -> tuple[str, ...]:
+        """Return durable native QA/Review references without invoking an Agent."""
+
+        self.reconcile(checkpoint)
+        if (
+            checkpoint.stage is not DeliveryStage.DONE
+            or checkpoint.candidate_revision is None
+            or checkpoint.task_id is None
+        ):
+            raise ValueError("single-repository acceptance requires a completed native delivery")
+        if checkpoint.verification_completion_sha256 is not None:
+            if checkpoint.verification_plan_sha256 is None:
+                raise ValueError("candidate verification completion has no plan")
+            return (
+                checkpoint.verification_plan_sha256,
+                checkpoint.verification_completion_sha256,
+            )
+        facts = self._facts_for_checkpoint(checkpoint)
+        paths = _runtime_paths(facts.workspace)
+        repository = MySqlTaskRepository(self._dsn)
+        try:
+            result = _terminal_delivery_result(
+                repository,
+                FileArtifactStore(paths.artifacts),
+                checkpoint.task_id,
+            )
+        finally:
+            repository.close()
+        if not isinstance(result, RetryDeliveryResult):
+            raise ValueError("native delivery has no accepted QA/Review artifact chain")
+        if result.candidate_revision != checkpoint.candidate_revision:
+            raise ValueError("native accepted candidate drifted")
+        return result.artifact_ids
+
     def _commit_dispatch(self, checkpoint: ProjectDeliveryCheckpoint) -> DispatchCommitRecord:
         facts = self._facts_for_checkpoint(checkpoint)
         preparation = facts.preparation.preparation
@@ -880,6 +916,7 @@ class ProductionProjectDeliveryBackend:
         *,
         route_adapters: DeliveryRouteAdapterFactory | None = None,
         extra_context: tuple[ContextSource, ...] = (),
+        route_scope: tuple[ProviderRouteConfig, ...] | None = None,
     ) -> RetryResult:
         """Trusted composition after native or recovery allocation authorization."""
         facts = self._facts(preparation)
@@ -922,6 +959,7 @@ class ProductionProjectDeliveryBackend:
             context_resolver=resolver,
             environment=self._environment,
             route_adapters=route_adapters or self._delivery_route_adapters,
+            route_scope=route_scope,
         )
         primary = self._config.routes_for(TeamRole.CODER)[0]
         runtime_config = RuntimeConfig(

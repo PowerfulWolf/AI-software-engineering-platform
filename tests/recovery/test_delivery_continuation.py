@@ -28,6 +28,7 @@ from ai_software_engineer.manager.delivery_checkpoint import (
 from ai_software_engineer.manager.dispatch import (
     ContinuationDispatchRecord,
     _record_digest,
+    continuation_attempt_identity,
 )
 from ai_software_engineer.orchestration import (
     BlockedResult,
@@ -245,6 +246,84 @@ def test_continuation_is_attached_once_and_seals_successor_candidate(tmp_path: P
     assert len(store.list(dispatch.source_delivery_id)) == 3
     assert service.finish_continuation(dispatch, delivered, at=task.updated_at) == finished
     assert len(store.list(dispatch.source_delivery_id)) == 3
+
+
+def test_failed_pre_candidate_continuation_gets_a_fresh_successor(tmp_path: Path) -> None:
+    allocation = continuation_allocation(tmp_path)
+    service, store = _service(tmp_path, allocation)
+    first, plan, completion = _verification_for(store, allocation)
+    service.begin_continuation(first, plan, completion, at=NOW + timedelta(minutes=1))
+    blocked_task = first.task.model_copy(
+        update={
+            "status": TaskStatus.BLOCKED,
+            "attempts": 1,
+            "updated_at": NOW + timedelta(minutes=2),
+        }
+    )
+    service.finish_continuation(
+        first,
+        BlockedResult(
+            task=blocked_task,
+            classification=RetryClassification.BUDGET_EXHAUSTED,
+            reason="context exceeded before Coder admission",
+            attempt=1,
+            artifact_ids=(),
+            event_ids=("evt_context_blocked",),
+        ),
+        at=blocked_task.updated_at,
+    )
+    identity = continuation_attempt_identity(
+        first.continuation_sha256,
+        attempt=2,
+        retry_of_task_id=first.task_id,
+        retry_of_dispatch_id=first.id,
+    )
+    task_id = f"task_continue_{identity[:32]}"
+    task = first.task.model_copy(
+        update={
+            "id": task_id,
+            "metadata": {
+                **first.task.metadata,
+                "continuation_attempt": 2,
+                "continuation_retry_of_task_id": first.task_id,
+                "continuation_retry_of_dispatch_id": first.id,
+            },
+        }
+    )
+    phases = tuple(
+        phase.model_copy(
+            update={
+                "assignment": phase.assignment.model_copy(update={"task_id": task_id}),
+                "lease": phase.lease.model_copy(update={"task_id": task_id}),
+            }
+        )
+        for phase in first.phases
+    )
+    retry = first.model_copy(
+        update={
+            "id": f"dispatch_commit_{identity}",
+            "task_id": task_id,
+            "continuation_attempt": 2,
+            "retry_of_task_id": first.task_id,
+            "retry_of_dispatch_id": first.id,
+            "task": task,
+            "phases": phases,
+            "dispatch_sha256": "0" * 64,
+        }
+    )
+    retry = retry.model_copy(update={"dispatch_sha256": _record_digest(retry)})
+
+    started = service.begin_continuation(
+        retry,
+        plan,
+        completion,
+        at=NOW + timedelta(minutes=3),
+    )
+
+    assert started.checkpoint.stage is DeliveryStage.DELIVERING
+    assert started.checkpoint.task_id == retry.task_id
+    assert started.checkpoint.dispatch_commit_id == retry.id
+    assert store.current(retry.source_delivery_id) == started.checkpoint
 
 
 def test_continuation_accepts_retained_candidate_when_terminal_cursor_is_empty(

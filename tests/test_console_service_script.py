@@ -190,6 +190,33 @@ def test_service_launcher_restart_hands_off_managed_process_between_checkouts(
         _run(new_launcher, new_environment, "stop")
 
 
+def test_service_launcher_recognizes_same_project_relative_console_command(
+    tmp_path: Path,
+) -> None:
+    launcher, environment = _launcher(tmp_path)
+    state = Path(environment["ASE_SERVICE_STATE_DIR"])
+    processes = Path(environment["ASE_TEST_PROCESS_DIRECTORY"])
+
+    try:
+        started = _run(launcher, environment, "start")
+        assert started.returncode == 0, started.stderr
+        pid = (state / "ase-console.pid").read_text(encoding="utf-8").splitlines()[0]
+        project = launcher.parents[1]
+        (processes / f"{pid}.command").write_text(
+            f"{project}/.venv/bin/python3 .venv/bin/ase-console\n",
+            encoding="utf-8",
+        )
+
+        restarted = _run(launcher, environment, "restart")
+
+        assert restarted.returncode == 0, restarted.stderr
+        assert "ase-console stopped" in restarted.stdout
+        assert "ase-console started" in restarted.stdout
+        assert _run(launcher, environment, "status").returncode == 0
+    finally:
+        _run(launcher, environment, "stop")
+
+
 def test_service_launcher_rejects_invalid_invocations(tmp_path: Path) -> None:
     launcher, environment = _launcher(tmp_path, executable=False)
 

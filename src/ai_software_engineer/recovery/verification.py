@@ -30,7 +30,10 @@ from ai_software_engineer.orchestration.runner import (
 )
 from ai_software_engineer.recovery.models import RecoveryRejected, digest
 from ai_software_engineer.recovery.verification_records import CandidateVerificationInputs
-from ai_software_engineer.recovery.verification_snapshot import terminal_candidate_event
+from ai_software_engineer.recovery.verification_snapshot import (
+    terminal_accepted_qa_event,
+    terminal_candidate_event,
+)
 from ai_software_engineer.store import TaskRepository
 
 
@@ -85,7 +88,7 @@ class _AdmittedVerifier:
     def run(self, request: AgentRequest) -> AgentResult:
         if request.role not in (AgentRole.QA, AgentRole.REVIEWER):
             raise RecoveryRejected("candidate verification cannot invoke Coder or Planner")
-        task, _, _ = self.owner._read_inputs(self.inputs)
+        task, _, _, _ = self.owner._read_inputs(self.inputs)
         self.owner._admission.admit(self.inputs, request)
         result = self.owner._adapter.run(request)
         if result.status is AgentRunStatus.SUCCEEDED:
@@ -122,7 +125,7 @@ class CandidateVerificationRunner:
 
     def verify_candidate(self, inputs: CandidateVerificationInputs) -> CandidateVerificationResult:
         inputs = CandidateVerificationInputs.model_validate(inputs.to_wire())
-        task, plan, implementation = self._read_inputs(inputs)
+        task, plan, implementation, accepted_qa = self._read_inputs(inputs)
         self._admission.validate_configuration(inputs, self._definitions)
         runner = SerialOrchestrator(
             repository=self._repository,
@@ -137,18 +140,23 @@ class CandidateVerificationRunner:
         # run_task, _transition or record_attempt: the original Task remains terminal.
         seen = {a.producer.run_id for a in self._artifacts.list_for_task(task.id)}
         seen.update(inputs.prior_run_ids)
-        qa = runner._run_agent(
-            task,
-            AgentRole.QA,
-            attempt=max(task.attempts, 1),
-            candidate_revision=inputs.candidate_revision,
-            input_artifacts=(plan, implementation),
-            expected_parents=(implementation.artifact_id,),
-            seen_run_ids=seen,
-        ).artifact
-        if not isinstance(qa, QaReportArtifact):
-            raise RecoveryRejected("verification did not produce a QA report")
-        self._validate_verdict(task, qa, AgentRole.QA, inputs.candidate_revision)
+        if accepted_qa is None:
+            qa = runner._run_agent(
+                task,
+                AgentRole.QA,
+                attempt=max(task.attempts, 1),
+                candidate_revision=inputs.candidate_revision,
+                input_artifacts=(plan, implementation),
+                expected_parents=(implementation.artifact_id,),
+                seen_run_ids=seen,
+            ).artifact
+            if not isinstance(qa, QaReportArtifact):
+                raise RecoveryRejected("verification did not produce a QA report")
+            self._validate_verdict(task, qa, AgentRole.QA, inputs.candidate_revision)
+        else:
+            # The sealed historical producer was checked by _read_inputs. A newly
+            # scheduled QA definition is not the author of the reused report.
+            qa = accepted_qa
         self._read_inputs(inputs)
         review: ReviewReportArtifact | None = None
         if qa.content.status is QaReportStatus.PASS:
@@ -170,7 +178,12 @@ class CandidateVerificationRunner:
 
     def _read_inputs(
         self, inputs: CandidateVerificationInputs
-    ) -> tuple[Task, PlanArtifact, ImplementationReportArtifact]:
+    ) -> tuple[
+        Task,
+        PlanArtifact,
+        ImplementationReportArtifact,
+        QaReportArtifact | None,
+    ]:
         task = self._repository.get(inputs.task_id)
         events = self._repository.list_events(task.id)
         revision = self._repository.current_revision(task.id)
@@ -217,13 +230,36 @@ class CandidateVerificationRunner:
             m.criterion_id for m in implementation.content.acceptance_mapping
         } != expected:
             raise RecoveryRejected("original artifacts do not cover the approved criteria")
+        accepted_event = terminal_accepted_qa_event(task, events)
+        if (accepted_event is None) != (inputs.accepted_qa is None):
+            raise RecoveryRejected("accepted QA input differs from the terminal Task event chain")
+        accepted_qa = None
+        if inputs.accepted_qa is not None:
+            assert accepted_event is not None
+            artifact = self._artifacts.get(inputs.accepted_qa.artifact_id)
+            if (
+                not isinstance(artifact, QaReportArtifact)
+                or accepted_event.artifact_ids != (artifact.artifact_id,)
+                or artifact_digest(artifact) != inputs.accepted_qa.artifact_sha256
+                or artifact.task_id != task.id
+                or artifact.source_revision != inputs.candidate_revision
+                or artifact.parent_artifact_ids != (implementation.artifact_id,)
+                or artifact.supersedes is not None
+                or artifact.producer.role is not AgentRole.QA
+                or artifact.producer.run_id
+                in {plan.producer.run_id, implementation.producer.run_id}
+                or artifact.content.status is not QaReportStatus.PASS
+                or {item.criterion_id for item in artifact.content.criteria_results} != expected
+            ):
+                raise RecoveryRejected("accepted QA artifact differs from pinned terminal facts")
+            accepted_qa = artifact
         self._validate_independence(task)
         if (
             self._repository.get(task.id) != task
             or self._repository.current_revision(task.id) != revision
         ):
             raise RecoveryRejected("original task changed during verification")
-        return task, plan, implementation
+        return task, plan, implementation, accepted_qa
 
     def _validate_independence(self, task: Task) -> None:
         roles = (AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER)

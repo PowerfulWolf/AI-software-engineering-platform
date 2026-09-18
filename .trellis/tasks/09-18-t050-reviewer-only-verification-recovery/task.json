@@ -1,0 +1,31 @@
+{
+  "id": "T050",
+  "slug": "reviewer-only-verification-recovery",
+  "title": "复用已封存 QA PASS 并仅恢复 Reviewer",
+  "status": "completed",
+  "phase": "offline_verified",
+  "operator_validation": "后续用户平台运行已复用 QA PASS 并得到 Reviewer APPROVE；原生 sequence 55 DONE，completion 5490d892d999efee95b2eb8d093e66c245908b23e3ba45a629a439abe45a1b51。联合父需求衔接阻塞由 T051 修复，待用户继续联合集成。",
+  "depends_on": ["T044"],
+  "allowed_paths": [
+    "src/ai_software_engineer/recovery/**",
+    "src/ai_software_engineer/manager/dispatch.py",
+    "src/ai_software_engineer/web_console/manager.py",
+    "schemas/candidate-verification.schema.json",
+    "tests/recovery/**",
+    "tests/manager/**",
+    "tests/web_console/test_manager.py",
+    "docs/contracts.md",
+    "docs/operator-feedback-loop.md",
+    ".trellis/spec/core/delivery-recovery.md",
+    ".trellis/spec/core/web-console.md",
+    ".trellis/tasks/09-18-t050-reviewer-only-verification-recovery/**"
+  ],
+  "verification_commands": [
+    ".venv/bin/pytest -q tests/recovery tests/manager/test_verification_reservation.py tests/web_console/test_manager.py",
+    ".venv/bin/ruff check src/ai_software_engineer/recovery src/ai_software_engineer/web_console/manager.py tests/recovery tests/web_console/test_manager.py",
+    ".venv/bin/ruff format --check src/ai_software_engineer/recovery src/ai_software_engineer/web_console/manager.py tests/recovery tests/web_console/test_manager.py",
+    ".venv/bin/mypy src/ai_software_engineer/recovery src/ai_software_engineer/web_console/manager.py tests/recovery/test_candidate_verification.py tests/recovery/test_verification_admission.py tests/recovery/test_verification_snapshot.py tests/web_console/test_manager.py",
+    "git diff --check"
+  ],
+  "rollback_point": "只回退 T050 代码和 Schema 变更并重启，保留全部运行事实；旧版本不能执行带 accepted_qa 的新计划。需重新生成旧版兼容计划并由用户批准，不能覆盖新计划或沿用其审批。"
+}

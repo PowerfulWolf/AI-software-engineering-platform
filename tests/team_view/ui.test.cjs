@@ -950,6 +950,49 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   await agentCards[2].events.click();
   assert.match(text(get("content")), /测试 · 任务队列/);
   assert.match(text(get("content")), /待完成 1/);
+  fixture.tasks.push(
+    {
+      ...structuredClone(fixture.tasks[0]),
+      id: "verification_old_blocked",
+      status: "BLOCKED",
+      terminal: true,
+      blocker: "old verification failed",
+      last_activity: "2026-09-04T01:00:00Z",
+    },
+    {
+      ...structuredClone(fixture.tasks[0]),
+      id: "verification_old_completed",
+      status: "DONE",
+      terminal: true,
+      last_activity: "2026-09-04T02:00:00Z",
+    },
+    {
+      ...structuredClone(fixture.tasks[0]),
+      id: "verification_other_requirement",
+      request_id: "r-other",
+      title: "另一个需求",
+      status: "BLOCKED",
+      terminal: true,
+      blocker: "another requirement failed verification",
+      last_activity: "2026-09-04T03:00:00Z",
+    },
+  );
+  fixture.agents[1].history_delivery_ids = [
+    "verification_old_blocked",
+    "verification_old_completed",
+    "verification_other_requirement",
+  ];
+  await interval.fn();
+  assert.equal(
+    descend(get("content")).filter((node) => node.className === "work-row").length,
+    2,
+    "QA and Reviewer queues collapse attempts for the same Requirement without hiding a different Requirement",
+  );
+  assert.match(text(get("content")), /已阻塞 1/);
+  assert.match(text(get("content")), /已完成 0/);
+  fixture.agents[1].history_delivery_ids = [];
+  fixture.tasks.splice(-3);
+  await interval.fn();
   const projectPicker = get("projects").children[0];
   assert.equal(projectPicker.className, "project-picker");
   assert.match(text(projectPicker), /2 个 Project · 可搜索切换/);
@@ -1668,12 +1711,22 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   fixture.requests[0].dialogue = [
     { sequence: 1, speaker: "user", text: "Clarified requirement", attachments: [] },
   ];
-  fixture.tasks[0].status = "IMPLEMENTING";
+  fixture.tasks[0].status = "QA";
   fixture.tasks[0].terminal = false;
   delete fixture.tasks[0].blocker;
   fixture.tasks[1].status = "NEW";
   fixture.tasks[1].terminal = false;
   delete fixture.tasks[1].blocker;
+  fixture.agents.push({
+    id: "agent_manager",
+    name: "管理",
+    roles: ["manager"],
+    enabled: true,
+    max_parallel_assignments: 1,
+    current_stage_delivery_ids: [],
+    assigned_delivery_ids: [],
+    history_delivery_ids: [],
+  });
   storedOperations[1].status = "RUNNING";
   await interval.fn();
   assert.match(text(get("content")), /进行中 1/);
@@ -1684,7 +1737,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
       node.className.includes("request") &&
       text(node).includes(malicious),
   );
-  assert.match(text(activeRequirementCard), /实现中/);
+  assert.match(text(activeRequirementCard), /测试中/);
   assert.doesNotMatch(text(activeRequirementCard), /Old joint blocker/);
   const activeDeliveryFlow = descend(get("detail")).find(
     (node) =>
@@ -1696,6 +1749,51 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     /Manager|正在|可以离开|平台会按串行阶段继续推进/,
     "the delivery flow contains node states only",
   );
+  fixture.requests[0].stage = "VERIFY_QA";
+  fixture.tasks[0].status = "REVIEW";
+  await interval.fn();
+  const authoritativeQaFlow = descend(get("detail")).find(
+    (node) => node.className === "delivery-flow",
+  );
+  const authoritativeQaCurrent = authoritativeQaFlow.children.find(
+    (node) => node.className === "current",
+  );
+  assert.match(
+    text(authoritativeQaCurrent),
+    /5.*测试/,
+    "the Requirement verification stage must not be overwritten by a stale repository REVIEW status",
+  );
+  fixture.requests[0].stage = "INTEGRATING";
+  fixture.tasks.push({
+    ...structuredClone(fixture.tasks[0]),
+    id: "verification_current_plan",
+    request_id: "r1",
+    source_delivery_id: fixture.tasks[0].id,
+    status: "VERIFY_QA",
+    terminal: false,
+    blocker: null,
+    last_activity: "2026-09-17T03:27:20Z",
+    next_action: "QA candidate verification is active.",
+  });
+  await interval.fn();
+  const activeLeaseQaFlow = descend(get("detail")).find(
+    (node) => node.className === "delivery-flow",
+  );
+  const activeLeaseQaCurrent = activeLeaseQaFlow.children.find(
+    (node) => node.className === "current",
+  );
+  assert.match(
+    text(activeLeaseQaCurrent),
+    /5.*测试/,
+    "an active QA verification lease must override the joint INTEGRATING checkpoint",
+  );
+  assert.match(text(get("detail")), /查看仓库任务 · 候选测试中/);
+  assert.doesNotMatch(text(get("detail")), /VERIFY_QA/);
+  assert.doesNotMatch(text(get("operations")), /Manager 正在执行/);
+  fixture.tasks.pop();
+  fixture.requests[0].stage = "BLOCKED";
+  fixture.tasks[0].status = "QA";
+  await interval.fn();
   const completedDiscussion = descend(get("detail")).find(
     (node) => node.className === "detail-section product-dialogue",
   );
@@ -1704,6 +1802,39 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     /Manager 正在处理该需求|Product Agent 正在回复/,
     "delivery recovery must not be rendered as Product discussion activity",
   );
+  await get("nav-team").events.click();
+  const recoveryRoster = descend(get("content")).find(
+    (node) => node.className === "agent-roster",
+  );
+  const recoveryCoder = recoveryRoster.children.find((node) =>
+    text(node).includes("实现"),
+  );
+  const recoveryQa = recoveryRoster.children.find((node) =>
+    text(node).includes("测试"),
+  );
+  const recoveryManager = recoveryRoster.children.find((node) =>
+    text(node).includes("管理"),
+  );
+  assert.match(text(recoveryCoder), /等待当前阶段/);
+  assert.match(text(recoveryQa), /执行中/);
+  assert.match(text(recoveryManager), /空闲中/);
+  await recoveryQa.events.click();
+  assert.match(text(get("content")), /测试 · 任务队列/);
+  assert.match(text(get("content")), /进行中 1/);
+  assert.ok(
+    descend(get("content")).find(
+      (node) =>
+        node.className === "work-row" &&
+        text(node).includes(malicious) &&
+        text(node).includes("/backend/module-a"),
+    ),
+    "the active recovery stays in the backend-reported QA queue",
+  );
+  await recoveryManager.events.click();
+  assert.match(text(get("content")), /管理 · 任务队列/);
+  assert.match(text(get("content")), /待完成 0/);
+  get("nav-requests").events.click();
+  fixture.agents.pop();
   fixture.tasks.slice(0, 2).forEach((task) => {
     task.status = "BLOCKED";
     task.terminal = true;
@@ -1749,6 +1880,41 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   );
   assert.match(blockedDetail, /No automatic continuation is available/);
   assert.doesNotMatch(blockedDetail, /Old joint blocker/);
+  storedOperations[1].result.next_action = "Waiting for recovery";
+  await interval.fn();
+  assert.equal(text(get("detail")).match(/Waiting for recovery/g)?.length, 1);
+  storedOperations[1].result.next_action = "No automatic continuation is available.";
+  fixture.tasks.push({
+    ...structuredClone(fixture.tasks[0]),
+    id: "verification_superseded_blocker",
+    source_delivery_id: fixture.tasks[0].id,
+    blocker: "Superseded QA failure",
+    next_action: "Obsolete QA retry advice",
+    last_activity: "2026-09-04T01:00:00Z",
+  });
+  await interval.fn();
+  assert.doesNotMatch(
+    text(get("detail")),
+    /Superseded QA failure|Obsolete QA retry advice/,
+    "old verification failures are audit evidence, not current requirement blockers",
+  );
+  fixture.tasks.push({
+    ...structuredClone(fixture.tasks[0]),
+    id: "verification_latest_blocker",
+    source_delivery_id: fixture.tasks[0].id,
+    blocker: "Current reviewer provider failure",
+    last_activity: "2026-09-06T01:00:00Z",
+  });
+  await interval.fn();
+  const currentBlockers = vm.runInContext(
+    'requestBlockingSummary(snapshot.requests[0]).reasons',
+    context,
+  );
+  assert.ok(currentBlockers.some((item) => item.reason === "Current reviewer provider failure"));
+  assert.ok(currentBlockers.some((item) => item.reason === "Waiting for recovery"));
+  assert.ok(currentBlockers.every((item) => item.reason !== "Superseded QA failure"));
+  fixture.tasks.splice(-2);
+  await interval.fn();
   assert.ok(
     descend(get("detail")).find(
       (node) => node.tag === "button" && node.textContent === "关闭需求",
@@ -1894,6 +2060,65 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     "a consumed exact plan is not offered again; unified continue can propose the next plan",
   );
   assert.doesNotMatch(text(get("detail")), /批准并继续/);
+
+  const beforeSingleFinalization = structuredClone(fixture.requests[0]);
+  fixture.requests[0].stage = "WAITING_DELIVERY_FINALIZATION";
+  fixture.requests[0].blocker =
+    "原生 QA 与 Review 已通过，继续交付将复核现有证据并完成单仓需求。";
+  fixture.requests[0].next_action = fixture.requests[0].blocker;
+  await interval.fn();
+  vm.runInContext('showDetail("request","r1")', context);
+  assert.match(text(get("detail")), /等待交付确认/);
+  const finalizationFlow = vm.runInContext(
+    "deliveryFlow(snapshot.requests[0])",
+    context,
+  );
+  const currentDelivery = descend(finalizationFlow).find(
+    (node) => node.className === "current",
+  );
+  assert.match(text(currentDelivery), /7\s+交付/);
+  fixture.requests[0] = beforeSingleFinalization;
+  await interval.fn();
+
+  // A retained PLANNING checkpoint can request integration approval without
+  // pretending the completed child has gone back to Coder/QA/Reviewer.
+  const beforeIntegration = structuredClone(fixture.requests[0]);
+  const beforeApprovalResult = storedOperations[1].result;
+  fixture.requests[0].stage = "PLANNING";
+  fixture.requests[0].blocker = null;
+  storedOperations[1].result = {
+    project_id: "project_fixture",
+    delivery_id: "r1",
+    checkpoint_sha256: "a".repeat(64),
+    stage: "PLANNING",
+    next_action: "请确认候选并批准一次补充验收。",
+    approval: {
+      kind: "joint_integration",
+      plan_sha256: "e".repeat(64),
+      title: "批准一次补充联合验收",
+      facts: ["原有 3 次验收记录完整保留", "不会重新执行已完成仓库的 Coder、QA 或 Reviewer"],
+    },
+  };
+  await interval.fn();
+  vm.runInContext('showDetail("request","r1")', context);
+  assert.match(text(get("detail")), /批准一次补充联合验收/);
+  const extraApproval = descend(get("detail")).find(
+    (node) => node.tag === "button" && node.textContent === "批准并继续",
+  );
+  assert.ok(extraApproval);
+  await extraApproval.events.click();
+  assert.deepEqual(submittedIntents.at(-1), {
+    action: "CONTINUE_DELIVERY",
+    project_id: "project_fixture",
+    delivery_id: "r1",
+    expected_checkpoint_sha256: "a".repeat(64),
+    approved_plan_sha256: "e".repeat(64),
+  });
+  storedOperations.pop();
+  submittedIntents.pop();
+  storedOperations[1].result = beforeApprovalResult;
+  fixture.requests[0] = beforeIntegration;
+  await interval.fn();
 
   vm.runInContext('showDetail("task","d1")', context);
   assert.match(text(get("detail")), /任务详情/);

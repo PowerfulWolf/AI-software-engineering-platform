@@ -232,11 +232,17 @@ class PlanCoverageError(ValueError):
 class IntegrationCommandError(ValueError):
     """Safe preflight feedback without echoing untrusted argv or check names."""
 
-    def __init__(self, *, check_index: int, argv: tuple[str, ...]) -> None:
+    def __init__(
+        self, *, check_index: int, argv: tuple[str, ...], missing_test: bool = False
+    ) -> None:
         command_sha = hashlib.sha256(json.dumps(argv, separators=(",", ":")).encode()).hexdigest()
+        reason = (
+            "integration pytest file selector is absent from the reviewed candidate or unsafe"
+            if missing_test
+            else "integration requires a supported test command, not inspection/install/inline code"
+        )
         super().__init__(
-            "integration requires a supported test command, not inspection/install/inline code; "
-            f"check index: {check_index}; argv sha256: {command_sha}. "
+            f"{reason}; check index: {check_index}; argv sha256: {command_sha}. "
             "Use integration_command_policy intersected with prepared project commands"
         )
 
@@ -244,7 +250,7 @@ class IntegrationCommandError(ValueError):
 class JointExecutionPlan(DomainModel):
     design_sha256: Digest
     units: Annotated[tuple[UnitPlan, ...], Field(min_length=1)]
-    integration_checks: Annotated[tuple[IntegrationCheck, ...], Field(min_length=1)]
+    integration_checks: tuple[IntegrationCheck, ...] = ()
 
     def validate_for(
         self, scope: DirectoryScope, product: JointProductSpec, design: JointTechnicalDesign
@@ -262,6 +268,13 @@ class JointExecutionPlan(DomainModel):
             if not set(unit.depends_on) <= completed:
                 raise ValueError("dependency must precede its consumer in the serial plan")
             completed.add(unit.unit_id)
+        if len(scope.units) == 1 and not self.integration_checks:
+            # The native repository delivery already requires exact Product acceptance
+            # coverage, QA PASS and Reviewer APPROVE.  A second, synthetic "joint"
+            # command adds no cross-repository evidence for a one-repository request.
+            return
+        if not self.integration_checks:
+            raise ValueError("multi-repository plan requires joint integration checks")
         known = {u.id for u in scope.units}
         expected = set(product.acceptance_ids())
         covered: set[str] = set()
@@ -299,6 +312,31 @@ class IntegrationEvidence(DomainModel):
     checks: tuple[CommandResult, ...]
 
 
+class IntegrationRetryProposal(DomainModel):
+    """One additional integration execution for an exact reviewed candidate set."""
+
+    checkpoint_sha256: Digest
+    candidates: Annotated[tuple[Candidate, ...], Field(min_length=1)]
+    next_attempt: Literal[4] = 4
+
+
+class IntegrationRetryApproval(DomainModel):
+    proposal: IntegrationRetryProposal
+    reference: NonEmptyStr
+    approved_at: AwareDatetime
+
+
+class SingleRepositoryAcceptance(DomainModel):
+    """Auditable proof that one native repository delivery is the whole request."""
+
+    unit_id: UnitId
+    child_checkpoint_sha256: Digest
+    candidate_revision: NonEmptyStr
+    product_spec_sha256: Digest
+    acceptance_ids: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1)]
+    native_evidence_references: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1)]
+
+
 class JointCheckpoint(DomainModel):
     delivery_id: DeliveryId
     team_id: TeamId
@@ -320,6 +358,8 @@ class JointCheckpoint(DomainModel):
     plan: JointExecutionPlan | None = None
     children: tuple[ChildDelivery, ...] = ()
     integration: IntegrationEvidence | None = None
+    integration_retry_approval: IntegrationRetryApproval | None = None
+    single_repository_acceptance: SingleRepositoryAcceptance | None = None
     attempts: dict[str, int] = Field(default_factory=dict)
     next_action: NonEmptyStr
     checkpoint_sha256: Digest
@@ -330,6 +370,18 @@ class JointCheckpoint(DomainModel):
             raise ValueError("joint checkpoint sequence/parent mismatch")
         ensure_unique((p.unit_id for p in self.preparations), "prepared units")
         ensure_unique((c.unit_id for c in self.children), "child units")
+        if self.integration_retry_approval is not None:
+            proposal = self.integration_retry_approval.proposal
+            candidates = tuple(
+                Candidate(unit_id=child.unit_id, revision=child.checkpoint.candidate_revision or "")
+                for child in self.children
+            )
+            if (
+                proposal.candidates != candidates
+                or any(child.checkpoint.stage is not DeliveryStage.DONE for child in self.children)
+                or not 3 <= self.attempts.get("integration", 0) <= proposal.next_attempt
+            ):
+                raise ValueError("integration retry approval candidate or attempt mismatch")
         if self.product_spec is not None and self.product_spec.scope_sha256 != digest(self.scope):
             raise ValueError("ProductSpec scope drift")
         if self.approval is not None and (
@@ -346,8 +398,26 @@ class JointCheckpoint(DomainModel):
                 raise ValueError("joint planning requires a technical design")
             self.plan.validate_for(self.scope, self.product_spec, self.design)
         if self.stage is JointStage.DONE:
+            if self.single_repository_acceptance is not None:
+                if len(self.scope.units) != 1 or len(self.children) != 1:
+                    raise ValueError("single-repository acceptance requires exactly one child")
+                child = self.children[0]
+                proof = self.single_repository_acceptance
+                if (
+                    self.product_spec is None
+                    or child.unit_id != self.scope.units[0].id
+                    or child.checkpoint.stage is not DeliveryStage.DONE
+                    or child.checkpoint.candidate_revision is None
+                    or proof.unit_id != child.unit_id
+                    or proof.child_checkpoint_sha256 != child.checkpoint.checkpoint_sha256
+                    or proof.candidate_revision != child.checkpoint.candidate_revision
+                    or proof.product_spec_sha256 != digest(self.product_spec)
+                    or proof.acceptance_ids != self.product_spec.acceptance_ids()
+                ):
+                    raise ValueError("single-repository acceptance proof drifted")
+                return self
             if self.plan is None or self.integration is None:
-                raise ValueError("joint DONE requires integration evidence")
+                raise ValueError("multi-repository DONE requires integration evidence")
             if {c.unit_id for c in self.children} != {u.unit_id for u in self.plan.units}:
                 raise ValueError("partial repository success is not joint DONE")
             if any(c.checkpoint.stage != DeliveryStage.DONE for c in self.children):
@@ -402,3 +472,4 @@ class JointCheckpoint(DomainModel):
 
 class JointDeliveryResult(DomainModel):
     checkpoint: JointCheckpoint
+    integration_retry_proposal: IntegrationRetryProposal | None = None

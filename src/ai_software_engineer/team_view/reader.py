@@ -18,6 +18,7 @@ from ai_software_engineer.domain.workforce import AgentProfile
 from ai_software_engineer.evaluation import FileEvaluationEventStore
 from ai_software_engineer.manager.delivery import _delivery_id
 from ai_software_engineer.manager.delivery_checkpoint import (
+    DeliveryStage,
     FileProjectDeliveryCheckpointStore,
     ProjectDeliveryCheckpoint,
     ProjectDeliveryIntake,
@@ -25,10 +26,12 @@ from ai_software_engineer.manager.delivery_checkpoint import (
 )
 from ai_software_engineer.manager.dispatch import (
     ContinuationDispatchRecord,
+    DeliveryAllocation,
+    RecoveryDispatchRecord,
     VerificationReservation,
 )
 from ai_software_engineer.manager.mysql_dispatch_authority import _decode_allocation
-from ai_software_engineer.multi_directory.models import JointCheckpoint, digest
+from ai_software_engineer.multi_directory.models import JointCheckpoint, JointStage, digest
 from ai_software_engineer.multi_directory.production import DerivedStageInputs
 from ai_software_engineer.multi_directory.retirement import RequirementRetirementStore
 from ai_software_engineer.multi_directory.scope import git_read
@@ -176,11 +179,22 @@ class ProductionTeamReader:
         ownership: dict[str, tuple[str, ScopeView]] = {}
         requests: list[RequestView] = []
         for joint in joints:
+            children = {child.unit_id: child.checkpoint for child in joint.children}
+            if not children.keys() <= {unit.id for unit in joint.scope.units}:
+                raise ValueError("committed child unit is outside the Requirement scope")
             scopes: list[ScopeView] = []
             for unit in joint.scope.units:
                 native_id: str | None = None
                 reference = joint.design is not None and unit.id in joint.design.reference_only
-                if joint.plan is not None and not reference:
+                child_checkpoint = children.get(unit.id)
+                if child_checkpoint is not None:
+                    if reference or child_checkpoint.repository_root != unit.root:
+                        raise ValueError("committed child code scope mismatch")
+                    # A sealed child keeps its identity when integration recovery clears or
+                    # replaces the parent plan. Derivation is only for the initial window
+                    # before that child has been attached to the parent journal.
+                    native_id = child_checkpoint.delivery_id
+                elif joint.plan is not None and not reference:
                     derived = DerivedStageInputs(joint, unit.id)
                     native_id = _delivery_id(
                         derived.root,
@@ -194,6 +208,8 @@ class ProductionTeamReader:
                     delivery_id=native_id,
                 )
                 if native_id is not None:
+                    if native_id in ownership:
+                        raise ValueError("ambiguous native Requirement ownership")
                     ownership[native_id] = (joint.delivery_id, scope)
                 scopes.append(scope)
             for child in joint.children:
@@ -216,18 +232,34 @@ class ProductionTeamReader:
                     ("TechnicalDesign", joint.design),
                     ("ExecutionPlan", joint.plan),
                     ("IntegrationEvidence", joint.integration),
+                    ("SingleRepositoryAcceptance", joint.single_repository_acceptance),
                 )
                 if document is not None
+            )
+            waiting_single_acceptance = (
+                len(joint.scope.units) == 1
+                and len(joint.children) == 1
+                and joint.children[0].checkpoint.stage is DeliveryStage.DONE
+                and joint.single_repository_acceptance is None
+                and joint.stage not in {JointStage.DONE, JointStage.CLOSED}
+            )
+            presented_stage = (
+                "WAITING_DELIVERY_FINALIZATION" if waiting_single_acceptance else joint.stage
+            )
+            presented_next_action = (
+                "原生 QA 与 Review 已通过，继续交付将复核现有证据并完成单仓需求。"  # noqa: RUF001
+                if waiting_single_acceptance
+                else _safe(joint.next_action)
             )
             requests.append(
                 RequestView(
                     id=joint.delivery_id,
                     project_id=joint.project_id,
                     title=_safe(joint.title),
-                    stage=joint.stage,
+                    stage=presented_stage,
                     scopes=tuple(scopes),
-                    next_action=_safe(joint.next_action),
-                    blocker=_safe(joint.next_action) if _waiting(joint.stage) else None,
+                    next_action=presented_next_action,
+                    blocker=(presented_next_action if _waiting(presented_stage) else None),
                     dialogue=tuple(
                         DialogueTurnView(
                             sequence=sequence,
@@ -307,6 +339,14 @@ class ProductionTeamReader:
                     cursor.execute("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
                     for native, base in native_views:
                         view = _read_task_details(native, cursor, base)
+                        successor = _active_successor_dispatch(native, cursor)
+                        if successor is not None:
+                            view = _read_task_details(
+                                native,
+                                cursor,
+                                base,
+                                dispatch_override=successor,
+                            )
                         tasks.append(view)
                         projected_native_views.append((native, view))
                     tasks.extend(
@@ -681,10 +721,10 @@ def _read_verifications(
 ) -> tuple[TaskView, ...]:
     """Project verification reservations as first-class read-side work items."""
     cursor.execute(
-        "SELECT plan_sha256,payload_json,completion_sha256 "
+        "SELECT plan_sha256,payload_json,completion_sha256,abandonment_sha256 "
         "FROM verification_reservations ORDER BY plan_sha256"
     )
-    reservations: list[tuple[VerificationReservation, str | None]] = []
+    reservations: list[tuple[VerificationReservation, str | None, str | None]] = []
     latest_by_source: dict[tuple[str, str], VerificationReservation] = {}
     for row in cursor.fetchall():
         reservation = VerificationReservation.model_validate_json(_text(row, "payload_json"))
@@ -693,7 +733,12 @@ def _read_verifications(
         completion_sha256 = (
             str(row["completion_sha256"]) if row["completion_sha256"] is not None else None
         )
-        reservations.append((reservation, completion_sha256))
+        abandonment_sha256 = (
+            str(row["abandonment_sha256"]) if row["abandonment_sha256"] is not None else None
+        )
+        if completion_sha256 is not None and abandonment_sha256 is not None:
+            raise ValueError("verification reservation has conflicting releases")
+        reservations.append((reservation, completion_sha256, abandonment_sha256))
         key = (str(reservation.repository_id), str(reservation.source_task_id))
         latest = latest_by_source.get(key)
         if latest is None or reservation.committed_at > latest.committed_at:
@@ -703,7 +748,7 @@ def _read_verifications(
     result: list[TaskView] = []
     validated_sources: set[str] = set()
     repository_ids = {native.checkpoint.repository_id for native, _, _ in native_by_task.values()}
-    for reservation, completion_sha256 in reservations:
+    for reservation, completion_sha256, abandonment_sha256 in reservations:
         source = native_by_task.get(str(reservation.source_task_id))
         if source is None:
             if reservation.repository_id in repository_ids:
@@ -724,8 +769,10 @@ def _read_verifications(
                 source_scope,
                 reservation,
                 completion_sha256,
+                abandonment_sha256,
                 superseded=(
                     completion_sha256 is None
+                    and abandonment_sha256 is None
                     and latest_by_source[
                         (str(reservation.repository_id), str(reservation.source_task_id))
                     ].plan_sha256
@@ -744,6 +791,7 @@ def _verification_view(
     source_scope: ScopeView,
     reservation: VerificationReservation,
     completion_sha256: str | None,
+    abandonment_sha256: str | None,
     *,
     superseded: bool,
     team_id: str,
@@ -833,6 +881,11 @@ def _verification_view(
                 else "Review rejected; resume the delivery to create a linked Coder remediation."
             )
             next_action = blocker
+    elif abandonment_sha256 is not None:
+        terminal = True
+        status = "VERIFICATION_INTERRUPTED"
+        blocker = "Candidate verification stopped before a sealed result was produced."
+        next_action = "Continue the delivery to create and approve a fresh verification plan."
     elif superseded:
         terminal = True
         status = "VERIFICATION_SUPERSEDED"
@@ -879,22 +932,39 @@ def _verification_view(
     )
 
 
-def _read_task_details(native: _Native, cursor: DictCursor, base: TaskView) -> TaskView:
+def _read_task_details(
+    native: _Native,
+    cursor: DictCursor,
+    base: TaskView,
+    *,
+    dispatch_override: DeliveryAllocation | None = None,
+) -> TaskView:
     cp = native.checkpoint
-    if cp.dispatch_commit_id is None:
+    if cp.dispatch_commit_id is None and dispatch_override is None:
         return base
-    cursor.execute("SELECT * FROM dispatch_commits WHERE id = %s", (cp.dispatch_commit_id,))
-    row = cursor.fetchone()
-    if row is None:
-        raise ValueError("missing committed dispatch")
-    dispatch = _decode_allocation(row)
-    if (
-        dispatch.dispatch_sha256 != cp.dispatch_commit_sha256
-        or dispatch.repository_id != cp.repository_id
-        or dispatch.task.repository != cp.repository_root
-        or (cp.task_id is not None and dispatch.task_id != cp.task_id)
-    ):
-        raise ValueError("dispatch checkpoint mismatch")
+    checkpoint_bound = dispatch_override is None
+    if checkpoint_bound:
+        cursor.execute("SELECT * FROM dispatch_commits WHERE id = %s", (cp.dispatch_commit_id,))
+        row = cursor.fetchone()
+        if row is None:
+            raise ValueError("missing committed dispatch")
+        dispatch = _decode_allocation(row)
+        if (
+            dispatch.dispatch_sha256 != cp.dispatch_commit_sha256
+            or dispatch.repository_id != cp.repository_id
+            or dispatch.task.repository != cp.repository_root
+            or (cp.task_id is not None and dispatch.task_id != cp.task_id)
+        ):
+            raise ValueError("dispatch checkpoint mismatch")
+    else:
+        if dispatch_override is None:
+            raise ValueError("active successor dispatch is missing")
+        dispatch = dispatch_override
+        if (
+            dispatch.repository_id != cp.repository_id
+            or dispatch.task.repository != cp.repository_root
+        ):
+            raise ValueError("active successor dispatch scope mismatch")
     cursor.execute("SELECT * FROM tasks WHERE id = %s", (dispatch.task_id,))
     row = cursor.fetchone()
     if row is None:
@@ -904,10 +974,11 @@ def _read_task_details(native: _Native, cursor: DictCursor, base: TaskView) -> T
     task = _decode_task(dispatch.task_id, _text(row, "payload_json"))
     if row["status"] != task.status.value:
         raise ValueError("Task indexed status mismatch")
-    if cp.task_revision is not None and row["revision"] < cp.task_revision:
+    if checkpoint_bound and cp.task_revision is not None and row["revision"] < cp.task_revision:
         raise ValueError("Task snapshot predates the captured checkpoint")
     if (
-        cp.task_status is not None
+        checkpoint_bound
+        and cp.task_status is not None
         and cp.task_status.value in _TERMINAL
         and task.status != cp.task_status
     ):
@@ -968,39 +1039,123 @@ def _read_task_details(native: _Native, cursor: DictCursor, base: TaskView) -> T
         )
         for a in artifacts
     )
-    blocker = base.blocker or (
-        _safe(events[-1].reason) if task.status.value in {"BLOCKED", "FAILED"} and events else None
-    )
+    blocker = base.blocker if checkpoint_bound else None
+    if blocker is None and task.status.value in {"BLOCKED", "FAILED"} and events:
+        blocker = _safe(events[-1].reason)
     continuation = dispatch if isinstance(dispatch, ContinuationDispatchRecord) else None
+    recovery = dispatch if isinstance(dispatch, RecoveryDispatchRecord) else None
+    source_task_id = (
+        continuation.source_task_id
+        if continuation is not None
+        else (
+            str(recovery.task.metadata.get("recovery_of_task_id")) if recovery is not None else None
+        )
+    )
+    source_delivery_id = (
+        continuation.source_delivery_id
+        if continuation is not None
+        else (
+            str(recovery.task.metadata.get("recovery_of_delivery_id"))
+            if recovery is not None
+            else None
+        )
+    )
+    plan_sha256 = (
+        continuation.continuation_sha256
+        if continuation is not None
+        else (recovery.recovery_plan_sha256 if recovery is not None else None)
+    )
+    terminal = task.status.value in _TERMINAL or (base.terminal if checkpoint_bound else False)
+    candidate_revision = projection.tasks[0].candidate_revision
+    if checkpoint_bound:
+        candidate_revision = cp.candidate_revision or candidate_revision
     return base.model_copy(
         update={
-            "work_kind": "remediation" if continuation is not None else base.work_kind,
-            "source_delivery_id": (
-                continuation.source_delivery_id if continuation is not None else None
+            "work_kind": (
+                "remediation"
+                if continuation is not None or recovery is not None
+                else base.work_kind
             ),
-            "source_task_id": (continuation.source_task_id if continuation is not None else None),
-            "plan_sha256": (continuation.continuation_sha256 if continuation is not None else None),
+            "source_delivery_id": source_delivery_id,
+            "source_task_id": source_task_id,
+            "plan_sha256": plan_sha256,
             "task_id": task.id,
             "status": task.status.value,
-            "terminal": task.status.value in _TERMINAL or base.terminal,
+            "checkpoint_stage": (base.checkpoint_stage if checkpoint_bound else task.status.value),
+            "terminal": terminal,
             "last_activity": max(cp.checkpointed_at, task.updated_at),
             "blocker": blocker,
+            "next_action": (
+                base.next_action if checkpoint_bound else f"Continue {task.status.value}."
+            ),
             "assignments": tuple(
                 AssignmentView(
                     agent_id=p.agent_id,
                     role=p.role,
                     planned_provider=p.model_selection.provider,
                     planned_model=p.model_selection.model,
-                    current_stage=_CURRENT_ROLE.get(task.status) is p.role and not base.terminal,
+                    current_stage=_CURRENT_ROLE.get(task.status) is p.role and not terminal,
                 )
                 for p in dispatch.phases
             ),
             "timeline": timeline,
             "runs": _read_runs(native, task.id),
             "documents": base.documents + docs,
-            "candidate_revision": cp.candidate_revision or projection.tasks[0].candidate_revision,
+            "candidate_revision": candidate_revision,
+            "candidate_branch": _candidate_branch(cp.repository_root, task.id, candidate_revision),
         }
     )
+
+
+def _active_successor_dispatch(
+    native: _Native,
+    cursor: DictCursor,
+) -> DeliveryAllocation | None:
+    """Return the one live recovery/remediation Task newer than the checkpoint.
+
+    A Coder run begins only after its dispatch and SQL Task are durable.  The native
+    delivery checkpoint is published after that run returns, so it legitimately lags
+    while Coder, QA, or Reviewer is executing.  Project the live successor instead of
+    leaving the parent Requirement and Team queues on the previous BLOCKED checkpoint.
+    """
+    cp = native.checkpoint
+    known_tasks = _native_task_sources(native)
+    cursor.execute(
+        "SELECT * FROM dispatch_commits WHERE repository_id = %s",
+        (cp.repository_id,),
+    )
+    candidates: list[DeliveryAllocation] = []
+    for row in cursor.fetchall():
+        dispatch = _decode_allocation(row)
+        if dispatch.task_id == cp.task_id or dispatch.committed_at <= cp.checkpointed_at:
+            continue
+        source_task_id: str | None = None
+        source_delivery_id: str | None = None
+        if isinstance(dispatch, RecoveryDispatchRecord):
+            source_task_id = str(dispatch.task.metadata.get("recovery_of_task_id", ""))
+            source_delivery_id = str(dispatch.task.metadata.get("recovery_of_delivery_id", ""))
+            if source_delivery_id == cp.delivery_id and (
+                source_task_id != cp.task_id
+                or dispatch.task.metadata.get("recovery_source_checkpoint_sha256")
+                != cp.checkpoint_sha256
+            ):
+                raise ValueError("active recovery source checkpoint mismatch")
+        elif isinstance(dispatch, ContinuationDispatchRecord):
+            source_task_id = str(dispatch.source_task_id)
+            source_delivery_id = str(dispatch.source_delivery_id)
+        if source_task_id not in known_tasks or source_delivery_id != cp.delivery_id:
+            continue
+        cursor.execute("SELECT status FROM tasks WHERE id = %s", (dispatch.task_id,))
+        task_row = cursor.fetchone()
+        if task_row is None:
+            continue
+        if str(task_row["status"]) not in _TERMINAL:
+            candidates.append(dispatch)
+    if not candidates:
+        return None
+    if len(candidates) != 1:
+        raise ValueError("ambiguous active successor dispatch")
+    return candidates[0]
 
 
 def _read_runs(

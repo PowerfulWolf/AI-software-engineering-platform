@@ -1,0 +1,33 @@
+{
+  "id": "T049",
+  "slug": "incremental-knowledge-indexing",
+  "title": "建设知识导入后的异步解析与增量索引",
+  "status": "todo",
+  "phase": "backlog",
+  "depends_on": ["T048"],
+  "allowed_paths": [
+    "src/ai_software_engineer/knowledge/**",
+    "src/ai_software_engineer/knowledge_documents.py",
+    "src/ai_software_engineer/knowledge_selection.py",
+    "src/ai_software_engineer/spec_documents.py",
+    "src/ai_software_engineer/learning.py",
+    "src/ai_software_engineer/manager/**",
+    "src/ai_software_engineer/web_console/**",
+    "schemas/knowledge-*.schema.json",
+    "schemas/spec-*.schema.json",
+    "tests/knowledge/**",
+    "tests/specs/**",
+    "tests/manager/**",
+    "tests/web_console/**",
+    "docs/**",
+    ".trellis/spec/core/**",
+    ".trellis/tasks/09-18-t049-incremental-knowledge-indexing/**"
+  ],
+  "verification_commands": [
+    "uv run pytest -q tests/knowledge tests/specs tests/manager tests/web_console",
+    "uv run ruff check .",
+    "uv run ruff format --check .",
+    "uv run mypy src tests",
+    "git diff --check"
+  ]
+}

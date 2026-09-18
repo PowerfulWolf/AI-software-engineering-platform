@@ -228,8 +228,9 @@ class DeliveryResumeController:
                 raise ValueError("successor verification changed the retained candidate")
             return self._approval_required(current, successor, path)
         store = source[0]
+        remediation_backend = self._verification.backend
         native = CandidateRemediationService(
-            backend=self._backend,
+            backend=remediation_backend,
             config=self._config,
             environment=self._environment,
         ).prepare(source=self._native_source(plan), store=store, plan=plan, completion=completion)
@@ -246,7 +247,7 @@ class DeliveryResumeController:
                 next_action=_checkpoint_next_action(started.checkpoint),
                 completion=completion,
             )
-        delivered = self._backend.run_prepared_allocation(
+        delivered = remediation_backend.run_prepared_allocation(
             native.dispatch,
             native.preparation,
             native.source.stages.product,

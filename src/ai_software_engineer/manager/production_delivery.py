@@ -129,6 +129,7 @@ class DispatchDeliveryAgentAdapter:
         context_resolver: StoredContextResolver,
         environment: Mapping[str, str] | None = None,
         route_adapters: DeliveryRouteAdapterFactory | None = None,
+        route_scope: tuple[ProviderRouteConfig, ...] | None = None,
     ) -> None:
         if isinstance(dispatch, VerificationReservation):
             if plan_adapter is not None:
@@ -157,6 +158,7 @@ class DispatchDeliveryAgentAdapter:
         )
         self._context_resolver = context_resolver
         self._route_adapters = route_adapters or ConfiguredDeliveryRouteAdapterFactory()
+        self._route_scope = route_scope
         self._coder: RoleWorktreeBinding | None = None
         self._verifiers: VerificationWorktreeBindings | None = None
         self._adapters: dict[AgentRole, AgentAdapter] = {}
@@ -243,7 +245,7 @@ class DispatchDeliveryAgentAdapter:
         self,
         definition: AgentDefinition,
     ) -> tuple[ProviderRouteConfig, ...]:
-        routes = self._config.routes_for(TeamRole(definition.role.value))
+        routes = self._route_scope or self._config.routes_for(TeamRole(definition.role.value))
         primary = tuple(
             route
             for route in routes

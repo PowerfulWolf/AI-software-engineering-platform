@@ -416,6 +416,9 @@ class ContinuationDispatchRecord(DomainModel):
     continuation_sha256: DispatchSha256
     continuation_plan_sha256: DispatchSha256
     continuation_context_sha256: DispatchSha256
+    continuation_attempt: int = Field(default=1, ge=1, le=10)
+    retry_of_task_id: TaskId | None = None
+    retry_of_dispatch_id: DispatchCommitId | None = None
     target_preparation_sha256: DispatchSha256
     source_delivery_id: NonEmptyStr
     source_task_id: TaskId
@@ -430,7 +433,13 @@ class ContinuationDispatchRecord(DomainModel):
 
     @model_validator(mode="after")
     def validate_record(self) -> Self:
-        expected = {
+        attempt_identity = continuation_attempt_identity(
+            self.continuation_sha256,
+            attempt=self.continuation_attempt,
+            retry_of_task_id=self.retry_of_task_id,
+            retry_of_dispatch_id=self.retry_of_dispatch_id,
+        )
+        expected: dict[str, object] = {
             "continuation_kind": self.continuation_kind,
             "continuation_sha256": self.continuation_sha256,
             "continuation_plan_sha256": self.continuation_plan_sha256,
@@ -446,12 +455,20 @@ class ContinuationDispatchRecord(DomainModel):
             "execution_plan_id": self.execution_plan_id,
             "execution_plan_sha256": self.execution_plan_sha256,
         }
+        if self.continuation_attempt > 1:
+            expected.update(
+                {
+                    "continuation_attempt": self.continuation_attempt,
+                    "continuation_retry_of_task_id": self.retry_of_task_id,
+                    "continuation_retry_of_dispatch_id": self.retry_of_dispatch_id,
+                }
+            )
         if (
             self.task.id != self.task_id
             or self.task.status is not TaskStatus.NEW
             or self.task.attempts != 0
-            or self.task_id != f"task_continue_{self.continuation_sha256[:32]}"
-            or self.id != f"dispatch_commit_{self.continuation_sha256}"
+            or self.task_id != f"task_continue_{attempt_identity[:32]}"
+            or self.id != f"dispatch_commit_{attempt_identity}"
             or any(self.task.metadata.get(key) != value for key, value in expected.items())
         ):
             raise ValueError("continuation dispatch Task lineage mismatch")
@@ -475,6 +492,35 @@ class ContinuationDispatchRecord(DomainModel):
     def validate_integrity(self) -> None:
         if self.dispatch_sha256 != _record_digest(self):
             raise DispatchCommitCorruption("continuation dispatch digest mismatch")
+
+
+def continuation_attempt_identity(
+    continuation_sha256: DispatchSha256 | str,
+    *,
+    attempt: int,
+    retry_of_task_id: TaskId | str | None,
+    retry_of_dispatch_id: DispatchCommitId | str | None,
+) -> str:
+    """Derive an append-only remediation allocation identity.
+
+    Attempt one preserves the v0.1 identity.  Later attempts are chained to the
+    exact failed successor so a pre-Agent infrastructure failure can create a new
+    Task without mutating or replaying the terminal Task.
+    """
+
+    if attempt == 1:
+        if retry_of_task_id is not None or retry_of_dispatch_id is not None:
+            raise ValueError("first continuation attempt cannot retry another allocation")
+        return str(continuation_sha256)
+    if attempt < 2 or retry_of_task_id is None or retry_of_dispatch_id is None:
+        raise ValueError("continuation retry requires the exact prior Task and dispatch")
+    payload = {
+        "continuation_sha256": str(continuation_sha256),
+        "attempt": attempt,
+        "retry_of_task_id": str(retry_of_task_id),
+        "retry_of_dispatch_id": str(retry_of_dispatch_id),
+    }
+    return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
 
 DeliveryAllocation = DispatchCommitRecord | RecoveryDispatchRecord | ContinuationDispatchRecord
@@ -1008,6 +1054,9 @@ class FileDispatchCommitStore:
 
 def _record_digest(record: DeliveryAllocation) -> str:
     payload = record.model_dump(mode="json", exclude={"dispatch_sha256"}, exclude_none=True)
+    if isinstance(record, ContinuationDispatchRecord) and record.continuation_attempt == 1:
+        # Preserve the exact v0.1 digest of already committed remediation records.
+        payload.pop("continuation_attempt", None)
     return hashlib.sha256(_canonical_json(payload).encode()).hexdigest()
 
 
@@ -1085,4 +1134,5 @@ __all__ = [
     "DispatchWorkforceSnapshot",
     "FileDispatchCommitStore",
     "ManagerDispatchService",
+    "continuation_attempt_identity",
 ]

@@ -16,6 +16,7 @@ from ai_software_engineer.manager.delivery_checkpoint import (
 from ai_software_engineer.recovery.models import RecoveryRejected
 from ai_software_engineer.recovery.verification_snapshot import (
     CandidateRuntimeSnapshot,
+    terminal_accepted_qa_event,
     validate_candidate_snapshot,
 )
 from tests.e2e.test_delivery_checkpoint import _checkpoint, _full_fields
@@ -166,3 +167,59 @@ def test_candidate_snapshot_accepts_qa_finding_then_failed_coder(
         checkpoint,
         CandidateRuntimeSnapshot(task, len(events), dispatch, dispatch, events),
     )
+
+
+def test_terminal_accepted_qa_is_selected_only_from_qa_pass_transition(tmp_path: Path) -> None:
+    request, workforce = _facts(tmp_path)
+    dispatch = _service(RecordingDispatchStore(), workforce, request).commit_dispatch(request)
+    task = dispatch.task.model_copy(update={"status": TaskStatus.BLOCKED, "attempts": 3})
+    states = (
+        TaskStatus.NEW,
+        TaskStatus.PLANNING,
+        TaskStatus.IMPLEMENTING,
+        TaskStatus.QA,
+        TaskStatus.REVIEW,
+        TaskStatus.BLOCKED,
+    )
+    reasons = (
+        "task_validated",
+        "plan_validated",
+        "candidate_ready",
+        "qa_passed",
+        "Reviewer provider unavailable",
+    )
+    events = tuple(
+        StateEvent(
+            event_id=f"evt_reviewer_recovery_{index}",
+            task_id=task.id,
+            from_status=before,
+            to_status=after,
+            actor=AgentRole.ORCHESTRATOR,
+            reason=reasons[index],
+            artifact_ids=(
+                ("art_impl_snapshot",)
+                if after is TaskStatus.QA
+                else ("art_qa_snapshot",)
+                if after is TaskStatus.REVIEW
+                else ()
+            ),
+            source_revision="b" * 40 if index >= 2 else task.base_ref,
+            attempt=1 if index < 4 else 3,
+            occurred_at=task.updated_at,
+        )
+        for index, (before, after) in enumerate(pairwise(states))
+    )
+
+    accepted = terminal_accepted_qa_event(task, events)
+
+    assert accepted is not None
+    assert accepted.artifact_ids == ("art_qa_snapshot",)
+    with pytest.raises(RecoveryRejected):
+        terminal_accepted_qa_event(
+            task,
+            (
+                *events[:3],
+                events[3].model_copy(update={"artifact_ids": ("art_qa_a", "art_qa_b")}),
+                events[4],
+            ),
+        )

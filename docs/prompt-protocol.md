@@ -27,7 +27,7 @@ class AgentAdapter(Protocol):
     def run(self, request: AgentRequest) -> AgentResult: ...
 ```
 
-`AgentRequest` 固定携带 `run_id`、`task_id`、`role`、`attempt`、`source_revision`、`context_manifest_id`、`input_artifact_ids`、机器 `permissions`、`output_schema` 和 `timeout_seconds`。Coder 接续运行还必须携带 `continuation_checkpoint_id` 和排序后的 `continuation_changed_paths`，且 checkpoint 必须在 input artifacts 中。`AgentResult` 回显这些身份字段，并且只能是 `SUCCEEDED + typed artifact`，或 `FAILED/TIMED_OUT + AgentFailure`；失败结果不能携带 verdict Artifact。
+`AgentRequest` 固定携带 `run_id`、`task_id`、`role`、`attempt`、`source_revision`、`context_manifest_id`、`input_artifact_ids`、机器 `permissions`、`output_schema` 和 `timeout_seconds`。Runner 还必须通过 `expected_parent_artifact_ids` 与 `expected_supersedes_by_kind` 下发精确 lineage；后者覆盖该角色允许返回的每一种 Artifact，并允许值为 `null`。Coder 接续运行还必须携带 `continuation_checkpoint_id` 和排序后的 `continuation_changed_paths`，且 checkpoint 必须在 input artifacts 中。`AgentResult` 回显这些身份字段，并且只能是 `SUCCEEDED + typed artifact`，或 `FAILED/TIMED_OUT + AgentFailure`；失败结果不能携带 verdict Artifact。模型返回的 parent 或 supersedes 与请求契约不一致时，按 `INVALID_OUTPUT` 进入受控重试/阻塞，不得作为未分类异常退出。
 
 这里 request 的 `source_revision` 始终表示 Agent 实际收到的输入 revision。Coder 在该基线上形成 intended diff；Codex adapter 先校验 provisional report、实际路径与机器权限，再由平台创建 candidate commit。最终 implementation-report Artifact 的 `source_revision` 可以不同，但必须等于报告内 `commit_sha`；QA 和 Reviewer 随后的 request/result 都必须严格绑定这个 candidate。不要为了追求字段字面相等而在 Coder 启动前虚构未知 candidate。
 

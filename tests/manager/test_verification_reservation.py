@@ -13,8 +13,10 @@ from ai_software_engineer.manager.mysql_dispatch_authority import MySqlDispatchA
 from tests.manager.test_dispatch import RecordingDispatchStore, _facts, _service
 
 
-@pytest.mark.parametrize("completed", [False, True])
-def test_terminal_task_does_not_release_live_verification(tmp_path: Path, completed: bool) -> None:
+@pytest.mark.parametrize("release", [None, "completed", "abandoned"])
+def test_terminal_task_does_not_release_live_verification(
+    tmp_path: Path, release: str | None
+) -> None:
     request, snapshot = _facts(tmp_path)
     dispatch = _service(RecordingDispatchStore(), snapshot, request).commit_dispatch(request)
     phases = []
@@ -78,7 +80,8 @@ def test_terminal_task_does_not_release_live_verification(tmp_path: Path, comple
             {
                 "plan_sha256": reservation.plan_sha256,
                 "payload_json": reservation.model_dump_json(),
-                "completion_sha256": "b" * 64 if completed else None,
+                "completion_sha256": "b" * 64 if release == "completed" else None,
+                "abandonment_sha256": "c" * 64 if release == "abandoned" else None,
             }
         ],
     ]
@@ -89,6 +92,6 @@ def test_terminal_task_does_not_release_live_verification(tmp_path: Path, comple
         cast(Connection, connection), snapshot.repository_id, snapshot.task_id
     )
     assert {lease.id for lease in actual.active_leases} == (
-        set() if completed else {p.lease.id for p in reservation.phases}
+        set() if release is not None else {p.lease.id for p in reservation.phases}
     )
     assert {p.assignment.id for p in reservation.phases} <= {a.id for a in actual.assignments}

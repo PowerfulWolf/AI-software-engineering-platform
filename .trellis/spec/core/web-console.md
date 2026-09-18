@@ -337,6 +337,13 @@ requestBlockingSummary(request) -> { reasons, operationReason, approval, suggest
 recoveryApprovalBox(request, approval) -> HTMLElement
 ```
 
+```python
+NativeRecoveryEntry.open_plan(path: Path) -> tuple[FileRecoveryStore, RecoveryPlan]
+CandidateVerificationEntry.open_plan(
+    path: Path,
+) -> tuple[FileRecoveryStore, CandidateVerificationPlan]
+```
+
 ### 3. Contracts
 
 - The unconsumed approval must be rendered inside the Requirement's single `阻塞信息` module,
@@ -352,6 +359,14 @@ recoveryApprovalBox(request, approval) -> HTMLElement
   digest would hide the user's only recovery action forever.
 - The joint parent may remain `BLOCKED` while the child returns the approval. UI state is derived
   from the successful Operation plus exact checkpoint, not from a synthetic stage transition.
+- Recovery and candidate-verification plan files are durable store envelopes shaped as
+  `{record, sha256}`. The console adapter must open them through the Project-scoped recovery entry;
+  it must not parse the whole file directly as `RecoveryPlan` or `CandidateVerificationPlan`.
+  The entry validates path ownership, envelope integrity and the canonical record before the adapter
+  builds an approval request.
+- A candidate-verification plan with `accepted_qa` must state that the sealed QA PASS will be reused,
+  identify that QA artifact and display only the fresh Reviewer model assignment. The approval must
+  not imply that QA will run again.
 - Closing a recovery bug requires an explicit existing-data disposition. If durable facts are
   internally inconsistent, repair only the exact resolved records under their transaction/integrity
   gates, preserve immutable history, and report before/after verification. If the durable facts are
@@ -370,6 +385,10 @@ recoveryApprovalBox(request, approval) -> HTMLElement
 | Failed continue Operation | Failure remains the latest recovery result; no approval is fabricated |
 | Scope/plan approval fails safely, then a newer Operation reissues the same digest | Newer issuance is actionable and rendered; the older submission does not consume it |
 | Approval checkpoint differs from current checkpoint | Approval is stale and not rendered |
+| Valid persisted `{record, sha256}` recovery/verification envelope | Scoped entry opens and validates it; the console renders the exact approval facts |
+| Candidate verification plan contains `accepted_qa` | Approval says QA is reused and only Reviewer will run |
+| Raw model parser receives the whole persisted envelope | Forbidden: this rejects valid plans as extra/missing fields and hides the actionable approval |
+| Envelope path, scope, record digest or outer digest is invalid | Reject safely; do not fabricate an approval |
 | Existing facts are consistent and an exact scope/plan approval is pending | No database rewrite; handoff names the visible approval action and every subsequent step needed to resume |
 | Existing facts violate a mutable projection/index contract | Repair only resolved derived records, preserve immutable journals/evidence, then verify both source facts and rebuilt UI projection |
 
@@ -380,6 +399,8 @@ recoveryApprovalBox(request, approval) -> HTMLElement
 - Base: no approval exists; the durable current blocker and normal continue action remain visible.
 - Bad: leave the old raw Coder failure under `当前阻塞` and place the actual approval below the
   discussion, making a successful continuation look like the same error repeated.
+- Bad: call `RecoveryPlan.model_validate_json(plan_path.read_text())` on the persisted envelope.
+  A valid plan then fails at the console boundary even though recovery already produced it.
 - Bad: declare the bug fixed because new code is correct while the reporter's existing Requirement
   remains blocked with neither a bounded data repair nor an exact operator recovery sequence.
 
@@ -389,6 +410,11 @@ recoveryApprovalBox(request, approval) -> HTMLElement
 policy failure with a successful, same-checkpoint `coder_scope` Operation. Assert the approval button
 is a descendant of `request-blocking-section`, exact paths are visible, digests/raw failure text are
 hidden, and the button submits only `approved_scope_sha256`.
+
+`tests/web_console/test_manager.py` must pass a real `FileRecoveryStore` envelope path through a
+`DeliveryResumeResult` and assert that `ManagerConsoleAdapter` delegates plan opening to the scoped
+entry before returning `coder_recovery`. Candidate-verification coverage must preserve the same
+entry-reader boundary. Tampered or misplaced envelopes remain covered by recovery entry/store tests.
 
 ### 7. Wrong vs Correct
 
@@ -400,6 +426,14 @@ appendApprovalAfterDiscussion(operation.result.approval)
 // Correct: preserve history while presenting the successful next operator gate in one place.
 const approval = latestApproval(request.id, request.checkpoint_sha256)
 showOriginalBlockerAndApproval(request.blocker, recoveryApprovalBox(request, approval))
+```
+
+```python
+# Wrong: persisted files contain an envelope, not a bare plan.
+plan = RecoveryPlan.model_validate_json(Path(plan_file).read_text())
+
+# Correct: resolve and validate the envelope through the Project-scoped boundary.
+_, plan = host.recovery_entry(project_id).open_plan(Path(plan_file))
 ```
 
 ## Scenario: singleton Team, Project, document knowledge and production settings administration
@@ -822,7 +856,10 @@ ase-console.pid line 2 = absolute repository-local executable that created the r
   repository's executable, or when line 2 identifies a live `*/.venv/bin/ase-console` previously
   written by this launcher in another checkout sharing the same state directory. The latter is a
   managed checkout handoff: `restart` stops the verified old executable and starts the current
-  repository executable. A numeric PID with no live process is a safe stale record: `stop` removes
+  repository executable. Python entry points may appear in the process table as the same repository's
+  `.venv/bin/python*` followed by relative `.venv/bin/ase-console`; that exact same-project form is
+  equivalent to the absolute entry point. It must not authorize a different virtualenv or an arbitrary
+  Python process. A numeric PID with no live process is a safe stale record: `stop` removes
   only that PID file and succeeds, allowing `restart` to continue. It waits up to 20 seconds and never
   escalates to KILL automatically.
 - `start` writes both PID and executable identity, treats a verified managed process from another
@@ -848,6 +885,7 @@ ase-console.pid line 2 = absolute repository-local executable that created the r
 | Missing PID on stop | report not running; success |
 | Non-numeric PID | send no signal; report stopped without trusting the record |
 | Numeric PID with no live process | remove only the stale PID file; report stopped; allow restart |
+| Live PID uses same-project `.venv/bin/python* .venv/bin/ase-console` | recognize it as the recorded repository executable; status/stop/restart work normally |
 | Live PID and recorded executable identify another checkout's managed Console | `restart` stops that exact process, then starts the current checkout |
 | Live PID has no valid recorded executable or command does not match it | send no signal; retain PID file; fail safely |
 | Child exits during startup | remove its PID record, show bounded log tail, exit 1 |
@@ -871,8 +909,8 @@ ase-console.pid line 2 = absolute repository-local executable that created the r
 - No-argument invocation exits 2.
 - Focused process tests use an isolated absolute `ASE_SERVICE_STATE_DIR` and a fake repository-local
   executable. They prove dead-PID restart recovery, safe handoff between two checkout executables
-  sharing one state directory, and that a live unrelated process remains alive with its PID record
-  intact.
+  sharing one state directory, same-project relative Python entry-point recognition, and that a live
+  unrelated process remains alive with its PID record intact.
 - The launcher test must prove that sibling `runtime.env` reaches the child environment without
   printing its value.
 
@@ -910,6 +948,18 @@ kill -TERM "$current_pid"
    alone proves neither ownership nor which code/config instance the browser is observing.
 5. **Knowledge capture**: this executable contract, the production guide, README and isolated launcher
    regression are the maintained prevention boundary; no parallel template tree exists in this repo.
+
+### 9. Bug analysis: Python entry-point command normalization
+
+1. **Root cause category**: process-representation mismatch. The launcher persisted a canonical
+   executable, but macOS can expose the running console as the repository virtualenv's Python plus a
+   relative entry-point argument.
+2. **Why the previous guard failed**: substring matching only the absolute entry point rejected its own
+   verified process, so safe `restart` stopped before sending TERM and emitted the stale-PID warning.
+3. **Prevention**: normalize the one safe equivalent representation—same project virtualenv Python and
+   relative `.venv/bin/ase-console`—while preserving fail-closed behavior for foreign interpreters and
+   unrelated live PIDs. The isolated launcher regression rewrites the observed command to this exact
+   representation and proves restart succeeds.
 
 ## Scenario: Product Agent 多轮需求讨论
 

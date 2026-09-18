@@ -1,0 +1,40 @@
+{
+  "id": "T048",
+  "slug": "active-knowledge-closure",
+  "title": "建设 Agent 主动知识检索与知识缺口闭环",
+  "status": "planned",
+  "phase": "plan",
+  "depends_on": ["T021", "T028", "T031", "T046"],
+  "allowed_paths": [
+    "src/ai_software_engineer/knowledge/**",
+    "src/ai_software_engineer/context/**",
+    "src/ai_software_engineer/tools/**",
+    "src/ai_software_engineer/manager/**",
+    "src/ai_software_engineer/product/**",
+    "src/ai_software_engineer/design/**",
+    "src/ai_software_engineer/planning/**",
+    "src/ai_software_engineer/agents/**",
+    "src/ai_software_engineer/learning.py",
+    "schemas/knowledge-*.schema.json",
+    "schemas/agent-skill-*.schema.json",
+    "tests/knowledge/**",
+    "tests/context/**",
+    "tests/tools/**",
+    "tests/manager/**",
+    "tests/product/**",
+    "tests/design/**",
+    "tests/planning/**",
+    "tests/agents/**",
+    "tests/evaluation/**",
+    "docs/**",
+    ".trellis/spec/core/**",
+    ".trellis/tasks/09-18-t048-active-knowledge-closure/**"
+  ],
+  "verification_commands": [
+    "uv run pytest -q tests/knowledge tests/context tests/tools tests/manager tests/product tests/design tests/planning tests/agents tests/evaluation",
+    "uv run ruff check .",
+    "uv run ruff format --check .",
+    "uv run mypy src tests",
+    "git diff --check"
+  ]
+}

@@ -59,6 +59,12 @@ from ai_software_engineer.recovery.models import (
     RecoverySource,
     digest,
 )
+from ai_software_engineer.recovery.verification_snapshot import (
+    CandidateRuntimeSnapshot,
+    candidate_event,
+    terminal_candidate_requires_coder_recovery,
+    validate_candidate_snapshot,
+)
 from ai_software_engineer.repository_workspace import RepositoryWorkspaceManifest
 from ai_software_engineer.store.mysql_repository import (
     _decode_event,
@@ -82,6 +88,7 @@ class NativeRecoverySource:
     plan: ExecutionPlan
     request: ProjectRequest
     task: Task
+    worktree_revision: str
 
 
 def _is_recoverable_terminal_coder_route(
@@ -246,6 +253,7 @@ class NativeRecoverySourceReader:
         if tuple(route.route_index for route in routes) != tuple(range(1, len(routes) + 1)):
             raise ValueError("failed route history has gaps")
         final_route = routes[-1]
+        worktree_revision = final_route.result.source_revision
         for route in routes:
             route.validate_integrity()
             result = route.result
@@ -253,7 +261,7 @@ class NativeRecoverySourceReader:
                 route.role is not AgentRole.CODER
                 or route.task_id != task.id
                 or result.context_manifest_id != context_id
-                or result.source_revision != task.base_ref
+                or result.source_revision != worktree_revision
                 or result.attempt != task.attempts
                 or (route is not final_route and route.outcome is not RouteAttemptOutcome.FALLBACK)
             ):
@@ -263,7 +271,7 @@ class NativeRecoverySourceReader:
         if (
             context.task_id != task.id
             or context.role is not AgentRole.CODER
-            or context.source_revision != task.base_ref
+            or context.source_revision != worktree_revision
             or context.attempt != task.attempts
         ):
             raise ValueError("failed context mismatch")
@@ -331,6 +339,7 @@ class NativeRecoverySourceReader:
             plan,
             stages.request,
             task,
+            worktree_revision,
         )
 
     def _sql(
@@ -400,6 +409,7 @@ class NativeRecoverySourceReader:
                     raise ValueError("event revision gap")
                 previous = TaskStatus.NEW
                 previous_attempt = 0
+                events = []
                 for event_row in rows:
                     event = _decode_event(_text(event_row, "payload_json"))
                     if (
@@ -407,11 +417,10 @@ class NativeRecoverySourceReader:
                         or event.event_id != event_row["event_id"]
                         or event.from_status is not previous
                         or event.attempt < max(previous_attempt, 1)
-                        or event.attempt > previous_attempt + 1
                         or event.attempt > task.attempts
-                        or event.source_revision != task.base_ref
                     ):
                         raise ValueError("event chain mismatch")
+                    events.append(event)
                     previous = event.to_status
                     previous_attempt = event.attempt
                 if (
@@ -426,6 +435,23 @@ class NativeRecoverySourceReader:
                     )
                 ):
                     raise ValueError("not an interrupted Coder")
+                event_tuple = tuple(events)
+                try:
+                    candidate_event(event_tuple)
+                except RecoveryRejected:
+                    if any(item.source_revision != task.base_ref for item in event_tuple):
+                        raise ValueError("pre-candidate event source revision mismatch") from None
+                else:
+                    snapshot = CandidateRuntimeSnapshot(
+                        task=task,
+                        revision=revision,
+                        dispatch=dispatch,
+                        planner_dispatch=planner_dispatch,
+                        events=event_tuple,
+                    )
+                    validate_candidate_snapshot(cp, snapshot)
+                    if not terminal_candidate_requires_coder_recovery(task, event_tuple):
+                        raise ValueError("candidate has no interrupted post-feedback Coder work")
                 return task, revision, dispatch, planner_dispatch
         finally:
             connection.rollback()

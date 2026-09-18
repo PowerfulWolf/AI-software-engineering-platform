@@ -81,6 +81,21 @@ def test_multistack_markers_are_retained_in_stable_order(tmp_path: Path) -> None
     }
 
 
+def test_platform_worktrees_are_excluded_from_source_discovery(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "README.md").write_text("source rules\n", encoding="utf-8")
+    generated = project / "worktrees" / "task_old" / "coder-attempt-01"
+    generated.mkdir(parents=True)
+    (generated / "AGENTS.md").write_text("stale generated rules\n", encoding="utf-8")
+    (generated / "package.json").write_text("{}\n", encoding="utf-8")
+
+    profile = discover_repository_profile(project, observed_at=OBSERVED)
+
+    assert tuple(source.relative_path for source in profile.native_rules) == ("README.md",)
+    assert all(fact.language is not ProjectLanguage.TYPESCRIPT for fact in profile.languages)
+
+
 def test_native_rule_sources_use_project_uris_hashes_and_schema(tmp_path: Path) -> None:
     project = tmp_path / "rules"
     project.mkdir()

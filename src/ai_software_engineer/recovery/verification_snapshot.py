@@ -36,6 +36,10 @@ from ai_software_engineer.store.mysql_repository import (
     open_mysql_connection,
 )
 
+_PRE_AGENT_CONTEXT_BUDGET_REASON = (
+    "BUDGET_EXHAUSTED: Required context exceeds the configured input budget; no automatic retry."
+)
+
 
 def retained_candidate_checkpoint(
     history: tuple[ProjectDeliveryCheckpoint, ...],
@@ -141,6 +145,53 @@ def terminal_candidate_event(task: Task, events: tuple[StateEvent, ...]) -> Stat
     if not _valid_terminal_tail(task, events[index + 1 :], candidate):
         raise RecoveryRejected("runtime is not a terminal post-candidate QA failure")
     return candidate
+
+
+def terminal_accepted_qa_event(task: Task, events: tuple[StateEvent, ...]) -> StateEvent | None:
+    """Return the exact QA PASS transition retained by a failed Reviewer run."""
+    index, candidate = candidate_event(events)
+    tail = events[index + 1 :]
+    if not _valid_terminal_tail(task, tail, candidate):
+        raise RecoveryRejected("runtime is not a terminal post-candidate QA failure")
+    if not tail or not (
+        tail[0].from_status is TaskStatus.QA
+        and tail[0].to_status is TaskStatus.REVIEW
+        and tail[0].reason == "qa_passed"
+    ):
+        return None
+    if tail[0].source_revision != candidate.source_revision or len(tail[0].artifact_ids) != 1:
+        raise RecoveryRejected("terminal QA PASS evidence is invalid")
+    return tail[0]
+
+
+def terminal_candidate_requires_coder_recovery(task: Task, events: tuple[StateEvent, ...]) -> bool:
+    """Return whether a verified candidate was followed by interrupted Coder work.
+
+    The retained candidate remains useful as the worktree baseline, but it is no
+    longer the latest solution once QA/Review routed feedback back to Coder.  A
+    terminal Coder failure after that feedback must therefore recover the Coder
+    workspace instead of re-verifying the older candidate.
+    """
+    index, candidate = candidate_event(events)
+    tail = events[index + 1 :]
+    if not _valid_terminal_tail(task, tail, candidate):
+        raise RecoveryRejected("runtime is not a terminal post-candidate QA failure")
+    offset = (
+        1
+        if (
+            tail[0].from_status is TaskStatus.QA
+            and tail[0].to_status is TaskStatus.REVIEW
+            and tail[0].reason == "qa_passed"
+        )
+        else 0
+    )
+    remaining = tail[offset:]
+    return (
+        len(remaining) == 2
+        and remaining[0].to_status is TaskStatus.IMPLEMENTING
+        and remaining[1].from_status is TaskStatus.IMPLEMENTING
+        and remaining[1].to_status is task.status
+    )
 
 
 def _valid_terminal_tail(
@@ -358,3 +409,9 @@ def _validate_failed_continuation_runtime(
         previous, previous_time = event.to_status, event.occurred_at
     if previous is not task.status or previous_time != task.updated_at:
         raise RecoveryRejected("failed continuation is not terminal")
+    # A continuation may reuse the retained source candidate only when execution
+    # stopped before any Agent was admitted.  Every other terminal continuation
+    # can contain valuable Coder work and must go through native worktree
+    # recovery instead of silently starting again from the old candidate.
+    if events[-1].reason != _PRE_AGENT_CONTEXT_BUDGET_REASON:
+        raise RecoveryRejected("failed continuation contains a recoverable Agent workspace")

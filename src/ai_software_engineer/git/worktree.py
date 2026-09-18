@@ -198,6 +198,44 @@ class GitWorktreeManager:
             detached=expected_branch is None,
         )
 
+    def restore_clean_coder(self, spec: WorktreeSpec) -> WorktreeRef:
+        """Restore a cleaned Coder worktree only when its branch still proves a clean base.
+
+        Normal recovery never mutates repository state. This narrower Manager repair exists for
+        terminal provider failures whose clean worktree was removed by normal cleanup. It will
+        not recreate a missing branch, move a branch, discard edits, or accept a branch that has
+        advanced beyond the Task's immutable source revision.
+        """
+        if spec.role is not AgentRole.CODER:
+            raise WorktreeIdentityDrift("only a Coder worktree can be restored from its branch")
+        self._validate_repository()
+        self._validate_repository_filters()
+        self._validate_worktree_root()
+        expected_revision = self._resolve_revision(spec.source_revision)
+        if spec.source_revision != expected_revision:
+            raise WorktreeRevisionDrift(
+                "clean Coder restoration requires a durable full commit SHA"
+            )
+        target = self._target_path(spec)
+        self._validate_target_containment(target)
+        self._validate_target_has_no_symlinks(target)
+        if target.exists():
+            return self.recover(spec)
+        branch = self._branch_name(spec)
+        if not self._branch_exists(branch):
+            raise WorktreeNotFound(str(target))
+        branch_revision = self._resolve_revision(f"refs/heads/{branch}")
+        if branch_revision != expected_revision:
+            raise WorktreeRevisionDrift(
+                "missing Coder worktree branch does not match its immutable source revision"
+            )
+        target.parent.mkdir(parents=True, exist_ok=True)
+        self._run_git(("worktree", "add", str(target), branch), cwd=self._repository)
+        restored = self.recover(spec)
+        if self.inspect(restored).dirty:
+            raise WorktreeIdentityDrift("restored Coder worktree is not clean")
+        return restored
+
     def inspect(self, worktree: WorktreeRef) -> WorktreeSnapshot:
         """Return the exact HEAD and changed repository paths for a managed worktree."""
         self._validate_repository()
@@ -227,6 +265,7 @@ class GitWorktreeManager:
         permissions: AgentPermissions,
         *,
         denied_paths: tuple[str, ...] = (),
+        base_revision: str | None = None,
     ) -> WorktreeChangeCapture:
         """Observe preserved Coder modifications without changing files, index or refs.
 
@@ -237,8 +276,12 @@ class GitWorktreeManager:
         """
         if worktree.role is not AgentRole.CODER:
             raise WorktreeCaptureRejected("only Coder work can be captured for recovery")
-        first = self._capture_changes_once(worktree, permissions, denied_paths)
-        second = self._capture_changes_once(worktree, permissions, denied_paths)
+        first = self._capture_changes_once(
+            worktree, permissions, denied_paths, base_revision=base_revision
+        )
+        second = self._capture_changes_once(
+            worktree, permissions, denied_paths, base_revision=base_revision
+        )
         if first != second:
             raise WorktreeCaptureRejected("worktree changed during capture")
         return first
@@ -251,7 +294,12 @@ class GitWorktreeManager:
         denied_paths: tuple[str, ...] = (),
     ) -> None:
         """Re-read the exact source; stale/tampered captures never authorize recovery."""
-        observed = self.capture_changes(capture.worktree, permissions, denied_paths=denied_paths)
+        observed = self.capture_changes(
+            capture.worktree,
+            permissions,
+            denied_paths=denied_paths,
+            base_revision=capture.base_revision,
+        )
         if observed != capture:
             raise WorktreeCaptureRejected("preserved work no longer matches capture")
 
@@ -288,7 +336,7 @@ class GitWorktreeManager:
                 (
                     "merge-base",
                     "--is-ancestor",
-                    capture.worktree.head_revision,
+                    capture.effective_base_revision,
                     target.head_revision,
                 ),
                 cwd=target.path,
@@ -309,7 +357,7 @@ class GitWorktreeManager:
                         executable=bool(target_path.lstat().st_mode & 0o100),
                     )
                 elif self._path_exists_at_revision(
-                    capture.worktree.path, capture.worktree.head_revision, path
+                    capture.worktree.path, capture.effective_base_revision, path
                 ):
                     raise WorktreeSeedRejected("seed target is missing a captured base file")
             self._validate_seed_configuration(target, capture.changed_paths)
@@ -386,6 +434,8 @@ class GitWorktreeManager:
         worktree: WorktreeRef,
         permissions: AgentPermissions,
         denied_paths: tuple[str, ...],
+        *,
+        base_revision: str | None = None,
     ) -> WorktreeChangeCapture:
         # recover validates full SHA, registered ownership, exact branch and HEAD;
         # validate the supplied ref as well, not merely its derived Task/attempt.
@@ -399,6 +449,14 @@ class GitWorktreeManager:
             )
         )
         root = worktree.path
+        diff_base = worktree.head_revision
+        if base_revision is not None:
+            diff_base = self._resolve_revision(base_revision)
+            if diff_base != base_revision:
+                raise WorktreeCaptureRejected("capture base must be a durable full commit SHA")
+            self._run_git(
+                ("merge-base", "--is-ancestor", diff_base, worktree.head_revision), cwd=root
+            )
         policy = WorkspacePolicy(root, permissions, denied_paths=denied_paths)
         untracked_paths = _decode_nul_paths(
             self._run_git_bytes(("ls-files", "--others", "--exclude-standard", "-z"), cwd=root)
@@ -414,7 +472,7 @@ class GitWorktreeManager:
             "--no-renames",
         )
         raw = self._run_git_bytes(
-            (*arguments, "--raw", "--no-abbrev", "-z", "HEAD", "--"), cwd=root
+            (*arguments, "--raw", "--no-abbrev", "-z", diff_base, "--"), cwd=root
         )
         entries = raw.split(b"\0")[:-1]
         if len(entries) % 2 or len(entries) // 2 + len(untracked_paths) > MAX_CAPTURE_FILES:
@@ -444,12 +502,12 @@ class GitWorktreeManager:
                 policy.authorize_read(path)
                 policy.authorize_write(path)
                 content = read_capture_file(root, path, executable=fields[1] == b"100755")
-                base_size = (
-                    int(self._run_git(("cat-file", "-s", fields[2].decode("ascii")), cwd=root))
-                    if modified
-                    else 0
-                )
-                total_bytes += len(content) + base_size
+                # Bound the untrusted working-tree snapshot that recovery actually
+                # captures.  The committed base blob is already trusted repository
+                # data and is not embedded in the capture; counting it again made a
+                # small edit to a large tracked text file fail even when both the
+                # resulting snapshot and generated patch were within their limits.
+                total_bytes += len(content)
                 if total_bytes > MAX_CAPTURE_BYTES:
                     raise WorktreeCaptureRejected("capture content exceeds byte limit")
             except (OSError, UnicodeError, ValueError) as error:
@@ -473,7 +531,7 @@ class GitWorktreeManager:
             files[path] = hashlib.sha256(content).hexdigest()
         staged_paths = _decode_nul_paths(
             self._run_git_bytes(
-                (*arguments, "--cached", "--name-only", "-z", "HEAD", "--"), cwd=root
+                (*arguments, "--cached", "--name-only", "-z", diff_base, "--"), cwd=root
             )
         )
         if not staged_paths.issubset(files):
@@ -488,7 +546,9 @@ class GitWorktreeManager:
             "--src-prefix=a/",
             "--dst-prefix=b/",
         )
-        patch = without_hunk_labels(self._run_git_bytes((*patch_arguments, "HEAD", "--"), cwd=root))
+        patch = without_hunk_labels(
+            self._run_git_bytes((*patch_arguments, diff_base, "--"), cwd=root)
+        )
         for path in sorted(untracked_paths):
             patch += without_hunk_labels(
                 self._run_git_diff_bytes(
@@ -496,7 +556,7 @@ class GitWorktreeManager:
                 )
             )
         staged = without_hunk_labels(
-            self._run_git_bytes((*patch_arguments, "--cached", "HEAD", "--"), cwd=root)
+            self._run_git_bytes((*patch_arguments, "--cached", diff_base, "--"), cwd=root)
         )
         for payload in (patch, staged):
             if len(payload) > MAX_CAPTURE_BYTES:
@@ -514,6 +574,7 @@ class GitWorktreeManager:
             patch=patch,
             index_diff_sha256=hashlib.sha256(staged).hexdigest(),
             file_sha256s=tuple(sorted(files.items())),
+            base_revision=base_revision,
         )
 
     def _path_exists_at_revision(self, root: Path, revision: str, path: str) -> bool:

@@ -1,5 +1,27 @@
 {
   "$defs": {
+    "AcceptedQaReport": {
+      "additionalProperties": false,
+      "description": "One sealed QA PASS selected from the terminal Task event chain.",
+      "properties": {
+        "artifact_id": {
+          "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "artifact_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Artifact Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "artifact_sha256"
+      ],
+      "title": "AcceptedQaReport",
+      "type": "object"
+    },
     "AgentDefinition": {
       "additionalProperties": false,
       "description": "Resolved single-role run configuration; the organization identity is AgentProfile.",
@@ -305,6 +327,32 @@
           ],
           "default": null,
           "title": "Expected Parent Artifact Ids"
+        },
+        "expected_supersedes_by_kind": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "propertyNames": {
+                "$ref": "#/$defs/ArtifactKind"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Supersedes By Kind"
         }
       },
       "required": [
@@ -405,9 +453,17 @@
           "type": "string"
         },
         "qa_invocation_sha256": {
-          "pattern": "^[a-f0-9]{64}$",
-          "title": "Qa Invocation Sha256",
-          "type": "string"
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Qa Invocation Sha256"
         },
         "reviewer_invocation_sha256": {
           "anyOf": [
@@ -450,7 +506,6 @@
       "required": [
         "plan_sha256",
         "authorization_sha256",
-        "qa_invocation_sha256",
         "qa",
         "completed_at",
         "completion_sha256"
@@ -501,6 +556,17 @@
           "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
           "title": "Candidate Revision",
           "type": "string"
+        },
+        "accepted_qa": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AcceptedQaReport"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "prior_run_ids": {
           "default": [],

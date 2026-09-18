@@ -166,7 +166,11 @@ class CandidateVerificationAdmission:
                     raise RecoveryRejected("completion conflicts with the recorded result")
                 return previous
             authorization = self.store.get_verification_authorization(self.plan_sha256)
-            qa = self.store.get_verification_invocation(self.plan_sha256, AgentRole.QA)
+            qa = (
+                None
+                if plan.inputs.accepted_qa is not None
+                else self.store.get_verification_invocation(self.plan_sha256, AgentRole.QA)
+            )
             reviewer = (
                 self.store.get_verification_invocation(self.plan_sha256, AgentRole.REVIEWER)
                 if result.review is not None
@@ -176,7 +180,7 @@ class CandidateVerificationAdmission:
                 CandidateVerificationCompletion.create(
                     plan_sha256=self.plan_sha256,
                     authorization_sha256=authorization.authorization_sha256,
-                    qa_invocation_sha256=qa.invocation_sha256,
+                    qa_invocation_sha256=(qa.invocation_sha256 if qa is not None else None),
                     reviewer_invocation_sha256=reviewer.invocation_sha256
                     if reviewer is not None
                     else None,
@@ -190,27 +194,47 @@ class CandidateVerificationAdmission:
         prefix = (plan.inputs.plan_id, plan.inputs.implementation_id)
         if request.role is AgentRole.QA:
             if (
-                request.input_artifact_ids != prefix
+                plan.inputs.accepted_qa is not None
+                or request.input_artifact_ids != prefix
                 or request.expected_parent_artifact_ids != prefix[1:]
             ):
                 raise RecoveryRejected("QA invocation does not bind the approved implementation")
             return
         if request.role is not AgentRole.REVIEWER or len(request.input_artifact_ids) != 3:
             raise RecoveryRejected("verification only permits QA followed by Reviewer")
-        qa_invocation = self.store.get_verification_invocation(self.plan_sha256, AgentRole.QA)
         qa = self.artifacts.get(request.input_artifact_ids[-1])
-        qa_definition = next(d for d in plan.definitions if d.role is AgentRole.QA)
+        qa_invocation = (
+            None
+            if plan.inputs.accepted_qa is not None
+            else self.store.get_verification_invocation(self.plan_sha256, AgentRole.QA)
+        )
+        qa_definition = (
+            None
+            if qa_invocation is None
+            else next(d for d in plan.definitions if d.role is AgentRole.QA)
+        )
         if (
             not isinstance(qa, QaReportArtifact)
-            or qa.producer.run_id != qa_invocation.request.run_id
-            or qa.context_manifest_id != qa_invocation.request.context_manifest_id
-            or qa.producer.agent_id != qa_definition.id
             or qa.task_id != plan.inputs.task_id
             or qa.source_revision != plan.inputs.candidate_revision
             or qa.parent_artifact_ids != prefix[1:]
             or qa.content.status is not QaReportStatus.PASS
             or request.input_artifact_ids[:2] != prefix
             or request.expected_parent_artifact_ids != (qa.artifact_id,)
-            or request.run_id == qa_invocation.request.run_id
+            or request.run_id == qa.producer.run_id
+        ):
+            raise RecoveryRejected("Reviewer requires this recovery's accepted QA report")
+        if plan.inputs.accepted_qa is not None:
+            if (
+                qa.artifact_id != plan.inputs.accepted_qa.artifact_id
+                or artifact_digest(qa) != plan.inputs.accepted_qa.artifact_sha256
+            ):
+                raise RecoveryRejected("Reviewer requires the plan's pinned QA report")
+            return
+        assert qa_invocation is not None and qa_definition is not None
+        if (
+            qa.producer.run_id != qa_invocation.request.run_id
+            or qa.context_manifest_id != qa_invocation.request.context_manifest_id
+            or qa.producer.agent_id != qa_definition.id
         ):
             raise RecoveryRejected("Reviewer requires this recovery's accepted QA report")

@@ -111,6 +111,7 @@ class CapturedChanges(DomainModel):
     index_diff_sha256: StageSha256
     files: tuple[CapturedFile, ...] = Field(max_length=MAX_CAPTURE_FILES)
     capture_sha256: StageSha256
+    base_revision: FullCommit | None = None
 
     @classmethod
     def from_capture(cls, capture: WorktreeChangeCapture) -> CapturedChanges:
@@ -125,6 +126,7 @@ class CapturedChanges(DomainModel):
             index_diff_sha256=capture.index_diff_sha256,
             files=tuple(CapturedFile(path=p, sha256=s) for p, s in capture.file_sha256s),
             capture_sha256=capture.capture_sha256,
+            base_revision=capture.base_revision,
         )
         if result.to_capture() != capture:
             raise RecoveryRejected("capture has a noncanonical Coder identity")
@@ -144,6 +146,7 @@ class CapturedChanges(DomainModel):
             patch=self.patch.encode("utf-8"),
             index_diff_sha256=self.index_diff_sha256,
             file_sha256s=tuple((f.path, f.sha256) for f in self.files),
+            base_revision=self.base_revision,
         )
 
     @model_validator(mode="after")
@@ -319,7 +322,7 @@ class RecoveryPlan(DomainModel):
     def validate_lineage(self) -> Self:
         if (
             self.capture.task_id != self.source.task_id
-            or self.capture.source_revision != self.source.base_revision
+            or self.capture.to_capture().effective_base_revision != self.source.base_revision
         ):
             raise ValueError("capture must belong to the failed Task and base")
         target = self.effective_target_permissions

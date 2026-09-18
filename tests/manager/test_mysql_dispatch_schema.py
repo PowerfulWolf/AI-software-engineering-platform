@@ -44,6 +44,7 @@ _CURRENT = {
         "plan_sha256",
         "payload_json",
         "completion_sha256",
+        "abandonment_sha256",
     },
 }
 _LEGACY = {
@@ -79,6 +80,26 @@ def test_current_dispatch_schema_is_idempotent() -> None:
     _ensure_current_dispatch_tables(cursor)
 
     assert not any(statement.startswith("RENAME TABLE") for statement in cursor.statements)
+
+
+def test_legacy_verification_schema_adds_distinct_abandonment_column() -> None:
+    columns = {
+        **_CURRENT,
+        "verification_reservations": {
+            "plan_sha256",
+            "payload_json",
+            "completion_sha256",
+        },
+    }
+
+    cursor = _SchemaCursor(columns)
+    _ensure_current_dispatch_tables(cursor)
+
+    assert any(
+        statement.startswith("ALTER TABLE verification_reservations")
+        and "ADD COLUMN abandonment_sha256" in statement
+        for statement in cursor.statements
+    )
 
 
 def test_legacy_project_dispatch_tables_are_preserved_before_current_tables_are_created() -> None:

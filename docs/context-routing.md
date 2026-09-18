@@ -71,12 +71,14 @@ Builder 始终生成并优先交付 `policy`、`task`、`role`；提供且不同
 相同 Task、role、attempt、权限、来源正文、candidate revision 和 budget 必须产生相同 section 顺序、hash、token 计数和 `context_id`；`built_at` 仅是观察元数据，不参与身份哈希。
 
 `RuntimeConfig.context_max_input_tokens` 显式传到 `FileRunContextBuilder`，默认仍为 12,000；
-生产 Team Host 的交付阶段设置 32,000，输出预留仍为 4,000。它是本地确定性估算上限，
+生产 Team Host 的交付阶段设置 64,000，输出预留仍为 4,000。它是本地确定性估算上限，
 不是供应商真实 tokenizer 或模型 context window 的声明；不会因超限自动扩大或重试。
 生产 `project.profile` source 使用 `repository_profile_context(profile)`：只把语言识别的完整
 marker 清单替换为 `marker_count` 和最多三个排序样例，保留所有 build-system/native-rule
 事实和完整 profile digest。`kind=repository_profile_context` 明确它是阅读投影，不可写回为
 RepositoryProfile。批准方案、Task、规则引用和上游 Artifact 不因压缩而省略。
+RepositoryProfile 发现会排除平台生成的根级 `worktrees/` 执行目录，避免把历史 Task 的完整
+检出副本重复当作项目源码和规范输入。
 
 状态迁移后的 Task 快照属于 Context identity 的一部分：例如 planning run 的 Task section 是 `PLANNING`，Coder run 是 `IMPLEMENTING`。重放或离线 Fake scenario 必须使用对应 durable checkpoint 构建 manifest，不能拿 `NEW` 快照冒充后续输入。
 

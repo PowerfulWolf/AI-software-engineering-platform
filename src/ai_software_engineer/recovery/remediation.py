@@ -26,6 +26,7 @@ from ai_software_engineer.manager.dispatch import (
     DispatchPhaseCommit,
     DispatchWorkforceSnapshot,
     _record_digest,
+    continuation_attempt_identity,
 )
 from ai_software_engineer.manager.mysql_dispatch_authority import MySqlDispatchAuthority
 from ai_software_engineer.manager.preparation import PrepareProjectResult
@@ -98,9 +99,23 @@ class CandidateRemediationService:
         prepared = preparation.preparation
         if prepared is None:
             raise RecoveryRejected("project preparation needs human resolution before remediation")
-        # The completion digest identifies this successor. Its sealed time keeps exact replay
-        # deterministic even when the process stopped after allocation but before checkpointing.
-        now = completion.completed_at
+        # A failed successor remains immutable. Infrastructure/context failures before a new
+        # candidate create an append-only retry allocation chained to that exact Task/dispatch.
+        previous = source.failed_continuation
+        continuation_attempt = 1 if previous is None else previous.continuation_attempt + 1
+        retry_of_task_id = None if previous is None else previous.task_id
+        retry_of_dispatch_id = None if previous is None else previous.id
+        attempt_identity = continuation_attempt_identity(
+            completion.completion_sha256,
+            attempt=continuation_attempt,
+            retry_of_task_id=retry_of_task_id,
+            retry_of_dispatch_id=retry_of_dispatch_id,
+        )
+        now = (
+            completion.completed_at
+            if previous is None
+            else source.terminal_checkpoint.checkpointed_at
+        )
         original_request = source.stages.request
         rebound_request = ProjectRequest.create(
             request_id=original_request.id,
@@ -112,7 +127,7 @@ class CandidateRemediationService:
             created_at=original_request.created_at,
             updated_at=now,
         )
-        task_id = f"task_continue_{completion.completion_sha256[:32]}"
+        task_id = f"task_continue_{attempt_identity[:32]}"
         task = derive_delivery_task(
             prepared,
             rebound_request,
@@ -141,6 +156,15 @@ class CandidateRemediationService:
                     "continuation_sha256": completion.completion_sha256,
                     "continuation_plan_sha256": plan.plan_sha256,
                     "continuation_context_sha256": context_sha256,
+                    **(
+                        {
+                            "continuation_attempt": continuation_attempt,
+                            "continuation_retry_of_task_id": retry_of_task_id,
+                            "continuation_retry_of_dispatch_id": retry_of_dispatch_id,
+                        }
+                        if previous is not None
+                        else {}
+                    ),
                     "continuation_target_preparation_sha256": (prepared.preparation_sha256),
                     "continuation_of_delivery_id": source.scope.delivery_id,
                     "continuation_of_task_id": source.inputs.task_id,
@@ -176,6 +200,9 @@ class CandidateRemediationService:
                 or existing.continuation_sha256 != completion.completion_sha256
                 or existing.continuation_plan_sha256 != plan.plan_sha256
                 or existing.continuation_context_sha256 != context_sha256
+                or existing.continuation_attempt != continuation_attempt
+                or existing.retry_of_task_id != retry_of_task_id
+                or existing.retry_of_dispatch_id != retry_of_dispatch_id
                 or existing.target_preparation_sha256 != prepared.preparation_sha256
                 or existing.source_delivery_id != source.scope.delivery_id
                 or existing.source_task_id != source.inputs.task_id
@@ -235,7 +262,7 @@ class CandidateRemediationService:
             plan_phases = source.stages.plan.phases
             phase_ids = (plan_phases[0].id, plan_phases[1].id, plan_phases[2].id)
             value = ContinuationDispatchRecord(
-                id=f"dispatch_commit_{completion.completion_sha256}",
+                id=f"dispatch_commit_{attempt_identity}",
                 repository_id=prepared.repository_id,
                 task_id=task.id,
                 project_request_id=rebound_request.id,
@@ -246,6 +273,9 @@ class CandidateRemediationService:
                 continuation_sha256=completion.completion_sha256,
                 continuation_plan_sha256=plan.plan_sha256,
                 continuation_context_sha256=context_sha256,
+                continuation_attempt=continuation_attempt,
+                retry_of_task_id=retry_of_task_id,
+                retry_of_dispatch_id=retry_of_dispatch_id,
                 target_preparation_sha256=prepared.preparation_sha256,
                 source_delivery_id=source.scope.delivery_id,
                 source_task_id=source.inputs.task_id,
@@ -263,7 +293,7 @@ class CandidateRemediationService:
         dispatch = authority.commit_continuation(
             repository_id=prepared.repository_id,
             task_id=task.id,
-            continuation_sha256=completion.completion_sha256,
+            continuation_sha256=attempt_identity,
             validate_current=validate,
             build=build,
         )
@@ -358,8 +388,8 @@ def remediation_context(
         raise RecoveryRejected("candidate remediation supports UTF-8 text changes only") from error
     if not patch:
         raise RecoveryRejected("candidate remediation has no candidate changes to preserve")
-    if redact_text(patch).occurrences:
-        raise RecoveryRejected("candidate patch contains sensitive content")
+    redacted_patch = redact_text(patch)
+    patch = redacted_patch.text
     report = json.dumps(completion.to_wire(), ensure_ascii=False, sort_keys=True)
     return (
         ContextSource(

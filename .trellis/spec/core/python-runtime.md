@@ -675,7 +675,7 @@ Signatures:
 
 Contract: Runtime passes the explicit input cap to every role, records it in the persisted manifest,
 and reserves 4,000 output tokens. Existing low-level defaults stay 12,000/4,000. Production uses
-32,000/4,000 and declares a matching 36,000 role token budget. These remain local character-based
+64,000/4,000 and declares a matching 68,000 role token budget. These remain local character-based
 estimates, not provider window/usage guarantees. Required overflow never truncates or auto-retries.
 
 Profile context has `kind=repository_profile_context`, a URI pinned to `profile_sha256`, and full
@@ -686,7 +686,7 @@ RepositoryProfile; the digest refers to the original record, while section SHA h
 | Case | Expected |
 |---|---|
 | 1,500 language markers plus native rules | Compact context; unchanged native references/profile |
-| Explicit 32,000 input with >12,000 required tokens | Four-role offline Runtime succeeds; exact cap in each manifest |
+| Explicit 64,000 input with >12,000 required tokens | Four-role offline Runtime succeeds; exact cap in each manifest |
 | Same sources with 12,000 input | ContextBudgetExceeded; no Agent call |
 | Runtime catches overflow in any role | Existing BUDGET_EXHAUSTED/BLOCKED event; no call/retry of overflowing role |
 | Zero, boolean or >2,000,000 input cap | Pydantic and canonical runtime-config schema reject |
@@ -1563,6 +1563,8 @@ RuntimeSession(config, *, agent_adapter=None, agent_definitions=None,
 
 - RepositoryProfile 遍历目标根目录时不执行项目命令、不跟随逃逸 symlink、不读取 `.git` 内容作为
   source text；语言/build/VCS 未知必须记录 UNKNOWN/empty facts，不猜测；
+- 根级 `worktrees/` 是平台生成的执行状态，不参与语言、构建系统或 native rule 发现，避免历史
+  Task 的完整检出副本重复进入 Agent context；
 - native rule source 必须是 root-relative POSIX path、`project://<repository_id>/<path>` URI、
   UTF-8 content SHA 和 source revision；profile digest 排除 `observed_at`，相同项目事实可重放；
 - RepositoryProfile 只发现 rule source，不把 Markdown 自然语言自动转换为 SpecRule，也不推断

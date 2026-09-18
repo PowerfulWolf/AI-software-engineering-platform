@@ -215,18 +215,17 @@
       "type": "array"
     },
     "integration_checks": {
+      "default": [],
       "items": {
         "$ref": "#/$defs/IntegrationCheck"
       },
-      "minItems": 1,
       "title": "Integration Checks",
       "type": "array"
     }
   },
   "required": [
     "design_sha256",
-    "units",
-    "integration_checks"
+    "units"
   ],
   "title": "JointExecutionPlan",
   "type": "object",

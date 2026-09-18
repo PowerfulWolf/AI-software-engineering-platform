@@ -212,7 +212,7 @@
       "additionalProperties": false,
       "required": ["kind", "plan_sha256", "title", "facts"],
       "properties": {
-        "kind": {"enum": ["candidate_verification", "coder_recovery", "coder_scope"]},
+        "kind": {"enum": ["candidate_verification", "coder_recovery", "coder_scope", "joint_integration"]},
         "plan_sha256": {"$ref": "#/$defs/digest"},
         "title": {"type": "string", "minLength": 1},
         "facts": {"type": "array", "items": {"type": "string", "minLength": 1}}

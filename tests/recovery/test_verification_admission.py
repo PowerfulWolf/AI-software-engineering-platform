@@ -17,7 +17,7 @@ from ai_software_engineer.recovery.models import (
     RecoveryRejected,
     RecoveryScope,
 )
-from ai_software_engineer.recovery.store import FileRecoveryStore
+from ai_software_engineer.recovery.store import FileRecoveryStore, RecoveryRecordMissing
 from ai_software_engineer.recovery.verification import CandidateVerificationRunner
 from ai_software_engineer.recovery.verification_admission import (
     CandidateVerificationAdmission,
@@ -28,14 +28,23 @@ from ai_software_engineer.recovery.verification_entry import (
     _policy_sha,
     _verification_inputs_are_current,
 )
+from ai_software_engineer.recovery.verification_native import (
+    _validate_inconclusive_continuation,
+)
 from ai_software_engineer.recovery.verification_records import (
     CandidateVerificationCompletion,
+    CandidateVerificationDisposition,
     CandidateVerificationInvocation,
     CandidateVerificationPlan,
 )
 from tests.orchestration.test_retry import ScriptedAdapter
 from tests.orchestration.test_runner import _clock, _definitions
-from tests.recovery.test_candidate_verification import Admission, setup_verification
+from tests.recovery.test_candidate_verification import (
+    Admission,
+    RejectedReviewAdapter,
+    setup_reviewer_only_verification,
+    setup_verification,
+)
 
 
 class Facts:
@@ -150,6 +159,182 @@ def test_consumed_failed_invocation_requires_a_new_plan_without_calling_provider
         ):
             entry.execute(tmp_path / "verification-plan.json")
         assert len(adapter.requests) == 1
+    finally:
+        repository.close()
+
+
+def test_reviewer_only_completion_reuses_qa_without_fabricating_invocation(
+    tmp_path: Path,
+) -> None:
+    inputs, repository, artifacts, accepted_qa = setup_reviewer_only_verification(tmp_path)
+    scope = RecoveryScope(
+        team_id="team_test",
+        repository_id="repository_test",
+        delivery_id="delivery_test",
+        repository_root=str(tmp_path / "project"),
+    )
+    plan = CandidateVerificationPlan.create(
+        scope=scope,
+        inputs=inputs,
+        native_checkpoint_sha256="1" * 64,
+        dispatch_sha256="2" * 64,
+        approved_stage_chain_sha256="3" * 64,
+        current_policy_sha256="4" * 64,
+        definitions=tuple(_definitions().values()),
+        created_at=_clock(),
+    )
+    store = FileRecoveryStore.initialize(tmp_path / "verification", scope=scope)
+    admission = CandidateVerificationAdmission(
+        store=store,
+        plan_sha256=plan.plan_sha256,
+        facts=Facts(),
+        artifacts=artifacts,
+        clock=_clock,
+    )
+    admission.propose(plan)
+    authorization = admission.approve(
+        RecoveryApprovalCommand(
+            operation_id="op_reviewer_only_test",
+            plan_sha256=plan.plan_sha256,
+            approval_reference="reuse-sealed-qa",
+            submitted_at=_clock(),
+        ),
+        human=ExplicitVerificationHuman(plan.plan_sha256),
+    )
+    adapter = ScriptedAdapter()
+    verifier = CandidateVerificationRunner(
+        repository=repository,
+        artifact_store=artifacts,
+        context_builder=FileRunContextBuilder(tmp_path / "project"),
+        agent_adapter=adapter,
+        agent_definitions=_definitions(),
+        admission=admission,
+        clock=_clock,
+    )
+    try:
+        result = verifier.verify_candidate(inputs)
+        completion = admission.complete(result)
+
+        assert result.qa == accepted_qa
+        assert [request.role for request in adapter.requests] == [AgentRole.REVIEWER]
+        assert completion.qa_invocation_sha256 is None
+        assert completion.qa == accepted_qa
+        assert completion.reviewer_invocation_sha256 is not None
+        assert completion.authorization_sha256 == authorization.authorization_sha256
+        with pytest.raises(RecoveryRecordMissing):
+            store.get_verification_invocation(plan.plan_sha256, AgentRole.QA)
+        assert (
+            store.get_verification_invocation(
+                plan.plan_sha256, AgentRole.REVIEWER
+            ).request.input_artifact_ids[-1]
+            == accepted_qa.artifact_id
+        )
+        assert store.get_verification_completion(plan.plan_sha256) == completion
+        schema = json.loads(
+            (Path(__file__).parents[2] / "schemas/candidate-verification.schema.json").read_text()
+        )
+        validator = Draft202012Validator(schema, format_checker=FormatChecker())
+        for record in (
+            plan,
+            authorization,
+            store.get_verification_invocation(plan.plan_sha256, AgentRole.REVIEWER),
+            completion,
+        ):
+            assert not tuple(validator.iter_errors(record.to_wire()))
+    finally:
+        repository.close()
+
+
+def test_reviewer_only_rejection_can_start_remediation_without_qa_invocation(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    inputs, repository, artifacts, _ = setup_reviewer_only_verification(source_root)
+    scope = RecoveryScope(
+        team_id="team_test",
+        repository_id="repository_test",
+        delivery_id="delivery_test",
+        repository_root=str(source_root / "project"),
+    )
+    plan = CandidateVerificationPlan.create(
+        scope=scope,
+        inputs=inputs,
+        native_checkpoint_sha256="1" * 64,
+        dispatch_sha256="2" * 64,
+        approved_stage_chain_sha256="3" * 64,
+        current_policy_sha256="4" * 64,
+        definitions=tuple(_definitions().values()),
+        created_at=_clock(),
+    )
+    sidecar = tmp_path / "sidecar"
+    (sidecar / "state").mkdir(parents=True)
+    store = FileRecoveryStore.initialize(
+        sidecar / "state" / f"candidate-verification-{scope.delivery_id}",
+        scope=scope,
+    )
+    admission = CandidateVerificationAdmission(
+        store=store,
+        plan_sha256=plan.plan_sha256,
+        facts=Facts(),
+        artifacts=artifacts,
+        clock=_clock,
+    )
+    admission.propose(plan)
+    admission.approve(
+        RecoveryApprovalCommand(
+            operation_id="op_reviewer_reject_test",
+            plan_sha256=plan.plan_sha256,
+            approval_reference="reuse-sealed-qa",
+            submitted_at=_clock(),
+        ),
+        human=ExplicitVerificationHuman(plan.plan_sha256),
+    )
+    verifier = CandidateVerificationRunner(
+        repository=repository,
+        artifact_store=artifacts,
+        context_builder=FileRunContextBuilder(source_root / "project"),
+        agent_adapter=RejectedReviewAdapter(),
+        agent_definitions=_definitions(),
+        admission=admission,
+        clock=_clock,
+    )
+    try:
+        result = verifier.verify_candidate(inputs)
+        completion = admission.complete(result)
+        reviewer = store.get_verification_invocation(plan.plan_sha256, AgentRole.REVIEWER)
+        current_inputs = inputs.model_copy(
+            update={
+                "prior_run_ids": tuple(sorted((*inputs.prior_run_ids, reviewer.request.run_id)))
+            }
+        )
+        source_checkpoint = Mock(
+            checkpoint_sha256=plan.native_checkpoint_sha256,
+            dispatch_commit_id="dispatch_source",
+        )
+        runtime = Mock()
+        runtime.dispatch.dispatch_sha256 = plan.dispatch_sha256
+        continuation = Mock(
+            source_delivery_id=scope.delivery_id,
+            source_task_id=inputs.task_id,
+            source_revision=inputs.candidate_revision,
+            source_dispatch_id=source_checkpoint.dispatch_commit_id,
+            continuation_plan_sha256=plan.plan_sha256,
+            continuation_sha256=completion.completion_sha256,
+        )
+
+        assert completion.disposition is CandidateVerificationDisposition.REMEDIATE_CANDIDATE
+        with pytest.raises(RecoveryRecordMissing):
+            store.get_verification_invocation(plan.plan_sha256, AgentRole.QA)
+        _validate_inconclusive_continuation(
+            sidecar,
+            scope,
+            (source_checkpoint,),
+            source_checkpoint,
+            runtime,
+            current_inputs,
+            continuation,
+        )
     finally:
         repository.close()
 

@@ -57,3 +57,47 @@ def test_real_qa_parent_pattern_is_invalid_output_not_platform_failure(tmp_path:
         assert sum(r.role is AgentRole.CODER for r in adapter.requests) == 1
     finally:
         repository.close()
+
+
+class MissingRetrySupersedesAdapter(ScriptedAdapter):
+    def __init__(self) -> None:
+        super().__init__(qa_failures=(1,))
+
+    def run(self, request: AgentRequest) -> AgentResult:
+        payload = json.loads(RequestPromptBuilder().build(request).messages[1].content)
+        if request.role is AgentRole.CODER:
+            expected = payload["output_contract"]["supersedes_by_kind"]
+            if request.attempt == 1:
+                assert expected == {
+                    "coder-progress": None,
+                    "implementation-report": None,
+                }
+            else:
+                assert expected == {
+                    "coder-progress": None,
+                    "implementation-report": "art_impl_001",
+                }
+        result = super().run(request)
+        if request.role is AgentRole.CODER and request.attempt > 1:
+            assert result.artifact is not None
+            return result.model_copy(
+                update={"artifact": result.artifact.model_copy(update={"supersedes": None})}
+            )
+        return result
+
+
+def test_retry_supersedes_contract_is_transmitted_and_invalid_output_is_durable(
+    tmp_path: Path,
+) -> None:
+    adapter = MissingRetrySupersedesAdapter()
+    task, repository, runner = _runner(tmp_path, adapter)
+    try:
+        result = runner.run_task(task.id)
+
+        assert isinstance(result, BlockedResult)
+        assert result.classification is RetryClassification.INVALID_OUTPUT
+        assert result.task.status is TaskStatus.BLOCKED
+        assert "supersedes lineage" in result.reason
+        assert sum(request.role is AgentRole.CODER for request in adapter.requests) == 3
+    finally:
+        repository.close()

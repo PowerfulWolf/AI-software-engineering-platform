@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Set
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -34,6 +35,7 @@ from ai_software_engineer.manager.production_delivery import (
     DeliveryRouteAdapterFactory,
     DispatchDeliveryAgentAdapter,
 )
+from ai_software_engineer.manager.team_roster import production_team_roster
 from ai_software_engineer.orchestration import FileRunContextBuilder
 from ai_software_engineer.planning import FileExecutionPlanStore
 from ai_software_engineer.planning.preview import derive_phase_demands
@@ -106,6 +108,7 @@ def _policy_sha(definitions: Mapping[AgentRole, AgentDefinition], config: Produc
                 for role, value in sorted(definitions.items(), key=lambda x: x[0].value)
             },
             "enabled_routes": [route.to_wire() for route in config.enabled_routes()],
+            "model_policy": production_team_roster(config)[1].to_wire(),
         }
     )
 
@@ -135,23 +138,24 @@ def _verification_allocation(
     source: NativeCandidateSource,
     snapshot: DispatchWorkforceSnapshot,
     *,
+    config: ProductionConfig,
     execution_task_id: str,
     plan_sha256: str,
     now: datetime,
 ) -> VerificationReservation:
+    # The source Task snapshot retains its original policy even after Settings restart.
+    # A newly approved run uses today's policy; occupancy and Agent history stay fenced.
+    _, policy = production_team_roster(config)
     scheduler = PortfolioScheduler()
     router = ModelRouter(
         route_context_capacities={
-            (route.provider, route.model): 2_000_000
-            for policy in snapshot.model_policies
-            for route in policy.routes
+            (route.provider, route.model): 2_000_000 for route in policy.routes
         }
     )
     demands = derive_phase_demands(source.runtime.task, source.stages.plan)
     phases = []
     leases, assignments = tuple(snapshot.active_leases), tuple(snapshot.assignments)
     profiles = {agent.id: agent for agent in snapshot.agents}
-    policies = {policy.id: policy for policy in snapshot.model_policies}
     for phase, demand in zip(source.stages.plan.phases[1:], demands[1:], strict=True):
         item = WorkItem(
             task_id=execution_task_id,
@@ -180,7 +184,7 @@ def _verification_allocation(
         routing = router.route(
             demand.model_copy(update={"task_id": execution_task_id}),
             profile,
-            policies[profile.default_model_policy_id],
+            policy,
             now=now,
         )
         if routing.status is not ModelRoutingDecisionStatus.SELECTED or routing.selection is None:
@@ -303,6 +307,10 @@ class CandidateVerificationEntry:
         self.config, self.environment, self.backend = config, dict(environment), backend
         self._route_factory = backend._delivery_route_adapters
 
+    def open_plan(self, path: Path) -> tuple[FileRecoveryStore, CandidateVerificationPlan]:
+        """Open one exact persisted verification-plan envelope through its scoped store."""
+        return open_candidate_verification_plan(self.config, self.environment, path)
+
     def _authority(self, source: NativeCandidateSource) -> MySqlDispatchAuthority:
         sidecar = Path(source.stages.preparation.repository_workspace_root)
         return MySqlDispatchAuthority(
@@ -375,7 +383,12 @@ class CandidateVerificationEntry:
             repository_id=scope.repository_id, task_id=source.inputs.task_id
         )
         preview = _verification_allocation(
-            source, snapshot, execution_task_id=execution_id, plan_sha256="0" * 64, now=now
+            source,
+            snapshot,
+            config=self.config,
+            execution_task_id=execution_id,
+            plan_sha256="0" * 64,
+            now=now,
         )
         definitions = _definitions(source, preview)
         plan = CandidateVerificationPlan.create(
@@ -465,6 +478,7 @@ class CandidateVerificationEntry:
             value = _verification_allocation(
                 source,
                 snapshot,
+                config=self.config,
                 execution_task_id=plan.execution_task_id,
                 plan_sha256=plan.plan_sha256,
                 now=datetime.now(UTC),
@@ -521,6 +535,24 @@ class CandidateVerificationEntry:
                 ),
             )
             return completion
+        except Exception as error:
+            # Admission is deliberately at-most-once, so an interrupted plan must never be
+            # replayed.  It must also stop consuming QA/Reviewer capacity after setup or the
+            # provider fails.  The release digest records only stable, non-sensitive facts.
+            with suppress(Exception):
+                authority.abandon_verification(
+                    plan_sha256=plan.plan_sha256,
+                    abandonment_sha256=digest(
+                        {
+                            "kind": "candidate_verification_abandonment",
+                            "plan_sha256": plan.plan_sha256,
+                            "error_type": type(error).__name__,
+                        }
+                    ),
+                )
+            # Preserve the original execution failure. A later Manager reconciliation can still
+            # repair a reservation whose release itself could not be persisted.
+            raise
         finally:
             repository.close()
             adapter.close_clean_worktrees()

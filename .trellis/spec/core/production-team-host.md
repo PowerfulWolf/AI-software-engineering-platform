@@ -297,9 +297,38 @@ Root cause (B/D/E): the external runner contract and Agent-visible work contract
 runners always committed immediately, so tests proved postconditions without proving the model was
 told how to finish before the external deadline. A real 1,800-second run changed all authorized areas
 and completed a broad pytest subprocess, yet timed out dirty before commit/Artifact. The deterministic
-test can prevent prompt regression; only live delivery can test model compliance. If this contract is
-still insufficient, the next architectural step is staged/checkpointed Coder execution, not unbounded
-timeouts or silent adoption of dirty work.
+test can prevent prompt regression; only live delivery can test model compliance.
+
+#### Candidate QA reuses provisioned project tooling
+
+Scope/trigger: applies when QA verifies an exact candidate in a detached role worktree and the
+registered repository root already contains a project-local `.venv/bin/pytest`. The detached
+worktree intentionally excludes ignored virtual environments; that absence alone is not evidence
+that the verifier environment is unavailable.
+
+Contract: before invoking QA, the Manager-side Codex adapter resolves the registered Git common
+directory and accepts only a real, executable, non-symlink `.venv/bin/pytest`. It injects that fixed
+path as `ASE_PROJECT_PYTEST` and names the exact runner in the QA prompt. QA runs that absolute
+executable while keeping the current working directory on the exact candidate worktree. The
+external environment is read-only tooling: imports, test discovery, Git checks and all verdict
+evidence remain bound to the candidate SHA. QA may report `ERROR`/`NOT_TESTED` only after both the
+Manager-provisioned runner and permitted repository commands cannot establish a verdict.
+
+| Case | Required result |
+|---|---|
+| detached worktree has no `.venv`, registered root has pytest | use registered absolute pytest against candidate cwd |
+| focused tests pass | evidence binds exact candidate; criteria may PASS |
+| focused tests fail due candidate | FAIL, never environment ERROR |
+| no project runner and offline cache is incomplete | fixed environment ERROR/NOT_TESTED; candidate retained |
+
+Good: QA reuses the already provisioned interpreter without copying dependencies or modifying the
+candidate. Bad: create a second environment through network access, run tests against the registered
+root checkout, or classify a candidate failure as infrastructure. Tests:
+`tests/agents/test_codex_cli.py::test_qa_semantic_artifact_failure_has_safe_actionable_diagnostics`
+locks the Agent-visible runner instruction; live candidate verification proves the end-to-end path.
+
+If project-local tooling is still insufficient, the next architectural step is a typed Manager
+environment-preparation step, not network access for QA or a silently accepted `NOT_TESTED` verdict.
 
 ## Scenario: per-Agent model routes and Product image input
 
@@ -496,7 +525,7 @@ this does not authorize rebasing old approval or QA/Review evidence in place.
   deterministic Orchestrator 60 秒。native 与 recovery delivery 都必须通过同一
   `_agent_definitions` seam 获得这些预算；未知 delivery role fail closed。超时仍无 Artifact，dirty
   worktree 仍保留且不得自动重试。未来的风险自适应或 operator 配置不能静默改变已批准 Run。
-- T042 production context 使用显式 32,000 input / 4,000 output reserve；完整规范索引和批准文档
+- T042 production context 使用显式 64,000 input / 4,000 output reserve；完整规范索引和批准文档
   不截断，语言 marker 清单仅作 context-only 投影。低层 Runtime 默认仍为 12,000 input。
   签名、错误矩阵与回归点见 `python-runtime.md` 的 T042 小节；旧 manifest/审批不改写。
 - Production TeamHost 每次按 Project 读取 active Team/Project Spec 快照。Team Spec 进入

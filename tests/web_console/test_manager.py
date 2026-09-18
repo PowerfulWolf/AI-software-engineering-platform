@@ -12,11 +12,21 @@ from ai_software_engineer.manager.delivery import (
     ResumeProjectDelivery,
     UnifiedProjectEntryService,
 )
+from ai_software_engineer.manager.delivery_checkpoint import (
+    DeliveryFailureCode,
+    DeliveryNextAction,
+    DeliveryStage,
+    DeliveryStageAttempts,
+    ProjectDeliveryCheckpoint,
+)
 from ai_software_engineer.multi_directory.errors import RequirementSourceRevisionDrift
 from ai_software_engineer.multi_directory.models import (
+    Candidate,
+    IntegrationRetryProposal,
     JointCheckpoint,
     JointDeliveryResult,
     JointStage,
+    digest,
 )
 from ai_software_engineer.multi_directory.scope import DirectoryScope, DirectoryUnit
 from ai_software_engineer.multi_directory.service import (
@@ -26,6 +36,13 @@ from ai_software_engineer.multi_directory.service import (
     JointDeliveryService,
     RestartRequirement,
     UpdateRequirement,
+)
+from ai_software_engineer.recovery import FileRecoveryStore, RecoveryPlan, RecoveryScope
+from ai_software_engineer.recovery.resume import DeliveryResumeOutcome, DeliveryResumeResult
+from ai_software_engineer.recovery.verification_records import (
+    AcceptedQaReport,
+    CandidateVerificationInputs,
+    CandidateVerificationPlan,
 )
 from ai_software_engineer.team_workspace import TeamWorkspace
 from ai_software_engineer.web_console import (
@@ -42,6 +59,8 @@ from ai_software_engineer.web_console import (
     UpdateRequirementIntent,
 )
 from ai_software_engineer.web_console.manager import TeamConsoleHost
+from tests.orchestration.test_runner import _definitions
+from tests.recovery.test_authorization import make_plan
 
 DELIVERY_ID = "delivery_multi_" + "a" * 40
 PROJECT_ID = "project_web"
@@ -131,6 +150,10 @@ class _Host:
         self.entry = entry
         self.project = project
         self.resume_commands: list[ResumeProjectDelivery] = []
+        self.resume_result: DeliveryResumeResult | JointDeliveryResult | None = None
+        self.recovery_plan: RecoveryPlan | None = None
+        self.verification_plan: CandidateVerificationPlan | None = None
+        self.opened_plan_paths: list[Path] = []
 
     def create_project(self, *, name: str, project_id: str | None = None) -> object:
         assert name == "Web Project"
@@ -147,10 +170,36 @@ class _Host:
 
     def resume_delivery(
         self, command: ResumeProjectDelivery, *, project_id: str | None = None
-    ) -> JointDeliveryResult:
+    ) -> DeliveryResumeResult | JointDeliveryResult:
         assert project_id == PROJECT_ID
         self.resume_commands.append(command)
+        if self.resume_result is not None:
+            return self.resume_result
         return JointDeliveryResult(checkpoint=self.entry.checkpoint)
+
+    def recovery_entry(self, project_id: str | None = None) -> object:
+        assert project_id == PROJECT_ID
+        host = self
+
+        class _RecoveryPlanReader:
+            def open_plan(self, path: Path) -> tuple[object, RecoveryPlan]:
+                assert host.recovery_plan is not None
+                host.opened_plan_paths.append(path)
+                return object(), host.recovery_plan
+
+        return _RecoveryPlanReader()
+
+    def verification_entry(self, project_id: str | None = None) -> object:
+        assert project_id == PROJECT_ID
+        host = self
+
+        class _VerificationPlanReader:
+            def open_plan(self, path: Path) -> tuple[object, CandidateVerificationPlan]:
+                assert host.verification_plan is not None
+                host.opened_plan_paths.append(path)
+                return object(), host.verification_plan
+
+        return _VerificationPlanReader()
 
 
 def _adapter(tmp_path: Path) -> tuple[ManagerConsoleAdapter, _Host, _Entry]:
@@ -318,6 +367,31 @@ def test_source_revision_drift_has_a_dedicated_browser_error_code(
     assert "source revision changed" in captured.value.safe_summary
 
 
+def test_joint_integration_retry_uses_exact_console_approval(tmp_path: Path) -> None:
+    adapter, host, entry = _adapter(tmp_path)
+    proposal = IntegrationRetryProposal(
+        checkpoint_sha256=entry.checkpoint.checkpoint_sha256,
+        candidates=(Candidate(unit_id="unit_" + "2" * 16, revision="a" * 40),),
+    )
+    host.resume_result = JointDeliveryResult(
+        checkpoint=entry.checkpoint, integration_retry_proposal=proposal
+    )
+    intent = ContinueDeliveryIntent(
+        project_id=PROJECT_ID,
+        delivery_id=DELIVERY_ID,
+        expected_checkpoint_sha256=entry.checkpoint.checkpoint_sha256,
+    )
+    result = adapter.execute(intent)
+    assert result.approval is not None
+    assert result.approval.kind == "joint_integration"
+    assert result.approval.plan_sha256 == digest(proposal)
+    assert "1 次" in result.approval.facts[0]
+    assert "a" * 40 in result.approval.facts[-1]
+    adapter.execute(intent.model_copy(update={"approved_plan_sha256": digest(proposal)}))
+    assert host.resume_commands[-1].approved_plan_sha256 == digest(proposal)
+    assert host.resume_commands[-1].approval_reference is not None
+
+
 def test_continue_rejects_a_stale_browser_without_resuming(tmp_path: Path) -> None:
     adapter, host, _ = _adapter(tmp_path)
 
@@ -372,3 +446,120 @@ def test_continue_sends_an_exact_scope_approval_separately_from_plan_approval(
     assert command.approved_scope_sha256 == "5" * 64
     assert command.approved_plan_sha256 is None
     assert command.approval_reference == "web-console-scope:" + "5" * 64
+
+
+def test_continue_reads_the_persisted_recovery_envelope_through_the_recovery_entry(
+    tmp_path: Path,
+) -> None:
+    adapter, host, entry = _adapter(tmp_path)
+    plan = make_plan(tmp_path / "project")
+    store = FileRecoveryStore.initialize(tmp_path / "recovery", scope=plan.source.scope)
+    store.put_plan(plan)
+    plan_path = tmp_path / "recovery" / f"plan-{plan.plan_sha256}.json"
+    child_checkpoint = ProjectDeliveryCheckpoint.create(
+        delivery_id="delivery_child",
+        sequence=1,
+        previous_checkpoint_sha256=None,
+        repository_id=plan.source.scope.repository_id,
+        repository_root=plan.source.scope.repository_root,
+        stage=DeliveryStage.BLOCKED,
+        stage_attempts=DeliveryStageAttempts(),
+        next_action=DeliveryNextAction.REQUEST_HUMAN,
+        failure_code=DeliveryFailureCode.PERMISSION_DENIED,
+        failure_summary="Retained Coder work requires recovery approval.",
+        checkpointed_at=datetime(2026, 9, 15, tzinfo=UTC),
+    )
+    host.recovery_plan = plan
+    host.resume_result = DeliveryResumeResult(
+        outcome=DeliveryResumeOutcome.RECOVERY_APPROVAL_REQUIRED,
+        checkpoint=child_checkpoint,
+        next_action="Review the recovery plan.",
+        recovery_plan_file=str(plan_path),
+        recovery_plan_sha256=plan.plan_sha256,
+    )
+
+    result = adapter.execute(
+        ContinueDeliveryIntent(
+            project_id=PROJECT_ID,
+            delivery_id=DELIVERY_ID,
+            expected_checkpoint_sha256=entry.checkpoint.checkpoint_sha256,
+        )
+    )
+
+    assert result.approval is not None
+    assert result.approval.kind == "coder_recovery"
+    assert result.approval.plan_sha256 == plan.plan_sha256
+    assert host.opened_plan_paths == [plan_path]
+
+
+def test_reviewer_only_approval_explains_that_qa_will_be_reused(tmp_path: Path) -> None:
+    adapter, host, entry = _adapter(tmp_path)
+    child_delivery_id = "delivery_child"
+    plan = CandidateVerificationPlan.create(
+        scope=RecoveryScope(
+            team_id="team_test",
+            repository_id="repository_test",
+            repository_root=str(tmp_path / "project"),
+            delivery_id=child_delivery_id,
+        ),
+        inputs=CandidateVerificationInputs(
+            task_id="task_verification_source",
+            task_revision=7,
+            task_sha256="1" * 64,
+            plan_id="art_plan_source",
+            plan_sha256="2" * 64,
+            implementation_id="art_impl_source",
+            implementation_sha256="3" * 64,
+            candidate_revision="4" * 40,
+            accepted_qa=AcceptedQaReport(
+                artifact_id="art_qa_source",
+                artifact_sha256="5" * 64,
+            ),
+        ),
+        native_checkpoint_sha256="6" * 64,
+        dispatch_sha256="7" * 64,
+        approved_stage_chain_sha256="8" * 64,
+        current_policy_sha256="9" * 64,
+        definitions=tuple(_definitions().values()),
+        created_at=datetime(2026, 9, 15, tzinfo=UTC),
+    )
+    plan_path = tmp_path / "reviewer-only-plan.json"
+    checkpoint = ProjectDeliveryCheckpoint.create(
+        delivery_id=child_delivery_id,
+        sequence=1,
+        previous_checkpoint_sha256=None,
+        repository_id=plan.scope.repository_id,
+        repository_root=plan.scope.repository_root,
+        stage=DeliveryStage.BLOCKED,
+        stage_attempts=DeliveryStageAttempts(),
+        next_action=DeliveryNextAction.REQUEST_HUMAN,
+        failure_code=DeliveryFailureCode.TRANSIENT_PROVIDER_FAILURE,
+        failure_summary="Reviewer provider quota was exhausted.",
+        checkpointed_at=datetime(2026, 9, 15, tzinfo=UTC),
+    )
+    host.verification_plan = plan
+    host.resume_result = DeliveryResumeResult(
+        outcome=DeliveryResumeOutcome.VERIFICATION_APPROVAL_REQUIRED,
+        checkpoint=checkpoint,
+        next_action="Review the verification plan.",
+        verification_plan_file=str(plan_path),
+        verification_plan_sha256=plan.plan_sha256,
+    )
+
+    result = adapter.execute(
+        ContinueDeliveryIntent(
+            project_id=PROJECT_ID,
+            delivery_id=DELIVERY_ID,
+            expected_checkpoint_sha256=entry.checkpoint.checkpoint_sha256,
+        )
+    )
+
+    assert result.approval is not None
+    assert result.approval.title == "复用已通过 QA 并只重新执行 Reviewer"
+    assert result.approval.facts == (
+        "候选提交 " + "4" * 40,
+        "复用已封存 QA PASS art_qa_source",
+        "reviewer: local / fake-reviewer",
+    )
+    assert result.next_action == "请检查并批准仅重新执行 Reviewer 的精确验证计划。"
+    assert host.opened_plan_paths == [plan_path]

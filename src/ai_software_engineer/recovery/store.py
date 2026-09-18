@@ -14,8 +14,9 @@ from typing import TypeVar
 
 from pydantic import TypeAdapter
 
+from ai_software_engineer.artifacts import artifact_digest
 from ai_software_engineer.domain.artifact import QaReportArtifact, ReviewReportArtifact
-from ai_software_engineer.domain.enums import AgentRole
+from ai_software_engineer.domain.enums import AgentRole, QaReportStatus
 from ai_software_engineer.domain.project_delivery import StageSha256
 from ai_software_engineer.recovery.models import (
     RecoveryAuthorization,
@@ -221,21 +222,29 @@ class FileRecoveryStore:
         prefix = (plan.inputs.plan_id, plan.inputs.implementation_id)
         if record.request.role is AgentRole.QA:
             if (
-                record.request.input_artifact_ids != prefix
+                plan.inputs.accepted_qa is not None
+                or record.request.input_artifact_ids != prefix
                 or record.request.expected_parent_artifact_ids != prefix[1:]
             ):
                 raise RecoveryRejected("persisted QA invocation has invalid input lineage")
         else:
-            qa = self.get_verification_invocation(plan.plan_sha256, AgentRole.QA)
             if (
                 len(record.request.input_artifact_ids) != 3
                 or record.request.input_artifact_ids[:2] != prefix
                 or record.request.expected_parent_artifact_ids
                 != record.request.input_artifact_ids[2:]
-                or record.request.run_id == qa.request.run_id
-                or record.admitted_at < qa.admitted_at
             ):
                 raise RecoveryRejected("persisted Reviewer invocation has invalid input lineage")
+            if plan.inputs.accepted_qa is not None:
+                if record.request.input_artifact_ids[2] != plan.inputs.accepted_qa.artifact_id:
+                    raise RecoveryRejected("persisted Reviewer does not bind the pinned QA report")
+            else:
+                qa = self.get_verification_invocation(plan.plan_sha256, AgentRole.QA)
+                if (
+                    record.request.run_id == qa.request.run_id
+                    or record.admitted_at < qa.admitted_at
+                ):
+                    raise RecoveryRejected("persisted Reviewer invocation has invalid role order")
 
     def put_verification_completion(
         self, record: CandidateVerificationCompletion
@@ -258,9 +267,24 @@ class FileRecoveryStore:
         authorization = self.get_verification_authorization(record.plan_sha256)
         if record.authorization_sha256 != authorization.authorization_sha256:
             raise RecoveryRejected("completion authorization mismatch")
-        reports: list[tuple[AgentRole, QaReportArtifact | ReviewReportArtifact, str | None]] = [
-            (AgentRole.QA, record.qa, record.qa_invocation_sha256)
-        ]
+        reports: list[tuple[AgentRole, QaReportArtifact | ReviewReportArtifact, str | None]] = []
+        if plan.inputs.accepted_qa is not None:
+            if (
+                record.qa_invocation_sha256 is not None
+                or record.qa.artifact_id != plan.inputs.accepted_qa.artifact_id
+                or artifact_digest(record.qa) != plan.inputs.accepted_qa.artifact_sha256
+                or record.qa.task_id != plan.inputs.task_id
+                or record.qa.source_revision != plan.inputs.candidate_revision
+                or record.qa.parent_artifact_ids != (plan.inputs.implementation_id,)
+                or record.qa.supersedes is not None
+                or record.qa.producer.role is not AgentRole.QA
+                or record.qa.content.status is not QaReportStatus.PASS
+            ):
+                raise RecoveryRejected("completion reused QA differs from the approved plan")
+        else:
+            if record.qa_invocation_sha256 is None:
+                raise RecoveryRejected("fresh QA completion is missing its invocation")
+            reports.append((AgentRole.QA, record.qa, record.qa_invocation_sha256))
         if record.review is not None:
             reports.append((AgentRole.REVIEWER, record.review, record.reviewer_invocation_sha256))
         for role, report, invocation_sha in reports:

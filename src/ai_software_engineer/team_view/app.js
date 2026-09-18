@@ -62,11 +62,14 @@ const labels = {
   DISPATCHING: "分配成员",
   DELIVERING: "分仓交付",
   INTEGRATING: "联合验收",
+  WAITING_DELIVERY_FINALIZATION: "等待交付确认",
   IMPLEMENTING: "实现中",
   CONTINUE_REQUIRED: "等待继续实现",
   QUEUED: "已重新排队",
   QA: "测试中",
   REVIEW: "评审中",
+  VERIFY_QA: "候选测试中",
+  VERIFY_REVIEW: "候选评审中",
   DONE: "已完成",
   CLOSED: "已关闭",
   BLOCKED: "已阻塞",
@@ -329,6 +332,19 @@ function requestGroup(request) {
 function requestTasks(request) {
   return snapshot.tasks.filter((task) => task.request_id === request.id);
 }
+function currentRequestTasks(request) {
+  const currentByDelivery = new Map();
+  for (const task of requestTasks(request)) {
+    const deliveryId = task.source_delivery_id || task.id;
+    const previous = currentByDelivery.get(deliveryId);
+    if (
+      !previous ||
+      task.last_activity.localeCompare(previous.last_activity) > 0
+    )
+      currentByDelivery.set(deliveryId, task);
+  }
+  return [...currentByDelivery.values()];
+}
 function activeRequestTask(request) {
   if (
     !(
@@ -404,9 +420,19 @@ function requestPresentation(request) {
     nextAction: request.next_action,
   };
 }
+
+function agentQueueState(agent) {
+  return {
+    assigned_delivery_ids: [...agent.assigned_delivery_ids],
+    current_stage_delivery_ids: [...agent.current_stage_delivery_ids],
+    history_delivery_ids: [...agent.history_delivery_ids],
+  };
+}
 function requestBlockingSummary(request) {
   if (requestPresentation(request).group !== "blocked") return null;
-  const blockedTasks = requestTasks(request).filter(
+  // Verification attempts are audit history of the same native delivery, not
+  // independent current blockers. Select its newest observation before filtering.
+  const blockedTasks = currentRequestTasks(request).filter(
     (task) => taskGroup(task) === "blocked",
   );
   const reasons = new Map();
@@ -465,7 +491,7 @@ function requestBlockingSummary(request) {
       reason,
       scopes: [...new Set(scopes)],
     })),
-    operationReason,
+    operationReason: reasons.has(operationReason) ? null : operationReason,
     approval,
     suggestedAction,
   };
@@ -1412,7 +1438,7 @@ function renderOperationStatus() {
           "p",
           operation.status === "QUEUED"
             ? "已安全接单，等待 Manager 执行。"
-            : "Manager 正在执行；可以刷新或关闭页面。",
+            : "交付流程正在执行；可以刷新或关闭页面。",
           "muted",
         ),
       );
@@ -1443,6 +1469,39 @@ function renderOperationStatus() {
 }
 function agentWorkGroup(work) {
   return work.kind === "task" ? taskGroup(work.item) : requestGroup(work.item);
+}
+function collapseVerificationQueue(agent, assigned, history, currentIds) {
+  if (!agent.roles.some((role) => ["qa", "reviewer"].includes(role)))
+    return { assigned, history };
+  const assignedIds = new Set(assigned.map((work) => work.id));
+  const selected = new Map();
+  for (const work of [...assigned, ...history]) {
+    const requirementId =
+      work.kind === "request" ? work.item.id : work.item.request_id || work.item.id;
+    const priority = currentIds.has(work.id)
+      ? 3
+      : assignedIds.has(work.id)
+        ? 2
+        : 1;
+    const candidate = {
+      work,
+      priority,
+      activity: work.item.last_activity || "",
+    };
+    const existing = selected.get(requirementId);
+    if (
+      !existing ||
+      candidate.priority > existing.priority ||
+      (candidate.priority === existing.priority &&
+        candidate.activity.localeCompare(existing.activity) > 0)
+    )
+      selected.set(requirementId, candidate);
+  }
+  const representatives = [...selected.values()].map((candidate) => candidate.work);
+  return {
+    assigned: representatives.filter((work) => assignedIds.has(work.id)),
+    history: representatives.filter((work) => !assignedIds.has(work.id)),
+  };
 }
 function taskRow(work, agentId) {
   const task = work.item;
@@ -1528,10 +1587,14 @@ function renderTeam(content) {
     })
     .map(({ agent }) => agent);
   if (!orderedAgents.length) return;
+  const queueStates = new Map(
+    orderedAgents.map((agent) => [agent.id, agentQueueState(agent)]),
+  );
   if (!orderedAgents.some((agent) => agent.id === selectedAgentId))
     selectedAgentId =
-      orderedAgents.find((agent) => agent.current_stage_delivery_ids.length)
-        ?.id || orderedAgents[0].id;
+      orderedAgents.find(
+        (agent) => queueStates.get(agent.id).current_stage_delivery_ids.length,
+      )?.id || orderedAgents[0].id;
   const heading = el("div", undefined, "section-heading");
   heading.append(
     el("div", "长期团队成员", "section-title"),
@@ -1542,11 +1605,12 @@ function renderTeam(content) {
   const roster = el("aside", undefined, "agent-roster");
   roster.setAttribute("aria-label", "团队成员列表");
   for (const agent of orderedAgents) {
+    const queueState = queueStates.get(agent.id);
     const memberStatus = !agent.enabled
       ? ["已停用", "badge"]
-      : agent.current_stage_delivery_ids.length
+      : queueState.current_stage_delivery_ids.length
         ? ["执行中", "badge current"]
-        : agent.assigned_delivery_ids.length
+        : queueState.assigned_delivery_ids.length
           ? ["等待当前阶段", "badge"]
           : ["空闲中", "badge done"];
     const control = button(
@@ -1575,8 +1639,20 @@ function renderTeam(content) {
     el("span", `并发上限 ${agent.max_parallel_assignments}（配置值）`, "badge"),
   );
   board.append(boardHeading);
-  const assigned = agent.assigned_delivery_ids.map(agentWorkById).filter(Boolean);
-  const history = agent.history_delivery_ids.map(agentWorkById).filter(Boolean);
+  const queueState = queueStates.get(agent.id);
+  let assigned = queueState.assigned_delivery_ids
+    .map(agentWorkById)
+    .filter(Boolean);
+  let history = queueState.history_delivery_ids
+    .map(agentWorkById)
+    .filter(Boolean);
+  const currentIds = new Set(queueState.current_stage_delivery_ids);
+  ({ assigned, history } = collapseVerificationQueue(
+    agent,
+    assigned,
+    history,
+    currentIds,
+  ));
   const blockedIds = new Set(
     [...assigned, ...history]
       .filter((work) => agentWorkGroup(work) === "blocked")
@@ -1588,7 +1664,7 @@ function renderTeam(content) {
       assigned.filter(
         (work) =>
           !blockedIds.has(work.id) &&
-          !agent.current_stage_delivery_ids.includes(work.id),
+          !currentIds.has(work.id),
       ),
       "waiting",
     ],
@@ -1596,8 +1672,7 @@ function renderTeam(content) {
       "进行中",
       assigned.filter(
         (work) =>
-          !blockedIds.has(work.id) &&
-          agent.current_stage_delivery_ids.includes(work.id),
+          !blockedIds.has(work.id) && currentIds.has(work.id),
       ),
       "active",
     ],
@@ -1700,13 +1775,15 @@ function requestOperation(panel, request, discussionSection) {
     else appendOperation(content);
   };
   const running = activeOperation(request.id);
-  const activeTask = activeRequestTask(request);
   const isProductDiscussion = productDiscussionStages.has(request.stage);
   const sourceRevisionDrift = isSourceRevisionDrift(
     latestOperation(request.id),
   );
   const approvingProduct = running?.intent.action === "PRODUCT_APPROVAL";
-  if ((running || activeTask) && !isProductDiscussion) return;
+  // A terminal browser operation may leave an admitted QA/Reviewer item visible until
+  // Manager creates its successor plan. Only a live Console operation suppresses the
+  // recovery action; the durable task projection alone must not strand the operator.
+  if (running && !isProductDiscussion) return;
   if (running) {
     appendDiscussionContent(
       el(
@@ -4193,22 +4270,31 @@ function deliveryFlow(request) {
     PLANNING: 2,
     DISPATCHING: 2,
     DELIVERING: 3,
-    INTEGRATING: 5,
+    VERIFY_QA: 4,
+    VERIFY_REVIEW: 5,
+    INTEGRATING: 6,
+    WAITING_DELIVERY_FINALIZATION: 6,
     DONE: 6,
     CLOSED: 6,
   };
-  let current = requestStages[request.stage] ?? 0;
+  const presentedStage = requestPresentation(request).status;
+  const effectiveStage = ["VERIFY_QA", "VERIFY_REVIEW"].includes(presentedStage)
+    ? presentedStage
+    : request.stage;
+  let current = requestStages[effectiveStage] ?? 0;
   const taskStatuses = request.scopes
     .map((scope) => taskById(scope.delivery_id)?.status)
     .filter(Boolean);
-  if (taskStatuses.includes("REVIEW")) current = 5;
-  else if (taskStatuses.includes("QA")) current = 4;
-  else if (
-    taskStatuses.some((status) =>
-      ["IMPLEMENTING", "CONTINUE_REQUIRED", "QUEUED"].includes(status),
+  if (!["VERIFY_QA", "VERIFY_REVIEW"].includes(effectiveStage)) {
+    if (taskStatuses.includes("REVIEW")) current = 5;
+    else if (taskStatuses.includes("QA")) current = 4;
+    else if (
+      taskStatuses.some((status) =>
+        ["IMPLEMENTING", "CONTINUE_REQUIRED", "QUEUED"].includes(status),
+      )
     )
-  )
-    current = 3;
+      current = 3;
+  }
   const flow = el("ol", undefined, "delivery-flow");
   steps.forEach((title, index) => {
     const step = el("li", undefined, index < current ? "done" : "");
@@ -4381,10 +4467,14 @@ function renderDetail() {
     panel.append(flow);
     const scopes = el("section", undefined, "detail-section");
     scopes.append(el("h2", "涉及代码目录"));
+    const currentTasks = currentRequestTasks(item);
     for (const scope of item.scopes) {
       const scopeCard = el("div", undefined, "request-scope-card");
       scopeCard.append(el("p", paths(scope), "paths"));
-      const task = taskById(scope.delivery_id);
+      const task = currentTasks.find(
+        (candidate) =>
+          (candidate.source_delivery_id || candidate.id) === scope.delivery_id,
+      );
       if (task)
         scopeCard.append(
           button("查看仓库任务 · " + label(task.status), () =>

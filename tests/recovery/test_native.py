@@ -22,7 +22,11 @@ from ai_software_engineer.config import ModelProviderKind, ProductionConfig, Pro
 from ai_software_engineer.context import FileContextStore
 from ai_software_engineer.design import FileDesignRecordStore
 from ai_software_engineer.domain import AgentDefinition, AgentRole, ChangedFile, ChangeType
-from ai_software_engineer.manager.delivery import ApproveProductSpec, StartProjectDelivery
+from ai_software_engineer.manager.delivery import (
+    ApproveProductSpec,
+    ResumeProjectDelivery,
+    StartProjectDelivery,
+)
 from ai_software_engineer.manager.delivery_checkpoint import (
     FileProjectDeliveryCheckpointStore,
     ProjectDeliveryCheckpoint,
@@ -34,6 +38,7 @@ from ai_software_engineer.planning import FileExecutionPlanStore
 from ai_software_engineer.product import FileProductRecordStore
 from ai_software_engineer.recovery import RecoveryRejected, RecoveryScope
 from ai_software_engineer.recovery.native import NativeRecoverySourceReader
+from ai_software_engineer.recovery.resume import DeliveryResumeOutcome, DeliveryResumeResult
 from ai_software_engineer.role_workspace import RoleWorktreeBinding
 from tests.domain.factories import make_coder_progress_artifact
 from tests.e2e.test_joint_delivery import setup_host
@@ -80,6 +85,47 @@ class InterruptedFactory:
         environment: Mapping[str, str],
     ) -> AgentAdapter:
         return InterruptedCoder(binding.worktree.path, self.requests)
+
+
+class InvalidOutputCoder:
+    def __init__(self, requests: list[AgentRequest]) -> None:
+        self.requests = requests
+
+    def run(self, request: AgentRequest) -> AgentResult:
+        assert request.role is AgentRole.CODER
+        self.requests.append(request)
+        return AgentResult(
+            run_id=request.run_id,
+            task_id=request.task_id,
+            role=request.role,
+            attempt=request.attempt,
+            source_revision=request.source_revision,
+            context_manifest_id=request.context_manifest_id,
+            status=AgentRunStatus.FAILED,
+            error=AgentFailure(
+                code=AgentErrorCode.INVALID_OUTPUT,
+                message="offline Coder returned invalid structured output",
+                transient=False,
+            ),
+        )
+
+
+class InvalidOutputFactory:
+    def __init__(self) -> None:
+        self.requests: list[AgentRequest] = []
+
+    def create(
+        self,
+        *,
+        route: ProviderRouteConfig,
+        definition: AgentDefinition,
+        binding: RoleWorktreeBinding,
+        context_resolver: StoredContextResolver,
+        config: ProductionConfig,
+        environment: Mapping[str, str],
+    ) -> AgentAdapter:
+        del route, definition, binding, context_resolver, config, environment
+        return InvalidOutputCoder(self.requests)
 
 
 class ContinuedCoder:
@@ -333,6 +379,83 @@ def test_budget_exhausted_coder_progress_is_a_recoverable_native_source(
     assert routes[-1].outcome is RouteAttemptOutcome.SUCCEEDED
     assert routes[-1].result.artifact is not None
     assert routes[-1].result.artifact.kind.value == "coder-progress"
+
+
+@pytest.mark.mysql
+def test_retry_budget_invalid_output_is_a_recoverable_native_source(
+    tmp_path: Path, mysql_dsn: str
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "hello.txt").write_text("hello\n")
+    _git("init", "-b", "main", cwd=project)
+    _git("add", "hello.txt", cwd=project)
+    _git("commit", "-m", "initial", cwd=project)
+    config = ProductionConfig(
+        platform_root=str(tmp_path / "platform"),
+        default_project_id="project_test",
+        default_project_name="Test Project",
+        model_routes=(
+            ProviderRouteConfig(
+                provider="codex", model="gpt-5.5", kind=ModelProviderKind.CODEX_CLI
+            ),
+        ),
+        live_model_execution=True,
+    )
+    environment = {"ASE_MYSQL_DSN": mysql_dsn, "PATH": os.environ.get("PATH", "")}
+    factory = InvalidOutputFactory()
+    host = TeamHost(
+        config=config,
+        environment=environment,
+        structured_clients=_ScriptedClientFactory(),
+        delivery_route_adapters=factory,
+    )
+    entry = host.project_entry()
+    started = entry.start(
+        StartProjectDelivery(repository_root=str(project), requirement="Change greeting.")
+    )
+    checkpoint = entry.approve(
+        ApproveProductSpec(
+            delivery_id=started.checkpoint.delivery_id,
+            expected_checkpoint_sha256=started.checkpoint.checkpoint_sha256,
+            approval_reference="test-invalid-output-recovery",
+        )
+    ).checkpoint
+
+    assert checkpoint.stage.value == "BLOCKED"
+    assert len(factory.requests) == 3
+    source = NativeRecoverySourceReader(config, environment).discover_failed_coder(
+        RecoveryScope(
+            team_id=config.team_id,
+            repository_id=checkpoint.repository_id,
+            repository_root=str(project),
+            delivery_id=checkpoint.delivery_id,
+        )
+    )
+
+    assert source.task.attempts == source.task.max_attempts == 3
+    assert source.source.failed_run_id == factory.requests[-1].run_id
+    assert source.source.failed_context_id == factory.requests[-1].context_manifest_id
+
+    source_worktree = (
+        Path(config.platform_root)
+        / "worktrees"
+        / checkpoint.repository_id
+        / source.task.id
+        / "coder-attempt-01"
+    )
+    assert not source_worktree.exists()
+
+    proposed = host.resume_delivery(ResumeProjectDelivery(delivery_id=checkpoint.delivery_id))
+
+    assert isinstance(proposed, DeliveryResumeResult)
+    assert proposed.outcome is DeliveryResumeOutcome.RECOVERY_APPROVAL_REQUIRED
+    assert proposed.recovery_plan_file is not None
+    _, plan = host.recovery_entry().open_plan(Path(proposed.recovery_plan_file))
+    assert plan.input_mode == "coder_reapply"
+    assert plan.capture.patch == ""
+    assert plan.capture.files == ()
+    assert source_worktree.is_dir()
 
 
 def test_inspection_does_not_initialize_missing_platform(tmp_path: Path) -> None:

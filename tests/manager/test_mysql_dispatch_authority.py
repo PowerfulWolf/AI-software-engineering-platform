@@ -147,6 +147,77 @@ def test_terminal_tasks_release_capacity_without_erasing_dispatch(
         reserve()
 
 
+def test_abandoned_verification_releases_capacity_without_becoming_replayable(
+    tmp_path: Path, mysql_dsn: str
+) -> None:
+    _, snapshot, record, plans, revisions = _durable_facts(tmp_path)
+    authority = MySqlDispatchAuthority(
+        mysql_dsn, request_revisions=revisions, planner_records=plans
+    )
+    authority.seed_snapshot(snapshot)
+
+    def build(current: DispatchWorkforceSnapshot) -> VerificationReservation:
+        phase = record.phases[1]
+        assignment_id = "assignment_verify_abandoned"
+        lease_id = "lease_verify_abandoned"
+        return VerificationReservation(
+            plan_sha256="c" * 64,
+            repository_id=record.repository_id,
+            source_task_id=record.task_id,
+            task_id="task_verify_abandoned",
+            workforce_snapshot_sha256=current.snapshot_sha256,
+            phases=(
+                phase.model_copy(
+                    update={
+                        "assignment": phase.assignment.model_copy(
+                            update={
+                                "id": assignment_id,
+                                "lease_id": lease_id,
+                                "task_id": "task_verify_abandoned",
+                            }
+                        ),
+                        "lease": phase.lease.model_copy(
+                            update={
+                                "id": lease_id,
+                                "assignment_id": assignment_id,
+                                "task_id": "task_verify_abandoned",
+                            }
+                        ),
+                    }
+                ),
+            ),
+            committed_at=record.committed_at,
+        )
+
+    reserved = authority.reserve_verification(
+        repository_id=record.repository_id,
+        source_task_id=record.task_id,
+        plan_sha256="c" * 64,
+        validate_current=lambda _: None,
+        build=build,
+    )
+    active = authority.current_snapshot(repository_id=record.repository_id, task_id=record.task_id)
+    assert reserved.phases[0].lease.id in {lease.id for lease in active.active_leases}
+
+    for _ in range(2):
+        authority.abandon_verification(
+            plan_sha256="c" * 64,
+            abandonment_sha256="d" * 64,
+        )
+    released = authority.current_snapshot(
+        repository_id=record.repository_id, task_id=record.task_id
+    )
+    assert reserved.phases[0].lease.id not in {lease.id for lease in released.active_leases}
+    with pytest.raises(DispatchAuthorityConflict, match="already completed"):
+        authority.reserve_verification(
+            repository_id=record.repository_id,
+            source_task_id=record.task_id,
+            plan_sha256="c" * 64,
+            validate_current=lambda _: None,
+            build=build,
+        )
+
+
 @pytest.fixture
 def mysql_dsn() -> str:
     value = os.environ.get("ASE_TEST_MYSQL_DSN")

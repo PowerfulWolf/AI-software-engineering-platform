@@ -1,0 +1,26 @@
+{
+  "id": "T052",
+  "title": "联合验收失败恢复",
+  "status": "completed",
+  "phase": "offline_verified",
+  "goal": "让联合验收失败可封存、可诊断，并通过有界重规划恢复到联合验收",
+  "allowed_paths": [
+    "src/ai_software_engineer/multi_directory/models.py",
+    "src/ai_software_engineer/multi_directory/production.py",
+    "src/ai_software_engineer/multi_directory/service.py",
+    "src/ai_software_engineer/multi_directory/store.py",
+    "tests/manager/test_joint_contracts.py",
+    "tests/manager/test_joint_planner_feedback.py",
+    "tests/e2e/test_joint_delivery.py",
+    ".trellis/spec/core/multi-directory-delivery.md",
+    "docs/operator-feedback-loop.md"
+  ],
+  "verification_commands": [
+    ".venv/bin/pytest -q tests/manager/test_joint_contracts.py tests/manager/test_joint_planner_feedback.py",
+    ".venv/bin/pytest -q tests/e2e/test_joint_delivery.py --tb=short",
+    ".venv/bin/ruff check src/ai_software_engineer/multi_directory tests/manager/test_joint_contracts.py tests/manager/test_joint_planner_feedback.py",
+    ".venv/bin/mypy src/ai_software_engineer/multi_directory",
+    "git diff --check"
+  ],
+  "rollback_point": "回退本任务代码并重启 Console；保留已有联合 journal、候选和 Reviewer 事实，不修改生产数据"
+}

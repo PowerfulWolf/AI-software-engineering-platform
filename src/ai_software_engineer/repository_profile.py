@@ -328,6 +328,10 @@ _IGNORED_DIRECTORIES: Final[frozenset[str]] = frozenset(
         ".mypy_cache",
         ".pytest_cache",
         ".ruff_cache",
+        # Platform-managed and legacy local Git worktrees are execution state, not
+        # repository source.  Scanning them recursively duplicates the project for
+        # every historical Task and can exhaust the Agent context before admission.
+        "worktrees",
     }
 )
 _VCS_MARKERS: Final[tuple[tuple[str, VcsKind], ...]] = (

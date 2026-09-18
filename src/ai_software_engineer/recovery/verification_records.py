@@ -30,6 +30,13 @@ from ai_software_engineer.manager.delivery_checkpoint import DeliveryId
 from ai_software_engineer.recovery.models import FullCommit, RecoveryScope, _safe_text, digest
 
 
+class AcceptedQaReport(DomainModel):
+    """One sealed QA PASS selected from the terminal Task event chain."""
+
+    artifact_id: ArtifactId
+    artifact_sha256: Sha256
+
+
 class CandidateVerificationInputs(DomainModel):
     """Exact original facts; a matching digest is not an authorization."""
 
@@ -41,6 +48,7 @@ class CandidateVerificationInputs(DomainModel):
     implementation_id: ArtifactId
     implementation_sha256: Sha256
     candidate_revision: FullCommit
+    accepted_qa: AcceptedQaReport | None = None
     prior_run_ids: tuple[RunId, ...] = ()
 
     @model_validator(mode="after")
@@ -165,7 +173,7 @@ class CandidateVerificationCompletion(DomainModel):
     schema_version: Literal["v0.1"] = "v0.1"
     plan_sha256: Sha256
     authorization_sha256: Sha256
-    qa_invocation_sha256: Sha256
+    qa_invocation_sha256: Sha256 | None = None
     reviewer_invocation_sha256: Sha256 | None = None
     qa: QaReportArtifact
     review: ReviewReportArtifact | None = None

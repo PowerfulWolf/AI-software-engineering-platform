@@ -29,12 +29,15 @@ from ai_software_engineer.multi_directory.attachments import (
 )
 from ai_software_engineer.multi_directory.integration_commands import planner_command_policy
 from ai_software_engineer.multi_directory.models import (
+    Candidate,
     ChildDelivery,
     DesignInterfaceConsumersError,
     DesignWritePathsError,
     DialogueMessage,
     IntegrationCommandError,
     IntegrationEvidence,
+    IntegrationRetryApproval,
+    IntegrationRetryProposal,
     JointApproval,
     JointCheckpoint,
     JointDeliveryResult,
@@ -44,6 +47,7 @@ from ai_software_engineer.multi_directory.models import (
     JointTechnicalDesign,
     PlanCoverageError,
     PreparedUnit,
+    SingleRepositoryAcceptance,
     digest,
 )
 from ai_software_engineer.multi_directory.retirement import RequirementRetirementStore
@@ -69,6 +73,9 @@ class JointBackend(Protocol):
     def integrate(self, checkpoint: JointCheckpoint) -> IntegrationEvidence: ...
     def reconcile(self, checkpoint: JointCheckpoint) -> None: ...
     def validate_plan(self, checkpoint: JointCheckpoint, plan: JointExecutionPlan) -> None: ...
+    def accept_single_repository(
+        self, checkpoint: JointCheckpoint
+    ) -> SingleRepositoryAcceptance: ...
 
 
 class CreateRequirement(DomainModel):
@@ -348,12 +355,87 @@ class JointDeliveryService:
     def resume(self, command: ResumeProjectDelivery) -> JointDeliveryResult:
         with self.journal.lock(command.delivery_id):
             checkpoint = self._current(command.delivery_id)
+            completed = self._complete_single_repository(checkpoint)
+            if completed is not None:
+                return JointDeliveryResult(checkpoint=completed)
+            if checkpoint.stage in {JointStage.BLOCKED, JointStage.PLANNING} and (
+                checkpoint.attempts.get("integration", 0) >= 3
+                and checkpoint.integration is not None
+                and any(check.returncode != 0 for check in checkpoint.integration.checks)
+            ):
+                self.backend.reconcile(checkpoint)
+                if checkpoint.integration_retry_approval is not None:
+                    if checkpoint.attempts["integration"] >= 4:
+                        return JointDeliveryResult(
+                            checkpoint=self._save(
+                                checkpoint,
+                                stage=JointStage.BLOCKED,
+                                next_action=(
+                                    "补充联合验收机会已用完。候选与历史证据已保留。"
+                                    "请检查验收失败原因后人工处理。"
+                                ),
+                            )
+                        )
+                else:
+                    if (
+                        checkpoint.attempts["integration"] != 3
+                        or not checkpoint.children
+                        or any(
+                            child.checkpoint.stage is not DeliveryStage.DONE
+                            for child in checkpoint.children
+                        )
+                    ):
+                        raise ValueError("integration retry requires completed reviewed children")
+                    proposal = IntegrationRetryProposal(
+                        checkpoint_sha256=checkpoint.checkpoint_sha256,
+                        candidates=tuple(
+                            Candidate(
+                                unit_id=child.unit_id,
+                                revision=child.checkpoint.candidate_revision or "",
+                            )
+                            for child in checkpoint.children
+                        ),
+                    )
+                    if command.approved_plan_sha256 is None:
+                        return JointDeliveryResult(
+                            checkpoint=checkpoint, integration_retry_proposal=proposal
+                        )
+                    if command.approved_plan_sha256 != digest(proposal):
+                        raise DeliveryCheckpointStale("integration retry approval changed")
+                    assert command.approval_reference is not None
+                    checkpoint = self._save(
+                        checkpoint,
+                        integration_retry_approval=IntegrationRetryApproval(
+                            proposal=proposal,
+                            reference=command.approval_reference,
+                            approved_at=command.submitted_at,
+                        ),
+                    )
             if checkpoint.stage is JointStage.BLOCKED and checkpoint.integration is None:
                 self.backend.reconcile(checkpoint)
                 checkpoint = self._save(
                     checkpoint,
                     stage=JointStage.DELIVERING,
                     next_action="Resume only incomplete repository deliveries.",
+                )
+            elif (
+                checkpoint.stage is JointStage.BLOCKED
+                and checkpoint.integration is not None
+                and any(result.returncode != 0 for result in checkpoint.integration.checks)
+            ):
+                # An integration plan is immutable during normal delivery.  A failed,
+                # evidenced integration is the one explicit recovery seam: retain the
+                # old plan and evidence in the journal, then let Planner produce a fresh
+                # complete plan without rerunning completed repository children.
+                self.backend.reconcile(checkpoint)
+                checkpoint = self._save(
+                    checkpoint,
+                    stage=JointStage.PLANNING,
+                    plan=None,
+                    next_action=(
+                        "The previous joint integration command failed. Produce a fresh, "
+                        "complete integration plan using the recorded command evidence."
+                    ),
                 )
             return JointDeliveryResult(checkpoint=self._advance(checkpoint))
 
@@ -365,6 +447,9 @@ class JointDeliveryService:
     def _advance(self, checkpoint: JointCheckpoint) -> JointCheckpoint:
         self._team_binding(checkpoint)
         self.backend.reconcile(checkpoint)
+        completed = self._complete_single_repository(checkpoint)
+        if completed is not None:
+            return completed
         if checkpoint.stage is JointStage.PREPARING:
             # All roots are prepared before ANY Product invocation.
             existing = {p.unit_id for p in checkpoint.preparations}
@@ -494,7 +579,9 @@ class JointDeliveryService:
                 "Act as Planner. Bind design_sha256. "
                 "Return each modified unit once, in dependency-first SERIAL order, with "
                 "coder/qa/reviewer phases. "
-                "Also provide executable integration_checks covering all global "
+                "For a single-repository scope return integration_checks=[]; native QA and "
+                "Reviewer are its final acceptance. For multiple repositories provide executable "
+                "integration_checks covering all global "
                 "acceptance and interface IDs. "
                 "Use the exact required_coverage lists supplied by the platform and correct "
                 "any prior rejection in next_action; do not omit documentation/delivery criteria. "
@@ -513,7 +600,12 @@ class JointDeliveryService:
                 "for interface compatibility, not only independent unit tests. Do not "
                 "substitute echo/true "
                 "or git inspection for tests. If tests need implementation, include "
-                "them in native QA/Coder work.",
+                "them in native QA/Coder work. "
+                "When completed children are retained after integration failure, the supplied "
+                "read-only roots are their reviewed candidates, not the original baseline. "
+                "Inspect the actual test files there before selecting argv. Completed child "
+                "Agents will not rerun; do not invent test paths or plan new code changes. "
+                "Preserve every acceptance criterion and interface coverage requirement.",
             )
             assert checkpoint.product_spec is not None and checkpoint.design is not None
             try:
@@ -529,6 +621,7 @@ class JointDeliveryService:
                 checkpoint,
                 stage=JointStage.DELIVERING,
                 plan=plan,
+                integration=None,
                 next_action="Execute each repository with independent QA and Reviewer.",
             )
         if checkpoint.stage is JointStage.DELIVERING:
@@ -564,13 +657,30 @@ class JointDeliveryService:
                             "Completed repositories are retained; joint delivery is not DONE."
                         ),
                     )
+            completed = self._complete_single_repository(checkpoint)
+            if completed is not None:
+                return completed
             checkpoint = self._save(
                 checkpoint,
                 stage=JointStage.INTEGRATING,
                 next_action="Verify the complete pinned candidate set together.",
             )
         if checkpoint.stage is JointStage.INTEGRATING:
-            checkpoint = self._attempt(checkpoint, "integration")
+            integration_limit = 4 if checkpoint.integration_retry_approval is not None else 3
+            if checkpoint.attempts.get("integration", 0) >= integration_limit:
+                return self._save(
+                    checkpoint,
+                    stage=JointStage.BLOCKED,
+                    next_action=(
+                        "联合验收机会已用完或上次执行中断。候选与历史证据已保留。"
+                        "请检查已有执行记录后人工处理。"
+                    ),
+                )
+            checkpoint = self._attempt(
+                checkpoint,
+                "integration",
+                limit=integration_limit,
+            )
             evidence = self.backend.integrate(checkpoint)
             if any(c.returncode != 0 for c in evidence.checks):
                 return self._save(
@@ -592,6 +702,30 @@ class JointDeliveryService:
                 ),
             )
         return checkpoint
+
+    def _complete_single_repository(self, checkpoint: JointCheckpoint) -> JointCheckpoint | None:
+        if checkpoint.stage not in {
+            JointStage.PLANNING,
+            JointStage.DELIVERING,
+            JointStage.INTEGRATING,
+            JointStage.BLOCKED,
+        }:
+            return None
+        if len(checkpoint.scope.units) != 1 or len(checkpoint.children) != 1:
+            return None
+        child = checkpoint.children[0]
+        if child.checkpoint.stage is not DeliveryStage.DONE:
+            return None
+        proof = self.backend.accept_single_repository(checkpoint)
+        return self._save(
+            checkpoint,
+            stage=JointStage.DONE,
+            single_repository_acceptance=proof,
+            next_action=(
+                "The repository candidate passed native QA and Review. Review the candidate "
+                "before merging; nothing was pushed."
+            ),
+        )
 
     def _produce(
         self, checkpoint: JointCheckpoint, model: type[Output], instructions: str

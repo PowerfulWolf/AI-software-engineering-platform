@@ -438,6 +438,63 @@ check can succeed before actual application writes unmerged entries/conflict mar
 run a real three-way merge in an isolated index and reject its nonzero result before touching target.
 Future CLI/dispatch/seed receipt and provider admission remain unimplemented.
 
+## Increment C2.1 — recover post-feedback Coder work before re-verifying a retained candidate
+
+When QA or Reviewer routes a candidate back to Coder, the candidate commit becomes the retained
+worktree `HEAD`; edits made after that feedback may still be uncommitted when quota, provider, or
+process execution stops. Those edits are current delivery work, not disposable dirty data.
+
+```python
+terminal_candidate_requires_coder_recovery(
+    task: Task, events: tuple[StateEvent, ...]
+) -> bool
+GitWorktreeManager.capture_changes(
+    worktree: WorktreeRef,
+    permissions: AgentPermissions,
+    *,
+    denied_paths: tuple[str, ...] = (),
+    base_revision: str | None = None,
+) -> WorktreeChangeCapture
+```
+
+### Contracts
+
+- A valid `candidate_ready`/`candidate_recovered` event followed by QA/Review feedback to
+  `IMPLEMENTING` and a terminal Coder failure takes precedence over old-candidate verification.
+  Manager must enter explicit Coder recovery first.
+- The failed route/context source revision must equal the retained candidate `HEAD`; the immutable
+  Task base remains the recovery source base and target-ancestry anchor.
+- A post-feedback capture binds both revisions. Its patch is the bounded full snapshot from original
+  Task base through the committed candidate and later working-tree edits. It must not capture only
+  `HEAD -> working tree`, because that would silently lose the committed candidate.
+- The capture digest uses version 2 when `base_revision` is present. Historical captures omit that
+  field and retain version-1 wire identity and digest.
+- Verification of a capture re-reads the same explicit base. Seeding checks ancestry from the
+  capture's effective base and applies the complete snapshot to a fresh recovery Task.
+- Direct terminal QA/Review failures with no later Coder admission may still re-verify the retained
+  candidate. Missing or inconsistent feedback, route, context, event, HEAD, or base identity fails
+  closed without changing either worktree.
+
+### Validation matrix
+
+| Runtime tail | Manager action |
+|---|---|
+| Candidate -> QA terminal failure | Candidate verification |
+| Candidate -> QA/Review feedback -> Coder terminal failure | Coder worktree recovery |
+| Candidate commit plus uncommitted post-feedback edits | Capture base-to-working-tree snapshot |
+| Feedback chain or route/context revision mismatch | Human gate; retain all evidence |
+
+### Tests Required
+
+- `tests/git/test_capture.py` proves a candidate commit plus later uncommitted edit is captured from
+  the original Task base and seeded without losing either layer.
+- `tests/recovery/test_resume.py` proves Manager offers a recovery plan, not a verification plan,
+  after QA feedback and terminal Coder interruption.
+
+Wrong: verify the older candidate because it is the most recent commit, ignoring newer uncommitted
+Coder work. Correct: recover the complete base-to-working-tree snapshot, let Coder finish it, and
+only then send the new candidate through independent QA and Review.
+
 ## Increment C3 — current native facts and authorized Task draft
 
 ### Scope and signatures
@@ -615,7 +672,19 @@ The test-only trusted `route_factory(seed)` injects offline adapters; production
 `ConfiguredDeliveryRouteAdapterFactory(initial_workspace_admission=seed)`. Codex's default clean
 guard remains unchanged when this dependency is absent. Public errors never include raw provider
 text/secrets; CLI returns 2 for admission failures, 3 for a non-DONE runtime result, 0 for DONE.
-Recovery currently admits exactly one CODEX_CLI route and requires live_model_execution=true.
+Recovery requires `live_model_execution=true` and validates exactly one explicit
+`config.routes_for(TeamRole.CODER)` CODEX_CLI route. Routes enabled for Manager, Product, Designer,
+Planner, QA or Reviewer do not participate in this gate. This keeps the seed admission boundary
+single-provider while allowing the production configuration to contain distinct per-Agent routes.
+
+For a joint Requirement, `ProductionJointBackend.delivery_runtime(checkpoint, unit_id)` must first
+read the native child's latest committed checkpoint. When a recovery checkpoint names a newer
+`preparation_sha256` than the frozen joint child, rebuild the native runtime from that exact immutable
+versioned `ProjectPreparation`, its uniquely matching baseline compilation, and the bound historical
+repository profile/source revision. The original joint Product/Design/Plan context remains frozen.
+Never reconcile a recovered child against either the old joint preparation or the mutable current
+checkout. This rule applies again after every interrupted recovery so a retained second-generation
+worktree can be proposed and approved without creating a new Requirement.
 
 Records live at `team/projects/<project>/state/recovery-<old-delivery>/` with plan/authorization/
 task/seed/invocation `<plan-sha>` names plus scoped manifest and nonblocking advisory execution lock.
@@ -629,6 +698,8 @@ Native get_commit/_decode_commit stay strict; global reservation reads use the a
 | Failure / replay | Required behavior |
 |---|---|
 | Missing exact human confirmation / config disabled / unsupported route | No provider |
+| Several global routes, one explicit Coder CODEX_CLI route | Admit the approved recovery; unrelated Agent routes do not block it |
+| Zero, several, or non-Codex Coder routes | Reject before seed/provider invocation |
 | Stale source, target, sealed Task or policy | Reject before fresh execution |
 | Exact existing allocation | Verify current Task binding; reuse first record/leases |
 | Concurrent recovery execution | Nonblocking lock refusal, no second Coder |
@@ -637,6 +708,8 @@ Native get_commit/_decode_commit stay strict; global reservation reads use the a
 | Provider previously admitted, including process loss | Refuse repeat Coder; inspect native Task/artifacts |
 | Terminal recovery Task | Never reset; same terminal and original history remain |
 | Child recovered to DONE | Report new candidate; old joint parent remains unchanged |
+| Joint child recovery becomes BLOCKED on a newer preparation | reopen that exact preparation/profile and permit a new explicit recovery plan |
+| Historical preparation or uniquely matching baseline compilation is missing/ambiguous | fail reconciliation closed; preserve every retained worktree |
 
 CaseStartedEvent for a Task carrying recovery_of_task_id is excluded from aggregate ADR; its Agent
 events still persist and original failed case remains included. Never count a recovery as another
@@ -650,11 +723,84 @@ current preparation), or routing section names as source IDs. ContextBuilder pre
 with `source:`; restore `source:joint.approved_context` as source_id `joint.approved_context`.
 The joint fixture verifies this source in every new ContextBundle without rerunning upstream models.
 Tests also cover records/schema identity, allocation scope/role/hash tamper, file corruption,
-seed drift, invocation lineage and scope-lock contention. Schema registry requires `$id/$schema`.
+seed drift, invocation lineage, scope-lock contention, the role-specific route gate, and a joint
+child that blocks on a current target preparation and is then re-proposed from that same retained
+recovery lineage. Schema
+registry requires `$id/$schema`.
 
 Testing note: accumulated pytest temporary Git trees can make automatic old-temp cleanup slow.
 Use a fresh `mktemp -d` path as `--basetemp` for the test run; never delete a broad workspace or
 mistake cleanup latency for a model call. Diagnose via bounded stack/progress, not repeated retries.
+
+## Scenario: recovery candidate revision after QA/Reviewer feedback
+
+### 1. Scope / Trigger
+
+Applies when the first admitted Coder run in a recovery Task creates a candidate, then QA returns
+`FAIL` or Reviewer returns `REJECT` and the same live serial runtime routes the Task back to Coder.
+This is an ordinary later Task attempt, not a replay of the recovery seed admission.
+
+### 2. Signatures
+
+```python
+InitialWorkspaceAdmission.authorize(request: AgentRequest, workspace_root: Path) -> None
+CodexCliAgentAdapter.run(request: AgentRequest) -> AgentResult
+```
+
+The adapter consumes its injected `InitialWorkspaceAdmission` exactly once after a successful
+authorization. Later requests on that same adapter use the normal Codex worktree preconditions.
+
+### 3. Contracts
+
+- The one-shot admission verifies only the first recovery Coder request at the approved base/seed and
+  publishes the durable recovery invocation record. It must not be called again for attempt 2+.
+- A later Coder request must bind `source_revision` to the previous candidate SHA. The worktree HEAD
+  must equal that SHA and the worktree must be clean, unless an ordinary persisted continuation
+  checkpoint supplies the exact changed-path inventory.
+- Later attempts still enforce `WorkspacePolicy`, candidate inventory, commit binding, artifact
+  parent/supersedes lineage and run replay guards. Consuming seed admission never widens permissions.
+- Process loss after the first admission remains non-replayable through `recovery execute`; only the
+  already-running serial runtime may continue to a later Coder attempt after a sealed QA/Review
+  verdict. A new process still requires the normal explicit successor recovery plan.
+
+### 4. Validation & Error Matrix
+
+| Case | Required behavior |
+|---|---|
+| First recovery Coder request | authorize exact seed once, then run provider |
+| First authorization rejects | do not consume admission; no provider invocation |
+| Reviewer rejects candidate in the same live runtime | run Coder attempt 2 at prior candidate SHA under normal clean-worktree policy |
+| Later HEAD differs from request source revision | fail closed before provider |
+| Later worktree is dirty without exact continuation checkpoint | fail closed before provider |
+| Recovery entry is restarted after admitted invocation | reject replay; require current recovery workflow |
+
+### 5. Good / Base / Bad Cases
+
+- Good: Coder creates candidate A, QA passes, Reviewer rejects, Coder safely creates candidate B,
+  then independent QA/Reviewer evaluate B.
+- Base: Reviewer approves candidate A, so no second Coder request occurs.
+- Bad: reuse `RecoverySeedService.authorize` for candidate A's remediation; it necessarily rejects
+  attempt/revision/invocation identity and falsely blocks the Task before the model runs.
+
+### 6. Tests Required
+
+`tests/agents/test_codex_cli.py` must run two Coder requests through one adapter with a one-shot fake
+admission. Assert admission count is one, both runs succeed, the second request starts from the first
+candidate, and the final worktree is clean. Existing recovery execution tests continue to prove that
+a restarted recovery entry cannot replay an already-admitted seed invocation.
+
+### 7. Wrong vs Correct
+
+```python
+# Wrong: seed authorization is a permanent wrapper around every Coder correction.
+admission.authorize(second_attempt, candidate_worktree)
+
+# Correct: admit the approved seed once; later serial attempts use ordinary candidate guards.
+if not initial_admission_consumed:
+    admission.authorize(first_attempt, seeded_worktree)
+else:
+    require_exact_head_and_clean_or_checkpointed_changes(second_attempt)
+```
 
 ## D3: Explicit Coder reapplication on a clean base
 
@@ -963,17 +1109,25 @@ only active occupancy, not assignments or SQL history. Normal Task dispatch filt
 `complete_verification(plan_sha256, completion_sha256, validate_completion)` uses the same lock;
 the trusted callback must resolve sealed completion and validate its invocation/allocation binding.
 Exact completion replay is allowed; conflicting completion and re-reservation after release reject.
-No completion means no implicit success/release; existing lease expiration policy still applies.
+`abandon_verification(plan_sha256, abandonment_sha256)` is the distinct failure release: it is called
+only after an approved plan has terminated without a completion, keeps the plan non-replayable, and
+removes only active occupancy while retaining assignment and reservation history. The abandonment
+digest contains stable non-sensitive failure facts and is idempotent; it never represents QA or
+Reviewer success. If persisting the release fails, the original execution error remains authoritative
+and Manager reconciliation must repair the orphaned reservation.
 
 Good: FAILED original Task plus live verification occupies both verifier leases. Base: completion
-releases those leases while retaining assignments. Bad: infer verification liveness from Task status,
-or call release with an unvalidated digest.
+releases those leases while retaining assignments. Failure: worktree/provider setup raises after
+reservation and the entry abandons the plan before propagating the original error. Bad: infer
+verification liveness from Task status, leave a failed setup as an executing QA card, or replay the
+abandoned plan.
 `test_verification_reservation.py` exercises the shared SQL snapshot decoder with offline row fixtures.
 Real MySQL transaction/concurrency verification is still required before production use.
 
 The targeted MySQL reservation suite now covers terminal BLOCKED/FAILED/DONE origins, concurrent
-exact reservation replay, retained live occupancy, idempotent completion and rejection of reuse
-after completion. It uses a dedicated test database, never the production demand database.
+exact reservation replay, retained live occupancy, idempotent completion, idempotent abandonment,
+capacity release after abandonment, and rejection of reuse after either release. It uses a dedicated
+test database, never the production demand database.
 
 ### Native candidate source inspection
 
@@ -1170,6 +1324,125 @@ if not _verification_inputs_are_current(
     raise RecoveryRejected("verification source changed after proposal")
 ```
 
+### E2.2 Reuse a sealed QA PASS after Reviewer infrastructure failure
+
+#### Scope / Trigger
+
+Use when the terminal candidate entered `REVIEW` through a durable `qa_passed` StateEvent, but
+Reviewer produced no verdict because its provider, process, quota or execution environment failed.
+The candidate and accepted QA report are unchanged, so a successor verification plan runs only a
+fresh independent Reviewer.
+
+#### Signatures
+
+```python
+class AcceptedQaReport(DomainModel):
+    artifact_id: ArtifactId
+    artifact_sha256: Sha256
+
+class CandidateVerificationInputs(DomainModel):
+    accepted_qa: AcceptedQaReport | None = None
+
+terminal_accepted_qa_event(task, events) -> StateEvent | None
+CandidateVerificationRunner.verify_candidate(inputs) -> CandidateVerificationResult
+```
+
+#### Contracts
+
+- Native source inspection is the only producer of `accepted_qa`. It derives the artifact ID from
+  the first event after the retained candidate only when that event is exactly
+  `QA → REVIEW`, reason `qa_passed`, same candidate revision and one QA artifact ID.
+- The referenced sealed artifact must be a QA-owned PASS for the same Task and candidate, directly
+  parented by the pinned implementation, cover every approved criterion, and match the digest bound
+  in `accepted_qa`. Any mismatch rejects before admission or provider execution.
+- A plan with `accepted_qa` does not admit or invoke QA. Reviewer receives the pinned plan,
+  implementation and QA artifact and its report directly parents that QA artifact. Reviewer identity
+  must remain independent of all historical Coder/QA work.
+- Reused QA retains its sealed historical producer. Do not compare that producer to a newly
+  allocated QA definition; only newly produced reports must match the current role definition.
+- Reviewer-only completion embeds the reused QA fact, has no QA invocation digest for the new plan,
+  and binds the new durable Reviewer invocation. The store must never fabricate a QA invocation.
+- If that Reviewer returns `REJECT`, remediation lineage validates the pinned QA ID/digest plus the
+  Reviewer invocation. It must not require a nonexistent QA invocation from the reviewer-only plan.
+- Without `accepted_qa`, candidate verification retains the existing QA → Reviewer behavior.
+- Existing plans that omitted a newly discoverable accepted QA no longer match current native inputs;
+  preserve them as history and propose a new exact plan. Do not edit Task, StateEvent, Artifact,
+  Operation, verification plan or database rows in place.
+
+#### Validation & Error Matrix
+
+| Current facts | Result | Provider calls |
+|---|---|---:|
+| Exact retained candidate + sealed QA PASS + Reviewer infrastructure failure | Reviewer-only successor | Reviewer 1 |
+| No `qa_passed` event | Normal candidate verification | QA 1, Reviewer at most 1 |
+| QA ID/digest/candidate/parent/criteria/role drift | Reject before admission | 0 |
+| Caller supplies QA not referenced by terminal event | Reject before admission | 0 |
+| Reviewer fails again without verdict | Consume plan; next exact plan may reuse the same QA | Reviewer at most 1 |
+| Reviewer returns APPROVE/REJECT | Seal completion with reused QA plus new Review | Reviewer 1 |
+| Reviewer returns REJECT and successor Coder remediation is prepared | Reuse sealed completion lineage; no QA invocation lookup | 0 verification calls |
+
+#### Tests Required
+
+- Unit runner proves the exact retained QA object is supplied to Reviewer and the adapter sees only
+  `AgentRole.REVIEWER`.
+- Admission/store tests prove no QA invocation exists for reviewer-only plans, completion replay is
+  exact, and forged QA ID/digest/lineage is rejected.
+- Continuation tests prove a reviewer-only `REJECT` completion can authorize normal Coder remediation
+  while the plan still has no QA invocation record.
+- Native source tests prove only the terminal `qa_passed` event can create `accepted_qa`; older,
+  unrelated or tampered QA artifacts cannot.
+- Existing QA → Reviewer tests remain green, along with Schema parity, Ruff, strict Mypy and diff
+  checks.
+
+#### Wrong vs Correct
+
+```python
+# Wrong: a new plan always spends another QA run after QA already passed unchanged code.
+qa = run_qa(candidate)
+review = run_reviewer(candidate, qa)
+
+# Correct: bind the durable QA fact and run only the missing role.
+qa = require_terminal_accepted_qa(plan.inputs.accepted_qa, candidate)
+review = run_reviewer(candidate, qa)
+```
+
+### E2.3 Current model policy for successor verification
+
+#### Scope / Signatures
+
+Applies after Settings changes and Host restart when an existing terminal Task needs a new
+verification plan. `_verification_allocation(source, snapshot, *, config, execution_task_id,
+plan_sha256, now) -> VerificationReservation` uses the current production ModelPolicy.
+
+#### Contracts
+
+- The fenced snapshot remains authoritative for Agent identities, capacity, assignment history and
+  lease occupancy. Its historical model policy must not override the current Host configuration for
+  a newly approved verifier run. Do not rewrite the old snapshot or its digest.
+- Both proposal and fenced execution derive the same current policy via `production_team_roster`;
+  the selected Agent must reference that policy ID. Missing policies fail closed.
+- `ModelSelection` records the current policy version and exact provider/model/reasoning effort.
+  The adapter must accept the selection through that role's current configured route list.
+- `current_policy_sha256` also binds the current model policy, including role-specific route order.
+  Changing only role selection/order invalidates approval even if the enabled catalog is unchanged.
+- Consumed, unsealed plans remain history. Continue delivery proposes a new exact plan for human
+  approval; existing candidate and sealed QA PASS remain reusable after all normal lineage checks.
+
+#### Validation / Tests
+
+| Input | Expected result |
+|---|---|
+| Old snapshot selects a model absent from current role routes | New plan selects current role primary; adapter accepts it |
+| Role route order/membership changes after approval | Digest drift; reject before invocation |
+| Agent references another policy or verifier capacity is exhausted | Reject; do not use stale routes or bypass occupancy |
+| Failed plan has a sealed abandonment but no completion | Keep history; fresh plan and approval, no database repair |
+
+Regression must exercise stale-snapshot allocation through actual adapter route resolution, cover
+role-only digest drift and capacity refusal, and retain reviewer-only QA reuse tests.
+
+Good: current policy + fenced workforce facts → exact approved verifier selection. Bad: choose the
+old Task policy, then let the current adapter fail after consuming the Reviewer invocation.
+
 ## Scenario: Delivery-level universal resume and candidate remediation
 
 ### 1. Scope / Trigger
@@ -1339,8 +1612,10 @@ dispatch_sha256
 - PASS + APPROVE may seal the original Delivery DONE without rewriting its terminal Task; the
   checkpoint binds both verification plan and completion digests.
 - QA FAIL or Review REJECT creates exactly one deterministic successor Task and dispatch from the
-  completion digest. Required Coder context contains the sealed completion plus a bounded,
-  secret-scanned diff from the original base to Candidate V1.
+  completion digest. Required Coder context contains the sealed completion plus a bounded diff from
+  the original base to Candidate V1. The Manager deterministically redacts secret-shaped values in
+  this untrusted context instead of persisting them or deadlocking remediation; Candidate history
+  remains immutable, and the successor Coder receives only the redacted patch text.
 - The successor Task starts on the current clean project preparation/base and executes the normal
   serial Coder → QA → Reviewer runtime. Candidate V2 is recorded on the original Delivery hash chain;
   the source Task/events remain terminal and unchanged.
@@ -1553,6 +1828,13 @@ terminal_candidate_cursor_matches(checkpoint, candidate_revision) -> bool
 - QA may create disposable ignored cache/build files. After every run, candidate HEAD must equal
   `AgentRequest.source_revision` and `git status --porcelain` must be empty. Any Git-visible write or
   HEAD change is `POLICY_VIOLATION`, regardless of report content.
+- QA runs only tests mapped to the approved Task acceptance criteria by default. It must not expand
+  into the repository-wide suite unless the approved execution plan explicitly requires that suite;
+  optional full regression remains the human release gate and cannot turn a focused PASS into an
+  environment-only delivery blocker.
+- Every model-produced Artifact ID is bound by the platform to the admitted `AgentRequest.run_id`.
+  Candidate verification must not reuse a historical QA/Reviewer Artifact ID merely because the
+  prior report was present in context; retries and successor plans therefore remain append-only.
 - A completion is `RETRY_VERIFICATION` only when Review did not run, no criterion/test is `FAIL`,
   and at least one criterion is `NOT_TESTED` or test is `ERROR`. It creates a fresh plan/Run for the
   same candidate and requires a new exact human approval. It never starts Coder.
@@ -1663,3 +1945,59 @@ candidate = terminal_candidate_event(selected_task, selected_events)
 assert source.dispatch_commit_id == continuation.source_dispatch_id
 assert candidate.source_revision == verification_plan.inputs.candidate_revision
 ```
+
+## Scenario: Manager Leader self-healing capability seam
+
+### 1. Scope / Trigger
+
+Use when delivery is blocked by an environment, workflow, or provider incident that the Team Leader
+may repair without changing business intent or silently expanding machine authority. Manager may use
+an explicitly registered built-in capability, Skill, or MCP adapter. Repository-changing repairs are
+submitted as ordinary repair Tasks and must still pass Coder, QA, and Reviewer.
+
+### 2. Signatures
+
+```python
+ManagerLeaderRecovery.recover(incident: ManagerIncident) -> ManagerRepairResult
+ManagerRepairExecutor.execute(incident: ManagerIncident) -> ManagerRepairExecution
+ManagerRepairTaskSubmitter.submit(
+    incident: ManagerIncident,
+    capability: ManagerRepairCapability,
+) -> ManagerRepairSubmission
+```
+
+### 3. Contracts
+
+- The external interface is one typed incident and one exclusive disposition. Capability selection,
+  retry budgets, evidence hashing, and Task submission stay inside the module.
+- Only capabilities registered by trusted Team Host configuration are candidates. `SKILL` and `MCP`
+  identify adapters; they do not authorize installation, discovery, credential access, or new network
+  scope at incident time.
+- `ENVIRONMENT`, `WORKFLOW`, and `PROVIDER` incidents may run automatically only through a
+  pre-approved non-destructive capability with a bounded `max_attempts`.
+- `POLICY`, `PERMISSION`, and `BUSINESS` incidents always return `WAITING_HUMAN`. Automatic
+  capabilities cannot expand permissions or declare destructive behavior.
+- Direct repair never changes repository content. It returns a safe summary plus a SHA-256 evidence
+  digest, after which the caller may retry the same delivery.
+- Any repository-changing repair uses `CANDIDATE_DELIVERY`: Manager submits a repair Task through
+  the ordinary delivery pipeline. Manager never writes or merges the target branch directly.
+- Missing capabilities, exhausted repair budgets, or failed direct repairs fail closed to
+  `WAITING_HUMAN`; there is no unbounded retry loop.
+
+### 4. Validation & Error Matrix
+
+| Incident / capability facts | Result |
+|---|---|
+| Environment + pre-approved direct Skill/MCP | Execute once; on success `RETRY_DELIVERY` with evidence digest |
+| Workflow defect + repository repair capability | `REPAIR_TASK_SUBMITTED`; Coder/QA/Reviewer own the change |
+| Provider incident + no registered capability | `WAITING_HUMAN` |
+| Policy, permission, or business incident | `WAITING_HUMAN`, regardless of available adapters |
+| Attempt reaches capability `max_attempts` | `WAITING_HUMAN`; executor is not called |
+| Automatic capability is destructive or expands permissions | Configuration validation fails |
+
+### 5. Tests Required
+
+- `tests/manager/test_leader_recovery.py`: direct environment repair, normal repair-Task submission,
+  human-only incident classes, and bounded retry exhaustion.
+- Targeted pytest, Ruff, strict Mypy, and `git diff --check` must pass. Full regression remains the
+  human release gate.

@@ -32,7 +32,7 @@ ProjectLearningStore(project).collect() -> tuple[LearningProposalView, ...]
 ProjectLearningStore(project).decide(proposal_id, command) -> LearningProposalView
 ```
 
-`AgentRequest` 必须携带 `task_id`、`run_id`、`attempt`、`source_revision`、`context_manifest_id`、permissions 和 output schema；`AgentResult` 不能直接改变 Task 状态。
+`AgentRequest` 必须携带 `task_id`、`run_id`、`attempt`、`source_revision`、`context_manifest_id`、permissions 和 output schema；Runner 还必须绑定 exact parent lineage 与按允许输出 kind 完整覆盖的 supersedes lineage（包括显式 null），provider prompt 原样暴露并在返回后校验。lineage 不匹配属于 typed `INVALID_OUTPUT`，只能进入受控重试或持久化阻塞，不能以未分类编排异常退出。`AgentResult` 不能直接改变 Task 状态。
 
 `source_revision` 在 request/result identity 中表示 Agent Run 的输入 revision。Orchestrator、QA、
 Reviewer 输出仍必须与它完全相同；Coder 是唯一决定代码改动的角色，Codex adapter 可由平台

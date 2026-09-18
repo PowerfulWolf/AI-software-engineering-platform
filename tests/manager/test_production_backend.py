@@ -395,7 +395,7 @@ def _git_output(*arguments: str, cwd: Path) -> str:
 
 
 @pytest.mark.mysql
-@pytest.mark.parametrize("input_limit", [32_000, 1])
+@pytest.mark.parametrize("input_limit", [64_000, 1])
 def test_host_records_isolated_delivery_without_polluting_project(
     tmp_path: Path,
     mysql_dsn: str,
@@ -500,7 +500,7 @@ def test_host_records_isolated_delivery_without_polluting_project(
     )
     for context_id in approved.delivery.context_manifest_ids:
         context = context_store.get(context_id)
-        assert context.budget.max_input_tokens == 32_000
+        assert context.budget.max_input_tokens == 64_000
         assert context.budget.reserved_output_tokens == 4_000
         assert all(not section.truncated for section in context.sections)
     assert (project / "hello.txt").read_text(encoding="utf-8") == "hello\n"

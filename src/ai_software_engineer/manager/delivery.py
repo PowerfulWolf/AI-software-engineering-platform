@@ -627,17 +627,45 @@ class UnifiedProjectEntryService:
             return ProjectDeliveryResult(checkpoint=current)
         dispatch.validate_integrity()
         history = store.list(current.delivery_id)
+        expected_current_task = (
+            dispatch.source_task_id
+            if dispatch.continuation_attempt == 1
+            else dispatch.retry_of_task_id
+        )
+        expected_current_dispatch = (
+            dispatch.source_dispatch_id
+            if dispatch.continuation_attempt == 1
+            else dispatch.retry_of_dispatch_id
+        )
+        verification_current = current
+        verification_history = history
+        if dispatch.continuation_attempt > 1:
+            source_indices = tuple(
+                index
+                for index, checkpoint in enumerate(history)
+                if checkpoint.task_id == plan.inputs.task_id
+                and checkpoint.dispatch_commit_sha256 == plan.dispatch_sha256
+                and checkpoint.stage in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
+                and terminal_candidate_cursor_matches(checkpoint, plan.inputs.candidate_revision)
+            )
+            if source_indices:
+                source_index = source_indices[-1]
+                verification_current = history[source_index]
+                verification_history = history[: source_index + 1]
         if (
             current.stage not in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
-            or current.task_id != dispatch.source_task_id
-            or current.dispatch_commit_id != dispatch.source_dispatch_id
-            or current.dispatch_commit_sha256 != plan.dispatch_sha256
+            or current.task_id != expected_current_task
+            or current.dispatch_commit_id != expected_current_dispatch
+            or (
+                dispatch.continuation_attempt == 1
+                and current.dispatch_commit_sha256 != plan.dispatch_sha256
+            )
             or dispatch.continuation_plan_sha256 != plan.plan_sha256
             or dispatch.continuation_sha256 != completion.completion_sha256
             or completion.verified
             or not _verification_binds_terminal_candidate(
-                current=current,
-                history=history,
+                current=verification_current,
+                history=verification_history,
                 plan=plan,
                 completion=completion,
             )

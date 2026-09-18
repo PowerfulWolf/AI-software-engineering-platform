@@ -9,7 +9,12 @@ from ai_software_engineer.agents.fallback import model_route_root
 from ai_software_engineer.artifacts import FileArtifactStore, artifact_digest
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.domain import AgentRole
-from ai_software_engineer.domain.artifact import ImplementationReportArtifact, PlanArtifact
+from ai_software_engineer.domain.artifact import (
+    ImplementationReportArtifact,
+    PlanArtifact,
+    QaReportArtifact,
+)
+from ai_software_engineer.domain.enums import QaReportStatus
 from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryStage,
     FileProjectDeliveryCheckpointStore,
@@ -21,6 +26,7 @@ from ai_software_engineer.recovery.models import RecoveryRejected, RecoveryScope
 from ai_software_engineer.recovery.native import NativeApprovedStages, _parent, read_approved_stages
 from ai_software_engineer.recovery.store import FileRecoveryStore
 from ai_software_engineer.recovery.verification_records import (
+    AcceptedQaReport,
     CandidateVerificationDisposition,
     CandidateVerificationInputs,
     verification_inputs_are_current,
@@ -28,7 +34,9 @@ from ai_software_engineer.recovery.verification_records import (
 from ai_software_engineer.recovery.verification_snapshot import (
     CandidateRuntimeSnapshot,
     read_candidate_source_snapshot,
+    terminal_accepted_qa_event,
     terminal_candidate_event,
+    terminal_candidate_requires_coder_recovery,
 )
 from ai_software_engineer.repository_workspace import RepositoryWorkspaceManifest
 from ai_software_engineer.team_workspace import TeamWorkspace, _read_regular, _reject_symlinks
@@ -44,6 +52,7 @@ class NativeCandidateSource:
     inputs: CandidateVerificationInputs
     parent_delivery_id: str | None
     parent_checkpoint_sha256: str | None
+    failed_continuation: ContinuationDispatchRecord | None = None
 
 
 class NativeCandidateSourceReader:
@@ -96,6 +105,10 @@ class NativeCandidateSourceReader:
         cp, terminal, runtime, continuation = read_candidate_source_snapshot(
             self.config, self.environment, history
         )
+        if terminal_candidate_requires_coder_recovery(runtime.task, runtime.events):
+            raise RecoveryRejected(
+                "candidate has newer interrupted Coder work that must be recovered first"
+            )
         stages = read_approved_stages(
             self.config,
             root,
@@ -132,6 +145,26 @@ class NativeCandidateSourceReader:
             item.criterion_id for item in implementation.content.acceptance_mapping
         } != expected:
             raise ValueError("candidate criteria mismatch")
+        accepted_qa = None
+        accepted_qa_event = terminal_accepted_qa_event(runtime.task, runtime.events)
+        if accepted_qa_event is not None:
+            qa = artifacts.get(accepted_qa_event.artifact_ids[0])
+            if (
+                not isinstance(qa, QaReportArtifact)
+                or qa.task_id != runtime.task.id
+                or qa.source_revision != candidate
+                or qa.parent_artifact_ids != (implementation.artifact_id,)
+                or qa.supersedes is not None
+                or qa.producer.role is not AgentRole.QA
+                or qa.producer.run_id in {plan.producer.run_id, implementation.producer.run_id}
+                or qa.content.status is not QaReportStatus.PASS
+                or {item.criterion_id for item in qa.content.criteria_results} != expected
+            ):
+                raise ValueError("accepted QA artifact provenance mismatch")
+            accepted_qa = AcceptedQaReport(
+                artifact_id=qa.artifact_id,
+                artifact_sha256=artifact_digest(qa),
+            )
         routes_root = model_route_root(root)
         _reject_symlinks(routes_root)
         routes = FileModelRouteAttemptStore(routes_root, read_only=True)
@@ -152,6 +185,7 @@ class NativeCandidateSourceReader:
             implementation_id=implementation.artifact_id,
             implementation_sha256=artifact_digest(implementation),
             candidate_revision=candidate,
+            accepted_qa=accepted_qa,
             prior_run_ids=tuple(sorted(run_ids)),
         )
         if continuation is not None:
@@ -193,6 +227,7 @@ class NativeCandidateSourceReader:
             inputs,
             parent_id,
             parent_sha,
+            continuation,
         )
 
 
@@ -205,15 +240,28 @@ def _validate_inconclusive_continuation(
     inputs: CandidateVerificationInputs,
     continuation: ContinuationDispatchRecord,
 ) -> None:
-    """Allow retained-candidate reuse only for a legacy environment-only QA remediation."""
+    """Validate the sealed verdict that created a failed remediation successor."""
     store = FileRecoveryStore(
         sidecar / "state" / f"candidate-verification-{scope.delivery_id}",
         scope=scope,
     )
     plan = store.get_verification_plan(continuation.continuation_plan_sha256)
     completion = store.get_verification_completion(plan.plan_sha256)
-    qa_invocation = store.get_verification_invocation(plan.plan_sha256, AgentRole.QA)
-    admitted_run_ids = {qa_invocation.request.run_id}
+    admitted_run_ids: set[str] = set()
+    accepted_qa = plan.inputs.accepted_qa
+    if accepted_qa is None:
+        qa_invocation = store.get_verification_invocation(plan.plan_sha256, AgentRole.QA)
+        qa_invocation_sha256 = qa_invocation.invocation_sha256
+        admitted_run_ids.add(qa_invocation.request.run_id)
+    else:
+        qa_invocation_sha256 = None
+        if (
+            completion.qa.artifact_id != accepted_qa.artifact_id
+            or artifact_digest(completion.qa) != accepted_qa.artifact_sha256
+        ):
+            raise RecoveryRejected(
+                "failed continuation does not retain its sealed candidate verdict"
+            )
     if completion.review is not None:
         reviewer_invocation = store.get_verification_invocation(
             plan.plan_sha256, AgentRole.REVIEWER
@@ -231,7 +279,12 @@ def _validate_inconclusive_continuation(
         or plan.dispatch_sha256 != runtime.dispatch.dispatch_sha256
         or not verification_inputs_are_current(plan.inputs, inputs, admitted_run_ids)
         or completion.plan_sha256 != plan.plan_sha256
-        or completion.qa_invocation_sha256 != qa_invocation.invocation_sha256
-        or completion.disposition is not CandidateVerificationDisposition.RETRY_VERIFICATION
+        or completion.qa_invocation_sha256 != qa_invocation_sha256
+        or completion.verified
+        or completion.disposition
+        not in {
+            CandidateVerificationDisposition.REMEDIATE_CANDIDATE,
+            CandidateVerificationDisposition.RETRY_VERIFICATION,
+        }
     ):
-        raise RecoveryRejected("failed continuation does not retain an inconclusive candidate")
+        raise RecoveryRejected("failed continuation does not retain its sealed candidate verdict")

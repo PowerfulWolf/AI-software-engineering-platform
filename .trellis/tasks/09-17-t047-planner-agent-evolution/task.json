@@ -1,0 +1,29 @@
+{
+  "id": "T047",
+  "slug": "planner-agent-evolution",
+  "title": "建设面向复杂需求的 Planner Agent",
+  "status": "planned",
+  "phase": "plan",
+  "depends_on": ["T031", "T046"],
+  "allowed_paths": [
+    "src/ai_software_engineer/planning/**",
+    "src/ai_software_engineer/manager/**",
+    "src/ai_software_engineer/scheduling/**",
+    "src/ai_software_engineer/context/**",
+    "schemas/execution-plan*.schema.json",
+    "schemas/planner-*.schema.json",
+    "tests/planning/**",
+    "tests/manager/**",
+    "tests/scheduling/**",
+    "docs/**",
+    ".trellis/spec/core/**",
+    ".trellis/tasks/09-17-t047-planner-agent-evolution/**"
+  ],
+  "verification_commands": [
+    "uv run pytest -q tests/planning tests/manager tests/scheduling",
+    "uv run ruff check .",
+    "uv run ruff format --check .",
+    "uv run mypy src tests",
+    "git diff --check"
+  ]
+}

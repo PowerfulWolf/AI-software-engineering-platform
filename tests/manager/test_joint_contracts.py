@@ -1,6 +1,7 @@
 """Joint artifact coverage, authorization, and exported Schema regression tests."""
 
 import json
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -8,12 +9,20 @@ import pytest
 
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.domain.project_delivery import ProjectPreparation
-from ai_software_engineer.execution import CommandResult
+from ai_software_engineer.execution import (
+    CommandExecutionError,
+    CommandResult,
+    CommandTimedOut,
+    SubprocessCommandExecutor,
+)
 from ai_software_engineer.manager.preparation import PrepareProjectResult, PrepareProjectStatus
 from ai_software_engineer.manager.production_agents import ProductDraft
 from ai_software_engineer.multi_directory.integration_commands import is_test_command
 from ai_software_engineer.multi_directory.models import (
+    Candidate,
     DialogueMessage,
+    IntegrationCommandError,
+    IntegrationEvidence,
     JointApproval,
     JointCheckpoint,
     JointExecutionPlan,
@@ -25,12 +34,18 @@ from ai_software_engineer.multi_directory.models import (
 )
 from ai_software_engineer.multi_directory.production import (
     DerivedStageInputs,
+    _execute_integration_command,
+    _integration_permissions,
+    _python_integration_environment,
     _require_nonempty_test_run,
+    _validate_pytest_paths,
 )
 from ai_software_engineer.multi_directory.retirement import RequirementRetirement
 from ai_software_engineer.multi_directory.scope import DirectoryScope, DirectoryUnit
 from ai_software_engineer.multi_directory.service import CreateRequirement
+from ai_software_engineer.multi_directory.store import JointJournal
 from tests.e2e.test_joint_delivery import JointModels
+from tests.manager.test_production_backend import _git, _git_output
 
 
 def checkpoint(tmp_path: Path) -> JointCheckpoint:
@@ -208,6 +223,73 @@ def test_integration_zero_test_success_is_not_a_pass(tmp_path: Path) -> None:
     _require_nonempty_test_run(result.model_copy(update={"stderr": "Ran 1 test in 0.1s\nOK"}))
 
 
+@pytest.mark.parametrize(
+    ("error", "returncode", "stderr"),
+    [
+        (
+            CommandExecutionError("host path and secret must not escape"),
+            127,
+            "command could not start",
+        ),
+        (CommandTimedOut(("pytest",), 42), 124, "command timed out"),
+    ],
+)
+def test_integration_command_failures_are_typed_and_redacted(
+    tmp_path: Path,
+    error: CommandExecutionError,
+    returncode: int,
+    stderr: str,
+) -> None:
+    class FailingExecutor:
+        def run(
+            self,
+            arguments: tuple[str, ...],
+            *,
+            timeout_seconds: float | None = None,
+        ) -> CommandResult:
+            del arguments, timeout_seconds
+            raise error
+
+    result = _execute_integration_command(
+        FailingExecutor(),
+        ("pytest", "-q", "tests"),
+        tmp_path,
+        timeout_seconds=1,
+    )
+    assert result.returncode == returncode
+    assert result.stderr == stderr
+    assert "secret" not in result.stderr
+    assert result.cwd == str(tmp_path)
+
+
+def test_integration_zero_test_success_is_durable_failure() -> None:
+    class EmptyExecutor:
+        def run(
+            self,
+            arguments: tuple[str, ...],
+            *,
+            timeout_seconds: float | None = None,
+        ) -> CommandResult:
+            del timeout_seconds
+            return CommandResult(
+                argv=arguments,
+                cwd="/tmp/candidate",
+                returncode=0,
+                stdout="Ran 0 tests in 0.001s\nOK",
+                stderr="",
+                duration_ms=3,
+            )
+
+    result = _execute_integration_command(
+        EmptyExecutor(),
+        ("python3", "-m", "unittest"),
+        Path("/tmp/candidate"),
+        timeout_seconds=1,
+    )
+    assert result.returncode == 1
+    assert result.stderr == "integration reported no executed tests; cannot accept PASS"
+
+
 def test_reference_only_unit_needs_no_native_delivery(tmp_path: Path) -> None:
     cp = checkpoint(tmp_path)
     assert cp.design and cp.product_spec and cp.plan
@@ -225,6 +307,68 @@ def test_reference_only_unit_needs_no_native_delivery(tmp_path: Path) -> None:
         }
     )
     plan.validate_for(cp.scope, cp.product_spec, design)
+
+
+def test_integration_uses_project_tooling_and_imports_candidate_sources(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    binary = repository / ".venv" / "bin"
+    binary.mkdir(parents=True)
+    candidate = tmp_path / "candidate"
+    sources = candidate / "src"
+    sources.mkdir(parents=True)
+    (sources / "candidate_value.py").write_text("VALUE = 'reviewed-candidate'\n")
+    runner = binary / "pytest"
+    runner.write_text(
+        f"#!{sys.executable}\n"
+        "import os\nfrom candidate_value import VALUE\n"
+        "assert VALUE == 'reviewed-candidate'\n"
+        "assert 'PRIVATE_TEST_SECRET' not in os.environ\n"
+        "print('1 passed in 0.01s')\n"
+    )
+    runner.chmod(0o700)
+    base = {"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"}
+    environment = _python_integration_environment(repository, candidate, base)
+    executor = SubprocessCommandExecutor(
+        candidate,
+        _integration_permissions(("pytest",)),
+        environment=environment,
+        environment_allowlist=tuple(environment),
+    )
+    result = _execute_integration_command(executor, ("pytest",), candidate, timeout_seconds=10)
+    assert result.returncode == 0
+    assert "1 passed" in result.stdout
+    assert result.cwd == str(candidate)
+    assert base == {"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"}
+    runner.unlink()
+    binary.rmdir()
+    (repository / ".venv").rmdir()
+    (repository / ".venv").symlink_to(tmp_path)
+    with pytest.raises(ValueError, match="project-local"):
+        _python_integration_environment(repository, candidate, base)
+
+
+@pytest.mark.parametrize(
+    "prefix", [("pytest",), ("python3", "-m", "pytest"), ("uv", "run", "pytest")]
+)
+def test_integration_pytest_paths_are_bound_to_candidate(
+    tmp_path: Path, prefix: tuple[str, ...]
+) -> None:
+    _git("init", cwd=tmp_path)
+    _git("config", "user.name", "Fixture", cwd=tmp_path)
+    _git("config", "user.email", "fixture@example.invalid", cwd=tmp_path)
+    (tmp_path / "test_candidate.py").write_text("def test_ok():\n    assert True\n")
+    _git("add", "test_candidate.py", cwd=tmp_path)
+    _git("commit", "-m", "candidate", cwd=tmp_path)
+    candidate = _git_output("rev-parse", "HEAD", cwd=tmp_path)
+    (tmp_path / "test_main_only.py").write_text("def test_ok():\n    assert True\n")
+    _git("add", "test_main_only.py", cwd=tmp_path)
+    _git("commit", "-m", "main advances", cwd=tmp_path)
+    _validate_pytest_paths(tmp_path, candidate, (*prefix, "test_candidate.py::test_ok"), 1)
+    _validate_pytest_paths(tmp_path, candidate, (*prefix, "./test_candidate.py"), 1)
+    for path in ("test_main_only.py", "private-missing.py", "../test_candidate.py"):
+        with pytest.raises(IntegrationCommandError, match="reviewed candidate") as error:
+            _validate_pytest_paths(tmp_path, candidate, (*prefix, path), 1)
+        assert path not in str(error.value)
 
 
 def test_joint_schemas_are_in_sync_with_models() -> None:
@@ -248,3 +392,65 @@ def test_joint_schemas_are_in_sync_with_models() -> None:
 def test_product_dialogue_rejects_unknown_speaker() -> None:
     with pytest.raises(ValueError):
         DialogueMessage.model_validate({"speaker": "reviewer", "text": "Untrusted role"})
+
+
+def test_joint_journal_only_allows_explicit_integration_replan(tmp_path: Path) -> None:
+    cp = checkpoint(tmp_path)
+    assert cp.plan is not None
+    failed = IntegrationEvidence(
+        plan_sha256=digest(cp.plan),
+        candidates=tuple(Candidate(unit_id=unit.id, revision="a" * 40) for unit in cp.scope.units),
+        checks=(
+            CommandResult(
+                argv=cp.plan.integration_checks[0].argv,
+                cwd=str(tmp_path),
+                returncode=127,
+                stdout="",
+                stderr="command could not start",
+                duration_ms=0,
+            ),
+        ),
+    )
+    blocked = JointCheckpoint.seal(
+        {
+            **cp.to_wire(),
+            "stage": JointStage.BLOCKED,
+            "integration": failed,
+            "next_action": "Inspect joint integration evidence.",
+        }
+    )
+    journal = JointJournal(tmp_path / "journal")
+    journal.append(blocked, expected=None)
+    replanning = JointCheckpoint.seal(
+        {
+            **blocked.to_wire(),
+            "sequence": 2,
+            "previous_checkpoint_sha256": blocked.checkpoint_sha256,
+            "stage": JointStage.PLANNING,
+            "plan": None,
+            "next_action": "Produce a fresh complete integration plan.",
+        }
+    )
+    journal.append(replanning, expected=blocked.checkpoint_sha256)
+
+    changed_plan = cp.plan.model_copy(
+        update={
+            "integration_checks": (
+                cp.plan.integration_checks[0].model_copy(update={"id": "fresh_check"}),
+            )
+        }
+    )
+    ordinary_mutation = JointCheckpoint.seal(
+        {
+            **blocked.to_wire(),
+            "sequence": 2,
+            "previous_checkpoint_sha256": blocked.checkpoint_sha256,
+            "stage": JointStage.PLANNING,
+            "plan": changed_plan,
+            "next_action": "Attempt to replace the committed plan.",
+        }
+    )
+    other_journal = JointJournal(tmp_path / "other-journal")
+    other_journal.append(blocked, expected=None)
+    with pytest.raises(ValueError, match="immutable"):
+        other_journal.append(ordinary_mutation, expected=blocked.checkpoint_sha256)

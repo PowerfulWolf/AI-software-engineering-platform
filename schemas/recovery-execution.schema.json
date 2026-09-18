@@ -109,6 +109,19 @@
           "pattern": "^[a-f0-9]{64}$",
           "title": "Capture Sha256",
           "type": "string"
+        },
+        "base_revision": {
+          "anyOf": [
+            {
+              "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Revision"
         }
       },
       "required": [
@@ -231,6 +244,39 @@
           "pattern": "^[a-f0-9]{64}$",
           "title": "Continuation Context Sha256",
           "type": "string"
+        },
+        "continuation_attempt": {
+          "default": 1,
+          "maximum": 10,
+          "minimum": 1,
+          "title": "Continuation Attempt",
+          "type": "integer"
+        },
+        "retry_of_task_id": {
+          "anyOf": [
+            {
+              "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retry Of Task Id"
+        },
+        "retry_of_dispatch_id": {
+          "anyOf": [
+            {
+              "pattern": "^dispatch_commit_[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retry Of Dispatch Id"
         },
         "target_preparation_sha256": {
           "pattern": "^[a-f0-9]{64}$",

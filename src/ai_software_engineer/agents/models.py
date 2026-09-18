@@ -13,7 +13,7 @@ from ai_software_engineer.domain.artifact import (
     CoderProgressArtifact,
     ImplementationReportArtifact,
 )
-from ai_software_engineer.domain.enums import AgentRole
+from ai_software_engineer.domain.enums import AgentRole, ArtifactKind
 from ai_software_engineer.domain.identity import RunId as RunId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.task import TaskId
@@ -100,6 +100,7 @@ class AgentRequest(DomainModel):
     continuation_checkpoint_id: ArtifactId | None = None
     continuation_changed_paths: tuple[NonEmptyStr, ...] = ()
     expected_parent_artifact_ids: tuple[ArtifactId, ...] | None = None
+    expected_supersedes_by_kind: dict[ArtifactKind, ArtifactId | None] | None = None
 
     @model_validator(mode="after")
     def validate_artifact_ids(self) -> Self:
@@ -108,6 +109,12 @@ class AgentRequest(DomainModel):
             ensure_unique(self.expected_parent_artifact_ids, "expected parent Artifact IDs")
             if not set(self.expected_parent_artifact_ids) <= set(self.input_artifact_ids):
                 raise ValueError("expected parents must belong to input Artifact IDs")
+        if self.expected_supersedes_by_kind is not None:
+            expected_kinds = set(ROLE_OUTPUTS[self.role])
+            if set(self.expected_supersedes_by_kind) != expected_kinds:
+                raise ValueError(
+                    "expected supersedes contract must cover every output kind for the role"
+                )
         expected_schema = ROLE_OUTPUT_SCHEMA[self.role]
         if self.output_schema != expected_schema:
             raise ValueError(

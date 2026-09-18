@@ -110,6 +110,77 @@ class _CoderRunner:
         return CodexInvocationResult(returncode=0)
 
 
+class _SequentialCoderRunner:
+    def __init__(self, requests: tuple[AgentRequest, ...]) -> None:
+        self.requests = requests
+        self.calls = 0
+
+    def run(
+        self,
+        argv: tuple[str, ...],
+        *,
+        cwd: Path,
+        environment: Mapping[str, str],
+        stdin: str,
+        timeout_seconds: float,
+    ) -> CodexInvocationResult:
+        del environment, stdin, timeout_seconds
+        request = self.requests[self.calls]
+        self.calls += 1
+        target = cwd / "src/change.py"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(f"VALUE = {self.calls}\n", encoding="utf-8")
+        template = make_implementation_artifact()
+        content = template.content.model_copy(
+            update={
+                "commit_sha": request.source_revision,
+                "changed_files": (
+                    ChangedFile(
+                        path="src/change.py",
+                        change=(ChangeType.ADDED if self.calls == 1 else ChangeType.MODIFIED),
+                        lines_added=1,
+                        lines_deleted=0 if self.calls == 1 else 1,
+                    ),
+                ),
+            }
+        )
+        draft = template.model_copy(
+            update={
+                "task_id": request.task_id,
+                "source_revision": request.source_revision,
+                "context_manifest_id": request.context_manifest_id,
+                "parent_artifact_ids": request.input_artifact_ids,
+                "producer": template.producer.model_copy(update={"run_id": request.run_id}),
+                "content": content,
+            }
+        )
+        output_path = Path(argv[argv.index("--output-last-message") + 1])
+        output_path.write_text(json.dumps({"artifact": draft.to_wire()}), encoding="utf-8")
+        return CodexInvocationResult(returncode=0)
+
+
+class _OneShotAdmission:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def authorize(self, request: AgentRequest, workspace_root: Path) -> None:
+        del request, workspace_root
+        self.calls += 1
+        if self.calls > 1:
+            raise AssertionError("initial recovery admission was reused")
+
+
+class _RejectOnceAdmission:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def authorize(self, request: AgentRequest, workspace_root: Path) -> None:
+        del request, workspace_root
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("stale recovery seed")
+
+
 class _FailureRunner:
     def run(
         self,
@@ -128,6 +199,7 @@ class _ArtifactOutputRunner:
     def __init__(self, payload: object) -> None:
         self.raw_output = json.dumps(payload)
         self.prompt = ""
+        self.environment: Mapping[str, str] = {}
 
     def run(
         self,
@@ -138,8 +210,9 @@ class _ArtifactOutputRunner:
         stdin: str,
         timeout_seconds: float,
     ) -> CodexInvocationResult:
-        del cwd, environment, timeout_seconds
+        del cwd, timeout_seconds
         self.prompt = stdin
+        self.environment = environment
         output_path = Path(argv[argv.index("--output-last-message") + 1])
         output_path.write_text(self.raw_output, encoding="utf-8")
         return CodexInvocationResult(returncode=0)
@@ -373,6 +446,70 @@ def test_platform_finalizes_coder_draft_when_git_metadata_is_sandbox_external(
     assert _git(root, "status", "--porcelain") == ""
 
 
+def test_recovery_seed_admission_is_consumed_before_review_remediation(
+    tmp_path: Path,
+) -> None:
+    root, base = _repository(tmp_path)
+    first_request = _coder_request().model_copy(update={"source_revision": base})
+    second_request = first_request.model_copy(
+        update={
+            "run_id": "run_real_review_remediation",
+            "attempt": 2,
+            "source_revision": base,
+        }
+    )
+    runner = _SequentialCoderRunner((first_request, second_request))
+    admission = _OneShotAdmission()
+    adapter = CodexCliAgentAdapter(
+        workspace_root=root,
+        model="gpt-5.5",
+        agent_id="agent_coder_001",
+        agent_version="v0.1",
+        prompt_builder=StaticPromptBuilder(),
+        runner=runner,
+        initial_workspace_admission=admission,
+    )
+
+    first = adapter.run(first_request)
+    assert first.status is AgentRunStatus.SUCCEEDED
+    assert first.artifact is not None
+    candidate = first.artifact.source_revision
+    second_request = second_request.model_copy(update={"source_revision": candidate})
+    runner.requests = (first_request, second_request)
+
+    second = adapter.run(second_request)
+
+    assert second.status is AgentRunStatus.SUCCEEDED
+    assert admission.calls == 1
+    assert runner.calls == 2
+    assert _git(root, "status", "--porcelain") == ""
+
+
+def test_rejected_recovery_seed_admission_is_not_consumed(tmp_path: Path) -> None:
+    root, base = _repository(tmp_path)
+    first_request = _coder_request().model_copy(update={"source_revision": base})
+    second_request = first_request.model_copy(update={"run_id": "run_real_seed_retry"})
+    runner = _SequentialCoderRunner((second_request,))
+    admission = _RejectOnceAdmission()
+    adapter = CodexCliAgentAdapter(
+        workspace_root=root,
+        model="gpt-5.5",
+        agent_id="agent_coder_001",
+        agent_version="v0.1",
+        prompt_builder=StaticPromptBuilder(),
+        runner=runner,
+        initial_workspace_admission=admission,
+    )
+
+    first = adapter.run(first_request)
+    second = adapter.run(second_request)
+
+    assert first.status is AgentRunStatus.FAILED
+    assert second.status is AgentRunStatus.SUCCEEDED
+    assert admission.calls == 2
+    assert runner.calls == 1
+
+
 def test_coder_progress_preserves_authorized_draft_for_the_next_run(tmp_path: Path) -> None:
     root, base = _repository(tmp_path)
     first_request = _coder_request().model_copy(update={"source_revision": base})
@@ -563,6 +700,11 @@ def test_qa_semantic_artifact_failure_has_safe_actionable_diagnostics(
     tmp_path: Path,
 ) -> None:
     root, base = _repository(tmp_path)
+    (root / ".git" / "info" / "exclude").write_text(".venv/\n", encoding="utf-8")
+    qa_runner = root / ".venv" / "bin" / "pytest"
+    qa_runner.parent.mkdir(parents=True)
+    qa_runner.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    qa_runner.chmod(0o755)
     request = _request(
         AgentRole.QA,
         run_id="run_qa_invalid_evidence",
@@ -602,8 +744,16 @@ def test_qa_semantic_artifact_failure_has_safe_actionable_diagnostics(
     assert hashlib.sha256(runner.raw_output.encode()).hexdigest() in result.error.message
     assert "private-provider-output" not in result.error.message
     assert "Copy these exact envelope bindings" in runner.prompt
+    expected_artifact_id = "art_qa_" + hashlib.sha256(request.run_id.encode()).hexdigest()[:32]
+    assert f'"artifact_id": "{expected_artifact_id}"' in runner.prompt
     assert "Every referenced evidence ID must exist exactly once" in runner.prompt
     assert "QA status PASS requires every criterion and test to PASS" in runner.prompt
+    assert "`.venv/bin/pytest`" in runner.prompt
+    assert "run that absolute executable from the current candidate worktree" in runner.prompt
+    assert "Do not run the repository-wide test suite" in runner.prompt
+    assert "broader optional regression remains the human release gate" in runner.prompt
+    assert f"Manager provisioned the exact QA runner `{qa_runner}`" in runner.prompt
+    assert runner.environment["ASE_PROJECT_PYTEST"] == str(qa_runner)
 
 
 def test_qa_uses_writable_disposable_sandbox_but_candidate_stays_immutable(
@@ -622,6 +772,9 @@ def test_qa_uses_writable_disposable_sandbox_but_candidate_stays_immutable(
     ).run(request)
 
     assert result.status is AgentRunStatus.SUCCEEDED
+    assert result.artifact is not None
+    expected_artifact_id = "art_qa_" + hashlib.sha256(request.run_id.encode()).hexdigest()[:32]
+    assert result.artifact.artifact_id == expected_artifact_id
     assert runner.argv is not None
     sandbox_index = runner.argv.index("--sandbox")
     assert runner.argv[sandbox_index + 1] == "workspace-write"

@@ -97,6 +97,19 @@
           "pattern": "^[a-f0-9]{64}$",
           "title": "Capture Sha256",
           "type": "string"
+        },
+        "base_revision": {
+          "anyOf": [
+            {
+              "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Revision"
         }
       },
       "required": [

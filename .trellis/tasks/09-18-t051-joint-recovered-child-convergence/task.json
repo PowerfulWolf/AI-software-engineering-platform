@@ -1,0 +1,32 @@
+{
+  "id": "T051",
+  "title": "联合交付复用已恢复子仓库的当前准备快照",
+  "status": "completed",
+  "phase": "offline_verified",
+  "operator_validation": "56 项定向测试通过；真实 checkpoint 只读复查成功且历史哈希不变。待用户重启 Console 并继续联合集成。",
+  "goal": "修复子仓库已完成但联合需求继续时 preparation checkpoint drifted 的阻塞",
+  "scope": "已有 child 使用其当前已验证 runtime；新 child 保留确定性 intake；不修改生产事实或触发真实交付",
+  "acceptance_criteria": [
+    "子仓库基于新准备快照恢复完成后，联合需求继续进入集成验收",
+    "已完成 child 不重跑 Coder/QA/Reviewer；历史与候选不变",
+    "缺失或漂移的历史仍失败关闭；新 child 与正常恢复行为不变"
+  ],
+  "allowed_paths": [
+    "src/ai_software_engineer/multi_directory/production.py",
+    "tests/recovery/test_resume.py",
+    "tests/recovery/test_native.py",
+    ".trellis/spec/core/multi-directory-delivery.md",
+    "docs/operator-feedback-loop.md",
+    ".trellis/tasks/09-18-t050-reviewer-only-verification-recovery/**",
+    ".trellis/tasks/09-18-t051-joint-recovered-child-convergence/**"
+  ],
+  "verification_commands": [
+    ".venv/bin/pytest -q tests/recovery/test_resume.py -k joint_scope --tb=short",
+    ".venv/bin/pytest -q tests/e2e/test_joint_delivery.py tests/e2e/test_project_revision_preparation.py --tb=short",
+    ".venv/bin/pytest -q tests/manager/test_joint_contracts.py tests/manager/test_joint_planner_feedback.py tests/manager/test_joint_designer_feedback.py tests/manager/test_requirement_retirement.py",
+    ".venv/bin/ruff check src/ai_software_engineer/multi_directory/production.py tests/recovery/test_resume.py tests/recovery/test_native.py",
+    ".venv/bin/mypy src/ai_software_engineer/multi_directory/production.py tests/recovery/test_resume.py tests/recovery/test_native.py",
+    "git diff --check"
+  ],
+  "rollback_point": "仅回退 T051 的 deliver runtime 选择逻辑和重启；保留 T050 与所有生产记录，停止重复点击至修复可用"
+}

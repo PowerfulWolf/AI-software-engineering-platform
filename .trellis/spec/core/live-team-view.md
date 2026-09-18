@@ -33,7 +33,11 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
   the native child has advanced, accept the parent reference only when it is the exact record at its
   sequence in the same fully validated native hash chain. Missing, replaced, future or cross-delivery
   references reject the whole snapshot; the Task view uses the latest native checkpoint.
-- Match in-flight children with DerivedStageInputs + existing delivery identity, never titles/prose.
+- Match an attached child using its committed native delivery ID, exact unit/root and validated
+  history prefix. A replacement integration plan must not regenerate an existing child identity;
+  `PLANNING + plan=null + DONE children` is valid. Use DerivedStageInputs only for unattached
+  in-flight children when a plan exists. Reject unknown/reference-only child units and ambiguous
+  ownership. Never match by titles/prose or construct a Host to repair reads.
 - Capture file prefixes before SQL snapshot; event-linked artifacts support gate evidence. Completed
   model-route records can precede state transitions but cannot become verdict authority.
 - Open the MySQL read snapshot only when at least one native delivery has a current dispatch commit or
@@ -60,6 +64,11 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
 - Member display state is assignment-derived: current-stage assignment = `执行中`; non-current active
   assignment = `等待当前阶段`; no non-terminal assignment in the selected Project = `空闲中`.
   `空闲中` is a team workload statement, never a process-online statement.
+- 浏览器已确认同一 Requirement 存在 `QUEUED`/`RUNNING` 的 `CONTINUE_DELIVERY` Operation 时，
+  Operation 只负责把 Requirement 列表呈现为恢复执行中；成员队列始终以 Team snapshot 的
+  `assigned_delivery_ids` / `current_stage_delivery_ids` 为唯一事实。Manager 准备、Coder、QA、
+  Reviewer 的串行切换必须随每次 snapshot 原样展示，浏览器不得把整个 Operation 生命周期硬编码
+  为 Coder 执行中，也不得为了修正展示而写回 Team/Project/MySQL 状态。
 - The Team page may project the selected member into a four-column queue without adding new state:
   current-stage assignments are `进行中`, other non-terminal assignments are `待完成`, blocker or
   waiting/failed work is `已阻塞`, and terminal audit history is `已完成`. The queue is explicitly
@@ -69,6 +78,21 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
   点击/键盘操作的概览入口；
   模型、最近活动、完整目录、阻塞原因和审计记录统一进入任务详情弹窗。代码目录在卡片中可单行省略，
   但必须保留完整值供悬停查看。
+- QA/Reviewer may create several immutable verification attempts for one Requirement. Their member
+  queue is a current-work overview, not an audit ledger: show at most one card per Requirement,
+  preferring the current-stage assignment, then another active assignment, then the newest historical
+  attempt. Keep every older attempt in durable records and task detail evidence, but do not repeat the
+  same Requirement across blocked/completed queue columns.
+- Requirement blocker summaries similarly select the newest observation per native Delivery
+  (`source_delivery_id` for verification/remediation, otherwise `id`) before collecting reasons and
+  next actions. An older failed verification cannot remain a current blocker after newer recovery or
+  verification work. Keep distinct repository blockers and all historical evidence; do not deduplicate
+  by title or delete audit records. The DOM regression covers old/new verification reasons sharing a
+  source Delivery while a second repository's current blocker remains visible.
+- The Requirement's repository-detail shortcut resolves the same current observation, including an
+  independent candidate verification, instead of linking to an obsolete blocked native Task.
+  `VERIFY_QA`/`VERIFY_REVIEW` have explicit localized labels. An active Console Operation describes
+  workflow execution, not Manager model execution; Agent ownership still comes only from assignments.
 - The task page renders every selected-Project Task in exactly one UI group: `DONE` is `已完成`;
   blocker/`WAITING_*`/`BLOCKED`/`FAILED` is `阻塞中`; other non-terminal work is `执行中`;
   any remaining audit-terminal status is `已完成`.
@@ -97,6 +121,7 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
 | Running child before parent publication | visible via deterministic identity |
 | Joint parent remains `BLOCKED`, current child is `IMPLEMENTING` | Requirement is active/`DELIVERING`; stale parent blocker is hidden |
 | Parent references an exact historical child; native child advanced | latest child remains visible |
+| Integration replanning has no plan, or replaces plan with retained DONE children | same native IDs and parent ownership; read-only snapshot succeeds |
 | Parent child record is absent/replaced or ahead of native history | reject snapshot |
 | Task/dispatch/event binding drift | reject snapshot, never hide corrupted records |
 | Terminal Task | history, no current-stage assignment |
@@ -108,6 +133,9 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
 | Valid prepared Project tab | one isolated snapshot for that Project plus the common Team roster |
 | Invalid/path-like/unknown Project ID | safe 404 or unavailable response; no path traversal |
 | Enabled member without selected-Project assignment | `空闲中`; no online claim |
+| Recovery Operation runs while Team snapshot says QA current | QA `执行中`; Coder/Reviewer use their snapshot assignments; no Coder override |
+| Recovery Operation reaches a terminal status | continue using the latest durable Agent projection |
+| Recovery Operation is terminal but an admitted QA/Reviewer projection remains active | keep the projection visible and show `继续交付`; the next Manager call creates the successor plan instead of stranding the Requirement |
 | Active, blocked and done Tasks | exactly one matching task section each |
 | Narrow Team queue with a long Repository path | readable overview card; compact single-line path; full metadata in the task-detail modal |
 | Non-GET / unknown path or query | 405 / 404 |
@@ -132,9 +160,16 @@ regression, Ruff, strict Mypy and offline build required.
 The reader suite must also create a real repository sidecar containing a pre-dispatch terminal native
 checkpoint and assert that `snapshot()` succeeds without a DSN, returns the blocked card, and exposes
 no Task ID or Assignment.
+`test_joint_reader_preserves_child_ownership_through_integration_replanning` covers PLANNING,
+INTEGRATING and DONE before/after replacement plan publication and one approved extra attempt. Assert
+no filesystem writes on snapshot, no child Agent rerun, candidate-bound Planner roots, one parent
+and unchanged Task ownership. Unknown units, swapped roots and uncommitted future children reject.
 The DOM harness must include one serial Task assigned to Coder/QA/Reviewer and assert that exactly the
 current assignment receives the active Task-stage label before and after a Coder-to-QA transition.
 `tests/projection/test_projector.py` 必须覆盖 orchestrator Run 可见但 `snapshot.agents` 不含虚假成员。
+The DOM harness must also hold a stale blocked Requirement projection while a matching
+`CONTINUE_DELIVERY` Operation is RUNNING, then provide a QA-current Team snapshot and assert that QA,
+not Coder, owns the current work while Manager remains idle.
 
 ## Wrong vs Correct
 
@@ -153,6 +188,11 @@ Correct: render the badge from `assignment.current_stage` plus serial role order
 Wrong: label every enabled profile `已启用 · 运行状态未确认`, or call it online/idle without scope.
 Correct: derive `执行中 / 等待当前阶段 / 空闲中` from selected-Project assignments and separately
 state that process liveness remains unknown.
+
+Wrong: treat every queued/running recovery Operation as Coder execution even after Team snapshot has
+advanced to QA or Reviewer.
+Correct: use Operation state only for Requirement-level progress and render every Agent queue directly
+from the latest Team snapshot's assigned/current-stage IDs.
 
 Wrong: render Project tabs while every tab still fetches the same default Project snapshot.
 Correct: each tab calls `GET /api/v1/team?project_id=<project_id>` and the reader validates that
@@ -279,7 +319,14 @@ _read_verifications(
     team_id: str,
 ) -> tuple[TaskView, ...]
 _native_task_sources(native: _Native) -> dict[str, _Native]
-_read_task_details(native: _Native, cursor: DictCursor, base: TaskView) -> TaskView
+_active_successor_dispatch(native: _Native, cursor: DictCursor) -> DeliveryAllocation | None
+_read_task_details(
+    native: _Native,
+    cursor: DictCursor,
+    base: TaskView,
+    *,
+    dispatch_override: DeliveryAllocation | None = None,
+) -> TaskView
 ```
 
 `TaskView` exposes `work_kind = delivery | candidate_verification | remediation`, optional
@@ -300,6 +347,10 @@ _read_task_details(native: _Native, cursor: DictCursor, base: TaskView) -> TaskV
   not permission to accept an orphaned or corrupted verification row.
 - An incomplete verification reservation is a first-class QA/Reviewer work item. Current role is QA
   until its invocation/report exists, then Reviewer; a sealed completion makes it terminal.
+- The Requirement delivery-flow widget must treat the projected Requirement stage as authoritative
+  during verification: `VERIFY_QA` highlights 测试 and `VERIFY_REVIEW` highlights 评审. A historical
+  repository Task may already carry `QA`/`REVIEW`, but that child status is only a fallback before an
+  explicit verification stage exists and must never advance the parent flow ahead of its current role.
 - When a newer reservation for the same project and source Task has been committed, an older
   completion-less reservation is a consumed, superseded plan rather than active Agent work. Keep its
   runs and approval evidence visible with terminal `VERIFICATION_SUPERSEDED`; no assignment on that
@@ -310,6 +361,21 @@ _read_task_details(native: _Native, cursor: DictCursor, base: TaskView) -> TaskV
   requests and route attempts intentionally retain `source_task_id`; the immutable invocation Run ID
   is the exact join key used to prevent unrelated source-Task retries from appearing on the card.
 - A `continuation_dispatch` is rendered as remediation and retains its source Delivery/Task lineage.
+- Recovery/continuation execution may commit a new dispatch and advance its SQL Task before the
+  native checkpoint is attached. Discover the one non-terminal successor committed after the captured
+  checkpoint, scoped to the same Repository and Delivery and a validated historical source Task.
+  A recovery additionally binds `recovery_of_task_id` to the current checkpoint Task and
+  `recovery_source_checkpoint_sha256` to that exact checkpoint digest. Missing Task materialization
+  means no active work yet; multiple live successors or mismatched recovery lineage reject the read.
+- Reuse the ordinary dispatch digest, normalized immutable Task, contiguous event, artifact and
+  projection checks for the successor. Only the old checkpoint's Task revision/status constraints
+  are inapplicable to a different Task. Its `status`, candidate, assignments, current role and blocker
+  come from the successor, never from the predecessor's terminal checkpoint or old implementation
+  report. Keep the stable native Delivery ID and parent Requirement ID for browser selection.
+- A successor view is `work_kind=remediation` with exact source Delivery/Task and plan digest. During
+  Coder/QA/Reviewer execution the parent becomes `DELIVERING` and the old blocker is hidden. Snapshot
+  never publishes a checkpoint, edits a Task or repairs the database. Once native attachment is
+  published, the normal checkpoint-bound read resumes.
 - Agent cards count these active assignments exactly as ordinary delivery work. The projection remains
   read-only and never creates a Host, schema, workspace, or state transition.
 
@@ -319,9 +385,13 @@ _read_task_details(native: _Native, cursor: DictCursor, base: TaskView) -> TaskV
 |---|---|
 | Active reservation, no QA invocation | QA current; source directory visible |
 | QA invocation/report, no completion | QA run visible; Reviewer current only after QA PASS |
+| Requirement `VERIFY_QA`, historical source Task `REVIEW` | 测试 remains current; 评审 is not highlighted |
 | Older incomplete reservation plus newer committed reservation for the same source | older is terminal `VERIFICATION_SUPERSEDED`; newer owns liveness |
 | Sealed QA FAIL | terminal verification with blocker; Reviewer not active |
 | Continuation dispatch | remediation work with fresh Task plus source lineage |
+| Checkpoint is BLOCKED; later bound recovery Task is IMPLEMENTING/QA/REVIEW | current recovery Task/role visible immediately; parent DELIVERING; no stale blocker |
+| Recovery dispatch committed but SQL Task not materialized | preserve checkpoint view; no invented assignment |
+| Recovery source checkpoint digest/Task differs or multiple live successors exist | reject snapshot |
 | Current remediation Task plus reservation for its original Task | show both current remediation and historical verification |
 | Historical Task appears in the native chain and still matches SQL/dispatch/artifacts | valid verification source |
 | Historical checkpoint changes Delivery/project/root or one Task belongs to two deliveries | reject snapshot |
@@ -347,6 +417,10 @@ produce QA FAIL, begin the linked remediation Coder, call `ProductionTeamReader.
 that Coder completes, and assert the remediation card retains the original `source_task_id`; the
 consumed predecessor plan must be terminal with no current assignment. Existing
 schema equality, no-write, Project isolation, HTTP and browser tests remain required.
+`test_resume_discovers_approves_and_attaches_pre_candidate_coder_recovery` observes a real resumed
+recovery before each Coder/QA/Reviewer invocation: assert the successor Task ID and stage, exactly one
+current role, no old blocker, and parent `DELIVERING`, even though the native checkpoint still points
+at the failed predecessor. This is an incremental regression, not a replacement for full validation.
 
 ### 7. Wrong vs Correct
 
@@ -363,7 +437,39 @@ native_by_task[native.checkpoint.task_id] = native
 # Correct: index the latest trusted checkpoint for every Task in the Delivery chain, then validate
 # the selected historical Task through the same SQL/dispatch/artifact path as the current Task.
 native_by_task.update(_native_task_sources(native))
+
+# Wrong: keep showing the failed checkpoint Task until recovery.execute() returns.
+view = read_only_the_checkpoint_task(native)
+
+# Correct: validate the checkpoint Task, then project its exact committed live successor.
+successor = _active_successor_dispatch(native, cursor)
+if successor is not None:
+    view = _read_task_details(native, cursor, base, dispatch_override=successor)
 ```
+
+### Existing-data disposition
+
+This is a read-model repair; valid checkpoints, dispatches and events require no SQL rewrite or
+deletion. Reload the service after active operations finish, then read the existing Project again.
+The same in-flight/finished Task remains the source of truth. Do not set Task status to DONE or clear
+historical blockers in storage to make the page look correct.
+
+### Bug analysis: recovery runs while the page still shows the failed predecessor
+
+1. **Root cause (B/D/E)**: dispatch/SQL advancement precedes native checkpoint publication. The
+   reader implicitly treated the checkpoint Task ID as the only possible current work identity.
+2. **Why partial fixes missed it**: clearing an old parent blocker works only when the child view
+   already contains the new Task. Browser Operation overrides can change a list label but cannot
+   identify whether Coder, QA or Reviewer actually owns the current work.
+3. **Prevention**: bind a successor to trusted dispatch/source facts, reuse Task/event validation,
+   and observe every role in the real recovery regression before checkpoint attachment. Reject
+   ambiguous successors rather than guessing from timestamps or titles.
+4. **Systematic expansion**: the same boundary applies to Coder remediation and candidate
+   verification. Verification keeps its reservation-owned lifecycle; recovery/remediation uses
+   dispatch-owned Task state. Neither may replace historical records or infer process liveness.
+5. **Knowledge capture**: the signatures, lineage matrix, incremental regression and existing-data
+   disposition above are the maintenance contract. This repository has no generic thinking-guide or
+   `src/templates/markdown/spec/` mirror; keep this rule in the owning core spec.
 
 ## Scenario: retired Requirement visibility
 
@@ -416,3 +522,16 @@ retirement record.
 Wrong: hide only the parent Requirement and let its child sidecars reappear as standalone Agent work.
 Correct: validate the Project-owned retirement index, derive its owned native Delivery identities,
 then filter parent and children before Request/Task/Agent projection.
+
+## Scenario: retained single-repository candidate awaiting finalization
+
+- When a one-repository parent has one exact native DONE child but no
+  `single_repository_acceptance`, project `WAITING_DELIVERY_FINALIZATION` instead of claiming that
+  Planner is running.
+- The delivery flow highlights step 7 (交付). The view explains that “继续交付” performs a read-only
+  evidence recheck followed by the parent journal append; it must not show joint-integration
+  approval or assign Planner/Coder/QA/Reviewer.
+- After the proof is appended, project ordinary DONE. If evidence validation fails, retain the prior
+  checkpoint and surface the exact safe failure through the operation result.
+- Existing `PLANNING` remains meaningful for actual multi-repository planning; the read projection
+  must not relabel all PLANNING states globally.

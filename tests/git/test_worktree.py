@@ -346,6 +346,56 @@ def test_existing_worktree_can_be_recovered_idempotently_after_restart(tmp_path:
     assert _git(repository, "status", "--porcelain") == ""
 
 
+def test_cleaned_coder_worktree_can_be_restored_from_its_unchanged_branch(
+    tmp_path: Path,
+) -> None:
+    repository = _create_fixture_repository(tmp_path)
+    revision = _git(repository, "rev-parse", "HEAD")
+    spec = WorktreeSpec(
+        task_id="task_fixture_restore_clean_coder",
+        role=AgentRole.CODER,
+        attempt=1,
+        source_revision=revision,
+    )
+    manager = GitWorktreeManager(repository, tmp_path / "worktrees")
+    created = manager.create(spec)
+    manager.remove(created)
+
+    restored = manager.restore_clean_coder(spec)
+
+    assert restored.path == created.path
+    assert restored.branch == created.branch
+    assert restored.head_revision == revision
+    assert manager.inspect(restored).dirty is False
+
+
+def test_cleaned_coder_worktree_restoration_rejects_branch_revision_drift(
+    tmp_path: Path,
+) -> None:
+    repository = _create_fixture_repository(tmp_path)
+    revision = _git(repository, "rev-parse", "HEAD")
+    spec = WorktreeSpec(
+        task_id="task_fixture_restore_drifted_coder",
+        role=AgentRole.CODER,
+        attempt=1,
+        source_revision=revision,
+    )
+    manager = GitWorktreeManager(repository, tmp_path / "worktrees")
+    created = manager.create(spec)
+    branch = created.branch
+    assert branch is not None
+    manager.remove(created)
+    (repository / "README.md").write_text("advanced main\n", encoding="utf-8")
+    _git(repository, "add", "README.md")
+    _git(repository, "commit", "-m", "advance main")
+    _git(repository, "branch", "-f", branch, "HEAD")
+
+    with pytest.raises(WorktreeRevisionDrift, match="immutable source revision"):
+        manager.restore_clean_coder(spec)
+
+    assert not created.path.exists()
+
+
 def test_recovery_preserves_dirty_worktree_evidence(tmp_path: Path) -> None:
     repository = _create_fixture_repository(tmp_path)
     spec = WorktreeSpec(

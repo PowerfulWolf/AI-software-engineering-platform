@@ -1,7 +1,9 @@
 # 角色、权限与 Artifact 契约
 
 候选复核恢复另有内部契约：`schemas/candidate-verification.schema.json` 定义绑定原候选的
-计划、审批和调用凭据。它保留原 Task/实现报告身份，只允许新 QA→Reviewer，不重置终态。
+计划、审批和调用凭据。它保留原 Task/实现报告身份；没有可信 QA PASS 时运行新 QA→Reviewer，
+Reviewer 基础设施失败且终态事件已封存同一 candidate 的 QA PASS 时复用该报告并只运行新 Reviewer，
+不重置终态。
 生产入口是 `ase request resume`；低层 `verify-*` 只用于 break-glass。复核通过先完成子 Delivery，
 联合需求仍需完整候选集合和联合验收；详见
 [恢复规范](../.trellis/spec/core/delivery-recovery.md)。
@@ -125,7 +127,7 @@ repository、manifest digest/Schema/path mismatch 或 layout 缺失均 fail clos
 生产 Host 在选定 Project 下自动注册并装配 Repository；底层 RuntimeConfig 仍显式使用这些路径。
 
 Runtime wire 可选字段 `context_max_input_tokens` 为严格整数（1..2,000,000），默认 12,000；
-生产交付显式配置 32,000。它必须传到各角色 ContextBundle 的 budget，不会因 required source
+生产交付显式配置 64,000。它必须传到各角色 ContextBundle 的 budget，不会因 required source
 超限自动增加。生产 Profile 阅读投影只压缩语言 marker 清单，保留完整规范引用及原始 profile
 digest；投影不是可写回的 RepositoryProfile。详见 [上下文契约](context-routing.md)。
 

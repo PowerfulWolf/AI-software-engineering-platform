@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -17,7 +18,13 @@ from ai_software_engineer.domain import (
     ProductApprovalDecision,
     TeamRole,
 )
-from ai_software_engineer.execution import CommandResult, SubprocessCommandExecutor
+from ai_software_engineer.execution import (
+    CommandExecutionError,
+    CommandExecutor,
+    CommandResult,
+    CommandTimedOut,
+    SubprocessCommandExecutor,
+)
 from ai_software_engineer.git import (
     GitWorkspaceError,
     GitWorktreeManager,
@@ -26,6 +33,7 @@ from ai_software_engineer.git import (
     WorktreeRef,
     WorktreeSpec,
 )
+from ai_software_engineer.manager.baseline import FileProjectBaselineCompilationStore
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
     ProjectDeliveryCheckpointCatalog,
@@ -36,6 +44,7 @@ from ai_software_engineer.manager.delivery import (
 from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryStage,
     FileProjectDeliveryCheckpointStore,
+    ProjectDeliveryCheckpoint,
     checkpoint_is_ancestor,
 )
 from ai_software_engineer.manager.preparation import PrepareProjectResult, PrepareProjectStatus
@@ -49,7 +58,11 @@ from ai_software_engineer.manager.production_backend import (
     StructuredClientFactory,
     _task_commands,
 )
+from ai_software_engineer.manager.store import FileProjectPreparationStore
 from ai_software_engineer.multi_directory.errors import RequirementSourceRevisionDrift
+from ai_software_engineer.multi_directory.integration_commands import (
+    TEST_PREFIXES,
+)
 from ai_software_engineer.multi_directory.integration_commands import (
     is_test_command as _test_command,
 )
@@ -62,9 +75,11 @@ from ai_software_engineer.multi_directory.models import (
     JointExecutionPlan,
     JointStage,
     PreparedUnit,
+    SingleRepositoryAcceptance,
     digest,
 )
 from ai_software_engineer.multi_directory.scope import DirectoryUnit, git_read
+from ai_software_engineer.multi_directory.store import JointJournal
 from ai_software_engineer.product import (
     HumanProductDecisionCommand,
     HumanProductDecisionVerifier,
@@ -73,7 +88,35 @@ from ai_software_engineer.product import (
 from ai_software_engineer.project_workspace import ProjectWorkspace
 from ai_software_engineer.redaction import redact_text
 from ai_software_engineer.repository_profile import RepositoryProfile
+from ai_software_engineer.repository_workspace import RepositoryWorkspace
+from ai_software_engineer.runtime_workspace import load_repository_profile
 from ai_software_engineer.team_workspace import TeamWorkspace
+
+
+def approved_joint_context_source(checkpoint: JointCheckpoint, unit_id: str) -> ContextSource:
+    """Build the canonical approved parent context for one repository unit."""
+    projection = DerivedStageInputs(checkpoint, unit_id)
+    shared = {
+        "requirement_project": checkpoint.delivery_id,
+        "product": checkpoint.product_spec.to_wire() if checkpoint.product_spec else None,
+        "design": checkpoint.design.to_wire() if checkpoint.design else None,
+        "plan": checkpoint.plan.to_wire() if checkpoint.plan else None,
+        "approval": checkpoint.approval.to_wire() if checkpoint.approval else None,
+        "dependencies": [
+            child.to_wire()
+            for child in checkpoint.children
+            if child.unit_id in projection.dependencies
+        ],
+    }
+    content = json.dumps(shared, sort_keys=True, ensure_ascii=False)
+    return ContextSource(
+        source_id="joint.approved_context",
+        uri=f"joint://{checkpoint.delivery_id}/{hashlib.sha256(content.encode()).hexdigest()}",
+        content=content,
+        required=True,
+        priority=5,
+    )
+
 
 BackendFactory = Callable[
     [
@@ -140,7 +183,11 @@ class ProductionJointBackend:
         )
 
     def client(self, checkpoint: JointCheckpoint, role: TeamRole) -> StructuredModelClient:
-        roots = self._baseline_paths(checkpoint)
+        roots = (
+            self._candidate_paths(checkpoint)
+            if role is TeamRole.PLANNER and checkpoint.children
+            else self._baseline_paths(checkpoint)
+        )
         if isinstance(self.clients, MultiRepositoryStructuredClientFactory):
             return self.clients.for_projects(roots, role)
         return self.clients.for_project(roots[0], role)
@@ -161,8 +208,25 @@ class ProductionJointBackend:
             unit = next(u for u in checkpoint.scope.units if u.id == child.unit_id)
             if child.checkpoint.repository_root != unit.root:
                 raise ValueError("child checkpoint belongs to another repository")
+            if checkpoint.plan is None and (
+                checkpoint.stage is JointStage.PLANNING
+                or checkpoint.single_repository_acceptance is not None
+            ):
+                # Integration recovery deliberately clears the current plan before Planner
+                # runs.  Rebuilding a DerivedStageInputs projection here would reject that
+                # valid checkpoint because it requires a plan.  The child journal is the
+                # authoritative fact needed at this seam; validate its exact committed prefix
+                # directly and defer plan-bound runtime reconstruction until a fresh plan exists.
+                history = self._child_history(child)
+                if (
+                    not history
+                    or history[-1] != child.checkpoint
+                    or not checkpoint_is_ancestor(history, child.checkpoint)
+                ):
+                    raise ValueError("native child checkpoint is not a committed history prefix")
+                continue
             # Resolve native facts, not just a claimed joint child status.
-            service = self._entry(checkpoint, child.unit_id)
+            _, service = self.delivery_runtime(checkpoint, child.unit_id)
             actual = service.status(child.checkpoint.delivery_id).checkpoint
             history = FileProjectDeliveryCheckpointStore(
                 self.project.root
@@ -180,42 +244,127 @@ class ProductionJointBackend:
             if child.checkpoint.stage is DeliveryStage.DONE and actual != child.checkpoint:
                 raise ValueError("completed candidate checkpoint drift")
 
+    def _child_history(self, child: ChildDelivery) -> tuple[ProjectDeliveryCheckpoint, ...]:
+        """Read a retained native journal without requiring a plan-bound projection."""
+
+        store = FileProjectDeliveryCheckpointStore(
+            self.project.root
+            / "repositories"
+            / child.checkpoint.repository_id
+            / "state/project-deliveries",
+            read_only=True,
+        )
+        return store.list(child.checkpoint.delivery_id)
+
     def delivery_runtime(
         self, checkpoint: JointCheckpoint, unit_id: str
     ) -> tuple[ProductionProjectDeliveryBackend, UnifiedProjectEntryService]:
         """Rebuild the exact native runtime owned by one Requirement unit."""
 
+        projection = DerivedStageInputs(checkpoint, unit_id)
+        child = next(item for item in checkpoint.children if item.unit_id == unit_id)
         backend = self._derived_backend(checkpoint, unit_id)
+        catalog = ProjectDeliveryCheckpointCatalog(self.project.repository_registry().registry_root)
+        history = catalog.for_delivery(child.checkpoint.delivery_id).list(
+            child.checkpoint.delivery_id
+        )
+        if history:
+            current = history[-1]
+            prepared = projection.preparation.preparation
+            assert prepared is not None
+            current_preparation_sha256 = current.preparation_sha256
+            if current_preparation_sha256 is None:
+                raise ValueError("native child checkpoint has no preparation")
+            if current_preparation_sha256 != prepared.preparation_sha256:
+                workspace = self.project.repository_registry().register(
+                    current.repository_root,
+                    repository_id=current.repository_id,
+                )
+                historical = _load_preparation_result(
+                    workspace,
+                    current_preparation_sha256,
+                )
+                historical_preparation = historical.preparation
+                assert historical_preparation is not None
+                profile = load_repository_profile(
+                    workspace.root,
+                    historical_preparation.repository_profile_sha256,
+                )
+                backend = self._derived_backend(
+                    checkpoint,
+                    unit_id,
+                    frozen_preparation=historical,
+                    frozen_source_revision=profile.source_revision,
+                )
         return backend, self._entry(checkpoint, unit_id, backend=backend)
 
+    def accept_single_repository(self, checkpoint: JointCheckpoint) -> SingleRepositoryAcceptance:
+        """Verify one retained native candidate as the complete Requirement result."""
+
+        if len(checkpoint.scope.units) != 1 or len(checkpoint.children) != 1:
+            raise ValueError("single-repository acceptance requires exactly one repository")
+        child = checkpoint.children[0]
+        if (
+            child.unit_id != checkpoint.scope.units[0].id
+            or child.checkpoint.stage is not DeliveryStage.DONE
+            or child.checkpoint.candidate_revision is None
+            or checkpoint.product_spec is None
+        ):
+            raise ValueError("single-repository child is not an accepted native candidate")
+        runtime_checkpoint = self._single_repository_runtime_checkpoint(checkpoint)
+        backend, service = self.delivery_runtime(runtime_checkpoint, child.unit_id)
+        actual = service.status(child.checkpoint.delivery_id).checkpoint
+        if actual != child.checkpoint:
+            raise ValueError("single-repository native checkpoint drifted")
+        evidence = backend.accepted_delivery_evidence(actual)
+        return SingleRepositoryAcceptance(
+            unit_id=child.unit_id,
+            child_checkpoint_sha256=child.checkpoint.checkpoint_sha256,
+            candidate_revision=child.checkpoint.candidate_revision,
+            product_spec_sha256=digest(checkpoint.product_spec),
+            acceptance_ids=checkpoint.product_spec.acceptance_ids(),
+            native_evidence_references=evidence,
+        )
+
+    def _single_repository_runtime_checkpoint(self, checkpoint: JointCheckpoint) -> JointCheckpoint:
+        if checkpoint.plan is not None:
+            return checkpoint
+        history = JointJournal(self.project.requirements_root, read_only=True).history(
+            checkpoint.delivery_id
+        )
+        historical = next(
+            (
+                item
+                for item in reversed(history)
+                if item.plan is not None
+                and item.product_spec == checkpoint.product_spec
+                and item.design == checkpoint.design
+            ),
+            None,
+        )
+        if historical is None:
+            raise ValueError("single-repository acceptance has no approved native plan")
+        assert historical.plan is not None
+        values: dict[str, object] = dict(checkpoint.to_wire())
+        values["plan"] = historical.plan
+        return JointCheckpoint.seal(values)
+
     def _derived_backend(
-        self, checkpoint: JointCheckpoint, unit_id: str
+        self,
+        checkpoint: JointCheckpoint,
+        unit_id: str,
+        *,
+        frozen_preparation: PrepareProjectResult | None = None,
+        frozen_source_revision: str | None = None,
     ) -> ProductionProjectDeliveryBackend:
         projection = DerivedStageInputs(checkpoint, unit_id)
-        shared = {
-            "requirement_project": checkpoint.delivery_id,
-            "product": checkpoint.product_spec.to_wire() if checkpoint.product_spec else None,
-            "design": checkpoint.design.to_wire() if checkpoint.design else None,
-            "plan": checkpoint.plan.to_wire() if checkpoint.plan else None,
-            "approval": checkpoint.approval.to_wire() if checkpoint.approval else None,
-            "dependencies": [
-                c.to_wire() for c in checkpoint.children if c.unit_id in projection.dependencies
-            ],
-        }
-        content = json.dumps(shared, sort_keys=True, ensure_ascii=False)
-        source = ContextSource(
-            source_id="joint.approved_context",
-            uri=f"joint://{checkpoint.delivery_id}/{hashlib.sha256(content.encode()).hexdigest()}",
-            content=content,
-            required=True,
-            priority=5,
-        )
+        source = approved_joint_context_source(checkpoint, unit_id)
         return self.factory(
             projection,
             (source,),
             projection,
-            projection.preparation,
-            projection.base_revision,
+            frozen_preparation or projection.preparation,
+            frozen_source_revision or projection.base_revision,
         )
 
     def _entry(
@@ -245,8 +394,35 @@ class ProductionJointBackend:
     def _baseline_paths(self, checkpoint: JointCheckpoint) -> tuple[Path, ...]:
         return tuple(self._baseline(checkpoint, unit).path for unit in checkpoint.scope.units)
 
-    def _baseline(self, checkpoint: JointCheckpoint, unit: DirectoryUnit) -> WorktreeRef:
-        if unit.base_revision is None:
+    def _candidate_paths(self, checkpoint: JointCheckpoint) -> tuple[Path, ...]:
+        assert checkpoint.design is not None
+        children = {child.unit_id: child.checkpoint for child in checkpoint.children}
+        roots = []
+        for unit in checkpoint.scope.units:
+            child = children.get(unit.id)
+            if child is not None:
+                if child.stage is not DeliveryStage.DONE or child.candidate_revision is None:
+                    raise ValueError("integration planning requires completed native candidates")
+                roots.append(
+                    self._baseline(
+                        checkpoint, unit, candidate_revision=child.candidate_revision
+                    ).path
+                )
+            else:
+                if unit.id not in checkpoint.design.reference_only:
+                    raise ValueError("integration planning requires every modified candidate")
+                roots.append(self._baseline(checkpoint, unit).path)
+        return tuple(roots)
+
+    def _baseline(
+        self,
+        checkpoint: JointCheckpoint,
+        unit: DirectoryUnit,
+        *,
+        candidate_revision: str | None = None,
+    ) -> WorktreeRef:
+        revision = candidate_revision or unit.base_revision
+        if revision is None:
             raise RequirementSourceRevisionDrift(
                 "Requirement source baseline requires a committed Git revision"
             )
@@ -259,11 +435,13 @@ class ProductionJointBackend:
             / unit.id,
         )
         spec = WorktreeSpec(
-            task_id="task_baseline_"
-            + hashlib.sha256(f"{checkpoint.delivery_id}:{unit.id}".encode()).hexdigest()[:32],
+            task_id=("task_candidate_" if candidate_revision else "task_baseline_")
+            + hashlib.sha256(
+                (f"{checkpoint.delivery_id}:{unit.id}" + (candidate_revision or "")).encode()
+            ).hexdigest()[:32],
             role=AgentRole.REVIEWER,
             attempt=1,
-            source_revision=unit.base_revision,
+            source_revision=revision,
         )
         try:
             try:
@@ -271,7 +449,7 @@ class ProductionJointBackend:
             except WorktreeAlreadyExists:
                 worktree = manager.recover(spec)
             snapshot = manager.inspect(worktree)
-            if snapshot.dirty or snapshot.head_revision != unit.base_revision:
+            if snapshot.dirty or snapshot.head_revision != revision:
                 raise RequirementSourceRevisionDrift(
                     "Requirement source baseline worktree changed; restore it before continuing"
                 )
@@ -285,15 +463,22 @@ class ProductionJointBackend:
     def deliver(self, checkpoint: JointCheckpoint, unit_id: str) -> ChildDelivery:
         self.reconcile(checkpoint)
         projection = DerivedStageInputs(checkpoint, unit_id)
-        service = self._entry(checkpoint, unit_id)
-        result = service.start(
-            StartProjectDelivery(
-                repository_root=projection.root,
-                requirement=projection.requirement,
-                title=checkpoint.title,
-                submitted_at=checkpoint.submitted_at,
+        child = next((item for item in checkpoint.children if item.unit_id == unit_id), None)
+        if child is not None:
+            # Recovery may have approved a newer preparation than the parent intake.
+            # Observe that exact runtime before deciding whether any work remains.
+            _, service = self.delivery_runtime(checkpoint, unit_id)
+            result = service.status(child.checkpoint.delivery_id)
+        else:
+            service = self._entry(checkpoint, unit_id)
+            result = service.start(
+                StartProjectDelivery(
+                    repository_root=projection.root,
+                    requirement=projection.requirement,
+                    title=checkpoint.title,
+                    submitted_at=checkpoint.submitted_at,
+                )
             )
-        )
         if result.checkpoint.stage is DeliveryStage.WAITING_PRODUCT_APPROVAL:
             assert checkpoint.approval is not None
             result = service.approve(
@@ -315,6 +500,8 @@ class ProductionJointBackend:
         return ChildDelivery(unit_id=unit_id, checkpoint=result.checkpoint)
 
     def validate_plan(self, checkpoint: JointCheckpoint, plan: JointExecutionPlan) -> None:
+        if len(checkpoint.scope.units) == 1 and not plan.integration_checks:
+            return
         for check_index, check in enumerate(plan.integration_checks, 1):
             prepared = next(p for p in checkpoint.preparations if p.unit_id == check.unit_id)
             unit = next(u for u in checkpoint.scope.units if u.id == check.unit_id)
@@ -323,6 +510,12 @@ class ProductionJointBackend:
             # Integration is testing, not a general shell/build/install escape hatch.
             if not _test_command(check.argv):
                 raise IntegrationCommandError(check_index=check_index, argv=check.argv)
+            child = next((c.checkpoint for c in checkpoint.children if c.unit_id == unit.id), None)
+            if child is not None and child.stage is DeliveryStage.DONE:
+                assert child.candidate_revision is not None
+                _validate_pytest_paths(
+                    Path(unit.root), child.candidate_revision, check.argv, check_index
+                )
         assert checkpoint.design is not None
         for interface in checkpoint.design.interfaces:
             participants = {interface.producer, *interface.consumers}
@@ -394,22 +587,28 @@ class ProductionJointBackend:
             for check in checkpoint.plan.integration_checks:
                 prepared = next(p for p in checkpoint.preparations if p.unit_id == check.unit_id)
                 _, ref = opened[check.unit_id]
-                result = SubprocessCommandExecutor(
+                command_environment = environment
+                if check.argv[0] in {"pytest", "python", "python3"}:
+                    unit = next(u for u in checkpoint.scope.units if u.id == check.unit_id)
+                    command_environment = _python_integration_environment(
+                        Path(unit.root), ref.path, environment
+                    )
+                executor = SubprocessCommandExecutor(
                     ref.path,
                     _integration_permissions(prepared.commands),
-                    environment=environment,
-                    environment_allowlist=tuple(environment),
+                    environment=command_environment,
+                    environment_allowlist=tuple(command_environment),
                     max_output_bytes=100_000,
-                ).run(check.argv, timeout_seconds=check.timeout_seconds)
-                _require_nonempty_test_run(result)
-                results.append(
-                    result.model_copy(
-                        update={
-                            "stdout": redact_text(result.stdout).text,
-                            "stderr": redact_text(result.stderr).text,
-                        }
-                    )
                 )
+                result = _execute_integration_command(
+                    executor,
+                    check.argv,
+                    ref.path,
+                    timeout_seconds=check.timeout_seconds,
+                )
+                results.append(result)
+                if result.returncode != 0:
+                    break
                 for manager, worktree in opened.values():
                     snapshot = manager.inspect(worktree)
                     if snapshot.dirty or snapshot.head_revision != worktree.head_revision:
@@ -424,6 +623,88 @@ class ProductionJointBackend:
                 snapshot = manager.inspect(worktree)
                 if not snapshot.dirty and snapshot.head_revision == worktree.head_revision:
                     manager.remove(worktree)
+
+
+def _validate_pytest_paths(
+    repository_root: Path, revision: str, argv: tuple[str, ...], check_index: int
+) -> None:
+    """Explicit pytest file selectors must exist in the reviewed Git tree, not main."""
+
+    if not any(argv[: len(prefix)] == prefix for prefix in TEST_PREFIXES if prefix[-1] == "pytest"):
+        return
+    for token in argv[1:]:
+        path = token.split("::", 1)[0]
+        if token.startswith("-") or not path.endswith(".py"):
+            continue
+        if Path(path).is_absolute() or ".." in Path(path).parts or "\\" in path:
+            raise IntegrationCommandError(check_index=check_index, argv=argv, missing_test=True)
+        if (
+            git_read(repository_root, "cat-file", "-e", f"{revision}:{path.removeprefix('./')}")
+            is None
+        ):
+            raise IntegrationCommandError(check_index=check_index, argv=argv, missing_test=True)
+
+
+def _python_integration_environment(
+    repository_root: Path,
+    candidate_root: Path,
+    base: Mapping[str, str],
+) -> dict[str, str]:
+    """Borrow existing project tooling, with imports pinned to the candidate checkout."""
+
+    environment = dict(base)
+    venv = repository_root / ".venv"
+    binary = venv / "bin"
+    if venv.is_symlink() or binary.is_symlink():
+        raise ValueError("integration Python environment must be project-local")
+    if binary.is_dir():
+        environment["PATH"] = str(binary) + os.pathsep + base.get("PATH", "/usr/bin:/bin")
+    sources = (candidate_root / "src", candidate_root)
+    environment["PYTHONPATH"] = os.pathsep.join(str(path) for path in sources if path.is_dir())
+    return environment
+
+
+def _load_preparation_result(
+    workspace: RepositoryWorkspace,
+    preparation_sha256: str,
+) -> PrepareProjectResult:
+    """Reopen the exact immutable preparation used by a recovered native child."""
+
+    policy = workspace.directory("policy")
+    preparations = []
+    for directory in (policy, *sorted(policy.glob("preparations-*"))):
+        if directory.is_symlink() or not directory.is_dir():
+            raise ValueError("native preparation directory is unsafe")
+        prepared = FileProjectPreparationStore(directory, read_only=True).find(
+            workspace.repository_id
+        )
+        if prepared is not None and prepared.preparation_sha256 == preparation_sha256:
+            preparations.append(prepared)
+    if len(preparations) != 1:
+        raise ValueError("native child preparation is missing or ambiguous")
+    preparation = preparations[0]
+
+    compilation_store = FileProjectBaselineCompilationStore()
+    compilation_root = policy / "project-baseline-compilations"
+    if compilation_root.is_symlink() or not compilation_root.is_dir():
+        raise ValueError("native baseline compilation directory is unsafe")
+    compilations = []
+    for path in sorted(compilation_root.glob("*.json")):
+        compilation = compilation_store.get(workspace, path.stem)
+        if (
+            compilation.repository_profile_sha256 == preparation.repository_profile_sha256
+            and compilation.compiled_spec is not None
+            and compilation.compiled_spec.baseline_sha256 == preparation.baseline_spec_sha256
+        ):
+            compilations.append(compilation)
+    if len(compilations) != 1:
+        raise ValueError("native child baseline compilation is missing or ambiguous")
+    return PrepareProjectResult(
+        status=PrepareProjectStatus.PREPARED,
+        repository_id=workspace.repository_id,
+        baseline_compilation_sha256=compilations[0].compilation_sha256,
+        preparation=preparation,
+    )
 
 
 class DerivedStageInputs(
@@ -557,3 +838,71 @@ def _require_nonempty_test_run(result: CommandResult) -> None:
         r"Ran 0 tests?\b|Tests run: 0\b|No tests were found|\[no test files\]", output
     ):
         raise ValueError("integration reported no executed tests; cannot accept PASS")
+
+
+def _integration_failure_result(
+    argv: tuple[str, ...],
+    cwd: Path,
+    *,
+    returncode: int,
+    duration_ms: int,
+    stdout: str = "",
+    stderr: str,
+) -> CommandResult:
+    """Build a redacted typed result for failures without a normal command result."""
+
+    return CommandResult(
+        argv=argv,
+        cwd=str(cwd),
+        returncode=returncode,
+        stdout=redact_text(stdout).text,
+        stderr=redact_text(stderr).text,
+        duration_ms=duration_ms,
+    )
+
+
+def _execute_integration_command(
+    executor: CommandExecutor,
+    argv: tuple[str, ...],
+    cwd: Path,
+    *,
+    timeout_seconds: int,
+) -> CommandResult:
+    """Turn every expected command outcome into redacted, durable evidence."""
+
+    try:
+        result = executor.run(argv, timeout_seconds=timeout_seconds)
+    except CommandTimedOut as error:
+        return _integration_failure_result(
+            argv,
+            cwd,
+            returncode=124,
+            duration_ms=error.duration_ms,
+            stderr="command timed out",
+        )
+    except CommandExecutionError:
+        # Never persist provider, OS, path, or environment details from the exception.
+        return _integration_failure_result(
+            argv,
+            cwd,
+            returncode=127,
+            duration_ms=0,
+            stderr="command could not start",
+        )
+    try:
+        _require_nonempty_test_run(result)
+    except ValueError:
+        return _integration_failure_result(
+            argv,
+            cwd,
+            returncode=1,
+            duration_ms=result.duration_ms,
+            stdout=result.stdout,
+            stderr="integration reported no executed tests; cannot accept PASS",
+        )
+    return result.model_copy(
+        update={
+            "stdout": redact_text(result.stdout).text,
+            "stderr": redact_text(result.stderr).text,
+        }
+    )

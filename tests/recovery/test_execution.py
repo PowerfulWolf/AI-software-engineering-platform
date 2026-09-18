@@ -17,9 +17,15 @@ from ai_software_engineer.agents import (
     ContextPromptBuilder,
     StoredContextResolver,
 )
-from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
+from ai_software_engineer.config import (
+    AgentModelRoutePolicy,
+    ModelProviderKind,
+    ProductionConfig,
+    ProviderRouteConfig,
+    ProviderRouteReference,
+)
 from ai_software_engineer.context import FileContextBuilder, FileContextStore
-from ai_software_engineer.domain import AgentDefinition, AgentRole, TaskStatus
+from ai_software_engineer.domain import AgentDefinition, AgentRole, TaskStatus, TeamRole
 from ai_software_engineer.evaluation import CaseStartedEvent, FileEvaluationEventStore
 from ai_software_engineer.git import WorktreeCaptureRejected, WorktreeSeedRejected
 from ai_software_engineer.manager.delivery import (
@@ -36,7 +42,7 @@ from ai_software_engineer.orchestration.retry import RetryDeliveryResult
 from ai_software_engineer.planning import FileExecutionPlanStore
 from ai_software_engineer.product import FileProductRecordStore
 from ai_software_engineer.recovery import RecoveryRejected
-from ai_software_engineer.recovery.entry import read_recovery_task
+from ai_software_engineer.recovery.entry import _require_seed_recovery_route, read_recovery_task
 from ai_software_engineer.recovery.native import NativeRecoverySourceReader
 from ai_software_engineer.recovery.seed import RecoverySeedService
 from ai_software_engineer.recovery.store import RecoveryRecordMissing
@@ -109,6 +115,51 @@ class OfflineRunner:
             json.dumps(result.artifact.to_wire())
         )
         return CodexInvocationResult(returncode=0)
+
+
+def test_seed_recovery_route_guard_uses_the_coder_policy_not_all_enabled_routes(
+    tmp_path: Path,
+) -> None:
+    coder = ProviderRouteConfig(
+        provider="codex",
+        model="coder-model",
+        kind=ModelProviderKind.CODEX_CLI,
+    )
+    other = ProviderRouteConfig(
+        provider="codex",
+        model="other-agent-model",
+        kind=ModelProviderKind.CODEX_CLI,
+    )
+    policies = tuple(
+        AgentModelRoutePolicy(
+            role=role,
+            routes=(
+                ProviderRouteReference(
+                    provider=(coder if role is TeamRole.CODER else other).provider,
+                    model=(coder if role is TeamRole.CODER else other).model,
+                ),
+                *(
+                    (
+                        ProviderRouteReference(
+                            provider=other.provider,
+                            model=other.model,
+                        ),
+                    )
+                    if role is TeamRole.CODER
+                    else ()
+                ),
+            ),
+        )
+        for role in TeamRole
+    )
+    config = ProductionConfig(
+        platform_root=str(tmp_path / "platform"),
+        live_model_execution=True,
+        model_routes=(coder, other),
+        agent_model_routes=policies,
+    )
+
+    assert _require_seed_recovery_route(config) == coder
 
 
 class OfflineAdapter:

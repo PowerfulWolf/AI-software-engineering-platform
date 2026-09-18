@@ -4,6 +4,9 @@
 选择一个或多个代码目录，平台准备 Team、Project 与 Repository 规范后再讨论需求。底层
 `ase task ...` 不属于日常路径。
 
+日常交付采用[平台操作与问题反馈闭环](operator-feedback-loop.md)：用户在平台执行，开发协作者
+定位并修复具体报错，验证后交回用户继续交付。
+
 ## 1. 运行边界
 
 **Team Host 是团队运行的装配入口，不是一个 Agent，也不是 Docker 容器。**

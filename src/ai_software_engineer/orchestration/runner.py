@@ -18,7 +18,7 @@ from ai_software_engineer.agents import (
 )
 from ai_software_engineer.artifacts import ArtifactStore, seal_artifact
 from ai_software_engineer.context.models import ContextId
-from ai_software_engineer.domain.agent import AgentDefinition
+from ai_software_engineer.domain.agent import ROLE_OUTPUTS, AgentDefinition
 from ai_software_engineer.domain.artifact import (
     Artifact,
     ArtifactId,
@@ -341,6 +341,11 @@ class SerialOrchestrator:
             context_manifest_id=context.context_id,
             input_artifact_ids=tuple(artifact.artifact_id for artifact in input_artifacts),
             expected_parent_artifact_ids=expected_parents,
+            expected_supersedes_by_kind=(
+                dict(expected_supersedes_by_kind)
+                if expected_supersedes_by_kind is not None
+                else {kind: expected_supersedes for kind in ROLE_OUTPUTS[role]}
+            ),
             permissions=definition.permissions,
             output_schema=ROLE_OUTPUT_SCHEMA[role],
             timeout_seconds=definition.timeout_seconds,
@@ -379,8 +384,21 @@ class SerialOrchestrator:
                 )
             required_supersedes = expected_supersedes_by_kind[result.artifact.kind]
         if result.artifact.supersedes != required_supersedes:
-            raise DeliveryContractViolation(
-                f"{role.value} Artifact supersedes lineage does not match the retry input"
+            raise AgentRunFailed(
+                result.model_copy(
+                    update={
+                        "status": AgentRunStatus.FAILED,
+                        "artifact": None,
+                        "error": AgentFailure(
+                            code=AgentErrorCode.INVALID_OUTPUT,
+                            message=(
+                                f"{role.value} Artifact supersedes lineage does not match "
+                                "the retry input"
+                            ),
+                            transient=False,
+                        ),
+                    }
+                )
             )
         sealed = seal_artifact(result.artifact, validated_at=self._clock())
         reference = self._artifact_store.put(sealed)
