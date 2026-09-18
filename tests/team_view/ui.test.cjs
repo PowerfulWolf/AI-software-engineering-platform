@@ -110,6 +110,43 @@ test("agent queue cards keep long task metadata readable", () => {
     /\.agent-queue \.work-row\s*\{[^}]*cursor:\s*pointer;/s,
     "overview cards must visibly communicate that the full card opens task details",
   );
+  assert.match(
+    styles,
+    /\.agent-workspace\s*\{[^}]*align-items:\s*stretch;/s,
+    "the queue panel must share its bottom edge with the Agent roster",
+  );
+  assert.match(
+    styles,
+    /\.agent-board\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;[^}]*min-height:\s*0;/s,
+    "the queue panel must consume the roster-defined grid height without growing it",
+  );
+  assert.match(
+    styles,
+    /\.agent-queue-board\s*\{[^}]*flex:\s*1 1 0;[^}]*min-height:\s*0;[^}]*overflow-x:\s*auto;[^}]*overflow-y:\s*hidden;/s,
+    "the four-column board must fill the available height while retaining horizontal scrolling",
+  );
+  assert.match(
+    styles,
+    /\.agent-queue\s*\{[^}]*min-height:\s*0;[^}]*max-height:\s*100%;[^}]*overflow-y:\s*auto;/s,
+    "each queue column must scroll vertically instead of extending the whole page",
+  );
+});
+
+test("long blocker diagnostics stay inside the detail boundary", () => {
+  const styles = fs.readFileSync(
+    path.join(__dirname, "../../src/ai_software_engineer/team_view/style.css"),
+    "utf8",
+  );
+  assert.match(
+    styles,
+    /\.request-blocking-primary\s*\{[^}]*min-width:\s*0;[^}]*max-width:\s*100%;/s,
+    "blocker cards must remain constrained by the detail panel",
+  );
+  assert.match(
+    styles,
+    /\.request-blocking-reason\s*\{[^}]*overflow-wrap:\s*anywhere;[^}]*word-break:\s*break-word;/s,
+    "opaque run IDs and hashes must wrap before crossing the detail boundary",
+  );
 });
 
 test("Requirement detail uses one heading hierarchy and section rhythm", () => {
