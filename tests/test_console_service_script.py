@@ -196,6 +196,55 @@ def test_service_launcher_never_signals_live_foreign_supervisor_pid(tmp_path: Pa
         foreign.wait(timeout=5)
 
 
+def test_service_launcher_never_signals_child_with_executable_only_as_argument(
+    tmp_path: Path,
+) -> None:
+    launcher, environment = _launcher(tmp_path)
+    state = Path(environment["ASE_SERVICE_STATE_DIR"])
+    state.mkdir()
+    service = launcher.parents[1] / ".venv" / "bin" / "ase-console"
+    foreign = subprocess.Popen(
+        (sys.executable, "-c", "import signal; signal.pause()"),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    (state / "ase-console.pid").write_text(f"{foreign.pid}\n{service}\n", encoding="utf-8")
+    process_directory = Path(environment["ASE_TEST_PROCESS_DIRECTORY"])
+    process_directory.mkdir()
+    (process_directory / f"{foreign.pid}.command.foreign").write_text(
+        f"foreign-wrapper --note {service} --not-managed\n",
+        encoding="utf-8",
+    )
+
+    try:
+        stopped = _run(launcher, environment, "stop")
+
+        assert stopped.returncode == 1
+        assert "does not identify this project's ase-console" in stopped.stderr
+        assert foreign.poll() is None
+    finally:
+        foreign.terminate()
+        foreign.wait(timeout=5)
+
+
+def test_service_launcher_preserves_invalid_supervisor_record(tmp_path: Path) -> None:
+    launcher, environment = _launcher(tmp_path)
+    state = Path(environment["ASE_SERVICE_STATE_DIR"])
+    state.mkdir()
+    invalid_record = state / "ase-console-supervisor.pid"
+    invalid_record.write_text("not-a-pid\n", encoding="utf-8")
+
+    try:
+        started = _run(launcher, environment, "start")
+
+        assert started.returncode == 1
+        assert "could not be started safely" in started.stderr
+        assert invalid_record.read_text(encoding="utf-8") == "not-a-pid\n"
+    finally:
+        invalid_record.unlink(missing_ok=True)
+        _run(launcher, environment, "stop")
+
+
 def test_service_supervisor_excludes_a_second_owner(tmp_path: Path) -> None:
     launcher, environment = _launcher(tmp_path)
     state = Path(environment["ASE_SERVICE_STATE_DIR"])
@@ -320,6 +369,33 @@ def test_service_launcher_restart_hands_off_managed_process_between_checkouts(
         _run(new_launcher, new_environment, "stop")
 
 
+def test_service_launcher_recognizes_same_project_relative_console_command(
+    tmp_path: Path,
+) -> None:
+    launcher, environment = _launcher(tmp_path)
+    state = Path(environment["ASE_SERVICE_STATE_DIR"])
+    processes = Path(environment["ASE_TEST_PROCESS_DIRECTORY"])
+
+    try:
+        started = _run(launcher, environment, "start")
+        assert started.returncode == 0, started.stderr
+        pid = (state / "ase-console.pid").read_text(encoding="utf-8").splitlines()[0]
+        project = launcher.parents[1]
+        (processes / f"{pid}.command").write_text(
+            f"{project}/.venv/bin/python3 .venv/bin/ase-console\n",
+            encoding="utf-8",
+        )
+
+        restarted = _run(launcher, environment, "restart")
+
+        assert restarted.returncode == 0, restarted.stderr
+        assert "ase-console stopped" in restarted.stdout
+        assert "ase-console started" in restarted.stdout
+        assert _run(launcher, environment, "status").returncode == 0
+    finally:
+        _run(launcher, environment, "stop")
+
+
 def test_service_launcher_rejects_invalid_invocations(tmp_path: Path) -> None:
     launcher, environment = _launcher(tmp_path, executable=False)
 
@@ -335,6 +411,21 @@ def test_service_launcher_rejects_invalid_invocations(tmp_path: Path) -> None:
     unsafe_state = _run(launcher, unsafe_environment, "status")
     assert unsafe_state.returncode == 2
     assert "absolute path" in unsafe_state.stderr
+
+    root_environment = {**environment, "ASE_SERVICE_STATE_DIR": "/"}
+    root_state = _run(launcher, root_environment, "status")
+    assert root_state.returncode == 2
+    assert "unsafe service state directory" in root_state.stderr
+
+    target = tmp_path / "state-target"
+    target.mkdir()
+    state_link = tmp_path / "state-link"
+    state_link.symlink_to(target, target_is_directory=True)
+    symlink_environment = {**environment, "ASE_SERVICE_STATE_DIR": str(state_link)}
+    symlink_state = _run(launcher, symlink_environment, "status")
+    assert symlink_state.returncode == 2
+    assert "unsafe service state directory" in symlink_state.stderr
+    assert list(target.iterdir()) == []
 
 
 def test_service_launcher_loads_runtime_environment_next_to_config(tmp_path: Path) -> None:

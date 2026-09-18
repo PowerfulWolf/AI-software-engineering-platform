@@ -97,10 +97,26 @@ process_matches_executable() {
   candidate_executable=$2
   process_exists "$candidate_pid" || return 1
   command_line=$(ps -p "$candidate_pid" -o command= 2>/dev/null || true)
-  case "$command_line" in
-    *"$candidate_executable"*) return 0 ;;
-    *) return 1 ;;
-  esac
+  python3 - "$candidate_executable" "$command_line" <<'PY'
+import re
+import shlex
+import sys
+from pathlib import Path
+
+executable = sys.argv[1]
+try:
+    arguments = shlex.split(sys.argv[2])
+except ValueError:
+    raise SystemExit(1)
+if arguments == [executable]:
+    raise SystemExit(0)
+if len(arguments) == 2 and arguments[1] in {executable, ".venv/bin/ase-console"}:
+    interpreter = Path(arguments[0])
+    expected_bin = Path(executable).parent
+    if interpreter.parent == expected_bin and re.fullmatch(r"python(?:\d+(?:\.\d+)*)?", interpreter.name):
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
 }
 
 is_our_process() {
@@ -170,14 +186,18 @@ except ValueError:
     raise SystemExit(1)
 if arguments == [script, "supervise"]:
     raise SystemExit(0)
-if len(arguments) == 3 and arguments[0].rsplit("/", 1)[-1] == "sh":
+if len(arguments) == 3 and arguments[0] in {"sh", "/bin/sh", "/usr/bin/sh"}:
     raise SystemExit(0 if arguments[1:] == [script, "supervise"] else 1)
 raise SystemExit(1)
 PY
 }
 
 start_supervisor() {
-  if supervisor_pid=$(read_supervisor_pid 2>/dev/null); then
+  if [ -f "$SUPERVISOR_PID_FILE" ]; then
+    supervisor_pid=$(read_supervisor_pid 2>/dev/null) || {
+      echo "error: invalid supervisor PID record; no process replaced" >&2
+      return 1
+    }
     if is_supervisor_process "$supervisor_pid"; then
       return 0
     fi
@@ -185,8 +205,8 @@ start_supervisor() {
       echo "error: supervisor PID file does not identify the managed service script" >&2
       return 1
     fi
+    rm -f "$SUPERVISOR_PID_FILE"
   fi
-  rm -f "$SUPERVISOR_PID_FILE"
   nohup "$SERVICE_SCRIPT" supervise >>"$LOG_FILE" 2>&1 </dev/null &
   launched_supervisor_pid=$!
   remaining=20

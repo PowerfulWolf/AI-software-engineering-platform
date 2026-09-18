@@ -94,7 +94,13 @@ class PsSupervisorProcessProbe:
             arguments = shlex.split(result.stdout.strip())
         except (OSError, subprocess.SubprocessError, ValueError):
             return False
-        return len(arguments) >= 2 and arguments[-2:] == [str(script), "supervise"]
+        if arguments == [str(script), "supervise"]:
+            return True
+        return (
+            len(arguments) == 3
+            and arguments[0] in {"sh", "/bin/sh", "/usr/bin/sh"}
+            and arguments[1:] == [str(script), "supervise"]
+        )
 
 
 class FileConfigurationLifecycle:

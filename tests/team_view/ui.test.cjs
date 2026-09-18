@@ -1583,6 +1583,18 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   );
   assert.match(browserStorage.get("ase-configuration-apply"), /configuration_apply_/);
   configurationApplyConnectionFailure = false;
+  configurationApplyStatus = "PENDING";
+  vm.runInContext(
+    "configurationApplyInFlight = true; configurationApplyStartedAt = Date.now() - configurationApplyTimeoutMs - 1;",
+    context,
+  );
+  await vm.runInContext("refreshConfigurationApply()", context);
+  assert.match(text(get("content")), /未在预期时间内恢复连接/);
+  assert.equal(
+    vm.runInContext("configurationApplyInFlight", context),
+    false,
+  );
+  assert.match(browserStorage.get("ase-configuration-apply"), /configuration_apply_/);
   configurationApplyFailure = "配置仍已保存，但服务监督器暂不可用。";
   vm.runInContext(
     "settingsSnapshot.restart_required = true; configurationApplyResult = null; render();",

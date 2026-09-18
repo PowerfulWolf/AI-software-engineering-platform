@@ -2204,6 +2204,16 @@ function finishConfigurationApply(result) {
   persistConfigurationApplyPending(null);
   render();
 }
+function expireConfigurationApply() {
+  configurationApplyInFlight = false;
+  configurationApplyStartedAt = null;
+  configurationApplyResult = {
+    kind: "error",
+    message:
+      "Web Console 未在预期时间内恢复连接。配置仍已保存，请使用服务脚本检查状态后安全重试。",
+  };
+  render();
+}
 function reconnectToConfigurationPort(port) {
   const browserLocation = globalThis.location;
   if (
@@ -2232,6 +2242,13 @@ function reconnectToConfigurationPort(port) {
 }
 async function refreshConfigurationApply() {
   if (!configurationApplyInFlight) return;
+  if (
+    configurationApplyStartedAt !== null &&
+    Date.now() - configurationApplyStartedAt >= configurationApplyTimeoutMs
+  ) {
+    expireConfigurationApply();
+    return;
+  }
   try {
     const state = await adminFetch("/api/v1/admin/settings/apply");
     if (
@@ -2270,13 +2287,7 @@ async function refreshConfigurationApply() {
       configurationApplyStartedAt !== null &&
       Date.now() - configurationApplyStartedAt >= configurationApplyTimeoutMs
     ) {
-      configurationApplyInFlight = false;
-      configurationApplyResult = {
-        kind: "error",
-        message:
-          "Web Console 未在预期时间内恢复连接。配置仍已保存，请使用服务脚本检查状态后安全重试。",
-      };
-      render();
+      expireConfigurationApply();
     }
   }
 }

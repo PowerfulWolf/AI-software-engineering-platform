@@ -142,3 +142,37 @@ def test_ps_supervisor_probe_requires_exact_script_and_supervise_mode(
 
     monkeypatch.setattr("ai_software_engineer.web_console.lifecycle.subprocess.run", foreign)
     assert not PsSupervisorProcessProbe().matches(4242, script)
+
+    def adversarial_prefix(
+        command: tuple[str, ...], **_: object
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=f"foreign-wrapper --note {script} supervise\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(
+        "ai_software_engineer.web_console.lifecycle.subprocess.run", adversarial_prefix
+    )
+    assert not PsSupervisorProcessProbe().matches(4242, script)
+
+
+@pytest.mark.parametrize("unsafe_kind", ["root", "symlink"])
+def test_file_lifecycle_rejects_unsafe_root(tmp_path: Path, unsafe_kind: str) -> None:
+    if unsafe_kind == "root":
+        root = Path("/")
+    else:
+        target = tmp_path / "target"
+        target.mkdir()
+        root = tmp_path / "state-link"
+        root.symlink_to(target, target_is_directory=True)
+
+    lifecycle = FileConfigurationLifecycle(root)
+
+    with pytest.raises(ConfigurationApplyError, match="unavailable"):
+        lifecycle.current()
+
+    if unsafe_kind == "symlink":
+        assert list(target.iterdir()) == []
