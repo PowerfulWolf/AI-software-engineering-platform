@@ -232,6 +232,30 @@ def test_runtime_configuration_change_requires_restart(tmp_path: Path) -> None:
     assert snapshot.config.console_port == 8877
 
 
+def test_configuration_apply_token_changes_without_exposing_runtime_secret(
+    tmp_path: Path,
+) -> None:
+    administration = _administration(tmp_path)
+    before = administration.configuration_apply_token()
+    synthetic_dsn = "mysql+pymysql://user:changed@127.0.0.1:3307/database"
+
+    administration.update_settings(
+        UpdateSettingsRequest.model_validate(
+            {
+                "config": administration.runtime_config.to_wire(),
+                "runtime_variables": [
+                    {"environment_name": "TEST_MYSQL_DSN", "value": synthetic_dsn}
+                ],
+            }
+        )
+    )
+    after = administration.configuration_apply_token()
+
+    assert before != after
+    assert len(after) == 64
+    assert synthetic_dsn not in after
+
+
 def test_settings_reject_team_identity_and_name_drift(tmp_path: Path) -> None:
     administration = _administration(tmp_path)
     unknown = administration.runtime_config.model_copy(

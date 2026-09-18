@@ -25,6 +25,15 @@ from .administration import (
     UpdateSpecActivationRequest,
 )
 from .core import ConsoleCommandRejected, ManagerConsolePort, ProjectConsole
+from .lifecycle import (
+    ApplyConfigurationRequest,
+    ConfigurationApplyError,
+    ConfigurationApplyState,
+    ConfigurationApplyStatus,
+    ConfigurationApplyView,
+    ConfigurationLifecycle,
+    FileConfigurationLifecycle,
+)
 from .manager import ManagerConsoleAdapter, TeamConsoleHost
 from .models import (
     CONSOLE_INTENT_ADAPTER,
@@ -58,8 +67,14 @@ __all__ = [
     "CONSOLE_INTENT_ADAPTER",
     "AdministrationError",
     "AgentModelRouteRuntimeStatus",
+    "ApplyConfigurationRequest",
     "CloseRequirementIntent",
     "CodexRuntimeStatus",
+    "ConfigurationApplyError",
+    "ConfigurationApplyState",
+    "ConfigurationApplyStatus",
+    "ConfigurationApplyView",
+    "ConfigurationLifecycle",
     "ConsoleAction",
     "ConsoleAdministration",
     "ConsoleApplication",
@@ -79,6 +94,7 @@ __all__ = [
     "CreateRequirementIntent",
     "DatabaseRuntimeStatus",
     "DeleteRequirementIntent",
+    "FileConfigurationLifecycle",
     "FileConsoleOperationStore",
     "InMemoryConsoleOperationStore",
     "KnowledgeDocumentContentView",

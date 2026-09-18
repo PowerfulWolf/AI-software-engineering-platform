@@ -21,6 +21,7 @@ from ai_software_engineer.work_queue import QueueError
 from .administration import LocalConsoleAdministration
 from .core import ConsoleCommandRejected, ProjectConsole
 from .directories import NativeDirectoryChooser
+from .lifecycle import ConfigurationApplyError, FileConfigurationLifecycle
 from .manager import ManagerConsoleAdapter
 from .models import ConsoleIntent, ConsoleOperation
 from .store import ConsoleOperationNotFound, FileConsoleOperationStore
@@ -132,12 +133,20 @@ def production_console_app(
         environment=variables,
         delivery_runtime_ready=delivery_runtime_ready,
     )
+    try:
+        configuration_lifecycle = FileConfigurationLifecycle.from_environment(variables)
+    except ConfigurationApplyError:
+        configuration_lifecycle = None
     return create_console_app(
         console,
         reader,
         team_id=config.team_id,
         port=selected_port,
         administration=administration,
+        configuration_lifecycle=configuration_lifecycle,
+        configuration_port_override=(
+            int(variables["ASE_CONSOLE_PORT"]) if "ASE_CONSOLE_PORT" in variables else None
+        ),
         directory_chooser=NativeDirectoryChooser(),
         delivery_ready=delivery_runtime_ready,
     )

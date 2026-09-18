@@ -15,12 +15,16 @@ from ai_software_engineer.multi_directory.attachments import RequirementScreensh
 from ai_software_engineer.team_view.models import TeamSnapshot
 from ai_software_engineer.team_workspace import TeamWorkspace
 from ai_software_engineer.web_console import (
+    ConfigurationApplyError,
+    ConfigurationApplyState,
+    ConfigurationApplyStatus,
     ConsoleIntent,
     ConsoleOperation,
     InMemoryConsoleOperationStore,
     LocalConsoleAdministration,
     create_console_app,
 )
+from ai_software_engineer.web_console.administration import SettingsSnapshot
 from ai_software_engineer.web_console.host import production_console_app
 from ai_software_engineer.web_console.transport import _screenshot_body
 
@@ -101,6 +105,49 @@ class _ScreenshotAdministration:
             manifest_sha256="0" * 64,
         )
         return provisional.model_copy(update={"manifest_sha256": provisional.recompute_digest()})
+
+
+class _ApplyAdministration:
+    def __init__(self, *, restart_required: bool = True) -> None:
+        self.restart_required = restart_required
+
+    def settings(self) -> SettingsSnapshot:
+        return SettingsSnapshot(
+            config=ProductionConfig.default(),
+            config_path="/safe/config.json",
+            config_source="saved",
+            restart_required=self.restart_required,
+        )
+
+    def configuration_apply_token(self) -> str:
+        return "a" * 64
+
+
+class _ConfigurationLifecycle:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.state: ConfigurationApplyState | None = None
+
+    def request(self, token_sha256: str) -> ConfigurationApplyState:
+        self.calls.append(token_sha256)
+        if self.state is None:
+            self.state = ConfigurationApplyState(
+                request_id="configuration_apply_" + token_sha256[:32],
+                status=ConfigurationApplyStatus.PENDING,
+                safe_summary="Configuration apply is in progress.",
+            )
+        return self.state
+
+    def current(self) -> ConfigurationApplyState | None:
+        return self.state
+
+
+class _FailingConfigurationLifecycle:
+    def request(self, token_sha256: str) -> ConfigurationApplyState:
+        raise ConfigurationApplyError("mysql+pymysql://user:secret@db/database")
+
+    def current(self) -> ConfigurationApplyState | None:
+        raise ConfigurationApplyError("mysql+pymysql://user:secret@db/database")
 
 
 def _payload(tmp_path: Path, *, name: str = "Frontend delivery") -> dict[str, object]:
@@ -272,6 +319,89 @@ def test_web_transport_rejects_changed_idempotency_key_and_unknown_operation(
     assert first.status_code == 202
     assert changed.status_code == 409
     assert missing.status_code == 404
+
+
+def test_configuration_apply_endpoint_is_empty_typed_and_idempotent() -> None:
+    administration = _ApplyAdministration()
+    lifecycle = _ConfigurationLifecycle()
+    app = create_console_app(
+        _Console(),
+        _Reader(),
+        team_id="team_test",
+        port=8765,
+        administration=administration,  # type: ignore[arg-type]
+        configuration_lifecycle=lifecycle,
+    )
+
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        first = client.post("/api/v1/admin/settings/apply", json={})
+        replay = client.post("/api/v1/admin/settings/apply", json={})
+        status = client.get("/api/v1/admin/settings/apply")
+        rejected = client.post("/api/v1/admin/settings/apply", json={"command": "restart --force"})
+
+    assert first.status_code == replay.status_code == 202
+    assert status.json() == first.json() == replay.json()
+    assert lifecycle.calls == ["a" * 64, "a" * 64]
+    assert first.json()["effective_console_port"] == 8765
+    assert rejected.status_code == 422
+    assert "restart --force" not in rejected.text
+
+
+def test_configuration_apply_uses_server_selected_override_port() -> None:
+    app = create_console_app(
+        _Console(),
+        _Reader(),
+        team_id="team_test",
+        port=8765,
+        administration=_ApplyAdministration(),  # type: ignore[arg-type]
+        configuration_lifecycle=_ConfigurationLifecycle(),
+        configuration_port_override=8877,
+    )
+
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        submitted = client.post("/api/v1/admin/settings/apply", json={})
+        status = client.get("/api/v1/admin/settings/apply")
+
+    assert submitted.json()["effective_console_port"] == 8877
+    assert status.json()["effective_console_port"] == 8877
+
+
+def test_configuration_apply_requires_server_side_restart_eligibility() -> None:
+    lifecycle = _ConfigurationLifecycle()
+    app = create_console_app(
+        _Console(),
+        _Reader(),
+        team_id="team_test",
+        port=8765,
+        administration=_ApplyAdministration(restart_required=False),  # type: ignore[arg-type]
+        configuration_lifecycle=lifecycle,
+    )
+
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        response = client.post("/api/v1/admin/settings/apply", json={})
+
+    assert response.status_code == 409
+    assert lifecycle.calls == []
+
+
+def test_configuration_apply_failure_returns_only_fixed_safe_summaries() -> None:
+    app = create_console_app(
+        _Console(),
+        _Reader(),
+        team_id="team_test",
+        port=8765,
+        administration=_ApplyAdministration(),  # type: ignore[arg-type]
+        configuration_lifecycle=_FailingConfigurationLifecycle(),
+    )
+
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        submitted = client.post("/api/v1/admin/settings/apply", json={})
+        status = client.get("/api/v1/admin/settings/apply")
+
+    assert submitted.status_code == status.status_code == 503
+    assert "secret" not in submitted.text
+    assert "secret" not in status.text
+    assert submitted.json()["error"]["code"] == "APPLY_UNAVAILABLE"
 
 
 def test_console_host_missing_config_starts_with_visible_defaults(

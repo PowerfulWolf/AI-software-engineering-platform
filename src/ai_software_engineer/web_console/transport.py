@@ -37,6 +37,12 @@ from .administration import (
 )
 from .core import ConsoleCommandRejected
 from .directories import DirectoryChooser, DirectorySelectionError
+from .lifecycle import (
+    ApplyConfigurationRequest,
+    ConfigurationApplyError,
+    ConfigurationApplyView,
+    ConfigurationLifecycle,
+)
 from .models import ConsoleIntent, ConsoleOperation, IdempotencyKey
 from .store import ConsoleOperationConflict, ConsoleOperationNotFound
 
@@ -73,6 +79,8 @@ def create_console_app(
     team_id: str,
     port: int = 8765,
     administration: ConsoleAdministration | None = None,
+    configuration_lifecycle: ConfigurationLifecycle | None = None,
+    configuration_port_override: int | None = None,
     directory_chooser: DirectoryChooser | None = None,
     delivery_ready: bool = True,
 ) -> FastAPI:
@@ -628,6 +636,57 @@ def create_console_app(
         except AdministrationError:
             return _error(409, "SETTINGS_REJECTED", "Settings could not be saved safely.")
         return JSONResponse(value.to_wire())
+
+    @app.get("/api/v1/admin/settings/apply")
+    async def configuration_apply_status() -> Response:
+        if configuration_lifecycle is None or administration is None:
+            return _error(404, "NOT_AVAILABLE", "Configuration apply is not available.")
+        try:
+            value = await run_in_threadpool(configuration_lifecycle.current)
+            settings_value = await run_in_threadpool(administration.settings)
+        except (AdministrationError, ConfigurationApplyError):
+            return _error(503, "APPLY_UNAVAILABLE", "Configuration apply status is unavailable.")
+        if value is None:
+            return _error(404, "NOT_FOUND", "No configuration apply request exists.")
+        reconnect_port = configuration_port_override or settings_value.config.console_port
+        return JSONResponse(
+            ConfigurationApplyView.from_state(
+                value, effective_console_port=reconnect_port
+            ).to_wire()
+        )
+
+    @app.post("/api/v1/admin/settings/apply", status_code=202)
+    async def apply_configuration(request: Request) -> Response:
+        if administration is None or configuration_lifecycle is None:
+            return _error(404, "NOT_AVAILABLE", "Configuration apply is not available.")
+        payload = await _json_body(request)
+        if isinstance(payload, Response):
+            return payload
+        try:
+            ApplyConfigurationRequest.model_validate_json(payload)
+            settings_value = await run_in_threadpool(administration.settings)
+            if not settings_value.restart_required:
+                return _error(409, "RESTART_NOT_REQUIRED", "Configuration is already applied.")
+            apply_token = await run_in_threadpool(administration.configuration_apply_token)
+            value = await run_in_threadpool(configuration_lifecycle.request, apply_token)
+        except ValidationError:
+            return _error(422, "INVALID_REQUEST", "Configuration apply input is invalid.")
+        except AdministrationError:
+            return _error(503, "ADMIN_UNAVAILABLE", "Configuration apply is unavailable.")
+        except ConfigurationApplyError:
+            return _error(
+                503,
+                "APPLY_UNAVAILABLE",
+                "Configuration remains saved but could not be applied. "
+                "Use the service script to retry safely.",
+            )
+        reconnect_port = configuration_port_override or settings_value.config.console_port
+        return JSONResponse(
+            ConfigurationApplyView.from_state(
+                value, effective_console_port=reconnect_port
+            ).to_wire(),
+            status_code=202,
+        )
 
     @app.post("/api/v1/admin/settings/test-mysql")
     async def test_mysql_connection(request: Request) -> Response:
