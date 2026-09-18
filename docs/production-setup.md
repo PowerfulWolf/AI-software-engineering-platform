@@ -212,7 +212,9 @@ Agent，即使它们碰巧使用同一模型也不能互相代替或自我批准
 
 1. 在“设置”查看内置/已保存配置，按需维护平台目录、完整 MySQL DSN、模型路由/API Key、七个 Agent
    各自的主模型/备用顺序、Codex、执行开关和端口；用“测试连接”验证 MySQL；
-2. 保存后若显示“需要重启”，执行 `./scripts/ase-console-service.sh restart`，让 Host 绑定新配置；
+2. 保存后若显示“需要重启”，点击“应用配置”。页面只提交空的 typed lifecycle 请求；服务脚本监督器
+   验证受管进程后重建 Host，并在浏览器重连后重新读取状态确认已生效。也可执行
+   `./scripts/ase-console-service.sh restart` 进行人工恢复；
 3. 在“状态”确认 MySQL、Codex、Team workspace 和启用的模型路由已就绪；逐个检查七名 Agent 的
    主模型、备用顺序、Reasoning 和就绪情况，再用独立的“可用模型目录”检查 Provider/凭证；这些是
    配置状态，不代表 Agent 正在执行；
@@ -240,6 +242,23 @@ Agent，即使它们碰巧使用同一模型也不能互相代替或自我批准
 `ase-console` 只监听 loopback。当前可信本机 MVP 为降低使用门槛，会把 DSN/API Key 以 `0600`
 明文保存在配置目录的 `runtime.env`；不要提交或共享该文件，也不要把值写入 launchd plist 或
 systemd unit。后续应以 macOS Keychain / Linux Secret Service 替换存储实现。
+
+“应用配置”只作用于服务端判定为 `restart_required` 的已保存运行配置，不是热加载，也不适用于 Team/
+Project 知识选择或 Spec activation。浏览器不能提交路径、命令、DSN、API key 或环境变量值；状态文件
+只记录稳定请求 ID、`PENDING/SUCCEEDED/FAILED` 和固定安全摘要。重复点击归并到同一请求，监督器对同一
+终态请求不会重复重启。启动失败或 20 秒内无法停止旧进程时，已保存的 `config.json`/`runtime.env`
+保持不变，页面显示脱敏失败摘要；使用 `status`/`logs` 检查后可通过脚本人工 `restart`，脚本不会升级到
+`KILL`，也不会向无法验证的 Console 或监督器 PID 发送信号。监督器记录并验证自身脚本身份；每次子
+Host 启动都在隔离子 shell 中重新加载 `runtime.env`，因此已从该文件删除的密钥不会由监督器残留传递。
+若保存的 Console 端口发生变化，页面会在请求被接受后跳转到同一 loopback host 的服务端有效端口；
+该端口由服务端结合已保存配置与 `ASE_CONSOLE_PORT` 覆盖选择，浏览器不能提供主机或端口。页面只在
+本地保存不透明请求 ID 与有效端口以便跳转或刷新后继续查询；必须同时读到匹配的 `SUCCEEDED` 状态和
+`restart_required=false` 才确认成功。监督器仅在 lifecycle 状态精确匹配同一 `PENDING` 请求时才会
+停止子进程，并以有界等待和属主条件清理避免旧监督器删除替换进程的 PID 记录。
+浏览器等待重启有 30 秒上限；超时后保留不透明请求身份供后续核对，显示固定恢复指引并允许安全重试。
+跨端口重连在同一上限内重复尝试。监督器以原子锁保证单一属主，并按精确参数验证进程；若已领取请求后
+异常退出、`runtime.env` 格式错误或为符号链接，生命周期会收敛为脱敏 `FAILED`，不会永久停留在
+`PENDING`。
 
 <details>
 <summary>兼容 CLI 与逐条诊断流程</summary>

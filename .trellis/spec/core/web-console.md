@@ -435,8 +435,12 @@ ConsoleAdministration.collect_project_learnings(project_id) -> tuple[LearningPro
 ConsoleAdministration.decide_project_learning(project_id, proposal_id, request) -> LearningProposalView
 ConsoleAdministration.settings() -> SettingsSnapshot
 ConsoleAdministration.update_settings(request: UpdateSettingsRequest) -> SettingsSnapshot
+ConsoleAdministration.configuration_apply_token() -> str  # lowercase SHA-256, never returned
 ConsoleAdministration.test_mysql_connection(request: MySqlConnectionRequest) -> MySqlConnectionResult
 ConsoleAdministration.status() -> RuntimeStatusSnapshot
+ConfigurationLifecycle.request(token_sha256: str) -> ConfigurationApplyState
+ConfigurationLifecycle.current() -> ConfigurationApplyState | None
+ConfigurationApplyView = ConfigurationApplyState + effective_console_port
 LocalRuntimeEnvironmentStore.load() -> dict[str, str]
 LocalRuntimeEnvironmentStore.save(values: Mapping[str, str]) -> None
 
@@ -468,6 +472,8 @@ POST /api/v1/admin/projects/<project_id>/learnings/collect
 POST /api/v1/admin/projects/<project_id>/learnings/<proposal_id>/decision
 GET  /api/v1/admin/settings
 PUT  /api/v1/admin/settings
+GET  /api/v1/admin/settings/apply
+POST /api/v1/admin/settings/apply  # body: strict `{}`
 POST /api/v1/admin/settings/test-mysql
 GET  /api/v1/admin/status
 ```
@@ -595,6 +601,32 @@ GET  /api/v1/admin/status
   `restart_required`; the already constructed Host is not mutated or hot-switched. Knowledge upload
   and sidecar selection, Spec activation and Learning decisions are not config saves and do not
   require restart.
+- `POST /api/v1/admin/settings/apply` accepts only the strict empty
+  `ApplyConfigurationRequest`. The server first re-evaluates `restart_required`, derives a one-way token
+  from the saved config/runtime inputs, and submits it to `ConfigurationLifecycle`; the browser cannot
+  provide a command, path, configuration, DSN, credential name/value or request identity. GET on the
+  same path returns only the current request ID, `PENDING/SUCCEEDED/FAILED`, its fixed safe summary,
+  and the server-selected effective loopback Console port used for reconnection.
+- `FileConfigurationLifecycle` requires a live service-supervisor PID and publishes one `0600` request
+  handshake. The token-derived request identity makes same-input submissions idempotent; a pending
+  request excludes a concurrent replacement. A replay of a persisted `PENDING` identity republishes
+  its missing request marker atomically, so a claim interrupted before restart cannot remain stuck.
+  `ase-console-service.sh` consumes each identity once,
+  verifies the supervisor PID plus its exact script identity and the managed child before `TERM`, waits
+  at most 20 seconds without `KILL`, reconstructs the Host from saved `config.json` and `runtime.env`,
+  then atomically records a safe terminal state. Each child launch loads `runtime.env` in a subshell so
+  the long-lived supervisor cannot retain a secret removed by a later Settings save.
+  Browser success requires a matching durable `SUCCEEDED` lifecycle state after reconnecting and
+  observing `restart_required=false`; HTTP acceptance alone is not proof that the new Host started.
+  A terminal `SUCCEEDED` record is historical once the currently saved Settings again report
+  `restart_required=true`: browser initialization must discard that stale pending/in-flight identity
+  and leave the apply action operable for the newer saved configuration. The same check is repeated
+  after lifecycle polling so a save racing with terminal observation cannot leave the button disabled.
+  The browser persists only the opaque accepted request ID and effective port so reload/navigation can
+  resume terminal-state polling. When the saved Console port differs, it navigates to the same loopback
+  host on the server-selected effective port; an `ASE_CONSOLE_PORT` override remains authoritative and
+  is reflected by that port. The lifecycle response never supplies a redirect host. Failure never rolls
+  back saved settings and never records raw subprocess output or secrets in the lifecycle response.
 - Every submitted Settings save has an explicit modal result. A successful PUT opens a success dialog
   that states whether Web Console restart is required. A failed PUT opens an `alertdialog` containing
   the bounded server `error.message` (or the generic client fallback), re-enables save and preserves
@@ -665,6 +697,12 @@ GET  /api/v1/admin/status
 | Settings/runtime variable changed while Host is running | Persist plus `restart_required=true`; no hot mutation |
 | Settings PUT succeeds | show a success dialog and the exact restart requirement returned by `SettingsSnapshot` |
 | Settings browser validation or PUT fails safely | show its exact safe message in an `alertdialog`; keep the draft and allow retry |
+| Apply POST contains any field or restart is not required | 422/409; create no lifecycle request |
+| Supervisor is missing, stale, foreign or has an invalid identity record | 503 fixed safe summary; preserve saved config/runtime.env and send no signal |
+| Same saved-input token is submitted repeatedly or another request is pending | return the existing state; publish no concurrent request |
+| Child stops and replacement remains alive after startup check | atomically record `SUCCEEDED`; browser must still re-read Settings |
+| Prior request is `SUCCEEDED` but current Settings again require restart | discard stale browser pending/in-flight state; keep “应用配置” enabled for the newer save |
+| TERM times out or replacement exits during startup | no KILL; record fixed `FAILED`; preserve saved config/runtime.env |
 
 ### 5. Good / Base / Bad Cases
 
@@ -675,9 +713,14 @@ GET  /api/v1/admin/status
   guidance remains enforceable through its body and the normal QA/Review gates.
 - Base: an invalid Settings submission keeps the edited values in place after its error dialog is
   dismissed, so the operator can correct only the rejected field and retry.
+- Good: a restart-required save produces one opaque request; the verified supervisor replaces the
+  managed child, the reconnected browser observes `restart_required=false`, and no secret enters the
+  request, lifecycle state or response.
+- Base: repeated clicks and HTTP retries return the same pending/terminal identity without a second
+  restart; knowledge selection and Spec activation never render the apply control.
 - Bad: let the browser submit `/etc/passwd`, recursively scan `knowledge/`, keep only an AI summary,
-  return a DSN from the API, accept arbitrary environment names, or change the active Team inside an
-  already-running Delivery Host.
+  return a DSN from the API, accept arbitrary environment names, let the browser supply a restart
+  command/path/token, or change the active Team inside an already-running Delivery Host.
 
 ### 6. Tests Required
 
@@ -687,11 +730,13 @@ GET  /api/v1/admin/status
   duplicate/name/control/size/symlink rejection.
 - `tests/web_console/test_administration.py`: singleton Team, Project catalog/create, config write/read,
   selected knowledge replacement/retirement, Spec retirement, write-only runtime values, safe MySQL
-  probe, Status and restart semantics.
+  probe, Status/restart semantics, and apply-token change without secret reflection.
+- `tests/web_console/test_lifecycle.py`: strict empty request, fixed summaries, supervisor identity,
+  root/symlink rejection, atomic request publication, exact replay and concurrent-request exclusion.
 - `tests/web_console/test_transport.py`: admin verbs, content types/body limits, typed errors and no
   content/secret reflection, native chooser endpoint and screenshot upload, plus verified
-  normalized-content reads; missing config/MySQL must still expose Settings/Status while delivery is
-  `SETUP_REQUIRED`.
+  normalized-content reads; apply POST must re-check restart eligibility and reject browser restart
+  inputs; missing config/MySQL must still expose Settings/Status while delivery is `SETUP_REQUIRED`.
 - `tests/web_console/test_directories.py`: canonical/unique directory output and relative, missing,
   symlink rejection.
 - `tests/manager/test_requirement_attachments.py`: content addressing, tamper detection, exact
@@ -705,7 +750,8 @@ GET  /api/v1/admin/status
   Knowledge pages, modal bounded Background/Spec multi-file selection, role/stage multi-selects,
   optional verification, separate Status tab with seven per-Agent policies and route catalog, shared
   Model Routing selector styling, Settings success/error result dialogs with draft-preserving retry,
-  safe text rendering and long opaque identifier containment.
+  stale terminal apply-state recovery with an operable button, safe text rendering and long opaque
+  identifier containment.
 - `tests/contracts/test_json_schema_contracts.py`: production config/port, knowledge manifests,
   selection/retirement and Spec document/activation/retirement Python-to-Schema parity.
 
@@ -804,6 +850,10 @@ The executable is the repository-local `.venv/bin/ase-console`. PID and log defa
 ```text
 ase-console.pid line 1 = numeric child PID
 ase-console.pid line 2 = absolute repository-local executable that created the record
+ase-console-supervisor.pid line 1 = numeric supervisor PID
+ase-console-supervisor.pid line 2 = absolute `scripts/ase-console-service.sh` identity
+configuration-apply.request = `configuration_apply_` + 32 lowercase hex characters
+configuration-apply.json = request_id + PENDING/SUCCEEDED/FAILED + fixed safe_summary
 ```
 
 ### 3. Contracts
@@ -821,7 +871,25 @@ ase-console.pid line 2 = absolute repository-local executable that created the r
   escalates to KILL automatically.
 - `start` writes both PID and executable identity, treats a verified managed process from another
   checkout as already running, and never overwrites a live unverified PID record with a second
-  process. `status` reports the recorded executable when another checkout owns the managed process.
+  process. It also starts one supervisor whose PID and exact script path must match its live command;
+  a stale/foreign supervisor record is never signaled or overwritten. `status` reports the recorded
+  executable when another checkout owns the managed process.
+- The supervisor consumes a valid apply request once, verifies the managed child, uses only TERM with
+  the same 20-second bound, and starts a replacement from the saved config/runtime environment. Child
+  launch sources `runtime.env` in a subshell so removed managed values do not remain in supervisor
+  memory. Before signaling, it requires the regular lifecycle state file to exactly encode the same
+  request ID with the fixed `PENDING` summary; missing, malformed, symlink, mismatched or non-pending
+  state is never authorization to signal. Terminal state publication is atomic and contains only fixed
+  safe text. A supervisor takes an atomic directory ownership lock and writes its PID/script identity
+  inside that lock before publishing the external PID record; a second supervisor cannot overwrite the
+  owner record. A missing or malformed in-lock owner is never treated as stale because the owner may
+  still be publishing it; reclamation requires a complete owner whose exact process is proven stale.
+  Live command verification tokenizes the command and
+  accepts only the exact script plus `supervise` arguments, never substring matches. On startup, a
+  `PENDING` state whose request marker was already claimed is reconciled to fixed `FAILED`; every child
+  stop/load/launch interruption likewise records `FAILED`, including malformed or symlinked runtime.env.
+  Supervisor shutdown waits boundedly, and trap cleanup removes the PID record only while it
+  still names that supervisor, preventing an old process from deleting its replacement's identity.
 - `restart` is exact `stop` followed by `start`; `status` is read-only apart from preparing its safe
   state directory; `logs` tails the last 100 lines and follows the file.
 - The state directory must be absolute, not `/`, and not a symlink. PID-file symlinks are rejected.
@@ -844,6 +912,11 @@ ase-console.pid line 2 = absolute repository-local executable that created the r
 | Numeric PID with no live process | remove only the stale PID file; report stopped; allow restart |
 | Live PID and recorded executable identify another checkout's managed Console | `restart` stops that exact process, then starts the current checkout |
 | Live PID has no valid recorded executable or command does not match it | send no signal; retain PID file; fail safely |
+| Live supervisor PID lacks the exact recorded script identity/command | send no signal; retain record; fail safely |
+| Invalid/symlink apply request or state | consume no untrusted content; fail safely without signaling a child |
+| Duplicate terminal apply request identity | remove the duplicate request marker; do not restart again |
+| Second supervisor or foreign command containing script/mode text | reject ownership or identity; do not overwrite or signal |
+| Claimed PENDING request or runtime.env load failure | atomically record fixed `FAILED`; keep saved inputs and supervisor recoverable |
 | Child exits during startup | remove its PID record, show bounded log tail, exit 1 |
 | TERM does not stop in 20 seconds | leave process and PID intact; exit 1 |
 | Relative/root/symlink state directory | reject before creating or deleting files |
@@ -852,12 +925,14 @@ ase-console.pid line 2 = absolute repository-local executable that created the r
 
 - Good: start once with defaults, save DSN/provider keys in Settings, restart so the launcher exports
   the canonical runtime file, then use `status`/`logs` for operations.
+- Good: one valid pending apply request replaces one verified child and records `SUCCEEDED`; replaying
+  its terminal identity does not replace the child again.
 - Base: stopping an already stopped service is idempotent; a dead numeric PID is cleaned without
   signaling any process, then `restart` starts a fresh child. A legacy one-line PID remains valid for
   the checkout whose exact executable is running, but cannot authorize a cross-checkout handoff.
-- Bad: use a PID file without process identity validation, hard-code DSN in the script, source an
-  arbitrary/symlink runtime file, treat every `ase-console` command as managed, or issue `kill -9`
-  after a fixed delay.
+- Bad: use a PID file without process identity validation, retain sourced secrets in the long-lived
+  supervisor, hard-code DSN in the script, source an arbitrary/symlink runtime file, treat every
+  `ase-console` command as managed, or issue `kill -9` after a fixed delay.
 
 ### 6. Tests Required
 
@@ -869,6 +944,10 @@ ase-console.pid line 2 = absolute repository-local executable that created the r
   intact.
 - The launcher test must prove that sibling `runtime.env` reaches the child environment without
   printing its value.
+- Apply tests must prove one request produces one replacement PID and a fixed terminal state, terminal
+  replay preserves that PID, removed runtime values do not reach the next child, foreign
+  supervisor/child identities receive no signal, and a contender cannot reclaim the ownership lock
+  while its first owner is still publishing the in-lock identity.
 
 ### 7. Wrong vs Correct
 
@@ -880,6 +959,19 @@ kill -9 "$(cat "$PID_FILE")"
 process_exists "$current_pid" || { rm -f "$PID_FILE"; exit 0; }
 (is_our_process "$current_pid" || is_managed_process "$current_pid") || exit 1
 kill -TERM "$current_pid"
+```
+
+```sh
+# Wrong: source managed secrets into the long-lived supervisor shell.
+. "$RUNTIME_ENV_FILE"
+nohup "$SERVICE_EXECUTABLE" &
+
+# Correct: constrain the managed environment to the child-launch subshell.
+(
+  load_runtime_environment
+  export ASE_CONFIG="$CONFIG_FILE"
+  nohup "$SERVICE_EXECUTABLE" &
+)
 ```
 
 ### 8. Bug analysis: checkout-local identity behind a shared PID file

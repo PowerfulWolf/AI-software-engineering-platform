@@ -322,6 +322,17 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     storedOperations = [],
     createdProjects = [],
     savedSettings = [],
+    configurationApplyRequests = [],
+    configurationApplyFailure = null,
+    configurationApplyConnectionFailure = false,
+    configurationApplyStatus = null,
+    configurationApplyEffectivePort = 8765,
+    settingsRestartRequired = false,
+    assignedLocation = null,
+    assignedLocations = [],
+    locationAssignFailures = 0,
+    browserStorage = new Map(),
+    scheduledTimeouts = [],
     settingsSaveFailure = null,
     mysqlTests = [],
     knowledgeSelections = [],
@@ -611,6 +622,50 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
               created_at: "2026-09-12T00:00:00Z",
             })),
         };
+      if (
+        url === "/api/v1/admin/settings/apply" &&
+        options.method === "POST"
+      ) {
+        configurationApplyRequests.push(JSON.parse(options.body));
+        if (configurationApplyFailure)
+          return {
+            ok: false,
+            json: async () => ({
+              error: { message: configurationApplyFailure },
+            }),
+          };
+        configurationApplyStatus = "PENDING";
+        return {
+          ok: true,
+          json: async () => ({
+            request_id: "configuration_apply_" + "a".repeat(32),
+            status: "PENDING",
+            safe_summary: "Configuration apply is in progress.",
+            effective_console_port: configurationApplyEffectivePort,
+          }),
+        };
+      }
+      if (url === "/api/v1/admin/settings/apply")
+        if (configurationApplyConnectionFailure)
+          throw new Error("connection unavailable");
+      if (url === "/api/v1/admin/settings/apply")
+        return {
+          ok: configurationApplyStatus !== null,
+          json: async () => ({
+            ...(configurationApplyStatus === null
+              ? { error: { message: "No configuration apply request exists." } }
+              : {}),
+            request_id: "configuration_apply_" + "a".repeat(32),
+            status: configurationApplyStatus,
+            safe_summary:
+              configurationApplyStatus === "FAILED"
+                ? "Configuration remains saved but the Console could not be restarted. Use the service script to inspect status and retry safely."
+                : configurationApplyStatus === "SUCCEEDED"
+                  ? "Configuration was applied."
+                  : "Configuration apply is in progress.",
+            effective_console_port: configurationApplyEffectivePort,
+          }),
+        };
       if (url === "/api/v1/admin/settings" && options.method === "PUT") {
         if (settingsSaveFailure)
           return {
@@ -629,7 +684,13 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
         };
       }
       if (url === "/api/v1/admin/settings")
-        return { ok: true, json: async () => structuredClone(settingsFixture) };
+        return {
+          ok: true,
+          json: async () => ({
+            ...structuredClone(settingsFixture),
+            restart_required: settingsRestartRequired,
+          }),
+        };
       if (url === "/api/v1/admin/settings/test-mysql") {
         mysqlTests.push(JSON.parse(options.body));
         return {
@@ -811,13 +872,39 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
         },
       };
     },
-    setTimeout: () => 1,
+    setTimeout: (fn) => {
+      scheduledTimeouts.push(fn);
+      return scheduledTimeouts.length;
+    },
     clearTimeout: () => {},
     setInterval: (fn, ms) => {
       interval = { fn, ms };
     },
     AbortController,
     structuredClone,
+    localStorage: {
+      getItem: (key) => browserStorage.get(key) ?? null,
+      setItem: (key, value) => browserStorage.set(key, value),
+      removeItem: (key) => browserStorage.delete(key),
+    },
+    location: {
+      href: "http://127.0.0.1:8765/",
+      port: "8765",
+      assign: (value) => {
+        assignedLocations.push(value);
+        if (locationAssignFailures > 0) {
+          locationAssignFailures -= 1;
+          throw new Error("navigation unavailable");
+        }
+        assignedLocation = value;
+      },
+    },
+    URL: class extends URL {
+      static createObjectURL() {
+        return "blob:test-screenshot";
+      }
+      static revokeObjectURL() {}
+    },
   });
   vm.runInContext(
     fs.readFileSync(
@@ -1388,12 +1475,126 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   );
   await settingsForm.events.submit({ preventDefault() {} });
   assert.match(text(get("composer")), /设置保存成功/);
-  assert.match(text(get("composer")), /请重启 Web Console/);
+  assert.match(text(get("composer")), /应用配置.*重启 Web Console/);
   const acknowledgeSettingsSuccess = descend(get("composer")).find(
     (node) => node.tag === "button" && node.textContent === "知道了",
   );
   await acknowledgeSettingsSuccess.events.click();
   assert.equal(get("composer").hidden, true);
+  const applyConfiguration = descend(get("content")).find(
+    (node) => node.tag === "button" && node.textContent === "应用配置",
+  );
+  assert.ok(applyConfiguration);
+  await Promise.all([
+    applyConfiguration.events.click(),
+    applyConfiguration.events.click(),
+  ]);
+  assert.deepEqual(configurationApplyRequests, [{}]);
+  assert.match(text(get("content")), /正在重启/);
+  assert.match(browserStorage.get("ase-configuration-apply"), /configuration_apply_/);
+  configurationApplyStatus = "SUCCEEDED";
+  await interval.fn();
+  assert.match(text(get("content")), /配置已应用/);
+  assert.equal(browserStorage.has("ase-configuration-apply"), false);
+  assert.equal(assignedLocation, null);
+  settingsRestartRequired = true;
+  browserStorage.clear();
+  vm.runInContext(
+    "configurationApplyPending = null; configurationApplyInFlight = false; settingsSnapshot.restart_required = true;",
+    context,
+  );
+  await vm.runInContext("resumeConfigurationApply()", context);
+  vm.runInContext("render()", context);
+  assert.equal(
+    vm.runInContext("configurationApplyInFlight", context),
+    false,
+  );
+  const applyAfterStaleSuccess = descend(get("content")).find(
+    (node) => node.tag === "button" && node.textContent === "应用配置",
+  );
+  assert.ok(applyAfterStaleSuccess);
+  assert.equal(applyAfterStaleSuccess.disabled, false);
+  settingsRestartRequired = false;
+  configurationApplyStatus = "PENDING";
+  configurationApplyEffectivePort = 8877;
+  browserStorage.clear();
+  assignedLocation = null;
+  vm.runInContext(
+    "configurationApplyPending = null; configurationApplyInFlight = false;",
+    context,
+  );
+  await vm.runInContext("resumeConfigurationApply()", context);
+  scheduledTimeouts.at(-1)();
+  assert.match(assignedLocation, /127\.0\.0\.1:8877/);
+  assignedLocations.length = 0;
+  assignedLocation = null;
+  locationAssignFailures = 1;
+  vm.runInContext(
+    "configurationApplyInFlight = true; configurationApplyStartedAt = Date.now();",
+    context,
+  );
+  vm.runInContext("reconnectToConfigurationPort(8877)", context);
+  scheduledTimeouts.at(-1)();
+  scheduledTimeouts.at(-1)();
+  assert.equal(assignedLocations.length, 2);
+  assert.match(assignedLocation, /127\.0\.0\.1:8877/);
+  assignedLocation = null;
+  configurationApplyEffectivePort = 8765;
+  vm.runInContext(
+    "configurationApplyPending = null; configurationApplyInFlight = false;",
+    context,
+  );
+  vm.runInContext(
+    "settingsSnapshot.restart_required = true; configurationApplyResult = null; render();",
+    context,
+  );
+  configurationApplyEffectivePort = 8877;
+  await descend(get("content"))
+    .find((node) => node.tag === "button" && node.textContent === "应用配置")
+    .events.click();
+  scheduledTimeouts.at(-1)();
+  assert.match(assignedLocation, /127\.0\.0\.1:8877/);
+  configurationApplyStatus = "FAILED";
+  browserStorage.clear();
+  vm.runInContext(
+    "configurationApplyPending = null; configurationApplyInFlight = false;",
+    context,
+  );
+  await vm.runInContext("resumeConfigurationApply()", context);
+  assert.match(text(get("content")), /could not be restarted/);
+  assert.equal(browserStorage.has("ase-configuration-apply"), false);
+  configurationApplyConnectionFailure = true;
+  browserStorage.set(
+    "ase-configuration-apply",
+    JSON.stringify({
+      request_id: "configuration_apply_" + "a".repeat(32),
+      effective_console_port: 8765,
+    }),
+  );
+  vm.runInContext(
+    "configurationApplyPending = readConfigurationApplyPending(); configurationApplyInFlight = true; configurationApplyStartedAt = Date.now() - configurationApplyTimeoutMs - 1;",
+    context,
+  );
+  await vm.runInContext("refreshConfigurationApply()", context);
+  assert.match(text(get("content")), /未在预期时间内恢复连接/);
+  assert.equal(
+    vm.runInContext("configurationApplyInFlight", context),
+    false,
+  );
+  assert.match(browserStorage.get("ase-configuration-apply"), /configuration_apply_/);
+  configurationApplyConnectionFailure = false;
+  configurationApplyFailure = "配置仍已保存，但服务监督器暂不可用。";
+  vm.runInContext(
+    "settingsSnapshot.restart_required = true; configurationApplyResult = null; render();",
+    context,
+  );
+  await descend(get("content"))
+    .find((node) => node.tag === "button" && node.textContent === "应用配置")
+    .events.click();
+  assert.match(text(get("content")), /配置仍已保存/);
+  assert.doesNotMatch(text(get("content")), /deepseek-key/);
+  assert.equal(savedSettings.length, 1);
+  configurationApplyFailure = null;
   assert.deepEqual(savedSettings[0].runtime_variables, [
     {
       environment_name: "ASE_MYSQL_DSN",

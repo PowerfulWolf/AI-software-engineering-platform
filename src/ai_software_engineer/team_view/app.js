@@ -27,6 +27,12 @@ let actionSerial = 0;
 let requestFilter = "active";
 let settingsSection = "general";
 let settingsSaveResult = null;
+const configurationApplyStorageKey = "ase-configuration-apply";
+const configurationApplyTimeoutMs = 30000;
+let configurationApplyPending = readConfigurationApplyPending();
+let configurationApplyInFlight = configurationApplyPending !== null;
+let configurationApplyResult = null;
+let configurationApplyStartedAt = configurationApplyInFlight ? Date.now() : null;
 let selectedAgentId = null;
 let creatingProject = false;
 let editingRequirement = null;
@@ -2165,6 +2171,170 @@ async function adminFetch(url, options = {}) {
   if (!response.ok) throw new Error(payload.error?.message || "管理操作失败。");
   return payload;
 }
+function readConfigurationApplyPending() {
+  try {
+    const stored = globalThis.localStorage?.getItem(configurationApplyStorageKey);
+    const parsed = stored ? JSON.parse(stored) : null;
+    return parsed &&
+      /^configuration_apply_[a-f0-9]{32}$/.test(parsed.request_id) &&
+      Number.isInteger(parsed.effective_console_port)
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
+}
+function persistConfigurationApplyPending(value) {
+  configurationApplyPending = value;
+  try {
+    if (value)
+      globalThis.localStorage?.setItem(
+        configurationApplyStorageKey,
+        JSON.stringify(value),
+      );
+    else globalThis.localStorage?.removeItem(configurationApplyStorageKey);
+  } catch {
+    // Durable recovery is best-effort when browser storage is unavailable.
+  }
+}
+function finishConfigurationApply(result) {
+  configurationApplyInFlight = false;
+  configurationApplyStartedAt = null;
+  configurationApplyResult = result;
+  persistConfigurationApplyPending(null);
+  render();
+}
+function reconnectToConfigurationPort(port) {
+  const browserLocation = globalThis.location;
+  if (
+    !browserLocation ||
+    !Number.isInteger(port) ||
+    String(port) === browserLocation.port
+  )
+    return false;
+  const reconnectUrl = new URL(browserLocation.href);
+  reconnectUrl.port = String(port);
+  const reconnect = () => {
+    try {
+      browserLocation.assign(reconnectUrl.href);
+    } catch {
+      // A failed navigation is retried within the same bounded restart window.
+    }
+    if (
+      configurationApplyInFlight &&
+      configurationApplyStartedAt !== null &&
+      Date.now() - configurationApplyStartedAt < configurationApplyTimeoutMs
+    )
+      setTimeout(reconnect, 2500);
+  };
+  setTimeout(reconnect, 2500);
+  return true;
+}
+async function refreshConfigurationApply() {
+  if (!configurationApplyInFlight) return;
+  try {
+    const state = await adminFetch("/api/v1/admin/settings/apply");
+    if (
+      configurationApplyPending &&
+      state.request_id !== configurationApplyPending.request_id
+    ) {
+      finishConfigurationApply({
+        kind: "error",
+        message: "无法确认已接受的配置应用请求，请使用服务脚本检查状态并安全重试。",
+      });
+      return;
+    }
+    if (state.status === "FAILED") {
+      finishConfigurationApply({ kind: "error", message: state.safe_summary });
+      return;
+    }
+    if (state.status === "SUCCEEDED") {
+      const saved = await adminFetch("/api/v1/admin/settings");
+      settingsSnapshot = saved;
+      if (saved.restart_required) {
+        configurationApplyInFlight = false;
+        configurationApplyResult = null;
+        persistConfigurationApplyPending(null);
+        render();
+        return;
+      }
+      settingsDraft = structuredClone(saved.config);
+      normalizeAgentModelRoutes(settingsDraft);
+      finishConfigurationApply({
+        kind: "success",
+        message: "配置已应用，Web Console 已使用保存的运行配置重新启动。",
+      });
+    }
+  } catch {
+    if (
+      configurationApplyStartedAt !== null &&
+      Date.now() - configurationApplyStartedAt >= configurationApplyTimeoutMs
+    ) {
+      configurationApplyInFlight = false;
+      configurationApplyResult = {
+        kind: "error",
+        message:
+          "Web Console 未在预期时间内恢复连接。配置仍已保存，请使用服务脚本检查状态后安全重试。",
+      };
+      render();
+    }
+  }
+}
+async function resumeConfigurationApply() {
+  if (!configurationApplyPending) {
+    try {
+      const state = await adminFetch("/api/v1/admin/settings/apply");
+      if (
+        state.status === "PENDING" ||
+        (state.status === "SUCCEEDED" && !settingsSnapshot?.restart_required) ||
+        (state.status === "FAILED" && settingsSnapshot?.restart_required)
+      ) {
+        persistConfigurationApplyPending({
+          request_id: state.request_id,
+          effective_console_port: state.effective_console_port,
+        });
+        configurationApplyInFlight = true;
+        configurationApplyStartedAt = Date.now();
+        if (
+          state.status !== "FAILED" &&
+          reconnectToConfigurationPort(state.effective_console_port)
+        )
+          return;
+      }
+    } catch {
+      return;
+    }
+  }
+  if (configurationApplyPending) await refreshConfigurationApply();
+}
+async function applySavedConfiguration() {
+  if (configurationApplyInFlight) return;
+  configurationApplyInFlight = true;
+  configurationApplyStartedAt = Date.now();
+  configurationApplyResult = null;
+  render();
+  try {
+    const state = await adminFetch("/api/v1/admin/settings/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    persistConfigurationApplyPending({
+      request_id: state.request_id,
+      effective_console_port: state.effective_console_port,
+    });
+    if (reconnectToConfigurationPort(state.effective_console_port)) return;
+    setTimeout(refreshConfigurationApply, 1000);
+  } catch (error) {
+    finishConfigurationApply({
+      kind: "error",
+      message:
+        error instanceof Error
+          ? error.message
+          : "配置仍已保存，但无法请求重启 Web Console。",
+    });
+  }
+}
 async function loadKnowledge() {
   if (knowledgeMode === "specs") {
     const base =
@@ -2209,6 +2379,7 @@ async function loadAdministration() {
     normalizeAgentModelRoutes(settingsDraft);
     runtimeVariablesDraft = {};
     administrationAvailable = true;
+    await resumeConfigurationApply();
     try {
       administrationProjects = await adminFetch("/api/v1/admin/projects");
     } catch {
@@ -3476,6 +3647,29 @@ function renderSettings(content) {
         "admin-notice",
       ),
     );
+  if (settingsSnapshot.restart_required) {
+    const applyNotice = el("div", undefined, "admin-notice configuration-apply-notice");
+    applyNotice.append(
+      el(
+        "span",
+        configurationApplyInFlight
+          ? "配置已保存，正在重启并等待 Web Console 恢复连接。"
+          : "配置已保存，但尚未应用到当前 Web Console。",
+      ),
+    );
+    const apply = button(
+      configurationApplyInFlight ? "正在应用…" : "应用配置",
+      applySavedConfiguration,
+      "primary",
+    );
+    apply.disabled = configurationApplyInFlight;
+    applyNotice.append(apply);
+    content.append(applyNotice);
+  } else if (configurationApplyResult?.kind === "success") {
+    content.append(el("div", configurationApplyResult.message, "admin-notice"));
+  }
+  if (configurationApplyResult?.kind === "error")
+    content.append(el("div", configurationApplyResult.message, "operation-error"));
 
   const workspace = el("div", undefined, "settings-workspace");
   const navigation = el("aside", undefined, "settings-navigation");
@@ -3581,7 +3775,7 @@ function renderSettings(content) {
       settingsSaveResult = {
         kind: "success",
         message: saved.restart_required
-          ? "保存成功。请重启 Web Console 使新配置生效。"
+          ? "保存成功。请使用“应用配置”重启 Web Console 并使新配置生效。"
           : "保存成功，当前配置未改变。",
       };
       render();
@@ -4602,6 +4796,8 @@ async function refresh(projectId, includeRuntimeStatus = false) {
     const selectedBeforeRefresh = selected;
     snapshot = next;
     await refreshOperations();
+    if (configurationApplyInFlight && page === "settings")
+      await refreshConfigurationApply();
     if (
       selectedBeforeRefresh?.kind === "request" &&
       !requestById(selectedBeforeRefresh.id)

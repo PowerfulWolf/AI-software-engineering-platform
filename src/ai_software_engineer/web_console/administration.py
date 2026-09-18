@@ -7,6 +7,7 @@ import shutil
 import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from hashlib import sha256
 from pathlib import Path
 from threading import Lock
 from typing import Annotated, Literal, Protocol
@@ -332,6 +333,7 @@ class ConsoleAdministration(Protocol):
     ) -> LearningProposalView: ...
     def settings(self) -> SettingsSnapshot: ...
     def update_settings(self, request: UpdateSettingsRequest) -> SettingsSnapshot: ...
+    def configuration_apply_token(self) -> str: ...
     def test_mysql_connection(self, request: MySqlConnectionRequest) -> MySqlConnectionResult: ...
     def status(self) -> RuntimeStatusSnapshot: ...
 
@@ -822,6 +824,24 @@ class LocalConsoleAdministration:
             except RuntimeEnvironmentError as error:
                 raise AdministrationError("runtime environment could not be saved") from error
         return self.settings()
+
+    def configuration_apply_token(self) -> str:
+        """Identify the saved restart inputs without exposing their values."""
+
+        try:
+            stored = self._runtime_environment.load()
+        except RuntimeEnvironmentError as error:
+            raise AdministrationError("runtime environment is invalid") from error
+        digest = sha256()
+        digest.update(self._saved_config.model_dump_json().encode("utf-8"))
+        for name, value in sorted(stored.items()):
+            encoded_name = name.encode("utf-8")
+            encoded_value = value.encode("utf-8")
+            digest.update(len(encoded_name).to_bytes(4, "big"))
+            digest.update(encoded_name)
+            digest.update(len(encoded_value).to_bytes(8, "big"))
+            digest.update(encoded_value)
+        return digest.hexdigest()
 
     def test_mysql_connection(self, request: MySqlConnectionRequest) -> MySqlConnectionResult:
         dsn = request.dsn
