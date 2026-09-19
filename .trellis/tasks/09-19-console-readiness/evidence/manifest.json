@@ -1,0 +1,135 @@
+{
+  "kind": "engineering-evidence-archive",
+  "archived_on": "2026-09-19",
+  "integration_revision": "c280310062240b9fb673b8ca6cc25bedb310ec4d",
+  "candidate_app_sha256": "bbebc6578d4f89921ba82a46af93d5e31cef35abf7fad843e42e5e1a49c824be",
+  "files": [
+    {
+      "source_path": "/private/tmp/ase-console-readiness-qa.md",
+      "path": "ase-console-readiness-qa.md",
+      "sha256": "a520f74772f48f465b40545beb77d9ef6271c023c1ed20cfc3782f890d034305",
+      "bytes": 5440
+    },
+    {
+      "source_path": "/private/tmp/ase-console-readiness-qa-v2.md",
+      "path": "ase-console-readiness-qa-v2.md",
+      "sha256": "fa9d7d1875705fbf128b0e1f1c253398e8ec3bc0ae4317fc62166c211af9e92f",
+      "bytes": 4819
+    },
+    {
+      "source_path": "/private/tmp/ase-console-readiness-qa-v3.md",
+      "path": "ase-console-readiness-qa-v3.md",
+      "sha256": "8949aa2703a481c4119859071ec6bfb6b847b713fb5ee165e51d7b828a6a17c1",
+      "bytes": 4587
+    },
+    {
+      "source_path": "/private/tmp/ase-console-readiness-qa-v4.md",
+      "path": "ase-console-readiness-qa-v4.md",
+      "sha256": "6b071a44e5cd43c7c6125f800e424c366b4436e019813bdefc76325f540cad6c",
+      "bytes": 4535
+    },
+    {
+      "source_path": "/private/tmp/ase-console-readiness-review.md",
+      "path": "ase-console-readiness-review.md",
+      "sha256": "413df0b4c65bb8ae5b27e62ce8c0e82a7704ec427c935152f17b1182fbac4a6f",
+      "bytes": 4969
+    },
+    {
+      "source_path": "/private/tmp/ase-console-readiness-review-v2.md",
+      "path": "ase-console-readiness-review-v2.md",
+      "sha256": "e5faa4b59feb6a291351e4c3b2a7c7fcd73527db78a2bd0e8fd25e1a19cbfd71",
+      "bytes": 4026
+    },
+    {
+      "source_path": "/private/tmp/ase-console-readiness-review-v3.md",
+      "path": "ase-console-readiness-review-v3.md",
+      "sha256": "138ad4a4e70dc8c92897da41d6bed19a3aac964c0ac3bb98c472fbb52e0908c8",
+      "bytes": 4520
+    },
+    {
+      "source_path": "/private/tmp/ase-console-readiness-baseline-tests.log",
+      "path": "ase-console-readiness-baseline-tests.log.gz",
+      "sha256": "1d452f89694a46ee5518f695ea613520bf3f7bd081ad1e6e4442f1a94a04b427",
+      "bytes": 13286,
+      "encoding": "gzip",
+      "stored_sha256": "c51f773e0f101b5bd14f6340d27814728ba512d9efb23f4be90eb97967d94a87"
+    },
+    {
+      "source_path": "/private/tmp/ase-console-readiness-before-busy-fix-tests.log",
+      "path": "ase-console-readiness-before-busy-fix-tests.log.gz",
+      "sha256": "21947e86c2a063c327456ad25931988533bf15a644ab02b181ca4ecf5fdd1c84",
+      "bytes": 2642,
+      "encoding": "gzip",
+      "stored_sha256": "4250cfc46162956df59778fa7810737601acb57aaa6e8d1e5ef0f3300613928d"
+    },
+    {
+      "source_path": "/private/tmp/ase-console-readiness-before-confirmation-fix-tests.log",
+      "path": "ase-console-readiness-before-confirmation-fix-tests.log.gz",
+      "sha256": "3c86169aedf5e25ac9aeabcfb1a16682827ef7b0025074c18a01e4048611742c",
+      "bytes": 2750,
+      "encoding": "gzip",
+      "stored_sha256": "eceffffadaac6ff6b7d577ffe2a01f75bc7cac1ad60797a18e4f735c761fc866"
+    },
+    {
+      "source_path": "/private/tmp/ase-console-readiness-before-review-fixes-tests.log",
+      "path": "ase-console-readiness-before-review-fixes-tests.log.gz",
+      "sha256": "d43bfa5b40ec1388e4194fccb57c2959c9bf51ab2eb02cb5f7410b097b58c8c2",
+      "bytes": 6491,
+      "encoding": "gzip",
+      "stored_sha256": "4dd965d57fef5ba8609c6a2e7a98699c242fbdd17d001e09e73f2abe668bcafc"
+    },
+    {
+      "source_path": "/private/tmp/ase-console-readiness-qa-tests.log",
+      "path": "ase-console-readiness-qa-tests.log.gz",
+      "sha256": "ef51206c4b431852df9eafb5dfff11cf685a7c5ceb6dc42643c1babba36e1796",
+      "bytes": 1662,
+      "encoding": "gzip",
+      "stored_sha256": "d93cf1067b518b353f97d39e08357b3f2ae01450d778837d0fe044753552dc97"
+    },
+    {
+      "source_path": "/private/tmp/ase-console-readiness-qa-v2-tests.log",
+      "path": "ase-console-readiness-qa-v2-tests.log.gz",
+      "sha256": "4e782782d24cb6ad0fc0fc03d9f4de87deaf66214ee226d14709d98434d5c44b",
+      "bytes": 2196,
+      "encoding": "gzip",
+      "stored_sha256": "9a7bb2412c098a65116bc7fc3d543af7c52cb44e5c2825fd8fbfc753ada30fe8"
+    },
+    {
+      "source_path": "/private/tmp/ase-console-readiness-qa-v3-tests.log",
+      "path": "ase-console-readiness-qa-v3-tests.log.gz",
+      "sha256": "24879541e575a2feae80adf1be9599a73426e4e97839ff9623759ccad36384f8",
+      "bytes": 2407,
+      "encoding": "gzip",
+      "stored_sha256": "a8dbbe0ec50c817a3717f7ed8853ccc10e00e7a56539dc6bd86ded520ab7db13"
+    },
+    {
+      "source_path": "/private/tmp/ase-console-readiness-qa-v4-tests.log",
+      "path": "ase-console-readiness-qa-v4-tests.log.gz",
+      "sha256": "5fcff90724fc2109ef5c89eae421461bb1828f17527cfdc9023453a2d6f47b28",
+      "bytes": 2500,
+      "encoding": "gzip",
+      "stored_sha256": "077335ca47a46586d6721faee034ef2871adcd1322a08988c5edccecc5a864bf"
+    }
+  ],
+  "reproductions": {
+    "path": "reproductions.tar.gz",
+    "sha256": "dad2dd6eb880cb5187130b86cdbaec5eb94cc416896892e779fd9bf2e9ae4aa0",
+    "members": [
+      {
+        "source_path": "/private/tmp/ase-console-readiness-before-review-fixes.js",
+        "member": "ase-console-readiness-before-review-fixes.js",
+        "sha256": "a1496d6bb47d510b3d95d55b7d6ab61a14ef18139e872705008908edda415c42"
+      },
+      {
+        "source_path": "/private/tmp/ase-console-readiness-before-busy-fix.js",
+        "member": "ase-console-readiness-before-busy-fix.js",
+        "sha256": "bc4fe19f76951dfc265b3ebc96d0c863208f71f5bc8b7885f2c193505b710257"
+      },
+      {
+        "source_path": "/private/tmp/ase-console-readiness-before-confirmation-fix.js",
+        "member": "ase-console-readiness-before-confirmation-fix.js",
+        "sha256": "a20ba889600ee7918f1e6d66ccd7389feed46d145fe515bbcb3a87184ce7f8c6"
+      }
+    ]
+  }
+}

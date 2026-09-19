@@ -1,0 +1,21 @@
+{
+  "id": "documentation-cleanup-20260919",
+  "title": "Documentation navigation, historical records and evidence cleanup",
+  "status": "completed",
+  "phase": "verified",
+  "baseline": "c280310062240b9fb673b8ca6cc25bedb310ec4d",
+  "allowed_paths": [
+    "README.md",
+    "docs/**",
+    ".trellis/tasks/**",
+    ".trellis/README.md",
+    ".trellis/spec/core/python-runtime.md",
+    ".gitignore",
+    "artifacts/runs/.gitkeep",
+    "src/ai_software_engineer/prompts/.gitkeep"
+  ],
+  "remaining": [],
+  "completed_on": "2026-09-19",
+  "verification_report": ".trellis/tasks/09-19-documentation-cleanup/verification.json",
+  "local_cleanup_report": ".trellis/tasks/09-19-documentation-cleanup/local-cleanup.json"
+}

@@ -12,10 +12,21 @@
 Archive 是组织记忆的一部分，不依赖任何单个 Agent 的会话。历史事实需要更正时，应保留原始
 结论并明确写出更正原因、日期和证据，不能静默改写已经发生的交付记录。
 
+历史快照不作为当前规范或操作指令。当前入口见 [文档分类](../README.md)；
+旧路径、迁移位置与摘要见 [迁移表](document-migrations.json)。
+
 ## 归档索引
 
 | 日期 | 基线 | 范围 | 记录 |
 |---|---|---|---|
+| 2026-09-19 | c280310 原文快照 | 原 M0–M9、首批任务与旧 T047 编号 | [旧路线快照](2026-09-19-foundation-roadmap-snapshot.md) |
+| 2026-09-19 | 977a9c2；正文来源 c280310 | Planner、主动知识、增量索引续作与验证 | [T047–T049 交付记录](2026-09-19-t047-t049-continuation.md) |
+| 2026-09-18 | c280310 原文快照 | Console 恢复事故、存量处置及后续更正 | [恢复事故](2026-09-18-console-recovery-incidents.md) |
+| 2026-09-08 | 原记录所列证据 | Coder deadline 与 finalization | [完成预算](2026-09-08-coder-completion-budget.md) |
+| 2026-09-08 | 原记录所列证据 | 已初始化组织的模型策略版本 | [模型策略](2026-09-08-model-policy-revisions.md) |
+| 2026-09-08 | 原记录所列证据 | 生产角色调用时限 | [角色超时](2026-09-08-production-role-timeouts.md) |
+| 2026-09-08 | 原记录所列证据 | 捕获源权限与当前恢复权限 | [恢复权限演进](2026-09-08-t044-recovery-permission-evolution.md) |
+| 原文未标日期 | 原记录所列证据 | Codex 输出 Schema 修复 | [输出 Schema](codex-output-schema-repair.md) |
 | 2026-09-12 | 本记录所在提交 | M18；零配置设置入口、受控运行变量与独立运行状态页 | [Runtime settings and status](2026-09-12-runtime-settings-status.md) |
 | 2026-09-12 | 本记录所在提交 | M16；Web Console 公司接入、本地文档知识库和无密钥生产设置 | [Company administration and document knowledge](2026-09-12-company-administration-document-knowledge.md) |
 | 2026-09-09 | 本记录所在提交 | T047；Delivery 统一 resume、失败 Coder 接手、候选复核/修复循环与实时看板 | [Universal delivery resume](2026-09-09-universal-delivery-resume.md) |

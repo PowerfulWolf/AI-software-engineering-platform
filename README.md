@@ -759,23 +759,9 @@ MySQL 集成测试需设置 `ASE_TEST_MYSQL_DSN`，并且必须指向名称为 `
 
 ## 文档导航
 
-- 生产部署与最新使用：[`docs/production-setup.md`](docs/production-setup.md)
-- 架构与边界：[`docs/architecture.md`](docs/architecture.md)
-- 状态机：[`docs/state-machine.md`](docs/state-machine.md)
-- 契约与权限：[`docs/contracts.md`](docs/contracts.md)
-- Prompt 协议：[`docs/prompt-protocol.md`](docs/prompt-protocol.md)
-- Context：[`docs/context-routing.md`](docs/context-routing.md)
-- Git 隔离：[`docs/git-worktree.md`](docs/git-worktree.md)
-- Orchestrator：[`docs/orchestration.md`](docs/orchestration.md)
-- 失败路由：[`docs/failure-routing.md`](docs/failure-routing.md)
-- 评估：[`docs/evaluation.md`](docs/evaluation.md)
-- CLI 使用：[`docs/cli.md`](docs/cli.md)
-- Runtime 配置与 task run：[`docs/runtime.md`](docs/runtime.md)
-- Project workspace 与 Agent 工作可视化：[`docs/visualization.md`](docs/visualization.md)
-- 里程碑：[`docs/milestones.md`](docs/milestones.md)
-- 阶段成果与提交证据：[`docs/archive/README.md`](docs/archive/README.md)
-- 规划、主动知识与索引运行：[`docs/planning-knowledge-operations.md`](docs/planning-knowledge-operations.md)
-- T047–T049 续作交付记录：[`docs/t047-t049-continuation.md`](docs/t047-t049-continuation.md)
-- 语言架构决策：[`docs/decisions/0001-python-control-plane.md`](docs/decisions/0001-python-control-plane.md)
-- Agent Workforce 决策：[`docs/decisions/0002-organization-owned-agent-workforce.md`](docs/decisions/0002-organization-owned-agent-workforce.md)
-- Codex bootstrap：[`AGENTS.md`](AGENTS.md)
+- [分类索引](docs/README.md)：使用、运维、架构、协议、开发、决策与历史。
+- [生产部署与配置](docs/production-setup.md)、[团队工作台](docs/visualization.md)。
+- [总体架构](docs/architecture.md)、[角色与 Artifact 契约](docs/contracts.md)。
+- [当前路线与待验收事项](docs/milestones.md)、[工程任务索引](.trellis/tasks/README.md)。
+- [历史归档与交付证据](docs/archive/README.md)。
+- [工程规范](.trellis/spec/index.md)、[领域术语](CONTEXT.md)、[Codex 开发指引](AGENTS.md)。

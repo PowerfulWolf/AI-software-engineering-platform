@@ -1,0 +1,16 @@
+{
+  "id": "09-10-qa-environment-recovery",
+  "title": "QA environment-aware verification recovery",
+  "status": "legacy_unknown",
+  "phase": "needs_status_verification",
+  "metadata_recorded_on": "2026-09-19",
+  "status_reason": "Historical documents exist, but no task.json was recorded. Completion and acceptance are not inferred.",
+  "source_documents": [
+    "design.md",
+    "implement.md",
+    "prd.md"
+  ],
+  "remaining": [
+    "reconcile original implementation, integration and verification evidence before changing status"
+  ]
+}

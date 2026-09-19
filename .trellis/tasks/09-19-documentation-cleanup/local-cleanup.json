@@ -1,0 +1,164 @@
+{
+  "root": "/Users/zhangjunshuai/workspace/code/AI-software-engineering-platform",
+  "removed": [
+    {
+      "path": ".pytest_cache",
+      "kind": "regenerable_cache",
+      "bytes": 1934
+    },
+    {
+      "path": "src/ai_software_engineer/__pycache__",
+      "kind": "regenerable_cache",
+      "bytes": 386026
+    },
+    {
+      "path": "src/ai_software_engineer/agents/__pycache__",
+      "kind": "regenerable_cache",
+      "bytes": 186336
+    },
+    {
+      "path": "src/ai_software_engineer/artifacts/__pycache__",
+      "kind": "regenerable_cache",
+      "bytes": 16900
+    },
+    {
+      "path": "src/ai_software_engineer/config/__pycache__",
+      "kind": "regenerable_cache",
+      "bytes": 28616
+    },
+    {
+      "path": "src/ai_software_engineer/context/__pycache__",
+      "kind": "regenerable_cache",
+      "bytes": 39467
+    },
+    {
+      "path": "src/ai_software_engineer/design/__pycache__",
+      "kind": "regenerable_cache",
+      "bytes": 90850
+    },
+    {
+      "path": "src/ai_software_engineer/domain/__pycache__",
+      "kind": "regenerable_cache",
+      "bytes": 126393
+    },
+    {
+      "path": "src/ai_software_engineer/evaluation/__pycache__",
+      "kind": "regenerable_cache",
+      "bytes": 105905
+    },
+    {
+      "path": "src/ai_software_engineer/evidence/__pycache__",
+      "kind": "regenerable_cache",
+      "bytes": 55306
+    },
+    {
+      "path": "src/ai_software_engineer/git/__pycache__",
+      "kind": "regenerable_cache",
+      "bytes": 77831
+    },
+    {
+      "path": "src/ai_software_engineer/knowledge/__pycache__",
+      "kind": "regenerable_cache",
+      "bytes": 167129
+    },
+    {
+      "path": "src/ai_software_engineer/manager/__pycache__",
+      "kind": "regenerable_cache",
+      "bytes": 490013
+    },
+    {
+      "path": "src/ai_software_engineer/multi_directory/__pycache__",
+      "kind": "regenerable_cache",
+      "bytes": 218162
+    },
+    {
+      "path": "src/ai_software_engineer/orchestration/__pycache__",
+      "kind": "regenerable_cache",
+      "bytes": 93999
+    },
+    {
+      "path": "src/ai_software_engineer/planning/__pycache__",
+      "kind": "regenerable_cache",
+      "bytes": 128903
+    },
+    {
+      "path": "src/ai_software_engineer/product/__pycache__",
+      "kind": "regenerable_cache",
+      "bytes": 165167
+    },
+    {
+      "path": "src/ai_software_engineer/projection/__pycache__",
+      "kind": "regenerable_cache",
+      "bytes": 61397
+    },
+    {
+      "path": "src/ai_software_engineer/recovery/__pycache__",
+      "kind": "regenerable_cache",
+      "bytes": 365008
+    },
+    {
+      "path": "src/ai_software_engineer/scheduling/__pycache__",
+      "kind": "regenerable_cache",
+      "bytes": 41357
+    },
+    {
+      "path": "src/ai_software_engineer/store/__pycache__",
+      "kind": "regenerable_cache",
+      "bytes": 43660
+    },
+    {
+      "path": "src/ai_software_engineer/team_view/__pycache__",
+      "kind": "regenerable_cache",
+      "bytes": 69332
+    },
+    {
+      "path": "src/ai_software_engineer/tools/__pycache__",
+      "kind": "regenerable_cache",
+      "bytes": 20932
+    },
+    {
+      "path": "src/ai_software_engineer/web_console/__pycache__",
+      "kind": "regenerable_cache",
+      "bytes": 231008
+    },
+    {
+      "path": "src/ai_software_engineer/work_queue/__pycache__",
+      "kind": "regenerable_cache",
+      "bytes": 84036
+    },
+    {
+      "path": "tests/__pycache__",
+      "kind": "regenerable_cache",
+      "bytes": 6034
+    },
+    {
+      "path": "tests/web_console/__pycache__",
+      "kind": "regenerable_cache",
+      "bytes": 94161
+    },
+    {
+      "path": "artifacts/evidence",
+      "kind": "empty_directory"
+    },
+    {
+      "path": "artifacts/run-manifests",
+      "kind": "empty_directory"
+    },
+    {
+      "path": "src/ai_software_engineer/project_groups",
+      "kind": "empty_directory"
+    },
+    {
+      "path": "worktrees",
+      "kind": "ignored_placeholder_only"
+    }
+  ],
+  "skipped": [],
+  "untouched": [
+    ".venv",
+    ".git",
+    "external worktrees",
+    "platform data",
+    "MySQL"
+  ]
+}

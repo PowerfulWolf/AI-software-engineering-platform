@@ -661,7 +661,7 @@ FileContextBuilder(
 - `tests/context/test_store.py`：内存/文件 Store round-trip、built_at 等价重放、canonical ID
   冲突、非法 lookup ID、持久化篡改和 unknown manifest。
 - `tests/orchestration/test_context_registry.py`：FileRunContextBuilder 返回值与登记 manifest 完全一致。
-- `tests/contracts/test_json_schema_contracts.py`：ContextBundle 正例与缺失 section hash/sections 反例必须校验 [`schemas/context.schema.json`](../../schemas/context.schema.json)。
+- `tests/contracts/test_json_schema_contracts.py`：ContextBundle 正例与缺失 section hash/sections 反例必须校验 [`schemas/context.schema.json`](../../../schemas/context.schema.json)。
 - Ruff、strict mypy、完整 pytest、`uv lock --check`、`uv build` 和 `git diff --check` 是合并门禁。
 
 ### 10.7 T042: Production context composition

@@ -1,0 +1,16 @@
+{
+  "id": "universal-delivery-resume",
+  "title": "Universal delivery resume",
+  "status": "legacy_unknown",
+  "phase": "needs_status_verification",
+  "metadata_recorded_on": "2026-09-19",
+  "status_reason": "Historical documents exist, but no task.json was recorded. Completion and acceptance are not inferred.",
+  "source_documents": [
+    "design.md",
+    "implement.md",
+    "prd.md"
+  ],
+  "remaining": [
+    "reconcile original implementation, integration and verification evidence before changing status"
+  ]
+}

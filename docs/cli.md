@@ -11,12 +11,12 @@
 显式绝对路径或安全的 `~/custom-ase` 优先；配置加载和此只读命令都不会创建平台目录。目录仅在显式初始化、
 项目准备或交付写入流程中创建；无效显式路径会失败，不会回退到默认位置。
 
-正常用户入口是 `ase request ...`，旧 `ase project ...` 保留兼容：Production Team Host 自动从 `ASE_CONFIG`/默认配置和环境变量装配
+日常用户入口是 Web Console；命令行用于运维、诊断和兼容工作流。兼容接单使用 `ase request ...`，旧 `ase project ...` 保留兼容：Production Team Host 自动从 `ASE_CONFIG`/默认配置和环境变量装配
 MySQL、Team、模型路由、Project/Repository sidecar 与 worktree。`ase task ...`、`ase evaluation ...`、
 `ase handoff ...` 是保留给平台开发、兼容测试和诊断的低层命令。CLI 不绕过 Task、Artifact、
 StateEvent、EvaluationEvent 或 Handoff 的 typed contract。
 
-## 统一项目接单（推荐）
+## 兼容命令行接单
 
 完成一次 [`production-setup.md`](production-setup.md) 配置后：
 
@@ -73,7 +73,10 @@ QA/Reviewer，QA FAIL 或 Review REJECT 会创建关联修复 Task，并重新�
 项目主 checkout 不变。完整首次配置、返回值和候选复核方法见
 [`production-setup.md`](production-setup.md)。
 
-## 默认目录
+## 低层兼容命令的默认目录
+
+以下相对路径仅适用于低层 Task/Evaluation/Handoff 命令。生产 Web Console 使用外置平台数据根
+和 MySQL，布局见 [生产部署](production-setup.md)。
 
 ```text
 .ase/state.sqlite3             # Task 快照和 StateEvent

@@ -218,3 +218,47 @@ Artifact 的 Python 入口是 `Artifact` union；`FileArtifactStore` 以 Artifac
 不做单 Task 内多角色并发或复杂 DAG，不引入消息队列、向量数据库、自动生产部署、跨仓库事务、
 自动需求拆分、自动修改组织规范或自动 merge 保护分支。组织层只实现单进程、有界、Lease 驱动
 的多 Task 调度；不会用共享长驻会话冒充并发，也不会在 v0.1 引入分布式 Scheduler。
+
+
+<a id="read-projection"></a>
+
+## 7. 只读投影与静态可视化基础
+
+以下为仍保留的底层库，当前 Web Console 的入口与交互见 [团队工作台](visualization.md)。
+
+`RunProjectionBuilder` 是纯函数：输入已经从 SQLite、ArtifactStore、EvidenceStore、Evaluation
+Store、WorkforceStore 和 HandoffStore 读取并校验的 `ProjectionFacts`，输出可重算的
+`ProjectionSnapshot`。它汇总 Task、Run、Agent、Lease 和稳定排序的 timeline，不写入任何来源。
+
+`ReadOnlyProjectionApi` 是 transport-neutral 的 GET-only seam，提供 `/api/v1/tasks`、`runs`、
+`agents`、`leases` 列表/详情、过滤与分页。POST/PUT/DELETE 一律 405；未知路径 404；分页错误
+400。API 接受快照而非可写 store，因此不会迁移 Task、修改 verdict 或执行命令。
+
+Projection 在构建前拒绝重复 ID、未知 Task、冲突 run identity、断裂 StateEvent 流和 naive
+`as_of`；Lease 状态只能依据显式时钟计算，缺省为 UNKNOWN。每个投影项保留 source URI、digest
+和源 ID，dashboard 可据此回链 durable facts。
+
+### 静态 DashboardRenderer
+
+T027 在 T026 `ProjectionSnapshot` / `ReadOnlyProjectionApi` 之上提供一个无依赖、可离线打开的
+只读 dashboard renderer。入口是 `DashboardRenderer`：
+
+```python
+from ai_software_engineer.visualization import DashboardRenderer
+
+html = DashboardRenderer().render_html(snapshot)
+json_payload = DashboardRenderer().render_json(read_api)
+```
+
+### 静态 Renderer 的四个视图
+
+- Task board：delivery/scheduling status、attempt、candidate、QA/Review 和 artifact/evidence IDs；
+- Run timeline：State、Evaluation、Artifact、Evidence、Assignment、Lease、Handoff 按时间排序，保留 URI/digest；
+- Agent capacity/detail：角色、模型、Run/Lease 引用，只统计 projection 中的 ACTIVE lease；总容量未知时显式 `capacity_known=false`；
+- Human inbox：从 `WAITING_HUMAN` WorkItem 或 `BLOCKED` Task 推导，保留 reason/evidence/handoff 引用。
+
+Renderer 不持有 repository、SQLite、subprocess 或 Agent adapter，不能写 Task、verdict、artifact
+或状态。HTML 使用 escaped JSON 和浏览器 `textContent`，目标仓库文本不能结束 script 标签。
+
+此底层 Renderer 采用静态 HTML，不引入前端构建链、WebSocket、消息队列或向量库；人工决策仍属于 Human
+boundary，不属于 dashboard。

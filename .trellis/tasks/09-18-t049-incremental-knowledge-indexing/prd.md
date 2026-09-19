@@ -110,5 +110,5 @@ job lifecycle、snapshot version、parser compatibility 和后台健康状态。
 ## 续作验收记录（2026-09-19）
 
 本轮实现和任务相关验证已完成。完整测试结果、独立 QA/Review 引用、存量数据处置、
-回滚及验证限制见 `docs/t047-t049-continuation.md`。实现已由源提交 `977a9c2` 合并到当前 `main`；
+回滚及验证限制见 `docs/archive/2026-09-19-t047-t049-continuation.md`。实现已由源提交 `977a9c2` 合并到当前 `main`；
 未执行推送或部署。

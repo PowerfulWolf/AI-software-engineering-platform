@@ -2,7 +2,7 @@
 
 ## 使用
 
-先按照 [生产配置](production-setup.md) 设置 ASE_CONFIG 和 MySQL DSN，再启动本地 Web Console：
+按照 [生产配置](production-setup.md) 安装后启动本地 Web Console；未配置时可先在页面完成设置：
 
 ```bash
 uv run ase-console
@@ -12,7 +12,8 @@ uv run ase-console
 与 Product Agent 讨论和批准、继续中断交付、批准 exact 恢复计划，以及领取 Candidate。
 Ctrl+C 会停止控制台和它的后台 Manager dispatcher；已经提交的 Operation、Delivery、Task
 和 Artifact 仍然持久化。页面每 5 秒读取已提交数据，不要求手工拼装 ProjectionFacts。
-配置缺失或端口占用时 CLI 安全退出；Team 未准备、数据库不可用或记录校验失败时页面报错，
+配置缺失时进入 setup 模式，设置和状态页仍可访问；端口占用时 CLI 安全退出。
+Team 未准备、数据库不可用或记录校验失败时交付不可用并显示具体状态，
 不伪装成空团队。真正空的已准备 Team 显示创建 Project/接单提示。
 
 ## 三条阅读路径

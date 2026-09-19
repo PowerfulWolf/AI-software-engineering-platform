@@ -1,0 +1,50 @@
+{
+  "recorded_on": "2026-09-19",
+  "entries": [
+    {
+      "old_path": "docs/t047-t049-continuation.md",
+      "source_revision": "c280310062240b9fb673b8ca6cc25bedb310ec4d",
+      "source_sha256": "52be56637b4d3da51475a931f788451eed8271064009cf400bde61f69fcb95a9",
+      "archived_path": "docs/archive/2026-09-19-t047-t049-continuation.md",
+      "archived_sha256": "76bb437352c4635dc92bef8d9546a3e46773d64e52db2d4f4b7371f1a2fc29f2",
+      "body_changes": "relative Markdown link targets only; original body available at source_revision"
+    },
+    {
+      "old_path": "docs/milestones.md",
+      "source_revision": "c280310062240b9fb673b8ca6cc25bedb310ec4d",
+      "source_sha256": "15c83570aa9c6c0b5b8791ac7c2f5f3c60497abc1f62f0d26db6d640ee6db6f4",
+      "archived_path": "docs/archive/2026-09-19-foundation-roadmap-snapshot.md",
+      "archived_sha256": "050919d7d824cd3776eba64470c19b4f95635d47dff3cd3de74d1123e0138304",
+      "body_changes": "relative Markdown link targets only; original body available at source_revision"
+    },
+    {
+      "old_path": "docs/operator-feedback-loop.md",
+      "source_revision": "c280310062240b9fb673b8ca6cc25bedb310ec4d",
+      "source_sha256": "4dd999d784de5f665dd2d5fed44d3c5ced4681e94fce5939a77747e5fe654d20",
+      "archived_path": "docs/archive/2026-09-18-console-recovery-incidents.md",
+      "archived_sha256": "bdf1b4789344e40c99f416415794fb075715a443f89092df239ba9ef9ea131e2",
+      "body_changes": "relative Markdown link targets only; original body available at source_revision"
+    },
+    {
+      "old_path": "docs/projection.md",
+      "source_revision": "c280310062240b9fb673b8ca6cc25bedb310ec4d",
+      "source_sha256": "baa7cb81a17baa37ed2bf0858a9635ea712a6c6947da1f41db1a82c84585c853",
+      "merged_into": "docs/architecture.md#read-projection",
+      "body_changes": "section heading levels; renderer scope clarified"
+    },
+    {
+      "old_path": "docs/visualization-implementation.md",
+      "source_revision": "c280310062240b9fb673b8ca6cc25bedb310ec4d",
+      "source_sha256": "85b4a8d982b64913b92129bd8f6cff7bf31554e29d30ad1a41015f1bba6f329e",
+      "merged_into": "docs/architecture.md#read-projection",
+      "body_changes": "section heading levels; renderer scope clarified"
+    },
+    {
+      "old_path": "docs/tool-protocol.md",
+      "source_revision": "c280310062240b9fb673b8ca6cc25bedb310ec4d",
+      "source_sha256": "b775f24ce999feb19c3d7d57c70a67492808adf563a2f7e22b94637ee44ee4e1",
+      "merged_into": "docs/prompt-protocol.md#typed-tools",
+      "body_changes": "section heading levels; renderer scope clarified"
+    }
+  ]
+}

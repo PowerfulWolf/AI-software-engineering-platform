@@ -35,14 +35,14 @@
 
 ## Independent evidence
 
-- QA report: `/private/tmp/ase-console-readiness-qa-v4.md`, SHA-256
+- QA report: [QA v4](evidence/ase-console-readiness-qa-v4.md), SHA-256
   `6b071a44e5cd43c7c6125f800e424c366b4436e019813bdefc76325f540cad6c`.
 - Candidate app.js SHA-256:
   `bbebc6578d4f89921ba82a46af93d5e31cef35abf7fad843e42e5e1a49c824be`.
 - QA kept earlier reports and reproduced each reported failure against the corresponding frozen
   script before verifying the repair. Reports are independent engineering evidence, not platform
   Task/QA/Review runtime artifacts or state transition authorization.
-- Final independent Review: `/private/tmp/ase-console-readiness-review-v3.md`, SHA-256
+- Final independent Review: [Review v3](evidence/ase-console-readiness-review-v3.md), SHA-256
   `138ad4a4e70dc8c92897da41d6bed19a3aac964c0ac3bb98c472fbb52e0908c8`; no remaining blocking
   findings in the reviewed frontend scope.
 
@@ -53,3 +53,12 @@ browser to load it. The Python static-asset route reads app.js per request, so t
 changes require no service restart. The healthy running Console configuration remains authoritative.
 
 Rollback: restore baseline b8983b8's frontend asset and refresh. Preserve all runtime/audit facts.
+
+
+## Integration completed (2026-09-19)
+
+The user explicitly authorized merging the delivery branch. Commit
+c280310062240b9fb673b8ca6cc25bedb310ec4d was fast-forwarded into main. The main checkout reran
+25 frontend and 13 transport tests successfully; the served app.js matched the candidate hash.
+No runtime configuration or business data changed. Original reports, logs and intermediate
+reproduction scripts are retained via [the evidence manifest](evidence/manifest.json).

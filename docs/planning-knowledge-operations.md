@@ -1,4 +1,4 @@
-# T047–T049 规划与知识运行说明
+# 规划与知识运行说明
 
 本轮任务使用完整名称区分历史编号：`09-17-t047-planner-agent-evolution`、
 `09-18-t048-active-knowledge-closure`、`09-18-t049-incremental-knowledge-indexing`。

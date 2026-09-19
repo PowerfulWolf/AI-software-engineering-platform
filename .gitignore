@@ -16,5 +16,4 @@ __pycache__/
 .trellis/workspace/*
 !.trellis/workspace/.gitkeep
 worktrees/
-artifacts/runs/*
-!artifacts/runs/.gitkeep
+artifacts/

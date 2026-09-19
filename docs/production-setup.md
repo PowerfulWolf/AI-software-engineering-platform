@@ -40,7 +40,7 @@ QA、Reviewer 在同一 candidate commit 的独立 worktree 中验证。主 chec
 - Python 3.12+ 和 `uv`；
 - Git，目标项目必须有干净工作树和已提交的 HEAD；
 - Docker + Compose，或一个可连接的 MySQL 8.0；
-- 默认 GPT-5.5 路由需要已安装并登录的 Codex CLI；
+- 默认 Codex CLI 路由需要已安装并登录的 Codex CLI，具体模型以当前配置为准；
 - 可选 Qwen/DeepSeek fallback 需要相应 Responses-compatible endpoint 和 API key。
 
 安装平台依赖：
@@ -420,7 +420,8 @@ Project/Repository/Delivery identity 都绑定唯一 Team 和所属 Project；�
 ## 8. Live smoke
 
 [`scripts/smoke-live-gpt55.sh`](../scripts/smoke-live-gpt55.sh) 使用临时 Git 项目验证 Production Team
-Host、GPT-5.5、Product gate、隔离 Coder、QA 和 Reviewer。它会消耗真实额度，因此默认拒绝运行：
+Host、配置中的模型路由、Product gate、隔离 Coder、QA 和 Reviewer。脚本文件名保留早期模型名称，
+实际模型由 ASE_CONFIG 决定。它会消耗真实额度，因此默认拒绝运行：
 
 ```bash
 ASE_RUN_LIVE_TESTS=1 scripts/smoke-live-gpt55.sh

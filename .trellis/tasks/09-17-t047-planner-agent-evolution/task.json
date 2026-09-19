@@ -43,5 +43,5 @@
     "uv run mypy src tests",
     "git diff --check"
   ],
-  "verification_report": "docs/t047-t049-continuation.md"
+  "verification_report": "docs/archive/2026-09-19-t047-t049-continuation.md"
 }

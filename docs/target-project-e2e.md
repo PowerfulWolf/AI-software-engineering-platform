@@ -9,6 +9,7 @@ target repository can be any local project while AI metadata remains in an exter
 |---|---|---|---|
 | `python` | Python / Python build | `python3 --version` | `src/hello.py` |
 | `java` | Java / Maven | `java -version` | `src/main/java/example/App.java` |
+| `cpp` | C++ / CMake | `cmake --version` | `src/hello.cpp` |
 | `go` | Go / Go modules | `go version` | `main.go` |
 | `typescript` | TypeScript / npm | `node --version` | `src/hello.ts` |
 
