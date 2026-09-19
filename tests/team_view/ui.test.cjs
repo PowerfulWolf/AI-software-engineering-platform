@@ -716,7 +716,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
           ok: true,
           json: async () => ({
             ...structuredClone(settingsFixture),
-            restart_required: true,
+            restart_required: settingsRestartRequired,
           }),
         };
       }
@@ -1553,15 +1553,14 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   const settingsForm = descend(get("content")).find(
     (node) => node.tag === "form" && node.className === "settings-form",
   );
+  settingsRestartRequired = true;
   await settingsForm.events.submit({ preventDefault() {} });
   assert.match(text(get("composer")), /设置保存成功/);
   assert.match(text(get("composer")), /应用配置.*重启 Web Console/);
-  const acknowledgeSettingsSuccess = descend(get("composer")).find(
-    (node) => node.tag === "button" && node.textContent === "知道了",
-  );
-  await acknowledgeSettingsSuccess.events.click();
-  assert.equal(get("composer").hidden, true);
-  const applyConfiguration = descend(get("content")).find(
+  assert.equal(descend(get("content")).some(
+    (node) => node.tag === "button" && node.textContent === "应用配置",
+  ), false);
+  const applyConfiguration = descend(get("composer")).find(
     (node) => node.tag === "button" && node.textContent === "应用配置",
   );
   assert.ok(applyConfiguration);
@@ -1571,10 +1570,19 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   ]);
   assert.deepEqual(configurationApplyRequests, [{}]);
   assert.match(text(get("content")), /正在重启/);
+  assert.match(text(get("composer")), /正在重启/);
+  assert.equal(descend(get("composer")).find(
+    (node) => node.tag === "button" && node.textContent === "正在应用…",
+  ).disabled, true);
   assert.match(browserStorage.get("ase-configuration-apply"), /configuration_apply_/);
   configurationApplyStatus = "SUCCEEDED";
+  settingsRestartRequired = false;
   await interval.fn();
   assert.match(text(get("content")), /配置已应用/);
+  assert.match(text(get("composer")), /配置已应用/);
+  assert.equal(descend(get("composer")).some(
+    (node) => node.tag === "button" && node.textContent === "应用配置",
+  ), false);
   assert.equal(browserStorage.has("ase-configuration-apply"), false);
   assert.equal(assignedLocation, null);
   settingsRestartRequired = true;
@@ -1589,7 +1597,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     vm.runInContext("configurationApplyInFlight", context),
     false,
   );
-  const applyAfterStaleSuccess = descend(get("content")).find(
+  const applyAfterStaleSuccess = descend(get("composer")).find(
     (node) => node.tag === "button" && node.textContent === "应用配置",
   );
   assert.ok(applyAfterStaleSuccess);
@@ -1629,7 +1637,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     context,
   );
   configurationApplyEffectivePort = 8877;
-  await descend(get("content"))
+  await descend(get("composer"))
     .find((node) => node.tag === "button" && node.textContent === "应用配置")
     .events.click();
   scheduledTimeouts.at(-1)();
@@ -1680,10 +1688,14 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     "settingsSnapshot.restart_required = true; configurationApplyResult = null; render();",
     context,
   );
-  await descend(get("content"))
+  await descend(get("composer"))
     .find((node) => node.tag === "button" && node.textContent === "应用配置")
     .events.click();
   assert.match(text(get("content")), /配置仍已保存/);
+  assert.match(text(get("composer")), /配置仍已保存，但服务监督器暂不可用/);
+  assert.equal(descend(get("composer")).find(
+    (node) => node.tag === "button" && node.textContent === "应用配置",
+  ).disabled, false);
   assert.doesNotMatch(text(get("content")), /deepseek-key/);
   assert.equal(savedSettings.length, 1);
   configurationApplyFailure = null;
@@ -1745,6 +1757,15 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     (node) => node.tag === "button" && node.textContent === "知道了",
   );
   await acknowledgeSettingsFailure.events.click();
+  settingsRestartRequired = false;
+  await descend(get("content"))
+    .find((node) => node.tag === "form" && node.className === "settings-form")
+    .events.submit({ preventDefault() {} });
+  assert.match(text(get("composer")), /保存成功/);
+  assert.doesNotMatch(text(get("composer")), /应用配置|重启|监督器/);
+  await descend(get("composer"))
+    .find((node) => node.tag === "button" && node.textContent === "知道了")
+    .events.click();
   await get("nav-status").events.click();
   assert.equal(get("scope-label").textContent, "平台级");
   assert.match(text(get("content")), /平台状态|配置与启动/);

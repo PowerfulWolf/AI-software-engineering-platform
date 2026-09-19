@@ -779,6 +779,10 @@ function renderComposer() {
   if (settingsSaveResult) {
     const result = settingsSaveResult;
     const success = result.kind === "success";
+    const canApply =
+      success && result.restart_required && settingsSnapshot?.restart_required;
+    const applyResult =
+      success && result.restart_required ? configurationApplyResult : null;
     dialog.className = "modal-dialog settings-result-dialog";
     dialog.setAttribute("role", success ? "dialog" : "alertdialog");
     dialog.setAttribute(
@@ -800,13 +804,28 @@ function renderComposer() {
         settingsSaveResult = null;
         renderComposer();
       },
-      success ? "primary" : "",
+      success && !canApply ? "primary" : "",
     );
     const actions = el("div", undefined, "modal-actions");
     actions.append(close);
+    if (canApply) {
+      const apply = button(
+        configurationApplyInFlight ? "正在应用…" : "应用配置",
+        applySavedConfiguration,
+        "primary",
+      );
+      apply.disabled = configurationApplyInFlight;
+      actions.append(apply);
+    }
     dialog.append(
       header,
-      el("p", result.message, "settings-result-message"),
+      el(
+        "p",
+        success && result.restart_required && configurationApplyInFlight
+          ? "配置已保存，正在重启并等待 Web Console 恢复连接。"
+          : applyResult?.message || result.message,
+        applyResult?.kind === "error" ? "operation-error" : "settings-result-message",
+      ),
       actions,
     );
     panel.append(dialog);
@@ -3745,13 +3764,6 @@ function renderSettings(content) {
           : "配置已保存，但尚未应用到当前 Web Console。",
       ),
     );
-    const apply = button(
-      configurationApplyInFlight ? "正在应用…" : "应用配置",
-      applySavedConfiguration,
-      "primary",
-    );
-    apply.disabled = configurationApplyInFlight;
-    applyNotice.append(apply);
     content.append(applyNotice);
   } else if (configurationApplyResult?.kind === "success") {
     content.append(el("div", configurationApplyResult.message, "admin-notice"));
@@ -3860,11 +3872,13 @@ function renderSettings(content) {
       normalizeAgentModelRoutes(settingsDraft);
       runtimeVariablesDraft = {};
       administrationNotice = null;
+      configurationApplyResult = null;
       settingsSaveResult = {
         kind: "success",
+        restart_required: saved.restart_required,
         message: saved.restart_required
           ? "保存成功。请使用“应用配置”重启 Web Console 并使新配置生效。"
-          : "保存成功，当前配置未改变。",
+          : "保存成功。",
       };
       render();
     } catch (error) {

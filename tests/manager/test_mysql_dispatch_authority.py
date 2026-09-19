@@ -143,7 +143,7 @@ def test_terminal_tasks_release_capacity_without_erasing_dispatch(
     released = reopened.current_snapshot(repository_id=record.repository_id, task_id=record.task_id)
     assert not released.active_leases
     assert released.assignments == active.assignments
-    with pytest.raises(DispatchAuthorityConflict, match="already completed"):
+    with pytest.raises(DispatchAuthorityConflict, match="already released"):
         reserve()
 
 
@@ -157,16 +157,11 @@ def test_abandoned_verification_releases_capacity_without_becoming_replayable(
     authority.seed_snapshot(snapshot)
 
     def build(current: DispatchWorkforceSnapshot) -> VerificationReservation:
-        phase = record.phases[1]
-        assignment_id = "assignment_verify_abandoned"
-        lease_id = "lease_verify_abandoned"
-        return VerificationReservation(
-            plan_sha256="c" * 64,
-            repository_id=record.repository_id,
-            source_task_id=record.task_id,
-            task_id="task_verify_abandoned",
-            workforce_snapshot_sha256=current.snapshot_sha256,
-            phases=(
+        phases = []
+        for phase in record.phases[1:]:
+            assignment_id = f"assignment_verify_abandoned_{phase.role.value}"
+            lease_id = f"lease_verify_abandoned_{phase.role.value}"
+            phases.append(
                 phase.model_copy(
                     update={
                         "assignment": phase.assignment.model_copy(
@@ -184,8 +179,15 @@ def test_abandoned_verification_releases_capacity_without_becoming_replayable(
                             }
                         ),
                     }
-                ),
-            ),
+                )
+            )
+        return VerificationReservation(
+            plan_sha256="c" * 64,
+            repository_id=record.repository_id,
+            source_task_id=record.task_id,
+            task_id="task_verify_abandoned",
+            workforce_snapshot_sha256=current.snapshot_sha256,
+            phases=tuple(phases),
             committed_at=record.committed_at,
         )
 
@@ -197,7 +199,8 @@ def test_abandoned_verification_releases_capacity_without_becoming_replayable(
         build=build,
     )
     active = authority.current_snapshot(repository_id=record.repository_id, task_id=record.task_id)
-    assert reserved.phases[0].lease.id in {lease.id for lease in active.active_leases}
+    reserved_leases = {phase.lease.id for phase in reserved.phases}
+    assert reserved_leases <= {lease.id for lease in active.active_leases}
 
     for _ in range(2):
         authority.abandon_verification(
@@ -207,8 +210,9 @@ def test_abandoned_verification_releases_capacity_without_becoming_replayable(
     released = authority.current_snapshot(
         repository_id=record.repository_id, task_id=record.task_id
     )
-    assert reserved.phases[0].lease.id not in {lease.id for lease in released.active_leases}
-    with pytest.raises(DispatchAuthorityConflict, match="already completed"):
+    assert reserved_leases.isdisjoint(lease.id for lease in released.active_leases)
+    assert released.assignments == active.assignments
+    with pytest.raises(DispatchAuthorityConflict, match="already released"):
         authority.reserve_verification(
             repository_id=record.repository_id,
             source_task_id=record.task_id,

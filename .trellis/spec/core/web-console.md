@@ -668,7 +668,10 @@ GET  /api/v1/admin/status
   is reflected by that port. The lifecycle response never supplies a redirect host. Failure never rolls
   back saved settings and never records raw subprocess output or secrets in the lifecycle response.
 - Every submitted Settings save has an explicit modal result. A successful PUT opens a success dialog
-  that states whether Web Console restart is required. A failed PUT opens an `alertdialog` containing
+  that includes “应用配置” only when `restart_required=true`; the Settings page does not duplicate
+  that action. With no restart required the dialog only confirms the save. Apply progress, errors and
+  retry remain visible in the dialog; closing it does not cancel an accepted apply request. Saving
+  again reopens the dialog and re-evaluates restart eligibility. A failed PUT opens an `alertdialog` containing
   the bounded server `error.message` (or the generic client fallback), re-enables save and preserves
   the current draft so the operator can close the result and correct it. Inline progress text is not
   the terminal save result and must not be the only feedback.

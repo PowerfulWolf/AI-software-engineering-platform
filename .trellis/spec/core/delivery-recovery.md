@@ -1846,10 +1846,14 @@ terminal_candidate_cursor_matches(checkpoint, candidate_revision) -> bool
 - Any criterion/test `FAIL`, Reviewer result, or malformed ambiguous combination remains
   `REMEDIATE_CANDIDATE`; `PASS + APPROVE` remains `VERIFIED`.
 - For a legacy failed continuation with no Candidate V2, retained Candidate V1 may be reused only
-  when the exact current `ContinuationDispatchRecord` points to a sealed source plan/completion whose
+  when execution stopped before Agent admission (the exact pre-Agent context-budget terminal reason)
+  and the current `ContinuationDispatchRecord` points to a sealed source plan/completion whose
   disposition is `RETRY_VERIFICATION`. Scope, Task, dispatch, source candidate, plan, completion,
   invocation, run additions, approved checkpoint ancestry, and current terminal runtime must all
   match. A genuine remediation failure stays on failed-Coder recovery.
+  Once Coder was admitted, `resume` must return `RECOVERY_APPROVAL_REQUIRED` and capture its retained
+  worktree even when the source QA completion was inconclusive. The MySQL resume regression asserts
+  that the recovery patch contains the later edits and proposing recovery invokes no model.
 - `resolve_planner_dispatch` and retained-candidate lookup must use the same source-cursor predicate
   at every continuation generation. A historic source cursor may omit `candidate_revision` only when
   it is a terminal `BLOCKED/FAILED` checkpoint with `failed_stage=DELIVERING` and a terminal

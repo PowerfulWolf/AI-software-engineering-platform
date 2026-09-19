@@ -115,6 +115,9 @@ class _ResumeAdapter(AgentAdapter):
             and request.task_id.startswith("task_continue_")
             and self._owner.remediation_no_candidate
         ):
+            (self._workspace / "hello.txt").write_text(
+                "retained legacy remediation work\n", encoding="utf-8"
+            )
             return AgentResult(
                 run_id=request.run_id,
                 task_id=request.task_id,
@@ -934,7 +937,9 @@ def test_resume_verifies_failed_candidate_and_delivers_remediation(
         if task.work_kind == "candidate_verification"
         and task.plan_sha256 == proposed.verification_plan_sha256
     )
-    assert verification_work.status == "VERIFY_QA"
+    assert verification_work.status == "VERIFICATION_INTERRUPTED"
+    assert verification_work.terminal
+    assert not any(item.current_stage for item in verification_work.assignments)
     assert len(verification_work.runs) == 1
     assert verification_work.runs[0].role is AgentRole.QA
     calls_after_uncertain_result = len(routes.requests)
@@ -965,7 +970,7 @@ def test_resume_verifies_failed_candidate_and_delivers_remediation(
             superseded = next(
                 task for task in live.tasks if task.plan_sha256 == proposed.verification_plan_sha256
             )
-            assert superseded.status == "VERIFICATION_SUPERSEDED"
+            assert superseded.status == "VERIFICATION_INTERRUPTED"
             assert superseded.terminal
             assert not any(item.current_stage for item in superseded.assignments)
             observed_remediation.append(request.task_id)
@@ -1093,7 +1098,7 @@ def test_resume_accepts_verified_candidate_after_delivery_checkpoint_append(
 
 
 @pytest.mark.mysql
-def test_resume_reuses_retained_candidate_after_legacy_inconclusive_remediation(
+def test_resume_recovers_admitted_coder_after_legacy_inconclusive_remediation(
     tmp_path: Path,
     mysql_dsn: str,
 ) -> None:
@@ -1195,7 +1200,10 @@ def test_resume_reuses_retained_candidate_after_legacy_inconclusive_remediation(
     resumed = host.resume_delivery(ResumeProjectDelivery(delivery_id=blocked.delivery_id))
 
     assert isinstance(resumed, DeliveryResumeResult)
-    assert resumed.outcome is DeliveryResumeOutcome.VERIFICATION_APPROVAL_REQUIRED
-    assert resumed.verification_plan_sha256 is not None
-    assert resumed.verification_plan_sha256 != proposed.verification_plan_sha256
+    assert resumed.outcome is DeliveryResumeOutcome.RECOVERY_APPROVAL_REQUIRED
+    assert resumed.verification_plan_sha256 is None
+    assert resumed.recovery_plan_file is not None
+    _, recovery_plan = host.recovery_entry().open_plan(Path(resumed.recovery_plan_file))
+    assert "hello.txt" in {item.path for item in recovery_plan.capture.files}
+    assert "retained legacy remediation work" in recovery_plan.capture.patch
     assert len(routes.requests) == calls

@@ -347,6 +347,9 @@ _read_task_details(
   not permission to accept an orphaned or corrupted verification row.
 - An incomplete verification reservation is a first-class QA/Reviewer work item. Current role is QA
   until its invocation/report exists, then Reviewer; a sealed completion makes it terminal.
+  A released reservation with `abandonment_sha256` instead displays terminal
+  `VERIFICATION_INTERRUPTED`, with no current assignments. A later successor does not erase this
+  recorded interruption; `VERIFICATION_SUPERSEDED` applies to incomplete, non-abandoned predecessors.
 - The Requirement delivery-flow widget must treat the projected Requirement stage as authoritative
   during verification: `VERIFY_QA` highlights 测试 and `VERIFY_REVIEW` highlights 评审. A historical
   repository Task may already carry `QA`/`REVIEW`, but that child status is only a fallback before an
