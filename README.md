@@ -52,19 +52,6 @@ request 命令已经自动生成完整评估与交付汇总报告。Reporter 仍
 明确不做：单 Task 并行 Agent/DAG、共享多 Task 会话、分布式 Scheduler、向量库/RAG 平台、
 自动合并保护分支、生产发布、数据库迁移编排和跨仓库事务。
 
-### T047–T049 当前能力
-
-| 能力 | 当前行为 |
-|---|---|
-| T047 规划分流 | Manager 根据已批准 ProductSpec 和 TechnicalDesign 的结构化事实确定 SIMPLE/COMPLEX；简单需求生成确定性计划，零 Planner 模型调用；复杂需求由 Planner 产出有界工作包、依赖、风险、检查点和验收测试矩阵 |
-| T048 主动知识闭环 | Product、Designer、Planner 与交付角色通过受控 search/read 查询冻结快照；检索和拒绝都有证据，知识咨询进入有预算和摘要的 Context；缺口经精确人工批准后用新 Context/run 接续原 checkpoint |
-| T049 增量知识索引 | 上传先返回持久化作业，后台解析与分段；页面显示排队、解析、就绪、失败和重试；相同内容与版本复用缓存，失败替换保留旧文档，历史冻结知识仍可读取 |
-
-Planner 计划不包含具体 Agent、模型或 Lease，实际分配仍由 Manager 的确定性服务校验。
-人工知识解答会进入 Evaluation/ADR 的干预记录；需要复用于未来需求时，还必须经过独立的
-Learning 发布审批。运行步骤、存量恢复和回滚见 [规划与知识运行说明](docs/planning-knowledge-operations.md)，
-本轮验证范围见 [T047–T049 交付记录](docs/t047-t049-continuation.md)。
-
 ## 总体架构
 
 平台只有一支长期存在的 Team，但可接入多个 Project。`<platform_root>/team` 保存团队成员、通用知识、
