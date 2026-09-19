@@ -12,6 +12,8 @@ from pydantic import AwareDatetime, Field
 from ai_software_engineer.agents import StructuredModelClient
 from ai_software_engineer.domain.enums import TeamRole
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
+from ai_software_engineer.knowledge.stages import StageWorkflowGate, repeated_child_failure
+from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
     CheckpointDigest,
@@ -34,7 +36,6 @@ from ai_software_engineer.multi_directory.models import (
     DesignInterfaceConsumersError,
     DesignWritePathsError,
     DialogueMessage,
-    IntegrationCommandError,
     IntegrationEvidence,
     IntegrationRetryApproval,
     IntegrationRetryProposal,
@@ -45,14 +46,20 @@ from ai_software_engineer.multi_directory.models import (
     JointProductSpec,
     JointStage,
     JointTechnicalDesign,
-    PlanCoverageError,
     PreparedUnit,
     SingleRepositoryAcceptance,
     digest,
 )
+from ai_software_engineer.multi_directory.planning import (
+    compile_joint_plan,
+    fast_joint_plan,
+    joint_planning_decision,
+    rejection_feedback,
+)
 from ai_software_engineer.multi_directory.retirement import RequirementRetirementStore
 from ai_software_engineer.multi_directory.scope import DirectoryScope, DirectoryUnit, discover_scope
 from ai_software_engineer.multi_directory.store import JointJournal
+from ai_software_engineer.planning.gate import HumanPlanningUpgrade, PlanningMode
 from ai_software_engineer.project_workspace import ProjectWorkspace
 from ai_software_engineer.team_workspace import TeamWorkspace
 
@@ -83,6 +90,14 @@ class CreateRequirement(DomainModel):
 
     name: Annotated[str, Field(min_length=1, max_length=200)]
     repository_roots: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1, max_length=32)]
+    submitted_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class UpgradeJointPlanning(DomainModel):
+    delivery_id: DeliveryId
+    expected_checkpoint_sha256: CheckpointDigest
+    operator_id: NonEmptyStr
+    rationale: NonEmptyStr
     submitted_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -413,6 +428,9 @@ class JointDeliveryService:
                     )
             if checkpoint.stage is JointStage.BLOCKED and checkpoint.integration is None:
                 self.backend.reconcile(checkpoint)
+                if repeated_child_failure(checkpoint):
+                    self._stage_workflow(checkpoint).require("break-loop", checkpoint)
+                self._stage_workflow(checkpoint).require("recovery", checkpoint)
                 checkpoint = self._save(
                     checkpoint,
                     stage=JointStage.DELIVERING,
@@ -428,9 +446,16 @@ class JointDeliveryService:
                 # old plan and evidence in the journal, then let Planner produce a fresh
                 # complete plan without rerunning completed repository children.
                 self.backend.reconcile(checkpoint)
+                self._stage_workflow(checkpoint).require("break-loop", checkpoint)
+                self._stage_workflow(checkpoint).require("recovery", checkpoint)
                 checkpoint = self._save(
                     checkpoint,
                     stage=JointStage.PLANNING,
+                    planning_feedback=(
+                        rejection_feedback(checkpoint.plan, "INTEGRATION_FAILED")
+                        if checkpoint.plan is not None
+                        else checkpoint.planning_feedback
+                    ),
                     plan=None,
                     next_action=(
                         "The previous joint integration command failed. Produce a fresh, "
@@ -444,7 +469,78 @@ class JointDeliveryService:
         self.backend.reconcile(checkpoint)
         return JointDeliveryResult(checkpoint=checkpoint)
 
+    def upgrade_planning(self, command: UpgradeJointPlanning) -> JointDeliveryResult:
+        """Explicit human promotion only, durably bound to the exact gate input."""
+        with self.journal.lock(command.delivery_id):
+            checkpoint = self._current(command.delivery_id)
+            if checkpoint.checkpoint_sha256 != command.expected_checkpoint_sha256:
+                raise DeliveryCheckpointStale("planning upgrade checkpoint changed")
+            if checkpoint.stage is not JointStage.PLANNING or checkpoint.plan is not None:
+                raise ValueError("planning upgrade requires an uncommitted PLANNING checkpoint")
+            if checkpoint.planning_upgrade is not None:
+                raise ValueError("human planning upgrade is immutable")
+            decision = joint_planning_decision(checkpoint)
+            upgrade = HumanPlanningUpgrade(
+                input_sha256=decision.input_sha256,
+                operator_id=command.operator_id,
+                rationale=command.rationale,
+                decided_at=command.submitted_at,
+            )
+            promoted = checkpoint.model_copy(update={"planning_upgrade": upgrade})
+            saved = self._save(
+                checkpoint,
+                planning_upgrade=upgrade,
+                planning_decision=joint_planning_decision(promoted),
+            )
+            return JointDeliveryResult(checkpoint=saved)
+
     def _advance(self, checkpoint: JointCheckpoint) -> JointCheckpoint:
+        from ai_software_engineer.knowledge.gaps import KnowledgeGapRaised
+
+        try:
+            return self._advance_stages(checkpoint)
+        except KnowledgeGapRaised as error:
+            current = self._current(checkpoint.delivery_id)
+            return self._save(
+                current,
+                stage=JointStage.WAITING_HUMAN,
+                knowledge_wait_stage=current.stage,
+                knowledge_gap_id=error.gap.gap_id,
+                next_action="Resolve and approve knowledge gap "
+                + error.gap.gap_id
+                + " before resuming.",
+            )
+
+    def _advance_stages(self, checkpoint: JointCheckpoint) -> JointCheckpoint:
+        if checkpoint.stage is JointStage.WAITING_HUMAN and checkpoint.knowledge_gap_id is not None:
+            from ai_software_engineer.knowledge.administration import find_gap_records
+            from ai_software_engineer.knowledge.gaps import KnowledgeGap, KnowledgeResolution
+
+            records = find_gap_records(
+                self.project, checkpoint.delivery_id, checkpoint.knowledge_gap_id
+            )
+            resolution = records.find(
+                "gap-resolutions", checkpoint.knowledge_gap_id, KnowledgeResolution
+            )
+            if resolution is None:
+                return checkpoint
+            resolution.validate_integrity()
+            if checkpoint.knowledge_wait_stage is None:
+                raise ValueError("knowledge wait has no durable resume stage")
+            self._stage_workflow(checkpoint).require(
+                "recovery",
+                checkpoint,
+                gap=records.get("gaps", checkpoint.knowledge_gap_id, KnowledgeGap),
+                resolution=resolution,
+                resolution_records=records,
+            )
+            checkpoint = self._save(
+                checkpoint,
+                stage=checkpoint.knowledge_wait_stage,
+                knowledge_wait_stage=None,
+                knowledge_gap_id=None,
+                next_action="Resume with the exact approved knowledge resolution.",
+            )
         self._team_binding(checkpoint)
         self.backend.reconcile(checkpoint)
         completed = self._complete_single_repository(checkpoint)
@@ -481,6 +577,7 @@ class JointDeliveryService:
                         "code was changed."
                     ),
                 )
+            self._stage_workflow(checkpoint).require("start", checkpoint)
             if checkpoint.requirement is None:
                 return self._save(
                     checkpoint,
@@ -565,6 +662,9 @@ class JointDeliveryService:
                     ),
                 )
                 continue
+            self._stage_workflow(checkpoint).require(
+                "architecture-check", checkpoint, design=design
+            )
             checkpoint = self._save(
                 checkpoint,
                 stage=JointStage.PLANNING,
@@ -572,10 +672,16 @@ class JointDeliveryService:
                 next_action="Plan the bounded repository order and joint integration checks.",
             )
         if checkpoint.stage is JointStage.PLANNING:
-            checkpoint = self._attempt(checkpoint, "plan")
-            plan = self._produce(
+            decision = joint_planning_decision(checkpoint)
+            if checkpoint.planning_decision is None:
+                checkpoint = self._save(checkpoint, planning_decision=decision)
+            elif checkpoint.planning_decision != decision:
+                raise ValueError("durable planning gate drifted from exact design facts")
+            self._stage_workflow(checkpoint).require("planning-gate", checkpoint)
+            if decision.mode is PlanningMode.COMPLEX:
+                checkpoint = self._attempt(checkpoint, "plan")
+            plan = self._planning_output(
                 checkpoint,
-                JointExecutionPlan,
                 "Act as Planner. Bind design_sha256. "
                 "Return each modified unit once, in dependency-first SERIAL order, with "
                 "coder/qa/reviewer phases. "
@@ -605,18 +711,30 @@ class JointDeliveryService:
                 "read-only roots are their reviewed candidates, not the original baseline. "
                 "Inspect the actual test files there before selecting argv. Completed child "
                 "Agents will not rerun; do not invent test paths or plan new code changes. "
-                "Preserve every acceptance criterion and interface coverage requirement.",
+                "Preserve every acceptance criterion and interface coverage requirement. "
+                "You cannot choose or override planning_decision. Supply bounded work_graph "
+                "packages per unit: component_<key>, design_step_<key>, exact global acceptance "
+                "IDs, dependencies, risk, checkpoints and acceptance-mapped tests. Every complex "
+                "write unit requires a complete work_graph; omission is rejected. At most 16 units "
+                "and "
+                "4 independent repository Tasks may be ready; every Task keeps serial roles. "
+                "Never include concrete Agent, provider, model, Assignment or Lease.",
             )
             assert checkpoint.product_spec is not None and checkpoint.design is not None
             try:
                 plan.validate_for(checkpoint.scope, checkpoint.product_spec, checkpoint.design)
                 self.backend.validate_plan(checkpoint, plan)
-            except (PlanCoverageError, IntegrationCommandError) as exc:
-                self._save(
+                plan = compile_joint_plan(checkpoint, plan)
+                plan.validate_for(checkpoint.scope, checkpoint.product_spec, checkpoint.design)
+            except ValueError as exc:
+                rejected = self._save(
                     checkpoint,
+                    planning_feedback=rejection_feedback(plan, type(exc).__name__),
                     next_action=f"Rejected plan {digest(plan)}: {exc}. Correct the plan on resume.",
                 )
+                self._stage_workflow(rejected).require("break-loop", rejected)
                 raise
+            self._stage_workflow(checkpoint).require("plan", checkpoint, plan=plan)
             checkpoint = self._save(
                 checkpoint,
                 stage=JointStage.DELIVERING,
@@ -632,6 +750,14 @@ class JointDeliveryService:
                 )
                 if previous is not None and previous.checkpoint.stage is DeliveryStage.DONE:
                     continue
+                assert checkpoint.design is not None
+                completed_dependencies = set(checkpoint.design.reference_only) | {
+                    item.unit_id
+                    for item in checkpoint.children
+                    if item.checkpoint.stage is DeliveryStage.DONE
+                }
+                if not set(planned_unit.depends_on) <= completed_dependencies:
+                    raise ValueError("dispatch dependency has no durable completed child")
                 child = self.backend.deliver(checkpoint, planned_unit.unit_id)
                 if child.unit_id != planned_unit.unit_id:
                     raise ValueError("delivery result belongs to a different unit")
@@ -643,7 +769,7 @@ class JointDeliveryService:
                     ),
                 )
                 if child.checkpoint.stage is not DeliveryStage.DONE:
-                    return self._save(
+                    stopped = self._save(
                         checkpoint,
                         stage=(
                             JointStage.BLOCKED
@@ -657,6 +783,9 @@ class JointDeliveryService:
                             "Completed repositories are retained; joint delivery is not DONE."
                         ),
                     )
+                    if repeated_child_failure(stopped):
+                        self._stage_workflow(stopped).require("break-loop", stopped)
+                    return stopped
             completed = self._complete_single_repository(checkpoint)
             if completed is not None:
                 return completed
@@ -776,12 +905,24 @@ class JointDeliveryService:
             )
         return model.model_validate(result.payload)
 
+    def _planning_output(
+        self, checkpoint: JointCheckpoint, instructions: str
+    ) -> JointExecutionPlan:
+        assert checkpoint.planning_decision is not None
+        if checkpoint.planning_decision.mode is PlanningMode.SIMPLE:
+            return fast_joint_plan(checkpoint)
+        return self._produce(checkpoint, JointExecutionPlan, instructions)
+
     def _attempt(self, checkpoint: JointCheckpoint, name: str, limit: int = 3) -> JointCheckpoint:
         attempts = dict(checkpoint.attempts)
         if attempts.get(name, 0) >= limit:
             raise ValueError(f"joint {name} attempt budget exhausted; inspect checkpoint evidence")
         attempts[name] = attempts.get(name, 0) + 1
         return self._save(checkpoint, attempts=attempts)
+
+    def _stage_workflow(self, checkpoint: JointCheckpoint) -> StageWorkflowGate:
+        records = KnowledgeRecordStore(self.journal.directory(checkpoint.delivery_id) / "knowledge")
+        return StageWorkflowGate(self.journal, records)
 
     def _save(self, checkpoint: JointCheckpoint, **changes: object) -> JointCheckpoint:
         values: dict[str, object] = dict(checkpoint.to_wire())

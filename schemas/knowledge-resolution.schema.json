@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/knowledge-resolution.schema.json",
+  "$defs": {
+    "KnowledgeResolutionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "uri": {
+          "minLength": 1,
+          "title": "Uri",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "content": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Content",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri",
+        "sha256",
+        "content"
+      ],
+      "title": "KnowledgeResolutionSource",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "const": "knowledge_resolution",
+      "default": "knowledge_resolution",
+      "title": "Kind",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "v0.1",
+      "default": "v0.1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "gap_id": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Gap Id",
+      "type": "string"
+    },
+    "previous_run_id": {
+      "minLength": 1,
+      "title": "Previous Run Id",
+      "type": "string"
+    },
+    "answer": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "title": "Answer",
+      "type": "string"
+    },
+    "sources": {
+      "items": {
+        "$ref": "#/$defs/KnowledgeResolutionSource"
+      },
+      "maxItems": 32,
+      "minItems": 1,
+      "title": "Sources",
+      "type": "array"
+    },
+    "approval_reference": {
+      "minLength": 1,
+      "title": "Approval Reference",
+      "type": "string"
+    },
+    "approved_by": {
+      "minLength": 1,
+      "title": "Approved By",
+      "type": "string"
+    },
+    "disposition": {
+      "default": "REQUIREMENT_ONLY",
+      "enum": [
+        "REQUIREMENT_ONLY",
+        "PROPOSE_LEARNING"
+      ],
+      "title": "Disposition",
+      "type": "string"
+    },
+    "resolution_id": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Resolution Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "gap_id",
+    "previous_run_id",
+    "answer",
+    "sources",
+    "approval_reference",
+    "approved_by",
+    "resolution_id"
+  ],
+  "title": "KnowledgeResolution",
+  "type": "object"
+}

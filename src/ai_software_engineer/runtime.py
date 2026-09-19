@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Literal, Self
+from typing import Annotated, Literal, Protocol, Self
 
 from pydantic import Field, StrictBool, StrictInt, StringConstraints, model_validator
 
@@ -26,6 +26,7 @@ from ai_software_engineer.domain import (
     AgentRole,
     ArtifactKind,
     NetworkAccess,
+    Task,
     TaskStatus,
 )
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
@@ -44,6 +45,8 @@ from ai_software_engineer.orchestration import (
     RetryResult,
     TaskNotRunnable,
 )
+from ai_software_engineer.orchestration.context import RunContextBuilder
+from ai_software_engineer.orchestration.runner import DeliveryTransitionGate
 from ai_software_engineer.store import MySqlTaskRepository, SqliteTaskRepository
 
 EnvVarName = Annotated[str, StringConstraints(pattern=r"^[A-Z_][A-Z0-9_]{0,127}$")]
@@ -209,6 +212,14 @@ class RoleAwareAgentAdapter:
         return self._adapters[request.role].run(request)
 
 
+class RuntimeHumanActionRecorder(Protocol):
+    """Application-owned audit bridge; never grants an Agent event-store authority."""
+
+    def record(
+        self, task: Task, case_id: EvaluationCaseId, events: EvaluationEventStore
+    ) -> None: ...
+
+
 class RuntimeSession:
     """Open durable stores and compose one bounded serial Task execution."""
 
@@ -220,8 +231,14 @@ class RuntimeSession:
         agent_adapter: AgentAdapter | None = None,
         agent_definitions: Mapping[AgentRole, AgentDefinition] | None = None,
         repository_root: str | Path | None = None,
+        context_builder: RunContextBuilder | None = None,
+        transition_gate: DeliveryTransitionGate | None = None,
+        human_action_recorder: RuntimeHumanActionRecorder | None = None,
     ) -> None:
         self._config = config
+        self._context_builder = context_builder
+        self._transition_gate = transition_gate
+        self._human_action_recorder = human_action_recorder
         self._agent_definitions = _validate_agent_definitions(
             agent_definitions if agent_definitions is not None else config.agent_definitions()
         )
@@ -286,7 +303,9 @@ class RuntimeSession:
             task.base_ref,
             included="recovery_of_task_id" not in task.metadata,
         )
-        context_builder = FileRunContextBuilder(
+        if self._human_action_recorder is not None:
+            self._human_action_recorder.record(task, selected_case, self._evaluation_store)
+        context_builder = self._context_builder or FileRunContextBuilder(
             repository_root,
             sources=self._config.context_sources,
             context_store=self._context_store,
@@ -306,6 +325,7 @@ class RuntimeSession:
             context_builder=context_builder,
             agent_adapter=instrumented,
             agent_definitions=self._agent_definitions,
+            transition_gate=self._transition_gate,
         )
         return RuntimeRunResult(case_id=selected_case, result=runner.run_task(task.id))
 

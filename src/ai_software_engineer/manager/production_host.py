@@ -284,6 +284,7 @@ class TeamHost:
                 human_decision_verifier=verifier,
                 frozen_preparation=frozen_preparation,
                 frozen_source_revision=frozen_source_revision,
+                trusted_plan_projection=True,
             )
 
         entry = UnifiedProjectEntryService(

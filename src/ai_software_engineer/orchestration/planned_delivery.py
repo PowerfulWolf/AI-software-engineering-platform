@@ -29,6 +29,7 @@ from ai_software_engineer.domain import (
     TaskStatus,
     TechnicalDesign,
 )
+from ai_software_engineer.domain.project_delivery import validate_execution_plan
 from ai_software_engineer.store import TaskNotFound, TaskRepository
 
 if TYPE_CHECKING:
@@ -118,6 +119,14 @@ class ExecutionPlanAgentAdapter:
 
     def materialize(self, request: AgentRequest) -> PlanArtifact:
         components = {component.id: component for component in self._technical_design.components}
+        design_steps = self._technical_design.implementation_steps
+        graph = self._execution_plan.work_graph
+        if graph is not None:
+            by_id = {step.id: step for step in design_steps}
+            ordered = tuple(
+                dict.fromkeys(step_id for package in graph.packages for step_id in package.step_ids)
+            )
+            design_steps = tuple(by_id[step_id] for step_id in ordered)
         steps = tuple(
             PlanStep(
                 step_id=step.id,
@@ -129,13 +138,33 @@ class ExecutionPlanAgentAdapter:
                 ),
                 verification=step.verification,
             )
-            for step in self._technical_design.implementation_steps
+            for step in design_steps
         )
         step_ids = tuple(step.step_id for step in steps)
         strategies = {
             mapping.acceptance_criterion_id: mapping.verification_strategy
             for mapping in self._technical_design.acceptance_mappings
         }
+        criteria_steps = {criterion.id: step_ids for criterion in self._task.acceptance_criteria}
+        if graph is not None:
+            for criterion in self._task.acceptance_criteria:
+                packages = tuple(
+                    package
+                    for package in graph.packages
+                    if criterion.id in package.acceptance_criterion_ids
+                )
+                criteria_steps[criterion.id] = tuple(
+                    dict.fromkeys(step_id for package in packages for step_id in package.step_ids)
+                )
+                tests = tuple(
+                    dict.fromkeys(
+                        f"{test.level}: {test.verification}"
+                        for package in packages
+                        for test in package.tests
+                        if criterion.id in test.acceptance_criterion_ids
+                    )
+                )
+                strategies[criterion.id] = strategies[criterion.id] + "; " + "; ".join(tests)
         content = PlanContent(
             goal=self._product_spec.summary,
             assumptions=self._product_spec.assumptions,
@@ -143,7 +172,7 @@ class ExecutionPlanAgentAdapter:
             acceptance_mapping=tuple(
                 PlanAcceptanceMapping(
                     criterion_id=criterion.id,
-                    step_ids=step_ids,
+                    step_ids=criteria_steps[criterion.id],
                     test_strategy=strategies[criterion.id],
                 )
                 for criterion in self._task.acceptance_criteria
@@ -207,6 +236,7 @@ def _validate_lineage(
     product_spec.validate_integrity()
     technical_design.validate_integrity()
     execution_plan.validate_integrity()
+    validate_execution_plan(product_spec, technical_design, execution_plan)
     if (
         task.status is not TaskStatus.NEW
         or task.metadata.get("project_request_id") != product_spec.request_id

@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol, cast
 from urllib.parse import urlparse
@@ -44,6 +44,8 @@ class StructuredModelResult:
     payload: Mapping[str, object]
     duration_ms: int
     usage: AgentUsage | None = None
+    provider: str | None = None
+    model: str | None = None
 
 
 class StructuredModelClient(Protocol):
@@ -109,19 +111,21 @@ class FallbackStructuredModelClient:
         for index, route in enumerate(candidates):
             try:
                 if input_images:
-                    return route.client.complete(
+                    result = route.client.complete(
                         instructions=instructions,
                         input_payload=input_payload,
                         output_schema=output_schema,
                         timeout_seconds=timeout_seconds,
                         input_images=input_images,
                     )
-                return route.client.complete(
-                    instructions=instructions,
-                    input_payload=input_payload,
-                    output_schema=output_schema,
-                    timeout_seconds=timeout_seconds,
-                )
+                else:
+                    result = route.client.complete(
+                        instructions=instructions,
+                        input_payload=input_payload,
+                        output_schema=output_schema,
+                        timeout_seconds=timeout_seconds,
+                    )
+                return replace(result, provider=route.provider, model=route.model)
             except StructuredModelError as error:
                 last = error
                 if index == len(candidates) - 1 or not _allows_fallback(error):

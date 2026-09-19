@@ -66,6 +66,9 @@ def test_screenshot_rejects_unsupported_content_and_detects_tampering(
 
 
 class _ProductBackend(StructuredModelClient):
+    def accept_single_repository(self, checkpoint: JointCheckpoint) -> NoReturn:
+        raise AssertionError("product fixture cannot accept delivery")
+
     def __init__(self) -> None:
         self.models = JointModels()
         self.roles: list[TeamRole] = []

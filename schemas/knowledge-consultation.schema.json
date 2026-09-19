@@ -1,0 +1,454 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/knowledge-consultation.schema.json",
+  "$defs": {
+    "KnowledgeAssessment": {
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "SUFFICIENT",
+            "GAP"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "claims": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/KnowledgeClaim"
+          },
+          "title": "Claims",
+          "type": "array"
+        },
+        "gap_question": {
+          "anyOf": [
+            {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gap Question"
+        },
+        "gap_reason": {
+          "default": "MISSING",
+          "enum": [
+            "MISSING",
+            "CONFLICT",
+            "STALE",
+            "UNVERIFIABLE"
+          ],
+          "title": "Gap Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "KnowledgeAssessment",
+      "type": "object"
+    },
+    "KnowledgeCitation": {
+      "additionalProperties": false,
+      "properties": {
+        "document_id": {
+          "pattern": "^[a-z][a-zA-Z0-9_.:-]{0,159}$",
+          "title": "Document Id",
+          "type": "string"
+        },
+        "scope": {
+          "enum": [
+            "team",
+            "project",
+            "repository",
+            "spec"
+          ],
+          "title": "Scope",
+          "type": "string"
+        },
+        "document_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Document Sha256",
+          "type": "string"
+        },
+        "chunk_id": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Chunk Id",
+          "type": "string"
+        },
+        "chunk_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Chunk Sha256",
+          "type": "string"
+        },
+        "source_uri": {
+          "minLength": 1,
+          "title": "Source Uri",
+          "type": "string"
+        }
+      },
+      "required": [
+        "document_id",
+        "scope",
+        "document_sha256",
+        "chunk_id",
+        "chunk_sha256",
+        "source_uri"
+      ],
+      "title": "KnowledgeCitation",
+      "type": "object"
+    },
+    "KnowledgeClaim": {
+      "additionalProperties": false,
+      "description": "A model assertion must cite a chunk actually read by this run.",
+      "properties": {
+        "statement": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Statement",
+          "type": "string"
+        },
+        "citations": {
+          "items": {
+            "$ref": "#/$defs/KnowledgeCitation"
+          },
+          "minItems": 1,
+          "title": "Citations",
+          "type": "array"
+        }
+      },
+      "required": [
+        "statement",
+        "citations"
+      ],
+      "title": "KnowledgeClaim",
+      "type": "object"
+    },
+    "KnowledgeIntent": {
+      "additionalProperties": false,
+      "properties": {
+        "queries": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 4,
+          "title": "Queries",
+          "type": "array"
+        }
+      },
+      "required": [
+        "queries"
+      ],
+      "title": "KnowledgeIntent",
+      "type": "object"
+    },
+    "KnowledgeResolution": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "knowledge_resolution",
+          "default": "knowledge_resolution",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "gap_id": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Gap Id",
+          "type": "string"
+        },
+        "previous_run_id": {
+          "minLength": 1,
+          "title": "Previous Run Id",
+          "type": "string"
+        },
+        "answer": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Answer",
+          "type": "string"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/KnowledgeResolutionSource"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Sources",
+          "type": "array"
+        },
+        "approval_reference": {
+          "minLength": 1,
+          "title": "Approval Reference",
+          "type": "string"
+        },
+        "approved_by": {
+          "minLength": 1,
+          "title": "Approved By",
+          "type": "string"
+        },
+        "disposition": {
+          "default": "REQUIREMENT_ONLY",
+          "enum": [
+            "REQUIREMENT_ONLY",
+            "PROPOSE_LEARNING"
+          ],
+          "title": "Disposition",
+          "type": "string"
+        },
+        "resolution_id": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Resolution Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "gap_id",
+        "previous_run_id",
+        "answer",
+        "sources",
+        "approval_reference",
+        "approved_by",
+        "resolution_id"
+      ],
+      "title": "KnowledgeResolution",
+      "type": "object"
+    },
+    "KnowledgeResolutionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "uri": {
+          "minLength": 1,
+          "title": "Uri",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "content": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Content",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri",
+        "sha256",
+        "content"
+      ],
+      "title": "KnowledgeResolutionSource",
+      "type": "object"
+    },
+    "KnowledgeRunBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Id"
+        },
+        "role": {
+          "$ref": "#/$defs/TeamRole"
+        },
+        "team_id": {
+          "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Team Id",
+          "type": "string"
+        },
+        "project_id": {
+          "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "requirement_id": {
+          "pattern": "^[a-z][a-zA-Z0-9_.:-]{0,159}$",
+          "title": "Requirement Id",
+          "type": "string"
+        },
+        "repository_ids": {
+          "items": {
+            "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Repository Ids",
+          "type": "array"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "context_manifest_id": {
+          "pattern": "^ctx_[a-f0-9]{64}$",
+          "title": "Context Manifest Id",
+          "type": "string"
+        },
+        "snapshot_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Snapshot Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "role",
+        "team_id",
+        "project_id",
+        "requirement_id",
+        "repository_ids",
+        "source_revision",
+        "context_manifest_id",
+        "snapshot_sha256"
+      ],
+      "title": "KnowledgeRunBinding",
+      "type": "object"
+    },
+    "KnowledgeRunManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "binding": {
+          "$ref": "#/$defs/KnowledgeRunBinding"
+        },
+        "snapshot_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Snapshot Sha256",
+          "type": "string"
+        },
+        "evidence_ids": {
+          "items": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "citations": {
+          "items": {
+            "$ref": "#/$defs/KnowledgeCitation"
+          },
+          "title": "Citations",
+          "type": "array"
+        },
+        "manifest_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Manifest Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "binding",
+        "snapshot_sha256",
+        "evidence_ids",
+        "citations",
+        "manifest_sha256"
+      ],
+      "title": "KnowledgeRunManifest",
+      "type": "object"
+    },
+    "TeamRole": {
+      "description": "Long-lived roles that a Team-owned AgentProfile may declare.",
+      "enum": [
+        "manager",
+        "product",
+        "designer",
+        "planner",
+        "coder",
+        "qa",
+        "reviewer"
+      ],
+      "title": "TeamRole",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "binding": {
+      "$ref": "#/$defs/KnowledgeRunBinding"
+    },
+    "input_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Input Sha256",
+      "type": "string"
+    },
+    "intent": {
+      "$ref": "#/$defs/KnowledgeIntent"
+    },
+    "assessment": {
+      "$ref": "#/$defs/KnowledgeAssessment"
+    },
+    "manifest": {
+      "$ref": "#/$defs/KnowledgeRunManifest"
+    },
+    "resolutions": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/KnowledgeResolution"
+      },
+      "title": "Resolutions",
+      "type": "array"
+    },
+    "workflow_evidence_ids": {
+      "default": [],
+      "items": {
+        "pattern": "^[a-f0-9]{64}$",
+        "type": "string"
+      },
+      "title": "Workflow Evidence Ids",
+      "type": "array"
+    },
+    "call_ids": {
+      "default": [],
+      "items": {
+        "pattern": "^[a-f0-9]{64}$",
+        "type": "string"
+      },
+      "title": "Call Ids",
+      "type": "array"
+    },
+    "consultation_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Consultation Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "binding",
+    "input_sha256",
+    "intent",
+    "assessment",
+    "manifest",
+    "consultation_sha256"
+  ],
+  "title": "KnowledgeConsultation",
+  "type": "object"
+}

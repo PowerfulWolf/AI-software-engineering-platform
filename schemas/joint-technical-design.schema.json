@@ -1,4 +1,6 @@
 {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/joint-technical-design.schema.json",
   "$defs": {
     "AcceptanceMappingDraft": {
       "additionalProperties": false,
@@ -66,6 +68,58 @@
         "affected_paths"
       ],
       "title": "ComponentDraft",
+      "type": "object"
+    },
+    "DesignComplexityFacts": {
+      "additionalProperties": false,
+      "description": "Designer facts only: Manager policy owns their routing interpretation.",
+      "properties": {
+        "database_migration": {
+          "default": false,
+          "title": "Database Migration",
+          "type": "boolean"
+        },
+        "interface_compatibility": {
+          "default": false,
+          "title": "Interface Compatibility",
+          "type": "boolean"
+        },
+        "data_backfill": {
+          "default": false,
+          "title": "Data Backfill",
+          "type": "boolean"
+        },
+        "security": {
+          "default": false,
+          "title": "Security",
+          "type": "boolean"
+        },
+        "performance": {
+          "default": false,
+          "title": "Performance",
+          "type": "boolean"
+        },
+        "concurrency": {
+          "default": false,
+          "title": "Concurrency",
+          "type": "boolean"
+        },
+        "work_package_dependencies": {
+          "default": false,
+          "title": "Work Package Dependencies",
+          "type": "boolean"
+        },
+        "integration_groups": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Integration Groups",
+          "type": "array"
+        }
+      },
+      "title": "DesignComplexityFacts",
       "type": "object"
     },
     "DesignRiskDraft": {
@@ -267,6 +321,17 @@
           },
           "title": "Risks",
           "type": "array"
+        },
+        "complexity_facts": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignComplexityFacts"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -353,7 +418,5 @@
     "units"
   ],
   "title": "JointTechnicalDesign",
-  "type": "object",
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ai-software-engineer.local/schemas/joint-technical-design.schema.json"
+  "type": "object"
 }

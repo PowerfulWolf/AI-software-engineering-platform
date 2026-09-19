@@ -31,6 +31,9 @@ Repository 目录和 Requirement 交付事实保持隔离。
 - 一条自然语言需求；Product Agent 将其整理为可评审 Product Spec，并由用户确认；
 - Team 通用知识、Project 背景知识、必须遵守的 Team/Project Spec、Repository 原生规范，以及
   AgentProfile 与 ModelPolicy。知识用于理解，Spec 用于约束和验收，两者不再混放。
+- Manager 确定性区分简单快速计划与复杂 Planner 工作包；Agent 按冻结快照主动检索知识，
+  知识缺口经人工批准后从 checkpoint 恢复。知识导入通过异步、增量 Indexer 发布，页面提供状态和重试。
+  运行、存量恢复及回滚步骤见 [规划与知识运行说明](docs/planning-knowledge-operations.md)。
 
 日常 Web Console 入口的交付结果：
 

@@ -15,6 +15,12 @@ from ai_software_engineer.domain import (
     TaskStatus,
     derive_delivery_task,
 )
+from ai_software_engineer.domain.project_delivery import (
+    ExecutionPlan,
+    PlanTestItem,
+    PlanWorkGraph,
+    PlanWorkPackage,
+)
 from ai_software_engineer.manager.dispatch import DispatchCommitRecord
 from ai_software_engineer.orchestration.planned_delivery import (
     DispatchTaskConflict,
@@ -66,8 +72,52 @@ def test_dispatch_task_is_exact_create_or_compare_across_restart(tmp_path: Path)
             materializer.materialize(cast(DispatchCommitRecord, _Dispatch(changed)))
 
 
-def test_execution_plan_is_mechanically_materialized_as_task_plan(tmp_path: Path) -> None:
+@pytest.mark.parametrize("with_graph", (False, True))
+def test_execution_plan_is_mechanically_materialized_as_task_plan(
+    tmp_path: Path, with_graph: bool
+) -> None:
     task, spec, design, plan = _facts(tmp_path)
+    if with_graph:
+        plan = ExecutionPlan.create(
+            spec,
+            design,
+            plan_id=plan.id,
+            version=1,
+            phases=plan.phases,
+            created_at=plan.created_at,
+            work_graph=PlanWorkGraph(
+                packages=(
+                    PlanWorkPackage(
+                        id="package_delivery",
+                        component_ids=tuple(item.id for item in design.components),
+                        step_ids=tuple(step.id for step in design.implementation_steps),
+                        acceptance_criterion_ids=tuple(
+                            item.id for item in spec.acceptance_criteria
+                        ),
+                        risk=plan.phases[0].risk,
+                        checkpoints=("Exact independent acceptance",),
+                        tests=tuple(
+                            PlanTestItem(
+                                id="matrix_" + item.acceptance_criterion_id + "_" + level,
+                                acceptance_criterion_ids=(item.acceptance_criterion_id,),
+                                level=level,
+                                verification="Run the Planner-selected integration matrix",
+                            )
+                            for item in design.acceptance_mappings
+                            for level in (*item.test_levels, "integration")
+                        ),
+                    ),
+                )
+            ),
+        )
+        task = task.model_copy(
+            update={
+                "metadata": {
+                    **task.metadata,
+                    "execution_plan_sha256": plan.execution_plan_sha256,
+                }
+            }
+        )
     adapter = ExecutionPlanAgentAdapter(
         task=task,
         product_spec=spec,
@@ -105,6 +155,11 @@ def test_execution_plan_is_mechanically_materialized_as_task_plan(tmp_path: Path
         criterion.id for criterion in task.acceptance_criteria
     }
     assert result.artifact.integrity.validated is False
+    if with_graph:
+        assert all(
+            "Planner-selected integration matrix" in mapping.test_strategy
+            for mapping in result.artifact.content.acceptance_mapping
+        )
 
 
 def test_planning_adapter_rejects_a_non_planning_role(tmp_path: Path) -> None:

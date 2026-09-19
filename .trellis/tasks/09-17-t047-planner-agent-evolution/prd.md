@@ -14,22 +14,22 @@
 
 ## Acceptance Criteria
 
-- [ ] 由 Manager 的确定性 `PlanningGate`/`ComplexityClassifier` 负责简单/复杂需求分类；Product、Designer
+- [x] 由 Manager 的确定性 `PlanningGate`/`ComplexityClassifier` 负责简单/复杂需求分类；Product、Designer
       只提供结构化事实，Planner 不参与路由自身；
-- [ ] 定义可测试、版本化的分类输入、规则、理由码和决策结果；相同事实必须得到相同分类；
-- [ ] 至少覆盖多 Repository/模块、工作包依赖、数据库迁移、接口兼容、数据回填、安全、性能、并发、
+- [x] 定义可测试、版本化的分类输入、规则、理由码和决策结果；相同事实必须得到相同分类；
+- [x] 至少覆盖多 Repository/模块、工作包依赖、数据库迁移、接口兼容、数据回填、安全、性能、并发、
       中高技术风险和多组集成测试矩阵等复杂条件；
-- [ ] 人工可以把简单需求升级为复杂规划，但不得把规则判定为复杂或高风险的需求强制降级；升级决定
+- [x] 人工可以把简单需求升级为复杂规划，但不得把规则判定为复杂或高风险的需求强制降级；升级决定
       必须作为不可变审计事实持久化；
-- [ ] 简单需求通过确定性计划生成器产出最小 `Coder → QA → Reviewer` 计划，零模型调用；
-- [ ] 复杂需求的 Planner 输出包含模块、工作步骤、依赖、风险、测试矩阵、执行顺序和检查点；
-- [ ] 计划能够表达多个有界工作包及其依赖，但不得直接写入具体 Agent、provider、model、Assignment 或 Lease；
-- [ ] Planner 只能读取 Scheduler/ModelRouter preview，不得持有数据库写口、Lease 或调度提交权限；
-- [ ] Manager 使用当前事实重新校验计划、容量、模型能力和依赖后，才可以原子提交 dispatch；
-- [ ] Product Spec 的验收标准不可被 Planner 改写、删除或弱化；每个工作包和测试项必须可追溯到验收标准；
-- [ ] Planner 被打回后，新版本必须引用前一计划和结构化反馈，旧计划保持不可变；
-- [ ] 进程重启后能够从 durable Planner run/plan/checkpoint 恢复，不能依赖模型会话记忆；
-- [ ] 覆盖简单快速计划、复杂串行计划、合法有界并行、依赖环、验收覆盖缺失、容量漂移和越权分配测试。
+- [x] 简单需求通过确定性计划生成器产出最小 `Coder → QA → Reviewer` 计划，零模型调用；
+- [x] 复杂需求的 Planner 输出包含模块、工作步骤、依赖、风险、测试矩阵、执行顺序和检查点；
+- [x] 计划能够表达多个有界工作包及其依赖，但不得直接写入具体 Agent、provider、model、Assignment 或 Lease；
+- [x] Planner 只能读取 Scheduler/ModelRouter preview，不得持有数据库写口、Lease 或调度提交权限；
+- [x] Manager 使用当前事实重新校验计划、容量、模型能力和依赖后，才可以原子提交 dispatch；
+- [x] Product Spec 的验收标准不可被 Planner 改写、删除或弱化；每个工作包和测试项必须可追溯到验收标准；
+- [x] Planner 被打回后，新版本必须引用前一计划和结构化反馈，旧计划保持不可变；
+- [x] 进程重启后能够从 durable Planner run/plan/checkpoint 恢复，不能依赖模型会话记忆；
+- [x] 覆盖简单快速计划、复杂串行计划、合法有界并行、依赖环、验收覆盖缺失、容量漂移和越权分配测试。
 
 ## Non-goals
 
@@ -48,3 +48,8 @@ Planner，而不是让 Manager 同时生成并批准自己的计划。
 复杂度路由同样属于 Manager 的 policy-bound Skill，而不是 prompt 判断。分类输出至少包含规则版本、
 输入事实摘要、`SIMPLE`/`COMPLEX` 结论和理由码；简单路径的快速计划与复杂路径的 Planner 计划都必须
 经过同一个 Manager commit-dispatch 校验边界。
+
+## 续作验收记录（2026-09-19）
+
+本轮实现和任务相关验证已完成。完整测试结果、独立 QA/Review 引用、存量数据处置、
+回滚及验证限制见 `docs/t047-t049-continuation.md`。代码仍保留在原独立 worktree，未提交、合并或部署。

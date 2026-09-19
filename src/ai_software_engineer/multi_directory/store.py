@@ -153,6 +153,22 @@ def _validate_successor(previous: JointCheckpoint | None, item: JointCheckpoint)
             raise ValueError("integration retry requires an exact immutable approval")
     if previous.design is not None and item.design != previous.design:
         raise ValueError("committed joint design and plan are immutable")
+    if previous.planning_upgrade is not None and item.planning_upgrade != previous.planning_upgrade:
+        raise ValueError("human planning upgrade is immutable")
+    if (
+        previous.planning_decision is not None
+        and item.planning_decision != previous.planning_decision
+        and (
+            previous.planning_upgrade is not None
+            or item.planning_upgrade is None
+            or previous.stage is not JointStage.PLANNING
+            or previous.plan is not None
+            or item.planning_decision is None
+            or item.planning_decision.facts != previous.planning_decision.facts
+            or item.planning_decision.mode.value != "COMPLEX"
+        )
+    ):
+        raise ValueError("planning decision cannot be downgraded or replaced")
     if previous.integration_retry_approval is not None and item.attempts.get(
         "integration", 0
     ) < previous.attempts.get("integration", 0):

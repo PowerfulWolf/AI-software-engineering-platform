@@ -1,4 +1,6 @@
 {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/requirement-checkpoint.schema.json",
   "$defs": {
     "AcceptanceDraft": {
       "additionalProperties": false,
@@ -385,6 +387,58 @@
       "title": "DeliveryStageAttempts",
       "type": "object"
     },
+    "DesignComplexityFacts": {
+      "additionalProperties": false,
+      "description": "Designer facts only: Manager policy owns their routing interpretation.",
+      "properties": {
+        "database_migration": {
+          "default": false,
+          "title": "Database Migration",
+          "type": "boolean"
+        },
+        "interface_compatibility": {
+          "default": false,
+          "title": "Interface Compatibility",
+          "type": "boolean"
+        },
+        "data_backfill": {
+          "default": false,
+          "title": "Data Backfill",
+          "type": "boolean"
+        },
+        "security": {
+          "default": false,
+          "title": "Security",
+          "type": "boolean"
+        },
+        "performance": {
+          "default": false,
+          "title": "Performance",
+          "type": "boolean"
+        },
+        "concurrency": {
+          "default": false,
+          "title": "Concurrency",
+          "type": "boolean"
+        },
+        "work_package_dependencies": {
+          "default": false,
+          "title": "Work Package Dependencies",
+          "type": "boolean"
+        },
+        "integration_groups": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Integration Groups",
+          "type": "array"
+        }
+      },
+      "title": "DesignComplexityFacts",
+      "type": "object"
+    },
     "DesignRiskDraft": {
       "additionalProperties": false,
       "properties": {
@@ -559,12 +613,67 @@
           "minItems": 3,
           "title": "Phases",
           "type": "array"
+        },
+        "work_graph": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanWorkGraph"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "revision_feedback": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanRevisionFeedback"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
         "phases"
       ],
       "title": "ExecutionPlanDraft",
+      "type": "object"
+    },
+    "HumanPlanningUpgrade": {
+      "additionalProperties": false,
+      "properties": {
+        "input_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Input Sha256",
+          "type": "string"
+        },
+        "operator_id": {
+          "minLength": 1,
+          "title": "Operator Id",
+          "type": "string"
+        },
+        "rationale": {
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        },
+        "decided_at": {
+          "format": "date-time",
+          "title": "Decided At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "input_sha256",
+        "operator_id",
+        "rationale",
+        "decided_at"
+      ],
+      "title": "HumanPlanningUpgrade",
       "type": "object"
     },
     "IntegrationCheck": {
@@ -820,6 +929,59 @@
           },
           "title": "Integration Checks",
           "type": "array"
+        },
+        "max_parallelism": {
+          "anyOf": [
+            {
+              "maximum": 4,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Parallelism"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Version"
+        },
+        "previous_plan_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Previous Plan Sha256"
+        },
+        "feedback_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Feedback Sha256"
         }
       },
       "required": [
@@ -827,6 +989,39 @@
         "units"
       ],
       "title": "JointExecutionPlan",
+      "type": "object"
+    },
+    "JointPlanFeedback": {
+      "additionalProperties": false,
+      "properties": {
+        "previous_plan": {
+          "$ref": "#/$defs/JointExecutionPlan"
+        },
+        "reason_codes": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Reason Codes",
+          "type": "array"
+        },
+        "required_changes": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Required Changes",
+          "type": "array"
+        }
+      },
+      "required": [
+        "previous_plan",
+        "reason_codes",
+        "required_changes"
+      ],
+      "title": "JointPlanFeedback",
       "type": "object"
     },
     "JointProductSpec": {
@@ -1014,6 +1209,314 @@
       ],
       "title": "PhaseDraft",
       "type": "object"
+    },
+    "PlanRevisionFeedback": {
+      "additionalProperties": false,
+      "properties": {
+        "previous_plan_id": {
+          "pattern": "^execution_plan_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Previous Plan Id",
+          "type": "string"
+        },
+        "previous_plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Previous Plan Sha256",
+          "type": "string"
+        },
+        "reason_codes": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Reason Codes",
+          "type": "array"
+        },
+        "required_changes": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Required Changes",
+          "type": "array"
+        }
+      },
+      "required": [
+        "previous_plan_id",
+        "previous_plan_sha256",
+        "reason_codes",
+        "required_changes"
+      ],
+      "title": "PlanRevisionFeedback",
+      "type": "object"
+    },
+    "PlanTestItem": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "acceptance_criterion_ids": {
+          "items": {
+            "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Acceptance Criterion Ids",
+          "type": "array"
+        },
+        "level": {
+          "minLength": 1,
+          "title": "Level",
+          "type": "string"
+        },
+        "verification": {
+          "minLength": 1,
+          "title": "Verification",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "acceptance_criterion_ids",
+        "level",
+        "verification"
+      ],
+      "title": "PlanTestItem",
+      "type": "object"
+    },
+    "PlanWorkGraph": {
+      "additionalProperties": false,
+      "properties": {
+        "packages": {
+          "items": {
+            "$ref": "#/$defs/PlanWorkPackage"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Packages",
+          "type": "array"
+        },
+        "max_parallelism": {
+          "default": 1,
+          "maximum": 4,
+          "minimum": 1,
+          "title": "Max Parallelism",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "packages"
+      ],
+      "title": "PlanWorkGraph",
+      "type": "object"
+    },
+    "PlanWorkPackage": {
+      "additionalProperties": false,
+      "description": "Bounded abstract Task proposal; roles within each Task stay serial.",
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "component_ids": {
+          "items": {
+            "pattern": "^component_[a-z0-9][a-z0-9_-]{1,63}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Component Ids",
+          "type": "array"
+        },
+        "step_ids": {
+          "items": {
+            "pattern": "^design_step_[a-z0-9][a-z0-9_-]{1,63}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Step Ids",
+          "type": "array"
+        },
+        "acceptance_criterion_ids": {
+          "items": {
+            "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Acceptance Criterion Ids",
+          "type": "array"
+        },
+        "depends_on": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Depends On",
+          "type": "array"
+        },
+        "risk": {
+          "$ref": "#/$defs/RiskTier"
+        },
+        "checkpoints": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Checkpoints",
+          "type": "array"
+        },
+        "tests": {
+          "items": {
+            "$ref": "#/$defs/PlanTestItem"
+          },
+          "minItems": 1,
+          "title": "Tests",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "component_ids",
+        "step_ids",
+        "acceptance_criterion_ids",
+        "risk",
+        "checkpoints",
+        "tests"
+      ],
+      "title": "PlanWorkPackage",
+      "type": "object"
+    },
+    "PlanningDecision": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "planning_gate_decision",
+          "default": "planning_gate_decision",
+          "title": "Kind",
+          "type": "string"
+        },
+        "rules_version": {
+          "const": "planning-gate-v1",
+          "default": "planning-gate-v1",
+          "title": "Rules Version",
+          "type": "string"
+        },
+        "facts": {
+          "$ref": "#/$defs/PlanningFacts"
+        },
+        "input_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Input Sha256",
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/PlanningMode"
+        },
+        "reason_codes": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Reason Codes",
+          "type": "array"
+        },
+        "human_upgrade": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HumanPlanningUpgrade"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "decision_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Decision Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "facts",
+        "input_sha256",
+        "mode",
+        "reason_codes",
+        "decision_sha256"
+      ],
+      "title": "PlanningDecision",
+      "type": "object"
+    },
+    "PlanningFacts": {
+      "additionalProperties": false,
+      "properties": {
+        "product_spec_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Product Spec Sha256",
+          "type": "string"
+        },
+        "technical_design_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Technical Design Sha256",
+          "type": "string"
+        },
+        "repository_count": {
+          "minimum": 1,
+          "title": "Repository Count",
+          "type": "integer"
+        },
+        "component_count": {
+          "minimum": 1,
+          "title": "Component Count",
+          "type": "integer"
+        },
+        "integration_group_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Integration Group Count",
+          "type": "integer"
+        },
+        "technical_risk": {
+          "$ref": "#/$defs/RiskTier",
+          "default": "low"
+        },
+        "design_facts": {
+          "$ref": "#/$defs/DesignComplexityFacts",
+          "default": {
+            "database_migration": false,
+            "interface_compatibility": false,
+            "data_backfill": false,
+            "security": false,
+            "performance": false,
+            "concurrency": false,
+            "work_package_dependencies": false,
+            "integration_groups": []
+          }
+        }
+      },
+      "required": [
+        "product_spec_sha256",
+        "technical_design_sha256",
+        "repository_count",
+        "component_count"
+      ],
+      "title": "PlanningFacts",
+      "type": "object"
+    },
+    "PlanningMode": {
+      "enum": [
+        "SIMPLE",
+        "COMPLEX"
+      ],
+      "title": "PlanningMode",
+      "type": "string"
     },
     "PrepareProjectResult": {
       "additionalProperties": false,
@@ -2224,6 +2727,17 @@
           },
           "title": "Risks",
           "type": "array"
+        },
+        "complexity_facts": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignComplexityFacts"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -2342,6 +2856,30 @@
     "stage": {
       "$ref": "#/$defs/JointStage"
     },
+    "knowledge_wait_stage": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JointStage"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "knowledge_gap_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Knowledge Gap Id"
+    },
     "scope": {
       "$ref": "#/$defs/DirectoryScope"
     },
@@ -2428,6 +2966,39 @@
       ],
       "default": null
     },
+    "planning_decision": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PlanningDecision"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "planning_upgrade": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/HumanPlanningUpgrade"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "planning_feedback": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JointPlanFeedback"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "children": {
       "default": [],
       "items": {
@@ -2502,7 +3073,5 @@
     "checkpoint_sha256"
   ],
   "title": "JointCheckpoint",
-  "type": "object",
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ai-software-engineer.local/schemas/requirement-checkpoint.schema.json"
+  "type": "object"
 }

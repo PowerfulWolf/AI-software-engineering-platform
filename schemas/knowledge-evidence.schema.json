@@ -1,0 +1,348 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/knowledge-evidence.schema.json",
+  "$defs": {
+    "KnowledgeChunk": {
+      "additionalProperties": false,
+      "properties": {
+        "citation": {
+          "$ref": "#/$defs/KnowledgeCitation"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "section_path": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Section Path",
+          "type": "array"
+        },
+        "ordinal": {
+          "minimum": 0,
+          "title": "Ordinal",
+          "type": "integer"
+        },
+        "content": {
+          "maxLength": 4096,
+          "title": "Content",
+          "type": "string"
+        },
+        "terms": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Terms",
+          "type": "array"
+        }
+      },
+      "required": [
+        "citation",
+        "title",
+        "ordinal",
+        "content"
+      ],
+      "title": "KnowledgeChunk",
+      "type": "object"
+    },
+    "KnowledgeCitation": {
+      "additionalProperties": false,
+      "properties": {
+        "document_id": {
+          "pattern": "^[a-z][a-zA-Z0-9_.:-]{0,159}$",
+          "title": "Document Id",
+          "type": "string"
+        },
+        "scope": {
+          "enum": [
+            "team",
+            "project",
+            "repository",
+            "spec"
+          ],
+          "title": "Scope",
+          "type": "string"
+        },
+        "document_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Document Sha256",
+          "type": "string"
+        },
+        "chunk_id": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Chunk Id",
+          "type": "string"
+        },
+        "chunk_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Chunk Sha256",
+          "type": "string"
+        },
+        "source_uri": {
+          "minLength": 1,
+          "title": "Source Uri",
+          "type": "string"
+        }
+      },
+      "required": [
+        "document_id",
+        "scope",
+        "document_sha256",
+        "chunk_id",
+        "chunk_sha256",
+        "source_uri"
+      ],
+      "title": "KnowledgeCitation",
+      "type": "object"
+    },
+    "KnowledgeHit": {
+      "additionalProperties": false,
+      "properties": {
+        "citation": {
+          "$ref": "#/$defs/KnowledgeCitation"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "section_path": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Section Path",
+          "type": "array"
+        },
+        "matched_terms": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Matched Terms",
+          "type": "array"
+        },
+        "score": {
+          "minimum": 1,
+          "title": "Score",
+          "type": "integer"
+        },
+        "snippet": {
+          "maxLength": 800,
+          "title": "Snippet",
+          "type": "string"
+        }
+      },
+      "required": [
+        "citation",
+        "title",
+        "section_path",
+        "matched_terms",
+        "score",
+        "snippet"
+      ],
+      "title": "KnowledgeHit",
+      "type": "object"
+    },
+    "KnowledgeRunBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Id"
+        },
+        "role": {
+          "$ref": "#/$defs/TeamRole"
+        },
+        "team_id": {
+          "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Team Id",
+          "type": "string"
+        },
+        "project_id": {
+          "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "requirement_id": {
+          "pattern": "^[a-z][a-zA-Z0-9_.:-]{0,159}$",
+          "title": "Requirement Id",
+          "type": "string"
+        },
+        "repository_ids": {
+          "items": {
+            "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Repository Ids",
+          "type": "array"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "context_manifest_id": {
+          "pattern": "^ctx_[a-f0-9]{64}$",
+          "title": "Context Manifest Id",
+          "type": "string"
+        },
+        "snapshot_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Snapshot Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "role",
+        "team_id",
+        "project_id",
+        "requirement_id",
+        "repository_ids",
+        "source_revision",
+        "context_manifest_id",
+        "snapshot_sha256"
+      ],
+      "title": "KnowledgeRunBinding",
+      "type": "object"
+    },
+    "TeamRole": {
+      "description": "Long-lived roles that a Team-owned AgentProfile may declare.",
+      "enum": [
+        "manager",
+        "product",
+        "designer",
+        "planner",
+        "coder",
+        "qa",
+        "reviewer"
+      ],
+      "title": "TeamRole",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "v0.1",
+      "default": "v0.1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "binding": {
+      "$ref": "#/$defs/KnowledgeRunBinding"
+    },
+    "operation_id": {
+      "pattern": "^[a-z][a-zA-Z0-9_.:-]{0,159}$",
+      "title": "Operation Id",
+      "type": "string"
+    },
+    "operation": {
+      "enum": [
+        "search_knowledge",
+        "read_knowledge"
+      ],
+      "title": "Operation",
+      "type": "string"
+    },
+    "request_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Request Sha256",
+      "type": "string"
+    },
+    "query": {
+      "default": "",
+      "title": "Query",
+      "type": "string"
+    },
+    "scopes": {
+      "default": [],
+      "items": {
+        "enum": [
+          "team",
+          "project",
+          "repository",
+          "spec"
+        ],
+        "type": "string"
+      },
+      "title": "Scopes",
+      "type": "array"
+    },
+    "status": {
+      "enum": [
+        "HIT",
+        "MISS",
+        "READ",
+        "REJECTED"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "hits": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/KnowledgeHit"
+      },
+      "title": "Hits",
+      "type": "array"
+    },
+    "chunk": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/KnowledgeChunk"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "error_code": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Error Code"
+    },
+    "evidence_id": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Evidence Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "binding",
+    "operation_id",
+    "operation",
+    "request_sha256",
+    "status",
+    "evidence_id"
+  ],
+  "title": "KnowledgeEvidence",
+  "type": "object"
+}

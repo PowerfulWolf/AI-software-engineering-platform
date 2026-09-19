@@ -30,6 +30,7 @@ from ai_software_engineer.domain.enums import (
 from ai_software_engineer.domain.identity import ProjectId, RepositoryId, TeamId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.task import TaskId
+from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.knowledge_documents import (
     KnowledgeDocumentError,
     ProjectKnowledgeDocumentStore,
@@ -63,6 +64,7 @@ class LearningError(RuntimeError):
 class LearningTrigger(StrEnum):
     QA_FAILURE = "QA_FAILURE"
     REVIEW_REJECTION = "REVIEW_REJECTION"
+    KNOWLEDGE_RESOLUTION = "KNOWLEDGE_RESOLUTION"
 
 
 class LearningTarget(StrEnum):
@@ -90,6 +92,16 @@ class LearningEvidence(DomainModel):
         return self
 
 
+class KnowledgeLearningEvidence(DomainModel):
+    """A genuine approved gap resolution, never a fabricated delivery verdict."""
+
+    requirement_id: NonEmptyStr
+    gap_id: Digest
+    resolution_id: Digest
+    previous_run_id: NonEmptyStr
+    evidence_uris: tuple[NonEmptyStr, ...]
+
+
 class LearningProposal(DomainModel):
     schema_version: Literal["v0.1"] = "v0.1"
     proposal_id: LearningProposalId
@@ -103,17 +115,16 @@ class LearningProposal(DomainModel):
     proposed_improvement: NonEmptyStr
     verification: NonEmptyStr
     suggested_target: LearningTarget = LearningTarget.SPEC
-    evidence: Annotated[tuple[LearningEvidence, ...], Field(min_length=1)]
+    evidence: Annotated[
+        tuple[LearningEvidence | KnowledgeLearningEvidence, ...], Field(min_length=1)
+    ]
     created_at: AwareDatetime
     proposal_sha256: Digest
 
     @model_validator(mode="after")
     def validate_proposal(self) -> Self:
         ensure_unique(
-            (
-                (item.repository_id, item.task_id, item.artifact_id, item.finding_id)
-                for item in self.evidence
-            ),
+            (_sha256(item.to_wire()) for item in self.evidence),
             "Learning evidence identities",
         )
         return self
@@ -130,8 +141,13 @@ class LearningProposal(DomainModel):
 
     def as_markdown(self) -> str:
         evidence = "\n".join(
-            f"- `{item.repository_id}` / `{item.task_id}` / `{item.artifact_id}` / "
-            f"`{item.finding_id}`"
+            (
+                f"- `{item.repository_id}` / `{item.task_id}` / `{item.artifact_id}` / "
+                f"`{item.finding_id}`"
+                if isinstance(item, LearningEvidence)
+                else f"- `{item.requirement_id}` / gap `{item.gap_id}` / "
+                f"resolution `{item.resolution_id}`"
+            )
             for item in self.evidence
         )
         return (
@@ -244,6 +260,56 @@ class ProjectLearningStore:
     @property
     def root(self) -> Path:
         return self.project.root / "specs" / "learning"
+
+    def propose_knowledge_resolution(
+        self, records: KnowledgeRecordStore, resolution_id: str
+    ) -> LearningProposal:
+        """Queue a proposal only; publication still requires exact human Learning approval."""
+        from ai_software_engineer.knowledge.gaps import KnowledgeGap, KnowledgeResolution
+
+        self.project.validate_current()
+        resolution = records.get("resolutions", resolution_id, KnowledgeResolution)
+        resolution.validate_integrity()
+        gap = records.get("gaps", resolution.gap_id, KnowledgeGap)
+        gap.validate_integrity()
+        if (
+            resolution.disposition != "PROPOSE_LEARNING"
+            or records.get("gap-resolutions", gap.gap_id, KnowledgeResolution) != resolution
+            or resolution.previous_run_id != gap.binding.run_id
+            or gap.binding.team_id != self.project.manifest.team_id
+            or gap.binding.project_id != self.project.manifest.project_id
+        ):
+            raise LearningError("Knowledge Learning requires an approved scoped resolution")
+        evidence = KnowledgeLearningEvidence(
+            requirement_id=gap.binding.requirement_id,
+            gap_id=gap.gap_id,
+            resolution_id=resolution.resolution_id,
+            previous_run_id=resolution.previous_run_id,
+            evidence_uris=tuple(source.uri for source in resolution.sources),
+        )
+        provisional = LearningProposal(
+            proposal_id="learning_proposal_" + "0" * 32,
+            team_id=gap.binding.team_id,
+            project_id=gap.binding.project_id,
+            trigger=LearningTrigger.KNOWLEDGE_RESOLUTION,
+            recurrence_key=_sha256({"question": gap.question, "reason": gap.reason}),
+            occurrence_count=1,
+            title=("Verified knowledge: " + gap.question)[:200],
+            observation=gap.question,
+            proposed_improvement=resolution.answer,
+            verification="New requirements must retrieve and cite this approved answer; "
+            "existing frozen requirements retain their original context.",
+            suggested_target=LearningTarget.KNOWLEDGE,
+            evidence=(evidence,),
+            created_at=datetime.now(UTC),
+            proposal_sha256="0" * 64,
+        )
+        identified = provisional.model_copy(
+            update={"proposal_id": "learning_proposal_" + _proposal_identity(provisional)[:32]}
+        )
+        proposal = identified.model_copy(update={"proposal_sha256": identified.recompute_digest()})
+        self._put_proposal(proposal)
+        return self._read_proposal(self.root / proposal.proposal_id)
 
     def collect(self, *, collected_at: datetime | None = None) -> tuple[LearningProposalView, ...]:
         self.project.validate_current()

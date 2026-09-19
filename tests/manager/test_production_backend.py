@@ -81,6 +81,8 @@ class _ScriptedStructuredClient(StructuredModelClient):
     ) -> StructuredModelResult:
         del input_images
         del instructions, input_payload, timeout_seconds
+        if output_schema.get("title") == "KnowledgeIntent":
+            return StructuredModelResult(payload={"queries": []}, duration_ms=0)
         properties = output_schema["properties"]
         assert isinstance(properties, Mapping)
         if "action" in properties:

@@ -29,6 +29,7 @@ from ai_software_engineer.multi_directory.models import (
     JointStage,
     digest,
 )
+from ai_software_engineer.multi_directory.planning import compile_joint_plan
 from ai_software_engineer.multi_directory.production import ProductionJointBackend
 from ai_software_engineer.multi_directory.scope import DirectoryUnit
 from ai_software_engineer.multi_directory.service import CloseRequirement, JointDeliveryService
@@ -78,6 +79,9 @@ class PlanningBackend:
 
     def integrate(self, checkpoint: JointCheckpoint) -> IntegrationEvidence:
         raise AssertionError("no delivery verdict exists")
+
+    def accept_single_repository(self, checkpoint: JointCheckpoint) -> NoReturn:
+        raise AssertionError("no native acceptance exists in this planning fixture")
 
 
 def _done_child(checkpoint: JointCheckpoint, index: int) -> ChildDelivery:
@@ -201,6 +205,37 @@ def test_rejected_coverage_survives_restart_and_reaches_next_attempt(
     valid = cp.plan.model_copy(
         update={"design_sha256": digest(design), "integration_checks": (check,)}
     )
+    revised_units = []
+    for unit in valid.units:
+        graph = unit.plan.work_graph
+        assert graph is not None
+        package = graph.packages[0]
+        revised = package.model_copy(
+            update={
+                "acceptance_criterion_ids": (*package.acceptance_criterion_ids, "ac_001_002"),
+                "tests": (
+                    *package.tests,
+                    package.tests[0].model_copy(
+                        update={
+                            "id": "test_second_acceptance",
+                            "acceptance_criterion_ids": ("ac_001_002",),
+                        }
+                    ),
+                ),
+            }
+        )
+        revised_units.append(
+            unit.model_copy(
+                update={
+                    "plan": unit.plan.model_copy(
+                        update={
+                            "work_graph": graph.model_copy(update={"packages": (revised,)}),
+                        }
+                    )
+                }
+            )
+        )
+    valid = valid.model_copy(update={"units": tuple(revised_units)})
     bad_check = check.model_copy(
         update=(
             {"acceptance_ids": ("ac_001_001",)}
@@ -264,7 +299,11 @@ def test_rejected_coverage_survives_restart_and_reaches_next_attempt(
         restarted.resume(command)
     assert backend.inputs[1]["next_action"] == rejected.next_action
     accepted = restarted.status(seed.delivery_id).checkpoint
-    assert accepted.stage is JointStage.DELIVERING and accepted.plan == valid
+    assert accepted.stage is JointStage.DELIVERING
+    assert accepted.plan == compile_joint_plan(accepted, valid)
+    assert accepted.planning_feedback is not None
+    assert accepted.plan.previous_plan_sha256 == digest(invalid)
+    assert accepted.plan.feedback_sha256 == digest(accepted.planning_feedback)
     assert accepted.attempts == {"plan": 2}
     assert not accepted.children and accepted.integration is None
 
@@ -391,9 +430,10 @@ def test_failed_integration_replans_without_redelivering_done_children(
     result = service.resume(command).checkpoint
 
     assert result.stage is (JointStage.BLOCKED if retry_fails else JointStage.DONE)
-    assert result.plan == fresh_plan
+    assert result.plan == compile_joint_plan(result, fresh_plan)
     assert result.children == children
-    assert result.integration is not None and result.integration.plan_sha256 == digest(fresh_plan)
+    assert result.integration is not None and result.plan is not None
+    assert result.integration.plan_sha256 == digest(result.plan)
     assert backend.inputs and len(backend.inputs) == 1
     assert backend.deliver_calls == []
     assert backend.integrate_calls == 1

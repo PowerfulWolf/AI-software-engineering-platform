@@ -21,6 +21,7 @@ from ai_software_engineer.domain.project_delivery import (
     StageSha256,
     TechnicalDesign,
     validate_execution_plan,
+    validate_execution_plan_revision,
 )
 from ai_software_engineer.manager.stages import StageAdvanceAuthorization
 from ai_software_engineer.planning.agents import (
@@ -31,7 +32,16 @@ from ai_software_engineer.planning.agents import (
     validate_planner_result,
 )
 from ai_software_engineer.planning.context import PlannerContextBuilder
+from ai_software_engineer.planning.fast import fast_plan
+from ai_software_engineer.planning.gate import (
+    HumanPlanningUpgrade,
+    PlanningDecision,
+    PlanningFacts,
+    PlanningGate,
+    PlanningMode,
+)
 from ai_software_engineer.planning.models import (
+    PlannerAgentErrorCode,
     PlannerCommitCheckpoint,
     PlannerRunOutcome,
     PlannerRunRecord,
@@ -91,6 +101,12 @@ class ProjectRequestRevisionPort(Protocol):
     def current_request_revision(self, request_id: str) -> ProjectRequestRevision: ...
 
 
+class PlanningDecisionPort(Protocol):
+    def put_planning_decision(
+        self, run_id: RunId, decision: PlanningDecision
+    ) -> PlanningDecision: ...
+
+
 class ProduceExecutionPlanCommand(DomainModel):
     """Exact, replay-safe Planner production command."""
 
@@ -103,6 +119,7 @@ class ProduceExecutionPlanCommand(DomainModel):
     planning_authorization: StageAdvanceAuthorization
     expected_execution_plan_version: int = Field(ge=1)
     transitioned_at: AwareDatetime
+    human_upgrade: HumanPlanningUpgrade | None = None
 
 
 class PlanningStageResult(DomainModel):
@@ -130,12 +147,14 @@ class PlannerStageService:
         execution_plans: ExecutionPlanRecordPort,
         request_revisions: ProjectRequestRevisionPort,
         design_records: DesignRecordStore,
+        planning_decisions: PlanningDecisionPort | None = None,
     ) -> None:
         self._context_builder = context_builder
         self._adapter = adapter
         self._execution_plans = execution_plans
         self._request_revisions = request_revisions
         self._design_records = design_records
+        self._planning_decisions = planning_decisions
 
     def produce(self, command: ProduceExecutionPlanCommand) -> PlanningStageResult:
         """Journal one accepted Agent result before materializing its effects."""
@@ -150,6 +169,17 @@ class PlannerStageService:
         self._require_current_input(command)
         current_revision = command.current_request_revision
         current_request = current_revision.request
+        decision = None
+        if command.human_upgrade is not None and self._planning_decisions is None:
+            raise PlanningStageError("human upgrade requires a durable planning decision port")
+        if self._planning_decisions is not None:
+            decision = PlanningGate().classify(
+                PlanningFacts.from_design(command.product_spec, command.technical_design),
+                upgrade=command.human_upgrade,
+            )
+            persisted = self._planning_decisions.put_planning_decision(command.run_id, decision)
+            if persisted != decision:
+                raise PlanningStagePersistenceError("planning decision changed during publication")
         context = self._context_builder.build(
             project_request_revision=current_revision,
             product_spec=command.product_spec,
@@ -159,6 +189,7 @@ class PlannerStageService:
             planning_authorization=command.planning_authorization,
             expected_execution_plan_version=command.expected_execution_plan_version,
             built_at=command.transitioned_at,
+            planning_decision=decision,
         )
         request = PlannerAgentRequest(
             run_id=command.run_id,
@@ -167,7 +198,11 @@ class PlannerStageService:
             context=context,
         )
         try:
-            result = self._adapter.run(request)
+            result = (
+                fast_plan(request)
+                if decision is not None and decision.mode is PlanningMode.SIMPLE
+                else self._adapter.run(request)
+            )
         except Exception as error:
             raise PlanningStageError(
                 "PlannerAgentAdapter raised instead of returning typed failure"
@@ -195,6 +230,7 @@ class PlannerStageService:
                 error_code=result.error.code,
                 error_message=result.error.message,
                 recorded_at=command.transitioned_at,
+                planning_decision=decision,
             )
             self._execution_plans.put_run(failed)
             raise PlanningStageAgentFailed(
@@ -203,7 +239,33 @@ class PlannerStageService:
         try:
             plan = validate_planner_result(request, result)
             validate_execution_plan(command.product_spec, command.technical_design, plan)
+            validate_execution_plan_revision(
+                plan, self._execution_plans.find_for_request(plan.request_id)
+            )
+            if (
+                decision is not None
+                and decision.mode is PlanningMode.COMPLEX
+                and plan.work_graph is None
+            ):
+                raise ValueError("complex Planner output requires bounded work packages")
         except (PlannerAgentError, RuntimeError, ValueError) as error:
+            self._execution_plans.put_run(
+                PlannerRunRecord.create(
+                    run_id=command.run_id,
+                    repository_id=current_request.repository_id,
+                    request_id=current_request.id,
+                    context_id=context.context_id,
+                    input_sha256=input_sha256,
+                    input_request_revision_sha256=current_revision.request_revision_sha256,
+                    design_checkpoint_sha256=command.design_checkpoint.checkpoint_sha256,
+                    planning_authorization_sha256=command.planning_authorization.authorization_sha256,
+                    outcome=PlannerRunOutcome.FAILED,
+                    error_code=PlannerAgentErrorCode.INVALID_OUTPUT,
+                    error_message="Planner Agent output is invalid",
+                    recorded_at=command.transitioned_at,
+                    planning_decision=decision,
+                )
+            )
             raise PlanningStageError("Planner Agent output is invalid") from error
         ready_revision = ProjectRequestRevision.create(
             _ready_request(current_request, transitioned_at=command.transitioned_at),
@@ -225,6 +287,7 @@ class PlannerStageService:
             execution_plan=plan,
             ready_request_revision=ready_revision,
             recorded_at=command.transitioned_at,
+            planning_decision=decision,
         )
         receipt = self._execution_plans.put_run(receipt)
         return self._materialize_success(receipt, replayed=False)
@@ -278,6 +341,9 @@ class PlannerStageService:
         revision = receipt.ready_request_revision
         assert plan is not None and revision is not None
         self._require_exact_recovery_predecessor(receipt)
+        latest = self._execution_plans.find_for_request(plan.request_id)
+        if latest != plan:
+            validate_execution_plan_revision(plan, latest)
         try:
             persisted_revision = self._request_revisions.compare_and_put_request_revision(
                 revision,

@@ -70,17 +70,17 @@ T049；T048 先定义稳定检索接口，并允许使用现有已验证 Markdow
 
 ## Acceptance Criteria
 
-- [ ] 每个允许检索的 Agent 可通过同一 typed 接口搜索/读取当前作用域内知识，并返回 exact citations；
-- [ ] baseline 词法检索 adapter 不依赖 T049、模型或外部向量服务即可跑通契约测试；
-- [ ] 未选中、已退休、跨 Project、digest 漂移和越权读取全部 fail closed，并留下拒绝证据；
-- [ ] Agent 对未知或冲突信息产生 `KnowledgeGap`，Manager 能路由并用 `KnowledgeResolution` 恢复；
-- [ ] Gap 解决方案可以只属于当前 Requirement，也可以经人工批准进入未来 Project Knowledge/Spec；
-- [ ] Trellis Workflow Skills 按角色绑定，执行证据进入 Context/Artifact lineage；
-- [ ] Coder、QA、Reviewer 不能通过 Workflow Skill 扩大自身权限或跳过独立验证；
-- [ ] 评测能稳定区分正确引用、无答案报告、虚构和跨范围泄漏；
-- [ ] 至少一个端到端 fixture 证明：Agent 主动检索知识、引用来源、完成任务并通过 QA/Review；
-- [ ] 至少一个端到端 fixture 证明：知识不足时安全停下，补充并批准知识后从 durable checkpoint 继续；
-- [ ] Python models、JSON Schemas、`.trellis/spec/`、README/运行文档和测试保持同步。
+- [x] 每个允许检索的 Agent 可通过同一 typed 接口搜索/读取当前作用域内知识，并返回 exact citations；
+- [x] baseline 词法检索 adapter 不依赖 T049、模型或外部向量服务即可跑通契约测试；
+- [x] 未选中、已退休、跨 Project、digest 漂移和越权读取全部 fail closed，并留下拒绝证据；
+- [x] Agent 对未知或冲突信息产生 `KnowledgeGap`，Manager 能路由并用 `KnowledgeResolution` 恢复；
+- [x] Gap 解决方案可以只属于当前 Requirement，也可以经人工批准进入未来 Project Knowledge/Spec；
+- [x] Trellis Workflow Skills 按角色绑定，执行证据进入 Context/Artifact lineage；
+- [x] Coder、QA、Reviewer 不能通过 Workflow Skill 扩大自身权限或跳过独立验证；
+- [x] 评测能稳定区分正确引用、无答案报告、虚构和跨范围泄漏；
+- [x] 至少一个端到端 fixture 证明：Agent 主动检索知识、引用来源、完成任务并通过 QA/Review；
+- [x] 至少一个端到端 fixture 证明：知识不足时安全停下，补充并批准知识后从 durable checkpoint 继续；
+- [x] Python models、JSON Schemas、`.trellis/spec/`、README/运行文档和测试保持同步。
 
 ## Decision (ADR-lite)
 
@@ -124,3 +124,8 @@ T049 再实现异步增量索引 adapter；调用方和 Artifact contract 不因
 - 当前 Learning 发布入口：`learning.py::ProjectLearningStore`；
 - Repository 原生规则发现：`repository_profile.py::_discover_native_rules`；
 - 必须遵守 `.trellis/spec/core/{architecture,contracts,python-runtime,team-workspace}.md`。
+
+## 续作验收记录（2026-09-19）
+
+本轮实现和任务相关验证已完成。完整测试结果、独立 QA/Review 引用、存量数据处置、
+回滚及验证限制见 `docs/t047-t049-continuation.md`。代码仍保留在原独立 worktree，未提交、合并或部署。

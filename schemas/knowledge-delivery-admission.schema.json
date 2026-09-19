@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/knowledge-delivery-admission.schema.json",
+  "additionalProperties": false,
+  "description": "One-time upgrade boundary; never manufactures knowledge evidence for old work.",
+  "properties": {
+    "task_id": {
+      "title": "Task Id",
+      "type": "string"
+    },
+    "contract_version": {
+      "default": "active-knowledge-v1",
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "legacy_artifact_digests": {
+      "items": {
+        "maxItems": 2,
+        "minItems": 2,
+        "prefixItems": [
+          {
+            "type": "string"
+          },
+          {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          }
+        ],
+        "type": "array"
+      },
+      "title": "Legacy Artifact Digests",
+      "type": "array"
+    }
+  },
+  "required": [
+    "task_id",
+    "legacy_artifact_digests"
+  ],
+  "title": "DeliveryWorkflowAdmission",
+  "type": "object"
+}

@@ -1,0 +1,200 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/knowledge-model-call.schema.json",
+  "$defs": {
+    "AgentUsage": {
+      "additionalProperties": false,
+      "description": "Provider-neutral token usage reported for one Agent Run.",
+      "properties": {
+        "input_tokens": {
+          "minimum": 0,
+          "title": "Input Tokens",
+          "type": "integer"
+        },
+        "output_tokens": {
+          "minimum": 0,
+          "title": "Output Tokens",
+          "type": "integer"
+        },
+        "total_tokens": {
+          "minimum": 0,
+          "title": "Total Tokens",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "total_tokens"
+      ],
+      "title": "AgentUsage",
+      "type": "object"
+    },
+    "KnowledgeRunBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Id"
+        },
+        "role": {
+          "$ref": "#/$defs/TeamRole"
+        },
+        "team_id": {
+          "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Team Id",
+          "type": "string"
+        },
+        "project_id": {
+          "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "requirement_id": {
+          "pattern": "^[a-z][a-zA-Z0-9_.:-]{0,159}$",
+          "title": "Requirement Id",
+          "type": "string"
+        },
+        "repository_ids": {
+          "items": {
+            "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Repository Ids",
+          "type": "array"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "context_manifest_id": {
+          "pattern": "^ctx_[a-f0-9]{64}$",
+          "title": "Context Manifest Id",
+          "type": "string"
+        },
+        "snapshot_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Snapshot Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "role",
+        "team_id",
+        "project_id",
+        "requirement_id",
+        "repository_ids",
+        "source_revision",
+        "context_manifest_id",
+        "snapshot_sha256"
+      ],
+      "title": "KnowledgeRunBinding",
+      "type": "object"
+    },
+    "TeamRole": {
+      "description": "Long-lived roles that a Team-owned AgentProfile may declare.",
+      "enum": [
+        "manager",
+        "product",
+        "designer",
+        "planner",
+        "coder",
+        "qa",
+        "reviewer"
+      ],
+      "title": "TeamRole",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "binding": {
+      "$ref": "#/$defs/KnowledgeRunBinding"
+    },
+    "phase": {
+      "enum": [
+        "intent",
+        "assessment"
+      ],
+      "title": "Phase",
+      "type": "string"
+    },
+    "duration_ms": {
+      "minimum": 0,
+      "title": "Duration Ms",
+      "type": "integer"
+    },
+    "usage": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AgentUsage"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "provider": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Provider"
+    },
+    "model": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Model"
+    },
+    "output_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Output Sha256",
+      "type": "string"
+    },
+    "call_id": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Call Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "binding",
+    "phase",
+    "duration_ms",
+    "output_sha256",
+    "call_id"
+  ],
+  "title": "KnowledgeModelCall",
+  "type": "object"
+}

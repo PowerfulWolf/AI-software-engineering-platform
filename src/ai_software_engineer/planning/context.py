@@ -25,6 +25,7 @@ from ai_software_engineer.domain.project_delivery import (
     validate_technical_design,
 )
 from ai_software_engineer.manager.stages import ProjectStage, StageAdvanceAuthorization
+from ai_software_engineer.planning.gate import PlanningDecision, PlanningFacts
 from ai_software_engineer.product.models import ProjectRequestRevision
 
 
@@ -73,6 +74,7 @@ class PlannerContextManifest(DomainModel):
     design_checkpoint: DesignCommitCheckpoint
     planning_authorization: StageAdvanceAuthorization
     expected_execution_plan_version: int
+    planning_decision: PlanningDecision | None = None
     permissions: PlannerAgentPermissions = PLANNER_AGENT_PERMISSIONS
     built_at: AwareDatetime
     context_sha256: StageSha256
@@ -84,6 +86,12 @@ class PlannerContextManifest(DomainModel):
         return self
 
     def validate_integrity(self) -> None:
+        if self.planning_decision is not None:
+            self.planning_decision.validate_integrity()
+            if self.planning_decision.facts != PlanningFacts.from_design(
+                self.product_spec, self.technical_design
+            ):
+                raise PlannerContextLineageError("planning decision does not bind input artifacts")
         try:
             _validate_lineage(
                 self.project_request_revision,
@@ -121,6 +129,7 @@ class PlannerContextBuilder:
         planning_authorization: StageAdvanceAuthorization,
         expected_execution_plan_version: int,
         built_at: datetime,
+        planning_decision: PlanningDecision | None = None,
     ) -> PlannerContextManifest:
         if built_at.tzinfo is None or built_at.utcoffset() is None:
             raise PlannerContextError("Planner context built_at must be timezone-aware")
@@ -147,6 +156,7 @@ class PlannerContextBuilder:
             design_checkpoint=design_checkpoint,
             planning_authorization=planning_authorization,
             expected_execution_plan_version=expected_execution_plan_version,
+            planning_decision=planning_decision,
             permissions=PLANNER_AGENT_PERMISSIONS,
             built_at=built_at,
             context_sha256="0" * 64,

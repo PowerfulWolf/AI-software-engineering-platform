@@ -1,0 +1,225 @@
+{
+  "$defs": {
+    "DesignComplexityFacts": {
+      "additionalProperties": false,
+      "description": "Designer facts only: Manager policy owns their routing interpretation.",
+      "properties": {
+        "database_migration": {
+          "default": false,
+          "title": "Database Migration",
+          "type": "boolean"
+        },
+        "interface_compatibility": {
+          "default": false,
+          "title": "Interface Compatibility",
+          "type": "boolean"
+        },
+        "data_backfill": {
+          "default": false,
+          "title": "Data Backfill",
+          "type": "boolean"
+        },
+        "security": {
+          "default": false,
+          "title": "Security",
+          "type": "boolean"
+        },
+        "performance": {
+          "default": false,
+          "title": "Performance",
+          "type": "boolean"
+        },
+        "concurrency": {
+          "default": false,
+          "title": "Concurrency",
+          "type": "boolean"
+        },
+        "work_package_dependencies": {
+          "default": false,
+          "title": "Work Package Dependencies",
+          "type": "boolean"
+        },
+        "integration_groups": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Integration Groups",
+          "type": "array"
+        }
+      },
+      "title": "DesignComplexityFacts",
+      "type": "object"
+    },
+    "HumanPlanningUpgrade": {
+      "additionalProperties": false,
+      "properties": {
+        "input_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Input Sha256",
+          "type": "string"
+        },
+        "operator_id": {
+          "minLength": 1,
+          "title": "Operator Id",
+          "type": "string"
+        },
+        "rationale": {
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        },
+        "decided_at": {
+          "format": "date-time",
+          "title": "Decided At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "input_sha256",
+        "operator_id",
+        "rationale",
+        "decided_at"
+      ],
+      "title": "HumanPlanningUpgrade",
+      "type": "object"
+    },
+    "PlanningFacts": {
+      "additionalProperties": false,
+      "properties": {
+        "product_spec_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Product Spec Sha256",
+          "type": "string"
+        },
+        "technical_design_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Technical Design Sha256",
+          "type": "string"
+        },
+        "repository_count": {
+          "minimum": 1,
+          "title": "Repository Count",
+          "type": "integer"
+        },
+        "component_count": {
+          "minimum": 1,
+          "title": "Component Count",
+          "type": "integer"
+        },
+        "integration_group_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Integration Group Count",
+          "type": "integer"
+        },
+        "technical_risk": {
+          "$ref": "#/$defs/RiskTier",
+          "default": "low"
+        },
+        "design_facts": {
+          "$ref": "#/$defs/DesignComplexityFacts",
+          "default": {
+            "database_migration": false,
+            "interface_compatibility": false,
+            "data_backfill": false,
+            "security": false,
+            "performance": false,
+            "concurrency": false,
+            "work_package_dependencies": false,
+            "integration_groups": []
+          }
+        }
+      },
+      "required": [
+        "product_spec_sha256",
+        "technical_design_sha256",
+        "repository_count",
+        "component_count"
+      ],
+      "title": "PlanningFacts",
+      "type": "object"
+    },
+    "PlanningMode": {
+      "enum": [
+        "SIMPLE",
+        "COMPLEX"
+      ],
+      "title": "PlanningMode",
+      "type": "string"
+    },
+    "RiskTier": {
+      "enum": [
+        "low",
+        "normal",
+        "high",
+        "critical"
+      ],
+      "title": "RiskTier",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "const": "planning_gate_decision",
+      "default": "planning_gate_decision",
+      "title": "Kind",
+      "type": "string"
+    },
+    "rules_version": {
+      "const": "planning-gate-v1",
+      "default": "planning-gate-v1",
+      "title": "Rules Version",
+      "type": "string"
+    },
+    "facts": {
+      "$ref": "#/$defs/PlanningFacts"
+    },
+    "input_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Input Sha256",
+      "type": "string"
+    },
+    "mode": {
+      "$ref": "#/$defs/PlanningMode"
+    },
+    "reason_codes": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Reason Codes",
+      "type": "array"
+    },
+    "human_upgrade": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/HumanPlanningUpgrade"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "decision_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Decision Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "facts",
+    "input_sha256",
+    "mode",
+    "reason_codes",
+    "decision_sha256"
+  ],
+  "title": "PlanningDecision",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/planning-gate.schema.json"
+}

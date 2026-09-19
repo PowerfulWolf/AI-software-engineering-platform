@@ -742,6 +742,12 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
           ok: true,
           json: async () => structuredClone(knowledgeFixture),
         };
+      if (String(url).endsWith("/knowledge/index"))
+        return {ok: true, json: async () => ({backlog: 1, failed: 1, oldest_pending_seconds: 3,
+          jobs: [{job_id: "a".repeat(64), source_name: "pending.pdf", status: "QUEUED"},
+            {job_id: "b".repeat(64), source_name: "broken.pdf", status: "FAILED", error_code: "DOCUMENT_INVALID"}]})};
+      if (String(url).includes("/knowledge/index/") && String(url).endsWith("/retry"))
+        return {ok: true, json: async () => ({status: "QUEUED"})};
       if (
         String(url).endsWith(
           "/knowledge_document_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/content",
@@ -1179,7 +1185,13 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   assert.doesNotMatch(text(get("composer")), /维护方式/);
   await backgroundForm.events.submit({ preventDefault() {} });
   assert.equal(knowledgeImports.length, 2);
-  assert.match(text(get("content")), /已导入 2 份背景知识/);
+  assert.match(text(get("content")), /已接收 2 份背景知识/);
+  assert.match(text(get("content")), /知识解析与索引/);
+  assert.match(text(get("content")), /等待解析/);
+  assert.match(text(get("content")), /解析失败/);
+  const indexRetry = descend(get("content")).find((node) => node.tag === "button" && node.textContent === "重试索引");
+  assert.ok(indexRetry);
+  await indexRetry.events.click();
   assert.equal(get("composer").hidden, true);
   const enableProjectKnowledge = descend(get("content")).find(
     (node) => node.tag === "button" && node.textContent === "用于新需求",
@@ -1248,7 +1260,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     knowledgeUpdateBodies[1],
     "# Edited project guide\n\nSaved in the browser.\n",
   );
-  assert.match(text(get("content")), /背景知识已更新/);
+  assert.match(text(get("content")), /背景知识更新已排队/);
   const deleteKnowledge = descend(get("content")).find(
     (node) => node.tag === "button" && node.textContent === "删除",
   );

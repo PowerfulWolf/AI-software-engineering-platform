@@ -32,6 +32,7 @@ from ai_software_engineer.domain.workforce import (
     TaskLease,
     WorkItem,
 )
+from ai_software_engineer.planning.gate import PlanningDecision
 from ai_software_engineer.product.models import ProjectRequestRevision
 from ai_software_engineer.scheduling import (
     AssignmentDecision,
@@ -76,6 +77,7 @@ class PlannerRunRecord(DomainModel):
     input_request_revision_sha256: StageSha256
     design_checkpoint_sha256: StageSha256
     planning_authorization_sha256: StageSha256
+    planning_decision: PlanningDecision | None = None
     outcome: PlannerRunOutcome
     execution_plan: ExecutionPlan | None = None
     ready_request_revision: ProjectRequestRevision | None = None
@@ -113,6 +115,11 @@ class PlannerRunRecord(DomainModel):
         plan = self.execution_plan
         revision = self.ready_request_revision
         assert plan is not None and revision is not None
+        if self.planning_decision is not None and (
+            self.planning_decision.facts.product_spec_sha256 != plan.product_spec_sha256
+            or self.planning_decision.facts.technical_design_sha256 != plan.technical_design_sha256
+        ):
+            raise ValueError("Planner run gate decision does not match the produced plan")
         plan.validate_integrity()
         revision.validate_integrity()
         if (
@@ -143,6 +150,7 @@ class PlannerRunRecord(DomainModel):
         ready_request_revision: ProjectRequestRevision | None = None,
         error_code: PlannerAgentErrorCode | None = None,
         error_message: str | None = None,
+        planning_decision: PlanningDecision | None = None,
     ) -> PlannerRunRecord:
         provisional = cls(
             run_id=run_id,
@@ -153,6 +161,7 @@ class PlannerRunRecord(DomainModel):
             input_request_revision_sha256=input_request_revision_sha256,
             design_checkpoint_sha256=design_checkpoint_sha256,
             planning_authorization_sha256=planning_authorization_sha256,
+            planning_decision=planning_decision,
             outcome=outcome,
             execution_plan=execution_plan,
             ready_request_revision=ready_request_revision,
@@ -166,6 +175,8 @@ class PlannerRunRecord(DomainModel):
         )
 
     def validate_integrity(self) -> None:
+        if self.planning_decision is not None:
+            self.planning_decision.validate_integrity()
         try:
             if self.outcome is PlannerRunOutcome.READY_FOR_DELIVERY:
                 self._validate_success()

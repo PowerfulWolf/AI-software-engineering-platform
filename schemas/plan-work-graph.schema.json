@@ -1,0 +1,155 @@
+{
+  "$defs": {
+    "PlanTestItem": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "acceptance_criterion_ids": {
+          "items": {
+            "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Acceptance Criterion Ids",
+          "type": "array"
+        },
+        "level": {
+          "minLength": 1,
+          "title": "Level",
+          "type": "string"
+        },
+        "verification": {
+          "minLength": 1,
+          "title": "Verification",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "acceptance_criterion_ids",
+        "level",
+        "verification"
+      ],
+      "title": "PlanTestItem",
+      "type": "object"
+    },
+    "PlanWorkPackage": {
+      "additionalProperties": false,
+      "description": "Bounded abstract Task proposal; roles within each Task stay serial.",
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "component_ids": {
+          "items": {
+            "pattern": "^component_[a-z0-9][a-z0-9_-]{1,63}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Component Ids",
+          "type": "array"
+        },
+        "step_ids": {
+          "items": {
+            "pattern": "^design_step_[a-z0-9][a-z0-9_-]{1,63}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Step Ids",
+          "type": "array"
+        },
+        "acceptance_criterion_ids": {
+          "items": {
+            "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Acceptance Criterion Ids",
+          "type": "array"
+        },
+        "depends_on": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Depends On",
+          "type": "array"
+        },
+        "risk": {
+          "$ref": "#/$defs/RiskTier"
+        },
+        "checkpoints": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Checkpoints",
+          "type": "array"
+        },
+        "tests": {
+          "items": {
+            "$ref": "#/$defs/PlanTestItem"
+          },
+          "minItems": 1,
+          "title": "Tests",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "component_ids",
+        "step_ids",
+        "acceptance_criterion_ids",
+        "risk",
+        "checkpoints",
+        "tests"
+      ],
+      "title": "PlanWorkPackage",
+      "type": "object"
+    },
+    "RiskTier": {
+      "enum": [
+        "low",
+        "normal",
+        "high",
+        "critical"
+      ],
+      "title": "RiskTier",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "packages": {
+      "items": {
+        "$ref": "#/$defs/PlanWorkPackage"
+      },
+      "maxItems": 16,
+      "minItems": 1,
+      "title": "Packages",
+      "type": "array"
+    },
+    "max_parallelism": {
+      "default": 1,
+      "maximum": 4,
+      "minimum": 1,
+      "title": "Max Parallelism",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "packages"
+  ],
+  "title": "PlanWorkGraph",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/plan-work-graph.schema.json"
+}

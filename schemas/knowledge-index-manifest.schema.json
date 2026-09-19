@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.dev/schemas/knowledge-index-manifest.schema.json",
+  "$defs": {
+    "KnowledgeIndexEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "document_id": {
+          "pattern": "^knowledge_document_[a-f0-9]{32}$",
+          "title": "Document Id",
+          "type": "string"
+        },
+        "normalized_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Normalized Sha256",
+          "type": "string"
+        },
+        "cache_key": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Cache Key",
+          "type": "string"
+        },
+        "selected": {
+          "title": "Selected",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "document_id",
+        "normalized_sha256",
+        "cache_key",
+        "selected"
+      ],
+      "title": "KnowledgeIndexEntry",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "v0.1",
+      "default": "v0.1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "scope": {
+      "enum": [
+        "team",
+        "project"
+      ],
+      "title": "Scope",
+      "type": "string"
+    },
+    "team_id": {
+      "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$",
+      "title": "Team Id",
+      "type": "string"
+    },
+    "project_id": {
+      "anyOf": [
+        {
+          "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Project Id"
+    },
+    "parser_version": {
+      "pattern": "^[a-zA-Z0-9._-]{1,40}$",
+      "title": "Parser Version",
+      "type": "string"
+    },
+    "index_version": {
+      "pattern": "^[a-zA-Z0-9._-]{1,40}$",
+      "title": "Index Version",
+      "type": "string"
+    },
+    "documents": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/KnowledgeIndexEntry"
+      },
+      "maxItems": 1024,
+      "title": "Documents",
+      "type": "array"
+    },
+    "manifest_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Manifest Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "scope",
+    "team_id",
+    "parser_version",
+    "index_version",
+    "manifest_sha256"
+  ],
+  "title": "KnowledgeIndexManifest",
+  "type": "object"
+}

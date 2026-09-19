@@ -18,6 +18,7 @@ from ai_software_engineer.domain import (
     ProductApprovalDecision,
     TeamRole,
 )
+from ai_software_engineer.domain.project_delivery import DesignComplexityFacts
 from ai_software_engineer.execution import (
     CommandExecutionError,
     CommandExecutor,
@@ -78,6 +79,7 @@ from ai_software_engineer.multi_directory.models import (
     SingleRepositoryAcceptance,
     digest,
 )
+from ai_software_engineer.multi_directory.planning import design_work_graph
 from ai_software_engineer.multi_directory.scope import DirectoryUnit, git_read
 from ai_software_engineer.multi_directory.store import JointJournal
 from ai_software_engineer.product import (
@@ -189,8 +191,19 @@ class ProductionJointBackend:
             else self._baseline_paths(checkpoint)
         )
         if isinstance(self.clients, MultiRepositoryStructuredClientFactory):
-            return self.clients.for_projects(roots, role)
-        return self.clients.for_project(roots[0], role)
+            client = self.clients.for_projects(roots, role)
+        else:
+            client = self.clients.for_project(roots[0], role)
+        from ai_software_engineer.knowledge.index import retrieval_for_project
+        from ai_software_engineer.knowledge.runtime import joint_knowledge_client
+
+        return joint_knowledge_client(
+            client,
+            checkpoint,
+            role,
+            self.project.requirements_root / checkpoint.delivery_id / "knowledge",
+            retrieval_for_project(self.project),
+        )
 
     def reconcile(self, checkpoint: JointCheckpoint) -> None:
         prepared_unit_ids = {prepared.unit_id for prepared in checkpoint.preparations}
@@ -359,9 +372,18 @@ class ProductionJointBackend:
     ) -> ProductionProjectDeliveryBackend:
         projection = DerivedStageInputs(checkpoint, unit_id)
         source = approved_joint_context_source(checkpoint, unit_id)
+        prepared = next(item for item in checkpoint.preparations if item.unit_id == unit_id)
         return self.factory(
             projection,
-            (source,),
+            (
+                source,
+                *tuple(
+                    item
+                    for item in prepared.context_sources
+                    if item.source_id.startswith("native.rule.")
+                    or item.uri.startswith(("team://", "project://"))
+                ),
+            ),
             projection,
             frozen_preparation or projection.preparation,
             frozen_source_revision or projection.base_revision,
@@ -740,6 +762,17 @@ class DerivedStageInputs(
         planned = next(p for p in checkpoint.plan.units if p.unit_id == unit_id)
         self.dependencies = planned.depends_on
         self.plan = planned.plan
+        if checkpoint.planning_decision is None and self.plan.work_graph is None:
+            # Historical approved plan: preserve it in the journal/context; only its
+            # new native projection receives mechanically mapped design references.
+            self.plan = self.plan.model_copy(
+                update={
+                    "work_graph": design_work_graph(
+                        design.design,
+                        package_id="legacy_" + unit_id,
+                    )
+                }
+            )
         pairs = [
             (f"req_{i:03d}", r)
             for i, r in enumerate(checkpoint.product_spec.product.requirements, 1)
@@ -754,8 +787,55 @@ class DerivedStageInputs(
             for i, (old, r) in enumerate(pairs, 1)
             for j, _ in enumerate(r.acceptance, 1)
         }
+        if self.plan.work_graph is not None:
+            graph = self.plan.work_graph
+            self.plan = self.plan.model_copy(
+                update={
+                    "work_graph": graph.model_copy(
+                        update={
+                            "packages": tuple(
+                                package.model_copy(
+                                    update={
+                                        "acceptance_criterion_ids": tuple(
+                                            ac_map[item]
+                                            for item in package.acceptance_criterion_ids
+                                        ),
+                                        "tests": tuple(
+                                            test.model_copy(
+                                                update={
+                                                    "acceptance_criterion_ids": tuple(
+                                                        ac_map[item]
+                                                        for item in test.acceptance_criterion_ids
+                                                    ),
+                                                }
+                                            )
+                                            for test in package.tests
+                                        ),
+                                    }
+                                )
+                                for package in graph.packages
+                            ),
+                        }
+                    )
+                }
+            )
+        complexity = design.design.complexity_facts
+        participates_in_interface = any(
+            interface.producer == unit_id or unit_id in interface.consumers
+            for interface in checkpoint.design.interfaces
+        )
+        if planned.depends_on or participates_in_interface:
+            complexity = (complexity or DesignComplexityFacts()).model_copy(
+                update={
+                    "work_package_dependencies": bool(planned.depends_on)
+                    or bool(complexity and complexity.work_package_dependencies),
+                    "interface_compatibility": participates_in_interface
+                    or bool(complexity and complexity.interface_compatibility),
+                }
+            )
         self.design = design.design.model_copy(
             update={
+                "complexity_facts": complexity,
                 "requirement_mappings": tuple(
                     m.model_copy(update={"requirement_id": req_map[m.requirement_id]})
                     for m in design.design.requirement_mappings

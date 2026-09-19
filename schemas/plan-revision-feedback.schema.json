@@ -1,0 +1,43 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "previous_plan_id": {
+      "pattern": "^execution_plan_[a-z0-9][a-z0-9_-]{2,63}$",
+      "title": "Previous Plan Id",
+      "type": "string"
+    },
+    "previous_plan_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Previous Plan Sha256",
+      "type": "string"
+    },
+    "reason_codes": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Reason Codes",
+      "type": "array"
+    },
+    "required_changes": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Required Changes",
+      "type": "array"
+    }
+  },
+  "required": [
+    "previous_plan_id",
+    "previous_plan_sha256",
+    "reason_codes",
+    "required_changes"
+  ],
+  "title": "PlanRevisionFeedback",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/plan-revision-feedback.schema.json"
+}

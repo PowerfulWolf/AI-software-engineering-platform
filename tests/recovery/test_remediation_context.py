@@ -59,6 +59,7 @@ def test_remediation_context_redacts_secret_shaped_candidate_fixture(tmp_path: P
     patch = next(
         source.content for source in sources if source.source_id.endswith("candidate_patch")
     )
+    assert patch is not None
     assert "fixture-value" not in patch
     assert "[REDACTED:secret_assignment]" in patch
     assert redact_text(patch).text == patch

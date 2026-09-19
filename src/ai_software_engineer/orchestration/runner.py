@@ -125,6 +125,14 @@ class _CompletedRun:
     run_id: RunId
 
 
+class DeliveryTransitionGate(Protocol):
+    def begin_task(self, task: Task) -> None: ...
+
+    def before_transition(
+        self, task: Task, target: TaskStatus, artifact_ids: tuple[str, ...]
+    ) -> None: ...
+
+
 class SerialOrchestrator:
     """Drive exactly one Coder → QA → Reviewer attempt without retry routing."""
 
@@ -138,8 +146,10 @@ class SerialOrchestrator:
         agent_definitions: Mapping[AgentRole, AgentDefinition],
         identities: OrchestrationIdentityFactory | None = None,
         clock: Clock | None = None,
+        transition_gate: DeliveryTransitionGate | None = None,
     ) -> None:
         self._repository = repository
+        self._transition_gate = transition_gate
         self._artifact_store = artifact_store
         self._context_builder = context_builder
         self._agent_adapter = agent_adapter
@@ -153,6 +163,8 @@ class SerialOrchestrator:
         task = self._repository.get(task_id)
         if task.status is not TaskStatus.NEW:
             raise TaskNotRunnable(f"Task {task.id} must be NEW, not {task.status.value}")
+        if self._transition_gate is not None:
+            self._transition_gate.begin_task(task)
 
         attempt = 1
         seen_run_ids: set[RunId] = set()
@@ -419,6 +431,8 @@ class SerialOrchestrator:
         attempt: int,
         artifact_ids: tuple[ArtifactId, ...] = (),
     ) -> tuple[Task, EventId]:
+        if self._transition_gate is not None:
+            self._transition_gate.before_transition(task, to_status, artifact_ids)
         event_id = self._identities.new_event_id(
             task.id,
             task.status,
