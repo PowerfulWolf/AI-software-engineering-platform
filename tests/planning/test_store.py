@@ -105,9 +105,9 @@ def test_file_execution_plan_store_round_trip_exact_replay_and_conflict(tmp_path
         phases=plan.phases,
         created_at=plan.created_at,
     )
-    store.put_execution_plan(ambiguous)
-    with pytest.raises(ExecutionPlanCorruption, match="ambiguous"):
-        store.find_for_request(plan.request_id)
+    with pytest.raises(ExecutionPlanConflict, match="predecessor"):
+        store.put_execution_plan(ambiguous)
+    assert store.find_for_request(plan.request_id) == plan
 
 
 def test_file_execution_plan_store_detects_envelope_tamper(tmp_path: Path) -> None:
@@ -122,6 +122,33 @@ def test_file_execution_plan_store_detects_envelope_tamper(tmp_path: Path) -> No
 
     with pytest.raises(ExecutionPlanCorruption):
         store.get_execution_plan(plan.id)
+
+
+def test_legacy_v2_without_feedback_remains_readable_but_cannot_be_newly_published(
+    tmp_path: Path,
+) -> None:
+    spec, design, first = _stage(tmp_path)
+    root = tmp_path / "sidecar-records"
+    store = FileExecutionPlanStore(root)
+    store.put_execution_plan(first)
+    legacy = ExecutionPlan.create(
+        spec,
+        design,
+        plan_id="execution_plan_legacy_002",
+        version=2,
+        phases=first.phases,
+        created_at=first.created_at,
+    )
+    with pytest.raises(ExecutionPlanConflict, match="feedback"):
+        store.put_execution_plan(legacy)
+    wire = legacy.to_wire()
+    target = root / "execution-plans" / f"{legacy.id}.json"
+    # Emulate an immutable pre-T047 record without passing through the new write gate.
+    target.write_text(json.dumps({"record": wire, "sha256": planning_store_module._digest(wire)}))
+    reopened = FileExecutionPlanStore(root)
+    assert reopened.get_execution_plan(legacy.id) == legacy
+    assert reopened.find_for_request(first.request_id) == legacy
+    assert reopened.put_execution_plan(legacy) == legacy
 
 
 def test_file_execution_plan_store_writes_all_bytes_on_short_write(

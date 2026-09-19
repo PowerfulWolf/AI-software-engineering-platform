@@ -62,7 +62,9 @@ class ConfiguredDeliveryRouteAdapterFactory:
     """Build real Codex CLI or Responses adapters from secret-free route metadata."""
 
     def __init__(
-        self, *, initial_workspace_admission: InitialWorkspaceAdmission | None = None
+        self,
+        *,
+        initial_workspace_admission: InitialWorkspaceAdmission | None = None,
     ) -> None:
         self._initial_admission = initial_workspace_admission
 
@@ -76,7 +78,9 @@ class ConfiguredDeliveryRouteAdapterFactory:
         config: ProductionConfig,
         environment: Mapping[str, str],
     ) -> AgentAdapter:
-        prompt_builder = ContextPromptBuilder(context_resolver)
+        from ai_software_engineer.agents.openai_compatible import PromptBuilder
+
+        prompt_builder: PromptBuilder = ContextPromptBuilder(context_resolver)
         if route.kind is ModelProviderKind.CODEX_CLI:
             return CodexCliAgentAdapter(
                 workspace_root=binding.worktree.path,

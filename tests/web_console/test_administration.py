@@ -462,3 +462,28 @@ def test_preexisting_runtime_file_not_loaded_by_process_requires_restart(tmp_pat
     snapshot = administration.settings()
 
     assert snapshot.restart_required is True
+
+
+def test_knowledge_tick_isolates_team_and_project_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_software_engineer.knowledge.index import KnowledgeIndexer
+    from ai_software_engineer.knowledge.models import KnowledgeError
+
+    administration = _administration(tmp_path)
+    for project_id in ("project_broken", "project_healthy"):
+        administration.create_project(CreateProjectRequest(project_id=project_id, name=project_id))
+    healthy = administration.enqueue_document(
+        project_id="project_healthy", filename="guide.md", content=b"# Healthy"
+    )
+    tick = KnowledgeIndexer.tick
+
+    def isolated_tick(self: KnowledgeIndexer, *, limit: int = 4) -> tuple[object, ...]:
+        if self.documents.project_id != "project_healthy":
+            raise KnowledgeError("INDEX_CACHE_INTEGRITY")
+        return tick(self, limit=limit)
+
+    monkeypatch.setattr(KnowledgeIndexer, "tick", isolated_tick)
+    administration.tick_knowledge_indexes()
+    jobs = administration.knowledge_index("project_healthy").jobs
+    assert next(job for job in jobs if job.job_id == healthy.job_id).status == "READY"

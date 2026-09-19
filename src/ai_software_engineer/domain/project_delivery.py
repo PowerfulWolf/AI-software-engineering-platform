@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Literal, Self
@@ -455,6 +456,19 @@ class DesignRisk(DomainModel):
     mitigation: NonEmptyStr
 
 
+class DesignComplexityFacts(DomainModel):
+    """Designer facts only: Manager policy owns their routing interpretation."""
+
+    database_migration: StrictBool = False
+    interface_compatibility: StrictBool = False
+    data_backfill: StrictBool = False
+    security: StrictBool = False
+    performance: StrictBool = False
+    concurrency: StrictBool = False
+    work_package_dependencies: StrictBool = False
+    integration_groups: tuple[NonEmptyStr, ...] = ()
+
+
 class TechnicalDesign(DomainModel):
     """Technical solution for one exact, human-approved ProductSpec."""
 
@@ -474,6 +488,7 @@ class TechnicalDesign(DomainModel):
     acceptance_mappings: Annotated[tuple[AcceptanceDesignMapping, ...], Field(min_length=1)]
     implementation_steps: Annotated[tuple[DesignStep, ...], Field(min_length=1)]
     risks: tuple[DesignRisk, ...] = ()
+    complexity_facts: DesignComplexityFacts | None = None
     created_at: AwareDatetime
     technical_design_sha256: StageSha256
 
@@ -520,6 +535,7 @@ class TechnicalDesign(DomainModel):
         implementation_steps: tuple[DesignStep, ...],
         created_at: datetime,
         risks: tuple[DesignRisk, ...] = (),
+        complexity_facts: DesignComplexityFacts | None = None,
     ) -> TechnicalDesign:
         require_product_approval(product_spec, approval)
         provisional = cls(
@@ -536,6 +552,7 @@ class TechnicalDesign(DomainModel):
             acceptance_mappings=acceptance_mappings,
             implementation_steps=implementation_steps,
             risks=risks,
+            complexity_facts=complexity_facts,
             created_at=created_at,
             technical_design_sha256="0" * 64,
         )
@@ -579,6 +596,68 @@ class PlanPhaseDemand(DomainModel):
         return self
 
 
+class PlanTestItem(DomainModel):
+    id: NonEmptyStr
+    acceptance_criterion_ids: Annotated[tuple[AcceptanceCriterionId, ...], Field(min_length=1)]
+    level: NonEmptyStr
+    verification: NonEmptyStr
+
+
+class PlanWorkPackage(DomainModel):
+    """Bounded abstract Task proposal; roles within each Task stay serial."""
+
+    id: NonEmptyStr
+    component_ids: Annotated[tuple[DesignComponentId, ...], Field(min_length=1)]
+    step_ids: Annotated[tuple[DesignStepId, ...], Field(min_length=1)]
+    acceptance_criterion_ids: Annotated[tuple[AcceptanceCriterionId, ...], Field(min_length=1)]
+    depends_on: tuple[NonEmptyStr, ...] = ()
+    risk: RiskTier
+    checkpoints: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1)]
+    tests: Annotated[tuple[PlanTestItem, ...], Field(min_length=1)]
+
+    @model_validator(mode="after")
+    def validate_package(self) -> Self:
+        for name in ("component_ids", "step_ids", "acceptance_criterion_ids", "depends_on"):
+            ensure_unique(getattr(self, name), f"work package {name}")
+        ensure_unique((test.id for test in self.tests), "work package test IDs")
+        covered = {criterion for test in self.tests for criterion in test.acceptance_criterion_ids}
+        if covered != set(self.acceptance_criterion_ids):
+            raise ValueError("work package tests must cover exact package acceptance IDs")
+        return self
+
+
+class PlanWorkGraph(DomainModel):
+    packages: Annotated[tuple[PlanWorkPackage, ...], Field(min_length=1, max_length=16)]
+    max_parallelism: Annotated[StrictInt, Field(ge=1, le=4)] = 1
+
+    @model_validator(mode="after")
+    def validate_graph(self) -> Self:
+        ensure_unique((package.id for package in self.packages), "work package IDs")
+        ancestors: dict[str, set[str]] = {}
+        for package in self.packages:
+            if not set(package.depends_on) <= ancestors.keys():
+                raise ValueError("work package dependency must precede consumer; cycles forbidden")
+            ancestors[package.id] = set(package.depends_on)
+            for dependency in package.depends_on:
+                ancestors[package.id].update(ancestors[dependency])
+            if self.max_parallelism > 1:
+                for previous in self.packages:
+                    if previous.id == package.id:
+                        break
+                    if previous.id not in ancestors[package.id] and (
+                        set(previous.component_ids) & set(package.component_ids)
+                    ):
+                        raise ValueError("parallel work packages require disjoint components")
+        return self
+
+
+class PlanRevisionFeedback(DomainModel):
+    previous_plan_id: ExecutionPlanId
+    previous_plan_sha256: StageSha256
+    reason_codes: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1)]
+    required_changes: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1)]
+
+
 class ExecutionPlan(DomainModel):
     """Planner-owned serial plan containing demand but no concrete allocation."""
 
@@ -595,6 +674,8 @@ class ExecutionPlan(DomainModel):
     status: Literal["READY_FOR_DISPATCH"] = "READY_FOR_DISPATCH"
     phases: Annotated[tuple[PlanPhaseDemand, ...], Field(min_length=3, max_length=3)]
     feasibility_evidence_uris: tuple[NonEmptyStr, ...] = ()
+    work_graph: PlanWorkGraph | None = None
+    revision_feedback: PlanRevisionFeedback | None = None
     created_at: AwareDatetime
     execution_plan_sha256: StageSha256
 
@@ -618,6 +699,8 @@ class ExecutionPlan(DomainModel):
         phases: tuple[PlanPhaseDemand, ...],
         created_at: datetime,
         feasibility_evidence_uris: tuple[str, ...] = (),
+        work_graph: PlanWorkGraph | None = None,
+        revision_feedback: PlanRevisionFeedback | None = None,
     ) -> ExecutionPlan:
         technical_design.validate_integrity()
         provisional = cls(
@@ -631,6 +714,8 @@ class ExecutionPlan(DomainModel):
             version=version,
             phases=phases,
             feasibility_evidence_uris=feasibility_evidence_uris,
+            work_graph=work_graph,
+            revision_feedback=revision_feedback,
             created_at=created_at,
             execution_plan_sha256="0" * 64,
         )
@@ -756,6 +841,75 @@ def validate_execution_plan(
     )
     if observed != expected:
         raise StageContractMismatch("ExecutionPlan lineage does not match TechnicalDesign")
+    if execution_plan.work_graph is not None:
+        if execution_plan.work_graph.max_parallelism != 1:
+            raise StageContractMismatch(
+                "parallel delivery requires independently isolated repository Tasks"
+            )
+        expected_criteria = {criterion.id for criterion in product_spec.acceptance_criteria}
+        packages = execution_plan.work_graph.packages
+        if {
+            item for package in packages for item in package.acceptance_criterion_ids
+        } != expected_criteria:
+            raise StageContractMismatch("work packages must cover exact ProductSpec acceptance IDs")
+        if {item for package in packages for item in package.component_ids} != {
+            component.id for component in technical_design.components
+        }:
+            raise StageContractMismatch("work packages must cover exact design components")
+        if {item for package in packages for item in package.step_ids} != {
+            step.id for step in technical_design.implementation_steps
+        }:
+            raise StageContractMismatch("work packages must cover exact design steps")
+        validate_plan_test_matrix(
+            execution_plan.work_graph,
+            {
+                item.acceptance_criterion_id: item.test_levels
+                for item in technical_design.acceptance_mappings
+            },
+        )
+
+
+def validate_plan_test_matrix(
+    graph: PlanWorkGraph, required_levels: Mapping[str, tuple[str, ...]]
+) -> None:
+    """Preserve every design-required test level for each exact acceptance criterion."""
+    observed: dict[str, set[str]] = {}
+    for package in graph.packages:
+        for test in package.tests:
+            for criterion in test.acceptance_criterion_ids:
+                observed.setdefault(criterion, set()).add(test.level)
+    for criterion, levels in required_levels.items():
+        missing = set(levels) - observed.get(criterion, set())
+        if missing:
+            raise ValueError(
+                f"work package test matrix weakens design coverage for {criterion}: "
+                f"missing test levels {', '.join(sorted(missing))}"
+            )
+
+
+def validate_execution_plan_revision(
+    plan: ExecutionPlan, predecessor: ExecutionPlan | None
+) -> None:
+    """Validate a new publication against the latest durable plan, without changing old reads."""
+    if predecessor is None:
+        if plan.version != 1 or plan.revision_feedback is not None:
+            raise StageContractMismatch(
+                "initial plan requires version 1 and no predecessor feedback"
+            )
+        return
+    feedback = plan.revision_feedback
+    if (
+        feedback is None
+        or plan.version != predecessor.version + 1
+        or feedback.previous_plan_id != predecessor.id
+        or feedback.previous_plan_sha256 != predecessor.execution_plan_sha256
+        or plan.request_id != predecessor.request_id
+        or plan.repository_id != predecessor.repository_id
+        or plan.product_spec_sha256 != predecessor.product_spec_sha256
+    ):
+        raise StageContractMismatch(
+            "plan revision must bind exact latest immutable predecessor and feedback"
+        )
 
 
 def validate_stage_chain(

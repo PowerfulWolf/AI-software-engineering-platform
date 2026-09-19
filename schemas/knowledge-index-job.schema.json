@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.dev/schemas/knowledge-index-job.schema.json",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "v0.1",
+      "default": "v0.1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "job_id": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Job Id",
+      "type": "string"
+    },
+    "scope": {
+      "enum": [
+        "team",
+        "project"
+      ],
+      "title": "Scope",
+      "type": "string"
+    },
+    "team_id": {
+      "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$",
+      "title": "Team Id",
+      "type": "string"
+    },
+    "project_id": {
+      "anyOf": [
+        {
+          "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Project Id"
+    },
+    "document_id": {
+      "pattern": "^knowledge_document_[a-f0-9]{32}$",
+      "title": "Document Id",
+      "type": "string"
+    },
+    "source_name": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Source Name",
+      "type": "string"
+    },
+    "source_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Source Sha256",
+      "type": "string"
+    },
+    "normalized_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Normalized Sha256"
+    },
+    "replaces_document_id": {
+      "anyOf": [
+        {
+          "pattern": "^knowledge_document_[a-f0-9]{32}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Replaces Document Id"
+    },
+    "parser_version": {
+      "pattern": "^[a-zA-Z0-9._-]{1,40}$",
+      "title": "Parser Version",
+      "type": "string"
+    },
+    "index_version": {
+      "pattern": "^[a-zA-Z0-9._-]{1,40}$",
+      "title": "Index Version",
+      "type": "string"
+    },
+    "status": {
+      "default": "QUEUED",
+      "enum": [
+        "QUEUED",
+        "PROCESSING",
+        "READY",
+        "FAILED",
+        "RETIRED"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "attempts": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Attempts",
+      "type": "integer"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    },
+    "retry_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Retry At"
+    },
+    "error_code": {
+      "anyOf": [
+        {
+          "enum": [
+            "DOCUMENT_INVALID",
+            "INDEX_INVALID",
+            "REPLACEMENT_STALE"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Error Code"
+    },
+    "job_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Job Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "job_id",
+    "scope",
+    "team_id",
+    "document_id",
+    "source_name",
+    "source_sha256",
+    "parser_version",
+    "index_version",
+    "created_at",
+    "updated_at",
+    "job_sha256"
+  ],
+  "title": "KnowledgeIndexJob",
+  "type": "object"
+}

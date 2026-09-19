@@ -15,6 +15,9 @@ from starlette.middleware.base import RequestResponseEndpoint
 
 from ai_software_engineer.domain.identity import ProjectId, TeamId
 from ai_software_engineer.domain.model import DomainModel
+from ai_software_engineer.knowledge.administration import ApproveKnowledgeResolution
+from ai_software_engineer.knowledge.index import KnowledgeIndexWorker
+from ai_software_engineer.knowledge.models import KnowledgeError
 from ai_software_engineer.knowledge_documents import KnowledgeDocumentError
 from ai_software_engineer.knowledge_selection import KnowledgeSelectionError
 from ai_software_engineer.learning import DecideLearningProposal, LearningError
@@ -30,6 +33,7 @@ from .administration import (
     AdministrationError,
     ConsoleAdministration,
     CreateProjectRequest,
+    LocalConsoleAdministration,
     MySqlConnectionRequest,
     UpdateKnowledgeSelectionRequest,
     UpdateSettingsRequest,
@@ -89,13 +93,22 @@ def create_console_app(
     expected_host = f"127.0.0.1:{port}"
     expected_origin = f"http://{expected_host}"
     command_team_id = TypeAdapter(TeamId).validate_python(team_id)
+    knowledge_worker = (
+        KnowledgeIndexWorker(administration.tick_knowledge_indexes)
+        if isinstance(administration, LocalConsoleAdministration)
+        else None
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         console.start()
+        if knowledge_worker is not None:
+            knowledge_worker.start()
         try:
             yield
         finally:
+            if knowledge_worker is not None:
+                knowledge_worker.close()
             console.close()
 
     app = FastAPI(
@@ -132,6 +145,40 @@ def create_console_app(
         if project_id is not None and not _valid_project_id(project_id):
             return _error(404, "NOT_FOUND", "Project was not found.")
         return await _team_snapshot(reader, project_id)
+
+    @app.get("/api/v1/admin/projects/{project_id}/requirements/{requirement_id}/knowledge-gaps")
+    async def knowledge_gaps(project_id: str, requirement_id: str) -> Response:
+        if not isinstance(administration, LocalConsoleAdministration):
+            return _error(404, "NOT_AVAILABLE", "Knowledge administration is unavailable.")
+        try:
+            gaps = await run_in_threadpool(
+                administration.knowledge_gaps, project_id, requirement_id
+            )
+            return JSONResponse([gap.to_wire() for gap in gaps])
+        except (KnowledgeError, AdministrationError, ValueError):
+            return _error(404, "KNOWLEDGE_GAP_NOT_FOUND", "Verified knowledge gaps were not found.")
+
+    @app.post(
+        "/api/v1/admin/projects/{project_id}/requirements/{requirement_id}/knowledge-resolutions"
+    )
+    async def resolve_knowledge_gap(
+        project_id: str, requirement_id: str, request: Request
+    ) -> Response:
+        if not isinstance(administration, LocalConsoleAdministration):
+            return _error(404, "NOT_AVAILABLE", "Knowledge administration is unavailable.")
+        payload = await _json_body(request)
+        if isinstance(payload, Response):
+            return payload
+        try:
+            command = ApproveKnowledgeResolution.model_validate_json(payload)
+            result = await run_in_threadpool(
+                administration.resolve_knowledge_gap, project_id, requirement_id, command
+            )
+            return JSONResponse(result.to_wire(), status_code=201)
+        except (KnowledgeError, AdministrationError, ValueError):
+            return _error(
+                409, "KNOWLEDGE_RESOLUTION_REJECTED", "Resolution could not be approved safely."
+            )
 
     @app.get("/api/v1/operations")
     async def operations() -> Response:
@@ -235,7 +282,27 @@ def create_console_app(
             return _error(503, "KNOWLEDGE_UNAVAILABLE", "Team knowledge is unavailable.")
         return JSONResponse([value.to_wire() for value in values])
 
-    @app.post("/api/v1/admin/team/knowledge", status_code=201)
+    @app.get("/api/v1/admin/team/knowledge/index")
+    async def team_knowledge_index() -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        try:
+            value = await run_in_threadpool(administration.knowledge_index)
+        except (AdministrationError, KnowledgeError, KnowledgeDocumentError):
+            return _error(503, "INDEX_UNAVAILABLE", "Knowledge index is unavailable.")
+        return JSONResponse(value.to_wire())
+
+    @app.post("/api/v1/admin/team/knowledge/index/{job_id}/retry")
+    async def retry_team_knowledge_index(job_id: str) -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        try:
+            value = await run_in_threadpool(administration.retry_knowledge_index, job_id)
+        except (AdministrationError, KnowledgeError, KnowledgeDocumentError):
+            return _error(409, "INDEX_RETRY_REJECTED", "Knowledge index retry was rejected.")
+        return JSONResponse(value.to_wire(), status_code=202)
+
+    @app.post("/api/v1/admin/team/knowledge", status_code=202)
     async def import_knowledge(request: Request, filename: str = "") -> Response:
         if administration is None:
             return _error(404, "NOT_AVAILABLE", "Administration is not available.")
@@ -244,7 +311,7 @@ def create_console_app(
             return content
         try:
             value = await run_in_threadpool(
-                administration.import_document,
+                administration.enqueue_document,
                 filename=filename,
                 content=content,
             )
@@ -252,10 +319,11 @@ def create_console_app(
             AdministrationError,
             KnowledgeDocumentError,
             KnowledgeSelectionError,
+            KnowledgeError,
             ValidationError,
         ):
             return _error(422, "DOCUMENT_REJECTED", "Document could not be imported safely.")
-        return JSONResponse(value.to_wire(), status_code=201)
+        return JSONResponse(value.to_wire(), status_code=202)
 
     @app.get("/api/v1/admin/team/knowledge/{document_id}/content")
     async def team_knowledge_content(document_id: str) -> Response:
@@ -294,8 +362,8 @@ def create_console_app(
             return content
         try:
             value = await run_in_threadpool(
-                administration.replace_document,
-                document_id,
+                administration.enqueue_document,
+                replaces_document_id=document_id,
                 filename=filename,
                 content=content,
             )
@@ -303,10 +371,11 @@ def create_console_app(
             AdministrationError,
             KnowledgeDocumentError,
             KnowledgeSelectionError,
+            KnowledgeError,
             ValidationError,
         ):
             return _error(422, "DOCUMENT_REJECTED", "Document could not be updated safely.")
-        return JSONResponse(value.to_wire())
+        return JSONResponse(value.to_wire(), status_code=202)
 
     @app.delete("/api/v1/admin/team/knowledge/{document_id}")
     async def delete_knowledge(document_id: str) -> Response:
@@ -335,7 +404,33 @@ def create_console_app(
             return _error(503, "KNOWLEDGE_UNAVAILABLE", "Project knowledge is unavailable.")
         return JSONResponse([value.to_wire() for value in values])
 
-    @app.post("/api/v1/admin/projects/{project_id}/knowledge", status_code=201)
+    @app.get("/api/v1/admin/projects/{project_id}/knowledge/index")
+    async def project_knowledge_index(project_id: str) -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        if not _valid_project_id(project_id):
+            return _error(404, "NOT_FOUND", "Project was not found.")
+        try:
+            value = await run_in_threadpool(administration.knowledge_index, project_id)
+        except (AdministrationError, KnowledgeError, KnowledgeDocumentError):
+            return _error(503, "INDEX_UNAVAILABLE", "Knowledge index is unavailable.")
+        return JSONResponse(value.to_wire())
+
+    @app.post("/api/v1/admin/projects/{project_id}/knowledge/index/{job_id}/retry")
+    async def retry_project_knowledge_index(project_id: str, job_id: str) -> Response:
+        if administration is None:
+            return _error(404, "NOT_AVAILABLE", "Administration is not available.")
+        if not _valid_project_id(project_id):
+            return _error(404, "NOT_FOUND", "Project was not found.")
+        try:
+            value = await run_in_threadpool(
+                administration.retry_knowledge_index, job_id, project_id
+            )
+        except (AdministrationError, KnowledgeError, KnowledgeDocumentError):
+            return _error(409, "INDEX_RETRY_REJECTED", "Knowledge index retry was rejected.")
+        return JSONResponse(value.to_wire(), status_code=202)
+
+    @app.post("/api/v1/admin/projects/{project_id}/knowledge", status_code=202)
     async def import_project_knowledge(
         project_id: str, request: Request, filename: str = ""
     ) -> Response:
@@ -348,8 +443,8 @@ def create_console_app(
             return content
         try:
             value = await run_in_threadpool(
-                administration.import_project_document,
-                project_id,
+                administration.enqueue_document,
+                project_id=project_id,
                 filename=filename,
                 content=content,
             )
@@ -357,10 +452,11 @@ def create_console_app(
             AdministrationError,
             KnowledgeDocumentError,
             KnowledgeSelectionError,
+            KnowledgeError,
             ValidationError,
         ):
             return _error(422, "DOCUMENT_REJECTED", "Document could not be imported safely.")
-        return JSONResponse(value.to_wire(), status_code=201)
+        return JSONResponse(value.to_wire(), status_code=202)
 
     @app.get("/api/v1/admin/projects/{project_id}/knowledge/{document_id}/content")
     async def project_knowledge_content(project_id: str, document_id: str) -> Response:
@@ -416,9 +512,9 @@ def create_console_app(
             return content
         try:
             value = await run_in_threadpool(
-                administration.replace_project_document,
-                project_id,
-                document_id,
+                administration.enqueue_document,
+                project_id=project_id,
+                replaces_document_id=document_id,
                 filename=filename,
                 content=content,
             )
@@ -426,10 +522,11 @@ def create_console_app(
             AdministrationError,
             KnowledgeDocumentError,
             KnowledgeSelectionError,
+            KnowledgeError,
             ValidationError,
         ):
             return _error(422, "DOCUMENT_REJECTED", "Document could not be updated safely.")
-        return JSONResponse(value.to_wire())
+        return JSONResponse(value.to_wire(), status_code=202)
 
     @app.delete("/api/v1/admin/projects/{project_id}/knowledge/{document_id}")
     async def delete_project_knowledge(project_id: str, document_id: str) -> Response:

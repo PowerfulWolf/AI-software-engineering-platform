@@ -1,0 +1,325 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/knowledge-evaluation.schema.json",
+  "$defs": {
+    "KnowledgeCitation": {
+      "additionalProperties": false,
+      "properties": {
+        "document_id": {
+          "pattern": "^[a-z][a-zA-Z0-9_.:-]{0,159}$",
+          "title": "Document Id",
+          "type": "string"
+        },
+        "scope": {
+          "enum": [
+            "team",
+            "project",
+            "repository",
+            "spec"
+          ],
+          "title": "Scope",
+          "type": "string"
+        },
+        "document_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Document Sha256",
+          "type": "string"
+        },
+        "chunk_id": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Chunk Id",
+          "type": "string"
+        },
+        "chunk_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Chunk Sha256",
+          "type": "string"
+        },
+        "source_uri": {
+          "minLength": 1,
+          "title": "Source Uri",
+          "type": "string"
+        }
+      },
+      "required": [
+        "document_id",
+        "scope",
+        "document_sha256",
+        "chunk_id",
+        "chunk_sha256",
+        "source_uri"
+      ],
+      "title": "KnowledgeCitation",
+      "type": "object"
+    },
+    "KnowledgeEvaluationObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "case_id": {
+          "minLength": 1,
+          "title": "Case Id",
+          "type": "string"
+        },
+        "condition": {
+          "enum": [
+            "ENABLED",
+            "DISABLED"
+          ],
+          "title": "Condition",
+          "type": "string"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "context_manifest_id": {
+          "minLength": 1,
+          "title": "Context Manifest Id",
+          "type": "string"
+        },
+        "snapshot_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Snapshot Sha256",
+          "type": "string"
+        },
+        "skill_versions": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Skill Versions",
+          "type": "array"
+        },
+        "provider": {
+          "minLength": 1,
+          "title": "Provider",
+          "type": "string"
+        },
+        "model": {
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "expected_citations": {
+          "items": {
+            "$ref": "#/$defs/KnowledgeCitation"
+          },
+          "title": "Expected Citations",
+          "type": "array"
+        },
+        "allowed_citations": {
+          "items": {
+            "$ref": "#/$defs/KnowledgeCitation"
+          },
+          "title": "Allowed Citations",
+          "type": "array"
+        },
+        "actual_citations": {
+          "items": {
+            "$ref": "#/$defs/KnowledgeCitation"
+          },
+          "title": "Actual Citations",
+          "type": "array"
+        },
+        "decisive_claims": {
+          "minimum": 0,
+          "title": "Decisive Claims",
+          "type": "integer"
+        },
+        "supported_claims": {
+          "minimum": 0,
+          "title": "Supported Claims",
+          "type": "integer"
+        },
+        "gap_expected": {
+          "title": "Gap Expected",
+          "type": "boolean"
+        },
+        "gap_reported": {
+          "title": "Gap Reported",
+          "type": "boolean"
+        },
+        "acceptance_total": {
+          "minimum": 0,
+          "title": "Acceptance Total",
+          "type": "integer"
+        },
+        "acceptance_covered": {
+          "minimum": 0,
+          "title": "Acceptance Covered",
+          "type": "integer"
+        },
+        "qa_rejected": {
+          "title": "Qa Rejected",
+          "type": "boolean"
+        },
+        "review_rejected": {
+          "title": "Review Rejected",
+          "type": "boolean"
+        },
+        "token_count": {
+          "minimum": 0,
+          "title": "Token Count",
+          "type": "integer"
+        },
+        "latency_ms": {
+          "minimum": 0,
+          "title": "Latency Ms",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "case_id",
+        "condition",
+        "source_revision",
+        "context_manifest_id",
+        "snapshot_sha256",
+        "skill_versions",
+        "provider",
+        "model",
+        "expected_citations",
+        "allowed_citations",
+        "actual_citations",
+        "decisive_claims",
+        "supported_claims",
+        "gap_expected",
+        "gap_reported",
+        "acceptance_total",
+        "acceptance_covered",
+        "qa_rejected",
+        "review_rejected",
+        "token_count",
+        "latency_ms"
+      ],
+      "title": "KnowledgeEvaluationObservation",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "v0.1",
+      "default": "v0.1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "observations": {
+      "items": {
+        "$ref": "#/$defs/KnowledgeEvaluationObservation"
+      },
+      "title": "Observations",
+      "type": "array"
+    },
+    "citation_precision": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Citation Precision"
+    },
+    "hallucination_rate": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Hallucination Rate"
+    },
+    "gap_recall": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Gap Recall"
+    },
+    "scope_leakage_rate": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Scope Leakage Rate"
+    },
+    "acceptance_coverage": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Acceptance Coverage"
+    },
+    "qa_rejection_rate": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Qa Rejection Rate"
+    },
+    "review_rejection_rate": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Review Rejection Rate"
+    },
+    "additional_tokens": {
+      "title": "Additional Tokens",
+      "type": "integer"
+    },
+    "additional_latency_ms": {
+      "title": "Additional Latency Ms",
+      "type": "integer"
+    },
+    "passed": {
+      "title": "Passed",
+      "type": "boolean"
+    },
+    "report_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Report Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "observations",
+    "additional_tokens",
+    "additional_latency_ms",
+    "passed",
+    "report_sha256"
+  ],
+  "title": "KnowledgeEvaluationReport",
+  "type": "object"
+}

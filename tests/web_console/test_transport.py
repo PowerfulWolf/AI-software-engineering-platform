@@ -464,7 +464,11 @@ def test_console_host_rejects_existing_invalid_config(tmp_path: Path) -> None:
 
 def test_administration_endpoints_create_project_import_document_and_save_settings(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        "ai_software_engineer.knowledge.index.KnowledgeIndexWorker.start", lambda _: None
+    )
     config = ProductionConfig.model_validate(
         {
             "platform_root": str(tmp_path / "platform"),
@@ -505,23 +509,23 @@ def test_administration_endpoints_create_project_import_document_and_save_settin
             content=b"# Project guide\n",
             headers={"Content-Type": "application/octet-stream"},
         )
+        assert imported.json()["status"] == "QUEUED"
+        administration.tick_knowledge_indexes()
         team_content = client.get(
-            "/api/v1/admin/team/knowledge/"
-            + imported.json()["manifest"]["document_id"]
-            + "/content"
+            "/api/v1/admin/team/knowledge/" + imported.json()["document_id"] + "/content"
         )
         project_content = client.get(
             "/api/v1/admin/projects/project_web/knowledge/"
-            + project_imported.json()["manifest"]["document_id"]
+            + project_imported.json()["document_id"]
             + "/content"
         )
         team_selection = client.put(
             "/api/v1/admin/team/knowledge/selection",
-            json={"document_ids": [imported.json()["manifest"]["document_id"]]},
+            json={"document_ids": [imported.json()["document_id"]]},
         )
         project_selection = client.put(
             "/api/v1/admin/projects/project_web/knowledge/selection",
-            json={"document_ids": [project_imported.json()["manifest"]["document_id"]]},
+            json={"document_ids": [project_imported.json()["document_id"]]},
         )
         spec_payload = {
             "spec_key": "python.testing",
@@ -550,24 +554,26 @@ def test_administration_endpoints_create_project_import_document_and_save_settin
         knowledge = client.get("/api/v1/admin/team/knowledge")
         team_replaced = client.put(
             "/api/v1/admin/team/knowledge/"
-            + imported.json()["manifest"]["document_id"]
+            + imported.json()["document_id"]
             + "?filename=team-guide.md",
             content=b"# Team guide v2\n",
             headers={"Content-Type": "application/octet-stream"},
         )
         project_replaced = client.put(
             "/api/v1/admin/projects/project_web/knowledge/"
-            + project_imported.json()["manifest"]["document_id"]
+            + project_imported.json()["document_id"]
             + "?filename=project-guide.md",
             content=b"# Project guide v2\n",
             headers={"Content-Type": "application/octet-stream"},
         )
+        administration.tick_knowledge_indexes()
+        assert administration.knowledge()[0].selected is True
+        assert administration.project_knowledge("project_web")[0].selected is True
         team_deleted = client.delete(
-            "/api/v1/admin/team/knowledge/" + team_replaced.json()["manifest"]["document_id"]
+            "/api/v1/admin/team/knowledge/" + team_replaced.json()["document_id"]
         )
         project_deleted = client.delete(
-            "/api/v1/admin/projects/project_web/knowledge/"
-            + project_replaced.json()["manifest"]["document_id"]
+            "/api/v1/admin/projects/project_web/knowledge/" + project_replaced.json()["document_id"]
         )
         team_spec_deleted = client.delete("/api/v1/admin/team/specs/python.testing")
         project_spec_deleted = client.delete(
@@ -589,8 +595,8 @@ def test_administration_endpoints_create_project_import_document_and_save_settin
 
     assert created.status_code == 201
     assert created.json()["project_id"] == "project_web"
-    assert imported.status_code == 201
-    assert project_imported.status_code == 201
+    assert imported.status_code == 202
+    assert project_imported.status_code == 202
     assert project_imported.json()["project_id"] == "project_web"
     assert team_content.json()["content_markdown"] == "# Team guide\n"
     assert project_content.json()["content_markdown"] == "# Project guide\n"
@@ -610,10 +616,8 @@ def test_administration_endpoints_create_project_import_document_and_save_settin
     assert projects.status_code == 200
     assert [item["project_id"] for item in projects.json()] == ["project_web"]
     assert knowledge.json()[0]["manifest"]["source_name"] == "team-guide.md"
-    assert team_replaced.status_code == 200
-    assert team_replaced.json()["selected"] is True
-    assert project_replaced.status_code == 200
-    assert project_replaced.json()["selected"] is True
+    assert team_replaced.status_code == 202
+    assert project_replaced.status_code == 202
     assert team_deleted.json() == []
     assert project_deleted.json() == []
     assert team_spec_deleted.json() == []
@@ -641,3 +645,54 @@ def test_administration_endpoints_create_project_import_document_and_save_settin
     assert updated.json()["restart_required"] is False
     assert rejected.status_code == 422
     assert "Team guide" not in imported.text
+
+
+def test_knowledge_upload_is_async_and_failed_job_has_safe_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(
+        "ai_software_engineer.knowledge.index.KnowledgeIndexWorker.start", lambda _: None
+    )
+    config = ProductionConfig.model_validate(
+        {
+            "platform_root": str(tmp_path / "platform"),
+            "team_id": "team_test",
+            "team_name": "Test",
+            "model_routes": [{"provider": "codex", "model": "gpt-5.6-terra", "kind": "codex_cli"}],
+        }
+    )
+    TeamWorkspace.initialize(config.platform_root, team_id=config.team_id, name=config.team_name)
+    administration = LocalConsoleAdministration(
+        runtime_config=config,
+        config_path=tmp_path / "config.json",
+        environment={},
+        mysql_probe=lambda _: None,
+    )
+    app = create_console_app(
+        _Console(), _Reader(), team_id="team_test", administration=administration
+    )
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        uploaded = client.post(
+            "/api/v1/admin/team/knowledge?filename=broken.pdf",
+            content=b"sk-do-not-log-secret-document",
+            headers={"Content-Type": "application/octet-stream"},
+        )
+        assert uploaded.status_code == 202
+        job = uploaded.json()
+        assert job["status"] == "QUEUED"
+        assert client.get("/api/v1/admin/team/knowledge").json() == []
+        assert client.get("/api/v1/admin/team/knowledge/index").json()["backlog"] == 1
+        administration.tick_knowledge_indexes()
+        failed = client.get("/api/v1/admin/team/knowledge/index").json()
+        assert failed["failed"] == 1
+        assert failed["jobs"][0]["error_code"] == "DOCUMENT_INVALID"
+        retried = client.post("/api/v1/admin/team/knowledge/index/" + job["job_id"] + "/retry")
+        assert retried.status_code == 202 and retried.json()["status"] == "QUEUED"
+        assert (
+            client.post("/api/v1/admin/team/knowledge/index/" + "a" * 64 + "/retry").status_code
+            == 409
+        )
+        assert "sk-do-not-log" not in str(failed)
+        assert "sk-do-not-log" not in caplog.text

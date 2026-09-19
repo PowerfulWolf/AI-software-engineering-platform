@@ -39,6 +39,11 @@ from ai_software_engineer.domain.model import (
     ReasoningEffort,
     ensure_unique,
 )
+from ai_software_engineer.knowledge.administration import ApproveKnowledgeResolution
+from ai_software_engineer.knowledge.gaps import KnowledgeGap, KnowledgeResolution
+from ai_software_engineer.knowledge.index import KnowledgeIndexer
+from ai_software_engineer.knowledge.index_models import KnowledgeIndexJob, KnowledgeIndexStatus
+from ai_software_engineer.knowledge.mutation import knowledge_mutation_lock
 from ai_software_engineer.knowledge_documents import (
     KnowledgeDocumentId,
     KnowledgeDocumentManifest,
@@ -282,6 +287,18 @@ class ConsoleAdministration(Protocol):
         content: bytes,
     ) -> RequirementScreenshot: ...
     def knowledge(self) -> tuple[KnowledgeDocumentView, ...]: ...
+    def enqueue_document(
+        self,
+        *,
+        filename: str,
+        content: bytes,
+        project_id: str | None = None,
+        replaces_document_id: str | None = None,
+    ) -> KnowledgeIndexJob: ...
+    def knowledge_index(self, project_id: str | None = None) -> KnowledgeIndexStatus: ...
+    def retry_knowledge_index(
+        self, job_id: str, project_id: str | None = None
+    ) -> KnowledgeIndexJob: ...
     def document_content(self, document_id: str) -> KnowledgeDocumentContentView: ...
     def import_document(self, *, filename: str, content: bytes) -> KnowledgeDocumentView: ...
     def replace_document(
@@ -458,6 +475,53 @@ class LocalConsoleAdministration:
             for manifest in TeamKnowledgeDocumentStore(team).list()
         )
 
+    def _knowledge_indexer(self, project_id: str | None = None) -> KnowledgeIndexer:
+        if project_id is None:
+            return KnowledgeIndexer(
+                self._team(), fallback_paths=self._saved_config.team_knowledge_paths
+            )
+        project = self._project(project_id)
+        return KnowledgeIndexer(
+            project, fallback_paths=self._legacy_project_knowledge_paths(project)
+        )
+
+    def enqueue_document(
+        self,
+        *,
+        filename: str,
+        content: bytes,
+        project_id: str | None = None,
+        replaces_document_id: str | None = None,
+    ) -> KnowledgeIndexJob:
+        return self._knowledge_indexer(project_id).enqueue(
+            filename=filename, content=content, replaces_document_id=replaces_document_id
+        )
+
+    def knowledge_index(self, project_id: str | None = None) -> KnowledgeIndexStatus:
+        return self._knowledge_indexer(project_id).status()
+
+    def retry_knowledge_index(
+        self, job_id: str, project_id: str | None = None
+    ) -> KnowledgeIndexJob:
+        return self._knowledge_indexer(project_id).retry(job_id)
+
+    def tick_knowledge_indexes(self) -> None:
+        try:
+            team = self._team()
+        except AdministrationError:
+            return  # Initial setup has no Team yet.
+        # Every scope owns its failures. A corrupt Team or Project index cannot starve
+        # the remaining libraries; management status still exposes that scope's error.
+        scopes = (
+            None,
+            *(project.manifest.project_id for project in team.project_registry().discover()),
+        )
+        for project_id in scopes:
+            try:
+                self._knowledge_indexer(project_id).tick()
+            except Exception:
+                continue
+
     def import_document(self, *, filename: str, content: bytes) -> KnowledgeDocumentView:
         team = self._team()
         manifest = TeamKnowledgeDocumentStore(team).import_document(
@@ -484,7 +548,7 @@ class LocalConsoleAdministration:
     ) -> KnowledgeDocumentView:
         team = self._team()
         store = TeamKnowledgeDocumentStore(team)
-        with self._lock:
+        with self._lock, knowledge_mutation_lock(team.root / "knowledge"):
             current = _knowledge_document(store.list(), document_id)
             selected = set(
                 effective_team_knowledge_paths(team, self._saved_config.team_knowledge_paths)
@@ -505,7 +569,7 @@ class LocalConsoleAdministration:
     def delete_document(self, document_id: str) -> tuple[KnowledgeDocumentView, ...]:
         team = self._team()
         store = TeamKnowledgeDocumentStore(team)
-        with self._lock:
+        with self._lock, knowledge_mutation_lock(team.root / "knowledge"):
             current = _knowledge_document(store.list(), document_id)
             selected = set(
                 effective_team_knowledge_paths(team, self._saved_config.team_knowledge_paths)
@@ -520,10 +584,10 @@ class LocalConsoleAdministration:
         self, request: UpdateKnowledgeSelectionRequest
     ) -> tuple[KnowledgeDocumentView, ...]:
         team = self._team()
-        manifests = TeamKnowledgeDocumentStore(team).list()
-        paths = _selected_document_paths(manifests, request.document_ids)
         try:
-            with self._lock:
+            with self._lock, knowledge_mutation_lock(team.root / "knowledge"):
+                manifests = TeamKnowledgeDocumentStore(team).list()
+                paths = _selected_document_paths(manifests, request.document_ids)
                 TeamKnowledgeSelectionStore(team).save(paths)
         except KnowledgeSelectionError as error:
             raise AdministrationError("Team knowledge selection could not be saved") from error
@@ -585,7 +649,7 @@ class LocalConsoleAdministration:
     ) -> KnowledgeDocumentView:
         project = self._project(project_id)
         store = ProjectKnowledgeDocumentStore(project)
-        with self._lock:
+        with self._lock, knowledge_mutation_lock(project.root / "knowledge"):
             current = _knowledge_document(store.list(), document_id)
             selected = set(
                 effective_project_knowledge_paths(
@@ -612,7 +676,7 @@ class LocalConsoleAdministration:
     ) -> tuple[KnowledgeDocumentView, ...]:
         project = self._project(project_id)
         store = ProjectKnowledgeDocumentStore(project)
-        with self._lock:
+        with self._lock, knowledge_mutation_lock(project.root / "knowledge"):
             current = _knowledge_document(store.list(), document_id)
             selected = set(
                 effective_project_knowledge_paths(
@@ -630,10 +694,10 @@ class LocalConsoleAdministration:
         self, project_id: str, request: UpdateKnowledgeSelectionRequest
     ) -> tuple[KnowledgeDocumentView, ...]:
         project = self._project(project_id)
-        manifests = ProjectKnowledgeDocumentStore(project).list()
-        paths = _selected_document_paths(manifests, request.document_ids)
         try:
-            with self._lock:
+            with self._lock, knowledge_mutation_lock(project.root / "knowledge"):
+                manifests = ProjectKnowledgeDocumentStore(project).list()
+                paths = _selected_document_paths(manifests, request.document_ids)
                 ProjectKnowledgeSelectionStore(project).save(paths)
         except KnowledgeSelectionError as error:
             raise AdministrationError("Project knowledge selection could not be saved") from error
@@ -996,6 +1060,18 @@ class LocalConsoleAdministration:
             return self._team().project_registry().open(project_id)
         except (OSError, ValueError) as error:
             raise AdministrationError("Project workspace is invalid") from error
+
+    def knowledge_gaps(self, project_id: str, requirement_id: str) -> tuple[KnowledgeGap, ...]:
+        from ai_software_engineer.knowledge.administration import list_gaps
+
+        return list_gaps(self._project(project_id), requirement_id)
+
+    def resolve_knowledge_gap(
+        self, project_id: str, requirement_id: str, command: ApproveKnowledgeResolution
+    ) -> KnowledgeResolution:
+        from ai_software_engineer.knowledge.administration import approve_resolution
+
+        return approve_resolution(self._project(project_id), requirement_id, command)
 
     def _legacy_project_knowledge_paths(self, project: ProjectWorkspace) -> tuple[str, ...]:
         return (

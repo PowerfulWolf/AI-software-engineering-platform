@@ -98,6 +98,11 @@ learning facts additionally use `spec-document.schema.json`, `spec-activation.sc
 - Team and Project knowledge selections are explicit, unique, sorted, bounded, safe relative paths. Reads
   reject traversal, hidden/path-like entries, symlinks, non-regular files, invalid UTF-8 and size
   overflow; selected content is redacted and digest-bound in Context.
+- Selection, replacement, deletion and retirement read-modify-write share the scope's
+  `knowledge/mutation.lock`; the process lock is reentrant within one thread. Console validates selected
+  document IDs under that lock, and index replacement holds it from the live-selection read through
+  retirement. Concurrent deselection must never be undone by stale selection transfer; concurrent
+  retirements must retain every retired ID. See [`knowledge-index.md`](knowledge-index.md).
 - Selection publication is atomic and live for future runtime access. An absent selection record may
   use the corresponding `ProductionConfig` list as a compatibility fallback; a present empty record
   explicitly means no selected knowledge. This is not a process-level configuration mutation.

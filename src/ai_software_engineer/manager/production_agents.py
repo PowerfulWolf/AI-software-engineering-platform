@@ -38,6 +38,11 @@ from ai_software_engineer.domain import (
     TechnicalDesign,
 )
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
+from ai_software_engineer.domain.project_delivery import (
+    DesignComplexityFacts,
+    PlanRevisionFeedback,
+    PlanWorkGraph,
+)
 from ai_software_engineer.planning import (
     PlannerAgentAdapter,
     PlannerAgentFailure,
@@ -146,6 +151,7 @@ class TechnicalDesignDraft(DomainModel):
     acceptance_mappings: Annotated[tuple[AcceptanceMappingDraft, ...], Field(min_length=1)]
     implementation_steps: Annotated[tuple[DesignStepDraft, ...], Field(min_length=1)]
     risks: tuple[DesignRiskDraft, ...] = ()
+    complexity_facts: DesignComplexityFacts | None = None
 
 
 class PhaseDraft(DomainModel):
@@ -159,6 +165,8 @@ class PhaseDraft(DomainModel):
 
 class ExecutionPlanDraft(DomainModel):
     phases: Annotated[tuple[PhaseDraft, ...], Field(min_length=3, max_length=3)]
+    work_graph: PlanWorkGraph | None = None
+    revision_feedback: PlanRevisionFeedback | None = None
 
     @model_validator(mode="after")
     def validate_serial_roles(self) -> Self:
@@ -237,7 +245,10 @@ class StructuredDesignerAgentAdapter(DesignerAgentAdapter):
                     "requirement and acceptance ID. When modifying an existing file, reuse its "
                     "exact repository-relative path from the project profile; never invent a new "
                     "directory for it. Use a repository-relative glob only for a genuinely broad "
-                    "component scope."
+                    "component scope. Supply complexity_facts for migrations, interface "
+                    "compatibility, backfill, security, performance, concurrency, dependencies "
+                    "and integration groups. "
+                    "These are facts, not a routing decision; Manager owns planning classification."
                 ),
                 input_payload=cast(dict[str, object], request.context.to_wire()),
                 output_schema=TechnicalDesignDraft.model_json_schema(),
@@ -279,9 +290,16 @@ class StructuredPlannerAgentAdapter(PlannerAgentAdapter):
         try:
             completion = self._client.complete(
                 instructions=(
-                    "Act as Planner Agent. Produce exactly the serial coder, qa, reviewer demands. "
-                    "Assign no concrete Agent or provider. Each phase needs explicit capabilities, "
-                    "risk, minimum brain tier, and verifiable checkpoints."
+                    "Act as Planner Agent. Produce serial coder, qa, reviewer demands per Task. "
+                    "Assign no concrete Agent, provider, model, Assignment or Lease. "
+                    "Each phase needs "
+                    "explicit capabilities, risk, minimum brain tier, and verifiable checkpoints. "
+                    "For COMPLEX gate decisions include work_graph with 1..16 bounded packages, "
+                    "exact component IDs, design step IDs, unchanged acceptance IDs, dependencies "
+                    "in topological order, risks, checkpoints and acceptance-mapped test matrices. "
+                    "Use max_parallelism=1 within one repository; parallelism is only between "
+                    "independently isolated repository Tasks. Preserve every approved acceptance "
+                    "criterion. Never route or override the Manager planning gate."
                 ),
                 input_payload=cast(dict[str, object], request.context.to_wire()),
                 output_schema=ExecutionPlanDraft.model_json_schema(),
@@ -413,6 +431,7 @@ def _technical_design(
             )
             for item in draft.risks
         ),
+        complexity_facts=draft.complexity_facts,
         created_at=request.context.built_at,
     )
 
@@ -436,6 +455,8 @@ def _execution_plan(request: PlannerAgentRequest, draft: ExecutionPlanDraft) -> 
         plan_id=f"execution_plan_{_identity(request.run_id)}",
         version=request.context.expected_execution_plan_version,
         phases=phases,
+        work_graph=draft.work_graph,
+        revision_feedback=draft.revision_feedback,
         created_at=request.context.built_at,
     )
 

@@ -106,6 +106,7 @@ from ai_software_engineer.manager.production_agents import (
     StructuredProductAgentAdapter,
 )
 from ai_software_engineer.manager.production_delivery import (
+    ConfiguredDeliveryRouteAdapterFactory,
     DeliveryRouteAdapterFactory,
     DispatchDeliveryAgentAdapter,
 )
@@ -348,6 +349,7 @@ class ProductionProjectDeliveryBackend:
         human_decision_verifier: HumanProductDecisionVerifier | None = None,
         frozen_preparation: PrepareProjectResult | None = None,
         frozen_source_revision: str | None = None,
+        trusted_plan_projection: bool = False,
     ) -> None:
         if (frozen_preparation is None) != (frozen_source_revision is None):
             raise ValueError("frozen preparation and source revision must be supplied together")
@@ -369,6 +371,7 @@ class ProductionProjectDeliveryBackend:
         self._human_decision_verifier = human_decision_verifier or _CliHumanDecisionVerifier()
         self._frozen_preparation = frozen_preparation
         self._frozen_source_revision = frozen_source_revision
+        self._trusted_plan_projection = trusted_plan_projection
         self._baseline_store = FileProjectBaselineCompilationStore()
         self._preparer = ManagerSkillService(
             organization=organization,
@@ -580,6 +583,7 @@ class ProductionProjectDeliveryBackend:
                     )
                 ),
                 execution_plans=facts.planning,
+                planning_decisions=None if self._trusted_plan_projection else facts.planning,
                 request_revisions=facts.product,
                 design_records=facts.design,
             )
@@ -989,6 +993,57 @@ class ProductionProjectDeliveryBackend:
             ),
             max_retries=0,
         )
+        from ai_software_engineer.context import ContextBudget
+        from ai_software_engineer.knowledge.audit import KnowledgeHumanActionRecorder
+        from ai_software_engineer.knowledge.delivery import KnowledgeDeliveryGate
+        from ai_software_engineer.knowledge.runtime import KnowledgeRunContextBuilder
+        from ai_software_engineer.knowledge.store import KnowledgeRecordStore
+        from ai_software_engineer.orchestration.context import FileRunContextBuilder
+
+        contexts = FileContextStore(paths.contexts)
+        knowledge_records = KnowledgeRecordStore(facts.workspace.root / "knowledge" / "runs")
+        audit_stores = [knowledge_records]
+        requirement_id = None
+        for source in runtime_config.context_sources:
+            if source.uri.startswith("joint://"):
+                requirement_id = source.uri.split("/")[2]
+                requirement_records = (
+                    facts.workspace.root.parent.parent
+                    / "requirements"
+                    / requirement_id
+                    / "knowledge"
+                )
+                if requirement_records.is_dir():
+                    audit_stores.append(KnowledgeRecordStore(requirement_records))
+        run_contexts = FileRunContextBuilder(
+            facts.workspace.repository_root,
+            sources=runtime_config.context_sources,
+            context_store=contexts,
+            budget=ContextBudget(
+                max_input_tokens=runtime_config.context_max_input_tokens,
+                reserved_output_tokens=4_000,
+            ),
+        )
+        knowledge_contexts = (
+            KnowledgeRunContextBuilder(
+                run_contexts,
+                contexts=contexts,
+                clients=ConfiguredStructuredClientFactory(self._config, self._environment),
+                repository_root=facts.workspace.repository_root,
+                records=knowledge_records,
+                team_id=self._config.team_id,
+                project_id=facts.workspace.manifest.project_id,
+                repository_id=facts.workspace.repository_id,
+                sources=runtime_config.context_sources,
+            )
+            if isinstance(
+                route_adapters
+                or self._delivery_route_adapters
+                or ConfiguredDeliveryRouteAdapterFactory(),
+                ConfiguredDeliveryRouteAdapterFactory,
+            )
+            else run_contexts
+        )
         try:
             with RuntimeSession(
                 runtime_config,
@@ -996,6 +1051,17 @@ class ProductionProjectDeliveryBackend:
                 agent_adapter=adapter,
                 agent_definitions=definitions,
                 repository_root=facts.workspace.repository_root,
+                context_builder=knowledge_contexts,
+                human_action_recorder=KnowledgeHumanActionRecorder(
+                    tuple(audit_stores), requirement_id=requirement_id
+                ),
+                transition_gate=KnowledgeDeliveryGate(
+                    records=KnowledgeRecordStore(facts.workspace.root / "knowledge" / "runs"),
+                    artifacts=FileArtifactStore(paths.artifacts),
+                    contexts=contexts,
+                )
+                if isinstance(knowledge_contexts, KnowledgeRunContextBuilder)
+                else None,
             ) as runtime:
                 return runtime.run_task(dispatch.task_id).result
         finally:
@@ -1083,8 +1149,14 @@ class ProductionProjectDeliveryBackend:
 
     @staticmethod
     def _guard(label: str, operation: Callable[[], ResultT]) -> ResultT:
+        from ai_software_engineer.knowledge.gaps import KnowledgeGapRaised
+
         try:
             return operation()
+        except KnowledgeGapRaised:
+            # Requirement coordination owns the recoverable knowledge wait.
+            # Keep the Task at its last checkpoint; a gap is not a role verdict.
+            raise
         except DeliveryBackendFailure:
             raise
         except ProductionConfigError as error:

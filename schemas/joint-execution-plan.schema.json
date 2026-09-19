@@ -1,4 +1,6 @@
 {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/joint-execution-plan.schema.json",
   "$defs": {
     "BrainTier": {
       "enum": [
@@ -21,6 +23,28 @@
           "minItems": 3,
           "title": "Phases",
           "type": "array"
+        },
+        "work_graph": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanWorkGraph"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "revision_feedback": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanRevisionFeedback"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -160,6 +184,188 @@
       "title": "PhaseDraft",
       "type": "object"
     },
+    "PlanRevisionFeedback": {
+      "additionalProperties": false,
+      "properties": {
+        "previous_plan_id": {
+          "pattern": "^execution_plan_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Previous Plan Id",
+          "type": "string"
+        },
+        "previous_plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Previous Plan Sha256",
+          "type": "string"
+        },
+        "reason_codes": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Reason Codes",
+          "type": "array"
+        },
+        "required_changes": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Required Changes",
+          "type": "array"
+        }
+      },
+      "required": [
+        "previous_plan_id",
+        "previous_plan_sha256",
+        "reason_codes",
+        "required_changes"
+      ],
+      "title": "PlanRevisionFeedback",
+      "type": "object"
+    },
+    "PlanTestItem": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "acceptance_criterion_ids": {
+          "items": {
+            "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Acceptance Criterion Ids",
+          "type": "array"
+        },
+        "level": {
+          "minLength": 1,
+          "title": "Level",
+          "type": "string"
+        },
+        "verification": {
+          "minLength": 1,
+          "title": "Verification",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "acceptance_criterion_ids",
+        "level",
+        "verification"
+      ],
+      "title": "PlanTestItem",
+      "type": "object"
+    },
+    "PlanWorkGraph": {
+      "additionalProperties": false,
+      "properties": {
+        "packages": {
+          "items": {
+            "$ref": "#/$defs/PlanWorkPackage"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Packages",
+          "type": "array"
+        },
+        "max_parallelism": {
+          "default": 1,
+          "maximum": 4,
+          "minimum": 1,
+          "title": "Max Parallelism",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "packages"
+      ],
+      "title": "PlanWorkGraph",
+      "type": "object"
+    },
+    "PlanWorkPackage": {
+      "additionalProperties": false,
+      "description": "Bounded abstract Task proposal; roles within each Task stay serial.",
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "component_ids": {
+          "items": {
+            "pattern": "^component_[a-z0-9][a-z0-9_-]{1,63}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Component Ids",
+          "type": "array"
+        },
+        "step_ids": {
+          "items": {
+            "pattern": "^design_step_[a-z0-9][a-z0-9_-]{1,63}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Step Ids",
+          "type": "array"
+        },
+        "acceptance_criterion_ids": {
+          "items": {
+            "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Acceptance Criterion Ids",
+          "type": "array"
+        },
+        "depends_on": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Depends On",
+          "type": "array"
+        },
+        "risk": {
+          "$ref": "#/$defs/RiskTier"
+        },
+        "checkpoints": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Checkpoints",
+          "type": "array"
+        },
+        "tests": {
+          "items": {
+            "$ref": "#/$defs/PlanTestItem"
+          },
+          "minItems": 1,
+          "title": "Tests",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "component_ids",
+        "step_ids",
+        "acceptance_criterion_ids",
+        "risk",
+        "checkpoints",
+        "tests"
+      ],
+      "title": "PlanWorkPackage",
+      "type": "object"
+    },
     "RiskTier": {
       "enum": [
         "low",
@@ -221,6 +427,59 @@
       },
       "title": "Integration Checks",
       "type": "array"
+    },
+    "max_parallelism": {
+      "anyOf": [
+        {
+          "maximum": 4,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Max Parallelism"
+    },
+    "version": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Version"
+    },
+    "previous_plan_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Previous Plan Sha256"
+    },
+    "feedback_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Feedback Sha256"
     }
   },
   "required": [
@@ -228,7 +487,5 @@
     "units"
   ],
   "title": "JointExecutionPlan",
-  "type": "object",
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ai-software-engineer.local/schemas/joint-execution-plan.schema.json"
+  "type": "object"
 }

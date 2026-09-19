@@ -22,6 +22,7 @@ from pypdf.errors import PdfReadError
 
 from ai_software_engineer.domain.identity import ProjectId, TeamId
 from ai_software_engineer.domain.model import DomainModel
+from ai_software_engineer.knowledge.mutation import knowledge_mutation_lock
 from ai_software_engineer.project_workspace import ProjectWorkspace
 from ai_software_engineer.team_workspace import (
     MAX_TEAM_KNOWLEDGE_DOCUMENT_BYTES,
@@ -233,21 +234,23 @@ class _KnowledgeDocumentStore[ManifestT: KnowledgeDocumentManifest]:
 
     def retire(self, document_id: str) -> KnowledgeRetirement:
         self._validate_workspace()
-        identity = TypeAdapter(KnowledgeDocumentId).validate_python(document_id)
-        if identity not in {item.document_id for item in self._list_all()}:
-            raise KnowledgeDocumentError("knowledge document was not found")
-        current = self.retirement()
-        return self._save_retirement((*current.retired_document_ids, identity))
+        with knowledge_mutation_lock(self.root.parent):
+            identity = TypeAdapter(KnowledgeDocumentId).validate_python(document_id)
+            if identity not in {item.document_id for item in self._list_all()}:
+                raise KnowledgeDocumentError("knowledge document was not found")
+            current = self.retirement()
+            return self._save_retirement((*current.retired_document_ids, identity))
 
     def restore(self, document_id: str) -> KnowledgeRetirement:
         self._validate_workspace()
-        identity = TypeAdapter(KnowledgeDocumentId).validate_python(document_id)
-        current = self.retirement()
-        if identity not in current.retired_document_ids:
-            return current
-        return self._save_retirement(
-            tuple(item for item in current.retired_document_ids if item != identity)
-        )
+        with knowledge_mutation_lock(self.root.parent):
+            identity = TypeAdapter(KnowledgeDocumentId).validate_python(document_id)
+            current = self.retirement()
+            if identity not in current.retired_document_ids:
+                return current
+            return self._save_retirement(
+                tuple(item for item in current.retired_document_ids if item != identity)
+            )
 
     def import_document(
         self,
@@ -265,6 +268,15 @@ class _KnowledgeDocumentStore[ManifestT: KnowledgeDocumentManifest]:
         suffix = Path(source_name).suffix.lower()
         source_sha = hashlib.sha256(content).hexdigest()
         document_id = "knowledge_document_" + source_sha[:32]
+        target = self.root / document_id
+        if target.exists():
+            existing = self._read(target)
+            if existing.source_sha256 != source_sha:
+                raise KnowledgeDocumentError("knowledge document identity collision")
+            if Path(existing.source_name).suffix.lower() != suffix:
+                raise KnowledgeDocumentError("knowledge document format identity collision")
+            self.restore(existing.document_id)
+            return existing
         normalized = _normalize(source_name, content)
         normalized_bytes = normalized.encode("utf-8")
         if not normalized.strip():
@@ -293,13 +305,6 @@ class _KnowledgeDocumentStore[ManifestT: KnowledgeDocumentManifest]:
         manifest = provisional.model_copy(
             update={"manifest_sha256": provisional.recompute_digest()}
         )
-        target = self.root / document_id
-        if target.exists():
-            existing = self._read(target)
-            if existing.source_sha256 != source_sha:
-                raise KnowledgeDocumentError("knowledge document identity collision")
-            self.restore(existing.document_id)
-            return existing
         self.root.mkdir(parents=True, exist_ok=True)
         _reject_symlink(self.root)
         staging = Path(tempfile.mkdtemp(prefix=".knowledge-", dir=self.root))
@@ -524,7 +529,9 @@ def _normalize(filename: str, content: bytes) -> str:
         if suffix in {".md", ".txt"}:
             text = content.decode("utf-8")
         elif suffix == ".pdf":
-            reader = PdfReader(BytesIO(content))
+            if not content.startswith(b"%PDF-"):
+                raise KnowledgeDocumentError("knowledge document cannot be decoded")
+            reader = PdfReader(BytesIO(content), strict=True)
             if reader.is_encrypted and not reader.decrypt(""):
                 raise KnowledgeDocumentError("encrypted PDF documents are not supported")
             if len(reader.pages) > 500:

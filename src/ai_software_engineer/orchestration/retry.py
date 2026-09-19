@@ -104,6 +104,8 @@ class RetryingOrchestrator(SerialOrchestrator):
     """
 
     def run_task(self, task_id: TaskId) -> RetryResult:  # type: ignore[override]
+        if self._transition_gate is not None:
+            self._transition_gate.begin_task(self._repository.get(task_id))
         try:
             return self._run_task(task_id)
         except ContextBudgetExceeded:

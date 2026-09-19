@@ -135,6 +135,10 @@ production_console_app(
   “截图已添加”，移除最后一张后预览区必须隐藏。
 - Project 知识库的 Project selector 必须同时用可见 `selected` 样式和 `aria-selected/aria-current`
   标识当前 Project；切换后资产列表与选中态使用同一个 `selected_project_id` 重绘。
+- Knowledge index worker 的 Team/Project tick 必须逐 scope 隔离失败；某个损坏索引不能阻止其他
+  Project 的 QUEUED job 推进。Console 的知识选择、替换和退休 RMW 与 worker 共用 scope mutation
+  lock，不能只依赖 Console 实例自己的线程锁；验收见 `tests/knowledge/test_index.py` 与
+  `tests/web_console/test_administration.py`。
 - UI 术语固定为 Team `通用知识`、Project `背景知识`；两者底层仍复用内容寻址的 knowledge document
   契约，不能因为展示名称不同而复制存储或选择逻辑。
 - Requirements 页把 Project 创建放在 Project 上下文区，把 Requirement 创建放在需求列表标题与

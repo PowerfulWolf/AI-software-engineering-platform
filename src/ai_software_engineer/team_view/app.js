@@ -10,6 +10,7 @@ let consoleDeliveryReady = null;
 let administrationAvailable = null;
 let administrationProjects = [];
 let knowledgeDocuments = [];
+let knowledgeIndexStatus = null;
 let knowledgeScope = "team";
 let knowledgeMode = "background";
 let specDocuments = [];
@@ -934,7 +935,7 @@ function renderComposer() {
         const knowledgeLabel = knowledgeLabelForScope(editing.scope);
         administrationNotice = {
           page: "knowledge",
-          text: `${knowledgeLabel}已更新；原启用状态已继承，只影响之后准备的新需求。`,
+          text: `${knowledgeLabel}更新已排队，解析完成后继承原启用状态；只影响之后准备的新需求。`,
         };
         render();
       } catch (error) {
@@ -2474,9 +2475,13 @@ async function loadKnowledge() {
             "/knowledge",
         )
       : [];
+    knowledgeIndexStatus = projectId
+      ? await adminFetch("/api/v1/admin/projects/" + encodeURIComponent(projectId) + "/knowledge/index")
+      : null;
     return;
   }
   knowledgeDocuments = await adminFetch("/api/v1/admin/team/knowledge");
+  knowledgeIndexStatus = await adminFetch("/api/v1/admin/team/knowledge/index");
 }
 async function loadAdministration() {
   try {
@@ -2765,10 +2770,10 @@ function renderBackgroundKnowledgeImport(dialog) {
     administrationNotice = {
       page: "knowledge",
       text: failures.length
-        ? `已导入 ${imported}/${selectedFiles.length} 份；${failures.length} 份失败。${failures[0]}`
+        ? `已接收 ${imported}/${selectedFiles.length} 份；${failures.length} 份上传失败。${failures[0]}`
         : replacements.size
-          ? `已导入 ${imported} 份${knowledgeLabel}，其中 ${replacements.size} 份同名文档已更新；原启用状态已继承。`
-          : `已导入 ${imported} 份${knowledgeLabel}。启用后会立即用于之后的新需求，无需重启。`,
+          ? `已接收 ${imported} 份${knowledgeLabel}，其中 ${replacements.size} 份更新正在排队；解析完成后继承原启用状态。`
+          : `已接收 ${imported} 份${knowledgeLabel}，正在后台解析。就绪后可启用于新需求。`,
     };
     render();
   };
@@ -2828,6 +2833,36 @@ function renderBackgroundKnowledgeImport(dialog) {
   file.focus();
 }
 
+function renderKnowledgeIndex(content) {
+  if (!knowledgeIndexStatus) return;
+  const index = knowledgeIndexStatus;
+  const panel = el("section", undefined, "knowledge-index-status");
+  panel.append(el("h3", "知识解析与索引"));
+  panel.append(el("p", `待处理 ${index.backlog} 份 · 失败 ${index.failed} 份 · 最长等待 ${Math.ceil(index.oldest_pending_seconds)} 秒`, "muted"));
+  const labels = {QUEUED: "等待解析", PROCESSING: "正在解析", READY: "索引就绪", FAILED: "解析失败", RETIRED: "已退休"};
+  const errors = {DOCUMENT_INVALID: "无法解析文档，请检查格式或重新上传。", INDEX_INVALID: "索引构建失败，原有可用索引已保留。", REPLACEMENT_STALE: "原文档已变更，请重新选择替换目标。"};
+  for (const job of index.jobs.filter((value) => value.status !== "RETIRED").slice(-20)) {
+    const row = el("div", undefined, "row knowledge-index-job");
+    row.append(el("span", job.source_name), el("span", labels[job.status] || job.status, "badge"));
+    if (job.status === "FAILED") {
+      row.append(el("span", errors[job.error_code] || "解析失败，可重试。", "muted"));
+      row.append(button("重试索引", async () => {
+        const base = knowledgeScope === "team" ? "/api/v1/admin/team/knowledge" : "/api/v1/admin/projects/" + encodeURIComponent(currentProjectId()) + "/knowledge";
+        try {
+          await adminFetch(base + "/index/" + encodeURIComponent(job.job_id) + "/retry", {method: "POST"});
+          await loadKnowledge();
+          render();
+        } catch (error) {
+          administrationNotice = {page: "knowledge", text: error instanceof Error ? error.message : "索引重试失败。"};
+          render();
+        }
+      }));
+    }
+    panel.append(row);
+  }
+  content.append(panel);
+}
+
 function renderBackgroundKnowledge(content) {
   if (knowledgeScope === "project" && !currentProjectId()) {
     content.append(el("div", "请先在页面顶部选择一个 Project。", "empty"));
@@ -2863,6 +2898,7 @@ function renderBackgroundKnowledge(content) {
     actions,
   );
   content.append(top);
+  renderKnowledgeIndex(content);
   content.append(
     el(
       "p",
@@ -4681,6 +4717,54 @@ function renderDetail() {
     panel.append(overview);
     const blocking = requestBlockerSection(item);
     if (blocking) panel.append(blocking);
+    if (item.stage === "WAITING_HUMAN") {
+      const gaps = el("section", undefined, "detail-section");
+      gaps.append(el("h2", "知识缺口"));
+      gaps.append(button("查看待确认的知识", async () => {
+        try {
+          const base = "/api/v1/admin/projects/" + encodeURIComponent(item.project_id) +
+            "/requirements/" + encodeURIComponent(item.id);
+          const records = await adminFetch(base + "/knowledge-gaps");
+          for (const gap of records) {
+            const card = el("form", undefined, "knowledge-upload");
+            const answer = el("textarea");
+            answer.required = true;
+            answer.maxLength = 4096;
+            answer.placeholder = "补充已核实的事实；提交表示批准该解答用于当前需求。";
+            const source = el("input");
+            source.required = true;
+            source.placeholder = "事实来源或人工决策说明";
+            const submit = el("button", "批准解答", "primary");
+            submit.type = "submit";
+            card.append(el("h3", gap.question), el("p", gap.required_decision), answer, source, submit);
+            card.addEventListener("submit", async (event) => {
+              event.preventDefault();
+              submit.disabled = true;
+              try {
+                const content = answer.value.trim();
+                const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(content));
+                const sha256 = Array.from(new Uint8Array(bytes), b => b.toString(16).padStart(2, "0")).join("");
+                await adminFetch(base + "/knowledge-resolutions", {method: "POST", headers: {"Content-Type": "application/json"},
+                  body: JSON.stringify({gap_id: gap.gap_id, answer: content,
+                    sources: [{uri: source.value.trim(), content, sha256}],
+                    approval_reference: "local-console:" + gap.gap_id})});
+                card.replaceChildren(el("p", "解答已批准，原始证据保留。"), button("继续需求", () => submitOperation({
+                  action: "CONTINUE_DELIVERY", project_id: item.project_id, delivery_id: item.id,
+                }), "primary"));
+              } catch (error) {
+                card.append(el("p", error.message || "解答未被接受。", "error"));
+                submit.disabled = false;
+              }
+            });
+            gaps.append(card);
+          }
+          if (!records.length) gaps.append(el("p", "当前没有已记录的知识缺口。"));
+        } catch (error) {
+          gaps.append(el("p", error.message || "无法读取知识缺口。", "error"));
+        }
+      }, "secondary"));
+      panel.append(gaps);
+    }
     const flow = el("section", undefined, "detail-section");
     flow.append(el("h2", "交付流程"), deliveryFlow(item));
     panel.append(flow);
@@ -4905,6 +4989,7 @@ async function refresh(projectId, includeRuntimeStatus = false) {
       JSON.stringify({ ...snapshot, as_of: null }) !==
         JSON.stringify({ ...next, as_of: null });
     const priorOperations = JSON.stringify(operations);
+    const priorKnowledgeIndex = JSON.stringify(knowledgeIndexStatus);
     const priorConsoleTeam = consoleTeamId;
     const priorConsoleReady = consoleDeliveryReady;
     const priorRuntimeStatus = JSON.stringify(runtimeStatusSnapshot);
@@ -4951,6 +5036,7 @@ async function refresh(projectId, includeRuntimeStatus = false) {
         priorOperations !== JSON.stringify(operations) ||
         priorConsoleTeam !== consoleTeamId ||
         priorConsoleReady !== consoleDeliveryReady ||
+        priorKnowledgeIndex !== JSON.stringify(knowledgeIndexStatus) ||
         priorRuntimeStatus !== JSON.stringify(runtimeStatusSnapshot))
     )
       render();

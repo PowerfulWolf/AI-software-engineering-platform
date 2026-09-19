@@ -15,6 +15,7 @@ from pydantic import Field, StringConstraints, model_validator
 
 from ai_software_engineer.domain.identity import ProjectId, TeamId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
+from ai_software_engineer.knowledge.mutation import knowledge_mutation_lock
 from ai_software_engineer.project_workspace import ProjectWorkspace
 from ai_software_engineer.team_workspace import TeamWorkspace, validate_knowledge_path
 
@@ -82,20 +83,21 @@ class TeamKnowledgeSelectionStore:
 
     def save(self, selected_paths: tuple[str, ...]) -> KnowledgeSelection:
         self.team.validate_current()
-        paths = tuple(sorted(selected_paths))
-        try:
-            self.team.knowledge_sources(paths)
-        except (OSError, UnicodeError, ValueError) as error:
-            raise KnowledgeSelectionError("Team knowledge selection is invalid") from error
-        return _save(
-            self.path,
-            KnowledgeSelection(
-                scope="team",
-                team_id=self.team.manifest.team_id,
-                selected_paths=paths,
-                selection_sha256="0" * 64,
-            ),
-        )
+        with knowledge_mutation_lock(self.path.parent):
+            paths = tuple(sorted(selected_paths))
+            try:
+                self.team.knowledge_sources(paths)
+            except (OSError, UnicodeError, ValueError) as error:
+                raise KnowledgeSelectionError("Team knowledge selection is invalid") from error
+            return _save(
+                self.path,
+                KnowledgeSelection(
+                    scope="team",
+                    team_id=self.team.manifest.team_id,
+                    selected_paths=paths,
+                    selection_sha256="0" * 64,
+                ),
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,21 +121,22 @@ class ProjectKnowledgeSelectionStore:
 
     def save(self, selected_paths: tuple[str, ...]) -> KnowledgeSelection:
         self.project.validate_current()
-        paths = tuple(sorted(selected_paths))
-        try:
-            self.project.knowledge_sources(paths)
-        except (OSError, UnicodeError, ValueError) as error:
-            raise KnowledgeSelectionError("Project knowledge selection is invalid") from error
-        return _save(
-            self.path,
-            KnowledgeSelection(
-                scope="project",
-                team_id=self.project.manifest.team_id,
-                project_id=self.project.manifest.project_id,
-                selected_paths=paths,
-                selection_sha256="0" * 64,
-            ),
-        )
+        with knowledge_mutation_lock(self.path.parent):
+            paths = tuple(sorted(selected_paths))
+            try:
+                self.project.knowledge_sources(paths)
+            except (OSError, UnicodeError, ValueError) as error:
+                raise KnowledgeSelectionError("Project knowledge selection is invalid") from error
+            return _save(
+                self.path,
+                KnowledgeSelection(
+                    scope="project",
+                    team_id=self.project.manifest.team_id,
+                    project_id=self.project.manifest.project_id,
+                    selected_paths=paths,
+                    selection_sha256="0" * 64,
+                ),
+            )
 
 
 def _load(path: Path) -> KnowledgeSelection | None:

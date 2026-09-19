@@ -2,9 +2,14 @@
   "id": "T048",
   "slug": "active-knowledge-closure",
   "title": "建设 Agent 主动知识检索与知识缺口闭环",
-  "status": "planned",
-  "phase": "plan",
-  "depends_on": ["T021", "T028", "T031", "T046"],
+  "status": "completed",
+  "phase": "verified",
+  "depends_on": [
+    "T021",
+    "T028",
+    "T031",
+    "T046"
+  ],
   "allowed_paths": [
     "src/ai_software_engineer/knowledge/**",
     "src/ai_software_engineer/context/**",
@@ -28,7 +33,18 @@
     "tests/evaluation/**",
     "docs/**",
     ".trellis/spec/core/**",
-    ".trellis/tasks/09-18-t048-active-knowledge-closure/**"
+    ".trellis/tasks/09-18-t048-active-knowledge-closure/**",
+    "README.md",
+    "src/ai_software_engineer/runtime.py",
+    "src/ai_software_engineer/orchestration/runner.py",
+    "src/ai_software_engineer/multi_directory/**",
+    "src/ai_software_engineer/web_console/**",
+    "schemas/requirement-checkpoint.schema.json",
+    "tests/web_console/**",
+    "tests/e2e/test_joint_delivery.py",
+    "tests/specs/test_learning.py",
+    "tests/recovery/test_remediation_context.py",
+    "src/ai_software_engineer/orchestration/retry.py"
   ],
   "verification_commands": [
     "uv run pytest -q tests/knowledge tests/context tests/tools tests/manager tests/product tests/design tests/planning tests/agents tests/evaluation",
@@ -36,5 +52,6 @@
     "uv run ruff format --check .",
     "uv run mypy src tests",
     "git diff --check"
-  ]
+  ],
+  "verification_report": "docs/t047-t049-continuation.md"
 }

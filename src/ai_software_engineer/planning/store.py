@@ -20,12 +20,14 @@ from ai_software_engineer.domain.project_delivery import (
     ExecutionPlan,
     ExecutionPlanId,
     StageContractError,
+    validate_execution_plan_revision,
 )
+from ai_software_engineer.planning.gate import PlanningDecision
 from ai_software_engineer.planning.models import PlannerCommitCheckpoint, PlannerRunRecord
 
 _PLAN_ID = TypeAdapter(ExecutionPlanId)
 _RUN_ID = TypeAdapter(RunId)
-_RecordT = TypeVar("_RecordT", PlannerRunRecord, PlannerCommitCheckpoint)
+_RecordT = TypeVar("_RecordT", PlannerRunRecord, PlannerCommitCheckpoint, PlanningDecision)
 
 
 class ExecutionPlanStoreError(RuntimeError):
@@ -88,11 +90,24 @@ class FileExecutionPlanStore:
         target = self._path("execution-plans", plan.id)
         if target.exists() or target.is_symlink():
             return self._require_exact(target, plan)
+        try:
+            validate_execution_plan_revision(plan, self.find_for_request(plan.request_id))
+        except StageContractError as error:
+            raise ExecutionPlanConflict(str(error)) from error
         wire = plan.to_wire()
         envelope: dict[str, JsonValue] = {"record": wire, "sha256": _digest(wire)}
         if not _publish_exclusive(self._root, self._root_identity, target, envelope):
             return self._require_exact(target, plan)
         return self.get_execution_plan(plan.id)
+
+    def put_planning_decision(self, run_id: RunId, decision: PlanningDecision) -> PlanningDecision:
+        decision.validate_integrity()
+        identity = _identity(_RUN_ID, run_id, "Planner gate run")
+        return self._put_record("decisions", identity, decision, PlanningDecision)
+
+    def get_planning_decision(self, run_id: RunId) -> PlanningDecision:
+        identity = _identity(_RUN_ID, run_id, "Planner gate run")
+        return self._get_record("decisions", identity, PlanningDecision)
 
     def get_execution_plan(self, plan_id: ExecutionPlanId | str) -> ExecutionPlan:
         try:
@@ -271,7 +286,7 @@ class FileExecutionPlanStore:
     def _path(self, category: str, identity: str, *, create: bool = True) -> Path:
         if create and self._read_only:
             raise ExecutionPlanPathError("Planner store is read-only")
-        if category not in {"execution-plans", "runs", "checkpoints"}:
+        if category not in {"execution-plans", "runs", "checkpoints", "decisions"}:
             raise ExecutionPlanPathError(f"unknown Planner record category: {category}")
         self._require_root()
         directory = self._root / category

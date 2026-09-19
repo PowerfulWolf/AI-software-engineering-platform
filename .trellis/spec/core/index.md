@@ -18,6 +18,9 @@
     [`persistent-work-queue.md`](persistent-work-queue.md)。
 13. 修改浏览器交付命令、Web Console Operation 或后台 Manager 执行时阅读
     [`web-console.md`](web-console.md)。
+14. 修改复杂度分类、Planner 工作包和计划修订时阅读 [`planning-gate.md`](planning-gate.md)。
+15. 修改主动检索、知识缺口、角色 gates 或效果评测时阅读 [`active-knowledge.md`](active-knowledge.md)。
+16. 修改异步导入、选择、退休或增量索引时阅读 [`knowledge-index.md`](knowledge-index.md)。
 
 ## Quality Check
 
@@ -39,3 +42,6 @@
 - [`delivery-recovery.md`](delivery-recovery.md)
 - [`persistent-work-queue.md`](persistent-work-queue.md)
 - [`web-console.md`](web-console.md)
+- [`planning-gate.md`](planning-gate.md)
+- [`active-knowledge.md`](active-knowledge.md)
+- [`knowledge-index.md`](knowledge-index.md)

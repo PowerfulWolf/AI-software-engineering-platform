@@ -71,6 +71,8 @@ class JointModels(StructuredClientFactory, StructuredModelClient):
     ) -> StructuredModelResult:
         del input_images
         title = str(output_schema["title"])
+        if title == "KnowledgeIntent":
+            return StructuredModelResult(payload={"queries": []}, duration_ms=0)
         self.calls.append(title)
         simple = _ScriptedStructuredClient()
         if title == "ProductDraft":
@@ -116,6 +118,30 @@ class JointModels(StructuredClientFactory, StructuredModelClient):
             output_schema=ExecutionPlanDraft.model_json_schema(),
             timeout_seconds=1,
         ).payload
+        plan = {
+            **plan,
+            "work_graph": {
+                "packages": [
+                    {
+                        "id": "package_greeting",
+                        "component_ids": ["component_greeting"],
+                        "step_ids": ["design_step_edit"],
+                        "acceptance_criterion_ids": ["ac_001_001"],
+                        "risk": "normal",
+                        "checkpoints": ["Independent native QA and Review"],
+                        "tests": [
+                            {
+                                "id": "test_greeting",
+                                "acceptance_criterion_ids": ["ac_001_001"],
+                                "level": "acceptance",
+                                "verification": "Read and compare the file",
+                            }
+                        ],
+                    }
+                ],
+                "max_parallelism": 1,
+            },
+        }
         return StructuredModelResult(
             payload={
                 "design_sha256": input_payload["design_sha256"],

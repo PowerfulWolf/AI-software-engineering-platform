@@ -2,22 +2,39 @@
   "id": "T047",
   "slug": "planner-agent-evolution",
   "title": "建设面向复杂需求的 Planner Agent",
-  "status": "planned",
-  "phase": "plan",
-  "depends_on": ["T031", "T046"],
+  "status": "completed",
+  "phase": "verified",
+  "depends_on": [
+    "T031",
+    "T046"
+  ],
   "allowed_paths": [
     "src/ai_software_engineer/planning/**",
     "src/ai_software_engineer/manager/**",
     "src/ai_software_engineer/scheduling/**",
     "src/ai_software_engineer/context/**",
+    "src/ai_software_engineer/domain/project_delivery.py",
+    "src/ai_software_engineer/multi_directory/**",
+    "src/ai_software_engineer/orchestration/planned_delivery.py",
     "schemas/execution-plan*.schema.json",
     "schemas/planner-*.schema.json",
+    "schemas/joint-execution-plan.schema.json",
+    "schemas/joint-technical-design.schema.json",
+    "schemas/project-stage-defs.schema.json",
+    "schemas/requirement-checkpoint.schema.json",
+    "schemas/design-complexity-facts.schema.json",
+    "schemas/plan-revision-feedback.schema.json",
+    "schemas/plan-work-graph.schema.json",
+    "schemas/planning-gate.schema.json",
     "tests/planning/**",
     "tests/manager/**",
     "tests/scheduling/**",
+    "tests/e2e/test_planned_delivery.py",
+    "tests/e2e/test_joint_delivery.py",
     "docs/**",
     ".trellis/spec/core/**",
-    ".trellis/tasks/09-17-t047-planner-agent-evolution/**"
+    ".trellis/tasks/09-17-t047-planner-agent-evolution/**",
+    "README.md"
   ],
   "verification_commands": [
     "uv run pytest -q tests/planning tests/manager tests/scheduling",
@@ -25,5 +42,6 @@
     "uv run ruff format --check .",
     "uv run mypy src tests",
     "git diff --check"
-  ]
+  ],
+  "verification_report": "docs/t047-t049-continuation.md"
 }

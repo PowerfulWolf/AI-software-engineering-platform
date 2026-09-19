@@ -49,6 +49,9 @@ NOW = datetime(2026, 9, 15, 10, 0, tzinfo=UTC)
 
 
 class _PreparationBackend:
+    def accept_single_repository(self, checkpoint: JointCheckpoint) -> NoReturn:
+        raise AssertionError("preparation fixture cannot accept delivery")
+
     def __init__(self, team: TeamWorkspace, project: ProjectWorkspace) -> None:
         self.team = team
         self.project = project

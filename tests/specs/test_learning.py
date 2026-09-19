@@ -17,6 +17,7 @@ from ai_software_engineer.learning import (
     DecideLearningProposal,
     LearningDecisionAction,
     LearningError,
+    LearningEvidence,
     LearningTarget,
     ProjectLearningStore,
 )
@@ -85,6 +86,7 @@ def test_collect_is_idempotent_and_human_approval_publishes_active_spec(
     assert len(first) == 1
     proposal = first[0].proposal
     assert proposal.occurrence_count == 1
+    assert isinstance(proposal.evidence[0], LearningEvidence)
     assert proposal.evidence[0].artifact_id == "art_qa_001"
     assert ProjectSpecDocumentStore(project).active() == ()
 

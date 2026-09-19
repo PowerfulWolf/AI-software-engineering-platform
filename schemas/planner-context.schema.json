@@ -16,6 +16,7 @@
     "design_checkpoint": {"$ref": "#/$defs/designCheckpoint"},
     "planning_authorization": {"$ref": "https://ai-software-engineer.local/schemas/agent-skill-manager.schema.json#/$defs/StageAdvanceAuthorization"},
     "expected_execution_plan_version": {"type": "integer", "minimum": 1},
+    "planning_decision": {"$ref": "https://ai-software-engineer.local/schemas/planning-gate.schema.json"},
     "permissions": {"$ref": "#/$defs/permissions"},
     "built_at": {"type": "string", "format": "date-time"},
     "context_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}

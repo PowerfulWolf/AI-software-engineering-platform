@@ -12,6 +12,7 @@ from pydantic import AwareDatetime, Field, model_validator
 from ai_software_engineer.context import ContextSource
 from ai_software_engineer.domain.identity import ProjectId, TeamId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
+from ai_software_engineer.domain.project_delivery import validate_plan_test_matrix
 from ai_software_engineer.execution import CommandResult
 from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryId,
@@ -26,6 +27,7 @@ from ai_software_engineer.manager.production_agents import (
 )
 from ai_software_engineer.multi_directory.attachments import RequirementScreenshot
 from ai_software_engineer.multi_directory.scope import Digest, DirectoryScope, UnitId
+from ai_software_engineer.planning.gate import HumanPlanningUpgrade, PlanningDecision
 
 
 def digest(model: DomainModel) -> str:
@@ -229,6 +231,15 @@ class PlanCoverageError(ValueError):
         )
 
 
+class ComplexPlanRequired(ValueError):
+    """Safe feedback for missing Planner work packages; no model-authored prose."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "COMPLEX planning requires complete work_graph packages for every write unit"
+        )
+
+
 class IntegrationCommandError(ValueError):
     """Safe preflight feedback without echoing untrusted argv or check names."""
 
@@ -251,6 +262,18 @@ class JointExecutionPlan(DomainModel):
     design_sha256: Digest
     units: Annotated[tuple[UnitPlan, ...], Field(min_length=1)]
     integration_checks: tuple[IntegrationCheck, ...] = ()
+    max_parallelism: Annotated[int, Field(ge=1, le=4)] | None = None
+    version: Annotated[int, Field(ge=1)] | None = None
+    previous_plan_sha256: Digest | None = None
+    feedback_sha256: Digest | None = None
+
+    def ready_units(self, completed: frozenset[str]) -> tuple[UnitPlan, ...]:
+        """A bounded proposal only; Manager must recheck durable completion before dispatch."""
+        return tuple(
+            unit
+            for unit in self.units
+            if unit.unit_id not in completed and set(unit.depends_on) <= completed
+        )[: self.max_parallelism or 1]
 
     def validate_for(
         self, scope: DirectoryScope, product: JointProductSpec, design: JointTechnicalDesign
@@ -268,6 +291,28 @@ class JointExecutionPlan(DomainModel):
             if not set(unit.depends_on) <= completed:
                 raise ValueError("dependency must precede its consumer in the serial plan")
             completed.add(unit.unit_id)
+            graph = unit.plan.work_graph
+            if graph is not None:
+                source = next(item.design for item in design.units if item.unit_id == unit.unit_id)
+                if graph.max_parallelism != 1:
+                    raise ValueError("parallel delivery is only between isolated repository Tasks")
+                if {item for package in graph.packages for item in package.component_ids} != {
+                    "component_" + item.key for item in source.components
+                } or {item for package in graph.packages for item in package.step_ids} != {
+                    "design_step_" + item.key for item in source.implementation_steps
+                }:
+                    raise ValueError("work packages must cover exact design components and steps")
+                if {
+                    item for package in graph.packages for item in package.acceptance_criterion_ids
+                } != {item.acceptance_criterion_id for item in source.acceptance_mappings}:
+                    raise ValueError("work packages must preserve exact approved acceptance IDs")
+                validate_plan_test_matrix(
+                    graph,
+                    {
+                        item.acceptance_criterion_id: item.test_levels
+                        for item in source.acceptance_mappings
+                    },
+                )
         if len(scope.units) == 1 and not self.integration_checks:
             # The native repository delivery already requires exact Product acceptance
             # coverage, QA PASS and Reviewer APPROVE.  A second, synthetic "joint"
@@ -294,6 +339,12 @@ class JointExecutionPlan(DomainModel):
             )
         if interfaces != {i.id for i in design.interfaces}:
             raise ValueError("integration checks must cover the shared interfaces")
+
+
+class JointPlanFeedback(DomainModel):
+    previous_plan: JointExecutionPlan
+    reason_codes: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1)]
+    required_changes: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1)]
 
 
 class ChildDelivery(DomainModel):
@@ -346,6 +397,8 @@ class JointCheckpoint(DomainModel):
     sequence: Annotated[int, Field(ge=1)]
     previous_checkpoint_sha256: Digest | None = None
     stage: JointStage
+    knowledge_wait_stage: JointStage | None = None
+    knowledge_gap_id: Digest | None = None
     scope: DirectoryScope
     title: NonEmptyStr
     requirement: NonEmptyStr | None = None
@@ -356,6 +409,9 @@ class JointCheckpoint(DomainModel):
     approval: JointApproval | None = None
     design: JointTechnicalDesign | None = None
     plan: JointExecutionPlan | None = None
+    planning_decision: PlanningDecision | None = None
+    planning_upgrade: HumanPlanningUpgrade | None = None
+    planning_feedback: JointPlanFeedback | None = None
     children: tuple[ChildDelivery, ...] = ()
     integration: IntegrationEvidence | None = None
     integration_retry_approval: IntegrationRetryApproval | None = None
@@ -397,6 +453,28 @@ class JointCheckpoint(DomainModel):
             if self.design is None or self.product_spec is None:
                 raise ValueError("joint planning requires a technical design")
             self.plan.validate_for(self.scope, self.product_spec, self.design)
+        if self.planning_decision is not None:
+            self.planning_decision.validate_integrity()
+            if (
+                self.product_spec is None
+                or self.design is None
+                or (
+                    self.planning_decision.facts.product_spec_sha256 != digest(self.product_spec)
+                    or self.planning_decision.facts.technical_design_sha256 != digest(self.design)
+                    or self.planning_decision.human_upgrade != self.planning_upgrade
+                )
+            ):
+                raise ValueError("planning gate does not bind approved joint facts")
+        if (
+            self.plan is not None
+            and self.planning_feedback is not None
+            and (
+                self.plan.previous_plan_sha256 != digest(self.planning_feedback.previous_plan)
+                or self.plan.feedback_sha256 != digest(self.planning_feedback)
+                or self.plan.version != (self.planning_feedback.previous_plan.version or 1) + 1
+            )
+        ):
+            raise ValueError("revised plan must bind previous plan and structured feedback")
         if self.stage is JointStage.DONE:
             if self.single_repository_acceptance is not None:
                 if len(self.scope.units) != 1 or len(self.children) != 1:
