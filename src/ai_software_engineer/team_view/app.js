@@ -3790,14 +3790,12 @@ function renderSettings(content) {
         "admin-notice",
       ),
     );
-  if (settingsSnapshot.restart_required) {
+  if (settingsSnapshot.restart_required && configurationApplyInFlight) {
     const applyNotice = el("div", undefined, "admin-notice configuration-apply-notice");
     applyNotice.append(
       el(
         "span",
-        configurationApplyInFlight
-          ? "配置已保存，正在重启并等待 Web Console 恢复连接。"
-          : "配置已保存，但尚未应用到当前 Web Console。",
+        "配置已保存，正在重启并等待 Web Console 恢复连接。",
       ),
     );
     content.append(applyNotice);

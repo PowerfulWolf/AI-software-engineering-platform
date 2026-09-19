@@ -673,7 +673,8 @@ GET  /api/v1/admin/status
   back saved settings and never records raw subprocess output or secrets in the lifecycle response.
 - Every submitted Settings save has an explicit modal result. A successful PUT opens a success dialog
   that includes “应用配置” only when `restart_required=true`; the Settings page does not duplicate
-  that action. With no restart required the dialog only confirms the save. Apply progress, errors and
+  that action or show a persistent “尚未应用” notice; the read-only restart badge remains sufficient.
+  With no restart required the dialog only confirms the save. Apply progress, errors and
   retry remain visible in the dialog; closing it does not cancel an accepted apply request. Saving
   again reopens the dialog and re-evaluates restart eligibility. A failed PUT opens an `alertdialog` containing
   the bounded server `error.message` (or the generic client fallback), re-enables save and preserves

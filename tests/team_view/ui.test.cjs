@@ -1569,6 +1569,10 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   await settingsForm.events.submit({ preventDefault() {} });
   assert.match(text(get("composer")), /设置保存成功/);
   assert.match(text(get("composer")), /应用配置.*重启 Web Console/);
+  assert.doesNotMatch(
+    text(get("content")),
+    /配置已保存，但尚未应用到当前 Web Console/,
+  );
   assert.equal(descend(get("content")).some(
     (node) => node.tag === "button" && node.textContent === "应用配置",
   ), false);
