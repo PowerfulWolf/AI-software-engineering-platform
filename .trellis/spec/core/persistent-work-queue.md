@@ -187,5 +187,122 @@ if tick.status is DispatcherTickStatus.DISPATCHED:
     worker.execute(tick.claim, owner_token=tick.lease_owner_token)
 ```
 
-当前 `ase request` 仍是同步整 Task 兼容入口。逐角色 Worker 接线完成前，不得声称该 CLI 已由后台
-队列驱动；但也不得另建第二套队列或 Lease 语义。
+当前 `ase request` 保持同步调用兼容，但内部已接入逐角色 Worker（见 §8）；每次模型执行有真实
+claim/heartbeat。外部独立进程 fleet 尚未实现，不得把同步 Supervisor 宣称为独立后台集群。
+
+## 8. Production bounded Worker integration (2026-09-19)
+
+T046 is now the execution boundary for production Delivery role Runs. `RuntimeSession.run_step()` keeps
+one existing `RetryingOrchestrator` state machine and returns a typed `RoleRunBoundary` before a second
+Coder/QA/Reviewer invocation. A trusted `QueuedDeliverySupervisor` must admit the exact Task/allocation,
+claim the exact `(task_id, role, attempt, checkpoint_sequence)` item, start/renew the owner-fenced Lease,
+and complete the item only after the existing Task transition gate accepts the sealed Artifact.
+
+The deterministic prelude may write the existing Plan and move the Task to its current role checkpoint
+before the first queue item is admitted; it must not call a delivery model or create a delivery Context
+without a claim. The queue is not a verdict authority. Only accepted Artifact receipts bound to
+`work_item_id + lease_id + dispatch_sequence + run_id + context_manifest_id + source_revision` are
+eligible for restart recovery; filesystem Artifacts without that receipt remain inspectable evidence and
+are not selected by the Worker recovery store.
+
+Production admission is explicit and immutable. The first queue item and the `RoleQueueAdmission` are
+published under the shared dispatch-authority then WorkQueue lock order. Legacy native dispatch
+records remain immutable for audit and role independence; once a Task is adopted, its ordinary
+delivery reservations are excluded from live capacity. Independent candidate-verification reservations
+are not migrated and retain their active capacity until completion/abandonment/expiry. Queue claims
+include these reservations and the unadopted native reservations. WorkQueue claim validation rejects a
+second active claim for the same Task even when two different WorkItems are presented.
+
+Lease ownership is checked on the same MySQL Task mutation transaction through the bound cursor before
+`record_attempt` and StateEvent writes. Provider execution receives the trusted execution guard; Codex
+subprocesses inherit the Task lock, are terminated on lost ownership, and cannot finalize a candidate
+after the guard fails. A dirty or uncertain worktree is retained for explicit recovery and is never
+silently reused by a replacement Worker.
+
+Knowledge gaps have two replay-safe windows: if a durable gap/route exists but the first wait was lost,
+an active owner retries the exact `QueueKnowledgeWaitPort`; if the wait was already committed, the
+queue item remains waiting until an integrity-checked resolution calls `make_ready`. Neither window
+changes the Task verdict or fabricates a new claim. The supervisor is currently called by the existing
+bounded Console/Manager operation; no independent fleet or same-Task parallelism is introduced.
+
+### 8.1 Signatures and persistence
+
+```python
+RuntimeSession.run_step(task_id: str, control: BoundedRunControl) \
+    -> RuntimeRunResult | RoleRunBoundary
+MySqlRoleQueue.admit(admission: RoleQueueAdmission, step: QueuedRoleStep) -> None
+MySqlRoleQueue.finish(claim: QueueClaim, token: str, *, next_step: QueuedRoleStep | None,
+                      now: datetime, guard: Callable[[], None] | None = None) -> QueueCompletion
+ApprovedRoleDispatch.validate_routes(role: AgentRole, routes: tuple[ProviderRouteConfig, ...]) -> None
+```
+
+The additional tables `work_queue_admissions`, `work_queue_steps`, and
+`work_queue_accepted_artifacts` each store `(id PK, task_id, payload_json, sha256)`; row identity and
+canonical payload digest must agree. `schemas/role-queue-execution.schema.json` owns their typed
+wire contracts. Existing approvals, dispatches, Task events and terminal status are not rewritten.
+
+`finish.now` is the deterministic completion/successor timestamp, not an ownership clock. After taking
+the authority lock, check generation, active owner and fresh expiry; check heartbeat guard and locked
+expiry again before commit. Failure rolls back close, successor binding and successor enqueue together.
+Exact CLOSED replay still validates the original owner and immutable completion content without
+requiring the already released lease to become active again.
+
+Primary actor/model identity stays frozen. Explicit fallback routes must be an ordered subset of the
+dispatch's exact `ModelSelection.policy_id/policy_version` routes, with the primary first and matching
+reasoning effort. Legacy effort=None may resolve only one unambiguous configured route. The claim
+expresses the primary; immutable `ModelRouteAttempt` records express actual provider attempts.
+New settings cannot add/reorder routes on a retained dispatch. Recovery may narrow allowed routes.
+
+### 8.2 Validation and error matrix
+
+| Fact | Result |
+|---|---|
+| Expired/released lease, changed generation or lost heartbeat | `QueueLeaseLost`, both `QueueConflict` and `DeliveryQueuePending`; preserve checkpoint/worktree |
+| Wrong token, another Task, immutable receipt drift | ordinary `QueueConflict`; never treat authorization failure as resumable lease loss |
+| Expiry during lock wait or completion SQL; heartbeat lost before commit | rollback completion and next-step publication |
+| Artifact accepted before Task transition | resume from accepted receipt under original validation, no repeated model call |
+| Task advanced before queue finish | reconcile old item, separately claim next role |
+| Knowledge route durable but wait uncommitted | reapply exact wait using the new valid owner |
+| Knowledge wait committed without approved resolution | no model call/Task mutation; stay waiting |
+| Interrupted/waiting supervisor | retain even clean worktrees, so surviving branch can be reopened |
+| Independent verification active | original reservation still counts against Worker capacity |
+| New/reordered fallback or ambiguous legacy effort | reject before constructing route clients |
+
+### 8.3 Good / Base / Bad, tests and operations
+
+- Good: lease loss returns recoverable pending, a new claim reopens the same worktree and reaches
+  DONE through separate QA/Reviewer claims. Base: legacy terminal evidence is read without adoption.
+- Bad: catch every QueueConflict as temporary, or use queue CLOSED as evidence of QA PASS.
+- Wrong: remove all clean worktrees in `finally`; the interrupted Coder branch survives but cannot be
+  recreated. Correct: clean only on a normal terminal result, retaining interrupted execution state.
+- `test_worker_mysql.py`: role retry/progress/QA failure, accepted receipts, owner fencing, both crash
+  windows, knowledge wait/resume, capacity handoff, heartbeat and lock/completion expiry rollback.
+- `test_owned_execution.py`: subprocess loss termination, typed startup error, candidate not committed
+  after ownership loss, per-Task process exclusion; `test_route_binding.py`: frozen route contract.
+- Production-style test adapters must bind Artifact producer to the actual AgentDefinition, as real
+  Codex/Responses adapters do; generic `agent_coder_001` templates are not valid under a team claim.
+  Keep wrong-producer rejection and native progress/budget/recovery assertions, rather than weakening
+  the ownership gate to accommodate a fixture.
+- Production backend/joint e2e must observe real RUNNING claims and final receipts; live reader/DOM
+  must preserve lease-vs-Task status distinction.
+- Rollout, existing-data recovery and rollback: `docs/t046-worker-operations.md`. Never execute adopted
+  nonterminal Tasks with the old binary or delete admission/history to bypass this boundary.
+
+### 8.4 Bug analysis: lease checks are transaction boundaries, not timestamps
+
+1. **Root cause (B/D/E)**: lifecycle code reused the timestamp captured before acquiring SQL locks as
+   proof of current ownership. The local heartbeat check was only before the call; expiry or a failed
+   renewal during completion could still publish CLOSED and the successor.
+2. **Why partial fixes missed it**: owner token/generation checks reject a replacement owner, but do
+   not prove the original lease is still alive after waiting. A post-return check is also too late
+   because the transaction has already committed. Ordinary fast happy-path tests never crossed expiry.
+3. **Prevention (DONE)**: separate deterministic event time from the trusted live ownership clock;
+   check the locked expiry and heartbeat guard immediately before commit. Three injected-time MySQL
+   tests verify rollback of the current item, lease release, step receipt and next-item publication.
+4. **Systematic expansion**: accepted-artifact and Task-mutation transactions already recheck before
+   commit; candidate finalization and subprocess execution use the same ownership guard. Exceptions
+   must preserve worktrees, and recoverable lease loss must cross the production guard without being
+   reclassified as a terminal invariant failure. Ordinary wrong-owner errors remain fail closed.
+5. **Knowledge capture**: the signatures/matrix/tests above and production-team-host/live-team-view
+   contracts document the behavior. There is no generic guides/template mirror in this repository;
+   preserve this rule in the owning core spec. No production data rewrite is needed.

@@ -131,13 +131,12 @@ single-repository claim to a joint repository set, or treating an expired owner 
 `tests/knowledge/test_queue.py` covers exact binding, route integrity, waits, stale ownership and
 replay; `test_queue_mysql.py` applies the same bridge to the existing guarded real-MySQL fixture.
 
-The current production `ase request` compatibility flow has not migrated to per-role queue Workers.
-Its Requirement coordinator records knowledge WAITING_HUMAN while retaining the Task checkpoint;
-it must not manufacture a QueueClaim or claim that queue capacity was released. The optional
-`KnowledgeConsultationService`/`KnowledgeRunContextBuilder` wait port is the integration seam for
-a future real worker composition. This change neither schedules new work nor completes that migration.
-Existing queued work and leases require no manual database rewrite; no historical approvals,
-Task events or knowledge records are changed.
+Production `ase request`/Console uses a real per-role Worker claim before Delivery Context creation.
+`WorkerKnowledgeWait` binds that claim to the consultation and releases capacity through
+`QueueKnowledgeWaitPort`. A route persisted before the wait can be replayed by its next active owner;
+an already committed wait resumes only after its stored Resolution is validated. Requirement
+WAITING_HUMAN remains separate from Task checkpoint and queue scheduling status. No historical
+approvals, Task events or knowledge records are rewritten; see `docs/t046-worker-operations.md`.
 
 ## Upstream stage workflow gates
 
@@ -166,7 +165,7 @@ create a Task, Assignment, Lease, verdict or approval.
 
 The joint service invokes these receipts at intake preparation, before committing design, before
 planning/plan execution, and at recovery or failure-routing boundaries. Its existing request
-compatibility path still does not become a per-role Worker or queue producer. Missing or invalid
+stage path itself does not produce delivery claims; the native Delivery Supervisor does. Missing or invalid
 proof stops the stage before child delivery; no production model or Artifact verdict is modified.
 See `tests/knowledge/test_stages.py` for receipt replay, validator, SIMPLE, failure and binding
 regressions. Existing Requirements need no migration: stage proof sidecars are written on subsequent

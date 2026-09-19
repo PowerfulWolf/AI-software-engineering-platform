@@ -999,6 +999,7 @@ tests; they must not implement incomplete module-local cleanup.
   after them, including test-body and fixture-setup failures. It captures the validated DSN once so
   test monkeypatches cannot redirect teardown. Unmarked tests do not connect or reset.
 - Cleanup deletes only existing tables from this fixed child-before-parent order:
+  `work_queue_accepted_artifacts`, `work_queue_steps`, `work_queue_admissions`,
   `work_queue_events`, `work_queue_claims`, `work_queue_items`, `verification_reservations`,
   `dispatch_commits`, `dispatch_workforce_snapshots`, `state_events`, `tasks`. Table discovery is
   restricted to `DATABASE()`; identifiers in DELETE come only from this source-code allowlist.
@@ -1127,3 +1128,30 @@ facts; rerun the failed test/suite using its dedicated database. No production m
 - README names the allowed test database patterns and explains why the guard exists.
 - This repository has no `.trellis/spec/guides/` or `src/templates/markdown/spec/` mirror; there is no
   guide or template file to synchronize.
+
+### 3.6 T046 Worker composition
+
+`TeamHost` composes `MySqlRoleQueue` with the shared dispatch authority. Production delivery binds the
+approved `DeliveryAllocation` and `ExecutionPlan` to one `QueuedRoleStep` at a time. A single Manager
+operation may supervise the bounded steps synchronously for compatibility, but every Coder, QA and
+Reviewer model invocation requires a real T046 claim and lease heartbeat. `DispatcherLoop.tick` supports
+an explicit `work_item_id` filter for this compatibility supervisor so it cannot execute another Task's
+claim in the current repository worktree.
+
+The Worker must be stopped before a native/queue rollout is reversed. Existing terminal Tasks, approvals,
+Task events, dispatch records and Artifact files are immutable; only queue adoption, role-step and
+accepted-receipt records are new facts. A missing queue claim is not repaired by changing a Task status.
+
+`QueueLeaseLost` passes through the production execution guard as `DeliveryQueuePending`, retaining
+the native/joint DELIVERING checkpoint rather than persisting INVARIANT_VIOLATION/BLOCKED. Only ordinary
+queue corruption/authorization conflicts fail closed as invariants. Supervisor exceptions preserve
+all role worktrees, including clean ones whose branch already exists; cleanup occurs after a normal
+terminal result. `test_host_records_isolated_delivery_without_polluting_project[64000-True]` interrupts
+the real adapter lease and verifies the same delivery resumes to DONE with three accepted receipts.
+
+The frozen policy version authorizes explicit fallback routes; only the primary route is represented
+in the claim. Validate ordered fallback membership/reasoning through `ApprovedRoleDispatch` before
+client construction, and retain ModelRouteAttempt actual-model facts. Separate candidate verification
+continues through its original reservation, whose capacity must not be dropped on native adoption.
+Follow `docs/t046-worker-operations.md` for rollout/rollback; do not resume an adopted nonterminal Task
+with an old binary that does not know about queue admission.

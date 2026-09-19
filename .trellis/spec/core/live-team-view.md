@@ -47,6 +47,9 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
   directory exists. Once any current or historical Task lineage exists, SQL remains mandatory and
   unavailable/corrupt SQL facts fail the selected Project closed.
 - Current role is Task stage + committed assignment; terminal tasks are history, not active work.
+- For T046-adopted delivery, a current-stage assignment additionally requires the matching role queue
+  item to be RUNNING with LEASE_VALID. Queued, waiting or expired work does not make the Agent executing.
+  Legacy non-adopted delivery and independent verification keep their existing projection contracts.
 - Requirement 状态是联合 checkpoint 与其子 Task 的只读组合投影。若联合 checkpoint 仍是旧的
   `BLOCKED`/waiting 观察，但同一 Requirement 已有更新的、无 blocker 的非终态子 Task，列表和详情
   必须优先展示子 Task 正在交付（delivery/remediation 为 `DELIVERING`，candidate verification 为
@@ -538,3 +541,33 @@ then filter parent and children before Request/Task/Agent projection.
   checkpoint and surface the exact safe failure through the operation result.
 - Existing `PLANNING` remains meaningful for actual multi-repository planning; the read projection
   must not relabel all PLANNING states globally.
+
+## Scenario: T046 role queue visibility
+
+### Scope and signatures
+
+`read_role_queue(cursor, *, task_id, repository_id, allocation_sha256, now) -> tuple[RoleQueueView, ...]`
+reads inside the existing READ ONLY SQL snapshot. `TaskView.role_queue` defaults to `()` for legacy
+Tasks. `RoleQueueView` carries work_item_id, role, attempt, status, agent_id, heartbeat_at,
+lease_expires_at, lease_liveness and wait_reason; schema parity is required.
+
+### Contract and validation matrix
+
+| Facts | Projection |
+|---|---|
+| No admission table/record | legacy empty queue; do not initialize tables |
+| Valid admission with exact dispatch digest | read ordered role queue items and their latest claim |
+| RUNNING + ACTIVE lease with expiry in future | LEASE_VALID; may own current_stage if Task role also matches |
+| Expired/released claim or READY/WAITING item | no current-stage assignment; no claim of execution |
+| Queue CLOSED | 本次执行已结束, not Task DONE or role verdict |
+| Queue WAITING_HUMAN/WAITING_DEPENDENCY | taskGroup is blocked; raw gap ID/hash is not shown as user guidance |
+| Admission/Task/repository/assignment/lease binding drift or multiple open roles | reject read; never repair facts on GET |
+
+Good: Task is at QA checkpoint but the expired QA lease is not shown as QA executing.
+Base: legacy Task without admission remains readable. Bad: infer online execution from dispatch alone.
+Wrong: label all CLOSED entries “交付完成”. Correct: render queue lifecycle separately from Task verdict.
+
+`tests/team_view/test_live.py::test_real_inflight_joint_and_terminal_reads` checks actual RUNNING claims,
+heartbeat and all-CLOSED terminal history with no writes. `ui.test.cjs` verifies localized status,
+heartbeats and waiting task-group placement. Existing schema, read-only, stale-poll and isolation gates
+still apply; existing production data needs no SQL rewrite.
