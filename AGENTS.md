@@ -42,7 +42,9 @@ NEW → PLANNING → IMPLEMENTING ──complete──→ QA → REVIEW → DONE
 当前 `RuntimeSession` 一次仍只推进一个 Task；T046 已实现 Run 级 MySQL PersistentWorkQueue、
 确定性 Dispatcher tick 和 owner-fenced Lease lifecycle。外部进程监督负责重复 tick，Planner 模型
 不运行无限循环。组织层可以并发多个彼此隔离的 Task，但单个 Task 内的角色不能并行或跳步。
-当前 `ase request` 兼容入口尚未切换为逐角色 Worker。允许 `BLOCKED` 和 `FAILED`
+生产 `ase request`/Console 已通过同步 Supervisor 逐角色领取 Worker；独立进程 fleet 尚不在范围内。
+每个角色执行及知识查询都必须有真实 claim；丢失租约保留 checkpoint/worktree，不转成不可恢复的失败。
+允许 `BLOCKED` 和 `FAILED`
 终态。禁止在 v0.1 引入：
 
 - 单 Task 内复杂 DAG、并行 Coder/QA/Reviewer、动态角色创建；

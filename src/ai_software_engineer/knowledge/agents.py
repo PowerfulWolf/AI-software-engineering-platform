@@ -15,6 +15,7 @@ from ai_software_engineer.knowledge.gaps import (
     KnowledgeClaim,
     KnowledgeGap,
     KnowledgeGapRaised,
+    KnowledgeGapRouting,
     KnowledgeGapService,
     KnowledgeResolution,
     KnowledgeWaitPort,
@@ -156,11 +157,13 @@ class KnowledgeConsultationService:
             if prior.assessment.status == "GAP":
                 unresolved = gaps.unresolved(binding)
                 if unresolved:
+                    self._wait_again(unresolved[0])
                     raise KnowledgeGapRaised(unresolved[0])
                 raise KnowledgeError("RESOLUTION_REQUIRES_NEW_RUN")
             return prior
         unresolved = gaps.unresolved(binding)
         if unresolved:
+            self._wait_again(unresolved[0])
             raise KnowledgeGapRaised(unresolved[0])
         skills = KnowledgeSkillRegistry(binding, snapshot, self.retrieval, self.records)
         resolved: list[KnowledgeResolution] = []
@@ -329,6 +332,11 @@ class KnowledgeConsultationService:
             self.records.put("consultations", binding.run_id, sealed)
             raise KnowledgeGapRaised(gap)
         return self.records.put("consultations", binding.run_id, sealed)
+
+    def _wait_again(self, gap: KnowledgeGap) -> None:
+        if self.wait_port is not None:
+            route = self.records.get("gap-routes", gap.gap_id, KnowledgeGapRouting)
+            self.wait_port.wait(gap.binding, route)
 
 
 class KnowledgeAwareStructuredClient:

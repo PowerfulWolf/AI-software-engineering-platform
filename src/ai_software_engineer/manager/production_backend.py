@@ -19,7 +19,7 @@ from ai_software_engineer.agents import (
     StructuredModelClient,
     StructuredModelRoute,
 )
-from ai_software_engineer.artifacts import FileArtifactStore
+from ai_software_engineer.artifacts import ArtifactStore, FileArtifactStore
 from ai_software_engineer.config import (
     ModelProviderKind,
     ProductionConfig,
@@ -166,7 +166,9 @@ from ai_software_engineer.runtime_workspace import (
 )
 from ai_software_engineer.scheduling import ModelRouter, PortfolioScheduler
 from ai_software_engineer.spec_compiler import SpecRule
-from ai_software_engineer.store import MySqlTaskRepository
+from ai_software_engineer.store import MySqlTaskRepository, TaskRepository
+from ai_software_engineer.work_queue.execution_store import MySqlRoleQueue
+from ai_software_engineer.work_queue.ports import DeliveryQueuePending
 
 Clock = Callable[[], datetime]
 ResultT = TypeVar("ResultT")
@@ -350,6 +352,7 @@ class ProductionProjectDeliveryBackend:
         frozen_preparation: PrepareProjectResult | None = None,
         frozen_source_revision: str | None = None,
         trusted_plan_projection: bool = False,
+        role_queue: MySqlRoleQueue | None = None,
     ) -> None:
         if (frozen_preparation is None) != (frozen_source_revision is None):
             raise ValueError("frozen preparation and source revision must be supplied together")
@@ -361,6 +364,7 @@ class ProductionProjectDeliveryBackend:
                 raise ValueError("frozen delivery requires a prepared project checkpoint")
             if not _is_durable_git_revision(cast(str, frozen_source_revision)):
                 raise ValueError("frozen delivery requires a durable Git source revision")
+        self._role_queue = role_queue
         self._config = config
         self._environment = dict(environment)
         self._organization = organization
@@ -930,15 +934,29 @@ class ProductionProjectDeliveryBackend:
         repository = MySqlTaskRepository(self._dsn)
         try:
             DispatchTaskMaterializer(repository).materialize(dispatch)
-            terminal = _terminal_delivery_result(
-                repository,
-                FileArtifactStore(paths.artifacts),
-                dispatch.task_id,
-            )
         finally:
             repository.close()
-        if terminal is not None:
-            return terminal
+        from ai_software_engineer.manager.queue_capacity import production_role_queue
+        from ai_software_engineer.manager.queued_delivery import ApprovedRoleDispatch
+        from ai_software_engineer.work_queue.worker import (
+            AcceptedArtifactStore,
+            QueuedDeliverySupervisor,
+            WorkerExecutionGuard,
+            WorkerKnowledgeWait,
+        )
+
+        queue = self._role_queue or production_role_queue(self._dsn)
+        approved = ApprovedRoleDispatch(
+            queue,
+            dispatch,
+            plan,
+            FileTeamWorkforceStore(self._organization),
+            facts.workspace.repository_root,
+        )
+        worker_guard = WorkerExecutionGuard()
+        accepted_artifacts = AcceptedArtifactStore(
+            FileArtifactStore(paths.artifacts), queue, dispatch.task_id, worker_guard
+        )
         definitions = _agent_definitions(dispatch, _task_commands(facts.profile))
         plan_adapter = ExecutionPlanAgentAdapter(
             task=dispatch.task,
@@ -951,8 +969,15 @@ class ProductionProjectDeliveryBackend:
         )
         resolver = StoredContextResolver(
             FileContextStore(paths.contexts),
-            FileArtifactStore(paths.artifacts),
+            accepted_artifacts,
         )
+        selected_adapters = (
+            route_adapters
+            or self._delivery_route_adapters
+            or ConfiguredDeliveryRouteAdapterFactory()
+        )
+        if isinstance(selected_adapters, ConfiguredDeliveryRouteAdapterFactory):
+            selected_adapters = selected_adapters.with_execution_guard(worker_guard)
         adapter = DispatchDeliveryAgentAdapter(
             dispatch=dispatch,
             definitions=definitions,
@@ -962,8 +987,9 @@ class ProductionProjectDeliveryBackend:
             repository_workspace_root=facts.workspace.root,
             context_resolver=resolver,
             environment=self._environment,
-            route_adapters=route_adapters or self._delivery_route_adapters,
+            route_adapters=selected_adapters,
             route_scope=route_scope,
+            route_validator=approved.validate_routes,
         )
         primary = self._config.routes_for(TeamRole.CODER)[0]
         runtime_config = RuntimeConfig(
@@ -1035,37 +1061,49 @@ class ProductionProjectDeliveryBackend:
                 project_id=facts.workspace.manifest.project_id,
                 repository_id=facts.workspace.repository_id,
                 sources=runtime_config.context_sources,
+                wait_port=WorkerKnowledgeWait(worker_guard, knowledge_records),
             )
-            if isinstance(
-                route_adapters
-                or self._delivery_route_adapters
-                or ConfiguredDeliveryRouteAdapterFactory(),
-                ConfiguredDeliveryRouteAdapterFactory,
-            )
+            if isinstance(selected_adapters, ConfiguredDeliveryRouteAdapterFactory)
             else run_contexts
         )
-        try:
-            with RuntimeSession(
-                runtime_config,
-                environment=self._environment,
-                agent_adapter=adapter,
-                agent_definitions=definitions,
-                repository_root=facts.workspace.repository_root,
-                context_builder=knowledge_contexts,
-                human_action_recorder=KnowledgeHumanActionRecorder(
-                    tuple(audit_stores), requirement_id=requirement_id
+        with RuntimeSession(
+            runtime_config,
+            environment=self._environment,
+            agent_adapter=adapter,
+            artifact_store=accepted_artifacts,
+            agent_definitions=definitions,
+            repository_root=facts.workspace.repository_root,
+            context_builder=knowledge_contexts,
+            human_action_recorder=KnowledgeHumanActionRecorder(
+                tuple(audit_stores), requirement_id=requirement_id
+            ),
+            transition_gate=KnowledgeDeliveryGate(
+                records=KnowledgeRecordStore(facts.workspace.root / "knowledge" / "runs"),
+                artifacts=accepted_artifacts,
+                contexts=contexts,
+            )
+            if isinstance(knowledge_contexts, KnowledgeRunContextBuilder)
+            else None,
+        ) as runtime:
+            supervisor = QueuedDeliverySupervisor(
+                queue=queue,
+                guard=worker_guard,
+                artifacts=accepted_artifacts,
+                allocation_sha256=dispatch.dispatch_sha256,
+                repository_id=dispatch.repository_id,
+                records=knowledge_records,
+                locks_root=facts.workspace.directory("state") / "queue-worker-locks",
+                build_step=approved.build_step,
+                dispatcher=approved.dispatcher,
+            )
+            return supervisor.run(
+                runtime,
+                dispatch.task_id,
+                terminal_result=lambda: _terminal_delivery_result(
+                    runtime.task_repository, accepted_artifacts, dispatch.task_id
                 ),
-                transition_gate=KnowledgeDeliveryGate(
-                    records=KnowledgeRecordStore(facts.workspace.root / "knowledge" / "runs"),
-                    artifacts=FileArtifactStore(paths.artifacts),
-                    contexts=contexts,
-                )
-                if isinstance(knowledge_contexts, KnowledgeRunContextBuilder)
-                else None,
-            ) as runtime:
-                return runtime.run_task(dispatch.task_id).result
-        finally:
-            adapter.close_clean_worktrees()
+                close_worktrees=adapter.close_clean_worktrees,
+            )
 
     def _facts(self, preparation: PrepareProjectResult) -> _ProjectFacts:
         if preparation.status is not PrepareProjectStatus.PREPARED:
@@ -1153,7 +1191,7 @@ class ProductionProjectDeliveryBackend:
 
         try:
             return operation()
-        except KnowledgeGapRaised:
+        except (KnowledgeGapRaised, DeliveryQueuePending):
             # Requirement coordination owns the recoverable knowledge wait.
             # Keep the Task at its last checkpoint; a gap is not a role verdict.
             raise
@@ -1187,8 +1225,8 @@ class ProductionProjectDeliveryBackend:
 
 
 def _terminal_delivery_result(
-    repository: MySqlTaskRepository,
-    artifacts: FileArtifactStore,
+    repository: TaskRepository,
+    artifacts: ArtifactStore,
     task_id: str,
 ) -> RetryResult | None:
     """Rebuild a sealed runtime result after Task completion beat checkpointing.

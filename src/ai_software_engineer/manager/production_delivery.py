@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from pathlib import Path
 from typing import Protocol
@@ -21,6 +21,7 @@ from ai_software_engineer.agents import (
     StoredContextResolver,
 )
 from ai_software_engineer.agents.codex_cli import InitialWorkspaceAdmission
+from ai_software_engineer.agents.execution import ExecutionGuard
 from ai_software_engineer.agents.fallback import model_route_root
 from ai_software_engineer.config import (
     ModelProviderKind,
@@ -65,8 +66,16 @@ class ConfiguredDeliveryRouteAdapterFactory:
         self,
         *,
         initial_workspace_admission: InitialWorkspaceAdmission | None = None,
+        execution_guard: ExecutionGuard | None = None,
     ) -> None:
         self._initial_admission = initial_workspace_admission
+        self._execution_guard = execution_guard
+
+    def with_execution_guard(self, guard: ExecutionGuard) -> ConfiguredDeliveryRouteAdapterFactory:
+        """Bind Worker ownership while preserving explicitly approved recovery admission."""
+        return ConfiguredDeliveryRouteAdapterFactory(
+            initial_workspace_admission=self._initial_admission, execution_guard=guard
+        )
 
     def create(
         self,
@@ -84,6 +93,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
         if route.kind is ModelProviderKind.CODEX_CLI:
             return CodexCliAgentAdapter(
                 workspace_root=binding.worktree.path,
+                execution_guard=self._execution_guard,
                 model=route.model,
                 agent_id=definition.id,
                 agent_version=definition.version,
@@ -104,6 +114,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             )
         return ResponsesAgentAdapter(
             workspace_root=binding.worktree.path,
+            execution_guard=self._execution_guard,
             endpoint=route.endpoint,
             api_key=api_key,
             model=route.model,
@@ -134,6 +145,7 @@ class DispatchDeliveryAgentAdapter:
         environment: Mapping[str, str] | None = None,
         route_adapters: DeliveryRouteAdapterFactory | None = None,
         route_scope: tuple[ProviderRouteConfig, ...] | None = None,
+        route_validator: Callable[[AgentRole, tuple[ProviderRouteConfig, ...]], None] | None = None,
     ) -> None:
         if isinstance(dispatch, VerificationReservation):
             if plan_adapter is not None:
@@ -163,6 +175,7 @@ class DispatchDeliveryAgentAdapter:
         self._context_resolver = context_resolver
         self._route_adapters = route_adapters or ConfiguredDeliveryRouteAdapterFactory()
         self._route_scope = route_scope
+        self._route_validator = route_validator
         self._coder: RoleWorktreeBinding | None = None
         self._verifiers: VerificationWorktreeBindings | None = None
         self._adapters: dict[AgentRole, AgentAdapter] = {}
@@ -220,6 +233,8 @@ class DispatchDeliveryAgentAdapter:
     ) -> AgentAdapter:
         definition = self._definitions[role]
         configured = self._ordered_routes(definition)
+        if self._route_validator is not None:
+            self._route_validator(role, configured)
         routes: list[ProviderAgentRoute] = []
         for route in configured:
             adapter = self._route_adapters.create(

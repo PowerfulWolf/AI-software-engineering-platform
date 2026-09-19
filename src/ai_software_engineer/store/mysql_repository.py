@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Self, cast
@@ -48,6 +48,7 @@ class MySqlTaskRepository:
     """Durable Task snapshots and event log backed by MySQL 8/InnoDB."""
 
     def __init__(self, dsn: str) -> None:
+        self.mutation_fence: Callable[[DictCursor, str], None] | None = None
         self._connection = open_mysql_connection(dsn)
         try:
             self._initialize_schema()
@@ -106,6 +107,8 @@ class MySqlTaskRepository:
     def append_event(self, event: StateEvent) -> None:
         """Atomically append an event and advance its locked Task snapshot."""
         with self._transaction(), self._connection.cursor() as cursor:
+            if self.mutation_fence is not None:
+                self.mutation_fence(cast(DictCursor, cursor), event.task_id)
             # Serialize same-Task writers before either acquires an absent event-ID gap lock.
             cursor.execute(
                 "SELECT id, payload_json, revision FROM tasks WHERE id = %s FOR UPDATE",
@@ -173,12 +176,16 @@ class MySqlTaskRepository:
                 raise StoreError("failed to append state event") from error
             if updated != 1:
                 raise StoreError("Task revision changed while appending state event")
+            if self.mutation_fence is not None:
+                self.mutation_fence(cast(DictCursor, cursor), event.task_id)
 
     def record_attempt(self, task_id: TaskId, attempt: int) -> None:
         """Durably checkpoint an Agent attempt without a state transition."""
         if type(attempt) is not int or not 1 <= attempt <= 10:
             raise StoreError(f"attempt must be between 1 and 10: {attempt}")
         with self._transaction(), self._connection.cursor() as cursor:
+            if self.mutation_fence is not None:
+                self.mutation_fence(cast(DictCursor, cursor), task_id)
             cursor.execute(
                 "SELECT id, payload_json FROM tasks WHERE id = %s FOR UPDATE",
                 (task_id,),
@@ -198,6 +205,8 @@ class MySqlTaskRepository:
             )
             if updated != 1:
                 raise StoreError("Task attempt checkpoint was not written")
+            if self.mutation_fence is not None:
+                self.mutation_fence(cast(DictCursor, cursor), task_id)
 
     def list_events(self, task_id: TaskId) -> tuple[StateEvent, ...]:
         """Return a Task's events in replay order."""

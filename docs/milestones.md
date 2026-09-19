@@ -8,7 +8,7 @@
 
 | 事项 | 已有基础 | 未完成范围与证据 |
 |---|---|---|
-| 逐角色后台 Worker 集成 | T046 持久 WorkQueue、Dispatcher、Lease | 生产 request 仍走串行 RuntimeSession；队列能力不能表示入口已迁移 |
+| 逐角色后台 Worker 集成 | T046 持久 WorkQueue、Dispatcher、Lease | 已接入 bounded RuntimeSession step、真实 claim/heartbeat、Artifact receipt 与 native capacity adoption；独立 supervisor 进程和多 Task 并发仍待单独验收 |
 | Reporter | 底层 Evaluation/Handoff | [T033](../.trellis/tasks/09-02-t033-delivery-reporter/prd.md) 暂停，尚未决定独立 Agent 或确定性服务 |
 | 显式交付恢复的真实验收 | 已有离线恢复、重应用与候选复核 | [T044](../.trellis/tasks/09-06-t044-explicit-delivery-recovery/task.json) 仍列新精确计划、人工批准与真实 Coder/QA/Reviewer 验证 |
 | Requirement 独立源基线验收 | 已记录实现与复核准备 | [任务记录](../.trellis/tasks/09-15-requirement-source-baseline/task.json) 仍要求完整 localhost/MySQL 检查，不因代码已存在而抹掉剩余项 |

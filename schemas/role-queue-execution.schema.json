@@ -1,0 +1,414 @@
+{
+  "$defs": {
+    "AcceptedRoleArtifact": {
+      "additionalProperties": false,
+      "properties": {
+        "checkpoint_sequence": {
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Checkpoint Sequence",
+          "type": "integer"
+        },
+        "context_manifest_id": {
+          "pattern": "^ctx_[a-f0-9]{64}$",
+          "title": "Context Manifest Id",
+          "type": "string"
+        },
+        "dispatch_sequence": {
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Dispatch Sequence",
+          "type": "integer"
+        },
+        "kind": {
+          "const": "accepted_role_artifact",
+          "default": "accepted_role_artifact",
+          "title": "Kind",
+          "type": "string"
+        },
+        "lease_id": {
+          "pattern": "^lease_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Lease Id",
+          "type": "string"
+        },
+        "receipt": {
+          "$ref": "#/$defs/QueueArtifactReceipt"
+        },
+        "run_id": {
+          "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "work_item_id": {
+          "pattern": "^work_[a-z0-9][a-z0-9_-]{2,95}$",
+          "title": "Work Item Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "work_item_id",
+        "lease_id",
+        "dispatch_sequence",
+        "checkpoint_sequence",
+        "run_id",
+        "context_manifest_id",
+        "source_revision",
+        "receipt"
+      ],
+      "title": "AcceptedRoleArtifact",
+      "type": "object"
+    },
+    "AgentRole": {
+      "description": "Delivery-runtime roles bound to Task artifacts and state transitions.",
+      "enum": [
+        "orchestrator",
+        "coder",
+        "qa",
+        "reviewer"
+      ],
+      "title": "AgentRole",
+      "type": "string"
+    },
+    "QueueArtifactReceipt": {
+      "additionalProperties": false,
+      "description": "Immutable Artifact evidence accepted before a queue transition.",
+      "properties": {
+        "artifact_id": {
+          "minLength": 1,
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "sha256"
+      ],
+      "title": "QueueArtifactReceipt",
+      "type": "object"
+    },
+    "QueuedRoleStep": {
+      "additionalProperties": false,
+      "properties": {
+        "allocation_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Allocation Sha256",
+          "type": "string"
+        },
+        "boundary": {
+          "$ref": "#/$defs/RoleRunBoundary"
+        },
+        "kind": {
+          "const": "queued_role_step",
+          "default": "queued_role_step",
+          "title": "Kind",
+          "type": "string"
+        },
+        "work_item": {
+          "$ref": "#/$defs/QueuedWorkItem"
+        }
+      },
+      "required": [
+        "work_item",
+        "boundary",
+        "allocation_sha256"
+      ],
+      "title": "QueuedRoleStep",
+      "type": "object"
+    },
+    "QueuedWorkItem": {
+      "additionalProperties": false,
+      "description": "One executable delivery-role Run in the organization queue.",
+      "properties": {
+        "attempt": {
+          "maximum": 10,
+          "minimum": 0,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "available_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Available At"
+        },
+        "checkpoint_sequence": {
+          "default": 0,
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Checkpoint Sequence",
+          "type": "integer"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "dispatch_sequence": {
+          "default": 0,
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Dispatch Sequence",
+          "type": "integer"
+        },
+        "id": {
+          "pattern": "^work_[a-z0-9][a-z0-9_-]{2,95}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "work_item",
+          "default": "work_item",
+          "title": "Kind",
+          "type": "string"
+        },
+        "parent_work_item_id": {
+          "anyOf": [
+            {
+              "pattern": "^work_[a-z0-9][a-z0-9_-]{2,95}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Work Item Id"
+        },
+        "preferred_agent_id": {
+          "anyOf": [
+            {
+              "pattern": "^agent_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Preferred Agent Id"
+        },
+        "priority": {
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Priority",
+          "type": "integer"
+        },
+        "repository_id": {
+          "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "repository_scopes": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Repository Scopes",
+          "type": "array"
+        },
+        "required_capabilities": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Required Capabilities",
+          "type": "array"
+        },
+        "risk": {
+          "$ref": "#/$defs/RiskTier"
+        },
+        "role": {
+          "$ref": "#/$defs/AgentRole"
+        },
+        "status": {
+          "$ref": "#/$defs/WorkItemStatus"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "wait_reason": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Wait Reason"
+        }
+      },
+      "required": [
+        "task_id",
+        "repository_id",
+        "status",
+        "priority",
+        "risk",
+        "created_at",
+        "updated_at",
+        "id",
+        "role",
+        "attempt",
+        "repository_scopes"
+      ],
+      "title": "QueuedWorkItem",
+      "type": "object"
+    },
+    "RiskTier": {
+      "enum": [
+        "low",
+        "normal",
+        "high",
+        "critical"
+      ],
+      "title": "RiskTier",
+      "type": "string"
+    },
+    "RoleQueueAdmission": {
+      "additionalProperties": false,
+      "properties": {
+        "allocation_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Allocation Sha256",
+          "type": "string"
+        },
+        "kind": {
+          "const": "role_queue_admission",
+          "default": "role_queue_admission",
+          "title": "Kind",
+          "type": "string"
+        },
+        "legacy_artifacts": {
+          "items": {
+            "$ref": "#/$defs/QueueArtifactReceipt"
+          },
+          "title": "Legacy Artifacts",
+          "type": "array"
+        },
+        "repository_id": {
+          "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "repository_id",
+        "allocation_sha256",
+        "legacy_artifacts"
+      ],
+      "title": "RoleQueueAdmission",
+      "type": "object"
+    },
+    "RoleRunBoundary": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt": {
+          "maximum": 10,
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "checkpoint_sequence": {
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Checkpoint Sequence",
+          "type": "integer"
+        },
+        "role": {
+          "enum": [
+            "coder",
+            "qa",
+            "reviewer"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "role",
+        "attempt",
+        "checkpoint_sequence",
+        "source_revision"
+      ],
+      "title": "RoleRunBoundary",
+      "type": "object"
+    },
+    "WorkItemStatus": {
+      "enum": [
+        "READY",
+        "LEASED",
+        "RUNNING",
+        "WAITING_HUMAN",
+        "WAITING_DEPENDENCY",
+        "RETRY_SCHEDULED",
+        "CLOSED"
+      ],
+      "title": "WorkItemStatus",
+      "type": "string"
+    }
+  },
+  "$id": "https://ai-software-engineer.local/schemas/role-queue-execution.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "anyOf": [
+    {
+      "$ref": "#/$defs/RoleQueueAdmission"
+    },
+    {
+      "$ref": "#/$defs/QueuedRoleStep"
+    },
+    {
+      "$ref": "#/$defs/AcceptedRoleArtifact"
+    }
+  ]
+}

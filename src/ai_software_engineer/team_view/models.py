@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import AwareDatetime
 
-from ai_software_engineer.domain.enums import AgentRole, TeamRole
+from ai_software_engineer.domain.enums import AgentRole, TeamRole, WorkItemStatus
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.projection.models import TimelineEntry
 
@@ -60,6 +60,18 @@ class RunView(DomainModel):
     sha256: str
 
 
+class RoleQueueView(DomainModel):
+    work_item_id: str
+    role: AgentRole
+    attempt: int
+    status: WorkItemStatus
+    agent_id: str | None = None
+    heartbeat_at: AwareDatetime | None = None
+    lease_expires_at: AwareDatetime | None = None
+    lease_liveness: Literal["UNKNOWN", "LEASE_VALID", "LEASE_EXPIRED"] = "UNKNOWN"
+    wait_reason: str | None = None
+
+
 class TaskView(DomainModel):
     id: str
     project_id: str
@@ -80,6 +92,7 @@ class TaskView(DomainModel):
     next_action: str
     candidate_revision: str | None = None
     candidate_branch: str | None = None
+    role_queue: tuple[RoleQueueView, ...] = ()
     assignments: tuple[AssignmentView, ...] = ()
     timeline: tuple[TimelineEntry, ...] = ()
     runs: tuple[RunView, ...] = ()

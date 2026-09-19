@@ -58,6 +58,7 @@ def test_terminal_task_does_not_release_live_verification(
         "payload_json": snapshot.model_dump_json(),
         "snapshot_sha256": snapshot.snapshot_sha256,
     }
+    cursor.fetchone.side_effect = [cursor.fetchone.return_value, None]
     cursor.fetchall.side_effect = [
         [
             {

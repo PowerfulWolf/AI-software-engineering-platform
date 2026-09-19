@@ -10,6 +10,7 @@ from typing import Annotated, Literal, Self
 
 from pydantic import AwareDatetime, Field, TypeAdapter, model_validator
 
+from ai_software_engineer.domain.enums import WorkItemStatus
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.workforce import AgentProfile, ModelPolicy, RunDemand
 from ai_software_engineer.scheduling import (
@@ -106,14 +107,31 @@ class DispatcherLoop:
         self._scan_limit = scan_limit
         self._expired_lease_retry_delay = expired_lease_retry_delay
 
-    def tick(self, *, now: datetime) -> DispatcherTickResult:
+    def tick(self, *, now: datetime, work_item_id: str | None = None) -> DispatcherTickResult:
         """Claim at most one Run-level WorkItem using current durable capacity facts."""
         reclaimed = self._queue.reclaim_expired(
             now=now,
             retry_at=now + self._expired_lease_retry_delay,
         )
         reclaimed_ids = tuple(item.id for item in reclaimed)
-        candidates = self._queue.list_schedulable(now=now, limit=self._scan_limit)
+        if work_item_id is None:
+            candidates = self._queue.list_schedulable(now=now, limit=self._scan_limit)
+        else:
+            # A compatibility supervisor owns only its bound Task/runtime. Never
+            # claim another Task and accidentally execute it in this worktree.
+            selected = self._queue.get(work_item_id)
+            candidates = (
+                (selected,)
+                if (
+                    selected.status is WorkItemStatus.READY
+                    or (
+                        selected.status is WorkItemStatus.RETRY_SCHEDULED
+                        and selected.available_at is not None
+                        and selected.available_at <= now
+                    )
+                )
+                else ()
+            )
         if not candidates:
             return DispatcherTickResult(
                 status=DispatcherTickStatus.IDLE,

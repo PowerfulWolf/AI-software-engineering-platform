@@ -35,6 +35,7 @@ from ai_software_engineer.work_queue.ports import (
     QueueConflict,
     QueueCorruption,
     QueueError,
+    QueueLeaseLost,
     QueueNotFound,
 )
 
@@ -495,51 +496,72 @@ class MySqlPersistentWorkQueue:
             connection.cursor() as cursor,
         ):
             self._lock_authority(cursor)
-            current = self._get_locked(cursor, str(work_item_id), lock=True)
-            if current.status is WorkItemStatus.CLOSED:
-                return self._replay_completion(
-                    cursor,
-                    current,
-                    lease_id=lease_id,
-                    owner_token=owner_token,
-                    artifacts=receipts,
-                    next_work_item=next_work_item,
-                )
-            self._require_active_claim(cursor, current.id, lease_id, owner_token, now=now)
-            if current.status not in _ACTIVE_STATUSES:
-                raise QueueConflict("only active work can complete")
-            if next_work_item is not None:
-                if (
-                    next_work_item.task_id != current.task_id
-                    or next_work_item.parent_work_item_id != current.id
-                    or next_work_item.created_at < now
-                ):
-                    raise QueueConflict("next WorkItem does not follow the current queue fact")
-                self._validate_enqueue_status(next_work_item)
-            closed = current.model_copy(update={"status": WorkItemStatus.CLOSED, "updated_at": now})
-            self._update_item(cursor, closed)
-            self._release_claim(cursor, lease_id, state="RELEASED", ended_at=now)
-            published = (
-                self._enqueue_locked(cursor, next_work_item) if next_work_item is not None else None
-            )
-            self._append_event(
+            return self._complete_locked(
                 cursor,
-                closed,
-                from_status=current.status,
-                event_type="COMPLETED",
+                str(work_item_id),
                 lease_id=lease_id,
-                occurred_at=now,
-                detail={
-                    "artifacts": [item.to_wire() for item in receipts],
-                    "next_work_item": (published.to_wire() if published is not None else None),
-                },
+                owner_token=owner_token,
+                receipts=receipts,
+                next_work_item=next_work_item,
+                now=now,
             )
-            return QueueCompletion(
-                work_item=closed,
+
+    def _complete_locked(
+        self,
+        cursor: object,
+        work_item_id: str,
+        *,
+        lease_id: str,
+        owner_token: str,
+        receipts: tuple[QueueArtifactReceipt, ...],
+        next_work_item: QueuedWorkItem | None,
+        now: datetime,
+    ) -> QueueCompletion:
+        current = self._get_locked(cursor, str(work_item_id), lock=True)
+        if current.status is WorkItemStatus.CLOSED:
+            return self._replay_completion(
+                cursor,
+                current,
+                lease_id=lease_id,
+                owner_token=owner_token,
                 artifacts=receipts,
-                next_work_item=published,
-                completed_at=now,
+                next_work_item=next_work_item,
             )
+        self._require_active_claim(cursor, current.id, lease_id, owner_token, now=now)
+        if current.status not in _ACTIVE_STATUSES:
+            raise QueueConflict("only active work can complete")
+        if next_work_item is not None:
+            if (
+                next_work_item.task_id != current.task_id
+                or next_work_item.parent_work_item_id != current.id
+                or next_work_item.created_at < now
+            ):
+                raise QueueConflict("next WorkItem does not follow the current queue fact")
+            self._validate_enqueue_status(next_work_item)
+        closed = current.model_copy(update={"status": WorkItemStatus.CLOSED, "updated_at": now})
+        self._update_item(cursor, closed)
+        self._release_claim(cursor, lease_id, state="RELEASED", ended_at=now)
+        published = (
+            self._enqueue_locked(cursor, next_work_item) if next_work_item is not None else None
+        )
+        self._append_event(
+            cursor,
+            closed,
+            from_status=current.status,
+            event_type="COMPLETED",
+            lease_id=lease_id,
+            occurred_at=now,
+            detail={
+                "artifacts": [item.to_wire() for item in receipts],
+                "next_work_item": (published.to_wire() if published is not None else None),
+            },
+        )
+        return QueueCompletion(
+            work_item=closed,
+            artifacts=receipts,
+            next_work_item=published,
+            completed_at=now,
+        )
 
     def _replay_completion(
         self,
@@ -874,6 +896,13 @@ class MySqlPersistentWorkQueue:
     ) -> None:
         typed = cast("pymysql.cursors.DictCursor", cursor)
         typed.execute(
+            "SELECT lease_id FROM work_queue_claims "
+            "WHERE task_id=%s AND state='ACTIVE' AND expires_at > %s LIMIT 1 FOR UPDATE",
+            (assignment.task_id, self._time_key(now)),
+        )
+        if typed.fetchone() is not None:
+            raise QueueConflict("Task already has an active role claim")
+        typed.execute(
             """
             SELECT COALESCE(SUM(capacity_units),0) AS used_capacity
             FROM work_queue_claims
@@ -917,14 +946,14 @@ class MySqlPersistentWorkQueue:
         row = cast(Mapping[str, object] | None, typed.fetchone())
         if row is None:
             raise QueueConflict("Lease does not exist")
-        if (
-            self._text(row, "work_item_id") != work_item_id
-            or self._text(row, "state") != "ACTIVE"
-            or self._text(row, "owner_token_sha256") != self._token_digest(owner_token)
-        ):
-            raise QueueConflict("Lease owner or state changed")
+        if self._text(row, "work_item_id") != work_item_id or self._text(
+            row, "owner_token_sha256"
+        ) != self._token_digest(owner_token):
+            raise QueueConflict("Lease owner changed")
+        if self._text(row, "state") != "ACTIVE":
+            raise QueueLeaseLost("Lease state changed")
         if self._parse_time(self._text(row, "expires_at")) <= now:
-            raise QueueConflict("Lease expired before lifecycle operation")
+            raise QueueLeaseLost("Lease expired before lifecycle operation")
         return row
 
     def _active_claim_exists(self, cursor: object, work_item_id: str) -> bool:
@@ -1043,8 +1072,7 @@ class MySqlPersistentWorkQueue:
             and item.available_at <= now
         )
 
-    @staticmethod
-    def _lock_authority(cursor: object) -> None:
+    def _lock_authority(self, cursor: object) -> None:
         typed = cast("pymysql.cursors.DictCursor", cursor)
         typed.execute("SELECT id FROM work_queue_authority_lock WHERE id=1 FOR UPDATE")
         if typed.fetchone() is None:

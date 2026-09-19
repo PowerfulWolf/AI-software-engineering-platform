@@ -13,6 +13,9 @@ from ai_software_engineer.store.mysql_repository import open_mysql_connection
 
 # Child rows precede their parents. Authority lock rows and unrelated tables survive.
 _MUTABLE_FACT_TABLES = (
+    "work_queue_accepted_artifacts",
+    "work_queue_steps",
+    "work_queue_admissions",
     "work_queue_events",
     "work_queue_claims",
     "work_queue_items",

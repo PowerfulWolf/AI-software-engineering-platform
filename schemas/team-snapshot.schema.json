@@ -372,6 +372,93 @@
       "title": "RequestView",
       "type": "object"
     },
+    "RoleQueueView": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Agent Id"
+        },
+        "attempt": {
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "heartbeat_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Heartbeat At"
+        },
+        "lease_expires_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lease Expires At"
+        },
+        "lease_liveness": {
+          "default": "UNKNOWN",
+          "enum": [
+            "UNKNOWN",
+            "LEASE_VALID",
+            "LEASE_EXPIRED"
+          ],
+          "title": "Lease Liveness",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/AgentRole"
+        },
+        "status": {
+          "$ref": "#/$defs/WorkItemStatus"
+        },
+        "wait_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Wait Reason"
+        },
+        "work_item_id": {
+          "title": "Work Item Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_item_id",
+        "role",
+        "attempt",
+        "status"
+      ],
+      "title": "RoleQueueView",
+      "type": "object"
+    },
     "RunView": {
       "additionalProperties": false,
       "properties": {
@@ -580,6 +667,14 @@
           "title": "Request Id",
           "type": "string"
         },
+        "role_queue": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RoleQueueView"
+          },
+          "title": "Role Queue",
+          "type": "array"
+        },
         "runs": {
           "default": [],
           "items": {
@@ -782,6 +877,19 @@
       ],
       "title": "TimelineEntry",
       "type": "object"
+    },
+    "WorkItemStatus": {
+      "enum": [
+        "READY",
+        "LEASED",
+        "RUNNING",
+        "WAITING_HUMAN",
+        "WAITING_DEPENDENCY",
+        "RETRY_SCHEDULED",
+        "CLOSED"
+      ],
+      "title": "WorkItemStatus",
+      "type": "string"
     }
   },
   "$id": "https://ai-software-engineer.local/schemas/team-snapshot.schema.json",

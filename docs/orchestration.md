@@ -27,8 +27,9 @@ T019 实现纯 Scheduler/ModelRouter，T022 将已持久化 workforce、Compiled
 Dispatcher tick、原子 claim、owner-fenced start/renew/complete/wait/retry 和 Lease expiry reaper；
 每次 tick 先回收过期 Lease，再领取至多一个 Run。start/renew/result 属于持有 owner token 的 Worker，
 不是 Dispatcher 的隐式权限。
-当前 `ase request` 兼容入口仍一次同步运行一个 Task；逐角色 Worker 接线完成后，由外部进程监督器
-重复调用 tick，不由 Planner 的模型会话运行无限循环。
+生产 `ase request`/Console 已由 `QueuedDeliverySupervisor` 重复执行有界 tick 和
+`RuntimeSession.run_step`，每次最多一个 Coder/QA/Reviewer 调用。命令仍同步等结果；独立进程
+监督部署另行验收，不由 Planner 模型运行无限循环。
 
 ### WorkItem 生命周期
 

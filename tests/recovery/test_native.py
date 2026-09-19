@@ -129,8 +129,11 @@ class InvalidOutputFactory:
 
 
 class ContinuedCoder:
-    def __init__(self, root: Path, requests: list[AgentRequest]) -> None:
+    def __init__(
+        self, root: Path, requests: list[AgentRequest], definition: AgentDefinition
+    ) -> None:
         self.root, self.requests = root, requests
+        self.definition = definition
 
     def run(self, request: AgentRequest) -> AgentResult:
         assert request.role is AgentRole.CODER
@@ -143,7 +146,13 @@ class ContinuedCoder:
                 "task_id": request.task_id,
                 "source_revision": request.source_revision,
                 "context_manifest_id": request.context_manifest_id,
-                "producer": template.producer.model_copy(update={"run_id": request.run_id}),
+                "producer": template.producer.model_copy(
+                    update={
+                        "agent_id": self.definition.id,
+                        "agent_version": self.definition.version,
+                        "run_id": request.run_id,
+                    }
+                ),
                 "parent_artifact_ids": request.expected_parent_artifact_ids or (),
                 "supersedes": request.continuation_checkpoint_id,
                 "content": template.content.model_copy(
@@ -191,7 +200,7 @@ class ContinuedFactory:
         config: ProductionConfig,
         environment: Mapping[str, str],
     ) -> AgentAdapter:
-        return ContinuedCoder(binding.worktree.path, self.requests)
+        return ContinuedCoder(binding.worktree.path, self.requests, definition)
 
 
 def _snapshot(root: Path) -> dict[str, bytes]:

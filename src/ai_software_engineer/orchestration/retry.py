@@ -776,6 +776,7 @@ class RetryingOrchestrator(SerialOrchestrator):
             )
 
     def _record_attempt(self, task: Task, attempt: int) -> None:
+        self._guard_write()
         self._repository.record_attempt(task.id, attempt)
 
     def _artifacts_for_task(self, task_id: TaskId) -> tuple[Artifact, ...]:
@@ -841,6 +842,12 @@ def _recoverable_candidate(
         return False
     if last_event.from_status is TaskStatus.PLANNING:
         return implementation.supersedes is None
+    if last_event.from_status is TaskStatus.QUEUED:
+        # Continuation output must consume the exact persisted progress checkpoint;
+        # an older candidate cannot satisfy this lineage after a new resume.
+        return bool(last_event.artifact_ids) and set(last_event.artifact_ids).issubset(
+            implementation.parent_artifact_ids
+        )
     if last_event.from_status in {TaskStatus.QA, TaskStatus.REVIEW}:
         return implementation.supersedes is not None
     return False

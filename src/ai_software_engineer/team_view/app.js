@@ -83,6 +83,10 @@ const labels = {
   BLOCKED: "已阻塞",
   FAILED: "失败",
   WAITING_HUMAN: "等待人工",
+  WAITING_DEPENDENCY: "等待依赖",
+  READY: "等待调度",
+  LEASED: "已领取",
+  RETRY_SCHEDULED: "等待重试",
   coder: "实现",
   qa: "测试",
   reviewer: "评审",
@@ -356,6 +360,7 @@ function taskGroup(task) {
   if (task.status === "DONE") return "completed";
   if (
     task.blocker ||
+    task.role_queue?.some((step) => step.status.startsWith("WAITING_")) ||
     task.status.includes("WAITING") ||
     ["BLOCKED", "FAILED"].includes(task.status)
   )
@@ -4899,6 +4904,22 @@ function renderDetail() {
     dialog.append(el("p", "候选版本 · " + item.candidate_revision, "paths"));
   if (item.candidate_branch)
     dialog.append(el("p", "候选分支 · " + item.candidate_branch, "paths"));
+  if (item.role_queue?.length) {
+    dialog.append(el("h2", "角色执行队列"));
+    for (const step of item.role_queue) {
+      const lease = {
+        LEASE_VALID: "租约有效",
+        LEASE_EXPIRED: "租约已过期",
+        UNKNOWN: "无有效租约",
+      }[step.lease_liveness];
+      const status = step.status === "CLOSED" ? "本次执行已结束" : label(step.status);
+      dialog.append(el("p", `${label(step.role)} · 第 ${step.attempt} 次 · ${status} · ${lease}`));
+      if (step.heartbeat_at)
+        dialog.append(el("p", "最近心跳 · " + time(step.heartbeat_at), "muted"));
+      if (step.wait_reason?.startsWith("KNOWLEDGE_GAP:"))
+        dialog.append(el("p", "等待补充知识，详情见需求的阻塞信息。", "muted"));
+    }
+  }
   dialog.append(el("h2", "成员与分配模型"));
   for (const a of item.assignments)
     dialog.append(

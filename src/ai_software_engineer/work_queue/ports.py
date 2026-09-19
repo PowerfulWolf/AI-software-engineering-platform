@@ -26,12 +26,20 @@ class QueueError(RuntimeError):
     """Base failure for durable queue operations."""
 
 
+class DeliveryQueuePending(Exception):
+    """Scheduling is pending; retain the current nonterminal delivery checkpoint."""
+
+
 class QueueNotFound(QueueError):
     """A requested queue identity does not exist."""
 
 
 class QueueConflict(QueueError):
     """Current queue state, Lease ownership or replay identity changed."""
+
+
+class QueueLeaseLost(QueueConflict, DeliveryQueuePending):
+    """An expired/released execution permit is recoverable, never a Task verdict."""
 
 
 class QueueCorruption(QueueError):
@@ -130,5 +138,6 @@ __all__ = [
     "QueueConflict",
     "QueueCorruption",
     "QueueError",
+    "QueueLeaseLost",
     "QueueNotFound",
 ]

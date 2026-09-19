@@ -75,7 +75,9 @@ TaskOrchestrator，不是团队成员本体。
 `active_capacity_by_agent` 和 `PortfolioScheduler` 已实现 capacity aggregate、自审拒绝与 batch
 内新 Lease 占用。T046 的 `MySqlPersistentWorkQueue` 已将一次角色 Run 持久化为
 `QueuedWorkItem`，并由确定性 Dispatcher tick 在数据库围栏内提交 Assignment/Lease/ModelSelection；
-当前 `ase request` 兼容入口尚待改成逐角色 Worker 消费这条队列。
+生产 `ase request`/Console 已由单 Worker Supervisor 消费这条队列，保留同步命令返回语义。
+额外的 `role-queue-execution.schema.json` 约束 admission、单步输入和接受回执；Artifact 文件本身
+不等于 Worker 已接受的结果。独立候选复核继续使用原 reservation/approval 契约。
 
 Queue 状态与 Task 状态正交：`READY/LEASED/RUNNING/WAITING_*/RETRY_SCHEDULED/CLOSED` 只表达
 资源调度；TaskOrchestrator 仍独占 delivery verdict。Lease 明文 owner token 只交给 Worker，数据库

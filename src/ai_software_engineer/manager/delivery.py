@@ -52,6 +52,7 @@ from ai_software_engineer.recovery.verification_records import (
     CandidateVerificationCompletion,
     CandidateVerificationPlan,
 )
+from ai_software_engineer.work_queue.ports import DeliveryQueuePending
 
 CheckpointDigest = Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
 
@@ -983,6 +984,8 @@ class UnifiedProjectEntryService:
     ) -> ProjectDeliveryResult:
         try:
             delivery = self._backend.run_delivery(current)
+        except DeliveryQueuePending:
+            return ProjectDeliveryResult(checkpoint=current, product=product)
         except DeliveryBackendFailure as error:
             if error.snapshot is not None:
                 snapshot = error.snapshot

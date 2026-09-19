@@ -1,0 +1,21 @@
+{
+  "id": "t046-worker-integration-20260919",
+  "title": "Integrate T046 role queue into production delivery",
+  "status": "in_progress",
+  "phase": "ready_for_user_validation",
+  "baseline": "1879792eb43536389b9ffe69d623f1f85b0b4ec3",
+  "allowed_paths": [
+    "src/ai_software_engineer/**",
+    "tests/**",
+    "schemas/**",
+    "docs/**",
+    "README.md",
+    "AGENTS.md",
+    ".trellis/spec/core/**",
+    ".trellis/tasks/**"
+  ],
+  "remaining": [
+    "User-owned full regression",
+    "Commit/integration and controlled production rollout when authorized"
+  ]
+}

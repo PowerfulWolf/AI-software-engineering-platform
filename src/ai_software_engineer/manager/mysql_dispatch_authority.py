@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import closing, contextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import cast
 
 import pymysql
@@ -636,6 +636,11 @@ class MySqlDispatchAuthority:
                 "FROM verification_reservations"
             )
             verification_rows = cast(tuple[Mapping[str, object], ...], cursor.fetchall())
+            from ai_software_engineer.work_queue.execution_store import read_queue_workforce
+
+            queued = read_queue_workforce(
+                cast("pymysql.cursors.DictCursor", cursor), datetime.now(UTC)
+            )
 
         assignments = {assignment.id: assignment for assignment in base.assignments}
         leases = {lease.id: lease for lease in base.active_leases}
@@ -657,7 +662,9 @@ class MySqlDispatchAuthority:
                 update={"status": WorkItemStatus.LEASED, "updated_at": task_commit_time}
             )
         active_leases = {
-            key: lease for key, lease in leases.items() if lease.task_id not in terminal_tasks
+            key: lease
+            for key, lease in leases.items()
+            if lease.task_id not in terminal_tasks | queued.adopted_task_ids
         }
         for row in verification_rows:
             reservation = VerificationReservation.model_validate_json(_text(row, "payload_json"))
@@ -670,6 +677,11 @@ class MySqlDispatchAuthority:
                 leases[phase.lease.id] = phase.lease
                 if row["completion_sha256"] is None and row["abandonment_sha256"] is None:
                     active_leases[phase.lease.id] = phase.lease
+        for assignment in queued.assignments:
+            prior = assignments.setdefault(assignment.id, assignment)
+            if prior != assignment:
+                raise DispatchCommitCorruption("queue assignment conflicts with native history")
+        active_leases.update((lease.id, lease) for lease in queued.leases)
         return DispatchWorkforceSnapshot.create(
             repository_id=base.repository_id,
             task_id=base.task_id,

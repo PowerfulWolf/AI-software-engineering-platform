@@ -13,7 +13,7 @@ from pymysql.cursors import DictCursor
 from ai_software_engineer.agents.fallback import FileModelRouteAttemptStore, model_route_root
 from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.config import ProductionConfig
-from ai_software_engineer.domain.enums import AgentRole, TaskStatus, TeamRole
+from ai_software_engineer.domain.enums import AgentRole, TaskStatus, TeamRole, WorkItemStatus
 from ai_software_engineer.domain.workforce import AgentProfile
 from ai_software_engineer.evaluation import FileEvaluationEventStore
 from ai_software_engineer.manager.delivery import _delivery_id
@@ -1069,8 +1069,18 @@ def _read_task_details(
     candidate_revision = projection.tasks[0].candidate_revision
     if checkpoint_bound:
         candidate_revision = cp.candidate_revision or candidate_revision
+    from ai_software_engineer.team_view.queue_reader import read_role_queue
+
+    role_queue = read_role_queue(
+        cursor,
+        task_id=task.id,
+        repository_id=dispatch.repository_id,
+        allocation_sha256=dispatch.dispatch_sha256,
+        now=datetime.now(UTC),
+    )
     return base.model_copy(
         update={
+            "role_queue": role_queue,
             "work_kind": (
                 "remediation"
                 if continuation is not None or recovery is not None
@@ -1094,7 +1104,19 @@ def _read_task_details(
                     role=p.role,
                     planned_provider=p.model_selection.provider,
                     planned_model=p.model_selection.model,
-                    current_stage=_CURRENT_ROLE.get(task.status) is p.role and not terminal,
+                    current_stage=(
+                        _CURRENT_ROLE.get(task.status) is p.role
+                        and not terminal
+                        and (
+                            not role_queue
+                            or any(
+                                step.role is p.role
+                                and step.status is WorkItemStatus.RUNNING
+                                and step.lease_liveness == "LEASE_VALID"
+                                for step in role_queue
+                            )
+                        )
+                    ),
                 )
                 for p in dispatch.phases
             ),

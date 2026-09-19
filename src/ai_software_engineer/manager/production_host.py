@@ -33,6 +33,7 @@ from ai_software_engineer.manager.production_delivery import (
 from ai_software_engineer.manager.production_rules import (
     production_rules,
 )
+from ai_software_engineer.manager.queue_capacity import production_role_queue
 from ai_software_engineer.manager.spec_rules import ProductionProjectRuleProvider
 from ai_software_engineer.manager.team_roster import production_team_roster
 from ai_software_engineer.multi_directory.models import JointDeliveryResult, JointStage
@@ -52,9 +53,13 @@ from ai_software_engineer.spec_documents import (
 )
 from ai_software_engineer.store import MySqlTaskRepository
 from ai_software_engineer.team_workspace import TeamWorkspace
-from ai_software_engineer.work_queue import DispatcherLoop, MySqlPersistentWorkQueue
+from ai_software_engineer.work_queue import DispatcherLoop
 from ai_software_engineer.work_queue.dispatcher import OwnerTokenFactory, RunDemandBuilder
+from ai_software_engineer.work_queue.execution_store import MySqlRoleQueue
 from ai_software_engineer.work_queue.models import LeaseWorkerId
+
+# Compatibility seam retained for tests and injected local hosts.
+MySqlPersistentWorkQueue = production_role_queue
 
 if TYPE_CHECKING:
     from ai_software_engineer.recovery.entry import NativeRecoveryEntry
@@ -260,6 +265,7 @@ class TeamHost:
             project_rule_provider=project_rule_provider,
             structured_clients=self._structured_clients,
             delivery_route_adapters=self._delivery_route_adapters,
+            role_queue=self._work_queue,
             preparation_guard=validate_context,
         )
 
@@ -279,6 +285,7 @@ class TeamHost:
                 project_rule_provider=project_rule_provider,
                 structured_clients=clients,
                 delivery_route_adapters=self._delivery_route_adapters,
+                role_queue=self._work_queue,
                 preparation_guard=validate_context,
                 delivery_context_sources=sources,
                 human_decision_verifier=verifier,
@@ -360,7 +367,7 @@ class TeamHost:
         raise ValueError("select a Project before creating or continuing a Requirement")
 
     @property
-    def work_queue(self) -> MySqlPersistentWorkQueue:
+    def work_queue(self) -> MySqlRoleQueue:
         """Team Run queue; project sidecars never own this state."""
         return self._work_queue
 

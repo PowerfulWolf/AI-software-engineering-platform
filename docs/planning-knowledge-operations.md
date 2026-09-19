@@ -67,9 +67,10 @@ Delivery consultation 在最终 AgentRequest 构造前写入受预算约束的 C
 Requirement 的已批准事实，并记录对首次恢复摘要的引用；不能把新候选伪装成原中断 Run。
 人工解答同时进入标准 Evaluation HumanActionEvent，因此恢复成功仍保留“人工干预”归因。
 
-T046 队列 Worker 可注入 QueueKnowledgeWaitPort，以 exact claim/token 释放 Lease 并进入等待。
-`ase request` 兼容路径仍采用原串行 RuntimeSession，没有迁移成逐角色 WorkQueue Worker；
-不能在该路径伪造 claim/owner token。其旧派发容量按既有 Lease 期限处理。
+生产 T046 Worker 已注入 QueueKnowledgeWaitPort，以真实 exact claim/token 释放 Lease 并进入等待。
+重启后会验证已持久化的 Gap、route 和人工批准 Resolution，再恢复原 WorkItem；不伪造 claim，
+不改写 Task checkpoint。只有进入 Worker 的 Task 才移交旧派发容量，详见
+[T046 运维说明](t046-worker-operations.md)。
 
 ## 存量数据处置
 

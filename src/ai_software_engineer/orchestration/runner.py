@@ -41,6 +41,7 @@ from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.domain.task import Task, TaskId
 from ai_software_engineer.orchestration.context import RunContextBuilder
 from ai_software_engineer.orchestration.state_machine import build_event
+from ai_software_engineer.orchestration.steps import BoundedRunControl
 from ai_software_engineer.store import TaskRepository
 
 Clock = Callable[[], datetime]
@@ -147,9 +148,11 @@ class SerialOrchestrator:
         identities: OrchestrationIdentityFactory | None = None,
         clock: Clock | None = None,
         transition_gate: DeliveryTransitionGate | None = None,
+        execution_control: BoundedRunControl | None = None,
     ) -> None:
         self._repository = repository
         self._transition_gate = transition_gate
+        self.execution_control = execution_control
         self._artifact_store = artifact_store
         self._context_builder = context_builder
         self._agent_adapter = agent_adapter
@@ -326,6 +329,10 @@ class SerialOrchestrator:
         expected_supersedes: ArtifactId | None = None,
         expected_supersedes_by_kind: Mapping[ArtifactKind, ArtifactId | None] | None = None,
     ) -> _CompletedRun:
+        if self.execution_control is not None:
+            self.execution_control.before_run(
+                task, role, attempt, candidate_revision or task.base_ref
+            )
         definition = self._definitions[role]
         context = self._context_builder.build(
             task,
@@ -369,6 +376,7 @@ class SerialOrchestrator:
             ),
         )
         result = self._agent_adapter.run(request)
+        self._guard_write()
         self._validate_result_identity(request, result)
         if result.status is not AgentRunStatus.SUCCEEDED or result.artifact is None:
             raise AgentRunFailed(result)
@@ -413,6 +421,7 @@ class SerialOrchestrator:
                 )
             )
         sealed = seal_artifact(result.artifact, validated_at=self._clock())
+        self._guard_write()
         reference = self._artifact_store.put(sealed)
         persisted = self._artifact_store.get(reference.artifact_id)
         return _CompletedRun(
@@ -431,6 +440,7 @@ class SerialOrchestrator:
         attempt: int,
         artifact_ids: tuple[ArtifactId, ...] = (),
     ) -> tuple[Task, EventId]:
+        self._guard_write()
         if self._transition_gate is not None:
             self._transition_gate.before_transition(task, to_status, artifact_ids)
         event_id = self._identities.new_event_id(
@@ -449,8 +459,13 @@ class SerialOrchestrator:
             attempt=attempt,
             occurred_at=self._clock(),
         )
+        self._guard_write()
         self._repository.append_event(event)
         return self._repository.get(task.id), event_id
+
+    def _guard_write(self) -> None:
+        if self.execution_control is not None:
+            self.execution_control.before_write()
 
     def _validate_configuration(self) -> None:
         expected_roles = set(AgentRole)

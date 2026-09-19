@@ -6,16 +6,19 @@ import hashlib
 import json
 import os
 import re
+import signal
 import subprocess
 import tempfile
 import time
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
 
 from pydantic import TypeAdapter, ValidationError
 
+from ai_software_engineer.agents.execution import ExecutionGuard, execution_scope
 from ai_software_engineer.agents.json_schema import strict_output_schema
 from ai_software_engineer.agents.models import (
     AgentErrorCode,
@@ -122,6 +125,9 @@ class CodexCommandRunner(Protocol):
 class SubprocessCodexCommandRunner:
     """Execute Codex without a shell and bound execution time."""
 
+    def __init__(self, execution_guard: ExecutionGuard | None = None) -> None:
+        self._execution_guard = execution_guard
+
     def run(
         self,
         argv: tuple[str, ...],
@@ -131,6 +137,10 @@ class SubprocessCodexCommandRunner:
         stdin: str,
         timeout_seconds: float,
     ) -> CodexInvocationResult:
+        if self._execution_guard is not None:
+            return self._run_owned(
+                argv, cwd=cwd, environment=environment, stdin=stdin, timeout_seconds=timeout_seconds
+            )
         try:
             completed = subprocess.run(
                 argv,
@@ -157,6 +167,65 @@ class SubprocessCodexCommandRunner:
             stderr=_bounded(completed.stderr),
         )
 
+    def _run_owned(
+        self,
+        argv: tuple[str, ...],
+        *,
+        cwd: Path,
+        environment: Mapping[str, str],
+        stdin: str,
+        timeout_seconds: float,
+    ) -> CodexInvocationResult:
+        guard = self._execution_guard
+        assert guard is not None
+        guard.check()
+        started = time.monotonic()
+        # The child inherits the Task lock. Even if the host is killed, another
+        # Worker cannot reuse this worktree while the executor still owns it.
+        try:
+            process = subprocess.Popen(
+                argv,
+                cwd=cwd,
+                env=dict(environment),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True,
+                pass_fds=guard.inherited_fds,
+            )
+        except OSError as error:
+            raise CodexCliError("Codex CLI process could not start") from error
+
+        def stop() -> tuple[str, str]:
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGTERM)
+            try:
+                return process.communicate(timeout=1)
+            except subprocess.TimeoutExpired:
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                return process.communicate()
+
+        first_input: str | None = stdin
+        try:
+            while True:
+                guard.check()
+                if time.monotonic() - started >= timeout_seconds:
+                    stdout, stderr = stop()
+                    return CodexInvocationResult(-1, _bounded(stdout), _bounded(stderr), True)
+                try:
+                    stdout, stderr = process.communicate(first_input, timeout=0.2)
+                    guard.check()
+                    return CodexInvocationResult(
+                        process.returncode, _bounded(stdout), _bounded(stderr)
+                    )
+                except subprocess.TimeoutExpired:
+                    first_input = None
+        except BaseException:
+            stop()
+            raise
+
 
 class CodexCliAgentAdapter:
     """Run one role in a fixed worktree, then verify Git and Artifact facts."""
@@ -175,6 +244,7 @@ class CodexCliAgentAdapter:
         runner: CodexCommandRunner | None = None,
         initial_workspace_admission: InitialWorkspaceAdmission | None = None,
         candidate_commit_skill: CandidateCommitSkill | None = None,
+        execution_guard: ExecutionGuard | None = None,
     ) -> None:
         root = Path(workspace_root).expanduser().resolve(strict=False)
         if not root.is_dir() or root.is_symlink():
@@ -197,7 +267,8 @@ class CodexCliAgentAdapter:
         self._executable = executable
         self._reasoning_effort = reasoning_effort
         self._environment = _filtered_environment(environment or os.environ)
-        self._runner = runner or SubprocessCodexCommandRunner()
+        self._execution_guard = execution_guard
+        self._runner = runner or SubprocessCodexCommandRunner(execution_guard)
         self._initial_admission = initial_workspace_admission
         self._initial_admission_consumed = False
         self._candidate_commit = candidate_commit_skill or GitCandidateCommitSkill(
@@ -394,8 +465,9 @@ class CodexCliAgentAdapter:
             )
         artifact = _normalize_producer(artifact, request, self._agent_id, self._agent_version)
         try:
-            artifact = self._finalize_coder_candidate(request, initial_head, artifact)
-            self._validate_git_result(request, initial_head, artifact)
+            with execution_scope(self._execution_guard):
+                artifact = self._finalize_coder_candidate(request, initial_head, artifact)
+                self._validate_git_result(request, initial_head, artifact)
         except WorkspacePolicyError:
             raise
         except ValueError as error:

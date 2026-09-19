@@ -14,7 +14,7 @@ from typer.testing import CliRunner
 from ai_software_engineer.agents import StructuredModelClient, StructuredModelResult
 from ai_software_engineer.cli import app
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
-from ai_software_engineer.domain import TeamRole
+from ai_software_engineer.domain import AgentRole, TeamRole, WorkItemStatus
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
     DeliveryCheckpointStale,
@@ -276,6 +276,11 @@ def test_joint_cli_to_candidates(
     assert checkpoint.integration is not None
     assert (checkpoint.integration.checks[0].returncode != 0) == fail_integration
     for child in checkpoint.children:
+        assert child.checkpoint.task_id is not None
+        steps = host.work_queue.items_for_task(child.checkpoint.task_id)
+        assert [step.role for step in steps] == [AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER]
+        assert all(step.status is WorkItemStatus.CLOSED for step in steps)
+        assert len(host.work_queue.accepted(child.checkpoint.task_id)) == 3
         root = Path(child.checkpoint.repository_root)
         assert child.checkpoint.candidate_revision
         assert (root / "hello.txt").read_text() == "hello\n"

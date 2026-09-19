@@ -22,7 +22,7 @@ from ai_software_engineer.agents import AgentRequest, AgentResult, StructuredMod
 from ai_software_engineer.cli import app
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
 from ai_software_engineer.domain import AgentProfile
-from ai_software_engineer.domain.enums import AgentRole, TeamRole
+from ai_software_engineer.domain.enums import AgentRole, TeamRole, WorkItemStatus
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
     ReplyToProduct,
@@ -603,6 +603,15 @@ def test_real_inflight_joint_and_terminal_reads(
         current = next(t for t in snapshot.tasks if t.task_id == request.task_id)
         assert sum(a.current_stage for a in current.assignments) == 1
         assert next(a.role for a in current.assignments if a.current_stage) == request.role
+        (executing,) = tuple(
+            step for step in current.role_queue if step.status is WorkItemStatus.RUNNING
+        )
+        assert executing.role is request.role
+        assert executing.lease_liveness == "LEASE_VALID"
+        assert executing.heartbeat_at is not None and executing.lease_expires_at is not None
+        assert all(
+            step.status is WorkItemStatus.CLOSED or step is executing for step in current.role_queue
+        )
         assert current.scope.root in tuple(map(str, projects))
         assert current.execution_liveness == "UNKNOWN"
         assert len(snapshot.requests) >= 1
@@ -652,6 +661,8 @@ def test_real_inflight_joint_and_terminal_reads(
     assert all(len(a.history_delivery_ids) == 2 for a in upstream_agents)
     assert all(t.candidate_revision and len(t.assignments) == 3 for t in final.tasks)
     assert all(t.timeline and t.documents for t in final.tasks)
+    assert all(len(t.role_queue) == 3 for t in final.tasks)
+    assert all(step.status is WorkItemStatus.CLOSED for t in final.tasks for step in t.role_queue)
     assert all(len(t.runs) == 3 and all(r.model == "gpt-5.5" for r in t.runs) for t in final.tasks)
     assert all(len(r.scopes) == 2 and len(r.documents) == 4 for r in final.requests)
 

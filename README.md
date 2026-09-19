@@ -21,8 +21,8 @@ Repository 目录和 Requirement 交付事实保持隔离。
 4. **Task 内串行，组织层有界调度**：每个 Task 仍按 `Coder → QA → Reviewer` 串行；组织可以在
    容量约束下分配多个相互隔离 Task，不引入单 Task 复杂 DAG、共享会话或外部分布式队列。
    T046 提供 MySQL PersistentWorkQueue、确定性 Dispatcher tick 和 owner-fenced Lease 生命周期；
-   一次队列项只代表一个可执行角色 Run。当前 `ase request` 兼容入口仍使用串行 RuntimeSession，
-   尚未切换为逐角色队列 Worker。
+   一次队列项只代表一个可执行角色 Run。生产 `ase request`/Console 由单 Worker Supervisor
+   逐角色领取并调用 `RuntimeSession.run_step`；独立 Worker fleet 不在本轮范围。
 
 ## MVP 边界
 
@@ -64,8 +64,8 @@ Designer 形成技术方案，Planner 处理复杂计划，Coder、QA、Reviewer
 
 下图是当前控制平面边界。浏览器只提交 typed intent；Web Console 先把操作写入 Team sidecar，
 再由后台 Manager 执行，因此刷新或关闭网页不会重复或取消已接纳的工作。当前生产 request 路径由
-Manager 编排上游阶段，并通过 RuntimeSession 串行推进仓库 Task。T046 队列与 Dispatcher 已具备
-独立的领取、心跳、等待和过期恢复契约；把该入口迁移成逐角色 Worker 仍是后续集成工作。
+Manager 编排上游阶段，通过 T046 队列逐角色领取并串行推进仓库 Task。Worker 持续续约、校验
+结果并发布下一角色；CLI 仍同步等待，Console 仍由现有后台 Operation 监督，不新增常驻模型循环。
 
 ```mermaid
 flowchart TB
@@ -119,12 +119,14 @@ flowchart TB
     STOP --> HUMAN
     VIEW --> HUMAN
 
-    subgraph QUEUE_INFRA["T046 已有基础设施：request 入口尚未接入逐角色 Worker"]
+    subgraph QUEUE_INFRA["T046 生产逐角色执行边界"]
         QUEUE[("MySQL PersistentWorkQueue")] --> DISPATCHER["Dispatcher 有界 tick"]
         DISPATCHER --> CLAIM["原子 Assignment / Lease / ModelSelection"]
-        CLAIM --> WORKER["Worker seam<br/>owner-fenced 启动、心跳、结果"]
+        CLAIM --> WORKER["Worker<br/>owner-fenced 启动、心跳、结果"]
         WORKER --> QUEUE
     end
+    ORCH --> QUEUE
+    WORKER --> FACTS
 ```
 
 模型路由由“可用模型目录 + 每个 Agent 的有序策略”组成。Manager、Product、Designer、Planner、
@@ -187,7 +189,7 @@ Run/Task 接续。
 
 ### 持久队列的 Lease 生命周期
 
-以下是 T046 已实现并独立验证的队列契约，不表示上面的 request 流程已完成 Worker 迁移。
+以下契约已接入生产 request/Console 的 Coder、QA、Reviewer 执行链。
 队列只发布当前可执行角色，不提前占用 QA/Reviewer；Task 交付状态与 WorkItem 调度状态相互独立。
 
 ```mermaid
@@ -212,6 +214,11 @@ stateDiagram-v2
 启动、续约、完成、等待或重试。数据库只保存 owner token 的 SHA-256。等待会立即释放容量；过期
 Lease 被标记为 EXPIRED，原 WorkItem 增加 `dispatch_sequence` 后进入可审计的延迟重排。关闭当前
 WorkItem 与发布下一角色 WorkItem 在同一事务中完成，重复的相同 completion 可安全重放。
+
+重启或租约丢失会保留 checkpoint 和 worktree。旧进程退出、租约过期后，在平台点击“继续交付”；
+若本次只完成过期回收，可在短暂退避后再次继续。已接受的 Artifact 不重复调用模型，未提交修改仍受
+原生恢复审批约束；独立候选复核保留已有 reservation 流程，不伪造为普通交付 Run。
+部署、存量数据与回滚步骤见 [T046 运维说明](docs/t046-worker-operations.md)。
 
 ## 项目结构
 
@@ -742,7 +749,7 @@ MySQL 集成测试需设置 `ASE_TEST_MYSQL_DSN`，并且必须指向名称为 `
 | M9 Production Team Host | 完成命令级自动装配、MySQL 存储、配置驱动的模型路由与隔离交付；Coder 支持有界 checkpoint/续跑，真实模型验收需另行执行 |
 | M10 知识与联合交付 | Team 通用知识、Project 专属知识按需加载；Requirement 先准备后讨论；多 Repository 独立交付、联合候选验收与中断恢复 |
 | M11 持续团队与候选提交 | 七个 Team 级长期成员；显式 CandidateCommit Skill；CoderProgress Artifact；可重启的有界 Coder 续跑循环 |
-| M12 持久工作队列 | MySQL Run 级 WorkItem、确定性 Dispatcher tick、原子 Assignment/Lease/ModelSelection、owner-fenced 心跳/完成/等待/重试/过期回收；`ase request` 兼容入口仍是串行 RuntimeSession，逐角色 Worker 集成尚未完成 |
+| M12 持久工作队列 | 生产 request/Console 已接入单 Worker 的逐角色领取、心跳、结果 receipt、容量移交、知识等待和过期恢复；保持 Task 串行，独立 Worker fleet 与跨 Task 并发部署另行验收 |
 | M13 候选复核恢复 | 对已有 Coder candidate 提供 `verify-propose / inspect / approve / run`；使用独立 QA/Reviewer allocation、Lease 和 worktree，保留原失败 Task 与联合需求历史，不自动 merge/push/deploy |
 | M14 统一恢复与自动修复 | `request resume` 统一接管现有持久化阶段；候选复核可由同一入口批准和续跑；QA FAIL/Review REJECT 创建确定性修复 Task 并重新走 Coder→QA→Reviewer；看板显示验证与修复工作；终态 Task 可零调用补写 Delivery checkpoint |
 | M15 Web 交付控制台 | 浏览器完成 Project 选择、Requirement 创建、Product 对话与批准、统一继续/精确恢复计划批准和候选领取；操作先写入 Team sidecar，再由后台 Manager 执行，页面刷新不丢单；CLI 降为运维和 break-glass 入口 |

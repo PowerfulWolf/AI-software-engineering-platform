@@ -84,6 +84,13 @@ class CommandExecutor(Protocol):
     ) -> CommandResult: ...
 
 
+class CommandExecutionGuard(Protocol):
+    @property
+    def inherited_fds(self) -> tuple[int, ...]: ...
+
+    def check(self) -> None: ...
+
+
 class SubprocessCommandExecutor:
     """Execute one command in a fixed worktree with policy and environment guards."""
 
@@ -97,12 +104,14 @@ class SubprocessCommandExecutor:
         environment_allowlist: tuple[str, ...] = _DEFAULT_ENVIRONMENT_ALLOWLIST,
         default_timeout_seconds: float = 600.0,
         max_output_bytes: int = 1_000_000,
+        execution_guard: CommandExecutionGuard | None = None,
     ) -> None:
         settings = CommandExecutorSettings(
             environment_allowlist=environment_allowlist,
             default_timeout_seconds=default_timeout_seconds,
             max_output_bytes=max_output_bytes,
         )
+        self._execution_guard = execution_guard
         self._workspace_root = Path(workspace_root).resolve()
         self._policy = WorkspacePolicy(
             self._workspace_root,
@@ -121,6 +130,8 @@ class SubprocessCommandExecutor:
         timeout_seconds: float | None = None,
     ) -> CommandResult:
         """Authorize and execute argv without invoking a shell or inheriting secrets."""
+        if self._execution_guard is not None:
+            self._execution_guard.check()
         authorized = self._policy.authorize_command(arguments)
         timeout = (
             self._default_timeout_seconds
@@ -141,6 +152,7 @@ class SubprocessCommandExecutor:
                 stderr=subprocess.PIPE,
                 shell=False,
                 start_new_session=True,
+                pass_fds=self._execution_guard.inherited_fds if self._execution_guard else (),
             )
             if process.stdout is None or process.stderr is None:
                 raise CommandExecutionError("command output pipes were not created")
@@ -162,7 +174,20 @@ class SubprocessCommandExecutor:
             )
             for thread in drain_threads:
                 thread.start()
-            process.wait(timeout=timeout)
+            if self._execution_guard is None:
+                process.wait(timeout=timeout)
+            else:
+                while True:
+                    self._execution_guard.check()
+                    remaining = timeout - (time.monotonic() - started)
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired(authorized, timeout)
+                    try:
+                        process.wait(timeout=min(0.2, remaining))
+                        self._execution_guard.check()
+                        break
+                    except subprocess.TimeoutExpired:
+                        continue
         except subprocess.TimeoutExpired as error:
             duration_ms = _duration_ms(started)
             if process is not None:
@@ -171,7 +196,15 @@ class SubprocessCommandExecutor:
                 _join_drain_threads(drain_threads)
             raise CommandTimedOut(authorized, duration_ms) from error
         except OSError as error:
+            if process is not None:
+                _terminate_process_group(process)
             raise CommandExecutionError("command could not start") from error
+        except BaseException:
+            if process is not None:
+                _terminate_process_group(process)
+            if drain_threads is not None:
+                _join_drain_threads(drain_threads)
+            raise
 
         if collectors is None or drain_threads is None:
             raise CommandExecutionError("command output capture was not initialized")

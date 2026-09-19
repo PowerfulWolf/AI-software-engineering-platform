@@ -1017,6 +1017,21 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   assert.equal(get("detail").className, "task-detail-modal");
   assert.match(text(get("detail")), /任务详情/);
   assert.match(text(get("detail")), /成员与分配模型/);
+  vm.runInContext(`
+    taskById("d1").role_queue = [{
+      work_item_id: "work_ui_coder", role: "coder", attempt: 1,
+      status: "RUNNING", lease_liveness: "LEASE_VALID",
+      heartbeat_at: "2026-09-05T01:00:00Z"
+    }];
+    renderDetail();
+  `, context);
+  assert.match(text(get("detail")), /角色执行队列/);
+  assert.match(text(get("detail")), /实现 · 第 1 次 · 执行中 · 租约有效/);
+  assert.match(text(get("detail")), /最近心跳/);
+  assert.equal(vm.runInContext(`taskGroup({
+    status: "IMPLEMENTING", role_queue: [{status: "WAITING_HUMAN"}]
+  })`, context), "blocked");
+  vm.runInContext('taskById("d1").role_queue = [];', context);
   descend(get("detail")).find(
     (node) => node.tag === "button" && node.textContent === "关闭",
   ).events.click();

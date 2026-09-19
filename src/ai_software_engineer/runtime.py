@@ -18,7 +18,7 @@ from ai_software_engineer.agents import (
     OpenAICompatibleAgentAdapter,
     StoredContextResolver,
 )
-from ai_software_engineer.artifacts import FileArtifactStore
+from ai_software_engineer.artifacts import ArtifactStore, FileArtifactStore
 from ai_software_engineer.context import ContextBudget, ContextSource, FileContextStore
 from ai_software_engineer.domain import (
     AgentDefinition,
@@ -47,7 +47,13 @@ from ai_software_engineer.orchestration import (
 )
 from ai_software_engineer.orchestration.context import RunContextBuilder
 from ai_software_engineer.orchestration.runner import DeliveryTransitionGate
+from ai_software_engineer.orchestration.steps import (
+    BoundedRunControl,
+    RoleRunBoundary,
+    RoleRunPending,
+)
 from ai_software_engineer.store import MySqlTaskRepository, SqliteTaskRepository
+from ai_software_engineer.store.ports import TaskRepository
 
 EnvVarName = Annotated[str, StringConstraints(pattern=r"^[A-Z_][A-Z0-9_]{0,127}$")]
 
@@ -234,6 +240,7 @@ class RuntimeSession:
         context_builder: RunContextBuilder | None = None,
         transition_gate: DeliveryTransitionGate | None = None,
         human_action_recorder: RuntimeHumanActionRecorder | None = None,
+        artifact_store: ArtifactStore | None = None,
     ) -> None:
         self._config = config
         self._context_builder = context_builder
@@ -251,7 +258,7 @@ class RuntimeSession:
                 f"required API key environment variable is missing: {config.api_key_env}"
             )
         self._repository = _open_task_repository(config, variables)
-        self._artifact_store = FileArtifactStore(config.paths.artifacts)
+        self._artifact_store = artifact_store or FileArtifactStore(config.paths.artifacts)
         self._context_store = FileContextStore(config.paths.contexts)
         self._evaluation_store: EvaluationEventStore = FileEvaluationEventStore(
             config.paths.evaluation_events
@@ -282,6 +289,28 @@ class RuntimeSession:
         case_id: EvaluationCaseId | None = None,
     ) -> RuntimeRunResult:
         """Record a CaseStartedEvent and run the existing bounded serial orchestrator."""
+        return self._run_task(task_id, case_id=case_id)
+
+    def run_step(
+        self, task_id: TaskId, control: BoundedRunControl
+    ) -> RuntimeRunResult | RoleRunBoundary:
+        """Execute at most one permitted delivery role with unchanged verdict gates."""
+        try:
+            return self._run_task(task_id, case_id=None, control=control)
+        except RoleRunPending as pending:
+            return pending.boundary
+
+    @property
+    def task_repository(self) -> TaskRepository:
+        return self._repository
+
+    def _run_task(
+        self,
+        task_id: TaskId,
+        *,
+        case_id: EvaluationCaseId | None,
+        control: BoundedRunControl | None = None,
+    ) -> RuntimeRunResult:
         task = self._repository.get(task_id)
         repository_root = Path(task.repository).expanduser().resolve(strict=False)
         if self._repository_root is not None and repository_root != self._repository_root:
@@ -326,6 +355,7 @@ class RuntimeSession:
             agent_adapter=instrumented,
             agent_definitions=self._agent_definitions,
             transition_gate=self._transition_gate,
+            execution_control=control,
         )
         return RuntimeRunResult(case_id=selected_case, result=runner.run_task(task.id))
 

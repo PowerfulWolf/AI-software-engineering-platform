@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 from pydantic import TypeAdapter
 
+from ai_software_engineer.agents.execution import ExecutionGuard, execution_scope
 from ai_software_engineer.agents.json_schema import strict_output_schema
 from ai_software_engineer.agents.models import (
     AgentErrorCode,
@@ -46,6 +47,7 @@ from ai_software_engineer.domain.artifact import (
     validate_artifact_payload,
 )
 from ai_software_engineer.domain.model import JsonValue, ReasoningEffort, WirePayload
+from ai_software_engineer.execution import SubprocessCommandExecutor
 from ai_software_engineer.git import (
     CandidateCommitError,
     CandidateCommitRequest,
@@ -88,6 +90,7 @@ class ResponsesAgentAdapter:
         max_turns: int = 40,
         max_tool_calls: int = 100,
         candidate_commit_skill: CandidateCommitSkill | None = None,
+        execution_guard: ExecutionGuard | None = None,
     ) -> None:
         root = Path(workspace_root).expanduser().resolve(strict=False)
         if not root.is_dir() or root.is_symlink():
@@ -102,6 +105,7 @@ class ResponsesAgentAdapter:
             raise ResponsesAgentConfigurationError("Responses reasoning effort is invalid")
         if not 1 <= max_turns <= 100 or not 1 <= max_tool_calls <= 500:
             raise ResponsesAgentConfigurationError("Responses loop bounds are invalid")
+        self._execution_guard = execution_guard
         self._workspace_root = root
         self._endpoint = _normalize_endpoint(endpoint)
         self._api_key = api_key
@@ -198,6 +202,11 @@ class ResponsesAgentAdapter:
             self._workspace_root,
             self._agent,
             run_id=request.run_id,
+            command_executor=SubprocessCommandExecutor(
+                self._workspace_root,
+                self._agent.permissions,
+                execution_guard=self._execution_guard,
+            ),
         )
         prompt = self._prompt_builder.build(request)
         input_items: list[WirePayload] = [
@@ -214,6 +223,8 @@ class ResponsesAgentAdapter:
         tool_calls = 0
         latest_usage: AgentUsage | None = None
         for turn in range(1, self._max_turns + 1):
+            if self._execution_guard is not None:
+                self._execution_guard.check()
             body = _request_body(
                 self._model,
                 input_items,
@@ -231,6 +242,8 @@ class ResponsesAgentAdapter:
                 body,
                 float(request.timeout_seconds),
             )
+            if self._execution_guard is not None:
+                self._execution_guard.check()
             if not 200 <= response.status_code < 300:
                 status, code, transient = _http_failure(response)
                 return _safe_failure(
@@ -259,7 +272,15 @@ class ResponsesAgentAdapter:
                         arguments,
                         operation_id=f"tool.responses.{turn:02d}.{tool_calls:03d}",
                     )
-                    tool_result = registry.execute(tool_request)
+                    if self._execution_guard is not None:
+                        self._execution_guard.check()
+                    if name == "write_file":
+                        with execution_scope(self._execution_guard):
+                            tool_result = registry.execute(tool_request)
+                    else:
+                        tool_result = registry.execute(tool_request)
+                    if self._execution_guard is not None:
+                        self._execution_guard.check()
                     outputs.append(
                         {
                             "type": "function_call_output",
@@ -278,19 +299,20 @@ class ResponsesAgentAdapter:
             if artifact.kind not in ROLE_OUTPUTS[request.role]:
                 raise ValueError("provider Artifact is outside the role contract")
             artifact = _normalize_producer(artifact, request, self._agent)
-            artifact = _finalize_coder_candidate(
-                request,
-                initial_head,
-                artifact,
-                self._candidate_commit,
-            )
-            _validate_git_result(
-                self._workspace_root,
-                request,
-                initial_head,
-                artifact,
-                self._candidate_commit,
-            )
+            with execution_scope(self._execution_guard):
+                artifact = _finalize_coder_candidate(
+                    request,
+                    initial_head,
+                    artifact,
+                    self._candidate_commit,
+                )
+                _validate_git_result(
+                    self._workspace_root,
+                    request,
+                    initial_head,
+                    artifact,
+                    self._candidate_commit,
+                )
             return AgentResult(
                 run_id=request.run_id,
                 task_id=request.task_id,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Never
 
@@ -47,11 +47,13 @@ from ai_software_engineer.domain import (
     ReviewReportContent,
     ReviewVerdict,
     TeamRole,
+    WorkItemStatus,
 )
 from ai_software_engineer.manager import production_backend
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
     DeliveryBackendFailure,
+    ResumeProjectDelivery,
     StartProjectDelivery,
 )
 from ai_software_engineer.manager.delivery_checkpoint import (
@@ -67,6 +69,7 @@ from ai_software_engineer.manager.production_host import TeamHost
 from ai_software_engineer.orchestration import BlockedResult, RetryDeliveryResult
 from ai_software_engineer.role_workspace import RoleWorktreeBinding
 from ai_software_engineer.runtime_workspace import FileTeamWorkforceStore
+from ai_software_engineer.work_queue.ports import QueueLeaseLost
 
 
 class _ScriptedStructuredClient(StructuredModelClient):
@@ -397,12 +400,13 @@ def _git_output(*arguments: str, cwd: Path) -> str:
 
 
 @pytest.mark.mysql
-@pytest.mark.parametrize("input_limit", [64_000, 1])
+@pytest.mark.parametrize("input_limit,lose_lease", [(64_000, False), (1, False), (64_000, True)])
 def test_host_records_isolated_delivery_without_polluting_project(
     tmp_path: Path,
     mysql_dsn: str,
     monkeypatch: pytest.MonkeyPatch,
     input_limit: int,
+    lose_lease: bool,
 ) -> None:
     monkeypatch.setattr(
         production_backend,
@@ -459,6 +463,31 @@ def test_host_records_isolated_delivery_without_polluting_project(
     assert new_policy.id == old_policy.id
     assert new_policy.version != old_policy.version
     assert backend._workforce()[1] == new_policy
+    run_adapter = _ScriptedDeliveryAdapter.run
+    invoked: list[AgentRole] = []
+    interrupted = False
+
+    def observe_claim(adapter: _ScriptedDeliveryAdapter, request: AgentRequest) -> AgentResult:
+        nonlocal interrupted
+        (lease,) = tuple(
+            lease
+            for lease in host.work_queue.list_active_leases(now=datetime.now(UTC))
+            if lease.task_id == request.task_id
+        )
+        assert lease.agent_id == adapter._definition.id
+        (active,) = tuple(
+            item
+            for item in host.work_queue.items_for_task(request.task_id)
+            if item.status is WorkItemStatus.RUNNING
+        )
+        assert active.role is request.role and active.attempt == request.attempt
+        if lose_lease and not interrupted:
+            interrupted = True
+            raise QueueLeaseLost("fixture lost execution ownership")
+        invoked.append(request.role)
+        return run_adapter(adapter, request)
+
+    monkeypatch.setattr(_ScriptedDeliveryAdapter, "run", observe_claim)
     service = host.project_entry()
     started = service.start(
         StartProjectDelivery(
@@ -474,6 +503,19 @@ def test_host_records_isolated_delivery_without_polluting_project(
             approval_reference="test-approval",
         )
     )
+
+    if lose_lease:
+        assert approved.checkpoint.stage is DeliveryStage.DELIVERING
+        assert approved.checkpoint.failure_code is None
+        (lease,) = host.work_queue.list_active_leases(now=datetime.now(UTC))
+        (reclaimed,) = host.work_queue.reclaim_expired(
+            now=lease.expires_at,
+            retry_at=lease.expires_at + timedelta(seconds=1),
+        )
+        host.work_queue.make_ready(reclaimed.id, now=lease.expires_at + timedelta(seconds=2))
+        approved = service.resume(
+            ResumeProjectDelivery(delivery_id=approved.checkpoint.delivery_id)
+        )
 
     assert workforce.get_policy(legacy_policy.id) == legacy_policy
     assert workforce.get_policy(new_policy.id, version=new_policy.version) == new_policy
@@ -494,6 +536,15 @@ def test_host_records_isolated_delivery_without_polluting_project(
     assert approved.checkpoint.task_id is not None
     assert approved.checkpoint.candidate_revision is not None
     assert isinstance(approved.delivery, RetryDeliveryResult)
+    assert invoked == [AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER]
+    assert len(host.work_queue.accepted(approved.checkpoint.task_id)) == 3
+    assert all(
+        item.status is WorkItemStatus.CLOSED
+        for item in host.work_queue.items_for_task(
+            approved.checkpoint.task_id,
+        )
+    )
+    assert not host.work_queue.list_active_leases(now=datetime.now(UTC))
     context_store = FileContextStore(
         project_workspace.root
         / "repositories"
