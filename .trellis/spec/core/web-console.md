@@ -671,6 +671,27 @@ GET  /api/v1/admin/status
   host on the server-selected effective port; an `ASE_CONSOLE_PORT` override remains authoritative and
   is reflected by that port. The lifecycle response never supplies a redirect host. Failure never rolls
   back saved settings and never records raw subprocess output or secrets in the lifecycle response.
+- Configuration apply feedback is transient UI state. With no locally pending request, a historical
+  `SUCCEEDED` response must not be replayed as a new success on navigation. A matching pending apply
+  still needs `SUCCEEDED` plus `restart_required=false`; then refresh `/api/v1/console`, invalidate
+  the old dependency snapshot, and show a success notice for at most five seconds (or until dismissed).
+  The save dialog retains the acknowledged result until closed, never reverting to stale restart prose.
+- Console metadata and saved/process settings are independent of the Team projection and Operation
+  list. `refreshConsoleInfo` validates `/api/v1/console`; an Operation-list failure cannot turn a ready
+  runtime into setup mode, but unavailable Operations still disable delivery commands. Every lightweight
+  refresh reads system facts even if `/api/v1/team` fails; Settings/Status must also render when there
+  has never been a successful Team snapshot. Missing Team data remains explicitly unavailable.
+- `refreshSettingsSnapshot` updates saved/process facts without replacing the editable config or
+  write-only runtime-variable drafts. Expiring a Settings notice must not re-render another page's
+  Project/Requirement form or confirmation dialog. When delivery facts become unavailable, update
+  only marked delivery controls in place. Busy-state changes use `setDeliveryControlDisabled` to
+  update both the visible control and its suspended state: reconnecting before an in-flight POST
+  finishes must keep it busy, while a completed failure must allow retry after reconnecting.
+  `submitOperation` and Project submission recheck the current gate before any POST.
+  Status reloads dependencies on entry, manual refresh, confirmed
+  apply or observed readiness/settings change; unchanged five-second polling does not probe MySQL.
+  Only `restart_required=true` justifies restart guidance. `SETUP_REQUIRED` without a config difference
+  is reported as an unavailable/missing dependency, and an unknown Console read never implies ready.
 - Every submitted Settings save has an explicit modal result. A successful PUT opens a success dialog
   that includes “应用配置” only when `restart_required=true`; the Settings page does not duplicate
   that action or show a persistent “尚未应用” notice; the read-only restart badge remains sufficient.
@@ -1196,3 +1217,29 @@ renderProductDiscussion({ dialogue, composerDisabled: stage === "PRODUCT_DISCOVE
 5. **Knowledge capture**: this section, the recovery/error matrix above and
    `multi-directory-delivery.md` form the executable contract. This repository has no
    `src/templates/markdown/spec/` mirror to synchronize.
+
+## Regression: stale readiness after a successful restart (2026-09-19)
+
+The browser replayed durable apply success on every Settings entry and kept the notice indefinitely.
+Meanwhile it refreshed Console readiness only after a successful Team projection, and retained the
+old dependency snapshot. These independent facts could therefore show conflicting messages.
+
+| Case | Required UI result |
+|---|---|
+| Good: pending apply succeeds; config effective and Console ready | clear setup warning immediately; bounded success notice |
+| Base: revisit Settings with historical SUCCEEDED and no pending request | effective badge; no replayed success |
+| Bad: Team/Operation query fails while Console metadata is ready | preserve accurate readiness; no invented setup warning or delivery authority |
+| Manual restart with unsaved browser edits | refresh restart badge, preserve config/password drafts |
+| Runtime SETUP_REQUIRED but restart_required=false | show unavailable dependencies, no instruction to restart again |
+| Console request fails | readiness unknown; delivery controls unavailable |
+| Initial Team snapshot fails | Settings/Status remain accessible with no fabricated Team records |
+| Success notice expires after navigation | retain unrelated form drafts and confirmation nodes |
+| Read failures while a form remains open | disable delivery in place and block direct submissions; preserve draft |
+| POST fails during read outage, then reads recover | keep disabled during outage; enable retry after recovery |
+| Reads recover while POST is still in flight | retain busy state until POST completes; allow retry after failure |
+
+Regression suite: `node --test tests/team_view/*.test.cjs`, including the independent readiness
+harness against actual `app.js`. No Schema or persistent lifecycle state changes are required.
+Existing Requirements, Tasks, Operations, approvals and queues remain unchanged; load the repaired
+frontend and refresh the browser. A successful prior restart does not need repeating for these
+client-only changes. Rollback restores the previous frontend asset and refreshes the page.

@@ -4,6 +4,7 @@ let page = "team";
 let selected = null;
 let refreshing = false;
 let operations = [];
+let operationsAvailable = false;
 let consoleAvailable = null;
 let consoleTeamId = null;
 let consoleDeliveryReady = null;
@@ -201,11 +202,11 @@ function updatePageContext() {
   const title = document.getElementById("scope-title");
   const projectLabel = document.getElementById("project-context-label");
   const contexts = {
-    team: ["Team 级", snapshot.team_name, "工作负载筛选"],
+    team: ["Team 级", snapshot?.team_name || "Team 记录暂不可用", "工作负载筛选"],
     requests: ["Project 级", projectName(), "当前 Project"],
     knowledge:
       knowledgeScope === "team"
-        ? ["Team 知识", snapshot.team_name, ""]
+        ? ["Team 知识", snapshot?.team_name || "Team 记录暂不可用", ""]
         : ["Project 知识", projectName(), ""],
     settings: ["平台级", "当前 Team Host", ""],
     status: ["平台级", "当前 Team Host", ""],
@@ -227,6 +228,34 @@ const button = (text, action, className = "link") => {
   n.addEventListener("click", action);
   return n;
 };
+const deliveryButton = (text, action, className = "link") => {
+  const control = button(text, (...args) => {
+    if (canControlCurrentTeam()) return action(...args);
+  }, className);
+  control.setAttribute("data-delivery-control", "true");
+  return control;
+};
+const suspendedDeliveryControls = new WeakMap();
+function setDeliveryControlDisabled(control, disabled) {
+  const ready = canControlCurrentTeam();
+  if (ready) suspendedDeliveryControls.delete(control);
+  else suspendedDeliveryControls.set(control, Boolean(disabled));
+  control.disabled = Boolean(disabled) || !ready;
+}
+function syncDeliveryControls() {
+  const ready = canControlCurrentTeam();
+  document.getElementById("project-creator").hidden = page !== "requests" || !ready;
+  for (const control of document.querySelectorAll('[data-delivery-control="true"]')) {
+    if (!ready) {
+      if (!suspendedDeliveryControls.has(control))
+        suspendedDeliveryControls.set(control, Boolean(control.disabled));
+      control.disabled = true;
+    } else if (suspendedDeliveryControls.has(control)) {
+      control.disabled = suspendedDeliveryControls.get(control);
+      suspendedDeliveryControls.delete(control);
+    }
+  }
+}
 const time = (value) =>
   value ? new Date(value).toLocaleString() : "暂无活动记录";
 const badge = (status) =>
@@ -296,6 +325,7 @@ const latestApproval = (deliveryId, checkpoint) => {
 const operationKey = () => `browser-${Date.now()}-${++actionSerial}`;
 const canControlCurrentTeam = () =>
   consoleAvailable === true &&
+  operationsAvailable &&
   consoleDeliveryReady === true &&
   snapshot &&
   snapshot.team_id === consoleTeamId;
@@ -606,7 +636,7 @@ function recoveryApprovalBox(request, approval) {
         : "批准后平台只执行上方计划；页面会把精确计划身份安全地带回 Manager。",
       "muted",
     ),
-    button(
+    deliveryButton(
       approval.kind === "coder_scope" ? "批准文件范围" : "批准并继续",
       () =>
         submitOperation({
@@ -803,7 +833,9 @@ function renderComposer() {
       "知道了",
       () => {
         settingsSaveResult = null;
-        renderComposer();
+        if (configurationApplyResult?.kind === "success")
+          configurationApplyResult = null;
+        render();
       },
       success && !canApply ? "primary" : "",
     );
@@ -824,7 +856,10 @@ function renderComposer() {
         "p",
         success && result.restart_required && configurationApplyInFlight
           ? "配置已保存，正在重启并等待 Web Console 恢复连接。"
-          : applyResult?.message || result.message,
+          : applyResult?.message ||
+            (success && result.restart_required && settingsSnapshot?.restart_required === false
+              ? "配置已生效。"
+              : result.message),
         applyResult?.kind === "error" ? "operation-error" : "settings-result-message",
       ),
       actions,
@@ -835,6 +870,7 @@ function renderComposer() {
   }
   if (pendingConfirmation) {
     const confirmation = pendingConfirmation;
+    const deliveryConfirmation = page === "requests";
     const feedback = el("p", "", "form-feedback");
     const cancel = button("取消", () => {
       pendingConfirmation = null;
@@ -843,7 +879,8 @@ function renderComposer() {
     const proceed = button(
       confirmation.confirmText,
       async () => {
-        proceed.disabled = true;
+        if (deliveryConfirmation) setDeliveryControlDisabled(proceed, true);
+        else proceed.disabled = true;
         try {
           await confirmation.action();
           pendingConfirmation = null;
@@ -852,11 +889,13 @@ function renderComposer() {
           feedback.className = "form-feedback error";
           feedback.textContent =
             error instanceof Error ? error.message : "操作失败。";
-          proceed.disabled = false;
+          if (deliveryConfirmation) setDeliveryControlDisabled(proceed, false);
+          else proceed.disabled = false;
         }
       },
       "danger",
     );
+    if (deliveryConfirmation) proceed.setAttribute("data-delivery-control", "true");
     const actions = el("div", undefined, "modal-actions");
     actions.append(cancel, proceed);
     dialog.append(
@@ -1124,6 +1163,7 @@ function renderComposer() {
     name.required = true;
     const feedback = el("p", "", "form-feedback");
     const submit = el("button", "创建 Project", "primary");
+    submit.setAttribute("data-delivery-control", "true");
     submit.type = "submit";
     form.append(
       field(
@@ -1136,8 +1176,10 @@ function renderComposer() {
     );
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      submit.disabled = true;
+      setDeliveryControlDisabled(submit, true);
       try {
+        if (!canControlCurrentTeam())
+          throw new Error("交付控制状态暂不可用，请刷新后重试。");
         const created = await adminFetch("/api/v1/admin/projects", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1154,7 +1196,7 @@ function renderComposer() {
         feedback.className = "form-feedback error";
         feedback.textContent =
           error instanceof Error ? error.message : "Project 创建失败。";
-        submit.disabled = false;
+        setDeliveryControlDisabled(submit, false);
       }
     });
     dialog.append(
@@ -1251,6 +1293,7 @@ function renderComposer() {
     "primary",
   );
   submit.type = "submit";
+  submit.setAttribute("data-delivery-control", "true");
   form.append(
     field("需求名称", name),
     field(
@@ -1269,7 +1312,7 @@ function renderComposer() {
       feedback.className = "form-feedback error";
       return;
     }
-    submit.disabled = true;
+    setDeliveryControlDisabled(submit, true);
     feedback.className = "form-feedback";
     feedback.textContent = "Manager 正在接单…";
     const accepted = await submitOperation(
@@ -1299,7 +1342,7 @@ function renderComposer() {
     } else {
       feedback.textContent = "创建失败，请查看上方操作状态后重试。";
       feedback.className = "form-feedback error";
-      submit.disabled = false;
+      setDeliveryControlDisabled(submit, false);
     }
   });
   dialog.append(
@@ -1331,6 +1374,8 @@ function confirmMutation(title, message, confirmText, action) {
 }
 async function submitOperation(intent) {
   try {
+    if (!canControlCurrentTeam())
+      throw new Error("交付控制状态暂不可用，请刷新后重试。");
     const response = await fetch("/api/v1/operations", {
       method: "POST",
       cache: "no-store",
@@ -1379,6 +1424,10 @@ function renderOperationStatus() {
         "operation-error",
       ),
     );
+    return;
+  }
+  if (!operationsAvailable) {
+    panel.append(el("div", "交付操作记录暂时无法读取；恢复连接后可继续操作。", "operation-error"));
     return;
   }
   if (consoleAvailable === true && consoleDeliveryReady === false) {
@@ -1838,7 +1887,7 @@ function requestOperation(panel, request, discussionSection) {
         "旧需求及讨论记录会继续保留，确认新需求创建成功后可以删除旧需求。",
         "muted",
       ),
-      button(
+      deliveryButton(
         "基于当前代码新建需求",
         () => {
           creatingProject = false;
@@ -1868,7 +1917,7 @@ function requestOperation(panel, request, discussionSection) {
         "请先阅读下方 ProductSpec。确认内容准确后批准；如果仍需调整，可在下方继续和 Product Agent 讨论。",
         "muted",
       ),
-      button(
+      deliveryButton(
         "批准 ProductSpec 并开始交付",
         () =>
           submitOperation({
@@ -2007,8 +2056,9 @@ function requestOperation(panel, request, discussionSection) {
     });
     renderScreenshots();
     const submit = el("button", submitLabel, "primary");
+    submit.setAttribute("data-delivery-control", "true");
     submit.type = request.stage === "PRODUCT_DISCOVERY" ? "button" : "submit";
-    submit.disabled = Boolean(running);
+    setDeliveryControlDisabled(submit, Boolean(running));
     const discussionField = el("div", undefined, "field discussion-field");
     discussionField.append(
       el("h3", discussionTitle),
@@ -2046,7 +2096,7 @@ function requestOperation(panel, request, discussionSection) {
         feedback.textContent = "请填写需求说明或添加至少一张截图。";
         return;
       }
-      submit.disabled = true;
+      setDeliveryControlDisabled(submit, true);
       feedback.className = "form-feedback";
       feedback.textContent = selectedScreenshots.length
         ? "正在保存截图…"
@@ -2081,12 +2131,12 @@ function requestOperation(panel, request, discussionSection) {
           screenshot_ids: uploaded,
         });
         if (accepted) revokeScreenshotPreviews();
-        else submit.disabled = false;
+        else setDeliveryControlDisabled(submit, false);
       } catch (error) {
         feedback.className = "form-feedback error";
         feedback.textContent =
           error instanceof Error ? error.message : "截图保存失败。";
-        submit.disabled = false;
+        setDeliveryControlDisabled(submit, false);
       }
     });
     appendDiscussionContent(form);
@@ -2095,7 +2145,7 @@ function requestOperation(panel, request, discussionSection) {
     !productDiscussionStages.has(request.stage) &&
     request.stage !== "DONE"
   ) {
-    const action = button(
+    const action = deliveryButton(
       "继续交付",
       () =>
         submitOperation({
@@ -2164,7 +2214,7 @@ function renderRequests(content) {
   );
   if (canControlCurrentTeam() && currentProjectId())
     actions.append(
-      button(
+      deliveryButton(
         "新建需求",
         () => {
           creatingProject = false;
@@ -2203,7 +2253,7 @@ function renderRequests(content) {
     );
     if (canControlCurrentTeam() && currentProjectId())
       n.append(
-        button(
+        deliveryButton(
           "新建第一个需求",
           () => {
             creatingProject = false;
@@ -2298,6 +2348,15 @@ function finishConfigurationApply(result) {
   configurationApplyInFlight = false;
   configurationApplyStartedAt = null;
   configurationApplyResult = result;
+  if (result.kind === "success") {
+    if (settingsSaveResult?.kind === "success")
+      settingsSaveResult.message = result.message;
+    setTimeout(() => {
+      if (configurationApplyResult !== result) return;
+      configurationApplyResult = null;
+      if (page === "settings") render();
+    }, 5000);
+  }
   persistConfigurationApplyPending(null);
   render();
 }
@@ -2372,8 +2431,9 @@ async function refreshConfigurationApply() {
         render();
         return;
       }
-      settingsDraft = structuredClone(saved.config);
-      normalizeAgentModelRoutes(settingsDraft);
+      await refreshConsoleInfo();
+      runtimeStatusSnapshot = null;
+      if (page === "status") await loadRuntimeStatus();
       finishConfigurationApply({
         kind: "success",
         message: "配置已应用，Web Console 已使用保存的运行配置重新启动。",
@@ -2394,7 +2454,6 @@ async function resumeConfigurationApply() {
       const state = await adminFetch("/api/v1/admin/settings/apply");
       if (
         state.status === "PENDING" ||
-        (state.status === "SUCCEEDED" && !settingsSnapshot?.restart_required) ||
         (state.status === "FAILED" && settingsSnapshot?.restart_required)
       ) {
         persistConfigurationApplyPending({
@@ -2487,6 +2546,7 @@ async function loadAdministration() {
   try {
     const settings = await adminFetch("/api/v1/admin/settings");
     settingsSnapshot = settings;
+    await refreshConsoleInfo();
     settingsDraft = structuredClone(settings.config);
     normalizeAgentModelRoutes(settingsDraft);
     runtimeVariablesDraft = {};
@@ -2517,9 +2577,9 @@ async function loadAdministration() {
     runtimeStatusError = null;
   }
 }
-async function loadRuntimeStatus() {
+async function loadRuntimeStatus(signal) {
   try {
-    runtimeStatusSnapshot = await adminFetch("/api/v1/admin/status");
+    runtimeStatusSnapshot = await adminFetch("/api/v1/admin/status", { signal });
     runtimeStatusError = null;
   } catch (error) {
     runtimeStatusSnapshot = null;
@@ -3764,7 +3824,7 @@ function renderProjectPicker(content) {
 }
 function renderProjectCreator(content) {
   content.append(
-    button(
+    deliveryButton(
       "新建 Project",
       () => {
         composing = false;
@@ -3782,11 +3842,11 @@ function renderSettings(content) {
   }
   if (administrationNotice?.page === "settings")
     content.append(el("div", administrationNotice.text, "admin-notice"));
-  if (consoleDeliveryReady !== true)
+  if (consoleDeliveryReady === false)
     content.append(
       el(
         "div",
-        "当前交付运行时尚未就绪；请检查下方配置，保存后按提示重启服务。",
+        "当前交付运行时尚未就绪；请检查下方配置和运行依赖。",
         "admin-notice",
       ),
     );
@@ -3799,8 +3859,19 @@ function renderSettings(content) {
       ),
     );
     content.append(applyNotice);
-  } else if (configurationApplyResult?.kind === "success") {
-    content.append(el("div", configurationApplyResult.message, "admin-notice"));
+  } else if (
+    !settingsSnapshot.restart_required && configurationApplyResult?.kind === "success"
+  ) {
+    const notice = el("div", undefined, "admin-notice");
+    notice.setAttribute("role", "status");
+    notice.append(
+      el("span", configurationApplyResult.message),
+      button("关闭配置提示", () => {
+        configurationApplyResult = null;
+        render();
+      }),
+    );
+    content.append(notice);
   }
   if (configurationApplyResult?.kind === "error")
     content.append(el("div", configurationApplyResult.message, "operation-error"));
@@ -3860,7 +3931,7 @@ function renderSettings(content) {
   save.type = "submit";
   const saveBar = el("div", undefined, "settings-save-bar");
   saveBar.append(
-    el("span", "保存运行配置后需要重启服务；知识选择不需要重启。", "muted"),
+    el("span", "运行配置有变更时，保存后按提示应用；知识选择即时生效。", "muted"),
     feedback,
     save,
   );
@@ -4401,6 +4472,7 @@ function renderStatus(content) {
   }
   const value = runtimeStatusSnapshot;
   const ready =
+    !value.restart_required &&
     value.delivery_runtime === "READY" &&
     value.database.connection === "CONNECTED" &&
     value.team_prepared;
@@ -4417,7 +4489,9 @@ function renderStatus(content) {
       "p",
       ready
         ? "数据库、Team workspace 与交付运行时均已就绪。"
-        : "请根据下方橙色状态处理配置或重启问题。",
+        : value.restart_required
+          ? "配置已保存但尚未加载到当前进程，请重启 Web Console。"
+          : "请根据下方状态处理尚未就绪的运行依赖。",
       "muted",
     ),
   );
@@ -4441,7 +4515,13 @@ function renderStatus(content) {
     el("h2", "运行依赖"),
     statusRow(
       "交付运行时",
-      value.delivery_runtime === "READY" ? "已就绪" : "待配置或重启",
+      value.delivery_runtime === "READY"
+        ? "已就绪"
+        : value.restart_required
+          ? "已保存 · 待重启"
+          : value.database.connection === "NOT_CONFIGURED"
+            ? "待配置"
+            : "暂不可用",
       value.delivery_runtime === "READY",
     ),
     statusRow(
@@ -4562,6 +4642,7 @@ function renderDetail() {
   panel.replaceChildren();
   panel.className = "";
   panel.hidden =
+    !snapshot ||
     (!selected && page !== "requests") ||
     (page === "requests" && !snapshot.requests.length);
   if (panel.hidden) return;
@@ -4594,7 +4675,7 @@ function renderDetail() {
   ) {
     if (item.stage === "READY_FOR_DISCUSSION")
       topActions.append(
-        button(
+        deliveryButton(
           "编辑需求",
           () => {
             creatingProject = false;
@@ -4608,7 +4689,7 @@ function renderDetail() {
       );
     if (item.stage === "BLOCKED")
       topActions.append(
-        button(
+        deliveryButton(
           "关闭需求",
           () =>
             confirmMutation(
@@ -4630,7 +4711,7 @@ function renderDetail() {
       );
     if (item.stage === "CLOSED")
       topActions.append(
-        button(
+        deliveryButton(
           "重新启动需求",
           () =>
             confirmMutation(
@@ -4655,7 +4736,7 @@ function renderDetail() {
       ["BLOCKED", "CLOSED"].includes(item.stage)
     )
       topActions.append(
-        button(
+        deliveryButton(
           "删除需求",
           () =>
             confirmMutation(
@@ -4746,7 +4827,7 @@ function renderDetail() {
                   body: JSON.stringify({gap_id: gap.gap_id, answer: content,
                     sources: [{uri: source.value.trim(), content, sha256}],
                     approval_reference: "local-console:" + gap.gap_id})});
-                card.replaceChildren(el("p", "解答已批准，原始证据保留。"), button("继续需求", () => submitOperation({
+                card.replaceChildren(el("p", "解答已批准，原始证据保留。"), deliveryButton("继续需求", () => submitOperation({
                   action: "CONTINUE_DELIVERY", project_id: item.project_id, delivery_id: item.id,
                 }), "primary"));
               } catch (error) {
@@ -4860,15 +4941,14 @@ function renderDetail() {
   panel.append(dialog);
 }
 function render() {
-  if (!snapshot) return;
   const expanded = new Set(
     [...document.querySelectorAll("details[open]")].map((n) => n.dataset.key),
   );
-  document.getElementById("team").textContent = snapshot.team_name;
+  document.getElementById("team").textContent = snapshot?.team_name || "Team 记录暂不可用";
   document.getElementById("main").dataset.page = page;
   const projects = document.getElementById("projects");
   projects.replaceChildren();
-  renderProjectPicker(projects);
+  if (snapshot) renderProjectPicker(projects);
   projects.hidden = !["team", "requests"].includes(page);
   document.getElementById("context-controls").hidden = projects.hidden;
   const projectCreator = document.getElementById("project-creator");
@@ -4881,7 +4961,9 @@ function render() {
   const content = document.getElementById("content");
   content.replaceChildren();
   content.className = "";
-  if (page === "team") renderTeam(content);
+  if (!snapshot && !["settings", "status"].includes(page))
+    content.append(el("div", "团队记录暂时无法读取；设置与平台状态仍可查看。", "operation-error"));
+  else if (page === "team") renderTeam(content);
   else if (page === "requests") renderRequests(content);
   else if (page === "knowledge") renderKnowledge(content);
   else if (page === "settings") renderSettings(content);
@@ -4889,6 +4971,7 @@ function render() {
   renderComposer();
   renderOperationStatus();
   renderDetail();
+  syncDeliveryControls();
   for (const node of document.querySelectorAll("details"))
     if (expanded.has(node.dataset.key)) node.open = true;
 }
@@ -4929,32 +5012,48 @@ for (const target of ["team", "requests", "knowledge", "settings", "status"])
       updateNavigation();
       render();
     });
-async function refreshOperations() {
+async function refreshConsoleInfo(signal) {
   try {
-    const [infoResponse, operationsResponse] = await Promise.all([
-      fetch("/api/v1/console", { cache: "no-store" }),
-      fetch("/api/v1/operations", { cache: "no-store" }),
-    ]);
-    if (!infoResponse.ok || !operationsResponse.ok)
-      throw new Error("console unavailable");
-    const info = await infoResponse.json();
-    const nextOperations = await operationsResponse.json();
+    const response = await fetch("/api/v1/console", { cache: "no-store", signal });
+    if (!response.ok) throw new Error("console unavailable");
+    const info = await response.json();
     if (
       info.schema_version !== "v0.2" ||
       typeof info.team_id !== "string" ||
-      typeof info.delivery_ready !== "boolean" ||
-      !Array.isArray(nextOperations)
+      typeof info.delivery_ready !== "boolean"
     )
       throw new Error("invalid console response");
     consoleAvailable = true;
     consoleTeamId = info.team_id;
     consoleDeliveryReady = info.delivery_ready;
-    operations = nextOperations;
   } catch {
     consoleAvailable = false;
     consoleTeamId = null;
     consoleDeliveryReady = null;
+  }
+}
+async function refreshOperations(signal) {
+  await refreshConsoleInfo(signal);
+  try {
+    const response = await fetch("/api/v1/operations", { cache: "no-store", signal });
+    if (!response.ok) throw new Error("operations unavailable");
+    const values = await response.json();
+    if (!Array.isArray(values)) throw new Error("invalid operations response");
+    operations = values;
+    operationsAvailable = true;
+  } catch {
     operations = [];
+    operationsAvailable = false;
+  }
+}
+async function refreshSettingsSnapshot(signal) {
+  try {
+    // Refresh saved/process facts without replacing the user's editable draft.
+    settingsSnapshot = await adminFetch("/api/v1/admin/settings", { signal });
+    if (settingsSnapshot.restart_required && configurationApplyResult?.kind === "success")
+      configurationApplyResult = null;
+  } catch {
+    // Keep the last settings observation during a service restart.
   }
 }
 async function refresh(projectId, includeRuntimeStatus = false) {
@@ -4964,15 +5063,50 @@ async function refresh(projectId, includeRuntimeStatus = false) {
   const status = document.getElementById("connection");
   const controller = new AbortController(),
     timeout = setTimeout(() => controller.abort(), 40000);
+  const priorConsoleReady = consoleDeliveryReady;
+  const priorConsoleTeam = consoleTeamId;
+  const priorSettings = JSON.stringify(settingsSnapshot);
+  const priorRuntimeStatus = JSON.stringify(runtimeStatusSnapshot);
+  const priorOperations = JSON.stringify(operations);
+  const priorOperationsAvailable = operationsAvailable;
+  const priorKnowledgeIndex = JSON.stringify(knowledgeIndexStatus);
+  const refreshSystemViews = async () => {
+    if (configurationApplyInFlight) await refreshConfigurationApply();
+    if (["settings", "status"].includes(page) && administrationAvailable)
+      await refreshSettingsSnapshot(controller.signal);
+    if (
+      page === "status" && administrationAvailable &&
+      (includeRuntimeStatus || priorConsoleReady !== consoleDeliveryReady ||
+        priorSettings !== JSON.stringify(settingsSnapshot) || !runtimeStatusSnapshot)
+    )
+      await loadRuntimeStatus(controller.signal);
+  };
+  const systemViewsChanged = () =>
+    priorConsoleTeam !== consoleTeamId || priorConsoleReady !== consoleDeliveryReady ||
+    priorOperationsAvailable !== operationsAvailable ||
+    priorSettings !== JSON.stringify(settingsSnapshot) ||
+    priorRuntimeStatus !== JSON.stringify(runtimeStatusSnapshot);
   try {
     const target = projectId || (snapshot && snapshot.selected_project_id);
     const url = target
       ? "/api/v1/team?project_id=" + encodeURIComponent(target)
       : "/api/v1/team";
-    const response = await fetch(url, {
+    const teamRead = fetch(url, {
       cache: "no-store",
       signal: controller.signal,
     });
+    const [teamResult, systemResult] = await Promise.allSettled([
+      teamRead,
+      (async () => {
+        await refreshOperations(controller.signal);
+        syncDeliveryControls();
+        if (priorOperationsAvailable !== operationsAvailable) renderOperationStatus();
+        await refreshSystemViews();
+      })(),
+    ]);
+    if (systemResult.status === "rejected") throw systemResult.reason;
+    if (teamResult.status === "rejected") throw teamResult.reason;
+    const response = teamResult.value;
     if (!response.ok) throw new Error("read failed");
     const next = await response.json();
     if (
@@ -4986,16 +5120,8 @@ async function refresh(projectId, includeRuntimeStatus = false) {
       !snapshot ||
       JSON.stringify({ ...snapshot, as_of: null }) !==
         JSON.stringify({ ...next, as_of: null });
-    const priorOperations = JSON.stringify(operations);
-    const priorKnowledgeIndex = JSON.stringify(knowledgeIndexStatus);
-    const priorConsoleTeam = consoleTeamId;
-    const priorConsoleReady = consoleDeliveryReady;
-    const priorRuntimeStatus = JSON.stringify(runtimeStatusSnapshot);
     const selectedBeforeRefresh = selected;
     snapshot = next;
-    await refreshOperations();
-    if (configurationApplyInFlight && page === "settings")
-      await refreshConfigurationApply();
     if (
       selectedBeforeRefresh?.kind === "request" &&
       !requestById(selectedBeforeRefresh.id)
@@ -5016,8 +5142,6 @@ async function refresh(projectId, includeRuntimeStatus = false) {
     }
     if (page === "knowledge" && target !== undefined)
       await loadAdministration();
-    if (includeRuntimeStatus && page === "status" && administrationAvailable)
-      await loadRuntimeStatus();
     const modalActive =
       composing ||
       creatingProject ||
@@ -5029,25 +5153,24 @@ async function refresh(projectId, includeRuntimeStatus = false) {
       editingKnowledgeDocument ||
       editingSpecDocument;
     if (
-      !modalActive &&
+      (!modalActive || (["settings", "status"].includes(page) && systemViewsChanged())) &&
       (changed ||
         priorOperations !== JSON.stringify(operations) ||
-        priorConsoleTeam !== consoleTeamId ||
-        priorConsoleReady !== consoleDeliveryReady ||
         priorKnowledgeIndex !== JSON.stringify(knowledgeIndexStatus) ||
-        priorRuntimeStatus !== JSON.stringify(runtimeStatusSnapshot))
+        systemViewsChanged())
     )
       render();
     status.className = "";
     status.textContent = consoleAvailable
       ? (consoleDeliveryReady
           ? "团队与交付控制台已连接"
-          : "设置控制台已连接 · 交付运行时待配置或重启") +
+          : "设置控制台已连接 · 交付运行时尚未就绪") +
         " · 最近读取 " +
         time(snapshot.as_of) +
         " · 每 5 秒刷新"
       : "只读团队记录已连接；交付控制台暂不可用。";
   } catch {
+    if (["settings", "status"].includes(page) && systemViewsChanged()) render();
     status.className = "error";
     status.textContent = snapshot
       ? "刷新失败，以下为旧数据 · 上次成功读取 " + time(snapshot.as_of)
