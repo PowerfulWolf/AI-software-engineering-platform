@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import os
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import closing
 from datetime import timedelta
 from pathlib import Path
 from threading import Barrier
 
-import pymysql
 import pytest
 
 from ai_software_engineer.domain import TaskStatus
@@ -25,10 +23,9 @@ from ai_software_engineer.manager.dispatch import (
 )
 from ai_software_engineer.orchestration.state_machine import build_event
 from ai_software_engineer.scheduling import PortfolioScheduler
-from ai_software_engineer.store.mysql_repository import MySqlTaskRepository, open_mysql_connection
+from ai_software_engineer.store.mysql_repository import MySqlTaskRepository
 from tests.manager.test_dispatch import _router
 from tests.manager.test_dispatch_authority import _durable_facts
-from tests.mysql_safety import require_isolated_mysql_test_database
 
 pytestmark = pytest.mark.mysql
 
@@ -227,25 +224,6 @@ def mysql_dsn() -> str:
     value = os.environ.get("ASE_TEST_MYSQL_DSN")
     if not value:
         pytest.skip("ASE_TEST_MYSQL_DSN is not configured")
-    value = require_isolated_mysql_test_database(value)
-    with closing(open_mysql_connection(value)) as connection:
-        try:
-            with connection.cursor() as cursor:
-                cursor.execute("SHOW TABLES LIKE 'verification_reservations'")
-                if cursor.fetchone() is not None:
-                    cursor.execute("DELETE FROM verification_reservations")
-                cursor.execute("DELETE FROM dispatch_commits")
-                cursor.execute("DELETE FROM dispatch_workforce_snapshots")
-                # This module's fixture has a fixed Task ID; remove only its prior run.
-                cursor.execute(
-                    "DELETE FROM state_events WHERE task_id = %s", ("task_dispatch_001",)
-                )
-                cursor.execute("DELETE FROM tasks WHERE id = %s", ("task_dispatch_001",))
-            connection.commit()
-        except pymysql.ProgrammingError as error:
-            connection.rollback()
-            if not error.args or error.args[0] != 1146:
-                raise
     return value
 
 

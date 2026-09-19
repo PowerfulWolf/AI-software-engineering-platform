@@ -723,9 +723,11 @@ uv build --offline
 ```
 
 MySQL 集成测试需设置 `ASE_TEST_MYSQL_DSN`，并且必须指向名称为 `test_*`、`*_test` 或
-`*_tests` 的专用测试数据库（例如 `ase_self_iteration_test`）。测试会重置共享的调度和工作队列表；
-pytest 会在任何 MySQL fixture 执行前拒绝生产库名称。测试使用脚本化模型验证契约，不代表真实模型
-已完成业务验收。
+`*_tests` 的专用测试数据库（例如 `ase_self_iteration_test`）。pytest 会在任何 MySQL fixture
+执行前拒绝生产库名称，并在每个 `mysql` 用例前后统一清理 Task/事件、调度、验证预留和工作队列
+事实；测试或 fixture 失败也会执行清理。表结构、锁行及无关表保留。每个并发 pytest 进程/worker
+必须使用不同的测试数据库，不能共用这个会被清理的 schema。测试使用脚本化模型验证契约，
+不代表真实模型已完成业务验收。
 
 ## 当前进度（2026-09-19）
 

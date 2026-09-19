@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.mysql_safety import require_isolated_mysql_test_database
+from tests.mysql_safety import require_isolated_mysql_test_database, reset_mysql_test_facts
 
 
 @pytest.mark.parametrize(
@@ -54,3 +54,15 @@ def test_mysql_test_guard_bounds_malformed_dsn_error() -> None:
         require_isolated_mysql_test_database(dsn)
 
     assert "do-not-print" not in str(caught.value)
+
+
+def test_mysql_reset_rejects_non_test_database_before_connecting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def forbidden_connection(_dsn: str) -> None:
+        pytest.fail("invalid test database must be rejected before connecting")
+
+    monkeypatch.setattr("tests.mysql_safety.open_mysql_connection", forbidden_connection)
+
+    with pytest.raises(pytest.UsageError, match="production"):
+        reset_mysql_test_facts("mysql://ase:do-not-print@127.0.0.1/production")

@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import closing
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -23,7 +22,6 @@ from ai_software_engineer.domain import (
     WorkItemStatus,
 )
 from ai_software_engineer.scheduling import ModelRouter, PortfolioScheduler
-from ai_software_engineer.store.mysql_repository import open_mysql_connection
 from ai_software_engineer.work_queue import (
     DispatcherLoop,
     DispatcherTickStatus,
@@ -32,7 +30,6 @@ from ai_software_engineer.work_queue import (
     QueueConflict,
     QueuedWorkItem,
 )
-from tests.mysql_safety import require_isolated_mysql_test_database
 
 pytestmark = pytest.mark.mysql
 
@@ -45,20 +42,8 @@ def mysql_queue() -> Iterator[MySqlPersistentWorkQueue]:
     dsn = os.environ.get("ASE_TEST_MYSQL_DSN")
     if not dsn:
         pytest.skip("ASE_TEST_MYSQL_DSN is not configured")
-    dsn = require_isolated_mysql_test_database(dsn)
     queue = MySqlPersistentWorkQueue(dsn)
-    _clear_queue(dsn)
     yield queue
-    _clear_queue(dsn)
-
-
-def _clear_queue(dsn: str) -> None:
-    with closing(open_mysql_connection(dsn)) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute("DELETE FROM work_queue_events")
-            cursor.execute("DELETE FROM work_queue_claims")
-            cursor.execute("DELETE FROM work_queue_items")
-        connection.commit()
 
 
 def queued_item(

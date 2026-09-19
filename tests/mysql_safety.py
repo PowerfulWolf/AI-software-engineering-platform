@@ -3,9 +3,25 @@
 from __future__ import annotations
 
 import re
+from contextlib import closing
 from urllib.parse import unquote, urlsplit
 
 import pytest
+from pymysql.cursors import DictCursor
+
+from ai_software_engineer.store.mysql_repository import open_mysql_connection
+
+# Child rows precede their parents. Authority lock rows and unrelated tables survive.
+_MUTABLE_FACT_TABLES = (
+    "work_queue_events",
+    "work_queue_claims",
+    "work_queue_items",
+    "verification_reservations",
+    "dispatch_commits",
+    "dispatch_workforce_snapshots",
+    "state_events",
+    "tasks",
+)
 
 
 def require_isolated_mysql_test_database(dsn: str) -> str:
@@ -32,3 +48,28 @@ def require_isolated_mysql_test_database(dsn: str) -> str:
             f"(test_*, *_test, or *_tests); refused database {safe_name!r}"
         )
     return dsn
+
+
+def reset_mysql_test_facts(dsn: str) -> None:
+    """Clear known mutable facts in a dedicated serial pytest database.
+
+    Schema initialization remains the responsibility of the real stores. Separate
+    pytest processes/workers must receive separate databases.
+    """
+
+    require_isolated_mysql_test_database(dsn)
+    with closing(open_mysql_connection(dsn)) as connection:
+        try:
+            with connection.cursor(DictCursor) as cursor:
+                cursor.execute(
+                    "SELECT TABLE_NAME FROM information_schema.TABLES "
+                    "WHERE TABLE_SCHEMA = DATABASE()"
+                )
+                present = {row["TABLE_NAME"] for row in cursor.fetchall()}
+                for table in _MUTABLE_FACT_TABLES:
+                    if table in present:
+                        cursor.execute(f"DELETE FROM {table}")
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise

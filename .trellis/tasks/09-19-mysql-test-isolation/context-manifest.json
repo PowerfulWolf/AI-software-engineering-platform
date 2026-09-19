@@ -1,0 +1,15 @@
+{
+  "task_id": "mysql-test-isolation-20260919",
+  "source_revision": "de4edcce73d7c2f57fe2213cf772b7d9dda45e2f",
+  "context_manifest_id": "6a1e3e2c702df9398df7ecb4cdc423831b657e307f382ca1975425761bdc60de",
+  "files": {
+    ".trellis/spec/core/production-team-host.md": "1eb4e5f1236c3a15c8a3594c6b21e9ac1e7690fd1bd5572c3f6ad788308a6662",
+    "README.md": "8061c32445ee9d9bc430ee624e945a777a80b0653e3715a2fdd0dbca72f239f4",
+    "tests/conftest.py": "c52c44b6d8d9f4cce8ffa2a913b946e1cdaea471df0d74028274168e35138a62",
+    "tests/manager/test_mysql_dispatch_authority.py": "3c91b46195708d7ae437348b5c29a661743eed0b64797706efc9447d3ab972fe",
+    "tests/mysql_safety.py": "0f29929f49932744bf58855d9ecf314b2a1fd5e1784832e45a9cea84e4702433",
+    "tests/test_mysql_test_isolation.py": "6ca692eca3248a686ca328a6f6705f5d0ba0e47d03534f903d512997f91625d2",
+    "tests/test_mysql_test_safety.py": "680da964967db4afa881f637553b92afe1cbebe30a09fb39616973833a8cf0c7",
+    "tests/work_queue/test_mysql_queue.py": "8374f3b8b1fbc4ba6a5ace2814748ffd14201ab3b183da97a42839696a61f614"
+  }
+}

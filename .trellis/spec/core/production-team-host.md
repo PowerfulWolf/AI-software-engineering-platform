@@ -972,18 +972,20 @@ points to disposable storage.
 
 ```python
 require_isolated_mysql_test_database(dsn: str) -> str
+reset_mysql_test_facts(dsn: str) -> None
 pytest_runtest_setup(item: pytest.Item) -> None
+isolated_mysql_facts(request: pytest.FixtureRequest) -> Iterator[None]
 ```
 
-Implementation locations are `tests/mysql_safety.py`, the repository-wide `tests/conftest.py`, and
-the destructive fixtures in `tests/manager/test_mysql_dispatch_authority.py` and
-`tests/work_queue/test_mysql_queue.py`.
+Implementation locations are `tests/mysql_safety.py` and the repository-wide `tests/conftest.py`.
+Dispatch and queue fixtures use the same autouse boundary as production-host, recovery and reader
+tests; they must not implement incomplete module-local cleanup.
 
 ### 3. Contracts
 
 - Every test marked `mysql` must pass the repository-wide guard before pytest constructs any fixture
-  or opens a MySQL connection. Fixtures that reset aggregate-wide tables must repeat the guard at the
-  point of use as defense in depth.
+  or opens a MySQL connection. `reset_mysql_test_facts` repeats the guard before opening its connection
+  as defense in depth.
 - An absent `ASE_TEST_MYSQL_DSN` retains the existing opt-in behavior: the individual fixture skips
   the integration test.
 - A configured DSN is accepted only when its decoded database name is a safe identifier matching
@@ -993,6 +995,19 @@ the destructive fixtures in `tests/manager/test_mysql_dispatch_authority.py` and
 - Broad fixture cleanup remains permitted only behind this guard. Production runtime configuration
   uses `ASE_MYSQL_DSN` and must never be copied into `ASE_TEST_MYSQL_DSN` unless it points to a separate
   test-named database.
+- The function-scoped autouse fixture resets before dependent fixtures, then resets in `finally`
+  after them, including test-body and fixture-setup failures. It captures the validated DSN once so
+  test monkeypatches cannot redirect teardown. Unmarked tests do not connect or reset.
+- Cleanup deletes only existing tables from this fixed child-before-parent order:
+  `work_queue_events`, `work_queue_claims`, `work_queue_items`, `verification_reservations`,
+  `dispatch_commits`, `dispatch_workforce_snapshots`, `state_events`, `tasks`. Table discovery is
+  restricted to `DATABASE()`; identifiers in DELETE come only from this source-code allowlist.
+  Keep schemas, authority lock rows, legacy archive tables and unrelated tables. Empty/partial
+  schemas are valid; the real stores still initialize their own schema. Deletes commit together;
+  errors rollback and propagate instead of silently declaring the database clean.
+- A disposable database is exclusive to one serial pytest process/worker. Concurrent workers must
+  receive different DSNs; this fixture does not provide cross-process locking. A killed process may
+  skip teardown, so the next test's setup must also reset. Preserve required debug facts before rerun.
 
 ### 4. Validation & Error Matrix
 
@@ -1003,6 +1018,11 @@ the destructive fixtures in `tests/manager/test_mysql_dispatch_authority.py` and
 | database `ase_self_iteration`, `production` or `staging_copy` | abort before fixture setup and before SQL |
 | malformed scheme, missing database, nested path or unsafe/control text | abort with a bounded `<invalid>` name |
 | credentials embedded in rejected DSN | no credential substring in the guard error or session exit message |
+| earlier test left active verification/dispatch/queue facts | clear before fixtures; no cross-test capacity |
+| test body or dependent fixture raises | `finally` clears the same captured test database |
+| empty/partial schema | delete only present allowlisted tables; never initialize or drop schema |
+| unknown table or authority lock row | preserve unchanged |
+| database delete fails | rollback and fail the fixture; do not continue with polluted facts |
 
 ### 5. Good / Base / Bad Cases
 
@@ -1021,6 +1041,11 @@ the destructive fixtures in `tests/manager/test_mysql_dispatch_authority.py` and
   before its fixture executes; the output must contain only the safe database name.
 - Dispatch and queue integration tests still run only against a separately provisioned test-named
   schema. They must not be used as verification against production data.
+- `tests/test_mysql_test_isolation.py` must run actual pytest items against real MySQL, including a
+  producer leaving an active verification reservation, a subsequent clean consumer, test failure
+  and fixture failure. Verify both setup isolation and final teardown.
+- Repeating `test_active_candidate_verification_is_visible_as_qa_work` before
+  `test_serial_joint_deliveries_do_not_exhaust_finished_agent_capacity` must retain DONE delivery.
 
 ### 7. Wrong vs Correct
 
@@ -1038,6 +1063,25 @@ cursor.execute("DELETE FROM dispatch_commits")
 dsn = require_isolated_mysql_test_database(os.environ["ASE_TEST_MYSQL_DSN"])
 # Destructive fixture reset is now confined to an explicitly disposable database.
 ```
+
+### Regression analysis: test reservations consume later tests' capacity (2026-09-19)
+
+Root cause is D/E (missing cross-test coverage / implicit database emptiness). `tmp_path` isolates
+Git and sidecars, but production fixtures reuse `agent_team_qa`/`agent_team_reviewer` and a shared
+MySQL authority. The Team View active-verification test intentionally inserts an unfinished
+`verification_reservations` row. Module-local dispatch cleanup only runs when that module executes;
+it cannot isolate e2e, recovery or reader tests, or consecutive pytest invocations.
+
+Repeating that real producer fills eight slots and makes the original serial joint-delivery test
+BLOCKED at `PlanningPreviewRejected`; on clean storage the same ten Tasks finish. A two-item pytest
+regression also detects one residual reservation immediately, without waiting for capacity exhaustion.
+Passing the target alone or just its own module does not disprove persistent-state contamination.
+
+Prevention is the guarded per-item setup/finally boundary across all MySQL tests, including Task
+events and queue facts, with lifecycle regression coverage. Production terminal-Task release and
+unfinished-reservation safety remain unchanged. Existing-data handling: do not modify production
+Requirements, Tasks, approvals or queues. The next marked test safely resets old disposable test
+facts; rerun the failed test/suite using its dedicated database. No production migration is needed.
 
 ## Bug Analysis: full regression deleted live dispatch and queue facts
 

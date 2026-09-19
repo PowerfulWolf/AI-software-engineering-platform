@@ -1,0 +1,31 @@
+{
+  "id": "mysql-test-isolation-20260919",
+  "title": "Isolate persistent MySQL facts between pytest items",
+  "status": "completed",
+  "phase": "verified",
+  "operator_validation": "Independent QA: lifecycle/safety 15 passed in 14.74s; database probes 4 passed in 0.90s; full isolated pytest 1340 passed, 2 warnings in 1436.74s; original serial joint-delivery failure passed. No production data or schema migration changed.",
+  "source_revision": "de4edcc",
+  "goal": "Remove cross-test persistence pollution behind joint delivery capacity failures",
+  "allowed_paths": [
+    "tests/conftest.py",
+    "tests/mysql_safety.py",
+    "tests/test_mysql_test*.py",
+    "tests/manager/test_mysql_dispatch_authority.py",
+    "tests/work_queue/test_mysql_queue.py",
+    "README.md",
+    ".trellis/spec/core/production-team-host.md",
+    ".trellis/tasks/09-19-mysql-test-isolation/**"
+  ],
+  "verification_commands": [
+    "pytest -q tests/test_mysql_test_isolation.py tests/test_mysql_test_safety.py",
+    "pytest -q -m mysql",
+    "pytest -v --tb=short",
+    "ruff check .",
+    "ruff format --check .",
+    "mypy src tests",
+    "git diff --check"
+  ],
+  "rollback_point": "Revert only this task's test harness/documentation patch; no production schema or data migration",
+  "integration_revision": "8a7f761",
+  "integration_validation": "Latest origin/main integration: 50 targeted MySQL/lifecycle tests passed in 83.24s; Ruff check/format passed; mypy src tests passed (411 files); UI tests 6 passed. Independent review is recorded separately."
+}
