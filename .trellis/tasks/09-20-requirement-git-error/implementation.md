@@ -37,7 +37,7 @@ PREPARING history when source is missing. Changed source/tests passed Ruff, Ruff
 strict Mypy and diff whitespace checks. Independent QA/Review
 results belong to their respective agents; this document is implementation evidence only.
 
-## Existing data (read-only verification)
+## Existing data and cleanup
 
 - Project: `project_codex_ea3536b4974b`.
 - Failed Operation: `operation_3e0a1c1bf6e3d489f3e8baa049d66f9e`.
@@ -50,10 +50,18 @@ results belong to their respective agents; this document is implementation evide
 
 Using the patched validation against the integrity-checked historical checkpoint returns
 the specific instruction to recreate the Requirement. Read-only rediscovery of the current
-source passes the baseline prerequisite. Nothing was changed in production Operations,
-requirements, MySQL, or source repositories, and no live Agent was invoked.
+source passes the baseline prerequisite. No live Agent was invoked.
 
-No database migration is required. Recreate the original named Requirement against the current
-committed source; its new baseline gives it a new identity. Retain the old failure for audit.
-The code has not been merged into main or loaded by the running Console. Follow the repository's
-human merge/restart process to activate it. Rollback consists only of reverting this code patch.
+At the user's request on 2026-09-20, the exact failed Requirement was removed from current
+visibility through the typed, digest-bound retirement store. The immutable checkpoint remains
+unchanged for audit: its file SHA-256 is still
+`2776c11c6939cad8296d80afec7578cddb26e24b43befbd57aff21b36b4ed6c0`. A read-only scan of the
+`ase_self_iteration` MySQL schema found no row containing the title or delivery ID because
+Requirement journals are Project-owned filesystem facts, not MySQL facts. The production read
+projection now reports zero visible Requirements for this Project, so the user can recreate the
+original name against the current committed source and receive a new baseline-bound identity.
+
+No database migration is required. The fix landed on `main` as `2060dc2`; the Console service was
+stopped during verification, so restarting it is still required to load the new code. Rollback of
+the code consists of reverting that commit; restoring the retired Requirement, if ever needed,
+must use the typed retirement store rather than editing the immutable journal.
