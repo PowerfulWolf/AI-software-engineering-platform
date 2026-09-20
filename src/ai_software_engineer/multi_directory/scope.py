@@ -11,6 +11,7 @@ from typing import Annotated
 from pydantic import Field, StringConstraints
 
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
+from ai_software_engineer.multi_directory.errors import RequirementGitBaselineRequired
 
 Digest = Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
 UnitId = Annotated[str, StringConstraints(pattern=r"^unit_[a-f0-9]{16}$")]
@@ -103,3 +104,16 @@ def discover_scope(paths: tuple[str, ...]) -> DirectoryScope:
             )
         )
     return DirectoryScope(units=tuple(units))
+
+
+def require_git_baselines(scope: DirectoryScope) -> None:
+    """Reject missing intake baselines before preparation or checkpoint serialization."""
+    for unit in scope.units:
+        if unit.base_revision is not None:
+            continue
+        root = Path(unit.root)
+        if not git_read(root, "rev-parse", "--show-toplevel"):
+            raise RequirementGitBaselineRequired(unit.root, reason="not_git")
+        if not git_read(root, "rev-parse", "--verify", "HEAD^{commit}"):
+            raise RequirementGitBaselineRequired(unit.root, reason="no_commit")
+        raise RequirementGitBaselineRequired(unit.root, reason="not_recorded")

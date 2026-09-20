@@ -1,0 +1,559 @@
+diff --git a/src/ai_software_engineer/multi_directory/errors.py b/src/ai_software_engineer/multi_directory/errors.py
+index ea605a6..314df62 100644
+--- a/src/ai_software_engineer/multi_directory/errors.py
++++ b/src/ai_software_engineer/multi_directory/errors.py
+@@ -1,8 +1,32 @@
+ """Public failure contracts for multi-directory Requirement delivery."""
+ 
++from typing import Literal
++
++
++class RequirementGitBaselineRequired(ValueError):
++    """Selected source lacks the immutable Git baseline required by intake."""
++
++    def __init__(
++        self,
++        repository_root: str,
++        *,
++        reason: Literal["not_git", "no_commit", "not_recorded"],
++    ) -> None:
++        self.repository_root = repository_root
++        self.reason = reason
++        directory = repository_root if len(repository_root) <= 240 else "…" + repository_root[-239:]
++        explanations = {
++            "not_git": (
++                "所选目录未受 Git 管理。请先初始化 Git 并完成首次提交, 或选择已有提交的 Git 仓库"
++            ),
++            "no_commit": "所选 Git 仓库没有可用的提交基线 (HEAD)。请先完成首次有效提交",
++            "not_recorded": "此需求未记录 Git 提交基线。请使用当前已有提交的目录",
++        }
++        super().__init__(f"{explanations[reason]}, 然后重新创建需求。目录: {directory}")
++
+ 
+ class RequirementSourceRevisionDrift(ValueError):
+     """A Requirement cannot continue after one of its pinned Git revisions changes."""
+ 
+ 
+-__all__ = ["RequirementSourceRevisionDrift"]
++__all__ = ["RequirementGitBaselineRequired", "RequirementSourceRevisionDrift"]
+diff --git a/src/ai_software_engineer/multi_directory/scope.py b/src/ai_software_engineer/multi_directory/scope.py
+index a952db7..0b3cece 100644
+--- a/src/ai_software_engineer/multi_directory/scope.py
++++ b/src/ai_software_engineer/multi_directory/scope.py
+@@ -11,6 +11,7 @@ from typing import Annotated
+ from pydantic import Field, StringConstraints
+ 
+ from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
++from ai_software_engineer.multi_directory.errors import RequirementGitBaselineRequired
+ 
+ Digest = Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
+ UnitId = Annotated[str, StringConstraints(pattern=r"^unit_[a-f0-9]{16}$")]
+@@ -103,3 +104,16 @@ def discover_scope(paths: tuple[str, ...]) -> DirectoryScope:
+             )
+         )
+     return DirectoryScope(units=tuple(units))
++
++
++def require_git_baselines(scope: DirectoryScope) -> None:
++    """Reject missing intake baselines before preparation or checkpoint serialization."""
++    for unit in scope.units:
++        if unit.base_revision is not None:
++            continue
++        root = Path(unit.root)
++        if not git_read(root, "rev-parse", "--show-toplevel"):
++            raise RequirementGitBaselineRequired(unit.root, reason="not_git")
++        if not git_read(root, "rev-parse", "--verify", "HEAD^{commit}"):
++            raise RequirementGitBaselineRequired(unit.root, reason="no_commit")
++        raise RequirementGitBaselineRequired(unit.root, reason="not_recorded")
+diff --git a/src/ai_software_engineer/multi_directory/service.py b/src/ai_software_engineer/multi_directory/service.py
+index f3d8b6b..d61bdf3 100644
+--- a/src/ai_software_engineer/multi_directory/service.py
++++ b/src/ai_software_engineer/multi_directory/service.py
+@@ -57,7 +57,12 @@ from ai_software_engineer.multi_directory.planning import (
+     rejection_feedback,
+ )
+ from ai_software_engineer.multi_directory.retirement import RequirementRetirementStore
+-from ai_software_engineer.multi_directory.scope import DirectoryScope, DirectoryUnit, discover_scope
++from ai_software_engineer.multi_directory.scope import (
++    DirectoryScope,
++    DirectoryUnit,
++    discover_scope,
++    require_git_baselines,
++)
+ from ai_software_engineer.multi_directory.store import JointJournal
+ from ai_software_engineer.planning.gate import HumanPlanningUpgrade, PlanningMode
+ from ai_software_engineer.project_workspace import ProjectWorkspace
+@@ -253,6 +258,7 @@ class JointDeliveryService:
+             self.team.validate_code_root(unit.root)
+             if self.journal.root.is_relative_to(Path(unit.root)):
+                 raise ValueError("Team delivery workspace must be outside target repositories")
++        require_git_baselines(scope)
+         delivery_id = self._delivery_id(scope, title, requirement)
+         with self.journal.lock(delivery_id):
+             checkpoint = self.journal.current(delivery_id)
+@@ -466,6 +472,8 @@ class JointDeliveryService:
+ 
+     def status(self, delivery_id: str) -> JointDeliveryResult:
+         checkpoint = self._current(delivery_id)
++        if checkpoint.stage is JointStage.PREPARING:
++            require_git_baselines(checkpoint.scope)
+         self.backend.reconcile(checkpoint)
+         return JointDeliveryResult(checkpoint=checkpoint)
+ 
+@@ -541,6 +549,8 @@ class JointDeliveryService:
+                 knowledge_gap_id=None,
+                 next_action="Resume with the exact approved knowledge resolution.",
+             )
++        if checkpoint.stage is JointStage.PREPARING:
++            require_git_baselines(checkpoint.scope)
+         self._team_binding(checkpoint)
+         self.backend.reconcile(checkpoint)
+         completed = self._complete_single_repository(checkpoint)
+@@ -568,15 +578,6 @@ class JointDeliveryService:
+                         "Resolve the recorded project specification conflicts before a new intake."
+                     ),
+                 )
+-            if any(u.base_revision is None for u in checkpoint.scope.units):
+-                return self._save(
+-                    checkpoint,
+-                    stage=JointStage.BLOCKED,
+-                    next_action=(
+-                        "Delivery currently requires Git repositories with committed HEADs; no "
+-                        "code was changed."
+-                    ),
+-                )
+             self._stage_workflow(checkpoint).require("start", checkpoint)
+             if checkpoint.requirement is None:
+                 return self._save(
+diff --git a/src/ai_software_engineer/web_console/manager.py b/src/ai_software_engineer/web_console/manager.py
+index 5d6ced5..93fe61b 100644
+--- a/src/ai_software_engineer/web_console/manager.py
++++ b/src/ai_software_engineer/web_console/manager.py
+@@ -17,7 +17,10 @@ from ai_software_engineer.manager.delivery import (
+ from ai_software_engineer.manager.delivery_checkpoint import (
+     ProjectDeliveryCheckpointError,
+ )
+-from ai_software_engineer.multi_directory.errors import RequirementSourceRevisionDrift
++from ai_software_engineer.multi_directory.errors import (
++    RequirementGitBaselineRequired,
++    RequirementSourceRevisionDrift,
++)
+ from ai_software_engineer.multi_directory.models import JointDeliveryResult, digest
+ from ai_software_engineer.multi_directory.service import (
+     CloseRequirement,
+@@ -191,6 +194,11 @@ class ManagerConsoleAdapter:
+                 "STALE_CHECKPOINT",
+                 "The displayed delivery changed. Refresh the workspace and try again.",
+             ) from error
++        except RequirementGitBaselineRequired as error:
++            raise ConsoleCommandRejected(
++                "GIT_BASELINE_REQUIRED",
++                _safe_summary(error),
++            ) from error
+         except RequirementSourceRevisionDrift as error:
+             raise ConsoleCommandRejected(
+                 "SOURCE_REVISION_DRIFT",
+diff --git a/tests/web_console/test_git_baseline.py b/tests/web_console/test_git_baseline.py
+new file mode 100644
+index 0000000..758423f
+--- /dev/null
++++ b/tests/web_console/test_git_baseline.py
+@@ -0,0 +1,292 @@
++"""Exercise Requirement intake through the real production preparation and Console seams."""
++
++import json
++from datetime import UTC, datetime
++from pathlib import Path
++from typing import cast
++
++import pytest
++from jsonschema import Draft202012Validator
++
++from ai_software_engineer.agents import StructuredModelClient
++from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
++from ai_software_engineer.domain import TeamRole
++from ai_software_engineer.manager.delivery import ResumeProjectDelivery
++from ai_software_engineer.manager.production_backend import (
++    ProductionProjectDeliveryBackend,
++)
++from ai_software_engineer.multi_directory.models import (
++    JointCheckpoint,
++    JointDeliveryResult,
++    JointStage,
++)
++from ai_software_engineer.multi_directory.production import ProductionJointBackend
++from ai_software_engineer.multi_directory.scope import discover_scope
++from ai_software_engineer.multi_directory.service import JointDeliveryService
++from ai_software_engineer.runtime_workspace import TeamWorkforceWorkspace
++from ai_software_engineer.team_workspace import TeamWorkspace
++from ai_software_engineer.web_console import (
++    ConsoleOperationStatus,
++    ContinueDeliveryIntent,
++    CreateRequirementIntent,
++    FileConsoleOperationStore,
++    ManagerConsoleAdapter,
++    ProjectConsole,
++)
++from ai_software_engineer.web_console.manager import TeamConsoleHost
++from tests.manager.test_directory_scope import repository as committed_repository
++from tests.manager.test_preparation import hard_rule
++from tests.manager.test_production_backend import _git
++
++
++class _NoModels:
++    def for_project(
++        self, repository_root: Path, role: TeamRole = TeamRole.PRODUCT
++    ) -> StructuredModelClient:
++        pytest.fail("Requirement preparation must not invoke a model")
++
++
++def _console(tmp_path: Path) -> tuple[ProjectConsole, JointDeliveryService]:
++    config = ProductionConfig(
++        platform_root=str(tmp_path / "platform"),
++        model_routes=(
++            ProviderRouteConfig(provider="codex", model="test", kind=ModelProviderKind.CODEX_CLI),
++        ),
++    )
++    team = TeamWorkspace.initialize(
++        config.platform_root, team_id=config.team_id, name=config.team_name
++    )
++    project = team.project_registry().register(project_id="project_test", name="Test")
++    # Preparation never connects to MySQL; execution is intentionally unavailable.
++    environment = {"ASE_MYSQL_DSN": "mysql+pymysql://unused@127.0.0.1/unused_test"}
++    native = ProductionProjectDeliveryBackend(
++        config=config,
++        environment=environment,
++        organization=TeamWorkforceWorkspace.from_team(team),
++        registry=project.repository_registry(),
++        platform_rules=(hard_rule(),),
++    )
++    backend = ProductionJointBackend(
++        native=native,
++        factory=lambda *_args: pytest.fail("must not start delivery"),
++        clients=_NoModels(),
++        team=team,
++        project=project,
++        environment=environment,
++    )
++    entry = JointDeliveryService(backend=backend, team=team, project=project)
++
++    class Host:
++        def requirement_entry(self, project_id: str | None = None) -> JointDeliveryService:
++            assert project_id == "project_test"
++            return entry
++
++        def resume_delivery(
++            self, command: ResumeProjectDelivery, *, project_id: str | None = None
++        ) -> JointDeliveryResult:
++            assert project_id == "project_test"
++            return entry.resume(command)
++
++    return (
++        ProjectConsole(
++            store=FileConsoleOperationStore(tmp_path / "operations", team_id=team.manifest.team_id),
++            executor=ManagerConsoleAdapter(cast(TeamConsoleHost, Host())),
++        ),
++        entry,
++    )
++
++
++@pytest.mark.parametrize("initialize_git", [False, True])
++def test_missing_git_baseline_has_actionable_persisted_error(
++    tmp_path: Path, initialize_git: bool, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    repository = tmp_path / "codex-quota-monitor"
++    repository.mkdir()
++    if initialize_git:
++        _git("init", cwd=repository)
++    console, entry = _console(tmp_path)
++    monkeypatch.setattr(entry.backend, "prepare", lambda *_: pytest.fail("must validate first"))
++    monkeypatch.setattr(entry.backend, "reconcile", lambda *_: pytest.fail("must validate first"))
++    queued = console.submit(
++        CreateRequirementIntent(
++            project_id="project_test",
++            name="账号筛选页面优化",
++            repository_roots=(str(repository),),
++        ),
++        idempotency_key="missing-git-baseline",
++    )
++
++    result = console.run_once()
++
++    assert result is not None
++    assert result.status is ConsoleOperationStatus.FAILED
++    assert result.error_code == "GIT_BASELINE_REQUIRED", result.error_summary
++    assert result.error_summary is not None
++    assert "codex-quota-monitor" in result.error_summary
++    assert "提交" in result.error_summary
++    assert "重新创建需求" in result.error_summary
++    expected_reason = "没有可用的提交基线" if initialize_git else "未受 Git 管理"
++    assert expected_reason in result.error_summary
++    assert not tuple(entry.journal.root.glob("delivery_multi_*"))
++    assert (repository / ".git").exists() is initialize_git
++    assert console.get(queued.operation_id) == result
++    schema = json.loads(
++        (Path(__file__).parents[2] / "schemas/console-operation.schema.json").read_text()
++    )
++    Draft202012Validator(schema).validate(result.to_wire())
++
++
++def test_mixed_selection_rejects_before_preparing_any_repository(tmp_path: Path) -> None:
++    valid = committed_repository(tmp_path / "a-valid")
++    invalid = tmp_path / "z-invalid"
++    invalid.mkdir()
++    console, entry = _console(tmp_path)
++    console.submit(
++        CreateRequirementIntent(
++            project_id="project_test", name="Mixed", repository_roots=(str(valid), str(invalid))
++        ),
++        idempotency_key="mixed-git-baselines",
++    )
++
++    result = console.run_once()
++
++    assert result is not None
++    assert result.error_code == "GIT_BASELINE_REQUIRED"
++    assert result.error_summary is not None and "z-invalid" in result.error_summary
++    assert not tuple(entry.journal.root.glob("delivery_multi_*"))
++    assert not tuple(entry.project.root.glob("repositories/*/policy/project-preparation-*.json"))
++
++
++def test_long_directory_keeps_the_actionable_error(tmp_path: Path) -> None:
++    repository = tmp_path
++    for index in range(5):
++        repository /= f"directory-{index}-" + "x" * 90
++    repository /= "codex-quota-monitor"
++    repository.mkdir(parents=True)
++    console, _ = _console(tmp_path)
++    console.submit(
++        CreateRequirementIntent(
++            project_id="project_test", name="Long path", repository_roots=(str(repository),)
++        ),
++        idempotency_key="long-git-baseline",
++    )
++
++    result = console.run_once()
++
++    assert result is not None and result.error_code == "GIT_BASELINE_REQUIRED"
++    assert result.error_summary is not None
++    assert len(result.error_summary) <= 500
++    assert "未受 Git 管理" in result.error_summary
++    assert "codex-quota-monitor" in result.error_summary
++
++
++def test_unrelated_long_error_retains_safe_fallback(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    repository = committed_repository(tmp_path / "code")
++    console, entry = _console(tmp_path)
++
++    def fail_prepare(*_args: object) -> None:
++        raise ValueError("private diagnostic " * 50)
++
++    monkeypatch.setattr(entry.backend, "prepare", fail_prepare)
++    console.submit(
++        CreateRequirementIntent(
++            project_id="project_test", name="Unrelated", repository_roots=(str(repository),)
++        ),
++        idempotency_key="unrelated-git-error",
++    )
++
++    result = console.run_once()
++
++    assert result is not None and result.error_code == "COMMAND_REJECTED"
++    assert result.error_summary == (
++        "Manager rejected the operation; inspect current delivery facts."
++    )
++
++
++@pytest.mark.parametrize("select_module", [False, True])
++def test_committed_git_directory_still_prepares_without_models(
++    tmp_path: Path, select_module: bool
++) -> None:
++    repository = committed_repository(tmp_path / "code")
++    selected = repository
++    if select_module:
++        selected = repository / "module"
++        selected.mkdir()
++    console, _ = _console(tmp_path)
++    console.submit(
++        CreateRequirementIntent(
++            project_id="project_test", name="Valid", repository_roots=(str(selected),)
++        ),
++        idempotency_key="valid-git-baseline",
++    )
++
++    result = console.run_once()
++
++    assert result is not None
++    assert result.status is ConsoleOperationStatus.SUCCEEDED, result.error_summary
++    assert result.result is not None and result.result.stage == "READY_FOR_DISCUSSION"
++
++
++@pytest.mark.parametrize("fix_source", [False, True])
++def test_historical_preparing_checkpoint_is_preserved_with_recovery_guidance(
++    tmp_path: Path, fix_source: bool, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    repository = tmp_path / "code"
++    repository.mkdir()
++    console, entry = _console(tmp_path)
++    initial = JointCheckpoint.seal(
++        {
++            "delivery_id": "delivery_multi_" + "a" * 40,
++            "team_id": entry.team.manifest.team_id,
++            "team_manifest_sha256": entry.team.manifest.manifest_sha256,
++            "project_id": entry.project.manifest.project_id,
++            "project_manifest_sha256": entry.project.manifest.manifest_sha256,
++            "sequence": 1,
++            "stage": JointStage.PREPARING,
++            "scope": discover_scope((str(repository),)),
++            "title": "账号筛选页面优化",
++            "submitted_at": datetime.now(UTC),
++            "next_action": "Prepare every selected directory.",
++        }
++    )
++    entry.journal.append(initial, expected=None)
++    history_path = entry.journal.directory(initial.delivery_id) / "000001.json"
++    before = history_path.read_bytes()
++    if fix_source:
++        _git("init", cwd=repository)
++        _git("commit", "--allow-empty", "-m", "initial", cwd=repository)
++    console.submit(
++        ContinueDeliveryIntent(
++            project_id="project_test",
++            delivery_id=initial.delivery_id,
++            expected_checkpoint_sha256=initial.checkpoint_sha256,
++        ),
++        idempotency_key="legacy-git-baseline",
++    )
++
++    with monkeypatch.context() as guard:
++        guard.setattr(entry.backend, "prepare", lambda *_: pytest.fail("must validate first"))
++        guard.setattr(entry.backend, "reconcile", lambda *_: pytest.fail("must validate first"))
++        result = console.run_once()
++
++    assert result is not None
++    assert result.error_code == "GIT_BASELINE_REQUIRED", result.error_summary
++    assert result.error_summary is not None and "重新创建需求" in result.error_summary
++    if fix_source:
++        assert "未记录 Git 提交基线" in result.error_summary
++        console.submit(
++            CreateRequirementIntent(
++                project_id="project_test", name=initial.title, repository_roots=(str(repository),)
++            ),
++            idempotency_key="recreated-git-baseline",
++        )
++        recovered = console.run_once()
++        assert recovered is not None
++        assert recovered.status is ConsoleOperationStatus.SUCCEEDED, recovered.error_summary
++        assert recovered.result is not None
++        assert recovered.result.stage == "READY_FOR_DISCUSSION"
++        assert recovered.result.delivery_id != initial.delivery_id
++    assert history_path.read_bytes() == before
++    assert entry.journal.history(initial.delivery_id) == (initial,)
+diff --git a/docs/requirement-git-baseline.md b/docs/requirement-git-baseline.md
+new file mode 100644
+index 0000000..74e6735
+--- /dev/null
++++ b/docs/requirement-git-baseline.md
+@@ -0,0 +1,51 @@
++# 新建需求的 Git 基线校验
++
++## 现象与原因
++
++选择未受 Git 管理、或已 `git init` 但没有提交的目录时，旧版本可能只显示
++`Manager rejected the operation; inspect current delivery facts.`。
++
++目录发现会如实记录 `DirectoryUnit.base_revision=None`。旧流程先保存 PREPARING，再准备
++Repository，最后才检查 Git 基线。准备结果写入下一 checkpoint 时，`to_wire()` 省略 null
++字段，而 `base_revision` 是必填的 nullable 字段，导致 Schema 校验先失败。其错误正文超过
++Console 的 500 字符安全上限，于是被通用提示替代；原有 Git 前置条件提示未执行到。
++
++## 边界契约
++
++- `require_git_baselines(scope: DirectoryScope) -> None`：所有 unit 必须已有非空提交基线。
++  缺少时抛出 `RequirementGitBaselineRequired`，不执行 prepare、模型或代码写入。
++- 新 intake 在创建需求 journal 前校验；历史 PREPARING 在 reconcile/prepare 前使用同一校验。
++- Console 映射为既有 Operation envelope 的 `GIT_BASELINE_REQUIRED`，显示有界目录和中文
++  原因/恢复指引。`error_summary` 不超过 500 字符；无 Schema、状态机或权限变更。
++- Git 非仓库、Git 无有效 HEAD、旧需求未冻结基线三种情况分别说明。未知异常仍使用现有
++  安全摘要，不能通过移除长度限制或暴露完整 ValidationError 修复此问题。
++- 有提交的仓库及仓库内模块保留原行为，源码漂移/dirty checkout 守卫继续生效。
++- `base_revision=None` 仍是有效的只读 discovery/历史事实；不可通过伪造提交 SHA 或
++  修改整个领域序列化策略掩盖缺少基线。
++
++## 验证矩阵
++
++| 输入 | 结果 |
++|---|---|
++| 普通非 Git 目录 | `GIT_BASELINE_REQUIRED`，说明需要 Git 管理和首次提交 |
++| 已初始化但没有 HEAD commit | 同一错误码，说明缺少有效提交 |
++| 多目录中任一缺少基线 | 指明该目录，任何 Repository 准备前拒绝 |
++| 有提交的根目录/模块 | 正常到 READY_FOR_DISCUSSION，零模型调用 |
++| 历史 PREPARING/null baseline | 明确拒绝，不改 checkpoint 哈希/准备事实 |
++| 源码已补提交，但旧 checkpoint 没有基线 | 说明旧需求缺少冻结基线，需要重新创建 |
++| 路径过长 | 有界路径摘要仍包含原因，不退化为通用错误 |
++
++## 存量数据处置
++
++无需改库。失败 Operation 和 PREPARING checkpoint 是真实的失败历史，保留原文件与哈希；
++不得改为成功，也不得给旧 checkpoint 补入当前 HEAD。准备阶段没有 Product/Coder 执行，
++无需恢复 Agent 或业务代码。
++
++1. 在原目录确认正确的 Git 根目录。若目录确实尚未纳管，由用户检查 `.gitignore`、敏感文件和
++   提交范围后，初始化 Git 并完成首次提交；也可以重新选择已经有提交的正确仓库/模块。
++2. 确认 `git rev-parse --verify 'HEAD^{commit}'` 返回提交，`git status --porcelain` 为空。
++3. 使用原名称和修正后的目录重新创建需求。新的提交基线参与 Requirement identity，生成新的
++   可讨论需求；旧失败需求保留审计历史。新建本身不调用模型。
++4. 到 READY_FOR_DISCUSSION 后继续 Product 对话，并按原流程审批。
++
++修复只改变输入拒绝和错误映射；回滚代码不需要迁移或重写历史记录。
+diff --git a/.trellis/tasks/09-20-requirement-git-error/prd.md b/.trellis/tasks/09-20-requirement-git-error/prd.md
+new file mode 100644
+index 0000000..9b4de12
+--- /dev/null
++++ b/.trellis/tasks/09-20-requirement-git-error/prd.md
+@@ -0,0 +1,43 @@
++# Requirement Git baseline error
++
++## Goal
++
++Creating a Requirement from a directory without a committed Git baseline must explain the
++missing prerequisite instead of returning the generic Manager rejection.
++
++## Scope and acceptance
++
++- Validate every selected directory before repository preparation or model execution.
++- Distinguish a non-Git directory from a Git repository without a valid HEAD commit.
++- Return a bounded, actionable Console error, identifying the affected directory.
++- Preserve the generic safe fallback for unrelated errors; do not expose tracebacks.
++- Replaying historical PREPARING checkpoints with null baselines must produce the same
++  actionable error without changing immutable history or invoking an Agent.
++- Valid committed repositories, including selected subdirectories, remain supported.
++- Preserve existing failed Operations/checkpoints. Document recovery by fixing the source
++  prerequisite and creating a new Requirement with the original name and directory.
++
++## Allowed paths
++
++`src/ai_software_engineer/multi_directory/{errors,scope,service}.py`,
++`src/ai_software_engineer/web_console/manager.py`, related tests, this task directory,
++and `docs/requirement-git-baseline.md`.
++
++## Contract and validation
++
++Console uses the existing `error_code`/`error_summary` envelope (no schema change), with
++`GIT_BASELINE_REQUIRED` and a summary of at most 500 characters. New intake fails before
++writing a Requirement checkpoint; historical PREPARING checkpoints remain unchanged.
++
++Good: committed repository/subdirectory prepares normally. Base: an empty non-Git
++directory reports Git setup instructions. Bad: an initialized repository without a commit,
++a mixed selection, or a historical missing baseline is rejected before preparation.
++
++Run focused pytest regressions, existing scope/Requirement/Console/contract tests, Ruff,
++and strict mypy. Use offline fixtures; never run production Agents or mutate user sources.
++
++## Rollback
++
++The change is isolated in `codex/requirement-git-error-20260920`, based on
++`0c5d0bb`. Revert its code patch to roll back; no database migration or historical record
++rewrite is required.

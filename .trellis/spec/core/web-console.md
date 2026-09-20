@@ -28,6 +28,10 @@ ConsoleOperationStore.fail(...) -> ConsoleOperation
 ConsoleOperationStore.interrupt_running(...) -> tuple[ConsoleOperation, ...]
 
 ManagerConsoleAdapter.execute(intent: ConsoleIntent) -> ConsoleCommandResult
+RequirementGitBaselineRequired -> ConsoleCommandRejected(
+    code="GIT_BASELINE_REQUIRED",
+    safe_summary=<bounded directory and Git prerequisite/recreation guidance>,
+)
 RequirementSourceRevisionDrift -> ConsoleCommandRejected(
     code="SOURCE_REVISION_DRIFT",
     safe_summary=<stable source-drift message>,
@@ -207,6 +211,8 @@ production_console_app(
 | Same idempotency key, changed intent | 409; original Operation unchanged |
 | Second active command for same Delivery | 409; no second provider call |
 | Relative/duplicate/lexical-parent path | 422 before persistence or project access |
+| Requirement directory has no committed Git baseline | FAILED Operation with GIT_BASELINE_REQUIRED; bounded directory and setup guidance, no Repository preparation or model call |
+| Historical PREPARING has no frozen baseline | status remains readable; Continue returns GIT_BASELINE_REQUIRED with recreation guidance and preserves checkpoint bytes |
 | Directory picker cancelled | return an empty successful selection; do not create a Requirement |
 | Picker executable missing/fails or returns relative/symlink/missing path | 503; no browser text fallback |
 | Empty Product text with 1–4 valid screenshot IDs | accept and bind immutable attachments into dialogue |

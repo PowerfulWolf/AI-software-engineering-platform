@@ -57,7 +57,12 @@ from ai_software_engineer.multi_directory.planning import (
     rejection_feedback,
 )
 from ai_software_engineer.multi_directory.retirement import RequirementRetirementStore
-from ai_software_engineer.multi_directory.scope import DirectoryScope, DirectoryUnit, discover_scope
+from ai_software_engineer.multi_directory.scope import (
+    DirectoryScope,
+    DirectoryUnit,
+    discover_scope,
+    require_git_baselines,
+)
 from ai_software_engineer.multi_directory.store import JointJournal
 from ai_software_engineer.planning.gate import HumanPlanningUpgrade, PlanningMode
 from ai_software_engineer.project_workspace import ProjectWorkspace
@@ -253,6 +258,7 @@ class JointDeliveryService:
             self.team.validate_code_root(unit.root)
             if self.journal.root.is_relative_to(Path(unit.root)):
                 raise ValueError("Team delivery workspace must be outside target repositories")
+        require_git_baselines(scope)
         delivery_id = self._delivery_id(scope, title, requirement)
         with self.journal.lock(delivery_id):
             checkpoint = self.journal.current(delivery_id)
@@ -466,6 +472,12 @@ class JointDeliveryService:
 
     def status(self, delivery_id: str) -> JointDeliveryResult:
         checkpoint = self._current(delivery_id)
+        if checkpoint.stage is JointStage.PREPARING and any(
+            unit.base_revision is None for unit in checkpoint.scope.units
+        ):
+            # Incomplete historical intake remains inspectable even if its source is gone.
+            # Only a command that advances it requires a usable frozen Git baseline.
+            return JointDeliveryResult(checkpoint=checkpoint)
         self.backend.reconcile(checkpoint)
         return JointDeliveryResult(checkpoint=checkpoint)
 
@@ -541,6 +553,8 @@ class JointDeliveryService:
                 knowledge_gap_id=None,
                 next_action="Resume with the exact approved knowledge resolution.",
             )
+        if checkpoint.stage is JointStage.PREPARING:
+            require_git_baselines(checkpoint.scope)
         self._team_binding(checkpoint)
         self.backend.reconcile(checkpoint)
         completed = self._complete_single_repository(checkpoint)
@@ -566,15 +580,6 @@ class JointDeliveryService:
                     stage=JointStage.WAITING_HUMAN,
                     next_action=(
                         "Resolve the recorded project specification conflicts before a new intake."
-                    ),
-                )
-            if any(u.base_revision is None for u in checkpoint.scope.units):
-                return self._save(
-                    checkpoint,
-                    stage=JointStage.BLOCKED,
-                    next_action=(
-                        "Delivery currently requires Git repositories with committed HEADs; no "
-                        "code was changed."
                     ),
                 )
             self._stage_workflow(checkpoint).require("start", checkpoint)

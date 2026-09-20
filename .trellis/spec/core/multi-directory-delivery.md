@@ -33,6 +33,16 @@ ase request resume DELIVERY_ID
 多目录不是多个互不相关的 Product 会话。子仓库 Product/Design/Plan 是已批准联合事实的确定性
 投影，不重新询问用户、不重新生成需求。每个子 Task 仍串行 Coder → QA → Reviewer。
 
+- `scope.require_git_baselines(DirectoryScope) -> None` 在 intake journal 写入前检查全部 unit；
+  任一 `base_revision=None` 抛 `RequirementGitBaselineRequired`，区分非 Git、没有有效 HEAD
+  和旧需求未冻结基线。校验只读，不初始化 Git、补提交或调用模型。
+- 历史 PREPARING/null baseline 的 `status()` 返回已验证原 checkpoint，不 reconcile、不要求
+  源码仍存在；`resume()` 在 reconcile/prepare 前执行同一 baseline guard。修好源码后重新创建
+  Requirement，新的基线参与新 identity，旧 checkpoint/Operation 不重写。
+- Git 前置条件必须在 preparation 的 `_save()` 前校验：required nullable `base_revision`
+  被 `to_wire(exclude_none=True)` 省略会提前触发 ValidationError，超过 Console 的摘要长度上限
+  后掩盖原始问题。不得靠放宽摘要长度、伪造 revision 或修改通用序列化修复。
+
 - create 准备所有目录后停在 READY_FOR_DISCUSSION，不调用模型。同名+同 Project+同 scope（含
   base SHA）幂等恢复；新需求使用新名称。dialogue、product_spec、approval、design、plan、children、
   integration、attempts 和 next_action 都保存在带 sequence/前后 SHA 的 JointCheckpoint。
@@ -115,6 +125,8 @@ ase request resume DELIVERY_ID
 
 ## 5. Good / Base / Bad Cases
 
+- Git intake Good/Base：有提交的仓库或模块继续准备；无 Git/无提交时明确拒绝且不创建 journal。
+  Bad：先准备部分仓库再检查基线，或 status 为查看旧失败记录而依赖失效的源码路径。
 - Good：后端与非相邻前端，一次批准、独立候选、读完整候选集的联合测试通过后 DONE。
 - Base：一个目录使用同一 request 入口；纯文字 Product 对话保持兼容；参考目录不创建无意义 Coder Task。
 - Bad：分别发起产品会话、让 Product/Coder 读取不断前进的主 checkout、把截图转成未校验路径塞进
@@ -130,6 +142,12 @@ ase request resume DELIVERY_ID
   测试的退出当作联合 PASS。
 
 ## 6. Tests Required
+
+`tests/web_console/test_git_baseline.py` 必须通过真实 production preparation/Console seam 验证
+错误码、目录、恢复指引、持久化 Operation 的 Schema，以及非 Git/无提交/混合目录/长路径/
+正常仓库和模块。历史 Continue 使用 prepare/reconcile 失败哨兵，断言原 checkpoint 字节不变，
+补提交后可创建 READY_FOR_DISCUSSION 新需求。`test_requirement_journal_is_project_scoped`
+继续验证源目录缺失时 status 仍可读取历史；未知长异常仍使用通用安全摘要。
 
 多目录/同仓库多模块/非相邻目录、重复和 symlink、越界写路径、reference-only、stale approval、
 重新启动恢复、候选集漂移、部分成功、失败集成验收、单目录入口回归；生产桥接另用离线
