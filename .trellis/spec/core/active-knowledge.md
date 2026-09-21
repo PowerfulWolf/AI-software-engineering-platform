@@ -18,7 +18,10 @@ documents, active applicable Specs and discovered native rules, not by Agents.
 - A new selection cannot rewrite a frozen requirement. Retired/replaced documents
   cannot enter new snapshots; historical snapshots retain exact verified bytes.
 - Gap, route, resolution and resume records preserve original run and evidence.
-  BLOCKING gaps prevent progress until an exact approved resolution is present.
+  Human-owned BLOCKING gaps prevent progress until an exact approved resolution is present.
+  A gap with `gap_owner=REPOSITORY` may continue only when runtime composition has explicitly
+  bound the exact repository revision to a read-only model client. The final role prompt must
+  require repository inspection and must not ask the user to paste source or READ output.
 - Workflow definitions are Team-owned, versioned and role-scoped. Learning proposals
   are not executable registrations. Missing evidence/version drift rejects a gate.
 - Knowledge is redacted before reaching an Agent or evidence record; raw digests remain
@@ -82,6 +85,30 @@ Good: missing facts stop before commands, resolution approval creates a new cont
 same Task resumes at its last delivery checkpoint. Bad: translating a gap into an invariant
 failure, or changing the frozen knowledge selection to resolve it. Tests must assert both
 the persisted enriched Context and fresh-process recovery.
+
+### Repository inspection fallback
+
+`KnowledgeAssessment.gap_owner` is `HUMAN` or `REPOSITORY`. The assessment prompt may select
+`REPOSITORY` only when the missing fact can be established from the bound repository at the
+exact `source_revision`; product decisions, external facts, stale or conflicting evidence stay
+`HUMAN`. `KnowledgeConsultationService(..., allow_repository_inspection=True)` is the explicit
+composition seam that permits this continuation. Without that flag, every `GAP` remains blocking.
+
+The non-blocking receipt remains immutable with `assessment.status=GAP` and is passed to the
+final role call. `KnowledgeAwareStructuredClient` adds a bounded instruction to inspect the
+repository read-only and report contradictions. It never converts a human-owned gap into a
+successful consultation. Upstream joint Product/Designer/Planner composition and native
+Delivery context composition set the flag only alongside a repository-backed client.
+
+| Case | Outcome |
+| --- | --- |
+| Good: `gap_owner=REPOSITORY`, exact source revision and read-only client | persist GAP receipt, continue final role call |
+| Base: `gap_owner=REPOSITORY` without the composition flag | persist blocking Gap and wait for approval |
+| Bad: `gap_owner=HUMAN`, conflict, stale fact, or invented citation | persist blocking Gap; no final role call |
+
+The regression test must assert that a Designer receives the final call and its instruction to
+read the bound repository, while the same assessment through a non-authorized service still
+raises `KnowledgeGapRaised`.
 
 Human-facing Knowledge Gap descriptions are Chinese application facts. The assessment prompt
 requires Simplified Chinese for `gap_question`; before publication, a non-Chinese model question

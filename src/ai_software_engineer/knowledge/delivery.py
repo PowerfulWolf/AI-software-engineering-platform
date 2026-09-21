@@ -13,7 +13,11 @@ from ai_software_engineer.domain.artifact import (
 )
 from ai_software_engineer.domain.enums import QaReportStatus, ReviewVerdict
 from ai_software_engineer.domain.model import DomainModel
-from ai_software_engineer.knowledge.agents import KnowledgeConsultation
+from ai_software_engineer.knowledge.agents import (
+    KnowledgeConsultation,
+    consultation_integrity_matches,
+    repository_inspection_gap,
+)
 from ai_software_engineer.knowledge.gaps import KnowledgeGapService
 from ai_software_engineer.knowledge.models import (
     Digest,
@@ -133,11 +137,15 @@ class KnowledgeDeliveryGate:
         stored = self.records.get(
             "consultations", consultation.binding.run_id, KnowledgeConsultation
         )
-        if stored != consultation or consultation.assessment.status != "SUFFICIENT":
+        repository_gap_is_unresolved = bool(
+            KnowledgeGapService(self.records).unresolved(consultation.binding)
+        )
+        consultation_is_usable = consultation.assessment.status == "SUFFICIENT" or (
+            repository_inspection_gap(consultation) and not repository_gap_is_unresolved
+        )
+        if stored != consultation or not consultation_is_usable:
             raise KnowledgeError("WORKFLOW_CONSULTATION_INVALID")
-        if consultation.consultation_sha256 != digest(
-            consultation.model_dump(mode="json", exclude={"consultation_sha256"})
-        ):
+        if not consultation_integrity_matches(consultation):
             raise KnowledgeError("WORKFLOW_CONSULTATION_INVALID")
         consultation.manifest.validate_integrity()
         parent = self.contexts.get(consultation.binding.context_manifest_id)

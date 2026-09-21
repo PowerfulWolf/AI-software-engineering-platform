@@ -39,7 +39,10 @@ Delivery consultation 在最终 AgentRequest 构造前写入受预算约束的 C
 
 ## 知识缺口恢复
 
-缺少决定性事实时，Requirement 进入 WAITING_HUMAN 并记录 exact gap ID；Task 保持最近 checkpoint。
+缺少需要人工决定的决定性事实时，Requirement 进入 WAITING_HUMAN 并记录 exact gap ID；Task 保持最近 checkpoint。
+如果缺少的事实可以从绑定的 exact source revision 代码仓库核实，Designer/Planner 和 Delivery
+角色先使用只读仓库检查继续工作，不要求用户提供源码或 READ 输出；只有模型明确标记为
+`gap_owner=HUMAN` 的缺口才进入人工等待。
 Console 的需求详情提供“待确认的知识”表单。展开当前事项，填写解答与事实来源/决策依据，再点击
 “批准解答”。成功后状态为“已确认的知识 · 待继续”，入口为“查看已确认的知识”；展开后在
 “已回答的内容”中回显保存的原解答及其来源，保留原有换行，不需重复填写。
@@ -87,6 +90,12 @@ Requirement 的已批准事实，并记录对首次恢复摘要的引用；不�
 ## 存量数据处置
 
 本轮开发没有修改业务数据库、生产 Task、Operation、知识选择或审批。
+
+本次知识 gate 修复同样不重写历史 Gap、Consultation 或 WAITING_HUMAN checkpoint。旧
+`KnowledgeAssessment` 没有 `gap_owner` 时按 `HUMAN` 读取，并兼容其原有 consultation digest；
+因此历史记录的审计含义不变。已经处于 WAITING_HUMAN 的 Requirement 继续使用既有 exact
+resolution/`request resume` 或关闭并重新创建需求的流程，不能直接改库清除等待。新产生的
+咨询会在有明确只读仓库绑定时把可由代码核实的缺口标为 `REPOSITORY`，不再要求用户粘贴源码。
 
 - 旧计划和 approved Context 不迁移、不改写。旧计划 extension 缺失时仍保持原字节和 hash；
   新计划发布执行更严格的修订与覆盖校验。

@@ -45,6 +45,15 @@
           ],
           "title": "Gap Reason",
           "type": "string"
+        },
+        "gap_owner": {
+          "default": "HUMAN",
+          "enum": [
+            "HUMAN",
+            "REPOSITORY"
+          ],
+          "title": "Gap Owner",
+          "type": "string"
         }
       },
       "required": [

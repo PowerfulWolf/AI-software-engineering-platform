@@ -6,7 +6,7 @@ import pytest
 
 from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.context import ContextSource, FileContextStore
-from ai_software_engineer.domain import AgentRole, TaskStatus, TeamRole
+from ai_software_engineer.domain import AgentRole, Task, TaskStatus, TeamRole
 from ai_software_engineer.knowledge.agents import KnowledgeConsultation
 from ai_software_engineer.knowledge.delivery import KnowledgeDeliveryGate
 from ai_software_engineer.knowledge.gaps import (
@@ -18,20 +18,22 @@ from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.production_backend import ProductionProjectDeliveryBackend
 from ai_software_engineer.orchestration import FileRunContextBuilder, RetryingOrchestrator
 from ai_software_engineer.store import SqliteTaskRepository
-from tests.knowledge.test_consultation import Model
+from tests.knowledge.test_consultation import Model, RepositoryInspectionModel
 from tests.orchestration.test_retry import ScriptedAdapter
 from tests.orchestration.test_runner import _clock, _definitions, _task
 
 
 class Clients:
-    def __init__(self) -> None:
-        self.model = Model()
+    def __init__(self, model: Model | None = None) -> None:
+        self.model = model or Model()
 
     def for_project(self, repository_root: Path, role: TeamRole) -> Model:
         return self.model
 
 
-def _builder(tmp_path: Path, *, enabled: bool = True):  # type: ignore[no-untyped-def]
+def _builder(
+    tmp_path: Path, *, enabled: bool = True, model: Model | None = None
+) -> tuple[Task, FileContextStore, KnowledgeRecordStore, KnowledgeRunContextBuilder]:
     task = _task(tmp_path)
     contexts = FileContextStore(tmp_path / "contexts")
     records = KnowledgeRecordStore(tmp_path / "knowledge")
@@ -49,7 +51,7 @@ def _builder(tmp_path: Path, *, enabled: bool = True):  # type: ignore[no-untype
     builder = KnowledgeRunContextBuilder(
         FileRunContextBuilder(task.repository, context_store=contexts),
         contexts=contexts,
-        clients=Clients(),
+        clients=Clients(model),
         repository_root=Path(task.repository),
         records=records,
         team_id="team_ai",
@@ -121,3 +123,24 @@ def test_gap_is_not_converted_to_terminal_delivery_failure(tmp_path: Path) -> No
     with pytest.raises(KnowledgeGapRaised) as caught:
         ProductionProjectDeliveryBackend._guard("Delivery", consult)
     assert KnowledgeGapService(records).unresolved(caught.value.gap.binding)
+
+
+def test_repository_inspection_gap_can_complete_native_delivery(tmp_path: Path) -> None:
+    task, _, records, builder = _builder(
+        tmp_path, enabled=False, model=RepositoryInspectionModel()
+    )
+    artifacts = FileArtifactStore(tmp_path / "artifacts")
+    with SqliteTaskRepository(tmp_path / "tasks.sqlite") as repository:
+        repository.create(task)
+        result = RetryingOrchestrator(
+            repository=repository,
+            artifact_store=artifacts,
+            context_builder=builder,
+            agent_adapter=ScriptedAdapter(),
+            agent_definitions=_definitions(),
+            clock=_clock,
+            transition_gate=KnowledgeDeliveryGate(
+                records=records, artifacts=artifacts, contexts=builder.contexts
+            ),
+        ).run_task(task.id)
+    assert result.task.status is TaskStatus.DONE

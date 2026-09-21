@@ -71,7 +71,14 @@ def joint_knowledge_client(
     records = KnowledgeRecordStore(records_root)
     records.put("snapshots", snapshot.snapshot_sha256, snapshot)
     records.put("stage-contexts", binding.context_manifest_id, checkpoint)
-    return KnowledgeAwareStructuredClient(client, binding, snapshot, records, retrieval)
+    return KnowledgeAwareStructuredClient(
+        client,
+        binding,
+        snapshot,
+        records,
+        retrieval,
+        allow_repository_inspection=True,
+    )
 
 
 class KnowledgeRoleClients(Protocol):
@@ -215,7 +222,11 @@ class KnowledgeRunContextBuilder:
         )
         client = self.clients.for_project(self.repository_root, binding.role)
         consultation = KnowledgeConsultationService(
-            client, self.records, self.retrieval, wait_port=self.wait_port
+            client,
+            self.records,
+            self.retrieval,
+            wait_port=self.wait_port,
+            allow_repository_inspection=True,
         ).consult(
             binding,
             snapshot,
