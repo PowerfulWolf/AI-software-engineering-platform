@@ -14,7 +14,6 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 
 | 目录 | 状态 / 阶段 | 剩余事项 |
 |---|---|---|
-| [09-21-knowledge-resolution-ui](09-21-knowledge-resolution-ui/task.json) | in_progress / verified | 回归已完成，服务已加载；提交推送收尾 |
 | [09-02-t033-delivery-reporter](09-02-t033-delivery-reporter/task.json) | planned / plan | 见原 PRD/任务记录 |
 | [09-06-t044-explicit-delivery-recovery](09-06-t044-explicit-delivery-recovery/task.json) | in_progress / coder_reapply_offline_verified | new exact real target recovery plan and human approval；real Coder QA Reviewer validation |
 | [09-15-requirement-source-baseline](09-15-requirement-source-baseline/task.json) | in_progress / ready_for_review | rerun the complete localhost socket and MySQL suite outside the restricted sandbox |
@@ -112,5 +111,6 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 | 09-19-console-readiness | console-readiness | [completed](09-19-console-readiness/task.json) |
 | 09-19-documentation-cleanup | documentation-cleanup-20260919 | [completed](09-19-documentation-cleanup/task.json) |
 | 09-19-mysql-test-isolation | mysql-test-isolation-20260919 | [completed](09-19-mysql-test-isolation/task.json) |
+| 09-21-knowledge-resolution-ui | knowledge-resolution-ui | [completed](09-21-knowledge-resolution-ui/task.json) |
 
-汇总：当前 3；待核实 11；已完成 66。
+汇总：当前 3；待核实 11；已完成 67。

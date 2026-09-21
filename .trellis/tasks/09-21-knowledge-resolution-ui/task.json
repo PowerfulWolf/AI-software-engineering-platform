@@ -1,8 +1,9 @@
 {
   "id": "knowledge-resolution-ui",
   "title": "Restore approved knowledge resolution state in Console",
-  "status": "in_progress",
-  "phase": "verified",
+  "status": "completed",
+  "phase": "complete",
+  "implementation_commit": "e4552eb",
   "verification": "verification.md",
   "baseline": "41aeccc",
   "authorization": "User approved task creation, implementation, commit and push on 2026-09-21."
