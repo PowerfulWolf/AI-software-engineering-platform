@@ -112,5 +112,6 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 | 09-19-documentation-cleanup | documentation-cleanup-20260919 | [completed](09-19-documentation-cleanup/task.json) |
 | 09-19-mysql-test-isolation | mysql-test-isolation-20260919 | [completed](09-19-mysql-test-isolation/task.json) |
 | 09-21-knowledge-resolution-ui | knowledge-resolution-ui | [completed](09-21-knowledge-resolution-ui/task.json) |
+| 09-21-confirmed-knowledge-display | confirmed-knowledge-display | [completed](09-21-confirmed-knowledge-display/task.json) |
 
-汇总：当前 3；待核实 11；已完成 67。
+汇总：当前 3；待核实 11；已完成 68。

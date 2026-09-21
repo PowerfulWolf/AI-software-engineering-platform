@@ -108,7 +108,7 @@ test("knowledge resolution submits once and preserves form/error state on retry"
   assert.doesNotMatch(text(h.detail()), /请重试/);
   assert.equal(all(h.detail()).filter(n => n.tag === "form").length, 0);
   assert.ok(findButton(h, "继续交付"));
-  await findButton(h, "查看已批准的解答").events.click();
+  await findButton(h, "查看已确认的知识").events.click();
   assert.equal(all(h.detail()).filter(n => n.tag === "form").length, 0);
   assert.match(text(h.detail()), /产品确认/);
 });
@@ -144,10 +144,10 @@ test("reloaded approved gap shows saved answer and exact-checkpoint continuation
     operations = [{operation_id: "op-old", status: "SUCCEEDED", intent: {action: "CONTINUE_DELIVERY", delivery_id: "r1", project_id: "project_test"}, result: {delivery_id: "r1", stage: "WAITING_HUMAN", checkpoint_sha256: "checkpoint-a", next_action: snapshot.requests[0].blocker}, updated_at: "2026-09-21"}];
     renderDetail(); renderOperationStatus();
   `, h.context);
-  await findButton(h, "查看已批准的解答").events.click();
+  await findButton(h, "查看已确认的知识").events.click();
   assert.equal(all(h.detail()).filter(n => n.tag === "form" || n.tag === "textarea").length, 0);
-  assert.match(text(h.detail()), /已批准的解答.*A.*产品确认/);
-  assert.match(text(h.detail()), /解答已批准 · 待继续/);
+  assert.match(text(h.detail()), /已回答的内容.*A.*产品确认/);
+  assert.match(text(h.detail()), /已确认的知识 · 待继续/);
   assert.doesNotMatch(text(h.detail()), /Resolve and approve|需要你的确认/);
   assert.doesNotMatch(text(h.get("operations")), /等待人工|操作需要处理/);
   assert.equal(all(h.detail()).filter(n => n.tag === "button" && n.textContent === "继续交付").length, 1);
@@ -179,7 +179,7 @@ test("polling the same checkpoint replaces pending drafts when approval arrived 
   view = approved;
   h.context.approvedView = approved;
   vm.runInContext("snapshot.requests[0].knowledge_gap = approvedView; renderDetail()", h.context);
-  await findButton(h, "查看已批准的解答").events.click();
+  await findButton(h, "查看已确认的知识").events.click();
   assert.equal(all(h.detail()).filter(n => n.tag === "textarea").length, 0);
   assert.match(text(h.detail()), /产品确认/);
 });
@@ -193,6 +193,45 @@ test("operation guidance remains readable if the Team snapshot is unavailable", 
   `, h.context));
   assert.match(text(h.get("operations")), /等待人工/);
   assert.doesNotMatch(text(h.get("operations")), /解答已批准/);
+});
+
+test("opening a stale pending entry echoes the saved answer and immediately confirms its state", async () => {
+  const answer = "第一行已确认\n第二行 <script>plain text</script>";
+  const confirmed = {...approved, resolution: {...resolution, answer}};
+  let reads = 0;
+  const h = harness(async () => { reads++; return {ok: true, json: async () => [confirmed]}; });
+  await findButton(h, "查看待确认的知识").events.click();
+  assert.equal(all(h.detail()).find(n => n.className === "knowledge-gap-answer").textContent, answer);
+  const css = fs.readFileSync(path.join(__dirname, "../../src/ai_software_engineer/team_view/style.css"), "utf8");
+  assert.match(css, /\.knowledge-gap-answer\s*\{[^}]*white-space:\s*pre-wrap/);
+  assert.equal(all(h.detail()).find(n => n.className === "knowledge-gap-content").hidden, false);
+  assert.equal(all(h.detail()).filter(n => n.tag === "form" || n.tag === "textarea").length, 0);
+  assert.ok(all(h.detail()).some(n => n.tag === "h2" && n.textContent === "已确认的知识"));
+  assert.match(text(h.detail()), /已确认的知识 · 待继续/);
+  assert.doesNotMatch(text(h.detail()), /补充待确认的信息|查看待确认的知识|需要你的确认/);
+  await findButton(h, "收起知识详情").events.click();
+  h.render();
+  await findButton(h, "查看已确认的知识").events.click();
+  assert.equal(reads, 1);
+  assert.equal(all(h.detail()).find(n => n.className === "knowledge-gap-answer").textContent, answer);
+});
+
+test("a late confirmed answer cannot confirm a newer checkpoint's question", async () => {
+  let firstResolve, reads = 0;
+  const current = {...pending, gap: {...gap, gap_id: "gap-new", question: "新的待确认问题"}};
+  const h = harness(async () => {
+    if (++reads === 1) return new Promise(done => { firstResolve = done; });
+    return {ok: true, json: async () => [current]};
+  });
+  const oldLoad = findButton(h, "查看待确认的知识").events.click();
+  h.context.currentView = current;
+  vm.runInContext('snapshot.requests[0] = {...snapshot.requests[0], checkpoint_sha256: "checkpoint-b", knowledge_gap: currentView}; renderDetail()', h.context);
+  await findButton(h, "查看待确认的知识").events.click();
+  firstResolve({ok: true, json: async () => [approved]});
+  await oldLoad;
+  assert.match(text(h.detail()), /新的待确认问题/);
+  assert.doesNotMatch(text(h.detail()), /已确认的知识|产品确认/);
+  assert.equal(all(h.detail()).filter(n => n.tag === "form").length, 1);
 });
 
 test("historical approved gap and current pending gap have only one actionable form", async () => {

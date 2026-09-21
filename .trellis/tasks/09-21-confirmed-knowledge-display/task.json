@@ -1,0 +1,9 @@
+{
+  "id": "confirmed-knowledge-display",
+  "title": "Echo confirmed knowledge answers with consistent labels",
+  "status": "completed",
+  "phase": "complete",
+  "verification": "verification.md",
+  "baseline": "9954761",
+  "authorization": "User replied 修正下吧 after the small-task creation question."
+}

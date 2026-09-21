@@ -242,8 +242,15 @@ returns `KnowledgeGapView[]` (not the old bare `KnowledgeGap[]`).
 - Read stores explicitly use `read_only=True`: no mkdir, publication, migration or repair.
   `is_current` requires the current WAITING_HUMAN checkpoint's exact gap ID. History stays readable.
 - Snapshot polling includes approval facts even when checkpoint SHA is unchanged. Current
-  approval displays `解答已批准 · 待继续`, saved answer/source, no approval form, and explicit
+  approval displays `已确认的知识 · 待继续`, saved answer/source, no approval form, and explicit
   continuation guidance. Historical gaps cannot offer approval/continuation actions.
+- Confirmed sections/cards use `已确认的知识` and the collapsed entry uses `查看已确认的知识`.
+  Expanding shows `已回答的内容` and the saved source; preserve multiline answers with `pre-wrap`
+  and textContent. Only persisted resolutions confirm knowledge, never an unsaved draft.
+- A detail GET can observe approval before the Team poll. Update matching current request guidance
+  and re-key the existing expanded section by resolution ID, keeping the visible answer and avoiding
+  a duplicate GET. Require the same project, requirement, checkpoint/cache key and current gap ID;
+  late results for older checkpoints cannot confirm or replace a new pending question.
 - A preserved IMPLEMENTING/QA child checkpoint cannot override a current knowledge wait.
   A real active Console delivery Operation can show that explicit continuation is running.
 - Approval immediately refreshes detail and Operation guidance. Current read facts supersede
@@ -277,7 +284,8 @@ or a new empty form asks the user to repeat an immutable approval.
   schema validation, historical/current gap isolation and corrupted lineage rejection.
 - `tests/team_view/knowledge-gap.test.cjs`: reload and successful-submit reopening, same-hash
   external approval, safe text, stale blocker/banner replacement, retained child precedence,
-  one exact-checkpoint continuation action that disappears while running.
+  one exact-checkpoint continuation action that disappears while running, confirmed detail GET ahead
+  of snapshot polling, confirmed labels, multiline echo and late-response isolation.
 
 ### 7. Wrong vs Correct
 
