@@ -11,10 +11,12 @@ class Element {
       textContent: "", className: "", value: "", hidden: false, checked: false });
     this.classList = { toggle() {} };
   }
-  append(...nodes) { this.children.push(...nodes); }
+  append(...nodes) { for (const node of nodes) if (typeof node !== "string") node.parentElement = this; this.children.push(...nodes); }
   replaceChildren(...nodes) { this.children = nodes; }
   addEventListener(name, callback) { this.events[name] = callback; }
   setAttribute(name, value) { this.attributes[name] = value; }
+  getAttribute(name) { return this.attributes[name] ?? null; }
+  remove() { if (this.parentElement) this.parentElement.children = this.parentElement.children.filter(node => node !== this); }
   removeAttribute(name) { delete this.attributes[name]; }
   querySelectorAll(selector) {
     return descendants(this).slice(1).filter((node) => matchesSelector(node, selector));

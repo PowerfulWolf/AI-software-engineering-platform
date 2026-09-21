@@ -24,6 +24,15 @@ let runtimeStatusError = null;
 let runtimeStatusLoading = false;
 let administrationNotice = null;
 let operationNotice = null;
+let renderedNotificationSignature = null;
+let notificationReturnFocus = null;
+const discussionFormCaches = new Map();
+let settingsDraftBaseline = null;
+let knowledgeReadSerial = 0;
+let administrationLoadPromise = null;
+let knowledgeLoading = false;
+let knowledgeError = null;
+let knowledgeLoadedContext = null;
 let composing = false;
 let pendingConfirmation = null;
 let actionSerial = 0;
@@ -232,7 +241,11 @@ const el = (tag, text, className) => {
 };
 const button = (text, action, className = "link") => {
   const n = el("button", text, className);
-  n.addEventListener("click", action);
+  n.type = "button";
+  n.addEventListener("click", (event) => {
+    if (text === "取消" && !mayCloseComposer()) return;
+    return runUiAction(n.closest?.(".modal-dialog"), () => action(event));
+  });
   return n;
 };
 const deliveryButton = (text, action, className = "link") => {
@@ -813,20 +826,167 @@ function multiSelectField(labelText, hint, key, options, initialValues) {
     },
   };
 }
+function hasOpenComposer() {
+  return Boolean(
+    composing || creatingProject || editingRequirement || recreatingRequirement ||
+    knowledgeImportMode || pendingConfirmation || settingsSaveResult ||
+    editingKnowledgeDocument || editingSpecDocument,
+  );
+}
+// UI command ownership is the form/dialog node, never a mutable global editor flag.
+const uiCommands = new WeakMap();
+const dirtyComposers = new WeakSet();
+const observedComposers = new WeakSet();
+const modalOpeners = new Map();
+let inertNodes = [];
+let currentModal = null;
+function runUiAction(owner, action) {
+  if (owner && uiCommands.has(owner)) return;
+  const controls = owner?.querySelectorAll
+    ? [...owner.querySelectorAll("button, input, textarea, select")].map(node => [node, suspendedDeliveryControls.get(node) ?? node.disabled]) : [];
+  const result = action();
+  if (!owner || !result?.then) return result;
+  uiCommands.set(owner, controls);
+  owner.setAttribute("aria-busy", "true");
+  for (const [node] of controls) {
+    if (node.getAttribute("data-delivery-control") === "true") setDeliveryControlDisabled(node, true);
+    else node.disabled = true;
+  }
+  const status = el("p", "正在提交，请等待结果。提交后关闭窗口不会撤销命令。", "command-pending muted");
+  status.setAttribute("role", "status");
+  owner.append(status);
+  syncModalState();
+  return result.finally(() => {
+    uiCommands.delete(owner);
+    owner.removeAttribute("aria-busy");
+    status.remove();
+    for (const [node, disabled] of controls) {
+      if (node.getAttribute("data-delivery-control") === "true") setDeliveryControlDisabled(node, disabled);
+      else node.disabled = disabled;
+    }
+    if (owner.matches?.(".settings-form") && page === "settings") render();
+    syncModalState();
+  });
+}
+function onFormSubmit(form, action) {
+  form.addEventListener("submit", event => {
+    event.preventDefault();
+    return runUiAction(form.closest?.(".modal-dialog") || form, () => action(event));
+  });
+}
+function mayCloseComposer() {
+  const dialog = document.getElementById("composer").firstElementChild;
+  if (!dialog) return true;
+  if (uiCommands.has(dialog)) return false;
+  return !dirtyComposers.has(dialog) || globalThis.confirm("还有未保存的编辑，确定放弃并关闭吗？");
+}
+function topModal() {
+  for (const id of ["notification", "composer", "detail"]) {
+    const panel = document.getElementById(id);
+    if (!panel.hidden) {
+      const dialog = panel.querySelector?.('[aria-modal="true"]');
+      if (dialog) return dialog;
+    }
+  }
+  return null;
+}
+function modalControls(dialog) {
+  return [...dialog.querySelectorAll("button, input, textarea, select, a[href], summary, [tabindex]")]
+    .filter(node => !node.disabled && node.tabIndex >= 0 && node.getClientRects().length && !node.closest("[hidden]"));
+}
+function focusModal(dialog) {
+  const target = modalControls(dialog)[0] || dialog;
+  if (target === dialog) dialog.tabIndex = -1;
+  target.focus();
+}
+function syncModalState() {
+  // The lightweight contract harness has no layout/focus APIs; browser tests cover this seam.
+  if (!document.body?.contains) return;
+  const modal = topModal();
+  for (const node of inertNodes) node.inert = false;
+  inertNodes = [];
+  if (modal) {
+    let branch = modal;
+    while (branch.parentElement) {
+      for (const sibling of branch.parentElement.children) {
+        if (sibling !== branch) { sibling.inert = true; inertNodes.push(sibling); }
+      }
+      branch = branch.parentElement;
+      if (branch === document.body) break;
+    }
+  }
+  const composer = document.getElementById("composer").firstElementChild;
+  if (composer && !observedComposers.has(composer)) {
+    observedComposers.add(composer);
+    for (const event of ["input", "change"])
+      composer.addEventListener(event, () => dirtyComposers.add(composer));
+  }
+  const old = currentModal;
+  currentModal = modal;
+  // Capture openers before builders focus new controls (render wrappers do this).
+  for (const [dialog, opener] of modalOpeners) {
+    if (dialog.isConnected) continue;
+    modalOpeners.delete(dialog);
+    if (old !== dialog) continue;
+    let target = opener.node?.isConnected ? opener.node : null;
+    if (!target && opener.id) target = document.getElementById(opener.id);
+    if (!target && opener.text) target = [...document.querySelectorAll("button")]
+      .find(node => node.textContent === opener.text && !node.closest("[hidden]") && !node.inert);
+    if (target && (!modal || modal.contains(target))) target.focus();
+  }
+  if (modal && !modal.contains(document.activeElement)) focusModal(modal);
+}
+function rememberModalOpener(panel, opener) {
+  const dialog = panel.querySelector?.('[aria-modal="true"]');
+  if (dialog && !modalOpeners.has(dialog)) {
+    // Keep the original opener when a polled task dialog is rebuilt.
+    const previous = [...modalOpeners].find(([node, value]) => !node.isConnected && value.panel === panel.id);
+    modalOpeners.set(dialog, previous?.[1] || {
+      panel: panel.id, node: opener, id: opener?.id, text: opener?.tagName === "BUTTON" ? opener.textContent : null,
+    });
+  }
+}
+document.addEventListener?.("keydown", event => {
+  const modal = topModal();
+  if (!modal) return;
+  if (event.key === "Escape") {
+    event.preventDefault(); event.stopPropagation();
+    if (uiCommands.has(modal)) return;
+    const close = [...modal.querySelectorAll("button")]
+      .find(node => ["取消", "知道了", "关闭"].includes(node.textContent) && !node.disabled);
+    close?.click();
+  } else if (event.key === "Tab") {
+    const controls = modalControls(modal);
+    const index = controls.indexOf(document.activeElement);
+    event.preventDefault(); event.stopPropagation();
+    if (!controls.length) focusModal(modal);
+    else controls[(index + (event.shiftKey ? -1 : 1) + controls.length) % controls.length].focus();
+  }
+}, true);
+document.addEventListener?.("focusin", () => {
+  const modal = topModal();
+  if (modal && !modal.contains(document.activeElement)) focusModal(modal);
+});
+globalThis.addEventListener?.("beforeunload", event => {
+  const composer = document.getElementById("composer").firstElementChild;
+  if (settingsHaveDraft() || (composer && (dirtyComposers.has(composer) || uiCommands.has(composer))) ||
+      [...discussionFormCaches.values()].some(draft => draft.dirty())) {
+    event.preventDefault(); event.returnValue = "";
+  }
+});
 function renderComposer() {
+  const panel = document.getElementById("composer");
+  if (hasOpenComposer() && uiCommands.has(panel.firstElementChild)) return;
+  const opener = document.activeElement;
+  buildComposer();
+  rememberModalOpener(panel, opener);
+  syncModalState();
+}
+function buildComposer() {
   const panel = document.getElementById("composer");
   panel.replaceChildren();
   panel.className = "";
-  panel.hidden =
-    !composing &&
-    !creatingProject &&
-    !editingRequirement &&
-    !recreatingRequirement &&
-    !knowledgeImportMode &&
-    !pendingConfirmation &&
-    !settingsSaveResult &&
-    !editingKnowledgeDocument &&
-    !editingSpecDocument;
+  panel.hidden = !hasOpenComposer();
   if (panel.hidden) return;
   panel.className = "modal-backdrop";
   const dialog = el("section", undefined, "modal-dialog");
@@ -908,6 +1068,7 @@ function renderComposer() {
         else proceed.disabled = true;
         try {
           await confirmation.action();
+          if (pendingConfirmation !== confirmation) return;
           pendingConfirmation = null;
           render();
         } catch (error) {
@@ -965,7 +1126,7 @@ function renderComposer() {
       feedback,
       actions,
     );
-    form.addEventListener("submit", async (event) => {
+    onFormSubmit(form, async (event) => {
       event.preventDefault();
       if (!content.value.trim()) {
         feedback.className = "form-feedback error";
@@ -994,6 +1155,7 @@ function renderComposer() {
             body: content.value,
           },
         );
+        if (editingKnowledgeDocument !== editing) return;
         editingKnowledgeDocument = null;
         await loadKnowledge();
         const knowledgeLabel = knowledgeLabelForScope(editing.scope);
@@ -1085,7 +1247,7 @@ function renderComposer() {
       feedback,
       actions,
     );
-    form.addEventListener("submit", async (event) => {
+    onFormSubmit(form, async (event) => {
       event.preventDefault();
       const selectedRoles = roles.values();
       const selectedStages = stages.values();
@@ -1116,6 +1278,7 @@ function renderComposer() {
             verification: verification.value.trim(),
           }),
         });
+        if (editingSpecDocument !== editing) return;
         editingSpecDocument = null;
         await loadKnowledge();
         administrationNotice = {
@@ -1199,7 +1362,7 @@ function renderComposer() {
       feedback,
       submit,
     );
-    form.addEventListener("submit", async (event) => {
+    onFormSubmit(form, async (event) => {
       event.preventDefault();
       setDeliveryControlDisabled(submit, true);
       try {
@@ -1267,6 +1430,7 @@ function renderComposer() {
           method: "POST",
         });
         let exceededDirectoryLimit = false;
+        if (result.directories?.length) dirtyComposers.add(dialog);
         for (const path of result.directories || []) {
           if (selectedRoots.includes(path)) continue;
           if (selectedRoots.length >= 32) exceededDirectoryLimit = true;
@@ -1298,6 +1462,7 @@ function renderComposer() {
       chip.append(
         el("span", path, "paths"),
         button("移除", () => {
+          dirtyComposers.add(dialog);
           selectedRoots.splice(selectedRoots.indexOf(path), 1);
           renderSelectedRoots();
         }),
@@ -1329,7 +1494,7 @@ function renderComposer() {
     feedback,
     submit,
   );
-  form.addEventListener("submit", async (event) => {
+  onFormSubmit(form, async (event) => {
     event.preventDefault();
     const projectRoots = [...selectedRoots];
     if (!name.value.trim() || !projectRoots.length) {
@@ -1420,10 +1585,13 @@ function acknowledgeOperationNotice(notice) {
     acknowledgedOperationNoticeKeys.add(notice.key);
     persistAcknowledgedOperationNotices();
   }
-  if (operationNotice === notice) operationNotice = null;
+  if (operationNotice === notice || (notice?.key && operationNotice?.key === notice.key))
+    operationNotice = null;
 }
-function notificationJump(notice) {
+async function notificationJump(notice) {
+  if (hasOpenComposer()) return;
   acknowledgeOperationNotice(notice);
+  renderNotification();
   if (notice.target) {
     page = "requests";
     updateNavigation();
@@ -1431,17 +1599,18 @@ function notificationJump(notice) {
     return;
   }
   if (notice.page) {
-    page = notice.page;
-    updateNavigation();
-    render();
+    await navigatePage(notice.page);
     return;
   }
-  renderNotification();
 }
 function operationNoticeFor(operation) {
-  const target = operationTarget(operation);
+  const context = operation.intent.project_id
+    ? projectName() : "团队";
+  const targetId = operationTarget(operation);
+  const request = snapshot && targetId ? requestById(targetId) : null;
+  const target = request && request.project_id === operation.intent.project_id
+    ? targetId : null;
   const needsHumanAttention = operationNeedsHumanAttention(operation);
-  const request = snapshot && target ? requestById(target) : null;
   const knowledgeApproved =
     needsHumanAttention &&
     operation.result?.stage === "WAITING_HUMAN" &&
@@ -1454,7 +1623,7 @@ function operationNoticeFor(operation) {
       operationId: operation.operation_id,
       state: "ACTIVE",
       kind: "info",
-      title: `${label(operation.intent.action)} · ${label(operation.status)}`,
+      title: `${context} · ${label(operation.intent.action)} · ${label(operation.status)}`,
       message:
         operation.status === "QUEUED"
           ? "操作已安全接收，正在等待 Manager 执行。关闭弹窗不会中断任务。"
@@ -1466,7 +1635,7 @@ function operationNoticeFor(operation) {
       operationId: operation.operation_id,
       state: operation.status,
       kind: "error",
-      title: `${label(operation.intent.action)} · ${label(operation.status)}`,
+      title: `${context} · ${label(operation.intent.action)} · ${label(operation.status)}`,
       message: operation.error_summary || "操作未完成，请查看需求详情后处理。",
       target,
       jumpLabel: target ? "打开需求工作区" : null,
@@ -1477,7 +1646,7 @@ function operationNoticeFor(operation) {
       operationId: operation.operation_id,
       state: "ACTION_REQUIRED",
       kind: "warning",
-      title: `${label(operation.intent.action)} · 需要处理`,
+      title: `${context} · ${label(operation.intent.action)} · 需要处理`,
       message: knowledgeApproved
         ? "知识解答已批准。请进入需求工作区继续原需求。"
         : "操作需要你的处理，具体原因和下一步已收口到需求详情。",
@@ -1486,46 +1655,52 @@ function operationNoticeFor(operation) {
     };
   return null;
 }
-function systemOperationNotice() {
+function systemOperationNotices() {
+  const notices = [];
   if (consoleAvailable === false)
-    return {
+    notices.push({
       key: "system:console-read-only",
       kind: "error",
       title: "交付控制不可用",
       message: "当前连接的是只读看板。请启动后台 Web Console 后再创建或继续需求。",
       page: "status",
       jumpLabel: "查看运行状态",
-    };
+    });
   if (!operationsAvailable)
-    return {
+    notices.push({
       key: "system:operations-unavailable",
       kind: "error",
       title: "交付记录读取失败",
       message: "交付操作记录暂时无法读取；恢复连接后可继续操作。",
-    };
+    });
   if (consoleAvailable === true && consoleDeliveryReady === false)
-    return {
+    notices.push({
       key: "system:delivery-not-ready",
       kind: "warning",
       title: "交付运行时尚未就绪",
       message: "请先完成设置并应用配置，再创建或继续需求。",
       page: "settings",
       jumpLabel: "前往设置",
-    };
+    });
   if (snapshot && consoleTeamId && snapshot.team_id !== consoleTeamId)
-    return {
+    notices.push({
       key: "system:team-mismatch",
       kind: "error",
       title: "Team 绑定不一致",
       message: "当前后台服务未绑定这个 Team；此工作台暂时只能查看，不能提交交付操作。",
       page: "status",
       jumpLabel: "查看运行状态",
-    };
-  return null;
+    });
+  return notices;
 }
 function renderNotification() {
+  const opener = document.activeElement;
+  buildNotification();
+  rememberModalOpener(document.getElementById("notification"), opener);
+  syncModalState();
+}
+function buildNotification() {
   const panel = document.getElementById("notification");
-  panel.replaceChildren();
   const notice = operationNotice ||
     (administrationNotice?.page === page
       ? {
@@ -1537,8 +1712,23 @@ function renderNotification() {
           administration: true,
         }
       : null);
+  const navigationBlocked = Boolean(notice?.jumpLabel && hasOpenComposer());
+  const signature = notice ? JSON.stringify({ notice, navigationBlocked }) : null;
   panel.hidden = !notice;
-  if (!notice) return;
+  if (signature === renderedNotificationSignature) return;
+  // A newly displayed operation/system notice consumes the older management feedback.
+  // Otherwise acknowledging it reveals a stale success dialog underneath.
+  if (operationNotice) administrationNotice = null;
+  const wasOpen = renderedNotificationSignature !== null;
+  renderedNotificationSignature = signature;
+  panel.replaceChildren();
+  panel.className = "";
+  if (!notice) {
+    if (notificationReturnFocus?.isConnected) notificationReturnFocus.focus();
+    notificationReturnFocus = null;
+    return;
+  }
+  if (!wasOpen) notificationReturnFocus = document.activeElement;
   panel.className = "modal-backdrop notification-backdrop";
   const dialog = el("section", undefined, "modal-dialog operation-notice-dialog");
   dialog.setAttribute("role", notice.kind === "error" ? "alertdialog" : "dialog");
@@ -1560,23 +1750,26 @@ function renderNotification() {
       else acknowledgeOperationNotice(notice);
       renderNotification();
     },
-    notice.jumpLabel ? "" : "primary",
+    notice.jumpLabel && !navigationBlocked ? "" : "primary",
   );
   const actions = el("div", undefined, "modal-actions");
   actions.append(close);
-  if (notice.jumpLabel)
+  if (notice.jumpLabel && !navigationBlocked)
     actions.append(
       button(notice.jumpLabel, () => notificationJump(notice), "primary"),
     );
   dialog.append(
     header,
     el("p", notice.message, "settings-result-message"),
-    actions,
   );
+  if (navigationBlocked)
+    dialog.append(el("p", "当前表单仍在编辑。请先完成或取消编辑，再通过页面导航查看处理。", "muted"));
+  dialog.append(actions);
   panel.append(dialog);
   close.focus();
 }
 async function submitOperation(intent) {
+  const ownerProjectId = intent.project_id || null;
   try {
     if (!canControlCurrentTeam())
       throw new Error("交付控制状态暂不可用，请刷新后重试。");
@@ -1608,6 +1801,8 @@ async function submitOperation(intent) {
     renderDetail();
     return payload;
   } catch (error) {
+    administrationNotice = null;
+    if (ownerProjectId && ownerProjectId !== currentProjectId()) return null;
     operationNotice = {
       kind: "error",
       title: `${label(intent.action)} · 操作未被接受`,
@@ -1621,31 +1816,9 @@ function renderOperationStatus() {
   const panel = document.getElementById("operations");
   panel.replaceChildren();
   panel.hidden = true;
-  if (page !== "requests") return;
-  const systemNotice = systemOperationNotice();
-  const systemKeys = [...acknowledgedOperationNoticeKeys].filter((key) =>
-    key.startsWith("system:"),
-  );
-  if (!systemNotice) {
-    for (const key of systemKeys) acknowledgedOperationNoticeKeys.delete(key);
-    if (systemKeys.length) persistAcknowledgedOperationNotices();
-    if (operationNotice?.key?.startsWith("system:")) {
-      operationNotice = null;
-      renderNotification();
-    }
-  }
-  if (
-    systemNotice &&
-    (!operationNotice || operationNotice.state === "ACTIVE") &&
-    !acknowledgedOperationNoticeKeys.has(systemNotice.key)
-  ) {
-    operationNotice = systemNotice;
-    renderNotification();
-    return;
-  }
-  if (systemNotice) return;
   const visible = [...operations]
     .filter((operation) => {
+      if (operation.intent.project_id && operation.intent.project_id !== currentProjectId()) return false;
       if (
         operation.status === "SUCCEEDED" &&
         !operationNeedsHumanAttention(operation)
@@ -1660,8 +1833,8 @@ function renderOperationStatus() {
       if (!["FAILED", "INTERRUPTED"].includes(operation.status)) return true;
       return !operations.some(
         (candidate) =>
-          candidate.status === "SUCCEEDED" &&
           candidate.intent.action === operation.intent.action &&
+          candidate.intent.project_id === operation.intent.project_id &&
           operationTarget(candidate) === operationTarget(operation) &&
           candidate.updated_at > operation.updated_at,
       );
@@ -1669,16 +1842,40 @@ function renderOperationStatus() {
     .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
     .map(operationNoticeFor)
     .filter(Boolean);
+  if (operationsAvailable && operationNotice?.operationId)
+    operationNotice = visible.find(
+      (notice) => notice.operationId === operationNotice.operationId,
+    ) || null;
+  const systemNotices = systemOperationNotices();
+  const systemNotice = systemNotices[0] || null;
+  const systemKeys = [...acknowledgedOperationNoticeKeys].filter((key) =>
+    key.startsWith("system:"),
+  );
+  for (const key of systemKeys) {
+    if (!systemNotices.some((notice) => notice.key === key))
+      acknowledgedOperationNoticeKeys.delete(key);
+  }
+  if (systemKeys.length) persistAcknowledgedOperationNotices();
+  if (operationNotice?.key?.startsWith("system:")) {
+    if (operationNotice.key !== systemNotice?.key) {
+      operationNotice = null;
+      renderNotification();
+    }
+  }
+  // Reconcile already-visible notices everywhere; introduce system prompts on Requests.
   if (
-    operationNotice?.state === "ACTIVE" &&
-    !visible.some(
-      (notice) =>
-        notice.operationId === operationNotice.operationId &&
-        notice.state === "ACTIVE",
-    )
+    page === "requests" &&
+    systemNotice &&
+    (!operationNotice || operationNotice.state === "ACTIVE") &&
+    !acknowledgedOperationNoticeKeys.has(systemNotice.key)
   ) {
-    operationNotice = null;
+    operationNotice = systemNotice;
     renderNotification();
+    return;
+  }
+  if (systemNotice) {
+    renderNotification();
+    return;
   }
   const actionable = visible.find(
     (notice) =>
@@ -1690,15 +1887,15 @@ function renderOperationStatus() {
     renderNotification();
     return;
   }
-  if (!operationNotice) {
+  if (!operationNotice && page === "requests") {
     const next = visible.find(
       (notice) => !acknowledgedOperationNoticeKeys.has(notice.key),
     );
     if (next) {
       operationNotice = next;
-      renderNotification();
     }
   }
+  renderNotification();
 }
 function agentWorkGroup(work) {
   return work.kind === "task" ? taskGroup(work.item) : requestGroup(work.item);
@@ -2012,6 +2209,17 @@ function requestOperation(panel, request, discussionSection) {
   const sourceRevisionDrift = isSourceRevisionDrift(
     latestOperation(request.id),
   );
+  const discussionKey = JSON.stringify([
+    request.project_id, request.id, request.checkpoint_sha256, request.stage,
+    running?.operation_id || null, sourceRevisionDrift,
+  ]);
+  const identity = JSON.stringify([request.project_id, request.id]);
+  let discussionFormCache = discussionFormCaches.get(identity);
+  if (discussionFormCache && discussionFormCache.key !== discussionKey) {
+    discussionFormCache.dispose();
+    discussionFormCaches.delete(identity);
+    discussionFormCache = null;
+  }
   const approvingProduct = running?.intent.action === "PRODUCT_APPROVAL";
   // A terminal browser operation may leave an admitted QA/Reviewer item visible until
   // Manager creates its successor plan. Only a live Console operation suppresses the
@@ -2118,6 +2326,12 @@ function requestOperation(panel, request, discussionSection) {
       if (failedOperation?.operation_id)
         failure.append(el("small", `操作编号：${failedOperation.operation_id}${code ? ` · ${code}` : ""}`));
       appendDiscussionContent(failure);
+    }
+    // Unrelated polling must not replace unsent text, pasted files or an in-flight submit.
+    // Reuse only for the exact Requirement checkpoint and execution gate.
+    if (discussionFormCache?.key === discussionKey) {
+      appendDiscussionContent(discussionFormCache.form);
+      return;
     }
     const form = el("form", undefined, "discussion-form");
     const message = el("textarea");
@@ -2279,7 +2493,7 @@ function requestOperation(panel, request, discussionSection) {
         }),
       );
     }
-    form.addEventListener("submit", async (event) => {
+    onFormSubmit(form, async (event) => {
       event.preventDefault();
       if (!replyEnabled) return;
       if (!message.value.trim() && !selectedScreenshots.length) {
@@ -2321,14 +2535,21 @@ function requestOperation(panel, request, discussionSection) {
           message: message.value.trim(),
           screenshot_ids: uploaded,
         });
-        if (accepted) revokeScreenshotPreviews();
-        else setDeliveryControlDisabled(submit, false);
+        if (accepted) {
+          message.value = "";
+          selectedScreenshots = [];
+          renderScreenshots();
+        } else setDeliveryControlDisabled(submit, false);
       } catch (error) {
         feedback.className = "form-feedback error";
         feedback.textContent =
           error instanceof Error ? error.message : "截图保存失败。";
         setDeliveryControlDisabled(submit, false);
       }
+    });
+    discussionFormCaches.set(identity, {
+      key: discussionKey, form, dispose: revokeScreenshotPreviews,
+      dirty: () => Boolean(message.value.trim() || selectedScreenshots.length),
     });
     appendDiscussionContent(form);
   }
@@ -2691,80 +2912,80 @@ async function applySavedConfiguration() {
     });
   }
 }
+function knowledgeContext() {
+  return JSON.stringify([knowledgeScope, knowledgeMode, currentProjectId()]);
+}
 async function loadKnowledge() {
-  if (knowledgeMode === "specs") {
-    const base =
-      knowledgeScope === "team"
-        ? "/api/v1/admin/team/specs"
-        : currentProjectId()
-          ? "/api/v1/admin/projects/" +
-            encodeURIComponent(currentProjectId()) +
-            "/specs"
-          : null;
-    specDocuments = base ? await adminFetch(base) : [];
-    return;
+  const context = knowledgeContext(), serial = ++knowledgeReadSerial;
+  const mode = knowledgeMode, scope = knowledgeScope, projectId = currentProjectId();
+  const isCurrent = () => serial === knowledgeReadSerial && context === knowledgeContext();
+  if (knowledgeLoadedContext !== context) {
+    knowledgeDocuments = []; specDocuments = []; learningProposals = [];
+    knowledgeIndexStatus = null;
   }
-  if (knowledgeMode === "learning") {
-    learningProposals = currentProjectId()
-      ? await adminFetch(
-          "/api/v1/admin/projects/" +
-            encodeURIComponent(currentProjectId()) +
-            "/learnings",
-        )
-      : [];
-    return;
+  knowledgeLoading = true;
+  knowledgeError = null;
+  const owner = scope === "team" ? "/api/v1/admin/team" : projectId
+    ? "/api/v1/admin/projects/" + encodeURIComponent(projectId) : null;
+  try {
+    let documents = [], index = null;
+    if (owner) {
+      const resource = mode === "specs" ? "/specs" : mode === "learning" ? "/learnings" : "/knowledge";
+      [documents, index] = await Promise.all([
+        adminFetch(owner + resource),
+        mode === "background" ? adminFetch(owner + "/knowledge/index") : null,
+      ]);
+    }
+    if (!isCurrent()) return false;
+    if (mode === "specs") specDocuments = documents;
+    else if (mode === "learning") learningProposals = documents;
+    else { knowledgeDocuments = documents; knowledgeIndexStatus = index; }
+    knowledgeLoadedContext = context;
+    return true;
+  } catch (error) {
+    if (!isCurrent()) return false;
+    knowledgeDocuments = []; specDocuments = []; learningProposals = [];
+    knowledgeIndexStatus = null;
+    knowledgeError = error instanceof Error ? error.message : "知识读取失败，请重试。";
+    return true;
+  } finally {
+    if (isCurrent()) knowledgeLoading = false;
   }
-  if (knowledgeScope === "project") {
-    const projectId = currentProjectId();
-    knowledgeDocuments = projectId
-      ? await adminFetch(
-          "/api/v1/admin/projects/" +
-            encodeURIComponent(projectId) +
-            "/knowledge",
-        )
-      : [];
-    knowledgeIndexStatus = projectId
-      ? await adminFetch("/api/v1/admin/projects/" + encodeURIComponent(projectId) + "/knowledge/index")
-      : null;
-    return;
-  }
-  knowledgeDocuments = await adminFetch("/api/v1/admin/team/knowledge");
-  knowledgeIndexStatus = await adminFetch("/api/v1/admin/team/knowledge/index");
+}
+function settingsHaveDraft() {
+  return settingsDraft && (JSON.stringify(settingsDraft) !== settingsDraftBaseline ||
+    Object.keys(runtimeVariablesDraft).length > 0);
 }
 async function loadAdministration() {
-  try {
-    const settings = await adminFetch("/api/v1/admin/settings");
-    settingsSnapshot = settings;
-    await refreshConsoleInfo();
-    settingsDraft = structuredClone(settings.config);
-    normalizeAgentModelRoutes(settingsDraft);
-    runtimeVariablesDraft = {};
-    administrationAvailable = true;
-    await resumeConfigurationApply();
+  if (!administrationLoadPromise) administrationLoadPromise = (async () => {
     try {
-      administrationProjects = await adminFetch("/api/v1/admin/projects");
+      const settings = await adminFetch("/api/v1/admin/settings");
+      settingsSnapshot = settings;
+      if (!settingsHaveDraft()) {
+        settingsDraft = structuredClone(settings.config);
+        normalizeAgentModelRoutes(settingsDraft);
+        settingsDraftBaseline = JSON.stringify(settingsDraft);
+      }
+      administrationAvailable = true;
+      await refreshConsoleInfo();
+      await resumeConfigurationApply();
+      let projects;
+      try { projects = await adminFetch("/api/v1/admin/projects"); }
+      catch { projects = []; }
+      administrationProjects = projects;
     } catch {
-      administrationProjects = [];
+      administrationAvailable = false;
+      // A read outage must never erase unsaved configuration or write-only secrets.
     }
-    try {
-      await loadKnowledge();
-    } catch {
-      knowledgeDocuments = [];
-      specDocuments = [];
-      learningProposals = [];
-    }
-  } catch {
-    administrationAvailable = false;
-    administrationProjects = [];
-    knowledgeDocuments = [];
-    specDocuments = [];
-    learningProposals = [];
-    settingsSnapshot = null;
-    settingsDraft = null;
-    runtimeVariablesDraft = {};
-    runtimeStatusSnapshot = null;
-    runtimeStatusError = null;
+  })();
+  const pending = administrationLoadPromise;
+  try { await pending; }
+  finally {
+    if (administrationLoadPromise === pending) administrationLoadPromise = null;
   }
+  // Share only Team administration facts. Knowledge reads belong to the current
+  // scope, so an old Project request must never hold up a new Project navigation.
+  if (page === "knowledge" && administrationAvailable) await loadKnowledge();
 }
 async function loadRuntimeStatus(signal) {
   try {
@@ -2824,8 +3045,9 @@ function renderKnowledge(content) {
         if (scope === "team" && knowledgeMode === "learning")
           knowledgeMode = "background";
         administrationNotice = null;
-        await loadKnowledge();
+        const loading = loadKnowledge();
         render();
+        if (await loading) render({ preserveComposer: hasOpenComposer() });
       },
       knowledgeScope === scope ? "selected" : "",
     );
@@ -2908,8 +3130,9 @@ function renderKnowledge(content) {
       async () => {
         knowledgeMode = mode;
         administrationNotice = null;
-        await loadKnowledge();
+        const loading = loadKnowledge();
         render();
+        if (await loading) render({ preserveComposer: hasOpenComposer() });
       },
       knowledgeMode === mode ? "selected" : "",
     );
@@ -2925,6 +3148,16 @@ function renderKnowledge(content) {
   body.append(navigation);
   workspace.append(ownership, body);
   content.append(workspace);
+  if (knowledgeLoading || knowledgeError) {
+    body.append(el("p", knowledgeLoading ? "正在读取当前知识库…" : knowledgeError,
+      knowledgeLoading ? "muted" : "operation-error"));
+    if (knowledgeError) body.append(button("重试读取", async () => {
+      const loading = loadKnowledge();
+      render();
+      if (await loading) render({ preserveComposer: hasOpenComposer() });
+    }));
+    return;
+  }
   if (knowledgeMode === "specs") {
     renderSpecs(body);
     return;
@@ -2957,6 +3190,7 @@ function renderBackgroundKnowledgeImport(dialog) {
   const scope = knowledgeScope;
   const projectId = scope === "project" ? currentProjectId() : null;
   const knowledgeLabel = knowledgeLabelForScope(scope);
+  const ownerContext = knowledgeContext();
   renderKnowledgeImportHeader(
     dialog,
     `导入${knowledgeLabel}`,
@@ -3013,6 +3247,7 @@ function renderBackgroundKnowledgeImport(dialog) {
       }
     }
     knowledgeImportMode = null;
+    if (ownerContext !== knowledgeContext() || page !== "knowledge") return;
     await loadKnowledge();
     administrationNotice = {
       page: "knowledge",
@@ -3024,7 +3259,7 @@ function renderBackgroundKnowledgeImport(dialog) {
     };
     render();
   };
-  form.addEventListener("submit", async (event) => {
+  onFormSubmit(form, async (event) => {
     event.preventDefault();
     const selectedFiles = [...(file.files || [])];
     if (!selectedFiles.length) return;
@@ -3093,15 +3328,20 @@ function renderKnowledgeIndex(content) {
     row.append(el("span", job.source_name), el("span", labels[job.status] || job.status, "badge"));
     if (job.status === "FAILED") {
       row.append(el("span", errors[job.error_code] || "解析失败，可重试。", "muted"));
+      const ownerContext = knowledgeContext();
       row.append(button("重试索引", async () => {
-        const base = knowledgeScope === "team" ? "/api/v1/admin/team/knowledge" : "/api/v1/admin/projects/" + encodeURIComponent(currentProjectId()) + "/knowledge";
+        const scope = knowledgeScope, projectId = currentProjectId();
+        const base = scope === "team" ? "/api/v1/admin/team/knowledge" : "/api/v1/admin/projects/" + encodeURIComponent(projectId) + "/knowledge";
         try {
           await adminFetch(base + "/index/" + encodeURIComponent(job.job_id) + "/retry", {method: "POST"});
+          if (ownerContext !== knowledgeContext() || page !== "knowledge") return;
           await loadKnowledge();
-          render();
+          if (ownerContext !== knowledgeContext()) return;
+          render({ preserveComposer: hasOpenComposer() });
         } catch (error) {
+          if (ownerContext !== knowledgeContext() || page !== "knowledge") return;
           administrationNotice = {page: "knowledge", text: error instanceof Error ? error.message : "索引重试失败。"};
-          render();
+          render({ preserveComposer: hasOpenComposer() });
         }
       }));
     }
@@ -3111,23 +3351,27 @@ function renderKnowledgeIndex(content) {
 }
 
 function renderBackgroundKnowledge(content) {
-  if (knowledgeScope === "project" && !currentProjectId()) {
+  const scope = knowledgeScope, projectId = currentProjectId(), context = knowledgeContext();
+  const documents = knowledgeDocuments;
+  const stillCurrent = () => page === "knowledge" && context === knowledgeContext();
+
+  if (scope === "project" && !projectId) {
     content.append(el("div", "请先在页面顶部选择一个 Project。", "empty"));
     return;
   }
 
   const project = snapshot.projects.find(
-    (item) => item.id === currentProjectId(),
+    (item) => item.id === projectId,
   );
   const ownerName =
-    knowledgeScope === "team"
+    scope === "team"
       ? snapshot.team_name
-      : project?.name || currentProjectId();
-  const knowledgeLabel = knowledgeLabelForScope(knowledgeScope);
+      : project?.name || projectId;
+  const knowledgeLabel = knowledgeLabelForScope(scope);
   const top = el("div", undefined, "row request-heading");
   const actions = el("div", undefined, "row knowledge-heading-actions");
   actions.append(
-    el("span", `${knowledgeDocuments.length} 份`, "badge"),
+    el("span", `${documents.length} 份`, "badge"),
     button(
       `导入${knowledgeLabel}`,
       () => {
@@ -3140,7 +3384,7 @@ function renderBackgroundKnowledge(content) {
   top.append(
     el(
       "h2",
-      `${ownerName} · ${knowledgeScope === "team" ? "团队通用知识" : "Project 知识"}`,
+      `${ownerName} · ${scope === "team" ? "团队通用知识" : "Project 知识"}`,
     ),
     actions,
   );
@@ -3149,17 +3393,17 @@ function renderBackgroundKnowledge(content) {
   content.append(
     el(
       "p",
-      knowledgeScope === "team"
+      scope === "team"
         ? "启用后用于所有 Project 的新需求。"
         : "启用后只用于当前 Project 的新需求，不影响其他 Project。",
       "muted",
     ),
   );
-  if (!knowledgeDocuments.length) {
+  if (!documents.length) {
     content.append(
       el(
         "div",
-        knowledgeScope === "team"
+        scope === "team"
           ? "尚未导入团队通用知识文档。"
           : "当前 Project 尚未导入知识文档。",
         "empty",
@@ -3167,7 +3411,7 @@ function renderBackgroundKnowledge(content) {
     );
     return;
   }
-  for (const item of knowledgeDocuments) {
+  for (const item of documents) {
     const manifest = item.manifest;
     const card = el("article", undefined, "knowledge-card");
     const head = el("div", undefined, "row");
@@ -3192,7 +3436,7 @@ function renderBackgroundKnowledge(content) {
     );
     const toggle = button(item.selected ? "停用" : "用于新需求", async () => {
       toggle.disabled = true;
-      const documentIds = knowledgeDocuments
+      const documentIds = documents
         .filter(
           (candidate) =>
             candidate.manifest.document_id !== manifest.document_id &&
@@ -3201,52 +3445,61 @@ function renderBackgroundKnowledge(content) {
         .map((candidate) => candidate.manifest.document_id);
       if (!item.selected) documentIds.push(manifest.document_id);
       const endpoint =
-        knowledgeScope === "team"
+        scope === "team"
           ? "/api/v1/admin/team/knowledge/selection"
           : "/api/v1/admin/projects/" +
-            encodeURIComponent(currentProjectId()) +
+            encodeURIComponent(projectId) +
             "/knowledge/selection";
       try {
-        knowledgeDocuments = await adminFetch(endpoint, {
+        await adminFetch(endpoint, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ document_ids: documentIds }),
         });
+        if (!stillCurrent()) return;
+        if (!await loadKnowledge() || !stillCurrent()) return;
         administrationNotice = {
           page: "knowledge",
           text: "知识选择已生效，无需重启；已存在需求不会被静默改写。",
         };
-        render();
+        render({ preserveComposer: hasOpenComposer() });
       } catch (error) {
+        if (!stillCurrent()) return;
+        if (!await loadKnowledge() || !stillCurrent()) return;
         administrationNotice = {
           page: "knowledge",
           text: error instanceof Error ? error.message : "知识选择保存失败。",
         };
-        render();
+        render({ preserveComposer: hasOpenComposer() });
       }
     });
     const actions = el("div", undefined, "knowledge-card-actions");
     const update = button("更新文档", async () => {
       update.disabled = true;
       const endpoint =
-        knowledgeScope === "team"
+        scope === "team"
           ? "/api/v1/admin/team/knowledge/" +
             encodeURIComponent(manifest.document_id) +
             "/content"
           : "/api/v1/admin/projects/" +
-            encodeURIComponent(currentProjectId()) +
+            encodeURIComponent(projectId) +
             "/knowledge/" +
             encodeURIComponent(manifest.document_id) +
             "/content";
       try {
-        editingKnowledgeDocument = await adminFetch(endpoint);
+        const serial = knowledgeReadSerial;
+        const editing = await adminFetch(endpoint);
+        if (!stillCurrent() || serial !== knowledgeReadSerial || hasOpenComposer()) return;
+        editingKnowledgeDocument = editing;
         renderComposer();
       } catch (error) {
+        if (!stillCurrent()) return;
+        if (!await loadKnowledge() || !stillCurrent()) return;
         administrationNotice = {
           page: "knowledge",
           text: error instanceof Error ? error.message : "无法读取文档正文。",
         };
-        render();
+        render({ preserveComposer: hasOpenComposer() });
       }
     });
     const remove = button(
@@ -3258,15 +3511,17 @@ function renderBackgroundKnowledge(content) {
           "确认删除",
           async () => {
             const base =
-              knowledgeScope === "team"
+              scope === "team"
                 ? "/api/v1/admin/team/knowledge"
                 : "/api/v1/admin/projects/" +
-                  encodeURIComponent(currentProjectId()) +
+                  encodeURIComponent(projectId) +
                   "/knowledge";
-            knowledgeDocuments = await adminFetch(
+            await adminFetch(
               base + "/" + encodeURIComponent(manifest.document_id),
               { method: "DELETE" },
             );
+            if (!stillCurrent()) return;
+            if (!await loadKnowledge() || !stillCurrent()) return;
             administrationNotice = {
               page: "knowledge",
               text: `${knowledgeLabel}已删除；历史交付引用保持不变。`,
@@ -3377,7 +3632,7 @@ function renderSpecImport(dialog) {
     feedback,
     submit,
   );
-  form.addEventListener("submit", async (event) => {
+  onFormSubmit(form, async (event) => {
     event.preventDefault();
     const selectedFiles = [...(file.files || [])];
     if (!selectedFiles.length) return;
@@ -3471,18 +3726,22 @@ function renderSpecImport(dialog) {
 }
 
 function renderSpecs(content) {
-  if (knowledgeScope === "project" && !currentProjectId()) {
+  const scope = knowledgeScope, projectId = currentProjectId(), context = knowledgeContext();
+  const documents = specDocuments;
+  const stillCurrent = () => page === "knowledge" && context === knowledgeContext();
+
+  if (scope === "project" && !projectId) {
     content.append(el("div", "请先在页面顶部选择一个 Project。", "empty"));
     return;
   }
   const project = snapshot.projects.find(
-    (item) => item.id === currentProjectId(),
+    (item) => item.id === projectId,
   );
   const ownerName =
-    knowledgeScope === "team"
+    scope === "team"
       ? snapshot.team_name
-      : project?.name || currentProjectId();
-  const logicalSpecs = latestSpecs(specDocuments);
+      : project?.name || projectId;
+  const logicalSpecs = latestSpecs(documents);
   const top = el("div", undefined, "row request-heading");
   const actions = el("div", undefined, "row knowledge-heading-actions");
   actions.append(
@@ -3511,7 +3770,7 @@ function renderSpecs(content) {
   }
   for (const item of logicalSpecs) {
     const spec = item.document;
-    const activeVersion = specDocuments.find(
+    const activeVersion = documents.find(
       (candidate) =>
         candidate.active && candidate.document.spec_key === spec.spec_key,
     );
@@ -3543,8 +3802,8 @@ function renderSpecs(content) {
     const actions = el("div", undefined, "knowledge-card-actions");
     const update = button("更新规范", () => {
       editingSpecDocument = {
-        scope: knowledgeScope,
-        project_id: knowledgeScope === "project" ? currentProjectId() : null,
+        scope,
+        project_id: scope === "project" ? projectId : null,
         document: structuredClone(spec),
       };
       renderComposer();
@@ -3553,7 +3812,7 @@ function renderSpecs(content) {
       isCurrent ? "停用" : activeVersion ? "启用更新" : "启用规范",
       async () => {
         toggle.disabled = true;
-        const ids = specDocuments
+        const ids = documents
           .filter(
             (candidate) =>
               candidate.active && candidate.document.spec_key !== spec.spec_key,
@@ -3561,28 +3820,32 @@ function renderSpecs(content) {
           .map((candidate) => candidate.document.spec_id);
         if (!isCurrent) ids.push(spec.spec_id);
         const endpoint =
-          knowledgeScope === "team"
+          scope === "team"
             ? "/api/v1/admin/team/specs/activation"
             : "/api/v1/admin/projects/" +
-              encodeURIComponent(currentProjectId()) +
+              encodeURIComponent(projectId) +
               "/specs/activation";
         try {
-          specDocuments = await adminFetch(endpoint, {
+          await adminFetch(endpoint, {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ spec_ids: ids }),
           });
+          if (!stillCurrent()) return;
+          if (!await loadKnowledge() || !stillCurrent()) return;
           administrationNotice = {
             page: "knowledge",
             text: "Spec 激活状态已更新；只影响之后重新准备的新需求，无需重启服务。",
           };
         } catch (error) {
+          if (!stillCurrent()) return;
+          if (!await loadKnowledge() || !stillCurrent()) return;
           administrationNotice = {
             page: "knowledge",
             text: error instanceof Error ? error.message : "Spec 激活失败。",
           };
         }
-        render();
+        render({ preserveComposer: hasOpenComposer() });
       },
     );
     const remove = button(
@@ -3594,15 +3857,17 @@ function renderSpecs(content) {
           "确认删除",
           async () => {
             const base =
-              knowledgeScope === "team"
+              scope === "team"
                 ? "/api/v1/admin/team/specs"
                 : "/api/v1/admin/projects/" +
-                  encodeURIComponent(currentProjectId()) +
+                  encodeURIComponent(projectId) +
                   "/specs";
-            specDocuments = await adminFetch(
+            await adminFetch(
               base + "/" + encodeURIComponent(spec.spec_key),
               { method: "DELETE" },
             );
+            if (!stillCurrent()) return;
+            if (!await loadKnowledge() || !stillCurrent()) return;
             administrationNotice = {
               page: "knowledge",
               text: "开发规范已删除；历史交付引用保持不变。",
@@ -3628,24 +3893,28 @@ function renderLearning(content) {
     button(
       "扫描 QA / Review 失败",
       async () => {
+        const ownerProjectId = currentProjectId();
         try {
-          learningProposals = await adminFetch(
+          const proposals = await adminFetch(
             "/api/v1/admin/projects/" +
-              encodeURIComponent(currentProjectId()) +
+              encodeURIComponent(ownerProjectId) +
               "/learnings/collect",
             { method: "POST" },
           );
+          if (ownerProjectId !== currentProjectId() || page !== "knowledge") return;
+          learningProposals = proposals;
           administrationNotice = {
             page: "knowledge",
             text: "扫描完成。学习建议仍需人工逐条批准，不会自动改变知识或规范。",
           };
         } catch (error) {
+          if (ownerProjectId !== currentProjectId() || page !== "knowledge") return;
           administrationNotice = {
             page: "knowledge",
             text: error instanceof Error ? error.message : "学习建议扫描失败。",
           };
         }
-        render();
+        render({ preserveComposer: hasOpenComposer() });
       },
       "primary",
     ),
@@ -3742,10 +4011,12 @@ function renderLearning(content) {
 }
 
 async function decideLearning(proposal, action, target) {
+  const ownerProjectId = currentProjectId();
+  const ownerContext = knowledgeContext();
   try {
     const endpoint =
       "/api/v1/admin/projects/" +
-      encodeURIComponent(currentProjectId()) +
+      encodeURIComponent(ownerProjectId) +
       "/learnings/" +
       encodeURIComponent(proposal.proposal_id) +
       "/decision";
@@ -3763,7 +4034,8 @@ async function decideLearning(proposal, action, target) {
             : "已在 Web Console 中核对来源证据并拒绝。",
       }),
     });
-    await loadKnowledge();
+    if (ownerContext !== knowledgeContext() || page !== "knowledge") return;
+    if (!await loadKnowledge() || ownerContext !== knowledgeContext() || page !== "knowledge") return;
     administrationNotice = {
       page: "knowledge",
       text:
@@ -3772,12 +4044,13 @@ async function decideLearning(proposal, action, target) {
           : "学习建议已拒绝并保留审计记录。",
     };
   } catch (error) {
+    if (ownerContext !== knowledgeContext() || page !== "knowledge") return;
     administrationNotice = {
       page: "knowledge",
       text: error instanceof Error ? error.message : "学习建议决策失败。",
     };
   }
-  render();
+  render({ preserveComposer: hasOpenComposer() });
 }
 function bindInput(control, value, update, type = "text") {
   control.type = type;
@@ -4121,7 +4394,7 @@ function renderSettings(content) {
     save,
   );
   form.append(saveBar);
-  form.addEventListener("submit", async (event) => {
+  onFormSubmit(form, async (event) => {
     event.preventDefault();
     const modelRouteError = modelRouteValidationMessage(settingsDraft);
     if (modelRouteError) {
@@ -4160,6 +4433,7 @@ function renderSettings(content) {
       settingsSnapshot = saved;
       settingsDraft = structuredClone(saved.config);
       normalizeAgentModelRoutes(settingsDraft);
+      settingsDraftBaseline = JSON.stringify(settingsDraft);
       runtimeVariablesDraft = {};
       administrationNotice = null;
       configurationApplyResult = null;
@@ -5011,6 +5285,12 @@ function modelCallDiagnostics(operation) {
 }
 
 function renderDetail() {
+  const opener = document.activeElement;
+  buildDetail();
+  rememberModalOpener(document.getElementById("detail"), opener);
+  syncModalState();
+}
+function buildDetail() {
   const panel = document.getElementById("detail");
   panel.replaceChildren();
   panel.className = "";
@@ -5285,7 +5565,8 @@ function renderDetail() {
   documentList(dialog, item.documents);
   panel.append(dialog);
 }
-function render() {
+function render({ preserveComposer = false } = {}) {
+  const focused = document.activeElement;
   const expanded = new Set(
     [...document.querySelectorAll("details[open]")].map((n) => n.dataset.key),
   );
@@ -5304,6 +5585,8 @@ function render() {
   document.getElementById("explanation").textContent = pageCopy[page][1];
   updatePageContext();
   const content = document.getElementById("content");
+  const preserveSettings = page === "settings" && uiCommands.has(content.querySelector?.(".settings-form"));
+  if (!preserveSettings) {
   content.replaceChildren();
   content.className = "";
   if (!snapshot && !["settings", "status"].includes(page))
@@ -5313,13 +5596,19 @@ function render() {
   else if (page === "knowledge") renderKnowledge(content);
   else if (page === "settings") renderSettings(content);
   else renderStatus(content);
-  renderComposer();
+  }
+  if (!preserveComposer) renderComposer();
   renderOperationStatus();
   renderNotification();
   renderDetail();
   syncDeliveryControls();
   for (const node of document.querySelectorAll("details"))
     if (expanded.has(node.dataset.key)) node.open = true;
+  // Reattaching an unchanged discussion form preserves its draft but drops browser focus.
+  // Restore only that surviving control, never over a new modal or changed checkpoint.
+  if (focused?.isConnected && document.activeElement === document.body &&
+      document.getElementById("notification").hidden && !hasOpenComposer())
+    focused.focus();
 }
 function updateNavigation() {
   for (const key of ["team", "requests", "knowledge", "settings", "status"]) {
@@ -5329,35 +5618,39 @@ function updateNavigation() {
     else node.removeAttribute("aria-current");
   }
 }
+async function navigatePage(target) {
+  if (!mayCloseComposer()) return;
+  if (uiCommands.has(document.querySelector?.(".settings-form"))) return;
+  administrationNotice = null;
+  page = target;
+  selected = null;
+  composing = false;
+  creatingProject = false;
+  editingRequirement = null;
+  recreatingRequirement = null;
+  knowledgeImportMode = null;
+  pendingConfirmation = null;
+  settingsSaveResult = null;
+  editingKnowledgeDocument = null;
+  editingSpecDocument = null;
+  if (["knowledge", "settings"].includes(target)) await loadAdministration();
+  if (target === "status") {
+    runtimeStatusLoading = true;
+    updateNavigation();
+    render();
+    await loadAdministration();
+    if (administrationAvailable) await loadRuntimeStatus();
+    runtimeStatusLoading = false;
+  }
+  // A slow prior navigation must not reset the destination selected afterwards.
+  if (page !== target) return;
+  updateNavigation();
+  render();
+}
 for (const target of ["team", "requests", "knowledge", "settings", "status"])
   document
     .getElementById("nav-" + target)
-    .addEventListener("click", async () => {
-      administrationNotice = null;
-      page = target;
-      selected = null;
-      composing = false;
-      creatingProject = false;
-      editingRequirement = null;
-      recreatingRequirement = null;
-      knowledgeImportMode = null;
-      pendingConfirmation = null;
-      settingsSaveResult = null;
-      editingKnowledgeDocument = null;
-      editingSpecDocument = null;
-      if (target === "knowledge") await loadAdministration();
-      if (target === "settings") await loadAdministration();
-      if (target === "status") {
-        runtimeStatusLoading = true;
-        updateNavigation();
-        render();
-        await loadAdministration();
-        if (administrationAvailable) await loadRuntimeStatus();
-        runtimeStatusLoading = false;
-      }
-      updateNavigation();
-      render();
-    });
+    .addEventListener("click", () => navigatePage(target));
 async function refreshConsoleInfo(signal) {
   try {
     const response = await fetch("/api/v1/console", { cache: "no-store", signal });
@@ -5403,6 +5696,7 @@ async function refreshSettingsSnapshot(signal) {
   }
 }
 async function refresh(projectId, includeRuntimeStatus = false) {
+  if (projectId && projectId !== currentProjectId() && !mayCloseComposer()) return;
   if (refreshing) return;
   refreshing = true;
   document.getElementById("refresh").disabled = true;
@@ -5488,16 +5782,7 @@ async function refresh(projectId, includeRuntimeStatus = false) {
     }
     if (page === "knowledge" && target !== undefined)
       await loadAdministration();
-    const modalActive =
-      composing ||
-      creatingProject ||
-      editingRequirement ||
-      recreatingRequirement ||
-      knowledgeImportMode ||
-      pendingConfirmation ||
-      settingsSaveResult ||
-      editingKnowledgeDocument ||
-      editingSpecDocument;
+    const modalActive = hasOpenComposer();
     if (
       (!modalActive || (["settings", "status"].includes(page) && systemViewsChanged())) &&
       (changed ||
@@ -5505,7 +5790,7 @@ async function refresh(projectId, includeRuntimeStatus = false) {
         priorKnowledgeIndex !== JSON.stringify(knowledgeIndexStatus) ||
         systemViewsChanged())
     )
-      render();
+      render({ preserveComposer: Boolean(modalActive && !settingsSaveResult) });
     status.className = "";
     status.textContent = consoleAvailable
       ? (consoleDeliveryReady
@@ -5525,6 +5810,9 @@ async function refresh(projectId, includeRuntimeStatus = false) {
     clearTimeout(timeout);
     refreshing = false;
     document.getElementById("refresh").disabled = false;
+    // Notifications follow polling even when editor DOM is deliberately preserved.
+    renderOperationStatus();
+    renderNotification();
   }
 }
 document

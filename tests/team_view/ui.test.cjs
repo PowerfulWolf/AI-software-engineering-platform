@@ -20,6 +20,7 @@ class Element {
     this.classList = { toggle() {} };
   }
   append(...nodes) {
+    for (const node of nodes) if (typeof node !== "string") node.parentElement = this;
     this.children.push(...nodes);
   }
   replaceChildren(...nodes) {
@@ -31,6 +32,8 @@ class Element {
   setAttribute(key, value) {
     this.attributes[key] = value;
   }
+  getAttribute(key) { return this.attributes[key] ?? null; }
+  remove() { if (this.parentElement) this.parentElement.children = this.parentElement.children.filter(node => node !== this); }
   removeAttribute(key) {
     delete this.attributes[key];
   }
@@ -1975,6 +1978,9 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     task.blocker = "Waiting for recovery";
   });
   await interval.fn();
+  // The fixture holds all projects' requests; select the owner before its operation.
+  fixture.selected_project_id = "project_fixture";
+  await vm.runInContext('refresh("project_fixture")', context);
   vm.runInContext('showDetail("request","r1")', context);
   const continueButton = descend(get("detail")).find(
     (node) => node.tag === "button" && node.textContent === "继续交付",

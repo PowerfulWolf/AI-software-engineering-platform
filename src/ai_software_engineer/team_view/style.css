@@ -1722,8 +1722,9 @@ main[data-page="requests"] .page-context {
 .form-feedback.error {
   color: #8c360e;
 }
-#composer[hidden] {
-  display: none;
+/* Hidden overlays must neither paint nor intercept input, regardless of layout rules. */
+[hidden] {
+  display: none !important;
 }
 #composer.modal-backdrop {
   position: fixed;

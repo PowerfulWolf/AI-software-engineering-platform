@@ -192,11 +192,11 @@ test("operation guidance remains readable if the Team snapshot is unavailable", 
     renderOperationStatus();
   `, h.context));
   assert.equal(h.get("operations").hidden, true);
-  assert.match(text(h.get("notification")), /继续交付.*需要处理/);
+  assert.equal(h.get("notification").hidden, true, "project notices wait for a verified current Project");
   assert.doesNotMatch(text(h.get("notification")), /解答已批准/);
-  assert.ok(all(h.get("notification")).some(
+  assert.equal(all(h.get("notification")).some(
     n => n.tag === "button" && n.textContent === "打开需求工作区",
-  ));
+  ), false, "without a verified Team snapshot there is no navigable Requirement target");
 });
 
 test("opening a stale pending entry echoes the saved answer and immediately confirms its state", async () => {
