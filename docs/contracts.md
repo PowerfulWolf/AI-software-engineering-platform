@@ -686,6 +686,8 @@ artifact 请求前抛出 `KnowledgeGapRaised` 时，预留的 Design 次数归�
 
 `RequestView.design_recovery_available` 是只读投影字段，仅由上述 checkpoint/history/resolution
 事实推导。它为 Design 恢复显示“恢复设计”，而 active `DESIGNING` 不显示普通“继续交付”。
+执行中的 Design 或排队/运行中的 Operation 不显示按钮；已失败的 Designer Operation 才显示
+“重试 Design”，并通过新的 exact-checkpoint `CONTINUE_DELIVERY` Operation 重试。
 缺少、越权、篡改或过期的 resolution/checkpoint 返回 `COMMAND_REJECTED`/`STALE_CHECKPOINT`，
 不追加 journal、不调用模型。恢复 gate 可以为 immutable 历史等待 checkpoint 生成
 `StageWorkflowProof`，但仅限 `recovery` 且必须证明该 checkpoint 仍在当前 hash chain 中。

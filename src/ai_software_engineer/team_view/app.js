@@ -466,6 +466,21 @@ function requestPresentation(request) {
       blocker: null,
       nextAction: request.next_action,
     };
+  const failedDesignOperation = latestOperation(request.id);
+  if (
+    request.stage === "DESIGNING" &&
+    failedDesignOperation?.status === "FAILED" &&
+    operationTarget(failedDesignOperation) === request.id &&
+    ["CONTINUE_DELIVERY", "RECOVER_DESIGN"].includes(
+      failedDesignOperation.intent.action,
+    )
+  )
+    return {
+      group: "blocked",
+      status: "DESIGN_RETRY_REQUIRED",
+      blocker: failedDesignOperation.error_summary || "Designer 操作未完成。",
+      nextAction: "上一次 Designer 操作未完成；修复模型服务后可重试 Design。",
+    };
   if (request.design_recovery_available)
     return {
       group: "blocked",
@@ -507,6 +522,17 @@ function canRecoverDesign(request) {
   return Boolean(request.design_recovery_available) && !activeOperation(request.id);
 }
 
+function canRetryDesign(request) {
+  const operation = latestOperation(request.id);
+  return (
+    request.stage === "DESIGNING" &&
+    operation?.status === "FAILED" &&
+    operationTarget(operation) === request.id &&
+    ["CONTINUE_DELIVERY", "RECOVER_DESIGN"].includes(operation.intent.action) &&
+    !activeOperation(request.id)
+  );
+}
+
 function agentQueueState(agent) {
   return {
     assigned_delivery_ids: [...agent.assigned_delivery_ids],
@@ -516,6 +542,19 @@ function agentQueueState(agent) {
 }
 function requestBlockingSummary(request) {
   if (requestPresentation(request).group !== "blocked") return null;
+  if (canRetryDesign(request)) {
+    const operation = latestOperation(request.id);
+    return {
+      reasons: [{
+        reason: "上一次 Designer 操作未完成，Design checkpoint 与预算已保留。",
+        scopes: [],
+      }],
+      operationReason: operation?.error_summary || null,
+      approval: null,
+      suggestedAction: "修复模型服务后点击“重试 Design”；执行中不会显示重复操作按钮。",
+      approvedKnowledge: true,
+    };
+  }
   if (request.design_recovery_available) {
     const operation = latestOperation(request.id);
     return {
@@ -2589,7 +2628,20 @@ function requestOperation(panel, request, discussionSection) {
     });
     appendDiscussionContent(form);
   }
-  if (canRecoverDesign(request)) {
+  if (canRetryDesign(request)) {
+    const action = deliveryButton(
+      "重试 Design",
+      () =>
+        submitOperation({
+          action: "CONTINUE_DELIVERY",
+          project_id: request.project_id,
+          delivery_id: request.id,
+          expected_checkpoint_sha256: request.checkpoint_sha256,
+        }),
+      "primary",
+    );
+    appendOperation(action);
+  } else if (canRecoverDesign(request)) {
     const action = deliveryButton(
       "恢复设计",
       () =>

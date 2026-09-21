@@ -187,6 +187,60 @@ test("in-progress delivery stages do not expose a continuation action", () => {
   assert.match(text(h.detail()), /当前阶段仍在运行/);
 });
 
+test("failed Design exposes an exact-checkpoint retry, but a running retry hides it", async () => {
+  const submitted = [];
+  const h = harness(async (url, options = {}) => {
+    if (options.method) {
+      submitted.push(JSON.parse(options.body).intent);
+      return {
+        ok: true,
+        json: async () => ({
+          operation_id: "op-retry",
+          status: "QUEUED",
+          updated_at: "2026-09-22",
+          intent: submitted.at(-1),
+        }),
+      };
+    }
+    return {ok: true, json: async () => []};
+  });
+  vm.runInContext(`
+    snapshot.requests[0] = {
+      ...snapshot.requests[0],
+      stage: "DESIGNING",
+      next_action: "Designer 操作失败后可重试。",
+    };
+    operations = [{
+      operation_id: "op-failed",
+      status: "FAILED",
+      error_summary: "MODEL_PROVIDER_UNAVAILABLE",
+      intent: {action: "CONTINUE_DELIVERY", delivery_id: "r1", project_id: "project_test"},
+      updated_at: "2026-09-21",
+    }];
+    renderDetail(); renderOperationStatus();
+  `, h.context);
+  assert.equal(findButton(h, "继续交付"), undefined);
+  assert.ok(findButton(h, "重试 Design"));
+  await findButton(h, "重试 Design").events.click();
+  assert.deepEqual(submitted, [{
+    action: "CONTINUE_DELIVERY",
+    project_id: "project_test",
+    delivery_id: "r1",
+    expected_checkpoint_sha256: "checkpoint-a",
+  }]);
+  vm.runInContext(`
+    operations = [{
+      operation_id: "op-retry",
+      status: "RUNNING",
+      intent: {action: "CONTINUE_DELIVERY", delivery_id: "r1", project_id: "project_test"},
+      updated_at: "2026-09-22",
+    }];
+    renderDetail();
+  `, h.context);
+  assert.equal(findButton(h, "重试 Design"), undefined);
+  assert.equal(findButton(h, "继续交付"), undefined);
+});
+
 test("polling the same checkpoint replaces pending drafts when approval arrived elsewhere", async () => {
   let view = pending;
   const h = harness(async () => ({ok: true, json: async () => [view]}));

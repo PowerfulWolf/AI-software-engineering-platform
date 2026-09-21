@@ -116,6 +116,10 @@ production_console_app(
   完整性通过且已批准的 Design 知识等待；成功时追加 successor checkpoint，只重置
   `attempts.design`，并将 operator/rationale/approval reference 写入 next action。旧 Operation、
   ProductSpec、讨论、审批、Gap/Resolution 和 journal 记录不可覆盖。
+- Design 正在执行或存在 `QUEUED`/`RUNNING` Operation 时不显示任何继续按钮。若 Designer 的最近
+  Operation 已经是可重试的 `FAILED`，页面只显示“重试 Design”，仍提交新的、绑定当前 checkpoint
+  的 `CONTINUE_DELIVERY`；这不是 active Design 的 generic continuation，也不会自动消耗下一次
+  attempt。
 - checkpoint、retained paths、原 permissions/deny-list、scope 或 plan 已变化时必须拒绝；刷新最新
   投影后重新提交，不得自动替换用户批准对象。
 
