@@ -1,11 +1,13 @@
 {
   "id": "T050",
-  "slug": "reviewer-only-verification-recovery",
   "title": "复用已封存 QA PASS 并仅恢复 Reviewer",
   "status": "completed",
   "phase": "offline_verified",
+  "slug": "reviewer-only-verification-recovery",
   "operator_validation": "后续用户平台运行已复用 QA PASS 并得到 Reviewer APPROVE；原生 sequence 55 DONE，completion 5490d892d999efee95b2eb8d093e66c245908b23e3ba45a629a439abe45a1b51。联合父需求衔接阻塞由 T051 修复，待用户继续联合集成。",
-  "depends_on": ["T044"],
+  "depends_on": [
+    "T044"
+  ],
   "allowed_paths": [
     "src/ai_software_engineer/recovery/**",
     "src/ai_software_engineer/manager/dispatch.py",

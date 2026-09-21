@@ -1,9 +1,9 @@
 {
   "id": "T048",
-  "slug": "active-knowledge-closure",
   "title": "建设 Agent 主动知识检索与知识缺口闭环",
   "status": "completed",
   "phase": "verified",
+  "slug": "active-knowledge-closure",
   "depends_on": [
     "T021",
     "T028",

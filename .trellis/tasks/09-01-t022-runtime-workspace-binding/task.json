@@ -1,10 +1,13 @@
 {
   "id": "T022",
-  "slug": "runtime-workspace-binding",
   "title": "绑定 organization/project workspace 到 Runtime",
   "status": "completed",
   "phase": "verify",
-  "depends_on": ["T019", "T021"],
+  "slug": "runtime-workspace-binding",
+  "depends_on": [
+    "T019",
+    "T021"
+  ],
   "allowed_paths": [
     "src/ai_software_engineer/runtime.py",
     "src/ai_software_engineer/runtime_workspace.py",

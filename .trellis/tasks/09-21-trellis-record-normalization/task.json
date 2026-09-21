@@ -1,0 +1,9 @@
+{
+  "id": "trellis-record-normalization-20260921",
+  "title": "Normalize Trellis task and workspace records",
+  "status": "completed",
+  "phase": "complete",
+  "baseline": "4f38528",
+  "authorization": "User asked not to delete the records, to normalize their format, and approved creating this task.",
+  "verification": "verification.md"
+}

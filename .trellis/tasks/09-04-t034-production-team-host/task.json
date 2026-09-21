@@ -1,10 +1,12 @@
 {
   "id": "T034",
-  "slug": "production-team-host",
   "title": "实现 GPT-5.5 Production Team Host 与真实项目交付闭环",
   "status": "completed",
   "phase": "verify",
-  "depends_on": ["T032"],
+  "slug": "production-team-host",
+  "depends_on": [
+    "T032"
+  ],
   "allowed_paths": [
     "src/ai_software_engineer/agents/**",
     "src/ai_software_engineer/product/**",

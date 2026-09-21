@@ -1,6 +1,8 @@
 {
-  "name": "t046-persistent-work-queue",
+  "id": "t046-persistent-work-queue",
+  "title": "T046 Persistent WorkQueue and Dispatcher",
   "status": "completed",
-  "created_at": "2026-09-08",
-  "id": "t046-persistent-work-queue"
+  "phase": "complete",
+  "name": "t046-persistent-work-queue",
+  "created_at": "2026-09-08"
 }

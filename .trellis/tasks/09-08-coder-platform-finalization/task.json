@@ -1,6 +1,8 @@
 {
-  "name": "coder-platform-finalization",
+  "id": "coder-platform-finalization",
+  "title": "Platform-owned Coder candidate finalization",
   "status": "completed",
-  "created_at": "2026-09-08",
-  "id": "coder-platform-finalization"
+  "phase": "complete",
+  "name": "coder-platform-finalization",
+  "created_at": "2026-09-08"
 }

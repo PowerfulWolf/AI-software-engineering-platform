@@ -2,6 +2,7 @@
   "id": "task_t004_state_machine",
   "title": "T004 pure Task state-machine guard and reducer",
   "status": "completed",
+  "phase": "complete",
   "branch": "ai/task_t004_state_machine/attempt-1",
   "base_branch": "main",
   "scope": "backend",

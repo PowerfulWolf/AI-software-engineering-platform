@@ -1,10 +1,12 @@
 {
   "id": "T021",
-  "slug": "spec-compiler",
   "title": "实现 SpecCompiler 与规范冲突人工治理",
   "status": "completed",
   "phase": "verify",
-  "depends_on": ["T020"],
+  "slug": "spec-compiler",
+  "depends_on": [
+    "T020"
+  ],
   "allowed_paths": [
     "src/ai_software_engineer/spec_compiler.py",
     "schemas/spec-resolution.schema.json",

@@ -1,10 +1,12 @@
 {
   "id": "T017",
-  "slug": "project-workspace",
   "title": "建立外置 per-project AI workspace 注册与初始化契约",
   "status": "completed",
   "phase": "verify",
-  "depends_on": ["T016"],
+  "slug": "project-workspace",
+  "depends_on": [
+    "T016"
+  ],
   "allowed_paths": [
     "src/ai_software_engineer/project_workspace.py",
     "schemas/project-workspace.schema.json",

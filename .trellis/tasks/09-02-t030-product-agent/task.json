@@ -1,10 +1,12 @@
 {
   "id": "T030",
-  "slug": "product-agent",
   "title": "实现 Product Agent 需求对话与用户确认循环",
   "status": "completed",
   "phase": "verify",
-  "depends_on": ["T029"],
+  "slug": "product-agent",
+  "depends_on": [
+    "T029"
+  ],
   "allowed_paths": [
     "src/ai_software_engineer/product/**",
     "src/ai_software_engineer/project_manager/**",

@@ -1,10 +1,12 @@
 {
   "id": "T029",
-  "slug": "project-manager-skills",
   "title": "实现 Project Preparation 与 Project Manager Agent Skills",
   "status": "completed",
   "phase": "verify",
-  "depends_on": ["T028"],
+  "slug": "project-manager-skills",
+  "depends_on": [
+    "T028"
+  ],
   "allowed_paths": [
     "src/ai_software_engineer/project_manager/**",
     "src/ai_software_engineer/spec_compiler.py",

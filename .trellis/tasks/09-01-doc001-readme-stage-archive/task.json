@@ -1,10 +1,12 @@
 {
   "id": "DOC001",
-  "slug": "readme-stage-archive",
   "title": "更新当前进度 README 与阶段归档",
   "status": "completed",
   "phase": "verify",
-  "depends_on": ["T017"],
+  "slug": "readme-stage-archive",
+  "depends_on": [
+    "T017"
+  ],
   "allowed_paths": [
     "README.md",
     "docs/milestones.md",

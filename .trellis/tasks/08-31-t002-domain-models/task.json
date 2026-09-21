@@ -2,6 +2,7 @@
   "id": "task_t002_domain_models",
   "title": "T002 Task, Agent, and Artifact domain models",
   "status": "completed",
+  "phase": "complete",
   "branch": "ai/task_t002_domain_models/attempt-1",
   "base_branch": "main",
   "scope": "backend",

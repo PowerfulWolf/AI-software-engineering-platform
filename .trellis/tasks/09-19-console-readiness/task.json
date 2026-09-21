@@ -1,9 +1,9 @@
 {
   "id": "console-readiness",
+  "title": "Fix stale readiness and repeated apply feedback",
   "status": "completed",
   "phase": "integrated",
   "baseline": "b8983b8",
-  "title": "Fix stale readiness and repeated apply feedback",
   "integrated_revision": "c280310062240b9fb673b8ca6cc25bedb310ec4d",
   "completed_on": "2026-09-19",
   "evidence_manifest": ".trellis/tasks/09-19-console-readiness/evidence/manifest.json",

@@ -1,6 +1,8 @@
 # 工程任务索引
 
 这里记录开发平台本身的工作，不是生产 TaskRepository 或平台 Operation 队列。
+新增或维护记录时遵循 [任务记录格式](FORMAT.md)；workspace 的用途见
+[workspace 说明](../workspace/README.md)。
 状态取自各目录 task.json；completed 表示原工程记录的完成声明，具体测试和真实验收限制仍以报告为准。
 旧目录路径保持稳定，按状态导航，避免迁移历史上下文里的路径引用。
 
@@ -17,6 +19,7 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 | [09-02-t033-delivery-reporter](09-02-t033-delivery-reporter/task.json) | planned / plan | 见原 PRD/任务记录 |
 | [09-06-t044-explicit-delivery-recovery](09-06-t044-explicit-delivery-recovery/task.json) | in_progress / coder_reapply_offline_verified | new exact real target recovery plan and human approval；real Coder QA Reviewer validation |
 | [09-15-requirement-source-baseline](09-15-requirement-source-baseline/task.json) | in_progress / ready_for_review | rerun the complete localhost socket and MySQL suite outside the restricted sandbox |
+| [09-19-t046-worker-integration](09-19-t046-worker-integration/task.json) | in_progress / ready_for_user_validation | user-owned full regression；commit/integration and controlled production rollout when authorized |
 
 <a id="legacy-tasks"></a>
 
@@ -36,6 +39,9 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 | [09-12-web-project-delivery-console](09-12-web-project-delivery-console/task.json) | [design.md](09-12-web-project-delivery-console/design.md)、[implement.md](09-12-web-project-delivery-console/implement.md)、[prd.md](09-12-web-project-delivery-console/prd.md) |
 | [09-13-scoped-knowledge-management](09-13-scoped-knowledge-management/task.json) | [design.md](09-13-scoped-knowledge-management/design.md)、[implement.md](09-13-scoped-knowledge-management/implement.md)、[prd.md](09-13-scoped-knowledge-management/prd.md) |
 | [09-18-t053-single-repository-acceptance](09-18-t053-single-repository-acceptance/task.json) | [design.md](09-18-t053-single-repository-acceptance/design.md)、[prd.md](09-18-t053-single-repository-acceptance/prd.md) |
+| [09-20-requirement-git-error](09-20-requirement-git-error/task.json) | [fix.patch](09-20-requirement-git-error/fix.patch)、[implementation.md](09-20-requirement-git-error/implementation.md)、[prd.md](09-20-requirement-git-error/prd.md) |
+| [09-21-model-diagnostics-knowledge-ui](09-21-model-diagnostics-knowledge-ui/task.json) | [prd.md](09-21-model-diagnostics-knowledge-ui/prd.md) |
+| [09-21-product-failure-diagnostics](09-21-product-failure-diagnostics/task.json) | [prd.md](09-21-product-failure-diagnostics/prd.md) |
 | [candidate-verification-recovery](candidate-verification-recovery/task.json) | [design.md](candidate-verification-recovery/design.md)、[implement.md](candidate-verification-recovery/implement.md)、[prd.md](candidate-verification-recovery/prd.md) |
 | [universal-delivery-resume](universal-delivery-resume/task.json) | [design.md](universal-delivery-resume/design.md)、[implement.md](universal-delivery-resume/implement.md)、[prd.md](universal-delivery-resume/prd.md) |
 
@@ -111,7 +117,8 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 | 09-19-console-readiness | console-readiness | [completed](09-19-console-readiness/task.json) |
 | 09-19-documentation-cleanup | documentation-cleanup-20260919 | [completed](09-19-documentation-cleanup/task.json) |
 | 09-19-mysql-test-isolation | mysql-test-isolation-20260919 | [completed](09-19-mysql-test-isolation/task.json) |
-| 09-21-knowledge-resolution-ui | knowledge-resolution-ui | [completed](09-21-knowledge-resolution-ui/task.json) |
 | 09-21-confirmed-knowledge-display | confirmed-knowledge-display | [completed](09-21-confirmed-knowledge-display/task.json) |
+| 09-21-knowledge-resolution-ui | knowledge-resolution-ui | [completed](09-21-knowledge-resolution-ui/task.json) |
+| 09-21-trellis-record-normalization | trellis-record-normalization-20260921 | [completed](09-21-trellis-record-normalization/task.json) |
 
-汇总：当前 3；待核实 11；已完成 68。
+汇总：当前 4；待核实 14；已完成 69。

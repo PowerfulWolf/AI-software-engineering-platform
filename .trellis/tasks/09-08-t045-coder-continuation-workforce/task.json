@@ -1,6 +1,8 @@
 {
-  "name": "t045-coder-continuation-workforce",
+  "id": "t045-coder-continuation-workforce",
+  "title": "T045 Recoverable Coder continuation and durable organization roster",
   "status": "completed",
-  "created_at": "2026-09-08",
-  "id": "t045-coder-continuation-workforce"
+  "phase": "complete",
+  "name": "t045-coder-continuation-workforce",
+  "created_at": "2026-09-08"
 }

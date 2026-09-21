@@ -1,10 +1,14 @@
 {
   "id": "T011",
-  "slug": "real-agent",
   "title": "接入 OpenAI-compatible 真实 AgentAdapter",
   "status": "completed",
   "phase": "verify",
-  "depends_on": ["T008", "T009", "T010"],
+  "slug": "real-agent",
+  "depends_on": [
+    "T008",
+    "T009",
+    "T010"
+  ],
   "allowed_paths": [
     "src/ai_software_engineer/agents/**",
     "src/ai_software_engineer/context/**",

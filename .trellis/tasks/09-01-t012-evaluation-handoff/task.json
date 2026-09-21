@@ -1,10 +1,14 @@
 {
   "id": "T012",
-  "slug": "evaluation-handoff",
   "title": "实现 metrics、ADR 与 human handoff",
   "status": "completed",
   "phase": "verify",
-  "depends_on": ["T009", "T010", "T011"],
+  "slug": "evaluation-handoff",
+  "depends_on": [
+    "T009",
+    "T010",
+    "T011"
+  ],
   "allowed_paths": [
     "src/ai_software_engineer/evaluation/**",
     "tests/evaluation/**",

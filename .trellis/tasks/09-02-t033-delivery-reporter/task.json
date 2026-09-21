@@ -1,10 +1,12 @@
 {
   "id": "T033",
-  "slug": "delivery-reporter",
   "title": "评估并实现只读 Reporter Agent/Skill",
   "status": "planned",
   "phase": "plan",
-  "depends_on": ["T032"],
+  "slug": "delivery-reporter",
+  "depends_on": [
+    "T032"
+  ],
   "allowed_paths": [
     "src/ai_software_engineer/reporting/**",
     "src/ai_software_engineer/evaluation/**",

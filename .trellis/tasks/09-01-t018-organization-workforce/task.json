@@ -1,10 +1,12 @@
 {
   "id": "T018",
-  "slug": "organization-workforce",
   "title": "建立组织级 Agent workforce 与 run-scoped model 契约",
   "status": "completed",
   "phase": "verify",
-  "depends_on": ["T017"],
+  "slug": "organization-workforce",
+  "depends_on": [
+    "T017"
+  ],
   "allowed_paths": [
     "src/ai_software_engineer/domain/**",
     "src/ai_software_engineer/project_workspace.py",

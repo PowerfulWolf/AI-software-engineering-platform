@@ -1,10 +1,13 @@
 {
   "id": "T023",
-  "slug": "evidence-capture",
   "title": "封存命令、diff、测试与 Agent usage evidence",
   "status": "completed",
   "phase": "verify",
-  "depends_on": ["T015", "T022"],
+  "slug": "evidence-capture",
+  "depends_on": [
+    "T015",
+    "T022"
+  ],
   "allowed_paths": [
     "src/ai_software_engineer/evidence/**",
     "src/ai_software_engineer/redaction.py",

@@ -2,6 +2,7 @@
   "id": "task_t008_fake_agent",
   "title": "T008 deterministic FakeAgentAdapter",
   "status": "completed",
+  "phase": "complete",
   "branch": "ai/task_t008_fake_agent/attempt-1",
   "base_branch": "ai/task_t007_context/attempt-1",
   "scope": "backend",

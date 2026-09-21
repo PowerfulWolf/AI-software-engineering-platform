@@ -1,0 +1,14 @@
+{
+  "id": "09-21-model-diagnostics-knowledge-ui",
+  "title": "Model-call diagnostics and knowledge clarification UI",
+  "status": "legacy_unknown",
+  "phase": "needs_status_verification",
+  "metadata_recorded_on": "2026-09-21",
+  "status_reason": "Historical documents exist, but no task.json was recorded. Completion and acceptance are not inferred.",
+  "source_documents": [
+    "prd.md"
+  ],
+  "remaining": [
+    "reconcile original implementation, integration and verification evidence before changing status"
+  ]
+}

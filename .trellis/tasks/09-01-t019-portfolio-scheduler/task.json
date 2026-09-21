@@ -1,10 +1,12 @@
 {
   "id": "T019",
-  "slug": "portfolio-scheduler",
   "title": "实现组织级 PortfolioScheduler 与 ModelRouter",
   "status": "completed",
   "phase": "verify",
-  "depends_on": ["T018"],
+  "slug": "portfolio-scheduler",
+  "depends_on": [
+    "T018"
+  ],
   "allowed_paths": [
     "src/ai_software_engineer/scheduling/**",
     "tests/scheduling/**",

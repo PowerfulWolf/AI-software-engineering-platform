@@ -1,10 +1,13 @@
 {
   "id": "T020",
-  "slug": "project-profile",
   "title": "发现 ProjectProfile 与项目原生规范",
   "status": "completed",
   "phase": "verify",
-  "depends_on": ["T017", "T018"],
+  "slug": "project-profile",
+  "depends_on": [
+    "T017",
+    "T018"
+  ],
   "allowed_paths": [
     "src/ai_software_engineer/project_profile.py",
     "schemas/project-profile.schema.json",

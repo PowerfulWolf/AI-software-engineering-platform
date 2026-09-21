@@ -1,9 +1,9 @@
 {
   "id": "T047",
-  "slug": "planner-agent-evolution",
   "title": "建设面向复杂需求的 Planner Agent",
   "status": "completed",
   "phase": "verified",
+  "slug": "planner-agent-evolution",
   "depends_on": [
     "T031",
     "T046"

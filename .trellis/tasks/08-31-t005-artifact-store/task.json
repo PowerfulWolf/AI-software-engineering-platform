@@ -2,6 +2,7 @@
   "id": "task_t005_artifact_store",
   "title": "T005 immutable ArtifactStore with integrity and lineage",
   "status": "completed",
+  "phase": "complete",
   "branch": "ai/task_t005_artifact_store/attempt-1",
   "base_branch": "main",
   "scope": "backend",

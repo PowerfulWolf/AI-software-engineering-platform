@@ -1,10 +1,15 @@
 {
   "id": "T014",
-  "slug": "runtime-run",
   "title": "组装配置驱动的 Task run",
   "status": "completed",
   "phase": "verify",
-  "depends_on": ["T010", "T011", "T012", "T013"],
+  "slug": "runtime-run",
+  "depends_on": [
+    "T010",
+    "T011",
+    "T012",
+    "T013"
+  ],
   "allowed_paths": [
     "src/ai_software_engineer/runtime.py",
     "src/ai_software_engineer/cli.py",

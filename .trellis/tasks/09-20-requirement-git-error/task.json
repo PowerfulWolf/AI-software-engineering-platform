@@ -1,0 +1,16 @@
+{
+  "id": "09-20-requirement-git-error",
+  "title": "Requirement Git baseline error",
+  "status": "legacy_unknown",
+  "phase": "needs_status_verification",
+  "metadata_recorded_on": "2026-09-21",
+  "status_reason": "Historical documents exist, but no task.json was recorded. Completion and acceptance are not inferred.",
+  "source_documents": [
+    "fix.patch",
+    "implementation.md",
+    "prd.md"
+  ],
+  "remaining": [
+    "reconcile original implementation, integration and verification evidence before changing status"
+  ]
+}

@@ -2,6 +2,7 @@
   "id": "task_t006_git_worktree",
   "title": "T006 isolated Git worktrees and workspace policy",
   "status": "completed",
+  "phase": "complete",
   "branch": "ai/task_t006_git_worktree/attempt-1",
   "base_branch": "main",
   "scope": "backend",

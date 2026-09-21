@@ -1,10 +1,16 @@
 {
   "id": "T025",
-  "slug": "cross-language-e2e",
   "title": "验证任意目标项目的串行 candidate-QA-review 交付",
   "status": "completed",
   "phase": "verify",
-  "depends_on": ["T020", "T021", "T022", "T023", "T024"],
+  "slug": "cross-language-e2e",
+  "depends_on": [
+    "T020",
+    "T021",
+    "T022",
+    "T023",
+    "T024"
+  ],
   "allowed_paths": [
     "fixtures/target-projects/**",
     "tests/e2e/**",

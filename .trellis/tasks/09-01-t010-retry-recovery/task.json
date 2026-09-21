@@ -2,6 +2,7 @@
   "id": "task_t010_retry_recovery",
   "title": "T010 bounded retry and checkpoint recovery",
   "status": "completed",
+  "phase": "complete",
   "branch": "ai/task_t010_retry/attempt-1",
   "base_branch": "main",
   "scope": "backend",

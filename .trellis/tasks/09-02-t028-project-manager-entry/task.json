@@ -1,10 +1,17 @@
 {
   "id": "T028",
-  "slug": "project-manager-entry",
   "title": "建立 Project Request、Project Manager 与产品设计阶段",
   "status": "completed",
   "phase": "verify",
-  "depends_on": ["T019", "T020", "T021", "T022", "T024", "T025"],
+  "slug": "project-manager-entry",
+  "depends_on": [
+    "T019",
+    "T020",
+    "T021",
+    "T022",
+    "T024",
+    "T025"
+  ],
   "allowed_paths": [
     "src/ai_software_engineer/project_manager/**",
     "src/ai_software_engineer/product/**",

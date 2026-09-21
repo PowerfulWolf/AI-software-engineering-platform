@@ -1,9 +1,9 @@
 {
   "id": "T049",
-  "slug": "incremental-knowledge-indexing",
   "title": "建设知识导入后的异步解析与增量索引",
   "status": "completed",
   "phase": "verified",
+  "slug": "incremental-knowledge-indexing",
   "depends_on": [
     "T048"
   ],

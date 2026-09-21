@@ -2,6 +2,7 @@
   "id": "task_t009_orchestrator",
   "title": "T009 serial Orchestrator happy path",
   "status": "completed",
+  "phase": "complete",
   "branch": "ai/task_t009_orchestrator/attempt-1",
   "base_branch": "ai/task_t008_fake_agent/attempt-1",
   "scope": "backend",

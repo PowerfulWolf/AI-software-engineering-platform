@@ -1,1 +1,7 @@
-{"id":"model-policy-revisions","title":"Immutable production model policy revisions","status":"completed","phase":"offline_verified","remaining":[]}
+{
+  "id": "model-policy-revisions",
+  "title": "Immutable production model policy revisions",
+  "status": "completed",
+  "phase": "offline_verified",
+  "remaining": []
+}

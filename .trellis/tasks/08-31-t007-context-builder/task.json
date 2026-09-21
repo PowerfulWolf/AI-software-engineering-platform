@@ -2,6 +2,7 @@
   "id": "task_t007_context_builder",
   "title": "T007 deterministic Context Builder and Router",
   "status": "completed",
+  "phase": "complete",
   "branch": "ai/task_t007_context/attempt-1",
   "base_branch": "ai/task_t006_git_worktree/attempt-1",
   "scope": "backend",

@@ -2,6 +2,7 @@
   "id": "task_t001_python_cli",
   "title": "T001 Python package and CLI bootstrap",
   "status": "completed",
+  "phase": "complete",
   "branch": "ai/task_t001_python_cli/attempt-1",
   "base_branch": "main",
   "scope": "backend",

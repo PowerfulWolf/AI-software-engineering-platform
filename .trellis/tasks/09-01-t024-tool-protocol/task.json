@@ -1,10 +1,14 @@
 {
   "id": "T024",
-  "slug": "tool-protocol",
   "title": "建立 Coder/QA/Reviewer typed tool protocol",
   "status": "completed",
   "phase": "verify",
-  "depends_on": ["T016", "T019", "T023"],
+  "slug": "tool-protocol",
+  "depends_on": [
+    "T016",
+    "T019",
+    "T023"
+  ],
   "allowed_paths": [
     "src/ai_software_engineer/tools/**",
     "schemas/tool-*.schema.json",
