@@ -171,6 +171,22 @@ test("current knowledge wait outranks a preserved child checkpoint, but not an e
   assert.equal(vm.runInContext("requestPresentation(snapshot.requests[0]).status", h.context), "DELIVERING");
 });
 
+test("in-progress delivery stages do not expose a continuation action", () => {
+  const h = harness(async () => ({ok: true, json: async () => []}));
+  for (const stage of ["DESIGNING", "PLANNING", "DISPATCHING", "DELIVERING", "INTEGRATING", "CLOSED"]) {
+    vm.runInContext(`
+      snapshot.requests[0] = {
+        ...snapshot.requests[0],
+        stage: ${JSON.stringify(stage)},
+        next_action: "当前阶段仍在运行。",
+      };
+      renderDetail();
+    `, h.context);
+    assert.equal(findButton(h, "继续交付"), undefined, `${stage} must not offer recovery`);
+  }
+  assert.match(text(h.detail()), /当前阶段仍在运行/);
+});
+
 test("polling the same checkpoint replaces pending drafts when approval arrived elsewhere", async () => {
   let view = pending;
   const h = harness(async () => ({ok: true, json: async () => [view]}));

@@ -175,7 +175,10 @@ production_console_app(
   恢复、离开页面或串行推进文案。Operation 状态只在全局操作/结果入口展示，Product 处理状态只在
   需求讨论 composer 内展示。当前子 Task 已开始时，Requirement 列表/摘要优先显示子 Task 阶段并
   隐藏旧父 checkpoint blocker；需求讨论只保留已提交的双方消息。活动子 Task 存在时不得再次显示
-  “继续交付”。
+  “继续交付”。同样，`DESIGNING`、`PLANNING`、`DISPATCHING`、`DELIVERING` 和
+  `INTEGRATING` 等非阻塞进行中阶段不得显示该按钮；只有当前投影明确为阻塞/等待人工，或存在
+  已验证的独立批准计划时，才显示恢复或批准动作。`CLOSED` 只能显示“重新启动需求”，不能提交
+  `CONTINUE_DELIVERY`。
 - 设置页的模型路由分为可用模型目录和 Agent 策略。启用目录路由只使其可选，不自动成为
   备用模型；每个 Agent 选择一个主模型，并可从目录中显式添加、移除、上移或下移 0–N 个备用模型。
 - 一个 Task 的 Coder/QA/Reviewer 串行。UI 只把 `current_stage=true` 的 assignment 标成执行中；
@@ -221,6 +224,9 @@ production_console_app(
 | Two Requirements in the same visible group | clicking either card body opens and marks that exact Requirement as the sole selection; polling preserves it |
 | Requirement detail contains empty or populated Product/artifact modules | every module heading remains the same level and every divider has the same spacing on both sides |
 | Delivery has active continue Operation or child Task | seven flow nodes only; no Manager/operation prose in the flow section |
+| Requirement is in `DESIGNING`/`PLANNING`/`DISPATCHING`/`DELIVERING`/`INTEGRATING` without a blocker or approval | hide “继续交付”; an in-progress stage must not submit a recovery command |
+| Requirement is `BLOCKED`/`FAILED`/`WAITING_HUMAN` or has a validated recovery/integration approval | show the exact recovery/approval action and bind it to the current checkpoint |
+| Requirement is `CLOSED` | show only “重新启动需求”; do not offer `CONTINUE_DELIVERY` |
 | Enabled model exists in catalog but is not selected by an Agent | save succeeds; it is never serialized or shown as that Agent's fallback |
 | Screenshot over 10 MB, unsupported magic, stale checkpoint or wrong stage | 413/422; no dialogue mutation |
 | Stale displayed checkpoint | terminal FAILED with `STALE_CHECKPOINT`; no model call |
@@ -272,6 +278,8 @@ production_console_app(
   以及活动通知单次展示/正常完成自动关闭/终态替换、失败通知关闭/成功替代、
   successful-but-blocked 反馈、同 Requirement 去重、阻塞信息唯一入口与 Operation 快捷跳转；通知弹窗
   不得销毁或覆盖已经打开的表单草稿。
+- `tests/team_view/knowledge-gap.test.cjs`：Designer 处于 `DESIGNING` 时不得渲染通用“继续交付”按钮；
+  阻塞且已批准的知识缺口仍必须保留 exact-checkpoint 继续入口。
 - `tests/team_view/test_live.py`：candidate branch 必须从 exact candidate ref 唯一推导；退休父需求的
   native child deliveries 与 Agent 队列投影必须同时消失。
 - `tests/contracts/test_json_schema_contracts.py`：Python/JSON Schema 的 QUEUED/RUNNING/terminal 状态、

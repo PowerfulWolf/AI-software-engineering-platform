@@ -484,6 +484,14 @@ function requestPresentation(request) {
   };
 }
 
+function canContinueDelivery(request) {
+  return (
+    !productDiscussionStages.has(request.stage) &&
+    (requestPresentation(request).group === "blocked" ||
+      currentRequestTasks(request).some((task) => taskGroup(task) === "blocked"))
+  );
+}
+
 function agentQueueState(agent) {
   return {
     assigned_delivery_ids: [...agent.assigned_delivery_ids],
@@ -2553,10 +2561,7 @@ function requestOperation(panel, request, discussionSection) {
     });
     appendDiscussionContent(form);
   }
-  if (
-    !productDiscussionStages.has(request.stage) &&
-    request.stage !== "DONE"
-  ) {
+  if (canContinueDelivery(request)) {
     const action = deliveryButton(
       "继续交付",
       () =>
