@@ -315,8 +315,19 @@ class StageWorkflowGate:
         gap: KnowledgeGap | None = None,
         resolution: KnowledgeResolution | None = None,
         resolution_records: KnowledgeRecordStore | None = None,
+        historical: bool = False,
     ) -> WorkflowSkillEvidence:
-        if self.journal.current(checkpoint.delivery_id) != checkpoint:
+        if historical and name != "recovery":
+            raise KnowledgeError("STAGE_HISTORICAL_ONLY_RECOVERY")
+        current = self.journal.current(checkpoint.delivery_id)
+        if current != checkpoint and not (
+            historical
+            and current is not None
+            and any(
+                item.checkpoint_sha256 == checkpoint.checkpoint_sha256
+                for item in self.journal.history(checkpoint.delivery_id)
+            )
+        ):
             raise KnowledgeError("STAGE_CHECKPOINT_NOT_CURRENT")
         if gap is not None and resolution is not None:
             source = resolution_records or self.records

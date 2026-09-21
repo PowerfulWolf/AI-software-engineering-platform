@@ -34,6 +34,7 @@ from ai_software_engineer.multi_directory.service import (
     CreateRequirement,
     DeleteRequirement,
     JointDeliveryService,
+    RecoverDesign,
     RestartRequirement,
     UpdateRequirement,
 )
@@ -55,6 +56,7 @@ from ai_software_engineer.web_console import (
     ManagerConsoleAdapter,
     ProductApprovalIntent,
     ProductReplyIntent,
+    RecoverDesignIntent,
     RestartRequirementIntent,
     UpdateRequirementIntent,
 )
@@ -142,6 +144,16 @@ class _Entry:
 
     def status(self, delivery_id: str) -> JointDeliveryResult:
         assert delivery_id == self.checkpoint.delivery_id
+        return JointDeliveryResult(checkpoint=self.checkpoint)
+
+
+class _RecoverEntry(JointDeliveryService):
+    def __init__(self, checkpoint: JointCheckpoint) -> None:
+        self.checkpoint = checkpoint
+        self.commands: list[RecoverDesign] = []
+
+    def recover_design(self, command: RecoverDesign) -> JointDeliveryResult:
+        self.commands.append(command)
         return JointDeliveryResult(checkpoint=self.checkpoint)
 
 
@@ -245,6 +257,29 @@ def test_create_requirement_delegates_and_returns_small_cursor(tmp_path: Path) -
     assert result.project_id == PROJECT_ID
     assert result.stage == "READY_FOR_DISCUSSION"
     assert result.checkpoint_sha256 == entry.checkpoint.checkpoint_sha256
+
+
+def test_recover_design_intent_binds_exact_checkpoint_and_audit_reference(
+    tmp_path: Path,
+) -> None:
+    adapter, host, entry = _adapter(tmp_path)
+    recovered = _RecoverEntry(entry.checkpoint)
+    host.entry = recovered  # type: ignore[assignment]
+
+    result = adapter.execute(
+        RecoverDesignIntent(
+            project_id=PROJECT_ID,
+            delivery_id=DELIVERY_ID,
+            expected_checkpoint_sha256=entry.checkpoint.checkpoint_sha256,
+        )
+    )
+
+    assert result.checkpoint_sha256 == entry.checkpoint.checkpoint_sha256
+    command = recovered.commands[0]
+    assert command.delivery_id == DELIVERY_ID
+    assert command.expected_checkpoint_sha256 == entry.checkpoint.checkpoint_sha256
+    assert command.operator_id == "web-console"
+    assert command.approval_reference.endswith(entry.checkpoint.checkpoint_sha256)
 
 
 def test_update_and_delete_requirement_bind_the_displayed_draft(tmp_path: Path) -> None:

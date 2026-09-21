@@ -1,0 +1,3 @@
+# Design
+
+Keep `JointCheckpoint.attempts["design"]` as the count of actual Design artifact attempts. `_advance` rolls back the pre-call reservation only when `KnowledgeGapRaised` interrupts before a Design artifact is requested. Add a typed `RecoverDesign` command and `RECOVER_DESIGN` console intent. The service validates a historical DESIGNING knowledge wait has an approved, integrity-checked resolution, appends a checkpoint that clears the wait and resets only the design counter, then invokes the normal `_advance` path. The read projection derives `design_recovery_available` from durable journal/history and resolution records; UI renders a dedicated recovery button. No old checkpoint is edited or deleted.

@@ -319,6 +319,47 @@ Wrong: duplicate a partial prefix list in a prompt. Correct: derive context and 
 one module and verify both with `test_integration_command_policy.py`. Service/journal feedback
 regression is `test_command_rejection_is_safe_and_durable`.
 
+## Design budget is for Design artifacts, with bounded recovery
+
+### Scope / Trigger
+
+Knowledge consultation runs before the requested Product, Design or Planner artifact. A
+human knowledge wait is a recoverable gate and must not consume the downstream artifact's
+attempt budget.
+
+### Contract
+
+`JointCheckpoint.attempts["design"]` counts reserved Design artifact calls. The reservation is
+created before the provider call for crash safety. If `KnowledgeGapRaised` interrupts before a
+`JointTechnicalDesign` result is requested, the successor `WAITING_HUMAN` checkpoint returns
+that reservation to the Design budget. Provider interruption, invalid output and rejected
+Design artifacts remain spent. Existing journals retain every historical reservation and wait.
+
+An exhausted Design checkpoint (`stage=DESIGNING`, `design=null`, `plan=null`, `attempts.design >=
+3`) may be recovered only when its immutable history contains a Design `WAITING_HUMAN` checkpoint
+with an integrity-checked, human-approved `KnowledgeResolution`. `RecoverDesign` requires the
+exact checkpoint digest, operator, rationale and approval reference; it appends a successor,
+resets only `attempts.design`, and immediately invokes the ordinary Designer validation path.
+The console persists the `RECOVER_DESIGN` operation and the successor `next_action`; no journal
+record is edited or deleted.
+
+The read projection derives `design_recovery_available` from the current checkpoint, hash-chain
+history and resolution store. It renders a dedicated “恢复设计” action and never reuses generic
+“继续交付” for an active Design stage.
+
+### Validation matrix
+
+| Case | Result |
+|---|---|
+| Knowledge gap before Design artifact | Wait, preserve the unused Design budget |
+| Three real invalid Design artifacts | Exhaust budget; no automatic fourth call |
+| Exhausted Design plus approved historical knowledge resolution | Append audited recovery and continue Design |
+| Missing/foreign/stale resolution or checkpoint | Reject without journal mutation or provider call |
+| Recovery after accepted Design/Plan or another stage | Reject; no budget reset |
+
+Good: knowledge-only waits leave `attempts.design` unchanged and a recovery reuses the approved
+ProductSpec. Bad: reset counters from the browser or silently overwrite the exhausted checkpoint.
+
 ## 10. Bounded Designer duplicate-consumer correction
 
 ### Scope / Trigger

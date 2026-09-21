@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from ai_software_engineer.agents import StructuredModelResult
+from ai_software_engineer.knowledge.gaps import KnowledgeGapRaised
 from ai_software_engineer.manager.delivery import ResumeProjectDelivery
 from ai_software_engineer.multi_directory.models import (
     JointCheckpoint,
@@ -13,7 +14,7 @@ from ai_software_engineer.multi_directory.models import (
     JointTechnicalDesign,
     digest,
 )
-from ai_software_engineer.multi_directory.service import JointDeliveryService
+from ai_software_engineer.multi_directory.service import JointDeliveryService, RecoverDesign
 from ai_software_engineer.team_workspace import TeamWorkspace
 from tests.manager.test_joint_contracts import checkpoint
 from tests.manager.test_joint_planner_feedback import DeliveryReached, PlanningBackend
@@ -177,6 +178,89 @@ def test_foreign_duplicate_consumers_are_not_reclassified(tmp_path: Path) -> Non
     assert len(backend.design_inputs) == 1
     rejected = service.status(seed.delivery_id).checkpoint
     assert rejected.design is None and rejected.attempts == {"design": 1}
+
+
+def test_knowledge_wait_does_not_spend_design_artifact_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, _backend, seed, _invalid = setup_design(tmp_path)
+
+    class Gap:
+        gap_id = "a" * 64
+
+    def blocked(*_args: object, **_kwargs: object) -> JointTechnicalDesign:
+        raise KnowledgeGapRaised(Gap())  # type: ignore[arg-type]
+
+    monkeypatch.setattr(service, "_produce", blocked)
+    waiting = service.resume(ResumeProjectDelivery(delivery_id=seed.delivery_id)).checkpoint
+
+    assert waiting.stage is JointStage.WAITING_HUMAN
+    assert waiting.knowledge_wait_stage is JointStage.DESIGNING
+    assert waiting.attempts.get("design", 0) == 0
+
+
+def test_design_recovery_appends_checkpoint_and_resets_only_design_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, _backend, seed, _invalid = setup_design(tmp_path)
+    source = service._save(
+        seed,
+        stage=JointStage.WAITING_HUMAN,
+        knowledge_wait_stage=JointStage.DESIGNING,
+        knowledge_gap_id="b" * 64,
+        next_action="Resolve knowledge gap before resuming.",
+    )
+    exhausted = service._save(
+        source,
+        stage=JointStage.DESIGNING,
+        knowledge_wait_stage=None,
+        knowledge_gap_id=None,
+        attempts={"product": 7, "design": 3},
+        next_action="Resume with the exact approved knowledge resolution.",
+    )
+
+    class Resolution:
+        resolution_id = "c" * 64
+
+        def validate_integrity(self) -> None:
+            return None
+
+    class Records:
+        def get(self, _kind: str, _key: str, _model: object) -> object:
+            return object()
+
+        def find(self, _kind: str, _key: str, _model: object) -> Resolution:
+            return Resolution()
+
+    class Gate:
+        def require(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "ai_software_engineer.knowledge.administration.find_gap_records",
+        lambda *_args, **_kwargs: Records(),
+    )
+    monkeypatch.setattr(service, "_approved_design_wait", lambda _checkpoint: source)
+    monkeypatch.setattr(service, "_stage_workflow", lambda _checkpoint: Gate())
+    monkeypatch.setattr(service, "_advance", lambda checkpoint: checkpoint)
+
+    recovered = service.recover_design(
+        RecoverDesign(
+            delivery_id=exhausted.delivery_id,
+            expected_checkpoint_sha256=exhausted.checkpoint_sha256,
+            operator_id="test-operator",
+            rationale="approved knowledge resolution",
+            approval_reference="test-recovery-reference",
+        )
+    ).checkpoint
+
+    assert recovered.sequence == exhausted.sequence + 1
+    assert recovered.attempts == {"product": 7, "design": 0}
+    assert recovered.product_spec == exhausted.product_spec
+    assert recovered.approval == exhausted.approval
+    assert recovered.stage is JointStage.DESIGNING
+    assert "test-recovery-reference" in recovered.next_action
+    assert len(service.journal.history(seed.delivery_id)) == recovered.sequence
 
 
 @pytest.mark.parametrize("path", ["./src/config.py", "src/", ".", "/private/secret", "../secret"])

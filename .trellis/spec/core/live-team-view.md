@@ -59,6 +59,11 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
   不能因其仍是 IMPLEMENTING/QA 而宣称恢复执行。通过只读 `KnowledgeGapView` 关联批准事实，
   `RequestView.knowledge_gap` 在批准后即变化（checkpoint SHA 不变），提示已批准、等待用户继续。
   详见 [`product-failure-diagnostics.md`](product-failure-diagnostics.md) 的 approved knowledge 契约。
+- Design 预算因知识门误计而耗尽时，Reader 只有在当前 `DESIGNING` 无 Design/Plan、历史存在
+  Design `WAITING_HUMAN` 且 resolution 完整性和 lineage 均通过时才设置
+  `RequestView.design_recovery_available=true`。该字段由 journal/resolution 只读事实推导；网页
+  显示独立“恢复设计”，不会把进行中的 Design 渲染成普通“继续交付”。恢复 Operation 的
+  `expected_checkpoint_sha256` 必须与页面精确一致，Reader 不推进状态、不改预算、不创建 gate。
 - Agent cards must render assignment-stage state, not copy the Task's global delivery status onto every
   planned assignment. Only `AssignmentView.current_stage=true` may display the Task's active-stage label.
   Earlier serial roles display `本轮已完成`, later roles display `等待<角色>阶段`, and a Task with no

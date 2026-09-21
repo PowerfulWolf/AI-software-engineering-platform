@@ -28,6 +28,7 @@ from ai_software_engineer.multi_directory.service import (
     CreateRequirement,
     DeleteRequirement,
     JointDeliveryService,
+    RecoverDesign,
     RestartRequirement,
     UpdateRequirement,
 )
@@ -50,6 +51,7 @@ from .models import (
     DeleteRequirementIntent,
     ProductApprovalIntent,
     ProductReplyIntent,
+    RecoverDesignIntent,
     RestartRequirementIntent,
     UpdateRequirementIntent,
 )
@@ -152,6 +154,27 @@ class ManagerConsoleAdapter:
                     )
                 )
                 return _summarize(approved, project_id=intent.project_id)
+            if isinstance(intent, RecoverDesignIntent):
+                recovered = self._entry(intent.project_id, intent.delivery_id)
+                if not isinstance(recovered, JointDeliveryService):
+                    raise ConsoleCommandRejected(
+                        "COMMAND_REJECTED",
+                        "Design recovery is only available for joint Requirements.",
+                    )
+                result = recovered.recover_design(
+                    RecoverDesign(
+                        delivery_id=intent.delivery_id,
+                        expected_checkpoint_sha256=intent.expected_checkpoint_sha256,
+                        operator_id="web-console",
+                        rationale=(
+                            "Approved knowledge resolution authorizes Design budget recovery."
+                        ),
+                        approval_reference=(
+                            "web-console-design-recovery:" + intent.expected_checkpoint_sha256
+                        ),
+                    )
+                )
+                return _summarize(result, project_id=intent.project_id)
             if isinstance(intent, ContinueDeliveryIntent):
                 current = (
                     self._entry(intent.project_id, intent.delivery_id)

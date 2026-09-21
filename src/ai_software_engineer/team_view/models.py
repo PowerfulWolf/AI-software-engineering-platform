@@ -112,6 +112,7 @@ class RequestView(DomainModel):
     documents: tuple[DocumentView, ...] = ()
     checkpoint_sha256: str
     knowledge_gap: KnowledgeGapView | None = None
+    design_recovery_available: bool = False
 
 
 class AgentView(DomainModel):

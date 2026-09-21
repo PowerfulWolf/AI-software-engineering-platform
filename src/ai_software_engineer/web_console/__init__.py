@@ -50,6 +50,7 @@ from .models import (
     DeleteRequirementIntent,
     ProductApprovalIntent,
     ProductReplyIntent,
+    RecoverDesignIntent,
     RestartRequirementIntent,
     UpdateRequirementIntent,
 )
@@ -109,6 +110,7 @@ __all__ = [
     "ProductReplyIntent",
     "ProjectConsole",
     "ProjectSummary",
+    "RecoverDesignIntent",
     "RestartRequirementIntent",
     "RuntimeStatusSnapshot",
     "RuntimeVariableUpdate",

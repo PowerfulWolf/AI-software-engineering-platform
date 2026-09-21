@@ -316,6 +316,28 @@ def test_knowledge_recovery_requires_exact_approved_resolution_lineage(tmp_path:
     with pytest.raises(KnowledgeError, match="RESOLUTION_NOT_COMMITTED"):
         gate.require("recovery", cp, gap=gap, resolution=forged)
 
+    current = JointCheckpoint.seal(
+        {
+            **cp.to_wire(),
+            "sequence": cp.sequence + 1,
+            "previous_checkpoint_sha256": cp.checkpoint_sha256,
+            "next_action": "Current checkpoint advanced after the knowledge wait.",
+        }
+    )
+    gate.journal.append(current, expected=cp.checkpoint_sha256)
+    assert (
+        gate.require(
+            "recovery",
+            cp,
+            gap=gap,
+            resolution=resolution,
+            historical=True,
+        ).status
+        == "PASSED"
+    )
+    with pytest.raises(KnowledgeError, match="HISTORICAL_ONLY_RECOVERY"):
+        gate.require("architecture-check", cp, historical=True)
+
 
 def test_service_requires_architecture_receipt_before_design_commit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -196,6 +196,12 @@ it does not claim a business fix or change the failed verdict. Knowledge recover
 the exact approved resolution from its owning record store before receipt publication. A gate cannot
 create a Task, Assignment, Lease, verdict or approval.
 
+The bounded Design-budget recovery is the one historical-checkpoint exception: callers may pass
+`StageWorkflowGate.require("recovery", historical_checkpoint, ..., historical=True)` only after
+proving that the immutable checkpoint digest is an ancestor in the current `JointJournal` hash chain.
+The proof still records the historical `WAITING_HUMAN` checkpoint and exact Gap/Resolution lineage;
+`historical=True` is rejected for every other skill and does not authorize edits to that checkpoint.
+
 The joint service invokes these receipts at intake preparation, before committing design, before
 planning/plan execution, and at recovery or failure-routing boundaries. Its existing request
 stage path itself does not produce delivery claims; the native Delivery Supervisor does. Missing or invalid

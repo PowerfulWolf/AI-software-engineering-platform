@@ -140,6 +140,22 @@ class RestartRequirement(DomainModel):
     submitted_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class RecoverDesign(DomainModel):
+    """Reset an exhausted Design window after an approved knowledge wait.
+
+    The command never edits the exhausted checkpoint.  It appends a successor and
+    immediately enters the ordinary Designer path, so the recovery is visible in
+    both the console operation journal and the Requirement hash chain.
+    """
+
+    delivery_id: DeliveryId
+    expected_checkpoint_sha256: CheckpointDigest
+    operator_id: NonEmptyStr
+    rationale: NonEmptyStr
+    approval_reference: NonEmptyStr
+    submitted_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class JointDeliveryService:
     def __init__(
         self,
@@ -243,6 +259,70 @@ class JointDeliveryService:
                 ),
             )
             return JointDeliveryResult(checkpoint=restarted)
+
+    def recover_design(self, command: RecoverDesign) -> JointDeliveryResult:
+        """Resume Design after a knowledge-only budget exhaustion.
+
+        A recovery is allowed only when the immutable history contains an approved
+        Design knowledge wait.  This prevents a generic budget reset from becoming
+        an unbounded retry or from bypassing the human knowledge decision.
+        """
+
+        from ai_software_engineer.knowledge.administration import find_gap_records
+        from ai_software_engineer.knowledge.gaps import KnowledgeGap, KnowledgeResolution
+
+        with self.journal.lock(command.delivery_id):
+            checkpoint = self._current(command.delivery_id)
+            self._expected(checkpoint, command.expected_checkpoint_sha256)
+            if (
+                checkpoint.stage not in {JointStage.DESIGNING, JointStage.WAITING_HUMAN}
+                or checkpoint.design is not None
+                or checkpoint.plan is not None
+                or checkpoint.attempts.get("design", 0) < 3
+            ):
+                raise ValueError(
+                    "design recovery requires an exhausted DESIGNING checkpoint without a design"
+                )
+            source = self._approved_design_wait(checkpoint)
+            assert source.knowledge_gap_id is not None
+            records = find_gap_records(
+                self.project, checkpoint.delivery_id, source.knowledge_gap_id
+            )
+            gap = records.get("gaps", source.knowledge_gap_id, KnowledgeGap)
+            resolution = records.find(
+                "gap-resolutions", source.knowledge_gap_id, KnowledgeResolution
+            )
+            if resolution is None:
+                raise ValueError("design recovery requires an approved knowledge resolution")
+            resolution.validate_integrity()
+            self._stage_workflow(source).require(
+                "recovery",
+                source,
+                gap=gap,
+                resolution=resolution,
+                resolution_records=records,
+                historical=True,
+            )
+            values = dict(checkpoint.attempts)
+            values["design"] = 0
+            recovered = self._save(
+                checkpoint,
+                stage=JointStage.DESIGNING,
+                knowledge_wait_stage=None,
+                knowledge_gap_id=None,
+                attempts=values,
+                next_action=(
+                    "Design budget reset by "
+                    + command.operator_id
+                    + " under "
+                    + command.approval_reference
+                    + " ("
+                    + command.rationale
+                    + ")"
+                    + "; resume the approved Design with the retained ProductSpec."
+                ),
+            )
+            return JointDeliveryResult(checkpoint=self._advance(recovered))
 
     def _intake(
         self,
@@ -513,15 +593,50 @@ class JointDeliveryService:
             return self._advance_stages(checkpoint)
         except KnowledgeGapRaised as error:
             current = self._current(checkpoint.delivery_id)
+            attempts = dict(current.attempts)
+            # Reserve a stage attempt before invoking the model, but do not spend
+            # that reservation when the knowledge gate interrupts before the
+            # requested Design artifact is generated.  Provider interruptions and
+            # invalid artifacts remain spent and are handled by the existing bound.
+            if current.stage is JointStage.DESIGNING and current.design is None:
+                attempts["design"] = max(0, attempts.get("design", 0) - 1)
             return self._save(
                 current,
                 stage=JointStage.WAITING_HUMAN,
                 knowledge_wait_stage=current.stage,
                 knowledge_gap_id=error.gap.gap_id,
+                attempts=attempts,
                 next_action="Resolve and approve knowledge gap "
                 + error.gap.gap_id
                 + " before resuming.",
             )
+
+    def _approved_design_wait(self, checkpoint: JointCheckpoint) -> JointCheckpoint:
+        """Find the exact historical Design wait that authorizes recovery."""
+
+        history = self.journal.history(checkpoint.delivery_id)
+        candidates = tuple(
+            item
+            for item in reversed(history)
+            if item.stage is JointStage.WAITING_HUMAN
+            and item.knowledge_wait_stage is JointStage.DESIGNING
+            and item.knowledge_gap_id is not None
+        )
+        if not candidates:
+            raise ValueError("design recovery requires a historical Design knowledge wait")
+        from ai_software_engineer.knowledge.administration import find_gap_records
+        from ai_software_engineer.knowledge.gaps import KnowledgeResolution
+
+        for item in candidates:
+            assert item.knowledge_gap_id is not None
+            records = find_gap_records(self.project, checkpoint.delivery_id, item.knowledge_gap_id)
+            resolution = records.find(
+                "gap-resolutions", item.knowledge_gap_id, KnowledgeResolution
+            )
+            if resolution is not None:
+                resolution.validate_integrity()
+                return item
+        raise ValueError("design recovery requires an approved knowledge resolution")
 
     def _advance_stages(self, checkpoint: JointCheckpoint) -> JointCheckpoint:
         if checkpoint.stage is JointStage.WAITING_HUMAN and checkpoint.knowledge_gap_id is not None:

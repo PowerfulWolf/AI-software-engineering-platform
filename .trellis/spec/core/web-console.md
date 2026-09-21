@@ -72,6 +72,9 @@ production_console_app(
 - `PRODUCT_APPROVAL(project_id, delivery_id, expected_checkpoint_sha256)`；
 - `CONTINUE_DELIVERY(project_id, delivery_id, expected_checkpoint_sha256,
   approved_scope_sha256?, approved_plan_sha256?)`；一次只能提交一个 approval digest。
+- `RECOVER_DESIGN(project_id, delivery_id, expected_checkpoint_sha256)`；只允许 Manager 从
+  当前联合 Requirement checkpoint、hash-chain 中的 Design `WAITING_HUMAN` 和已批准
+  `KnowledgeResolution` 重建恢复事实，浏览器不能携带预算、Gap 答案或状态值。
 
 公开持久化契约是 `schemas/console-operation.schema.json`。
 
@@ -108,6 +111,11 @@ production_console_app(
   不能启动 Agent；平台获准捕获后必须再返回独立的 `coder_recovery` plan 审批。
 - UI 只能批准 Manager 返回并验证过的 exact scope/recovery/verification SHA。SHA 可以隐藏在
   控件中，但批准前必须显示精确遗漏路径、候选提交、Agent/模型或保留修改/目标基线等可理解事实。
+- `RECOVER_DESIGN` 是独立的恢复操作，不是普通 `CONTINUE_DELIVERY` 的别名。Manager 必须要求
+  当前 checkpoint digest 精确匹配、`design=null`、`plan=null`、Design 预算耗尽，以及历史中
+  完整性通过且已批准的 Design 知识等待；成功时追加 successor checkpoint，只重置
+  `attempts.design`，并将 operator/rationale/approval reference 写入 next action。旧 Operation、
+  ProductSpec、讨论、审批、Gap/Resolution 和 journal 记录不可覆盖。
 - checkpoint、retained paths、原 permissions/deny-list、scope 或 plan 已变化时必须拒绝；刷新最新
   投影后重新提交，不得自动替换用户批准对象。
 

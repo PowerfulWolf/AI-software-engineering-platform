@@ -207,6 +207,22 @@
         "required": ["approved_plan_sha256", "approved_scope_sha256"]
       }
     },
+    "recover_design": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "project_id",
+        "delivery_id",
+        "expected_checkpoint_sha256"
+      ],
+      "properties": {
+        "action": {"const": "RECOVER_DESIGN"},
+        "project_id": {"$ref": "#/$defs/project_id"},
+        "delivery_id": {"$ref": "#/$defs/delivery_id"},
+        "expected_checkpoint_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
     "approval": {
       "type": "object",
       "additionalProperties": false,
@@ -268,7 +284,8 @@
         {"$ref": "#/$defs/delete_requirement"},
         {"$ref": "#/$defs/reply"},
         {"$ref": "#/$defs/product_approval"},
-        {"$ref": "#/$defs/continue"}
+        {"$ref": "#/$defs/continue"},
+        {"$ref": "#/$defs/recover_design"}
       ]
     },
     "intent_sha256": {"$ref": "#/$defs/digest"},

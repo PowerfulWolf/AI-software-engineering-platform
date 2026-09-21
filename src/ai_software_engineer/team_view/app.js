@@ -122,6 +122,7 @@ const labels = {
   PRODUCT_REPLY: "提交需求说明",
   PRODUCT_APPROVAL: "批准产品文档",
   CONTINUE_DELIVERY: "继续交付",
+  RECOVER_DESIGN: "恢复设计",
   QA_FAILURE: "QA 失败",
   REVIEW_REJECTION: "Review 拒绝",
   APPROVE: "已批准",
@@ -138,6 +139,7 @@ const deliveryOperationActions = new Set([
   "PRODUCT_REPLY",
   "PRODUCT_APPROVAL",
   "CONTINUE_DELIVERY",
+  "RECOVER_DESIGN",
 ]);
 const deliveryRoleOrder = { coder: 0, qa: 1, reviewer: 2 };
 const teamRoleOrder = {
@@ -436,6 +438,8 @@ function requestPresentation(request) {
         ? "PRODUCT_DISCOVERY"
         : deliveryOperation?.intent.action === "PRODUCT_APPROVAL"
           ? "DESIGNING"
+          : deliveryOperation?.intent.action === "RECOVER_DESIGN"
+            ? "DESIGNING"
           : "DELIVERING";
     return {
       group: "active",
@@ -460,6 +464,13 @@ function requestPresentation(request) {
       group: "completed",
       status: request.stage,
       blocker: null,
+      nextAction: request.next_action,
+    };
+  if (request.design_recovery_available)
+    return {
+      group: "blocked",
+      status: "DESIGN_RECOVERY_REQUIRED",
+      blocker: request.blocker,
       nextAction: request.next_action,
     };
   if (approvedKnowledge(request))
@@ -492,6 +503,10 @@ function canContinueDelivery(request) {
   );
 }
 
+function canRecoverDesign(request) {
+  return Boolean(request.design_recovery_available) && !activeOperation(request.id);
+}
+
 function agentQueueState(agent) {
   return {
     assigned_delivery_ids: [...agent.assigned_delivery_ids],
@@ -501,6 +516,19 @@ function agentQueueState(agent) {
 }
 function requestBlockingSummary(request) {
   if (requestPresentation(request).group !== "blocked") return null;
+  if (request.design_recovery_available) {
+    const operation = latestOperation(request.id);
+    return {
+      reasons: [{
+        reason: "Design 尝试次数被知识门误计，需要执行一次有记录的恢复。",
+        scopes: [],
+      }],
+      operationReason: operation?.status === "FAILED" ? operation.error_summary : null,
+      approval: null,
+      suggestedAction: "点击“恢复设计”，平台会保留需求、讨论和 ProductSpec 审批后重新进入 Design。",
+      approvedKnowledge: true,
+    };
+  }
   if (request.stage === "WAITING_HUMAN" && request.knowledge_gap?.is_current) {
     const approved = approvedKnowledge(request);
     const operation = latestOperation(request.id);
@@ -2561,7 +2589,20 @@ function requestOperation(panel, request, discussionSection) {
     });
     appendDiscussionContent(form);
   }
-  if (canContinueDelivery(request)) {
+  if (canRecoverDesign(request)) {
+    const action = deliveryButton(
+      "恢复设计",
+      () =>
+        submitOperation({
+          action: "RECOVER_DESIGN",
+          project_id: request.project_id,
+          delivery_id: request.id,
+          expected_checkpoint_sha256: request.checkpoint_sha256,
+        }),
+      "primary",
+    );
+    appendOperation(action);
+  } else if (canContinueDelivery(request)) {
     const action = deliveryButton(
       "继续交付",
       () =>

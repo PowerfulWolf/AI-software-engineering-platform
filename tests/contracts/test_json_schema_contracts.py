@@ -43,6 +43,7 @@ from ai_software_engineer.web_console import (
     CreateRequirementIntent,
     DeleteRequirementIntent,
     ProductReplyIntent,
+    RecoverDesignIntent,
     RestartRequirementIntent,
     UpdateRequirementIntent,
 )
@@ -605,6 +606,18 @@ def test_console_operation_states_satisfy_the_canonical_schema(tmp_path: Path) -
         requested_at=at,
     )
     _assert_valid(product_reply.to_wire(), "console-operation.schema.json")
+
+    recover_design = ConsoleOperation.queued(
+        team_id="team_test",
+        idempotency_key="browser-action-recover-design-0001",
+        intent=RecoverDesignIntent(
+            project_id="project_test",
+            delivery_id="delivery_multi_" + "a" * 40,
+            expected_checkpoint_sha256="2" * 64,
+        ),
+        requested_at=at,
+    )
+    _assert_valid(recover_design.to_wire(), "console-operation.schema.json")
 
     update_requirement = ConsoleOperation.queued(
         team_id="team_test",

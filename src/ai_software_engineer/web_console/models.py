@@ -53,6 +53,7 @@ class ConsoleAction(StrEnum):
     PRODUCT_REPLY = "PRODUCT_REPLY"
     PRODUCT_APPROVAL = "PRODUCT_APPROVAL"
     CONTINUE_DELIVERY = "CONTINUE_DELIVERY"
+    RECOVER_DESIGN = "RECOVER_DESIGN"
 
 
 class ConsoleOperationStatus(StrEnum):
@@ -155,6 +156,13 @@ class ContinueDeliveryIntent(DomainModel):
         return self
 
 
+class RecoverDesignIntent(DomainModel):
+    action: Literal[ConsoleAction.RECOVER_DESIGN] = ConsoleAction.RECOVER_DESIGN
+    project_id: ProjectId
+    delivery_id: DeliveryId
+    expected_checkpoint_sha256: CheckpointDigest
+
+
 ConsoleIntent = Annotated[
     CreateProjectIntent
     | CreateRequirementIntent
@@ -164,7 +172,8 @@ ConsoleIntent = Annotated[
     | DeleteRequirementIntent
     | ProductReplyIntent
     | ProductApprovalIntent
-    | ContinueDeliveryIntent,
+    | ContinueDeliveryIntent
+    | RecoverDesignIntent,
     Field(discriminator="action"),
 ]
 CONSOLE_INTENT_ADAPTER: TypeAdapter[ConsoleIntent] = TypeAdapter(ConsoleIntent)
@@ -366,6 +375,7 @@ __all__ = [
     "OperationId",
     "ProductApprovalIntent",
     "ProductReplyIntent",
+    "RecoverDesignIntent",
     "RestartRequirementIntent",
     "UpdateRequirementIntent",
 ]

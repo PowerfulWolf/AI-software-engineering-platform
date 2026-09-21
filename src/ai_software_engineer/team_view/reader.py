@@ -270,6 +270,12 @@ class ProductionTeamReader:
                     if knowledge_gap.resolution is not None
                     else "请在“知识缺口”中补充并批准解答，然后继续交付。"  # noqa: RUF001
                 )
+            design_recovery_available = _design_recovery_available(selected, journal, joint)
+            if design_recovery_available:
+                presented_next_action = (
+                    "Design 尝试次数已被知识门误计。请执行一次有记录的 Design 恢复, "
+                    "平台会保留现有需求、讨论和 ProductSpec 审批。"
+                )
             requests.append(
                 RequestView(
                     id=joint.delivery_id,
@@ -278,7 +284,11 @@ class ProductionTeamReader:
                     stage=presented_stage,
                     scopes=tuple(scopes),
                     next_action=presented_next_action,
-                    blocker=(presented_next_action if _waiting(presented_stage) else None),
+                    blocker=(
+                        presented_next_action
+                        if _waiting(presented_stage) or design_recovery_available
+                        else None
+                    ),
                     dialogue=tuple(
                         DialogueTurnView(
                             sequence=sequence,
@@ -300,6 +310,7 @@ class ProductionTeamReader:
                     documents=documents,
                     checkpoint_sha256=joint.checkpoint_sha256,
                     knowledge_gap=knowledge_gap,
+                    design_recovery_available=design_recovery_available,
                 )
             )
         tasks: list[TaskView] = []
@@ -629,6 +640,46 @@ def _native_task_sources(native: _Native) -> dict[str, _Native]:
 
 def _safe(text: str) -> str:
     return redact_text(text).text
+
+
+def _design_recovery_available(
+    project: ProjectWorkspace | None,
+    journal: JointJournal | None,
+    checkpoint: JointCheckpoint,
+) -> bool:
+    """Project the bounded recovery contract from immutable facts only."""
+
+    if (
+        project is None
+        or journal is None
+        or checkpoint.stage is not JointStage.DESIGNING
+        or checkpoint.design is not None
+        or checkpoint.plan is not None
+        or checkpoint.attempts.get("design", 0) < 3
+    ):
+        return False
+    from ai_software_engineer.knowledge.gaps import KnowledgeResolution
+
+    for item in reversed(journal.history(checkpoint.delivery_id)):
+        if (
+            item.stage is not JointStage.WAITING_HUMAN
+            or item.knowledge_wait_stage is not JointStage.DESIGNING
+            or item.knowledge_gap_id is None
+        ):
+            continue
+        records = find_gap_records(
+            project,
+            checkpoint.delivery_id,
+            item.knowledge_gap_id,
+            read_only=True,
+        )
+        resolution = records.find(
+            "gap-resolutions", item.knowledge_gap_id, KnowledgeResolution
+        )
+        if resolution is not None:
+            resolution.validate_integrity()
+            return True
+    return False
 
 
 def _waiting(stage: str) -> bool:

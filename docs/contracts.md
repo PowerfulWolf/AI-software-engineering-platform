@@ -659,8 +659,12 @@ UNKNOWN；planned_model 不代替 ModelRouteAttempt 的实际模型。读取不�
 ## Local Web Console command contract
 
 Web Console 不向只读 `TeamSnapshot` 投影塞入副作用，而是提供平级的 typed command module。
-`POST /api/v1/operations` 只接受多目录需求创建、Product 回复/批准和统一继续四类 intent；先在
-Team sidecar 追加 `QUEUED` Operation 并返回 202，后台 Manager 再推进原有 Delivery。
+`POST /api/v1/operations` 只接受多目录需求创建、Product 回复/批准、统一继续和
+`RECOVER_DESIGN` 五类交付 intent；先在 Team sidecar 追加 `QUEUED` Operation 并返回 202，后台
+Manager 再推进原有 Delivery。`RECOVER_DESIGN` 的 payload 固定为
+`{action, project_id, delivery_id, expected_checkpoint_sha256}`，不能从浏览器接收预算值、知识
+答案或任意状态字段；Manager 从当前 Project 的 immutable Requirement journal 和已批准
+`KnowledgeResolution` 重新验证其余事实。
 Operation 的 `QUEUED → RUNNING → SUCCEEDED | FAILED | INTERRUPTED` 只描述一次浏览器操作，
 不能代替 Task/Delivery/Artifact/verdict 权威事实。
 
@@ -670,6 +674,21 @@ Product 与恢复批准都绑定页面实际展示版本。Coder 现场恢复分
 计划审批，两次浏览器意图一次只能携带一个 digest；checkpoint、范围或 plan 漂移必须拒绝。公开 wire contract 是
 `schemas/console-operation.schema.json`，完整签名、错误矩阵和测试见
 `.trellis/spec/core/web-console.md`。
+
+Design 恢复是独立的有界命令：当前必须是没有 `JointTechnicalDesign`/Plan、Design 尝试已耗尽且
+历史包含同一 Requirement 的 Design `WAITING_HUMAN` 以及完整性通过的已批准
+`KnowledgeResolution`。服务要求 exact checkpoint digest，并把 operator、rationale 和
+approval reference 写入新 checkpoint 的 `next_action`；它只重置 `attempts.design`，追加 hash-chain
+successor 后进入普通 Designer 校验路径。旧 checkpoint、ProductSpec、ProductSpecApproval、讨论、
+知识 Gap/Resolution 和失败 Operation 都保留，浏览器不能直接重置计数器。知识咨询在 Design
+artifact 请求前抛出 `KnowledgeGapRaised` 时，预留的 Design 次数归还；provider 中断、非法或被
+验证器拒绝的 Design 仍计入预算。
+
+`RequestView.design_recovery_available` 是只读投影字段，仅由上述 checkpoint/history/resolution
+事实推导。它为 Design 恢复显示“恢复设计”，而 active `DESIGNING` 不显示普通“继续交付”。
+缺少、越权、篡改或过期的 resolution/checkpoint 返回 `COMMAND_REJECTED`/`STALE_CHECKPOINT`，
+不追加 journal、不调用模型。恢复 gate 可以为 immutable 历史等待 checkpoint 生成
+`StageWorkflowProof`，但仅限 `recovery` 且必须证明该 checkpoint 仍在当前 hash chain 中。
 
 ## T044 显式恢复与串行执行
 
