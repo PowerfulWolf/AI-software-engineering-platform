@@ -10,6 +10,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import Message, Scope
 
+from ai_software_engineer.agents.model_diagnostics import ModelCallDiagnostic
 from ai_software_engineer.config import ProductionConfig, ProductionConfigError
 from ai_software_engineer.multi_directory.attachments import RequirementScreenshot
 from ai_software_engineer.team_view.models import TeamSnapshot
@@ -54,6 +55,9 @@ class _Console:
 
     def list_operations(self) -> tuple[ConsoleOperation, ...]:
         return self.store.list_current()
+
+    def model_calls(self, operation_id: str) -> tuple[ModelCallDiagnostic, ...]:
+        return self.store.model_calls(operation_id)
 
 
 class _Reader:

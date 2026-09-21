@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from threading import Event, Lock, Thread
 from typing import Protocol
 
+from ai_software_engineer.agents.model_diagnostics import ModelCallDiagnostic, capture_model_calls
+
 from .models import ConsoleCommandResult, ConsoleIntent, ConsoleOperation
-from .store import ConsoleOperationStore
+from .store import ConsoleOperationError, ConsoleOperationStore
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class ConsoleCommandRejected(RuntimeError):
@@ -62,12 +67,25 @@ class ProjectConsole:
     def list_operations(self) -> tuple[ConsoleOperation, ...]:
         return self._store.list_current()
 
+    def model_calls(self, operation_id: str) -> tuple[ModelCallDiagnostic, ...]:
+        return self._store.model_calls(operation_id)
+
+    def _record_model_call(self, operation_id: str, call: ModelCallDiagnostic) -> None:
+        try:
+            self._store.record_model_call(operation_id, call)
+        except (ConsoleOperationError, OSError, ValueError):
+            # Observability must not turn successful delivery into a retry/billing risk.
+            _LOGGER.error("Model call diagnostics could not be stored for %s", operation_id)
+
     def run_once(self) -> ConsoleOperation | None:
         running = self._store.claim_next(at=self._clock())
         if running is None:
             return None
         try:
-            result = self._executor.execute(running.intent)
+            with capture_model_calls(
+                lambda call: self._record_model_call(running.operation_id, call)
+            ):
+                result = self._executor.execute(running.intent)
         except ConsoleCommandRejected as error:
             return self._store.fail(
                 running.operation_id,
@@ -76,12 +94,31 @@ class ProjectConsole:
                 error_summary=error.safe_summary,
                 at=self._clock(),
             )
-        except Exception:
+        except Exception as error:
+            # Correlate unknown failures without serializing payloads, secrets or traceback.
+            error_type = type(error).__name__
+            if not error_type.isascii() or not error_type.isidentifier():
+                error_type = "Exception"
+            error_type = error_type[:80]
+            locations = []
+            frame = error.__traceback__
+            while frame is not None:
+                module = frame.tb_frame.f_globals.get("__name__", "")
+                if isinstance(module, str) and module.startswith("ai_software_engineer."):
+                    locations.append(f"{module}:{frame.tb_lineno}")
+                frame = frame.tb_next
+            _LOGGER.error(
+                "Console operation %s failed with %s; locations=%s",
+                running.operation_id,
+                error_type,
+                ", ".join(locations[-4:]),
+            )
             return self._store.fail(
                 running.operation_id,
                 expected=running.operation_sha256,
                 error_code="MANAGER_FAILURE",
-                error_summary="Manager operation failed; inspect durable delivery facts.",
+                error_summary=f"Manager 执行异常({error_type}); "
+                "尚未获得具体原因。请提供此操作编号排查, 不要反复重试。",
                 at=self._clock(),
             )
         return self._store.succeed(

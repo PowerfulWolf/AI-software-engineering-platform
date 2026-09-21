@@ -1,5 +1,6 @@
 """Structured upstream stages support bounded image input and safe fallback."""
 
+import errno
 import json
 import subprocess
 from collections.abc import Mapping
@@ -8,8 +9,11 @@ from pathlib import Path
 import pytest
 
 from ai_software_engineer.agents import (
+    AgentErrorCode,
     CodexCliStructuredModelClient,
     FallbackStructuredModelClient,
+    HttpResponse,
+    ResponsesStructuredModelClient,
     StructuredModelClient,
     StructuredModelError,
     StructuredModelResult,
@@ -179,3 +183,103 @@ def test_codex_structured_image_rejects_symlink_before_provider_call(
             timeout_seconds=30,
             input_images=(alias,),
         )
+
+
+@pytest.mark.parametrize(
+    ("stderr", "code"),
+    [
+        ("Error: usage limit reached", AgentErrorCode.QUOTA_EXHAUSTED),
+        ("Error: rate limit 429", AgentErrorCode.RATE_LIMITED),
+        ("Error: authentication expired", AgentErrorCode.AUTHENTICATION_ERROR),
+        ("Error: service connection closed", AgentErrorCode.PROVIDER_UNAVAILABLE),
+    ],
+)
+def test_structured_cli_failure_preserves_safe_cause_not_stdout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stderr: str, code: AgentErrorCode
+) -> None:
+    def run(command: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(command, 1, "PROMPT usage limit PRIVATE", stderr)
+
+    monkeypatch.setattr("ai_software_engineer.agents.structured.subprocess.run", run)
+    client = CodexCliStructuredModelClient(repository_root=tmp_path, model="test")
+    with pytest.raises(StructuredModelError) as raised:
+        client.complete(instructions="Act", input_payload={}, output_schema={}, timeout_seconds=1)
+    assert raised.value.code is code
+    assert stderr in raised.value.safe_message
+    assert "退出码 1" in raised.value.safe_message
+    assert "PRIVATE" not in raised.value.safe_message
+
+
+def test_provider_diagnostic_is_redacted_before_truncation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    secret = "sk-" + "x" * 40
+    diagnostic = (
+        "PRIVATE TRANSCRIPT\n\x1b[31mError: auth token=opaque-token "
+        f"{secret} mysql+pymysql://user:db-password@host/db "
+        "https://host/secret-path?key=another-secret\x1b[0m " + "x" * 600
+    )
+    monkeypatch.setattr(
+        "ai_software_engineer.agents.structured.subprocess.run",
+        lambda command, **kwargs: subprocess.CompletedProcess(command, 1, "PRIVATE", diagnostic),
+    )
+    client = CodexCliStructuredModelClient(repository_root=tmp_path, model="test")
+    with pytest.raises(StructuredModelError) as raised:
+        client.complete(instructions="Act", input_payload={}, output_schema={}, timeout_seconds=1)
+    message = raised.value.safe_message
+    assert len(message) <= 500
+    assert "Error: auth" in message
+    for forbidden in (secret, "opaque-token", "db-password", "another-secret", "PRIVATE", "\x1b"):
+        assert forbidden not in message
+
+
+@pytest.mark.parametrize("kind", ["start", "timeout", "json"])
+def test_structured_process_boundary_failures_have_safe_diagnostics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    def run(command: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if kind == "start":
+            raise FileNotFoundError(errno.ENOENT, "secret startup details", "/secret/path")
+        if kind == "timeout":
+            raise subprocess.TimeoutExpired(command, 1, output="secret", stderr="secret")
+        Path(command[command.index("--output-last-message") + 1]).write_text("secret invalid JSON")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr("ai_software_engineer.agents.structured.subprocess.run", run)
+    client = CodexCliStructuredModelClient(repository_root=tmp_path, model="test")
+    with pytest.raises(StructuredModelError) as raised:
+        client.complete(instructions="Act", input_payload={}, output_schema={}, timeout_seconds=1)
+    assert "secret" not in raised.value.safe_message
+    expected = {
+        "start": AgentErrorCode.PROVIDER_UNAVAILABLE,
+        "timeout": AgentErrorCode.TIMEOUT,
+        "json": AgentErrorCode.INVALID_OUTPUT,
+    }
+    assert raised.value.code is expected[kind]
+    if kind == "start":
+        assert "errno=2" in raised.value.safe_message
+
+
+def test_responses_failure_keeps_http_cause_without_credentials() -> None:
+    class Transport:
+        def post(
+            self, url: str, headers: Mapping[str, str], body: bytes, timeout: float
+        ) -> HttpResponse:
+            return HttpResponse(
+                status_code=403,
+                body=(
+                    b'{"error":{"message":"model denied for private-value; api_key=private-value"}}'
+                ),
+            )
+
+    client = ResponsesStructuredModelClient(
+        endpoint="https://example.invalid/v1/responses",
+        api_key="private-value",
+        model="test",
+        transport=Transport(),
+    )
+    with pytest.raises(StructuredModelError) as raised:
+        client.complete(instructions="Act", input_payload={}, output_schema={}, timeout_seconds=1)
+    assert raised.value.code is AgentErrorCode.AUTHENTICATION_ERROR
+    assert "HTTP 403" in raised.value.safe_message and "model denied" in raised.value.safe_message
+    assert "private-value" not in raised.value.safe_message

@@ -282,7 +282,7 @@ class ConfiguredStructuredClientFactory:
                     supports_images=route.accepts_image_input(),
                 )
             )
-        return FallbackStructuredModelClient(tuple(routes))
+        return FallbackStructuredModelClient(tuple(routes), role=role)
 
 
 class _NoProjectRules(ProjectRuleProvider):

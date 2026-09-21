@@ -7,9 +7,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Protocol, TypeVar
 
-from pydantic import AwareDatetime, Field
+from pydantic import AwareDatetime, Field, ValidationError
 
-from ai_software_engineer.agents import StructuredModelClient
+from ai_software_engineer.agents import AgentErrorCode, StructuredModelClient, StructuredModelError
 from ai_software_engineer.domain.enums import TeamRole
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.knowledge.stages import StageWorkflowGate, repeated_child_failure
@@ -908,7 +908,15 @@ class JointDeliveryService:
                 output_schema=model.model_json_schema(),
                 timeout_seconds=600,
             )
-        return model.model_validate(result.payload)
+        try:
+            return model.model_validate(result.payload)
+        except ValidationError as error:
+            raise StructuredModelError(
+                AgentErrorCode.INVALID_OUTPUT,
+                f"{role.value} / {model.__name__} 回复未通过结构校验; "
+                "未推进阶段, 原讨论与审批记录保留。",
+                transient=False,
+            ) from error
 
     def _planning_output(
         self, checkpoint: JointCheckpoint, instructions: str

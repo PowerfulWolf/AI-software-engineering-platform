@@ -6,10 +6,15 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated, Literal, cast
 
-from pydantic import Field
+from pydantic import Field, ValidationError
 
-from ai_software_engineer.agents.models import AgentUsage
-from ai_software_engineer.agents.structured import StructuredModelClient, StructuredModelResult
+from ai_software_engineer.agents.model_diagnostics import model_call_phase
+from ai_software_engineer.agents.models import AgentErrorCode, AgentUsage
+from ai_software_engineer.agents.structured import (
+    StructuredModelClient,
+    StructuredModelError,
+    StructuredModelResult,
+)
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.knowledge.gaps import (
     KnowledgeClaim,
@@ -109,12 +114,19 @@ class KnowledgeConsultationService:
         output_schema: Mapping[str, object],
         timeout_seconds: int,
     ) -> StructuredModelResult:
-        result = self.client.complete(
-            instructions=instructions,
-            input_payload=input_payload,
-            output_schema=output_schema,
-            timeout_seconds=timeout_seconds,
-        )
+        try:
+            with model_call_phase(
+                "knowledge_intent" if phase == "intent" else "knowledge_assessment"
+            ):
+                result = self.client.complete(
+                    instructions=instructions,
+                    input_payload=input_payload,
+                    output_schema=output_schema,
+                    timeout_seconds=timeout_seconds,
+                )
+        except StructuredModelError as error:
+            phase_name = "知识检索意图" if phase == "intent" else "知识充分性评估"
+            raise error.with_context(f"{binding.role.value} / {phase_name}") from error
         record = KnowledgeModelCall(
             binding=binding,
             phase=phase,
@@ -360,16 +372,30 @@ class KnowledgeAwareStructuredClient:
         timeout_seconds: int,
         input_images: tuple[Path, ...] = (),
     ) -> StructuredModelResult:
-        consultation = self.consultations.consult(
-            self.binding, self.snapshot, input_payload, timeout_seconds=min(timeout_seconds, 120)
-        )
+        try:
+            consultation = self.consultations.consult(
+                self.binding,
+                self.snapshot,
+                input_payload,
+                timeout_seconds=min(timeout_seconds, 120),
+            )
+        except ValidationError as error:
+            raise StructuredModelError(
+                AgentErrorCode.INVALID_OUTPUT,
+                f"{self.binding.role.value} / 知识咨询结果未通过结构校验; "
+                "未接受该结果, 请检查知识意图、评估或引用格式。",
+                transient=False,
+            ) from error
         payload = dict(input_payload)
         payload["knowledge_consultation"] = consultation.to_wire()
-        return self.client.complete(
-            instructions=instructions
-            + " Cite exact knowledge sources for decisions; unresolved gaps block execution.",
-            input_payload=cast(Mapping[str, object], payload),
-            output_schema=output_schema,
-            timeout_seconds=timeout_seconds,
-            input_images=input_images,
-        )
+        try:
+            return self.client.complete(
+                instructions=instructions
+                + " Cite exact knowledge sources for decisions; unresolved gaps block execution.",
+                input_payload=cast(Mapping[str, object], payload),
+                output_schema=output_schema,
+                timeout_seconds=timeout_seconds,
+                input_images=input_images,
+            )
+        except StructuredModelError as error:
+            raise error.with_context(f"{self.binding.role.value} / 生成阶段回复") from error

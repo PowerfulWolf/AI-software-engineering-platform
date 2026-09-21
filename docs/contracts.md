@@ -744,3 +744,17 @@ Project Spec，或 Team 下的非执行性 Skill 设计建议；后者不会安�
 `learning-proposal.schema.json`、`learning-authorization.schema.json`、
 `learning-decision.schema.json`。实现与回归点见
 `.trellis/spec/core/team-workspace.md`、`web-console.md` 和 `python-runtime.md`。
+
+## Console 模型调用诊断
+
+`GET /api/v1/operations/{operation_id}/model-calls` 是只读接口，返回符合
+`model-call-diagnostic.schema.json` 的数组。每条记录包含本次结构化调用的 invocation、配置路由
+顺序、角色/阶段、模型/推理程度、耗时、成功/失败，以及服务实际提供的 HTTP 状态、请求编号和
+关联编号。主模型失败后备用成功也保留两条记录；CLI/超时没有 HTTP 响应时不补造字段。
+
+诊断使用独立的内容寻址 sidecar，不修改 Operation 哈希链、需求 checkpoint 或 MySQL 状态。
+未知 Operation 返回 404；损坏或无法验证的记录返回 409；旧操作无记录时返回空数组。只保存
+限长、脱敏的诊断字段，不保存凭据、任意响应头或响应正文。诊断写入失败不能导致重跑模型。
+历史缺失数据不能补造；进程在请求未完成时中断也可能没有该请求的完成记录。本契约覆盖 Console
+中的结构化主/备用调用，不是所有 CLI 子进程的执行账本。详见
+[调用诊断与知识澄清规范](../.trellis/spec/core/product-failure-diagnostics.md)。

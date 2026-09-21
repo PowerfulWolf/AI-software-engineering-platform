@@ -148,6 +148,26 @@ def test_console_records_only_safe_rejection(tmp_path: Path) -> None:
     assert completed.result is None
 
 
+def test_unknown_failure_has_safe_type_and_operation_correlation(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    class Executor:
+        def execute(self, intent: object) -> ConsoleCommandResult:
+            raise RuntimeError("mysql+pymysql://user:private-password@host/db")
+
+    console = ProjectConsole(
+        store=InMemoryConsoleOperationStore(TEAM_ID), executor=Executor(), clock=_Clock()
+    )
+    console.submit(_create_intent(tmp_path), idempotency_key="unknown-error")
+    failed = console.run_once()
+    assert failed is not None and failed.error_summary is not None
+    assert failed.error_code == "MANAGER_FAILURE"
+    assert "RuntimeError" in failed.error_summary
+    assert failed.operation_id in caplog.text
+    assert "private-password" not in caplog.text + failed.error_summary
+    assert "Traceback" not in caplog.text
+
+
 def test_file_store_reopens_hash_chain_and_interrupts_orphan(tmp_path: Path) -> None:
     root = tmp_path / "operations"
     at = datetime(2026, 9, 12, tzinfo=UTC)

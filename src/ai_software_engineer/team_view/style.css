@@ -710,6 +710,96 @@ main[data-page="requests"] #detail {
 .request-detail-overview {
   padding-bottom: var(--detail-section-space);
 }
+.knowledge-gap-heading,
+.knowledge-gap-card-heading,
+.knowledge-gap-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.knowledge-gap-heading > div {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+.knowledge-gap-heading h2,
+.knowledge-gap-heading p,
+.knowledge-gap-card p,
+.knowledge-gap-card h3,
+.model-call-card p {
+  margin: 0;
+}
+.knowledge-gap-heading > button,
+.knowledge-gap-actions > button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.knowledge-gap-content {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  min-width: 0;
+}
+.knowledge-gap-content[hidden] { display: none; }
+.knowledge-gap-card {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  margin: 0;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #f8faff;
+}
+.knowledge-gap-card h3 {
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+.knowledge-gap-question {
+  font-size: 0.94rem;
+  font-weight: 400;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.knowledge-gap-hint,
+.knowledge-gap-actions .muted {
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.knowledge-gap-card label { margin: 0; min-width: 0; }
+.knowledge-gap-card input,
+.knowledge-gap-card textarea { font-weight: 400; }
+.knowledge-gap-card textarea {
+  min-height: 112px;
+  max-height: 320px;
+  resize: vertical;
+}
+.knowledge-gap-actions {
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.knowledge-gap-actions > button { margin-left: auto; }
+.knowledge-gap-card .form-feedback:empty { display: none; }
+.model-call-diagnostics {
+  margin-top: 12px;
+  font-size: 0.85rem;
+  min-width: 0;
+}
+.model-call-diagnostics summary { cursor: pointer; color: var(--accent); }
+.model-call-list { display: grid; gap: 8px; margin-top: 10px; }
+.model-call-card {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8faff;
+  overflow-wrap: anywhere;
+}
 .request-detail-overview > .row {
   align-items: flex-start;
 }

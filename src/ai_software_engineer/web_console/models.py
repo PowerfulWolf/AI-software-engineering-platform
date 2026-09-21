@@ -17,6 +17,7 @@ from pydantic import (
     model_validator,
 )
 
+from ai_software_engineer.agents.model_diagnostics import ModelCallDiagnostic
 from ai_software_engineer.domain.identity import ProjectId, TeamId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.manager.delivery import CheckpointDigest
@@ -29,6 +30,17 @@ IdempotencyKey = Annotated[
     str,
     StringConstraints(min_length=8, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]+$"),
 ]
+
+
+class ConsoleModelCall(DomainModel):
+    """Content-addressed observation, separate from the immutable Operation hash chain."""
+
+    operation_id: OperationId
+    call: ModelCallDiagnostic
+
+    @property
+    def record_sha256(self) -> str:
+        return hashlib.sha256(self.model_dump_json().encode()).hexdigest()
 
 
 class ConsoleAction(StrEnum):

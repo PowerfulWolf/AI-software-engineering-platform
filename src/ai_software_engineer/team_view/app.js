@@ -42,6 +42,7 @@ let recreatingRequirement = null;
 let knowledgeImportMode = null;
 let editingKnowledgeDocument = null;
 let editingSpecDocument = null;
+const knowledgeGapSections = new Map();
 const dismissedOperationIds = new Set(
   (() => {
     try {
@@ -1937,12 +1938,45 @@ function requestOperation(panel, request, discussionSection) {
     appendDiscussionContent(approval);
   }
   if (isProductDiscussion) {
+    const failedOperation = latestOperation(request.id);
+    const interrupted = request.stage === "PRODUCT_DISCOVERY" && !running;
+    if (interrupted) {
+      const failure = el("div", undefined, "operation-error product-failure");
+      const code = failedOperation?.error_code;
+      const guidance = {
+        MODEL_AUTHENTICATION_ERROR: "检查该模型服务的登录或凭证；Codex CLI 可在终端执行 codex login。修复后点击“继续需求讨论”。",
+        MODEL_QUOTA_EXHAUSTED: "等待额度恢复，或在设置中为 Product 配置有额度的模型并应用配置，然后点击“继续需求讨论”。",
+        MODEL_RATE_LIMITED: "模型服务限流，请稍后点击“继续需求讨论”，不要连续重复提交。",
+        MODEL_TIMEOUT: "本轮等待模型回复超时；可稍后点击“继续需求讨论”。若反复超时，请检查模型服务连接。",
+        MODEL_PROVIDER_UNAVAILABLE: "按详情检查 Codex 可执行文件、文件权限或模型服务连接；修复后点击“继续需求讨论”。",
+        MODEL_PROVIDER_ERROR: "按服务返回的详情检查模型名称、访问权限和路由配置；修复并应用配置后点击“继续需求讨论”。",
+        MODEL_INVALID_OUTPUT: "模型未返回有效的结构化结果。可恢复本轮回复一次；若重复失败，请附此操作编号排查输出格式。",
+        MODEL_POLICY_VIOLATION: "执行违反安全策略；请附此操作编号排查权限问题，不要绕过审批或反复重试。",
+        HOST_INTERRUPTED: "服务在本轮回复完成前中断。服务恢复后点击“继续需求讨论”。",
+      };
+      const legacy = !failedOperation?.error_summary ||
+        failedOperation.error_summary === "Manager operation failed; inspect durable delivery facts." ||
+        failedOperation.error_summary === "Manager rejected the operation; inspect current delivery facts.";
+      failure.append(
+        el("strong", "Product 回复未完成"),
+        el("p", `失败原因：${legacy ? "旧记录未保存具体失败原因，无法判断是否为额度、登录或服务问题。" : failedOperation.error_summary}`),
+        el("p", `下一步：${guidance[code] || (legacy ? "更新并重启服务后，点击“继续需求讨论”恢复本轮回复；若仍失败，页面会展示新的错误详情。" : "请附此操作编号排查具体异常，修复后再继续本轮讨论。")}`),
+        el("p", "已保存的消息和代码基线会保留，无需重新输入或新建需求。", "muted"),
+      );
+      if (failedOperation?.operation_id)
+        failure.append(el("small", `操作编号：${failedOperation.operation_id}${code ? ` · ${code}` : ""}`));
+      appendDiscussionContent(failure);
+    }
     const form = el("form", undefined, "discussion-form");
     const message = el("textarea");
     let discussionTitle = "等待 Product Agent 回复";
     let messagePlaceholder =
       "上一条消息正在处理中，收到 Product Agent 回复后可继续输入。";
     let submitLabel = "继续需求讨论";
+    if (interrupted) {
+      discussionTitle = "恢复 Product 回复";
+      messagePlaceholder = "上一条消息已保存；请按失败说明处理后继续本轮讨论，无需重复输入。";
+    }
     if (running) {
       discussionTitle = approvingProduct
         ? "ProductSpec 批准处理中"
@@ -2073,7 +2107,7 @@ function requestOperation(panel, request, discussionSection) {
           ? "输入文字，或将截图直接粘贴到这里；两者至少提供一项。"
           : running
             ? "Product Agent 正在处理上一条消息，完成后可继续输入。"
-            : "上次 Product Agent 执行已中断，先恢复本轮回复后再继续输入。",
+            : "处理上方失败原因后，点击“继续需求讨论”恢复上一条消息的回复。",
       ),
       message,
     );
@@ -4642,6 +4676,148 @@ function deliveryFlow(request) {
   });
   return flow;
 }
+function knowledgeGapSection(item) {
+  const key = `${item.project_id}/${item.id}/${item.checkpoint_sha256}`;
+  if (knowledgeGapSections.has(key)) return knowledgeGapSections.get(key);
+  const section = el("section", undefined, "detail-section knowledge-gap-section");
+  const heading = el("div", undefined, "knowledge-gap-heading");
+  const intro = el("div");
+  intro.append(el("h2", "知识缺口"), el("p", "补充待确认的信息，批准后再继续原需求。", "muted"));
+  const content = el("div", undefined, "knowledge-gap-content");
+  content.id = `knowledge-gap-content-${++actionSerial}`;
+  content.hidden = true;
+  let loading = false, loaded = false;
+  const base = "/api/v1/admin/projects/" + encodeURIComponent(item.project_id) +
+    "/requirements/" + encodeURIComponent(item.id);
+  const toggle = button("查看待确认的知识", async () => {
+    if (loading) return;
+    if (loaded) {
+      content.hidden = !content.hidden;
+    } else {
+      loading = true;
+      toggle.disabled = true;
+      content.hidden = false;
+      content.replaceChildren(el("p", "正在读取待确认事项…", "muted"));
+      content.setAttribute("aria-busy", "true");
+      try {
+        const records = await adminFetch(base + "/knowledge-gaps");
+        const unique = [...new Map(records.map(gap => [gap.gap_id, gap])).values()];
+        content.replaceChildren(...unique.map((gap, index) => knowledgeGapCard(gap, index, base, item)));
+        if (!unique.length) content.append(el("p", "当前没有已记录的知识缺口。", "muted"));
+        loaded = true;
+      } catch (error) {
+        content.replaceChildren(el("p", error.message || "无法读取知识缺口，请重试。", "error"));
+      } finally {
+        loading = false;
+        toggle.disabled = false;
+        content.setAttribute("aria-busy", "false");
+      }
+    }
+    toggle.textContent = loaded && !content.hidden ? "收起待确认的知识" : "查看待确认的知识";
+    toggle.setAttribute("aria-expanded", String(!content.hidden));
+  }, "secondary");
+  toggle.setAttribute("aria-controls", content.id);
+  toggle.setAttribute("aria-expanded", "false");
+  heading.append(intro, toggle);
+  section.append(heading, content);
+  knowledgeGapSections.set(key, section);
+  // Keep drafts for nearby requirements without an unbounded session cache.
+  if (knowledgeGapSections.size > 20) knowledgeGapSections.delete(knowledgeGapSections.keys().next().value);
+  return section;
+}
+
+function knowledgeGapCard(gap, index, base, item) {
+  const card = el("form", undefined, "knowledge-gap-card");
+  const header = el("div", undefined, "knowledge-gap-card-heading");
+  header.append(el("h3", `待确认事项 ${index + 1}`), el("span", "需要你的确认", "badge"));
+  const decision = gap.required_decision === "Provide verified facts and approve the exact resolution."
+    ? "请提供已核实的信息，并确认将此解答用于当前需求。" : gap.required_decision;
+  const answer = el("textarea");
+  answer.required = true;
+  answer.maxLength = 4096;
+  answer.rows = 4;
+  answer.placeholder = "填写你的解答或明确的决策…";
+  const source = el("input");
+  source.required = true;
+  source.placeholder = "例如：产品负责人确认，或相关文档链接";
+  const feedback = el("div", undefined, "form-feedback");
+  feedback.setAttribute("role", "status");
+  feedback.setAttribute("aria-live", "polite");
+  const submit = el("button", "批准解答", "primary");
+  submit.type = "submit";
+  const actions = el("div", undefined, "knowledge-gap-actions");
+  actions.append(el("span", "批准仅保存解答，不会自动开始交付。", "muted"), submit);
+  card.append(header, el("p", gap.question, "knowledge-gap-question"));
+  if (decision) card.append(el("p", decision, "knowledge-gap-hint"));
+  card.append(field("你的解答", answer), field("事实来源 / 决策依据", source), feedback, actions);
+  let submitting = false;
+  card.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (submitting) return;
+    const content = answer.value.trim(), uri = source.value.trim();
+    if (!content || !uri) {
+      feedback.replaceChildren(el("p", "请填写解答和事实来源 / 决策依据。", "error"));
+      return;
+    }
+    submitting = true;
+    submit.disabled = true;
+    feedback.replaceChildren();
+    try {
+      const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(content));
+      const sha256 = Array.from(new Uint8Array(bytes), b => b.toString(16).padStart(2, "0")).join("");
+      await adminFetch(base + "/knowledge-resolutions", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({gap_id: gap.gap_id, answer: content,
+          sources: [{uri, content, sha256}], approval_reference: "local-console:" + gap.gap_id}),
+      });
+      card.replaceChildren(header, el("p", "解答已批准，原始证据保留。", "success"),
+        deliveryButton("继续需求", () => submitOperation({
+          action: "CONTINUE_DELIVERY", project_id: item.project_id, delivery_id: item.id,
+        }), "primary"));
+    } catch (error) {
+      feedback.replaceChildren(el("p", error.message || "解答未被接受。", "error"));
+      submitting = false;
+      submit.disabled = false;
+    }
+  });
+  return card;
+}
+
+function modelCallDiagnostics(operation) {
+  const details = el("details", undefined, "model-call-diagnostics");
+  details.append(el("summary", "查看模型调用记录"));
+  const content = el("div", undefined, "model-call-list");
+  details.append(content);
+  let loading = false, loaded = false;
+  details.addEventListener("toggle", async () => {
+    if (!details.open || loading || loaded) return;
+    loading = true;
+    content.replaceChildren(el("p", "正在读取调用记录…", "muted"));
+    try {
+      const calls = await adminFetch("/api/v1/operations/" + encodeURIComponent(operation.operation_id) + "/model-calls");
+      const phases = {stage_reply: "阶段回复", knowledge_intent: "知识检索意图", knowledge_assessment: "知识充分性评估"};
+      content.replaceChildren(...calls.map(call => {
+        const card = el("div", undefined, "model-call-card");
+        card.append(
+          el("strong", `${call.route_index === 1 ? "主模型" : `备用 ${call.route_index - 1}`} · ${call.provider} / ${call.model} · ${call.reasoning_effort}`),
+          el("p", `${call.role ? label(call.role) + " · " : ""}${phases[call.phase] || call.phase} · ${call.outcome === "SUCCEEDED" ? "成功" : "失败"} · ${(call.duration_ms / 1000).toFixed(2)} 秒 · ${call.http_status ? `HTTP ${call.http_status}` : "无 HTTP 状态（CLI 或未收到响应）"}`),
+        );
+        if (call.error_summary) card.append(el("p", call.error_summary));
+        card.append(el("p", "请求编号：" + (call.request_id || "服务未提供"), "paths"));
+        if (call.correlation_id) card.append(el("p", "关联编号：" + call.correlation_id, "paths"));
+        return card;
+      }));
+      if (!calls.length) content.append(el("p", "这条操作没有已记录的调用明细；历史缺失记录无法补回。", "muted"));
+      loaded = !["QUEUED", "RUNNING"].includes(operation.status);
+    } catch (error) {
+      content.replaceChildren(el("p", error.message || "无法读取调用记录，请收起后重试。", "error"));
+    } finally {
+      loading = false;
+    }
+  });
+  return details;
+}
+
 function renderDetail() {
   const panel = document.getElementById("detail");
   panel.replaceChildren();
@@ -4801,54 +4977,7 @@ function renderDetail() {
     panel.append(overview);
     const blocking = requestBlockerSection(item);
     if (blocking) panel.append(blocking);
-    if (item.stage === "WAITING_HUMAN") {
-      const gaps = el("section", undefined, "detail-section");
-      gaps.append(el("h2", "知识缺口"));
-      gaps.append(button("查看待确认的知识", async () => {
-        try {
-          const base = "/api/v1/admin/projects/" + encodeURIComponent(item.project_id) +
-            "/requirements/" + encodeURIComponent(item.id);
-          const records = await adminFetch(base + "/knowledge-gaps");
-          for (const gap of records) {
-            const card = el("form", undefined, "knowledge-upload");
-            const answer = el("textarea");
-            answer.required = true;
-            answer.maxLength = 4096;
-            answer.placeholder = "补充已核实的事实；提交表示批准该解答用于当前需求。";
-            const source = el("input");
-            source.required = true;
-            source.placeholder = "事实来源或人工决策说明";
-            const submit = el("button", "批准解答", "primary");
-            submit.type = "submit";
-            card.append(el("h3", gap.question), el("p", gap.required_decision), answer, source, submit);
-            card.addEventListener("submit", async (event) => {
-              event.preventDefault();
-              submit.disabled = true;
-              try {
-                const content = answer.value.trim();
-                const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(content));
-                const sha256 = Array.from(new Uint8Array(bytes), b => b.toString(16).padStart(2, "0")).join("");
-                await adminFetch(base + "/knowledge-resolutions", {method: "POST", headers: {"Content-Type": "application/json"},
-                  body: JSON.stringify({gap_id: gap.gap_id, answer: content,
-                    sources: [{uri: source.value.trim(), content, sha256}],
-                    approval_reference: "local-console:" + gap.gap_id})});
-                card.replaceChildren(el("p", "解答已批准，原始证据保留。"), deliveryButton("继续需求", () => submitOperation({
-                  action: "CONTINUE_DELIVERY", project_id: item.project_id, delivery_id: item.id,
-                }), "primary"));
-              } catch (error) {
-                card.append(el("p", error.message || "解答未被接受。", "error"));
-                submit.disabled = false;
-              }
-            });
-            gaps.append(card);
-          }
-          if (!records.length) gaps.append(el("p", "当前没有已记录的知识缺口。"));
-        } catch (error) {
-          gaps.append(el("p", error.message || "无法读取知识缺口。", "error"));
-        }
-      }, "secondary"));
-      panel.append(gaps);
-    }
+    if (item.stage === "WAITING_HUMAN") panel.append(knowledgeGapSection(item));
     const flow = el("section", undefined, "detail-section");
     flow.append(el("h2", "交付流程"), deliveryFlow(item));
     panel.append(flow);
@@ -4874,6 +5003,9 @@ function renderDetail() {
     panel.append(scopes);
     const discussionSection = requestDialogue(panel, item);
     requestOperation(panel, item, discussionSection);
+    const lastOperation = latestOperation(item.id);
+    if (lastOperation?.operation_id && discussionSection)
+      discussionSection.append(modelCallDiagnostics(lastOperation));
     deliveryResult(panel, item);
     const artifacts = el("section", undefined, "detail-section stage-artifacts");
     artifacts.append(el("h2", "阶段产物"));

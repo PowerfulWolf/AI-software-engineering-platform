@@ -16,6 +16,7 @@ from urllib.request import urlopen
 
 from pydantic import Field
 
+from ai_software_engineer.agents.model_diagnostics import safe_request_id
 from ai_software_engineer.agents.models import (
     AgentErrorCode,
     AgentFailure,
@@ -61,6 +62,8 @@ class HttpResponse:
 
     status_code: int
     body: bytes
+    request_id: str | None = None
+    correlation_id: str | None = None
 
 
 class HttpTransport(Protocol):
@@ -132,12 +135,26 @@ class UrllibHttpTransport:
                 payload = response.read(self._max_response_bytes + 1)
                 if len(payload) > self._max_response_bytes:
                     raise OSError("provider response exceeds configured limit")
-                return HttpResponse(status_code=response.status, body=payload)
+                return HttpResponse(
+                    status_code=response.status,
+                    body=payload,
+                    request_id=safe_request_id(
+                        response.headers.get("x-request-id") or response.headers.get("request-id")
+                    ),
+                    correlation_id=safe_request_id(response.headers.get("x-correlation-id")),
+                )
         except HTTPError as error:
             payload = error.read(self._max_response_bytes + 1)
             if len(payload) > self._max_response_bytes:
                 payload = b""
-            return HttpResponse(status_code=error.code, body=payload)
+            return HttpResponse(
+                status_code=error.code,
+                body=payload,
+                request_id=safe_request_id(
+                    error.headers.get("x-request-id") or error.headers.get("request-id")
+                ),
+                correlation_id=safe_request_id(error.headers.get("x-correlation-id")),
+            )
         except OpenAICompatibleConfigurationError:
             raise
         except TimeoutError:

@@ -14,11 +14,13 @@ from typing import Protocol
 
 from pydantic import TypeAdapter
 
+from ai_software_engineer.agents.model_diagnostics import ModelCallDiagnostic
 from ai_software_engineer.team_workspace import _read_regular
 
 from .models import (
     ConsoleCommandResult,
     ConsoleIntent,
+    ConsoleModelCall,
     ConsoleOperation,
     ConsoleOperationStatus,
     IdempotencyKey,
@@ -39,6 +41,9 @@ class ConsoleOperationNotFound(ConsoleOperationError):
 
 
 class ConsoleOperationStore(Protocol):
+    def record_model_call(self, operation_id: str, call: ModelCallDiagnostic) -> None: ...
+    def model_calls(self, operation_id: str) -> tuple[ModelCallDiagnostic, ...]: ...
+
     def submit(
         self, *, intent: ConsoleIntent, idempotency_key: str, requested_at: datetime
     ) -> ConsoleOperation: ...
@@ -68,7 +73,26 @@ class InMemoryConsoleOperationStore:
     def __init__(self, team_id: str) -> None:
         self.team_id = team_id
         self._histories: dict[str, list[ConsoleOperation]] = {}
+        self._model_calls: dict[str, list[ModelCallDiagnostic]] = {}
         self._lock = Lock()
+
+    def record_model_call(self, operation_id: str, call: ModelCallDiagnostic) -> None:
+        with self._lock:
+            history = self._histories.get(operation_id)
+            if not history:
+                raise ConsoleOperationNotFound("console operation not found")
+            if history[-1].status is not ConsoleOperationStatus.RUNNING:
+                raise ConsoleOperationConflict("model call requires a running operation")
+            calls = self._model_calls.setdefault(operation_id, [])
+            if call not in calls:
+                if len(calls) >= 2048:
+                    raise ConsoleOperationConflict("model call diagnostic limit reached")
+                calls.append(call)
+
+    def model_calls(self, operation_id: str) -> tuple[ModelCallDiagnostic, ...]:
+        self.get(operation_id)
+        with self._lock:
+            return tuple(self._model_calls.get(operation_id, ()))
 
     def submit(
         self, *, intent: ConsoleIntent, idempotency_key: str, requested_at: datetime
@@ -207,6 +231,51 @@ class FileConsoleOperationStore:
         self.team_id = team_id
         _reject_symlinks(self.root)
         self.root.mkdir(parents=True, exist_ok=True)
+
+    def record_model_call(self, operation_id: str, call: ModelCallDiagnostic) -> None:
+        record = ConsoleModelCall(operation_id=operation_id, call=call)
+        with self._locked():
+            operation = self._current(operation_id)
+            if operation is None:
+                raise ConsoleOperationNotFound("console operation not found")
+            if operation.status is not ConsoleOperationStatus.RUNNING:
+                raise ConsoleOperationConflict("model call requires a running operation")
+            directory = self.root / operation_id / "model-calls"
+            _reject_symlinks(directory)
+            directory.mkdir(exist_ok=True)
+            target = directory / f"{record.record_sha256}.json"
+            _reject_symlinks(target)
+            if target.exists():
+                if _read_regular(target, 16_000) != record.model_dump_json(indent=2).encode():
+                    raise ConsoleOperationConflict("model call diagnostic changed")
+                return
+            if len(tuple(directory.glob("*.json"))) >= 2048:
+                raise ConsoleOperationConflict("model call diagnostic limit reached")
+            _publish_json(target, record.model_dump_json(indent=2))
+
+    def model_calls(self, operation_id: str) -> tuple[ModelCallDiagnostic, ...]:
+        with self._locked(shared=True):
+            if self._current(operation_id) is None:
+                raise ConsoleOperationNotFound("console operation not found")
+            directory = self.root / operation_id / "model-calls"
+            _reject_symlinks(directory)
+            if directory.exists() and not directory.is_dir():
+                raise ConsoleOperationConflict("model call diagnostics require a directory")
+            paths = sorted(directory.glob("*.json"))
+            if len(paths) > 2048:
+                raise ConsoleOperationConflict("model call diagnostic limit reached")
+            calls = []
+            for path in paths:
+                _reject_symlinks(path)
+                record = ConsoleModelCall.model_validate_json(_read_regular(path, 16_000))
+                if record.operation_id != operation_id or path.stem != record.record_sha256:
+                    raise ConsoleOperationConflict("model call diagnostic identity mismatch")
+                calls.append(record.call)
+            return tuple(
+                sorted(
+                    calls, key=lambda call: (call.started_at, call.invocation_id, call.route_index)
+                )
+            )
 
     def submit(
         self, *, intent: ConsoleIntent, idempotency_key: str, requested_at: datetime
@@ -375,26 +444,28 @@ class FileConsoleOperationStore:
         directory = self.root / operation.operation_id
         directory.mkdir(parents=True, exist_ok=True)
         target = directory / f"{operation.sequence:06d}.json"
-        descriptor, temporary_name = tempfile.mkstemp(prefix=".operation-", dir=directory)
-        temporary = Path(temporary_name)
+        _publish_json(target, operation.model_dump_json(indent=2))
+
+
+def _publish_json(target: Path, content: str) -> None:
+    descriptor, temporary_name = tempfile.mkstemp(prefix=".operation-", dir=target.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
         try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-                stream.write(operation.model_dump_json(indent=2))
-                stream.flush()
-                os.fsync(stream.fileno())
-            try:
-                os.link(temporary, target)
-            except FileExistsError as error:
-                raise ConsoleOperationConflict(
-                    "console operation was concurrently updated"
-                ) from error
-            directory_descriptor = os.open(directory, os.O_RDONLY)
-            try:
-                os.fsync(directory_descriptor)
-            finally:
-                os.close(directory_descriptor)
+            os.link(temporary, target)
+        except FileExistsError as error:
+            raise ConsoleOperationConflict("console operation was concurrently updated") from error
+        directory_descriptor = os.open(target.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_descriptor)
         finally:
-            temporary.unlink(missing_ok=True)
+            os.close(directory_descriptor)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _same_submission(current: ConsoleOperation, proposed: ConsoleOperation) -> ConsoleOperation:

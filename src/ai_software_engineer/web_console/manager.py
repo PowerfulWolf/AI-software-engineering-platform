@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol, cast
 
+from ai_software_engineer.agents.structured import StructuredModelError
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
     DeliveryCheckpointStale,
@@ -194,6 +195,8 @@ class ManagerConsoleAdapter:
                 "STALE_CHECKPOINT",
                 "The displayed delivery changed. Refresh the workspace and try again.",
             ) from error
+        except StructuredModelError as error:
+            raise ConsoleCommandRejected("MODEL_" + error.code.value, error.safe_message) from error
         except RequirementGitBaselineRequired as error:
             raise ConsoleCommandRejected(
                 "GIT_BASELINE_REQUIRED",

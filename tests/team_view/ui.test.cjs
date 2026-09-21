@@ -2601,6 +2601,53 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     "Product discovery must not be presented as implementation delivery",
   );
 
+  for (const [code, summary, expectedNext] of [
+    ["MODEL_AUTHENTICATION_ERROR", "product / 知识检索意图: codex/test (high): authentication expired", /codex login/],
+    ["MODEL_QUOTA_EXHAUSTED", "usage limit reached", /等待额度恢复/],
+    ["MODEL_PROVIDER_UNAVAILABLE", "Codex CLI 无法启动 errno=2", /可执行文件/],
+    ["MODEL_INVALID_OUTPUT", "ProductDraft 回复未通过结构校验", /结构化结果/],
+    ["MANAGER_FAILURE", "Manager operation failed; inspect durable delivery facts.", /旧记录未保存具体失败原因/],
+  ]) {
+    storedOperations = [{
+      operation_id: "operation_product_failure",
+      status: "FAILED",
+      updated_at: "2026-09-05T01:00:06Z",
+      error_code: code,
+      error_summary: summary,
+      intent: { action: "PRODUCT_REPLY", project_id: "project_fixture", delivery_id: "r1" },
+    }];
+    await interval.fn();
+    vm.runInContext('showDetail("request","r1")', context);
+    const failures = descend(get("detail")).filter((node) => node.className.includes("product-failure"));
+    assert.equal(failures.length, 1);
+    assert.match(text(failures[0]), /失败原因/);
+    assert.match(text(failures[0]), /下一步/);
+    assert.match(text(failures[0]), expectedNext);
+    assert.match(text(failures[0]), /operation_product_failure/);
+    assert.match(text(failures[0]), /无需重新输入或新建需求/);
+    if (code !== "MANAGER_FAILURE") assert.ok(text(failures[0]).includes(summary));
+  }
+  const continueDiscussion = descend(get("detail")).find(
+    (node) => node.tag === "button" && node.textContent === "继续需求讨论",
+  );
+  await continueDiscussion.events.click();
+  assert.deepEqual(submittedIntents.at(-1), {
+    action: "CONTINUE_DELIVERY",
+    project_id: "project_fixture",
+    delivery_id: "r1",
+    expected_checkpoint_sha256: "a".repeat(64),
+  });
+  storedOperations[0].status = "RUNNING";
+  await interval.fn();
+  vm.runInContext('showDetail("request","r1")', context);
+  assert.equal(descend(get("detail")).some((node) => node.className.includes("product-failure")), false);
+  storedOperations[0].status = "SUCCEEDED";
+  fixture.requests[0].stage = "WAITING_PRODUCT_REPLY";
+  await interval.fn();
+  vm.runInContext('showDetail("request","r1")', context);
+  assert.equal(descend(get("detail")).some((node) => node.className.includes("product-failure")), false);
+  fixture.requests[0].stage = "PRODUCT_DISCOVERY";
+
   storedOperations = [
     {
       operation_id: "operation_source_revision_drift",

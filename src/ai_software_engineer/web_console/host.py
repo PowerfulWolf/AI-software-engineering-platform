@@ -10,6 +10,7 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI
 
+from ai_software_engineer.agents.model_diagnostics import ModelCallDiagnostic
 from ai_software_engineer.config import ProductionConfig, ProductionConfigError
 from ai_software_engineer.manager.production_host import TeamHost
 from ai_software_engineer.store import StoreError
@@ -48,6 +49,9 @@ class _SetupConsole:
 
     def list_operations(self) -> tuple[ConsoleOperation, ...]:
         return ()
+
+    def model_calls(self, operation_id: str) -> tuple[ModelCallDiagnostic, ...]:
+        raise ConsoleOperationNotFound("console operation not found")
 
 
 class _SetupTeamReader:

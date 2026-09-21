@@ -5,22 +5,33 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import subprocess
 import tempfile
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol, cast
 from urllib.parse import urlparse
+from uuid import uuid4
 
+from ai_software_engineer.agents.diagnostics import provider_error_detail, safe_diagnostic
 from ai_software_engineer.agents.json_schema import strict_output_schema
+from ai_software_engineer.agents.model_diagnostics import (
+    ModelCallDiagnostic,
+    current_call_phase,
+    record_model_call,
+    safe_request_id,
+)
 from ai_software_engineer.agents.models import AgentErrorCode, AgentUsage
 from ai_software_engineer.agents.openai_compatible import (
     HttpResponse,
     HttpTransport,
     UrllibHttpTransport,
 )
+from ai_software_engineer.domain.enums import TeamRole
 from ai_software_engineer.domain.model import (
     JsonValue,
     ReasoningEffort,
@@ -32,11 +43,34 @@ from ai_software_engineer.domain.model import (
 class StructuredModelError(RuntimeError):
     """Typed provider failure used by bounded upstream fallback."""
 
-    def __init__(self, code: AgentErrorCode, safe_message: str, *, transient: bool) -> None:
+    def __init__(
+        self,
+        code: AgentErrorCode,
+        safe_message: str,
+        *,
+        transient: bool,
+        http_status: int | None = None,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+    ) -> None:
+        safe_message = safe_diagnostic(safe_message) or "模型执行失败, 未记录安全详情"
         super().__init__(safe_message)
         self.code = code
         self.safe_message = safe_message
         self.transient = transient
+        self.http_status = http_status
+        self.request_id = request_id
+        self.correlation_id = correlation_id
+
+    def with_context(self, context: str) -> StructuredModelError:
+        return StructuredModelError(
+            self.code,
+            f"{safe_diagnostic(context, limit=150)}: {self.safe_message}",
+            transient=self.transient,
+            http_status=self.http_status,
+            request_id=self.request_id,
+            correlation_id=self.correlation_id,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +80,9 @@ class StructuredModelResult:
     usage: AgentUsage | None = None
     provider: str | None = None
     model: str | None = None
+    http_status: int | None = None
+    request_id: str | None = None
+    correlation_id: str | None = None
 
 
 class StructuredModelClient(Protocol):
@@ -80,7 +117,9 @@ class StructuredModelRoute:
 class FallbackStructuredModelClient:
     """Switch upstream brains only for transient capacity/infrastructure failures."""
 
-    def __init__(self, routes: tuple[StructuredModelRoute, ...]) -> None:
+    def __init__(
+        self, routes: tuple[StructuredModelRoute, ...], *, role: TeamRole | None = None
+    ) -> None:
         if not routes:
             raise ValueError("structured fallback requires at least one route")
         ensure_unique(
@@ -88,6 +127,7 @@ class FallbackStructuredModelClient:
             "structured provider/model/reasoning routes",
         )
         self._routes = routes
+        self._role = role
 
     def complete(
         self,
@@ -99,7 +139,9 @@ class FallbackStructuredModelClient:
         input_images: tuple[Path, ...] = (),
     ) -> StructuredModelResult:
         candidates = tuple(
-            route for route in self._routes if not input_images or route.supports_images
+            (route_index, route)
+            for route_index, route in enumerate(self._routes, start=1)
+            if not input_images or route.supports_images
         )
         if not candidates:
             raise StructuredModelError(
@@ -108,7 +150,9 @@ class FallbackStructuredModelClient:
                 transient=False,
             )
         last: StructuredModelError | None = None
-        for index, route in enumerate(candidates):
+        invocation_id = uuid4().hex
+        for index, (route_index, route) in enumerate(candidates):
+            started_at, started = datetime.now(UTC), time.monotonic()
             try:
                 if input_images:
                     result = route.client.complete(
@@ -125,11 +169,50 @@ class FallbackStructuredModelClient:
                         output_schema=output_schema,
                         timeout_seconds=timeout_seconds,
                     )
-                return replace(result, provider=route.provider, model=route.model)
             except StructuredModelError as error:
-                last = error
+                record_model_call(
+                    ModelCallDiagnostic(
+                        invocation_id=invocation_id,
+                        route_index=route_index,
+                        started_at=started_at,
+                        role=self._role,
+                        phase=current_call_phase(),
+                        provider=route.provider,
+                        model=route.model,
+                        reasoning_effort=route.reasoning_effort,
+                        duration_ms=_elapsed_ms(started),
+                        outcome="FAILED",
+                        http_status=error.http_status,
+                        request_id=error.request_id,
+                        correlation_id=error.correlation_id,
+                        error_code=error.code,
+                        error_summary=error.safe_message,
+                    )
+                )
+                last = error.with_context(
+                    f"{route.provider}/{route.model} ({route.reasoning_effort})"
+                )
                 if index == len(candidates) - 1 or not _allows_fallback(error):
-                    raise
+                    raise last from error
+            else:
+                record_model_call(
+                    ModelCallDiagnostic(
+                        invocation_id=invocation_id,
+                        route_index=route_index,
+                        started_at=started_at,
+                        role=self._role,
+                        phase=current_call_phase(),
+                        provider=route.provider,
+                        model=route.model,
+                        reasoning_effort=route.reasoning_effort,
+                        duration_ms=_elapsed_ms(started),
+                        outcome="SUCCEEDED",
+                        http_status=result.http_status,
+                        request_id=result.request_id,
+                        correlation_id=result.correlation_id,
+                    )
+                )
+                return replace(result, provider=route.provider, model=route.model)
         assert last is not None
         raise last
 
@@ -236,14 +319,20 @@ class CodexCliStructuredModelClient:
             except OSError as error:
                 raise StructuredModelError(
                     AgentErrorCode.PROVIDER_UNAVAILABLE,
-                    "Codex structured execution could not start",
+                    "Codex CLI 无法启动; "
+                    + (
+                        f"errno={error.errno}: {os.strerror(error.errno)}"
+                        if error.errno
+                        else type(error).__name__
+                    ),
                     transient=True,
                 ) from error
             if completed.returncode != 0:
-                code, transient = _classify_text_failure(f"{completed.stdout}\n{completed.stderr}")
+                code, transient = _classify_text_failure(completed.stderr)
                 raise StructuredModelError(
                     code,
-                    "Codex structured provider execution failed",
+                    f"Codex CLI 执行失败(退出码 {completed.returncode}); "
+                    + provider_error_detail(completed.stderr),
                     transient=transient,
                 )
             try:
@@ -251,7 +340,7 @@ class CodexCliStructuredModelClient:
             except (OSError, UnicodeError, json.JSONDecodeError) as error:
                 raise StructuredModelError(
                     AgentErrorCode.INVALID_OUTPUT,
-                    "Codex structured output is invalid",
+                    "Codex structured output is invalid: 缺少有效 JSON 回复",
                     transient=False,
                 ) from error
         if not isinstance(payload, Mapping):
@@ -362,8 +451,12 @@ class ResponsesStructuredModelClient:
             code, transient = _http_failure(response)
             raise StructuredModelError(
                 code,
-                f"Responses structured provider returned HTTP {response.status_code}",
+                f"Responses structured provider returned HTTP {response.status_code}; "
+                + _http_error_detail(response.body, self._api_key),
                 transient=transient,
+                http_status=response.status_code,
+                request_id=safe_request_id(response.request_id, secret=self._api_key),
+                correlation_id=safe_request_id(response.correlation_id, secret=self._api_key),
             )
         try:
             provider = json.loads(response.body.decode("utf-8"))
@@ -377,11 +470,17 @@ class ResponsesStructuredModelClient:
                 AgentErrorCode.INVALID_OUTPUT,
                 "Responses structured output is invalid",
                 transient=False,
+                http_status=response.status_code,
+                request_id=safe_request_id(response.request_id, secret=self._api_key),
+                correlation_id=safe_request_id(response.correlation_id, secret=self._api_key),
             ) from error
         return StructuredModelResult(
             payload=output,
             duration_ms=_elapsed_ms(started),
             usage=_usage(provider),
+            http_status=response.status_code,
+            request_id=safe_request_id(response.request_id, secret=self._api_key),
+            correlation_id=safe_request_id(response.correlation_id, secret=self._api_key),
         )
 
 
@@ -544,12 +643,26 @@ def _provider_error_code(body: bytes) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _http_error_detail(body: bytes, api_key: str) -> str:
+    try:
+        payload = json.loads(body)
+    except (ValueError, UnicodeError):
+        return "未获得结构化服务错误详情"
+    if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
+        message = payload["error"].get("message")
+        if isinstance(message, str):
+            return safe_diagnostic(message.replace(api_key, "[REDACTED:api_key]"), limit=240)
+    return "未获得结构化服务错误详情"
+
+
 def _classify_text_failure(text: str) -> tuple[AgentErrorCode, bool]:
     normalized = text.lower()
     quota_markers = ("insufficient_quota", "quota exceeded", "usage limit")
     if any(marker in normalized for marker in quota_markers):
         return AgentErrorCode.QUOTA_EXHAUSTED, True
-    if any(marker in normalized for marker in ("rate limit", "too many requests", "429")):
+    if any(marker in normalized for marker in ("rate limit", "too many requests")) or re.search(
+        r"\b429\b", normalized
+    ):
         return AgentErrorCode.RATE_LIMITED, True
     auth_markers = ("unauthorized", "authentication", "sign in", "login")
     if any(marker in normalized for marker in auth_markers):

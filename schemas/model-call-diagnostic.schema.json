@@ -1,0 +1,188 @@
+{
+  "$defs": {
+    "AgentErrorCode": {
+      "description": "Stable failure categories consumed by Orchestrator retry routing.",
+      "enum": [
+        "TIMEOUT",
+        "QUOTA_EXHAUSTED",
+        "RATE_LIMITED",
+        "AUTHENTICATION_ERROR",
+        "PROVIDER_UNAVAILABLE",
+        "INVALID_OUTPUT",
+        "PROVIDER_ERROR",
+        "POLICY_VIOLATION"
+      ],
+      "title": "AgentErrorCode",
+      "type": "string"
+    },
+    "ReasoningEffort": {
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "type": "string"
+    },
+    "TeamRole": {
+      "description": "Long-lived roles that a Team-owned AgentProfile may declare.",
+      "enum": [
+        "manager",
+        "product",
+        "designer",
+        "planner",
+        "coder",
+        "qa",
+        "reviewer"
+      ],
+      "title": "TeamRole",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "invocation_id": {
+      "pattern": "^[a-f0-9]{32}$",
+      "title": "Invocation Id",
+      "type": "string"
+    },
+    "route_index": {
+      "maximum": 16,
+      "minimum": 1,
+      "title": "Route Index",
+      "type": "integer"
+    },
+    "started_at": {
+      "format": "date-time",
+      "title": "Started At",
+      "type": "string"
+    },
+    "role": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TeamRole"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "phase": {
+      "enum": [
+        "stage_reply",
+        "knowledge_intent",
+        "knowledge_assessment"
+      ],
+      "title": "Phase",
+      "type": "string"
+    },
+    "provider": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Provider",
+      "type": "string"
+    },
+    "model": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Model",
+      "type": "string"
+    },
+    "reasoning_effort": {
+      "$ref": "#/$defs/ReasoningEffort"
+    },
+    "duration_ms": {
+      "minimum": 0,
+      "title": "Duration Ms",
+      "type": "integer"
+    },
+    "outcome": {
+      "enum": [
+        "SUCCEEDED",
+        "FAILED"
+      ],
+      "title": "Outcome",
+      "type": "string"
+    },
+    "http_status": {
+      "anyOf": [
+        {
+          "maximum": 599,
+          "minimum": 100,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Http Status"
+    },
+    "request_id": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9_.:-]{1,128}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Request Id"
+    },
+    "correlation_id": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9_.:-]{1,128}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Correlation Id"
+    },
+    "error_code": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AgentErrorCode"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "error_summary": {
+      "anyOf": [
+        {
+          "maxLength": 500,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Error Summary"
+    }
+  },
+  "required": [
+    "invocation_id",
+    "route_index",
+    "started_at",
+    "phase",
+    "provider",
+    "model",
+    "reasoning_effort",
+    "duration_ms",
+    "outcome"
+  ],
+  "title": "ModelCallDiagnostic",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/model-call-diagnostic.schema.json"
+}

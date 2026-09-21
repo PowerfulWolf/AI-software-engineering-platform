@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import TypeAdapter, ValidationError
 from starlette.middleware.base import RequestResponseEndpoint
 
+from ai_software_engineer.agents.model_diagnostics import ModelCallDiagnostic
 from ai_software_engineer.domain.identity import ProjectId, TeamId
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.knowledge.administration import ApproveKnowledgeResolution
@@ -69,6 +70,7 @@ class ConsoleApplication(Protocol):
     def submit(self, intent: ConsoleIntent, *, idempotency_key: str) -> ConsoleOperation: ...
     def get(self, operation_id: str) -> ConsoleOperation: ...
     def list_operations(self) -> tuple[ConsoleOperation, ...]: ...
+    def model_calls(self, operation_id: str) -> tuple[ModelCallDiagnostic, ...]: ...
 
 
 class SubmitOperation(DomainModel):
@@ -810,6 +812,18 @@ def create_console_app(
         except AdministrationError:
             return _error(503, "ADMIN_UNAVAILABLE", "Runtime status is unavailable.")
         return JSONResponse(value.to_wire())
+
+    @app.get("/api/v1/operations/{operation_id}/model-calls")
+    async def model_calls(operation_id: str) -> Response:
+        try:
+            values = await run_in_threadpool(console.model_calls, operation_id)
+        except ConsoleOperationNotFound:
+            return _error(404, "NOT_FOUND", "Operation not found.")
+        except (ConsoleOperationConflict, ValidationError, OSError, ValueError):
+            return _error(
+                409, "DIAGNOSTICS_UNAVAILABLE", "Model call records could not be verified."
+            )
+        return JSONResponse([value.to_wire() for value in values])
 
     @app.get("/api/v1/operations/{operation_id}")
     async def operation(operation_id: str) -> Response:
