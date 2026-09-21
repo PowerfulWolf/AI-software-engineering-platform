@@ -6,6 +6,7 @@ from pydantic import AwareDatetime
 
 from ai_software_engineer.domain.enums import AgentRole, TeamRole, WorkItemStatus
 from ai_software_engineer.domain.model import DomainModel
+from ai_software_engineer.knowledge.views import KnowledgeGapView
 from ai_software_engineer.projection.models import TimelineEntry
 
 
@@ -110,6 +111,7 @@ class RequestView(DomainModel):
     dialogue: tuple[DialogueTurnView, ...] = ()
     documents: tuple[DocumentView, ...] = ()
     checkpoint_sha256: str
+    knowledge_gap: KnowledgeGapView | None = None
 
 
 class AgentView(DomainModel):

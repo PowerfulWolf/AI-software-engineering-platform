@@ -55,6 +55,10 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
   必须优先展示子 Task 正在交付（delivery/remediation 为 `DELIVERING`，candidate verification 为
   `INTEGRATING`），清除旧 blocker，并使用子 Task 的 `next_action`。子 Task 再次终止或阻塞后才恢复
   展示联合 checkpoint 的阻塞事实；不得把旧父记录覆盖回存储。
+- 例外：当前 `WAITING_HUMAN + knowledge_gap_id` 是显式知识等待，子 Task 刻意保留原 checkpoint，
+  不能因其仍是 IMPLEMENTING/QA 而宣称恢复执行。通过只读 `KnowledgeGapView` 关联批准事实，
+  `RequestView.knowledge_gap` 在批准后即变化（checkpoint SHA 不变），提示已批准、等待用户继续。
+  详见 [`product-failure-diagnostics.md`](product-failure-diagnostics.md) 的 approved knowledge 契约。
 - Agent cards must render assignment-stage state, not copy the Task's global delivery status onto every
   planned assignment. Only `AssignmentView.current_stage=true` may display the Task's active-stage label.
   Earlier serial roles display `本轮已完成`, later roles display `等待<角色>阶段`, and a Task with no

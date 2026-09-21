@@ -758,3 +758,9 @@ Project Spec，或 Team 下的非执行性 Skill 设计建议；后者不会安�
 历史缺失数据不能补造；进程在请求未完成时中断也可能没有该请求的完成记录。本契约覆盖 Console
 中的结构化主/备用调用，不是所有 CLI 子进程的执行账本。详见
 [调用诊断与知识澄清规范](../.trellis/spec/core/product-failure-diagnostics.md)。
+
+知识缺口查询返回 `KnowledgeGapView {gap, resolution?, is_current}`，不再返回 bare Gap 列表。
+Team snapshot 的可选 `RequestView.knowledge_gap` 使用同一投影（见 `team-snapshot.schema.json`）。
+批准事实来自校验后的 Gap/Resolution 精确关联，而非浏览器内存；批准不会推进 Requirement
+checkpoint，轮询必须在 checkpoint SHA 不变时仍能反映新批准。已批准事项只读显示原解答/来源，
+由用户另行发起携带当前 `expected_checkpoint_sha256` 的 `CONTINUE_DELIVERY`。

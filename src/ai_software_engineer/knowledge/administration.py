@@ -15,6 +15,7 @@ from ai_software_engineer.knowledge.gaps import (
 )
 from ai_software_engineer.knowledge.models import BoundedText, Digest, KnowledgeError, digest
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
+from ai_software_engineer.knowledge.views import KnowledgeGapView, read_gap_view
 from ai_software_engineer.manager.delivery_checkpoint import DeliveryId
 from ai_software_engineer.multi_directory.models import JointStage
 from ai_software_engineer.multi_directory.retirement import RequirementRetirementStore
@@ -41,7 +42,9 @@ class KnowledgeHumanActionEvent(DomainModel):
     event_sha256: Digest
 
 
-def gap_stores(project: ProjectWorkspace, requirement_id: str) -> tuple[KnowledgeRecordStore, ...]:
+def gap_stores(
+    project: ProjectWorkspace, requirement_id: str, *, read_only: bool = False
+) -> tuple[KnowledgeRecordStore, ...]:
     identity = TypeAdapter(DeliveryId).validate_python(requirement_id)
     current = JointJournal(project.requirements_root, read_only=True).current(identity)
     if current is None or current.project_id != project.manifest.project_id:
@@ -51,13 +54,13 @@ def gap_stores(project: ProjectWorkspace, requirement_id: str) -> tuple[Knowledg
         project.root / "repositories" / p.result.repository_id / "knowledge" / "runs"
         for p in current.preparations
     )
-    return tuple(KnowledgeRecordStore(root) for root in roots if root.is_dir())
+    return tuple(KnowledgeRecordStore(root, read_only=read_only) for root in roots if root.is_dir())
 
 
 def list_gaps(project: ProjectWorkspace, requirement_id: str) -> tuple[KnowledgeGap, ...]:
     gaps = tuple(
         gap
-        for records in gap_stores(project, requirement_id)
+        for records in gap_stores(project, requirement_id, read_only=True)
         for gap in records.list("gaps", KnowledgeGap)
         if gap.binding.requirement_id == requirement_id
         and gap.binding.project_id == project.manifest.project_id
@@ -68,15 +71,32 @@ def list_gaps(project: ProjectWorkspace, requirement_id: str) -> tuple[Knowledge
     return gaps
 
 
+def list_gap_views(project: ProjectWorkspace, requirement_id: str) -> tuple[KnowledgeGapView, ...]:
+    current = JointJournal(project.requirements_root, read_only=True).current(requirement_id)
+    if current is None:
+        raise KnowledgeError("REQUIREMENT_NOT_FOUND")
+    return tuple(
+        read_gap_view(
+            find_gap_records(project, requirement_id, gap.gap_id, read_only=True),
+            gap,
+            current_gap_id=(
+                current.knowledge_gap_id if current.stage is JointStage.WAITING_HUMAN else None
+            ),
+        )
+        for gap in list_gaps(project, requirement_id)
+    )
+
+
 def find_gap_records(
-    project: ProjectWorkspace, requirement_id: str, gap_id: str
+    project: ProjectWorkspace, requirement_id: str, gap_id: str, *, read_only: bool = False
 ) -> KnowledgeRecordStore:
-    for records in gap_stores(project, requirement_id):
+    for records in gap_stores(project, requirement_id, read_only=read_only):
         gap = records.find("gaps", gap_id, KnowledgeGap)
         if (
             gap is not None
             and gap.binding.requirement_id == requirement_id
             and gap.binding.project_id == project.manifest.project_id
+            and gap.binding.team_id == project.manifest.team_id
         ):
             gap.validate_integrity()
             return records

@@ -84,6 +84,7 @@ const labels = {
   BLOCKED: "已阻塞",
   FAILED: "失败",
   WAITING_HUMAN: "等待人工",
+  KNOWLEDGE_APPROVED: "解答已批准 · 待继续",
   WAITING_DEPENDENCY: "等待依赖",
   READY: "等待调度",
   LEASED: "已领取",
@@ -389,6 +390,8 @@ function currentRequestTasks(request) {
   return [...currentByDelivery.values()];
 }
 function activeRequestTask(request) {
+  if (request.stage === "WAITING_HUMAN" && request.knowledge_gap?.is_current)
+    return null;
   if (
     !(
       request.stage.includes("WAITING") ||
@@ -445,6 +448,9 @@ function requestPresentation(request) {
       blocker: null,
       nextAction: request.next_action,
     };
+  if (approvedKnowledge(request))
+    return { group: "blocked", status: "KNOWLEDGE_APPROVED", blocker: null,
+      nextAction: "解答已批准，点击“继续交付”恢复原需求。" };
   if (
     request.blocker ||
     request.stage.includes("WAITING") ||
@@ -473,6 +479,18 @@ function agentQueueState(agent) {
 }
 function requestBlockingSummary(request) {
   if (requestPresentation(request).group !== "blocked") return null;
+  if (request.stage === "WAITING_HUMAN" && request.knowledge_gap?.is_current) {
+    const approved = approvedKnowledge(request);
+    const operation = latestOperation(request.id);
+    return {
+      reasons: [{reason: approved ? "知识解答已批准，原需求等待继续。" : "有待确认的知识，请补充并批准解答。", scopes: []}],
+      operationReason: operation?.status === "FAILED" ? operation.error_summary : null,
+      approval: null,
+      suggestedAction: approved ? "无需重复解答。点击“继续交付”，平台将使用已批准的解答恢复原需求。"
+        : "在下方“知识缺口”中填写解答和决策依据，点击“批准解答”。",
+      approvedKnowledge: approved,
+    };
+  }
   // Verification attempts are audit history of the same native delivery, not
   // independent current blockers. Select its newest observation before filtering.
   const blockedTasks = currentRequestTasks(request).filter(
@@ -575,7 +593,7 @@ function requestBlockerSection(request) {
     "detail-section request-blocking-section",
   );
   section.append(
-    el("h2", "阻塞信息"),
+    el("h2", summary.approvedKnowledge ? "下一步" : "阻塞信息"),
     el(
       "p",
       "当前原因、最近恢复结果和建议操作都集中在这里。",
@@ -588,7 +606,7 @@ function requestBlockerSection(request) {
     card.append(
       el(
         "span",
-        summary.approval ? "原始阻塞" : "当前阻塞",
+        summary.approvedKnowledge ? "当前状态" : summary.approval ? "原始阻塞" : "当前阻塞",
         "request-blocking-kicker",
       ),
       el(
@@ -1487,11 +1505,14 @@ function renderOperationStatus() {
   }
   for (const operation of visible) {
     const needsHumanAttention = operationNeedsHumanAttention(operation);
+    const request = snapshot ? requestById(operationTarget(operation)) : null;
+    const knowledgeApproved = needsHumanAttention && operation.result?.stage === "WAITING_HUMAN" &&
+      request && operation.result.checkpoint_sha256 === request.checkpoint_sha256 && approvedKnowledge(request);
     const card = el("div", undefined, "operation-status");
     const row = el("div", undefined, "row");
     const state = el("div", undefined, "operation-status-actions");
     state.append(
-      badge(needsHumanAttention ? operation.result.stage : operation.status),
+      badge(knowledgeApproved ? "KNOWLEDGE_APPROVED" : needsHumanAttention ? operation.result.stage : operation.status),
     );
     if (
       ["FAILED", "INTERRUPTED"].includes(operation.status) ||
@@ -1531,7 +1552,8 @@ function renderOperationStatus() {
       card.append(
         el(
           "p",
-          "操作需要处理，具体原因已归入需求详情的“阻塞信息”。",
+          knowledgeApproved ? "知识解答已批准。打开需求工作区后点击“继续交付”。"
+            : "操作需要处理，具体原因已归入需求详情的“阻塞信息”。",
           "muted",
         ),
       );
@@ -4676,20 +4698,29 @@ function deliveryFlow(request) {
   });
   return flow;
 }
+function approvedKnowledge(item) {
+  return item.stage === "WAITING_HUMAN" && item.knowledge_gap?.is_current &&
+    Boolean(item.knowledge_gap.resolution);
+}
+
 function knowledgeGapSection(item) {
-  const key = `${item.project_id}/${item.id}/${item.checkpoint_sha256}`;
+  const key = `${item.project_id}/${item.id}/${item.checkpoint_sha256}/${item.knowledge_gap?.resolution?.resolution_id || "pending"}`;
   if (knowledgeGapSections.has(key)) return knowledgeGapSections.get(key);
   const section = el("section", undefined, "detail-section knowledge-gap-section");
   const heading = el("div", undefined, "knowledge-gap-heading");
   const intro = el("div");
-  intro.append(el("h2", "知识缺口"), el("p", "补充待确认的信息，批准后再继续原需求。", "muted"));
+  const approved = approvedKnowledge(item);
+  intro.append(el("h2", "知识缺口"), el("p", approved
+    ? "解答已批准并保存，无需重复填写。点击“继续交付”恢复原需求。"
+    : "补充待确认的信息，批准后再继续原需求。", "muted"));
   const content = el("div", undefined, "knowledge-gap-content");
   content.id = `knowledge-gap-content-${++actionSerial}`;
   content.hidden = true;
   let loading = false, loaded = false;
   const base = "/api/v1/admin/projects/" + encodeURIComponent(item.project_id) +
     "/requirements/" + encodeURIComponent(item.id);
-  const toggle = button("查看待确认的知识", async () => {
+  const showLabel = approved ? "查看已批准的解答" : "查看待确认的知识";
+  const toggle = button(showLabel, async () => {
     if (loading) return;
     if (loaded) {
       content.hidden = !content.hidden;
@@ -4701,8 +4732,8 @@ function knowledgeGapSection(item) {
       content.setAttribute("aria-busy", "true");
       try {
         const records = await adminFetch(base + "/knowledge-gaps");
-        const unique = [...new Map(records.map(gap => [gap.gap_id, gap])).values()];
-        content.replaceChildren(...unique.map((gap, index) => knowledgeGapCard(gap, index, base, item)));
+        const unique = [...new Map(records.map(view => [view.gap.gap_id, view])).values()];
+        content.replaceChildren(...unique.map((view, index) => knowledgeGapCard(view, index, base, item)));
         if (!unique.length) content.append(el("p", "当前没有已记录的知识缺口。", "muted"));
         loaded = true;
       } catch (error) {
@@ -4713,7 +4744,7 @@ function knowledgeGapSection(item) {
         content.setAttribute("aria-busy", "false");
       }
     }
-    toggle.textContent = loaded && !content.hidden ? "收起待确认的知识" : "查看待确认的知识";
+    toggle.textContent = loaded && !content.hidden ? "收起知识详情" : showLabel;
     toggle.setAttribute("aria-expanded", String(!content.hidden));
   }, "secondary");
   toggle.setAttribute("aria-controls", content.id);
@@ -4726,10 +4757,21 @@ function knowledgeGapSection(item) {
   return section;
 }
 
-function knowledgeGapCard(gap, index, base, item) {
-  const card = el("form", undefined, "knowledge-gap-card");
+function knowledgeGapCard(view, index, base, item) {
+  const {gap, resolution, is_current: current} = view;
+  const card = el(resolution || !current ? "div" : "form", undefined, "knowledge-gap-card");
   const header = el("div", undefined, "knowledge-gap-card-heading");
-  header.append(el("h3", `待确认事项 ${index + 1}`), el("span", "需要你的确认", "badge"));
+  header.append(el("h3", `知识事项 ${index + 1}`),
+    el("span", resolution ? "解答已批准" : current ? "需要你的确认" : "历史记录", "badge"));
+  if (resolution || !current) {
+    card.append(header, el("p", gap.question, "knowledge-gap-question"));
+    if (resolution) {
+      card.append(el("h4", "已批准的解答"), el("p", resolution.answer), el("h4", "事实来源 / 决策依据"));
+      for (const source of resolution.sources) card.append(el("p", source.uri));
+      if (current) card.append(el("p", "解答已保存，等待你继续原需求。", "success"));
+    } else card.append(el("p", "此项不是当前待处理事项，无需在此重复提交。", "muted"));
+    return card;
+  }
   const decision = gap.required_decision === "Provide verified facts and approve the exact resolution."
     ? "请提供已核实的信息，并确认将此解答用于当前需求。" : gap.required_decision;
   const answer = el("textarea");
@@ -4765,15 +4807,18 @@ function knowledgeGapCard(gap, index, base, item) {
     try {
       const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(content));
       const sha256 = Array.from(new Uint8Array(bytes), b => b.toString(16).padStart(2, "0")).join("");
-      await adminFetch(base + "/knowledge-resolutions", {
+      const resolution = await adminFetch(base + "/knowledge-resolutions", {
         method: "POST", headers: {"Content-Type": "application/json"},
         body: JSON.stringify({gap_id: gap.gap_id, answer: content,
           sources: [{uri, content, sha256}], approval_reference: "local-console:" + gap.gap_id}),
       });
-      card.replaceChildren(header, el("p", "解答已批准，原始证据保留。", "success"),
-        deliveryButton("继续需求", () => submitOperation({
-          action: "CONTINUE_DELIVERY", project_id: item.project_id, delivery_id: item.id,
-        }), "primary"));
+      const request = snapshot?.requests.find(request => request.id === item.id && request.project_id === item.project_id);
+      if (request?.checkpoint_sha256 === item.checkpoint_sha256) {
+        request.knowledge_gap = {...view, resolution};
+        // Approval changes knowledge facts without advancing the immutable checkpoint.
+        renderOperationStatus();
+        renderDetail();
+      }
     } catch (error) {
       feedback.replaceChildren(el("p", error.message || "解答未被接受。", "error"));
       submitting = false;

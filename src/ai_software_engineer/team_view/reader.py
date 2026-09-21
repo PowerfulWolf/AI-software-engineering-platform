@@ -16,6 +16,9 @@ from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.domain.enums import AgentRole, TaskStatus, TeamRole, WorkItemStatus
 from ai_software_engineer.domain.workforce import AgentProfile
 from ai_software_engineer.evaluation import FileEvaluationEventStore
+from ai_software_engineer.knowledge.administration import find_gap_records
+from ai_software_engineer.knowledge.gaps import KnowledgeGap
+from ai_software_engineer.knowledge.views import read_gap_view
 from ai_software_engineer.manager.delivery import _delivery_id
 from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryStage,
@@ -251,6 +254,22 @@ class ProductionTeamReader:
                 if waiting_single_acceptance
                 else _safe(joint.next_action)
             )
+            knowledge_gap = None
+            if joint.stage is JointStage.WAITING_HUMAN and joint.knowledge_gap_id is not None:
+                assert selected is not None
+                records = find_gap_records(
+                    selected, joint.delivery_id, joint.knowledge_gap_id, read_only=True
+                )
+                knowledge_gap = read_gap_view(
+                    records,
+                    records.get("gaps", joint.knowledge_gap_id, KnowledgeGap),
+                    current_gap_id=joint.knowledge_gap_id,
+                )
+                presented_next_action = (
+                    "知识解答已批准，点击“继续交付”恢复原需求，无需重复解答。"  # noqa: RUF001
+                    if knowledge_gap.resolution is not None
+                    else "请在“知识缺口”中补充并批准解答，然后继续交付。"  # noqa: RUF001
+                )
             requests.append(
                 RequestView(
                     id=joint.delivery_id,
@@ -280,6 +299,7 @@ class ProductionTeamReader:
                     ),
                     documents=documents,
                     checkpoint_sha256=joint.checkpoint_sha256,
+                    knowledge_gap=knowledge_gap,
                 )
             )
         tasks: list[TaskView] = []
@@ -617,6 +637,9 @@ def _waiting(stage: str) -> bool:
 
 def _request_with_current_work(request: RequestView, tasks: list[TaskView]) -> RequestView:
     """Prefer a newer active child Task over a stale terminal joint observation."""
+    # Knowledge waits preserve the child's delivery checkpoint; it is not active work.
+    if request.knowledge_gap is not None and request.knowledge_gap.is_current:
+        return request
     if not (_waiting(request.stage) or request.stage in {"DELIVERING", "INTEGRATING"}):
         return request
     active = tuple(

@@ -7,11 +7,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from ai_software_engineer.agents.model_diagnostics import ModelCallDiagnostic, record_model_call
+from ai_software_engineer.agents.models import AgentErrorCode
 from ai_software_engineer.agents.structured import (
     FallbackStructuredModelClient,
     ResponsesStructuredModelClient,
     StructuredModelRoute,
 )
+from ai_software_engineer.domain.enums import TeamRole
 from ai_software_engineer.team_view.models import TeamSnapshot
 from ai_software_engineer.web_console import (
     ConsoleCommandRejected,
@@ -33,7 +35,7 @@ def call() -> ModelCallDiagnostic:
         invocation_id="a" * 32,
         route_index=1,
         started_at=datetime.now(UTC),
-        role="product",
+        role=TeamRole.PRODUCT,
         phase="knowledge_intent",
         provider="hdl",
         model="model-test",
@@ -42,7 +44,7 @@ def call() -> ModelCallDiagnostic:
         outcome="FAILED",
         http_status=504,
         request_id="req-test",
-        error_code="PROVIDER_UNAVAILABLE",
+        error_code=AgentErrorCode.PROVIDER_UNAVAILABLE,
         error_summary="HTTP 504",
     )
 
@@ -169,7 +171,7 @@ def test_fallback_to_durable_console_diagnostics_end_to_end(tmp_path: Path) -> N
             )
             for name, status in (("primary", 504), ("backup", 200))
         ),
-        role="product",
+        role=TeamRole.PRODUCT,
     )
 
     class Executor:

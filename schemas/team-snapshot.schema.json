@@ -254,6 +254,317 @@
         }
       ]
     },
+    "KnowledgeGap": {
+      "additionalProperties": false,
+      "properties": {
+        "binding": {
+          "$ref": "#/$defs/KnowledgeRunBinding"
+        },
+        "evidence_ids": {
+          "items": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "gap_id": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Gap Id",
+          "type": "string"
+        },
+        "impact": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Impact",
+          "type": "string"
+        },
+        "kind": {
+          "const": "knowledge_gap",
+          "default": "knowledge_gap",
+          "title": "Kind",
+          "type": "string"
+        },
+        "manifest_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Manifest Sha256",
+          "type": "string"
+        },
+        "question": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Question",
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "MISSING",
+            "CONFLICT",
+            "STALE",
+            "UNVERIFIABLE"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "required_decision": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Required Decision",
+          "type": "string"
+        },
+        "risk": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Risk",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "BLOCKING",
+            "NON_BLOCKING"
+          ],
+          "title": "Severity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "binding",
+        "question",
+        "required_decision",
+        "reason",
+        "severity",
+        "impact",
+        "risk",
+        "evidence_ids",
+        "manifest_sha256",
+        "gap_id"
+      ],
+      "title": "KnowledgeGap",
+      "type": "object"
+    },
+    "KnowledgeGapView": {
+      "additionalProperties": false,
+      "properties": {
+        "gap": {
+          "$ref": "#/$defs/KnowledgeGap"
+        },
+        "is_current": {
+          "title": "Is Current",
+          "type": "boolean"
+        },
+        "resolution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KnowledgeResolution"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "gap",
+        "is_current"
+      ],
+      "title": "KnowledgeGapView",
+      "type": "object"
+    },
+    "KnowledgeResolution": {
+      "additionalProperties": false,
+      "properties": {
+        "answer": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Answer",
+          "type": "string"
+        },
+        "approval_reference": {
+          "minLength": 1,
+          "title": "Approval Reference",
+          "type": "string"
+        },
+        "approved_by": {
+          "minLength": 1,
+          "title": "Approved By",
+          "type": "string"
+        },
+        "disposition": {
+          "default": "REQUIREMENT_ONLY",
+          "enum": [
+            "REQUIREMENT_ONLY",
+            "PROPOSE_LEARNING"
+          ],
+          "title": "Disposition",
+          "type": "string"
+        },
+        "gap_id": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Gap Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "knowledge_resolution",
+          "default": "knowledge_resolution",
+          "title": "Kind",
+          "type": "string"
+        },
+        "previous_run_id": {
+          "minLength": 1,
+          "title": "Previous Run Id",
+          "type": "string"
+        },
+        "resolution_id": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Resolution Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/KnowledgeResolutionSource"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Sources",
+          "type": "array"
+        }
+      },
+      "required": [
+        "gap_id",
+        "previous_run_id",
+        "answer",
+        "sources",
+        "approval_reference",
+        "approved_by",
+        "resolution_id"
+      ],
+      "title": "KnowledgeResolution",
+      "type": "object"
+    },
+    "KnowledgeResolutionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Content",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "uri": {
+          "minLength": 1,
+          "title": "Uri",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri",
+        "sha256",
+        "content"
+      ],
+      "title": "KnowledgeResolutionSource",
+      "type": "object"
+    },
+    "KnowledgeRunBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "context_manifest_id": {
+          "pattern": "^ctx_[a-f0-9]{64}$",
+          "title": "Context Manifest Id",
+          "type": "string"
+        },
+        "project_id": {
+          "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "repository_ids": {
+          "items": {
+            "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Repository Ids",
+          "type": "array"
+        },
+        "requirement_id": {
+          "pattern": "^[a-z][a-zA-Z0-9_.:-]{0,159}$",
+          "title": "Requirement Id",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/TeamRole"
+        },
+        "run_id": {
+          "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "snapshot_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Snapshot Sha256",
+          "type": "string"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Id"
+        },
+        "team_id": {
+          "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Team Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "role",
+        "team_id",
+        "project_id",
+        "requirement_id",
+        "repository_ids",
+        "source_revision",
+        "context_manifest_id",
+        "snapshot_sha256"
+      ],
+      "title": "KnowledgeRunBinding",
+      "type": "object"
+    },
     "ProjectView": {
       "additionalProperties": false,
       "properties": {
@@ -335,6 +646,17 @@
         "id": {
           "title": "Id",
           "type": "string"
+        },
+        "knowledge_gap": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KnowledgeGapView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "next_action": {
           "title": "Next Action",

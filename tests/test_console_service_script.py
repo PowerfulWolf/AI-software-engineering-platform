@@ -616,6 +616,8 @@ def test_service_supervisor_never_signals_child_for_symlink_apply_state(
 
 def test_service_supervisor_does_not_retain_removed_runtime_value(tmp_path: Path) -> None:
     launcher, environment = _launcher(tmp_path)
+    # This scenario removes the file-only value, not an independently inherited value.
+    environment.pop("ASE_MYSQL_DSN", None)
     state = Path(environment["ASE_SERVICE_STATE_DIR"])
     config = tmp_path / "config" / "config.json"
     config.parent.mkdir()

@@ -148,10 +148,11 @@ ConsoleOperationStore.model_calls(operation_id: str) -> tuple[ModelCallDiagnosti
   during an unfinished call may leave no record. Old operations return an empty array;
   never backfill invented observations. Only Console-scoped structured calls are persisted,
   not arbitrary Coder/QA tool subprocesses or standalone CLI invocations.
-- Knowledge UI caches one section per `(project_id, requirement_id, checkpoint_sha256)`,
+- Knowledge UI caches one section per `(project_id, requirement_id, checkpoint_sha256, resolution_id)`,
   with at most 20 nearby sections. One in-flight GET, then toggle visibility; failed GETs
   replace the feedback and permit retry. Deduplicate by `gap_id`; polling/reopening the same
-  checkpoint retains drafts. Changing checkpoint creates a new section, and old asynchronous
+  pending checkpoint retains drafts. A new approved resolution invalidates the draft even when
+  the checkpoint hash is unchanged. Changing checkpoint creates a new section, and old asynchronous
   results cannot populate it. Cache eviction/reloading the page is not durable draft storage.
 - Long questions are ordinary wrapping paragraph text, not headings. Use numbered short
   card headings, explicit answer/source labels and one feedback area. All values use
@@ -209,3 +210,91 @@ leave these defects. Typed metadata plus an end-to-end fixture prevents diagnost
 checkpoint-keyed sections and concurrent-click tests prevent duplicate forms and cross-request
 responses. The shared structured client covers other upstream roles without changing their
 authority. This spec and its task PRD capture the contracts; no generated spec templates exist.
+
+## Scenario: approved knowledge remains visible after reload
+
+### 1. Scope / Trigger
+
+Knowledge approval is an immutable fact separate from Requirement continuation. A successful
+approval does not advance the WAITING_HUMAN checkpoint. Query/UI state must join both records;
+neither an unchanged checkpoint nor an old Operation means the answer needs approval again.
+
+### 2. Signatures
+
+```python
+KnowledgeGapView(gap: KnowledgeGap, resolution: KnowledgeResolution | None, is_current: bool)
+read_gap_view(records, gap, *, current_gap_id: str | None) -> KnowledgeGapView
+list_gap_views(project, requirement_id) -> tuple[KnowledgeGapView, ...]
+KnowledgeRecordStore(root, *, read_only: bool = False)
+```
+
+`GET /api/v1/admin/projects/{project_id}/requirements/{requirement_id}/knowledge-gaps`
+returns `KnowledgeGapView[]` (not the old bare `KnowledgeGap[]`).
+`RequestView.knowledge_gap` in `team-snapshot.schema.json` optionally carries the current view.
+`POST .../knowledge-resolutions` retains its existing request and immutable Resolution response.
+
+### 3. Contracts
+
+- Join gaps from both Requirement and Repository stores to `gap-resolutions[gap_id]` and the
+  matching canonical `resolutions[resolution_id]`. Verify content digests, exact gap ID,
+  previous run ID and Team/Project/Requirement ownership. Missing resolution means pending;
+  corrupted or mismatched resolution is an error, never a pending form or fabricated approval.
+- Read stores explicitly use `read_only=True`: no mkdir, publication, migration or repair.
+  `is_current` requires the current WAITING_HUMAN checkpoint's exact gap ID. History stays readable.
+- Snapshot polling includes approval facts even when checkpoint SHA is unchanged. Current
+  approval displays `解答已批准 · 待继续`, saved answer/source, no approval form, and explicit
+  continuation guidance. Historical gaps cannot offer approval/continuation actions.
+- A preserved IMPLEMENTING/QA child checkpoint cannot override a current knowledge wait.
+  A real active Console delivery Operation can show that explicit continuation is running.
+- Approval immediately refreshes detail and Operation guidance. Current read facts supersede
+  stale successful WAITING_HUMAN Operation text, without rewriting audit history or hiding a
+  latest failed continuation. Failed reads retain errors; they never imply success.
+- Use the single existing Requirement `继续交付` action, including
+  `expected_checkpoint_sha256`; do not add an unguarded duplicate in a cached knowledge card.
+  Approval, expand/reload and polling never submit continuation automatically.
+
+### 4. Validation & Error Matrix
+
+| Case | Result |
+|---|---|
+| Current gap, no resolution | One editable form; pending drafts survive unchanged polls |
+| Approved current gap, same checkpoint | Saved answer/source and wait-for-continue state; no form |
+| New current gap | Historical approved card read-only; only new gap gets a form |
+| Wrong owner, digest, gap/run lineage or missing canonical resolution | Admin GET 404; Team GET 503, no writes |
+| Missing root opened read-only / attempted publication | STORE_PATH / STORE_READ_ONLY; no directory created |
+| Approval replay / changed answer / obsolete gap | Existing idempotent 201 / 409 / 409 |
+
+### 5. Good / Base / Bad Cases
+
+Good: reload an approved `A`/`产品确认` answer and explicitly continue the unchanged checkpoint.
+Base: pending question stays editable until approved. Bad: a DOM-only success disappears on reload,
+or a new empty form asks the user to repeat an immutable approval.
+
+### 6. Tests Required
+
+- `tests/web_console/test_knowledge_resolution.py`: real stores, approve -> reopened API and
+  read-only snapshot, both gap storage locations, exact checkpoint and byte preservation,
+  schema validation, historical/current gap isolation and corrupted lineage rejection.
+- `tests/team_view/knowledge-gap.test.cjs`: reload and successful-submit reopening, same-hash
+  external approval, safe text, stale blocker/banner replacement, retained child precedence,
+  one exact-checkpoint continuation action that disappears while running.
+
+### 7. Wrong vs Correct
+
+Wrong: render a blank form from every immutable Gap, or cache solely by checkpoint SHA.
+Correct: render verified `gap + resolution + is_current`, cache by approval identity too,
+and keep approval and delivery continuation as separate human actions.
+
+### Bug analysis / prevention
+
+1. **Root category B/D/E**: the query omitted resolution facts and tests assumed an approval
+   success DOM represented durable state; checkpoint identity was incorrectly treated as all UI state.
+2. **Why a surface fix is insufficient**: hiding the old sentence or remembering a clicked button
+   cannot reconstruct approval after reload or from another browser. The query contract must change.
+3. **Prevention**: typed shared projection, canonical lineage checks, explicit read-only store mode
+   and persisted API + DOM regressions cover the complete chain.
+4. **Expansion**: Requirement badges, blocker panel, Operation banner, cached forms and child-stage
+   precedence consume the same approval facts. One existing continuation control avoids divergent
+   payloads and the former missing-checkpoint card action.
+5. **Capture**: this executable contract, read-side spec, operator guide and task verification.
+   There is no generated spec-template tree in this repository.

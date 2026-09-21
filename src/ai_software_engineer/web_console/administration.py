@@ -40,10 +40,11 @@ from ai_software_engineer.domain.model import (
     ensure_unique,
 )
 from ai_software_engineer.knowledge.administration import ApproveKnowledgeResolution
-from ai_software_engineer.knowledge.gaps import KnowledgeGap, KnowledgeResolution
+from ai_software_engineer.knowledge.gaps import KnowledgeResolution
 from ai_software_engineer.knowledge.index import KnowledgeIndexer
 from ai_software_engineer.knowledge.index_models import KnowledgeIndexJob, KnowledgeIndexStatus
 from ai_software_engineer.knowledge.mutation import knowledge_mutation_lock
+from ai_software_engineer.knowledge.views import KnowledgeGapView
 from ai_software_engineer.knowledge_documents import (
     KnowledgeDocumentId,
     KnowledgeDocumentManifest,
@@ -1061,10 +1062,10 @@ class LocalConsoleAdministration:
         except (OSError, ValueError) as error:
             raise AdministrationError("Project workspace is invalid") from error
 
-    def knowledge_gaps(self, project_id: str, requirement_id: str) -> tuple[KnowledgeGap, ...]:
-        from ai_software_engineer.knowledge.administration import list_gaps
+    def knowledge_gaps(self, project_id: str, requirement_id: str) -> tuple[KnowledgeGapView, ...]:
+        from ai_software_engineer.knowledge.administration import list_gap_views
 
-        return list_gaps(self._project(project_id), requirement_id)
+        return list_gap_views(self._project(project_id), requirement_id)
 
     def resolve_knowledge_gap(
         self, project_id: str, requirement_id: str, command: ApproveKnowledgeResolution

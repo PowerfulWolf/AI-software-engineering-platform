@@ -40,10 +40,16 @@ Delivery consultation 在最终 AgentRequest 构造前写入受预算约束的 C
 ## 知识缺口恢复
 
 缺少决定性事实时，Requirement 进入 WAITING_HUMAN 并记录 exact gap ID；Task 保持最近 checkpoint。
-当前提供本机管理 API，尚无专门的 Gap 审批表单。人工操作步骤：
+Console 的需求详情提供“知识缺口”表单。展开当前事项，填写解答与事实来源/决策依据，再点击
+“批准解答”。成功后显示“解答已批准 · 待继续”；重新打开页面仍展示原解答和来源，不需重复填写。
+批准不会自动恢复交付，下一步由用户点击需求的“继续交付”。如再次出现不同问题，仅新问题需要解答。
+历史 WAITING_HUMAN Operation 是当时的结果，不代表已保存的批准失效。
+
+等价的本机管理 API 操作步骤：
 
 1. 读取 `GET /api/v1/admin/projects/<project_id>/requirements/<requirement_id>/knowledge-gaps`，
-   核对当前 Requirement 的 gap ID、问题、来源与风险。
+   返回 `{gap, resolution?, is_current}` 列表，核对当前 Requirement 的 gap ID、问题、来源与风险。
+   `resolution` 存在即已批准；只处理 `is_current=true` 且尚无 resolution 的事项。
 2. 准备批准正文及来源。每个来源包含 `uri`、`content` 和该 content UTF-8 字节的 SHA-256。
    不允许密钥或敏感值进入解答。
 3. 通过可信本机 Console 向同级 `/knowledge-resolutions` 发送 POST：
@@ -58,7 +64,7 @@ Delivery consultation 在最终 AgentRequest 构造前写入受预算约束的 C
    }
    ```
 
-4. 对当前 exact gap 的批准成功返回 201。执行 `ase request resume <requirement_id>`；
+4. 对当前 exact gap 的批准成功返回 201。点击“继续交付”或执行 `ase request resume <requirement_id>`；
    平台保留旧 Gap、run、Context 和事件，用新 Context/run 恢复，不改变原知识选择或批准。
 5. 如需复用到未来需求，将 disposition 设为 `PROPOSE_LEARNING`，再在“学习改进”独立审批发布。
    Resolution 批准只生成 proposal，不直接激活 Spec 或安装 Skill。

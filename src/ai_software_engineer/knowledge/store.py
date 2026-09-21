@@ -24,10 +24,14 @@ class KnowledgeRecordStore:
     fully fsynced temporary inode exclusively, so concurrent changed replay cannot win.
     """
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, read_only: bool = False) -> None:
         self.root = root.absolute()
+        self._read_only = read_only
         self._check_ancestry()
-        self.root.mkdir(parents=True, exist_ok=True)
+        if not read_only:
+            self.root.mkdir(parents=True, exist_ok=True)
+        if not self.root.is_dir():
+            raise KnowledgeError("STORE_PATH")
         info = self.root.stat()
         self._identity = (info.st_dev, info.st_ino)
 
@@ -51,6 +55,8 @@ class KnowledgeRecordStore:
         return f"{namespace}-{digest(key)}.json"
 
     def put[T: DomainModel](self, namespace: str, key: str, record: T) -> T:
+        if self._read_only:
+            raise KnowledgeError("STORE_READ_ONLY")
         name = self._name(namespace, key)
         wire = record.to_wire()
         payload = json.dumps(
