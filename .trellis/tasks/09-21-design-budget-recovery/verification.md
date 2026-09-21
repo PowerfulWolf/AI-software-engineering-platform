@@ -15,7 +15,20 @@ check passed.
 
 ## Durable recovery
 
-The existing Requirement remains the source of truth. After the code commit, the local Console will
-receive one exact `RECOVER_DESIGN` operation bound to the checkpoint SHA shown by the live snapshot.
-The operation ID, result, successor checkpoint and model-call diagnostics will be recorded here only
-after the service has durably completed; no sidecar or database row is edited directly.
+The existing Requirement remains the source of truth. The local Console received the following
+formal Operations; no sidecar or database row was edited directly:
+
+- `operation_a727231d8f17d3af1fbb39f4a171fd1d` — `RECOVER_DESIGN`, exact input checkpoint
+  `22f87450416d9202ce2592eabe71e8259ab37e014f101e4c647e3b645daae693`. It preserved the failed
+  Operation record and appended the recovery checkpoint; the first execution then failed before a
+  provider call because the manually started Console lacked the configured runtime environment.
+- `operation_ffd70daf7a63492dc32478780d47bcc0` — `CONTINUE_DELIVERY`, exact successor checkpoint
+  `b73fc4ddd1ec9e6ad726fead30928b63582108565503da56ee5b667351299128`. After restarting the
+  Console with the existing `runtime.env`, the Designer knowledge route made two real calls; both
+  provider routes returned HTTP 504 `PROVIDER_UNAVAILABLE`. The Operation is durably `FAILED` with
+  that safe error, and the Requirement remains `DESIGNING` at checkpoint
+  `c898a45c3a8ea95321909c990b4830d78826d25e798cf39ece6f75cb4c465834`, attempts `design=2`.
+
+The approved ProductSpec, approval, dialogue, all earlier knowledge waits/resolutions, both failed
+Operations and every checkpoint remain available. The provider 504 is an external route failure;
+no further attempt was spent after the recorded failure.
