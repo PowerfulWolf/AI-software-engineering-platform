@@ -1,0 +1,8 @@
+{
+  "id": "09-21-chinese-knowledge-confirmations",
+  "title": "Use Chinese descriptions for knowledge confirmations",
+  "status": "in_progress",
+  "phase": "awaiting_independent_review",
+  "baseline": "f3bc3dc",
+  "authorization": "User requested that all knowledge-confirmation descriptions use Chinese."
+}

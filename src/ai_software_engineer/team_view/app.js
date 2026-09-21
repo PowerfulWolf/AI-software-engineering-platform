@@ -3759,8 +3759,8 @@ async function decideLearning(proposal, action, target) {
         operator_id: "console-user",
         rationale:
           action === "APPROVE"
-            ? "Approved in the Web Console after reviewing source evidence."
-            : "Rejected in the Web Console after reviewing source evidence.",
+            ? "已在 Web Console 中核对来源证据并批准。"
+            : "已在 Web Console 中核对来源证据并拒绝。",
       }),
     });
     await loadKnowledge();

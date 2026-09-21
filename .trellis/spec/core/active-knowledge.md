@@ -83,6 +83,12 @@ same Task resumes at its last delivery checkpoint. Bad: translating a gap into a
 failure, or changing the frozen knowledge selection to resolve it. Tests must assert both
 the persisted enriched Context and fresh-process recovery.
 
+Human-facing Knowledge Gap descriptions are Chinese application facts. The assessment prompt
+requires Simplified Chinese for `gap_question`; before publication, a non-Chinese model question
+is replaced by the bounded Chinese fallback instead of being translated or trusted. Platform-owned
+`required_decision`, impact and routing reason strings are Chinese as well. Existing immutable gaps
+are not rewritten, and the Console keeps compatibility for the former English fixed decision text.
+
 `KnowledgeDeliveryGate.begin_task` freezes a one-time `DeliveryWorkflowAdmission` before new
 role work. For an existing non-NEW Task it records exact already-sealed legacy Artifact IDs and
 digests. Only those artifacts may resume with the original native gates and unchanged Context;

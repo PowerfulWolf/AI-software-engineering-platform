@@ -7,7 +7,7 @@ import pytest
 from ai_software_engineer.agents.structured import StructuredModelResult
 from ai_software_engineer.domain.enums import TeamRole
 from ai_software_engineer.knowledge.agents import KnowledgeAwareStructuredClient
-from ai_software_engineer.knowledge.gaps import KnowledgeGapRaised
+from ai_software_engineer.knowledge.gaps import KnowledgeGapRaised, KnowledgeGapRouting
 from ai_software_engineer.knowledge.models import KnowledgeEvidence
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from tests.knowledge.test_retrieval_contract import binding, document, snapshot
@@ -16,6 +16,7 @@ from tests.knowledge.test_retrieval_contract import binding, document, snapshot
 class Model:
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.instructions: dict[str, str] = {}
 
     def complete(
         self,
@@ -28,6 +29,7 @@ class Model:
     ) -> StructuredModelResult:
         name = str(output_schema["title"])
         self.calls.append(name)
+        self.instructions[name] = instructions
         if name == "KnowledgeIntent":
             return StructuredModelResult(payload={"queries": ["original payment"]}, duration_ms=1)
         if name == "KnowledgeAssessment":
@@ -80,9 +82,8 @@ def test_real_composition_seam_consults_and_replays(tmp_path: Path, role: TeamRo
 def test_unknown_stops_before_final_role_call(tmp_path: Path) -> None:
     frozen = snapshot()
     model = Model()
-    client = KnowledgeAwareStructuredClient(
-        model, binding(frozen), frozen, KnowledgeRecordStore(tmp_path)
-    )
+    records = KnowledgeRecordStore(tmp_path)
+    client = KnowledgeAwareStructuredClient(model, binding(frozen), frozen, records)
     with pytest.raises(KnowledgeGapRaised) as error:
         client.complete(
             instructions="Act",
@@ -91,4 +92,10 @@ def test_unknown_stops_before_final_role_call(tmp_path: Path) -> None:
             timeout_seconds=10,
         )
     assert error.value.gap.evidence_ids
+    assert error.value.gap.question == "请补充当前工作缺少的关键事实。请说明可核验的依据。"
+    assert error.value.gap.required_decision == "请提供已核实的信息。请确认将此解答用于当前需求。"
+    assert error.value.gap.impact == "角色缺少可靠依据。无法安全继续。"
+    route = records.get("gap-routes", error.value.gap.gap_id, KnowledgeGapRouting)
+    assert route.rationale == "关键事实需要经过核实并由人工确认。"
+    assert "人工确认问题必须使用简体中文" in model.instructions["KnowledgeAssessment"]
     assert model.calls == ["KnowledgeIntent", "KnowledgeAssessment"]

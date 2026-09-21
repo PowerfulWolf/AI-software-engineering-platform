@@ -1409,6 +1409,10 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   await approveLearning.events.click();
   assert.equal(learningDecisions[0].action, "APPROVE");
   assert.equal(learningDecisions[0].target, "SPEC");
+  assert.equal(
+    learningDecisions[0].rationale,
+    "已在 Web Console 中核对来源证据并批准。",
+  );
   await get("nav-settings").events.click();
   assert.equal(get("scope-label").textContent, "平台级");
   assert.equal(get("context-controls").hidden, true);
