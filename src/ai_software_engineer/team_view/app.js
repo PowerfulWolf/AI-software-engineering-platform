@@ -23,6 +23,7 @@ let runtimeStatusSnapshot = null;
 let runtimeStatusError = null;
 let runtimeStatusLoading = false;
 let administrationNotice = null;
+let operationNotice = null;
 let composing = false;
 let pendingConfirmation = null;
 let actionSerial = 0;
@@ -43,15 +44,15 @@ let knowledgeImportMode = null;
 let editingKnowledgeDocument = null;
 let editingSpecDocument = null;
 const knowledgeGapSections = new Map();
-const dismissedOperationIds = new Set(
+const acknowledgedOperationNoticeKeys = new Set(
   (() => {
     try {
       const stored = globalThis.localStorage?.getItem(
-        "ase-dismissed-console-operations",
+        "ase-acknowledged-operation-notices",
       );
       const parsed = stored ? JSON.parse(stored) : [];
       return Array.isArray(parsed) && parsed.every((value) => typeof value === "string")
-        ? parsed.slice(-100)
+        ? parsed.slice(-200)
         : [];
     } catch {
       return [];
@@ -1396,6 +1397,185 @@ function confirmMutation(title, message, confirmText, action) {
   pendingConfirmation = { title, message, confirmText, action };
   renderComposer();
 }
+function operationNoticeKey(operation) {
+  const state = ["QUEUED", "RUNNING"].includes(operation.status)
+    ? "ACTIVE"
+    : operationNeedsHumanAttention(operation)
+      ? "ACTION_REQUIRED"
+      : operation.status;
+  return `${operation.operation_id}:${state}`;
+}
+function persistAcknowledgedOperationNotices() {
+  try {
+    globalThis.localStorage?.setItem(
+      "ase-acknowledged-operation-notices",
+      JSON.stringify([...acknowledgedOperationNoticeKeys].slice(-200)),
+    );
+  } catch {
+    // Browser storage is optional; the current page still acknowledges the dialog.
+  }
+}
+function acknowledgeOperationNotice(notice) {
+  if (notice?.key) {
+    acknowledgedOperationNoticeKeys.add(notice.key);
+    persistAcknowledgedOperationNotices();
+  }
+  if (operationNotice === notice) operationNotice = null;
+}
+function notificationJump(notice) {
+  acknowledgeOperationNotice(notice);
+  if (notice.target) {
+    page = "requests";
+    updateNavigation();
+    showDetail("request", notice.target);
+    return;
+  }
+  if (notice.page) {
+    page = notice.page;
+    updateNavigation();
+    render();
+    return;
+  }
+  renderNotification();
+}
+function operationNoticeFor(operation) {
+  const target = operationTarget(operation);
+  const needsHumanAttention = operationNeedsHumanAttention(operation);
+  const request = snapshot && target ? requestById(target) : null;
+  const knowledgeApproved =
+    needsHumanAttention &&
+    operation.result?.stage === "WAITING_HUMAN" &&
+    request &&
+    operation.result.checkpoint_sha256 === request.checkpoint_sha256 &&
+    approvedKnowledge(request);
+  if (["QUEUED", "RUNNING"].includes(operation.status))
+    return {
+      key: operationNoticeKey(operation),
+      operationId: operation.operation_id,
+      state: "ACTIVE",
+      kind: "info",
+      title: `${label(operation.intent.action)} · ${label(operation.status)}`,
+      message:
+        operation.status === "QUEUED"
+          ? "操作已安全接收，正在等待 Manager 执行。关闭弹窗不会中断任务。"
+          : "交付流程正在执行。你可以关闭弹窗或页面，任务会继续运行。",
+    };
+  if (["FAILED", "INTERRUPTED"].includes(operation.status))
+    return {
+      key: operationNoticeKey(operation),
+      operationId: operation.operation_id,
+      state: operation.status,
+      kind: "error",
+      title: `${label(operation.intent.action)} · ${label(operation.status)}`,
+      message: operation.error_summary || "操作未完成，请查看需求详情后处理。",
+      target,
+      jumpLabel: target ? "打开需求工作区" : null,
+    };
+  if (needsHumanAttention)
+    return {
+      key: operationNoticeKey(operation),
+      operationId: operation.operation_id,
+      state: "ACTION_REQUIRED",
+      kind: "warning",
+      title: `${label(operation.intent.action)} · 需要处理`,
+      message: knowledgeApproved
+        ? "知识解答已批准。请进入需求工作区继续原需求。"
+        : "操作需要你的处理，具体原因和下一步已收口到需求详情。",
+      target,
+      jumpLabel: target ? "打开需求工作区" : null,
+    };
+  return null;
+}
+function systemOperationNotice() {
+  if (consoleAvailable === false)
+    return {
+      key: "system:console-read-only",
+      kind: "error",
+      title: "交付控制不可用",
+      message: "当前连接的是只读看板。请启动后台 Web Console 后再创建或继续需求。",
+      page: "status",
+      jumpLabel: "查看运行状态",
+    };
+  if (!operationsAvailable)
+    return {
+      key: "system:operations-unavailable",
+      kind: "error",
+      title: "交付记录读取失败",
+      message: "交付操作记录暂时无法读取；恢复连接后可继续操作。",
+    };
+  if (consoleAvailable === true && consoleDeliveryReady === false)
+    return {
+      key: "system:delivery-not-ready",
+      kind: "warning",
+      title: "交付运行时尚未就绪",
+      message: "请先完成设置并应用配置，再创建或继续需求。",
+      page: "settings",
+      jumpLabel: "前往设置",
+    };
+  if (snapshot && consoleTeamId && snapshot.team_id !== consoleTeamId)
+    return {
+      key: "system:team-mismatch",
+      kind: "error",
+      title: "Team 绑定不一致",
+      message: "当前后台服务未绑定这个 Team；此工作台暂时只能查看，不能提交交付操作。",
+      page: "status",
+      jumpLabel: "查看运行状态",
+    };
+  return null;
+}
+function renderNotification() {
+  const panel = document.getElementById("notification");
+  panel.replaceChildren();
+  const notice = operationNotice ||
+    (administrationNotice?.page === page
+      ? {
+          kind: /失败|无法|错误/.test(administrationNotice.text) ? "error" : "info",
+          title: /失败|无法|错误/.test(administrationNotice.text)
+            ? "操作失败"
+            : "操作提示",
+          message: administrationNotice.text,
+          administration: true,
+        }
+      : null);
+  panel.hidden = !notice;
+  if (!notice) return;
+  panel.className = "modal-backdrop notification-backdrop";
+  const dialog = el("section", undefined, "modal-dialog operation-notice-dialog");
+  dialog.setAttribute("role", notice.kind === "error" ? "alertdialog" : "dialog");
+  dialog.setAttribute("aria-modal", "true");
+  dialog.setAttribute("aria-label", notice.title);
+  const header = el("div", undefined, "settings-result-header");
+  header.append(
+    el(
+      "span",
+      notice.kind === "error" ? "!" : notice.kind === "warning" ? "i" : "✓",
+      `settings-result-icon ${notice.kind === "error" ? "error" : notice.kind === "warning" ? "warning" : "success"}`,
+    ),
+    el("div", notice.title, "section-title"),
+  );
+  const close = button(
+    "知道了",
+    () => {
+      if (notice.administration) administrationNotice = null;
+      else acknowledgeOperationNotice(notice);
+      renderNotification();
+    },
+    notice.jumpLabel ? "" : "primary",
+  );
+  const actions = el("div", undefined, "modal-actions");
+  actions.append(close);
+  if (notice.jumpLabel)
+    actions.append(
+      button(notice.jumpLabel, () => notificationJump(notice), "primary"),
+    );
+  dialog.append(
+    header,
+    el("p", notice.message, "settings-result-message"),
+    actions,
+  );
+  panel.append(dialog);
+  close.focus();
+}
 async function submitOperation(intent) {
   try {
     if (!canControlCurrentTeam())
@@ -1420,66 +1600,55 @@ async function submitOperation(intent) {
       ),
       payload,
     ];
+    // A newly accepted delivery action supersedes any older page-level
+    // administration feedback. Do not reveal that stale dialog after the
+    // operation notice is acknowledged.
+    administrationNotice = null;
     renderOperationStatus();
     renderDetail();
     return payload;
   } catch (error) {
-    const panel = document.getElementById("operations");
-    panel.replaceChildren(
-      el(
-        "div",
-        error instanceof Error ? error.message : "操作未被接受。",
-        "operation-error",
-      ),
-    );
+    operationNotice = {
+      kind: "error",
+      title: `${label(intent.action)} · 操作未被接受`,
+      message: error instanceof Error ? error.message : "操作未被接受。",
+    };
+    renderNotification();
     return null;
   }
 }
 function renderOperationStatus() {
   const panel = document.getElementById("operations");
   panel.replaceChildren();
-  panel.hidden = page !== "requests";
-  if (panel.hidden) return;
-  if (consoleAvailable === false) {
-    panel.append(
-      el(
-        "div",
-        "当前连接的是只读看板。请启动后台 Web Console 后再创建或继续需求。",
-        "operation-error",
-      ),
-    );
+  panel.hidden = true;
+  if (page !== "requests") return;
+  const systemNotice = systemOperationNotice();
+  const systemKeys = [...acknowledgedOperationNoticeKeys].filter((key) =>
+    key.startsWith("system:"),
+  );
+  if (!systemNotice) {
+    for (const key of systemKeys) acknowledgedOperationNoticeKeys.delete(key);
+    if (systemKeys.length) persistAcknowledgedOperationNotices();
+    if (operationNotice?.key?.startsWith("system:")) {
+      operationNotice = null;
+      renderNotification();
+    }
+  }
+  if (
+    systemNotice &&
+    (!operationNotice || operationNotice.state === "ACTIVE") &&
+    !acknowledgedOperationNoticeKeys.has(systemNotice.key)
+  ) {
+    operationNotice = systemNotice;
+    renderNotification();
     return;
   }
-  if (!operationsAvailable) {
-    panel.append(el("div", "交付操作记录暂时无法读取；恢复连接后可继续操作。", "operation-error"));
-    return;
-  }
-  if (consoleAvailable === true && consoleDeliveryReady === false) {
-    panel.append(
-      el(
-        "div",
-        "控制台正在使用默认或待配置运行时。请先完成设置并重启，再创建或继续需求。",
-        "operation-error",
-      ),
-    );
-    return;
-  }
-  if (snapshot && consoleTeamId && snapshot.team_id !== consoleTeamId) {
-    panel.append(
-      el(
-        "div",
-        "当前后台服务未绑定这个 Team；此工作台暂时只能查看，不能提交交付操作。",
-        "operation-error",
-      ),
-    );
-    return;
-  }
+  if (systemNotice) return;
   const visible = [...operations]
     .filter((operation) => {
       if (
-        (operation.status === "SUCCEEDED" &&
-          !operationNeedsHumanAttention(operation)) ||
-        dismissedOperationIds.has(operation.operation_id)
+        operation.status === "SUCCEEDED" &&
+        !operationNeedsHumanAttention(operation)
       )
         return false;
       if (
@@ -1498,76 +1667,37 @@ function renderOperationStatus() {
       );
     })
     .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
-    .slice(0, 5);
-  if (!visible.length) {
-    panel.hidden = true;
+    .map(operationNoticeFor)
+    .filter(Boolean);
+  if (
+    operationNotice?.state === "ACTIVE" &&
+    !visible.some(
+      (notice) =>
+        notice.operationId === operationNotice.operationId &&
+        notice.state === "ACTIVE",
+    )
+  ) {
+    operationNotice = null;
+    renderNotification();
+  }
+  const actionable = visible.find(
+    (notice) =>
+      notice.state !== "ACTIVE" &&
+      !acknowledgedOperationNoticeKeys.has(notice.key),
+  );
+  if (operationNotice?.state === "ACTIVE" && actionable) {
+    operationNotice = actionable;
+    renderNotification();
     return;
   }
-  for (const operation of visible) {
-    const needsHumanAttention = operationNeedsHumanAttention(operation);
-    const request = snapshot ? requestById(operationTarget(operation)) : null;
-    const knowledgeApproved = needsHumanAttention && operation.result?.stage === "WAITING_HUMAN" &&
-      request && operation.result.checkpoint_sha256 === request.checkpoint_sha256 && approvedKnowledge(request);
-    const card = el("div", undefined, "operation-status");
-    const row = el("div", undefined, "row");
-    const state = el("div", undefined, "operation-status-actions");
-    state.append(
-      badge(knowledgeApproved ? "KNOWLEDGE_APPROVED" : needsHumanAttention ? operation.result.stage : operation.status),
+  if (!operationNotice) {
+    const next = visible.find(
+      (notice) => !acknowledgedOperationNoticeKeys.has(notice.key),
     );
-    if (
-      ["FAILED", "INTERRUPTED"].includes(operation.status) ||
-      needsHumanAttention
-    )
-      state.append(
-        button("关闭", () => {
-          dismissedOperationIds.add(operation.operation_id);
-          try {
-            globalThis.localStorage?.setItem(
-              "ase-dismissed-console-operations",
-              JSON.stringify([...dismissedOperationIds].slice(-100)),
-            );
-          } catch {
-            // Browser storage is optional; the current page can still dismiss it.
-          }
-          renderOperationStatus();
-        }),
-      );
-    row.append(el("strong", label(operation.intent.action)), state);
-    card.append(row);
-    if (["QUEUED", "RUNNING"].includes(operation.status))
-      card.append(
-        el(
-          "p",
-          operation.status === "QUEUED"
-            ? "已安全接单，等待 Manager 执行。"
-            : "交付流程正在执行；可以刷新或关闭页面。",
-          "muted",
-        ),
-      );
-    const target = operationTarget(operation);
-    if (
-      target &&
-      (needsHumanAttention || ["FAILED", "INTERRUPTED"].includes(operation.status))
-    )
-      card.append(
-        el(
-          "p",
-          knowledgeApproved ? "知识解答已批准。打开需求工作区后点击“继续交付”。"
-            : "操作需要处理，具体原因已归入需求详情的“阻塞信息”。",
-          "muted",
-        ),
-      );
-    else if (operation.error_summary)
-      card.append(el("div", operation.error_summary, "blocker"));
-    if (target)
-      card.append(
-        button("打开需求工作区", () => {
-          page = "requests";
-          updateNavigation();
-          showDetail("request", target);
-        }),
-      );
-    panel.append(card);
+    if (next) {
+      operationNotice = next;
+      renderNotification();
+    }
   }
 }
 function agentWorkGroup(work) {
@@ -2264,8 +2394,6 @@ function deliveryResult(panel, request) {
 }
 function renderRequests(content) {
   content.className = "request-master-panel";
-  if (administrationNotice?.page === "requests")
-    content.append(el("div", administrationNotice.text, "admin-notice"));
   const top = el("div", undefined, "row request-heading");
   const actions = el("div", undefined, "request-heading-actions");
   actions.append(
@@ -2662,8 +2790,6 @@ function renderKnowledge(content) {
     administrationUnavailable(content);
     return;
   }
-  if (administrationNotice?.page === "knowledge")
-    content.append(el("div", administrationNotice.text, "admin-notice"));
 
   const descriptions = {
     background:
@@ -3901,8 +4027,6 @@ function renderSettings(content) {
     administrationUnavailable(content);
     return;
   }
-  if (administrationNotice?.page === "settings")
-    content.append(el("div", administrationNotice.text, "admin-notice"));
   if (consoleDeliveryReady === false)
     content.append(
       el(
@@ -5191,6 +5315,7 @@ function render() {
   else renderStatus(content);
   renderComposer();
   renderOperationStatus();
+  renderNotification();
   renderDetail();
   syncDeliveryControls();
   for (const node of document.querySelectorAll("details"))

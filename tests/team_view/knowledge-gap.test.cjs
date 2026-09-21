@@ -191,8 +191,12 @@ test("operation guidance remains readable if the Team snapshot is unavailable", 
     operations = [{operation_id: "op-old", status: "SUCCEEDED", intent: {action: "CONTINUE_DELIVERY", delivery_id: "r1", project_id: "project_test"}, result: {delivery_id: "r1", stage: "WAITING_HUMAN", checkpoint_sha256: "checkpoint-a"}, updated_at: "2026-09-21"}];
     renderOperationStatus();
   `, h.context));
-  assert.match(text(h.get("operations")), /等待人工/);
-  assert.doesNotMatch(text(h.get("operations")), /解答已批准/);
+  assert.equal(h.get("operations").hidden, true);
+  assert.match(text(h.get("notification")), /继续交付.*需要处理/);
+  assert.doesNotMatch(text(h.get("notification")), /解答已批准/);
+  assert.ok(all(h.get("notification")).some(
+    n => n.tag === "button" && n.textContent === "打开需求工作区",
+  ));
 });
 
 test("opening a stale pending entry echoes the saved answer and immediately confirms its state", async () => {

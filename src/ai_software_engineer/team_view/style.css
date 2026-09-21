@@ -1735,6 +1735,19 @@ main[data-page="requests"] .page-context {
   padding: 80px 18px 30px;
   background: rgba(20, 35, 55, 0.48);
 }
+#notification.modal-backdrop {
+  position: fixed;
+  z-index: 40;
+  inset: 0;
+  display: grid;
+  place-items: start center;
+  overflow-y: auto;
+  padding: 80px 18px 30px;
+  background: rgba(20, 35, 55, 0.48);
+}
+.operation-notice-dialog {
+  width: min(520px, 100%);
+}
 .modal-dialog {
   width: min(620px, 100%);
   padding: 22px 24px;
@@ -1771,6 +1784,10 @@ main[data-page="requests"] .page-context {
 .settings-result-icon.error {
   background: #fff0e2;
   color: #9a4812;
+}
+.settings-result-icon.warning {
+  background: #fff5d9;
+  color: #8a5b00;
 }
 .settings-result-message {
   margin: 16px 0 4px;

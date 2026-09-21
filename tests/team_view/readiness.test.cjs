@@ -387,7 +387,8 @@ test("simultaneous Team and Operations failure revokes existing delivery control
   assert.equal(vm.runInContext("canControlCurrentTeam()", ui.context), false);
   assert.equal(ui.get("project-creator").hidden, true);
   assert.equal(submit.disabled, true);
-  assert.match(text(ui.get("operations")), /交付操作记录暂时无法读取/);
+  assert.equal(ui.get("operations").hidden, true);
+  assert.match(text(ui.get("notification")), /交付操作记录暂时无法读取/);
   assert.equal(descendants(ui.get("composer")).find((node) => node.tag === "input"), name);
   assert.equal(name.value, "Unsaved Requirement");
   ui.state.teamFailure = false;
@@ -396,7 +397,7 @@ test("simultaneous Team and Operations failure revokes existing delivery control
   assert.equal(vm.runInContext("canControlCurrentTeam()", ui.context), true);
   assert.equal(ui.get("project-creator").hidden, false);
   assert.equal(submit.disabled, false);
-  assert.doesNotMatch(text(ui.get("operations")), /交付操作记录暂时无法读取/);
+  assert.doesNotMatch(text(ui.get("notification")), /交付操作记录暂时无法读取/);
   assert.equal(descendants(ui.get("composer")).find((node) => node.tag === "input"), name);
   assert.equal(name.value, "Unsaved Requirement");
 });

@@ -1200,7 +1200,11 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   assert.doesNotMatch(text(get("composer")), /维护方式/);
   await backgroundForm.events.submit({ preventDefault() {} });
   assert.equal(knowledgeImports.length, 2);
-  assert.match(text(get("content")), /已接收 2 份背景知识/);
+  assert.doesNotMatch(text(get("content")), /已接收 2 份背景知识/);
+  assert.match(text(get("notification")), /已接收 2 份背景知识/);
+  await descend(get("notification")).find(
+    (node) => node.tag === "button" && node.textContent === "知道了",
+  ).events.click();
   assert.match(text(get("content")), /知识解析与索引/);
   assert.match(text(get("content")), /等待解析/);
   assert.match(text(get("content")), /解析失败/);
@@ -1217,7 +1221,10 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
       document_ids: ["knowledge_document_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
     },
   ]);
-  assert.match(text(get("content")), /无需重启/);
+  assert.match(text(get("notification")), /无需重启/);
+  await descend(get("notification")).find(
+    (node) => node.tag === "button" && node.textContent === "知道了",
+  ).events.click();
   const refreshedImportBackgroundKnowledge = descend(get("content")).find(
     (node) => node.tag === "button" && node.textContent === "导入背景知识",
   );
@@ -1275,7 +1282,10 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     knowledgeUpdateBodies[1],
     "# Edited project guide\n\nSaved in the browser.\n",
   );
-  assert.match(text(get("content")), /背景知识更新已排队/);
+  assert.match(text(get("notification")), /背景知识更新已排队/);
+  await descend(get("notification")).find(
+    (node) => node.tag === "button" && node.textContent === "知道了",
+  ).events.click();
   const deleteKnowledge = descend(get("content")).find(
     (node) => node.tag === "button" && node.textContent === "删除",
   );
@@ -1950,7 +1960,11 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     name: "跨仓登录升级",
     repository_roots: ["/backend/module-a", "/frontend"],
   });
-  assert.match(text(get("operations")), /等待 Manager/);
+  assert.equal(get("operations").hidden, true);
+  assert.match(text(get("notification")), /等待 Manager/);
+  await descend(get("notification")).find(
+    (node) => node.tag === "button" && node.textContent === "知道了",
+  ).events.click();
   fixture.tasks.slice(0, 2).forEach((task) => {
     task.status = "BLOCKED";
     task.terminal = true;
@@ -1969,6 +1983,10 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     expected_checkpoint_sha256: "a".repeat(64),
   });
   assert.doesNotMatch(text(get("detail")), /a{64}/);
+  assert.match(text(get("notification")), /继续交付.*已重新排队/);
+  await descend(get("notification")).find(
+    (node) => node.tag === "button" && node.textContent === "知道了",
+  ).events.click();
 
   fixture.requests[0].stage = "BLOCKED";
   fixture.requests[0].blocker = "Old joint blocker";
@@ -1994,6 +2012,11 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   });
   storedOperations[1].status = "RUNNING";
   await interval.fn();
+  assert.equal(
+    get("notification").hidden,
+    true,
+    "QUEUED to RUNNING does not reopen an acknowledged active-operation dialog",
+  );
   assert.match(text(get("content")), /进行中 1/);
   assert.match(text(get("content")), /阻塞中 0/);
   const activeRequirementCard = descend(get("content")).find(
@@ -2120,11 +2143,11 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   await interval.fn();
   assert.doesNotMatch(text(get("operations")), /No automatic continuation is available/);
   assert.match(
-    text(get("operations")),
-    /具体原因已归入需求详情的“阻塞信息”/,
-    "the operation area points to the one authoritative blocker surface",
+    text(get("notification")),
+    /具体原因和下一步已收口到需求详情/,
+    "the operation dialog points to the one authoritative blocker surface",
   );
-  const openRequirementWorkspace = descend(get("operations")).find(
+  const openRequirementWorkspace = descend(get("notification")).find(
     (node) => node.tag === "button" && node.textContent === "打开需求工作区",
   );
   await openRequirementWorkspace.events.click();
@@ -2198,9 +2221,9 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   storedOperations.push(olderBlocked);
   await interval.fn();
   assert.equal(
-    text(get("operations")).match(/具体原因已归入需求详情的“阻塞信息”/g)?.length,
-    1,
-    "only the latest result that needs human attention is shown per Requirement",
+    get("notification").hidden,
+    true,
+    "an acknowledged latest result and its older duplicate do not reopen a notification",
   );
   storedOperations.pop();
 
@@ -2311,12 +2334,13 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   storedOperations[3].updated_at = "2026-09-05T01:00:09Z";
   storedOperations[3].error_summary = "Provider unavailable";
   await interval.fn();
-  const closeFailure = descend(get("operations")).find(
-    (node) => node.tag === "button" && node.textContent === "关闭",
+  assert.match(text(get("notification")), /Provider unavailable/);
+  const closeFailure = descend(get("notification")).find(
+    (node) => node.tag === "button" && node.textContent === "知道了",
   );
-  assert.ok(closeFailure, "a durable failed operation can be dismissed from the page");
+  assert.ok(closeFailure, "a durable failed operation can be dismissed from its dialog");
   await closeFailure.events.click();
-  assert.doesNotMatch(text(get("operations")), /Provider unavailable/);
+  assert.doesNotMatch(text(get("notification")), /Provider unavailable/);
   vm.runInContext('showDetail("request","r1")', context);
   assert.ok(
     descend(get("detail")).find(
@@ -2415,7 +2439,13 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     ),
     false,
   );
-  assert.match(text(get("operations")), /待配置运行时/);
+  assert.equal(get("operations").hidden, true);
+  assert.match(text(get("notification")), /交付运行时尚未就绪/);
+  assert.ok(
+    descend(get("notification")).find(
+      (node) => node.tag === "button" && node.textContent === "前往设置",
+    ),
+  );
   await get("nav-settings").events.click();
   assert.equal(
     descend(get("content")).some(

@@ -182,16 +182,17 @@ production_console_app(
   已完成/未来角色不得同时显示为运行。
 - DONE 只展示已经由 durable facts 证明的 candidate commit、可唯一定位的 branch 和验证证据。
   v0.1 不自动 merge、push 或 deploy。
-- FAILED/INTERRUPTED Operation 是不可变审计事实，但通知卡不是永久页面状态。用户可在浏览器关闭
-  该卡；同一 Requirement/动作出现更新的成功 Operation 后，旧失败卡自动隐藏。关闭只写入有界的
-  本地 UI 偏好，不修改 Operation 日志、Delivery checkpoint 或错误证据。
+- Operation 是短暂页面级通知，不是永久页面模块。`#operations` 保留兼容边界但不得渲染常驻卡片；
+  `QUEUED/RUNNING` 首次出现时弹出一次可关闭通知，正常完成后自动关闭。`FAILED/INTERRUPTED` 或需要
+  人工处理的结果必须用新的终态通知替换旧活动通知。关闭只写入有界本地 UI 偏好，不修改不可变的
+  Operation 日志、Delivery checkpoint 或错误证据。
 - `SUCCEEDED` 只表示 Manager 命令已完整返回，不等于 Delivery 已推进。若 result stage 仍是
-  `WAITING_HUMAN/BLOCKED/FAILED` 且没有可批准计划，需求页必须保留可关闭的结果卡并显示 safe
-  `next_action`；同一 Requirement 只显示最新一张需要人工关注的成功结果，避免历史阻塞卡堆叠。
+  `WAITING_HUMAN/BLOCKED/FAILED` 且没有可批准计划，弹窗必须显示 safe `next_action`；同一
+  Requirement 只提示最新一项需要人工关注的结果，避免历史通知重复弹出。
 - 阻塞原因只在 Requirement 详情的“阻塞信息”同级 section 展示。该 section 合并相同子仓原因，
   按“当前阻塞 / 最近一次恢复 / 建议操作”呈现，并把已知内部英文状态转换为面向用户的说明。
-  顶部 Operation 卡只提示前往该 section；“打开需求工作区”必须切换到需求页、选中 exact target
-  Requirement 并滚动到详情。Team 队列卡和 Requirement 列表卡不得重复完整阻塞文本。
+  Operation 通知只在能够精确定位 Requirement 时提供“打开需求工作区”；该按钮必须切换到需求页、
+  选中 exact target Requirement 并滚动到详情。Team 队列卡和 Requirement 列表卡不得重复完整阻塞文本。
 - `ase request`、`verify-*` 和底层 Runtime 保留作运维/诊断/break-glass，不是 README 的日常入口。
 
 ## 4. Validation & Error Matrix
@@ -233,10 +234,13 @@ production_console_app(
 | Recovery/verification approval required | SUCCEEDED Operation carries safe facts plus exact hidden plan digest |
 | Host exits during RUNNING | next startup appends INTERRUPTED; never silently replay |
 | Executor raises an unexpected exception | terminal FAILED with generic safe summary; no traceback in browser |
-| User closes a FAILED/INTERRUPTED notification | hide the card locally; keep durable Operation query/audit unchanged |
-| Later success for same action and Requirement target | suppress the older failure card automatically |
-| SUCCEEDED continue returns BLOCKED/FAILED without approval | keep the latest dismissible card and show its safe next action; never appear unresponsive |
-| Same blocker appears on parent, child and latest Operation | one consolidated blocker section; operation card only links to it |
+| User closes a FAILED/INTERRUPTED notification | hide the dialog locally; keep durable Operation query/audit unchanged |
+| `QUEUED` changes to `RUNNING` after the active notice was acknowledged | do not reopen the same logical active notice |
+| Active Operation completes normally | close its transient dialog automatically; do not leave a success card on the page |
+| Active Operation later fails or needs human action | replace the stale active dialog with the newest terminal/action-required dialog |
+| Later success for same action and Requirement target | suppress the older failure dialog automatically |
+| SUCCEEDED continue returns BLOCKED/FAILED without approval | show the latest dismissible dialog and its safe next action; never appear unresponsive |
+| Same blocker appears on parent, child and latest Operation | one consolidated blocker section; operation dialog only links to it |
 | Operation shortcut targets a Requirement from another visible tab | switch to Requirements, select exact target and scroll its detail into view |
 | Missing production config/MySQL/team | startup/read fails safely; no fake workspace or data |
 | Foreign Host/Origin, non-JSON or oversized body | 403 / 415 / 413 before command execution |
@@ -265,8 +269,9 @@ production_console_app(
   粘贴截图移除后的预览和反馈同步、READY draft 编辑、Product 批准前删除、阻塞需求关闭/删除、
   已关闭需求独立筛选与重启、生命周期 Operation 不冒充活动交付、
   仅含节点状态的交付流程、source-drift 重建，
-  以及失败通知关闭/成功替代、successful-but-blocked 反馈、同 Requirement 去重、阻塞信息唯一入口与
-  Operation 快捷跳转。
+  以及活动通知单次展示/正常完成自动关闭/终态替换、失败通知关闭/成功替代、
+  successful-but-blocked 反馈、同 Requirement 去重、阻塞信息唯一入口与 Operation 快捷跳转；通知弹窗
+  不得销毁或覆盖已经打开的表单草稿。
 - `tests/team_view/test_live.py`：candidate branch 必须从 exact candidate ref 唯一推导；退休父需求的
   native child deliveries 与 Agent 队列投影必须同时消失。
 - `tests/contracts/test_json_schema_contracts.py`：Python/JSON Schema 的 QUEUED/RUNNING/terminal 状态、
@@ -1249,3 +1254,75 @@ harness against actual `app.js`. No Schema or persistent lifecycle state changes
 Existing Requirements, Tasks, Operations, approvals and queues remain unchanged; load the repaired
 frontend and refresh the browser. A successful prior restart does not need repeating for these
 client-only changes. Rollback restores the previous frontend asset and refreshes the page.
+
+## Scenario: transient operation notification dialogs
+
+### 1. Scope / Trigger
+
+修改 Team View 的页面级 Operation、运行环境或管理操作反馈时适用。表单字段校验、Requirement
+阻塞详情、连接/运行状态和知识解析进度属于持续上下文，继续在原位置展示，不迁入通知弹窗。
+
+### 2. Signatures
+
+```javascript
+operationNoticeKey(operation) -> string
+operationNoticeFor(operation) -> Notification | null
+systemOperationNotice() -> Notification | null
+renderOperationStatus() -> void
+renderNotification() -> void
+```
+
+`Notification` 至少包含安全标题、正文和可选 action。action 只允许跳转到由当前投影精确定位的
+Requirement、Settings 或 Status 页面，不允许根据错误文本猜测目标。
+
+### 3. Contracts
+
+- `#operations` 始终隐藏，不渲染长期占位卡；durable Operation 仍可由 API 查询和审计。
+- `QUEUED` 与 `RUNNING` 共用 `{operation_id}:ACTIVE`，同一活动操作只提示一次。活动操作正常完成时，
+  已打开的活动弹窗自动关闭；失败、中断或需要人工处理时，以对应终态弹窗替换。
+- 终态 key 使用 `{operation_id}:FAILED`、`{operation_id}:INTERRUPTED` 或
+  `{operation_id}:ACTION_REQUIRED`。用户关闭后写入本地确认列表；列表最多保留 200 条，不回写服务端。
+- 系统错误恢复后清除对应 `system:*` 当前通知及本地确认，使同一问题未来重新发生时仍可提示。
+- 通知使用独立 DOM 层，不复用 composer；打开、替换和关闭通知都不得清空新建 Project、Requirement、
+  Settings 或知识库表单草稿。
+- 精确 Requirement target 才显示“打开需求工作区”；只读 Console 可跳转 Status，runtime 未就绪可跳转
+  Settings，其余读取错误只允许关闭。
+
+### 4. Validation & Error Matrix
+
+| Case | Required UI |
+|---|---|
+| `QUEUED` 后轮询到 `RUNNING` | 不重复弹出已确认的 ACTIVE 通知 |
+| 活动操作正常成功 | 自动关闭活动弹窗，不产生常驻成功卡 |
+| 活动操作失败或要求人工处理 | 新终态弹窗替换旧 ACTIVE 弹窗 |
+| 用户关闭终态弹窗后刷新 | 保持关闭；Operation 审计事实不变 |
+| 精确 target Requirement 存在 | 显示跳转按钮并选择、滚动到对应详情 |
+| target 缺失或不可见 | 不显示猜测性的需求跳转按钮 |
+| Operation 列表读取失败 | 显示可关闭错误弹窗，不破坏 Console readiness |
+| 通知在 composer 打开期间到达 | 草稿、选择和表单 DOM 保持不变 |
+
+### 5. Good / Base / Bad Cases
+
+- Good：继续交付开始时出现一次进度弹窗；操作需要用户处理时原弹窗被明确错误和“打开需求工作区”
+  替换。用户关闭后页面不留状态卡，需求详情仍保留完整阻塞事实。
+- Base：后台操作正常完成；活动弹窗自动关闭，页面布局不留下空白模块。
+- Bad：每次轮询都重新弹窗；在页面顶部永久堆叠历史操作；用通知弹窗重建 composer 并丢失用户草稿；
+  或仅凭错误字符串跳转到可能错误的 Requirement。
+
+### 6. Tests Required
+
+- `tests/team_view/ui.test.cjs`：隐藏兼容 operations 容器、ACTIVE 去重、正常完成关闭、终态替换、
+  精确 Requirement 跳转以及通知不会破坏表单草稿。
+- `tests/team_view/readiness.test.cjs`：只读、runtime 未就绪和 Operation 读取失败的系统通知及跳转边界。
+- `tests/team_view/knowledge-gap.test.cjs`：Project/Knowledge 管理操作反馈使用同一通知弹窗。
+
+### 7. Wrong vs Correct
+
+```javascript
+// Wrong: durable history becomes permanent page chrome.
+operations.innerHTML = operations.map(renderOperationCard).join("")
+
+// Correct: durable facts remain queryable; only the newest actionable event is transiently surfaced.
+operations.hidden = true
+renderNotification()
+```
