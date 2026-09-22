@@ -224,7 +224,7 @@
         "task_id": {"$ref": "#/$defs/taskId"},
         "repository_id": {"$ref": "#/$defs/repositoryId"},
         "role": {"enum": ["coder", "qa", "reviewer"]},
-        "attempt": {"type": "integer", "minimum": 1, "maximum": 10},
+        "attempt": {"type": "integer", "minimum": 1, "maximum": 400},
         "checkpoint_sequence": {"type": "integer", "minimum": 0, "maximum": 10000},
         "dispatch_sequence": {"type": "integer", "minimum": 0, "maximum": 10000},
         "repository_scopes": {
@@ -265,7 +265,7 @@
         "task_id": {"$ref": "#/$defs/taskId"},
         "agent_id": {"$ref": "#/$defs/agentId"},
         "role": {"$ref": "#/$defs/deliveryRole"},
-        "attempt": {"type": "integer", "minimum": 1, "maximum": 10},
+        "attempt": {"type": "integer", "minimum": 1, "maximum": 400},
         "lease_id": {"$ref": "#/$defs/leaseId"},
         "capacity_units": {"type": "integer", "minimum": 1, "maximum": 16},
         "assigned_at": {"type": "string", "format": "date-time"}
@@ -298,7 +298,7 @@
         "task_id": {"$ref": "#/$defs/taskId"},
         "agent_id": {"$ref": "#/$defs/agentId"},
         "role": {"$ref": "#/$defs/deliveryRole"},
-        "attempt": {"type": "integer", "minimum": 1, "maximum": 10},
+        "attempt": {"type": "integer", "minimum": 1, "maximum": 400},
         "model_selection": {"$ref": "#/$defs/modelSelection"},
         "context_manifest_id": {"type": "string", "pattern": "^ctx_[a-f0-9]{64}$"},
         "prompt_version": {"type": "string", "minLength": 1},

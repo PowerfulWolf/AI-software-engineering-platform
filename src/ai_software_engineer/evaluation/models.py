@@ -17,6 +17,7 @@ from ai_software_engineer.agents import RunId
 from ai_software_engineer.domain.artifact import ArtifactId
 from ai_software_engineer.domain.enums import AgentRole
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
+from ai_software_engineer.domain.retry_policy import ExecutionAttempt
 from ai_software_engineer.domain.task import TaskId
 
 EvaluationCaseId = Annotated[str, StringConstraints(pattern=r"^case_[a-z0-9][a-z0-9_-]{2,63}$")]
@@ -86,7 +87,7 @@ class AgentRunEvent(EvaluationEventEnvelope):
     kind: Literal[EvaluationEventKind.AGENT_RUN] = EvaluationEventKind.AGENT_RUN
     run_id: RunId
     role: AgentRole
-    attempt: Annotated[StrictInt, Field(ge=1, le=10)]
+    attempt: ExecutionAttempt
     output_status: ArtifactOutputStatus
     artifact_id: ArtifactId | None = None
     policy_violations: Annotated[StrictInt, Field(ge=0)] = 0

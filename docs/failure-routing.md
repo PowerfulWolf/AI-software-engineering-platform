@@ -16,12 +16,19 @@
 
 ## 2. 重试规则
 
-- attempt 上限默认 3（初次 + 2 次修复），Task 可降低但不能由 Agent 提高；
-- 同一输入、同一模型、同一错误最多重试 2 次；超过即升级；
+- 新生产 Task 的 Coder 工作上限默认 3（初次 + 2 次修复），Coder/QA/Reviewer 临时故障各默认 5；
+  `execution_retry_policy` 支持 1–100，dispatch 冻结，Agent 不能提高。旧 Task 保留原上限；
+- 仅明确 typed retryable 故障单独记账；未知崩溃/无效输出不退款，新策略下无效输出直接阻塞；
+- `record_retry_failure` 在同一事务追加故障并预留下一执行身份，MySQL 写入前后校验 owner fence；
+  新调用仍需单独 claim。达到该角色故障上限后停止，重启不赠送重试；
 - QA/Review finding 必须在新 Coder context 中可见，并带原 artifact ID；
 - 重试不得覆盖旧 artifact；新 artifact 通过 `supersedes` 和 `parent_artifact_ids` 关联；
 - 若失败来自环境而非代码，重试 Coder 没有意义。Candidate verification 必须生成新的、需明确
   批准的 verification plan 后重试 QA；已经 admitted 的 Run 仍然遵守至多一次调用。
+
+联合 Product/Designer/Planner 的调用前预留工作额度，typed 临时故障通过追加 checkpoint 退款并
+增加独立故障计数；unknown interruption 保守保留预留。当前策略与历史兼容入口的差异见
+[执行与重试契约](../.trellis/spec/core/execution-retry-policy.md)。
 
 ## 3. 路由矩阵
 

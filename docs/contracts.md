@@ -10,11 +10,14 @@ Reviewer 基础设施失败且终态事件已封存同一 candidate 的 QA PASS 
 
 ## 1. 角色总览
 
-联合 Design 的运行预算属于 operator 配置，不改变角色权限或审批：
-`ProductionConfig.design_retry_policy` 分别限制设计尝试与临时故障。
-`JointCheckpoint.attempts.design_transient` 保存独立临时故障计数，旧 checkpoint 不重写。
-`RequestView.design_budget` 只读投影已用次数、配置上限和耗尽原因；完整字段、错误矩阵与恢复边界见
-[Design 重试预算契约](../.trellis/spec/core/design-retry-budget.md)。
+`ProductionConfig.execution_retry_policy` 属于 operator 配置，不改变角色权限或审批。
+联合上游分别持久化 `attempts.{product,design,plan}` 与对应 `_transient` 计数。
+`RequestView.stage_budget` 投影当前上游额度；`design_budget` 保留兼容。新 Task 冻结
+`retry_policy`，`retry_failures` 保存独立临时故障事实。旧 Task/Checkpoint 的 wire/hash 不重写。
+`Task.attempts` 是单调执行身份，工作次数由它减去已退款的历史临时失败得出；其跨层最大值为
+400（100 工作次数 + 三角色各 100 临时失败），不是 400 次 Coder 修复授权。完整矩阵见
+[执行与重试策略](../.trellis/spec/core/execution-retry-policy.md)与
+[Design 恢复契约](../.trellis/spec/core/design-retry-budget.md)。
 
 下表是已经进入 Task delivery runtime 的四个岗位，即 `AgentRole`。组织长期成员可声明的
 `TeamRole` 还包含 `manager/product/designer/planner`；这些上游岗位不能被

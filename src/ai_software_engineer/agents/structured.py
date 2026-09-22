@@ -38,6 +38,7 @@ from ai_software_engineer.domain.model import (
     WirePayload,
     ensure_unique,
 )
+from ai_software_engineer.domain.retry_policy import TRANSIENT_CODES
 
 
 class StructuredModelError(RuntimeError):
@@ -65,7 +66,7 @@ class StructuredModelError(RuntimeError):
     @property
     def retryable(self) -> bool:
         """Only typed transient infrastructure failures allow fallback or retry accounting."""
-        return self.transient and self.code in _FALLBACK_CODES
+        return self.transient and self.code in TRANSIENT_CODES
 
     def with_context(self, context: str) -> StructuredModelError:
         return StructuredModelError(
@@ -487,16 +488,6 @@ class ResponsesStructuredModelClient:
             request_id=safe_request_id(response.request_id, secret=self._api_key),
             correlation_id=safe_request_id(response.correlation_id, secret=self._api_key),
         )
-
-
-_FALLBACK_CODES = frozenset(
-    {
-        AgentErrorCode.TIMEOUT,
-        AgentErrorCode.QUOTA_EXHAUSTED,
-        AgentErrorCode.RATE_LIMITED,
-        AgentErrorCode.PROVIDER_UNAVAILABLE,
-    }
-)
 
 
 def _allows_fallback(error: StructuredModelError) -> bool:

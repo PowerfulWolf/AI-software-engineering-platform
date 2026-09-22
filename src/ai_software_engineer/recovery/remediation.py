@@ -139,6 +139,7 @@ class CandidateRemediationService:
             repository=prepared.repository_root,
             base_ref=self._backend.delivery_base_revision(Path(prepared.repository_root)),
             max_attempts=source.runtime.task.max_attempts,
+            retry_policy=source.runtime.task.retry_policy,
             created_at=now,
             constraints=source.runtime.task.constraints,
             owner=source.runtime.task.owner,

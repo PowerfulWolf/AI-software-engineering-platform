@@ -84,7 +84,7 @@
         "occurred_at": {"type": "string", "format": "date-time"},
         "run_id": {"type": "string", "pattern": "^run_[a-zA-Z0-9][a-zA-Z0-9_-]{2,127}$"},
         "role": {"enum": ["orchestrator", "coder", "qa", "reviewer"]},
-        "attempt": {"type": "integer", "minimum": 1, "maximum": 10},
+        "attempt": {"type": "integer", "minimum": 1, "maximum": 400},
         "output_status": {"enum": ["VALID", "INVALID", "NOT_PRODUCED"]},
         "artifact_id": {"$ref": "#/$defs/artifactId"},
         "policy_violations": {"type": "integer", "minimum": 0},

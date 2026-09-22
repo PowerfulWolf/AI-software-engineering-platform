@@ -536,6 +536,11 @@ def test_host_records_isolated_delivery_without_polluting_project(
     assert approved.checkpoint.task_id is not None
     assert approved.checkpoint.candidate_revision is not None
     assert isinstance(approved.delivery, RetryDeliveryResult)
+    assert approved.delivery.task.retry_policy == config.execution_retry_policy.delivery_policy()
+    assert (
+        approved.delivery.task.max_attempts
+        == config.execution_retry_policy.delivery_policy().execution_limit
+    )
     assert invoked == [AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER]
     assert len(host.work_queue.accepted(approved.checkpoint.task_id)) == 3
     assert all(

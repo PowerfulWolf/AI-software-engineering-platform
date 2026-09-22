@@ -27,6 +27,7 @@ from ai_software_engineer.domain.model import (
     ReasoningEffort,
     ensure_unique,
 )
+from ai_software_engineer.domain.retry_policy import ExecutionRetryPolicy, StageRetryPolicy
 from ai_software_engineer.multi_directory.budget import DesignRetryPolicy
 from ai_software_engineer.project_workspace import ProjectName
 from ai_software_engineer.team_workspace import TeamName, validate_knowledge_path
@@ -134,7 +135,34 @@ class ProductionConfig(DomainModel):
     codex_executable: NonEmptyStr = "codex"
     live_model_execution: StrictBool = False
     console_port: Annotated[StrictInt, Field(ge=1, le=65535)] = 8765
-    design_retry_policy: DesignRetryPolicy = DesignRetryPolicy()
+    execution_retry_policy: ExecutionRetryPolicy = ExecutionRetryPolicy()
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_design_policy(cls, value: object) -> object:
+        if not isinstance(value, dict) or "design_retry_policy" not in value:
+            return value
+        payload = dict(value)
+        legacy = DesignRetryPolicy.model_validate(payload.pop("design_retry_policy"))
+        designer = StageRetryPolicy(
+            max_attempts=legacy.max_design_attempts,
+            max_transient_failures=legacy.max_transient_failures,
+        )
+        if "execution_retry_policy" in payload:
+            current = ExecutionRetryPolicy.model_validate(payload["execution_retry_policy"])
+            if current.designer != designer:
+                raise ValueError("conflicting Design and execution retry policies")
+        else:
+            payload["execution_retry_policy"] = ExecutionRetryPolicy(designer=designer)
+        return payload
+
+    @property
+    def design_retry_policy(self) -> DesignRetryPolicy:
+        """Read compatibility for the existing Design projection and recovery contract."""
+        return DesignRetryPolicy(
+            max_design_attempts=self.execution_retry_policy.designer.max_attempts,
+            max_transient_failures=self.execution_retry_policy.designer.max_transient_failures,
+        )
 
     @classmethod
     def default(cls) -> Self:

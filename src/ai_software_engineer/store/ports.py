@@ -3,6 +3,7 @@
 from typing import Protocol
 
 from ai_software_engineer.domain.event import StateEvent
+from ai_software_engineer.domain.retry_policy import DeliveryRetryFailure
 from ai_software_engineer.domain.task import Task, TaskId
 
 
@@ -16,6 +17,8 @@ class TaskRepository(Protocol):
     def append_event(self, event: StateEvent) -> None: ...
 
     def record_attempt(self, task_id: TaskId, attempt: int) -> None: ...
+
+    def record_retry_failure(self, task_id: TaskId, failure: DeliveryRetryFailure) -> None: ...
 
     def list_events(self, task_id: TaskId) -> tuple[StateEvent, ...]: ...
 

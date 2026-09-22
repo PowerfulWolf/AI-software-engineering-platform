@@ -7,6 +7,88 @@
   "additionalProperties": false,
   "required": ["model_routes"],
   "$defs": {
+    "StageRetryPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "max_transient_failures": {
+          "default": 5,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Transient Failures",
+          "type": "integer"
+        },
+        "max_attempts": {
+          "default": 3,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Attempts",
+          "type": "integer"
+        }
+      },
+      "title": "StageRetryPolicy",
+      "type": "object"
+    },
+    "TransientRetryPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "max_transient_failures": {
+          "default": 5,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Transient Failures",
+          "type": "integer"
+        }
+      },
+      "title": "TransientRetryPolicy",
+      "type": "object"
+    },
+    "ExecutionRetryPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "product": {
+          "$ref": "#/$defs/StageRetryPolicy",
+          "default": {
+            "max_transient_failures": 5,
+            "max_attempts": 20
+          }
+        },
+        "designer": {
+          "$ref": "#/$defs/StageRetryPolicy",
+          "default": {
+            "max_transient_failures": 5,
+            "max_attempts": 3
+          }
+        },
+        "planner": {
+          "$ref": "#/$defs/StageRetryPolicy",
+          "default": {
+            "max_transient_failures": 5,
+            "max_attempts": 3
+          }
+        },
+        "coder": {
+          "$ref": "#/$defs/StageRetryPolicy",
+          "default": {
+            "max_transient_failures": 5,
+            "max_attempts": 3
+          }
+        },
+        "qa": {
+          "$ref": "#/$defs/TransientRetryPolicy",
+          "default": {
+            "max_transient_failures": 5
+          }
+        },
+        "reviewer": {
+          "$ref": "#/$defs/TransientRetryPolicy",
+          "default": {
+            "max_transient_failures": 5
+          }
+        }
+      },
+      "title": "ExecutionRetryPolicy",
+      "type": "object"
+    },
     "design_retry_policy": {
       "type": "object",
       "additionalProperties": false,
@@ -140,6 +222,7 @@
     },
     "database": {"$ref": "#/$defs/database"},
     "design_retry_policy": {"$ref": "#/$defs/design_retry_policy"},
+    "execution_retry_policy": {"$ref": "#/$defs/ExecutionRetryPolicy"},
     "model_routes": {
       "type": "array",
       "minItems": 1,

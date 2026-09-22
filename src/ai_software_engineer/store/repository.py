@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from ai_software_engineer.domain.event import StateEvent
 from ai_software_engineer.domain.model import WirePayload
+from ai_software_engineer.domain.retry_policy import MAX_EXECUTION_ATTEMPTS, DeliveryRetryFailure
 from ai_software_engineer.domain.task import Task, TaskId
 
 
@@ -174,8 +175,8 @@ class SqliteTaskRepository:
 
     def record_attempt(self, task_id: TaskId, attempt: int) -> None:
         """Durably checkpoint an Agent attempt without inventing a state transition."""
-        if type(attempt) is not int or not 1 <= attempt <= 10:
-            raise StoreError(f"attempt must be between 1 and 10: {attempt}")
+        if type(attempt) is not int or not 1 <= attempt <= MAX_EXECUTION_ATTEMPTS:
+            raise StoreError(f"attempt must be between 1 and {MAX_EXECUTION_ATTEMPTS}: {attempt}")
         with self._transaction():
             row = self._connection.execute(
                 "SELECT id, payload_json FROM tasks WHERE id = ?", (task_id,)
@@ -194,6 +195,20 @@ class SqliteTaskRepository:
             )
             if updated.rowcount != 1:
                 raise StoreError("Task attempt checkpoint was not written")
+
+    def record_retry_failure(self, task_id: TaskId, failure: DeliveryRetryFailure) -> None:
+        with self._transaction():
+            task = self.get(task_id)
+            try:
+                successor = task.with_retry_failure(failure)
+            except ValueError as error:
+                raise StoreError(str(error)) from error
+            if successor == task:
+                return
+            self._connection.execute(
+                "UPDATE tasks SET payload_json = ? WHERE id = ?",
+                (_encode(successor.to_wire()), task_id),
+            )
 
     def list_events(self, task_id: TaskId) -> tuple[StateEvent, ...]:
         """Return a Task's events in replay order."""

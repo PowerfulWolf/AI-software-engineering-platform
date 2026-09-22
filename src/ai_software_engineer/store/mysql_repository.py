@@ -16,6 +16,7 @@ from pymysql.cursors import DictCursor
 
 from ai_software_engineer.domain.event import StateEvent
 from ai_software_engineer.domain.model import WirePayload
+from ai_software_engineer.domain.retry_policy import MAX_EXECUTION_ATTEMPTS, DeliveryRetryFailure
 from ai_software_engineer.domain.task import Task, TaskId
 from ai_software_engineer.store.repository import (
     EventIdempotencyConflict,
@@ -181,8 +182,8 @@ class MySqlTaskRepository:
 
     def record_attempt(self, task_id: TaskId, attempt: int) -> None:
         """Durably checkpoint an Agent attempt without a state transition."""
-        if type(attempt) is not int or not 1 <= attempt <= 10:
-            raise StoreError(f"attempt must be between 1 and 10: {attempt}")
+        if type(attempt) is not int or not 1 <= attempt <= MAX_EXECUTION_ATTEMPTS:
+            raise StoreError(f"attempt must be between 1 and {MAX_EXECUTION_ATTEMPTS}: {attempt}")
         with self._transaction(), self._connection.cursor() as cursor:
             if self.mutation_fence is not None:
                 self.mutation_fence(cast(DictCursor, cursor), task_id)
@@ -205,6 +206,29 @@ class MySqlTaskRepository:
             )
             if updated != 1:
                 raise StoreError("Task attempt checkpoint was not written")
+            if self.mutation_fence is not None:
+                self.mutation_fence(cast(DictCursor, cursor), task_id)
+
+    def record_retry_failure(self, task_id: TaskId, failure: DeliveryRetryFailure) -> None:
+        with self._transaction(), self._connection.cursor() as cursor:
+            if self.mutation_fence is not None:
+                self.mutation_fence(cast(DictCursor, cursor), task_id)
+            cursor.execute(
+                "SELECT id, payload_json FROM tasks WHERE id = %s FOR UPDATE", (task_id,)
+            )
+            row = cast(Mapping[str, object] | None, cursor.fetchone())
+            if row is None:
+                raise TaskNotFound(task_id)
+            task = _decode_task(_text(row, "id"), _text(row, "payload_json"))
+            try:
+                successor = task.with_retry_failure(failure)
+            except ValueError as error:
+                raise StoreError(str(error)) from error
+            if successor != task:
+                cursor.execute(
+                    "UPDATE tasks SET payload_json = %s WHERE id = %s",
+                    (_encode(successor.to_wire()), task_id),
+                )
             if self.mutation_fence is not None:
                 self.mutation_fence(cast(DictCursor, cursor), task_id)
 

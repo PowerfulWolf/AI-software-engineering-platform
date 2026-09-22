@@ -24,6 +24,7 @@ from ai_software_engineer.context.router import ContextRouter
 from ai_software_engineer.domain.agent import AgentPermissions
 from ai_software_engineer.domain.enums import AgentRole
 from ai_software_engineer.domain.model import WirePayload
+from ai_software_engineer.domain.retry_policy import MAX_EXECUTION_ATTEMPTS
 from ai_software_engineer.domain.task import Task
 from ai_software_engineer.git import PathPolicyViolation, WorkspacePolicy
 from ai_software_engineer.redaction import redact_text
@@ -73,8 +74,10 @@ class FileContextBuilder:
         candidate_revision: str | None = None,
     ) -> ContextBundle:
         """Route, redact, budget, and hash one role-scoped context bundle."""
-        if type(attempt) is not int or not 1 <= attempt <= 10:
-            raise ContextSourceError(f"attempt must be between 1 and 10: {attempt}")
+        if type(attempt) is not int or not 1 <= attempt <= MAX_EXECUTION_ATTEMPTS:
+            raise ContextSourceError(
+                f"attempt must be between 1 and {MAX_EXECUTION_ATTEMPTS}: {attempt}"
+            )
         if not isinstance(role, AgentRole):
             raise ContextSourceError(f"unknown Agent role: {role!r}")
         source_revision = task.base_ref if candidate_revision is None else candidate_revision

@@ -18,6 +18,7 @@ from ai_software_engineer.agents.structured import StructuredModelResult
 from ai_software_engineer.artifacts import FileArtifactStore, seal_artifact
 from ai_software_engineer.context import FileContextStore
 from ai_software_engineer.domain import AgentRole, RiskTier, StateEvent, TaskStatus, WorkItemStatus
+from ai_software_engineer.domain.retry_policy import DeliveryRetryPolicy
 from ai_software_engineer.domain.workforce import TaskLease
 from ai_software_engineer.knowledge.gaps import (
     KnowledgeGapRaised,
@@ -196,6 +197,7 @@ def runtime_fixture(
     adapter: ScriptedAdapter,
     *,
     knowledge_clients: KnowledgeRoleClients | None = None,
+    retry_policy: DeliveryRetryPolicy | None = None,
 ) -> Iterator[tuple[RuntimeSession, QueuedDeliverySupervisor]]:
     root = tmp_path / "repository"
     root.mkdir(exist_ok=True)
@@ -263,7 +265,19 @@ def runtime_fixture(
         try:
             runtime.task_repository.get("task_domain_001")
         except TaskNotFound:
-            runtime.task_repository.create(make_task().model_copy(update={"repository": str(root)}))
+            task = make_task().model_copy(update={"repository": str(root)})
+            if retry_policy is not None:
+                assert task.constraints is not None
+                task = task.model_copy(
+                    update={
+                        "retry_policy": retry_policy,
+                        "max_attempts": retry_policy.execution_limit,
+                        "constraints": task.constraints.model_copy(
+                            update={"max_attempts": retry_policy.execution_limit}
+                        ),
+                    }
+                )
+            runtime.task_repository.create(task)
         yield runtime, supervisor
 
 
@@ -280,6 +294,27 @@ def run_supervisor(
     )
     assert isinstance(outcome, RetryDeliveryResult)
     return outcome
+
+
+def test_frozen_policy_retry_has_distinct_real_claims(mysql_dsn: str, tmp_path: Path) -> None:
+    queue = MySqlRoleQueue(mysql_dsn)
+    adapter = ObservedAdapter(queue, coder_timeouts=(1,))
+    policy = DeliveryRetryPolicy(max_work_attempts=1)
+    with runtime_fixture(tmp_path, mysql_dsn, queue, adapter, retry_policy=policy) as (
+        runtime,
+        supervisor,
+    ):
+        result = run_supervisor(runtime, supervisor)
+        assert result.task.retry_policy == policy
+        assert result.task.work_attempt == 1
+        assert result.task.transient_failures(AgentRole.CODER) == 1
+        assert [role for role, _ in adapter.invocation_claims] == [
+            AgentRole.CODER,
+            AgentRole.CODER,
+            AgentRole.QA,
+            AgentRole.REVIEWER,
+        ]
+        assert len({lease for _, lease in adapter.invocation_claims}) == 4
 
 
 @pytest.mark.parametrize(

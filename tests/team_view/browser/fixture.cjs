@@ -26,7 +26,14 @@ async function ui(t, options = {}) {
       checkpoint_sha256: "a".repeat(64), scopes: [], documents: [], dialogue: [], next_action: "Start discussion" }] };
   const config = { schema_version: "v0.2", platform_root: "/fixture/platform", team_id: "team_fixture", team_name: "Fixture",
     team_knowledge_paths: [], database: { backend: "mysql", dsn_env: "ASE_MYSQL_DSN" }, model_routes: [], agent_model_routes: [],
-    codex_executable: "codex", live_model_execution: false, console_port: 8765 };
+    codex_executable: "codex", live_model_execution: false, console_port: 8765,
+    execution_retry_policy: {
+      product: {max_attempts: 20, max_transient_failures: 5},
+      designer: {max_attempts: 3, max_transient_failures: 5},
+      planner: {max_attempts: 3, max_transient_failures: 5},
+      coder: {max_attempts: 3, max_transient_failures: 5},
+      qa: {max_transient_failures: 5}, reviewer: {max_transient_failures: 5},
+    } };
   // Poll explicitly to keep the race scenarios deterministic. All API traffic is fixtures.
   await page.addInitScript(() => { window.setInterval = () => 0; });
   await page.route("http://ui.test/**", async (route) => {

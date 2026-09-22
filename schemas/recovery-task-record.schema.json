@@ -219,14 +219,14 @@
           "$ref": "#/$defs/TaskStatus"
         },
         "max_attempts": {
-          "maximum": 10,
+          "maximum": 400,
           "minimum": 1,
           "title": "Max Attempts",
           "type": "integer"
         },
         "attempts": {
           "default": 0,
-          "maximum": 10,
+          "maximum": 400,
           "minimum": 0,
           "title": "Attempts",
           "type": "integer"
@@ -269,6 +269,32 @@
           },
           "title": "Metadata",
           "type": "object"
+        },
+        "retry_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DeliveryRetryPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "retry_failures": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/DeliveryRetryFailure"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retry Failures"
         }
       },
       "required": [
@@ -320,7 +346,7 @@
         "max_attempts": {
           "anyOf": [
             {
-              "maximum": 10,
+              "maximum": 400,
               "minimum": 1,
               "type": "integer"
             },
@@ -363,6 +389,102 @@
       ],
       "title": "TaskStatus",
       "type": "string"
+    },
+    "DeliveryRetryPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "max_work_attempts": {
+          "default": 3,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Work Attempts",
+          "type": "integer"
+        },
+        "coder": {
+          "$ref": "#/$defs/TransientRetryPolicy",
+          "default": {
+            "max_transient_failures": 5
+          }
+        },
+        "qa": {
+          "$ref": "#/$defs/TransientRetryPolicy",
+          "default": {
+            "max_transient_failures": 5
+          }
+        },
+        "reviewer": {
+          "$ref": "#/$defs/TransientRetryPolicy",
+          "default": {
+            "max_transient_failures": 5
+          }
+        }
+      },
+      "title": "DeliveryRetryPolicy",
+      "type": "object"
+    },
+    "DeliveryRetryFailure": {
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "enum": [
+            "coder",
+            "qa",
+            "reviewer"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "attempt": {
+          "maximum": 400,
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "code": {
+          "enum": [
+            "TIMEOUT",
+            "QUOTA_EXHAUSTED",
+            "RATE_LIMITED",
+            "PROVIDER_UNAVAILABLE"
+          ],
+          "title": "Code",
+          "type": "string"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Run Id"
+        }
+      },
+      "required": [
+        "role",
+        "attempt",
+        "code"
+      ],
+      "title": "DeliveryRetryFailure",
+      "type": "object"
+    },
+    "TransientRetryPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "max_transient_failures": {
+          "default": 5,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Transient Failures",
+          "type": "integer"
+        }
+      },
+      "title": "TransientRetryPolicy",
+      "type": "object"
     }
   },
   "additionalProperties": false,

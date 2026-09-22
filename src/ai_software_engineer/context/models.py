@@ -7,6 +7,7 @@ from pydantic import AwareDatetime, Field, StrictBool, StrictInt, StringConstrai
 from ai_software_engineer.domain.enums import AgentRole
 from ai_software_engineer.domain.identity import ContextId as ContextId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
+from ai_software_engineer.domain.retry_policy import ExecutionAttempt
 from ai_software_engineer.domain.task import TaskId
 
 ContextSourceId = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_.:-]{0,127}$")]
@@ -82,7 +83,7 @@ class ContextBundle(DomainModel):
     context_id: ContextId
     task_id: TaskId
     role: AgentRole
-    attempt: Annotated[StrictInt, Field(ge=1, le=10)]
+    attempt: ExecutionAttempt
     source_revision: NonEmptyStr
     sections: Annotated[tuple[ContextSection, ...], Field(min_length=1)]
     redactions: tuple[ContextRedaction, ...] = ()

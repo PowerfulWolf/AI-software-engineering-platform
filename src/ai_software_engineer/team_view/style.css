@@ -1514,12 +1514,36 @@ main[data-page="requests"] .page-context {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px 20px;
 }
-.settings-subsection {
+.settings-section {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
   border-top: 1px solid var(--line);
   padding-top: 20px;
 }
-.settings-subsection h3 {
-  margin-bottom: 12px;
+.settings-section > h3,
+.settings-section > p {
+  margin: 0;
+}
+.settings-section .settings-grid {
+  align-items: start;
+}
+.retry-policy-list {
+  display: grid;
+  gap: 16px;
+}
+.retry-policy-row {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.retry-policy-row + .retry-policy-row {
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+}
+.retry-policy-row h4,
+.retry-policy-row p {
+  margin: 0;
 }
 .status-row {
   display: flex;

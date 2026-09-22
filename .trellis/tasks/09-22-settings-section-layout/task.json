@@ -1,0 +1,7 @@
+{
+  "id": "settings-section-layout",
+  "title": "Group Basic settings and configure stage and transient retry budgets across roles",
+  "status": "completed",
+  "baseline": "00a1395",
+  "authorization": "Continue in current checkout with one agent and incremental tests only. User explicitly approved implementing all-role retry configuration in this task."
+}

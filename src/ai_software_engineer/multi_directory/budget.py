@@ -8,8 +8,13 @@ from typing import Annotated, Literal
 from pydantic import Field, StrictInt
 
 from ai_software_engineer.domain.model import DomainModel
+from ai_software_engineer.domain.retry_policy import (
+    ExecutionRetryPolicy,
+    RetryLimit,
+    StageRetryPolicy,
+)
 
-AttemptLimit = Annotated[StrictInt, Field(ge=1, le=100)]
+AttemptLimit = RetryLimit
 AttemptCount = Annotated[StrictInt, Field(ge=0)]
 DESIGN_TRANSIENT_COUNTER = "design_transient"
 
@@ -42,3 +47,42 @@ class DesignBudget(DesignRetryPolicy):
     design_attempts: AttemptCount
     transient_failures: AttemptCount
     exhausted: Literal["design", "transient"] | None = None
+
+
+class StageBudget(StageRetryPolicy):
+    role: Literal["product", "designer", "planner"]
+    attempts: AttemptCount
+    transient_failures: AttemptCount
+    exhausted: Literal["work", "transient"] | None = None
+
+
+def stage_budget(
+    policy: ExecutionRetryPolicy, stage: str, attempts: Mapping[str, int]
+) -> StageBudget | None:
+    """Only the active model stage can block its continuation; old counters are history."""
+    roles: dict[str, tuple[Literal["product", "designer", "planner"], str]] = {
+        "PRODUCT_DISCOVERY": ("product", "product"),
+        "WAITING_PRODUCT_REPLY": ("product", "product"),
+        "DESIGNING": ("designer", "design"),
+        "PLANNING": ("planner", "plan"),
+    }
+    selected = roles.get(stage)
+    if selected is None:
+        return None
+    role, counter = selected
+    limits = {"product": policy.product, "designer": policy.designer, "planner": policy.planner}[
+        role
+    ]
+    work, transient = attempts.get(counter, 0), attempts.get(counter + "_transient", 0)
+    return StageBudget(
+        role=role,
+        attempts=work,
+        transient_failures=transient,
+        max_attempts=limits.max_attempts,
+        max_transient_failures=limits.max_transient_failures,
+        exhausted="transient"
+        if transient >= limits.max_transient_failures
+        else "work"
+        if work >= limits.max_attempts
+        else None,
+    )

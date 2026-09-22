@@ -237,12 +237,20 @@ def test_design_retry_settings_roundtrip_requires_restart(tmp_path: Path) -> Non
     changed = ProductionConfig.model_validate(
         {
             **administration.runtime_config.to_wire(),
-            "design_retry_policy": {"max_design_attempts": 8, "max_transient_failures": 20},
+            "execution_retry_policy": {
+                "designer": {"max_attempts": 8, "max_transient_failures": 20},
+                "product": {"max_attempts": 30, "max_transient_failures": 10},
+                "planner": {"max_attempts": 7},
+                "coder": {"max_attempts": 9},
+                "qa": {"max_transient_failures": 12},
+                "reviewer": {"max_transient_failures": 13},
+            },
         }
     )
     saved = administration.update_settings(UpdateSettingsRequest(config=changed))
     assert saved.restart_required
     assert saved.config.design_retry_policy == changed.design_retry_policy
+    assert saved.config.execution_retry_policy == changed.execution_retry_policy
     assert administration.runtime_config.design_retry_policy.max_design_attempts == 3
     reopened = LocalConsoleAdministration(
         runtime_config=ProductionConfig.from_file(tmp_path / "config.json"),
@@ -250,6 +258,7 @@ def test_design_retry_settings_roundtrip_requires_restart(tmp_path: Path) -> Non
         environment=administration.environment,
     )
     assert reopened.settings().config.design_retry_policy == changed.design_retry_policy
+    assert reopened.settings().config.execution_retry_policy == changed.execution_retry_policy
     assert not reopened.settings().restart_required
 
 

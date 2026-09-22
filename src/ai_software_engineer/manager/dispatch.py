@@ -42,6 +42,7 @@ from ai_software_engineer.domain.project_delivery import (
     TechnicalDesign,
     derive_delivery_task,
 )
+from ai_software_engineer.domain.retry_policy import DeliveryRetryPolicy
 from ai_software_engineer.domain.task import AttemptLimit, Task, TaskConstraints, TaskId
 from ai_software_engineer.domain.workforce import (
     AgentProfile,
@@ -576,6 +577,7 @@ class CommitDispatchRequest(DomainModel):
     repository: NonEmptyStr
     base_ref: NonEmptyStr
     max_attempts: AttemptLimit
+    retry_policy: DeliveryRetryPolicy | None = None
     task_created_at: AwareDatetime
     committed_at: AwareDatetime
     constraints: TaskConstraints | None = None
@@ -821,6 +823,7 @@ class ManagerDispatchService:
             repository=request.repository,
             base_ref=request.base_ref,
             max_attempts=request.max_attempts,
+            retry_policy=request.retry_policy,
             created_at=request.task_created_at,
             constraints=request.constraints,
             owner=request.owner,

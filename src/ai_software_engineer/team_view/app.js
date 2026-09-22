@@ -75,6 +75,8 @@ const labels = {
   READY_FOR_DISCUSSION: "等待讨论需求",
   PRODUCT_DISCOVERY: "产品梳理",
   WAITING_PRODUCT_REPLY: "等待补充需求",
+  RETRY_BUDGET_EXHAUSTED: "执行预算已用尽",
+  PLANNER_RETRY_REQUIRED: "计划执行待重试",
   WAITING_PRODUCT_APPROVAL: "等待产品批准",
   DESIGNING: "技术设计",
   DESIGN_RETRY_REQUIRED: "设计待重试",
@@ -476,16 +478,17 @@ function requestPresentation(request) {
       blocker: request.blocker,
       nextAction: "点击“恢复设计”，保留已批准需求并重新开放设计尝试。",
     };
-  if (designBudgetExhausted(request))
+  if (designBudgetExhausted(request) && !latestApproval(request.id, request.checkpoint_sha256))
     return {
       group: "blocked",
-      status: "DESIGN_BUDGET_EXHAUSTED",
+      status: request.stage === "DESIGNING" ? "DESIGN_BUDGET_EXHAUSTED" : "RETRY_BUDGET_EXHAUSTED",
       blocker: designBudgetSummary(request),
-      nextAction: "请在设置中提高对应预算，保存并重启服务后重试 Design。",
+      nextAction: "请在设置中提高对应预算，保存并重启服务后继续。",
     };
   const failedDesignOperation = latestOperation(request.id);
   if (
-    request.stage === "DESIGNING" &&
+    ["DESIGNING", "PLANNING"].includes(request.stage) &&
+    !latestApproval(request.id, request.checkpoint_sha256) &&
     failedDesignOperation?.status === "FAILED" &&
     operationTarget(failedDesignOperation) === request.id &&
     ["CONTINUE_DELIVERY", "RECOVER_DESIGN"].includes(
@@ -494,9 +497,9 @@ function requestPresentation(request) {
   )
     return {
       group: "blocked",
-      status: "DESIGN_RETRY_REQUIRED",
-      blocker: failedDesignOperation.error_summary || "Designer 操作未完成。",
-      nextAction: "上一次 Designer 操作未完成；修复模型服务后可重试 Design。",
+      status: request.stage === "DESIGNING" ? "DESIGN_RETRY_REQUIRED" : "PLANNER_RETRY_REQUIRED",
+      blocker: failedDesignOperation.error_summary || "模型角色操作未完成。",
+      nextAction: "上一次操作未完成；检查失败记录或修复模型服务后可重试。",
     };
   if (approvedKnowledge(request))
     return { group: "blocked", status: "KNOWLEDGE_APPROVED", blocker: null,
@@ -522,6 +525,7 @@ function requestPresentation(request) {
 
 function canContinueDelivery(request) {
   return (
+    !designBudgetExhausted(request) &&
     request.stage !== "DESIGNING" &&
     !productDiscussionStages.has(request.stage) &&
     (requestPresentation(request).group === "blocked" ||
@@ -536,7 +540,8 @@ function canRecoverDesign(request) {
 function canRetryDesign(request) {
   const operation = latestOperation(request.id);
   return (
-    request.stage === "DESIGNING" &&
+    ["DESIGNING", "PLANNING"].includes(request.stage) &&
+    !latestApproval(request.id, request.checkpoint_sha256) &&
     !request.design_recovery_available &&
     !designBudgetExhausted(request) &&
     operation?.status === "FAILED" &&
@@ -547,10 +552,15 @@ function canRetryDesign(request) {
 }
 
 function designBudgetExhausted(request) {
+  if (request.stage_budget) return Boolean(request.stage_budget.exhausted);
   return request.stage === "DESIGNING" && Boolean(request.design_budget?.exhausted);
 }
 
 function designBudgetSummary(request) {
+  if (request.stage_budget) {
+    const budget = request.stage_budget;
+    return `${budget.role} 工作尝试 ${budget.attempts}/${budget.max_attempts}；临时故障 ${budget.transient_failures}/${budget.max_transient_failures}。`;
+  }
   const budget = request.design_budget;
   if (!budget) return "Design 预算已用尽。";
   return `设计尝试 ${budget.design_attempts}/${budget.max_design_attempts}；临时故障 ${budget.transient_failures}/${budget.max_transient_failures}。`;
@@ -569,12 +579,12 @@ function requestBlockingSummary(request) {
     const operation = latestOperation(request.id);
     return {
       reasons: [{
-        reason: "上一次 Designer 操作未完成，Design checkpoint 与预算已保留。",
+        reason: "上一次模型角色操作未完成，checkpoint 与预算已保留。",
         scopes: [],
       }],
       operationReason: operation?.error_summary || null,
       approval: null,
-      suggestedAction: "修复模型服务后点击“重试 Design”；执行中不会显示重复操作按钮。",
+      suggestedAction: "检查失败记录或修复模型服务后重试；执行中不会显示重复操作按钮。",
       approvedKnowledge: true,
     };
   }
@@ -591,7 +601,7 @@ function requestBlockingSummary(request) {
       approvedKnowledge: true,
     };
   }
-  if (designBudgetExhausted(request)) {
+  if (designBudgetExhausted(request) && !latestApproval(request.id, request.checkpoint_sha256)) {
     return {
       reasons: [{reason: designBudgetSummary(request), scopes: []}],
       operationReason: latestOperation(request.id)?.error_summary || null,
@@ -2318,7 +2328,7 @@ function requestOperation(panel, request, discussionSection) {
   );
   const discussionKey = JSON.stringify([
     request.project_id, request.id, request.checkpoint_sha256, request.stage,
-    running?.operation_id || null, sourceRevisionDrift,
+    running?.operation_id || null, sourceRevisionDrift, request.stage_budget,
   ]);
   const identity = JSON.stringify([request.project_id, request.id]);
   let discussionFormCache = discussionFormCaches.get(identity);
@@ -2332,6 +2342,8 @@ function requestOperation(panel, request, discussionSection) {
   // Manager creates its successor plan. Only a live Console operation suppresses the
   // recovery action; the durable task projection alone must not strand the operator.
   if (running && !isProductDiscussion) return;
+  if (!running && designBudgetExhausted(request) && !canRecoverDesign(request) &&
+      !latestApproval(request.id, request.checkpoint_sha256)) return;
   if (running) {
     appendDiscussionContent(
       el(
@@ -2473,7 +2485,7 @@ function requestOperation(panel, request, discussionSection) {
       messagePlaceholder = "说明 ProductSpec 需要修改或补充的内容…";
       submitLabel = "提交修改并重新生成 ProductSpec";
     }
-    const replyEnabled = request.stage !== "PRODUCT_DISCOVERY" && !running;
+    const replyEnabled = request.stage !== "PRODUCT_DISCOVERY" && !running && !designBudgetExhausted(request);
     message.rows = 5;
     message.maxLength = 20000;
     message.disabled = !replyEnabled;
@@ -2662,7 +2674,7 @@ function requestOperation(panel, request, discussionSection) {
   }
   if (canRetryDesign(request)) {
     const action = deliveryButton(
-      "重试 Design",
+      request.stage === "PLANNING" ? "重试 Planner" : "重试 Design",
       () =>
         submitOperation({
           action: "CONTINUE_DELIVERY",
@@ -4591,6 +4603,7 @@ function renderSettings(content) {
 
 function renderGeneralSettings(form) {
   const general = el("div", undefined, "settings-grid");
+  const runtime = el("div", undefined, "settings-grid");
   const platformRoot = bindInput(
     el("input"),
     settingsDraft.platform_root,
@@ -4633,31 +4646,57 @@ function renderGeneralSettings(form) {
       team,
       `${settingsDraft.team_id}；Team 是长期团队，不随 Project 切换。`,
     ),
+  );
+  runtime.append(
     field("Codex 可执行文件", codex),
     field("Web Console 端口", port, "修改端口后使用新地址重启。"),
     field("启用真实模型执行", live),
   );
-  form.append(general);
-  if (settingsDraft.design_retry_policy) {
-    const policy = settingsDraft.design_retry_policy;
-    const budgets = el("div", undefined, "settings-grid");
-    for (const [key, title] of [
-      ["max_design_attempts", "Design 设计尝试上限"],
-      ["max_transient_failures", "Design 临时故障上限"],
+  const platformSection = el("section", undefined, "settings-section");
+  platformSection.append(el("h3", "平台与团队"), general);
+  const runtimeSection = el("section", undefined, "settings-section");
+  runtimeSection.append(el("h3", "运行设置"), runtime);
+  form.append(platformSection, runtimeSection);
+  if (settingsDraft.execution_retry_policy) {
+    const policy = settingsDraft.execution_retry_policy;
+    const budgets = el("div", undefined, "retry-policy-list");
+    for (const [role, title, workTitle] of [
+      ["product", "Product · 需求讨论", "讨论 / 产物尝试上限"],
+      ["designer", "Designer · 技术设计", "设计尝试上限"],
+      ["planner", "Planner · 执行计划", "计划尝试上限"],
+      ["coder", "Coder · 实现与修正", "实现轮次上限"],
+      ["qa", "QA · 质量验证", null],
+      ["reviewer", "Reviewer · 代码审查", null],
     ]) {
-      const input = bindInput(el("input"), String(policy[key]),
-        (value) => (policy[key] = Number(value)), "number");
-      input.min = "1";
-      input.max = "100";
-      input.step = "1";
-      input.required = true;
-      budgets.append(field(title, input, "1–100 次；修改后保存并重启服务，已用次数保留。"));
+      const row = el("div", undefined, "retry-policy-row");
+      row.append(el("h4", title));
+      const fields = el("div", undefined, "settings-grid");
+      for (const [key, caption] of [
+        ["max_attempts", workTitle], ["max_transient_failures", "临时故障上限"],
+      ]) {
+        if (!caption) continue;
+        const input = bindInput(el("input"), String(policy[role][key]),
+          (value) => (policy[role][key] = Number(value)), "number");
+        input.min = "1";
+        input.max = "100";
+        input.step = "1";
+        input.required = true;
+        input.name = `retry-${role}-${key}`;
+        fields.append(field(caption, input));
+      }
+      if (!workTitle)
+        fields.append(el("p", "不重试有效的否定结论；缺陷交给 Coder 修复，验证中断保留原审批流程。", "muted"));
+      row.append(fields);
+      budgets.append(row);
     }
-    form.append(
-      el("h3", "Design 重试预算"),
-      el("p", "设计尝试包含首次生成及修正；504、超时和限流等临时故障单独计数。提高上限后可继续现有需求。", "muted"),
+    const retrySection = el("section", undefined, "settings-section");
+    retrySection.append(
+      el("h3", "执行与重试策略"),
+      el("p", "1–100 次，工作次数含首次执行。504、超时、限流等临时故障独立计数。保存并重启后，上游继续执行和新建 Task 使用新上限；已有 Task 保留冻结策略。", "muted"),
       budgets,
+      el("p", "Manager 只执行确定性调度，无模型调用额度。配置不会清零历史，也不会跳过范围、恢复或验证审批。", "muted"),
     );
+    form.append(retrySection);
   }
 }
 
@@ -5589,7 +5628,7 @@ function buildDetail() {
       el("p", item.id, "paths request-detail-id"),
       badge(presentation.status),
     );
-    if (item.stage === "DESIGNING" && item.design_budget)
+    if (item.stage_budget || (item.stage === "DESIGNING" && item.design_budget))
       overview.append(el("p", designBudgetSummary(item), "muted"));
     if (presentation.group !== "blocked")
       overview.append(

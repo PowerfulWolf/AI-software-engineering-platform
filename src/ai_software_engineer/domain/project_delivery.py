@@ -28,6 +28,7 @@ from ai_software_engineer.domain.enums import (
 )
 from ai_software_engineer.domain.identity import ProjectId, RepositoryId, TeamId
 from ai_software_engineer.domain.model import DomainModel, JsonValue, NonEmptyStr, ensure_unique
+from ai_software_engineer.domain.retry_policy import DeliveryRetryPolicy
 from ai_software_engineer.domain.task import (
     AcceptanceCriterion,
     AcceptanceCriterionId,
@@ -948,6 +949,7 @@ def derive_delivery_task(
     repository: str,
     base_ref: str,
     max_attempts: AttemptLimit,
+    retry_policy: DeliveryRetryPolicy | None = None,
     created_at: datetime,
     constraints: TaskConstraints | None = None,
     owner: str | None = None,
@@ -986,6 +988,7 @@ def derive_delivery_task(
         constraints=constraints,
         status=TaskStatus.NEW,
         max_attempts=max_attempts,
+        retry_policy=retry_policy,
         owner=owner,
         labels=labels,
         created_at=created_at,

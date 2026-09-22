@@ -769,7 +769,10 @@ class ProductionProjectDeliveryBackend:
             raise ValueError("Dispatch Product handoff is incomplete")
         task_id = f"task_{_suffix(checkpoint.delivery_id)}"
         base_ref = self.delivery_base_revision(facts.workspace.repository_root)
-        constraints = _task_constraints(facts.profile, design)
+        retry_policy = self._config.execution_retry_policy.delivery_policy()
+        constraints = _task_constraints(
+            facts.profile, design, max_attempts=retry_policy.execution_limit
+        )
         task = derive_delivery_task(
             preparation,
             ready_revision.request,
@@ -780,7 +783,8 @@ class ProductionProjectDeliveryBackend:
             task_id=task_id,
             repository=str(facts.workspace.repository_root),
             base_ref=base_ref,
-            max_attempts=PRODUCTION_DELIVERY_MAX_ATTEMPTS,
+            max_attempts=retry_policy.execution_limit,
+            retry_policy=retry_policy,
             created_at=checkpoint.checkpointed_at,
             constraints=constraints,
             owner="project-manager",
@@ -872,7 +876,8 @@ class ProductionProjectDeliveryBackend:
             task_id=task.id,
             repository=str(facts.workspace.repository_root),
             base_ref=base_ref,
-            max_attempts=PRODUCTION_DELIVERY_MAX_ATTEMPTS,
+            max_attempts=retry_policy.execution_limit,
+            retry_policy=retry_policy,
             task_created_at=checkpoint.checkpointed_at,
             committed_at=checkpoint.checkpointed_at + timedelta(seconds=1),
             constraints=constraints,
@@ -1343,7 +1348,12 @@ def _maximum_risk(risks: Iterable[RiskTier]) -> RiskTier:
     return max(values, key=ranks.__getitem__)
 
 
-def _task_constraints(profile: RepositoryProfile, design: TechnicalDesign) -> TaskConstraints:
+def _task_constraints(
+    profile: RepositoryProfile,
+    design: TechnicalDesign,
+    *,
+    max_attempts: int = PRODUCTION_DELIVERY_MAX_ATTEMPTS,
+) -> TaskConstraints:
     affected = tuple(
         sorted({path for component in design.components for path in component.affected_paths})
     )
@@ -1360,7 +1370,7 @@ def _task_constraints(profile: RepositoryProfile, design: TechnicalDesign) -> Ta
         allowed_paths=affected,
         denied_paths=denied,
         allowed_commands=_task_commands(profile),
-        max_attempts=PRODUCTION_DELIVERY_MAX_ATTEMPTS,
+        max_attempts=max_attempts,
         notes=(
             "Production v0.1 is serial; bounded Coder runs may checkpoint and continue before QA."
         ),

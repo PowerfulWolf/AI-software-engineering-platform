@@ -136,7 +136,7 @@
       "description": "One executable delivery-role Run in the organization queue.",
       "properties": {
         "attempt": {
-          "maximum": 10,
+          "maximum": 400,
           "minimum": 0,
           "title": "Attempt",
           "type": "integer"
@@ -343,7 +343,7 @@
       "additionalProperties": false,
       "properties": {
         "attempt": {
-          "maximum": 10,
+          "maximum": 400,
           "minimum": 1,
           "title": "Attempt",
           "type": "integer"

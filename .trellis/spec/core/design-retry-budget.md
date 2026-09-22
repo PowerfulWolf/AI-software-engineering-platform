@@ -2,6 +2,7 @@
 
 ## Scope and signatures
 
+`ProductionConfig.execution_retry_policy.designer` is now canonical; the read compatibility property
 `ProductionConfig.design_retry_policy: DesignRetryPolicy` defaults to `max_design_attempts=3` and
 `max_transient_failures=5`; both accept strict integers in 1..100. Settings saves this secret-free
 policy and requires Host/Reader reconstruction through the existing restart flow.
@@ -34,7 +35,8 @@ permits another normal continuation; spent counts never decrease due to configur
 ## Projection and UI
 
 The Settings API remains `GET/PUT /api/v1/admin/settings`, with
-`config.design_retry_policy.{max_design_attempts,max_transient_failures}`. Save is followed by the
+`config.execution_retry_policy.designer.{max_attempts,max_transient_failures}`. The legacy
+`design_retry_policy` field remains accepted on input, but is not emitted. Save is followed by the
 existing apply/restart operation. `GET /api/v1/team` returns each joint request's `design_budget`:
 `design_attempts`, `max_design_attempts`, `transient_failures`, `max_transient_failures`, and optional
 `exhausted` (`design`/`transient`; absent when available). Neither settings nor the read endpoint edits
@@ -115,10 +117,10 @@ limit or a renamed retry button would leave these distinct failure modes intact.
 
 ### 4. Systematic expansion
 
-Product, Planner and Integration keep their existing budgets; their accounting is not silently
-changed by this Design-specific policy. New stage retry policies need their own typed classifier,
-crash accounting and recovery contract. Action precedence tests must combine checkpoint facts with
-failed and running operations, rather than checking translated button labels alone.
+The all-role extension is specified in `execution-retry-policy.md`: Product/Planner gain independent
+work/transient budgets, Delivery freezes its own role policy. Integration remains a deterministic
+command/approval allowance, not a model retry. Action precedence tests must combine checkpoint facts
+with failed/running operations and exact approvals, rather than checking translated labels alone.
 
 ### 5. Knowledge capture
 

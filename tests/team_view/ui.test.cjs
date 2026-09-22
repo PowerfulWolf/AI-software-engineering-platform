@@ -421,7 +421,13 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
       codex_executable: "codex",
       live_model_execution: true,
       console_port: 8765,
-      design_retry_policy: {max_design_attempts: 3, max_transient_failures: 5},
+      execution_retry_policy: {
+        product: {max_attempts: 20, max_transient_failures: 5},
+        designer: {max_attempts: 3, max_transient_failures: 5},
+        planner: {max_attempts: 3, max_transient_failures: 5},
+        coder: {max_attempts: 3, max_transient_failures: 5},
+        qa: {max_transient_failures: 5}, reviewer: {max_transient_failures: 5},
+      },
     },
     config_path: "/config/production.json",
     config_source: "saved",
@@ -1422,12 +1428,12 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   assert.equal(get("context-controls").hidden, true);
   assert.doesNotMatch(text(get("content")), /创建新 Project/);
   assert.match(text(get("content")), /平台数据目录/);
-  assert.match(text(get("content")), /Design 重试预算/);
+  assert.match(text(get("content")), /执行与重试策略/);
   const designLimit = descend(get("content")).find(
-    (node) => node.tag === "input" && node.value === "3" && node.max === "100",
+    (node) => node.name === "retry-designer-max_attempts",
   );
   const transientLimit = descend(get("content")).find(
-    (node) => node.tag === "input" && node.value === "5" && node.max === "100",
+    (node) => node.name === "retry-designer-max_transient_failures",
   );
   assert.ok(designLimit);
   assert.ok(transientLimit);
@@ -1613,8 +1619,8 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   );
   settingsRestartRequired = true;
   await settingsForm.events.submit({ preventDefault() {} });
-  assert.equal(savedSettings.at(-1).config.design_retry_policy.max_design_attempts, 8);
-  assert.equal(savedSettings.at(-1).config.design_retry_policy.max_transient_failures, 20);
+  assert.equal(savedSettings.at(-1).config.execution_retry_policy.designer.max_attempts, 8);
+  assert.equal(savedSettings.at(-1).config.execution_retry_policy.designer.max_transient_failures, 20);
   assert.match(text(get("composer")), /设置保存成功/);
   assert.match(text(get("composer")), /应用配置.*重启 Web Console/);
   assert.doesNotMatch(

@@ -26,6 +26,7 @@ from ai_software_engineer.domain.enums import (
 from ai_software_engineer.domain.event import StateEvent
 from ai_software_engineer.domain.identity import ContextId, RepositoryId, RunId
 from ai_software_engineer.domain.model import DomainModel, JsonValue, NonEmptyStr, ensure_unique
+from ai_software_engineer.domain.retry_policy import ExecutionAttempt
 from ai_software_engineer.domain.task import Task, TaskId
 from ai_software_engineer.domain.workforce import (
     AgentProfile,
@@ -96,7 +97,7 @@ class RunProjection(DomainModel):
     repository_id: RepositoryId | None = None
     agent_id: NonEmptyStr | None = None
     role: AgentRole | None = None
-    attempt: StrictInt | None = Field(default=None, ge=1, le=10)
+    attempt: ExecutionAttempt | None = None
     provider: NonEmptyStr | None = None
     model: NonEmptyStr | None = None
     context_manifest_id: ContextId | None = None

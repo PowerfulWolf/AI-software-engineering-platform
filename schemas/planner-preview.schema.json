@@ -49,7 +49,7 @@
         "kind": {"const": "assignment_decision"}, "status": {"const": "ASSIGNED"},
         "task_id": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/taskId"},
         "repository_id": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/repositoryId"},
-        "role": {"enum": ["coder", "qa", "reviewer"]}, "attempt": {"type": "integer", "minimum": 1, "maximum": 10},
+        "role": {"enum": ["coder", "qa", "reviewer"]}, "attempt": {"type": "integer", "minimum": 1, "maximum": 400},
         "agent_id": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/agentId"},
         "assignment": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/roleAssignment"},
         "lease": {"$ref": "https://ai-software-engineer.local/schemas/workforce.schema.json#/$defs/taskLease"},

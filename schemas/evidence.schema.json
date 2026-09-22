@@ -27,7 +27,7 @@
         "run_id": {"$ref": "#/$defs/runId"},
         "agent_id": {"type": "string", "minLength": 1},
         "role": {"enum": ["orchestrator", "coder", "qa", "reviewer"]},
-        "attempt": {"type": "integer", "minimum": 1, "maximum": 10},
+        "attempt": {"type": "integer", "minimum": 1, "maximum": 400},
         "source_revision": {"type": "string", "minLength": 1},
         "context_manifest_id": {"$ref": "#/$defs/contextId"}
       }

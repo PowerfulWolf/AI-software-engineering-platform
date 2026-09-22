@@ -5,6 +5,104 @@
   "type": "object",
   "additionalProperties": false,
   "required": ["id", "title", "description", "repository", "base_ref", "acceptance_criteria", "status", "max_attempts", "created_at", "updated_at"],
+  "$defs": {
+    "DeliveryRetryPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "max_work_attempts": {
+          "default": 3,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Work Attempts",
+          "type": "integer"
+        },
+        "coder": {
+          "$ref": "#/$defs/TransientRetryPolicy",
+          "default": {
+            "max_transient_failures": 5
+          }
+        },
+        "qa": {
+          "$ref": "#/$defs/TransientRetryPolicy",
+          "default": {
+            "max_transient_failures": 5
+          }
+        },
+        "reviewer": {
+          "$ref": "#/$defs/TransientRetryPolicy",
+          "default": {
+            "max_transient_failures": 5
+          }
+        }
+      },
+      "title": "DeliveryRetryPolicy",
+      "type": "object"
+    },
+    "DeliveryRetryFailure": {
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "enum": [
+            "coder",
+            "qa",
+            "reviewer"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "attempt": {
+          "maximum": 400,
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "code": {
+          "enum": [
+            "TIMEOUT",
+            "QUOTA_EXHAUSTED",
+            "RATE_LIMITED",
+            "PROVIDER_UNAVAILABLE"
+          ],
+          "title": "Code",
+          "type": "string"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Run Id"
+        }
+      },
+      "required": [
+        "role",
+        "attempt",
+        "code"
+      ],
+      "title": "DeliveryRetryFailure",
+      "type": "object"
+    },
+    "TransientRetryPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "max_transient_failures": {
+          "default": 5,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Transient Failures",
+          "type": "integer"
+        }
+      },
+      "title": "TransientRetryPolicy",
+      "type": "object"
+    }
+  },
   "properties": {
     "id": {"type": "string", "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$"},
     "title": {"type": "string", "minLength": 1, "maxLength": 200},
@@ -34,17 +132,19 @@
         "allowed_paths": {"type": "array", "items": {"type": "string"}},
         "denied_paths": {"type": "array", "items": {"type": "string"}},
         "allowed_commands": {"type": "array", "items": {"type": "string"}},
-        "max_attempts": {"type": "integer", "minimum": 1, "maximum": 10},
+        "max_attempts": {"type": "integer", "minimum": 1, "maximum": 400},
         "notes": {"type": "string"}
       }
     },
     "status": {"enum": ["NEW", "PLANNING", "IMPLEMENTING", "CONTINUE_REQUIRED", "QUEUED", "QA", "REVIEW", "DONE", "BLOCKED", "FAILED"]},
-    "max_attempts": {"type": "integer", "minimum": 1, "maximum": 10},
-    "attempts": {"type": "integer", "minimum": 0, "maximum": 10},
+    "max_attempts": {"type": "integer", "minimum": 1, "maximum": 400},
+    "attempts": {"type": "integer", "minimum": 0, "maximum": 400},
     "owner": {"type": "string"},
     "labels": {"type": "array", "items": {"type": "string"}},
     "created_at": {"type": "string", "format": "date-time"},
     "updated_at": {"type": "string", "format": "date-time"},
+    "retry_policy": {"$ref": "#/$defs/DeliveryRetryPolicy"},
+    "retry_failures": {"type": "array", "items": {"$ref": "#/$defs/DeliveryRetryFailure"}},
     "metadata": {"type": "object"}
   }
 }

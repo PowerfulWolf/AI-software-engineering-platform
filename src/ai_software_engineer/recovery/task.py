@@ -60,6 +60,7 @@ class AuthorizedRecoveryTaskBuilder:
             repository=facts.target.repository_root,
             base_ref=plan.target_base_revision,
             max_attempts=original.task.max_attempts,
+            retry_policy=original.task.retry_policy,
             created_at=plan.created_at,
             constraints=constraints,
             owner=original.task.owner,

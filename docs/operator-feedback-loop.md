@@ -53,8 +53,8 @@ evidence；已完成子仓库的 QA/Review 不因此失效。继续操作按当�
 
 ## Design 预算耗尽与存量需求处置
 
-Design 的设计尝试与临时故障现已分开计数，默认分别为 3 和 5，可在“设置 → 通用设置 → Design
-重试预算”调整（1–100）。`joint design attempt budget exhausted` 指设计尝试耗尽；
+Design 的设计尝试与临时故障现已分开计数，默认分别为 3 和 5，可在“设置 → 通用设置 → 执行与
+重试策略 → Designer”调整（1–100）。`joint design attempt budget exhausted` 指设计尝试耗尽；
 `joint design transient failure budget exhausted` 指临时故障耗尽。两者都在模型调用前拒绝继续。
 504 是供应商/网关返回的临时错误，发生在知识咨询时也只消费新的临时故障额度。
 
@@ -67,12 +67,20 @@ Design 的设计尝试与临时故障现已分开计数，默认分别为 3 和 
 2. 打开 codex Project 中该需求，确认显示“恢复设计”；预算恢复入口应优先于旧失败的“重试 Design”。
 3. 点击一次“恢复设计”。平台按当前 exact checkpoint 验证历史知识批准，追加恢复记录并继续；
    原需求、讨论、产品批准与失败记录保留，无需重新创建需求。
-4. 若之后临时故障再次耗尽，先核对模型服务，再提高“Design 临时故障上限”，保存并应用配置；
-   重启后点击“重试 Design”。也可提高“Design 设计尝试上限”直接延长旧设计预算，计数不会清零。
+4. 若之后临时故障再次耗尽，先核对模型服务，再提高 Designer 的“临时故障上限”，保存并应用配置；
+   重启后点击“重试 Design”。也可提高“设计尝试上限”直接延长旧设计预算，计数不会清零。
 5. 不符合历史知识恢复条件的其他需求只能提高对应预算后继续；本入口不能代替范围或计划审批。
 
-代码回滚使用此修复提交的 `git revert`。若新配置已保存，旧版本严格解析器不认识
-`design_retry_policy`，需在停止服务后移除这个配置字段再启动旧版本。保留全部 journal；旧版本不会
-执行新增的临时故障限制，会恢复旧计数行为，因此回滚期间暂停 Design 重试，不通过回写旧数据回滚。
+Product/Planner 耗尽同样先核对错误，再提高该角色对应上限、应用配置并继续；原对话、审批和计数保留。
+交付 Task 的策略在首次 dispatch 时冻结。已存在 Task 不会因为调整全局配置获得额外授权；
+若已 BLOCKED，打开原需求点击“继续交付”，检查平台生成的恢复范围/计划，按页面要求精确批准，
+再继续执行。候选复核或 Coder 恢复由现有 durable facts 决定，不能通过改库强制选择。新恢复 Task
+保留原冻结策略但开始新计数；原 Task/失败历史不变。没有策略字段的旧 Task 仍按原 max_attempts。
+
+代码回滚使用本次提交的 `git revert`，先停止运行操作。尚未产生带新策略的 Task 时，可在停止服务后
+把 `execution_retry_policy.designer` 转回上一版 `design_retry_policy`（max_attempts 改名为
+max_design_attempts），移除新字段，保留 journal。其他角色策略会丢失，不得假装仍生效。
+若已经产生 `Task.retry_policy/retry_failures` 或超过 10 的执行身份，旧二进制无法安全读取它们；
+必须继续使用兼容读取器并前向修复，不能删除这些字段、重写哈希或清空数据库来降级。
 - 契约见 [交付恢复规范](../.trellis/spec/core/delivery-recovery.md)，
   启动与设置见 [生产部署](production-setup.md)。

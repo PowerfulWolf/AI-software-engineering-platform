@@ -34,6 +34,7 @@
 
 ## Files
 
+- [`execution-retry-policy.md`](execution-retry-policy.md): all-role operator limits, durable transient accounting and compact settings.
 - [`design-retry-budget.md`](design-retry-budget.md): configurable Design/transient budgets and recovery UI.
 - [`architecture.md`](architecture.md)
 - [`contracts.md`](contracts.md)

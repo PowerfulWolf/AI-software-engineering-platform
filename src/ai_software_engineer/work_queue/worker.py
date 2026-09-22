@@ -308,7 +308,7 @@ class QueuedDeliverySupervisor:
             raise QueueConflict("queued delivery allocation changed")
         # A finite Task attempt budget bounds successful role invocations. Lease
         # recovery may wait briefly, but capacity shortage never spins forever.
-        for _ in range(64):
+        for _ in range(max(64, repository.get(task_id).max_attempts * 4 + 8)):
             pending = tuple(
                 item
                 for item in self.queue.items_for_task(task_id)

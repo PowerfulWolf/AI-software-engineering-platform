@@ -19,6 +19,7 @@ from ai_software_engineer.domain.artifact import (
     ImplementationReportArtifact,
 )
 from ai_software_engineer.domain.enums import AgentRole, QaReportStatus, ReviewVerdict
+from ai_software_engineer.domain.retry_policy import MAX_EXECUTION_ATTEMPTS
 
 ScenarioKey = tuple[AgentRole, int]
 
@@ -44,8 +45,10 @@ class FakeAgentAdapter:
                 or type(key[1]) is not int
             ):
                 raise AgentConfigurationError("fake scenario keys must be (AgentRole, int)")
-            if not 1 <= key[1] <= 10:
-                raise AgentConfigurationError("fake scenario attempt must be between 1 and 10")
+            if not 1 <= key[1] <= MAX_EXECUTION_ATTEMPTS:
+                raise AgentConfigurationError(
+                    f"fake scenario attempt must be between 1 and {MAX_EXECUTION_ATTEMPTS}"
+                )
 
     def run(self, request: AgentRequest) -> AgentResult:
         """Return a deterministic result, caching exact run replay."""

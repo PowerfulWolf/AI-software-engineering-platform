@@ -12,6 +12,7 @@ from pydantic import AwareDatetime, Field, ValidationError
 from ai_software_engineer.agents import AgentErrorCode, StructuredModelClient, StructuredModelError
 from ai_software_engineer.domain.enums import TeamRole
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
+from ai_software_engineer.domain.retry_policy import ExecutionRetryPolicy, StageRetryPolicy
 from ai_software_engineer.knowledge.stages import StageWorkflowGate, repeated_child_failure
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.delivery import (
@@ -29,7 +30,7 @@ from ai_software_engineer.multi_directory.attachments import (
     MAX_REQUIREMENT_SCREENSHOTS,
     RequirementAttachmentStore,
 )
-from ai_software_engineer.multi_directory.budget import DESIGN_TRANSIENT_COUNTER, DesignRetryPolicy
+from ai_software_engineer.multi_directory.budget import DesignRetryPolicy
 from ai_software_engineer.multi_directory.integration_commands import planner_command_policy
 from ai_software_engineer.multi_directory.models import (
     Candidate,
@@ -165,11 +166,22 @@ class JointDeliveryService:
         team: TeamWorkspace,
         project: ProjectWorkspace,
         design_retry_policy: DesignRetryPolicy | None = None,
+        execution_retry_policy: ExecutionRetryPolicy | None = None,
     ) -> None:
         self.backend = backend
         self.team = team
         self.project = project
         self.design_retry_policy = design_retry_policy or DesignRetryPolicy()
+        self.execution_retry_policy = execution_retry_policy or ExecutionRetryPolicy(
+            designer=StageRetryPolicy(
+                max_attempts=self.design_retry_policy.max_design_attempts,
+                max_transient_failures=self.design_retry_policy.max_transient_failures,
+            )
+        )
+        self.design_retry_policy = DesignRetryPolicy(
+            max_design_attempts=self.execution_retry_policy.designer.max_attempts,
+            max_transient_failures=self.execution_retry_policy.designer.max_transient_failures,
+        )
         if project.team.manifest != team.manifest:
             raise ValueError("Project is not served by this Team")
         self.journal = JointJournal(project.requirements_root)
@@ -599,12 +611,18 @@ class JointDeliveryService:
         except KnowledgeGapRaised as error:
             current = self._current(checkpoint.delivery_id)
             attempts = dict(current.attempts)
-            # Reserve a stage attempt before invoking the model, but do not spend
-            # that reservation when the knowledge gate interrupts before the
-            # requested Design artifact is generated. Typed provider interruptions
-            # are accounted separately by _design_output; unknown failures remain spent.
-            if current.stage is JointStage.DESIGNING and current.design is None:
-                attempts["design"] = max(0, attempts.get("design", 0) - 1)
+            # Refund only a reservation made during this advance. Planning gates
+            # can wait before any new reservation; they must not erase old work.
+            # Typed provider failures are accounted separately by _stage_output.
+            stage_key = {
+                JointStage.PRODUCT_DISCOVERY: "product",
+                JointStage.DESIGNING: "design",
+                JointStage.PLANNING: "plan",
+            }.get(current.stage)
+            if stage_key is not None and attempts.get(stage_key, 0) > checkpoint.attempts.get(
+                stage_key, 0
+            ):
+                attempts[stage_key] = max(0, attempts.get(stage_key, 0) - 1)
             return self._save(
                 current,
                 stage=JointStage.WAITING_HUMAN,
@@ -715,8 +733,11 @@ class JointDeliveryService:
                 next_action="Discover one product across all prepared directories.",
             )
         if checkpoint.stage is JointStage.PRODUCT_DISCOVERY:
-            checkpoint = self._attempt(checkpoint, "product", limit=20)
-            draft = self._produce(
+            self._require_stage_transient_budget(checkpoint, "product")
+            checkpoint = self._attempt(
+                checkpoint, "product", limit=self.execution_retry_policy.product.max_attempts
+            )
+            draft = self._stage_output(
                 checkpoint,
                 ProductDraft,
                 "Act as Product Agent. Produce one reviewable "
@@ -804,7 +825,10 @@ class JointDeliveryService:
                 raise ValueError("durable planning gate drifted from exact design facts")
             self._stage_workflow(checkpoint).require("planning-gate", checkpoint)
             if decision.mode is PlanningMode.COMPLEX:
-                checkpoint = self._attempt(checkpoint, "plan")
+                self._require_stage_transient_budget(checkpoint, "plan")
+                checkpoint = self._attempt(
+                    checkpoint, "plan", limit=self.execution_retry_policy.planner.max_attempts
+                )
             plan = self._planning_output(
                 checkpoint,
                 "Act as Planner. Bind design_sha256. "
@@ -1044,27 +1068,45 @@ class JointDeliveryService:
         assert checkpoint.planning_decision is not None
         if checkpoint.planning_decision.mode is PlanningMode.SIMPLE:
             return fast_joint_plan(checkpoint)
-        return self._produce(checkpoint, JointExecutionPlan, instructions)
+        return self._stage_output(checkpoint, JointExecutionPlan, instructions)
 
     def _require_design_transient_budget(self, checkpoint: JointCheckpoint) -> None:
-        budget = self.design_retry_policy.budget(checkpoint.attempts)
-        if budget.exhausted == "transient":
+        self._require_stage_transient_budget(checkpoint, "design")
+
+    def _require_stage_transient_budget(self, checkpoint: JointCheckpoint, stage: str) -> None:
+        policy = {
+            "product": self.execution_retry_policy.product,
+            "design": self.execution_retry_policy.designer,
+            "plan": self.execution_retry_policy.planner,
+        }[stage]
+        if checkpoint.attempts.get(stage + "_transient", 0) >= policy.max_transient_failures:
             raise ValueError(
-                "joint design transient failure budget exhausted; "
-                "inspect provider evidence and increase design_retry_policy.max_transient_failures "
+                f"joint {stage} transient failure budget exhausted; "
+                "inspect provider evidence and increase execution_retry_policy role allowance "
                 "in Settings before restarting and retrying"
             )
 
     def _design_output(
         self, checkpoint: JointCheckpoint, instructions: str
     ) -> JointTechnicalDesign:
+        return self._stage_output(checkpoint, JointTechnicalDesign, instructions)
+
+    def _stage_output[Output: DomainModel](
+        self, checkpoint: JointCheckpoint, model: type[Output], instructions: str
+    ) -> Output:
+        stage = {
+            JointStage.PRODUCT_DISCOVERY: "product",
+            JointStage.DESIGNING: "design",
+            JointStage.PLANNING: "plan",
+        }[checkpoint.stage]
         try:
-            return self._produce(checkpoint, JointTechnicalDesign, instructions)
+            return self._produce(checkpoint, model, instructions)
         except StructuredModelError as error:
             if error.retryable:
                 attempts = dict(checkpoint.attempts)
-                attempts["design"] -= 1
-                attempts[DESIGN_TRANSIENT_COUNTER] = attempts.get(DESIGN_TRANSIENT_COUNTER, 0) + 1
+                attempts[stage] -= 1
+                key = stage + "_transient"
+                attempts[key] = attempts.get(key, 0) + 1
                 self._save(checkpoint, attempts=attempts)
             raise
 

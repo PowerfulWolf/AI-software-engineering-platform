@@ -210,10 +210,56 @@ def test_design_retry_budget_schema_rejects_invalid_limits(key: str, value: Json
 
 def test_design_retry_budget_schema_allows_legacy_and_custom_policies() -> None:
     payload = ProductionConfig.default().to_wire()
-    payload.pop("design_retry_policy")
+    payload.pop("execution_retry_policy")
     _assert_valid(payload, "production-config.schema.json")
     payload["design_retry_policy"] = {"max_design_attempts": 100, "max_transient_failures": 1}
     _assert_valid(payload, "production-config.schema.json")
+
+
+@pytest.mark.parametrize("role", ["product", "designer", "planner", "coder", "qa", "reviewer"])
+@pytest.mark.parametrize("value", [0, 101, True, "5", 1.5])
+def test_execution_retry_schema_rejects_bad_role_limits(role: str, value: JsonValue) -> None:
+    payload = ProductionConfig.default().to_wire()
+    payload["execution_retry_policy"] = {role: {"max_transient_failures": value}}
+    _assert_invalid(payload, "production-config.schema.json")
+
+
+def test_execution_retry_schema_accepts_canonical_config() -> None:
+    _assert_valid(ProductionConfig.default().to_wire(), "production-config.schema.json")
+
+
+def test_maximum_execution_policy_task_and_nested_schemas() -> None:
+    from ai_software_engineer.domain import Task
+    from ai_software_engineer.domain.retry_policy import DeliveryRetryPolicy, TransientRetryPolicy
+
+    limit = TransientRetryPolicy(max_transient_failures=100)
+    policy = DeliveryRetryPolicy(max_work_attempts=100, coder=limit, qa=limit, reviewer=limit)
+    original = make_task()
+    assert original.constraints is not None
+    task = Task.model_validate(
+        {
+            **original.to_wire(),
+            "max_attempts": policy.execution_limit,
+            "constraints": {
+                **original.constraints.to_wire(),
+                "max_attempts": policy.execution_limit,
+            },
+            "retry_policy": policy.to_wire(),
+            "retry_failures": [{"role": "coder", "attempt": 1, "code": "TIMEOUT"}],
+            "attempts": 400,
+        }
+    )
+    _assert_valid(task.to_wire(), "task.schema.json")
+    payload = task.to_wire()
+    payload["attempts"] = 401
+    _assert_invalid(payload, "task.schema.json")
+    expected = Task.model_json_schema()
+    for path in (Path(__file__).parents[2] / "schemas").glob("*.schema.json"):
+        schema = json.loads(path.read_text())
+        nested = schema.get("$defs", {}).get("Task")
+        if nested is not None:
+            for field in ("retry_policy", "retry_failures", "max_attempts", "attempts"):
+                assert nested["properties"][field] == expected["properties"][field], (path, field)
 
 
 def test_production_config_schema_accepts_supported_home_relative_input() -> None:

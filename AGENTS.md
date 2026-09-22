@@ -233,11 +233,15 @@ subprocess/filesystem handle。
 
 ## 失败与重试
 
-- 联合 Design 的 `ProductionConfig.design_retry_policy` 分开限制设计尝试（默认 3）与临时模型
-  故障（默认 5），均可由操作者配置为 1–100，保存并重启生效。只有明确 typed 的 retryable
-  provider failure 才退回 Design 预留次数并追加 `attempts.design_transient`；未知中断保留预留。
-  旧 journal 不追溯重算。UI 必须优先显示符合条件的“恢复设计”，不得用普通重试遮住恢复或在预算
-  耗尽时继续显示必然失败的操作。详见 `.trellis/spec/core/design-retry-budget.md`。
+- `ProductionConfig.execution_retry_policy` 分开限制六个模型角色的工作/临时故障额度，
+  每项为 1–100，保存并重启生效。Product 工作默认 20，Designer/Planner/Coder 默认 3；
+  六角色临时故障各默认 5。QA/Review 有效否定结论必须回 Coder，Manager 无模型额度。
+  联合上游仅 typed retryable provider failure 退回工作预留并追加对应 `_transient` 计数；
+  未知中断不退款。新 Task 冻结 `retry_policy`，`record_retry_failure` 原子追加故障和下一
+  执行身份，MySQL 写前/写后 fence 且新 Run 必须有新 claim；工作额度不再等于执行身份。
+  旧 Task 和 journal 不追溯重算，旧 `design_retry_policy` 配置可读迁移。UI 不能用重试遮住
+  精确审批或“恢复设计”，额度耗尽隐藏必然失败的操作。详见
+  `.trellis/spec/core/execution-retry-policy.md` 与 `design-retry-budget.md`。
 - 默认最多 3 个 Coder attempt；Agent timeout/崩溃只按 transient 重试，不产生 verdict；
 - T010 使用 `RetryingOrchestrator` 继续已有 `PLANNING`/`IMPLEMENTING`/`CONTINUE_REQUIRED`/
   `QUEUED`/`QA`/`REVIEW`

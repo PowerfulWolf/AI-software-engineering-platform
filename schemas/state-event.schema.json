@@ -11,7 +11,7 @@
     "from_status": {"enum": ["NEW", "PLANNING", "IMPLEMENTING", "CONTINUE_REQUIRED", "QUEUED", "QA", "REVIEW", "DONE", "BLOCKED", "FAILED"]},
     "to_status": {"enum": ["NEW", "PLANNING", "IMPLEMENTING", "CONTINUE_REQUIRED", "QUEUED", "QA", "REVIEW", "DONE", "BLOCKED", "FAILED"]},
     "actor": {"const": "orchestrator"},
-    "attempt": {"type": "integer", "minimum": 1, "maximum": 10},
+    "attempt": {"type": "integer", "minimum": 1, "maximum": 400},
     "reason": {"type": "string", "minLength": 1},
     "artifact_ids": {"type": "array", "items": {"type": "string", "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$"}},
     "source_revision": {"type": "string", "minLength": 1},

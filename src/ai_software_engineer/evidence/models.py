@@ -21,6 +21,7 @@ from ai_software_engineer.domain.artifact import Evidence, EvidenceId, Sha256
 from ai_software_engineer.domain.enums import AgentRole, EvidenceType
 from ai_software_engineer.domain.identity import ContextId, RepositoryId, RunId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, WirePayload, ensure_unique
+from ai_software_engineer.domain.retry_policy import ExecutionAttempt
 from ai_software_engineer.domain.task import TaskId
 
 OperationId = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_.:-]{0,127}$")]
@@ -67,7 +68,7 @@ class RunEvidenceIdentity(DomainModel):
     run_id: RunId
     agent_id: NonEmptyStr
     role: AgentRole
-    attempt: Annotated[StrictInt, Field(ge=1, le=10)]
+    attempt: ExecutionAttempt
     source_revision: NonEmptyStr
     context_manifest_id: ContextId
 

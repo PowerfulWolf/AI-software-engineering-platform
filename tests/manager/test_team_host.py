@@ -159,7 +159,9 @@ def test_team_host_scopes_product_catalog_and_context(
     config = ProductionConfig.model_validate(
         {
             **config.to_wire(),
-            "design_retry_policy": {"max_design_attempts": 7, "max_transient_failures": 12},
+            "execution_retry_policy": {
+                "designer": {"max_attempts": 7, "max_transient_failures": 12}
+            },
         }
     )
     host = TeamHost(

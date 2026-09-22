@@ -253,7 +253,7 @@
           "$ref": "#/$defs/AgentRole"
         },
         "attempt": {
-          "maximum": 10,
+          "maximum": 400,
           "minimum": 1,
           "title": "Attempt",
           "type": "integer"

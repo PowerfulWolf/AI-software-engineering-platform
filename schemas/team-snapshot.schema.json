@@ -745,6 +745,17 @@
           "title": "Stage",
           "type": "string"
         },
+        "stage_budget": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StageBudget"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "title": {
           "title": "Title",
           "type": "string"
@@ -957,6 +968,67 @@
         "selected_paths"
       ],
       "title": "ScopeView",
+      "type": "object"
+    },
+    "StageBudget": {
+      "additionalProperties": false,
+      "properties": {
+        "attempts": {
+          "minimum": 0,
+          "title": "Attempts",
+          "type": "integer"
+        },
+        "exhausted": {
+          "anyOf": [
+            {
+              "enum": [
+                "work",
+                "transient"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exhausted"
+        },
+        "max_attempts": {
+          "default": 3,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Attempts",
+          "type": "integer"
+        },
+        "max_transient_failures": {
+          "default": 5,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Transient Failures",
+          "type": "integer"
+        },
+        "role": {
+          "enum": [
+            "product",
+            "designer",
+            "planner"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "transient_failures": {
+          "minimum": 0,
+          "title": "Transient Failures",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "role",
+        "attempts",
+        "transient_failures"
+      ],
+      "title": "StageBudget",
       "type": "object"
     },
     "TaskView": {

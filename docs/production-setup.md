@@ -150,23 +150,40 @@ AgentProfile，也不代表单个 Git 仓库或一次 Requirement。
 Team、Project 和 Repository sidecar 目录只在显式的 Host 初始化、Project/Requirement 准备或交付写入流程中创建；加载配置和
 `ase team serve` 等只读查看不会创建目录。
 
-### Design 重试预算
+### 执行与重试策略
 
-“设置 → 通用设置 → Design 重试预算”提供两个独立上限，保存后通过“应用配置”重启服务生效：
+“设置 → 通用设置 → 执行与重试策略”按模型角色提供独立上限，保存并应用配置重启后生效：
 
 ```json
 {
-  "design_retry_policy": {
-    "max_design_attempts": 3,
-    "max_transient_failures": 5
+  "execution_retry_policy": {
+    "product": {"max_attempts": 20, "max_transient_failures": 5},
+    "designer": {"max_attempts": 3, "max_transient_failures": 5},
+    "planner": {"max_attempts": 3, "max_transient_failures": 5},
+    "coder": {"max_attempts": 3, "max_transient_failures": 5},
+    "qa": {"max_transient_failures": 5},
+    "reviewer": {"max_transient_failures": 5}
   }
 }
 ```
 
-两项均为 1–100 的整数。设计尝试包含首次生成和不合格输出后的修正；明确分类的 504/超时/限流等
-临时模型故障单独计数，包括生成设计之前的知识咨询。临时故障退出当前操作，现有模型备用路由仍有界，
-不会增加无限自动重试循环。需求详情显示已用次数/上限；提高上限后可继续已有需求，重启不清空计数。
-旧配置不填写该字段时使用 3/5 默认值；新功能不追溯重算旧失败。恢复步骤见
+每个输入均为 1–100 的整数。工作次数含首次执行：Product 包含讨论/产物调用，Designer/Planner
+包含产物修正，Coder 包含实现、未完成续跑与 QA/Review 退回修复。临时故障上限指可记录的失败数，
+达到上限便停止（配置 1 表示首次临时失败后停止）。只有 typed retryable 的超时、504/服务不可用、
+限流与额度故障计入独立额度，包括角色调用前的知识咨询；未知中断不退款。
+
+QA/Reviewer 的有效否定结论不在本角色重跑，而是交给 Coder；候选复核仍要求新计划及人工批准。
+Manager 当前为确定性调度，没有模型额度。联合上游调用失败会结束当前操作，操作者可检查原因后
+继续；Delivery 的重试必须取得新 Run 的真实 claim，不能在一个已消费 permit 内重复调用。
+
+配置覆盖 Console/`ase request` 的 Product、Designer、Planner 以及生产新建 Task 的
+Coder、QA、Reviewer。低层兼容 `ase project` 的原生上游 journal 不迁移到联合计数协议；
+其旧上游恢复行为保持不变，日常需求请使用 `ase request`。低层手工创建的 Task 若无
+`retry_policy` 也保留原 `max_attempts` 行为。
+
+上游需求显示次数/上限，提高配置后可以继续，重启不清零。新 Task 在 dispatch 时冻结
+`retry_policy`；已有 Task 不会随全局设置热改或自动解除终态。旧 `design_retry_policy` 可读并映射
+到 Designer，保存输出统一为新字段；同时给出互相冲突的新旧配置会拒绝。新功能不追溯重算旧失败。恢复步骤见
 [操作反馈闭环](operator-feedback-loop.md#design-预算耗尽与存量需求处置)。
 
 ## 5. 模型路由

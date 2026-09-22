@@ -8,12 +8,13 @@ queue implementation.
 from enum import StrEnum
 from typing import Literal, Self
 
-from pydantic import AwareDatetime, Field, StrictInt, model_validator
+from pydantic import AwareDatetime, model_validator
 
 from ai_software_engineer.domain.agent import AgentId
 from ai_software_engineer.domain.enums import AgentRole, BrainTier
 from ai_software_engineer.domain.identity import RepositoryId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
+from ai_software_engineer.domain.retry_policy import ExecutionAttempt
 from ai_software_engineer.domain.task import TaskId
 from ai_software_engineer.domain.workforce import ModelSelection, RoleAssignment, TaskLease
 
@@ -66,7 +67,7 @@ class AssignmentDecision(DomainModel):
     task_id: TaskId
     repository_id: RepositoryId
     role: AgentRole
-    attempt: StrictInt = Field(ge=1, le=10)
+    attempt: ExecutionAttempt
     agent_id: AgentId | None = None
     assignment: RoleAssignment | None = None
     lease: TaskLease | None = None

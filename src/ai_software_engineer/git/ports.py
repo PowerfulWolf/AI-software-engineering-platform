@@ -2,15 +2,16 @@
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Protocol, Self
+from typing import Protocol, Self
 
-from pydantic import Field, StrictInt, model_validator
+from pydantic import model_validator
 
 from ai_software_engineer.domain.enums import AgentRole
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
+from ai_software_engineer.domain.retry_policy import ExecutionAttempt
 from ai_software_engineer.domain.task import TaskId
 
-AttemptNumber = Annotated[StrictInt, Field(ge=1, le=10)]
+AttemptNumber = ExecutionAttempt
 
 
 class WorktreeSpec(DomainModel):

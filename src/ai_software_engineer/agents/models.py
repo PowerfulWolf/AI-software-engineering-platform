@@ -16,9 +16,10 @@ from ai_software_engineer.domain.artifact import (
 from ai_software_engineer.domain.enums import AgentRole, ArtifactKind
 from ai_software_engineer.domain.identity import RunId as RunId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
+from ai_software_engineer.domain.retry_policy import ExecutionAttempt
 from ai_software_engineer.domain.task import TaskId
 
-AgentAttempt = Annotated[StrictInt, Field(ge=1, le=10)]
+AgentAttempt = ExecutionAttempt
 DurationMs = Annotated[StrictInt, Field(ge=0)]
 TokenCount = Annotated[StrictInt, Field(ge=0)]
 ROLE_OUTPUT_SCHEMA: Final[dict[AgentRole, str]] = {

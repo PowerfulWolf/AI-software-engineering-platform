@@ -11,7 +11,7 @@
     "repository_id": {"type": "string", "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$"},
     "agent_id": {"type": "string", "minLength": 1},
     "role": {"enum": ["orchestrator", "coder", "qa", "reviewer"]},
-    "attempt": {"type": "integer", "minimum": 1, "maximum": 10},
+    "attempt": {"type": "integer", "minimum": 1, "maximum": 400},
     "provider": {"type": "string", "minLength": 1},
     "model": {"type": "string", "minLength": 1},
     "context_manifest_id": {"type": "string", "pattern": "^ctx_[a-f0-9]{64}$"},

@@ -31,6 +31,7 @@ from ai_software_engineer.domain.model import (
     WirePayload,
     ensure_unique,
 )
+from ai_software_engineer.domain.retry_policy import TRANSIENT_CODES
 from ai_software_engineer.domain.task import TaskId
 
 Clock = Callable[[], datetime]
@@ -340,22 +341,12 @@ class FallbackAgentAdapter:
         return attempts
 
 
-_FALLBACK_CODES = frozenset(
-    {
-        AgentErrorCode.TIMEOUT,
-        AgentErrorCode.QUOTA_EXHAUSTED,
-        AgentErrorCode.RATE_LIMITED,
-        AgentErrorCode.PROVIDER_UNAVAILABLE,
-    }
-)
-
-
 def _allows_fallback(result: AgentResult) -> bool:
     return (
         result.status is not AgentRunStatus.SUCCEEDED
         and result.error is not None
         and result.error.transient
-        and result.error.code in _FALLBACK_CODES
+        and result.error.code in TRANSIENT_CODES
     )
 
 

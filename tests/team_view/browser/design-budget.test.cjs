@@ -2,6 +2,26 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { ui, operation } = require("./fixture.cjs");
 
+test("Product and Planner exhaustion hides futile actions; increased Planner allowance enables retry", async (t) => {
+  const h = await ui(t, {operations: [operation("FAILED")]});
+  await h.requests();
+  await h.close();
+  for (const [stage, role] of [["PRODUCT_DISCOVERY", "product"], ["PLANNING", "planner"]]) {
+    Object.assign(h.team.requests[0], {stage, stage_budget: {role, attempts: 1, max_attempts: 3,
+      transient_failures: 2, max_transient_failures: 2, exhausted: "transient"}});
+    await h.tick();
+    await h.page.evaluate(() => showDetail("request", "request_fixture"));
+    const detail = h.page.locator("#detail");
+    assert.match(await detail.innerText(), /临时故障 2\/2/);
+    assert.equal(await detail.getByRole("button", {name: /^(继续交付|继续需求讨论|重试 Planner)$/}).count(), 0);
+  }
+  h.team.requests[0].stage_budget.max_transient_failures = 3;
+  delete h.team.requests[0].stage_budget.exhausted;
+  await h.tick();
+  await h.page.evaluate(() => showDetail("request", "request_fixture"));
+  assert.equal(await h.page.locator("#detail").getByRole("button", {name: "重试 Planner", exact: true}).count(), 1);
+});
+
 test("real browser selects recovery over the failed retry and hides it while running", async (t) => {
   const h = await ui(t, {operations: [operation("FAILED")]});
   Object.assign(h.team.requests[0], {stage: "DESIGNING", design_recovery_available: true,
@@ -41,18 +61,14 @@ test("real browser displays separate exhausted counters and budget settings inpu
   assert.equal(await detail.getByRole("button", {name: "继续交付", exact: true}).count(), 0);
   await h.page.locator("#nav-settings").click();
   await h.page.locator("#content .settings-form").waitFor();
-  // Only the new policy is injected into the existing read-only fixture Settings response.
-  await h.page.evaluate(() => {
-    settingsDraft.design_retry_policy = {max_design_attempts: 3, max_transient_failures: 5};
-    render();
-  });
   const content = h.page.locator("#content");
-  const limits = content.locator('input[type="number"][max="100"]');
+  const limits = content.locator('input[name^="retry-designer-"]');
   assert.equal(await limits.count(), 2);
   await limits.first().fill("8");
   await limits.last().fill("20");
-  assert.deepEqual(await h.page.evaluate(() => settingsDraft.design_retry_policy),
-    {max_design_attempts: 8, max_transient_failures: 20});
+  assert.deepEqual(await h.page.evaluate(() => settingsDraft.execution_retry_policy.designer),
+    {max_attempts: 8, max_transient_failures: 20});
+  assert.equal(await content.locator('input[type="number"][max="100"]').count(), 10);
   await limits.first().fill("101");
   assert.equal(await limits.first().evaluate(node => node.checkValidity()), false);
 });

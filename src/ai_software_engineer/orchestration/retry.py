@@ -3,6 +3,7 @@
 from enum import StrEnum
 
 from ai_software_engineer.agents import AgentErrorCode, AgentRunStatus, RunId
+from ai_software_engineer.agents.structured import StructuredModelError
 from ai_software_engineer.context import ContextBudgetExceeded
 from ai_software_engineer.context.models import ContextId
 from ai_software_engineer.domain.artifact import (
@@ -26,6 +27,7 @@ from ai_software_engineer.domain.enums import (
 )
 from ai_software_engineer.domain.event import EventId, StateEvent
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
+from ai_software_engineer.domain.retry_policy import TRANSIENT_CODES, DeliveryRetryFailure
 from ai_software_engineer.domain.task import Task, TaskId
 from ai_software_engineer.orchestration.runner import (
     AgentRunFailed,
@@ -130,6 +132,27 @@ class RetryingOrchestrator(SerialOrchestrator):
             raise TaskNotRunnable(f"Task {task.id} is terminal at {task.status.value}")
 
         existing_events = self._repository.list_events(task.id)
+        role = {
+            TaskStatus.IMPLEMENTING: AgentRole.CODER,
+            TaskStatus.QA: AgentRole.QA,
+            TaskStatus.REVIEW: AgentRole.REVIEWER,
+        }.get(task.status)
+        if (
+            task.retry_policy is not None
+            and role is not None
+            and task.transient_failures(role) >= task.retry_policy.transient_limit(role)
+        ):
+            return self._blocked(
+                task,
+                RetryClassification.BUDGET_EXHAUSTED,
+                f"{role.value} transient allowance exhausted; preserve evidence for recovery",
+                max(task.attempts, 1),
+                tuple(event.event_id for event in existing_events),
+                tuple(dict.fromkeys(a for event in existing_events for a in event.artifact_ids)),
+                source_revision=existing_events[-1].source_revision
+                if existing_events
+                else task.base_ref,
+            )
         checkpointed_artifact_ids = {
             artifact_id for event in existing_events for artifact_id in event.artifact_ids
         }
@@ -218,7 +241,7 @@ class RetryingOrchestrator(SerialOrchestrator):
                         event_ids,
                         (),
                     )
-                if task.attempts >= task.max_attempts:
+                if task.work_budget_exhausted:
                     return self._blocked(
                         task,
                         RetryClassification.BUDGET_EXHAUSTED,
@@ -374,7 +397,7 @@ class RetryingOrchestrator(SerialOrchestrator):
                             (qa.artifact_id,),
                             source_revision=implementation.content.commit_sha,
                         )
-                    if task.attempts >= task.max_attempts:
+                    if task.work_budget_exhausted:
                         return self._blocked(
                             task,
                             RetryClassification.QA_FINDING,
@@ -440,7 +463,7 @@ class RetryingOrchestrator(SerialOrchestrator):
                 else:
                     review = current_review
                 if review.content.verdict is ReviewVerdict.REJECT:
-                    if task.attempts >= task.max_attempts:
+                    if task.work_budget_exhausted:
                         return self._blocked(
                             task,
                             RetryClassification.REVIEW_FINDING,
@@ -528,8 +551,9 @@ class RetryingOrchestrator(SerialOrchestrator):
                 context_ids.append(completed.context_id)
                 return plan, self._repository.get(task.id), attempt
             except AgentRunFailed as error:
-                if _retryable(error) and attempt < task.max_attempts:
-                    attempt += 1
+                next_attempt = self._retry_failure(task, error)
+                if next_attempt is not None:
+                    attempt = next_attempt
                     continue
                 return self._blocked(
                     self._repository.get(task.id),
@@ -616,8 +640,9 @@ class RetryingOrchestrator(SerialOrchestrator):
                 )
                 return implementation, task, event_id
             except AgentRunFailed as error:
-                if _retryable(error) and attempt < task.max_attempts:
-                    attempt += 1
+                next_attempt = self._retry_failure(task, error)
+                if next_attempt is not None:
+                    attempt = next_attempt
                     continue
                 return self._blocked(
                     self._repository.get(task.id),
@@ -627,6 +652,12 @@ class RetryingOrchestrator(SerialOrchestrator):
                     (),
                     tuple(item.artifact_id for item in feedback),
                 )
+            except StructuredModelError as error:
+                outcome = self._knowledge_failure(task, error)
+                if isinstance(outcome, int):
+                    attempt = outcome
+                    continue
+                return outcome
             except DeliveryContractViolation as error:
                 self._fail_platform(self._repository.get(task.id), attempt, str(error))
                 raise
@@ -665,8 +696,9 @@ class RetryingOrchestrator(SerialOrchestrator):
                 context_ids.append(completed.context_id)
                 return qa, self._repository.get(task.id)
             except AgentRunFailed as error:
-                if _retryable(error) and attempt < task.max_attempts:
-                    attempt += 1
+                next_attempt = self._retry_failure(task, error)
+                if next_attempt is not None:
+                    attempt = next_attempt
                     continue
                 return self._blocked(
                     self._repository.get(task.id),
@@ -677,6 +709,12 @@ class RetryingOrchestrator(SerialOrchestrator):
                     (implementation.artifact_id,),
                     source_revision=implementation.content.commit_sha,
                 )
+            except StructuredModelError as error:
+                outcome = self._knowledge_failure(task, error)
+                if isinstance(outcome, int):
+                    attempt = outcome
+                    continue
+                return outcome
             except DeliveryContractViolation as error:
                 self._fail_platform(self._repository.get(task.id), attempt, str(error))
                 raise
@@ -715,8 +753,9 @@ class RetryingOrchestrator(SerialOrchestrator):
                 context_ids.append(completed.context_id)
                 return review, self._repository.get(task.id)
             except AgentRunFailed as error:
-                if _retryable(error) and attempt < task.max_attempts:
-                    attempt += 1
+                next_attempt = self._retry_failure(task, error)
+                if next_attempt is not None:
+                    attempt = next_attempt
                     continue
                 return self._blocked(
                     self._repository.get(task.id),
@@ -727,6 +766,12 @@ class RetryingOrchestrator(SerialOrchestrator):
                     (qa.artifact_id,),
                     source_revision=implementation.content.commit_sha,
                 )
+            except StructuredModelError as error:
+                outcome = self._knowledge_failure(task, error)
+                if isinstance(outcome, int):
+                    attempt = outcome
+                    continue
+                return outcome
             except DeliveryContractViolation as error:
                 self._fail_platform(self._repository.get(task.id), attempt, str(error))
                 raise
@@ -774,6 +819,74 @@ class RetryingOrchestrator(SerialOrchestrator):
                 source_revision=task.base_ref,
                 attempt=attempt,
             )
+
+    def _knowledge_failure(self, task: Task, error: StructuredModelError) -> int | BlockedResult:
+        current = self._repository.get(task.id)
+        role = {
+            TaskStatus.IMPLEMENTING: AgentRole.CODER,
+            TaskStatus.QA: AgentRole.QA,
+            TaskStatus.REVIEW: AgentRole.REVIEWER,
+        }[current.status]
+        next_attempt = (
+            self._record_transient(current, role, error.code.value) if error.retryable else None
+        )
+        if next_attempt is not None:
+            return next_attempt
+        events = self._repository.list_events(task.id)
+        classification = {
+            AgentErrorCode.INVALID_OUTPUT: RetryClassification.INVALID_OUTPUT,
+            AgentErrorCode.POLICY_VIOLATION: RetryClassification.POLICY_VIOLATION,
+        }.get(error.code, RetryClassification.TRANSIENT_INFRA)
+        if error.retryable and current.retry_policy is not None:
+            classification = RetryClassification.BUDGET_EXHAUSTED
+        return self._blocked(
+            self._repository.get(task.id),
+            classification,
+            f"{role.value} knowledge preparation failed: {error.code.value}",
+            current.attempts,
+            (),
+            tuple(a.artifact_id for a in self._artifacts_for_task(task.id)),
+            source_revision=events[-1].source_revision if events else task.base_ref,
+        )
+
+    def _retry_failure(self, task: Task, error: AgentRunFailed) -> int | None:
+        current = self._repository.get(task.id)
+        result = error.result
+        if current.retry_policy is None:
+            return (
+                current.attempts + 1
+                if _retryable(error) and current.attempts < current.max_attempts
+                else None
+            )
+        failure = result.error
+        if (
+            failure is None
+            or not failure.transient
+            or failure.code not in TRANSIENT_CODES
+            or result.role is AgentRole.ORCHESTRATOR
+        ):
+            return None
+        return self._record_transient(current, result.role, failure.code.value, result.run_id)
+
+    def _record_transient(
+        self, task: Task, role: AgentRole, code: str, run_id: str | None = None
+    ) -> int | None:
+        if task.retry_policy is None or role is AgentRole.ORCHESTRATOR:
+            return None
+        self._guard_write()
+        self._repository.record_retry_failure(
+            task.id,
+            DeliveryRetryFailure.model_validate(
+                {
+                    "role": role,
+                    "attempt": task.attempts,
+                    "code": code,
+                    "run_id": run_id,
+                }
+            ),
+        )
+        updated = self._repository.get(task.id)
+        return updated.attempts if updated.attempts > task.attempts else None
 
     def _record_attempt(self, task: Task, attempt: int) -> None:
         self._guard_write()

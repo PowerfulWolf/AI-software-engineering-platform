@@ -34,7 +34,7 @@ from ai_software_engineer.manager.dispatch import (
     VerificationReservation,
 )
 from ai_software_engineer.manager.mysql_dispatch_authority import _decode_allocation
-from ai_software_engineer.multi_directory.budget import DesignRetryPolicy
+from ai_software_engineer.multi_directory.budget import DesignRetryPolicy, stage_budget
 from ai_software_engineer.multi_directory.models import JointCheckpoint, JointStage, digest
 from ai_software_engineer.multi_directory.production import DerivedStageInputs
 from ai_software_engineer.multi_directory.retirement import RequirementRetirementStore
@@ -272,12 +272,15 @@ class ProductionTeamReader:
                     else "请在“知识缺口”中补充并批准解答，然后继续交付。"  # noqa: RUF001
                 )
             design_budget = self.config.design_retry_policy.budget(joint.attempts)
+            active_budget = stage_budget(
+                self.config.execution_retry_policy, joint.stage, joint.attempts
+            )
             design_recovery_available = _design_recovery_available(
                 selected, journal, joint, policy=self.config.design_retry_policy
             )
-            if joint.stage is JointStage.DESIGNING and design_budget.exhausted:
+            if active_budget is not None and active_budget.exhausted:
                 presented_next_action = (
-                    "Design 预算已用尽。请检查失败记录，在设置中提高对应预算，"  # noqa: RUF001
+                    f"{active_budget.role} 预算已用尽。请检查失败记录，在设置中提高对应预算，"  # noqa: RUF001
                     "重启服务后重试。"
                 )
             if design_recovery_available:
@@ -297,7 +300,7 @@ class ProductionTeamReader:
                         presented_next_action
                         if _waiting(presented_stage)
                         or design_recovery_available
-                        or (joint.stage is JointStage.DESIGNING and design_budget.exhausted)
+                        or (active_budget is not None and active_budget.exhausted)
                         else None
                     ),
                     dialogue=tuple(
@@ -323,6 +326,7 @@ class ProductionTeamReader:
                     knowledge_gap=knowledge_gap,
                     design_recovery_available=design_recovery_available,
                     design_budget=design_budget,
+                    stage_budget=active_budget,
                 )
             )
         tasks: list[TaskView] = []
