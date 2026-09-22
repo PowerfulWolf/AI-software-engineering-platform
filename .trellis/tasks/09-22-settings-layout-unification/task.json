@@ -1,0 +1,7 @@
+{
+  "id": "settings-layout-unification",
+  "title": "Unify the Platform Settings information architecture and spacing",
+  "status": "completed",
+  "baseline": "6ec25b1",
+  "authorization": "User approved implementing the reviewed prototype in the current checkout. Preserve live_model_execution as a real safety gate, use one agent, run incremental Settings tests only, and commit the completed change."
+}

@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>平台设置统一排版原型</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --canvas: #f4f6f9;
+      --panel: #ffffff;
+      --text: #172033;
+      --muted: #667085;
+      --line: #e4e7ec;
+      --soft: #f8fafc;
+      --accent: #2f64d6;
+      --accent-soft: #eef4ff;
+      --success: #157f57;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--text); background: var(--canvas); }
+    button, input, select { font: inherit; }
+    button { cursor: pointer; }
+    .shell { min-height: 100vh; padding: 32px; }
+    .workspace { display: grid; grid-template-columns: 224px minmax(0, 960px); gap: 24px; align-items: start; justify-content: center; }
+    .nav, .panel { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+    .nav { position: sticky; top: 24px; padding: 18px 12px; }
+    .nav-title { padding: 0 10px 14px; border-bottom: 1px solid var(--line); }
+    .nav-title strong { display: block; font-size: 17px; }
+    .nav-title small { display: block; margin-top: 6px; color: var(--muted); line-height: 1.45; }
+    .tabs { display: grid; gap: 4px; padding-top: 12px; }
+    .tab { display: grid; gap: 3px; width: 100%; padding: 10px; border: 0; border-radius: 8px; color: var(--text); text-align: left; background: transparent; }
+    .tab span { font-weight: 650; }
+    .tab small { color: var(--muted); }
+    .tab.active { color: #244fa7; background: var(--accent-soft); }
+    .panel { min-width: 0; overflow: clip; }
+    .page-head { padding: 24px 28px 20px; }
+    .title-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    h1 { margin: 0; font-size: 24px; letter-spacing: -.02em; }
+    .lede { margin: 7px 0 0; color: var(--muted); line-height: 1.55; }
+    .badge { flex: 0 0 auto; padding: 5px 9px; border-radius: 999px; color: var(--success); background: #eaf8f1; font-size: 12px; font-weight: 700; }
+    .meta { display: flex; gap: 8px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+    .meta code { min-width: 0; overflow: hidden; color: #475467; text-overflow: ellipsis; white-space: nowrap; }
+    .content { padding: 0 28px; }
+    .section { padding: 27px 0 28px; border-top: 1px solid var(--line); }
+    .section-head { display: grid; grid-template-columns: 200px minmax(0, 1fr) auto; gap: 24px; align-items: start; margin-bottom: 18px; }
+    .section-head > div { display: contents; }
+    .section h2 { margin: 0; font-size: 17px; }
+    .section-copy { grid-column: 2; margin: 1px 0 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
+    .section-head > .secondary { grid-column: 3; grid-row: 1; }
+    .field-list { display: grid; gap: 16px; }
+    .field-row { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 24px; align-items: start; }
+    .label { padding-top: 9px; }
+    .label strong { display: block; font-size: 14px; }
+    .help { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+    input, select { width: 100%; min-height: 40px; padding: 8px 11px; border: 1px solid #cfd5df; border-radius: 8px; color: var(--text); background: #fff; }
+    input[disabled] { color: #667085; background: var(--soft); }
+    .check { display: inline-flex; align-items: center; gap: 9px; min-height: 40px; }
+    .check input { width: 18px; min-height: 18px; }
+    .secondary { min-height: 36px; padding: 7px 11px; border: 1px solid #cfd5df; border-radius: 8px; color: #344054; background: #fff; font-weight: 650; }
+    .primary { min-height: 40px; padding: 8px 16px; border: 0; border-radius: 8px; color: #fff; background: var(--accent); font-weight: 700; }
+    .section-foot { margin: 18px 0 0 224px; padding: 12px 14px; border-radius: 8px; color: #475467; background: var(--soft); font-size: 12px; line-height: 1.55; }
+    .policy-table, .route-list, .agent-list { border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+    .policy-row { display: grid; grid-template-columns: minmax(170px, 1.2fr) 120px 120px minmax(180px, 1.4fr); gap: 12px; align-items: center; min-height: 54px; padding: 9px 12px; border-top: 1px solid var(--line); }
+    .policy-row:first-child { border-top: 0; }
+    .policy-row.head { min-height: 38px; color: var(--muted); background: var(--soft); font-size: 12px; font-weight: 700; }
+    .policy-row input { min-height: 34px; padding: 5px 8px; }
+    .role strong { display: block; font-size: 13px; }
+    .role small, .note { color: var(--muted); font-size: 12px; line-height: 1.4; }
+    .action-row { display: flex; align-items: center; gap: 12px; margin-left: 224px; }
+    .success { color: var(--success); font-size: 13px; font-weight: 650; }
+    .route, .agent { border-top: 1px solid var(--line); }
+    .route:first-child, .agent:first-child { border-top: 0; }
+    .route-summary, .agent-summary { display: grid; align-items: center; min-height: 58px; padding: 9px 12px; }
+    .route-summary { grid-template-columns: minmax(150px, 1.2fr) minmax(150px, 1.2fr) 110px 100px 72px 32px; gap: 12px; }
+    .agent-summary { grid-template-columns: minmax(160px, .8fr) minmax(220px, 1.2fr) minmax(130px, .7fr) auto; gap: 12px; }
+    .route-summary:hover, .agent-summary:hover { background: var(--soft); }
+    .route-name strong, .agent-name strong { display: block; font-size: 13px; }
+    .route-name small, .agent-name small { color: var(--muted); font-size: 12px; }
+    .pill { justify-self: start; padding: 4px 7px; border-radius: 999px; color: #344054; background: #eef2f6; font-size: 11px; font-weight: 700; }
+    .on { color: var(--success); background: #eaf8f1; }
+    .chevron { border: 0; background: transparent; color: var(--muted); font-size: 18px; }
+    .route-detail, .agent-detail { display: none; padding: 16px 12px; border-top: 1px solid var(--line); background: var(--soft); }
+    .route.open .route-detail, .agent.open .agent-detail { display: block; }
+    .compact-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .compact-fields label { display: grid; gap: 5px; color: #475467; font-size: 12px; font-weight: 650; }
+    .fallback-list { display: grid; gap: 8px; margin: 0; padding: 0; color: #475467; counter-reset: fallback; font-size: 13px; list-style: none; }
+    .fallback-list li { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 10px; align-items: center; min-height: 38px; counter-increment: fallback; }
+    .fallback-list li::before { content: counter(fallback) "."; color: var(--muted); text-align: right; }
+    .fallback-model { min-width: 0; }
+    .fallback-actions { display: grid; grid-template-columns: 54px 54px; gap: 6px; }
+    .fallback-actions .secondary { width: 54px; padding-right: 6px; padding-left: 6px; }
+    .savebar { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 14px 28px; border-top: 1px solid var(--line); background: rgba(255,255,255,.96); backdrop-filter: blur(8px); }
+    .save-state strong { display: block; font-size: 13px; }
+    .save-state small { color: var(--muted); font-size: 12px; }
+    [data-page] { display: none; }
+    [data-page].active { display: block; }
+    @media (max-width: 899px) {
+      .shell { padding: 18px; }
+      .workspace { grid-template-columns: 1fr; }
+      .nav { position: static; padding: 12px; }
+      .nav-title { border: 0; padding-bottom: 10px; }
+      .tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); padding-top: 0; }
+      .tab small { display: none; }
+      .tab { text-align: center; }
+    }
+    @media (max-width: 599px) {
+      .shell { padding: 0; }
+      .workspace { gap: 0; }
+      .nav, .panel { border-right: 0; border-left: 0; border-radius: 0; }
+      .page-head, .content { padding-right: 18px; padding-left: 18px; }
+      .title-row { align-items: start; }
+      .field-row { grid-template-columns: 1fr; gap: 7px; }
+      .section-head { grid-template-columns: 1fr auto; gap: 7px 12px; }
+      .section-head > div { display: contents; }
+      .section-copy { grid-column: 1 / -1; grid-row: 2; }
+      .section-head > .secondary { grid-column: 2; grid-row: 1; }
+      .label { padding-top: 0; }
+      .section-foot, .action-row { margin-left: 0; }
+      .policy-row { grid-template-columns: 1fr 1fr; }
+      .policy-row.head { display: none; }
+      .policy-row .role, .policy-row .note { grid-column: 1 / -1; }
+      .route-summary { grid-template-columns: 1fr auto auto; }
+      .route-summary > :nth-child(2), .route-summary > :nth-child(4) { display: none; }
+      .agent-summary { grid-template-columns: 1fr auto; }
+      .agent-summary > :nth-child(2), .agent-summary > :nth-child(3) { grid-column: 1 / -1; }
+      .fallback-list li { grid-template-columns: 22px minmax(0, 1fr); }
+      .fallback-actions { grid-column: 2; justify-self: start; }
+      .compact-fields { grid-template-columns: 1fr; }
+      .savebar { align-items: stretch; flex-direction: column; padding: 12px 18px; }
+      .primary { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="workspace">
+      <aside class="nav">
+        <div class="nav-title"><strong>平台设置</strong><small>作用于当前 Team Host，不随 Project 切换。</small></div>
+        <div class="tabs">
+          <button class="tab active" data-tab="general"><span>基础配置</span><small>平台、运行与重试策略</small></button>
+          <button class="tab" data-tab="database"><span>MySQL</span><small>连接、凭证与验证</small></button>
+          <button class="tab" data-tab="models"><span>模型路由</span><small>模型目录与 Agent 分配</small></button>
+        </div>
+      </aside>
+
+      <main class="panel">
+        <section class="page active" data-page="general">
+          <header class="page-head">
+            <div class="title-row"><div><h1>基础配置</h1><p class="lede">管理平台身份、运行环境以及各角色的执行与临时故障额度。</p></div><span class="badge">当前配置已生效</span></div>
+            <div class="meta"><span>配置文件</span><code>/Users/example/.ase/config/team.json</code></div>
+          </header>
+          <div class="content">
+            <section class="section">
+              <div class="section-head"><div><h2>平台身份</h2><p class="section-copy">平台数据和长期 Team 的固定归属。</p></div></div>
+              <div class="field-list">
+                <label class="field-row"><span class="label"><strong>平台数据目录</strong><span class="help">必须是绝对路径；保存 Team、Projects、worktrees 与 quarantine。</span></span><input value="/Users/example/workspace/.ase"></label>
+                <label class="field-row"><span class="label"><strong>唯一 Team</strong><span class="help">长期团队，不随 Project 切换。</span></span><input value="AI Team · team_ai" disabled></label>
+              </div>
+            </section>
+            <section class="section">
+              <div class="section-head"><div><h2>运行环境</h2><p class="section-copy">修改后需要按页面提示重启 Team Host。</p></div></div>
+              <div class="field-list">
+                <label class="field-row"><span class="label"><strong>Codex 可执行文件</strong><span class="help">本机 Codex CLI 的绝对路径。</span></span><input value="/Users/example/.local/bin/codex"></label>
+                <label class="field-row"><span class="label"><strong>Web Console 端口</strong><span class="help">重启后使用新地址访问。</span></span><input type="number" value="8765"></label>
+                <div class="field-row"><span class="label"><strong>允许调用真实模型</strong><span class="help">全局安全开关；关闭后拒绝所有模型任务。修改后需要重启。</span></span><label class="check"><input type="checkbox" checked>允许 Agent 发起真实模型请求</label></div>
+              </div>
+            </section>
+            <section class="section">
+              <div class="section-head"><div><h2>执行与重试策略</h2><p class="section-copy">工作次数包含首次执行；504、超时和限流等临时故障独立计数。</p></div></div>
+              <div class="policy-table">
+                <div class="policy-row head"><span>角色</span><span>工作次数</span><span>临时故障</span><span>规则</span></div>
+                <div class="policy-row"><span class="role"><strong>Product</strong><small>需求讨论</small></span><input type="number" value="20"><input type="number" value="5"><span class="note">讨论 / 产物尝试上限</span></div>
+                <div class="policy-row"><span class="role"><strong>Designer</strong><small>技术设计</small></span><input type="number" value="3"><input type="number" value="5"><span class="note">设计尝试上限</span></div>
+                <div class="policy-row"><span class="role"><strong>Planner</strong><small>执行计划</small></span><input type="number" value="3"><input type="number" value="5"><span class="note">计划尝试上限</span></div>
+                <div class="policy-row"><span class="role"><strong>Coder</strong><small>实现与修正</small></span><input type="number" value="3"><input type="number" value="5"><span class="note">实现轮次上限</span></div>
+                <div class="policy-row"><span class="role"><strong>QA</strong><small>质量验证</small></span><span>—</span><input type="number" value="5"><span class="note">有效缺陷回到 Coder</span></div>
+                <div class="policy-row"><span class="role"><strong>Reviewer</strong><small>代码审查</small></span><span>—</span><input type="number" value="5"><span class="note">有效驳回回到 Coder</span></div>
+              </div>
+              <p class="section-foot">Manager 只执行确定性调度，无模型调用额度。修改不会清零历史，也不会跳过恢复、范围或验证审批。</p>
+            </section>
+          </div>
+        </section>
+
+        <section class="page" data-page="database">
+          <header class="page-head">
+            <div class="title-row"><div><h1>MySQL 数据库</h1><p class="lede">配置任务、运行事实与队列使用的数据库连接。</p></div><span class="badge">当前配置已生效</span></div>
+            <div class="meta"><span>配置文件</span><code>/Users/example/.ase/config/team.json</code></div>
+          </header>
+          <div class="content">
+            <section class="section">
+              <div class="section-head"><div><h2>连接配置</h2><p class="section-copy">凭证只写入本机 runtime.env，页面不会回显已保存的值。</p></div></div>
+              <div class="field-list">
+                <label class="field-row"><span class="label"><strong>启动变量</strong><span class="help">服务脚本加载的固定环境变量名。</span></span><input value="ASE_MYSQL_DSN" disabled></label>
+                <label class="field-row"><span class="label"><strong>MySQL DSN</strong><span class="help">留空表示保留已保存值；输入新 DSN 才会替换。</span></span><input type="password" placeholder="已保存；输入新 DSN 可替换"></label>
+              </div>
+            </section>
+            <section class="section">
+              <div class="section-head"><div><h2>连接验证</h2><p class="section-copy">使用当前输入值；留空时测试已保存的连接。</p></div></div>
+              <div class="action-row"><button class="secondary" type="button">测试连接</button><span class="success">✓ 连接成功，MySQL 8.4</span></div>
+              <p class="section-foot">测试不会回显 DSN。保存运行配置后，按提示重启 Team Host 使新连接生效。</p>
+            </section>
+          </div>
+        </section>
+
+        <section class="page" data-page="models">
+          <header class="page-head">
+            <div class="title-row"><div><h1>模型路由</h1><p class="lede">先维护可用模型目录，再为每个 Agent 选择主模型和备用顺序。</p></div><span class="badge">当前配置已生效</span></div>
+            <div class="meta"><span>配置文件</span><code>/Users/example/.ase/config/team.json</code></div>
+          </header>
+          <div class="content">
+            <section class="section">
+              <div class="section-head"><div><h2>可用模型目录</h2><p class="section-copy">启用只表示可选，不会自动加入任何 Agent 的备用模型。</p></div><button class="secondary" type="button">添加路由</button></div>
+              <div class="route-list">
+                <div class="route open">
+                  <div class="route-summary"><span class="route-name"><strong>OpenAI</strong><small>Responses API</small></span><span>gpt-5.4</span><span class="pill">high</span><span>图像输入</span><span class="pill on">已启用</span><button class="chevron" aria-label="收起">⌃</button></div>
+                  <div class="route-detail"><div class="compact-fields"><label>Endpoint<input value="https://api.openai.com/v1/responses"></label><label>API Key 环境变量<input value="OPENAI_API_KEY"></label><label>API Key<input type="password" placeholder="已保存；输入新值可替换"></label><label>类型<select><option>Responses API</option><option>Codex CLI</option></select></label></div></div>
+                </div>
+                <div class="route"><div class="route-summary"><span class="route-name"><strong>Codex</strong><small>Codex CLI</small></span><span>gpt-5.4</span><span class="pill">medium</span><span>文本</span><span class="pill on">已启用</span><button class="chevron" aria-label="展开">⌄</button></div><div class="route-detail"></div></div>
+                <div class="route"><div class="route-summary"><span class="route-name"><strong>Anthropic</strong><small>Responses 兼容</small></span><span>claude-sonnet</span><span class="pill">high</span><span>图像输入</span><span class="pill">已停用</span><button class="chevron" aria-label="展开">⌄</button></div><div class="route-detail"></div></div>
+              </div>
+            </section>
+            <section class="section">
+              <div class="section-head"><div><h2>Agent 路由分配</h2><p class="section-copy">每个 Agent 使用一个主模型；备用模型按顺序在必要时尝试。</p></div></div>
+              <div class="agent-list">
+                <div class="agent"><div class="agent-summary"><span class="agent-name"><strong>Product</strong><small>需求讨论与 ProductSpec</small></span><span>OpenAI · gpt-5.4 · high</span><span class="note">2 个备用模型</span><button class="secondary" type="button">管理</button></div><div class="agent-detail"></div></div>
+                <div class="agent open"><div class="agent-summary"><span class="agent-name"><strong>Designer</strong><small>技术设计</small></span><span>OpenAI · gpt-5.4 · high</span><span class="note">2 个备用模型</span><button class="secondary" type="button">收起</button></div><div class="agent-detail"><ol class="fallback-list"><li><span class="fallback-model">Codex · gpt-5.4 · medium</span><span class="fallback-actions"><button class="secondary">上移</button><button class="secondary">移除</button></span></li><li><span class="fallback-model">Anthropic · claude-sonnet · high</span><span class="fallback-actions"><button class="secondary">下移</button><button class="secondary">移除</button></span></li></ol></div></div>
+                <div class="agent"><div class="agent-summary"><span class="agent-name"><strong>Coder</strong><small>实现与修正</small></span><span>Codex · gpt-5.4 · high</span><span class="note">1 个备用模型</span><button class="secondary" type="button">管理</button></div><div class="agent-detail"></div></div>
+                <div class="agent"><div class="agent-summary"><span class="agent-name"><strong>QA / Reviewer</strong><small>独立验证与审查</small></span><span>OpenAI · gpt-5.4 · medium</span><span class="note">各 1 个备用</span><button class="secondary" type="button">管理</button></div><div class="agent-detail"></div></div>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <footer class="savebar"><span class="save-state"><strong>没有未保存的更改</strong><small>运行配置变更保存后按提示应用。</small></span><button class="primary" type="button">保存设置</button></footer>
+      </main>
+    </div>
+  </div>
+  <script>
+    const tabs = [...document.querySelectorAll("[data-tab]")];
+    const pages = [...document.querySelectorAll("[data-page]")];
+    tabs.forEach((tab) => tab.addEventListener("click", () => {
+      tabs.forEach((item) => item.classList.toggle("active", item === tab));
+      pages.forEach((page) => page.classList.toggle("active", page.dataset.page === tab.dataset.tab));
+    }));
+    document.querySelectorAll(".route-summary, .agent-summary").forEach((summary) => {
+      summary.addEventListener("click", (event) => {
+        if (event.target.closest("button") && !event.target.classList.contains("chevron")) return;
+        const item = summary.parentElement;
+        item.classList.toggle("open");
+        const chevron = summary.querySelector(".chevron");
+        if (chevron) chevron.textContent = item.classList.contains("open") ? "⌃" : "⌄";
+      });
+    });
+  </script>
+</body>
+</html>

@@ -1529,7 +1529,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     7,
   );
   const responseRoute = descend(get("content")).filter(
-    (node) => node.className === "route-card",
+    (node) => node.className.includes("route-card"),
   )[1];
   const enableResponseRoute = descend(responseRoute)
     .filter((node) => node.tag === "input" && node.type === "checkbox")

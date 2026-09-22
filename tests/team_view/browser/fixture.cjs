@@ -24,7 +24,7 @@ async function ui(t, options = {}) {
     selected_project_id: "project_fixture", projects: [{ id: "project_fixture", name: "Fixture project" }], agents: [], tasks: [],
     requests: [{ id: "request_fixture", title: "Fixture request", project_id: "project_fixture", stage: "READY_FOR_DISCUSSION",
       checkpoint_sha256: "a".repeat(64), scopes: [], documents: [], dialogue: [], next_action: "Start discussion" }] };
-  const config = { schema_version: "v0.2", platform_root: "/fixture/platform", team_id: "team_fixture", team_name: "Fixture",
+  const config = options.config || { schema_version: "v0.2", platform_root: "/fixture/platform", team_id: "team_fixture", team_name: "Fixture",
     team_knowledge_paths: [], database: { backend: "mysql", dsn_env: "ASE_MYSQL_DSN" }, model_routes: [], agent_model_routes: [],
     codex_executable: "codex", live_model_execution: false, console_port: 8765,
     execution_retry_policy: {

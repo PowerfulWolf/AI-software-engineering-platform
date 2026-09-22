@@ -38,6 +38,8 @@ let pendingConfirmation = null;
 let actionSerial = 0;
 let requestFilter = "active";
 let settingsSection = "general";
+let expandedModelRouteIndex = 0;
+let expandedAgentModelRole = null;
 let settingsSaveResult = null;
 const configurationApplyStorageKey = "ase-configuration-apply";
 const configurationApplyTimeoutMs = 30000;
@@ -4371,6 +4373,33 @@ function updateModelRouteIdentity(route, property, value) {
     }
   }
 }
+function settingsField(labelText, control, hint) {
+  const row = el("div", undefined, "settings-field-row");
+  const copy = el("div", undefined, "settings-field-copy");
+  copy.append(el("strong", labelText));
+  if (hint) copy.append(el("small", hint));
+  const value = el("div", undefined, "settings-field-control");
+  control.setAttribute("aria-label", labelText);
+  value.append(control);
+  row.append(copy, value);
+  return row;
+}
+function settingsCheckbox(control, text) {
+  const wrapper = el("label", undefined, "settings-checkbox-control");
+  wrapper.append(control, el("span", text));
+  return wrapper;
+}
+function settingsModule(title, description, children, action = null) {
+  const section = el("section", undefined, "settings-section");
+  const header = el("div", undefined, "settings-section-header");
+  header.append(
+    el("h3", title, "settings-section-title"),
+    el("p", description, "settings-section-description"),
+  );
+  if (action) header.append(action);
+  section.append(header, ...children);
+  return section;
+}
 function renderProjectPicker(content) {
   const values = snapshot.projects || [];
   const current = values.find((item) => item.id === currentProjectId());
@@ -4501,26 +4530,34 @@ function renderSettings(content) {
   }
 
   const panel = el("section", undefined, "admin-panel settings-panel");
-  const top = el("div", undefined, "row");
+  const pageHeader = el("div", undefined, "settings-page-header");
+  const top = el("div", undefined, "settings-page-title-row");
+  const [title, description] =
+    settingsSection === "general"
+      ? ["基础配置", "管理平台身份、运行环境以及各角色的执行与临时故障额度。"]
+      : settingsSection === "database"
+        ? ["MySQL 数据库", "配置任务、运行事实与队列使用的数据库连接。"]
+        : ["模型路由", "先维护可用模型目录，再为每个 Agent 选择主模型和备用顺序。"];
+  const titleCopy = el("div");
+  titleCopy.append(
+    el("h2", title),
+    el("p", description, "settings-page-description"),
+  );
   top.append(
-    el(
-      "h2",
-      settingsSection === "general"
-        ? "基础配置"
-        : settingsSection === "database"
-          ? "MySQL 数据库"
-          : "模型路由",
-    ),
+    titleCopy,
     settingsSnapshot.config_source === "default"
       ? el("span", "正在使用内置默认配置", "badge")
       : settingsSnapshot.restart_required
         ? el("span", "已保存 · 需要重启", "badge blocked")
         : el("span", "当前配置已生效", "badge done"),
   );
-  panel.append(
-    top,
-    el("p", "配置文件 · " + settingsSnapshot.config_path, "paths"),
+  const metadata = el("div", undefined, "settings-metadata");
+  metadata.append(
+    el("span", "配置文件"),
+    el("code", settingsSnapshot.config_path),
   );
+  pageHeader.append(top, metadata);
+  panel.append(pageHeader);
   const form = el("form", undefined, "settings-form");
   if (settingsSection === "general") renderGeneralSettings(form);
   else if (settingsSection === "database") renderDatabaseSettings(form);
@@ -4602,8 +4639,8 @@ function renderSettings(content) {
 }
 
 function renderGeneralSettings(form) {
-  const general = el("div", undefined, "settings-grid");
-  const runtime = el("div", undefined, "settings-grid");
+  const general = el("div", undefined, "settings-field-list");
+  const runtime = el("div", undefined, "settings-field-list");
   const platformRoot = bindInput(
     el("input"),
     settingsDraft.platform_root,
@@ -4636,79 +4673,130 @@ function renderGeneralSettings(form) {
     () => (settingsDraft.live_model_execution = live.checked),
   );
   general.append(
-    field(
+    settingsField(
       "平台数据目录",
       platformRoot,
       "必须是绝对路径；Team、Projects、worktrees 与 quarantine 都保存在该目录。",
     ),
-    field(
+    settingsField(
       "唯一 Team",
       team,
       `${settingsDraft.team_id}；Team 是长期团队，不随 Project 切换。`,
     ),
   );
   runtime.append(
-    field("Codex 可执行文件", codex),
-    field("Web Console 端口", port, "修改端口后使用新地址重启。"),
-    field("启用真实模型执行", live),
+    settingsField(
+      "Codex 可执行文件",
+      codex,
+      "本机 Codex CLI 的绝对路径。",
+    ),
+    settingsField(
+      "Web Console 端口",
+      port,
+      "重启后使用新地址访问。",
+    ),
+    settingsField(
+      "允许调用真实模型",
+      settingsCheckbox(live, "允许 Agent 发起真实模型请求"),
+      "全局安全开关；关闭后拒绝所有模型任务。修改后需要重启。",
+    ),
   );
-  const platformSection = el("section", undefined, "settings-section");
-  platformSection.append(el("h3", "平台与团队"), general);
-  const runtimeSection = el("section", undefined, "settings-section");
-  runtimeSection.append(el("h3", "运行设置"), runtime);
-  form.append(platformSection, runtimeSection);
+  form.append(
+    settingsModule(
+      "平台身份",
+      "平台数据和长期 Team 的固定归属。",
+      [general],
+    ),
+    settingsModule(
+      "运行环境",
+      "修改后需要按页面提示重启 Team Host。",
+      [runtime],
+    ),
+  );
   if (settingsDraft.execution_retry_policy) {
     const policy = settingsDraft.execution_retry_policy;
-    const budgets = el("div", undefined, "retry-policy-list");
-    for (const [role, title, workTitle] of [
-      ["product", "Product · 需求讨论", "讨论 / 产物尝试上限"],
-      ["designer", "Designer · 技术设计", "设计尝试上限"],
-      ["planner", "Planner · 执行计划", "计划尝试上限"],
-      ["coder", "Coder · 实现与修正", "实现轮次上限"],
-      ["qa", "QA · 质量验证", null],
-      ["reviewer", "Reviewer · 代码审查", null],
+    const budgets = el("div", undefined, "retry-policy-table");
+    const tableHead = el("div", undefined, "retry-policy-row retry-policy-head");
+    tableHead.append(
+      el("span", "角色"),
+      el("span", "工作次数"),
+      el("span", "临时故障"),
+      el("span", "规则"),
+    );
+    budgets.append(tableHead);
+    for (const [role, title, subtitle, workTitle] of [
+      ["product", "Product", "需求讨论", "讨论 / 产物尝试上限"],
+      ["designer", "Designer", "技术设计", "设计尝试上限"],
+      ["planner", "Planner", "执行计划", "计划尝试上限"],
+      ["coder", "Coder", "实现与修正", "实现轮次上限"],
+      ["qa", "QA", "质量验证", null],
+      ["reviewer", "Reviewer", "代码审查", null],
     ]) {
       const row = el("div", undefined, "retry-policy-row");
-      row.append(el("h4", title));
-      const fields = el("div", undefined, "settings-grid");
-      for (const [key, caption] of [
-        ["max_attempts", workTitle], ["max_transient_failures", "临时故障上限"],
-      ]) {
-        if (!caption) continue;
-        const input = bindInput(el("input"), String(policy[role][key]),
-          (value) => (policy[role][key] = Number(value)), "number");
-        input.min = "1";
-        input.max = "100";
-        input.step = "1";
-        input.required = true;
-        input.name = `retry-${role}-${key}`;
-        fields.append(field(caption, input));
+      const roleCopy = el("span", undefined, "retry-policy-role");
+      roleCopy.append(el("strong", title), el("small", subtitle));
+      const work = workTitle
+        ? bindInput(
+            el("input"),
+            String(policy[role].max_attempts),
+            (value) => (policy[role].max_attempts = Number(value)),
+            "number",
+          )
+        : el("span", "—", "retry-policy-empty");
+      if (workTitle) {
+        work.min = "1";
+        work.max = "100";
+        work.step = "1";
+        work.required = true;
+        work.name = `retry-${role}-max_attempts`;
+        work.setAttribute("aria-label", `${title} 工作次数`);
       }
-      if (!workTitle)
-        fields.append(el("p", "不重试有效的否定结论；缺陷交给 Coder 修复，验证中断保留原审批流程。", "muted"));
-      row.append(fields);
+      const transient = bindInput(
+        el("input"),
+        String(policy[role].max_transient_failures),
+        (value) => (policy[role].max_transient_failures = Number(value)),
+        "number",
+      );
+      transient.min = "1";
+      transient.max = "100";
+      transient.step = "1";
+      transient.required = true;
+      transient.name = `retry-${role}-max_transient_failures`;
+      transient.setAttribute("aria-label", `${title} 临时故障上限`);
+      row.append(
+        roleCopy,
+        work,
+        transient,
+        el(
+          "span",
+          workTitle ||
+            (role === "qa"
+              ? "有效缺陷回到 Coder"
+              : "有效驳回回到 Coder"),
+          "retry-policy-note",
+        ),
+      );
       budgets.append(row);
     }
-    const retrySection = el("section", undefined, "settings-section");
-    retrySection.append(
-      el("h3", "执行与重试策略"),
-      el("p", "1–100 次，工作次数含首次执行。504、超时、限流等临时故障独立计数。保存并重启后，上游继续执行和新建 Task 使用新上限；已有 Task 保留冻结策略。", "muted"),
-      budgets,
-      el("p", "Manager 只执行确定性调度，无模型调用额度。配置不会清零历史，也不会跳过范围、恢复或验证审批。", "muted"),
+    const note = el(
+      "p",
+      "Manager 只执行确定性调度，无模型调用额度。修改不会清零历史，也不会跳过恢复、范围或验证审批。",
+      "settings-section-note",
     );
-    form.append(retrySection);
+    form.append(
+      settingsModule(
+        "执行与重试策略",
+        "工作次数包含首次执行；504、超时和限流等临时故障独立计数。",
+        [budgets, note],
+      ),
+    );
   }
 }
 
 function renderDatabaseSettings(form) {
-  form.append(
-    el(
-      "p",
-      "填写完整连接字符串。留空表示保留已经保存的值；页面不会回显密码。",
-      "muted",
-    ),
-  );
   const dsnName = settingsDraft.database.dsn_env;
+  const environmentName = bindInput(el("input"), dsnName, () => {});
+  environmentName.disabled = true;
   const dsn = bindInput(
     el("input"),
     runtimeVariablesDraft[dsnName] || "",
@@ -4748,22 +4836,44 @@ function renderDatabaseSettings(form) {
     }
   });
   testConnection.type = "button";
+  const connectionFields = el("div", undefined, "settings-field-list");
+  connectionFields.append(
+    settingsField(
+      "启动变量",
+      environmentName,
+      "服务脚本加载的固定环境变量名。",
+    ),
+    settingsField(
+      "MySQL DSN",
+      dsn,
+      "留空表示保留已保存值；输入新 DSN 才会替换。",
+    ),
+  );
+  const action = el("div", undefined, "settings-action-row");
+  action.append(testConnection, connectionFeedback);
+  const note = el(
+    "p",
+    "测试不会回显 DSN。保存运行配置后，按提示重启 Team Host 使新连接生效。",
+    "settings-section-note",
+  );
   form.append(
-    field("MySQL DSN", dsn, `启动变量 ${dsnName} 由服务脚本自动维护。`),
-    connectionFeedback,
-    testConnection,
+    settingsModule(
+      "连接配置",
+      "凭证只写入本机 runtime.env，页面不会回显已保存的值。",
+      [connectionFields],
+    ),
+    settingsModule(
+      "连接验证",
+      "使用当前输入值；留空时测试已保存的连接。",
+      [action, note],
+    ),
   );
 }
 
 function renderModelSettings(form) {
-  const routesTop = el("div", undefined, "row");
-  routesTop.append(
-    el(
-      "p",
-      "按页面顺序尝试可用模型；同一模型可配置不同推理程度，每个 Provider + Model + Reasoning 组合只能出现一次。",
-      "muted",
-    ),
-    button("添加路由", () => {
+  const addRoute = button(
+    "添加路由",
+    () => {
       settingsDraft.model_routes.push({
         provider: "provider",
         model: "model",
@@ -4774,13 +4884,45 @@ function renderModelSettings(form) {
         image_input: false,
         enabled: false,
       });
+      expandedModelRouteIndex = settingsDraft.model_routes.length - 1;
       render();
-    }),
+    },
+    "settings-section-action",
   );
-  form.append(routesTop);
+  const routeList = el("div", undefined, "model-route-list");
   settingsDraft.model_routes.forEach((route, index) => {
-    const row = el("div", undefined, "route-card");
-    const fields = el("div", undefined, "settings-grid");
+    const row = el("details", undefined, "route-card model-route-disclosure");
+    row.open = expandedModelRouteIndex === index;
+    row.addEventListener("toggle", () => {
+      if (row.open) expandedModelRouteIndex = index;
+      else if (expandedModelRouteIndex === index) expandedModelRouteIndex = null;
+    });
+    const summary = el("summary", undefined, "model-route-summary");
+    const identity = el("span", undefined, "model-route-identity");
+    identity.append(
+      el("strong", route.provider || "未命名 Provider"),
+      el("small", route.kind === "codex_cli" ? "Codex CLI" : "Responses API"),
+    );
+    summary.append(
+      identity,
+      el("span", route.model || "未命名模型", "model-route-model"),
+      el("span", route.reasoning_effort || "medium", "model-route-pill"),
+      el(
+        "span",
+        route.image_input === true || route.kind === "codex_cli"
+          ? "图像输入"
+          : "仅文本",
+        "model-route-capability",
+      ),
+      el(
+        "span",
+        route.enabled ? "已启用" : "已停用",
+        `model-route-pill${route.enabled ? " enabled" : ""}`,
+      ),
+      el("span", "", "model-route-chevron"),
+    );
+    const detail = el("div", undefined, "model-route-detail");
+    const fields = el("div", undefined, "model-route-fields");
     fields.append(
       field(
         "Provider",
@@ -4892,36 +5034,42 @@ function renderModelSettings(form) {
       normalizeAgentModelRoutes(settingsDraft);
       render();
     });
-    row.append(fields, field("启用", enabled));
+    const routeActions = el("div", undefined, "model-route-actions");
+    routeActions.append(settingsCheckbox(enabled, "启用此路由"));
     if (settingsDraft.model_routes.length > 1)
-      row.append(
-        button("移除路由", () => {
-          settingsDraft.model_routes.splice(index, 1);
-          render();
-        }),
+      routeActions.append(
+        button(
+          "移除路由",
+          () => {
+            settingsDraft.model_routes.splice(index, 1);
+            expandedModelRouteIndex = settingsDraft.model_routes.length
+              ? Math.min(index, settingsDraft.model_routes.length - 1)
+              : null;
+            render();
+          },
+          "danger",
+        ),
       );
-    form.append(row);
+    detail.append(fields, routeActions);
+    row.append(summary, detail);
+    routeList.append(row);
   });
   normalizeAgentModelRoutes(settingsDraft);
   const enabledRoutes = settingsDraft.model_routes.filter(
     (route) => route.enabled,
   );
-  const assignments = el("section", undefined, "agent-model-settings");
-  assignments.append(
-    el("h3", "Agent 模型分配"),
-    el(
-      "p",
-      "每个 Agent 必须选择一个主模型；备用模型可选，且只会按该 Agent 显式配置的顺序降级。",
-      "muted",
-    ),
-  );
-  const grid = el("div", undefined, "agent-model-grid");
+  const assignments = el("div", undefined, "agent-model-list");
   for (const [role, title, description] of agentModelRoles) {
     const policy = settingsDraft.agent_model_routes.find(
       (candidate) => candidate.role === role,
     );
-    const card = el("div", undefined, "agent-model-card");
+    const card = el("details", undefined, "agent-model-card");
     card.dataset.role = role;
+    card.open = expandedAgentModelRole === role;
+    card.addEventListener("toggle", () => {
+      if (card.open) expandedAgentModelRole = role;
+      else if (expandedAgentModelRole === role) expandedAgentModelRole = null;
+    });
     const primary = policy?.routes?.[0];
     const primaryKey = primary ? modelRouteKey(primary) : "";
     const choices = enabledRoutes.map((route) => [
@@ -4938,9 +5086,36 @@ function renderModelSettings(form) {
       `agent-primary-model-${role}`,
       !choices.length,
     );
+    const fallbackRoutes = policy?.routes?.slice(1) || [];
+    const summary = el("summary", undefined, "agent-model-summary");
+    const roleCopy = el("span", undefined, "agent-model-role");
+    roleCopy.append(el("strong", title), el("small", description));
+    summary.append(
+      roleCopy,
+      el(
+        "span",
+        primary
+          ? `${primary.provider} / ${primary.model} · ${primary.reasoning_effort || "medium"}`
+          : "当前未配置主模型",
+        "agent-model-primary",
+      ),
+      el(
+        "span",
+        `${fallbackRoutes.length} 个备用模型`,
+        "agent-model-fallback-count",
+      ),
+      el("span", "", "agent-model-chevron"),
+    );
+    const detail = el("div", undefined, "agent-model-detail");
+    detail.append(
+      settingsField(
+        "主模型",
+        selector,
+        "该 Agent 每次运行首先尝试的模型。",
+      ),
+    );
     const fallbacks = el("div", undefined, "agent-fallback-settings");
     fallbacks.append(el("strong", "备用模型（可选）", "agent-fallback-title"));
-    const fallbackRoutes = policy?.routes?.slice(1) || [];
     if (!fallbackRoutes.length)
       fallbacks.append(
         el(
@@ -4953,13 +5128,11 @@ function renderModelSettings(form) {
       const index = fallbackOffset + 1;
       const row = el("div", undefined, "agent-fallback-row");
       row.dataset.fallbackIndex = String(index);
-      const identity = el("div", undefined, "agent-fallback-identity");
-      identity.append(
-        el("span", `备用 ${index}`, "route-position"),
-        el(
-          "span",
-          `${route.provider} / ${route.model} · ${route.reasoning_effort || "medium"}`,
-        ),
+      const position = el("span", `备用 ${index}`, "route-position");
+      const identity = el(
+        "span",
+        `${route.provider} / ${route.model} · ${route.reasoning_effort || "medium"}`,
+        "agent-fallback-identity",
       );
       const actions = el("div", undefined, "agent-fallback-actions");
       const moveUp = button("上移", () => {
@@ -4980,7 +5153,7 @@ function renderModelSettings(form) {
           render();
         }),
       );
-      row.append(identity, actions);
+      row.append(position, identity, actions);
       fallbacks.append(row);
     });
     const selectedKeys = new Set(
@@ -5005,16 +5178,23 @@ function renderModelSettings(form) {
           `agent-fallback-model-${role}`,
         ),
       );
-    card.append(
-      el("strong", title),
-      el("p", description, "muted"),
-      field("主模型", selector),
-      fallbacks,
-    );
-    grid.append(card);
+    detail.append(fallbacks);
+    card.append(summary, detail);
+    assignments.append(card);
   }
-  assignments.append(grid);
-  form.append(assignments);
+  form.append(
+    settingsModule(
+      "可用模型目录",
+      "启用只表示可选，不会自动加入任何 Agent 的备用模型。",
+      [routeList],
+      addRoute,
+    ),
+    settingsModule(
+      "Agent 模型分配",
+      "每个 Agent 使用一个主模型；备用模型按顺序在必要时尝试。",
+      [assignments],
+    ),
+  );
 }
 function statusRow(title, value, ready) {
   const row = el("div", undefined, "status-row");
