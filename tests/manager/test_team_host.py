@@ -156,10 +156,17 @@ def test_team_host_scopes_product_catalog_and_context(
     (team.root / "knowledge" / "unselected.md").write_text("UNSELECTED PRIVATE DATA")
     models = _RecordingFactory()
     config = _config(platform, "team_alpha", ("workflow.md",))
+    config = ProductionConfig.model_validate(
+        {
+            **config.to_wire(),
+            "design_retry_policy": {"max_design_attempts": 7, "max_transient_failures": 12},
+        }
+    )
     host = TeamHost(
         config=config, environment={"ASE_MYSQL_DSN": "connectivity-only"}, structured_clients=models
     )
     command = StartProjectDelivery(repository_root=str(repo), requirement="Update the greeting")
+    assert host.requirement_entry().design_retry_policy == config.design_retry_policy
     first = host.project_entry().start(command)
     assert first.checkpoint.stage is DeliveryStage.WAITING_PRODUCT_APPROVAL
     alpha_repositories = platform / "projects" / "project_alpha" / "repositories"

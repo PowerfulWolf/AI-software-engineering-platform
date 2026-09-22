@@ -50,5 +50,29 @@ evidence；已完成子仓库的 QA/Review 不因此失效。继续操作按当�
 - 沿用原 MySQL 和平台数据根，通过当前页面/CLI 给出的精确范围及计划审批继续。
 - 代码回滚与数据回滚分开判断；旧服务不认识的新审批字段不能被旧版本继续写入。
 - 每次修复单独核对现有需求是否需要操作，测试结果不能替代真实候选验收或用户审批。
+
+## Design 预算耗尽与存量需求处置
+
+Design 的设计尝试与临时故障现已分开计数，默认分别为 3 和 5，可在“设置 → 通用设置 → Design
+重试预算”调整（1–100）。`joint design attempt budget exhausted` 指设计尝试耗尽；
+`joint design transient failure budget exhausted` 指临时故障耗尽。两者都在模型调用前拒绝继续。
+504 是供应商/网关返回的临时错误，发生在知识咨询时也只消费新的临时故障额度。
+
+2026-09-22 排查的 codex Project 需求“设置保存交互优化”
+（`delivery_multi_bd73c5ce9fa226eaa8e427b5c7c1dd96dce1e006`）仍处于 DESIGNING。
+旧 checkpoint 30 的 `attempts.design=3`、设计为空，保留已批准 ProductSpec 和历史知识解答。
+当前修复不修改生产 MySQL、Operation 或 journal，也不把旧 504 静默挪到新计数：无需改库。
+
+1. 使用包含此次修复的服务版本重启 Web Console，然后刷新页面。
+2. 打开 codex Project 中该需求，确认显示“恢复设计”；预算恢复入口应优先于旧失败的“重试 Design”。
+3. 点击一次“恢复设计”。平台按当前 exact checkpoint 验证历史知识批准，追加恢复记录并继续；
+   原需求、讨论、产品批准与失败记录保留，无需重新创建需求。
+4. 若之后临时故障再次耗尽，先核对模型服务，再提高“Design 临时故障上限”，保存并应用配置；
+   重启后点击“重试 Design”。也可提高“Design 设计尝试上限”直接延长旧设计预算，计数不会清零。
+5. 不符合历史知识恢复条件的其他需求只能提高对应预算后继续；本入口不能代替范围或计划审批。
+
+代码回滚使用此修复提交的 `git revert`。若新配置已保存，旧版本严格解析器不认识
+`design_retry_policy`，需在停止服务后移除这个配置字段再启动旧版本。保留全部 journal；旧版本不会
+执行新增的临时故障限制，会恢复旧计数行为，因此回滚期间暂停 Design 重试，不通过回写旧数据回滚。
 - 契约见 [交付恢复规范](../.trellis/spec/core/delivery-recovery.md)，
   启动与设置见 [生产部署](production-setup.md)。

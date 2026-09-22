@@ -62,6 +62,11 @@ class StructuredModelError(RuntimeError):
         self.request_id = request_id
         self.correlation_id = correlation_id
 
+    @property
+    def retryable(self) -> bool:
+        """Only typed transient infrastructure failures allow fallback or retry accounting."""
+        return self.transient and self.code in _FALLBACK_CODES
+
     def with_context(self, context: str) -> StructuredModelError:
         return StructuredModelError(
             self.code,
@@ -495,7 +500,7 @@ _FALLBACK_CODES = frozenset(
 
 
 def _allows_fallback(error: StructuredModelError) -> bool:
-    return error.transient and error.code in _FALLBACK_CODES
+    return error.retryable
 
 
 def _verified_images(values: tuple[Path, ...]) -> tuple[Path, ...]:

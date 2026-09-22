@@ -13,7 +13,7 @@ from referencing import Registry, Resource
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.context import ContextBudget, ContextSource, FileContextBuilder
 from ai_software_engineer.domain import AgentPermissions, AgentRole, NetworkAccess
-from ai_software_engineer.domain.model import WirePayload
+from ai_software_engineer.domain.model import JsonValue, WirePayload
 from ai_software_engineer.evaluation import HandoffBuilder
 from ai_software_engineer.knowledge_documents import (
     ProjectKnowledgeDocumentStore,
@@ -198,6 +198,22 @@ def test_production_config_schema_requires_complete_agent_model_policy(
     ]
 
     _assert_invalid(payload, "production-config.schema.json")
+
+
+@pytest.mark.parametrize("key", ["max_design_attempts", "max_transient_failures"])
+@pytest.mark.parametrize("value", [0, 101, True, "5", 1.5])
+def test_design_retry_budget_schema_rejects_invalid_limits(key: str, value: JsonValue) -> None:
+    payload = ProductionConfig.default().to_wire()
+    payload["design_retry_policy"] = {key: value}
+    _assert_invalid(payload, "production-config.schema.json")
+
+
+def test_design_retry_budget_schema_allows_legacy_and_custom_policies() -> None:
+    payload = ProductionConfig.default().to_wire()
+    payload.pop("design_retry_policy")
+    _assert_valid(payload, "production-config.schema.json")
+    payload["design_retry_policy"] = {"max_design_attempts": 100, "max_transient_failures": 1}
+    _assert_valid(payload, "production-config.schema.json")
 
 
 def test_production_config_schema_accepts_supported_home_relative_input() -> None:

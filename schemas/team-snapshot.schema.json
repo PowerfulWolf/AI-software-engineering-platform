@@ -119,6 +119,58 @@
       "title": "AssignmentView",
       "type": "object"
     },
+    "DesignBudget": {
+      "additionalProperties": false,
+      "description": "Read-only observation; unknown legacy transient counts default to zero.",
+      "properties": {
+        "design_attempts": {
+          "minimum": 0,
+          "title": "Design Attempts",
+          "type": "integer"
+        },
+        "exhausted": {
+          "anyOf": [
+            {
+              "enum": [
+                "design",
+                "transient"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exhausted"
+        },
+        "max_design_attempts": {
+          "default": 3,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Design Attempts",
+          "type": "integer"
+        },
+        "max_transient_failures": {
+          "default": 5,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Transient Failures",
+          "type": "integer"
+        },
+        "transient_failures": {
+          "minimum": 0,
+          "title": "Transient Failures",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "design_attempts",
+        "transient_failures"
+      ],
+      "title": "DesignBudget",
+      "type": "object"
+    },
     "DialogueAttachmentView": {
       "additionalProperties": false,
       "properties": {
@@ -627,6 +679,22 @@
           "title": "Checkpoint Sha256",
           "type": "string"
         },
+        "design_budget": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignBudget"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "design_recovery_available": {
+          "default": false,
+          "title": "Design Recovery Available",
+          "type": "boolean"
+        },
         "dialogue": {
           "default": [],
           "items": {
@@ -657,11 +725,6 @@
             }
           ],
           "default": null
-        },
-        "design_recovery_available": {
-          "default": false,
-          "title": "Design Recovery Available",
-          "type": "boolean"
         },
         "next_action": {
           "title": "Next Action",

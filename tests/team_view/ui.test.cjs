@@ -421,6 +421,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
       codex_executable: "codex",
       live_model_execution: true,
       console_port: 8765,
+      design_retry_policy: {max_design_attempts: 3, max_transient_failures: 5},
     },
     config_path: "/config/production.json",
     config_source: "saved",
@@ -1421,6 +1422,19 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   assert.equal(get("context-controls").hidden, true);
   assert.doesNotMatch(text(get("content")), /创建新 Project/);
   assert.match(text(get("content")), /平台数据目录/);
+  assert.match(text(get("content")), /Design 重试预算/);
+  const designLimit = descend(get("content")).find(
+    (node) => node.tag === "input" && node.value === "3" && node.max === "100",
+  );
+  const transientLimit = descend(get("content")).find(
+    (node) => node.tag === "input" && node.value === "5" && node.max === "100",
+  );
+  assert.ok(designLimit);
+  assert.ok(transientLimit);
+  designLimit.value = "8";
+  designLimit.events.input();
+  transientLimit.value = "20";
+  transientLimit.events.input();
   assert.doesNotMatch(text(get("content")), /MySQL DSN/);
   const modelSettings = descend(get("content")).find(
     (node) => node.tag === "button" && node.textContent === "模型路由",
@@ -1599,6 +1613,8 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   );
   settingsRestartRequired = true;
   await settingsForm.events.submit({ preventDefault() {} });
+  assert.equal(savedSettings.at(-1).config.design_retry_policy.max_design_attempts, 8);
+  assert.equal(savedSettings.at(-1).config.design_retry_policy.max_transient_failures, 20);
   assert.match(text(get("composer")), /设置保存成功/);
   assert.match(text(get("composer")), /应用配置.*重启 Web Console/);
   assert.doesNotMatch(

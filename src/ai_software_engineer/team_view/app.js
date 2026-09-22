@@ -77,6 +77,9 @@ const labels = {
   WAITING_PRODUCT_REPLY: "等待补充需求",
   WAITING_PRODUCT_APPROVAL: "等待产品批准",
   DESIGNING: "技术设计",
+  DESIGN_RETRY_REQUIRED: "设计待重试",
+  DESIGN_RECOVERY_REQUIRED: "设计待恢复",
+  DESIGN_BUDGET_EXHAUSTED: "设计预算已用尽",
   PLANNING: "计划编排",
   DISPATCHING: "分配成员",
   DELIVERING: "分仓交付",
@@ -466,6 +469,20 @@ function requestPresentation(request) {
       blocker: null,
       nextAction: request.next_action,
     };
+  if (request.design_recovery_available)
+    return {
+      group: "blocked",
+      status: "DESIGN_RECOVERY_REQUIRED",
+      blocker: request.blocker,
+      nextAction: "点击“恢复设计”，保留已批准需求并重新开放设计尝试。",
+    };
+  if (designBudgetExhausted(request))
+    return {
+      group: "blocked",
+      status: "DESIGN_BUDGET_EXHAUSTED",
+      blocker: designBudgetSummary(request),
+      nextAction: "请在设置中提高对应预算，保存并重启服务后重试 Design。",
+    };
   const failedDesignOperation = latestOperation(request.id);
   if (
     request.stage === "DESIGNING" &&
@@ -480,13 +497,6 @@ function requestPresentation(request) {
       status: "DESIGN_RETRY_REQUIRED",
       blocker: failedDesignOperation.error_summary || "Designer 操作未完成。",
       nextAction: "上一次 Designer 操作未完成；修复模型服务后可重试 Design。",
-    };
-  if (request.design_recovery_available)
-    return {
-      group: "blocked",
-      status: "DESIGN_RECOVERY_REQUIRED",
-      blocker: request.blocker,
-      nextAction: request.next_action,
     };
   if (approvedKnowledge(request))
     return { group: "blocked", status: "KNOWLEDGE_APPROVED", blocker: null,
@@ -512,6 +522,7 @@ function requestPresentation(request) {
 
 function canContinueDelivery(request) {
   return (
+    request.stage !== "DESIGNING" &&
     !productDiscussionStages.has(request.stage) &&
     (requestPresentation(request).group === "blocked" ||
       currentRequestTasks(request).some((task) => taskGroup(task) === "blocked"))
@@ -526,11 +537,23 @@ function canRetryDesign(request) {
   const operation = latestOperation(request.id);
   return (
     request.stage === "DESIGNING" &&
+    !request.design_recovery_available &&
+    !designBudgetExhausted(request) &&
     operation?.status === "FAILED" &&
     operationTarget(operation) === request.id &&
     ["CONTINUE_DELIVERY", "RECOVER_DESIGN"].includes(operation.intent.action) &&
     !activeOperation(request.id)
   );
+}
+
+function designBudgetExhausted(request) {
+  return request.stage === "DESIGNING" && Boolean(request.design_budget?.exhausted);
+}
+
+function designBudgetSummary(request) {
+  const budget = request.design_budget;
+  if (!budget) return "Design 预算已用尽。";
+  return `设计尝试 ${budget.design_attempts}/${budget.max_design_attempts}；临时故障 ${budget.transient_failures}/${budget.max_transient_failures}。`;
 }
 
 function agentQueueState(agent) {
@@ -559,13 +582,22 @@ function requestBlockingSummary(request) {
     const operation = latestOperation(request.id);
     return {
       reasons: [{
-        reason: "Design 尝试次数被知识门误计，需要执行一次有记录的恢复。",
+        reason: "Design 预算已用尽，已有批准的知识解答，可执行有记录的恢复。",
         scopes: [],
       }],
       operationReason: operation?.status === "FAILED" ? operation.error_summary : null,
       approval: null,
       suggestedAction: "点击“恢复设计”，平台会保留需求、讨论和 ProductSpec 审批后重新进入 Design。",
       approvedKnowledge: true,
+    };
+  }
+  if (designBudgetExhausted(request)) {
+    return {
+      reasons: [{reason: designBudgetSummary(request), scopes: []}],
+      operationReason: latestOperation(request.id)?.error_summary || null,
+      approval: null,
+      suggestedAction: "检查失败记录后，在设置 → 通用设置中提高对应预算，保存并重启服务后重试。",
+      approvedKnowledge: false,
     };
   }
   if (request.stage === "WAITING_HUMAN" && request.knowledge_gap?.is_current) {
@@ -4606,6 +4638,27 @@ function renderGeneralSettings(form) {
     field("启用真实模型执行", live),
   );
   form.append(general);
+  if (settingsDraft.design_retry_policy) {
+    const policy = settingsDraft.design_retry_policy;
+    const budgets = el("div", undefined, "settings-grid");
+    for (const [key, title] of [
+      ["max_design_attempts", "Design 设计尝试上限"],
+      ["max_transient_failures", "Design 临时故障上限"],
+    ]) {
+      const input = bindInput(el("input"), String(policy[key]),
+        (value) => (policy[key] = Number(value)), "number");
+      input.min = "1";
+      input.max = "100";
+      input.step = "1";
+      input.required = true;
+      budgets.append(field(title, input, "1–100 次；修改后保存并重启服务，已用次数保留。"));
+    }
+    form.append(
+      el("h3", "Design 重试预算"),
+      el("p", "设计尝试包含首次生成及修正；504、超时和限流等临时故障单独计数。提高上限后可继续现有需求。", "muted"),
+      budgets,
+    );
+  }
 }
 
 function renderDatabaseSettings(form) {
@@ -5536,6 +5589,8 @@ function buildDetail() {
       el("p", item.id, "paths request-detail-id"),
       badge(presentation.status),
     );
+    if (item.stage === "DESIGNING" && item.design_budget)
+      overview.append(el("p", designBudgetSummary(item), "muted"));
     if (presentation.group !== "blocked")
       overview.append(
         el(

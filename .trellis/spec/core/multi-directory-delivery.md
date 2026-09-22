@@ -105,8 +105,9 @@ ase request resume DELIVERY_ID
   新 preparation，不能重新用父需求最初的 preparation 调用 `start()`。DONE 观察值直接追加回
   父 journal 并进入候选集验收，不重跑该 child 的 Coder/QA/Reviewer；BLOCKED/FAILED 仍保留，
   不在此入口绕过恢复审批。没有 child 观察值时继续使用确定性 `start()` 恢复首次派发窗口。
-- Product 最多 20 次、Design/Plan/Integration 各 3 次调用，调用前记录尝试。模型响应到文档落盘
-  的窗口可能重复计费；崩溃后的测试可能重跑，不承诺 exactly-once。
+- Product 最多 20 次、Plan/Integration 各 3 次调用；Design 默认 3 次设计尝试与 5 次临时故障，
+  两项上限独立可配置，分类见 [design-retry-budget.md](design-retry-budget.md)。调用前记录尝试；
+  模型响应到文档落盘的窗口可能重复计费；崩溃后的测试可能重跑，不承诺 exactly-once。
 - 子仓 BLOCKED/FAILED 或联合测试非零：保留候选与证据，父需求 BLOCKED。当前 checkout、规范或
   知识变化只影响新需求；旧需求继续使用已封存准备事实和代码基线。不自动扩大已批准范围或引入修复
   DAG。旧需求自己的 retained baseline 漂移必须 fail closed，不能覆盖历史。
@@ -332,27 +333,33 @@ attempt budget.
 `JointCheckpoint.attempts["design"]` counts reserved Design artifact calls. The reservation is
 created before the provider call for crash safety. If `KnowledgeGapRaised` interrupts before a
 `JointTechnicalDesign` result is requested, the successor `WAITING_HUMAN` checkpoint returns
-that reservation to the Design budget. Provider interruption, invalid output and rejected
-Design artifacts remain spent. Existing journals retain every historical reservation and wait.
+that reservation to the Design budget. Typed retryable provider interruptions now return the
+reservation and spend `attempts.design_transient`; invalid output, rejected Design artifacts and
+unknown interruptions remain spent. See [design-retry-budget.md](design-retry-budget.md) for the
+shared configurable limits and classification. Existing journals retain every historical reservation
+and wait; old spent attempts are not retroactively reclassified.
 
-An exhausted Design checkpoint (`stage=DESIGNING`, `design=null`, `plan=null`, `attempts.design >=
-3`) may be recovered only when its immutable history contains a Design `WAITING_HUMAN` checkpoint
+An exhausted Design checkpoint (`stage=DESIGNING`, `design=null`, `plan=null`, and `attempts.design`
+at or above the configured Design limit, default 3) may be recovered only when its immutable
+history contains a Design `WAITING_HUMAN` checkpoint
 with an integrity-checked, human-approved `KnowledgeResolution`. `RecoverDesign` requires the
 exact checkpoint digest, operator, rationale and approval reference; it appends a successor,
 resets only `attempts.design`, and immediately invokes the ordinary Designer validation path.
+An exhausted transient allowance must first be extended through operator configuration; recovery
+cannot reset it. Raising the Design limit also permits ordinary retry without a counter reset.
 The console persists the `RECOVER_DESIGN` operation and the successor `next_action`; no journal
 record is edited or deleted.
 
 The read projection derives `design_recovery_available` from the current checkpoint, hash-chain
-history and resolution store. It renders a dedicated “恢复设计” action and never reuses generic
-“继续交付” for an active Design stage.
+history, configured policy and resolution store. It renders a dedicated “恢复设计” action before
+ordinary failed-operation retry, and never reuses generic “继续交付” for an active Design stage.
 
 ### Validation matrix
 
 | Case | Result |
 |---|---|
 | Knowledge gap before Design artifact | Wait, preserve the unused Design budget |
-| Three real invalid Design artifacts | Exhaust budget; no automatic fourth call |
+| Three real invalid Design artifacts with default policy | Exhaust Design budget; no automatic fourth call |
 | Exhausted Design plus approved historical knowledge resolution | Append audited recovery and continue Design |
 | Missing/foreign/stale resolution or checkpoint | Reject without journal mutation or provider call |
 | Recovery after accepted Design/Plan or another stage | Reject; no budget reset |
@@ -373,10 +380,12 @@ model artifact rejection, not permission to normalize the model output or retry 
 `JointTechnicalDesign.validate_for(scope, product)` after interface scope membership checks.
 `JointDeliveryService._advance` catches only this type, seals a DESIGNING checkpoint containing
 the rejected design SHA and one-based interface index in `next_action`, then calls Designer again
-within the existing three-call design budget. Every call spends an attempt before execution.
+within the configured Design budget (default three artifact attempts). Every call reserves an
+attempt before execution; typed transient failures use the separate allowance described above.
 The invalid design remains absent; feedback never includes interface names, prose or raw output.
 Approval, product and scope are unchanged. No wire fields, schemas or migration are introduced.
-An interruption preserves the feedback and spent attempts. Exhaustion raises before another call;
+An interruption preserves the feedback; unknown failures retain the reservation, while typed
+retryable failures refund it and spend the transient allowance. Exhaustion raises before another call;
 the last DESIGNING checkpoint remains inspectable, with no accepted design or downstream Task.
 
 ### Validation & Error Matrix
@@ -384,8 +393,8 @@ the last DESIGNING checkpoint remains inspectable, with no accepted design or do
 | Case | Result |
 |---|---|
 | Repeated known consumers, then valid full design | Durable rejection; full validation before Planner |
-| Three duplicate-consumer rejections | No fourth call, no plan/dispatch; preserve last diagnostic |
-| Provider interruption during correction | Propagate; resume retains feedback and budget |
+| Three duplicate-consumer rejections with default policy | No fourth call, no plan/dispatch; preserve last diagnostic |
+| Provider interruption during correction | Propagate; preserve feedback and apply typed retry accounting |
 | Wrong ProductSpec digest, foreign unit, schema/provider error | No automatic retry |
 | Proposed write-path rejection | Dedicated bounded feedback in section 11; scope never widened |
 | Already accepted Design | Resume does not regenerate Design |
@@ -424,7 +433,8 @@ normalization or expansion of selected directories is allowed.
 Signature: `DesignWritePathsError(unit_index: int, component_index: int, path_index: int)`.
 The validator supplies one-based positions, never raw paths or component names. The service seals
 the rejected design digest and safe diagnostic in `next_action`, then requests a complete corrected
-design using the same total three-call Designer budget as section 10. All guards run again.
+design using the same configurable Designer budget as section 10 (default three artifact attempts).
+All guards run again.
 Approval, selected scope, previous checkpoints, wire schemas and provider-failure behavior stay
 unchanged. This error concerns a proposed artifact, not an executed unauthorized write.
 

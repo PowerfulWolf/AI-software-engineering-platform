@@ -232,6 +232,27 @@ def test_runtime_configuration_change_requires_restart(tmp_path: Path) -> None:
     assert snapshot.config.console_port == 8877
 
 
+def test_design_retry_settings_roundtrip_requires_restart(tmp_path: Path) -> None:
+    administration = _administration(tmp_path)
+    changed = ProductionConfig.model_validate(
+        {
+            **administration.runtime_config.to_wire(),
+            "design_retry_policy": {"max_design_attempts": 8, "max_transient_failures": 20},
+        }
+    )
+    saved = administration.update_settings(UpdateSettingsRequest(config=changed))
+    assert saved.restart_required
+    assert saved.config.design_retry_policy == changed.design_retry_policy
+    assert administration.runtime_config.design_retry_policy.max_design_attempts == 3
+    reopened = LocalConsoleAdministration(
+        runtime_config=ProductionConfig.from_file(tmp_path / "config.json"),
+        config_path=tmp_path / "config.json",
+        environment=administration.environment,
+    )
+    assert reopened.settings().config.design_retry_policy == changed.design_retry_policy
+    assert not reopened.settings().restart_required
+
+
 def test_configuration_apply_token_changes_without_exposing_runtime_secret(
     tmp_path: Path,
 ) -> None:

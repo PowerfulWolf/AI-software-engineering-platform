@@ -302,6 +302,7 @@ class TeamHost:
         requirements = JointDeliveryService(
             team=self._team,
             project=project,
+            design_retry_policy=self._config.design_retry_policy,
             backend=ProductionJointBackend(
                 native=backend,
                 factory=derived_backend,

@@ -34,6 +34,7 @@ from ai_software_engineer.manager.dispatch import (
     VerificationReservation,
 )
 from ai_software_engineer.manager.mysql_dispatch_authority import _decode_allocation
+from ai_software_engineer.multi_directory.budget import DesignRetryPolicy
 from ai_software_engineer.multi_directory.models import JointCheckpoint, JointStage, digest
 from ai_software_engineer.multi_directory.production import DerivedStageInputs
 from ai_software_engineer.multi_directory.retirement import RequirementRetirementStore
@@ -270,10 +271,18 @@ class ProductionTeamReader:
                     if knowledge_gap.resolution is not None
                     else "请在“知识缺口”中补充并批准解答，然后继续交付。"  # noqa: RUF001
                 )
-            design_recovery_available = _design_recovery_available(selected, journal, joint)
+            design_budget = self.config.design_retry_policy.budget(joint.attempts)
+            design_recovery_available = _design_recovery_available(
+                selected, journal, joint, policy=self.config.design_retry_policy
+            )
+            if joint.stage is JointStage.DESIGNING and design_budget.exhausted:
+                presented_next_action = (
+                    "Design 预算已用尽。请检查失败记录，在设置中提高对应预算，"  # noqa: RUF001
+                    "重启服务后重试。"
+                )
             if design_recovery_available:
                 presented_next_action = (
-                    "Design 尝试次数已被知识门误计。请执行一次有记录的 Design 恢复, "
+                    "Design 预算已用尽，历史知识解答已批准。可执行一次有记录的 Design 恢复, "  # noqa: RUF001
                     "平台会保留现有需求、讨论和 ProductSpec 审批。"
                 )
             requests.append(
@@ -286,7 +295,9 @@ class ProductionTeamReader:
                     next_action=presented_next_action,
                     blocker=(
                         presented_next_action
-                        if _waiting(presented_stage) or design_recovery_available
+                        if _waiting(presented_stage)
+                        or design_recovery_available
+                        or (joint.stage is JointStage.DESIGNING and design_budget.exhausted)
                         else None
                     ),
                     dialogue=tuple(
@@ -311,6 +322,7 @@ class ProductionTeamReader:
                     checkpoint_sha256=joint.checkpoint_sha256,
                     knowledge_gap=knowledge_gap,
                     design_recovery_available=design_recovery_available,
+                    design_budget=design_budget,
                 )
             )
         tasks: list[TaskView] = []
@@ -646,6 +658,8 @@ def _design_recovery_available(
     project: ProjectWorkspace | None,
     journal: JointJournal | None,
     checkpoint: JointCheckpoint,
+    *,
+    policy: DesignRetryPolicy,
 ) -> bool:
     """Project the bounded recovery contract from immutable facts only."""
 
@@ -655,7 +669,7 @@ def _design_recovery_available(
         or checkpoint.stage is not JointStage.DESIGNING
         or checkpoint.design is not None
         or checkpoint.plan is not None
-        or checkpoint.attempts.get("design", 0) < 3
+        or policy.budget(checkpoint.attempts).exhausted != "design"
     ):
         return False
     from ai_software_engineer.knowledge.gaps import KnowledgeResolution
@@ -673,9 +687,7 @@ def _design_recovery_available(
             item.knowledge_gap_id,
             read_only=True,
         )
-        resolution = records.find(
-            "gap-resolutions", item.knowledge_gap_id, KnowledgeResolution
-        )
+        resolution = records.find("gap-resolutions", item.knowledge_gap_id, KnowledgeResolution)
         if resolution is not None:
             resolution.validate_integrity()
             return True

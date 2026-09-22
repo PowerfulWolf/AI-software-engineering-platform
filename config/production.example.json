@@ -39,5 +39,9 @@
   ],
   "codex_executable": "codex",
   "live_model_execution": false,
-  "console_port": 8765
+  "console_port": 8765,
+  "design_retry_policy": {
+    "max_design_attempts": 3,
+    "max_transient_failures": 5
+  }
 }

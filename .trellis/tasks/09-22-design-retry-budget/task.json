@@ -1,0 +1,9 @@
+{
+  "id": "design-retry-budget",
+  "title": "Separate configurable Design and transient failure budgets; repair recovery UI",
+  "status": "completed",
+  "phase": "verified",
+  "baseline": "faffb49fe26561a34e40db374cd905876387a96a",
+  "authorization": "User explicitly requested Trellis, one agent, edits and commit in the current checkout; incremental tests only.",
+  "verification": "verification.md"
+}

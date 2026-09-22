@@ -34,6 +34,7 @@
 
 ## Files
 
+- [`design-retry-budget.md`](design-retry-budget.md): configurable Design/transient budgets and recovery UI.
 - [`architecture.md`](architecture.md)
 - [`contracts.md`](contracts.md)
 - [`python-runtime.md`](python-runtime.md)

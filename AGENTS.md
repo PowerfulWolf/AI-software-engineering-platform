@@ -233,6 +233,11 @@ subprocess/filesystem handle。
 
 ## 失败与重试
 
+- 联合 Design 的 `ProductionConfig.design_retry_policy` 分开限制设计尝试（默认 3）与临时模型
+  故障（默认 5），均可由操作者配置为 1–100，保存并重启生效。只有明确 typed 的 retryable
+  provider failure 才退回 Design 预留次数并追加 `attempts.design_transient`；未知中断保留预留。
+  旧 journal 不追溯重算。UI 必须优先显示符合条件的“恢复设计”，不得用普通重试遮住恢复或在预算
+  耗尽时继续显示必然失败的操作。详见 `.trellis/spec/core/design-retry-budget.md`。
 - 默认最多 3 个 Coder attempt；Agent timeout/崩溃只按 transient 重试，不产生 verdict；
 - T010 使用 `RetryingOrchestrator` 继续已有 `PLANNING`/`IMPLEMENTING`/`CONTINUE_REQUIRED`/
   `QUEUED`/`QA`/`REVIEW`

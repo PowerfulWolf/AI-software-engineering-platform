@@ -241,6 +241,47 @@ test("failed Design exposes an exact-checkpoint retry, but a running retry hides
   assert.equal(findButton(h, "继续交付"), undefined);
 });
 
+test("exhausted Design recovery outranks a failed retry and submits the recovery intent", async () => {
+  const submitted = [];
+  const h = harness(async (_url, options = {}) => {
+    if (options.method) submitted.push(JSON.parse(options.body).intent);
+    return {ok: true, json: async () => ({operation_id: "op-recovery", status: "QUEUED",
+      updated_at: "2026-09-22", intent: submitted.at(-1)})};
+  });
+  vm.runInContext(`
+    snapshot.requests[0].stage = "DESIGNING";
+    snapshot.requests[0].design_recovery_available = true;
+    operations = [{operation_id: "op-failed", status: "FAILED", error_summary: "design budget exhausted",
+      intent: {action: "CONTINUE_DELIVERY", delivery_id: "r1"}, updated_at: "2026-09-21"}];
+    renderDetail();
+  `, h.context);
+  assert.equal(findButton(h, "重试 Design"), undefined);
+  assert.equal(findButton(h, "继续交付"), undefined);
+  assert.ok(findButton(h, "恢复设计"));
+  assert.match(text(h.detail()), /设计待恢复/);
+  await findButton(h, "恢复设计").events.click();
+  assert.deepEqual(submitted, [{action: "RECOVER_DESIGN", project_id: "project_test",
+    delivery_id: "r1", expected_checkpoint_sha256: "checkpoint-a"}]);
+  assert.equal(findButton(h, "恢复设计"), undefined);
+});
+
+test("exhausted transient budget shows settings guidance without an impossible retry", () => {
+  const h = harness(async () => ({ok: true, json: async () => []}));
+  vm.runInContext(`
+    snapshot.requests[0].stage = "DESIGNING";
+    snapshot.requests[0].design_budget = {design_attempts: 1, max_design_attempts: 3,
+      transient_failures: 5, max_transient_failures: 5, exhausted: "transient"};
+    operations = [{operation_id: "op-failed", status: "FAILED", error_summary: "HTTP 504",
+      intent: {action: "CONTINUE_DELIVERY", delivery_id: "r1"}, updated_at: "2026-09-21"}];
+    renderDetail();
+  `, h.context);
+  assert.equal(findButton(h, "重试 Design"), undefined);
+  assert.equal(findButton(h, "继续交付"), undefined);
+  assert.match(text(h.detail()), /临时故障.*5.*5/);
+  assert.match(text(h.detail()), /设置/);
+  assert.match(text(h.detail()), /设计预算已用尽/);
+});
+
 test("polling the same checkpoint replaces pending drafts when approval arrived elsewhere", async () => {
   let view = pending;
   const h = harness(async () => ({ok: true, json: async () => [view]}));

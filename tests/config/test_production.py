@@ -49,6 +49,31 @@ def test_config_loads_without_storing_secrets(tmp_path: Path) -> None:
     assert "api_key" not in config.to_wire()
 
 
+def test_design_retry_policy_defaults_and_custom_limits(tmp_path: Path) -> None:
+    config = ProductionConfig.model_validate(_payload(tmp_path))
+    assert config.design_retry_policy.max_design_attempts == 3
+    assert config.design_retry_policy.max_transient_failures == 5
+    payload = {
+        **_payload(tmp_path),
+        "design_retry_policy": {
+            "max_design_attempts": 8,
+            "max_transient_failures": 20,
+        },
+    }
+    custom = ProductionConfig.model_validate(payload)
+    assert custom.design_retry_policy.max_design_attempts == 8
+    assert ProductionConfig.model_validate(custom.to_wire()) == custom
+
+
+@pytest.mark.parametrize("key", ["max_design_attempts", "max_transient_failures"])
+@pytest.mark.parametrize("value", [0, -1, 101, True, "5", 1.5])
+def test_design_retry_policy_rejects_invalid_limits(
+    tmp_path: Path, key: str, value: object
+) -> None:
+    with pytest.raises(ValidationError):
+        ProductionConfig.model_validate({**_payload(tmp_path), "design_retry_policy": {key: value}})
+
+
 def test_environment_selects_config_path(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     path.write_text(json.dumps(_payload(tmp_path)), encoding="utf-8")

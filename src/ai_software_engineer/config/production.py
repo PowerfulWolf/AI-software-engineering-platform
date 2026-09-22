@@ -27,6 +27,7 @@ from ai_software_engineer.domain.model import (
     ReasoningEffort,
     ensure_unique,
 )
+from ai_software_engineer.multi_directory.budget import DesignRetryPolicy
 from ai_software_engineer.project_workspace import ProjectName
 from ai_software_engineer.team_workspace import TeamName, validate_knowledge_path
 
@@ -133,6 +134,7 @@ class ProductionConfig(DomainModel):
     codex_executable: NonEmptyStr = "codex"
     live_model_execution: StrictBool = False
     console_port: Annotated[StrictInt, Field(ge=1, le=65535)] = 8765
+    design_retry_policy: DesignRetryPolicy = DesignRetryPolicy()
 
     @classmethod
     def default(cls) -> Self:

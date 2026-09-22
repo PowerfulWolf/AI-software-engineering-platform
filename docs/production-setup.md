@@ -150,6 +150,25 @@ AgentProfile，也不代表单个 Git 仓库或一次 Requirement。
 Team、Project 和 Repository sidecar 目录只在显式的 Host 初始化、Project/Requirement 准备或交付写入流程中创建；加载配置和
 `ase team serve` 等只读查看不会创建目录。
 
+### Design 重试预算
+
+“设置 → 通用设置 → Design 重试预算”提供两个独立上限，保存后通过“应用配置”重启服务生效：
+
+```json
+{
+  "design_retry_policy": {
+    "max_design_attempts": 3,
+    "max_transient_failures": 5
+  }
+}
+```
+
+两项均为 1–100 的整数。设计尝试包含首次生成和不合格输出后的修正；明确分类的 504/超时/限流等
+临时模型故障单独计数，包括生成设计之前的知识咨询。临时故障退出当前操作，现有模型备用路由仍有界，
+不会增加无限自动重试循环。需求详情显示已用次数/上限；提高上限后可继续已有需求，重启不清空计数。
+旧配置不填写该字段时使用 3/5 默认值；新功能不追溯重算旧失败。恢复步骤见
+[操作反馈闭环](operator-feedback-loop.md#design-预算耗尽与存量需求处置)。
+
 ## 5. 模型路由
 
 `model_routes` 是平台的可用模型目录，不代表每个 Agent 都会自动使用其中所有模型。

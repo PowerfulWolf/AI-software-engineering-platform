@@ -29,6 +29,7 @@ from ai_software_engineer.multi_directory.attachments import (
     MAX_REQUIREMENT_SCREENSHOTS,
     RequirementAttachmentStore,
 )
+from ai_software_engineer.multi_directory.budget import DESIGN_TRANSIENT_COUNTER, DesignRetryPolicy
 from ai_software_engineer.multi_directory.integration_commands import planner_command_policy
 from ai_software_engineer.multi_directory.models import (
     Candidate,
@@ -163,10 +164,12 @@ class JointDeliveryService:
         backend: JointBackend,
         team: TeamWorkspace,
         project: ProjectWorkspace,
+        design_retry_policy: DesignRetryPolicy | None = None,
     ) -> None:
         self.backend = backend
         self.team = team
         self.project = project
+        self.design_retry_policy = design_retry_policy or DesignRetryPolicy()
         if project.team.manifest != team.manifest:
             raise ValueError("Project is not served by this Team")
         self.journal = JointJournal(project.requirements_root)
@@ -278,11 +281,13 @@ class JointDeliveryService:
                 checkpoint.stage not in {JointStage.DESIGNING, JointStage.WAITING_HUMAN}
                 or checkpoint.design is not None
                 or checkpoint.plan is not None
-                or checkpoint.attempts.get("design", 0) < 3
+                or checkpoint.attempts.get("design", 0)
+                < self.design_retry_policy.max_design_attempts
             ):
                 raise ValueError(
                     "design recovery requires an exhausted DESIGNING checkpoint without a design"
                 )
+            self._require_design_transient_budget(checkpoint)
             source = self._approved_design_wait(checkpoint)
             assert source.knowledge_gap_id is not None
             records = find_gap_records(
@@ -596,8 +601,8 @@ class JointDeliveryService:
             attempts = dict(current.attempts)
             # Reserve a stage attempt before invoking the model, but do not spend
             # that reservation when the knowledge gate interrupts before the
-            # requested Design artifact is generated.  Provider interruptions and
-            # invalid artifacts remain spent and are handled by the existing bound.
+            # requested Design artifact is generated. Typed provider interruptions
+            # are accounted separately by _design_output; unknown failures remain spent.
             if current.stage is JointStage.DESIGNING and current.design is None:
                 attempts["design"] = max(0, attempts.get("design", 0) - 1)
             return self._save(
@@ -630,9 +635,7 @@ class JointDeliveryService:
         for item in candidates:
             assert item.knowledge_gap_id is not None
             records = find_gap_records(self.project, checkpoint.delivery_id, item.knowledge_gap_id)
-            resolution = records.find(
-                "gap-resolutions", item.knowledge_gap_id, KnowledgeResolution
-            )
+            resolution = records.find("gap-resolutions", item.knowledge_gap_id, KnowledgeResolution)
             if resolution is not None:
                 resolution.validate_integrity()
                 return item
@@ -747,10 +750,12 @@ class JointDeliveryService:
                 ),
             )
         while checkpoint.stage is JointStage.DESIGNING:
-            checkpoint = self._attempt(checkpoint, "design")
-            design = self._produce(
+            self._require_design_transient_budget(checkpoint)
+            checkpoint = self._attempt(
+                checkpoint, "design", limit=self.design_retry_policy.max_design_attempts
+            )
+            design = self._design_output(
                 checkpoint,
-                JointTechnicalDesign,
                 "Act as Designer. "
                 "Return a unified technical design bound to product_spec_sha256. "
                 "Classify every input unit "
@@ -1040,6 +1045,28 @@ class JointDeliveryService:
         if checkpoint.planning_decision.mode is PlanningMode.SIMPLE:
             return fast_joint_plan(checkpoint)
         return self._produce(checkpoint, JointExecutionPlan, instructions)
+
+    def _require_design_transient_budget(self, checkpoint: JointCheckpoint) -> None:
+        budget = self.design_retry_policy.budget(checkpoint.attempts)
+        if budget.exhausted == "transient":
+            raise ValueError(
+                "joint design transient failure budget exhausted; "
+                "inspect provider evidence and increase design_retry_policy.max_transient_failures "
+                "in Settings before restarting and retrying"
+            )
+
+    def _design_output(
+        self, checkpoint: JointCheckpoint, instructions: str
+    ) -> JointTechnicalDesign:
+        try:
+            return self._produce(checkpoint, JointTechnicalDesign, instructions)
+        except StructuredModelError as error:
+            if error.retryable:
+                attempts = dict(checkpoint.attempts)
+                attempts["design"] -= 1
+                attempts[DESIGN_TRANSIENT_COUNTER] = attempts.get(DESIGN_TRANSIENT_COUNTER, 0) + 1
+                self._save(checkpoint, attempts=attempts)
+            raise
 
     def _attempt(self, checkpoint: JointCheckpoint, name: str, limit: int = 3) -> JointCheckpoint:
         attempts = dict(checkpoint.attempts)
