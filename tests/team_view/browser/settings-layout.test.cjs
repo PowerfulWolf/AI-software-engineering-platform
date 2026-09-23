@@ -103,6 +103,14 @@ test("Agent help, horizontal primary row and exhausted fallback catalog remain u
     "primary label and model selector must share a horizontal row");
   assert.ok(Math.abs(primary.labelCenter - primary.selectCenter) <= 2,
     `primary label and selector are vertically aligned: ${JSON.stringify(primary)}`);
+  const helpAlignment = await designer.evaluate((card) => ({
+    primary: card.querySelector(".agent-model-detail > .settings-field-row .settings-help-trigger")
+      .getBoundingClientRect().left,
+    fallback: card.querySelector(".agent-fallback-heading .settings-help-trigger")
+      .getBoundingClientRect().left,
+  }));
+  assert.ok(Math.abs(helpAlignment.primary - helpAlignment.fallback) <= 1,
+    `primary and fallback help icons align: ${JSON.stringify(helpAlignment)}`);
 
   assert.equal(await designer.locator(".agent-fallback-row").count(), 2);
   const exhaustedAdd = designer.locator(".agent-fallback-add");

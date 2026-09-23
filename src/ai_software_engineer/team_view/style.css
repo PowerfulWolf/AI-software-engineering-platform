@@ -2010,6 +2010,7 @@ main[data-page="requests"] .page-context {
 .agent-setting-heading {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
 }
 .agent-setting-heading strong {
