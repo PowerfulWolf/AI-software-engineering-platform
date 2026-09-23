@@ -17,6 +17,7 @@ from ai_software_engineer.agents import (
     CodexCliAgentAdapter,
     CodexInvocationResult,
 )
+from ai_software_engineer.agents import codex_cli as codex_cli_module
 from ai_software_engineer.agents.codex_cli import (
     SubprocessCodexCommandRunner,
     _completion_reserve_seconds,
@@ -182,6 +183,9 @@ class _RejectOnceAdmission:
 
 
 class _FailureRunner:
+    def __init__(self, stderr: str = "usage limit reached") -> None:
+        self.stderr = stderr
+
     def run(
         self,
         argv: tuple[str, ...],
@@ -192,7 +196,7 @@ class _FailureRunner:
         timeout_seconds: float,
     ) -> CodexInvocationResult:
         del argv, cwd, environment, stdin, timeout_seconds
-        return CodexInvocationResult(returncode=1, stderr="usage limit reached")
+        return CodexInvocationResult(returncode=1, stderr=self.stderr)
 
 
 class _ArtifactOutputRunner:
@@ -447,6 +451,37 @@ def test_coder_cli_uses_explicit_local_proxy_without_loading_user_config(
     assert "CLIPROXY_API_KEY" not in environment
     assert "test-secret" not in repr(argv)
     assert "test-secret" not in prompt
+
+
+def test_coder_cli_managed_proxy_key_does_not_reach_shell_or_argv(tmp_path: Path) -> None:
+    root, base = _repository(tmp_path)
+    request = _coder_request().model_copy(update={"source_revision": base})
+    runner = _CoderRunner(request)
+    adapter = CodexCliAgentAdapter(
+        workspace_root=root,
+        model="gpt-test",
+        agent_id="agent_coder_001",
+        agent_version="v0.1",
+        proxy_base_url="http://127.0.0.1:8317/v1",
+        proxy_api_key_env="ASE_CODEX_PROXY_API_KEY",
+        prompt_builder=StaticPromptBuilder(),
+        environment={
+            "PATH": "/usr/bin",
+            "ASE_CODEX_PROXY_API_KEY": "test-proxy-secret",
+            "OTHER_API_KEY": "never-forward",
+        },
+        runner=runner,
+    )
+
+    assert adapter.run(request).status is AgentRunStatus.SUCCEEDED
+    argv, environment, prompt = runner.calls[0]
+    assert 'model_providers.ase_local_proxy.env_key="ASE_CODEX_PROXY_API_KEY"' in argv
+    assert "model_providers.ase_local_proxy.requires_openai_auth=false" in argv
+    assert 'shell_environment_policy.filters.ASE_CODEX_PROXY_API_KEY="exclude"' in argv
+    assert environment["ASE_CODEX_PROXY_API_KEY"] == "test-proxy-secret"
+    assert "OTHER_API_KEY" not in environment
+    assert "test-proxy-secret" not in repr(argv)
+    assert "test-proxy-secret" not in prompt
 
 
 def test_platform_finalizes_coder_draft_when_git_metadata_is_sandbox_external(
@@ -723,6 +758,43 @@ def test_cli_usage_limit_is_typed_for_provider_fallback(tmp_path: Path) -> None:
     assert result.error is not None
     assert result.error.code is AgentErrorCode.QUOTA_EXHAUSTED
     assert result.error.transient is True
+
+
+@pytest.mark.parametrize("stderr", ["Error: 401 Missing API key", "Error: HTTP 403 Forbidden"])
+def test_cli_missing_proxy_key_is_non_retryable_authentication(tmp_path: Path, stderr: str) -> None:
+    root, base = _repository(tmp_path)
+    request = _coder_request().model_copy(update={"source_revision": base})
+    adapter = CodexCliAgentAdapter(
+        workspace_root=root,
+        model="gpt-5.5",
+        agent_id="agent_coder_001",
+        agent_version="v0.1",
+        prompt_builder=StaticPromptBuilder(),
+        runner=_FailureRunner(stderr=stderr),
+    )
+
+    result = adapter.run(request)
+
+    assert result.error is not None
+    assert result.error.code is AgentErrorCode.AUTHENTICATION_ERROR
+    assert result.error.transient is False
+
+
+def test_cli_git_inspection_does_not_inherit_proxy_secret(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ASE_CODEX_PROXY_API_KEY", "test-proxy-secret")
+    captured: list[dict[str, str]] = []
+
+    def run(command: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        captured.append(kwargs["env"])  # type: ignore[arg-type]
+        return subprocess.CompletedProcess(command, 0, "base-revision\n", "")
+
+    monkeypatch.setattr(codex_cli_module.subprocess, "run", run)
+
+    assert codex_cli_module._git(tmp_path, "rev-parse", "HEAD") == "base-revision"
+    assert captured[0]["GIT_TERMINAL_PROMPT"] == "0"
+    assert "ASE_CODEX_PROXY_API_KEY" not in captured[0]
 
 
 def test_qa_semantic_artifact_failure_has_safe_actionable_diagnostics(

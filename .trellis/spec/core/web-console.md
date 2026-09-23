@@ -193,10 +193,11 @@ production_console_app(
   `CONTINUE_DELIVERY`。
 - 设置页的模型路由分为可用模型目录和 Agent 策略。启用目录路由只使其可选，不自动成为
   备用模型；每个 Agent 选择一个主模型，并可从目录中显式添加、移除、上移或下移 0–N 个备用模型。
-- 模型路由页单独显示可选 Codex CLI 本地代理 base URL；留空表示旧直连语义。URL 是
-  无密钥运行配置而非任意 CLI 参数，保存后沿用现有“应用配置”重启流程，不能热改正在
-  执行的 Agent，也不能把代理故障自动解释为登录失效。页面只说明 Codex CLI 需在与服务相同
-  的凭证环境中预先完成代理 API-key 登录；不收取或回显代理密钥，也不把它透传给 Agent 子进程。
+- 模型路由页单独显示可选 Codex CLI 本地代理 base URL 与写入型代理 API Key；留空 URL
+  表示旧直连语义。URL 是无密钥运行配置而非任意 CLI 参数；Key 通过现有 `runtime_variables`
+  保存，不由 API 回显。保存后沿用“应用配置”重启流程，不能热改正在执行的 Agent，也不能
+  把代理故障自动解释为登录失效。未在页面配置 Key 时才需要同一凭证环境的 CLI 登录；
+  配置 Key 时只将显式引用的 Key 传给 Codex 客户端，禁止传给模型工具 shell。
 - 一个 Task 的 Coder/QA/Reviewer 串行。UI 只把 `current_stage=true` 的 assignment 标成执行中；
   已完成/未来角色不得同时显示为运行。
 - DONE 只展示已经由 durable facts 证明的 candidate commit、可唯一定位的 branch 和验证证据。
@@ -631,6 +632,11 @@ GET  /api/v1/admin/status
   `NAME='POSIX-quoted value'` entries. Names follow `EnvVarName`; duplicates, controls, noncanonical
   quoting, symlinks and non-files fail closed. Save uses same-directory temporary file, fsync, atomic
   replace and `0600`. This is an explicit ease-of-use trade-off for one trusted local operator.
+- The Model Routing Codex CLI proxy password field uses the same write-only `runtime_variables`
+  channel. Its only accepted name is `ASE_CODEX_PROXY_API_KEY`, referenced by
+  `ProductionConfig.codex_cli_proxy_api_key_env`; a configured key requires a loopback proxy URL.
+  Blank preserves the stored value; an explicit switch back to CLI login clears the reference and
+  prunes the stored value. `secret_status` reports configured/not configured, never the value.
 - MySQL test accepts a proposed DSN or the effective stored/process value, validates its scheme and
   attempts one connection. Its response is only `{connected, message}` and must never echo the DSN,
   driver exception, username or password.

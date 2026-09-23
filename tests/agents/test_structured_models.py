@@ -119,6 +119,49 @@ def test_codex_structured_command_uses_explicit_local_proxy(
     assert "model_providers.ase_local_proxy.requires_openai_auth=true" in command
 
 
+def test_codex_structured_proxy_uses_only_named_key_and_hides_stderr_secret(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    commands: list[tuple[str, ...]] = []
+    environments: list[dict[str, str]] = []
+
+    def run(command: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        environments.append(kwargs["env"])  # type: ignore[arg-type]
+        return subprocess.CompletedProcess(command, 1, "", "error: test-proxy-secret rejected")
+
+    monkeypatch.setattr("ai_software_engineer.agents.structured.subprocess.run", run)
+    client = CodexCliStructuredModelClient(
+        repository_root=repository,
+        model="gpt-test",
+        proxy_base_url="http://127.0.0.1:8317/v1",
+        proxy_api_key_env="ASE_CODEX_PROXY_API_KEY",
+        environment={
+            "PATH": "/usr/bin",
+            "ASE_CODEX_PROXY_API_KEY": "test-proxy-secret",
+            "OTHER_API_KEY": "never-forward",
+        },
+    )
+
+    with pytest.raises(StructuredModelError) as error:
+        client.complete(
+            instructions="Return a result.",
+            input_payload={},
+            output_schema={"type": "object"},
+            timeout_seconds=30,
+        )
+
+    command = commands[0]
+    assert 'model_providers.ase_local_proxy.env_key="ASE_CODEX_PROXY_API_KEY"' in command
+    assert "model_providers.ase_local_proxy.requires_openai_auth=false" in command
+    assert 'shell_environment_policy.filters.ASE_CODEX_PROXY_API_KEY="exclude"' in command
+    assert environments == [{"PATH": "/usr/bin", "ASE_CODEX_PROXY_API_KEY": "test-proxy-secret"}]
+    assert "test-proxy-secret" not in repr(command)
+    assert "test-proxy-secret" not in str(error.value)
+
+
 def test_codex_structured_command_mounts_additional_requirement_baselines(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -230,6 +273,8 @@ def test_codex_structured_image_rejects_symlink_before_provider_call(
         ("Error: usage limit reached", AgentErrorCode.QUOTA_EXHAUSTED),
         ("Error: rate limit 429", AgentErrorCode.RATE_LIMITED),
         ("Error: authentication expired", AgentErrorCode.AUTHENTICATION_ERROR),
+        ("Error: 401 Missing API key", AgentErrorCode.AUTHENTICATION_ERROR),
+        ("Error: HTTP 403 Forbidden", AgentErrorCode.AUTHENTICATION_ERROR),
         ("Error: service connection closed", AgentErrorCode.PROVIDER_UNAVAILABLE),
     ],
 )
@@ -244,6 +289,7 @@ def test_structured_cli_failure_preserves_safe_cause_not_stdout(
     with pytest.raises(StructuredModelError) as raised:
         client.complete(instructions="Act", input_payload={}, output_schema={}, timeout_seconds=1)
     assert raised.value.code is code
+    assert raised.value.transient is (code is not AgentErrorCode.AUTHENTICATION_ERROR)
     assert stderr in raised.value.safe_message
     assert "退出码 1" in raised.value.safe_message
     assert "PRIVATE" not in raised.value.safe_message

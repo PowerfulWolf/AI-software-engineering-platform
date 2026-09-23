@@ -92,6 +92,31 @@ def test_local_codex_proxy_rejects_unsafe_url(tmp_path: Path, url: str) -> None:
         ProductionConfig.model_validate({**_payload(tmp_path), "codex_cli_proxy_base_url": url})
 
 
+def test_local_codex_proxy_key_reference_is_secret_free_and_requires_url(
+    tmp_path: Path,
+) -> None:
+    payload = {
+        **_payload(tmp_path),
+        "codex_cli_proxy_base_url": "http://127.0.0.1:8317/v1",
+        "codex_cli_proxy_api_key_env": "ASE_CODEX_PROXY_API_KEY",
+    }
+    schema = json.loads(
+        (Path(__file__).parents[2] / "schemas" / "production-config.schema.json").read_text()
+    )
+    config = ProductionConfig.model_validate(payload)
+
+    assert config.codex_cli_proxy_api_key_env == "ASE_CODEX_PROXY_API_KEY"
+    assert "proxy-secret" not in config.model_dump_json()
+    Draft202012Validator(schema).validate(config.to_wire())
+    for invalid in (
+        {**payload, "codex_cli_proxy_base_url": None},
+        {**payload, "codex_cli_proxy_api_key_env": "invalid-name"},
+    ):
+        with pytest.raises(ValidationError):
+            ProductionConfig.model_validate(invalid)
+        assert list(Draft202012Validator(schema).iter_errors(invalid))
+
+
 def test_design_retry_policy_defaults_and_custom_limits(tmp_path: Path) -> None:
     config = ProductionConfig.model_validate(_payload(tmp_path))
     assert config.design_retry_policy.max_design_attempts == 3

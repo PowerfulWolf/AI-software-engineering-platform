@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import stat
 from pathlib import Path
 
 import pytest
@@ -249,6 +250,63 @@ def test_local_codex_proxy_setting_is_saved_and_requires_restart(tmp_path: Path)
         "http://127.0.0.1:8317/v1"
     )
     assert not (tmp_path / "runtime.env").exists()
+
+
+def test_local_codex_proxy_key_is_write_only_replaced_and_pruned(tmp_path: Path) -> None:
+    administration = _administration(tmp_path)
+    config = ProductionConfig.model_validate(
+        {
+            **administration.runtime_config.to_wire(),
+            "codex_cli_proxy_base_url": "http://127.0.0.1:8317/v1",
+            "codex_cli_proxy_api_key_env": "ASE_CODEX_PROXY_API_KEY",
+        }
+    )
+    request = UpdateSettingsRequest.model_validate(
+        {
+            "config": config.to_wire(),
+            "runtime_variables": [
+                {"environment_name": "ASE_CODEX_PROXY_API_KEY", "value": "proxy-secret-one"}
+            ],
+        }
+    )
+
+    saved = administration.update_settings(request)
+
+    assert saved.restart_required is True
+    assert "proxy-secret-one" not in saved.model_dump_json()
+    assert "proxy-secret-one" not in (tmp_path / "config.json").read_text()
+    assert stat.S_IMODE((tmp_path / "runtime.env").stat().st_mode) == 0o600
+    assert (
+        LocalRuntimeEnvironmentStore(tmp_path / "runtime.env").load()["ASE_CODEX_PROXY_API_KEY"]
+        == "proxy-secret-one"
+    )
+    assert any(
+        item.environment_name == "ASE_CODEX_PROXY_API_KEY" and item.configured
+        for item in saved.secret_status
+    )
+    assert administration.status().model_routes[0].credential_configured is True
+
+    administration.update_settings(
+        UpdateSettingsRequest.model_validate(
+            {
+                "config": config.to_wire(),
+                "runtime_variables": [
+                    {"environment_name": "ASE_CODEX_PROXY_API_KEY", "value": "proxy-secret-two"}
+                ],
+            }
+        )
+    )
+    assert (
+        LocalRuntimeEnvironmentStore(tmp_path / "runtime.env").load()["ASE_CODEX_PROXY_API_KEY"]
+        == "proxy-secret-two"
+    )
+
+    direct = config.model_copy(update={"codex_cli_proxy_api_key_env": None})
+    administration.update_settings(UpdateSettingsRequest(config=direct))
+    assert (
+        "ASE_CODEX_PROXY_API_KEY"
+        not in LocalRuntimeEnvironmentStore(tmp_path / "runtime.env").load()
+    )
 
 
 def test_design_retry_settings_roundtrip_requires_restart(tmp_path: Path) -> None:

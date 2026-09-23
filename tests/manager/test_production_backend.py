@@ -23,6 +23,7 @@ from ai_software_engineer.agents import (
 from ai_software_engineer.config import (
     ModelProviderKind,
     ProductionConfig,
+    ProductionConfigError,
     ProviderRouteConfig,
 )
 from ai_software_engineer.context import ContextBudget, FileContextStore
@@ -353,6 +354,36 @@ def test_upstream_codex_factory_receives_local_proxy_config(
 
     assert ConfiguredStructuredClientFactory(config, {}).for_project(tmp_path) is not None
     assert captured == ["http://127.0.0.1:8317/v1"]
+
+
+def test_upstream_codex_proxy_managed_key_requires_runtime_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: list[object] = []
+
+    def make_client(**kwargs: object) -> StructuredModelClient:
+        captured.append(kwargs["proxy_api_key_env"])
+        return _ScriptedStructuredClient()
+
+    monkeypatch.setattr(production_backend, "CodexCliStructuredModelClient", make_client)
+    config = ProductionConfig.model_validate(
+        {
+            "platform_root": str(tmp_path / "platform"),
+            "live_model_execution": True,
+            "codex_cli_proxy_base_url": "http://127.0.0.1:8317/v1",
+            "codex_cli_proxy_api_key_env": "ASE_CODEX_PROXY_API_KEY",
+            "model_routes": [{"provider": "codex", "model": "gpt-test", "kind": "codex_cli"}],
+        }
+    )
+    with pytest.raises(ProductionConfigError, match="ASE_CODEX_PROXY_API_KEY"):
+        ConfiguredStructuredClientFactory(config, {}).for_project(tmp_path)
+    assert (
+        ConfiguredStructuredClientFactory(
+            config, {"ASE_CODEX_PROXY_API_KEY": "test-proxy-secret"}
+        ).for_project(tmp_path)
+        is not None
+    )
+    assert captured == ["ASE_CODEX_PROXY_API_KEY"]
 
 
 @pytest.mark.parametrize(

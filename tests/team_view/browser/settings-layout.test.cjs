@@ -46,6 +46,7 @@ const modelConfig = () => {
     ],
     codex_executable: "codex",
     codex_cli_proxy_base_url: null,
+    codex_cli_proxy_api_key_env: null,
     live_model_execution: true,
     console_port: 8765,
     execution_retry_policy: retryPolicy,
@@ -138,6 +139,9 @@ test("Model routing uses compact disclosures and aligned fallback actions", asyn
   assert.equal(await proxy.inputValue(), "http://127.0.0.1:8317/v1");
   assert.equal(await h.page.evaluate(() => settingsDraft.codex_cli_proxy_base_url),
     "http://127.0.0.1:8317/v1");
+  const proxyKey = form.getByLabel("代理 API Key");
+  assert.equal(await proxyKey.getAttribute("type"), "password");
+  await proxyKey.fill("test-proxy-secret");
 
   const designer = form.locator('.agent-model-card[data-role="designer"]');
   await designer.locator(":scope > summary").click();
@@ -164,6 +168,14 @@ test("Model routing uses compact disclosures and aligned fallback actions", asyn
   const submission = h.page.waitForRequest((request) =>
     request.url().endsWith("/api/v1/admin/settings") && request.method() === "PUT");
   await form.getByRole("button", { name: "保存设置" }).click();
-  assert.equal((await submission).postDataJSON().config.codex_cli_proxy_base_url,
+  const submitted = (await submission).postDataJSON();
+  assert.equal(submitted.config.codex_cli_proxy_base_url,
     "http://127.0.0.1:8317/v1");
+  assert.equal(submitted.config.codex_cli_proxy_api_key_env,
+    "ASE_CODEX_PROXY_API_KEY");
+  assert.deepEqual(submitted.runtime_variables.find((item) =>
+    item.environment_name === "ASE_CODEX_PROXY_API_KEY"), {
+    environment_name: "ASE_CODEX_PROXY_API_KEY", value: "test-proxy-secret",
+  });
+  assert.equal(JSON.stringify(submitted.config).includes("test-proxy-secret"), false);
 });

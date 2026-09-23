@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from urllib.parse import urlsplit
+
+CODEX_PROXY_API_KEY_ENV = "ASE_CODEX_PROXY_API_KEY"
 
 _LOCAL_PROXY_URL = re.compile(
     r"^http://(?:localhost|127\.0\.0\.1|\[::1\])(?::[0-9]+)?"
@@ -35,12 +38,18 @@ def normalize_local_codex_proxy_base_url(value: str) -> str:
     return value
 
 
-def codex_cli_proxy_overrides(base_url: str | None) -> tuple[str, ...]:
+def codex_cli_proxy_overrides(
+    base_url: str | None, api_key_env: str | None = None
+) -> tuple[str, ...]:
     """Build fixed TOML overrides while preserving --ignore-user-config."""
     if base_url is None:
+        if api_key_env is not None:
+            raise ValueError("Codex CLI proxy key requires a proxy URL")
         return ()
     safe_url = normalize_local_codex_proxy_base_url(base_url)
-    return (
+    if api_key_env is not None and api_key_env != CODEX_PROXY_API_KEY_ENV:
+        raise ValueError("Codex CLI proxy key environment name is invalid")
+    overrides = (
         "-c",
         'model_provider="ase_local_proxy"',
         "-c",
@@ -49,6 +58,35 @@ def codex_cli_proxy_overrides(base_url: str | None) -> tuple[str, ...]:
         f"model_providers.ase_local_proxy.base_url={json.dumps(safe_url)}",
         "-c",
         'model_providers.ase_local_proxy.wire_api="responses"',
-        "-c",
-        "model_providers.ase_local_proxy.requires_openai_auth=true",
     )
+    if api_key_env is None:
+        return (
+            *overrides,
+            "-c",
+            "model_providers.ase_local_proxy.requires_openai_auth=true",
+        )
+    return (
+        *overrides,
+        "-c",
+        "model_providers.ase_local_proxy.requires_openai_auth=false",
+        "-c",
+        f"model_providers.ase_local_proxy.env_key={json.dumps(api_key_env)}",
+        "-c",
+        "shell_environment_policy.ignore_default_excludes=false",
+        "-c",
+        f'shell_environment_policy.filters.{api_key_env}="exclude"',
+    )
+
+
+def codex_cli_proxy_key_environment(
+    source: Mapping[str, str], api_key_env: str | None
+) -> dict[str, str]:
+    """Pass only the explicitly configured key to the Codex process itself."""
+    if api_key_env is None:
+        return {}
+    if api_key_env != CODEX_PROXY_API_KEY_ENV:
+        raise ValueError("Codex CLI proxy key environment name is invalid")
+    value = source.get(api_key_env)
+    if not value:
+        raise ValueError("Codex CLI proxy API key is not configured")
+    return {api_key_env: value}

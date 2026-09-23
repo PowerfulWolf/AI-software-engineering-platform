@@ -29,6 +29,7 @@ from ai_software_engineer.config import (
     ProductionConfigError,
     ProviderRouteConfig,
 )
+from ai_software_engineer.config.codex_proxy import codex_cli_proxy_key_environment
 from ai_software_engineer.domain import AgentDefinition, AgentRole, TeamRole
 from ai_software_engineer.git import GitWorktreeManager
 from ai_software_engineer.manager.dispatch import (
@@ -91,6 +92,13 @@ class ConfiguredDeliveryRouteAdapterFactory:
 
         prompt_builder: PromptBuilder = ContextPromptBuilder(context_resolver)
         if route.kind is ModelProviderKind.CODEX_CLI:
+            try:
+                codex_cli_proxy_key_environment(environment, config.codex_cli_proxy_api_key_env)
+            except ValueError as error:
+                raise ProductionConfigError(
+                    "Codex CLI proxy API key environment variable is missing: "
+                    f"{config.codex_cli_proxy_api_key_env}"
+                ) from error
             return CodexCliAgentAdapter(
                 workspace_root=binding.worktree.path,
                 execution_guard=self._execution_guard,
@@ -100,6 +108,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
                 prompt_builder=prompt_builder,
                 executable=config.codex_executable,
                 proxy_base_url=config.codex_cli_proxy_base_url,
+                proxy_api_key_env=config.codex_cli_proxy_api_key_env,
                 reasoning_effort=route.reasoning_effort,
                 environment=environment,
                 initial_workspace_admission=(

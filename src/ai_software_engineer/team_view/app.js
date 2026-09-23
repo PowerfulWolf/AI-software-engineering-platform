@@ -4257,6 +4257,8 @@ function modelRouteKey(route) {
   return `${route.provider}\u0000${route.model}\u0000${route.reasoning_effort || "medium"}`;
 }
 function modelRouteValidationMessage(config) {
+  if (config.codex_cli_proxy_api_key_env && !config.codex_cli_proxy_base_url)
+    return "请先填写 Codex CLI 本地代理地址，再配置代理 API Key。";
   const firstRouteByKey = new Map();
   for (const [index, route] of (config.model_routes || []).entries()) {
     const provider = route.provider.trim();
@@ -4597,6 +4599,7 @@ function renderSettings(content) {
             .sort(([left], [right]) => {
               const order = [
                 settingsDraft.database.dsn_env,
+                settingsDraft.codex_cli_proxy_api_key_env,
                 ...settingsDraft.model_routes
                   .map((route) => route.api_key_env)
                   .filter(Boolean),
@@ -4871,18 +4874,66 @@ function renderDatabaseSettings(form) {
 }
 
 function renderModelSettings(form) {
+  const proxyKeyName = "ASE_CODEX_PROXY_API_KEY";
   const proxy = bindInput(
     el("input"),
     settingsDraft.codex_cli_proxy_base_url || "",
-    (value) => (settingsDraft.codex_cli_proxy_base_url = value.trim() || null),
+    (value) => {
+      settingsDraft.codex_cli_proxy_base_url = value.trim() || null;
+      if (!settingsDraft.codex_cli_proxy_base_url) {
+        settingsDraft.codex_cli_proxy_api_key_env = null;
+        delete runtimeVariablesDraft[proxyKeyName];
+      }
+    },
   );
   proxy.placeholder = "http://127.0.0.1:8317/v1";
+  const proxyKey = bindInput(
+    el("input"),
+    runtimeVariablesDraft[proxyKeyName] || "",
+    (value) => {
+      if (value) {
+        runtimeVariablesDraft[proxyKeyName] = value;
+        settingsDraft.codex_cli_proxy_api_key_env = proxyKeyName;
+      } else {
+        delete runtimeVariablesDraft[proxyKeyName];
+        if (settingsSnapshot.config.codex_cli_proxy_api_key_env !== proxyKeyName)
+          settingsDraft.codex_cli_proxy_api_key_env = null;
+      }
+    },
+    "password",
+  );
+  proxyKey.autocomplete = "new-password";
+  proxyKey.placeholder = settingsSnapshot.secret_status.some(
+    (item) => item.environment_name === proxyKeyName && item.configured,
+  )
+    ? "已保存；输入新 Key 可替换"
+    : "输入 CLIProxyAPI 的 API Key";
   const proxyFields = el("div", undefined, "settings-field-list");
-  proxyFields.append(settingsField(
-    "Codex CLI 本地代理地址",
-    proxy,
-    "仅支持本机回环 HTTP 地址；代理需通过 Codex CLI 保存的 API key 认证。留空沿用原有连接；保存后需应用配置。",
-  ));
+  proxyFields.append(
+    settingsField(
+      "Codex CLI 本地代理地址",
+      proxy,
+      "仅支持本机回环 HTTP 地址；留空沿用原有连接。",
+    ),
+    settingsField(
+      "代理 API Key",
+      proxyKey,
+      "留空保留已保存值；页面不会回显。未配置时沿用 Codex CLI 登录。",
+    ),
+  );
+  const proxyChildren = [proxyFields];
+  if (settingsDraft.codex_cli_proxy_api_key_env === proxyKeyName) {
+    const clearKey = button("改用 Codex CLI 登录并清除已保存 Key", () => {
+      settingsDraft.codex_cli_proxy_api_key_env = null;
+      delete runtimeVariablesDraft[proxyKeyName];
+      proxyKey.value = "";
+      clearKey.disabled = true;
+    });
+    clearKey.type = "button";
+    const keyAction = el("div", undefined, "settings-action-row");
+    keyAction.append(clearKey);
+    proxyChildren.push(keyAction);
+  }
   const addRoute = button(
     "添加路由",
     () => {
@@ -5197,8 +5248,8 @@ function renderModelSettings(form) {
   form.append(
     settingsModule(
       "Codex CLI 连接",
-      "平台显式连接本地 Responses 代理，不读取个人 Codex 配置；状态页不检测代理在线。",
-      [proxyFields],
+      "平台显式连接本地 Responses 代理，不读取个人 Codex 配置；保存后需应用配置。",
+      proxyChildren,
     ),
     settingsModule(
       "可用模型目录",

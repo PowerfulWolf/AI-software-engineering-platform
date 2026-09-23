@@ -5,7 +5,23 @@
 Let the production platform run its Codex CLI routes through a locally managed
 CLIProxyAPI-compatible Responses proxy without loading the operator's full Codex
 configuration or requiring a direct ChatGPT CLI session. Proxy authentication
-uses Codex's stored API-key credential, never a key in agent argv/environment.
+uses Codex's stored API-key credential in URL-only mode; the follow-up adds a
+write-only managed-key mode without putting a key in argv or prompts.
+
+## Follow-up: platform-managed proxy key
+
+The operator also needs the same write-only API-key entry available for MySQL
+and Responses routes. Add an optional, config-referenced proxy key environment
+name and a password field on Model Routing. A key entered through Settings is
+stored only in sibling `runtime.env` (0600), never in config JSON, a response,
+an Operation, argv or a model prompt. Codex receives only this explicitly
+referenced key in its process environment and uses provider `env_key`; it must
+not expose that variable to model-invoked shell commands. Existing proxy URLs
+without a managed key continue to use Codex's own saved login.
+
+The operator-supplied key in the conversation is not an implementation fixture
+or a value to copy into source. The operator should rotate it and enter the new
+value in the write-only field after deployment.
 
 ## Scope
 
@@ -24,9 +40,15 @@ uses Codex's stored API-key credential, never a key in agent argv/environment.
 - [ ] Non-loopback HTTP, credentials, query/fragment, malformed and control-character
   URLs fail before any model call.
 - [ ] No personal `config.toml` or proxy secret is read or copied into persisted facts.
-- [ ] The local proxy can use Codex's stored API key; a missing/revoked credential
+- [ ] URL-only proxy configuration can use Codex's stored API key; a missing/revoked credential
   fails explicitly rather than silently changing providers.
 - [ ] Focused Python and UI tests pass; no full test suite is run.
+- [ ] Settings accepts, persists, reports configured status for, and replaces
+  the proxy key without ever returning its value; clearing the proxy/mode prunes
+  the managed secret from `runtime.env`.
+- [ ] Both Codex CLI call paths use `env_key` only when the managed key is
+  configured; they fail closed when its runtime value is missing and keep the
+  key out of argv, diagnostics and model-invoked shell environments.
 
 ## Allowed paths / verification / rollback
 

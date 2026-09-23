@@ -26,6 +26,7 @@ from ai_software_engineer.config import (
     ProductionConfigError,
     ProviderRouteConfig,
 )
+from ai_software_engineer.config.codex_proxy import codex_cli_proxy_key_environment
 from ai_software_engineer.context import ContextBudget, ContextSource, FileContextStore
 from ai_software_engineer.context.profile import repository_profile_context
 from ai_software_engineer.design import (
@@ -251,12 +252,22 @@ class ConfiguredStructuredClientFactory:
         routes: list[StructuredModelRoute] = []
         for route in self._config.routes_for(role):
             if route.kind is ModelProviderKind.CODEX_CLI:
+                try:
+                    codex_cli_proxy_key_environment(
+                        self._environment, self._config.codex_cli_proxy_api_key_env
+                    )
+                except ValueError as error:
+                    raise ProductionConfigError(
+                        "Codex CLI proxy API key environment variable is missing: "
+                        f"{self._config.codex_cli_proxy_api_key_env}"
+                    ) from error
                 client: StructuredModelClient = CodexCliStructuredModelClient(
                     repository_root=repository_roots[0],
                     additional_repository_roots=repository_roots[1:],
                     model=route.model,
                     executable=self._config.codex_executable,
                     proxy_base_url=self._config.codex_cli_proxy_base_url,
+                    proxy_api_key_env=self._config.codex_cli_proxy_api_key_env,
                     reasoning_effort=route.reasoning_effort,
                     environment=self._environment,
                 )

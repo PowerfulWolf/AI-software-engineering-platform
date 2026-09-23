@@ -19,7 +19,10 @@ from pydantic import (
     model_validator,
 )
 
-from ai_software_engineer.config.codex_proxy import normalize_local_codex_proxy_base_url
+from ai_software_engineer.config.codex_proxy import (
+    CODEX_PROXY_API_KEY_ENV,
+    normalize_local_codex_proxy_base_url,
+)
 from ai_software_engineer.domain.enums import TeamRole
 from ai_software_engineer.domain.identity import ProjectId, TeamId
 from ai_software_engineer.domain.model import (
@@ -135,6 +138,7 @@ class ProductionConfig(DomainModel):
     agent_model_routes: Annotated[tuple[AgentModelRoutePolicy, ...], Field(max_length=7)] = ()
     codex_executable: NonEmptyStr = "codex"
     codex_cli_proxy_base_url: str | None = None
+    codex_cli_proxy_api_key_env: EnvVarName | None = None
     live_model_execution: StrictBool = False
     console_port: Annotated[StrictInt, Field(ge=1, le=65535)] = 8765
     execution_retry_policy: ExecutionRetryPolicy = ExecutionRetryPolicy()
@@ -143,6 +147,13 @@ class ProductionConfig(DomainModel):
     @classmethod
     def validate_codex_cli_proxy_base_url(cls, value: str | None) -> str | None:
         return None if value is None else normalize_local_codex_proxy_base_url(value)
+
+    @field_validator("codex_cli_proxy_api_key_env")
+    @classmethod
+    def validate_codex_cli_proxy_api_key_env(cls, value: str | None) -> str | None:
+        if value is not None and value != CODEX_PROXY_API_KEY_ENV:
+            raise ValueError("Codex CLI proxy API key environment name is invalid")
+        return value
 
     @model_validator(mode="before")
     @classmethod
@@ -215,6 +226,14 @@ class ProductionConfig(DomainModel):
         root = Path(self.platform_root)
         if not root.is_absolute() or any(ord(character) < 32 for character in self.platform_root):
             raise ValueError("platform_root must be an absolute safe path")
+        if self.codex_cli_proxy_api_key_env is not None:
+            if self.codex_cli_proxy_base_url is None:
+                raise ValueError("Codex CLI proxy API key requires a proxy URL")
+            if self.codex_cli_proxy_api_key_env in {
+                self.database.dsn_env,
+                *(route.api_key_env for route in self.model_routes),
+            }:
+                raise ValueError("Codex CLI proxy API key must have a dedicated environment name")
         ensure_unique(
             ((route.provider, route.model, route.reasoning_effort) for route in self.model_routes),
             "production provider/model/reasoning routes",

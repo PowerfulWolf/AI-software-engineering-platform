@@ -812,6 +812,8 @@ class LocalConsoleAdministration:
 
     def settings(self) -> SettingsSnapshot:
         names = {self._saved_config.database.dsn_env}
+        if self._saved_config.codex_cli_proxy_api_key_env is not None:
+            names.add(self._saved_config.codex_cli_proxy_api_key_env)
         names.update(
             route.api_key_env
             for route in self._saved_config.model_routes
@@ -1001,13 +1003,19 @@ class LocalConsoleAdministration:
         self, route: ProviderRouteConfig, codex_available: bool
     ) -> ModelRouteRuntimeStatus:
         if route.kind is ModelProviderKind.CODEX_CLI:
+            key_name = self._saved_config.codex_cli_proxy_api_key_env
+            configured = (
+                self._runtime_variable(key_name)[0] is not None if key_name is not None else None
+            )
             return ModelRouteRuntimeStatus(
                 provider=route.provider,
                 model=route.model,
                 reasoning_effort=route.reasoning_effort,
                 kind=route.kind,
                 enabled=route.enabled,
-                ready=not route.enabled or codex_available,
+                ready=not route.enabled or (codex_available and configured is not False),
+                credential_environment_name=key_name,
+                credential_configured=configured,
             )
         assert route.api_key_env is not None
         configured = self._runtime_variable(route.api_key_env)[0] is not None
@@ -1133,6 +1141,8 @@ def _write_config(path: Path, config: ProductionConfig) -> None:
 
 def _runtime_variable_names(config: ProductionConfig) -> set[str]:
     names = {config.database.dsn_env}
+    if config.codex_cli_proxy_api_key_env is not None:
+        names.add(config.codex_cli_proxy_api_key_env)
     names.update(
         route.api_key_env for route in config.model_routes if route.api_key_env is not None
     )

@@ -264,10 +264,27 @@
       ],
       "default": null
     },
+    "codex_cli_proxy_api_key_env": {
+      "anyOf": [
+        {"const": "ASE_CODEX_PROXY_API_KEY"},
+        {"type": "null"}
+      ],
+      "default": null
+    },
     "live_model_execution": {"type": "boolean", "default": false},
     "console_port": {"type": "integer", "minimum": 1, "maximum": 65535, "default": 8765}
   },
   "allOf": [
+    {
+      "if": {
+        "required": ["codex_cli_proxy_api_key_env"],
+        "properties": {"codex_cli_proxy_api_key_env": {"type": "string"}}
+      },
+      "then": {
+        "required": ["codex_cli_proxy_base_url"],
+        "properties": {"codex_cli_proxy_base_url": {"type": "string"}}
+      }
+    },
     {
       "if": {"required": ["default_project_id"]},
       "then": {"required": ["default_project_name"]}

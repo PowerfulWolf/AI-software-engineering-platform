@@ -39,6 +39,7 @@
   ],
   "codex_executable": "codex",
   "codex_cli_proxy_base_url": null,
+  "codex_cli_proxy_api_key_env": null,
   "live_model_execution": false,
   "console_port": 8765,
   "design_retry_policy": {

@@ -51,11 +51,14 @@ uv run ase --version
 codex login status
 ```
 
-如果 `codex login status` 未登录，先执行 `codex login`。平台不会读取或保存登录凭据正文；Codex CLI 自己
-管理当前账号会话。
+直连 Codex CLI 或仅配置代理地址时，如 `codex login status` 未登录，先执行 `codex login`。
+页面填写代理 API Key 的模式不依赖该登录。平台不会读取 Codex CLI 登录凭据正文。
 如果在“设置 → 模型路由 → Codex CLI 连接”配置了本机 CLIProxyAPI 地址，平台的 Codex CLI
-路由改为显式使用该代理。代理要求的 API key 必须预先通过同一 Codex 登录环境的
-`codex login --with-api-key` 保存；平台不接收或传递密钥。CLI 当前是 ChatGPT 登录且令牌已撤销时，
+路由改为显式使用该代理。可在同一区域填写代理 API Key：它和 MySQL DSN 一样仅写入本机
+`runtime.env`（0600），配置 JSON 只保存固定环境变量名，页面/API 不回显密钥。保存后应用配置重启；
+CLI 会通过固定 `env_key` 从进程环境获取它，不需要改动个人 Codex 登录。
+如果只配置代理地址而不在页面填写 Key，则沿用同一 Codex 登录环境的
+`codex login --with-api-key`。CLI 当前是 ChatGPT 登录且令牌已撤销时，
 `codex login status` 仍可能显示“已登录”，并不证明密钥或刷新仍有效。切换登录方式前请注意：
 默认 CLI/IDE 共享登录缓存；`codex logout` 会清除现有缓存。由操作者在与服务相同的系统用户、
 `CODEX_HOME` 下运行（变量名仅作示例，不要把密钥写进命令行参数或仓库）：
@@ -232,9 +235,14 @@ Codex 路由不接受 endpoint 或 API key 字段。Responses 路由必须同时
 `http://127.0.0.1:8317/v1` 时，在模型路由页填写这个 **base URL**，不要填 `/responses` 完整路径，
 也不要在 URL 中放密码、query 或 fragment。只接受 `localhost`、`127.0.0.1` 或 `::1` 的
 HTTP 地址。平台仍以
-`--ignore-user-config` 启动 Codex，显式指定本地 `responses` provider 与
-`requires_openai_auth=true`，从 Codex 自己的已保存 API key 凭证发出请求，因而不会读取
-`~/.codex/config.toml` 的 provider、hooks 或其他行为。留空则沿用 Codex CLI 原有直连登录。
+`--ignore-user-config` 启动 Codex，显式指定本地 `responses` provider，因而不会读取
+`~/.codex/config.toml` 的 provider、hooks 或其他行为。填写页面 API Key 时，配置的
+`codex_cli_proxy_api_key_env` 为 `ASE_CODEX_PROXY_API_KEY`，并使用 `env_key` 认证；仅配置
+URL 时仍使用 `requires_openai_auth=true` 的 Codex 已保存登录。留空代理 URL 则沿用 Codex CLI
+原有直连登录。代理 Key 只传给 Codex 客户端进程，CLI 工具 shell 的环境策略显式排除该变量；
+不要把密钥放在目标仓库、模型提示、代理 URL 或命令行参数中。
+该环境过滤只阻止 CLI 启动的工具 shell 继承此变量，不等于同一系统用户下的
+`runtime.env` 文件不可读；此模式仅适用于可信本机操作者与可信运行环境。
 保存后需“应用配置”重启 Host；代理不可用时不会静默回退直连。历史 504/登录错误事实保留，
 修复连接后在需求页面显式继续现有需求，不必改库或重新批准已批准的 ProductSpec。
 状态页的 Codex 就绪标记只确认 CLI 可执行文件可解析，不检测代理服务或模型请求是否可用。

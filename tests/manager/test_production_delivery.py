@@ -135,6 +135,57 @@ def test_delivery_codex_factory_receives_local_proxy_config(
     assert captured == ["http://127.0.0.1:8317/v1"]
 
 
+def test_delivery_codex_proxy_managed_key_requires_runtime_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: list[object] = []
+    sentinel = MagicMock()
+
+    def make_adapter(**kwargs: object) -> MagicMock:
+        captured.append(kwargs["proxy_api_key_env"])
+        return sentinel
+
+    monkeypatch.setattr(
+        "ai_software_engineer.manager.production_delivery.CodexCliAgentAdapter",
+        make_adapter,
+    )
+    config = ProductionConfig.model_validate(
+        {
+            **_config(tmp_path).to_wire(),
+            "codex_cli_proxy_base_url": "http://127.0.0.1:8317/v1",
+            "codex_cli_proxy_api_key_env": "ASE_CODEX_PROXY_API_KEY",
+        }
+    )
+    definition = MagicMock()
+    definition.id = "agent_coder"
+    definition.version = "v0.1"
+    definition.role = AgentRole.CODER
+    binding = MagicMock()
+    binding.worktree.path = tmp_path
+
+    with pytest.raises(ProductionConfigError, match="ASE_CODEX_PROXY_API_KEY"):
+        ConfiguredDeliveryRouteAdapterFactory().create(
+            route=config.model_routes[0],
+            definition=definition,
+            binding=binding,
+            context_resolver=cast(StoredContextResolver, MagicMock()),
+            config=config,
+            environment={},
+        )
+    assert (
+        ConfiguredDeliveryRouteAdapterFactory().create(
+            route=config.model_routes[0],
+            definition=definition,
+            binding=binding,
+            context_resolver=cast(StoredContextResolver, MagicMock()),
+            config=config,
+            environment={"ASE_CODEX_PROXY_API_KEY": "test-proxy-secret"},
+        )
+        is sentinel
+    )
+    assert captured == ["ASE_CODEX_PROXY_API_KEY"]
+
+
 def _adapter(
     tmp_path: Path,
     dispatch: DispatchCommitRecord | VerificationReservation,

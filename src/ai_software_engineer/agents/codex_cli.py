@@ -33,7 +33,10 @@ from ai_software_engineer.agents.ports import (
     AgentError,
     AgentRequestConflict,
 )
-from ai_software_engineer.config.codex_proxy import codex_cli_proxy_overrides
+from ai_software_engineer.config.codex_proxy import (
+    codex_cli_proxy_key_environment,
+    codex_cli_proxy_overrides,
+)
 from ai_software_engineer.domain.agent import ROLE_OUTPUTS
 from ai_software_engineer.domain.artifact import (
     Artifact,
@@ -241,6 +244,7 @@ class CodexCliAgentAdapter:
         prompt_builder: PromptBuilder | None = None,
         executable: str = "codex",
         proxy_base_url: str | None = None,
+        proxy_api_key_env: str | None = None,
         reasoning_effort: str = "medium",
         environment: Mapping[str, str] | None = None,
         runner: CodexCommandRunner | None = None,
@@ -267,9 +271,13 @@ class CodexCliAgentAdapter:
         self._agent_version = agent_version
         self._prompt_builder = prompt_builder or RequestPromptBuilder()
         self._executable = executable
-        self._proxy_overrides = codex_cli_proxy_overrides(proxy_base_url)
+        self._proxy_overrides = codex_cli_proxy_overrides(proxy_base_url, proxy_api_key_env)
         self._reasoning_effort = reasoning_effort
-        self._environment = _filtered_environment(environment or os.environ)
+        source_environment = environment if environment is not None else os.environ
+        self._environment = _filtered_environment(source_environment)
+        self._environment.update(
+            codex_cli_proxy_key_environment(source_environment, proxy_api_key_env)
+        )
         self._execution_guard = execution_guard
         self._runner = runner or SubprocessCodexCommandRunner(execution_guard)
         self._initial_admission = initial_workspace_admission
@@ -840,10 +848,17 @@ def _require_full_revision(value: str) -> str:
 
 
 def _git(root: Path, *arguments: str) -> str:
+    environment = {
+        "PATH": os.environ.get("PATH", os.defpath),
+        "LANG": "C",
+        "LC_ALL": "C",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
     try:
         completed = subprocess.run(
             ("git", *arguments),
             cwd=root,
+            env=environment,
             capture_output=True,
             text=True,
             timeout=30,
@@ -887,7 +902,10 @@ def _recognized_cli_failure(invocation: CodexInvocationResult) -> AgentErrorCode
         r"\b429\b", text
     ):
         return AgentErrorCode.RATE_LIMITED
-    if any(marker in text for marker in ("unauthorized", "authentication", "sign in", "login")):
+    if any(
+        marker in text
+        for marker in ("unauthorized", "authentication", "sign in", "login", "missing api key")
+    ) or re.search(r"\b(?:401|403)\b", text):
         return AgentErrorCode.AUTHENTICATION_ERROR
     return None
 

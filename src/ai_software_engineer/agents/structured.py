@@ -31,7 +31,10 @@ from ai_software_engineer.agents.openai_compatible import (
     HttpTransport,
     UrllibHttpTransport,
 )
-from ai_software_engineer.config.codex_proxy import codex_cli_proxy_overrides
+from ai_software_engineer.config.codex_proxy import (
+    codex_cli_proxy_key_environment,
+    codex_cli_proxy_overrides,
+)
 from ai_software_engineer.domain.enums import TeamRole
 from ai_software_engineer.domain.model import (
     JsonValue,
@@ -235,6 +238,7 @@ class CodexCliStructuredModelClient:
         model: str,
         executable: str = "codex",
         proxy_base_url: str | None = None,
+        proxy_api_key_env: str | None = None,
         reasoning_effort: ReasoningEffort = "medium",
         environment: Mapping[str, str] | None = None,
     ) -> None:
@@ -255,9 +259,14 @@ class CodexCliStructuredModelClient:
         self._additional_repository_roots = additional_roots
         self._model = _safe_text(model, "model")
         self._executable = _safe_text(executable, "executable")
-        self._proxy_overrides = codex_cli_proxy_overrides(proxy_base_url)
+        self._proxy_overrides = codex_cli_proxy_overrides(proxy_base_url, proxy_api_key_env)
+        self._proxy_api_key_env = proxy_api_key_env
         self._reasoning_effort = reasoning_effort
-        self._environment = _filtered_environment(environment or os.environ)
+        source_environment = environment if environment is not None else os.environ
+        self._environment = _filtered_environment(source_environment)
+        self._environment.update(
+            codex_cli_proxy_key_environment(source_environment, proxy_api_key_env)
+        )
 
     def complete(
         self,
@@ -342,7 +351,11 @@ class CodexCliStructuredModelClient:
                 raise StructuredModelError(
                     code,
                     f"Codex CLI 执行失败(退出码 {completed.returncode}); "
-                    + provider_error_detail(completed.stderr),
+                    + (
+                        "本地代理错误详情已隐藏"
+                        if self._proxy_api_key_env is not None
+                        else provider_error_detail(completed.stderr)
+                    ),
                     transient=transient,
                 )
             try:
@@ -664,8 +677,10 @@ def _classify_text_failure(text: str) -> tuple[AgentErrorCode, bool]:
         r"\b429\b", normalized
     ):
         return AgentErrorCode.RATE_LIMITED, True
-    auth_markers = ("unauthorized", "authentication", "sign in", "login")
-    if any(marker in normalized for marker in auth_markers):
+    auth_markers = ("unauthorized", "authentication", "sign in", "login", "missing api key")
+    if any(marker in normalized for marker in auth_markers) or re.search(
+        r"\b(?:401|403)\b", normalized
+    ):
         return AgentErrorCode.AUTHENTICATION_ERROR, False
     return AgentErrorCode.PROVIDER_UNAVAILABLE, True
 

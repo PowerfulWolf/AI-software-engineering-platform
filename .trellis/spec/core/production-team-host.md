@@ -205,11 +205,13 @@ fresh-organization tests hid the conflict. This does not authorize replaying ter
   `workspace-write` sandbox，QA/Reviewer 使用 `read-only` sandbox。
 - 可选 `ProductionConfig.codex_cli_proxy_base_url` 仅接受不含 userinfo、query、fragment 的本机
   loopback HTTP base URL。设置后，上游 structured 与交付三角色的 Codex CLI 调用都在保留
-  `--ignore-user-config` 的前提下，显式指定固定 `ase_local_proxy` provider、`wire_api=responses`、
-  `requires_openai_auth=true` 和该 base URL；CLI 从相同 `CODEX_HOME` 的已保存 API key 凭证
-  获取代理密钥，平台不把密钥写入 CLI argv/env、配置 JSON 或 Operation。未设置时保持既有
-  直连登录语义。不得读取用户 `config.toml`、从 URL 携带密钥，或因代理失败静默改走 OpenAI
-  直连。保存后必须重启 Host；
+  `--ignore-user-config` 的前提下，显式指定固定 `ase_local_proxy` provider、`wire_api=responses`
+  和该 base URL。可选 `codex_cli_proxy_api_key_env=ASE_CODEX_PROXY_API_KEY` 只保存环境变量名；
+  Settings 把完整 Key 写入 0600 `runtime.env`，CLI 仅获得该显式值并用 `env_key` 认证，同时
+  以 CLI shell environment policy 排除该变量，不把值写入 argv、配置 JSON、Operation 或提示。
+  若未配置平台管理的 Key，保留 `requires_openai_auth=true`，CLI 从相同 `CODEX_HOME` 的已保存
+  API key 凭证获取代理密钥。未设置 URL 时保持既有直连登录语义。不得读取用户
+  `config.toml`、从 URL 携带密钥，或因代理失败静默改走 OpenAI 直连。保存后必须重启 Host；
   历史 Requirement/Task/Operation 不改写，现有阻塞需求仍需用户显式继续。
 - Codex 子进程环境只允许显式非 secret keys；`UV_CACHE_DIR` 可以透传到 sandbox 可写的 `/tmp`/TMPDIR
   缓存，避免构建工具尝试写只读 home cache。透传环境变量不能扩大 Codex sandbox 文件权限。
@@ -1174,6 +1176,8 @@ insufficient: both production adapters pass `--ignore-user-config`, so loading
 that file would also import unrelated hooks, approval choices and provider
 behavior. This scenario changes transport configuration, not Task/Artifact
 identity, role permissions or retry semantics.
+The original URL-only login mode is described first; the write-only Settings
+key mode below supersedes its authentication details when configured.
 
 ### 2. Signatures
 
@@ -1187,11 +1191,10 @@ ConfiguredStructuredClientFactory.for_projects(...) -> StructuredModelClient
 ConfiguredDeliveryRouteAdapterFactory.create(...) -> AgentAdapter
 ```
 
-The wire field is optional in `schemas/production-config.schema.json` and
+The URL wire field is optional in `schemas/production-config.schema.json` and
 `config/production.example.json`; `GET/PUT /api/v1/admin/settings` uses the
-existing typed `ProductionConfig` request/response. No new API endpoint,
-environment variable, secret file entry, database migration or Task Schema is
-introduced.
+existing typed `ProductionConfig` request/response. This URL-only baseline
+introduces no new API endpoint, database migration or Task Schema.
 
 ### 3. Contracts
 
@@ -1199,12 +1202,12 @@ introduced.
   or `[::1]` are accepted. The URL may have a valid port and base path, but no
   userinfo, query, fragment, whitespace, control character, double quote or
   backslash.
-  The proxy is trusted local infrastructure. Authentication uses a Codex
+  For URL-only mode, the proxy is trusted local infrastructure. Authentication uses a Codex
   API-key login in the same CLI credential cache as the service; the key never
   crosses platform Settings, persisted JSON, role subprocess environment or
   command-line arguments. A revoked ChatGPT login is not a substitute.
 - `None` emits no proxy overrides and retains the direct-login CLI behavior.
-  A configured URL emits fixed, quoted `-c` values for
+  A configured URL without a managed key emits fixed, quoted `-c` values for
   `model_provider="ase_local_proxy"`, `model_providers.ase_local_proxy.name`,
   `base_url`, `wire_api="responses"` and `requires_openai_auth=true`.
   The provider name and config keys are code-owned, not arbitrary UI strings.
@@ -1214,7 +1217,7 @@ introduced.
   `config/codex_proxy.py` to construct overrides and keep
   `--ephemeral --ignore-user-config`, explicit sandbox, schema, worktree and
   tool-policy arguments unchanged.
-- The Settings model-route page writes only the base URL. `LocalConsoleAdministration`
+- The URL-only Settings baseline writes only the base URL. `LocalConsoleAdministration`
   persists the secret-free field through the existing atomic configuration
   writer and reports `restart_required`; no hot mutation of an in-flight run.
 
@@ -1226,7 +1229,7 @@ introduced.
 | `http://127.0.0.1:8317/v1` | Schema and Pydantic accept; both production factories pass it to CLI adapters |
 | Remote HTTP/HTTPS, credentials, query, fragment, quote, whitespace or bad port | Reject typed config before persistence or model invocation; never interpolate free-form argv |
 | Proxy unavailable / incompatible Responses wire API | Existing typed CLI failure; preserve diagnostics and retry budget, never silently use direct provider |
-| Missing proxy API key / revoked CLI credential | Explicit authentication failure; operator must use `codex login --with-api-key` in the service's CLI credential environment |
+| Missing proxy API key / revoked CLI credential in URL-only mode | Explicit authentication failure; operator must use `codex login --with-api-key` in the service's CLI credential environment |
 | Settings save while Host runs | Return `restart_required=true`; old Host keeps its frozen config until application restart |
 | Existing failed Requirement | Preserve Operation and checkpoint history; operator explicitly continues after restart |
 
@@ -1247,15 +1250,15 @@ introduced.
   strings.
 - `tests/agents/test_structured_models.py` and
   `tests/agents/test_codex_cli.py`: exact proxy override tokens, retained
-  `--ignore-user-config`, `requires_openai_auth=true`, no override in the
-  default case, and no proxy key in argv or environment.
+  `--ignore-user-config`, URL-only `requires_openai_auth=true`, no override in
+  the default case, and no proxy key in argv.
 - `tests/manager/test_production_backend.py` and
   `tests/manager/test_production_delivery.py`: both production composition
   seams pass the same value to the right adapter.
 - `tests/web_console/test_administration.py` and
   `tests/team_view/browser/settings-layout.test.cjs`: Settings persists the
-  field, requires restart, writes no runtime secret, and keeps model-page
-  layout aligned at desktop and narrow widths.
+  URL field, requires restart and keeps model-page layout aligned at desktop
+  and narrow widths.
 
 ### 7. Wrong vs Correct
 
@@ -1269,3 +1272,72 @@ argv = (
     *codex_cli_proxy_overrides(config.codex_cli_proxy_base_url), "-",
 )
 ```
+
+## Follow-up: write-only proxy key in Settings (2026-09-23)
+
+### Signatures and fields
+
+```python
+ProductionConfig.codex_cli_proxy_api_key_env: EnvVarName | None
+codex_cli_proxy_overrides(base_url: str | None,
+                          api_key_env: str | None = None) -> tuple[str, ...]
+codex_cli_proxy_key_environment(source: Mapping[str, str],
+                                api_key_env: str | None) -> dict[str, str]
+UpdateSettingsRequest.runtime_variables: tuple[RuntimeVariableUpdate, ...]
+```
+
+The only accepted key name is `ASE_CODEX_PROXY_API_KEY`; it requires a valid
+`codex_cli_proxy_base_url` and must not collide with MySQL/Responses credentials.
+The browser sends the value only as a `runtime_variables` item in
+`PUT /api/v1/admin/settings`, never inside `config`. The existing
+`LocalRuntimeEnvironmentStore.save` writes it to sibling `runtime.env` with
+mode `0600`; GET returns only `SecretStatus(configured=...)`. An empty input
+retains the value, explicit CLI-login selection removes the config reference
+and the next save prunes the stored key. A new key or changed mode requires
+Host restart. Existing Requirement/Task/Operation facts are not rewritten.
+
+With no managed key, provider overrides remain
+`requires_openai_auth=true`. With the managed key, they set
+`requires_openai_auth=false`, `env_key="ASE_CODEX_PROXY_API_KEY"`,
+`shell_environment_policy.ignore_default_excludes=false` and an exact
+`shell_environment_policy.filters.ASE_CODEX_PROXY_API_KEY="exclude"`.
+Both adapters add only that referenced value to the otherwise non-secret
+Codex process environment. The model-invoked shell must not inherit it.
+The delivery adapter's own Git inspection subprocess uses a separate
+`PATH`/`LANG`/`LC_ALL`/`GIT_TERMINAL_PROMPT` allowlist; it must not inherit the
+host's managed proxy key.
+Factories fail before CLI launch if the value is missing; the structured
+adapter replaces potentially credential-bearing stderr with a fixed message.
+No raw key may enter argv, stdout/stderr-derived diagnostics, Operation or
+model prompts. This is the trusted single-user local `runtime.env` trade-off;
+the file remains sensitive and must not be placed in a target repository.
+The shell environment exclusion does not prove that the same-UID model process
+cannot read that file; do not claim filesystem secret isolation for this mode.
+
+| Case | Result |
+|---|---|
+| No URL / no key reference | Historical direct CLI command |
+| URL only | Existing Codex CLI login provider behavior |
+| URL + key reference + stored value | Both CLI paths use `env_key`, exact process env and shell exclusion |
+| Key reference without URL, wrong name or credential-name collision | Pydantic/Schema rejection before persistence |
+| Key reference with missing runtime value | `ProductionConfigError`; no CLI launch or fallback |
+| Proxy reports `401`/`403` or `Missing API key` | `AUTHENTICATION_ERROR`, non-transient; preserve checkpoint without consuming transient retries |
+| Replace key | Save new 0600 value, return status only, mark restart required |
+| Clear key reference | Prune stored value, revert to CLI login mode after restart |
+
+Good: UI saves a write-only key and a subsequent CLI invocation has the
+referenced process variable but no key in argv/tool-shell policy. Base: URL
+only keeps the previous login mode. Bad: set `env_key` while retaining
+`requires_openai_auth=true` (Codex ignores `env_key`), echo the submitted
+value from GET, or inherit the full host environment.
+
+Required assertions: `tests/config/test_production.py` checks Schema/model
+parity; `tests/web_console/test_administration.py` checks 0600 persistence,
+replacement, redacted status and pruning; both `tests/agents/test_*codex*`
+paths check fixed argv, exact env and error secrecy; both
+`tests/manager/test_production_*` factories check missing-value refusal;
+`tests/team_view/browser/settings-layout.test.cjs` checks password input,
+aligned layout and request-only value. Both CLI adapter test modules assert
+that a `401 Missing API key` response is non-transient.
+`tests/agents/test_codex_cli.py` also asserts Git inspection receives no
+managed proxy key from the host environment.
