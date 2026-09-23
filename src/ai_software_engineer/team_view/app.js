@@ -5087,7 +5087,7 @@ function renderModelSettings(form) {
           : route.image_input === false
             ? "仅文本"
             : route.kind === "codex_cli"
-              ? "默认可传图"
+              ? "图像输入"
               : "仅文本",
         "model-route-capability",
       ),

@@ -194,7 +194,8 @@ production_console_app(
 - 设置页的模型路由分为可用模型目录和 Agent 策略。启用目录路由只使其可选，不自动成为
   备用模型；每个 Agent 选择一个主模型，并可从目录中显式添加、移除、上移或下移 0–N 个备用模型。
   目录卡片的图片标记必须按显式 `image_input` 优先、缺省时仅 Codex CLI 为 true 的同一后端规则
-  计算；Codex CLI 缺省值标为“默认可传图”而非确认该模型的原生能力，也允许显式关闭。
+  计算；生效支持时统一标为“图像输入”，关闭时标为“仅文本”。Codex CLI 缺省值只是执行器的默认
+  声明而非该模型原生能力的确认，详情说明须保留这一区别，也允许显式关闭。
   选择项显示类型以区分相同 Provider/Model/Reasoning 的路由。
   编辑草稿载入时要把旧路由的有效 mode 固定为显式值；用户随后填写代理 URL 不得悄悄切换原 direct 路由。
 - Codex CLI 路由的 `connection_mode` 可逐条选择“普通 CLI”或“CLIProxyAPI”；卡片、Agent 主/备

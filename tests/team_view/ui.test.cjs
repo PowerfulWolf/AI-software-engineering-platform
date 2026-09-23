@@ -1469,10 +1469,11 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   );
   assert.match(text(firstRouteCard.children[0]), /仅文本/);
   vm.runInContext("settingsDraft.model_routes[0].image_input = null; render();", context);
-  const defaultImageCard = descend(get("content")).find((node) =>
+  const imageCards = descend(get("content")).filter((node) =>
     node.className.includes("model-route-disclosure"),
   );
-  assert.match(text(defaultImageCard.children[0]), /默认可传图/);
+  assert.match(text(imageCards[0].children[0]), /图像输入/);
+  assert.match(text(imageCards[1].children[0]), /图像输入/);
   assert.equal(vm.runInContext(`modelRouteValidationMessage({ model_routes: [
     { provider: "codex", model: "gpt-5.6-sol", kind: "codex_cli", reasoning_effort: "high" },
     { provider: "codex", model: "gpt-5.6-sol", kind: "responses", reasoning_effort: "high" }
