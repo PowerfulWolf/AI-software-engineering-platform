@@ -59,9 +59,6 @@ const geometry = (locator) => locator.evaluate((form) => {
     section.querySelector(".settings-field-row"));
   const firstField = firstFieldSection?.querySelector(".settings-field-row");
   const heading = firstFieldSection?.querySelector(".settings-section-title");
-  const description = firstFieldSection?.querySelector(
-    ".settings-section-description",
-  );
   const copy = firstField?.querySelector(".settings-field-copy");
   const control = firstField?.querySelector(".settings-field-control");
   return {
@@ -70,7 +67,6 @@ const geometry = (locator) => locator.evaluate((form) => {
       style: getComputedStyle(section).borderTopStyle,
     })),
     headingLeft: heading?.getBoundingClientRect().left ?? null,
-    descriptionLeft: description?.getBoundingClientRect().left ?? null,
     copyLeft: copy?.getBoundingClientRect().left ?? null,
     controlLeft: control?.getBoundingClientRect().left ?? null,
     overflow: document.documentElement.scrollWidth > window.innerWidth,
@@ -83,10 +79,19 @@ test("Settings pages share one aligned section grid across desktop and narrow wi
   const form = h.page.locator("#content .settings-form");
   await form.waitFor();
   await h.page.getByText("允许调用真实模型", { exact: true }).waitFor();
-  await h.page.getByText(
-    "全局安全开关；关闭后拒绝所有模型任务。修改后需要重启。",
-    { exact: true },
-  ).waitFor();
+  assert.equal(await h.page.locator("#content .settings-page-title-row .settings-help-trigger").count(), 1);
+  assert.equal(await form.locator(".settings-section-header .settings-help-trigger").count(), 3);
+  const modelSwitchHelp = form.getByRole("button", { name: "允许调用真实模型说明" });
+  assert.equal(await modelSwitchHelp.count(), 1);
+  assert.equal(await modelSwitchHelp.getAttribute("aria-expanded"), "false");
+  await modelSwitchHelp.focus();
+  await h.page.keyboard.press("Enter");
+  const modelSwitchPanel = form.getByRole("dialog", { name: "允许调用真实模型说明" });
+  await modelSwitchPanel.getByText("全局安全开关；关闭后拒绝所有模型任务。修改后需要重启。").waitFor();
+  assert.equal(await modelSwitchHelp.getAttribute("aria-expanded"), "true");
+  await h.page.keyboard.press("Escape");
+  assert.equal(await modelSwitchPanel.isVisible(), false);
+  assert.equal(await modelSwitchHelp.getAttribute("aria-expanded"), "false");
   assert.equal(await form.getByText(/模拟执行/).count(), 0);
 
   for (const width of [1440, 768, 390]) {
@@ -98,8 +103,8 @@ test("Settings pages share one aligned section grid across desktop and narrow wi
     if (width >= 600) {
       assert.ok(Math.abs(layout.headingLeft - layout.copyLeft) <= 1,
         `${width}px: Section titles and field labels share the left baseline`);
-      assert.ok(Math.abs(layout.descriptionLeft - layout.controlLeft) <= 1,
-        `${width}px: Section descriptions and controls share the right baseline`);
+      assert.ok(layout.controlLeft > layout.copyLeft,
+        `${width}px: Controls stay in the field value column`);
     }
     assert.equal(layout.overflow, false, `${width}px: Basic settings does not overflow`);
   }
@@ -108,8 +113,9 @@ test("Settings pages share one aligned section grid across desktop and narrow wi
   await h.page.setViewportSize({ width: 1440, height: 1000 });
   const mysql = await geometry(form);
   assert.equal(mysql.sections.length, 2);
+  assert.equal(await form.locator(".settings-section-header .settings-help-trigger").count(), 2);
   assert.ok(Math.abs(mysql.headingLeft - mysql.copyLeft) <= 1);
-  assert.ok(Math.abs(mysql.descriptionLeft - mysql.controlLeft) <= 1);
+  assert.ok(mysql.controlLeft > mysql.copyLeft);
   const environmentName = form.getByRole("textbox", { name: "启动变量" });
   assert.equal(await environmentName.count(), 1);
   assert.equal(await environmentName.isEnabled(), false);
@@ -117,11 +123,14 @@ test("Settings pages share one aligned section grid across desktop and narrow wi
   const mysqlAlignment = await form.evaluate((node) => {
     const control = node.querySelector(".settings-field-control").getBoundingClientRect();
     const action = node.querySelector(".settings-action-row").getBoundingClientRect();
-    const note = node.querySelector(".settings-section-note").getBoundingClientRect();
-    return { control: control.left, action: action.left, note: note.left };
+    return { control: control.left, action: action.left };
   });
   assert.ok(Math.abs(mysqlAlignment.control - mysqlAlignment.action) <= 1);
-  assert.ok(Math.abs(mysqlAlignment.control - mysqlAlignment.note) <= 1);
+  const mysqlHelp = form.getByRole("button", { name: "MySQL DSN说明" });
+  await mysqlHelp.click();
+  await form.getByRole("dialog", { name: "MySQL DSN说明" })
+    .getByText("留空表示保留已保存值；输入新 DSN 才会替换。")
+    .waitFor();
 });
 
 test("Model routing uses compact disclosures and aligned fallback actions", async (t) => {
@@ -133,6 +142,7 @@ test("Model routing uses compact disclosures and aligned fallback actions", asyn
   assert.equal(await form.locator(".model-route-disclosure").count(), 3);
   assert.equal(await form.locator(".agent-model-card").count(), 7);
   assert.equal(await form.locator(".settings-section").count(), 3);
+  assert.equal(await form.locator(".settings-section-header .settings-help-trigger").count(), 3);
   const proxy = form.getByRole("textbox", { name: "Codex CLI 本地代理地址" });
   assert.equal(await proxy.count(), 1);
   await proxy.fill("http://127.0.0.1:8317/v1");
@@ -145,12 +155,46 @@ test("Model routing uses compact disclosures and aligned fallback actions", asyn
   await connection.locator("summary").click();
   await connection.getByRole("option", { name: "CLIProxyAPI（本地代理）" }).click();
   assert.equal(await h.page.evaluate(() => settingsDraft.model_routes[0].connection_mode), "proxy");
-  const proxyKey = form.getByLabel("代理 API Key");
+  const proxyKey = form.getByRole("textbox", { name: "代理 API Key", exact: true });
   assert.equal(await proxyKey.getAttribute("type"), "password");
   await proxyKey.fill("test-proxy-secret");
 
+  const response = form.locator(".model-route-disclosure").nth(2);
+  if (!(await response.evaluate((node) => node.open)))
+    await response.locator(":scope > summary").click();
+  await h.page.waitForFunction(() =>
+    document.querySelectorAll(".model-route-disclosure")[2]?.open);
+  const responseAlignment = await response.evaluate((node) => {
+    const fields = Array.from(node.querySelectorAll(".settings-route-field"));
+    const key = fields.find((field) => field.querySelector("strong")?.textContent === "API Key");
+    const image = fields.find((field) => field.querySelector("strong")?.textContent === "支持图片输入");
+    const keyInput = key.querySelector("input").getBoundingClientRect();
+    const imageInput = image.querySelector("input").getBoundingClientRect();
+    return {
+      keyTop: key.getBoundingClientRect().top,
+      imageTop: image.getBoundingClientRect().top,
+      keyCenter: keyInput.top + keyInput.height / 2,
+      imageCenter: imageInput.top + imageInput.height / 2,
+    };
+  });
+  assert.ok(Math.abs(responseAlignment.keyTop - responseAlignment.imageTop) <= 1);
+  assert.ok(Math.abs(responseAlignment.keyCenter - responseAlignment.imageCenter) <= 2,
+    JSON.stringify(responseAlignment));
+  const imageHelp = response.locator('.settings-help-trigger[aria-label="支持图片输入说明"]');
+  assert.equal(await imageHelp.count(), 1);
+  await imageHelp.click();
+  const imagePanel = form.getByRole("dialog", { name: "支持图片输入说明" });
+  await imagePanel.getByText(/Codex CLI 默认支持/).waitFor();
+  const helpBounds = await imagePanel.boundingBox();
+  assert.ok(helpBounds.x >= 0 && helpBounds.x + helpBounds.width <= 1440);
+  await imagePanel.getByRole("button", { name: "关闭" }).click();
+  assert.equal(await imagePanel.isVisible(), false);
+
   const designer = form.locator('.agent-model-card[data-role="designer"]');
-  await designer.locator(":scope > summary").click();
+  if (!(await designer.evaluate((node) => node.open)))
+    await designer.locator(":scope > summary").click();
+  await h.page.waitForFunction(() =>
+    document.querySelector('.agent-model-card[data-role="designer"]')?.open);
   const fallbackRows = designer.locator(".agent-fallback-row");
   assert.equal(await fallbackRows.count(), 2);
   const actionColumns = await fallbackRows.evaluateAll((rows) => rows.map((row) => {
@@ -164,9 +208,40 @@ test("Model routing uses compact disclosures and aligned fallback actions", asyn
   assert.ok(Math.abs(actionColumns[0].left - actionColumns[1].left) <= 1);
   assert.ok(actionColumns.every(({ widths }) =>
     widths.length === 3 && Math.max(...widths) - Math.min(...widths) <= 1));
+  const product = form.locator('.agent-model-card[data-role="product"]');
+  if (!(await product.evaluate((node) => node.open)))
+    await product.locator(":scope > summary").click();
+  await h.page.waitForFunction(() =>
+    document.querySelector('.agent-model-card[data-role="product"]')?.open);
 
   for (const width of [1440, 768, 390]) {
     await h.page.setViewportSize({ width, height: 1000 });
+    const detailAlignment = await form.evaluate(() => {
+      const designer = document.querySelector('.agent-model-card[data-role="designer"]');
+      const product = document.querySelector('.agent-model-card[data-role="product"]');
+      return {
+        primary: designer.querySelector('.settings-field-control').getBoundingClientRect().left,
+        fallback: designer.querySelector('.agent-fallback-identity').getBoundingClientRect().left,
+        addPrimary: product.querySelector('.settings-field-control').getBoundingClientRect().left,
+        addFallback: product.querySelector('.agent-fallback-settings > .single-select').getBoundingClientRect().left,
+      };
+    });
+    assert.ok(Math.abs(detailAlignment.primary - detailAlignment.fallback) <= 1,
+      `${width}px: Primary and fallback model columns align: ${JSON.stringify(detailAlignment)}`);
+    assert.ok(Math.abs(detailAlignment.addPrimary - detailAlignment.addFallback) <= 1,
+      `${width}px: Primary and add-fallback controls align: ${JSON.stringify(detailAlignment)}`);
+    const sectionHelp = form.getByRole("button", { name: "Codex CLI 连接说明" });
+    await sectionHelp.click();
+    const sectionPanel = form.getByRole("dialog", { name: "Codex CLI 连接说明" });
+    const bounds = await sectionPanel.boundingBox();
+    assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= width,
+      `${width}px: Section explanation remains within viewport`);
+    await h.page.keyboard.press("Escape");
+    await imageHelp.click();
+    const fieldBounds = await imagePanel.boundingBox();
+    assert.ok(fieldBounds.x >= 0 && fieldBounds.x + fieldBounds.width <= width,
+      `${width}px: Field explanation remains within viewport`);
+    await h.page.keyboard.press("Escape");
     const overflow = await form.evaluate(() =>
       document.documentElement.scrollWidth > window.innerWidth);
     assert.equal(overflow, false, `${width}px: Model Routing does not overflow`);

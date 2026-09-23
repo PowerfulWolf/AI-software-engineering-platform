@@ -1620,8 +1620,8 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   assert.doesNotMatch(text(productCardAfterRemove), /备用 2/);
   await addProductFallback("codex / gpt-5.6-terra · high · Codex CLI · 普通 CLI");
   const responseKeyRow = descend(get("content")).find(
-    (node) => node.className === "field" &&
-      node.children[0]?.textContent === "API Key",
+    (node) => node.className === "field settings-route-field" &&
+      node.children[0]?.children[0]?.textContent === "API Key",
   );
   const responseKeyInput = descend(responseKeyRow).find(
     (node) => node.tag === "input" && node.type === "password",

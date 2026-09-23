@@ -52,6 +52,7 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 
 | 目录 | 任务 ID | 状态记录 |
 |---|---|---|
+| 09-23-settings-help-popovers | settings-help-popovers-20260923 | [completed](09-23-settings-help-popovers/task.json) |
 | 09-23-per-route-cli-connection | per-route-cli-connection-20260923 | [completed](09-23-per-route-cli-connection/task.json) |
 | 09-23-model-route-kind-identity | model-route-kind-identity-20260923 | [completed](09-23-model-route-kind-identity/task.json) |
 | 08-31-t001-python-cli-bootstrap | task_t001_python_cli | [completed](08-31-t001-python-cli-bootstrap/task.json) |

@@ -1,0 +1,9 @@
+{
+  "id": "settings-help-popovers-20260923",
+  "title": "Align settings fields with on-demand explanations",
+  "status": "completed",
+  "phase": "verified_incremental",
+  "baseline": "3882ac9",
+  "authorization": "User requested clickable help markers for explanations across Basic, MySQL and Model Routing settings, with Trellis, single-agent work, incremental tests and commit.",
+  "verification": "verification.md"
+}

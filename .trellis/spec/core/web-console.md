@@ -684,16 +684,21 @@ GET  /api/v1/admin/status
   uses local Basic/MySQL/Model navigation over one shared draft and one atomic save action. Status is
   read-only and leads with a readiness conclusion before individual runtime facts.
 - Basic、MySQL 和 Model Settings 使用同一页面头、Section、字段行和 sticky 保存栏。桌面 Section
-  标题/字段标签共享左列，Section 说明/控件/验证动作共享右列；小屏只能按同一信息顺序堆叠，不能
+  标题/字段标签共享左列，控件/验证动作共享右列；小屏只能按同一信息顺序堆叠，不能
   改变草稿或保存范围。`live_model_execution` 必须显示为真实模型调用安全闸门：关闭后拒绝模型
   任务，不得描述为或静默切换 fake Agent。MySQL 验证结果与动作属于独立对齐 Section。
+- 三个 Settings 页的页面、Section 和字段解释使用统一的标签行信息按钮按需展示，不占据字段控件行高度；
+  模型路由的两列字段必须共用标签与控件基线。按钮有可访问名称、键盘激活、展开状态和关闭路径，
+  弹出的纯文本说明不得被卡片裁切或在窄屏溢出。连接测试结果、输入校验错误、保存/重启状态及
+  write-only 密钥的保存占位符是操作事实，必须保持直接可见，不能藏入帮助说明。
 - Model Routing uses one shared compact disclosure/listbox control for route type, reasoning effort
   and each Agent's primary route. The control must keep focus visibility, disabled state, exact
   selected value and button keyboard activation while avoiding the unstyleable operating-system
   native option menu.
 - Model Routing 的可用目录与 Agent 分配是两个同级 Section。目录路由和 Agent 策略默认使用紧凑摘要
   行并按需展开编辑，禁止卡片嵌套；备用模型使用固定的位置、模型和操作列，所有行的上移/下移/移除
-  槽位等宽对齐，模型名称长度不得推动操作列。
+  槽位等宽对齐，模型名称长度不得推动操作列。Agent 展开详情的主模型输入、备用模型身份和添加备用
+  模型选择器共用同一内容列左基线，窄屏也不得回退为不同起点。
 - Project creation is rendered in `需求与交付`, next to Project selection and Requirement work. The
   Settings page contains only process/runtime configuration and never presents Project creation as a
   configuration field.

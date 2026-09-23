@@ -4421,16 +4421,66 @@ function updateModelRouteIdentity(route, property, value) {
     }
   }
 }
+let settingsHelpSequence = 0;
+function settingsHelp(labelText, explanation) {
+  const wrapper = el("span", undefined, "settings-help");
+  const trigger = el("button", "i", "settings-help-trigger");
+  trigger.type = "button";
+  trigger.setAttribute("aria-label", `${labelText}说明`);
+  trigger.setAttribute("aria-expanded", "false");
+  trigger.setAttribute("aria-haspopup", "dialog");
+  const panel = el("span", undefined, "settings-help-panel");
+  panel.id = `settings-help-${++settingsHelpSequence}`;
+  panel.setAttribute("popover", "auto");
+  panel.setAttribute("role", "dialog");
+  panel.setAttribute("aria-label", `${labelText}说明`);
+  trigger.setAttribute("aria-controls", panel.id);
+  panel.append(el("span", explanation, "settings-help-text"));
+  const close = button("关闭", () => {
+    panel.hidePopover();
+    trigger.focus();
+  }, "settings-help-close");
+  close.type = "button";
+  panel.append(close);
+  trigger.addEventListener("click", () => {
+    if (panel.matches(":popover-open")) {
+      panel.hidePopover();
+      return;
+    }
+    panel.showPopover();
+    const anchor = trigger.getBoundingClientRect();
+    const width = panel.getBoundingClientRect().width;
+    const height = panel.getBoundingClientRect().height;
+    panel.style.left = `${Math.max(12, Math.min(anchor.right - width, window.innerWidth - width - 12))}px`;
+    panel.style.top = `${anchor.bottom + height + 12 <= window.innerHeight
+      ? anchor.bottom + 8
+      : Math.max(12, anchor.top - height - 8)}px`;
+  });
+  panel.addEventListener("beforetoggle", (event) => {
+    trigger.setAttribute("aria-expanded", String(event.newState === "open"));
+  });
+  wrapper.append(trigger, panel);
+  return wrapper;
+}
 function settingsField(labelText, control, hint) {
   const row = el("div", undefined, "settings-field-row");
   const copy = el("div", undefined, "settings-field-copy");
   copy.append(el("strong", labelText));
-  if (hint) copy.append(el("small", hint));
+  if (hint) copy.append(settingsHelp(labelText, hint));
   const value = el("div", undefined, "settings-field-control");
   control.setAttribute("aria-label", labelText);
   value.append(control);
   row.append(copy, value);
   return row;
+}
+function settingsRouteField(labelText, control, hint) {
+  const wrapper = el("div", undefined, "field settings-route-field");
+  const heading = el("div", undefined, "settings-route-field-heading");
+  heading.append(el("strong", labelText));
+  if (hint) heading.append(settingsHelp(labelText, hint));
+  control.setAttribute("aria-label", labelText);
+  wrapper.append(heading, control);
+  return wrapper;
 }
 function settingsCheckbox(control, text) {
   const wrapper = el("label", undefined, "settings-checkbox-control");
@@ -4440,11 +4490,11 @@ function settingsCheckbox(control, text) {
 function settingsModule(title, description, children, action = null) {
   const section = el("section", undefined, "settings-section");
   const header = el("div", undefined, "settings-section-header");
-  header.append(
-    el("h3", title, "settings-section-title"),
-    el("p", description, "settings-section-description"),
-  );
-  if (action) header.append(action);
+  header.append(el("h3", title, "settings-section-title"));
+  const tools = el("div", undefined, "settings-section-tools");
+  if (description) tools.append(settingsHelp(title, description));
+  if (action) tools.append(action);
+  header.append(tools);
   section.append(header, ...children);
   return section;
 }
@@ -4589,7 +4639,7 @@ function renderSettings(content) {
   const titleCopy = el("div");
   titleCopy.append(
     el("h2", title),
-    el("p", description, "settings-page-description"),
+    settingsHelp(title, description),
   );
   top.append(
     titleCopy,
@@ -4828,16 +4878,11 @@ function renderGeneralSettings(form) {
       );
       budgets.append(row);
     }
-    const note = el(
-      "p",
-      "Manager 只执行确定性调度，无模型调用额度。修改不会清零历史，也不会跳过恢复、范围或验证审批。",
-      "settings-section-note",
-    );
     form.append(
       settingsModule(
         "执行与重试策略",
-        "工作次数包含首次执行；504、超时和限流等临时故障独立计数。",
-        [budgets, note],
+        "工作次数包含首次执行；504、超时和限流等临时故障独立计数。Manager 只执行确定性调度，无模型调用额度。修改不会清零历史，也不会跳过恢复、范围或验证审批。",
+        [budgets],
       ),
     );
   }
@@ -4901,11 +4946,6 @@ function renderDatabaseSettings(form) {
   );
   const action = el("div", undefined, "settings-action-row");
   action.append(testConnection, connectionFeedback);
-  const note = el(
-    "p",
-    "测试不会回显 DSN。保存运行配置后，按提示重启 Team Host 使新连接生效。",
-    "settings-section-note",
-  );
   form.append(
     settingsModule(
       "连接配置",
@@ -4914,8 +4954,8 @@ function renderDatabaseSettings(form) {
     ),
     settingsModule(
       "连接验证",
-      "使用当前输入值；留空时测试已保存的连接。",
-      [action, note],
+      "使用当前输入值；留空时测试已保存的连接。测试不会回显 DSN。保存运行配置后，按提示重启 Team Host 使新连接生效。",
+      [action],
     ),
   );
 }
@@ -5038,19 +5078,19 @@ function renderModelSettings(form) {
     const detail = el("div", undefined, "model-route-detail");
     const fields = el("div", undefined, "model-route-fields");
     fields.append(
-      field(
+      settingsRouteField(
         "Provider",
         bindInput(el("input"), route.provider, (value) =>
           updateModelRouteIdentity(route, "provider", value),
         ),
       ),
-      field(
+      settingsRouteField(
         "Model",
         bindInput(el("input"), route.model, (value) =>
           updateModelRouteIdentity(route, "model", value),
         ),
       ),
-      field(
+      settingsRouteField(
         "类型",
         selectInput(
           [
@@ -5070,7 +5110,7 @@ function renderModelSettings(form) {
           `model-route-${index}-kind`,
         ),
       ),
-      field(
+      settingsRouteField(
         "Reasoning",
         selectInput(
           ["low", "medium", "high", "xhigh"].map((value) => [value, value]),
@@ -5085,7 +5125,7 @@ function renderModelSettings(form) {
     );
     if (route.kind === "codex_cli")
       fields.append(
-        field(
+        settingsRouteField(
           "连接方式",
           selectInput(
             [["direct", "普通 CLI（本机登录）"], ["proxy", "CLIProxyAPI（本地代理）"]],
@@ -5101,7 +5141,7 @@ function renderModelSettings(form) {
       );
     if (route.kind === "responses")
       fields.append(
-        field(
+        settingsRouteField(
           "Endpoint",
           bindInput(
             el("input"),
@@ -5109,7 +5149,7 @@ function renderModelSettings(form) {
             (value) => (route.endpoint = value),
           ),
         ),
-        field(
+        settingsRouteField(
           "API Key 环境变量名",
           bindInput(
             el("input"),
@@ -5117,7 +5157,7 @@ function renderModelSettings(form) {
             (value) => (route.api_key_env = value),
           ),
         ),
-        field(
+        settingsRouteField(
           "API Key",
           (() => {
             const key = bindInput(
@@ -5150,7 +5190,7 @@ function renderModelSettings(form) {
       () => (route.image_input = imageInput.checked),
     );
     fields.append(
-      field(
+      settingsRouteField(
         "支持图片输入",
         imageInput,
         "Codex CLI 默认支持；Responses 服务需确认兼容图片输入格式后开启。",
