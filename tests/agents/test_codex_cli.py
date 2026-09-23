@@ -409,6 +409,7 @@ def test_coder_creates_verified_candidate_in_isolated_worktree(tmp_path: Path) -
     assert "gpt-5.5" in argv
     assert "workspace-write" in argv
     assert "--approve-for-me" not in argv
+    assert not any(item.startswith("model_provider=") for item in argv)
     assert "QWEN_API_KEY" not in environment
     assert environment["UV_CACHE_DIR"] == str(tmp_path / "uv-cache")
     assert "Never merge, push, deploy" in prompt
@@ -418,6 +419,34 @@ def test_coder_creates_verified_candidate_in_isolated_worktree(tmp_path: Path) -
     assert "Do not run git add or git commit" in prompt
     assert "platform will policy-check and bind the candidate" in prompt
     assert "JSON report and a complete intended diff" in prompt
+
+
+def test_coder_cli_uses_explicit_local_proxy_without_loading_user_config(
+    tmp_path: Path,
+) -> None:
+    root, base = _repository(tmp_path)
+    request = _coder_request().model_copy(update={"source_revision": base})
+    runner = _CoderRunner(request)
+    adapter = CodexCliAgentAdapter(
+        workspace_root=root,
+        model="gpt-test",
+        agent_id="agent_coder_001",
+        agent_version="v0.1",
+        proxy_base_url="http://127.0.0.1:8317/v1",
+        prompt_builder=StaticPromptBuilder(),
+        environment={"PATH": "/usr/bin", "CLIPROXY_API_KEY": "test-secret"},
+        runner=runner,
+    )
+
+    assert adapter.run(request).status is AgentRunStatus.SUCCEEDED
+    argv, environment, prompt = runner.calls[0]
+    assert "--ignore-user-config" in argv
+    assert 'model_provider="ase_local_proxy"' in argv
+    assert 'model_providers.ase_local_proxy.base_url="http://127.0.0.1:8317/v1"' in argv
+    assert "model_providers.ase_local_proxy.requires_openai_auth=true" in argv
+    assert "CLIPROXY_API_KEY" not in environment
+    assert "test-secret" not in repr(argv)
+    assert "test-secret" not in prompt
 
 
 def test_platform_finalizes_coder_draft_when_git_metadata_is_sandbox_external(

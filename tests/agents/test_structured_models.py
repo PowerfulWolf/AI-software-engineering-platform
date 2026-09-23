@@ -78,6 +78,45 @@ def test_codex_structured_command_binds_verified_images(
 
     assert result.payload == {"result": "ok"}
     assert commands[0][commands[0].index("--image") + 1] == str(screenshot)
+    assert not any(item.startswith("model_provider=") for item in commands[0])
+
+
+def test_codex_structured_command_uses_explicit_local_proxy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    commands: list[tuple[str, ...]] = []
+
+    def run(command: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        commands.append(command)
+        Path(command[command.index("--output-last-message") + 1]).write_text(
+            json.dumps({"result": "ok"}), encoding="utf-8"
+        )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr("ai_software_engineer.agents.structured.subprocess.run", run)
+    client = CodexCliStructuredModelClient(
+        repository_root=repository,
+        model="gpt-test",
+        proxy_base_url="http://127.0.0.1:8317/v1",
+        environment={"PATH": "/usr/bin"},
+    )
+
+    client.complete(
+        instructions="Return a result.",
+        input_payload={},
+        output_schema={"type": "object"},
+        timeout_seconds=30,
+    )
+
+    command = commands[0]
+    assert "--ignore-user-config" in command
+    assert 'model_provider="ase_local_proxy"' in command
+    assert 'model_providers.ase_local_proxy.base_url="http://127.0.0.1:8317/v1"' in command
+    assert 'model_providers.ase_local_proxy.wire_api="responses"' in command
+    assert "model_providers.ase_local_proxy.requires_openai_auth=true" in command
 
 
 def test_codex_structured_command_mounts_additional_requirement_baselines(

@@ -53,6 +53,20 @@ codex login status
 
 如果 `codex login status` 未登录，先执行 `codex login`。平台不会读取或保存登录凭据正文；Codex CLI 自己
 管理当前账号会话。
+如果在“设置 → 模型路由 → Codex CLI 连接”配置了本机 CLIProxyAPI 地址，平台的 Codex CLI
+路由改为显式使用该代理。代理要求的 API key 必须预先通过同一 Codex 登录环境的
+`codex login --with-api-key` 保存；平台不接收或传递密钥。CLI 当前是 ChatGPT 登录且令牌已撤销时，
+`codex login status` 仍可能显示“已登录”，并不证明密钥或刷新仍有效。切换登录方式前请注意：
+默认 CLI/IDE 共享登录缓存；`codex logout` 会清除现有缓存。由操作者在与服务相同的系统用户、
+`CODEX_HOME` 下运行（变量名仅作示例，不要把密钥写进命令行参数或仓库）：
+
+```bash
+codex logout
+printenv CLIPROXY_API_KEY | codex login --with-api-key
+codex login status
+```
+
+若需要隔离个人 ChatGPT 登录，应另用专门的 CLI 凭证存储环境；本设置不会自动迁移或复制现有凭证。
 
 ## 3. 启动独立 MySQL
 
@@ -214,6 +228,16 @@ QA/Reviewer 使用不同模型。
 Codex 路由不接受 endpoint 或 API key 字段。Responses 路由必须同时配置 `endpoint` 和
 `api_key_env`，例如 `DASHSCOPE_API_KEY` 或 `DEEPSEEK_API_KEY`；完整密钥可在设置页填写并由
 `runtime.env` 提供给下次启动的进程。
+`codex_cli_proxy_base_url` 是独立的可选本机 CLI 连接设置。例如 CLIProxyAPI 监听本机
+`http://127.0.0.1:8317/v1` 时，在模型路由页填写这个 **base URL**，不要填 `/responses` 完整路径，
+也不要在 URL 中放密码、query 或 fragment。只接受 `localhost`、`127.0.0.1` 或 `::1` 的
+HTTP 地址。平台仍以
+`--ignore-user-config` 启动 Codex，显式指定本地 `responses` provider 与
+`requires_openai_auth=true`，从 Codex 自己的已保存 API key 凭证发出请求，因而不会读取
+`~/.codex/config.toml` 的 provider、hooks 或其他行为。留空则沿用 Codex CLI 原有直连登录。
+保存后需“应用配置”重启 Host；代理不可用时不会静默回退直连。历史 504/登录错误事实保留，
+修复连接后在需求页面显式继续现有需求，不必改库或重新批准已批准的 ProductSpec。
+状态页的 Codex 就绪标记只确认 CLI 可执行文件可解析，不检测代理服务或模型请求是否可用。
 Codex CLI 默认声明支持截图。Responses 路由只有在设置页显式启用“支持图片输入”后，才能接收 Product
 截图；含截图的调用会跳过不支持图片的备用路由，而不是假装模型已经看过图片。
 Qwen/DeepSeek 的模型 ID 和 endpoint 必须以相应账户当前实际支持的值替换；平台不会猜测“免费”型号，

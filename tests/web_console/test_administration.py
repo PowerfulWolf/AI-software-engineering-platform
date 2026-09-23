@@ -232,6 +232,25 @@ def test_runtime_configuration_change_requires_restart(tmp_path: Path) -> None:
     assert snapshot.config.console_port == 8877
 
 
+def test_local_codex_proxy_setting_is_saved_and_requires_restart(tmp_path: Path) -> None:
+    administration = _administration(tmp_path)
+    changed = ProductionConfig.model_validate(
+        {
+            **administration.runtime_config.to_wire(),
+            "codex_cli_proxy_base_url": "http://127.0.0.1:8317/v1",
+        }
+    )
+
+    saved = administration.update_settings(UpdateSettingsRequest(config=changed))
+
+    assert saved.config.codex_cli_proxy_base_url == "http://127.0.0.1:8317/v1"
+    assert saved.restart_required is True
+    assert ProductionConfig.from_file(tmp_path / "config.json").codex_cli_proxy_base_url == (
+        "http://127.0.0.1:8317/v1"
+    )
+    assert not (tmp_path / "runtime.env").exists()
+
+
 def test_design_retry_settings_roundtrip_requires_restart(tmp_path: Path) -> None:
     administration = _administration(tmp_path)
     changed = ProductionConfig.model_validate(

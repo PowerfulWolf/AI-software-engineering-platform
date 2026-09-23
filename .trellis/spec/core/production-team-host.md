@@ -203,6 +203,14 @@ fresh-organization tests hid the conflict. This does not authorize replaying ter
   Codex CLI provider 使用 `--ephemeral --ignore-user-config` 和显式 `--sandbox`；当前 CLI 禁止将
   `--approve-for-me` 与 `--sandbox` 组合。Coder 使用
   `workspace-write` sandbox，QA/Reviewer 使用 `read-only` sandbox。
+- 可选 `ProductionConfig.codex_cli_proxy_base_url` 仅接受不含 userinfo、query、fragment 的本机
+  loopback HTTP base URL。设置后，上游 structured 与交付三角色的 Codex CLI 调用都在保留
+  `--ignore-user-config` 的前提下，显式指定固定 `ase_local_proxy` provider、`wire_api=responses`、
+  `requires_openai_auth=true` 和该 base URL；CLI 从相同 `CODEX_HOME` 的已保存 API key 凭证
+  获取代理密钥，平台不把密钥写入 CLI argv/env、配置 JSON 或 Operation。未设置时保持既有
+  直连登录语义。不得读取用户 `config.toml`、从 URL 携带密钥，或因代理失败静默改走 OpenAI
+  直连。保存后必须重启 Host；
+  历史 Requirement/Task/Operation 不改写，现有阻塞需求仍需用户显式继续。
 - Codex 子进程环境只允许显式非 secret keys；`UV_CACHE_DIR` 可以透传到 sandbox 可写的 `/tmp`/TMPDIR
   缓存，避免构建工具尝试写只读 home cache。透传环境变量不能扩大 Codex sandbox 文件权限。
 - Responses provider 只能把 model output 中明确的 typed tool call 交给 role/run-bound
@@ -1155,3 +1163,109 @@ client construction, and retain ModelRouteAttempt actual-model facts. Separate c
 continues through its original reservation, whose capacity must not be dropped on native adoption.
 Follow `docs/t046-worker-operations.md` for rollout/rollback; do not resume an adopted nonterminal Task
 with an old binary that does not know about queue admission.
+
+## Scenario: explicit local proxy for production Codex CLI routes (2026-09-23)
+
+### 1. Scope / Trigger
+
+Use this contract when an operator wants platform-owned Codex CLI calls to use a
+local Responses proxy. A normal `~/.codex/config.toml` provider is deliberately
+insufficient: both production adapters pass `--ignore-user-config`, so loading
+that file would also import unrelated hooks, approval choices and provider
+behavior. This scenario changes transport configuration, not Task/Artifact
+identity, role permissions or retry semantics.
+
+### 2. Signatures
+
+```python
+ProductionConfig.codex_cli_proxy_base_url: str | None
+normalize_local_codex_proxy_base_url(value: str) -> str
+codex_cli_proxy_overrides(base_url: str | None) -> tuple[str, ...]
+CodexCliStructuredModelClient(..., proxy_base_url: str | None = None)
+CodexCliAgentAdapter(..., proxy_base_url: str | None = None)
+ConfiguredStructuredClientFactory.for_projects(...) -> StructuredModelClient
+ConfiguredDeliveryRouteAdapterFactory.create(...) -> AgentAdapter
+```
+
+The wire field is optional in `schemas/production-config.schema.json` and
+`config/production.example.json`; `GET/PUT /api/v1/admin/settings` uses the
+existing typed `ProductionConfig` request/response. No new API endpoint,
+environment variable, secret file entry, database migration or Task Schema is
+introduced.
+
+### 3. Contracts
+
+- Only absolute `http` URLs whose host is exactly `localhost`, `127.0.0.1`
+  or `[::1]` are accepted. The URL may have a valid port and base path, but no
+  userinfo, query, fragment, whitespace, control character, double quote or
+  backslash.
+  The proxy is trusted local infrastructure. Authentication uses a Codex
+  API-key login in the same CLI credential cache as the service; the key never
+  crosses platform Settings, persisted JSON, role subprocess environment or
+  command-line arguments. A revoked ChatGPT login is not a substitute.
+- `None` emits no proxy overrides and retains the direct-login CLI behavior.
+  A configured URL emits fixed, quoted `-c` values for
+  `model_provider="ase_local_proxy"`, `model_providers.ase_local_proxy.name`,
+  `base_url`, `wire_api="responses"` and `requires_openai_auth=true`.
+  The provider name and config keys are code-owned, not arbitrary UI strings.
+- `src/ai_software_engineer/manager/production_backend.py` passes the same
+  setting to Product/Designer/Planner structured calls;
+  `manager/production_delivery.py` passes it to Coder/QA/Reviewer. Both use
+  `config/codex_proxy.py` to construct overrides and keep
+  `--ephemeral --ignore-user-config`, explicit sandbox, schema, worktree and
+  tool-policy arguments unchanged.
+- The Settings model-route page writes only the base URL. `LocalConsoleAdministration`
+  persists the secret-free field through the existing atomic configuration
+  writer and reports `restart_required`; no hot mutation of an in-flight run.
+
+### 4. Validation & Error Matrix
+
+| Input or event | Expected behavior |
+|---|---|
+| No proxy field / `null` | Historical direct CLI command; ChatGPT CLI authentication may be needed |
+| `http://127.0.0.1:8317/v1` | Schema and Pydantic accept; both production factories pass it to CLI adapters |
+| Remote HTTP/HTTPS, credentials, query, fragment, quote, whitespace or bad port | Reject typed config before persistence or model invocation; never interpolate free-form argv |
+| Proxy unavailable / incompatible Responses wire API | Existing typed CLI failure; preserve diagnostics and retry budget, never silently use direct provider |
+| Missing proxy API key / revoked CLI credential | Explicit authentication failure; operator must use `codex login --with-api-key` in the service's CLI credential environment |
+| Settings save while Host runs | Return `restart_required=true`; old Host keeps its frozen config until application restart |
+| Existing failed Requirement | Preserve Operation and checkpoint history; operator explicitly continues after restart |
+
+### 5. Good / Base / Bad Cases
+
+- Good: a loopback CLIProxyAPI base URL appears as fixed `model_provider` and
+  `base_url` overrides in upstream and delivery CLI invocations; all role
+  sandbox and `--ignore-user-config` flags remain present, and the proxy API
+  key is read by Codex from its own credential cache.
+- Base: no URL means no new overrides and the current direct CLI behavior.
+- Bad: remove `--ignore-user-config` to pick up an operator's proxy. That also
+  imports unrelated user policy and may change the execution boundary.
+
+### 6. Tests Required
+
+- `tests/config/test_production.py`: schema/typed round-trip for valid URL;
+  reject remote, credential-bearing, query/fragment, malformed and injection
+  strings.
+- `tests/agents/test_structured_models.py` and
+  `tests/agents/test_codex_cli.py`: exact proxy override tokens, retained
+  `--ignore-user-config`, `requires_openai_auth=true`, no override in the
+  default case, and no proxy key in argv or environment.
+- `tests/manager/test_production_backend.py` and
+  `tests/manager/test_production_delivery.py`: both production composition
+  seams pass the same value to the right adapter.
+- `tests/web_console/test_administration.py` and
+  `tests/team_view/browser/settings-layout.test.cjs`: Settings persists the
+  field, requires restart, writes no runtime secret, and keeps model-page
+  layout aligned at desktop and narrow widths.
+
+### 7. Wrong vs Correct
+
+```python
+# Wrong: personal config becomes ambient authority for every production run.
+argv = ("codex", "exec", "--sandbox", "read-only", "-")
+
+# Correct: fixed proxy transport is explicit, while user config stays ignored.
+argv = (
+    "codex", "exec", "--ignore-user-config", "--sandbox", "read-only",
+    *codex_cli_proxy_overrides(config.codex_cli_proxy_base_url), "-",
+)
+```

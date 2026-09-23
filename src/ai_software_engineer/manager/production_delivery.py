@@ -99,6 +99,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
                 agent_version=definition.version,
                 prompt_builder=prompt_builder,
                 executable=config.codex_executable,
+                proxy_base_url=config.codex_cli_proxy_base_url,
                 reasoning_effort=route.reasoning_effort,
                 environment=environment,
                 initial_workspace_admission=(

@@ -31,6 +31,7 @@ from ai_software_engineer.agents.openai_compatible import (
     HttpTransport,
     UrllibHttpTransport,
 )
+from ai_software_engineer.config.codex_proxy import codex_cli_proxy_overrides
 from ai_software_engineer.domain.enums import TeamRole
 from ai_software_engineer.domain.model import (
     JsonValue,
@@ -233,6 +234,7 @@ class CodexCliStructuredModelClient:
         additional_repository_roots: tuple[str | Path, ...] = (),
         model: str,
         executable: str = "codex",
+        proxy_base_url: str | None = None,
         reasoning_effort: ReasoningEffort = "medium",
         environment: Mapping[str, str] | None = None,
     ) -> None:
@@ -253,6 +255,7 @@ class CodexCliStructuredModelClient:
         self._additional_repository_roots = additional_roots
         self._model = _safe_text(model, "model")
         self._executable = _safe_text(executable, "executable")
+        self._proxy_overrides = codex_cli_proxy_overrides(proxy_base_url)
         self._reasoning_effort = reasoning_effort
         self._environment = _filtered_environment(environment or os.environ)
 
@@ -302,6 +305,7 @@ class CodexCliStructuredModelClient:
                         *additional_directory_arguments,
                         "-m",
                         self._model,
+                        *self._proxy_overrides,
                         "-c",
                         f'model_reasoning_effort="{self._reasoning_effort}"',
                         "-C",

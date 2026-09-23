@@ -61,7 +61,10 @@ from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryStage,
 )
 from ai_software_engineer.manager.dispatch import DispatchStoreUnavailable
-from ai_software_engineer.manager.production_backend import StructuredClientFactory
+from ai_software_engineer.manager.production_backend import (
+    ConfiguredStructuredClientFactory,
+    StructuredClientFactory,
+)
 from ai_software_engineer.manager.production_delivery import (
     DeliveryRouteAdapterFactory,
 )
@@ -327,6 +330,29 @@ class _ScriptedDeliveryFactory(DeliveryRouteAdapterFactory):
     ) -> AgentAdapter:
         del route, context_resolver, config, environment
         return _ScriptedDeliveryAdapter(definition, binding.worktree.path)
+
+
+def test_upstream_codex_factory_receives_local_proxy_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: list[object] = []
+
+    def make_client(**kwargs: object) -> StructuredModelClient:
+        captured.append(kwargs["proxy_base_url"])
+        return _ScriptedStructuredClient()
+
+    monkeypatch.setattr(production_backend, "CodexCliStructuredModelClient", make_client)
+    config = ProductionConfig.model_validate(
+        {
+            "platform_root": str(tmp_path / "platform"),
+            "live_model_execution": True,
+            "codex_cli_proxy_base_url": "http://127.0.0.1:8317/v1",
+            "model_routes": [{"provider": "codex", "model": "gpt-test", "kind": "codex_cli"}],
+        }
+    )
+
+    assert ConfiguredStructuredClientFactory(config, {}).for_project(tmp_path) is not None
+    assert captured == ["http://127.0.0.1:8317/v1"]
 
 
 @pytest.mark.parametrize(

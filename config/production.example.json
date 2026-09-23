@@ -38,6 +38,7 @@
     }
   ],
   "codex_executable": "codex",
+  "codex_cli_proxy_base_url": null,
   "live_model_execution": false,
   "console_port": 8765,
   "design_retry_policy": {

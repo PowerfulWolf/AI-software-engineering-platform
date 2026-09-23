@@ -45,6 +45,7 @@ const modelConfig = () => {
       { role: "designer", routes: routes.map(reference) },
     ],
     codex_executable: "codex",
+    codex_cli_proxy_base_url: null,
     live_model_execution: true,
     console_port: 8765,
     execution_retry_policy: retryPolicy,
@@ -130,7 +131,13 @@ test("Model routing uses compact disclosures and aligned fallback actions", asyn
   const form = h.page.locator("#content .settings-form");
   assert.equal(await form.locator(".model-route-disclosure").count(), 3);
   assert.equal(await form.locator(".agent-model-card").count(), 7);
-  assert.equal(await form.locator(".settings-section").count(), 2);
+  assert.equal(await form.locator(".settings-section").count(), 3);
+  const proxy = form.getByRole("textbox", { name: "Codex CLI 本地代理地址" });
+  assert.equal(await proxy.count(), 1);
+  await proxy.fill("http://127.0.0.1:8317/v1");
+  assert.equal(await proxy.inputValue(), "http://127.0.0.1:8317/v1");
+  assert.equal(await h.page.evaluate(() => settingsDraft.codex_cli_proxy_base_url),
+    "http://127.0.0.1:8317/v1");
 
   const designer = form.locator('.agent-model-card[data-role="designer"]');
   await designer.locator(":scope > summary").click();
@@ -154,4 +161,9 @@ test("Model routing uses compact disclosures and aligned fallback actions", asyn
       document.documentElement.scrollWidth > window.innerWidth);
     assert.equal(overflow, false, `${width}px: Model Routing does not overflow`);
   }
+  const submission = h.page.waitForRequest((request) =>
+    request.url().endsWith("/api/v1/admin/settings") && request.method() === "PUT");
+  await form.getByRole("button", { name: "保存设置" }).click();
+  assert.equal((await submission).postDataJSON().config.codex_cli_proxy_base_url,
+    "http://127.0.0.1:8317/v1");
 });

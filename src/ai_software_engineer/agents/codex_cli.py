@@ -33,6 +33,7 @@ from ai_software_engineer.agents.ports import (
     AgentError,
     AgentRequestConflict,
 )
+from ai_software_engineer.config.codex_proxy import codex_cli_proxy_overrides
 from ai_software_engineer.domain.agent import ROLE_OUTPUTS
 from ai_software_engineer.domain.artifact import (
     Artifact,
@@ -239,6 +240,7 @@ class CodexCliAgentAdapter:
         agent_version: str,
         prompt_builder: PromptBuilder | None = None,
         executable: str = "codex",
+        proxy_base_url: str | None = None,
         reasoning_effort: str = "medium",
         environment: Mapping[str, str] | None = None,
         runner: CodexCommandRunner | None = None,
@@ -265,6 +267,7 @@ class CodexCliAgentAdapter:
         self._agent_version = agent_version
         self._prompt_builder = prompt_builder or RequestPromptBuilder()
         self._executable = executable
+        self._proxy_overrides = codex_cli_proxy_overrides(proxy_base_url)
         self._reasoning_effort = reasoning_effort
         self._environment = _filtered_environment(environment or os.environ)
         self._execution_guard = execution_guard
@@ -389,6 +392,7 @@ class CodexCliAgentAdapter:
                     str(output_path),
                     "-m",
                     self._model,
+                    *self._proxy_overrides,
                     "-c",
                     f'model_reasoning_effort="{self._reasoning_effort}"',
                     "-C",

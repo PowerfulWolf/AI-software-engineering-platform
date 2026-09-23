@@ -1,0 +1,9 @@
+{
+  "id": "codex-cli-proxy-20260923",
+  "title": "Explicit local proxy for production Codex CLI routes",
+  "status": "in_progress",
+  "phase": "ready_for_user_validation",
+  "baseline": "e2a95eb0afa913c787ae83f404865c82975111b7",
+  "authorization": "User chose the explicit CLI proxy approach; current checkout, Trellis, no multi-agent, incremental tests, commit.",
+  "verification": "verification.md"
+}

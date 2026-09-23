@@ -19,6 +19,7 @@ from pydantic import (
     model_validator,
 )
 
+from ai_software_engineer.config.codex_proxy import normalize_local_codex_proxy_base_url
 from ai_software_engineer.domain.enums import TeamRole
 from ai_software_engineer.domain.identity import ProjectId, TeamId
 from ai_software_engineer.domain.model import (
@@ -133,9 +134,15 @@ class ProductionConfig(DomainModel):
     model_routes: Annotated[tuple[ProviderRouteConfig, ...], Field(min_length=1, max_length=16)]
     agent_model_routes: Annotated[tuple[AgentModelRoutePolicy, ...], Field(max_length=7)] = ()
     codex_executable: NonEmptyStr = "codex"
+    codex_cli_proxy_base_url: str | None = None
     live_model_execution: StrictBool = False
     console_port: Annotated[StrictInt, Field(ge=1, le=65535)] = 8765
     execution_retry_policy: ExecutionRetryPolicy = ExecutionRetryPolicy()
+
+    @field_validator("codex_cli_proxy_base_url")
+    @classmethod
+    def validate_codex_cli_proxy_base_url(cls, value: str | None) -> str | None:
+        return None if value is None else normalize_local_codex_proxy_base_url(value)
 
     @model_validator(mode="before")
     @classmethod

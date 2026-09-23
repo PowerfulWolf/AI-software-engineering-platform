@@ -18,7 +18,10 @@ from ai_software_engineer.manager.dispatch import (
     DispatchCommitRecord,
     VerificationReservation,
 )
-from ai_software_engineer.manager.production_delivery import DispatchDeliveryAgentAdapter
+from ai_software_engineer.manager.production_delivery import (
+    ConfiguredDeliveryRouteAdapterFactory,
+    DispatchDeliveryAgentAdapter,
+)
 from ai_software_engineer.orchestration import ExecutionPlanAgentAdapter
 from tests.manager.test_dispatch import RecordingDispatchStore, _facts, _service
 
@@ -93,6 +96,43 @@ def _orchestrator_request(task_id: str) -> AgentRequest:
         output_schema="schemas/plan.schema.json",
         timeout_seconds=60,
     )
+
+
+def test_delivery_codex_factory_receives_local_proxy_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: list[object] = []
+    sentinel = MagicMock()
+
+    def make_adapter(**kwargs: object) -> MagicMock:
+        captured.append(kwargs["proxy_base_url"])
+        return sentinel
+
+    monkeypatch.setattr(
+        "ai_software_engineer.manager.production_delivery.CodexCliAgentAdapter",
+        make_adapter,
+    )
+    config = _config(tmp_path).model_copy(
+        update={"codex_cli_proxy_base_url": "http://127.0.0.1:8317/v1"}
+    )
+    definition = MagicMock()
+    definition.id = "agent_coder"
+    definition.version = "v0.1"
+    definition.role = AgentRole.CODER
+    binding = MagicMock()
+    binding.worktree.path = tmp_path
+
+    adapter = ConfiguredDeliveryRouteAdapterFactory().create(
+        route=config.model_routes[0],
+        definition=definition,
+        binding=binding,
+        context_resolver=cast(StoredContextResolver, MagicMock()),
+        config=config,
+        environment={},
+    )
+
+    assert adapter is sentinel
+    assert captured == ["http://127.0.0.1:8317/v1"]
 
 
 def _adapter(

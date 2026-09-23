@@ -4871,6 +4871,18 @@ function renderDatabaseSettings(form) {
 }
 
 function renderModelSettings(form) {
+  const proxy = bindInput(
+    el("input"),
+    settingsDraft.codex_cli_proxy_base_url || "",
+    (value) => (settingsDraft.codex_cli_proxy_base_url = value.trim() || null),
+  );
+  proxy.placeholder = "http://127.0.0.1:8317/v1";
+  const proxyFields = el("div", undefined, "settings-field-list");
+  proxyFields.append(settingsField(
+    "Codex CLI 本地代理地址",
+    proxy,
+    "仅支持本机回环 HTTP 地址；代理需通过 Codex CLI 保存的 API key 认证。留空沿用原有连接；保存后需应用配置。",
+  ));
   const addRoute = button(
     "添加路由",
     () => {
@@ -5183,6 +5195,11 @@ function renderModelSettings(form) {
     assignments.append(card);
   }
   form.append(
+    settingsModule(
+      "Codex CLI 连接",
+      "平台显式连接本地 Responses 代理，不读取个人 Codex 配置；状态页不检测代理在线。",
+      [proxyFields],
+    ),
     settingsModule(
       "可用模型目录",
       "启用只表示可选，不会自动加入任何 Agent 的备用模型。",

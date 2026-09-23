@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 
 from ai_software_engineer.config import ProductionConfig, ProductionConfigError
@@ -47,6 +48,48 @@ def test_config_loads_without_storing_secrets(tmp_path: Path) -> None:
     assert config.enabled_routes()[0].model == "gpt-5.5"
     assert "password" not in json.dumps(config.to_wire()).lower()
     assert "api_key" not in config.to_wire()
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1:8317/v1",
+        "http://localhost:8317/v1",
+        "http://[::1]:8317/v1",
+    ],
+)
+def test_local_codex_proxy_round_trip_and_schema(tmp_path: Path, url: str) -> None:
+    payload = {**_payload(tmp_path), "codex_cli_proxy_base_url": url}
+    schema = json.loads(
+        (Path(__file__).parents[2] / "schemas" / "production-config.schema.json").read_text()
+    )
+
+    config = ProductionConfig.model_validate(payload)
+
+    assert config.codex_cli_proxy_base_url == url
+    assert ProductionConfig.model_validate(config.to_wire()) == config
+    Draft202012Validator(schema).validate(config.to_wire())
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://example.com/v1",
+        "http://127.0.0.2:8317/v1",
+        "https://127.0.0.1:8317/v1",
+        "http://user:password@127.0.0.1:8317/v1",
+        "http://127.0.0.1:8317/v1?token=secret",
+        "http://127.0.0.1:8317/v1#fragment",
+        "http://127.0.0.1:0/v1",
+        "http://127.0.0.1:99999/v1",
+        'http://127.0.0.1:8317/v1"injected',
+        "http://127.0.0.1:8317/v1\nother=value",
+        "not-a-url",
+    ],
+)
+def test_local_codex_proxy_rejects_unsafe_url(tmp_path: Path, url: str) -> None:
+    with pytest.raises(ValidationError):
+        ProductionConfig.model_validate({**_payload(tmp_path), "codex_cli_proxy_base_url": url})
 
 
 def test_design_retry_policy_defaults_and_custom_limits(tmp_path: Path) -> None:

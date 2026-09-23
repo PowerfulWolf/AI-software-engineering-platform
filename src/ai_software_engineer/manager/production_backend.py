@@ -256,6 +256,7 @@ class ConfiguredStructuredClientFactory:
                     additional_repository_roots=repository_roots[1:],
                     model=route.model,
                     executable=self._config.codex_executable,
+                    proxy_base_url=self._config.codex_cli_proxy_base_url,
                     reasoning_effort=route.reasoning_effort,
                     environment=self._environment,
                 )
