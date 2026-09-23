@@ -73,6 +73,67 @@ const geometry = (locator) => locator.evaluate((form) => {
   };
 });
 
+test("Agent help, horizontal primary row and exhausted fallback catalog remain usable", async (t) => {
+  const h = await ui(t, { config: modelConfig() });
+  await h.page.locator("#nav-settings").click();
+  await h.page.getByRole("button", { name: /^模型路由/ }).click();
+  const form = h.page.locator("#content .settings-form");
+  const manager = form.locator('.agent-model-card[data-role="manager"]');
+  assert.equal(await form.locator(".agent-model-role small").count(), 0,
+    "Agent descriptions should not stretch summary rows");
+  const help = manager.getByRole("button", { name: "Manager Agent说明" });
+  await help.click();
+  await form.getByRole("dialog", { name: "Manager Agent说明" }).getByText(/确定性能力/).waitFor();
+  assert.equal(await manager.evaluate((node) => node.open), false,
+    "opening a summary help popover must not expand the Agent card");
+  await h.page.keyboard.press("Escape");
+
+  const designer = form.locator('.agent-model-card[data-role="designer"]');
+  await designer.locator(":scope > summary").click();
+  const primary = await designer.evaluate((card) => {
+    const row = card.querySelector(".agent-model-detail > .settings-field-row");
+    if (!row) return null;
+    const label = row.querySelector(".settings-field-copy").getBoundingClientRect();
+    const select = row.querySelector(".single-select > summary").getBoundingClientRect();
+    const control = row.querySelector(".settings-field-control").getBoundingClientRect();
+    return { labelRight: label.right, selectLeft: select.left,
+      labelCenter: label.top + label.height / 2, selectCenter: select.top + select.height / 2 };
+  });
+  assert.ok(primary && primary.labelRight < primary.selectLeft,
+    "primary label and model selector must share a horizontal row");
+  assert.ok(Math.abs(primary.labelCenter - primary.selectCenter) <= 2,
+    `primary label and selector are vertically aligned: ${JSON.stringify(primary)}`);
+
+  assert.equal(await designer.locator(".agent-fallback-row").count(), 2);
+  const exhaustedAdd = designer.locator(".agent-fallback-add");
+  await exhaustedAdd.locator("summary").click();
+  await exhaustedAdd.getByRole("option", { name: /新增可用模型路由/ }).click();
+  const routeRows = form.locator(".model-route-disclosure");
+  assert.equal(await routeRows.count(), 4);
+  assert.deepEqual(await routeRows.evaluateAll((rows) => rows.map((row) => row.open)),
+    [false, false, false, true]);
+  const created = routeRows.last();
+  await created.getByRole("textbox", { name: "Provider" }).fill("new-provider");
+  await created.getByRole("textbox", { name: "Model" }).fill("new-model");
+  await created.getByLabel("启用此路由").check();
+  const addFallback = designer.locator(".agent-fallback-add");
+  await addFallback.locator("summary").click();
+  await addFallback.getByRole("option", { name: /^new-provider \/ new-model/ }).click();
+  assert.equal(await designer.locator(".agent-fallback-row").count(), 3);
+});
+
+test("model catalog starts closed and only a newly added route opens", async (t) => {
+  const h = await ui(t, { config: modelConfig() });
+  await h.page.locator("#nav-settings").click();
+  await h.page.getByRole("button", { name: /^模型路由/ }).click();
+  const rows = h.page.locator("#content .model-route-disclosure");
+  assert.deepEqual(await rows.evaluateAll((items) => items.map((item) => item.open)),
+    [false, false, false]);
+  await h.page.getByRole("button", { name: "添加路由", exact: true }).click();
+  assert.deepEqual(await rows.evaluateAll((items) => items.map((item) => item.open)),
+    [false, false, false, true]);
+});
+
 test("stale Settings service blocks saves and explains the required restart", async (t) => {
   const h = await ui(t, { settingsContractVersion: 0 });
   const writes = [];
@@ -166,6 +227,7 @@ test("Model routing uses compact disclosures and aligned fallback actions", asyn
     "http://127.0.0.1:8317/v1");
   assert.equal(await h.page.evaluate(() => settingsDraft.model_routes[0].connection_mode),
     "direct", "adding a proxy URL must not silently switch an existing CLI route");
+  await form.locator(".model-route-disclosure").first().locator(":scope > summary").click();
   const connection = form.locator('[data-key="model-route-0-connection"]');
   await connection.locator("summary").click();
   await connection.getByRole("option", { name: "CLIProxyAPI（本地代理）" }).click();
@@ -223,7 +285,7 @@ test("Model routing uses compact disclosures and aligned fallback actions", asyn
   assert.ok(Math.abs(actionColumns[0].left - actionColumns[1].left) <= 1);
   assert.ok(actionColumns.every(({ widths }) =>
     widths.length === 3 && widths.every((width) => Math.abs(width - 36) <= 1)));
-  assert.equal(await designer.locator('.agent-primary-settings .single-select-value').textContent(),
+  assert.equal(await designer.locator('.agent-model-detail > .settings-field-row .single-select-value').textContent(),
     "gpt-5.6-terra");
   assert.match(await designer.locator('.agent-primary-meta').textContent(),
     /codex · high · Codex CLI/);
@@ -241,16 +303,16 @@ test("Model routing uses compact disclosures and aligned fallback actions", asyn
       const designer = document.querySelector('.agent-model-card[data-role="designer"]');
       const product = document.querySelector('.agent-model-card[data-role="product"]');
       return {
-        primary: designer.querySelector('.agent-primary-settings > .single-select').getBoundingClientRect().left,
+        primary: designer.querySelector('.agent-model-detail > .settings-field-row .single-select').getBoundingClientRect().left,
         fallback: designer.querySelector('.agent-fallback-row').getBoundingClientRect().left,
-        addPrimary: product.querySelector('.agent-primary-settings > .single-select').getBoundingClientRect().left,
+        addPrimary: product.querySelector('.agent-model-detail > .settings-field-row .single-select').getBoundingClientRect().left,
         addFallback: product.querySelector('.agent-fallback-add').getBoundingClientRect().left,
       };
     });
-    assert.ok(Math.abs(detailAlignment.primary - detailAlignment.fallback) <= 1,
-      `${width}px: Primary and fallback groups share the same outer edge: ${JSON.stringify(detailAlignment)}`);
+    assert.ok(detailAlignment.primary >= detailAlignment.fallback && detailAlignment.primary - detailAlignment.fallback <= 122,
+      `${width}px: Primary and fallback groups keep a bounded aligned indent: ${JSON.stringify(detailAlignment)}`);
     assert.ok(Math.abs(detailAlignment.addPrimary - detailAlignment.addFallback) <= 1,
-      `${width}px: Primary and add-fallback controls share the same outer edge: ${JSON.stringify(detailAlignment)}`);
+      `${width}px: Primary and add-fallback controls share their model-control edge: ${JSON.stringify(detailAlignment)}`);
     const sectionHelp = form.getByRole("button", { name: "Codex CLI 连接说明" });
     await sectionHelp.click();
     const sectionPanel = form.getByRole("dialog", { name: "Codex CLI 连接说明" });

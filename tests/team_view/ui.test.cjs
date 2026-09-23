@@ -1556,6 +1556,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   assert.ok(connectionChoices.includes("codex / gpt-5.6-terra · high · Codex CLI · CLIProxyAPI"));
   assert.equal(vm.runInContext("modelRouteValidationMessage(settingsDraft)", context), null);
   assert.equal(vm.runInContext("recordedModelConnectionLabel({route_kind: 'codex_cli'})", context), "连接方式未记录");
+  assert.equal(vm.runInContext("recordedModelConnectionLabel({kind: 'responses'})", context), "Responses API");
   vm.runInContext("settingsDraft.model_routes.pop(); settingsDraft.codex_cli_proxy_base_url = null; render();", context);
   assert.doesNotMatch(text(get("content")), /密钥状态/);
   assert.match(text(get("content")), /Agent 模型分配/);
@@ -1897,6 +1898,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   assert.match(text(get("content")), /主模型 codex \/ gpt-5.6-terra · high/);
   assert.match(text(get("content")), /备用 1 codex \/ gpt-5.6-terra · medium/);
   assert.match(text(get("content")), /可用模型目录/);
+  assert.match(text(get("content")), /deepseek \/ deepseek-v4 · high · Responses API/);
   assert.doesNotMatch(text(get("content")), /user:password/);
   const statusReads = urls.filter(
     (url) => url === "/api/v1/admin/status",

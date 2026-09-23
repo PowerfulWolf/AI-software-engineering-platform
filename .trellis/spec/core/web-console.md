@@ -701,6 +701,34 @@ GET  /api/v1/admin/status
   备用列表和添加入口；备用行的序号形成清楚的次级缩进，不能用普通文本链接冒充操作按钮。
   主模型当前值可只显示模型名，但完整 provider/model/effort/kind 必须在选择选项和当前元信息中可辨，
   不得因视觉缩写改变精确路由身份或 fallback 顺序。窄屏仍需保持内容与操作可见、无横向溢出。
+- Agent 职责说明只通过摘要行右侧、带可访问名称的 `settingsHelp` 按钮打开；点击按钮及其关闭动作
+  不得切换外层 `<details>`。主模型恢复标签与选择器同一横向字段行，控件须消除全局 `details`
+  默认外边距，使 48px 标签与选择框真正共用垂直中心；窄屏再按字段行顺序堆叠。
+- `expandedModelRouteIndex` 初始为 `null`；已有路由默认全部折叠。添加路由仅展开新索引，移除后
+  不自动展开相邻项。全局 `render()` 的 disclosure 恢复只记录有 `data-key` 的控件；无 key 的
+  模型目录和 Agent 卡片分别由自身状态恢复，不能把所有无 key 的 `<details>` 当作同一项。
+- Agent 已选择全部启用模型时仍保留添加备用入口：可新增一条未启用的目录路由，完成字段配置并
+  显式启用后，再通过精确路由身份选为备用；不自动纳入任何 Agent 策略，不重复已有 route。
+  目录 16 条上限仍生效，达到上限且没有剩余候选时展示明确的额度说明。
+- Status `ModelRouteRuntimeStatus` 使用 `kind`，旧模型调用诊断可使用 `route_kind`；展示函数须
+  同时识别两者。`kind=responses` 显示 `Responses API`；Codex CLI 只在 `connection_mode`
+  明确为 `direct/proxy` 时显示对应名称，历史缺失时保留“连接方式未记录”，不得猜测。
+
+### Model-routing Settings UI validation matrix
+
+| Input/state | UI contract | Regression point |
+|---|---|---|
+| Initial catalog with existing routes | All disclosures closed | `tests/team_view/browser/settings-layout.test.cjs` catalog case |
+| Add route from catalog or exhausted fallback selector | Only new disabled route opens; user must configure and enable | browser add/fallback case |
+| Seven Agent summaries with different explanation lengths | Equal-height compact rows, each help opens without expanding card | browser help case |
+| Expanded Agent primary/fallback | One horizontal primary row, aligned label/control; compact ordered fallback actions | browser geometry case at desktop and narrow widths |
+| Status route with `kind=responses` | `Responses API`, not unknown connection mode | `tests/team_view/ui.test.cjs` Status assertion |
+| Historical Codex run without transport | “连接方式未记录” | DOM helper assertion |
+
+Wrong: preserve an unkeyed disclosure with `undefined` as a shared key, show explanatory small text
+inside every Agent row, or hide the fallback entry when every catalog route is already selected.
+Correct: keep independent disclosure ownership, use on-demand help, and expose the explicit new
+catalog-route path without silently changing per-Agent model policy.
 - Project creation is rendered in `需求与交付`, next to Project selection and Requirement work. The
   Settings page contains only process/runtime configuration and never presents Project creation as a
   configuration field.

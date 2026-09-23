@@ -38,7 +38,7 @@ let pendingConfirmation = null;
 let actionSerial = 0;
 let requestFilter = "active";
 let settingsSection = "general";
-let expandedModelRouteIndex = 0;
+let expandedModelRouteIndex = null;
 let expandedAgentModelRole = null;
 let settingsSaveResult = null;
 const settingsContractVersion = 1;
@@ -4268,7 +4268,7 @@ function modelRouteLabel(route, config = settingsDraft) {
     : "Responses API";
 }
 function recordedModelConnectionLabel(route) {
-  if (route.route_kind === "responses") return "Responses API";
+  if ((route.route_kind || route.kind) === "responses") return "Responses API";
   if (route.connection_mode === "proxy") return "CLIProxyAPI";
   if (route.connection_mode === "direct") return "普通 CLI";
   return "连接方式未记录";
@@ -4439,13 +4439,17 @@ function settingsHelp(labelText, explanation) {
   panel.setAttribute("aria-label", `${labelText}说明`);
   trigger.setAttribute("aria-controls", panel.id);
   panel.append(el("span", explanation, "settings-help-text"));
-  const close = button("关闭", () => {
+  const close = button("关闭", (event) => {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
     panel.hidePopover();
     trigger.focus();
   }, "settings-help-close");
   close.type = "button";
   panel.append(close);
-  trigger.addEventListener("click", () => {
+  trigger.addEventListener("click", (event) => {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
     if (panel.matches(":popover-open")) {
       panel.hidePopover();
       return;
@@ -4465,7 +4469,7 @@ function settingsHelp(labelText, explanation) {
   wrapper.append(trigger, panel);
   return wrapper;
 }
-function settingsField(labelText, control, hint) {
+function settingsField(labelText, control, hint, extra = null) {
   const row = el("div", undefined, "settings-field-row");
   const copy = el("div", undefined, "settings-field-copy");
   copy.append(el("strong", labelText));
@@ -4473,6 +4477,7 @@ function settingsField(labelText, control, hint) {
   const value = el("div", undefined, "settings-field-control");
   control.setAttribute("aria-label", labelText);
   value.append(control);
+  if (extra) value.append(extra);
   row.append(copy, value);
   return row;
 }
@@ -5035,29 +5040,33 @@ function renderModelSettings(form) {
     keyAction.append(clearKey);
     proxyChildren.push(keyAction);
   }
+  const addModelRoute = () => {
+    settingsDraft.model_routes.push({
+      provider: "provider",
+      model: "model",
+      kind: "responses",
+      endpoint: "https://example.invalid/v1/responses",
+      api_key_env: "MODEL_API_KEY",
+      reasoning_effort: "medium",
+      image_input: false,
+      enabled: false,
+    });
+    expandedModelRouteIndex = settingsDraft.model_routes.length - 1;
+    render();
+    document.querySelector?.(".model-route-disclosure[open] input[aria-label='Provider']")?.focus();
+  };
   const addRoute = button(
     "添加路由",
-    () => {
-      settingsDraft.model_routes.push({
-        provider: "provider",
-        model: "model",
-        kind: "responses",
-        endpoint: "https://example.invalid/v1/responses",
-        api_key_env: "MODEL_API_KEY",
-        reasoning_effort: "medium",
-        image_input: false,
-        enabled: false,
-      });
-      expandedModelRouteIndex = settingsDraft.model_routes.length - 1;
-      render();
-    },
+    addModelRoute,
     "settings-section-action",
   );
+  addRoute.disabled = settingsDraft.model_routes.length >= 16;
   const routeList = el("div", undefined, "model-route-list");
   settingsDraft.model_routes.forEach((route, index) => {
     const row = el("details", undefined, "route-card model-route-disclosure");
     row.open = expandedModelRouteIndex === index;
     row.addEventListener("toggle", () => {
+      if (row.isConnected === false) return;
       if (row.open) expandedModelRouteIndex = index;
       else if (expandedModelRouteIndex === index) expandedModelRouteIndex = null;
     });
@@ -5226,9 +5235,7 @@ function renderModelSettings(form) {
           "移除路由",
           () => {
             settingsDraft.model_routes.splice(index, 1);
-            expandedModelRouteIndex = settingsDraft.model_routes.length
-              ? Math.min(index, settingsDraft.model_routes.length - 1)
-              : null;
+            expandedModelRouteIndex = null;
             render();
           },
           "danger",
@@ -5274,7 +5281,7 @@ function renderModelSettings(form) {
     const fallbackRoutes = policy?.routes?.slice(1) || [];
     const summary = el("summary", undefined, "agent-model-summary");
     const roleCopy = el("span", undefined, "agent-model-role");
-    roleCopy.append(el("strong", title), el("small", description));
+    roleCopy.append(el("strong", title), settingsHelp(title, description));
     summary.append(
       roleCopy,
       el(
@@ -5292,21 +5299,19 @@ function renderModelSettings(form) {
       el("span", "", "agent-model-chevron"),
     );
     const detail = el("div", undefined, "agent-model-detail");
-    const primarySettings = el("div", undefined, "agent-primary-settings");
-    const primaryHeading = el("div", undefined, "agent-setting-heading");
-    primaryHeading.append(
-      el("strong", "主模型"),
-      settingsHelp("主模型", "该 Agent 每次运行首先尝试的模型。"),
-    );
-    primarySettings.append(primaryHeading, selector);
-    if (primary)
-      primarySettings.append(
-        el(
+    const primaryMeta = primary
+      ? el(
           "span",
           `${primary.provider} · ${primary.reasoning_effort || "medium"} · ${modelRouteLabel(primary)}`,
           "agent-primary-meta",
-        ),
-      );
+        )
+      : null;
+    detail.append(settingsField(
+      "主模型",
+      selector,
+      "该 Agent 每次运行首先尝试的模型。",
+      primaryMeta,
+    ));
     const fallbacks = el("div", undefined, "agent-fallback-settings");
     const fallbackHeading = el("div", undefined, "agent-fallback-heading");
     const fallbackLabel = el("div", undefined, "agent-setting-heading");
@@ -5380,12 +5385,21 @@ function renderModelSettings(form) {
         modelRouteKey(route),
         `${route.provider} / ${route.model} · ${route.reasoning_effort} · ${modelRouteLabel(route)}`,
       ]);
-    if (fallbackChoices.length) {
+    const canAddRoute = settingsDraft.model_routes.length < 16;
+    if (fallbackChoices.length || canAddRoute) {
       const addFallback = selectInput(
-        [["", "＋ 添加备用模型"], ...fallbackChoices],
+        [
+          ["", "＋ 添加备用模型"],
+          ...fallbackChoices,
+          ...(canAddRoute ? [["__new_route__", "＋ 新增可用模型路由"]] : []),
+        ],
         "",
         (value) => {
           if (!value) return;
+          if (value === "__new_route__") {
+            addModelRoute();
+            return;
+          }
           addAgentFallbackModel(role, value);
           render();
         },
@@ -5394,7 +5408,15 @@ function renderModelSettings(form) {
       addFallback.className += " agent-fallback-add";
       fallbacks.append(addFallback);
     }
-    detail.append(primarySettings, fallbacks);
+    if (!fallbackChoices.length)
+      fallbacks.append(el(
+        "p",
+        canAddRoute
+          ? "已分配全部启用路由；可以新增路由、完成配置并启用后，再选为备用模型。"
+          : "已分配全部启用路由，且模型目录已达 16 条上限。",
+        "muted agent-fallback-catalog-note",
+      ));
+    detail.append(fallbacks);
     card.append(summary, detail);
     assignments.append(card);
   }
@@ -6161,7 +6183,9 @@ function buildDetail() {
 function render({ preserveComposer = false } = {}) {
   const focused = document.activeElement;
   const expanded = new Set(
-    [...document.querySelectorAll("details[open]")].map((n) => n.dataset.key),
+    [...document.querySelectorAll("details[open]")]
+      .filter((n) => n.dataset.key)
+      .map((n) => n.dataset.key),
   );
   document.getElementById("team").textContent = snapshot?.team_name || "Team 记录暂不可用";
   document.getElementById("main").dataset.page = page;
@@ -6196,7 +6220,7 @@ function render({ preserveComposer = false } = {}) {
   renderDetail();
   syncDeliveryControls();
   for (const node of document.querySelectorAll("details"))
-    if (expanded.has(node.dataset.key)) node.open = true;
+    if (node.dataset.key && expanded.has(node.dataset.key)) node.open = true;
   // Reattaching an unchanged discussion form preserves its draft but drops browser focus.
   // Restore only that surviving control, never over a new modal or changed checkpoint.
   if (focused?.isConnected && document.activeElement === document.body &&

@@ -52,6 +52,7 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 
 | 目录 | 任务 ID | 状态记录 |
 |---|---|---|
+| 09-23-model-routing-ui-followup | model-routing-ui-followup-20260923 | [completed](09-23-model-routing-ui-followup/task.json) |
 | 09-23-settings-save-invalid | settings-save-invalid-20260923 | [completed](09-23-settings-save-invalid/task.json) |
 | 09-23-agent-model-detail-polish | agent-model-detail-polish-20260923 | [completed](09-23-agent-model-detail-polish/task.json) |
 | 09-23-settings-help-popovers | settings-help-popovers-20260923 | [completed](09-23-settings-help-popovers/task.json) |

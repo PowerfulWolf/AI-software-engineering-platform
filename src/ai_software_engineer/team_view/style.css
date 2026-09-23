@@ -1893,14 +1893,23 @@ main[data-page="requests"] .page-context {
   outline: 3px solid #89adff;
   outline-offset: -3px;
 }
-.model-route-identity,
-.agent-model-role {
+.model-route-identity {
   display: grid;
   min-width: 0;
   gap: 1px;
 }
+.agent-model-role {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+.agent-model-role > strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .model-route-identity small,
-.agent-model-role small,
 .agent-model-fallback-count {
   color: var(--muted);
   font-size: 0.75rem;
@@ -1942,9 +1951,8 @@ main[data-page="requests"] .page-context {
 }
 .agent-model-detail {
   display: grid;
-  gap: 20px;
-  padding: 20px 18px 24px;
-  background: #fbfcfe;
+  gap: 16px;
+  padding: 16px 12px 20px;
 }
 .agent-model-list {
   overflow: visible;
@@ -1981,18 +1989,25 @@ main[data-page="requests"] .page-context {
   padding-top: 14px;
   border-top: 1px solid var(--line);
 }
-.agent-primary-settings,
-.agent-fallback-settings {
-  width: min(100%, 680px);
+.agent-model-detail > .settings-field-row {
+  grid-template-columns: 110px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+}
+.agent-model-detail > .settings-field-row .settings-field-copy {
+  align-self: start;
+  min-height: 48px;
+}
+.agent-model-detail > .settings-field-row .settings-field-control {
+  align-self: start;
+  align-content: start;
+  grid-template-rows: 48px auto;
   min-width: 0;
-  margin-inline: auto;
-}
-.agent-primary-settings {
   display: grid;
-  gap: 8px;
+  gap: 6px;
+  max-width: 420px;
 }
-.agent-setting-heading,
-.agent-fallback-heading {
+.agent-setting-heading {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -2000,15 +2015,19 @@ main[data-page="requests"] .page-context {
 .agent-setting-heading strong {
   font-size: 0.9rem;
 }
-.agent-primary-settings > .single-select {
+.agent-model-detail > .settings-field-row .single-select {
+  align-self: start;
   width: 100%;
+  margin: 0;
 }
-.agent-primary-settings .single-select > summary {
+.agent-model-detail > .settings-field-row .single-select > summary {
+  box-sizing: border-box;
+  height: 48px;
   min-height: 48px;
   background: white;
   font-weight: 650;
 }
-.agent-primary-settings .single-select-option {
+.agent-model-detail > .settings-field-row .single-select-option {
   overflow-wrap: anywhere;
 }
 .agent-primary-meta {
@@ -2022,15 +2041,19 @@ main[data-page="requests"] .page-context {
 }
 .agent-fallback-settings {
   display: grid;
-  gap: 0;
-  padding-top: 18px;
+  gap: 8px;
+  min-width: 0;
+  padding-top: 14px;
   border-top: 1px solid var(--line);
 }
 .agent-fallback-heading {
-  justify-content: space-between;
-  margin-bottom: 8px;
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr) auto;
+  gap: 12px;
+  min-height: 32px;
 }
 .agent-fallback-count {
+  grid-column: 3;
   padding: 2px 8px;
   border-radius: 999px;
   background: #eef2f8;
@@ -2039,12 +2062,19 @@ main[data-page="requests"] .page-context {
   font-weight: 650;
 }
 .agent-fallback-empty {
-  padding: 12px 0;
+  padding: 8px 0;
   font-size: 0.82rem;
+}
+.agent-model-card .agent-fallback-empty,
+.agent-model-card .agent-fallback-catalog-note {
+  margin-left: 122px;
+}
+.agent-fallback-catalog-note {
+  font-size: 0.78rem;
 }
 .agent-fallback-row {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) 110px;
+  grid-template-columns: 110px minmax(0, 1fr) 110px;
   align-items: center;
   gap: 12px;
   min-width: 0;
@@ -2053,15 +2083,14 @@ main[data-page="requests"] .page-context {
   border-bottom: 1px solid var(--line);
 }
 .agent-fallback-position {
-  display: grid;
-  width: 26px;
-  height: 26px;
-  place-items: center;
-  border-radius: 8px;
-  background: #edf1f7;
+  display: flex;
+  align-items: center;
   color: #52647c;
   font-size: 0.78rem;
   font-weight: 700;
+}
+.agent-fallback-position::before {
+  content: "备用 ";
 }
 .agent-fallback-identity {
   display: grid;
@@ -2113,8 +2142,8 @@ main[data-page="requests"] .page-context {
   background: #fff4f4;
 }
 .agent-fallback-add {
-  width: 100%;
-  margin-top: 14px;
+  width: min(420px, calc(100% - 122px));
+  margin: 10px 0 0 122px;
 }
 .agent-fallback-add > summary {
   border-style: dashed;
@@ -2444,8 +2473,29 @@ code {
     grid-column: 1 / -1;
   }
   .agent-fallback-row {
-    grid-template-columns: 28px minmax(0, 1fr);
+    grid-template-columns: 70px minmax(0, 1fr);
     gap: 8px;
+  }
+  .agent-model-detail > .settings-field-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 7px;
+  }
+  .agent-model-detail > .settings-field-row .settings-field-copy {
+    min-height: 26px;
+  }
+  .agent-fallback-heading {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .agent-fallback-count {
+    grid-column: 2;
+  }
+  .agent-model-card .agent-fallback-empty,
+  .agent-model-card .agent-fallback-catalog-note {
+    margin-left: 0;
+  }
+  .agent-fallback-add {
+    width: 100%;
+    margin-left: 0;
   }
   .agent-fallback-actions {
     grid-column: 2;

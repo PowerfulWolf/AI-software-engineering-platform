@@ -1,0 +1,9 @@
+{
+  "id": "model-routing-ui-followup-20260923",
+  "title": "Refine model routing and Agent assignment UI",
+  "status": "completed",
+  "phase": "verified_incremental",
+  "baseline": "2241747",
+  "authorization": "User requested four Settings/Status UI corrections; use Trellis, one agent, focused incremental tests and commit in the current checkout.",
+  "verification": "verification.md"
+}
