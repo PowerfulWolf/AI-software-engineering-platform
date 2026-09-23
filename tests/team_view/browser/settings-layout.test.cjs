@@ -196,8 +196,9 @@ test("Settings pages share one aligned section grid across desktop and narrow wi
   await h.page.getByRole("button", { name: "MySQL", exact: true }).click();
   await h.page.setViewportSize({ width: 1440, height: 1000 });
   const mysql = await geometry(form);
-  assert.equal(mysql.sections.length, 2);
-  assert.equal(await form.locator(".settings-section-header .settings-help-trigger").count(), 2);
+  assert.equal(mysql.sections.length, 1);
+  assert.equal(await form.locator(".settings-section-header .settings-help-trigger").count(), 1);
+  assert.equal(await form.locator(".settings-field-row").count(), 3);
   assert.ok(Math.abs(mysql.headingLeft - mysql.copyLeft) <= 1);
   assert.ok(mysql.controlLeft > mysql.copyLeft);
   const environmentName = form.getByRole("textbox", { name: "启动变量" });
@@ -205,16 +206,23 @@ test("Settings pages share one aligned section grid across desktop and narrow wi
   assert.equal(await environmentName.isEnabled(), false);
   assert.equal(await environmentName.inputValue(), "ASE_MYSQL_DSN");
   const mysqlAlignment = await form.evaluate((node) => {
-    const control = node.querySelector(".settings-field-control").getBoundingClientRect();
+    const control = node.querySelectorAll(".settings-field-control")[1].getBoundingClientRect();
     const action = node.querySelector(".settings-action-row").getBoundingClientRect();
-    return { control: control.left, action: action.left };
+    return { control: control.left, action: action.left,
+      gap: action.top - control.bottom };
   });
   assert.ok(Math.abs(mysqlAlignment.control - mysqlAlignment.action) <= 1);
+  assert.ok(mysqlAlignment.gap >= 0 && mysqlAlignment.gap <= 32,
+    JSON.stringify(mysqlAlignment));
   const mysqlHelp = form.getByRole("button", { name: "MySQL DSN说明" });
   await mysqlHelp.click();
   await form.getByRole("dialog", { name: "MySQL DSN说明" })
     .getByText("留空表示保留已保存值；输入新 DSN 才会替换。")
     .waitFor();
+  await h.page.keyboard.press("Escape");
+  await h.page.setViewportSize({ width: 390, height: 1000 });
+  assert.equal((await geometry(form)).overflow, false,
+    "narrow MySQL settings keep the validation action inside the viewport");
 });
 
 test("Model routing uses compact disclosures and aligned fallback actions", async (t) => {
@@ -342,6 +350,9 @@ test("Model routing uses compact disclosures and aligned fallback actions", asyn
   await addFallback.getByRole('option', { name: /^deepseek \/ deepseek-v4/ }).click();
   assert.equal(await product.locator('.agent-fallback-row').count(), 1,
     'the visually compact add control still updates the exact Agent fallback policy');
+  assert.equal(await designer.evaluate((node) => node.open), true,
+    'editing Product must leave the previously opened Designer card expanded');
+  assert.equal(await product.evaluate((node) => node.open), true);
   const submission = h.page.waitForRequest((request) =>
     request.url().endsWith("/api/v1/admin/settings") && request.method() === "PUT");
   await form.getByRole("button", { name: "保存设置" }).click();

@@ -1678,6 +1678,9 @@ main[data-page="requests"] .page-context {
 .settings-action-row {
   margin-left: 224px;
 }
+.settings-field-control > .settings-action-row {
+  margin-left: 0;
+}
 .settings-action-row {
   display: flex;
   align-items: center;

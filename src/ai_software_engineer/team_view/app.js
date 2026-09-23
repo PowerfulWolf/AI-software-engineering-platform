@@ -39,7 +39,7 @@ let actionSerial = 0;
 let requestFilter = "active";
 let settingsSection = "general";
 let expandedModelRouteIndex = null;
-let expandedAgentModelRole = null;
+const expandedAgentModelRoles = new Set();
 let settingsSaveResult = null;
 const settingsContractVersion = 1;
 const settingsVersionMismatchMessage =
@@ -4950,6 +4950,8 @@ function renderDatabaseSettings(form) {
     }
   });
   testConnection.type = "button";
+  const action = el("div", undefined, "settings-action-row");
+  action.append(testConnection, connectionFeedback);
   const connectionFields = el("div", undefined, "settings-field-list");
   connectionFields.append(
     settingsField(
@@ -4962,19 +4964,17 @@ function renderDatabaseSettings(form) {
       dsn,
       "留空表示保留已保存值；输入新 DSN 才会替换。",
     ),
+    settingsField(
+      "连接验证",
+      action,
+      "使用当前输入值；留空时测试已保存的连接。测试不会回显 DSN。保存运行配置后，按提示重启 Team Host 使新连接生效。",
+    ),
   );
-  const action = el("div", undefined, "settings-action-row");
-  action.append(testConnection, connectionFeedback);
   form.append(
     settingsModule(
       "连接配置",
       "凭证只写入本机 runtime.env，页面不会回显已保存的值。",
       [connectionFields],
-    ),
-    settingsModule(
-      "连接验证",
-      "使用当前输入值；留空时测试已保存的连接。测试不会回显 DSN。保存运行配置后，按提示重启 Team Host 使新连接生效。",
-      [action],
     ),
   );
 }
@@ -5256,10 +5256,11 @@ function renderModelSettings(form) {
     );
     const card = el("details", undefined, "agent-model-card");
     card.dataset.role = role;
-    card.open = expandedAgentModelRole === role;
+    card.open = expandedAgentModelRoles.has(role);
     card.addEventListener("toggle", () => {
-      if (card.open) expandedAgentModelRole = role;
-      else if (expandedAgentModelRole === role) expandedAgentModelRole = null;
+      if (!card.isConnected) return;
+      if (card.open) expandedAgentModelRoles.add(role);
+      else expandedAgentModelRoles.delete(role);
     });
     const primary = policy?.routes?.[0];
     const primaryKey = primary ? modelRouteKey(primary) : "";

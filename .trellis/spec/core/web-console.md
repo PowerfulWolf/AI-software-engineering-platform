@@ -687,7 +687,8 @@ GET  /api/v1/admin/status
 - Basic、MySQL 和 Model Settings 使用同一页面头、Section、字段行和 sticky 保存栏。桌面 Section
   标题/字段标签共享左列，控件/验证动作共享右列；小屏只能按同一信息顺序堆叠，不能
   改变草稿或保存范围。`live_model_execution` 必须显示为真实模型调用安全闸门：关闭后拒绝模型
-  任务，不得描述为或静默切换 fake Agent。MySQL 验证结果与动作属于独立对齐 Section。
+  任务，不得描述为或静默切换 fake Agent。MySQL 验证作为连接配置的第三个字段行，动作与结果
+  对齐控件列，不另起稀疏 Section。
 - 三个 Settings 页的页面、Section 和字段解释使用统一的标签行信息按钮按需展示，不占据字段控件行高度；
   模型路由的两列字段必须共用标签与控件基线。按钮有可访问名称、键盘激活、展开状态和关闭路径，
   弹出的纯文本说明不得被卡片裁切或在窄屏溢出。连接测试结果、输入校验错误、保存/重启状态及
@@ -704,7 +705,8 @@ GET  /api/v1/admin/status
   不得因视觉缩写改变精确路由身份或 fallback 顺序。窄屏仍需保持内容与操作可见、无横向溢出。
 - Agent 职责说明只通过摘要行右侧、带可访问名称的 `settingsHelp` 按钮打开；点击按钮及其关闭动作
   不得切换外层 `<details>`。主模型恢复标签与选择器同一横向字段行，控件须消除全局 `details`
-  默认外边距，使 48px 标签与选择框真正共用垂直中心；窄屏再按字段行顺序堆叠。
+  默认外边距，使 48px 标签与选择框真正共用垂直中心；窄屏再按字段行顺序堆叠。各 Agent 卡片
+  独立记录展开状态，修改一张卡片并重绘时不得自动收起其他已展开的卡片。
 - `expandedModelRouteIndex` 初始为 `null`；已有路由默认全部折叠。添加路由仅展开新索引，移除后
   不自动展开相邻项。全局 `render()` 的 disclosure 恢复只记录有 `data-key` 的控件；无 key 的
   模型目录和 Agent 卡片分别由自身状态恢复，不能把所有无 key 的 `<details>` 当作同一项。
@@ -723,6 +725,7 @@ GET  /api/v1/admin/status
 | Add route from catalog or exhausted fallback selector | Only new disabled route opens; user must configure and enable | browser add/fallback case |
 | Seven Agent summaries with different explanation lengths | Equal-height compact rows, each help opens without expanding card | browser help case |
 | Expanded Agent primary/fallback | One horizontal primary row, aligned label/control; compact ordered fallback actions | browser geometry case at desktop and narrow widths |
+| Multiple Agent cards open, then one policy edited | All previously open cards remain open after rerender | browser model-routing case |
 | Status route with `kind=responses` | `Responses API`, not unknown connection mode | `tests/team_view/ui.test.cjs` Status assertion |
 | Historical Codex run without transport | “连接方式未记录” | DOM helper assertion |
 
