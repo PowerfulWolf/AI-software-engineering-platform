@@ -290,7 +290,8 @@ def _enforce_minimum_brain_tier(
             ),
             required_tier=phase.minimum_brain_tier,
             considered_routes=(
-                f"{selection.provider}/{selection.model}@{selection.reasoning_effort}",
+                f"{selection.provider}/{selection.model}@{selection.reasoning_effort}"
+                + (f"#{selection.route_kind}" if selection.route_kind is not None else ""),
             ),
         ),
         decided_at=previewed_at,

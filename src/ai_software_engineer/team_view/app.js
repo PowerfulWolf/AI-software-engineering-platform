@@ -4254,7 +4254,12 @@ function selectInput(values, current, update, key, disabled = false) {
   return control;
 }
 function modelRouteKey(route) {
-  return `${route.provider}\u0000${route.model}\u0000${route.reasoning_effort || "medium"}`;
+  return JSON.stringify([
+    route.provider,
+    route.model,
+    route.reasoning_effort || "medium",
+    route.route_kind || route.kind || "",
+  ]);
 }
 function modelRouteValidationMessage(config) {
   if (config.codex_cli_proxy_api_key_env && !config.codex_cli_proxy_base_url)
@@ -4266,10 +4271,10 @@ function modelRouteValidationMessage(config) {
     if (!provider || !model)
       return `第 ${index + 1} 条模型路由必须填写 Provider 和 Model。`;
     const reasoning = route.reasoning_effort || "medium";
-    const key = modelRouteKey({ provider, model, reasoning_effort: reasoning });
+    const key = modelRouteKey({ provider, model, reasoning_effort: reasoning, kind: route.kind });
     const firstIndex = firstRouteByKey.get(key);
     if (firstIndex !== undefined)
-      return `第 ${index + 1} 条模型路由（${provider} / ${model} · ${reasoning}）与第 ${firstIndex + 1} 条重复。每个 Provider + Model + Reasoning 组合只能配置一次；请修改已有路由或删除重复项。`;
+      return `第 ${index + 1} 条模型路由（${provider} / ${model} · ${reasoning} · ${route.kind}）与第 ${firstIndex + 1} 条重复。每个 Provider + Model + Reasoning + 类型组合只能配置一次；请修改已有路由或删除重复项。`;
     firstRouteByKey.set(key, index);
   }
   return null;
@@ -4279,18 +4284,18 @@ function modelRouteReference(route) {
     provider: route.provider,
     model: route.model,
     reasoning_effort: route.reasoning_effort || "medium",
+    route_kind: route.kind,
   };
 }
 function resolveModelRouteReference(reference, enabled) {
-  const exact = enabled.find(
-    (route) => modelRouteKey(route) === modelRouteKey(reference),
-  );
-  if (reference.reasoning_effort) return exact;
-  const legacy = enabled.filter(
+  const matches = enabled.filter(
     (route) =>
-      route.provider === reference.provider && route.model === reference.model,
+      route.provider === reference.provider &&
+      route.model === reference.model &&
+      (!reference.reasoning_effort || route.reasoning_effort === reference.reasoning_effort) &&
+      (!reference.route_kind || route.kind === reference.route_kind),
   );
-  return legacy.length === 1 ? legacy[0] : undefined;
+  return matches.length === 1 ? matches[0] : undefined;
 }
 function normalizeAgentModelRoutes(config) {
   if (!config) return;
@@ -4372,6 +4377,7 @@ function updateModelRouteIdentity(route, property, value) {
       reference.provider = route.provider;
       reference.model = route.model;
       reference.reasoning_effort = route.reasoning_effort || "medium";
+      reference.route_kind = route.kind;
     }
   }
 }
@@ -4972,9 +4978,13 @@ function renderModelSettings(form) {
       el("span", route.reasoning_effort || "medium", "model-route-pill"),
       el(
         "span",
-        route.image_input === true || route.kind === "codex_cli"
+        route.image_input === true
           ? "图像输入"
-          : "仅文本",
+          : route.image_input === false
+            ? "仅文本"
+            : route.kind === "codex_cli"
+              ? "默认可传图"
+              : "仅文本",
         "model-route-capability",
       ),
       el(
@@ -5008,7 +5018,8 @@ function renderModelSettings(form) {
           ],
           route.kind,
           (value) => {
-            route.kind = value;
+            updateModelRouteIdentity(route, "kind", value);
+            route.image_input = null;
             if (value === "codex_cli") {
               route.endpoint = null;
               route.api_key_env = null;
@@ -5073,22 +5084,21 @@ function renderModelSettings(form) {
           "留空保留已保存值，页面不会回显。",
         ),
       );
-    if (route.kind === "responses") {
-      const imageInput = el("input");
-      imageInput.type = "checkbox";
-      imageInput.checked = route.image_input === true;
-      imageInput.addEventListener(
-        "change",
-        () => (route.image_input = imageInput.checked),
-      );
-      fields.append(
-        field(
-          "支持图片输入",
-          imageInput,
-          "只有兼容 Responses 图片输入格式的服务才应开启。Codex CLI 默认支持。",
-        ),
-      );
-    }
+    const imageInput = el("input");
+    imageInput.type = "checkbox";
+    imageInput.checked = route.image_input === true ||
+      (route.image_input == null && route.kind === "codex_cli");
+    imageInput.addEventListener(
+      "change",
+      () => (route.image_input = imageInput.checked),
+    );
+    fields.append(
+      field(
+        "支持图片输入",
+        imageInput,
+        "Codex CLI 默认支持；Responses 服务需确认兼容图片输入格式后开启。",
+      ),
+    );
     const enabled = el("input");
     enabled.type = "checkbox";
     enabled.checked = route.enabled;
@@ -5137,7 +5147,7 @@ function renderModelSettings(form) {
     const primaryKey = primary ? modelRouteKey(primary) : "";
     const choices = enabledRoutes.map((route) => [
       modelRouteKey(route),
-      `${route.provider} / ${route.model} · ${route.reasoning_effort}`,
+      `${route.provider} / ${route.model} · ${route.reasoning_effort} · ${route.kind === "codex_cli" ? "Codex CLI" : "Responses API"}`,
     ]);
     const selector = selectInput(
       choices,
@@ -5158,7 +5168,7 @@ function renderModelSettings(form) {
       el(
         "span",
         primary
-          ? `${primary.provider} / ${primary.model} · ${primary.reasoning_effort || "medium"}`
+          ? `${primary.provider} / ${primary.model} · ${primary.reasoning_effort || "medium"} · ${primary.route_kind === "codex_cli" ? "Codex CLI" : "Responses API"}`
           : "当前未配置主模型",
         "agent-model-primary",
       ),
@@ -5194,7 +5204,7 @@ function renderModelSettings(form) {
       const position = el("span", `备用 ${index}`, "route-position");
       const identity = el(
         "span",
-        `${route.provider} / ${route.model} · ${route.reasoning_effort || "medium"}`,
+        `${route.provider} / ${route.model} · ${route.reasoning_effort || "medium"} · ${route.route_kind === "codex_cli" ? "Codex CLI" : "Responses API"}`,
         "agent-fallback-identity",
       );
       const actions = el("div", undefined, "agent-fallback-actions");
@@ -5226,7 +5236,7 @@ function renderModelSettings(form) {
       .filter((route) => !selectedKeys.has(modelRouteKey(route)))
       .map((route) => [
         modelRouteKey(route),
-        `${route.provider} / ${route.model} · ${route.reasoning_effort}`,
+        `${route.provider} / ${route.model} · ${route.reasoning_effort} · ${route.kind === "codex_cli" ? "Codex CLI" : "Responses API"}`,
       ]);
     if (fallbackChoices.length)
       fallbacks.append(

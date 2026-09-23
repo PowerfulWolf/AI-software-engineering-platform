@@ -233,8 +233,68 @@ def test_duplicate_provider_model_reasoning_route_is_rejected(tmp_path: Path) ->
     assert isinstance(routes, list)
     routes.append(dict(routes[0]))
 
-    with pytest.raises(ValidationError, match="provider/model/reasoning routes"):
+    with pytest.raises(ValidationError, match="provider/model/reasoning/type routes"):
         ProductionConfig.model_validate(payload)
+
+
+def test_same_model_reasoning_can_use_distinct_route_types(tmp_path: Path) -> None:
+    payload = _payload(tmp_path)
+    routes = payload["model_routes"]
+    assert isinstance(routes, list)
+    routes.append(
+        {
+            "provider": "codex",
+            "model": "gpt-5.5",
+            "kind": "responses",
+            "reasoning_effort": "medium",
+            "endpoint": "https://example.invalid/responses",
+            "api_key_env": "CODEX_RESPONSES_API_KEY",
+        }
+    )
+
+    config = ProductionConfig.model_validate(payload)
+
+    assert [route.kind.value for route in config.enabled_routes()] == ["codex_cli", "responses"]
+    assert config.model_routes[0].accepts_image_input()
+    assert not config.model_routes[-1].accepts_image_input()
+    assert (
+        not config.model_routes[0].model_copy(update={"image_input": False}).accepts_image_input()
+    )
+
+
+def test_agent_reference_requires_type_when_same_model_has_two_types(tmp_path: Path) -> None:
+    payload = _payload(tmp_path)
+    routes = payload["model_routes"]
+    assert isinstance(routes, list)
+    routes.append(
+        {
+            "provider": "codex",
+            "model": "gpt-5.5",
+            "kind": "responses",
+            "reasoning_effort": "medium",
+            "endpoint": "https://example.invalid/responses",
+            "api_key_env": "CODEX_RESPONSES_API_KEY",
+        }
+    )
+    roles = ("manager", "product", "designer", "planner", "coder", "qa", "reviewer")
+    payload["agent_model_routes"] = [
+        {
+            "role": role,
+            "routes": [{"provider": "codex", "model": "gpt-5.5", "reasoning_effort": "medium"}],
+        }
+        for role in roles
+    ]
+    with pytest.raises(ValidationError, match="ambiguous"):
+        ProductionConfig.model_validate(payload)
+
+    for policy in payload["agent_model_routes"]:
+        policy["routes"][0]["route_kind"] = "responses"
+    config = ProductionConfig.model_validate(payload)
+    assert all(config.routes_for(role)[0].kind.value == "responses" for role in TeamRole)
+    schema = json.loads(
+        (Path(__file__).parents[2] / "schemas/production-config.schema.json").read_text()
+    )
+    assert list(Draft202012Validator(schema).iter_errors(config.to_wire())) == []
 
 
 def test_each_agent_can_have_an_independent_primary_and_fallback_order(

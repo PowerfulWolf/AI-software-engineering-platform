@@ -38,6 +38,7 @@ from ai_software_engineer.config.codex_proxy import (
 from ai_software_engineer.domain.enums import TeamRole
 from ai_software_engineer.domain.model import (
     JsonValue,
+    ProviderRouteKind,
     ReasoningEffort,
     WirePayload,
     ensure_unique,
@@ -116,6 +117,7 @@ class StructuredModelRoute:
     client: StructuredModelClient
     reasoning_effort: ReasoningEffort = "medium"
     supports_images: bool = True
+    route_kind: ProviderRouteKind | None = None
 
     def __post_init__(self) -> None:
         if not self.provider.strip() or not self.model.strip():
@@ -133,8 +135,11 @@ class FallbackStructuredModelClient:
         if not routes:
             raise ValueError("structured fallback requires at least one route")
         ensure_unique(
-            ((route.provider, route.model, route.reasoning_effort) for route in routes),
-            "structured provider/model/reasoning routes",
+            (
+                (route.provider, route.model, route.reasoning_effort, route.route_kind)
+                for route in routes
+            ),
+            "structured provider/model/reasoning/type routes",
         )
         self._routes = routes
         self._role = role

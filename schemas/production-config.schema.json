@@ -116,6 +116,7 @@
       "properties": {
         "provider": {"type": "string", "minLength": 1},
         "model": {"type": "string", "minLength": 1},
+        "route_kind": {"anyOf": [{"enum": ["codex_cli", "responses"]}, {"type": "null"}], "default": null},
         "reasoning_effort": {
           "anyOf": [
             {"enum": ["low", "medium", "high", "xhigh"]},

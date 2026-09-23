@@ -97,7 +97,7 @@ Environment contract:
 - `ProductionConfig` 必须符合 `schemas/production-config.schema.json`。macOS/Linux 省略
   `platform_root` 时纯解析为当前用户的 `~/.ase`；显式绝对路径或安全的 `~/...` 优先，后者先展开
   再进入同一校验。任何显式路径中的 `..`、控制字符或非绝对结果都失败关闭，不得回退默认值；
-  解析本身不得创建目录。至少一条 enabled route，`(provider, model, reasoning_effort)` 唯一；`console_port` 必须为
+  解析本身不得创建目录。至少一条 enabled route，`(provider, model, reasoning_effort, kind)` 唯一；`console_port` 必须为
   `1..65535`；JSON 中 secret 只能由环境变量间接引用。`ProductionConfig.default()` 是 Web
   Console 首次运行的内置可见配置；仅当配置文件不存在时使用，不写文件。已有但无效的配置不得
   回退默认值。CLI 生产命令仍要求有效的显式/默认路径配置文件。
@@ -105,14 +105,15 @@ Environment contract:
   `api_key_env`。示例默认 `live_model_execution=false`，生产执行必须显式改为 `true`。
 - `agent_model_routes` 为空时兼容旧配置并对所有角色使用 enabled `model_routes` 顺序；非空时必须
   精确覆盖 Manager/Product/Designer/Planner/Coder/QA/Reviewer 七个角色，每个引用只可指向启用且
-  唯一的 provider/model/reasoning effort。首项是该 Agent 主模型，后续项是冻结后的降级顺序；
+  唯一的 provider/model/reasoning effort/kind。首项是该 Agent 主模型，后续项是冻结后的降级顺序；
   显式策略是可用模型目录的有序子集，未被该 Agent 选中的启用模型不得自动成为备用路由。
-  同一模型的不同推理程度是可独立选择的路由。旧引用缺少 `reasoning_effort` 时，仅允许其
-  provider/model 在启用目录中唯一，否则按歧义配置失败关闭。
+  同一模型的不同推理程度或执行类型是可独立选择的路由。旧引用缺少 `reasoning_effort` 或
+  `route_kind` 时，只在全部已声明字段过滤后恰好剩一条 enabled route 才可解析；否则失败关闭。
 - 新生成的 `ModelSelection`、`AgentDefinition` 和 `ModelRouteAttempt` 必须固化精确的
-  `reasoning_effort`。升级前已持久化且缺少该字段的 Artifact 保留为“未指定”，仅当同一
-  provider/model 在当前冻结路由中唯一时才可恢复；不得静默把旧记录解释为 `medium`。
-- `image_input` 可显式声明 Responses route 的图片能力；省略时 Codex CLI 为 true、Responses 为
+  `reasoning_effort` 与 `route_kind`。升级前已持久化且缺少字段的事实保留为“未指定”；
+  frozen policy、claim、实际执行和 route-attempt replay 不得在同 provider/model/effort 的
+  Codex CLI 与 Responses 间猜测。旧 SHA-256 payload 不因新增可选字段重算或改写。
+- `image_input` 可显式声明两类 route 的图片能力；省略时 Codex CLI 为 true、Responses 为
   false。带截图的 Product 调用跳过不支持图片的 route；没有可用图片 route 时返回非瞬态 typed
   provider error，不得丢图退化成纯文字。
 - 未注入测试 provider 时，`project_entry()` 惰性缓存
@@ -230,6 +231,30 @@ fresh-organization tests hid the conflict. This does not authorize replaying ter
 - Product/Designer/Planner 的 accepted stage artifact 可在 resume 时复用；上游 structured fallback
   目前没有独立 durable attempt ledger，因此 provider 返回到 stage artifact 落盘之间仍有可能重复计费的
   crash window。修改这条边界前应另立任务，不能在文档中声称 exactly-once billing。
+
+#### Route kind identity: validation and replay matrix
+
+Scope / trigger: adding or editing a Model Routing catalog entry, dispatching a delivery Run, or
+replaying a retained Run. `route_kind` is the optional historical wire field on
+`ProviderRouteReference`, `ModelRouteReference`, `ModelRoute`, `ModelSelection`,
+`AgentDefinition` and `ModelRouteAttempt`; it uses `codex_cli | responses`. New production
+facts must populate it from `ProviderRouteConfig.kind`. CLIProxyAPI changes only the Codex CLI
+connection and never creates a third kind.
+
+| Case | Input | Required result |
+|---|---|---|
+| Good | Same provider/model/effort, distinct `kind`, explicit typed Agent references | Save, select and execute the exact kind; fallback ledger records it |
+| Base | Legacy reference/selection without `route_kind`, exactly one matching frozen route | Resolve without rewriting the old fact or its digest |
+| Bad | Legacy reference/selection without type, two matching frozen routes | Reject as ambiguous before execution/replay |
+| Bad | Existing claim/definition says `codex_cli`, configured route now says `responses` | Reject claim/worker binding; do not silently switch transport |
+
+Tests: `tests/config/test_production.py` asserts typed catalog/reference validation;
+`tests/manager/test_team_roster.py` asserts ModelPolicy retains type;
+`tests/work_queue/test_route_binding.py` asserts frozen selection and legacy ambiguity;
+`tests/agents/test_fallback.py` asserts route-attempt type and replay identity;
+`tests/team_view/ui.test.cjs` asserts visible capability and duplicate detection. Wrong: keying
+readiness or policy only by `(provider, model, reasoning_effort)`; correct: include `kind` and
+require a unique match for every older untyped reference.
 
 #### T043: Safe CLI failure diagnostics
 
@@ -365,8 +390,9 @@ StructuredModelClient.complete(..., input_images: tuple[Path, ...] = ())
 - `model_routes` is the enabled route catalog. `agent_model_routes` is the seven-role ordered policy;
   the first route is primary and every following route is an explicitly selected fallback. The
   catalog does not implicitly expand a role policy. Route identity is
-  `(provider, model, reasoning_effort)`, so one model may expose multiple independently selectable
-  reasoning levels.
+  `(provider, model, reasoning_effort, kind)`, so one model may expose multiple independently selectable
+  reasoning levels and execution types. CLIProxyAPI only supplies the Codex CLI connection; it is
+  not a route kind.
 - Product, Designer and Planner resolve their own TeamRole at the structured-client seam. Coder, QA
   and Reviewer preserve the same order in the content-versioned ModelPolicy used by dispatch.
 - Settings may materialize an explicit seven-role policy from a legacy empty policy by selecting only
@@ -375,7 +401,7 @@ StructuredModelClient.complete(..., input_images: tuple[Path, ...] = ())
   fallbacks per Agent. Manager's route is persisted/displayed even though current Manager decisions
   use deterministic Skills and do not invoke a model.
 - The read-only runtime Status projection resolves the same seven role policies through
-  `ProductionConfig.routes_for(role)` and joins each exact route triple with catalog readiness. It
+  `ProductionConfig.routes_for(role)` and joins each exact route four-tuple with catalog readiness. It
   preserves primary/fallback order and labels whether the policy is explicit or inherited; it does
   not claim that any route is currently executing.
 - Codex CLI receives one `--image <verified-path>` pair per Product screenshot. Responses receives

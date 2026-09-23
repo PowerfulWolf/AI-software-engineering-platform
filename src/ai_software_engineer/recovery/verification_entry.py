@@ -232,6 +232,7 @@ def _definitions(
                 "provider": phase.model_selection.provider,
                 "model": phase.model_selection.model,
                 "reasoning_effort": phase.model_selection.reasoning_effort,
+                "route_kind": phase.model_selection.route_kind,
                 "permissions": _delivery_role_permissions(phase.role, allowed, commands),
             }
         )

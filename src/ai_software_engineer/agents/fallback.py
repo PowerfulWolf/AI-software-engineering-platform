@@ -27,6 +27,7 @@ from ai_software_engineer.domain.identity import RunId
 from ai_software_engineer.domain.model import (
     DomainModel,
     NonEmptyStr,
+    ProviderRouteKind,
     ReasoningEffort,
     WirePayload,
     ensure_unique,
@@ -63,6 +64,7 @@ class ModelRouteAttempt(DomainModel):
     provider: NonEmptyStr
     model: NonEmptyStr
     reasoning_effort: ReasoningEffort | None = None
+    route_kind: ProviderRouteKind | None = None
     request_sha256: Sha256
     started_at: AwareDatetime
     completed_at: AwareDatetime
@@ -109,6 +111,7 @@ class ModelRouteAttempt(DomainModel):
         provider: str,
         model: str,
         reasoning_effort: ReasoningEffort = "medium",
+        route_kind: ProviderRouteKind | None = None,
         started_at: datetime,
         completed_at: datetime,
         result: AgentResult,
@@ -130,6 +133,7 @@ class ModelRouteAttempt(DomainModel):
             provider=provider,
             model=model,
             reasoning_effort=reasoning_effort,
+            route_kind=route_kind,
             request_sha256=_digest_request(request),
             started_at=started_at,
             completed_at=completed_at,
@@ -241,6 +245,7 @@ class ProviderAgentRoute:
     model: str
     adapter: AgentAdapter
     reasoning_effort: ReasoningEffort = "medium"
+    route_kind: ProviderRouteKind | None = None
 
     def __post_init__(self) -> None:
         if not self.provider.strip() or not self.model.strip():
@@ -260,8 +265,11 @@ class FallbackAgentAdapter:
         if not routes:
             raise ValueError("fallback adapter requires at least one route")
         ensure_unique(
-            ((route.provider, route.model, route.reasoning_effort) for route in routes),
-            "fallback provider/model/reasoning routes",
+            (
+                (route.provider, route.model, route.reasoning_effort, route.route_kind)
+                for route in routes
+            ),
+            "fallback provider/model/reasoning/type routes",
         )
         self._routes = routes
         self._attempt_store = attempt_store
@@ -297,6 +305,7 @@ class FallbackAgentAdapter:
                     provider=route.provider,
                     model=route.model,
                     reasoning_effort=route.reasoning_effort,
+                    route_kind=route.route_kind,
                     started_at=started_at,
                     completed_at=completed_at,
                     result=result,
@@ -325,6 +334,7 @@ class FallbackAgentAdapter:
                     attempt.reasoning_effort is not None
                     and attempt.reasoning_effort != route.reasoning_effort
                 )
+                or (attempt.route_kind is not None and attempt.route_kind != route.route_kind)
                 or attempt.request_sha256 != _digest_request(request)
                 or result.run_id != request.run_id
                 or result.task_id != request.task_id

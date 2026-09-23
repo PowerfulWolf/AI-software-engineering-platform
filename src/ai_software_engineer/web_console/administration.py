@@ -948,7 +948,7 @@ class LocalConsoleAdministration:
             for route in self._saved_config.model_routes
         )
         route_statuses = {
-            (route.provider, route.model, route.reasoning_effort): status
+            (route.provider, route.model, route.reasoning_effort, route.kind): status
             for route, status in zip(self._saved_config.model_routes, routes, strict=True)
         }
         policy_source: Literal["agent_policy", "global_default"] = (
@@ -959,7 +959,9 @@ class LocalConsoleAdministration:
                 role=role,
                 policy_source=policy_source,
                 routes=tuple(
-                    route_statuses[(route.provider, route.model, route.reasoning_effort)]
+                    route_statuses[
+                        (route.provider, route.model, route.reasoning_effort, route.kind)
+                    ]
                     for route in self._saved_config.routes_for(role)
                 ),
             )

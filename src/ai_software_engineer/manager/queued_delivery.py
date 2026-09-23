@@ -90,10 +90,16 @@ class ApprovedRoleDispatch:
         routing = router.route(demand, profile, policy, now=step.work_item.created_at)
         selected = routing.selection
         expected = phase.model_selection
-        if selected is None or (selected.provider, selected.model, selected.reasoning_effort) != (
+        if selected is None or (
+            selected.provider,
+            selected.model,
+            selected.reasoning_effort,
+            selected.route_kind,
+        ) != (
             expected.provider,
             expected.model,
             expected.reasoning_effort,
+            expected.route_kind,
         ):
             raise QueueConflict("Worker routing no longer matches approved dispatch")
         return DispatcherLoop(
@@ -133,24 +139,28 @@ def validate_frozen_routes(
         if role_policy is not None
         else policy.routes
     )
-    actual = tuple((item.provider, item.model, item.reasoning_effort) for item in routes)
+    actual = tuple(
+        (item.provider, item.model, item.reasoning_effort, item.kind.value) for item in routes
+    )
     keys = []
     for item in allowed:
-        key = (item.provider, item.model, item.reasoning_effort)
-        if item.reasoning_effort is None:
-            # Legacy policy did not bind reasoning: accept only one unambiguous
-            # configured route, never guess between two efforts for the same model.
-            matches = tuple(candidate for candidate in actual if candidate[:2] == key[:2])
-            if len(matches) > 1:
-                raise QueueConflict("Worker legacy route is ambiguous")
-            if matches:
-                key = matches[0]
-        keys.append(key)
+        matches = tuple(
+            candidate
+            for candidate in actual
+            if candidate[:2] == (item.provider, item.model)
+            and (item.reasoning_effort is None or candidate[2] == item.reasoning_effort)
+            and (item.route_kind is None or candidate[3] == item.route_kind)
+        )
+        if len(matches) > 1:
+            raise QueueConflict("Worker legacy route is ambiguous")
+        if matches:
+            keys.append(matches[0])
     primary = tuple(
         key
         for key in keys
         if key[:2] == (selection.provider, selection.model)
         and (selection.reasoning_effort is None or key[2] == selection.reasoning_effort)
+        and (selection.route_kind is None or key[3] == selection.route_kind)
     )
     if len(primary) != 1 or not actual or actual[0] != primary[0]:
         raise QueueConflict("Worker primary route does not match its claim")

@@ -120,6 +120,36 @@ def test_same_model_with_distinct_reasoning_efforts_are_distinct_routes(
     )
 
 
+def test_same_model_with_distinct_types_has_separate_replay_identity(tmp_path: Path) -> None:
+    request = _coder_request()
+    store = FileModelRouteAttemptStore(tmp_path / "routes")
+    routes = (
+        ProviderAgentRoute(
+            "codex",
+            "gpt-5.5",
+            _ResultAdapter(_failed(request, AgentErrorCode.RATE_LIMITED, transient=True)),
+            route_kind="codex_cli",
+        ),
+        ProviderAgentRoute(
+            "codex",
+            "gpt-5.5",
+            _ResultAdapter(_success(request)),
+            route_kind="responses",
+        ),
+    )
+
+    assert (
+        FallbackAgentAdapter(routes, attempt_store=store, clock=_Clock()).run(request).status
+        is AgentRunStatus.SUCCEEDED
+    )
+    assert tuple(item.route_kind for item in store.list_for_run(request.run_id)) == (
+        "codex_cli",
+        "responses",
+    )
+    with pytest.raises(AgentRequestConflict):
+        FallbackAgentAdapter(routes[::-1], attempt_store=store, clock=_Clock()).run(request)
+
+
 @pytest.mark.parametrize(
     "code",
     (AgentErrorCode.RATE_LIMITED, AgentErrorCode.PROVIDER_UNAVAILABLE, AgentErrorCode.TIMEOUT),

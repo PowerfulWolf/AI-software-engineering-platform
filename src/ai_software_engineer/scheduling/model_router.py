@@ -32,9 +32,12 @@ def _next_tier(tier: BrainTier) -> BrainTier:
     return _TIER_ORDER[min(_TIER_RANK[tier] + 1, len(_TIER_ORDER) - 1)]
 
 
-def _route_name(provider: str, model: str, reasoning_effort: str | None) -> str:
+def _route_name(
+    provider: str, model: str, reasoning_effort: str | None, route_kind: str | None
+) -> str:
     suffix = f"@{reasoning_effort}" if reasoning_effort is not None else ""
-    return f"{provider}/{model}{suffix}"
+    kind = f"#{route_kind}" if route_kind is not None else ""
+    return f"{provider}/{model}{suffix}{kind}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +148,7 @@ class ModelRouter:
                         route.provider,
                         route.model,
                         route.reasoning_effort or "",
+                        route.route_kind or "",
                     ),
                 )
             )
@@ -171,6 +175,7 @@ class ModelRouter:
                             route.provider,
                             route.model,
                             route.reasoning_effort,
+                            route.route_kind,
                         )
                         for route in routes
                     ),
@@ -193,6 +198,7 @@ class ModelRouter:
                             route.provider,
                             route.model,
                             route.reasoning_effort,
+                            route.route_kind,
                         )
                         for route in capacity_routes
                     ),
@@ -219,6 +225,7 @@ class ModelRouter:
             provider=selected.provider,
             model=selected.model,
             reasoning_effort=selected.reasoning_effort,
+            route_kind=selected.route_kind,
             tier=selected.tier,
             reasons=tuple(reasons),
             selected_at=now,

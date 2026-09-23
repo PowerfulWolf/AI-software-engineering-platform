@@ -63,3 +63,44 @@ def test_frozen_routes_preserve_explicit_fallback_and_recovery_narrowing() -> No
             policy.model_copy(update={"version": "v2"}),
             routes,
         )
+
+
+def test_frozen_routes_bind_type_and_reject_legacy_ambiguity() -> None:
+    routes = (
+        ProviderRouteConfig(provider="codex", model="gpt-5.5", kind=ModelProviderKind.CODEX_CLI),
+        ProviderRouteConfig(
+            provider="codex",
+            model="gpt-5.5",
+            kind=ModelProviderKind.RESPONSES,
+            endpoint="https://example.invalid/responses",
+            api_key_env="CODEX_RESPONSES_API_KEY",
+        ),
+    )
+    _, policy = production_team_roster(ProductionConfig(model_routes=routes))
+    selection = ModelSelection(
+        policy_id=policy.id,
+        policy_version=policy.version,
+        provider="codex",
+        model="gpt-5.5",
+        reasoning_effort="medium",
+        route_kind="codex_cli",
+        tier=BrainTier.CRITICAL,
+        reasons=(ModelRouteReason.DEFAULT,),
+        selected_at=datetime.now(UTC),
+    )
+    validate_frozen_routes(AgentRole.CODER, selection, policy, routes)
+    with pytest.raises(QueueConflict):
+        validate_frozen_routes(AgentRole.CODER, selection, policy, routes[::-1])
+    legacy_policy = policy.model_copy(
+        update={
+            "role_routes": (),
+            "routes": (policy.routes[0].model_copy(update={"route_kind": None}),),
+        }
+    )
+    with pytest.raises(QueueConflict, match="ambiguous"):
+        validate_frozen_routes(
+            AgentRole.CODER,
+            selection.model_copy(update={"route_kind": None}),
+            legacy_policy,
+            routes,
+        )

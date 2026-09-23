@@ -9,6 +9,7 @@ from ai_software_engineer.domain.model import (
     DomainModel,
     JsonValue,
     NonEmptyStr,
+    ProviderRouteKind,
     ReasoningEffort,
     ensure_unique,
 )
@@ -69,6 +70,7 @@ class AgentDefinition(DomainModel):
     model: NonEmptyStr
     provider: NonEmptyStr | None = None
     reasoning_effort: ReasoningEffort | None = None
+    route_kind: ProviderRouteKind | None = None
     system_prompt_ref: NonEmptyStr | None = None
     permissions: AgentPermissions
     input_artifacts: tuple[ArtifactKind, ...]

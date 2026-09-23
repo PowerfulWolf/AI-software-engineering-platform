@@ -292,6 +292,7 @@ class ConfiguredStructuredClientFactory:
                     client=client,
                     reasoning_effort=route.reasoning_effort,
                     supports_images=route.accepts_image_input(),
+                    route_kind=route.kind.value,
                 )
             )
         return FallbackStructuredModelClient(tuple(routes), role=role)
@@ -1562,6 +1563,7 @@ def _agent_definitions(
             model=phase.model_selection.model,
             provider=phase.model_selection.provider,
             reasoning_effort=phase.model_selection.reasoning_effort,
+            route_kind=phase.model_selection.route_kind,
             permissions=_delivery_role_permissions(phase.role, allowed_paths, commands),
             input_artifacts=_ROLE_INPUTS[phase.role],
             output_artifacts=_ROLE_OUTPUTS[phase.role],

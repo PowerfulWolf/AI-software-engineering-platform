@@ -62,8 +62,8 @@ T018 的 [`schemas/workforce.schema.json`](../schemas/workforce.schema.json) 定
 - `WorkItem`：Task 的优先级、风险、能力需求和 `WAITING_*` 调度状态；
 - `RoleAssignment`：Agent 在一个 Task attempt 中临时担任的 Role；
 - `TaskLease`：有明确获得/过期时间的 Agent 容量占用；
-- `ModelPolicy`：eligible provider/model/reasoning routes、默认 BrainTier 和完整 risk floors；
-- `ModelSelection`：一次 Run 的 provider/model/reasoning effort/tier/policy version 与选择理由；
+- `ModelPolicy`：eligible provider/model/reasoning/route kind routes、默认 BrainTier 和完整 risk floors；
+- `ModelSelection`：一次 Run 的 provider/model/reasoning effort/route kind/tier/policy version 与选择理由；
 - `RunDemand`：一次 Run 的风险、上下文规模、变更规模、受影响层数和历史失败等客观路由信号；
 - `AgentRunAllocation`：把 Agent、Assignment、Model、Context、Prompt、Spec 和 tool policy 绑定到
   唯一 `run_id`。
@@ -586,7 +586,7 @@ Task + ExecutionPlan 机械派生，不接受调用方注入。
 
 验证通过后，服务对 Coder、QA、Reviewer 按顺序重新调用同一 Scheduler/ModelRouter；前一 phase 的
 新 Assignment/Lease 只在本次内存候选中占用 capacity。commit-time Agent 必须与 preview 相同，
-model 的 policy/version/provider/model/reasoning-effort/tier 语义也必须相同，且不能低于 ExecutionPlan 的 minimum
+model 的 policy/version/provider/model/reasoning-effort/route-kind/tier 语义也必须相同，且不能低于 ExecutionPlan 的 minimum
 BrainTier。任何 phase 拒绝、决策漂移、自我评审、容量不足或 model refusal 都发生在 store 调用前，
 因此不能产生部分持久化。
 

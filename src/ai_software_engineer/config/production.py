@@ -107,6 +107,7 @@ class ProviderRouteReference(DomainModel):
     provider: NonEmptyStr
     model: NonEmptyStr
     reasoning_effort: ReasoningEffort | None = None
+    route_kind: ModelProviderKind | None = None
 
 
 class AgentModelRoutePolicy(DomainModel):
@@ -116,7 +117,10 @@ class AgentModelRoutePolicy(DomainModel):
     @model_validator(mode="after")
     def validate_routes(self) -> Self:
         ensure_unique(
-            ((route.provider, route.model, route.reasoning_effort) for route in self.routes),
+            (
+                (route.provider, route.model, route.reasoning_effort, route.route_kind)
+                for route in self.routes
+            ),
             f"{self.role.value} Agent model routes",
         )
         return self
@@ -235,8 +239,11 @@ class ProductionConfig(DomainModel):
             }:
                 raise ValueError("Codex CLI proxy API key must have a dedicated environment name")
         ensure_unique(
-            ((route.provider, route.model, route.reasoning_effort) for route in self.model_routes),
-            "production provider/model/reasoning routes",
+            (
+                (route.provider, route.model, route.reasoning_effort, route.kind)
+                for route in self.model_routes
+            ),
+            "production provider/model/reasoning/type routes",
         )
         if not any(route.enabled for route in self.model_routes):
             raise ValueError("at least one production model route must be enabled")
@@ -253,7 +260,10 @@ class ProductionConfig(DomainModel):
                 self._resolve_route_reference(reference) for reference in policy.routes
             )
             ensure_unique(
-                ((route.provider, route.model, route.reasoning_effort) for route in resolved),
+                (
+                    (route.provider, route.model, route.reasoning_effort, route.kind)
+                    for route in resolved
+                ),
                 f"{policy.role.value} resolved Agent model routes",
             )
         ensure_unique(self.team_knowledge_paths, "team knowledge selection")
@@ -335,6 +345,7 @@ class ProductionConfig(DomainModel):
                 reference.reasoning_effort is None
                 or route.reasoning_effort == reference.reasoning_effort
             )
+            and (reference.route_kind is None or route.kind == reference.route_kind)
         )
         if not candidates:
             raise ValueError(
@@ -344,6 +355,6 @@ class ProductionConfig(DomainModel):
         if len(candidates) > 1:
             raise ValueError(
                 f"Agent route {reference.provider}/{reference.model} is ambiguous without "
-                "reasoning_effort"
+                "reasoning_effort and/or route_kind"
             )
         return candidates[0]

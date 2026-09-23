@@ -1,0 +1,9 @@
+{
+  "id": "model-route-kind-identity-20260923",
+  "title": "Bind model route identity and image capability in Settings and execution",
+  "status": "completed",
+  "phase": "verified_incremental",
+  "baseline": "14cd8c0e69879731bd56f71264a6c2383da3300e",
+  "authorization": "User requested route-type uniqueness and image-input correction; Trellis, single Agent, incremental tests, current checkout commit.",
+  "verification": "verification.md"
+}

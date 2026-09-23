@@ -193,6 +193,9 @@ production_console_app(
   `CONTINUE_DELIVERY`。
 - 设置页的模型路由分为可用模型目录和 Agent 策略。启用目录路由只使其可选，不自动成为
   备用模型；每个 Agent 选择一个主模型，并可从目录中显式添加、移除、上移或下移 0–N 个备用模型。
+  目录卡片的图片标记必须按显式 `image_input` 优先、缺省时仅 Codex CLI 为 true 的同一后端规则
+  计算；Codex CLI 缺省值标为“默认可传图”而非确认该模型的原生能力，也允许显式关闭。
+  选择项显示类型以区分相同 Provider/Model/Reasoning 的路由。
 - 模型路由页单独显示可选 Codex CLI 本地代理 base URL 与写入型代理 API Key；留空 URL
   表示旧直连语义。URL 是无密钥运行配置而非任意 CLI 参数；Key 通过现有 `runtime_variables`
   保存，不由 API 回显。保存后沿用“应用配置”重启流程，不能热改正在执行的 Agent，也不能
@@ -622,12 +625,12 @@ GET  /api/v1/admin/status
   Codex executable, live execution and Console port. `runtime_variables` accepts only names referenced
   by that submitted config and is request-only; referenced values never enter a response. A blank UI
   input means preserve the stored value, not erase it.
-- Model routes use `(provider, model, reasoning_effort)` as their stable reference identity. The
-  browser must detect a duplicate normalized triple before calling the Settings API and identify both
+- Model routes use `(provider, model, reasoning_effort, kind)` as their stable reference identity. The
+  browser must detect a duplicate normalized four-tuple before calling the Settings API and identify both
   conflicting route positions; the backend uniqueness validator remains authoritative. The same
-  provider/model may appear more than once when each route has a distinct reasoning effort, and every
-  Agent policy reference must preserve that effort. A legacy reference without effort is accepted only
-  when its provider/model resolves to exactly one enabled route.
+  provider/model may appear more than once when reasoning effort or kind differs, and every new Agent
+  policy reference must preserve both. A legacy reference without effort/type is accepted only when
+  all declared fields resolve to exactly one enabled route; ambiguous saved references fail closed.
 - `runtime.env` is sibling to `ASE_CONFIG`, UTF-8, at most 64 KB and contains only canonical
   `NAME='POSIX-quoted value'` entries. Names follow `EnvVarName`; duplicates, controls, noncanonical
   quoting, symlinks and non-files fail closed. Save uses same-directory temporary file, fsync, atomic
@@ -645,7 +648,7 @@ GET  /api/v1/admin/status
   actual delivery-runtime composition, live-model execution switch, Team preparation/knowledge
   counts and per-route credential readiness. `RuntimeStatusSnapshot.agent_model_routes` contains the
   fixed seven roles in organization order. Every role reports `policy_source` and its exact ordered
-  `(provider, model, reasoning_effort)` routes enriched with the catalog readiness facts. This is
+  `(provider, model, reasoning_effort, kind)` routes enriched with the catalog readiness facts. This is
   configuration readiness, not evidence that the Agent is currently running or calling that model.
   The separate `model_routes` catalog remains visible as “可用模型目录”. Zero knowledge is neutral.
   MySQL connectivity alone must not imply the full delivery runtime is ready.

@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, StringConstraints
 type JsonValue = str | int | float | bool | list[JsonValue] | dict[str, JsonValue] | None
 type WirePayload = dict[str, JsonValue]
 type ReasoningEffort = Literal["low", "medium", "high", "xhigh"]
+type ProviderRouteKind = Literal["codex_cli", "responses"]
 
 NonEmptyStr = Annotated[str, StringConstraints(min_length=1)]
 

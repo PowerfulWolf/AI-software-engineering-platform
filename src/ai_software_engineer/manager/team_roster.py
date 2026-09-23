@@ -66,6 +66,7 @@ def production_team_roster(
                 provider=route.provider,
                 model=route.model,
                 reasoning_effort=route.reasoning_effort,
+                route_kind=route.kind.value,
                 tier=BrainTier.CRITICAL,
                 capabilities=TEAM_CAPABILITIES,
             )
@@ -79,6 +80,7 @@ def production_team_roster(
                         provider=route.provider,
                         model=route.model,
                         reasoning_effort=route.reasoning_effort,
+                        route_kind=route.kind.value,
                     )
                     for route in config.routes_for(role)
                 ),

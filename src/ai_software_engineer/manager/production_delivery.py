@@ -261,6 +261,7 @@ class DispatchDeliveryAgentAdapter:
                     model=route.model,
                     adapter=adapter,
                     reasoning_effort=route.reasoning_effort,
+                    route_kind=route.kind.value,
                 )
             )
         return FallbackAgentAdapter(
@@ -284,6 +285,7 @@ class DispatchDeliveryAgentAdapter:
                 definition.reasoning_effort is None
                 or route.reasoning_effort == definition.reasoning_effort
             )
+            and (definition.route_kind is None or route.kind.value == definition.route_kind)
         )
         if len(primary) != 1:
             raise ProductionConfigError(

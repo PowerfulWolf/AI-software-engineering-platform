@@ -1453,6 +1453,20 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     node.className.split(" ").includes("single-select"),
   );
   assert.ok(modelSelects.length > 0);
+  vm.runInContext("settingsDraft.model_routes[0].image_input = false; render();", context);
+  const firstRouteCard = descend(get("content")).find((node) =>
+    node.className.includes("model-route-disclosure"),
+  );
+  assert.match(text(firstRouteCard.children[0]), /仅文本/);
+  vm.runInContext("settingsDraft.model_routes[0].image_input = null; render();", context);
+  const defaultImageCard = descend(get("content")).find((node) =>
+    node.className.includes("model-route-disclosure"),
+  );
+  assert.match(text(defaultImageCard.children[0]), /默认可传图/);
+  assert.equal(vm.runInContext(`modelRouteValidationMessage({ model_routes: [
+    { provider: "codex", model: "gpt-5.6-sol", kind: "codex_cli", reasoning_effort: "high" },
+    { provider: "codex", model: "gpt-5.6-sol", kind: "responses", reasoning_effort: "high" }
+  ] })`, context), null);
   assert.ok(
     modelSelects.every((node) => node.tag === "details"),
     "every Model Routing dropdown uses the shared styled disclosure",
@@ -1518,8 +1532,8 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     .children.flatMap(descend)
     .filter((node) => node.tag === "button")
     .map((node) => node.textContent);
-  assert.ok(coderReasoningChoices.includes("codex / gpt-5.6-terra · high"));
-  assert.ok(coderReasoningChoices.includes("codex / gpt-5.6-terra · medium"));
+  assert.ok(coderReasoningChoices.includes("codex / gpt-5.6-terra · high · Codex CLI"));
+  assert.ok(coderReasoningChoices.includes("codex / gpt-5.6-terra · medium · Codex CLI"));
   assert.doesNotMatch(text(get("content")), /密钥状态/);
   assert.match(text(get("content")), /Agent 模型分配/);
   assert.equal(
@@ -1552,7 +1566,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   const deepseekModelOption = descend(productModel).find(
     (node) =>
       node.tag === "button" &&
-      node.textContent === "deepseek / deepseek-v4 · high",
+      node.textContent === "deepseek / deepseek-v4 · high · Responses API",
   );
   await deepseekModelOption.events.click();
   const addProductFallback = async (label) => {
@@ -1567,8 +1581,8 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     );
     await option.events.click();
   };
-  await addProductFallback("codex / gpt-5.6-terra · high");
-  await addProductFallback("codex / gpt-5.6-terra · medium");
+  await addProductFallback("codex / gpt-5.6-terra · high · Codex CLI");
+  await addProductFallback("codex / gpt-5.6-terra · medium · Codex CLI");
   const productCardWithFallbacks = descend(get("content")).find(
     (node) => node.dataset.role === "product",
   );
@@ -1591,12 +1605,16 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     (node) => node.dataset.role === "product",
   );
   assert.doesNotMatch(text(productCardAfterRemove), /备用 2/);
-  await addProductFallback("codex / gpt-5.6-terra · high");
-  const modelRuntimeInputs = descend(get("content")).filter(
+  await addProductFallback("codex / gpt-5.6-terra · high · Codex CLI");
+  const responseKeyRow = descend(get("content")).find(
+    (node) => node.className === "field" &&
+      node.children[0]?.textContent === "API Key",
+  );
+  const responseKeyInput = descend(responseKeyRow).find(
     (node) => node.tag === "input" && node.type === "password",
   );
-  modelRuntimeInputs[0].value = "deepseek-key";
-  modelRuntimeInputs[0].events.input();
+  responseKeyInput.value = "deepseek-key";
+  responseKeyInput.events.input();
   const mysqlSettings = descend(get("content")).find(
     (node) => node.tag === "button" && node.textContent === "MySQL",
   );
@@ -1619,6 +1637,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   );
   settingsRestartRequired = true;
   await settingsForm.events.submit({ preventDefault() {} });
+  assert.ok(savedSettings.length, text(get("composer")) + text(settingsForm));
   assert.equal(savedSettings.at(-1).config.execution_retry_policy.designer.max_attempts, 8);
   assert.equal(savedSettings.at(-1).config.execution_retry_policy.designer.max_transient_failures, 20);
   assert.match(text(get("composer")), /设置保存成功/);
@@ -1807,7 +1826,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   );
   await failedSettingsForm.events.submit({ preventDefault() {} });
   assert.match(text(get("composer")), /设置保存失败/);
-  assert.match(text(get("composer")), /每个 Provider \+ Model \+ Reasoning 组合只能配置一次/);
+  assert.match(text(get("composer")), /每个 Provider \+ Model \+ Reasoning \+ 类型组合只能配置一次/);
   assert.equal(savedSettings.length, 1, "client validation must send no PUT");
   await descend(get("composer"))
     .find((node) => node.tag === "button" && node.textContent === "知道了")

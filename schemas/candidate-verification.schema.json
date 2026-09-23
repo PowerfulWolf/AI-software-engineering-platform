@@ -57,6 +57,14 @@
           "default": null,
           "title": "Provider"
         },
+        "route_kind": {
+          "anyOf": [
+            {"enum": ["codex_cli", "responses"], "type": "string"},
+            {"type": "null"}
+          ],
+          "default": null,
+          "title": "Route Kind"
+        },
         "reasoning_effort": {
           "anyOf": [
             {
