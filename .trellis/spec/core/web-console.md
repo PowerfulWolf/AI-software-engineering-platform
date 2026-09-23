@@ -697,8 +697,10 @@ GET  /api/v1/admin/status
   native option menu.
 - Model Routing 的可用目录与 Agent 分配是两个同级 Section。目录路由和 Agent 策略默认使用紧凑摘要
   行并按需展开编辑，禁止卡片嵌套；备用模型使用固定的位置、模型和操作列，所有行的上移/下移/移除
-  槽位等宽对齐，模型名称长度不得推动操作列。Agent 展开详情的主模型输入、备用模型身份和添加备用
-  模型选择器共用同一内容列左基线，窄屏也不得回退为不同起点。
+  槽位等宽对齐，模型名称长度不得推动操作列。Agent 展开详情用同一外层内容边界容纳主模型选择、
+  备用列表和添加入口；备用行的序号形成清楚的次级缩进，不能用普通文本链接冒充操作按钮。
+  主模型当前值可只显示模型名，但完整 provider/model/effort/kind 必须在选择选项和当前元信息中可辨，
+  不得因视觉缩写改变精确路由身份或 fallback 顺序。窄屏仍需保持内容与操作可见、无横向溢出。
 - Project creation is rendered in `需求与交付`, next to Project selection and Requirement work. The
   Settings page contains only process/runtime configuration and never presents Project creation as a
   configuration field.

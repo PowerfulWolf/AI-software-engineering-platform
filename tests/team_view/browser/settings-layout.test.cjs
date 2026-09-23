@@ -207,7 +207,13 @@ test("Model routing uses compact disclosures and aligned fallback actions", asyn
   }));
   assert.ok(Math.abs(actionColumns[0].left - actionColumns[1].left) <= 1);
   assert.ok(actionColumns.every(({ widths }) =>
-    widths.length === 3 && Math.max(...widths) - Math.min(...widths) <= 1));
+    widths.length === 3 && widths.every((width) => Math.abs(width - 36) <= 1)));
+  assert.equal(await designer.locator('.agent-primary-settings .single-select-value').textContent(),
+    "gpt-5.6-terra");
+  assert.match(await designer.locator('.agent-primary-meta').textContent(),
+    /codex · high · Codex CLI/);
+  assert.equal(await designer.getByRole('button', { name: '上移备用 1' }).isDisabled(), true);
+  assert.equal(await designer.getByRole('button', { name: '下移备用 2' }).isDisabled(), true);
   const product = form.locator('.agent-model-card[data-role="product"]');
   if (!(await product.evaluate((node) => node.open)))
     await product.locator(":scope > summary").click();
@@ -220,16 +226,16 @@ test("Model routing uses compact disclosures and aligned fallback actions", asyn
       const designer = document.querySelector('.agent-model-card[data-role="designer"]');
       const product = document.querySelector('.agent-model-card[data-role="product"]');
       return {
-        primary: designer.querySelector('.settings-field-control').getBoundingClientRect().left,
-        fallback: designer.querySelector('.agent-fallback-identity').getBoundingClientRect().left,
-        addPrimary: product.querySelector('.settings-field-control').getBoundingClientRect().left,
-        addFallback: product.querySelector('.agent-fallback-settings > .single-select').getBoundingClientRect().left,
+        primary: designer.querySelector('.agent-primary-settings > .single-select').getBoundingClientRect().left,
+        fallback: designer.querySelector('.agent-fallback-row').getBoundingClientRect().left,
+        addPrimary: product.querySelector('.agent-primary-settings > .single-select').getBoundingClientRect().left,
+        addFallback: product.querySelector('.agent-fallback-add').getBoundingClientRect().left,
       };
     });
     assert.ok(Math.abs(detailAlignment.primary - detailAlignment.fallback) <= 1,
-      `${width}px: Primary and fallback model columns align: ${JSON.stringify(detailAlignment)}`);
+      `${width}px: Primary and fallback groups share the same outer edge: ${JSON.stringify(detailAlignment)}`);
     assert.ok(Math.abs(detailAlignment.addPrimary - detailAlignment.addFallback) <= 1,
-      `${width}px: Primary and add-fallback controls align: ${JSON.stringify(detailAlignment)}`);
+      `${width}px: Primary and add-fallback controls share the same outer edge: ${JSON.stringify(detailAlignment)}`);
     const sectionHelp = form.getByRole("button", { name: "Codex CLI 连接说明" });
     await sectionHelp.click();
     const sectionPanel = form.getByRole("dialog", { name: "Codex CLI 连接说明" });
@@ -246,6 +252,11 @@ test("Model routing uses compact disclosures and aligned fallback actions", asyn
       document.documentElement.scrollWidth > window.innerWidth);
     assert.equal(overflow, false, `${width}px: Model Routing does not overflow`);
   }
+  const addFallback = product.locator('.agent-fallback-add');
+  await addFallback.locator('summary').click();
+  await addFallback.getByRole('option', { name: /^deepseek \/ deepseek-v4/ }).click();
+  assert.equal(await product.locator('.agent-fallback-row').count(), 1,
+    'the visually compact add control still updates the exact Agent fallback policy');
   const submission = h.page.waitForRequest((request) =>
     request.url().endsWith("/api/v1/admin/settings") && request.method() === "PUT");
   await form.getByRole("button", { name: "保存设置" }).click();

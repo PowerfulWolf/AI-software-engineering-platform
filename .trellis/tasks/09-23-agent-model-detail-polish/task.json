@@ -1,0 +1,9 @@
+{
+  "id": "agent-model-detail-polish-20260923",
+  "title": "Polish Agent model assignment details",
+  "status": "completed",
+  "phase": "verified_incremental",
+  "baseline": "0481fa0",
+  "authorization": "User reported the expanded Agent model assignment detail looks poor in the attached screenshot; keep the Trellis and incremental-test constraints from the settings work.",
+  "verification": "verification.md"
+}

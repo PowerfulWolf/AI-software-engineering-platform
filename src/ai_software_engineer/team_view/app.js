@@ -4214,7 +4214,7 @@ function selectInput(values, current, update, key, disabled = false) {
   const selected = values.find(([value]) => value === current);
   const selectedLabel = el(
     "span",
-    selected?.[1] || "暂无可用选项",
+    selected?.[2] || selected?.[1] || "暂无可用选项",
     "single-select-value",
   );
   const summary = el("summary", undefined, "single-select-trigger");
@@ -4222,13 +4222,13 @@ function selectInput(values, current, update, key, disabled = false) {
   const menu = el("div", undefined, "single-select-menu");
   menu.setAttribute("role", "listbox");
   const optionNodes = [];
-  for (const [value, title] of values) {
+  for (const [value, title, compactTitle] of values) {
     const option = button(
       title,
       () => {
         if (disabled) return;
         control.dataset.value = value;
-        selectedLabel.textContent = title;
+        selectedLabel.textContent = compactTitle || title;
         for (const [candidate, candidateValue] of optionNodes) {
           const active = candidateValue === value;
           candidate.className = `single-select-option${active ? " selected" : ""}`;
@@ -5245,6 +5245,7 @@ function renderModelSettings(form) {
     const choices = enabledRoutes.map((route) => [
       modelRouteKey(route),
       `${route.provider} / ${route.model} · ${route.reasoning_effort} · ${modelRouteLabel(route)}`,
+      route.model,
     ]);
     const selector = selectInput(
       choices,
@@ -5265,7 +5266,7 @@ function renderModelSettings(form) {
       el(
         "span",
         primary
-          ? `${primary.provider} / ${primary.model} · ${primary.reasoning_effort || "medium"} · ${modelRouteLabel(primary)}`
+          ? `${primary.model} · ${primary.reasoning_effort || "medium"} · ${modelRouteLabel(primary)}`
           : "当前未配置主模型",
         "agent-model-primary",
       ),
@@ -5277,20 +5278,38 @@ function renderModelSettings(form) {
       el("span", "", "agent-model-chevron"),
     );
     const detail = el("div", undefined, "agent-model-detail");
-    detail.append(
-      settingsField(
-        "主模型",
-        selector,
-        "该 Agent 每次运行首先尝试的模型。",
-      ),
+    const primarySettings = el("div", undefined, "agent-primary-settings");
+    const primaryHeading = el("div", undefined, "agent-setting-heading");
+    primaryHeading.append(
+      el("strong", "主模型"),
+      settingsHelp("主模型", "该 Agent 每次运行首先尝试的模型。"),
     );
+    primarySettings.append(primaryHeading, selector);
+    if (primary)
+      primarySettings.append(
+        el(
+          "span",
+          `${primary.provider} · ${primary.reasoning_effort || "medium"} · ${modelRouteLabel(primary)}`,
+          "agent-primary-meta",
+        ),
+      );
     const fallbacks = el("div", undefined, "agent-fallback-settings");
-    fallbacks.append(el("strong", "备用模型（可选）", "agent-fallback-title"));
+    const fallbackHeading = el("div", undefined, "agent-fallback-heading");
+    const fallbackLabel = el("div", undefined, "agent-setting-heading");
+    fallbackLabel.append(
+      el("strong", "备用模型"),
+      settingsHelp("备用模型", "仅在主模型不可用且符合降级规则时，按下列顺序尝试。"),
+    );
+    fallbackHeading.append(
+      fallbackLabel,
+      el("span", `${fallbackRoutes.length} 个`, "agent-fallback-count"),
+    );
+    fallbacks.append(fallbackHeading);
     if (!fallbackRoutes.length)
       fallbacks.append(
         el(
           "p",
-          "当前未配置备用模型；主模型不可用时不会自动尝试模型池中的其他模型。",
+          "尚未添加备用模型。",
           "muted agent-fallback-empty",
         ),
       );
@@ -5298,30 +5317,42 @@ function renderModelSettings(form) {
       const index = fallbackOffset + 1;
       const row = el("div", undefined, "agent-fallback-row");
       row.dataset.fallbackIndex = String(index);
-      const position = el("span", `备用 ${index}`, "route-position");
-      const identity = el(
-        "span",
-        `${route.provider} / ${route.model} · ${route.reasoning_effort || "medium"} · ${modelRouteLabel(route)}`,
-        "agent-fallback-identity",
+      const position = el("span", String(index), "agent-fallback-position");
+      position.setAttribute("aria-label", `备用 ${index}`);
+      const identity = el("span", undefined, "agent-fallback-identity");
+      identity.append(
+        el("strong", route.model, "agent-fallback-model"),
+        el(
+          "small",
+          `${route.provider} · ${route.reasoning_effort || "medium"} · ${modelRouteLabel(route)}`,
+          "agent-fallback-meta",
+        ),
       );
       const actions = el("div", undefined, "agent-fallback-actions");
-      const moveUp = button("上移", () => {
+      const moveUp = button("↑", () => {
         moveAgentFallbackModel(role, index, -1);
         render();
       });
+      moveUp.setAttribute("aria-label", `上移备用 ${index}`);
+      moveUp.title = "上移";
       moveUp.disabled = index === 1;
-      const moveDown = button("下移", () => {
+      const moveDown = button("↓", () => {
         moveAgentFallbackModel(role, index, 1);
         render();
       });
+      moveDown.setAttribute("aria-label", `下移备用 ${index}`);
+      moveDown.title = "下移";
       moveDown.disabled = index === policy.routes.length - 1;
+      const remove = button("×", () => {
+        removeAgentFallbackModel(role, index);
+        render();
+      });
+      remove.setAttribute("aria-label", `移除备用 ${index}`);
+      remove.title = "移除";
       actions.append(
         moveUp,
         moveDown,
-        button("移除", () => {
-          removeAgentFallbackModel(role, index);
-          render();
-        }),
+        remove,
       );
       row.append(position, identity, actions);
       fallbacks.append(row);
@@ -5335,20 +5366,21 @@ function renderModelSettings(form) {
         modelRouteKey(route),
         `${route.provider} / ${route.model} · ${route.reasoning_effort} · ${modelRouteLabel(route)}`,
       ]);
-    if (fallbackChoices.length)
-      fallbacks.append(
-        selectInput(
-          [["", "添加备用模型"], ...fallbackChoices],
-          "",
-          (value) => {
-            if (!value) return;
-            addAgentFallbackModel(role, value);
-            render();
-          },
-          `agent-fallback-model-${role}`,
-        ),
+    if (fallbackChoices.length) {
+      const addFallback = selectInput(
+        [["", "＋ 添加备用模型"], ...fallbackChoices],
+        "",
+        (value) => {
+          if (!value) return;
+          addAgentFallbackModel(role, value);
+          render();
+        },
+        `agent-fallback-model-${role}`,
       );
-    detail.append(fallbacks);
+      addFallback.className += " agent-fallback-add";
+      fallbacks.append(addFallback);
+    }
+    detail.append(primarySettings, fallbacks);
     card.append(summary, detail);
     assignments.append(card);
   }

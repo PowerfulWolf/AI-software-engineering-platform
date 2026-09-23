@@ -1940,6 +1940,15 @@ main[data-page="requests"] .page-context {
   border-top: 1px solid var(--line);
   background: #f8f9fb;
 }
+.agent-model-detail {
+  display: grid;
+  gap: 20px;
+  padding: 20px 18px 24px;
+  background: #fbfcfe;
+}
+.agent-model-list {
+  overflow: visible;
+}
 .model-route-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1972,16 +1981,40 @@ main[data-page="requests"] .page-context {
   padding-top: 14px;
   border-top: 1px solid var(--line);
 }
-.agent-model-detail > .settings-field-row {
-  grid-template-columns: 76px minmax(0, 1fr);
-  gap: 10px;
-  margin-bottom: 16px;
+.agent-primary-settings,
+.agent-fallback-settings {
+  width: min(100%, 680px);
+  min-width: 0;
+  margin-inline: auto;
 }
-.agent-model-detail > .settings-field-row .settings-field-copy {
-  gap: 4px;
+.agent-primary-settings {
+  display: grid;
+  gap: 8px;
 }
-.agent-model-detail > .settings-field-row .settings-field-control {
-  max-width: 420px;
+.agent-setting-heading,
+.agent-fallback-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.agent-setting-heading strong {
+  font-size: 0.9rem;
+}
+.agent-primary-settings > .single-select {
+  width: 100%;
+}
+.agent-primary-settings .single-select > summary {
+  min-height: 48px;
+  background: white;
+  font-weight: 650;
+}
+.agent-primary-settings .single-select-option {
+  overflow-wrap: anywhere;
+}
+.agent-primary-meta {
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
 }
 .agent-model-card p,
 .agent-model-card small {
@@ -1989,47 +2022,105 @@ main[data-page="requests"] .page-context {
 }
 .agent-fallback-settings {
   display: grid;
-  gap: 8px;
-  padding-top: 14px;
+  gap: 0;
+  padding-top: 18px;
   border-top: 1px solid var(--line);
 }
-.agent-fallback-title {
-  font-size: 0.9rem;
+.agent-fallback-heading {
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.agent-fallback-count {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #eef2f8;
+  color: #52647c;
+  font-size: 0.72rem;
+  font-weight: 650;
 }
 .agent-fallback-empty {
+  padding: 12px 0;
   font-size: 0.82rem;
-}
-.agent-model-card .agent-fallback-empty {
-  margin-left: 86px;
 }
 .agent-fallback-row {
   display: grid;
-  grid-template-columns: 76px minmax(0, 1fr) 174px;
+  grid-template-columns: 28px minmax(0, 1fr) 110px;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   min-width: 0;
-  padding: 9px 0;
+  min-height: 60px;
+  padding: 10px 0;
   border-bottom: 1px solid var(--line);
 }
+.agent-fallback-position {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border-radius: 8px;
+  background: #edf1f7;
+  color: #52647c;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
 .agent-fallback-identity {
+  display: grid;
+  gap: 1px;
   min-width: 0;
   overflow-wrap: anywhere;
-  font-size: 0.85rem;
+  line-height: 1.4;
+}
+.agent-fallback-model {
+  font-size: 0.88rem;
+  font-weight: 650;
+}
+.agent-fallback-meta {
+  color: var(--muted);
+  font-size: 0.75rem;
 }
 .agent-fallback-actions {
   display: grid;
-  grid-template-columns: repeat(3, 54px);
-  gap: 6px;
+  grid-template-columns: repeat(3, 36px);
+  justify-self: end;
+  overflow: hidden;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: white;
 }
 .agent-fallback-actions button {
-  width: 54px;
-  padding: 0.3rem 0.25rem;
-  white-space: nowrap;
-  font-size: 0.78rem;
+  display: grid;
+  width: 36px;
+  height: 32px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-right: 1px solid #dbe2ec;
+  border-radius: 0;
+  background: transparent;
+  color: #40516a;
+  font-size: 1rem;
+  line-height: 1;
 }
-.agent-fallback-settings > .single-select {
-  width: min(420px, calc(100% - 86px));
-  margin: 4px 0 0 86px;
+.agent-fallback-actions button:last-child {
+  border-right: 0;
+}
+.agent-fallback-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+.agent-fallback-actions button:last-child:hover {
+  color: #a83232;
+  background: #fff4f4;
+}
+.agent-fallback-add {
+  width: 100%;
+  margin-top: 14px;
+}
+.agent-fallback-add > summary {
+  border-style: dashed;
+  background: white;
+  color: var(--accent);
+  font-weight: 600;
 }
 .full-row {
   grid-column: 1 / -1;
@@ -2353,13 +2444,12 @@ code {
     grid-column: 1 / -1;
   }
   .agent-fallback-row {
-    grid-template-columns: 76px minmax(0, 1fr);
-  }
-  .agent-model-detail > .settings-field-row {
-    grid-template-columns: 76px minmax(0, 1fr);
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: 8px;
   }
   .agent-fallback-actions {
     grid-column: 2;
     justify-self: start;
+    margin-top: 4px;
   }
 }

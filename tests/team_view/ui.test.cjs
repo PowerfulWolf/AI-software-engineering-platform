@@ -1566,10 +1566,10 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   const coderCardBeforeFallback = descend(get("content")).find(
     (node) => node.dataset.role === "coder",
   );
-  assert.match(text(coderCardBeforeFallback), /当前未配置备用模型/);
-  assert.doesNotMatch(
-    text(coderCardBeforeFallback),
-    /备用 1/,
+  assert.match(text(coderCardBeforeFallback), /尚未添加备用模型/);
+  assert.equal(
+    descend(coderCardBeforeFallback).filter((node) => node.className === "agent-fallback-row").length,
+    0,
     "enabling a catalog route must not silently add it to an Agent fallback policy",
   );
   const productModel = descend(get("content"))
@@ -1582,6 +1582,13 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
       node.textContent === "deepseek / deepseek-v4 · high · Responses API",
   );
   await deepseekModelOption.events.click();
+  const selectedProductModel = descend(get("content"))
+    .find((node) => node.dataset.key === "agent-primary-model-product");
+  assert.equal(
+    descend(selectedProductModel).find((node) => node.className === "single-select-value").textContent,
+    "deepseek-v4",
+    "selected summary stays compact while the options retain exact route labels",
+  );
   const addProductFallback = async (label) => {
     const productCard = descend(get("content")).find(
       (node) => node.dataset.role === "product",
@@ -1603,7 +1610,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     (node) => node.dataset.fallbackIndex === "2",
   );
   await descend(secondFallback).find(
-    (node) => node.tag === "button" && node.textContent === "上移",
+    (node) => node.tag === "button" && node.getAttribute("aria-label") === "上移备用 2",
   ).events.click();
   const productCardAfterMove = descend(get("content")).find(
     (node) => node.dataset.role === "product",
@@ -1612,7 +1619,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     (node) => node.dataset.fallbackIndex === "2",
   );
   await descend(removableFallback).find(
-    (node) => node.tag === "button" && node.textContent === "移除",
+    (node) => node.tag === "button" && node.getAttribute("aria-label") === "移除备用 2",
   ).events.click();
   const productCardAfterRemove = descend(get("content")).find(
     (node) => node.dataset.role === "product",
