@@ -704,6 +704,42 @@ GET  /api/v1/admin/status
 - Project creation is rendered in `需求与交付`, next to Project selection and Requirement work. The
   Settings page contains only process/runtime configuration and never presents Project creation as a
   configuration field.
+
+### Settings page/server contract version
+
+1. Scope / Trigger: `team_view/app.js` is served from files while a running `ase-console` retains
+   imported Python models. A checkout update can therefore pair a new browser Settings form with an
+   old `ProductionConfig` validator even after browser refresh. `DomainModel(extra="forbid")` then
+   reports a generic 422 for every save, including an unchanged draft.
+2. Signatures: `GET /api/v1/admin/settings` and successful `PUT /api/v1/admin/settings` return
+   `SettingsSnapshot.settings_contract_version: Literal[1]`. This marker is response metadata, not a
+   `ProductionConfig` field and not a request field. `renderSettings` requires exact version `1`
+   before issuing a Settings PUT.
+3. Contract: missing or different marker means the browser must show a visible restart/refresh
+   instruction and preserve the draft. It must not submit credentials or any config to that service.
+   A matching marker allows the existing typed validation and atomic save path, including explicit
+   no-change saves. Do not infer compatibility from optional config property presence: `to_wire`
+   omits `None` fields even on a current server.
+4. Validation/error matrix:
+
+   | GET marker | Save action | Result |
+   |---|---|---|
+   | `1` | valid draft | normal PUT and save-result dialog |
+   | absent or not `1` | any draft | no PUT; version-mismatch notice and error dialog |
+   | `1` | invalid draft | normal client/server rejection, draft retained |
+
+5. Good/Base/Bad: Good — current page/current service saves. Base — current page/old service blocks
+   without write and asks for a supervised restart. Bad — rely on browser refresh alone or forward
+   the new payload to the old strict validator and show only `Settings input is invalid.`
+6. Tests: `tests/web_console/test_transport.py` asserts the GET marker;
+   `tests/team_view/ui.test.cjs` removes it and asserts a visible warning, no PUT and actionable
+   dialog, then restores it and exercises normal Settings save. Browser layout fixtures must carry
+   the marker so they model the current API.
+7. Wrong vs correct: wrong — inspect `codex_cli_proxy_base_url` presence, which is absent when null;
+   correct — compare `settings_contract_version` exactly before serializing the draft. When changing
+   the Settings wire contract incompatibly, increment the marker in the Python response and JS,
+   update fixtures, and require a managed Console restart after checkout updates.
+
 - A config save uses same-directory temporary file, fsync and atomic replace. It validates the selected
   Team/name before publication. Any changed saved config or write-only runtime variable is marked
   `restart_required`; the already constructed Host is not mutated or hot-switched. Knowledge upload

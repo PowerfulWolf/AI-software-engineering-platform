@@ -418,6 +418,7 @@ def test_console_host_missing_config_starts_with_visible_defaults(
 
     with TestClient(app, base_url="http://127.0.0.1:8765") as client:
         settings = client.get("/api/v1/admin/settings")
+        assert settings.json()["settings_contract_version"] == 1
         status = client.get("/api/v1/admin/status")
         team = client.get("/api/v1/team")
         delivery = client.post("/api/v1/operations", json=_payload(tmp_path))

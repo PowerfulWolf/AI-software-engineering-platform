@@ -387,6 +387,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     learningDecisions = [],
     screenshotUploads = [];
   const settingsFixture = {
+    settings_contract_version: 1,
     config: {
       schema_version: "v0.2",
       platform_root: "/data/ase",
@@ -1429,6 +1430,15 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   assert.doesNotMatch(text(get("content")), /创建新 Project/);
   assert.match(text(get("content")), /平台数据目录/);
   assert.match(text(get("content")), /执行与重试策略/);
+  vm.runInContext('settingsSnapshot.settings_contract_version = undefined; settingsDraft.codex_executable = "codex-stale"; render();', context);
+  assert.match(text(get("content")), /服务版本不匹配.*重启 Web Console/);
+  const staleSettingsForm = descend(get("content")).find(
+    (node) => node.tag === "form" && node.className === "settings-form",
+  );
+  await staleSettingsForm.events.submit({ preventDefault() {} });
+  assert.equal(savedSettings.length, 0, "a stale Settings server must not receive PUT");
+  assert.match(text(get("composer")), /服务版本不匹配.*重启 Web Console/);
+  vm.runInContext('settingsSnapshot.settings_contract_version = 1; settingsDraft.codex_executable = "codex"; render();', context);
   const designLimit = descend(get("content")).find(
     (node) => node.name === "retry-designer-max_attempts",
   );

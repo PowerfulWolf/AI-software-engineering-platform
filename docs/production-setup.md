@@ -271,7 +271,9 @@ Agent，即使它们碰巧使用同一模型也不能互相代替或自我批准
 ./scripts/ase-console-service.sh start
 ```
 
-用同一脚本的 `status`、`logs`、`restart` 和 `stop` 管理后台进程。脚本解析 `ASE_CONFIG` 或默认
+用同一脚本的 `status`、`logs`、`restart` 和 `stop` 管理后台进程。更新代码后须执行 `restart`
+再刷新浏览器；只刷新页面可能使新版静态界面连接到仍持有旧 Python 配置契约的进程，设置页会
+提示服务版本不匹配并阻止保存。脚本解析 `ASE_CONFIG` 或默认
 配置路径，自动加载同目录 `runtime.env`，并要求先执行过 `uv sync`。通常不再需要手工 export DSN
 或 provider key。
 

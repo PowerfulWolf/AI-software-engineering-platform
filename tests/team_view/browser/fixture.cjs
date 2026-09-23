@@ -46,7 +46,7 @@ async function ui(t, options = {}) {
       "/api/v1/team": team,
       "/api/v1/console": { schema_version: "v0.2", team_id: "team_fixture", delivery_ready: state.ready },
       "/api/v1/operations": state.operations,
-      "/api/v1/admin/settings": { config, config_path: "/fixture/production.json", config_source: "saved", restart_required: false, secret_status: [] },
+      "/api/v1/admin/settings": { settings_contract_version: options.settingsContractVersion ?? 1, config, config_path: "/fixture/production.json", config_source: "saved", restart_required: false, secret_status: [] },
       "/api/v1/admin/projects": team.projects,
       "/api/v1/admin/team/knowledge": [],
       "/api/v1/admin/team/knowledge/index": null,

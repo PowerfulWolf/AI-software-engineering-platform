@@ -103,7 +103,7 @@ async function browser(options = {}) {
         if (state.operationsFailure) throw new Error("Operations unavailable");
         return response([]);
       }
-      if (url === "/api/v1/admin/settings") return response({ config,
+      if (url === "/api/v1/admin/settings") return response({ settings_contract_version: 1, config,
         config_path: "/fixture/production.json", config_source: "saved",
         restart_required: state.restart, secret_status: [] });
       if (url === "/api/v1/admin/settings/apply") {

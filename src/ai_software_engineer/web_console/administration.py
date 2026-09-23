@@ -139,6 +139,7 @@ class RuntimeVariableUpdate(DomainModel):
 
 
 class SettingsSnapshot(DomainModel):
+    settings_contract_version: Literal[1] = 1
     config: ProductionConfig
     config_path: NonEmptyStr
     config_source: Literal["default", "saved"]

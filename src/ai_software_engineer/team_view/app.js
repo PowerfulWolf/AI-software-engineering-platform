@@ -41,6 +41,9 @@ let settingsSection = "general";
 let expandedModelRouteIndex = 0;
 let expandedAgentModelRole = null;
 let settingsSaveResult = null;
+const settingsContractVersion = 1;
+const settingsVersionMismatchMessage =
+  "设置页面与当前服务版本不匹配。请重启 Web Console 后刷新页面，再保存配置。";
 const configurationApplyStorageKey = "ase-configuration-apply";
 const configurationApplyTimeoutMs = 30000;
 let configurationApplyPending = readConfigurationApplyPending();
@@ -4569,6 +4572,12 @@ function renderSettings(content) {
     administrationUnavailable(content);
     return;
   }
+  if (settingsSnapshot.settings_contract_version !== settingsContractVersion)
+    content.append(el(
+      "div",
+      settingsVersionMismatchMessage,
+      "admin-notice operation-error",
+    ));
   if (consoleDeliveryReady === false)
     content.append(
       el(
@@ -4673,6 +4682,11 @@ function renderSettings(content) {
   form.append(saveBar);
   onFormSubmit(form, async (event) => {
     event.preventDefault();
+    if (settingsSnapshot.settings_contract_version !== settingsContractVersion) {
+      settingsSaveResult = { kind: "error", message: settingsVersionMismatchMessage };
+      renderComposer();
+      return;
+    }
     const modelRouteError = modelRouteValidationMessage(settingsDraft);
     if (modelRouteError) {
       feedback.className = "form-feedback error";

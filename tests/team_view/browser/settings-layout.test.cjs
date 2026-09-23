@@ -73,6 +73,21 @@ const geometry = (locator) => locator.evaluate((form) => {
   };
 });
 
+test("stale Settings service blocks saves and explains the required restart", async (t) => {
+  const h = await ui(t, { settingsContractVersion: 0 });
+  const writes = [];
+  h.page.on("request", (request) => {
+    if (request.url().endsWith("/api/v1/admin/settings") && request.method() === "PUT")
+      writes.push(request);
+  });
+  await h.page.locator("#nav-settings").click();
+  await h.page.getByText(/服务版本不匹配.*重启 Web Console/).waitFor();
+  await h.page.evaluate(() => { settingsDraft.codex_executable = "/new/codex"; });
+  await h.page.locator("#content .settings-form button[type=submit]").click();
+  await h.page.getByRole("alertdialog").getByText(/重启 Web Console 后刷新页面/).waitFor();
+  assert.equal(writes.length, 0);
+});
+
 test("Settings pages share one aligned section grid across desktop and narrow widths", async (t) => {
   const h = await ui(t);
   await h.page.locator("#nav-settings").click();

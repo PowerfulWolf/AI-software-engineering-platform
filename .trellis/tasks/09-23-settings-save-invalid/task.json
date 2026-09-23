@@ -1,0 +1,9 @@
+{
+  "id": "settings-save-invalid-20260923",
+  "title": "Diagnose and fix invalid Settings save",
+  "status": "completed",
+  "phase": "verified_incremental",
+  "baseline": "db7907b",
+  "authorization": "User reported Settings save returns 'Settings input is invalid.' after the model assignment UI changes; continue single-agent Trellis workflow and incremental tests.",
+  "verification": "verification.md"
+}
