@@ -71,6 +71,61 @@ def test_local_codex_proxy_round_trip_and_schema(tmp_path: Path, url: str) -> No
     Draft202012Validator(schema).validate(config.to_wire())
 
 
+def test_codex_connection_mode_is_per_route_and_legacy_mode_is_preserved(tmp_path: Path) -> None:
+    payload = _payload(tmp_path)
+    routes = payload["model_routes"]
+    assert isinstance(routes, list)
+    routes[0]["connection_mode"] = "direct"
+    routes.append({**routes[0], "connection_mode": "proxy"})
+    payload["codex_cli_proxy_base_url"] = "http://127.0.0.1:8317/v1"
+    config = ProductionConfig.model_validate(payload)
+    schema = json.loads(
+        (Path(__file__).parents[2] / "schemas" / "production-config.schema.json").read_text()
+    )
+    Draft202012Validator(schema).validate(config.to_wire())
+    assert [config.effective_connection_mode(route) for route in config.enabled_routes()] == [
+        "direct",
+        "proxy",
+    ]
+    assert ProductionConfig.model_validate(config.to_wire()) == config
+    legacy = ProductionConfig.model_validate(
+        {**_payload(tmp_path), "codex_cli_proxy_base_url": payload["codex_cli_proxy_base_url"]}
+    )
+    assert legacy.effective_connection_mode(legacy.enabled_routes()[0]) == "proxy"
+
+
+def test_codex_connection_mode_rejects_missing_proxy_and_ambiguous_legacy_reference(
+    tmp_path: Path,
+) -> None:
+    payload = _payload(tmp_path)
+    routes = payload["model_routes"]
+    assert isinstance(routes, list)
+    routes[0]["connection_mode"] = "proxy"
+    with pytest.raises(ValidationError, match="proxy URL"):
+        ProductionConfig.model_validate(payload)
+    payload["codex_cli_proxy_base_url"] = "http://127.0.0.1:8317/v1"
+    routes.append({**routes[0], "connection_mode": "direct"})
+    payload["agent_model_routes"] = [
+        {"role": role.value, "routes": [{"provider": "codex", "model": "gpt-5.5"}]}
+        for role in TeamRole
+    ]
+    with pytest.raises(ValidationError, match="ambiguous"):
+        ProductionConfig.model_validate(payload)
+
+
+def test_responses_route_rejects_codex_connection_mode(tmp_path: Path) -> None:
+    payload = _payload(tmp_path)
+    routes = payload["model_routes"]
+    assert isinstance(routes, list)
+    routes[1]["connection_mode"] = "direct"
+    with pytest.raises(ValidationError):
+        ProductionConfig.model_validate(payload)
+    schema = json.loads(
+        (Path(__file__).parents[2] / "schemas" / "production-config.schema.json").read_text()
+    )
+    assert list(Draft202012Validator(schema).iter_errors(payload))
+
+
 @pytest.mark.parametrize(
     "url",
     [

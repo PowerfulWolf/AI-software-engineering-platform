@@ -638,6 +638,8 @@ class NativeRecoveryEntry:
             if route.provider == recovery_route.provider
             and route.model == recovery_route.model
             and route.reasoning_effort == recovery_route.reasoning_effort
+            and route.route_kind == recovery_route.kind.value
+            and route.connection_mode == self.config.effective_connection_mode(recovery_route)
         )
         if len(selected_routes) != 1:
             raise RecoveryRejected("selected recovery route is absent or ambiguous in policy")

@@ -273,6 +273,7 @@ def _dispatch(repository: Path) -> DispatchCommitRecord:
                 model=f"fixture-{role.value}",
                 reasoning_effort="medium",
                 route_kind=None,
+                connection_mode=None,
             ),
         )
         for role in (AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER)

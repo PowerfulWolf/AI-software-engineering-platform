@@ -386,6 +386,37 @@ def test_upstream_codex_proxy_managed_key_requires_runtime_value(
     assert captured == ["ASE_CODEX_PROXY_API_KEY"]
 
 
+def test_upstream_direct_route_does_not_require_or_forward_proxy_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: list[dict[str, object]] = []
+
+    def make_client(**kwargs: object) -> StructuredModelClient:
+        captured.append(kwargs)
+        return _ScriptedStructuredClient()
+
+    monkeypatch.setattr(production_backend, "CodexCliStructuredModelClient", make_client)
+    config = ProductionConfig.model_validate(
+        {
+            "platform_root": str(tmp_path / "platform"),
+            "live_model_execution": True,
+            "codex_cli_proxy_base_url": "http://127.0.0.1:8317/v1",
+            "codex_cli_proxy_api_key_env": "ASE_CODEX_PROXY_API_KEY",
+            "model_routes": [
+                {
+                    "provider": "codex",
+                    "model": "gpt-test",
+                    "kind": "codex_cli",
+                    "connection_mode": "direct",
+                }
+            ],
+        }
+    )
+    ConfiguredStructuredClientFactory(config, {}).for_project(tmp_path)
+    assert captured[0]["proxy_base_url"] is None
+    assert captured[0]["proxy_api_key_env"] is None
+
+
 @pytest.mark.parametrize(
     ("role", "expected"),
     [

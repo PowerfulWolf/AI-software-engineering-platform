@@ -3107,6 +3107,7 @@ async function loadAdministration() {
       settingsSnapshot = settings;
       if (!settingsHaveDraft()) {
         settingsDraft = structuredClone(settings.config);
+        normalizeModelConnectionModes(settingsDraft);
         normalizeAgentModelRoutes(settingsDraft);
         settingsDraftBaseline = JSON.stringify(settingsDraft);
       }
@@ -4253,12 +4254,29 @@ function selectInput(values, current, update, key, disabled = false) {
   control.append(summary, menu);
   return control;
 }
-function modelRouteKey(route) {
+function effectiveModelConnectionMode(route, config = settingsDraft) {
+  if ((route.route_kind || route.kind) !== "codex_cli") return null;
+  return route.connection_mode || (config?.codex_cli_proxy_base_url ? "proxy" : "direct");
+}
+function modelRouteLabel(route, config = settingsDraft) {
+  const kind = route.route_kind || route.kind;
+  return kind === "codex_cli"
+    ? `Codex CLI · ${effectiveModelConnectionMode(route, config) === "proxy" ? "CLIProxyAPI" : "普通 CLI"}`
+    : "Responses API";
+}
+function recordedModelConnectionLabel(route) {
+  if (route.route_kind === "responses") return "Responses API";
+  if (route.connection_mode === "proxy") return "CLIProxyAPI";
+  if (route.connection_mode === "direct") return "普通 CLI";
+  return "连接方式未记录";
+}
+function modelRouteKey(route, config = settingsDraft) {
   return JSON.stringify([
     route.provider,
     route.model,
     route.reasoning_effort || "medium",
     route.route_kind || route.kind || "",
+    effectiveModelConnectionMode(route, config),
   ]);
 }
 function modelRouteValidationMessage(config) {
@@ -4271,13 +4289,23 @@ function modelRouteValidationMessage(config) {
     if (!provider || !model)
       return `第 ${index + 1} 条模型路由必须填写 Provider 和 Model。`;
     const reasoning = route.reasoning_effort || "medium";
-    const key = modelRouteKey({ provider, model, reasoning_effort: reasoning, kind: route.kind });
+    if (route.kind === "codex_cli" && effectiveModelConnectionMode(route, config) === "proxy" && !config.codex_cli_proxy_base_url)
+      return `第 ${index + 1} 条路由使用 CLIProxyAPI，请先配置本地代理地址。`;
+    if (route.kind === "responses" && route.connection_mode)
+      return `第 ${index + 1} 条 Responses 路由不能设置 Codex CLI 连接方式。`;
+    const key = modelRouteKey({ ...route, provider, model, reasoning_effort: reasoning }, config);
     const firstIndex = firstRouteByKey.get(key);
     if (firstIndex !== undefined)
-      return `第 ${index + 1} 条模型路由（${provider} / ${model} · ${reasoning} · ${route.kind}）与第 ${firstIndex + 1} 条重复。每个 Provider + Model + Reasoning + 类型组合只能配置一次；请修改已有路由或删除重复项。`;
+      return `第 ${index + 1} 条模型路由（${provider} / ${model} · ${reasoning} · ${modelRouteLabel(route, config)}）与第 ${firstIndex + 1} 条重复。请修改已有路由或删除重复项。`;
     firstRouteByKey.set(key, index);
   }
   return null;
+}
+function normalizeModelConnectionModes(config) {
+  for (const route of config.model_routes || []) {
+    if (route.kind === "codex_cli")
+      route.connection_mode = effectiveModelConnectionMode(route, config);
+  }
 }
 function modelRouteReference(route) {
   return {
@@ -4285,6 +4313,7 @@ function modelRouteReference(route) {
     model: route.model,
     reasoning_effort: route.reasoning_effort || "medium",
     route_kind: route.kind,
+    connection_mode: effectiveModelConnectionMode(route),
   };
 }
 function resolveModelRouteReference(reference, enabled) {
@@ -4293,7 +4322,8 @@ function resolveModelRouteReference(reference, enabled) {
       route.provider === reference.provider &&
       route.model === reference.model &&
       (!reference.reasoning_effort || route.reasoning_effort === reference.reasoning_effort) &&
-      (!reference.route_kind || route.kind === reference.route_kind),
+      (!reference.route_kind || route.kind === reference.route_kind) &&
+      (!reference.connection_mode || effectiveModelConnectionMode(route) === reference.connection_mode),
   );
   return matches.length === 1 ? matches[0] : undefined;
 }
@@ -4370,7 +4400,16 @@ function removeAgentFallbackModel(role, index) {
 }
 function updateModelRouteIdentity(route, property, value) {
   const previous = modelRouteKey(route);
+  const unambiguous = settingsDraft.model_routes.filter(
+    (candidate) => modelRouteKey(candidate) === previous,
+  ).length === 1;
+  const priorKind = route.kind;
   route[property] = value;
+  if (property === "kind")
+    route.connection_mode = value === "codex_cli"
+      ? (priorKind === "codex_cli" ? effectiveModelConnectionMode(route) : "direct")
+      : null;
+  if (!unambiguous) return;
   for (const policy of settingsDraft.agent_model_routes || []) {
     for (const reference of policy.routes || []) {
       if (modelRouteKey(reference) !== previous) continue;
@@ -4378,6 +4417,7 @@ function updateModelRouteIdentity(route, property, value) {
       reference.model = route.model;
       reference.reasoning_effort = route.reasoning_effort || "medium";
       reference.route_kind = route.kind;
+      reference.connection_mode = effectiveModelConnectionMode(route);
     }
   }
 }
@@ -4620,6 +4660,7 @@ function renderSettings(content) {
       });
       settingsSnapshot = saved;
       settingsDraft = structuredClone(saved.config);
+      normalizeModelConnectionModes(settingsDraft);
       normalizeAgentModelRoutes(settingsDraft);
       settingsDraftBaseline = JSON.stringify(settingsDraft);
       runtimeVariablesDraft = {};
@@ -4919,7 +4960,7 @@ function renderModelSettings(form) {
     settingsField(
       "Codex CLI 本地代理地址",
       proxy,
-      "仅支持本机回环 HTTP 地址；留空沿用原有连接。",
+      "仅供选择 CLIProxyAPI 的 Codex CLI 路由使用；只支持本机回环 HTTP 地址。",
     ),
     settingsField(
       "代理 API Key",
@@ -4929,7 +4970,7 @@ function renderModelSettings(form) {
   );
   const proxyChildren = [proxyFields];
   if (settingsDraft.codex_cli_proxy_api_key_env === proxyKeyName) {
-    const clearKey = button("改用 Codex CLI 登录并清除已保存 Key", () => {
+    const clearKey = button("清除代理 Key（代理改用 CLI 登录）", () => {
       settingsDraft.codex_cli_proxy_api_key_env = null;
       delete runtimeVariablesDraft[proxyKeyName];
       proxyKey.value = "";
@@ -4970,7 +5011,7 @@ function renderModelSettings(form) {
     const identity = el("span", undefined, "model-route-identity");
     identity.append(
       el("strong", route.provider || "未命名 Provider"),
-      el("small", route.kind === "codex_cli" ? "Codex CLI" : "Responses API"),
+      el("small", modelRouteLabel(route)),
     );
     summary.append(
       identity,
@@ -5042,6 +5083,22 @@ function renderModelSettings(form) {
         ),
       ),
     );
+    if (route.kind === "codex_cli")
+      fields.append(
+        field(
+          "连接方式",
+          selectInput(
+            [["direct", "普通 CLI（本机登录）"], ["proxy", "CLIProxyAPI（本地代理）"]],
+            effectiveModelConnectionMode(route),
+            (value) => {
+              updateModelRouteIdentity(route, "connection_mode", value);
+              render();
+            },
+            `model-route-${index}-connection`,
+          ),
+          "仅当前路由生效；CLIProxyAPI 需要上方代理地址，Key 可选。",
+        ),
+      );
     if (route.kind === "responses")
       fields.append(
         field(
@@ -5147,7 +5204,7 @@ function renderModelSettings(form) {
     const primaryKey = primary ? modelRouteKey(primary) : "";
     const choices = enabledRoutes.map((route) => [
       modelRouteKey(route),
-      `${route.provider} / ${route.model} · ${route.reasoning_effort} · ${route.kind === "codex_cli" ? "Codex CLI" : "Responses API"}`,
+      `${route.provider} / ${route.model} · ${route.reasoning_effort} · ${modelRouteLabel(route)}`,
     ]);
     const selector = selectInput(
       choices,
@@ -5168,7 +5225,7 @@ function renderModelSettings(form) {
       el(
         "span",
         primary
-          ? `${primary.provider} / ${primary.model} · ${primary.reasoning_effort || "medium"} · ${primary.route_kind === "codex_cli" ? "Codex CLI" : "Responses API"}`
+          ? `${primary.provider} / ${primary.model} · ${primary.reasoning_effort || "medium"} · ${modelRouteLabel(primary)}`
           : "当前未配置主模型",
         "agent-model-primary",
       ),
@@ -5204,7 +5261,7 @@ function renderModelSettings(form) {
       const position = el("span", `备用 ${index}`, "route-position");
       const identity = el(
         "span",
-        `${route.provider} / ${route.model} · ${route.reasoning_effort || "medium"} · ${route.route_kind === "codex_cli" ? "Codex CLI" : "Responses API"}`,
+        `${route.provider} / ${route.model} · ${route.reasoning_effort || "medium"} · ${modelRouteLabel(route)}`,
         "agent-fallback-identity",
       );
       const actions = el("div", undefined, "agent-fallback-actions");
@@ -5236,7 +5293,7 @@ function renderModelSettings(form) {
       .filter((route) => !selectedKeys.has(modelRouteKey(route)))
       .map((route) => [
         modelRouteKey(route),
-        `${route.provider} / ${route.model} · ${route.reasoning_effort} · ${route.kind === "codex_cli" ? "Codex CLI" : "Responses API"}`,
+        `${route.provider} / ${route.model} · ${route.reasoning_effort} · ${modelRouteLabel(route)}`,
       ]);
     if (fallbackChoices.length)
       fallbacks.append(
@@ -5258,7 +5315,7 @@ function renderModelSettings(form) {
   form.append(
     settingsModule(
       "Codex CLI 连接",
-      "平台显式连接本地 Responses 代理，不读取个人 Codex 配置；保存后需应用配置。",
+      "仅选择 CLIProxyAPI 的路由使用此共享代理；普通 CLI 使用本机 Codex 登录。保存后需应用配置。",
       proxyChildren,
     ),
     settingsModule(
@@ -5337,7 +5394,7 @@ function renderAgentModelRouteStatus(value) {
         el("span", index === 0 ? "主模型" : `备用 ${index}`, "route-position"),
         el(
           "span",
-          `${route.provider} / ${route.model} · ${route.reasoning_effort}`,
+          `${route.provider} / ${route.model} · ${route.reasoning_effort} · ${recordedModelConnectionLabel(route)}`,
           "agent-route-identity",
         ),
         el(
@@ -5476,7 +5533,7 @@ function renderStatus(content) {
   for (const route of value.model_routes)
     routes.append(
       statusRow(
-        `${route.provider} / ${route.model} · ${route.reasoning_effort}`,
+        `${route.provider} / ${route.model} · ${route.reasoning_effort} · ${recordedModelConnectionLabel(route)}`,
         !route.enabled ? "未启用" : route.ready ? "已就绪" : "缺少运行配置",
         !route.enabled ? null : route.ready,
       ),
@@ -5713,7 +5770,7 @@ function modelCallDiagnostics(operation) {
       content.replaceChildren(...calls.map(call => {
         const card = el("div", undefined, "model-call-card");
         card.append(
-          el("strong", `${call.route_index === 1 ? "主模型" : `备用 ${call.route_index - 1}`} · ${call.provider} / ${call.model} · ${call.reasoning_effort}`),
+          el("strong", `${call.route_index === 1 ? "主模型" : `备用 ${call.route_index - 1}`} · ${call.provider} / ${call.model} · ${call.reasoning_effort} · ${recordedModelConnectionLabel(call)}`),
           el("p", `${call.role ? label(call.role) + " · " : ""}${phases[call.phase] || call.phase} · ${call.outcome === "SUCCEEDED" ? "成功" : "失败"} · ${(call.duration_ms / 1000).toFixed(2)} 秒 · ${call.http_status ? `HTTP ${call.http_status}` : "无 HTTP 状态（CLI 或未收到响应）"}`),
         );
         if (call.error_summary) card.append(el("p", call.error_summary));
@@ -6003,7 +6060,7 @@ function buildDetail() {
     dialog.append(
       el(
         "p",
-        `${label(run.role)} · ${run.provider} / ${run.model} · 第 ${run.route_index} 路 · ${label(run.outcome)} · ${(run.duration_ms / 1000).toFixed(1)} 秒`,
+        `${label(run.role)} · ${run.provider} / ${run.model} · ${recordedModelConnectionLabel(run)} · 第 ${run.route_index} 路 · ${label(run.outcome)} · ${(run.duration_ms / 1000).toFixed(1)} 秒`,
       ),
     );
     if (run.error_code) dialog.append(el("div", run.error_code, "blocker"));

@@ -65,6 +65,14 @@
           "default": null,
           "title": "Route Kind"
         },
+        "connection_mode": {
+          "anyOf": [
+            {"enum": ["direct", "proxy"], "type": "string"},
+            {"type": "null"}
+          ],
+          "default": null,
+          "title": "Connection Mode"
+        },
         "reasoning_effort": {
           "anyOf": [
             {

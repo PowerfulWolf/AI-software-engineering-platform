@@ -9,6 +9,7 @@ type JsonValue = str | int | float | bool | list[JsonValue] | dict[str, JsonValu
 type WirePayload = dict[str, JsonValue]
 type ReasoningEffort = Literal["low", "medium", "high", "xhigh"]
 type ProviderRouteKind = Literal["codex_cli", "responses"]
+type CodexConnectionMode = Literal["direct", "proxy"]
 
 NonEmptyStr = Annotated[str, StringConstraints(min_length=1)]
 

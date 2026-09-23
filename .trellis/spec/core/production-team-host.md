@@ -17,6 +17,7 @@ ProductionConfig.from_file(path: str | Path) -> ProductionConfig
 ProductionConfig.require_mysql_dsn(environment: Mapping[str, str]) -> str
 ProductionConfig.enabled_routes() -> tuple[ProviderRouteConfig, ...]
 ProductionConfig.routes_for(role: TeamRole) -> tuple[ProviderRouteConfig, ...]
+ProductionConfig.effective_connection_mode(route: ProviderRouteConfig) -> Literal["direct", "proxy"] | None
 ProductionConfig.path_from_environment(environment: Mapping[str, str] | None = None) -> Path
 _default_platform_root() -> str
 _normalize_platform_root(value: str) -> str
@@ -97,7 +98,7 @@ Environment contract:
 - `ProductionConfig` 必须符合 `schemas/production-config.schema.json`。macOS/Linux 省略
   `platform_root` 时纯解析为当前用户的 `~/.ase`；显式绝对路径或安全的 `~/...` 优先，后者先展开
   再进入同一校验。任何显式路径中的 `..`、控制字符或非绝对结果都失败关闭，不得回退默认值；
-  解析本身不得创建目录。至少一条 enabled route，`(provider, model, reasoning_effort, kind)` 唯一；`console_port` 必须为
+  解析本身不得创建目录。至少一条 enabled route，`(provider, model, reasoning_effort, kind, effective_connection_mode)` 唯一；`console_port` 必须为
   `1..65535`；JSON 中 secret 只能由环境变量间接引用。`ProductionConfig.default()` 是 Web
   Console 首次运行的内置可见配置；仅当配置文件不存在时使用，不写文件。已有但无效的配置不得
   回退默认值。CLI 生产命令仍要求有效的显式/默认路径配置文件。
@@ -105,12 +106,13 @@ Environment contract:
   `api_key_env`。示例默认 `live_model_execution=false`，生产执行必须显式改为 `true`。
 - `agent_model_routes` 为空时兼容旧配置并对所有角色使用 enabled `model_routes` 顺序；非空时必须
   精确覆盖 Manager/Product/Designer/Planner/Coder/QA/Reviewer 七个角色，每个引用只可指向启用且
-  唯一的 provider/model/reasoning effort/kind。首项是该 Agent 主模型，后续项是冻结后的降级顺序；
+  唯一的 provider/model/reasoning effort/kind/connection mode。首项是该 Agent 主模型，后续项是冻结后的降级顺序；
   显式策略是可用模型目录的有序子集，未被该 Agent 选中的启用模型不得自动成为备用路由。
-  同一模型的不同推理程度或执行类型是可独立选择的路由。旧引用缺少 `reasoning_effort` 或
-  `route_kind` 时，只在全部已声明字段过滤后恰好剩一条 enabled route 才可解析；否则失败关闭。
+  同一模型的不同推理程度、执行类型或 Codex CLI 连接方式是可独立选择的路由。旧引用缺少
+  `reasoning_effort`、`route_kind` 或 `connection_mode` 时，只在全部已声明字段过滤后恰好剩
+  一条 enabled route 才可解析；否则失败关闭。
 - 新生成的 `ModelSelection`、`AgentDefinition` 和 `ModelRouteAttempt` 必须固化精确的
-  `reasoning_effort` 与 `route_kind`。升级前已持久化且缺少字段的事实保留为“未指定”；
+  `reasoning_effort`、`route_kind` 与 Codex CLI `connection_mode`。升级前已持久化且缺少字段的事实保留为“未指定”；
   frozen policy、claim、实际执行和 route-attempt replay 不得在同 provider/model/effort 的
   Codex CLI 与 Responses 间猜测。旧 SHA-256 payload 不因新增可选字段重算或改写。
 - `image_input` 可显式声明两类 route 的图片能力；省略时 Codex CLI 为 true、Responses 为
@@ -205,15 +207,34 @@ fresh-organization tests hid the conflict. This does not authorize replaying ter
   `--approve-for-me` 与 `--sandbox` 组合。Coder 使用
   `workspace-write` sandbox，QA/Reviewer 使用 `read-only` sandbox。
 - 可选 `ProductionConfig.codex_cli_proxy_base_url` 仅接受不含 userinfo、query、fragment 的本机
-  loopback HTTP base URL。设置后，上游 structured 与交付三角色的 Codex CLI 调用都在保留
-  `--ignore-user-config` 的前提下，显式指定固定 `ase_local_proxy` provider、`wire_api=responses`
-  和该 base URL。可选 `codex_cli_proxy_api_key_env=ASE_CODEX_PROXY_API_KEY` 只保存环境变量名；
+  loopback HTTP base URL。只有 `effective_connection_mode(route) == "proxy"` 的 Codex CLI
+  路由才在保留 `--ignore-user-config` 的前提下显式指定固定 `ase_local_proxy` provider、
+  `wire_api=responses` 和该 base URL；显式 `direct` 即使存在全局 URL/Key 也不得接收代理参数。
+  旧路由未声明 mode 时，有 URL 继承 `proxy`，否则继承 `direct`。可选
+  `codex_cli_proxy_api_key_env=ASE_CODEX_PROXY_API_KEY` 只保存环境变量名；
   Settings 把完整 Key 写入 0600 `runtime.env`，CLI 仅获得该显式值并用 `env_key` 认证，同时
   以 CLI shell environment policy 排除该变量，不把值写入 argv、配置 JSON、Operation 或提示。
   若未配置平台管理的 Key，保留 `requires_openai_auth=true`，CLI 从相同 `CODEX_HOME` 的已保存
   API key 凭证获取代理密钥。未设置 URL 时保持既有直连登录语义。不得读取用户
   `config.toml`、从 URL 携带密钥，或因代理失败静默改走 OpenAI 直连。保存后必须重启 Host；
   历史 Requirement/Task/Operation 不改写，现有阻塞需求仍需用户显式继续。
+
+### Per-route Codex connection validation
+
+| Input | Boundary / result |
+|---|---|
+| 同 provider/model/effort/kind 的 direct 与 proxy | 配置允许，Agent 引用与 ModelPolicy 精确区分 |
+| 显式 proxy 但 URL 缺失；Responses 声明 mode | `ProductionConfig` 拒绝，不能创建 Agent |
+| 旧引用缺少 mode 且匹配双路由 | `routes_for`、policy/claim/recovery 解析拒绝歧义 |
+| 显式 direct 且配置了代理 Key | structured 与 delivery adapter 均传 `proxy_base_url=None`、`proxy_api_key_env=None`，不要求代理 Key |
+| 已完成旧调用缺少 mode | 保留原始 digest；只读 UI 显示“连接方式未记录” |
+
+Good：同名 direct/proxy 两条路由各自出现在 Agent 选择和状态页，调用记录带实际 mode。
+Base：旧单路由配置继续继承原全局连接语义。Bad：用当前 Settings URL 反推旧调用走了代理。
+测试点：`tests/config/test_production.py` 验证迁移与唯一性；`tests/manager/test_production_{backend,delivery}.py`
+断言代理 Key 隔离；`tests/agents/test_{fallback,model_diagnostics}.py` 断言真实尝试的不可变 mode；
+`tests/work_queue/test_route_binding.py` 断言冻结路由歧义保护。错误实现是仅在页面增加模式标签；
+正确实现必须使五元组贯穿 config → policy → selection/claim → adapter → immutable attempt → read model。
 - Codex 子进程环境只允许显式非 secret keys；`UV_CACHE_DIR` 可以透传到 sandbox 可写的 `/tmp`/TMPDIR
   缓存，避免构建工具尝试写只读 home cache。透传环境变量不能扩大 Codex sandbox 文件权限。
 - Responses provider 只能把 model output 中明确的 typed tool call 交给 role/run-bound
@@ -390,9 +411,9 @@ StructuredModelClient.complete(..., input_images: tuple[Path, ...] = ())
 - `model_routes` is the enabled route catalog. `agent_model_routes` is the seven-role ordered policy;
   the first route is primary and every following route is an explicitly selected fallback. The
   catalog does not implicitly expand a role policy. Route identity is
-  `(provider, model, reasoning_effort, kind)`, so one model may expose multiple independently selectable
-  reasoning levels and execution types. CLIProxyAPI only supplies the Codex CLI connection; it is
-  not a route kind.
+  `(provider, model, reasoning_effort, kind, effective_connection_mode)`, so one model may expose
+  multiple independently selectable reasoning levels, execution types and CLI transports.
+  CLIProxyAPI only supplies the Codex CLI connection; it is not a route kind.
 - Product, Designer and Planner resolve their own TeamRole at the structured-client seam. Coder, QA
   and Reviewer preserve the same order in the content-versioned ModelPolicy used by dispatch.
 - Settings may materialize an explicit seven-role policy from a legacy empty policy by selecting only
@@ -401,7 +422,7 @@ StructuredModelClient.complete(..., input_images: tuple[Path, ...] = ())
   fallbacks per Agent. Manager's route is persisted/displayed even though current Manager decisions
   use deterministic Skills and do not invoke a model.
 - The read-only runtime Status projection resolves the same seven role policies through
-  `ProductionConfig.routes_for(role)` and joins each exact route four-tuple with catalog readiness. It
+  `ProductionConfig.routes_for(role)` and joins each exact route five-tuple with catalog readiness. It
   preserves primary/fallback order and labels whether the policy is explicit or inherited; it does
   not claim that any route is currently executing.
 - Codex CLI receives one `--image <verified-path>` pair per Product screenshot. Responses receives

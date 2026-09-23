@@ -1,0 +1,9 @@
+{
+  "id": "per-route-cli-connection-20260923",
+  "title": "Configure and observe Codex CLI connection per model route",
+  "status": "completed",
+  "phase": "verified_incremental",
+  "baseline": "48a08fd9962cc84de52118ee8aeabc077a1a1ec4",
+  "authorization": "User requested the previously proposed per-route ordinary CLI versus CLIProxyAPI connection setting and visibility; current checkout, Trellis, single Agent, incremental tests, commit.",
+  "verification": "verification.md"
+}

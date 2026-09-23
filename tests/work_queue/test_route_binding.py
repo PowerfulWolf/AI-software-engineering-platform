@@ -94,7 +94,9 @@ def test_frozen_routes_bind_type_and_reject_legacy_ambiguity() -> None:
     legacy_policy = policy.model_copy(
         update={
             "role_routes": (),
-            "routes": (policy.routes[0].model_copy(update={"route_kind": None}),),
+            "routes": (
+                policy.routes[0].model_copy(update={"route_kind": None, "connection_mode": None}),
+            ),
         }
     )
     with pytest.raises(QueueConflict, match="ambiguous"):
@@ -103,4 +105,62 @@ def test_frozen_routes_bind_type_and_reject_legacy_ambiguity() -> None:
             selection.model_copy(update={"route_kind": None}),
             legacy_policy,
             routes,
+        )
+
+
+def test_frozen_routes_bind_codex_connection_and_reject_legacy_ambiguity() -> None:
+    routes = (
+        ProviderRouteConfig(
+            provider="codex",
+            model="gpt-5.5",
+            kind=ModelProviderKind.CODEX_CLI,
+            connection_mode="direct",
+        ),
+        ProviderRouteConfig(
+            provider="codex",
+            model="gpt-5.5",
+            kind=ModelProviderKind.CODEX_CLI,
+            connection_mode="proxy",
+        ),
+    )
+    config = ProductionConfig(
+        model_routes=routes, codex_cli_proxy_base_url="http://127.0.0.1:8317/v1"
+    )
+    _, policy = production_team_roster(config)
+    selection = ModelSelection(
+        policy_id=policy.id,
+        policy_version=policy.version,
+        provider="codex",
+        model="gpt-5.5",
+        reasoning_effort="medium",
+        route_kind="codex_cli",
+        connection_mode="direct",
+        tier=BrainTier.CRITICAL,
+        reasons=(ModelRouteReason.DEFAULT,),
+        selected_at=datetime.now(UTC),
+    )
+    validate_frozen_routes(
+        AgentRole.CODER, selection, policy, routes, proxy_base_url=config.codex_cli_proxy_base_url
+    )
+    with pytest.raises(QueueConflict):
+        validate_frozen_routes(
+            AgentRole.CODER,
+            selection,
+            policy,
+            routes[::-1],
+            proxy_base_url=config.codex_cli_proxy_base_url,
+        )
+    legacy_policy = policy.model_copy(
+        update={
+            "role_routes": (),
+            "routes": (policy.routes[0].model_copy(update={"connection_mode": None}),),
+        }
+    )
+    with pytest.raises(QueueConflict, match="ambiguous"):
+        validate_frozen_routes(
+            AgentRole.CODER,
+            selection.model_copy(update={"connection_mode": None}),
+            legacy_policy,
+            routes,
+            proxy_base_url=config.codex_cli_proxy_base_url,
         )

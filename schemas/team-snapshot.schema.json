@@ -1,5 +1,13 @@
 {
   "$defs": {
+    "CodexConnectionMode": {
+      "enum": ["direct", "proxy"],
+      "type": "string"
+    },
+    "ProviderRouteKind": {
+      "enum": ["codex_cli", "responses"],
+      "type": "string"
+    },
     "AgentRole": {
       "description": "Delivery-runtime roles bound to Task artifacts and state transitions.",
       "enum": [
@@ -863,6 +871,8 @@
     "RunView": {
       "additionalProperties": false,
       "properties": {
+        "route_kind": {"anyOf": [{"$ref": "#/$defs/ProviderRouteKind"}, {"type": "null"}], "default": null},
+        "connection_mode": {"anyOf": [{"$ref": "#/$defs/CodexConnectionMode"}, {"type": "null"}], "default": null},
         "completed_at": {
           "format": "date-time",
           "title": "Completed At",

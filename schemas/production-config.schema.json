@@ -117,6 +117,7 @@
         "provider": {"type": "string", "minLength": 1},
         "model": {"type": "string", "minLength": 1},
         "route_kind": {"anyOf": [{"enum": ["codex_cli", "responses"]}, {"type": "null"}], "default": null},
+        "connection_mode": {"anyOf": [{"enum": ["direct", "proxy"]}, {"type": "null"}], "default": null},
         "reasoning_effort": {
           "anyOf": [
             {"enum": ["low", "medium", "high", "xhigh"]},
@@ -151,6 +152,7 @@
         "provider": {"type": "string", "minLength": 1},
         "model": {"type": "string", "minLength": 1},
         "kind": {"enum": ["codex_cli", "responses"]},
+        "connection_mode": {"anyOf": [{"enum": ["direct", "proxy"]}, {"type": "null"}], "default": null},
         "endpoint": {
           "anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}],
           "default": null
@@ -181,6 +183,7 @@
           "else": {
             "required": ["endpoint", "api_key_env"],
             "properties": {
+              "connection_mode": {"type": "null"},
               "endpoint": {"type": "string", "minLength": 1},
               "api_key_env": {"$ref": "#/$defs/env_var"}
             }

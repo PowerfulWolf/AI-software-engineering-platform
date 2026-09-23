@@ -196,6 +196,30 @@ def test_image_filter_preserves_configured_route_position(tmp_path: Path) -> Non
     assert [(call.model, call.route_index) for call in calls] == [("vision", 2)]
 
 
+def test_structured_call_records_connection_without_proxy_credential() -> None:
+    class Client:
+        def complete(self, **kwargs: object) -> StructuredModelResult:
+            return StructuredModelResult(payload={}, duration_ms=1)
+
+    client = FallbackStructuredModelClient(
+        (
+            StructuredModelRoute(
+                provider="codex",
+                model="gpt-test",
+                client=Client(),
+                route_kind="codex_cli",
+                connection_mode="proxy",
+            ),
+        )
+    )
+    calls: list[ModelCallDiagnostic] = []
+    with capture_model_calls(calls.append):
+        client.complete(instructions="", input_payload={}, output_schema={}, timeout_seconds=1)
+    assert calls[0].route_kind == "codex_cli"
+    assert calls[0].connection_mode == "proxy"
+    assert "base_url" not in calls[0].model_dump_json()
+
+
 def test_model_call_schema_matches_typed_contract() -> None:
     schema = json.loads(
         (Path(__file__).parents[2] / "schemas/model-call-diagnostic.schema.json").read_text()

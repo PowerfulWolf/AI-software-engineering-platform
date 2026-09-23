@@ -37,6 +37,7 @@ from ai_software_engineer.config.codex_proxy import (
 )
 from ai_software_engineer.domain.enums import TeamRole
 from ai_software_engineer.domain.model import (
+    CodexConnectionMode,
     JsonValue,
     ProviderRouteKind,
     ReasoningEffort,
@@ -118,6 +119,7 @@ class StructuredModelRoute:
     reasoning_effort: ReasoningEffort = "medium"
     supports_images: bool = True
     route_kind: ProviderRouteKind | None = None
+    connection_mode: CodexConnectionMode | None = None
 
     def __post_init__(self) -> None:
         if not self.provider.strip() or not self.model.strip():
@@ -136,7 +138,13 @@ class FallbackStructuredModelClient:
             raise ValueError("structured fallback requires at least one route")
         ensure_unique(
             (
-                (route.provider, route.model, route.reasoning_effort, route.route_kind)
+                (
+                    route.provider,
+                    route.model,
+                    route.reasoning_effort,
+                    route.route_kind,
+                    route.connection_mode,
+                )
                 for route in routes
             ),
             "structured provider/model/reasoning/type routes",
@@ -195,6 +203,8 @@ class FallbackStructuredModelClient:
                         provider=route.provider,
                         model=route.model,
                         reasoning_effort=route.reasoning_effort,
+                        route_kind=route.route_kind,
+                        connection_mode=route.connection_mode,
                         duration_ms=_elapsed_ms(started),
                         outcome="FAILED",
                         http_status=error.http_status,
@@ -220,6 +230,8 @@ class FallbackStructuredModelClient:
                         provider=route.provider,
                         model=route.model,
                         reasoning_effort=route.reasoning_effort,
+                        route_kind=route.route_kind,
+                        connection_mode=route.connection_mode,
                         duration_ms=_elapsed_ms(started),
                         outcome="SUCCEEDED",
                         http_status=result.http_status,

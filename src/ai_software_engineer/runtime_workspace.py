@@ -577,6 +577,8 @@ class RuntimeAgentRun(DomainModel):
             or self.agent_definition.reasoning_effort
             != self.allocation.model_selection.reasoning_effort
             or self.agent_definition.route_kind != self.allocation.model_selection.route_kind
+            or self.agent_definition.connection_mode
+            != self.allocation.model_selection.connection_mode
         ):
             raise ValueError("AgentDefinition does not match AgentRunAllocation")
         if not Path(self.code_root).is_absolute():
@@ -647,6 +649,7 @@ class RuntimeWorkforceResolver:
                 "provider": selection.provider,
                 "reasoning_effort": selection.reasoning_effort,
                 "route_kind": selection.route_kind,
+                "connection_mode": selection.connection_mode,
                 "metadata": {
                     **base_definition.metadata,
                     "team_id": self._binding.team_id,
@@ -756,6 +759,10 @@ class RuntimeWorkforceResolver:
                 or route.reasoning_effort == selection.reasoning_effort
             )
             and (selection.route_kind is None or route.route_kind == selection.route_kind)
+            and (
+                selection.connection_mode is None
+                or route.connection_mode == selection.connection_mode
+            )
         )
         if len(candidates) != 1:
             raise RuntimeAllocationError("ModelSelection route is absent from ModelPolicy")

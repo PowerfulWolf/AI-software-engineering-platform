@@ -195,6 +195,7 @@ class ModelRouteRuntimeStatus(DomainModel):
     model: NonEmptyStr
     reasoning_effort: ReasoningEffort
     kind: ModelProviderKind
+    connection_mode: Literal["direct", "proxy"] | None = None
     enabled: StrictBool
     ready: StrictBool
     credential_environment_name: EnvVarName | None = None
@@ -948,7 +949,13 @@ class LocalConsoleAdministration:
             for route in self._saved_config.model_routes
         )
         route_statuses = {
-            (route.provider, route.model, route.reasoning_effort, route.kind): status
+            (
+                route.provider,
+                route.model,
+                route.reasoning_effort,
+                route.kind,
+                self._saved_config.effective_connection_mode(route),
+            ): status
             for route, status in zip(self._saved_config.model_routes, routes, strict=True)
         }
         policy_source: Literal["agent_policy", "global_default"] = (
@@ -960,7 +967,13 @@ class LocalConsoleAdministration:
                 policy_source=policy_source,
                 routes=tuple(
                     route_statuses[
-                        (route.provider, route.model, route.reasoning_effort, route.kind)
+                        (
+                            route.provider,
+                            route.model,
+                            route.reasoning_effort,
+                            route.kind,
+                            self._saved_config.effective_connection_mode(route),
+                        )
                     ]
                     for route in self._saved_config.routes_for(role)
                 ),
@@ -1005,7 +1018,8 @@ class LocalConsoleAdministration:
         self, route: ProviderRouteConfig, codex_available: bool
     ) -> ModelRouteRuntimeStatus:
         if route.kind is ModelProviderKind.CODEX_CLI:
-            key_name = self._saved_config.codex_cli_proxy_api_key_env
+            mode = self._saved_config.effective_connection_mode(route)
+            key_name = self._saved_config.codex_cli_proxy_api_key_env if mode == "proxy" else None
             configured = (
                 self._runtime_variable(key_name)[0] is not None if key_name is not None else None
             )
@@ -1014,6 +1028,7 @@ class LocalConsoleAdministration:
                 model=route.model,
                 reasoning_effort=route.reasoning_effort,
                 kind=route.kind,
+                connection_mode=mode,
                 enabled=route.enabled,
                 ready=not route.enabled or (codex_available and configured is not False),
                 credential_environment_name=key_name,

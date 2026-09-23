@@ -5,7 +5,7 @@ from typing import Literal
 from pydantic import AwareDatetime
 
 from ai_software_engineer.domain.enums import AgentRole, TeamRole, WorkItemStatus
-from ai_software_engineer.domain.model import DomainModel
+from ai_software_engineer.domain.model import CodexConnectionMode, DomainModel, ProviderRouteKind
 from ai_software_engineer.knowledge.views import KnowledgeGapView
 from ai_software_engineer.multi_directory.budget import DesignBudget, StageBudget
 from ai_software_engineer.projection.models import TimelineEntry
@@ -53,6 +53,8 @@ class RunView(DomainModel):
     role: AgentRole
     provider: str
     model: str
+    route_kind: ProviderRouteKind | None = None
+    connection_mode: CodexConnectionMode | None = None
     route_index: int
     outcome: str
     error_code: str | None = None

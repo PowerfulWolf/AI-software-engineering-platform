@@ -92,13 +92,15 @@ class ConfiguredDeliveryRouteAdapterFactory:
 
         prompt_builder: PromptBuilder = ContextPromptBuilder(context_resolver)
         if route.kind is ModelProviderKind.CODEX_CLI:
-            try:
-                codex_cli_proxy_key_environment(environment, config.codex_cli_proxy_api_key_env)
-            except ValueError as error:
-                raise ProductionConfigError(
-                    "Codex CLI proxy API key environment variable is missing: "
-                    f"{config.codex_cli_proxy_api_key_env}"
-                ) from error
+            proxy = config.effective_connection_mode(route) == "proxy"
+            if proxy:
+                try:
+                    codex_cli_proxy_key_environment(environment, config.codex_cli_proxy_api_key_env)
+                except ValueError as error:
+                    raise ProductionConfigError(
+                        "Codex CLI proxy API key environment variable is missing: "
+                        f"{config.codex_cli_proxy_api_key_env}"
+                    ) from error
             return CodexCliAgentAdapter(
                 workspace_root=binding.worktree.path,
                 execution_guard=self._execution_guard,
@@ -107,8 +109,8 @@ class ConfiguredDeliveryRouteAdapterFactory:
                 agent_version=definition.version,
                 prompt_builder=prompt_builder,
                 executable=config.codex_executable,
-                proxy_base_url=config.codex_cli_proxy_base_url,
-                proxy_api_key_env=config.codex_cli_proxy_api_key_env,
+                proxy_base_url=config.codex_cli_proxy_base_url if proxy else None,
+                proxy_api_key_env=config.codex_cli_proxy_api_key_env if proxy else None,
                 reasoning_effort=route.reasoning_effort,
                 environment=environment,
                 initial_workspace_admission=(
@@ -262,6 +264,7 @@ class DispatchDeliveryAgentAdapter:
                     adapter=adapter,
                     reasoning_effort=route.reasoning_effort,
                     route_kind=route.kind.value,
+                    connection_mode=self._config.effective_connection_mode(route),
                 )
             )
         return FallbackAgentAdapter(
@@ -286,6 +289,10 @@ class DispatchDeliveryAgentAdapter:
                 or route.reasoning_effort == definition.reasoning_effort
             )
             and (definition.route_kind is None or route.kind.value == definition.route_kind)
+            and (
+                definition.connection_mode is None
+                or self._config.effective_connection_mode(route) == definition.connection_mode
+            )
         )
         if len(primary) != 1:
             raise ProductionConfigError(

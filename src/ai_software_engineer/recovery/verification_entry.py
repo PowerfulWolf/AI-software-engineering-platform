@@ -233,6 +233,7 @@ def _definitions(
                 "model": phase.model_selection.model,
                 "reasoning_effort": phase.model_selection.reasoning_effort,
                 "route_kind": phase.model_selection.route_kind,
+                "connection_mode": phase.model_selection.connection_mode,
                 "permissions": _delivery_role_permissions(phase.role, allowed, commands),
             }
         )

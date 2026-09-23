@@ -1532,8 +1532,21 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     .children.flatMap(descend)
     .filter((node) => node.tag === "button")
     .map((node) => node.textContent);
-  assert.ok(coderReasoningChoices.includes("codex / gpt-5.6-terra · high · Codex CLI"));
-  assert.ok(coderReasoningChoices.includes("codex / gpt-5.6-terra · medium · Codex CLI"));
+  assert.ok(coderReasoningChoices.includes("codex / gpt-5.6-terra · high · Codex CLI · 普通 CLI"));
+  assert.ok(coderReasoningChoices.includes("codex / gpt-5.6-terra · medium · Codex CLI · 普通 CLI"));
+  vm.runInContext(`settingsDraft.codex_cli_proxy_base_url = "http://127.0.0.1:8317/v1";
+    settingsDraft.model_routes.push({...structuredClone(settingsDraft.model_routes[0]), connection_mode: "proxy"});
+    render();`, context);
+  const connectionChoices = descend(get("content"))
+    .find((node) => node.dataset.role === "coder")
+    .children.flatMap(descend)
+    .filter((node) => node.tag === "button")
+    .map((node) => node.textContent);
+  assert.ok(connectionChoices.includes("codex / gpt-5.6-terra · high · Codex CLI · 普通 CLI"));
+  assert.ok(connectionChoices.includes("codex / gpt-5.6-terra · high · Codex CLI · CLIProxyAPI"));
+  assert.equal(vm.runInContext("modelRouteValidationMessage(settingsDraft)", context), null);
+  assert.equal(vm.runInContext("recordedModelConnectionLabel({route_kind: 'codex_cli'})", context), "连接方式未记录");
+  vm.runInContext("settingsDraft.model_routes.pop(); settingsDraft.codex_cli_proxy_base_url = null; render();", context);
   assert.doesNotMatch(text(get("content")), /密钥状态/);
   assert.match(text(get("content")), /Agent 模型分配/);
   assert.equal(
@@ -1581,8 +1594,8 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     );
     await option.events.click();
   };
-  await addProductFallback("codex / gpt-5.6-terra · high · Codex CLI");
-  await addProductFallback("codex / gpt-5.6-terra · medium · Codex CLI");
+  await addProductFallback("codex / gpt-5.6-terra · high · Codex CLI · 普通 CLI");
+  await addProductFallback("codex / gpt-5.6-terra · medium · Codex CLI · 普通 CLI");
   const productCardWithFallbacks = descend(get("content")).find(
     (node) => node.dataset.role === "product",
   );
@@ -1605,7 +1618,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     (node) => node.dataset.role === "product",
   );
   assert.doesNotMatch(text(productCardAfterRemove), /备用 2/);
-  await addProductFallback("codex / gpt-5.6-terra · high · Codex CLI");
+  await addProductFallback("codex / gpt-5.6-terra · high · Codex CLI · 普通 CLI");
   const responseKeyRow = descend(get("content")).find(
     (node) => node.className === "field" &&
       node.children[0]?.textContent === "API Key",
@@ -1826,7 +1839,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   );
   await failedSettingsForm.events.submit({ preventDefault() {} });
   assert.match(text(get("composer")), /设置保存失败/);
-  assert.match(text(get("composer")), /每个 Provider \+ Model \+ Reasoning \+ 类型组合只能配置一次/);
+  assert.match(text(get("composer")), /与第 1 条重复/);
   assert.equal(savedSettings.length, 1, "client validation must send no PUT");
   await descend(get("composer"))
     .find((node) => node.tag === "button" && node.textContent === "知道了")

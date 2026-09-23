@@ -916,6 +916,7 @@ class ManagerDispatchService:
             preview.selection.model,
             preview.selection.reasoning_effort,
             preview.selection.route_kind,
+            preview.selection.connection_mode,
             preview.selection.tier,
         )
         current_semantics = (
@@ -925,6 +926,7 @@ class ManagerDispatchService:
             current.selection.model,
             current.selection.reasoning_effort,
             current.selection.route_kind,
+            current.selection.connection_mode,
             current.selection.tier,
         )
         if preview_semantics != current_semantics:

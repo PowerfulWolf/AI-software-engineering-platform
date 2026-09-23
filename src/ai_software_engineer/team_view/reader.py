@@ -1289,6 +1289,8 @@ def _read_runs(
                         role=attempt.role,
                         provider=_safe(attempt.provider),
                         model=_safe(attempt.model),
+                        route_kind=attempt.route_kind,
+                        connection_mode=attempt.connection_mode,
                         route_index=attempt.route_index,
                         outcome=attempt.outcome.value,
                         error_code=attempt.error_code.value if attempt.error_code else None,

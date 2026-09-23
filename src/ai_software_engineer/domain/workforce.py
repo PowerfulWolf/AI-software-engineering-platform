@@ -16,6 +16,7 @@ from ai_software_engineer.domain.enums import (
 )
 from ai_software_engineer.domain.identity import ContextId, RepositoryId, RunId
 from ai_software_engineer.domain.model import (
+    CodexConnectionMode,
     DomainModel,
     JsonValue,
     NonEmptyStr,
@@ -78,6 +79,7 @@ class ModelRoute(DomainModel):
     model: NonEmptyStr
     reasoning_effort: ReasoningEffort | None = None
     route_kind: ProviderRouteKind | None = None
+    connection_mode: CodexConnectionMode | None = None
     tier: BrainTier
     capabilities: tuple[NonEmptyStr, ...] = ()
 
@@ -99,6 +101,7 @@ class ModelRouteReference(DomainModel):
     model: NonEmptyStr
     reasoning_effort: ReasoningEffort | None = None
     route_kind: ProviderRouteKind | None = None
+    connection_mode: CodexConnectionMode | None = None
 
 
 class RoleModelRoutes(DomainModel):
@@ -109,7 +112,13 @@ class RoleModelRoutes(DomainModel):
     def validate_routes(self) -> Self:
         ensure_unique(
             (
-                (route.provider, route.model, route.reasoning_effort, route.route_kind)
+                (
+                    route.provider,
+                    route.model,
+                    route.reasoning_effort,
+                    route.route_kind,
+                    route.connection_mode,
+                )
                 for route in self.routes
             ),
             f"{self.role.value} role model routes",
@@ -132,7 +141,13 @@ class ModelPolicy(DomainModel):
     @model_validator(mode="after")
     def validate_policy(self) -> Self:
         route_keys = tuple(
-            (route.provider, route.model, route.reasoning_effort, route.route_kind)
+            (
+                route.provider,
+                route.model,
+                route.reasoning_effort,
+                route.route_kind,
+                route.connection_mode,
+            )
             for route in self.routes
         )
         ensure_unique(route_keys, "ModelPolicy provider/model/reasoning/type routes")
@@ -157,7 +172,13 @@ class ModelPolicy(DomainModel):
             )
             ensure_unique(
                 (
-                    (route.provider, route.model, route.reasoning_effort, route.route_kind)
+                    (
+                        route.provider,
+                        route.model,
+                        route.reasoning_effort,
+                        route.route_kind,
+                        route.connection_mode,
+                    )
                     for route in resolved
                 ),
                 f"{role_policy.role.value} resolved role model routes",
@@ -176,12 +197,17 @@ class ModelPolicy(DomainModel):
                 or route.reasoning_effort == reference.reasoning_effort
             )
             and (reference.route_kind is None or route.route_kind == reference.route_kind)
+            and (
+                reference.connection_mode is None
+                or route.connection_mode == reference.connection_mode
+            )
         )
         if not candidates:
             raise ValueError("ModelPolicy role routes reference an unavailable route")
         if len(candidates) > 1:
             raise ValueError(
-                "ModelPolicy role route is ambiguous without reasoning_effort and/or route_kind"
+                "ModelPolicy role route is ambiguous without "
+                "reasoning_effort, route_kind and/or connection_mode"
             )
         return candidates[0]
 
@@ -196,6 +222,7 @@ class ModelSelection(DomainModel):
     model: NonEmptyStr
     reasoning_effort: ReasoningEffort | None = None
     route_kind: ProviderRouteKind | None = None
+    connection_mode: CodexConnectionMode | None = None
     tier: BrainTier
     reasons: Annotated[tuple[ModelRouteReason, ...], Field(min_length=1)]
     selected_at: AwareDatetime

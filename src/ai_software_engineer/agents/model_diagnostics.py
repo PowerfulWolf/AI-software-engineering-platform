@@ -11,7 +11,12 @@ from pydantic import AwareDatetime, Field, StringConstraints, field_validator
 from ai_software_engineer.agents.diagnostics import safe_diagnostic
 from ai_software_engineer.agents.models import AgentErrorCode
 from ai_software_engineer.domain.enums import TeamRole
-from ai_software_engineer.domain.model import DomainModel, ReasoningEffort
+from ai_software_engineer.domain.model import (
+    CodexConnectionMode,
+    DomainModel,
+    ProviderRouteKind,
+    ReasoningEffort,
+)
 
 CallPhase = Literal["stage_reply", "knowledge_intent", "knowledge_assessment"]
 RequestId = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_.:-]{1,128}$")]
@@ -25,6 +30,8 @@ class ModelCallDiagnostic(DomainModel):
     phase: CallPhase
     provider: Annotated[str, Field(min_length=1, max_length=200)]
     model: Annotated[str, Field(min_length=1, max_length=200)]
+    route_kind: ProviderRouteKind | None = None
+    connection_mode: CodexConnectionMode | None = None
     reasoning_effort: ReasoningEffort
     duration_ms: int = Field(ge=0)
     outcome: Literal["SUCCEEDED", "FAILED"]

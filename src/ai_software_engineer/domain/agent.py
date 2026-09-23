@@ -6,6 +6,7 @@ from pydantic import Field, StrictBool, StrictInt, StringConstraints, model_vali
 
 from ai_software_engineer.domain.enums import AgentRole, ArtifactKind, NetworkAccess
 from ai_software_engineer.domain.model import (
+    CodexConnectionMode,
     DomainModel,
     JsonValue,
     NonEmptyStr,
@@ -71,6 +72,7 @@ class AgentDefinition(DomainModel):
     provider: NonEmptyStr | None = None
     reasoning_effort: ReasoningEffort | None = None
     route_kind: ProviderRouteKind | None = None
+    connection_mode: CodexConnectionMode | None = None
     system_prompt_ref: NonEmptyStr | None = None
     permissions: AgentPermissions
     input_artifacts: tuple[ArtifactKind, ...]

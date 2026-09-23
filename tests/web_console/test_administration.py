@@ -519,6 +519,51 @@ def test_status_reports_each_agent_exact_model_route_and_readiness(tmp_path: Pat
     assert by_role["product"].routes[0].credential_configured is False
 
 
+def test_status_distinguishes_same_codex_model_by_connection(tmp_path: Path) -> None:
+    config = ProductionConfig.model_validate(
+        {
+            "platform_root": str(tmp_path / "platform"),
+            "team_id": "team_test",
+            "team_name": "Test team",
+            "database": {"dsn_env": "TEST_MYSQL_DSN"},
+            "codex_executable": "/bin/sh",
+            "codex_cli_proxy_base_url": "http://127.0.0.1:8317/v1",
+            "codex_cli_proxy_api_key_env": "ASE_CODEX_PROXY_API_KEY",
+            "model_routes": [
+                {
+                    "provider": "codex",
+                    "model": "gpt-test",
+                    "kind": "codex_cli",
+                    "connection_mode": "direct",
+                },
+                {
+                    "provider": "codex",
+                    "model": "gpt-test",
+                    "kind": "codex_cli",
+                    "connection_mode": "proxy",
+                },
+            ],
+        }
+    )
+    TeamWorkspace.initialize(config.platform_root, team_id=config.team_id, name=config.team_name)
+    administration = LocalConsoleAdministration(
+        runtime_config=config,
+        config_path=tmp_path / "config.json",
+        environment={"TEST_MYSQL_DSN": "mysql+pymysql://user:secret@example.invalid/database"},
+        mysql_probe=lambda _: None,
+    )
+    status = administration.status()
+    assert [route.connection_mode for route in status.model_routes] == ["direct", "proxy"]
+    assert [route.connection_mode for route in status.agent_model_routes[0].routes] == [
+        "direct",
+        "proxy",
+    ]
+    assert status.model_routes[0].credential_environment_name is None
+    assert status.model_routes[1].credential_environment_name == "ASE_CODEX_PROXY_API_KEY"
+    assert status.model_routes[0].ready is True
+    assert status.model_routes[1].ready is False
+
+
 def test_runtime_update_rejects_unknown_variable_and_invalid_dsn(tmp_path: Path) -> None:
     administration = _administration(tmp_path)
 

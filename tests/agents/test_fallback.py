@@ -150,6 +150,39 @@ def test_same_model_with_distinct_types_has_separate_replay_identity(tmp_path: P
         FallbackAgentAdapter(routes[::-1], attempt_store=store, clock=_Clock()).run(request)
 
 
+def test_same_codex_model_with_distinct_connections_has_separate_replay_identity(
+    tmp_path: Path,
+) -> None:
+    request = _coder_request()
+    store = FileModelRouteAttemptStore(tmp_path / "routes")
+    routes = (
+        ProviderAgentRoute(
+            "codex",
+            "gpt-5.5",
+            _ResultAdapter(_failed(request, AgentErrorCode.RATE_LIMITED, transient=True)),
+            route_kind="codex_cli",
+            connection_mode="direct",
+        ),
+        ProviderAgentRoute(
+            "codex",
+            "gpt-5.5",
+            _ResultAdapter(_success(request)),
+            route_kind="codex_cli",
+            connection_mode="proxy",
+        ),
+    )
+    assert (
+        FallbackAgentAdapter(routes, attempt_store=store, clock=_Clock()).run(request).status
+        is AgentRunStatus.SUCCEEDED
+    )
+    assert tuple(item.connection_mode for item in store.list_for_run(request.run_id)) == (
+        "direct",
+        "proxy",
+    )
+    with pytest.raises(AgentRequestConflict):
+        FallbackAgentAdapter(routes[::-1], attempt_store=store, clock=_Clock()).run(request)
+
+
 @pytest.mark.parametrize(
     "code",
     (AgentErrorCode.RATE_LIMITED, AgentErrorCode.PROVIDER_UNAVAILABLE, AgentErrorCode.TIMEOUT),

@@ -196,11 +196,16 @@ production_console_app(
   目录卡片的图片标记必须按显式 `image_input` 优先、缺省时仅 Codex CLI 为 true 的同一后端规则
   计算；Codex CLI 缺省值标为“默认可传图”而非确认该模型的原生能力，也允许显式关闭。
   选择项显示类型以区分相同 Provider/Model/Reasoning 的路由。
-- 模型路由页单独显示可选 Codex CLI 本地代理 base URL 与写入型代理 API Key；留空 URL
-  表示旧直连语义。URL 是无密钥运行配置而非任意 CLI 参数；Key 通过现有 `runtime_variables`
+  编辑草稿载入时要把旧路由的有效 mode 固定为显式值；用户随后填写代理 URL 不得悄悄切换原 direct 路由。
+- Codex CLI 路由的 `connection_mode` 可逐条选择“普通 CLI”或“CLIProxyAPI”；卡片、Agent 主/备
+  选项和只读状态显示该路由的方式，不由全局 URL 推断已完成调用。Responses 仍显示自己的 API 类型。
+- 模型路由页单独显示共享的 Codex CLI 本地代理 base URL 与写入型代理 API Key；只有明确选择
+  CLIProxyAPI 的路由使用它们。未指定 `connection_mode` 的旧配置沿用原全局语义（有 URL 即
+  代理，否则普通 CLI）；页面编辑时规范化成显式值。URL 是无密钥运行配置而非任意 CLI 参数；Key 通过现有 `runtime_variables`
   保存，不由 API 回显。保存后沿用“应用配置”重启流程，不能热改正在执行的 Agent，也不能
   把代理故障自动解释为登录失效。未在页面配置 Key 时才需要同一凭证环境的 CLI 登录；
-  配置 Key 时只将显式引用的 Key 传给 Codex 客户端，禁止传给模型工具 shell。
+  配置 Key 时只将显式引用的 Key 传给代理路由的 Codex 客户端，普通 CLI 路由不能继承 Key
+  或代理覆盖参数；模型工具 shell 也不能接收 Key。
 - 一个 Task 的 Coder/QA/Reviewer 串行。UI 只把 `current_stage=true` 的 assignment 标成执行中；
   已完成/未来角色不得同时显示为运行。
 - DONE 只展示已经由 durable facts 证明的 candidate commit、可唯一定位的 branch 和验证证据。
@@ -625,11 +630,12 @@ GET  /api/v1/admin/status
   Codex executable, live execution and Console port. `runtime_variables` accepts only names referenced
   by that submitted config and is request-only; referenced values never enter a response. A blank UI
   input means preserve the stored value, not erase it.
-- Model routes use `(provider, model, reasoning_effort, kind)` as their stable reference identity. The
-  browser must detect a duplicate normalized four-tuple before calling the Settings API and identify both
+- Model routes use `(provider, model, reasoning_effort, kind, effective_connection_mode)` as their
+  stable reference identity. The browser must detect a duplicate normalized five-tuple before calling
+  the Settings API and identify both
   conflicting route positions; the backend uniqueness validator remains authoritative. The same
-  provider/model may appear more than once when reasoning effort or kind differs, and every new Agent
-  policy reference must preserve both. A legacy reference without effort/type is accepted only when
+  provider/model may appear more than once when reasoning effort, kind or CLI connection differs, and
+  every new Agent policy reference must preserve all three. A legacy reference without effort/type/mode is accepted only when
   all declared fields resolve to exactly one enabled route; ambiguous saved references fail closed.
 - `runtime.env` is sibling to `ASE_CONFIG`, UTF-8, at most 64 KB and contains only canonical
   `NAME='POSIX-quoted value'` entries. Names follow `EnvVarName`; duplicates, controls, noncanonical
@@ -648,7 +654,7 @@ GET  /api/v1/admin/status
   actual delivery-runtime composition, live-model execution switch, Team preparation/knowledge
   counts and per-route credential readiness. `RuntimeStatusSnapshot.agent_model_routes` contains the
   fixed seven roles in organization order. Every role reports `policy_source` and its exact ordered
-  `(provider, model, reasoning_effort, kind)` routes enriched with the catalog readiness facts. This is
+  `(provider, model, reasoning_effort, kind, effective_connection_mode)` routes enriched with catalog readiness facts. This is
   configuration readiness, not evidence that the Agent is currently running or calling that model.
   The separate `model_routes` catalog remains visible as “可用模型目录”. Zero knowledge is neutral.
   MySQL connectivity alone must not imply the full delivery runtime is ready.

@@ -33,9 +33,11 @@ class ApprovedRoleDispatch:
         plan: ExecutionPlan,
         workforce: FileTeamWorkforceStore,
         repository_root: Path,
+        proxy_base_url: str | None = None,
     ) -> None:
         self.queue, self.dispatch, self.workforce = queue, dispatch, workforce
         self.root = repository_root
+        self.proxy_base_url = proxy_base_url
         self.phases = {phase.role: phase for phase in dispatch.phases}
         self.demands = {demand.role: demand for demand in derive_phase_demands(dispatch.task, plan)}
         self.worker_id = "worker_delivery_" + uuid4().hex
@@ -95,11 +97,13 @@ class ApprovedRoleDispatch:
             selected.model,
             selected.reasoning_effort,
             selected.route_kind,
+            selected.connection_mode,
         ) != (
             expected.provider,
             expected.model,
             expected.reasoning_effort,
             expected.route_kind,
+            expected.connection_mode,
         ):
             raise QueueConflict("Worker routing no longer matches approved dispatch")
         return DispatcherLoop(
@@ -116,7 +120,7 @@ class ApprovedRoleDispatch:
     def validate_routes(self, role: AgentRole, routes: tuple[ProviderRouteConfig, ...]) -> None:
         selection = self.phases[role].model_selection
         policy = self.workforce.get_policy(selection.policy_id, version=selection.policy_version)
-        validate_frozen_routes(role, selection, policy, routes)
+        validate_frozen_routes(role, selection, policy, routes, proxy_base_url=self.proxy_base_url)
 
 
 def validate_frozen_routes(
@@ -124,6 +128,8 @@ def validate_frozen_routes(
     selection: ModelSelection,
     policy: ModelPolicy,
     routes: tuple[ProviderRouteConfig, ...],
+    *,
+    proxy_base_url: str | None = None,
 ) -> None:
     """A claim selects the primary; only its exact policy can authorize fallback.
 
@@ -140,7 +146,16 @@ def validate_frozen_routes(
         else policy.routes
     )
     actual = tuple(
-        (item.provider, item.model, item.reasoning_effort, item.kind.value) for item in routes
+        (
+            item.provider,
+            item.model,
+            item.reasoning_effort,
+            item.kind.value,
+            (item.connection_mode or ("proxy" if proxy_base_url else "direct"))
+            if item.kind.value == "codex_cli"
+            else None,
+        )
+        for item in routes
     )
     keys = []
     for item in allowed:
@@ -150,6 +165,7 @@ def validate_frozen_routes(
             if candidate[:2] == (item.provider, item.model)
             and (item.reasoning_effort is None or candidate[2] == item.reasoning_effort)
             and (item.route_kind is None or candidate[3] == item.route_kind)
+            and (item.connection_mode is None or candidate[4] == item.connection_mode)
         )
         if len(matches) > 1:
             raise QueueConflict("Worker legacy route is ambiguous")
@@ -161,6 +177,7 @@ def validate_frozen_routes(
         if key[:2] == (selection.provider, selection.model)
         and (selection.reasoning_effort is None or key[2] == selection.reasoning_effort)
         and (selection.route_kind is None or key[3] == selection.route_kind)
+        and (selection.connection_mode is None or key[4] == selection.connection_mode)
     )
     if len(primary) != 1 or not actual or actual[0] != primary[0]:
         raise QueueConflict("Worker primary route does not match its claim")

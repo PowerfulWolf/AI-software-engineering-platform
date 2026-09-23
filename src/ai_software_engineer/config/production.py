@@ -26,6 +26,7 @@ from ai_software_engineer.config.codex_proxy import (
 from ai_software_engineer.domain.enums import TeamRole
 from ai_software_engineer.domain.identity import ProjectId, TeamId
 from ai_software_engineer.domain.model import (
+    CodexConnectionMode,
     DomainModel,
     NonEmptyStr,
     ReasoningEffort,
@@ -80,6 +81,7 @@ class ProviderRouteConfig(DomainModel):
     provider: NonEmptyStr
     model: NonEmptyStr
     kind: ModelProviderKind
+    connection_mode: CodexConnectionMode | None = None
     endpoint: NonEmptyStr | None = None
     api_key_env: EnvVarName | None = None
     reasoning_effort: ReasoningEffort = "medium"
@@ -91,8 +93,11 @@ class ProviderRouteConfig(DomainModel):
         if self.kind is ModelProviderKind.CODEX_CLI:
             if self.endpoint is not None or self.api_key_env is not None:
                 raise ValueError("Codex CLI route cannot embed endpoint or API key settings")
-        elif self.endpoint is None or self.api_key_env is None:
-            raise ValueError("Responses route requires endpoint and api_key_env")
+        else:
+            if self.connection_mode is not None:
+                raise ValueError("Responses route cannot declare a Codex CLI connection mode")
+            if self.endpoint is None or self.api_key_env is None:
+                raise ValueError("Responses route requires endpoint and api_key_env")
         if self.endpoint is not None and any(ord(character) < 32 for character in self.endpoint):
             raise ValueError("provider endpoint cannot contain control characters")
         return self
@@ -108,6 +113,7 @@ class ProviderRouteReference(DomainModel):
     model: NonEmptyStr
     reasoning_effort: ReasoningEffort | None = None
     route_kind: ModelProviderKind | None = None
+    connection_mode: CodexConnectionMode | None = None
 
 
 class AgentModelRoutePolicy(DomainModel):
@@ -118,7 +124,13 @@ class AgentModelRoutePolicy(DomainModel):
     def validate_routes(self) -> Self:
         ensure_unique(
             (
-                (route.provider, route.model, route.reasoning_effort, route.route_kind)
+                (
+                    route.provider,
+                    route.model,
+                    route.reasoning_effort,
+                    route.route_kind,
+                    route.connection_mode,
+                )
                 for route in self.routes
             ),
             f"{self.role.value} Agent model routes",
@@ -186,6 +198,11 @@ class ProductionConfig(DomainModel):
             max_transient_failures=self.execution_retry_policy.designer.max_transient_failures,
         )
 
+    def effective_connection_mode(self, route: ProviderRouteConfig) -> CodexConnectionMode | None:
+        if route.kind is not ModelProviderKind.CODEX_CLI:
+            return None
+        return route.connection_mode or ("proxy" if self.codex_cli_proxy_base_url else "direct")
+
     @classmethod
     def default(cls) -> Self:
         """Build the visible first-run defaults without writing operator state."""
@@ -238,9 +255,19 @@ class ProductionConfig(DomainModel):
                 *(route.api_key_env for route in self.model_routes),
             }:
                 raise ValueError("Codex CLI proxy API key must have a dedicated environment name")
+        if self.codex_cli_proxy_base_url is None and any(
+            self.effective_connection_mode(route) == "proxy" for route in self.model_routes
+        ):
+            raise ValueError("Codex CLI proxy route requires a proxy URL")
         ensure_unique(
             (
-                (route.provider, route.model, route.reasoning_effort, route.kind)
+                (
+                    route.provider,
+                    route.model,
+                    route.reasoning_effort,
+                    route.kind,
+                    self.effective_connection_mode(route),
+                )
                 for route in self.model_routes
             ),
             "production provider/model/reasoning/type routes",
@@ -261,7 +288,13 @@ class ProductionConfig(DomainModel):
             )
             ensure_unique(
                 (
-                    (route.provider, route.model, route.reasoning_effort, route.kind)
+                    (
+                        route.provider,
+                        route.model,
+                        route.reasoning_effort,
+                        route.kind,
+                        self.effective_connection_mode(route),
+                    )
                     for route in resolved
                 ),
                 f"{policy.role.value} resolved Agent model routes",
@@ -346,6 +379,10 @@ class ProductionConfig(DomainModel):
                 or route.reasoning_effort == reference.reasoning_effort
             )
             and (reference.route_kind is None or route.kind == reference.route_kind)
+            and (
+                reference.connection_mode is None
+                or self.effective_connection_mode(route) == reference.connection_mode
+            )
         )
         if not candidates:
             raise ValueError(
@@ -355,6 +392,6 @@ class ProductionConfig(DomainModel):
         if len(candidates) > 1:
             raise ValueError(
                 f"Agent route {reference.provider}/{reference.model} is ambiguous without "
-                "reasoning_effort and/or route_kind"
+                "reasoning_effort, route_kind and/or connection_mode"
             )
         return candidates[0]

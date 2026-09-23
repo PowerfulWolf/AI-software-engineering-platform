@@ -186,6 +186,41 @@ def test_delivery_codex_proxy_managed_key_requires_runtime_value(
     assert captured == ["ASE_CODEX_PROXY_API_KEY"]
 
 
+def test_delivery_direct_route_does_not_require_or_forward_proxy_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: list[dict[str, object]] = []
+
+    def make_adapter(**kwargs: object) -> MagicMock:
+        captured.append(kwargs)
+        return MagicMock()
+
+    monkeypatch.setattr(
+        "ai_software_engineer.manager.production_delivery.CodexCliAgentAdapter", make_adapter
+    )
+    payload = _config(tmp_path).to_wire()
+    payload["codex_cli_proxy_base_url"] = "http://127.0.0.1:8317/v1"
+    payload["codex_cli_proxy_api_key_env"] = "ASE_CODEX_PROXY_API_KEY"
+    routes = payload["model_routes"]
+    assert isinstance(routes, list)
+    routes[0]["connection_mode"] = "direct"
+    config = ProductionConfig.model_validate(payload)
+    definition = MagicMock(id="agent_coder", version="v0.1", role=AgentRole.CODER)
+    binding = MagicMock()
+    binding.worktree.path = tmp_path
+
+    ConfiguredDeliveryRouteAdapterFactory().create(
+        route=config.model_routes[0],
+        definition=definition,
+        binding=binding,
+        context_resolver=cast(StoredContextResolver, MagicMock()),
+        config=config,
+        environment={},
+    )
+    assert captured[0]["proxy_base_url"] is None
+    assert captured[0]["proxy_api_key_env"] is None
+
+
 def _adapter(
     tmp_path: Path,
     dispatch: DispatchCommitRecord | VerificationReservation,

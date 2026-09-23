@@ -13,6 +13,7 @@
     "model": {"type": "string", "minLength": 1},
     "provider": {"type": "string"},
     "route_kind": {"anyOf": [{"enum": ["codex_cli", "responses"]}, {"type": "null"}], "default": null},
+    "connection_mode": {"anyOf": [{"enum": ["direct", "proxy"]}, {"type": "null"}], "default": null},
     "reasoning_effort": {
       "anyOf": [
         {"enum": ["low", "medium", "high", "xhigh"]},

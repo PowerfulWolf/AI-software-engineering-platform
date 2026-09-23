@@ -252,22 +252,24 @@ class ConfiguredStructuredClientFactory:
         routes: list[StructuredModelRoute] = []
         for route in self._config.routes_for(role):
             if route.kind is ModelProviderKind.CODEX_CLI:
-                try:
-                    codex_cli_proxy_key_environment(
-                        self._environment, self._config.codex_cli_proxy_api_key_env
-                    )
-                except ValueError as error:
-                    raise ProductionConfigError(
-                        "Codex CLI proxy API key environment variable is missing: "
-                        f"{self._config.codex_cli_proxy_api_key_env}"
-                    ) from error
+                proxy = self._config.effective_connection_mode(route) == "proxy"
+                if proxy:
+                    try:
+                        codex_cli_proxy_key_environment(
+                            self._environment, self._config.codex_cli_proxy_api_key_env
+                        )
+                    except ValueError as error:
+                        raise ProductionConfigError(
+                            "Codex CLI proxy API key environment variable is missing: "
+                            f"{self._config.codex_cli_proxy_api_key_env}"
+                        ) from error
                 client: StructuredModelClient = CodexCliStructuredModelClient(
                     repository_root=repository_roots[0],
                     additional_repository_roots=repository_roots[1:],
                     model=route.model,
                     executable=self._config.codex_executable,
-                    proxy_base_url=self._config.codex_cli_proxy_base_url,
-                    proxy_api_key_env=self._config.codex_cli_proxy_api_key_env,
+                    proxy_base_url=self._config.codex_cli_proxy_base_url if proxy else None,
+                    proxy_api_key_env=self._config.codex_cli_proxy_api_key_env if proxy else None,
                     reasoning_effort=route.reasoning_effort,
                     environment=self._environment,
                 )
@@ -293,6 +295,7 @@ class ConfiguredStructuredClientFactory:
                     reasoning_effort=route.reasoning_effort,
                     supports_images=route.accepts_image_input(),
                     route_kind=route.kind.value,
+                    connection_mode=self._config.effective_connection_mode(route),
                 )
             )
         return FallbackStructuredModelClient(tuple(routes), role=role)
@@ -970,6 +973,7 @@ class ProductionProjectDeliveryBackend:
             plan,
             FileTeamWorkforceStore(self._organization),
             facts.workspace.repository_root,
+            proxy_base_url=self._config.codex_cli_proxy_base_url,
         )
         worker_guard = WorkerExecutionGuard()
         accepted_artifacts = AcceptedArtifactStore(
@@ -1564,6 +1568,7 @@ def _agent_definitions(
             provider=phase.model_selection.provider,
             reasoning_effort=phase.model_selection.reasoning_effort,
             route_kind=phase.model_selection.route_kind,
+            connection_mode=phase.model_selection.connection_mode,
             permissions=_delivery_role_permissions(phase.role, allowed_paths, commands),
             input_artifacts=_ROLE_INPUTS[phase.role],
             output_artifacts=_ROLE_OUTPUTS[phase.role],

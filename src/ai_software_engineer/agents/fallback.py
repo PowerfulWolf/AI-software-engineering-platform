@@ -25,6 +25,7 @@ from ai_software_engineer.agents.ports import AgentAdapter, AgentRequestConflict
 from ai_software_engineer.domain.enums import AgentRole
 from ai_software_engineer.domain.identity import RunId
 from ai_software_engineer.domain.model import (
+    CodexConnectionMode,
     DomainModel,
     NonEmptyStr,
     ProviderRouteKind,
@@ -65,6 +66,7 @@ class ModelRouteAttempt(DomainModel):
     model: NonEmptyStr
     reasoning_effort: ReasoningEffort | None = None
     route_kind: ProviderRouteKind | None = None
+    connection_mode: CodexConnectionMode | None = None
     request_sha256: Sha256
     started_at: AwareDatetime
     completed_at: AwareDatetime
@@ -112,6 +114,7 @@ class ModelRouteAttempt(DomainModel):
         model: str,
         reasoning_effort: ReasoningEffort = "medium",
         route_kind: ProviderRouteKind | None = None,
+        connection_mode: CodexConnectionMode | None = None,
         started_at: datetime,
         completed_at: datetime,
         result: AgentResult,
@@ -134,6 +137,7 @@ class ModelRouteAttempt(DomainModel):
             model=model,
             reasoning_effort=reasoning_effort,
             route_kind=route_kind,
+            connection_mode=connection_mode,
             request_sha256=_digest_request(request),
             started_at=started_at,
             completed_at=completed_at,
@@ -246,6 +250,7 @@ class ProviderAgentRoute:
     adapter: AgentAdapter
     reasoning_effort: ReasoningEffort = "medium"
     route_kind: ProviderRouteKind | None = None
+    connection_mode: CodexConnectionMode | None = None
 
     def __post_init__(self) -> None:
         if not self.provider.strip() or not self.model.strip():
@@ -266,7 +271,13 @@ class FallbackAgentAdapter:
             raise ValueError("fallback adapter requires at least one route")
         ensure_unique(
             (
-                (route.provider, route.model, route.reasoning_effort, route.route_kind)
+                (
+                    route.provider,
+                    route.model,
+                    route.reasoning_effort,
+                    route.route_kind,
+                    route.connection_mode,
+                )
                 for route in routes
             ),
             "fallback provider/model/reasoning/type routes",
@@ -306,6 +317,7 @@ class FallbackAgentAdapter:
                     model=route.model,
                     reasoning_effort=route.reasoning_effort,
                     route_kind=route.route_kind,
+                    connection_mode=route.connection_mode,
                     started_at=started_at,
                     completed_at=completed_at,
                     result=result,
@@ -335,6 +347,10 @@ class FallbackAgentAdapter:
                     and attempt.reasoning_effort != route.reasoning_effort
                 )
                 or (attempt.route_kind is not None and attempt.route_kind != route.route_kind)
+                or (
+                    attempt.connection_mode is not None
+                    and attempt.connection_mode != route.connection_mode
+                )
                 or attempt.request_sha256 != _digest_request(request)
                 or result.run_id != request.run_id
                 or result.task_id != request.task_id
