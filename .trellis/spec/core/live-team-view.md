@@ -64,6 +64,11 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
   交付流程在有失败阶段时必须把失败阶段之前的节点显示为已完成、失败节点显示为阻塞警告、后续节点
   保持待处理，从而在 `BLOCKED`/`FAILED` 且没有活动 Task 时仍能看出卡点。活动 successor Task 重新出现时，
   Reader 清除旧的 `failed_stages`，流程恢复显示当前 Task 阶段。
+- `DELIVERING` is an aggregate checkpoint for the serial Coder/QA/Reviewer run. When a terminal
+  blocked child includes a validated `role_queue`, the browser maps its latest durable delivery role
+  to the matching flow gate (`coder → 实现`, `qa → 测试`, `reviewer → 评审`) before rendering the
+  failed warning. If no role evidence exists, it keeps the aggregate `DELIVERING → 实现` fallback;
+  it must never label an earlier retained Coder candidate as blocked when QA or Review is the failed role.
 - Manager 是跨阶段的协调角色，不作为第八个交付门槛插入流程；详情在流程上方显示只读的
   `Manager 协调 · 等待执行/处理中/等待恢复/已阻塞` 状态。该提示只能来自当前 Operation 与 durable
   Requirement 状态，不能把 Manager Operation 当成 Coder、QA 或 Reviewer 的执行事实。
@@ -142,6 +147,8 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
 | Prepared empty team | honest empty data; no DB/model needed without native deliveries |
 | Pre-dispatch `BLOCKED` native delivery, no current/historical Task | show the blocked work card with zero assignments; do not open MySQL |
 | `BLOCKED`/`FAILED` checkpoint with `failed_stage=PLANNING` | Requirement flow shows 产品/设计已完成、计划为阻塞、实现及后续待处理 |
+| Terminal `DELIVERING` child with latest closed QA role | Requirement flow marks 测试为阻塞；实现已完成，评审待处理 |
+| Terminal `DELIVERING` child without role evidence | Keep the aggregate delivery fallback; do not infer QA/Review from blocker prose |
 | Blocked checkpoint with an active successor Task | Requirement flow follows the successor's current stage and does not retain the old failed marker |
 | Blocked Requirement with a queued or running Manager Operation | show the Manager coordination pill while keeping the seven delivery gates unchanged |
 | Any current/historical Task or dispatch lineage | require one read-only MySQL snapshot; unavailable or inconsistent facts reject the snapshot |
@@ -201,6 +208,8 @@ current assignment receives the active Task-stage label before and after a Coder
 The DOM harness must also hold a stale blocked Requirement projection while a matching
 `CONTINUE_DELIVERY` Operation is RUNNING, then provide a QA-current Team snapshot and assert that QA,
 not Coder, owns the current work while Manager remains idle.
+The DOM harness must cover a terminal `DELIVERING` Task whose role queue ends in QA and assert that
+the flow marks 测试 as blocked while the retained Coder candidate is not marked blocked.
 
 ## Wrong vs Correct
 

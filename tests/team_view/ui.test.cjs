@@ -2135,8 +2135,39 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     /Manager 协调.*处理中/,
     "the delivery flow exposes Manager coordination separately from its stage nodes",
   );
+  fixture.requests[0].stage = "BLOCKED";
+  fixture.requests[0].failed_stages = ["DELIVERING"];
+  fixture.requests[0].blocker =
+    "QA verification could not complete in the current environment; the candidate is retained for fresh verification";
+  fixture.tasks[0].status = "BLOCKED";
+  fixture.tasks[0].terminal = true;
+  fixture.tasks[0].blocker = fixture.requests[0].blocker;
+  fixture.tasks[0].role_queue = [
+    { work_item_id: "coder-1", role: "coder", attempt: 1, status: "CLOSED" },
+    { work_item_id: "qa-2", role: "qa", attempt: 2, status: "CLOSED" },
+  ];
+  await interval.fn();
+  const qaBlockedFlow = descend(get("detail")).find(
+    (node) => node.className === "delivery-flow",
+  );
+  const qaBlockedStep = qaBlockedFlow.children.find(
+    (node) => node.className === "blocked",
+  );
+  assert.match(
+    text(qaBlockedStep),
+    /5.*测试.*已阻塞/,
+    "a QA verification blocker must mark the Test stage, not the Coder stage",
+  );
+  assert.notEqual(
+    qaBlockedFlow.children[3].className,
+    "blocked",
+    "the retained Coder candidate must not be presented as blocked",
+  );
   fixture.requests[0].stage = "VERIFY_QA";
+  fixture.requests[0].failed_stages = [];
   fixture.tasks[0].status = "REVIEW";
+  fixture.tasks[0].terminal = false;
+  delete fixture.tasks[0].blocker;
   await interval.fn();
   const authoritativeQaFlow = descend(get("detail")).find(
     (node) => node.className === "delivery-flow",

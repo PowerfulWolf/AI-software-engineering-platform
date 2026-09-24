@@ -154,6 +154,7 @@ const deliveryOperationActions = new Set([
   "RECHECK_DESIGN",
 ]);
 const deliveryRoleOrder = { coder: 0, qa: 1, reviewer: 2 };
+const deliveryRoleStage = { coder: 3, qa: 4, reviewer: 5 };
 const teamRoleOrder = {
   manager: 0,
   product: 1,
@@ -416,6 +417,19 @@ function currentRequestTasks(request) {
       currentByDelivery.set(deliveryId, task);
   }
   return [...currentByDelivery.values()];
+}
+function failedDeliveryRoleStages(request) {
+  if (!(request.failed_stages || []).includes("DELIVERING")) return new Set();
+  const stages = new Set();
+  for (const task of currentRequestTasks(request)) {
+    if (!task.terminal || !["BLOCKED", "FAILED"].includes(task.status)) continue;
+    const roles = (task.role_queue || [])
+      .map((step) => step.role)
+      .filter((role) => deliveryRoleStage[role] !== undefined);
+    const role = roles.at(-1);
+    if (role) stages.add(deliveryRoleStage[role]);
+  }
+  return stages;
 }
 function activeRequestTask(request) {
   if (request.stage === "WAITING_HUMAN" && request.knowledge_gap?.is_current)
@@ -5768,6 +5782,11 @@ function deliveryFlow(request) {
       )
       .filter((index) => index !== undefined),
   );
+  const roleStageIndexes = failedDeliveryRoleStages(request);
+  if (roleStageIndexes.size) {
+    failedStageIndexes.delete(requestStages.DELIVERING);
+    for (const index of roleStageIndexes) failedStageIndexes.add(index);
+  }
   const operation = latestOperation(request.id);
   if (
     !failedStageIndexes.size &&
