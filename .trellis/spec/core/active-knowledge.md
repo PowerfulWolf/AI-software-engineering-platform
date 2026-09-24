@@ -18,7 +18,8 @@ documents, active applicable Specs and discovered native rules, not by Agents.
 - A new selection cannot rewrite a frozen requirement. Retired/replaced documents
   cannot enter new snapshots; historical snapshots retain exact verified bytes.
 - Gap, route, resolution and resume records preserve original run and evidence.
-  Human-owned BLOCKING gaps prevent progress until an exact approved resolution is present.
+  Human-owned BLOCKING gaps prevent progress until an exact approved resolution is present,
+  except the explicit, scoped upstream investigation handoff described below (not approval).
   A gap with `gap_owner=REPOSITORY` may continue only when runtime composition has explicitly
   bound the exact repository revision to a read-only model client. The final role prompt must
   require repository inspection and must not ask the user to paste source or READ output.
@@ -209,3 +210,72 @@ proof stops the stage before child delivery; no production model or Artifact ver
 See `tests/knowledge/test_stages.py` for receipt replay, validator, SIMPLE, failure and binding
 regressions. Existing Requirements need no migration: stage proof sidecars are written on subsequent
 runs, while historical journal checkpoints remain immutable.
+
+## Planning knowledge handoff and explicit design recheck
+
+- Joint knowledge `source_revision` remains the historical aggregate scope fingerprint,
+  NOT a Git revision. `repository_inspection` supplies each unit's repository ID, validated
+  read root and actual Git revision. New consultations use a versioned identity. Candidate
+  inspection must use the candidate revision, not the original baseline.
+- Approved upstream resolutions are authoritative inputs across Product/Designer/Planner.
+  Repository questions are delegated to read-only inspection; absence from the knowledge
+  index is not absence from the repository. Designer owns implementation decisions under
+  the approved scope; Planner decomposes and checks feasibility, not product rediscovery.
+- New designs explicitly return `blocking_issues=[]` when ready. Nonempty issues or an
+  omitted readiness declaration consume bounded Designer correction attempts and cannot
+  reach Planning. Legacy persisted designs remain hash-compatible and readable.
+- `RECHECK_DESIGN(delivery_id, expected_checkpoint_sha256)` is an explicit human request
+  to investigate an unresolved Design/Planning gap before dispatch, NOT a resolution or
+  approval of a proposed behavior change. The journal atomically appends a DESIGNING
+  successor with typed recheck lineage, retained exact Product approval and unchanged
+  budgets. Stale checkpoint, resolved gap, wrong scope/stage, children and exhausted
+  Designer budgets reject before writes/model calls.
+- Only gaps named by validated recheck lineage cease blocking that requirement's upstream
+  investigation. Original questions remain required model input and visible history.
+  New gaps still block. No generic gap deletion, synthetic answer or budget reset is allowed.
+- Read-side `knowledge_wait_stage` comes from the durable checkpoint. WAITING_HUMAN is
+  a pause, never an implicit return to Product; an unknown origin highlights no stage.
+- Regression points: exact baseline/candidate context, cross-role approved facts, new human
+  gap after recheck, restart/stale replay, no recheck model call, budget preservation,
+  blocker correction, legacy receipt hashes and paused-stage rendering.
+
+### Executable boundaries
+
+- `multi_directory/service.py`: `JointDeliveryService.recheck_design(RecheckDesign)`
+  returns `JointDeliveryResult` after one append. It does not call `_advance`.
+- `web_console/models.py`: `RecheckDesignIntent` carries `action=RECHECK_DESIGN`,
+  `project_id`, `delivery_id`, `expected_checkpoint_sha256` through the existing operation API.
+  Manager binds `operator_id=web-console` and a checkpoint-bound `request_reference`.
+- `JointCheckpoint.knowledge_rechecks[]` embeds `DesignKnowledgeRecheck` with original
+  `gap`, `source_checkpoint_sha256`, `product_spec_sha256`, operator/reference/time.
+  `JointJournal._validate_successor` verifies one appended recheck and the exact predecessor;
+  it permits clearing the old design/decision only at that handoff. Later accepted design
+  bytes are a new journal revision; old design bytes are never rewritten.
+- `JointTechnicalDesign.blocking_issues` is required in new model requests. Absent fields
+  on historical records serialize as absent, including nested stage-proof digests. This
+  uses Pydantic `exclude_if` (minimum 2.12). `design_feedback` stores rejected full drafts
+  for the next bounded correction, not as an accepted design.
+- `knowledge/recheck.py` compares Team/Project/Requirement/repositories/snapshot/source
+  bindings; `KnowledgeConsultationService` also checks the original gap in the record store.
+  Stage gates consume the recheck-bearing verified journal. Generic `unresolved()` and
+  Delivery-role behavior remain unchanged. A cached sufficient consultation cannot mask
+  another unresolved human gap.
+
+| Case | Result / assertion |
+| --- | --- |
+| Good: unresolved Planning gap, approved Product, no child, budget available | One DESIGNING successor; approval/attempts unchanged; no model call |
+| Base: ordinary approved human answer | Existing resolution/resume path; no recheck needed |
+| Bad: stale digest | `DeliveryCheckpointStale`, no append |
+| Bad: resolved/foreign/Product/post-dispatch gap or exhausted budget | Reject; no model call, no append |
+| Bad: readiness absent or blockers present | Bounded Design correction; no Planning/dispatch |
+| Bad: a new human gap after recheck | WAITING_HUMAN; original recheck cannot bypass it |
+| Unknown wait origin | No active Product highlight; do not infer a stage |
+
+Tests: `tests/knowledge/test_joint_recheck.py`, `tests/manager/test_joint_designer_feedback.py`,
+`tests/team_view/knowledge-gap.test.cjs`, `tests/web_console/test_manager.py` and schema parity.
+Existing data requires no SQL migration: restart, refresh the affected Requirement, request
+“重新核对设计”, then “继续交付”. If Designer budget is exhausted, raise its configured limit
+and restart first; never reset attempts or approve a suggestion merely to unblock execution.
+Rollback before any recheck uses a code/schema revert. After a recheck has been appended,
+older binaries cannot read the new fields; keep compatible readers or roll forward. Do not
+delete journal entries to make a downgrade work.

@@ -1,13 +1,5 @@
 {
   "$defs": {
-    "CodexConnectionMode": {
-      "enum": ["direct", "proxy"],
-      "type": "string"
-    },
-    "ProviderRouteKind": {
-      "enum": ["codex_cli", "responses"],
-      "type": "string"
-    },
     "AgentRole": {
       "description": "Delivery-runtime roles bound to Task artifacts and state transitions.",
       "enum": [
@@ -126,6 +118,13 @@
       ],
       "title": "AssignmentView",
       "type": "object"
+    },
+    "CodexConnectionMode": {
+      "enum": [
+        "direct",
+        "proxy"
+      ],
+      "type": "string"
     },
     "DesignBudget": {
       "additionalProperties": false,
@@ -668,6 +667,13 @@
       "title": "ProjectionEventKind",
       "type": "string"
     },
+    "ProviderRouteKind": {
+      "enum": [
+        "codex_cli",
+        "responses"
+      ],
+      "type": "string"
+    },
     "RequestView": {
       "additionalProperties": false,
       "properties": {
@@ -697,6 +703,16 @@
             }
           ],
           "default": null
+        },
+        "design_recheck_available": {
+          "default": false,
+          "title": "Design Recheck Available",
+          "type": "boolean"
+        },
+        "design_recheck_pending": {
+          "default": false,
+          "title": "Design Recheck Pending",
+          "type": "boolean"
         },
         "design_recovery_available": {
           "default": false,
@@ -733,6 +749,26 @@
             }
           ],
           "default": null
+        },
+        "knowledge_rechecked_gap_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Knowledge Rechecked Gap Ids",
+          "type": "array"
+        },
+        "knowledge_wait_stage": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Knowledge Wait Stage"
         },
         "next_action": {
           "title": "Next Action",
@@ -871,12 +907,21 @@
     "RunView": {
       "additionalProperties": false,
       "properties": {
-        "route_kind": {"anyOf": [{"$ref": "#/$defs/ProviderRouteKind"}, {"type": "null"}], "default": null},
-        "connection_mode": {"anyOf": [{"$ref": "#/$defs/CodexConnectionMode"}, {"type": "null"}], "default": null},
         "completed_at": {
           "format": "date-time",
           "title": "Completed At",
           "type": "string"
+        },
+        "connection_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodexConnectionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "duration_ms": {
           "title": "Duration Ms",
@@ -912,6 +957,17 @@
         "route_index": {
           "title": "Route Index",
           "type": "integer"
+        },
+        "route_kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderRouteKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "run_id": {
           "title": "Run Id",

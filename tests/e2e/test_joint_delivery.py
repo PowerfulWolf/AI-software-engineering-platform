@@ -95,6 +95,7 @@ class JointModels(StructuredClientFactory, StructuredModelClient):
                 payload={
                     "product_spec_sha256": input_payload["product_spec_sha256"],
                     "summary": "Keep producer and consumer greetings compatible.",
+                    "blocking_issues": [],
                     "units": [
                         {"unit_id": unit.id, "requirement_ids": ["req_001"], "design": draft}
                         for unit in scope.units

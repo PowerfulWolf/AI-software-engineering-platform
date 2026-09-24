@@ -228,3 +228,33 @@ def test_legacy_consultation_digest_remains_readable(tmp_path: Path) -> None:
     payload["assessment"].pop("gap_owner", None)
     legacy = receipt.model_copy(update={"consultation_sha256": digest(payload)})
     assert consultation_integrity_matches(legacy)
+
+
+def test_repository_conflict_is_not_silently_deferred_on_first_call(tmp_path: Path) -> None:
+    class ConflictModel(RepositoryInspectionModel):
+        def complete(self, **kwargs: object) -> StructuredModelResult:
+            result = super().complete(**kwargs)  # type: ignore[arg-type]
+            if result.payload.get("status") == "GAP":
+                return StructuredModelResult(
+                    payload={**result.payload, "gap_reason": "CONFLICT"}, duration_ms=1
+                )
+            return result
+
+    frozen = snapshot()
+    model = ConflictModel()
+    client = KnowledgeAwareStructuredClient(
+        model,
+        binding(frozen, TeamRole.DESIGNER),
+        frozen,
+        KnowledgeRecordStore(tmp_path),
+        allow_repository_inspection=True,
+    )
+    for _ in range(2):
+        with pytest.raises(KnowledgeGapRaised):
+            client.complete(
+                instructions="Design",
+                input_payload={},
+                output_schema={"title": "Output"},
+                timeout_seconds=10,
+            )
+    assert model.calls == ["KnowledgeIntent", "KnowledgeAssessment"]

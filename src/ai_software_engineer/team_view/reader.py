@@ -272,6 +272,19 @@ class ProductionTeamReader:
                     else "请在“知识缺口”中补充并批准解答，然后继续交付。"  # noqa: RUF001
                 )
             design_budget = self.config.design_retry_policy.budget(joint.attempts)
+            from ai_software_engineer.multi_directory.recheck import design_recheck_available
+
+            recheck_available = (
+                knowledge_gap is not None
+                and knowledge_gap.resolution is None
+                and design_recheck_available(
+                    joint, knowledge_gap.gap, self.config.design_retry_policy
+                )
+            )
+            if recheck_available:
+                presented_next_action = (
+                    "可补充并批准解答，或选择“重新核对设计”让 Designer 在原批准范围内查证。"  # noqa: RUF001
+                )
             active_budget = stage_budget(
                 self.config.execution_retry_policy, joint.stage, joint.attempts
             )
@@ -324,6 +337,17 @@ class ProductionTeamReader:
                     documents=documents,
                     checkpoint_sha256=joint.checkpoint_sha256,
                     knowledge_gap=knowledge_gap,
+                    knowledge_wait_stage=joint.knowledge_wait_stage,
+                    design_recheck_available=recheck_available,
+                    design_recheck_pending=bool(
+                        joint.stage is JointStage.DESIGNING
+                        and joint.knowledge_rechecks
+                        and joint.previous_checkpoint_sha256
+                        == joint.knowledge_rechecks[-1].source_checkpoint_sha256
+                    ),
+                    knowledge_rechecked_gap_ids=tuple(
+                        r.gap.gap_id for r in joint.knowledge_rechecks or ()
+                    ),
                     design_recovery_available=design_recovery_available,
                     design_budget=design_budget,
                     stage_budget=active_budget,

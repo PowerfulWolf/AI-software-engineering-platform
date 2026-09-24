@@ -131,6 +131,11 @@ ConsoleOperationStore.model_calls(operation_id: str) -> tuple[ModelCallDiagnosti
   `http_status`, `request_id`, `correlation_id`, `error_code/error_summary`. A successful
   fallback does not erase its primary failure. CLI calls and transport timeouts have no
   invented HTTP metadata. Arbitrary uncaught exceptions are not synthesized as completed calls.
+- `modelCallDiagnostics` renders `route_kind=codex_cli` as Codex CLI plus its recorded
+  connection mode and omits the HTTP-status/request-ID placeholders when those fields are
+  absent. For `route_kind=responses`, a missing `http_status` means no HTTP response was
+  received; an HTTP response without `request_id` may show that the service did not provide
+  an ID. Never infer a CLI transport failure from missing HTTP metadata.
 - HTTP metadata allowlist: `x-request-id` (or `request-id`) and `x-correlation-id` only.
   IDs must match `[A-Za-z0-9_.:-]{1,128}`; reject credential echoes and secret-like strings.
   Never persist headers, prompts, response bodies, endpoint URLs, API keys or environment.
@@ -165,6 +170,8 @@ ConsoleOperationStore.model_calls(operation_id: str) -> tuple[ModelCallDiagnosti
 |---|---|
 | Primary HTTP 504, backup HTTP 200 | Two records, same invocation, configured route order, separate durations/IDs |
 | Timeout / CLI result | HTTP status and request ID absent, never guessed |
+| Successful CLI route without HTTP fields | Show success/duration and Codex CLI connection mode; omit HTTP and request-ID placeholders |
+| Responses route without HTTP response | Show “未收到 HTTP 响应”, not a CLI label |
 | Unknown operation | GET 404 |
 | Old operation without diagnostics directory | GET 200 with `[]` |
 | Altered hash/identity, symlink, invalid record or non-directory | GET 409; operation/journal unchanged |
@@ -187,7 +194,9 @@ replay a model to produce historical diagnostics, or append duplicate approval f
   Console -> file sidecar -> reopened GET; hash/symlink/path rejection, 404/405/409,
   no original Operation hash changes, and sink failure without retry or delivery failure.
 - `tests/team_view/knowledge-gap.test.cjs`: one GET/form, retry/submit single-flight,
-  draft retention, late responses across checkpoints and safe diagnostic presentation.
+  draft retention, late responses across checkpoints and safe diagnostic presentation;
+  CLI success has no HTTP/request-ID placeholder while a Responses transport failure reports
+  the missing HTTP response.
 
 ### 7. Wrong vs Correct
 

@@ -115,6 +115,10 @@ class RequestView(DomainModel):
     documents: tuple[DocumentView, ...] = ()
     checkpoint_sha256: str
     knowledge_gap: KnowledgeGapView | None = None
+    knowledge_wait_stage: str | None = None
+    design_recheck_available: bool = False
+    design_recheck_pending: bool = False
+    knowledge_rechecked_gap_ids: tuple[str, ...] = ()
     design_recovery_available: bool = False
     design_budget: DesignBudget | None = None
     stage_budget: StageBudget | None = None

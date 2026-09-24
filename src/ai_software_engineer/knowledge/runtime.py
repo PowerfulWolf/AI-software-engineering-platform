@@ -15,6 +15,7 @@ from ai_software_engineer.domain.enums import TeamRole
 from ai_software_engineer.knowledge.agents import (
     KnowledgeAwareStructuredClient,
     KnowledgeConsultationService,
+    RepositoryInspection,
 )
 from ai_software_engineer.knowledge.context import snapshot_from_sources
 from ai_software_engineer.knowledge.gaps import (
@@ -39,6 +40,8 @@ def joint_knowledge_client(
     role: TeamRole,
     records_root: Path,
     retrieval: KnowledgeRetrieval | None = None,
+    *,
+    repository_inspection: tuple[RepositoryInspection, ...] = (),
 ) -> StructuredModelClient:
     repositories = tuple(sorted({p.result.repository_id for p in checkpoint.preparations}))
     if not repositories:
@@ -54,7 +57,7 @@ def joint_knowledge_client(
             for source in p.context_sources
         ),
     )
-    identity = digest((checkpoint.checkpoint_sha256, role.value))
+    identity = digest(("joint-knowledge-v2", checkpoint.checkpoint_sha256, role.value))
     binding = KnowledgeRunBinding(
         run_id="run_knowledge_" + identity[:32],
         role=role,
@@ -78,6 +81,8 @@ def joint_knowledge_client(
         records,
         retrieval,
         allow_repository_inspection=True,
+        repository_inspection=repository_inspection,
+        design_rechecks=checkpoint.knowledge_rechecks or (),
     )
 
 

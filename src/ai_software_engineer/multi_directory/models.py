@@ -14,6 +14,7 @@ from ai_software_engineer.domain.identity import ProjectId, TeamId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.project_delivery import validate_plan_test_matrix
 from ai_software_engineer.execution import CommandResult
+from ai_software_engineer.knowledge.recheck import DesignKnowledgeRecheck
 from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryId,
     DeliveryStage,
@@ -135,12 +136,29 @@ class DesignWritePathsError(ValueError):
         )
 
 
+class DesignReadinessError(ValueError):
+    """Designer must explicitly close technical blockers before Planning."""
+
+
 class JointTechnicalDesign(DomainModel):
     product_spec_sha256: Digest
     summary: NonEmptyStr
     units: Annotated[tuple[UnitDesign, ...], Field(min_length=1)]
     reference_only: tuple[UnitId, ...] = ()
     interfaces: tuple[InterfaceContract, ...] = ()
+    # Omit absent legacy fields even in nested hash payloads (stage proofs).
+    blocking_issues: tuple[NonEmptyStr, ...] | None = Field(
+        default=None, max_length=32, exclude_if=lambda value: value is None
+    )
+
+    def require_ready(self) -> None:
+        if self.blocking_issues is None:
+            raise DesignReadinessError("declare blocking_issues explicitly; [] means ready")
+        if self.blocking_issues:
+            raise DesignReadinessError(
+                "resolve the reported blocking_issues against approved facts and repository "
+                "evidence before Planning; do not delegate unresolved design choices to Planner"
+            )
 
     def validate_for(self, scope: DirectoryScope, product: JointProductSpec) -> None:
         if self.product_spec_sha256 != digest(product):
@@ -202,6 +220,8 @@ class JointTechnicalDesign(DomainModel):
                 raise ValueError("interface references a directory outside this request")
             if len(set(interface.consumers)) != len(interface.consumers):
                 raise DesignInterfaceConsumersError(interface_index=index)
+        if self.blocking_issues:
+            self.require_ready()
 
 
 class UnitPlan(DomainModel):
@@ -399,6 +419,9 @@ class JointCheckpoint(DomainModel):
     stage: JointStage
     knowledge_wait_stage: JointStage | None = None
     knowledge_gap_id: Digest | None = None
+    knowledge_rechecks: tuple[DesignKnowledgeRecheck, ...] | None = Field(
+        default=None, max_length=32, exclude_if=lambda value: value is None
+    )
     scope: DirectoryScope
     title: NonEmptyStr
     requirement: NonEmptyStr | None = None
@@ -408,6 +431,9 @@ class JointCheckpoint(DomainModel):
     product_spec: JointProductSpec | None = None
     approval: JointApproval | None = None
     design: JointTechnicalDesign | None = None
+    design_feedback: JointTechnicalDesign | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     plan: JointExecutionPlan | None = None
     planning_decision: PlanningDecision | None = None
     planning_upgrade: HumanPlanningUpgrade | None = None
@@ -445,6 +471,21 @@ class JointCheckpoint(DomainModel):
             or self.approval.product_spec_sha256 != digest(self.product_spec)
         ):
             raise ValueError("human approval ProductSpec drift")
+        if self.knowledge_rechecks:
+            ensure_unique((r.gap.gap_id for r in self.knowledge_rechecks), "rechecked gaps")
+            for recheck in self.knowledge_rechecks:
+                recheck.gap.validate_integrity()
+                if (
+                    self.approval is None
+                    or recheck.product_spec_sha256 != self.approval.product_spec_sha256
+                    or (
+                        recheck.gap.binding.team_id,
+                        recheck.gap.binding.project_id,
+                        recheck.gap.binding.requirement_id,
+                    )
+                    != (self.team_id, self.project_id, self.delivery_id)
+                ):
+                    raise ValueError("design recheck scope or approval drift")
         if self.design is not None:
             if self.approval is None or self.product_spec is None:
                 raise ValueError("joint design requires exact human approval")

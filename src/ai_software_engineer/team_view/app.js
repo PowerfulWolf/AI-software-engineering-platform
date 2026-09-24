@@ -133,6 +133,7 @@ const labels = {
   PRODUCT_APPROVAL: "批准产品文档",
   CONTINUE_DELIVERY: "继续交付",
   RECOVER_DESIGN: "恢复设计",
+  RECHECK_DESIGN: "重新核对设计",
   QA_FAILURE: "QA 失败",
   REVIEW_REJECTION: "Review 拒绝",
   APPROVE: "已批准",
@@ -150,6 +151,7 @@ const deliveryOperationActions = new Set([
   "PRODUCT_APPROVAL",
   "CONTINUE_DELIVERY",
   "RECOVER_DESIGN",
+  "RECHECK_DESIGN",
 ]);
 const deliveryRoleOrder = { coder: 0, qa: 1, reviewer: 2 };
 const teamRoleOrder = {
@@ -448,7 +450,7 @@ function requestPresentation(request) {
         ? "PRODUCT_DISCOVERY"
         : deliveryOperation?.intent.action === "PRODUCT_APPROVAL"
           ? "DESIGNING"
-          : deliveryOperation?.intent.action === "RECOVER_DESIGN"
+          : ["RECOVER_DESIGN", "RECHECK_DESIGN"].includes(deliveryOperation?.intent.action)
             ? "DESIGNING"
           : "DELIVERING";
     return {
@@ -491,6 +493,9 @@ function requestPresentation(request) {
       nextAction: "请在设置中提高对应预算，保存并重启服务后继续。",
     };
   const failedDesignOperation = latestOperation(request.id);
+  if (request.design_recheck_pending)
+    return {group: "blocked", status: "DESIGNING", blocker: null,
+      nextAction: "已保留原产品批准。点击“继续交付”开始重新核对设计，不会自动批准问题中的变更建议。"};
   if (
     ["DESIGNING", "PLANNING"].includes(request.stage) &&
     !latestApproval(request.id, request.checkpoint_sha256) &&
@@ -529,6 +534,8 @@ function requestPresentation(request) {
 }
 
 function canContinueDelivery(request) {
+  if (request.design_recheck_pending)
+    return !designBudgetExhausted(request) && !activeOperation(request.id);
   return (
     !designBudgetExhausted(request) &&
     request.stage !== "DESIGNING" &&
@@ -623,6 +630,7 @@ function requestBlockingSummary(request) {
       operationReason: operation?.status === "FAILED" ? operation.error_summary : null,
       approval: null,
       suggestedAction: approved ? "无需重复解答。点击“继续交付”，平台将使用已批准的解答恢复原需求。"
+        : request.design_recheck_available ? "如果这是代码事实或设计问题，可点击“重新核对设计”；真正缺少产品决策时仍需批准解答。"
         : "在下方“待确认的知识”中填写解答和决策依据，点击“批准解答”。",
       approvedKnowledge: approved,
     };
@@ -2676,6 +2684,15 @@ function requestOperation(panel, request, discussionSection) {
       dirty: () => Boolean(message.value.trim() || selectedScreenshots.length),
     });
     appendDiscussionContent(form);
+  }
+  if (request.design_recheck_available && !activeOperation(request.id)) {
+    appendOperation(deliveryButton("重新核对设计", () => confirmMutation(
+      "重新核对设计", "保留已批准的产品需求、原问题与全部历史，将代码事实和设计问题交回 Designer 核实。此操作不批准任何行为变更，不重置预算，也不会立即调用模型。",
+      "重新核对设计", () => submitOperation({
+        action: "RECHECK_DESIGN", project_id: request.project_id,
+        delivery_id: request.id, expected_checkpoint_sha256: request.checkpoint_sha256,
+      }),
+    ), "secondary"));
   }
   if (canRetryDesign(request)) {
     const action = deliveryButton(
@@ -5686,12 +5703,14 @@ function deliveryFlow(request) {
   const presentedStage = requestPresentation(request).status;
   const effectiveStage = ["VERIFY_QA", "VERIFY_REVIEW"].includes(presentedStage)
     ? presentedStage
-    : request.stage;
-  let current = requestStages[effectiveStage] ?? 0;
+    : request.stage === "WAITING_HUMAN"
+      ? request.knowledge_wait_stage
+      : request.stage;
+  let current = requestStages[effectiveStage] ?? -1;
   const taskStatuses = request.scopes
     .map((scope) => taskById(scope.delivery_id)?.status)
     .filter(Boolean);
-  if (!["VERIFY_QA", "VERIFY_REVIEW"].includes(effectiveStage)) {
+  if (request.stage !== "WAITING_HUMAN" && !["VERIFY_QA", "VERIFY_REVIEW"].includes(effectiveStage)) {
     if (taskStatuses.includes("REVIEW")) current = 5;
     else if (taskStatuses.includes("QA")) current = 4;
     else if (
@@ -5726,7 +5745,9 @@ function knowledgeGapSection(item) {
   const heading = el("div", undefined, "knowledge-gap-heading");
   const intro = el("div");
   let approved = approvedKnowledge(item);
-  const renderIntro = () => intro.replaceChildren(el("h2", approved ? "已确认的知识" : "待确认的知识"), el("p", approved
+  const historyOnly = item.stage !== "WAITING_HUMAN";
+  const renderIntro = () => intro.replaceChildren(el("h2", historyOnly ? "知识核对记录" : approved ? "已确认的知识" : "待确认的知识"), el("p", historyOnly
+    ? "保留原问题与核对历史。重新核对不代表批准问题中的建议。" : approved
     ? "解答已批准并保存，无需重复填写。点击“继续交付”恢复原需求。"
     : "补充待确认的信息，批准后再继续原需求。", "muted"));
   renderIntro();
@@ -5736,7 +5757,7 @@ function knowledgeGapSection(item) {
   let loading = false, loaded = false;
   const base = "/api/v1/admin/projects/" + encodeURIComponent(item.project_id) +
     "/requirements/" + encodeURIComponent(item.id);
-  const showLabel = () => approved ? "查看已确认的知识" : "查看待确认的知识";
+  const showLabel = () => historyOnly ? "查看知识核对记录" : approved ? "查看已确认的知识" : "查看待确认的知识";
   const toggle = button(showLabel(), async () => {
     if (loading) return;
     if (loaded) {
@@ -5794,10 +5815,11 @@ function knowledgeGapSection(item) {
 
 function knowledgeGapCard(view, index, base, item) {
   const {gap, resolution, is_current: current} = view;
+  const rechecked = item.knowledge_rechecked_gap_ids?.includes(gap.gap_id);
   const card = el(resolution || !current ? "div" : "form", undefined, "knowledge-gap-card");
   const header = el("div", undefined, "knowledge-gap-card-heading");
   header.append(el("h3", `知识事项 ${index + 1}`),
-    el("span", resolution ? "已确认的知识" : current ? "需要你的确认" : "历史记录", "badge"));
+    el("span", resolution ? "已确认的知识" : rechecked ? "已交回设计核对 · 非批准" : current ? "需要你的确认" : "历史记录", "badge"));
   if (resolution || !current) {
     card.append(header, el("p", gap.question, "knowledge-gap-question"));
     if (resolution) {
@@ -5878,12 +5900,15 @@ function modelCallDiagnostics(operation) {
       const phases = {stage_reply: "阶段回复", knowledge_intent: "知识检索意图", knowledge_assessment: "知识充分性评估"};
       content.replaceChildren(...calls.map(call => {
         const card = el("div", undefined, "model-call-card");
+        const isCli = call.route_kind === "codex_cli";
+        const connection = `${isCli ? "Codex CLI · " : ""}${recordedModelConnectionLabel(call)}`;
+        const httpStatus = isCli ? "" : ` · ${call.http_status != null ? `HTTP ${call.http_status}` : "未收到 HTTP 响应"}`;
         card.append(
-          el("strong", `${call.route_index === 1 ? "主模型" : `备用 ${call.route_index - 1}`} · ${call.provider} / ${call.model} · ${call.reasoning_effort} · ${recordedModelConnectionLabel(call)}`),
-          el("p", `${call.role ? label(call.role) + " · " : ""}${phases[call.phase] || call.phase} · ${call.outcome === "SUCCEEDED" ? "成功" : "失败"} · ${(call.duration_ms / 1000).toFixed(2)} 秒 · ${call.http_status ? `HTTP ${call.http_status}` : "无 HTTP 状态（CLI 或未收到响应）"}`),
+          el("strong", `${call.route_index === 1 ? "主模型" : `备用 ${call.route_index - 1}`} · ${call.provider} / ${call.model} · ${call.reasoning_effort} · ${connection}`),
+          el("p", `${call.role ? label(call.role) + " · " : ""}${phases[call.phase] || call.phase} · ${call.outcome === "SUCCEEDED" ? "成功" : "失败"} · ${(call.duration_ms / 1000).toFixed(2)} 秒${httpStatus}`),
         );
         if (call.error_summary) card.append(el("p", call.error_summary));
-        card.append(el("p", "请求编号：" + (call.request_id || "服务未提供"), "paths"));
+        if (!isCli || call.request_id) card.append(el("p", "请求编号：" + (call.request_id || "服务未提供"), "paths"));
         if (call.correlation_id) card.append(el("p", "关联编号：" + call.correlation_id, "paths"));
         return card;
       }));
@@ -6065,7 +6090,7 @@ function buildDetail() {
     panel.append(overview);
     const blocking = requestBlockerSection(item);
     if (blocking) panel.append(blocking);
-    if (item.stage === "WAITING_HUMAN") panel.append(knowledgeGapSection(item));
+    if (item.stage === "WAITING_HUMAN" || item.knowledge_rechecked_gap_ids?.length) panel.append(knowledgeGapSection(item));
     const flow = el("section", undefined, "detail-section");
     flow.append(el("h2", "交付流程"), deliveryFlow(item));
     panel.append(flow);

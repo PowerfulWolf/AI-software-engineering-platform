@@ -36,6 +36,7 @@ from ai_software_engineer.multi_directory.models import (
     Candidate,
     ChildDelivery,
     DesignInterfaceConsumersError,
+    DesignReadinessError,
     DesignWritePathsError,
     DialogueMessage,
     IntegrationEvidence,
@@ -139,6 +140,14 @@ class RestartRequirement(DomainModel):
 
     delivery_id: DeliveryId
     expected_checkpoint_sha256: CheckpointDigest
+    submitted_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class RecheckDesign(DomainModel):
+    delivery_id: DeliveryId
+    expected_checkpoint_sha256: CheckpointDigest
+    operator_id: NonEmptyStr
+    request_reference: NonEmptyStr
     submitted_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -274,6 +283,56 @@ class JointDeliveryService:
                 ),
             )
             return JointDeliveryResult(checkpoint=restarted)
+
+    def recheck_design(self, command: RecheckDesign) -> JointDeliveryResult:
+        """Append an investigation handoff, without answering the gap or running a model."""
+        from ai_software_engineer.knowledge.administration import find_gap_records
+        from ai_software_engineer.knowledge.gaps import KnowledgeGap, KnowledgeResolution
+        from ai_software_engineer.knowledge.recheck import DesignKnowledgeRecheck
+        from ai_software_engineer.multi_directory.recheck import design_recheck_available
+
+        with self.journal.lock(command.delivery_id):
+            checkpoint = self._current(command.delivery_id)
+            self._expected(checkpoint, command.expected_checkpoint_sha256)
+            if checkpoint.knowledge_gap_id is None:
+                raise ValueError("design recheck requires a current unresolved upstream gap")
+            records = find_gap_records(
+                self.project, checkpoint.delivery_id, checkpoint.knowledge_gap_id
+            )
+            gap = records.get("gaps", checkpoint.knowledge_gap_id, KnowledgeGap)
+            if records.find(
+                "gap-resolutions", gap.gap_id, KnowledgeResolution
+            ) is not None or not design_recheck_available(
+                checkpoint, gap, self.design_retry_policy
+            ):
+                raise ValueError(
+                    "design recheck requires an unresolved upstream gap and available Design budget"
+                )
+            assert checkpoint.approval is not None
+            recheck = DesignKnowledgeRecheck(
+                gap=gap,
+                source_checkpoint_sha256=checkpoint.checkpoint_sha256,
+                product_spec_sha256=checkpoint.approval.product_spec_sha256,
+                operator_id=command.operator_id,
+                request_reference=command.request_reference,
+                requested_at=command.submitted_at,
+            )
+            saved = self._save(
+                checkpoint,
+                stage=JointStage.DESIGNING,
+                knowledge_gap_id=None,
+                knowledge_wait_stage=None,
+                knowledge_rechecks=(*(checkpoint.knowledge_rechecks or ()), recheck),
+                design=None,
+                design_feedback=None,
+                plan=None,
+                planning_decision=None,
+                planning_feedback=None,
+                next_action="Design recheck requested. Continue to inspect the retained questions "
+                "against approved Product facts and exact repository revisions. "
+                "This is not approval of proposed behavior changes; budgets are unchanged.",
+            )
+            return JointDeliveryResult(checkpoint=saved)
 
     def recover_design(self, command: RecoverDesign) -> JointDeliveryResult:
         """Resume Design after a knowledge-only budget exhaustion.
@@ -778,6 +837,12 @@ class JointDeliveryService:
             design = self._design_output(
                 checkpoint,
                 "Act as Designer. "
+                "Inspect pinned repository facts and reuse approved Product decisions. "
+                "Resolve implementation choices yourself within that scope; do not invent "
+                "a behavior change or pass unresolved choices to Planner. "
+                "Return blocking_issues=[] "
+                "only when ready; otherwise explicitly list unresolved blockers. Investigate any "
+                "knowledge_rechecks; they are not human approval of the gap's proposals. "
                 "Return a unified technical design bound to product_spec_sha256. "
                 "Classify every input unit "
                 "as modified (units) or reference_only. Assign approved requirements as "
@@ -799,9 +864,15 @@ class JointDeliveryService:
             assert checkpoint.product_spec is not None
             try:
                 design.validate_for(checkpoint.scope, checkpoint.product_spec)
-            except (DesignInterfaceConsumersError, DesignWritePathsError) as exc:
+                design.require_ready()
+            except (
+                DesignInterfaceConsumersError,
+                DesignWritePathsError,
+                DesignReadinessError,
+            ) as exc:
                 checkpoint = self._save(
                     checkpoint,
+                    design_feedback=design,
                     next_action=(
                         f"Rejected design {digest(design)}: {exc}. "
                         "Return a corrected complete design within the remaining attempt budget."
@@ -815,6 +886,7 @@ class JointDeliveryService:
                 checkpoint,
                 stage=JointStage.PLANNING,
                 design=design,
+                design_feedback=None,
                 next_action="Plan the bounded repository order and joint integration checks.",
             )
         if checkpoint.stage is JointStage.PLANNING:
@@ -832,6 +904,10 @@ class JointDeliveryService:
             plan = self._planning_output(
                 checkpoint,
                 "Act as Planner. Bind design_sha256. "
+                "Your responsibility is executable decomposition and feasibility verification "
+                "of the approved Product and ready Design, not reopening product discovery. "
+                "Read the pinned repository to resolve file, symbol and test facts yourself. "
+                "Reuse approved dialogue/resolutions; do not request source files from the user. "
                 "Return each modified unit once, in dependency-first SERIAL order, with "
                 "coder/qa/reviewer phases. "
                 "For a single-repository scope return integration_checks=[]; native QA and "
@@ -1037,11 +1113,14 @@ class JointDeliveryService:
             else TeamRole.PLANNER
         )
         client = self.backend.client(checkpoint, role)
+        output_schema = model.model_json_schema()
+        if model is JointTechnicalDesign:
+            output_schema["required"] = [*output_schema.get("required", []), "blocking_issues"]
         if image_paths:
             result = client.complete(
                 instructions=_POLICY + instructions,
                 input_payload=payload,
-                output_schema=model.model_json_schema(),
+                output_schema=output_schema,
                 timeout_seconds=600,
                 input_images=image_paths,
             )
@@ -1049,7 +1128,7 @@ class JointDeliveryService:
             result = client.complete(
                 instructions=_POLICY + instructions,
                 input_payload=payload,
-                output_schema=model.model_json_schema(),
+                output_schema=output_schema,
                 timeout_seconds=600,
             )
         try:

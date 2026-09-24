@@ -223,6 +223,17 @@
         "expected_checkpoint_sha256": {"$ref": "#/$defs/digest"}
       }
     },
+    "recheck_design": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "project_id", "delivery_id", "expected_checkpoint_sha256"],
+      "properties": {
+        "action": {"const": "RECHECK_DESIGN"},
+        "project_id": {"$ref": "#/$defs/project_id"},
+        "delivery_id": {"$ref": "#/$defs/delivery_id"},
+        "expected_checkpoint_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
     "approval": {
       "type": "object",
       "additionalProperties": false,
@@ -285,7 +296,8 @@
         {"$ref": "#/$defs/reply"},
         {"$ref": "#/$defs/product_approval"},
         {"$ref": "#/$defs/continue"},
-        {"$ref": "#/$defs/recover_design"}
+        {"$ref": "#/$defs/recover_design"},
+        {"$ref": "#/$defs/recheck_design"}
       ]
     },
     "intent_sha256": {"$ref": "#/$defs/digest"},

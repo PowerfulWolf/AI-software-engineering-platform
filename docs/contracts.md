@@ -781,6 +781,8 @@ Project Spec，或 Team 下的非执行性 Skill 设计建议；后者不会安�
 `model-call-diagnostic.schema.json` 的数组。每条记录包含本次结构化调用的 invocation、配置路由
 顺序、角色/阶段、模型/推理程度、耗时、成功/失败，以及服务实际提供的 HTTP 状态、请求编号和
 关联编号。主模型失败后备用成功也保留两条记录；CLI/超时没有 HTTP 响应时不补造字段。
+调用明细按 `route_kind` 展示：Codex CLI 记录展示连接方式、结果和耗时，不显示缺失的
+HTTP/请求编号占位；Responses API 未收到 HTTP 响应时明确标注该事实。
 
 诊断使用独立的内容寻址 sidecar，不修改 Operation 哈希链、需求 checkpoint 或 MySQL 状态。
 未知 Operation 返回 404；损坏或无法验证的记录返回 409；旧操作无记录时返回空数组。只保存
@@ -794,3 +796,16 @@ Team snapshot 的可选 `RequestView.knowledge_gap` 使用同一投影（见 `te
 批准事实来自校验后的 Gap/Resolution 精确关联，而非浏览器内存；批准不会推进 Requirement
 checkpoint，轮询必须在 checkpoint SHA 不变时仍能反映新批准。已批准事项只读显示原解答/来源，
 由用户另行发起携带当前 `expected_checkpoint_sha256` 的 `CONTINUE_DELIVERY`。
+# Planning wait / engineering recheck
+
+Joint `WAITING_HUMAN` preserves `knowledge_wait_stage`; it is not a Product-stage transition.
+New joint model consultations carry `repository_inspection[]` with actual Git revisions and
+validated read roots, distinct from the aggregate knowledge fingerprint. Approved upstream
+answers are reused across roles; Designer resolves technical choices, Planner decomposes
+and verifies the ready design. A new design must explicitly declare `blocking_issues=[]`.
+
+Console `RECHECK_DESIGN` binds Project, Requirement and exact checkpoint. It appends a typed,
+auditable Design investigation handoff only for an unresolved upstream gap before dispatch.
+Product approval and budget counters are retained; no model runs until the later Continue.
+This action is not a KnowledgeResolution and does not approve behavior changes. See
+`.trellis/spec/core/active-knowledge.md` for the contract, rejection matrix and old-data recovery.

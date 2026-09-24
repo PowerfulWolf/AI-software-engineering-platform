@@ -1,0 +1,7 @@
+{
+  "name": "planning-knowledge-handoff",
+  "status": "completed",
+  "scope": "Joint upstream knowledge, design readiness, Console recovery and read-side stage",
+  "validation": "Incremental offline Python/Node tests only",
+  "rollback": "Revert code and schemas together; retain immutable Requirement history"
+}

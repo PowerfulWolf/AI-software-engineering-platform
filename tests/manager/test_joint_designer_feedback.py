@@ -167,6 +167,36 @@ def test_valid_first_design_is_not_regenerated(tmp_path: Path) -> None:
     assert len(backend.inputs) == 1
 
 
+@pytest.mark.parametrize("issues", [None, ("Verify code before choosing an icon",)])
+def test_unready_design_is_corrected_before_planning(
+    tmp_path: Path, issues: tuple[str, ...] | None
+) -> None:
+    service, backend, seed, _ = setup_design(tmp_path)
+    valid = backend.designs[1]
+    assert isinstance(valid, JointTechnicalDesign)
+    unready = valid.model_copy(update={"blocking_issues": issues})
+    backend.designs = [unready, valid]
+    with pytest.raises(DeliveryReached):
+        service.resume(ResumeProjectDelivery(delivery_id=seed.delivery_id))
+    assert len(backend.design_inputs) == 2
+    assert backend.design_inputs[1]["design_feedback"] == unready.to_wire()
+    accepted = service.status(seed.delivery_id).checkpoint
+    assert accepted.design == valid and accepted.design_feedback is None
+    assert accepted.attempts["design"] == 2
+
+
+def test_unready_design_exhausts_without_entering_planning(tmp_path: Path) -> None:
+    service, backend, seed, _ = setup_design(tmp_path)
+    valid = backend.designs[1]
+    assert isinstance(valid, JointTechnicalDesign)
+    backend.designs = [valid.model_copy(update={"blocking_issues": ("unresolved",)})] * 3
+    with pytest.raises(ValueError, match="design attempt budget exhausted"):
+        service.resume(ResumeProjectDelivery(delivery_id=seed.delivery_id))
+    paused = service.status(seed.delivery_id).checkpoint
+    assert paused.stage is JointStage.DESIGNING and paused.design is None
+    assert not backend.inputs
+
+
 def test_foreign_duplicate_consumers_are_not_reclassified(tmp_path: Path) -> None:
     service, backend, seed, invalid = setup_design(tmp_path)
     interface = invalid.interfaces[0].model_copy(

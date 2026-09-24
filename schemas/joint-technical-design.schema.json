@@ -410,6 +410,23 @@
       },
       "title": "Interfaces",
       "type": "array"
+    },
+    "blocking_issues": {
+      "anyOf": [
+        {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Blocking Issues"
     }
   },
   "required": [

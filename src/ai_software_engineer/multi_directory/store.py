@@ -111,6 +111,8 @@ def _validate_successor(previous: JointCheckpoint | None, item: JointCheckpoint)
     if previous is None:
         if item.sequence != 1:
             raise ValueError("joint journal has a missing initial record")
+        if item.knowledge_rechecks:
+            raise ValueError("design recheck requires a previous wait checkpoint")
         return
     if (
         item.sequence != previous.sequence + 1
@@ -151,12 +153,14 @@ def _validate_successor(previous: JointCheckpoint | None, item: JointCheckpoint)
             or item.stage != previous.stage
         ):
             raise ValueError("integration retry requires an exact immutable approval")
-    if previous.design is not None and item.design != previous.design:
+    recheck = _validate_recheck(previous, item)
+    if previous.design is not None and item.design != previous.design and not recheck:
         raise ValueError("committed joint design and plan are immutable")
     if previous.planning_upgrade is not None and item.planning_upgrade != previous.planning_upgrade:
         raise ValueError("human planning upgrade is immutable")
     if (
         previous.planning_decision is not None
+        and not recheck
         and item.planning_decision != previous.planning_decision
         and (
             previous.planning_upgrade is not None
@@ -190,3 +194,43 @@ def _validate_successor(previous: JointCheckpoint | None, item: JointCheckpoint)
             raise ValueError("committed joint design and plan are immutable")
     if previous.stage == "DONE":
         raise ValueError("completed joint delivery is immutable")
+
+
+def _validate_recheck(previous: JointCheckpoint, item: JointCheckpoint) -> bool:
+    old, new = previous.knowledge_rechecks or (), item.knowledge_rechecks or ()
+    if old == new:
+        return False
+    if len(new) != len(old) + 1 or new[:-1] != old:
+        raise ValueError("design recheck history is append-only")
+    recheck = new[-1]
+    from ai_software_engineer.multi_directory.budget import DesignRetryPolicy
+    from ai_software_engineer.multi_directory.recheck import design_recheck_available
+
+    if not design_recheck_available(
+        previous,
+        recheck.gap,
+        DesignRetryPolicy(max_design_attempts=100, max_transient_failures=100),
+    ):
+        raise ValueError("design recheck scope or stage mismatch")
+    if (
+        previous.stage is not JointStage.WAITING_HUMAN
+        or previous.knowledge_wait_stage not in {JointStage.DESIGNING, JointStage.PLANNING}
+        or previous.knowledge_gap_id != recheck.gap.gap_id
+        or recheck.source_checkpoint_sha256 != previous.checkpoint_sha256
+        or previous.children
+        or previous.plan is not None
+        or item.stage is not JointStage.DESIGNING
+        or item.design is not None
+        or item.plan is not None
+        or item.planning_decision is not None
+        or item.planning_feedback is not None
+        or item.design_feedback is not None
+        or item.knowledge_gap_id is not None
+        or item.knowledge_wait_stage is not None
+        or item.attempts != previous.attempts
+        or item.children != previous.children
+        or item.preparations != previous.preparations
+        or item.dialogue != previous.dialogue
+    ):
+        raise ValueError("design recheck requires an exact upstream handoff without budget reset")
+    return True

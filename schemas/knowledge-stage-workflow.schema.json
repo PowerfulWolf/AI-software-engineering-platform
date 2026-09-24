@@ -439,6 +439,55 @@
       "title": "DesignComplexityFacts",
       "type": "object"
     },
+    "DesignKnowledgeRecheck": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "design_knowledge_recheck",
+          "default": "design_knowledge_recheck",
+          "title": "Kind",
+          "type": "string"
+        },
+        "gap": {
+          "$ref": "#/$defs/KnowledgeGap"
+        },
+        "source_checkpoint_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Source Checkpoint Sha256",
+          "type": "string"
+        },
+        "product_spec_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Product Spec Sha256",
+          "type": "string"
+        },
+        "operator_id": {
+          "minLength": 1,
+          "title": "Operator Id",
+          "type": "string"
+        },
+        "request_reference": {
+          "minLength": 1,
+          "title": "Request Reference",
+          "type": "string"
+        },
+        "requested_at": {
+          "format": "date-time",
+          "title": "Requested At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "gap",
+        "source_checkpoint_sha256",
+        "product_spec_sha256",
+        "operator_id",
+        "request_reference",
+        "requested_at"
+      ],
+      "title": "DesignKnowledgeRecheck",
+      "type": "object"
+    },
     "DesignRiskDraft": {
       "additionalProperties": false,
       "properties": {
@@ -979,6 +1028,22 @@
           "default": null,
           "title": "Knowledge Gap Id"
         },
+        "knowledge_rechecks": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/DesignKnowledgeRecheck"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Knowledge Rechecks"
+        },
         "scope": {
           "$ref": "#/$defs/DirectoryScope"
         },
@@ -1044,6 +1109,17 @@
           "default": null
         },
         "design": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JointTechnicalDesign"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "design_feedback": {
           "anyOf": [
             {
               "$ref": "#/$defs/JointTechnicalDesign"
@@ -1373,6 +1449,23 @@
           },
           "title": "Interfaces",
           "type": "array"
+        },
+        "blocking_issues": {
+          "anyOf": [
+            {
+              "items": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Blocking Issues"
         }
       },
       "required": [

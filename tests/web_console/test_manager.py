@@ -34,6 +34,7 @@ from ai_software_engineer.multi_directory.service import (
     CreateRequirement,
     DeleteRequirement,
     JointDeliveryService,
+    RecheckDesign,
     RecoverDesign,
     RestartRequirement,
     UpdateRequirement,
@@ -280,6 +281,31 @@ def test_recover_design_intent_binds_exact_checkpoint_and_audit_reference(
     assert command.expected_checkpoint_sha256 == entry.checkpoint.checkpoint_sha256
     assert command.operator_id == "web-console"
     assert command.approval_reference.endswith(entry.checkpoint.checkpoint_sha256)
+
+
+def test_recheck_design_intent_is_a_scoped_request_not_a_resolution(tmp_path: Path) -> None:
+    from ai_software_engineer.web_console.models import RecheckDesignIntent
+
+    adapter, host, entry = _adapter(tmp_path)
+    received: list[RecheckDesign] = []
+
+    class RecheckEntry(_RecoverEntry):
+        def recheck_design(self, command: RecheckDesign) -> JointDeliveryResult:
+            received.append(command)
+            return JointDeliveryResult(checkpoint=self.checkpoint)
+
+    host.entry = RecheckEntry(entry.checkpoint)  # type: ignore[assignment]
+    result = adapter.execute(
+        RecheckDesignIntent(
+            project_id=PROJECT_ID,
+            delivery_id=DELIVERY_ID,
+            expected_checkpoint_sha256=entry.checkpoint.checkpoint_sha256,
+        )
+    )
+    assert result.checkpoint_sha256 == entry.checkpoint.checkpoint_sha256
+    assert received[0].operator_id == "web-console"
+    assert received[0].request_reference.endswith(entry.checkpoint.checkpoint_sha256)
+    assert not host.resume_commands
 
 
 def test_update_and_delete_requirement_bind_the_displayed_draft(tmp_path: Path) -> None:

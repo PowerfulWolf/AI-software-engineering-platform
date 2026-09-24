@@ -439,6 +439,55 @@
       "title": "DesignComplexityFacts",
       "type": "object"
     },
+    "DesignKnowledgeRecheck": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "design_knowledge_recheck",
+          "default": "design_knowledge_recheck",
+          "title": "Kind",
+          "type": "string"
+        },
+        "gap": {
+          "$ref": "#/$defs/KnowledgeGap"
+        },
+        "source_checkpoint_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Source Checkpoint Sha256",
+          "type": "string"
+        },
+        "product_spec_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Product Spec Sha256",
+          "type": "string"
+        },
+        "operator_id": {
+          "minLength": 1,
+          "title": "Operator Id",
+          "type": "string"
+        },
+        "request_reference": {
+          "minLength": 1,
+          "title": "Request Reference",
+          "type": "string"
+        },
+        "requested_at": {
+          "format": "date-time",
+          "title": "Requested At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "gap",
+        "source_checkpoint_sha256",
+        "product_spec_sha256",
+        "operator_id",
+        "request_reference",
+        "requested_at"
+      ],
+      "title": "DesignKnowledgeRecheck",
+      "type": "object"
+    },
     "DesignRiskDraft": {
       "additionalProperties": false,
       "properties": {
@@ -1105,6 +1154,23 @@
           },
           "title": "Interfaces",
           "type": "array"
+        },
+        "blocking_issues": {
+          "anyOf": [
+            {
+              "items": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Blocking Issues"
         }
       },
       "required": [
@@ -1145,6 +1211,183 @@
           "type": "null"
         }
       ]
+    },
+    "KnowledgeGap": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "knowledge_gap",
+          "default": "knowledge_gap",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "binding": {
+          "$ref": "#/$defs/KnowledgeRunBinding"
+        },
+        "question": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Question",
+          "type": "string"
+        },
+        "required_decision": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Required Decision",
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "MISSING",
+            "CONFLICT",
+            "STALE",
+            "UNVERIFIABLE"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "BLOCKING",
+            "NON_BLOCKING"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "impact": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Impact",
+          "type": "string"
+        },
+        "risk": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Risk",
+          "type": "string"
+        },
+        "evidence_ids": {
+          "items": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "manifest_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Manifest Sha256",
+          "type": "string"
+        },
+        "gap_id": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Gap Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "binding",
+        "question",
+        "required_decision",
+        "reason",
+        "severity",
+        "impact",
+        "risk",
+        "evidence_ids",
+        "manifest_sha256",
+        "gap_id"
+      ],
+      "title": "KnowledgeGap",
+      "type": "object"
+    },
+    "KnowledgeRunBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Id"
+        },
+        "role": {
+          "$ref": "#/$defs/TeamRole"
+        },
+        "team_id": {
+          "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Team Id",
+          "type": "string"
+        },
+        "project_id": {
+          "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "requirement_id": {
+          "pattern": "^[a-z][a-zA-Z0-9_.:-]{0,159}$",
+          "title": "Requirement Id",
+          "type": "string"
+        },
+        "repository_ids": {
+          "items": {
+            "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Repository Ids",
+          "type": "array"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "context_manifest_id": {
+          "pattern": "^ctx_[a-f0-9]{64}$",
+          "title": "Context Manifest Id",
+          "type": "string"
+        },
+        "snapshot_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Snapshot Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "role",
+        "team_id",
+        "project_id",
+        "requirement_id",
+        "repository_ids",
+        "source_revision",
+        "context_manifest_id",
+        "snapshot_sha256"
+      ],
+      "title": "KnowledgeRunBinding",
+      "type": "object"
     },
     "PhaseDraft": {
       "additionalProperties": false,
@@ -2680,6 +2923,20 @@
       "title": "TaskStatus",
       "type": "string"
     },
+    "TeamRole": {
+      "description": "Long-lived roles that a Team-owned AgentProfile may declare.",
+      "enum": [
+        "manager",
+        "product",
+        "designer",
+        "planner",
+        "coder",
+        "qa",
+        "reviewer"
+      ],
+      "title": "TeamRole",
+      "type": "string"
+    },
     "TechnicalDesignDraft": {
       "additionalProperties": false,
       "properties": {
@@ -2880,6 +3137,22 @@
       "default": null,
       "title": "Knowledge Gap Id"
     },
+    "knowledge_rechecks": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/DesignKnowledgeRecheck"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Knowledge Rechecks"
+    },
     "scope": {
       "$ref": "#/$defs/DirectoryScope"
     },
@@ -2945,6 +3218,17 @@
       "default": null
     },
     "design": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JointTechnicalDesign"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "design_feedback": {
       "anyOf": [
         {
           "$ref": "#/$defs/JointTechnicalDesign"

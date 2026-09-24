@@ -48,6 +48,51 @@ const resolution = {gap_id: gap.gap_id, resolution_id: "resolution-a", answer: "
 const approved = {...pending, resolution};
 const findButton = (h, label) => all(h.detail()).find(n => n.tag === "button" && n.textContent === label);
 
+test("knowledge waits retain their durable origin instead of falling back to Product", () => {
+  const h = harness(async () => ({ok: true, json: async () => []}));
+  for (const [origin, label] of [["DESIGNING", "设计"], ["PLANNING", "计划"], [null, null]]) {
+    h.context.origin = origin;
+    const flow = vm.runInContext("deliveryFlow({...snapshot.requests[0], knowledge_wait_stage: origin})", h.context);
+    const active = all(flow).find(n => n.tag === "li" && n.className === "current");
+    assert.equal(active ? active.children[1].textContent : null, label);
+  }
+});
+
+test("design recheck requires confirmation and sends only the exact checkpoint intent", async () => {
+  const sent = [];
+  const h = harness(async (url, options = {}) => {
+    sent.push(JSON.parse(options.body).intent);
+    return {ok: true, json: async () => ({operation_id: "op-recheck", status: "QUEUED", intent: sent.at(-1)})};
+  });
+  vm.runInContext(`
+    snapshot.requests[0].design_recheck_available = true;
+    snapshot.requests[0].knowledge_wait_stage = "PLANNING";
+    confirmMutation = (title, message, label, action) => { globalThis.confirmation = message; return action(); };
+    renderDetail();
+  `, h.context);
+  await findButton(h, "重新核对设计").events.click();
+  assert.match(h.context.confirmation, /不批准.*不重置预算.*不会立即调用模型/);
+  assert.deepEqual(sent, [{action: "RECHECK_DESIGN", project_id: "project_test", delivery_id: "r1", expected_checkpoint_sha256: "checkpoint-a"}]);
+  assert.equal(findButton(h, "重新核对设计"), undefined);
+});
+
+test("rechecked history is not approved and an idle handoff exposes Continue after reload", async () => {
+  const h = harness(async () => ({ok: true, json: async () => [{...pending, is_current: false}]}));
+  vm.runInContext(`
+    snapshot.requests[0].stage = "DESIGNING";
+    snapshot.requests[0].checkpoint_sha256 = "checkpoint-b";
+    snapshot.requests[0].knowledge_rechecked_gap_ids = ["gap-a"];
+    snapshot.requests[0].design_recheck_pending = true;
+    renderDetail();
+  `, h.context);
+  assert.ok(findButton(h, "继续交付"));
+  await findButton(h, "查看知识核对记录").events.click();
+  assert.match(text(h.detail()), /已交回设计核对 · 非批准/);
+  assert.equal(all(h.detail()).filter(n => n.tag === "form").length, 0);
+  vm.runInContext('operations = [{operation_id: "op", status: "RUNNING", intent: {action: "CONTINUE_DELIVERY", delivery_id: "r1"}}]; renderDetail()', h.context);
+  assert.equal(findButton(h, "继续交付"), undefined);
+});
+
 test("knowledge gaps reuse one region and retain drafts across clicks and refresh", async () => {
   let reads = 0;
   const h = harness(async () => { reads++; return {ok: true, json: async () => [pending]}; });
@@ -377,4 +422,19 @@ test("model call details load once and show primary, fallback, duration and IDs"
   assert.match(text(details), /60.10 秒.*HTTP 504/);
   assert.match(text(details), /req-primary/);
   assert.match(text(details), /req-backup/);
+});
+
+test("model call details present CLI results without HTTP placeholders", async () => {
+  const h = harness(async () => ({ok: true, json: async () => [
+    {route_index: 1, provider: "codex", model: "gpt-6-sol", reasoning_effort: "high", route_kind: "codex_cli", connection_mode: "proxy", phase: "stage_reply", role: "designer", outcome: "SUCCEEDED", duration_ms: 135590, http_status: null, request_id: null},
+    {route_index: 2, provider: "codex", model: "backup", reasoning_effort: "high", route_kind: "responses", phase: "stage_reply", role: "designer", outcome: "FAILED", duration_ms: 1200, http_status: null, request_id: null},
+  ]}));
+  const details = vm.runInContext('modelCallDiagnostics({operation_id:"op-cli", status:"SUCCEEDED"})', h.context);
+  details.open = true;
+  await details.events.toggle();
+  const cards = all(details).filter(node => node.className === "model-call-card");
+  assert.match(text(cards[0]), /Codex CLI · CLIProxyAPI/);
+  assert.match(text(cards[0]), /阶段回复 · 成功 · 135\.59 秒/);
+  assert.doesNotMatch(text(cards[0]), /HTTP|请求编号|服务未提供/);
+  assert.match(text(cards[1]), /未收到 HTTP 响应/);
 });

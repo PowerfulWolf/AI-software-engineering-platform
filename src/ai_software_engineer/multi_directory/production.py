@@ -194,6 +194,7 @@ class ProductionJointBackend:
             client = self.clients.for_projects(roots, role)
         else:
             client = self.clients.for_project(roots[0], role)
+        from ai_software_engineer.knowledge.agents import RepositoryInspection
         from ai_software_engineer.knowledge.index import retrieval_for_project
         from ai_software_engineer.knowledge.runtime import joint_knowledge_client
 
@@ -203,6 +204,31 @@ class ProductionJointBackend:
             role,
             self.project.requirements_root / checkpoint.delivery_id / "knowledge",
             retrieval_for_project(self.project),
+            repository_inspection=tuple(
+                RepositoryInspection(
+                    unit_id=unit.id,
+                    repository_id=next(
+                        p.result.repository_id
+                        for p in checkpoint.preparations
+                        if p.unit_id == unit.id
+                    ),
+                    read_root=str(root),
+                    git_revision=(
+                        next(
+                            (
+                                child.checkpoint.candidate_revision
+                                for child in checkpoint.children
+                                if child.unit_id == unit.id
+                            ),
+                            unit.base_revision,
+                        )
+                        if role is TeamRole.PLANNER and checkpoint.children
+                        else unit.base_revision
+                    )
+                    or "",
+                )
+                for unit, root in zip(checkpoint.scope.units, roots, strict=True)
+            ),
         )
 
     def reconcile(self, checkpoint: JointCheckpoint) -> None:

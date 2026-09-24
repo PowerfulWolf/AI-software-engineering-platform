@@ -28,6 +28,7 @@ from ai_software_engineer.multi_directory.service import (
     CreateRequirement,
     DeleteRequirement,
     JointDeliveryService,
+    RecheckDesign,
     RecoverDesign,
     RestartRequirement,
     UpdateRequirement,
@@ -51,6 +52,7 @@ from .models import (
     DeleteRequirementIntent,
     ProductApprovalIntent,
     ProductReplyIntent,
+    RecheckDesignIntent,
     RecoverDesignIntent,
     RestartRequirementIntent,
     UpdateRequirementIntent,
@@ -154,6 +156,22 @@ class ManagerConsoleAdapter:
                     )
                 )
                 return _summarize(approved, project_id=intent.project_id)
+            if isinstance(intent, RecheckDesignIntent):
+                entry = self._entry(intent.project_id, intent.delivery_id)
+                if not isinstance(entry, JointDeliveryService):
+                    raise ConsoleCommandRejected(
+                        "COMMAND_REJECTED", "Only joint upstream gaps can be rechecked."
+                    )
+                result = entry.recheck_design(
+                    RecheckDesign(
+                        delivery_id=intent.delivery_id,
+                        expected_checkpoint_sha256=intent.expected_checkpoint_sha256,
+                        operator_id="web-console",
+                        request_reference="web-console-design-recheck:"
+                        + intent.expected_checkpoint_sha256,
+                    )
+                )
+                return _summarize(result, project_id=intent.project_id)
             if isinstance(intent, RecoverDesignIntent):
                 recovered = self._entry(intent.project_id, intent.delivery_id)
                 if not isinstance(recovered, JointDeliveryService):

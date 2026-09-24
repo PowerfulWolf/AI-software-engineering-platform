@@ -20,6 +20,7 @@ from ai_software_engineer.knowledge.models import (
     KnowledgeSnapshot,
     digest,
 )
+from ai_software_engineer.knowledge.recheck import rechecked_gap_ids
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.knowledge.workflow import (
     SkillName,
@@ -191,6 +192,9 @@ class StageWorkflowProof(DomainModel):
             if cp.stage is not JointStage.DESIGNING or self.design is None:
                 raise KnowledgeError("STAGE_DESIGN_REQUIRED")
             self.design.validate_for(cp.scope, cp.product_spec)
+            # Legacy proofs without an explicit readiness declaration remain replayable.
+            if self.design.blocking_issues is not None:
+                self.design.require_ready()
             covered = tuple(
                 sorted(
                     {
@@ -399,7 +403,10 @@ class StageWorkflowGate:
             required_acceptance_ids=required,
             covered_acceptance_ids=covered,
             unresolved_blocking_gap_ids=tuple(
-                item.gap_id for item in KnowledgeGapService(self.records).unresolved(proof.binding)
+                item.gap_id
+                for item in KnowledgeGapService(self.records).unresolved(proof.binding)
+                if item.gap_id
+                not in rechecked_gap_ids(checkpoint.knowledge_rechecks or (), proof.binding)
             ),
         )
         registry = WorkflowSkillRegistry(self.records)
