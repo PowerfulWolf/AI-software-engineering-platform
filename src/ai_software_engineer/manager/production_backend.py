@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -133,6 +134,7 @@ from ai_software_engineer.orchestration import (
 from ai_software_engineer.planning import (
     FileExecutionPlanStore,
     PlannerContextBuilder,
+    PlannerRunOutcome,
     PlannerStageService,
     PlanningPreviewService,
     PlanningStageResult,
@@ -594,6 +596,24 @@ class ProductionProjectDeliveryBackend:
                 raise ValueError("Planner design handoff is incomplete")
             if spec is None or approval is None:
                 raise ValueError("Planner Product handoff is incomplete")
+            base_run_id = _planner_run_id(checkpoint.delivery_id)
+            prior_run = facts.planning.find_run(base_run_id)
+            planner_run_id = base_run_id
+            transitioned_at = checkpoint.checkpointed_at
+            if prior_run is not None:
+                if prior_run.outcome in {
+                    PlannerRunOutcome.FAILED,
+                    PlannerRunOutcome.TIMED_OUT,
+                }:
+                    # A failed immutable receipt cannot be replayed with the new
+                    # checkpoint timestamp.  Give this bounded retry its own run
+                    # identity while retaining the old failure as evidence.
+                    planner_run_id = _planner_retry_run_id(
+                        checkpoint.delivery_id, checkpoint.sequence
+                    )
+                elif prior_run.outcome is PlannerRunOutcome.READY_FOR_DELIVERY:
+                    # Crash recovery of a successful run must replay its exact input.
+                    transitioned_at = prior_run.recorded_at
             service = PlannerStageService(
                 context_builder=PlannerContextBuilder(),
                 adapter=StructuredPlannerAgentAdapter(
@@ -609,7 +629,7 @@ class ProductionProjectDeliveryBackend:
             )
             return service.produce(
                 ProduceExecutionPlanCommand(
-                    run_id=_planner_run_id(checkpoint.delivery_id),
+                    run_id=planner_run_id,
                     current_request_revision=revision,
                     product_spec=spec,
                     product_approval=approval,
@@ -617,7 +637,7 @@ class ProductionProjectDeliveryBackend:
                     design_checkpoint=design_checkpoint,
                     planning_authorization=authorization,
                     expected_execution_plan_version=1,
-                    transitioned_at=checkpoint.checkpointed_at,
+                    transitioned_at=transitioned_at,
                 )
             )
 
@@ -771,16 +791,25 @@ class ProductionProjectDeliveryBackend:
         facts = self._facts_for_checkpoint(checkpoint)
         preparation = facts.preparation.preparation
         assert preparation is not None
-        planner_run = facts.planning.get_run(_planner_run_id(checkpoint.delivery_id))
-        planner_checkpoint = facts.planning.get_checkpoint(_planner_run_id(checkpoint.delivery_id))
-        plan = planner_run.execution_plan
+        if checkpoint.execution_plan_id is None:
+            raise ValueError("dispatch checkpoint has no ExecutionPlan reference")
+        plan = facts.planning.get_execution_plan(checkpoint.execution_plan_id)
+        if checkpoint.execution_plan_sha256 != plan.execution_plan_sha256:
+            raise ValueError("dispatch checkpoint ExecutionPlan digest drifted")
+        planner_run = facts.planning.find_run_for_execution_plan(plan.id)
+        if planner_run is None:
+            raise ValueError("dispatch has no durable Planner run for the ExecutionPlan")
+        planner_checkpoint = facts.planning.get_checkpoint(planner_run.run_id)
+        planner_plan = planner_run.execution_plan
         ready_revision = planner_run.ready_request_revision
         design_run = facts.design.get_run(_designer_run_id(checkpoint.delivery_id))
         design = design_run.technical_design
         spec = facts.product.find_product_spec(cast(str, checkpoint.product_spec_id))
         approval = facts.product.find_approval(cast(str, checkpoint.approval_id))
-        if plan is None or ready_revision is None or design is None:
+        if planner_plan is None or ready_revision is None or design is None:
             raise ValueError("Dispatch design/planning handoff is incomplete")
+        if planner_plan != plan:
+            raise ValueError("Planner receipt does not match the checkpoint ExecutionPlan")
         if spec is None or approval is None:
             raise ValueError("Dispatch Product handoff is incomplete")
         task_id = f"task_{_suffix(checkpoint.delivery_id)}"
@@ -1352,6 +1381,11 @@ def _designer_run_id(delivery_id: str) -> str:
 
 def _planner_run_id(delivery_id: str) -> str:
     return f"run_planner_{_suffix(delivery_id)}"
+
+
+def _planner_retry_run_id(delivery_id: str, checkpoint_sequence: int) -> str:
+    identity = hashlib.sha256(f"{delivery_id}:{checkpoint_sequence}".encode()).hexdigest()[:32]
+    return f"run_planner_retry_{identity}"
 
 
 def _maximum_risk(risks: Iterable[RiskTier]) -> RiskTier:

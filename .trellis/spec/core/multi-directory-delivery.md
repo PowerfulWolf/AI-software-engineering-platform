@@ -105,6 +105,16 @@ ase request resume DELIVERY_ID
   新 preparation，不能重新用父需求最初的 preparation 调用 `start()`。DONE 观察值直接追加回
   父 journal 并进入候选集验收，不重跑该 child 的 Coder/QA/Reviewer；BLOCKED/FAILED 仍保留，
   不在此入口绕过恢复审批。没有 child 观察值时继续使用确定性 `start()` 恢复首次派发窗口。
+- Manager 从联合 `BLOCKED` checkpoint 恢复 native child 后，无论 child recovery 返回 DONE、BLOCKED、
+  FAILED 还是等待中的阶段，都必须回到联合 `resume()`，由 `ProductionJointBackend.deliver()` 读取同一条
+  已验证 native journal 并追加父 checkpoint。不能直接把 native `DeliveryResumeResult` 返回给联合
+  调用方，否则父 journal 停留在旧 child 前缀，Console 继续显示过时的阻塞原因。父级
+  `next_action` 可复制 child 的 `failed_stage`、`failure_code` 和经脱敏、限长的
+  `failure_summary`；不得自行猜测状态或覆盖 native 事实。
+- Planner 的失败 `PlannerRunRecord` 是不可变事实，继续同一 native checkpoint 时不得复用失败
+  receipt 的 `run_id` 搭配新的 `transitioned_at`。平台为每个有界 Planner 重试生成新的确定性
+  run identity，并在 Dispatch 时按成功 `ExecutionPlan` 的 immutable ID 找回对应的 Planner
+  receipt/checkpoint；已成功但父 checkpoint 未保存的窗口仍使用原 receipt 时间戳精确 replay。
 - Product 最多 20 次、Plan/Integration 各 3 次调用；Design 默认 3 次设计尝试与 5 次临时故障，
   两项上限独立可配置，分类见 [design-retry-budget.md](design-retry-budget.md)。调用前记录尝试；
   模型响应到文档落盘的窗口可能重复计费；崩溃后的测试可能重跑，不承诺 exactly-once。
@@ -170,6 +180,11 @@ reconcile fail closed。reply/reconcile 拒绝时 current checkpoint 不得增�
 
 联合验收恢复还必须覆盖：启动失败、超时、非零退出、零测试成功、失败 evidence 脱敏、
 `BLOCKED + integration evidence → PLANNING` 的唯一计划替代，以及重规划后不重复执行 DONE child。
+联合 child 恢复还必须断言 native 非 DONE recovery 之后父 checkpoint 追加了最新 child
+sequence/digest，父级阻塞提示包含 durable `failed_stage`/`failure_code`/bounded summary，
+恢复不会重复已完成的角色，也不会绕过 QA/Review。
+Planner 恢复还必须断言失败 run 后的新 checkpoint 使用新的 Planner run identity，Dispatch
+不会读取旧失败 receipt；成功 receipt 的崩溃 replay 保持原 run identity 和输入 digest。
 
 ## 7. Wrong vs Correct
 

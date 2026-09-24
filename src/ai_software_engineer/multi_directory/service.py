@@ -24,7 +24,11 @@ from ai_software_engineer.manager.delivery import (
     ResumeProjectDelivery,
     StartProjectDelivery,
 )
-from ai_software_engineer.manager.delivery_checkpoint import DeliveryId, DeliveryStage
+from ai_software_engineer.manager.delivery_checkpoint import (
+    DeliveryId,
+    DeliveryStage,
+    ProjectDeliveryCheckpoint,
+)
 from ai_software_engineer.manager.preparation import PrepareProjectStatus
 from ai_software_engineer.manager.production_agents import ProductDraft
 from ai_software_engineer.multi_directory.attachments import (
@@ -71,6 +75,7 @@ from ai_software_engineer.multi_directory.scope import (
 from ai_software_engineer.multi_directory.store import JointJournal
 from ai_software_engineer.planning.gate import HumanPlanningUpgrade, PlanningMode
 from ai_software_engineer.project_workspace import ProjectWorkspace
+from ai_software_engineer.redaction import redact_text
 from ai_software_engineer.team_workspace import TeamWorkspace
 
 Output = TypeVar("Output", bound=DomainModel)
@@ -81,6 +86,36 @@ _POLICY = (
     "Return only the typed artifact requested. All supplied directories belong to ONE request, "
     "not independent product conversations. Report ambiguities; do not invent facts. "
 )
+
+
+def _child_blocker_action(unit_id: str, checkpoint: ProjectDeliveryCheckpoint) -> str:
+    """Render bounded failure facts for the durable joint checkpoint action.
+
+    The parent journal must explain why a child stopped, while keeping the native
+    checkpoint as the source of truth.  Only typed stage/code fields and the
+    already bounded native summary are copied into the parent-facing text.
+    """
+
+    stage = checkpoint.failed_stage or checkpoint.stage
+    stage_name = stage.value
+    code_name = checkpoint.failure_code.value if checkpoint.failure_code else None
+    summary = checkpoint.failure_summary
+    safe_summary = " ".join(redact_text(summary).text.split()) if summary else ""
+    if len(safe_summary) > 240:
+        safe_summary = safe_summary[:237].rstrip() + "..."
+
+    status_word = (
+        "阻塞"
+        if checkpoint.stage in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
+        or checkpoint.failed_stage is not None
+        else "尚未完成"
+    )
+    detail = f"仓库 {unit_id} 在 {stage_name} 阶段{status_word}"
+    if code_name:
+        detail += f" ({code_name})"
+    if safe_summary:
+        detail += f": {safe_summary}"
+    return detail + "。请检查该阶段的失败记录后继续交付。"
 
 
 class JointBackend(Protocol):
@@ -1008,11 +1043,10 @@ class JointDeliveryService:
                             in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
                             else JointStage.DELIVERING
                         ),
-                        next_action=(
-                            f"Repository {planned_unit.unit_id} is {child.checkpoint.stage}; "
-                            "inspect its native checkpoint. "
-                            "Completed repositories are retained; joint delivery is not DONE."
-                        ),
+                        next_action=_child_blocker_action(
+                            planned_unit.unit_id, child.checkpoint
+                        )
+                        + "; 已完成的仓库会保留, 联合交付尚未完成。",
                     )
                     if repeated_child_failure(stopped):
                         self._stage_workflow(stopped).require("break-loop", stopped)

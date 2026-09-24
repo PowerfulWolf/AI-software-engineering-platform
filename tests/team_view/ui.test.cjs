@@ -989,6 +989,20 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     ),
     "QA 未能在当前环境完成验证；候选代码已保留，继续交付时只会重新执行 QA/Review。",
   );
+  assert.equal(
+    vm.runInContext(
+      'humanizeBlockingText("Repository unit_a is BLOCKED; inspect its native checkpoint. Completed repositories are retained; joint delivery is not DONE.")',
+      context,
+    ),
+    "至少一个代码仓库任务仍处于阻塞状态，联合交付尚未完成。",
+  );
+  assert.equal(
+    vm.runInContext(
+      'humanizeBlockingText("Repository unit_a is BLOCKED; PLANNING (INVARIANT_VIOLATION): Planner stopped safely")',
+      context,
+    ),
+    "Repository unit_a is BLOCKED; PLANNING (INVARIANT_VIOLATION): Planner stopped safely",
+  );
   assert.equal(interval.ms, 5000);
   assert.equal(get("scope-label").textContent, "Team 级");
   assert.equal(get("scope-title").textContent, "Fixture team");

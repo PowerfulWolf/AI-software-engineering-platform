@@ -7,6 +7,7 @@ import subprocess
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Never
 
 import pytest
@@ -64,6 +65,7 @@ from ai_software_engineer.manager.delivery_checkpoint import (
 from ai_software_engineer.manager.dispatch import DispatchStoreUnavailable
 from ai_software_engineer.manager.production_backend import (
     ConfiguredStructuredClientFactory,
+    ProductionProjectDeliveryBackend,
     StructuredClientFactory,
 )
 from ai_software_engineer.manager.production_delivery import (
@@ -71,6 +73,7 @@ from ai_software_engineer.manager.production_delivery import (
 )
 from ai_software_engineer.manager.production_host import TeamHost
 from ai_software_engineer.orchestration import BlockedResult, RetryDeliveryResult
+from ai_software_engineer.planning import PlannerRunOutcome
 from ai_software_engineer.role_workspace import RoleWorktreeBinding
 from ai_software_engineer.runtime_workspace import FileTeamWorkforceStore
 from ai_software_engineer.work_queue.ports import QueueLeaseLost
@@ -175,6 +178,66 @@ class _ScriptedStructuredClient(StructuredModelClient):
                 ]
             }
         return StructuredModelResult(payload=payload, duration_ms=1)
+
+
+def test_planner_retry_uses_a_new_run_identity_after_a_failed_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed Planner receipt cannot be replayed with a changed checkpoint input."""
+
+    delivery_id = "delivery_planner_retry"
+    base_run_id = f"run_planner_{delivery_id.removeprefix('delivery_')}"
+    prior = SimpleNamespace(outcome=PlannerRunOutcome.FAILED)
+    captured: list[object] = []
+    facts = SimpleNamespace(
+        design=SimpleNamespace(
+                get_run=lambda run_id: SimpleNamespace(
+                    technical_design=SimpleNamespace(),
+                    planning_authorization=SimpleNamespace(),
+                    next_request_revision=SimpleNamespace(),
+                ),
+            get_checkpoint=lambda run_id: SimpleNamespace(run_id=run_id),
+        ),
+        product=SimpleNamespace(
+            current_request_revision=lambda request_id: SimpleNamespace(),
+            find_product_spec=lambda spec_id: SimpleNamespace(),
+            find_approval=lambda approval_id: SimpleNamespace(),
+        ),
+        planning=SimpleNamespace(find_run=lambda run_id: prior if run_id == base_run_id else None),
+        workspace=SimpleNamespace(repository_root=tmp_path),
+    )
+
+    class _PlannerStage:
+        def __init__(self, **kwargs: object) -> None:
+            del kwargs
+
+        def produce(self, command: object) -> object:
+            captured.append(command)
+            return command
+
+    class _Command:
+        def __init__(self, **values: object) -> None:
+            self.__dict__.update(values)
+
+    monkeypatch.setattr(production_backend, "PlannerStageService", _PlannerStage)
+    monkeypatch.setattr(production_backend, "ProduceExecutionPlanCommand", _Command)
+    backend = object.__new__(ProductionProjectDeliveryBackend)
+    backend._facts_for_checkpoint = lambda checkpoint: facts
+    backend._structured_clients = SimpleNamespace(for_project=lambda *args: object())
+    backend._trusted_plan_projection = False
+    checkpoint = SimpleNamespace(
+        delivery_id=delivery_id,
+        product_spec_id="product_spec",
+        approval_id="approval",
+        checkpointed_at=datetime.now(UTC),
+        sequence=9,
+    )
+
+    result = backend.run_planner(checkpoint)
+
+    assert result is captured[0]
+    command = captured[0]
+    assert command.run_id != base_run_id
 
 
 class _ScriptedClientFactory(StructuredClientFactory):

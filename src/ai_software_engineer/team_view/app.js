@@ -755,7 +755,11 @@ function humanizeBlockingText(value) {
   )
     return "系统未能确认唯一且可信的 Coder 执行记录，本次自动恢复已安全停止。";
   if (text === "REQUEST_HUMAN") return "需要人工处理后再继续交付。";
-  if (text.startsWith("Repository ") && text.includes(" is BLOCKED"))
+  if (
+    /^Repository [^\s]+ is BLOCKED; inspect its native checkpoint\. Completed repositories are retained; joint delivery is not DONE\.$/.test(
+      text,
+    )
+  )
     return "至少一个代码仓库任务仍处于阻塞状态，联合交付尚未完成。";
   return text;
 }

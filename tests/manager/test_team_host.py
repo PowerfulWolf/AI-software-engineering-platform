@@ -22,6 +22,7 @@ from ai_software_engineer.knowledge_selection import (
 from ai_software_engineer.manager.delivery import (
     DeliveryBackendFailure,
     ReplyToProduct,
+    ResumeProjectDelivery,
     StartProjectDelivery,
 )
 from ai_software_engineer.manager.delivery_checkpoint import (
@@ -32,6 +33,7 @@ from ai_software_engineer.manager.production_backend import StructuredClientFact
 from ai_software_engineer.manager.production_host import TeamHost
 from ai_software_engineer.multi_directory.errors import RequirementSourceRevisionDrift
 from ai_software_engineer.multi_directory.models import JointStage
+from ai_software_engineer.multi_directory.production import ProductionJointBackend
 from ai_software_engineer.multi_directory.service import CreateRequirement
 from ai_software_engineer.spec_documents import (
     CreateSpecDocument,
@@ -130,6 +132,55 @@ def test_recovery_uses_current_project_backend_when_child_delivery_is_frozen(
     assert controller._backend is frozen_child_backend
     assert controller._recovery.backend is current_backend
     assert controller._verification.backend is current_backend
+
+
+def test_joint_resume_syncs_parent_after_non_done_child_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A child recovery result must be observed by the parent journal."""
+
+    host = object.__new__(TeamHost)
+    child_checkpoint = SimpleNamespace(
+        delivery_id="delivery_child_blocked",
+        stage=DeliveryStage.BLOCKED,
+    )
+    child = SimpleNamespace(unit_id="unit_child", checkpoint=child_checkpoint)
+    joint = SimpleNamespace(
+        stage=JointStage.BLOCKED,
+        integration=None,
+        children=(child,),
+    )
+    parent_result = object()
+    child_result = SimpleNamespace(
+        checkpoint=SimpleNamespace(stage=DeliveryStage.BLOCKED),
+    )
+    calls: list[tuple[str, object]] = []
+
+    backend = object.__new__(ProductionJointBackend)
+    backend.delivery_runtime = lambda checkpoint, unit_id: (None, None)
+    requirements = SimpleNamespace(
+        backend=backend,
+        status=lambda delivery_id: SimpleNamespace(checkpoint=joint),
+        resume=lambda command: calls.append(("parent", command)) or parent_result,
+    )
+    runtime = SimpleNamespace(requirements=requirements)
+    controller = SimpleNamespace(
+        resume=lambda command: calls.append(("child", command)) or child_result,
+    )
+    monkeypatch.setattr(host, "_resolve_project_id", lambda project_id, delivery_id=None: "project")
+    monkeypatch.setattr(host, "_runtime", lambda project_id: runtime)
+    monkeypatch.setattr(
+        host,
+        "_resume_controller",
+        lambda runtime, **kwargs: controller,
+    )
+
+    result = host.resume_delivery(
+        ResumeProjectDelivery(delivery_id="delivery_multi_joint_resume")
+    )
+
+    assert result is parent_result
+    assert [kind for kind, _ in calls] == ["child", "parent"]
 
 
 def test_team_host_scopes_product_catalog_and_context(

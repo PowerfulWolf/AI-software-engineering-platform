@@ -23,7 +23,11 @@ from ai_software_engineer.domain.project_delivery import (
     validate_execution_plan_revision,
 )
 from ai_software_engineer.planning.gate import PlanningDecision
-from ai_software_engineer.planning.models import PlannerCommitCheckpoint, PlannerRunRecord
+from ai_software_engineer.planning.models import (
+    PlannerCommitCheckpoint,
+    PlannerRunOutcome,
+    PlannerRunRecord,
+)
 
 _PLAN_ID = TypeAdapter(ExecutionPlanId)
 _RUN_ID = TypeAdapter(RunId)
@@ -188,6 +192,37 @@ class FileExecutionPlanStore:
             return self.get_run(run_id)
         except ExecutionPlanNotFound:
             return None
+
+    def find_run_for_execution_plan(
+        self, plan_id: ExecutionPlanId | str
+    ) -> PlannerRunRecord | None:
+        """Find the one successful Planner receipt that published a plan.
+
+        Planner retries use fresh run identities after a failed receipt. Dispatch
+        therefore resolves the successful receipt by its immutable plan identity
+        instead of assuming the first attempt's run ID.
+        """
+
+        identity = _PLAN_ID.validate_python(plan_id)
+        directory = self._root / "runs"
+        if not directory.exists():
+            return None
+        if directory.is_symlink() or not directory.is_dir():
+            raise ExecutionPlanPathError(f"untrusted Planner run directory: {directory}")
+        self._require_path(directory)
+        matches = tuple(
+            record
+            for path in sorted(directory.glob("*.json"))
+            for record in (self.get_run(path.stem),)
+            if record.outcome is PlannerRunOutcome.READY_FOR_DELIVERY
+            and record.execution_plan is not None
+            and record.execution_plan.id == identity
+        )
+        if len(matches) > 1:
+            raise ExecutionPlanCorruption(
+                f"ambiguous Planner run history for ExecutionPlan: {identity}"
+            )
+        return matches[0] if matches else None
 
     def put_checkpoint(self, checkpoint: PlannerCommitCheckpoint) -> PlannerCommitCheckpoint:
         checkpoint.validate_integrity()

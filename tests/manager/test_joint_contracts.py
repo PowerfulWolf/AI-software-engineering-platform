@@ -15,6 +15,13 @@ from ai_software_engineer.execution import (
     CommandTimedOut,
     SubprocessCommandExecutor,
 )
+from ai_software_engineer.manager.delivery_checkpoint import (
+    DeliveryFailureCode,
+    DeliveryNextAction,
+    DeliveryStage,
+    DeliveryStageAttempts,
+    ProjectDeliveryCheckpoint,
+)
 from ai_software_engineer.manager.preparation import PrepareProjectResult, PrepareProjectStatus
 from ai_software_engineer.manager.production_agents import ProductDraft
 from ai_software_engineer.multi_directory.integration_commands import is_test_command
@@ -42,7 +49,7 @@ from ai_software_engineer.multi_directory.production import (
 )
 from ai_software_engineer.multi_directory.retirement import RequirementRetirement
 from ai_software_engineer.multi_directory.scope import DirectoryScope, DirectoryUnit
-from ai_software_engineer.multi_directory.service import CreateRequirement
+from ai_software_engineer.multi_directory.service import CreateRequirement, _child_blocker_action
 from ai_software_engineer.multi_directory.store import JointJournal
 from tests.e2e.test_joint_delivery import JointModels
 from tests.manager.test_production_backend import _git, _git_output
@@ -157,6 +164,31 @@ def test_joint_design_rejects_write_escape_and_duplicate_mapping(tmp_path: Path)
         cp.design.model_copy(
             update={"units": (unit.model_copy(update={"design": duplicate}), cp.design.units[1])}
         ).validate_for(cp.scope, cp.product_spec)
+
+
+def test_joint_child_blocker_action_keeps_native_failure_facts_safe(tmp_path: Path) -> None:
+    checkpoint = ProjectDeliveryCheckpoint.create(
+        delivery_id="delivery_child_blocker",
+        sequence=1,
+        repository_id="repository_contract_a",
+        repository_root=str(tmp_path),
+        stage=DeliveryStage.BLOCKED,
+        stage_attempts=DeliveryStageAttempts(planning=1),
+        next_action=DeliveryNextAction.REQUEST_HUMAN,
+        failure_code=DeliveryFailureCode.INVARIANT_VIOLATION,
+        failure_summary="Planner stopped safely password=should-not-leak",
+        failed_stage=DeliveryStage.PLANNING,
+        checkpointed_at=datetime.now(UTC),
+    )
+
+    action = _child_blocker_action("unit_a", checkpoint)
+
+    assert "unit_a" in action
+    assert "PLANNING" in action
+    assert "INVARIANT_VIOLATION" in action
+    assert "Planner stopped safely" in action
+    assert "should-not-leak" not in action
+    assert "[REDACTED:secret_assignment]" in action
 
 
 def test_dependency_order_and_done_require_joint_evidence(tmp_path: Path) -> None:

@@ -184,15 +184,18 @@ class TeamHost:
                     child_backend, child_entry = runtime.requirements.backend.delivery_runtime(
                         joint, child.unit_id
                     )
-                    child_result = self._resume_controller(
+                    self._resume_controller(
                         runtime,
                         backend=child_backend,
                         entry=child_entry,
                     ).resume(
                         command.model_copy(update={"delivery_id": child.checkpoint.delivery_id})
                     )
-                    if child_result.checkpoint.stage is not DeliveryStage.DONE:
-                        return child_result
+                    # The native recovery appends its own checkpoint, but the parent
+                    # Requirement still contains the last committed child observation.
+                    # Always let the joint service observe that native result and append a
+                    # successor parent checkpoint.  Returning the native result here leaves
+                    # the parent journal stale and makes the Console hide the real blocker.
             elif (
                 command.approved_plan_sha256 is not None and joint.integration is None
             ) or command.approved_scope_sha256 is not None:

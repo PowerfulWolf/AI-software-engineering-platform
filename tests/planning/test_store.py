@@ -19,6 +19,7 @@ from ai_software_engineer.planning import (
     ExecutionPlanNotFound,
     ExecutionPlanPathError,
     FileExecutionPlanStore,
+    PlannerAgentErrorCode,
     PlannerCommitCheckpoint,
     PlannerRunOutcome,
     PlannerRunRecord,
@@ -171,9 +172,32 @@ def test_file_execution_plan_store_writes_all_bytes_on_short_write(
     assert store.put_execution_plan(plan) == plan
     assert store.get_execution_plan(plan.id) == plan
     assert store.put_run(run) == run
+    assert store.find_run_for_execution_plan(plan.id) == run
     assert store.put_checkpoint(checkpoint) == checkpoint
     assert store.get_checkpoint(run.run_id) == checkpoint
     assert short_writes > 1
+
+
+def test_find_run_for_execution_plan_ignores_failed_receipts(tmp_path: Path) -> None:
+    _, _, plan = _stage(tmp_path)
+    store = FileExecutionPlanStore(tmp_path / "sidecar-records")
+    source = _planner_record(tmp_path)
+    failed = PlannerRunRecord.create(
+        run_id="run_planner_failed_store",
+        repository_id=source.repository_id,
+        request_id=source.request_id,
+        context_id=source.context_id,
+        input_sha256=source.input_sha256,
+        input_request_revision_sha256=source.input_request_revision_sha256,
+        design_checkpoint_sha256=source.design_checkpoint_sha256,
+        planning_authorization_sha256=source.planning_authorization_sha256,
+        outcome=PlannerRunOutcome.FAILED,
+        error_code=PlannerAgentErrorCode.INVALID_OUTPUT,
+        error_message="Planner Agent output is invalid",
+        recorded_at=source.recorded_at,
+    )
+    assert store.put_run(failed) == failed
+    assert store.find_run_for_execution_plan(plan.id) is None
 
 
 def test_planner_checkpoint_requires_exact_durable_run(tmp_path: Path) -> None:
