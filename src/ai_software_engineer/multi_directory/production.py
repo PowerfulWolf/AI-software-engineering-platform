@@ -788,6 +788,13 @@ class DerivedStageInputs(
         planned = next(p for p in checkpoint.plan.units if p.unit_id == unit_id)
         self.dependencies = planned.depends_on
         self.plan = planned.plan
+        # Joint revision lineage belongs to the parent journal. The native child
+        # receives a fresh projected plan, so carrying parent feedback would make
+        # native validation treat it as a revision without a native predecessor.
+        # Preserve the approved phases and work graph while omitting that
+        # parent-only lineage at this boundary.
+        if self.plan.revision_feedback is not None:
+            self.plan = self.plan.model_copy(update={"revision_feedback": None})
         if checkpoint.planning_decision is None and self.plan.work_graph is None:
             # Historical approved plan: preserve it in the journal/context; only its
             # new native projection receives mechanically mapped design references.

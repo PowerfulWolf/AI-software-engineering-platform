@@ -28,12 +28,21 @@ the deterministic fast generator for SIMPLE decisions. Planner has no gate routi
   composition that supplies `DerivedStageInputs` sets `trusted_plan_projection=True` on the
   native backend; the native stage validates and journals that mechanical projection without
   rerunning classification or replacing its work graph, phases, risk or checkpoints.
+- A committed joint revision is already validated in the parent journal. When it is projected
+  into a native child, `DerivedStageInputs` must preserve the approved phases/work graph but omit
+  the parent `revision_feedback`: the child publishes a fresh native version 1 plan and has no
+  native predecessor for that parent-only lineage. Carrying the feedback makes the native
+  `validate_execution_plan_revision` guard reject an otherwise valid projection as an initial
+  plan with a predecessor.
 - `validate_execution_plan_revision(plan, latest)` runs before a successful Planner receipt
   or READY revision and on new store publication. Initial plans require version 1 without
   feedback; revisions require the exact latest ID/digest, feedback and next contiguous version.
   Invalid lineage yields an `INVALID_OUTPUT` failure receipt and no READY/checkpoint. Existing
   legacy records are still readable and exact replay remains idempotent; reads do not retrofit
   the new publication rules onto their immutable content.
+- An `INVALID_OUTPUT` receipt keeps the stable category but also stores a bounded
+  `safe_diagnostic` of the typed validation error (with secret/URL redaction). This detail is
+  diagnostic evidence only; it never relaxes validation or becomes a model/provider verdict.
 - `validate_plan_test_matrix(graph, required_levels)` is shared by native and joint validation.
   For each acceptance ID, every Design `test_levels` entry must occur in that criterion's plan
   tests; merely mentioning the criterion or substituting a weaker level is insufficient.
@@ -148,6 +157,12 @@ parity and read legacy journal/proof hashes without writing production data.
   between corrections, rather than checking only isolated validators.
 - Native validation shares the typed guard; automatic correction is deliberately joint-only because
   native receipt/commit recovery has a different protocol. No template mirror exists in this repo.
+
+- A (cross-stage lineage): joint plan revision feedback was copied into a fresh native child
+  projection. The native store correctly has no predecessor for that new child plan, so its
+  initial-plan guard rejected the copied feedback and surfaced only the generic
+  `Planner Agent output is invalid`. Projection now clears parent-only feedback while retaining
+  the approved graph and phase demands; the parent journal remains the source of revision history.
 
 ### Current Requirement recovery / rollback
 

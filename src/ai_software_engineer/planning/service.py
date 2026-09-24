@@ -8,6 +8,7 @@ from typing import Protocol
 
 from pydantic import AwareDatetime, Field
 
+from ai_software_engineer.agents.diagnostics import safe_diagnostic
 from ai_software_engineer.design.models import DesignCommitCheckpoint
 from ai_software_engineer.design.store import DesignRecordStore
 from ai_software_engineer.domain.enums import ProjectRequestStatus
@@ -249,6 +250,10 @@ class PlannerStageService:
             ):
                 raise ValueError("complex Planner output requires bounded work packages")
         except (PlannerAgentError, RuntimeError, ValueError) as error:
+            diagnostic = safe_diagnostic(str(error), limit=240)
+            error_message = "Planner Agent output is invalid"
+            if diagnostic:
+                error_message = f"{error_message}: {diagnostic}"
             self._execution_plans.put_run(
                 PlannerRunRecord.create(
                     run_id=command.run_id,
@@ -261,12 +266,12 @@ class PlannerStageService:
                     planning_authorization_sha256=command.planning_authorization.authorization_sha256,
                     outcome=PlannerRunOutcome.FAILED,
                     error_code=PlannerAgentErrorCode.INVALID_OUTPUT,
-                    error_message="Planner Agent output is invalid",
+                    error_message=error_message,
                     recorded_at=command.transitioned_at,
                     planning_decision=decision,
                 )
             )
-            raise PlanningStageError("Planner Agent output is invalid") from error
+            raise PlanningStageError(error_message) from error
         ready_revision = ProjectRequestRevision.create(
             _ready_request(current_request, transitioned_at=command.transitioned_at),
             revision=current_revision.revision + 1,

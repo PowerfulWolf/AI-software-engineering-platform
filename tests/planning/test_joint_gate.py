@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from ai_software_engineer.domain.project_delivery import PlanRevisionFeedback
 from ai_software_engineer.domain.retry_policy import ExecutionRetryPolicy, StageRetryPolicy
 from ai_software_engineer.manager.delivery import ResumeProjectDelivery
 from ai_software_engineer.multi_directory.models import JointCheckpoint, JointStage, digest
@@ -170,6 +171,37 @@ def test_historical_approved_plan_projects_without_rewriting_its_hash(tmp_path: 
     assert projection.design.complexity_facts.work_package_dependencies
     assert historical.checkpoint_sha256 == previous_sha
     assert historical.plan == old_plan
+    historical.validate_integrity()
+
+
+def test_approved_joint_revision_feedback_is_not_native_projection_lineage(
+    tmp_path: Path,
+) -> None:
+    original = checkpoint(tmp_path)
+    assert original.plan is not None
+    unit = original.plan.units[0]
+    native_feedback = PlanRevisionFeedback(
+        previous_plan_id="execution_plan_parent_previous",
+        previous_plan_sha256="0" * 64,
+        reason_codes=("PLAN_TEST_MATRIX_MISSING_LEVELS",),
+        required_changes=("Preserve exact test levels",),
+    )
+    parent_revision = unit.plan.model_copy(update={"revision_feedback": native_feedback})
+    revised_parent_plan = original.plan.model_copy(
+        update={
+            "units": (
+                unit.model_copy(update={"plan": parent_revision}),
+                *original.plan.units[1:],
+            )
+        }
+    )
+    historical = JointCheckpoint.seal({**original.to_wire(), "plan": revised_parent_plan})
+
+    projection = DerivedStageInputs(historical, unit.unit_id)
+
+    assert projection.plan.revision_feedback is None
+    assert projection.plan.phases == parent_revision.phases
+    assert projection.plan.work_graph == parent_revision.work_graph
     historical.validate_integrity()
 
 

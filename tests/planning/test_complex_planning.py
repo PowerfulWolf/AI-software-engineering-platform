@@ -316,6 +316,9 @@ def test_invalid_revision_is_failed_before_success_receipt_or_ready(
     failed = plans.get_run(command.run_id)
     assert failed.outcome is PlannerRunOutcome.FAILED
     assert failed.execution_plan is None and failed.ready_request_revision is None
+    if invalid == "initial_feedback":
+        assert failed.error_message is not None
+        assert "initial plan requires version 1" in failed.error_message
     assert (
         requests.current_request_revision(first.request_id).request.status
         is ProjectRequestStatus.PLANNING
