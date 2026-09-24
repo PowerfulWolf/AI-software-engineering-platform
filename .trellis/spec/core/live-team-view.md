@@ -27,7 +27,11 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
   from sibling `platform_root/projects/project_*`. Validate every included manifest and Team lineage.
   A requested Project ID must satisfy `ProjectId` and match the discovered catalog before facts are read.
 - Read one selected Project per snapshot; never aggregate its Requirements/Tasks into another Project.
-  Validate chain, intake, dispatch digest and normalized immutable Task identity. Reuse
+  Validate chain, intake, dispatch digest and typed immutable Task identity. The identity comparison
+  includes every Task field except execution status, attempt count, update timestamp and appended
+  transient retry failures. A dispatch retry policy, when present, is frozen and must match exactly;
+  a legacy dispatch that predates persisted retry policies may omit that one field and remains readable
+  against the current Task policy. Any other drift is corruption and rejects the snapshot. Reuse
   RunProjectionBuilder event validation.
 - A joint parent's child checkpoint is a committed observation, not a mutable latest pointer. When
   the native child has advanced, accept the parent reference only when it is the exact record at its
@@ -147,6 +151,8 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
 | Integration replanning has no plan, or replaces plan with retained DONE children | same native IDs and parent ownership; read-only snapshot succeeds |
 | Parent child record is absent/replaced or ahead of native history | reject snapshot |
 | Task/dispatch/event binding drift | reject snapshot, never hide corrupted records |
+| Task runtime facts differ from dispatch | accept after typed immutable identity validation; a dispatch policy, when present, must still match |
+| Legacy dispatch omits `retry_policy` while the materialized Task has a legal policy | accept for compatibility; do not rewrite dispatch or Task |
 | Terminal Task | history, no current-stage assignment |
 | IMPLEMENTING with Coder current, QA/Reviewer planned | Coder `实现中`; QA `等待测试阶段`; Reviewer `等待评审阶段` |
 | QA with QA current | Coder `本轮已完成`; QA `测试中`; Reviewer `等待评审阶段` |
@@ -180,6 +186,8 @@ no file writes, Project isolation, tamper rejection; actual HTTP GET/assets/Host
 exact Schema model equality; Node DOM harness for multi-assignment/views/HTML safety/refresh/stale/
 expanded documents, Project tabs, member workload state and three task groups. No real models. Full
 regression, Ruff, strict Mypy and offline build required.
+`tests/team_view/test_dispatch_identity.py` must cover runtime retry-failure append, legacy dispatch
+policy omission, exact policy matching when present and immutable-field drift rejection.
 The reader suite must also create a real repository sidecar containing a pre-dispatch terminal native
 checkpoint and assert that `snapshot()` succeeds without a DSN, returns the blocked card, and exposes
 no Task ID or Assignment.
