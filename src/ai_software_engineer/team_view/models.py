@@ -111,6 +111,7 @@ class RequestView(DomainModel):
     scopes: tuple[ScopeView, ...]
     next_action: str
     blocker: str | None = None
+    failed_stages: tuple[str, ...] = ()
     dialogue: tuple[DialogueTurnView, ...] = ()
     documents: tuple[DocumentView, ...] = ()
     checkpoint_sha256: str

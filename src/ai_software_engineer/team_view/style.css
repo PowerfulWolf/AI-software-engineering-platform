@@ -1853,6 +1853,33 @@ main[data-page="requests"] .page-context {
 .delivery-flow li.current {
   color: var(--accent);
 }
+.delivery-flow li.blocked {
+  color: var(--warn);
+}
+.delivery-flow li.blocked span {
+  background: var(--warn);
+  color: white;
+}
+.delivery-flow .flow-state {
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+.flow-manager {
+  width: fit-content;
+  margin: 4px 0 8px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+.flow-manager.active {
+  color: var(--accent);
+  background: #e9effd;
+}
+.flow-manager.blocked {
+  color: var(--warn);
+  background: #fff0e6;
+}
 .model-route-list,
 .agent-model-list {
   overflow: hidden;

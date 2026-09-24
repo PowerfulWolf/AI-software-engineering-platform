@@ -92,6 +92,51 @@ test("knowledge waits retain their durable origin instead of falling back to Pro
   }
 });
 
+test("blocked delivery flow highlights the durable failed stage", () => {
+  const h = harness(async () => ({ok: true, json: async () => []}));
+  const flow = vm.runInContext(
+    'deliveryFlow({...snapshot.requests[0], stage: "BLOCKED", failed_stages: ["PLANNING"]})',
+    h.context,
+  );
+  const steps = all(flow).filter((node) => node.tag === "li");
+  assert.deepEqual(
+    steps.map((node) => node.className),
+    ["done", "done", "blocked", "", "", "", ""],
+  );
+  assert.match(text(steps[2]), /3.*计划.*已阻塞/);
+  assert.equal(steps[2].attributes.title, "计划：阻塞");
+  const dispatchFlow = vm.runInContext(
+    'deliveryFlow({...snapshot.requests[0], stage: "BLOCKED", failed_stages: ["DISPATCHING"]})',
+    h.context,
+  );
+  assert.equal(
+    all(dispatchFlow).filter((node) => node.tag === "li")[2].className,
+    "blocked",
+  );
+});
+
+test("blocked delivery flow uses a visible warning treatment", () => {
+  const styles = fs.readFileSync(
+    path.join(__dirname, "../../src/ai_software_engineer/team_view/style.css"),
+    "utf8",
+  );
+  assert.match(styles, /\.delivery-flow li\.blocked\s*\{[^}]*color:\s*var\(--warn\);/s);
+  assert.match(
+    styles,
+    /\.delivery-flow li\.blocked span\s*\{[^}]*background:\s*var\(--warn\);/s,
+  );
+});
+
+test("blocked delivery flow exposes Manager coordination state without adding a fake gate", () => {
+  const h = harness(async () => ({ok: true, json: async () => []}));
+  const manager = vm.runInContext(
+    'managerFlowStatus({...snapshot.requests[0], stage: "BLOCKED", failed_stages: ["PLANNING"]})',
+    h.context,
+  );
+  assert.match(text(manager), /Manager 协调.*等待恢复/);
+  assert.equal(manager.className, "flow-manager blocked");
+});
+
 test("design recheck requires confirmation and sends only the exact checkpoint intent", async () => {
   const sent = [];
   const h = harness(async (url, options = {}) => {

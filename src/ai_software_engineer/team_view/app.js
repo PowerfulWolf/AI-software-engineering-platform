@@ -5761,10 +5761,34 @@ function deliveryFlow(request) {
       ? request.knowledge_wait_stage
       : request.stage;
   let current = requestStages[effectiveStage] ?? -1;
+  const failedStageIndexes = new Set(
+    (request.failed_stages || [])
+      .map(
+        (stage) => requestStages[stage] ?? (stage === "DISPATCHING" ? 2 : undefined),
+      )
+      .filter((index) => index !== undefined),
+  );
+  const operation = latestOperation(request.id);
+  if (
+    !failedStageIndexes.size &&
+    operation?.status === "FAILED" &&
+    deliveryOperationActions.has(operation.intent.action) &&
+    !activeOperation(request.id) &&
+    requestPresentation(request).group === "blocked" &&
+    ["DESIGNING", "PLANNING", "BLOCKED", "FAILED"].includes(request.stage) &&
+    current >= 0
+  ) failedStageIndexes.add(current);
+  if (failedStageIndexes.size) {
+    const firstFailedStage = Math.min(...failedStageIndexes);
+    if (current < 0 || firstFailedStage < current) current = firstFailedStage;
+  }
   const taskStatuses = request.scopes
     .map((scope) => taskById(scope.delivery_id)?.status)
     .filter(Boolean);
-  if (request.stage !== "WAITING_HUMAN" && !["VERIFY_QA", "VERIFY_REVIEW"].includes(effectiveStage)) {
+  if (
+    request.stage !== "WAITING_HUMAN" &&
+    !["VERIFY_QA", "VERIFY_REVIEW"].includes(effectiveStage)
+  ) {
     if (taskStatuses.includes("REVIEW")) current = 5;
     else if (taskStatuses.includes("QA")) current = 4;
     else if (
@@ -5776,12 +5800,46 @@ function deliveryFlow(request) {
   }
   const flow = el("ol", undefined, "delivery-flow");
   steps.forEach((title, index) => {
-    const step = el("li", undefined, index < current ? "done" : "");
-    if (index === current) step.className = "current";
+    let state = index < current ? "done" : "";
+    if (failedStageIndexes.has(index)) state = "blocked";
+    if (index === current && !failedStageIndexes.has(index)) state = "current";
+    const step = el("li", undefined, state);
+    if (state === "blocked") step.setAttribute("title", `${title}：阻塞`);
+    if (state === "current") step.setAttribute("aria-current", "step");
     step.append(el("span", String(index + 1)), el("strong", title));
+    if (state === "blocked") step.append(el("small", "已阻塞", "flow-state"));
     flow.append(step);
   });
   return flow;
+}
+function managerFlowStatus(request) {
+  const operation = activeOperation(request.id);
+  if (operation && deliveryOperationActions.has(operation.intent.action)) {
+    const state = operation.status === "QUEUED" ? "等待执行" : "处理中";
+    return el(
+      "p",
+      `Manager 协调 · ${state}（${label(operation.intent.action)}）`,
+      "flow-manager active",
+    );
+  }
+  if (requestPresentation(request).group !== "blocked") return null;
+  const latest = latestOperation(request.id);
+  if (latest && ["FAILED", "INTERRUPTED"].includes(latest.status) &&
+      deliveryOperationActions.has(latest.intent.action))
+    return el(
+      "p",
+      `Manager 协调 · 最近操作${latest.status === "FAILED" ? "失败" : "中断"}`,
+      "flow-manager blocked",
+    );
+  if (["BLOCKED", "FAILED"].includes(request.stage))
+    return el(
+      "p",
+      `Manager 协调 · ${request.failed_stages?.length ? "等待恢复" : "已阻塞"}`,
+      "flow-manager blocked",
+    );
+  if (request.stage === "WAITING_HUMAN")
+    return el("p", "Manager 协调 · 等待人工处理", "flow-manager blocked");
+  return null;
 }
 function approvedKnowledge(item) {
   return item.stage === "WAITING_HUMAN" && item.knowledge_gap?.is_current &&
@@ -6146,7 +6204,10 @@ function buildDetail() {
     if (blocking) panel.append(blocking);
     if (item.stage === "WAITING_HUMAN" || item.knowledge_rechecked_gap_ids?.length) panel.append(knowledgeGapSection(item));
     const flow = el("section", undefined, "detail-section");
-    flow.append(el("h2", "交付流程"), deliveryFlow(item));
+    flow.append(el("h2", "交付流程"));
+    const manager = managerFlowStatus(item);
+    if (manager) flow.append(manager);
+    flow.append(deliveryFlow(item));
     panel.append(flow);
     const scopes = el("section", undefined, "detail-section");
     scopes.append(el("h2", "涉及代码目录"));

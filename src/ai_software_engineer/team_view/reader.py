@@ -316,6 +316,16 @@ class ProductionTeamReader:
                         or (active_budget is not None and active_budget.exhausted)
                         else None
                     ),
+                    failed_stages=tuple(
+                        dict.fromkeys(
+                            stored.checkpoint.failed_stage.value
+                            for child in joint.children
+                            if (stored := by_id.get(child.checkpoint.delivery_id)) is not None
+                            and stored.checkpoint.stage
+                            in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
+                            and stored.checkpoint.failed_stage is not None
+                        )
+                    ),
                     dialogue=tuple(
                         DialogueTurnView(
                             sequence=sequence,
@@ -450,6 +460,12 @@ class ProductionTeamReader:
                             scopes=(view.scope,),
                             next_action=view.next_action,
                             blocker=view.blocker,
+                            failed_stages=(
+                                (cp.failed_stage.value,)
+                                if cp.stage in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
+                                and cp.failed_stage is not None
+                                else ()
+                            ),
                             documents=_stage_refs(cp),
                             checkpoint_sha256=cp.checkpoint_sha256,
                         )
@@ -750,6 +766,7 @@ def _request_with_current_work(request: RequestView, tasks: list[TaskView]) -> R
             "stage": stage,
             "next_action": current.next_action,
             "blocker": None,
+            "failed_stages": (),
         }
     )
 

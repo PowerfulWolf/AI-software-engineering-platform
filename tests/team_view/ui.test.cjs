@@ -2130,10 +2130,10 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
       node.className === "detail-section" && text(node).includes("交付流程"),
   );
   assert.match(text(activeDeliveryFlow), /产品.*设计.*计划.*实现.*测试.*评审.*交付/);
-  assert.doesNotMatch(
+  assert.match(
     text(activeDeliveryFlow),
-    /Manager|正在|可以离开|平台会按串行阶段继续推进/,
-    "the delivery flow contains node states only",
+    /Manager 协调.*处理中/,
+    "the delivery flow exposes Manager coordination separately from its stage nodes",
   );
   fixture.requests[0].stage = "VERIFY_QA";
   fixture.tasks[0].status = "REVIEW";

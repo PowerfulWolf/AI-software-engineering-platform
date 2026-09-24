@@ -55,6 +55,14 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
   必须优先展示子 Task 正在交付（delivery/remediation 为 `DELIVERING`，candidate verification 为
   `INTEGRATING`），清除旧 blocker，并使用子 Task 的 `next_action`。子 Task 再次终止或阻塞后才恢复
   展示联合 checkpoint 的阻塞事实；不得把旧父记录覆盖回存储。
+- `RequestView.failed_stages` 是从当前 native child checkpoint 的 `failed_stage` 只读投影的失败阶段集合；
+  不得从 blocker 文本猜测阶段，也不得使用已被 successor Task 取代的历史 child checkpoint。浏览器的
+  交付流程在有失败阶段时必须把失败阶段之前的节点显示为已完成、失败节点显示为阻塞警告、后续节点
+  保持待处理，从而在 `BLOCKED`/`FAILED` 且没有活动 Task 时仍能看出卡点。活动 successor Task 重新出现时，
+  Reader 清除旧的 `failed_stages`，流程恢复显示当前 Task 阶段。
+- Manager 是跨阶段的协调角色，不作为第八个交付门槛插入流程；详情在流程上方显示只读的
+  `Manager 协调 · 等待执行/处理中/等待恢复/已阻塞` 状态。该提示只能来自当前 Operation 与 durable
+  Requirement 状态，不能把 Manager Operation 当成 Coder、QA 或 Reviewer 的执行事实。
 - 例外：当前 `WAITING_HUMAN + knowledge_gap_id` 是显式知识等待，子 Task 刻意保留原 checkpoint，
   不能因其仍是 IMPLEMENTING/QA 而宣称恢复执行。通过只读 `KnowledgeGapView` 关联批准事实，
   `RequestView.knowledge_gap` 在批准后即变化（checkpoint SHA 不变），提示已批准、等待用户继续。
@@ -129,6 +137,9 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
 | Missing team / bad digest / path / unavailable DB | TeamReadError / HTTP 503, no init |
 | Prepared empty team | honest empty data; no DB/model needed without native deliveries |
 | Pre-dispatch `BLOCKED` native delivery, no current/historical Task | show the blocked work card with zero assignments; do not open MySQL |
+| `BLOCKED`/`FAILED` checkpoint with `failed_stage=PLANNING` | Requirement flow shows 产品/设计已完成、计划为阻塞、实现及后续待处理 |
+| Blocked checkpoint with an active successor Task | Requirement flow follows the successor's current stage and does not retain the old failed marker |
+| Blocked Requirement with a queued or running Manager Operation | show the Manager coordination pill while keeping the seven delivery gates unchanged |
 | Any current/historical Task or dispatch lineage | require one read-only MySQL snapshot; unavailable or inconsistent facts reject the snapshot |
 | Running child before parent publication | visible via deterministic identity |
 | Joint parent remains `BLOCKED`, current child is `IMPLEMENTING` | Requirement is active/`DELIVERING`; stale parent blocker is hidden |

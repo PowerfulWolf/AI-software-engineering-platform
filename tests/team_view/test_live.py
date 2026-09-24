@@ -130,6 +130,7 @@ def test_active_child_task_supersedes_stale_blocked_requirement_projection() -> 
         scopes=(scope,),
         next_action="Inspect the old blocked checkpoint.",
         blocker="Repository is BLOCKED.",
+        failed_stages=("PLANNING",),
         checkpoint_sha256="a" * 64,
     )
     task = TaskView(
@@ -149,6 +150,7 @@ def test_active_child_task_supersedes_stale_blocked_requirement_projection() -> 
 
     assert projected.stage == "DELIVERING"
     assert projected.blocker is None
+    assert projected.failed_stages == ()
     assert projected.next_action == "RUN_DELIVERY"
 
 
@@ -330,6 +332,7 @@ def test_pre_dispatch_failure_needs_no_database(tmp_path: Path) -> None:
     assert task.terminal
     assert task.task_id is None
     assert task.assignments == ()
+    assert snapshot.requests[0].failed_stages == ("DISPATCHING",)
 
 
 @pytest.mark.mysql
@@ -388,6 +391,8 @@ def test_joint_reader_accepts_committed_child_checkpoint_as_a_valid_prefix(
     task = next(item for item in snapshot.tasks if item.id == child.delivery_id)
     assert task.last_activity >= advanced.checkpointed_at
     assert task.request_id == parent.delivery_id
+    request = next(item for item in snapshot.requests if item.id == parent.delivery_id)
+    assert request.failed_stages == (child.failed_stage.value,)
 
 
 @pytest.mark.mysql

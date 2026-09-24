@@ -727,6 +727,14 @@
           "title": "Dialogue",
           "type": "array"
         },
+        "failed_stages": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Failed Stages",
+          "type": "array"
+        },
         "documents": {
           "default": [],
           "items": {

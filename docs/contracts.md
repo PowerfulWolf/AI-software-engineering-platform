@@ -660,6 +660,11 @@ branch/detached 与 HEAD，dirty 现场不得清理。
 需求、目录范围、Task、分配、时间线、报告和已完成模型路由记录。不接受写入。成员的任务集合为多值，
 current_stage 来自 Task 状态与 Dispatch 的 role 匹配，不代表执行器在线。execution_liveness 仅
 UNKNOWN；planned_model 不代替 ModelRouteAttempt 的实际模型。读取不会初始化 store 或推进业务。
+`RequestView.failed_stages` 保留当前 native checkpoint 的结构化 `failed_stage`，用于在没有活动 Task 的
+阻塞详情中定位流程节点；前端不得从 blocker 文本解析阶段。已有 successor Task 成为活动工作后，该字段
+随只读投影清除，流程以 successor 的实际 Task 阶段为准。
+Manager 是跨阶段协调者，Team View 在交付流程上方以独立状态提示 Manager 的排队、执行或等待恢复；
+它不占用产品、设计、计划、实现、测试、评审、交付七个节点，也不能代替 Task assignment 的执行角色。
 联合父需求保存的 child checkpoint 是已提交观察值；child 后续恢复产生新 checkpoint 时，只要父引用
 仍是同一条已验证哈希链中的精确历史记录，看板就读取并展示最新 child。历史记录缺失、被替换、超前
 或属于其他交付时仍整体拒绝，不能把损坏数据降级为空列表。
