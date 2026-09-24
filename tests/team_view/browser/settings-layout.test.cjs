@@ -130,6 +130,48 @@ test("Agent help, horizontal primary row and exhausted fallback catalog remain u
   assert.equal(await designer.locator(".agent-fallback-row").count(), 3);
 });
 
+test("last Agent fallback menu stays reachable at the bottom of Model settings", async (t) => {
+  const config = modelConfig();
+  for (let index = 1; index <= 6; index++)
+    config.model_routes.push(route("codex", `extra-model-${index}`, "high"));
+  config.agent_model_routes.push({role: "reviewer", routes: config.model_routes.slice(0, 2).map(
+    ({provider, model, reasoning_effort}) => ({provider, model, reasoning_effort}))});
+  const h = await ui(t, {config});
+  await h.page.locator("#nav-settings").click();
+  await h.page.getByRole("button", {name: /^模型路由/}).click();
+  const reviewer = h.page.locator('.agent-model-card[data-role="reviewer"]');
+  await reviewer.locator(":scope > summary").click();
+  const add = reviewer.locator(".agent-fallback-add");
+  for (const [width, model] of [[1440, "extra-model-6"], [390, "extra-model-5"]]) {
+    await h.page.setViewportSize({width, height: 900});
+    await add.scrollIntoViewIfNeeded();
+    await h.page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await add.locator("summary").click();
+    await h.page.waitForFunction(() => document.querySelector(
+      '.agent-model-card[data-role="reviewer"] .agent-fallback-add')?.classList.contains("opens-up"));
+    const geometry = await add.evaluate((control) => {
+      const menu = control.querySelector(".single-select-menu");
+      const trigger = control.querySelector("summary");
+      const footer = document.querySelector(".settings-save-bar");
+      const menuRect = menu.getBoundingClientRect();
+      const triggerRect = trigger.getBoundingClientRect();
+      const footerRect = footer.getBoundingClientRect();
+      return {menuTop: menuRect.top, menuBottom: menuRect.bottom,
+        triggerTop: triggerRect.top, footerTop: footerRect.top,
+        viewportHeight: innerHeight,
+        menuScrollHeight: menu.scrollHeight, menuClientHeight: menu.clientHeight};
+    });
+    assert.ok(geometry.menuTop >= 0 && geometry.menuBottom <= geometry.footerTop - 8,
+      `${width}px fallback options must fit above the sticky save bar: ${JSON.stringify(geometry)}`);
+    assert.ok(geometry.menuTop < geometry.triggerTop,
+      `${width}px bottom-row fallback selector should open upward: ${JSON.stringify(geometry)}`);
+    assert.ok(geometry.menuScrollHeight > geometry.menuClientHeight,
+      `${width}px long fallback catalogs should scroll inside the menu`);
+    await add.getByRole("option", {name: new RegExp(model)}).click();
+    assert.match(await reviewer.locator(".agent-fallback-row").last().textContent(), new RegExp(model));
+  }
+});
+
 test("model catalog starts closed and only a newly added route opens", async (t) => {
   const h = await ui(t, { config: modelConfig() });
   await h.page.locator("#nav-settings").click();

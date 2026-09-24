@@ -1172,6 +1172,10 @@ select:focus {
   background: white;
   box-shadow: 0 14px 32px rgba(25, 37, 54, 0.16);
 }
+.single-select.opens-up > .single-select-menu {
+  top: auto;
+  bottom: calc(100% + 7px);
+}
 .single-select-option {
   display: grid;
   width: 100%;

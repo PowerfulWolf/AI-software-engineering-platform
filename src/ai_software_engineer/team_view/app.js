@@ -4272,6 +4272,25 @@ function selectInput(values, current, update, key, disabled = false) {
   summary.append(selectedLabel, el("span", "", "single-select-chevron"));
   const menu = el("div", undefined, "single-select-menu");
   menu.setAttribute("role", "listbox");
+  control.addEventListener("toggle", () => {
+    if (!control.open) return;
+    control.classList.remove("opens-up");
+    menu.style.maxHeight = "";
+    const trigger = summary.getBoundingClientRect();
+    const panel = control.closest(".settings-panel");
+    const panelBounds = panel?.getBoundingClientRect();
+    const footer = panel?.querySelector(".settings-save-bar");
+    const lowerEdge = Math.min(
+      window.innerHeight,
+      panelBounds?.bottom ?? window.innerHeight,
+      footer?.getBoundingClientRect().top ?? window.innerHeight,
+    );
+    const below = lowerEdge - trigger.bottom - 7;
+    const above = trigger.top - Math.max(0, panelBounds?.top ?? 0) - 7;
+    const opensUp = below < menu.getBoundingClientRect().height && above > below;
+    control.classList.toggle("opens-up", opensUp);
+    menu.style.maxHeight = `${Math.max(0, Math.min(240, (opensUp ? above : below) - 8))}px`;
+  });
   const optionNodes = [];
   for (const [value, title, compactTitle] of values) {
     const option = button(

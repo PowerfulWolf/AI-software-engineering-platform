@@ -729,6 +729,28 @@ GET  /api/v1/admin/status
 | Status route with `kind=responses` | `Responses API`, not unknown connection mode | `tests/team_view/ui.test.cjs` Status assertion |
 | Historical Codex run without transport | “连接方式未记录” | DOM helper assertion |
 
+#### Bottom-edge model listbox placement
+
+Scope: the shared `selectInput(values, current, update, key, disabled)` in
+`team_view/app.js` builds `<details class="single-select">` for route and Agent model choices.
+When its `toggle` event opens the menu, measure the trigger, the clipping `.settings-panel`, the
+viewport and the sticky `.settings-save-bar`. If the menu cannot fit below and more space exists
+above, add `opens-up` and place `.single-select-menu` above the trigger. Limit menu height to the
+chosen available space (at most 240px), preserving `overflow-y: auto` and exact option selection.
+Clear the prior direction/height before each measurement so a reopened menu adapts after scrolling.
+
+| Case | Expected geometry / action |
+| --- | --- |
+| Enough space below | Menu stays below; normal option selection |
+| Last Agent open at document bottom | Menu opens above; top ≥ viewport/panel top and bottom stays above sticky save bar |
+| Many routes or 390px viewport | Menu scrolls internally; last choice remains clickable |
+
+Good: Reviewer at the bottom can select the last fallback. Base: controls higher on the page keep
+their original downward placement. Bad: a fixed downward menu extends beneath the save bar or
+outside the clipped Settings panel, even after the page is scrolled to its end. The geometry and
+selection assertions live in `tests/team_view/browser/settings-layout.test.cjs`; do not treat a
+DOM-only open state as evidence that options are visible.
+
 Wrong: preserve an unkeyed disclosure with `undefined` as a shared key, show explanatory small text
 inside every Agent row, or hide the fallback entry when every catalog route is already selected.
 Correct: keep independent disclosure ownership, use on-demand help, and expose the explicit new
