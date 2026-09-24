@@ -12,7 +12,10 @@ from pydantic import AwareDatetime, Field, model_validator
 from ai_software_engineer.context import ContextSource
 from ai_software_engineer.domain.identity import ProjectId, TeamId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
-from ai_software_engineer.domain.project_delivery import validate_plan_test_matrix
+from ai_software_engineer.domain.project_delivery import (
+    PlanTestMatrixIssue,
+    validate_plan_test_matrix,
+)
 from ai_software_engineer.execution import CommandResult
 from ai_software_engineer.knowledge.recheck import DesignKnowledgeRecheck
 from ai_software_engineer.manager.delivery_checkpoint import (
@@ -332,6 +335,7 @@ class JointExecutionPlan(DomainModel):
                         item.acceptance_criterion_id: item.test_levels
                         for item in source.acceptance_mappings
                     },
+                    unit_id=unit.unit_id,
                 )
         if len(scope.units) == 1 and not self.integration_checks:
             # The native repository delivery already requires exact Product acceptance
@@ -365,6 +369,9 @@ class JointPlanFeedback(DomainModel):
     previous_plan: JointExecutionPlan
     reason_codes: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1)]
     required_changes: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1)]
+    test_matrix_issues: Annotated[tuple[PlanTestMatrixIssue, ...], Field(min_length=1)] | None = (
+        Field(default=None, exclude_if=lambda value: value is None)
+    )
 
 
 class ChildDelivery(DomainModel):

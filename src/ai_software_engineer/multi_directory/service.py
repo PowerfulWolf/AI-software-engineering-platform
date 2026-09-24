@@ -12,6 +12,7 @@ from pydantic import AwareDatetime, Field, ValidationError
 from ai_software_engineer.agents import AgentErrorCode, StructuredModelClient, StructuredModelError
 from ai_software_engineer.domain.enums import TeamRole
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
+from ai_software_engineer.domain.project_delivery import PlanTestMatrixError
 from ai_software_engineer.domain.retry_policy import ExecutionRetryPolicy, StageRetryPolicy
 from ai_software_engineer.knowledge.stages import StageWorkflowGate, repeated_child_failure
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
@@ -57,6 +58,7 @@ from ai_software_engineer.multi_directory.planning import (
     compile_joint_plan,
     fast_joint_plan,
     joint_planning_decision,
+    planner_test_requirements,
     rejection_feedback,
 )
 from ai_software_engineer.multi_directory.retirement import RequirementRetirementStore
@@ -669,25 +671,11 @@ class JointDeliveryService:
             return self._advance_stages(checkpoint)
         except KnowledgeGapRaised as error:
             current = self._current(checkpoint.delivery_id)
-            attempts = dict(current.attempts)
-            # Refund only a reservation made during this advance. Planning gates
-            # can wait before any new reservation; they must not erase old work.
-            # Typed provider failures are accounted separately by _stage_output.
-            stage_key = {
-                JointStage.PRODUCT_DISCOVERY: "product",
-                JointStage.DESIGNING: "design",
-                JointStage.PLANNING: "plan",
-            }.get(current.stage)
-            if stage_key is not None and attempts.get(stage_key, 0) > checkpoint.attempts.get(
-                stage_key, 0
-            ):
-                attempts[stage_key] = max(0, attempts.get(stage_key, 0) - 1)
             return self._save(
                 current,
                 stage=JointStage.WAITING_HUMAN,
                 knowledge_wait_stage=current.stage,
                 knowledge_gap_id=error.gap.gap_id,
-                attempts=attempts,
                 next_action="Resolve and approve knowledge gap "
                 + error.gap.gap_id
                 + " before resuming.",
@@ -889,7 +877,7 @@ class JointDeliveryService:
                 design_feedback=None,
                 next_action="Plan the bounded repository order and joint integration checks.",
             )
-        if checkpoint.stage is JointStage.PLANNING:
+        while checkpoint.stage is JointStage.PLANNING:
             decision = joint_planning_decision(checkpoint)
             if checkpoint.planning_decision is None:
                 checkpoint = self._save(checkpoint, planning_decision=decision)
@@ -939,7 +927,12 @@ class JointDeliveryService:
                 "Preserve every acceptance criterion and interface coverage requirement. "
                 "You cannot choose or override planning_decision. Supply bounded work_graph "
                 "packages per unit: component_<key>, design_step_<key>, exact global acceptance "
-                "IDs, dependencies, risk, checkpoints and acceptance-mapped tests. Every complex "
+                "IDs, dependencies, risk, checkpoints and acceptance-mapped tests. "
+                "Use required_test_matrix: for each unit and acceptance criterion, emit separate "
+                "tests for EVERY exact design test level. Never concatenate or rename levels "
+                "(manual_ui + accessibility are two entries, not manual_ui_accessibility). "
+                "Correct planning_feedback.test_matrix_issues without weakening other coverage. "
+                "Every complex "
                 "write unit requires a complete work_graph; omission is rejected. At most 16 units "
                 "and "
                 "4 independent repository Tasks may be ready; every Task keeps serial roles. "
@@ -952,12 +945,25 @@ class JointDeliveryService:
                 plan = compile_joint_plan(checkpoint, plan)
                 plan.validate_for(checkpoint.scope, checkpoint.product_spec, checkpoint.design)
             except ValueError as exc:
-                rejected = self._save(
+                checkpoint = self._save(
                     checkpoint,
-                    planning_feedback=rejection_feedback(plan, type(exc).__name__),
+                    planning_feedback=rejection_feedback(
+                        plan,
+                        type(exc).__name__,
+                        test_matrix_issues=exc.issues
+                        if isinstance(exc, PlanTestMatrixError)
+                        else None,
+                    ),
                     next_action=f"Rejected plan {digest(plan)}: {exc}. Correct the plan on resume.",
                 )
-                self._stage_workflow(rejected).require("break-loop", rejected)
+                self._stage_workflow(checkpoint).require("break-loop", checkpoint)
+                if (
+                    isinstance(exc, PlanTestMatrixError)
+                    and decision.mode is PlanningMode.COMPLEX
+                    and checkpoint.attempts.get("plan", 0)
+                    < self.execution_retry_policy.planner.max_attempts
+                ):
+                    continue
                 raise
             self._stage_workflow(checkpoint).require("plan", checkpoint, plan=plan)
             checkpoint = self._save(
@@ -1116,6 +1122,12 @@ class JointDeliveryService:
         output_schema = model.model_json_schema()
         if model is JointTechnicalDesign:
             output_schema["required"] = [*output_schema.get("required", []), "blocking_issues"]
+        if model is JointExecutionPlan and checkpoint.design is not None:
+            requirements = planner_test_requirements(checkpoint.design)
+            payload["required_test_matrix"] = [item.to_wire() for item in requirements]
+            output_schema["$defs"]["PlanTestItem"]["properties"]["level"]["enum"] = sorted(
+                {level for item in requirements for level in item.test_levels}
+            )
         if image_paths:
             result = client.complete(
                 instructions=_POLICY + instructions,
@@ -1173,6 +1185,8 @@ class JointDeliveryService:
     def _stage_output[Output: DomainModel](
         self, checkpoint: JointCheckpoint, model: type[Output], instructions: str
     ) -> Output:
+        from ai_software_engineer.knowledge.gaps import KnowledgeGapRaised
+
         stage = {
             JointStage.PRODUCT_DISCOVERY: "product",
             JointStage.DESIGNING: "design",
@@ -1180,6 +1194,13 @@ class JointDeliveryService:
         }[checkpoint.stage]
         try:
             return self._produce(checkpoint, model, instructions)
+        except KnowledgeGapRaised:
+            # Only this unfinished producer owns a refundable reservation. A later
+            # gate or correction must never refund a preceding rejected response.
+            attempts = dict(checkpoint.attempts)
+            attempts[stage] -= 1
+            self._save(checkpoint, attempts=attempts)
+            raise
         except StructuredModelError as error:
             if error.retryable:
                 attempts = dict(checkpoint.attempts)

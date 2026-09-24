@@ -1,0 +1,5 @@
+{
+  "name": "planner-test-matrix-repair",
+  "status": "completed",
+  "validation": "Incremental offline tests; no production model or state writes"
+}

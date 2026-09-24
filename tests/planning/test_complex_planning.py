@@ -13,9 +13,11 @@ from ai_software_engineer.domain.project_delivery import (
     ExecutionPlan,
     PlanRevisionFeedback,
     PlanTestItem,
+    PlanTestMatrixError,
     PlanWorkGraph,
     PlanWorkPackage,
     TechnicalDesign,
+    validate_plan_test_matrix,
 )
 from ai_software_engineer.planning import (
     FakePlannerAgentAdapter,
@@ -339,3 +341,23 @@ def test_native_plan_test_matrix_cannot_weaken_design_levels(tmp_path: Path) -> 
             created_at=NOW,
             work_graph=graph,
         )
+
+
+def test_test_matrix_reports_all_missing_criteria_without_aliasing() -> None:
+    graph = PlanWorkGraph(packages=(_package(),))
+    with pytest.raises(PlanTestMatrixError) as raised:
+        validate_plan_test_matrix(
+            graph,
+            {
+                "ac_planner_02": ("manual_ui",),
+                "ac_planner_01": ("contract", "accessibility"),
+            },
+        )
+    first, second = raised.value.issues
+    assert first.acceptance_criterion_id == "ac_planner_01"
+    assert first.observed_levels == ("contract", "unit")
+    assert first.missing_levels == ("accessibility",)
+    assert second.acceptance_criterion_id == "ac_planner_02"
+    assert second.observed_levels == () and second.missing_levels == ("manual_ui",)
+    assert "unit_id" not in first.to_wire()
+    validate_plan_test_matrix(graph, {"ac_planner_01": ("unit", "contract")})

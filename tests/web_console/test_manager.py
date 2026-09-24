@@ -6,6 +6,7 @@ from typing import cast
 
 import pytest
 
+from ai_software_engineer.domain.project_delivery import PlanTestMatrixError, PlanTestMatrixIssue
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
     ReplyToProduct,
@@ -426,6 +427,36 @@ def test_source_revision_drift_has_a_dedicated_browser_error_code(
 
     assert captured.value.code == "SOURCE_REVISION_DRIFT"
     assert "source revision changed" in captured.value.safe_summary
+
+
+def test_planner_matrix_rejection_has_a_dedicated_browser_error_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter, host, entry = _adapter(tmp_path)
+
+    def reject_plan(*args: object, **kwargs: object) -> None:
+        raise PlanTestMatrixError(
+            (
+                PlanTestMatrixIssue(
+                    acceptance_criterion_id="ac_001_001",
+                    required_levels=("manual_ui", "accessibility"),
+                    observed_levels=("manual_ui_accessibility",),
+                    missing_levels=("manual_ui", "accessibility"),
+                ),
+            )
+        )
+
+    monkeypatch.setattr(host, "resume_delivery", reject_plan)
+    with pytest.raises(ConsoleCommandRejected) as captured:
+        adapter.execute(
+            ContinueDeliveryIntent(
+                project_id=PROJECT_ID,
+                delivery_id=DELIVERY_ID,
+                expected_checkpoint_sha256=entry.checkpoint.checkpoint_sha256,
+            )
+        )
+    assert captured.value.code == "PLANNER_TEST_MATRIX_REJECTED"
+    assert "manual_ui, accessibility" in captured.value.safe_summary
 
 
 def test_joint_integration_retry_uses_exact_console_approval(tmp_path: Path) -> None:

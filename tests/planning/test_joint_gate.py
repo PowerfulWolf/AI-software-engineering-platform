@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from ai_software_engineer.domain.retry_policy import ExecutionRetryPolicy, StageRetryPolicy
 from ai_software_engineer.manager.delivery import ResumeProjectDelivery
 from ai_software_engineer.multi_directory.models import JointCheckpoint, JointStage, digest
 from ai_software_engineer.multi_directory.planning import (
@@ -222,11 +223,20 @@ def test_joint_semantic_rejection_is_durable_and_reaches_revised_attempt(
     assert rejected.planning_feedback is not None
     assert rejected.planning_feedback.previous_plan == backend.plan
     assert not rejected.children
+    expected_attempts = 3 if invalid == "test_levels" else 1
+    assert rejected.attempts["plan"] == expected_attempts
+    assert len(backend.inputs) == expected_attempts
     backend.plan = valid
-    restarted = JointDeliveryService(backend=backend, team=service.team, project=service.project)
+    restarted = JointDeliveryService(
+        backend=backend,
+        team=service.team,
+        project=service.project,
+        execution_retry_policy=ExecutionRetryPolicy(planner=StageRetryPolicy(max_attempts=4)),
+    )
     with pytest.raises(DeliveryReached):
         restarted.resume(ResumeProjectDelivery(delivery_id=seed.delivery_id))
     accepted = restarted.status(seed.delivery_id).checkpoint
     assert accepted.plan is not None and accepted.plan.version == 2
+    assert accepted.attempts["plan"] == expected_attempts + 1
     assert accepted.plan.previous_plan_sha256 == digest(rejected.planning_feedback.previous_plan)
     assert backend.inputs[-1]["planning_feedback"] == rejected.planning_feedback.to_wire()

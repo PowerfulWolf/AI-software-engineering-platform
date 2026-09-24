@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Protocol, cast
 
 from ai_software_engineer.agents.structured import StructuredModelError
+from ai_software_engineer.domain.project_delivery import PlanTestMatrixError
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
     DeliveryCheckpointStale,
@@ -238,6 +239,10 @@ class ManagerConsoleAdapter:
             ) from error
         except StructuredModelError as error:
             raise ConsoleCommandRejected("MODEL_" + error.code.value, error.safe_message) from error
+        except PlanTestMatrixError as error:
+            raise ConsoleCommandRejected(
+                "PLANNER_TEST_MATRIX_REJECTED", _safe_summary(error)
+            ) from error
         except RequirementGitBaselineRequired as error:
             raise ConsoleCommandRejected(
                 "GIT_BASELINE_REQUIRED",

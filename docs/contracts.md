@@ -809,3 +809,21 @@ auditable Design investigation handoff only for an unresolved upstream gap befor
 Product approval and budget counters are retained; no model runs until the later Continue.
 This action is not a KnowledgeResolution and does not approve behavior changes. See
 `.trellis/spec/core/active-knowledge.md` for the contract, rejection matrix and old-data recovery.
+
+## Joint Planner test coverage correction
+
+Planner receives `required_test_matrix[]` with exact `unit_id`, `acceptance_criterion_id` and
+`test_levels` from the accepted Design. Each required level needs a separate test entry; combined
+labels are not aliases. The invocation schema restricts levels, and the shared deterministic guard
+checks exact per-criterion coverage. Persisted plan schemas remain compatible with legacy levels.
+
+Only typed `PlanTestMatrixError` triggers automatic joint COMPLEX correction, within
+`execution_retry_policy.planner.max_attempts`. Each rejected response consumes work and is retained
+in `JointPlanFeedback.previous_plan`, with optional typed `test_matrix_issues`. Absent extension
+fields are omitted to preserve legacy hashes. Transient provider failures retain separate counters;
+knowledge waits refund only an unfinished producer, not earlier rejected work.
+
+Console uses `PLANNER_TEST_MATRIX_REJECTED` for exhausted matrix corrections; legacy
+`COMMAND_REJECTED` denotes platform validation, not model availability. Schema/permission/lineage
+errors are not included in this automatic loop. Product approvals, Design and dispatch gates remain
+unchanged. See `.trellis/spec/core/planning-gate.md` for tests and existing-Requirement recovery.

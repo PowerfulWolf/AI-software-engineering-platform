@@ -509,7 +509,7 @@ function requestPresentation(request) {
       group: "blocked",
       status: request.stage === "DESIGNING" ? "DESIGN_RETRY_REQUIRED" : "PLANNER_RETRY_REQUIRED",
       blocker: failedDesignOperation.error_summary || "模型角色操作未完成。",
-      nextAction: "上一次操作未完成；检查失败记录或修复模型服务后可重试。",
+      nextAction: stageFailureGuidance(failedDesignOperation).action,
     };
   if (approvedKnowledge(request))
     return { group: "blocked", status: "KNOWLEDGE_APPROVED", blocker: null,
@@ -585,18 +585,49 @@ function agentQueueState(agent) {
     history_delivery_ids: [...agent.history_delivery_ids],
   };
 }
+
+function stageFailureGuidance(operation) {
+  const code = operation?.error_code;
+  if (code === "PLANNER_TEST_MATRIX_REJECTED")
+    return {
+      reason: "Planner 测试覆盖不符合设计要求，计划未被接受；拒绝记录与已用预算已保留。",
+      action: "检查缺失的测试类型后重试 Planner；平台会在剩余工作预算内要求修正，无需重新确认产品。",
+    };
+  if (code === "MODEL_INVALID_OUTPUT")
+    return {
+      reason: "模型输出格式未通过校验，阶段未推进。",
+      action: "检查输出格式错误后重试；重试仍受对应角色工作预算限制。",
+    };
+  if (["COMMAND_REJECTED", "MODEL_POLICY_VIOLATION"].includes(code))
+    return {
+      reason: "平台校验未通过，阶段未推进；原审批和 checkpoint 已保留。",
+      action: "检查失败记录中的具体约束，修正后重试；此错误不代表模型服务不可用。",
+    };
+  if (["MODEL_PROVIDER_UNAVAILABLE", "MODEL_PROVIDER_ERROR", "MODEL_TIMEOUT",
+    "MODEL_RATE_LIMITED", "MODEL_QUOTA_EXHAUSTED", "MODEL_AUTHENTICATION_ERROR"].includes(code))
+    return {
+      reason: "模型服务调用失败，原审批和 checkpoint 已保留。",
+      action: "检查模型服务、凭证或额度，恢复后重试。",
+    };
+  return {
+    reason: "上一次操作未完成，原审批、checkpoint 和已用预算已保留。",
+    action: "检查失败记录确定原因后重试；未记录具体错误类型，不能判断为模型服务故障。",
+  };
+}
+
 function requestBlockingSummary(request) {
   if (requestPresentation(request).group !== "blocked") return null;
   if (canRetryDesign(request)) {
     const operation = latestOperation(request.id);
+    const guidance = stageFailureGuidance(operation);
     return {
       reasons: [{
-        reason: "上一次模型角色操作未完成，checkpoint 与预算已保留。",
+        reason: guidance.reason,
         scopes: [],
       }],
       operationReason: operation?.error_summary || null,
       approval: null,
-      suggestedAction: "检查失败记录或修复模型服务后重试；执行中不会显示重复操作按钮。",
+      suggestedAction: guidance.action,
       approvedKnowledge: true,
     };
   }

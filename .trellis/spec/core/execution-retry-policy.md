@@ -29,8 +29,10 @@ Upstream Product/Design/Plan reserve their stage attempt before calling a provid
 transient failures refund it in a successor checkpoint and increment `<stage>_transient` (Design
 keeps `design_transient`). Original feedback and errors survive. Knowledge waits refund the stage
 reservation without consuming transient allowance. Old checkpoints are not rewritten.
-Only a reservation made within the current advance can be refunded: a pre-invocation planning gate
-must never decrement historical `plan` attempts. Compare against the entry checkpoint counts.
+Only the unfinished producer's reservation can be refunded, inside `_stage_output`. A knowledge
+wait in a pre-invocation gate or after a rejected response must never decrement spent work.
+Comparing counters against the entry checkpoint is insufficient when one advance contains several
+bounded corrections: earlier responses in that same advance have already consumed work.
 
 Delivery execution identities remain monotonic; work attempt equals execution attempt less earlier
 recorded transient failures. Identity ceiling is work allowance plus the three role allowances,

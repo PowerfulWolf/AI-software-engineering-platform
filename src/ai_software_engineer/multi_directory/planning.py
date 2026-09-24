@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
+
+from pydantic import Field
 
 from ai_software_engineer.domain.enums import BrainTier, RiskTier
+from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.domain.project_delivery import (
     DesignComplexityFacts,
     PlanTestItem,
+    PlanTestMatrixIssue,
     PlanWorkGraph,
     PlanWorkPackage,
 )
+from ai_software_engineer.domain.task import AcceptanceCriterionId
 from ai_software_engineer.manager.production_agents import (
     DeliveryCapability,
     ExecutionPlanDraft,
@@ -22,9 +27,11 @@ from ai_software_engineer.multi_directory.models import (
     JointCheckpoint,
     JointExecutionPlan,
     JointPlanFeedback,
+    JointTechnicalDesign,
     UnitPlan,
     digest,
 )
+from ai_software_engineer.multi_directory.scope import UnitId
 from ai_software_engineer.planning.gate import (
     PlanningDecision,
     PlanningFacts,
@@ -170,11 +177,40 @@ def design_work_graph(design: TechnicalDesignDraft, *, package_id: str) -> PlanW
     )
 
 
-def rejection_feedback(plan: JointExecutionPlan, reason: str) -> JointPlanFeedback:
+class PlannerTestRequirement(DomainModel):
+    unit_id: UnitId
+    acceptance_criterion_id: AcceptanceCriterionId
+    test_levels: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1)]
+
+
+def planner_test_requirements(design: JointTechnicalDesign) -> tuple[PlannerTestRequirement, ...]:
+    return tuple(
+        PlannerTestRequirement(
+            unit_id=unit.unit_id,
+            acceptance_criterion_id=mapping.acceptance_criterion_id,
+            test_levels=mapping.test_levels,
+        )
+        for unit in design.units
+        for mapping in unit.design.acceptance_mappings
+    )
+
+
+def rejection_feedback(
+    plan: JointExecutionPlan,
+    reason: str,
+    *,
+    test_matrix_issues: tuple[PlanTestMatrixIssue, ...] | None = None,
+) -> JointPlanFeedback:
     return JointPlanFeedback(
         previous_plan=plan,
-        reason_codes=(reason,),
-        required_changes=(
-            "Correct the recorded rejection; preserve exact approved acceptance and interfaces",
-        ),
+        reason_codes=("PLAN_TEST_MATRIX_MISSING_LEVELS",) if test_matrix_issues else (reason,),
+        test_matrix_issues=test_matrix_issues,
+        required_changes=tuple(
+            f"For unit {issue.unit_id}, criterion {issue.acceptance_criterion_id}, add separate "
+            f"test entries using each exact missing level: {', '.join(issue.missing_levels)}. "
+            "Do not concatenate level names; preserve all other approved coverage."
+            for issue in test_matrix_issues
+        )
+        if test_matrix_issues
+        else ("Correct the recorded rejection; preserve exact approved acceptance and interfaces",),
     )

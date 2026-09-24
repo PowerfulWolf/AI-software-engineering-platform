@@ -48,6 +48,40 @@ const resolution = {gap_id: gap.gap_id, resolution_id: "resolution-a", answer: "
 const approved = {...pending, resolution};
 const findButton = (h, label) => all(h.detail()).find(n => n.tag === "button" && n.textContent === label);
 
+test("Planner rejection guidance distinguishes coverage, legacy validation and provider failures", () => {
+  const h = harness(async () => ({ok: true, json: async () => []}));
+  for (const [code, expected] of [
+    ["PLANNER_TEST_MATRIX_REJECTED", /测试覆盖.*不符合设计/],
+    ["COMMAND_REJECTED", /平台校验未通过/],
+    ["MODEL_INVALID_OUTPUT", /输出格式未通过校验/],
+    ["MODEL_PROVIDER_UNAVAILABLE", /模型服务/],
+    ["UNKNOWN", /检查失败记录/],
+  ]) {
+    h.context.code = code;
+    vm.runInContext(`
+      snapshot.requests[0].stage = "PLANNING";
+      operations = [{operation_id: "op", status: "FAILED", error_code: code,
+        error_summary: "fixture rejection", intent: {action: "CONTINUE_DELIVERY", delivery_id: "r1"}}];
+      renderDetail();
+    `, h.context);
+    assert.match(text(h.detail()), expected, code);
+    assert.ok(findButton(h, "重试 Planner"), code);
+    if (code !== "MODEL_PROVIDER_UNAVAILABLE") assert.doesNotMatch(text(h.detail()), /修复模型服务/);
+  }
+  vm.runInContext(`
+    snapshot.requests[0].stage_budget = {exhausted: true, role: "planner",
+      attempts: 3, max_attempts: 3, transient_failures: 0, max_transient_failures: 5};
+    renderDetail();
+  `, h.context);
+  assert.equal(findButton(h, "重试 Planner"), undefined);
+  assert.match(text(h.detail()), /提高对应预算/);
+  vm.runInContext(`
+    snapshot.requests[0].stage_budget.exhausted = false;
+    operations[0].status = "RUNNING"; renderDetail();
+  `, h.context);
+  assert.equal(findButton(h, "重试 Planner"), undefined);
+});
+
 test("knowledge waits retain their durable origin instead of falling back to Product", () => {
   const h = harness(async () => ({ok: true, json: async () => []}));
   for (const [origin, label] of [["DESIGNING", "设计"], ["PLANNING", "计划"], [null, null]]) {

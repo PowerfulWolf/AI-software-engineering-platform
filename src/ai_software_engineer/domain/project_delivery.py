@@ -604,6 +604,31 @@ class PlanTestItem(DomainModel):
     verification: NonEmptyStr
 
 
+class PlanTestMatrixIssue(DomainModel):
+    """Machine-computed missing coverage, never a model's self-reported verdict."""
+
+    unit_id: NonEmptyStr | None = Field(default=None, exclude_if=lambda value: value is None)
+    acceptance_criterion_id: AcceptanceCriterionId
+    required_levels: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1)]
+    observed_levels: tuple[NonEmptyStr, ...]
+    missing_levels: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1)]
+
+
+class PlanTestMatrixError(ValueError):
+    def __init__(self, issues: tuple[PlanTestMatrixIssue, ...]) -> None:
+        if not issues:
+            raise ValueError("test matrix rejection requires missing coverage")
+        self.issues = issues
+        super().__init__(
+            "; ".join(
+                "work package test matrix weakens design coverage for "
+                f"{issue.acceptance_criterion_id}: "
+                f"missing test levels {', '.join(issue.missing_levels)}"
+                for issue in issues
+            )
+        )
+
+
 class PlanWorkPackage(DomainModel):
     """Bounded abstract Task proposal; roles within each Task stay serial."""
 
@@ -871,7 +896,10 @@ def validate_execution_plan(
 
 
 def validate_plan_test_matrix(
-    graph: PlanWorkGraph, required_levels: Mapping[str, tuple[str, ...]]
+    graph: PlanWorkGraph,
+    required_levels: Mapping[str, tuple[str, ...]],
+    *,
+    unit_id: str | None = None,
 ) -> None:
     """Preserve every design-required test level for each exact acceptance criterion."""
     observed: dict[str, set[str]] = {}
@@ -879,13 +907,21 @@ def validate_plan_test_matrix(
         for test in package.tests:
             for criterion in test.acceptance_criterion_ids:
                 observed.setdefault(criterion, set()).add(test.level)
-    for criterion, levels in required_levels.items():
+    issues = []
+    for criterion, levels in sorted(required_levels.items()):
         missing = set(levels) - observed.get(criterion, set())
         if missing:
-            raise ValueError(
-                f"work package test matrix weakens design coverage for {criterion}: "
-                f"missing test levels {', '.join(sorted(missing))}"
+            issues.append(
+                PlanTestMatrixIssue(
+                    unit_id=unit_id,
+                    acceptance_criterion_id=criterion,
+                    required_levels=tuple(sorted(set(levels))),
+                    observed_levels=tuple(sorted(observed.get(criterion, set()))),
+                    missing_levels=tuple(sorted(missing)),
+                )
             )
+    if issues:
+        raise PlanTestMatrixError(tuple(issues))
 
 
 def validate_execution_plan_revision(

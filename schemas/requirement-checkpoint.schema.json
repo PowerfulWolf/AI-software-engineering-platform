@@ -1063,6 +1063,22 @@
           "minItems": 1,
           "title": "Required Changes",
           "type": "array"
+        },
+        "test_matrix_issues": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/PlanTestMatrixIssue"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Test Matrix Issues"
         }
       },
       "required": [
@@ -1529,6 +1545,64 @@
         "verification"
       ],
       "title": "PlanTestItem",
+      "type": "object"
+    },
+    "PlanTestMatrixIssue": {
+      "additionalProperties": false,
+      "description": "Machine-computed missing coverage, never a model's self-reported verdict.",
+      "properties": {
+        "unit_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit Id"
+        },
+        "acceptance_criterion_id": {
+          "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Acceptance Criterion Id",
+          "type": "string"
+        },
+        "required_levels": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Required Levels",
+          "type": "array"
+        },
+        "observed_levels": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Observed Levels",
+          "type": "array"
+        },
+        "missing_levels": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Missing Levels",
+          "type": "array"
+        }
+      },
+      "required": [
+        "acceptance_criterion_id",
+        "required_levels",
+        "observed_levels",
+        "missing_levels"
+      ],
+      "title": "PlanTestMatrixIssue",
       "type": "object"
     },
     "PlanWorkGraph": {
