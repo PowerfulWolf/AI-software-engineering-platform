@@ -142,3 +142,23 @@ class Task(DomainModel):
             count < limit and self.attempts < self.max_attempts
         )
         return type(self).model_validate(payload)
+
+
+def task_matches_dispatch(
+    current: Task, dispatched: Task, *, allow_legacy_retry_policy: bool = False
+) -> bool:
+    """Compare frozen intent, excluding only fields changed by normal execution.
+
+    Retry failures are runtime facts, just like attempts. Their validation and
+    persistence remain the Task/repository's responsibility; this does not reset
+    them or authorize another run. Recovery keeps retry policy exact. Only the
+    read-only projection may opt into its existing legacy-policy compatibility.
+    """
+    runtime_fields = {"status", "attempts", "updated_at", "retry_failures"}
+    if allow_legacy_retry_policy and dispatched.retry_policy is None:
+        runtime_fields.add("retry_policy")
+    return all(
+        getattr(current, name) == getattr(dispatched, name)
+        for name in Task.model_fields
+        if name not in runtime_fields
+    )

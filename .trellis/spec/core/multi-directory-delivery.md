@@ -111,6 +111,14 @@ ase request resume DELIVERY_ID
   调用方，否则父 journal 停留在旧 child 前缀，Console 继续显示过时的阻塞原因。父级
   `next_action` 可复制 child 的 `failed_stage`、`failure_code` 和经脱敏、限长的
   `failure_summary`；不得自行猜测状态或覆盖 native 事实。
+- 子恢复要求 verification/recovery/scope 精确审批时，Host 返回
+  `JointDeliveryResumeResult(JointDeliveryResult)`，包含最新父 `checkpoint` 与完整 typed
+  `continuation: DeliveryResumeResult`。只返回第一个待审批子项；先同步父 journal，再校验
+  continuation checkpoint 精确属于父 children，禁止丢弃审批或用子 checkpoint 替代父游标。
+  Console 复用原生审批封装，不复制三套审批渲染逻辑；结果 delivery/checkpoint 仍绑定父需求。
+  浏览器使用同一父 delivery 的 Operation **result** checkpoint 匹配待审批项，因为本次操作已
+  追加父 checkpoint；旧 native-result Operation 仅保留原 input checkpoint 兼容。
+  错误/过期/异属 child 必须拒绝，已消费的计划不得重复显示；用户仍需明确点击批准。
 - Planner 的失败 `PlannerRunRecord` 是不可变事实，继续同一 native checkpoint 时不得复用失败
   receipt 的 `run_id` 搭配新的 `transitioned_at`。平台为每个有界 Planner 重试生成新的确定性
   run identity，并在 Dispatch 时按成功 `ExecutionPlan` 的 immutable ID 找回对应的 Planner

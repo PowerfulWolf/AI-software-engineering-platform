@@ -8,6 +8,7 @@ import pytest
 
 from ai_software_engineer.domain import AgentRole, TaskStatus
 from ai_software_engineer.domain.event import StateEvent
+from ai_software_engineer.domain.retry_policy import DeliveryRetryFailure, DeliveryRetryPolicy
 from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryFailureCode,
     DeliveryNextAction,
@@ -25,14 +26,36 @@ from tests.manager.test_dispatch import RecordingDispatchStore, _facts, _service
 
 @pytest.mark.parametrize(
     "mutation",
-    [None, "legacy_base", "foreign_revision", "task", "revision", "chain", "candidate", "future"],
+    [
+        None,
+        "legacy_base",
+        "foreign_revision",
+        "task",
+        "revision",
+        "chain",
+        "candidate",
+        "future",
+        "policy",
+        "constraints",
+    ],
 )
+@pytest.mark.parametrize("with_transient_retry", [False, True])
 def test_candidate_snapshot_accepts_stale_projection_not_changed_facts(
-    tmp_path: Path, mutation: str | None
+    tmp_path: Path, mutation: str | None, with_transient_retry: bool
 ) -> None:
-    request, workforce = _facts(tmp_path)
+    request, workforce = _facts(
+        tmp_path, retry_policy=DeliveryRetryPolicy() if with_transient_retry else None
+    )
     dispatch = _service(RecordingDispatchStore(), workforce, request).commit_dispatch(request)
     task = dispatch.task.model_copy(update={"status": TaskStatus.FAILED, "attempts": 1})
+    if with_transient_retry:
+        task = (
+            task.model_copy(update={"status": TaskStatus.IMPLEMENTING})
+            .with_retry_failure(
+                DeliveryRetryFailure(role=AgentRole.CODER, attempt=1, code="TIMEOUT")
+            )
+            .model_copy(update={"status": TaskStatus.FAILED})
+        )
     states = (
         TaskStatus.NEW,
         TaskStatus.PLANNING,
@@ -84,6 +107,18 @@ def test_candidate_snapshot_accepts_stale_projection_not_changed_facts(
         )
     elif mutation == "task":
         snapshot = replace(snapshot, task=task.model_copy(update={"title": "changed"}))
+    elif mutation == "policy":
+        snapshot = replace(
+            snapshot,
+            task=task.model_copy(update={"retry_policy": DeliveryRetryPolicy(max_work_attempts=2)}),
+        )
+    elif mutation == "constraints":
+        from ai_software_engineer.domain.task import TaskConstraints
+
+        snapshot = replace(
+            snapshot,
+            task=task.model_copy(update={"constraints": TaskConstraints(allowed_paths=("**",))}),
+        )
     elif mutation == "revision":
         snapshot = replace(snapshot, revision=3)
     elif mutation == "chain":

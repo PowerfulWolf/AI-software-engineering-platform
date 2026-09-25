@@ -2383,6 +2383,23 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     (node) => node.tag === "button" && node.textContent === "批准文件范围",
   );
   assert.ok(approveScope, "WAITING_HUMAN renders its exact scope approval");
+  // Synchronizing a native child appends a successor parent checkpoint.
+  // The returned approval belongs to that result cursor, not the old input.
+  fixture.requests[0].checkpoint_sha256 = "b".repeat(64);
+  storedOperations[1].result.checkpoint_sha256 = "b".repeat(64);
+  await interval.fn();
+  assert.ok(
+    vm.runInContext('latestApproval("r1", "b".repeat(64))', context),
+    "parent synchronization must not hide the exact child approval",
+  );
+  assert.equal(
+    vm.runInContext('latestApproval("r1", "a".repeat(64))', context),
+    null,
+    "a successor approval cannot be replayed against its stale input cursor",
+  );
+  fixture.requests[0].checkpoint_sha256 = "a".repeat(64);
+  storedOperations[1].result.checkpoint_sha256 = "a".repeat(64);
+  await interval.fn();
   assert.ok(
     descend(scopeBlockerSection).includes(approveScope),
     "the pending recovery action is rendered beside the blocker instead of below the discussion",

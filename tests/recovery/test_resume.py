@@ -53,6 +53,7 @@ from ai_software_engineer.recovery.resume import (
     DeliveryResumeController,
     DeliveryResumeOutcome,
     DeliveryResumeResult,
+    JointDeliveryResumeResult,
 )
 from ai_software_engineer.recovery.seed import RecoverySeedService
 from ai_software_engineer.recovery.verification_native import NativeCandidateSourceReader
@@ -701,8 +702,10 @@ def test_joint_scope_recovery_targets_current_preparation_after_main_advances(
     _git("commit", "-m", "Advance main while requirement is blocked", cwd=projects[0])
     current_head = _git_output("rev-parse", "HEAD", cwd=projects[0])
 
-    requested = host.resume_delivery(ResumeProjectDelivery(delivery_id=blocked.delivery_id))
-    assert isinstance(requested, DeliveryResumeResult)
+    requested_joint = host.resume_delivery(ResumeProjectDelivery(delivery_id=blocked.delivery_id))
+    assert isinstance(requested_joint, JointDeliveryResumeResult)
+    assert requested_joint.checkpoint == entry.status(blocked.delivery_id).checkpoint
+    requested = requested_joint.continuation
     assert requested.outcome is DeliveryResumeOutcome.SCOPE_APPROVAL_REQUIRED, requested.next_action
     assert requested.scope_supplement_sha256 is not None
 
@@ -713,7 +716,9 @@ def test_joint_scope_recovery_targets_current_preparation_after_main_advances(
             approval_reference="approve-current-target",
         )
     )
-    assert isinstance(proposed, DeliveryResumeResult)
+    assert isinstance(proposed, JointDeliveryResumeResult)
+    assert proposed.checkpoint == entry.status(blocked.delivery_id).checkpoint
+    proposed = proposed.continuation
     assert proposed.outcome is DeliveryResumeOutcome.RECOVERY_APPROVAL_REQUIRED
     assert proposed.recovery_plan_file is not None
     _, plan = host.recovery_entry().open_plan(Path(proposed.recovery_plan_file))
@@ -780,12 +785,19 @@ def test_joint_scope_recovery_targets_current_preparation_after_main_advances(
         )
         assert len(remaining_routes.requests) == 3
         return
-    assert isinstance(interrupted_recovery, DeliveryResumeResult)
-    assert interrupted_recovery.outcome is DeliveryResumeOutcome.WAITING_HUMAN
-    assert interrupted_recovery.checkpoint.preparation_sha256 == plan.target_preparation_sha256
+    assert isinstance(interrupted_recovery, JointDeliveryResult)
+    assert interrupted_recovery.checkpoint == entry.status(blocked.delivery_id).checkpoint
+    assert interrupted_recovery.checkpoint.stage.value == "BLOCKED"
+    recovered = next(
+        child.checkpoint
+        for child in interrupted_recovery.checkpoint.children
+        if child.unit_id == blocked.children[0].unit_id
+    )
+    assert recovered.preparation_sha256 == plan.target_preparation_sha256
 
     reproposed = host.resume_delivery(ResumeProjectDelivery(delivery_id=blocked.delivery_id))
-    assert isinstance(reproposed, DeliveryResumeResult)
+    assert isinstance(reproposed, JointDeliveryResumeResult)
+    reproposed = reproposed.continuation
     assert reproposed.outcome is DeliveryResumeOutcome.RECOVERY_APPROVAL_REQUIRED
     assert reproposed.recovery_plan_sha256 is not None
     assert reproposed.recovery_plan_sha256 != plan.plan_sha256

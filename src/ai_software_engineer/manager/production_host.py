@@ -166,9 +166,15 @@ class TeamHost:
         self, command: ResumeProjectDelivery, *, project_id: str | None = None
     ) -> DeliveryResumeResult | JointDeliveryResult:
         """Manager's single public continuation seam for native and joint work."""
+        from ai_software_engineer.recovery.resume import (
+            DeliveryResumeOutcome,
+            JointDeliveryResumeResult,
+        )
+
         runtime = self._runtime(self._resolve_project_id(project_id, command.delivery_id))
         if str(command.delivery_id).startswith("delivery_multi_"):
             joint = runtime.requirements.status(command.delivery_id).checkpoint
+            pending: DeliveryResumeResult | None = None
             if joint.stage is JointStage.BLOCKED and joint.integration is None:
                 for child in joint.children:
                     if child.checkpoint.stage not in {
@@ -184,7 +190,7 @@ class TeamHost:
                     child_backend, child_entry = runtime.requirements.backend.delivery_runtime(
                         joint, child.unit_id
                     )
-                    self._resume_controller(
+                    child_result = self._resume_controller(
                         runtime,
                         backend=child_backend,
                         entry=child_entry,
@@ -196,11 +202,25 @@ class TeamHost:
                     # Always let the joint service observe that native result and append a
                     # successor parent checkpoint.  Returning the native result here leaves
                     # the parent journal stale and makes the Console hide the real blocker.
+                    if child_result.outcome in {
+                        DeliveryResumeOutcome.VERIFICATION_APPROVAL_REQUIRED,
+                        DeliveryResumeOutcome.RECOVERY_APPROVAL_REQUIRED,
+                        DeliveryResumeOutcome.SCOPE_APPROVAL_REQUIRED,
+                    }:
+                        pending = child_result
+                        break
             elif (
                 command.approved_plan_sha256 is not None and joint.integration is None
             ) or command.approved_scope_sha256 is not None:
                 raise ValueError("joint delivery has no blocked child awaiting this approval")
-            return runtime.requirements.resume(command)
+            result = runtime.requirements.resume(command)
+            if pending is not None:
+                return JointDeliveryResumeResult(
+                    checkpoint=result.checkpoint,
+                    integration_retry_proposal=result.integration_retry_proposal,
+                    continuation=pending,
+                )
+            return result
         return self._resume_controller(runtime).resume(command)
 
     def _resume_controller(

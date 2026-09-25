@@ -14,7 +14,7 @@ from ai_software_engineer.agents.fallback import FileModelRouteAttemptStore, mod
 from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.domain.enums import AgentRole, TaskStatus, TeamRole, WorkItemStatus
-from ai_software_engineer.domain.task import Task
+from ai_software_engineer.domain.task import Task, task_matches_dispatch
 from ai_software_engineer.domain.workforce import AgentProfile
 from ai_software_engineer.evaluation import FileEvaluationEventStore
 from ai_software_engineer.knowledge.administration import find_gap_records
@@ -87,25 +87,6 @@ _CURRENT_ROLE = {
     TaskStatus.REVIEW: AgentRole.REVIEWER,
 }
 
-# Task status, attempt counters, timestamps and transient retry facts are appended by
-# delivery execution.  They are deliberately excluded from the immutable dispatch
-# identity below.  ``retry_policy`` needs one compatibility exception: dispatches
-# written before the policy was persisted have no policy, while newer dispatches
-# freeze it as part of their identity.
-_TASK_RUNTIME_FIELDS = frozenset({"status", "attempts", "updated_at", "retry_failures"})
-
-
-def _task_dispatch_identity(
-    task: Task, *, include_retry_policy: bool
-) -> tuple[object, ...]:
-    fields = tuple(
-        name
-        for name in Task.model_fields
-        if name not in _TASK_RUNTIME_FIELDS
-        and (include_retry_policy or name != "retry_policy")
-    )
-    return tuple(getattr(task, name) for name in fields)
-
 
 def _validate_task_dispatch_identity(current: Task, dispatch: Task) -> None:
     """Validate immutable dispatch intent while accepting legal runtime evolution.
@@ -116,10 +97,7 @@ def _validate_task_dispatch_identity(current: Task, dispatch: Task) -> None:
     that happens the current Task's policy is accepted for read compatibility.
     A policy present in the dispatch remains exact and immutable.
     """
-    include_retry_policy = dispatch.retry_policy is not None
-    if _task_dispatch_identity(
-        current, include_retry_policy=include_retry_policy
-    ) != _task_dispatch_identity(dispatch, include_retry_policy=include_retry_policy):
+    if not task_matches_dispatch(current, dispatch, allow_legacy_retry_policy=True):
         raise ValueError("Task differs from dispatch intent")
 
 

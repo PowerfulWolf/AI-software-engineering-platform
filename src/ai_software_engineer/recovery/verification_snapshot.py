@@ -13,6 +13,7 @@ from pymysql.cursors import DictCursor
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.domain import Task, TaskStatus
 from ai_software_engineer.domain.event import StateEvent
+from ai_software_engineer.domain.task import task_matches_dispatch
 from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryStage,
     ProjectDeliveryCheckpoint,
@@ -83,20 +84,13 @@ def validate_candidate_snapshot(
 ) -> None:
     """Validate actual runtime progress without trusting stale cached status/candidate."""
     task, dispatch, events = snapshot.task, snapshot.dispatch, snapshot.events
-    normalized = task.model_copy(
-        update={
-            "status": TaskStatus.NEW,
-            "attempts": 0,
-            "updated_at": dispatch.task.updated_at,
-        }
-    )
     if (
         checkpoint.task_id != task.id
         or checkpoint.dispatch_commit_id != dispatch.id
         or checkpoint.dispatch_commit_sha256 != dispatch.dispatch_sha256
         or checkpoint.repository_id != dispatch.repository_id
         or checkpoint.repository_root != task.repository
-        or normalized != dispatch.task
+        or not task_matches_dispatch(task, dispatch.task)
         or task.status not in (TaskStatus.FAILED, TaskStatus.BLOCKED)
         or snapshot.revision != len(events)
         or len(events) < 2
@@ -376,15 +370,8 @@ def _validate_failed_continuation_runtime(
     dispatch: ContinuationDispatchRecord,
 ) -> None:
     task, revision, events = _read_task_facts(cursor, checkpoint)
-    normalized = task.model_copy(
-        update={
-            "status": TaskStatus.NEW,
-            "attempts": 0,
-            "updated_at": dispatch.task.updated_at,
-        }
-    )
     if (
-        normalized != dispatch.task
+        not task_matches_dispatch(task, dispatch.task)
         or checkpoint.task_status is not task.status
         or checkpoint.task_revision != revision
         or task.status not in {TaskStatus.BLOCKED, TaskStatus.FAILED}

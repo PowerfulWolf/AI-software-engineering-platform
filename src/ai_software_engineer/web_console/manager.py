@@ -37,7 +37,7 @@ from ai_software_engineer.multi_directory.service import (
 from ai_software_engineer.project_workspace import ProjectWorkspace
 from ai_software_engineer.recovery import RecoveryRejected
 from ai_software_engineer.recovery.entry import NativeRecoveryEntry
-from ai_software_engineer.recovery.resume import DeliveryResumeResult
+from ai_software_engineer.recovery.resume import DeliveryResumeResult, JointDeliveryResumeResult
 from ai_software_engineer.recovery.verification_entry import CandidateVerificationEntry
 from ai_software_engineer.runtime_workspace import RuntimeWorkspaceError
 
@@ -295,6 +295,10 @@ def _summarize(
             ),
         )
         next_action = "联合验收预算已用完。请确认候选并批准一次补充验收。"
+    if isinstance(result, JointDeliveryResumeResult):
+        # Approval facts belong to the native plan, but the browser's next command
+        # must remain fenced to the newly synchronized parent checkpoint above.
+        result = result.continuation
     if isinstance(result, DeliveryResumeResult):
         next_action = result.next_action
         if result.verification_plan_sha256 is not None:

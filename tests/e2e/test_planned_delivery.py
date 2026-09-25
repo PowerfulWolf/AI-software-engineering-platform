@@ -21,6 +21,7 @@ from ai_software_engineer.domain.project_delivery import (
     PlanWorkGraph,
     PlanWorkPackage,
 )
+from ai_software_engineer.domain.retry_policy import DeliveryRetryFailure, DeliveryRetryPolicy
 from ai_software_engineer.manager.dispatch import DispatchCommitRecord
 from ai_software_engineer.orchestration.planned_delivery import (
     DispatchTaskConflict,
@@ -28,6 +29,7 @@ from ai_software_engineer.orchestration.planned_delivery import (
     ExecutionPlanAgentAdapter,
 )
 from ai_software_engineer.store import SqliteTaskRepository
+from tests.domain.factories import make_state_event
 from tests.manager.test_contracts import NOW, stage_chain
 
 
@@ -70,6 +72,47 @@ def test_dispatch_task_is_exact_create_or_compare_across_restart(tmp_path: Path)
         changed = task.model_copy(update={"description": "different dispatch intent"})
         with pytest.raises(DispatchTaskConflict, match="different dispatch content"):
             materializer.materialize(cast(DispatchCommitRecord, _Dispatch(changed)))
+
+
+def test_dispatch_replay_after_persisted_transient_failure_retains_runtime(tmp_path: Path) -> None:
+    task, *_ = _facts(tmp_path)
+    policy = DeliveryRetryPolicy()
+    task = task.model_copy(update={"retry_policy": policy, "max_attempts": policy.execution_limit})
+    dispatch = cast(DispatchCommitRecord, _Dispatch(task))
+    database = tmp_path / "retry.sqlite3"
+    with SqliteTaskRepository(database) as repository:
+        DispatchTaskMaterializer(repository).materialize(dispatch)
+        for index, (before, after) in enumerate(
+            (
+                (TaskStatus.NEW, TaskStatus.PLANNING),
+                (TaskStatus.PLANNING, TaskStatus.IMPLEMENTING),
+            )
+        ):
+            repository.append_event(
+                make_state_event(
+                    event_id=f"evt_replay_{index}",
+                    task_id=task.id,
+                    from_status=before,
+                    to_status=after,
+                ).model_copy(update={"occurred_at": task.updated_at})
+            )
+        repository.record_attempt(task.id, 1)
+        repository.record_retry_failure(
+            task.id,
+            DeliveryRetryFailure(
+                role=AgentRole.CODER,
+                attempt=1,
+                code="TIMEOUT",
+                run_id="run_replay_timeout",
+            ),
+        )
+        current, events = repository.get(task.id), repository.list_events(task.id)
+        assert current.attempts == 2
+
+    with SqliteTaskRepository(database) as reopened:
+        assert DispatchTaskMaterializer(reopened).materialize(dispatch) == current
+        assert reopened.list_events(task.id) == events
+        assert current.retry_failures is not None and len(current.retry_failures) == 1
 
 
 @pytest.mark.parametrize("with_graph", (False, True))

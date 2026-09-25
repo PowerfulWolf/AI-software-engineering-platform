@@ -5,6 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from enum import StrEnum
 from pathlib import Path
+from typing import Self
+
+from pydantic import model_validator
 
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.domain import AgentRole
@@ -21,6 +24,7 @@ from ai_software_engineer.manager.delivery_checkpoint import (
 from ai_software_engineer.manager.production_backend import (
     ProductionProjectDeliveryBackend,
 )
+from ai_software_engineer.multi_directory.models import JointDeliveryResult, JointStage
 from ai_software_engineer.recovery.entry import NativeRecoveryEntry
 from ai_software_engineer.recovery.models import (
     RecoveryPlan,
@@ -66,6 +70,25 @@ class DeliveryResumeResult(DomainModel):
     recovery_plan_sha256: str | None = None
     scope_supplement_sha256: str | None = None
     scope_supplement_paths: tuple[NonEmptyStr, ...] = ()
+
+
+class JointDeliveryResumeResult(JointDeliveryResult):
+    """A refreshed parent cursor together with its exact native human gate."""
+
+    continuation: DeliveryResumeResult
+
+    @model_validator(mode="after")
+    def require_current_child(self) -> Self:
+        if (
+            self.checkpoint.stage is not JointStage.BLOCKED
+            or self.integration_retry_proposal is not None
+            or not any(
+                child.checkpoint == self.continuation.checkpoint
+                for child in self.checkpoint.children
+            )
+        ):
+            raise ValueError("joint continuation does not match the refreshed child checkpoint")
+        return self
 
 
 def _checkpoint_next_action(checkpoint: ProjectDeliveryCheckpoint) -> str:

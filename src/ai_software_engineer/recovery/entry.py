@@ -17,6 +17,7 @@ from ai_software_engineer.config import (
 )
 from ai_software_engineer.context import ContextSource, FileContextStore
 from ai_software_engineer.domain import AgentRole, Task, TaskStatus, TeamRole
+from ai_software_engineer.domain.task import task_matches_dispatch
 from ai_software_engineer.git import GitWorktreeManager, WorktreeNotFound, WorktreeSpec
 from ai_software_engineer.manager.delivery_checkpoint import ProjectDeliveryCheckpoint
 from ai_software_engineer.manager.dispatch import RecoveryDispatchRecord
@@ -239,14 +240,7 @@ def read_recovery_task(
             if row is None:
                 return None
             task = _decode_task(plan.new_task_id, str(row["payload_json"]))
-            normalized = task.model_copy(
-                update={
-                    "status": TaskStatus.NEW,
-                    "attempts": 0,
-                    "updated_at": dispatch.task.updated_at,
-                }
-            )
-            if normalized != dispatch.task or task.status.value != row["status"]:
+            if not task_matches_dispatch(task, dispatch.task) or task.status.value != row["status"]:
                 raise RecoveryRejected("Task snapshot differs from recovery allocation")
             return task
     finally:

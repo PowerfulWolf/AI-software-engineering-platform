@@ -153,6 +153,7 @@ def test_joint_resume_syncs_parent_after_non_done_child_recovery(
     parent_result = object()
     child_result = SimpleNamespace(
         checkpoint=SimpleNamespace(stage=DeliveryStage.BLOCKED),
+        outcome="WAITING_HUMAN",
     )
     calls: list[tuple[str, object]] = []
 
@@ -175,9 +176,7 @@ def test_joint_resume_syncs_parent_after_non_done_child_recovery(
         lambda runtime, **kwargs: controller,
     )
 
-    result = host.resume_delivery(
-        ResumeProjectDelivery(delivery_id="delivery_multi_joint_resume")
-    )
+    result = host.resume_delivery(ResumeProjectDelivery(delivery_id="delivery_multi_joint_resume"))
 
     assert result is parent_result
     assert [kind for kind, _ in calls] == ["child", "parent"]

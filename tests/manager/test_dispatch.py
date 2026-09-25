@@ -14,6 +14,7 @@ from ai_software_engineer.domain.enums import (
     WorkItemStatus,
 )
 from ai_software_engineer.domain.project_delivery import ExecutionPlan, derive_delivery_task
+from ai_software_engineer.domain.retry_policy import DeliveryRetryPolicy
 from ai_software_engineer.domain.workforce import (
     AgentProfile,
     ModelPolicy,
@@ -268,6 +269,7 @@ def _facts(
     tmp_path: Path,
     *,
     active_leases: tuple[TaskLease, ...] = (),
+    retry_policy: DeliveryRetryPolicy | None = None,
 ) -> tuple[CommitDispatchRequest, DispatchWorkforceSnapshot]:
     prepared, project_request, spec, approval, design, plan = stage_chain(tmp_path)
     ready_revision = ProjectRequestRevision.create(
@@ -304,7 +306,8 @@ def _facts(
         task_id="task_dispatch_001",
         repository=prepared.repository_root,
         base_ref="a" * 40,
-        max_attempts=3,
+        max_attempts=retry_policy.execution_limit if retry_policy else 3,
+        retry_policy=retry_policy,
         created_at=PREVIEWED_AT,
     )
     work_item = WorkItem(
@@ -360,6 +363,7 @@ def _facts(
         repository=prepared.repository_root,
         base_ref=task.base_ref,
         max_attempts=task.max_attempts,
+        retry_policy=retry_policy,
         task_created_at=task.created_at,
         committed_at=COMMITTED_AT,
     )

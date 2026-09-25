@@ -33,6 +33,7 @@ from ai_software_engineer.domain import (
 )
 from ai_software_engineer.domain.identity import ContextId, RunId
 from ai_software_engineer.domain.project_delivery import validate_stage_chain
+from ai_software_engineer.domain.task import task_matches_dispatch
 from ai_software_engineer.manager.delivery import _delivery_id
 from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryFailureCode,
@@ -382,19 +383,12 @@ class NativeRecoverySourceReader:
                     raise ValueError("missing Task")
                 task = _decode_task(cp.task_id, _text(row, "payload_json"))
                 revision = _non_negative_int(row, "revision")
-                normalized = task.model_copy(
-                    update={
-                        "status": TaskStatus.NEW,
-                        "attempts": 0,
-                        "updated_at": dispatch.task.updated_at,
-                    }
-                )
                 if (
                     task.status is not TaskStatus.BLOCKED
                     or _text(row, "status") != task.status.value
                     or not 1 <= task.attempts <= task.max_attempts
                     or revision != cp.task_revision
-                    or normalized != dispatch.task
+                    or not task_matches_dispatch(task, dispatch.task)
                     or dispatch.task_id != cp.task_id
                     or dispatch.repository_id != cp.repository_id
                     or dispatch.task.repository != cp.repository_root

@@ -23,6 +23,7 @@ from ai_software_engineer.manager.delivery_checkpoint import (
 from ai_software_engineer.multi_directory.errors import RequirementSourceRevisionDrift
 from ai_software_engineer.multi_directory.models import (
     Candidate,
+    ChildDelivery,
     IntegrationRetryProposal,
     JointCheckpoint,
     JointDeliveryResult,
@@ -41,7 +42,11 @@ from ai_software_engineer.multi_directory.service import (
     UpdateRequirement,
 )
 from ai_software_engineer.recovery import FileRecoveryStore, RecoveryPlan, RecoveryScope
-from ai_software_engineer.recovery.resume import DeliveryResumeOutcome, DeliveryResumeResult
+from ai_software_engineer.recovery.resume import (
+    DeliveryResumeOutcome,
+    DeliveryResumeResult,
+    JointDeliveryResumeResult,
+)
 from ai_software_engineer.recovery.verification_records import (
     AcceptedQaReport,
     CandidateVerificationInputs,
@@ -540,8 +545,10 @@ def test_continue_sends_an_exact_scope_approval_separately_from_plan_approval(
     assert command.approval_reference == "web-console-scope:" + "5" * 64
 
 
+@pytest.mark.parametrize("joint", [False, True])
 def test_continue_reads_the_persisted_recovery_envelope_through_the_recovery_entry(
     tmp_path: Path,
+    joint: bool,
 ) -> None:
     adapter, host, entry = _adapter(tmp_path)
     plan = make_plan(tmp_path / "project")
@@ -569,6 +576,22 @@ def test_continue_reads_the_persisted_recovery_envelope_through_the_recovery_ent
         recovery_plan_file=str(plan_path),
         recovery_plan_sha256=plan.plan_sha256,
     )
+    parent = entry.checkpoint
+    if joint:
+        parent = JointCheckpoint.seal(
+            {
+                **parent.to_wire(),
+                "sequence": 2,
+                "previous_checkpoint_sha256": parent.checkpoint_sha256,
+                "stage": JointStage.BLOCKED,
+                "children": (
+                    ChildDelivery(unit_id=parent.scope.units[0].id, checkpoint=child_checkpoint),
+                ),
+            }
+        )
+        host.resume_result = JointDeliveryResumeResult(
+            checkpoint=parent, continuation=host.resume_result
+        )
 
     result = adapter.execute(
         ContinueDeliveryIntent(
@@ -582,9 +605,15 @@ def test_continue_reads_the_persisted_recovery_envelope_through_the_recovery_ent
     assert result.approval.kind == "coder_recovery"
     assert result.approval.plan_sha256 == plan.plan_sha256
     assert host.opened_plan_paths == [plan_path]
+    if joint:
+        assert result.delivery_id == DELIVERY_ID
+        assert result.checkpoint_sha256 == parent.checkpoint_sha256
 
 
-def test_reviewer_only_approval_explains_that_qa_will_be_reused(tmp_path: Path) -> None:
+@pytest.mark.parametrize("joint", [False, True])
+def test_reviewer_only_approval_explains_that_qa_will_be_reused(
+    tmp_path: Path, joint: bool
+) -> None:
     adapter, host, entry = _adapter(tmp_path)
     child_delivery_id = "delivery_child"
     plan = CandidateVerificationPlan.create(
@@ -637,6 +666,22 @@ def test_reviewer_only_approval_explains_that_qa_will_be_reused(tmp_path: Path) 
         verification_plan_file=str(plan_path),
         verification_plan_sha256=plan.plan_sha256,
     )
+    parent = entry.checkpoint
+    if joint:
+        parent = JointCheckpoint.seal(
+            {
+                **parent.to_wire(),
+                "sequence": 2,
+                "previous_checkpoint_sha256": parent.checkpoint_sha256,
+                "stage": JointStage.BLOCKED,
+                "children": (
+                    ChildDelivery(unit_id=parent.scope.units[0].id, checkpoint=checkpoint),
+                ),
+            }
+        )
+        host.resume_result = JointDeliveryResumeResult(
+            checkpoint=parent, continuation=host.resume_result
+        )
 
     result = adapter.execute(
         ContinueDeliveryIntent(
@@ -655,3 +700,6 @@ def test_reviewer_only_approval_explains_that_qa_will_be_reused(tmp_path: Path) 
     )
     assert result.next_action == "请检查并批准仅重新执行 Reviewer 的精确验证计划。"
     assert host.opened_plan_paths == [plan_path]
+    if joint:
+        assert result.delivery_id == DELIVERY_ID
+        assert result.checkpoint_sha256 == parent.checkpoint_sha256

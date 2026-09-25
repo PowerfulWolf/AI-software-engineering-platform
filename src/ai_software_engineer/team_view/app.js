@@ -339,7 +339,9 @@ const latestApproval = (deliveryId, checkpoint) => {
             operationTarget(operation) !== deliveryId ||
             operation.status !== "SUCCEEDED" ||
             !approval ||
-            operation.intent.expected_checkpoint_sha256 !== checkpoint
+            (operation.result.delivery_id === deliveryId
+              ? operation.result.checkpoint_sha256
+              : operation.intent.expected_checkpoint_sha256) !== checkpoint
           )
             return false;
           return !operations.some((candidate) => {

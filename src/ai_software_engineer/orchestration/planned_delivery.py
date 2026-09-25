@@ -30,6 +30,7 @@ from ai_software_engineer.domain import (
     TechnicalDesign,
 )
 from ai_software_engineer.domain.project_delivery import validate_execution_plan
+from ai_software_engineer.domain.task import task_matches_dispatch
 from ai_software_engineer.store import TaskNotFound, TaskRepository
 
 if TYPE_CHECKING:
@@ -62,7 +63,7 @@ class DispatchTaskMaterializer:
         except TaskNotFound:
             self._repository.create(expected)
             return self._repository.get(expected.id)
-        if _immutable_task_wire(current, expected) != expected.to_wire():
+        if not task_matches_dispatch(current, expected):
             raise DispatchTaskConflict(
                 f"Task {expected.id} already exists with different dispatch content"
             )
@@ -254,17 +255,6 @@ def _validate_lineage(
         mapping.acceptance_criterion_id for mapping in technical_design.acceptance_mappings
     }:
         raise PlannedDeliveryLineageError("design does not cover the exact Task acceptance set")
-
-
-def _immutable_task_wire(current: Task, expected: Task) -> Mapping[str, object]:
-    normalized = current.model_copy(
-        update={
-            "status": TaskStatus.NEW,
-            "attempts": 0,
-            "updated_at": expected.updated_at,
-        }
-    )
-    return normalized.to_wire()
 
 
 def _digest(payload: dict[str, object]) -> str:

@@ -23,6 +23,24 @@ dispatch. `Task.retry_failures: tuple[DeliveryRetryFailure, ...] | None` is abse
 one typed fact and reserves the successor execution attempt atomically, with exact-replay/conflict
 validation and MySQL owner fencing. No verdict or new status is written by this method.
 
+`domain.task.task_matches_dispatch(current, dispatched, *, allow_legacy_retry_policy=False)` is
+the shared immutable-intent comparison for dispatch replay, native recovery, candidate verification,
+failed-continuation inspection and read projections. Only `status`, `attempts`, `updated_at` and
+`retry_failures` are runtime fields. All other fields, including frozen `retry_policy`, constraints,
+acceptance criteria and metadata, remain exact. Only the read-only Team View explicitly allows its
+existing legacy missing-policy compatibility; recovery/execution must never opt into it.
+
+A Coder timeout followed by a successful candidate legitimately leaves retry facts in the terminal
+Task that were absent from its dispatch. Comparing those facts as immutable content strands
+`CONTINUE_DELIVERY` at `candidate provenance is missing, unsafe or inconsistent`. Fix the reader,
+not historical Task/dispatch/artifact data: retain the original candidate and append-only history,
+then let normal resume propose an exact verification plan requiring normal approval.
+
+Regression checks: `tests/recovery/test_verification_snapshot.py` covers retries plus candidate,
+event, policy and intent drift; `tests/e2e/test_planned_delivery.py` reopens a real SQLite repository
+after `record_retry_failure` and proves replay preserves its events and retry facts;
+`tests/domain/test_task_dispatch_identity.py` keeps legacy compatibility out of execution.
+
 ## Accounting and compatibility
 
 Upstream Product/Design/Plan reserve their stage attempt before calling a provider. Only typed
