@@ -6,8 +6,16 @@
 
 ## 当前事项
 
+2026-09-28 更新：当前真实需求已由 ASE 完成 DONE；Manager 候选验收协调、Reviewer-only
+恢复及项目切换修复已发布到 `v0.1.2`。详细缺陷与边界见
+[本轮平台复盘](archive/2026-09-28-ase-delivery-retrospective.md)。后续优先级如下，历史待核实项不自动关闭。
+
 | 事项 | 已有基础 | 未完成范围与证据 |
 |---|---|---|
+| P1 自动知识收集闭环（下一项） | report observations、显式 collect/批准/发布/前端/后续检索 | accepted checkpoint 自动触发、增量幂等与失败恢复；上游角色和 Manager 经验生产者；[演进任务](../.trellis/tasks/09-25-team-evolution-audit/task.json) |
+| P1 Manager 全阶段前提协调 | 候选验证 incident、当前探测、精确提案/审批、执行器与恢复 | 将同一职责贯穿 Product/Design/Planning/Coder，不能宣称当前已通用于所有阶段 |
+| P1 通用能力扩展（知识闭环之后） | Swift/UI 受控 adapter，SKILL 设计提案 | 隔离验证、独立评审、版本化注册/授权、监控/回滚；禁止自行扩权 |
+| 组合回归与运行质量 | Git/MySQL/CLI/GUI/历史兼容回归已存在 | 分层 CI、其余 CLI 角色权限审计、知识效果追踪、投影延迟与路由健康、依赖弃用；见本轮复盘 |
 | 逐角色后台 Worker 集成 | T046 持久 WorkQueue、Dispatcher、Lease | 已接入 bounded RuntimeSession step、真实 claim/heartbeat、Artifact receipt 与 native capacity adoption；独立 supervisor 进程和多 Task 并发仍待单独验收 |
 | Reporter | 底层 Evaluation/Handoff | [T033](../.trellis/tasks/09-02-t033-delivery-reporter/prd.md) 暂停，尚未决定独立 Agent 或确定性服务 |
 | 显式交付恢复的真实验收 | 已有离线恢复、重应用与候选复核 | [T044](../.trellis/tasks/09-06-t044-explicit-delivery-recovery/task.json) 仍列新精确计划、人工批准与真实 Coder/QA/Reviewer 验证 |

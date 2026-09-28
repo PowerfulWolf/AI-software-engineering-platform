@@ -1,5 +1,9 @@
 # Verification — Project Switching
 
+Release follow-up: user subsequently authorized commit/tag. The fix is now committed/pushed as
+`4d1e799ed48abf0b3a8c053b71772c8567da45d2`, annotated `v0.1.2`; 61 Node cases reran successfully.
+The original verification-phase notes below retain their historical uncommitted state.
+
 Date: 2026-09-28. Baseline: `321f15e`, pushed to `origin/main` before task creation.
 That baseline contains the prior 174-file change set; the navigation fix is separate, uncommitted
 work. Final `HEAD...origin/main` is `0 0`.

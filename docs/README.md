@@ -37,6 +37,7 @@
 - [开发与验证入口](../README.md#开发与验证)、[跨语言 E2E](target-project-e2e.md)。
 - [工程任务索引](../.trellis/tasks/README.md)：当前工作、待核实记录和已完成历史。
 - [当前路线与待验收事项](milestones.md)。
+- [2026-09-28 ASE 交付复盘与后续优先级](archive/2026-09-28-ase-delivery-retrospective.md)：平台缺陷、已修边界、自动知识闭环与能力扩展的剩余工作。
 - [ADR-0001：Python 控制面](decisions/0001-python-control-plane.md)。
 - [ADR-0002：组织拥有 Agent](decisions/0002-organization-owned-agent-workforce.md)。
 - [历史归档索引](archive/README.md)：交付报告、旧计划、事故处置。

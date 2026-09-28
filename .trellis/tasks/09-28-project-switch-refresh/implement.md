@@ -10,7 +10,8 @@
       Ruff, typecheck, diff check, and real localhost switching before/after refresh.
 - [x] Capture root cause/contract and verification evidence; update task/index.
 - [x] During review, reproduce/fix the Knowledge async publication boundary with a red→green test.
-- [ ] Commit/archive the new fix in a subsequent authorized commit phase; no second push in this task.
+- [x] Subsequent user-authorized release committed/pushed the fix as `4d1e799`, tag `v0.1.2`;
+      stable task path retained per FORMAT.md, lifecycle index updated.
 
 Inline only. No repository Trellis scripts or template mirror exist, so use the established
 `.trellis/tasks/FORMAT.md` files directly. Business code/data and runtime secrets are out of scope.

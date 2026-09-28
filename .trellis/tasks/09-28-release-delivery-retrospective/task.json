@@ -1,16 +1,21 @@
 {
   "id": "release-delivery-retrospective-20260928",
   "title": "提交发布 ASE 修复、合并安装已交付 App 并复盘遗留项",
-  "status": "in_progress",
-  "phase": "planning",
+  "status": "completed",
+  "phase": "released_installed_documented",
   "authorization": "用户明确要求提交本次改动并打最新 tag、将 codex 已交付分支合并主干并重新打包安装、梳理全部 bug 与遗留项；已批准创建 Trellis 任务并继续。inline 执行。",
   "ase_baseline": "321f15e",
   "release_tag": "v0.1.2",
+  "ase_release_commit": "4d1e799ed48abf0b3a8c053b71772c8567da45d2",
   "application_repository": "/Users/zhangjunshuai/workspace/codex/codex-quota-monitor",
   "application_base": "6d05fef305a6bcf225b526a3512c60e2679dbffe",
   "application_candidate": "9ac7c9ee830df548571db55ec5cf809e613467ba",
   "application_branch": "ai/task_continue_3619e92f73a4f2794610c76cbdd24bb8/attempt-1",
   "application_target": "main",
   "delivery_id": "delivery_multi_bd73c5ce9fa226eaa8e427b5c7c1dd96dce1e006",
-  "delivery_checkpoint": "f22850f71024c2abad8e10c0138dac11c42c1cfd8c416067bab35fdc0c0d88df"
+  "delivery_checkpoint": "f22850f71024c2abad8e10c0138dac11c42c1cfd8c416067bab35fdc0c0d88df",
+  "verification": "verification.md",
+  "retrospective": "docs/archive/2026-09-28-ase-delivery-retrospective.md",
+  "installed_app": "/Applications/CodexQuotaMonitor.app",
+  "backup_app": "/Users/zhangjunshuai/workspace/codex/quota-app-backup-20260928-YMoBzM/CodexQuotaMonitor.app"
 }

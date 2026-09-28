@@ -1,8 +1,8 @@
 {
   "id": "project-switch-refresh-20260928",
   "title": "修复自动刷新期间项目切换意图丢失",
-  "status": "in_progress",
-  "phase": "verified_pending_commit",
+  "status": "completed",
+  "phase": "released",
   "authorization": "用户要求先提交推送现有改动，然后创建 Trellis 任务修复项目切换 bug；inline 实施和检查。",
   "baseline_commit": "321f15e",
   "prior_changes_pushed": "origin/main at 321f15e",
@@ -10,6 +10,7 @@
   "production_data_changes": "none",
   "verification": "verification.md",
   "spec": ".trellis/spec/core/project-navigation.md",
-  "new_fix_commit": null,
-  "remaining": "New fix remains in the current workspace; commit/archive separately from the prior published baseline."
+  "new_fix_commit": "4d1e799ed48abf0b3a8c053b71772c8567da45d2",
+  "release_tag": "v0.1.2",
+  "remaining": "None for the navigation defect; backend latency remains a separate performance follow-up."
 }

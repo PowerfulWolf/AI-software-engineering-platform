@@ -16,11 +16,7 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 
 | 目录 | 状态 / 阶段 | 剩余事项 |
 |---|---|---|
-| [09-28-release-delivery-retrospective](09-28-release-delivery-retrospective/task.json) | in_progress / planning | ASE 提交打 tag、已交付 App 合并安装及全过程复盘；用户已授权 |
-| [09-28-project-switch-refresh](09-28-project-switch-refresh/task.json) | in_progress / verified_pending_commit | 切换/知识库异步边界已修复，前端 61 项和真实 UI 验证通过；新修复待提交，旧基线 321f15e 已推送 |
-| [09-27-delivery-reliability-audit](09-27-delivery-reliability-audit/task.json) | in_progress / verified_delivery_held | 14 阶段审查及平台修复通过隔离验证；未提交/部署，真实需求等待受控恢复 |
-| [09-25-team-evolution-audit](09-25-team-evolution-audit/task.json) | in_progress / execute | 已有知识演进切片；Manager 集成和自动收集尚未完成，可靠性审查另见 09-27 任务 |
-| [09-25-joint-approval-delivery](09-25-joint-approval-delivery/task.json) | in_progress / execute | 原业务交付保留候选和历史；09-27 可靠性审查期间停止派发，未宣告验收通过 |
+| [09-25-team-evolution-audit](09-25-team-evolution-audit/task.json) | in_progress / execute | 当前需求已交付；显式知识闭环与候选验证 Manager 协调已接通，下一步自动收集、上游学习生产者、通用能力扩展 |
 | [09-23-codex-cli-proxy](09-23-codex-cli-proxy/task.json) | in_progress / ready_for_user_validation | operator API-key login and authenticated CLIProxyAPI smoke; then resume existing Requirement |
 | [09-02-t033-delivery-reporter](09-02-t033-delivery-reporter/task.json) | planned / plan | 见原 PRD/任务记录 |
 | [09-06-t044-explicit-delivery-recovery](09-06-t044-explicit-delivery-recovery/task.json) | in_progress / coder_reapply_offline_verified | new exact real target recovery plan and human approval；real Coder QA Reviewer validation |
@@ -57,6 +53,10 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 
 | 目录 | 任务 ID | 状态记录 |
 |---|---|---|
+| 09-28-release-delivery-retrospective | release-delivery-retrospective-20260928 | [completed](09-28-release-delivery-retrospective/task.json)：v0.1.2 已发布，业务候选已合并安装，ASE 复盘已落盘 |
+| 09-28-project-switch-refresh | project-switch-refresh-20260928 | [completed](09-28-project-switch-refresh/task.json)：4d1e799 / v0.1.2，61 项前端回归及实际 UI 验证 |
+| 09-27-delivery-reliability-audit | delivery-reliability-audit | [completed](09-27-delivery-reliability-audit/task.json)：14 阶段审查修复已发布，后续真实交付已 DONE |
+| 09-25-joint-approval-delivery | joint-approval-delivery | [completed](09-25-joint-approval-delivery/task.json)：独立 QA/Review、原需求 DONE，Reviewer-only 修复已发布 |
 | 09-23-model-routing-ui-followup | model-routing-ui-followup-20260923 | [completed](09-23-model-routing-ui-followup/task.json) |
 | 09-23-settings-save-invalid | settings-save-invalid-20260923 | [completed](09-23-settings-save-invalid/task.json) |
 | 09-23-agent-model-detail-polish | agent-model-detail-polish-20260923 | [completed](09-23-agent-model-detail-polish/task.json) |
