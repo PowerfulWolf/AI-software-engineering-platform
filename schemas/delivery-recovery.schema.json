@@ -110,6 +110,21 @@
           ],
           "default": null,
           "title": "Base Revision"
+        },
+        "branch_name": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 11,
+              "pattern": "^ai/(feature|bugfix)/[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Branch Name"
         }
       },
       "required": [
@@ -248,7 +263,10 @@
           "type": "string"
         }
       },
-      "required": ["source_path", "target_path"],
+      "required": [
+        "source_path",
+        "target_path"
+      ],
       "title": "RecoveryPathRebinding",
       "type": "object"
     },
@@ -268,13 +286,19 @@
           "title": "Schema Version",
           "type": "string"
         },
-        "scope": {"$ref": "#/$defs/RecoveryScope"},
+        "scope": {
+          "$ref": "#/$defs/RecoveryScope"
+        },
         "task_id": {
           "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
           "title": "Task Id",
           "type": "string"
         },
-        "task_revision": {"minimum": 1, "title": "Task Revision", "type": "integer"},
+        "task_revision": {
+          "minimum": 1,
+          "title": "Task Revision",
+          "type": "integer"
+        },
         "checkpoint_sha256": {
           "pattern": "^[a-f0-9]{64}$",
           "title": "Checkpoint Sha256",
@@ -331,8 +355,13 @@
       "properties": {
         "input_mode": {
           "anyOf": [
-            {"const": "coder_reapply", "type": "string"},
-            {"type": "null"}
+            {
+              "const": "coder_reapply",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ],
           "default": null,
           "title": "Input Mode"
@@ -367,15 +396,25 @@
         },
         "scope_supplement": {
           "anyOf": [
-            {"$ref": "#/$defs/RecoveryScopeSupplement"},
-            {"type": "null"}
+            {
+              "$ref": "#/$defs/RecoveryScopeSupplement"
+            },
+            {
+              "type": "null"
+            }
           ],
           "default": null
         },
         "scope_approval_reference": {
           "anyOf": [
-            {"maxLength": 2000, "minLength": 1, "type": "string"},
-            {"type": "null"}
+            {
+              "maxLength": 2000,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ],
           "default": null,
           "title": "Scope Approval Reference"
@@ -402,13 +441,19 @@
               "allOf": [
                 {
                   "properties": {
-                    "can_merge": {"const": false},
-                    "can_change_state": {"const": false}
+                    "can_merge": {
+                      "const": false
+                    },
+                    "can_change_state": {
+                      "const": false
+                    }
                   }
                 }
               ]
             },
-            {"type": "null"}
+            {
+              "type": "null"
+            }
           ],
           "default": null,
           "title": "Target Permissions"
@@ -416,10 +461,14 @@
         "path_rebindings": {
           "anyOf": [
             {
-              "items": {"$ref": "#/$defs/RecoveryPathRebinding"},
+              "items": {
+                "$ref": "#/$defs/RecoveryPathRebinding"
+              },
               "type": "array"
             },
-            {"type": "null"}
+            {
+              "type": "null"
+            }
           ],
           "default": null,
           "title": "Path Rebindings"
@@ -440,6 +489,21 @@
           "pattern": "^[a-f0-9]{64}$",
           "title": "Plan Sha256",
           "type": "string"
+        },
+        "target_branch_name": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 11,
+              "pattern": "^ai/(feature|bugfix)/[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Branch Name"
         }
       },
       "required": [

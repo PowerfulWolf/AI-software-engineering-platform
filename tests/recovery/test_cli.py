@@ -1,5 +1,6 @@
 """Operator recovery CLI fails closed and inspection never constructs Team Host."""
 
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -10,6 +11,7 @@ from ai_software_engineer.cli import app
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
 from ai_software_engineer.manager.production_host import TeamHost
 from ai_software_engineer.recovery import RecoveryPlan
+from ai_software_engineer.recovery.models import CapturedChanges
 from ai_software_engineer.recovery.store import FileRecoveryStore
 from ai_software_engineer.team_workspace import TeamWorkspace
 from tests.recovery.test_authorization import make_plan
@@ -88,12 +90,22 @@ def test_inspect_is_read_only_and_approval_needs_exact_confirmation(
 
 
 @pytest.mark.parametrize("reapply", [False, True])
+@pytest.mark.parametrize("named", [False, True])
 def test_proposal_mode_is_explicit_and_printed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reapply: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reapply: bool, named: bool
 ) -> None:
     original = make_plan(tmp_path / "project")
+    target_name = "ai/feature/greeting-storage-recovery" if named else None
+    capture = original.capture.to_capture()
+    if named:
+        capture = replace(capture, worktree=replace(capture.worktree, branch="ai/feature/greeting"))
     plan = RecoveryPlan.create(
-        **{**original.to_wire(), "input_mode": "coder_reapply" if reapply else None}
+        **{
+            **original.to_wire(),
+            "input_mode": "coder_reapply" if reapply else None,
+            "capture": CapturedChanges.from_capture(capture),
+            "target_branch_name": target_name,
+        }
     )
     host = Mock()
     host.recovery_entry.return_value.propose.return_value = (plan, tmp_path / "plan.json")
@@ -110,9 +122,16 @@ def test_proposal_mode_is_explicit_and_printed(
         "--context",
         "ctx_original",
     ]
+    if target_name is not None:
+        args += ["--target-branch-name", target_name]
     result = CliRunner().invoke(app, args + (["--coder-reapply"] if reapply else []))
     assert result.exit_code == 0, result.output
     assert ("coder_reapply" if reapply else "git_seed") in result.output
     assert (
         host.recovery_entry.return_value.propose.call_args.kwargs["input_mode"] == plan.input_mode
     )
+    assert host.recovery_entry.return_value.propose.call_args.kwargs["target_branch_name"] == (
+        target_name
+    )
+    if target_name is not None:
+        assert target_name in result.output

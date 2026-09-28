@@ -16,6 +16,7 @@ from typing import Annotated, Literal, Self
 
 from pydantic import AwareDatetime, Field, StrictBool, StrictInt, StringConstraints, model_validator
 
+from ai_software_engineer.domain.branch import BranchName
 from ai_software_engineer.domain.enums import (
     AgentRole,
     BrainTier,
@@ -249,6 +250,7 @@ class ProductSpec(DomainModel):
     version: StageVersion
     status: ProductSpecStatus
     summary: NonEmptyStr
+    branch_name: BranchName | None = Field(default=None, exclude_if=lambda value: value is None)
     goals: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1)]
     non_goals: tuple[NonEmptyStr, ...] = ()
     requirements: Annotated[tuple[ProductRequirement, ...], Field(min_length=1)]
@@ -307,6 +309,7 @@ class ProductSpec(DomainModel):
         open_questions: tuple[str, ...] = (),
         decisions: tuple[ProductDecision, ...] = (),
         supersedes: ProductSpecId | None = None,
+        branch_name: BranchName | None = None,
     ) -> ProductSpec:
         provisional = cls(
             id=spec_id,
@@ -315,6 +318,7 @@ class ProductSpec(DomainModel):
             version=version,
             status=status,
             summary=summary,
+            branch_name=branch_name,
             goals=goals,
             non_goals=non_goals,
             requirements=requirements,
@@ -1018,6 +1022,7 @@ def derive_delivery_task(
         id=task_id,
         title=request.title,
         description=product_spec.summary,
+        branch_name=product_spec.branch_name,
         repository=str(resolved_repository),
         base_ref=base_ref,
         acceptance_criteria=product_spec.acceptance_criteria,

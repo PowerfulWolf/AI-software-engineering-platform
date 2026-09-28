@@ -21,6 +21,7 @@ from ai_software_engineer.domain import (
     WorkItem,
     WorkItemStatus,
 )
+from ai_software_engineer.domain.branch import successor_branch
 from ai_software_engineer.domain.prerequisite_repair import PrerequisiteRepairPlan
 from ai_software_engineer.domain.project_delivery import derive_delivery_task
 from ai_software_engineer.domain.task import TaskConstraints
@@ -192,6 +193,10 @@ class CandidateRemediationService:
         task = Task.model_validate(
             {
                 **task.to_wire(),
+                "branch_name": successor_branch(
+                    (previous.task if previous is not None else source.runtime.task).branch_name,
+                    "prerequisite-repair" if repair_plan is not None else "review-fixes",
+                ),
                 "metadata": {
                     **task.metadata,
                     "continuation_kind": continuation_kind,

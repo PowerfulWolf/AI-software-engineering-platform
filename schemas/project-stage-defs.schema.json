@@ -95,6 +95,7 @@
       "additionalProperties": false,
       "required": ["kind", "schema_version", "id", "request_id", "repository_id", "version", "status", "summary", "goals", "non_goals", "requirements", "acceptance_criteria", "assumptions", "open_questions", "decisions", "created_at", "product_spec_sha256"],
       "properties": {
+        "branch_name": {"anyOf":[{"maxLength":240,"minLength":11,"pattern":"^ai/(feature|bugfix)/[a-z][a-z0-9]*(?:-[a-z0-9]+)*$","type":"string"},{"type":"null"}],"default":null,"title":"Branch Name"},
         "kind": {"const": "product_spec"},
         "schema_version": {"const": "v0.1"},
         "id": {"$ref": "#/$defs/productSpecId"},

@@ -208,7 +208,15 @@ class DispatchDeliveryAgentAdapter:
         )
         self._coordinator = DispatchRoleWorktreeCoordinator(
             RoleWorktreeSession(
-                GitWorktreeManager(self._repository_root, worktree_root),
+                GitWorktreeManager(
+                    self._repository_root,
+                    worktree_root,
+                    branch_names=(
+                        {}
+                        if isinstance(dispatch, VerificationReservation)
+                        else {dispatch.task_id: dispatch.task.branch_name}
+                    ),
+                ),
                 environment=self._environment,
             )
         )

@@ -53,6 +53,7 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 
 | 目录 | 任务 ID | 状态记录 |
 |---|---|---|
+| 09-28-semantic-branch-naming | semantic-branch-naming-20260928 | [completed](09-28-semantic-branch-naming/task.json)：语义分支、审批绑定与恢复归属保护完成；验证报告交付后用户授权提交推送 |
 | 09-28-release-delivery-retrospective | release-delivery-retrospective-20260928 | [completed](09-28-release-delivery-retrospective/task.json)：v0.1.2 已发布，业务候选已合并安装，ASE 复盘已落盘 |
 | 09-28-project-switch-refresh | project-switch-refresh-20260928 | [completed](09-28-project-switch-refresh/task.json)：4d1e799 / v0.1.2，61 项前端回归及实际 UI 验证 |
 | 09-27-delivery-reliability-audit | delivery-reliability-audit | [completed](09-27-delivery-reliability-audit/task.json)：14 阶段审查修复已发布，后续真实交付已 DONE |

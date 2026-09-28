@@ -47,6 +47,7 @@ def test_product_draft_becomes_digest_bound_product_spec(tmp_path: Path) -> None
         _StructuredClient(
             {
                 "action": "ready",
+                "branch_name": "ai/feature/deterministic-greeting",
                 "summary": "Add deterministic greeting behavior.",
                 "goals": ["Expose one deterministic greeting."],
                 "requirements": [
@@ -71,6 +72,7 @@ def test_product_draft_becomes_digest_bound_product_spec(tmp_path: Path) -> None
     assert result.product_spec is not None
     result.product_spec.validate_integrity()
     assert result.product_spec.request_id == request.request_id
+    assert result.product_spec.branch_name == "ai/feature/deterministic-greeting"
     assert result.product_spec.requirements[0].acceptance_criterion_ids == ("ac_001_001",)
 
 

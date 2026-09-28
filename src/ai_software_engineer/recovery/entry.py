@@ -24,6 +24,7 @@ from ai_software_engineer.domain import (
     TaskStatus,
     TeamRole,
 )
+from ai_software_engineer.domain.branch import BranchName, successor_branch
 from ai_software_engineer.domain.task import task_matches_dispatch
 from ai_software_engineer.git import GitWorktreeManager, WorktreeNotFound, WorktreeSpec
 from ai_software_engineer.knowledge.gaps import (
@@ -271,6 +272,7 @@ class NativeRecoveryEntry:
         failed_run_id: str,
         failed_context_id: str,
         input_mode: RecoveryInputMode | None = None,
+        target_branch_name: BranchName | None = None,
         approved_scope_sha256: str | None = None,
         scope_approval_reference: str | None = None,
     ) -> tuple[RecoveryPlan, Path]:
@@ -289,7 +291,7 @@ class NativeRecoveryEntry:
             failed_run_id=failed_run_id,
             failed_context_id=failed_context_id,
         )
-        manager = self._manager(scope)
+        manager = self._manager(scope, {original.task.id: original.task.branch_name})
         source_spec = WorktreeSpec(
             task_id=original.task.id,
             role=AgentRole.CODER,
@@ -348,12 +350,24 @@ class NativeRecoveryEntry:
             rebound_paths,
             _task_commands(self.backend._facts(prepared_result).profile),
         )
+        target_branch_name = target_branch_name or successor_branch(
+            original.task.branch_name, "recovery"
+        )
+        if target_branch_name is not None:
+            target_branch_name = TypeAdapter(BranchName).validate_python(target_branch_name)
+            if manager._branch_exists(target_branch_name):
+                raise RecoveryRejected(
+                    "recovery target branch already exists; propose again with "
+                    "--target-branch-name and a meaningful scope qualifier, "
+                    "then approve the new plan"
+                )
         plan = RecoveryPlan.create(
             input_mode=input_mode,
             source=original.source,
             capture=CapturedChanges.from_capture(capture),
             target_base_revision=manager._run_git(("rev-parse", "HEAD"), cwd=Path(repository_root)),
             target_preparation_sha256=prepared.preparation_sha256,
+            target_branch_name=target_branch_name,
             scope_supplement=supplement,
             scope_approval_reference=scope_approval_reference if supplement is not None else None,
             permissions=source_permissions,
@@ -384,7 +398,7 @@ class NativeRecoveryEntry:
         original = NativeRecoverySourceReader(self.config, self.environment).discover_failed_coder(
             scope
         )
-        manager = self._manager(scope)
+        manager = self._manager(scope, {original.task.id: original.task.branch_name})
         try:
             old = manager.recover(
                 WorktreeSpec(
@@ -478,10 +492,13 @@ class NativeRecoveryEntry:
         service.authorize(command)
         sealing.seal(plan.plan_sha256)
 
-    def _manager(self, scope: RecoveryScope) -> GitWorktreeManager:
+    def _manager(
+        self, scope: RecoveryScope, branch_names: Mapping[str, BranchName | None] | None = None
+    ) -> GitWorktreeManager:
         return GitWorktreeManager(
             scope.repository_root,
             Path(self.config.platform_root) / "worktrees" / scope.repository_id,
+            branch_names=branch_names,
         )
 
     def _services(
@@ -493,7 +510,10 @@ class NativeRecoveryEntry:
         service = RecoveryAuthorizationService(
             store,
             facts=facts,
-            captures=self._manager(plan.source.scope),
+            # The service validates native facts (including this exact name) before capture.
+            captures=self._manager(
+                plan.source.scope, {plan.capture.task_id: plan.capture.branch_name}
+            ),
             human=ExplicitRecoveryHuman(confirmed),
         )
         builder = AuthorizedRecoveryTaskBuilder(service, facts)
@@ -700,7 +720,13 @@ class NativeRecoveryEntry:
         definitions = _agent_definitions(dispatch, _task_commands(draft.facts.profile))
         if definitions[AgentRole.CODER].permissions != plan.effective_target_permissions:
             raise RecoveryRejected("new Coder permissions differ from approved recovery")
-        manager = self._manager(plan.source.scope)
+        manager = self._manager(
+            plan.source.scope,
+            {
+                draft.facts.original.task.id: draft.facts.original.task.branch_name,
+                dispatch.task_id: dispatch.task.branch_name,
+            },
+        )
         coordinator = DispatchRoleWorktreeCoordinator(
             RoleWorktreeSession(manager, environment=self.environment)
         )

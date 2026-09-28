@@ -1446,7 +1446,12 @@ def test_resume_verifies_failed_candidate_and_delivers_remediation(
     try:
         assert blocked.task_id is not None
         assert repository.get(blocked.task_id).status is TaskStatus.BLOCKED
-        assert repository.get(delivered.checkpoint.task_id).status is TaskStatus.DONE
+        original_task = repository.get(blocked.task_id)
+        remediation_task = repository.get(delivered.checkpoint.task_id)
+        assert remediation_task.status is TaskStatus.DONE
+        assert original_task.branch_name is not None
+        assert original_task.branch_name.startswith("ai/feature/")
+        assert remediation_task.branch_name == original_task.branch_name + "-review-fixes"
     finally:
         repository.close()
     assert [request.role for request in routes.requests] == [

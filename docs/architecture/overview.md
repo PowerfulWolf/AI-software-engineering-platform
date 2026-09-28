@@ -135,7 +135,7 @@ changed paths 和 typed Artifact。这个组合是 v0.1 的进程级安全边界
 T016 的 `RoleWorktreeSession` 是该端口与 Repository Plane 的最小组合层：它只接受同角色
 `AgentDefinition` 与 `WorktreeSpec`，调用 `GitWorkspace.create` 后把返回的 manager-owned
 root 绑定给 `SubprocessCommandExecutor`。QA/Reviewer 继续在 candidate SHA 的 detached
-worktree 中运行，Coder 保留 attempt branch；`close` 委托 Git 的 dirty 检查，不能 force-delete
+worktree 中运行，Coder 保留 Task 冻结的分支；`close` 委托 Git 的 dirty 检查，不能 force-delete
 未持久化现场。该层不迁移 Task、不写 Artifact，也不把模型文本解释成命令。
 
 ### Evidence Plane
@@ -146,7 +146,7 @@ Artifact Store 保存 JSON artifact 正文、Schema 版本、producer、source r
 
 Git worktree 管理候选代码。Orchestrator 在主 checkout 上只做读取和 ref 操作；Coder 使用可写 worktree；QA 可在专用 worktree 写测试但不能改生产代码；Reviewer 只读。
 
-v0.1 的 `GitWorktreeManager` 将所有 role worktree 放在 main checkout 外，Coder 使用独立 attempt branch，QA/Reviewer detached 到同一 candidate SHA。`WorkspacePolicy` 绑定具体 worktree root，先做 path/command 授权；Git adapter 再用 argv、固定 cwd/env/timeout 执行。dirty worktree 保留用于 evidence/recovery，不 force cleanup。
+v0.1 的 `GitWorktreeManager` 将所有 role worktree 放在 main checkout 外，新需求 Coder 使用已批准的 `ai/feature/<slug>` 或 `ai/bugfix/<slug>`，同 Task 续跑沿用名称；历史无命名字段的 Task 保留旧分支。QA/Reviewer detached 到同一 candidate SHA。`WorkspacePolicy` 绑定具体 worktree root，先做 path/command 授权；Git adapter 再用 argv、固定 cwd/env/timeout 执行。dirty worktree 保留用于 evidence/recovery，不 force cleanup。详见 [Git 隔离规则](git-worktree.md)。
 
 ### Human Boundary
 

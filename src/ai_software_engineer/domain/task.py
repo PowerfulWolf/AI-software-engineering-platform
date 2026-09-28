@@ -4,6 +4,7 @@ from typing import Annotated, Self
 
 from pydantic import AwareDatetime, Field, StrictBool, StringConstraints, model_validator
 
+from ai_software_engineer.domain.branch import BranchName
 from ai_software_engineer.domain.enums import AgentRole, TaskStatus
 from ai_software_engineer.domain.model import DomainModel, JsonValue, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.retry_policy import (
@@ -60,6 +61,7 @@ class Task(DomainModel):
     description: NonEmptyStr
     repository: NonEmptyStr
     base_ref: NonEmptyStr
+    branch_name: BranchName | None = Field(default=None, exclude_if=lambda value: value is None)
     acceptance_criteria: Annotated[tuple[AcceptanceCriterion, ...], Field(min_length=1)]
     constraints: TaskConstraints | None = None
     status: TaskStatus

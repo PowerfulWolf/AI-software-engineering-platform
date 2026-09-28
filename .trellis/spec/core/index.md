@@ -38,6 +38,8 @@
 
 ## Files
 
+- [`branch-naming.md`](branch-naming.md): approved semantic branches, immutable Task binding and legacy recovery.
+
 - [`project-navigation.md`](project-navigation.md): latest-intent navigation, serial refresh and visible Project identity.
 
 - [`verification-role-recovery.md`](verification-role-recovery.md): admitted standalone QA checkpoints, exact approval and Reviewer-only restart.

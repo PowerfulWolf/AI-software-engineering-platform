@@ -69,6 +69,7 @@ class AuthorizedRecoveryTaskBuilder:
         task = Task.model_validate(
             {
                 **task.to_wire(),
+                "branch_name": plan.target_branch_name,
                 "metadata": {
                     **task.metadata,
                     "recovery_plan_sha256": plan.plan_sha256,

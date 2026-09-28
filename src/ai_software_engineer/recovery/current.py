@@ -118,8 +118,12 @@ class NativeRecoveryFactsVerifier:
         constraints = original.task.constraints
         allowed_paths = constraints.allowed_paths if constraints is not None else ()
         manager = GitWorktreeManager(
-            target.repository_root, Path(config.platform_root) / "worktrees" / target.repository_id
+            target.repository_root,
+            Path(config.platform_root) / "worktrees" / target.repository_id,
+            branch_names={original.task.id: original.task.branch_name},
         )
+        if plan.capture.branch_name != original.task.branch_name:
+            raise ValueError("captured branch differs from frozen source Task intent")
         old = plan.capture.to_capture().worktree
         supplement = inspect_recovery_scope_supplement(manager, old, original)
         if (

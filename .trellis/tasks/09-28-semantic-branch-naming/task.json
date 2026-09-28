@@ -1,0 +1,13 @@
+{
+  "id": "semantic-branch-naming-20260928",
+  "title": "平台强制采用 ai/feature 与 ai/bugfix 语义分支命名",
+  "status": "completed",
+  "phase": "verified",
+  "authorization": "用户确认 ai/feature/<需求短名>、ai/bugfix/<问题短名>，不要短 ID 或 attempt-N，并明确同意创建 Trellis 任务进入规划和修复。inline 实施与检查。验证报告交付后，用户明确要求：完成这个任务，然后提交并推送。",
+  "baseline_commit": "8eed383",
+  "resumed_revision": "205e340",
+  "submission_target": "origin/main",
+  "preserved_changes": ["README.md", "docs/README.md", "docs/milestones.md", "docs/TODO.md"],
+  "production_data_changes": "none; only temporary Git fixtures and the isolated test database were changed",
+  "verification": "verification.md"
+}

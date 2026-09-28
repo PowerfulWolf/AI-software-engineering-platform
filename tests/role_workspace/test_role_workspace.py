@@ -315,15 +315,21 @@ def test_dispatch_bindings_enforce_assigned_roles_and_same_candidate(tmp_path: P
     coordinator.close(coder)
 
 
-def test_dispatch_coder_recovery_uses_the_retry_request_revision(tmp_path: Path) -> None:
+@pytest.mark.parametrize("semantic", [False, True])
+def test_dispatch_coder_recovery_uses_the_retry_request_revision(
+    tmp_path: Path, semantic: bool
+) -> None:
     repository = _fixture_repository(tmp_path)
     dispatch = _dispatch(repository)
     definitions = {
         role: _agent(role) for role in (AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER)
     }
     worktree_root = tmp_path / "worktrees"
+    branch_names = {dispatch.task_id: "ai/feature/project-switch"} if semantic else None
     coordinator = DispatchRoleWorktreeCoordinator(
-        RoleWorktreeSession(GitWorktreeManager(repository, worktree_root))
+        RoleWorktreeSession(
+            GitWorktreeManager(repository, worktree_root, branch_names=branch_names)
+        )
     )
     coder = coordinator.open_coder(dispatch, definitions)
     (coder.worktree.path / "src/app.py").write_text("VALUE = 2\n", encoding="utf-8")
@@ -332,7 +338,9 @@ def test_dispatch_coder_recovery_uses_the_retry_request_revision(tmp_path: Path)
     candidate = _git(coder.worktree.path, "rev-parse", "HEAD")
 
     restarted = DispatchRoleWorktreeCoordinator(
-        RoleWorktreeSession(GitWorktreeManager(repository, worktree_root))
+        RoleWorktreeSession(
+            GitWorktreeManager(repository, worktree_root, branch_names=branch_names)
+        )
     )
     recovered = restarted.open_coder(
         dispatch,
@@ -342,6 +350,7 @@ def test_dispatch_coder_recovery_uses_the_retry_request_revision(tmp_path: Path)
     )
 
     assert recovered.worktree.head_revision == candidate
+    assert recovered.worktree.branch == coder.worktree.branch
     restarted.close(recovered)
 
 

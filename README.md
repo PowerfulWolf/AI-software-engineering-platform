@@ -392,6 +392,10 @@ AI-software-engineering-platform/
 - `worktrees/` 是平台管理的执行现场，不是备份目录。不得手工清空正在运行或待恢复的 worktree；
   干净现场由平台回收，失败/脏现场保留供诊断。
 - Candidate 分支和提交属于目标 Git 仓库；通过 QA/Reviewer 后交付可合并分支，平台不自动 merge、push 或 deploy。
+- 新需求分支固定为 `ai/feature/<业务短名>` 或 `ai/bugfix/<问题短名>`，不带 Task ID/短 ID/attempt。
+  Product 提案、用户批准后冻结；feature 的 QA 返工仍是 feature，同 Task 续跑不改名。
+  独立恢复保留原类型并补充用途限定词，碰撞拒绝覆盖；历史分支不批量改名。
+  详见[分支命名规范](docs/architecture/git-worktree.md#2-分支命名)。
 - MySQL 与整个 `<platform_root>` 共同构成可恢复状态，备份、迁移或清理时必须成套处理。
 
 ## 推荐的 v0.1 运行形态

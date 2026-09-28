@@ -152,6 +152,7 @@ class RecoveryTaskRecord(DomainModel):
             or not authorization.decision.approved
             or self.task.repository != plan.source.scope.repository_root
             or self.task.base_ref != plan.target_base_revision
+            or self.task.branch_name != plan.target_branch_name
             or self.task.created_at != plan.created_at
             or self.task.updated_at != plan.created_at
             or self.rebound_request.repository_id != plan.source.scope.repository_id

@@ -1,15 +1,22 @@
 """Local Git CLI adapter for isolated role worktrees."""
 
 import hashlib
+import json
 import os
 import shutil
+import stat
 import subprocess
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final, Protocol, runtime_checkable
 
+from pydantic import TypeAdapter
+
 from ai_software_engineer.domain.agent import AgentPermissions
+from ai_software_engineer.domain.branch import BranchName
 from ai_software_engineer.domain.enums import AgentRole
+from ai_software_engineer.domain.task import TaskId
 from ai_software_engineer.git.capture import (
     MAX_CAPTURE_BYTES,
     MAX_CAPTURE_FILES,
@@ -116,10 +123,19 @@ class GitWorktreeManager:
         worktree_root: str | Path,
         *,
         command_timeout_seconds: float = 30.0,
+        branch_names: Mapping[TaskId, BranchName | None] | None = None,
     ) -> None:
         self._repository = Path(repository).resolve()
         self._worktree_root = Path(worktree_root).resolve()
         self._command_timeout_seconds = command_timeout_seconds
+        # Trusted composition supplies sealed Task intent, never WorktreeRef.branch.
+        self._require_known_task = branch_names is not None
+        self._branch_names = TypeAdapter(dict[TaskId, BranchName | None]).validate_python(
+            dict(branch_names or {})
+        )
+        names = [name for name in self._branch_names.values() if name is not None]
+        if len(set(names)) != len(names):
+            raise ValueError("different Tasks cannot own the same semantic branch")
         self._git = shutil.which("git", path=os.defpath)
 
     def create(self, spec: WorktreeSpec) -> WorktreeRef:
@@ -204,7 +220,8 @@ class GitWorktreeManager:
         Normal recovery never mutates repository state. This narrower Manager repair exists for
         terminal provider failures whose clean worktree was removed by normal cleanup. It will
         not recreate a missing branch, move a branch, discard edits, or accept a branch that has
-        advanced beyond the Task's immutable source revision.
+        advanced beyond the Task's immutable source revision. Semantic names also require the
+        exact manager-owned removal receipt; matching a shared name/SHA cannot establish ownership.
         """
         if spec.role is not AgentRole.CODER:
             raise WorktreeIdentityDrift("only a Coder worktree can be restored from its branch")
@@ -229,6 +246,8 @@ class GitWorktreeManager:
             raise WorktreeRevisionDrift(
                 "missing Coder worktree branch does not match its immutable source revision"
             )
+        if self._branch_names.get(spec.task_id) is not None:
+            self._require_removal_marker(self._removal_marker(spec, branch))
         target.parent.mkdir(parents=True, exist_ok=True)
         self._run_git(("worktree", "add", str(target), branch), cwd=self._repository)
         restored = self.recover(spec)
@@ -257,7 +276,72 @@ class GitWorktreeManager:
         snapshot = self.inspect(worktree)
         if snapshot.dirty:
             raise DirtyWorktree(snapshot.changed_paths)
+        if (
+            worktree.role is AgentRole.CODER
+            and self._branch_names.get(worktree.task_id) is not None
+        ):
+            self._validate_target_has_no_symlinks(worktree.path)
+            spec = WorktreeSpec(
+                task_id=worktree.task_id,
+                role=worktree.role,
+                attempt=worktree.attempt,
+                source_revision=snapshot.head_revision,
+            )
+            marker = self._removal_marker(spec, self._branch_name(spec))
+            self._write_removal_marker(marker)
         self._run_git(("worktree", "remove", str(worktree.path.resolve())), cwd=self._repository)
+
+    def _removal_marker(self, spec: WorktreeSpec, branch: str) -> Path:
+        target = self._target_path(spec)
+        identity = {
+            "version": 1,
+            "repository": str(self._repository),
+            "worktree": str(target),
+            "branch": branch,
+            "spec": spec.to_wire(),
+        }
+        digest = hashlib.sha256(
+            json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        return target.with_name(f".{target.name}.removed-{digest}")
+
+    @staticmethod
+    def _require_removal_marker(marker: Path) -> None:
+        try:
+            descriptor = os.open(marker, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            try:
+                metadata = os.fstat(descriptor)
+                if not stat.S_ISREG(metadata.st_mode) or metadata.st_size != 0:
+                    raise WorktreeIdentityDrift("invalid semantic Coder removal marker")
+            finally:
+                os.close(descriptor)
+        except OSError as error:
+            raise WorktreeIdentityDrift(
+                "missing or unsafe semantic Coder removal marker"
+            ) from error
+
+    def _write_removal_marker(self, marker: Path) -> None:
+        # An empty exclusive-create file is atomic; its name seals the exact ownership facts.
+        # Persist it before removing Git's worktree registration, and never follow a symlink.
+        try:
+            try:
+                descriptor = os.open(
+                    marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
+                )
+            except FileExistsError:
+                self._require_removal_marker(marker)
+            else:
+                try:
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+            directory = os.open(marker.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        except OSError as error:
+            raise WorktreeIdentityDrift("cannot persist semantic Coder removal marker") from error
 
     def capture_changes(
         self,
@@ -666,9 +750,10 @@ class GitWorktreeManager:
     def _target_path(self, spec: WorktreeSpec) -> Path:
         return self._worktree_root / spec.task_id / f"{spec.role.value}-attempt-{spec.attempt:02d}"
 
-    @staticmethod
-    def _branch_name(spec: WorktreeSpec) -> str:
-        return f"ai/{spec.task_id}/attempt-{spec.attempt}"
+    def _branch_name(self, spec: WorktreeSpec) -> str:
+        if self._require_known_task and spec.task_id not in self._branch_names:
+            raise UnmanagedWorktree("Coder Task has no trusted branch binding")
+        return self._branch_names.get(spec.task_id) or f"ai/{spec.task_id}/attempt-{spec.attempt}"
 
     def _validate_owned_worktree(self, worktree: WorktreeRef) -> Path:
         try:

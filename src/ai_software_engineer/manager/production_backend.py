@@ -374,6 +374,7 @@ class ProductionProjectDeliveryBackend:
         frozen_preparation: PrepareProjectResult | None = None,
         frozen_source_revision: str | None = None,
         trusted_plan_projection: bool = False,
+        trusted_legacy_product_projection: bool = False,
         role_queue: MySqlRoleQueue | None = None,
     ) -> None:
         if (frozen_preparation is None) != (frozen_source_revision is None):
@@ -398,6 +399,7 @@ class ProductionProjectDeliveryBackend:
         self._frozen_preparation = frozen_preparation
         self._frozen_source_revision = frozen_source_revision
         self._trusted_plan_projection = trusted_plan_projection
+        self._trusted_legacy_product_projection = trusted_legacy_product_projection
         self._baseline_store = FileProjectBaselineCompilationStore()
         self._preparer = ManagerSkillService(
             organization=organization,
@@ -1255,7 +1257,8 @@ class ProductionProjectDeliveryBackend:
                 self._structured_clients.for_project(
                     facts.workspace.repository_root,
                     TeamRole.PRODUCT,
-                )
+                ),
+                trusted_legacy_projection=self._trusted_legacy_product_projection,
             ),
             stage_advancer=self._stage_advancer,
             human_decision_verifier=self._human_decision_verifier,

@@ -279,7 +279,7 @@ production_console_app(
 | Missing production config/MySQL/team | startup/read fails safely; no fake workspace or data |
 | Foreign Host/Origin, non-JSON or oversized body | 403 / 415 / 413 before command execution |
 | Read-only legacy Team server | UI remains read-only and explicitly reports console unavailable |
-| DONE with unique `ai/<task>/attempt-*` ref | display exact candidate branch; ambiguous/missing branch stays omitted |
+| DONE with frozen semantic Task branch or unique legacy ref | display only the exact branch at candidate SHA; ambiguous/missing branch stays omitted |
 
 ## 5. Good / Base / Bad Cases
 

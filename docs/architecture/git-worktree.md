@@ -27,12 +27,31 @@ worktrees/<task-id>/
 ## 2. 分支命名
 
 ```text
-ai/<task-id>/attempt-<n>
+ai/feature/<业务短名>
+ai/bugfix/<问题短名>
 ```
 
-Task ID 只允许 `[a-z0-9_-]`，长度受限，避免路径注入。分支从 Task 的 `base_ref` 创建；重试从最新有效候选 commit 创建新 attempt，不复用已污染的工作树。
+Product 提出英文小写 kebab-case 业务短名，随 ProductSpec 一起批准并冻结到 Task.branch_name。
+类型取决于原始需求：新增功能是 feature，独立缺陷是 bugfix；QA/Review 返工不改变类型。
+公开分支不包含 Task ID、哈希短 ID 或 attempt-N；Task ID/attempt 仍用于内部 worktree 路径隔离。
+同 Task 普通续跑复用同一分支和受校验工作树，不因执行次数改名。另立的恢复/修复 Task 在
+直接来源名称上追加 recovery、review-fixes 或 prerequisite-repair，保留原现场与原类型。
 
-source ref 会先解析为完整 commit SHA。已有 target path 或 Coder branch 都视为旧 attempt evidence，返回 `WorktreeAlreadyExists`，不会自动复用、覆盖或 force-delete。
+同名分支不能被覆盖或冒领：批准前通过 Product 讨论补充更具体的业务限定词；中断恢复可用
+`ase recovery propose ... --target-branch-name ai/feature/<更具体的恢复短名>` 提案，再批准新摘要。
+历史缺少命名字段的 Task 保持 `ai/<task-id>/attempt-<n>`，不重命名、不猜类型、不改历史哈希。
+语义分支与 capture/Task/审批/恢复的可执行契约见
+[branch-naming.md](../../.trellis/spec/core/branch-naming.md)。
+
+source ref 会先解析为完整 commit SHA。新建时已有 target path 或 Coder branch 返回
+`WorktreeAlreadyExists`，不会覆盖或 force-delete。重启恢复必须验证冻结名称、Task/path、
+common-dir、role 与 HEAD，不能仅凭名字相同或 SHA 相同判断所有权。
+
+语义分支的干净 Coder 工作树清理前，manager 在工作树旁写入绑定 repository、Task、role、
+attempt、path、branch 与实际 HEAD 的 SHA-256 清理标记，并先持久化再执行 Git remove。
+重建缺失工作树还必须验证这个精确标记；缺失、损坏、symlink 或从其他 Task/layout 复制的
+标记均拒绝。标记保存在主仓库外的 manager 工作树目录，不是执行批准，也不修改历史 artifact。
+历史 `ai/<task-id>/attempt-N` 分支保留原恢复规则。
 
 ## 3. 角色隔离
 

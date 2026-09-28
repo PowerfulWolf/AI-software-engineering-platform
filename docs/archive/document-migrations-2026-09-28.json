@@ -26,10 +26,10 @@
     {
       "old_path": "docs/contracts.md",
       "source_revision": "8eed38366523cf5b127b39d005d0e424fe883659",
-      "source_kind": "git_revision",
-      "source_sha256": "de95120aec80ec9e23ed5b961ae2787063c76913f55ddbfdae725a0228132baf",
+      "source_kind": "working_tree_at_migration",
+      "source_sha256": "0e8c80bb7eb86a870b728ef9f4ae6b27e007690c114aa629e0327d966068a010",
       "new_path": "docs/architecture/contracts.md",
-      "destination_sha256_at_migration": "e4e38f11daaa00a142cf3f1254e9c838bca18d47a09b3e792499466c59f08468",
+      "destination_sha256_at_migration": "054403a10adedec5644220d2e1efb94743b67eb2a645cdd00dfad31c2acbdf14",
       "body_changes": "relocation and link repair; current manuals may separate audience-specific or historical sections"
     },
     {
@@ -62,10 +62,10 @@
     {
       "old_path": "docs/git-worktree.md",
       "source_revision": "8eed38366523cf5b127b39d005d0e424fe883659",
-      "source_kind": "git_revision",
-      "source_sha256": "268ec44a6624abcf61339b1ad101d793eca7dcc3d8568b524e95800b3fb07235",
+      "source_kind": "working_tree_at_migration",
+      "source_sha256": "7f850bb395760225dc1864f4feb6ebac6a91eec8f5516ef6de1445e7a1ac4255",
       "new_path": "docs/architecture/git-worktree.md",
-      "destination_sha256_at_migration": "4bed7e33970c6fcc081ceae7cfc099e60f5576a7fa51b8bb2bc8b2d19bc69c13",
+      "destination_sha256_at_migration": "a1de60e67e5d562559ca161f862e3984ccac712efc9b73f35cce7509cf5742fa",
       "body_changes": "relocation and link repair; current manuals may separate audience-specific or historical sections"
     },
     {

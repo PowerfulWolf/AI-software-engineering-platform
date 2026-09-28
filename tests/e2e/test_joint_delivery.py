@@ -76,11 +76,21 @@ class JointModels(StructuredClientFactory, StructuredModelClient):
         self.calls.append(title)
         simple = _ScriptedStructuredClient()
         if title == "ProductDraft":
-            return simple.complete(
+            result = simple.complete(
                 instructions=instructions,
                 input_payload=input_payload,
                 output_schema=output_schema,
                 timeout_seconds=timeout_seconds,
+            )
+            # Distinct requirements have distinct business names, not a hardcoded shared ref.
+            import re
+
+            slug = re.sub(
+                r"[^a-z0-9]+", "-", str(input_payload.get("title") or "greeting").lower()
+            ).strip("-")
+            return StructuredModelResult(
+                payload={**result.payload, "branch_name": f"ai/feature/{slug or 'greeting'}"},
+                duration_ms=result.duration_ms,
             )
         scope = DirectoryScope.model_validate(input_payload["scope"])
         first, second = scope.units

@@ -330,6 +330,9 @@ def test_recovery_complete_native_delivery_and_preserve_failed_history(
     )
     store, loaded = recovery.open_plan(path)
     assert loaded == plan
+    assert plan.capture.branch_name is not None
+    assert plan.capture.branch_name.startswith("ai/feature/")
+    assert plan.target_branch_name == plan.capture.branch_name + "-recovery"
     assert plan.target_permissions is not None
     assert "git commit" not in plan.target_permissions.commands
     if legacy_direct_commit:
@@ -388,6 +391,8 @@ def test_recovery_complete_native_delivery_and_preserve_failed_history(
 
     result = recovery.execute(path, route_factory=factory)
     assert result.task.status is TaskStatus.DONE, result
+    assert result.task.branch_name == plan.target_branch_name
+    assert git(project, "rev-parse", plan.target_branch_name) == result.candidate_revision
     assert isinstance(result, RetryDeliveryResult)
     assert read_recovery_task(config, environment, store, plan) == result.task
     assert len(result.artifact_ids) == 4

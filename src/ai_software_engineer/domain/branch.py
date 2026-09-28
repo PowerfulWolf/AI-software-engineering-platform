@@ -1,0 +1,49 @@
+"""Approval-bound branch vocabulary; Task/run IDs remain internal identities."""
+
+import re
+from typing import Annotated, Literal
+
+from pydantic import AfterValidator, StringConstraints, TypeAdapter
+
+
+def _semantic_name(value: str) -> str:
+    slug = value.split("/", 2)[2]
+    if re.search(r"(?:^|-)attempt-[0-9]+(?:-|$)", slug) or re.search(
+        r"(?:^|-)[a-f0-9]{16,}(?:-|$)", slug
+    ):
+        raise ValueError("branch names require business meaning, not IDs or attempt numbers")
+    return value
+
+
+BranchName = Annotated[
+    str,
+    StringConstraints(
+        min_length=11,
+        max_length=240,
+        pattern=r"^ai/(feature|bugfix)/[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+    ),
+    AfterValidator(_semantic_name),
+]
+
+BRANCH_NAMING_INSTRUCTIONS = (
+    "For ready output provide branch_name as ai/feature/<business-slug> for new functionality "
+    "or ai/bugfix/<problem-slug> for an independent defect request. Use a concise lowercase "
+    "English kebab-case business name; no Task IDs, hashes or attempt-N. Classify by the original "
+    "request, not by later QA/Review rework. Ask for clarification if its nature is ambiguous. "
+    "The name is reviewed and frozen with ProductSpec. Use meaningful scope qualifiers to "
+    "distinguish unrelated requirements; never reuse another requirement's branch."
+)
+
+
+def successor_branch(
+    original: BranchName | None,
+    purpose: Literal["recovery", "review-fixes", "prerequisite-repair"],
+) -> BranchName | None:
+    """Preserve kind and ancestry; never truncate into a collision or invent an ID.
+
+    None is reserved for historical unclassified deliveries. The source Task, not
+    the initial ProductSpec, owns the current name across multiple successors.
+    """
+    if original is None:
+        return None
+    return TypeAdapter(BranchName).validate_python(f"{original}-{purpose}")

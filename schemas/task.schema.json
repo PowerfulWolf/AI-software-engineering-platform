@@ -104,6 +104,7 @@
     }
   },
   "properties": {
+    "branch_name": {"anyOf":[{"maxLength":240,"minLength":11,"pattern":"^ai/(feature|bugfix)/[a-z][a-z0-9]*(?:-[a-z0-9]+)*$","type":"string"},{"type":"null"}],"default":null,"title":"Branch Name"},
     "id": {"type": "string", "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$"},
     "title": {"type": "string", "minLength": 1, "maxLength": 200},
     "description": {"type": "string", "minLength": 1},

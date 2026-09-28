@@ -162,7 +162,7 @@ repository_id_for_root(repository_root: str | Path) -> RepositoryId
   重建保留首次观察时间。
 - **T012 Base**：DONE delivery 在 regression window 结束前保持 `PENDING`，人类仍可审阅 handoff。
 - **T012 Bad**：只看 `Task.status == DONE` 就写 `adr=true`，或任务完成后手工补造“无人干预”历史。
-- **T016 Good**：Coder binding 使用 attempt branch，QA/Reviewer binding detached 到同一 candidate；
+- **T016 Good**：Coder binding 使用 Task 冻结的语义分支（旧 Task 保留 legacy 名称），QA/Reviewer binding detached 到同一 candidate；命名契约见 `branch-naming.md`；
   binding executor 的 cwd 等于 manager-issued root，clean 后才关闭。
 - **T016 Bad**：把 QA AgentDefinition 配给 Coder spec、直接用 main checkout 构造 executor，
   或 force-remove dirty role worktree。

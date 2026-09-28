@@ -570,7 +570,9 @@ this does not authorize rebasing old approval or QA/Review evidence in place.
 - 目标项目必须是真实目录、Git root、clean working tree 且 HEAD 为 full commit。Task `allowed_paths`
   来自 TechnicalDesign affected paths，commands 来自确定性 RepositoryProfile build-system allowlist。
 - Coder worktree 位于 `<platform_root>/worktrees/<repository-id>/<task-id>/coder-attempt-01` 并使用
-  `ai/<task-id>/attempt-1` branch；QA、Reviewer 在 exact candidate SHA 的不同 detached worktree。
+  已批准 Task.branch_name（`ai/feature/<业务短名>` 或 `ai/bugfix/<问题短名>`）；仅历史无字段
+  Task 保持 `ai/<task-id>/attempt-1`。参见 [branch-naming.md](branch-naming.md)。
+  QA、Reviewer 在 exact candidate SHA 的不同 detached worktree。
 - Coder 必须留下完整 intended diff 和 provisional report；平台 finalizer 形成 clean candidate commit，
   且 changed paths 不越权。QA/Reviewer 不得改变 HEAD 或工作树。
   clean worktree 可以关闭，dirty/漂移现场必须保留，禁止 force reset/delete。

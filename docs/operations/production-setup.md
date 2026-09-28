@@ -456,7 +456,7 @@ git -C /absolute/path/to/target-project diff HEAD..<candidate_revision>
 git -C /absolute/path/to/target-project branch --contains <candidate_revision>
 ```
 
-候选通常保留在 `ai/<task-id>/attempt-1`。平台不执行 merge；确认无误后，由项目自己的保护分支流程、
+新需求候选保留在 ProductSpec 批准并由 Task 冻结的 `ai/feature/<slug>` 或 `ai/bugfix/<slug>`；历史无命名字段的 Task 仍保留 `ai/<task-id>/attempt-1`，不自动改名。以交付页面实际分支为准。平台不执行 merge；确认无误后，由项目自己的保护分支流程、
 PR 或人工 Git 命令完成交付。
 
 </details>

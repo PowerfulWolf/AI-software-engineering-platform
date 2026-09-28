@@ -18,6 +18,7 @@ from pydantic import (
 )
 
 from ai_software_engineer.domain import AgentPermissions, AgentRole
+from ai_software_engineer.domain.branch import BranchName
 from ai_software_engineer.domain.identity import ContextId, RepositoryId, RunId, TeamId
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.domain.project_delivery import StageSha256
@@ -135,6 +136,7 @@ class CapturedChanges(DomainModel):
     files: tuple[CapturedFile, ...] = Field(max_length=MAX_CAPTURE_FILES)
     capture_sha256: StageSha256
     base_revision: FullCommit | None = None
+    branch_name: BranchName | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @classmethod
     def from_capture(cls, capture: WorktreeChangeCapture) -> CapturedChanges:
@@ -150,6 +152,12 @@ class CapturedChanges(DomainModel):
             files=tuple(CapturedFile(path=p, sha256=s) for p, s in capture.file_sha256s),
             capture_sha256=capture.capture_sha256,
             base_revision=capture.base_revision,
+            branch_name=(
+                None
+                if capture.worktree.branch
+                == f"ai/{capture.worktree.task_id}/attempt-{capture.worktree.attempt}"
+                else capture.worktree.branch
+            ),
         )
         if result.to_capture() != capture:
             raise RecoveryRejected("capture has a noncanonical Coder identity")
@@ -163,7 +171,7 @@ class CapturedChanges(DomainModel):
                 attempt=self.attempt,
                 path=Path(self.worktree_path),
                 head_revision=self.source_revision,
-                branch=f"ai/{self.task_id}/attempt-{self.attempt}",
+                branch=self.branch_name or f"ai/{self.task_id}/attempt-{self.attempt}",
                 detached=False,
             ),
             patch=self.patch.encode("utf-8"),
@@ -282,6 +290,9 @@ class RecoveryPlan(DomainModel):
     capture: CapturedChanges
     target_base_revision: FullCommit
     target_preparation_sha256: StageSha256
+    target_branch_name: BranchName | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     # Source permissions prove the captured historical worktree. They may contain
     # only the original policy plus a digest-bound, explicitly approved supplement.
     scope_supplement: RecoveryScopeSupplement | None = None
@@ -343,6 +354,15 @@ class RecoveryPlan(DomainModel):
 
     @model_validator(mode="after")
     def validate_lineage(self) -> Self:
+        source_branch = self.capture.branch_name
+        if (source_branch is None) != (self.target_branch_name is None):
+            raise ValueError("semantic recovery requires an explicit target branch")
+        if source_branch is not None and (
+            self.target_branch_name == source_branch
+            or self.target_branch_name is None
+            or self.target_branch_name.split("/")[1] != source_branch.split("/")[1]
+        ):
+            raise ValueError("recovery must preserve requirement type and use a distinct branch")
         if (
             self.capture.task_id != self.source.task_id
             or self.capture.to_capture().effective_base_revision != self.source.base_revision

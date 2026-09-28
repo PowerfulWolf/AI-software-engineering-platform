@@ -891,7 +891,7 @@ def _read_verifications(
         elif reservation.committed_at == latest.committed_at:
             raise ValueError("ambiguous verification reservation order")
     result: list[TaskView] = []
-    validated_sources: set[str] = set()
+    validated_sources: dict[str, TaskView] = {}
     repository_ids = {native.checkpoint.repository_id for native, _, _ in native_by_task.values()}
     for reservation, completion_sha256, abandonment_sha256 in reservations:
         source = native_by_task.get(str(reservation.source_task_id))
@@ -906,7 +906,7 @@ def _read_verifications(
             source_view = _read_task(native, project_id, request_id, source_scope, cursor)
             if source_view.task_id != reservation.source_task_id:
                 raise ValueError("verification reservation source Task is missing")
-            validated_sources.add(reservation.source_task_id)
+            validated_sources[reservation.source_task_id] = source_view
         result.append(
             _verification_view(
                 native,
@@ -925,6 +925,7 @@ def _read_verifications(
                 ),
                 team_id=team_id,
                 project_id=project_id,
+                source_branch=validated_sources[reservation.source_task_id].candidate_branch,
             )
         )
     return tuple(result)
@@ -941,6 +942,7 @@ def _verification_view(
     superseded: bool,
     team_id: str,
     project_id: str,
+    source_branch: str | None = None,
 ) -> TaskView:
     verification_id = f"verification_{reservation.plan_sha256[:32]}"
     current_role = AgentRole.QA
@@ -1063,11 +1065,7 @@ def _verification_view(
         blocker=blocker,
         next_action=next_action,
         candidate_revision=native.checkpoint.candidate_revision,
-        candidate_branch=_candidate_branch(
-            native.checkpoint.repository_root,
-            reservation.source_task_id,
-            native.checkpoint.candidate_revision,
-        ),
+        candidate_branch=source_branch,
         assignments=assignments,
         # Verifier requests judge the immutable source Task/candidate.  The
         # distinct reservation Task scopes leases and worktrees, while the
@@ -1261,7 +1259,9 @@ def _read_task_details(
             "runs": _read_runs(native, task.id),
             "documents": base.documents + docs,
             "candidate_revision": candidate_revision,
-            "candidate_branch": _candidate_branch(cp.repository_root, task.id, candidate_revision),
+            "candidate_branch": _candidate_branch(
+                cp.repository_root, task.id, candidate_revision, branch_name=task.branch_name
+            ),
         }
     )
 
@@ -1351,7 +1351,11 @@ def _read_runs(
 
 
 def _candidate_branch(
-    repository_root: str, task_id: str | None, candidate_revision: str | None
+    repository_root: str,
+    task_id: str | None,
+    candidate_revision: str | None,
+    *,
+    branch_name: str | None = None,
 ) -> str | None:
     if task_id is None or candidate_revision is None:
         return None
@@ -1360,11 +1364,13 @@ def _candidate_branch(
         "for-each-ref",
         f"--points-at={candidate_revision}",
         "--format=%(refname:short)",
-        f"refs/heads/ai/{task_id}",
+        f"refs/heads/{branch_name}" if branch_name else f"refs/heads/ai/{task_id}",
     )
     if not value:
         return None
     branches = tuple(
-        branch for branch in value.splitlines() if branch.startswith(f"ai/{task_id}/attempt-")
+        branch
+        for branch in value.splitlines()
+        if (branch == branch_name if branch_name else branch.startswith(f"ai/{task_id}/attempt-"))
     )
     return branches[0] if len(branches) == 1 else None

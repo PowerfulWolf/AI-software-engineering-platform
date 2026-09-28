@@ -79,7 +79,9 @@ def request(prepared: ProjectPreparation) -> ProjectRequest:
     )
 
 
-def product_spec(project_request: ProjectRequest, *, version: int = 1) -> ProductSpec:
+def product_spec(
+    project_request: ProjectRequest, *, version: int = 1, branch_name: str | None = None
+) -> ProductSpec:
     criterion = AcceptanceCriterion(
         id="ac_intake_01",
         description="A prepared project can produce a reviewable intake.",
@@ -94,6 +96,7 @@ def product_spec(project_request: ProjectRequest, *, version: int = 1) -> Produc
         version=version,
         status=ProductSpecStatus.READY_FOR_REVIEW,
         summary="Create an explicit, auditable intake-to-delivery contract.",
+        branch_name=branch_name,
         goals=("Turn approved product intent into a Delivery Task.",),
         non_goals=("Do not auto-merge the candidate.",),
         requirements=(

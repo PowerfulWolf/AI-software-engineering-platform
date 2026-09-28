@@ -338,7 +338,7 @@ WorkspacePolicy.authorize_command(arguments: tuple[str, ...]) -> tuple[str, ...]
 ### 3. Contracts
 
 - worktree root 必须位于 main checkout 之外，layout 固定为 `<root>/<task-id>/<role>-attempt-<NN>`；create 在落盘前解析 target 的已有 symlink parents，结果必须仍位于 configured root 内；
-- Coder 创建 `ai/<task-id>/attempt-<n>` branch，QA/Reviewer detached 到同一 candidate commit；Orchestrator role 不允许构造 `WorktreeSpec`；
+- 新需求 Coder 使用已批准并冻结的 `ai/feature/<slug>` 或 `ai/bugfix/<slug>`；同 Task 续跑不改名，历史无命名字段才沿用 `ai/<task-id>/attempt-<n>`。QA/Reviewer detached 到同一 candidate commit；Orchestrator role 不允许构造 `WorktreeSpec`。完整契约见 `branch-naming.md`；
 - source ref 必须先通过 `git rev-parse --verify --end-of-options <ref>^{commit}` 固化为完整 SHA；已有 target 或 Coder branch 不复用；
 - `inspect/remove` 只接受 layout 和 Git common directory 都与 manager 匹配的 `WorktreeRef`；
 - `remove` 先检查 staged、unstaged 和 untracked paths，dirty worktree 抛 `DirtyWorktree(changed_paths)` 并保留现场，clean cleanup 不删除 branch/commit；

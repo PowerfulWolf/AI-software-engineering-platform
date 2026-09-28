@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -46,6 +47,7 @@ from ai_software_engineer.multi_directory.service import (
 )
 from ai_software_engineer.orchestration import AgentRunFailed
 from ai_software_engineer.recovery import FileRecoveryStore, RecoveryPlan, RecoveryScope
+from ai_software_engineer.recovery.models import CapturedChanges
 from ai_software_engineer.recovery.resume import (
     DeliveryResumeOutcome,
     DeliveryResumeResult,
@@ -611,12 +613,24 @@ def test_continue_sends_an_exact_scope_approval_separately_from_plan_approval(
 
 
 @pytest.mark.parametrize("joint", [False, True])
+@pytest.mark.parametrize("semantic", [False, True])
 def test_continue_reads_the_persisted_recovery_envelope_through_the_recovery_entry(
     tmp_path: Path,
     joint: bool,
+    semantic: bool,
 ) -> None:
     adapter, host, entry = _adapter(tmp_path)
     plan = make_plan(tmp_path / "project")
+    if semantic:
+        capture = plan.capture.to_capture()
+        capture = replace(capture, worktree=replace(capture.worktree, branch="ai/feature/trends"))
+        plan = RecoveryPlan.create(
+            **{
+                **plan.to_wire(),
+                "capture": CapturedChanges.from_capture(capture),
+                "target_branch_name": "ai/feature/trends-recovery",
+            }
+        )
     store = FileRecoveryStore.initialize(tmp_path / "recovery", scope=plan.source.scope)
     store.put_plan(plan)
     plan_path = tmp_path / "recovery" / f"plan-{plan.plan_sha256}.json"
@@ -668,6 +682,8 @@ def test_continue_reads_the_persisted_recovery_envelope_through_the_recovery_ent
 
     assert result.approval is not None
     assert result.approval.kind == "coder_recovery"
+    if semantic:
+        assert "目标分支 ai/feature/trends-recovery" in result.approval.facts
     assert result.approval.plan_sha256 == plan.plan_sha256
     assert host.opened_plan_paths == [plan_path]
     if joint:

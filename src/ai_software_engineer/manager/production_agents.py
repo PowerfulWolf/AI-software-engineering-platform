@@ -37,6 +37,7 @@ from ai_software_engineer.domain import (
     RiskTier,
     TechnicalDesign,
 )
+from ai_software_engineer.domain.branch import BRANCH_NAMING_INSTRUCTIONS, BranchName
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.domain.project_delivery import (
     DesignComplexityFacts,
@@ -100,6 +101,11 @@ class ProductDraft(DomainModel):
     non_goals: tuple[NonEmptyStr, ...] = ()
     assumptions: tuple[NonEmptyStr, ...] = ()
     requirements: tuple[RequirementDraft, ...] = ()
+    branch_name: BranchName | None = Field(default=None, exclude_if=lambda value: value is None)
+
+    def require_branch_name(self) -> None:
+        if self.action == "ready" and self.branch_name is None:
+            raise ValueError("new Product ready output requires a semantic branch_name")
 
     @model_validator(mode="after")
     def validate_action(self) -> Self:
@@ -176,8 +182,11 @@ class ExecutionPlanDraft(DomainModel):
 
 
 class StructuredProductAgentAdapter(ProductAgentAdapter):
-    def __init__(self, client: StructuredModelClient) -> None:
+    def __init__(
+        self, client: StructuredModelClient, *, trusted_legacy_projection: bool = False
+    ) -> None:
         self._client = client
+        self._trusted_legacy_projection = trusted_legacy_projection
 
     def run(self, request: ProductAgentRequest) -> ProductAgentResult:
         try:
@@ -185,13 +194,16 @@ class StructuredProductAgentAdapter(ProductAgentAdapter):
                 instructions=(
                     "Act as Product Agent. Decide whether material user decisions are missing. "
                     "If so return clarify; otherwise produce measurable requirements and "
-                    "acceptance criteria. Do not design the implementation."
+                    "acceptance criteria. Do not design the implementation. "
+                    + BRANCH_NAMING_INSTRUCTIONS
                 ),
                 input_payload=cast(dict[str, object], request.context.to_wire()),
                 output_schema=ProductDraft.model_json_schema(),
                 timeout_seconds=request.timeout_seconds,
             )
             draft = ProductDraft.model_validate(completion.payload)
+            if not self._trusted_legacy_projection:
+                draft.require_branch_name()
             if draft.action == "clarify":
                 return ProductAgentResult(
                     run_id=request.run_id,
@@ -367,6 +379,7 @@ def _product_spec(request: ProductAgentRequest, draft: ProductDraft) -> ProductS
         version=request.context.expected_product_spec_version,
         status=ProductSpecStatus.READY_FOR_REVIEW,
         summary=draft.summary,
+        branch_name=draft.branch_name,
         goals=draft.goals,
         non_goals=draft.non_goals,
         requirements=tuple(requirements),

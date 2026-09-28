@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
@@ -94,14 +95,22 @@ class _ScriptedStructuredClient(StructuredModelClient):
         input_images: tuple[Path, ...] = (),
     ) -> StructuredModelResult:
         del input_images
-        del instructions, input_payload, timeout_seconds
+        del instructions, timeout_seconds
         if output_schema.get("title") == "KnowledgeIntent":
             return StructuredModelResult(payload={"queries": []}, duration_ms=0)
         properties = output_schema["properties"]
         assert isinstance(properties, Mapping)
         if "action" in properties:
+            product_request = input_payload.get("project_request", {})
+            title = (
+                product_request.get("title", "greeting")
+                if isinstance(product_request, Mapping)
+                else "greeting"
+            )
+            slug = re.sub(r"[^a-z0-9]+", "-", str(title).lower()).strip("-") or "greeting"
             payload: Mapping[str, object] = {
                 "action": "ready",
+                "branch_name": f"ai/feature/{slug}",
                 "summary": "Change the greeting",
                 "goals": ["The greeting is updated."],
                 "requirements": [

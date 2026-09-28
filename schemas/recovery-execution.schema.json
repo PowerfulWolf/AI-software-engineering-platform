@@ -122,6 +122,21 @@
           ],
           "default": null,
           "title": "Base Revision"
+        },
+        "branch_name": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 11,
+              "pattern": "^ai/(feature|bugfix)/[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Branch Name"
         }
       },
       "required": [
@@ -1082,6 +1097,21 @@
           ],
           "default": null,
           "title": "Retry Failures"
+        },
+        "branch_name": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 11,
+              "pattern": "^ai/(feature|bugfix)/[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Branch Name"
         }
       },
       "required": [

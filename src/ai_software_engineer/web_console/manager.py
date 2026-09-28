@@ -492,6 +492,11 @@ def _summarize(
                     f"保留改动 {len(recovery_plan.capture.files)} 个文件",
                     f"目标基线 {recovery_plan.target_base_revision}",
                     *(
+                        (f"目标分支 {recovery_plan.target_branch_name}",)
+                        if recovery_plan.target_branch_name is not None
+                        else ()
+                    ),
+                    *(
                         f"已补充文件范围 {path}"
                         for path in (
                             recovery_plan.scope_supplement.paths

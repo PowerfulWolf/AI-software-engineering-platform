@@ -10,6 +10,7 @@ from typing import Annotated, Protocol, TypeVar
 from pydantic import AwareDatetime, Field, ValidationError
 
 from ai_software_engineer.agents import AgentErrorCode, StructuredModelClient, StructuredModelError
+from ai_software_engineer.domain.branch import BRANCH_NAMING_INSTRUCTIONS
 from ai_software_engineer.domain.enums import TeamRole
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.domain.project_delivery import PlanTestMatrixError
@@ -839,7 +840,7 @@ class JointDeliveryService:
                 "product for the user's entire requirement. Clarify only genuinely "
                 "missing decisions. "
                 "You have all prepared profiles and selected module scopes. Do not ask "
-                "for a project hierarchy.",
+                "for a project hierarchy. " + BRANCH_NAMING_INSTRUCTIONS,
             )
             if draft.action == "clarify":
                 return self._save(
@@ -851,6 +852,7 @@ class JointDeliveryService:
                     ),
                     next_action="Reply to the Product Agent questions.",
                 )
+            draft.require_branch_name()
             spec = JointProductSpec(
                 scope_sha256=digest(checkpoint.scope),
                 version=checkpoint.attempts["product"],

@@ -273,7 +273,10 @@ Coder 的写权限由 policy 限定，QA 只能写 `tests/**`，Reviewer 始终�
 artifact/state/verdict/report 路径以及 shell interpreter 都必须 fail closed。工具成功不等于
 QA PASS/Review APPROVE，所有结果必须由应用层显式交给 EvidenceStore 后才能进入交付链。
 
-Git role workspace 由 `GitWorkspace.create/inspect/remove` 管理。Coder 使用 attempt branch；QA/Reviewer detached 到 candidate SHA；dirty workspace 不允许清理。完整错误与 Git 执行安全契约见 [`docs/architecture/git-worktree.md`](git-worktree.md)。
+Git role workspace 由 `GitWorkspace.create/inspect/remove` 管理。Coder 使用批准后冻结的
+`ai/feature/<业务短名>` 或 `ai/bugfix/<问题短名>`；QA/Reviewer detached 到 candidate SHA；
+dirty workspace 不允许清理。历史无命名字段的 Task 保持原分支。
+完整错误与 Git 执行安全契约见 [`docs/architecture/git-worktree.md`](git-worktree.md)。
 
 ## 2. 共同输入信封
 

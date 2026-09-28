@@ -368,6 +368,7 @@ class TeamHost:
                 frozen_preparation=frozen_preparation,
                 frozen_source_revision=frozen_source_revision,
                 trusted_plan_projection=True,
+                trusted_legacy_product_projection=True,
             )
 
         entry = UnifiedProjectEntryService(
