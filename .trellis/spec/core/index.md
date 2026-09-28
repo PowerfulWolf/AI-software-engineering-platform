@@ -25,6 +25,8 @@
     [`product-failure-diagnostics.md`](product-failure-diagnostics.md)。
 18. 修改独立验证中断恢复、QA 复用或 Reviewer-only 审批时阅读
     [`verification-role-recovery.md`](verification-role-recovery.md)。
+19. 修改项目切换、后台轮询或前端异步项目作用域时阅读
+    [`project-navigation.md`](project-navigation.md)。
 
 ## Quality Check
 
@@ -35,6 +37,8 @@
 - [ ] 完成后把新模式写回本层 spec。
 
 ## Files
+
+- [`project-navigation.md`](project-navigation.md): latest-intent navigation, serial refresh and visible Project identity.
 
 - [`verification-role-recovery.md`](verification-role-recovery.md): admitted standalone QA checkpoints, exact approval and Reviewer-only restart.
 

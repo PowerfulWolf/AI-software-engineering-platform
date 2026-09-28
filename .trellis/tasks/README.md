@@ -16,6 +16,8 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 
 | 目录 | 状态 / 阶段 | 剩余事项 |
 |---|---|---|
+| [09-28-release-delivery-retrospective](09-28-release-delivery-retrospective/task.json) | in_progress / planning | ASE 提交打 tag、已交付 App 合并安装及全过程复盘；用户已授权 |
+| [09-28-project-switch-refresh](09-28-project-switch-refresh/task.json) | in_progress / verified_pending_commit | 切换/知识库异步边界已修复，前端 61 项和真实 UI 验证通过；新修复待提交，旧基线 321f15e 已推送 |
 | [09-27-delivery-reliability-audit](09-27-delivery-reliability-audit/task.json) | in_progress / verified_delivery_held | 14 阶段审查及平台修复通过隔离验证；未提交/部署，真实需求等待受控恢复 |
 | [09-25-team-evolution-audit](09-25-team-evolution-audit/task.json) | in_progress / execute | 已有知识演进切片；Manager 集成和自动收集尚未完成，可靠性审查另见 09-27 任务 |
 | [09-25-joint-approval-delivery](09-25-joint-approval-delivery/task.json) | in_progress / execute | 原业务交付保留候选和历史；09-27 可靠性审查期间停止派发，未宣告验收通过 |

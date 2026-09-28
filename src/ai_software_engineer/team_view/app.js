@@ -3,6 +3,11 @@ let snapshot = null;
 let page = "team";
 let selected = null;
 let refreshing = false;
+let refreshFlight = null;
+let requestedProjectId = null;
+let activeRefreshProject = null;
+let refreshQueued = false;
+let requestedRuntimeStatus = false;
 let operations = [];
 let operationsAvailable = false;
 let consoleAvailable = null;
@@ -307,6 +312,8 @@ const badge = (status) =>
 const operationTarget = (operation) =>
   operation.intent.delivery_id || operation.result?.delivery_id || null;
 const currentProjectId = () => snapshot?.selected_project_id || null;
+const projectSwitchPending = () =>
+  requestedProjectId !== null && requestedProjectId !== currentProjectId();
 const activeOperation = (deliveryId) =>
   operations.find(
     (operation) =>
@@ -361,6 +368,7 @@ const latestApproval = (deliveryId, checkpoint) => {
 };
 const operationKey = () => `browser-${Date.now()}-${++actionSerial}`;
 const canControlCurrentTeam = () =>
+  !projectSwitchPending() &&
   consoleAvailable === true &&
   operationsAvailable &&
   consoleDeliveryReady === true &&
@@ -4654,7 +4662,7 @@ function renderProjectPicker(content) {
         project.name,
         () => {
           picker.open = false;
-          refresh(project.id);
+          return refresh(project.id);
         },
         project.id === currentProjectId()
           ? "project-picker-option selected"
@@ -6501,10 +6509,51 @@ async function refreshSettingsSnapshot(signal) {
 }
 async function refresh(projectId, includeRuntimeStatus = false) {
   if (projectId && projectId !== currentProjectId() && !mayCloseComposer()) return;
-  if (refreshing) return;
+  if (projectId) {
+    requestedProjectId = projectId;
+    refreshQueued = projectId !== activeRefreshProject || requestedRuntimeStatus;
+  }
+  if (includeRuntimeStatus) {
+    requestedRuntimeStatus = true;
+    refreshQueued = true;
+  }
+  if (refreshFlight) {
+    if (projectId) {
+      showRefreshProgress();
+      syncDeliveryControls();
+    }
+    return refreshFlight;
+  }
+  // Coalesce explicit navigation, but never queue periodic ticks behind a slow poll.
+  // Keep shared Console/Operations reads serial: aborting them would revoke readiness.
+  refreshFlight = (async () => {
+    do {
+      refreshQueued = false;
+      activeRefreshProject = requestedProjectId || currentProjectId();
+      const runtimeStatus = requestedRuntimeStatus;
+      requestedRuntimeStatus = false;
+      await refreshSnapshot(activeRefreshProject, runtimeStatus);
+    } while (refreshQueued);
+  })();
+  try { await refreshFlight; }
+  finally { refreshFlight = null; activeRefreshProject = null; }
+}
+function showRefreshProgress() {
+  const status = document.getElementById("connection");
+  status.className = "";
+  const name = snapshot?.projects.find(item => item.id === requestedProjectId)?.name
+    || requestedProjectId;
+  status.textContent = projectSwitchPending()
+    ? `正在切换到「${name}」…当前仍显示「${projectName()}」的数据。`
+    : "正在刷新团队与交付记录…";
+}
+async function refreshSnapshot(target, includeRuntimeStatus) {
   refreshing = true;
   document.getElementById("refresh").disabled = true;
+  showRefreshProgress();
+  syncDeliveryControls();
   const status = document.getElementById("connection");
+  const superseded = () => requestedProjectId !== null && requestedProjectId !== target;
   const controller = new AbortController(),
     timeout = setTimeout(() => controller.abort(), 40000);
   const priorConsoleReady = consoleDeliveryReady;
@@ -6531,7 +6580,6 @@ async function refresh(projectId, includeRuntimeStatus = false) {
     priorSettings !== JSON.stringify(settingsSnapshot) ||
     priorRuntimeStatus !== JSON.stringify(runtimeStatusSnapshot);
   try {
-    const target = projectId || (snapshot && snapshot.selected_project_id);
     const url = target
       ? "/api/v1/team?project_id=" + encodeURIComponent(target)
       : "/api/v1/team";
@@ -6553,8 +6601,10 @@ async function refresh(projectId, includeRuntimeStatus = false) {
     const response = teamResult.value;
     if (!response.ok) throw new Error("read failed");
     const next = await response.json();
+    if (superseded()) return;
     if (
       next.schema_version !== "v0.2" ||
+      (target && next.selected_project_id !== target) ||
       !Array.isArray(next.tasks) ||
       !Array.isArray(next.agents) ||
       !Array.isArray(next.requests)
@@ -6564,8 +6614,10 @@ async function refresh(projectId, includeRuntimeStatus = false) {
       !snapshot ||
       JSON.stringify({ ...snapshot, as_of: null }) !==
         JSON.stringify({ ...next, as_of: null });
+    const projectChanged = currentProjectId() !== next.selected_project_id;
     const selectedBeforeRefresh = selected;
     snapshot = next;
+    if (requestedProjectId === target) requestedProjectId = null;
     if (
       selectedBeforeRefresh?.kind === "request" &&
       !requestById(selectedBeforeRefresh.id)
@@ -6584,8 +6636,15 @@ async function refresh(projectId, includeRuntimeStatus = false) {
         ? { kind: "request", id: replacement.result.delivery_id }
         : null;
     }
-    if (page === "knowledge" && target !== undefined)
+    if (page === "knowledge") {
+      if (projectChanged) {
+        // Publish identity and its loading view together; a later navigation may
+        // arrive while Knowledge is still loading for this accepted snapshot.
+        knowledgeLoading = true;
+        render({ preserveComposer: hasOpenComposer() });
+      }
       await loadAdministration();
+    }
     const modalActive = hasOpenComposer();
     if (
       (!modalActive || (["settings", "status"].includes(page) && systemViewsChanged())) &&
@@ -6595,6 +6654,10 @@ async function refresh(projectId, includeRuntimeStatus = false) {
         systemViewsChanged())
     )
       render({ preserveComposer: Boolean(modalActive && !settingsSaveResult) });
+    if (superseded()) {
+      showRefreshProgress();
+      return;
+    }
     status.className = "";
     status.textContent = consoleAvailable
       ? (consoleDeliveryReady
@@ -6605,15 +6668,21 @@ async function refresh(projectId, includeRuntimeStatus = false) {
         " · 每 5 秒刷新"
       : "只读团队记录已连接；交付控制台暂不可用。";
   } catch {
+    if (superseded()) return;
     if (["settings", "status"].includes(page) && systemViewsChanged()) render();
     status.className = "error";
-    status.textContent = snapshot
-      ? "刷新失败，以下为旧数据 · 上次成功读取 " + time(snapshot.as_of)
-      : "暂时无法读取数据。请检查生产配置、MySQL 连接，以及 Team/Project workspace 是否已准备。";
+    const destination = snapshot?.projects.find(item => item.id === requestedProjectId)?.name
+      || requestedProjectId;
+    status.textContent = projectSwitchPending()
+      ? `切换到「${destination}」失败，仍显示原 Project 数据；刷新将重试该项目。`
+      : snapshot
+        ? "刷新失败，以下为旧数据 · 上次成功读取 " + time(snapshot.as_of)
+        : "暂时无法读取数据。请检查生产配置、MySQL 连接，以及 Team/Project workspace 是否已准备。";
   } finally {
     clearTimeout(timeout);
     refreshing = false;
     document.getElementById("refresh").disabled = false;
+    syncDeliveryControls();
     // Notifications follow polling even when editor DOM is deliberately preserved.
     renderOperationStatus();
     renderNotification();

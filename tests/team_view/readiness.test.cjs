@@ -18,6 +18,7 @@ class Element {
   getAttribute(name) { return this.attributes[name] ?? null; }
   remove() { if (this.parentElement) this.parentElement.children = this.parentElement.children.filter(node => node !== this); }
   removeAttribute(name) { delete this.attributes[name]; }
+  get firstElementChild() { return this.children.find(node => typeof node !== "string"); }
   querySelectorAll(selector) {
     return descendants(this).slice(1).filter((node) => matchesSelector(node, selector));
   }
@@ -43,9 +44,11 @@ const matchesSelector = (node, selector) => selector.split(",").some((part) => {
 });
 const settled = () => new Promise(setImmediate);
 const deferred = () => {
-  let reject;
-  const promise = new Promise((_, rejectPromise) => { reject = rejectPromise; });
-  return { promise, reject };
+  let resolve, reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise; reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 };
 const successMessage = "配置已应用，Web Console 已使用保存的运行配置重新启动。";
 
@@ -77,7 +80,7 @@ async function browser(options = {}) {
   const team = {
     schema_version: "v0.2", as_of: "2026-09-19T00:00:00Z", team_id: "team_fixture",
     team_name: "Fixture team", selected_project_id: options.project ? "project_fixture" : null,
-    projects: options.project ? [{ id: "project_fixture", name: "Fixture project" }] : [],
+    projects: options.projects || (options.project ? [{ id: "project_fixture", name: "Fixture project" }] : []),
     agents: [], requests: options.requests || [], tasks: [],
   };
   const response = (value, ok = true) => ({ ok, json: async () => structuredClone(value) });
@@ -89,6 +92,7 @@ async function browser(options = {}) {
     fetch: async (url, request = {}) => {
       requests.push({ url, method: request.method || "GET" });
       if (url.startsWith("/api/v1/team")) {
+        if (options.teamRead) return options.teamRead(url, request, team, response);
         if (state.teamFailure) throw new Error("Team projection unavailable");
         return response(team);
       }
@@ -129,6 +133,10 @@ async function browser(options = {}) {
       if (url === "/api/v1/admin/projects" || url === "/api/v1/admin/team/knowledge")
         return response([]);
       if (url === "/api/v1/admin/team/knowledge/index") return response(null);
+      if (/^\/api\/v1\/admin\/projects\/[^/]+\/knowledge$/.test(url))
+        return options.knowledgeRead ? options.knowledgeRead(url, response) : response([]);
+      if (/^\/api\/v1\/admin\/projects\/[^/]+\/knowledge\/index$/.test(url))
+        return response(null);
       throw new Error("Unexpected request: " + url);
     },
     setTimeout: (callback, delay) => {
@@ -170,6 +178,208 @@ async function browser(options = {}) {
     },
   };
 }
+
+test("Project click during an in-flight poll is retained without another click or timer", async () => {
+  const options = { ready: true, restart: false, project: true, projects: [
+    { id: "project_fixture", name: "Fixture project" },
+    { id: "project_other", name: "Other project" },
+  ] };
+  const ui = await browser(options);
+  const held = deferred();
+  options.teamRead = async (url, _request, team, response) => {
+    const target = new URL(url, "http://fixture").searchParams.get("project_id");
+    if (target === "project_fixture") await held.promise;
+    return response({ ...team, selected_project_id: target });
+  };
+  const polling = ui.tick();
+  await settled();
+  const option = descendants(ui.get("projects"))
+    .find(node => node.tag === "button" && node.textContent === "Other project");
+  assert.ok(option);
+  option.events.click();
+  assert.match(text(ui.get("connection")), /正在切换到「Other project」.*仍显示「Fixture project」/);
+  assert.equal(vm.runInContext("canControlCurrentTeam()", ui.context), false);
+  held.resolve();
+  await polling;
+  await settled();
+  assert.equal(vm.runInContext("currentProjectId()", ui.context), "project_other");
+  assert.equal(ui.requests.filter(({ url }) => url.endsWith("project_id=project_other")).length, 1);
+  assert.equal(ui.get("refresh").disabled, false);
+  assert.equal(vm.runInContext("canControlCurrentTeam()", ui.context), true);
+});
+
+async function projectBrowser() {
+  const options = { ready: true, restart: false, project: true, projects: [
+    { id: "project_fixture", name: "Fixture project" },
+    { id: "project_b", name: "Project B" }, { id: "project_c", name: "Project C" },
+  ] };
+  const ui = await browser(options);
+  const choose = name => {
+    const option = descendants(ui.get("projects"))
+      .find(node => node.tag === "button" && node.textContent === name);
+    assert.ok(option, name);
+    return option.events.click();
+  };
+  const current = () => vm.runInContext("currentProjectId()", ui.context);
+  return { ui, options, choose, current };
+}
+const projectTarget = url => new URL(url, "http://fixture").searchParams.get("project_id");
+
+for (const oldFails of [false, true]) test(`only the latest queued Project is read; old failure=${oldFails}`, async () => {
+  const { ui, options, choose, current } = await projectBrowser();
+  const old = deferred(), latest = deferred(), reads = [];
+  options.teamRead = async (url, _request, team, response) => {
+    const target = projectTarget(url); reads.push(target);
+    if (target === "project_fixture") {
+      await old.promise;
+      if (oldFails) throw new Error("old project read failed");
+    } else await latest.promise;
+    return response({ ...team, selected_project_id: target });
+  };
+  const poll = ui.tick();
+  choose("Project B");
+  const chosen = choose("Project C");
+  const ticks = [ui.tick(), ui.tick(), ui.tick()];
+  old.resolve(); await settled();
+  assert.equal(current(), "project_fixture", "old data must not be relabelled as the pending Project");
+  assert.deepEqual(reads, ["project_fixture", "project_c"]);
+  assert.match(text(ui.get("connection")), /正在切换到「Project C」/);
+  latest.resolve(); await Promise.all([poll, chosen, ...ticks]);
+  assert.equal(current(), "project_c");
+  assert.equal(ui.get("connection").className, "");
+  assert.equal(vm.runInContext("refreshing || refreshFlight !== null", ui.context), false);
+});
+
+test("selecting the current Project cancels a queued switch without reading the discarded Project", async () => {
+  const { ui, options, choose, current } = await projectBrowser();
+  const held = deferred(), reads = [];
+  options.teamRead = async (url, _request, team, response) => {
+    reads.push(projectTarget(url)); await held.promise; return response(team);
+  };
+  const poll = ui.tick();
+  choose("Project B"); choose("Fixture project");
+  held.resolve(); await poll;
+  assert.equal(current(), "project_fixture");
+  assert.deepEqual(reads, ["project_fixture"]);
+  assert.equal(vm.runInContext("canControlCurrentTeam()", ui.context), true);
+});
+
+test("a superseded response body cannot publish while the latest Project is loading", async () => {
+  const { ui, options, choose, current } = await projectBrowser();
+  const body = deferred(), latest = deferred();
+  let original;
+  options.teamRead = async (url, _request, team, response) => {
+    original = team;
+    if (projectTarget(url) === "project_b") return { ok: true, json: () => body.promise };
+    await latest.promise;
+    return response({ ...team, selected_project_id: "project_c" });
+  };
+  const first = choose("Project B"); await settled();
+  const second = choose("Project C");
+  body.resolve({ ...original, selected_project_id: "project_b" }); await settled();
+  assert.equal(current(), "project_fixture");
+  assert.doesNotMatch(text(ui.get("projects")), /Project B当前/);
+  latest.resolve(); await Promise.all([first, second]);
+  assert.equal(current(), "project_c");
+});
+
+test("Knowledge loading keeps the rendered Project aligned before a later switch fails", async () => {
+  const { ui, options, choose, current } = await projectBrowser();
+  await ui.navigate("knowledge");
+  await ui.click("项目知识库");
+  const knowledge = deferred();
+  options.knowledgeRead = async (_url, response) => {
+    await knowledge.promise;
+    return response([]);
+  };
+  options.teamRead = async (url, _request, team, response) => {
+    const target = projectTarget(url);
+    if (target === "project_c") throw new Error("latest project unavailable");
+    return response({ ...team, selected_project_id: target });
+  };
+  const first = choose("Project B"); await settled();
+  assert.equal(current(), "project_b");
+  const selectedTab = () => descendants(ui.get("content"))
+    .find(node => node.getAttribute("aria-current") === "true");
+  assert.equal(selectedTab()?.textContent, "Project B");
+  assert.match(ui.content(), /正在读取当前知识库/);
+  const second = choose("Project C");
+  knowledge.resolve(); await Promise.all([first, second]);
+  assert.equal(current(), "project_b");
+  assert.equal(selectedTab()?.textContent, "Project B");
+  assert.match(ui.content(), /Project B · Project 知识/);
+  assert.doesNotMatch(ui.content(), /正在读取当前知识库/);
+  assert.match(text(ui.get("connection")), /切换到「Project C」失败/);
+});
+
+for (const failure of ["network", "wrong_project"]) test(`a failed target preserves prior data and retry intent: ${failure}`, async () => {
+  const { ui, options, choose, current } = await projectBrowser();
+  const reads = []; let fail = true;
+  options.teamRead = async (url, _request, team, response) => {
+    const target = projectTarget(url); reads.push(target);
+    if (fail && failure === "network") throw new Error("fixture unavailable");
+    return response({ ...team, selected_project_id: fail ? "project_fixture" : target });
+  };
+  await choose("Project B");
+  assert.equal(current(), "project_fixture");
+  assert.match(text(ui.get("connection")), /切换到「Project B」失败.*刷新将重试/);
+  assert.equal(ui.get("refresh").disabled, false);
+  assert.equal(vm.runInContext("canControlCurrentTeam()", ui.context), false);
+  fail = false; await ui.tick();
+  assert.deepEqual(reads, ["project_b", "project_b"]);
+  assert.equal(current(), "project_b");
+  assert.equal(ui.get("connection").className, "");
+  assert.equal(vm.runInContext("canControlCurrentTeam()", ui.context), true);
+});
+
+test("an old timed out poll releases the lane to the pending Project", async () => {
+  const { ui, options, choose, current } = await projectBrowser();
+  options.teamRead = async (url, request, team, response) => {
+    const target = projectTarget(url);
+    if (target === "project_fixture") await new Promise((_, reject) =>
+      request.signal.addEventListener("abort", () => reject(new Error("fixture timeout")), { once: true }));
+    return response({ ...team, selected_project_id: target });
+  };
+  const poll = ui.tick();
+  choose("Project B");
+  await ui.runTimer(40000); await poll;
+  assert.equal(current(), "project_b");
+  assert.equal(vm.runInContext("refreshing", ui.context), false);
+  assert.equal(ui.get("connection").className, "");
+});
+
+test("manual runtime status refresh is retained while periodic ticks are coalesced", async () => {
+  const { ui, options } = await projectBrowser();
+  await ui.navigate("status");
+  const held = deferred(); let teamReads = 0;
+  options.teamRead = async (_url, _request, team, response) => {
+    if (++teamReads === 1) await held.promise;
+    return response(team);
+  };
+  const statusReads = () => ui.requests.filter(({ url }) => url === "/api/v1/admin/status").length;
+  const before = statusReads();
+  const poll = ui.tick(); await settled();
+  const manual = vm.runInContext("refresh(undefined, true)", ui.context);
+  const extra = ui.tick(); held.resolve();
+  await Promise.all([poll, manual, extra]);
+  assert.equal(teamReads, 2);
+  assert.equal(statusReads(), before + 1);
+});
+
+for (const guard of ["dirty", "busy"]) test(`Project switching respects the ${guard} composer guard`, async () => {
+  const { ui, choose, current } = await projectBrowser();
+  const dialog = new Element("form"); ui.get("composer").append(dialog);
+  ui.context.confirm = () => false;
+  vm.runInContext(guard === "dirty"
+    ? 'dirtyComposers.add(document.getElementById("composer").firstElementChild)'
+    : 'uiCommands.set(document.getElementById("composer").firstElementChild, [])', ui.context);
+  const reads = ui.requests.length;
+  await choose("Project B");
+  assert.equal(ui.requests.length, reads);
+  assert.equal(current(), "project_fixture");
+  assert.equal(vm.runInContext("requestedProjectId", ui.context), null);
+  assert.equal(ui.get("composer").firstElementChild, dialog);
+});
 
 async function applySuccessfully(ui) {
   await vm.runInContext("applySavedConfiguration()", ui.context);

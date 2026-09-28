@@ -1,0 +1,15 @@
+{
+  "id": "project-switch-refresh-20260928",
+  "title": "修复自动刷新期间项目切换意图丢失",
+  "status": "in_progress",
+  "phase": "verified_pending_commit",
+  "authorization": "用户要求先提交推送现有改动，然后创建 Trellis 任务修复项目切换 bug；inline 实施和检查。",
+  "baseline_commit": "321f15e",
+  "prior_changes_pushed": "origin/main at 321f15e",
+  "scope": ["src/ai_software_engineer/team_view/app.js", "tests/team_view", ".trellis/spec/core", ".trellis/tasks/09-28-project-switch-refresh", ".trellis/tasks/README.md"],
+  "production_data_changes": "none",
+  "verification": "verification.md",
+  "spec": ".trellis/spec/core/project-navigation.md",
+  "new_fix_commit": null,
+  "remaining": "New fix remains in the current workspace; commit/archive separately from the prior published baseline."
+}
