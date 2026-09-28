@@ -1,7 +1,7 @@
 # 平台操作与问题反馈闭环
 
 本页保存通用操作与交接方法。具体需求、checkpoint、失败现场和当时的恢复步骤见
-[2026-09-18 事故归档](archive/2026-09-18-console-recovery-incidents.md)；归档中的旧步骤需要结合
+[2026-09-18 事故归档](../archive/2026-09-18-console-recovery-incidents.md)；归档中的旧步骤需要结合
 后续更正阅读，不能直接套用到其他需求。
 
 ## 分工与交接
@@ -58,18 +58,16 @@ Design 的设计尝试与临时故障现已分开计数，默认分别为 3 和 
 `joint design transient failure budget exhausted` 指临时故障耗尽。两者都在模型调用前拒绝继续。
 504 是供应商/网关返回的临时错误，发生在知识咨询时也只消费新的临时故障额度。
 
-2026-09-22 排查的 codex Project 需求“设置保存交互优化”
-（`delivery_multi_bd73c5ce9fa226eaa8e427b5c7c1dd96dce1e006`）仍处于 DESIGNING。
-旧 checkpoint 30 的 `attempts.design=3`、设计为空，保留已批准 ProductSpec 和历史知识解答。
-当前修复不修改生产 MySQL、Operation 或 journal，也不把旧 504 静默挪到新计数：无需改库。
+处理 Designer 预算耗尽时，先查看原需求提供的操作：
 
-1. 使用包含此次修复的服务版本重启 Web Console，然后刷新页面。
-2. 打开 codex Project 中该需求，确认显示“恢复设计”；预算恢复入口应优先于旧失败的“重试 Design”。
-3. 点击一次“恢复设计”。平台按当前 exact checkpoint 验证历史知识批准，追加恢复记录并继续；
-   原需求、讨论、产品批准与失败记录保留，无需重新创建需求。
-4. 若之后临时故障再次耗尽，先核对模型服务，再提高 Designer 的“临时故障上限”，保存并应用配置；
-   重启后点击“重试 Design”。也可提高“设计尝试上限”直接延长旧设计预算，计数不会清零。
-5. 不符合历史知识恢复条件的其他需求只能提高对应预算后继续；本入口不能代替范围或计划审批。
+1. 若页面显示“恢复设计”，核对原需求与历史知识批准，通过该入口恢复；
+   它只适用于平台能验证的历史断点，不应手工给其他需求补造恢复条件。
+2. 临时故障先核对模型服务，再根据需要调整 Designer 的临时故障上限；
+   工作预算不足时调整设计尝试上限。保存并应用配置后再继续，计数不会清零。
+3. 没有可用恢复入口的旧需求按其当前错误和冻结策略处理，不直接修改 checkpoint。
+
+具体旧需求、2026-09-22 的断点与当时操作保存在
+[恢复记录原文](../archive/2026-09-28-delivery-recovery-source.md#design-预算耗尽与存量需求处置)。
 
 Product/Planner 耗尽同样先核对错误，再提高该角色对应上限、应用配置并继续；原对话、审批和计数保留。
 交付 Task 的策略在首次 dispatch 时冻结。已存在 Task 不会因为调整全局配置获得额外授权；
@@ -77,10 +75,11 @@ Product/Planner 耗尽同样先核对错误，再提高该角色对应上限、�
 再继续执行。候选复核或 Coder 恢复由现有 durable facts 决定，不能通过改库强制选择。新恢复 Task
 保留原冻结策略但开始新计数；原 Task/失败历史不变。没有策略字段的旧 Task 仍按原 max_attempts。
 
-代码回滚使用本次提交的 `git revert`，先停止运行操作。尚未产生带新策略的 Task 时，可在停止服务后
-把 `execution_retry_policy.designer` 转回上一版 `design_retry_policy`（max_attempts 改名为
-max_design_attempts），移除新字段，保留 journal。其他角色策略会丢失，不得假装仍生效。
-若已经产生 `Task.retry_policy/retry_failures` 或超过 10 的执行身份，旧二进制无法安全读取它们；
-必须继续使用兼容读取器并前向修复，不能删除这些字段、重写哈希或清空数据库来降级。
-- 契约见 [交付恢复规范](../.trellis/spec/core/delivery-recovery.md)，
+版本回退前先停止运行操作，并核对目标版本是否支持已经产生的策略和历史记录。
+已经产生 `Task.retry_policy/retry_failures` 或超过 10 的执行身份时，旧二进制可能无法读取，
+应保留兼容读取器并前向修复；不能删字段、重写哈希或清空数据库来降级。
+历史 `design_retry_policy` 向全角色策略迁移的当次回退说明保存在上述原文快照中，
+必须按确切版本及实际数据重新判断适用性。
+
+- 契约见 [交付恢复规范](../../.trellis/spec/core/delivery-recovery.md)，
   启动与设置见 [生产部署](production-setup.md)。

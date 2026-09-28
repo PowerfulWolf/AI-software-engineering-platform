@@ -1210,7 +1210,7 @@ The frozen policy version authorizes explicit fallback routes; only the primary 
 in the claim. Validate ordered fallback membership/reasoning through `ApprovedRoleDispatch` before
 client construction, and retain ModelRouteAttempt actual-model facts. Separate candidate verification
 continues through its original reservation, whose capacity must not be dropped on native adoption.
-Follow `docs/t046-worker-operations.md` for rollout/rollback; do not resume an adopted nonterminal Task
+Follow `docs/operations/worker-operations.md` for rollout/rollback; do not resume an adopted nonterminal Task
 with an old binary that does not know about queue admission.
 
 ## Scenario: explicit local proxy for production Codex CLI routes (2026-09-23)

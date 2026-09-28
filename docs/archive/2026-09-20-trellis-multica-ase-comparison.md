@@ -1,3 +1,5 @@
+> 历史快照：保留原文当时的事实、验证和限制；当前操作请从[文档导航](../README.md)进入。
+
 # Trellis、Multica 与 ASE：架构、设计思想与工作流对比报告
 
 > 核查日期：2026-09-20  
@@ -712,18 +714,18 @@ Manager 自修复的目标应是“在预批准边界内恢复交付”，不是
 [M5]: https://multica.ai/docs/skills
 [M6]: https://multica.ai/docs/squads
 [M7]: https://multica.ai/docs/autopilots
-[A1]: /Users/zhangjunshuai/workspace/code/AI-software-engineering-platform/README.md
-[A2]: /Users/zhangjunshuai/workspace/code/AI-software-engineering-platform/docs/architecture.md
-[A3]: /Users/zhangjunshuai/workspace/code/AI-software-engineering-platform/src/ai_software_engineer/planning/gate.py
-[A4]: /Users/zhangjunshuai/workspace/code/AI-software-engineering-platform/src/ai_software_engineer/knowledge/skills.py
-[A5]: /Users/zhangjunshuai/workspace/code/AI-software-engineering-platform/src/ai_software_engineer/knowledge/workflow.py
-[A6]: /Users/zhangjunshuai/workspace/code/AI-software-engineering-platform/src/ai_software_engineer/knowledge/gaps.py
-[A7]: /Users/zhangjunshuai/workspace/code/AI-software-engineering-platform/src/ai_software_engineer/knowledge/index.py
-[A8]: /Users/zhangjunshuai/workspace/code/AI-software-engineering-platform/src/ai_software_engineer/orchestration/runner.py
-[A9]: /Users/zhangjunshuai/workspace/code/AI-software-engineering-platform/docs/t046-worker-operations.md
-[A10]: /Users/zhangjunshuai/workspace/code/AI-software-engineering-platform/src/ai_software_engineer/work_queue/worker.py
-[A11]: /Users/zhangjunshuai/workspace/code/AI-software-engineering-platform/docs/production-setup.md
-[A12]: /Users/zhangjunshuai/workspace/code/AI-software-engineering-platform/src/ai_software_engineer/manager/leader_recovery.py
-[A13]: /Users/zhangjunshuai/workspace/code/AI-software-engineering-platform/docs/evaluation.md
-[A14]: /Users/zhangjunshuai/workspace/code/AI-software-engineering-platform/src/ai_software_engineer/manager/production_backend.py
+[A1]: ../../README.md
+[A2]: ../architecture/overview.md
+[A3]: ../../src/ai_software_engineer/planning/gate.py
+[A4]: ../../src/ai_software_engineer/knowledge/skills.py
+[A5]: ../../src/ai_software_engineer/knowledge/workflow.py
+[A6]: ../../src/ai_software_engineer/knowledge/gaps.py
+[A7]: ../../src/ai_software_engineer/knowledge/index.py
+[A8]: ../../src/ai_software_engineer/orchestration/runner.py
+[A9]: ../operations/worker-operations.md
+[A10]: ../../src/ai_software_engineer/work_queue/worker.py
+[A11]: ../operations/production-setup.md
+[A12]: ../../src/ai_software_engineer/manager/leader_recovery.py
+[A13]: ../architecture/evaluation.md
+[A14]: ../../src/ai_software_engineer/manager/production_backend.py
 [R1]: /Users/zhangjunshuai/Documents/Codex/2026-08-31/referenced-chatgpt-conversation-this-is-an/research/multica-trellis-primary-sources-2026-09-20.md

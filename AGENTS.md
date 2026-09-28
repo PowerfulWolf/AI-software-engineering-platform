@@ -99,7 +99,7 @@ repository_root。生产入口由 Team Host 在选定 Project 下注册 Reposito
 
 后续可选的 role Git worktree 是临时代码 checkout，不是 AI metadata workspace；逻辑项目仍由
 给定 `project_root` 绑定。可视化只读取 sidecar 的 durable events/artifacts/evidence 和目标项目
-的只读 Git inspection，不直接驱动状态或 verdict；路线见 `docs/visualization.md`。
+的只读 Git inspection，不直接驱动状态或 verdict；路线见 `docs/user/team-console.md`。
 
 T026/T027 的 projection 与 dashboard 只能是 read side：`ProjectionFacts` 必须来自已校验的
 durable StateEvent、Evaluation、Artifact、Evidence、Assignment、Lease 和 Handoff，
@@ -255,7 +255,7 @@ subprocess/filesystem handle。
   `IMPLEMENTING → CONTINUE_REQUIRED → QUEUED → IMPLEMENTING`；每次继续都消耗一次 attempt，
   达到 `max_attempts` 后进入 `BLOCKED`，不得无限循环或把草稿交给 QA；
 - QA `FAIL` 或 Review `REJECT` 必须把原 finding、命令、位置和 evidence ID 路由给 Coder；
-- `INVALID_OUTPUT`、`POLICY_VIOLATION`、需求歧义和预算耗尽不能靠无限重试解决；按 `docs/failure-routing.md` 进入 `BLOCKED`；
+- `INVALID_OUTPUT`、`POLICY_VIOLATION`、需求歧义和预算耗尽不能靠无限重试解决；按 `docs/architecture/failure-routing.md` 进入 `BLOCKED`；
 - 状态事件必须带 `from_status`、`to_status`、attempt、reason、artifact IDs、source revision，并支持幂等回放。
 
 ## Evaluation / Human Handoff 规则
@@ -288,4 +288,4 @@ subprocess/filesystem handle。
 
 ## 推荐阅读顺序
 
-`README.md` → `docs/architecture.md` → `docs/contracts.md` → `docs/prompt-protocol.md` → `docs/state-machine.md` → `docs/context-routing.md` → `docs/git-worktree.md` → `docs/orchestration.md` → `docs/failure-routing.md` → `schemas/*.json`。
+`README.md` → `docs/architecture/overview.md` → `docs/architecture/contracts.md` → `docs/architecture/prompt-protocol.md` → `docs/architecture/state-machine.md` → `docs/architecture/context-routing.md` → `docs/architecture/git-worktree.md` → `docs/architecture/orchestration.md` → `docs/architecture/failure-routing.md` → `schemas/*.json`。

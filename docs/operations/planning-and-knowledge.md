@@ -1,8 +1,6 @@
-# 规划与知识运行说明
+# 规划与知识运维
 
-本轮任务使用完整名称区分历史编号：`09-17-t047-planner-agent-evolution`、
-`09-18-t048-active-knowledge-closure`、`09-18-t049-incremental-knowledge-indexing`。
-历史“Delivery 统一恢复”也使用 T047 编号，其记录保留，不代表本轮 Planner 任务。
+面向诊断规划、索引和知识等待的维护者。普通用户见[知识使用指南](../user/knowledge.md)。
 
 ## 规划
 
@@ -85,21 +83,19 @@ Requirement 的已批准事实，并记录对首次恢复摘要的引用；不�
 生产 T046 Worker 已注入 QueueKnowledgeWaitPort，以真实 exact claim/token 释放 Lease 并进入等待。
 重启后会验证已持久化的 Gap、route 和人工批准 Resolution，再恢复原 WorkItem；不伪造 claim，
 不改写 Task checkpoint。只有进入 Worker 的 Task 才移交旧派发容量，详见
-[T046 运维说明](t046-worker-operations.md)。
+[角色执行队列运维](worker-operations.md)。
 
 ## 存量数据处置
 
-2026-09-27 修正：前提修复后的 QA/Reviewer 知识等待也必须回到 Manager。新 successor 显式继承
+前提修复后的 QA/Reviewer 知识等待也必须回到 Manager。新 successor 显式继承
 已批准父需求 Context；已有 task-scoped 缺口只能凭当前父子链、原生 Task、仓库和封存候选证明归属，
 不改写旧记录。升级后先正常“继续交付”同步当前子 checkpoint，再在上述知识接口批准 exact gap，
 再次继续将恢复原 QA，不重复 Coder。知识快照漂移会拒绝恢复，不能通过修改选择清除等待。
 若旧修复说明的上下文摘要导致平台中断，恢复只接受已知格式与原摘要精确一致的字节。平台
 INVARIANT_VIOLATION 投影下真实 Task 仍在 QA/REVIEW 的，可以正常继续原 Task；终态 Task 不复位。
-参见 [可执行恢复契约](../.trellis/spec/core/continuation-knowledge-wait.md)。
+参见 [可执行恢复契约](../../.trellis/spec/core/continuation-knowledge-wait.md)。
 
-本轮开发没有修改业务数据库、生产 Task、Operation、知识选择或审批。
-
-本次知识 gate 修复同样不重写历史 Gap、Consultation 或 WAITING_HUMAN checkpoint。旧
+历史兼容读取不重写历史 Gap、Consultation 或 WAITING_HUMAN checkpoint。旧
 `KnowledgeAssessment` 没有 `gap_owner` 时按 `HUMAN` 读取，并兼容其原有 consultation digest；
 因此历史记录的审计含义不变。已经处于 WAITING_HUMAN 的 Requirement 继续使用既有 exact
 resolution/`request resume` 或关闭并重新创建需求的流程，不能直接改库清除等待。新产生的
@@ -116,13 +112,14 @@ resolution/`request resume` 或关闭并重新创建需求的流程，不能直�
 - 如果此前竞态已覆盖用户意图，人工在对应 Team/Project 页面重新保存真实选择；平台不能推测授权范围。
 - 原本已 BLOCKED/FAILED 的终态不被直接复位，仍需现有恢复计划与 exact 人工批准。
 
-## 验证与回滚
+## 验证与版本回退
 
-运行 Python contract/fixture 全套、隔离 MySQL 集成测试、严格 Mypy、Ruff 和
-`node --test tests/team_view/ui.test.cjs`。知识效果评测使用实际检索/consultation 的确定性 fixture，
-包含启用/禁用对照和 Learning 后的后续需求回归；不等同于真实模型质量测量。
+知识索引与咨询的验证使用确定性 fixture，包括启用/禁用对照和学习后的后续需求回归；
+这不等同于真实模型质量测量。开发验证入口见[开发指南](../development/README.md)。
 
-回滚前停止接收新工作并停止索引写入，再回退本轮代码和 Schema；保留所有外置 immutable artifacts、
-Context、admissions、knowledge records、index 数据库、文档和选择。需要时使用 baseline 检索 adapter。
-不要删除历史、清空表、重置审批或自动 merge 候选以实现回滚。本轮代码已合并到当前 `main`，
-但尚未推送或部署；回滚时应回退对应合并提交并保留外置事实。
+回退前停止接收新工作和索引写入，核对目标版本的 Schema 与历史读取兼容性；保留外置
+Artifact、Context、admission、知识记录、索引、原文和选择。不能删除历史、清空表或重置审批。
+某次改动的代码回退方案仅适用于该次版本组合，不应直接套用到后续部署。
+
+原 T047–T049 任务编号、当时验证与部署状态，以及后续历史修正见
+[规划与知识运行原文](../archive/2026-09-28-planning-knowledge-source.md)。

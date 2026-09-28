@@ -11,7 +11,7 @@
 > fail-closed 命令执行端口，T016 将其绑定到 role worktree 生命周期。
 >
 > 已完成阶段、逐任务验证基线和提交证据见
-> [`docs/archive/README.md`](../archive/README.md)。
+> [`docs/archive/README.md`](README.md)。
 
 ## 里程碑
 
@@ -66,8 +66,8 @@ Dispatcher tick 与 Lease lifecycle；把 `ase request` 改为逐角色 Worker �
 
 已建立只读事件投影、GET-only read API 和无依赖静态 renderer，提供 Task board、Run timeline、
 Agent detail 和 Human inbox。可视化只消费 durable StateEvent、AgentRunEvent、Context、Artifact、
-Evidence 和 Handoff，不成为第二个状态写入者。实现细节见 [`docs/projection.md`](../architecture.md#read-projection)、
-[`docs/visualization-implementation.md`](../architecture.md#read-projection)。
+Evidence 和 Handoff，不成为第二个状态写入者。实现细节见 [`docs/projection.md`](../architecture/overview.md#read-projection)、
+[`docs/visualization-implementation.md`](../architecture/overview.md#read-projection)。
 
 ### M8 — Manager 统一接单与完整 Agent 团队
 

@@ -121,7 +121,7 @@ Every finding needs severity, location, explanation, and evidence IDs.
 
 当前 Prompt 由代码中的 PromptBuilder/ContextPromptBuilder 组合，仓库没有外置角色模板。
 独立模板文件和模板版本追踪属于后续扩展，不能把占位目录当成已实现能力。修改 Prompt 时同步
-[角色契约](../.trellis/spec/core/contracts.md) 及对应测试。
+[角色契约](../../.trellis/spec/core/contracts.md) 及对应测试。
 
 
 <a id="typed-tools"></a>

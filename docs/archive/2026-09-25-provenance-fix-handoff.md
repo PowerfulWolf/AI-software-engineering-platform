@@ -1,3 +1,5 @@
+> 历史快照：保留原文当时的事实、验证和限制；当前操作请从[文档导航](../README.md)进入。
+
 # Continue-delivery provenance fix — 2026-09-25
 
 ## Outcome and live recovery

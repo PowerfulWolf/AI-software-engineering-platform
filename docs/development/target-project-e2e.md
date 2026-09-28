@@ -1,6 +1,6 @@
-# T025 Target-project serial delivery fixture
+# 跨语言目标项目串行交付验证
 
-T025 is the first cross-language acceptance seam for the platform.  It demonstrates that the
+This fixture is the cross-language acceptance seam introduced by engineering task T025.  It demonstrates that the
 target repository can be any local project while AI metadata remains in an external sidecar.
 
 ## Fixture matrix

@@ -47,7 +47,7 @@ worktree，并跳过 dispatch authority 的 schema 初始化，只允许读取�
 
 无需改库。用户从当前平台代码目录沿用原配置重启 Console，刷新原需求后点击一次“继续交付”，
 平台应吸收已完成 child，再运行联合集成；通过才进入 DONE。此次不需要新验证计划或重新
-执行 Coder/QA/Reviewer。详细命令见 [操作闭环](../../../docs/operator-feedback-loop.md)。
+执行 Coder/QA/Reviewer。详细命令见 [操作闭环](../../../docs/operations/delivery-recovery.md)。
 
 ## 风险与回滚
 

@@ -285,7 +285,7 @@ New settings cannot add/reorder routes on a retained dispatch. Recovery may narr
   the ownership gate to accommodate a fixture.
 - Production backend/joint e2e must observe real RUNNING claims and final receipts; live reader/DOM
   must preserve lease-vs-Task status distinction.
-- Rollout, existing-data recovery and rollback: `docs/t046-worker-operations.md`. Never execute adopted
+- Rollout, existing-data recovery and rollback: `docs/operations/worker-operations.md`. Never execute adopted
   nonterminal Tasks with the old binary or delete admission/history to bypass this boundary.
 
 ### 8.4 Bug analysis: lease checks are transaction boundaries, not timestamps

@@ -5,7 +5,7 @@
 `ase team serve --port 8765` 使用同一生产配置，在 http://127.0.0.1:8765 提供 Team、Projects、
 多目录需求和任务详情。每 5 秒自动刷新，不初始化 workspace/schema、不调用模型、不修改交付。
 配置错误/端口占用返回 exit 2；数据不可用显示明确错误，不能被解释成没有任务。
-详见 [工作台说明](visualization.md)。
+详见 [工作台说明](../user/team-console.md)。
 
 在 macOS/Linux，省略生产配置中的 `platform_root` 会解析为当前用户的 `~/.ase`，与执行命令的目录无关。
 显式绝对路径或安全的 `~/custom-ase` 优先；配置加载和此只读命令都不会创建平台目录。目录仅在显式初始化、
@@ -125,7 +125,7 @@ ase task run task_example_001 --config runtime.json
 
 配置中的 `paths.database` 必须指向创建 Task 时使用的同一个 SQLite 文件。API key 不得写入
 JSON；只允许通过 `api_key_env` 指定环境变量名。完整字段、role override 和离线 fake 注入
-方式见 [`docs/runtime.md`](runtime.md)。
+方式见 [`docs/development/runtime.md`](../development/runtime.md)。
 
 成功输出包含 `case_id` 和 typed retry result；失败输出单行错误并返回退出码 2，不打印
 provider secret。`--case-id` 可提供外部评估使用的稳定 case identity。

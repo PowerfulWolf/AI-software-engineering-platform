@@ -105,4 +105,4 @@ Operation 已完成，再检查该 Operation，避免批准旧摘要。
 Reviewer run `run_120692f786034f94a9da7111e5b266b5` 产出 APPROVE。
 原生 sequence 55 已 DONE，candidate 为 `d337b6bf6b42788876b9296896081ae92030e0f3`。
 父需求仍在 DELIVERING 的问题独立记录为 T051；此时不应重复本页前面的验证计划审批步骤，
-应按 [平台操作闭环](../../../docs/operator-feedback-loop.md) 的最新“子仓库完成”步骤继续联合集成。
+应按 [平台操作闭环](../../../docs/operations/delivery-recovery.md) 的最新“子仓库完成”步骤继续联合集成。

@@ -1,4 +1,4 @@
-# T046 逐角色 Worker：上线与恢复
+# 角色执行队列：升级、中断与恢复
 
 ## 范围
 
@@ -6,14 +6,14 @@
 每次领取一个 Coder、QA 或 Reviewer Run，持续续约，在产物及 Task 状态通过原有校验后关闭
 队列项。Coder → QA → Reviewer 仍严格串行，队列完成不等于需求交付完成。
 
-本轮不迁移上游 Product/Designer/Planner 模型会话、独立候选复核 reservation，也不提供
+当前执行边界不迁移上游 Product/Designer/Planner 模型会话、独立候选复核 reservation，也不提供
 独立 Worker fleet、多 Task 并发部署、自动 merge 或生产部署。独立候选复核仍占用原来的
 QA/Reviewer reservation 容量，普通交付队列计算容量时也会计算这些未完成预约。
 
 ## 存量数据处置
 
-本轮开发和验证没有修改生产数据库、Requirement journal、审批或 worktree。
-不需要手工 `UPDATE` Task 状态或删除队列。新版本在原有 MySQL 队列表旁初始化三张附加表：
+从尚未接入逐角色队列的版本升级时，平台在原有 MySQL 队列表旁初始化三张附加表，
+无需手工 `UPDATE` Task 状态或删除队列：
 
 - `work_queue_admissions`：Task 首次移交到角色队列的不可变记录；
 - `work_queue_steps`：角色、attempt、checkpoint 与批准 allocation 的绑定；
@@ -25,13 +25,13 @@ QA/Reviewer reservation 容量，普通交付队列计算容量时也会计算�
 既有 DONE/BLOCKED/FAILED Task 不会被强行重置；终态需要继续时仍走已有恢复计划与批准入口。
 
 旧版 `project_id` 队列表只允许原有 exact-schema 原子归档升级；混合或损坏结构会拒绝启动，
-不能手工改列、删除历史或绕过 hash 校验。详见 Persistent WorkQueue 规范。
+不能手工改列、删除历史或绕过 hash 校验。详见 [Persistent WorkQueue 规范](../../.trellis/spec/core/persistent-work-queue.md)。
 
 ## 升级与继续现有需求
 
 1. 先让旧 Console/CLI 的活动交付结束，或按现有受控方式停止；确认旧执行进程及其子进程退出。
    同一 Team/MySQL/workspace 不得混跑旧版和新版本写入者。保留数据库及外置 workspace 备份。
-2. 从包含本次改动的 checkout 启动服务，仍使用原来的 `ASE_CONFIG` 和生产 MySQL 配置。
+2. 从包含逐角色队列支持的 checkout 启动服务，仍使用原来的 `ASE_CONFIG` 和生产 MySQL 配置。
    本文不改变已有配置路径、模型授权或服务启动脚本。
 3. 在 Console 打开原需求并点击“继续交付”。有效的非终态 checkpoint 自动接入新队列，
    无需新建需求或复制工作目录。该动作不是重新执行已通过的角色。
@@ -65,8 +65,10 @@ accepted receipt 约束，可能重复执行或双重计数。先停止写入者
 不得删除 admission、清空队列、改 Task 终态或重写审批来制造“兼容”。数据回滚需完整的一致性
 恢复方案，不能只回滚 MySQL 而保留更晚的文件产物，反之亦然。
 
-## 验证方式
 
-本轮使用专用 `*_tests` MySQL 数据库、临时 Git 仓库、scripted/fake Agent；没有运行真实模型或
-部署生产。相关命令与实测结果记录在
-`.trellis/tasks/09-19-t046-worker-integration/implement.md`。全量测试和实际服务升级由用户触发。
+## 来源与验证范围
+
+本手册源自 T046 Worker 集成。该次开发的存量处置声明、验证范围和未部署说明保存在
+[升级记录原文](../archive/2026-09-19-t046-worker-rollout.md)，详细实施证据见
+[工程任务记录](../../.trellis/tasks/09-19-t046-worker-integration/implement.md)。
+手册描述恢复规则，不代表本机已完成某次升级或全量验收。

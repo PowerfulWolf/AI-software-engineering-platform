@@ -70,7 +70,7 @@ text as transient, or retry after a hard contract error without accounting.
 Fake-provider service tests cover classification, restart, mixed failures, pre-call reservations and
 configured limits. Config/Schema tests cover defaults and invalid limits; read projection and DOM
 tests verify the submitted exact-checkpoint action, disabled running controls and saved settings.
-No MySQL migration or journal rewriting is needed. See docs/operator-feedback-loop.md for recovery
+No MySQL migration or journal rewriting is needed. See docs/operations/delivery-recovery.md for recovery
 of the reported existing codex Requirement and rollback instructions.
 
 Specific regression locations: `tests/manager/test_design_retry_budget.py`,

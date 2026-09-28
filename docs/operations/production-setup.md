@@ -4,7 +4,7 @@
 选择一个或多个代码目录，平台准备 Team、Project 与 Repository 规范后再讨论需求。底层
 `ase task ...` 不属于日常路径。
 
-日常交付采用[平台操作与问题反馈闭环](operator-feedback-loop.md)：用户在平台执行，开发协作者
+日常交付采用[平台操作与问题反馈闭环](delivery-recovery.md)：用户在平台执行，开发协作者
 定位并修复具体报错，验证后交回用户继续交付。
 
 ## 1. 运行边界
@@ -103,8 +103,8 @@ docker compose stop mysql
 
 ## 4. 配置 Team Host
 
-配置契约见 [`schemas/production-config.schema.json`](../schemas/production-config.schema.json)，示例见
-[`config/production.example.json`](../config/production.example.json)。Web Console 默认读取：
+配置契约见 [`schemas/production-config.schema.json`](../../schemas/production-config.schema.json)，示例见
+[`config/production.example.json`](../../config/production.example.json)。Web Console 默认读取：
 
 ```text
 ~/.config/ai-software-engineer/config.json
@@ -201,7 +201,7 @@ Coder、QA、Reviewer。低层兼容 `ase project` 的原生上游 journal 不�
 上游需求显示次数/上限，提高配置后可以继续，重启不清零。新 Task 在 dispatch 时冻结
 `retry_policy`；已有 Task 不会随全局设置热改或自动解除终态。旧 `design_retry_policy` 可读并映射
 到 Designer，保存输出统一为新字段；同时给出互相冲突的新旧配置会拒绝。新功能不追溯重算旧失败。恢复步骤见
-[操作反馈闭环](operator-feedback-loop.md#design-预算耗尽与存量需求处置)。
+[操作反馈闭环](delivery-recovery.md#design-预算耗尽与存量需求处置)。
 
 ## 5. 模型路由
 
@@ -489,7 +489,7 @@ Project/Repository/Delivery identity 都绑定唯一 Team 和所属 Project；�
 
 ## 8. Live smoke
 
-[`scripts/smoke-live-gpt55.sh`](../scripts/smoke-live-gpt55.sh) 使用临时 Git 项目验证 Production Team
+[`scripts/smoke-live-gpt55.sh`](../../scripts/smoke-live-gpt55.sh) 使用临时 Git 项目验证 Production Team
 Host、配置中的模型路由、Product gate、隔离 Coder、QA 和 Reviewer。脚本文件名保留早期模型名称，
 实际模型由 ASE_CONFIG 决定。它会消耗真实额度，因此默认拒绝运行：
 

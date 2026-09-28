@@ -5,8 +5,8 @@
 1. 阅读 [`architecture.md`](architecture.md) 的 Scope、Signatures、Contracts 和 Validation Matrix；
 2. 阅读 [`contracts.md`](contracts.md) 的角色权限和 artifact/evidence 契约；
 3. 编写 Python 代码前阅读 [`python-runtime.md`](python-runtime.md)；
-4. 对任何跨层字段变化同步检查 `schemas/*.json` 与 `docs/contracts.md`；
-5. 对状态、Context 或 Git 变化分别检查 `docs/state-machine.md`、`docs/context-routing.md`、`docs/git-worktree.md`；
+4. 对任何跨层字段变化同步检查 `schemas/*.json` 与 `docs/architecture/contracts.md`；
+5. 对状态、Context 或 Git 变化分别检查 `docs/architecture/state-machine.md`、`docs/architecture/context-routing.md`、`docs/architecture/git-worktree.md`；
 6. 先补 contract tests，再接入真实模型或外部服务。
 7. 修改 `ase project ...`、MySQL、生产模型或 fallback 前阅读
    [`production-team-host.md`](production-team-host.md)。

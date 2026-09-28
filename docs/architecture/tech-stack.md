@@ -1,6 +1,6 @@
 # 技术选型与理由
 
-> 状态：已接受。控制平面正式采用 Python 3.12+；完整决策、替代方案和演进边界见 [`decisions/0001-python-control-plane.md`](decisions/0001-python-control-plane.md)。
+> 状态：已接受。控制平面正式采用 Python 3.12+；完整决策、替代方案和演进边界见 [`decisions/0001-python-control-plane.md`](../decisions/0001-python-control-plane.md)。
 
 ## 选型总表
 

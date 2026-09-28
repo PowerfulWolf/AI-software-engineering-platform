@@ -185,7 +185,7 @@ T044 的只读 Python 接口 `GitWorktreeManager.capture_changes/verify_capture`
 留下的既有文本修改及新增文本文件，绑定原 HEAD、分支、patch、文件摘要与暂存区摘要。新增文件
 必须是非忽略、非 symlink、UTF-8、大小受限的普通文件，并使用 `/dev/null` no-index patch 表达；
 删除、重命名、二进制、编码异常、超限或敏感改动明确拒绝。接口不修改旧工作树，也不恢复终态
-Task；细节见 [恢复契约](../.trellis/spec/core/delivery-recovery.md)。
+Task；细节见 [恢复契约](../../.trellis/spec/core/delivery-recovery.md)。
 
 如果 dirty inventory 中存在原 Task read/write allowlist 未覆盖的路径，平台只能先读取 Git 路径清单，
 不能读取这些文件正文。恢复控制器返回绑定原 Task/revision、checkpoint/base、原权限与 deny-list

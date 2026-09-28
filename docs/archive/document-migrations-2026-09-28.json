@@ -1,0 +1,258 @@
+{
+  "recorded_on": "2026-09-28",
+  "scope": "documentation hierarchy and current navigation; no runtime data, approvals, task scope, or sealed evidence changes",
+  "source_note": "source_revision records the baseline commit; working_tree_at_migration explicitly includes pre-existing uncommitted content and is identified by source_sha256",
+  "hash_note": "destination hashes describe this migration snapshot, not a constraint on later maintained manuals; previous migration records remain unchanged",
+  "previous_manifest": "docs/archive/document-migrations.json",
+  "entries": [
+    {
+      "old_path": "docs/architecture.md",
+      "source_revision": "8eed38366523cf5b127b39d005d0e424fe883659",
+      "source_kind": "git_revision",
+      "source_sha256": "1715b1aaae6862e558b11b5b8a47932f84a729caf85012c4f737fcfa4ec18f46",
+      "new_path": "docs/architecture/overview.md",
+      "destination_sha256_at_migration": "2a6c651880c32547b5144e68d3d5b6ed4df129cb3f5f2a726063c2486bb020b9",
+      "body_changes": "relocation and link repair; current manuals may separate audience-specific or historical sections"
+    },
+    {
+      "old_path": "docs/tech-stack.md",
+      "source_revision": "8eed38366523cf5b127b39d005d0e424fe883659",
+      "source_kind": "git_revision",
+      "source_sha256": "2dbb8e3b1a56c45c5bd1ec78e3e00836ae21ca61d402e3f3b6044427e0e18345",
+      "new_path": "docs/architecture/tech-stack.md",
+      "destination_sha256_at_migration": "5597b1bb86f85d2b169791144222ae521c8d692c32ec857b61de0416c8961b42",
+      "body_changes": "relocation and link repair; current manuals may separate audience-specific or historical sections"
+    },
+    {
+      "old_path": "docs/contracts.md",
+      "source_revision": "8eed38366523cf5b127b39d005d0e424fe883659",
+      "source_kind": "git_revision",
+      "source_sha256": "de95120aec80ec9e23ed5b961ae2787063c76913f55ddbfdae725a0228132baf",
+      "new_path": "docs/architecture/contracts.md",
+      "destination_sha256_at_migration": "e4e38f11daaa00a142cf3f1254e9c838bca18d47a09b3e792499466c59f08468",
+      "body_changes": "relocation and link repair; current manuals may separate audience-specific or historical sections"
+    },
+    {
+      "old_path": "docs/state-machine.md",
+      "source_revision": "8eed38366523cf5b127b39d005d0e424fe883659",
+      "source_kind": "git_revision",
+      "source_sha256": "e3c9163f4eda8a9d3abb307f60f2dbac500f1fbc61aa4e62869e347797c85abe",
+      "new_path": "docs/architecture/state-machine.md",
+      "destination_sha256_at_migration": "e3c9163f4eda8a9d3abb307f60f2dbac500f1fbc61aa4e62869e347797c85abe",
+      "body_changes": "relocation and link repair; current manuals may separate audience-specific or historical sections"
+    },
+    {
+      "old_path": "docs/prompt-protocol.md",
+      "source_revision": "8eed38366523cf5b127b39d005d0e424fe883659",
+      "source_kind": "git_revision",
+      "source_sha256": "bd4a5867004637c3c15d408896697066d0d33361ec312a7888ad5a1ac63aef84",
+      "new_path": "docs/architecture/prompt-protocol.md",
+      "destination_sha256_at_migration": "31e49ca1cfe6932d49177a4c944a20e46a6f2843e0beae65cd62345fcb2f3e26",
+      "body_changes": "relocation and link repair; current manuals may separate audience-specific or historical sections"
+    },
+    {
+      "old_path": "docs/context-routing.md",
+      "source_revision": "8eed38366523cf5b127b39d005d0e424fe883659",
+      "source_kind": "git_revision",
+      "source_sha256": "8a47123fa3566e691cc670bb7f72dc4d857ecbfd550e76874636209604b2c0ff",
+      "new_path": "docs/architecture/context-routing.md",
+      "destination_sha256_at_migration": "0a82b6b9473f9d3f6624936d80f498bbfa908283648eb3b0a0437cd1fac326d3",
+      "body_changes": "relocation and link repair; current manuals may separate audience-specific or historical sections"
+    },
+    {
+      "old_path": "docs/git-worktree.md",
+      "source_revision": "8eed38366523cf5b127b39d005d0e424fe883659",
+      "source_kind": "git_revision",
+      "source_sha256": "268ec44a6624abcf61339b1ad101d793eca7dcc3d8568b524e95800b3fb07235",
+      "new_path": "docs/architecture/git-worktree.md",
+      "destination_sha256_at_migration": "4bed7e33970c6fcc081ceae7cfc099e60f5576a7fa51b8bb2bc8b2d19bc69c13",
+      "body_changes": "relocation and link repair; current manuals may separate audience-specific or historical sections"
+    },
+    {
+      "old_path": "docs/orchestration.md",
+      "source_revision": "8eed38366523cf5b127b39d005d0e424fe883659",
+      "source_kind": "git_revision",
+      "source_sha256": "97f3f363b227965734144da342ad8071cafeb6aa82efdd1d04297246fc7546ce",
+      "new_path": "docs/architecture/orchestration.md",
+      "destination_sha256_at_migration": "97f3f363b227965734144da342ad8071cafeb6aa82efdd1d04297246fc7546ce",
+      "body_changes": "relocation and link repair; current manuals may separate audience-specific or historical sections"
+    },
+    {
+      "old_path": "docs/failure-routing.md",
+      "source_revision": "8eed38366523cf5b127b39d005d0e424fe883659",
+      "source_kind": "git_revision",
+      "source_sha256": "b6471a65f239bce6b5816a6786c2b9adddd4857b2fd823cae020bc0161b1bfd6",
+      "new_path": "docs/architecture/failure-routing.md",
+      "destination_sha256_at_migration": "b31e84916169d9c9cb46eb53f00361d6bbc47b50d7c18fb6e71e3351718e3c7c",
+      "body_changes": "relocation and link repair; current manuals may separate audience-specific or historical sections"
+    },
+    {
+      "old_path": "docs/evaluation.md",
+      "source_revision": "8eed38366523cf5b127b39d005d0e424fe883659",
+      "source_kind": "git_revision",
+      "source_sha256": "7946a9e4ebb841d01a4067381fc311a99aecb50540c4fd280f452352ebdc7607",
+      "new_path": "docs/architecture/evaluation.md",
+      "destination_sha256_at_migration": "7946a9e4ebb841d01a4067381fc311a99aecb50540c4fd280f452352ebdc7607",
+      "body_changes": "relocation and link repair; current manuals may separate audience-specific or historical sections"
+    },
+    {
+      "old_path": "docs/visualization.md",
+      "source_revision": "8eed38366523cf5b127b39d005d0e424fe883659",
+      "source_kind": "git_revision",
+      "source_sha256": "f0feb52f2853057c8c10928a380db6af21e8dec25c36a7cb7f955bebbd34ee10",
+      "new_path": "docs/user/team-console.md",
+      "destination_sha256_at_migration": "882df519a6c48c011ee913b678b9d332330a28d14aaf7837936538bcce17bbc1",
+      "body_changes": "relocation and link repair; current manuals may separate audience-specific or historical sections",
+      "also_extracted_to": [
+        "docs/architecture/team-console.md"
+      ]
+    },
+    {
+      "old_path": "docs/production-setup.md",
+      "source_revision": "8eed38366523cf5b127b39d005d0e424fe883659",
+      "source_kind": "git_revision",
+      "source_sha256": "32e80bce00f4156a6cb9414df0fb57200b343e5e44f5f27ece54f73c82521f48",
+      "new_path": "docs/operations/production-setup.md",
+      "destination_sha256_at_migration": "8a5a8cd5d306432e5277522787329e97235463e42a00510906ea1c22618436ef",
+      "body_changes": "relocation and link repair; current manuals may separate audience-specific or historical sections"
+    },
+    {
+      "old_path": "docs/operator-feedback-loop.md",
+      "source_revision": "8eed38366523cf5b127b39d005d0e424fe883659",
+      "source_kind": "git_revision",
+      "source_sha256": "3425dfd26301fee34aa3ad8108efd7a539d6bed9061421e846a91b6f95650db1",
+      "new_path": "docs/operations/delivery-recovery.md",
+      "destination_sha256_at_migration": "fa36d039c7cdee4f4c1f818b892517fde6ce875a3113704ec9c2987a542b1c5d",
+      "body_changes": "relocation and link repair; current manuals may separate audience-specific or historical sections",
+      "original_snapshot_path": "docs/archive/2026-09-28-delivery-recovery-source.md",
+      "original_snapshot_sha256": "8d9799fb59bcca66419e03611cdda019a0245d406f170b4b982960ae9a09bd2c",
+      "snapshot_body_changes": "historical notice and navigational link targets only"
+    },
+    {
+      "old_path": "docs/planning-knowledge-operations.md",
+      "source_revision": "8eed38366523cf5b127b39d005d0e424fe883659",
+      "source_kind": "git_revision",
+      "source_sha256": "d9da2a3a2d0d550adf94b06b76a7965d97172e744f23854a56ebe5fc9f806c41",
+      "new_path": "docs/operations/planning-and-knowledge.md",
+      "destination_sha256_at_migration": "698695327a1b69af808a61164432f4234116d87960bc449d32ee80e6982e8212",
+      "body_changes": "relocation and link repair; current manuals may separate audience-specific or historical sections",
+      "original_snapshot_path": "docs/archive/2026-09-28-planning-knowledge-source.md",
+      "original_snapshot_sha256": "6fb4aa09d5208a0b11075f920a996197c00466ba953ae9fcee39e4b753776631",
+      "snapshot_body_changes": "historical notice and navigational link targets only"
+    },
+    {
+      "old_path": "docs/cli.md",
+      "source_revision": "8eed38366523cf5b127b39d005d0e424fe883659",
+      "source_kind": "git_revision",
+      "source_sha256": "dea24b24f47fd7514aa344856fb53f2a2d358070d8ce04ec30f243313afede69",
+      "new_path": "docs/operations/cli.md",
+      "destination_sha256_at_migration": "fa4473db056085a30d899d122d12809b903946dacdeca042c624b6f608c2c973",
+      "body_changes": "relocation and link repair; current manuals may separate audience-specific or historical sections"
+    },
+    {
+      "old_path": "docs/runtime.md",
+      "source_revision": "8eed38366523cf5b127b39d005d0e424fe883659",
+      "source_kind": "git_revision",
+      "source_sha256": "1407398008a625f5138829b23cc845ed888a4cf50ce03e76dfe386ca0dde315c",
+      "new_path": "docs/development/runtime.md",
+      "destination_sha256_at_migration": "0bb767e9b7f16f691b4261c7c90ea93d5399c488f646e16b174cab2319441d36",
+      "body_changes": "relocation and link repair; current manuals may separate audience-specific or historical sections"
+    },
+    {
+      "old_path": "docs/requirement-git-baseline.md",
+      "source_revision": "8eed38366523cf5b127b39d005d0e424fe883659",
+      "source_kind": "git_revision",
+      "source_sha256": "ca3775ba3b378aae5f188e4d14f1d66d855e2596b567b4d0275940294b103ef9",
+      "new_path": "docs/development/requirement-git-baseline.md",
+      "destination_sha256_at_migration": "ca3775ba3b378aae5f188e4d14f1d66d855e2596b567b4d0275940294b103ef9",
+      "body_changes": "relocation and link repair; current manuals may separate audience-specific or historical sections"
+    },
+    {
+      "old_path": "docs/target-project-e2e.md",
+      "source_revision": "8eed38366523cf5b127b39d005d0e424fe883659",
+      "source_kind": "git_revision",
+      "source_sha256": "e9c223f0c375b964eae2c2b034cc91788ca3f58d241b13b3601562363f30c49f",
+      "new_path": "docs/development/target-project-e2e.md",
+      "destination_sha256_at_migration": "454ca0ea05eb21671ecb1a2028c1af3fc88673599d740e348942d75ba6ffae8e",
+      "body_changes": "relocation and link repair; current manuals may separate audience-specific or historical sections"
+    },
+    {
+      "old_path": "docs/t046-worker-operations.md",
+      "source_revision": "8eed38366523cf5b127b39d005d0e424fe883659",
+      "source_kind": "git_revision",
+      "source_sha256": "81ad4f2e2f72318d114780ba856f6331f11b3e09934f049ccf99386bf079bb0e",
+      "new_path": "docs/operations/worker-operations.md",
+      "destination_sha256_at_migration": "175e459ec17b32fd23793bfb7a048bfd06bf241e0093081d2c171a5f29aa8b1e",
+      "body_changes": "relocation and link repair; current manuals may separate audience-specific or historical sections",
+      "original_snapshot_path": "docs/archive/2026-09-19-t046-worker-rollout.md",
+      "original_snapshot_sha256": "55c4cf79f3c038363c0084b159189985f9e61ec0c60b4b1d2ff106e3b40cd53d",
+      "snapshot_body_changes": "historical notice and navigational link targets only"
+    },
+    {
+      "old_path": "docs/milestones.md",
+      "source_revision": "8eed38366523cf5b127b39d005d0e424fe883659",
+      "source_kind": "working_tree_at_migration",
+      "source_sha256": "cb35d536234fcfe2218dc3fbc87f7d2952f742ebcb9949aa9161607031b1bd76",
+      "new_path": "docs/roadmap/milestones.md",
+      "destination_sha256_at_migration": "592a281dbf4a9fef33dfa179c76230d147a81af42953c2a24d95556a20a15c25",
+      "body_changes": "relocation and link repair; current manuals may separate audience-specific or historical sections"
+    },
+    {
+      "old_path": "docs/TODO.md",
+      "source_revision": "8eed38366523cf5b127b39d005d0e424fe883659",
+      "source_kind": "working_tree_at_migration",
+      "source_sha256": "161a356d9542a4a2d7b8e5ae8fdc07d827ea12300a1f3c03bb3eebc89b1692eb",
+      "new_path": "docs/roadmap/backlog.md",
+      "destination_sha256_at_migration": "622f4739b4c834afdde0ba0be587117408a33ffc49568356fee779cfcd3e6345",
+      "body_changes": "relocation and link repair; current manuals may separate audience-specific or historical sections"
+    },
+    {
+      "old_path": "docs/provenance-fix-handoff-20260925.md",
+      "source_revision": "8eed38366523cf5b127b39d005d0e424fe883659",
+      "source_kind": "git_revision",
+      "source_sha256": "8e54b911477692360b7a26f739dbbe7cbaa3e3cc2d81de1ae087b8dff96fdf6d",
+      "new_path": "docs/archive/2026-09-25-provenance-fix-handoff.md",
+      "destination_sha256_at_migration": "a477de6af129b2a9925b93a6a7a0bbdf3df6cb4b8fbcaf4763a0bd22d20c001f",
+      "body_changes": "historical notice and navigational link targets only"
+    },
+    {
+      "old_path": "docs/trellis-multica-ase-architecture-workflow-comparison.md",
+      "source_revision": "8eed38366523cf5b127b39d005d0e424fe883659",
+      "source_kind": "git_revision",
+      "source_sha256": "fb449ad4e09a1faff8f62c5fa1d69c0db386d05fc74c80310c55d4f35c29000b",
+      "new_path": "docs/archive/2026-09-20-trellis-multica-ase-comparison.md",
+      "destination_sha256_at_migration": "6928fc174df9ea76974e4bc04d10a12f7d3535d348cd068accdf91c8b2015814",
+      "body_changes": "historical notice and navigational link targets only"
+    },
+    {
+      "old_path": "docs/ui-notification-interactions.md",
+      "source_revision": "8eed38366523cf5b127b39d005d0e424fe883659",
+      "source_kind": "git_revision",
+      "source_sha256": "bcf0a2bae69402518afe43b05112a14237b8cdd2e1b5d00cba4187be8378866f",
+      "new_path": "docs/archive/2026-09-21-ui-notification-interactions.md",
+      "destination_sha256_at_migration": "e5ed4fa145c0d40acc12310b6277c68a7a14971d070bf1a08d6baf3aebc73ce6",
+      "body_changes": "historical notice and navigational link targets only",
+      "current_guide": "docs/development/ui-interactions.md"
+    }
+  ],
+  "historical_link_repairs": [
+    {
+      "path": "docs/archive/2026-09-01-v0.1-foundation-t001-t017.md",
+      "before_sha256": "401e716fdc34b8a1cc516598113e96a70e223abbec815d1b280e5b23708d37b6",
+      "after_sha256": "8a534301a8f68b4b49c8397424a9ea8030edf3a268355946104d71016d805c6b",
+      "body_changes": "navigational link targets only; original prose and historical labels unchanged"
+    },
+    {
+      "path": "docs/archive/2026-09-18-console-recovery-incidents.md",
+      "before_sha256": "bdf1b4789344e40c99f416415794fb075715a443f89092df239ba9ef9ea131e2",
+      "after_sha256": "98056f152f9ddb2f007a4d8da7acf4e8434985fbb497a4cf8a415426033deadc",
+      "body_changes": "navigational link targets only; original prose and historical labels unchanged"
+    },
+    {
+      "path": "docs/archive/2026-09-19-foundation-roadmap-snapshot.md",
+      "before_sha256": "050919d7d824cd3776eba64470c19b4f95635d47dff3cd3de74d1123e0138304",
+      "after_sha256": "8be8fa5472b4994ab536486fe175eca72fda5276582b6c32d9bb7248a43af507",
+      "body_changes": "navigational link targets only; original prose and historical labels unchanged"
+    }
+  ]
+}

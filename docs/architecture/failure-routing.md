@@ -28,7 +28,7 @@
 
 联合 Product/Designer/Planner 的调用前预留工作额度，typed 临时故障通过追加 checkpoint 退款并
 增加独立故障计数；unknown interruption 保守保留预留。当前策略与历史兼容入口的差异见
-[执行与重试契约](../.trellis/spec/core/execution-retry-policy.md)。
+[执行与重试契约](../../.trellis/spec/core/execution-retry-policy.md)。
 
 ## 3. 路由矩阵
 

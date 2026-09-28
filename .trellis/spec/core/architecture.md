@@ -5,7 +5,7 @@
 本规范适用于 ai-software-engineer v0.1 的所有运行时代码、CLI 和测试。凡是新增模块、跨层
 payload、状态持久化或 Agent 执行入口，都必须先检查本规范。架构由 Control Plane、Organization
 Workforce Plane、Knowledge Plane、Agent Execution Plane、Evidence Plane、Repository Plane 和
-Human Boundary 组成；边界定义见 `docs/architecture.md`。
+Human Boundary 组成；边界定义见 `docs/architecture/overview.md`。
 
 ## 2. Signatures
 
@@ -61,7 +61,7 @@ repository_id_for_root(repository_root: str | Path) -> RepositoryId
 
 ## 3. Contracts
 
-- `run_task` 只能推进 `docs/state-machine.md` 中的合法迁移；
+- `run_task` 只能推进 `docs/architecture/state-machine.md` 中的合法迁移；
 - T009 `SerialOrchestrator.run_task` 只接受 `NEW` Task，以固定单 attempt 顺序运行
   planning-mode Orchestrator、Coder、QA、Reviewer；retry、BLOCKED 路由和恢复属于 T010；
 - T010 `RetryingOrchestrator` 只在上述串行路径上增加有界 retry/recovery；每次 Agent 调用前

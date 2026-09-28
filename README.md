@@ -2,6 +2,9 @@
 
 一个基于 Trellis 思想与 Multi-Agent 协作的、可审计的通用 AI 软件工程团队平台。
 
+状态更新：**2026-09-28**；最新发布 tag：**`v0.1.2`**（`4d1e799`）。文中的 v0.1 表示当前产品与架构边界，
+不代表所有持久化协议都使用同一版本号。
+
 团队不绑定某个业务领域或技术栈。你先接入一个 Project，再为 Requirement 选择该 Project
 涉及的一个或多个代码目录；同一支长期 Agent 团队服务所有 Project，而每个 Project 的知识、规范、
 Repository 目录和 Requirement 交付事实保持隔离。
@@ -12,9 +15,27 @@ Repository 目录和 Requirement 交付事实保持隔离。
 > Manager 先准备 Project 和所选 Repository，再让 Product 与你澄清 Requirement。你确认产品文档后，
 > 团队按 Repository 串行执行 `Coder → QA → Reviewer`，最后交付可合并候选分支与验证证据，或明确的阻塞原因。
 
+## 当前能力与边界
+
+已有一次真实需求通过 ASE 正常交付至 `DONE`，独立 QA 四项 PASS、Reviewer APPROVE。
+这证明了一条真实闭环，不代表所有技术栈、恢复路径和部署形态都已验收；其中 Mock UI 证据也不等于真实 OAuth 验收。
+具体候选、平台缺陷及修复证据见 [2026-09-28 交付复盘](docs/archive/2026-09-28-ase-delivery-retrospective.md)。
+
+| 能力 | 当前已具备 | 尚需补齐 |
+|---|---|---|
+| 独立交付与验收 | Coder/QA/Reviewer 独立身份、Run、Context、worktree；同候选证据校验和受控执行；已接入 Swift/UI 的版本化执行策略 | 更多执行器的统一接入与发布，不是重新建设独立 QA/Review |
+| 审批与中断恢复 | 精确计划审批、候选复核、修复接续；独立 QA PASS 后可在证据匹配且重新批准时仅恢复 Reviewer | 更广的历史数据、重启、多候选组合回归 |
+| Manager 缺口协调 | 候选验证中已接通 incident → 当前前提探测 → 精确方案/审批 → 受控执行 receipt → 独立验收/恢复 | Product/Design/Planning/Coder 等全阶段统一前提协调 |
+| 项目记忆 | 知识/Spec 分离、冻结快照、按角色检索引用；有证据的学习提案、显式收集、审批发布及前端来源展示 | accepted checkpoint 自动收集、上游与 Manager 经验生产者、效果与失效治理 |
+| 能力演进 | 受控工具与专用执行器；学习结果可发布非执行性的 Skill 设计建议 | 新能力统一描述、验证、注册、按角色启用与版本回退；禁止 Agent 自行扩权 |
+
+下一步优先补齐自动知识闭环，再建设统一的新能力接入、验证与发布流程；Manager 全阶段协调和组合回归作为可靠性工作同步推进。
+完整拆解见 [TODO 扩展](docs/roadmap/backlog.md)。
+
 ## 设计原则
 
-1. **Knowledge belongs to the organization, not the agent**：规则、设计决策、失败经验和验收标准沉淀在 `.trellis/` 与任务 artifact 中；Agent 是可替换的执行者。
+1. **Knowledge belongs to the organization, not the agent**：ASE 自身工程经验沉淀在 `.trellis/spec/` 与 `docs/`；
+   运行时项目经验经审核进入外置 Team/Project 知识与规范，并由 artifact 保留来源。新会话检索组织记忆，不依赖上个模型的隐式记忆。
 2. **No agent may be the sole judge of its own work**：Coder 不能批准自己的代码；同一 Task 历史
    的 Coder、QA、Reviewer 必须是不同 Agent，并使用独立 Run、Context、worktree 和受限权限。
 3. **Agents communicate through verifiable artifacts, not shared assumptions**：跨角色传递只允许使用经过 Schema 校验、带来源 revision、证据和哈希的 artifact。
@@ -105,7 +126,7 @@ flowchart TB
     COMMON_KNOWLEDGE["Team / Project 知识上传"] --> INDEX["异步增量 Indexer<br/>READY 后显式选择"]
     INDEX --> KNOWLEDGE["Knowledge Plane<br/>冻结快照 · typed search/read · 可追溯证据"]
     STRICT_SPECS["Engineering Specs<br/>适用的 Team/Project 规范 · Repository 原生规则"] --> KNOWLEDGE
-    LEARNING["Learning Loop<br/>失败证据 / 已批准解答 · 独立发布审批"] --> KNOWLEDGE
+    LEARNING["Learning Loop<br/>显式收集失败/角色发现 · 已批准解答提案 · 独立发布审批"] --> KNOWLEDGE
     KNOWLEDGE --> PM
     KNOWLEDGE --> PRODUCT
     KNOWLEDGE --> DESIGNER
@@ -140,7 +161,7 @@ Coder、QA、Reviewer 可以分别配置主模型和备用顺序；额度、限�
 
 | 层 | 核心职责 | 明确不能做 |
 |---|---|---|
-| Manager Agent | 团队领导；通过 prepare、advance、commit-dispatch、recover、deliver Skills 接单和推进整支团队 | 不能绕过 Skill 直接写状态、分配资源或批准代码 |
+| Manager Agent | 团队领导；通过 prepare、advance、commit-dispatch、recover、deliver Skills 推进团队；已接入候选验证前提协调，全阶段推广待补齐 | 不能绕过 Skill 直接写状态、分配资源、改业务代码或代写 QA/Review verdict |
 | Web Console command module | 接受浏览器 typed intent，先持久化 Operation，再异步委托 Manager；把 exact checkpoint/plan digest 隐藏在 UI 控件中 | 不能直接改 Task、Artifact、Git 或判定交付成功 |
 | Product Agent | 与用户澄清需求，产出可评审、可追溯的版本化 Product Spec | 不能自己批准产品范围，不能持有人工决策验证权限，不能设计实现细节 |
 | Designer Agent | 把已确认 Product Spec 转换为 Technical Design 和实施/测试规划 | 不能改写产品需求，不能直接提交业务实现 |
@@ -183,9 +204,17 @@ Task：`resume → 独立候选验证 → PASS 则接纳；FAIL/REJECT 则创建
 因此“模型调用不能重复”和“需求必须继续完成”并不冲突：前者约束单个 Run，后者通过新的、可审计的
 Run/Task 接续。
 
+独立候选验证已封存 QA PASS、但 Reviewer 在入场前或执行中中断时，可生成 **Reviewer-only** 新计划。
+它必须绑定原 QA 的来源、candidate、完整验收证据及适用的执行 receipt，复核当前范围/策略并取得新的精确批准；
+不能挑选更早的 PASS 覆盖新失败，也不能重放已消费的批准。见 [角色级恢复契约](.trellis/spec/core/verification-role-recovery.md)。
+
 同一 Task 可以产生多个 Coder/QA/Reviewer Run；代码现场属于 Task branch/worktree，
 不属于 Agent 的临时会话。阻塞知识缺口使 Requirement 等待人工解答，Task 保持最近 checkpoint；
 批准 exact Resolution 后建立新 Context/run，旧 Gap、调用、批准和证据继续保留。
+
+Xcode/XCTest 缺失、桌面锁定、数据库不可达等是环境前提，不等于业务代码缺陷。平台应把当前证据交给 Manager，
+由 Manager 提出受控方案或请求人协助，解除后重新探测并从原进度恢复；工具安装成功不等于 QA 通过。
+当前这条协调链已接入候选验证，尚不能宣称覆盖所有上游阶段。Swift 只是目标项目技术栈之一，不是所有项目的必装依赖。
 
 ### 持久队列的 Lease 生命周期
 
@@ -218,7 +247,7 @@ WorkItem 与发布下一角色 WorkItem 在同一事务中完成，重复的相�
 重启或租约丢失会保留 checkpoint 和 worktree。旧进程退出、租约过期后，在平台点击“继续交付”；
 若本次只完成过期回收，可在短暂退避后再次继续。已接受的 Artifact 不重复调用模型，未提交修改仍受
 原生恢复审批约束；独立候选复核保留已有 reservation 流程，不伪造为普通交付 Run。
-部署、存量数据与回滚步骤见 [T046 运维说明](docs/t046-worker-operations.md)。
+部署、存量数据与回滚步骤见 [角色执行队列运维](docs/operations/worker-operations.md)。
 
 ## 项目结构
 
@@ -254,7 +283,7 @@ AI-software-engineering-platform/
 │   ├── knowledge_documents.py        # MD/TXT/PDF/DOCX 导入、规范化与不可变知识记录
 │   ├── knowledge_selection.py        # Team/Project 知识选择、完整性与即时解析
 │   ├── spec_documents.py             # Team/Project 强制 Spec 的不可变版本和显式启用集合
-│   ├── learning.py                   # QA/Review 失败归纳、人工决策与知识/Spec/Skill 建议发布
+│   ├── learning.py                   # 失败/角色发现/知识解答提案、审批发布；Skill 仅设计建议
 │   └── runtime_workspace.py          # Team/Project/Repository Runtime 组合与校验
 ├── scripts/
 │   └── ase-console-service.sh        # Web Console 后台启动、停止、重启、状态和日志
@@ -277,12 +306,14 @@ AI-software-engineering-platform/
 │   ├── knowledge-*.schema.json
 │   └── recovery-execution.schema.json
 ├── tests/                            # 与 src 分层对应；含真实 Git/MySQL 和离线模型契约测试
-├── docs/
-│   ├── production-setup.md           # 完整部署与运维手册
-│   ├── architecture.md               # 架构和边界
-│   ├── cli.md                        # CLI 与恢复命令
-│   ├── archive/                      # 阶段成果和提交证据
-│   └── decisions/                    # 已接受架构决策
+├── docs/                             # 按读者与用途组织，README.md 为统一导航
+│   ├── user/                         # 用户入门、知识使用、交付与反馈
+│   ├── operations/                   # 部署、配置、升级、诊断与恢复
+│   ├── architecture/                 # 架构、状态机与角色协议
+│   ├── development/                  # 开发、验证与文档维护
+│   ├── roadmap/                      # 当前路线和详细待办
+│   ├── decisions/                    # 技术决策记录
+│   └── archive/                      # 历史交付、事故、调研与迁移记录
 └── .trellis/
     ├── spec/                         # 团队在本项目沉淀的可执行开发规范
     ├── tasks/                        # PRD、Design、Implement 等任务事实
@@ -332,7 +363,7 @@ AI-software-engineering-platform/
 │       ├── specs/                     # 项目级强制规范与持续学习事实
 │       │   ├── documents/<spec_id>/   # Project Spec 不可变版本
 │       │   ├── activation.json        # 当前启用版本集合
-│       │   └── learning/<proposal_id>/ # QA/Review 建议、发布前授权及完成决策
+│       │   └── learning/<proposal_id>/ # 证据化学习提案、发布前授权及完成决策
 │       ├── repositories/              # 该 Project 可使用的代码目录 catalog
 │       │   └── <repository_id>/
 │       │       ├── workspace.json      # 源码绝对路径与 Project/sidecar 绑定
@@ -401,7 +432,7 @@ v0.1 推荐先以一台可信的 macOS/Linux 主机运行，不必先部署 Kube
 按最新 durable delivery 事实“继续交付”。当前已具备后台进程形态，但自动随系统登录启动仍需要
 macOS Keychain / Linux Secret Service 适配，不能把 MySQL DSN 明文写入 launchd/systemd 配置。
 
-具体选择和理由见 [`docs/tech-stack.md`](docs/tech-stack.md)。
+具体选择和理由见 [`docs/architecture/tech-stack.md`](docs/architecture/tech-stack.md)。
 
 ## 最新使用方法
 
@@ -436,6 +467,7 @@ Origin；它不是可直接暴露到局域网或公网的多用户系统。用 `
    正常状态，不会被标记成故障。
 3. 打开“需求与交付”，在本页创建或选择 Project。Project 表示一组长期共享业务背景、知识和开发
    规范的项目，不等于单个 Git 仓库，也不等于一次 Requirement；同一 Project 可以登记多个代码目录。
+   后台刷新较慢时，页面保留最后一次项目选择并显示正在加载的目标；旧响应不会覆盖新选择，切换期间禁止向旧项目提交交付命令。
 4. 打开“知识库”，先选择独立的“团队知识库”或“项目知识库”，再选择内容类型。团队知识库只维护
    一份，不挂在任何 Project 下面；项目知识库会要求选择具体 Project：
    - 团队“通用知识”与项目“背景知识”：页面默认只展示已导入资产；点击对应导入按钮，在弹窗中一次
@@ -444,8 +476,11 @@ Origin；它不是可直接暴露到局域网或公网的多用户系统。用 `
    - “开发规范”：页面默认只展示现有规范；点击“导入开发规范”，在弹窗中批量选择 Markdown/TXT，
      并配置适用角色、阶段、Repository、路径和可选验证方法。稳定 `spec_key` 由平台根据文件名生成并在
      后续更新中复用，不需要用户填写。创建只生成未启用的新版本，检查后必须显式启用。
-   - “学习改进”只在项目知识库出现：扫描当前 Project 已持久化的 QA FAIL 与 Review REJECT，查看复发次数和证据；
-     人工可拒绝，或批准沉淀为背景知识、Project Spec 或非执行性的 Skill 设计建议。
+   - “学习改进”只在项目知识库出现：显式收集当前 Project 已持久化的 QA FAIL、Review REJECT，以及
+     Coder/QA/Reviewer 报告中带证据的 `project_observations`，包括正常开发和成功验收中的发现；
+     已批准的知识缺口解答也可通过对应流程形成学习提案。页面展示来源、适用范围、证据和决策状态，
+     人工可拒绝，或精确批准沉淀为背景知识、Project Spec 或非执行性的 Skill 设计建议。
+     当前不是每个 checkpoint 自动收集；批准解答供本次恢复使用，也不等于批准长期知识发布。
 5. 背景知识和 Spec 启停会立即用于之后的新需求，不需要重启；已经准备或批准的需求不会被静默套用
    新版本。绑定事实变化时会安全停止并要求重新准备；Team、Project 或 Repository 规则冲突时由人工决策。
 
@@ -464,8 +499,8 @@ Spec 位于对应 scope 的 `specs/documents/<spec_id>/`，当前启用集合写
 
 ### 3. 日常需求交付主要在网页完成
 
-创建、讨论、批准、执行观察和常规继续都在 Web Console 完成。遇到知识缺口时，当前版本没有单独的
-Gap 审批表单：可信本机管理员使用需求详情中的“查看待确认的知识”表单（底层 API 也可作为运维入口），
+创建、讨论、批准、执行观察和常规继续都在 Web Console 完成。遇到知识缺口时，可信本机管理员
+使用需求详情中的“查看待确认的知识”表单（底层 API 也可作为运维入口），
 批准 exact 解答后再点击“继续需求”。CLI `ase request resume` 仍保留为同一恢复动作的 break-glass/runbook
 入口；所有人工解答、来源哈希和恢复都会进入标准审计记录。
 
@@ -503,6 +538,8 @@ Gap 审批表单：可信本机管理员使用需求详情中的“查看待确�
 - 普通中断从最近 checkpoint 继续，已完成阶段和仓库不会重跑。
 - Candidate 已存在但 QA/Reviewer 未完成时，页面展示 exact 候选验证计划；阅读 Agent、模型和
   candidate 后点击“批准并继续”，不会重跑 Coder。
+  若独立 QA PASS 的封存证据仍满足精确复用条件，页面明确展示原 QA 证据和“仅执行 Reviewer”；
+  新批准后只恢复 Reviewer，Reviewer 仍独立验证，不能用历史 QA 代替 Review。
 - Coder 无 Candidate 但保留了修改时，如果现场含原需求未授权的文件，页面先逐条展示具体路径并
   要求一次“补充文件范围”审批；这里只批准本次恢复读取这些精确路径，不批准目录或通配符。
   随后页面展示包含实际修改的 exact 恢复计划并要求第二次审批，之后才创建新的关联 Task 接续；
@@ -510,7 +547,9 @@ Gap 审批表单：可信本机管理员使用需求详情中的“查看待确�
 - QA FAIL 或 Reviewer REJECT 会保留旧 Candidate 和证据，创建修复 Task，重新执行
   `Coder → QA → Reviewer`。
 - QA 只有 `NOT_TESTED`/命令环境 `ERROR`、没有任何验收项或测试 `FAIL` 时，不再误派给 Coder；
-  Candidate 会保留，继续交付只创建新的 QA/Reviewer 验证计划。
+  Candidate 会保留，由 Manager 协调验证前提；满足条件后再提出新的精确验证计划。
+- 受控执行器在模型启动前失败，也进入 Manager 的候选验证协调链。桌面仍锁定等前提未解除时，
+  页面给出协助方与解除条件，不反复启动明知不可执行的验收；前提变为 READY 后重新提案、批准，旧失败记录仍保留。
 - 显式 deny、规范冲突、来源漂移或业务歧义仍会停止并要求人工处理；网页不会偷偷放宽制度。
 - 如果 Host 在操作执行中退出，该 Web Operation 会标记为 `INTERRUPTED`。重新启动服务后打开需求，
   依据当前 Delivery 事实再次点击“继续交付”，不会盲目重放原模型调用。
@@ -539,10 +578,10 @@ branch，以及 QA/Reviewer/联合验收证据入口。人工确认后，仍按�
 只返回已配置状态，不返回正文。当前可信本机 MVP 将这些运行变量以权限 `0600` 明文保存在
 `runtime.env`，启动脚本会自动加载；不要提交或共享该文件。未来可换成 Keychain/Secret Service，
 不改变页面工作流。完整 MySQL、模型 fallback 和配置边界见
-[生产配置指南](docs/production-setup.md)。
+[生产配置指南](docs/operations/production-setup.md)。
 
 `verify-*`、`request resume` 和底层 Task Runtime 仍作为诊断/break-glass 能力保留，不是日常用户
-流程。详细断点矩阵见 [CLI 手册](docs/cli.md) 与
+流程。详细断点矩阵见 [CLI 手册](docs/operations/cli.md) 与
 [恢复规范](.trellis/spec/core/delivery-recovery.md)。
 
 <details>
@@ -596,7 +635,7 @@ export ASE_CONFIG='/absolute/path/to/production-config.json' # 使用默认配�
 
 把配置中的第一个已启用 `model_routes` 改成当前实际可用模型（推荐 Codex CLI 的
 `gpt-5.6-terra`）。密钥和 DSN 正文只放环境变量。完整 MySQL、模型 fallback 和安全配置见
-[生产配置指南](docs/production-setup.md)。
+[生产配置指南](docs/operations/production-setup.md)。
 
 ### 2. 日常使用：创建、讨论、确认
 
@@ -684,6 +723,8 @@ uv run ase request resume DELIVERY_ID
   随后返回精确恢复计划，批准后创建新 Task 接续旧修改，再走 `Coder → QA → Reviewer`；新的恢复/修复 Coder 若再次中断，
   继续执行同一个 `resume`，平台会沿完整 Task/dispatch 历史创建下一次恢复，而不是卡死在第一轮。
 - Coder 已产生 candidate、QA/Reviewer 因额度或进程故障中断：先返回一个精确验证计划，**不会重跑 Coder**。
+- 独立 QA 已 PASS、仅 Reviewer 中断：来源、候选和范围等条件匹配时，精确计划可复用封存 QA，
+  新批准后仅执行 Reviewer；不重放旧 Run/批准，不跳过独立 Review。
 - QA FAIL 或 Review REJECT：保留 Candidate V1 和原失败 Task，自动创建关联修复 Task，再走
   `Coder → QA → Reviewer` 得到 Candidate V2。
 - 已完成 Task、checkpoint 尚未来得及写入：从 Task event 和 sealed artifacts 接管，零模型调用。
@@ -711,10 +752,10 @@ uv run ase request resume DELIVERY_ID \
 计划并再次要求确认。`verify-propose / verify-inspect / verify-approve / verify-run` 仍保留给诊断和
 break-glass 操作，日常交付不需要手工串这四个命令。
 
-低层 [失败 Coder 接手流程](docs/cli.md#显式接手失败-coder-的保留修改) 和 `verify-*` 仍保留给
+低层 [失败 Coder 接手流程](docs/operations/cli.md#显式接手失败-coder-的保留修改) 和 `verify-*` 仍保留给
 诊断与逐条审计；日常流程不需要切换命令。未知半成品不会被自动视为正确实现，`resume` 只负责
 封存并展示精确恢复计划，仍需人工批准后才能交给新的 Coder Task。详细断点矩阵见
-[CLI 手册](docs/cli.md) 与 [恢复规范](.trellis/spec/core/delivery-recovery.md)。
+[CLI 手册](docs/operations/cli.md) 与 [恢复规范](.trellis/spec/core/delivery-recovery.md)。
 
 </details>
 
@@ -722,21 +763,28 @@ break-glass 操作，日常交付不需要手工串这四个命令。
 
 ```bash
 uv sync
-uv run pytest -q
+uv run pytest -q -m 'not mysql'
+node --test tests/team_view/*.test.cjs
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src tests
 uv build --offline
 ```
 
-MySQL 集成测试需设置 `ASE_TEST_MYSQL_DSN`，并且必须指向名称为 `test_*`、`*_test` 或
+MySQL 集成测试另用 `uv run pytest -q -m mysql`，需设置 `ASE_TEST_MYSQL_DSN`，并且必须指向名称为 `test_*`、`*_test` 或
 `*_tests` 的专用测试数据库（例如 `ase_self_iteration_test`）。pytest 会在任何 MySQL fixture
 执行前拒绝生产库名称，并在每个 `mysql` 用例前后统一清理 Task/事件、调度、验证预留和工作队列
 事实；测试或 fixture 失败也会执行清理。表结构、锁行及无关表保留。每个并发 pytest 进程/worker
 必须使用不同的测试数据库，不能共用这个会被清理的 schema。测试使用脚本化模型验证契约，
 不代表真实模型已完成业务验收。
 
-## 当前进度（2026-09-19）
+真实 CLI 沙箱、Swift/XCTest 和桌面 UI 等 opt-in 测试需要各自的工具链、显式执行开关及可用环境；
+不能把 skipped/deselected 算作通过，也不能用 CoreVerification 替代需求明确要求的 XCTest/UI 验收。
+最新一轮验证范围和未执行项见 [复盘验证口径](docs/archive/2026-09-28-ase-delivery-retrospective.md#当前验证口径与未做事项)。
+
+## 当前进度（2026-09-28）
+
+M0–M25 保留历史阶段编号；近期增量单独列出，不把能力规划计作已完成。
 
 | 阶段 | 阶段性成果 |
 |---|---|
@@ -746,7 +794,7 @@ MySQL 集成测试需设置 `ASE_TEST_MYSQL_DSN`，并且必须指向名称为 `
 | M6 可执行与可审计 | 完成受控命令、typed tools、Evidence、跨语言边界和只读 API |
 | M7 团队可视化 | 本地只读团队工作台，跨 Project 读取 Requirement、成员分配、涉及目录、执行历史和报告；旧静态组件保留为底层工具 |
 | M8 接单与推进 | 接通 Product、Designer、Planner、原子 dispatch 和可恢复 CLI 入口；产品批准与必要澄清仍由人工完成 |
-| M9 Production Team Host | 完成命令级自动装配、MySQL 存储、配置驱动的模型路由与隔离交付；Coder 支持有界 checkpoint/续跑，真实模型验收需另行执行 |
+| M9 Production Team Host | 完成命令级自动装配、MySQL 存储、配置驱动的模型路由与隔离交付；Coder 支持有界 checkpoint/续跑；阶段实现与真实需求验收分别留证，最近一次真实闭环见下方增量 |
 | M10 知识与联合交付 | Team 通用知识、Project 专属知识按需加载；Requirement 先准备后讨论；多 Repository 独立交付、联合候选验收与中断恢复 |
 | M11 持续团队与候选提交 | 七个 Team 级长期成员；显式 CandidateCommit Skill；CoderProgress Artifact；可重启的有界 Coder 续跑循环 |
 | M12 持久工作队列 | 生产 request/Console 已接入单 Worker 的逐角色领取、心跳、结果 receipt、容量移交、知识等待和过期恢复；保持 Task 串行，独立 Worker fleet 与跨 Task 并发部署另行验收 |
@@ -756,19 +804,36 @@ MySQL 集成测试需设置 `ASE_TEST_MYSQL_DSN`，并且必须指向名称为 `
 | M16 平台管理面 | 浏览器创建/选择 Project，分别管理内容寻址的 Team 通用知识与 Project 知识，并维护平台目录、MySQL、模型路由、Codex、执行开关和端口；知识选择即时生效，运行配置变化明确要求重启 |
 | M17 Team–Project 边界 | 将唯一 Team 与多个 Project 设为并列聚合；Project 管理知识、规范、Repository 和 Requirement；增加 Web Console 后台启动、停止、重启、状态和日志脚本 |
 | M18 运行设置与状态 | Web Console 可零配置降级启动，展示内置默认值；设置页写入完整 MySQL DSN/Responses API Key，服务脚本加载受控 `runtime.env`；独立状态页显示 MySQL、Codex、Team、知识和模型路由就绪情况；知识管理不混入设置页 |
-| M19 Spec Center 与持续学习 | 通用/背景知识与强制 Spec 分离；Team/Project Spec 支持不可变版本、显式启用、适用范围和验证方法，并进入 production baseline/context；QA/Review 失败可生成证据化 Learning proposal，经人工审批后沉淀为背景知识、Project Spec 或非执行性 Skill 设计建议 |
+| M19 Spec Center 与持续学习 | 通用/背景知识与强制 Spec 分离；Team/Project Spec 支持不可变版本、显式启用、适用范围和验证方法，并进入 production baseline/context；失败证据、三类交付报告的正常发现及已批准解答可形成 Learning proposal，经独立发布审批沉淀为知识/Spec/非执行性 Skill 设计建议；收集尚未自动化 |
 | M20 需求输入与 Agent 模型策略 | 新建 Requirement 使用 macOS/Linux 原生目录选择器；Product 对话支持有界、不可变、可追溯的截图附件；七个长期 Agent 可分别配置主模型与备用顺序，运行事实保留实际选择 |
 | M21 知识导入与路由状态 | 知识库改为资产列表优先，通用知识、背景知识和开发规范通过作用域明确的弹窗批量导入；状态页分别展示七名 Agent 的精确模型策略与底层可用模型目录 |
-| M22 需求维护 | Product 对话开始前可编辑 Requirement 名称与代码目录，ProductSpec 批准前可逻辑删除；编辑发布替代需求、删除只改变当前可见性，旧 checkpoint、对话与 Operation 继续保留审计；代码基线漂移时停止无效恢复并预填新 Requirement；失败提示可关闭但不擦除事实 |
+| M22 需求维护 | Product 对话开始前可编辑 Requirement 名称与代码目录，ProductSpec 批准前可逻辑删除；编辑发布替代需求、删除只改变当前可见性，旧 checkpoint、对话与 Operation 继续保留审计；需求保留独立源基线，主分支前移不要求重建需求，绑定/来源损坏仍拒绝无效恢复；失败提示可关闭但不擦除事实 |
 | M23 规划分流（T047） | Manager PlanningGate 根据结构化 Product/Design 事实选择 SIMPLE/COMPLEX；SIMPLE 零 Planner 模型调用，COMPLEX 计划保留工作包、依赖、风险、检查点和验收测试矩阵 |
-| M24 主动知识闭环（T048） | 冻结 Team/Project/Repository 适用知识与规范，提供带证据的 typed search/read、预算化 Context consultation、exact Gap/Resolution 恢复和独立 Learning 发布审批 |
+| M24 主动检索与知识缺口恢复（T048） | 冻结 Team/Project/Repository 适用知识与规范，提供带证据的 typed search/read、预算化 Context consultation、exact Gap/Resolution 恢复和独立 Learning 发布审批；不等于自动知识收集已完成 |
 | M25 增量索引（T049） | 上传异步进入 QUEUED/PROCESSING/READY/FAILED/RETIRED 生命周期；增量缓存、原子发布、替换/退休互斥、失败重试和 Web 状态页已覆盖 |
+| 09-25–09-28 可靠交付增量 | 修复审批自失效、Responses 工具多轮、队列等待/续租竞争、历史上下文兼容及执行器/候选身份问题；接通 Manager 候选前提协调、受控 Swift/UI 证据和 Reviewer-only 恢复；真实需求最终 DONE |
+| 09-28 控制台增量 | 项目切换保留最后意图，拒绝旧响应，切换中限制旧项目操作；Knowledge 内容与所接受的项目身份同步更新；已发布 `v0.1.2` |
+
+## TODO 扩展
+
+详细清单集中在 [docs/roadmap/backlog.md](docs/roadmap/backlog.md)，包含现有基础、未完成范围、责任、依赖、实施步骤与验收标准：
+
+1. **自动知识闭环**：接纳 checkpoint 后可靠收集，补齐 Product/Designer/Planner/Manager 经验生产者；
+   通过待审、发布、检索引用、效果反馈与失效治理，让后续需求不再从零理解项目。
+2. **可靠性并行补齐**：Manager 全阶段前提协调、真实组合回归、角色权限审计、投影性能与路由诊断。
+3. **统一的新能力接入、验证与发布**：复用已有隔离执行和独立评审，补能力描述/注册、版本化授权、停用与回退；
+   Skill 设计建议不能直接安装执行器或赋予 Agent 权限。
+4. **工程台账与后续部署形态**：核实历史验收、依赖维护和密钥存储；Reporter、Worker fleet 等另行决策，不阻塞前述最小闭环。
+
+这些是待办，不是已实现能力，也不是自动执行、扩权或变更生产环境的授权。
 
 ## 文档导航
 
-- [分类索引](docs/README.md)：使用、运维、架构、协议、开发、决策与历史。
-- [生产部署与配置](docs/production-setup.md)、[团队工作台](docs/visualization.md)。
-- [总体架构](docs/architecture.md)、[角色与 Artifact 契约](docs/contracts.md)。
-- [当前路线与待验收事项](docs/milestones.md)、[工程任务索引](.trellis/tasks/README.md)。
+- [分类索引](docs/README.md)：按读者选择入口。
+- [用户入门](docs/user/README.md)、[部署与运维](docs/operations/README.md)、[开发与验证](docs/development/README.md)。
+- [生产部署与配置](docs/operations/production-setup.md)、[团队工作台](docs/user/team-console.md)。
+- [总体架构](docs/architecture/overview.md)、[角色与 Artifact 契约](docs/architecture/contracts.md)。
+- [TODO 扩展详细清单](docs/roadmap/backlog.md)、[当前路线与待验收事项](docs/roadmap/milestones.md)、[工程任务索引](.trellis/tasks/README.md)。
+- [2026-09-28 ASE 平台缺陷与交付复盘](docs/archive/2026-09-28-ase-delivery-retrospective.md)。
 - [历史归档与交付证据](docs/archive/README.md)。
 - [工程规范](.trellis/spec/index.md)、[领域术语](CONTEXT.md)、[Codex 开发指引](AGENTS.md)。

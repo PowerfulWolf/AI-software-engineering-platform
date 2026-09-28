@@ -68,7 +68,7 @@ project-native rules 只读发现并以 URI/hash 引用。平台 hard safety pol
 
 后续可选的 role worktree 是临时代码 checkout，与 sidecar 元数据分离；逻辑项目绑定仍指向给定
 `repository_root`。Agent 工作可视化只从 sidecar durable facts 和目标项目只读 Git inspection 生成
-read projection，不成为第二个状态写入者，详见 [`docs/visualization.md`](visualization.md)。
+read projection，不成为第二个状态写入者，详见 [`docs/user/team-console.md`](../user/team-console.md)。
 
 ### Team Workforce Plane
 
@@ -224,7 +224,7 @@ Artifact 的 Python 入口是 `Artifact` union；`FileArtifactStore` 以 Artifac
 
 ## 7. 只读投影与静态可视化基础
 
-以下为仍保留的底层库，当前 Web Console 的入口与交互见 [团队工作台](visualization.md)。
+以下为仍保留的底层库，当前 Web Console 的入口与交互见 [团队工作台](../user/team-console.md)。
 
 `RunProjectionBuilder` 是纯函数：输入已经从 SQLite、ArtifactStore、EvidenceStore、Evaluation
 Store、WorkforceStore 和 HandoffStore 读取并校验的 `ProjectionFacts`，输出可重算的

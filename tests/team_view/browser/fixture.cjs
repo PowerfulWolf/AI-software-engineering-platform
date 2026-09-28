@@ -1,5 +1,5 @@
 // Real CSS/layout and input regression suite. Requires Playwright and Chrome.
-// See docs/ui-notification-interactions.md for the isolated test command.
+// See docs/development/ui-interactions.md for the isolated test command.
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");

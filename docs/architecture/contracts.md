@@ -7,10 +7,10 @@ Reviewer 中断且终态事件或精确的独立验证入场/制品证明已封�
 原生 `inputs.accepted_qa` 与独立验证 `retained_qa` 互斥；后者绑定原计划、QA 入场、已封存报告，
 以及存在时消费该报告的 Reviewer 入场。它不是部分 completion，也不会补造 Task 事件。
 只检查最近已入场尝试，不从历史挑选有利 PASS；具体校验和恢复边界见
-[角色恢复规范](../.trellis/spec/core/verification-role-recovery.md)。
+[角色恢复规范](../../.trellis/spec/core/verification-role-recovery.md)。
 生产入口是 `ase request resume`；低层 `verify-*` 只用于 break-glass。复核通过先完成子 Delivery，
 联合需求仍需完整候选集合和联合验收；详见
-[恢复规范](../.trellis/spec/core/delivery-recovery.md)。
+[恢复规范](../../.trellis/spec/core/delivery-recovery.md)。
 
 ## 1. 角色总览
 
@@ -20,8 +20,8 @@ Reviewer 中断且终态事件或精确的独立验证入场/制品证明已封�
 `retry_policy`，`retry_failures` 保存独立临时故障事实。旧 Task/Checkpoint 的 wire/hash 不重写。
 `Task.attempts` 是单调执行身份，工作次数由它减去已退款的历史临时失败得出；其跨层最大值为
 400（100 工作次数 + 三角色各 100 临时失败），不是 400 次 Coder 修复授权。完整矩阵见
-[执行与重试策略](../.trellis/spec/core/execution-retry-policy.md)与
-[Design 恢复契约](../.trellis/spec/core/design-retry-budget.md)。
+[执行与重试策略](../../.trellis/spec/core/execution-retry-policy.md)与
+[Design 恢复契约](../../.trellis/spec/core/design-retry-budget.md)。
 
 下表是已经进入 Task delivery runtime 的四个岗位，即 `AgentRole`。组织长期成员可声明的
 `TeamRole` 还包含 `manager/product/designer/planner`；这些上游岗位不能被
@@ -89,7 +89,7 @@ Assignment 或 Lease。正式 wire contracts 位于 `schemas/project-*.schema.js
 
 ## Organization Workforce 契约
 
-T018 的 [`schemas/workforce.schema.json`](../schemas/workforce.schema.json) 定义八类组织级事实：
+T018 的 [`schemas/workforce.schema.json`](../../schemas/workforce.schema.json) 定义八类组织级事实：
 
 - `AgentProfile`：长期成员身份、能力、eligible roles、最大并行 Assignment 和默认 ModelPolicy；
 - `WorkItem`：Task 的优先级、风险、能力需求和 `WAITING_*` 调度状态；
@@ -124,7 +124,7 @@ TaskOrchestrator，不是团队成员本体。
 Queue 状态与 Task 状态正交：`READY/LEASED/RUNNING/WAITING_*/RETRY_SCHEDULED/CLOSED` 只表达
 资源调度；TaskOrchestrator 仍独占 delivery verdict。Lease 明文 owner token 只交给 Worker，数据库
 只保存 digest。关闭当前 WorkItem 与发布下一角色 WorkItem 是同一事务；完整 wire contract 见
-[`schemas/work-queue.schema.json`](../schemas/work-queue.schema.json)。
+[`schemas/work-queue.schema.json`](../../schemas/work-queue.schema.json)。
 
 ModelPolicy 必须覆盖 `low/normal/high/critical` 全部 RiskTier，且每个最低 BrainTier 都有 eligible
 route。ModelRouter 选择最小满足质量/风险约束的 route，并记录 reasons；模型升级依据测试失败、
@@ -187,7 +187,7 @@ Task.repository/source_revision 的单仓含义。子仓完成后必须验证完
 `joint-technical-design.schema.json`、`joint-execution-plan.schema.json`。
 Python 入口在 `multi_directory/models.py`、`service.py`，生产桥接在 `production.py`。
 完整签名、授权投影、路径/命令校验和恢复矩阵见
-[`多目录交付 code-spec`](../.trellis/spec/core/multi-directory-delivery.md)。
+[`多目录交付 code-spec`](../../.trellis/spec/core/multi-directory-delivery.md)。
 
 AgentProfile、ModelPolicy、全局 WorkQueue 和团队绩效位于组织 workspace。T020 的 RepositoryProfile
 只读发现语言、构建、VCS 和原生规范来源并记录 URI/hash；T021 的 `SpecCompiler` 对显式结构化
@@ -200,7 +200,7 @@ safety policy 不允许项目规范放宽。正式 wire contracts 是
 RepositoryProfile 的 `repository-profile.schema.json` 与 Python 枚举同时支持 `swift` 语言和构建系统。
 检测版本 `t020-v3` 只读识别 Swift marker，不执行 manifest。历史 profile/Task 不回写；新的独立验证
 计划可从精确候选补充受限 Swift 命令，必须重新精确批准。详见
-[Swift 验证契约](../.trellis/spec/core/swift-verification.md)。
+[Swift 验证契约](../../.trellis/spec/core/swift-verification.md)。
 
 ## 1.2 Agent Run 输入/输出契约
 
@@ -273,7 +273,7 @@ Coder 的写权限由 policy 限定，QA 只能写 `tests/**`，Reviewer 始终�
 artifact/state/verdict/report 路径以及 shell interpreter 都必须 fail closed。工具成功不等于
 QA PASS/Review APPROVE，所有结果必须由应用层显式交给 EvidenceStore 后才能进入交付链。
 
-Git role workspace 由 `GitWorkspace.create/inspect/remove` 管理。Coder 使用 attempt branch；QA/Reviewer detached 到 candidate SHA；dirty workspace 不允许清理。完整错误与 Git 执行安全契约见 [`docs/git-worktree.md`](git-worktree.md)。
+Git role workspace 由 `GitWorkspace.create/inspect/remove` 管理。Coder 使用 attempt branch；QA/Reviewer detached 到 candidate SHA；dirty workspace 不允许清理。完整错误与 Git 执行安全契约见 [`docs/architecture/git-worktree.md`](git-worktree.md)。
 
 ## 2. 共同输入信封
 
@@ -385,7 +385,7 @@ Git role workspace 由 `GitWorkspace.create/inspect/remove` 管理。Coder 使�
 | `qa-report` | status、criteria_results、tests_run、findings、evidence |
 | `review-report` | verdict、findings、checked_dimensions、evidence |
 
-详细机器契约见 [`schemas/`](../schemas/)。
+详细机器契约见 [`schemas/`](../../schemas)。
 
 ## 8. StateEvent 与持久化
 
@@ -795,7 +795,7 @@ exact paths 补入本次恢复的 read/write 权限。它不能引入 glob、目
 
 恢复事件仍完整记录，但其 CaseStartedEvent 使用 `included=false`，避免将同一需求恢复成功
 再计入一个新自主交付样本；原失败评估记录保留。恢复批准及 Task metadata 提供人工决策归属。
-完整签名、错误矩阵和限制见 [恢复规范](../.trellis/spec/core/delivery-recovery.md)。
+完整签名、错误矩阵和限制见 [恢复规范](../../.trellis/spec/core/delivery-recovery.md)。
 
 ## Spec Center 与持续学习契约
 
@@ -841,7 +841,7 @@ HTTP/请求编号占位；Responses API 未收到 HTTP 响应时明确标注该�
 限长、脱敏的诊断字段，不保存凭据、任意响应头或响应正文。诊断写入失败不能导致重跑模型。
 历史缺失数据不能补造；进程在请求未完成时中断也可能没有该请求的完成记录。本契约覆盖 Console
 中的结构化主/备用调用，不是所有 CLI 子进程的执行账本。详见
-[调用诊断与知识澄清规范](../.trellis/spec/core/product-failure-diagnostics.md)。
+[调用诊断与知识澄清规范](../../.trellis/spec/core/product-failure-diagnostics.md)。
 
 知识缺口查询返回 `KnowledgeGapView {gap, resolution?, is_current}`，不再返回 bare Gap 列表。
 Team snapshot 的可选 `RequestView.knowledge_gap` 使用同一投影（见 `team-snapshot.schema.json`）。

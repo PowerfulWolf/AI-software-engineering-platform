@@ -143,7 +143,7 @@ have an empty exemption list. Admission replay never adds later artifacts.
 First gap recovery preserves exact source revision. After that exact recovery is durable,
 `KnowledgeResume.previous_resume_sha256` links later candidates' reuse of Requirement facts to
 the first recovery, while retaining the new revision/run/context. A changed candidate with no
-initial exact recovery still fails closed. See `docs/planning-knowledge-operations.md` for human
+initial exact recovery still fails closed. See `docs/operations/planning-and-knowledge.md` for human
 resolution API, existing data handling and rollback.
 
 ## Persistent queue wait boundary
@@ -186,7 +186,7 @@ Production `ase request`/Console uses a real per-role Worker claim before Delive
 `QueueKnowledgeWaitPort`. A route persisted before the wait can be replayed by its next active owner;
 an already committed wait resumes only after its stored Resolution is validated. Requirement
 WAITING_HUMAN remains separate from Task checkpoint and queue scheduling status. No historical
-approvals, Task events or knowledge records are rewritten; see `docs/t046-worker-operations.md`.
+approvals, Task events or knowledge records are rewritten; see `docs/operations/worker-operations.md`.
 
 ## Upstream stage workflow gates
 

@@ -42,7 +42,7 @@
 只能证明进程失败，确认额度原因还需要相应 provider 证据。
 
 恢复契约见 [delivery-recovery.md](../../.trellis/spec/core/delivery-recovery.md)，
-常规启动与操作见 [production-setup.md](../production-setup.md)。
+常规启动与操作见 [production-setup.md](../operations/production-setup.md)。
 
 ## 子仓库完成而需求仍显示“实现”
 

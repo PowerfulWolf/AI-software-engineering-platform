@@ -2,7 +2,7 @@
 
 ## 1. Scope / Trigger
 
-本规范适用于所有 Agent request/response、JSON artifact、权限 policy 和跨角色路由。新增或修改任何字段、角色、权限、finding 或 verdict 时，必须同步更新 `schemas/`、`docs/contracts.md` 和 contract fixtures。
+本规范适用于所有 Agent request/response、JSON artifact、权限 policy 和跨角色路由。新增或修改任何字段、角色、权限、finding 或 verdict 时，必须同步更新 `schemas/`、`docs/architecture/contracts.md` 和 contract fixtures。
 
 ## 2. Signatures
 
@@ -79,7 +79,7 @@ Task constraint 冲突，必须产生 `SPEC_CONFLICT` 并使 WorkItem 进入 `WA
 Artifact 通过 `schemas/artifact.schema.json` 的共同 envelope 传递；业务内容分别由 `plan.schema.json`、
 `coder-progress.schema.json`、`implementation-report.schema.json`、`qa-report.schema.json`、
 `review-report.schema.json` 约束；Coder 的二选一输出入口为 `coder-output.schema.json`。Schema 变化
-必须同步更新 `docs/contracts.md`、`AGENTS.md` 和 contract fixtures。
+必须同步更新 `docs/architecture/contracts.md`、`AGENTS.md` 和 contract fixtures。
 
 Team/Project 开发规范由 `spec-document.schema.json` 与 `spec-activation.schema.json` 约束：文档版本
 不可变，创建与启用分离，activation 同一 `spec_key` 至多选择一个 exact 版本。持续学习事实由

@@ -1,6 +1,6 @@
 # Runtime 配置与任务执行
 
-> 日常使用请从 [`production-setup.md`](production-setup.md) 的 Web Console 或 `ase request ...` 开始。
+> 日常使用请从 [`production-setup.md`](../operations/production-setup.md) 的 Web Console 或 `ase request ...` 开始。
 > Production Team Host 自动使用 MySQL、Team Workforce、Project/Repository sidecar、模型路由和隔离 worktree，不需要手工构造
 > 本文的 RuntimeConfig。本文描述的是可独立调试的低层 Task Runtime。
 
@@ -10,7 +10,7 @@ artifact；真实模型凭据只从进程环境读取。
 
 ## 最小配置
 
-配置文件必须符合 [`schemas/runtime-config.schema.json`](../schemas/runtime-config.schema.json)。
+配置文件必须符合 [`schemas/runtime-config.schema.json`](../../schemas/runtime-config.schema.json)。
 `endpoint` 是 OpenAI-compatible Chat Completions endpoint，`model` 是默认模型名：
 
 ```json

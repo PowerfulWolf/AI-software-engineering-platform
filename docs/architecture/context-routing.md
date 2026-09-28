@@ -42,7 +42,7 @@ SHA-256；相同 identity 的重复登记返回首次观察值，不同内容复
 
 `ContextSource` 必须且只能提供一个 `content: str` 或 `relative_path: str`；`roles=()` 表示所有角色，否则只匹配声明的 `AgentRole`。`priority=0` 保留给机器 policy，外部来源必须使用正数优先级。
 
-`ContextBundle.to_wire()` 是 Agent adapter 的唯一输入 manifest，包含：`context_id`、`task_id`、`role`、`attempt`、精确 `source_revision`、带 `content/uri/sha256/tokens/priority/truncated` 的 `sections`、安全的 `redactions`、`budget` 和 UTC `built_at`。正式跨语言契约为 [`schemas/context.schema.json`](../schemas/context.schema.json)。
+`ContextBundle.to_wire()` 是 Agent adapter 的唯一输入 manifest，包含：`context_id`、`task_id`、`role`、`attempt`、精确 `source_revision`、带 `content/uri/sha256/tokens/priority/truncated` 的 `sections`、安全的 `redactions`、`budget` 和 UTC `built_at`。正式跨语言契约为 [`schemas/context.schema.json`](../../schemas/context.schema.json)。
 
 ## 3. 来源层次与路由
 
