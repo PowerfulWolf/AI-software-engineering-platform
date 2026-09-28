@@ -865,6 +865,8 @@ function recoveryApprovalBox(request, approval) {
           expected_checkpoint_sha256: request.checkpoint_sha256,
           ...(approval.kind === "coder_scope"
             ? { approved_scope_sha256: approval.plan_sha256 }
+            : approval.kind === "prerequisite_repair"
+              ? { approved_repair_sha256: approval.plan_sha256 }
             : { approved_plan_sha256: approval.plan_sha256 }),
         }),
       "primary",
@@ -3234,7 +3236,7 @@ function renderKnowledge(content) {
         ? "跨 Project 共享的团队知识，不作为强制工程规则。"
         : "帮助团队理解当前 Project 的业务与技术背景，不作为强制工程规则。",
     specs: "新需求必须遵守的工程规则；验证方式可在明确后补充。",
-    learning: "从 QA 失败和 Review 拒绝中提炼，经人工批准后再沉淀。",
+    learning: "从开发发现、独立验证和人工澄清中积累，经确认后供后续需求复用。",
   };
   const workspace = el("div", undefined, "knowledge-workspace");
   const ownership = el("aside", undefined, "knowledge-navigation");
@@ -4107,7 +4109,7 @@ function renderLearning(content) {
   top.append(
     el("h2", "当前 Project · 学习建议"),
     button(
-      "扫描 QA / Review 失败",
+      "收集项目发现与失败经验",
       async () => {
         const ownerProjectId = currentProjectId();
         try {
@@ -4139,12 +4141,12 @@ function renderLearning(content) {
     top,
     el(
       "p",
-      "建议来自已持久化的 QA FAIL / Review REJECT Artifact。批准后才会形成新知识、Spec 版本或 Skill 设计稿。",
+      "建议来自有证据的角色报告或人工确认。保存为背景知识后供后续需求检索，已冻结的需求不变；历史知识不能代替本次独立验收。Skill 设计稿不会自动安装或扩权。",
       "muted",
     ),
   );
   if (!learningProposals.length) {
-    content.append(el("div", "尚无学习建议，可先扫描已有失败证据。", "empty"));
+    content.append(el("div", "尚无学习建议，可收集角色报告中的项目发现与失败经验。", "empty"));
     return;
   }
   for (const view of learningProposals) {
@@ -4169,19 +4171,33 @@ function renderLearning(content) {
       el("p", `建议 · ${proposal.proposed_improvement}`, "muted"),
       el(
         "p",
-        `重复出现 ${proposal.occurrence_count} 次 · 来源 ${label(proposal.trigger)}`,
+        `重复出现 ${proposal.occurrence_count} 次 · 来源 ${learningTriggerLabel(proposal.trigger)}`,
         "muted",
       ),
       el("p", `验证 · ${proposal.verification}`, "muted"),
     );
-    for (const evidence of proposal.evidence)
+    card.append(el("p", `作用域 · 当前 Project ${proposal.project_id}`, "muted"));
+    for (const evidence of proposal.evidence) {
       card.append(
         el(
           "p",
-          `${evidence.repository_id} / ${evidence.task_id} / ${evidence.artifact_id}`,
+          evidence.resolution_id
+            ? `需求 ${evidence.requirement_id} / 知识缺口 ${evidence.gap_id} / 确认 ${evidence.resolution_id}`
+            : `${evidence.repository_id} / ${evidence.task_id} / ${evidence.artifact_id}`,
           "paths",
         ),
       );
+      if (evidence.observation_id) {
+        card.append(
+          el("p", `发现 ${evidence.observation_id} · ${label(evidence.role)} · 候选 ${evidence.source_revision}`, "paths"),
+          el("p", `适用范围 · ${evidence.applicability}`, "muted"),
+        );
+      }
+      if (evidence.artifact_sha256)
+        card.append(el("p", `来源摘要 · ${evidence.artifact_sha256}`, "paths"));
+      for (const uri of evidence.evidence_uris || [])
+        card.append(el("p", uri, "paths"));
+    }
     if (!view.decision) {
       const actions = el("div", undefined, "learning-actions");
       const available = view.authorization
@@ -4194,8 +4210,8 @@ function renderLearning(content) {
             ],
           ]
         : [
-            ["SPEC", "批准为 Project Spec"],
             ["KNOWLEDGE", "保存为背景知识"],
+            ["SPEC", "批准为 Project Spec"],
             ["SKILL", "批准为 Skill 设计稿"],
           ];
       for (const [target, title] of available)
@@ -4224,6 +4240,15 @@ function renderLearning(content) {
     }
     content.append(card);
   }
+}
+
+function learningTriggerLabel(trigger) {
+  return {
+    QA_FAILURE: "QA 失败经验",
+    REVIEW_REJECTION: "Review 驳回经验",
+    KNOWLEDGE_RESOLUTION: "人工确认的知识",
+    PROJECT_OBSERVATION: "开发中的项目发现",
+  }[trigger] || label(trigger);
 }
 
 async function decideLearning(proposal, action, target) {

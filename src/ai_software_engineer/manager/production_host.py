@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.context import ContextSource
 from ai_software_engineer.domain.identity import ProjectId
+from ai_software_engineer.knowledge.gaps import KnowledgeGap, KnowledgeGapRaised
 from ai_software_engineer.knowledge_selection import (
     effective_project_knowledge_paths,
     effective_team_knowledge_paths,
@@ -174,7 +175,32 @@ class TeamHost:
         runtime = self._runtime(self._resolve_project_id(project_id, command.delivery_id))
         if str(command.delivery_id).startswith("delivery_multi_"):
             joint = runtime.requirements.status(command.delivery_id).checkpoint
-            pending: DeliveryResumeResult | None = None
+            if joint.stage is JointStage.BLOCKED and joint.integration is None:
+                if not isinstance(runtime.requirements.backend, ProductionJointBackend):
+                    raise ValueError("joint delivery backend cannot rebuild child runtime")
+                # A native result can outlive a crash before its parent observation.
+                # Synchronize that actual progress BEFORE binding a new approval to
+                # the parent digest. Never forward a child approval to integration.
+                for child in joint.children:
+                    if child.checkpoint.stage is DeliveryStage.DONE:
+                        continue
+                    _, child_entry = runtime.requirements.backend.delivery_runtime(
+                        joint, child.unit_id
+                    )
+                    if (
+                        child_entry.status(child.checkpoint.delivery_id).checkpoint
+                        != child.checkpoint
+                    ):
+                        synchronized = runtime.requirements.resume(
+                            ResumeProjectDelivery(
+                                delivery_id=command.delivery_id,
+                                submitted_at=command.submitted_at,
+                            )
+                        )
+                        joint = synchronized.checkpoint
+                        if joint.stage is not JointStage.BLOCKED or joint.integration is not None:
+                            return synchronized
+                        break
             if joint.stage is JointStage.BLOCKED and joint.integration is None:
                 for child in joint.children:
                     if child.checkpoint.stage not in {
@@ -190,37 +216,64 @@ class TeamHost:
                     child_backend, child_entry = runtime.requirements.backend.delivery_runtime(
                         joint, child.unit_id
                     )
-                    child_result = self._resume_controller(
-                        runtime,
-                        backend=child_backend,
-                        entry=child_entry,
-                    ).resume(
-                        command.model_copy(update={"delivery_id": child.checkpoint.delivery_id})
-                    )
-                    # The native recovery appends its own checkpoint, but the parent
-                    # Requirement still contains the last committed child observation.
-                    # Always let the joint service observe that native result and append a
-                    # successor parent checkpoint.  Returning the native result here leaves
-                    # the parent journal stale and makes the Console hide the real blocker.
+                    try:
+                        child_result = self._resume_controller(
+                            runtime,
+                            backend=child_backend,
+                            entry=child_entry,
+                        ).resume(
+                            command.model_copy(update={"delivery_id": child.checkpoint.delivery_id})
+                        )
+                    except KnowledgeGapRaised as error:
+                        # A successor is attached before its roles run. Hand its durable
+                        # wait back to Requirement coordination, never to generic failure.
+                        from ai_software_engineer.knowledge.administration import find_gap_records
+
+                        # The successor may have a newly approved preparation. Reopen
+                        # against its durable native checkpoint, not the old backend.
+                        _, resumed_entry = runtime.requirements.backend.delivery_runtime(
+                            joint, child.unit_id
+                        )
+                        attached = resumed_entry.status(child.checkpoint.delivery_id).checkpoint
+                        records = find_gap_records(
+                            runtime.project, command.delivery_id, error.gap.gap_id, read_only=True
+                        )
+                        if (
+                            error.gap.binding.task_id != attached.task_id
+                            or records.get("gaps", error.gap.gap_id, KnowledgeGap) != error.gap
+                        ):
+                            raise ValueError(
+                                "successor knowledge wait differs from durable Task"
+                            ) from error
+                        return runtime.requirements.resume(
+                            ResumeProjectDelivery(
+                                delivery_id=command.delivery_id, submitted_at=command.submitted_at
+                            )
+                        )
                     if child_result.outcome in {
                         DeliveryResumeOutcome.VERIFICATION_APPROVAL_REQUIRED,
                         DeliveryResumeOutcome.RECOVERY_APPROVAL_REQUIRED,
                         DeliveryResumeOutcome.SCOPE_APPROVAL_REQUIRED,
-                    }:
-                        pending = child_result
-                        break
+                        DeliveryResumeOutcome.REPAIR_APPROVAL_REQUIRED,
+                    } or (
+                        child_result.outcome is DeliveryResumeOutcome.WAITING_HUMAN
+                        and child_result.checkpoint == child.checkpoint
+                    ):
+                        # A proposal does not advance the native checkpoint. Appending
+                        # the parent here would immediately invalidate its exact binding
+                        # and cause an endless propose -> approve -> re-propose loop.
+                        return JointDeliveryResumeResult(
+                            checkpoint=joint,
+                            continuation=child_result,
+                        )
+                    # Actual native progress must be observed by the joint service
+                    # before another child is resumed or final acceptance is attempted.
+                    break
             elif (
                 command.approved_plan_sha256 is not None and joint.integration is None
             ) or command.approved_scope_sha256 is not None:
                 raise ValueError("joint delivery has no blocked child awaiting this approval")
-            result = runtime.requirements.resume(command)
-            if pending is not None:
-                return JointDeliveryResumeResult(
-                    checkpoint=result.checkpoint,
-                    integration_retry_proposal=result.integration_retry_proposal,
-                    continuation=pending,
-                )
-            return result
+            return runtime.requirements.resume(command)
         return self._resume_controller(runtime).resume(command)
 
     def _resume_controller(

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import timedelta
 from pathlib import Path
 
@@ -17,8 +19,11 @@ from ai_software_engineer.agents import (
     AgentResult,
     AgentRunStatus,
     StoredContextResolver,
+    StructuredModelResult,
 )
+from ai_software_engineer.agents.execution import ExecutionGuard
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
+from ai_software_engineer.context import FileContextStore
 from ai_software_engineer.domain import (
     AgentDefinition,
     AgentRole,
@@ -28,6 +33,9 @@ from ai_software_engineer.domain import (
     QaReportStatus,
     TaskStatus,
 )
+from ai_software_engineer.domain.artifact import Evidence, QaTestRun
+from ai_software_engineer.domain.enums import EvidenceType, QaTestStatus
+from ai_software_engineer.domain.retry_policy import ExecutionRetryPolicy, TransientRetryPolicy
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
     ReplyToProduct,
@@ -40,14 +48,15 @@ from ai_software_engineer.manager.delivery_checkpoint import (
     ProjectDeliveryCheckpoint,
 )
 from ai_software_engineer.manager.production_delivery import (
+    ConfiguredDeliveryRouteAdapterFactory,
     DeliveryRouteAdapterFactory,
 )
 from ai_software_engineer.manager.production_host import TeamHost
 from ai_software_engineer.multi_directory.models import JointDeliveryResult
 from ai_software_engineer.multi_directory.service import CreateRequirement
-from ai_software_engineer.orchestration import AgentRunFailed
+from ai_software_engineer.orchestration import AgentRunFailed, RetryResult
 from ai_software_engineer.recovery.entry import NativeRecoveryEntry, NativeRecoveryExecution
-from ai_software_engineer.recovery.models import RecoveryScope
+from ai_software_engineer.recovery.models import RecoveryRejected, RecoveryScope
 from ai_software_engineer.recovery.remediation import CandidateRemediationService
 from ai_software_engineer.recovery.resume import (
     DeliveryResumeController,
@@ -57,8 +66,13 @@ from ai_software_engineer.recovery.resume import (
 )
 from ai_software_engineer.recovery.seed import RecoverySeedService
 from ai_software_engineer.recovery.verification_native import NativeCandidateSourceReader
+from ai_software_engineer.recovery.verification_records import (
+    CandidateVerificationCompletion,
+    CandidateVerificationDisposition,
+)
 from ai_software_engineer.role_workspace import RoleWorktreeBinding
 from ai_software_engineer.store import MySqlTaskRepository
+from ai_software_engineer.swift_verification import SWIFT_VERIFICATION_COMMANDS
 from ai_software_engineer.team_view.reader import ProductionTeamReader
 from tests.e2e.test_joint_delivery import setup_host
 from tests.manager.test_production_backend import (
@@ -85,6 +99,23 @@ class _ResumeAdapter(AgentAdapter):
 
     def run(self, request: AgentRequest) -> AgentResult:
         self._owner.requests.append(request)
+        if request.role is AgentRole.REVIEWER and request.task_id == self._owner.source_task_id:
+            self._owner.reviewer_calls += 1
+            if self._owner.reviewer_calls <= self._owner.reviewer_interruptions:
+                return AgentResult(
+                    run_id=request.run_id,
+                    task_id=request.task_id,
+                    role=request.role,
+                    attempt=request.attempt,
+                    source_revision=request.source_revision,
+                    context_manifest_id=request.context_manifest_id,
+                    status=AgentRunStatus.FAILED,
+                    error=AgentFailure(
+                        code=AgentErrorCode.RATE_LIMITED,
+                        message="offline interrupted Reviewer",
+                        transient=True,
+                    ),
+                )
         if request.role is AgentRole.CODER and self._owner.source_task_id is None:
             self._owner.source_task_id = request.task_id
         continuation = request.task_id.startswith("task_continue_")
@@ -240,6 +271,7 @@ class _ResumeFactory(DeliveryRouteAdapterFactory):
         remediation_no_candidate: bool = False,
         continuation_qa_rejects: bool = False,
         continuation_coder_fails_after_feedback: bool = False,
+        reviewer_interruptions: int = 0,
     ) -> None:
         self.requests: list[AgentRequest] = []
         self.source_task_id: str | None = None
@@ -251,6 +283,8 @@ class _ResumeFactory(DeliveryRouteAdapterFactory):
         self.continuation_qa_rejects = continuation_qa_rejects
         self.continuation_coder_fails_after_feedback = continuation_coder_fails_after_feedback
         self.continuation_coder_calls = 0
+        self.reviewer_interruptions = reviewer_interruptions
+        self.reviewer_calls = 0
 
     def create(
         self,
@@ -264,6 +298,217 @@ class _ResumeFactory(DeliveryRouteAdapterFactory):
     ) -> AgentAdapter:
         del route, context_resolver, config, environment
         return _ResumeAdapter(self, definition, binding.worktree.path)
+
+
+@pytest.mark.mysql
+@pytest.mark.parametrize("expand_commands", [False, True])
+@pytest.mark.parametrize("interrupt_reviewer", [False, True])
+def test_joint_verification_approval_stays_current_and_completes_delivery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, expand_commands: bool, interrupt_reviewer: bool
+) -> None:
+    # This fixture verifies command-policy upgrades with scripted role adapters, not the host's
+    # real executor. Installing Xcode must not silently add a live capability to an offline test.
+    monkeypatch.setattr(
+        "ai_software_engineer.recovery.verification_entry.discover_swift_sandbox_capability",
+        lambda _: None,
+    )
+    config, environment, models, projects = setup_host(tmp_path)
+    config = config.model_copy(
+        update={
+            "live_model_execution": True,
+            "execution_retry_policy": ExecutionRetryPolicy(
+                qa=TransientRetryPolicy(max_transient_failures=1)
+            ),
+        }
+    )
+    routes = _ResumeFactory(
+        transient_qa_failures=1,
+        verification_fails=False,
+        reviewer_interruptions=2 if interrupt_reviewer else 0,
+    )
+    host = TeamHost(
+        config=config,
+        environment=environment,
+        structured_clients=models,
+        delivery_route_adapters=routes,
+    )
+    entry = host.requirement_entry()
+    created = entry.create(
+        CreateRequirement(
+            name="Verify the retained candidate", repository_roots=tuple(map(str, projects))
+        )
+    ).checkpoint
+    product = entry.reply(
+        ReplyToProduct(
+            delivery_id=created.delivery_id,
+            expected_checkpoint_sha256=created.checkpoint_sha256,
+            message="Update both greetings.",
+        )
+    ).checkpoint
+    blocked = entry.approve(
+        ApproveProductSpec(
+            delivery_id=product.delivery_id,
+            expected_checkpoint_sha256=product.checkpoint_sha256,
+            approval_reference="approve-product",
+        )
+    ).checkpoint
+    assert blocked.stage.value == "BLOCKED"
+    source = blocked.children[0].checkpoint
+    assert source.candidate_revision is not None
+    assert source.task_id is not None
+    with MySqlTaskRepository(environment["ASE_MYSQL_DSN"]) as repository:
+        original_task = repository.get(source.task_id)
+        original_events = repository.list_events(source.task_id)
+    calls_before = len(routes.requests)
+
+    proposed = host.resume_delivery(ResumeProjectDelivery(delivery_id=blocked.delivery_id))
+    assert isinstance(proposed, JointDeliveryResumeResult)
+    assert proposed.checkpoint == blocked
+    assert proposed.continuation.outcome is DeliveryResumeOutcome.VERIFICATION_APPROVAL_REQUIRED
+    plan_file = proposed.continuation.verification_plan_file
+    assert plan_file is not None
+    _, plan = host.verification_entry().open_plan(Path(plan_file))
+    assert plan.parent_checkpoint_sha256 == blocked.checkpoint_sha256
+
+    # Reopening, continuing without approval, and approving a wrong digest cannot
+    # churn the parent journal, invalidate the plan, or invoke a provider.
+    host = TeamHost(
+        config=config,
+        environment=environment,
+        structured_clients=models,
+        delivery_route_adapters=routes,
+    )
+    for command in (
+        ResumeProjectDelivery(delivery_id=blocked.delivery_id),
+        ResumeProjectDelivery(
+            delivery_id=blocked.delivery_id,
+            approved_plan_sha256="0" * 64,
+            approval_reference="wrong-plan",
+        ),
+    ):
+        repeated = host.resume_delivery(command)
+        assert repeated == proposed
+    assert len(routes.requests) == calls_before
+
+    if expand_commands:
+        from ai_software_engineer.recovery import verification_entry
+
+        historical_commands = verification_entry._verification_task_commands
+        monkeypatch.setattr(
+            verification_entry,
+            "_verification_task_commands",
+            lambda source, profile: tuple(
+                sorted(set(historical_commands(source, profile)) | set(SWIFT_VERIFICATION_COMMANDS))
+            ),
+        )
+        old_plan = plan
+        refreshed = host.resume_delivery(
+            ResumeProjectDelivery(
+                delivery_id=blocked.delivery_id,
+                approved_plan_sha256=old_plan.plan_sha256,
+                approval_reference="old-approval-cannot-expand-permissions",
+            )
+        )
+        assert isinstance(refreshed, JointDeliveryResumeResult)
+        assert refreshed.checkpoint == blocked
+        assert refreshed.continuation.verification_plan_file is not None
+        _, plan = host.verification_entry().open_plan(
+            Path(refreshed.continuation.verification_plan_file)
+        )
+        assert plan.plan_sha256 != old_plan.plan_sha256
+        assert plan.current_policy_sha256 != old_plan.current_policy_sha256
+        assert plan.inputs == old_plan.inputs
+        assert len(routes.requests) == calls_before
+        for definition in plan.definitions:
+            old_definition = next(d for d in old_plan.definitions if d.role == definition.role)
+            if definition.role in {AgentRole.QA, AgentRole.REVIEWER}:
+                assert set(SWIFT_VERIFICATION_COMMANDS) <= set(definition.permissions.commands)
+            else:
+                assert definition == old_definition
+
+    if interrupt_reviewer:
+        from ai_software_engineer.orchestration import AgentRunFailed
+
+        first_plan = plan
+        for index in range(2):
+            with pytest.raises(AgentRunFailed):
+                host.resume_delivery(
+                    ResumeProjectDelivery(
+                        delivery_id=blocked.delivery_id,
+                        approved_plan_sha256=plan.plan_sha256,
+                        approval_reference=f"approve-interrupted-reviewer-{index}",
+                    )
+                )
+            host = TeamHost(
+                config=config,
+                environment=environment,
+                structured_clients=models,
+                delivery_route_adapters=routes,
+            )
+            proposal = host.resume_delivery(ResumeProjectDelivery(delivery_id=blocked.delivery_id))
+            assert isinstance(proposal, JointDeliveryResumeResult)
+            assert proposal.checkpoint == blocked
+            assert proposal.continuation.verification_plan_file is not None
+            _, plan = host.verification_entry().open_plan(
+                Path(proposal.continuation.verification_plan_file)
+            )
+            assert plan.retained_qa is not None
+            assert plan.retained_qa.plan_sha256 == first_plan.plan_sha256
+            assert plan.inputs.accepted_qa is None
+        assert [r.role for r in routes.requests[calls_before:]] == [
+            AgentRole.QA,
+            AgentRole.REVIEWER,
+            AgentRole.REVIEWER,
+        ]
+
+    completed = host.resume_delivery(
+        ResumeProjectDelivery(
+            delivery_id=blocked.delivery_id,
+            approved_plan_sha256=plan.plan_sha256,
+            approval_reference="approve-exact-verification",
+        )
+    )
+    assert isinstance(completed, JointDeliveryResult)
+    assert completed.checkpoint.stage.value == "DONE"
+    assert completed.checkpoint.integration is not None
+    assert (
+        completed.checkpoint.children[0].checkpoint.candidate_revision == source.candidate_revision
+    )
+    assert [request.role for request in routes.requests[calls_before:]] == [
+        AgentRole.QA,
+        *([AgentRole.REVIEWER, AgentRole.REVIEWER] if interrupt_reviewer else []),
+        AgentRole.REVIEWER,
+        AgentRole.CODER,
+        AgentRole.QA,
+        AgentRole.REVIEWER,
+    ]
+    assert all(
+        request.task_id == source.task_id
+        for request in routes.requests[calls_before : calls_before + 2]
+    )
+    prepared = host.verification_entry().backend.prepare(source.repository_root).preparation
+    assert prepared is not None
+    contexts = FileContextStore(Path(prepared.repository_workspace_root) / "contexts")
+    context_requests = (
+        routes.requests[calls_before + 3 : calls_before + 4]
+        if interrupt_reviewer
+        else routes.requests[calls_before : calls_before + 2]
+    )
+    for request in context_requests:
+        context = contexts.get(request.context_manifest_id)
+        section = next(s for s in context.sections if s.uri == f"verification://{plan.plan_sha256}")
+        payload = json.loads(section.content)
+        assert payload["plan_sha256"] == plan.plan_sha256
+        assert payload["candidate_revision"] == plan.inputs.candidate_revision
+        assert payload["verification_commands"][request.role.value] == list(
+            next(d for d in plan.definitions if d.role == request.role).permissions.commands
+        )
+    with MySqlTaskRepository(environment["ASE_MYSQL_DSN"]) as repository:
+        assert repository.get(source.task_id) == original_task
+        assert repository.list_events(source.task_id) == original_events
+    count = len(routes.requests)
+    assert host.resume_delivery(ResumeProjectDelivery(delivery_id=blocked.delivery_id)) == completed
+    assert len(routes.requests) == count
 
 
 class _SeededInterruptedRecoveryAdapter(AgentAdapter):
@@ -382,6 +627,81 @@ class _OutOfScopeInterruptedFactory(DeliveryRouteAdapterFactory):
     ) -> AgentAdapter:
         del route, definition, context_resolver, config, environment
         return _OutOfScopeInterruptedAdapter(self, binding.worktree.path)
+
+
+class _KnowledgeFixtureAdapter(AgentAdapter):
+    """Keep the ordinary scripted roles, recording the QA check actually performed."""
+
+    def __init__(self, delegate: AgentAdapter, workspace: Path) -> None:
+        self.delegate, self.workspace = delegate, workspace
+
+    def run(self, request: AgentRequest) -> AgentResult:
+        result = self.delegate.run(request)
+        artifact = result.artifact
+        if not isinstance(artifact, QaReportArtifact):
+            return result
+        blob = _git_output("show", f"{request.source_revision}:hello.txt", cwd=self.workspace)
+        assert blob == "hello from the team"
+        evidence = Evidence(
+            evidence_id="ev_fixture_greeting",
+            type=EvidenceType.TEST,
+            uri=f"git:{request.source_revision}:hello.txt",
+            description="Offline fixture independently compared the candidate greeting.",
+            sha256=hashlib.sha256(blob.encode()).hexdigest(),
+        )
+        content = artifact.content.model_copy(
+            update={
+                "tests_run": (
+                    QaTestRun(
+                        command=f"git show {request.source_revision}:hello.txt",
+                        status=QaTestStatus.PASS,
+                        evidence_id=evidence.evidence_id,
+                    ),
+                ),
+                "criteria_results": tuple(
+                    item.model_copy(update={"evidence_ids": (evidence.evidence_id,)})
+                    for item in artifact.content.criteria_results
+                ),
+            }
+        )
+        return result.model_copy(
+            update={
+                "artifact": artifact.model_copy(
+                    update={"evidence": (evidence,), "content": content}
+                )
+            }
+        )
+
+
+class _KnowledgeFixtureFactory(ConfiguredDeliveryRouteAdapterFactory):
+    """Use real knowledge/queue composition with explicitly offline delivery tools."""
+
+    def __init__(self, delegate: DeliveryRouteAdapterFactory) -> None:
+        super().__init__()
+        self.delegate = delegate
+
+    def with_execution_guard(self, guard: ExecutionGuard) -> _KnowledgeFixtureFactory:
+        return self
+
+    def create(
+        self,
+        *,
+        route: ProviderRouteConfig,
+        definition: AgentDefinition,
+        binding: RoleWorktreeBinding,
+        context_resolver: StoredContextResolver,
+        config: ProductionConfig,
+        environment: Mapping[str, str],
+    ) -> AgentAdapter:
+        adapter = self.delegate.create(
+            route=route,
+            definition=definition,
+            binding=binding,
+            context_resolver=context_resolver,
+            config=config,
+            environment=environment,
+        )
+        return _KnowledgeFixtureAdapter(adapter, binding.worktree.path)
 
 
 def _append_equivalent_delivery_checkpoint(
@@ -659,11 +979,14 @@ def test_resume_requires_exact_scope_approval_before_capturing_omitted_files(
 
 
 @pytest.mark.mysql
-@pytest.mark.parametrize("complete_recovery", [False, True])
+@pytest.mark.parametrize(
+    ("complete_recovery", "knowledge_wait"), [(False, False), (True, False), (True, True)]
+)
 def test_joint_scope_recovery_targets_current_preparation_after_main_advances(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     complete_recovery: bool,
+    knowledge_wait: bool,
 ) -> None:
     config, environment, models, projects = setup_host(tmp_path)
     config = config.model_copy(update={"live_model_execution": True})
@@ -724,23 +1047,57 @@ def test_joint_scope_recovery_targets_current_preparation_after_main_advances(
     _, plan = host.recovery_entry().open_plan(Path(proposed.recovery_plan_file))
     assert plan.target_base_revision == current_head
 
-    def execute_interrupted(recovery: NativeRecoveryEntry, path: Path) -> NativeRecoveryExecution:
-        store, selected = recovery.open_plan(path)
-        delivery = recovery.execute(
-            path,
-            route_factory=(
-                _SeededCompleteRecoveryFactory
-                if complete_recovery
-                else _SeededInterruptedRecoveryFactory
-            ),
-        )
-        return NativeRecoveryExecution(
-            selected,
-            recovery._dispatch_for(store, selected),
-            delivery,
+    original_execute = NativeRecoveryEntry.execute
+    original_complete = models.complete
+    gap_enabled = knowledge_wait
+
+    def complete(**kwargs: object) -> StructuredModelResult:
+        payload = kwargs["input_payload"]
+        schema = kwargs["output_schema"]
+        assert isinstance(payload, Mapping) and isinstance(schema, Mapping)
+        bound = payload.get("binding", {})
+        if (
+            gap_enabled
+            and isinstance(bound, Mapping)
+            and str(bound.get("task_id", "")).startswith("task_recovery_")
+            and bound.get("role") == "qa"
+        ):
+            if schema["title"] == "KnowledgeIntent":
+                return StructuredModelResult(payload={"queries": ["独立验收前提"]}, duration_ms=0)
+            if schema["title"] == "KnowledgeAssessment":
+                return StructuredModelResult(
+                    payload={"status": "GAP", "gap_question": "请确认测试前提。"}, duration_ms=0
+                )
+        return original_complete(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(models, "complete", complete)
+    if knowledge_wait:
+        monkeypatch.setattr(
+            "ai_software_engineer.manager.production_backend.ConfiguredStructuredClientFactory.for_project",
+            lambda *args, **kwargs: models,
         )
 
-    monkeypatch.setattr(NativeRecoveryEntry, "resume_execution", execute_interrupted)
+    def execute_interrupted(
+        recovery: NativeRecoveryEntry,
+        path: Path,
+        *,
+        route_factory: Callable[[RecoverySeedService], DeliveryRouteAdapterFactory] | None = None,
+    ) -> RetryResult:
+        def factory(seed: RecoverySeedService) -> DeliveryRouteAdapterFactory:
+            delegate = (
+                _SeededCompleteRecoveryFactory(seed)
+                if complete_recovery
+                else _SeededInterruptedRecoveryFactory(seed)
+            )
+            return _KnowledgeFixtureFactory(delegate) if knowledge_wait else delegate
+
+        return original_execute(
+            recovery,
+            path,
+            route_factory=factory,
+        )
+
+    monkeypatch.setattr(NativeRecoveryEntry, "execute", execute_interrupted)
 
     if complete_recovery:
         # Reopen the host; only the second repository may run new delivery roles.
@@ -749,7 +1106,9 @@ def test_joint_scope_recovery_targets_current_preparation_after_main_advances(
             config=config,
             environment=environment,
             structured_clients=models,
-            delivery_route_adapters=remaining_routes,
+            delivery_route_adapters=_KnowledgeFixtureFactory(remaining_routes)
+            if knowledge_wait
+            else remaining_routes,
         )
 
     interrupted_recovery = host.resume_delivery(
@@ -759,9 +1118,62 @@ def test_joint_scope_recovery_targets_current_preparation_after_main_advances(
             approval_reference="approve-current-target-plan",
         )
     )
+    if knowledge_wait:
+        from ai_software_engineer.knowledge.administration import (
+            ApproveKnowledgeResolution,
+            approve_resolution,
+            list_gap_views,
+        )
+        from ai_software_engineer.knowledge.gaps import KnowledgeResolutionSource
+        from ai_software_engineer.knowledge.models import text_digest
+        from ai_software_engineer.team_workspace import TeamWorkspace
+
+        assert isinstance(interrupted_recovery, JointDeliveryResult)
+        waiting = interrupted_recovery.checkpoint
+        assert waiting.stage.value == "WAITING_HUMAN"
+        assert waiting.knowledge_gap_id is not None
+        native_wait = (
+            host.project_entry().status(blocked.children[0].checkpoint.delivery_id).checkpoint
+        )
+        assert native_wait.task_id == plan.new_task_id
+        assert native_wait.stage is DeliveryStage.DELIVERING
+        team = TeamWorkspace.initialize(
+            config.platform_root, team_id=config.team_id, name=config.team_name
+        )
+        project_workspace = team.project_registry().open(waiting.project_id)
+        assert any(
+            view.is_current for view in list_gap_views(project_workspace, waiting.delivery_id)
+        )
+        answer = "测试前提已确认, 仍需 QA 独立执行, 不提供或代替验收结论。"
+        approve_resolution(
+            project_workspace,
+            waiting.delivery_id,
+            ApproveKnowledgeResolution(
+                gap_id=waiting.knowledge_gap_id,
+                answer=answer,
+                sources=(
+                    KnowledgeResolutionSource(
+                        uri="human://fixture", content=answer, sha256=text_digest(answer)
+                    ),
+                ),
+                approval_reference="fixture-confirmed-prerequisite",
+            ),
+        )
+        gap_enabled = False
+        host = TeamHost(
+            config=config,
+            environment=environment,
+            structured_clients=models,
+            delivery_route_adapters=_KnowledgeFixtureFactory(remaining_routes),
+        )
+        interrupted_recovery = host.resume_delivery(
+            ResumeProjectDelivery(delivery_id=waiting.delivery_id)
+        )
     if complete_recovery:
         assert isinstance(interrupted_recovery, JointDeliveryResult)
-        assert interrupted_recovery.checkpoint.stage.value == "DONE"
+        assert interrupted_recovery.checkpoint.stage.value == "DONE", (
+            interrupted_recovery.checkpoint.to_wire()
+        )
         recovered = next(
             child.checkpoint
             for child in interrupted_recovery.checkpoint.children
@@ -772,18 +1184,23 @@ def test_joint_scope_recovery_targets_current_preparation_after_main_advances(
         assert recovered.task_id != blocked.children[0].checkpoint.task_id
         assert recovered.stage is DeliveryStage.DONE
         assert interrupted_recovery.checkpoint.integration is not None
-        assert [request.role for request in remaining_routes.requests] == [
+        assert [request.role for request in remaining_routes.requests] == (
+            [AgentRole.QA, AgentRole.REVIEWER] if knowledge_wait else []
+        ) + [
             AgentRole.CODER,
             AgentRole.QA,
             AgentRole.REVIEWER,
         ]
-        assert all(request.task_id != recovered.task_id for request in remaining_routes.requests)
+        assert all(
+            request.role is not AgentRole.CODER or request.task_id != recovered.task_id
+            for request in remaining_routes.requests
+        )
         assert len(models.calls) == 3
         assert (
             host.resume_delivery(ResumeProjectDelivery(delivery_id=blocked.delivery_id)).checkpoint
             == interrupted_recovery.checkpoint
         )
-        assert len(remaining_routes.requests) == 3
+        assert len(remaining_routes.requests) == (5 if knowledge_wait else 3)
         return
     assert isinstance(interrupted_recovery, JointDeliveryResult)
     assert interrupted_recovery.checkpoint == entry.status(blocked.delivery_id).checkpoint
@@ -816,6 +1233,9 @@ def test_resume_recovers_post_feedback_coder_workspace_before_old_candidate_veri
     _git("commit", "-m", "initial", cwd=project)
     config = ProductionConfig(
         platform_root=str(tmp_path / "platform"),
+        execution_retry_policy=ExecutionRetryPolicy(
+            qa=TransientRetryPolicy(max_transient_failures=3)
+        ),
         default_project_id="project_test",
         default_project_name="Test Project",
         live_model_execution=True,
@@ -893,6 +1313,9 @@ def test_resume_verifies_failed_candidate_and_delivers_remediation(
     _git("commit", "-m", "initial", cwd=project)
     config = ProductionConfig(
         platform_root=str(tmp_path / "platform"),
+        execution_retry_policy=ExecutionRetryPolicy(
+            qa=TransientRetryPolicy(max_transient_failures=3)
+        ),
         default_project_id="project_test",
         default_project_name="Test Project",
         live_model_execution=True,
@@ -1057,6 +1480,9 @@ def test_resume_accepts_verified_candidate_after_delivery_checkpoint_append(
     _git("commit", "-m", "initial", cwd=project)
     config = ProductionConfig(
         platform_root=str(tmp_path / "platform"),
+        execution_retry_policy=ExecutionRetryPolicy(
+            qa=TransientRetryPolicy(max_transient_failures=3)
+        ),
         default_project_id="project_test",
         default_project_name="Test Project",
         live_model_execution=True,
@@ -1113,6 +1539,7 @@ def test_resume_accepts_verified_candidate_after_delivery_checkpoint_append(
 def test_resume_recovers_admitted_coder_after_legacy_inconclusive_remediation(
     tmp_path: Path,
     mysql_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -1122,6 +1549,9 @@ def test_resume_recovers_admitted_coder_after_legacy_inconclusive_remediation(
     _git("commit", "-m", "initial", cwd=project)
     config = ProductionConfig(
         platform_root=str(tmp_path / "platform"),
+        execution_retry_policy=ExecutionRetryPolicy(
+            qa=TransientRetryPolicy(max_transient_failures=3)
+        ),
         default_project_id="project_test",
         default_project_name="Test Project",
         live_model_execution=True,
@@ -1181,11 +1611,26 @@ def test_resume_recovers_admitted_coder_after_legacy_inconclusive_remediation(
         )
     )
     backend = host.recovery_entry().backend
-    remediation = CandidateRemediationService(
+    remediation_service = CandidateRemediationService(
         backend=backend,
         config=config,
         environment=environment,
-    ).prepare(source=source, store=store, plan=plan, completion=completion)
+    )
+    with pytest.raises(RecoveryRejected, match="explicit prerequisite repair approval"):
+        remediation_service.prepare(source=source, store=store, plan=plan, completion=completion)
+    # Manufacture only the historical admission with the pre-fix disposition rule. The sealed
+    # inconclusive QA bytes remain unchanged; restore today's policy before exercising resume.
+    # This keeps legacy recovery coverage without a production flag that bypasses approval.
+    with monkeypatch.context() as legacy_policy:
+        legacy_policy.setattr(
+            CandidateVerificationCompletion,
+            "disposition",
+            property(lambda _: CandidateVerificationDisposition.REMEDIATE_CANDIDATE),
+        )
+        remediation = remediation_service.prepare(
+            source=source, store=store, plan=plan, completion=completion
+        )
+    assert completion.disposition is CandidateVerificationDisposition.RETRY_VERIFICATION
     entry.begin_continuation(
         remediation.dispatch,
         plan,

@@ -11,6 +11,15 @@ worktrees/<task-id>/
 └── reviewer-attempt-01/    # 从同一候选 commit 创建，只读
 ```
 
+普通交付的 QA/Reviewer 目录使用当前 `AgentRequest.attempt`，不能把后续候选复用到
+`attempt-01`。两角色按需独立创建/恢复，进程在只创建一个角色后中断也可继续；每次运行前
+重新校验 Task、角色、完整候选 SHA、Git 注册归属和 clean 状态。provider adapter 缓存与
+角色/工作区 attempt 绑定，不得只按角色缓存。Coder 延续仍保留自身 `attempt-01` 工作区；
+独立的 `VerificationReservation` 只验收一个候选，保留其现有 `attempt-01` 契约。
+存量其他 attempt 的 checkout 不迁移、不 checkout/reset、不覆盖；仅恢复本轮精确匹配的目录。
+旧版本遗留在 `attempt-01` 的其他候选作为历史现场保留，新轮次从批准候选创建新目录。
+本轮目录的 HEAD 漂移或 dirty 必须拒绝执行，不能通过删除重建掩盖。
+
 运行结束后保留 commit、diff 和关键日志；worktree 可按保留策略清理，但清理前必须确认 artifact 已持久化。
 
 `GitWorktreeManager(repository, worktree_root)` 在第一次创建前验证 repository 必须是 Git root，且 `worktree_root` 不能等于或位于 main checkout 内。每个 Task target 在创建前还会解析已有 symlink parents，解析结果必须仍位于 configured root 内。这样创建 worktree 本身不会让 main checkout 出现未跟踪目录，也不能通过预置 symlink 把 role worktree 引到根外。

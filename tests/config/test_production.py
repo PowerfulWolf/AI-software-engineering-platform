@@ -342,8 +342,13 @@ def test_agent_reference_requires_type_when_same_model_has_two_types(tmp_path: P
     with pytest.raises(ValidationError, match="ambiguous"):
         ProductionConfig.model_validate(payload)
 
-    for policy in payload["agent_model_routes"]:
-        policy["routes"][0]["route_kind"] = "responses"
+    policies = payload["agent_model_routes"]
+    assert isinstance(policies, list)
+    for policy in policies:
+        assert isinstance(policy, dict)
+        policy_routes = policy["routes"]
+        assert isinstance(policy_routes, list) and isinstance(policy_routes[0], dict)
+        policy_routes[0]["route_kind"] = "responses"
     config = ProductionConfig.model_validate(payload)
     assert all(config.routes_for(role)[0].kind.value == "responses" for role in TeamRole)
     schema = json.loads(

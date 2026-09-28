@@ -4,6 +4,18 @@ This context defines the shared language for auditable software delivery perform
 
 ## Language
 
+**Project Observation**:
+An evidence-backed, scoped discovery proposed during work for possible reuse by future requirements. It remains a proposal until separately accepted into Project Knowledge or a Spec; a passing delivery does not approve it automatically.
+_Avoid_: Verified knowledge, automatic policy, private Agent memory
+
+**Execution Prerequisite**:
+A tool, data, access or environment condition needed for a particular execution. An unmet prerequisite is coordinated by Manager and is not itself a defect in the candidate or a universal project rule.
+_Avoid_: Code defect, Project Knowledge, granted capability
+
+**Capability Proposal**:
+A proposed extension of the Team's permitted actions that requires evaluation, authorization and independent verification before use. Knowledge acquisition or installing a tool alone does not activate it.
+_Avoid_: Installed Skill, self-granted permission, learned fact
+
 **Team**:
 A long-lived AI software engineering unit that owns its Agents, model policies, capacity and reusable Team Knowledge while serving one or more Projects.
 _Avoid_: Company, tenant, code repository

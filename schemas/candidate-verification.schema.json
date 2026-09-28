@@ -57,39 +57,38 @@
           "default": null,
           "title": "Provider"
         },
-        "route_kind": {
-          "anyOf": [
-            {"enum": ["codex_cli", "responses"], "type": "string"},
-            {"type": "null"}
-          ],
-          "default": null,
-          "title": "Route Kind"
-        },
-        "connection_mode": {
-          "anyOf": [
-            {"enum": ["direct", "proxy"], "type": "string"},
-            {"type": "null"}
-          ],
-          "default": null,
-          "title": "Connection Mode"
-        },
         "reasoning_effort": {
           "anyOf": [
             {
-              "enum": [
-                "low",
-                "medium",
-                "high",
-                "xhigh"
-              ],
-              "type": "string"
+              "$ref": "#/$defs/ReasoningEffort"
             },
             {
               "type": "null"
             }
           ],
-          "default": null,
-          "title": "Reasoning Effort"
+          "default": null
+        },
+        "route_kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderRouteKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "connection_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodexConnectionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "system_prompt_ref": {
           "anyOf": [
@@ -442,6 +441,56 @@
       "title": "ArtifactKind",
       "type": "string"
     },
+    "CandidateExecutorPrerequisite": {
+      "additionalProperties": false,
+      "description": "A sealed executor observation, explicitly NOT a verification completion or verdict.",
+      "properties": {
+        "kind": {
+          "const": "candidate_executor_prerequisite",
+          "default": "candidate_executor_prerequisite",
+          "title": "Kind",
+          "type": "string"
+        },
+        "plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "source_task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Source Task Id",
+          "type": "string"
+        },
+        "candidate_revision": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Candidate Revision",
+          "type": "string"
+        },
+        "execution_failure": {
+          "$ref": "#/$defs/VerificationFailureReference"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "observation_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Observation Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan_sha256",
+        "source_task_id",
+        "candidate_revision",
+        "execution_failure",
+        "observed_at",
+        "observation_sha256"
+      ],
+      "title": "CandidateExecutorPrerequisite",
+      "type": "object"
+    },
     "CandidateVerificationCompletion": {
       "additionalProperties": false,
       "description": "Immutable verifier reports; never a replacement Task success event.",
@@ -736,6 +785,74 @@
           "title": "Definitions",
           "type": "array"
         },
+        "executor_capability": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SwiftSandboxCapability"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "native_ui": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativeUiCapability"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "prerequisite_incident_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prerequisite Incident Sha256"
+        },
+        "prior_visual_evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PriorVisualEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "retained_qa": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RetainedVerificationQa"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "manager_advice": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ManagerVerificationAdvice"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "created_at": {
           "format": "date-time",
           "title": "Created At",
@@ -759,6 +876,70 @@
         "plan_sha256"
       ],
       "title": "CandidateVerificationPlan",
+      "type": "object"
+    },
+    "CodexConnectionMode": {
+      "enum": [
+        "direct",
+        "proxy"
+      ],
+      "type": "string"
+    },
+    "CommandResult": {
+      "additionalProperties": false,
+      "description": "Bounded, serializable evidence returned by one command invocation.",
+      "properties": {
+        "argv": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Argv",
+          "type": "array"
+        },
+        "cwd": {
+          "minLength": 1,
+          "title": "Cwd",
+          "type": "string"
+        },
+        "returncode": {
+          "title": "Returncode",
+          "type": "integer"
+        },
+        "stdout": {
+          "title": "Stdout",
+          "type": "string"
+        },
+        "stderr": {
+          "title": "Stderr",
+          "type": "string"
+        },
+        "duration_ms": {
+          "minimum": 0,
+          "title": "Duration Ms",
+          "type": "integer"
+        },
+        "stdout_truncated": {
+          "default": false,
+          "title": "Stdout Truncated",
+          "type": "boolean"
+        },
+        "stderr_truncated": {
+          "default": false,
+          "title": "Stderr Truncated",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "argv",
+        "cwd",
+        "returncode",
+        "stdout",
+        "stderr",
+        "duration_ms"
+      ],
+      "title": "CommandResult",
       "type": "object"
     },
     "Evidence": {
@@ -954,6 +1135,934 @@
         }
       ]
     },
+    "KnowledgeResolution": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "knowledge_resolution",
+          "default": "knowledge_resolution",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "gap_id": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Gap Id",
+          "type": "string"
+        },
+        "previous_run_id": {
+          "minLength": 1,
+          "title": "Previous Run Id",
+          "type": "string"
+        },
+        "answer": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Answer",
+          "type": "string"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/KnowledgeResolutionSource"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Sources",
+          "type": "array"
+        },
+        "approval_reference": {
+          "minLength": 1,
+          "title": "Approval Reference",
+          "type": "string"
+        },
+        "approved_by": {
+          "minLength": 1,
+          "title": "Approved By",
+          "type": "string"
+        },
+        "disposition": {
+          "default": "REQUIREMENT_ONLY",
+          "enum": [
+            "REQUIREMENT_ONLY",
+            "PROPOSE_LEARNING"
+          ],
+          "title": "Disposition",
+          "type": "string"
+        },
+        "resolution_id": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Resolution Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "gap_id",
+        "previous_run_id",
+        "answer",
+        "sources",
+        "approval_reference",
+        "approved_by",
+        "resolution_id"
+      ],
+      "title": "KnowledgeResolution",
+      "type": "object"
+    },
+    "KnowledgeResolutionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "uri": {
+          "minLength": 1,
+          "title": "Uri",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "content": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Content",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri",
+        "sha256",
+        "content"
+      ],
+      "title": "KnowledgeResolutionSource",
+      "type": "object"
+    },
+    "ManagerIncident": {
+      "additionalProperties": false,
+      "description": "Safe evidence supplied to the Manager Leader recovery interface.",
+      "properties": {
+        "id": {
+          "pattern": "^manager_incident_[a-z0-9][a-z0-9_-]{2,95}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ManagerIncidentKind"
+        },
+        "summary": {
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        },
+        "delivery_id": {
+          "minLength": 1,
+          "title": "Delivery Id",
+          "type": "string"
+        },
+        "repository_root": {
+          "minLength": 1,
+          "title": "Repository Root",
+          "type": "string"
+        },
+        "recovery_attempt": {
+          "default": 0,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Recovery Attempt",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "summary",
+        "delivery_id",
+        "repository_root"
+      ],
+      "title": "ManagerIncident",
+      "type": "object"
+    },
+    "ManagerIncidentKind": {
+      "description": "Stable incident classes used for recovery policy.",
+      "enum": [
+        "ENVIRONMENT",
+        "WORKFLOW",
+        "PROVIDER",
+        "POLICY",
+        "PERMISSION",
+        "BUSINESS"
+      ],
+      "title": "ManagerIncidentKind",
+      "type": "string"
+    },
+    "ManagerRepairDisposition": {
+      "description": "Exclusive outcome returned to the Team Host.",
+      "enum": [
+        "RETRY_DELIVERY",
+        "REPAIR_TASK_SUBMITTED",
+        "WAITING_HUMAN"
+      ],
+      "title": "ManagerRepairDisposition",
+      "type": "string"
+    },
+    "ManagerRepairResult": {
+      "additionalProperties": false,
+      "description": "Auditable result of one Manager Leader recovery decision.",
+      "properties": {
+        "disposition": {
+          "$ref": "#/$defs/ManagerRepairDisposition"
+        },
+        "summary": {
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        },
+        "capability_id": {
+          "anyOf": [
+            {
+              "pattern": "^manager_capability_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Capability Id"
+        },
+        "evidence_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Evidence Sha256"
+        },
+        "repair_task_id": {
+          "anyOf": [
+            {
+              "pattern": "^task_[a-z0-9][a-z0-9_-]{2,95}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repair Task Id"
+        }
+      },
+      "required": [
+        "disposition",
+        "summary"
+      ],
+      "title": "ManagerRepairResult",
+      "type": "object"
+    },
+    "ManagerVerificationAdvice": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "manager_verification_advice",
+          "default": "manager_verification_advice",
+          "title": "Kind",
+          "type": "string"
+        },
+        "input_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Input Sha256",
+          "type": "string"
+        },
+        "scope_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Scope Sha256",
+          "type": "string"
+        },
+        "candidate_revision": {
+          "pattern": "^[a-f0-9]{40}$",
+          "title": "Candidate Revision",
+          "type": "string"
+        },
+        "qa_artifact_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Qa Artifact Id"
+        },
+        "qa_artifact_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Qa Artifact Sha256"
+        },
+        "manager_run_id": {
+          "minLength": 1,
+          "title": "Manager Run Id",
+          "type": "string"
+        },
+        "provider": {
+          "minLength": 1,
+          "title": "Provider",
+          "type": "string"
+        },
+        "model": {
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "draft": {
+          "$ref": "#/$defs/ManagerVerificationDraft"
+        },
+        "knowledge_resolutions": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/KnowledgeResolution"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Knowledge Resolutions"
+        },
+        "execution_failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VerificationFailureReference"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "environment_prerequisite": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativeUiSessionPrerequisite"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "advice_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Advice Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "input_sha256",
+        "scope_sha256",
+        "candidate_revision",
+        "manager_run_id",
+        "provider",
+        "model",
+        "draft",
+        "advice_sha256"
+      ],
+      "title": "ManagerVerificationAdvice",
+      "type": "object"
+    },
+    "ManagerVerificationDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "disposition": {
+          "enum": [
+            "PROPOSE_UI",
+            "PROPOSE_REPAIR",
+            "WAITING_HUMAN"
+          ],
+          "title": "Disposition",
+          "type": "string"
+        },
+        "summary": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        },
+        "next_action": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Next Action",
+          "type": "string"
+        },
+        "native_ui_scenario": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativeUiScenario"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "PROPOSE_UI requires a scenario awaiting exact human approval; WAITING_HUMAN requires null because no executable plan can yet be proposed."
+        },
+        "criteria": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/VerificationCriterionPlan"
+          },
+          "title": "Criteria",
+          "type": "array"
+        },
+        "prerequisite_repair": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PrerequisiteRepairRequest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "disposition",
+        "summary",
+        "next_action"
+      ],
+      "title": "ManagerVerificationDraft",
+      "type": "object"
+    },
+    "NativeUiCapability": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "macos_mock_ax_v1",
+          "default": "macos_mock_ax_v1",
+          "title": "Kind",
+          "type": "string"
+        },
+        "driver_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Driver Sha256",
+          "type": "string"
+        },
+        "policy_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Policy Sha256",
+          "type": "string"
+        },
+        "denied_user_root": {
+          "minLength": 1,
+          "title": "Denied User Root",
+          "type": "string"
+        },
+        "scenario": {
+          "$ref": "#/$defs/NativeUiScenario"
+        }
+      },
+      "required": [
+        "driver_sha256",
+        "policy_sha256",
+        "denied_user_root",
+        "scenario"
+      ],
+      "title": "NativeUiCapability",
+      "type": "object"
+    },
+    "NativeUiCapture": {
+      "additionalProperties": false,
+      "properties": {
+        "window_id": {
+          "exclusiveMinimum": 0,
+          "title": "Window Id",
+          "type": "integer"
+        },
+        "image": {
+          "$ref": "#/$defs/PngEvidence"
+        }
+      },
+      "required": [
+        "window_id",
+        "image"
+      ],
+      "title": "NativeUiCapture",
+      "type": "object"
+    },
+    "NativeUiDiagnostics": {
+      "additionalProperties": false,
+      "properties": {
+        "session_status": {
+          "anyOf": [
+            {
+              "enum": [
+                "READY",
+                "SESSION_LOCKED",
+                "SESSION_UNAVAILABLE"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Session Status"
+        },
+        "ax_trusted": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ax Trusted"
+        },
+        "native_window_count": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Native Window Count"
+        },
+        "ax_status": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ax Status"
+        },
+        "ax_window_count": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ax Window Count"
+        },
+        "launch_argv": {
+          "anyOf": [
+            {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Launch Argv"
+        },
+        "process_running": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Process Running"
+        },
+        "process_returncode": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Process Returncode"
+        }
+      },
+      "title": "NativeUiDiagnostics",
+      "type": "object"
+    },
+    "NativeUiNode": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "attributes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Attributes",
+          "type": "object"
+        }
+      },
+      "required": [
+        "path",
+        "attributes"
+      ],
+      "title": "NativeUiNode",
+      "type": "object"
+    },
+    "NativeUiOutput": {
+      "additionalProperties": false,
+      "properties": {
+        "pid": {
+          "exclusiveMinimum": 1,
+          "title": "Pid",
+          "type": "integer"
+        },
+        "action": {
+          "enum": [
+            "snapshot",
+            "press",
+            "scroll"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "nodes": {
+          "items": {
+            "$ref": "#/$defs/NativeUiNode"
+          },
+          "maxItems": 1000,
+          "title": "Nodes",
+          "type": "array"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error"
+        },
+        "diagnostic": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Diagnostic"
+        },
+        "diagnostics": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativeUiDiagnostics"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "capture": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativeUiCapture"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "pid",
+        "action",
+        "nodes"
+      ],
+      "title": "NativeUiOutput",
+      "type": "object"
+    },
+    "NativeUiResult": {
+      "additionalProperties": false,
+      "properties": {
+        "step": {
+          "$ref": "#/$defs/NativeUiStep"
+        },
+        "output": {
+          "$ref": "#/$defs/NativeUiOutput"
+        }
+      },
+      "required": [
+        "step",
+        "output"
+      ],
+      "title": "NativeUiResult",
+      "type": "object"
+    },
+    "NativeUiScenario": {
+      "additionalProperties": false,
+      "properties": {
+        "product": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,79}$",
+          "title": "Product",
+          "type": "string"
+        },
+        "mock_argument": {
+          "pattern": "^--mock-[a-z][a-z0-9-]{0,70}$",
+          "title": "Mock Argument",
+          "type": "string"
+        },
+        "window_title": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Window Title",
+          "type": "string"
+        },
+        "steps": {
+          "items": {
+            "$ref": "#/$defs/NativeUiStep"
+          },
+          "maxItems": 40,
+          "minItems": 1,
+          "title": "Steps",
+          "type": "array"
+        }
+      },
+      "required": [
+        "product",
+        "mock_argument",
+        "window_title",
+        "steps"
+      ],
+      "title": "NativeUiScenario",
+      "type": "object"
+    },
+    "NativeUiSession": {
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "READY",
+            "SESSION_LOCKED",
+            "SESSION_UNAVAILABLE"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "NativeUiSession",
+      "type": "object"
+    },
+    "NativeUiSessionPrerequisite": {
+      "additionalProperties": false,
+      "description": "Historical desktop failure plus a fresh observation, never an execution grant.",
+      "properties": {
+        "kind": {
+          "const": "macos_console_session",
+          "default": "macos_console_session",
+          "title": "Kind",
+          "type": "string"
+        },
+        "observed_status": {
+          "enum": [
+            "SESSION_LOCKED",
+            "SESSION_UNAVAILABLE"
+          ],
+          "title": "Observed Status",
+          "type": "string"
+        },
+        "current_session": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativeUiSession"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "owner": {
+          "const": "logged_in_user",
+          "default": "logged_in_user",
+          "title": "Owner",
+          "type": "string"
+        },
+        "is_execution_mutex": {
+          "const": false,
+          "default": false,
+          "title": "Is Execution Mutex",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "observed_status"
+      ],
+      "title": "NativeUiSessionPrerequisite",
+      "type": "object"
+    },
+    "NativeUiStep": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "action": {
+          "default": "snapshot",
+          "enum": [
+            "snapshot",
+            "press",
+            "scroll"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "enum": [
+                "AXButton",
+                "AXCheckBox",
+                "AXLink"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Role"
+        },
+        "attribute": {
+          "anyOf": [
+            {
+              "enum": [
+                "AXTitle",
+                "AXDescription",
+                "AXIdentifier"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Attribute"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        },
+        "index": {
+          "default": 0,
+          "maximum": 20,
+          "minimum": 0,
+          "title": "Index",
+          "type": "integer"
+        },
+        "capture_window": {
+          "anyOf": [
+            {
+              "const": true,
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Capture Window"
+        },
+        "scroll_position": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scroll Position"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "NativeUiStep",
+      "type": "object"
+    },
     "NetworkAccess": {
       "enum": [
         "none",
@@ -961,6 +2070,318 @@
         "allowlist"
       ],
       "title": "NetworkAccess",
+      "type": "string"
+    },
+    "PngEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "media_type": {
+          "const": "image/png",
+          "default": "image/png",
+          "title": "Media Type",
+          "type": "string"
+        },
+        "data_base64": {
+          "maxLength": 540000,
+          "minLength": 1,
+          "title": "Data Base64",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "width": {
+          "exclusiveMinimum": 0,
+          "maximum": 1800,
+          "title": "Width",
+          "type": "integer"
+        },
+        "height": {
+          "exclusiveMinimum": 0,
+          "maximum": 1800,
+          "title": "Height",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "data_base64",
+        "sha256",
+        "width",
+        "height"
+      ],
+      "title": "PngEvidence",
+      "type": "object"
+    },
+    "PrerequisiteRepairPlan": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "prerequisite_repair_plan",
+          "default": "prerequisite_repair_plan",
+          "title": "Kind",
+          "type": "string"
+        },
+        "repository_root": {
+          "minLength": 1,
+          "title": "Repository Root",
+          "type": "string"
+        },
+        "delivery_id": {
+          "minLength": 1,
+          "title": "Delivery Id",
+          "type": "string"
+        },
+        "source_task_id": {
+          "minLength": 1,
+          "title": "Source Task Id",
+          "type": "string"
+        },
+        "source_plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Source Plan Sha256",
+          "type": "string"
+        },
+        "completion_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completion Sha256"
+        },
+        "incident_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Incident Sha256"
+        },
+        "executor_prerequisite_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Executor Prerequisite Sha256"
+        },
+        "manager_advice_input_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Manager Advice Input Sha256"
+        },
+        "native_checkpoint_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Native Checkpoint Sha256",
+          "type": "string"
+        },
+        "candidate_revision": {
+          "pattern": "^[a-f0-9]{40}$",
+          "title": "Candidate Revision",
+          "type": "string"
+        },
+        "target_base_revision": {
+          "pattern": "^[a-f0-9]{40}$",
+          "title": "Target Base Revision",
+          "type": "string"
+        },
+        "target_preparation_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Target Preparation Sha256",
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/PrerequisiteRepairRequest"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "repository_root",
+        "delivery_id",
+        "source_task_id",
+        "source_plan_sha256",
+        "native_checkpoint_sha256",
+        "candidate_revision",
+        "target_base_revision",
+        "target_preparation_sha256",
+        "request",
+        "created_at",
+        "plan_sha256"
+      ],
+      "title": "PrerequisiteRepairPlan",
+      "type": "object",
+      "oneOf": [
+        {
+          "required": [
+            "completion_sha256",
+            "incident_sha256"
+          ],
+          "properties": {
+            "completion_sha256": {
+              "type": "string"
+            },
+            "incident_sha256": {
+              "type": "string"
+            },
+            "executor_prerequisite_sha256": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "required": [
+            "executor_prerequisite_sha256"
+          ],
+          "properties": {
+            "executor_prerequisite_sha256": {
+              "type": "string"
+            },
+            "completion_sha256": {
+              "type": "null"
+            },
+            "incident_sha256": {
+              "type": "null"
+            }
+          }
+        }
+      ]
+    },
+    "PrerequisiteRepairRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "objective": {
+          "maxLength": 8000,
+          "minLength": 10,
+          "title": "Objective",
+          "type": "string"
+        },
+        "write_paths": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Write Paths",
+          "type": "array"
+        }
+      },
+      "required": [
+        "objective",
+        "write_paths"
+      ],
+      "title": "PrerequisiteRepairRequest",
+      "type": "object"
+    },
+    "PriorVisualEvidence": {
+      "additionalProperties": false,
+      "description": "Exact QA receipt of the prerequisite completion, not ambient history access.",
+      "properties": {
+        "plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "record_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Record Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan_sha256",
+        "record_sha256"
+      ],
+      "title": "PriorVisualEvidence",
+      "type": "object"
+    },
+    "ProjectObservation": {
+      "additionalProperties": false,
+      "description": "A scoped discovery proposal, never a verdict or executable policy.",
+      "properties": {
+        "observation_id": {
+          "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+          "title": "Observation Id",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "fact": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Fact",
+          "type": "string"
+        },
+        "applicability": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Applicability",
+          "type": "string"
+        },
+        "evidence_ids": {
+          "items": {
+            "pattern": "^ev_[a-z0-9][a-z0-9_-]{2,63}$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Evidence Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "observation_id",
+        "title",
+        "fact",
+        "applicability",
+        "evidence_ids"
+      ],
+      "title": "ProjectObservation",
+      "type": "object"
+    },
+    "ProviderRouteKind": {
+      "enum": [
+        "codex_cli",
+        "responses"
+      ],
       "type": "string"
     },
     "QaCriterionResult": {
@@ -1108,6 +2529,15 @@
     "QaReportContent": {
       "additionalProperties": false,
       "properties": {
+        "project_observations": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ProjectObservation"
+          },
+          "maxItems": 8,
+          "title": "Project Observations",
+          "type": "array"
+        },
         "status": {
           "$ref": "#/$defs/QaReportStatus"
         },
@@ -1213,6 +2643,15 @@
       "title": "QaTestStatus",
       "type": "string"
     },
+    "ReasoningEffort": {
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "type": "string"
+    },
     "RecoveryApprovalCommand": {
       "additionalProperties": false,
       "properties": {
@@ -1315,6 +2754,45 @@
       "title": "RecoveryScope",
       "type": "object"
     },
+    "RetainedVerificationQa": {
+      "additionalProperties": false,
+      "description": "Admitted, sealed standalone QA before an interrupted Reviewer completed.",
+      "properties": {
+        "plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "qa_invocation_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Qa Invocation Sha256",
+          "type": "string"
+        },
+        "reviewer_invocation_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reviewer Invocation Sha256"
+        },
+        "qa": {
+          "$ref": "#/$defs/QaReportArtifact"
+        }
+      },
+      "required": [
+        "plan_sha256",
+        "qa_invocation_sha256",
+        "qa"
+      ],
+      "title": "RetainedVerificationQa",
+      "type": "object"
+    },
     "ReviewDimension": {
       "enum": [
         "correctness",
@@ -1323,7 +2801,7 @@
         "security",
         "maintainability",
         "performance",
-        "\u5951\u7ea6\u4e00\u81f4\u6027"
+        "契约一致性"
       ],
       "title": "ReviewDimension",
       "type": "string"
@@ -1424,6 +2902,15 @@
     "ReviewReportContent": {
       "additionalProperties": false,
       "properties": {
+        "project_observations": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ProjectObservation"
+          },
+          "maxItems": 8,
+          "title": "Project Observations",
+          "type": "array"
+        },
         "verdict": {
           "$ref": "#/$defs/ReviewVerdict"
         },
@@ -1480,6 +2967,316 @@
       "title": "ReviewVerdict",
       "type": "string"
     },
+    "SwiftSandboxCapability": {
+      "additionalProperties": false,
+      "description": "A proposal, not authority: its exact containing plan still needs approval.",
+      "properties": {
+        "kind": {
+          "const": "codex_sandbox_swiftpm_v1",
+          "default": "codex_sandbox_swiftpm_v1",
+          "title": "Kind",
+          "type": "string"
+        },
+        "sandbox_executable": {
+          "minLength": 1,
+          "title": "Sandbox Executable",
+          "type": "string"
+        },
+        "sandbox_executable_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sandbox Executable Sha256",
+          "type": "string"
+        },
+        "developer_directory": {
+          "minLength": 1,
+          "title": "Developer Directory",
+          "type": "string"
+        },
+        "swift_version": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Swift Version",
+          "type": "string"
+        },
+        "build_system": {
+          "const": "native",
+          "default": "native",
+          "title": "Build System",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sandbox_executable",
+        "sandbox_executable_sha256",
+        "developer_directory",
+        "swift_version"
+      ],
+      "title": "SwiftSandboxCapability",
+      "type": "object"
+    },
+    "VerificationCriterionPlan": {
+      "additionalProperties": false,
+      "properties": {
+        "criterion_id": {
+          "minLength": 1,
+          "title": "Criterion Id",
+          "type": "string"
+        },
+        "step_names": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Step Names",
+          "type": "array"
+        },
+        "expected_observation": {
+          "minLength": 1,
+          "title": "Expected Observation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "criterion_id",
+        "step_names",
+        "expected_observation"
+      ],
+      "title": "VerificationCriterionPlan",
+      "type": "object"
+    },
+    "VerificationEnvironmentIncident": {
+      "additionalProperties": false,
+      "description": "Durable Manager decision bound to an inconclusive independent QA completion.",
+      "properties": {
+        "kind": {
+          "const": "verification_environment_incident",
+          "default": "verification_environment_incident",
+          "title": "Kind",
+          "type": "string"
+        },
+        "source_plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Source Plan Sha256",
+          "type": "string"
+        },
+        "completion_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Completion Sha256",
+          "type": "string"
+        },
+        "candidate_revision": {
+          "pattern": "^[a-f0-9]{40,64}$",
+          "title": "Candidate Revision",
+          "type": "string"
+        },
+        "qa_artifact_id": {
+          "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Qa Artifact Id",
+          "type": "string"
+        },
+        "not_tested": {
+          "minimum": 0,
+          "title": "Not Tested",
+          "type": "integer"
+        },
+        "errors": {
+          "minimum": 0,
+          "title": "Errors",
+          "type": "integer"
+        },
+        "incident": {
+          "$ref": "#/$defs/ManagerIncident"
+        },
+        "decision": {
+          "$ref": "#/$defs/ManagerRepairResult"
+        },
+        "incident_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Incident Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_plan_sha256",
+        "completion_sha256",
+        "candidate_revision",
+        "qa_artifact_id",
+        "not_tested",
+        "errors",
+        "incident",
+        "decision",
+        "incident_sha256"
+      ],
+      "title": "VerificationEnvironmentIncident",
+      "type": "object"
+    },
+    "VerificationExecutionRecord": {
+      "additionalProperties": false,
+      "description": "At-most-once controlled execution, separate from every model's verdict.",
+      "properties": {
+        "kind": {
+          "const": "verification_execution",
+          "default": "verification_execution",
+          "title": "Kind",
+          "type": "string"
+        },
+        "phase": {
+          "enum": [
+            "STARTED",
+            "COMPLETED",
+            "BLOCKED"
+          ],
+          "title": "Phase",
+          "type": "string"
+        },
+        "plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "invocation_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Invocation Sha256",
+          "type": "string"
+        },
+        "authorization_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Authorization Sha256",
+          "type": "string"
+        },
+        "candidate_revision": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Candidate Revision",
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "qa",
+            "reviewer"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "capability": {
+          "$ref": "#/$defs/SwiftSandboxCapability"
+        },
+        "native_ui": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativeUiCapability"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "ui_results": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/NativeUiResult"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ui Results"
+        },
+        "source_root": {
+          "title": "Source Root",
+          "type": "string"
+        },
+        "scratch_root": {
+          "title": "Scratch Root",
+          "type": "string"
+        },
+        "results": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/CommandResult"
+          },
+          "title": "Results",
+          "type": "array"
+        },
+        "failure_code": {
+          "anyOf": [
+            {
+              "enum": [
+                "COMMAND_TIMEOUT",
+                "COMMAND_START_FAILED",
+                "NATIVE_UI_UNAVAILABLE",
+                "NATIVE_UI_SESSION_LOCKED"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failure Code"
+        },
+        "recorded_at": {
+          "format": "date-time",
+          "title": "Recorded At",
+          "type": "string"
+        },
+        "record_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Record Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "phase",
+        "plan_sha256",
+        "invocation_sha256",
+        "authorization_sha256",
+        "candidate_revision",
+        "role",
+        "capability",
+        "source_root",
+        "scratch_root",
+        "recorded_at",
+        "record_sha256"
+      ],
+      "title": "VerificationExecutionRecord",
+      "type": "object"
+    },
+    "VerificationFailureReference": {
+      "additionalProperties": false,
+      "properties": {
+        "plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "record_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Record Sha256",
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "qa",
+            "reviewer"
+          ],
+          "title": "Role",
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan_sha256",
+        "record_sha256",
+        "role"
+      ],
+      "title": "VerificationFailureReference",
+      "type": "object"
+    },
     "VerifiedRecoveryDecision": {
       "additionalProperties": false,
       "properties": {
@@ -1530,10 +3327,15 @@
   },
   "discriminator": {
     "mapping": {
+      "candidate_executor_prerequisite": "#/$defs/CandidateExecutorPrerequisite",
       "candidate_verification_completion": "#/$defs/CandidateVerificationCompletion",
       "candidate_verification_invocation": "#/$defs/CandidateVerificationInvocation",
       "candidate_verification_plan": "#/$defs/CandidateVerificationPlan",
-      "recovery_authorization": "#/$defs/RecoveryAuthorization"
+      "manager_verification_advice": "#/$defs/ManagerVerificationAdvice",
+      "prerequisite_repair_plan": "#/$defs/PrerequisiteRepairPlan",
+      "recovery_authorization": "#/$defs/RecoveryAuthorization",
+      "verification_environment_incident": "#/$defs/VerificationEnvironmentIncident",
+      "verification_execution": "#/$defs/VerificationExecutionRecord"
     },
     "propertyName": "kind"
   },
@@ -1549,6 +3351,21 @@
     },
     {
       "$ref": "#/$defs/RecoveryAuthorization"
+    },
+    {
+      "$ref": "#/$defs/VerificationEnvironmentIncident"
+    },
+    {
+      "$ref": "#/$defs/ManagerVerificationAdvice"
+    },
+    {
+      "$ref": "#/$defs/PrerequisiteRepairPlan"
+    },
+    {
+      "$ref": "#/$defs/VerificationExecutionRecord"
+    },
+    {
+      "$ref": "#/$defs/CandidateExecutorPrerequisite"
     }
   ],
   "$schema": "https://json-schema.org/draft/2020-12/schema",

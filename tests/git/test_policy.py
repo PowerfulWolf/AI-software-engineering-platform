@@ -10,6 +10,69 @@ from ai_software_engineer.git import (
     PathPolicyViolation,
     WorkspacePolicy,
 )
+from ai_software_engineer.swift_verification import SWIFT_VERIFICATION_COMMANDS
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    [
+        ("--package-path", "/tmp/other"),
+        ("--scratch-path", "/tmp/other"),
+        ("--disable-sandbox",),
+        ("--netrc-file", "/tmp/credentials"),
+        ("-Xswiftc", "-DOVERRIDE"),
+        ("--filter",),
+        ("--filter=example",),
+        ("-c", "debug", "--configuration", "release"),
+        ("--filter", "First", "--filter", "Second"),
+        ("--configuration", "invalid"),
+        ("--filter", "x" * 257),
+    ],
+)
+def test_swift_verification_rejects_permission_overrides(
+    tmp_path: Path, suffix: tuple[str, ...]
+) -> None:
+    policy = WorkspacePolicy(
+        tmp_path, _permissions().model_copy(update={"commands": SWIFT_VERIFICATION_COMMANDS})
+    )
+    prefix = ("swift", "test", "--disable-automatic-resolution", "--skip-update")
+    with pytest.raises(CommandPolicyViolation):
+        policy.authorize_command((*prefix, *suffix))
+
+
+def test_swift_verification_allows_focused_candidate_checks(tmp_path: Path) -> None:
+    policy = WorkspacePolicy(
+        tmp_path, _permissions().model_copy(update={"commands": SWIFT_VERIFICATION_COMMANDS})
+    )
+    for argv in (
+        ("swift", "--version"),
+        (
+            "swift",
+            "test",
+            "--disable-automatic-resolution",
+            "--skip-update",
+            "--filter",
+            "HistorySelection",
+        ),
+        (
+            "swift",
+            "build",
+            "--disable-automatic-resolution",
+            "--skip-update",
+            "--product",
+            "Monitor",
+            "-c",
+            "release",
+        ),
+    ):
+        assert policy.authorize_command(argv) == argv
+    for rejected_argv in (
+        ("swift", "package", "update"),
+        ("swift", "run", "evil.swift"),
+        ("swift", "--version", "evil.swift"),
+    ):
+        with pytest.raises(CommandPolicyViolation):
+            policy.authorize_command(rejected_argv)
 
 
 def _permissions() -> AgentPermissions:

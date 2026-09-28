@@ -18,6 +18,7 @@ from typing import Protocol, cast
 
 from pydantic import TypeAdapter, ValidationError
 
+from ai_software_engineer.agents.codex_policy import candidate_read_snapshot, no_command_arguments
 from ai_software_engineer.agents.execution import ExecutionGuard, execution_scope
 from ai_software_engineer.agents.json_schema import strict_output_schema
 from ai_software_engineer.agents.models import (
@@ -74,6 +75,7 @@ class _CodexOutputContractError(ValueError):
         *,
         validation_type: str | None = None,
         path: str | None = None,
+        validation_rule: str | None = None,
     ) -> None:
         super().__init__("Codex CLI output contract failed")
         encoded = raw_output.encode()
@@ -82,6 +84,7 @@ class _CodexOutputContractError(ValueError):
         self.output_bytes = len(encoded)
         self.validation_type = _safe_diagnostic_token(validation_type)
         self.path = _safe_diagnostic_path(path)
+        self.validation_rule = _safe_diagnostic_token(validation_rule)
 
     def diagnostic(self) -> str:
         facts = [
@@ -93,6 +96,8 @@ class _CodexOutputContractError(ValueError):
             facts.append(f"validation_type={self.validation_type}")
         if self.path is not None:
             facts.append(f"path={self.path}")
+        if self.validation_rule is not None:
+            facts.append(f"validation_rule={self.validation_rule}")
         return "; ".join(facts)
 
 
@@ -187,17 +192,26 @@ class SubprocessCodexCommandRunner:
         # The child inherits the Task lock. Even if the host is killed, another
         # Worker cannot reuse this worktree while the executor still owns it.
         try:
-            process = subprocess.Popen(
-                argv,
-                cwd=cwd,
-                env=dict(environment),
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                start_new_session=True,
-                pass_fds=guard.inherited_fds,
-            )
+            # On POSIX, communicate(None) after a timed-out partial input no
+            # longer polls stdin for writes. A large prompt can therefore strand
+            # Codex waiting for EOF forever. Give it an anonymous, private input
+            # descriptor, then poll only output and ownership. The parent closes
+            # its copy immediately; the child owns the remaining descriptor.
+            with tempfile.TemporaryFile(mode="w+b") as prompt:
+                prompt.write(stdin.encode("utf-8"))
+                prompt.seek(0)
+                guard.check()
+                process = subprocess.Popen(
+                    argv,
+                    cwd=cwd,
+                    env=dict(environment),
+                    stdin=prompt,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    start_new_session=True,
+                    pass_fds=guard.inherited_fds,
+                )
         except OSError as error:
             raise CodexCliError("Codex CLI process could not start") from error
 
@@ -211,7 +225,6 @@ class SubprocessCodexCommandRunner:
                     os.killpg(process.pid, signal.SIGKILL)
                 return process.communicate()
 
-        first_input: str | None = stdin
         try:
             while True:
                 guard.check()
@@ -219,13 +232,13 @@ class SubprocessCodexCommandRunner:
                     stdout, stderr = stop()
                     return CodexInvocationResult(-1, _bounded(stdout), _bounded(stderr), True)
                 try:
-                    stdout, stderr = process.communicate(first_input, timeout=0.2)
+                    stdout, stderr = process.communicate(timeout=0.2)
                     guard.check()
                     return CodexInvocationResult(
                         process.returncode, _bounded(stdout), _bounded(stderr)
                     )
                 except subprocess.TimeoutExpired:
-                    first_input = None
+                    continue
         except BaseException:
             stop()
             raise
@@ -372,9 +385,14 @@ class CodexCliAgentAdapter:
         qa_runner = _manager_provisioned_qa_runner(request, self._workspace_root)
         compiled_prompt = _compile_prompt(
             request,
-            prompt.to_messages(),
+            prompt.to_messages(include_images=False),
             manager_qa_runner=qa_runner,
         )
+        verifier = request.role in {AgentRole.QA, AgentRole.REVIEWER}
+        if verifier:
+            compiled_prompt += candidate_read_snapshot(
+                self._workspace_root, source_revision, request.permissions
+            )
         invocation_environment = dict(self._environment)
         if qa_runner is not None:
             invocation_environment["ASE_PROJECT_PYTEST"] = str(qa_runner)
@@ -386,6 +404,16 @@ class CodexCliAgentAdapter:
                 json.dumps(_artifact_schema(request.role), ensure_ascii=False),
                 encoding="utf-8",
             )
+            image_arguments: list[str] = []
+            for index, attachment in enumerate(prompt.images, start=1):
+                image_path = temporary_root / f"evidence-{index}.png"
+                image_path.write_bytes(attachment.image.bytes())
+                image_path.chmod(0o600)
+                image_arguments.extend(("--image", str(image_path)))
+                compiled_prompt += (
+                    f"\nAttached image {index}: {attachment.label}; "
+                    f"PNG SHA-256 {attachment.image.sha256}\n"
+                )
             invocation = self._runner.run(
                 (
                     self._executable,
@@ -394,6 +422,8 @@ class CodexCliAgentAdapter:
                     "--ignore-user-config",
                     "--sandbox",
                     _sandbox_mode(request.role),
+                    *(no_command_arguments() if verifier else ()),
+                    *image_arguments,
                     "--output-schema",
                     str(schema_path),
                     "--output-last-message",
@@ -468,6 +498,7 @@ class CodexCliAgentAdapter:
                 raw_output,
                 validation_type=validation_type,
                 path=validation_path,
+                validation_rule=_validation_rule(error),
             ) from error
         if artifact.kind not in ROLE_OUTPUTS[request.role]:
             raise _CodexOutputContractError(
@@ -763,6 +794,40 @@ def _manager_provisioned_qa_runner(request: AgentRequest, workspace_root: Path) 
     return runner
 
 
+def _validation_rule(error: ValidationError) -> str:
+    """Classify trusted validator messages without disclosing provider values.
+
+    Pydantic error messages and locations can include arbitrary private inputs.
+    Match only our domain validator's fixed text, and return constants rather
+    than printing the message, its suffix (IDs), context or input.
+    """
+    details = error.errors(include_input=False, include_url=False, include_context=False)
+    if not details:
+        return "UNCLASSIFIED"
+    message = str(details[0].get("msg", ""))
+    prefixes = (
+        (
+            "Value error, Artifact content references contain unknown Evidence IDs: ",
+            "UNKNOWN_EVIDENCE_REFERENCE",
+        ),
+        ("Value error, Evidence IDs must be unique; duplicates: ", "DUPLICATE_EVIDENCE_ID"),
+    )
+    for prefix, rule in prefixes:
+        if message.startswith(prefix):
+            return rule
+    exact = {
+        "Value error, QA PASS requires all reported criteria and tests to PASS "
+        "with no major findings": "QA_VERDICT_INCONSISTENT",
+        "Value error, qa-report Artifact must be produced by qa": "PRODUCER_ROLE_MISMATCH",
+        "Value error, review-report Artifact must be produced by reviewer": (
+            "PRODUCER_ROLE_MISMATCH"
+        ),
+        "Value error, Artifact cannot be its own parent": "ARTIFACT_SELF_PARENT",
+        "Value error, Artifact cannot supersede itself": "ARTIFACT_SELF_SUPERSEDES",
+    }
+    return exact.get(message, "UNCLASSIFIED")
+
+
 def _validation_location(error: ValidationError) -> tuple[str | None, str | None]:
     details = error.errors(include_input=False, include_url=False)
     if not details:
@@ -803,8 +868,8 @@ def _completion_reserve_seconds(timeout_seconds: int) -> int:
 
 
 def _sandbox_mode(role: AgentRole) -> str:
-    """Allow QA tool scratch while immutable Git postconditions protect the candidate."""
-    if role in {AgentRole.CODER, AgentRole.QA}:
+    """Verifiers judge controlled evidence; native tool execution is not authorized."""
+    if role is AgentRole.CODER:
         return "workspace-write"
     return "read-only"
 

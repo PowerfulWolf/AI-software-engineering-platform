@@ -416,6 +416,12 @@ CandidateVerificationEntry.open_plan(
 - A candidate-verification plan with `accepted_qa` must state that the sealed QA PASS will be reused,
   identify that QA artifact and display only the fresh Reviewer model assignment. The approval must
   not imply that QA will run again.
+- An inconclusive QA completion must retain its completion digest and report ID/counts in the
+  successor approval result. Console must preserve that bounded `next_action`, identify the
+  verification blocker in approval facts, and say to resolve it before approving again. It must not
+  replace the blocker with generic approval text or imply that another approval repairs permissions.
+  A later ordinary plan lookup still warns to address outstanding QA environment/permission issues;
+  no historical Operation or verdict is rewritten to refresh the message.
 - Closing a recovery bug requires an explicit existing-data disposition. If durable facts are
   internally inconsistent, repair only the exact resolved records under their transaction/integrity
   gates, preserve immutable history, and report before/after verification. If the durable facts are
@@ -436,6 +442,7 @@ CandidateVerificationEntry.open_plan(
 | Approval checkpoint differs from current checkpoint | Approval is stale and not rendered |
 | Valid persisted `{record, sha256}` recovery/verification envelope | Scoped entry opens and validates it; the console renders the exact approval facts |
 | Candidate verification plan contains `accepted_qa` | Approval says QA is reused and only Reviewer will run |
+| Successor verification follows NOT_TESTED/ERROR completion | Approval retains QA blocker and instructs repair before reapproval; parent digest stays stable |
 | Raw model parser receives the whole persisted envelope | Forbidden: this rejects valid plans as extra/missing fields and hides the actionable approval |
 | Envelope path, scope, record digest or outer digest is invalid | Reject safely; do not fabricate an approval |
 | Existing facts are consistent and an exact scope/plan approval is pending | No database rewrite; handoff names the visible approval action and every subsequent step needed to resume |
@@ -621,7 +628,10 @@ GET  /api/v1/admin/status
   and publishes an inactive next version. UI delete requires confirmation; the API removes selection/activation first and then writes
   a digest-bound retirement record. Retired records leave current inventory and future Context but
   immutable source/version files remain available to already-bound historical deliveries.
-- Learning collection reads only persisted failed QA/rejected Review artifacts. Before publication,
+- Learning collection reads persisted failed QA/rejected Review artifacts and explicit, evidenced
+  project observations from implementation/QA/Review reports. Human-approved knowledge resolutions
+  use their own requirement/gap/resolution provenance, never fake artifact fields. The UI must show
+  every variant without undefined fields; see `project-learning.md`. Before publication,
   an immutable authorization must bind the exact proposal SHA, action, target, operator and rationale;
   the completion decision is also immutable. An interrupted publication exposes the authorization and
   only the exact action can resume. Publishing to `SKILL` means a non-executable design record; it

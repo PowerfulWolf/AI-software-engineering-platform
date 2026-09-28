@@ -8,6 +8,7 @@ import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.context import ContextSource
@@ -20,7 +21,9 @@ from ai_software_engineer.domain import (
     WorkItem,
     WorkItemStatus,
 )
+from ai_software_engineer.domain.prerequisite_repair import PrerequisiteRepairPlan
 from ai_software_engineer.domain.project_delivery import derive_delivery_task
+from ai_software_engineer.domain.task import TaskConstraints
 from ai_software_engineer.manager.dispatch import (
     ContinuationDispatchRecord,
     DispatchPhaseCommit,
@@ -36,6 +39,7 @@ from ai_software_engineer.manager.production_backend import (
 )
 from ai_software_engineer.planning import PlanningPreviewService
 from ai_software_engineer.product import FileProductRecordStore
+from ai_software_engineer.recovery.context import prerequisite_repair_context
 from ai_software_engineer.recovery.models import RecoveryRejected, digest
 from ai_software_engineer.recovery.store import FileRecoveryStore
 from ai_software_engineer.recovery.verification_entry import NativeVerificationFacts
@@ -44,7 +48,10 @@ from ai_software_engineer.recovery.verification_native import (
     NativeCandidateSourceReader,
 )
 from ai_software_engineer.recovery.verification_records import (
+    CandidateExecutorPrerequisite,
+    CandidateRemediationEvidence,
     CandidateVerificationCompletion,
+    CandidateVerificationDisposition,
     CandidateVerificationPlan,
 )
 from ai_software_engineer.redaction import redact_text
@@ -81,11 +88,21 @@ class CandidateRemediationService:
         source: NativeCandidateSource,
         store: FileRecoveryStore,
         plan: CandidateVerificationPlan,
-        completion: CandidateVerificationCompletion,
+        completion: CandidateRemediationEvidence,
+        repair_plan: PrerequisiteRepairPlan | None = None,
     ) -> CandidateRemediation:
         if completion.verified:
             raise RecoveryRejected("verified candidates do not require Coder remediation")
         self._validate_current(source, store, plan, completion)
+        if repair_plan is None and (
+            isinstance(completion, CandidateExecutorPrerequisite)
+            or completion.disposition is CandidateVerificationDisposition.RETRY_VERIFICATION
+        ):
+            raise RecoveryRejected("inconclusive QA needs explicit prerequisite repair approval")
+        if repair_plan is not None:
+            require_repair_authority(
+                store, repair_plan, plan, completion, source.terminal_checkpoint.checkpoint_sha256
+            )
         context_sources = remediation_context(
             repository_root=source.scope.repository_root,
             source_delivery_id=source.scope.delivery_id,
@@ -93,12 +110,34 @@ class CandidateRemediationService:
             candidate_revision=source.inputs.candidate_revision,
             plan=plan,
             completion=completion,
+            repair_plan=repair_plan,
         )
         context_sha256 = digest([item.to_wire() for item in context_sources])
         preparation = self._backend.prepare(source.scope.repository_root)
         prepared = preparation.preparation
         if prepared is None:
             raise RecoveryRejected("project preparation needs human resolution before remediation")
+        target_base = self._backend.delivery_base_revision(Path(prepared.repository_root))
+        if repair_plan is not None and (
+            prepared.preparation_sha256 != repair_plan.target_preparation_sha256
+            or target_base != repair_plan.target_base_revision
+        ):
+            raise RecoveryRejected("repair target changed; propose and approve a fresh repair")
+        constraints = source.runtime.task.constraints
+        if repair_plan is not None:
+            previous_constraints = constraints or TaskConstraints()
+            constraints = previous_constraints.model_copy(
+                update={
+                    "allowed_paths": tuple(
+                        dict.fromkeys(
+                            (*previous_constraints.allowed_paths, *repair_plan.request.write_paths)
+                        )
+                    ),
+                }
+            )
+        continuation_kind: Literal["prerequisite_repair", "verification_remediation"] = (
+            "prerequisite_repair" if repair_plan is not None else "verification_remediation"
+        )
         # A failed successor remains immutable. Infrastructure/context failures before a new
         # candidate create an append-only retry allocation chained to that exact Task/dispatch.
         previous = source.failed_continuation
@@ -106,16 +145,18 @@ class CandidateRemediationService:
         retry_of_task_id = None if previous is None else previous.task_id
         retry_of_dispatch_id = None if previous is None else previous.id
         attempt_identity = continuation_attempt_identity(
-            completion.completion_sha256,
+            repair_plan.plan_sha256 if repair_plan is not None else completion.evidence_sha256,
             attempt=continuation_attempt,
             retry_of_task_id=retry_of_task_id,
             retry_of_dispatch_id=retry_of_dispatch_id,
         )
         now = (
-            completion.completed_at
+            completion.evidence_at
             if previous is None
             else source.terminal_checkpoint.checkpointed_at
         )
+        if repair_plan is not None:
+            now = store.get_repair_authorization(repair_plan.plan_sha256).decision.decided_at
         original_request = source.stages.request
         rebound_request = ProjectRequest.create(
             request_id=original_request.id,
@@ -137,11 +178,11 @@ class CandidateRemediationService:
             source.stages.plan,
             task_id=task_id,
             repository=prepared.repository_root,
-            base_ref=self._backend.delivery_base_revision(Path(prepared.repository_root)),
+            base_ref=target_base,
             max_attempts=source.runtime.task.max_attempts,
             retry_policy=source.runtime.task.retry_policy,
             created_at=now,
-            constraints=source.runtime.task.constraints,
+            constraints=constraints,
             owner=source.runtime.task.owner,
             labels=tuple(dict.fromkeys((*source.runtime.task.labels, "remediation"))),
         )
@@ -153,8 +194,13 @@ class CandidateRemediationService:
                 **task.to_wire(),
                 "metadata": {
                     **task.metadata,
-                    "continuation_kind": "verification_remediation",
-                    "continuation_sha256": completion.completion_sha256,
+                    "continuation_kind": continuation_kind,
+                    **(
+                        {"prerequisite_repair_sha256": repair_plan.plan_sha256}
+                        if repair_plan is not None
+                        else {}
+                    ),
+                    "continuation_sha256": completion.evidence_sha256,
                     "continuation_plan_sha256": plan.plan_sha256,
                     "continuation_context_sha256": context_sha256,
                     **(
@@ -196,9 +242,23 @@ class CandidateRemediationService:
 
         def validate(existing: ContinuationDispatchRecord | None) -> None:
             self._validate_current(source, store, plan, completion)
+            if repair_plan is not None:
+                require_repair_authority(
+                    store,
+                    repair_plan,
+                    plan,
+                    completion,
+                    source.terminal_checkpoint.checkpoint_sha256,
+                )
+                if (
+                    self._backend.prepare(source.scope.repository_root) != preparation
+                    or self._backend.delivery_base_revision(Path(prepared.repository_root))
+                    != target_base
+                ):
+                    raise RecoveryRejected("repair target drifted before dispatch")
             if existing is not None and (
                 existing.task != task
-                or existing.continuation_sha256 != completion.completion_sha256
+                or existing.continuation_sha256 != completion.evidence_sha256
                 or existing.continuation_plan_sha256 != plan.plan_sha256
                 or existing.continuation_context_sha256 != context_sha256
                 or existing.continuation_attempt != continuation_attempt
@@ -270,8 +330,11 @@ class CandidateRemediationService:
                 execution_plan_id=source.stages.plan.id,
                 execution_plan_sha256=source.stages.plan.execution_plan_sha256,
                 execution_plan_phase_ids=phase_ids,
-                continuation_kind="verification_remediation",
-                continuation_sha256=completion.completion_sha256,
+                continuation_kind=continuation_kind,
+                prerequisite_repair_sha256=repair_plan.plan_sha256
+                if repair_plan is not None
+                else None,
+                continuation_sha256=completion.evidence_sha256,
                 continuation_plan_sha256=plan.plan_sha256,
                 continuation_context_sha256=context_sha256,
                 continuation_attempt=continuation_attempt,
@@ -310,13 +373,19 @@ class CandidateRemediationService:
         source: NativeCandidateSource,
         store: FileRecoveryStore,
         plan: CandidateVerificationPlan,
-        completion: CandidateVerificationCompletion,
+        completion: CandidateRemediationEvidence,
     ) -> None:
         current = NativeCandidateSourceReader(self._config, self._environment).inspect(source.scope)
         NativeVerificationFacts(self._config, self._environment, store=store).validate(plan)
         if (
             current != source
-            or store.get_verification_completion(plan.plan_sha256) != completion
+            or store.get_remediation_evidence(
+                plan.plan_sha256,
+                completion.observation_sha256
+                if isinstance(completion, CandidateExecutorPrerequisite)
+                else None,
+            )
+            != completion
             or completion.plan_sha256 != plan.plan_sha256
         ):
             raise RecoveryRejected("candidate remediation facts changed")
@@ -359,7 +428,8 @@ def remediation_context(
     source_base_revision: str,
     candidate_revision: str,
     plan: CandidateVerificationPlan,
-    completion: CandidateVerificationCompletion,
+    completion: CandidateRemediationEvidence,
+    repair_plan: PrerequisiteRepairPlan | None = None,
 ) -> tuple[ContextSource, ...]:
     process = subprocess.run(
         (
@@ -392,10 +462,12 @@ def remediation_context(
     redacted_patch = redact_text(patch)
     patch = redacted_patch.text
     report = json.dumps(completion.to_wire(), ensure_ascii=False, sort_keys=True)
+    repair_context = () if repair_plan is None else (prerequisite_repair_context(repair_plan),)
     return (
+        *repair_context,
         ContextSource(
             source_id="remediation.verification",
-            uri=(f"candidate-verification://{source_delivery_id}/{completion.completion_sha256}"),
+            uri=(f"candidate-verification://{source_delivery_id}/{completion.evidence_sha256}"),
             content=report,
             priority=2,
             required=True,
@@ -411,3 +483,28 @@ def remediation_context(
             required=True,
         ),
     )
+
+
+def require_repair_authority(
+    store: FileRecoveryStore,
+    repair: PrerequisiteRepairPlan,
+    plan: CandidateVerificationPlan,
+    completion: CandidateRemediationEvidence,
+    checkpoint_sha256: str,
+) -> None:
+    """No environment report alone may grant Coder access or widen a Task scope."""
+    stored = store.get_repair_plan(repair.plan_sha256)
+    authorization = store.get_repair_authorization(repair.plan_sha256)
+    if (
+        stored != repair
+        or not authorization.decision.approved
+        or repair.source_plan_sha256 != plan.plan_sha256
+        or repair.source_evidence_sha256 != completion.evidence_sha256
+        or repair.native_checkpoint_sha256 != checkpoint_sha256
+        or repair.candidate_revision != plan.inputs.candidate_revision
+        or (
+            isinstance(completion, CandidateVerificationCompletion)
+            and completion.disposition is not CandidateVerificationDisposition.RETRY_VERIFICATION
+        )
+    ):
+        raise RecoveryRejected("source-changing prerequisite repair lacks exact current authority")

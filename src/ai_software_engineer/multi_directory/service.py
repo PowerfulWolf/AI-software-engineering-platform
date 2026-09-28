@@ -701,11 +701,24 @@ class JointDeliveryService:
 
     def _advance(self, checkpoint: JointCheckpoint) -> JointCheckpoint:
         from ai_software_engineer.knowledge.gaps import KnowledgeGapRaised
+        from ai_software_engineer.multi_directory.knowledge_wait import ChildKnowledgeGapRaised
 
         try:
             return self._advance_stages(checkpoint)
         except KnowledgeGapRaised as error:
             current = self._current(checkpoint.delivery_id)
+            if isinstance(error, ChildKnowledgeGapRaised):
+                if current.plan is None or error.child.unit_id not in {
+                    unit.unit_id for unit in current.plan.units
+                }:
+                    raise ValueError("knowledge wait belongs to an unplanned child") from error
+                current = self._save(
+                    current,
+                    children=(
+                        *tuple(c for c in current.children if c.unit_id != error.child.unit_id),
+                        error.child,
+                    ),
+                )
             return self._save(
                 current,
                 stage=JointStage.WAITING_HUMAN,
@@ -1043,9 +1056,7 @@ class JointDeliveryService:
                             in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
                             else JointStage.DELIVERING
                         ),
-                        next_action=_child_blocker_action(
-                            planned_unit.unit_id, child.checkpoint
-                        )
+                        next_action=_child_blocker_action(planned_unit.unit_id, child.checkpoint)
                         + "; 已完成的仓库会保留, 联合交付尚未完成。",
                     )
                     if repeated_child_failure(stopped):

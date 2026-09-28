@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from ai_software_engineer.domain import AcceptanceCriterion, Task, TaskStatus
+from ai_software_engineer.domain import AcceptanceCriterion, AgentRole, Task, TaskStatus
 from ai_software_engineer.domain.retry_policy import (
     DeliveryRetryFailure,
     DeliveryRetryPolicy,
@@ -58,7 +58,7 @@ def test_runtime_retry_failure_does_not_change_dispatch_identity(status: TaskSta
             "attempts": 1,
             "updated_at": dispatch.updated_at + timedelta(minutes=2),
             "retry_failures": (
-                DeliveryRetryFailure(role="coder", attempt=1, code="TIMEOUT"),
+                DeliveryRetryFailure(role=AgentRole.CODER, attempt=1, code="TIMEOUT"),
             ),
         }
     )

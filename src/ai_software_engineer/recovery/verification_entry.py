@@ -3,17 +3,30 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 from collections.abc import Mapping, Set
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 
 from ai_software_engineer.agents import StoredContextResolver
+from ai_software_engineer.agents.codex_policy import candidate_read_snapshot
 from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.config import ProductionConfig
-from ai_software_engineer.context import FileContextStore
-from ai_software_engineer.domain import AgentDefinition, AgentRole, WorkItem, WorkItemStatus
+from ai_software_engineer.context import ContextSource, FileContextStore
+from ai_software_engineer.domain import (
+    AgentDefinition,
+    AgentRole,
+    TeamRole,
+    WorkItem,
+    WorkItemStatus,
+)
+from ai_software_engineer.domain.artifact import QaReportArtifact, classify_qa_failure
+from ai_software_engineer.domain.enums import QaFailureDisposition, QaReportStatus
 from ai_software_engineer.git import GitWorktreeManager
+from ai_software_engineer.knowledge.administration import list_gap_views
+from ai_software_engineer.knowledge.gaps import KnowledgeResolution
 from ai_software_engineer.manager.delivery_checkpoint import (
     FileProjectDeliveryCheckpointStore,
     checkpoint_sha256_is_ancestor,
@@ -24,7 +37,14 @@ from ai_software_engineer.manager.dispatch import (
     VerificationReservation,
 )
 from ai_software_engineer.manager.mysql_dispatch_authority import MySqlDispatchAuthority
+from ai_software_engineer.manager.native_ui import (
+    NativeUiScenario,
+    NativeUiSessionPrerequisite,
+    native_ui_capability,
+    probe_native_ui_session,
+)
 from ai_software_engineer.manager.production_backend import (
+    PRODUCTION_DELIVERY_CONTEXT_BUDGET,
     ProductionProjectDeliveryBackend,
     _agent_definitions,
     _delivery_role_permissions,
@@ -36,6 +56,16 @@ from ai_software_engineer.manager.production_delivery import (
     DispatchDeliveryAgentAdapter,
 )
 from ai_software_engineer.manager.team_roster import production_team_roster
+from ai_software_engineer.manager.verification_coordination import (
+    ManagerVerificationAdvice,
+    VerificationFailureReference,
+    coordinate_verification,
+    coordination_digest,
+)
+from ai_software_engineer.manager.verification_environment import (
+    SwiftSandboxCapability,
+    discover_swift_sandbox_capability,
+)
 from ai_software_engineer.orchestration import FileRunContextBuilder
 from ai_software_engineer.planning import FileExecutionPlanStore
 from ai_software_engineer.planning.preview import derive_phase_demands
@@ -59,12 +89,21 @@ from ai_software_engineer.recovery.verification_native import (
     NativeCandidateSource,
     NativeCandidateSourceReader,
 )
+from ai_software_engineer.recovery.verification_qa import (
+    select_retained_qa,
+    validate_retained_qa_artifacts,
+)
 from ai_software_engineer.recovery.verification_records import (
     CandidateVerificationCompletion,
+    CandidateVerificationDisposition,
     CandidateVerificationInputs,
     CandidateVerificationPlan,
+    PriorVisualEvidence,
+    VerificationExecutionRecord,
     verification_inputs_are_current,
 )
+from ai_software_engineer.redaction import redact_text
+from ai_software_engineer.repository_profile import RepositoryProfile
 from ai_software_engineer.runtime_workspace import load_repository_profile
 from ai_software_engineer.scheduling import ModelRouter, PortfolioScheduler
 from ai_software_engineer.scheduling.models import (
@@ -72,7 +111,8 @@ from ai_software_engineer.scheduling.models import (
     ModelRoutingDecisionStatus,
 )
 from ai_software_engineer.store import MySqlTaskRepository
-from ai_software_engineer.team_workspace import _read_regular, _reject_symlinks
+from ai_software_engineer.swift_verification import SWIFT_VERIFICATION_COMMANDS
+from ai_software_engineer.team_workspace import TeamWorkspace, _read_regular, _reject_symlinks
 
 
 def verification_store_root(source: NativeCandidateSource) -> Path:
@@ -81,6 +121,20 @@ def verification_store_root(source: NativeCandidateSource) -> Path:
         / "state"
         / f"candidate-verification-{source.scope.delivery_id}"
     )
+
+
+def _manager_resolutions(
+    config: ProductionConfig, source: NativeCandidateSource
+) -> tuple[KnowledgeResolution, ...]:
+    """Reuse approved Requirement decisions; never invent operator authority in prompts."""
+    if source.parent_delivery_id is None:
+        return ()
+    team = TeamWorkspace.initialize(
+        config.platform_root, team_id=config.team_id, name=config.team_name, read_only=True
+    )
+    project, _ = team.project_registry().locate_repository(source.scope.repository_id)
+    views = list_gap_views(project, source.parent_delivery_id)
+    return tuple(view.resolution for view in views if view.resolution is not None)
 
 
 def open_candidate_verification_plan(
@@ -220,6 +274,7 @@ def _definitions(
         source.stages.preparation.repository_profile_sha256,
     )
     commands = _task_commands(profile)
+    verification_commands = _verification_task_commands(source, profile)
     result = _agent_definitions(source.runtime.dispatch, commands)
     allowed = (
         source.runtime.task.constraints.allowed_paths if source.runtime.task.constraints else ()
@@ -234,10 +289,156 @@ def _definitions(
                 "reasoning_effort": phase.model_selection.reasoning_effort,
                 "route_kind": phase.model_selection.route_kind,
                 "connection_mode": phase.model_selection.connection_mode,
-                "permissions": _delivery_role_permissions(phase.role, allowed, commands),
+                "permissions": _delivery_role_permissions(
+                    phase.role, allowed, verification_commands
+                ),
             }
         )
     return result
+
+
+def _verification_task_commands(
+    source: NativeCandidateSource, profile: RepositoryProfile
+) -> tuple[str, ...]:
+    """Derive a candidate-bound verification capability without rewriting history.
+
+    Existing Tasks keep their frozen RepositoryProfile and command policy.  A newly
+    proposed verification plan may add a narrowly detected Swift Package capability
+    when the approved candidate itself contains Package.swift; the exact expanded
+    commands are then sealed in its AgentDefinitions and policy digest.
+    """
+    commands = set(_task_commands(profile))
+    completed = subprocess.run(
+        (
+            "git",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "core.fsmonitor=false",
+            "ls-tree",
+            source.inputs.candidate_revision,
+            "--",
+            "Package.swift",
+        ),
+        cwd=source.scope.repository_root,
+        env={
+            "PATH": os.environ.get("PATH", os.defpath),
+            "LANG": "C",
+            "LC_ALL": "C",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_TERMINAL_PROMPT": "0",
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RecoveryRejected("cannot inspect candidate Swift package marker")
+    # Git tree mode rejects symlinks/directories/submodules named Package.swift.
+    if completed.stdout.startswith(("100644 blob ", "100755 blob ")) and completed.stdout.endswith(
+        "\tPackage.swift\n"
+    ):
+        commands.update(SWIFT_VERIFICATION_COMMANDS)
+    return tuple(sorted(commands))
+
+
+def _verification_context(plan: CandidateVerificationPlan) -> ContextSource:
+    return ContextSource(
+        source_id="verification.approved_plan",
+        uri=f"verification://{plan.plan_sha256}",
+        roles=(AgentRole.QA, AgentRole.REVIEWER),
+        priority=20,
+        required=True,
+        content=json.dumps(
+            {
+                "plan_sha256": plan.plan_sha256,
+                "candidate_revision": plan.inputs.candidate_revision,
+                "retained_qa": {
+                    "plan_sha256": plan.retained_qa.plan_sha256,
+                    "qa_invocation_sha256": plan.retained_qa.qa_invocation_sha256,
+                    "reviewer_invocation_sha256": plan.retained_qa.reviewer_invocation_sha256,
+                    "artifact_id": plan.retained_qa.qa.artifact_id,
+                    "artifact_sha256": plan.retained_qa.qa.integrity.sha256,
+                    "meaning": (
+                        "Reuse sealed QA PASS; execute only a fresh independent Reviewer. "
+                        "No Task event or prior Review verdict is inferred."
+                    ),
+                }
+                if plan.retained_qa is not None
+                else None,
+                "executor_capability": plan.executor_capability.to_wire()
+                if plan.executor_capability
+                else None,
+                "prerequisite_incident_sha256": plan.prerequisite_incident_sha256,
+                "prior_visual_evidence": plan.prior_visual_evidence.to_wire()
+                if plan.prior_visual_evidence
+                else None,
+                "manager_advice": plan.manager_advice.to_wire() if plan.manager_advice else None,
+                "verification_commands": {
+                    definition.role.value: definition.permissions.commands
+                    for definition in plan.definitions
+                    if definition.role in {AgentRole.QA, AgentRole.REVIEWER}
+                },
+                "scope": (
+                    "This independently approved verification plan supplies the current run's "
+                    "policy://permissions. The original Task and its old command list are "
+                    "immutable historical facts. Candidate, acceptance criteria and denied paths "
+                    "are unchanged. Execute only in the candidate worktree. Do not install "
+                    "dependencies/toolchains, disable sandboxes, sign, publish or merge. "
+                    "Build/static checks do not establish manual UI or accessibility acceptance. "
+                    "If required tooling or UI test data is missing, report NOT_TESTED/ERROR "
+                    "with evidence, never a fabricated PASS."
+                    " If this plan includes codex_sandbox_swiftpm_v1, the trusted executor "
+                    "will separately supply build/XCTest receipts under a retained readonly "
+                    "outer sandbox and isolated writable scratch. Only that executor may "
+                    "disable SwiftPM's inner sandbox. No model tool gains this option. "
+                    "These receipts are not UI evidence or a verdict."
+                ),
+            },
+            sort_keys=True,
+        ),
+    )
+
+
+def _available_prior_visual_evidence(
+    store: FileRecoveryStore,
+    inputs: CandidateVerificationInputs,
+    completion: CandidateVerificationCompletion | None,
+) -> VerificationExecutionRecord | None:
+    """Only the immediate inconclusive completion can supply inherited QA observations."""
+    if completion is None or (
+        completion.qa.task_id != inputs.task_id
+        or completion.qa.source_revision != inputs.candidate_revision
+        or completion.disposition is not CandidateVerificationDisposition.RETRY_VERIFICATION
+        or completion.qa_invocation_sha256 is None
+    ):
+        return None
+    source = store.get_verification_plan(completion.plan_sha256)
+    if (
+        source.inputs.model_copy(
+            update={
+                "prior_run_ids": inputs.prior_run_ids,
+            }
+        )
+        != inputs
+    ):
+        return None
+    try:
+        receipt = store.get_verification_execution(
+            completion.plan_sha256, AgentRole.QA, completed=True
+        )
+    except RecoveryRecordMissing:
+        return None
+    if (
+        receipt.phase != "COMPLETED"
+        or receipt.effective_failure_code is not None
+        or receipt.invocation_sha256 != completion.qa_invocation_sha256
+        or not any(result.output.capture is not None for result in receipt.ui_results or ())
+    ):
+        return None
+    return receipt
 
 
 class NativeVerificationFacts(VerificationFacts):
@@ -264,6 +465,15 @@ class NativeVerificationFacts(VerificationFacts):
 
     def validate(self, plan: CandidateVerificationPlan) -> None:
         source = NativeCandidateSourceReader(self.config, self.environment).inspect(plan.scope)
+        if self.store is not None:
+            validate_retained_qa_artifacts(
+                self.store,
+                plan,
+                FileArtifactStore(
+                    Path(source.stages.preparation.repository_workspace_root) / "artifacts",
+                    read_only=True,
+                ),
+            )
         checkpoint_history = FileProjectDeliveryCheckpointStore(
             Path(source.stages.preparation.repository_workspace_root) / "state/project-deliveries",
             read_only=True,
@@ -297,6 +507,37 @@ class NativeVerificationFacts(VerificationFacts):
         current = {d.role: d for d in plan.definitions}
         if _policy_sha(current, self.config) != plan.current_policy_sha256:
             raise RecoveryRejected("approved verifier policy digest changed")
+        # Unstarted plans must reflect today's candidate-derived capabilities. An
+        # already admitted run/completion remains a historical fact: changing the
+        # policy must not invalidate its sealed QA/Review evidence or lineage.
+        if not self._admitted_run_ids(plan):
+            profile = load_repository_profile(
+                Path(source.stages.preparation.repository_workspace_root),
+                source.stages.preparation.repository_profile_sha256,
+            )
+            commands = _verification_task_commands(source, profile)
+            if plan.executor_capability != _executor_capability(commands, self.config):
+                raise RecoveryRejected("verification executor capability changed; repropose")
+            if plan.native_ui is not None and plan.native_ui != native_ui_capability(
+                plan.native_ui.scenario
+            ):
+                raise RecoveryRejected("native UI capability changed; repropose")
+            allowed = (
+                source.runtime.task.constraints.allowed_paths
+                if source.runtime.task.constraints
+                else ()
+            )
+            for role in (AgentRole.QA, AgentRole.REVIEWER):
+                if current[role].permissions != _delivery_role_permissions(role, allowed, commands):
+                    raise RecoveryRejected("candidate verification permissions changed; repropose")
+
+
+def _executor_capability(
+    commands: tuple[str, ...], config: ProductionConfig
+) -> SwiftSandboxCapability | None:
+    if not set(SWIFT_VERIFICATION_COMMANDS) <= set(commands):
+        return None
+    return discover_swift_sandbox_capability(config.codex_executable)
 
 
 class CandidateVerificationEntry:
@@ -322,7 +563,12 @@ class CandidateVerificationEntry:
         )
 
     def propose_project(
-        self, *, repository_root: str, delivery_id: str
+        self,
+        *,
+        repository_root: str,
+        delivery_id: str,
+        native_ui_scenario: NativeUiScenario | None = None,
+        manager_advice: ManagerVerificationAdvice | None = None,
     ) -> tuple[CandidateVerificationPlan, Path]:
         """Resolve the registered project and propose verification without invoking a model."""
         prepared = self.backend.prepare(repository_root).preparation
@@ -334,7 +580,9 @@ class CandidateVerificationEntry:
                 repository_id=prepared.repository_id,
                 repository_root=prepared.repository_root,
                 delivery_id=delivery_id,
-            )
+            ),
+            native_ui_scenario=native_ui_scenario,
+            manager_advice=manager_advice,
         )
 
     def latest_project(
@@ -375,7 +623,270 @@ class CandidateVerificationEntry:
         plan, path = max(plans, key=lambda item: (item[0].created_at, item[0].plan_sha256))
         return store, plan, path
 
-    def propose(self, scope: RecoveryScope) -> tuple[CandidateVerificationPlan, Path]:
+    def coordinate(self, plan: CandidateVerificationPlan) -> ManagerVerificationAdvice | None:
+        """Own missing verification prerequisites before requesting another approval.
+
+        A cached exact-input decision is reused across process restarts. This does
+        not run a candidate, approve a plan or mutate the failed QA artifact.
+        """
+        source = NativeCandidateSourceReader(self.config, self.environment).inspect(plan.scope)
+        store = FileRecoveryStore(verification_store_root(source), scope=plan.scope)
+        admitted = NativeVerificationFacts(
+            self.config, self.environment, store=store
+        )._admitted_run_ids(plan)
+        if not _verification_inputs_are_current(plan.inputs, source.inputs, admitted):
+            raise RecoveryRejected("Manager coordination source changed")
+        artifacts = FileArtifactStore(
+            Path(source.stages.preparation.repository_workspace_root) / "artifacts", read_only=True
+        )
+        reports: list[QaReportArtifact] = []
+        for event in source.runtime.events:
+            for artifact_id in event.artifact_ids:
+                artifact = artifacts.get(artifact_id)
+                if (
+                    isinstance(artifact, QaReportArtifact)
+                    and artifact.source_revision == plan.inputs.candidate_revision
+                ):
+                    reports.append(artifact)
+        execution = store.latest_verification_execution(plan)
+        failed_execution = (
+            execution
+            if execution is not None and execution.effective_failure_code is not None
+            else None
+        )
+        if failed_execution is None and (
+            (plan.native_ui is not None and plan.manager_advice is None)
+            or plan.reused_qa is not None
+        ):
+            return None
+        completion = store.latest_verification_completion()
+        if (
+            completion is not None
+            and completion.qa.source_revision == plan.inputs.candidate_revision
+        ):
+            reports.append(completion.qa)
+        # Native events are ordered by their durable revisions; independent verification
+        # happens after that terminal history. A model-authored created_at is not a clock
+        # for execution order and must not let an old report hide the new completion.
+        qa = reports[-1] if reports else None
+        if failed_execution is None and (
+            qa is None
+            or qa.content.status is not QaReportStatus.FAIL
+            or classify_qa_failure(qa.content) is not QaFailureDisposition.RETRY_VERIFICATION
+        ):
+            return None
+        qa_definition = next(value for value in plan.definitions if value.role is AgentRole.QA)
+        snapshot = candidate_read_snapshot(
+            Path(plan.scope.repository_root),
+            plan.inputs.candidate_revision,
+            qa_definition.permissions,
+        )
+        resolutions = _manager_resolutions(self.config, source)
+        previous_ui = (
+            store.get_verification_plan(completion.plan_sha256).native_ui
+            if completion is not None
+            and completion.qa.source_revision == plan.inputs.candidate_revision
+            else None
+        )
+        failure_reference = None
+        environment_prerequisite = None
+        failure_details: dict[str, object] | None = None
+        if failed_execution is not None:
+            previous_ui = failed_execution.native_ui
+            failure_reference = VerificationFailureReference(
+                plan_sha256=failed_execution.plan_sha256,
+                record_sha256=failed_execution.record_sha256,
+                role=failed_execution.role,
+            )
+            last_ui = failed_execution.ui_results[-1] if failed_execution.ui_results else None
+            session_status = (
+                "SESSION_LOCKED"
+                if failed_execution.effective_failure_code == "NATIVE_UI_SESSION_LOCKED"
+                else last_ui.output.error
+                if last_ui
+                else None
+            )
+            if session_status in {"SESSION_LOCKED", "SESSION_UNAVAILABLE"}:
+                environment_prerequisite = NativeUiSessionPrerequisite.model_validate(
+                    {
+                        "observed_status": session_status,
+                        "current_session": probe_native_ui_session(plan.executor_capability),
+                    }
+                )
+            failure_details = {
+                "reference": failure_reference.to_wire(),
+                "failure_code": failed_execution.effective_failure_code,
+                "recorded_phase": failed_execution.phase,
+                "recorded_failure_code": failed_execution.failure_code,
+                "commands": [
+                    {"returncode": result.returncode, "duration_ms": result.duration_ms}
+                    for result in failed_execution.results
+                ],
+                "failed_ui_step": last_ui.step.to_wire() if last_ui else None,
+                "ui_error": last_ui.output.error if last_ui else None,
+                "ui_diagnostics": last_ui.output.diagnostics.to_wire()
+                if last_ui and last_ui.output.diagnostics
+                else None,
+                "ui_diagnostic": redact_text(last_ui.output.diagnostic or "").text[:2000]
+                if last_ui
+                else None,
+                "completed_ui_steps": max(0, len(failed_execution.ui_results or ()) - 1),
+                "no_verdict": True,
+                "observed_ui_controls": [
+                    {
+                        "path": node.path[:100],
+                        "attributes": {
+                            key: redact_text(value).text[:200]
+                            for key, value in node.attributes.items()
+                            if key
+                            in {
+                                "AXRole",
+                                "AXIdentifier",
+                                "AXTitle",
+                                "AXDescription",
+                                "AXValue",
+                                "AXEnabled",
+                            }
+                        },
+                    }
+                    for node in (last_ui.output.nodes if last_ui else ())
+                    if node.attributes.get("AXRole") in {"AXButton", "AXCheckBox", "AXLink"}
+                ][:40],
+                "observed_ui_controls_truncated": sum(
+                    node.attributes.get("AXRole") in {"AXButton", "AXCheckBox", "AXLink"}
+                    for node in (last_ui.output.nodes if last_ui else ())
+                )
+                > 40,
+                "environment_prerequisite": {
+                    **environment_prerequisite.to_wire(),
+                    "next_action": environment_prerequisite.next_action,
+                }
+                if environment_prerequisite
+                else None,
+            }
+        prior_visual = _available_prior_visual_evidence(store, plan.inputs, completion)
+        payload: dict[str, object] = {
+            "contract_version": "manager_verification_coordination_v9",
+            "scope": plan.scope.to_wire(),
+            "candidate": plan.inputs.candidate_revision,
+            "source_inputs": source.inputs.to_wire(),
+            "native_checkpoint": plan.native_checkpoint_sha256,
+            "parent_checkpoint": plan.parent_checkpoint_sha256,
+            "acceptance_criteria": [
+                value.to_wire() for value in source.runtime.task.acceptance_criteria
+            ],
+            "qa": qa.to_wire() if qa else None,
+            "available_prior_visual_evidence": {
+                "plan_sha256": prior_visual.plan_sha256,
+                "record_sha256": prior_visual.record_sha256,
+                "role": "historical_qa",
+                "delivery": "actual PNG attachments after fresh exact plan approval; no recapture",
+                "captures": [
+                    {"step": item.step.name, "sha256": item.output.capture.image.sha256}
+                    for item in prior_visual.ui_results or ()
+                    if item.output.capture is not None
+                ],
+            }
+            if prior_visual
+            else None,
+            "latest_execution_failure": failure_details,
+            "approved_knowledge_resolutions": [value.to_wire() for value in resolutions],
+            "candidate_source": snapshot,
+            "available_build_capability": plan.executor_capability.to_wire()
+            if plan.executor_capability
+            else None,
+            "available_ui_capability": {
+                "kind": "macos_mock_ax_v1",
+                "evidence": ["AX tree", "AX values", "AX positions/sizes", "exact press results"],
+                "screenshots": {
+                    "action": "snapshot with capture_window=true",
+                    "scope": "unique exact child PID/title window only; never desktop",
+                    "max_per_scenario": 6,
+                    "max_dimension_pixels": 1800,
+                    "max_png_bytes": 400_000,
+                    "requires_existing_screen_capture_permission": True,
+                    "delivery": "sealed receipt and actual QA/Reviewer image attachments",
+                },
+                "real_login": False,
+                "network": False,
+                "actions": ["snapshot", "press", "scroll"],
+                "scroll": {
+                    "scroll_position": "finite number 0..1: 0=top, 1=bottom",
+                    "target": "exactly one enabled settable vertical scrollbar in target window",
+                    "selectors": "none; no role/attribute/value/index or global coordinates",
+                    "evidence": "AXValue readback, then separate approved snapshot/capture",
+                    "ambiguous_or_unconfirmed": "stop and return to Manager; never retry",
+                },
+                "diagnostics": [
+                    "session",
+                    "AX trust",
+                    "child process status/argv",
+                    "child native window count",
+                    "child AX status/window count",
+                ],
+                "driver_sha256": native_ui_capability(previous_ui.scenario).driver_sha256
+                if previous_ui
+                else None,
+                "policy_sha256": native_ui_capability(previous_ui.scenario).policy_sha256
+                if previous_ui
+                else None,
+            }
+            if plan.executor_capability
+            else None,
+            "ui_scenario_schema": NativeUiScenario.model_json_schema(),
+            "source_prerequisite_repair": {
+                "available": failed_execution is not None and failed_execution.phase == "BLOCKED",
+                "requires_separate_exact_approval": True,
+                "producer": "ASE Coder",
+                "independent_qa_review_required": True,
+            },
+            "ui_launch_contract": (
+                "The executor starts the exact binary directly with its approved mock argument. "
+                "It does not send LaunchServices open/reopen events, activate the app, or open "
+                "a named SwiftUI Window. The isolated mock entry must create its primary window."
+            ),
+            "previous_ui_scenario": previous_ui.scenario.to_wire() if previous_ui else None,
+            "previous_ui_capability": previous_ui.to_wire() if previous_ui else None,
+        }
+        identity = coordination_digest(payload)
+        if plan.manager_advice is not None and plan.manager_advice.input_sha256 == identity:
+            return None
+        with store.execution_lock():
+            try:
+                return store.get_verification_advice(identity)
+            except RecoveryRecordMissing:
+                pass
+            advice = coordinate_verification(
+                self.backend._structured_clients.for_project(
+                    Path(plan.scope.repository_root), TeamRole.MANAGER
+                ),
+                payload=payload,
+                criterion_ids=tuple(value.id for value in source.runtime.task.acceptance_criteria),
+                scope_sha256=digest(plan.scope.to_wire()),
+                candidate_revision=plan.inputs.candidate_revision,
+                qa_artifact_id=qa.artifact_id if qa else None,
+                qa_artifact_sha256=qa.integrity.sha256 if qa else None,
+                knowledge_resolutions=resolutions,
+                execution_failure=failure_reference,
+                environment_prerequisite=environment_prerequisite,
+            )
+            if advice.draft.native_ui_scenario is not None and plan.executor_capability is None:
+                raise RecoveryRejected("Manager proposed an unavailable native UI capability")
+            if advice.draft.prerequisite_repair is not None and (
+                failed_execution is None or failed_execution.phase != "BLOCKED"
+            ):
+                raise RecoveryRejected(
+                    "historical UI evidence does not grant pre-model source repair"
+                )
+            return store.put_verification_advice(advice)
+
+    def propose(
+        self,
+        scope: RecoveryScope,
+        *,
+        native_ui_scenario: NativeUiScenario | None = None,
+        manager_advice: ManagerVerificationAdvice | None = None,
+    ) -> tuple[CandidateVerificationPlan, Path]:
         source = NativeCandidateSourceReader(self.config, self.environment).inspect(scope)
         now = datetime.now(UTC)
         execution_id = (
@@ -393,6 +904,50 @@ class CandidateVerificationEntry:
             now=now,
         )
         definitions = _definitions(source, preview)
+        store = FileRecoveryStore.initialize(verification_store_root(source), scope=scope)
+        retained = select_retained_qa(
+            store,
+            source.inputs,
+            FileArtifactStore(
+                Path(source.stages.preparation.repository_workspace_root) / "artifacts",
+                read_only=True,
+            ),
+        )
+        if retained is not None:
+            previous_attempt, _ = retained
+            if native_ui_scenario is not None and (
+                previous_attempt.native_ui is None
+                or native_ui_scenario != previous_attempt.native_ui.scenario
+            ):
+                raise RecoveryRejected(
+                    "Reviewer-only continuation must retain the approved UI scope"
+                )
+            native_ui_scenario = (
+                previous_attempt.native_ui.scenario if previous_attempt.native_ui else None
+            )
+            manager_advice = previous_attempt.manager_advice
+        previous = store.latest_verification_completion()
+        incident = None
+        if (
+            previous is not None
+            and previous.qa.task_id == source.inputs.task_id
+            and previous.qa.source_revision == source.inputs.candidate_revision
+            and previous.disposition is CandidateVerificationDisposition.RETRY_VERIFICATION
+        ):
+            incident = store.record_verification_incident(previous)
+        prior_visual = (
+            _available_prior_visual_evidence(store, source.inputs, previous)
+            if incident is not None and native_ui_scenario is not None
+            else None
+        )
+        if retained is not None:
+            previous_attempt = retained[0]
+            incident = (
+                store.get_verification_incident(previous_attempt.prerequisite_incident_sha256)
+                if previous_attempt.prerequisite_incident_sha256 is not None
+                else None
+            )
+            prior_visual = store.get_prior_visual_evidence(previous_attempt)
         plan = CandidateVerificationPlan.create(
             scope=scope,
             inputs=source.inputs,
@@ -404,9 +959,23 @@ class CandidateVerificationEntry:
             parent_delivery_id=source.parent_delivery_id,
             parent_checkpoint_sha256=source.parent_checkpoint_sha256,
             definitions=tuple(definitions[role] for role in AgentRole),
+            executor_capability=_executor_capability(
+                definitions[AgentRole.QA].permissions.commands, self.config
+            ),
+            native_ui=native_ui_capability(native_ui_scenario)
+            if native_ui_scenario is not None
+            else None,
+            prerequisite_incident_sha256=incident.incident_sha256 if incident else None,
+            prior_visual_evidence=PriorVisualEvidence(
+                plan_sha256=prior_visual.plan_sha256,
+                record_sha256=prior_visual.record_sha256,
+            )
+            if prior_visual is not None
+            else None,
+            manager_advice=manager_advice,
+            retained_qa=retained[1] if retained is not None else None,
             created_at=now,
         )
-        store = FileRecoveryStore.initialize(verification_store_root(source), scope=scope)
         CandidateVerificationAdmission(
             store=store,
             plan_sha256=plan.plan_sha256,
@@ -475,6 +1044,15 @@ class CandidateVerificationEntry:
         admission = self._admission(store, plan)
         authority = self._authority(source)
         definitions = {d.role: d for d in plan.definitions}
+        selected_factory = (
+            route_factory or self._route_factory or ConfiguredDeliveryRouteAdapterFactory()
+        )
+        if plan.executor_capability is not None and not isinstance(
+            selected_factory, ConfiguredDeliveryRouteAdapterFactory
+        ):
+            raise RecoveryRejected(
+                "selected adapter cannot enforce the approved verification capability"
+            )
 
         def build(snapshot: DispatchWorkforceSnapshot) -> VerificationReservation:
             value = _verification_allocation(
@@ -503,6 +1081,22 @@ class CandidateVerificationEntry:
             FileArtifactStore(sidecar / "artifacts"),
             FileContextStore(sidecar / "contexts"),
         )
+        if plan.executor_capability is not None:
+            from ai_software_engineer.recovery.verification_execution import (
+                BoundSwiftVerificationEvidence,
+            )
+
+            assert isinstance(selected_factory, ConfiguredDeliveryRouteAdapterFactory)
+            selected_factory = selected_factory.with_verification_evidence(
+                BoundSwiftVerificationEvidence(
+                    store=store,
+                    plan=plan,
+                    facts=NativeVerificationFacts(self.config, self.environment, store=store),
+                    worktree_root=Path(self.config.platform_root)
+                    / "worktrees"
+                    / plan.scope.repository_id,
+                )
+            )
         adapter = DispatchDeliveryAgentAdapter(
             dispatch=reservation,
             definitions=definitions,
@@ -512,9 +1106,7 @@ class CandidateVerificationEntry:
             repository_workspace_root=sidecar,
             context_resolver=StoredContextResolver(contexts, artifacts),
             environment=self.environment,
-            route_adapters=(
-                route_factory or self._route_factory or ConfiguredDeliveryRouteAdapterFactory()
-            ),
+            route_adapters=selected_factory,
         )
         repository = MySqlTaskRepository(self.config.require_mysql_dsn(self.environment))
         try:
@@ -522,7 +1114,10 @@ class CandidateVerificationEntry:
                 repository=repository,
                 artifact_store=artifacts,
                 context_builder=FileRunContextBuilder(
-                    plan.scope.repository_root, context_store=contexts
+                    plan.scope.repository_root,
+                    context_store=contexts,
+                    sources=(_verification_context(plan),),
+                    budget=PRODUCTION_DELIVERY_CONTEXT_BUDGET,
                 ),
                 agent_adapter=adapter,
                 agent_definitions=definitions,

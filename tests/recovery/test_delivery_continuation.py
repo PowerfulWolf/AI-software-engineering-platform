@@ -15,6 +15,8 @@ from ai_software_engineer.domain import (
 from ai_software_engineer.manager.delivery import (
     DeliveryCommandRejected,
     ProjectDeliveryCheckpointCatalog,
+    ProjectDeliveryResult,
+    ResumeProjectDelivery,
     UnifiedProjectEntryService,
 )
 from ai_software_engineer.manager.delivery_checkpoint import (
@@ -55,6 +57,62 @@ from tests.recovery.test_candidate_verification import Admission, setup_verifica
 from tests.recovery.test_execution_records import continuation_allocation
 
 NOW = datetime(2026, 9, 9, 8, 0, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    "status", [TaskStatus.QA, TaskStatus.REVIEW, TaskStatus.BLOCKED, TaskStatus.FAILED]
+)
+@pytest.mark.parametrize(
+    "failure",
+    [DeliveryFailureCode.INVARIANT_VIOLATION, DeliveryFailureCode.VERIFICATION_INCONCLUSIVE],
+)
+def test_platform_failure_resumes_only_retained_nonterminal_verifier(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    status: TaskStatus,
+    failure: DeliveryFailureCode,
+) -> None:
+    dispatch = continuation_allocation(tmp_path)
+    service, store = _service(tmp_path, dispatch)
+    before = store.current(dispatch.source_delivery_id)
+    blocked = ProjectDeliveryCheckpoint.create(
+        **{
+            **before.to_wire(),
+            "sequence": before.sequence + 1,
+            "previous_checkpoint_sha256": before.checkpoint_sha256,
+            "task_status": status,
+            "failure_code": failure,
+            "failure_summary": "Delivery stopped safely (ValueError)",
+        }
+    )
+    store.put(blocked)
+    observed: list[ProjectDeliveryCheckpoint] = []
+
+    def continue_delivery(
+        records: FileProjectDeliveryCheckpointStore,
+        current: ProjectDeliveryCheckpoint,
+        **kwargs: object,
+    ) -> ProjectDeliveryResult:
+        observed.append(current)
+        return ProjectDeliveryResult(checkpoint=current)
+
+    monkeypatch.setattr(service, "_continue_delivery", continue_delivery)
+    result = service.retry_interrupted_stage(
+        ResumeProjectDelivery(delivery_id=blocked.delivery_id)
+    ).checkpoint
+    if (
+        status in {TaskStatus.BLOCKED, TaskStatus.FAILED}
+        or failure is not DeliveryFailureCode.INVARIANT_VIOLATION
+    ):
+        assert result == blocked and not observed
+    else:
+        assert result.stage is DeliveryStage.DELIVERING
+        assert result.task_id == blocked.task_id and result.task_status is status
+        assert result.candidate_revision == blocked.candidate_revision
+        assert result.task_revision == blocked.task_revision
+        assert result.stage_attempts == blocked.stage_attempts
+        assert result.previous_checkpoint_sha256 == blocked.checkpoint_sha256
+        assert observed == [result]
 
 
 def _service(
@@ -534,6 +592,7 @@ def test_inconclusive_verification_proposes_fresh_qa_without_coder(
         }
     )
     verification = Mock()
+    verification.coordinate.return_value = None
     verification.latest_project.return_value = (Mock(), plan, tmp_path / "old-plan.json")
     verification.propose_project.return_value = (successor, tmp_path / "successor-plan.json")
     backend = Mock()
@@ -554,9 +613,18 @@ def test_inconclusive_verification_proposes_fresh_qa_without_coder(
 
     assert result.outcome is DeliveryResumeOutcome.VERIFICATION_APPROVAL_REQUIRED
     assert result.verification_plan_sha256 == successor.plan_sha256
+    assert result.verification_completion_sha256 == completion.completion_sha256
+    assert "NOT_TESTED" in result.next_action
+    assert "ERROR" in result.next_action
+    assert str(completion.qa.artifact_id) in result.next_action
+    verification.latest_project.return_value[
+        0
+    ].record_verification_incident.assert_called_once_with(completion)
     verification.propose_project.assert_called_once_with(
         repository_root=plan.scope.repository_root,
         delivery_id=plan.scope.delivery_id,
+        native_ui_scenario=None,
+        manager_advice=None,
     )
     backend.run_prepared_allocation.assert_not_called()
 

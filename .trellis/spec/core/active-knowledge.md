@@ -27,6 +27,13 @@ documents, active applicable Specs and discovered native rules, not by Agents.
   are not executable registrations. Missing evidence/version drift rejects a gate.
 - Knowledge is redacted before reaching an Agent or evidence record; raw digests remain
   provenance, and redacted chunk digests describe the bytes actually delivered.
+- Source role restrictions survive snapshot compilation, including nested `context.team` and
+  structured Specs. Parent/child roles intersect; no intersection means exclude, not unrestricted.
+  ORCHESTRATOR-only sources do not map to an arbitrary Team role. A Spec targeting a different
+  repository is excluded, never turned into wildcard scope by an empty ID intersection.
+- `KnowledgeSkillRegistry.available_documents() -> tuple[KnowledgeDocument, ...]` supplies the
+  same role-filtered inventory for consultation metadata and search/read. Titles and IDs are
+  information too: filtering retrieved body text alone is insufficient.
 
 ## Validation matrix
 
@@ -39,12 +46,21 @@ documents, active applicable Specs and discovered native rules, not by Agents.
 | Changed operation replay | conflict, first evidence preserved |
 | Approved resolution after restart | new run referencing Gap, resolution and old run |
 | Missing Skill evidence or different definition version | reject stage gate |
+| Coder-only source queried by QA, including nested wrappers | no hit/read and no discovery title |
+| Disjoint wrapper/Spec roles or foreign-repository Spec | excluded, not broadened to all roles/repos |
 
 ## Verification
 
 Shared baseline/index contract tests, immutable-store tamper/replay tests, role
 permission tests, knowledge effectiveness fixtures and delivery integration tests.
 No Task migration or destructive data conversion is needed for existing requirements.
+
+`tests/knowledge/test_source_scope.py`, `test_delivery_context.py` and `test_consultation.py`
+exercise native/Team/Project sources, nested wrappers, foreign Specs and metadata visibility.
+Good: Coder sees its scoped reference; QA cannot discover its title. Base: unrestricted sources
+keep their prior serialized roles. Bad: `roles=()` after losing a restriction, or `repository_ids=()`
+after intersecting away every allowed repository. Never rewrite a stored historical snapshot to
+hide prior visibility; current incompatible scoped snapshots must fail closed under existing guards.
 
 ## Evaluation and completion evidence
 

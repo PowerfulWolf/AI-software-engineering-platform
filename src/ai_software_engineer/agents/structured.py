@@ -17,7 +17,11 @@ from typing import Protocol, cast
 from urllib.parse import urlparse
 from uuid import uuid4
 
-from ai_software_engineer.agents.diagnostics import provider_error_detail, safe_diagnostic
+from ai_software_engineer.agents.diagnostics import (
+    http_error_detail,
+    provider_error_detail,
+    safe_diagnostic,
+)
 from ai_software_engineer.agents.json_schema import strict_output_schema
 from ai_software_engineer.agents.model_diagnostics import (
     ModelCallDiagnostic,
@@ -258,6 +262,7 @@ class CodexCliStructuredModelClient:
         proxy_api_key_env: str | None = None,
         reasoning_effort: ReasoningEffort = "medium",
         environment: Mapping[str, str] | None = None,
+        allow_native_commands: bool = True,
     ) -> None:
         root = Path(repository_root).expanduser().resolve(strict=False)
         if not root.is_dir() or root.is_symlink():
@@ -279,6 +284,7 @@ class CodexCliStructuredModelClient:
         self._proxy_overrides = codex_cli_proxy_overrides(proxy_base_url, proxy_api_key_env)
         self._proxy_api_key_env = proxy_api_key_env
         self._reasoning_effort = reasoning_effort
+        self._allow_native_commands = allow_native_commands
         source_environment = environment if environment is not None else os.environ
         self._environment = _filtered_environment(source_environment)
         self._environment.update(
@@ -294,6 +300,8 @@ class CodexCliStructuredModelClient:
         timeout_seconds: int,
         input_images: tuple[Path, ...] = (),
     ) -> StructuredModelResult:
+        from ai_software_engineer.agents.codex_policy import no_command_arguments
+
         started = time.monotonic()
         prompt = _prompt(instructions, input_payload)
         with tempfile.TemporaryDirectory(prefix="ase-structured-") as temporary:
@@ -323,6 +331,7 @@ class CodexCliStructuredModelClient:
                         "--ignore-user-config",
                         "--sandbox",
                         "read-only",
+                        *(no_command_arguments() if not self._allow_native_commands else ()),
                         "--output-schema",
                         str(schema_path),
                         "--output-last-message",
@@ -492,7 +501,7 @@ class ResponsesStructuredModelClient:
             raise StructuredModelError(
                 code,
                 f"Responses structured provider returned HTTP {response.status_code}; "
-                + _http_error_detail(response.body, self._api_key),
+                + http_error_detail(response.body, self._api_key),
                 transient=transient,
                 http_status=response.status_code,
                 request_id=safe_request_id(response.request_id, secret=self._api_key),
@@ -671,18 +680,6 @@ def _provider_error_code(body: bytes) -> str | None:
         return None
     value = cast(Mapping[str, object], payload["error"]).get("code")
     return value if isinstance(value, str) else None
-
-
-def _http_error_detail(body: bytes, api_key: str) -> str:
-    try:
-        payload = json.loads(body)
-    except (ValueError, UnicodeError):
-        return "未获得结构化服务错误详情"
-    if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
-        message = payload["error"].get("message")
-        if isinstance(message, str):
-            return safe_diagnostic(message.replace(api_key, "[REDACTED:api_key]"), limit=240)
-    return "未获得结构化服务错误详情"
 
 
 def _classify_text_failure(text: str) -> tuple[AgentErrorCode, bool]:

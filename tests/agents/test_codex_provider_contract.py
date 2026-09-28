@@ -22,6 +22,10 @@ def test_coder_union_is_nested_under_object_root() -> None:
     for artifact in (make_coder_progress_artifact(), make_implementation_artifact()):
         # Strict output requires defaulted and nullable fields too.
         payload = json.loads(artifact.model_dump_json())
+        # Durable reports omit empty observations to preserve historical hashes;
+        # strict provider output must explicitly supply every schema property.
+        if artifact.kind.value == "implementation-report":
+            payload["content"]["project_observations"] = []
         validator.validate({"artifact": payload})
     assert not validator.is_valid({"artifact": {}})
     assert not validator.is_valid({"artifact": payload, "extra": True})

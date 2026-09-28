@@ -8,7 +8,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 
 from pymysql.cursors import DictCursor
 
@@ -49,6 +49,8 @@ class WorkerLease:
         self._token = owner_token
         self._stop = Event()
         self._lost = Event()
+        self._lifecycle = Lock()
+        self._knowledge_wait: KnowledgeGap | None = None
         self._ttl = claim.lease.expires_at - claim.lease.acquired_at
         self._expires_at = claim.lease.expires_at
         self._thread = Thread(target=self._heartbeat, name="delivery-role-heartbeat", daemon=True)
@@ -72,21 +74,26 @@ class WorkerLease:
 
     def _heartbeat(self) -> None:
         while not self._stop.wait(min(10, self._ttl.total_seconds() / 3)):
-            try:
-                now = datetime.now(UTC)
-                self.queue.renew(
-                    self.claim.work_item.id,
-                    lease_id=self.claim.lease.id,
-                    owner_token=self._token,
-                    now=now,
-                    expires_at=now + self._ttl,
-                )
-                self._expires_at = now + self._ttl
-            except Exception:
-                self._lost.set()
-                return
+            with self._lifecycle:
+                if self._stop.is_set():
+                    return
+                try:
+                    now = datetime.now(UTC)
+                    self.queue.renew(
+                        self.claim.work_item.id,
+                        lease_id=self.claim.lease.id,
+                        owner_token=self._token,
+                        now=now,
+                        expires_at=now + self._ttl,
+                    )
+                    self._expires_at = now + self._ttl
+                except Exception:
+                    self._lost.set()
+                    return
 
     def check(self) -> None:
+        if self._knowledge_wait is not None:
+            raise KnowledgeGapRaised(self._knowledge_wait)
         if self._lost.is_set() or datetime.now(UTC) >= self._expires_at:
             raise QueueLeaseLost("Worker lease renewal was lost")
 
@@ -107,8 +114,12 @@ class WorkerLease:
         return self.queue.accept_artifact(self.claim, self._token, store, artifact)
 
     def finish(self, next_step: QueuedRoleStep | None, now: datetime) -> None:
-        self.check()
-        self.queue.finish(self.claim, self._token, next_step=next_step, now=now, guard=self.check)
+        with self._lifecycle:
+            self.check()
+            self.queue.finish(
+                self.claim, self._token, next_step=next_step, now=now, guard=self.check
+            )
+            self._stop.set()
 
     def wait_for_knowledge(
         self,
@@ -116,16 +127,22 @@ class WorkerLease:
         routing: KnowledgeGapRouting,
         records: KnowledgeRecordStore,
     ) -> None:
-        self.check()
-        QueueKnowledgeWaitPort(
-            self.queue,
-            claim=self.claim,
-            owner_token=self._token,
-            binding=binding,
-            records=records,
-            clock=lambda: datetime.now(UTC),
-        ).wait(binding, routing)
-        self._stop.set()
+        with self._lifecycle:
+            self.check()
+            gap = records.get("gaps", routing.gap_id, KnowledgeGap)
+            QueueKnowledgeWaitPort(
+                self.queue,
+                claim=self.claim,
+                owner_token=self._token,
+                binding=binding,
+                records=records,
+                clock=lambda: datetime.now(UTC),
+            ).wait(binding, routing)
+            # Publish the local boundary only after the owner-fenced wait commits.
+            # A heartbeat must never renew the now released claim, nor may this
+            # Worker use its old execution authority after returning from wait.
+            self._knowledge_wait = gap
+            self._stop.set()
 
 
 class WorkerExecutionGuard:

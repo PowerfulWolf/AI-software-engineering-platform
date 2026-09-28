@@ -321,6 +321,7 @@ def test_reviewer_only_rejection_can_start_remediation_without_qa_invocation(
             source_dispatch_id=source_checkpoint.dispatch_commit_id,
             continuation_plan_sha256=plan.plan_sha256,
             continuation_sha256=completion.completion_sha256,
+            prerequisite_repair_sha256=None,
         )
 
         assert completion.disposition is CandidateVerificationDisposition.REMEDIATE_CANDIDATE

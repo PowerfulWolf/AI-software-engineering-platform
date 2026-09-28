@@ -1427,6 +1427,30 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   assert.doesNotMatch(text(get("content")), /团队通用知识/);
   assert.match(text(get("content")), /MISSING_REGRESSION/);
   assert.match(text(get("content")), /重复出现 2 次/);
+  const learningEvidence = learningFixture[0].proposal.evidence;
+  learningFixture[0].proposal.evidence = [{
+    requirement_id: "requirement_prior", gap_id: "gap_prior", resolution_id: "resolution_prior",
+    previous_run_id: "run_prior", evidence_uris: ["human://confirmed-fact"],
+  }];
+  learningFixture[0].proposal.trigger = "KNOWLEDGE_RESOLUTION";
+  await learningMode.events.click();
+  assert.match(text(get("content")), /人工确认的知识/);
+  assert.match(text(get("content")), /需求 requirement_prior.*确认 resolution_prior/);
+  assert.match(text(get("content")), /human:\/\/confirmed-fact/);
+  assert.doesNotMatch(text(get("content")), /undefined/);
+  learningFixture[0].proposal.evidence = [{ ...learningEvidence[0],
+    observation_id: "discovered_fact", role: "coder", source_revision: "candidate_exact",
+    applicability: "Only this repository <script>unsafe</script>",
+  }];
+  learningFixture[0].proposal.trigger = "PROJECT_OBSERVATION";
+  await learningMode.events.click();
+  assert.match(text(get("content")), /开发中的项目发现/);
+  assert.match(text(get("content")), /候选 candidate_exact/);
+  assert.match(text(get("content")), /适用范围.*Only this repository/);
+  assert.doesNotMatch(text(get("content")), /undefined/);
+  learningFixture[0].proposal.evidence = learningEvidence;
+  learningFixture[0].proposal.trigger = "QA_FAILURE";
+  await learningMode.events.click();
   const approveLearning = descend(get("content")).find(
     (node) =>
       node.tag === "button" && node.textContent === "批准为 Project Spec",

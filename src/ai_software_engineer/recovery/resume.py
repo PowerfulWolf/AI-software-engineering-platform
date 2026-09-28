@@ -10,8 +10,10 @@ from typing import Self
 from pydantic import model_validator
 
 from ai_software_engineer.config import ProductionConfig
-from ai_software_engineer.domain import AgentRole
+from ai_software_engineer.domain import AgentRole, QaCriterionStatus, QaTestStatus
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
+from ai_software_engineer.domain.prerequisite_repair import PrerequisiteRepairPlan
+from ai_software_engineer.knowledge.gaps import KnowledgeGap
 from ai_software_engineer.manager.delivery import (
     ProjectDeliveryResult,
     ResumeProjectDelivery,
@@ -24,13 +26,19 @@ from ai_software_engineer.manager.delivery_checkpoint import (
 from ai_software_engineer.manager.production_backend import (
     ProductionProjectDeliveryBackend,
 )
+from ai_software_engineer.manager.verification_coordination import ManagerVerificationAdvice
 from ai_software_engineer.multi_directory.models import JointDeliveryResult, JointStage
+from ai_software_engineer.recovery.context import approved_parent_context
 from ai_software_engineer.recovery.entry import NativeRecoveryEntry
 from ai_software_engineer.recovery.models import (
+    RecoveryApprovalCommand,
+    RecoveryAuthorization,
     RecoveryPlan,
     RecoveryRejected,
     RecoveryScope,
     RecoveryScopeSupplement,
+    VerificationExecutionBlocked,
+    VerifiedRecoveryDecision,
 )
 from ai_software_engineer.recovery.remediation import CandidateRemediationService
 from ai_software_engineer.recovery.store import FileRecoveryStore, RecoveryRecordMissing
@@ -40,6 +48,8 @@ from ai_software_engineer.recovery.verification_native import (
     NativeCandidateSourceReader,
 )
 from ai_software_engineer.recovery.verification_records import (
+    CandidateExecutorPrerequisite,
+    CandidateRemediationEvidence,
     CandidateVerificationCompletion,
     CandidateVerificationDisposition,
     CandidateVerificationPlan,
@@ -52,6 +62,7 @@ class DeliveryResumeOutcome(StrEnum):
     VERIFICATION_APPROVAL_REQUIRED = "VERIFICATION_APPROVAL_REQUIRED"
     RECOVERY_APPROVAL_REQUIRED = "RECOVERY_APPROVAL_REQUIRED"
     SCOPE_APPROVAL_REQUIRED = "SCOPE_APPROVAL_REQUIRED"
+    REPAIR_APPROVAL_REQUIRED = "REPAIR_APPROVAL_REQUIRED"
     VERIFIED = "VERIFIED"
     RECOVERED = "RECOVERED"
     REMEDIATED = "REMEDIATED"
@@ -70,6 +81,7 @@ class DeliveryResumeResult(DomainModel):
     recovery_plan_sha256: str | None = None
     scope_supplement_sha256: str | None = None
     scope_supplement_paths: tuple[NonEmptyStr, ...] = ()
+    prerequisite_repair_plan: PrerequisiteRepairPlan | None = None
 
 
 class JointDeliveryResumeResult(JointDeliveryResult):
@@ -184,13 +196,40 @@ class DeliveryResumeController:
             repository_root=current.repository_root,
             delivery_id=current.delivery_id,
         )
+        if command.native_ui_scenario is not None:
+            from ai_software_engineer.manager.native_ui import native_ui_capability
+
+            expected_ui = native_ui_capability(command.native_ui_scenario)
+            if (
+                latest is not None
+                and latest[1].native_ui == expected_ui
+                and not self._has_admitted_invocation(latest[0], latest[1])
+            ):
+                return self._approval_required(current, latest[1], latest[2])
+            ui_plan, ui_path = self._verification.propose_project(
+                repository_root=current.repository_root,
+                delivery_id=current.delivery_id,
+                native_ui_scenario=command.native_ui_scenario,
+            )
+            return self._approval_required(current, ui_plan, ui_path)
         if latest is None:
             plan, path = self._verification.propose_project(
                 repository_root=current.repository_root,
                 delivery_id=current.delivery_id,
             )
-            return self._approval_required(current, plan, path)
+            return self._coordinate_prerequisites(current, plan) or self._approval_required(
+                current, plan, path
+            )
         store, plan, path = latest
+        if command.prerequisite_repair is not None or command.approved_repair_sha256 is not None:
+            return self._continue_prerequisite_repair(current, command, store, plan)
+        coordinated = (
+            None
+            if self._has_admitted_invocation(store, plan)
+            else self._coordinate_prerequisites(current, plan)
+        )
+        if coordinated is not None:
+            return coordinated
         try:
             authorization = store.get_verification_authorization(plan.plan_sha256)
         except RecoveryRecordMissing:
@@ -213,14 +252,68 @@ class DeliveryResumeController:
         except RecoveryRecordMissing:
             completion = None
         if completion is None and self._has_admitted_invocation(store, plan):
+            coordinated = self._coordinate_prerequisites(current, plan)
+            if coordinated is not None:
+                return coordinated
             successor, successor_path = self._verification.propose_project(
                 repository_root=current.repository_root,
                 delivery_id=current.delivery_id,
+                native_ui_scenario=plan.native_ui.scenario if plan.native_ui else None,
+                manager_advice=plan.manager_advice,
             )
             return self._approval_required(current, successor, successor_path)
         if completion is None:
-            completion = self._verification.execute(path)
+            try:
+                completion = self._verification.execute(path)
+            except VerificationExecutionBlocked as error:
+                return self._coordinate_prerequisites(current, plan) or DeliveryResumeResult(
+                    outcome=DeliveryResumeOutcome.WAITING_HUMAN,
+                    checkpoint=current,
+                    next_action=error.next_action,
+                )
         return self._continue_completion(plan, completion)
+
+    def _coordinate_prerequisites(
+        self, current: ProjectDeliveryCheckpoint, plan: CandidateVerificationPlan
+    ) -> DeliveryResumeResult | None:
+        advice = self._verification.coordinate(plan)
+        if advice is None:
+            return None
+        if advice.draft.prerequisite_repair is not None:
+            latest = self._verification.latest_project(
+                repository_root=current.repository_root,
+                delivery_id=current.delivery_id,
+            )
+            if latest is None or latest[1] != plan:
+                raise RecoveryRejected("Manager repair source is no longer current")
+            return self._continue_prerequisite_repair(
+                current,
+                ResumeProjectDelivery(
+                    delivery_id=current.delivery_id,
+                    prerequisite_repair=advice.draft.prerequisite_repair,
+                ),
+                latest[0],
+                plan,
+                manager_advice=advice,
+            )
+        if advice.draft.native_ui_scenario is None:
+            return DeliveryResumeResult(
+                outcome=DeliveryResumeOutcome.WAITING_HUMAN,
+                checkpoint=current,
+                next_action=(
+                    f"Manager: {advice.environment_prerequisite.next_action}"
+                    if advice.environment_prerequisite is not None
+                    and not advice.environment_prerequisite.ready
+                    else f"Manager: {advice.draft.summary}\n{advice.draft.next_action}"
+                ),
+            )
+        coordinated_plan, coordinated_path = self._verification.propose_project(
+            repository_root=current.repository_root,
+            delivery_id=current.delivery_id,
+            native_ui_scenario=advice.draft.native_ui_scenario,
+            manager_advice=advice,
+        )
+        return self._approval_required(current, coordinated_plan, coordinated_path)
 
     def _continue_completion(
         self,
@@ -242,33 +335,56 @@ class DeliveryResumeController:
         if source is None or source[1] != plan:
             raise ValueError("verification completion is no longer the current candidate result")
         if completion.disposition is CandidateVerificationDisposition.RETRY_VERIFICATION:
+            source[0].record_verification_incident(completion)
             current = self._entry.status(plan.scope.delivery_id).checkpoint
             successor, path = self._verification.propose_project(
                 repository_root=plan.scope.repository_root,
                 delivery_id=plan.scope.delivery_id,
+                native_ui_scenario=plan.native_ui.scenario if plan.native_ui else None,
+                manager_advice=plan.manager_advice,
             )
             if successor.inputs.candidate_revision != plan.inputs.candidate_revision:
                 raise ValueError("successor verification changed the retained candidate")
-            return self._approval_required(current, successor, path)
+            return self._coordinate_prerequisites(current, successor) or self._approval_required(
+                current, successor, path, completion=completion
+            )
         store = source[0]
+        return self._run_remediation(plan, completion, store)
+
+    def _run_remediation(
+        self,
+        plan: CandidateVerificationPlan,
+        completion: CandidateRemediationEvidence,
+        store: FileRecoveryStore,
+        repair_plan: PrerequisiteRepairPlan | None = None,
+    ) -> DeliveryResumeResult:
         remediation_backend = self._verification.backend
         native = CandidateRemediationService(
             backend=remediation_backend,
             config=self._config,
             environment=self._environment,
-        ).prepare(source=self._native_source(plan), store=store, plan=plan, completion=completion)
+        ).prepare(
+            source=self._native_source(plan),
+            store=store,
+            plan=plan,
+            completion=completion,
+            **({"repair_plan": repair_plan} if repair_plan is not None else {}),
+        )
         started = self._entry.begin_continuation(
             native.dispatch,
             plan,
             completion,
-            at=completion.completed_at,
+            at=native.dispatch.committed_at,
+            **({"repair_plan": repair_plan} if repair_plan is not None else {}),
         )
         if started.checkpoint.stage is not DeliveryStage.DELIVERING:
             return self._result(
                 DeliveryResumeOutcome.CONTINUED,
                 started,
                 next_action=_checkpoint_next_action(started.checkpoint),
-                completion=completion,
+                completion=completion
+                if isinstance(completion, CandidateVerificationCompletion)
+                else None,
             )
         delivered = remediation_backend.run_prepared_allocation(
             native.dispatch,
@@ -276,7 +392,12 @@ class DeliveryResumeController:
             native.source.stages.product,
             native.source.stages.design,
             native.source.stages.plan,
-            extra_context=native.context_sources,
+            extra_context=(
+                *approved_parent_context(
+                    self._config, plan.scope, plan.parent_delivery_id, plan.parent_checkpoint_sha256
+                ),
+                *native.context_sources,
+            ),
         )
         result = self._entry.finish_continuation(
             native.dispatch,
@@ -287,8 +408,129 @@ class DeliveryResumeController:
             DeliveryResumeOutcome.REMEDIATED,
             result,
             next_action=_checkpoint_next_action(result.checkpoint),
-            completion=completion,
+            completion=completion
+            if isinstance(completion, CandidateVerificationCompletion)
+            else None,
         )
+
+    def _continue_prerequisite_repair(
+        self,
+        current: ProjectDeliveryCheckpoint,
+        command: ResumeProjectDelivery,
+        store: FileRecoveryStore,
+        latest: CandidateVerificationPlan,
+        *,
+        manager_advice: ManagerVerificationAdvice | None = None,
+    ) -> DeliveryResumeResult:
+        with store.execution_lock():
+            return self._locked_prerequisite_repair(current, command, store, latest, manager_advice)
+
+    def _locked_prerequisite_repair(
+        self,
+        current: ProjectDeliveryCheckpoint,
+        command: ResumeProjectDelivery,
+        store: FileRecoveryStore,
+        latest: CandidateVerificationPlan,
+        manager_advice: ManagerVerificationAdvice | None = None,
+    ) -> DeliveryResumeResult:
+        # Only the latest sealed inconclusive result is eligible. A pending verification
+        # plan may reference it, but its verification approval cannot authorize Coder.
+        completion: CandidateRemediationEvidence
+        incident_sha256: str | None = None
+        failed = store.latest_verification_execution(latest)
+        if failed is not None and failed.phase == "BLOCKED":
+            source_plan = store.get_verification_plan(failed.plan_sha256)
+            completion = store.record_executor_prerequisite(failed)
+        elif latest.prerequisite_incident_sha256 is not None:
+            incident = store.get_verification_incident(latest.prerequisite_incident_sha256)
+            source_plan = store.get_verification_plan(incident.source_plan_sha256)
+            completion = store.get_verification_completion(source_plan.plan_sha256)
+            incident_sha256 = incident.incident_sha256
+        else:
+            source_plan = latest
+            completion = store.get_verification_completion(source_plan.plan_sha256)
+            incident = store.record_verification_incident(completion)
+            incident_sha256 = incident.incident_sha256
+        source = self._native_source(source_plan)
+        prepared = self._verification.backend.prepare(current.repository_root).preparation
+        if prepared is None:
+            raise RecoveryRejected("repair requires a valid current project preparation")
+        target_base = self._verification.backend.delivery_base_revision(
+            Path(current.repository_root)
+        )
+        if command.prerequisite_repair is not None:
+            repair = PrerequisiteRepairPlan(
+                repository_root=current.repository_root,
+                delivery_id=current.delivery_id,
+                source_task_id=source.inputs.task_id,
+                source_plan_sha256=source_plan.plan_sha256,
+                completion_sha256=completion.completion_sha256
+                if isinstance(completion, CandidateVerificationCompletion)
+                else None,
+                incident_sha256=incident_sha256,
+                executor_prerequisite_sha256=completion.observation_sha256
+                if isinstance(completion, CandidateExecutorPrerequisite)
+                else None,
+                manager_advice_input_sha256=manager_advice.input_sha256 if manager_advice else None,
+                native_checkpoint_sha256=current.checkpoint_sha256,
+                candidate_revision=source_plan.inputs.candidate_revision,
+                target_base_revision=target_base,
+                target_preparation_sha256=prepared.preparation_sha256,
+                request=command.prerequisite_repair,
+                created_at=completion.evidence_at,
+                plan_sha256="0" * 64,
+            )
+            repair = store.put_repair_plan(
+                repair.model_copy(update={"plan_sha256": repair.recompute_sha256()})
+            )
+            return DeliveryResumeResult(
+                outcome=DeliveryResumeOutcome.REPAIR_APPROVAL_REQUIRED,
+                checkpoint=current,
+                prerequisite_repair_plan=repair,
+                next_action=(
+                    "Manager 已提出源码前提修复计划。请审核目标和精确文件范围; "
+                    "批准后由 ASE Coder 实施, 新候选仍须独立 QA/Reviewer。"
+                ),
+            )
+        assert command.approved_repair_sha256 is not None
+        assert command.approval_reference is not None
+        repair = store.get_repair_plan(command.approved_repair_sha256)
+        if (
+            repair.source_plan_sha256 != source_plan.plan_sha256
+            or repair.source_evidence_sha256 != completion.evidence_sha256
+            or repair.native_checkpoint_sha256 != current.checkpoint_sha256
+            or repair.target_preparation_sha256 != prepared.preparation_sha256
+            or repair.target_base_revision != target_base
+            or repair.source_task_id != source.inputs.task_id
+        ):
+            raise RecoveryRejected(
+                "repair source or target changed; a new exact proposal is required"
+            )
+        try:
+            authorization = store.get_repair_authorization(repair.plan_sha256)
+        except RecoveryRecordMissing:
+            approval = RecoveryApprovalCommand(
+                operation_id=f"repair_{repair.plan_sha256}",
+                plan_sha256=repair.plan_sha256,
+                approval_reference=command.approval_reference,
+                submitted_at=command.submitted_at,
+            )
+            authorization = store.put_repair_authorization(
+                RecoveryAuthorization.create(
+                    approval,
+                    VerifiedRecoveryDecision(
+                        plan_sha256=repair.plan_sha256,
+                        approval_reference=command.approval_reference,
+                        approved=True,
+                        operator_id="console-operator",
+                        rationale="Approved source-changing prerequisite repair, not a QA verdict",
+                        decided_at=command.submitted_at,
+                    ),
+                )
+            )
+        if not authorization.decision.approved:
+            raise RecoveryRejected("prerequisite repair was not approved")
+        return self._run_remediation(source_plan, completion, store, repair)
 
     def _continue_coder_recovery(
         self,
@@ -354,6 +596,13 @@ class DeliveryResumeController:
                 DeliveryResumeOutcome.CONTINUED,
                 started,
                 next_action=_checkpoint_next_action(started.checkpoint),
+            )
+        if isinstance(execution.delivery, KnowledgeGap):
+            return self._result(
+                DeliveryResumeOutcome.WAITING_HUMAN,
+                started,
+                next_action=f"Manager 等待知识前提确认: {execution.delivery.gap_id}。"
+                "恢复 Task 已接回原需求; 保留当前 QA/Reviewer checkpoint, 不重跑 Coder。",
             )
         result = self._entry.finish_recovery(
             execution.plan,
@@ -425,16 +674,54 @@ class DeliveryResumeController:
         current: ProjectDeliveryCheckpoint,
         plan: CandidateVerificationPlan,
         path: Path,
+        *,
+        completion: CandidateVerificationCompletion | None = None,
     ) -> DeliveryResumeResult:
+        next_action = (
+            "请检查并批准精确验证计划; 若前次 QA 存在未执行项或环境/权限阻塞, 请先解决后再批准。"
+            f" ase request resume {current.delivery_id} --approve-plan {plan.plan_sha256}"
+        )
+        if completion is not None:
+            not_tested = sum(
+                criterion.status is QaCriterionStatus.NOT_TESTED
+                for criterion in completion.qa.content.criteria_results
+            )
+            errors = sum(
+                test.status is QaTestStatus.ERROR for test in completion.qa.content.tests_run
+            )
+            next_action = (
+                f"QA 报告 {completion.qa.artifact_id} 未完成验证: "
+                f"{not_tested} 项 NOT_TESTED, {errors} 项 ERROR。"
+                "请先解决报告中的环境/权限阻塞, 再批准新计划; 候选未改变, 不会重新执行 Coder。"
+            )
+        if plan.prerequisite_incident_sha256 is not None:
+            next_action = (
+                f"Manager 已记录验证环境阻塞 {plan.prerequisite_incident_sha256[:12]}, "
+                "等待人工处理。请核对 QA 的未执行项、工具链和 UI 验收前提; "
+                "新计划批准只授权列明的受控能力, "
+                "不表示环境已修复或验收通过。" + next_action
+            )
+        if plan.manager_advice is not None:
+            next_action = (
+                f"Manager 已提出验证补齐方案: {plan.manager_advice.draft.summary}。"
+                f"{plan.manager_advice.draft.next_action}。"
+                "请审核精确 UI 步骤及验收映射后批准; 执行成功仍须独立 QA/Reviewer 判定。"
+            )
+        if plan.reused_qa is not None:
+            next_action = (
+                f"复用已封存 QA PASS {plan.reused_qa.artifact_id}; "
+                "请批准仅重新执行独立 Reviewer 的精确计划。不会重新执行 QA, "
+                "不修改历史 Task 或 QA 结论; Reviewer 仍须独立审查后才能交付。"
+            )
         return DeliveryResumeResult(
             outcome=DeliveryResumeOutcome.VERIFICATION_APPROVAL_REQUIRED,
             checkpoint=current,
-            next_action=(
-                "Approve the exact verification plan, then resume: "
-                f"ase request resume {current.delivery_id} --approve-plan {plan.plan_sha256}"
-            ),
+            next_action=next_action,
             verification_plan_file=str(path),
             verification_plan_sha256=plan.plan_sha256,
+            verification_completion_sha256=(
+                completion.completion_sha256 if completion is not None else None
+            ),
         )
 
     @staticmethod

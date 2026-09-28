@@ -97,6 +97,34 @@ class RepositoryInspectionModel(Model):
         )
 
 
+def test_consultation_does_not_disclose_restricted_document_titles(tmp_path: Path) -> None:
+    class MetadataGuard(Model):
+        def complete(
+            self,
+            *,
+            instructions: str,
+            input_payload: Mapping[str, object],
+            output_schema: Mapping[str, object],
+            timeout_seconds: int,
+            input_images: tuple[Path, ...] = (),
+        ) -> StructuredModelResult:
+            if output_schema["title"] == "KnowledgeIntent":
+                assert input_payload["available_documents"] == []
+            return super().complete(
+                instructions=instructions,
+                input_payload=input_payload,
+                output_schema=output_schema,
+                timeout_seconds=timeout_seconds,
+                input_images=input_images,
+            )
+
+    frozen = snapshot(document().model_copy(update={"roles": (TeamRole.CODER,)}))
+    with pytest.raises(KnowledgeGapRaised):
+        KnowledgeConsultationService(MetadataGuard(), KnowledgeRecordStore(tmp_path)).consult(
+            binding(frozen, TeamRole.QA), frozen, {}, timeout_seconds=30
+        )
+
+
 @pytest.mark.parametrize("role", list(TeamRole))
 def test_real_composition_seam_consults_and_replays(tmp_path: Path, role: TeamRole) -> None:
     frozen = snapshot(document())
@@ -112,6 +140,7 @@ def test_real_composition_seam_consults_and_replays(tmp_path: Path, role: TeamRo
     )
     assert client.complete(**args).payload == {"answer": "Use original payment ID."}  # type: ignore[arg-type]
     assert model.calls == ["KnowledgeIntent", "KnowledgeAssessment", "Output"]
+    assert "QA produces its own acceptance evidence" in model.instructions["KnowledgeAssessment"]
     client.complete(**args)  # type: ignore[arg-type]
     assert model.calls == ["KnowledgeIntent", "KnowledgeAssessment", "Output", "Output"]
 

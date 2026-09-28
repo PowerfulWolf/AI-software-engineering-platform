@@ -263,6 +263,20 @@ class StageWorkflowProof(DomainModel):
                 raise KnowledgeError("STAGE_KNOWLEDGE_RESOLUTION_REQUIRED")
             self.gap.validate_integrity()
             self.resolution.validate_integrity()
+            # Historical continuation gaps may be Task-scoped. The exact native
+            # child recorded in this immutable Requirement checkpoint is their
+            # ownership proof; a caller-supplied or unrelated Task id is not.
+            legacy_child = (
+                self.gap.binding.task_id is not None
+                and self.gap.binding.task_id.startswith("task_continue_")
+                and self.gap.binding.requirement_id == self.gap.binding.task_id
+                and self.gap.binding.role in {TeamRole.QA, TeamRole.REVIEWER}
+                and any(
+                    child.checkpoint.task_id == self.gap.binding.task_id
+                    and self.gap.binding.repository_ids == (child.checkpoint.repository_id,)
+                    for child in cp.children
+                )
+            )
             if (
                 self.gap.gap_id != cp.knowledge_gap_id
                 or self.resolution.gap_id != self.gap.gap_id
@@ -270,9 +284,9 @@ class StageWorkflowProof(DomainModel):
                 or (
                     self.gap.binding.team_id,
                     self.gap.binding.project_id,
-                    self.gap.binding.requirement_id,
                 )
-                != (cp.team_id, cp.project_id, cp.delivery_id)
+                != (cp.team_id, cp.project_id)
+                or (self.gap.binding.requirement_id != cp.delivery_id and not legacy_child)
                 or not set(self.gap.binding.repository_ids) <= set(self.binding.repository_ids)
             ):
                 raise KnowledgeError("STAGE_RESOLUTION_BINDING")

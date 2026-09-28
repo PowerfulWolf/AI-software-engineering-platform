@@ -16,7 +16,10 @@ from ai_software_engineer.knowledge.gaps import (
 from ai_software_engineer.knowledge.models import BoundedText, Digest, KnowledgeError, digest
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.knowledge.views import KnowledgeGapView, read_gap_view
-from ai_software_engineer.manager.delivery_checkpoint import DeliveryId
+from ai_software_engineer.manager.delivery_checkpoint import (
+    DeliveryId,
+    FileProjectDeliveryCheckpointStore,
+)
 from ai_software_engineer.multi_directory.models import JointStage
 from ai_software_engineer.multi_directory.retirement import RequirementRetirementStore
 from ai_software_engineer.multi_directory.store import JointJournal
@@ -62,13 +65,64 @@ def list_gaps(project: ProjectWorkspace, requirement_id: str) -> tuple[Knowledge
         gap
         for records in gap_stores(project, requirement_id, read_only=True)
         for gap in records.list("gaps", KnowledgeGap)
-        if gap.binding.requirement_id == requirement_id
-        and gap.binding.project_id == project.manifest.project_id
-        and gap.binding.team_id == project.manifest.team_id
+        if _gap_belongs_to_requirement(project, requirement_id, gap)
     )
     for gap in gaps:
         gap.validate_integrity()
     return gaps
+
+
+def _gap_belongs_to_requirement(
+    project: ProjectWorkspace, requirement_id: str, gap: KnowledgeGap
+) -> bool:
+    """Recognize historical task-scoped verifier gaps through exact native lineage.
+
+    Do not rewrite the gap's binding or trust a Task id supplied by the caller.
+    The current Requirement child, native journal and sealed implementation prove
+    ownership for the old continuation path that omitted joint context.
+    """
+    from ai_software_engineer.artifacts import FileArtifactStore
+    from ai_software_engineer.domain import ImplementationReportArtifact, TeamRole
+
+    if (
+        gap.binding.project_id != project.manifest.project_id
+        or gap.binding.team_id != project.manifest.team_id
+    ):
+        return False
+    if gap.binding.requirement_id == requirement_id:
+        return True
+    if (
+        gap.binding.task_id is None
+        or gap.binding.requirement_id != gap.binding.task_id
+        or not gap.binding.task_id.startswith("task_continue_")
+        or gap.binding.role not in {TeamRole.QA, TeamRole.REVIEWER}
+    ):
+        return False
+    current = JointJournal(project.requirements_root, read_only=True).current(requirement_id)
+    if current is None:
+        return False
+    for child in current.children:
+        ref = child.checkpoint
+        if gap.binding.repository_ids != (ref.repository_id,):
+            continue
+        sidecar = project.root / "repositories" / ref.repository_id
+        native = FileProjectDeliveryCheckpointStore(
+            sidecar / "state/project-deliveries", read_only=True
+        ).current(ref.delivery_id)
+        if (
+            native.task_id != gap.binding.task_id
+            or native.repository_id != ref.repository_id
+            or native.repository_root != ref.repository_root
+        ):
+            continue
+        return any(
+            isinstance(artifact, ImplementationReportArtifact)
+            and artifact.source_revision == gap.binding.source_revision
+            for artifact in FileArtifactStore(sidecar / "artifacts", read_only=True).list_for_task(
+                gap.binding.task_id
+            )
+        )
+    return False
 
 
 def list_gap_views(project: ProjectWorkspace, requirement_id: str) -> tuple[KnowledgeGapView, ...]:
@@ -92,12 +146,7 @@ def find_gap_records(
 ) -> KnowledgeRecordStore:
     for records in gap_stores(project, requirement_id, read_only=read_only):
         gap = records.find("gaps", gap_id, KnowledgeGap)
-        if (
-            gap is not None
-            and gap.binding.requirement_id == requirement_id
-            and gap.binding.project_id == project.manifest.project_id
-            and gap.binding.team_id == project.manifest.team_id
-        ):
+        if gap is not None and _gap_belongs_to_requirement(project, requirement_id, gap):
             gap.validate_integrity()
             return records
     raise KnowledgeError("GAP_NOT_FOUND")

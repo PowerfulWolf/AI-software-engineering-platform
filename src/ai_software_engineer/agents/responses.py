@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 from pydantic import TypeAdapter
 
+from ai_software_engineer.agents.diagnostics import http_error_detail
 from ai_software_engineer.agents.execution import ExecutionGuard, execution_scope
 from ai_software_engineer.agents.json_schema import strict_output_schema
 from ai_software_engineer.agents.models import (
@@ -219,7 +220,20 @@ class ResponsesAgentAdapter:
             }
             for message in prompt.messages
         ]
-        previous_response_id: str | None = None
+        for attachment in prompt.images:
+            input_items.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": attachment.label},
+                        {
+                            "type": "input_image",
+                            "image_url": attachment.image.data_url(),
+                            "detail": "high",
+                        },
+                    ],
+                }
+            )
         tool_calls = 0
         latest_usage: AgentUsage | None = None
         for turn in range(1, self._max_turns + 1):
@@ -230,7 +244,6 @@ class ResponsesAgentAdapter:
                 input_items,
                 request.role,
                 reasoning_effort=self._reasoning_effort,
-                previous_response_id=previous_response_id,
             )
             response = self._transport.post(
                 self._endpoint,
@@ -251,7 +264,8 @@ class ResponsesAgentAdapter:
                     self._workspace_root,
                     initial_head,
                     code,
-                    f"Responses provider returned HTTP {response.status_code}",
+                    f"Responses provider returned HTTP {response.status_code}; "
+                    + http_error_detail(response.body, self._api_key),
                     transient=transient,
                     duration_ms=_elapsed_ms(started),
                     timed_out=status is AgentRunStatus.TIMED_OUT,
@@ -260,7 +274,7 @@ class ResponsesAgentAdapter:
             latest_usage = _usage(payload) or latest_usage
             calls = _function_calls(payload)
             if calls:
-                previous_response_id = _response_id(payload)
+                response_items = _conversation_output(payload)
                 outputs: list[WirePayload] = []
                 for call_id, name, arguments in calls:
                     tool_calls += 1
@@ -292,10 +306,13 @@ class ResponsesAgentAdapter:
                             ),
                         }
                     )
-                input_items = outputs
+                # Compatible gateways need not retain response IDs. Carry exact
+                # assistant output (including reasoning) and tool receipts within
+                # this bounded invocation instead of relying on server storage.
+                input_items = [*input_items, *response_items, *outputs]
                 continue
             content = _output_text(payload)
-            artifact = validate_artifact_payload(json.loads(content))
+            artifact = _decode_artifact_output(content)
             if artifact.kind not in ROLE_OUTPUTS[request.role]:
                 raise ValueError("provider Artifact is outside the role contract")
             artifact = _normalize_producer(artifact, request, self._agent)
@@ -334,11 +351,11 @@ def _request_body(
     role: AgentRole,
     *,
     reasoning_effort: ReasoningEffort,
-    previous_response_id: str | None,
 ) -> bytes:
     payload: WirePayload = {
         "model": model,
         "reasoning": {"effort": reasoning_effort},
+        "store": False,
         "input": cast(JsonValue, input_items),
         "tools": cast(JsonValue, _tool_definitions(role)),
         "text": {
@@ -350,8 +367,6 @@ def _request_body(
             }
         },
     }
-    if previous_response_id is not None:
-        payload["previous_response_id"] = previous_response_id
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
@@ -411,7 +426,7 @@ def _tool_definitions(role: AgentRole) -> list[WirePayload]:
                 },
             }
         )
-    return definitions
+    return [cast(WirePayload, strict_output_schema(definition)) for definition in definitions]
 
 
 def _tool_request(
@@ -445,11 +460,22 @@ def _response_payload(response: HttpResponse) -> Mapping[str, object]:
     return payload
 
 
-def _response_id(payload: Mapping[str, object]) -> str:
-    value = payload.get("id")
-    if not isinstance(value, str) or not value:
-        raise ValueError("Responses function call has no response ID")
-    return value
+def _conversation_output(payload: Mapping[str, object]) -> list[WirePayload]:
+    output = payload.get("output")
+    if not isinstance(output, list) or not output:
+        raise ValueError("Responses tool turn has no replayable output")
+    items: list[WirePayload] = []
+    for item in output:
+        if not isinstance(item, dict) or item.get("type") not in {
+            "function_call",
+            "reasoning",
+            "message",
+        }:
+            raise ValueError("Responses output item is not supported")
+        if item["type"] == "message" and item.get("role") != "assistant":
+            raise ValueError("Responses output cannot change instruction roles")
+        items.append(cast(WirePayload, item))
+    return items
 
 
 def _function_calls(payload: Mapping[str, object]) -> tuple[tuple[str, str, str], ...]:
@@ -534,7 +560,48 @@ def _artifact_schema(role: AgentRole) -> dict[str, object]:
         schema = QaReportArtifact.model_json_schema()
     else:
         schema = ReviewReportArtifact.model_json_schema()
-    return strict_output_schema(cast(dict[str, object], schema))
+    normalized = strict_output_schema(cast(dict[str, object], schema))
+    definitions = cast(dict[str, object], normalized.pop("$defs", {}))
+    if role is AgentRole.QA:
+        # Domain environment metadata is a free-form JSON object. Strict output
+        # cannot express arbitrary object keys; encode this optional metadata as
+        # JSON text on the provider wire, then decode before domain validation.
+        qa_content = cast(dict[str, object], definitions["QaReportContent"])
+        properties = cast(dict[str, object], qa_content["properties"])
+        properties["environment"] = {
+            "anyOf": [{"type": "string"}, {"type": "null"}],
+            "description": "Optional environment metadata as a JSON-encoded object string.",
+        }
+        definitions.pop("JsonValue", None)
+    # A Coder may return progress or implementation. Keep the union below an
+    # object root, as required by Responses strict structured outputs.
+    return {
+        "type": "object",
+        "properties": {"artifact": normalized},
+        "required": ["artifact"],
+        "additionalProperties": False,
+        "$defs": definitions,
+    }
+
+
+def _decode_artifact_output(content: str) -> Artifact:
+    payload = json.loads(content)
+    if not isinstance(payload, dict):
+        raise ValueError("Responses artifact output must be an object")
+    if "artifact" in payload:
+        if set(payload) != {"artifact"} or not isinstance(payload["artifact"], dict):
+            raise ValueError("Responses artifact envelope is invalid")
+        payload = payload["artifact"]
+    # Bare artifacts from older compatible providers remain domain-validated.
+    body = payload.get("content")
+    if payload.get("kind") == "qa-report" and isinstance(body, dict):
+        environment = body.get("environment")
+        if isinstance(environment, str):
+            decoded = json.loads(environment)
+            if not isinstance(decoded, dict):
+                raise ValueError("QA environment metadata must decode to an object")
+            body["environment"] = decoded
+    return validate_artifact_payload(payload)
 
 
 def _validate_request_binding(

@@ -23,6 +23,8 @@
 16. 修改异步导入、选择、退休或增量索引时阅读 [`knowledge-index.md`](knowledge-index.md)。
 17. 修改 Product 失败原因、逐路由调用诊断或知识澄清 UI 时阅读
     [`product-failure-diagnostics.md`](product-failure-diagnostics.md)。
+18. 修改独立验证中断恢复、QA 复用或 Reviewer-only 审批时阅读
+    [`verification-role-recovery.md`](verification-role-recovery.md)。
 
 ## Quality Check
 
@@ -34,6 +36,21 @@
 
 ## Files
 
+- [`verification-role-recovery.md`](verification-role-recovery.md): admitted standalone QA checkpoints, exact approval and Reviewer-only restart.
+
+- [`verifier-worktree-lifecycle.md`](verifier-worktree-lifecycle.md): request-attempt verifier isolation, restart and candidate identity.
+
+- [`continuation-knowledge-wait.md`](continuation-knowledge-wait.md): successor parent context, Manager-owned verifier waits and exact legacy recovery.
+
+- [`prerequisite-repair.md`](prerequisite-repair.md): explicit source-changing prerequisite approval and ASE-owned Coder dispatch.
+
+- [`verification-environment.md`](verification-environment.md): Manager prerequisites, exact executor capability approval and isolated Swift receipts.
+
+- [`project-learning.md`](project-learning.md): evidenced discoveries, exact publication and future-role reuse.
+
+- [`swift-verification.md`](swift-verification.md): candidate-bound Swift commands, exact approval and historical-policy compatibility.
+- [`native-ui-verification.md`](native-ui-verification.md): bounded Mock UI/Accessibility execution, isolation and evidence boundaries.
+- [`responses-wire.md`](responses-wire.md): strict tool/output schemas, metadata transport and safe role errors.
 - [`execution-retry-policy.md`](execution-retry-policy.md): all-role operator limits, durable transient accounting and compact settings.
 - [`design-retry-budget.md`](design-retry-budget.md): configurable Design/transient budgets and recovery UI.
 - [`architecture.md`](architecture.md)

@@ -392,6 +392,7 @@ def test_joint_reader_accepts_committed_child_checkpoint_as_a_valid_prefix(
     assert task.last_activity >= advanced.checkpointed_at
     assert task.request_id == parent.delivery_id
     request = next(item for item in snapshot.requests if item.id == parent.delivery_id)
+    assert child.failed_stage is not None
     assert request.failed_stages == (child.failed_stage.value,)
 
 

@@ -17,6 +17,7 @@ from ai_software_engineer.recovery.models import (
 )
 from ai_software_engineer.recovery.store import FileRecoveryStore, RecoveryRecordMissing
 from ai_software_engineer.recovery.verification import CandidateVerificationResult
+from ai_software_engineer.recovery.verification_qa import validate_retained_qa_artifacts
 from ai_software_engineer.recovery.verification_records import (
     CandidateVerificationCompletion,
     CandidateVerificationInputs,
@@ -168,7 +169,7 @@ class CandidateVerificationAdmission:
             authorization = self.store.get_verification_authorization(self.plan_sha256)
             qa = (
                 None
-                if plan.inputs.accepted_qa is not None
+                if plan.reused_qa is not None
                 else self.store.get_verification_invocation(self.plan_sha256, AgentRole.QA)
             )
             reviewer = (
@@ -191,10 +192,11 @@ class CandidateVerificationAdmission:
             )
 
     def _validate_inputs(self, plan: CandidateVerificationPlan, request: AgentRequest) -> None:
+        validate_retained_qa_artifacts(self.store, plan, self.artifacts)
         prefix = (plan.inputs.plan_id, plan.inputs.implementation_id)
         if request.role is AgentRole.QA:
             if (
-                plan.inputs.accepted_qa is not None
+                plan.reused_qa is not None
                 or request.input_artifact_ids != prefix
                 or request.expected_parent_artifact_ids != prefix[1:]
             ):
@@ -205,7 +207,7 @@ class CandidateVerificationAdmission:
         qa = self.artifacts.get(request.input_artifact_ids[-1])
         qa_invocation = (
             None
-            if plan.inputs.accepted_qa is not None
+            if plan.reused_qa is not None
             else self.store.get_verification_invocation(self.plan_sha256, AgentRole.QA)
         )
         qa_definition = (
@@ -224,10 +226,10 @@ class CandidateVerificationAdmission:
             or request.run_id == qa.producer.run_id
         ):
             raise RecoveryRejected("Reviewer requires this recovery's accepted QA report")
-        if plan.inputs.accepted_qa is not None:
+        if plan.reused_qa is not None:
             if (
-                qa.artifact_id != plan.inputs.accepted_qa.artifact_id
-                or artifact_digest(qa) != plan.inputs.accepted_qa.artifact_sha256
+                qa.artifact_id != plan.reused_qa.artifact_id
+                or artifact_digest(qa) != plan.reused_qa.artifact_sha256
             ):
                 raise RecoveryRejected("Reviewer requires the plan's pinned QA report")
             return
@@ -238,3 +240,10 @@ class CandidateVerificationAdmission:
             or qa.producer.agent_id != qa_definition.id
         ):
             raise RecoveryRejected("Reviewer requires this recovery's accepted QA report")
+
+    def reusable_qa(self, inputs: CandidateVerificationInputs) -> QaReportArtifact | None:
+        plan = self.store.get_verification_plan(self.plan_sha256)
+        if plan.inputs != inputs:
+            raise RecoveryRejected("retained QA targets different verification inputs")
+        self.facts.validate(plan)
+        return validate_retained_qa_artifacts(self.store, plan, self.artifacts)

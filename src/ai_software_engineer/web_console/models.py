@@ -20,8 +20,10 @@ from pydantic import (
 from ai_software_engineer.agents.model_diagnostics import ModelCallDiagnostic
 from ai_software_engineer.domain.identity import ProjectId, TeamId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
+from ai_software_engineer.domain.prerequisite_repair import PrerequisiteRepairRequest
 from ai_software_engineer.manager.delivery import CheckpointDigest
 from ai_software_engineer.manager.delivery_checkpoint import DeliveryId
+from ai_software_engineer.manager.native_ui import NativeUiScenario
 from ai_software_engineer.multi_directory.attachments import RequirementAttachmentId
 from ai_software_engineer.project_workspace import ProjectName
 
@@ -149,10 +151,25 @@ class ContinueDeliveryIntent(DomainModel):
     expected_checkpoint_sha256: CheckpointDigest
     approved_plan_sha256: CheckpointDigest | None = None
     approved_scope_sha256: CheckpointDigest | None = None
+    prerequisite_repair: PrerequisiteRepairRequest | None = None
+    native_ui_scenario: NativeUiScenario | None = None
+    approved_repair_sha256: CheckpointDigest | None = None
 
     @model_validator(mode="after")
     def require_one_approval(self) -> Self:
-        if self.approved_plan_sha256 is not None and self.approved_scope_sha256 is not None:
+        if (
+            sum(
+                value is not None
+                for value in (
+                    self.approved_plan_sha256,
+                    self.approved_scope_sha256,
+                    self.prerequisite_repair,
+                    self.native_ui_scenario,
+                    self.approved_repair_sha256,
+                )
+            )
+            > 1
+        ):
             raise ValueError("only one continuation approval may be submitted")
         return self
 
@@ -189,7 +206,13 @@ CONSOLE_INTENT_ADAPTER: TypeAdapter[ConsoleIntent] = TypeAdapter(ConsoleIntent)
 
 
 class ConsoleApprovalRequest(DomainModel):
-    kind: Literal["candidate_verification", "coder_recovery", "coder_scope", "joint_integration"]
+    kind: Literal[
+        "candidate_verification",
+        "coder_recovery",
+        "coder_scope",
+        "joint_integration",
+        "prerequisite_repair",
+    ]
     plan_sha256: CheckpointDigest
     title: NonEmptyStr
     facts: tuple[NonEmptyStr, ...]

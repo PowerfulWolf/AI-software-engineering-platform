@@ -111,6 +111,16 @@ Wrong: increase `Task.max_attempts` globally or silently discard failure facts o
 Correct: freeze a typed policy at dispatch, atomically record failure plus next execution identity,
 then require a new role permit. Work counts and execution identity have different semantics.
 
+Native pre-candidate recovery must use `Task.work_budget_exhausted` when admitting a successful
+`coder-progress` at `RETRY_BUDGET_EXHAUSTED`. Comparing `attempts == max_attempts` is wrong for
+frozen policies: default work exhaustion occurs at 3 while the execution identity ceiling is 18.
+Still require exact terminal Coder role/run/context/attempt, progress checkpoint sequence and
+terminal event provenance; this does not admit arbitrary successful runs. Legacy tasks without a
+policy retain their original meaning through the shared Task property. A non-transient INVALID_OUTPUT
+under a frozen policy stops after one call, with no refund or hidden retry, and remains inspectable
+through the normal exact recovery proposal. `tests/recovery/test_native.py` exercises both production
+Host/MySQL paths; changing tests to match these facts must not weaken the recovery/approval checks.
+
 Wrong: `if failed_operation: show_retry()` ahead of recovery/approval facts.
 Correct: retain exact approvals, then apply active-stage budget and failed-operation presentation.
 

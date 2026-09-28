@@ -401,6 +401,9 @@ def test_approved_resolution_learning_prevents_same_gap_for_future_requirement(
     KnowledgeGapService(records).resolve(resolution, Approval(resolution))
     learning = ProjectLearningStore(project)
     proposal = learning.propose_knowledge_resolution(records, resolution.resolution_id)
+    from tests.contracts.test_json_schema_contracts import _assert_valid
+
+    _assert_valid(proposal.to_wire(), "learning-proposal.schema.json")
     assert ProjectKnowledgeDocumentStore(project).list() == ()
     assert effective_project_knowledge_paths(project) == ()
     # Publication is a second exact human decision; resolution approval alone is insufficient.

@@ -5,7 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol, cast
 
+from ai_software_engineer.agents.diagnostics import safe_diagnostic
 from ai_software_engineer.agents.structured import StructuredModelError
+from ai_software_engineer.context.ports import ContextBudgetExceeded
 from ai_software_engineer.domain.project_delivery import PlanTestMatrixError
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
@@ -34,6 +36,7 @@ from ai_software_engineer.multi_directory.service import (
     RestartRequirement,
     UpdateRequirement,
 )
+from ai_software_engineer.orchestration import AgentRunFailed
 from ai_software_engineer.project_workspace import ProjectWorkspace
 from ai_software_engineer.recovery import RecoveryRejected
 from ai_software_engineer.recovery.entry import NativeRecoveryEntry
@@ -207,19 +210,27 @@ class ManagerConsoleAdapter:
                         delivery_id=intent.delivery_id,
                         approved_plan_sha256=intent.approved_plan_sha256,
                         approved_scope_sha256=intent.approved_scope_sha256,
+                        prerequisite_repair=intent.prerequisite_repair,
+                        native_ui_scenario=intent.native_ui_scenario,
+                        approved_repair_sha256=intent.approved_repair_sha256,
                         approval_reference=(
                             (
-                                "web-console-scope:"
+                                "web-console-repair:"
+                                if intent.approved_repair_sha256 is not None
+                                else "web-console-scope:"
                                 if intent.approved_scope_sha256 is not None
                                 else "web-console-plan:"
                             )
                             + cast(
                                 str,
-                                intent.approved_plan_sha256 or intent.approved_scope_sha256,
+                                intent.approved_plan_sha256
+                                or intent.approved_scope_sha256
+                                or intent.approved_repair_sha256,
                             )
                             if (
                                 intent.approved_plan_sha256 is not None
                                 or intent.approved_scope_sha256 is not None
+                                or intent.approved_repair_sha256 is not None
                             )
                             else None
                         ),
@@ -237,8 +248,25 @@ class ManagerConsoleAdapter:
                 "STALE_CHECKPOINT",
                 "The displayed delivery changed. Refresh the workspace and try again.",
             ) from error
+        except ContextBudgetExceeded as error:
+            raise ConsoleCommandRejected(
+                "CONTEXT_BUDGET_EXHAUSTED",
+                "必要上下文超过已配置预算, 未启动受影响的 Agent; 不代表业务验收失败。"
+                "已封存报告和审批历史保留。由 Manager 协调上下文配置修复后, "
+                "通过继续交付生成并审批新计划; 不要重复执行已消费的审批。",
+            ) from error
         except StructuredModelError as error:
             raise ConsoleCommandRejected("MODEL_" + error.code.value, error.safe_message) from error
+        except AgentRunFailed as error:
+            failure = error.result.error
+            code = failure.code.value if failure is not None else error.result.status.value
+            detail = (
+                failure.message if failure is not None else "Agent returned no successful artifact"
+            )
+            raise ConsoleCommandRejected(
+                "MODEL_" + code,
+                safe_diagnostic(f"{error.result.role.value}: {detail}"),
+            ) from error
         except PlanTestMatrixError as error:
             raise ConsoleCommandRejected(
                 "PLANNER_TEST_MATRIX_REJECTED", _safe_summary(error)
@@ -309,8 +337,9 @@ def _summarize(
             )
             if verification_plan.plan_sha256 != result.verification_plan_sha256:
                 raise ValueError("verification approval plan identity mismatch")
-            accepted_qa = verification_plan.inputs.accepted_qa
+            accepted_qa = verification_plan.reused_qa
             reviewer_only = accepted_qa is not None
+            inconclusive = not reviewer_only and result.verification_completion_sha256 is not None
             roles = tuple(
                 f"{definition.role.value}: "
                 f"{definition.provider or 'configured'} / {definition.model}"
@@ -318,9 +347,31 @@ def _summarize(
                 if definition.role.value in ({"reviewer"} if reviewer_only else {"qa", "reviewer"})
             )
             qa_facts = (
-                (f"复用已封存 QA PASS {accepted_qa.artifact_id}",)
+                (
+                    f"复用已封存 QA PASS {accepted_qa.artifact_id}",
+                    *(
+                        (
+                            f"独立验证 QA 来源计划 {verification_plan.retained_qa.plan_sha256}; "
+                            f"QA 入场 {verification_plan.retained_qa.qa_invocation_sha256}; "
+                            "仅恢复 Reviewer, 不补造原 Task 的 QA 通过事件。",
+                        )
+                        if verification_plan.retained_qa is not None
+                        else ()
+                    ),
+                )
                 if accepted_qa is not None
                 else ()
+            )
+            swift_commands = tuple(
+                sorted(
+                    {
+                        command
+                        for definition in verification_plan.definitions
+                        if definition.role.value in {"qa", "reviewer"}
+                        for command in definition.permissions.commands
+                        if command.startswith("swift ")
+                    }
+                )
             )
             approval = ConsoleApprovalRequest(
                 kind="candidate_verification",
@@ -328,18 +379,101 @@ def _summarize(
                 title=(
                     "复用已通过 QA 并只重新执行 Reviewer"
                     if reviewer_only
-                    else "批准独立 QA 与 Reviewer 验证"
+                    else (
+                        "解决 QA 验证阻塞后重新批准"
+                        if inconclusive
+                        else "批准独立 QA 与 Reviewer 验证"
+                    )
                 ),
                 facts=(
                     f"候选提交 {verification_plan.inputs.candidate_revision}",
+                    *(
+                        (
+                            f"Manager 协调方案 {verification_plan.manager_advice.advice_sha256}: "
+                            f"{verification_plan.manager_advice.draft.summary}",
+                            *(
+                                f"{criterion.criterion_id}: {', '.join(criterion.step_names)}; "
+                                f"预期观察: {criterion.expected_observation}"
+                                for criterion in verification_plan.manager_advice.draft.criteria
+                            ),
+                        )
+                        if verification_plan.manager_advice
+                        else ()
+                    ),
                     *qa_facts,
+                    *(
+                        (
+                            "复用精确历史 QA 图片证据: "
+                            f"计划 {verification_plan.prior_visual_evidence.plan_sha256}; "
+                            f"记录 {verification_plan.prior_visual_evidence.record_sha256}。"
+                            "仅同候选前驱记录, 最多 6 张旧图加 6 张本轮新图; "
+                            "不重放旧操作、不继承旧验收结论。",
+                        )
+                        if verification_plan.prior_visual_evidence is not None
+                        else ()
+                    ),
+                    *(
+                        (
+                            "Manager 环境阻塞记录: "
+                            f"{verification_plan.prerequisite_incident_sha256}; "
+                            "等待人工核对前提",
+                        )
+                        if verification_plan.prerequisite_incident_sha256
+                        else ()
+                    ),
+                    *(
+                        (
+                            "受控能力 codex_sandbox_swiftpm_v1: "
+                            "独立 QA/Reviewer 的 build 与 XCTest; "
+                            "仅执行器关闭 SwiftPM 内层沙箱, 保留 Codex 外层源码只读、"
+                            "独立临时目录可写、网络禁用。不授权普通 Agent 命令扩权; "
+                            "UI 验收仍须单独完成。",
+                        )
+                        if verification_plan.executor_capability
+                        else ()
+                    ),
+                    *((safe_diagnostic(result.next_action),) if inconclusive else ()),
+                    *(
+                        (
+                            "独立原生 UI 能力 macos_mock_ax_v1: 仅启动隔离 Mock, "
+                            "构建仍用 Codex 沙箱; GUI 使用独立 Seatbelt 禁网、源码不可写、"
+                            "用户目录/Keychain 不可读、仅私有临时目录可写。"
+                            "AX 驱动只读写此子进程的指定窗口, 不操作系统菜单或其他 App。",
+                            f"精确 UI 计划: {verification_plan.native_ui.model_dump_json()}",
+                        )
+                        if verification_plan.native_ui is not None
+                        else ()
+                    ),
+                    *(f"受限验证命令: {command}" for command in swift_commands),
                     *roles,
                 ),
             )
             next_action = (
                 "请检查并批准仅重新执行 Reviewer 的精确验证计划。"
                 if reviewer_only
-                else "Review and approve the exact candidate verification plan."
+                else safe_diagnostic(result.next_action)
+            )
+        elif result.prerequisite_repair_plan is not None:
+            repair = result.prerequisite_repair_plan
+            repair.validate_integrity()
+            approval = ConsoleApprovalRequest(
+                kind="prerequisite_repair",
+                plan_sha256=repair.plan_sha256,
+                title="批准源码前提修复任务",
+                facts=(
+                    (
+                        f"执行器前提证据 {repair.executor_prerequisite_sha256} (非 QA 结论)"
+                        if repair.executor_prerequisite_sha256 is not None
+                        else f"Manager 阻塞 {repair.incident_sha256}"
+                    ),
+                    f"源候选 {repair.candidate_revision}",
+                    f"目标基线 {repair.target_base_revision}",
+                    f"修复目标 {repair.request.objective}",
+                    *(f"补充写入范围 {path}" for path in repair.request.write_paths),
+                    "由 ASE Coder 实施, 不导入操作员草稿; "
+                    "保留原验收标准, 独立 QA/Reviewer 验收新候选。",
+                    "不授权安装、网络、合并、部署、凭据访问或修改历史结论。",
+                ),
             )
         elif result.recovery_plan_sha256 is not None:
             if host is None:

@@ -166,6 +166,11 @@ T013 起，`ase` CLI 是 control-plane 的 composition root，而不是绕过领
 
 ## 角色权限（机器 policy 优先）
 
+验证环境修复参见 `.trellis/spec/core/verification-environment.md`：Manager 记录前提阻塞，
+人批准精确计划，受控执行器执行，QA/Reviewer 独立验收。任何沙箱兼容例外只能属于版本化、
+获批的执行器能力，不能变成 Agent 通用命令权限。源码只读、独立缓存、网络边界和真实拒绝
+测试必须同时保持；安装工具链、命令成功和验收通过是不同事实。
+
 | 角色 | 允许写入 | 允许命令 | 明确禁止 |
 |---|---|---|---|
 | `orchestrator` | Task/事件/artifact 索引 | 受 allowlist 的 Git、测试、Agent 启动 | 业务代码、直接批准代码 |

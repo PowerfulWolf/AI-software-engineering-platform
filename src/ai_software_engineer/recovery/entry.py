@@ -10,15 +10,29 @@ from typing import cast
 
 from pydantic import TypeAdapter, ValidationError
 
+from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.config import (
     ModelProviderKind,
     ProductionConfig,
     ProviderRouteConfig,
 )
 from ai_software_engineer.context import ContextSource, FileContextStore
-from ai_software_engineer.domain import AgentRole, Task, TaskStatus, TeamRole
+from ai_software_engineer.domain import (
+    AgentRole,
+    ImplementationReportArtifact,
+    Task,
+    TaskStatus,
+    TeamRole,
+)
 from ai_software_engineer.domain.task import task_matches_dispatch
 from ai_software_engineer.git import GitWorktreeManager, WorktreeNotFound, WorktreeSpec
+from ai_software_engineer.knowledge.gaps import (
+    KnowledgeGap,
+    KnowledgeGapRaised,
+    KnowledgeGapRouting,
+)
+from ai_software_engineer.knowledge.models import digest as knowledge_digest
+from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.delivery_checkpoint import ProjectDeliveryCheckpoint
 from ai_software_engineer.manager.dispatch import RecoveryDispatchRecord
 from ai_software_engineer.manager.mysql_dispatch_authority import (
@@ -35,13 +49,15 @@ from ai_software_engineer.manager.production_delivery import (
     ConfiguredDeliveryRouteAdapterFactory,
     DeliveryRouteAdapterFactory,
 )
-from ai_software_engineer.multi_directory.production import approved_joint_context_source
-from ai_software_engineer.multi_directory.store import JointJournal
 from ai_software_engineer.orchestration import RetryResult
 from ai_software_engineer.planning import FileExecutionPlanStore
 from ai_software_engineer.product import FileProductRecordStore
 from ai_software_engineer.recovery.allocation import RecoveryAllocator
-from ai_software_engineer.recovery.context import recovery_context_sources
+from ai_software_engineer.recovery.context import (
+    approved_parent_context,
+    preserved_prerequisite_context,
+    recovery_context_sources,
+)
 from ai_software_engineer.recovery.current import NativeRecoveryFactsVerifier
 from ai_software_engineer.recovery.models import (
     CapturedChanges,
@@ -79,7 +95,7 @@ class NativeRecoveryExecution:
 
     plan: RecoveryPlan
     dispatch: RecoveryDispatchRecord
-    delivery: RetryResult
+    delivery: RetryResult | KnowledgeGap
 
 
 def _require_seed_recovery_route(config: ProductionConfig) -> ProviderRouteConfig:
@@ -153,41 +169,12 @@ def _approved_parent_context(
     original parent payload.  The parent IDs sealed into RecoverySource identify the
     authoritative joint checkpoint from which the canonical context is reconstructed.
     """
-    parent_id = plan.source.parent_delivery_id
-    parent_sha256 = plan.source.parent_checkpoint_sha256
-    if parent_id is None:
-        return ()
-    if parent_sha256 is None:
-        raise RecoveryRejected("joint recovery source is incomplete")
-    team = TeamWorkspace.initialize(
-        config.platform_root,
-        team_id=config.team_id,
-        name=config.team_name,
-        read_only=True,
+    return approved_parent_context(
+        config,
+        plan.source.scope,
+        plan.source.parent_delivery_id,
+        plan.source.parent_checkpoint_sha256,
     )
-    project, repository = team.project_registry().locate_repository(plan.source.scope.repository_id)
-    if str(repository.repository_root) != plan.source.scope.repository_root:
-        raise RecoveryRejected("joint recovery repository binding changed")
-    parent = JointJournal(project.requirements_root, read_only=True).current(parent_id)
-    if (
-        parent is None
-        or parent.checkpoint_sha256 != parent_sha256
-        or parent.team_id != team.manifest.team_id
-        or parent.team_manifest_sha256 != team.manifest.manifest_sha256
-        or parent.project_id != project.manifest.project_id
-        or parent.project_manifest_sha256 != project.manifest.manifest_sha256
-    ):
-        raise RecoveryRejected("approved joint parent checkpoint changed")
-    children = tuple(
-        child
-        for child in parent.children
-        if child.checkpoint.delivery_id == plan.source.scope.delivery_id
-        and child.checkpoint.repository_id == plan.source.scope.repository_id
-        and child.checkpoint.repository_root == plan.source.scope.repository_root
-    )
-    if len(children) != 1:
-        raise RecoveryRejected("joint recovery unit is missing or ambiguous")
-    return (approved_joint_context_source(parent, children[0].unit_id),)
 
 
 def open_recovery_plan(
@@ -533,9 +520,22 @@ class NativeRecoveryEntry:
         try:
             store.get_invocation(plan.plan_sha256)
         except RecoveryRecordMissing:
-            delivery = self.execute(path)
+            try:
+                delivery: RetryResult | KnowledgeGap = self.execute(path)
+            except KnowledgeGapRaised as error:
+                delivery = self._verifier_knowledge_wait(store, plan)
+                if delivery != error.gap:
+                    raise RecoveryRejected(
+                        "recovery knowledge wait differs from durable gap"
+                    ) from error
         else:
             task = read_recovery_task(self.config, self.environment, store, plan)
+            if task is not None and task.status in {TaskStatus.QA, TaskStatus.REVIEW}:
+                return NativeRecoveryExecution(
+                    plan,
+                    self._dispatch_for(store, plan),
+                    self._verifier_knowledge_wait(store, plan),
+                )
             if task is None or task.status not in {
                 TaskStatus.DONE,
                 TaskStatus.BLOCKED,
@@ -562,6 +562,49 @@ class NativeRecoveryEntry:
             dispatch=self._dispatch_for(store, plan),
             delivery=delivery,
         )
+
+    def _verifier_knowledge_wait(
+        self, store: FileRecoveryStore, plan: RecoveryPlan
+    ) -> KnowledgeGap:
+        """Adopt only a granted recovery Task paused at its own durable verifier gap."""
+        NativeRecoveryFactsVerifier(self.config, self.environment).validate(plan)
+        authorization = store.get_authorization(plan.plan_sha256)
+        if not authorization.decision.approved:
+            raise RecoveryRejected("recovery knowledge wait requires exact approval")
+        task = read_recovery_task(self.config, self.environment, store, plan)
+        role = {TaskStatus.QA: TeamRole.QA, TaskStatus.REVIEW: TeamRole.REVIEWER}.get(
+            task.status if task is not None else TaskStatus.NEW
+        )
+        if task is None or role is None:
+            raise RecoveryRejected("recovery knowledge wait is not at a verifier checkpoint")
+        sidecar = _repository_sidecar(self.config, plan.source.scope.repository_id)
+        candidates = {
+            item.source_revision
+            for item in FileArtifactStore(sidecar / "artifacts").list_for_task(task.id)
+            if isinstance(item, ImplementationReportArtifact)
+        }
+        records = KnowledgeRecordStore(sidecar / "knowledge/runs", read_only=True)
+        gaps = tuple(
+            gap
+            for gap in records.list("gaps", KnowledgeGap)
+            if gap.binding.task_id == task.id
+            and gap.binding.role is role
+            and gap.binding.team_id == plan.source.scope.team_id
+            and gap.binding.repository_ids == (plan.source.scope.repository_id,)
+            and gap.binding.requirement_id == (plan.source.parent_delivery_id or task.id)
+            and gap.binding.source_revision in candidates
+            and gap.severity == "BLOCKING"
+        )
+        if len(gaps) != 1:
+            raise RecoveryRejected("recovery verifier wait is missing or ambiguous")
+        gap = gaps[0]
+        gap.validate_integrity()
+        route = records.get("gap-routes", gap.gap_id, KnowledgeGapRouting)
+        if route.gap_id != gap.gap_id or route.routing_sha256 != knowledge_digest(
+            route.model_dump(mode="json", exclude={"routing_sha256"})
+        ):
+            raise RecoveryRejected("recovery knowledge route changed")
+        return gap
 
     def _dispatch_for(self, store: FileRecoveryStore, plan: RecoveryPlan) -> RecoveryDispatchRecord:
         sidecar = _repository_sidecar(self.config, plan.source.scope.repository_id)
@@ -680,6 +723,18 @@ class NativeRecoveryEntry:
         )
         seed.seed(binding.worktree)
         extra = _approved_parent_context(self.config, plan)
+        # Failed prerequisite Coder work must retain the separately approved repair objective,
+        # not just its dirty files and write allowlist. Read the sealed prior manifest and grant.
+        repair_root = sidecar / "state" / f"candidate-verification-{plan.source.scope.delivery_id}"
+        if repair_root.exists():
+            extra = (
+                *extra,
+                *preserved_prerequisite_context(
+                    plan,
+                    contexts,
+                    FileRecoveryStore(repair_root, scope=plan.source.scope),
+                ),
+            )
         # Test factories must explicitly honor the same admission port; real Codex receives it here.
         factory = (
             route_factory(seed)

@@ -5,12 +5,14 @@ from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import Mock
 
 import pytest
 
 from ai_software_engineer.agents import StructuredModelClient, StructuredModelResult
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
 from ai_software_engineer.domain import TeamRole
+from ai_software_engineer.knowledge.gaps import KnowledgeGapRaised
 from ai_software_engineer.knowledge_documents import (
     ProjectKnowledgeDocumentStore,
     TeamKnowledgeDocumentStore,
@@ -134,8 +136,10 @@ def test_recovery_uses_current_project_backend_when_child_delivery_is_frozen(
     assert controller._verification.backend is current_backend
 
 
+@pytest.mark.parametrize("knowledge_gap", [False, True])
 def test_joint_resume_syncs_parent_after_non_done_child_recovery(
     monkeypatch: pytest.MonkeyPatch,
+    knowledge_gap: bool,
 ) -> None:
     """A child recovery result must be observed by the parent journal."""
 
@@ -143,6 +147,7 @@ def test_joint_resume_syncs_parent_after_non_done_child_recovery(
     child_checkpoint = SimpleNamespace(
         delivery_id="delivery_child_blocked",
         stage=DeliveryStage.BLOCKED,
+        task_id="task_successor",
     )
     child = SimpleNamespace(unit_id="unit_child", checkpoint=child_checkpoint)
     joint = SimpleNamespace(
@@ -156,17 +161,39 @@ def test_joint_resume_syncs_parent_after_non_done_child_recovery(
         outcome="WAITING_HUMAN",
     )
     calls: list[tuple[str, object]] = []
+    gap = Mock(gap_id="a" * 64, binding=SimpleNamespace(task_id="task_successor"))
+    records = Mock()
+    records.get.return_value = gap
+    monkeypatch.setattr(
+        "ai_software_engineer.knowledge.administration.find_gap_records",
+        lambda *args, **kwargs: records,
+    )
+
+    def resume_parent(command: ResumeProjectDelivery) -> object:
+        calls.append(("parent", command))
+        return parent_result
+
+    def resume_child(command: ResumeProjectDelivery) -> SimpleNamespace:
+        calls.append(("child", command))
+        if knowledge_gap:
+            raise KnowledgeGapRaised(gap)
+        return child_result
 
     backend = object.__new__(ProductionJointBackend)
-    backend.delivery_runtime = lambda checkpoint, unit_id: (None, None)
+    child_entry = SimpleNamespace(
+        status=lambda delivery_id: SimpleNamespace(checkpoint=child_checkpoint)
+    )
+    monkeypatch.setattr(
+        backend, "delivery_runtime", lambda checkpoint, unit_id: (None, child_entry)
+    )
     requirements = SimpleNamespace(
         backend=backend,
         status=lambda delivery_id: SimpleNamespace(checkpoint=joint),
-        resume=lambda command: calls.append(("parent", command)) or parent_result,
+        resume=resume_parent,
     )
-    runtime = SimpleNamespace(requirements=requirements)
+    runtime = SimpleNamespace(requirements=requirements, project=Mock())
     controller = SimpleNamespace(
-        resume=lambda command: calls.append(("child", command)) or child_result,
+        resume=resume_child,
     )
     monkeypatch.setattr(host, "_resolve_project_id", lambda project_id, delivery_id=None: "project")
     monkeypatch.setattr(host, "_runtime", lambda project_id: runtime)

@@ -73,6 +73,11 @@ Builder 始终生成并优先交付 `policy`、`task`、`role`；提供且不同
 `RuntimeConfig.context_max_input_tokens` 显式传到 `FileRunContextBuilder`，默认仍为 12,000；
 生产 Team Host 的交付阶段设置 64,000，输出预留仍为 4,000。它是本地确定性估算上限，
 不是供应商真实 tokenizer 或模型 context window 的声明；不会因超限自动扩大或重试。
+独立候选验证入口 `CandidateVerificationEntry.execute` 同样必须显式复用
+`PRODUCTION_DELIVERY_CONTEXT_BUDGET`，不能落回低层默认值。QA 上下文能装下不代表
+Reviewer 加入完整 QA 报告后也能装下；必须以该生产 composition 做顺序回归。
+Console 对逃出独立验证入口的超限返回 `CONTEXT_BUDGET_EXHAUSTED`，保留报告与审批历史、
+明确 Manager 协调修复及新计划恢复，不把它当作模型/业务失败或输出原始 source 文本。
 生产 `project.profile` source 使用 `repository_profile_context(profile)`：只把语言识别的完整
 marker 清单替换为 `marker_count` 和最多三个排序样例，保留所有 build-system/native-rule
 事实和完整 profile digest。`kind=repository_profile_context` 明确它是阅读投影，不可写回为

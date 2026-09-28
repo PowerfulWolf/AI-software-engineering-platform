@@ -5,7 +5,7 @@ from __future__ import annotations
 from urllib.parse import urlparse
 
 from ai_software_engineer.context import ContextSource
-from ai_software_engineer.domain.enums import TeamRole
+from ai_software_engineer.domain.enums import AgentRole, TeamRole
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.knowledge.models import (
     KnowledgeDocument,
@@ -65,7 +65,21 @@ def snapshot_from_sources(
             )
         documents[key] = document
 
-    def visit(repository_id: str, source: ContextSource) -> None:
+    def visit(
+        repository_id: str,
+        source: ContextSource,
+        inherited_roles: tuple[TeamRole, ...] | None = None,
+    ) -> None:
+        declared_roles = (
+            tuple(
+                TeamRole(role.value) for role in source.roles if role is not AgentRole.ORCHESTRATOR
+            )
+            if source.roles
+            else None
+        )
+        allowed_roles = _intersect_roles(inherited_roles, declared_roles)
+        if allowed_roles == ():
+            return
         if source.content is None:
             raise KnowledgeError("UNRESOLVED_SOURCE")
         parsed = urlparse(source.uri)
@@ -81,9 +95,14 @@ def snapshot_from_sources(
                     if context.team_id != team_id:
                         raise KnowledgeError("CONTEXT_TEAM")
                     for nested in context.documents:
-                        visit(repository_id, nested)
+                        visit(repository_id, nested, allowed_roles)
                 elif rule.field.startswith("governance."):
                     spec = _SpecBody.model_validate(rule.value)
+                    if spec.repository_ids and repository_id not in spec.repository_ids:
+                        continue
+                    spec_roles = _intersect_roles(allowed_roles, spec.roles or None)
+                    if spec_roles == ():
+                        continue
                     safe = redact_text(spec.body_markdown).text
                     add(
                         KnowledgeDocument(
@@ -96,7 +115,7 @@ def snapshot_from_sources(
                             repository_ids=tuple(
                                 r for r in spec.repository_ids if r in repository_ids
                             ),
-                            roles=spec.roles,
+                            roles=spec_roles or (),
                             title=redact_text(spec.title).text,
                             source_uri=rule.source_uri,
                             document_sha256=rule.source_sha256,
@@ -121,6 +140,7 @@ def snapshot_from_sources(
                     scope="team" if parsed.scheme == "team" else "project",
                     team_id=team_id,
                     project_id=None if parsed.scheme == "team" else project_id,
+                    roles=allowed_roles or (),
                     title=content.splitlines()[0].lstrip("# ")[:300]
                     if content.strip()
                     else identity,
@@ -138,6 +158,7 @@ def snapshot_from_sources(
                     team_id=team_id,
                     project_id=project_id,
                     repository_ids=(repository_id,),
+                    roles=allowed_roles or (),
                     title=source.source_id,
                     source_uri=source.uri,
                     document_sha256=text_digest(content),
@@ -156,3 +177,14 @@ def snapshot_from_sources(
         repository_ids=repository_ids,
         documents=tuple(documents.values()),
     )
+
+
+def _intersect_roles(
+    parent: tuple[TeamRole, ...] | None, child: tuple[TeamRole, ...] | None
+) -> tuple[TeamRole, ...] | None:
+    # None means unrestricted; an empty intersection means nobody, not everybody.
+    if parent is None:
+        return child
+    if child is None:
+        return parent
+    return tuple(role for role in child if role in parent)

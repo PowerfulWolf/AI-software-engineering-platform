@@ -60,7 +60,10 @@ from ai_software_engineer.manager.delivery import (
 )
 from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryFailureCode,
+    DeliveryNextAction,
     DeliveryStage,
+    DeliveryStageAttempts,
+    ProjectDeliveryCheckpoint,
 )
 from ai_software_engineer.manager.dispatch import DispatchStoreUnavailable
 from ai_software_engineer.manager.production_backend import (
@@ -74,6 +77,7 @@ from ai_software_engineer.manager.production_delivery import (
 from ai_software_engineer.manager.production_host import TeamHost
 from ai_software_engineer.orchestration import BlockedResult, RetryDeliveryResult
 from ai_software_engineer.planning import PlannerRunOutcome
+from ai_software_engineer.repository_profile import RepositoryProfile
 from ai_software_engineer.role_workspace import RoleWorktreeBinding
 from ai_software_engineer.runtime_workspace import FileTeamWorkforceStore
 from ai_software_engineer.work_queue.ports import QueueLeaseLost
@@ -188,14 +192,14 @@ def test_planner_retry_uses_a_new_run_identity_after_a_failed_run(
     delivery_id = "delivery_planner_retry"
     base_run_id = f"run_planner_{delivery_id.removeprefix('delivery_')}"
     prior = SimpleNamespace(outcome=PlannerRunOutcome.FAILED)
-    captured: list[object] = []
+    captured: list[_Command] = []
     facts = SimpleNamespace(
         design=SimpleNamespace(
-                get_run=lambda run_id: SimpleNamespace(
-                    technical_design=SimpleNamespace(),
-                    planning_authorization=SimpleNamespace(),
-                    next_request_revision=SimpleNamespace(),
-                ),
+            get_run=lambda run_id: SimpleNamespace(
+                technical_design=SimpleNamespace(),
+                planning_authorization=SimpleNamespace(),
+                next_request_revision=SimpleNamespace(),
+            ),
             get_checkpoint=lambda run_id: SimpleNamespace(run_id=run_id),
         ),
         product=SimpleNamespace(
@@ -211,31 +215,40 @@ def test_planner_retry_uses_a_new_run_identity_after_a_failed_run(
         def __init__(self, **kwargs: object) -> None:
             del kwargs
 
-        def produce(self, command: object) -> object:
+        def produce(self, command: _Command) -> _Command:
             captured.append(command)
             return command
 
     class _Command:
-        def __init__(self, **values: object) -> None:
-            self.__dict__.update(values)
+        def __init__(self, *, run_id: str, **values: object) -> None:
+            del values
+            self.run_id = run_id
 
     monkeypatch.setattr(production_backend, "PlannerStageService", _PlannerStage)
     monkeypatch.setattr(production_backend, "ProduceExecutionPlanCommand", _Command)
     backend = object.__new__(ProductionProjectDeliveryBackend)
-    backend._facts_for_checkpoint = lambda checkpoint: facts
+    monkeypatch.setattr(backend, "_facts_for_checkpoint", lambda checkpoint: facts)
     backend._structured_clients = SimpleNamespace(for_project=lambda *args: object())
     backend._trusted_plan_projection = False
-    checkpoint = SimpleNamespace(
+    checkpoint = ProjectDeliveryCheckpoint.create(
         delivery_id=delivery_id,
+        repository_id="repository_planner_retry",
+        repository_root=str(tmp_path),
+        previous_checkpoint_sha256="1" * 64,
+        stage=DeliveryStage.PLANNING,
+        stage_attempts=DeliveryStageAttempts(),
+        next_action=DeliveryNextAction.RUN_PLANNER,
         product_spec_id="product_spec",
+        product_spec_sha256="2" * 64,
         approval_id="approval",
+        approval_sha256="3" * 64,
         checkpointed_at=datetime.now(UTC),
         sequence=9,
     )
 
-    result = backend.run_planner(checkpoint)
+    backend.run_planner(checkpoint)
 
-    assert result is captured[0]
+    assert len(captured) == 1
     command = captured[0]
     assert command.run_id != base_run_id
 
@@ -256,6 +269,10 @@ class _ScriptedDeliveryAdapter(AgentAdapter):
         self._definition = definition
         self._workspace = workspace
 
+    def _greeting(self, request: AgentRequest) -> str:
+        del request
+        return "hello from the team\n"
+
     def run(self, request: AgentRequest) -> AgentResult:
         assert (
             self._definition.timeout_seconds
@@ -275,8 +292,9 @@ class _ScriptedDeliveryAdapter(AgentAdapter):
         )
         integrity = ArtifactIntegrity(sha256="0" * 64, validated=False)
         artifact: Artifact
+        greeting = self._greeting(request)
         if request.role is AgentRole.CODER:
-            (self._workspace / "hello.txt").write_text("hello from the team\n", encoding="utf-8")
+            (self._workspace / "hello.txt").write_text(greeting, encoding="utf-8")
             _git("add", "hello.txt", cwd=self._workspace)
             _git("commit", "-m", "Update greeting", cwd=self._workspace)
             candidate = _git_output("rev-parse", "HEAD", cwd=self._workspace)
@@ -313,9 +331,7 @@ class _ScriptedDeliveryAdapter(AgentAdapter):
                 integrity=integrity,
             )
         elif request.role is AgentRole.QA:
-            assert (self._workspace / "hello.txt").read_text(encoding="utf-8") == (
-                "hello from the team\n"
-            )
+            assert (self._workspace / "hello.txt").read_text(encoding="utf-8") == greeting
             artifact = QaReportArtifact(
                 artifact_id=f"art_qa_{identity}",
                 task_id=request.task_id,
@@ -343,9 +359,7 @@ class _ScriptedDeliveryAdapter(AgentAdapter):
             )
         else:
             assert request.role is AgentRole.REVIEWER
-            assert (self._workspace / "hello.txt").read_text(encoding="utf-8") == (
-                "hello from the team\n"
-            )
+            assert (self._workspace / "hello.txt").read_text(encoding="utf-8") == greeting
             artifact = ReviewReportArtifact(
                 artifact_id=f"art_review_{identity}",
                 task_id=request.task_id,
@@ -368,6 +382,9 @@ class _ScriptedDeliveryAdapter(AgentAdapter):
                 ),
                 integrity=integrity,
             )
+        artifact = artifact.model_copy(
+            update={"supersedes": (request.expected_supersedes_by_kind or {}).get(artifact.kind)}
+        )
         return AgentResult(
             run_id=request.run_id,
             task_id=request.task_id,
@@ -720,3 +737,19 @@ def test_host_records_isolated_delivery_without_polluting_project(
     )
     assert candidate_content == "hello from the team"
     assert not (project / ".ase").exists()
+
+
+def test_swift_profile_adds_only_restricted_verification_commands(tmp_path: Path) -> None:
+    project = tmp_path / "swift"
+    project.mkdir()
+    (project / "Package.swift").write_text("// swift-tools-version: 6.0\n", encoding="utf-8")
+    profile = RepositoryProfile.discover(project)
+
+    commands = production_backend._task_commands(profile)
+
+    assert "swift test --disable-automatic-resolution --skip-update" in commands
+    assert "swift build --disable-automatic-resolution --skip-update" in commands
+    assert "swift" not in commands
+    assert "xcodebuild" not in commands
+    assert "bash" not in commands
+    assert "open" not in commands

@@ -62,6 +62,9 @@ class Admission:
         if not self.approved:
             raise RecoveryRejected("missing approval")
 
+    def reusable_qa(self, inputs: CandidateVerificationInputs) -> QaReportArtifact | None:
+        return None
+
 
 def setup_verification(
     tmp_path: Path, adapter: ScriptedAdapter, admission: Admission

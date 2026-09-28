@@ -36,6 +36,7 @@ from ai_software_engineer.context.ports import ContextStore
 from ai_software_engineer.domain.agent import ROLE_OUTPUTS
 from ai_software_engineer.domain.artifact import Artifact, ArtifactId, validate_artifact_payload
 from ai_software_engineer.domain.model import DomainModel, JsonValue, NonEmptyStr, WirePayload
+from ai_software_engineer.domain.visual_evidence import PromptImage
 
 PromptRole = Literal["system", "user", "assistant"]
 
@@ -51,9 +52,26 @@ class PromptPayload(DomainModel):
     """Provider-neutral prompt that can be encoded as Chat Completions messages."""
 
     messages: tuple[PromptMessage, ...] = Field(min_length=1)
+    # At most six current captures plus one exact-approved predecessor's six captures.
+    images: tuple[PromptImage, ...] = Field(default=(), max_length=12)
 
-    def to_messages(self) -> list[WirePayload]:
-        return [message.to_wire() for message in self.messages]
+    def to_messages(self, *, include_images: bool = True) -> list[WirePayload]:
+        messages = [message.to_wire() for message in self.messages]
+        if include_images:
+            for attachment in self.images:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": attachment.label},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": attachment.image.data_url(), "detail": "high"},
+                            },
+                        ],
+                    }
+                )
+        return messages
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,6 +200,18 @@ def _output_contract(request: AgentRequest) -> WirePayload:
     return contract
 
 
+_PROJECT_OBSERVATION_GUIDANCE = (
+    " When returning implementation-report, qa-report or review-report, you may include "
+    "project_observations for reusable descriptive project facts actually discovered in this run. "
+    "Each observation needs a stable observation_id, title, fact, applicability and nonempty "
+    "evidence_ids from this artifact. Use an empty list when nothing reusable was established. "
+    "Do not include secrets, temporary host readiness, assumptions, permission requests or "
+    "self-approved rules. These are pending learning proposals, not knowledge approval or "
+    "delivery verdicts. Historical knowledge never replaces independent verification "
+    "of this candidate."
+)
+
+
 class RequestPromptBuilder:
     """Safe fallback prompt when a caller has not wired a ContextResolver yet.
 
@@ -199,6 +229,7 @@ class RequestPromptBuilder:
             "supersedes value selected by the returned Artifact kind from "
             "output_contract.supersedes_by_kind; "
             "input_artifact_ids are context dependencies, not necessarily direct parents."
+            + _PROJECT_OBSERVATION_GUIDANCE
         )
         user = json.dumps(
             {
@@ -257,7 +288,7 @@ class ContextPromptBuilder:
             "supersedes value selected by the returned Artifact kind from "
             "output_contract.supersedes_by_kind; "
             "input_artifact_ids are context dependencies, not necessarily direct parents.\n"
-            f"MACHINE_POLICY={policy_sections[0]}"
+            f"MACHINE_POLICY={policy_sections[0]}" + _PROJECT_OBSERVATION_GUIDANCE
         )
         sections: list[dict[str, JsonValue]] = []
         for section in context.sections:

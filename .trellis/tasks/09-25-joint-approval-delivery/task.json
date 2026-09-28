@@ -1,0 +1,11 @@
+{
+  "id": "joint-approval-delivery",
+  "title": "修复联合恢复审批循环并完成现有需求交付",
+  "status": "in_progress",
+  "phase": "reviewer_only_recovery_verified_pending_commit",
+  "user_authorization": "直接修改当前主工作区并按现有 Trellis 任务修复；独立 QA/Reviewer 验证候选 fb76942771f79cecd9ae887961c8bb570c52046b；受限 Swift/XCTest、构建和 UI/辅助功能验证；2026-09-26 用户确认先补齐 Manager-人工审批-执行器链路、验证边界后正常批准继续。仅获批执行器可关闭 SwiftPM 内层沙箱，必须保留 Codex 外层源码只读、独立缓存和无网络；不含工具链安装、全局沙箱关闭、签名、合并或放宽验收。现有 QA/Reviewer 模型路由已另行授权。",
+  "rollback_point": "892f87e",
+  "live_delivery_id": "delivery_multi_bd73c5ce9fa226eaa8e427b5c7c1dd96dce1e006",
+  "blocker": null,
+  "latest_result": "Business delivery completed normally through ASE: operation_631cb34a7404c76156e907dd37504d32 SUCCEEDED/DONE, candidate9ac7c9ee830df548571db55ec5cf809e613467ba, four QA criteria PASS, independent Reviewer APPROVE, parent checkpoint f22850f71024c2abad8e10c0138dac11c42c1cfd8c416067bab35fdc0c0d88df. Standalone Reviewer-only recovery implemented and loaded in idle-restarted PID43232/PTTY29107. Exact new approval/provenance, pre-admission context failure, repeated interruption and negative-result guards verified:1971 offline passed/10 opt-in skipped/101 MySQL deselected,4 separate real Git/MySQL cases passed,Ruff/format/Mypy238/offline build/diff clean.39 historical plans validate without migration. No live requirement rerun, history/event/verdict mutation, commit/archive or merge. See reviewer-recovery-analysis.md."
+}

@@ -89,6 +89,14 @@ Requirement 的已批准事实，并记录对首次恢复摘要的引用；不�
 
 ## 存量数据处置
 
+2026-09-27 修正：前提修复后的 QA/Reviewer 知识等待也必须回到 Manager。新 successor 显式继承
+已批准父需求 Context；已有 task-scoped 缺口只能凭当前父子链、原生 Task、仓库和封存候选证明归属，
+不改写旧记录。升级后先正常“继续交付”同步当前子 checkpoint，再在上述知识接口批准 exact gap，
+再次继续将恢复原 QA，不重复 Coder。知识快照漂移会拒绝恢复，不能通过修改选择清除等待。
+若旧修复说明的上下文摘要导致平台中断，恢复只接受已知格式与原摘要精确一致的字节。平台
+INVARIANT_VIOLATION 投影下真实 Task 仍在 QA/REVIEW 的，可以正常继续原 Task；终态 Task 不复位。
+参见 [可执行恢复契约](../.trellis/spec/core/continuation-knowledge-wait.md)。
+
 本轮开发没有修改业务数据库、生产 Task、Operation、知识选择或审批。
 
 本次知识 gate 修复同样不重写历史 Gap、Consultation 或 WAITING_HUMAN checkpoint。旧

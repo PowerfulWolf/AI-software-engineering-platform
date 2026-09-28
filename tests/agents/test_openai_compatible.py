@@ -398,6 +398,8 @@ def test_context_prompt_builder_keeps_machine_policy_in_system_message() -> None
 
     request = request.model_copy(update={"expected_parent_artifact_ids": (artifact.artifact_id,)})
     payload = ContextPromptBuilder(RecordingContextResolver(context, artifact)).build(request)
+    assert "project_observations" in payload.messages[0].content
+    assert "independent verification" in payload.messages[0].content
     assert json.loads(payload.messages[1].content)["output_contract"] == {
         "parent_artifact_ids": [artifact.artifact_id]
     }

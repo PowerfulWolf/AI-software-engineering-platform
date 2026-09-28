@@ -13,6 +13,7 @@
           "additionalProperties": false,
           "required": ["verdict", "findings", "checked_dimensions", "evidence"],
           "properties": {
+            "project_observations": {"type": "array", "maxItems": 8, "items": {"$ref": "project-observation.schema.json"}},
             "verdict": {"enum": ["APPROVE", "REJECT"]},
             "findings": {"type": "array", "items": {"$ref": "artifact.schema.json#/$defs/finding"}},
             "checked_dimensions": {"type": "array", "minItems": 1, "items": {"enum": ["correctness", "acceptance", "regression", "security", "maintainability", "performance", "契约一致性"]}},

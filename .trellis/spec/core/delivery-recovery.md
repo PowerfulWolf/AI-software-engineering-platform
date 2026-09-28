@@ -1,5 +1,62 @@
 # Explicit delivery recovery — T044
 
+## Recovery verifier knowledge wait (2026-09-27)
+
+### Scope / Trigger
+
+An approved recovery Coder can finish a candidate before QA/Reviewer knowledge consultation
+pauses. The recovery Task must remain reachable from its original Requirement after that pause.
+
+### Signatures
+
+`NativeRecoveryEntry.resume_execution(path) -> NativeRecoveryExecution` returns a delivery
+result or a verified `KnowledgeGap`. `DeliveryResumeController` attaches the authorized dispatch
+through `begin_recovery` before returning WAITING_HUMAN. Joint reconciliation journals the exact
+gap and wait stage through its existing coordinator; Console must not invent a verdict or state.
+
+### Contracts
+
+- Validate the recovery plan, exact authorization, allocation/Task, verifier role, retained candidate
+  and durable gap/route before adopting an interrupted QA/Reviewer checkpoint. An uncertain Coder
+  invocation remains rejected; a knowledge gap is not authority to rerun it.
+- Reconstruction uses sealed recovery context and, if present, the separately approved prerequisite
+  repair objective. Do not resume using only dirty files or the original unrelated product text.
+- Queue remains waiting until normal exact resolution approval; a fresh Host resumes QA/Reviewer
+  on the retained candidate and keeps Coder execution at once. Preserve prior Tasks and approvals.
+
+### Validation & Error Matrix
+
+| Fact | Behavior |
+| --- | --- |
+| Approved recovery reaches durable QA/Review knowledge gap | Attach Task, retain checkpoint, journal visible WAITING_HUMAN |
+| Fresh process before parent attachment | Verify original grant and adopt same paused Task |
+| Missing/ambiguous gap, wrong role/candidate or changed plan | Reject; no guessed adoption or new Coder |
+| Approved answer after attachment | Normal queue resolution, new verifier context, same candidate |
+| No QA test evidence | Existing workflow gate rejects; do not weaken it for legacy fake adapters |
+
+### Good / Base / Bad Cases
+
+Good: original Requirement shows the current question and continues after an auditable answer.
+Base: terminal recovery still adopts its sealed result without model calls. Bad: catch a gap only
+at Console, return a synthetic success, or leave the recovery Task orphaned behind the old child.
+
+### Tests Required
+
+`test_joint_scope_recovery_targets_current_preparation_after_main_advances[True-True]` covers
+real Git/MySQL, parent-visible current gap, normal approval, fresh Host, exact target preparation,
+QA/Reviewer followed by the remaining repository and parent DONE, with no repeated recovery Coder.
+Offline QA must record the candidate check it actually ran; fixtures are not live acceptance.
+
+### Wrong vs Correct
+
+Wrong: attach the recovery Task only after the entire Coder→QA→Review call returns normally.
+Correct: treat durable verifier waiting as a recoverable result, attach the exact authorized Task,
+and let the Requirement coordinator own human waiting and continuation.
+
+No data migration or history rewrite: after deploying compatible code, use ordinary Continue to
+adopt the retained Task, resolve the displayed exact gap, then Continue. Never replay a consumed
+Coder approval or directly update Task/verdict/Operation rows.
+
 ## Scope / Trigger
 
 Use when capturing interrupted Coder work or extending terminal delivery recovery. Historical T044
@@ -1364,7 +1421,9 @@ CandidateVerificationRunner.verify_candidate(inputs) -> CandidateVerificationRes
   and binds the new durable Reviewer invocation. The store must never fabricate a QA invocation.
 - If that Reviewer returns `REJECT`, remediation lineage validates the pinned QA ID/digest plus the
   Reviewer invocation. It must not require a nonexistent QA invocation from the reviewer-only plan.
-- Without `accepted_qa`, candidate verification retains the existing QA → Reviewer behavior.
+- Without native `accepted_qa`, standalone verification may bind the distinct `retained_qa` proof
+  described in [verification-role-recovery.md](verification-role-recovery.md). Without either trusted
+  source, verification retains QA → Reviewer. Do not invent a native accepted event for standalone QA.
 - Existing plans that omitted a newly discoverable accepted QA no longer match current native inputs;
   preserve them as history and propose a new exact plan. Do not edit Task, StateEvent, Artifact,
   Operation, verification plan or database rows in place.
@@ -1374,7 +1433,7 @@ CandidateVerificationRunner.verify_candidate(inputs) -> CandidateVerificationRes
 | Current facts | Result | Provider calls |
 |---|---|---:|
 | Exact retained candidate + sealed QA PASS + Reviewer infrastructure failure | Reviewer-only successor | Reviewer 1 |
-| No `qa_passed` event | Normal candidate verification | QA 1, Reviewer at most 1 |
+| No `qa_passed` event or valid standalone `retained_qa` | Normal candidate verification | QA 1, Reviewer at most 1 |
 | QA ID/digest/candidate/parent/criteria/role drift | Reject before admission | 0 |
 | Caller supplies QA not referenced by terminal event | Reject before admission | 0 |
 | Reviewer fails again without verdict | Consume plan; next exact plan may reuse the same QA | Reviewer at most 1 |
@@ -1838,6 +1897,10 @@ terminal_candidate_cursor_matches(checkpoint, candidate_revision) -> bool
 - A completion is `RETRY_VERIFICATION` only when Review did not run, no criterion/test is `FAIL`,
   and at least one criterion is `NOT_TESTED` or test is `ERROR`. It creates a fresh plan/Run for the
   same candidate and requires a new exact human approval. It never starts Coder.
+- The successor `DeliveryResumeResult.verification_completion_sha256` references the preceding
+  inconclusive completion, not a completed execution of the new plan. Its `next_action` names the
+  QA report and NOT_TESTED/ERROR counts and asks for the blocker to be resolved before reapproval.
+  Console must preserve this explanation; approval availability does not prove a repaired verifier.
 - The initial serial QA gate and post-terminal Candidate verification must use the same
   `classify_qa_failure` rule. An initial environment-only failure transitions the Task directly from
   QA to BLOCKED with `RetryClassification.VERIFICATION_INCONCLUSIVE`, retains the exact candidate

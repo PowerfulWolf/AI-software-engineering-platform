@@ -306,3 +306,86 @@ New settings cannot add/reorder routes on a retained dispatch. Recovery may narr
 5. **Knowledge capture**: the signatures/matrix/tests above and production-team-host/live-team-view
    contracts document the behavior. There is no generic guides/template mirror in this repository;
    preserve this rule in the owning core spec. No production data rewrite is needed.
+
+### 8.5 Committed knowledge wait revokes local execution
+
+#### Scope / Trigger
+
+Changes to `WorkerLease` heartbeat, finish or knowledge-wait lifecycle must preserve both
+the durable owner fence and the local execution boundary after releasing capacity.
+
+#### Signatures
+
+`WorkerLease.wait_for_knowledge(binding, routing, records) -> None` commits the existing
+owner-fenced queue wait. Subsequent `check()`/`finish(...)` raise `KnowledgeGapRaised` with
+that exact persisted gap. No queue schema or approval contract changes.
+
+#### Contracts
+
+- Serialize heartbeat renew, finish and wait under one local lifecycle lock. Check the stop
+  event again inside the heartbeat lock; a heartbeat already awakened cannot renew a released claim.
+- Publish the local gap and stop heartbeat only after the queue transaction succeeds. A rejected
+  wait must neither masquerade as a committed wait nor disable a still-valid heartbeat.
+- Keep `check()` lock-free: transactional finish calls it while holding the lifecycle lock.
+  Owner/expiry checks still run inside MySQL; local serialization is not a replacement fence.
+- A committed wait is typed coordination, not lost ownership, a verdict or a Task failure.
+
+#### Validation & Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| Valid committed wait | Stop heartbeat; later execution raises the exact gap |
+| Heartbeat wakes while wait releases capacity | Wait for lifecycle lock, observe stop, no renew |
+| Wrong owner / rejected wait | Preserve rejection; no local wait or stop is published |
+| Actual expiry or renewal failure before wait | Existing `QueueLeaseLost`, never a fake gap |
+
+#### Good / Base / Bad Cases
+
+Good: QA returns a durable gap to Manager and retains its candidate checkpoint. Base: no
+knowledge wait uses the unchanged owner fence. Bad: renew races a successful release and
+reclassifies normal waiting as lease loss, or `check()` still authorizes work after wait.
+
+#### Tests Required
+
+`tests/work_queue/test_knowledge_lease.py` uses coordinated threads to hold a committed wait
+open while heartbeat wakes; assert no renewal and no false lost flag. Assert exact gap from
+both `check` and `finish`, and no local state on rejected wait. Existing MySQL completion,
+expiry, heartbeat and resolution/restart tests remain required.
+
+#### Wrong vs Correct
+
+Wrong: `queue.wait(...); stop.set()` races an independently executing `queue.renew(...)`.
+Correct: serialize both operations and publish local waiting state only after durable success.
+Do not solve the race by accepting stale owners or swallowing all queue errors.
+
+### 8.6 Owned subprocess input must survive lease polling
+
+#### Scope / Signatures
+
+`SubprocessCodexCommandRunner.run(argv, cwd=..., environment=..., stdin=..., timeout_seconds=...)`
+must deliver the complete UTF-8 prompt even when the child starts reading after an ownership poll.
+No schema, permissions, model routing or environment-variable changes.
+
+#### Contracts
+
+- The owned POSIX runner supplies a private, unlinked `TemporaryFile` as stdin, closes its parent
+  descriptor after spawn, and polls output with `communicate(timeout=0.2)` plus `guard.check()`.
+- Never send prompt bytes through the first short `communicate(input)` and then retry with None:
+  CPython does not register stdin writes again after an input timeout; a pipe-sized prefix is not
+  the full prompt, and EOF never arrives. A renewing lease proves ownership, not model progress.
+- Keep process-group termination on timeout or lost ownership and inherited Task-lock descriptors.
+  Prompt has no durable pathname/log, mode is 0600, and all descriptors close on exit/start failure.
+
+#### Validation / Cases
+
+Good: delayed reader receives the full large Unicode prompt and EOF. Base: empty prompt completes.
+Bad: a live process with a valid lease is reported as model progress while blocked reading stdin.
+Lost ownership still kills the child before returning; startup failures remain typed errors.
+
+#### Tests / Wrong vs Correct
+
+`tests/work_queue/test_owned_execution.py` uses a real local subprocess delayed 0.4s, exceeding
+the 0.2s polling interval, and a prompt larger than pipe capacity; assert exact character count,
+no timeout, 0600 mode and zero hard links. Retain owner-loss/Task-lock/candidate-finalization tests.
+Wrong: `communicate(prompt, timeout=.2)` then `communicate(None, timeout=.2)`.
+Correct: `Popen(stdin=anonymous_prompt)` then ownership-fenced output-only polling.

@@ -6,6 +6,7 @@ from pathlib import Path, PurePosixPath
 from typing import Final
 
 from ai_software_engineer.domain.agent import AgentPermissions
+from ai_software_engineer.swift_verification import is_restricted_swift_command
 
 
 class WorkspacePolicyError(RuntimeError):
@@ -58,6 +59,10 @@ class WorkspacePolicy:
             for prefix in self._commands
         ):
             raise CommandPolicyViolation(f"command is not allowed: {arguments[0]}")
+        if arguments[0] == "swift" and not is_restricted_swift_command(arguments):
+            raise CommandPolicyViolation(
+                "Swift verification arguments exceed the restricted policy"
+            )
         return arguments
 
     def _authorize_path(

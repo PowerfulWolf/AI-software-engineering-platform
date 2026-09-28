@@ -70,6 +70,8 @@ class VerificationAdmission(Protocol):
 
     def admit(self, inputs: CandidateVerificationInputs, request: AgentRequest) -> None: ...
 
+    def reusable_qa(self, inputs: CandidateVerificationInputs) -> QaReportArtifact | None: ...
+
     def validate_configuration(
         self,
         inputs: CandidateVerificationInputs,
@@ -127,6 +129,18 @@ class CandidateVerificationRunner:
         inputs = CandidateVerificationInputs.model_validate(inputs.to_wire())
         task, plan, implementation, accepted_qa = self._read_inputs(inputs)
         self._admission.validate_configuration(inputs, self._definitions)
+        if accepted_qa is None:
+            accepted_qa = self._admission.reusable_qa(inputs)
+            if accepted_qa is not None and (
+                self._artifacts.get(accepted_qa.artifact_id) != accepted_qa
+                or accepted_qa.task_id != task.id
+                or accepted_qa.source_revision != inputs.candidate_revision
+                or accepted_qa.parent_artifact_ids != (implementation.artifact_id,)
+                or accepted_qa.content.status is not QaReportStatus.PASS
+                or {c.criterion_id for c in accepted_qa.content.criteria_results}
+                != {c.id for c in task.acceptance_criteria}
+            ):
+                raise RecoveryRejected("retained QA differs from original candidate criteria")
         runner = SerialOrchestrator(
             repository=self._repository,
             artifact_store=self._artifacts,

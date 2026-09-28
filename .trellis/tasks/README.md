@@ -16,6 +16,9 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 
 | 目录 | 状态 / 阶段 | 剩余事项 |
 |---|---|---|
+| [09-27-delivery-reliability-audit](09-27-delivery-reliability-audit/task.json) | in_progress / verified_delivery_held | 14 阶段审查及平台修复通过隔离验证；未提交/部署，真实需求等待受控恢复 |
+| [09-25-team-evolution-audit](09-25-team-evolution-audit/task.json) | in_progress / execute | 已有知识演进切片；Manager 集成和自动收集尚未完成，可靠性审查另见 09-27 任务 |
+| [09-25-joint-approval-delivery](09-25-joint-approval-delivery/task.json) | in_progress / execute | 原业务交付保留候选和历史；09-27 可靠性审查期间停止派发，未宣告验收通过 |
 | [09-23-codex-cli-proxy](09-23-codex-cli-proxy/task.json) | in_progress / ready_for_user_validation | operator API-key login and authenticated CLIProxyAPI smoke; then resume existing Requirement |
 | [09-02-t033-delivery-reporter](09-02-t033-delivery-reporter/task.json) | planned / plan | 见原 PRD/任务记录 |
 | [09-06-t044-explicit-delivery-recovery](09-06-t044-explicit-delivery-recovery/task.json) | in_progress / coder_reapply_offline_verified | new exact real target recovery plan and human approval；real Coder QA Reviewer validation |
@@ -128,4 +131,4 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 | 09-21-knowledge-resolution-ui | knowledge-resolution-ui | [completed](09-21-knowledge-resolution-ui/task.json) |
 | 09-21-trellis-record-normalization | trellis-record-normalization-20260921 | [completed](09-21-trellis-record-normalization/task.json) |
 
-汇总：当前 5；待核实 14；已完成 69。
+汇总：当前 8；待核实 14；已完成 69。

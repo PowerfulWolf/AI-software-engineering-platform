@@ -2241,6 +2241,10 @@ state、approval 权限为 false。
   request/prompt/tool payload 注入；
 - Product Agent adapter 抛异常被转换为 application error；provider/timeout/invalid output 应优先返回
   typed terminal result，不能用半成品 ProductSpec 推进。
+- Product 模型调用是外部时间窗口。返回后、写任何成功或失败 operation receipt 之前，必须重新读取
+  current checkpoint 并比较 exact digest；期间人类回复推进了 checkpoint 时抛
+  `ProductDiscoveryStaleCheckpoint`，不得留下旧规格、旧失败回执或可重放的过时 effect bundle。
+  与 Designer/Planner 的调用后事实复核保持一致；store 的最终 lineage 拒绝不能替代这一步。
 
 ### 24.4 Validation matrix
 
@@ -2273,6 +2277,9 @@ state、approval 权限为 false。
 - store：all records、lineage/digest/envelope、concurrent winner、symlink swap/path escape；
 - service：state/lineage/version/human-only approval/project drift、external-free completed replay、
   receipt-to-checkpoint recovery；
+- `test_product_input_changed_during_model_call_does_not_publish_stale_receipt`：在 Product 调用中
+  通过正常人类回复入口推进 checkpoint，READY 和 TIMEOUT 都必须拒绝，旧 run 无 receipt/spec，
+  新回复仍可读取；普通 receipt 崩溃重放测试保持通过。
 - 合并前运行 T030 targeted suite、全量 pytest、Ruff、strict Mypy、offline build、diff check。
 
 ### 24.7 Wrong vs Correct

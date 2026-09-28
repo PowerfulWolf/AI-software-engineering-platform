@@ -98,6 +98,32 @@ def _orchestrator_request(task_id: str) -> AgentRequest:
     )
 
 
+@pytest.mark.parametrize("use_execution_task", [False, True])
+def test_verification_request_binds_source_task_not_checkout_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, use_execution_task: bool
+) -> None:
+    reservation = _reservation(tmp_path)
+    adapter = _adapter(tmp_path, reservation, plan_adapter=None)
+    binding = MagicMock()
+    binding.worktree.attempt = 1
+    provider = MagicMock()
+    open_binding = MagicMock(return_value=binding)
+    monkeypatch.setattr(adapter, "_binding", open_binding)
+    monkeypatch.setattr(adapter, "_route_adapter", MagicMock(return_value=provider))
+    request = _orchestrator_request(
+        reservation.task_id if use_execution_task else reservation.source_task_id
+    ).model_copy(update={"role": AgentRole.QA, "output_schema": "schemas/qa-report.schema.json"})
+    if use_execution_task:
+        with pytest.raises(ProductionConfigError, match="does not belong"):
+            adapter.run(request)
+        open_binding.assert_not_called()
+        provider.run.assert_not_called()
+    else:
+        assert adapter.run(request) is provider.run.return_value
+        open_binding.assert_called_once_with(request)
+        provider.run.assert_called_once_with(request)
+
+
 def test_delivery_codex_factory_receives_local_proxy_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -203,6 +229,7 @@ def test_delivery_direct_route_does_not_require_or_forward_proxy_key(
     payload["codex_cli_proxy_api_key_env"] = "ASE_CODEX_PROXY_API_KEY"
     routes = payload["model_routes"]
     assert isinstance(routes, list)
+    assert isinstance(routes[0], dict)
     routes[0]["connection_mode"] = "direct"
     config = ProductionConfig.model_validate(payload)
     definition = MagicMock(id="agent_coder", version="v0.1", role=AgentRole.CODER)

@@ -1,5 +1,6 @@
 """Worker ownership covers subprocess lifetime and platform candidate finalization."""
 
+import os
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -15,6 +16,47 @@ from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
 from tests.agents.test_codex_cli import _DirtySuccessRunner, _git, _repository
 from tests.agents.test_openai_compatible import StaticPromptBuilder, _coder_request
 from tests.execution.test_executor import _permissions
+
+
+@pytest.mark.parametrize("prompt", ["", "验收背景\n" * 100_000])
+def test_owned_codex_delivers_large_prompt_after_first_lease_poll(
+    tmp_path: Path, prompt: str
+) -> None:
+    """A slow stdin reader must still receive every byte and EOF after 0.2 seconds."""
+    result = SubprocessCodexCommandRunner(Guard()).run(
+        (
+            sys.executable,
+            "-c",
+            "import os,stat,sys,time; time.sleep(0.4); "
+            "assert stat.S_IMODE(os.fstat(0).st_mode) == 0o600; "
+            "assert os.fstat(0).st_nlink == 0; "
+            "print(len(sys.stdin.read()))",
+        ),
+        cwd=tmp_path,
+        environment={"PATH": os.defpath, "PYTHONIOENCODING": "utf-8"},
+        stdin=prompt,
+        timeout_seconds=3,
+    )
+    assert not result.timed_out
+    assert result.returncode == 0
+    assert result.stdout.strip() == str(len(prompt))
+
+
+def test_owned_codex_timeout_terminates_child_after_prompt_delivery(tmp_path: Path) -> None:
+    result = SubprocessCodexCommandRunner(Guard()).run(
+        (
+            sys.executable,
+            "-c",
+            "import os,sys,time; sys.stdin.read(); print(os.getpid(),flush=True); time.sleep(30)",
+        ),
+        cwd=tmp_path,
+        environment={},
+        stdin="Complete prompt",
+        timeout_seconds=0.5,
+    )
+    assert result.timed_out
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(result.stdout.strip()), 0)
 
 
 class Guard:

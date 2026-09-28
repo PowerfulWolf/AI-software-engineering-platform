@@ -447,6 +447,10 @@ class ProductDiscoveryService:
                 "ProductAgentAdapter raised instead of returning typed failure"
             ) from error
         self._validate_agent_result(agent_request, agent_result)
+        # Reopen the authoritative input after the external call, before even a
+        # failure receipt can make an obsolete response replayable.
+        _, current = self._load_current(command.request_id)
+        self._require_checkpoint(command.expected_checkpoint_sha256, current)
         if agent_result.status is not ProductAgentRunStatus.SUCCEEDED:
             return self._agent_failure(
                 command,

@@ -374,7 +374,11 @@ def test_budget_exhausted_coder_progress_is_a_recoverable_native_source(
             delivery_id=checkpoint.delivery_id,
         )
     )
-    assert source.task.attempts == source.task.max_attempts == 3
+    assert source.task.attempts == source.task.work_attempt == 3
+    assert source.task.work_budget_exhausted
+    assert (
+        source.task.max_attempts == config.execution_retry_policy.delivery_policy().execution_limit
+    )
     assert source.source.failed_run_id == factory.requests[-1].run_id
     assert source.source.failed_context_id == factory.requests[-1].context_manifest_id
     plan, plan_path = host.recovery_entry().propose_delivery(checkpoint)
@@ -391,7 +395,7 @@ def test_budget_exhausted_coder_progress_is_a_recoverable_native_source(
 
 
 @pytest.mark.mysql
-def test_retry_budget_invalid_output_is_a_recoverable_native_source(
+def test_nontransient_invalid_output_is_a_recoverable_native_source(
     tmp_path: Path, mysql_dsn: str
 ) -> None:
     project = tmp_path / "project"
@@ -432,7 +436,7 @@ def test_retry_budget_invalid_output_is_a_recoverable_native_source(
     ).checkpoint
 
     assert checkpoint.stage.value == "BLOCKED"
-    assert len(factory.requests) == 3
+    assert len(factory.requests) == 1
     source = NativeRecoverySourceReader(config, environment).discover_failed_coder(
         RecoveryScope(
             team_id=config.team_id,
@@ -442,7 +446,12 @@ def test_retry_budget_invalid_output_is_a_recoverable_native_source(
         )
     )
 
-    assert source.task.attempts == source.task.max_attempts == 3
+    assert source.task.attempts == source.task.work_attempt == 1
+    assert not source.task.work_budget_exhausted
+    assert source.task.retry_failures in (None, ())
+    assert (
+        source.task.max_attempts == config.execution_retry_policy.delivery_policy().execution_limit
+    )
     assert source.source.failed_run_id == factory.requests[-1].run_id
     assert source.source.failed_context_id == factory.requests[-1].context_manifest_id
 

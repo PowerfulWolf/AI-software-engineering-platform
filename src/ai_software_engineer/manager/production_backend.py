@@ -29,6 +29,7 @@ from ai_software_engineer.config import (
 )
 from ai_software_engineer.config.codex_proxy import codex_cli_proxy_key_environment
 from ai_software_engineer.context import ContextBudget, ContextSource, FileContextStore
+from ai_software_engineer.context.native import rebind_native_rule_sources
 from ai_software_engineer.context.profile import repository_profile_context
 from ai_software_engineer.design import (
     DesignerService,
@@ -91,6 +92,7 @@ from ai_software_engineer.manager.dispatch import (
     DispatchStoreUnavailable,
     DispatchWorkforceSnapshot,
     ManagerDispatchService,
+    RecoveryDispatchRecord,
 )
 from ai_software_engineer.manager.mysql_dispatch_authority import (
     MySqlDispatchAuthority,
@@ -170,6 +172,7 @@ from ai_software_engineer.runtime_workspace import (
 from ai_software_engineer.scheduling import ModelRouter, PortfolioScheduler
 from ai_software_engineer.spec_compiler import SpecRule
 from ai_software_engineer.store import MySqlTaskRepository, TaskRepository
+from ai_software_engineer.swift_verification import SWIFT_VERIFICATION_COMMANDS
 from ai_software_engineer.work_queue.execution_store import MySqlRoleQueue
 from ai_software_engineer.work_queue.ports import DeliveryQueuePending
 
@@ -274,6 +277,7 @@ class ConfiguredStructuredClientFactory:
                     proxy_api_key_env=self._config.codex_cli_proxy_api_key_env if proxy else None,
                     reasoning_effort=route.reasoning_effort,
                     environment=self._environment,
+                    allow_native_commands=role is not TeamRole.MANAGER,
                 )
             else:
                 assert route.api_key_env is not None and route.endpoint is not None
@@ -954,6 +958,42 @@ class ProductionProjectDeliveryBackend:
             if isinstance(dispatch, ContinuationDispatchRecord)
             else ()
         )
+        route_scope = None
+        if isinstance(dispatch, RecoveryDispatchRecord):
+            from ai_software_engineer.recovery.context import (
+                preserved_prerequisite_context,
+                recovery_context_sources,
+            )
+            from ai_software_engineer.recovery.entry import (
+                _require_seed_recovery_route,
+                open_recovery_plan,
+            )
+            from ai_software_engineer.recovery.store import FileRecoveryStore
+
+            recovery_root = facts.workspace.root / "state" / f"recovery-{checkpoint.delivery_id}"
+            recovery_store, recovery_plan = open_recovery_plan(
+                self._config, recovery_root / f"plan-{dispatch.recovery_plan_sha256}.json"
+            )
+            sealed = recovery_store.get_task_record(recovery_plan.plan_sha256)
+            if (
+                sealed.task != dispatch.task
+                or dispatch.recovery_task_record_sha256 != sealed.record_sha256
+            ):
+                raise ValueError("recovery context allocation changed")
+            extra_context = recovery_context_sources(recovery_plan)
+            repair_root = (
+                facts.workspace.root / "state" / f"candidate-verification-{checkpoint.delivery_id}"
+            )
+            if repair_root.exists():
+                extra_context = (
+                    *preserved_prerequisite_context(
+                        recovery_plan,
+                        FileContextStore(facts.workspace.root / "contexts"),
+                        FileRecoveryStore(repair_root, scope=recovery_plan.source.scope),
+                    ),
+                    *extra_context,
+                )
+            route_scope = (_require_seed_recovery_route(self._config),)
         result = self.run_prepared_allocation(
             dispatch,
             facts.preparation,
@@ -961,6 +1001,7 @@ class ProductionProjectDeliveryBackend:
             design,
             facts.planning.get_execution_plan(dispatch.execution_plan_id),
             extra_context=extra_context,
+            route_scope=route_scope,
         )
         return result
 
@@ -1043,6 +1084,11 @@ class ProductionProjectDeliveryBackend:
             route_validator=approved.validate_routes,
         )
         primary = self._config.routes_for(TeamRole.CODER)[0]
+        delivery_sources = (*self._delivery_context_sources, *extra_context)
+        if isinstance(dispatch, (ContinuationDispatchRecord, RecoveryDispatchRecord)):
+            delivery_sources = rebind_native_rule_sources(
+                facts.workspace.repository_root, facts.profile, delivery_sources
+            )
         runtime_config = RuntimeConfig(
             endpoint="https://runtime.invalid/v1/responses",
             model=primary.model,
@@ -1055,8 +1101,7 @@ class ProductionProjectDeliveryBackend:
                 mysql_dsn_env=self._config.database.dsn_env,
             ),
             context_sources=(
-                *self._delivery_context_sources,
-                *extra_context,
+                *delivery_sources,
                 repository_profile_context(facts.profile),
                 ContextSource(
                     source_id="project.baseline",
@@ -1238,7 +1283,9 @@ class ProductionProjectDeliveryBackend:
 
     @staticmethod
     def _guard(label: str, operation: Callable[[], ResultT]) -> ResultT:
+        from ai_software_engineer.knowledge.diagnostics import knowledge_error_code
         from ai_software_engineer.knowledge.gaps import KnowledgeGapRaised
+        from ai_software_engineer.knowledge.models import KnowledgeError
 
         try:
             return operation()
@@ -1248,6 +1295,11 @@ class ProductionProjectDeliveryBackend:
             raise
         except DeliveryBackendFailure:
             raise
+        except KnowledgeError as error:
+            raise DeliveryBackendFailure(
+                DeliveryFailureCode.INVARIANT_VIOLATION,
+                f"{label} knowledge coordination stopped safely ({knowledge_error_code(error)})",
+            ) from error
         except ProductionConfigError as error:
             raise DeliveryBackendFailure(
                 DeliveryFailureCode.PERMISSION_DENIED,
@@ -1449,6 +1501,7 @@ def _task_commands(profile: RepositoryProfile) -> tuple[str, ...]:
         BuildSystem.MESON: ("meson", "ninja"),
         BuildSystem.MAKE: ("make",),
         BuildSystem.BAZEL: ("bazel",),
+        BuildSystem.SWIFT: SWIFT_VERIFICATION_COMMANDS,
     }
     for fact in profile.build_systems:
         commands.update(build_commands.get(fact.system, ()))
@@ -1531,8 +1584,12 @@ def _continuation_context(
     dispatch: ContinuationDispatchRecord,
 ) -> tuple[ContextSource, ...]:
     """Rebuild durable remediation input after a process restart."""
+    from ai_software_engineer.recovery.context import prerequisite_repair_context
     from ai_software_engineer.recovery.models import RecoveryScope, digest
-    from ai_software_engineer.recovery.remediation import remediation_context
+    from ai_software_engineer.recovery.remediation import (
+        remediation_context,
+        require_repair_authority,
+    )
     from ai_software_engineer.recovery.store import FileRecoveryStore
 
     scope = RecoveryScope(
@@ -1546,14 +1603,24 @@ def _continuation_context(
         scope=scope,
     )
     plan = store.get_verification_plan(dispatch.continuation_plan_sha256)
-    completion = store.get_verification_completion(plan.plan_sha256)
+    repair = (
+        store.get_repair_plan(dispatch.prerequisite_repair_sha256)
+        if dispatch.prerequisite_repair_sha256 is not None
+        else None
+    )
+    completion = store.get_remediation_evidence(
+        plan.plan_sha256,
+        repair.executor_prerequisite_sha256 if repair else None,
+    )
     if (
         completion.verified
-        or completion.completion_sha256 != dispatch.continuation_sha256
+        or completion.evidence_sha256 != dispatch.continuation_sha256
         or plan.inputs.task_id != dispatch.source_task_id
         or plan.inputs.candidate_revision != dispatch.source_revision
     ):
         raise ValueError("continuation verifier lineage drifted")
+    if repair is not None:
+        require_repair_authority(store, repair, plan, completion, repair.native_checkpoint_sha256)
     sources = remediation_context(
         repository_root=scope.repository_root,
         source_delivery_id=scope.delivery_id,
@@ -1561,7 +1628,16 @@ def _continuation_context(
         candidate_revision=dispatch.source_revision,
         plan=plan,
         completion=completion,
+        repair_plan=repair,
     )
+    if (
+        digest([item.to_wire() for item in sources]) != dispatch.continuation_context_sha256
+        and repair is not None
+    ):
+        sources = (
+            prerequisite_repair_context(repair, legacy_qa_description=True),
+            *sources[1:],
+        )
     if digest([item.to_wire() for item in sources]) != dispatch.continuation_context_sha256:
         raise ValueError("continuation context drifted")
     return sources

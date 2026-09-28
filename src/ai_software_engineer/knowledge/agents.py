@@ -310,7 +310,7 @@ class KnowledgeConsultationService:
                     "task": consultation_payload,
                     "available_documents": [
                         {"id": doc.document_id, "scope": doc.scope, "title": doc.title}
-                        for doc in snapshot.documents
+                        for doc in skills.available_documents()
                     ],
                 },
                 output_schema=KnowledgeIntent.model_json_schema(),
@@ -355,6 +355,12 @@ class KnowledgeConsultationService:
                         "binding.source_revision is then an aggregate fingerprint, NOT a Git SHA. "
                         "Designer owns ordinary technical decisions within approved scope; "
                         "Planner decomposes and checks feasibility, not product rediscovery. "
+                        "QA produces its own acceptance evidence during verification; "
+                        "do not require the human to supply the future results of this role's "
+                        "own tests before that role may run. Missing tool, desktop, data or "
+                        "authority prerequisites must still be reported to Manager, and missing "
+                        "upstream verdicts still block Reviewer. Mock evidence never proves real "
+                        "login or production behavior. No consultation is an acceptance verdict. "
                         "A design_recheck requests investigation, NOT approval of its proposals. "
                         "Use HUMAN only for a genuinely unresolved product decision, external "
                         "fact or scope conflict; reuse approved answers instead of reopening them. "

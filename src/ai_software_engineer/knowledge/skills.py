@@ -1,6 +1,7 @@
 """Run-bound search/read skills and immutable evidence, without ambient authority."""
 
 from ai_software_engineer.knowledge.models import (
+    KnowledgeDocument,
     KnowledgeError,
     KnowledgeEvidence,
     KnowledgeReadRequest,
@@ -51,11 +52,16 @@ class KnowledgeSkillRegistry:
             requirement_id=self._snapshot.requirement_id,
             repository_ids=self._snapshot.repository_ids,
             documents=tuple(
-                doc
-                for doc in self._snapshot.documents
-                if (not doc.roles or self.binding.role in doc.roles)
-                and (not scopes or doc.scope in scopes)
+                doc for doc in self.available_documents() if not scopes or doc.scope in scopes
             ),
+        )
+
+    def available_documents(self) -> tuple[KnowledgeDocument, ...]:
+        """Apply the same visibility rule to discovery metadata and readable text."""
+        return tuple(
+            doc
+            for doc in self._snapshot.documents
+            if not doc.roles or self.binding.role in doc.roles
         )
 
     def search_knowledge(self, request: KnowledgeSearchRequest) -> KnowledgeEvidence:

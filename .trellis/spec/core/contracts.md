@@ -84,7 +84,8 @@ Artifact 通过 `schemas/artifact.schema.json` 的共同 envelope 传递；业�
 Team/Project 开发规范由 `spec-document.schema.json` 与 `spec-activation.schema.json` 约束：文档版本
 不可变，创建与启用分离，activation 同一 `spec_key` 至多选择一个 exact 版本。持续学习事实由
 `learning-proposal.schema.json`、`learning-authorization.schema.json` 与
-`learning-decision.schema.json` 约束：proposal 必须引用失败 QA/Review artifact 的 exact digest；
+`learning-decision.schema.json` 约束：proposal 引用 QA/Review finding、已确认的知识缺口或
+角色报告中项目发现的 exact 来源；详见 `project-learning.md`；
 authorization 在发布前持久化 exact 人工授权；decision 绑定 proposal digest 且只能完成一次。
 
 `FileArtifactStore` 只接受 `schema_version=v0.1`、typed union 校验通过、`integrity.validated=true` 且 canonical digest 匹配的 Artifact。Digest 排除顶层 `integrity` 避免循环；`seal_artifact` 返回带 digest 和 `validated_at` 的新 immutable Artifact。

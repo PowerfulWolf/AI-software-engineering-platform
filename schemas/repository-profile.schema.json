@@ -68,7 +68,7 @@
       "required": ["language", "markers"],
       "properties": {
         "language": {
-          "enum": ["python", "java", "go", "typescript", "cpp", "unknown"]
+          "enum": ["python", "java", "go", "typescript", "cpp", "swift", "unknown"]
         },
         "markers": {
           "type": "array",
@@ -103,6 +103,7 @@
             "meson",
             "make",
             "bazel",
+            "swift",
             "unknown"
           ]
         },

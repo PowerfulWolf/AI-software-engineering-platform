@@ -13,6 +13,7 @@
           "additionalProperties": false,
           "required": ["commit_sha", "changed_files", "acceptance_mapping", "tests_run", "known_risks"],
           "properties": {
+            "project_observations": {"type": "array", "maxItems": 8, "items": {"$ref": "project-observation.schema.json"}},
             "commit_sha": {"type": "string", "pattern": "^[a-f0-9]{7,64}$"},
             "changed_files": {"type": "array", "minItems": 1, "items": {"type": "object", "required": ["path", "change", "lines_added", "lines_deleted"], "properties": {"path": {"type": "string"}, "change": {"enum": ["added", "modified", "deleted", "renamed"]}, "lines_added": {"type": "integer", "minimum": 0}, "lines_deleted": {"type": "integer", "minimum": 0}}, "additionalProperties": false}},
             "acceptance_mapping": {"type": "array", "items": {"type": "object", "required": ["criterion_id", "implementation", "tests"], "properties": {"criterion_id": {"type": "string"}, "implementation": {"type": "string"}, "tests": {"type": "array", "items": {"type": "string"}}}, "additionalProperties": false}},

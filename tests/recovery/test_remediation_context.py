@@ -42,7 +42,7 @@ def test_remediation_context_redacts_secret_shaped_candidate_fixture(tmp_path: P
     completion = cast(
         Any,
         SimpleNamespace(
-            completion_sha256="b" * 64,
+            evidence_sha256="b" * 64,
             to_wire=lambda: {"verified": False},
         ),
     )

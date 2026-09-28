@@ -181,6 +181,29 @@ class DispatchRoleWorktreeCoordinator:
         spec = self._spec(dispatch, AgentRole.CODER, revision, attempt=1)
         return self._open(spec, definition, recover=recover)
 
+    def open_verifier(
+        self,
+        dispatch: DeliveryAllocation | VerificationReservation,
+        role: AgentRole,
+        candidate_revision: str,
+        definitions: Mapping[AgentRole, AgentDefinition],
+        *,
+        attempt: int = 1,
+        recover: bool = False,
+    ) -> RoleWorktreeBinding:
+        """Bind one verifier to this delivery attempt, independently of its peer."""
+        dispatch.validate_integrity()
+        if role not in (AgentRole.QA, AgentRole.REVIEWER):
+            raise DispatchRoleBindingMismatch("only QA and Reviewer are verifier roles")
+        # Allocation identity stays frozen at dispatch; checkout identity follows the
+        # request's delivery cycle, not the original workforce reservation attempt.
+        definition = self._definition(dispatch, role, definitions, attempt=1)
+        return self._open(
+            self._spec(dispatch, role, candidate_revision, attempt=attempt),
+            definition,
+            recover=recover,
+        )
+
     def open_verifiers(
         self,
         dispatch: DeliveryAllocation | VerificationReservation,

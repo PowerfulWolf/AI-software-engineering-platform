@@ -19,10 +19,13 @@ from ai_software_engineer.artifacts import ArtifactStoreError, FileArtifactStore
 from ai_software_engineer.domain.artifact import (
     ArtifactId,
     Finding,
+    ImplementationReportArtifact,
+    ProjectObservation,
     QaReportArtifact,
     ReviewReportArtifact,
 )
 from ai_software_engineer.domain.enums import (
+    AgentRole,
     QaReportStatus,
     ReviewVerdict,
     TeamRole,
@@ -30,6 +33,7 @@ from ai_software_engineer.domain.enums import (
 from ai_software_engineer.domain.identity import ProjectId, RepositoryId, TeamId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.task import TaskId
+from ai_software_engineer.knowledge.mutation import knowledge_mutation_lock
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.knowledge_documents import (
     KnowledgeDocumentError,
@@ -41,6 +45,7 @@ from ai_software_engineer.knowledge_selection import (
     effective_project_knowledge_paths,
 )
 from ai_software_engineer.project_workspace import ProjectWorkspace
+from ai_software_engineer.redaction import redact_text
 from ai_software_engineer.spec_documents import (
     CreateSpecDocument,
     ProjectSpecDocumentStore,
@@ -65,6 +70,7 @@ class LearningTrigger(StrEnum):
     QA_FAILURE = "QA_FAILURE"
     REVIEW_REJECTION = "REVIEW_REJECTION"
     KNOWLEDGE_RESOLUTION = "KNOWLEDGE_RESOLUTION"
+    PROJECT_OBSERVATION = "PROJECT_OBSERVATION"
 
 
 class LearningTarget(StrEnum):
@@ -102,6 +108,18 @@ class KnowledgeLearningEvidence(DomainModel):
     evidence_uris: tuple[NonEmptyStr, ...]
 
 
+class ProjectObservationEvidence(DomainModel):
+    repository_id: RepositoryId
+    task_id: TaskId
+    artifact_id: ArtifactId
+    artifact_sha256: Digest
+    source_revision: NonEmptyStr
+    role: Literal[AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER]
+    observation_id: NonEmptyStr
+    applicability: NonEmptyStr
+    evidence_uris: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1)]
+
+
 class LearningProposal(DomainModel):
     schema_version: Literal["v0.1"] = "v0.1"
     proposal_id: LearningProposalId
@@ -116,7 +134,8 @@ class LearningProposal(DomainModel):
     verification: NonEmptyStr
     suggested_target: LearningTarget = LearningTarget.SPEC
     evidence: Annotated[
-        tuple[LearningEvidence | KnowledgeLearningEvidence, ...], Field(min_length=1)
+        tuple[LearningEvidence | KnowledgeLearningEvidence | ProjectObservationEvidence, ...],
+        Field(min_length=1),
     ]
     created_at: AwareDatetime
     proposal_sha256: Digest
@@ -127,6 +146,14 @@ class LearningProposal(DomainModel):
             (_sha256(item.to_wire()) for item in self.evidence),
             "Learning evidence identities",
         )
+        expected = {
+            LearningTrigger.QA_FAILURE: LearningEvidence,
+            LearningTrigger.REVIEW_REJECTION: LearningEvidence,
+            LearningTrigger.KNOWLEDGE_RESOLUTION: KnowledgeLearningEvidence,
+            LearningTrigger.PROJECT_OBSERVATION: ProjectObservationEvidence,
+        }[self.trigger]
+        if not all(isinstance(item, expected) for item in self.evidence):
+            raise ValueError("Learning trigger and evidence kind do not match")
         return self
 
     def recompute_digest(self) -> str:
@@ -145,14 +172,27 @@ class LearningProposal(DomainModel):
                 f"- `{item.repository_id}` / `{item.task_id}` / `{item.artifact_id}` / "
                 f"`{item.finding_id}`"
                 if isinstance(item, LearningEvidence)
-                else f"- `{item.requirement_id}` / gap `{item.gap_id}` / "
-                f"resolution `{item.resolution_id}`"
+                else (
+                    f"- `{item.requirement_id}` / gap `{item.gap_id}` / "
+                    f"resolution `{item.resolution_id}`"
+                    if isinstance(item, KnowledgeLearningEvidence)
+                    else f"- `{item.repository_id}` / `{item.task_id}` / `{item.artifact_id}` / "
+                    f"`{item.observation_id}` / `{item.role.value}` / `{item.source_revision}`\n"
+                    f"  Artifact SHA-256: {item.artifact_sha256}\n"
+                    f"  Applicability: {item.applicability}\n"
+                    + "\n".join(f"  - {uri}" for uri in item.evidence_uris)
+                )
             )
             for item in self.evidence
         )
+        heading = (
+            "Observation"
+            if self.trigger is LearningTrigger.PROJECT_OBSERVATION
+            else "Observed failure"  # Keep historical publication bytes replay-compatible.
+        )
         return (
             f"# {self.title}\n\n"
-            "## Observed failure\n\n"
+            f"## {heading}\n\n"
             f"{self.observation}\n\n"
             "## Proposed improvement\n\n"
             f"{self.proposed_improvement}\n\n"
@@ -331,6 +371,29 @@ class ProjectLearningStore:
                 created_at=timestamp,
             )
             self._put_proposal(proposal)
+        for repository in self.project.repository_registry().discover():
+            root = repository.directory("artifacts")
+            artifacts = FileArtifactStore(root, read_only=True)
+            try:
+                for path in sorted(root.glob("art_*.json")):
+                    report = artifacts.get(TypeAdapter(ArtifactId).validate_python(path.stem))
+                    if not isinstance(
+                        report,
+                        (ImplementationReportArtifact, QaReportArtifact, ReviewReportArtifact),
+                    ):
+                        continue
+                    for observation in report.content.project_observations:
+                        self._put_proposal(
+                            _observation_proposal(
+                                self.project,
+                                repository.repository_id,
+                                report,
+                                observation,
+                                timestamp,
+                            )
+                        )
+            except (ArtifactStoreError, OSError, ValueError) as error:
+                raise LearningError("Learning observation evidence cannot be trusted") from error
         return self.list()
 
     def list(self) -> tuple[LearningProposalView, ...]:
@@ -401,6 +464,8 @@ class ProjectLearningStore:
                 )
             raise LearningError("Learning proposal already has a different immutable decision")
         timestamp = decided_at or datetime.now(UTC)
+        if command.action is LearningDecisionAction.APPROVE:
+            self._validate_observation_source(proposal)
         authorization = self._authorize(directory, proposal, command, timestamp)
         try:
             published_uri = (
@@ -489,9 +554,10 @@ class ProjectLearningStore:
                 filename=f"{proposal.proposal_id}.md",
                 content=body.encode(),
             )
-            selection = set(effective_project_knowledge_paths(self.project))
-            selection.add(document.normalized_relative_path)
-            ProjectKnowledgeSelectionStore(self.project).save(tuple(sorted(selection)))
+            with knowledge_mutation_lock(self.project.root / "knowledge"):
+                selection = set(effective_project_knowledge_paths(self.project))
+                selection.add(document.normalized_relative_path)
+                ProjectKnowledgeSelectionStore(self.project).save(tuple(sorted(selection)))
             return (
                 f"project://{self.project.manifest.project_id}/knowledge/"
                 f"{document.normalized_relative_path}#{document.normalized_sha256}"
@@ -520,6 +586,40 @@ class ProjectLearningStore:
             spec_store.activate(tuple(active[key] for key in sorted(active)))
             return f"project://{self.project.manifest.project_id}/specs/{spec.spec_id}"
         return self._publish_skill_design(proposal, body)
+
+    def _validate_observation_source(self, proposal: LearningProposal) -> None:
+        if proposal.trigger is not LearningTrigger.PROJECT_OBSERVATION:
+            return
+        if len(proposal.evidence) != 1 or not isinstance(
+            proposal.evidence[0], ProjectObservationEvidence
+        ):
+            raise LearningError("Project observation requires its exact source")
+        evidence = proposal.evidence[0]
+        try:
+            repository = next(
+                item
+                for item in self.project.repository_registry().discover()
+                if item.repository_id == evidence.repository_id
+            )
+            artifact = FileArtifactStore(repository.directory("artifacts"), read_only=True).get(
+                evidence.artifact_id
+            )
+            if not isinstance(
+                artifact, (ImplementationReportArtifact, QaReportArtifact, ReviewReportArtifact)
+            ):
+                raise LearningError("Project observation source is not a delivery report")
+            observation = next(
+                item
+                for item in artifact.content.project_observations
+                if item.observation_id == evidence.observation_id
+            )
+            expected = _observation_proposal(
+                self.project, repository.repository_id, artifact, observation, proposal.created_at
+            )
+            if expected != proposal:
+                raise LearningError("Project observation source does not match the proposal")
+        except (ArtifactStoreError, OSError, ValueError, StopIteration) as error:
+            raise LearningError("Project observation source cannot be trusted") from error
 
     def _publish_skill_design(self, proposal: LearningProposal, body: str) -> str:
         root = self.project.team.root / "skills" / "learning-proposals"
@@ -698,6 +798,63 @@ def _proposal(
         proposal_sha256="0" * 64,
     )
     return provisional.model_copy(update={"proposal_sha256": provisional.recompute_digest()})
+
+
+def _observation_proposal(
+    project: ProjectWorkspace,
+    repository_id: RepositoryId,
+    artifact: ImplementationReportArtifact | QaReportArtifact | ReviewReportArtifact,
+    observation: ProjectObservation,
+    created_at: datetime,
+) -> LearningProposal:
+    safe = ProjectObservation(
+        observation_id=observation.observation_id,
+        title=redact_text(observation.title).text[:200],
+        fact=redact_text(observation.fact).text,
+        applicability=redact_text(observation.applicability).text,
+        evidence_ids=observation.evidence_ids,
+    )
+    by_id = {item.evidence_id: item for item in artifact.evidence}
+    role = artifact.producer.role
+    if role not in (AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER):
+        raise LearningError("Project observation requires a delivery role")
+    evidence = ProjectObservationEvidence(
+        repository_id=repository_id,
+        task_id=artifact.task_id,
+        artifact_id=artifact.artifact_id,
+        artifact_sha256=artifact.integrity.sha256,
+        source_revision=artifact.source_revision,
+        role=role,
+        observation_id=safe.observation_id,
+        applicability=safe.applicability,
+        evidence_uris=tuple(
+            sorted({redact_text(by_id[key].uri).text for key in safe.evidence_ids})
+        ),
+    )
+    provisional = LearningProposal(
+        proposal_id="learning_proposal_" + "0" * 32,
+        team_id=project.manifest.team_id,
+        project_id=project.manifest.project_id,
+        trigger=LearningTrigger.PROJECT_OBSERVATION,
+        recurrence_key=_sha256(
+            {"repository_id": repository_id, "fact": safe.fact, "applicability": safe.applicability}
+        ),
+        occurrence_count=1,
+        title=safe.title,
+        observation=safe.fact,
+        proposed_improvement=f"Reuse as project background within: {safe.applicability}",
+        verification="Confirm the source and applicability before publication. Future roles must "
+        "cite this background and independently verify their current candidate; "
+        "this proposal grants no permission and is not a delivery verdict.",
+        suggested_target=LearningTarget.KNOWLEDGE,
+        evidence=(evidence,),
+        created_at=created_at,
+        proposal_sha256="0" * 64,
+    )
+    identified = provisional.model_copy(
+        update={"proposal_id": "learning_proposal_" + _proposal_identity(provisional)[:32]}
+    )
+    return identified.model_copy(update={"proposal_sha256": identified.recompute_digest()})
 
 
 def _recurrence_key(finding: _ObservedFinding) -> str:

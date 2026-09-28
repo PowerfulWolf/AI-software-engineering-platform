@@ -81,11 +81,35 @@ def test_multistack_markers_are_retained_in_stable_order(tmp_path: Path) -> None
     }
 
 
-def test_platform_worktrees_are_excluded_from_source_discovery(tmp_path: Path) -> None:
+def test_swift_package_is_detected_without_running_project_commands(tmp_path: Path) -> None:
+    project = tmp_path / "swift"
+    project.mkdir()
+    (project / "Package.swift").write_text("// swift-tools-version: 6.0\n", encoding="utf-8")
+    source = project / "Sources" / "App" / "main.swift"
+    source.parent.mkdir(parents=True)
+    source.write_text('print("ok")\n', encoding="utf-8")
+
+    profile = discover_repository_profile(project, observed_at=OBSERVED)
+
+    assert any(f.language is ProjectLanguage.SWIFT for f in profile.languages)
+    assert any(f.system is BuildSystem.SWIFT for f in profile.build_systems)
+    assert list(_validator().iter_errors(profile.to_wire())) == []
+    assert (
+        profile.profile_sha256
+        == discover_repository_profile(
+            project, observed_at=OBSERVED + timedelta(hours=1)
+        ).profile_sha256
+    )
+
+
+@pytest.mark.parametrize("scratch", ["worktrees", ".build", ".swiftpm"])
+def test_platform_worktrees_are_excluded_from_source_discovery(
+    tmp_path: Path, scratch: str
+) -> None:
     project = tmp_path / "project"
     project.mkdir()
     (project / "README.md").write_text("source rules\n", encoding="utf-8")
-    generated = project / "worktrees" / "task_old" / "coder-attempt-01"
+    generated = project / scratch / "task_old" / "coder-attempt-01"
     generated.mkdir(parents=True)
     (generated / "AGENTS.md").write_text("stale generated rules\n", encoding="utf-8")
     (generated / "package.json").write_text("{}\n", encoding="utf-8")
@@ -186,7 +210,7 @@ def test_profile_integrity_detects_schema_valid_tampering(tmp_path: Path) -> Non
     project = tmp_path / "project"
     project.mkdir()
     original = discover_repository_profile(project, observed_at=OBSERVED)
-    tampered = original.model_copy(update={"detector_version": "t020-v3"})
+    tampered = original.model_copy(update={"detector_version": "t020-v999"})
 
     with pytest.raises(RepositoryProfileMetadataError, match="profile_sha256"):
         tampered.validate_integrity()

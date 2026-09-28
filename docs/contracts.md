@@ -2,8 +2,12 @@
 
 候选复核恢复另有内部契约：`schemas/candidate-verification.schema.json` 定义绑定原候选的
 计划、审批和调用凭据。它保留原 Task/实现报告身份；没有可信 QA PASS 时运行新 QA→Reviewer，
-Reviewer 基础设施失败且终态事件已封存同一 candidate 的 QA PASS 时复用该报告并只运行新 Reviewer，
-不重置终态。
+Reviewer 中断且终态事件或精确的独立验证入场/制品证明已封存同一 candidate 的 QA PASS 时，
+新批准计划复用该报告并只运行新 Reviewer，不重置终态。
+原生 `inputs.accepted_qa` 与独立验证 `retained_qa` 互斥；后者绑定原计划、QA 入场、已封存报告，
+以及存在时消费该报告的 Reviewer 入场。它不是部分 completion，也不会补造 Task 事件。
+只检查最近已入场尝试，不从历史挑选有利 PASS；具体校验和恢复边界见
+[角色恢复规范](../.trellis/spec/core/verification-role-recovery.md)。
 生产入口是 `ase request resume`；低层 `verify-*` 只用于 break-glass。复核通过先完成子 Delivery，
 联合需求仍需完整候选集合和联合验收；详见
 [恢复规范](../.trellis/spec/core/delivery-recovery.md)。
@@ -31,6 +35,35 @@ Reviewer 基础设施失败且终态事件已封存同一 candidate 的 QA PASS 
 | Reviewer | PRD、plan、diff、implementation-report、qa-report、规范 | review-report（仅 artifact store） | 只读检查、测试复跑 | 修改仓库、修改 QA verdict、直接 merge | review-report |
 
 权限必须由机器可验证的 policy 表达；自然语言 prompt 只是解释，不是授权来源。
+
+### 验证阻塞的 Manager 协调
+
+`CandidateVerificationPlan.manager_advice` 可绑定新的 `ManagerVerificationAdvice`：输入、scope、
+候选和 QA artifact 摘要，Manager run/provider/model，以及 `PROPOSE_UI|PROPOSE_REPAIR|WAITING_HUMAN` 决定。
+UI 提案包含精确场景及原验收 ID 到观察步骤的映射，必须另行精确批准；普通继续和模型建议不是
+执行授权。决策按输入摘要不可变保存，重启复用。Console 显示解决方案和验收映射；旧 QA/审批不改写。
+CLI QA/Reviewer 原生执行工具禁用并保留只读沙箱，读取平台提供的有界、脱敏、权限过滤候选源码；
+测试使用受控执行器证据，缺失证据仍阻塞。Manager 模型只提案、不执行或批准。
+执行器在模型启动前失败也必须交回 Manager：`execution_failure` 精确引用计划、角色和
+BLOCKED 回执摘要，携带失败步骤和有界诊断；没有 QA 时不得伪造 QA 来源。
+立即失败及重启后继续都先协调，再考虑新的精确审批；不能因已有 invocation 而跳过 Manager。
+原生 UI 回执可带 `NativeUiDiagnostics`：GUI 会话、AX 信任状态、仅目标 PID 的窗口计数、
+实际 Mock 启动参数和进程存活/退出码。不新增截图、激活、菜单或 AppleEvent 权限；诊断能力
+变更进入 driver/policy hash，必须新计划审批。
+`ManagerVerificationAdvice.environment_prerequisite` 可封存桌面会话前提和最新只读探测。
+`NATIVE_UI_SESSION_LOCKED` 是 macOS 锁屏，不是执行互斥锁；未检测到 READY 时只显示登录用户
+解锁的明确操作，不能提议源码修复或重复 UI 执行。正常继续重新探测，状态变化进入建议输入摘要，
+READY 后由 Manager 重提独立审批的新计划。探测不启动业务程序、不解锁或读取密码；旧记录缺省
+该字段时摘要保持不变。环境事实与候选 QA verdict 严格分离。
+详见 `.trellis/spec/core/verification-environment.md`。
+
+源码前提修复可以绑定 `CandidateExecutorPrerequisite`：它精确引用 admitted BLOCKED 回执，
+没有 QA/Review/verdict，不能冒充验证 completion。`PrerequisiteRepairPlan` 必须二选一：
+`completion_sha256 + incident_sha256` 或 `executor_prerequisite_sha256`。Manager 的修复提案
+绑定原 request/candidate/receipt；只有单独批准 exact repair digest 后才能启动 ASE Coder。
+恢复 dispatch/context 保留真实 evidence kind/digest，原验收标准及独立 QA/Reviewer 不变。
+旧 optional 字段缺省时保留历史摘要；Console 明确显示执行器证据不是 QA 结论。
+详见 `.trellis/spec/core/prerequisite-repair.md`。
 
 ## Manager、Agent Skills 与上游交接
 
@@ -163,6 +196,11 @@ Markdown 正文不会被模型猜测式解析。只有决定终止本次交付�
 safety policy 不允许项目规范放宽。正式 wire contracts 是
 `project-profile.schema.json`、`spec-conflict.schema.json`、`spec-resolution.schema.json` 与
 `runtime-workspace-binding.schema.json`。
+
+RepositoryProfile 的 `repository-profile.schema.json` 与 Python 枚举同时支持 `swift` 语言和构建系统。
+检测版本 `t020-v3` 只读识别 Swift marker，不执行 manifest。历史 profile/Task 不回写；新的独立验证
+计划可从精确候选补充受限 Swift 命令，必须重新精确批准。详见
+[Swift 验证契约](../.trellis/spec/core/swift-verification.md)。
 
 ## 1.2 Agent Run 输入/输出契约
 
@@ -708,6 +746,15 @@ artifact 请求前抛出 `KnowledgeGapRaised` 时，预留的 Design 次数归�
 
 ## T044 显式恢复与串行执行
 
+Candidate verification environment extension: plans may include optional `executor_capability`
+and `prerequisite_incident_sha256`; absent fields preserve legacy hashes. Inconclusive sealed QA
+produces an immutable Manager WAITING_HUMAN incident. Exact-plan human approval authorizes only the
+listed attempted verification. The versioned Swift executor retains Codex outer isolation and
+private role scratch; neither Responses tools nor CLI model permissions gain sandbox-disable flags.
+STARTED/COMPLETED/BLOCKED command receipts bind plan/authorization/invocation/candidate/role and never
+substitute for QA/Review verdicts. See `.trellis/spec/core/verification-environment.md` and
+`schemas/candidate-verification.schema.json`; regenerate using `scripts/generate-verification-schema.py`.
+
 恢复使用新的 Task，关联原失败 Task/checkpoint、批准的 Product/Design/Plan 和捕获的修改。
 旧终态、批准与 Coder 现场不变，不把原 Planner 记录伪装成新规划。
 
@@ -832,3 +879,13 @@ Console uses `PLANNER_TEST_MATRIX_REJECTED` for exhausted matrix corrections; le
 `COMMAND_REJECTED` denotes platform validation, not model availability. Schema/permission/lineage
 errors are not included in this automatic loop. Product approvals, Design and dispatch gates remain
 unchanged. See `.trellis/spec/core/planning-gate.md` for tests and existing-Requirement recovery.
+## Project observations and organizational learning
+
+Implementation, QA and Review report content may include up to eight `project_observations` with
+`observation_id`, `title`, `fact`, `applicability`, and nonempty report-local `evidence_ids`.
+Empty observations are omitted from durable serialization for historical digest compatibility.
+They produce `PROJECT_OBSERVATION` Learning proposals, not automatic background, rules or verdicts.
+`KNOWLEDGE_RESOLUTION` proposals carry requirement/gap/resolution provenance instead of finding
+provenance. Every publication still needs exact human approval; future snapshots may reuse selected
+knowledge, while historical inputs and independent candidate checks remain unchanged.
+See `.trellis/spec/core/project-learning.md` for signatures, errors, tests and existing-data handling.

@@ -6,7 +6,7 @@ import os
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from ai_software_engineer.agents import (
     AgentAdapter,
@@ -31,7 +31,7 @@ from ai_software_engineer.config import (
 )
 from ai_software_engineer.config.codex_proxy import codex_cli_proxy_key_environment
 from ai_software_engineer.domain import AgentDefinition, AgentRole, TeamRole
-from ai_software_engineer.git import GitWorktreeManager
+from ai_software_engineer.git import DirtyWorktree, GitWorktreeManager
 from ai_software_engineer.manager.dispatch import (
     DeliveryAllocation,
     VerificationReservation,
@@ -41,8 +41,10 @@ from ai_software_engineer.role_workspace import (
     DispatchRoleWorktreeCoordinator,
     RoleWorktreeBinding,
     RoleWorktreeSession,
-    VerificationWorktreeBindings,
 )
+
+if TYPE_CHECKING:
+    from ai_software_engineer.recovery.verification_execution import VerificationEvidenceProvider
 
 
 class DeliveryRouteAdapterFactory(Protocol):
@@ -68,14 +70,27 @@ class ConfiguredDeliveryRouteAdapterFactory:
         *,
         initial_workspace_admission: InitialWorkspaceAdmission | None = None,
         execution_guard: ExecutionGuard | None = None,
+        verification_evidence: VerificationEvidenceProvider | None = None,
     ) -> None:
         self._initial_admission = initial_workspace_admission
         self._execution_guard = execution_guard
+        self._verification_evidence = verification_evidence
 
     def with_execution_guard(self, guard: ExecutionGuard) -> ConfiguredDeliveryRouteAdapterFactory:
         """Bind Worker ownership while preserving explicitly approved recovery admission."""
         return ConfiguredDeliveryRouteAdapterFactory(
-            initial_workspace_admission=self._initial_admission, execution_guard=guard
+            initial_workspace_admission=self._initial_admission,
+            execution_guard=guard,
+            verification_evidence=self._verification_evidence,
+        )
+
+    def with_verification_evidence(
+        self, provider: VerificationEvidenceProvider
+    ) -> ConfiguredDeliveryRouteAdapterFactory:
+        return ConfiguredDeliveryRouteAdapterFactory(
+            initial_workspace_admission=self._initial_admission,
+            execution_guard=self._execution_guard,
+            verification_evidence=provider,
         )
 
     def create(
@@ -91,6 +106,19 @@ class ConfiguredDeliveryRouteAdapterFactory:
         from ai_software_engineer.agents.openai_compatible import PromptBuilder
 
         prompt_builder: PromptBuilder = ContextPromptBuilder(context_resolver)
+        if self._verification_evidence is not None:
+            from ai_software_engineer.recovery.verification_execution import (
+                VerificationEvidencePromptBuilder,
+            )
+
+            if definition.role not in (AgentRole.QA, AgentRole.REVIEWER):
+                raise ProductionConfigError("controlled verification evidence is verifier-only")
+            prompt_builder = VerificationEvidencePromptBuilder(
+                prompt_builder,
+                self._verification_evidence,
+                Path(binding.worktree.path),
+                self._execution_guard,
+            )
         if route.kind is ModelProviderKind.CODEX_CLI:
             proxy = config.effective_connection_mode(route) == "proxy"
             if proxy:
@@ -189,19 +217,32 @@ class DispatchDeliveryAgentAdapter:
         self._route_scope = route_scope
         self._route_validator = route_validator
         self._coder: RoleWorktreeBinding | None = None
-        self._verifiers: VerificationWorktreeBindings | None = None
-        self._adapters: dict[AgentRole, AgentAdapter] = {}
+        self._verifiers: dict[tuple[AgentRole, int], RoleWorktreeBinding] = {}
+        self._adapters: dict[tuple[AgentRole, int], AgentAdapter] = {}
 
     def run(self, request: AgentRequest) -> AgentResult:
+        if isinstance(self._dispatch, VerificationReservation):
+            if request.role not in (AgentRole.QA, AgentRole.REVIEWER):
+                raise ProductionConfigError(
+                    f"candidate verification cannot invoke {request.role.value.capitalize()}"
+                )
+            # Artifact/Context provenance stays on the original Task; only checkout
+            # and workforce reservations use the separate verification Task identity.
+            request_task_id = self._dispatch.source_task_id
+        else:
+            request_task_id = self._dispatch.task_id
+        if request.task_id != request_task_id:
+            raise ProductionConfigError("Agent request does not belong to this dispatch Task")
         if request.role is AgentRole.ORCHESTRATOR:
             if self._plan_adapter is None:
                 raise ProductionConfigError("candidate verification cannot invoke Orchestrator")
             return self._plan_adapter.run(request)
         binding = self._binding(request)
-        adapter = self._adapters.get(request.role)
+        key = (request.role, binding.worktree.attempt)
+        adapter = self._adapters.get(key)
         if adapter is None:
             adapter = self._route_adapter(request.role, binding)
-            self._adapters[request.role] = adapter
+            self._adapters[key] = adapter
         return adapter.run(request)
 
     def close_clean_worktrees(self) -> None:
@@ -209,8 +250,7 @@ class DispatchDeliveryAgentAdapter:
         bindings: list[RoleWorktreeBinding] = []
         if self._coder is not None:
             bindings.append(self._coder)
-        if self._verifiers is not None:
-            bindings.extend((self._verifiers.qa, self._verifiers.reviewer))
+        bindings.extend(self._verifiers.values())
         for binding in reversed(bindings):
             with suppress(Exception):
                 self._coordinator.close(binding)
@@ -229,14 +269,20 @@ class DispatchDeliveryAgentAdapter:
             return self._coder
         if request.role not in {AgentRole.QA, AgentRole.REVIEWER}:
             raise ProductionConfigError(f"unsupported delivery role: {request.role.value}")
-        if self._verifiers is None:
-            self._verifiers = self._coordinator.open_verifiers(
-                self._dispatch,
-                request.source_revision,
-                self._definitions,
-                recover=self._worktree_exists(AgentRole.QA),
-            )
-        return self._verifiers.qa if request.role is AgentRole.QA else self._verifiers.reviewer
+        attempt = 1 if isinstance(self._dispatch, VerificationReservation) else request.attempt
+        binding = self._coordinator.open_verifier(
+            self._dispatch,
+            request.role,
+            request.source_revision,
+            self._definitions,
+            attempt=attempt,
+            recover=self._worktree_exists(request.role, attempt=attempt),
+        )
+        snapshot = self._coordinator.inspect(binding)
+        if snapshot.dirty:
+            raise DirtyWorktree(snapshot.changed_paths)
+        self._verifiers[(request.role, attempt)] = binding
+        return binding
 
     def _route_adapter(
         self,
@@ -302,13 +348,13 @@ class DispatchDeliveryAgentAdapter:
         selected = primary[0]
         return (selected, *(route for route in routes if route is not selected))
 
-    def _worktree_exists(self, role: AgentRole) -> bool:
+    def _worktree_exists(self, role: AgentRole, *, attempt: int = 1) -> bool:
         root = (
             Path(self._config.platform_root).expanduser().resolve()
             / "worktrees"
             / str(self._dispatch.repository_id)
             / self._dispatch.task_id
-            / f"{role.value}-attempt-01"
+            / f"{role.value}-attempt-{attempt:02d}"
         )
         return root.exists()
 

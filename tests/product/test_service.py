@@ -25,6 +25,8 @@ from ai_software_engineer.product.agents import (
     FakeProductBehavior,
     FakeProductScenario,
     ProductAgentErrorCode,
+    ProductAgentRequest,
+    ProductAgentResult,
     ProductClarification,
 )
 from ai_software_engineer.product.models import (
@@ -448,6 +450,47 @@ def test_agent_failures_do_not_write_spec_or_advance_checkpoint(
     assert store.current_checkpoint(REQUEST_ID) == started.checkpoint
     assert store.list_product_specs(REQUEST_ID) == ()
     assert store.current_request_revision(REQUEST_ID) == started.request_revision
+
+
+@pytest.mark.parametrize("behavior", [FakeProductBehavior.READY, FakeProductBehavior.TIMEOUT])
+def test_product_input_changed_during_model_call_does_not_publish_stale_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, behavior: FakeProductBehavior
+) -> None:
+    preparation = _preparation(tmp_path)
+    service, store = _service(tmp_path, preparation, {})
+    started = _start(service)
+    original = FakeProductAgentAdapter.run
+
+    def concurrent_reply(
+        adapter: FakeProductAgentAdapter, request: ProductAgentRequest
+    ) -> ProductAgentResult:
+        service.record_human_message(
+            RecordHumanMessageCommand(
+                operation_id="message_during_product",
+                request_id=REQUEST_ID,
+                expected_checkpoint_sha256=started.checkpoint.checkpoint_sha256,
+                content="The acceptance behavior has changed.",
+                submitted_at=NOW,
+            )
+        )
+        delegate = FakeProductAgentAdapter(
+            scenarios={
+                "run_product_ready_001": FakeProductScenario(
+                    behavior=behavior,
+                    product_spec=_spec(preparation)
+                    if behavior is FakeProductBehavior.READY
+                    else None,
+                )
+            }
+        )
+        return original(delegate, request)
+
+    monkeypatch.setattr(FakeProductAgentAdapter, "run", concurrent_reply)
+    with pytest.raises(ProductDiscoveryStaleCheckpoint):
+        _ready(service, started.checkpoint.checkpoint_sha256)
+    assert store.find_operation("run_product_ready_001") is None
+    assert store.list_product_specs(REQUEST_ID) == ()
+    assert store.current_checkpoint(REQUEST_ID).dialogue_count == 2
 
 
 def test_stale_approval_and_changed_operation_replay_fail_closed(tmp_path: Path) -> None:

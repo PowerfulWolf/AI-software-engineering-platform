@@ -161,7 +161,37 @@ class ImplementationTestRun(DomainModel):
     duration_ms: NonNegativeInt | None = None
 
 
-class ImplementationReportContent(DomainModel):
+class ProjectObservation(DomainModel):
+    """A scoped discovery proposal, never a verdict or executable policy."""
+
+    observation_id: Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_-]{0,63}$")]
+    title: Annotated[str, StringConstraints(min_length=1, max_length=200)]
+    fact: Annotated[str, StringConstraints(min_length=1, max_length=4_000)]
+    applicability: Annotated[str, StringConstraints(min_length=1, max_length=1_000)]
+    evidence_ids: Annotated[tuple[EvidenceId, ...], Field(min_length=1, max_length=16)]
+
+    @model_validator(mode="after")
+    def validate_evidence(self) -> Self:
+        ensure_unique(self.evidence_ids, "Project observation evidence IDs")
+        return self
+
+
+class ObservingReportContent(DomainModel):
+    # Omission preserves digests of reports sealed before observations were introduced.
+    project_observations: Annotated[tuple[ProjectObservation, ...], Field(max_length=8)] = Field(
+        default=(), exclude_if=lambda value: not value
+    )
+
+    @model_validator(mode="after")
+    def validate_observations(self) -> Self:
+        ensure_unique(
+            (item.observation_id for item in self.project_observations),
+            "Project observation IDs",
+        )
+        return self
+
+
+class ImplementationReportContent(ObservingReportContent):
     commit_sha: CommitSha
     changed_files: Annotated[tuple[ChangedFile, ...], Field(min_length=1)]
     acceptance_mapping: tuple[ImplementationAcceptanceMapping, ...]
@@ -222,7 +252,7 @@ class QaTestRun(DomainModel):
     duration_ms: NonNegativeInt | None = None
 
 
-class QaReportContent(DomainModel):
+class QaReportContent(ObservingReportContent):
     status: QaReportStatus
     criteria_results: Annotated[tuple[QaCriterionResult, ...], Field(min_length=1)]
     tests_run: tuple[QaTestRun, ...]
@@ -263,7 +293,7 @@ def classify_qa_failure(content: QaReportContent) -> QaFailureDisposition:
     return QaFailureDisposition.REMEDIATE_CANDIDATE
 
 
-class ReviewReportContent(DomainModel):
+class ReviewReportContent(ObservingReportContent):
     verdict: ReviewVerdict
     findings: tuple[Finding, ...]
     checked_dimensions: Annotated[tuple[ReviewDimension, ...], Field(min_length=1)]
@@ -315,6 +345,12 @@ class ArtifactEnvelope[ContentT: DomainModel](DomainModel):
             raise ValueError("Artifact cannot be its own parent")
         if self.supersedes == self.artifact_id:
             raise ValueError("Artifact cannot supersede itself")
+        if isinstance(self.content, ObservingReportContent):
+            self.ensure_evidence_references(
+                evidence_id
+                for observation in self.content.project_observations
+                for evidence_id in observation.evidence_ids
+            )
         return self
 
     def ensure_evidence_references(self, references: Iterable[str]) -> None:

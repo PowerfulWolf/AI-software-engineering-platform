@@ -15,6 +15,10 @@ from ai_software_engineer.domain import Task, TaskStatus
 from ai_software_engineer.domain.artifact import CommitSha
 from ai_software_engineer.domain.identity import RepositoryId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
+from ai_software_engineer.domain.prerequisite_repair import (
+    PrerequisiteRepairPlan,
+    PrerequisiteRepairRequest,
+)
 from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryFailureCode,
     DeliveryId,
@@ -34,6 +38,7 @@ from ai_software_engineer.manager.dispatch import (
     DispatchCommitRecord,
     RecoveryDispatchRecord,
 )
+from ai_software_engineer.manager.native_ui import NativeUiScenario
 from ai_software_engineer.manager.preparation import (
     PrepareProjectResult,
     PrepareProjectStatus,
@@ -49,6 +54,8 @@ from ai_software_engineer.planning import PlanningStageResult
 from ai_software_engineer.product import ProductDiscoveryOutcome, ProductDiscoveryResult
 from ai_software_engineer.recovery.models import RecoveryPlan
 from ai_software_engineer.recovery.verification_records import (
+    CandidateExecutorPrerequisite,
+    CandidateRemediationEvidence,
     CandidateVerificationCompletion,
     CandidateVerificationPlan,
 )
@@ -155,6 +162,9 @@ class ResumeProjectDelivery(DomainModel):
     delivery_id: DeliveryId
     approved_plan_sha256: CheckpointDigest | None = None
     approved_scope_sha256: CheckpointDigest | None = None
+    prerequisite_repair: PrerequisiteRepairRequest | None = None
+    native_ui_scenario: NativeUiScenario | None = None
+    approved_repair_sha256: CheckpointDigest | None = None
     approval_reference: NonEmptyStr | None = None
     submitted_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -162,11 +172,21 @@ class ResumeProjectDelivery(DomainModel):
     def require_complete_verification_approval(self) -> ResumeProjectDelivery:
         approvals = tuple(
             value
-            for value in (self.approved_plan_sha256, self.approved_scope_sha256)
+            for value in (
+                self.approved_plan_sha256,
+                self.approved_scope_sha256,
+                self.approved_repair_sha256,
+            )
             if value is not None
         )
         if len(approvals) > 1:
             raise ValueError("only one delivery approval may be supplied at a time")
+        if (
+            len(approvals)
+            + int(self.prerequisite_repair is not None)
+            + int(self.native_ui_scenario is not None)
+        ) > 1:
+            raise ValueError("repair proposal and approval must be separate operations")
         if bool(approvals) != (self.approval_reference is not None):
             raise ValueError("approval digest and reference must be supplied together")
         return self
@@ -259,7 +279,7 @@ def _verification_binds_terminal_candidate(
     current: ProjectDeliveryCheckpoint,
     history: tuple[ProjectDeliveryCheckpoint, ...],
     plan: CandidateVerificationPlan,
-    completion: CandidateVerificationCompletion,
+    completion: CandidateRemediationEvidence,
 ) -> bool:
     """Verify the sealed candidate proof when the latest cursor omits its projection."""
     plan.validate_integrity()
@@ -291,9 +311,7 @@ def _verification_binds_terminal_candidate(
             and checkpoint.candidate_revision is None
             for checkpoint in tail
         )
-    qa = completion.qa
-    review = completion.review
-    return (
+    common = (
         bool(history)
         and history[-1] == current
         and checkpoint_sha256_is_ancestor(history, plan.native_checkpoint_sha256)
@@ -302,6 +320,17 @@ def _verification_binds_terminal_candidate(
         and current.repository_root == plan.scope.repository_root
         and current.delivery_id == plan.scope.delivery_id
         and (direct_cursor or successor_cursor)
+    )
+    if isinstance(completion, CandidateExecutorPrerequisite):
+        return (
+            common
+            and completion.source_task_id == plan.inputs.task_id
+            and completion.candidate_revision == candidate
+        )
+    qa = completion.qa
+    review = completion.review
+    return (
+        common
         and qa.task_id == plan.inputs.task_id
         and qa.source_revision == candidate
         and qa.parent_artifact_ids == (plan.inputs.implementation_id,)
@@ -542,7 +571,7 @@ class UnifiedProjectEntryService:
         return ProjectDeliveryResult(checkpoint=current)
 
     def retry_interrupted_stage(self, command: ResumeProjectDelivery) -> ProjectDeliveryResult:
-        """Re-enter one exact stage before any role invocation was admitted."""
+        """Resume a platform-interrupted stage without resetting a terminal Task."""
         store, current = self._current(command.delivery_id)
         self._backend.reconcile(current)
         retryable = {
@@ -559,6 +588,15 @@ class UnifiedProjectEntryService:
             and current.stage_attempts.delivering == 0
             and current.failed_stage in {None, DeliveryStage.DELIVERING}
         )
+        pending_verifier = (
+            current.task_id is not None
+            and current.task_status in {TaskStatus.QA, TaskStatus.REVIEW}
+            and current.task_revision is not None
+            and current.task_revision > 0
+            and current.candidate_revision is not None
+            and current.failed_stage is DeliveryStage.DELIVERING
+            and current.failure_code is DeliveryFailureCode.INVARIANT_VIOLATION
+        )
         pre_task_stage = current.task_id is None and current.failed_stage is not None
         legacy_mysql_dispatch_failure = (
             pre_task_stage
@@ -572,9 +610,9 @@ class UnifiedProjectEntryService:
         )
         if (
             current.stage not in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
-            or current.candidate_revision is not None
+            or (current.candidate_revision is not None and not pending_verifier)
             or (current.failure_code not in retryable and not legacy_mysql_dispatch_failure)
-            or not (pre_task_stage or pristine_delivery_start)
+            or not (pre_task_stage or pristine_delivery_start or pending_verifier)
         ):
             return ProjectDeliveryResult(checkpoint=current)
         next_actions = {
@@ -587,7 +625,11 @@ class UnifiedProjectEntryService:
             DeliveryStage.DISPATCHING: DeliveryNextAction.COMMIT_DISPATCH,
             DeliveryStage.DELIVERING: DeliveryNextAction.RUN_DELIVERY,
         }
-        target = DeliveryStage.DELIVERING if pristine_delivery_start else current.failed_stage
+        target = (
+            DeliveryStage.DELIVERING
+            if pristine_delivery_start or pending_verifier
+            else current.failed_stage
+        )
         assert target is not None
         next_action = next_actions.get(target)
         if next_action is None:
@@ -616,9 +658,10 @@ class UnifiedProjectEntryService:
         self,
         dispatch: ContinuationDispatchRecord,
         plan: CandidateVerificationPlan,
-        completion: CandidateVerificationCompletion,
+        completion: CandidateRemediationEvidence,
         *,
         at: datetime,
+        repair_plan: PrerequisiteRepairPlan | None = None,
     ) -> ProjectDeliveryResult:
         """Attach one trusted successor Task to a terminal candidate Delivery."""
         store, current = self._current(dispatch.source_delivery_id)
@@ -627,6 +670,25 @@ class UnifiedProjectEntryService:
                 raise DeliveryCommandRejected("continuation replay Task mismatch")
             return ProjectDeliveryResult(checkpoint=current)
         dispatch.validate_integrity()
+        if dispatch.prerequisite_repair_sha256 is not None:
+            if repair_plan is None:
+                raise DeliveryCommandRejected("prerequisite continuation requires repair authority")
+            repair_plan.validate_integrity()
+            if (
+                dispatch.prerequisite_repair_sha256 != repair_plan.plan_sha256
+                or repair_plan.source_plan_sha256 != plan.plan_sha256
+                or repair_plan.source_evidence_sha256 != completion.evidence_sha256
+                or repair_plan.native_checkpoint_sha256 != current.checkpoint_sha256
+                or repair_plan.target_base_revision != dispatch.task.base_ref
+                or repair_plan.target_preparation_sha256 != dispatch.target_preparation_sha256
+            ):
+                raise DeliveryCommandRejected("prerequisite repair does not bind this continuation")
+        elif repair_plan is not None:
+            raise DeliveryCommandRejected(
+                "repair authority cannot be used for an ordinary remediation"
+            )
+        if isinstance(completion, CandidateExecutorPrerequisite) and repair_plan is None:
+            raise DeliveryCommandRejected("executor prerequisite requires exact repair authority")
         history = store.list(current.delivery_id)
         expected_current_task = (
             dispatch.source_task_id
@@ -662,7 +724,7 @@ class UnifiedProjectEntryService:
                 and current.dispatch_commit_sha256 != plan.dispatch_sha256
             )
             or dispatch.continuation_plan_sha256 != plan.plan_sha256
-            or dispatch.continuation_sha256 != completion.completion_sha256
+            or dispatch.continuation_sha256 != completion.evidence_sha256
             or completion.verified
             or not _verification_binds_terminal_candidate(
                 current=verification_current,

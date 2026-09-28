@@ -1,10 +1,115 @@
 """Approved recovery input routing; old code is data, never execution authority."""
 
 import hashlib
+import json
 
-from ai_software_engineer.context import ContextBundle, ContextSource
+from ai_software_engineer.config import ProductionConfig
+from ai_software_engineer.context import ContextBundle, ContextSource, FileContextStore
 from ai_software_engineer.domain import AgentRole
-from ai_software_engineer.recovery.models import RecoveryPlan, RecoveryRejected
+from ai_software_engineer.domain.prerequisite_repair import PrerequisiteRepairPlan
+from ai_software_engineer.recovery.models import RecoveryPlan, RecoveryRejected, RecoveryScope
+from ai_software_engineer.recovery.store import FileRecoveryStore
+from ai_software_engineer.redaction import redact_text
+
+
+def approved_parent_context(
+    config: ProductionConfig,
+    scope: RecoveryScope,
+    parent_id: str | None,
+    parent_sha256: str | None,
+) -> tuple[ContextSource, ...]:
+    """Preserve exact approved Requirement context on every fresh successor path."""
+    if parent_id is None:
+        return ()
+    if parent_sha256 is None:
+        raise RecoveryRejected("joint recovery source is incomplete")
+    from ai_software_engineer.multi_directory.production import approved_joint_context_sources
+    from ai_software_engineer.multi_directory.store import JointJournal
+    from ai_software_engineer.team_workspace import TeamWorkspace
+
+    team = TeamWorkspace.initialize(
+        config.platform_root, team_id=config.team_id, name=config.team_name, read_only=True
+    )
+    project, repository = team.project_registry().locate_repository(scope.repository_id)
+    if str(repository.repository_root) != scope.repository_root:
+        raise RecoveryRejected("joint recovery repository binding changed")
+    parent = JointJournal(project.requirements_root, read_only=True).current(parent_id)
+    if (
+        parent is None
+        or parent.checkpoint_sha256 != parent_sha256
+        or parent.team_id != team.manifest.team_id
+        or parent.team_manifest_sha256 != team.manifest.manifest_sha256
+        or parent.project_id != project.manifest.project_id
+        or parent.project_manifest_sha256 != project.manifest.manifest_sha256
+    ):
+        raise RecoveryRejected("approved joint parent checkpoint changed")
+    children = tuple(
+        child
+        for child in parent.children
+        if child.checkpoint.delivery_id == scope.delivery_id
+        and child.checkpoint.repository_id == scope.repository_id
+        and child.checkpoint.repository_root == scope.repository_root
+    )
+    if len(children) != 1:
+        raise RecoveryRejected("joint recovery unit is missing or ambiguous")
+    return approved_joint_context_sources(parent, children[0].unit_id)
+
+
+def prerequisite_repair_context(
+    repair: PrerequisiteRepairPlan, *, legacy_qa_description: bool = False
+) -> ContextSource:
+    # Historical dispatch digests include the description, even when its source
+    # was executor evidence. Never rewrite those bytes during restart.
+    description = (
+        "The previous QA is INCONCLUSIVE, not a business defect. "
+        if legacy_qa_description
+        else "Its source is an inconclusive QA or executor observation, "
+        "not a business defect verdict. "
+    )
+    return ContextSource(
+        source_id="manager.prerequisite_repair",
+        uri=f"prerequisite-repair://{repair.plan_sha256}",
+        content=(
+            "Explicitly approved prerequisite repair. "
+            + description
+            + "Coder implements the prerequisite in its own worktree. "
+            "Preserve original acceptance criteria and candidate behavior; QA/Reviewer "
+            "independently verify the NEW candidate. "
+            "Never import operator-authored patches. "
+            "Mock is not real login evidence. Never modify credentials or real user data.\n"
+            + json.dumps(repair.to_wire(), ensure_ascii=False, sort_keys=True)
+        ),
+        priority=2,
+        required=True,
+    )
+
+
+def preserved_prerequisite_context(
+    plan: RecoveryPlan,
+    contexts: FileContextStore,
+    repairs: FileRecoveryStore,
+) -> tuple[ContextSource, ...]:
+    """Carry an approved repair objective across failed-Coder recovery generations."""
+    context = contexts.get(plan.source.failed_context_id)
+    if context.task_id != plan.source.task_id or context.role is not AgentRole.CODER:
+        raise RecoveryRejected("recovery prerequisite context belongs to another Task or role")
+    sections = tuple(s for s in context.sections if s.name == "source:manager.prerequisite_repair")
+    if not sections:
+        return ()
+    if len(sections) != 1 or sections[0].truncated:
+        raise RecoveryRejected("recovery prerequisite context is incomplete")
+    section = sections[0]
+    repair = repairs.get_repair_plan(section.uri.removeprefix("prerequisite-repair://"))
+    authorization = repairs.get_repair_authorization(repair.plan_sha256)
+    if authorization.decision.approved:
+        for legacy in (False, True):
+            expected = prerequisite_repair_context(repair, legacy_qa_description=legacy)
+            if (
+                section.uri == expected.uri
+                and section.content == redact_text(expected.content or "").text
+            ):
+                return (expected,)
+    raise RecoveryRejected("recovery prerequisite context lost exact repair authority")
 
 
 def recovery_context_sources(plan: RecoveryPlan) -> tuple[ContextSource, ...]:

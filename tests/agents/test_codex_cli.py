@@ -790,7 +790,7 @@ def test_cli_git_inspection_does_not_inherit_proxy_secret(
         captured.append(kwargs["env"])  # type: ignore[arg-type]
         return subprocess.CompletedProcess(command, 0, "base-revision\n", "")
 
-    monkeypatch.setattr(codex_cli_module.subprocess, "run", run)
+    monkeypatch.setattr("ai_software_engineer.agents.codex_cli.subprocess.run", run)
 
     assert codex_cli_module._git(tmp_path, "rev-parse", "HEAD") == "base-revision"
     assert captured[0]["GIT_TERMINAL_PROMPT"] == "0"
@@ -842,6 +842,8 @@ def test_qa_semantic_artifact_failure_has_safe_actionable_diagnostics(
     assert "cause=ARTIFACT_VALIDATION" in result.error.message
     assert "validation_type=value_error" in result.error.message
     assert "path=qa-report" in result.error.message
+    assert "validation_rule=UNKNOWN_EVIDENCE_REFERENCE" in result.error.message
+    assert "ev_missing_output" not in result.error.message
     assert hashlib.sha256(runner.raw_output.encode()).hexdigest() in result.error.message
     assert "private-provider-output" not in result.error.message
     assert "Copy these exact envelope bindings" in runner.prompt
@@ -857,7 +859,61 @@ def test_qa_semantic_artifact_failure_has_safe_actionable_diagnostics(
     assert runner.environment["ASE_PROJECT_PYTEST"] == str(qa_runner)
 
 
-def test_qa_uses_writable_disposable_sandbox_but_candidate_stays_immutable(
+@pytest.mark.parametrize(
+    ("fault", "rule"),
+    [
+        ("verdict", "QA_VERDICT_INCONSISTENT"),
+        ("producer", "PRODUCER_ROLE_MISMATCH"),
+        ("duplicate", "DUPLICATE_EVIDENCE_ID"),
+        ("self_parent", "ARTIFACT_SELF_PARENT"),
+        ("self_supersedes", "ARTIFACT_SELF_SUPERSEDES"),
+        ("unknown", "UNCLASSIFIED"),
+    ],
+)
+def test_qa_validation_rule_is_safe_and_never_repairs_output(
+    tmp_path: Path, fault: str, rule: str
+) -> None:
+    root, base = _repository(tmp_path)
+    request = _request(AgentRole.QA, run_id="run_diagnostic_rule", source_revision=base)
+    payload = json.loads(make_qa_artifact().model_dump_json())
+    if fault == "verdict":
+        payload["content"]["criteria_results"][0]["status"] = "NOT_TESTED"
+    elif fault == "producer":
+        payload["producer"]["role"] = "coder"
+    elif fault == "duplicate":
+        payload["evidence"].append(payload["evidence"][0].copy())
+    elif fault == "self_parent":
+        payload["parent_artifact_ids"] = [payload["artifact_id"]]
+    elif fault == "self_supersedes":
+        payload["supersedes"] = payload["artifact_id"]
+    else:
+        payload["content"]["environment"] = {"private-key-name": "private-value"}
+        payload["content"]["private-secret-value"] = "private-provider-output"
+    runner = _ArtifactOutputRunner(payload)
+    adapter = CodexCliAgentAdapter(
+        workspace_root=root,
+        model="gpt-5.6-terra",
+        agent_id="agent_qa_001",
+        agent_version="v0.1",
+        prompt_builder=StaticPromptBuilder(),
+        runner=runner,
+    )
+
+    result = adapter.run(request)
+
+    assert result.status is AgentRunStatus.FAILED
+    assert result.artifact is None
+    assert result.error is not None
+    assert result.error.code is AgentErrorCode.INVALID_OUTPUT
+    assert f"validation_rule={rule}" in result.error.message
+    assert "private-secret-value" not in result.error.message
+    assert "private-provider-output" not in result.error.message
+    assert "private-key-name" not in result.error.message
+    assert adapter.run(request) == result
+    assert _git(root, "status", "--porcelain") == ""
+
+
+def test_qa_cannot_use_native_commands_or_write_the_candidate(
     tmp_path: Path,
 ) -> None:
     root, base = _repository(tmp_path)
@@ -878,7 +934,9 @@ def test_qa_uses_writable_disposable_sandbox_but_candidate_stays_immutable(
     assert result.artifact.artifact_id == expected_artifact_id
     assert runner.argv is not None
     sandbox_index = runner.argv.index("--sandbox")
-    assert runner.argv[sandbox_index + 1] == "workspace-write"
+    assert runner.argv[sandbox_index + 1] == "read-only"
+    for feature in ("shell_tool", "unified_exec", "multi_agent", "apps", "plugins"):
+        assert ("--disable", feature) in tuple(zip(runner.argv, runner.argv[1:], strict=False))
     assert _git(root, "rev-parse", "HEAD") == base
     assert _git(root, "status", "--porcelain") == ""
 

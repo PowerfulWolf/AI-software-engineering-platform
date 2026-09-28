@@ -13,6 +13,11 @@ from ai_software_engineer.domain.enums import (
     QaReportStatus,
     QaTestStatus,
 )
+from ai_software_engineer.knowledge_documents import ProjectKnowledgeDocumentStore
+from ai_software_engineer.knowledge_selection import (
+    ProjectKnowledgeSelectionStore,
+    effective_project_knowledge_paths,
+)
 from ai_software_engineer.learning import (
     DecideLearningProposal,
     LearningDecisionAction,
@@ -175,3 +180,57 @@ def test_approved_publication_can_resume_after_authorization_boundary(
     assert completed.authorization is not None
     assert completed.decision is not None
     assert ProjectSpecDocumentStore(project).active()
+
+
+def test_learning_publication_cannot_overwrite_concurrent_deselection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    import ai_software_engineer.learning as learning_module
+
+    project = _project_with_failure(tmp_path)
+    old = ProjectKnowledgeDocumentStore(project).import_document(
+        filename="prior.md", content=b"# Prior background\n"
+    )
+    selection = ProjectKnowledgeSelectionStore(project)
+    selection.save((old.normalized_relative_path,))
+    store = ProjectLearningStore(project)
+    proposal = store.collect(collected_at=NOW)[0].proposal
+    read, resume, competing, finished = Event(), Event(), Event(), Event()
+
+    def paused_read(owner: ProjectWorkspace) -> tuple[str, ...]:
+        paths = effective_project_knowledge_paths(owner)
+        read.set()
+        assert resume.wait(5)
+        return paths
+
+    def deselect() -> None:
+        competing.set()
+        selection.save(())
+        finished.set()
+
+    monkeypatch.setattr(learning_module, "effective_project_knowledge_paths", paused_read)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        publication = pool.submit(
+            store.decide,
+            proposal.proposal_id,
+            DecideLearningProposal(
+                proposal_sha256=proposal.proposal_sha256,
+                action=LearningDecisionAction.APPROVE,
+                target=LearningTarget.KNOWLEDGE,
+                operator_id="human_owner",
+                rationale="Approve background only.",
+            ),
+        )
+        try:
+            assert read.wait(5)
+            competing_write = pool.submit(deselect)
+            assert competing.wait(5)
+            assert not finished.wait(0.1), "selection must wait for the whole publication RMW"
+        finally:
+            resume.set()
+        publication.result(timeout=5)
+        competing_write.result(timeout=5)
+    assert effective_project_knowledge_paths(project) == ()

@@ -1315,8 +1315,13 @@ argv = ("codex", "exec", "--sandbox", "read-only", "-")
 
 # Correct: fixed proxy transport is explicit, while user config stays ignored.
 argv = (
-    "codex", "exec", "--ignore-user-config", "--sandbox", "read-only",
-    *codex_cli_proxy_overrides(config.codex_cli_proxy_base_url), "-",
+    "codex",
+    "exec",
+    "--ignore-user-config",
+    "--sandbox",
+    "read-only",
+    *codex_cli_proxy_overrides(config.codex_cli_proxy_base_url),
+    "-",
 )
 ```
 

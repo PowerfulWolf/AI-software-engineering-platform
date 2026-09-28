@@ -6,6 +6,9 @@ from typing import cast
 
 import pytest
 
+from ai_software_engineer.agents import AgentErrorCode, AgentFailure, AgentResult, AgentRunStatus
+from ai_software_engineer.context.ports import ContextBudgetExceeded
+from ai_software_engineer.domain import AgentRole
 from ai_software_engineer.domain.project_delivery import PlanTestMatrixError, PlanTestMatrixIssue
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
@@ -41,6 +44,7 @@ from ai_software_engineer.multi_directory.service import (
     RestartRequirement,
     UpdateRequirement,
 )
+from ai_software_engineer.orchestration import AgentRunFailed
 from ai_software_engineer.recovery import FileRecoveryStore, RecoveryPlan, RecoveryScope
 from ai_software_engineer.recovery.resume import (
     DeliveryResumeOutcome,
@@ -464,6 +468,67 @@ def test_planner_matrix_rejection_has_a_dedicated_browser_error_code(
     assert "manual_ui, accessibility" in captured.value.safe_summary
 
 
+def test_verification_agent_failure_reaches_console_with_safe_cause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter, host, entry = _adapter(tmp_path)
+
+    def fail_verifier(*args: object, **kwargs: object) -> None:
+        raise AgentRunFailed(
+            AgentResult(
+                run_id="run_verifier_failure",
+                task_id="task_verifier_failure",
+                role=AgentRole.QA,
+                attempt=1,
+                source_revision="a" * 40,
+                context_manifest_id="ctx_" + "b" * 64,
+                status=AgentRunStatus.FAILED,
+                error=AgentFailure(
+                    code=AgentErrorCode.PROVIDER_ERROR,
+                    message="Responses provider returned HTTP 400; api_key=private-value",
+                    transient=False,
+                ),
+            )
+        )
+
+    monkeypatch.setattr(host, "resume_delivery", fail_verifier)
+    with pytest.raises(ConsoleCommandRejected) as captured:
+        adapter.execute(
+            ContinueDeliveryIntent(
+                project_id=PROJECT_ID,
+                delivery_id=DELIVERY_ID,
+                expected_checkpoint_sha256=entry.checkpoint.checkpoint_sha256,
+            )
+        )
+    assert captured.value.code == "MODEL_PROVIDER_ERROR"
+    assert "HTTP 400" in captured.value.safe_summary
+    assert "qa" in captured.value.safe_summary
+    assert "private-value" not in captured.value.safe_summary
+
+
+def test_verification_context_budget_has_actionable_safe_console_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter, host, entry = _adapter(tmp_path)
+
+    def fail_context(*args: object, **kwargs: object) -> None:
+        raise ContextBudgetExceeded("required source api_key=private-value does not fit")
+
+    monkeypatch.setattr(host, "resume_delivery", fail_context)
+    with pytest.raises(ConsoleCommandRejected) as captured:
+        adapter.execute(
+            ContinueDeliveryIntent(
+                project_id=PROJECT_ID,
+                delivery_id=DELIVERY_ID,
+                expected_checkpoint_sha256=entry.checkpoint.checkpoint_sha256,
+            )
+        )
+    assert captured.value.code == "CONTEXT_BUDGET_EXHAUSTED"
+    assert "Manager" in captured.value.safe_summary
+    assert "private-value" not in captured.value.safe_summary
+    assert "不代表业务验收失败" in captured.value.safe_summary
+
+
 def test_joint_integration_retry_uses_exact_console_approval(tmp_path: Path) -> None:
     adapter, host, entry = _adapter(tmp_path)
     proposal = IntegrationRetryProposal(
@@ -611,11 +676,33 @@ def test_continue_reads_the_persisted_recovery_envelope_through_the_recovery_ent
 
 
 @pytest.mark.parametrize("joint", [False, True])
-def test_reviewer_only_approval_explains_that_qa_will_be_reused(
-    tmp_path: Path, joint: bool
+@pytest.mark.parametrize("qa_source", ["none", "native", "standalone"])
+@pytest.mark.parametrize("swift", [False, True])
+@pytest.mark.parametrize("controlled", [False, True])
+def test_verification_approval_explains_retained_qa_evidence(
+    tmp_path: Path, joint: bool, qa_source: str, swift: bool, controlled: bool
 ) -> None:
+    from ai_software_engineer.manager.native_ui import native_ui_capability
+    from ai_software_engineer.recovery.verification_records import RetainedVerificationQa
+    from ai_software_engineer.swift_verification import SWIFT_VERIFICATION_COMMANDS
+    from tests.domain.factories import make_qa_artifact
+    from tests.recovery.test_native_ui import scenario
+    from tests.recovery.test_verification_environment import capability
+
+    reviewer_only = qa_source != "none"
     adapter, host, entry = _adapter(tmp_path)
     child_delivery_id = "delivery_child"
+    definitions = _definitions()
+    if swift:
+        for role in (AgentRole.QA, AgentRole.REVIEWER):
+            previous = definitions[role]
+            definitions[role] = previous.model_copy(
+                update={
+                    "permissions": previous.permissions.model_copy(
+                        update={"commands": SWIFT_VERIFICATION_COMMANDS}
+                    )
+                }
+            )
     plan = CandidateVerificationPlan.create(
         scope=RecoveryScope(
             team_id="team_test",
@@ -632,16 +719,33 @@ def test_reviewer_only_approval_explains_that_qa_will_be_reused(
             implementation_id="art_impl_source",
             implementation_sha256="3" * 64,
             candidate_revision="4" * 40,
-            accepted_qa=AcceptedQaReport(
-                artifact_id="art_qa_source",
-                artifact_sha256="5" * 64,
+            accepted_qa=(
+                AcceptedQaReport(
+                    artifact_id="art_qa_source",
+                    artifact_sha256="5" * 64,
+                )
+                if qa_source == "native"
+                else None
             ),
         ),
         native_checkpoint_sha256="6" * 64,
         dispatch_sha256="7" * 64,
         approved_stage_chain_sha256="8" * 64,
         current_policy_sha256="9" * 64,
-        definitions=tuple(_definitions().values()),
+        executor_capability=capability() if controlled else None,
+        native_ui=native_ui_capability(scenario()) if controlled else None,
+        prerequisite_incident_sha256="b" * 64 if controlled else None,
+        definitions=tuple(definitions.values()),
+        retained_qa=(
+            RetainedVerificationQa(
+                plan_sha256="c" * 64,
+                qa_invocation_sha256="d" * 64,
+                reviewer_invocation_sha256="e" * 64,
+                qa=make_qa_artifact().model_copy(update={"artifact_id": "art_qa_source"}),
+            )
+            if qa_source == "standalone"
+            else None
+        ),
         created_at=datetime(2026, 9, 15, tzinfo=UTC),
     )
     plan_path = tmp_path / "reviewer-only-plan.json"
@@ -662,9 +766,10 @@ def test_reviewer_only_approval_explains_that_qa_will_be_reused(
     host.resume_result = DeliveryResumeResult(
         outcome=DeliveryResumeOutcome.VERIFICATION_APPROVAL_REQUIRED,
         checkpoint=checkpoint,
-        next_action="Review the verification plan.",
+        next_action="QA 验证未完成: 请先解决报告中的环境/权限阻塞, 再批准新计划。",
         verification_plan_file=str(plan_path),
         verification_plan_sha256=plan.plan_sha256,
+        verification_completion_sha256=None if reviewer_only else "a" * 64,
     )
     parent = entry.checkpoint
     if joint:
@@ -692,14 +797,46 @@ def test_reviewer_only_approval_explains_that_qa_will_be_reused(
     )
 
     assert result.approval is not None
-    assert result.approval.title == "复用已通过 QA 并只重新执行 Reviewer"
-    assert result.approval.facts == (
-        "候选提交 " + "4" * 40,
-        "复用已封存 QA PASS art_qa_source",
-        "reviewer: local / fake-reviewer",
+    command_facts = (
+        tuple(f"受限验证命令: {command}" for command in sorted(SWIFT_VERIFICATION_COMMANDS))
+        if swift
+        else ()
     )
-    assert result.next_action == "请检查并批准仅重新执行 Reviewer 的精确验证计划。"
+    assert set(command_facts) <= set(result.approval.facts)
+    if reviewer_only:
+        assert result.approval.title == "复用已通过 QA 并只重新执行 Reviewer"
+        assert tuple(
+            fact
+            for fact in result.approval.facts
+            if not fact.startswith(
+                ("Manager 环境阻塞记录:", "受控能力 ", "独立原生 UI 能力 ", "精确 UI 计划:")
+            )
+        ) == (
+            "候选提交 " + "4" * 40,
+            "复用已封存 QA PASS art_qa_source",
+            *(
+                (
+                    f"独立验证 QA 来源计划 {'c' * 64}; QA 入场 {'d' * 64}; "
+                    "仅恢复 Reviewer, 不补造原 Task 的 QA 通过事件。",
+                )
+                if qa_source == "standalone"
+                else ()
+            ),
+            *command_facts,
+            "reviewer: local / fake-reviewer",
+        )
+        assert result.next_action == "请检查并批准仅重新执行 Reviewer 的精确验证计划。"
+    else:
+        assert result.approval.title == "解决 QA 验证阻塞后重新批准"
+        assert result.next_action == "QA 验证未完成: 请先解决报告中的环境/权限阻塞, 再批准新计划。"
+        assert result.next_action in result.approval.facts
     assert host.opened_plan_paths == [plan_path]
+    if controlled:
+        assert any("Manager 环境阻塞记录:" in fact for fact in result.approval.facts)
+        assert any("外层源码只读" in fact and "网络禁用" in fact for fact in result.approval.facts)
+        assert any("不授权普通 Agent 命令扩权" in fact for fact in result.approval.facts)
+        assert any("独立 Seatbelt" in fact for fact in result.approval.facts)
+        assert any("精确 UI 计划:" in fact for fact in result.approval.facts)
     if joint:
         assert result.delivery_id == DELIVERY_ID
         assert result.checkpoint_sha256 == parent.checkpoint_sha256

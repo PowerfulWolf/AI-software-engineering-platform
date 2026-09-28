@@ -7,12 +7,20 @@ import subprocess
 from collections.abc import Mapping
 from pathlib import Path
 
+import pytest
+from jsonschema import Draft202012Validator
+
 from ai_software_engineer.agents import (
     AgentErrorCode,
     AgentRequest,
     AgentRunStatus,
     HttpResponse,
     ResponsesAgentAdapter,
+)
+from ai_software_engineer.agents.responses import (
+    _artifact_schema,
+    _decode_artifact_output,
+    _request_body,
 )
 from ai_software_engineer.domain import (
     AgentDefinition,
@@ -22,9 +30,105 @@ from ai_software_engineer.domain import (
     ChangedFile,
     ChangeType,
     NetworkAccess,
+    QaReportArtifact,
 )
+from ai_software_engineer.tools import PolicyBoundToolRegistry, ToolRequest, ToolResult
 from tests.agents.test_openai_compatible import StaticPromptBuilder, _coder_request
-from tests.domain.factories import make_implementation_artifact
+from tests.domain.factories import make_implementation_artifact, make_qa_artifact
+
+
+@pytest.mark.parametrize("role", list(AgentRole))
+def test_all_strict_function_parameters_are_required(role: AgentRole) -> None:
+    payload = json.loads(_request_body("model", [], role, reasoning_effort="high"))
+    for tool in payload["tools"]:
+        schema = tool["parameters"]
+        assert tool["strict"] is True
+        assert set(schema["required"]) == set(schema["properties"])
+        assert schema["additionalProperties"] is False
+
+
+@pytest.mark.parametrize("role", list(AgentRole))
+def test_artifact_transport_schema_has_closed_objects_and_object_root(role: AgentRole) -> None:
+    payload = json.loads(_request_body("model", [], role, reasoning_effort="high"))
+    schema = payload["text"]["format"]["schema"]
+    assert schema.get("type") == "object"
+    assert "anyOf" not in schema
+
+    def require_closed_objects(value: object) -> None:
+        if isinstance(value, dict):
+            if value.get("type") == "object":
+                assert value.get("additionalProperties") is False
+            for child in value.values():
+                require_closed_objects(child)
+        elif isinstance(value, list):
+            for child in value:
+                require_closed_objects(child)
+
+    require_closed_objects(schema)
+
+
+def test_qa_transport_preserves_environment_and_domain_validation() -> None:
+    artifact = make_qa_artifact()
+    payload = artifact.model_dump(mode="json")
+    environment = {"compiler": "swift", "checks": {"count": 2, "passed": True}}
+    payload["content"]["environment"] = json.dumps(environment)
+    # New strict outputs carry every field; persisted legacy reports omit empty observations.
+    payload["content"]["project_observations"] = []
+    wire = {"artifact": payload}
+    Draft202012Validator(_artifact_schema(AgentRole.QA)).validate(wire)
+    decoded = _decode_artifact_output(json.dumps(wire))
+    assert isinstance(decoded, QaReportArtifact)
+    assert decoded.content.environment == environment
+    assert _decode_artifact_output(json.dumps(artifact.to_wire())) == artifact
+    payload["content"]["criteria_results"][0]["status"] = "NOT_TESTED"
+    with pytest.raises(ValueError):
+        _decode_artifact_output(json.dumps(wire))
+
+
+@pytest.mark.parametrize("environment", ["[]", "null", "invalid json"])
+def test_qa_transport_rejects_non_object_environment(environment: str) -> None:
+    payload = make_qa_artifact().model_dump(mode="json")
+    payload["content"]["environment"] = environment
+    with pytest.raises(ValueError):
+        _decode_artifact_output(json.dumps({"artifact": payload}))
+
+
+def test_artifact_transport_rejects_extra_envelope_fields() -> None:
+    with pytest.raises(ValueError, match="envelope"):
+        _decode_artifact_output(
+            json.dumps({"artifact": make_qa_artifact().to_wire(), "override": True})
+        )
+
+
+def test_http_error_detail_is_bounded_and_redacts_the_configured_key(tmp_path: Path) -> None:
+    root, base = _repository(tmp_path)
+    request, definition = _request(base)
+
+    class InvalidSchema:
+        def post(
+            self, url: str, headers: Mapping[str, str], body: bytes, timeout_seconds: float
+        ) -> HttpResponse:
+            return HttpResponse(
+                status_code=400,
+                body=json.dumps(
+                    {"error": {"message": "Missing required max_bytes test-key " + "x" * 600}}
+                ).encode(),
+            )
+
+    result = ResponsesAgentAdapter(
+        workspace_root=root,
+        endpoint="https://example.invalid/v1",
+        api_key="test-key",
+        model="model",
+        agent=definition,
+        prompt_builder=StaticPromptBuilder(),
+        transport=InvalidSchema(),
+    ).run(request)
+    assert result.error is not None
+    assert result.error.code is AgentErrorCode.PROVIDER_ERROR
+    assert "Missing required max_bytes" in result.error.message
+    assert "test-key" not in result.error.message
+    assert len(result.error.message) <= 500
 
 
 def _git(root: Path, *arguments: str) -> str:
@@ -77,9 +181,10 @@ def _request(base: str) -> tuple[AgentRequest, AgentDefinition]:
 
 
 class _CoderTransport:
-    def __init__(self, root: Path, request: AgentRequest) -> None:
+    def __init__(self, root: Path, request: AgentRequest, *, extra_tool_turn: bool = False) -> None:
         self.root = root
         self.request = request
+        self.extra_tool_turn = extra_tool_turn
         self.calls: list[Mapping[str, object]] = []
 
     def post(
@@ -101,6 +206,12 @@ class _CoderTransport:
                     {
                         "id": "resp_tool_001",
                         "output": [
+                            {
+                                "type": "reasoning",
+                                "id": "rs_test",
+                                "summary": [],
+                                "encrypted_content": "opaque-reasoning",
+                            },
                             {
                                 "type": "function_call",
                                 "call_id": "call_write",
@@ -128,6 +239,32 @@ class _CoderTransport:
                 ).encode(),
             )
         candidate = _git(self.root, "rev-parse", "HEAD")
+        if "previous_response_id" in payload:
+            return HttpResponse(
+                status_code=400,
+                body=b'{"error":{"message":"Previous response not found."}}',
+            )
+        if self.extra_tool_turn and len(self.calls) == 2:
+            return HttpResponse(
+                status_code=200,
+                body=json.dumps(
+                    {
+                        "output": [
+                            {
+                                "type": "message",
+                                "role": "assistant",
+                                "content": [{"type": "output_text", "text": "Verify candidate."}],
+                            },
+                            {
+                                "type": "function_call",
+                                "call_id": "call_status",
+                                "name": "run_command",
+                                "arguments": json.dumps({"argv": ["git", "status", "--porcelain"]}),
+                            },
+                        ]
+                    }
+                ).encode(),
+            )
         template = make_implementation_artifact()
         artifact = template.model_copy(
             update={
@@ -156,7 +293,7 @@ class _CoderTransport:
             body=json.dumps(
                 {
                     "id": "resp_final_001",
-                    "output_text": json.dumps(artifact.to_wire()),
+                    "output_text": json.dumps({"artifact": artifact.to_wire()}),
                     "usage": {"input_tokens": 10, "output_tokens": 20, "total_tokens": 30},
                 }
             ).encode(),
@@ -181,10 +318,21 @@ class _DirtyFailureTransport:
         return HttpResponse(status_code=429, body=b'{"error":{"code":"quota_exceeded"}}')
 
 
-def test_responses_tool_loop_creates_and_validates_coder_commit(tmp_path: Path) -> None:
+@pytest.mark.parametrize("extra_tool_turn", [False, True])
+def test_responses_tool_loop_creates_and_validates_coder_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extra_tool_turn: bool
+) -> None:
     root, base = _repository(tmp_path)
     request, definition = _request(base)
-    transport = _CoderTransport(root, request)
+    transport = _CoderTransport(root, request, extra_tool_turn=extra_tool_turn)
+    executed: list[ToolRequest] = []
+    original_execute = PolicyBoundToolRegistry.execute
+
+    def record_execute(registry: PolicyBoundToolRegistry, tool: ToolRequest) -> ToolResult:
+        executed.append(tool)
+        return original_execute(registry, tool)
+
+    monkeypatch.setattr(PolicyBoundToolRegistry, "execute", record_execute)
     adapter = ResponsesAgentAdapter(
         workspace_root=root,
         endpoint="https://example.invalid/v1/responses",
@@ -203,9 +351,43 @@ def test_responses_tool_loop_creates_and_validates_coder_commit(tmp_path: Path) 
     assert result.artifact.source_revision == _git(root, "rev-parse", "HEAD")
     assert result.usage is not None and result.usage.total_tokens == 30
     assert transport.calls[0]["reasoning"] == {"effort": "high"}
-    assert transport.calls[1]["previous_response_id"] == "resp_tool_001"
-    outputs = transport.calls[1]["input"]
-    assert isinstance(outputs, list) and len(outputs) == 3
+    assert all("previous_response_id" not in call for call in transport.calls)
+    assert all(call["store"] is False for call in transport.calls)
+    history = transport.calls[1]["input"]
+    assert isinstance(history, list)
+    initial = transport.calls[0]["input"]
+    assert isinstance(initial, list)
+    assert history[: len(initial)] == initial
+    outputs = history[len(initial) :]
+    assert len(outputs) == 7
+    assert outputs[0]["encrypted_content"] == "opaque-reasoning"
+    assert [item["type"] for item in outputs] == [
+        "reasoning",
+        "function_call",
+        "function_call",
+        "function_call",
+        "function_call_output",
+        "function_call_output",
+        "function_call_output",
+    ]
+    assert [item["call_id"] for item in outputs[1:4]] == [item["call_id"] for item in outputs[4:]]
+    assert len(executed) == (4 if extra_tool_turn else 3)
+    assert len({tool.operation_id for tool in executed}) == len(executed)
+    if extra_tool_turn:
+        third_history = transport.calls[2]["input"]
+        assert isinstance(third_history, list)
+        assert third_history[: len(history)] == history
+        latest = third_history[len(history) :]
+        assert [item["type"] for item in latest] == [
+            "message",
+            "function_call",
+            "function_call_output",
+        ]
+        assert latest[1]["call_id"] == latest[2]["call_id"] == "call_status"
+    # Exact in-memory replay must not dispatch any tools or HTTP requests again.
+    calls_before_replay, executions_before_replay = len(transport.calls), len(executed)
+    assert adapter.run(request) == result
+    assert (len(transport.calls), len(executed)) == (calls_before_replay, executions_before_replay)
     assert _git(root, "status", "--porcelain") == ""
 
 

@@ -33,7 +33,7 @@ test("a late learning scan cannot publish into another Project", async t => {
     return route.fulfill({ json: [{ proposal: { proposal_id: "old-project-proposal", title: "旧项目建议",
       observation: "old", proposed_improvement: "old", verification: "old", occurrence_count: 1, evidence: [] } }] });
   });
-  await h.page.getByRole("button", { name: "扫描 QA / Review 失败", exact: true }).click();
+  await h.page.getByRole("button", { name: "收集项目发现与失败经验", exact: true }).click();
   await started.promise;
   h.team.selected_project_id = "project_other";
   h.team.requests = [];
@@ -42,6 +42,37 @@ test("a late learning scan cannot publish into another Project", async t => {
   await drain(h, "**/learnings/collect", release);
   assert.equal(await h.page.getByText("旧项目建议", { exact: true }).count(), 0);
   assert.equal(await h.page.locator("#notification").isVisible(), false);
+});
+
+test("learning provenance distinguishes discoveries and human resolutions without executing text", async t => {
+  const h = await ui(t);
+  await projectKnowledge(h);
+  const proposal = {
+    proposal_id: "learning_fixture", project_id: "project_fixture", title: "项目发现",
+    observation: "Refunds use original payment identity.", proposed_improvement: "Reuse scoped background.",
+    verification: "Verify the next candidate independently.", occurrence_count: 1,
+  };
+  await h.page.route("**/api/v1/admin/projects/*/learnings", route => route.fulfill({ json: [
+    { proposal: { ...proposal, trigger: "PROJECT_OBSERVATION", evidence: [{
+      repository_id: "repository_fixture", task_id: "task_fixture", artifact_id: "art_fixture",
+      artifact_sha256: "a".repeat(64), role: "coder", source_revision: "candidate_exact",
+      observation_id: "refund_identity", applicability: "Only this repository <script>throw 1</script>",
+      evidence_uris: ["evidence://observed"],
+    }] } },
+    { proposal: { ...proposal, title: "人工确认", trigger: "KNOWLEDGE_RESOLUTION", evidence: [{
+      requirement_id: "requirement_prior", gap_id: "gap_prior", resolution_id: "resolution_prior",
+      previous_run_id: "run_prior", evidence_uris: ["human://approved-answer"],
+    }] } },
+  ] }));
+  await h.page.getByRole("tab", { name: "学习改进", exact: true }).click();
+  const cards = h.page.locator(".learning-card");
+  await cards.nth(1).waitFor();
+  const rendered = await cards.allTextContents();
+  assert.match(rendered[0], /候选 candidate_exact/);
+  assert.match(rendered[0], /适用范围.*<script>throw 1<\/script>/);
+  assert.match(rendered[1], /需求 requirement_prior.*确认 resolution_prior/);
+  assert.doesNotMatch(rendered.join(""), /undefined/);
+  assert.equal(await cards.locator("script").count(), 0);
 });
 
 test("a rejected command from a previous Project does not interrupt the current one", async t => {

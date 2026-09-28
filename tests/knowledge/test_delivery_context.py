@@ -31,6 +31,25 @@ class Clients:
         return self.model
 
 
+@pytest.mark.parametrize("scope", ["native", "project", "team"])
+def test_role_scoped_source_cannot_leak_through_knowledge_consultation(
+    tmp_path: Path, scope: str
+) -> None:
+    task, _, _, builder = _builder(tmp_path)
+    uri = {
+        "native": "repository://rules/AGENTS.md",
+        "project": "project://project_payments/knowledge/knowledge_document_refunds",
+        "team": "team://team_ai/knowledge/knowledge_document_refunds",
+    }[scope]
+    builder.sources = (
+        builder.sources[0].model_copy(update={"roles": (AgentRole.CODER,), "uri": uri}),
+    )
+    coder = builder.build(task, _definitions()[AgentRole.CODER], attempt=1)
+    assert any(s.name == "knowledge.consultation" for s in coder.sections)
+    with pytest.raises(KnowledgeGapRaised):
+        builder.build(task, _definitions()[AgentRole.QA], attempt=1)
+
+
 def _builder(
     tmp_path: Path, *, enabled: bool = True, model: Model | None = None
 ) -> tuple[Task, FileContextStore, KnowledgeRecordStore, KnowledgeRunContextBuilder]:
@@ -126,9 +145,7 @@ def test_gap_is_not_converted_to_terminal_delivery_failure(tmp_path: Path) -> No
 
 
 def test_repository_inspection_gap_can_complete_native_delivery(tmp_path: Path) -> None:
-    task, _, records, builder = _builder(
-        tmp_path, enabled=False, model=RepositoryInspectionModel()
-    )
+    task, _, records, builder = _builder(tmp_path, enabled=False, model=RepositoryInspectionModel())
     artifacts = FileArtifactStore(tmp_path / "artifacts")
     with SqliteTaskRepository(tmp_path / "tasks.sqlite") as repository:
         repository.create(task)

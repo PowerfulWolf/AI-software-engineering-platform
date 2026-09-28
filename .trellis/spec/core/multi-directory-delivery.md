@@ -105,7 +105,7 @@ ase request resume DELIVERY_ID
   新 preparation，不能重新用父需求最初的 preparation 调用 `start()`。DONE 观察值直接追加回
   父 journal 并进入候选集验收，不重跑该 child 的 Coder/QA/Reviewer；BLOCKED/FAILED 仍保留，
   不在此入口绕过恢复审批。没有 child 观察值时继续使用确定性 `start()` 恢复首次派发窗口。
-- Manager 从联合 `BLOCKED` checkpoint 恢复 native child 后，无论 child recovery 返回 DONE、BLOCKED、
+- Manager 从联合 `BLOCKED` checkpoint 恢复 native child **产生实际进展**后，无论 child recovery 返回 DONE、BLOCKED、
   FAILED 还是等待中的阶段，都必须回到联合 `resume()`，由 `ProductionJointBackend.deliver()` 读取同一条
   已验证 native journal 并追加父 checkpoint。不能直接把 native `DeliveryResumeResult` 返回给联合
   调用方，否则父 journal 停留在旧 child 前缀，Console 继续显示过时的阻塞原因。父级
@@ -113,12 +113,15 @@ ase request resume DELIVERY_ID
   `failure_summary`；不得自行猜测状态或覆盖 native 事实。
 - 子恢复要求 verification/recovery/scope 精确审批时，Host 返回
   `JointDeliveryResumeResult(JointDeliveryResult)`，包含最新父 `checkpoint` 与完整 typed
-  `continuation: DeliveryResumeResult`。只返回第一个待审批子项；先同步父 journal，再校验
+  `continuation: DeliveryResumeResult`。只返回第一个待审批子项；提案前同步真实变化的父观察值，再校验
   continuation checkpoint 精确属于父 children，禁止丢弃审批或用子 checkpoint 替代父游标。
   Console 复用原生审批封装，不复制三套审批渲染逻辑；结果 delivery/checkpoint 仍绑定父需求。
   浏览器使用同一父 delivery 的 Operation **result** checkpoint 匹配待审批项，因为本次操作已
   追加父 checkpoint；旧 native-result Operation 仅保留原 input checkpoint 兼容。
   错误/过期/异属 child 必须拒绝，已消费的计划不得重复显示；用户仍需明确点击批准。
+- pending proposal 本身不推进 native checkpoint，不能在生成计划后无条件调用 joint `resume()`。
+  该调用会写入新父 checkpoint，使刚绑定旧父 digest 的计划立即过期；重复批准将永远无法执行。
+  无变化时返回同一父 checkpoint；实际执行后才同步，再继续下一个 child。
 - Planner 的失败 `PlannerRunRecord` 是不可变事实，继续同一 native checkpoint 时不得复用失败
   receipt 的 `run_id` 搭配新的 `transitioned_at`。平台为每个有界 Planner 重试生成新的确定性
   run identity，并在 Dispatch 时按成功 `ExecutionPlan` 的 immutable ID 找回对应的 Planner

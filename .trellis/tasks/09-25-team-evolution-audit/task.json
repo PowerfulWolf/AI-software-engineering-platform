@@ -1,0 +1,12 @@
+{
+  "id": "team-evolution-audit",
+  "title": "校正 AI Team 职责、Manager 阻塞处理与项目知识演进闭环",
+  "status": "in_progress",
+  "phase": "execute",
+  "mode": "inline",
+  "checkpoint": "slice_1_verified: explicit project learning contract/UI/reuse; Manager incident integration and automatic capture remain open",
+  "authorization": "用户已批准在 ASE 当前工作区创建任务并规划实施验证；要求复核完整交付步骤、修复偏离、沉淀项目背景知识并在前端展示",
+  "rollback_point": "892f87e",
+  "preserve_prior_task": "09-25-joint-approval-delivery",
+  "constraints": ["不派发子代理", "不覆盖上一轮未提交修改", "不直接改生产状态或角色 verdict", "不自动扩权、合并或接受自身成果"]
+}

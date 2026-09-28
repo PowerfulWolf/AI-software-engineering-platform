@@ -24,9 +24,10 @@ from ai_software_engineer.manager.delivery_checkpoint import (
 from ai_software_engineer.manager.dispatch import ContinuationDispatchRecord
 from ai_software_engineer.recovery.models import RecoveryRejected, RecoveryScope, digest
 from ai_software_engineer.recovery.native import NativeApprovedStages, _parent, read_approved_stages
-from ai_software_engineer.recovery.store import FileRecoveryStore
+from ai_software_engineer.recovery.store import FileRecoveryStore, RecoveryRecordMissing
 from ai_software_engineer.recovery.verification_records import (
     AcceptedQaReport,
+    CandidateExecutorPrerequisite,
     CandidateVerificationDisposition,
     CandidateVerificationInputs,
     verification_inputs_are_current,
@@ -246,9 +247,42 @@ def _validate_inconclusive_continuation(
         scope=scope,
     )
     plan = store.get_verification_plan(continuation.continuation_plan_sha256)
-    completion = store.get_verification_completion(plan.plan_sha256)
+    repair = (
+        store.get_repair_plan(continuation.prerequisite_repair_sha256)
+        if continuation.prerequisite_repair_sha256 is not None
+        else None
+    )
+    completion = store.get_remediation_evidence(
+        plan.plan_sha256,
+        repair.executor_prerequisite_sha256 if repair else None,
+    )
     admitted_run_ids: set[str] = set()
-    accepted_qa = plan.inputs.accepted_qa
+    if isinstance(completion, CandidateExecutorPrerequisite):
+        assert repair is not None
+        authorization = store.get_repair_authorization(repair.plan_sha256)
+        # A Reviewer executor may fail after this plan already admitted QA. Only
+        # these exact persisted invocations can account for new source run IDs.
+        for role in (AgentRole.QA, AgentRole.REVIEWER):
+            try:
+                invocation = store.get_verification_invocation(plan.plan_sha256, role)
+            except RecoveryRecordMissing:
+                continue
+            admitted_run_ids.add(invocation.request.run_id)
+        if (
+            not authorization.decision.approved
+            or continuation.source_delivery_id != scope.delivery_id
+            or continuation.source_task_id != inputs.task_id
+            or continuation.source_revision != inputs.candidate_revision
+            or continuation.source_dispatch_id != source_checkpoint.dispatch_commit_id
+            or continuation.continuation_sha256 != completion.evidence_sha256
+            or plan.scope != scope
+            or not checkpoint_sha256_is_ancestor(history, plan.native_checkpoint_sha256)
+            or plan.dispatch_sha256 != runtime.dispatch.dispatch_sha256
+            or not verification_inputs_are_current(plan.inputs, inputs, admitted_run_ids)
+        ):
+            raise RecoveryRejected("failed continuation does not bind its executor prerequisite")
+        return
+    accepted_qa = plan.reused_qa
     if accepted_qa is None:
         qa_invocation = store.get_verification_invocation(plan.plan_sha256, AgentRole.QA)
         qa_invocation_sha256 = qa_invocation.invocation_sha256

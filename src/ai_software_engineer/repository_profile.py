@@ -29,7 +29,7 @@ ProjectRevision = Annotated[str, StringConstraints(pattern=r"^(unknown|[a-f0-9]{
 RelativePath = Annotated[str, StringConstraints(min_length=1, max_length=512)]
 DetectorVersion = Annotated[str, StringConstraints(pattern=r"^t020-v[0-9]+$")]
 
-DETECTOR_VERSION: Final[DetectorVersion] = "t020-v2"
+DETECTOR_VERSION: Final[DetectorVersion] = "t020-v3"
 UNKNOWN: Final[str] = "unknown"
 
 
@@ -65,6 +65,7 @@ class ProjectLanguage(StrEnum):
     GO = "go"
     TYPESCRIPT = "typescript"
     CPP = "cpp"
+    SWIFT = "swift"
     UNKNOWN = "unknown"
 
 
@@ -83,6 +84,7 @@ class BuildSystem(StrEnum):
     MESON = "meson"
     MAKE = "make"
     BAZEL = "bazel"
+    SWIFT = "swift"
     UNKNOWN = "unknown"
 
 
@@ -321,6 +323,8 @@ _IGNORED_DIRECTORIES: Final[frozenset[str]] = frozenset(
         "node_modules",
         "vendor",
         "build",
+        ".build",
+        ".swiftpm",
         "dist",
         "target",
         ".tox",
@@ -357,6 +361,7 @@ _LANGUAGE_SUFFIXES: Final[Mapping[str, ProjectLanguage]] = {
     ".hpp": ProjectLanguage.CPP,
     ".hh": ProjectLanguage.CPP,
     ".hxx": ProjectLanguage.CPP,
+    ".swift": ProjectLanguage.SWIFT,
 }
 _LANGUAGE_FILENAMES: Final[Mapping[str, ProjectLanguage]] = {
     "pyproject.toml": ProjectLanguage.PYTHON,
@@ -375,6 +380,7 @@ _LANGUAGE_FILENAMES: Final[Mapping[str, ProjectLanguage]] = {
     "tsconfig.base.json": ProjectLanguage.TYPESCRIPT,
     "cmakelists.txt": ProjectLanguage.CPP,
     "meson.build": ProjectLanguage.CPP,
+    "package.swift": ProjectLanguage.SWIFT,
 }
 _BUILD_MARKERS: Final[Mapping[str, BuildSystem]] = {
     "pyproject.toml": BuildSystem.PYTHON,
@@ -411,6 +417,7 @@ _BUILD_MARKERS: Final[Mapping[str, BuildSystem]] = {
     "workspace": BuildSystem.BAZEL,
     "meson.options": BuildSystem.MESON,
     "xmake.lua": BuildSystem.MAKE,
+    "package.swift": BuildSystem.SWIFT,
 }
 _REVISION_PATTERN = re.compile(r"^[a-f0-9]{40,64}$")
 _REF_PATTERN = re.compile(r"^refs/[A-Za-z0-9._/-]+$")

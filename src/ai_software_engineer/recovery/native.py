@@ -110,7 +110,7 @@ def _is_recoverable_terminal_coder_route(
         route.outcome is RouteAttemptOutcome.SUCCEEDED
         and isinstance(artifact, CoderProgressArtifact)
         and artifact.content.checkpoint_sequence == task.attempts
-        and task.attempts == task.max_attempts
+        and task.work_budget_exhausted
         and checkpoint.failure_code is DeliveryFailureCode.RETRY_BUDGET_EXHAUSTED
     )
 

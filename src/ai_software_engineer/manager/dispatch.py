@@ -413,7 +413,8 @@ class ContinuationDispatchRecord(DomainModel):
     execution_plan_id: ExecutionPlanId
     execution_plan_sha256: DispatchSha256
     execution_plan_phase_ids: tuple[PlanPhaseId, PlanPhaseId, PlanPhaseId]
-    continuation_kind: Literal["verification_remediation"]
+    continuation_kind: Literal["verification_remediation", "prerequisite_repair"]
+    prerequisite_repair_sha256: DispatchSha256 | None = None
     continuation_sha256: DispatchSha256
     continuation_plan_sha256: DispatchSha256
     continuation_context_sha256: DispatchSha256
@@ -434,8 +435,12 @@ class ContinuationDispatchRecord(DomainModel):
 
     @model_validator(mode="after")
     def validate_record(self) -> Self:
+        if (self.continuation_kind == "prerequisite_repair") != (
+            self.prerequisite_repair_sha256 is not None
+        ):
+            raise ValueError("prerequisite continuation requires an exact repair proposal")
         attempt_identity = continuation_attempt_identity(
-            self.continuation_sha256,
+            self.prerequisite_repair_sha256 or self.continuation_sha256,
             attempt=self.continuation_attempt,
             retry_of_task_id=self.retry_of_task_id,
             retry_of_dispatch_id=self.retry_of_dispatch_id,
@@ -456,6 +461,8 @@ class ContinuationDispatchRecord(DomainModel):
             "execution_plan_id": self.execution_plan_id,
             "execution_plan_sha256": self.execution_plan_sha256,
         }
+        if self.prerequisite_repair_sha256 is not None:
+            expected["prerequisite_repair_sha256"] = self.prerequisite_repair_sha256
         if self.continuation_attempt > 1:
             expected.update(
                 {

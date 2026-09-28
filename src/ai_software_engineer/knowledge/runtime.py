@@ -23,7 +23,9 @@ from ai_software_engineer.knowledge.gaps import (
     KnowledgeResolution,
     KnowledgeWaitPort,
 )
+from ai_software_engineer.knowledge.legacy_scope import retain_legacy_snapshot
 from ai_software_engineer.knowledge.models import (
+    KnowledgeError,
     KnowledgeRunBinding,
     digest,
     text_digest,
@@ -173,6 +175,39 @@ class KnowledgeRunContextBuilder:
             repository_ids=(self.repository_id,),
             sources=tuple((self.repository_id, source) for source in self.sources),
         )
+        # Old prerequisite continuations omitted joint context on their first run.
+        # Retain that exact gap scope for the same Task/role/candidate on resume;
+        # the Requirement approval facade separately proves its native ownership.
+        legacy_gaps = tuple(
+            gap
+            for gap in self.records.list("gaps", KnowledgeGap)
+            if task.id.startswith("task_continue_")
+            and agent.role in {AgentRole.QA, AgentRole.REVIEWER}
+            and gap.binding.task_id == task.id
+            and gap.binding.requirement_id == task.id
+            and gap.binding.team_id == self.team_id
+            and gap.binding.project_id == self.project_id
+            and gap.binding.repository_ids == (self.repository_id,)
+            and gap.binding.role == TeamRole(agent.role.value)
+            and gap.binding.source_revision == base.source_revision
+        )
+        if requirement_id != task.id and legacy_gaps:
+            legacy_snapshot = snapshot_from_sources(
+                team_id=self.team_id,
+                project_id=self.project_id,
+                requirement_id=task.id,
+                repository_ids=(self.repository_id,),
+                sources=tuple((self.repository_id, source) for source in self.sources),
+            )
+            retained = tuple(
+                retain_legacy_snapshot(
+                    legacy_snapshot, gap, contexts=self.contexts, records=self.records
+                )
+                for gap in legacy_gaps
+            )
+            if any(item != retained[0] for item in retained):
+                raise KnowledgeError("LEGACY_KNOWLEDGE_SCOPE_CHANGED")
+            requirement_id, snapshot = task.id, retained[0]
         self.records.put("snapshots", snapshot.snapshot_sha256, snapshot)
         resolutions = []
         for gap in self.records.list("gaps", KnowledgeGap):

@@ -159,6 +159,13 @@
       "title": "CapturedFile",
       "type": "object"
     },
+    "CodexConnectionMode": {
+      "enum": [
+        "direct",
+        "proxy"
+      ],
+      "type": "string"
+    },
     "ContinuationDispatchRecord": {
       "additionalProperties": false,
       "description": "Fresh serial Task derived from a durable delivery result such as QA remediation.",
@@ -226,9 +233,25 @@
           "type": "array"
         },
         "continuation_kind": {
-          "const": "verification_remediation",
+          "enum": [
+            "verification_remediation",
+            "prerequisite_repair"
+          ],
           "title": "Continuation Kind",
           "type": "string"
+        },
+        "prerequisite_repair_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prerequisite Repair Sha256"
         },
         "continuation_sha256": {
           "pattern": "^[a-f0-9]{64}$",
@@ -363,6 +386,88 @@
       "title": "ContinuationDispatchRecord",
       "type": "object"
     },
+    "DeliveryRetryFailure": {
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "enum": [
+            "coder",
+            "qa",
+            "reviewer"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "attempt": {
+          "maximum": 400,
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "code": {
+          "enum": [
+            "TIMEOUT",
+            "QUOTA_EXHAUSTED",
+            "RATE_LIMITED",
+            "PROVIDER_UNAVAILABLE"
+          ],
+          "title": "Code",
+          "type": "string"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Run Id"
+        }
+      },
+      "required": [
+        "role",
+        "attempt",
+        "code"
+      ],
+      "title": "DeliveryRetryFailure",
+      "type": "object"
+    },
+    "DeliveryRetryPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "max_work_attempts": {
+          "default": 3,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Work Attempts",
+          "type": "integer"
+        },
+        "coder": {
+          "$ref": "#/$defs/TransientRetryPolicy",
+          "default": {
+            "max_transient_failures": 5
+          }
+        },
+        "qa": {
+          "$ref": "#/$defs/TransientRetryPolicy",
+          "default": {
+            "max_transient_failures": 5
+          }
+        },
+        "reviewer": {
+          "$ref": "#/$defs/TransientRetryPolicy",
+          "default": {
+            "max_transient_failures": 5
+          }
+        }
+      },
+      "title": "DeliveryRetryPolicy",
+      "type": "object"
+    },
     "DispatchPhaseCommit": {
       "additionalProperties": false,
       "description": "Concrete commit-time allocation for one serial delivery role.",
@@ -482,39 +587,38 @@
           "title": "Model",
           "type": "string"
         },
-        "route_kind": {
-          "anyOf": [
-            {"enum": ["codex_cli", "responses"], "type": "string"},
-            {"type": "null"}
-          ],
-          "default": null,
-          "title": "Route Kind"
-        },
-        "connection_mode": {
-          "anyOf": [
-            {"enum": ["direct", "proxy"], "type": "string"},
-            {"type": "null"}
-          ],
-          "default": null,
-          "title": "Connection Mode"
-        },
         "reasoning_effort": {
           "anyOf": [
             {
-              "enum": [
-                "low",
-                "medium",
-                "high",
-                "xhigh"
-              ],
-              "type": "string"
+              "$ref": "#/$defs/ReasoningEffort"
             },
             {
               "type": "null"
             }
           ],
-          "default": null,
-          "title": "Reasoning Effort"
+          "default": null
+        },
+        "route_kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderRouteKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "connection_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodexConnectionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "tier": {
           "$ref": "#/$defs/BrainTier"
@@ -544,6 +648,22 @@
       ],
       "title": "ModelSelection",
       "type": "object"
+    },
+    "ProviderRouteKind": {
+      "enum": [
+        "codex_cli",
+        "responses"
+      ],
+      "type": "string"
+    },
+    "ReasoningEffort": {
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "type": "string"
     },
     "RecoveryDispatchRecord": {
       "additionalProperties": false,
@@ -1115,88 +1235,6 @@
       ],
       "title": "TaskStatus",
       "type": "string"
-    },
-    "DeliveryRetryPolicy": {
-      "additionalProperties": false,
-      "properties": {
-        "max_work_attempts": {
-          "default": 3,
-          "maximum": 100,
-          "minimum": 1,
-          "title": "Max Work Attempts",
-          "type": "integer"
-        },
-        "coder": {
-          "$ref": "#/$defs/TransientRetryPolicy",
-          "default": {
-            "max_transient_failures": 5
-          }
-        },
-        "qa": {
-          "$ref": "#/$defs/TransientRetryPolicy",
-          "default": {
-            "max_transient_failures": 5
-          }
-        },
-        "reviewer": {
-          "$ref": "#/$defs/TransientRetryPolicy",
-          "default": {
-            "max_transient_failures": 5
-          }
-        }
-      },
-      "title": "DeliveryRetryPolicy",
-      "type": "object"
-    },
-    "DeliveryRetryFailure": {
-      "additionalProperties": false,
-      "properties": {
-        "role": {
-          "enum": [
-            "coder",
-            "qa",
-            "reviewer"
-          ],
-          "title": "Role",
-          "type": "string"
-        },
-        "attempt": {
-          "maximum": 400,
-          "minimum": 1,
-          "title": "Attempt",
-          "type": "integer"
-        },
-        "code": {
-          "enum": [
-            "TIMEOUT",
-            "QUOTA_EXHAUSTED",
-            "RATE_LIMITED",
-            "PROVIDER_UNAVAILABLE"
-          ],
-          "title": "Code",
-          "type": "string"
-        },
-        "run_id": {
-          "anyOf": [
-            {
-              "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Run Id"
-        }
-      },
-      "required": [
-        "role",
-        "attempt",
-        "code"
-      ],
-      "title": "DeliveryRetryFailure",
-      "type": "object"
     },
     "TransientRetryPolicy": {
       "additionalProperties": false,

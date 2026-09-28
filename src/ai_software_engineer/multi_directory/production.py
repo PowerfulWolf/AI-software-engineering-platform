@@ -120,6 +120,23 @@ def approved_joint_context_source(checkpoint: JointCheckpoint, unit_id: str) -> 
     )
 
 
+def approved_joint_context_sources(
+    checkpoint: JointCheckpoint, unit_id: str
+) -> tuple[ContextSource, ...]:
+    """One frozen source projection for initial delivery, repair and restart."""
+    source = approved_joint_context_source(checkpoint, unit_id)
+    prepared = next(item for item in checkpoint.preparations if item.unit_id == unit_id)
+    return (
+        source,
+        *tuple(
+            item
+            for item in prepared.context_sources
+            if item.source_id.startswith("native.rule.")
+            or item.uri.startswith(("team://", "project://"))
+        ),
+    )
+
+
 BackendFactory = Callable[
     [
         StructuredClientFactory,
@@ -397,19 +414,9 @@ class ProductionJointBackend:
         frozen_source_revision: str | None = None,
     ) -> ProductionProjectDeliveryBackend:
         projection = DerivedStageInputs(checkpoint, unit_id)
-        source = approved_joint_context_source(checkpoint, unit_id)
-        prepared = next(item for item in checkpoint.preparations if item.unit_id == unit_id)
         return self.factory(
             projection,
-            (
-                source,
-                *tuple(
-                    item
-                    for item in prepared.context_sources
-                    if item.source_id.startswith("native.rule.")
-                    or item.uri.startswith(("team://", "project://"))
-                ),
-            ),
+            approved_joint_context_sources(checkpoint, unit_id),
             projection,
             frozen_preparation or projection.preparation,
             frozen_source_revision or projection.base_revision,
@@ -509,6 +516,9 @@ class ProductionJointBackend:
             ) from error
 
     def deliver(self, checkpoint: JointCheckpoint, unit_id: str) -> ChildDelivery:
+        from ai_software_engineer.knowledge.gaps import KnowledgeGapRaised
+        from ai_software_engineer.multi_directory.knowledge_wait import ChildKnowledgeGapRaised
+
         self.reconcile(checkpoint)
         projection = DerivedStageInputs(checkpoint, unit_id)
         child = next((item for item in checkpoint.children if item.unit_id == unit_id), None)
@@ -527,24 +537,30 @@ class ProductionJointBackend:
                     submitted_at=checkpoint.submitted_at,
                 )
             )
-        if result.checkpoint.stage is DeliveryStage.WAITING_PRODUCT_APPROVAL:
-            assert checkpoint.approval is not None
-            result = service.approve(
-                ApproveProductSpec(
-                    delivery_id=result.checkpoint.delivery_id,
-                    expected_checkpoint_sha256=result.checkpoint.checkpoint_sha256,
-                    approval_reference=projection.approval_reference,
-                    submitted_at=checkpoint.approval.approved_at,
+        try:
+            if result.checkpoint.stage is DeliveryStage.WAITING_PRODUCT_APPROVAL:
+                assert checkpoint.approval is not None
+                result = service.approve(
+                    ApproveProductSpec(
+                        delivery_id=result.checkpoint.delivery_id,
+                        expected_checkpoint_sha256=result.checkpoint.checkpoint_sha256,
+                        approval_reference=projection.approval_reference,
+                        submitted_at=checkpoint.approval.approved_at,
+                    )
                 )
-            )
-        elif result.checkpoint.stage not in {
-            DeliveryStage.DONE,
-            DeliveryStage.BLOCKED,
-            DeliveryStage.FAILED,
-        }:
-            result = service.resume(
-                ResumeProjectDelivery(delivery_id=result.checkpoint.delivery_id)
-            )
+            elif result.checkpoint.stage not in {
+                DeliveryStage.DONE,
+                DeliveryStage.BLOCKED,
+                DeliveryStage.FAILED,
+            }:
+                result = service.resume(
+                    ResumeProjectDelivery(delivery_id=result.checkpoint.delivery_id)
+                )
+        except KnowledgeGapRaised as error:
+            observed = service.status(result.checkpoint.delivery_id).checkpoint
+            raise ChildKnowledgeGapRaised(
+                error.gap, ChildDelivery(unit_id=unit_id, checkpoint=observed)
+            ) from error
         return ChildDelivery(unit_id=unit_id, checkpoint=result.checkpoint)
 
     def validate_plan(self, checkpoint: JointCheckpoint, plan: JointExecutionPlan) -> None:
