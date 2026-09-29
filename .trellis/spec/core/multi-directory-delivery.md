@@ -67,6 +67,17 @@ ase request resume DELIVERY_ID
   `joint-approval:<parent-id>:<approval-digest>:<unit-id>` 只验证精确父批准，不是 Agent 自批。
 - 子仓 `joint.approved_context` 包含联合方案、接口、验收及已完成声明依赖的候选事实；原生
   dispatch、Task、worktree、独立 QA/Review 和 Artifact/Evidence 守卫不得绕过。
+- 子仓交付的原生规则 Context 投影必须有界。冻结准备和知识检索记录保留全部原文、来源身份
+  和原有摘要；`approved_joint_context_sources` 不压缩它们。生产的 prompt delegate 在启用
+  knowledge consultation 时才压缩：所有 `AGENTS.md` 保留全文，其余规则用 URI/冻结正文摘要
+  表示，实际检索的原文经独立校验加入 required `knowledge.reads`。已批准 Product/Design/Plan、
+  approval 与角色上游 Artifact 始终完整。恢复先重验 Git blob 再投影；不得从当前 checkout
+  替换冻结来源。共享生产输入估算预算为 128,000，输出记账预留 4,000；最终 Context（含检索
+  原文）超额仍拒绝。`ContextBudgetExceeded` 发生在模型前，不能归类为模型超时。
+- 存量 `ContextBudgetExceeded → BLOCKED` Task 不因 Context 投影修复而重置。若超额发生在
+  第一个 Coder Run 建立前，现有 terminal Coder recovery 无 Run/Context 可引用，普通 resume
+  也不能重开终态 Task。必须先实现并批准一个绑定原 Task、原联合批准与新 Context 投影的审计
+  恢复入口，再新建 successor Task 交付；不得直接改 MySQL 状态或伪造失败 Run。
 - integration 使用全部 write candidate SHA 和 reference-only base SHA，在外置 detached worktrees
   执行。每条接口至少一个 check 同时消费 producer 和全部 consumers；证据绑定精确 plan/candidate set。
 - 测试 argv 必须同时匹配 RepositoryProfile allowlist 和支持的测试前缀，禁止 shell/inline code、

@@ -92,6 +92,25 @@ has its own run bound to the parent context, Task, role and frozen snapshot; the
 Artifact references the enriched Context. A prompt builder must never append unmanifested
 knowledge after this boundary. Approved resolutions form a new parent context and consultation
 run, retaining the original run and gap. Repository-native rule bytes retain their source IDs.
+Full frozen sources always feed `snapshot_from_sources`; replacing them with prompt pointers
+would destroy body search and change the snapshot identity used by approved gap resolutions.
+
+Production prompt compaction is a separate `native_rule_prompt_sources` projection, enabled
+only alongside active consultation. All AGENTS.md bodies remain inline; other native rules
+carry `native.reference.*` URI/redacted-body digests. After consultation, compact Contexts add
+required `knowledge.reads` before the receipt. `retrieved_context_section(consultation, records)`
+verifies immutable READ evidence against its binding, snapshot, role visibility, prior search
+hit and exact frozen chunk, then deterministically deduplicates citations. Reads have ordinary
+Context token accounting and hashes. Missing/mismatched evidence or overflow fails closed.
+The delivery gate recomputes the same section and permits exactly parent + reads + receipt;
+legacy contexts without reference projection retain the parent + receipt contract. Original
+snapshots, gap resolutions, consultations and Artifact Context IDs are never rewritten.
+
+Regression coverage: `tests/manager/test_joint_context_limits.py` exercises full joint stage
+payloads, profile/baseline and serial role artifacts alongside frozen READ text. Native rules
+must remain searchable by body-only terms; resumed approved resolutions keep their snapshot
+binding. `tests/knowledge/test_prompt_projection.py` checks restart and rejects wrong evidence
+bindings/content, removed READ sections and over-budget required evidence.
 
 The native production error guard must propagate `KnowledgeGapRaised` to the Requirement
 coordinator, which journals WAITING_HUMAN without terminating the delivery Task. No verdict is

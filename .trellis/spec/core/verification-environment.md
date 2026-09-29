@@ -37,7 +37,7 @@ context compilation fails. This is a platform context failure, not business QA f
 ### 2. Signatures
 
 `CandidateVerificationEntry.execute(path)` composes `FileRunContextBuilder` with the shared
-`PRODUCTION_DELIVERY_CONTEXT_BUDGET` (64,000 input / 4,000 reserved output).
+`PRODUCTION_DELIVERY_CONTEXT_BUDGET` (128,000 input / 4,000 reserved output).
 `ManagerConsoleAdapter.execute(intent)` maps `ContextBudgetExceeded` to
 `ConsoleCommandRejected(code="CONTEXT_BUDGET_EXHAUSTED", safe_summary=...)`.
 

@@ -1,5 +1,6 @@
 """Successor rules come from its sealed profile, never a parent's older bytes."""
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -13,7 +14,10 @@ from tests.manager.test_production_backend import _git
 def test_successor_native_sources_use_frozen_revision_and_preserve_role_scope(
     tmp_path: Path,
 ) -> None:
-    from ai_software_engineer.context.native import rebind_native_rule_sources
+    from ai_software_engineer.context.native import (
+        native_rule_prompt_sources,
+        rebind_native_rule_sources,
+    )
 
     root = tmp_path / "repository"
     root.mkdir()
@@ -39,6 +43,13 @@ def test_successor_native_sources_use_frozen_revision_and_preserve_role_scope(
     assert result == (source.model_copy(update={"content": "Approved successor rules.\n"}),)
     assert rules.read_text() == "Unapproved current checkout.\n"
     assert rebind_native_rule_sources(root, approved, ()) == ()
+    rebound = native_rule_prompt_sources(result)[0]
+    assert rebound.source_id == "native.reference.0"
+    assert rebound.roles == (AgentRole.QA,)
+    assert rebound.required
+    assert "Approved successor rules." not in (rebound.content or "")
+    assert approved.native_rules[0].uri in (rebound.content or "")
+    assert hashlib.sha256(b"Approved successor rules.\n").hexdigest() in (rebound.content or "")
     with pytest.raises(ValueError, match="native rule is not in the sealed profile"):
         rebind_native_rule_sources(
             root, approved, (source.model_copy(update={"uri": "project://repository_other/a"}),)

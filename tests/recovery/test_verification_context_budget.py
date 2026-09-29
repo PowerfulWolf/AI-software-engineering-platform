@@ -109,7 +109,8 @@ def test_production_entry_preserves_required_reviewer_context_and_bounded_budget
     approved = ContextSource(
         source_id="verification.approved_plan",
         uri="verification://approved-fixture",
-        content="p" * (260_000 if oversized else 32_000),
+        content="p"
+        * (PRODUCTION_DELIVERY_CONTEXT_BUDGET.max_input_tokens * 4 if oversized else 32_000),
         priority=20,
         required=True,
     )

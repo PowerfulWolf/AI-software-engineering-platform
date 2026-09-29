@@ -71,7 +71,7 @@ Builder 始终生成并优先交付 `policy`、`task`、`role`；提供且不同
 相同 Task、role、attempt、权限、来源正文、candidate revision 和 budget 必须产生相同 section 顺序、hash、token 计数和 `context_id`；`built_at` 仅是观察元数据，不参与身份哈希。
 
 `RuntimeConfig.context_max_input_tokens` 显式传到 `FileRunContextBuilder`，默认仍为 12,000；
-生产 Team Host 的交付阶段设置 64,000，输出预留仍为 4,000。它是本地确定性估算上限，
+生产 Team Host 的交付阶段设置 128,000，输出预留仍为 4,000。它是本地确定性估算上限，
 不是供应商真实 tokenizer 或模型 context window 的声明；不会因超限自动扩大或重试。
 独立候选验证入口 `CandidateVerificationEntry.execute` 同样必须显式复用
 `PRODUCTION_DELIVERY_CONTEXT_BUDGET`，不能落回低层默认值。QA 上下文能装下不代表
@@ -84,6 +84,26 @@ marker 清单替换为 `marker_count` 和最多三个排序样例，保留所有
 RepositoryProfile。批准方案、Task、规则引用和上游 Artifact 不因压缩而省略。
 RepositoryProfile 发现会排除平台生成的根级 `worktrees/` 执行目录，避免把历史 Task 的完整
 检出副本重复当作项目源码和规范输入。
+
+联合需求的 Repository 原生规则在冻结准备记录和知识检索 snapshot 中保留完整正文、source ID、
+角色范围和摘要。仅在生产入口实际启用 `KnowledgeRunContextBuilder` 时，对
+`FileRunContextBuilder` 的 sources 应用 `native_rule_prompt_sources`：所有 `AGENTS.md`
+（包括子目录）保留全文，其余原生规则变为 `native.reference.*` URI/冻结脱敏正文摘要。
+知识 Builder 仍接收原始 sources，不得索引指针文字；恢复先重验固定 Git blob，再构建投影。
+无知识检索的入口保持完整原文。已批准的 Product/Design/Plan/approval、Task、结构化 baseline
+和角色所需 Artifact 始终完整、required；不把上游成果当作可丢弃的日志。
+
+压缩后的最终角色 Context 包含 required `knowledge.reads`，保存本次 consultation 实际 READ
+的去重原文证据。正文从 immutable evidence 读回，并重验 binding、snapshot、角色范围、先前
+search hit、citation 与冻结 chunk。`KnowledgeDeliveryGate` 重算同一 section，精确验证
+`parent.sections + knowledge.reads + knowledge.consultation` 和总预算；模型 claim 不能替代原文。
+历史无引用投影的 Context 继续使用原来的 `parent + consultation` 校验，不重写旧 receipt。
+缺失、漂移或任何 required 内容（含检索正文）超预算仍失败关闭。
+
+128,000 是初始输入的本地估算上限，不是模型的总窗口或输出上限。当前配置的 Codex 模型本机
+元数据（2026-09-28）报告 272,000 窗口、95% effective；本策略为提示包装、工具结果、后续交互
+保留空间。代理服务实际支持量及中文 tokenizer 差异仍需真实运行验证；不自动提高预算重试，
+也不修改 provider 的输出/思考额度。独立候选验证复用同一常量。
 
 状态迁移后的 Task 快照属于 Context identity 的一部分：例如 planning run 的 Task section 是 `PLANNING`，Coder run 是 `IMPLEMENTING`。重放或离线 Fake scenario 必须使用对应 durable checkpoint 构建 manifest，不能拿 `NEW` 快照冒充后续输入。
 

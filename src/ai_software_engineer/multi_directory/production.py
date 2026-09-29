@@ -123,7 +123,7 @@ def approved_joint_context_source(checkpoint: JointCheckpoint, unit_id: str) -> 
 def approved_joint_context_sources(
     checkpoint: JointCheckpoint, unit_id: str
 ) -> tuple[ContextSource, ...]:
-    """One frozen source projection for initial delivery, repair and restart."""
+    """Full frozen inputs for delivery, repair, restart and knowledge retrieval."""
     source = approved_joint_context_source(checkpoint, unit_id)
     prepared = next(item for item in checkpoint.preparations if item.unit_id == unit_id)
     return (

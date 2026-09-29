@@ -18,6 +18,10 @@ from ai_software_engineer.knowledge.agents import (
     consultation_integrity_matches,
     repository_inspection_gap,
 )
+from ai_software_engineer.knowledge.context_reads import (
+    requires_frozen_reads,
+    retrieved_context_section,
+)
 from ai_software_engineer.knowledge.gaps import KnowledgeGapService
 from ai_software_engineer.knowledge.models import (
     Digest,
@@ -149,6 +153,11 @@ class KnowledgeDeliveryGate:
             raise KnowledgeError("WORKFLOW_CONSULTATION_INVALID")
         consultation.manifest.validate_integrity()
         parent = self.contexts.get(consultation.binding.context_manifest_id)
+        additions = (
+            (retrieved_context_section(consultation, self.records), section)
+            if requires_frozen_reads(parent)
+            else (section,)
+        )
         if (
             context.task_id != task.id
             or context.role != active.producer.role
@@ -158,10 +167,13 @@ class KnowledgeDeliveryGate:
             or parent.source_revision != context.source_revision
             or parent.task_id != context.task_id
             or parent.role != context.role
-            or context.sections != (*parent.sections, section)
+            or context.sections != (*parent.sections, *additions)
             or context.budget
             != parent.budget.model_copy(
-                update={"used_input_tokens": parent.budget.used_input_tokens + section.tokens}
+                update={
+                    "used_input_tokens": parent.budget.used_input_tokens
+                    + sum(item.tokens for item in additions)
+                }
             )
         ):
             raise KnowledgeError("WORKFLOW_CONTEXT_MISMATCH")

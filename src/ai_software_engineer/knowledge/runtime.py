@@ -18,6 +18,10 @@ from ai_software_engineer.knowledge.agents import (
     RepositoryInspection,
 )
 from ai_software_engineer.knowledge.context import snapshot_from_sources
+from ai_software_engineer.knowledge.context_reads import (
+    requires_frozen_reads,
+    retrieved_context_section,
+)
 from ai_software_engineer.knowledge.gaps import (
     KnowledgeGap,
     KnowledgeResolution,
@@ -273,6 +277,11 @@ class KnowledgeRunContextBuilder:
             {"task": task.to_wire(), "context": base.to_wire()},
             timeout_seconds=min(agent.timeout_seconds, 120),
         )
+        if requires_frozen_reads(base):
+            reads = retrieved_context_section(consultation, self.records)
+            base = append_knowledge_context(
+                base, self.contexts, name=reads.name, uri=reads.uri, content=reads.content
+            )
         return append_knowledge_context(
             base,
             self.contexts,

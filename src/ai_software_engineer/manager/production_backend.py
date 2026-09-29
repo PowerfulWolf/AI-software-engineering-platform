@@ -29,7 +29,10 @@ from ai_software_engineer.config import (
 )
 from ai_software_engineer.config.codex_proxy import codex_cli_proxy_key_environment
 from ai_software_engineer.context import ContextBudget, ContextSource, FileContextStore
-from ai_software_engineer.context.native import rebind_native_rule_sources
+from ai_software_engineer.context.native import (
+    native_rule_prompt_sources,
+    rebind_native_rule_sources,
+)
 from ai_software_engineer.context.profile import repository_profile_context
 from ai_software_engineer.design import (
     DesignerService,
@@ -179,7 +182,7 @@ from ai_software_engineer.work_queue.ports import DeliveryQueuePending
 Clock = Callable[[], datetime]
 ResultT = TypeVar("ResultT")
 PRODUCTION_DELIVERY_CONTEXT_BUDGET = ContextBudget(
-    max_input_tokens=64_000, reserved_output_tokens=4_000
+    max_input_tokens=128_000, reserved_output_tokens=4_000
 )
 PRODUCTION_DELIVERY_MAX_ATTEMPTS = 3
 _ALL_CAPABILITIES = DELIVERY_CAPABILITIES
@@ -1141,7 +1144,11 @@ class ProductionProjectDeliveryBackend:
                     audit_stores.append(KnowledgeRecordStore(requirement_records))
         run_contexts = FileRunContextBuilder(
             facts.workspace.repository_root,
-            sources=runtime_config.context_sources,
+            sources=(
+                native_rule_prompt_sources(runtime_config.context_sources)
+                if isinstance(selected_adapters, ConfiguredDeliveryRouteAdapterFactory)
+                else runtime_config.context_sources
+            ),
             context_store=contexts,
             budget=ContextBudget(
                 max_input_tokens=runtime_config.context_max_input_tokens,

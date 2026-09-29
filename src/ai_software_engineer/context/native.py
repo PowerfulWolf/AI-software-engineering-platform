@@ -4,11 +4,50 @@ import hashlib
 import os
 import re
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from urllib.parse import urlparse
 
 from ai_software_engineer.context.models import ContextSource
+from ai_software_engineer.context.ports import ContextSourceError
 from ai_software_engineer.redaction import redact_text
 from ai_software_engineer.repository_profile import RepositoryProfile
+
+
+def native_rule_prompt_sources(sources: tuple[ContextSource, ...]) -> tuple[ContextSource, ...]:
+    """Project frozen rules for a prompt paired with active knowledge retrieval.
+
+    The knowledge snapshot must still consume the original sources. Preserve all
+    AGENTS instructions; other bodies remain available in the frozen search/read
+    corpus. This projection is never persisted back into approved preparation.
+    """
+    projected = []
+    for source in sources:
+        if not source.source_id.startswith("native.rule."):
+            projected.append(source)
+            continue
+        if source.content is None:
+            raise ContextSourceError("native prompt projection requires frozen inline content")
+        if PurePosixPath(urlparse(source.uri).path).name.lower() == "agents.md":
+            projected.append(source)
+            continue
+        safe = redact_text(source.content).text
+        content = (
+            "Project-native rule reference; full body remains in the frozen knowledge snapshot. "
+            f"URI={redact_text(source.uri).text}; "
+            f"frozen_redacted_sha256={hashlib.sha256(safe.encode('utf-8')).hexdigest()}. "
+            "Consult applicable rules before editing or verifying. Verified retrieved passages "
+            "are supplied in knowledge.reads; references alone do not supply the rule text. "
+            "Report missing required rules rather than inferring their contents."
+        )
+        projected.append(
+            source.model_copy(
+                update={
+                    "source_id": source.source_id.replace("native.rule.", "native.reference.", 1),
+                    "content": content,
+                }
+            )
+        )
+    return tuple(projected)
 
 
 def rebind_native_rule_sources(

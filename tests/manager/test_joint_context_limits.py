@@ -1,0 +1,213 @@
+"""Prompt compaction must retain frozen rules and complete upstream stage outputs."""
+
+import json
+from pathlib import Path
+
+import pytest
+
+from ai_software_engineer.artifacts import FileArtifactStore
+from ai_software_engineer.context import ContextSource, FileContextStore
+from ai_software_engineer.context.native import native_rule_prompt_sources
+from ai_software_engineer.context.ports import ContextBudgetExceeded
+from ai_software_engineer.context.profile import repository_profile_context
+from ai_software_engineer.domain import AgentRole, TaskStatus
+from ai_software_engineer.knowledge.context import snapshot_from_sources
+from ai_software_engineer.knowledge.delivery import KnowledgeDeliveryGate
+from ai_software_engineer.knowledge.runtime import KnowledgeRunContextBuilder
+from ai_software_engineer.knowledge.store import KnowledgeRecordStore
+from ai_software_engineer.manager.baseline import ProjectSpecBaseline, _baseline_digest
+from ai_software_engineer.manager.production_backend import PRODUCTION_DELIVERY_CONTEXT_BUDGET
+from ai_software_engineer.multi_directory.models import JointCheckpoint
+from ai_software_engineer.multi_directory.production import approved_joint_context_sources
+from ai_software_engineer.orchestration import FileRunContextBuilder, RetryingOrchestrator
+from ai_software_engineer.repository_profile import RepositoryProfile
+from ai_software_engineer.store import SqliteTaskRepository
+from tests.domain.factories import make_agent, make_task
+from tests.knowledge.test_delivery_context import Clients
+from tests.manager.test_baseline import hard_rule
+from tests.manager.test_joint_contracts import checkpoint
+from tests.orchestration.test_retry import ScriptedAdapter
+from tests.orchestration.test_runner import _clock, _definitions, _task
+
+
+def joint_sources(tmp_path: Path) -> tuple[JointCheckpoint, tuple[ContextSource, ...]]:
+    current = checkpoint(tmp_path)
+    prepared = current.preparations[0]
+    repository_id = prepared.result.repository_id
+    rules = tuple(
+        ContextSource(
+            source_id=f"native.rule.{index}",
+            uri=f"project://{repository_id}/.trellis/spec/core/rule-{index}.md",
+            content=(
+                "# Refunds\nUse original payment identity. Preserve the ledger sequence.\n"
+                + "General project guidance.\n" * 9_000
+            ),
+            required=True,
+        )
+        for index in range(3)
+    )
+    agents = tuple(
+        ContextSource(
+            source_id=f"native.rule.agents{index}",
+            uri=f"project://{repository_id}/{path}",
+            content="Read applicable project rules before coding.\n",
+            required=True,
+        )
+        for index, path in enumerate(("AGENTS.md", "src/AGENTS.md"))
+    )
+    frozen = prepared.model_copy(update={"context_sources": (*rules, *agents)})
+    current = JointCheckpoint.seal(
+        {**current.to_wire(), "preparations": (frozen, *current.preparations[1:])}
+    )
+    return current, approved_joint_context_sources(current, prepared.unit_id)
+
+
+def test_projection_keeps_frozen_rules_and_full_approved_stages(tmp_path: Path) -> None:
+    current, sources = joint_sources(tmp_path)
+    assert sources[1:] == current.preparations[0].context_sources
+    assert current.product_spec and current.design and current.plan and current.approval
+    shared = json.loads(sources[0].content or "")
+    for key, value in (
+        ("product", current.product_spec),
+        ("design", current.design),
+        ("plan", current.plan),
+        ("approval", current.approval),
+    ):
+        assert shared[key] == value.to_wire()
+    projected = native_rule_prompt_sources(sources)
+    assert projected[0] == sources[0]
+    assert projected[-2:] == sources[-2:]  # Nested AGENTS instructions also remain full.
+    assert all(source.required for source in projected)
+    assert all("Preserve the ledger sequence" not in (s.content or "") for s in projected[1:4])
+    with pytest.raises(ContextBudgetExceeded):
+        FileRunContextBuilder(
+            tmp_path, sources=sources, budget=PRODUCTION_DELIVERY_CONTEXT_BUDGET
+        ).build(make_task(), make_agent(), attempt=1)
+    bundle = FileRunContextBuilder(
+        tmp_path, sources=projected, budget=PRODUCTION_DELIVERY_CONTEXT_BUDGET
+    ).build(make_task(), make_agent(), attempt=1)
+    assert all(not section.truncated for section in bundle.sections)
+
+
+@pytest.mark.parametrize("rework", ["none", "qa", "progress"])
+def test_complete_role_chain_retains_artifacts_and_frozen_read_text(
+    tmp_path: Path, rework: str
+) -> None:
+    current, sources = joint_sources(tmp_path)
+    repository_id = current.preparations[0].result.repository_id
+    profile = RepositoryProfile.discover(tmp_path, repository_id=repository_id)
+    baseline = ProjectSpecBaseline(
+        repository_id=repository_id,
+        repository_profile_sha256=profile.profile_sha256,
+        rules=(hard_rule(),),
+        baseline_sha256="0" * 64,
+    )
+    baseline = baseline.model_copy(update={"baseline_sha256": _baseline_digest(baseline)})
+    sources += (
+        repository_profile_context(profile),
+        ContextSource(
+            source_id="project.baseline",
+            uri=f"baseline://{repository_id}/frozen",
+            content=json.dumps(baseline.to_wire()),
+            required=True,
+        ),
+    )
+    frozen = snapshot_from_sources(
+        team_id=current.team_id,
+        project_id=current.project_id,
+        requirement_id=current.delivery_id,
+        repository_ids=(repository_id,),
+        sources=tuple((repository_id, s) for s in sources),
+    )
+    contexts = FileContextStore(tmp_path / "contexts")
+    records = KnowledgeRecordStore(tmp_path / "knowledge")
+    builder = KnowledgeRunContextBuilder(
+        FileRunContextBuilder(
+            tmp_path,
+            sources=native_rule_prompt_sources(sources),
+            context_store=contexts,
+            budget=PRODUCTION_DELIVERY_CONTEXT_BUDGET,
+        ),
+        contexts=contexts,
+        clients=Clients(),
+        repository_root=tmp_path,
+        records=records,
+        team_id=current.team_id,
+        project_id=current.project_id,
+        repository_id=repository_id,
+        sources=sources,
+    )
+    artifacts = FileArtifactStore(tmp_path / "artifacts")
+    adapter = ScriptedAdapter(
+        qa_failures=(1,) if rework == "qa" else (),
+        coder_progress=(1,) if rework == "progress" else (),
+    )
+    task = _task(tmp_path)
+    with SqliteTaskRepository(tmp_path / "tasks.sqlite") as repository:
+        repository.create(task)
+        result = RetryingOrchestrator(
+            repository=repository,
+            artifact_store=artifacts,
+            context_builder=builder,
+            agent_adapter=adapter,
+            agent_definitions=_definitions(),
+            clock=_clock,
+            transition_gate=KnowledgeDeliveryGate(
+                records=records, artifacts=artifacts, contexts=contexts
+            ),
+        ).run_task(task.id)
+    assert result.task.status is TaskStatus.DONE
+    assert records.get("snapshots", frozen.snapshot_sha256, type(frozen)) == frozen
+    assert {r.role for r in adapter.requests} == set(AgentRole)
+    for request in adapter.requests:
+        context = contexts.get(request.context_manifest_id)
+        sections = {s.name.removeprefix("source:"): s for s in context.sections}
+        assert {
+            "policy",
+            "task",
+            "role",
+            "project.profile",
+            "project.baseline",
+            "joint.approved_context",
+        } <= sections.keys()
+        assert json.loads(sections["joint.approved_context"].content) == json.loads(
+            sources[0].content or ""
+        )
+        assert all(not s.truncated for s in context.sections)
+        assert context.budget.max_input_tokens == 128_000
+        assert context.budget.used_input_tokens == sum(s.tokens for s in context.sections)
+        for identity in request.input_artifact_ids:
+            assert (
+                json.loads(sections[f"artifact.{identity}"].content)
+                == artifacts.get(identity).to_wire()
+            )
+        if request.role is not AgentRole.ORCHESTRATOR:
+            assert "knowledge.consultation" in sections
+            # This exact rule is absent from both the pointer and the model's claim.
+            assert "Preserve the ledger sequence." in sections["knowledge.reads"].content
+    if rework != "none":
+        assert ("art_qa_001" if rework == "qa" else "art_progress_001") in next(
+            r for r in adapter.requests if r.role is AgentRole.CODER and r.attempt == 2
+        ).input_artifact_ids
+
+
+@pytest.mark.parametrize("size,accepted", [(300_000, True), (520_000, False)])
+def test_production_budget_accepts_larger_required_inputs_but_remains_bounded(
+    tmp_path: Path, size: int, accepted: bool
+) -> None:
+    builder = FileRunContextBuilder(
+        tmp_path,
+        budget=PRODUCTION_DELIVERY_CONTEXT_BUDGET,
+        sources=(
+            ContextSource(
+                source_id="approved", uri="approved://fixture", content="x" * size, required=True
+            ),
+        ),
+    )
+    if not accepted:
+        with pytest.raises(ContextBudgetExceeded):
+            builder.build(make_task(), make_agent(), attempt=1)
+    else:
+        context = builder.build(make_task(), make_agent(), attempt=1)
+        assert 64_000 < context.budget.used_input_tokens < 128_000
+        assert context.budget.reserved_output_tokens == 4_000
