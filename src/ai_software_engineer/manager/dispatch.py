@@ -413,7 +413,9 @@ class ContinuationDispatchRecord(DomainModel):
     execution_plan_id: ExecutionPlanId
     execution_plan_sha256: DispatchSha256
     execution_plan_phase_ids: tuple[PlanPhaseId, PlanPhaseId, PlanPhaseId]
-    continuation_kind: Literal["verification_remediation", "prerequisite_repair"]
+    continuation_kind: Literal[
+        "verification_remediation", "prerequisite_repair", "pre_execution_restart"
+    ]
     prerequisite_repair_sha256: DispatchSha256 | None = None
     continuation_sha256: DispatchSha256
     continuation_plan_sha256: DispatchSha256
@@ -435,6 +437,12 @@ class ContinuationDispatchRecord(DomainModel):
 
     @model_validator(mode="after")
     def validate_record(self) -> Self:
+        if self.continuation_kind == "pre_execution_restart" and (
+            self.continuation_attempt != 1
+            or self.continuation_sha256 != self.continuation_plan_sha256
+            or self.source_revision != self.source_base_revision
+        ):
+            raise ValueError("pre-execution restart must bind one exact fresh-start plan")
         if (self.continuation_kind == "prerequisite_repair") != (
             self.prerequisite_repair_sha256 is not None
         ):

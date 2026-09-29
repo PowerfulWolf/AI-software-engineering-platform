@@ -742,6 +742,8 @@ function requestBlockingSummary(request) {
       "确认下方精确文件范围后点击“批准文件范围”；平台随后会生成恢复计划，并再次请求审批。";
   else if (approval?.kind === "coder_recovery")
     suggestedAction = "确认下方恢复任务信息后点击“批准并继续”。";
+  else if (approval?.kind === "pre_execution_restart")
+    suggestedAction = "Coder 尚未启动；确认下方新 Task 重启计划后点击“批准并继续”。";
   else if (approval?.kind === "candidate_verification")
     suggestedAction = "确认下方独立验证计划后点击“批准并继续”。";
   else if (

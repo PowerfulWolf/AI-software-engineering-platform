@@ -330,7 +330,10 @@ class RuntimeSession:
             selected_case,
             task.id,
             task.base_ref,
-            included="recovery_of_task_id" not in task.metadata,
+            included=(
+                "recovery_of_task_id" not in task.metadata
+                and task.metadata.get("continuation_kind") != "pre_execution_restart"
+            ),
         )
         if self._human_action_recorder is not None:
             self._human_action_recorder.record(task, selected_case, self._evaluation_store)

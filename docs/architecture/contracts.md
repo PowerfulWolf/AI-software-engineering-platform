@@ -782,9 +782,13 @@ substitute for QA/Review verdicts. See `.trellis/spec/core/verification-environm
 - `delivery-recovery.schema.json`：RecoveryScopeSupplement / RecoveryPlan / RecoveryAuthorization；
   先精确绑定人类批准的遗漏文件路径，再绑定获准捕获的基线与修改。
 - `recovery-task-record.schema.json`：封存重新绑定 preparation 的 Request 与 NEW Task。
+- `pre-execution-restart.schema.json`：首次 Coder 启动前上下文失败的独立重启计划，绑定原
+  Task/事件/dispatch/审批链、冻结父上下文和当前预算；不包含虚构的 Coder Run 或代码 capture。
+  精确批准后生成 `continuation_kind=pre_execution_restart` 的新 Task，原终态记录保持不变。
 - `recovery-execution.schema.json`：RecoveryDispatchRecord / ContinuationDispatchRecord /
-  RecoverySeedRecord / RecoveryInvocationRecord。Continuation 绑定被拒候选、验证 completion、当前
-  preparation、修复 Task 和新的 Coder/QA/Reviewer allocation。
+  RecoverySeedRecord / RecoveryInvocationRecord。普通 Continuation 绑定被拒候选、验证 completion、
+  当前 preparation、修复 Task 和新的 Coder/QA/Reviewer allocation；pre_execution_restart
+  则绑定精确重启计划及原始基线，不声称已有 candidate。
   新分配进入同一个 MySQL 全局资源锁；种子记录绑定目标 worktree 捕获；调用记录防止重复放行 Coder。
 
 `ase recovery propose → inspect → approve → run` 是可信本地操作者入口，不是 Agent 工具。

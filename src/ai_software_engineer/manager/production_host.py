@@ -254,6 +254,7 @@ class TeamHost:
                     if child_result.outcome in {
                         DeliveryResumeOutcome.VERIFICATION_APPROVAL_REQUIRED,
                         DeliveryResumeOutcome.RECOVERY_APPROVAL_REQUIRED,
+                        DeliveryResumeOutcome.RESTART_APPROVAL_REQUIRED,
                         DeliveryResumeOutcome.SCOPE_APPROVAL_REQUIRED,
                         DeliveryResumeOutcome.REPAIR_APPROVAL_REQUIRED,
                     } or (

@@ -1090,6 +1090,21 @@ class ProductionProjectDeliveryBackend:
         )
         primary = self._config.routes_for(TeamRole.CODER)[0]
         delivery_sources = (*self._delivery_context_sources, *extra_context)
+        if (
+            isinstance(dispatch, ContinuationDispatchRecord)
+            and dispatch.continuation_kind == "pre_execution_restart"
+        ):
+            # Parent context is frozen in the restart plan and may also be supplied by
+            # the joint runtime. Identical sources coalesce; a changed source fails closed.
+            unique_sources: dict[str, ContextSource] = {}
+            for source in delivery_sources:
+                if (
+                    source.source_id in unique_sources
+                    and unique_sources[source.source_id] != source
+                ):
+                    raise ValueError("restart frozen source differs from current joint context")
+                unique_sources[source.source_id] = source
+            delivery_sources = tuple(unique_sources.values())
         if isinstance(dispatch, (ContinuationDispatchRecord, RecoveryDispatchRecord)):
             delivery_sources = rebind_native_rule_sources(
                 facts.workspace.repository_root, facts.profile, delivery_sources
@@ -1608,6 +1623,23 @@ def _continuation_context(
         repository_root=str(facts.workspace.repository_root),
         delivery_id=dispatch.source_delivery_id,
     )
+    if dispatch.continuation_kind == "pre_execution_restart":
+        from ai_software_engineer.recovery.restart import require_restart_dispatch, restart_context
+
+        restart_store = FileRecoveryStore(
+            facts.workspace.root / "state" / f"pre-execution-{dispatch.source_delivery_id}",
+            scope=scope,
+        )
+        restart_plan = restart_store.get_restart_plan(dispatch.continuation_plan_sha256)
+        authorization = restart_store.get_restart_authorization(restart_plan.plan_sha256)
+        require_restart_dispatch(restart_plan, dispatch)
+        if (
+            not authorization.decision.approved
+            or restart_plan.config_sha256 != digest(config.to_wire())
+            or restart_plan.context_budget != PRODUCTION_DELIVERY_CONTEXT_BUDGET
+        ):
+            raise ValueError("restart approval or context policy changed")
+        return restart_context(restart_plan)
     store = FileRecoveryStore(
         facts.workspace.root / "state" / f"candidate-verification-{dispatch.source_delivery_id}",
         scope=scope,

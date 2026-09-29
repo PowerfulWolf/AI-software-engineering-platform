@@ -41,6 +41,7 @@ from ai_software_engineer.recovery.models import (
     VerifiedRecoveryDecision,
 )
 from ai_software_engineer.recovery.remediation import CandidateRemediationService
+from ai_software_engineer.recovery.restart_records import PreExecutionRestartPlan
 from ai_software_engineer.recovery.store import FileRecoveryStore, RecoveryRecordMissing
 from ai_software_engineer.recovery.verification_entry import CandidateVerificationEntry
 from ai_software_engineer.recovery.verification_native import (
@@ -61,6 +62,7 @@ class DeliveryResumeOutcome(StrEnum):
     WAITING_HUMAN = "WAITING_HUMAN"
     VERIFICATION_APPROVAL_REQUIRED = "VERIFICATION_APPROVAL_REQUIRED"
     RECOVERY_APPROVAL_REQUIRED = "RECOVERY_APPROVAL_REQUIRED"
+    RESTART_APPROVAL_REQUIRED = "RESTART_APPROVAL_REQUIRED"
     SCOPE_APPROVAL_REQUIRED = "SCOPE_APPROVAL_REQUIRED"
     REPAIR_APPROVAL_REQUIRED = "REPAIR_APPROVAL_REQUIRED"
     VERIFIED = "VERIFIED"
@@ -82,6 +84,7 @@ class DeliveryResumeResult(DomainModel):
     scope_supplement_sha256: str | None = None
     scope_supplement_paths: tuple[NonEmptyStr, ...] = ()
     prerequisite_repair_plan: PrerequisiteRepairPlan | None = None
+    restart_plan: PreExecutionRestartPlan | None = None
 
 
 class JointDeliveryResumeResult(JointDeliveryResult):
@@ -180,6 +183,9 @@ class DeliveryResumeController:
                 ),
             )
         if current.candidate_revision is None:
+            restart = self._continue_pre_execution_restart(current, command)
+            if restart is not None:
+                return restart
             try:
                 NativeCandidateSourceReader(self._config, self._environment).inspect(
                     RecoveryScope(
@@ -531,6 +537,55 @@ class DeliveryResumeController:
         if not authorization.decision.approved:
             raise RecoveryRejected("prerequisite repair was not approved")
         return self._run_remediation(source_plan, completion, store, repair)
+
+    def _continue_pre_execution_restart(
+        self,
+        current: ProjectDeliveryCheckpoint,
+        command: ResumeProjectDelivery,
+    ) -> DeliveryResumeResult | None:
+        from ai_software_engineer.recovery.restart import PreExecutionRestartService
+
+        service = PreExecutionRestartService(self._config, self._environment, self._backend)
+        try:
+            proposal = service.propose(current)
+            if proposal is None:
+                return None
+            plan = proposal.store().put_restart_plan(proposal.plan)
+            if command.approved_plan_sha256 != plan.plan_sha256:
+                return DeliveryResumeResult(
+                    outcome=DeliveryResumeOutcome.RESTART_APPROVAL_REQUIRED,
+                    checkpoint=current,
+                    restart_plan=plan,
+                    next_action="原 Task 在 Coder 启动前因上下文超限阻塞, 没有待恢复的代码。"
+                    "请审核并批准精确重启计划; 新 Task 保留原需求范围, "
+                    "重新执行 Coder、QA、Reviewer。",
+                )
+            dispatch = service.approve_and_dispatch(proposal, command)
+            self._entry.begin_pre_execution_restart(
+                plan,
+                dispatch,
+                proposal.store().get_restart_authorization(plan.plan_sha256),
+                at=dispatch.committed_at,
+            )
+        except RecoveryRejected as error:
+            return DeliveryResumeResult(
+                outcome=DeliveryResumeOutcome.WAITING_HUMAN,
+                checkpoint=current,
+                next_action=f"Pre-execution restart stopped safely: {error}",
+            )
+        # Attachment precedes execution. A crash or verifier knowledge wait remains reachable
+        # through normal native continuation; no second hidden execution path is needed.
+        result = self._entry.resume(
+            ResumeProjectDelivery(
+                delivery_id=current.delivery_id,
+                submitted_at=command.submitted_at,
+            )
+        )
+        return self._result(
+            DeliveryResumeOutcome.CONTINUED,
+            result,
+            next_action=_checkpoint_next_action(result.checkpoint),
+        )
 
     def _continue_coder_recovery(
         self,

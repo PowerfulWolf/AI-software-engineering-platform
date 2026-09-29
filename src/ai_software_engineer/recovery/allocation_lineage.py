@@ -33,7 +33,15 @@ def continuation_source_checkpoints(
         and checkpoint.dispatch_commit_id == allocation.source_dispatch_id
         and checkpoint.task_id == allocation.source_task_id
         and checkpoint.stage in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
-        and terminal_candidate_cursor_matches(checkpoint, allocation.source_revision)
+        and (
+            (
+                checkpoint.candidate_revision is None
+                and checkpoint.checkpoint_sha256
+                == allocation.task.metadata.get("restart_source_checkpoint_sha256")
+            )
+            if allocation.continuation_kind == "pre_execution_restart"
+            else terminal_candidate_cursor_matches(checkpoint, allocation.source_revision)
+        )
     )
 
 

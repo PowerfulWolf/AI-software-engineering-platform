@@ -254,6 +254,76 @@ def read_candidate_snapshot(
         connection.close()
 
 
+def read_pre_execution_snapshot(
+    config: ProductionConfig,
+    environment: Mapping[str, str],
+    history: tuple[ProjectDeliveryCheckpoint, ...],
+) -> CandidateRuntimeSnapshot | None:
+    """Recognize only the original, never-invoked Task's context-budget failure."""
+    if not history:
+        return None
+    cp = history[-1]
+    if cp.task_id is None or cp.dispatch_commit_id is None or cp.candidate_revision is not None:
+        return None
+    connection = open_mysql_connection(config.require_mysql_dsn(environment))
+    try:
+        with connection.cursor(DictCursor) as cursor:
+            cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+            cursor.execute("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
+            task, revision, events = _read_task_facts(cursor, cp)
+            if not (
+                revision == 2
+                and task.attempts == 1
+                and not task.retry_failures
+                and task.status is TaskStatus.BLOCKED
+                and len(events) == 2
+                and events[0].from_status is TaskStatus.NEW
+                and events[0].to_status is TaskStatus.PLANNING
+                and events[0].reason == "task_validated"
+                and events[1].from_status is TaskStatus.PLANNING
+                and events[1].to_status is TaskStatus.BLOCKED
+                and events[1].reason == _PRE_AGENT_CONTEXT_BUDGET_REASON
+            ):
+                return None
+            allocations = _read_allocations(cursor, history)
+            dispatch = allocations[cp.dispatch_commit_id]
+            if not isinstance(dispatch, DispatchCommitRecord):
+                raise RecoveryRejected(
+                    "pre-execution restart already attempted; inspect the new context failure"
+                )
+            if (
+                cp.stage is not DeliveryStage.BLOCKED
+                or cp.failed_stage is not DeliveryStage.DELIVERING
+                or cp.task_revision != revision
+                or cp.task_status is not task.status
+                or cp.repository_root != task.repository
+                or not task_matches_dispatch(task, dispatch.task)
+                or task.updated_at != events[-1].occurred_at
+                or not task.created_at <= events[0].occurred_at <= events[1].occurred_at
+                or any(
+                    e.task_id != task.id
+                    or e.attempt != 1
+                    or e.artifact_ids
+                    or e.source_revision != task.base_ref
+                    for e in events
+                )
+            ):
+                raise RecoveryRejected("pre-execution failure facts are inconsistent")
+            cursor.execute(
+                "SELECT lease_id FROM work_queue_claims WHERE task_id=%s",
+                (task.id,),
+            )
+            if cursor.fetchone() is not None:
+                raise RecoveryRejected("pre-execution source already has a role claim")
+            cursor.execute("SELECT id FROM work_queue_admissions WHERE task_id=%s", (task.id,))
+            if cursor.fetchone() is not None:
+                raise RecoveryRejected("pre-execution source already has a queue admission")
+            return CandidateRuntimeSnapshot(task, revision, dispatch, dispatch, events)
+    finally:
+        connection.rollback()
+        connection.close()
+
+
 def read_candidate_source_snapshot(
     config: ProductionConfig,
     environment: Mapping[str, str],

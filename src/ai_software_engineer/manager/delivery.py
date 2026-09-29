@@ -52,7 +52,8 @@ from ai_software_engineer.orchestration.retry import (
 )
 from ai_software_engineer.planning import PlanningStageResult
 from ai_software_engineer.product import ProductDiscoveryOutcome, ProductDiscoveryResult
-from ai_software_engineer.recovery.models import RecoveryPlan
+from ai_software_engineer.recovery.models import RecoveryAuthorization, RecoveryPlan
+from ai_software_engineer.recovery.restart_records import PreExecutionRestartPlan
 from ai_software_engineer.recovery.verification_records import (
     CandidateExecutorPrerequisite,
     CandidateRemediationEvidence,
@@ -750,6 +751,58 @@ class UnifiedProjectEntryService:
             at=at,
         )
         return ProjectDeliveryResult(checkpoint=checkpoint)
+
+    def begin_pre_execution_restart(
+        self,
+        plan: PreExecutionRestartPlan,
+        dispatch: ContinuationDispatchRecord,
+        authorization: RecoveryAuthorization,
+        *,
+        at: datetime,
+    ) -> ProjectDeliveryResult:
+        from ai_software_engineer.recovery.restart import require_restart_dispatch
+
+        require_restart_dispatch(plan, dispatch)
+        authorization.validate_integrity()
+        if (
+            not authorization.decision.approved
+            or authorization.command.plan_sha256 != plan.plan_sha256
+        ):
+            raise DeliveryCommandRejected("restart has no exact authorization")
+        store, current = self._current(plan.scope.delivery_id)
+        if current.dispatch_commit_id == dispatch.id:
+            if (
+                current.task_id != dispatch.task_id
+                or current.dispatch_commit_sha256 != dispatch.dispatch_sha256
+            ):
+                raise DeliveryCommandRejected("restart replay identity mismatch")
+            return ProjectDeliveryResult(checkpoint=current)
+        if (
+            current.stage is not DeliveryStage.BLOCKED
+            or current.checkpoint_sha256 != plan.source_checkpoint_sha256
+            or current.task_id != plan.source_task_id
+            or current.candidate_revision is not None
+            or current.dispatch_commit_id != dispatch.source_dispatch_id
+            or current.dispatch_commit_sha256 != plan.source_dispatch_sha256
+        ):
+            raise DeliveryCommandRejected("restart source checkpoint changed")
+        return ProjectDeliveryResult(
+            checkpoint=self._next(
+                store,
+                current,
+                stage=DeliveryStage.DELIVERING,
+                next_action=DeliveryNextAction.RUN_DELIVERY,
+                preparation_sha256=plan.target_preparation_sha256,
+                dispatch_commit_id=dispatch.id,
+                dispatch_commit_sha256=dispatch.dispatch_sha256,
+                task_id=dispatch.task_id,
+                task_revision=0,
+                task_status=TaskStatus.NEW,
+                candidate_revision=None,
+                attempts=current.stage_attempts.increment(DeliveryStage.DELIVERING),
+                at=at,
+            )
+        )
 
     def begin_recovery(
         self,

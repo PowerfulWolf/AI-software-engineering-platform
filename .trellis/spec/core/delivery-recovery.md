@@ -1,5 +1,98 @@
 # Explicit delivery recovery — T044
 
+## Initial context failure before Coder (2026-09-29)
+
+### 1. Scope / Trigger
+
+The original Planner allocation materialized a Task, but initial deterministic plan-context
+compilation failed before any role invocation. This is neither an interrupted Coder nor a
+retained candidate. Merely raising the context limit does not reopen its terminal Task.
+
+### 2. Signatures
+
+```python
+read_pre_execution_snapshot(config, environment, history) -> CandidateRuntimeSnapshot | None
+PreExecutionRestartService.propose(checkpoint) -> RestartProposal | None
+PreExecutionRestartService.approve_and_dispatch(proposal, command) -> ContinuationDispatchRecord
+UnifiedProjectEntryService.begin_pre_execution_restart(plan, dispatch, authorization, *, at)
+FileRecoveryStore.put_restart_plan(plan: PreExecutionRestartPlan)
+FileRecoveryStore.get_restart_authorization(plan_sha256) -> RecoveryAuthorization
+```
+
+`ase request resume ID` and Console `CONTINUE_DELIVERY` return
+`RESTART_APPROVAL_REQUIRED` / `approval.kind=pre_execution_restart`. Approval reuses
+`approved_plan_sha256` (CLI `--approve-plan`) and the exact visible checkpoint/audit reference.
+
+### 3. Contracts
+
+- Source: original `DispatchCommitRecord`, BLOCKED Task at attempt 1 / revision 2;
+  exactly `NEW → PLANNING(task_validated) → BLOCKED`, last reason exactly
+  `BUDGET_EXHAUSTED: Required context exceeds the configured input budget; no automatic retry.`
+  Both events use the original base and contain no artifact IDs. Reject retry-failure records,
+  contexts, artifacts, route attempts, role claims/admission or retained worktree for that Task.
+- Read SQL in a consistent **read-only** transaction, validate all dispatch/journal/Task references,
+  original Product/Approval/Design/Plan and exact parent delegation. No Run/Context/capture is
+  fabricated to satisfy interrupted-Coder contracts.
+- `pre-execution-restart.schema.json` binds source Task/events/checkpoint/dispatch hashes,
+  approved stage chain, parent checkpoint, unchanged target preparation/base, derived target
+  branch, current non-secret config hash, `context_policy=frozen-native-reference-v1`, exact
+  `context_budget`, full frozen parent `context_sources` and `plan_sha256`.
+  Proposal time is the source checkpoint time: identical facts yield identical plans.
+- Store plan/authorization append-only in sidecar `state/pre-execution-<delivery_id>/`,
+  `restart-plan-<sha>.json` / `restart-authorization-<sha>.json`; use private no-follow storage.
+  New policy/source/parent facts require a new exact approval; wrong approval never executes.
+- New `ContinuationDispatchRecord.continuation_kind=pre_execution_restart` uses plan digest as
+  continuation identity and binds `restart_source_checkpoint_sha256`. `source_revision` is the
+  original base, **not** a candidate. This kind has exactly one continuation attempt and is only
+  available for the original Planner allocation; it cannot form an unbounded fresh-Task loop.
+- Reuse `commit_continuation` and its MySQL fence with before/after current-fact checks. Copy the
+  immutable original NEW Task contract, including scope/criteria/retry policy, to the new identity;
+  do not mutate old Task, attempts, events, approvals or verdicts. Dispatch uses current independent
+  Coder/QA/Reviewer allocations and the ordinary claimed Worker path.
+- Attach successor to the native journal **before** execution. After attachment, normal resume
+  reconstructs exact authorization/context and goes through standard queue/knowledge gates.
+  Identical parent sources coalesce; conflicting same-ID sources reject. Later real Coder failures
+  use Coder recovery and retained candidates use independent verification, with validated ancestry.
+- Team read-side reports this successor as `work_kind=delivery`, not QA remediation. Its
+  CaseStartedEvent is `included=false`, preserving the original failed evaluation sample;
+  the new execution must not inflate autonomous success counts. Durable authorization records
+  and Task metadata retain the human restart decision and original Task association.
+
+### 4. Validation & Error Matrix
+
+| Facts | Result |
+| --- | --- |
+| Exact initial context failure, no approval | Stable plan; no model invocation |
+| Wrong/old plan digest or changed context budget | New current approval gate; no dispatch |
+| Different failure or Coder already started | Existing candidate/Coder classification, never fresh restart |
+| Contradictory artifact/context/claim/workspace evidence | Fail closed; preserve evidence |
+| Changed base/preparation | Explicit replanning required; no implicit rebase |
+| Crash after dispatch, before attachment | Exact approved replay adopts same deterministic dispatch |
+| Crash after attachment, before first model | Ordinary Continue resumes same successor |
+| Successor again fails initial context | Stop for premise repair; no recursive fresh restart |
+
+### 5. Good / Base / Bad Cases
+
+Good: fixed context policy, exact approval, new Task completes independent roles and original parent
+DONE; old Task stays BLOCKED. Base: repeat Continue leaves both journals and model count unchanged.
+Bad: loosen `discover_failed_coder`, fabricate a run, reset old attempts/status or approve a candidate
+that never existed.
+
+### 6. Tests Required
+
+`test_pre_execution_restart.py`: real Git/MySQL + offline adapters, original symptom, zero calls before
+approval, wrong/stale policy digest, retained workspace, two crash windows, immutable history,
+preserved contexts, parent DONE, independent role order and subsequent Coder/QA failure recovery.
+`test_restart_contracts.py`: exact event matrix, source drift, claims/admission, scoped immutable
+store/authorization and wire schema. Console/DOM tests verify the approval label and parent cursor.
+
+### 7. Wrong vs Correct
+
+Wrong: `candidate is None → require failed Coder Run` for every terminal Task.
+Correct: classify the proven execution boundary first, then choose initial restart, interrupted
+Coder recovery or candidate verification. A passing new run test alone does not prove that an
+already-blocked production Task can resume. See the operations guide for existing-data handling.
+
 ## Recovery verifier knowledge wait (2026-09-27)
 
 ### Scope / Trigger

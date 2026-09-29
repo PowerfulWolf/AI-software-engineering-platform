@@ -250,7 +250,8 @@
         "continuation_kind": {
           "enum": [
             "verification_remediation",
-            "prerequisite_repair"
+            "prerequisite_repair",
+            "pre_execution_restart"
           ],
           "title": "Continuation Kind",
           "type": "string"
@@ -998,6 +999,21 @@
           "title": "Base Ref",
           "type": "string"
         },
+        "branch_name": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 11,
+              "pattern": "^ai/(feature|bugfix)/[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Branch Name"
+        },
         "acceptance_criteria": {
           "items": {
             "$ref": "#/$defs/AcceptanceCriterion"
@@ -1097,21 +1113,6 @@
           ],
           "default": null,
           "title": "Retry Failures"
-        },
-        "branch_name": {
-          "anyOf": [
-            {
-              "maxLength": 240,
-              "minLength": 11,
-              "pattern": "^ai/(feature|bugfix)/[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Branch Name"
         }
       },
       "required": [

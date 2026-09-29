@@ -1225,7 +1225,10 @@ def _read_task_details(
         update={
             "role_queue": role_queue,
             "work_kind": (
-                "remediation"
+                "delivery"
+                if continuation is not None
+                and continuation.continuation_kind == "pre_execution_restart"
+                else "remediation"
                 if continuation is not None or recovery is not None
                 else base.work_kind
             ),

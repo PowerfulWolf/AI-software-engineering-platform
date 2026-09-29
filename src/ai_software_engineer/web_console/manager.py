@@ -481,6 +481,28 @@ def _summarize(
                     "不授权安装、网络、合并、部署、凭据访问或修改历史结论。",
                 ),
             )
+        elif result.restart_plan is not None:
+            restart = result.restart_plan
+            restart.validate_integrity()
+            approval = ConsoleApprovalRequest(
+                kind="pre_execution_restart",
+                plan_sha256=restart.plan_sha256,
+                title="批准 Coder 启动前重启",
+                facts=(
+                    f"原任务 {restart.source_task_id}",
+                    "原任务在首次上下文编译时阻塞, Coder 尚未启动, 没有代码或候选需要恢复。",
+                    f"目标基线 {restart.target_base_revision}",
+                    *(
+                        (f"目标分支 {restart.target_branch_name}",)
+                        if restart.target_branch_name
+                        else ()
+                    ),
+                    f"上下文输入上限 {restart.context_budget.max_input_tokens}; "
+                    f"输出预留 {restart.context_budget.reserved_output_tokens}",
+                    "保留原需求、审批和失败历史; 创建新 Task, 不重置旧 Task。",
+                    "新 Task 仍须经过独立 Coder、QA、Reviewer, 不授权扩范围、合并或部署。",
+                ),
+            )
         elif result.recovery_plan_sha256 is not None:
             if host is None:
                 raise ValueError("Coder recovery approval requires a trusted plan reader")

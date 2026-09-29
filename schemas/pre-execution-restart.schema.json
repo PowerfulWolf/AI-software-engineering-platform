@@ -1,0 +1,299 @@
+{
+  "$defs": {
+    "AgentRole": {
+      "description": "Delivery-runtime roles bound to Task artifacts and state transitions.",
+      "enum": [
+        "orchestrator",
+        "coder",
+        "qa",
+        "reviewer"
+      ],
+      "title": "AgentRole",
+      "type": "string"
+    },
+    "ContextBudget": {
+      "additionalProperties": false,
+      "description": "Input/output budget and actual input usage for one context bundle.",
+      "properties": {
+        "max_input_tokens": {
+          "minimum": 1,
+          "title": "Max Input Tokens",
+          "type": "integer"
+        },
+        "reserved_output_tokens": {
+          "minimum": 0,
+          "title": "Reserved Output Tokens",
+          "type": "integer"
+        },
+        "used_input_tokens": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Used Input Tokens",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "max_input_tokens",
+        "reserved_output_tokens"
+      ],
+      "title": "ContextBudget",
+      "type": "object"
+    },
+    "ContextSource": {
+      "additionalProperties": false,
+      "description": "A declared inline or root-relative source eligible for role routing.",
+      "properties": {
+        "source_id": {
+          "pattern": "^[a-z][a-z0-9_.:-]{0,127}$",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "uri": {
+          "minLength": 1,
+          "title": "Uri",
+          "type": "string"
+        },
+        "content": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content"
+        },
+        "relative_path": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relative Path"
+        },
+        "roles": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/AgentRole"
+          },
+          "title": "Roles",
+          "type": "array"
+        },
+        "priority": {
+          "default": 100,
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Priority",
+          "type": "integer"
+        },
+        "required": {
+          "default": false,
+          "title": "Required",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "source_id",
+        "uri"
+      ],
+      "title": "ContextSource",
+      "type": "object"
+    },
+    "RecoveryScope": {
+      "additionalProperties": false,
+      "properties": {
+        "team_id": {
+          "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Team Id",
+          "type": "string"
+        },
+        "repository_id": {
+          "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "delivery_id": {
+          "pattern": "^delivery_[a-z0-9][a-z0-9_-]{2,95}$",
+          "title": "Delivery Id",
+          "type": "string"
+        },
+        "repository_root": {
+          "pattern": "^/[^\\x00-\\x1f]*$",
+          "title": "Repository Root",
+          "type": "string"
+        }
+      },
+      "required": [
+        "team_id",
+        "repository_id",
+        "delivery_id",
+        "repository_root"
+      ],
+      "title": "RecoveryScope",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "const": "pre_execution_restart",
+      "default": "pre_execution_restart",
+      "title": "Kind",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "v0.1",
+      "default": "v0.1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "#/$defs/RecoveryScope"
+    },
+    "source_task_id": {
+      "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+      "title": "Source Task Id",
+      "type": "string"
+    },
+    "source_task_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Source Task Sha256",
+      "type": "string"
+    },
+    "source_events_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Source Events Sha256",
+      "type": "string"
+    },
+    "source_checkpoint_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Source Checkpoint Sha256",
+      "type": "string"
+    },
+    "source_dispatch_id": {
+      "minLength": 1,
+      "title": "Source Dispatch Id",
+      "type": "string"
+    },
+    "source_dispatch_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Source Dispatch Sha256",
+      "type": "string"
+    },
+    "approved_stages_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Approved Stages Sha256",
+      "type": "string"
+    },
+    "parent_delivery_id": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Parent Delivery Id"
+    },
+    "parent_checkpoint_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Parent Checkpoint Sha256"
+    },
+    "target_preparation_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Target Preparation Sha256",
+      "type": "string"
+    },
+    "target_base_revision": {
+      "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+      "title": "Target Base Revision",
+      "type": "string"
+    },
+    "target_branch_name": {
+      "anyOf": [
+        {
+          "maxLength": 240,
+          "minLength": 11,
+          "pattern": "^ai/(feature|bugfix)/[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Target Branch Name"
+    },
+    "config_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Config Sha256",
+      "type": "string"
+    },
+    "context_policy": {
+      "const": "frozen-native-reference-v1",
+      "default": "frozen-native-reference-v1",
+      "title": "Context Policy",
+      "type": "string"
+    },
+    "context_budget": {
+      "$ref": "#/$defs/ContextBudget"
+    },
+    "context_sources": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ContextSource"
+      },
+      "title": "Context Sources",
+      "type": "array"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "plan_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Plan Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "scope",
+    "source_task_id",
+    "source_task_sha256",
+    "source_events_sha256",
+    "source_checkpoint_sha256",
+    "source_dispatch_id",
+    "source_dispatch_sha256",
+    "approved_stages_sha256",
+    "target_preparation_sha256",
+    "target_base_revision",
+    "config_sha256",
+    "context_budget",
+    "created_at",
+    "plan_sha256"
+  ],
+  "title": "PreExecutionRestartPlan",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/pre-execution-restart.schema.json"
+}

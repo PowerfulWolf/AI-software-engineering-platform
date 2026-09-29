@@ -209,6 +209,7 @@ class ConsoleApprovalRequest(DomainModel):
     kind: Literal[
         "candidate_verification",
         "coder_recovery",
+        "pre_execution_restart",
         "coder_scope",
         "joint_integration",
         "prerequisite_repair",

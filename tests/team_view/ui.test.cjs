@@ -2394,6 +2394,21 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     },
   };
   fixture.requests[0].stage = "BLOCKED";
+  const priorScopeApproval = storedOperations[1].result.approval;
+  storedOperations[1].result.approval = {
+    kind: "pre_execution_restart",
+    plan_sha256: "e".repeat(64),
+    title: "批准 Coder 启动前重启",
+    facts: ["Coder 尚未启动，保留原 Task 和审批；新 Task 仍须独立 QA/Reviewer。"],
+  };
+  await interval.fn();
+  vm.runInContext('showDetail("request","r1")', context);
+  assert.match(text(get("detail")), /批准 Coder 启动前重启/);
+  assert.match(text(get("detail")), /新 Task 重启计划/);
+  assert.ok(descend(get("detail")).find(
+    (node) => node.tag === "button" && node.textContent === "批准并继续",
+  ));
+  storedOperations[1].result.approval = priorScopeApproval;
   fixture.tasks.forEach((task) => {
     task.blocker =
       "Coder failed at attempt 1: coder run run_fixture failed: Codex worktree changes violated the machine policy";

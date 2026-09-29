@@ -49,6 +49,7 @@ from ai_software_engineer.recovery.records import (
     RecoverySeedRecord,
     RecoveryTaskRecord,
 )
+from ai_software_engineer.recovery.restart_records import PreExecutionRestartPlan
 from ai_software_engineer.recovery.verification_records import (
     CandidateExecutorPrerequisite,
     CandidateRemediationEvidence,
@@ -76,6 +77,7 @@ _Record = TypeVar(
     PrerequisiteRepairPlan,
     ManagerVerificationAdvice,
     CandidateExecutorPrerequisite,
+    PreExecutionRestartPlan,
 )
 
 
@@ -217,6 +219,37 @@ class FileRecoveryStore:
         plan.validate_integrity()
         self._validate_scope(plan)
         return self._put("plan", plan.plan_sha256, plan, RecoveryPlan)
+
+    def put_restart_plan(self, plan: PreExecutionRestartPlan) -> PreExecutionRestartPlan:
+        plan.validate_integrity()
+        if plan.scope != self._scope:
+            raise RecoveryRejected("restart plan scope mismatch")
+        return self._put("restart-plan", plan.plan_sha256, plan, PreExecutionRestartPlan)
+
+    def get_restart_plan(self, plan_sha256: str) -> PreExecutionRestartPlan:
+        plan = self._get("restart-plan", plan_sha256, PreExecutionRestartPlan)
+        plan.validate_integrity()
+        if plan.scope != self._scope or plan.plan_sha256 != plan_sha256:
+            raise RecoveryRejected("restart plan identity mismatch")
+        return plan
+
+    def put_restart_authorization(self, record: RecoveryAuthorization) -> RecoveryAuthorization:
+        plan = self.get_restart_plan(record.command.plan_sha256)
+        record.validate_integrity()
+        if record.command.submitted_at < plan.created_at:
+            raise RecoveryRejected("restart approval predates plan")
+        return self._put("restart-authorization", plan.plan_sha256, record, RecoveryAuthorization)
+
+    def get_restart_authorization(self, plan_sha256: str) -> RecoveryAuthorization:
+        plan = self.get_restart_plan(plan_sha256)
+        record = self._get("restart-authorization", plan_sha256, RecoveryAuthorization)
+        record.validate_integrity()
+        if (
+            record.command.plan_sha256 != plan_sha256
+            or record.command.submitted_at < plan.created_at
+        ):
+            raise RecoveryRejected("restart authorization identity mismatch")
+        return record
 
     def put_repair_plan(self, plan: PrerequisiteRepairPlan) -> PrerequisiteRepairPlan:
         self._validate_repair_plan(plan)
@@ -1016,6 +1049,8 @@ class FileRecoveryStore:
         if category not in (
             "scope",
             "plan",
+            "restart-plan",
+            "restart-authorization",
             "authorization",
             "task",
             "seed",
