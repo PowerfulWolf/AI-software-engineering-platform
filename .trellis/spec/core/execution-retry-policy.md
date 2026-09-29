@@ -1,5 +1,96 @@
 # Execution and retry policy
 
+## Bounded upstream execution-time growth (2026-09-29)
+
+### 1. Scope / Trigger
+
+Product, Designer and Planner complete artifacts cannot checkpoint their model reasoning. The
+joint producer starts with a 600-second local execution window. A Codex CLI process that is
+still incomplete when the local watchdog fires raises
+`StructuredModelError(code=TIMEOUT, timeout_kind="local_execution_limit", transient=False)`.
+This is evidence of a saturated local execution window, **not** proof that the model was
+thinking or that the provider was healthy. The fallback client must not switch routes for this
+classification. An explicit provider failure found in the CLI timeout stderr is classified by
+its provider code instead. A Responses socket timeout has no reliable server-progress evidence
+and remains typed transient; HTTP 504 and other provider errors retain their current routing.
+
+### 2. Signatures
+
+```python
+StructuredModelError(code, safe_message, *, transient,
+                     timeout_kind: Literal["local_execution_limit"] | None = None)
+stage_timeout_seconds(attempts: Mapping[str, int], stage: str) -> int
+JointDeliveryService._stage_output(checkpoint, model, instructions) -> DomainModel
+```
+
+### 3. Contracts
+
+`stage_timeout_seconds(attempts, stage)` uses a bounded geometric series for `product`, `design`
+and `plan`: 600 → 1200 → 2400 seconds. `JointDeliveryService._stage_output` refunds only the
+unfinished reserved work attempt and appends `<stage>_capacity_timeout` to the sealed successor
+checkpoint. The counter is independent of `<stage>_transient`, survives restart and is not
+retroactively inferred for old journals. After the third local-window failure, the next
+invocation is rejected before model launch with `execution time budget exhausted`. No stage,
+approval, feedback, product/design/plan artifact or historical checkpoint is rewritten. A
+successful invocation consumes its normal work attempt; prior capacity facts remain audit
+history. Unknown process interruption does not refund. The knowledge intent/assessment
+subcalls for these three roles receive the same expanded window; Delivery roles retain their
+120-second consultation cap. Deterministic Manager has no model execution path or artificial
+timeout counter.
+
+`StageBudget` projects `capacity_timeouts`, `max_capacity_timeouts=3`, next window and
+`exhausted=capacity`. The Console maps only local-window timeouts to
+`MODEL_EXECUTION_LIMIT`; it leaves `MODEL_TIMEOUT` for transport/provider timeouts. The UI
+must not advise raising the *transient* failure limit when capacity is exhausted or offer a
+known-futile retry. There is no automatic terminal-state rewrite. Operators inspect the
+diagnostics and task size, then plan a smaller new Requirement if the fixed 2400-second
+ceiling is insufficient; do not edit a production checkpoint or reuse an approval.
+An approved historical Design knowledge wait can recover a *work* allowance, not a separately
+exhausted execution-time allowance; both reader and action guard must suppress that futile
+recovery while capacity is exhausted.
+
+### 4. Validation & Error Matrix
+
+| Evidence | Counter / route | Next call |
+| --- | --- | --- |
+| CLI local watchdog, no explicit provider error | `*_capacity_timeout += 1`, no fallback or transient debit | 1200 or 2400 seconds |
+| CLI stderr explicitly reports 504 before watchdog | `*_transient += 1`, fallback permitted | same time window |
+| Responses socket timeout | `*_transient += 1`, fallback permitted | same time window |
+| Valid artifact after expansion | one work attempt, historical capacity fact retained | next stage |
+| Third local watchdog | `*_capacity_timeout == 3` | reject before fourth call |
+
+### 5. Good / Base / Bad Cases
+
+- Good: a 600-second local timeout is sealed, restart invokes the same approved role at 1200
+  seconds, and the eventual artifact passes its ordinary validation.
+- Base: a first-call valid artifact consumes one work attempt with no capacity fact.
+- Bad: treat an ambiguous socket timeout as proof of thinking, switch to a backup after the
+  *local* watchdog, erase a capacity fact, or extend a terminal Task by editing its journal.
+
+### 6. Tests Required
+
+`tests/agents/test_structured_models.py` asserts local vs explicit provider evidence and route
+count; `tests/manager/test_stage_retry_budget.py` asserts all three stage counters, windows,
+restart, success and exhaustion; `tests/knowledge/test_consultation.py` asserts upstream subcalls
+receive the expanded window; `tests/team_view/test_design_budget.py` and UI/Console tests assert
+the projection, action suppression and distinct `MODEL_EXECUTION_LIMIT` code.
+
+### 7. Wrong vs Correct
+
+Wrong: `except TimeoutExpired: raise StructuredModelError(TIMEOUT, transient=True)` followed by
+fallback, because a local execution limit is not a typed provider outage.
+Correct: mark the local timeout origin, refund only the current producer reservation into a
+sealed capacity checkpoint, and calculate the next bounded window from that fact.
+
+### Bug analysis / prevention
+
+Category B/D/E: one error code conflated two boundaries, and tests covered provider failures but
+not the fallback-plus-stage-budget chain. The prevention mechanism is a typed origin on the
+error, a durable independent counter, cross-layer tests and the shared checklist in
+`../guides/timeout-classification.md`. Similar native Task timeouts still have a distinct
+checkpoint/attempt policy; do not copy this joint-upstream policy into Delivery roles without
+their own evidence and contract tests.
+
 ## Scope and signatures
 
 `ProductionConfig.execution_retry_policy: ExecutionRetryPolicy` replaces the Design-only setting.

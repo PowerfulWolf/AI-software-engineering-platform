@@ -13,7 +13,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Literal, Protocol, cast
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -63,6 +63,7 @@ class StructuredModelError(RuntimeError):
         http_status: int | None = None,
         request_id: str | None = None,
         correlation_id: str | None = None,
+        timeout_kind: Literal["local_execution_limit"] | None = None,
     ) -> None:
         safe_message = safe_diagnostic(safe_message) or "模型执行失败, 未记录安全详情"
         super().__init__(safe_message)
@@ -72,11 +73,16 @@ class StructuredModelError(RuntimeError):
         self.http_status = http_status
         self.request_id = request_id
         self.correlation_id = correlation_id
+        self.timeout_kind = timeout_kind
 
     @property
     def retryable(self) -> bool:
         """Only typed transient infrastructure failures allow fallback or retry accounting."""
-        return self.transient and self.code in TRANSIENT_CODES
+        return self.transient and self.timeout_kind is None and self.code in TRANSIENT_CODES
+
+    @property
+    def expandable_timeout(self) -> bool:
+        return self.code is AgentErrorCode.TIMEOUT and self.timeout_kind == "local_execution_limit"
 
     def with_context(self, context: str) -> StructuredModelError:
         return StructuredModelError(
@@ -86,6 +92,7 @@ class StructuredModelError(RuntimeError):
             http_status=self.http_status,
             request_id=self.request_id,
             correlation_id=self.correlation_id,
+            timeout_kind=self.timeout_kind,
         )
 
 
@@ -356,10 +363,19 @@ class CodexCliStructuredModelClient:
                     check=False,
                 )
             except subprocess.TimeoutExpired as error:
+                provider_failure = _timed_out_cli_provider_failure(error.stderr)
+                if provider_failure is not None:
+                    code, transient = provider_failure
+                    raise StructuredModelError(
+                        code,
+                        "Codex CLI reported a provider failure before its local time limit",
+                        transient=transient,
+                    ) from error
                 raise StructuredModelError(
                     AgentErrorCode.TIMEOUT,
-                    "Codex structured execution timed out",
-                    transient=True,
+                    "Codex structured execution reached its local time limit",
+                    transient=False,
+                    timeout_kind="local_execution_limit",
                 ) from error
             except OSError as error:
                 raise StructuredModelError(
@@ -691,12 +707,49 @@ def _classify_text_failure(text: str) -> tuple[AgentErrorCode, bool]:
         r"\b429\b", normalized
     ):
         return AgentErrorCode.RATE_LIMITED, True
-    auth_markers = ("unauthorized", "authentication", "sign in", "login", "missing api key")
+    auth_markers = (
+        "unauthorized",
+        "authentication",
+        "sign in",
+        "login",
+        "missing api key",
+        "refresh token was revoked",
+    )
     if any(marker in normalized for marker in auth_markers) or re.search(
         r"\b(?:401|403)\b", normalized
     ):
         return AgentErrorCode.AUTHENTICATION_ERROR, False
     return AgentErrorCode.PROVIDER_UNAVAILABLE, True
+
+
+def _timed_out_cli_provider_failure(
+    stderr: bytes | str | None,
+) -> tuple[AgentErrorCode, bool] | None:
+    if stderr is None:
+        return None
+    text = stderr.decode("utf-8", errors="replace") if isinstance(stderr, bytes) else stderr
+    normalized = text.lower()
+    explicit = (
+        "insufficient_quota",
+        "quota exceeded",
+        "usage limit",
+        "rate limit",
+        "too many requests",
+        "unauthorized",
+        "authentication",
+        "sign in",
+        "login",
+        "missing api key",
+        "refresh token was revoked",
+        "connection refused",
+        "network error",
+        "service unavailable",
+    )
+    if any(marker in normalized for marker in explicit) or re.search(
+        r"\b(?:401|403|408|429|500|502|503|504)\b", normalized
+    ):
+        return _classify_text_failure(text)
+    return None
 
 
 def _filtered_environment(source: Mapping[str, str]) -> dict[str, str]:

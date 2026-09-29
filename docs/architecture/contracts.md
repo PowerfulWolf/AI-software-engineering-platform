@@ -16,7 +16,9 @@ Reviewer 中断且终态事件或精确的独立验证入场/制品证明已封�
 
 `ProductionConfig.execution_retry_policy` 属于 operator 配置，不改变角色权限或审批。
 联合上游分别持久化 `attempts.{product,design,plan}` 与对应 `_transient` 计数。
-`RequestView.stage_budget` 投影当前上游额度；`design_budget` 保留兼容。新 Task 冻结
+本地 CLI 执行窗口触顶另记对应的 `_capacity_timeout`，按 600→1200→2400 秒扩容，
+不切换备用模型或消耗 `_transient`；显式服务故障仍走临时故障路径。
+`RequestView.stage_budget` 投影当前上游工作、临时故障与执行时间额度；`design_budget` 保留兼容。新 Task 冻结
 `retry_policy`，`retry_failures` 保存独立临时故障事实。旧 Task/Checkpoint 的 wire/hash 不重写。
 `Task.attempts` 是单调执行身份，工作次数由它减去已退款的历史临时失败得出；其跨层最大值为
 400（100 工作次数 + 三角色各 100 临时失败），不是 400 次 Coder 修复授权。完整矩阵见

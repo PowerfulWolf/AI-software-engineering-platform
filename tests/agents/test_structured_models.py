@@ -24,6 +24,7 @@ from ai_software_engineer.agents import (
 class _StaticClient(StructuredModelClient):
     def __init__(self) -> None:
         self.images: tuple[Path, ...] = ()
+        self.calls = 0
 
     def complete(
         self,
@@ -35,6 +36,7 @@ class _StaticClient(StructuredModelClient):
         input_images: tuple[Path, ...] = (),
     ) -> StructuredModelResult:
         del instructions, input_payload, output_schema, timeout_seconds
+        self.calls += 1
         self.images = input_images
         return StructuredModelResult(payload={"result": "ok"}, duration_ms=1)
 
@@ -343,6 +345,53 @@ def test_structured_process_boundary_failures_have_safe_diagnostics(
     assert raised.value.code is expected[kind]
     if kind == "start":
         assert "errno=2" in raised.value.safe_message
+
+
+def test_local_cli_execution_limit_does_not_switch_provider_route(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def run(command: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr("ai_software_engineer.agents.structured.subprocess.run", run)
+    backup = _StaticClient()
+    first = CodexCliStructuredModelClient(repository_root=tmp_path, model="test")
+    client = FallbackStructuredModelClient(
+        (
+            StructuredModelRoute("codex", "first", first),
+            StructuredModelRoute("backup", "next", backup),
+        )
+    )
+    with pytest.raises(StructuredModelError) as raised:
+        client.complete(instructions="Act", input_payload={}, output_schema={}, timeout_seconds=600)
+    assert raised.value.timeout_kind == "local_execution_limit"
+    assert not raised.value.retryable
+    assert backup.calls == 0
+
+
+def test_cli_timeout_with_explicit_provider_failure_uses_transient_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def run(command: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"], stderr=b"HTTP 504")
+
+    monkeypatch.setattr("ai_software_engineer.agents.structured.subprocess.run", run)
+    backup = _StaticClient()
+    client = FallbackStructuredModelClient(
+        (
+            StructuredModelRoute(
+                "codex",
+                "first",
+                CodexCliStructuredModelClient(repository_root=tmp_path, model="test"),
+            ),
+            StructuredModelRoute("backup", "next", backup),
+        )
+    )
+    result = client.complete(
+        instructions="Act", input_payload={}, output_schema={}, timeout_seconds=600
+    )
+    assert result.provider == "backup"
+    assert backup.calls == 1
 
 
 def test_responses_failure_keeps_http_cause_without_credentials() -> None:

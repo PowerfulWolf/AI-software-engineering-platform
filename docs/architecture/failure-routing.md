@@ -4,7 +4,8 @@
 
 | 类别 | 示例 | 默认动作 |
 |---|---|---|
-| `TRANSIENT_INFRA` | 模型超时、临时网络错误、进程被中断 | 进入 `RETRY_SCHEDULED`，释放 Lease，退避后重试原角色 |
+| `TRANSIENT_INFRA` | HTTP 504、socket 超时、临时网络错误 | 进入 `RETRY_SCHEDULED`，释放 Lease，退避后重试原角色 |
+| `EXECUTION_CAPACITY` | 联合 Product/Designer/Planner 的本地 CLI 看门狗触顶, 无明确供应商错误 | 保留 checkpoint、退回未完成工作预留；下一次按 600→1200→2400 秒扩容, 三次后拒绝继续 |
 | `INVALID_OUTPUT` | JSON 不符合 Schema、缺字段、哈希不匹配 | 重启同角色一次；退避期间释放 Lease，重复失败再终局 `BLOCKED` |
 | `QA_FINDING` | criterion/test 明确 `FAIL`、验收标准未满足 | 将 findings 原样路由给 Coder，创建新 attempt |
 | `QA_INCONCLUSIVE` | 无代码 `FAIL`，但测试为 `ERROR` 或标准为 `NOT_TESTED` | 为同一 Candidate 新建 QA verification plan，重新批准后重跑 QA；不调用 Coder |
@@ -29,6 +30,8 @@
 联合 Product/Designer/Planner 的调用前预留工作额度，typed 临时故障通过追加 checkpoint 退款并
 增加独立故障计数；unknown interruption 保守保留预留。当前策略与历史兼容入口的差异见
 [执行与重试契约](../../.trellis/spec/core/execution-retry-policy.md)。
+本地 CLI 超时只能证明本地执行窗口触顶，不能推断模型内部仍在思考；有明确供应商错误时仍按服务
+故障处理。其容量计数独立于临时故障额度，且不能通过提高临时故障预算解除容量上限。
 
 ## 3. 路由矩阵
 

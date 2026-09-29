@@ -21,6 +21,7 @@ from tests.knowledge.test_retrieval_contract import binding, document, snapshot
 class Model:
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.timeouts: list[int] = []
         self.instructions: dict[str, str] = {}
 
     def complete(
@@ -34,6 +35,7 @@ class Model:
     ) -> StructuredModelResult:
         name = str(output_schema["title"])
         self.calls.append(name)
+        self.timeouts.append(timeout_seconds)
         self.instructions[name] = instructions
         if name == "KnowledgeIntent":
             return StructuredModelResult(payload={"queries": ["original payment"]}, duration_ms=1)
@@ -143,6 +145,32 @@ def test_real_composition_seam_consults_and_replays(tmp_path: Path, role: TeamRo
     assert "QA produces its own acceptance evidence" in model.instructions["KnowledgeAssessment"]
     client.complete(**args)  # type: ignore[arg-type]
     assert model.calls == ["KnowledgeIntent", "KnowledgeAssessment", "Output", "Output"]
+
+
+@pytest.mark.parametrize(
+    ("role", "expected"),
+    [
+        (TeamRole.PRODUCT, 300),
+        (TeamRole.DESIGNER, 300),
+        (TeamRole.PLANNER, 300),
+        (TeamRole.CODER, 120),
+    ],
+)
+def test_upstream_knowledge_calls_share_expanded_stage_window(
+    tmp_path: Path, role: TeamRole, expected: int
+) -> None:
+    frozen = snapshot(document())
+    model = Model()
+    client = KnowledgeAwareStructuredClient(
+        model, binding(frozen, role), frozen, KnowledgeRecordStore(tmp_path)
+    )
+    client.complete(
+        instructions="Produce role output",
+        input_payload={"question": "refund"},
+        output_schema={"title": "Output"},
+        timeout_seconds=300,
+    )
+    assert model.timeouts == [expected, expected, 300]
 
 
 def test_unknown_stops_before_final_role_call(tmp_path: Path) -> None:

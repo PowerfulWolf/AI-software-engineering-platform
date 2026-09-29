@@ -22,6 +22,24 @@ test("Product and Planner exhaustion hides futile actions; increased Planner all
   assert.equal(await h.page.locator("#detail").getByRole("button", {name: "重试 Planner", exact: true}).count(), 1);
 });
 
+test("local execution time budget shows next window and hides exhausted retry", async (t) => {
+  const h = await ui(t, {operations: [operation("FAILED", {error_code: "MODEL_EXECUTION_LIMIT"})]});
+  Object.assign(h.team.requests[0], {stage: "DESIGNING", stage_budget: {role: "designer",
+    attempts: 0, max_attempts: 3, transient_failures: 0, max_transient_failures: 5,
+    capacity_timeouts: 2, max_capacity_timeouts: 3, next_timeout_seconds: 2400}});
+  await h.tick();
+  await h.requests();
+  await h.page.evaluate(() => showDetail("request", "request_fixture"));
+  const detail = h.page.locator("#detail");
+  assert.match(await detail.innerText(), /本地执行触顶 2\/3，下次时限 2400 秒/);
+  h.team.requests[0].stage_budget = {...h.team.requests[0].stage_budget,
+    capacity_timeouts: 3, next_timeout_seconds: null, exhausted: "capacity"};
+  await h.tick();
+  await h.page.evaluate(() => showDetail("request", "request_fixture"));
+  assert.match(await detail.innerText(), /本地执行触顶 3\/3，已达上限/);
+  assert.equal(await detail.getByRole("button", {name: "重试 Design", exact: true}).count(), 0);
+});
+
 test("real browser selects recovery over the failed retry and hides it while running", async (t) => {
   const h = await ui(t, {operations: [operation("FAILED")]});
   Object.assign(h.team.requests[0], {stage: "DESIGNING", design_recovery_available: true,

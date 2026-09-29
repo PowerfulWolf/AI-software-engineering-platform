@@ -8,14 +8,16 @@ and failure/recovery presentation. This does not authorize real model replay or 
 ## 2. Signatures
 
 ```python
-StructuredModelError(code: AgentErrorCode, safe_message: str, *, transient: bool)
+StructuredModelError(code: AgentErrorCode, safe_message: str, *, transient: bool,
+                     timeout_kind: Literal["local_execution_limit"] | None = None)
 StructuredModelError.with_context(context: str) -> StructuredModelError
 safe_diagnostic(text: str, *, limit: int = 500) -> str
 provider_error_detail(stderr: str) -> str
 ```
 
 `ManagerConsoleAdapter.execute` maps this error to `ConsoleCommandRejected` with
-`code="MODEL_" + error.code.value` and the bounded safe message. Existing Console Operation
+`code="MODEL_" + error.code.value` and the bounded safe message, except a local execution
+watchdog timeout maps to `MODEL_EXECUTION_LIMIT`. Existing Console Operation
 `error_code/error_summary` fields and immutable records remain the wire contract; no migration.
 
 ## 3. Contracts

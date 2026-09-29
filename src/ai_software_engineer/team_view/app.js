@@ -502,7 +502,7 @@ function requestPresentation(request) {
       blocker: null,
       nextAction: request.next_action,
     };
-  if (request.design_recovery_available)
+  if (request.design_recovery_available && request.stage_budget?.exhausted !== "capacity")
     return {
       group: "blocked",
       status: "DESIGN_RECOVERY_REQUIRED",
@@ -570,7 +570,8 @@ function canContinueDelivery(request) {
 }
 
 function canRecoverDesign(request) {
-  return Boolean(request.design_recovery_available) && !activeOperation(request.id);
+  return Boolean(request.design_recovery_available) &&
+    request.stage_budget?.exhausted !== "capacity" && !activeOperation(request.id);
 }
 
 function canRetryDesign(request) {
@@ -595,7 +596,12 @@ function designBudgetExhausted(request) {
 function designBudgetSummary(request) {
   if (request.stage_budget) {
     const budget = request.stage_budget;
-    return `${budget.role} 工作尝试 ${budget.attempts}/${budget.max_attempts}；临时故障 ${budget.transient_failures}/${budget.max_transient_failures}。`;
+    const capacityCount = budget.capacity_timeouts ?? 0;
+    const capacityLimit = budget.max_capacity_timeouts ?? 3;
+    const time = `；本地执行触顶 ${capacityCount}/${capacityLimit}`;
+    const next = capacityCount >= capacityLimit ? "，已达上限"
+      : `，下次时限 ${budget.next_timeout_seconds ?? 600} 秒`;
+    return `${budget.role} 工作尝试 ${budget.attempts}/${budget.max_attempts}；临时故障 ${budget.transient_failures}/${budget.max_transient_failures}${time}${next}。`;
   }
   const budget = request.design_budget;
   if (!budget) return "Design 预算已用尽。";
@@ -612,6 +618,11 @@ function agentQueueState(agent) {
 
 function stageFailureGuidance(operation) {
   const code = operation?.error_code;
+  if (code === "MODEL_EXECUTION_LIMIT")
+    return {
+      reason: "本地模型执行达到本轮时间上限，未确认是服务故障；审批和 checkpoint 已保留。",
+      action: "可继续原需求；平台将按 600→1200→2400 秒扩容。达到上限后请检查模型诊断和任务规模。",
+    };
   if (code === "PLANNER_TEST_MATRIX_REJECTED")
     return {
       reason: "Planner 测试覆盖不符合设计要求，计划未被接受；拒绝记录与已用预算已保留。",
@@ -655,7 +666,7 @@ function requestBlockingSummary(request) {
       approvedKnowledge: true,
     };
   }
-  if (request.design_recovery_available) {
+  if (canRecoverDesign(request)) {
     const operation = latestOperation(request.id);
     return {
       reasons: [{
@@ -673,7 +684,9 @@ function requestBlockingSummary(request) {
       reasons: [{reason: designBudgetSummary(request), scopes: []}],
       operationReason: latestOperation(request.id)?.error_summary || null,
       approval: null,
-      suggestedAction: "检查失败记录后，在设置 → 通用设置中提高对应预算，保存并重启服务后重试。",
+      suggestedAction: request.stage_budget?.exhausted === "capacity"
+        ? "本地执行时间已扩至上限。请检查逐路由模型诊断和任务规模；当前无法直接继续，不要反复点击重试。"
+        : "检查失败记录后，在设置 → 通用设置中提高对应预算，保存并重启服务后重试。",
       approvedKnowledge: false,
     };
   }
@@ -2501,6 +2514,7 @@ function requestOperation(panel, request, discussionSection) {
         MODEL_QUOTA_EXHAUSTED: "等待额度恢复，或在设置中为 Product 配置有额度的模型并应用配置，然后点击“继续需求讨论”。",
         MODEL_RATE_LIMITED: "模型服务限流，请稍后点击“继续需求讨论”，不要连续重复提交。",
         MODEL_TIMEOUT: "本轮等待模型回复超时；可稍后点击“继续需求讨论”。若反复超时，请检查模型服务连接。",
+        MODEL_EXECUTION_LIMIT: "本地执行窗口已触顶。继续需求讨论时平台会按 600→1200→2400 秒扩大时限；达到上限后请检查模型诊断和任务规模。",
         MODEL_PROVIDER_UNAVAILABLE: "按详情检查 Codex 可执行文件、文件权限或模型服务连接；修复后点击“继续需求讨论”。",
         MODEL_PROVIDER_ERROR: "按服务返回的详情检查模型名称、访问权限和路由配置；修复并应用配置后点击“继续需求讨论”。",
         MODEL_INVALID_OUTPUT: "模型未返回有效的结构化结果。可恢复本轮回复一次；若重复失败，请附此操作编号排查输出格式。",

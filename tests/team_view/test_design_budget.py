@@ -89,3 +89,33 @@ def test_product_and_planner_budget_projection(
     assert view.stage_budget.exhausted == "transient"
     assert view.blocker is not None
     assert service.journal.history(seed.delivery_id) == before
+
+
+def test_local_execution_time_exhaustion_is_visible_without_journal_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _, seed, _ = setup_design(tmp_path)
+    service._save(seed, attempts={"design": 3, "design_capacity_timeout": 3})
+    monkeypatch.setattr(
+        "ai_software_engineer.team_view.reader._design_recovery_available",
+        lambda *_args, **_kwargs: True,
+    )
+    config = ProductionConfig.model_validate(
+        {
+            **ProductionConfig.default().to_wire(),
+            "platform_root": service.team.manifest.platform_root,
+            "team_id": service.team.manifest.team_id,
+        }
+    )
+    before = service.journal.history(seed.delivery_id)
+    view = (
+        ProductionTeamReader(config, {}).snapshot(service.project.manifest.project_id).requests[0]
+    )
+    assert view.stage_budget is not None
+    assert view.stage_budget.exhausted == "capacity"
+    assert view.stage_budget.capacity_timeouts == 3
+    assert view.stage_budget.next_timeout_seconds is None
+    assert "2400" in view.next_action
+    assert not view.design_recovery_available
+    assert service.journal.history(seed.delivery_id) == before

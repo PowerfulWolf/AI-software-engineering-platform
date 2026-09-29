@@ -302,12 +302,18 @@ class ProductionTeamReader:
             active_budget = stage_budget(
                 self.config.execution_retry_policy, joint.stage, joint.attempts
             )
-            design_recovery_available = _design_recovery_available(
+            capacity_exhausted = active_budget is not None and active_budget.exhausted == "capacity"
+            if capacity_exhausted:
+                recheck_available = False
+            design_recovery_available = not capacity_exhausted and _design_recovery_available(
                 selected, journal, joint, policy=self.config.design_retry_policy
             )
             if active_budget is not None and active_budget.exhausted:
                 presented_next_action = (
-                    f"{active_budget.role} 预算已用尽。请检查失败记录，在设置中提高对应预算，"  # noqa: RUF001
+                    f"{active_budget.role} 本地执行时间已扩至 2400 秒仍触顶；"  # noqa: RUF001
+                    "原审批和 checkpoint 已保留。请检查模型诊断和任务规模, 勿直接重复执行。"
+                    if active_budget.exhausted == "capacity"
+                    else f"{active_budget.role} 预算已用尽。请检查失败记录，在设置中提高对应预算，"  # noqa: RUF001
                     "重启服务后重试。"
                 )
             if design_recovery_available:

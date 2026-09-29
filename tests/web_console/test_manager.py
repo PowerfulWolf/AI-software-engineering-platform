@@ -7,7 +7,13 @@ from typing import cast
 
 import pytest
 
-from ai_software_engineer.agents import AgentErrorCode, AgentFailure, AgentResult, AgentRunStatus
+from ai_software_engineer.agents import (
+    AgentErrorCode,
+    AgentFailure,
+    AgentResult,
+    AgentRunStatus,
+    StructuredModelError,
+)
 from ai_software_engineer.context.ports import ContextBudgetExceeded
 from ai_software_engineer.domain import AgentRole
 from ai_software_engineer.domain.project_delivery import PlanTestMatrixError, PlanTestMatrixIssue
@@ -438,6 +444,31 @@ def test_source_revision_drift_has_a_dedicated_browser_error_code(
 
     assert captured.value.code == "SOURCE_REVISION_DRIFT"
     assert "source revision changed" in captured.value.safe_summary
+
+
+def test_local_execution_limit_has_distinct_browser_error_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter, host, entry = _adapter(tmp_path)
+
+    def exhausted(*_args: object, **_kwargs: object) -> None:
+        raise StructuredModelError(
+            AgentErrorCode.TIMEOUT,
+            "local execution window reached",
+            transient=False,
+            timeout_kind="local_execution_limit",
+        )
+
+    monkeypatch.setattr(host, "resume_delivery", exhausted)
+    with pytest.raises(ConsoleCommandRejected) as captured:
+        adapter.execute(
+            ContinueDeliveryIntent(
+                project_id=PROJECT_ID,
+                delivery_id=DELIVERY_ID,
+                expected_checkpoint_sha256=entry.checkpoint.checkpoint_sha256,
+            )
+        )
+    assert captured.value.code == "MODEL_EXECUTION_LIMIT"
 
 
 def test_planner_matrix_rejection_has_a_dedicated_browser_error_code(

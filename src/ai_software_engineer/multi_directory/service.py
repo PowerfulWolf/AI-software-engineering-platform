@@ -36,7 +36,7 @@ from ai_software_engineer.multi_directory.attachments import (
     MAX_REQUIREMENT_SCREENSHOTS,
     RequirementAttachmentStore,
 )
-from ai_software_engineer.multi_directory.budget import DesignRetryPolicy
+from ai_software_engineer.multi_directory.budget import DesignRetryPolicy, stage_timeout_seconds
 from ai_software_engineer.multi_directory.integration_commands import planner_command_policy
 from ai_software_engineer.multi_directory.models import (
     Candidate,
@@ -396,7 +396,7 @@ class JointDeliveryService:
                 raise ValueError(
                     "design recovery requires an exhausted DESIGNING checkpoint without a design"
                 )
-            self._require_design_transient_budget(checkpoint)
+            self._require_stage_retry_budget(checkpoint, "design")
             source = self._approved_design_wait(checkpoint)
             assert source.knowledge_gap_id is not None
             records = find_gap_records(
@@ -829,7 +829,7 @@ class JointDeliveryService:
                 next_action="Discover one product across all prepared directories.",
             )
         if checkpoint.stage is JointStage.PRODUCT_DISCOVERY:
-            self._require_stage_transient_budget(checkpoint, "product")
+            self._require_stage_retry_budget(checkpoint, "product")
             checkpoint = self._attempt(
                 checkpoint, "product", limit=self.execution_retry_policy.product.max_attempts
             )
@@ -868,7 +868,7 @@ class JointDeliveryService:
                 ),
             )
         while checkpoint.stage is JointStage.DESIGNING:
-            self._require_design_transient_budget(checkpoint)
+            self._require_stage_retry_budget(checkpoint, "design")
             checkpoint = self._attempt(
                 checkpoint, "design", limit=self.design_retry_policy.max_design_attempts
             )
@@ -935,7 +935,7 @@ class JointDeliveryService:
                 raise ValueError("durable planning gate drifted from exact design facts")
             self._stage_workflow(checkpoint).require("planning-gate", checkpoint)
             if decision.mode is PlanningMode.COMPLEX:
-                self._require_stage_transient_budget(checkpoint, "plan")
+                self._require_stage_retry_budget(checkpoint, "plan")
                 checkpoint = self._attempt(
                     checkpoint, "plan", limit=self.execution_retry_policy.planner.max_attempts
                 )
@@ -1165,6 +1165,12 @@ class JointDeliveryService:
             if model is JointTechnicalDesign
             else TeamRole.PLANNER
         )
+        stage_counter = {
+            TeamRole.PRODUCT: "product",
+            TeamRole.DESIGNER: "design",
+            TeamRole.PLANNER: "plan",
+        }[role]
+        timeout_seconds = stage_timeout_seconds(checkpoint.attempts, stage_counter)
         client = self.backend.client(checkpoint, role)
         output_schema = model.model_json_schema()
         if model is JointTechnicalDesign:
@@ -1180,7 +1186,7 @@ class JointDeliveryService:
                 instructions=_POLICY + instructions,
                 input_payload=payload,
                 output_schema=output_schema,
-                timeout_seconds=600,
+                timeout_seconds=timeout_seconds,
                 input_images=image_paths,
             )
         else:
@@ -1188,7 +1194,7 @@ class JointDeliveryService:
                 instructions=_POLICY + instructions,
                 input_payload=payload,
                 output_schema=output_schema,
-                timeout_seconds=600,
+                timeout_seconds=timeout_seconds,
             )
         try:
             return model.model_validate(result.payload)
@@ -1208,10 +1214,8 @@ class JointDeliveryService:
             return fast_joint_plan(checkpoint)
         return self._stage_output(checkpoint, JointExecutionPlan, instructions)
 
-    def _require_design_transient_budget(self, checkpoint: JointCheckpoint) -> None:
-        self._require_stage_transient_budget(checkpoint, "design")
-
-    def _require_stage_transient_budget(self, checkpoint: JointCheckpoint, stage: str) -> None:
+    def _require_stage_retry_budget(self, checkpoint: JointCheckpoint, stage: str) -> None:
+        stage_timeout_seconds(checkpoint.attempts, stage)
         policy = {
             "product": self.execution_retry_policy.product,
             "design": self.execution_retry_policy.designer,
@@ -1249,10 +1253,10 @@ class JointDeliveryService:
             self._save(checkpoint, attempts=attempts)
             raise
         except StructuredModelError as error:
-            if error.retryable:
+            if error.retryable or error.expandable_timeout:
                 attempts = dict(checkpoint.attempts)
                 attempts[stage] -= 1
-                key = stage + "_transient"
+                key = stage + ("_capacity_timeout" if error.expandable_timeout else "_transient")
                 attempts[key] = attempts.get(key, 0) + 1
                 self._save(checkpoint, attempts=attempts)
             raise

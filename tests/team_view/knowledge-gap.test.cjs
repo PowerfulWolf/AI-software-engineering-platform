@@ -82,6 +82,36 @@ test("Planner rejection guidance distinguishes coverage, legacy validation and p
   assert.equal(findButton(h, "重试 Planner"), undefined);
 });
 
+test("local execution limit shows geometric window and prevents a futile retry", () => {
+  const h = harness(async () => ({ok: true, json: async () => []}));
+  vm.runInContext(`
+    snapshot.requests[0].stage = "PLANNING";
+    snapshot.requests[0].stage_budget = {role: "planner", attempts: 0, max_attempts: 3,
+      transient_failures: 0, max_transient_failures: 5, capacity_timeouts: 2,
+      max_capacity_timeouts: 3, next_timeout_seconds: 2400};
+    operations = [{operation_id: "op", status: "FAILED", error_code: "MODEL_EXECUTION_LIMIT",
+      error_summary: "local execution limit", intent: {action: "CONTINUE_DELIVERY", delivery_id: "r1"}}];
+    renderDetail();
+  `, h.context);
+  assert.match(text(h.detail()), /本地执行触顶 2\/3.*下次时限 2400 秒/);
+  assert.ok(findButton(h, "重试 Planner"));
+  vm.runInContext(`
+    snapshot.requests[0].stage_budget.capacity_timeouts = 3;
+    snapshot.requests[0].stage_budget.next_timeout_seconds = null;
+    snapshot.requests[0].stage_budget.exhausted = "capacity";
+    renderDetail();
+  `, h.context);
+  assert.match(text(h.detail()), /本地执行触顶 3\/3.*已达上限/);
+  assert.equal(findButton(h, "重试 Planner"), undefined);
+  assert.match(text(h.detail()), /当前无法直接继续/);
+  vm.runInContext(`
+    snapshot.requests[0].stage = "DESIGNING";
+    snapshot.requests[0].design_recovery_available = true;
+    renderDetail();
+  `, h.context);
+  assert.equal(findButton(h, "恢复设计"), undefined);
+});
+
 test("knowledge waits retain their durable origin instead of falling back to Product", () => {
   const h = harness(async () => ({ok: true, json: async () => []}));
   for (const [origin, label] of [["DESIGNING", "设计"], ["PLANNING", "计划"], [null, null]]) {
@@ -111,6 +141,14 @@ test("blocked delivery flow highlights the durable failed stage", () => {
   );
   assert.equal(
     all(dispatchFlow).filter((node) => node.tag === "li")[2].className,
+    "blocked",
+  );
+  const deliveryFlowWithoutRoleQueue = vm.runInContext(
+    'deliveryFlow({...snapshot.requests[0], stage: "BLOCKED", failed_stages: ["DELIVERING"]})',
+    h.context,
+  );
+  assert.equal(
+    all(deliveryFlowWithoutRoleQueue).filter((node) => node.tag === "li")[3].className,
     "blocked",
   );
 });

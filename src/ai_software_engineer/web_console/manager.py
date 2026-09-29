@@ -256,7 +256,10 @@ class ManagerConsoleAdapter:
                 "通过继续交付生成并审批新计划; 不要重复执行已消费的审批。",
             ) from error
         except StructuredModelError as error:
-            raise ConsoleCommandRejected("MODEL_" + error.code.value, error.safe_message) from error
+            code = (
+                "MODEL_EXECUTION_LIMIT" if error.expandable_timeout else "MODEL_" + error.code.value
+            )
+            raise ConsoleCommandRejected(code, error.safe_message) from error
         except AgentRunFailed as error:
             failure = error.result.error
             code = failure.code.value if failure is not None else error.result.status.value

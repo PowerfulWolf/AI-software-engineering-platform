@@ -10,6 +10,7 @@ from ai_software_engineer.manager.delivery import ResumeProjectDelivery
 from ai_software_engineer.multi_directory.models import JointStage
 from ai_software_engineer.multi_directory.service import JointDeliveryService
 from tests.manager.test_joint_designer_feedback import setup_design
+from tests.manager.test_joint_planner_feedback import DeliveryReached
 
 
 @pytest.mark.parametrize(
@@ -92,3 +93,80 @@ def test_knowledge_gate_before_planner_reservation_cannot_refund_old_work(
     result = service.resume(ResumeProjectDelivery(delivery_id=seed.delivery_id)).checkpoint
     assert result.stage is JointStage.WAITING_HUMAN
     assert result.attempts == {"plan": 2}, "no new invocation was reserved to refund"
+
+
+@pytest.mark.parametrize(
+    ("stage", "counter"),
+    [
+        (JointStage.PRODUCT_DISCOVERY, "product"),
+        (JointStage.DESIGNING, "design"),
+        (JointStage.PLANNING, "plan"),
+    ],
+)
+def test_local_execution_limit_grows_without_spending_work_or_transient_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stage: JointStage,
+    counter: str,
+) -> None:
+    service, backend, seed, _ = setup_design(tmp_path)
+    seed = service._save(
+        seed, stage=stage, design=backend.designs[1] if counter == "plan" else None
+    )
+    seen: list[int] = []
+
+    def timed_out(*_args: object, **kwargs: object) -> None:
+        seen.append(int(kwargs["timeout_seconds"]))
+        raise StructuredModelError(
+            AgentErrorCode.TIMEOUT,
+            "local execution limit reached",
+            transient=False,
+            timeout_kind="local_execution_limit",
+        )
+
+    monkeypatch.setattr(backend, "complete", timed_out)
+    command = ResumeProjectDelivery(delivery_id=seed.delivery_id)
+    for expected in (600, 1200, 2400):
+        reopened = JointDeliveryService(backend=backend, team=service.team, project=service.project)
+        with pytest.raises(StructuredModelError):
+            reopened.resume(command)
+        assert seen[-1] == expected
+    failed = service.status(seed.delivery_id).checkpoint
+    assert failed.attempts == {counter: 0, counter + "_capacity_timeout": 3}
+    with pytest.raises(ValueError, match=r"execution time.*exhausted"):
+        service.resume(command)
+    assert seen == [600, 1200, 2400]
+
+
+def test_success_after_expansion_retains_only_one_design_work_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, backend, seed, _ = setup_design(tmp_path)
+    valid = backend.designs[1]
+    seen: list[int] = []
+
+    def complete(*args: object, **kwargs: object) -> object:
+        seen.append(int(kwargs["timeout_seconds"]))
+        if len(seen) == 1:
+            raise StructuredModelError(
+                AgentErrorCode.TIMEOUT,
+                "local execution limit reached",
+                transient=False,
+                timeout_kind="local_execution_limit",
+            )
+        return backend_complete(*args, **kwargs)
+
+    backend.designs = [valid]
+    backend_complete = backend.complete
+    monkeypatch.setattr(backend, "complete", complete)
+    command = ResumeProjectDelivery(delivery_id=seed.delivery_id)
+    with pytest.raises(StructuredModelError):
+        service.resume(command)
+    with pytest.raises(DeliveryReached):
+        service.resume(command)
+    assert seen[:2] == [600, 1200]
+    assert service.status(seed.delivery_id).checkpoint.attempts == {
+        "design": 1,
+        "design_capacity_timeout": 1,
+        "plan": 1,
+    }

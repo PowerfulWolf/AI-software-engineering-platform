@@ -15,6 +15,7 @@ from ai_software_engineer.agents.structured import (
     StructuredModelError,
     StructuredModelResult,
 )
+from ai_software_engineer.domain.enums import TeamRole
 from ai_software_engineer.domain.identity import RepositoryId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.knowledge.gaps import (
@@ -397,8 +398,6 @@ class KnowledgeConsultationService:
             )
         workflow_ids: tuple[str, ...] = ()
         if assessment.status == "SUFFICIENT":
-            from ai_software_engineer.domain.enums import TeamRole
-
             name: SkillName = (
                 "before-dev"
                 if binding.role in {TeamRole.DESIGNER, TeamRole.CODER}
@@ -512,7 +511,11 @@ class KnowledgeAwareStructuredClient:
                 self.binding,
                 self.snapshot,
                 enriched,
-                timeout_seconds=min(timeout_seconds, 120),
+                timeout_seconds=(
+                    timeout_seconds
+                    if self.binding.role in {TeamRole.PRODUCT, TeamRole.DESIGNER, TeamRole.PLANNER}
+                    else min(timeout_seconds, 120)
+                ),
             )
         except ValidationError as error:
             raise StructuredModelError(

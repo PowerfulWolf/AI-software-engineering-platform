@@ -1052,12 +1052,19 @@
           "title": "Attempts",
           "type": "integer"
         },
+        "capacity_timeouts": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Capacity Timeouts",
+          "type": "integer"
+        },
         "exhausted": {
           "anyOf": [
             {
               "enum": [
                 "work",
-                "transient"
+                "transient",
+                "capacity"
               ],
               "type": "string"
             },
@@ -1075,12 +1082,32 @@
           "title": "Max Attempts",
           "type": "integer"
         },
+        "max_capacity_timeouts": {
+          "const": 3,
+          "default": 3,
+          "title": "Max Capacity Timeouts",
+          "type": "integer"
+        },
         "max_transient_failures": {
           "default": 5,
           "maximum": 100,
           "minimum": 1,
           "title": "Max Transient Failures",
           "type": "integer"
+        },
+        "next_timeout_seconds": {
+          "anyOf": [
+            {
+              "maximum": 2400,
+              "minimum": 600,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Next Timeout Seconds"
         },
         "role": {
           "enum": [

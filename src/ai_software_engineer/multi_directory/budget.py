@@ -17,6 +17,17 @@ from ai_software_engineer.domain.retry_policy import (
 AttemptLimit = RetryLimit
 AttemptCount = Annotated[StrictInt, Field(ge=0)]
 DESIGN_TRANSIENT_COUNTER = "design_transient"
+CAPACITY_TIMEOUT_LIMIT = 3
+BASE_STAGE_TIMEOUT_SECONDS = 600
+MAX_STAGE_TIMEOUT_SECONDS = 2400
+
+
+def stage_timeout_seconds(attempts: Mapping[str, int], stage: str) -> int:
+    """Bounded geometric growth after a sealed local execution-limit failure."""
+    count = attempts.get(stage + "_capacity_timeout", 0)
+    if count < 0 or count >= CAPACITY_TIMEOUT_LIMIT:
+        raise ValueError(f"joint {stage} execution time budget exhausted")
+    return min(BASE_STAGE_TIMEOUT_SECONDS * (1 << count), MAX_STAGE_TIMEOUT_SECONDS)
 
 
 class DesignRetryPolicy(DomainModel):
@@ -53,7 +64,10 @@ class StageBudget(StageRetryPolicy):
     role: Literal["product", "designer", "planner"]
     attempts: AttemptCount
     transient_failures: AttemptCount
-    exhausted: Literal["work", "transient"] | None = None
+    capacity_timeouts: AttemptCount = 0
+    max_capacity_timeouts: Literal[3] = 3
+    next_timeout_seconds: Annotated[StrictInt, Field(ge=600, le=2400)] | None = None
+    exhausted: Literal["work", "transient", "capacity"] | None = None
 
 
 def stage_budget(
@@ -74,13 +88,20 @@ def stage_budget(
         role
     ]
     work, transient = attempts.get(counter, 0), attempts.get(counter + "_transient", 0)
+    capacity = attempts.get(counter + "_capacity_timeout", 0)
     return StageBudget(
         role=role,
         attempts=work,
         transient_failures=transient,
+        capacity_timeouts=capacity,
+        next_timeout_seconds=(
+            stage_timeout_seconds(attempts, counter) if capacity < CAPACITY_TIMEOUT_LIMIT else None
+        ),
         max_attempts=limits.max_attempts,
         max_transient_failures=limits.max_transient_failures,
-        exhausted="transient"
+        exhausted="capacity"
+        if capacity >= CAPACITY_TIMEOUT_LIMIT
+        else "transient"
         if transient >= limits.max_transient_failures
         else "work"
         if work >= limits.max_attempts
