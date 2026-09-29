@@ -38,6 +38,8 @@
 
 ## Files
 
+- [`manager-coordination.md`](manager-coordination.md): owned Manager model runs, configurable time growth and policy-bound cross-stage advice.
+
 - [`branch-naming.md`](branch-naming.md): approved semantic branches, immutable Task binding and legacy recovery.
 
 - [`project-navigation.md`](project-navigation.md): latest-intent navigation, serial refresh and visible Project identity.

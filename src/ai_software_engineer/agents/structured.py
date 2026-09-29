@@ -35,6 +35,7 @@ from ai_software_engineer.agents.openai_compatible import (
     HttpTransport,
     UrllibHttpTransport,
 )
+from ai_software_engineer.agents.structured_execution import run_structured_command
 from ai_software_engineer.config.codex_proxy import (
     codex_cli_proxy_key_environment,
     codex_cli_proxy_overrides,
@@ -330,7 +331,7 @@ class CodexCliStructuredModelClient:
                     for repository in self._additional_repository_roots
                     for argument in ("--add-dir", str(repository))
                 )
-                completed = subprocess.run(
+                completed = run_structured_command(
                     (
                         self._executable,
                         "exec",

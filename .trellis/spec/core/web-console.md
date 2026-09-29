@@ -778,8 +778,8 @@ catalog-route path without silently changing per-Agent model policy.
    old `ProductionConfig` validator even after browser refresh. `DomainModel(extra="forbid")` then
    reports a generic 422 for every save, including an unchanged draft.
 2. Signatures: `GET /api/v1/admin/settings` and successful `PUT /api/v1/admin/settings` return
-   `SettingsSnapshot.settings_contract_version: Literal[1]`. This marker is response metadata, not a
-   `ProductionConfig` field and not a request field. `renderSettings` requires exact version `1`
+   `SettingsSnapshot.settings_contract_version: Literal[2]`. This marker is response metadata, not a
+   `ProductionConfig` field and not a request field. `renderSettings` requires exact version `2`
    before issuing a Settings PUT.
 3. Contract: missing or different marker means the browser must show a visible restart/refresh
    instruction and preserve the draft. It must not submit credentials or any config to that service.
@@ -790,9 +790,9 @@ catalog-route path without silently changing per-Agent model policy.
 
    | GET marker | Save action | Result |
    |---|---|---|
-   | `1` | valid draft | normal PUT and save-result dialog |
-   | absent or not `1` | any draft | no PUT; version-mismatch notice and error dialog |
-   | `1` | invalid draft | normal client/server rejection, draft retained |
+   | `2` | valid draft | normal PUT and save-result dialog |
+   | absent or not `2` | any draft | no PUT; version-mismatch notice and error dialog |
+   | `2` | invalid draft | normal client/server rejection, draft retained |
 
 5. Good/Base/Bad: Good — current page/current service saves. Base — current page/old service blocks
    without write and asks for a supervised restart. Bad — rely on browser refresh alone or forward
@@ -805,6 +805,11 @@ catalog-route path without silently changing per-Agent model policy.
    correct — compare `settings_contract_version` exactly before serializing the draft. When changing
    the Settings wire contract incompatibly, increment the marker in the Python response and JS,
    update fixtures, and require a managed Console restart after checkout updates.
+
+Version 2 adds `execution_retry_policy.manager` and four role-specific `execution_time` policies.
+Basic settings separates work/transient counts from time windows and coordination rounds. The
+request read model's optional `coordination` preserves the original delivery stage; it is not an
+approval or a verdict. Exact pending approval UI takes precedence over Manager waiting advice.
 
 - A config save uses same-directory temporary file, fsync and atomic replace. It validates the selected
   Team/name before publication. Any changed saved config or write-only runtime variable is marked

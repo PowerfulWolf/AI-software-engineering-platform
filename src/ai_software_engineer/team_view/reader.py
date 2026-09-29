@@ -310,7 +310,8 @@ class ProductionTeamReader:
             )
             if active_budget is not None and active_budget.exhausted:
                 presented_next_action = (
-                    f"{active_budget.role} 本地执行时间已扩至 2400 秒仍触顶；"  # noqa: RUF001
+                    f"{active_budget.role} 本地执行时间额度已用尽 "
+                    f"(配置窗口上限 {active_budget.max_timeout_seconds} 秒); "
                     "原审批和 checkpoint 已保留。请检查模型诊断和任务规模, 勿直接重复执行。"
                     if active_budget.exhausted == "capacity"
                     else f"{active_budget.role} 预算已用尽。请检查失败记录，在设置中提高对应预算，"  # noqa: RUF001
@@ -381,6 +382,7 @@ class ProductionTeamReader:
                     design_recovery_available=design_recovery_available,
                     design_budget=design_budget,
                     stage_budget=active_budget,
+                    coordination=joint.coordination,
                 )
             )
         tasks: list[TaskView] = []

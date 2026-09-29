@@ -240,7 +240,10 @@ subprocess/filesystem handle。
 
 - `ProductionConfig.execution_retry_policy` 分开限制六个模型角色的工作/临时故障额度，
   每项为 1–100，保存并重启生效。Product 工作默认 20，Designer/Planner/Coder 默认 3；
-  六角色临时故障各默认 5。QA/Review 有效否定结论必须回 Coder，Manager 无模型额度。
+  七角色临时故障各默认 5。QA/Review 有效否定结论必须回 Coder；Manager 模型用于跨阶段
+  阻塞诊断和验证协调，产物/修正默认 2 次、同阶段协调默认 3 轮。Manager/Product/Designer/
+  Planner 的本地执行窗口按 2 倍增长，初始/最长时限及触顶次数由 `execution_time` 配置，
+  与服务故障分开记账。Manager 只自动重试已授权且预算内的未完成产出，不审批或改写 verdict。
   联合上游仅 typed retryable provider failure 退回工作预留并追加对应 `_transient` 计数；
   未知中断不退款。新 Task 冻结 `retry_policy`，`record_retry_failure` 原子追加故障和下一
   执行身份，MySQL 写前/写后 fence 且新 Run 必须有新 claim；工作额度不再等于执行身份。

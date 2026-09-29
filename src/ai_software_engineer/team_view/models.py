@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import AwareDatetime
 
+from ai_software_engineer.domain.coordination import ManagerCoordinationAdvice
 from ai_software_engineer.domain.enums import AgentRole, TeamRole, WorkItemStatus
 from ai_software_engineer.domain.model import CodexConnectionMode, DomainModel, ProviderRouteKind
 from ai_software_engineer.knowledge.views import KnowledgeGapView
@@ -123,6 +124,7 @@ class RequestView(DomainModel):
     design_recovery_available: bool = False
     design_budget: DesignBudget | None = None
     stage_budget: StageBudget | None = None
+    coordination: ManagerCoordinationAdvice | None = None
 
 
 class AgentView(DomainModel):

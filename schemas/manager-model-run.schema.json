@@ -1,0 +1,272 @@
+{
+  "$defs": {
+    "ExecutionTimePolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "initial_seconds": {
+          "default": 600,
+          "maximum": 86400,
+          "minimum": 1,
+          "title": "Initial Seconds",
+          "type": "integer"
+        },
+        "max_seconds": {
+          "default": 2400,
+          "maximum": 86400,
+          "minimum": 1,
+          "title": "Max Seconds",
+          "type": "integer"
+        },
+        "max_capacity_timeouts": {
+          "default": 3,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Capacity Timeouts",
+          "type": "integer"
+        }
+      },
+      "title": "ExecutionTimePolicy",
+      "type": "object"
+    },
+    "JsonValue": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "ManagerRetryPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "max_transient_failures": {
+          "default": 5,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Transient Failures",
+          "type": "integer"
+        },
+        "max_attempts": {
+          "default": 2,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Attempts",
+          "type": "integer"
+        },
+        "max_coordination_rounds": {
+          "default": 3,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Coordination Rounds",
+          "type": "integer"
+        }
+      },
+      "title": "ManagerRetryPolicy",
+      "type": "object"
+    },
+    "ManagerRunScope": {
+      "additionalProperties": false,
+      "properties": {
+        "team_id": {
+          "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Team Id",
+          "type": "string"
+        },
+        "project_id": {
+          "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "requirement_id": {
+          "minLength": 1,
+          "title": "Requirement Id",
+          "type": "string"
+        },
+        "stage": {
+          "minLength": 1,
+          "title": "Stage",
+          "type": "string"
+        }
+      },
+      "required": [
+        "team_id",
+        "project_id",
+        "requirement_id",
+        "stage"
+      ],
+      "title": "ManagerRunScope",
+      "type": "object"
+    },
+    "WirePayload": {
+      "additionalProperties": {
+        "$ref": "#/$defs/JsonValue"
+      },
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "const": "manager_model_run",
+      "default": "manager_model_run",
+      "title": "Kind",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "#/$defs/ManagerRunScope"
+    },
+    "sequence": {
+      "minimum": 1,
+      "title": "Sequence",
+      "type": "integer"
+    },
+    "run_id": {
+      "minLength": 1,
+      "title": "Run Id",
+      "type": "string"
+    },
+    "agent_id": {
+      "const": "agent_team_manager",
+      "default": "agent_team_manager",
+      "title": "Agent Id",
+      "type": "string"
+    },
+    "input_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Input Sha256",
+      "type": "string"
+    },
+    "context_manifest_id": {
+      "minLength": 1,
+      "title": "Context Manifest Id",
+      "type": "string"
+    },
+    "state": {
+      "enum": [
+        "STARTED",
+        "SUCCEEDED",
+        "TRANSIENT",
+        "CAPACITY",
+        "INVALID",
+        "FAILED"
+      ],
+      "title": "State",
+      "type": "string"
+    },
+    "started_at": {
+      "format": "date-time",
+      "title": "Started At",
+      "type": "string"
+    },
+    "expires_at": {
+      "format": "date-time",
+      "title": "Expires At",
+      "type": "string"
+    },
+    "owner_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Owner Sha256",
+      "type": "string"
+    },
+    "timeout_seconds": {
+      "maximum": 86400,
+      "minimum": 1,
+      "title": "Timeout Seconds",
+      "type": "integer"
+    },
+    "retry_policy": {
+      "$ref": "#/$defs/ManagerRetryPolicy"
+    },
+    "time_policy": {
+      "$ref": "#/$defs/ExecutionTimePolicy"
+    },
+    "provider": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Provider"
+    },
+    "model": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Model"
+    },
+    "result": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WirePayload"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "error_code": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Error Code"
+    }
+  },
+  "required": [
+    "scope",
+    "sequence",
+    "run_id",
+    "input_sha256",
+    "context_manifest_id",
+    "state",
+    "started_at",
+    "expires_at",
+    "owner_sha256",
+    "timeout_seconds",
+    "retry_policy",
+    "time_policy"
+  ],
+  "title": "ManagerRunRecord",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/manager-model-run.schema.json"
+}

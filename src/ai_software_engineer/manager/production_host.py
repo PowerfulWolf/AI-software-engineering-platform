@@ -36,6 +36,7 @@ from ai_software_engineer.manager.production_rules import (
 )
 from ai_software_engineer.manager.queue_capacity import production_role_queue
 from ai_software_engineer.manager.spec_rules import ProductionProjectRuleProvider
+from ai_software_engineer.manager.stage_coordination import ProductionStageCoordinator
 from ai_software_engineer.manager.team_roster import production_team_roster
 from ai_software_engineer.multi_directory.models import JointDeliveryResult, JointStage
 from ai_software_engineer.multi_directory.production import ProductionJointBackend
@@ -380,6 +381,13 @@ class TeamHost:
             team=self._team,
             project=project,
             execution_retry_policy=self._config.execution_retry_policy,
+            coordinator=ProductionStageCoordinator(
+                self._config,
+                self._environment,
+                self._structured_clients
+                or ConfiguredStructuredClientFactory(self._config, self._environment),
+                self._team.directory("work-items") / "manager-model-runs",
+            ),
             backend=ProductionJointBackend(
                 native=backend,
                 factory=derived_backend,

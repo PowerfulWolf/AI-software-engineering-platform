@@ -10,6 +10,7 @@ from typing import Annotated, Literal, Self
 from pydantic import AwareDatetime, Field, model_validator
 
 from ai_software_engineer.context import ContextSource
+from ai_software_engineer.domain.coordination import ManagerCoordinationAdvice
 from ai_software_engineer.domain.identity import ProjectId, TeamId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.project_delivery import (
@@ -451,10 +452,18 @@ class JointCheckpoint(DomainModel):
     single_repository_acceptance: SingleRepositoryAcceptance | None = None
     attempts: dict[str, int] = Field(default_factory=dict)
     next_action: NonEmptyStr
+    coordination: ManagerCoordinationAdvice | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     checkpoint_sha256: Digest
 
     @model_validator(mode="after")
     def validate_chain(self) -> Self:
+        if self.coordination is not None and (
+            self.coordination.requirement_id != self.delivery_id
+            or self.coordination.stage != self.stage.value
+        ):
+            raise ValueError("Manager advice belongs to another Requirement or stage")
         if (self.sequence == 1) != (self.previous_checkpoint_sha256 is None):
             raise ValueError("joint checkpoint sequence/parent mismatch")
         ensure_unique((p.unit_id for p in self.preparations), "prepared units")

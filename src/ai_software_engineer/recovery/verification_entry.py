@@ -36,6 +36,8 @@ from ai_software_engineer.manager.dispatch import (
     DispatchWorkforceSnapshot,
     VerificationReservation,
 )
+from ai_software_engineer.manager.model_execution import ManagerModelExecutor
+from ai_software_engineer.manager.model_store import MySqlManagerRecordStore
 from ai_software_engineer.manager.mysql_dispatch_authority import MySqlDispatchAuthority
 from ai_software_engineer.manager.native_ui import (
     NativeUiScenario,
@@ -120,6 +122,36 @@ def verification_store_root(source: NativeCandidateSource) -> Path:
         Path(source.stages.preparation.repository_workspace_root)
         / "state"
         / f"candidate-verification-{source.scope.delivery_id}"
+    )
+
+
+def _manager_executor(
+    config: ProductionConfig,
+    environment: Mapping[str, str],
+    source: NativeCandidateSource,
+) -> ManagerModelExecutor:
+    from ai_software_engineer.manager.model_execution import (
+        ManagerModelExecutor,
+        ManagerRunScope,
+        MySqlManagerClaimAuthority,
+    )
+
+    team = TeamWorkspace.initialize(
+        config.platform_root, team_id=config.team_id, name=config.team_name, read_only=True
+    )
+    project, _ = team.project_registry().locate_repository(source.scope.repository_id)
+    return ManagerModelExecutor(
+        root=team.directory("work-items") / "manager-model-runs",
+        scope=ManagerRunScope(
+            team_id=config.team_id,
+            project_id=project.manifest.project_id,
+            requirement_id=source.parent_delivery_id or source.scope.delivery_id,
+            stage="VERIFICATION:" + source.scope.repository_id,
+        ),
+        authority=MySqlManagerClaimAuthority(config.require_mysql_dsn(environment)),
+        retry_policy=config.execution_retry_policy.manager,
+        time_policy=config.execution_retry_policy.execution_time.manager,
+        store=MySqlManagerRecordStore(config.require_mysql_dsn(environment), config.team_id),
     )
 
 
@@ -869,6 +901,7 @@ class CandidateVerificationEntry:
                 knowledge_resolutions=resolutions,
                 execution_failure=failure_reference,
                 environment_prerequisite=environment_prerequisite,
+                executor=_manager_executor(self.config, self.environment, source),
             )
             if advice.draft.native_ui_scenario is not None and plan.executor_capability is None:
                 raise RecoveryRejected("Manager proposed an unavailable native UI capability")

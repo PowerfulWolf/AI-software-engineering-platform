@@ -1,8 +1,8 @@
 """Operator work budgets are distinct from monotonically increasing run identities."""
 
-from typing import Annotated, Literal, get_args
+from typing import Annotated, Literal, Self, get_args
 
-from pydantic import Field, StrictInt
+from pydantic import Field, StrictInt, model_validator
 
 from ai_software_engineer.domain.enums import AgentRole
 from ai_software_engineer.domain.identity import RunId
@@ -22,6 +22,43 @@ class TransientRetryPolicy(DomainModel):
 
 class StageRetryPolicy(TransientRetryPolicy):
     max_attempts: RetryLimit = 3
+
+
+class ExecutionTimePolicy(DomainModel):
+    initial_seconds: Annotated[StrictInt, Field(ge=1, le=86400)] = 600
+    max_seconds: Annotated[StrictInt, Field(ge=1, le=86400)] = 2400
+    max_capacity_timeouts: RetryLimit = 3
+
+    @model_validator(mode="after")
+    def ordered_window(self) -> Self:
+        if self.max_seconds < self.initial_seconds:
+            raise ValueError("execution time ceiling must not be below the initial window")
+        return self
+
+    def window(self, capacity_timeouts: int) -> int:
+        if not 0 <= capacity_timeouts < self.max_capacity_timeouts:
+            raise ValueError("execution time budget exhausted")
+        return min(self.initial_seconds * (1 << capacity_timeouts), self.max_seconds)
+
+
+class ExecutionTimePolicies(DomainModel):
+    manager: ExecutionTimePolicy = ExecutionTimePolicy()
+    product: ExecutionTimePolicy = ExecutionTimePolicy()
+    designer: ExecutionTimePolicy = ExecutionTimePolicy()
+    planner: ExecutionTimePolicy = ExecutionTimePolicy()
+
+    def for_stage(self, stage: str) -> ExecutionTimePolicy:
+        return {
+            "manager": self.manager,
+            "product": self.product,
+            "design": self.designer,
+            "plan": self.planner,
+        }[stage]
+
+
+class ManagerRetryPolicy(StageRetryPolicy):
+    max_attempts: RetryLimit = 2
+    max_coordination_rounds: RetryLimit = 3
 
 
 class DeliveryRetryPolicy(DomainModel):
@@ -48,6 +85,8 @@ class DeliveryRetryPolicy(DomainModel):
 
 
 class ExecutionRetryPolicy(DomainModel):
+    manager: ManagerRetryPolicy = ManagerRetryPolicy()
+    execution_time: ExecutionTimePolicies = ExecutionTimePolicies()
     product: StageRetryPolicy = StageRetryPolicy(max_attempts=20)
     designer: StageRetryPolicy = StageRetryPolicy()
     planner: StageRetryPolicy = StageRetryPolicy()

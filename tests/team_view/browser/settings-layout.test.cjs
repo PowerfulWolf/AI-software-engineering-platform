@@ -83,7 +83,7 @@ test("Agent help, horizontal primary row and exhausted fallback catalog remain u
     "Agent descriptions should not stretch summary rows");
   const help = manager.getByRole("button", { name: "Manager Agent说明" });
   await help.click();
-  await form.getByRole("dialog", { name: "Manager Agent说明" }).getByText(/确定性能力/).waitFor();
+  await form.getByRole("dialog", { name: "Manager Agent说明" }).getByText(/跨阶段阻塞/).waitFor();
   assert.equal(await manager.evaluate((node) => node.open), false,
     "opening a summary help popover must not expand the Agent card");
   await h.page.keyboard.press("Escape");
@@ -206,7 +206,7 @@ test("Settings pages share one aligned section grid across desktop and narrow wi
   await form.waitFor();
   await h.page.getByText("允许调用真实模型", { exact: true }).waitFor();
   assert.equal(await h.page.locator("#content .settings-page-title-row .settings-help-trigger").count(), 1);
-  assert.equal(await form.locator(".settings-section-header .settings-help-trigger").count(), 3);
+  assert.equal(await form.locator(".settings-section-header .settings-help-trigger").count(), 4);
   const modelSwitchHelp = form.getByRole("button", { name: "允许调用真实模型说明" });
   assert.equal(await modelSwitchHelp.count(), 1);
   assert.equal(await modelSwitchHelp.getAttribute("aria-expanded"), "false");
@@ -223,7 +223,7 @@ test("Settings pages share one aligned section grid across desktop and narrow wi
   for (const width of [1440, 768, 390]) {
     await h.page.setViewportSize({ width, height: 1000 });
     const layout = await geometry(form);
-    assert.equal(layout.sections.length, 3);
+    assert.equal(layout.sections.length, 4);
     assert.ok(layout.sections.every((section) =>
       section.border >= 1 && section.style === "solid"));
     if (width >= 600) {

@@ -21,6 +21,7 @@ from ai_software_engineer.manager.delivery import (
 from ai_software_engineer.manager.delivery_checkpoint import (
     ProjectDeliveryCheckpointError,
 )
+from ai_software_engineer.manager.model_execution import ManagerExecutionRejected
 from ai_software_engineer.multi_directory.errors import (
     RequirementGitBaselineRequired,
     RequirementSourceRevisionDrift,
@@ -255,6 +256,8 @@ class ManagerConsoleAdapter:
                 "已封存报告和审批历史保留。由 Manager 协调上下文配置修复后, "
                 "通过继续交付生成并审批新计划; 不要重复执行已消费的审批。",
             ) from error
+        except ManagerExecutionRejected as error:
+            raise ConsoleCommandRejected("MANAGER_COORDINATION_STOP", str(error)) from error
         except StructuredModelError as error:
             code = (
                 "MODEL_EXECUTION_LIMIT" if error.expandable_timeout else "MODEL_" + error.code.value

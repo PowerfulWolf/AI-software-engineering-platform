@@ -55,6 +55,13 @@ from tests.recovery.test_native_ui import scenario
 from tests.recovery.test_verification_environment import _admitted
 
 
+@pytest.fixture(autouse=True)
+def manager_claim_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.manager.test_manager_model_execution import executor
+
+    monkeypatch.setattr(module, "_manager_executor", lambda *_: executor(tmp_path / "manager-runs"))
+
+
 @pytest.mark.parametrize("verification_completed", [False, True])
 def test_manager_uses_durable_qa_order_not_report_timestamp(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, verification_completed: bool

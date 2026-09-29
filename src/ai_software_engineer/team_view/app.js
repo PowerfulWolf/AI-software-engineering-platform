@@ -46,7 +46,7 @@ let settingsSection = "general";
 let expandedModelRouteIndex = null;
 const expandedAgentModelRoles = new Set();
 let settingsSaveResult = null;
-const settingsContractVersion = 1;
+const settingsContractVersion = 2;
 const settingsVersionMismatchMessage =
   "设置页面与当前服务版本不匹配。请重启 Web Console 后刷新页面，再保存配置。";
 const configurationApplyStorageKey = "ase-configuration-apply";
@@ -193,7 +193,7 @@ const agentModelRoles = [
   [
     "manager",
     "Manager Agent",
-    "团队管理；当前版本主要使用确定性能力，模型配置为后续智能决策预留。",
+    "分析跨阶段阻塞并提出协调、恢复与验证方案；执行受权限、预算和精确审批约束，不能代替 QA/Reviewer 验收。",
   ],
   [
     "product",
@@ -479,7 +479,7 @@ function requestPresentation(request) {
           : "DELIVERING";
     return {
       group: "active",
-      status: activeTask?.status || operationStage,
+      status: activeTask?.status || (["PRODUCT_DISCOVERY", "DESIGNING", "PLANNING", "INTEGRATING"].includes(request.stage) ? request.stage : operationStage),
       blocker: null,
       nextAction:
         activeTask?.next_action ||
@@ -517,6 +517,11 @@ function requestPresentation(request) {
       nextAction: "请在设置中提高对应预算，保存并重启服务后继续。",
     };
   const failedDesignOperation = latestOperation(request.id);
+  if (request.coordination && !latestApproval(request.id, request.checkpoint_sha256))
+    return {
+      group: "blocked", status: request.stage,
+      blocker: request.coordination.draft.summary, nextAction: request.next_action,
+    };
   if (request.design_recheck_pending)
     return {group: "blocked", status: "DESIGNING", blocker: null,
       nextAction: "已保留原产品批准。点击“继续交付”开始重新核对设计，不会自动批准问题中的变更建议。"};
@@ -621,7 +626,7 @@ function stageFailureGuidance(operation) {
   if (code === "MODEL_EXECUTION_LIMIT")
     return {
       reason: "本地模型执行达到本轮时间上限，未确认是服务故障；审批和 checkpoint 已保留。",
-      action: "可继续原需求；平台将按 600→1200→2400 秒扩容。达到上限后请检查模型诊断和任务规模。",
+      action: "平台按配置将下一次执行窗口加倍，不超过设置的时间与次数上限；触顶后请检查诊断或调整配置并重启。",
     };
   if (code === "PLANNER_TEST_MATRIX_REJECTED")
     return {
@@ -2514,7 +2519,7 @@ function requestOperation(panel, request, discussionSection) {
         MODEL_QUOTA_EXHAUSTED: "等待额度恢复，或在设置中为 Product 配置有额度的模型并应用配置，然后点击“继续需求讨论”。",
         MODEL_RATE_LIMITED: "模型服务限流，请稍后点击“继续需求讨论”，不要连续重复提交。",
         MODEL_TIMEOUT: "本轮等待模型回复超时；可稍后点击“继续需求讨论”。若反复超时，请检查模型服务连接。",
-        MODEL_EXECUTION_LIMIT: "本地执行窗口已触顶。继续需求讨论时平台会按 600→1200→2400 秒扩大时限；达到上限后请检查模型诊断和任务规模。",
+        MODEL_EXECUTION_LIMIT: "本地执行窗口已触顶。下一次调用会按配置加倍扩容，不超过最长时限；触顶次数耗尽后请检查模型诊断、任务规模与时间配置。",
         MODEL_PROVIDER_UNAVAILABLE: "按详情检查 Codex 可执行文件、文件权限或模型服务连接；修复后点击“继续需求讨论”。",
         MODEL_PROVIDER_ERROR: "按服务返回的详情检查模型名称、访问权限和路由配置；修复并应用配置后点击“继续需求讨论”。",
         MODEL_INVALID_OUTPUT: "模型未返回有效的结构化结果。可恢复本轮回复一次；若重复失败，请附此操作编号排查输出格式。",
@@ -2526,8 +2531,8 @@ function requestOperation(panel, request, discussionSection) {
         failedOperation.error_summary === "Manager rejected the operation; inspect current delivery facts.";
       failure.append(
         el("strong", "Product 回复未完成"),
-        el("p", `失败原因：${legacy ? "旧记录未保存具体失败原因，无法判断是否为额度、登录或服务问题。" : failedOperation.error_summary}`),
-        el("p", `下一步：${guidance[code] || (legacy ? "更新并重启服务后，点击“继续需求讨论”恢复本轮回复；若仍失败，页面会展示新的错误详情。" : "请附此操作编号排查具体异常，修复后再继续本轮讨论。")}`),
+        el("p", `失败原因：${request.coordination?.draft.summary || (legacy ? "旧记录未保存具体失败原因，无法判断是否为额度、登录或服务问题。" : failedOperation.error_summary)}`),
+        el("p", `下一步：${request.coordination ? request.next_action : guidance[code] || (legacy ? "更新并重启服务后，点击“继续需求讨论”恢复本轮回复；若仍失败，页面会展示新的错误详情。" : "请附此操作编号排查具体异常，修复后再继续本轮讨论。")}`),
         el("p", "已保存的消息和代码基线会保留，无需重新输入或新建需求。", "muted"),
       );
       if (failedOperation?.operation_id)
@@ -4968,6 +4973,11 @@ function renderGeneralSettings(form) {
   );
   if (settingsDraft.execution_retry_policy) {
     const policy = settingsDraft.execution_retry_policy;
+    policy.manager ??= {max_attempts: 2, max_transient_failures: 5, max_coordination_rounds: 3};
+    policy.execution_time ??= Object.fromEntries(
+      ["manager", "product", "designer", "planner"].map(role =>
+        [role, {initial_seconds: 600, max_seconds: 2400, max_capacity_timeouts: 3}]),
+    );
     const budgets = el("div", undefined, "retry-policy-table");
     const tableHead = el("div", undefined, "retry-policy-row retry-policy-head");
     tableHead.append(
@@ -4978,6 +4988,7 @@ function renderGeneralSettings(form) {
     );
     budgets.append(tableHead);
     for (const [role, title, subtitle, workTitle] of [
+      ["manager", "Manager", "阻塞诊断与协调", "方案 / 修正尝试上限"],
       ["product", "Product", "需求讨论", "讨论 / 产物尝试上限"],
       ["designer", "Designer", "技术设计", "设计尝试上限"],
       ["planner", "Planner", "执行计划", "计划尝试上限"],
@@ -5034,10 +5045,38 @@ function renderGeneralSettings(form) {
     form.append(
       settingsModule(
         "执行与重试策略",
-        "工作次数包含首次执行；504、超时和限流等临时故障独立计数。Manager 只执行确定性调度，无模型调用额度。修改不会清零历史，也不会跳过恢复、范围或验证审批。",
+        "工作次数包含首次执行；服务故障、本地时间触顶和产物修正独立计数。Manager 只在已授权范围内自动协调；修改不会清零历史或跳过审批。",
         [budgets],
       ),
     );
+    const windows = el("div", undefined, "retry-policy-table");
+    const timeHead = el("div", undefined, "retry-policy-row retry-policy-head");
+    for (const title of ["角色", "初始时限 / 秒", "最长时限 / 秒", "触顶次数上限"])
+      timeHead.append(el("span", title));
+    windows.append(timeHead);
+    for (const role of ["manager", "product", "designer", "planner"]) {
+      const row = el("div", undefined, "retry-policy-row");
+      row.append(el("strong", role[0].toUpperCase() + role.slice(1), "retry-policy-role"));
+      for (const [key, title, max] of [["initial_seconds", "初始时限", 86400],
+        ["max_seconds", "最长时限", 86400], ["max_capacity_timeouts", "触顶次数上限", 100]]) {
+        const input = bindInput(el("input"), String(policy.execution_time[role][key]),
+          value => policy.execution_time[role][key] = Number(value), "number");
+        input.min = "1"; input.max = String(max); input.step = "1"; input.required = true;
+        input.name = `execution-time-${role}-${key}`;
+        input.setAttribute("aria-label", `${role} ${title}`);
+        row.append(input);
+      }
+      windows.append(row);
+    }
+    const rounds = bindInput(el("input"), String(policy.manager.max_coordination_rounds),
+      value => policy.manager.max_coordination_rounds = Number(value), "number");
+    rounds.min = "1"; rounds.max = "100"; rounds.step = "1"; rounds.required = true;
+    rounds.name = "retry-manager-max_coordination_rounds";
+    form.append(settingsModule("执行时间与协调边界",
+      "本地时间触顶后，下一次调用窗口加倍。最长时限不得小于初始时限；触顶次数包含最后一次失败。保存并重启生效，不延长已终止的进程。",
+      [windows, settingsField("Manager 协调轮次", rounds,
+        "同一需求、同一阶段可诊断的不同阻塞输入数量。刷新、重启或重新点击不会重置；新的执行或修复审批仍由你决定。")],
+    ));
   }
 }
 
@@ -5890,6 +5929,9 @@ function managerFlowStatus(request) {
       "flow-manager active",
     );
   }
+  if (request.coordination)
+    return el("p", `Manager 协调 · ${request.coordination.draft.action === "PROPOSE_RECOVERY"
+      ? "等待恢复审批" : "等待处理"} · ${request.coordination.draft.summary}`, "flow-manager blocked");
   if (requestPresentation(request).group !== "blocked") return null;
   const latest = latestOperation(request.id);
   if (latest && ["FAILED", "INTERRUPTED"].includes(latest.status) &&

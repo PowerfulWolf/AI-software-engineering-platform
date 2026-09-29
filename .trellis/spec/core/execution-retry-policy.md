@@ -4,8 +4,8 @@
 
 ### 1. Scope / Trigger
 
-Product, Designer and Planner complete artifacts cannot checkpoint their model reasoning. The
-joint producer starts with a 600-second local execution window. A Codex CLI process that is
+Manager, Product, Designer and Planner complete artifacts cannot checkpoint their model reasoning. The
+joint producer defaults to a 600-second local execution window. A Codex CLI process that is
 still incomplete when the local watchdog fires raises
 `StructuredModelError(code=TIMEOUT, timeout_kind="local_execution_limit", transient=False)`.
 This is evidence of a saturated local execution window, **not** proof that the model was
@@ -19,32 +19,35 @@ and remains typed transient; HTTP 504 and other provider errors retain their cur
 ```python
 StructuredModelError(code, safe_message, *, transient,
                      timeout_kind: Literal["local_execution_limit"] | None = None)
-stage_timeout_seconds(attempts: Mapping[str, int], stage: str) -> int
+stage_timeout_seconds(attempts: Mapping[str, int], stage: str,
+                      policy: ExecutionTimePolicy | None = None) -> int
 JointDeliveryService._stage_output(checkpoint, model, instructions) -> DomainModel
 ```
 
 ### 3. Contracts
 
 `stage_timeout_seconds(attempts, stage)` uses a bounded geometric series for `product`, `design`
-and `plan`: 600 → 1200 → 2400 seconds. `JointDeliveryService._stage_output` refunds only the
+and `plan`: by default 600 → 1200 → 2400 seconds; `execution_retry_policy.execution_time`
+configures each role's initial/ceiling/capacity-failure limit. `JointDeliveryService._stage_output` refunds only the
 unfinished reserved work attempt and appends `<stage>_capacity_timeout` to the sealed successor
 checkpoint. The counter is independent of `<stage>_transient`, survives restart and is not
-retroactively inferred for old journals. After the third local-window failure, the next
+retroactively inferred for old journals. At the configured failure limit (default: third failure), the next
 invocation is rejected before model launch with `execution time budget exhausted`. No stage,
 approval, feedback, product/design/plan artifact or historical checkpoint is rewritten. A
 successful invocation consumes its normal work attempt; prior capacity facts remain audit
 history. Unknown process interruption does not refund. The knowledge intent/assessment
 subcalls for these three roles receive the same expanded window; Delivery roles retain their
-120-second consultation cap. Deterministic Manager has no model execution path or artificial
-timeout counter.
+120-second consultation cap. Manager's real model calls have independent durable work, transient
+and capacity records; ownership and coordination boundaries are in `manager-coordination.md`.
 
-`StageBudget` projects `capacity_timeouts`, `max_capacity_timeouts=3`, next window and
+`StageBudget` projects `capacity_timeouts`, configured `max_capacity_timeouts`, `max_timeout_seconds`, next window and
 `exhausted=capacity`. The Console maps only local-window timeouts to
 `MODEL_EXECUTION_LIMIT`; it leaves `MODEL_TIMEOUT` for transport/provider timeouts. The UI
 must not advise raising the *transient* failure limit when capacity is exhausted or offer a
 known-futile retry. There is no automatic terminal-state rewrite. Operators inspect the
-diagnostics and task size, then plan a smaller new Requirement if the fixed 2400-second
-ceiling is insufficient; do not edit a production checkpoint or reuse an approval.
+diagnostics and task size, then adjust the configured ceiling/count or plan smaller work if needed;
+do not edit a production checkpoint or reuse an approval. Already-authorized unfinished joint
+producers may automatically retry after validated Manager advice and another stage-budget check.
 An approved historical Design knowledge wait can recover a *work* allowance, not a separately
 exhausted execution-time allowance; both reader and action guard must suppress that futile
 recovery while capacity is exhausted.
@@ -57,7 +60,7 @@ recovery while capacity is exhausted.
 | CLI stderr explicitly reports 504 before watchdog | `*_transient += 1`, fallback permitted | same time window |
 | Responses socket timeout | `*_transient += 1`, fallback permitted | same time window |
 | Valid artifact after expansion | one work attempt, historical capacity fact retained | next stage |
-| Third local watchdog | `*_capacity_timeout == 3` | reject before fourth call |
+| Configured final local watchdog (default: third) | `*_capacity_timeout >= max_capacity_timeouts` | reject before next call |
 
 ### 5. Good / Base / Bad Cases
 
@@ -95,9 +98,10 @@ their own evidence and contract tests.
 
 `ProductionConfig.execution_retry_policy: ExecutionRetryPolicy` replaces the Design-only setting.
 Product defaults to 20 artifact/discussion attempts; Designer/Planner/Coder default to 3 work
-attempts; all six model roles default to 5 typed transient failures. Each input is a strict integer
+attempts; all seven model roles default to 5 typed transient failures. Each count is a strict integer
 in 1..100. QA/Reviewer have no configurable verdict retry: findings return to Coder or require a
-new verification approval. Manager is deterministic and has no model budget.
+new verification approval. Manager defaults to 2 artifact/correction calls per input and 3 distinct
+coordination inputs per stable Requirement/stage episode. Its typed model failures are not verdicts.
 
 Scope: Console/`ase request` joint upstream and newly dispatched production Tasks. Native legacy
 `ase project` upstream records retain their original protocol; do not apply new counter meanings to
@@ -106,7 +110,8 @@ commands and candidate verification admissions are not model-call retry loops; r
 Source: `domain/retry_policy.py`, `config/production.py`, `multi_directory/service.py`,
 `orchestration/retry.py`, `store/{repository,mysql_repository}.py`, `team_view/{reader,app.js,style.css}`.
 Settings API: `GET/PUT /api/v1/admin/settings` with `config.execution_retry_policy` and the existing
-write-only runtime variables; save/apply reconstructs Host and Reader. No SQL schema migration.
+write-only runtime variables; save/apply reconstructs Host and Reader. Existing Task tables are
+unchanged; Manager adds the immutable audit table described in `manager-coordination.md`.
 
 `Task.retry_policy: DeliveryRetryPolicy | None` freezes Coder work and per-role transient limits at
 dispatch. `Task.retry_failures: tuple[DeliveryRetryFailure, ...] | None` is absent from legacy JSON.
@@ -191,7 +196,7 @@ browser tests must assert these boundaries. Production records are not test fixt
 - `tests/work_queue/test_worker_mysql.py::test_frozen_policy_retry_has_distinct_real_claims`:
   real MySQL lease per role invocation; work=1 still succeeds after a Coder timeout.
 - `tests/team_view/browser/{settings-layout,design-budget}.test.cjs`: CSS geometry at 1440/768/390,
-  six roles/ten controls, exhaustion and Planner resumption; `ui.test.cjs` retains exact approvals.
+  seven roles, independent time controls, exhaustion and Planner resumption; `ui.test.cjs` retains exact approvals.
 
 For this user-authorized change run the explicit file list in the task's `implement.md`, never the
 full suite. MySQL tests use only `ASE_TEST_MYSQL_DSN`, guarded by `tests/mysql_safety.py`.
@@ -230,6 +235,6 @@ Correct: retain exact approvals, then apply active-stage budget and failed-opera
 
 ## UI layout
 
-Basic settings contains named platform/team, runtime, and execution/retry sections. Each has a
+Basic settings contains platform/team, runtime, execution/retry, and execution-time sections. Each has a
 visible top divider; module spacing is separate from the compact internal heading/description/grid
 spacing. Reset paragraph margins inside sections; never stack form grid gaps with default margins.

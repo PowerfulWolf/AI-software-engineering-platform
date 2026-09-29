@@ -387,7 +387,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     learningDecisions = [],
     screenshotUploads = [];
   const settingsFixture = {
-    settings_contract_version: 1,
+    settings_contract_version: 2,
     config: {
       schema_version: "v0.2",
       platform_root: "/data/ase",
@@ -1476,7 +1476,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   await staleSettingsForm.events.submit({ preventDefault() {} });
   assert.equal(savedSettings.length, 0, "a stale Settings server must not receive PUT");
   assert.match(text(get("composer")), /服务版本不匹配.*重启 Web Console/);
-  vm.runInContext('settingsSnapshot.settings_contract_version = 1; settingsDraft.codex_executable = "codex"; render();', context);
+  vm.runInContext('settingsSnapshot.settings_contract_version = 2; settingsDraft.codex_executable = "codex"; render();', context);
   const designLimit = descend(get("content")).find(
     (node) => node.name === "retry-designer-max_attempts",
   );

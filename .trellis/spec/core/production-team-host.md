@@ -419,8 +419,8 @@ StructuredModelClient.complete(..., input_images: tuple[Path, ...] = ())
 - Settings may materialize an explicit seven-role policy from a legacy empty policy by selecting only
   the first enabled route as each role's primary. It must not copy every enabled catalog route into
   fallbacks, and it may not mint new Agent IDs. Operators may add, remove and reorder zero or more
-  fallbacks per Agent. Manager's route is persisted/displayed even though current Manager decisions
-  use deterministic Skills and do not invoke a model.
+  fallbacks per Agent. Manager's route powers verification coordination and cross-stage blockage
+  diagnosis. Only typed deterministic capabilities may execute its advice; see `manager-coordination.md`.
 - The read-only runtime Status projection resolves the same seven role policies through
   `ProductionConfig.routes_for(role)` and joins each exact route five-tuple with catalog readiness. It
   preserves primary/fallback order and labels whether the policy is explicit or inherited; it does

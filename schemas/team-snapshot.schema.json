@@ -624,6 +624,120 @@
       "title": "KnowledgeRunBinding",
       "type": "object"
     },
+    "ManagerCoordinationAdvice": {
+      "additionalProperties": false,
+      "properties": {
+        "draft": {
+          "$ref": "#/$defs/ManagerCoordinationDraft"
+        },
+        "input_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Input Sha256",
+          "type": "string"
+        },
+        "kind": {
+          "const": "manager_stage_advice",
+          "default": "manager_stage_advice",
+          "title": "Kind",
+          "type": "string"
+        },
+        "manager_run_id": {
+          "minLength": 1,
+          "title": "Manager Run Id",
+          "type": "string"
+        },
+        "model": {
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "provider": {
+          "minLength": 1,
+          "title": "Provider",
+          "type": "string"
+        },
+        "requirement_id": {
+          "minLength": 1,
+          "title": "Requirement Id",
+          "type": "string"
+        },
+        "source_checkpoint_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Source Checkpoint Sha256",
+          "type": "string"
+        },
+        "source_facts_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Source Facts Sha256",
+          "type": "string"
+        },
+        "stage": {
+          "minLength": 1,
+          "title": "Stage",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requirement_id",
+        "stage",
+        "source_facts_sha256",
+        "source_checkpoint_sha256",
+        "input_sha256",
+        "manager_run_id",
+        "provider",
+        "model",
+        "draft"
+      ],
+      "title": "ManagerCoordinationAdvice",
+      "type": "object"
+    },
+    "ManagerCoordinationDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "RETRY_STAGE",
+            "PROPOSE_RECOVERY",
+            "WAITING_HUMAN"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "next_action": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Next Action",
+          "type": "string"
+        },
+        "responsible_actor": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Responsible Actor",
+          "type": "string"
+        },
+        "resume_condition": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Resume Condition",
+          "type": "string"
+        },
+        "summary": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "summary",
+        "next_action",
+        "responsible_actor",
+        "resume_condition"
+      ],
+      "title": "ManagerCoordinationDraft",
+      "type": "object"
+    },
     "ProjectView": {
       "additionalProperties": false,
       "properties": {
@@ -693,6 +807,17 @@
           "title": "Checkpoint Sha256",
           "type": "string"
         },
+        "coordination": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ManagerCoordinationAdvice"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "design_budget": {
           "anyOf": [
             {
@@ -727,20 +852,20 @@
           "title": "Dialogue",
           "type": "array"
         },
-        "failed_stages": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "title": "Failed Stages",
-          "type": "array"
-        },
         "documents": {
           "default": [],
           "items": {
             "$ref": "#/$defs/DocumentView"
           },
           "title": "Documents",
+          "type": "array"
+        },
+        "failed_stages": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Failed Stages",
           "type": "array"
         },
         "id": {
@@ -1083,9 +1208,17 @@
           "type": "integer"
         },
         "max_capacity_timeouts": {
-          "const": 3,
           "default": 3,
+          "maximum": 100,
+          "minimum": 1,
           "title": "Max Capacity Timeouts",
+          "type": "integer"
+        },
+        "max_timeout_seconds": {
+          "default": 2400,
+          "maximum": 86400,
+          "minimum": 1,
+          "title": "Max Timeout Seconds",
           "type": "integer"
         },
         "max_transient_failures": {
@@ -1098,8 +1231,8 @@
         "next_timeout_seconds": {
           "anyOf": [
             {
-              "maximum": 2400,
-              "minimum": 600,
+              "maximum": 86400,
+              "minimum": 1,
               "type": "integer"
             },
             {

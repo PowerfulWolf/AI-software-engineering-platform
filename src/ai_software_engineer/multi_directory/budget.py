@@ -10,6 +10,7 @@ from pydantic import Field, StrictInt
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.domain.retry_policy import (
     ExecutionRetryPolicy,
+    ExecutionTimePolicy,
     RetryLimit,
     StageRetryPolicy,
 )
@@ -17,17 +18,17 @@ from ai_software_engineer.domain.retry_policy import (
 AttemptLimit = RetryLimit
 AttemptCount = Annotated[StrictInt, Field(ge=0)]
 DESIGN_TRANSIENT_COUNTER = "design_transient"
-CAPACITY_TIMEOUT_LIMIT = 3
-BASE_STAGE_TIMEOUT_SECONDS = 600
-MAX_STAGE_TIMEOUT_SECONDS = 2400
 
 
-def stage_timeout_seconds(attempts: Mapping[str, int], stage: str) -> int:
+def stage_timeout_seconds(
+    attempts: Mapping[str, int], stage: str, policy: ExecutionTimePolicy | None = None
+) -> int:
     """Bounded geometric growth after a sealed local execution-limit failure."""
     count = attempts.get(stage + "_capacity_timeout", 0)
-    if count < 0 or count >= CAPACITY_TIMEOUT_LIMIT:
-        raise ValueError(f"joint {stage} execution time budget exhausted")
-    return min(BASE_STAGE_TIMEOUT_SECONDS * (1 << count), MAX_STAGE_TIMEOUT_SECONDS)
+    try:
+        return (policy or ExecutionTimePolicy()).window(count)
+    except ValueError as error:
+        raise ValueError(f"joint {stage} execution time budget exhausted") from error
 
 
 class DesignRetryPolicy(DomainModel):
@@ -65,8 +66,9 @@ class StageBudget(StageRetryPolicy):
     attempts: AttemptCount
     transient_failures: AttemptCount
     capacity_timeouts: AttemptCount = 0
-    max_capacity_timeouts: Literal[3] = 3
-    next_timeout_seconds: Annotated[StrictInt, Field(ge=600, le=2400)] | None = None
+    max_capacity_timeouts: RetryLimit = 3
+    max_timeout_seconds: Annotated[StrictInt, Field(ge=1, le=86400)] = 2400
+    next_timeout_seconds: Annotated[StrictInt, Field(ge=1, le=86400)] | None = None
     exhausted: Literal["work", "transient", "capacity"] | None = None
 
 
@@ -89,18 +91,23 @@ def stage_budget(
     ]
     work, transient = attempts.get(counter, 0), attempts.get(counter + "_transient", 0)
     capacity = attempts.get(counter + "_capacity_timeout", 0)
+    time_policy = policy.execution_time.for_stage(counter)
     return StageBudget(
         role=role,
         attempts=work,
         transient_failures=transient,
         capacity_timeouts=capacity,
+        max_capacity_timeouts=time_policy.max_capacity_timeouts,
+        max_timeout_seconds=time_policy.max_seconds,
         next_timeout_seconds=(
-            stage_timeout_seconds(attempts, counter) if capacity < CAPACITY_TIMEOUT_LIMIT else None
+            stage_timeout_seconds(attempts, counter, time_policy)
+            if capacity < time_policy.max_capacity_timeouts
+            else None
         ),
         max_attempts=limits.max_attempts,
         max_transient_failures=limits.max_transient_failures,
         exhausted="capacity"
-        if capacity >= CAPACITY_TIMEOUT_LIMIT
+        if capacity >= time_policy.max_capacity_timeouts
         else "transient"
         if transient >= limits.max_transient_failures
         else "work"

@@ -10,6 +10,7 @@ from typing import Annotated, Protocol, TypeVar
 from pydantic import AwareDatetime, Field, ValidationError
 
 from ai_software_engineer.agents import AgentErrorCode, StructuredModelClient, StructuredModelError
+from ai_software_engineer.context.ports import ContextBudgetExceeded
 from ai_software_engineer.domain.branch import BRANCH_NAMING_INSTRUCTIONS
 from ai_software_engineer.domain.enums import TeamRole
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
@@ -30,8 +31,14 @@ from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryStage,
     ProjectDeliveryCheckpoint,
 )
+from ai_software_engineer.manager.model_execution import ManagerExecutionRejected
 from ai_software_engineer.manager.preparation import PrepareProjectStatus
 from ai_software_engineer.manager.production_agents import ProductDraft
+from ai_software_engineer.manager.stage_coordination import (
+    StageCoordinator,
+    allowed_coordination_actions,
+    stage_facts_sha256,
+)
 from ai_software_engineer.multi_directory.attachments import (
     MAX_REQUIREMENT_SCREENSHOTS,
     RequirementAttachmentStore,
@@ -214,8 +221,10 @@ class JointDeliveryService:
         project: ProjectWorkspace,
         design_retry_policy: DesignRetryPolicy | None = None,
         execution_retry_policy: ExecutionRetryPolicy | None = None,
+        coordinator: StageCoordinator | None = None,
     ) -> None:
         self.backend = backend
+        self.coordinator = coordinator
         self.team = team
         self.project = project
         self.design_retry_policy = design_retry_policy or DesignRetryPolicy()
@@ -701,6 +710,50 @@ class JointDeliveryService:
             return JointDeliveryResult(checkpoint=saved)
 
     def _advance(self, checkpoint: JointCheckpoint) -> JointCheckpoint:
+        if self.coordinator is None:
+            return self._advance_once(checkpoint)
+        # Each retry returns through the original stage/work/approval gates, never a new engine.
+        for _ in range(self.execution_retry_policy.manager.max_coordination_rounds + 1):
+            error: StructuredModelError | ContextBudgetExceeded | None = None
+            try:
+                result = self._advance_once(checkpoint)
+            except (StructuredModelError, ContextBudgetExceeded) as failure:
+                error = failure
+                result = self._current(checkpoint.delivery_id)
+            if error is None and result.stage is not JointStage.BLOCKED:
+                return result
+            try:
+                advice = self.coordinator.diagnose(result, error)
+            except (ManagerExecutionRejected, StructuredModelError):
+                self._save(
+                    result,
+                    next_action=(
+                        "Manager 协调未完成, 原阶段与审批已保留。"
+                        "请查看 Manager 调用诊断及预算后继续。"
+                    ),
+                )
+                raise
+            current = self._current(result.delivery_id)
+            if advice.source_facts_sha256 != stage_facts_sha256(current):
+                raise DeliveryCheckpointStale("Manager advice source changed")
+            if advice.draft.action not in allowed_coordination_actions(
+                self.execution_retry_policy, current, error
+            ):
+                raise ValueError("Manager selected an unavailable action")
+            checkpoint = self._save(
+                current,
+                coordination=advice,
+                next_action=(
+                    f"Manager: {advice.draft.summary}\n{advice.draft.next_action}\n"
+                    f"责任方: {advice.draft.responsible_actor}; "
+                    f"恢复条件: {advice.draft.resume_condition}"
+                ),
+            )
+            if advice.draft.action != "RETRY_STAGE":
+                return checkpoint
+        raise ManagerExecutionRejected("Manager 自动协调轮次已耗尽, 请检查记录后继续。")
+
+    def _advance_once(self, checkpoint: JointCheckpoint) -> JointCheckpoint:
         from ai_software_engineer.knowledge.gaps import KnowledgeGapRaised
         from ai_software_engineer.multi_directory.knowledge_wait import ChildKnowledgeGapRaised
 
@@ -1170,7 +1223,11 @@ class JointDeliveryService:
             TeamRole.DESIGNER: "design",
             TeamRole.PLANNER: "plan",
         }[role]
-        timeout_seconds = stage_timeout_seconds(checkpoint.attempts, stage_counter)
+        timeout_seconds = stage_timeout_seconds(
+            checkpoint.attempts,
+            stage_counter,
+            self.execution_retry_policy.execution_time.for_stage(stage_counter),
+        )
         client = self.backend.client(checkpoint, role)
         output_schema = model.model_json_schema()
         if model is JointTechnicalDesign:
@@ -1215,7 +1272,9 @@ class JointDeliveryService:
         return self._stage_output(checkpoint, JointExecutionPlan, instructions)
 
     def _require_stage_retry_budget(self, checkpoint: JointCheckpoint, stage: str) -> None:
-        stage_timeout_seconds(checkpoint.attempts, stage)
+        stage_timeout_seconds(
+            checkpoint.attempts, stage, self.execution_retry_policy.execution_time.for_stage(stage)
+        )
         policy = {
             "product": self.execution_retry_policy.product,
             "design": self.execution_retry_policy.designer,
@@ -1273,6 +1332,8 @@ class JointDeliveryService:
         return StageWorkflowGate(self.journal, records)
 
     def _save(self, checkpoint: JointCheckpoint, **changes: object) -> JointCheckpoint:
+        if any(key != "next_action" for key in changes):
+            changes.setdefault("coordination", None)
         values: dict[str, object] = dict(checkpoint.to_wire())
         values.update(changes)
         values.update(

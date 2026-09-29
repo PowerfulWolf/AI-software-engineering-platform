@@ -16,7 +16,7 @@ Reviewer 中断且终态事件或精确的独立验证入场/制品证明已封�
 
 `ProductionConfig.execution_retry_policy` 属于 operator 配置，不改变角色权限或审批。
 联合上游分别持久化 `attempts.{product,design,plan}` 与对应 `_transient` 计数。
-本地 CLI 执行窗口触顶另记对应的 `_capacity_timeout`，按 600→1200→2400 秒扩容，
+本地 CLI 执行窗口触顶另记对应的 `_capacity_timeout`，默认按 600→1200→2400 秒扩容，
 不切换备用模型或消耗 `_transient`；显式服务故障仍走临时故障路径。
 `RequestView.stage_budget` 投影当前上游工作、临时故障与执行时间额度；`design_budget` 保留兼容。新 Task 冻结
 `retry_policy`，`retry_failures` 保存独立临时故障事实。旧 Task/Checkpoint 的 wire/hash 不重写。
@@ -24,6 +24,22 @@ Reviewer 中断且终态事件或精确的独立验证入场/制品证明已封�
 400（100 工作次数 + 三角色各 100 临时失败），不是 400 次 Coder 修复授权。完整矩阵见
 [执行与重试策略](../../.trellis/spec/core/execution-retry-policy.md)与
 [Design 恢复契约](../../.trellis/spec/core/design-retry-budget.md)。
+
+`execution_retry_policy.execution_time.{manager,product,designer,planner}` 配置初始秒数、
+最长秒数与本地触顶次数；时间范围 1–86400 秒，次数 1–100，最长不能小于初始。
+`execution_retry_policy.manager` 分别限制每个精确输入的方案尝试、同一需求/阶段的服务故障和
+不同协调输入轮次。所有 Manager 模型调用先持有 Team 互斥执行权，再封存 STARTED 与结果，
+重启不退还不确定调用。`manager-model-{run,context}.schema.json` 定义记录契约；MySQL
+`manager_coordination_records` 保存不可变、有摘要的输入、调用与结果。
+
+标准 Console/`ase request` 路径的 `JointCheckpoint.coordination` 保存 typed Manager 建议，
+绑定当前 Requirement、原阶段、直接前驱 checkpoint、实际 source facts 与 Manager run。
+仅允许 `RETRY_STAGE|PROPOSE_RECOVERY|WAITING_HUMAN`：自动重试必须再次满足原阶段审批、
+失败分类和剩余额度；上下文超限不自动重试；终态子 Task 只提恢复方案，不复活、不批准。
+新增字段缺省不进入旧 checkpoint 摘要。旧 `ase project` 上游保持原协议。
+现有候选验证 Manager 接入相同预算/执行权，仍沿用独立精确审批与 QA/Review。
+完整签名、表结构、验证矩阵与回滚见
+[Manager 协调契约](../../.trellis/spec/core/manager-coordination.md)。
 
 下表是已经进入 Task delivery runtime 的四个岗位，即 `AgentRole`。组织长期成员可声明的
 `TeamRole` 还包含 `manager/product/designer/planner`；这些上游岗位不能被

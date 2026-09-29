@@ -1,6 +1,4 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ai-software-engineer.local/schemas/requirement-checkpoint.schema.json",
   "$defs": {
     "AcceptanceDraft": {
       "additionalProperties": false,
@@ -1403,6 +1401,120 @@
         "snapshot_sha256"
       ],
       "title": "KnowledgeRunBinding",
+      "type": "object"
+    },
+    "ManagerCoordinationAdvice": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "manager_stage_advice",
+          "default": "manager_stage_advice",
+          "title": "Kind",
+          "type": "string"
+        },
+        "requirement_id": {
+          "minLength": 1,
+          "title": "Requirement Id",
+          "type": "string"
+        },
+        "stage": {
+          "minLength": 1,
+          "title": "Stage",
+          "type": "string"
+        },
+        "source_facts_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Source Facts Sha256",
+          "type": "string"
+        },
+        "source_checkpoint_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Source Checkpoint Sha256",
+          "type": "string"
+        },
+        "input_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Input Sha256",
+          "type": "string"
+        },
+        "manager_run_id": {
+          "minLength": 1,
+          "title": "Manager Run Id",
+          "type": "string"
+        },
+        "provider": {
+          "minLength": 1,
+          "title": "Provider",
+          "type": "string"
+        },
+        "model": {
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "draft": {
+          "$ref": "#/$defs/ManagerCoordinationDraft"
+        }
+      },
+      "required": [
+        "requirement_id",
+        "stage",
+        "source_facts_sha256",
+        "source_checkpoint_sha256",
+        "input_sha256",
+        "manager_run_id",
+        "provider",
+        "model",
+        "draft"
+      ],
+      "title": "ManagerCoordinationAdvice",
+      "type": "object"
+    },
+    "ManagerCoordinationDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "RETRY_STAGE",
+            "PROPOSE_RECOVERY",
+            "WAITING_HUMAN"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "summary": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        },
+        "next_action": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Next Action",
+          "type": "string"
+        },
+        "responsible_actor": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Responsible Actor",
+          "type": "string"
+        },
+        "resume_condition": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Resume Condition",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "summary",
+        "next_action",
+        "responsible_actor",
+        "resume_condition"
+      ],
+      "title": "ManagerCoordinationDraft",
       "type": "object"
     },
     "PhaseDraft": {
@@ -3425,6 +3537,17 @@
       "title": "Next Action",
       "type": "string"
     },
+    "coordination": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ManagerCoordinationAdvice"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "checkpoint_sha256": {
       "pattern": "^[a-f0-9]{64}$",
       "title": "Checkpoint Sha256",
@@ -3446,5 +3569,7 @@
     "checkpoint_sha256"
   ],
   "title": "JointCheckpoint",
-  "type": "object"
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/requirement-checkpoint.schema.json"
 }

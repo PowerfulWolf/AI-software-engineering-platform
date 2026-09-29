@@ -21,6 +21,7 @@ from ai_software_engineer.domain.enums import AgentRole
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.domain.prerequisite_repair import PrerequisiteRepairRequest
 from ai_software_engineer.knowledge.gaps import KnowledgeResolution
+from ai_software_engineer.manager.model_execution import ManagerModelExecutor
 from ai_software_engineer.manager.native_ui import NativeUiScenario, NativeUiSessionPrerequisite
 
 
@@ -154,6 +155,7 @@ def coordinate_verification(
     knowledge_resolutions: tuple[KnowledgeResolution, ...] = (),
     execution_failure: VerificationFailureReference | None = None,
     environment_prerequisite: NativeUiSessionPrerequisite | None = None,
+    executor: ManagerModelExecutor | None = None,
 ) -> ManagerVerificationAdvice:
     instructions = (
         "You are ASE Manager, responsible for resolving team verification prerequisites. "
@@ -226,28 +228,56 @@ def coordinate_verification(
         "must pass independent QA/Reviewer. Avoid repeatedly asking the platform owner for "
         "more diagnostics when the source already establishes a missing test-entry action."
     )
+
+    def validate_draft(draft: ManagerVerificationDraft) -> None:
+        if draft.disposition == "PROPOSE_UI" and {
+            criterion.criterion_id for criterion in draft.criteria
+        } != set(criterion_ids):
+            raise ValueError("criterion coverage mismatch")
+        if draft.prerequisite_repair is not None and execution_failure is None:
+            raise ValueError("source repair capability is unavailable")
+        if (
+            environment_prerequisite is not None
+            and not environment_prerequisite.ready
+            and draft.disposition != "WAITING_HUMAN"
+        ):
+            raise ValueError("unavailable desktop requires a human prerequisite handoff")
+
+    if executor is not None:
+        draft, provider, model = executor.run(
+            client,
+            instructions=instructions,
+            payload=payload,
+            model=ManagerVerificationDraft,
+            validate=validate_draft,
+        )
+        assert executor.last_run_id is not None
+        return ManagerVerificationAdvice.create(
+            input_sha256=coordination_digest(payload),
+            scope_sha256=scope_sha256,
+            candidate_revision=candidate_revision,
+            qa_artifact_id=qa_artifact_id,
+            qa_artifact_sha256=qa_artifact_sha256,
+            manager_run_id=executor.last_run_id,
+            provider=provider,
+            model=model,
+            draft=draft,
+            knowledge_resolutions=knowledge_resolutions or None,
+            execution_failure=execution_failure,
+            environment_prerequisite=environment_prerequisite,
+        )
+
     correction: dict[str, object] = {}
     for _attempt in range(2):
         result = client.complete(
             instructions=instructions,
             input_payload={**payload, **correction},
             output_schema=ManagerVerificationDraft.model_json_schema(),
-            timeout_seconds=240,
+            timeout_seconds=600,
         )
         try:
             draft = ManagerVerificationDraft.model_validate(result.payload)
-            if draft.disposition == "PROPOSE_UI" and {
-                criterion.criterion_id for criterion in draft.criteria
-            } != set(criterion_ids):
-                raise ValueError("criterion coverage mismatch")
-            if draft.prerequisite_repair is not None and execution_failure is None:
-                raise ValueError("source repair capability is unavailable")
-            if (
-                environment_prerequisite is not None
-                and not environment_prerequisite.ready
-                and draft.disposition != "WAITING_HUMAN"
-            ):
-                raise ValueError("unavailable desktop requires a human prerequisite handoff")
+            validate_draft(draft)
         except (ValidationError, ValueError):
             # Do not persist or echo validation error.inputs (raw model/repository text).
             correction = {

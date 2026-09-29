@@ -86,7 +86,56 @@ test("real browser displays separate exhausted counters and budget settings inpu
   await limits.last().fill("20");
   assert.deepEqual(await h.page.evaluate(() => settingsDraft.execution_retry_policy.designer),
     {max_attempts: 8, max_transient_failures: 20});
-  assert.equal(await content.locator('input[type="number"][max="100"]').count(), 10);
+  assert.equal(await content.locator('input[type="number"][max="100"]').count(), 17);
   await limits.first().fill("101");
   assert.equal(await limits.first().evaluate(node => node.checkValidity()), false);
+});
+
+test("Manager and execution-time fields submit the same bounded configuration", async (t) => {
+  const h = await ui(t);
+  await h.page.locator("#nav-settings").click();
+  const form = h.page.locator("#content .settings-form");
+  await form.waitFor();
+  const values = {
+    "retry-manager-max_attempts": 4,
+    "retry-manager-max_transient_failures": 7,
+    "retry-manager-max_coordination_rounds": 6,
+    "execution-time-manager-initial_seconds": 900,
+    "execution-time-manager-max_seconds": 3600,
+    "execution-time-manager-max_capacity_timeouts": 4,
+  };
+  for (const [name, value] of Object.entries(values))
+    await form.locator(`input[name="${name}"]`).fill(String(value));
+  const submission = h.page.waitForRequest(request =>
+    request.url().endsWith("/api/v1/admin/settings") && request.method() === "PUT");
+  await form.getByRole("button", {name: "保存设置"}).click();
+  const policy = (await submission).postDataJSON().config.execution_retry_policy;
+  assert.deepEqual(policy.manager,
+    {max_attempts: 4, max_transient_failures: 7, max_coordination_rounds: 6});
+  assert.deepEqual(policy.execution_time.manager,
+    {initial_seconds: 900, max_seconds: 3600, max_capacity_timeouts: 4});
+  assert.deepEqual(policy.execution_time.product,
+    {initial_seconds: 600, max_seconds: 2400, max_capacity_timeouts: 3});
+});
+
+test("Manager wait retains original stage and cannot replace exact approval", async (t) => {
+  const h = await ui(t);
+  const request = h.team.requests[0];
+  Object.assign(request, {stage: "PLANNING", next_action: "Review required context",
+    coordination: {draft: {action: "WAITING_HUMAN", summary: "Required context is too large"}}});
+  await h.tick();
+  await h.requests();
+  await h.page.evaluate(() => showDetail("request", "request_fixture"));
+  const detail = h.page.locator("#detail");
+  assert.match(await detail.innerText(), /Required context is too large/);
+  assert.equal(await h.page.evaluate(() => requestPresentation(snapshot.requests[0]).status), "PLANNING");
+  h.state.operations.push(operation("SUCCEEDED", {result: {
+    project_id: "project_fixture", delivery_id: request.id, checkpoint_sha256: request.checkpoint_sha256,
+    stage: "WAITING_HUMAN", next_action: "Approve exact recovery",
+    approval: {kind: "coder_recovery", plan_sha256: "b".repeat(64), title: "批准 Coder 恢复任务", facts: []},
+  }}));
+  await h.tick();
+  await h.page.evaluate(() => showDetail("request", "request_fixture"));
+  assert.equal(await detail.getByRole("button", {name: "批准并继续", exact: true}).count(), 1);
+  assert.equal(await detail.getByRole("button", {name: "重试 Planner", exact: true}).count(), 0);
 });

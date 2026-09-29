@@ -31,7 +31,7 @@ def test_legacy_design_settings_migrate_without_losing_limits() -> None:
 
 @pytest.mark.parametrize("value", [True, "3", 0, 101])
 def test_every_role_rejects_invalid_transient_limit(value: object) -> None:
-    for role in ("product", "designer", "planner", "coder", "qa", "reviewer"):
+    for role in ("manager", "product", "designer", "planner", "coder", "qa", "reviewer"):
         with pytest.raises(ValidationError):
             ExecutionRetryPolicy.model_validate({role: {"max_transient_failures": value}})
 
@@ -45,7 +45,7 @@ def test_conflicting_legacy_and_canonical_policy_is_rejected() -> None:
     assert ProductionConfig.model_validate(payload).execution_retry_policy == ExecutionRetryPolicy()
 
 
-@pytest.mark.parametrize("role", ["qa", "reviewer", "manager"])
+@pytest.mark.parametrize("role", ["qa", "reviewer"])
 def test_no_operator_policy_can_retry_valid_verdicts(role: str) -> None:
     with pytest.raises(ValidationError):
         ExecutionRetryPolicy.model_validate({role: {"max_attempts": 8}})

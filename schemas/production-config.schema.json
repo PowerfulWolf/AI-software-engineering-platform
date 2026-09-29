@@ -5,7 +5,9 @@
   "description": "Secret-free operator configuration for the Team-owned Production Team Host.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["model_routes"],
+  "required": [
+    "model_routes"
+  ],
   "$defs": {
     "StageRetryPolicy": {
       "additionalProperties": false,
@@ -45,6 +47,39 @@
     "ExecutionRetryPolicy": {
       "additionalProperties": false,
       "properties": {
+        "manager": {
+          "$ref": "#/$defs/ManagerRetryPolicy",
+          "default": {
+            "max_transient_failures": 5,
+            "max_attempts": 2,
+            "max_coordination_rounds": 3
+          }
+        },
+        "execution_time": {
+          "$ref": "#/$defs/ExecutionTimePolicies",
+          "default": {
+            "manager": {
+              "initial_seconds": 600,
+              "max_capacity_timeouts": 3,
+              "max_seconds": 2400
+            },
+            "product": {
+              "initial_seconds": 600,
+              "max_capacity_timeouts": 3,
+              "max_seconds": 2400
+            },
+            "designer": {
+              "initial_seconds": 600,
+              "max_capacity_timeouts": 3,
+              "max_seconds": 2400
+            },
+            "planner": {
+              "initial_seconds": 600,
+              "max_capacity_timeouts": 3,
+              "max_seconds": 2400
+            }
+          }
+        },
         "product": {
           "$ref": "#/$defs/StageRetryPolicy",
           "default": {
@@ -93,8 +128,18 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "max_design_attempts": {"type": "integer", "minimum": 1, "maximum": 100, "default": 3},
-        "max_transient_failures": {"type": "integer", "minimum": 1, "maximum": 100, "default": 5}
+        "max_design_attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 3
+        },
+        "max_transient_failures": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 5
+        }
       }
     },
     "env_var": {
@@ -105,23 +150,73 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "backend": {"const": "mysql", "default": "mysql"},
-        "dsn_env": {"$ref": "#/$defs/env_var", "default": "ASE_MYSQL_DSN"}
+        "backend": {
+          "const": "mysql",
+          "default": "mysql"
+        },
+        "dsn_env": {
+          "$ref": "#/$defs/env_var",
+          "default": "ASE_MYSQL_DSN"
+        }
       }
     },
     "route_reference": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["provider", "model"],
+      "required": [
+        "provider",
+        "model"
+      ],
       "properties": {
-        "provider": {"type": "string", "minLength": 1},
-        "model": {"type": "string", "minLength": 1},
-        "route_kind": {"anyOf": [{"enum": ["codex_cli", "responses"]}, {"type": "null"}], "default": null},
-        "connection_mode": {"anyOf": [{"enum": ["direct", "proxy"]}, {"type": "null"}], "default": null},
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "route_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "codex_cli",
+                "responses"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "connection_mode": {
+          "anyOf": [
+            {
+              "enum": [
+                "direct",
+                "proxy"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "reasoning_effort": {
           "anyOf": [
-            {"enum": ["low", "medium", "high", "xhigh"]},
-            {"type": "null"}
+            {
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "xhigh"
+              ]
+            },
+            {
+              "type": "null"
+            }
           ],
           "default": null
         }
@@ -130,133 +225,464 @@
     "agent_model_route_policy": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["role", "routes"],
+      "required": [
+        "role",
+        "routes"
+      ],
       "properties": {
         "role": {
-          "enum": ["manager", "product", "designer", "planner", "coder", "qa", "reviewer"]
+          "enum": [
+            "manager",
+            "product",
+            "designer",
+            "planner",
+            "coder",
+            "qa",
+            "reviewer"
+          ]
         },
         "routes": {
           "type": "array",
           "minItems": 1,
           "maxItems": 16,
           "uniqueItems": true,
-          "items": {"$ref": "#/$defs/route_reference"}
+          "items": {
+            "$ref": "#/$defs/route_reference"
+          }
         }
       }
     },
     "route": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["provider", "model", "kind"],
+      "required": [
+        "provider",
+        "model",
+        "kind"
+      ],
       "properties": {
-        "provider": {"type": "string", "minLength": 1},
-        "model": {"type": "string", "minLength": 1},
-        "kind": {"enum": ["codex_cli", "responses"]},
-        "connection_mode": {"anyOf": [{"enum": ["direct", "proxy"]}, {"type": "null"}], "default": null},
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "enum": [
+            "codex_cli",
+            "responses"
+          ]
+        },
+        "connection_mode": {
+          "anyOf": [
+            {
+              "enum": [
+                "direct",
+                "proxy"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "endpoint": {
-          "anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}],
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ],
           "default": null
         },
         "api_key_env": {
-          "anyOf": [{"$ref": "#/$defs/env_var"}, {"type": "null"}],
+          "anyOf": [
+            {
+              "$ref": "#/$defs/env_var"
+            },
+            {
+              "type": "null"
+            }
+          ],
           "default": null
         },
         "reasoning_effort": {
-          "enum": ["low", "medium", "high", "xhigh"],
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
           "default": "medium"
         },
         "image_input": {
-          "anyOf": [{"type": "boolean"}, {"type": "null"}],
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
           "default": null
         },
-        "enabled": {"type": "boolean", "default": true}
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        }
       },
       "allOf": [
         {
-          "if": {"properties": {"kind": {"const": "codex_cli"}}, "required": ["kind"]},
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "codex_cli"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
           "then": {
             "properties": {
-              "endpoint": {"type": "null"},
-              "api_key_env": {"type": "null"}
+              "endpoint": {
+                "type": "null"
+              },
+              "api_key_env": {
+                "type": "null"
+              }
             }
           },
           "else": {
-            "required": ["endpoint", "api_key_env"],
+            "required": [
+              "endpoint",
+              "api_key_env"
+            ],
             "properties": {
-              "connection_mode": {"type": "null"},
-              "endpoint": {"type": "string", "minLength": 1},
-              "api_key_env": {"$ref": "#/$defs/env_var"}
+              "connection_mode": {
+                "type": "null"
+              },
+              "endpoint": {
+                "type": "string",
+                "minLength": 1
+              },
+              "api_key_env": {
+                "$ref": "#/$defs/env_var"
+              }
             }
           }
         }
       ]
+    },
+    "ExecutionTimePolicies": {
+      "additionalProperties": false,
+      "properties": {
+        "manager": {
+          "$ref": "#/$defs/ExecutionTimePolicy",
+          "default": {
+            "initial_seconds": 600,
+            "max_seconds": 2400,
+            "max_capacity_timeouts": 3
+          }
+        },
+        "product": {
+          "$ref": "#/$defs/ExecutionTimePolicy",
+          "default": {
+            "initial_seconds": 600,
+            "max_seconds": 2400,
+            "max_capacity_timeouts": 3
+          }
+        },
+        "designer": {
+          "$ref": "#/$defs/ExecutionTimePolicy",
+          "default": {
+            "initial_seconds": 600,
+            "max_seconds": 2400,
+            "max_capacity_timeouts": 3
+          }
+        },
+        "planner": {
+          "$ref": "#/$defs/ExecutionTimePolicy",
+          "default": {
+            "initial_seconds": 600,
+            "max_seconds": 2400,
+            "max_capacity_timeouts": 3
+          }
+        }
+      },
+      "title": "ExecutionTimePolicies",
+      "type": "object"
+    },
+    "ExecutionTimePolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "initial_seconds": {
+          "default": 600,
+          "maximum": 86400,
+          "minimum": 1,
+          "title": "Initial Seconds",
+          "type": "integer"
+        },
+        "max_seconds": {
+          "default": 2400,
+          "maximum": 86400,
+          "minimum": 1,
+          "title": "Max Seconds",
+          "type": "integer"
+        },
+        "max_capacity_timeouts": {
+          "default": 3,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Capacity Timeouts",
+          "type": "integer"
+        }
+      },
+      "title": "ExecutionTimePolicy",
+      "type": "object"
+    },
+    "ManagerRetryPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "max_transient_failures": {
+          "default": 5,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Transient Failures",
+          "type": "integer"
+        },
+        "max_attempts": {
+          "default": 2,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Attempts",
+          "type": "integer"
+        },
+        "max_coordination_rounds": {
+          "default": 3,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Coordination Rounds",
+          "type": "integer"
+        }
+      },
+      "title": "ManagerRetryPolicy",
+      "type": "object"
     }
   },
   "properties": {
-    "schema_version": {"const": "v0.2", "default": "v0.2"},
+    "schema_version": {
+      "const": "v0.2",
+      "default": "v0.2"
+    },
     "platform_root": {
       "type": "string",
       "minLength": 1,
       "pattern": "^(?:/(?!.*[\\u0000-\\u001F])(?!\\.\\.(?:/|$))(?!.*?/\\.\\.(?:/|$)).*|~/(?!.*[\\u0000-\\u001F])(?!/)(?!\\.\\.(?:/|$))(?!.*?/\\.\\.(?:/|$)).*)$",
       "description": "Optional on macOS and Linux, where it defaults to ~/.ase. Explicit absolute paths and safe leading ~/ paths are supported; resolution does not create directories."
     },
-    "team_id": {"type": "string", "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$", "default": "team_ai"},
-    "team_name": {"type": "string", "minLength": 1, "maxLength": 200, "default": "AI Team"},
+    "team_id": {
+      "type": "string",
+      "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$",
+      "default": "team_ai"
+    },
+    "team_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "default": "AI Team"
+    },
     "team_knowledge_paths": {
-      "type": "array", "maxItems": 64, "uniqueItems": true, "default": [],
-      "items": {"type": "string", "minLength": 1}
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "default": [],
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
     },
     "default_project_id": {
       "anyOf": [
-        {"type": "string", "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"},
-        {"type": "null"}
+        {
+          "type": "string",
+          "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"
+        },
+        {
+          "type": "null"
+        }
       ],
       "default": null
     },
     "default_project_name": {
       "anyOf": [
-        {"type": "string", "minLength": 1, "maxLength": 200},
-        {"type": "null"}
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        {
+          "type": "null"
+        }
       ],
       "default": null
     },
     "project_knowledge_paths": {
-      "type": "array", "maxItems": 64, "uniqueItems": true, "default": [],
-      "items": {"type": "string", "minLength": 1}
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "default": [],
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
     },
-    "database": {"$ref": "#/$defs/database"},
-    "design_retry_policy": {"$ref": "#/$defs/design_retry_policy"},
-    "execution_retry_policy": {"$ref": "#/$defs/ExecutionRetryPolicy"},
+    "database": {
+      "$ref": "#/$defs/database"
+    },
+    "design_retry_policy": {
+      "$ref": "#/$defs/design_retry_policy"
+    },
+    "execution_retry_policy": {
+      "$ref": "#/$defs/ExecutionRetryPolicy"
+    },
     "model_routes": {
       "type": "array",
       "minItems": 1,
       "maxItems": 16,
-      "items": {"$ref": "#/$defs/route"}
+      "items": {
+        "$ref": "#/$defs/route"
+      }
     },
     "agent_model_routes": {
       "type": "array",
       "maxItems": 7,
       "uniqueItems": true,
       "default": [],
-      "items": {"$ref": "#/$defs/agent_model_route_policy"},
+      "items": {
+        "$ref": "#/$defs/agent_model_route_policy"
+      },
       "oneOf": [
-        {"maxItems": 0},
+        {
+          "maxItems": 0
+        },
         {
           "minItems": 7,
           "maxItems": 7,
           "allOf": [
-            {"contains": {"properties": {"role": {"const": "manager"}}, "required": ["role"]}, "minContains": 1, "maxContains": 1},
-            {"contains": {"properties": {"role": {"const": "product"}}, "required": ["role"]}, "minContains": 1, "maxContains": 1},
-            {"contains": {"properties": {"role": {"const": "designer"}}, "required": ["role"]}, "minContains": 1, "maxContains": 1},
-            {"contains": {"properties": {"role": {"const": "planner"}}, "required": ["role"]}, "minContains": 1, "maxContains": 1},
-            {"contains": {"properties": {"role": {"const": "coder"}}, "required": ["role"]}, "minContains": 1, "maxContains": 1},
-            {"contains": {"properties": {"role": {"const": "qa"}}, "required": ["role"]}, "minContains": 1, "maxContains": 1},
-            {"contains": {"properties": {"role": {"const": "reviewer"}}, "required": ["role"]}, "minContains": 1, "maxContains": 1}
+            {
+              "contains": {
+                "properties": {
+                  "role": {
+                    "const": "manager"
+                  }
+                },
+                "required": [
+                  "role"
+                ]
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "role": {
+                    "const": "product"
+                  }
+                },
+                "required": [
+                  "role"
+                ]
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "role": {
+                    "const": "designer"
+                  }
+                },
+                "required": [
+                  "role"
+                ]
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "role": {
+                    "const": "planner"
+                  }
+                },
+                "required": [
+                  "role"
+                ]
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "role": {
+                    "const": "coder"
+                  }
+                },
+                "required": [
+                  "role"
+                ]
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "role": {
+                    "const": "qa"
+                  }
+                },
+                "required": [
+                  "role"
+                ]
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "role": {
+                    "const": "reviewer"
+                  }
+                },
+                "required": [
+                  "role"
+                ]
+              },
+              "minContains": 1,
+              "maxContains": 1
+            }
           ]
         }
       ]
     },
-    "codex_executable": {"type": "string", "minLength": 1, "default": "codex"},
+    "codex_executable": {
+      "type": "string",
+      "minLength": 1,
+      "default": "codex"
+    },
     "codex_cli_proxy_base_url": {
       "anyOf": [
         {
@@ -264,38 +690,80 @@
           "maxLength": 2048,
           "pattern": "^http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?(/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*)?$"
         },
-        {"type": "null"}
+        {
+          "type": "null"
+        }
       ],
       "default": null
     },
     "codex_cli_proxy_api_key_env": {
       "anyOf": [
-        {"const": "ASE_CODEX_PROXY_API_KEY"},
-        {"type": "null"}
+        {
+          "const": "ASE_CODEX_PROXY_API_KEY"
+        },
+        {
+          "type": "null"
+        }
       ],
       "default": null
     },
-    "live_model_execution": {"type": "boolean", "default": false},
-    "console_port": {"type": "integer", "minimum": 1, "maximum": 65535, "default": 8765}
+    "live_model_execution": {
+      "type": "boolean",
+      "default": false
+    },
+    "console_port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535,
+      "default": 8765
+    }
   },
   "allOf": [
     {
       "if": {
-        "required": ["codex_cli_proxy_api_key_env"],
-        "properties": {"codex_cli_proxy_api_key_env": {"type": "string"}}
+        "required": [
+          "codex_cli_proxy_api_key_env"
+        ],
+        "properties": {
+          "codex_cli_proxy_api_key_env": {
+            "type": "string"
+          }
+        }
       },
       "then": {
-        "required": ["codex_cli_proxy_base_url"],
-        "properties": {"codex_cli_proxy_base_url": {"type": "string"}}
+        "required": [
+          "codex_cli_proxy_base_url"
+        ],
+        "properties": {
+          "codex_cli_proxy_base_url": {
+            "type": "string"
+          }
+        }
       }
     },
     {
-      "if": {"required": ["default_project_id"]},
-      "then": {"required": ["default_project_name"]}
+      "if": {
+        "required": [
+          "default_project_id"
+        ]
+      },
+      "then": {
+        "required": [
+          "default_project_name"
+        ]
+      }
     },
     {
-      "if": {"required": ["default_project_name"]},
-      "then": {"required": ["default_project_id"]}
+      "if": {
+        "required": [
+          "default_project_name"
+        ]
+      },
+      "then": {
+        "required": [
+          "default_project_id"
+        ]
+      }
     }
   ]
 }

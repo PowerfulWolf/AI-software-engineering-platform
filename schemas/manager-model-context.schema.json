@@ -1,0 +1,35 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "input_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Input Sha256",
+      "type": "string"
+    },
+    "payload": {
+      "additionalProperties": true,
+      "title": "Payload",
+      "type": "object"
+    },
+    "instructions": {
+      "minLength": 1,
+      "title": "Instructions",
+      "type": "string"
+    },
+    "output_schema": {
+      "additionalProperties": true,
+      "title": "Output Schema",
+      "type": "object"
+    }
+  },
+  "required": [
+    "input_sha256",
+    "payload",
+    "instructions",
+    "output_schema"
+  ],
+  "title": "ManagerContext",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/manager-model-context.schema.json"
+}

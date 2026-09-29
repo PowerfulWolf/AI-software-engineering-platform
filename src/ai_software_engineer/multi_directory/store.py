@@ -119,6 +119,15 @@ def _validate_successor(previous: JointCheckpoint | None, item: JointCheckpoint)
         or item.previous_checkpoint_sha256 != previous.checkpoint_sha256
     ):
         raise ValueError("joint journal hash chain is broken")
+    if item.coordination is not None and item.coordination != previous.coordination:
+        from ai_software_engineer.manager.stage_coordination import stage_facts_sha256
+
+        if (
+            item.coordination.source_checkpoint_sha256 != previous.checkpoint_sha256
+            or item.coordination.source_facts_sha256 != stage_facts_sha256(previous)
+            or stage_facts_sha256(item) != stage_facts_sha256(previous)
+        ):
+            raise ValueError("Manager advice does not bind the unchanged source facts")
     for field in (
         "delivery_id",
         "team_id",
