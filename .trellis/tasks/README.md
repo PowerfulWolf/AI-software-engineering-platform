@@ -16,6 +16,7 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 
 | 目录 | 状态 / 阶段 | 剩余事项 |
 |---|---|---|
+| [10-01-python-mysql-verification](10-01-python-mysql-verification/task.json) | in_progress / runner_and_discovery_verified_not_activated | 已验证 capability/discovery/runner；尚需隔离资源生命周期、精确审批和独立 QA/Review evidence 接线 |
 | [10-01-requested-recovery-scope](10-01-requested-recovery-scope/task.json) | in_progress / activated_terminal_only | 精确范围双审批已验证并加载；当前非终态 K1 尚不适用此恢复入口 |
 | [10-01-worker-lease-status-recovery](10-01-worker-lease-status-recovery/task.json) | in_progress / verification | 页面中断状态已验证；精确中断恢复、独立验收及 K1 真实交付继续推进 |
 | [09-30-coder-preexecution-auth-recovery](09-30-coder-preexecution-auth-recovery/task.json) | in_progress / verification | 已接纳 Coder progress 的续跑知识失败恢复、CLI诊断分类；增量验证与 K1 继续交付 |
@@ -138,4 +139,4 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 | 09-21-knowledge-resolution-ui | knowledge-resolution-ui | [completed](09-21-knowledge-resolution-ui/task.json) |
 | 09-21-trellis-record-normalization | trellis-record-normalization-20260921 | [completed](09-21-trellis-record-normalization/task.json) |
 
-汇总：当前 9；待核实 14；已完成 88。
+汇总：当前 10；待核实 14；已完成 88。

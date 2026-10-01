@@ -417,3 +417,35 @@ the capability and propose a new version. A normal subprocess XCTest pass did no
 OS sandbox worked; cache relocation alone exposed a separate nested `sandbox_apply` denial.
 Official profile semantics: https://developers.openai.com/codex/permissions ; the local executable
 and actual denial tests, not documentation alone, establish this host's working boundary.
+
+## Python/MySQL executor foundations (2026-10-01, not activated)
+
+The new `manager/python_verification*.py` modules define exact `PytestSelection` values,
+a versioned capability, read-only discovery and a fixed interpreter runner. They do not yet
+register a production executor, extend model authority or authorize candidate verification.
+Docker lifecycle, exact-plan/receipt integration and independent acceptance remain required.
+
+- Discovery binds binary, runner, complete Python runtime and dependency tree hashes. `-B`
+  prevents bytecode writes, not reads: existing `.pyc` is included. Directory scanning errors
+  fail closed. Only direct regular-file aliases inside the registered tree are accepted; link
+  text and canonical relative target are hashed. External hops, even returning inside, reject.
+- Candidate selectors are checked from exact Git objects, with replacement refs and lazy fetch
+  disabled and transport denied. No candidate import, image pull or container creation occurs.
+- The standalone runner uses `-I -S -B`, bypasses editable `.pth`, disables ambient pytest
+  plugins/addopts/parent conftest, checks both directions of exact collection membership and
+  limits collection to 256 cases. Skipped checks make command exit nonzero; exit zero is not PASS.
+- On the observed macOS Codex executable, `:root=none` plus `:minimal=read` still allowed
+  reading unrelated public temporary files. Explicit `:slash_tmp=none` and `:tmpdir=none`
+  are necessary before reopening only approved source/runtime/runner/config reads and scratch
+  writes. Preserve `--include-managed-config`, disabled network and exact Unix socket access.
+  Do not infer safety from a successful ordinary-directory probe.
+- OS regression fixtures cover both user and public temporary roots, source writes, unrelated
+  temporary secret reads/writes, socket unlink/rebind/alias and TCP denial, plus the permitted
+  socket. Keep Unix socket paths below the macOS sockaddr limit when allocating owned temp roots.
+
+Targeted checks: `tests/manager/test_python_verification.py`,
+`test_python_verification_discovery.py`, and `test_python_verification_runner.py`.
+Real OS checks require explicit `ASE_RUN_SANDBOX_TESTS=1` and
+`ASE_TEST_CODEX_EXECUTABLE=/absolute/codex`; no production DSN or model invocation is used.
+The official profile reference is <https://developers.openai.com/codex/permissions>; observed
+denial tests remain authoritative for the installed version. Historical Swift plans are unchanged.
