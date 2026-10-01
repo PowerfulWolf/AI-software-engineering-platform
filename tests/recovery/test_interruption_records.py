@@ -10,10 +10,12 @@ from jsonschema import Draft202012Validator, FormatChecker
 from ai_software_engineer.domain.workforce import TaskLease
 from ai_software_engineer.recovery.interruption_records import RecoveryInterruptionPlan
 from ai_software_engineer.recovery.models import (
+    CapturedChanges,
     RecoveryApprovalCommand,
     RecoveryAuthorization,
     RecoveryRejected,
     VerifiedRecoveryDecision,
+    digest,
 )
 from ai_software_engineer.recovery.store import FileRecoveryStore
 from tests.recovery.test_authorization import make_plan
@@ -99,3 +101,35 @@ def test_interruption_plan_rejects_live_lease_and_digest_drift(tmp_path: Path) -
     live = live.model_copy(update={"plan_sha256": live.recompute_sha256()})
     with pytest.raises(RecoveryRejected, match="expired"):
         live.validate_integrity()
+
+
+def test_interruption_legacy_wire_and_digest_remain_unchanged(tmp_path: Path) -> None:
+    plan = plan_fixture(tmp_path)
+    assert plan.stopped_capture is None
+    payload = plan.to_wire()
+    assert "stopped_capture" not in payload
+    assert plan.plan_sha256 == digest({k: v for k, v in payload.items() if k != "plan_sha256"})
+    assert RecoveryInterruptionPlan.model_validate(payload) == plan
+
+
+def test_interruption_plan_seals_changed_capture_and_rejects_foreign_identity(
+    tmp_path: Path,
+) -> None:
+    plan = plan_fixture(tmp_path)
+    seed = make_plan(tmp_path / "capture-project").capture
+    candidate = seed.model_copy(update={"task_id": plan.task_id, "attempt": 1})
+    capture = CapturedChanges.from_capture(candidate.to_capture())
+    bound = plan.model_copy(update={"stopped_capture": capture})
+    bound = bound.model_copy(update={"plan_sha256": bound.recompute_sha256()})
+    bound.validate_integrity()
+    assert bound.plan_sha256 != plan.plan_sha256
+    assert RecoveryInterruptionPlan.model_validate(bound.to_wire()) == bound
+    schema = json.loads(Path("schemas/recovery-interruption.schema.json").read_text())
+    Draft202012Validator(schema, format_checker=FormatChecker()).validate(bound.to_wire())
+    store = FileRecoveryStore.initialize(tmp_path / "changed-records", scope=bound.scope)
+    store.put_interruption_plan(bound)
+    assert store.get_interruption_plan(bound.recovery_plan_sha256) == bound
+    wrong = bound.model_copy(update={"task_id": "task_other"})
+    wrong = wrong.model_copy(update={"plan_sha256": wrong.recompute_sha256()})
+    with pytest.raises(RecoveryRejected, match="capture"):
+        wrong.validate_integrity()

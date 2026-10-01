@@ -623,11 +623,23 @@ def test_continue_hides_the_plan_reference_inside_manager_command(
     assert command.approval_reference == "web-console-plan:" + "4" * 64
 
 
-def test_interruption_approval_has_its_own_exact_plan_and_summary(tmp_path: Path) -> None:
+@pytest.mark.parametrize("changed", [False, True])
+def test_interruption_approval_has_its_own_exact_plan_and_summary(
+    tmp_path: Path, changed: bool
+) -> None:
+    from ai_software_engineer.recovery.models import CapturedChanges
     from ai_software_engineer.web_console.manager import _summarize
+    from tests.recovery.test_authorization import make_plan
     from tests.recovery.test_interruption_records import plan_fixture
 
     plan = plan_fixture(tmp_path)
+    if changed:
+        seed = make_plan(tmp_path / "capture").capture
+        capture = CapturedChanges.from_capture(
+            seed.model_copy(update={"task_id": plan.task_id}).to_capture()
+        )
+        plan = plan.model_copy(update={"stopped_capture": capture})
+        plan = plan.model_copy(update={"plan_sha256": plan.recompute_sha256()})
     checkpoint = ProjectDeliveryCheckpoint.create(
         delivery_id=plan.scope.delivery_id,
         sequence=1,
@@ -655,6 +667,12 @@ def test_interruption_approval_has_its_own_exact_plan_and_summary(tmp_path: Path
     assert result.approval.plan_sha256 == plan.plan_sha256
     assert result.approval.plan_sha256 != plan.recovery_plan_sha256
     assert any("保留同一任务" in fact for fact in result.approval.facts)
+    if changed:
+        assert plan.stopped_capture is not None
+        assert any(plan.stopped_capture.capture_sha256 in fact for fact in result.approval.facts)
+        assert not any("与已批准 seed 完全一致" in fact for fact in result.approval.facts)
+    else:
+        assert any("与已批准 seed 完全一致" in fact for fact in result.approval.facts)
 
 
 def test_continue_sends_an_exact_scope_approval_separately_from_plan_approval(

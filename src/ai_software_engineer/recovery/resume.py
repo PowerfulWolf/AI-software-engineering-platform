@@ -679,7 +679,7 @@ class DeliveryResumeController:
                         outcome=DeliveryResumeOutcome.RECOVERY_APPROVAL_REQUIRED,
                         checkpoint=current,
                         interruption_plan=proposal,
-                        next_action="Approve one replacement Coder Run on the unchanged seed.",
+                        next_action="Approve one new Coder Run on the exact stopped workspace.",
                     )
                 assert command.approval_reference is not None
                 execution = self._recovery.execute_interruption(

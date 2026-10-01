@@ -632,7 +632,13 @@ class NativeRecoveryEntry:
                     ExplicitRecoveryHuman(confirmed_plan)
                     .verify(command)
                     .model_copy(
-                        update={"rationale": "One replacement Run; unchanged seed and Task"}
+                        update={
+                            "rationale": (
+                                "One replacement Run; exact approved workspace and same Task"
+                                if proposal.stopped_capture is not None
+                                else "One replacement Run; unchanged seed and Task"
+                            )
+                        }
                     )
                 )
                 approval = store.put_interruption_authorization(
@@ -845,7 +851,10 @@ class NativeRecoveryEntry:
             permissions=definitions[AgentRole.CODER].permissions,
             contexts=contexts,
         )
-        seed.seed(binding.worktree)
+        if interruption is None:
+            seed.seed(binding.worktree)
+        else:
+            interruption.prepare_workspace(binding.worktree)
         extra = _approved_parent_context(self.config, plan)
         # Failed prerequisite Coder work must retain the separately approved repair objective,
         # not just its dirty files and write allowlist. Read the sealed prior manifest and grant.

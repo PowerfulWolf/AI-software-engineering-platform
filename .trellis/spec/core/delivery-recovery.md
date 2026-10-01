@@ -1,6 +1,6 @@
 # Explicit delivery recovery — T044
 
-## Expired first recovery invocation with an unchanged seed (2026-10-01)
+## Expired first recovery invocation with an exactly approved workspace (2026-10-01)
 
 `RecoveryInterruptionService.propose() -> RecoveryInterruptionPlan` and
 `NativeRecoveryEntry.execute_interruption(path, confirmed_plan, reference)` provide a separately
@@ -10,8 +10,24 @@ Console approval kind is `coder_interruption`. This does not replay the original
 The plan binds original plan/authorization/seed/invocation hashes, exact scope, Task/event/dispatch
 digests, revision, original WorkItem generation and expired TaskLease. Only IMPLEMENTING attempt 1
 with the exact two-event NEW→PLANNING→IMPLEMENTING history qualifies. No completed route, delivery
-artifact or queue-accepted output may exist. Worktree HEAD/index/content must match the sealed seed.
+artifact or queue-accepted output may exist. Legacy plans without `stopped_capture` require worktree
+HEAD/index/content to match the sealed seed. New proposals may bind an optional `CapturedChanges`
+snapshot of legitimate edits completed before interruption: `stopped_capture=None` is omitted from
+wire/digest to preserve old approvals; a changed snapshot requires a new plan digest and approval.
+Snapshot Task/attempt, worktree path/branch, HEAD and diff base must match the original seed identity.
+The original seed remains immutable lineage, not a replacement for the current workspace bytes.
 The stopped Task's process lock must be obtainable; original facts and target policy remain current.
+
+First proposal uses existing bounded, safe, read-only `capture_changes` with current effective
+permissions and deny rules. Plan publication seals all files, content hashes, index diff and patch.
+Re-proposal, approval preflight and real Worker admission verify that exact stored snapshot; they
+cannot overwrite an existing plan or accept subsequent drift. Capture rejection becomes a stable
+RecoveryRejected human gate, not an uncaught Manager failure. Console facts and persisted approval
+rationale must distinguish original-seed recovery from separately approved stopped-workspace recovery.
+`prepare_workspace(target: WorktreeRef)` reacquires the stopped Task lock, checks the target's full
+seed identity and re-inspects the sealed plan. Interruption execution must not call the ordinary
+seed replay entry, which verifies pre-invocation bytes. Preparation itself grants no execution
+authority; real Worker admission still performs the final fenced checks below.
 
 Approval is append-only and addresses the new plan digest. The native reaper expires the old owner;
 Dispatcher claims the same logical WorkItem with the next generation. Admission checks the real
@@ -24,7 +40,8 @@ replacement admission; another uncertain interruption fails closed.
 | Facts | Result |
 |---|---|
 | expired claim, unchanged approved seed, stopped process, no output | publish exact proposal |
-| wrong/old approval, active process/claim, changed seed/events/target, route or artifact | refuse |
+| legitimate edits before first proposal, same seed identity, current permissions | publish new capture-bound proposal; require its exact approval |
+| wrong/old approval, active process/claim, drift after proposal, changed identity/events/target, route or artifact | refuse |
 | approved plan + exact next generation + fresh Run | admit once, then normal Coder→QA→Reviewer |
 | another generation or already consumed replacement receipt | refuse, preserve history |
 

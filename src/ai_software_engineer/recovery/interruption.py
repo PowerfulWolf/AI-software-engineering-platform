@@ -1,4 +1,4 @@
-"""Inspect a stopped, unchanged seed before a separately approved replacement Run."""
+"""Inspect a stopped workspace before a separately approved replacement Run."""
 
 from __future__ import annotations
 
@@ -15,17 +15,34 @@ from ai_software_engineer.agents.execution import current_execution_guard
 from ai_software_engineer.agents.fallback import model_route_root
 from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.context import FileContextStore
-from ai_software_engineer.domain import AgentRole, PlanArtifact, TaskStatus, WorkItemStatus
+from ai_software_engineer.domain import (
+    AgentPermissions,
+    AgentRole,
+    PlanArtifact,
+    TaskStatus,
+    WorkItemStatus,
+)
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.domain.task import task_matches_dispatch
 from ai_software_engineer.domain.workforce import TaskLease
+from ai_software_engineer.git import (
+    GitWorkspaceError,
+    GitWorktreeManager,
+    WorkspacePolicyError,
+    WorktreeRef,
+)
 from ai_software_engineer.recovery.context import validate_reapply_context
 from ai_software_engineer.recovery.current import NativeRecoveryFactsVerifier
 from ai_software_engineer.recovery.interruption_records import (
     RecoveryInterruptionInvocation,
     RecoveryInterruptionPlan,
 )
-from ai_software_engineer.recovery.models import RecoveryPlan, RecoveryRejected, digest
+from ai_software_engineer.recovery.models import (
+    CapturedChanges,
+    RecoveryPlan,
+    RecoveryRejected,
+    digest,
+)
 from ai_software_engineer.recovery.store import FileRecoveryStore, RecoveryRecordMissing
 from ai_software_engineer.store.mysql_repository import (
     _decode_event,
@@ -48,6 +65,39 @@ if TYPE_CHECKING:
 class _QueueEventPayload(DomainModel):
     work_item: QueuedWorkItem
     detail: dict[str, JsonValue]
+
+
+def _stopped_workspace_capture(
+    manager: GitWorktreeManager,
+    seed: CapturedChanges,
+    permissions: AgentPermissions,
+    denied_paths: tuple[str, ...],
+    expected: RecoveryInterruptionPlan | None,
+) -> CapturedChanges | None:
+    """Seal a first proposal or verify its exact bytes; the caller owns the Task lock."""
+    original = seed.to_capture()
+    try:
+        if expected is not None:
+            approved = expected.stopped_capture or seed
+            capture = approved.to_capture()
+            if (
+                capture.worktree != original.worktree
+                or capture.base_revision != original.base_revision
+            ):
+                raise RecoveryRejected("interruption capture workspace identity differs from seed")
+            manager.verify_capture(capture, permissions, denied_paths=denied_paths)
+            return expected.stopped_capture
+        observed = manager.capture_changes(
+            original.worktree,
+            permissions,
+            denied_paths=denied_paths,
+            base_revision=original.base_revision,
+        )
+    except (GitWorkspaceError, WorkspacePolicyError) as error:
+        raise RecoveryRejected(
+            "interrupted workspace cannot satisfy its exact capture and current policy"
+        ) from error
+    return None if observed == original else CapturedChanges.from_capture(observed)
 
 
 class RecoveryInterruptionService:
@@ -83,15 +133,21 @@ class RecoveryInterruptionService:
         if (
             not authorization.decision.approved
             or sealed.authorization_sha256 != authorization.authorization_sha256
+            or seed.recovery_plan_sha256 != original.plan_sha256
+            or seed.dispatch_sha256 != dispatch.dispatch_sha256
+            or invocation.recovery_plan_sha256 != original.plan_sha256
+            or invocation.seed_record_sha256 != seed.record_sha256
         ):
-            raise RecoveryRejected("original recovery is not approved")
+            raise RecoveryRejected("original recovery approval or seed lineage differs")
         manager = self.entry._manager(
             original.source.scope, {sealed.task.id: sealed.task.branch_name}
         )
-        manager.verify_capture(
-            seed.capture.to_capture(),
+        stopped_capture = _stopped_workspace_capture(
+            manager,
+            seed.capture,
             original.effective_target_permissions,
-            denied_paths=original.denied_paths,
+            original.denied_paths,
+            expected,
         )
         prior_context = FileContextStore(self.sidecar / "contexts", read_only=True).get(
             invocation.context_manifest_id
@@ -302,6 +358,7 @@ class RecoveryInterruptionService:
             recovery_plan_sha256=original.plan_sha256,
             authorization_sha256=authorization.authorization_sha256,
             seed_record_sha256=seed.record_sha256,
+            stopped_capture=stopped_capture,
             invocation_record_sha256=invocation.record_sha256,
             task_id=task.id,
             task_sha256=digest(task.to_wire()),
@@ -331,6 +388,15 @@ class RecoveryInterruptionService:
         with WorkerExecutionGuard().task_scope(self.locks, task_id):
             plan = self.inspect(expected=expected)
             return self.store.put_interruption_plan(plan)
+
+    def prepare_workspace(self, target: WorktreeRef) -> None:
+        """Reopen the approved retained workspace without seeding or rewriting its receipt."""
+        plan = self.store.get_interruption_plan(self.original.plan_sha256)
+        with WorkerExecutionGuard().task_scope(self.locks, plan.task_id):
+            seed = self.store.get_seed(self.original.plan_sha256)
+            if seed.capture.to_capture().worktree != target:
+                raise RecoveryRejected("interruption seed belongs to another target workspace")
+            self.inspect(expected=plan)
 
     def authorize(self, request: AgentRequest, workspace_root: Path) -> None:
         """InitialWorkspaceAdmission implementation, called under the new real Worker."""

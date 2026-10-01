@@ -492,7 +492,19 @@ def _summarize(
                 facts=(
                     f"保留同一任务 {interruption.task_id} 和工作目录",
                     f"旧执行租约于 {interruption.expired_lease.expires_at.isoformat()} 失效",
-                    "旧执行已停止。保留改动与已批准 seed 完全一致。没有候选或后续角色验收结果。",
+                    *(
+                        (
+                            "旧执行已停止。本次批准中断时的完整改动快照, 原 seed 与历史不改写。",
+                            f"保留快照 {interruption.stopped_capture.capture_sha256}",
+                            *(
+                                f"保留文件 {file.path}"
+                                for file in interruption.stopped_capture.files
+                            ),
+                        )
+                        if interruption.stopped_capture is not None
+                        else ("旧执行已停止。保留改动与已批准 seed 完全一致。",)
+                    ),
+                    "没有候选或后续角色验收结果。",
                     "只批准一次新租约、新 Run。原调用、审批和失败历史保留。不退还或重置预算。",
                     "权限和验收范围不变。完成实现后仍须独立 QA 和 Reviewer。不授权合并或部署。",
                 ),

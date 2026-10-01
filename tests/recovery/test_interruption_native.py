@@ -39,11 +39,15 @@ from tests.recovery.test_native import InterruptedFactory
 
 
 class LossAdapter:
-    def __init__(self, admission: InitialWorkspaceAdmission, root: Path) -> None:
-        self.admission, self.root = admission, root
+    def __init__(
+        self, admission: InitialWorkspaceAdmission, root: Path, *, changed: bool = False
+    ) -> None:
+        self.admission, self.root, self.changed = admission, root, changed
 
     def run(self, request: AgentRequest) -> AgentResult:
         self.admission.authorize(request, self.root)
+        if self.changed:
+            (self.root / "hello.txt").write_text("work completed before lease loss\n")
         guard = current_execution_guard()
         assert isinstance(guard, WorkerExecutionGuard) and guard.lease is not None
         lease = guard.lease
@@ -73,8 +77,10 @@ class CompleteAdapter:
 
 
 class Factory:
-    def __init__(self, admission: InitialWorkspaceAdmission, *, lose: bool = False) -> None:
-        self.admission, self.lose = admission, lose
+    def __init__(
+        self, admission: InitialWorkspaceAdmission, *, lose: bool = False, changed: bool = False
+    ) -> None:
+        self.admission, self.lose, self.changed = admission, lose, changed
         self.calls: list[AgentRequest] = []
 
     def create(
@@ -88,8 +94,15 @@ class Factory:
         environment: Mapping[str, str],
     ) -> AgentAdapter:
         if self.lose:
-            return LossAdapter(self.admission, binding.worktree.path)
-        runner = OfflineRunner(definition, binding.worktree.path, self.calls)
+            return LossAdapter(self.admission, binding.worktree.path, changed=self.changed)
+        runner = OfflineRunner(
+            definition,
+            binding.worktree.path,
+            self.calls,
+            seed_text=(
+                "work completed before lease loss\n" if self.changed else "partially implemented\n"
+            ),
+        )
         return CompleteAdapter(
             CodexCliAgentAdapter(
                 workspace_root=binding.worktree.path,
@@ -108,9 +121,11 @@ class Factory:
 
 
 @pytest.mark.mysql
+@pytest.mark.parametrize("changed", [False, True])
 def test_exact_interruption_resume_keeps_seed_and_old_invocation(
     tmp_path: Path,
     mysql_dsn: str,
+    changed: bool,
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -152,7 +167,7 @@ def test_exact_interruption_resume_keeps_seed_and_old_invocation(
     recovery.approve(path, confirmed_plan=plan.plan_sha256, reference="recovery-approval")
 
     def lost(seed: RecoverySeedService) -> Factory:
-        return Factory(seed, lose=True)
+        return Factory(seed, lose=True, changed=changed)
 
     with pytest.raises(QueueLeaseLost):
         recovery.execute(path, route_factory=lost)
@@ -171,19 +186,25 @@ def test_exact_interruption_resume_keeps_seed_and_old_invocation(
     assert current.blocker is not None and "租约" in current.blocker
     service = RecoveryInterruptionService(recovery, store, plan)
     proposal = service.propose()
+    if changed:
+        assert proposal.stopped_capture is not None
+        assert "work completed before lease loss" in proposal.stopped_capture.patch
+        assert proposal.stopped_capture != seed.capture
+    else:
+        assert proposal.stopped_capture is None
     assert service.propose() == proposal
     with pytest.raises(RecoveryRejected, match="exact interruption"):
         recovery.execute_interruption(path, confirmed_plan=plan.plan_sha256, reference="stale")
     retained = Path(seed.capture.worktree_path) / "hello.txt"
     original = retained.read_bytes()
     retained.write_text("changed after inspection\n")
-    with pytest.raises(WorktreeCaptureRejected):
+    with pytest.raises((RecoveryRejected, WorktreeCaptureRejected)):
         service.propose()
     retained.write_bytes(original)
     factories: list[Factory] = []
 
     def complete(admission: InitialWorkspaceAdmission) -> Factory:
-        factory = Factory(admission)
+        factory = Factory(admission, changed=changed)
         factories.append(factory)
         return factory
 

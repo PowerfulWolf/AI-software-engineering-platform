@@ -1,4 +1,4 @@
-"""Exact authority for one replacement invocation of an unchanged recovery seed."""
+"""Exact authority for one replacement invocation of an approved stopped workspace."""
 
 from typing import Annotated, Literal
 
@@ -9,7 +9,12 @@ from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.domain.project_delivery import StageSha256
 from ai_software_engineer.domain.task import TaskId
 from ai_software_engineer.domain.workforce import LeaseId, TaskLease
-from ai_software_engineer.recovery.models import RecoveryRejected, RecoveryScope, digest
+from ai_software_engineer.recovery.models import (
+    CapturedChanges,
+    RecoveryRejected,
+    RecoveryScope,
+    digest,
+)
 from ai_software_engineer.work_queue.models import WorkItemId
 
 
@@ -20,6 +25,9 @@ class RecoveryInterruptionPlan(DomainModel):
     recovery_plan_sha256: StageSha256
     authorization_sha256: StageSha256
     seed_record_sha256: StageSha256
+    stopped_capture: CapturedChanges | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     invocation_record_sha256: StageSha256
     task_id: TaskId
     task_sha256: StageSha256
@@ -41,6 +49,10 @@ class RecoveryInterruptionPlan(DomainModel):
             raise RecoveryRejected("interruption plan digest mismatch")
         if self.expired_lease.expires_at > self.created_at:
             raise RecoveryRejected("interruption plan requires an expired lease")
+        if self.stopped_capture is not None and (
+            self.stopped_capture.task_id != self.task_id or self.stopped_capture.attempt != 1
+        ):
+            raise RecoveryRejected("interruption capture must bind the same first-attempt Task")
 
 
 class RecoveryInterruptionInvocation(DomainModel):

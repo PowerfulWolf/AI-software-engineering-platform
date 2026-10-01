@@ -932,8 +932,13 @@ failure uses an ordinary new plan referencing the actual Coder Run, never a fabr
 `recovery-interruption.schema.json`; Console exposes exact `coder_interruption` approval through
 `CONTINUE_DELIVERY.approved_plan_sha256`. A proposal binds the original plan, approval, seed,
 invocation, Task/event/dispatch digests and expired lease generation. It permits one new claim/Run
-for the same first Coder WorkItem only after exclusive stopped-Task inspection proves the worktree
-is byte-identical to the seed and no completed route/candidate/accepted output exists.
+for the same first Coder WorkItem only after exclusive stopped-Task inspection proves no completed
+route/candidate/accepted output exists. Legacy plans require a byte-identical seed. A new optional
+`stopped_capture` binds the complete current patch, file hashes and index for legitimate edits
+produced before interruption, retaining the original seed's exact worktree/branch/HEAD/base identity.
+Absent capture is omitted from wire/digest for compatibility; changed bytes require a new exact
+plan approval. Subsequent drift is rejected. Execution reopens and verifies the approved workspace
+without replaying or overwriting the original seed receipt.
 
 Native reaping may occur before proposal or after approval; both paths validate the original
 CLAIMED event, exact LEASE_EXPIRED event and single next generation. Provider admission rechecks
