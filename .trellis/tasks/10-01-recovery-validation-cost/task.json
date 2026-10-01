@@ -1,0 +1,6 @@
+{
+  "id": "recovery-validation-cost-20261001",
+  "title": "减少原生恢复分配前的重复完整校验开销",
+  "status": "planned",
+  "phase": "read_only_diagnosis_recorded"
+}

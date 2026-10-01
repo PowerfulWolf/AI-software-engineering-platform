@@ -2320,3 +2320,18 @@ capture or execution.
 Incremental tests must include prior progress after a later real failure, current progress,
 missing/corrupt facts, latest-only selection, and a native timeout scope recovery retaining the
 actual failed Run, additional dirty bytes, old Task history and independent QA/Review.
+
+### Recovery admission latency observation (2026-10-01)
+
+The real K1 recovery on `ed12f25` spent several minutes between authorization, Task sealing and
+workspace seeding before successfully starting Coder. A sealed Task with no dispatched WorkItem
+yet is not itself proof of a deadlock. Observe the Operation, seed, queue lease and invocation
+facts separately; do not restart an active recovery solely because allocation is slow.
+
+Read-only inspection found nested full-source validation in builder, sealing and allocator
+freshness checks. Static call counts suggest repeated immutable-lineage verification is a major
+amplifier, but do not establish a measured CPU breakdown or exponential lineage recursion.
+The [follow-up task](../../tasks/10-01-recovery-validation-cost/prd.md) requires a deterministic
+read-count regression before optimization. Any reuse must be bounded to one operation and must
+preserve current checkpoint, approval, HEAD, dirty capture and owner-fence checks at their
+authorization boundaries; speed is not a reason to accept stale facts.

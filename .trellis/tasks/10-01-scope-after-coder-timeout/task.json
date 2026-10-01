@@ -1,6 +1,8 @@
 {
   "id": "scope-after-coder-timeout-20261001",
   "title": "后续 Coder 超时后保留已接纳进度的精确范围申请资格",
-  "status": "in_progress",
-  "phase": "verified_pending_activation"
+  "status": "completed",
+  "phase": "activated_and_native_recovery_verified",
+  "implementation_commit": "ed12f2550093ed3247775276eacf89339b68efb5",
+  "production_recovery_task_id": "task_recovery_e35017a761b1037b5a1318e151250922"
 }

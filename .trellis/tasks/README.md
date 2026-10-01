@@ -16,9 +16,8 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 
 | 目录 | 状态 / 阶段 | 剩余事项 |
 |---|---|---|
-| [10-01-scope-after-coder-timeout](10-01-scope-after-coder-timeout/task.json) | in_progress / verified_pending_activation | scope历史证据查找已通过增量及原生双审批恢复；待加载后推进K1新基线 |
+| [10-01-recovery-validation-cost](10-01-recovery-validation-cost/task.json) | planned / read_only_diagnosis_recorded | 已记录恢复分配前重复完整校验；待确定性计数回归及保留freshness门禁的优化 |
 | [10-01-python-mysql-verification](10-01-python-mysql-verification/task.json) | in_progress / runner_and_discovery_verified_not_activated | 已验证 capability/discovery/runner；尚需隔离资源生命周期、精确审批和独立 QA/Review evidence 接线 |
-| [10-01-requested-recovery-scope](10-01-requested-recovery-scope/task.json) | in_progress / activated_terminal_only | 精确范围双审批已验证并加载；当前非终态 K1 尚不适用此恢复入口 |
 | [10-01-worker-lease-status-recovery](10-01-worker-lease-status-recovery/task.json) | in_progress / verification | 页面中断状态已验证；精确中断恢复、独立验收及 K1 真实交付继续推进 |
 | [09-30-coder-preexecution-auth-recovery](09-30-coder-preexecution-auth-recovery/task.json) | in_progress / verification | 已接纳 Coder progress 的续跑知识失败恢复、CLI诊断分类；增量验证与 K1 继续交付 |
 | [09-25-team-evolution-audit](09-25-team-evolution-audit/task.json) | in_progress / execute | 当前需求已交付；显式知识闭环与候选验证 Manager 协调已接通，下一步自动收集、上游学习生产者、通用能力扩展 |
@@ -58,6 +57,8 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 
 | 目录 | 任务 ID | 状态记录 |
 |---|---|---|
+| 10-01-scope-after-coder-timeout | scope-after-coder-timeout-20261001 | [completed](10-01-scope-after-coder-timeout/task.json)：ed12f25已推送加载；真实scope→plan双审批成功，新Coder在新基线执行，K1尚未完成 |
+| 10-01-requested-recovery-scope | requested-recovery-scope-20261001 | [completed](10-01-requested-recovery-scope/task.json)：真实测试文件scope已获精确批准并进入新Task，旧Task及历史保留 |
 | 10-01-coder-knowledge-wait | coder-knowledge-wait-20261001 | [completed](10-01-coder-knowledge-wait/task.json)：当前 Coder 知识等待已接回、页面等待状态已验证；正式批准知识答复后同 Task 已恢复运行 |
 | 09-28-semantic-branch-naming | semantic-branch-naming-20260928 | [completed](09-28-semantic-branch-naming/task.json)：语义分支、审批绑定与恢复归属保护完成；验证报告交付后用户授权提交推送 |
 | 09-28-release-delivery-retrospective | release-delivery-retrospective-20260928 | [completed](09-28-release-delivery-retrospective/task.json)：v0.1.2 已发布，业务候选已合并安装，ASE 复盘已落盘 |
@@ -140,4 +141,4 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 | 09-21-knowledge-resolution-ui | knowledge-resolution-ui | [completed](09-21-knowledge-resolution-ui/task.json) |
 | 09-21-trellis-record-normalization | trellis-record-normalization-20260921 | [completed](09-21-trellis-record-normalization/task.json) |
 
-汇总：当前 11；待核实 14；已完成 88。
+汇总：当前 10；待核实 14；已完成 90。

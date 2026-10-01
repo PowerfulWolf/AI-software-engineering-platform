@@ -15,3 +15,14 @@
 - 独立QA提出两处低级wire不一致：Console scope request的approval kind限制、supplement request/requested_files成对约束。已同步generator/schema及四类删除/null反向测试；定向4 passed，typed与JSON Schema均拒绝。未涉及运行时权限放宽。
 - 独立QA最终复核：上述两个low findings关闭；额外0/9 requested_files边界两种validator均拒绝，Schema自身有效；定向3 passed。独立Reviewer无剩余问题。
 - 06:31Z真实K1第三份progress art_coder_4375c6530f603c25a701a30048d5b5df已接纳，自动进入attempt4。只读冻结Context显示max_work_attempts=10/max_attempts=40，不能假定默认3轮耗尽；不修改预算或打断活跃执行。当前scope修复状态verified_pending_activation。
+
+## 真实激活与存量恢复
+
+2026-10-01旧Task最终第7轮超时后，已通过本入口批准尚未修改的精确测试文件
+`tests/contracts/test_json_schema_contracts.py`，继而批准新恢复计划，新Coder已在
+`ed12f25`基线运行。scope SHA
+`2311e190c24d7a064369f53b21a3571e2b0fa483df5d27180b9de73c9917a256`；
+plan SHA `e35017a761b1037b5a1318e15125092262df883f0518b679d9f0dbad4cb7896f`。
+后轮无artifact导致前轮范围依据丢失的问题由独立任务修复，完整审批、旧改动保存、前端
+检查及回滚说明见[实施记录](../10-01-scope-after-coder-timeout/implement.md)。
+无直接改库、旧权限重写或旧Task重置。本工程任务完成不表示K1需求已通过QA/Review。
