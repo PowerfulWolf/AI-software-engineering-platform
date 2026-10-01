@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -117,6 +119,51 @@ def test_service_launcher_starts_reports_and_stops_isolated_process(tmp_path: Pa
         assert "ase-console stopped" in stopped.stdout
         assert _run(launcher, environment, "status").returncode == 1
     finally:
+        _run(launcher, environment, "stop")
+
+
+def test_background_service_survives_starting_session_termination(tmp_path: Path) -> None:
+    launcher, environment = _launcher(tmp_path)
+    state = Path(environment["ASE_SERVICE_STATE_DIR"])
+    caller = subprocess.Popen(
+        (
+            sys.executable,
+            "-c",
+            "import signal, subprocess, sys; "
+            "result = subprocess.run([sys.argv[1], 'start'], capture_output=True, timeout=8); "
+            "print(result.returncode, flush=True); signal.pause()",
+            str(launcher),
+        ),
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        assert caller.stdout is not None
+        readable, _, _ = select.select([caller.stdout], [], [], 10)
+        assert readable, "isolated service startup did not report within 10 seconds"
+        assert os.read(caller.stdout.fileno(), 32).strip() == b"0"
+        child = int((state / "ase-console.pid").read_text().splitlines()[0])
+        supervisor = int((state / "ase-console-supervisor.pid").read_text().splitlines()[0])
+        os.killpg(caller.pid, signal.SIGTERM)
+        caller.wait(timeout=5)
+        # The caller's process-group cleanup must not terminate either daemon.
+        time.sleep(0.2)
+        observed = _run(launcher, environment, "status")
+        assert observed.returncode == 0, observed.stdout + observed.stderr
+        assert os.getsid(child) != caller.pid
+        assert os.getsid(supervisor) != caller.pid
+        os.kill(supervisor, 0)
+        stopped = _run(launcher, environment, "stop")
+        assert stopped.returncode == 0, stopped.stderr
+    finally:
+        if caller.poll() is None:
+            os.killpg(caller.pid, signal.SIGTERM)
+            caller.wait(timeout=5)
+        if caller.stdout is not None:
+            caller.stdout.close()
         _run(launcher, environment, "stop")
 
 

@@ -1403,6 +1403,8 @@ old dependency snapshot. These independent facts could therefore show conflictin
 | Manual restart with unsaved browser edits | refresh restart badge, preserve config/password drafts |
 | Runtime SETUP_REQUIRED but restart_required=false | show unavailable dependencies, no instruction to restart again |
 | Console request fails | readiness unknown; delivery controls unavailable |
+| Console returns 404 | current server has no delivery-control endpoint; no ready or task verdict inference |
+| Network, 5xx, invalid JSON or metadata contract failure | connection/metadata unknown; never claim the server is a read-only dashboard |
 | Initial Team snapshot fails | Settings/Status remain accessible with no fabricated Team records |
 | Success notice expires after navigation | retain unrelated form drafts and confirmation nodes |
 | Read failures while a form remains open | disable delivery in place and block direct submissions; preserve draft |
@@ -1414,6 +1416,33 @@ harness against actual `app.js`. No Schema or persistent lifecycle state changes
 Existing Requirements, Tasks, Operations, approvals and queues remain unchanged; load the repaired
 frontend and refresh the browser. A successful prior restart does not need repeating for these
 client-only changes. Rollback restores the previous frontend asset and refreshes the page.
+
+`refreshConsoleInfo` keeps `consoleAvailable=null` and clears Team/ready authorization on read
+failure. `consoleConnectionFailed` distinguishes this observation from initial, unread state;
+successful validated metadata clears it. HTTP 404 sets `consoleAvailable=false` for a missing
+endpoint. `systemOperationNotices` must describe the observed connection condition, never infer
+that a Task stopped or that a network outage proves a read-only server. Reconnection must remove
+the system notice and recompute control availability without changing stored delivery facts.
+
+### Background service session ownership (2026-10-01)
+
+`scripts/ase-console-service.sh::launch_detached(argv...) -> pid` is the trusted local launch
+seam. It uses tokenized subprocess arguments, no shell command construction, `start_new_session=True`,
+DEVNULL stdin and the existing log for stdout/stderr. `nohup` also retains SIGHUP immunity. Console,
+supervisor and the PID-bound caffeinate assertion must each survive cleanup of the caller's process
+group. The returned PID still identifies the actual executable; existing exact process matching,
+supervisor lock ownership and stop/apply checks remain required. New-session launch is process
+lifecycle management, not an Agent permission or restart of an existing delivery.
+
+Runtime secrets are loaded only in the Console launch subshell, never its long-lived supervisor or
+argv. Launch failure yields a stable error without environment values. Existing interrupted Tasks
+must resume through the durable interruption/recovery entry and any required exact approval;
+starting a service cannot rewrite their outcomes, leases or dirty worktrees.
+
+Regression: a temporary caller starts an isolated fake service, then receives process-group SIGTERM;
+the service and supervisor remain alive in independent sessions and normal stop works. Also retain
+configuration apply, foreign PID, malformed/symlink environment and removed-secret cases from
+`tests/test_console_service_script.py`. No production MySQL or full test suite is needed for this fix.
 
 ## Scenario: transient operation notification dialogs
 

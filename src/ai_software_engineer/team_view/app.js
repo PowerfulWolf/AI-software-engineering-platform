@@ -11,6 +11,7 @@ let requestedRuntimeStatus = false;
 let operations = [];
 let operationsAvailable = false;
 let consoleAvailable = null;
+let consoleConnectionFailed = false;
 let consoleTeamId = null;
 let consoleDeliveryReady = null;
 let administrationAvailable = null;
@@ -1915,7 +1916,16 @@ function systemOperationNotices() {
       key: "system:console-read-only",
       kind: "error",
       title: "交付控制不可用",
-      message: "当前连接的是只读看板。请启动后台 Web Console 后再创建或继续需求。",
+      message: "当前服务未提供交付控制接口。请连接后台 Web Console 后再创建或继续需求。",
+      page: "status",
+      jumpLabel: "查看运行状态",
+    });
+  if (consoleConnectionFailed)
+    notices.push({
+      key: "system:console-disconnected",
+      kind: "error",
+      title: "交付控制连接中断",
+      message: "暂时无法连接或确认后台 Web Console。页面暂不能提交交付操作，将自动重试并在恢复后重新读取任务状态。",
       page: "status",
       jumpLabel: "查看运行状态",
     });
@@ -6598,6 +6608,13 @@ for (const target of ["team", "requests", "knowledge", "settings", "status"])
 async function refreshConsoleInfo(signal) {
   try {
     const response = await fetch("/api/v1/console", { cache: "no-store", signal });
+    if (response.status === 404) {
+      consoleAvailable = false;
+      consoleConnectionFailed = false;
+      consoleTeamId = null;
+      consoleDeliveryReady = null;
+      return;
+    }
     if (!response.ok) throw new Error("console unavailable");
     const info = await response.json();
     if (
@@ -6607,10 +6624,12 @@ async function refreshConsoleInfo(signal) {
     )
       throw new Error("invalid console response");
     consoleAvailable = true;
+    consoleConnectionFailed = false;
     consoleTeamId = info.team_id;
     consoleDeliveryReady = info.delivery_ready;
   } catch {
-    consoleAvailable = false;
+    consoleAvailable = null;
+    consoleConnectionFailed = true;
     consoleTeamId = null;
     consoleDeliveryReady = null;
   }

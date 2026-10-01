@@ -57,6 +57,7 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 
 | 目录 | 任务 ID | 状态记录 |
 |---|---|---|
+| 10-01-console-session-disconnect | console-session-disconnect-20261001 | [completed](10-01-console-session-disconnect/task.json)：后台独立会话及准确断连提示已验证激活；K1新改动的中断恢复另行处理 |
 | 10-01-scope-after-coder-timeout | scope-after-coder-timeout-20261001 | [completed](10-01-scope-after-coder-timeout/task.json)：ed12f25已推送加载；真实scope→plan双审批成功，新Coder在新基线执行，K1尚未完成 |
 | 10-01-requested-recovery-scope | requested-recovery-scope-20261001 | [completed](10-01-requested-recovery-scope/task.json)：真实测试文件scope已获精确批准并进入新Task，旧Task及历史保留 |
 | 10-01-coder-knowledge-wait | coder-knowledge-wait-20261001 | [completed](10-01-coder-knowledge-wait/task.json)：当前 Coder 知识等待已接回、页面等待状态已验证；正式批准知识答复后同 Task 已恢复运行 |
@@ -141,4 +142,4 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 | 09-21-knowledge-resolution-ui | knowledge-resolution-ui | [completed](09-21-knowledge-resolution-ui/task.json) |
 | 09-21-trellis-record-normalization | trellis-record-normalization-20260921 | [completed](09-21-trellis-record-normalization/task.json) |
 
-汇总：当前 10；待核实 14；已完成 90。
+汇总：当前 10；待核实 14；已完成 91。

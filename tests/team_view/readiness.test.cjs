@@ -64,6 +64,9 @@ async function browser(options = {}) {
     restart: options.restart ?? true,
     teamFailure: options.teamFailure ?? false,
     consoleFailure: false,
+    consoleStatus: 200,
+    consoleInvalid: false,
+    consoleInvalidJson: false,
     operationsFailure: false,
     statusFailure: false,
     applyStatus: options.applyStatus ?? null,
@@ -98,6 +101,11 @@ async function browser(options = {}) {
       }
       if (url === "/api/v1/console") {
         if (state.consoleFailure) throw new Error("Console offline");
+        if (state.consoleStatus !== 200)
+          return { ok: false, status: state.consoleStatus };
+        if (state.consoleInvalid) return response({ schema_version: "invalid" });
+        if (state.consoleInvalidJson)
+          return { ok: true, json: async () => { throw new SyntaxError("invalid JSON"); } };
         return response({ schema_version: "v0.2", team_id: config.team_id,
           delivery_ready: state.ready });
       }
@@ -553,6 +561,42 @@ test("Operations failure keeps runtime facts readable while disabling delivery c
   await ui.tick();
   await ui.navigate("requests");
   assert.equal(ui.get("project-creator").hidden, false);
+});
+
+test("Console disconnection is not a read-only dashboard and reconnect restores control", async () => {
+  const ui = await browser({ ready: true, restart: false, project: true });
+  await ui.navigate("requests");
+  await ui.click("新建需求");
+  const name = descendants(ui.get("composer")).find((node) => node.tag === "input");
+  name.value = "Preserve the Requirement draft";
+  ui.state.consoleFailure = true;
+  await ui.tick();
+  assert.equal(vm.runInContext("canControlCurrentTeam()", ui.context), false);
+  const notices = vm.runInContext("JSON.stringify(systemOperationNotices())", ui.context);
+  assert.match(notices, /连接.*中断|暂时无法连接/);
+  assert.doesNotMatch(notices, /当前连接的是只读看板/);
+  assert.equal(descendants(ui.get("composer")).find((node) => node.tag === "input"), name);
+  ui.state.consoleFailure = false;
+  await ui.tick();
+  assert.equal(vm.runInContext("canControlCurrentTeam()", ui.context), true);
+  assert.doesNotMatch(vm.runInContext("JSON.stringify(systemOperationNotices())", ui.context), /连接.*中断|暂时无法连接/);
+  assert.equal(name.value, "Preserve the Requirement draft");
+});
+
+for (const failure of ["404", "503", "invalid", "json"]) test(`Console metadata failure classification: ${failure}`, async () => {
+  const ui = await browser({ ready: true, restart: false });
+  if (failure === "invalid") ui.state.consoleInvalid = true;
+  else if (failure === "json") ui.state.consoleInvalidJson = true;
+  else ui.state.consoleStatus = Number(failure);
+  await ui.tick();
+  assert.equal(vm.runInContext("canControlCurrentTeam()", ui.context), false);
+  assert.equal(vm.runInContext("consoleDeliveryReady", ui.context), null);
+  const notices = vm.runInContext("JSON.stringify(systemOperationNotices())", ui.context);
+  if (failure === "404") assert.match(notices, /未提供交付控制接口/);
+  else {
+    assert.match(notices, /连接.*中断|暂时无法连接/);
+    assert.doesNotMatch(notices, /只读看板/);
+  }
 });
 
 test("success expiry cannot rebuild a new Project form on another page or erase its draft", async () => {

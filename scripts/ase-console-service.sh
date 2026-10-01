@@ -129,6 +129,30 @@ is_managed_process() {
   process_matches_executable "$candidate_pid" "$managed_executable"
 }
 
+launch_detached() {
+  # nohup alone keeps the caller's process group. Tool/terminal cleanup can
+  # terminate that whole group after a successful start. Create a new session
+  # for each daemon and return the PID of the executable (nohup uses exec).
+  python3 - "$LOG_FILE" "$@" <<'PY'
+import subprocess
+import sys
+
+try:
+    with open(sys.argv[1], "ab") as output:
+        child = subprocess.Popen(
+            ["nohup", *sys.argv[2:]],
+            stdin=subprocess.DEVNULL,
+            stdout=output,
+            stderr=output,
+            start_new_session=True,
+        )
+except OSError:
+    print("error: could not launch detached service process", file=sys.stderr)
+    raise SystemExit(1) from None
+print(child.pid)
+PY
+}
+
 launch_child() {
   # Keep values loaded from runtime.env inside the child-launch subshell. The
   # long-lived supervisor must not retain a secret that a later save removes.
@@ -139,12 +163,11 @@ launch_child() {
     load_runtime_environment || exit 1
     export ASE_CONFIG="$CONFIG_FILE"
     : >>"$LOG_FILE"
-    nohup "$SERVICE_EXECUTABLE" >>"$LOG_FILE" 2>&1 </dev/null &
-    child_pid=$!
+    child_pid=$(launch_detached "$SERVICE_EXECUTABLE") || exit 1
     # Local Workers cannot renew their leases while macOS is idle-asleep.
     # Bind the assertion to the actual child; do not change system power settings.
     if [ -x /usr/bin/caffeinate ]; then
-      nohup /usr/bin/caffeinate -i -w "$child_pid" >>"$LOG_FILE" 2>&1 </dev/null &
+      launch_detached /usr/bin/caffeinate -i -w "$child_pid" >/dev/null || true
     fi
     {
       printf '%s\n' "$child_pid"
@@ -212,8 +235,7 @@ start_supervisor() {
     fi
     rm -f "$SUPERVISOR_PID_FILE"
   fi
-  nohup "$SERVICE_SCRIPT" supervise >>"$LOG_FILE" 2>&1 </dev/null &
-  launched_supervisor_pid=$!
+  launched_supervisor_pid=$(launch_detached "$SERVICE_SCRIPT" supervise) || return 1
   remaining=20
   while [ "$remaining" -gt 0 ]; do
     if supervisor_pid=$(read_supervisor_pid 2>/dev/null) && is_supervisor_process "$supervisor_pid"; then
