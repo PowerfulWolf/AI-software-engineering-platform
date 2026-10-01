@@ -1,6 +1,9 @@
 {
   "id": "interrupted-coder-changes-20261001",
   "title": "精确批准中断后已产生合法改动的首轮恢复Coder工作区",
-  "status": "in_progress",
-  "phase": "independently_verified_pending_activation"
+  "status": "completed",
+  "phase": "production_resume_verified",
+  "implementation_commit": "9f00cf7",
+  "operation_id": "operation_bcdbe757d0b507896544852e8efc0634",
+  "interruption_plan_sha256": "5e3370af1489b5d7f2003c10fed053e6ae53cb99c65efdbb839201994e3462a2"
 }

@@ -16,7 +16,6 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 
 | 目录 | 状态 / 阶段 | 剩余事项 |
 |---|---|---|
-| [10-01-interrupted-coder-changes](10-01-interrupted-coder-changes/task.json) | in_progress / independently_verified_pending_activation | 2 原生与 18 快速增量用例通过，独立复核通过；待加载修复并精确批准 K1 当前工作区 |
 | [10-01-recovery-validation-cost](10-01-recovery-validation-cost/task.json) | planned / read_only_diagnosis_recorded | 已记录恢复分配前重复完整校验；待确定性计数回归及保留freshness门禁的优化 |
 | [10-01-python-mysql-verification](10-01-python-mysql-verification/task.json) | in_progress / runner_and_discovery_verified_not_activated | 已验证 capability/discovery/runner；尚需隔离资源生命周期、精确审批和独立 QA/Review evidence 接线 |
 | [10-01-worker-lease-status-recovery](10-01-worker-lease-status-recovery/task.json) | in_progress / verification | 页面中断状态已验证；精确中断恢复、独立验收及 K1 真实交付继续推进 |
@@ -58,6 +57,7 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 
 | 目录 | 任务 ID | 状态记录 |
 |---|---|---|
+| 10-01-interrupted-coder-changes | interrupted-coder-changes-20261001 | [completed](10-01-interrupted-coder-changes/task.json)：9f00cf7 已推送加载；20 文件精确新审批、下一代租约及实际 Coder 续跑已验证，K1 本身仍在交付 |
 | 10-01-console-session-disconnect | console-session-disconnect-20261001 | [completed](10-01-console-session-disconnect/task.json)：后台独立会话及准确断连提示已验证激活；K1新改动的中断恢复另行处理 |
 | 10-01-scope-after-coder-timeout | scope-after-coder-timeout-20261001 | [completed](10-01-scope-after-coder-timeout/task.json)：ed12f25已推送加载；真实scope→plan双审批成功，新Coder在新基线执行，K1尚未完成 |
 | 10-01-requested-recovery-scope | requested-recovery-scope-20261001 | [completed](10-01-requested-recovery-scope/task.json)：真实测试文件scope已获精确批准并进入新Task，旧Task及历史保留 |
