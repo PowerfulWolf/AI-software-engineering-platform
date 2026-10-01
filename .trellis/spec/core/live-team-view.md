@@ -581,6 +581,31 @@ then filter parent and children before Request/Task/Agent projection.
 
 ## Scenario: T046 role queue visibility
 
+### Interrupted execution and historical Manager advice
+
+`_with_execution_state(TaskView)` derives a blocker from a nonterminal RUNNING/LEASED queue entry
+with `LEASE_EXPIRED`; it preserves Task.status and the immutable delivery checkpoint. Requirement
+projection uses the current successor's blocker and clears superseded coordination. A known expired
+lease outranks a still-running Console Operation in Requirement presentation. The Manager line can
+show its Operation separately, with the explicit interruption. Only the affected role is interrupted;
+future QA/Reviewer assignments remain waiting. CLOSED historical claims do not interrupt DONE.
+
+After native reaping, `RETRY_SCHEDULED` still represents this interruption when the latest claim is
+`EXPIRED`, its expiry is at or before snapshot time, and `wait_reason` equals
+`lease_expired:<that exact lease id>`. The read side retains `LEASE_EXPIRED` in this case. Both Python
+and browser keep the interruption and any exact approval visible until a new valid claim replaces it.
+Provider retries, CLOSED history and unrelated wait reasons do not satisfy this rule.
+
+`managerFlowStatus` only shows a pending approval when `latestApproval(id, checkpoint)` returns an
+unconsumed exact approval. PROPOSE_RECOVERY is advice and means waiting for recovery, not proof that
+an approval exists. Active successors, DONE and CLOSED suppress old blocking advice. Current knowledge
+waits retain their own gate. Journal bytes and SQL are never rewritten to repair this projection.
+
+Incremental regressions: `delivery-status.test.cjs`, `ui.test.cjs` and
+`test_live.py::test_active_child_task_supersedes_stale_blocked_requirement_projection`.
+Existing data requires only a service reload and page refresh; retained invocation/worktree recovery
+uses its separate approved execution contract.
+
 ### Scope and signatures
 
 `read_role_queue(cursor, *, task_id, repository_id, allocation_sha256, now) -> tuple[RoleQueueView, ...]`
@@ -598,6 +623,9 @@ lease_expires_at, lease_liveness and wait_reason; schema parity is required.
 | Expired/released claim or READY/WAITING item | no current-stage assignment; no claim of execution |
 | Queue CLOSED | 本次执行已结束, not Task DONE or role verdict |
 | Queue WAITING_HUMAN/WAITING_DEPENDENCY | taskGroup is blocked; raw gap ID/hash is not shown as user guidance |
+| Current nonterminal successor has a WAITING queue item before parent attachment | Requirement shows the queue wait, clears superseded Manager advice, keeps exact parent checkpoint hash |
+| Current knowledge gap / approved resolution | Manager shows waiting for knowledge / approved and waiting to continue; Task badge shows scheduling wait, with delivery checkpoint separately retained |
+| CLOSED historical knowledge queue item | Does not override current delivery or DONE |
 | Admission/Task/repository/assignment/lease binding drift or multiple open roles | reject read; never repair facts on GET |
 
 Good: Task is at QA checkpoint but the expired QA lease is not shown as QA executing.
@@ -608,3 +636,13 @@ Wrong: label all CLOSED entries “交付完成”. Correct: render queue lifecy
 heartbeat and all-CLOSED terminal history with no writes. `ui.test.cjs` verifies localized status,
 heartbeats and waiting task-group placement. Existing schema, read-only, stale-poll and isolation gates
 still apply; existing production data needs no SQL rewrite.
+
+`test_live.py::test_current_queue_wait_overrides_stale_parent_and_active_delivery` and
+`delivery-status.test.cjs` cover the pre-attachment wait and current knowledge gate. Existing
+recovery waits are attached through Continue after service reload; GET only projects facts.
+
+A RUNNING/QUEUED Console Continue operation is not evidence that the paused role has resumed.
+`requestPresentation` keeps a durable current role WAITING state ahead of that operation;
+`managerFlowStatus` may show coordination in progress alongside the role wait. `deliveryFlow`
+marks the corresponding Coder/QA/Reviewer step blocked, never current/animated. The delivery
+checkpoint stays unchanged. Only new queue facts can remove the waiting presentation.

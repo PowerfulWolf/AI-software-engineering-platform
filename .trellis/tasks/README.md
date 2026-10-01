@@ -16,6 +16,9 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 
 | 目录 | 状态 / 阶段 | 剩余事项 |
 |---|---|---|
+| [10-01-requested-recovery-scope](10-01-requested-recovery-scope/task.json) | in_progress / activated_terminal_only | 精确范围双审批已验证并加载；当前非终态 K1 尚不适用此恢复入口 |
+| [10-01-worker-lease-status-recovery](10-01-worker-lease-status-recovery/task.json) | in_progress / verification | 页面中断状态已验证；精确中断恢复、独立验收及 K1 真实交付继续推进 |
+| [09-30-coder-preexecution-auth-recovery](09-30-coder-preexecution-auth-recovery/task.json) | in_progress / verification | 已接纳 Coder progress 的续跑知识失败恢复、CLI诊断分类；增量验证与 K1 继续交付 |
 | [09-25-team-evolution-audit](09-25-team-evolution-audit/task.json) | in_progress / execute | 当前需求已交付；显式知识闭环与候选验证 Manager 协调已接通，下一步自动收集、上游学习生产者、通用能力扩展 |
 | [09-23-codex-cli-proxy](09-23-codex-cli-proxy/task.json) | in_progress / ready_for_user_validation | operator API-key login and authenticated CLIProxyAPI smoke; then resume existing Requirement |
 | [09-02-t033-delivery-reporter](09-02-t033-delivery-reporter/task.json) | planned / plan | 见原 PRD/任务记录 |
@@ -53,6 +56,7 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 
 | 目录 | 任务 ID | 状态记录 |
 |---|---|---|
+| 10-01-coder-knowledge-wait | coder-knowledge-wait-20261001 | [completed](10-01-coder-knowledge-wait/task.json)：当前 Coder 知识等待已接回、页面等待状态已验证；正式批准知识答复后同 Task 已恢复运行 |
 | 09-28-semantic-branch-naming | semantic-branch-naming-20260928 | [completed](09-28-semantic-branch-naming/task.json)：语义分支、审批绑定与恢复归属保护完成；验证报告交付后用户授权提交推送 |
 | 09-28-release-delivery-retrospective | release-delivery-retrospective-20260928 | [completed](09-28-release-delivery-retrospective/task.json)：v0.1.2 已发布，业务候选已合并安装，ASE 复盘已落盘 |
 | 09-28-project-switch-refresh | project-switch-refresh-20260928 | [completed](09-28-project-switch-refresh/task.json)：4d1e799 / v0.1.2，61 项前端回归及实际 UI 验证 |
@@ -134,4 +138,4 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 | 09-21-knowledge-resolution-ui | knowledge-resolution-ui | [completed](09-21-knowledge-resolution-ui/task.json) |
 | 09-21-trellis-record-normalization | trellis-record-normalization-20260921 | [completed](09-21-trellis-record-normalization/task.json) |
 
-汇总：当前 8；待核实 14；已完成 69。
+汇总：当前 9；待核实 14；已完成 88。

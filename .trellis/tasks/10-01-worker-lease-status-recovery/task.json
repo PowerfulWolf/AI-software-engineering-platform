@@ -1,0 +1,6 @@
+{
+  "id": "worker-lease-status-recovery-20261001",
+  "title": "修复恢复任务租约中断与陈旧 Manager 状态展示",
+  "status": "in_progress",
+  "phase": "verification"
+}

@@ -18,10 +18,18 @@ from ai_software_engineer.agents import (
     RouteAttemptOutcome,
     StoredContextResolver,
 )
+from ai_software_engineer.agents.structured import StructuredModelError
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
-from ai_software_engineer.context import FileContextStore
+from ai_software_engineer.context import ContextBundle, FileContextStore
 from ai_software_engineer.design import FileDesignRecordStore
-from ai_software_engineer.domain import AgentDefinition, AgentRole, ChangedFile, ChangeType
+from ai_software_engineer.domain import (
+    AgentDefinition,
+    AgentRole,
+    Artifact,
+    ChangedFile,
+    ChangeType,
+    Task,
+)
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
     ResumeProjectDelivery,
@@ -34,6 +42,7 @@ from ai_software_engineer.manager.delivery_checkpoint import (
 from ai_software_engineer.manager.production_host import TeamHost
 from ai_software_engineer.manager.store import FileProjectPreparationStore
 from ai_software_engineer.multi_directory.service import CreateRequirement
+from ai_software_engineer.orchestration.context import FileRunContextBuilder
 from ai_software_engineer.planning import FileExecutionPlanStore
 from ai_software_engineer.product import FileProductRecordStore
 from ai_software_engineer.recovery import RecoveryRejected, RecoveryScope
@@ -317,14 +326,43 @@ def test_native_source_is_verified_read_only_and_rejects_corruption(
 
 
 @pytest.mark.mysql
+@pytest.mark.parametrize("knowledge_failure", [False, True])
 def test_budget_exhausted_coder_progress_is_a_recoverable_native_source(
-    tmp_path: Path, mysql_dsn: str
+    tmp_path: Path, mysql_dsn: str, monkeypatch: pytest.MonkeyPatch, knowledge_failure: bool
 ) -> None:
+    original_build = FileRunContextBuilder.build
+
+    def build(
+        self: FileRunContextBuilder,
+        task: Task,
+        agent: AgentDefinition,
+        *,
+        attempt: int,
+        candidate_revision: str | None = None,
+        input_artifacts: tuple[Artifact, ...] = (),
+    ) -> ContextBundle:
+        context = original_build(
+            self,
+            task,
+            agent,
+            attempt=attempt,
+            candidate_revision=candidate_revision,
+            input_artifacts=input_artifacts,
+        )
+        if knowledge_failure and agent.role is AgentRole.CODER and attempt == 2:
+            raise StructuredModelError(
+                AgentErrorCode.AUTHENTICATION_ERROR, "offline knowledge failure", transient=False
+            )
+        return context
+
+    monkeypatch.setattr(FileRunContextBuilder, "build", build)
     project = tmp_path / "project"
     project.mkdir()
     (project / "hello.txt").write_text("hello\n")
     _git("init", "-b", "main", cwd=project)
-    _git("add", "hello.txt", cwd=project)
+    (project / "tests").mkdir()
+    (project / "tests/test_contract.py").write_text("def test_contract(): pass\n")
+    _git("add", "hello.txt", "tests/test_contract.py", cwd=project)
     _git("commit", "-m", "initial", cwd=project)
     config = ProductionConfig(
         platform_root=str(tmp_path / "platform"),
@@ -360,7 +398,7 @@ def test_budget_exhausted_coder_progress_is_a_recoverable_native_source(
     checkpoint = blocked.checkpoint
     assert checkpoint.stage.value == "BLOCKED"
     assert checkpoint.failure_code is not None
-    assert len(factory.requests) == 3, (
+    assert len(factory.requests) == (1 if knowledge_failure else 3), (
         checkpoint.failure_code,
         checkpoint.failure_summary,
         checkpoint.next_action,
@@ -374,8 +412,8 @@ def test_budget_exhausted_coder_progress_is_a_recoverable_native_source(
             delivery_id=checkpoint.delivery_id,
         )
     )
-    assert source.task.attempts == source.task.work_attempt == 3
-    assert source.task.work_budget_exhausted
+    assert source.task.attempts == source.task.work_attempt == (2 if knowledge_failure else 3)
+    assert source.task.work_budget_exhausted is (not knowledge_failure)
     assert (
         source.task.max_attempts == config.execution_retry_policy.delivery_policy().execution_limit
     )
@@ -392,6 +430,141 @@ def test_budget_exhausted_coder_progress_is_a_recoverable_native_source(
     assert routes[-1].outcome is RouteAttemptOutcome.SUCCEEDED
     assert routes[-1].result.artifact is not None
     assert routes[-1].result.artifact.kind.value == "coder-progress"
+    from ai_software_engineer.recovery.models import RecoveryScopeRequest
+
+    assert source.accepted_progress is not None
+    assert source.accepted_progress.artifact_id == routes[-1].result.artifact.artifact_id
+    scope_request = RecoveryScopeRequest(
+        progress_artifact_id=source.accepted_progress.artifact_id,
+        progress_sha256=source.accepted_progress.integrity.sha256,
+        paths=("tests/test_contract.py",),
+        reason="Update the necessary contract fixture within the approved requirement.",
+    )
+    requested = host.resume_delivery(
+        ResumeProjectDelivery(
+            delivery_id=checkpoint.delivery_id,
+            coder_scope_request=scope_request,
+        )
+    )
+    assert isinstance(requested, DeliveryResumeResult)
+    assert requested.outcome is DeliveryResumeOutcome.SCOPE_APPROVAL_REQUIRED
+    assert requested.coder_scope_request == scope_request
+    assert requested.scope_supplement_paths == scope_request.paths
+    proposed = host.resume_delivery(
+        ResumeProjectDelivery(
+            delivery_id=checkpoint.delivery_id,
+            coder_scope_request=scope_request,
+            approved_scope_sha256=requested.scope_supplement_sha256,
+            approval_reference="approved-requested-contract-file",
+        )
+    )
+    assert isinstance(proposed, DeliveryResumeResult)
+    assert proposed.outcome is DeliveryResumeOutcome.RECOVERY_APPROVAL_REQUIRED
+    assert proposed.recovery_plan_file is not None
+    legacy_plan_sha = plan.plan_sha256
+    plan_path = Path(proposed.recovery_plan_file)
+    _, plan = host.recovery_entry().open_plan(plan_path)
+    assert plan.plan_sha256 != legacy_plan_sha
+    assert plan.scope_supplement is not None
+    assert plan.scope_supplement.request == scope_request
+    assert "tests/test_contract.py" not in source.permissions.write_paths
+    assert "tests/test_contract.py" in plan.effective_target_permissions.write_paths
+    assert "tests/test_contract.py" not in tuple(f.path for f in plan.capture.files)
+    if not knowledge_failure:
+        from ai_software_engineer.store import MySqlTaskRepository
+        from tests.recovery.test_execution import OfflineFactory
+
+        with MySqlTaskRepository(mysql_dsn) as repository:
+            before = repository.get(source.task.id), repository.list_events(source.task.id)
+        recovery = host.recovery_entry()
+        recovery.approve(
+            plan_path, confirmed_plan=plan.plan_sha256, reference="requested-scope-plan"
+        )
+        completed = recovery.execute(plan_path, route_factory=OfflineFactory)
+        assert completed.task.status.value == "DONE"
+        assert completed.task.constraints is not None
+        assert "tests/test_contract.py" in completed.task.constraints.allowed_paths
+        with MySqlTaskRepository(mysql_dsn) as repository:
+            assert (
+                repository.get(source.task.id),
+                repository.list_events(source.task.id),
+            ) == before
+    if knowledge_failure:
+        from ai_software_engineer.recovery.progress_source import is_prior_progress_source
+        from ai_software_engineer.store import MySqlTaskRepository
+        from tests.recovery.test_execution import OfflineFactory
+
+        with MySqlTaskRepository(mysql_dsn) as repository:
+            before = repository.get(source.task.id), repository.list_events(source.task.id)
+        events = before[1]
+        assert is_prior_progress_source(routes[-1], source.task, checkpoint, events)
+        for index in range(len(events) - 4, len(events)):
+            altered = list(events)
+            altered[index] = altered[index].model_copy(update={"artifact_ids": ()})
+            assert not is_prior_progress_source(routes[-1], source.task, checkpoint, tuple(altered))
+        bad = events[-1].model_copy(update={"reason": "TRANSIENT_INFRA: unrelated failure"})
+        assert not is_prior_progress_source(
+            routes[-1], source.task, checkpoint, (*events[:-1], bad)
+        )
+        assert not is_prior_progress_source(
+            routes[-1], source.task.model_copy(update={"attempts": 3}), checkpoint, events
+        )
+        recovery = host.recovery_entry()
+        artifact_file = sidecar / "artifacts" / f"{routes[-1].result.artifact.artifact_id}.json"
+        original_artifact = artifact_file.read_bytes()
+        artifact_file.write_text("{}")
+        with pytest.raises(RecoveryRejected):
+            recovery.require_current_plan(plan_path)
+        artifact_file.write_bytes(original_artifact)
+        later_request = factory.requests[-1].model_copy(
+            update={"run_id": "run_later_coder", "attempt": 2}
+        )
+        later = routes[-1].create(
+            request=later_request,
+            route_index=1,
+            provider="codex",
+            model="offline",
+            started_at=routes[-1].completed_at,
+            completed_at=routes[-1].completed_at,
+            result=AgentResult(
+                run_id=later_request.run_id,
+                task_id=source.task.id,
+                role=AgentRole.CODER,
+                attempt=2,
+                source_revision=source.task.base_ref,
+                context_manifest_id=later_request.context_manifest_id,
+                status=AgentRunStatus.FAILED,
+                error=AgentFailure(
+                    code=AgentErrorCode.AUTHENTICATION_ERROR, message="offline", transient=False
+                ),
+            ),
+            fallback=False,
+        )
+        route_store = FileModelRouteAttemptStore(sidecar / "runs/model-routes")
+        route_store.append(later)
+        with pytest.raises(RecoveryRejected):
+            recovery.require_current_plan(plan_path)
+        later_directory = sidecar / "runs/model-routes" / later.run_id
+        for record in later_directory.iterdir():
+            record.unlink()
+        later_directory.rmdir()
+        dirty_root = Path(plan.capture.worktree_path)
+        extra = dirty_root / "unexpected.txt"
+        extra.write_text("unreported change")
+        with pytest.raises(RecoveryRejected):
+            recovery.approve(plan_path, confirmed_plan=plan.plan_sha256, reference="drift")
+        extra.unlink()
+        with pytest.raises(RecoveryRejected):
+            recovery.approve(plan_path, confirmed_plan="0" * 64, reference="wrong")
+        recovery.approve(plan_path, confirmed_plan=plan.plan_sha256, reference="progress-recovery")
+        completed = recovery.execute(plan_path, route_factory=OfflineFactory)
+        assert completed.task.status.value == "DONE"
+        assert completed.task.id != source.task.id
+        with MySqlTaskRepository(mysql_dsn) as repository:
+            assert (
+                repository.get(source.task.id),
+                repository.list_events(source.task.id),
+            ) == before
 
 
 @pytest.mark.mysql
@@ -529,6 +702,8 @@ def test_joint_parent_cannot_be_omitted_from_source_lineage(tmp_path: Path) -> N
         delivery_route_adapters=factory,
     )
     entry = host.requirement_entry()
+    # This fixture tests source lineage; its scripted model does not implement Manager advice.
+    entry.coordinator = None
     project_workspace = host.projects()[0]
     created = entry.create(
         CreateRequirement(name="Interrupted joint", repository_roots=tuple(map(str, projects)))

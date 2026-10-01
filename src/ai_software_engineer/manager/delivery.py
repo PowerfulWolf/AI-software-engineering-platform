@@ -52,7 +52,11 @@ from ai_software_engineer.orchestration.retry import (
 )
 from ai_software_engineer.planning import PlanningStageResult
 from ai_software_engineer.product import ProductDiscoveryOutcome, ProductDiscoveryResult
-from ai_software_engineer.recovery.models import RecoveryAuthorization, RecoveryPlan
+from ai_software_engineer.recovery.models import (
+    RecoveryAuthorization,
+    RecoveryPlan,
+    RecoveryScopeRequest,
+)
 from ai_software_engineer.recovery.restart_records import PreExecutionRestartPlan
 from ai_software_engineer.recovery.verification_records import (
     CandidateExecutorPrerequisite,
@@ -163,6 +167,7 @@ class ResumeProjectDelivery(DomainModel):
     delivery_id: DeliveryId
     approved_plan_sha256: CheckpointDigest | None = None
     approved_scope_sha256: CheckpointDigest | None = None
+    coder_scope_request: RecoveryScopeRequest | None = None
     prerequisite_repair: PrerequisiteRepairRequest | None = None
     native_ui_scenario: NativeUiScenario | None = None
     approved_repair_sha256: CheckpointDigest | None = None
@@ -190,6 +195,16 @@ class ResumeProjectDelivery(DomainModel):
             raise ValueError("repair proposal and approval must be separate operations")
         if bool(approvals) != (self.approval_reference is not None):
             raise ValueError("approval digest and reference must be supplied together")
+        if self.coder_scope_request is not None and any(
+            value is not None
+            for value in (
+                self.approved_plan_sha256,
+                self.approved_repair_sha256,
+                self.prerequisite_repair,
+                self.native_ui_scenario,
+            )
+        ):
+            raise ValueError("requested Coder scope may only accompany scope approval")
         return self
 
 

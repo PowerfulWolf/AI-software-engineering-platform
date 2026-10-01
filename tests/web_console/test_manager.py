@@ -623,10 +623,52 @@ def test_continue_hides_the_plan_reference_inside_manager_command(
     assert command.approval_reference == "web-console-plan:" + "4" * 64
 
 
+def test_interruption_approval_has_its_own_exact_plan_and_summary(tmp_path: Path) -> None:
+    from ai_software_engineer.web_console.manager import _summarize
+    from tests.recovery.test_interruption_records import plan_fixture
+
+    plan = plan_fixture(tmp_path)
+    checkpoint = ProjectDeliveryCheckpoint.create(
+        delivery_id=plan.scope.delivery_id,
+        sequence=1,
+        previous_checkpoint_sha256=None,
+        repository_id=plan.scope.repository_id,
+        repository_root=plan.scope.repository_root,
+        stage=DeliveryStage.BLOCKED,
+        stage_attempts=DeliveryStageAttempts(),
+        next_action=DeliveryNextAction.REQUEST_HUMAN,
+        failure_code=DeliveryFailureCode.PERMISSION_DENIED,
+        failure_summary="Prior recovery remains interrupted",
+        checkpointed_at=plan.created_at,
+    )
+    result = _summarize(
+        DeliveryResumeResult(
+            outcome=DeliveryResumeOutcome.RECOVERY_APPROVAL_REQUIRED,
+            checkpoint=checkpoint,
+            interruption_plan=plan,
+            next_action="Approve one new Run",
+        ),
+        project_id=PROJECT_ID,
+    )
+    assert result.approval is not None
+    assert result.approval.kind == "coder_interruption"
+    assert result.approval.plan_sha256 == plan.plan_sha256
+    assert result.approval.plan_sha256 != plan.recovery_plan_sha256
+    assert any("保留同一任务" in fact for fact in result.approval.facts)
+
+
 def test_continue_sends_an_exact_scope_approval_separately_from_plan_approval(
     tmp_path: Path,
 ) -> None:
+    from ai_software_engineer.recovery.models import RecoveryScopeRequest
+
     adapter, host, entry = _adapter(tmp_path)
+    scope_request = RecoveryScopeRequest(
+        progress_artifact_id="art_coder_progress",
+        progress_sha256="a" * 64,
+        paths=("tests/test_contract.py",),
+        reason="Update the required fixture",
+    )
 
     adapter.execute(
         ContinueDeliveryIntent(
@@ -634,11 +676,13 @@ def test_continue_sends_an_exact_scope_approval_separately_from_plan_approval(
             delivery_id=DELIVERY_ID,
             expected_checkpoint_sha256=entry.checkpoint.checkpoint_sha256,
             approved_scope_sha256="5" * 64,
+            coder_scope_request=scope_request,
         )
     )
 
     command = host.resume_commands[0]
     assert command.approved_scope_sha256 == "5" * 64
+    assert command.coder_scope_request == scope_request
     assert command.approved_plan_sha256 is None
     assert command.approval_reference == "web-console-scope:" + "5" * 64
 

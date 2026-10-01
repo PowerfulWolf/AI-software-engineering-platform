@@ -55,6 +55,31 @@ definitions["ContinueDeliveryIntent"]["allOf"] = [
     }
     for left, right in combinations(approval_fields, 2)
 ]
+definitions["ContinueDeliveryIntent"]["allOf"] += [
+    {
+        "not": {
+            "required": ["coder_scope_request", other],
+            "properties": {
+                "coder_scope_request": {"not": {"type": "null"}},
+                other: {"not": {"type": "null"}},
+            },
+        }
+    }
+    for other in approval_fields
+    if other != "approved_scope_sha256"
+]
+definitions["RecoveryScopeRequest"]["properties"]["paths"]["uniqueItems"] = True
+definitions["ConsoleApprovalRequest"]["allOf"] = [
+    {
+        "if": {
+            "required": ["coder_scope_request"],
+            "properties": {
+                "coder_scope_request": {"not": {"type": "null"}},
+            },
+        },
+        "then": {"properties": {"kind": {"const": "coder_scope"}}},
+    }
+]
 definitions["ConsoleCommandResult"]["oneOf"] = [
     {
         "required": ["delivery_id", "checkpoint_sha256"],

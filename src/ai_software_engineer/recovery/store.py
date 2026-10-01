@@ -35,6 +35,10 @@ from ai_software_engineer.manager.verification_environment import (
     VerificationEnvironmentIncident,
     swift_sandbox_command,
 )
+from ai_software_engineer.recovery.interruption_records import (
+    RecoveryInterruptionInvocation,
+    RecoveryInterruptionPlan,
+)
 from ai_software_engineer.recovery.models import (
     RecoveryAuthorization,
     RecoveryConflict,
@@ -78,6 +82,8 @@ _Record = TypeVar(
     ManagerVerificationAdvice,
     CandidateExecutorPrerequisite,
     PreExecutionRestartPlan,
+    RecoveryInterruptionPlan,
+    RecoveryInterruptionInvocation,
 )
 
 
@@ -225,6 +231,86 @@ class FileRecoveryStore:
         if plan.scope != self._scope:
             raise RecoveryRejected("restart plan scope mismatch")
         return self._put("restart-plan", plan.plan_sha256, plan, PreExecutionRestartPlan)
+
+    def put_interruption_plan(self, plan: RecoveryInterruptionPlan) -> RecoveryInterruptionPlan:
+        plan.validate_integrity()
+        if plan.scope != self._scope:
+            raise RecoveryRejected("interruption scope mismatch")
+        # One replacement only per original plan, not an unbounded retry ledger.
+        return self._put(
+            "interruption-plan", plan.recovery_plan_sha256, plan, RecoveryInterruptionPlan
+        )
+
+    def get_interruption_plan(self, recovery_sha256: str) -> RecoveryInterruptionPlan:
+        plan = self._get("interruption-plan", recovery_sha256, RecoveryInterruptionPlan)
+        if plan.scope != self._scope or plan.recovery_plan_sha256 != recovery_sha256:
+            raise RecoveryRejected("interruption plan identity mismatch")
+        return plan
+
+    def put_interruption_authorization(
+        self, recovery_sha256: str, record: RecoveryAuthorization
+    ) -> RecoveryAuthorization:
+        plan = self.get_interruption_plan(recovery_sha256)
+        record.validate_integrity()
+        if (
+            record.command.plan_sha256 != plan.plan_sha256
+            or record.command.submitted_at < plan.created_at
+        ):
+            raise RecoveryRejected("interruption authorization does not match plan")
+        return self._put(
+            "interruption-authorization", recovery_sha256, record, RecoveryAuthorization
+        )
+
+    def get_interruption_authorization(self, recovery_sha256: str) -> RecoveryAuthorization:
+        plan = self.get_interruption_plan(recovery_sha256)
+        record = self._get("interruption-authorization", recovery_sha256, RecoveryAuthorization)
+        if (
+            record.command.plan_sha256 != plan.plan_sha256
+            or record.command.submitted_at < plan.created_at
+        ):
+            raise RecoveryRejected("interruption authorization identity mismatch")
+        return record
+
+    def put_interruption_invocation(
+        self, recovery_sha256: str, record: RecoveryInterruptionInvocation
+    ) -> RecoveryInterruptionInvocation:
+        self._validate_interruption_invocation(recovery_sha256, record)
+        return self._put(
+            "interruption-invocation", recovery_sha256, record, RecoveryInterruptionInvocation
+        )
+
+    def get_interruption_invocation(self, recovery_sha256: str) -> RecoveryInterruptionInvocation:
+        record = self._get(
+            "interruption-invocation", recovery_sha256, RecoveryInterruptionInvocation
+        )
+        self._validate_interruption_invocation(recovery_sha256, record)
+        return record
+
+    def _validate_interruption_invocation(
+        self, recovery_sha256: str, record: RecoveryInterruptionInvocation
+    ) -> None:
+        record.validate_integrity()
+        plan = self.get_interruption_plan(recovery_sha256)
+        approval = self.get_interruption_authorization(recovery_sha256)
+        original = self.get_plan(recovery_sha256)
+        previous = self.get_invocation(recovery_sha256)
+        if (
+            not approval.decision.approved
+            or record.plan_sha256 != plan.plan_sha256
+            or record.authorization_sha256 != approval.authorization_sha256
+            or record.previous_invocation_sha256 != plan.invocation_record_sha256
+            or previous.record_sha256 != record.previous_invocation_sha256
+            or record.request.run_id == previous.run_id
+            or record.request.task_id != plan.task_id
+            or record.request.role is not AgentRole.CODER
+            or record.request.attempt != 1
+            or record.request.source_revision != original.target_base_revision
+            or record.request.permissions != original.effective_target_permissions
+            or record.dispatch_sequence != plan.dispatch_sequence + 1
+            or record.lease_id == plan.expired_lease.id
+            or record.admitted_at < approval.decision.decided_at
+        ):
+            raise RecoveryRejected("interruption invocation authority mismatch")
 
     def get_restart_plan(self, plan_sha256: str) -> PreExecutionRestartPlan:
         plan = self._get("restart-plan", plan_sha256, PreExecutionRestartPlan)
@@ -1051,6 +1137,9 @@ class FileRecoveryStore:
             "plan",
             "restart-plan",
             "restart-authorization",
+            "interruption-plan",
+            "interruption-authorization",
+            "interruption-invocation",
             "authorization",
             "task",
             "seed",

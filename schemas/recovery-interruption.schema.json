@@ -1,0 +1,624 @@
+{
+  "$defs": {
+    "AgentPermissions": {
+      "additionalProperties": false,
+      "description": "The executable path, command, network, and state capabilities of an Agent.",
+      "properties": {
+        "read_paths": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Read Paths",
+          "type": "array"
+        },
+        "write_paths": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Write Paths",
+          "type": "array"
+        },
+        "commands": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Commands",
+          "type": "array"
+        },
+        "network": {
+          "$ref": "#/$defs/NetworkAccess"
+        },
+        "can_change_state": {
+          "default": false,
+          "title": "Can Change State",
+          "type": "boolean"
+        },
+        "can_merge": {
+          "default": false,
+          "title": "Can Merge",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "read_paths",
+        "write_paths",
+        "commands",
+        "network"
+      ],
+      "title": "AgentPermissions",
+      "type": "object"
+    },
+    "AgentRequest": {
+      "additionalProperties": false,
+      "description": "Immutable input envelope supplied to one Agent adapter invocation.",
+      "properties": {
+        "run_id": {
+          "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/AgentRole"
+        },
+        "attempt": {
+          "maximum": 400,
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "context_manifest_id": {
+          "pattern": "^ctx_[a-f0-9]{64}$",
+          "title": "Context Manifest Id",
+          "type": "string"
+        },
+        "input_artifact_ids": {
+          "items": {
+            "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+            "type": "string"
+          },
+          "title": "Input Artifact Ids",
+          "type": "array"
+        },
+        "permissions": {
+          "$ref": "#/$defs/AgentPermissions"
+        },
+        "output_schema": {
+          "minLength": 1,
+          "title": "Output Schema",
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "maximum": 3600,
+          "minimum": 1,
+          "title": "Timeout Seconds",
+          "type": "integer"
+        },
+        "continuation_checkpoint_id": {
+          "anyOf": [
+            {
+              "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Continuation Checkpoint Id"
+        },
+        "continuation_changed_paths": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Continuation Changed Paths",
+          "type": "array"
+        },
+        "expected_parent_artifact_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Parent Artifact Ids"
+        },
+        "expected_supersedes_by_kind": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "propertyNames": {
+                "$ref": "#/$defs/ArtifactKind"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Supersedes By Kind"
+        }
+      },
+      "required": [
+        "run_id",
+        "task_id",
+        "role",
+        "attempt",
+        "source_revision",
+        "context_manifest_id",
+        "input_artifact_ids",
+        "permissions",
+        "output_schema",
+        "timeout_seconds"
+      ],
+      "title": "AgentRequest",
+      "type": "object"
+    },
+    "AgentRole": {
+      "description": "Delivery-runtime roles bound to Task artifacts and state transitions.",
+      "enum": [
+        "orchestrator",
+        "coder",
+        "qa",
+        "reviewer"
+      ],
+      "title": "AgentRole",
+      "type": "string"
+    },
+    "ArtifactKind": {
+      "enum": [
+        "plan",
+        "coder-progress",
+        "implementation-report",
+        "qa-report",
+        "review-report"
+      ],
+      "title": "ArtifactKind",
+      "type": "string"
+    },
+    "NetworkAccess": {
+      "enum": [
+        "none",
+        "model_endpoint_only",
+        "allowlist"
+      ],
+      "title": "NetworkAccess",
+      "type": "string"
+    },
+    "RecoveryApprovalCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "operation_id": {
+          "pattern": "^[a-z][a-z0-9_-]{2,127}$",
+          "title": "Operation Id",
+          "type": "string"
+        },
+        "plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "approval_reference": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Approval Reference",
+          "type": "string"
+        },
+        "submitted_at": {
+          "format": "date-time",
+          "title": "Submitted At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id",
+        "plan_sha256",
+        "approval_reference",
+        "submitted_at"
+      ],
+      "title": "RecoveryApprovalCommand",
+      "type": "object"
+    },
+    "RecoveryAuthorization": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "recovery_authorization",
+          "default": "recovery_authorization",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "command": {
+          "$ref": "#/$defs/RecoveryApprovalCommand"
+        },
+        "decision": {
+          "$ref": "#/$defs/VerifiedRecoveryDecision"
+        },
+        "authorization_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Authorization Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command",
+        "decision",
+        "authorization_sha256"
+      ],
+      "title": "RecoveryAuthorization",
+      "type": "object"
+    },
+    "RecoveryInterruptionInvocation": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "recovery_interruption_invocation",
+          "default": "recovery_interruption_invocation",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "authorization_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Authorization Sha256",
+          "type": "string"
+        },
+        "previous_invocation_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Previous Invocation Sha256",
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/AgentRequest"
+        },
+        "lease_id": {
+          "pattern": "^lease_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Lease Id",
+          "type": "string"
+        },
+        "dispatch_sequence": {
+          "minimum": 1,
+          "title": "Dispatch Sequence",
+          "type": "integer"
+        },
+        "admitted_at": {
+          "format": "date-time",
+          "title": "Admitted At",
+          "type": "string"
+        },
+        "record_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Record Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan_sha256",
+        "authorization_sha256",
+        "previous_invocation_sha256",
+        "request",
+        "lease_id",
+        "dispatch_sequence",
+        "admitted_at",
+        "record_sha256"
+      ],
+      "title": "RecoveryInterruptionInvocation",
+      "type": "object"
+    },
+    "RecoveryInterruptionPlan": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "recovery_interruption_plan",
+          "default": "recovery_interruption_plan",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v0.1",
+          "default": "v0.1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/RecoveryScope"
+        },
+        "recovery_plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Recovery Plan Sha256",
+          "type": "string"
+        },
+        "authorization_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Authorization Sha256",
+          "type": "string"
+        },
+        "seed_record_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Seed Record Sha256",
+          "type": "string"
+        },
+        "invocation_record_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Invocation Record Sha256",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "task_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Task Sha256",
+          "type": "string"
+        },
+        "events_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Events Sha256",
+          "type": "string"
+        },
+        "task_revision": {
+          "minimum": 1,
+          "title": "Task Revision",
+          "type": "integer"
+        },
+        "dispatch_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Dispatch Sha256",
+          "type": "string"
+        },
+        "work_item_id": {
+          "pattern": "^work_[a-z0-9][a-z0-9_-]{2,95}$",
+          "title": "Work Item Id",
+          "type": "string"
+        },
+        "dispatch_sequence": {
+          "minimum": 0,
+          "title": "Dispatch Sequence",
+          "type": "integer"
+        },
+        "expired_lease": {
+          "$ref": "#/$defs/TaskLease"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "recovery_plan_sha256",
+        "authorization_sha256",
+        "seed_record_sha256",
+        "invocation_record_sha256",
+        "task_id",
+        "task_sha256",
+        "events_sha256",
+        "task_revision",
+        "dispatch_sha256",
+        "work_item_id",
+        "dispatch_sequence",
+        "expired_lease",
+        "created_at",
+        "plan_sha256"
+      ],
+      "title": "RecoveryInterruptionPlan",
+      "type": "object"
+    },
+    "RecoveryScope": {
+      "additionalProperties": false,
+      "properties": {
+        "team_id": {
+          "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Team Id",
+          "type": "string"
+        },
+        "repository_id": {
+          "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "delivery_id": {
+          "pattern": "^delivery_[a-z0-9][a-z0-9_-]{2,95}$",
+          "title": "Delivery Id",
+          "type": "string"
+        },
+        "repository_root": {
+          "pattern": "^/[^\\x00-\\x1f]*$",
+          "title": "Repository Root",
+          "type": "string"
+        }
+      },
+      "required": [
+        "team_id",
+        "repository_id",
+        "delivery_id",
+        "repository_root"
+      ],
+      "title": "RecoveryScope",
+      "type": "object"
+    },
+    "TaskLease": {
+      "additionalProperties": false,
+      "description": "Expiring claim on Agent capacity for one RoleAssignment.",
+      "properties": {
+        "kind": {
+          "const": "task_lease",
+          "default": "task_lease",
+          "title": "Kind",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^lease_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "assignment_id": {
+          "pattern": "^assignment_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Assignment Id",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "agent_id": {
+          "pattern": "^agent_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Agent Id",
+          "type": "string"
+        },
+        "capacity_units": {
+          "default": 1,
+          "maximum": 16,
+          "minimum": 1,
+          "title": "Capacity Units",
+          "type": "integer"
+        },
+        "acquired_at": {
+          "format": "date-time",
+          "title": "Acquired At",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "assignment_id",
+        "task_id",
+        "agent_id",
+        "acquired_at",
+        "expires_at"
+      ],
+      "title": "TaskLease",
+      "type": "object"
+    },
+    "VerifiedRecoveryDecision": {
+      "additionalProperties": false,
+      "properties": {
+        "plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "approval_reference": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Approval Reference",
+          "type": "string"
+        },
+        "approved": {
+          "title": "Approved",
+          "type": "boolean"
+        },
+        "operator_id": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Operator Id",
+          "type": "string"
+        },
+        "rationale": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        },
+        "decided_at": {
+          "format": "date-time",
+          "title": "Decided At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan_sha256",
+        "approval_reference",
+        "approved",
+        "operator_id",
+        "rationale",
+        "decided_at"
+      ],
+      "title": "VerifiedRecoveryDecision",
+      "type": "object"
+    }
+  },
+  "discriminator": {
+    "mapping": {
+      "recovery_authorization": "#/$defs/RecoveryAuthorization",
+      "recovery_interruption_invocation": "#/$defs/RecoveryInterruptionInvocation",
+      "recovery_interruption_plan": "#/$defs/RecoveryInterruptionPlan"
+    },
+    "propertyName": "kind"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/RecoveryInterruptionPlan"
+    },
+    {
+      "$ref": "#/$defs/RecoveryInterruptionInvocation"
+    },
+    {
+      "$ref": "#/$defs/RecoveryAuthorization"
+    }
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/recovery-interruption.schema.json"
+}

@@ -5,6 +5,7 @@ import json
 import subprocess
 from collections.abc import Mapping
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -53,6 +54,7 @@ def test_codex_structured_command_binds_verified_images(
     def run(command: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
         del kwargs
         commands.append(command)
+        assert "--json" in command
         output = Path(command[command.index("--output-last-message") + 1])
         output.write_text(json.dumps({"result": "ok"}), encoding="utf-8")
         return subprocess.CompletedProcess(command, 0, "", "")
@@ -351,7 +353,7 @@ def test_local_cli_execution_limit_does_not_switch_provider_route(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def run(command: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        raise subprocess.TimeoutExpired(command, cast(int, kwargs["timeout"]))
 
     monkeypatch.setattr("ai_software_engineer.agents.structured.subprocess.run", run)
     backup = _StaticClient()
@@ -369,11 +371,98 @@ def test_local_cli_execution_limit_does_not_switch_provider_route(
     assert backup.calls == 0
 
 
+@pytest.mark.parametrize(
+    "diagnostic", ["login authentication 401", "quota exceeded 429", "HTTP 504"]
+)
+@pytest.mark.parametrize("timed_out", [True, False])
+def test_cli_transcript_is_not_provider_failure_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, diagnostic: str, timed_out: bool
+) -> None:
+    transcript = f"user\nWrite tests for {diagnostic}\nthinking\nInspecting tests.\n"
+
+    def run(command: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if timed_out:
+            raise subprocess.TimeoutExpired(
+                command, cast(int, kwargs["timeout"]), stderr=transcript
+            )
+        return subprocess.CompletedProcess(command, 1, "", transcript)
+
+    monkeypatch.setattr("ai_software_engineer.agents.structured.subprocess.run", run)
+    client = CodexCliStructuredModelClient(repository_root=tmp_path, model="test")
+    with pytest.raises(StructuredModelError) as raised:
+        client.complete(instructions="Act", input_payload={}, output_schema={}, timeout_seconds=1)
+    if timed_out:
+        assert raised.value.code is AgentErrorCode.TIMEOUT
+        assert raised.value.timeout_kind == "local_execution_limit"
+        assert not raised.value.retryable
+    else:
+        assert raised.value.code is AgentErrorCode.PROVIDER_UNAVAILABLE
+    assert diagnostic not in raised.value.safe_message
+
+
+@pytest.mark.parametrize("timed_out", [True, False])
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        (401, AgentErrorCode.AUTHENTICATION_ERROR),
+        (403, AgentErrorCode.AUTHENTICATION_ERROR),
+        (429, AgentErrorCode.RATE_LIMITED),
+        (504, AgentErrorCode.PROVIDER_UNAVAILABLE),
+    ],
+)
+def test_cli_json_provider_events_are_classified(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    timed_out: bool,
+    status: int,
+    expected: AgentErrorCode,
+) -> None:
+    output = json.dumps(
+        {"type": "turn.failed", "error": {"message": f"unexpected status {status}"}}
+    )
+
+    def run(command: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if timed_out:
+            raise subprocess.TimeoutExpired(command, 1, output=output, stderr="")
+        return subprocess.CompletedProcess(command, 1, output, "")
+
+    monkeypatch.setattr("ai_software_engineer.agents.structured.subprocess.run", run)
+    client = CodexCliStructuredModelClient(repository_root=tmp_path, model="test")
+    with pytest.raises(StructuredModelError) as raised:
+        client.complete(instructions="Act", input_payload={}, output_schema={}, timeout_seconds=1)
+    assert raised.value.code is expected
+    assert raised.value.retryable is (status not in {401, 403})
+
+
+def test_cli_json_model_text_is_not_a_provider_event(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = json.dumps(
+        {
+            "type": "item.completed",
+            "item": {
+                "type": "agent_message",
+                "text": "Error: authentication 401 quota exceeded 429 HTTP 504",
+            },
+        }
+    )
+
+    def run(command: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(command, 1, output=output, stderr="")
+
+    monkeypatch.setattr("ai_software_engineer.agents.structured.subprocess.run", run)
+    client = CodexCliStructuredModelClient(repository_root=tmp_path, model="test")
+    with pytest.raises(StructuredModelError) as raised:
+        client.complete(instructions="Act", input_payload={}, output_schema={}, timeout_seconds=1)
+    assert raised.value.timeout_kind == "local_execution_limit"
+
+
 def test_cli_timeout_with_explicit_provider_failure_uses_transient_fallback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def run(command: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        raise subprocess.TimeoutExpired(command, kwargs["timeout"], stderr=b"HTTP 504")
+        raise subprocess.TimeoutExpired(command, cast(int, kwargs["timeout"]), stderr=b"HTTP 504")
 
     monkeypatch.setattr("ai_software_engineer.agents.structured.subprocess.run", run)
     backup = _StaticClient()

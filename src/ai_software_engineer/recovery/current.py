@@ -76,6 +76,7 @@ class NativeRecoveryFactsVerifier:
             ) from error
 
     def _inspect(self, plan: RecoveryPlan) -> NativeRecoveryFacts:
+        plan.require_execution_supported()
         source = plan.source
         original = self._source.inspect(
             source.scope,
@@ -125,7 +126,12 @@ class NativeRecoveryFactsVerifier:
         if plan.capture.branch_name != original.task.branch_name:
             raise ValueError("captured branch differs from frozen source Task intent")
         old = plan.capture.to_capture().worktree
-        supplement = inspect_recovery_scope_supplement(manager, old, original)
+        supplement = inspect_recovery_scope_supplement(
+            manager,
+            old,
+            original,
+            request=plan.scope_supplement.request if plan.scope_supplement else None,
+        )
         if (
             supplement != plan.scope_supplement
             or expanded_recovery_permissions(original.permissions, supplement) != plan.permissions

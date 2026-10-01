@@ -914,3 +914,39 @@ They produce `PROJECT_OBSERVATION` Learning proposals, not automatic background,
 provenance. Every publication still needs exact human approval; future snapshots may reuse selected
 knowledge, while historical inputs and independent candidate checks remain unchanged.
 See `.trellis/spec/core/project-learning.md` for signatures, errors, tests and existing-data handling.
+
+
+### Historical recovery retry record compatibility (2026-10-01)
+
+`delivery-recovery.schema.json` retains the optional all-or-none `retry_of_plan_sha256`,
+`retry_of_task_id`, `retry_of_checkpoint_sha256` fields in already-persisted recovery plans.
+They remain part of their original digest. New ordinary plans omit these fields.
+`RecoveryPlan.require_execution_supported()` rejects execution of this historical retry variant;
+current-facts validation and native attached recovery execution both enforce it. Reading history
+does not grant dispatch authority. Recovery of an accepted Coder progress followed by knowledge
+failure uses an ordinary new plan referencing the actual Coder Run, never a fabricated latest Run.
+
+### Expired first recovery invocation (2026-10-01)
+
+`RecoveryInterruptionPlan` and `RecoveryInterruptionInvocation` use
+`recovery-interruption.schema.json`; Console exposes exact `coder_interruption` approval through
+`CONTINUE_DELIVERY.approved_plan_sha256`. A proposal binds the original plan, approval, seed,
+invocation, Task/event/dispatch digests and expired lease generation. It permits one new claim/Run
+for the same first Coder WorkItem only after exclusive stopped-Task inspection proves the worktree
+is byte-identical to the seed and no completed route/candidate/accepted output exists.
+
+Native reaping may occur before proposal or after approval; both paths validate the original
+CLAIMED event, exact LEASE_EXPIRED event and single next generation. Provider admission rechecks
+all facts under the new Worker owner fence and appends a separate receipt. No Task reset, budget
+refund, original invocation overwrite or verdict bypass is allowed. Knowledge waits retain their
+native gate. Details, rejection matrix and existing-data procedure are in
+`.trellis/spec/core/delivery-recovery.md`.
+
+### Requested recovery scope (D5.1)
+
+Console Continue may carry `coder_scope_request` with an exact accepted Coder progress ID/SHA,
+up to eight sorted unique untouched tracked file paths and a bounded reason. Terminal pre-candidate
+recovery alone resolves it; Git blob/mode, checkpoint and original policy are bound to the scope
+supplement. The scope approval and recovery-plan approval remain separate. No running or historical
+Task permissions change. Optional omitted fields preserve historical wire/digest identity. See
+`.trellis/spec/core/delivery-recovery.md` D5.1 for rejection and existing-data handling.

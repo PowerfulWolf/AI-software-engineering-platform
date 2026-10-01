@@ -74,6 +74,46 @@ def test_changed_baseline_has_new_plan_and_new_task_identity(tmp_path: Path) -> 
         plan.model_copy(update={"target_base_revision": "d" * 40}).validate_integrity()
 
 
+def test_historical_retry_plan_remains_readable_but_cannot_execute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from unittest.mock import MagicMock
+
+    from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
+    from ai_software_engineer.recovery.current import NativeRecoveryFactsVerifier
+    from ai_software_engineer.recovery.native import NativeRecoverySourceReader
+
+    original = make_plan(tmp_path / "project")
+    plan = RecoveryPlan.create(
+        **{
+            **original.to_wire(),
+            "retry_of_plan_sha256": "d" * 64,
+            "retry_of_task_id": "task_old_retry",
+            "retry_of_checkpoint_sha256": "e" * 64,
+        }
+    )
+    VALIDATOR.validate(plan.to_wire())
+    assert ADAPTER.validate_python(plan.to_wire()) == plan
+    plan.validate_integrity()
+    assert "retry_of_plan_sha256" not in original.to_wire()
+    inspect = MagicMock(side_effect=AssertionError("legacy execution reached source inspection"))
+    monkeypatch.setattr(NativeRecoverySourceReader, "inspect", inspect)
+    config = ProductionConfig(
+        platform_root=str(tmp_path / "platform"),
+        model_routes=(
+            ProviderRouteConfig(
+                provider="codex", model="offline", kind=ModelProviderKind.CODEX_CLI
+            ),
+        ),
+    )
+    with pytest.raises(RecoveryRejected, match="current recovery source"):
+        NativeRecoveryFactsVerifier(config, {}).validate(plan)
+    inspect.assert_not_called()
+    original.require_execution_supported()
+    with pytest.raises(RecoveryRejected, match="read-only"):
+        plan.require_execution_supported()
+
+
 def test_target_permissions_are_hash_bound_and_may_only_narrow_source(tmp_path: Path) -> None:
     old = make_plan(tmp_path / "project")
     source = old.permissions.model_copy(update={"commands": ("git status", "git commit")})
@@ -107,7 +147,12 @@ def test_target_permissions_are_hash_bound_and_may_only_narrow_source(tmp_path: 
             )
 
 
-def test_scope_supplement_and_approval_are_hash_bound_into_the_plan(tmp_path: Path) -> None:
+@pytest.mark.parametrize("requested", [False, True])
+def test_scope_supplement_and_approval_are_hash_bound_into_the_plan(
+    tmp_path: Path, requested: bool
+) -> None:
+    from ai_software_engineer.recovery.models import RecoveryRequestedFile, RecoveryScopeRequest
+
     old = make_plan(tmp_path / "project")
     supplement = RecoveryScopeSupplement.create(
         scope=old.source.scope,
@@ -118,7 +163,30 @@ def test_scope_supplement_and_approval_are_hash_bound_into_the_plan(tmp_path: Pa
         permissions_sha256=digest(old.permissions.to_wire()),
         denied_paths_sha256=digest(old.denied_paths),
         paths=("src/omitted.py",),
+        request=RecoveryScopeRequest(
+            progress_artifact_id="art_progress_001",
+            progress_sha256="a" * 64,
+            paths=("src/omitted.py",),
+            reason="Necessary file for the approved criteria",
+        )
+        if requested
+        else None,
+        requested_files=(
+            RecoveryRequestedFile(
+                path="src/omitted.py",
+                mode="100644",
+                blob_id="a" * 40,
+            ),
+        )
+        if requested
+        else None,
     )
+    if not requested:
+        assert "request" not in supplement.to_wire()
+        assert "requested_files" not in supplement.to_wire()
+        assert supplement.supplement_sha256 == digest(
+            {k: v for k, v in supplement.to_wire().items() if k != "supplement_sha256"}
+        )
     expanded = old.permissions.model_copy(
         update={
             "read_paths": (*old.permissions.read_paths, *supplement.paths),
@@ -137,6 +205,21 @@ def test_scope_supplement_and_approval_are_hash_bound_into_the_plan(tmp_path: Pa
     VALIDATOR.validate(plan.to_wire())
     assert plan.plan_sha256 != old.plan_sha256
     assert RecoveryPlan.model_validate(plan.to_wire()) == plan
+    if requested:
+        from jsonschema.exceptions import ValidationError as SchemaValidationError
+
+        for field in ("request", "requested_files"):
+            for null in (False, True):
+                wire = plan.to_wire()
+                assert isinstance(wire["scope_supplement"], dict)
+                if null:
+                    wire["scope_supplement"][field] = None
+                else:
+                    del wire["scope_supplement"][field]
+                with pytest.raises(SchemaValidationError):
+                    VALIDATOR.validate(wire)
+                with pytest.raises(ValidationError):
+                    RecoveryPlan.model_validate(wire)
     for invalid in (
         {"scope_approval_reference": None},
         {"scope_supplement": None},

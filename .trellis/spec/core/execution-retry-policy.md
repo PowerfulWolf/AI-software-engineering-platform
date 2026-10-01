@@ -238,3 +238,22 @@ Correct: retain exact approvals, then apply active-stage budget and failed-opera
 Basic settings contains platform/team, runtime, execution/retry, and execution-time sections. Each has a
 visible top divider; module spacing is separate from the compact internal heading/description/grid
 spacing. Reset paragraph margins inside sections; never stack form grid gaps with default margins.
+
+## CLI transcript provenance (2026-10-01)
+
+Structured `codex exec` uses `--json`. `_cli_failure_diagnostic(stderr, stdout)` accepts only top-level
+`error.message`, `turn.failed.error.message`, or explicit stderr Error/Fatal/HTTP diagnostics. Parse
+at most the last 1 MB of JSON output and skip lines above 64 KB. Model/tool `item.*` content is not
+provider evidence, even if it mentions authentication, login, quota, 401 or 504. Raw output never
+appears in errors; existing redaction and proxy diagnostic hiding remain mandatory.
+
+Classification matrix: watchdog without a recognized provider diagnostic remains
+`TIMEOUT/local_execution_limit` (no fallback); typed 401/403 remains `AUTHENTICATION_ERROR`
+(nonretryable); 429/quota/5xx diagnostics retain their transient route behavior. Test both process
+exit and watchdog paths with JSON events and transcript false positives. Actual CLI JSON mode can
+emit all provider errors to stdout with empty stderr; reading stderr alone incorrectly turns real
+403 into transient unavailability. Tests must cover that boundary as well as ordinary prose.
+
+Historical operation diagnostics remain immutable: a missing raw diagnostic cannot retrospectively
+prove a credential failure or a misclassification. The failure-mode fix applies to future runs;
+existing terminal deliveries require their ordinary exact recovery approval.

@@ -36,6 +36,7 @@ from ai_software_engineer.domain import (
 from ai_software_engineer.domain.artifact import Evidence, QaTestRun
 from ai_software_engineer.domain.enums import EvidenceType, QaTestStatus
 from ai_software_engineer.domain.retry_policy import ExecutionRetryPolicy, TransientRetryPolicy
+from ai_software_engineer.knowledge.gaps import KnowledgeGap
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
     ReplyToProduct,
@@ -980,15 +981,35 @@ def test_resume_requires_exact_scope_approval_before_capturing_omitted_files(
 
 @pytest.mark.mysql
 @pytest.mark.parametrize(
-    ("complete_recovery", "knowledge_wait"), [(False, False), (True, False), (True, True)]
+    ("complete_recovery", "knowledge_role"),
+    [(False, None), (True, None), (True, "qa"), (True, "coder")],
 )
 def test_joint_scope_recovery_targets_current_preparation_after_main_advances(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     complete_recovery: bool,
-    knowledge_wait: bool,
+    knowledge_role: str | None,
 ) -> None:
+    knowledge_wait = knowledge_role is not None
     config, environment, models, projects = setup_host(tmp_path)
+    stage_complete = models.complete
+
+    def with_manager(**kwargs: object) -> StructuredModelResult:
+        schema = kwargs["output_schema"]
+        if isinstance(schema, Mapping) and schema.get("title") == "ManagerCoordinationDraft":
+            return StructuredModelResult(
+                payload={
+                    "action": "PROPOSE_RECOVERY",
+                    "summary": "Recovery required",
+                    "next_action": "Inspect the exact recovery proposal.",
+                    "responsible_actor": "Manager",
+                    "resume_condition": "Exact approval",
+                },
+                duration_ms=0,
+            )
+        return stage_complete(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(models, "complete", with_manager)
     config = config.model_copy(update={"live_model_execution": True})
     interrupted = _OutOfScopeInterruptedFactory()
     host = TeamHost(
@@ -1050,6 +1071,64 @@ def test_joint_scope_recovery_targets_current_preparation_after_main_advances(
     original_execute = NativeRecoveryEntry.execute
     original_complete = models.complete
     gap_enabled = knowledge_wait
+    recovery_coder_calls: list[AgentRequest] = []
+    original_coder_run = _SeededCompleteRecoveryAdapter.run
+
+    def progress_before_gap(
+        adapter: _SeededCompleteRecoveryAdapter, request: AgentRequest
+    ) -> AgentResult:
+        if knowledge_role != "coder" or request.role is not AgentRole.CODER:
+            return original_coder_run(adapter, request)
+        from ai_software_engineer.domain import ChangedFile, ChangeType
+        from tests.domain.factories import make_coder_progress_artifact
+
+        adapter._seed.authorize(request, adapter._workspace)
+        recovery_coder_calls.append(request)
+        template = make_coder_progress_artifact()
+        artifact = template.model_copy(
+            update={
+                "artifact_id": "art_recovery_knowledge_progress",
+                "task_id": request.task_id,
+                "source_revision": request.source_revision,
+                "context_manifest_id": request.context_manifest_id,
+                "producer": template.producer.model_copy(
+                    update={
+                        "agent_id": "agent_team_coder",
+                        "run_id": request.run_id,
+                    }
+                ),
+                "parent_artifact_ids": request.expected_parent_artifact_ids or (),
+                "content": template.content.model_copy(
+                    update={
+                        "checkpoint_sequence": 1,
+                        "changed_files": (
+                            ChangedFile(
+                                path="omitted.txt",
+                                change=ChangeType.ADDED,
+                                lines_added=1,
+                                lines_deleted=0,
+                            ),
+                        ),
+                        "completed_step_ids": (),
+                        "remaining_step_ids": ("finish_change",),
+                        "tests_run": (),
+                        "next_actions": ("Confirm test prerequisites.",),
+                    }
+                ),
+            }
+        )
+        return AgentResult(
+            run_id=request.run_id,
+            task_id=request.task_id,
+            role=request.role,
+            attempt=request.attempt,
+            source_revision=request.source_revision,
+            context_manifest_id=request.context_manifest_id,
+            status=AgentRunStatus.SUCCEEDED,
+            artifact=artifact,
+        )
+
+    monkeypatch.setattr(_SeededCompleteRecoveryAdapter, "run", progress_before_gap)
 
     def complete(**kwargs: object) -> StructuredModelResult:
         payload = kwargs["input_payload"]
@@ -1060,7 +1139,8 @@ def test_joint_scope_recovery_targets_current_preparation_after_main_advances(
             gap_enabled
             and isinstance(bound, Mapping)
             and str(bound.get("task_id", "")).startswith("task_recovery_")
-            and bound.get("role") == "qa"
+            and bound.get("role") == knowledge_role
+            and (knowledge_role != "coder" or bool(recovery_coder_calls))
         ):
             if schema["title"] == "KnowledgeIntent":
                 return StructuredModelResult(payload={"queries": ["独立验收前提"]}, duration_ms=0)
@@ -1111,13 +1191,45 @@ def test_joint_scope_recovery_targets_current_preparation_after_main_advances(
             else remaining_routes,
         )
 
-    interrupted_recovery = host.resume_delivery(
-        ResumeProjectDelivery(
-            delivery_id=blocked.delivery_id,
-            approved_plan_sha256=plan.plan_sha256,
-            approval_reference="approve-current-target-plan",
-        )
+    approval_command = ResumeProjectDelivery(
+        delivery_id=blocked.delivery_id,
+        approved_plan_sha256=plan.plan_sha256,
+        approval_reference="approve-current-target-plan",
     )
+    if knowledge_role == "coder":
+        original_wait = NativeRecoveryEntry._knowledge_wait
+
+        def crash_before_attach(*args: object) -> KnowledgeGap:
+            raise RuntimeError("simulated restart before wait attachment")
+
+        monkeypatch.setattr(NativeRecoveryEntry, "_knowledge_wait", crash_before_attach)
+        with pytest.raises(RuntimeError, match="simulated restart"):
+            host.resume_delivery(approval_command)
+        monkeypatch.setattr(NativeRecoveryEntry, "_knowledge_wait", original_wait)
+        recovery = host.recovery_entry()
+        store, _ = recovery.open_plan(Path(proposed.recovery_plan_file))
+        invocation = store.get_invocation(plan.plan_sha256)
+        assert len(recovery_coder_calls) == 1
+        assert (
+            host.requirement_entry().status(blocked.delivery_id).checkpoint.stage.value == "BLOCKED"
+        )
+        snapshot = ProductionTeamReader(config, environment).snapshot("project_test")
+        view = next(r for r in snapshot.requests if r.id == blocked.delivery_id)
+        assert view.stage == "WAITING_HUMAN"
+        assert view.blocker is not None and "知识" in view.blocker
+        host = TeamHost(
+            config=config,
+            environment=environment,
+            structured_clients=models,
+            delivery_route_adapters=_KnowledgeFixtureFactory(remaining_routes),
+        )
+        interrupted_recovery = host.resume_delivery(
+            ResumeProjectDelivery(delivery_id=blocked.delivery_id)
+        )
+        assert store.get_invocation(plan.plan_sha256) == invocation
+        assert len(recovery_coder_calls) == 1 and not remaining_routes.requests
+    else:
+        interrupted_recovery = host.resume_delivery(approval_command)
     if knowledge_wait:
         from ai_software_engineer.knowledge.administration import (
             ApproveKnowledgeResolution,
@@ -1141,9 +1253,26 @@ def test_joint_scope_recovery_targets_current_preparation_after_main_advances(
             config.platform_root, team_id=config.team_id, name=config.team_name
         )
         project_workspace = team.project_registry().open(waiting.project_id)
-        assert any(
-            view.is_current for view in list_gap_views(project_workspace, waiting.delivery_id)
-        )
+        current_gaps = [
+            view
+            for view in list_gap_views(project_workspace, waiting.delivery_id)
+            if view.is_current
+        ]
+        assert len(current_gaps) == 1
+        if knowledge_role == "coder":
+            assert current_gaps[0].gap.binding.source_revision == current_head
+            from ai_software_engineer.recovery.entry import read_recovery_task
+
+            current_task = read_recovery_task(config, environment, store, plan)
+            assert current_task is not None and current_task.status is TaskStatus.IMPLEMENTING
+            assert current_task.attempts == 2
+            resumed_wait = host.resume_delivery(
+                ResumeProjectDelivery(delivery_id=waiting.delivery_id)
+            )
+            assert isinstance(resumed_wait, JointDeliveryResult)
+            assert resumed_wait.checkpoint.knowledge_gap_id == waiting.knowledge_gap_id
+            assert len(recovery_coder_calls) == 1 and not remaining_routes.requests
+
         answer = "测试前提已确认, 仍需 QA 独立执行, 不提供或代替验收结论。"
         approve_resolution(
             project_workspace,
@@ -1185,14 +1314,19 @@ def test_joint_scope_recovery_targets_current_preparation_after_main_advances(
         assert recovered.stage is DeliveryStage.DONE
         assert interrupted_recovery.checkpoint.integration is not None
         assert [request.role for request in remaining_routes.requests] == (
-            [AgentRole.QA, AgentRole.REVIEWER] if knowledge_wait else []
+            ([AgentRole.CODER] if knowledge_role == "coder" else [])
+            + [AgentRole.QA, AgentRole.REVIEWER]
+            if knowledge_wait
+            else []
         ) + [
             AgentRole.CODER,
             AgentRole.QA,
             AgentRole.REVIEWER,
         ]
         assert all(
-            request.role is not AgentRole.CODER or request.task_id != recovered.task_id
+            knowledge_role == "coder"
+            or request.role is not AgentRole.CODER
+            or request.task_id != recovered.task_id
             for request in remaining_routes.requests
         )
         assert len(models.calls) == 3
@@ -1200,7 +1334,9 @@ def test_joint_scope_recovery_targets_current_preparation_after_main_advances(
             host.resume_delivery(ResumeProjectDelivery(delivery_id=blocked.delivery_id)).checkpoint
             == interrupted_recovery.checkpoint
         )
-        assert len(remaining_routes.requests) == (5 if knowledge_wait else 3)
+        assert len(remaining_routes.requests) == (
+            6 if knowledge_role == "coder" else 5 if knowledge_wait else 3
+        )
         return
     assert isinstance(interrupted_recovery, JointDeliveryResult)
     assert interrupted_recovery.checkpoint == entry.status(blocked.delivery_id).checkpoint

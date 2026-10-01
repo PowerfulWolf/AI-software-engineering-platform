@@ -87,6 +87,14 @@ def read_role_queue(
         liveness: Literal["UNKNOWN", "LEASE_VALID", "LEASE_EXPIRED"] = "UNKNOWN"
         if lease_state == "ACTIVE" and expiry is not None:
             liveness = "LEASE_VALID" if expiry > now else "LEASE_EXPIRED"
+        elif (
+            lease_state == "EXPIRED"
+            and expiry is not None
+            and expiry <= now
+            and item.status is WorkItemStatus.RETRY_SCHEDULED
+            and item.wait_reason == f"lease_expired:{lease.id}"
+        ):
+            liveness = "LEASE_EXPIRED"
         result.append(
             RoleQueueView(
                 work_item_id=item.id,

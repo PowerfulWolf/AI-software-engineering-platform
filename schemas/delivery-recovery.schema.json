@@ -334,6 +334,34 @@
           "pattern": "^[a-f0-9]{64}$",
           "title": "Supplement Sha256",
           "type": "string"
+        },
+        "request": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RecoveryScopeRequest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "requested_files": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/RecoveryRequestedFile"
+              },
+              "maxItems": 8,
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Requested Files"
         }
       },
       "required": [
@@ -348,7 +376,61 @@
         "supplement_sha256"
       ],
       "title": "RecoveryScopeSupplement",
-      "type": "object"
+      "type": "object",
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "request"
+            ],
+            "properties": {
+              "request": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "requested_files"
+            ],
+            "properties": {
+              "requested_files": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "requested_files"
+            ],
+            "properties": {
+              "requested_files": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "request"
+            ],
+            "properties": {
+              "request": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "RecoveryPlan": {
       "additionalProperties": false,
@@ -504,6 +586,45 @@
           ],
           "default": null,
           "title": "Target Branch Name"
+        },
+        "retry_of_plan_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retry Of Plan Sha256"
+        },
+        "retry_of_task_id": {
+          "anyOf": [
+            {
+              "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retry Of Task Id"
+        },
+        "retry_of_checkpoint_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retry Of Checkpoint Sha256"
         }
       },
       "required": [
@@ -722,6 +843,80 @@
         "decided_at"
       ],
       "title": "VerifiedRecoveryDecision",
+      "type": "object"
+    },
+    "RecoveryScopeRequest": {
+      "additionalProperties": false,
+      "description": "Operator-selected exact missing files, bound to accepted Coder progress.",
+      "properties": {
+        "progress_artifact_id": {
+          "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Progress Artifact Id",
+          "type": "string"
+        },
+        "progress_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Progress Sha256",
+          "type": "string"
+        },
+        "paths": {
+          "items": {
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f]+$",
+            "type": "string"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Paths",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "reason": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "progress_artifact_id",
+        "progress_sha256",
+        "paths",
+        "reason"
+      ],
+      "title": "RecoveryScopeRequest",
+      "type": "object"
+    },
+    "RecoveryRequestedFile": {
+      "additionalProperties": false,
+      "description": "Read-only Git metadata; no pre-approval read of omitted file contents.",
+      "properties": {
+        "path": {
+          "minLength": 1,
+          "pattern": "^[^\\x00-\\x1f]+$",
+          "title": "Path",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "100644",
+            "100755"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "blob_id": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Blob Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "mode",
+        "blob_id"
+      ],
+      "title": "RecoveryRequestedFile",
       "type": "object"
     }
   },

@@ -14,6 +14,7 @@ from threading import Event
 import pytest
 
 from ai_software_engineer.agents import AgentRequest, AgentResult
+from ai_software_engineer.agents.execution import current_execution_guard
 from ai_software_engineer.agents.structured import StructuredModelResult
 from ai_software_engineer.artifacts import FileArtifactStore, seal_artifact
 from ai_software_engineer.context import FileContextStore
@@ -179,6 +180,10 @@ class ObservedAdapter(ScriptedAdapter):
             assert not active
         else:
             assert len(active) == 1
+            guard = current_execution_guard()
+            assert isinstance(guard, WorkerExecutionGuard)
+            assert guard.lease is not None and guard.inherited_fds
+            assert guard.lease.claim.lease.id == active[0].id
             assignments = {
                 assignment.id: assignment for assignment in self.queue.list_assignments()
             }

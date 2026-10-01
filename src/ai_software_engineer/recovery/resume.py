@@ -10,7 +10,7 @@ from typing import Self
 from pydantic import model_validator
 
 from ai_software_engineer.config import ProductionConfig
-from ai_software_engineer.domain import AgentRole, QaCriterionStatus, QaTestStatus
+from ai_software_engineer.domain import AgentRole, QaCriterionStatus, QaTestStatus, TaskStatus
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.domain.prerequisite_repair import PrerequisiteRepairPlan
 from ai_software_engineer.knowledge.gaps import KnowledgeGap
@@ -29,13 +29,20 @@ from ai_software_engineer.manager.production_backend import (
 from ai_software_engineer.manager.verification_coordination import ManagerVerificationAdvice
 from ai_software_engineer.multi_directory.models import JointDeliveryResult, JointStage
 from ai_software_engineer.recovery.context import approved_parent_context
-from ai_software_engineer.recovery.entry import NativeRecoveryEntry
+from ai_software_engineer.recovery.entry import (
+    NativeRecoveryEntry,
+    NativeRecoveryExecution,
+    read_recovery_task,
+)
+from ai_software_engineer.recovery.interruption import RecoveryInterruptionService
+from ai_software_engineer.recovery.interruption_records import RecoveryInterruptionPlan
 from ai_software_engineer.recovery.models import (
     RecoveryApprovalCommand,
     RecoveryAuthorization,
     RecoveryPlan,
     RecoveryRejected,
     RecoveryScope,
+    RecoveryScopeRequest,
     RecoveryScopeSupplement,
     VerificationExecutionBlocked,
     VerifiedRecoveryDecision,
@@ -83,8 +90,10 @@ class DeliveryResumeResult(DomainModel):
     recovery_plan_sha256: str | None = None
     scope_supplement_sha256: str | None = None
     scope_supplement_paths: tuple[NonEmptyStr, ...] = ()
+    coder_scope_request: RecoveryScopeRequest | None = None
     prerequisite_repair_plan: PrerequisiteRepairPlan | None = None
     restart_plan: PreExecutionRestartPlan | None = None
+    interruption_plan: RecoveryInterruptionPlan | None = None
 
 
 class JointDeliveryResumeResult(JointDeliveryResult):
@@ -137,6 +146,12 @@ class DeliveryResumeController:
 
     def resume(self, command: ResumeProjectDelivery) -> DeliveryResumeResult:
         current = self._entry.status(command.delivery_id).checkpoint
+        if command.coder_scope_request is not None and (
+            current.stage not in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
+            or current.candidate_revision is not None
+            or current.task_id is None
+        ):
+            raise RecoveryRejected("requested Coder scope requires terminal pre-candidate recovery")
         if current.stage not in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}:
             result = self._entry.resume(command)
             outcome = (
@@ -183,7 +198,11 @@ class DeliveryResumeController:
                 ),
             )
         if current.candidate_revision is None:
-            restart = self._continue_pre_execution_restart(current, command)
+            restart = (
+                self._continue_pre_execution_restart(current, command)
+                if command.coder_scope_request is None
+                else None
+            )
             if restart is not None:
                 return restart
             try:
@@ -197,6 +216,9 @@ class DeliveryResumeController:
                 )
             except RecoveryRejected:
                 return self._continue_coder_recovery(current, command)
+
+        if command.coder_scope_request is not None:
+            raise RecoveryRejected("requested Coder scope requires terminal pre-candidate recovery")
 
         latest = self._verification.latest_project(
             repository_root=current.repository_root,
@@ -594,6 +616,15 @@ class DeliveryResumeController:
     ) -> DeliveryResumeResult:
         try:
             latest = self._recovery.latest_delivery(current)
+            if (
+                latest is not None
+                and command.coder_scope_request is not None
+                and (
+                    latest[1].scope_supplement is None
+                    or latest[1].scope_supplement.request != command.coder_scope_request
+                )
+            ):
+                latest = None
             if latest is not None:
                 try:
                     self._recovery.require_current_plan(latest[2])
@@ -602,7 +633,9 @@ class DeliveryResumeController:
                     # scope and plan instead of asking the user to approve stale facts.
                     latest = None
             if latest is None:
-                supplement = self._recovery.scope_supplement(current)
+                supplement = self._recovery.scope_supplement(
+                    current, request=command.coder_scope_request
+                )
                 if supplement is not None and (
                     command.approved_scope_sha256 != supplement.supplement_sha256
                 ):
@@ -614,6 +647,7 @@ class DeliveryResumeController:
                 plan, path = self._recovery.propose_delivery(
                     current,
                     approved_scope_sha256=command.approved_scope_sha256,
+                    coder_scope_request=command.coder_scope_request,
                     scope_approval_reference=(
                         command.approval_reference
                         if command.approved_scope_sha256 is not None
@@ -624,6 +658,38 @@ class DeliveryResumeController:
         except RecoveryRejected as error:
             return self._recovery_human_gate(current, str(error))
         store, plan, path = latest
+        try:
+            waiting = self._recovery.pending_knowledge_wait(path)
+        except RecoveryRejected as error:
+            return self._recovery_human_gate(current, str(error))
+        if waiting is not None:
+            return self._finish_coder_recovery(waiting)
+        interrupted = read_recovery_task(self._config, self._environment, store, plan)
+        try:
+            store.get_invocation(plan.plan_sha256)
+        except RecoveryRecordMissing:
+            admitted = False
+        else:
+            admitted = True
+        if admitted and interrupted is not None and interrupted.status is TaskStatus.IMPLEMENTING:
+            try:
+                proposal = RecoveryInterruptionService(self._recovery, store, plan).propose()
+                if command.approved_plan_sha256 != proposal.plan_sha256:
+                    return DeliveryResumeResult(
+                        outcome=DeliveryResumeOutcome.RECOVERY_APPROVAL_REQUIRED,
+                        checkpoint=current,
+                        interruption_plan=proposal,
+                        next_action="Approve one replacement Coder Run on the unchanged seed.",
+                    )
+                assert command.approval_reference is not None
+                execution = self._recovery.execute_interruption(
+                    path,
+                    confirmed_plan=proposal.plan_sha256,
+                    reference=command.approval_reference,
+                )
+            except RecoveryRejected as error:
+                return self._recovery_human_gate(current, str(error))
+            return self._finish_coder_recovery(execution)
         authorization = store.find_authorization(plan.plan_sha256)
         if command.approved_plan_sha256 is not None:
             if command.approved_plan_sha256 != plan.plan_sha256:
@@ -641,6 +707,9 @@ class DeliveryResumeController:
             execution = self._recovery.resume_execution(path)
         except RecoveryRejected as error:
             return self._recovery_human_gate(current, str(error))
+        return self._finish_coder_recovery(execution)
+
+    def _finish_coder_recovery(self, execution: NativeRecoveryExecution) -> DeliveryResumeResult:
         started = self._entry.begin_recovery(
             execution.plan,
             execution.dispatch,
@@ -657,7 +726,8 @@ class DeliveryResumeController:
                 DeliveryResumeOutcome.WAITING_HUMAN,
                 started,
                 next_action=f"Manager 等待知识前提确认: {execution.delivery.gap_id}。"
-                "恢复 Task 已接回原需求; 保留当前 QA/Reviewer checkpoint, 不重跑 Coder。",
+                f"恢复 Task 已接回原需求; 保留当前 {execution.delivery.binding.role.value} "
+                "checkpoint, 解答批准前不启动新执行。",
             )
         result = self._entry.finish_recovery(
             execution.plan,
@@ -709,6 +779,7 @@ class DeliveryResumeController:
             next_action="Approve the exact omitted file paths before capturing retained work.",
             scope_supplement_sha256=supplement.supplement_sha256,
             scope_supplement_paths=supplement.paths,
+            coder_scope_request=supplement.request,
         )
 
     def _native_source(self, plan: CandidateVerificationPlan) -> NativeCandidateSource:

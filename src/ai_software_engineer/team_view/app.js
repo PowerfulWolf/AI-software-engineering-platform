@@ -128,6 +128,7 @@ const labels = {
   INVALID: "输出无效",
   TIMED_OUT: "执行超时",
   UNKNOWN: "未确认",
+  EXECUTION_INTERRUPTED: "执行中断",
   CREATE_PROJECT: "创建项目",
   CREATE_REQUIREMENT: "创建需求",
   UPDATE_REQUIREMENT: "编辑需求",
@@ -305,7 +306,7 @@ const badge = (status) =>
     "badge " +
       (["DONE", "CLOSED"].includes(status)
         ? "done"
-        : status.includes("WAITING") || ["BLOCKED", "FAILED"].includes(status)
+        : status.includes("WAITING") || ["BLOCKED", "FAILED", "EXECUTION_INTERRUPTED"].includes(status)
           ? "blocked"
           : "current"),
   );
@@ -376,6 +377,10 @@ const canControlCurrentTeam = () =>
   snapshot.team_id === consoleTeamId;
 function assignmentBadge(task, assignment) {
   if (task.terminal) return badge(task.status);
+  const waiting = waitingExecutionStep(task);
+  if (waiting?.role === assignment.role) return badge(waiting.status);
+  if (interruptedExecution(task) && task.role_queue.some(step =>
+    step.role === assignment.role && interruptedStep(step))) return badge("EXECUTION_INTERRUPTED");
   if (assignment.current_stage) return badge(task.status);
   const current = task.assignments.find((candidate) => candidate.current_stage);
   if (!current) return el("span", "已分配 · 等待调度", "badge");
@@ -397,10 +402,36 @@ const agentWorkById = (id) => {
   const request = requestById(id);
   return request ? { kind: "request", id, item: request } : null;
 };
+function interruptedStep(step) {
+  return step.lease_liveness === "LEASE_EXPIRED" &&
+    (["RUNNING", "LEASED"].includes(step.status) ||
+      (step.status === "RETRY_SCHEDULED" && step.wait_reason?.startsWith("lease_expired:")));
+}
+function interruptedExecution(task) {
+  return !task.terminal && task.role_queue?.some(interruptedStep);
+}
+function waitingExecutionStep(task) {
+  return !task.terminal && task.role_queue?.find(step =>
+    ["WAITING_HUMAN", "WAITING_DEPENDENCY"].includes(step.status));
+}
+function taskPresentationStatus(task) {
+  return waitingExecutionStep(task)?.status ||
+    (interruptedExecution(task) ? "EXECUTION_INTERRUPTED" : task.status || task.stage);
+}
+function waitingRequestTask(request) {
+  if (["DONE", "CLOSED"].includes(request.stage)) return null;
+  return currentRequestTasks(request).find(task => waitingExecutionStep(task)) || null;
+}
+function interruptedRequestTask(request) {
+  if (request.knowledge_gap?.is_current || ["DONE", "CLOSED"].includes(request.stage)) return null;
+  return currentRequestTasks(request).find(interruptedExecution) || null;
+}
+const interruptedExecutionReason = "执行租约已失效，当前执行已中断；交付阶段和已保存改动仍保留。";
+const interruptedExecutionNext = "请通过“继续交付”检查并恢复当前执行。";
 function taskGroup(task) {
   if (task.status === "DONE") return "completed";
   if (
-    task.blocker ||
+    task.blocker || interruptedExecution(task) ||
     task.role_queue?.some((step) => step.status.startsWith("WAITING_")) ||
     task.status.includes("WAITING") ||
     ["BLOCKED", "FAILED"].includes(task.status)
@@ -462,6 +493,15 @@ function activeRequestTask(request) {
   );
 }
 function requestPresentation(request) {
+  const waitingTask = waitingRequestTask(request);
+  if (waitingTask)
+    return {group: "blocked", status: approvedKnowledge(request)
+      ? "KNOWLEDGE_APPROVED" : waitingExecutionStep(waitingTask).status,
+      blocker: approvedKnowledge(request) ? null : waitingTask.blocker || request.blocker,
+      nextAction: request.next_action || waitingTask.next_action};
+  if (interruptedRequestTask(request))
+    return {group: "blocked", status: "EXECUTION_INTERRUPTED",
+      blocker: interruptedExecutionReason, nextAction: interruptedExecutionNext};
   const running = activeOperation(request.id);
   const deliveryOperation =
     running && deliveryOperationActions.has(running.intent.action)
@@ -879,7 +919,7 @@ function recoveryApprovalBox(request, approval) {
     el(
       "p",
       approval.kind === "coder_scope"
-        ? "批准后平台只会捕获上方精确文件，不会启动 Agent；捕获完成后仍需审批恢复计划。"
+        ? "批准后平台按上方精确范围准备恢复计划，不会启动 Agent；执行前仍需审批恢复计划。"
         : "批准后平台只执行上方计划；页面会把精确计划身份安全地带回 Manager。",
       "muted",
     ),
@@ -892,7 +932,9 @@ function recoveryApprovalBox(request, approval) {
           delivery_id: request.id,
           expected_checkpoint_sha256: request.checkpoint_sha256,
           ...(approval.kind === "coder_scope"
-            ? { approved_scope_sha256: approval.plan_sha256 }
+            ? { approved_scope_sha256: approval.plan_sha256,
+                ...(approval.coder_scope_request
+                  ? { coder_scope_request: approval.coder_scope_request } : {}) }
             : approval.kind === "prerequisite_repair"
               ? { approved_repair_sha256: approval.plan_sha256 }
             : { approved_plan_sha256: approval.plan_sha256 }),
@@ -5908,15 +5950,27 @@ function deliveryFlow(request) {
       current = 3;
   }
   const flow = el("ol", undefined, "delivery-flow");
+  const waitingStages = new Set(currentRequestTasks(request)
+    .map(waitingExecutionStep).filter(Boolean)
+    .map(step => deliveryRoleStage[step.role]).filter(index => index !== undefined));
+  if (waitingStages.size) current = Math.min(...waitingStages);
+  else if (["WAITING_HUMAN", "WAITING_DEPENDENCY"].includes(request.stage) && current >= 0)
+    waitingStages.add(current);
+  const interrupted = interruptedRequestTask(request);
+  const interruptedStages = new Set((interrupted?.role_queue || [])
+    .filter(interruptedStep)
+    .map(step => deliveryRoleStage[step.role]));
   steps.forEach((title, index) => {
     let state = index < current ? "done" : "";
     if (failedStageIndexes.has(index)) state = "blocked";
     if (index === current && !failedStageIndexes.has(index)) state = "current";
+    if (interruptedStages.has(index)) state = "blocked";
+    if (waitingStages.has(index)) state = "blocked";
     const step = el("li", undefined, state);
     if (state === "blocked") step.setAttribute("title", `${title}：阻塞`);
     if (state === "current") step.setAttribute("aria-current", "step");
     step.append(el("span", String(index + 1)), el("strong", title));
-    if (state === "blocked") step.append(el("small", "已阻塞", "flow-state"));
+    if (state === "blocked") step.append(el("small", interruptedStages.has(index) ? "执行中断" : "已阻塞", "flow-state"));
     flow.append(step);
   });
   return flow;
@@ -5925,16 +5979,30 @@ function managerFlowStatus(request) {
   const operation = activeOperation(request.id);
   if (operation && deliveryOperationActions.has(operation.intent.action)) {
     const state = operation.status === "QUEUED" ? "等待执行" : "处理中";
+    const waiting = waitingRequestTask(request);
+    const waitingNote = waiting
+      ? (waitingExecutionStep(waiting).wait_reason?.startsWith("KNOWLEDGE_GAP:")
+        ? approvedKnowledge(request) ? " · 知识解答已批准，等待角色恢复" : " · 当前角色等待知识确认"
+        : " · 当前角色等待前提处理") : "";
     return el(
       "p",
-      `Manager 协调 · ${state}（${label(operation.intent.action)}）`,
+      `Manager 协调 · ${state}（${label(operation.intent.action)}）${waitingNote || (interruptedRequestTask(request) ? " · 当前角色执行已中断" : "")}`,
       "flow-manager active",
     );
   }
+  if (requestPresentation(request).group !== "blocked") return null;
+  if (request.knowledge_gap?.is_current)
+    return el("p", approvedKnowledge(request)
+      ? "Manager 协调 · 知识解答已批准，等待继续"
+      : "Manager 协调 · 等待知识确认", "flow-manager blocked");
+  const approval = latestApproval(request.id, request.checkpoint_sha256);
+  if (approval)
+    return el("p", `Manager 协调 · 等待审批 · ${approval.title}`, "flow-manager blocked");
+  if (interruptedRequestTask(request))
+    return el("p", "Manager 协调 · 执行中断，等待恢复", "flow-manager blocked");
   if (request.coordination)
     return el("p", `Manager 协调 · ${request.coordination.draft.action === "PROPOSE_RECOVERY"
-      ? "等待恢复审批" : "等待处理"} · ${request.coordination.draft.summary}`, "flow-manager blocked");
-  if (requestPresentation(request).group !== "blocked") return null;
+      ? "等待恢复" : "等待处理"} · ${request.coordination.draft.summary}`, "flow-manager blocked");
   const latest = latestOperation(request.id);
   if (latest && ["FAILED", "INTERRUPTED"].includes(latest.status) &&
       deliveryOperationActions.has(latest.intent.action))
@@ -6333,7 +6401,7 @@ function buildDetail() {
       );
       if (task)
         scopeCard.append(
-          button("查看仓库任务 · " + label(task.status), () =>
+          button("查看仓库任务 · " + label(taskPresentationStatus(task)), () =>
             showDetail("task", task.id),
           ),
         );
@@ -6366,12 +6434,16 @@ function buildDetail() {
     top,
     el("h3", item.title),
     el("p", item.id, "paths"),
-    badge(item.status || item.stage),
+    badge(taskPresentationStatus(item)),
   );
   dialog.append(
     el("p", paths(item.scope), "paths"),
     el("p", "最近活动 · " + time(item.last_activity), "muted"),
   );
+  if (interruptedExecution(item))
+    dialog.append(el("p", `${interruptedExecutionReason} 当前交付检查点：${item.status}。`));
+  if (waitingExecutionStep(item))
+    dialog.append(el("p", `当前角色已暂停，交付检查点保留在${label(item.status)}。`));
   if (item.candidate_revision)
     dialog.append(el("p", "候选版本 · " + item.candidate_revision, "paths"));
   if (item.candidate_branch)
@@ -6384,7 +6456,9 @@ function buildDetail() {
         LEASE_EXPIRED: "租约已过期",
         UNKNOWN: "无有效租约",
       }[step.lease_liveness];
-      const status = step.status === "CLOSED" ? "本次执行已结束" : label(step.status);
+      const status = step.status === "CLOSED" ? "本次执行已结束"
+        : interruptedStep(step)
+          ? "执行中断" : label(step.status);
       dialog.append(el("p", `${label(step.role)} · 第 ${step.attempt} 次 · ${status} · ${lease}`));
       if (step.heartbeat_at)
         dialog.append(el("p", "最近心跳 · " + time(step.heartbeat_at), "muted"));

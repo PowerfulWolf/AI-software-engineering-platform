@@ -124,3 +124,24 @@ the parent still names the pre-repair Task.
 
 Correct: validate durable gap ownership → reconcile latest native child → journal Manager wait →
 approve exact resolution via normal API → resume the original QA checkpoint with frozen scope.
+
+## Recovery Coder wait admission (2026-10-01)
+
+`NativeRecoveryEntry.pending_knowledge_wait(path)` recognizes a granted recovery paused in
+Coder, QA or Reviewer knowledge preparation. Task remains at its delivery checkpoint. A current
+unique waiting WorkItem, matching allocation/step/revision, sealed gap/route, context and manifest
+must prove the exact run identity. The released claim is a legitimate wait, not a lease crash.
+No model is invoked while attaching the native child to its parent. Normal joint coordination
+then journals WAITING_HUMAN and exposes the existing exact resolution facade.
+
+| Fact | Result |
+| --- | --- |
+| Current Coder queue knowledge wait at IMPLEMENTING | Adopt same approved Task before interruption recovery |
+| Historical gap with no current waiting queue step | Never infer current wait from the old gap |
+| Wrong dispatch, step, revision, Project, context or route digest | Reject without execution |
+| Nonterminal Task with WAITING_HUMAN/WAITING_DEPENDENCY queue | UI shows scheduling wait while preserving delivery checkpoint |
+| Approved answer | Normal queue resolution and new claim; unchanged permissions and budget |
+
+Tests cover first/restarted admission and ordinary exact resolution, plus stale and mismatching
+facts. Existing data uses Continue, with no database repair or historical rewrite. Scope or
+executor changes require their own exact approvals; knowledge answers cannot grant authority.

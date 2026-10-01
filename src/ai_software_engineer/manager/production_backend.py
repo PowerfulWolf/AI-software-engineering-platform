@@ -979,6 +979,7 @@ class ProductionProjectDeliveryBackend:
             recovery_store, recovery_plan = open_recovery_plan(
                 self._config, recovery_root / f"plan-{dispatch.recovery_plan_sha256}.json"
             )
+            recovery_plan.require_execution_supported()
             sealed = recovery_store.get_task_record(recovery_plan.plan_sha256)
             if (
                 sealed.task != dispatch.task

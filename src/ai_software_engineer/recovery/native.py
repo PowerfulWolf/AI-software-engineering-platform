@@ -15,6 +15,8 @@ from pymysql.cursors import DictCursor
 
 from ai_software_engineer.agents import FileModelRouteAttemptStore, ModelRouteAttempt
 from ai_software_engineer.agents.fallback import RouteAttemptOutcome, model_route_root
+from ai_software_engineer.artifacts import FileArtifactStore
+from ai_software_engineer.artifacts.store import artifact_digest
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.context import FileContextStore
 from ai_software_engineer.design import FileDesignRecordStore
@@ -31,9 +33,11 @@ from ai_software_engineer.domain import (
     TaskStatus,
     TechnicalDesign,
 )
+from ai_software_engineer.domain.event import StateEvent
 from ai_software_engineer.domain.identity import ContextId, RunId
 from ai_software_engineer.domain.project_delivery import validate_stage_chain
 from ai_software_engineer.domain.task import task_matches_dispatch
+from ai_software_engineer.git import GitWorktreeManager, WorktreeSpec
 from ai_software_engineer.manager.delivery import _delivery_id
 from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryFailureCode,
@@ -59,6 +63,11 @@ from ai_software_engineer.recovery.models import (
     RecoveryScope,
     RecoverySource,
     digest,
+)
+from ai_software_engineer.recovery.progress_source import (
+    has_accepted_progress,
+    is_prior_progress_source,
+    require_stopped_progress,
 )
 from ai_software_engineer.recovery.verification_snapshot import (
     CandidateRuntimeSnapshot,
@@ -90,13 +99,17 @@ class NativeRecoverySource:
     request: ProjectRequest
     task: Task
     worktree_revision: str
+    accepted_progress: CoderProgressArtifact | None = None
 
 
 def _is_recoverable_terminal_coder_route(
     route: ModelRouteAttempt,
     task: Task,
     checkpoint: ProjectDeliveryCheckpoint,
+    events: tuple[StateEvent, ...] = (),
 ) -> bool:
+    if is_prior_progress_source(route, task, checkpoint, events):
+        return True
     if (
         route.task_id != task.id
         or route.role is not AgentRole.CODER
@@ -151,7 +164,7 @@ class NativeRecoverySourceReader:
             )
             history = journal.list(scope.delivery_id)
             checkpoint = history[-1]
-            task, _, _, _ = self._sql(checkpoint, history)
+            task, _, _, _, events = self._sql(checkpoint, history)
             routes_root = model_route_root(root)
             _reject_symlinks(routes_root)
             store = FileModelRouteAttemptStore(routes_root, read_only=True)
@@ -167,8 +180,7 @@ class NativeRecoverySourceReader:
                 if (
                     final.task_id == task.id
                     and final.role is AgentRole.CODER
-                    and final.result.attempt == task.attempts
-                    and _is_recoverable_terminal_coder_route(final, task, checkpoint)
+                    and _is_recoverable_terminal_coder_route(final, task, checkpoint, events)
                 ):
                     candidates.append((run_id, final.result.context_manifest_id))
             if len(candidates) != 1:
@@ -225,7 +237,7 @@ class NativeRecoverySourceReader:
             or cp.candidate_revision is not None
         ):
             raise ValueError("not a failed pre-candidate delivery")
-        task, revision, dispatch, planner_dispatch = self._sql(cp, history)
+        task, revision, dispatch, planner_dispatch, events = self._sql(cp, history)
         stages = read_approved_stages(
             self._config,
             root,
@@ -263,19 +275,47 @@ class NativeRecoverySourceReader:
                 or route.task_id != task.id
                 or result.context_manifest_id != context_id
                 or result.source_revision != worktree_revision
-                or result.attempt != task.attempts
+                or result.attempt != final_route.result.attempt
                 or (route is not final_route and route.outcome is not RouteAttemptOutcome.FALLBACK)
             ):
                 raise ValueError("route does not belong to terminal Coder")
-        if not _is_recoverable_terminal_coder_route(final_route, task, cp):
+        if not _is_recoverable_terminal_coder_route(final_route, task, cp, events):
             raise ValueError("terminal Coder route is not recoverable")
         if (
             context.task_id != task.id
             or context.role is not AgentRole.CODER
             or context.source_revision != worktree_revision
-            or context.attempt != task.attempts
+            or context.attempt != final_route.result.attempt
         ):
             raise ValueError("failed context mismatch")
+        if final_route.result.attempt != task.attempts:
+            require_stopped_progress(self._config, self._environment, root, task, final_route)
+            progress = final_route.result.artifact
+            if not isinstance(progress, CoderProgressArtifact):
+                raise ValueError("missing prior progress")
+            sealed = FileArtifactStore(root / "artifacts", read_only=True).get(progress.artifact_id)
+            if artifact_digest(sealed) != artifact_digest(progress):
+                raise ValueError("prior progress does not match sealed artifact")
+            manager = GitWorktreeManager(
+                scope.repository_root,
+                Path(self._config.platform_root) / "worktrees" / scope.repository_id,
+                branch_names={task.id: task.branch_name},
+            )
+            worktree = manager.recover(
+                WorktreeSpec(
+                    task_id=task.id,
+                    role=AgentRole.CODER,
+                    attempt=1,
+                    source_revision=worktree_revision,
+                )
+            )
+            snapshot = manager.inspect(worktree)
+            if (
+                snapshot.head_revision != progress.source_revision
+                or snapshot.changed_paths
+                != tuple(sorted(f.path for f in progress.content.changed_files))
+            ):
+                raise ValueError("prior progress worktree inventory changed")
         policy_sections = [s for s in context.sections if s.name == "policy"]
         if len(policy_sections) != 1:
             raise ValueError("missing exact policy section")
@@ -312,6 +352,7 @@ class NativeRecoverySourceReader:
             revision,
             dispatch,
             planner_dispatch,
+            events,
         ):
             raise ValueError("source changed during inspection")
         if (
@@ -329,6 +370,17 @@ class NativeRecoverySourceReader:
             raise ValueError("approved request changed during inspection")
         if _parent(team, cp, approval) != (parent_id, parent_sha):
             raise ValueError("parent changed during inspection")
+        accepted_progress = None
+        progress = final_route.result.artifact
+        if isinstance(progress, CoderProgressArtifact) and has_accepted_progress(
+            final_route, events
+        ):
+            sealed = FileArtifactStore(root / "artifacts", read_only=True).get(progress.artifact_id)
+            if not isinstance(sealed, CoderProgressArtifact) or artifact_digest(
+                sealed
+            ) != artifact_digest(progress):
+                raise ValueError("accepted progress differs from sealed artifact")
+            accepted_progress = sealed
         return NativeRecoverySource(
             source,
             permissions,
@@ -341,13 +393,14 @@ class NativeRecoverySourceReader:
             stages.request,
             task,
             worktree_revision,
+            accepted_progress,
         )
 
     def _sql(
         self,
         cp: ProjectDeliveryCheckpoint,
         history: tuple[ProjectDeliveryCheckpoint, ...],
-    ) -> tuple[Task, int, DeliveryAllocation, DispatchCommitRecord]:
+    ) -> tuple[Task, int, DeliveryAllocation, DispatchCommitRecord, tuple[StateEvent, ...]]:
         if cp.task_id is None or cp.dispatch_commit_id is None:
             raise ValueError("missing materialized Task")
         if not history or history[-1] != cp:
@@ -446,7 +499,7 @@ class NativeRecoverySourceReader:
                     validate_candidate_snapshot(cp, snapshot)
                     if not terminal_candidate_requires_coder_recovery(task, event_tuple):
                         raise ValueError("candidate has no interrupted post-feedback Coder work")
-                return task, revision, dispatch, planner_dispatch
+                return task, revision, dispatch, planner_dispatch, event_tuple
         finally:
             connection.rollback()
             connection.close()

@@ -6,11 +6,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from fnmatch import fnmatchcase
 from pathlib import Path, PurePosixPath
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from pydantic import TypeAdapter, ValidationError
 
-from ai_software_engineer.artifacts import FileArtifactStore
+from ai_software_engineer.agents.codex_cli import InitialWorkspaceAdmission
 from ai_software_engineer.config import (
     ModelProviderKind,
     ProductionConfig,
@@ -19,7 +19,6 @@ from ai_software_engineer.config import (
 from ai_software_engineer.context import ContextSource, FileContextStore
 from ai_software_engineer.domain import (
     AgentRole,
-    ImplementationReportArtifact,
     Task,
     TaskStatus,
     TeamRole,
@@ -30,10 +29,7 @@ from ai_software_engineer.git import GitWorktreeManager, WorktreeNotFound, Workt
 from ai_software_engineer.knowledge.gaps import (
     KnowledgeGap,
     KnowledgeGapRaised,
-    KnowledgeGapRouting,
 )
-from ai_software_engineer.knowledge.models import digest as knowledge_digest
-from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.delivery_checkpoint import ProjectDeliveryCheckpoint
 from ai_software_engineer.manager.dispatch import RecoveryDispatchRecord
 from ai_software_engineer.manager.mysql_dispatch_authority import (
@@ -63,11 +59,13 @@ from ai_software_engineer.recovery.current import NativeRecoveryFactsVerifier
 from ai_software_engineer.recovery.models import (
     CapturedChanges,
     RecoveryApprovalCommand,
+    RecoveryAuthorization,
     RecoveryInputMode,
     RecoveryPathRebinding,
     RecoveryPlan,
     RecoveryRejected,
     RecoveryScope,
+    RecoveryScopeRequest,
     RecoveryScopeSupplement,
     SafeText,
     VerifiedRecoveryDecision,
@@ -88,6 +86,9 @@ from ai_software_engineer.runtime_workspace import FileTeamWorkforceStore
 from ai_software_engineer.store import MySqlTaskRepository, TaskNotFound
 from ai_software_engineer.store.mysql_repository import _decode_task, open_mysql_connection
 from ai_software_engineer.team_workspace import TeamWorkspace, _read_regular, _reject_symlinks
+
+if TYPE_CHECKING:
+    from ai_software_engineer.recovery.interruption import RecoveryInterruptionService
 
 
 @dataclass(frozen=True)
@@ -275,6 +276,7 @@ class NativeRecoveryEntry:
         target_branch_name: BranchName | None = None,
         approved_scope_sha256: str | None = None,
         scope_approval_reference: str | None = None,
+        coder_scope_request: RecoveryScopeRequest | None = None,
     ) -> tuple[RecoveryPlan, Path]:
         prepared_result = self.backend.prepare(repository_root)
         prepared = prepared_result.preparation
@@ -306,7 +308,9 @@ class NativeRecoveryEntry:
             restored_clean_source = True
         if restored_clean_source:
             input_mode = "coder_reapply"
-        supplement = inspect_recovery_scope_supplement(manager, old, original)
+        supplement = inspect_recovery_scope_supplement(
+            manager, old, original, request=coder_scope_request
+        )
         if supplement is not None:
             if (
                 approved_scope_sha256 != supplement.supplement_sha256
@@ -386,7 +390,7 @@ class NativeRecoveryEntry:
         ) / "state" / f"recovery-{delivery_id}" / f"plan-{plan.plan_sha256}.json"
 
     def scope_supplement(
-        self, checkpoint: ProjectDeliveryCheckpoint
+        self, checkpoint: ProjectDeliveryCheckpoint, *, request: RecoveryScopeRequest | None = None
     ) -> RecoveryScopeSupplement | None:
         """Discover exact omitted changed paths without reading their file contents."""
         scope = RecoveryScope(
@@ -412,8 +416,12 @@ class NativeRecoveryEntry:
             # A clean terminal provider failure is removed by normal workspace cleanup.
             # Proposal performs the bounded branch-identity repair; scope inspection has
             # no omitted changed paths when no worktree evidence remains.
+            if request is not None:
+                raise RecoveryRejected(
+                    "requested scope requires a retained Coder worktree"
+                ) from None
             return None
-        return inspect_recovery_scope_supplement(manager, old, original)
+        return inspect_recovery_scope_supplement(manager, old, original, request=request)
 
     def propose_delivery(
         self,
@@ -421,6 +429,7 @@ class NativeRecoveryEntry:
         *,
         approved_scope_sha256: str | None = None,
         scope_approval_reference: str | None = None,
+        coder_scope_request: RecoveryScopeRequest | None = None,
     ) -> tuple[RecoveryPlan, Path]:
         """Discover the failed Coder identity and publish one exact recovery plan."""
         scope = RecoveryScope(
@@ -439,6 +448,7 @@ class NativeRecoveryEntry:
             failed_context_id=source.source.failed_context_id,
             approved_scope_sha256=approved_scope_sha256,
             scope_approval_reference=scope_approval_reference,
+            coder_scope_request=coder_scope_request,
         )
 
     def latest_delivery(
@@ -543,18 +553,22 @@ class NativeRecoveryEntry:
             try:
                 delivery: RetryResult | KnowledgeGap = self.execute(path)
             except KnowledgeGapRaised as error:
-                delivery = self._verifier_knowledge_wait(store, plan)
+                delivery = self._knowledge_wait(store, plan)
                 if delivery != error.gap:
                     raise RecoveryRejected(
                         "recovery knowledge wait differs from durable gap"
                     ) from error
         else:
             task = read_recovery_task(self.config, self.environment, store, plan)
-            if task is not None and task.status in {TaskStatus.QA, TaskStatus.REVIEW}:
+            if task is not None and task.status in {
+                TaskStatus.IMPLEMENTING,
+                TaskStatus.QA,
+                TaskStatus.REVIEW,
+            }:
                 return NativeRecoveryExecution(
                     plan,
                     self._dispatch_for(store, plan),
-                    self._verifier_knowledge_wait(store, plan),
+                    self._knowledge_wait(store, plan),
                 )
             if task is None or task.status not in {
                 TaskStatus.DONE,
@@ -583,57 +597,136 @@ class NativeRecoveryEntry:
             delivery=delivery,
         )
 
-    def _verifier_knowledge_wait(
-        self, store: FileRecoveryStore, plan: RecoveryPlan
-    ) -> KnowledgeGap:
-        """Adopt only a granted recovery Task paused at its own durable verifier gap."""
+    def execute_interruption(
+        self,
+        path: Path,
+        *,
+        confirmed_plan: str,
+        reference: str,
+        route_factory: Callable[[InitialWorkspaceAdmission], DeliveryRouteAdapterFactory]
+        | None = None,
+    ) -> NativeRecoveryExecution:
+        from datetime import timedelta
+
+        from ai_software_engineer.manager.queue_capacity import production_role_queue
+        from ai_software_engineer.recovery.interruption import RecoveryInterruptionService
+
+        if not self.config.live_model_execution:
+            raise RecoveryRejected("live model execution is disabled")
+        store, plan = self.open_plan(path)
+        with store.execution_lock():
+            interruption = RecoveryInterruptionService(self, store, plan)
+            proposal = interruption.propose()
+            if confirmed_plan != proposal.plan_sha256:
+                raise RecoveryRejected("exact interruption plan approval is required")
+            try:
+                approval = store.get_interruption_authorization(plan.plan_sha256)
+            except RecoveryRecordMissing:
+                command = RecoveryApprovalCommand(
+                    operation_id="interruption_" + proposal.plan_sha256[:32],
+                    plan_sha256=proposal.plan_sha256,
+                    approval_reference=reference,
+                    submitted_at=datetime.now(UTC),
+                )
+                decision = (
+                    ExplicitRecoveryHuman(confirmed_plan)
+                    .verify(command)
+                    .model_copy(
+                        update={"rationale": "One replacement Run; unchanged seed and Task"}
+                    )
+                )
+                approval = store.put_interruption_authorization(
+                    plan.plan_sha256, RecoveryAuthorization.create(command, decision)
+                )
+            if not approval.decision.approved:
+                raise RecoveryRejected("interruption was not approved")
+            interruption.propose()
+            # Use the native reaper before expensive preparation, so the normal
+            # Dispatcher can claim the next generation when preparation finishes.
+            now = datetime.now(UTC)
+            production_role_queue(self.config.require_mysql_dsn(self.environment)).reclaim_expired(
+                now=now, retry_at=now + timedelta(seconds=1)
+            )
+            factory = (
+                route_factory(interruption)
+                if route_factory
+                else ConfiguredDeliveryRouteAdapterFactory(initial_workspace_admission=interruption)
+            )
+            try:
+                result: RetryResult | KnowledgeGap = self._execute(
+                    store,
+                    plan,
+                    lambda seed: factory,
+                    _require_seed_recovery_route(self.config),
+                    interruption=interruption,
+                )
+            except KnowledgeGapRaised as error:
+                result = self._knowledge_wait(store, plan)
+                if result != error.gap:
+                    raise RecoveryRejected(
+                        "replacement knowledge wait differs from durable gap"
+                    ) from error
+            return NativeRecoveryExecution(plan, self._dispatch_for(store, plan), result)
+
+    def pending_knowledge_wait(self, path: Path) -> NativeRecoveryExecution | None:
+        """Adopt only a current queue wait belonging to the approved recovery allocation."""
+        store, plan = self.open_plan(path)
+        return self._pending_knowledge_wait(store, plan)
+
+    def _pending_knowledge_wait(
+        self,
+        store: FileRecoveryStore,
+        plan: RecoveryPlan,
+    ) -> NativeRecoveryExecution | None:
+        from ai_software_engineer.recovery.knowledge_wait import pending_recovery_knowledge_wait
+
+        if read_recovery_task(self.config, self.environment, store, plan) is None:
+            return None
+        dispatch = self._dispatch_for(store, plan)
+        team = TeamWorkspace.initialize(
+            self.config.platform_root,
+            team_id=self.config.team_id,
+            name=self.config.team_name,
+            read_only=True,
+        )
+        project, repository = team.project_registry().locate_repository(dispatch.repository_id)
+        gap = pending_recovery_knowledge_wait(
+            dsn=self.config.require_mysql_dsn(self.environment),
+            sidecar=repository.root,
+            project_id=project.manifest.project_id,
+            plan=plan,
+            dispatch=dispatch,
+        )
+        if gap is None:
+            return None
         NativeRecoveryFactsVerifier(self.config, self.environment).validate(plan)
         authorization = store.get_authorization(plan.plan_sha256)
         if not authorization.decision.approved:
             raise RecoveryRejected("recovery knowledge wait requires exact approval")
-        task = read_recovery_task(self.config, self.environment, store, plan)
-        role = {TaskStatus.QA: TeamRole.QA, TaskStatus.REVIEW: TeamRole.REVIEWER}.get(
-            task.status if task is not None else TaskStatus.NEW
-        )
-        if task is None or role is None:
-            raise RecoveryRejected("recovery knowledge wait is not at a verifier checkpoint")
-        sidecar = _repository_sidecar(self.config, plan.source.scope.repository_id)
-        candidates = {
-            item.source_revision
-            for item in FileArtifactStore(sidecar / "artifacts").list_for_task(task.id)
-            if isinstance(item, ImplementationReportArtifact)
-        }
-        records = KnowledgeRecordStore(sidecar / "knowledge/runs", read_only=True)
-        gaps = tuple(
-            gap
-            for gap in records.list("gaps", KnowledgeGap)
-            if gap.binding.task_id == task.id
-            and gap.binding.role is role
-            and gap.binding.team_id == plan.source.scope.team_id
-            and gap.binding.repository_ids == (plan.source.scope.repository_id,)
-            and gap.binding.requirement_id == (plan.source.parent_delivery_id or task.id)
-            and gap.binding.source_revision in candidates
-            and gap.severity == "BLOCKING"
-        )
-        if len(gaps) != 1:
-            raise RecoveryRejected("recovery verifier wait is missing or ambiguous")
-        gap = gaps[0]
-        gap.validate_integrity()
-        route = records.get("gap-routes", gap.gap_id, KnowledgeGapRouting)
-        if route.gap_id != gap.gap_id or route.routing_sha256 != knowledge_digest(
-            route.model_dump(mode="json", exclude={"routing_sha256"})
-        ):
-            raise RecoveryRejected("recovery knowledge route changed")
-        return gap
+        return NativeRecoveryExecution(plan, dispatch, gap)
+
+    def _knowledge_wait(self, store: FileRecoveryStore, plan: RecoveryPlan) -> KnowledgeGap:
+        execution = self._pending_knowledge_wait(store, plan)
+        if execution is None or not isinstance(execution.delivery, KnowledgeGap):
+            raise RecoveryRejected("recovery has no current durable knowledge wait")
+        return execution.delivery
 
     def _dispatch_for(self, store: FileRecoveryStore, plan: RecoveryPlan) -> RecoveryDispatchRecord:
-        sidecar = _repository_sidecar(self.config, plan.source.scope.repository_id)
-        authority = MySqlDispatchAuthority(
-            self.config.require_mysql_dsn(self.environment),
-            request_revisions=FileProductRecordStore(sidecar / "state/product"),
-            planner_records=FileExecutionPlanStore(sidecar / "state/planning"),
-        )
-        dispatch = authority.get_allocation(f"dispatch_commit_{plan.plan_sha256}")
+        connection = open_mysql_connection(self.config.require_mysql_dsn(self.environment))
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
+                cursor.execute(
+                    "SELECT * FROM dispatch_commits WHERE id=%s",
+                    (f"dispatch_commit_{plan.plan_sha256}",),
+                )
+                row = cast(Mapping[str, object] | None, cursor.fetchone())
+                if row is None:
+                    raise RecoveryRejected("recovery allocation is missing")
+                dispatch = _decode_allocation(row)
+        finally:
+            connection.rollback()
+            connection.close()
         sealed = store.get_task_record(plan.plan_sha256)
         if (
             not isinstance(dispatch, RecoveryDispatchRecord)
@@ -649,6 +742,8 @@ class NativeRecoveryEntry:
         plan: RecoveryPlan,
         route_factory: Callable[[RecoverySeedService], DeliveryRouteAdapterFactory] | None,
         recovery_route: ProviderRouteConfig,
+        *,
+        interruption: "RecoveryInterruptionService | None" = None,
     ) -> RetryResult:
         _, builder, sealing = self._services(store, plan, None)
         sealed = sealing.require_current(plan.plan_sha256)
@@ -657,9 +752,12 @@ class NativeRecoveryEntry:
         except RecoveryRecordMissing:
             pass
         else:
-            raise RecoveryRejected(
-                "recovery Coder already admitted; inspect Task/artifacts, do not rerun"
-            )
+            if interruption is not None:
+                interruption.propose()
+            else:
+                raise RecoveryRejected(
+                    "recovery Coder already admitted; inspect Task/artifacts, do not rerun"
+                )
         dsn = self.config.require_mysql_dsn(self.environment)
         repository = MySqlTaskRepository(dsn)
         try:

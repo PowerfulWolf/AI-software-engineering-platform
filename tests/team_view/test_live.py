@@ -22,6 +22,10 @@ from ai_software_engineer.agents import AgentRequest, AgentResult, StructuredMod
 from ai_software_engineer.cli import app
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
 from ai_software_engineer.domain import AgentProfile
+from ai_software_engineer.domain.coordination import (
+    ManagerCoordinationAdvice,
+    ManagerCoordinationDraft,
+)
 from ai_software_engineer.domain.enums import AgentRole, TeamRole, WorkItemStatus
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
@@ -64,6 +68,7 @@ from ai_software_engineer.store.mysql_repository import open_mysql_connection
 from ai_software_engineer.team_view.models import (
     ProjectView,
     RequestView,
+    RoleQueueView,
     ScopeView,
     TaskView,
     TeamReadError,
@@ -116,7 +121,10 @@ def test_candidate_branch_is_read_from_the_exact_candidate_ref(tmp_path: Path) -
     assert _candidate_branch(str(repository), task_id, "f" * 40) is None
 
 
-def test_active_child_task_supersedes_stale_blocked_requirement_projection() -> None:
+@pytest.mark.parametrize("queue_status", [WorkItemStatus.RUNNING, WorkItemStatus.RETRY_SCHEDULED])
+def test_active_child_task_supersedes_stale_blocked_requirement_projection(
+    queue_status: WorkItemStatus,
+) -> None:
     scope = ScopeView(
         root="/workspace/repository",
         selected_paths=(".",),
@@ -132,6 +140,23 @@ def test_active_child_task_supersedes_stale_blocked_requirement_projection() -> 
         blocker="Repository is BLOCKED.",
         failed_stages=("PLANNING",),
         checkpoint_sha256="a" * 64,
+        coordination=ManagerCoordinationAdvice(
+            requirement_id="delivery_multi_stale_parent",
+            stage="BLOCKED",
+            source_facts_sha256="b" * 64,
+            source_checkpoint_sha256="c" * 64,
+            input_sha256="d" * 64,
+            manager_run_id="manager_run_previous",
+            provider="fixture",
+            model="fixture",
+            draft=ManagerCoordinationDraft(
+                action="PROPOSE_RECOVERY",
+                summary="Old blocker",
+                next_action="Recover",
+                responsible_actor="Manager",
+                resume_condition="Approval",
+            ),
+        ),
     )
     task = TaskView(
         id="delivery_child_active",
@@ -152,6 +177,71 @@ def test_active_child_task_supersedes_stale_blocked_requirement_projection() -> 
     assert projected.blocker is None
     assert projected.failed_stages == ()
     assert projected.next_action == "RUN_DELIVERY"
+    assert projected.coordination is None
+
+    expired = task.model_copy(
+        update={
+            "role_queue": (
+                RoleQueueView(
+                    work_item_id="work_expired",
+                    role=AgentRole.CODER,
+                    attempt=1,
+                    status=queue_status,
+                    lease_liveness="LEASE_EXPIRED",
+                    wait_reason="lease_expired:lease_old",
+                ),
+            )
+        }
+    )
+    interrupted = _request_with_current_work(request, [expired])
+    assert interrupted.stage == "DELIVERING"
+    assert interrupted.blocker is not None and "租约" in interrupted.blocker
+    assert interrupted.coordination is None
+    assert expired.status == "IMPLEMENTING"
+
+
+@pytest.mark.parametrize(
+    "status", [WorkItemStatus.WAITING_HUMAN, WorkItemStatus.WAITING_DEPENDENCY]
+)
+def test_current_queue_wait_overrides_stale_parent_and_active_delivery(
+    status: WorkItemStatus,
+) -> None:
+    scope = ScopeView(root="/workspace/repository", selected_paths=(".",))
+    request = RequestView(
+        id="delivery_multi_wait",
+        project_id="project_test",
+        title="Knowledge wait",
+        stage="BLOCKED",
+        scopes=(scope,),
+        next_action="Old recovery advice",
+        checkpoint_sha256="a" * 64,
+    )
+    task = TaskView(
+        id="delivery_child_wait",
+        project_id="project_test",
+        request_id=request.id,
+        title=request.title,
+        scope=scope,
+        status="IMPLEMENTING",
+        checkpoint_stage="DELIVERING",
+        terminal=False,
+        last_activity=datetime.now(UTC),
+        next_action="Continue IMPLEMENTING.",
+        role_queue=(
+            RoleQueueView(
+                work_item_id="work_waiting",
+                role=AgentRole.CODER,
+                attempt=4,
+                status=status,
+                wait_reason="KNOWLEDGE_GAP:" + "a" * 64 + ":" + "b" * 64,
+            ),
+        ),
+    )
+    projected = _request_with_current_work(request, [task])
+    assert projected.stage == status.value
+    assert projected.blocker is not None and "知识" in projected.blocker
+    assert projected.coordination is None
+    assert task.status == "IMPLEMENTING"
 
 
 def test_requirement_stages_populate_upstream_agent_queues() -> None:

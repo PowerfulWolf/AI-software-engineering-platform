@@ -211,6 +211,7 @@ class ManagerConsoleAdapter:
                         delivery_id=intent.delivery_id,
                         approved_plan_sha256=intent.approved_plan_sha256,
                         approved_scope_sha256=intent.approved_scope_sha256,
+                        coder_scope_request=intent.coder_scope_request,
                         prerequisite_repair=intent.prerequisite_repair,
                         native_ui_scenario=intent.native_ui_scenario,
                         approved_repair_sha256=intent.approved_repair_sha256,
@@ -481,6 +482,21 @@ def _summarize(
                     "不授权安装、网络、合并、部署、凭据访问或修改历史结论。",
                 ),
             )
+        elif result.interruption_plan is not None:
+            interruption = result.interruption_plan
+            interruption.validate_integrity()
+            approval = ConsoleApprovalRequest(
+                kind="coder_interruption",
+                plan_sha256=interruption.plan_sha256,
+                title="批准中断后的单次 Coder 续跑",
+                facts=(
+                    f"保留同一任务 {interruption.task_id} 和工作目录",
+                    f"旧执行租约于 {interruption.expired_lease.expires_at.isoformat()} 失效",
+                    "旧执行已停止。保留改动与已批准 seed 完全一致。没有候选或后续角色验收结果。",
+                    "只批准一次新租约、新 Run。原调用、审批和失败历史保留。不退还或重置预算。",
+                    "权限和验收范围不变。完成实现后仍须独立 QA 和 Reviewer。不授权合并或部署。",
+                ),
+            )
         elif result.restart_plan is not None:
             restart = result.restart_plan
             restart.validate_integrity()
@@ -544,8 +560,19 @@ def _summarize(
                 kind="coder_scope",
                 plan_sha256=result.scope_supplement_sha256,
                 title="批准补充 Coder 文件范围",
+                coder_scope_request=result.coder_scope_request,
                 facts=(
-                    "以下改动文件不在原任务授权范围内。批准仅对本次恢复生效。",
+                    "以下精确文件不在原任务授权范围内。批准仅对本次恢复生效。",
+                    *(
+                        (
+                            f"已接纳 Coder 进度 {result.coder_scope_request.progress_artifact_id}; "
+                            f"SHA-256 {result.coder_scope_request.progress_sha256}",
+                            f"补充原因 {result.coder_scope_request.reason}",
+                            "请求中的文件尚未修改; 批准只扩大新恢复任务的精确文件范围。",
+                        )
+                        if result.coder_scope_request
+                        else ()
+                    ),
                     *(f"待补充文件 {path}" for path in result.scope_supplement_paths),
                 ),
             )

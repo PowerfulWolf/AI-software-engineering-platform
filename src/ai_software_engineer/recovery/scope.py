@@ -11,6 +11,8 @@ from ai_software_engineer.git import (
 )
 from ai_software_engineer.recovery.models import (
     RecoveryRejected,
+    RecoveryRequestedFile,
+    RecoveryScopeRequest,
     RecoveryScopeSupplement,
     digest,
 )
@@ -21,6 +23,8 @@ def inspect_recovery_scope_supplement(
     manager: GitWorktreeManager,
     worktree: WorktreeRef,
     original: NativeRecoverySource,
+    *,
+    request: RecoveryScopeRequest | None = None,
 ) -> RecoveryScopeSupplement | None:
     """Return exact changed paths omitted by policy without reading their contents."""
     policy = WorkspacePolicy(
@@ -29,7 +33,18 @@ def inspect_recovery_scope_supplement(
         denied_paths=original.denied_paths,
     )
     missing: set[str] = set()
-    for path in manager.inspect(worktree).changed_paths:
+    changed_paths = manager.inspect(worktree).changed_paths
+    requested_files = None
+    if request is not None:
+        request = RecoveryScopeRequest.model_validate(request.to_wire())
+        progress = original.accepted_progress
+        if progress is None or (
+            progress.artifact_id != request.progress_artifact_id
+            or progress.integrity.sha256 != request.progress_sha256
+        ):
+            raise RecoveryRejected("requested scope does not bind the accepted Coder progress")
+        requested_files = _requested_files(manager, worktree, original, request, changed_paths)
+    for path in (*changed_paths, *(request.paths if request else ())):
         for authorize in (policy.authorize_read, policy.authorize_write):
             try:
                 authorize(path)
@@ -40,6 +55,8 @@ def inspect_recovery_scope_supplement(
                 raise RecoveryRejected(
                     f"Coder recovery path cannot be approved: {error}"
                 ) from error
+        if request is not None and path in request.paths and path not in missing:
+            raise RecoveryRejected("requested scope path is already allowed")
     if not missing:
         return None
     source = original.source
@@ -53,9 +70,44 @@ def inspect_recovery_scope_supplement(
             permissions_sha256=digest(original.permissions.to_wire()),
             denied_paths_sha256=digest(original.denied_paths),
             paths=tuple(sorted(missing)),
+            request=request,
+            requested_files=requested_files,
         )
     except ValidationError as error:
         raise RecoveryRejected("Coder recovery contains an unsafe changed path") from error
+
+
+def _requested_files(
+    manager: GitWorktreeManager,
+    worktree: WorktreeRef,
+    original: NativeRecoverySource,
+    request: RecoveryScopeRequest,
+    changed_paths: tuple[str, ...],
+) -> tuple[RecoveryRequestedFile, ...]:
+    files = []
+    for path in request.paths:
+        target = worktree.path / path
+        if path in changed_paths or target.resolve() != target or not target.is_file():
+            raise RecoveryRejected("requested scope requires an unchanged regular tracked file")
+        # ls-tree reads object metadata only; no file content is exposed before approval.
+        entries = manager._run_git(
+            ("ls-tree", "-z", original.source.base_revision, "--", path), cwd=worktree.path
+        ).split("\0")
+        if len(entries) != 2 or entries[1] or "\t" not in entries[0]:
+            raise RecoveryRejected("requested scope file is not in the approved base")
+        metadata, found = entries[0].split("\t", 1)
+        parts = metadata.split()
+        if found != path or len(parts) != 3 or parts[1] != "blob":
+            raise RecoveryRejected("requested scope requires exact Git file metadata")
+        try:
+            files.append(
+                RecoveryRequestedFile.model_validate(
+                    {"path": path, "mode": parts[0], "blob_id": parts[2]}
+                )
+            )
+        except ValidationError as error:
+            raise RecoveryRejected("requested scope file is not a regular Git blob") from error
+    return tuple(files)
 
 
 def expanded_recovery_permissions(

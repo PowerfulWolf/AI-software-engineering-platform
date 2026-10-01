@@ -26,6 +26,7 @@ from ai_software_engineer.manager.delivery_checkpoint import DeliveryId
 from ai_software_engineer.manager.native_ui import NativeUiScenario
 from ai_software_engineer.multi_directory.attachments import RequirementAttachmentId
 from ai_software_engineer.project_workspace import ProjectName
+from ai_software_engineer.recovery.models import RecoveryScopeRequest
 
 OperationId = Annotated[str, StringConstraints(pattern=r"^operation_[a-f0-9]{32}$")]
 IdempotencyKey = Annotated[
@@ -151,6 +152,7 @@ class ContinueDeliveryIntent(DomainModel):
     expected_checkpoint_sha256: CheckpointDigest
     approved_plan_sha256: CheckpointDigest | None = None
     approved_scope_sha256: CheckpointDigest | None = None
+    coder_scope_request: RecoveryScopeRequest | None = None
     prerequisite_repair: PrerequisiteRepairRequest | None = None
     native_ui_scenario: NativeUiScenario | None = None
     approved_repair_sha256: CheckpointDigest | None = None
@@ -171,6 +173,16 @@ class ContinueDeliveryIntent(DomainModel):
             > 1
         ):
             raise ValueError("only one continuation approval may be submitted")
+        if self.coder_scope_request is not None and any(
+            value is not None
+            for value in (
+                self.approved_plan_sha256,
+                self.approved_repair_sha256,
+                self.prerequisite_repair,
+                self.native_ui_scenario,
+            )
+        ):
+            raise ValueError("requested Coder scope may only accompany scope approval")
         return self
 
 
@@ -209,6 +221,7 @@ class ConsoleApprovalRequest(DomainModel):
     kind: Literal[
         "candidate_verification",
         "coder_recovery",
+        "coder_interruption",
         "pre_execution_restart",
         "coder_scope",
         "joint_integration",
@@ -217,6 +230,13 @@ class ConsoleApprovalRequest(DomainModel):
     plan_sha256: CheckpointDigest
     title: NonEmptyStr
     facts: tuple[NonEmptyStr, ...]
+    coder_scope_request: RecoveryScopeRequest | None = None
+
+    @model_validator(mode="after")
+    def scope_request_kind(self) -> Self:
+        if self.coder_scope_request is not None and self.kind != "coder_scope":
+            raise ValueError("requested scope belongs only to a scope approval")
+        return self
 
 
 class ConsoleCommandResult(DomainModel):

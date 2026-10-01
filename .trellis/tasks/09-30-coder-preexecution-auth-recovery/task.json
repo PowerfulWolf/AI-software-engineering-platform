@@ -1,0 +1,6 @@
+{
+  "id": "coder-preexecution-auth-recovery-20260930",
+  "title": "恢复 Coder 续跑知识失败并修正 CLI 认证误报",
+  "status": "in_progress",
+  "phase": "verification"
+}

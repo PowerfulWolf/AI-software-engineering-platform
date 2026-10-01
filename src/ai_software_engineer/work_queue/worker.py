@@ -12,6 +12,7 @@ from threading import Event, Lock, Thread
 
 from pymysql.cursors import DictCursor
 
+from ai_software_engineer.agents.execution import bind_execution_guard
 from ai_software_engineer.artifacts import ArtifactStore
 from ai_software_engineer.artifacts.ports import ArtifactRef
 from ai_software_engineer.domain import Artifact, WorkItemStatus
@@ -354,14 +355,15 @@ class QueuedDeliverySupervisor:
             repository.mutation_fence = lease.mutation_fence
             try:
                 existing = terminal_result()
-                outcome = (
-                    existing
-                    if existing is not None
-                    else runtime.run_step(
-                        task_id,
-                        BoundedRunControl(repository, permit=step.boundary, guard=lease.check),
+                with bind_execution_guard(self.guard):
+                    outcome = (
+                        existing
+                        if existing is not None
+                        else runtime.run_step(
+                            task_id,
+                            BoundedRunControl(repository, permit=step.boundary, guard=lease.check),
+                        )
                     )
-                )
                 now = datetime.now(UTC)
                 next_step = (
                     self.build_step(outcome, item.id, now)

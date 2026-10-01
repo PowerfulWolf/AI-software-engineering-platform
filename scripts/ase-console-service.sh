@@ -141,6 +141,11 @@ launch_child() {
     : >>"$LOG_FILE"
     nohup "$SERVICE_EXECUTABLE" >>"$LOG_FILE" 2>&1 </dev/null &
     child_pid=$!
+    # Local Workers cannot renew their leases while macOS is idle-asleep.
+    # Bind the assertion to the actual child; do not change system power settings.
+    if [ -x /usr/bin/caffeinate ]; then
+      nohup /usr/bin/caffeinate -i -w "$child_pid" >>"$LOG_FILE" 2>&1 </dev/null &
+    fi
     {
       printf '%s\n' "$child_pid"
       printf '%s\n' "$SERVICE_EXECUTABLE"

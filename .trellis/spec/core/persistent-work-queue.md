@@ -86,6 +86,11 @@ work_queue_events(sequence PK, work_item_id FK, event_type, from_status,
 
 ### 3.3 Lease fencing
 
+- A suspended host cannot renew. macOS service launches bind `/usr/bin/caffeinate -i -w <child_pid>`
+  to the actual Console process to prevent idle sleep while the service runs; no global power setting
+  changes. Explicit sleep/host loss can still expire the lease. Never extend TTL or revive an expired
+  owner to conceal suspension; retain the checkpoint, invocation and worktree for approved recovery.
+
 - `claim` 生成高熵 `owner_token`；调用方持有明文，数据库只保存 SHA-256。`DispatcherTickResult.to_wire()`
   必须排除 token。
 - 单节点 v0.1 的所有 queue mutation 先获取 `work_queue_authority_lock`，再锁 WorkItem/claim 行；禁止

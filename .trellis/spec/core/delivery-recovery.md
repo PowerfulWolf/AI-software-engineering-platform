@@ -1,5 +1,40 @@
 # Explicit delivery recovery — T044
 
+## Expired first recovery invocation with an unchanged seed (2026-10-01)
+
+`RecoveryInterruptionService.propose() -> RecoveryInterruptionPlan` and
+`NativeRecoveryEntry.execute_interruption(path, confirmed_plan, reference)` provide a separately
+approved single replacement Run. Wire contracts are in `recovery-interruption.schema.json`;
+Console approval kind is `coder_interruption`. This does not replay the original invocation approval.
+
+The plan binds original plan/authorization/seed/invocation hashes, exact scope, Task/event/dispatch
+digests, revision, original WorkItem generation and expired TaskLease. Only IMPLEMENTING attempt 1
+with the exact two-event NEW→PLANNING→IMPLEMENTING history qualifies. No completed route, delivery
+artifact or queue-accepted output may exist. Worktree HEAD/index/content must match the sealed seed.
+The stopped Task's process lock must be obtainable; original facts and target policy remain current.
+
+Approval is append-only and addresses the new plan digest. The native reaper expires the old owner;
+Dispatcher claims the same logical WorkItem with the next generation. Admission checks the real
+Worker guard and inherited Task lock, exact next claim and request/context/permissions, and seals a
+separate one-use `RecoveryInterruptionInvocation` inside an owner fence. Original receipt and Task
+history remain unchanged. Task attempts/retry failures are retained: no provider timeout is invented,
+no allowance refunded, no terminal Task reopened. One original recovery plan supports at most one
+replacement admission; another uncertain interruption fails closed.
+
+| Facts | Result |
+|---|---|
+| expired claim, unchanged approved seed, stopped process, no output | publish exact proposal |
+| wrong/old approval, active process/claim, changed seed/events/target, route or artifact | refuse |
+| approved plan + exact next generation + fresh Run | admit once, then normal Coder→QA→Reviewer |
+| another generation or already consumed replacement receipt | refuse, preserve history |
+
+`tests/recovery/test_interruption_records.py` checks wire/integrity/immutable approval boundaries;
+`test_interruption_native.py` exercises real isolated Git/MySQL lease loss through DONE with separate
+role claims. Existing-data recovery: inspect the retained Task, Continue to obtain this proposal,
+approve its exact digest, and Continue through ordinary independent verification. Never delete the
+old invocation, fabricate a route failure or edit SQL statuses. Rollback preserves all new sidecar
+records; the original entry still refuses uncertain invocation replay.
+
 ## Initial context failure before Coder (2026-09-29)
 
 ### 1. Scope / Trigger
@@ -93,12 +128,12 @@ Correct: classify the proven execution boundary first, then choose initial resta
 Coder recovery or candidate verification. A passing new run test alone does not prove that an
 already-blocked production Task can resume. See the operations guide for existing-data handling.
 
-## Recovery verifier knowledge wait (2026-09-27)
+## Recovery role knowledge wait (2026-09-27, extended 2026-10-01)
 
 ### Scope / Trigger
 
-An approved recovery Coder can finish a candidate before QA/Reviewer knowledge consultation
-pauses. The recovery Task must remain reachable from its original Requirement after that pause.
+An approved recovery can pause during Coder continuation or QA/Reviewer knowledge consultation.
+The recovery Task must remain reachable from its original Requirement after that pause.
 
 ### Signatures
 
@@ -109,13 +144,17 @@ gap and wait stage through its existing coordinator; Console must not invent a v
 
 ### Contracts
 
-- Validate the recovery plan, exact authorization, allocation/Task, verifier role, retained candidate
-  and durable gap/route before adopting an interrupted QA/Reviewer checkpoint. An uncertain Coder
-  invocation remains rejected; a knowledge gap is not authority to rerun it.
+- Validate the recovery plan, exact authorization, allocation/Task, current unique waiting queue
+  item and its step/revision, released claim, exact gap/route/context/manifest before adoption.
+  The queue boundary binds Coder's input revision or the verifier candidate. An uncertain Coder
+  invocation remains rejected; only the proven scheduling wait is attached, without a model call.
+- SQL item row ID, Task ID and status must equal its payload; gap and manifest content IDs must
+  equal the keys used to retrieve them. A valid envelope under another key is not sufficient.
 - Reconstruction uses sealed recovery context and, if present, the separately approved prerequisite
   repair objective. Do not resume using only dirty files or the original unrelated product text.
-- Queue remains waiting until normal exact resolution approval; a fresh Host resumes QA/Reviewer
-  on the retained candidate and keeps Coder execution at once. Preserve prior Tasks and approvals.
+- Queue remains waiting until normal exact resolution approval; a fresh Host resumes the same
+  Coder continuation or verifier through a new claim. Preserve prior Tasks, progress, approvals,
+  candidate and frozen budget/permissions. Knowledge answers cannot expand scope or tool authority.
 
 ### Validation & Error Matrix
 
@@ -135,10 +174,12 @@ at Console, return a synthetic success, or leave the recovery Task orphaned behi
 
 ### Tests Required
 
-`test_joint_scope_recovery_targets_current_preparation_after_main_advances[True-True]` covers
+`test_joint_scope_recovery_targets_current_preparation_after_main_advances[True-qa]` covers
 real Git/MySQL, parent-visible current gap, normal approval, fresh Host, exact target preparation,
 QA/Reviewer followed by the remaining repository and parent DONE, with no repeated recovery Coder.
 Offline QA must record the candidate check it actually ran; fixtures are not live acceptance.
+`[True-coder]` covers accepted Coder progress, the subsequent knowledge wait, interruption before
+parent attachment, restart/adoption without a model call, exact resolution and same-Task continuation.
 
 ### Wrong vs Correct
 
@@ -2161,3 +2202,93 @@ ManagerRepairTaskSubmitter.submit(
   human-only incident classes, and bounded retry exhaustion.
 - Targeted pytest, Ruff, strict Mypy, and `git diff --check` must pass. Full regression remains the
   human release gate.
+
+## Accepted progress followed by continuation knowledge failure (2026-10-01)
+
+### Scope and signatures
+
+`is_prior_progress_source(route, task, checkpoint, events) -> bool` proves a source one execution
+attempt before the terminal Task. `require_stopped_progress(config, environment, sidecar, task,
+route) -> None` rejects later/ambiguous provider routes, live claims and leased/running work items.
+The ordinary `NativeRecoverySourceReader.inspect/discover_failed_coder` remains the public seam;
+New ordinary RecoveryPlans and exact approval contracts are unchanged. Historical `retry_of_plan_sha256`,
+`retry_of_task_id`, `retry_of_checkpoint_sha256` remain optional all-or-none read-only fields: old
+bytes/digests must parse during plan scans. `require_execution_supported()` rejects these legacy
+plans both at current-facts validation and the attached native backend execution entry. Never
+accept an old retry plan as fresh authorization; propose from the latest actual Coder source.
+
+### Contract and validation matrix
+
+Only the contiguous tail `IMPLEMENTING → CONTINUE_REQUIRED(coder_requested_continuation) →
+QUEUED(coder_continuation_queued) → IMPLEMENTING(coder_continuation_resumed) → BLOCKED` qualifies.
+First two transitions refer to the sealed progress at attempt N; last two use N+1. The terminal
+reason must be the explicit Coder knowledge AUTHENTICATION_ERROR or TIMEOUT failure and agree with
+the Delivery summary. All reference the base revision; no candidate event may exist. Route/context
+keep their real N identity; the source Task and revision remain at N+1. Never fabricate a run.
+
+| Facts | Result |
+| --- | --- |
+| Exact accepted progress, next knowledge failure, stopped workspace | Ordinary new capture and exact recovery approval |
+| Nonadjacent attempts, wrong reason/artifact/event tail | Reject source |
+| Later route, ambiguous run, active claim/work item | Reject source |
+| Sealed progress differs from route or HEAD/dirty paths differ | Reject source |
+| Capture contents/policy change after plan | Existing current-facts/capture verifier rejects approval/execution |
+
+Good: retain all edits made by the latest Coder, including files absent from its original recovery
+seed. Base: current-attempt failed routes and budget-exhausted progress use their existing rules.
+Bad: reuse the original seed after a successful Coder run or treat missing latest-attempt route as
+proof that this Task never ran Coder. Test at the real Git/MySQL source and execution boundaries;
+check old Task/event immutability and independent Coder/QA/Reviewer completion.
+
+### Existing-data handling and rollback
+
+No database migration or Task reset. After restarting the fixed Console, Continue discovers the
+last real progress run and creates a new plan from its current retained worktree; approve the exact
+plan and proceed through normal role delivery. Old Task, events, context, original seed and artifacts
+remain intact. Rolling back platform code only removes this discovery capability; do not delete
+plans, rewrite approvals or clean retained worktrees.
+
+## D5.1: Requested untouched files after accepted Coder progress
+
+### Signatures and contracts
+
+`RecoveryScopeRequest(progress_artifact_id, progress_sha256, paths, reason)` is an optional
+`coder_scope_request` on Console Continue and `ResumeProjectDelivery`. It supplies at most eight
+sorted unique exact file paths, never directory/glob/command authority. It may accompany only the
+scope approval, not another proposal or plan approval. Missing optional fields preserve old digests.
+
+Only terminal pre-candidate recovery can process it. `NativeRecoverySource.accepted_progress`
+is the current recoverable Coder route's sealed report referenced by validated Task StateEvents.
+The request must bind its exact ID/SHA. Free-text `next_actions` alone is not authorization.
+
+`inspect_recovery_scope_supplement(..., request=None)` binds requested paths using `git ls-tree`
+mode/blob metadata at the original base. Each file must be tracked, regular, unchanged and omitted
+from the original policy. No rejected file content is read before scope approval. Explicit denies,
+symlinks, unsafe paths, missing files, directories and already-allowed paths reject. Requested paths
+join discovered dirty omissions in one supplement digest; `request` and `requested_files` are paired.
+
+Scope proposal displays the exact files, report digest and reason; browser approval returns the
+same typed request plus supplement digest. Capture, approval and execution re-resolve the original
+accepted report, immutable Git identity, checkpoint and policy. A different request cannot reuse an
+older plan. Scope approval still only prepares a RecoveryPlan; its separate exact approval creates a
+NEW Task with expanded exact paths. The old Task, dispatch, events and worktree remain unchanged.
+
+### Matrix and tests
+
+Good: accepted progress requests a missing contract fixture -> scope approval -> recovery plan
+approval -> fresh Coder -> independent QA/Review. Base: absent request follows unchanged D5.
+Bad: modify a forbidden file first, append ambient test-directory authority, accept an orphan
+progress, or edit a running Task's permissions.
+
+`test_scope.py` covers positive metadata identity and wrong/missing progress, dirty/denied/missing/
+directory/already-allowed/symlink refusal. Native budget-exhausted recovery fixture exercises both
+approvals, persistence/reopen, unchanged original facts, and fresh serial completion. Console/Node
+checks typed request propagation and honest preparation wording. Use only these incremental gates.
+
+### Existing data and rollback
+
+No production SQL or old artifacts are rewritten. After a pre-candidate terminal checkpoint, submit
+the required exact paths with the latest accepted progress ID/SHA, approve the returned scope digest,
+then independently approve its RecoveryPlan. Existing plans without optional fields retain their
+identity. Code rollback must preserve newly created plans/approvals and cannot execute their extended
+contract on an older host; keep the new reader or leave those plans unconsumed.

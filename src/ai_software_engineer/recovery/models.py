@@ -18,6 +18,7 @@ from pydantic import (
 )
 
 from ai_software_engineer.domain import AgentPermissions, AgentRole
+from ai_software_engineer.domain.artifact import ArtifactId
 from ai_software_engineer.domain.branch import BranchName
 from ai_software_engineer.domain.identity import ContextId, RepositoryId, RunId, TeamId
 from ai_software_engineer.domain.model import DomainModel
@@ -232,6 +233,29 @@ class RecoverySource(DomainModel):
         return self
 
 
+class RecoveryScopeRequest(DomainModel):
+    """Operator-selected exact missing files, bound to accepted Coder progress."""
+
+    progress_artifact_id: ArtifactId
+    progress_sha256: StageSha256
+    paths: tuple[RelativePath, ...] = Field(min_length=1, max_length=8)
+    reason: SafeText = Field(min_length=1, max_length=2000)
+
+    @model_validator(mode="after")
+    def exact_unique_paths(self) -> Self:
+        if self.paths != tuple(sorted(set(self.paths))):
+            raise ValueError("requested scope paths must be sorted and unique")
+        return self
+
+
+class RecoveryRequestedFile(DomainModel):
+    """Read-only Git metadata; no pre-approval read of omitted file contents."""
+
+    path: RelativePath
+    mode: Literal["100644", "100755"]
+    blob_id: FullCommit
+
+
 class RecoveryScopeSupplement(DomainModel):
     """Deterministic request to approve exact changed paths missing from Coder policy."""
 
@@ -245,6 +269,10 @@ class RecoveryScopeSupplement(DomainModel):
     permissions_sha256: StageSha256
     denied_paths_sha256: StageSha256
     paths: tuple[RelativePath, ...] = Field(min_length=1, max_length=MAX_CAPTURE_FILES)
+    request: RecoveryScopeRequest | None = None
+    requested_files: tuple[RecoveryRequestedFile, ...] | None = Field(
+        default=None, min_length=1, max_length=8
+    )
     supplement_sha256: StageSha256
 
     @classmethod
@@ -256,10 +284,19 @@ class RecoveryScopeSupplement(DomainModel):
     def validate_paths(self) -> Self:
         if self.paths != tuple(sorted(set(self.paths))):
             raise ValueError("recovery scope supplement paths must be sorted and unique")
+        if (self.request is None) != (self.requested_files is None):
+            raise ValueError("requested scope requires exact file identities")
+        if self.request is not None and (
+            tuple(item.path for item in self.requested_files or ()) != self.request.paths
+            or not set(self.request.paths) <= set(self.paths)
+        ):
+            raise ValueError("requested file identities differ from the approved paths")
         return self
 
     def recompute_sha256(self) -> str:
-        return digest(self.model_dump(mode="json", exclude={"supplement_sha256"}))
+        return digest(
+            self.model_dump(mode="json", exclude_none=True, exclude={"supplement_sha256"})
+        )
 
     def validate_integrity(self) -> None:
         RecoveryScopeSupplement.model_validate(self.to_wire())
@@ -286,6 +323,15 @@ class RecoveryPlan(DomainModel):
     schema_version: Literal["v0.1"] = "v0.1"
     # None is omitted from wire/digest, preserving historical strict-seed approvals.
     input_mode: RecoveryInputMode | None = None
+    # Read-only compatibility for already persisted experimental retry plans.
+    # Current-facts validation rejects their execution; ordinary new plans omit them.
+    retry_of_plan_sha256: StageSha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    retry_of_task_id: TaskId | None = Field(default=None, exclude_if=lambda value: value is None)
+    retry_of_checkpoint_sha256: StageSha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     source: RecoverySource
     capture: CapturedChanges
     target_base_revision: FullCommit
@@ -328,6 +374,17 @@ class RecoveryPlan(DomainModel):
             raise ValueError("recovery scope approval does not bind this plan")
         return self
 
+    @model_validator(mode="after")
+    def validate_retry_lineage(self) -> Self:
+        values = (self.retry_of_plan_sha256, self.retry_of_task_id, self.retry_of_checkpoint_sha256)
+        if any(value is not None for value in values) and not all(
+            value is not None for value in values
+        ):
+            raise ValueError("historical recovery retry lineage must be complete")
+        if self.retry_of_task_id == self.source.task_id:
+            raise ValueError("historical recovery retry must reference a successor Task")
+        return self
+
     @classmethod
     def create(cls, **values: object) -> RecoveryPlan:
         provisional = cls.model_validate({**values, "plan_sha256": "0" * 64})
@@ -336,6 +393,13 @@ class RecoveryPlan(DomainModel):
     @property
     def new_task_id(self) -> TaskId:
         return "task_recovery_" + self.plan_sha256[:32]
+
+    def require_execution_supported(self) -> None:
+        if self.retry_of_plan_sha256 is not None:
+            raise RecoveryRejected(
+                "historical pre-provider retry is read-only; "
+                "propose from the latest actual Coder progress"
+            )
 
     @property
     def effective_target_permissions(self) -> AgentPermissions:

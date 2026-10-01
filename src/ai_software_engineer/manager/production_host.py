@@ -272,8 +272,10 @@ class TeamHost:
                     # before another child is resumed or final acceptance is attempted.
                     break
             elif (
-                command.approved_plan_sha256 is not None and joint.integration is None
-            ) or command.approved_scope_sha256 is not None:
+                (command.approved_plan_sha256 is not None and joint.integration is None)
+                or command.approved_scope_sha256 is not None
+                or command.coder_scope_request is not None
+            ):
                 raise ValueError("joint delivery has no blocked child awaiting this approval")
             return runtime.requirements.resume(command)
         return self._resume_controller(runtime).resume(command)

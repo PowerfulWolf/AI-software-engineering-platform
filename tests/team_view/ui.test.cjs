@@ -2389,6 +2389,10 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     approval: {
       kind: "coder_scope",
       plan_sha256: scopeSha,
+      coder_scope_request: {
+        progress_artifact_id: "art_coder_progress", progress_sha256: "b".repeat(64),
+        paths: ["tests/test_contract.py"], reason: "Update the required fixture",
+      },
       title: "批准补充 Coder 文件范围",
       facts: ["待补充文件 src/pkg/__init__.py"],
     },
@@ -2459,6 +2463,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     delivery_id: "r1",
     expected_checkpoint_sha256: "a".repeat(64),
     approved_scope_sha256: scopeSha,
+    coder_scope_request: priorScopeApproval.coder_scope_request,
   });
 
   storedOperations[2].status = "SUCCEEDED";

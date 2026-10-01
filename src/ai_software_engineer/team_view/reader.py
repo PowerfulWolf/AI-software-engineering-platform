@@ -72,6 +72,7 @@ from .models import (
     DocumentView,
     ProjectView,
     RequestView,
+    RoleQueueView,
     RunView,
     ScopeView,
     TaskView,
@@ -764,6 +765,61 @@ def _waiting(stage: str) -> bool:
     return stage.startswith("WAITING_") or stage in {"BLOCKED", "FAILED"}
 
 
+def _execution_interrupted(task: TaskView) -> bool:
+    return not task.terminal and any(
+        step.lease_liveness == "LEASE_EXPIRED"
+        and (
+            step.status in {WorkItemStatus.RUNNING, WorkItemStatus.LEASED}
+            or (
+                step.status is WorkItemStatus.RETRY_SCHEDULED
+                and (step.wait_reason or "").startswith("lease_expired:")
+            )
+        )
+        for step in task.role_queue
+    )
+
+
+def _queue_wait(task: TaskView) -> RoleQueueView | None:
+    if task.terminal:
+        return None
+    return next(
+        (
+            step
+            for step in task.role_queue
+            if step.status
+            in {
+                WorkItemStatus.WAITING_HUMAN,
+                WorkItemStatus.WAITING_DEPENDENCY,
+            }
+        ),
+        None,
+    )
+
+
+def _with_execution_state(task: TaskView) -> TaskView:
+    waiting = _queue_wait(task)
+    if waiting is not None:
+        reason = (
+            "当前角色等待知识前提确认, 已暂停执行。"
+            if (waiting.wait_reason or "").startswith("KNOWLEDGE_GAP:")
+            else "当前角色等待外部前提, 已暂停执行。"
+        )
+        return task.model_copy(
+            update={
+                "blocker": reason,
+                "next_action": "请通过“继续交付”接回当前等待, 按精确前提处理后恢复。",
+            }
+        )
+    if not _execution_interrupted(task):
+        return task
+    return task.model_copy(
+        update={
+            "blocker": "执行租约已失效。当前执行已中断。交付阶段和已保存改动仍保留。",
+            "next_action": "请通过“继续交付”检查并恢复当前执行。",
+        }
+    )
+
+
 def _request_with_current_work(request: RequestView, tasks: list[TaskView]) -> RequestView:
     """Prefer a newer active child Task over a stale terminal joint observation."""
     # Knowledge waits preserve the child's delivery checkpoint; it is not active work.
@@ -771,12 +827,30 @@ def _request_with_current_work(request: RequestView, tasks: list[TaskView]) -> R
         return request
     if not (_waiting(request.stage) or request.stage in {"DELIVERING", "INTEGRATING"}):
         return request
+    waiting_tasks = tuple(
+        _with_execution_state(task)
+        for task in tasks
+        if task.request_id == request.id and _queue_wait(task) is not None
+    )
+    if waiting_tasks:
+        current = max(waiting_tasks, key=lambda task: (task.last_activity, task.id))
+        waiting = _queue_wait(current)
+        assert waiting is not None
+        return request.model_copy(
+            update={
+                "stage": waiting.status.value,
+                "next_action": current.next_action,
+                "blocker": current.blocker,
+                "failed_stages": (),
+                "coordination": None,
+            }
+        )
     active = tuple(
-        task
+        _with_execution_state(task)
         for task in tasks
         if task.request_id == request.id
         and not task.terminal
-        and task.blocker is None
+        and (task.blocker is None or _execution_interrupted(task))
         and not _waiting(task.status)
     )
     if not active:
@@ -787,8 +861,9 @@ def _request_with_current_work(request: RequestView, tasks: list[TaskView]) -> R
         update={
             "stage": stage,
             "next_action": current.next_action,
-            "blocker": None,
+            "blocker": current.blocker,
             "failed_stages": (),
+            "coordination": None,
         }
     )
 
@@ -1221,59 +1296,63 @@ def _read_task_details(
         allocation_sha256=dispatch.dispatch_sha256,
         now=datetime.now(UTC),
     )
-    return base.model_copy(
-        update={
-            "role_queue": role_queue,
-            "work_kind": (
-                "delivery"
-                if continuation is not None
-                and continuation.continuation_kind == "pre_execution_restart"
-                else "remediation"
-                if continuation is not None or recovery is not None
-                else base.work_kind
-            ),
-            "source_delivery_id": source_delivery_id,
-            "source_task_id": source_task_id,
-            "plan_sha256": plan_sha256,
-            "task_id": task.id,
-            "status": task.status.value,
-            "checkpoint_stage": (base.checkpoint_stage if checkpoint_bound else task.status.value),
-            "terminal": terminal,
-            "last_activity": max(cp.checkpointed_at, task.updated_at),
-            "blocker": blocker,
-            "next_action": (
-                base.next_action if checkpoint_bound else f"Continue {task.status.value}."
-            ),
-            "assignments": tuple(
-                AssignmentView(
-                    agent_id=p.agent_id,
-                    role=p.role,
-                    planned_provider=p.model_selection.provider,
-                    planned_model=p.model_selection.model,
-                    current_stage=(
-                        _CURRENT_ROLE.get(task.status) is p.role
-                        and not terminal
-                        and (
-                            not role_queue
-                            or any(
-                                step.role is p.role
-                                and step.status is WorkItemStatus.RUNNING
-                                and step.lease_liveness == "LEASE_VALID"
-                                for step in role_queue
+    return _with_execution_state(
+        base.model_copy(
+            update={
+                "role_queue": role_queue,
+                "work_kind": (
+                    "delivery"
+                    if continuation is not None
+                    and continuation.continuation_kind == "pre_execution_restart"
+                    else "remediation"
+                    if continuation is not None or recovery is not None
+                    else base.work_kind
+                ),
+                "source_delivery_id": source_delivery_id,
+                "source_task_id": source_task_id,
+                "plan_sha256": plan_sha256,
+                "task_id": task.id,
+                "status": task.status.value,
+                "checkpoint_stage": (
+                    base.checkpoint_stage if checkpoint_bound else task.status.value
+                ),
+                "terminal": terminal,
+                "last_activity": max(cp.checkpointed_at, task.updated_at),
+                "blocker": blocker,
+                "next_action": (
+                    base.next_action if checkpoint_bound else f"Continue {task.status.value}."
+                ),
+                "assignments": tuple(
+                    AssignmentView(
+                        agent_id=p.agent_id,
+                        role=p.role,
+                        planned_provider=p.model_selection.provider,
+                        planned_model=p.model_selection.model,
+                        current_stage=(
+                            _CURRENT_ROLE.get(task.status) is p.role
+                            and not terminal
+                            and (
+                                not role_queue
+                                or any(
+                                    step.role is p.role
+                                    and step.status is WorkItemStatus.RUNNING
+                                    and step.lease_liveness == "LEASE_VALID"
+                                    for step in role_queue
+                                )
                             )
-                        )
-                    ),
-                )
-                for p in dispatch.phases
-            ),
-            "timeline": timeline,
-            "runs": _read_runs(native, task.id),
-            "documents": base.documents + docs,
-            "candidate_revision": candidate_revision,
-            "candidate_branch": _candidate_branch(
-                cp.repository_root, task.id, candidate_revision, branch_name=task.branch_name
-            ),
-        }
+                        ),
+                    )
+                    for p in dispatch.phases
+                ),
+                "timeline": timeline,
+                "runs": _read_runs(native, task.id),
+                "documents": base.documents + docs,
+                "candidate_revision": candidate_revision,
+                "candidate_branch": _candidate_branch(
+                    cp.repository_root, task.id, candidate_revision, branch_name=task.branch_name
+                ),
+            }
+        )
     )
 
 

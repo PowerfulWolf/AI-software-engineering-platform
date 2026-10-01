@@ -335,6 +335,7 @@ class CodexCliStructuredModelClient:
                     (
                         self._executable,
                         "exec",
+                        "--json",
                         "--ephemeral",
                         "--ignore-user-config",
                         "--sandbox",
@@ -364,7 +365,7 @@ class CodexCliStructuredModelClient:
                     check=False,
                 )
             except subprocess.TimeoutExpired as error:
-                provider_failure = _timed_out_cli_provider_failure(error.stderr)
+                provider_failure = _timed_out_cli_provider_failure(error.stderr, error.output)
                 if provider_failure is not None:
                     code, transient = provider_failure
                     raise StructuredModelError(
@@ -390,14 +391,15 @@ class CodexCliStructuredModelClient:
                     transient=True,
                 ) from error
             if completed.returncode != 0:
-                code, transient = _classify_text_failure(completed.stderr)
+                diagnostic = _cli_failure_diagnostic(completed.stderr, completed.stdout)
+                code, transient = _classify_text_failure(diagnostic)
                 raise StructuredModelError(
                     code,
                     f"Codex CLI 执行失败(退出码 {completed.returncode}); "
                     + (
                         "本地代理错误详情已隐藏"
                         if self._proxy_api_key_env is not None
-                        else provider_error_detail(completed.stderr)
+                        else provider_error_detail(diagnostic)
                     ),
                     transient=transient,
                 )
@@ -700,7 +702,7 @@ def _provider_error_code(body: bytes) -> str | None:
 
 
 def _classify_text_failure(text: str) -> tuple[AgentErrorCode, bool]:
-    normalized = text.lower()
+    normalized = _cli_failure_diagnostic(text).lower()
     quota_markers = ("insufficient_quota", "quota exceeded", "usage limit")
     if any(marker in normalized for marker in quota_markers):
         return AgentErrorCode.QUOTA_EXHAUSTED, True
@@ -725,11 +727,11 @@ def _classify_text_failure(text: str) -> tuple[AgentErrorCode, bool]:
 
 def _timed_out_cli_provider_failure(
     stderr: bytes | str | None,
+    stdout: bytes | str | None = None,
 ) -> tuple[AgentErrorCode, bool] | None:
-    if stderr is None:
-        return None
-    text = stderr.decode("utf-8", errors="replace") if isinstance(stderr, bytes) else stderr
-    normalized = text.lower()
+    text = stderr.decode("utf-8", errors="replace") if isinstance(stderr, bytes) else stderr or ""
+    diagnostic = _cli_failure_diagnostic(text, stdout)
+    normalized = diagnostic.lower()
     explicit = (
         "insufficient_quota",
         "quota exceeded",
@@ -749,8 +751,38 @@ def _timed_out_cli_provider_failure(
     if any(marker in normalized for marker in explicit) or re.search(
         r"\b(?:401|403|408|429|500|502|503|504)\b", normalized
     ):
-        return _classify_text_failure(text)
+        return _classify_text_failure(diagnostic)
     return None
+
+
+def _cli_failure_diagnostic(stderr: str, stdout: bytes | str | None = None) -> str:
+    """Read CLI error events, never model/tool items or arbitrary transcript prose."""
+    output = stdout.decode("utf-8", errors="replace") if isinstance(stdout, bytes) else stdout or ""
+    for line in reversed(output[-1_000_000:].splitlines()):
+        if len(line) > 64_000:
+            continue
+        try:
+            event = json.loads(line)
+        except (ValueError, RecursionError):
+            continue
+        if not isinstance(event, dict):
+            continue
+        detail = (
+            event
+            if event.get("type") == "error"
+            else (event.get("error") if event.get("type") == "turn.failed" else None)
+        )
+        if isinstance(detail, dict) and isinstance(detail.get("message"), str):
+            return "Error: " + safe_diagnostic(detail["message"])
+    for line in reversed(stderr.splitlines()):
+        cleaned = safe_diagnostic(line)
+        if re.match(r"^(?:error|fatal)(?:\s|:|\[)", cleaned, re.IGNORECASE) or re.fullmatch(
+            r"HTTP(?:/\d(?:\.\d)?)?\s+(?:401|403|408|429|500|502|503|504)(?:\s+[^\n]*)?",
+            cleaned,
+            re.IGNORECASE,
+        ):
+            return cleaned
+    return ""
 
 
 def _filtered_environment(source: Mapping[str, str]) -> dict[str, str]:
