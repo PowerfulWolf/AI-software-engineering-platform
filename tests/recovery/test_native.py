@@ -326,11 +326,40 @@ def test_native_source_is_verified_read_only_and_rejects_corruption(
 
 
 @pytest.mark.mysql
-@pytest.mark.parametrize("knowledge_failure", [False, True])
+@pytest.mark.parametrize(
+    "knowledge_failure,execution_failure", [(False, False), (True, False), (False, True)]
+)
 def test_budget_exhausted_coder_progress_is_a_recoverable_native_source(
-    tmp_path: Path, mysql_dsn: str, monkeypatch: pytest.MonkeyPatch, knowledge_failure: bool
+    tmp_path: Path,
+    mysql_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
+    knowledge_failure: bool,
+    execution_failure: bool,
 ) -> None:
     original_build = FileRunContextBuilder.build
+    original_run = ContinuedCoder.run
+
+    def run(self: ContinuedCoder, request: AgentRequest) -> AgentResult:
+        if execution_failure and request.attempt == 2:
+            self.requests.append(request)
+            (self.root / "hello.txt").write_text("later interrupted changes\n")
+            return AgentResult(
+                run_id=request.run_id,
+                task_id=request.task_id,
+                role=request.role,
+                attempt=request.attempt,
+                source_revision=request.source_revision,
+                context_manifest_id=request.context_manifest_id,
+                status=AgentRunStatus.FAILED,
+                error=AgentFailure(
+                    code=AgentErrorCode.POLICY_VIOLATION,
+                    message="Codex CLI left changes after an interrupted execution; cause=TIMEOUT",
+                    transient=False,
+                ),
+            )
+        return original_run(self, request)
+
+    monkeypatch.setattr(ContinuedCoder, "run", run)
 
     def build(
         self: FileRunContextBuilder,
@@ -398,7 +427,7 @@ def test_budget_exhausted_coder_progress_is_a_recoverable_native_source(
     checkpoint = blocked.checkpoint
     assert checkpoint.stage.value == "BLOCKED"
     assert checkpoint.failure_code is not None
-    assert len(factory.requests) == (1 if knowledge_failure else 3), (
+    assert len(factory.requests) == (1 if knowledge_failure else 2 if execution_failure else 3), (
         checkpoint.failure_code,
         checkpoint.failure_summary,
         checkpoint.next_action,
@@ -412,14 +441,23 @@ def test_budget_exhausted_coder_progress_is_a_recoverable_native_source(
             delivery_id=checkpoint.delivery_id,
         )
     )
-    assert source.task.attempts == source.task.work_attempt == (2 if knowledge_failure else 3)
-    assert source.task.work_budget_exhausted is (not knowledge_failure)
+    assert (
+        source.task.attempts
+        == source.task.work_attempt
+        == (2 if knowledge_failure or execution_failure else 3)
+    )
+    assert source.task.work_budget_exhausted is (not knowledge_failure and not execution_failure)
     assert (
         source.task.max_attempts == config.execution_retry_policy.delivery_policy().execution_limit
     )
     assert source.source.failed_run_id == factory.requests[-1].run_id
     assert source.source.failed_context_id == factory.requests[-1].context_manifest_id
     plan, plan_path = host.recovery_entry().propose_delivery(checkpoint)
+    if execution_failure:
+        assert "+later interrupted changes\n" in plan.capture.patch
+        assert (
+            Path(plan.capture.worktree_path) / "hello.txt"
+        ).read_text() == "later interrupted changes\n"
     assert plan.source.failed_run_id == factory.requests[-1].run_id
     assert plan.source.failed_context_id == factory.requests[-1].context_manifest_id
     assert plan_path.is_file()
@@ -427,13 +465,22 @@ def test_budget_exhausted_coder_progress_is_a_recoverable_native_source(
     routes = FileModelRouteAttemptStore(sidecar / "runs/model-routes", read_only=True).list_for_run(
         source.source.failed_run_id
     )
-    assert routes[-1].outcome is RouteAttemptOutcome.SUCCEEDED
-    assert routes[-1].result.artifact is not None
-    assert routes[-1].result.artifact.kind.value == "coder-progress"
+    if execution_failure:
+        assert routes[-1].outcome is RouteAttemptOutcome.FAILED
+        assert routes[-1].result.artifact is None
+    else:
+        assert routes[-1].outcome is RouteAttemptOutcome.SUCCEEDED
+        assert routes[-1].result.artifact is not None
+        assert routes[-1].result.artifact.kind.value == "coder-progress"
     from ai_software_engineer.recovery.models import RecoveryScopeRequest
 
     assert source.accepted_progress is not None
-    assert source.accepted_progress.artifact_id == routes[-1].result.artifact.artifact_id
+    if execution_failure:
+        assert source.accepted_progress.producer.run_id == factory.requests[0].run_id
+        assert source.accepted_progress.producer.run_id != source.source.failed_run_id
+    else:
+        assert routes[-1].result.artifact is not None
+        assert source.accepted_progress.artifact_id == routes[-1].result.artifact.artifact_id
     scope_request = RecoveryScopeRequest(
         progress_artifact_id=source.accepted_progress.artifact_id,
         progress_sha256=source.accepted_progress.integrity.sha256,
@@ -474,13 +521,18 @@ def test_budget_exhausted_coder_progress_is_a_recoverable_native_source(
         from ai_software_engineer.store import MySqlTaskRepository
         from tests.recovery.test_execution import OfflineFactory
 
+        class LaterChangesFactory(OfflineFactory):
+            seed_text = "later interrupted changes\n"
+
         with MySqlTaskRepository(mysql_dsn) as repository:
             before = repository.get(source.task.id), repository.list_events(source.task.id)
         recovery = host.recovery_entry()
         recovery.approve(
             plan_path, confirmed_plan=plan.plan_sha256, reference="requested-scope-plan"
         )
-        completed = recovery.execute(plan_path, route_factory=OfflineFactory)
+        completed = recovery.execute(
+            plan_path, route_factory=LaterChangesFactory if execution_failure else OfflineFactory
+        )
         assert completed.task.status.value == "DONE"
         assert completed.task.constraints is not None
         assert "tests/test_contract.py" in completed.task.constraints.allowed_paths
@@ -497,6 +549,7 @@ def test_budget_exhausted_coder_progress_is_a_recoverable_native_source(
         with MySqlTaskRepository(mysql_dsn) as repository:
             before = repository.get(source.task.id), repository.list_events(source.task.id)
         events = before[1]
+        assert routes[-1].result.artifact is not None
         assert is_prior_progress_source(routes[-1], source.task, checkpoint, events)
         for index in range(len(events) - 4, len(events)):
             altered = list(events)

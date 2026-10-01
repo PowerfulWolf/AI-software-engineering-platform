@@ -2258,7 +2258,8 @@ sorted unique exact file paths, never directory/glob/command authority. It may a
 scope approval, not another proposal or plan approval. Missing optional fields preserve old digests.
 
 Only terminal pre-candidate recovery can process it. `NativeRecoverySource.accepted_progress`
-is the current recoverable Coder route's sealed report referenced by validated Task StateEvents.
+is the latest sealed progress accepted in the current Task's validated StateEvent history, with
+its original Run/Context lineage checked independently of the final failed Coder execution.
 The request must bind its exact ID/SHA. Free-text `next_actions` alone is not authorization.
 
 `inspect_recovery_scope_supplement(..., request=None)` binds requested paths using `git ls-tree`
@@ -2292,3 +2293,30 @@ the required exact paths with the latest accepted progress ID/SHA, approve the r
 then independently approve its RecoveryPlan. Existing plans without optional fields retain their
 identity. Code rollback must preserve newly created plans/approvals and cannot execute their extended
 contract on an older host; keep the new reader or leave those plans unconsumed.
+
+### D5.2 Scope evidence after a later Coder execution fails
+
+`recovery.progress_source.accepted_scope_progress(sidecar, task, events, source_revision)`
+selects the latest validated IMPLEMENTING -> CONTINUE_REQUIRED event with the exact progress
+acceptance reason. It reads the sealed CoderProgressArtifact, the producer Run's consecutive
+fallback/final route chain, and the integrity-checked Context. Task, attempt, input revision,
+Run, Context, artifact digest and event identities must agree; attempt cannot exceed the terminal
+Task's attempt. Missing/corrupt latest applicable facts reject; never silently fall back to an
+older report. If the latest acceptance refers to an older input revision superseded by a candidate,
+return no scope evidence: ordinary post-feedback recovery continues, while an explicit request
+referencing that inapplicable progress still rejects at the scope gate.
+
+This is scope evidence only. If a later Coder execution times out, the RecoverySource continues
+to name that failed Run/Context, and capture seals its entire actual dirty worktree. The earlier
+report is not a replacement source or current changed-file inventory. Pre-provider recovery gates
+are unchanged. No wire fields, old digests, Task permissions, budgets or verdicts are rewritten.
+
+Good: attempt N accepted progress, N+1 times out -> requested exact scope -> dual approval -> new
+Task on the current clean target. Base: no accepted event -> no scope evidence. Bad: BLOCKED-only
+artifact reference, older request after newer acceptance, future attempt, foreign/revision-mismatched
+facts within the applicable revision, missing final route or corrupt Context -> reject before
+capture or execution.
+
+Incremental tests must include prior progress after a later real failure, current progress,
+missing/corrupt facts, latest-only selection, and a native timeout scope recovery retaining the
+actual failed Run, additional dirty bytes, old Task history and independent QA/Review.

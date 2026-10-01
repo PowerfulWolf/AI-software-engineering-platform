@@ -68,9 +68,11 @@ class OfflineRunner:
         calls: list[AgentRequest],
         *,
         reapply: bool = False,
+        seed_text: str = "partially implemented\n",
     ) -> None:
         self.definition, self.root, self.calls = definition, root, calls
         self.reapply = reapply
+        self.seed_text = seed_text
         self.request: AgentRequest | None = None
 
     def run(
@@ -106,7 +108,7 @@ class OfflineRunner:
                 assert git(cwd, "status", "--porcelain") == ""
                 assert "recovery.patch" in stdin and "partially implemented" in stdin
             else:
-                assert (cwd / "hello.txt").read_text() == "partially implemented\n"
+                assert (cwd / "hello.txt").read_text() == self.seed_text
             assert "recovery.origin" in stdin
         self.calls.append(self.request)
         result = _ScriptedDeliveryAdapter(self.definition, cwd).run(self.request)
@@ -215,6 +217,8 @@ class OfflineAdapter:
 
 
 class OfflineFactory:
+    seed_text = "partially implemented\n"
+
     def __init__(self, seed: RecoverySeedService) -> None:
         self.seed = seed
         self.calls: list[AgentRequest] = []
@@ -235,6 +239,7 @@ class OfflineFactory:
             binding.worktree.path,
             self.calls,
             reapply=plan.input_mode == "coder_reapply",
+            seed_text=self.seed_text,
         )
         return OfflineAdapter(
             CodexCliAgentAdapter(

@@ -65,7 +65,7 @@ from ai_software_engineer.recovery.models import (
     digest,
 )
 from ai_software_engineer.recovery.progress_source import (
-    has_accepted_progress,
+    accepted_scope_progress,
     is_prior_progress_source,
     require_stopped_progress,
 )
@@ -370,17 +370,7 @@ class NativeRecoverySourceReader:
             raise ValueError("approved request changed during inspection")
         if _parent(team, cp, approval) != (parent_id, parent_sha):
             raise ValueError("parent changed during inspection")
-        accepted_progress = None
-        progress = final_route.result.artifact
-        if isinstance(progress, CoderProgressArtifact) and has_accepted_progress(
-            final_route, events
-        ):
-            sealed = FileArtifactStore(root / "artifacts", read_only=True).get(progress.artifact_id)
-            if not isinstance(sealed, CoderProgressArtifact) or artifact_digest(
-                sealed
-            ) != artifact_digest(progress):
-                raise ValueError("accepted progress differs from sealed artifact")
-            accepted_progress = sealed
+        accepted_progress = accepted_scope_progress(root, task, events, worktree_revision)
         return NativeRecoverySource(
             source,
             permissions,
