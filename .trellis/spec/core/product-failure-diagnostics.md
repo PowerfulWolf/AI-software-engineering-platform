@@ -1,5 +1,28 @@
 # Product failure diagnostics and explicit resume
 
+## Confirmation history and running delivery visibility (2026-10-01)
+
+`knowledgeGapSection(RequestView)` remains reachable in every Requirement stage and loads the
+existing GET knowledge-gaps endpoint only on expansion. Cache identity includes Project,
+Requirement, checkpoint, stage and resolution so a same-checkpoint transition cannot retain an
+obsolete pending form. Resolved historical cards show the original question, exact answer,
+resolution ID, approval reference/actor and sources as text; no mutation or repeated approval.
+Empty/error history remains explicit. No migration or fabricated dialogue is allowed.
+
+`modelCallDiagnostics(ConsoleOperation)` displays completed stage diagnostics, not a live provider
+ledger. Its empty state must not imply zero calls or a stalled Coder. The matched current child
+Task's nonterminal, current-role `RUNNING + LEASE_VALID` queue item may show execution and recorded
+heartbeat; expired/closed/waiting or unrelated Project/Requirement facts must never show running.
+Heartbeat proves lease ownership, not that a provider is generating tokens. Explain that fine-grained
+model/tool/wait activity is unavailable, and link to existing Task completed-role records.
+`roleExecutionActivity(TaskView)` is read-only presentation, reused in Task detail and request call
+details; it never names an actual runtime model from planned allocation.
+
+Tests: knowledge-gap Node regressions cover DELIVERING/INTEGRATING/DONE history, same-checkpoint
+stage changes, safe rendering, active/expired/closed/waiting queues and Project identity; existing
+delivery-status/UI tests preserve approval precedence. Existing K1 resolution 99f12413 remains
+untouched; a normal static-page refresh restores its history entry without restarting the Worker.
+
 ## 1. Scope / Trigger
 
 Structured upstream model failures in Product discussion, Console Operation error mapping,

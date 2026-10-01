@@ -6037,7 +6037,7 @@ function approvedKnowledge(item) {
 }
 
 function knowledgeGapKey(item) {
-  return `${item.project_id}/${item.id}/${item.checkpoint_sha256}/${item.knowledge_gap?.resolution?.resolution_id || "pending"}`;
+  return `${item.project_id}/${item.id}/${item.checkpoint_sha256}/${item.stage}/${item.knowledge_gap?.resolution?.resolution_id || "pending"}`;
 }
 
 function knowledgeGapSection(item) {
@@ -6049,7 +6049,7 @@ function knowledgeGapSection(item) {
   let approved = approvedKnowledge(item);
   const historyOnly = item.stage !== "WAITING_HUMAN";
   const renderIntro = () => intro.replaceChildren(el("h2", historyOnly ? "知识核对记录" : approved ? "已确认的知识" : "待确认的知识"), el("p", historyOnly
-    ? "保留原问题与核对历史。重新核对不代表批准问题中的建议。" : approved
+    ? "查看原问题、已保存的解答与确认依据。已确认的历史事项无需重复回答；重新核对本身不代表批准。" : approved
     ? "解答已批准并保存，无需重复填写。点击“继续交付”恢复原需求。"
     : "补充待确认的信息，批准后再继续原需求。", "muted"));
   renderIntro();
@@ -6127,6 +6127,9 @@ function knowledgeGapCard(view, index, base, item) {
     if (resolution) {
       card.append(el("h4", "已回答的内容"), el("p", resolution.answer, "knowledge-gap-answer"), el("h4", "事实来源 / 决策依据"));
       for (const source of resolution.sources) card.append(el("p", source.uri));
+      card.append(el("p", "确认记录 · " + resolution.resolution_id, "paths"));
+      if (resolution.approval_reference) card.append(el("p", "确认依据 · " + resolution.approval_reference, "paths"));
+      if (resolution.approved_by) card.append(el("p", "记录的确认身份 · " + resolution.approved_by, "muted"));
       if (current) card.append(el("p", "解答已保存，等待你继续原需求。", "success"));
     } else card.append(el("p", "此项不是当前待处理事项，无需在此重复提交。", "muted"));
     return card;
@@ -6187,9 +6190,22 @@ function knowledgeGapCard(view, index, base, item) {
   return card;
 }
 
+function roleExecutionActivity(task) {
+  const section = el("div", undefined, "role-execution-activity");
+  if (task.terminal) return section;
+  const roleStatus = {coder: "IMPLEMENTING", qa: "QA", reviewer: "REVIEW"};
+  for (const step of task.role_queue || []) {
+    if (step.status !== "RUNNING" || step.lease_liveness !== "LEASE_VALID" ||
+        roleStatus[step.role] !== task.status) continue;
+    section.append(el("p", `${label(step.role)}正在执行 · 最近心跳 ${time(step.heartbeat_at)}。`));
+    section.append(el("p", "执行租约有效；模型请求、工具执行与等待返回的细分进度暂未上报。", "muted"));
+  }
+  return section;
+}
+
 function modelCallDiagnostics(operation) {
   const details = el("details", undefined, "model-call-diagnostics");
-  details.append(el("summary", "查看模型调用记录"));
+  details.append(el("summary", "查看已完成的阶段调用记录"));
   const content = el("div", undefined, "model-call-list");
   details.append(content);
   let loading = false, loaded = false;
@@ -6214,7 +6230,15 @@ function modelCallDiagnostics(operation) {
         if (call.correlation_id) card.append(el("p", "关联编号：" + call.correlation_id, "paths"));
         return card;
       }));
-      if (!calls.length) content.append(el("p", "这条操作没有已记录的调用明细；历史缺失记录无法补回。", "muted"));
+      if (!calls.length) content.append(el("p", "暂无已完成的阶段调用明细；空列表不表示没有执行模型调用。", "muted"));
+      content.append(el("p", "此处只展示已保存的阶段调用诊断。Coder、QA、Reviewer 的完成记录请查看仓库任务。", "muted"));
+      const request = snapshot?.requests.find(item => item.id === operation.intent?.delivery_id &&
+        item.project_id === operation.intent?.project_id);
+      if (request) {
+        for (const task of currentRequestTasks(request).filter(task => task.project_id === request.project_id)) {
+          content.append(roleExecutionActivity(task), button("查看角色执行记录", () => showDetail("task", task.id), "secondary"));
+        }
+      }
       loaded = !["QUEUED", "RUNNING"].includes(operation.status);
     } catch (error) {
       content.replaceChildren(el("p", error.message || "无法读取调用记录，请收起后重试。", "error"));
@@ -6392,7 +6416,7 @@ function buildDetail() {
     panel.append(overview);
     const blocking = requestBlockerSection(item);
     if (blocking) panel.append(blocking);
-    if (item.stage === "WAITING_HUMAN" || item.knowledge_rechecked_gap_ids?.length) panel.append(knowledgeGapSection(item));
+    panel.append(knowledgeGapSection(item));
     const flow = el("section", undefined, "detail-section");
     flow.append(el("h2", "交付流程"));
     const manager = managerFlowStatus(item);
@@ -6497,6 +6521,7 @@ function buildDetail() {
   }
   dialog.append(list);
   dialog.append(el("h2", "已完成的模型调用"));
+  dialog.append(roleExecutionActivity(item));
   if (!item.runs.length)
     dialog.append(
       el("p", "暂无已提交调用记录；进行中的调用完成后才会出现。", "muted"),

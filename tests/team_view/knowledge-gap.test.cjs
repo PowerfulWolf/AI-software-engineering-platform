@@ -117,8 +117,9 @@ test("knowledge waits retain their durable origin instead of falling back to Pro
   for (const [origin, label] of [["DESIGNING", "设计"], ["PLANNING", "计划"], [null, null]]) {
     h.context.origin = origin;
     const flow = vm.runInContext("deliveryFlow({...snapshot.requests[0], knowledge_wait_stage: origin})", h.context);
-    const active = all(flow).find(n => n.tag === "li" && n.className === "current");
-    assert.equal(active ? active.children[1].textContent : null, label);
+    const blocked = all(flow).find(n => n.tag === "li" && n.className === "blocked");
+    assert.equal(blocked ? blocked.children[1].textContent : null, label);
+    assert.equal(all(flow).some(n => n.tag === "li" && n.className === "current"), false);
   }
 });
 
@@ -539,6 +540,76 @@ test("model call details load once and show primary, fallback, duration and IDs"
   assert.match(text(details), /60.10 秒.*HTTP 504/);
   assert.match(text(details), /req-primary/);
   assert.match(text(details), /req-backup/);
+});
+
+test("approved knowledge remains reachable after delivery resumes and completes", async () => {
+  let reads = 0;
+  const h = harness(async () => {
+    reads++;
+    return {ok: true, json: async () => [{...approved, is_current: false}]};
+  });
+  for (const stage of ["DELIVERING", "INTEGRATING", "DONE"]) {
+    h.context.nextStage = stage;
+    vm.runInContext("snapshot.requests[0].stage = nextStage; renderDetail()", h.context);
+    const show = findButton(h, "查看知识核对记录");
+    assert.ok(show, stage);
+    await show.events.click();
+    assert.match(text(h.detail()), /已回答的内容.*A/);
+    assert.match(text(h.detail()), /resolution-a/);
+    assert.equal(all(h.detail()).filter(n => n.tag === "form").length, 0);
+  }
+  assert.equal(reads, 3);
+});
+
+test("same-checkpoint stage change discards an obsolete pending knowledge form", async () => {
+  let records = [pending];
+  const h = harness(async () => ({ok: true, json: async () => records}));
+  await findButton(h, "查看待确认的知识").events.click();
+  assert.equal(all(h.detail()).filter(n => n.tag === "form").length, 1);
+  records = [{...approved, is_current: false}];
+  vm.runInContext('snapshot.requests[0].stage = "DELIVERING"; renderDetail()', h.context);
+  assert.equal(all(h.detail()).filter(n => n.tag === "form").length, 0);
+  await findButton(h, "查看知识核对记录").events.click();
+  assert.match(text(h.detail()), /已回答的内容/);
+  assert.equal(all(h.detail()).filter(n => n.tag === "form").length, 0);
+});
+
+test("empty diagnostics distinguish valid role execution from completed call records", async () => {
+  const h = harness(async () => ({ok: true, json: async () => []}));
+  vm.runInContext(`
+    snapshot.tasks = [{id: "native-1", request_id: "r1", project_id: "project_test",
+      status: "IMPLEMENTING", terminal: false, last_activity: "2026-10-01T14:09:00Z",
+      role_queue: [{role: "coder", status: "RUNNING", lease_liveness: "LEASE_VALID",
+        heartbeat_at: "2026-10-01T14:09:00Z"}]}];
+  `, h.context);
+  for (const [status, liveness, active] of [
+    ["RUNNING", "LEASE_VALID", true], ["RUNNING", "LEASE_EXPIRED", false],
+    ["CLOSED", "LEASE_VALID", false], ["WAITING_HUMAN", "UNKNOWN", false],
+  ]) {
+    Object.assign(h.context, {queueStatus: status, leaseLiveness: liveness});
+    vm.runInContext(`snapshot.tasks[0].role_queue[0].status = queueStatus;
+      snapshot.tasks[0].role_queue[0].lease_liveness = leaseLiveness;`, h.context);
+    const details = vm.runInContext(`modelCallDiagnostics({operation_id: "op-running",
+      status: "RUNNING", intent: {delivery_id: "r1", project_id: "project_test"}})`, h.context);
+    details.open = true;
+    await details.events.toggle();
+    if (active) assert.match(text(details), /正在执行.*最近心跳/);
+    else assert.doesNotMatch(text(details), /正在执行/);
+    assert.match(text(details), /已完成.*阶段调用/);
+    assert.match(text(details), /查看角色执行记录/);
+    assert.doesNotMatch(text(details), /历史缺失记录无法补回/);
+  }
+  vm.runInContext(`snapshot.tasks[0].role_queue[0].status = "RUNNING";
+    snapshot.tasks[0].role_queue[0].lease_liveness = "LEASE_VALID";`, h.context);
+  const otherProject = vm.runInContext(`modelCallDiagnostics({operation_id: "op-foreign",
+    status: "RUNNING", intent: {delivery_id: "r1", project_id: "project_other"}})`, h.context);
+  otherProject.open = true;
+  await otherProject.events.toggle();
+  assert.doesNotMatch(text(otherProject), /正在执行|查看角色执行记录/);
+  vm.runInContext('snapshot.tasks[0].terminal = true', h.context);
+  assert.doesNotMatch(text(vm.runInContext('roleExecutionActivity(snapshot.tasks[0])', h.context)), /正在执行/);
+  vm.runInContext('snapshot.tasks[0].terminal = false; snapshot.tasks[0].role_queue[0].role = "reviewer"', h.context);
+  assert.doesNotMatch(text(vm.runInContext('roleExecutionActivity(snapshot.tasks[0])', h.context)), /正在执行/);
 });
 
 test("model call details present CLI results without HTTP placeholders", async () => {
