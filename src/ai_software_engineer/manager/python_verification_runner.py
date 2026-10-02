@@ -107,6 +107,44 @@ class _SelectionGuard:
     def __init__(self, nodes: tuple[str, ...], max_cases: int) -> None:
         self.nodes, self.max_cases = nodes, max_cases
         self.skipped = False
+        self.counts = [[index, 0, 0, 0, 0, 0, 0] for index in range(len(nodes))]
+        self.errors: list[list[str | int | None]] = []
+        self.omitted_errors = 0
+        self.collection_errors = 0
+        self.report_overflow = False
+
+    def _index(self, actual: str) -> int | None:
+        return next((i for i, node in enumerate(self.nodes) if self._matches(actual, node)), None)
+
+    def _error(self, index: int, phase: str, report: object) -> None:
+        if len(self.errors) >= 16:
+            self.omitted_errors += 1
+            return
+        # Only known class names and numeric codes are retained. Exception text,
+        # paths, argv and repr can contain partial credentials; never echo them.
+        crash = getattr(getattr(report, "longrepr", None), "reprcrash", None)
+        message = getattr(crash, "message", "")
+        if not isinstance(message, str):
+            message = ""
+        match = re.match(
+            r"^(?:[A-Za-z_][A-Za-z0-9_]*\.)*"
+            r"(AssertionError|PermissionError|FileNotFoundError|OperationalError|"
+            r"ProgrammingError|IntegrityError|CalledProcessError|TimeoutExpired|"
+            r"ValueError|TypeError|KeyError|RuntimeError|ImportError|ModuleNotFoundError)"
+            r"(?=:|$)",
+            message,
+        )
+        category = match.group(1) if match else "UNKNOWN"
+        numeric = None
+        if match and category in {"OperationalError", "ProgrammingError", "IntegrityError"}:
+            code = re.match(r":\s*\((\d{1,5}),", message[match.end() : match.end() + 32])
+            if code:
+                numeric = int(code.group(1))
+        elif match and category in {"PermissionError", "FileNotFoundError"}:
+            code = re.match(r":\s*\[Errno (\d{1,5})\]", message[match.end() : match.end() + 32])
+            if code:
+                numeric = int(code.group(1))
+        self.errors.append([index, phase, category, numeric])
 
     @staticmethod
     def _matches(actual: str, approved: str) -> bool:
@@ -128,9 +166,66 @@ class _SelectionGuard:
             )
         ):
             raise pytest.UsageError("collection exceeds approved bounds or exact selections")
+        for node in actual:
+            index = self._index(node)
+            assert index is not None
+            self.counts[index][1] += 1
 
     def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
         self.skipped = self.skipped or report.skipped
+        index = self._index(report.nodeid)
+        if index is None or report.when not in {"setup", "call", "teardown"}:
+            self.report_overflow = True
+            return
+        column = (
+            4
+            if report.skipped
+            else 2
+            if report.passed and report.when == "call"
+            else 3
+            if report.failed and report.when == "call"
+            else 5
+            if report.failed and report.when == "setup"
+            else 6
+            if report.failed and report.when == "teardown"
+            else None
+        )
+        if column is not None:
+            self.counts[index][column] += 1
+            if self.counts[index][column] > self.max_cases:
+                self.counts[index][column] = self.max_cases
+                self.report_overflow = True
+        if report.failed:
+            self._error(index, report.when, report)
+
+    def pytest_collectreport(self, report: pytest.CollectReport) -> None:
+        if report.failed:
+            self.collection_errors += 1
+            self._error(-1, "collection", report)
+
+    def summary(self, exit_code: int) -> str:
+        payload = {
+            "version": 1,
+            "pytest_exit": exit_code,
+            "columns": [
+                "selector",
+                "collected",
+                "passed",
+                "failed",
+                "skipped",
+                "setup_error",
+                "teardown_error",
+            ],
+            "counts": self.counts,
+            "errors": self.errors,
+            "omitted_errors": self.omitted_errors,
+            "collection_errors": self.collection_errors,
+            "report_overflow": self.report_overflow,
+        }
+        encoded = json.dumps(payload, separators=(",", ":"), ensure_ascii=True)
+        if len(encoded.encode()) > 3000:
+            raise ValueError("fixed pytest summary exceeds limit")
+        return "ASE_PYTEST_SUMMARY=" + encoded
 
 
 def _bind_mysql(config: _ConnectionConfig) -> None:
@@ -195,10 +290,18 @@ def main(arguments: list[str]) -> int:
     result = pytest.main(
         [
             "-q",
-            "-rA",
+            "-r",
+            "",
+            "--tb=no",
+            "--no-summary",
+            "--show-capture=no",
+            "--color=no",
+            "--disable-warnings",
             "-p",
             "no:cacheprovider",
             "--override-ini=addopts=",
+            "--override-ini=log_cli=false",
+            "--override-ini=verbosity_test_cases=-1",
             f"--rootdir={source}",
             f"--confcutdir={source}",
             f"--basetemp={scratch / 'pytest'}",
@@ -208,8 +311,9 @@ def main(arguments: list[str]) -> int:
         ],
         plugins=[guard],
     )
+    print(guard.summary(int(result)))
     # Exit zero must not hide a skipped prerequisite. It still isn't QA PASS.
-    return int(result) if result else (1 if guard.skipped else 0)
+    return int(result) if result else (1 if guard.skipped or guard.report_overflow else 0)
 
 
 if __name__ == "__main__":

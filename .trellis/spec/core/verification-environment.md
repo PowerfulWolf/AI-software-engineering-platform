@@ -123,6 +123,26 @@ new Python proposals/reverts the platform commit; preserve every resource record
 allow started-container deadlines to converge, reconcile any owned unstarted object through its
 exact retained intent, and keep the original candidate available for recovery.
 
+## Bounded pytest diagnostics (2026-10-02)
+
+`_SelectionGuard.summary(exit_code)` emits `ASE_PYTEST_SUMMARY=` followed by compact JSON,
+at most3000 bytes. Fixed columns are selector index, collected, call passed/failed, skipped
+at any phase, setup error and teardown error. Every approved selector retains its counters;
+at most16 error samples retain only index/phase, an anchored allowlisted exception class and
+numeric OS/MySQL code. Unknown types remain UNKNOWN. No exception message, path, argv or
+parametrized node ID is echoed. Samples may be omitted only with an explicit count; they are
+diagnostics, never role verdicts. Collection errors and report overflow are explicit.
+
+Trusted pytest flags suppress tracebacks, summaries, captured streams, color and live logging.
+Override `verbosity_test_cases=-1`: candidate ini can otherwise defeat `-q`, print long identities
+and include full secret-bearing skip reasons. Candidate-configured verbose skip cases must retain
+the quiet output bound and diagnostic counters without exposing their reasons.
+The existing4096-byte command output and whole-stream truncation redaction remain unchanged.
+Pass/skip/error and collection fixtures must remain inspectable;200 failures with long secret
+exceptions must fit the limit without credential text. A setup skip must not appear as a pass.
+Historical redacted receipts and native QA findings are immutable; new runner bytes require
+new fingerprint-bound approval. A recorded business finding still routes to Coder.
+
 ## Historical verification read graph
 
 Scope: public FileRecoveryStore verification getters validate a DAG of plans, advice, incidents,

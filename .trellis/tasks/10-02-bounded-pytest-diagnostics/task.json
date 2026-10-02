@@ -1,0 +1,6 @@
+{
+  "id": "bounded-pytest-diagnostics-20261002",
+  "title": "有界保留受控 pytest 逐节点状态，避免长输出隐藏全部失败诊断",
+  "status": "in_progress",
+  "phase": "incremental_verified_ready_for_activation"
+}

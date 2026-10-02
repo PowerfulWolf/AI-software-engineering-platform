@@ -1,6 +1,6 @@
 {
   "id": "python-mysql-verification-20261001",
   "title": "补齐精确审批下隔离 MySQL 的 Python 增量验证能力",
-  "status": "in_progress",
-  "phase": "independently_verified_ready_for_commit_and_activation"
+  "status": "completed",
+  "phase": "activated_with_native_execution_receipt"
 }

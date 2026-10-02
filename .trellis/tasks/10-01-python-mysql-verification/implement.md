@@ -24,4 +24,4 @@ Continue 的 `python_mysql_tests` 经 typed Console → Manager → Resume → C
 
 Unix proxy 只证明 SQL 语义，不验证 TCP/DNS/TLS。已启动容器自启动起最多 1200 秒；create→start 崩溃可能留未启动对象/卷，依赖下一次明确执行按精确过期 intent 清理。此对象没有运行 SQL、候选凭证、host binds 或公开端口。回滚平台提交/禁用新 Python 提案，保留所有历史记录和候选，按精确 intent 收敛剩余资源；禁止批量删除。
 
-当前状态：代码已验证，尚未生产激活；恢复结果在实际操作后追加。
+2026-10-02 生产激活：39389f4 已提交推送并重载。K1精确计划177f4b857f26bae920d96e0d5206e7aac984b6d1ac99003d419f56a40dd72377获正常Console审批，原生受控MySQL实际执行并封存回执。QA最终经备用模型成功产出独立FAIL，指出旧来源审计缺陷；ASE按原生规则创建后继Coder。测试stdout超过4096而缺少细节的问题转入10-02-bounded-pytest-diagnostics。此平台执行器已激活，不把它误记为K1完成或QA PASS。

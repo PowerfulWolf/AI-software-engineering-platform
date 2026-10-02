@@ -28,7 +28,12 @@ RUNNER = (
 
 
 def run_fixture(
-    tmp_path: Path, body: str, selections: list[str], *, max_cases: int = 256
+    tmp_path: Path,
+    body: str,
+    selections: list[str],
+    *,
+    max_cases: int = 256,
+    pytest_ini: str = "[pytest]\naddopts = --invalid-ambient-option\n",
 ) -> subprocess.CompletedProcess[str]:
     source, scratch, private = (tmp_path / name for name in ("source", "scratch", "private"))
     for directory in (source / "tests", source / "src", scratch, private):
@@ -37,7 +42,7 @@ def run_fixture(
     (source / "src/candidate_identity.py").write_text("IDENTITY = 'approved candidate'\n")
     # Both parent discovery and configured addopts must be disabled by the trusted runner.
     (tmp_path / "conftest.py").write_text("raise RuntimeError('parent conftest executed')\n")
-    (source / "pytest.ini").write_text("[pytest]\naddopts = --invalid-ambient-option\n")
+    (source / "pytest.ini").write_text(pytest_ini)
     config = private / "connection.json"
     config.write_text(
         json.dumps(
@@ -131,6 +136,128 @@ def test_runner_refuses_other_database_destinations(tmp_path: Path) -> None:
         ["tests/test_selected.py::test_selected"],
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def _summary(result: subprocess.CompletedProcess[str]) -> dict[str, object]:
+    line = next(
+        line for line in result.stdout.splitlines() if line.startswith("ASE_PYTEST_SUMMARY=")
+    )
+    return cast(dict[str, object], json.loads(line.split("=", 1)[1]))
+
+
+def test_many_failures_keep_all_counts_without_secret_text_or_truncated_output(
+    tmp_path: Path,
+) -> None:
+    result = run_fixture(
+        tmp_path,
+        "import pytest, os\n"
+        "@pytest.mark.parametrize('n', range(200))\n"
+        "def test_selected(n):\n"
+        "    raise AssertionError(os.environ['ASE_TEST_MYSQL_DSN'] + 'x' * 10000)\n",
+        ["tests/test_selected.py::test_selected"],
+    )
+    assert result.returncode == 1
+    assert len(result.stdout.encode()) < 4096
+    assert "a" * 12 not in result.stdout + result.stderr
+    assert "mysql://" not in result.stdout + result.stderr
+    summary = _summary(result)
+    assert summary["counts"] == [[0, 200, 0, 200, 0, 0, 0]]
+    assert len(cast(list[object], summary["errors"])) == 16
+    assert summary["omitted_errors"] == 184
+
+
+def test_setup_skip_and_permission_failure_are_explicit_without_exception_text(
+    tmp_path: Path,
+) -> None:
+    result = run_fixture(
+        tmp_path,
+        "import pytest, os\n"
+        "@pytest.fixture\n"
+        "def unavailable():\n"
+        "    pytest.skip(os.environ['ASE_TEST_MYSQL_DSN'])\n"
+        "@pytest.fixture\n"
+        "def forbidden():\n"
+        "    raise PermissionError(13, os.environ['ASE_TEST_MYSQL_DSN'])\n"
+        "def test_skip(unavailable): pass\n"
+        "def test_forbidden(forbidden): pass\n",
+        ["tests/test_selected.py::test_skip", "tests/test_selected.py::test_forbidden"],
+    )
+    assert result.returncode != 0
+    assert "a" * 12 not in result.stdout + result.stderr
+    summary = _summary(result)
+    assert summary["counts"] == [[0, 1, 0, 0, 1, 0, 0], [1, 1, 0, 0, 0, 1, 0]]
+    assert summary["errors"] == [[1, "setup", "PermissionError", 13]]
+
+
+def test_collection_error_is_counted_without_credential_text(tmp_path: Path) -> None:
+    result = run_fixture(
+        tmp_path,
+        "import os\nraise RuntimeError(os.environ['ASE_TEST_MYSQL_DSN'])\n"
+        "def test_selected(): pass\n",
+        ["tests/test_selected.py::test_selected"],
+    )
+    assert result.returncode != 0
+    assert "a" * 12 not in result.stdout + result.stderr
+    summary = _summary(result)
+    assert summary["collection_errors"] == 1
+    assert summary["counts"] == [[0, 0, 0, 0, 0, 0, 0]]
+    assert summary["errors"] == [[-1, "collection", "RuntimeError", None]]
+
+
+def test_unknown_exception_does_not_infer_permission_failure_from_message(tmp_path: Path) -> None:
+    result = run_fixture(
+        tmp_path,
+        "class CustomFailure(Exception): pass\n"
+        "def test_selected():\n"
+        "    raise CustomFailure('PermissionError: untrusted message')\n",
+        ["tests/test_selected.py::test_selected"],
+    )
+    assert result.returncode == 1
+    assert _summary(result)["errors"] == [[0, "call", "UNKNOWN", None]]
+
+
+def test_teardown_failure_keeps_call_pass_separate_from_error(tmp_path: Path) -> None:
+    result = run_fixture(
+        tmp_path,
+        "import pytest, os\n"
+        "@pytest.fixture\n"
+        "def cleanup():\n"
+        "    yield\n"
+        "    raise ValueError(os.environ['ASE_TEST_MYSQL_DSN'])\n"
+        "def test_selected(cleanup): pass\n",
+        ["tests/test_selected.py::test_selected"],
+    )
+    assert result.returncode != 0
+    assert "a" * 12 not in result.stdout + result.stderr
+    assert _summary(result)["counts"] == [[0, 1, 1, 0, 0, 0, 1]]
+    assert _summary(result)["errors"] == [[0, "teardown", "ValueError", None]]
+
+
+@pytest.mark.parametrize("skip", [False, True])
+def test_all_32_selectors_keep_counts_with_bounded_error_samples(
+    tmp_path: Path, skip: bool
+) -> None:
+    names = [f"test_selected_{index}_" + "long_identity_" * 10 for index in range(32)]
+    action = (
+        "pytest.skip(os.environ['ASE_TEST_MYSQL_DSN'])"
+        if skip
+        else "raise AssertionError('failed')"
+    )
+    body = "import os, pytest\n" + "\n".join(f"def {name}():\n    {action}" for name in names)
+    result = run_fixture(
+        tmp_path,
+        body,
+        [f"tests/test_selected.py::{name}" for name in names],
+        pytest_ini="[pytest]\naddopts = --invalid-ambient-option\nverbosity_test_cases = 2\n",
+    )
+    assert result.returncode == 1
+    assert len(result.stdout.encode()) < 4096
+    assert "a" * 12 not in result.stdout + result.stderr
+    summary = _summary(result)
+    assert summary["counts"] == [
+        [index, 1, 0, int(not skip), int(skip), 0, 0] for index in range(32)
+    ]
+    assert summary["omitted_errors"] == (0 if skip else 16)
 
 
 @pytest.fixture(params=[None, "/private/tmp"], ids=["user-tmp", "public-tmp"])
