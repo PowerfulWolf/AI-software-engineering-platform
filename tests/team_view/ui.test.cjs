@@ -17,7 +17,9 @@ class Element {
     this.value = "";
     this.checked = false;
     this.hidden = false;
-    this.classList = { toggle() {} };
+    this.classList = { toggle() {}, add: (...names) => {
+      this.className = [...new Set([...this.className.split(/\s+/).filter(Boolean), ...names])].join(" ");
+    } };
   }
   append(...nodes) {
     for (const node of nodes) if (typeof node !== "string") node.parentElement = this;
@@ -33,6 +35,10 @@ class Element {
     this.attributes[key] = value;
   }
   getAttribute(key) { return this.attributes[key] ?? null; }
+  querySelector(selector) {
+    const name = selector.startsWith(".") ? selector.slice(1) : null;
+    return name ? descend(this).slice(1).find(node => node.className.split(/\s+/).includes(name)) || null : null;
+  }
   remove() { if (this.parentElement) this.parentElement.children = this.parentElement.children.filter(node => node !== this); }
   removeAttribute(key) {
     delete this.attributes[key];

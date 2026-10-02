@@ -64,6 +64,90 @@ let knowledgeImportMode = null;
 let editingKnowledgeDocument = null;
 let editingSpecDocument = null;
 const knowledgeGapSections = new Map();
+// Signatures stay in memory; draft values and credentials must never become DOM attributes.
+const renderedSurfaces = new WeakMap();
+const renderedBlocks = new WeakMap();
+function viewBlock(node, key, facts) {
+  renderedBlocks.set(node, {key, signature: JSON.stringify(facts)});
+  return node;
+}
+function viewGroup(node, key) {
+  renderedBlocks.set(node, {key, signature: null});
+  return node;
+}
+function reconcileViewChildren(current, next) {
+  const existing = new Map([...current.childNodes].flatMap(node => {
+    const block = renderedBlocks.get(node);
+    return block ? [[block.key, node]] : [];
+  }));
+  const desired = [...next.childNodes];
+  desired.forEach((node, index) => {
+    const block = renderedBlocks.get(node);
+    const old = block && existing.get(block.key);
+    let replacement = node;
+    if (old) {
+      const previous = renderedBlocks.get(old);
+      if (block.signature !== null && previous.signature === block.signature)
+        replacement = old;
+      else if (block.signature === null && previous.signature === null && old.tagName === node.tagName) {
+        old.className = node.className;
+        old.hidden = node.hidden;
+        reconcileViewChildren(old, node);
+        replacement = old;
+      }
+    }
+    const position = current.childNodes[index] || null;
+    if (position !== replacement) {
+      if (replacement.parentNode === current && typeof current.moveBefore === "function")
+        current.moveBefore(replacement, position);
+      else current.insertBefore(replacement, position);
+    }
+  });
+  while (current.childNodes.length > desired.length) current.lastChild.remove();
+}
+function renderView(container, key, facts, build, incremental) {
+  const previous = renderedSurfaces.get(container);
+  if (incremental && previous?.key === key && previous.signature === JSON.stringify(facts())) return;
+  if (incremental && previous?.key === key && typeof container.insertBefore === "function") {
+    const next = el("div");
+    build(next);
+    container.className = next.className;
+    container.hidden = next.hidden;
+    reconcileViewChildren(container, next);
+  } else {
+    container.replaceChildren();
+    build(container);
+  }
+  renderedSurfaces.set(container, {key, signature: JSON.stringify(facts())});
+}
+function pollingControlFacts() {
+  return [consoleAvailable, consoleTeamId, consoleDeliveryReady, operationsAvailable,
+    snapshot?.team_id, currentProjectId(), projectSwitchPending()];
+}
+function pollingContentFacts() {
+  const common = [page, pollingControlFacts(), administrationNotice];
+  if (page === "settings") return [...common, administrationAvailable, settingsSnapshot,
+    settingsSection, configurationApplyInFlight, configurationApplyResult];
+  if (page === "status") return [...common, administrationAvailable, runtimeStatusSnapshot,
+    runtimeStatusLoading, runtimeStatusError];
+  if (page === "knowledge") return [...common, snapshot?.team_name, snapshot?.projects,
+    knowledgeScope, knowledgeMode, knowledgeDocuments, knowledgeIndexStatus, specDocuments,
+    learningProposals, knowledgeLoading, knowledgeError];
+  return [...common, snapshot?.team_name, snapshot?.projects, snapshot?.agents, snapshot?.tasks,
+    snapshot?.requests, operations, selected, selectedAgentId, requestFilter];
+}
+function pollingKnowledgeFacts() {
+  return [knowledgeDocuments, knowledgeIndexStatus, specDocuments, learningProposals,
+    knowledgeLoading, knowledgeError];
+}
+function pollingDetailFacts() {
+  const item = selected?.kind === "task" ? taskById(selected.id)
+    : selected ? requestById(selected.id) : null;
+  const tasks = selected?.kind === "request" && item ? currentRequestTasks(item) : [];
+  return [page, selected, item, tasks, snapshot?.agents, pollingControlFacts(),
+    item ? operations.filter(operation => operationTarget(operation) === item.id) : [],
+    page === "requests" && Boolean(snapshot?.requests.length)];
+}
 const acknowledgedOperationNoticeKeys = new Set(
   (() => {
     try {
@@ -966,7 +1050,7 @@ function documentList(parent, documents) {
     return;
   }
   for (const doc of documents) {
-    const d = el("details");
+    const d = viewBlock(el("details"), `document:${doc.source_uri}`, doc);
     d.dataset.key = doc.source_uri;
     d.append(
       el("summary", doc.name),
@@ -985,7 +1069,7 @@ function documentList(parent, documents) {
 function requestDialogue(parent, request) {
   const turns = request.dialogue || [];
   if (!turns.length && !productDiscussionStages.has(request.stage)) return null;
-  const section = el("section", undefined, "detail-section product-dialogue");
+  const section = viewGroup(el("section", undefined, "detail-section product-dialogue"), "discussion");
   const heading = el("div", undefined, "row");
   heading.append(el("h2", "需求讨论"));
   if (turns.length) heading.append(el("span", `${turns.length} 轮消息`, "badge"));
@@ -2239,6 +2323,8 @@ function taskRow(work, agentId) {
   }
   overview.append(scope);
   n.append(overview);
+  viewBlock(n, `work:${work.kind}:${task.id}`, [work.kind, task.id, request?.title || task.title,
+    fullPath, a?.role, snapshot.agents.find(agent => agent.id === agentId)?.roles]);
   return n;
 }
 function renderTeam(content) {
@@ -2258,6 +2344,8 @@ function renderTeam(content) {
     n.append(el("strong", String(count)), document.createTextNode(title));
     summary.append(n);
   }
+  viewBlock(summary, "team-summary", [snapshot.agents.length,
+    snapshot.tasks.filter(task => !task.terminal).length, snapshot.requests.filter(request => request.blocker).length]);
   content.append(summary);
   if (!snapshot.agents.length)
     content.append(
@@ -2293,9 +2381,10 @@ function renderTeam(content) {
     el("div", "长期团队成员", "section-title"),
     el("span", `工作负载 · ${projectName()}`, "badge"),
   );
+  viewBlock(heading, "team-heading", projectName());
   content.append(heading);
-  const workspace = el("div", undefined, "agent-workspace");
-  const roster = el("aside", undefined, "agent-roster");
+  const workspace = viewGroup(el("div", undefined, "agent-workspace"), "agent-workspace");
+  const roster = viewGroup(el("aside", undefined, "agent-roster"), "agent-roster");
   roster.setAttribute("aria-label", "团队成员列表");
   for (const agent of orderedAgents) {
     const queueState = queueStates.get(agent.id);
@@ -2322,15 +2411,17 @@ function renderTeam(content) {
     );
     identity.append(el("span", agent.name.slice(0, 1), "avatar"), name);
     control.append(identity, el("span", memberStatus[0], memberStatus[1]));
+    viewBlock(control, `agent:${agent.id}`, [agent, queueState, selectedAgentId]);
     roster.append(control);
   }
   const agent = orderedAgents.find((item) => item.id === selectedAgentId);
-  const board = el("section", undefined, "agent-board");
+  const board = viewGroup(el("section", undefined, "agent-board"), `agent-board:${agent.id}`);
   const boardHeading = el("div", undefined, "row agent-board-heading");
   boardHeading.append(
     el("div", `${agent.name} · 任务队列`, "section-title"),
     el("span", `并发上限 ${agent.max_parallel_assignments}（配置值）`, "badge"),
   );
+  viewBlock(boardHeading, "agent-board-heading", [agent.name, agent.max_parallel_assignments]);
   board.append(boardHeading);
   const queueState = queueStates.get(agent.id);
   let assigned = queueState.assigned_delivery_ids
@@ -2384,14 +2475,15 @@ function renderTeam(content) {
       "completed",
     ],
   ];
-  const columns = el("div", undefined, "agent-queue-board");
+  const columns = viewGroup(el("div", undefined, "agent-queue-board"), "agent-queues");
   for (const [title, tasks, state] of queues) {
-    const column = el("section", undefined, `agent-queue ${state}`);
+    const column = viewGroup(el("section", undefined, `agent-queue ${state}`), `queue:${state}`);
     const columnHeading = el("div", undefined, "agent-queue-heading");
     columnHeading.append(
       el("strong", title),
       el("span", String(tasks.length), "badge"),
     );
+    viewBlock(columnHeading, "queue-heading", [title, tasks.length]);
     column.append(columnHeading);
     if (!tasks.length) column.append(el("p", `暂无${title}任务。`, "muted"));
     for (const task of tasks) column.append(taskRow(task, agent.id));
@@ -2450,6 +2542,8 @@ function requestCard(request) {
       "muted request-summary",
     ),
   );
+  viewBlock(card, `request:${request.id}`, [request.id, request.title, presentation.status,
+    isSelected, request.scopes.length, write.length, done]);
   return card;
 }
 function requestOperation(panel, request, discussionSection) {
@@ -3004,7 +3098,7 @@ function renderRequests(content) {
     navigation.append(control);
   }
   content.append(navigation);
-  const group = el("section", undefined, "task-group request-list");
+  const group = viewGroup(el("section", undefined, "task-group request-list"), "request-list");
   const currentTitle = groups.find(([key]) => key === requestFilter)?.[1];
   const requests = snapshot.requests.filter(
     (request) => requestGroup(request) === requestFilter,
@@ -3319,7 +3413,7 @@ function renderKnowledge(content) {
     specs: "新需求必须遵守的工程规则；验证方式可在明确后补充。",
     learning: "从开发发现、独立验证和人工澄清中积累，经确认后供后续需求复用。",
   };
-  const workspace = el("div", undefined, "knowledge-workspace");
+  const workspace = viewGroup(el("div", undefined, "knowledge-workspace"), `knowledge:${knowledgeContext()}`);
   const ownership = el("aside", undefined, "knowledge-navigation");
   const ownershipHeader = el("div", undefined, "knowledge-navigation-header");
   ownershipHeader.append(
@@ -3365,6 +3459,8 @@ function renderKnowledge(content) {
       "knowledge-navigation-hint",
     ),
   );
+  viewBlock(ownership, "knowledge-navigation", [knowledgeScope, knowledgeMode,
+    currentProjectId(), snapshot.projects]);
   if (knowledgeScope === "project") {
     const projectSelector = el(
       "section",
@@ -3408,7 +3504,7 @@ function renderKnowledge(content) {
     }
   }
 
-  const body = el("section", undefined, "knowledge-main");
+  const body = viewGroup(el("section", undefined, "knowledge-main"), `knowledge-main:${knowledgeMode}`);
   const navigation = el("section", undefined, "knowledge-content-navigation");
   const navigationHeader = el("div", undefined, "knowledge-navigation-header");
   navigationHeader.append(
@@ -3444,6 +3540,7 @@ function renderKnowledge(content) {
     modeSwitch,
     el("p", descriptions[knowledgeMode], "knowledge-navigation-hint"),
   );
+  viewBlock(navigation, "knowledge-content-navigation", [knowledgeScope, knowledgeMode]);
   body.append(navigation);
   workspace.append(ownership, body);
   content.append(workspace);
@@ -3712,7 +3809,8 @@ function renderBackgroundKnowledge(content) {
   }
   for (const item of documents) {
     const manifest = item.manifest;
-    const card = el("article", undefined, "knowledge-card");
+    const card = viewBlock(el("article", undefined, "knowledge-card"), `knowledge:${manifest.document_id}`,
+      [item, context, documents.map(value => [value.manifest.document_id, value.selected])]);
     const head = el("div", undefined, "row");
     head.append(
       el("strong", manifest.source_name),
@@ -4074,7 +4172,7 @@ function renderSpecs(content) {
         candidate.active && candidate.document.spec_key === spec.spec_key,
     );
     const isCurrent = item.active;
-    const card = el("article", undefined, "knowledge-card spec-card");
+    const card = viewGroup(el("article", undefined, "knowledge-card spec-card"), `spec:${spec.spec_id}`);
     const head = el("div", undefined, "row");
     head.append(
       el("strong", spec.title),
@@ -4095,7 +4193,8 @@ function renderSpecs(content) {
       el("p", `路径 · ${spec.path_globs.join(", ")}`, "paths"),
       el("p", `验证 · ${spec.verification || "暂未设置"}`, "muted"),
     );
-    const detail = el("details");
+    const detail = viewBlock(el("details"), `spec-body:${spec.spec_id}`, spec);
+    detail.dataset.key = `spec:${scope}:${projectId}:${spec.spec_id}`;
     detail.append(el("summary", "查看规范正文"), el("pre", spec.body_markdown));
     card.append(detail);
     const actions = el("div", undefined, "knowledge-card-actions");
@@ -4232,7 +4331,8 @@ function renderLearning(content) {
   }
   for (const view of learningProposals) {
     const proposal = view.proposal;
-    const card = el("article", undefined, "knowledge-card learning-card");
+    const card = viewBlock(el("article", undefined, "knowledge-card learning-card"),
+      `learning:${proposal.proposal_id}`, [view, currentProjectId()]);
     const head = el("div", undefined, "row");
     head.append(
       el("strong", proposal.title),
@@ -4810,7 +4910,7 @@ function renderSettings(content) {
   if (configurationApplyResult?.kind === "error")
     content.append(el("div", configurationApplyResult.message, "operation-error"));
 
-  const workspace = el("div", undefined, "settings-workspace");
+  const workspace = viewGroup(el("div", undefined, "settings-workspace"), "settings-workspace");
   const navigation = el("aside", undefined, "settings-navigation");
   navigation.append(
     el("strong", "平台设置", "settings-navigation-title"),
@@ -4834,7 +4934,7 @@ function renderSettings(content) {
     navigation.append(control);
   }
 
-  const panel = el("section", undefined, "admin-panel settings-panel");
+  const panel = viewGroup(el("section", undefined, "admin-panel settings-panel"), "settings-panel");
   const pageHeader = el("div", undefined, "settings-page-header");
   const top = el("div", undefined, "settings-page-title-row");
   const [title, description] =
@@ -4946,6 +5046,8 @@ function renderSettings(content) {
     }
   });
   panel.append(form);
+  viewBlock(form, "settings-form", [settingsDraftBaseline, settingsSection,
+    settingsSnapshot.settings_contract_version]);
   workspace.append(navigation, panel);
   content.append(workspace);
 }
@@ -5685,7 +5787,7 @@ function statusRow(title, value, ready) {
           : "badge",
     ),
   );
-  return row;
+  return viewBlock(row, `status:${title}`, [title, value, ready]);
 }
 function modelRouteReadiness(route) {
   if (!route.enabled) return ["未启用", null];
@@ -5799,7 +5901,9 @@ function renderStatus(content) {
       "muted",
     ),
   );
+  viewBlock(summary, "status-summary", [ready, value.restart_required]);
   const overview = el("section", undefined, "admin-panel");
+  viewGroup(overview, "status-configuration");
   overview.append(
     el("h2", "配置与启动"),
     statusRow(
@@ -5815,6 +5919,7 @@ function renderStatus(content) {
     el("p", "运行变量 · " + value.runtime_environment_path, "paths"),
   );
   const runtime = el("section", undefined, "admin-panel");
+  viewGroup(runtime, "status-runtime");
   runtime.append(
     el("h2", "运行依赖"),
     statusRow(
@@ -5861,7 +5966,9 @@ function renderStatus(content) {
     ),
   );
   const agentRoutes = renderAgentModelRouteStatus(value);
+  viewBlock(agentRoutes, "status-agent-routes", [value.agent_model_routes, value.model_routes]);
   const routes = el("section", undefined, "admin-panel");
+  viewGroup(routes, "status-model-routes");
   routes.append(
     el("h2", "可用模型目录"),
     el(
@@ -5879,6 +5986,7 @@ function renderStatus(content) {
       ),
     );
   const grid = el("div", undefined, "status-grid");
+  viewGroup(grid, "status-grid");
   grid.append(overview, runtime);
   content.append(summary, grid, agentRoutes, routes);
 }
@@ -6208,10 +6316,13 @@ function roleExecutionActivity(task) {
 }
 
 function modelCallDiagnostics(operation) {
-  const details = el("details", undefined, "model-call-diagnostics");
+  const details = viewBlock(el("details", undefined, "model-call-diagnostics"),
+    `model-calls:${operation.operation_id}`, operation);
+  details.dataset.key = `model-calls:${operation.operation_id}`;
+  details.dataset.operationId = operation.operation_id;
   details.append(el("summary", "查看已完成的阶段调用记录"));
   const content = el("div", undefined, "model-call-list");
-  details.append(content);
+  details.append(content, el("div", undefined, "model-call-activity"));
   let loading = false, loaded = false;
   details.addEventListener("toggle", async () => {
     if (!details.open || loading || loaded) return;
@@ -6236,13 +6347,7 @@ function modelCallDiagnostics(operation) {
       }));
       if (!calls.length) content.append(el("p", "暂无已完成的阶段调用明细；空列表不表示没有执行模型调用。", "muted"));
       content.append(el("p", "此处只展示已保存的阶段调用诊断。Coder、QA、Reviewer 的完成记录请查看仓库任务。", "muted"));
-      const request = snapshot?.requests.find(item => item.id === operation.intent?.delivery_id &&
-        item.project_id === operation.intent?.project_id);
-      if (request) {
-        for (const task of currentRequestTasks(request).filter(task => task.project_id === request.project_id)) {
-          content.append(roleExecutionActivity(task), button("查看角色执行记录", () => showDetail("task", task.id), "secondary"));
-        }
-      }
+      refreshDiagnosticActivity(details, operation);
       loaded = !["QUEUED", "RUNNING"].includes(operation.status);
     } catch (error) {
       content.replaceChildren(el("p", error.message || "无法读取调用记录，请收起后重试。", "error"));
@@ -6252,16 +6357,28 @@ function modelCallDiagnostics(operation) {
   });
   return details;
 }
+function refreshDiagnosticActivity(details, operation) {
+  const activity = details.querySelector(".model-call-activity");
+  if (!activity) return;
+  const tasks = () => {
+    const request = snapshot?.requests.find(item => item.id === operation.intent?.delivery_id &&
+      item.project_id === operation.intent?.project_id);
+    return request ? currentRequestTasks(request).filter(task => task.project_id === request.project_id) : [];
+  };
+  renderView(activity, `activity:${operation.operation_id}`, tasks, target => {
+    for (const task of tasks())
+      target.append(roleExecutionActivity(task), button("查看角色执行记录", () => showDetail("task", task.id), "secondary"));
+  }, true);
+}
 
-function renderDetail() {
+function renderDetail({ incremental = false } = {}) {
   const opener = document.activeElement;
-  buildDetail();
+  renderView(document.getElementById("detail"), `detail:${page}:${currentProjectId()}:${selected?.kind}:${selected?.id}`,
+    pollingDetailFacts, buildDetail, incremental);
   rememberModalOpener(document.getElementById("detail"), opener);
   syncModalState();
 }
-function buildDetail() {
-  const panel = document.getElementById("detail");
-  panel.replaceChildren();
+function buildDetail(panel = document.getElementById("detail")) {
   panel.className = "";
   panel.hidden =
     !snapshot ||
@@ -6421,13 +6538,13 @@ function buildDetail() {
     const blocking = requestBlockerSection(item);
     if (blocking) panel.append(blocking);
     panel.append(knowledgeGapSection(item));
-    const flow = el("section", undefined, "detail-section");
+    const flow = viewGroup(el("section", undefined, "detail-section"), "delivery-flow");
     flow.append(el("h2", "交付流程"));
     const manager = managerFlowStatus(item);
     if (manager) flow.append(manager);
     flow.append(deliveryFlow(item));
     panel.append(flow);
-    const scopes = el("section", undefined, "detail-section");
+    const scopes = viewGroup(el("section", undefined, "detail-section"), "repository-scopes");
     scopes.append(el("h2", "涉及代码目录"));
     const currentTasks = currentRequestTasks(item);
     for (const scope of item.scopes) {
@@ -6453,7 +6570,7 @@ function buildDetail() {
     if (lastOperation?.operation_id && discussionSection)
       discussionSection.append(modelCallDiagnostics(lastOperation));
     deliveryResult(panel, item);
-    const artifacts = el("section", undefined, "detail-section stage-artifacts");
+    const artifacts = viewGroup(el("section", undefined, "detail-section stage-artifacts"), "stage-artifacts");
     artifacts.append(el("h2", "阶段产物"));
     documentList(artifacts, item.documents);
     panel.append(artifacts);
@@ -6465,6 +6582,7 @@ function buildDetail() {
     undefined,
     "modal-dialog modal-dialog-wide task-detail-dialog",
   );
+  viewGroup(dialog, `task-dialog:${item.id}`);
   dialog.setAttribute("role", "dialog");
   dialog.setAttribute("aria-modal", "true");
   dialog.setAttribute("aria-label", "任务详情");
@@ -6546,8 +6664,17 @@ function buildDetail() {
   documentList(dialog, item.documents);
   panel.append(dialog);
 }
-function render({ preserveComposer = false } = {}) {
+function render({ preserveComposer = false, incremental = false } = {}) {
   const focused = document.activeElement;
+  const selection = incremental ? globalThis.getSelection?.() : null;
+  const selectedText = selection && !selection.isCollapsed
+    ? [selection.anchorNode, selection.anchorOffset, selection.focusNode, selection.focusOffset]
+    : null;
+  const scrollPositions = incremental
+    ? [document.scrollingElement, ...document.querySelectorAll("#content *, #detail *, #projects *")]
+      .filter(node => node && (node.scrollTop || node.scrollLeft))
+      .map(node => [node, node.scrollTop, node.scrollLeft])
+    : [];
   const expanded = new Set(
     [...document.querySelectorAll("details[open]")]
       .filter((n) => n.dataset.key)
@@ -6556,34 +6683,41 @@ function render({ preserveComposer = false } = {}) {
   document.getElementById("team").textContent = snapshot?.team_name || "Team 记录暂不可用";
   document.getElementById("main").dataset.page = page;
   const projects = document.getElementById("projects");
-  projects.replaceChildren();
-  if (snapshot) renderProjectPicker(projects);
+  renderView(projects, `projects:${page}:${currentProjectId()}`,
+    () => [snapshot?.projects, currentProjectId()],
+    target => { if (snapshot) renderProjectPicker(target); }, incremental);
   projects.hidden = !["team", "requests"].includes(page);
   document.getElementById("context-controls").hidden = projects.hidden;
   const projectCreator = document.getElementById("project-creator");
-  projectCreator.replaceChildren();
+  renderView(projectCreator, `project-creator:${page}`, () => [page, canControlCurrentTeam()],
+    target => { if (page === "requests" && canControlCurrentTeam()) renderProjectCreator(target); }, incremental);
   projectCreator.hidden = page !== "requests" || !canControlCurrentTeam();
-  if (!projectCreator.hidden) renderProjectCreator(projectCreator);
   document.getElementById("heading").textContent = pageCopy[page][0];
   document.getElementById("explanation").textContent = pageCopy[page][1];
   updatePageContext();
   const content = document.getElementById("content");
   const preserveSettings = page === "settings" && uiCommands.has(content.querySelector?.(".settings-form"));
   if (!preserveSettings) {
-  content.replaceChildren();
-  content.className = "";
-  if (!snapshot && !["settings", "status"].includes(page))
-    content.append(el("div", "团队记录暂时无法读取；设置与平台状态仍可查看。", "operation-error"));
-  else if (page === "team") renderTeam(content);
-  else if (page === "requests") renderRequests(content);
-  else if (page === "knowledge") renderKnowledge(content);
-  else if (page === "settings") renderSettings(content);
-  else renderStatus(content);
+    const scope = ["settings", "status"].includes(page) ? snapshot?.team_id : currentProjectId();
+    renderView(content, `content:${page}:${scope}`, pollingContentFacts, target => {
+      target.className = "";
+      if (!snapshot && !["settings", "status"].includes(page))
+        target.append(el("div", "团队记录暂时无法读取；设置与平台状态仍可查看。", "operation-error"));
+      else if (page === "team") renderTeam(target);
+      else if (page === "requests") renderRequests(target);
+      else if (page === "knowledge") renderKnowledge(target);
+      else if (page === "settings") renderSettings(target);
+      else renderStatus(target);
+    }, incremental);
   }
-  if (!preserveComposer) renderComposer();
+  if (!preserveComposer && (!incremental || settingsSaveResult)) renderComposer();
   renderOperationStatus();
   renderNotification();
-  renderDetail();
+  renderDetail({incremental});
+  for (const details of document.querySelectorAll(".model-call-diagnostics")) {
+    const operation = operations.find(item => item.operation_id === details.dataset.operationId);
+    if (operation) refreshDiagnosticActivity(details, operation);
+  }
   syncDeliveryControls();
   for (const node of document.querySelectorAll("details"))
     if (node.dataset.key && expanded.has(node.dataset.key)) node.open = true;
@@ -6591,7 +6725,15 @@ function render({ preserveComposer = false } = {}) {
   // Restore only that surviving control, never over a new modal or changed checkpoint.
   if (focused?.isConnected && document.activeElement === document.body &&
       document.getElementById("notification").hidden && !hasOpenComposer())
-    focused.focus();
+    focused.focus({preventScroll: true});
+  if (selectedText && selectedText[0]?.isConnected && selectedText[2]?.isConnected &&
+      document.getElementById("notification").hidden && !hasOpenComposer())
+    selection.setBaseAndExtent(...selectedText);
+  for (const [node, top, left] of scrollPositions) {
+    if (!node.isConnected) continue;
+    node.scrollTop = top;
+    node.scrollLeft = left;
+  }
 }
 function updateNavigation() {
   for (const key of ["team", "requests", "knowledge", "settings", "status"]) {
@@ -6742,7 +6884,7 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
   const priorRuntimeStatus = JSON.stringify(runtimeStatusSnapshot);
   const priorOperations = JSON.stringify(operations);
   const priorOperationsAvailable = operationsAvailable;
-  const priorKnowledgeIndex = JSON.stringify(knowledgeIndexStatus);
+  const priorKnowledge = JSON.stringify(pollingKnowledgeFacts());
   const refreshSystemViews = async () => {
     if (configurationApplyInFlight) await refreshConfigurationApply();
     if (["settings", "status"].includes(page) && administrationAvailable)
@@ -6830,10 +6972,10 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
       (!modalActive || (["settings", "status"].includes(page) && systemViewsChanged())) &&
       (changed ||
         priorOperations !== JSON.stringify(operations) ||
-        priorKnowledgeIndex !== JSON.stringify(knowledgeIndexStatus) ||
+        priorKnowledge !== JSON.stringify(pollingKnowledgeFacts()) ||
         systemViewsChanged())
     )
-      render({ preserveComposer: Boolean(modalActive && !settingsSaveResult) });
+      render({ preserveComposer: Boolean(modalActive && !settingsSaveResult), incremental: true });
     if (superseded()) {
       showRefreshProgress();
       return;
@@ -6849,7 +6991,7 @@ async function refreshSnapshot(target, includeRuntimeStatus) {
       : "只读团队记录已连接；交付控制台暂不可用。";
   } catch {
     if (superseded()) return;
-    if (["settings", "status"].includes(page) && systemViewsChanged()) render();
+    if (["settings", "status"].includes(page) && systemViewsChanged()) render({incremental: true});
     status.className = "error";
     const destination = snapshot?.projects.find(item => item.id === requestedProjectId)?.name
       || requestedProjectId;

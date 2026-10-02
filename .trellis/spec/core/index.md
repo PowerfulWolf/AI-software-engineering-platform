@@ -38,6 +38,9 @@
 
 ## Files
 
+- [`incremental-polling.md`](incremental-polling.md): scoped read-side updates, retained DOM and drafts,
+  source-signature invalidation for exact approvals and Project boundaries.
+
 - [`candidate-review-source.md`](candidate-review-source.md): complete candidate differences,
   typed source lineage, command-free verifiers and final serialized input budget.
 

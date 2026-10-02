@@ -9,7 +9,9 @@ class Element {
   constructor(tag) {
     Object.assign(this, { tag, children: [], events: {}, attributes: {}, dataset: {},
       textContent: "", className: "", value: "", hidden: false, checked: false });
-    this.classList = { toggle() {} };
+    this.classList = { toggle() {}, add: (...names) => {
+      this.className = [...new Set([...this.className.split(/\s+/).filter(Boolean), ...names])].join(" ");
+    } };
   }
   append(...nodes) { for (const node of nodes) if (typeof node !== "string") node.parentElement = this; this.children.push(...nodes); }
   replaceChildren(...nodes) { this.children = nodes; }
@@ -22,6 +24,7 @@ class Element {
   querySelectorAll(selector) {
     return descendants(this).slice(1).filter((node) => matchesSelector(node, selector));
   }
+  querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
   focus() {}
   scrollIntoView() {}
   set innerHTML(value) { throw new Error("Unsafe HTML: " + value); }
@@ -31,6 +34,14 @@ const text = (node) => typeof node === "string"
 const descendants = (node) => [node, ...node.children
   .filter((child) => typeof child !== "string").flatMap(descendants)];
 const matchesSelector = (node, selector) => selector.split(",").some((part) => {
+  const ancestor = part.trim().match(/^#([\w-]+) \*$/);
+  if (ancestor) {
+    for (let parent = node.parentElement; parent; parent = parent.parentElement)
+      if (parent.attributes.id === ancestor[1]) return true;
+    return false;
+  }
+  const className = part.trim().match(/^\.([\w-]+)$/);
+  if (className) return node.className.split(/\s+/).includes(className[1]);
   const match = part.trim().match(/^(\w+)?(?:\[([\w-]+)(?:=["']?([^"'\]]+)["']?)?\])?$/);
   if (!match) throw new Error("Unsupported QA selector: " + part);
   const [, tag, attribute, expected] = match;
@@ -56,7 +67,11 @@ async function browser(options = {}) {
   const nodes = new Map(), timers = new Map(), storage = new Map(), requests = [];
   let timerId = 0, poll;
   const get = (id) => {
-    if (!nodes.has(id)) nodes.set(id, new Element("div"));
+    if (!nodes.has(id)) {
+      const node = new Element("div");
+      node.setAttribute("id", id);
+      nodes.set(id, node);
+    }
     return nodes.get(id);
   };
   const state = {
