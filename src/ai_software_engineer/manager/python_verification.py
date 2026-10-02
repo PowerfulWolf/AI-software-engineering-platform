@@ -121,6 +121,21 @@ class PythonMysqlSandboxCapability(DomainModel):
         return self
 
 
+def python_mysql_sandbox_environment() -> dict[str, str]:
+    """Keep outer temporary-directory aliases distinct from private writable scratch.
+
+    Codex resolves ``:tmpdir=none`` before launching Python. Passing TMPDIR=scratch
+    here would deny that same explicitly writable scratch. The hash-bound runner
+    sets TMPDIR inside the sandbox, after the OS policy has been resolved.
+    """
+    return {
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+
+
 def python_mysql_sandbox_command(
     capability: PythonMysqlSandboxCapability,
     source: Path,

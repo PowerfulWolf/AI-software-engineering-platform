@@ -20,6 +20,7 @@ from ai_software_engineer.manager.python_mysql_resources import (
 from ai_software_engineer.manager.python_verification import (
     PytestSelection,
     python_mysql_sandbox_command,
+    python_mysql_sandbox_environment,
 )
 from ai_software_engineer.manager.python_verification_discovery import (
     discover_python_mysql_capability,
@@ -45,7 +46,8 @@ def test_isolated_mysql_principal_proxy_and_candidate_os_denials():
         (source / "tests/test_boundary.py").write_text(
             "import json, os, socket\nfrom pathlib import Path\nimport pymysql, pytest\n"
             "from urllib.parse import urlsplit\n"
-            "def test_boundary():\n"
+            "def test_boundary(tmp_path):\n"
+            "    (tmp_path / 'isolated').write_text('private pytest scratch')\n"
             "    dsn = urlsplit(os.environ['ASE_TEST_MYSQL_DSN'])\n"
             "    connection = pymysql.connect(host=dsn.hostname,user=dsn.username,\n"
             "        password=dsn.password,database=dsn.path[1:])\n"
@@ -156,7 +158,7 @@ def test_isolated_mysql_principal_proxy_and_candidate_os_denials():
             result = subprocess.run(
                 python_mysql_sandbox_command(cap, source, scratch, private),
                 cwd=source,
-                env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C", "TMPDIR": str(scratch)},
+                env=python_mysql_sandbox_environment(),
                 capture_output=True,
                 text=True,
                 timeout=90,

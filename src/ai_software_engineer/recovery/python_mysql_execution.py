@@ -26,6 +26,7 @@ from ai_software_engineer.manager.python_mysql_resources import (
 from ai_software_engineer.manager.python_verification import (
     PythonMysqlSandboxCapability,
     python_mysql_sandbox_command,
+    python_mysql_sandbox_environment,
 )
 from ai_software_engineer.manager.python_verification_discovery import (
     discover_python_mysql_capability,
@@ -246,13 +247,7 @@ class BoundPythonMysqlVerificationEvidence:
                     )
                 private.chmod(0o500)
                 argv = python_mysql_sandbox_command(cap, source, scratch, private)
-                environment = {
-                    "PATH": "/usr/bin:/bin",
-                    "LANG": "C",
-                    "LC_ALL": "C",
-                    "TMPDIR": str(scratch),
-                    "PYTHONDONTWRITEBYTECODE": "1",
-                }
+                environment = python_mysql_sandbox_environment()
                 executor = SubprocessCommandExecutor(
                     source,
                     AgentPermissions(

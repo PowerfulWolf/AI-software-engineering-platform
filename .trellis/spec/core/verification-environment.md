@@ -125,6 +125,39 @@ exact retained intent, and keep the original candidate available for recovery.
 
 ## Bounded pytest diagnostics (2026-10-02)
 
+### Sandbox temporary-directory alias collision (2026-10-02)
+
+`python_mysql_sandbox_environment() -> dict[str, str]` supplies the fixed outer PATH/LANG/LC_ALL/
+PYTHONDONTWRITEBYTECODE only. Both production executor and real OS boundary fixtures use it.
+Do not send TMPDIR=scratch to Codex: its `:tmpdir=none` alias resolves before Python starts and
+would overlap the explicit scratch=write rule; deny wins and pytest basetemp.mkdir fails in setup
+with PermissionError(1). The trusted hash-bound runner sets TMPDIR=scratch only after entering the
+sandbox, preserving private test/cache/temp files. No host environment inheritance or directory,
+network, socket, source-write or Task-deny expansion is authorized.
+
+Good: real sandbox tmp_path and tempfile use scratch while forbidden source/public-temp/other
+socket/TCP actions are denied. Base: existing MySQL principal/proxy isolation stays unchanged.
+Bad: remove the :tmpdir deny or grant the whole host temp directory. The regression deliberately
+injects the conflicting outer TMPDIR and requires setup PermissionError, plus the production
+environment must pass both user-temp and public-temp roots. The real SQL boundary also uses
+tmp_path so an environment mismatch cannot hide behind a test that never writes scratch.
+
+| Outer environment / observed operation | Contract |
+| --- | --- |
+| Fixed production environment; tmp_path/tempfile scratch writes | Allowed inside private scratch |
+| Explicit outer TMPDIR=scratch counterexample | Setup PermissionError(1), no passed body |
+| Source/secret/public-temp write or foreign socket/TCP | OS denies; no policy expansion |
+
+Required incremental tests: `test_python_verification_runner.py::test_real_sandbox_denies_source_secret_other_sockets_and_tcp`
+and `test_python_mysql_boundary.py::test_isolated_mysql_principal_proxy_and_candidate_os_denials`.
+The existing admitted receipt/resource tests retain independent-role and uncertain-replay assertions.
+
+Existing data: preserve the 9179235e plan/approval/43 setup ERROR receipt, native Task and candidate.
+Load correction only when no role is active; propose and approve a fresh exact incremental plan.
+The old approval cannot replay. ERROR is not PASS; actual code findings remain Coder feedback.
+No Schema/SQL migration or historical digest changes. Rollback the correction and idle restart,
+keeping all approvals, resources and command history.
+
 `_SelectionGuard.summary(exit_code)` emits `ASE_PYTEST_SUMMARY=` followed by compact JSON,
 at most3000 bytes. Fixed columns are selector index, collected, call passed/failed, skipped
 at any phase, setup error and teardown error. Every approved selector retains its counters;

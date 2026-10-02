@@ -19,6 +19,7 @@ from ai_software_engineer.manager.python_verification import (
     PytestSelection,
     PythonMysqlSandboxCapability,
     python_mysql_sandbox_command,
+    python_mysql_sandbox_environment,
 )
 
 RUNNER = (
@@ -273,7 +274,12 @@ def short_sandbox_root(request: pytest.FixtureRequest) -> Iterator[Path]:
     sys.platform != "darwin" or os.environ.get("ASE_RUN_SANDBOX_TESTS") != "1",
     reason="requires explicitly enabled macOS sandbox boundary fixture",
 )
-def test_real_sandbox_denies_source_secret_other_sockets_and_tcp(short_sandbox_root: Path) -> None:
+@pytest.mark.parametrize(
+    "conflicting_tmpdir", [False, True], ids=["trusted-env", "tmpdir-conflict"]
+)
+def test_real_sandbox_denies_source_secret_other_sockets_and_tcp(
+    short_sandbox_root: Path, conflicting_tmpdir: bool
+) -> None:
     tmp_path = short_sandbox_root
     executable = os.environ.get("ASE_TEST_CODEX_EXECUTABLE")
     if not executable:
@@ -304,9 +310,14 @@ def test_real_sandbox_denies_source_secret_other_sockets_and_tcp(short_sandbox_r
         test_file = source / "tests/test_boundary.py"
         test_file.write_text(
             "import socket\nfrom pathlib import Path\nimport pytest\n"
-            "def test_boundaries():\n"
+            "def test_boundaries(tmp_path):\n"
             f"    source, scratch, private = map(Path, {paths!r})\n"
             "    (scratch / 'allowed').write_text('allowed')\n"
+            "    import os, tempfile\n"
+            "    assert os.environ['TMPDIR'] == str(scratch)\n"
+            "    assert Path(tempfile.gettempdir()).resolve() == scratch\n"
+            "    assert tmp_path.is_relative_to(scratch / 'pytest')\n"
+            "    (tmp_path / 'fixture').write_text('private pytest scratch')\n"
             "    for index, action in enumerate((\n"
             "        lambda: (source / 'unapproved-write').write_text('denied'),\n"
             f"        lambda: Path({str(secret)!r}).read_text(),\n"
@@ -361,15 +372,22 @@ def test_real_sandbox_denies_source_secret_other_sockets_and_tcp(short_sandbox_r
             mysql_image_id="sha256:" + "0" * 64,
             selections=(PytestSelection(node_id=node, criterion_ids=("ac_boundary",)),),
         )
+        environment = python_mysql_sandbox_environment()
+        if conflicting_tmpdir:
+            environment["TMPDIR"] = str(scratch)
         result = subprocess.run(
             python_mysql_sandbox_command(cap, source, scratch, private),
             cwd=source,
-            env={"PATH": os.defpath, "LANG": "C"},
+            env=environment,
             capture_output=True,
             text=True,
             timeout=45,
             check=False,
         )
+        if conflicting_tmpdir:
+            assert result.returncode != 0
+            assert _summary(result)["errors"] == [[0, "setup", "PermissionError", 1]]
+            return
         assert result.returncode == 0, result.stdout + result.stderr
         assert "1 passed" in result.stdout
         assert not (source / "unapproved-write").exists()
