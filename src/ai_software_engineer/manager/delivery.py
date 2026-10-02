@@ -43,6 +43,7 @@ from ai_software_engineer.manager.preparation import (
     PrepareProjectResult,
     PrepareProjectStatus,
 )
+from ai_software_engineer.manager.python_verification import PytestSelection
 from ai_software_engineer.multi_directory.attachments import RequirementAttachmentId
 from ai_software_engineer.orchestration.retry import (
     BlockedResult,
@@ -170,6 +171,9 @@ class ResumeProjectDelivery(DomainModel):
     coder_scope_request: RecoveryScopeRequest | None = None
     prerequisite_repair: PrerequisiteRepairRequest | None = None
     native_ui_scenario: NativeUiScenario | None = None
+    python_mysql_tests: tuple[PytestSelection, ...] | None = Field(
+        default=None, min_length=1, max_length=32
+    )
     approved_repair_sha256: CheckpointDigest | None = None
     approval_reference: NonEmptyStr | None = None
     submitted_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -191,6 +195,7 @@ class ResumeProjectDelivery(DomainModel):
             len(approvals)
             + int(self.prerequisite_repair is not None)
             + int(self.native_ui_scenario is not None)
+            + int(self.python_mysql_tests is not None)
         ) > 1:
             raise ValueError("repair proposal and approval must be separate operations")
         if bool(approvals) != (self.approval_reference is not None):
@@ -202,6 +207,7 @@ class ResumeProjectDelivery(DomainModel):
                 self.approved_repair_sha256,
                 self.prerequisite_repair,
                 self.native_ui_scenario,
+                self.python_mysql_tests,
             )
         ):
             raise ValueError("requested Coder scope may only accompany scope approval")

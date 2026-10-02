@@ -95,3 +95,21 @@ def test_selection_identity_and_bounds_are_part_of_capability(tmp_path: Path) ->
         )
     with pytest.raises(ValidationError):
         PythonMysqlSandboxCapability.model_validate({**cap.to_wire(), "max_cases": 257})
+
+
+def test_deny_config_budget_is_rejected_before_execution(tmp_path: Path) -> None:
+    cap = capability(tmp_path)
+    accepted = PythonMysqlSandboxCapability.model_validate(
+        {
+            **cap.to_wire(),
+            "denied_relative_paths": [f"private/{index:04d}.txt" for index in range(500)],
+        }
+    )
+    assert len(accepted.denied_relative_paths) == 500
+    with pytest.raises(ValidationError, match="private config budget"):
+        PythonMysqlSandboxCapability.model_validate(
+            {
+                **cap.to_wire(),
+                "denied_relative_paths": [f"private/{index:04d}.txt" for index in range(2000)],
+            }
+        )

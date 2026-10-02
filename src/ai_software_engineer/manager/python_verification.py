@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from itertools import combinations
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal, Self
 
 from pydantic import Field, StringConstraints, field_validator, model_validator
@@ -17,6 +17,7 @@ from ai_software_engineer.domain.artifact import Sha256
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.task import AcceptanceCriterionId
 from ai_software_engineer.manager.python_verification_runner import PYTEST_NODE_PATTERN
+from ai_software_engineer.redaction import redact_text
 
 PytestNodeId = Annotated[
     str,
@@ -58,6 +59,7 @@ class PythonMysqlSandboxCapability(DomainModel):
     docker_daemon_id: str = Field(min_length=1, max_length=256)
     mysql_image_id: Annotated[str, StringConstraints(pattern=r"^sha256:[a-f0-9]{64}$")]
     selections: tuple[PytestSelection, ...] = Field(min_length=1, max_length=32)
+    denied_relative_paths: tuple[str, ...] = Field(default=(), max_length=4096)
     max_cases: Literal[256] = 256
     resource_timeout_seconds: Literal[1200] = 1200
     transport: Literal["pymysql_unix_proxy_docker_exec_loopback"] = (
@@ -90,6 +92,32 @@ class PythonMysqlSandboxCapability(DomainModel):
         ensure_unique((selection.node_id for selection in self.selections), "pytest node IDs")
         if not Path(self.python_executable).is_relative_to(self.python_runtime_root):
             raise ValueError("Python executable must belong to the approved runtime")
+        ensure_unique(self.denied_relative_paths, "denied candidate paths")
+        for value in self.denied_relative_paths:
+            if redact_text(value).occurrences:
+                raise ValueError("secret-like candidate filename cannot enter approved inventory")
+            path = PurePosixPath(value)
+            if (
+                path.is_absolute()
+                or str(path) != value
+                or ".." in path.parts
+                or any(c in value for c in "*?[]\0\n\r")
+                or not value
+            ):
+                raise ValueError("denied candidate paths must be exact relative paths")
+        # Leave bounded room for the generated <104-byte Unix endpoint and credentials.
+        if (
+            len(
+                json.dumps(
+                    {
+                        "denied_paths": self.denied_relative_paths,
+                        "node_ids": [s.node_id for s in self.selections],
+                    }
+                ).encode()
+            )
+            > 30_000
+        ):
+            raise ValueError("approved deny/selector inventory exceeds private config budget")
         return self
 
 
@@ -122,6 +150,8 @@ def python_mysql_sandbox_command(
         ":tmpdir": "none",
         **{path: "read" for path in readonly},
         str(scratch): "write",
+        str(source / ".git"): "none",
+        **{str(source / path): "none" for path in capability.denied_relative_paths},
     }
     profile = (
         'permissions.ase_python_mysql_verification={extends=":read-only",filesystem={'

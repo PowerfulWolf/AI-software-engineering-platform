@@ -37,6 +37,7 @@ from ai_software_engineer.manager.native_ui import (
     run_native_ui,
 )
 from ai_software_engineer.manager.verification_environment import (
+    SwiftSandboxCapability,
     discover_swift_sandbox_capability,
     swift_sandbox_argv,
 )
@@ -112,7 +113,7 @@ class BoundSwiftVerificationEvidence:
         if plan != self._plan or request.role not in (AgentRole.QA, AgentRole.REVIEWER):
             raise RecoveryRejected("controlled verification belongs to another plan or role")
         capability = plan.executor_capability
-        if capability is None:
+        if not isinstance(capability, SwiftSandboxCapability):
             raise RecoveryRejected("controlled verification requires an approved capability")
         self._facts.validate(plan)
         invocation = self._store.get_verification_invocation(plan.plan_sha256, request.role)

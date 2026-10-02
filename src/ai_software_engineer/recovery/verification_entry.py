@@ -58,6 +58,13 @@ from ai_software_engineer.manager.production_delivery import (
     DeliveryRouteAdapterFactory,
     DispatchDeliveryAgentAdapter,
 )
+from ai_software_engineer.manager.python_verification import (
+    PytestSelection,
+    PythonMysqlSandboxCapability,
+)
+from ai_software_engineer.manager.python_verification_discovery import (
+    discover_python_mysql_capability,
+)
 from ai_software_engineer.manager.team_roster import production_team_roster
 from ai_software_engineer.manager.verification_coordination import (
     ManagerVerificationAdvice,
@@ -549,7 +556,17 @@ class NativeVerificationFacts(VerificationFacts):
                 source.stages.preparation.repository_profile_sha256,
             )
             commands = _verification_task_commands(source, profile)
-            if plan.executor_capability != _executor_capability(commands, self.config):
+            expected_capability = (
+                _python_capability(
+                    source,
+                    plan.executor_capability.selections,
+                    self.config,
+                    prior=plan.executor_capability,
+                )
+                if isinstance(plan.executor_capability, PythonMysqlSandboxCapability)
+                else _executor_capability(commands, self.config)
+            )
+            if plan.executor_capability != expected_capability:
                 raise RecoveryRejected("verification executor capability changed; repropose")
             if plan.native_ui is not None and plan.native_ui != native_ui_capability(
                 plan.native_ui.scenario
@@ -571,6 +588,37 @@ def _executor_capability(
     if not set(SWIFT_VERIFICATION_COMMANDS) <= set(commands):
         return None
     return discover_swift_sandbox_capability(config.codex_executable)
+
+
+def _python_capability(
+    source: NativeCandidateSource,
+    selections: tuple[PytestSelection, ...],
+    config: ProductionConfig,
+    *,
+    prior: PythonMysqlSandboxCapability | None = None,
+) -> PythonMysqlSandboxCapability:
+    expected = {criterion.id for criterion in source.runtime.task.acceptance_criteria}
+    if {criterion for selection in selections for criterion in selection.criterion_ids} != expected:
+        raise RecoveryRejected(
+            "exact Python/MySQL selections must cover all and only Task criteria"
+        )
+    constraints = source.runtime.task.constraints
+    return discover_python_mysql_capability(
+        Path(source.scope.repository_root),
+        source.inputs.candidate_revision,
+        selections,
+        codex_executable=config.codex_executable,
+        denied_patterns=constraints.denied_paths if constraints else (),
+        **(
+            {
+                "docker_executable": prior.docker_executable,
+                "docker_socket": prior.docker_socket,
+                "mysql_image": prior.mysql_image_id,
+            }
+            if prior
+            else {}
+        ),
+    )
 
 
 class CandidateVerificationEntry:
@@ -601,6 +649,7 @@ class CandidateVerificationEntry:
         repository_root: str,
         delivery_id: str,
         native_ui_scenario: NativeUiScenario | None = None,
+        python_mysql_tests: tuple[PytestSelection, ...] | None = None,
         manager_advice: ManagerVerificationAdvice | None = None,
     ) -> tuple[CandidateVerificationPlan, Path]:
         """Resolve the registered project and propose verification without invoking a model."""
@@ -615,6 +664,7 @@ class CandidateVerificationEntry:
                 delivery_id=delivery_id,
             ),
             native_ui_scenario=native_ui_scenario,
+            python_mysql_tests=python_mysql_tests,
             manager_advice=manager_advice,
         )
 
@@ -748,7 +798,11 @@ class CandidateVerificationEntry:
                 environment_prerequisite = NativeUiSessionPrerequisite.model_validate(
                     {
                         "observed_status": session_status,
-                        "current_session": probe_native_ui_session(plan.executor_capability),
+                        "current_session": probe_native_ui_session(
+                            plan.executor_capability
+                            if isinstance(plan.executor_capability, SwiftSandboxCapability)
+                            else None
+                        ),
                     }
                 )
             failure_details = {
@@ -869,7 +923,7 @@ class CandidateVerificationEntry:
                 if previous_ui
                 else None,
             }
-            if plan.executor_capability
+            if isinstance(plan.executor_capability, SwiftSandboxCapability)
             else None,
             "ui_scenario_schema": NativeUiScenario.model_json_schema(),
             "source_prerequisite_repair": {
@@ -909,7 +963,9 @@ class CandidateVerificationEntry:
                 environment_prerequisite=environment_prerequisite,
                 executor=_manager_executor(self.config, self.environment, source),
             )
-            if advice.draft.native_ui_scenario is not None and plan.executor_capability is None:
+            if advice.draft.native_ui_scenario is not None and not isinstance(
+                plan.executor_capability, SwiftSandboxCapability
+            ):
                 raise RecoveryRejected("Manager proposed an unavailable native UI capability")
             if advice.draft.prerequisite_repair is not None and (
                 failed_execution is None or failed_execution.phase != "BLOCKED"
@@ -924,9 +980,12 @@ class CandidateVerificationEntry:
         scope: RecoveryScope,
         *,
         native_ui_scenario: NativeUiScenario | None = None,
+        python_mysql_tests: tuple[PytestSelection, ...] | None = None,
         manager_advice: ManagerVerificationAdvice | None = None,
     ) -> tuple[CandidateVerificationPlan, Path]:
         source = NativeCandidateSourceReader(self.config, self.environment).inspect(scope)
+        if native_ui_scenario is not None and python_mysql_tests is not None:
+            raise RecoveryRejected("Python/MySQL and native UI proposals must be separate")
         now = datetime.now(UTC)
         execution_id = (
             f"task_verify_{digest({'task': source.inputs.task_id, 'time': now.isoformat()})[:32]}"
@@ -954,6 +1013,15 @@ class CandidateVerificationEntry:
         )
         if retained is not None:
             previous_attempt, _ = retained
+            previous_python = previous_attempt.executor_capability
+            retained_selections = (
+                previous_python.selections
+                if isinstance(previous_python, PythonMysqlSandboxCapability)
+                else None
+            )
+            if python_mysql_tests is not None and python_mysql_tests != retained_selections:
+                raise RecoveryRejected("Reviewer-only continuation must retain Python/MySQL scope")
+            python_mysql_tests = retained_selections
             if native_ui_scenario is not None and (
                 previous_attempt.native_ui is None
                 or native_ui_scenario != previous_attempt.native_ui.scenario
@@ -998,8 +1066,12 @@ class CandidateVerificationEntry:
             parent_delivery_id=source.parent_delivery_id,
             parent_checkpoint_sha256=source.parent_checkpoint_sha256,
             definitions=tuple(definitions[role] for role in AgentRole),
-            executor_capability=_executor_capability(
-                definitions[AgentRole.QA].permissions.commands, self.config
+            executor_capability=(
+                _python_capability(source, python_mysql_tests, self.config)
+                if python_mysql_tests is not None
+                else _executor_capability(
+                    definitions[AgentRole.QA].permissions.commands, self.config
+                )
             ),
             native_ui=native_ui_capability(native_ui_scenario)
             if native_ui_scenario is not None
@@ -1121,13 +1193,20 @@ class CandidateVerificationEntry:
             FileContextStore(sidecar / "contexts"),
         )
         if plan.executor_capability is not None:
+            from ai_software_engineer.recovery.python_mysql_execution import (
+                BoundPythonMysqlVerificationEvidence,
+            )
             from ai_software_engineer.recovery.verification_execution import (
                 BoundSwiftVerificationEvidence,
             )
 
             assert isinstance(selected_factory, ConfiguredDeliveryRouteAdapterFactory)
             selected_factory = selected_factory.with_verification_evidence(
-                BoundSwiftVerificationEvidence(
+                (
+                    BoundPythonMysqlVerificationEvidence
+                    if isinstance(plan.executor_capability, PythonMysqlSandboxCapability)
+                    else BoundSwiftVerificationEvidence
+                )(
                     store=store,
                     plan=plan,
                     facts=NativeVerificationFacts(self.config, self.environment, store=store),

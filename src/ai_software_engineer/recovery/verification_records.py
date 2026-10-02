@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Set
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import AwareDatetime, Field, StrictInt, field_validator, model_validator
 
@@ -30,12 +30,17 @@ from ai_software_engineer.domain.task import TaskId
 from ai_software_engineer.execution import CommandResult
 from ai_software_engineer.manager.delivery_checkpoint import DeliveryId
 from ai_software_engineer.manager.native_ui import NativeUiCapability, NativeUiResult
+from ai_software_engineer.manager.python_verification import PythonMysqlSandboxCapability
 from ai_software_engineer.manager.verification_coordination import (
     ManagerVerificationAdvice,
     VerificationFailureReference,
 )
 from ai_software_engineer.manager.verification_environment import SwiftSandboxCapability
 from ai_software_engineer.recovery.models import FullCommit, RecoveryScope, _safe_text, digest
+
+VerificationCapability = Annotated[
+    SwiftSandboxCapability | PythonMysqlSandboxCapability, Field(discriminator="kind")
+]
 
 
 class AcceptedQaReport(DomainModel):
@@ -109,7 +114,7 @@ class CandidateVerificationPlan(DomainModel):
     parent_delivery_id: DeliveryId | None = None
     parent_checkpoint_sha256: Sha256 | None = None
     definitions: tuple[AgentDefinition, ...]
-    executor_capability: SwiftSandboxCapability | None = None
+    executor_capability: VerificationCapability | None = None
     native_ui: NativeUiCapability | None = None
     prerequisite_incident_sha256: Sha256 | None = None
     prior_visual_evidence: PriorVisualEvidence | None = None
@@ -157,7 +162,9 @@ class CandidateVerificationPlan(DomainModel):
                 or self.manager_advice.draft.native_ui_scenario != self.native_ui.scenario
             ):
                 raise ValueError("verification plan does not bind the exact Manager UI proposal")
-        if self.native_ui is not None and self.executor_capability is None:
+        if self.native_ui is not None and not isinstance(
+            self.executor_capability, SwiftSandboxCapability
+        ):
             raise ValueError("native UI requires an approved isolated Swift build capability")
         if self.execution_task_id == self.inputs.task_id:
             raise ValueError("verification execution must not reuse the terminal Task identity")
@@ -238,11 +245,13 @@ class VerificationExecutionRecord(DomainModel):
     authorization_sha256: Sha256
     candidate_revision: FullCommit
     role: Literal[AgentRole.QA, AgentRole.REVIEWER]
-    capability: SwiftSandboxCapability
+    capability: VerificationCapability
     native_ui: NativeUiCapability | None = None
     ui_results: tuple[NativeUiResult, ...] | None = None
     source_root: str
     scratch_root: str
+    private_root: str | None = None
+    mysql_resource_id: Sha256 | None = None
     results: tuple[CommandResult, ...] = ()
     failure_code: VerificationExecutionFailure | None = None
     recorded_at: AwareDatetime
@@ -253,9 +262,11 @@ class VerificationExecutionRecord(DomainModel):
         """Interpret old partial UI receipts without rewriting their recorded phase/hash."""
         return self.failure_code or native_ui_failure_code(self.ui_results)
 
-    @field_validator("source_root", "scratch_root")
+    @field_validator("source_root", "scratch_root", "private_root")
     @classmethod
-    def safe_execution_path(cls, value: str) -> str:
+    def safe_execution_path(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         path = Path(value)
         if not path.is_absolute() or ".." in path.parts or any(ord(c) < 32 for c in value):
             raise ValueError("execution paths must be safe absolute paths")
@@ -279,9 +290,25 @@ class VerificationExecutionRecord(DomainModel):
         source, scratch = Path(self.source_root), Path(self.scratch_root)
         if scratch.is_relative_to(source) or source.is_relative_to(scratch):
             raise ValueError("execution scratch must not overlap source")
+        python_mysql = isinstance(self.capability, PythonMysqlSandboxCapability)
+        if python_mysql:
+            if (
+                self.private_root is None
+                or self.mysql_resource_id is None
+                or self.native_ui is not None
+            ):
+                raise ValueError("Python/MySQL execution requires exact resource and private proxy")
+            private = Path(self.private_root)
+            if any(
+                private.is_relative_to(p) or p.is_relative_to(private) for p in (source, scratch)
+            ):
+                raise ValueError("private proxy overlaps execution paths")
+        elif self.private_root is not None or self.mysql_resource_id is not None:
+            raise ValueError("Swift execution cannot contain MySQL resources")
         if (self.phase == "BLOCKED") != (self.failure_code is not None):
             raise ValueError("blocked execution requires exactly one typed failure")
-        if len(self.results) > 2:
+        expected_commands = 1 if python_mysql else 2
+        if len(self.results) > expected_commands:
             raise ValueError("controlled execution has only two commands")
         if self.ui_results is not None:
             if self.native_ui is None or self.phase == "STARTED":
@@ -317,7 +344,7 @@ class VerificationExecutionRecord(DomainModel):
                     ):
                         raise ValueError("UI launch diagnostic differs from the approved child")
         if (self.phase == "STARTED" and self.results) or (
-            self.phase == "COMPLETED" and len(self.results) != 2
+            self.phase == "COMPLETED" and len(self.results) != expected_commands
         ):
             raise ValueError("execution phase and command results differ")
         return self

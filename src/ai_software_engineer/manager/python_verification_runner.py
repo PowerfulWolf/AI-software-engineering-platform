@@ -36,6 +36,7 @@ class _ConnectionConfig:
     password: str
     database: str
     node_ids: tuple[str, ...]
+    denied_paths: tuple[str, ...] = ()
 
     @classmethod
     def read(cls, path: Path, source: Path) -> _ConnectionConfig:
@@ -44,15 +45,33 @@ class _ConnectionConfig:
         if path.stat().st_size > 32000:
             raise ValueError("connection config exceeds limit")
         value = json.loads(path.read_text())
-        if not isinstance(value, dict) or set(value) != {
-            "socket",
-            "user",
-            "password",
-            "database",
-            "node_ids",
-        }:
+        if not isinstance(value, dict) or set(value) not in (
+            {
+                "socket",
+                "user",
+                "password",
+                "database",
+                "node_ids",
+            },
+            {"socket", "user", "password", "database", "node_ids", "denied_paths"},
+        ):
             raise ValueError("invalid connection config")
         nodes = value["node_ids"]
+        denied = value.get("denied_paths", [])
+        if (
+            not isinstance(denied, list)
+            or len(denied) > 4096
+            or any(
+                not isinstance(path, str)
+                or not path
+                or Path(path).is_absolute()
+                or str(Path(path)) != path
+                or ".." in Path(path).parts
+                or any(c in path for c in "*?[]\0\n\r")
+                for path in denied
+            )
+        ):
+            raise ValueError("invalid fixed denied inventory")
         if (
             value["socket"] != str(path.parent / "mysql.sock")
             or value["user"] != "ase_verify"
@@ -75,7 +94,12 @@ class _ConnectionConfig:
             if test_file.resolve(strict=True) != test_file or not test_file.is_file():
                 raise ValueError("selected test must be a regular canonical candidate file")
         return cls(
-            value["socket"], value["user"], value["password"], value["database"], tuple(nodes)
+            value["socket"],
+            value["user"],
+            value["password"],
+            value["database"],
+            tuple(nodes),
+            tuple(denied),
         )
 
 
@@ -178,6 +202,8 @@ def main(arguments: list[str]) -> int:
             f"--rootdir={source}",
             f"--confcutdir={source}",
             f"--basetemp={scratch / 'pytest'}",
+            f"--ignore={source / '.git'}",
+            *(f"--ignore={source / path}" for path in config.denied_paths),
             *config.node_ids,
         ],
         plugins=[guard],

@@ -623,6 +623,26 @@ def test_continue_hides_the_plan_reference_inside_manager_command(
     assert command.approval_reference == "web-console-plan:" + "4" * 64
 
 
+def test_continue_forwards_exact_python_tests_as_a_separate_proposal(tmp_path: Path) -> None:
+    from ai_software_engineer.manager.python_verification import PytestSelection
+
+    adapter, host, entry = _adapter(tmp_path)
+    selections = (
+        PytestSelection(node_id="tests/test_sql.py::test_exact", criterion_ids=("ac_01",)),
+    )
+    adapter.execute(
+        ContinueDeliveryIntent(
+            project_id=PROJECT_ID,
+            delivery_id=DELIVERY_ID,
+            expected_checkpoint_sha256=entry.checkpoint.checkpoint_sha256,
+            python_mysql_tests=selections,
+        )
+    )
+    command = host.resume_commands[0]
+    assert command.python_mysql_tests == selections
+    assert command.approved_plan_sha256 is None and command.approval_reference is None
+
+
 @pytest.mark.parametrize("changed", [False, True])
 def test_interruption_approval_has_its_own_exact_plan_and_summary(
     tmp_path: Path, changed: bool

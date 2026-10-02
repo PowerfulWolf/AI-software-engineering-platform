@@ -12,6 +12,7 @@ import subprocess
 import sys
 import sysconfig
 import tempfile
+from fnmatch import fnmatchcase
 from pathlib import Path
 
 from ai_software_engineer.manager.python_verification import (
@@ -19,6 +20,8 @@ from ai_software_engineer.manager.python_verification import (
     PythonMysqlSandboxCapability,
 )
 from ai_software_engineer.manager.python_verification_runner import __file__ as runner_file
+from ai_software_engineer.manager.verification_process import bounded_verification_command
+from ai_software_engineer.redaction import redact_text
 
 _ENVIRONMENT = {
     "PATH": "/usr/bin:/bin",
@@ -83,14 +86,39 @@ def dependency_fingerprint(root: Path, *, max_files: int = 200_000) -> str:
     return result.hexdigest()
 
 
-def _read_command(argv: tuple[str, ...], *, cwd: Path | None = None) -> str:
-    result = subprocess.run(
-        argv, cwd=cwd, env=_ENVIRONMENT, capture_output=True, text=True, timeout=20, check=False
+def _read_command(
+    argv: tuple[str, ...], *, cwd: Path | None = None, limit: int = 16000, trim: bool = True
+) -> str:
+    try:
+        text = bounded_verification_command(
+            argv, cwd=cwd, environment=_ENVIRONMENT, limit=limit
+        ).decode("utf-8")
+        return text.strip() if trim else text
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        raise ValueError("verification host discovery failed") from error
+
+
+def candidate_denied_paths(
+    repository: Path, revision: str, patterns: tuple[str, ...]
+) -> tuple[str, ...]:
+    inventory = _read_command(
+        ("/usr/bin/git", "-c", "core.fsmonitor=false", "ls-tree", "-rz", "--name-only", revision),
+        cwd=repository,
+        limit=2_000_000,
+        trim=False,
+    ).split("\0")
+    result = tuple(
+        sorted(
+            path
+            for path in inventory
+            if path and any(fnmatchcase(path, pattern) for pattern in patterns)
+        )
     )
-    if result.returncode or len(result.stdout) > 16000:
-        # Do not echo CLI diagnostics: config and environment may contain secrets.
-        raise ValueError("verification host discovery failed")
-    return result.stdout.strip()
+    if len(result) > 4096:
+        raise ValueError("candidate deny inventory exceeds approved bound")
+    if any(redact_text(path).occurrences for path in result):
+        raise ValueError("secret-like candidate filename cannot enter approved inventory")
+    return result
 
 
 def _binary(name: str) -> Path:
@@ -124,11 +152,15 @@ def discover_python_mysql_capability(
     docker_executable: str = "docker",
     docker_socket: str | None = None,
     mysql_image: str = "mysql:8.0",
+    denied_patterns: tuple[str, ...] = (),
 ) -> PythonMysqlSandboxCapability:
     """No candidate evaluation, container creation, network connection, or image pull."""
     if platform.system() != "Darwin":
         raise ValueError("Python/MySQL capability requires the validated macOS sandbox")
     require_selected_candidate_files(repository, revision, selections)
+    denied = candidate_denied_paths(repository, revision, denied_patterns)
+    if any(selection.node_id.split("::", 1)[0] in denied for selection in selections):
+        raise ValueError("pytest selection is denied by Task policy")
     sandbox, docker = _binary(codex_executable), _binary(docker_executable)
     if docker_socket is None:
         endpoint = _read_command(
@@ -165,4 +197,5 @@ def discover_python_mysql_capability(
         docker_daemon_id=daemon,
         mysql_image_id=image,
         selections=selections,
+        denied_relative_paths=denied,
     )

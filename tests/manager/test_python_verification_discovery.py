@@ -9,6 +9,7 @@ import pytest
 
 from ai_software_engineer.manager.python_verification import PytestSelection
 from ai_software_engineer.manager.python_verification_discovery import (
+    candidate_denied_paths,
     dependency_fingerprint,
     require_selected_candidate_files,
 )
@@ -109,3 +110,24 @@ def test_unreadable_directory_cannot_produce_a_partial_fingerprint(tmp_path: Pat
         pytest.raises(ValueError, match="completely fingerprinted"),
     ):
         dependency_fingerprint(tmp_path)
+
+
+def test_nul_deny_inventory_preserves_legal_leading_and_trailing_spaces(tmp_path: Path) -> None:
+    with patch(
+        "ai_software_engineer.manager.python_verification_discovery.bounded_verification_command",
+        return_value=b" denied.txt\0normal.txt\0trailing.txt \0",
+    ):
+        assert candidate_denied_paths(tmp_path, "a" * 40, (" denied.txt", "trailing.txt ")) == (
+            " denied.txt",
+            "trailing.txt ",
+        )
+
+
+def test_secret_like_untouched_denied_filename_is_not_sealed_or_echoed(tmp_path: Path) -> None:
+    with patch(
+        "ai_software_engineer.manager.python_verification_discovery.bounded_verification_command",
+        return_value=b"private/password=fixture-credential.txt\0normal.py\0",
+    ):
+        with pytest.raises(ValueError, match="secret-like") as failure:
+            candidate_denied_paths(tmp_path, "a" * 40, ("private/*",))
+        assert "fixture-credential" not in str(failure.value)

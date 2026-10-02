@@ -1,5 +1,128 @@
 # Manager-owned verification prerequisites and controlled execution
 
+## Exact incremental Python/MySQL candidate verification (2026-10-02)
+
+### 1. Scope / Trigger
+
+An accepted immutable candidate needs real MySQL tests, but ordinary QA/Reviewer command policy
+denies the host Docker socket and network. Do not pass the host business DSN, disable the outer
+sandbox, replay a consumed approval, reset the terminal Task, or rerun Coder to solve this prerequisite.
+This executor is a separately versioned application capability, not an Agent command tool.
+
+### 2. Signatures and wire contracts
+
+- `ContinueDeliveryIntent.python_mysql_tests` and `ResumeProjectDelivery.python_mysql_tests`:
+  optional 1..32 `PytestSelection(node_id, criterion_ids)` values. Only exact `tests/**/test_*.py`
+  function/class-method nodes with bounded parametrization; no directory, suite, glob or flags.
+  Proposal is mutually exclusive with UI/repair/scope proposals and all approval fields. None is
+  omitted from wire values, preserving old operation digests.
+- `CandidateVerificationEntry.propose[_project](..., python_mysql_tests=...)` binds all and only
+  original Task criterion IDs, candidate commit, full toolchain/runtime/dependency/runner hashes,
+  local Docker Unix daemon identity, cached image SHA and exact selections. Native facts and
+  the independent execution provider rediscover the capability before execution.
+- `PythonMysqlSandboxCapability(kind=codex_sandbox_pytest_mysql_v1)` is discriminated from
+  Swift in plan/receipt schemas. UI requires Swift. Exact Task deny globs are expanded from raw
+  NUL-separated fixed Git inventory (no whitespace stripping) to `denied_relative_paths`.
+  At most4096 entries; encoded denied paths plus node IDs must fit30000 bytes before proposal,
+  leaving space within the runner's32000-byte protected configuration limit.
+- `BoundPythonMysqlVerificationEvidence.evidence_for` supplies an immutable command receipt
+  to the independent role. `MysqlResourceRecord(kind=python_mysql_resource)` stores INTENT,
+  CREATED, CLEANED and first CLEANUP_FAILED observations. None is a verdict.
+
+### 3. Execution and recovery contracts
+
+Use resolved Python with `-I -S -B`, registered dependency bytes, the hash-bound standalone runner,
+disabled ambient pytest plugins/addopts, at most256 collected cases and explicit deny-path ignores.
+Ignores keep pytest from statting unreadable entries; OS `none` still denies their contents and
+`.git`. Source/runtime/dependencies/config are read-only; only a separate scratch is writable.
+Network stays disabled. Only the exact private Unix proxy socket is connectable; candidate cannot
+unlink/rebind it, access the Docker daemon or connect to other sockets/TCP. Each role gets distinct
+scratch, proxy, principal and MySQL resource. Only genuine SQL semantics are demonstrated, not
+TCP/DNS/TLS/production-network behavior.
+
+Durably publish admitted STARTED and exact resource INTENT before creation. Ignore ambient Docker
+context/config/environment; bind binary and daemon, use `--pull=never --network none`, no ports or
+host binds,512MiB/1CPU/128PIDs/AutoRemove and no restart. Name, image, owner label, entrypoint,
+command, initialization environment, network/mounts/resources are checked and configuration-hashed.
+Fixed image command is `/usr/bin/timeout --kill-after=5 1195 ...`; an already-started container
+process runs for at most1200 seconds from its start even if TERM is ignored. A control-process
+crash between Docker creation and start can leave an unstarted object/volume until the next
+explicit Python verification reconciles its expired intent. It has no running SQL service,
+candidate credentials, host binds or ports; do not describe this object as automatically deleted
+within1200 seconds of intent publication. Wait for the final server's
+`@@GLOBAL.skip_networking=0`, not the official image's temporary initialization server.
+Rotate localhost root before creating any candidate-reachable proxy; credentials remain in memory,
+stdin and a0600 private config, never argv/records. Verify exact CURRENT_USER/database/grants and
+an actual root authentication denial. Least-privilege principal has only the isolated test database.
+
+Docker discovery/control output is drained with hard limits and process-group kill/reap on timeout.
+Reclaim the group even if its leader has already exited: an inherited pipe can keep a descendant
+alive beyond the direct child's lifetime. Observe a late sentinel in the real fork regression;
+Darwin `killpg(pid,0)` can return EPERM for an already killed orphan group and is not a liveness fact.
+Known passwords are replaced in retained output. A truncated stream is conservatively replaced
+entirely because a cutoff may retain an unrecognizable password prefix. Ordinary command output
+limits and secret redaction remain enforced. A zero exit, installation or fixture success is never
+QA PASS. Skipped/empty/over-bound collection fails; model independently evaluates all criteria.
+
+Cleanup revalidates the binary/daemon and performs successful exact-name enumeration before
+declaring absence. Lost create responses are recovered by full name, owner/config and observed
+container ID; only that container may be removed. A daemon error is not absence. Expired resources
+are reconciled under the execution lock on the next explicit Python verification execution; reads
+never clean resources. Validate immutable intent against its plan, approval, invocation and STARTED,
+retain first failed cleanup, and append successful cleanup. No bulk deletion or test replay.
+Later CREATED facts may fill unknown fields of a historical CLEANUP_FAILED; they must not make that
+old record unreadable. Compare every previously known ID/hash, reject actual conflicts, preserve
+the original bytes and revalidate the failed→created→cleaned chain after reopening the store.
+The fixed timeout independently converges already-started resources when the control process dies
+before a next execution; exact expired-intent reconciliation also removes owned unstarted objects.
+STARTED without a final receipt always requires a new exact plan. Native Task/events, candidate,
+old invocations and approvals are preserved. Reviewer-only recovery retains the sealed QA and its
+Python selections, skips Coder/QA and requires a new exact approval. Python failures bypass the
+Swift-only UI coordination path and name Python/Docker/MySQL prerequisites in the user remedy.
+
+### 4. Validation and error matrix
+
+| Fact | Outcome |
+| --- | --- |
+| Unapproved/wrong role/changed candidate, selectors or fingerprints | Reject before execution |
+| Suite/glob/flags, unknown/missing criteria, over-budget deny config | Reject before proposal/approval |
+| Exact selections with dedicated MySQL | Seal actual bounded command results; no inferred verdict |
+| Root/cross-database/global grants, source write, deny-file read, socket replacement, TCP | Real negative fixture must reject |
+| Lost create response or CREATED publish failure | Inspect exact owned identity and clean; retain audit |
+| Expired already-absent resource | Successful exact query permits CLEANED; daemon failure does not |
+| Unowned/config-changed resource | CLEANUP_FAILED; never remove |
+| Restart after uncertain execution | Exact expired-resource cleanup only; do not replay tests |
+| QA retained, Reviewer interrupted | Fresh approved Reviewer only; preserve original QA bytes |
+
+### 5. Good / Base / Bad
+
+Good: a delegated human submits exact incremental selections, reviews and approves the sealed plan,
+then native independent QA/Reviewer consume separately executed receipts. Base: old Swift plans,
+None fields and their hashes remain unchanged. Bad: use a business DSN, accept host-test output as
+a native verdict, broaden Agent shell, skip QA, or label a Python failure as macOS UI availability.
+
+### 6. Required tests
+
+`test_python_verification*.py`: exact selections, tree fingerprints, raw deny inventory/config
+bounds and real OS denials. `test_python_mysql_resources.py`: ownership/config rejection, intent
+before create, lost response, failed publication and absence versus daemon failure.
+`test_python_mysql_execution.py`: real store/admission receipts, no uncertain replay, credential
+cutoffs, process bounds and restart cleanup. `test_python_mysql_boundary.py`: explicitly enabled
+single disposable MySQL + real macOS sandbox fixture, root/cross-db/source/deny/socket/TCP rejection
+and TERM-ignoring timeout escalation. `test_python_mysql_contract.py`: typed/JSON Schema exclusivity
+and legacy wire. `test_verification_reviewer_resume.py` Python case: actual production entry selection,
+fresh exact approval, preserved Task/QA history and only Reviewer on continuation.
+
+### 7. Existing data and rollback
+
+No production SQL migration or Task rewrite. For an existing blocked candidate, reload the trusted
+host only after verifying no active role; submit selectors through normal Continue, obtain a new
+candidate-bound plan and approve its exact digest. Continue native QA/Reviewer and attach only its
+sealed completion. Do not reuse the failed old approval or reset Manager budgets. Rollback disables
+new Python proposals/reverts the platform commit; preserve every resource record and receipt,
+allow started-container deadlines to converge, reconcile any owned unstarted object through its
+exact retained intent, and keep the original candidate available for recovery.
+
 ## Historical verification read graph
 
 Scope: public FileRecoveryStore verification getters validate a DAG of plans, advice, incidents,

@@ -22,6 +22,8 @@ from ai_software_engineer.manager.delivery_checkpoint import (
     ProjectDeliveryCheckpointError,
 )
 from ai_software_engineer.manager.model_execution import ManagerExecutionRejected
+from ai_software_engineer.manager.python_verification import PythonMysqlSandboxCapability
+from ai_software_engineer.manager.verification_environment import SwiftSandboxCapability
 from ai_software_engineer.multi_directory.errors import (
     RequirementGitBaselineRequired,
     RequirementSourceRevisionDrift,
@@ -214,6 +216,7 @@ class ManagerConsoleAdapter:
                         coder_scope_request=intent.coder_scope_request,
                         prerequisite_repair=intent.prerequisite_repair,
                         native_ui_scenario=intent.native_ui_scenario,
+                        python_mysql_tests=intent.python_mysql_tests,
                         approved_repair_sha256=intent.approved_repair_sha256,
                         approval_reference=(
                             (
@@ -436,7 +439,22 @@ def _summarize(
                             "独立临时目录可写、网络禁用。不授权普通 Agent 命令扩权; "
                             "UI 验收仍须单独完成。",
                         )
-                        if verification_plan.executor_capability
+                        if isinstance(verification_plan.executor_capability, SwiftSandboxCapability)
+                        else ()
+                    ),
+                    *(
+                        (
+                            "受控 Python/MySQL 验证: 每个独立角色使用短寿命、无网络的专用 MySQL; "
+                            "源码只读, Task 禁止路径不可读, 仅私有 scratch 可写。仅证明 SQL 行为, "
+                            "不证明 TCP/DNS/TLS; 不扩大普通 Agent 命令权限。",
+                            *(
+                                f"精确增量测试 {s.node_id}: {', '.join(s.criterion_ids)}"
+                                for s in verification_plan.executor_capability.selections
+                            ),
+                        )
+                        if isinstance(
+                            verification_plan.executor_capability, PythonMysqlSandboxCapability
+                        )
                         else ()
                     ),
                     *((safe_diagnostic(result.next_action),) if inconclusive else ()),

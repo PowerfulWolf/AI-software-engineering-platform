@@ -167,6 +167,7 @@ def _admitted(
     *,
     environment_error: bool = False,
     native_ui: NativeUiCapability | None = None,
+    executor_capability=None,
 ) -> tuple[
     CandidateVerificationPlan,
     FileRecoveryStore,
@@ -192,7 +193,7 @@ def _admitted(
         current_policy_sha256="4" * 64,
         definitions=tuple(_definitions().values()),
         created_at=_clock(),
-        executor_capability=capability(),
+        executor_capability=executor_capability or capability(),
         native_ui=native_ui,
     )
     store = FileRecoveryStore.initialize(tmp_path / "verification", scope=plan.scope)

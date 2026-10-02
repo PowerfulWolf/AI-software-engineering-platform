@@ -788,13 +788,28 @@
         "executor_capability": {
           "anyOf": [
             {
-              "$ref": "#/$defs/SwiftSandboxCapability"
+              "discriminator": {
+                "mapping": {
+                  "codex_sandbox_pytest_mysql_v1": "#/$defs/PythonMysqlSandboxCapability",
+                  "codex_sandbox_swiftpm_v1": "#/$defs/SwiftSandboxCapability"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/SwiftSandboxCapability"
+                },
+                {
+                  "$ref": "#/$defs/PythonMysqlSandboxCapability"
+                }
+              ]
             },
             {
               "type": "null"
             }
           ],
-          "default": null
+          "default": null,
+          "title": "Executor Capability"
         },
         "native_ui": {
           "anyOf": [
@@ -876,7 +891,38 @@
         "plan_sha256"
       ],
       "title": "CandidateVerificationPlan",
-      "type": "object"
+      "type": "object",
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "native_ui"
+            ],
+            "properties": {
+              "native_ui": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "executor_capability"
+            ],
+            "properties": {
+              "executor_capability": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "codex_sandbox_swiftpm_v1"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "CodexConnectionMode": {
       "enum": [
@@ -1554,6 +1600,199 @@
       ],
       "title": "ManagerVerificationDraft",
       "type": "object"
+    },
+    "MysqlResourceIntent": {
+      "additionalProperties": false,
+      "properties": {
+        "plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "invocation_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Invocation Sha256",
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "qa",
+            "reviewer"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "capability": {
+          "$ref": "#/$defs/PythonMysqlSandboxCapability"
+        },
+        "recorded_at": {
+          "format": "date-time",
+          "title": "Recorded At",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "resource_id": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Resource Id",
+          "type": "string"
+        },
+        "container_name": {
+          "title": "Container Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan_sha256",
+        "invocation_sha256",
+        "role",
+        "capability",
+        "recorded_at",
+        "expires_at",
+        "resource_id",
+        "container_name"
+      ],
+      "title": "MysqlResourceIntent",
+      "type": "object"
+    },
+    "MysqlResourceRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "python_mysql_resource",
+          "default": "python_mysql_resource",
+          "title": "Kind",
+          "type": "string"
+        },
+        "phase": {
+          "enum": [
+            "INTENT",
+            "CREATED",
+            "CLEANED",
+            "CLEANUP_FAILED"
+          ],
+          "title": "Phase",
+          "type": "string"
+        },
+        "intent": {
+          "$ref": "#/$defs/MysqlResourceIntent"
+        },
+        "container_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Container Id"
+        },
+        "configuration_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Configuration Sha256"
+        },
+        "recorded_at": {
+          "format": "date-time",
+          "title": "Recorded At",
+          "type": "string"
+        },
+        "record_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Record Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "phase",
+        "intent",
+        "recorded_at",
+        "record_sha256"
+      ],
+      "title": "MysqlResourceRecord",
+      "type": "object",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "phase": {
+                "const": "CREATED"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "container_id",
+              "configuration_sha256"
+            ],
+            "properties": {
+              "container_id": {
+                "type": "string"
+              },
+              "configuration_sha256": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "phase": {
+                "const": "INTENT"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "container_id": {
+                "type": "null"
+              },
+              "configuration_sha256": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "configuration_sha256"
+            ],
+            "properties": {
+              "configuration_sha256": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "container_id"
+            ],
+            "properties": {
+              "container_id": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
     },
     "NativeUiCapability": {
       "additionalProperties": false,
@@ -2384,6 +2623,179 @@
       ],
       "type": "string"
     },
+    "PytestSelection": {
+      "additionalProperties": false,
+      "description": "A specific test function/class method, possibly parametrized; never a suite root.",
+      "properties": {
+        "node_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "pattern": "^tests/(?:[A-Za-z0-9_][A-Za-z0-9_.-]*/)*test_[A-Za-z0-9_.-]+\\.py::[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)?(?:\\[[A-Za-z0-9_.-]+\\])?$",
+          "title": "Node Id",
+          "type": "string"
+        },
+        "criterion_ids": {
+          "items": {
+            "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$",
+            "type": "string"
+          },
+          "maxItems": 50,
+          "minItems": 1,
+          "title": "Criterion Ids",
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "node_id",
+        "criterion_ids"
+      ],
+      "title": "PytestSelection",
+      "type": "object"
+    },
+    "PythonMysqlSandboxCapability": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "codex_sandbox_pytest_mysql_v1",
+          "default": "codex_sandbox_pytest_mysql_v1",
+          "title": "Kind",
+          "type": "string"
+        },
+        "sandbox_executable": {
+          "minLength": 1,
+          "title": "Sandbox Executable",
+          "type": "string"
+        },
+        "sandbox_executable_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sandbox Executable Sha256",
+          "type": "string"
+        },
+        "python_executable": {
+          "minLength": 1,
+          "title": "Python Executable",
+          "type": "string"
+        },
+        "python_executable_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Python Executable Sha256",
+          "type": "string"
+        },
+        "python_runtime_root": {
+          "minLength": 1,
+          "title": "Python Runtime Root",
+          "type": "string"
+        },
+        "python_runtime_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Python Runtime Sha256",
+          "type": "string"
+        },
+        "dependency_root": {
+          "minLength": 1,
+          "title": "Dependency Root",
+          "type": "string"
+        },
+        "dependency_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Dependency Sha256",
+          "type": "string"
+        },
+        "runner_path": {
+          "minLength": 1,
+          "title": "Runner Path",
+          "type": "string"
+        },
+        "runner_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Runner Sha256",
+          "type": "string"
+        },
+        "docker_executable": {
+          "minLength": 1,
+          "title": "Docker Executable",
+          "type": "string"
+        },
+        "docker_executable_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Docker Executable Sha256",
+          "type": "string"
+        },
+        "docker_socket": {
+          "minLength": 1,
+          "title": "Docker Socket",
+          "type": "string"
+        },
+        "docker_daemon_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Docker Daemon Id",
+          "type": "string"
+        },
+        "mysql_image_id": {
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "title": "Mysql Image Id",
+          "type": "string"
+        },
+        "selections": {
+          "items": {
+            "$ref": "#/$defs/PytestSelection"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Selections",
+          "type": "array"
+        },
+        "denied_relative_paths": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Denied Relative Paths",
+          "type": "array"
+        },
+        "max_cases": {
+          "const": 256,
+          "default": 256,
+          "title": "Max Cases",
+          "type": "integer"
+        },
+        "resource_timeout_seconds": {
+          "const": 1200,
+          "default": 1200,
+          "title": "Resource Timeout Seconds",
+          "type": "integer"
+        },
+        "transport": {
+          "const": "pymysql_unix_proxy_docker_exec_loopback",
+          "default": "pymysql_unix_proxy_docker_exec_loopback",
+          "title": "Transport",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sandbox_executable",
+        "sandbox_executable_sha256",
+        "python_executable",
+        "python_executable_sha256",
+        "python_runtime_root",
+        "python_runtime_sha256",
+        "dependency_root",
+        "dependency_sha256",
+        "runner_path",
+        "runner_sha256",
+        "docker_executable",
+        "docker_executable_sha256",
+        "docker_socket",
+        "docker_daemon_id",
+        "mysql_image_id",
+        "selections"
+      ],
+      "title": "PythonMysqlSandboxCapability",
+      "type": "object"
+    },
     "QaCriterionResult": {
       "additionalProperties": false,
       "properties": {
@@ -3158,7 +3570,22 @@
           "type": "string"
         },
         "capability": {
-          "$ref": "#/$defs/SwiftSandboxCapability"
+          "discriminator": {
+            "mapping": {
+              "codex_sandbox_pytest_mysql_v1": "#/$defs/PythonMysqlSandboxCapability",
+              "codex_sandbox_swiftpm_v1": "#/$defs/SwiftSandboxCapability"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/SwiftSandboxCapability"
+            },
+            {
+              "$ref": "#/$defs/PythonMysqlSandboxCapability"
+            }
+          ],
+          "title": "Capability"
         },
         "native_ui": {
           "anyOf": [
@@ -3193,6 +3620,31 @@
         "scratch_root": {
           "title": "Scratch Root",
           "type": "string"
+        },
+        "private_root": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Private Root"
+        },
+        "mysql_resource_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mysql Resource Id"
         },
         "results": {
           "default": [],
@@ -3245,7 +3697,55 @@
         "record_sha256"
       ],
       "title": "VerificationExecutionRecord",
-      "type": "object"
+      "type": "object",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "capability": {
+                "properties": {
+                  "kind": {
+                    "const": "codex_sandbox_pytest_mysql_v1"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "private_root",
+              "mysql_resource_id"
+            ],
+            "properties": {
+              "private_root": {
+                "type": "string"
+              },
+              "mysql_resource_id": {
+                "type": "string"
+              },
+              "native_ui": {
+                "type": "null"
+              },
+              "ui_results": {
+                "type": "null"
+              },
+              "results": {
+                "maxItems": 1
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "private_root": {
+                "type": "null"
+              },
+              "mysql_resource_id": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
     },
     "VerificationFailureReference": {
       "additionalProperties": false,
@@ -3333,6 +3833,7 @@
       "candidate_verification_plan": "#/$defs/CandidateVerificationPlan",
       "manager_verification_advice": "#/$defs/ManagerVerificationAdvice",
       "prerequisite_repair_plan": "#/$defs/PrerequisiteRepairPlan",
+      "python_mysql_resource": "#/$defs/MysqlResourceRecord",
       "recovery_authorization": "#/$defs/RecoveryAuthorization",
       "verification_environment_incident": "#/$defs/VerificationEnvironmentIncident",
       "verification_execution": "#/$defs/VerificationExecutionRecord"
@@ -3366,6 +3867,9 @@
     },
     {
       "$ref": "#/$defs/CandidateExecutorPrerequisite"
+    },
+    {
+      "$ref": "#/$defs/MysqlResourceRecord"
     }
   ],
   "$schema": "https://json-schema.org/draft/2020-12/schema",

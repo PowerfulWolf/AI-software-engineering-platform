@@ -27,6 +27,10 @@ from ai_software_engineer.domain.enums import (
 )
 from ai_software_engineer.domain.prerequisite_repair import PrerequisiteRepairPlan
 from ai_software_engineer.domain.project_delivery import StageSha256
+from ai_software_engineer.manager.python_verification import (
+    PythonMysqlSandboxCapability,
+    python_mysql_sandbox_command,
+)
 from ai_software_engineer.manager.verification_coordination import (
     ManagerVerificationAdvice,
     VerificationFailureReference,
@@ -48,6 +52,7 @@ from ai_software_engineer.recovery.models import (
     canonical_bytes,
     digest,
 )
+from ai_software_engineer.recovery.python_mysql_records import MysqlResourceRecord
 from ai_software_engineer.recovery.records import (
     RecoveryInvocationRecord,
     RecoverySeedRecord,
@@ -84,11 +89,24 @@ _Record = TypeVar(
     PreExecutionRestartPlan,
     RecoveryInterruptionPlan,
     RecoveryInterruptionInvocation,
+    MysqlResourceRecord,
 )
 
 
 class RecoveryRecordMissing(RecoveryRejected):
     """An exact plan or authorization has never been published."""
+
+
+def _mysql_observation_matches(record: MysqlResourceRecord, created: MysqlResourceRecord) -> bool:
+    expected = (created.container_id, created.configuration_sha256)
+    observed = (record.container_id, record.configuration_sha256)
+    if record.phase == "CLEANUP_FAILED":
+        # Later recovery can establish previously unknown fields; history stays immutable.
+        return all(
+            value is None or value == target
+            for value, target in zip(observed, expected, strict=True)
+        )
+    return observed == expected
 
 
 @dataclass
@@ -818,9 +836,21 @@ class FileRecoveryStore:
                     raise RecoveryRejected("native UI receipt exceeds approved sequence")
             for index, result in enumerate(record.results):
                 action: Literal["build", "test"] = "build" if index == 0 else "test"
-                expected_argv = swift_sandbox_command(
-                    record.capability, Path(record.source_root), Path(record.scratch_root), action
-                )
+                if isinstance(record.capability, PythonMysqlSandboxCapability):
+                    assert record.private_root is not None
+                    expected_argv = python_mysql_sandbox_command(
+                        record.capability,
+                        Path(record.source_root),
+                        Path(record.scratch_root),
+                        Path(record.private_root),
+                    )
+                else:
+                    expected_argv = swift_sandbox_command(
+                        record.capability,
+                        Path(record.source_root),
+                        Path(record.scratch_root),
+                        action,
+                    )
                 if result.argv != expected_argv or result.cwd != record.source_root:
                     raise RecoveryRejected("verification receipt contains unapproved commands")
             started = self.get_verification_execution(
@@ -840,6 +870,80 @@ class FileRecoveryStore:
                 != started
             ):
                 raise RecoveryRejected("completed execution differs from its durable start")
+
+    def put_mysql_resource(self, record: MysqlResourceRecord) -> MysqlResourceRecord:
+        """Resources are scoped to an already admitted, durably STARTED verifier."""
+        self._validate_mysql_admission(record)
+        intent = record.intent
+        if record.phase != "INTENT":
+            original = self.get_mysql_resource(intent.resource_id, "INTENT")
+            if original.intent != intent:
+                raise RecoveryRejected("MySQL resource differs from its durable intent")
+            if record.phase in ("CLEANED", "CLEANUP_FAILED"):
+                try:
+                    created = self.get_mysql_resource(intent.resource_id, "CREATED")
+                except RecoveryRecordMissing:
+                    pass
+                else:
+                    if not _mysql_observation_matches(record, created):
+                        raise RecoveryRejected("MySQL cleanup differs from the created resource")
+        return self._put(
+            "python-mysql-" + record.phase.lower(), intent.resource_id, record, MysqlResourceRecord
+        )
+
+    def _validate_mysql_admission(self, record: MysqlResourceRecord) -> None:
+        record.validate_integrity()
+        intent = record.intent
+        plan = self.get_verification_plan(intent.plan_sha256)
+        role = AgentRole(intent.role)
+        invocation = self.get_verification_invocation(intent.plan_sha256, role)
+        started = self.get_verification_execution(intent.plan_sha256, role, completed=False)
+        if (
+            not isinstance(plan.executor_capability, PythonMysqlSandboxCapability)
+            or intent.capability != plan.executor_capability
+            or intent.invocation_sha256 != invocation.invocation_sha256
+            or started.mysql_resource_id != intent.resource_id
+            or record.recorded_at < invocation.admitted_at
+        ):
+            raise RecoveryRejected("MySQL resource is outside admitted execution")
+
+    def get_mysql_resource(
+        self, identity: str, phase: Literal["INTENT", "CREATED", "CLEANED", "CLEANUP_FAILED"]
+    ) -> MysqlResourceRecord:
+        record = self._get("python-mysql-" + phase.lower(), identity, MysqlResourceRecord)
+        if record.intent.resource_id != identity or record.phase != phase:
+            raise RecoveryRejected("MySQL resource storage identity differs")
+        self._validate_mysql_admission(record)
+        if (
+            phase != "INTENT"
+            and self.get_mysql_resource(identity, "INTENT").intent != record.intent
+        ):
+            raise RecoveryRejected("MySQL resource durable intent differs")
+        if phase in ("CLEANED", "CLEANUP_FAILED"):
+            try:
+                created = self.get_mysql_resource(identity, "CREATED")
+            except RecoveryRecordMissing:
+                pass
+            else:
+                if not _mysql_observation_matches(record, created):
+                    raise RecoveryRejected("MySQL cleanup observation differs from creation")
+        return record
+
+    def list_mysql_resource_intents(self) -> tuple[MysqlResourceRecord, ...]:
+        with self._directory() as directory:
+            names = sorted(
+                name
+                for name in os.listdir(directory)
+                if name.startswith("python-mysql-intent-") and name.endswith(".json")
+            )
+        if len(names) > 256:
+            raise RecoveryRejected("MySQL resource reconciliation exceeds bounded inventory")
+        return tuple(
+            self.get_mysql_resource(
+                name.removeprefix("python-mysql-intent-").removesuffix(".json"), "INTENT"
+            )
+            for name in names
+        )
 
     def put_verification_authorization(
         self, record: RecoveryAuthorization
@@ -1158,6 +1262,10 @@ class FileRecoveryStore:
             "verification-execution-qa-completed",
             "verification-execution-reviewer-started",
             "verification-execution-reviewer-completed",
+            "python-mysql-intent",
+            "python-mysql-created",
+            "python-mysql-cleaned",
+            "python-mysql-cleanup_failed",
         ):
             raise RecoveryRejected("invalid recovery record category")
         if category == "scope":

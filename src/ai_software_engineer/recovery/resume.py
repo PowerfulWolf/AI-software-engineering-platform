@@ -26,6 +26,7 @@ from ai_software_engineer.manager.delivery_checkpoint import (
 from ai_software_engineer.manager.production_backend import (
     ProductionProjectDeliveryBackend,
 )
+from ai_software_engineer.manager.python_verification import PythonMysqlSandboxCapability
 from ai_software_engineer.manager.verification_coordination import ManagerVerificationAdvice
 from ai_software_engineer.multi_directory.models import JointDeliveryResult, JointStage
 from ai_software_engineer.recovery.context import approved_parent_context
@@ -224,6 +225,20 @@ class DeliveryResumeController:
             repository_root=current.repository_root,
             delivery_id=current.delivery_id,
         )
+        if command.python_mysql_tests is not None:
+            if (
+                latest is not None
+                and isinstance(latest[1].executor_capability, PythonMysqlSandboxCapability)
+                and latest[1].executor_capability.selections == command.python_mysql_tests
+                and not self._has_admitted_invocation(latest[0], latest[1])
+            ):
+                return self._approval_required(current, latest[1], latest[2])
+            python_plan, python_path = self._verification.propose_project(
+                repository_root=current.repository_root,
+                delivery_id=current.delivery_id,
+                python_mysql_tests=command.python_mysql_tests,
+            )
+            return self._approval_required(current, python_plan, python_path)
         if command.native_ui_scenario is not None:
             from ai_software_engineer.manager.native_ui import native_ui_capability
 
@@ -254,6 +269,7 @@ class DeliveryResumeController:
         coordinated = (
             None
             if self._has_admitted_invocation(store, plan)
+            or isinstance(plan.executor_capability, PythonMysqlSandboxCapability)
             else self._coordinate_prerequisites(current, plan)
         )
         if coordinated is not None:
@@ -280,13 +296,20 @@ class DeliveryResumeController:
         except RecoveryRecordMissing:
             completion = None
         if completion is None and self._has_admitted_invocation(store, plan):
-            coordinated = self._coordinate_prerequisites(current, plan)
+            coordinated = (
+                None
+                if isinstance(plan.executor_capability, PythonMysqlSandboxCapability)
+                else self._coordinate_prerequisites(current, plan)
+            )
             if coordinated is not None:
                 return coordinated
             successor, successor_path = self._verification.propose_project(
                 repository_root=current.repository_root,
                 delivery_id=current.delivery_id,
                 native_ui_scenario=plan.native_ui.scenario if plan.native_ui else None,
+                python_mysql_tests=plan.executor_capability.selections
+                if isinstance(plan.executor_capability, PythonMysqlSandboxCapability)
+                else None,
                 manager_advice=plan.manager_advice,
             )
             return self._approval_required(current, successor, successor_path)
@@ -304,6 +327,8 @@ class DeliveryResumeController:
     def _coordinate_prerequisites(
         self, current: ProjectDeliveryCheckpoint, plan: CandidateVerificationPlan
     ) -> DeliveryResumeResult | None:
+        if isinstance(plan.executor_capability, PythonMysqlSandboxCapability):
+            return None
         advice = self._verification.coordinate(plan)
         if advice is None:
             return None
@@ -369,6 +394,9 @@ class DeliveryResumeController:
                 repository_root=plan.scope.repository_root,
                 delivery_id=plan.scope.delivery_id,
                 native_ui_scenario=plan.native_ui.scenario if plan.native_ui else None,
+                python_mysql_tests=plan.executor_capability.selections
+                if isinstance(plan.executor_capability, PythonMysqlSandboxCapability)
+                else None,
                 manager_advice=plan.manager_advice,
             )
             if successor.inputs.candidate_revision != plan.inputs.candidate_revision:

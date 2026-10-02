@@ -42,6 +42,7 @@ approval_fields = (
     "approved_repair_sha256",
     "prerequisite_repair",
     "native_ui_scenario",
+    "python_mysql_tests",
 )
 definitions["ContinueDeliveryIntent"]["allOf"] = [
     {

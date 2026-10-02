@@ -3,6 +3,7 @@
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Literal
 from unittest.mock import Mock
 
 import pytest
@@ -69,6 +70,7 @@ class RejectedAdapter(RejectedReviewAdapter, UniqueAdapter):
         (False, 0, "review_approve", False),
         (False, 2, None, True),
         (True, 0, None, True),
+        (False, 1, None, "python"),
     ],
 )
 def test_fresh_production_proposal_resumes_only_reviewer_after_standalone_qa_pass(
@@ -77,8 +79,15 @@ def test_fresh_production_proposal_resumes_only_reviewer_after_standalone_qa_pas
     repeat: int,
     before_admission: bool,
     superseding: str | None,
-    controlled: bool,
+    controlled: bool | Literal["python"],
 ) -> None:
+    from ai_software_engineer.manager.python_verification import PytestSelection
+    from ai_software_engineer.recovery.python_mysql_execution import (
+        BoundPythonMysqlVerificationEvidence,
+    )
+    from ai_software_engineer.recovery.python_mysql_records import MysqlResourceRecord
+    from tests.manager.test_python_verification import capability as python_capability
+
     failing = InterruptedAdapter()
     inputs, repository, _ = setup_verification(tmp_path, failing, Admission())
     before = repository.get(inputs.task_id), repository.list_events(inputs.task_id)
@@ -113,6 +122,17 @@ def test_fresh_production_proposal_resumes_only_reviewer_after_standalone_qa_pas
             ),
         ),
     )
+    py_cap = python_capability(tmp_path).model_copy(
+        update={
+            "selections": (
+                PytestSelection(
+                    node_id="tests/test_fixture.py::test_exact",
+                    criterion_ids=tuple(c.id for c in source.runtime.task.acceptance_criteria),
+                ),
+            )
+        }
+    )
+    monkeypatch.setattr(entry_module, "discover_python_mysql_capability", lambda *a, **k: py_cap)
     monkeypatch.setattr(NativeCandidateSourceReader, "inspect", lambda *_: source)
     monkeypatch.setattr(entry_module.NativeVerificationFacts, "validate", lambda *_: None)
     monkeypatch.setattr(
@@ -138,7 +158,12 @@ def test_fresh_production_proposal_resumes_only_reviewer_after_standalone_qa_pas
         def run(request: AgentRequest) -> AgentResult:
             provider = route_adapters._verification_evidence
             if provider is not None:
-                assert isinstance(provider, BoundSwiftVerificationEvidence)
+                assert isinstance(
+                    provider,
+                    BoundPythonMysqlVerificationEvidence
+                    if controlled == "python"
+                    else BoundSwiftVerificationEvidence,
+                )
                 worktree = (
                     Path(config.platform_root)
                     / "worktrees"
@@ -175,6 +200,37 @@ def test_fresh_production_proposal_resumes_only_reviewer_after_standalone_qa_pas
         "ai_software_engineer.recovery.verification_execution._require_clean_candidate",
         lambda *_: None,
     )
+    py_prefix = "ai_software_engineer.recovery.python_mysql_execution."
+    monkeypatch.setattr(py_prefix + "discover_python_mysql_capability", lambda *a, **k: py_cap)
+    monkeypatch.setattr(py_prefix + "_require_clean_candidate", lambda *a: None)
+
+    class Resource:
+        password = "0123456789abcdef" * 3
+        secrets = (password,)
+
+        def __init__(self, intent, publish, clock):
+            self.intent, self.publish, self.clock = intent, publish, clock
+
+        def start(self, guard):
+            guard()
+            self.publish(
+                MysqlResourceRecord.create(
+                    phase="INTENT", intent=self.intent, recorded_at=self.clock()
+                )
+            )
+
+        def verify_principal(self, endpoint):
+            pass
+
+        def close(self):
+            self.publish(
+                MysqlResourceRecord.create(
+                    phase="CLEANED", intent=self.intent, recorded_at=self.clock()
+                )
+            )
+
+    monkeypatch.setattr(py_prefix + "IsolatedMysqlResource", Resource)
+    monkeypatch.setattr(py_prefix + "MysqlUnixProxy", Mock())
     ui_calls = Mock(
         side_effect=lambda current, *_: tuple(
             NativeUiResult(
@@ -200,7 +256,11 @@ def test_fresh_production_proposal_resumes_only_reviewer_after_standalone_qa_pas
         return value
 
     first = entry()
-    plan, path = first.propose(scope, native_ui_scenario=scenario() if controlled else None)
+    plan, path = first.propose(
+        scope,
+        native_ui_scenario=scenario() if controlled is True else None,
+        python_mysql_tests=py_cap.selections if controlled == "python" else None,
+    )
     first.approve(path, confirmed_plan=plan.plan_sha256, reference="fixture-original-approval")
     try:
         original_build = FileRunContextBuilder.build
@@ -353,9 +413,11 @@ def test_fresh_production_proposal_resumes_only_reviewer_after_standalone_qa_pas
                 repeat + (1 if before_admission else 2)
             )
             assert execution_roles == expected
-            assert commands.call_count == 2 * len(expected)
-            assert ui_calls.call_count == len(expected)
+            assert commands.call_count == (1 if controlled == "python" else 2) * len(expected)
+            assert ui_calls.call_count == (0 if controlled == "python" else len(expected))
             assert next_plan.native_ui == plan.native_ui
+            if controlled == "python":
+                assert next_plan.executor_capability == py_cap
             assert (
                 store.get_verification_execution(
                     plan.plan_sha256, AgentRole.QA, completed=True

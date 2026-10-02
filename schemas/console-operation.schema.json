@@ -298,6 +298,23 @@
           ],
           "default": null
         },
+        "python_mysql_tests": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/PytestSelection"
+              },
+              "maxItems": 32,
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Python Mysql Tests"
+        },
         "approved_repair_sha256": {
           "anyOf": [
             {
@@ -403,6 +420,26 @@
         {
           "not": {
             "required": [
+              "approved_plan_sha256",
+              "python_mysql_tests"
+            ],
+            "properties": {
+              "approved_plan_sha256": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "python_mysql_tests": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        },
+        {
+          "not": {
+            "required": [
               "approved_scope_sha256",
               "approved_repair_sha256"
             ],
@@ -463,6 +500,26 @@
         {
           "not": {
             "required": [
+              "approved_scope_sha256",
+              "python_mysql_tests"
+            ],
+            "properties": {
+              "approved_scope_sha256": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "python_mysql_tests": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        },
+        {
+          "not": {
+            "required": [
               "approved_repair_sha256",
               "prerequisite_repair"
             ],
@@ -503,6 +560,26 @@
         {
           "not": {
             "required": [
+              "approved_repair_sha256",
+              "python_mysql_tests"
+            ],
+            "properties": {
+              "approved_repair_sha256": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "python_mysql_tests": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        },
+        {
+          "not": {
+            "required": [
               "prerequisite_repair",
               "native_ui_scenario"
             ],
@@ -513,6 +590,46 @@
                 }
               },
               "native_ui_scenario": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "prerequisite_repair",
+              "python_mysql_tests"
+            ],
+            "properties": {
+              "prerequisite_repair": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "python_mysql_tests": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "native_ui_scenario",
+              "python_mysql_tests"
+            ],
+            "properties": {
+              "native_ui_scenario": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "python_mysql_tests": {
                 "not": {
                   "type": "null"
                 }
@@ -593,6 +710,26 @@
                 }
               },
               "native_ui_scenario": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "coder_scope_request",
+              "python_mysql_tests"
+            ],
+            "properties": {
+              "coder_scope_request": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "python_mysql_tests": {
                 "not": {
                   "type": "null"
                 }
@@ -988,6 +1125,35 @@
           }
         }
       ]
+    },
+    "PytestSelection": {
+      "additionalProperties": false,
+      "description": "A specific test function/class method, possibly parametrized; never a suite root.",
+      "properties": {
+        "node_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "pattern": "^tests/(?:[A-Za-z0-9_][A-Za-z0-9_.-]*/)*test_[A-Za-z0-9_.-]+\\.py::[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)?(?:\\[[A-Za-z0-9_.-]+\\])?$",
+          "title": "Node Id",
+          "type": "string"
+        },
+        "criterion_ids": {
+          "items": {
+            "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$",
+            "type": "string"
+          },
+          "maxItems": 50,
+          "minItems": 1,
+          "title": "Criterion Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "node_id",
+        "criterion_ids"
+      ],
+      "title": "PytestSelection",
+      "type": "object"
     },
     "RecheckDesignIntent": {
       "additionalProperties": false,

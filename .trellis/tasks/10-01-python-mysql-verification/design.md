@@ -20,7 +20,7 @@
 
 Codex sandbox保持network=false，仅`--allow-unix-socket`批准精确socket。socket在独立executor-owned目录，候选无目录写权限，不能unlink/rebind；tmp/cache另用scratch。可信pytest wrapper仅将本次专用DSN的PyMySQL连接转为该socket，其它目标拒绝。OS sandbox独立阻止原生socket/Connection绕过及symlink指向其它socket。receipt声明此适配只验证真实MySQL SQL行为，不证明TCP/DNS/TLS/网络超时语义；相关传输测试不得纳入。
 
-创建前持久化STARTED及唯一resource intent（name/owner/plan/run/role/image/daemon/deadline），创建后封存真实container ID和配置。正常退出立即精确清理；`--rm`及容器内固定timeout提供独立寿命上限，控制进程死亡不允许无限驻留。重启按精确intent+实际ID/labels/config复核收敛，不能按前缀/标签批量删除，不能重放测试。覆盖create成功但落盘失败、失租约/进程退出、cleanup失败后重启。
+创建前持久化STARTED及唯一resource intent（name/owner/plan/run/role/image/daemon/deadline），创建后封存真实container ID和配置。正常退出立即精确清理；`--rm`及容器内固定timeout将已启动容器进程的寿命限制为启动后最多1200秒。create→start窗口控制进程崩溃可能留下未启动对象/卷，此时没有SQL进程、候选凭证、host bind或公开端口；下一次明确Python验证在执行锁内按过期精确intent+实际ID/labels/config清理，不能宣称未启动对象必然1200秒自动删除。不能按前缀/标签批量删除，不能重放测试。覆盖create成功但落盘失败、失租约/进程退出、cleanup失败后重启。
 
 ## 文件、导入与输出
 

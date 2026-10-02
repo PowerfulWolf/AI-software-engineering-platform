@@ -24,6 +24,7 @@ from ai_software_engineer.domain.prerequisite_repair import PrerequisiteRepairRe
 from ai_software_engineer.manager.delivery import CheckpointDigest
 from ai_software_engineer.manager.delivery_checkpoint import DeliveryId
 from ai_software_engineer.manager.native_ui import NativeUiScenario
+from ai_software_engineer.manager.python_verification import PytestSelection
 from ai_software_engineer.multi_directory.attachments import RequirementAttachmentId
 from ai_software_engineer.project_workspace import ProjectName
 from ai_software_engineer.recovery.models import RecoveryScopeRequest
@@ -155,6 +156,9 @@ class ContinueDeliveryIntent(DomainModel):
     coder_scope_request: RecoveryScopeRequest | None = None
     prerequisite_repair: PrerequisiteRepairRequest | None = None
     native_ui_scenario: NativeUiScenario | None = None
+    python_mysql_tests: tuple[PytestSelection, ...] | None = Field(
+        default=None, min_length=1, max_length=32
+    )
     approved_repair_sha256: CheckpointDigest | None = None
 
     @model_validator(mode="after")
@@ -167,6 +171,7 @@ class ContinueDeliveryIntent(DomainModel):
                     self.approved_scope_sha256,
                     self.prerequisite_repair,
                     self.native_ui_scenario,
+                    self.python_mysql_tests,
                     self.approved_repair_sha256,
                 )
             )
@@ -180,6 +185,7 @@ class ContinueDeliveryIntent(DomainModel):
                 self.approved_repair_sha256,
                 self.prerequisite_repair,
                 self.native_ui_scenario,
+                self.python_mysql_tests,
             )
         ):
             raise ValueError("requested Coder scope may only accompany scope approval")

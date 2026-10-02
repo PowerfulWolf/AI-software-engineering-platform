@@ -45,9 +45,10 @@ class RecoveryConflict(RecoveryRejected):
 class VerificationExecutionBlocked(RecoveryRejected):
     """A sealed executor prerequisite failure for Manager, never a model verdict."""
 
-    def __init__(self, record_sha256: str, code: str) -> None:
+    def __init__(self, record_sha256: str, code: str, *, python_mysql: bool = False) -> None:
         super().__init__(f"controlled verification blocked: {code}; receipt={record_sha256}")
         self.record_sha256, self.code = record_sha256, code
+        self.python_mysql = python_mysql
 
     @property
     def next_action(self) -> str:
@@ -55,6 +56,8 @@ class VerificationExecutionBlocked(RecoveryRejected):
             "请解锁运行 ASE 的 Mac, 并在独立 QA/Reviewer 验收期间保持桌面解锁; "
             "不需要提交密码, 不会自动解锁或修改系统锁屏设置。"
             if self.code == "NATIVE_UI_SESSION_LOCKED"
+            else "请检查本机 Python、Docker、沙箱和隔离 MySQL 初始化/清理。"
+            if self.python_mysql
             else "请检查工具链/执行器与桌面会话。"
         )
         return (
