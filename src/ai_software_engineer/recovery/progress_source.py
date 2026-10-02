@@ -3,6 +3,7 @@
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Final
 
 from ai_software_engineer.agents import FileModelRouteAttemptStore, ModelRouteAttempt
 from ai_software_engineer.agents.fallback import RouteAttemptOutcome, model_route_root
@@ -15,6 +16,13 @@ from ai_software_engineer.domain.event import StateEvent
 from ai_software_engineer.manager.delivery_checkpoint import ProjectDeliveryCheckpoint
 from ai_software_engineer.store.mysql_repository import open_mysql_connection
 from ai_software_engineer.team_workspace import _read_regular, _reject_symlinks
+
+CODER_KNOWLEDGE_FAILURE_REASONS: Final = frozenset(
+    {
+        "TRANSIENT_INFRA: coder knowledge preparation failed: AUTHENTICATION_ERROR",
+        "TRANSIENT_INFRA: coder knowledge preparation failed: TIMEOUT",
+    }
+)
 
 
 def accepted_scope_progress(
@@ -131,10 +139,6 @@ def is_prior_progress_source(
     events: tuple[StateEvent, ...],
 ) -> bool:
     progress = route.result.artifact
-    reasons = {
-        "TRANSIENT_INFRA: coder knowledge preparation failed: AUTHENTICATION_ERROR",
-        "TRANSIENT_INFRA: coder knowledge preparation failed: TIMEOUT",
-    }
     if (
         route.task_id != task.id
         or route.role is not AgentRole.CODER
@@ -152,7 +156,7 @@ def is_prior_progress_source(
         return False
     accepted, queued, resumed, blocked = events[-4:]
     if (
-        blocked.reason not in reasons
+        blocked.reason not in CODER_KNOWLEDGE_FAILURE_REASONS
         or checkpoint.failure_summary != blocked.reason.split(": ", 1)[1]
         or progress.artifact_id not in blocked.artifact_ids
     ):

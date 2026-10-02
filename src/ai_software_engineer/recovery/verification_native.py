@@ -22,6 +22,9 @@ from ai_software_engineer.manager.delivery_checkpoint import (
     checkpoint_sha256_is_ancestor,
 )
 from ai_software_engineer.manager.dispatch import ContinuationDispatchRecord
+from ai_software_engineer.recovery.candidate_preflight import (
+    require_unchanged_pre_provider_candidate,
+)
 from ai_software_engineer.recovery.models import RecoveryRejected, RecoveryScope, digest
 from ai_software_engineer.recovery.native import NativeApprovedStages, _parent, read_approved_stages
 from ai_software_engineer.recovery.store import FileRecoveryStore, RecoveryRecordMissing
@@ -106,10 +109,6 @@ class NativeCandidateSourceReader:
         cp, terminal, runtime, continuation = read_candidate_source_snapshot(
             self.config, self.environment, history
         )
-        if terminal_candidate_requires_coder_recovery(runtime.task, runtime.events):
-            raise RecoveryRejected(
-                "candidate has newer interrupted Coder work that must be recovered first"
-            )
         stages = read_approved_stages(
             self.config,
             root,
@@ -146,6 +145,10 @@ class NativeCandidateSourceReader:
             item.criterion_id for item in implementation.content.acceptance_mapping
         } != expected:
             raise ValueError("candidate criteria mismatch")
+        if terminal_candidate_requires_coder_recovery(runtime.task, runtime.events):
+            require_unchanged_pre_provider_candidate(
+                self.config, self.environment, root, terminal, runtime, implementation
+            )
         accepted_qa = None
         accepted_qa_event = terminal_accepted_qa_event(runtime.task, runtime.events)
         if accepted_qa_event is not None:

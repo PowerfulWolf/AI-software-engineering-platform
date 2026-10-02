@@ -81,6 +81,44 @@ def test_clean_semantic_branch_can_be_restored(tmp_path: Path) -> None:
     assert restarted.restore_clean_coder(spec) == ref
 
 
+@pytest.mark.parametrize("damage", [None, "dirty", "missing-marker", "branch-drift"])
+def test_clean_candidate_inspection_is_readonly_and_requires_owned_cleanup(
+    tmp_path: Path, damage: str | None
+) -> None:
+    repo = _create_fixture_repository(tmp_path)
+    manager = GitWorktreeManager(
+        repo, tmp_path / "roles", branch_names={"task_preflight": "ai/feature/preflight"}
+    )
+    spec = WorktreeSpec(
+        task_id="task_preflight",
+        role=AgentRole.CODER,
+        attempt=1,
+        source_revision=_git(repo, "rev-parse", "HEAD"),
+    )
+    ref = manager.create(spec)
+    if damage == "dirty":
+        (ref.path / "src/app.py").write_text("VALUE = 9\n")
+        with pytest.raises(WorktreeIdentityDrift):
+            manager.require_clean_coder(spec)
+        assert (ref.path / "src/app.py").read_text() == "VALUE = 9\n"
+        return
+    manager.require_clean_coder(spec)
+    manager.remove(ref)
+    if damage == "missing-marker":
+        next(ref.path.parent.glob(".*.removed-*")).unlink()
+    elif damage == "branch-drift":
+        (repo / "src/app.py").write_text("VALUE = 2\n")
+        _git(repo, "add", "src/app.py")
+        _git(repo, "commit", "-m", "new base")
+        _git(repo, "branch", "-f", ref.branch or "", "HEAD")
+    if damage is None:
+        manager.require_clean_coder(spec)
+    else:
+        with pytest.raises(WorktreeIdentityDrift):
+            manager.require_clean_coder(spec)
+    assert not ref.path.exists()
+
+
 def test_clean_restoration_cannot_adopt_another_tasks_semantic_branch(tmp_path: Path) -> None:
     repo = _create_fixture_repository(tmp_path)
     name = "ai/feature/history-trends"

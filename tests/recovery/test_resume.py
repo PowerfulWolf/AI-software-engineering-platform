@@ -1357,10 +1357,58 @@ def test_joint_scope_recovery_targets_current_preparation_after_main_advances(
 
 
 @pytest.mark.mysql
+@pytest.mark.parametrize("knowledge_failure", [False, True, "authentication", "adapter"])
 def test_resume_recovers_post_feedback_coder_workspace_before_old_candidate_verification(
     tmp_path: Path,
     mysql_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
+    knowledge_failure: bool | str,
 ) -> None:
+    if knowledge_failure:
+        from ai_software_engineer.agents.structured import StructuredModelError
+        from ai_software_engineer.knowledge.agents import KnowledgeConsultationService
+
+        original_call = KnowledgeConsultationService._call
+
+        def call(self, binding, phase, **kwargs):
+            task = kwargs["input_payload"]["task"]["task"]
+            if (
+                knowledge_failure in (True, "authentication")
+                and str(binding.task_id).startswith("task_continue_")
+                and binding.role.value == "coder"
+                and task["attempts"] == 2
+            ):
+                raise StructuredModelError(
+                    AgentErrorCode.AUTHENTICATION_ERROR
+                    if knowledge_failure == "authentication"
+                    else AgentErrorCode.TIMEOUT,
+                    "offline knowledge failure",
+                    transient=False,
+                )
+            return original_call(self, binding, phase, **kwargs)
+
+        monkeypatch.setattr(KnowledgeConsultationService, "_call", call)
+        monkeypatch.setattr(
+            "ai_software_engineer.manager.production_backend.ConfiguredStructuredClientFactory.for_project",
+            lambda _, root, role: _ScriptedClientFactory().for_project(root, role),
+        )
+        if knowledge_failure == "adapter":
+            original_run = _ResumeAdapter.run
+
+            def run(self: _ResumeAdapter, request: AgentRequest) -> AgentResult:
+                if (
+                    request.task_id.startswith("task_continue_")
+                    and request.role is AgentRole.CODER
+                    and request.attempt == 2
+                ):
+                    self._owner.requests.append(request)
+                    self._owner.continuation_coder_calls += 1
+                    raise StructuredModelError(
+                        AgentErrorCode.TIMEOUT, "adapter entered", transient=False
+                    )
+                return original_run(self, request)
+
+            monkeypatch.setattr(_ResumeAdapter, "run", run)
     project = tmp_path / "project"
     project.mkdir()
     (project / "hello.txt").write_text("hello\n", encoding="utf-8")
@@ -1393,7 +1441,7 @@ def test_resume_recovers_post_feedback_coder_workspace_before_old_candidate_veri
         config=config,
         environment=environment,
         structured_clients=_ScriptedClientFactory(),
-        delivery_route_adapters=routes,
+        delivery_route_adapters=_KnowledgeFixtureFactory(routes) if knowledge_failure else routes,
     )
     entry = host.project_entry()
     started = entry.start(
@@ -1422,11 +1470,120 @@ def test_resume_recovers_post_feedback_coder_workspace_before_old_candidate_veri
     assert remediated.checkpoint.stage is DeliveryStage.BLOCKED
     assert remediated.checkpoint.task_id is not None
     assert remediated.checkpoint.task_id.startswith("task_continue_")
-    assert routes.continuation_coder_calls == 2
+    assert routes.continuation_coder_calls == (
+        1 if knowledge_failure in (True, "authentication") else 2
+    )
+
+    if knowledge_failure == "adapter":
+        with pytest.raises(RecoveryRejected):
+            host.resume_delivery(ResumeProjectDelivery(delivery_id=source.delivery_id))
+        return
 
     resumed = host.resume_delivery(ResumeProjectDelivery(delivery_id=source.delivery_id))
 
     assert isinstance(resumed, DeliveryResumeResult)
+    if knowledge_failure:
+        assert resumed.outcome is DeliveryResumeOutcome.VERIFICATION_APPROVAL_REQUIRED
+        assert resumed.verification_plan_file is not None
+        _, plan = host.verification_entry().open_plan(Path(resumed.verification_plan_file))
+        assert plan.inputs.candidate_revision == remediated.checkpoint.candidate_revision
+        assert plan.inputs.task_id == remediated.checkpoint.task_id
+        assert plan.plan_sha256 != proposed.verification_plan_sha256
+        assert routes.continuation_coder_calls == 1
+        with MySqlTaskRepository(mysql_dsn) as repository:
+            before = (
+                repository.get(plan.inputs.task_id),
+                repository.list_events(plan.inputs.task_id),
+            )
+        source = NativeCandidateSourceReader(config, environment).inspect(plan.scope)
+        sidecar = Path(source.stages.preparation.repository_workspace_root)
+        from dataclasses import replace
+        from unittest.mock import MagicMock
+
+        import ai_software_engineer.recovery.candidate_preflight as preflight
+        from ai_software_engineer.artifacts import FileArtifactStore
+
+        implementation = FileArtifactStore(sidecar / "artifacts", read_only=True).get(
+            plan.inputs.implementation_id
+        )
+        assert isinstance(implementation, ImplementationReportArtifact)
+        bad_event = source.runtime.events[-1].model_copy(
+            update={"reason": "TRANSIENT_INFRA: coder provider failed: TIMEOUT"}
+        )
+        bad_runtime = replace(source.runtime, events=(*source.runtime.events[:-1], bad_event))
+        with pytest.raises(RecoveryRejected):
+            preflight.require_unchanged_pre_provider_candidate(
+                config,
+                environment,
+                sidecar,
+                source.terminal_checkpoint,
+                bad_runtime,
+                implementation,
+            )
+        for active in ("claim", "work_item"):
+            cursor, connection = MagicMock(), MagicMock()
+            connection.cursor.return_value.__enter__.return_value = cursor
+            cursor.fetchone.side_effect = (
+                [{"lease_id": "active"}] if active == "claim" else [None, {"id": "running"}]
+            )
+            with monkeypatch.context() as patch:
+                patch.setattr(preflight, "open_mysql_connection", lambda _, conn=connection: conn)
+                with pytest.raises(RecoveryRejected, match="active"):
+                    preflight.require_unchanged_pre_provider_candidate(
+                        config,
+                        environment,
+                        sidecar,
+                        source.terminal_checkpoint,
+                        source.runtime,
+                        implementation,
+                    )
+            connection.rollback.assert_called_once()
+            connection.close.assert_called_once()
+        from ai_software_engineer.agents import FileModelRouteAttemptStore, ModelRouteAttempt
+
+        previous = next(
+            request
+            for request in routes.requests
+            if request.task_id == plan.inputs.task_id and request.role is AgentRole.CODER
+        )
+        later = previous.model_copy(
+            update={"run_id": "run_post_feedback_later", "attempt": source.runtime.task.attempts}
+        )
+        route = ModelRouteAttempt.create(
+            request=later,
+            route_index=1,
+            provider="codex",
+            model="offline",
+            started_at=source.runtime.events[-1].occurred_at,
+            completed_at=source.runtime.events[-1].occurred_at,
+            fallback=False,
+            result=AgentResult(
+                run_id=later.run_id,
+                task_id=later.task_id,
+                role=later.role,
+                attempt=later.attempt,
+                source_revision=later.source_revision,
+                context_manifest_id=later.context_manifest_id,
+                status=AgentRunStatus.TIMED_OUT,
+                error=AgentFailure(code=AgentErrorCode.TIMEOUT, message="offline", transient=False),
+            ),
+        )
+        FileModelRouteAttemptStore(sidecar / "runs/model-routes").append(route)
+        with pytest.raises(RecoveryRejected, match="later Coder"):
+            preflight.require_unchanged_pre_provider_candidate(
+                config,
+                environment,
+                sidecar,
+                source.terminal_checkpoint,
+                source.runtime,
+                implementation,
+            )
+        with MySqlTaskRepository(mysql_dsn) as repository:
+            assert (
+                repository.get(plan.inputs.task_id),
+                repository.list_events(plan.inputs.task_id),
+            ) == before
+        return
     assert resumed.outcome is DeliveryResumeOutcome.RECOVERY_APPROVAL_REQUIRED, resumed.next_action
     assert resumed.verification_plan_sha256 is None
     assert resumed.recovery_plan_file is not None

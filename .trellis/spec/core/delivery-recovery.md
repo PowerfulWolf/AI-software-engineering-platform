@@ -2421,3 +2421,74 @@ No SQL migration. An already admitted Context remains immutable. Continue native
 candidate; real FAIL routes to Coder with the newly sealed findings, and a future approved recovery
 loads this fix. Never patch historical Contexts or replay consumed approvals. Activate only while no
 role is running. Revert the platform commit and restart while idle to roll back; retain all facts.
+
+# Scenario: post-feedback Coder knowledge fails before provider (2026-10-02)
+
+## Scope / signatures
+
+`recovery.candidate_preflight.require_unchanged_pre_provider_candidate(config, environment, sidecar,
+checkpoint, runtime, implementation) -> None` runs in `NativeCandidateSourceReader` after the
+full terminal runtime and original plan/implementation provenance are validated.
+`GitWorktreeManager.require_clean_coder(spec: WorktreeSpec) -> None` is read-only, including
+the normal-cleanup removal case. Neither helper creates a worktree or moves refs.
+
+## Contracts
+
+- A QA FAIL/Review REJECT → IMPLEMENTING transition reserves the next Coder attempt before
+  knowledge consultation. That transition alone does not establish a provider execution or edits.
+- Accept only terminal BLOCKED with exact `TRANSIENT_INFRA: coder knowledge preparation failed:
+  AUTHENTICATION_ERROR` or `...: TIMEOUT`, matching checkpoint summary, the same feedback/failure
+  attempt, exactly one attempt after the last candidate. Full event-chain validation still applies.
+- Original accepted implementation must be referenced by both candidate and blocked events.
+  Revalidate sealed feedback type/verdict, Task, candidate and QA parent implementation.
+  Reopen the original successful Coder model route and compare full artifact digest/context/attempt;
+  any later Coder route or provider completion after feedback rejects this exception.
+- The error text and absence of a completed provider route cannot independently prove a pre-provider
+  failure: an adapter exception can be misclassified by the broad retry boundary. Require exactly
+  one current-attempt `KnowledgeConsultationInput` from the read-only repository knowledge store.
+  Verify Team/Project/Repository/Task/Coder/candidate, snapshot integrity/scope, full frozen base
+  Context, pre-block Task, original feedback URI/body and exact input SHA. Recompute knowledge run
+  identity from Context/snapshot; reject missing/ambiguous inputs, truncated feedback, any completed
+  consultation for that input or a `knowledge.consultation` section. Real production knowledge
+  composition seals the input before consulting, and returns to the adapter only after completion.
+  Review REJECT must parent the exact `qa_passed` artifact in the terminal tail; superseded reports
+  are not source proof. No producer-authored timestamp/text supplies this authority.
+- Read-only SQL must find no current active claim or LEASED/RUNNING work item. Native facts are
+  checked again by proposal/approval/admission; an earlier read does not grant execution authority.
+- Coder branch and managed worktree must still equal the full retained candidate and have no dirty
+  paths. A removed checkout requires semantic branch binding plus exact empty, nonsymlink
+  manager-owned removal marker (repository/root/Task/role/attempt/branch/SHA); path absence or
+  matching Git name/SHA alone cannot prove clean cleanup. Missing legacy ownership fails closed.
+- The only result is eligibility for a NEW exact candidate verification plan. No Task reset,
+  failed-run fabrication, budget refund, old verdict mutation or approval replay. Independent QA
+  and Reviewer remain mandatory; real FAIL routes through normal new-baseline Coder remediation.
+  Actual interrupted Coder work continues to require capture/reapply recovery.
+
+## Validation / Good / Base / Bad
+
+| Input facts | Required outcome |
+| --- | --- |
+| Exact knowledge failure, sealed feedback/implementation, no later Coder, clean ownership | New verification proposal/approval |
+| Real provider attempt, unknown failure, dirty worktree or branch drift | Reject; ordinary Coder recovery remains necessary |
+| Missing/corrupt/symlink removal marker, wrong Task/root/role or missing original route | Reject without mutation |
+| Active claim or work item | Reject without invocation |
+| Ordinary terminal QA/Reviewer failure | Existing candidate verification behavior |
+
+Good: QA FAIL → Coder pre-provider TIMEOUT → owned clean cleanup → new approved controlled QA.
+Base: no post-feedback Coder transition. Bad: infer no edits from an absent directory, or verify an
+older candidate while newer provider work remains.
+
+## Required tests / existing data / rollback
+
+`tests/recovery/test_resume.py::test_resume_recovers_post_feedback_coder_workspace_before_old_candidate_verification`
+uses real isolated MySQL/Git and actual native lifecycle: knowledge failure calls Coder once,
+new proposal binds same candidate/new Task revision, read-side checks retain Task/events; actual
+  post-feedback provider edits still select recovery. Include unknown reason and active worker denial.
+  Inject actual KnowledgeConsultationService failure, and a negative adapter-entered
+  StructuredModelError with no completed provider route: the latter must be refused.
+`tests/git/test_semantic_branches.py::test_clean_candidate_inspection_is_readonly_and_requires_owned_cleanup`
+covers live clean/dirty, exact removal, missing marker and branch drift without checkout restoration.
+
+No production migration or historical record repair. K1 d4 Task, e41 candidate, original QA FAIL and
+rejected Operations remain durable. After idle activation, Continue with exact incremental selectors
+and approve the new digest; do not reuse consumed plans. Revert commit/idle restart for rollback.

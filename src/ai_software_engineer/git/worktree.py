@@ -214,6 +214,27 @@ class GitWorktreeManager:
             detached=expected_branch is None,
         )
 
+    def require_clean_coder(self, spec: WorktreeSpec) -> None:
+        """Read-only proof of an unchanged checkout or exact manager-owned clean removal."""
+        if spec.role is not AgentRole.CODER:
+            raise WorktreeIdentityDrift("clean candidate inspection requires a Coder worktree")
+        try:
+            worktree = self.recover(spec)
+        except WorktreeNotFound:
+            branch = self._branch_name(spec)
+            if self._branch_names.get(spec.task_id) is None:
+                raise WorktreeIdentityDrift(
+                    "clean removal requires a semantic branch binding"
+                ) from None
+            if self._resolve_revision(f"refs/heads/{branch}") != spec.source_revision:
+                raise WorktreeIdentityDrift(
+                    "clean Coder branch differs from the retained candidate"
+                ) from None
+            self._require_removal_marker(self._removal_marker(spec, branch))
+        else:
+            if self.inspect(worktree).dirty:
+                raise WorktreeIdentityDrift("Coder has newer uncommitted work")
+
     def restore_clean_coder(self, spec: WorktreeSpec) -> WorktreeRef:
         """Restore a cleaned Coder worktree only when its branch still proves a clean base.
 
