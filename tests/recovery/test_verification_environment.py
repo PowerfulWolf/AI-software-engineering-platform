@@ -166,6 +166,7 @@ def _admitted(
     tmp_path: Path,
     *,
     environment_error: bool = False,
+    business_failure: bool = False,
     native_ui: NativeUiCapability | None = None,
     executor_capability=None,
 ) -> tuple[
@@ -176,7 +177,8 @@ def _admitted(
     CandidateVerificationCompletion,
 ]:
     adapter = ScriptedAdapter(
-        qa_environment_errors=tuple(range(1, 101)) if environment_error else ()
+        qa_failures=tuple(range(1, 101)) if business_failure else (),
+        qa_environment_errors=tuple(range(1, 101)) if environment_error else (),
     )
     inputs, repository, _ = setup_verification(tmp_path, adapter, Admission())
     plan = CandidateVerificationPlan.create(

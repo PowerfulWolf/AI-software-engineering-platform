@@ -2352,3 +2352,72 @@ The [follow-up task](../../tasks/10-01-recovery-validation-cost/prd.md) requires
 read-count regression before optimization. Any reuse must be bounded to one operation and must
 preserve current checkpoint, approval, HEAD, dirty capture and owner-fence checks at their
 authorization boundaries; speed is not a reason to accept stale facts.
+# Scenario: interrupted Coder retains verifier feedback (2026-10-02)
+
+## 1. Scope / Trigger
+
+A Coder dispatched for QA/Review remediation fails before the next candidate. Approved recovery
+must preserve both interrupted edits and the concrete sealed verification feedback. Restoring only
+the original Requirement/Plan can repeat the rejected implementation indefinitely.
+
+## 2. Signatures
+
+`verification_feedback_context(delivery_id, evidence) -> ContextSource` shares the exact historical
+serialization of `remediation.verification` between initial remediation and recovery.
+`preserved_verification_context(plan, contexts, verifications | None)` revalidates standalone
+completion/executor prerequisites. `preserved_native_verdict_context(plan, contexts, artifacts)`
+preserves native QA/Review reports as Coder-only `recovery.feedback.<artifact-id>` sources.
+`NativeRecoveryEntry` composes these required sources before `run_prepared_allocation`.
+
+## 3. Contracts
+
+- Read only `RecoveryPlan.source.failed_context_id`; its manifest must match the source Task and
+  Coder role. Never mutate that Context, old Task/events, report, invocation or approval.
+- Standalone section is unique and untruncated. Parse typed evidence references; reopen the exact
+  scoped verification plan, authorization, admission and sealed completion/executor prerequisite
+  through `FileRecoveryStore.get_remediation_evidence`. Compare full scope, exact URI and complete
+  redacted serialized body. A successful completion cannot become Coder remediation authority.
+  Missing verification store with a declared source fails closed; an ordinary old Context without
+  that source remains compatible.
+- Native input artifact sections resolve through the same Repository's read-only FileArtifactStore.
+  Only QA/Review report types are feedback. Original `source:artifact.<id>` requires report Task to
+  equal the failed Context Task; recovered feedback retains its historical Task. The content-addressed
+  failed manifest binds previously recovered feedback; each generation again verifies exact artifact
+  bytes, original URI/name and complete redacted body. No arbitrary upstream prose is copied.
+- Native feedback is required and routed only to Coder; it is historical source data, not an input
+  artifact/verdict for the new Task. Standalone feedback retains its original required scope.
+  Every original finding, criterion and evidence reference remains present. Seed/reapply carries
+  the interrupted code; the helper does not read or rewrite the old dirty worktree.
+- Existing Context budget remains authoritative: no truncation or budget expansion. RecoveryPlan
+  and Schema wire digests are unchanged; failed Context identity already binds these inputs.
+
+## 4. Validation / Error Matrix
+
+| Facts | Result |
+| --- | --- |
+| Sealed failing completion in exact failed Coder Context | Preserve required full feedback |
+| Native QA FAIL/Review REJECT input | Preserve immutable report as Coder-only recovery feedback |
+| Another recovery generation | Revalidate original sealed sources, do not rewrite them |
+| Wrong Task/role/scope, URI/body substitution, truncated source or missing record | Reject before role invocation |
+| Required feedback exceeds budget | ContextBudgetExceeded; no partially informed Coder |
+| Ordinary old failure without verifier feedback | Existing recovery behavior |
+
+## 5. Good / Base / Bad
+
+Good: QA FAIL → Coder interruption → exact recovery → original finding survives.
+Base: initial Coder interruption has no verifier report. Bad: preserve only dirty files, grant a
+model permission from report prose, or amend a running Context to make a historical manifest look fixed.
+
+## 6. Tests Required
+
+`tests/recovery/test_recovery_verdict_context.py`: real immutable verification/context/artifact stores,
+reopen, repeated generations, byte preservation, substitution/tamper/scope/success refusal, required
+budget failure, native production artifact serialization and ordinary compatibility. Retain focused
+remediation, prerequisite and reapply tests; Ruff and strict Mypy over changed modules.
+
+## 7. Existing Data / Rollback
+
+No SQL migration. An already admitted Context remains immutable. Continue native verification of its
+candidate; real FAIL routes to Coder with the newly sealed findings, and a future approved recovery
+loads this fix. Never patch historical Contexts or replay consumed approvals. Activate only while no
+role is running. Revert the platform commit and restart while idle to roll back; retain all facts.

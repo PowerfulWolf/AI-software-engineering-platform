@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 from collections.abc import Mapping
@@ -40,7 +39,10 @@ from ai_software_engineer.manager.production_backend import (
 )
 from ai_software_engineer.planning import PlanningPreviewService
 from ai_software_engineer.product import FileProductRecordStore
-from ai_software_engineer.recovery.context import prerequisite_repair_context
+from ai_software_engineer.recovery.context import (
+    prerequisite_repair_context,
+    verification_feedback_context,
+)
 from ai_software_engineer.recovery.models import RecoveryRejected, digest
 from ai_software_engineer.recovery.store import FileRecoveryStore
 from ai_software_engineer.recovery.verification_entry import NativeVerificationFacts
@@ -466,17 +468,10 @@ def remediation_context(
         raise RecoveryRejected("candidate remediation has no candidate changes to preserve")
     redacted_patch = redact_text(patch)
     patch = redacted_patch.text
-    report = json.dumps(completion.to_wire(), ensure_ascii=False, sort_keys=True)
     repair_context = () if repair_plan is None else (prerequisite_repair_context(repair_plan),)
     return (
         *repair_context,
-        ContextSource(
-            source_id="remediation.verification",
-            uri=(f"candidate-verification://{source_delivery_id}/{completion.evidence_sha256}"),
-            content=report,
-            priority=2,
-            required=True,
-        ),
+        verification_feedback_context(source_delivery_id, completion),
         ContextSource(
             source_id="remediation.candidate_patch",
             uri=(

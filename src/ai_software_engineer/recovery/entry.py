@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, cast
 from pydantic import TypeAdapter, ValidationError
 
 from ai_software_engineer.agents.codex_cli import InitialWorkspaceAdmission
+from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.config import (
     ModelProviderKind,
     ProductionConfig,
@@ -52,7 +53,9 @@ from ai_software_engineer.product import FileProductRecordStore
 from ai_software_engineer.recovery.allocation import RecoveryAllocator
 from ai_software_engineer.recovery.context import (
     approved_parent_context,
+    preserved_native_verdict_context,
     preserved_prerequisite_context,
+    preserved_verification_context,
     recovery_context_sources,
 )
 from ai_software_engineer.recovery.current import NativeRecoveryFactsVerifier
@@ -855,10 +858,21 @@ class NativeRecoveryEntry:
             seed.seed(binding.worktree)
         else:
             interruption.prepare_workspace(binding.worktree)
-        extra = _approved_parent_context(self.config, plan)
+        extra = (
+            *_approved_parent_context(self.config, plan),
+            *preserved_native_verdict_context(
+                plan, contexts, FileArtifactStore(sidecar / "artifacts", read_only=True)
+            ),
+        )
         # Failed prerequisite Coder work must retain the separately approved repair objective,
         # not just its dirty files and write allowlist. Read the sealed prior manifest and grant.
         repair_root = sidecar / "state" / f"candidate-verification-{plan.source.scope.delivery_id}"
+        verifications = (
+            FileRecoveryStore(repair_root, scope=plan.source.scope)
+            if repair_root.exists()
+            else None
+        )
+        extra = (*extra, *preserved_verification_context(plan, contexts, verifications))
         if repair_root.exists():
             extra = (
                 *extra,

@@ -16,6 +16,7 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 
 | 目录 | 状态 / 阶段 | 剩余事项 |
 |---|---|---|
+| [10-02-recovery-verdict-context](10-02-recovery-verdict-context/task.json) | completed / incremental_verified | 保留恢复前的 QA/Review finding；增量、Ruff、mypy与独立QA/Review通过；无活动角色时加载，K1继续原生验收 |
 | [10-02-current-child-blocker-display](10-02-current-child-blocker-display/task.json) | completed / incremental_verified | 48项增量与独立QA/Review；静态展示更新，K1仍走原生交付 |
 | [10-02-bounded-pytest-diagnostics](10-02-bounded-pytest-diagnostics/task.json) | completed / activated_pending_k1_receipt | 06441d5已加载；待新K1候选的受控验证receipt |
 | [10-01-candidate-read-scope](10-01-candidate-read-scope/task.json) | completed / verified_pending_candidate_executor_activation | 完整候选差异与依赖、typed来源绑定及最终预算；78项增量与独立QA/Review，待受控MySQL前提后恢复同一K1候选 |
@@ -147,4 +148,4 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 | 09-21-knowledge-resolution-ui | knowledge-resolution-ui | [completed](09-21-knowledge-resolution-ui/task.json) |
 | 09-21-trellis-record-normalization | trellis-record-normalization-20260921 | [completed](09-21-trellis-record-normalization/task.json) |
 
-汇总：当前 11；待核实 14；已完成 91。
+汇总：当前 12；待核实 14；已完成 91。
