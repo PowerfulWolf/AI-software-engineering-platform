@@ -2147,6 +2147,9 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   );
   assert.match(text(get("content")), /进行中 1/);
   assert.match(text(get("content")), /阻塞中 0/);
+  await descend(get("content")).find(
+    (node) => node.tag === "button" && /^进行中 1$/.test(node.textContent),
+  ).events.click();
   const activeRequirementCard = descend(get("content")).find(
     (node) =>
       node.tag === "article" &&

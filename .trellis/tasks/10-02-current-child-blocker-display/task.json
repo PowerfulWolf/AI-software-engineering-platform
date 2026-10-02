@@ -1,0 +1,6 @@
+{
+  "id": "current-child-blocker-display-20261002",
+  "title": "展示当前角色阻塞事实，避免泛化 Manager 建议或运行中 Operation 掩盖",
+  "status": "completed",
+  "phase": "incremental_verified"
+}

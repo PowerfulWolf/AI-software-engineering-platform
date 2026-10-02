@@ -166,3 +166,44 @@ test("ordinary provider retry and closed expired claims are not interrupted exec
   run('task.role_queue[0].status = "CLOSED"; task.role_queue[0].wait_reason = "lease_expired:lease_old"');
   assert.equal(run("interruptedExecution(task)"), false);
 });
+
+test("current terminal child blocker takes precedence over generic Manager advice", () => {
+  const run = state();
+  run(`request.stage = "BLOCKED"; request.scopes = [{delivery_id: "t"}];
+    request.failed_stages = ["DELIVERING"];
+    task.status = "BLOCKED"; task.terminal = true;
+    task.blocker = "Coder provider route left repository changes";
+    task.next_action = "Request exact Coder recovery";
+    task.role_queue[0].status = "CLOSED";`);
+  assert.equal(run("requestPresentation(request).blocker"), run("task.blocker"));
+  assert.equal(run("requestPresentation(request).nextAction"), run("task.next_action"));
+  assert.match(run("managerFlowStatus(request).textContent"), /当前角色已阻塞/);
+  assert.doesNotMatch(run("managerFlowStatus(request).textContent"), /old blocker/);
+  assert.equal(run("deliveryFlow(request).children[3].className"), "blocked");
+});
+
+for (const [role, index] of [["coder", 3], ["qa", 4], ["reviewer", 5]])
+test(`new terminal ${role} failure remains blocked while its Continue operation is still running`, () => {
+  const run = state();
+  run(`request.scopes = [{delivery_id: "t"}];
+    task.status = "BLOCKED"; task.terminal = true;
+    task.blocker = "Fresh role failure"; task.role_queue[0] = {role: ${JSON.stringify(role)}, status: "CLOSED"};
+    task.last_activity = "2026-10-01T00:02:00Z";
+    operations = [{status: "RUNNING", requested_at: "2026-10-01T00:01:00Z",
+      updated_at: "2026-10-01T00:01:01Z",
+      intent: {action: "CONTINUE_DELIVERY", delivery_id: "r"}}];`);
+  assert.equal(run("requestPresentation(request).group"), "blocked");
+  assert.equal(run("requestPresentation(request).blocker"), "Fresh role failure");
+  assert.match(run("managerFlowStatus(request).textContent"), /处理中.*当前角色已阻塞/);
+  assert.equal(run(`deliveryFlow(request).children[${index}].className`), "blocked");
+  assert.equal(run('deliveryFlow(request).children.some(step => step.className === "current")'), false,
+    "a blocked role cannot leave an earlier gate animating");
+  run('task.role_queue = []');
+  assert.equal(run('deliveryFlow(request).children[3].className'), "blocked",
+    "without role facts, retain the aggregate delivery-stage fallback");
+  assert.equal(run('deliveryFlow(request).children.some(step => step.className === "current")'), false);
+  run('task.last_activity = "2026-10-01T00:00:00Z"');
+  assert.equal(run("requestPresentation(request).group"), "active",
+    "the previous terminal failure cannot mask preparation of a new authorized recovery");
+  assert.doesNotMatch(run("managerFlowStatus(request).textContent"), /当前角色已阻塞/);
+});

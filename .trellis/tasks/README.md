@@ -16,9 +16,11 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 
 | 目录 | 状态 / 阶段 | 剩余事项 |
 |---|---|---|
+| [10-02-current-child-blocker-display](10-02-current-child-blocker-display/task.json) | completed / incremental_verified | 48项增量与独立QA/Review；静态展示更新，K1仍走原生交付 |
+| [10-02-bounded-pytest-diagnostics](10-02-bounded-pytest-diagnostics/task.json) | completed / activated_pending_k1_receipt | 06441d5已加载；待新K1候选的受控验证receipt |
 | [10-01-candidate-read-scope](10-01-candidate-read-scope/task.json) | completed / verified_pending_candidate_executor_activation | 完整候选差异与依赖、typed来源绑定及最终预算；78项增量与独立QA/Review，待受控MySQL前提后恢复同一K1候选 |
 | [10-01-recovery-validation-cost](10-01-recovery-validation-cost/task.json) | planned / read_only_diagnosis_recorded | 已记录恢复分配前重复完整校验；待确定性计数回归及保留freshness门禁的优化 |
-| [10-01-python-mysql-verification](10-01-python-mysql-verification/task.json) | in_progress / runner_and_discovery_verified_not_activated | 已验证 capability/discovery/runner；尚需隔离资源生命周期、精确审批和独立 QA/Review evidence 接线 |
+| [10-01-python-mysql-verification](10-01-python-mysql-verification/task.json) | completed / activated | 39389f4已加载；真实边界fixture通过，K1旧候选产生独立QA FAIL并回派修正 |
 | [10-01-worker-lease-status-recovery](10-01-worker-lease-status-recovery/task.json) | in_progress / verification | 页面中断状态已验证；精确中断恢复、独立验收及 K1 真实交付继续推进 |
 | [09-30-coder-preexecution-auth-recovery](09-30-coder-preexecution-auth-recovery/task.json) | in_progress / verification | 已接纳 Coder progress 的续跑知识失败恢复、CLI诊断分类；增量验证与 K1 继续交付 |
 | [09-25-team-evolution-audit](09-25-team-evolution-audit/task.json) | in_progress / execute | 当前需求已交付；显式知识闭环与候选验证 Manager 协调已接通，下一步自动收集、上游学习生产者、通用能力扩展 |

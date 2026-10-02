@@ -545,7 +545,9 @@ function currentRequestTasks(request) {
   return [...currentByDelivery.values()];
 }
 function failedDeliveryRoleStages(request) {
-  if (!(request.failed_stages || []).includes("DELIVERING")) return new Set();
+  if (!(request.failed_stages || []).includes("DELIVERING") &&
+      !(terminalBlockedRequestTask(request) && requestPresentation(request).group === "blocked"))
+    return new Set();
   const stages = new Set();
   for (const task of currentRequestTasks(request)) {
     if (!task.terminal || !["BLOCKED", "FAILED"].includes(task.status)) continue;
@@ -577,6 +579,21 @@ function activeRequestTask(request) {
       )[0] || null
   );
 }
+function terminalBlockedRequestTask(request) {
+  if (request.knowledge_gap?.is_current ||
+      !["BLOCKED", "FAILED", "DELIVERING", "INTEGRATING"].includes(request.stage))
+    return null;
+  return currentRequestTasks(request)
+    .filter(task => task.terminal && task.blocker && taskGroup(task) === "blocked")
+    .sort((left, right) => right.last_activity.localeCompare(left.last_activity))[0] || null;
+}
+function operationChildBlocker(request, operation) {
+  const task = terminalBlockedRequestTask(request);
+  // A retained failure from before this request is the input to recovery. Only
+  // a new durable failure can supersede an operation that is still finishing.
+  return task && operation?.status === "RUNNING" &&
+    Date.parse(task.last_activity) > Date.parse(operation.requested_at) ? task : null;
+}
 function requestPresentation(request) {
   const waitingTask = waitingRequestTask(request);
   if (waitingTask)
@@ -593,6 +610,11 @@ function requestPresentation(request) {
       ? running
       : null;
   const activeTask = activeRequestTask(request);
+  const blockedTask = operationChildBlocker(request, deliveryOperation) ||
+    (!deliveryOperation && !activeTask ? terminalBlockedRequestTask(request) : null);
+  if (blockedTask)
+    return {group: "blocked", status: blockedTask.status,
+      blocker: blockedTask.blocker, nextAction: blockedTask.next_action};
   if (deliveryOperation || activeTask) {
     const operationStage =
       deliveryOperation?.intent.action === "PRODUCT_REPLY"
@@ -6051,10 +6073,6 @@ function deliveryFlow(request) {
     ["DESIGNING", "PLANNING", "BLOCKED", "FAILED"].includes(request.stage) &&
     current >= 0
   ) failedStageIndexes.add(current);
-  if (failedStageIndexes.size) {
-    const firstFailedStage = Math.min(...failedStageIndexes);
-    if (current < 0 || firstFailedStage < current) current = firstFailedStage;
-  }
   const taskStatuses = request.scopes
     .map((scope) => taskById(scope.delivery_id)?.status)
     .filter(Boolean);
@@ -6070,6 +6088,14 @@ function deliveryFlow(request) {
       )
     )
       current = 3;
+  }
+  if (terminalBlockedRequestTask(request) && requestPresentation(request).group === "blocked" &&
+      !failedStageIndexes.size && requestStages[effectiveStage] !== undefined)
+    failedStageIndexes.add(requestStages[effectiveStage]);
+  if (failedStageIndexes.size) {
+    const firstFailedStage = Math.min(...failedStageIndexes);
+    if (requestPresentation(request).group === "blocked" || current < 0 || firstFailedStage < current)
+      current = firstFailedStage;
   }
   const flow = el("ol", undefined, "delivery-flow");
   const waitingStages = new Set(currentRequestTasks(request)
@@ -6106,9 +6132,10 @@ function managerFlowStatus(request) {
       ? (waitingExecutionStep(waiting).wait_reason?.startsWith("KNOWLEDGE_GAP:")
         ? approvedKnowledge(request) ? " · 知识解答已批准，等待角色恢复" : " · 当前角色等待知识确认"
         : " · 当前角色等待前提处理") : "";
+    const childBlocker = operationChildBlocker(request, operation);
     return el(
       "p",
-      `Manager 协调 · ${state}（${label(operation.intent.action)}）${waitingNote || (interruptedRequestTask(request) ? " · 当前角色执行已中断" : "")}`,
+      `Manager 协调 · ${state}（${label(operation.intent.action)}）${waitingNote || (interruptedRequestTask(request) ? " · 当前角色执行已中断" : childBlocker ? " · 当前角色已阻塞" : "")}`,
       "flow-manager active",
     );
   }
@@ -6122,6 +6149,8 @@ function managerFlowStatus(request) {
     return el("p", `Manager 协调 · 等待审批 · ${approval.title}`, "flow-manager blocked");
   if (interruptedRequestTask(request))
     return el("p", "Manager 协调 · 执行中断，等待恢复", "flow-manager blocked");
+  if (terminalBlockedRequestTask(request))
+    return el("p", "Manager 协调 · 当前角色已阻塞，等待恢复", "flow-manager blocked");
   if (request.coordination)
     return el("p", `Manager 协调 · ${request.coordination.draft.action === "PROPOSE_RECOVERY"
       ? "等待恢复" : "等待处理"} · ${request.coordination.draft.summary}`, "flow-manager blocked");

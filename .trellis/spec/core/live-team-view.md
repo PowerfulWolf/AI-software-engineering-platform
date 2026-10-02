@@ -98,6 +98,20 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
   `assigned_delivery_ids` / `current_stage_delivery_ids` 为唯一事实。Manager 准备、Coder、QA、
   Reviewer 的串行切换必须随每次 snapshot 原样展示，浏览器不得把整个 Operation 生命周期硬编码
   为 Coder 执行中，也不得为了修正展示而写回 Team/Project/MySQL 状态。
+- `team_view/app.js::terminalBlockedRequestTask(request)` 只从同一需求、每个 native delivery 的
+  最新 TaskView 选择有真实 blocker 的终态工作。它只适用于 BLOCKED/FAILED/DELIVERING/INTEGRATING
+  需求；当前知识门、活动 successor、等待最终确认和已完成/关闭阶段保留既有优先级。没有当前执行时，
+  具体 child blocker/next_action 优先于泛化 Manager advice；原 advice 留在 durable journal 中。
+- `operationChildBlocker(request, operation)` 只在 RUNNING 且
+  `Date.parse(child.last_activity) > Date.parse(operation.requested_at)` 时认定为本轮的新终态阻塞。
+  顶部必须继续显示阻塞及实际原因，Manager 文本可显示“处理中 · 当前角色已阻塞”。QUEUED、
+  时间缺失/无效或旧失败均不能据此压住正在准备的新恢复。Operation 是协调事实，不是角色 verdict。
+  知识等待、租约中断、未消费的精确审批仍使用自己的事实边界，不因时间比较获批或重放。
+- `deliveryFlow` 在 Task 状态 fallback 之后定位当前有效失败 gate：durable role_queue 的
+  Coder/QA/Reviewer 分别映射实现/测试/评审，前序已完成、失败节点阻塞、后序待处理；整个已阻塞
+  流程不得留下 current 动画。缺少可验证角色事实时保留需求聚合阶段 fallback，不能从错误文本猜角色。
+  `tests/team_view/delivery-status.test.cjs` 覆盖三角色的新失败窗口、空队列、旧失败与新恢复；
+  knowledge-gap/ui 定向回归覆盖知识门、精确审批、活动 successor 与等待交付确认。
 - The Team page may project the selected member into a four-column queue without adding new state:
   current-stage assignments are `进行中`, other non-terminal assignments are `待完成`, blocker or
   waiting/failed work is `已阻塞`, and terminal audit history is `已完成`. The queue is explicitly

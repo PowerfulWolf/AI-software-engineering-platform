@@ -15,6 +15,10 @@ class Element {
   addEventListener(name, fn) { this.events[name] = fn; }
   setAttribute(name, value) { this.attributes[name] = value; }
   removeAttribute(name) { delete this.attributes[name]; }
+  querySelector(selector) {
+    return selector.startsWith(".") ? all(this).slice(1).find(node =>
+      node.className.split(/\s+/).includes(selector.slice(1))) || null : null;
+  }
   focus() {}
   scrollIntoView() {}
   set innerHTML(value) { throw new Error("Unsafe HTML: " + value); }

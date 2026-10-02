@@ -9,3 +9,7 @@
 存量数据：旧回执整流清空的输出不可恢复，不修改已封存QA FAIL或其MAJOR业务finding。已有K1后继Coder因provider失败留下现场，保留dirty inventory并通过新的精确恢复审批继续；新runner只能在新hash-bound计划获批后用于验证。
 
 回滚：revert此提交并重提案；保留所有旧计划、审批、invocation、回执和候选。主机与目标仓库不执行任意异常文本；摘要仍只是命令事实，不是verdict。
+
+## 激活
+
+06441d5 已推送，注册主仓已快进到该基线并重启 Console。最新 K1 Coder 恢复计划 d4abeb12 的目标基线包含此修复。旧验证记录仍保留：QA 177f4b 已 FAIL 并回派修正；新的候选受控验证完成后才能检验实际 summary receipt，不重验消费过的审批。
