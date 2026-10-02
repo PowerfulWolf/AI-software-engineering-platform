@@ -1699,7 +1699,8 @@ main[data-page="requests"] .page-context {
   border: 1px solid var(--line);
   border-radius: 9px;
 }
-.retry-policy-row {
+.retry-policy-row,
+.execution-coordination-row {
   display: grid;
   grid-template-columns: minmax(170px, 1.2fr) 120px 120px minmax(180px, 1.4fr);
   align-items: center;
@@ -1707,6 +1708,17 @@ main[data-page="requests"] .page-context {
   min-height: 54px;
   min-width: 0;
   padding: 9px 12px;
+}
+.execution-time-fields {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.execution-coordination-row {
+  border: 1px solid transparent;
+}
+.execution-coordination-row .settings-field-control {
+  grid-column: 2 / -1;
 }
 .retry-policy-row + .retry-policy-row {
   border-top: 1px solid var(--line);
@@ -2480,6 +2492,13 @@ code {
   }
   .retry-policy-row {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+  .execution-coordination-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 7px;
+  }
+  .execution-coordination-row .settings-field-control {
+    grid-column: 1;
   }
   .retry-policy-role,
   .retry-policy-note {

@@ -238,6 +238,10 @@ Correct: retain exact approvals, then apply active-stage budget and failed-opera
 Basic settings contains platform/team, runtime, execution/retry, and execution-time sections. Each has a
 visible top divider; module spacing is separate from the compact internal heading/description/grid
 spacing. Reset paragraph margins inside sections; never stack form grid gaps with default margins.
+The execution-time table and Manager coordination field use the same desktop columns and horizontal
+insets: the coordination label aligns with role labels, its control starts at the first numeric column
+and ends at the last input edge. Keep a 16px body gap; stack the coordination field below its label on
+screens at or below 600px without changing the settings payload.
 
 ## CLI transcript provenance (2026-10-01)
 

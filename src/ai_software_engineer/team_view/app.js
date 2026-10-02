@@ -5126,10 +5126,14 @@ function renderGeneralSettings(form) {
       value => policy.manager.max_coordination_rounds = Number(value), "number");
     rounds.min = "1"; rounds.max = "100"; rounds.step = "1"; rounds.required = true;
     rounds.name = "retry-manager-max_coordination_rounds";
+    const coordination = settingsField("Manager 协调轮次", rounds,
+      "同一需求、同一阶段可诊断的不同阻塞输入数量。刷新、重启或重新点击不会重置；新的执行或修复审批仍由你决定。");
+    coordination.classList.add("execution-coordination-row");
+    const timeFields = el("div", undefined, "execution-time-fields");
+    timeFields.append(windows, coordination);
     form.append(settingsModule("执行时间与协调边界",
       "本地时间触顶后，下一次调用窗口加倍。最长时限不得小于初始时限；触顶次数包含最后一次失败。保存并重启生效，不延长已终止的进程。",
-      [windows, settingsField("Manager 协调轮次", rounds,
-        "同一需求、同一阶段可诊断的不同阻塞输入数量。刷新、重启或重新点击不会重置；新的执行或修复审批仍由你决定。")],
+      [timeFields],
     ));
   }
 }
