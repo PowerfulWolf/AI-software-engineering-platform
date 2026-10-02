@@ -221,7 +221,10 @@ or a request for humans to produce the future QA result.
 - `CandidateVerificationPlan.manager_advice` is optional, omitted for historical digests.
 - `CodexCliStructuredModelClient(allow_native_commands=False)` for Manager proposal calls.
 - `no_command_arguments()` plus read-only sandbox for CLI QA/Reviewer;
-  `candidate_read_snapshot(root, revision, permissions, max_bytes=2_000_000)` supplies source.
+  Production source now uses `candidate_read_scope` / `BoundCandidateSource` and complete candidate
+  difference views; see [candidate-review-source.md](candidate-review-source.md).
+  `candidate_read_snapshot(root, revision, permissions, max_bytes=2_000_000)` is only the conservative
+  low-level fallback without a typed resolver.
 
 ### 3. Contracts
 

@@ -109,6 +109,12 @@ search hit、citation 与冻结 chunk。`KnowledgeDeliveryGate` 重算同一 sec
 
 ## 5. 脱敏与注入边界
 
+生产 CLI verifier 的候选来源和最终序列化预算另见
+[`candidate-review-source.md`](../../.trellis/spec/core/candidate-review-source.md)。Context section
+预算通过后，receipt、源码差异和消息包装仍须计入最终输入。结构化 user JSON 可无损展开为
+对象，完整 source diff 用字节长度/SHA 绑定的原文 frame 表达；不改变 Context/Artifact wire
+或删除任何 required section。
+
 Builder 覆盖 OpenAI 风格 key、AWS access key、GitHub token、Bearer token、PEM private key，以及 `password/passwd/secret/token/api_key` assignment。替换值为 `[REDACTED:<kind>]`，只记录 `uri/kind/count`；当原始 URI 含 secret 时，审计 metadata 使用已脱敏的 `source://<source_id>`，不得泄露原 URI。
 
 仓库文件、Task prose 和测试输出都按数据处理。恶意文本只能作为自己的 section content 出现，不能覆盖 `policy` section、改变 role/permissions、创建隐式 source 或驱动状态迁移。发现越权要求时由 Orchestrator 依据 policy 记录 evidence 或进入 `BLOCKED`。

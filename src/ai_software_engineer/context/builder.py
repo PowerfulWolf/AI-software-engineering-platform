@@ -186,7 +186,7 @@ class FileContextBuilder:
                 continue
             redacted, source_redactions = _redact(content, safe_uri)
             redactions.extend(source_redactions)
-            source_tokens = _estimate_tokens(redacted)
+            source_tokens = estimate_input_tokens(redacted)
             truncated = False
             if source_tokens > remaining:
                 if source.required:
@@ -196,7 +196,7 @@ class FileContextBuilder:
                 if remaining == 0:
                     continue
                 redacted = _truncate_to_tokens(redacted, remaining)
-                source_tokens = _estimate_tokens(redacted)
+                source_tokens = estimate_input_tokens(redacted)
                 truncated = True
             section = ContextSection(
                 name=_section_name(source),
@@ -247,13 +247,14 @@ def _redact(content: str, uri: str) -> tuple[str, list[ContextRedaction]]:
     return result.text, redactions
 
 
-def _estimate_tokens(content: str) -> int:
+def estimate_input_tokens(content: str) -> int:
+    """Shared deterministic estimate for sections and the final serialized input."""
     return (len(content) + 3) // 4
 
 
 def _truncate_to_tokens(content: str, tokens: int) -> str:
     candidate = content[: tokens * 4]
-    while _estimate_tokens(candidate) > tokens:
+    while estimate_input_tokens(candidate) > tokens:
         candidate = candidate[:-1]
     return candidate
 

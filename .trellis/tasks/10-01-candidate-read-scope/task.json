@@ -1,0 +1,6 @@
+{
+  "id": "candidate-read-scope-20261001",
+  "title": "修复大仓库候选验证全仓快照超限并保持完整必需阅读范围",
+  "status": "completed",
+  "phase": "verified_pending_candidate_executor_activation"
+}

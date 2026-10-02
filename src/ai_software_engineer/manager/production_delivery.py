@@ -20,6 +20,7 @@ from ai_software_engineer.agents import (
     ResponsesAgentAdapter,
     StoredContextResolver,
 )
+from ai_software_engineer.agents.candidate_binding import BoundCandidateSource
 from ai_software_engineer.agents.codex_cli import InitialWorkspaceAdmission
 from ai_software_engineer.agents.execution import ExecutionGuard
 from ai_software_engineer.agents.fallback import model_route_root
@@ -136,6 +137,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
                 agent_id=definition.id,
                 agent_version=definition.version,
                 prompt_builder=prompt_builder,
+                candidate_source=BoundCandidateSource(context_resolver),
                 executable=config.codex_executable,
                 proxy_base_url=config.codex_cli_proxy_base_url if proxy else None,
                 proxy_api_key_env=config.codex_cli_proxy_api_key_env if proxy else None,

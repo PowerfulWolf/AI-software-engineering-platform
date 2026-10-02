@@ -202,8 +202,14 @@ def test_exact_predecessor_images_are_approved_forwarded_and_reopened_without_re
     monkeypatch.setattr(
         entry_module, "verification_store_root", lambda _: tmp_path / "verification"
     )
-    monkeypatch.setattr(entry_module, "candidate_read_snapshot", lambda *_: "fixture source")
+    monkeypatch.setattr(entry_module, "candidate_read_scope", lambda *_: None)
+    monkeypatch.setattr(entry_module, "candidate_review_snapshot", lambda *_: "fixture source")
     monkeypatch.setattr(entry_module, "_manager_resolutions", lambda *_: ())
+    from tests.manager.test_manager_model_execution import executor
+
+    monkeypatch.setattr(
+        entry_module, "_manager_executor", lambda *_: executor(tmp_path / "manager-runs")
+    )
     monkeypatch.setattr(entry_module, "_verification_allocation", lambda *_, **__: Mock())
     monkeypatch.setattr(
         entry_module, "_definitions", lambda *_: {d.role: d for d in plan.definitions}

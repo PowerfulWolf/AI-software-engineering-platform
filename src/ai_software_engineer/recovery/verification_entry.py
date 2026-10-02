@@ -11,7 +11,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from ai_software_engineer.agents import StoredContextResolver
-from ai_software_engineer.agents.codex_policy import candidate_read_snapshot
+from ai_software_engineer.agents.candidate_binding import candidate_read_scope
+from ai_software_engineer.agents.candidate_source import candidate_review_snapshot
 from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.context import ContextSource, FileContextStore
@@ -708,9 +709,14 @@ class CandidateVerificationEntry:
         ):
             return None
         qa_definition = next(value for value in plan.definitions if value.role is AgentRole.QA)
-        snapshot = candidate_read_snapshot(
+        snapshot = candidate_review_snapshot(
             Path(plan.scope.repository_root),
-            plan.inputs.candidate_revision,
+            candidate_read_scope(
+                source.runtime.task,
+                artifacts.get(plan.inputs.plan_id),
+                artifacts.get(plan.inputs.implementation_id),
+                plan.inputs.candidate_revision,
+            ),
             qa_definition.permissions,
         )
         resolutions = _manager_resolutions(self.config, source)

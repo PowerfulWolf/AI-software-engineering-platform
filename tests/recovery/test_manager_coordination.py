@@ -9,7 +9,7 @@ from unittest.mock import Mock
 import pytest
 
 from ai_software_engineer.agents.structured import StructuredModelResult
-from ai_software_engineer.artifacts import FileArtifactStore, seal_artifact
+from ai_software_engineer.artifacts import FileArtifactStore, artifact_digest, seal_artifact
 from ai_software_engineer.domain import AgentRole, QaCriterionStatus, QaReportStatus
 from ai_software_engineer.domain.artifact import QaReportArtifact
 from ai_software_engineer.execution import CommandResult
@@ -41,10 +41,17 @@ from ai_software_engineer.recovery.store import FileRecoveryStore, RecoveryRecor
 from ai_software_engineer.recovery.verification_entry import CandidateVerificationEntry
 from ai_software_engineer.recovery.verification_native import NativeCandidateSourceReader
 from ai_software_engineer.recovery.verification_records import (
+    CandidateVerificationInputs,
     CandidateVerificationPlan,
     VerificationExecutionRecord,
 )
-from tests.domain.factories import make_qa_artifact, make_task
+from tests.agents.test_candidate_review_source import repository as source_repository
+from tests.domain.factories import (
+    make_implementation_artifact,
+    make_plan_artifact,
+    make_qa_artifact,
+    make_task,
+)
 from tests.knowledge.test_audit_qa import _approved_resolution
 from tests.orchestration.test_retry import ScriptedAdapter
 from tests.orchestration.test_runner import _clock, _definitions
@@ -60,6 +67,128 @@ def manager_claim_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     from tests.manager.test_manager_model_execution import executor
 
     monkeypatch.setattr(module, "_manager_executor", lambda *_: executor(tmp_path / "manager-runs"))
+
+
+def _mock_source_view(monkeypatch: pytest.MonkeyPatch, text: str) -> None:
+    # These tests isolate coordination/caching; the real Git source seam is tested below.
+    monkeypatch.setattr(module, "candidate_read_scope", lambda *_: None)
+    monkeypatch.setattr(module, "candidate_review_snapshot", lambda *_: text)
+
+
+def test_manager_reads_real_candidate_scope_without_unrelated_repository_bulk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, scope = source_repository(tmp_path)
+    task = make_task().model_copy(update={"base_ref": scope.base_revision, "repository": str(root)})
+    plan_art = make_plan_artifact()
+    plan_art = seal_artifact(
+        plan_art.model_copy(
+            update={
+                "source_revision": scope.base_revision,
+                "content": plan_art.content.model_copy(
+                    update={
+                        "steps": (
+                            plan_art.content.steps[0].model_copy(
+                                update={"files": ("dependency.txt", "new.py")}
+                            ),
+                        )
+                    }
+                ),
+            }
+        ),
+        validated_at=_clock(),
+    )
+    implementation = make_implementation_artifact()
+    implementation = seal_artifact(
+        implementation.model_copy(
+            update={
+                "source_revision": scope.candidate_revision,
+                "content": implementation.content.model_copy(
+                    update={"commit_sha": scope.candidate_revision}
+                ),
+            }
+        ),
+        validated_at=_clock(),
+    )
+    qa = make_qa_artifact()
+    qa = seal_artifact(
+        qa.model_copy(
+            update={
+                "source_revision": scope.candidate_revision,
+                "content": qa.content.model_copy(
+                    update={
+                        "status": QaReportStatus.FAIL,
+                        "criteria_results": tuple(
+                            c.model_copy(update={"status": QaCriterionStatus.NOT_TESTED})
+                            for c in qa.content.criteria_results
+                        ),
+                    }
+                ),
+            }
+        ),
+        validated_at=_clock(),
+    )
+    artifacts = FileArtifactStore(tmp_path / "artifacts")
+    for artifact in (plan_art, implementation, qa):
+        artifacts.put(artifact)
+    inputs = CandidateVerificationInputs(
+        task_id=task.id,
+        task_revision=3,
+        task_sha256=digest(task.to_wire()),
+        plan_id=plan_art.artifact_id,
+        plan_sha256=artifact_digest(plan_art),
+        implementation_id=implementation.artifact_id,
+        implementation_sha256=artifact_digest(implementation),
+        candidate_revision=scope.candidate_revision,
+    )
+    plan = CandidateVerificationPlan.create(
+        scope=RecoveryScope(
+            team_id="team_test",
+            repository_id="repository_test",
+            repository_root=str(root),
+            delivery_id="delivery_test",
+        ),
+        inputs=inputs,
+        native_checkpoint_sha256="1" * 64,
+        dispatch_sha256="2" * 64,
+        approved_stage_chain_sha256="3" * 64,
+        current_policy_sha256="4" * 64,
+        definitions=tuple(_definitions().values()),
+        created_at=_clock(),
+    )
+    source = SimpleNamespace(
+        parent_delivery_id=None,
+        inputs=inputs,
+        scope=plan.scope,
+        stages=SimpleNamespace(
+            preparation=SimpleNamespace(repository_workspace_root=str(tmp_path))
+        ),
+        runtime=SimpleNamespace(
+            task=task, events=(SimpleNamespace(artifact_ids=(qa.artifact_id,)),)
+        ),
+    )
+    store = FileRecoveryStore.initialize(tmp_path / "verification", scope=plan.scope)
+    store.put_verification_plan(plan)
+    monkeypatch.setattr(NativeCandidateSourceReader, "inspect", lambda *_: source)
+    monkeypatch.setattr(module, "verification_store_root", lambda _: tmp_path / "verification")
+    monkeypatch.setattr(module, "_manager_resolutions", lambda *_: ())
+    client = Mock()
+    client.complete.return_value = StructuredModelResult(
+        payload={
+            "disposition": "WAITING_HUMAN",
+            "summary": "Missing independent executor",
+            "next_action": "Approve the exact controlled test capability",
+        },
+        duration_ms=1,
+    )
+    backend = Mock()
+    backend._structured_clients.for_project.return_value = client
+    assert CandidateVerificationEntry(Mock(), {}, backend).coordinate(plan) is not None
+    snapshot = client.complete.call_args.kwargs["input_payload"]["candidate_source"]
+    assert "first change must remain visible" in snapshot
+    assert "required dependency" in snapshot
+    assert "irrelevant baseline" not in snapshot
+    assert scope.base_revision in snapshot and scope.candidate_revision in snapshot
 
 
 @pytest.mark.parametrize("verification_completed", [False, True])
@@ -95,7 +224,7 @@ def test_manager_uses_durable_qa_order_not_report_timestamp(
     )
     monkeypatch.setattr(NativeCandidateSourceReader, "inspect", lambda *_: source)
     monkeypatch.setattr(module, "verification_store_root", lambda _: tmp_path / "verification")
-    monkeypatch.setattr(module, "candidate_read_snapshot", lambda *_: "bounded candidate source")
+    _mock_source_view(monkeypatch, "bounded candidate source")
     monkeypatch.setattr(module, "_manager_resolutions", lambda *_: ())
     client = Mock()
     client.complete.return_value = StructuredModelResult(
@@ -189,7 +318,7 @@ def test_manager_decision_is_bound_cached_and_reopened(
     )
     store.put_verification_plan(plan)
     monkeypatch.setattr(NativeCandidateSourceReader, "inspect", lambda *_: source)
-    monkeypatch.setattr(module, "candidate_read_snapshot", lambda *_: "exact bounded source")
+    _mock_source_view(monkeypatch, "exact bounded source")
     _, resolution = _approved_resolution(tmp_path / "knowledge", task_id=inputs.task_id)
     monkeypatch.setattr(module, "_manager_resolutions", lambda *_: (resolution,))
     client = Mock()
@@ -459,7 +588,7 @@ def test_first_executor_failure_reaches_manager_and_reopens_without_qa_verdict(
     monkeypatch.setattr(NativeCandidateSourceReader, "inspect", lambda *_: source)
     monkeypatch.setattr(module, "verification_store_root", lambda _: tmp_path / "verification")
     monkeypatch.setattr(FileRecoveryStore, "latest_verification_completion", lambda _: None)
-    monkeypatch.setattr(module, "candidate_read_snapshot", lambda *_: "bounded candidate source")
+    _mock_source_view(monkeypatch, "bounded candidate source")
     monkeypatch.setattr(module, "_manager_resolutions", lambda *_: ())
     session_probe = Mock(return_value=NativeUiSession(status="SESSION_LOCKED"))
     monkeypatch.setattr(module, "probe_native_ui_session", session_probe)

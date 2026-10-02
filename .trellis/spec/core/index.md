@@ -38,6 +38,9 @@
 
 ## Files
 
+- [`candidate-review-source.md`](candidate-review-source.md): complete candidate differences,
+  typed source lineage, command-free verifiers and final serialized input budget.
+
 - [`manager-coordination.md`](manager-coordination.md): owned Manager model runs, configurable time growth and policy-bound cross-stage advice.
 
 - [`branch-naming.md`](branch-naming.md): approved semantic branches, immutable Task binding and legacy recovery.

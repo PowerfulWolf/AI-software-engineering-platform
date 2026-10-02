@@ -16,6 +16,7 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 
 | 目录 | 状态 / 阶段 | 剩余事项 |
 |---|---|---|
+| [10-01-candidate-read-scope](10-01-candidate-read-scope/task.json) | completed / verified_pending_candidate_executor_activation | 完整候选差异与依赖、typed来源绑定及最终预算；78项增量与独立QA/Review，待受控MySQL前提后恢复同一K1候选 |
 | [10-01-recovery-validation-cost](10-01-recovery-validation-cost/task.json) | planned / read_only_diagnosis_recorded | 已记录恢复分配前重复完整校验；待确定性计数回归及保留freshness门禁的优化 |
 | [10-01-python-mysql-verification](10-01-python-mysql-verification/task.json) | in_progress / runner_and_discovery_verified_not_activated | 已验证 capability/discovery/runner；尚需隔离资源生命周期、精确审批和独立 QA/Review evidence 接线 |
 | [10-01-worker-lease-status-recovery](10-01-worker-lease-status-recovery/task.json) | in_progress / verification | 页面中断状态已验证；精确中断恢复、独立验收及 K1 真实交付继续推进 |
