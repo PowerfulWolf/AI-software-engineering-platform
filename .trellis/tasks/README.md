@@ -17,6 +17,7 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 | 目录 | 状态 / 阶段 | 剩余事项 |
 |---|---|---|
 | [10-03-execution-feedback-history](10-03-execution-feedback-history/task.json) | in_progress / implementation | 完成 QA/Review finding、Coder 反馈 lineage 与跨 successor Task 的完整执行记录；增量验证、推送与服务重载待完成 |
+| [10-03-delivery-operability](10-03-delivery-operability/task.json) | in_progress / implementation | 修复 Delivery 自动 Project 定位、基线漂移诊断、阻塞中文细节和当前子交付状态展示；增量验证与真实 K1 恢复待完成 |
 | [10-03-bounded-successor-branch-names](10-03-bounded-successor-branch-names/task.json) | completed / incremental_verified | 新 successor 从稳定业务根名生成；29 项语义分支测试、相关恢复选择测试、Ruff、mypy 通过；待提交推送并重载服务 |
 | [10-03-active-child-over-stale-verification-blocker](10-03-active-child-over-stale-verification-blocker/task.json) | in_progress / implementation | 活动 Coder 恢复优先于旧 QA/Review 终态阻塞；增量回归、推送与服务重载待完成 |
 | [10-02-post-feedback-knowledge-recovery](10-02-post-feedback-knowledge-recovery/task.json) | completed / incremental_verified | exact unfinished知识咨询与clean候选恢复；真实Git/MySQL增量及独立QA/Review通过，待空闲加载并恢复K1 |

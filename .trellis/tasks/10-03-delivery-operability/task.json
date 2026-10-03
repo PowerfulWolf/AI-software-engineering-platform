@@ -1,0 +1,18 @@
+{
+  "id": "delivery-operability-20261003",
+  "title": "ASE delivery operability and blocker diagnostics",
+  "status": "in_progress",
+  "phase": "implementation",
+  "created_at": "2026-10-03T00:00:00+08:00",
+  "scope": [
+    "Resolve a Project from a native or joint Delivery ID for CLI status and resume.",
+    "Keep baseline drift fail-closed while presenting a stable actionable diagnosis.",
+    "Preserve detailed blocker facts in Chinese read-side presentation.",
+    "Ensure current child delivery facts take precedence over stale coordination advice."
+  ],
+  "constraints": [
+    "Do not mutate historical Task, checkpoint, artifact, verdict, approval, or MySQL facts.",
+    "Do not bypass exact recovery or verification approvals.",
+    "Run focused incremental tests only; full regression remains user-owned."
+  ]
+}

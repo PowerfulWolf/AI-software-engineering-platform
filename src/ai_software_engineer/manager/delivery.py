@@ -220,6 +220,7 @@ class ProjectDeliveryResult(DomainModel):
     checkpoint: ProjectDeliveryCheckpoint
     product: ProductDiscoveryResult | None = None
     delivery: RetryResult | None = None
+    diagnostic: str | None = None
 
 
 class ProjectDeliveryBackend(Protocol):
@@ -589,7 +590,15 @@ class UnifiedProjectEntryService:
 
     def status(self, delivery_id: DeliveryId | str) -> ProjectDeliveryResult:
         _, current = self._current(delivery_id)
-        self._backend.reconcile(current)
+        try:
+            self._backend.reconcile(current)
+        except DeliveryBackendFailure as error:
+            # A read-only status request must remain useful after a source update.  Keep
+            # the immutable historical cursor and surface the typed drift diagnosis;
+            # resume/execute paths still fail closed through the normal backend gate.
+            if error.code is not DeliveryFailureCode.CHECKPOINT_DRIFT:
+                raise
+            return ProjectDeliveryResult(checkpoint=current, diagnostic=error.safe_summary)
         return ProjectDeliveryResult(checkpoint=current)
 
     def retry_interrupted_stage(self, command: ResumeProjectDelivery) -> ProjectDeliveryResult:

@@ -52,17 +52,27 @@ _EXACT: dict[str, str] = {
     "Manager operation failed; inspect durable delivery facts.": "Manager 操作失败，请检查持久化的交付事实。",
     "Manager rejected the operation; inspect current delivery facts.": "Manager 拒绝了该操作，请检查当前交付事实。",
     "The previous joint integration command failed. Produce a fresh, complete integration plan using the recorded command evidence.": "上一次联合集成命令失败。请依据已记录的命令证据生成新的完整联合集成计划。",
+    "candidate review prompt exceeds its configured Context budget": "候选验证上下文超过配置预算，平台在模型调用前安全停止；请缩小精确验证范围或生成新的验证计划。",
+    "candidate read snapshot exceeds its bounded context budget": "候选读取快照超过有界上下文预算，平台未调用模型；请缩小精确验证范围或生成新的验证计划。",
+    "required candidate source exceeds its bounded budget": "候选必需源码超过有界预算，平台未调用模型；请修订精确验证范围后再继续。",
+    "ContextBudgetExceeded": "候选验证上下文超过配置预算，平台未调用模型；请修订精确验证范围后再继续。",
+    "Responses provider returned HTTP 409": "Responses 模型服务返回 HTTP 409，当前模型调用未完成；请检查路由状态后再继续。",
+    "AUTHENTICATION_ERROR": "模型服务认证失败，当前阶段未完成；请检查模型凭据和路由配置后再继续。",
+    "RATE_LIMITED": "模型服务触发限流，当前阶段未完成；请等待限流恢复或使用已配置的备用路由。",
+    "TIMEOUT": "模型服务或执行器超时，当前阶段未完成；请检查服务可用性后再继续。",
+    "UNKNOWN_EVIDENCE_REFERENCE": "模型产物引用了不存在的证据，QA/Review 结果未被接受；请让 Coder 按该 finding 修正后重新验证。",
+    "ARTIFACT_VALIDATION": "角色产物未通过完整性校验，平台拒绝推进阶段；请保留原记录并按失败原因恢复。",
 }
 
-_REPOSITORY_BLOCKED = re.compile(
-    r"^Repository (?P<repository>.+?) is BLOCKED; (?P<detail>.*)$"
-)
+_REPOSITORY_BLOCKED = re.compile(r"^Repository (?P<repository>.+?) is BLOCKED; (?P<detail>.*)$")
 _ROLE_FAILURE = re.compile(
-    r"^(?:TRANSIENT_INFRA:\s*)?(?P<role>Coder|QA|Reviewer) failed at attempt "
+    r"^(?:(?:TRANSIENT_INFRA|POLICY_VIOLATION|INVALID_OUTPUT|"
+    r"VERIFICATION_INCONCLUSIVE):\s*)?(?P<role>Coder|QA|Reviewer) failed at attempt "
     r"(?P<attempt>\d+): (?P<detail>.*)$"
 )
 _KNOWLEDGE_FAILURE = re.compile(
-    r"^(?P<role>coder|qa|reviewer) knowledge "
+    r"^(?:(?:TRANSIENT_INFRA|BUDGET_EXHAUSTED|POLICY_VIOLATION):\s*)?"
+    r"(?P<role>coder|qa|reviewer) knowledge "
     r"(?P<phase>preparation|assessment|intent) failed:\s*"
     r"(?P<code>[A-Z0-9_:-]+)$",
     re.IGNORECASE,
@@ -97,10 +107,35 @@ def _role_failure(text: str) -> str | None:
     role, attempt, detail = match.group("role"), match.group("attempt"), match.group("detail")
     run_id = re.search(r"\brun_[0-9a-z]+\b", detail)
     digests = re.findall(r"\b[0-9a-f]{64}\b", detail)
-    if "failed provider route left repository changes" in detail:
+    if "candidate review prompt exceeds its configured Context budget" in detail:
+        reason = "候选验证上下文超过配置预算，平台在模型调用前安全停止"
+    elif "candidate read snapshot exceeds its bounded context budget" in detail:
+        reason = "候选读取快照超过有界上下文预算，平台未调用模型"
+    elif "required candidate source exceeds its bounded budget" in detail:
+        reason = "候选必需源码超过有界预算，平台未调用模型"
+    elif "ContextBudgetExceeded" in detail:
+        reason = "候选验证上下文超过配置预算，平台未调用模型"
+    elif "Responses provider returned HTTP 409" in detail:
+        reason = "Responses 模型服务返回 HTTP 409，当前模型调用未完成"
+    elif "AUTHENTICATION_ERROR" in detail:
+        reason = "模型服务认证失败，当前阶段未完成"
+    elif "RATE_LIMITED" in detail:
+        reason = "模型服务触发限流，当前阶段未完成"
+    elif "TIMEOUT" in detail or "provider timeout" in detail.lower():
+        reason = "模型服务或执行器超时，当前阶段未完成"
+    elif "UNKNOWN_EVIDENCE_REFERENCE" in detail:
+        reason = "模型产物引用了不存在的证据，QA/Review 结果未被接受"
+    elif "ARTIFACT_VALIDATION" in detail:
+        reason = "角色产物未通过完整性校验，平台拒绝推进阶段"
+    elif "failed provider route left repository changes" in detail:
         reason = "提供方路由失败后仓库仍有改动"
     elif "Codex CLI provider execution failed" in detail:
         reason = "Codex CLI 模型服务执行失败"
+    elif (
+        "interrupted execution left repository changes" in detail
+        or "left a dirty worktree" in detail
+    ):
+        reason = "执行中断后工作区仍有未确认改动，平台已暂停并等待精确恢复审批"
     else:
         reason = "执行失败，原始诊断已封存"
     facts = [f"执行记录 {run_id.group(0)}"] if run_id else []
@@ -113,9 +148,7 @@ def _knowledge_failure(text: str) -> str | None:
     match = _KNOWLEDGE_FAILURE.fullmatch(text)
     if match is None:
         return None
-    role = {"coder": "Coder", "qa": "QA", "reviewer": "Reviewer"}[
-        match.group("role").lower()
-    ]
+    role = {"coder": "Coder", "qa": "QA", "reviewer": "Reviewer"}[match.group("role").lower()]
     phase = {
         "preparation": "准备",
         "assessment": "评估",
@@ -174,6 +207,8 @@ def localize_blocking_text(value: str | None) -> str | None:
         return "Coder 恢复已安全停止，请检查失败记录和恢复证据后再继续。"
     if text.startswith("Coder 恢复已安全停止："):
         return "Coder 恢复已安全停止，请检查失败记录和恢复证据后再继续。"
+    if text.startswith("BUDGET_EXHAUSTED") and "上下文" in text:
+        return "上下文预算已用尽，平台不会自动重试模型；请缩小精确验证范围后再继续。"
     if text.startswith("Pre-execution restart stopped safely:"):
         return "Coder 启动前重启已安全停止，请检查失败记录和恢复证据后再继续。"
     if text.startswith("Coder 启动前重启已安全停止："):

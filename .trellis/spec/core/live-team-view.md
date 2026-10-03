@@ -743,3 +743,17 @@ A RUNNING/QUEUED Console Continue operation is not evidence that the paused role
 `managerFlowStatus` may show coordination in progress alongside the role wait. `deliveryFlow`
 marks the corresponding Coder/QA/Reviewer step blocked, never current/animated. The delivery
 checkpoint stays unchanged. Only new queue facts can remove the waiting presentation.
+### Blocker detail localization (2026-10-03)
+
+The read-side presentation must preserve the stable cause of a blocked role. Candidate
+context-budget refusals, authentication/limit/timeout failures, invalid evidence
+references, artifact validation failures and interrupted dirty worktrees each have a
+specific Chinese explanation and an actionable next step. The projection may retain
+opaque Run IDs, evidence digests and candidate SHAs, but must not echo provider bodies,
+secrets or model-authored arbitrary prose. Unknown safe summaries remain visible rather
+than being relabeled as PASS or collapsed into a misleading stage.
+
+An active child Delivery or current Task queue fact takes precedence over stale Manager
+coordination advice. A terminal BLOCKED/FAILED Task remains blocked in the UI; a Continue
+operation or a planned assignment does not make it executing without a current lease and
+heartbeat. These are read-side rules only and never repair a journal or SQL fact.

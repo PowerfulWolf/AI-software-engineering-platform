@@ -48,6 +48,15 @@ class FailedRuntimeBackend(_OfflineBackend):
         )
 
 
+class DriftStatusBackend(_OfflineBackend):
+    def reconcile(self, checkpoint: ProjectDeliveryCheckpoint) -> None:
+        del checkpoint
+        raise DeliveryBackendFailure(
+            DeliveryFailureCode.CHECKPOINT_DRIFT,
+            "交付绑定的代码基线已漂移：历史准备摘要 old，当前准备摘要 new。",  # noqa: RUF001
+        )
+
+
 @pytest.mark.parametrize("wrong_identity", [False, True])
 def test_failure_readback_updates_parent_without_rewriting_task(
     tmp_path: Path,
@@ -86,6 +95,31 @@ def test_failure_readback_updates_parent_without_rewriting_task(
     assert cp.stage_attempts.delivering == 1
     assert cp.checkpointed_at == NOW + timedelta(hours=1)
     assert service.status(cp.delivery_id).checkpoint == cp
+
+
+def test_status_keeps_historical_cursor_when_read_only_reconciliation_drifts(
+    tmp_path: Path,
+) -> None:
+    project = _copy_fixture(tmp_path, "java")
+    backend = DriftStatusBackend(tmp_path / "platform")
+    service = UnifiedProjectEntryService(
+        backend=backend,
+        catalog=ProjectDeliveryCheckpointCatalog(backend.repository_registry_root),
+    )
+    started = service.start(
+        StartProjectDelivery(
+            repository_root=str(project.resolve()),
+            requirement="Show a safe drift diagnosis",
+            submitted_at=NOW,
+        )
+    )
+
+    result = service.status(started.checkpoint.delivery_id)
+
+    assert result.checkpoint == started.checkpoint
+    assert result.diagnostic == (
+        "交付绑定的代码基线已漂移：历史准备摘要 old，当前准备摘要 new。"  # noqa: RUF001
+    )
 
 
 def test_production_backend_reads_actual_runtime_events(

@@ -144,11 +144,21 @@ class TeamHost:
     def projects(self) -> tuple[ProjectWorkspace, ...]:
         return self._projects.discover()
 
-    def project_entry(self, project_id: str | None = None) -> UnifiedProjectEntryService:
-        return self._runtime(self._resolve_project_id(project_id)).entry
+    def project_entry(
+        self,
+        project_id: str | None = None,
+        *,
+        delivery_id: str | None = None,
+    ) -> UnifiedProjectEntryService:
+        return self._runtime(self._resolve_project_id(project_id, delivery_id)).entry
 
-    def requirement_entry(self, project_id: str | None = None) -> JointDeliveryService:
-        return self._runtime(self._resolve_project_id(project_id)).requirements
+    def requirement_entry(
+        self,
+        project_id: str | None = None,
+        *,
+        delivery_id: str | None = None,
+    ) -> JointDeliveryService:
+        return self._runtime(self._resolve_project_id(project_id, delivery_id)).requirements
 
     def recovery_entry(self, project_id: str | None = None) -> NativeRecoveryEntry:
         """Explicit human recovery; does not restart an old terminal delivery."""
@@ -450,10 +460,12 @@ class TeamHost:
             if len(matches) == 1:
                 return matches[0].manifest.project_id
             if len(matches) > 1:
-                raise ValueError("delivery identity is ambiguous across Projects")
+                raise ValueError(
+                    "Delivery ID 同时属于多个 Project，无法安全选择；请明确指定 Project"  # noqa: RUF001
+                )
         if len(projects) == 1:
             return projects[0].manifest.project_id
-        raise ValueError("select a Project before creating or continuing a Requirement")
+        raise ValueError("无法根据 Delivery ID 唯一定位 Project；请先选择 Project")  # noqa: RUF001
 
     @property
     def work_queue(self) -> MySqlRoleQueue:

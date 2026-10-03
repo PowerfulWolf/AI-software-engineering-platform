@@ -407,7 +407,14 @@ def create_requirement_project(
 
 
 def _delivery_entry(delivery_id: str) -> UnifiedProjectEntryService | JointDeliveryService:
-    return requirement_entry() if delivery_id.startswith("delivery_multi_") else project_entry()
+    # Status is a read-only operation, but it still needs the Project-owned sidecar.
+    # Resolve it from the durable Delivery identity when no default Project exists.
+    from ai_software_engineer.manager.production_host import TeamHost
+
+    host = TeamHost.from_environment()
+    if delivery_id.startswith("delivery_multi_"):
+        return host.requirement_entry(delivery_id=delivery_id)
+    return host.project_entry(delivery_id=delivery_id)
 
 
 @evaluation_app.command("report")

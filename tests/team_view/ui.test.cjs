@@ -1016,6 +1016,20 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     ),
     "QA 知识准备失败（原因代码：RATE_LIMITED），请检查模型服务后再继续。",
   );
+  assert.match(
+    vm.runInContext(
+      'humanizeBlockingText("POLICY_VIOLATION: QA failed at attempt 1: qa run run_abc123 failed: candidate review prompt exceeds its configured Context budget")',
+      context,
+    ),
+    /候选验证上下文超过配置预算.*模型调用前安全停止/,
+  );
+  assert.equal(
+    vm.runInContext(
+      'humanizeBlockingText("TRANSIENT_INFRA: coder knowledge preparation failed: AUTHENTICATION_ERROR")',
+      context,
+    ),
+    "Coder 知识准备失败（原因代码：AUTHENTICATION_ERROR），请检查模型服务后再继续。",
+  );
   assert.equal(
     vm.runInContext(
       'humanizeBlockingText("Delivery is blocked because a sub-delivery or joint integration requires recovery and the child finding requests human handling.")',

@@ -476,9 +476,7 @@ class ProductionTeamReader:
                         # every validated historical Task and merge only its immutable
                         # timeline/run/document facts into the current read model.
                         historical_views = []
-                        for task_id, source_native in sorted(
-                            _native_task_sources(native).items()
-                        ):
+                        for task_id, source_native in sorted(_native_task_sources(native).items()):
                             if task_id == view.task_id:
                                 continue
                             historical_views.append(
@@ -764,14 +762,22 @@ def _safe(text: str) -> str:
     return redact_text(text).text
 
 
-def _safe_json(value: object) -> JsonValue:
-    """Redact strings inside timeline details without dropping audit facts."""
+_LOCALIZED_DETAIL_FIELDS = frozenset(
+    {"reason", "failure_summary", "blocked_reason", "error_summary"}
+)
+
+
+def _safe_json(value: object, *, field: str | None = None) -> JsonValue:
+    """Redact and localize stable blocker fields without changing durable facts."""
     if isinstance(value, str):
-        return _safe(value)
+        safe = _safe(value)
+        if field in _LOCALIZED_DETAIL_FIELDS:
+            return localize_blocking_text(safe) or safe
+        return safe
     if isinstance(value, dict):
-        return {str(key): _safe_json(item) for key, item in value.items()}
+        return {str(key): _safe_json(item, field=str(key)) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
-        return [_safe_json(item) for item in value]
+        return [_safe_json(item, field=field) for item in value]
     if value is None or isinstance(value, (bool, int, float)):
         return value
     return _safe(str(value))
@@ -790,11 +796,7 @@ def _merge_task_history(current: TaskView, historical: tuple[TaskView, ...]) -> 
             key=lambda item: (item.occurred_at, item.task_id or "", item.kind.value, item.id),
         )
     )
-    runs = {
-        (run.run_id, run.route_index): run
-        for view in candidates
-        for run in view.runs
-    }
+    runs = {(run.run_id, run.route_index): run for view in candidates for run in view.runs}
     documents = {
         (document.source_uri, document.sha256): document
         for view in candidates
@@ -990,7 +992,6 @@ def _request_with_current_work(request: RequestView, tasks: list[TaskView]) -> R
             "coordination": None,
         }
     )
-
 
 
 def _directories(root: Path, pattern: str) -> tuple[Path, ...]:

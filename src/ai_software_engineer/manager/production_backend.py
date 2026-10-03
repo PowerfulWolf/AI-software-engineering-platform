@@ -105,6 +105,7 @@ from ai_software_engineer.manager.preparation import (
     PrepareProjectRequest,
     PrepareProjectResult,
     PrepareProjectStatus,
+    ProjectPreparationDrift,
     ProjectRuleProvider,
 )
 from ai_software_engineer.manager.production_agents import (
@@ -346,6 +347,20 @@ class _ProjectFacts:
     product: FileProductRecordStore
     design: FileDesignRecordStore
     planning: FileExecutionPlanStore
+
+
+class _PreparationCheckpointDrift(ValueError):
+    """A durable Delivery points at preparation facts that are no longer current."""
+
+    def __init__(self, expected: str, current: str | None) -> None:
+        self.expected = expected
+        self.current = current
+        current_text = current or "未知"
+        super().__init__(
+            "交付绑定的代码基线已漂移：历史准备摘要 "  # noqa: RUF001
+            f"{expected}，当前准备摘要 {current_text}。平台不会自动 rebase 或覆盖历史事实；"  # noqa: RUF001
+            "请基于当前代码基线重新准备，并生成精确的恢复或候选验证计划。"  # noqa: RUF001
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1264,13 +1279,23 @@ class ProductionProjectDeliveryBackend:
         )
 
     def _facts_for_checkpoint(self, checkpoint: ProjectDeliveryCheckpoint) -> _ProjectFacts:
-        preparation = self.prepare(checkpoint.repository_root)
+        try:
+            preparation = self.prepare(checkpoint.repository_root)
+        except ProjectPreparationDrift as error:
+            raise _PreparationCheckpointDrift(
+                checkpoint.preparation_sha256 or "未知", None
+            ) from error
         if (
             preparation.preparation is None
             or preparation.repository_id != checkpoint.repository_id
             or preparation.preparation.preparation_sha256 != checkpoint.preparation_sha256
         ):
-            raise ValueError("delivery preparation checkpoint drifted")
+            raise _PreparationCheckpointDrift(
+                checkpoint.preparation_sha256 or "未知",
+                preparation.preparation.preparation_sha256
+                if preparation.preparation is not None
+                else None,
+            )
         return self._facts(preparation)
 
     def _product_service(self, facts: _ProjectFacts) -> ProductDiscoveryService:
@@ -1326,6 +1351,17 @@ class ProductionProjectDeliveryBackend:
             raise
         except DeliveryBackendFailure:
             raise
+        except _PreparationCheckpointDrift as error:
+            raise DeliveryBackendFailure(
+                DeliveryFailureCode.CHECKPOINT_DRIFT,
+                str(error),
+            ) from error
+        except ProjectPreparationDrift as error:
+            raise DeliveryBackendFailure(
+                DeliveryFailureCode.CHECKPOINT_DRIFT,
+                "交付绑定的项目准备事实已漂移。平台不会自动 rebase 或覆盖历史事实；"  # noqa: RUF001
+                "请基于当前代码基线重新准备，并生成精确的恢复或候选验证计划。",  # noqa: RUF001
+            ) from error
         except KnowledgeError as error:
             raise DeliveryBackendFailure(
                 DeliveryFailureCode.INVARIANT_VIOLATION,

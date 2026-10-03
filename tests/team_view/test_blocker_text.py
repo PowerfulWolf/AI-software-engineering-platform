@@ -1,5 +1,7 @@
 # ruff: noqa: E501, RUF001
 
+import pytest
+
 from ai_software_engineer.team_view.blocker_text import localize_blocking_text
 
 
@@ -7,15 +9,17 @@ def test_localizes_stable_recovery_and_manager_blockers() -> None:
     assert localize_blocking_text("A child delivery or integration requires recovery.") == (
         "子交付或联合集成需要恢复。"
     )
-    assert localize_blocking_text(
-        "Coder recovery stopped safely: failed Coder identity is missing, unsafe or ambiguous"
-    ) == "Coder 恢复已安全停止，请检查失败记录和恢复证据后再继续。"
+    assert (
+        localize_blocking_text(
+            "Coder recovery stopped safely: failed Coder identity is missing, unsafe or ambiguous"
+        )
+        == "Coder 恢复已安全停止，请检查失败记录和恢复证据后再继续。"
+    )
 
 
 def test_localizes_repository_blocker_but_keeps_opaque_identity() -> None:
     value = (
-        "Repository unit_backend is BLOCKED; PLANNING (INVARIANT_VIOLATION): "
-        "Planner stopped safely"
+        "Repository unit_backend is BLOCKED; PLANNING (INVARIANT_VIOLATION): Planner stopped safely"
     )
     localized = localize_blocking_text(value)
     assert localized == (
@@ -35,18 +39,76 @@ def test_localizes_role_failure_and_keeps_run_and_evidence_ids() -> None:
     assert "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" in localized
 
 
+def test_localizes_policy_classified_role_failure() -> None:
+    localized = localize_blocking_text(
+        "POLICY_VIOLATION: QA failed at attempt 1: qa run run_abc123 failed: "
+        "candidate review prompt exceeds its configured Context budget"
+    )
+
+    assert localized is not None
+    assert "QA 第 1 次执行失败" in localized
+    assert "候选验证上下文超过配置预算" in localized
+
+
 def test_localizes_knowledge_preparation_failure_and_keeps_error_code() -> None:
     assert localize_blocking_text("qa knowledge preparation failed: RATE_LIMITED") == (
         "QA 知识准备失败（原因代码：RATE_LIMITED），请检查模型服务后再继续。"
     )
+    assert (
+        localize_blocking_text(
+            "TRANSIENT_INFRA: coder knowledge preparation failed: AUTHENTICATION_ERROR"
+        )
+        == "Coder 知识准备失败（原因代码：AUTHENTICATION_ERROR），请检查模型服务后再继续。"
+    )
+    assert localize_blocking_text(
+        "BUDGET_EXHAUSTED：所需上下文超过配置的输入上限，不能自动重试。"
+    ) == ("上下文预算已用尽，平台不会自动重试模型；请缩小精确验证范围后再继续。")
+
+
+@pytest.mark.parametrize(
+    ("detail", "reason"),
+    [
+        (
+            "candidate review prompt exceeds its configured Context budget",
+            "候选验证上下文超过配置预算，平台在模型调用前安全停止",
+        ),
+        (
+            "candidate read snapshot exceeds its bounded context budget",
+            "候选读取快照超过有界上下文预算，平台未调用模型",
+        ),
+        (
+            "AUTHENTICATION_ERROR",
+            "模型服务认证失败，当前阶段未完成",
+        ),
+        (
+            "UNKNOWN_EVIDENCE_REFERENCE",
+            "模型产物引用了不存在的证据，QA/Review 结果未被接受",
+        ),
+        (
+            "interrupted execution left repository changes",
+            "执行中断后工作区仍有未确认改动，平台已暂停并等待精确恢复审批",
+        ),
+    ],
+)
+def test_localizes_known_role_blockers_with_actionable_details(
+    detail: str,
+    reason: str,
+) -> None:
+    localized = localize_blocking_text(f"QA failed at attempt 1: {detail}")
+
+    assert reason in localized
+    assert "QA 第 1 次执行失败" in localized
 
 
 def test_localizes_manager_recovery_advice_and_keeps_approval_digest() -> None:
     digest = "a" * 64
-    assert localize_blocking_text(
-        "Delivery is blocked because a sub-delivery or joint integration requires "
-        "recovery and the child finding requests human handling."
-    ) == "子交付或联合集成需要恢复，子任务发现需要人工处理。"
+    assert (
+        localize_blocking_text(
+            "Delivery is blocked because a sub-delivery or joint integration requires "
+            "recovery and the child finding requests human handling."
+        )
+        == "子交付或联合集成需要恢复，子任务发现需要人工处理。"
+    )
     assert localize_blocking_text(
         "Route the blocked delivery to the existing exact recovery approval associated "
         f"with approval_sha256 {digest}. Do not reset task state or replay any consumed approval."

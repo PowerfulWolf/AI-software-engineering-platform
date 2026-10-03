@@ -1,6 +1,7 @@
 """Unified project command surface tests."""
 
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -91,3 +92,28 @@ def test_request_resume_rejects_approval_reference_without_plan(
     assert result.exit_code == 2
     assert "approval digest and reference must be supplied together" in result.stderr
     host.resume_delivery.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("delivery_id", "entry_method"),
+    [
+        ("delivery_native_example", "project_entry"),
+        ("delivery_multi_example", "requirement_entry"),
+    ],
+)
+def test_status_resolves_project_from_delivery_id(
+    delivery_id: str,
+    entry_method: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    host = Mock()
+    entry = Mock()
+    entry.status.return_value = SimpleNamespace(to_wire=lambda: {"delivery_id": delivery_id})
+    getattr(host, entry_method).return_value = entry
+    monkeypatch.setattr(TeamHost, "from_environment", lambda: host)
+
+    result = runner.invoke(app, ["request", "status", delivery_id])
+
+    assert result.exit_code == 0
+    assert delivery_id in result.stdout
+    getattr(host, entry_method).assert_called_once_with(delivery_id=delivery_id)

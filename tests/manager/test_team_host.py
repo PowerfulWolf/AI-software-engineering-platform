@@ -22,7 +22,6 @@ from ai_software_engineer.knowledge_selection import (
     TeamKnowledgeSelectionStore,
 )
 from ai_software_engineer.manager.delivery import (
-    DeliveryBackendFailure,
     ReplyToProduct,
     ResumeProjectDelivery,
     StartProjectDelivery,
@@ -266,13 +265,16 @@ def test_team_host_scopes_product_catalog_and_context(
     assert replay.checkpoint == first.checkpoint
     assert len(models.payloads) == 2
     rule.write_text("CHANGED TEAM POLICY")
-    with pytest.raises(DeliveryBackendFailure):
-        host.project_entry().status(first.checkpoint.delivery_id)
+    drifted = host.project_entry().status(first.checkpoint.delivery_id)
+    assert drifted.checkpoint == first.checkpoint
+    assert drifted.diagnostic is not None
+    assert "代码基线已漂移" in drifted.diagnostic
     reopened = TeamHost(
         config=config, environment={"ASE_MYSQL_DSN": "connectivity-only"}, structured_clients=models
     )
-    with pytest.raises(DeliveryBackendFailure):
-        reopened.project_entry().status(first.checkpoint.delivery_id)
+    reopened_drifted = reopened.project_entry().status(first.checkpoint.delivery_id)
+    assert reopened_drifted.checkpoint == first.checkpoint
+    assert reopened_drifted.diagnostic is not None
     assert len(models.payloads) == 2
     assert (repo / "hello.txt").read_text() == "hello\n"
 

@@ -25,7 +25,10 @@ _normalize_platform_root(value: str) -> str
 TeamHost.from_environment(
     environment: Mapping[str, str] | None = None,
 ) -> TeamHost
-TeamHost.project_entry() -> UnifiedProjectEntryService
+TeamHost.project_entry(project_id: ProjectId | None = None,
+                      *, delivery_id: DeliveryId | None = None) -> UnifiedProjectEntryService
+TeamHost.requirement_entry(project_id: ProjectId | None = None,
+                           *, delivery_id: DeliveryId | None = None) -> JointDeliveryService
 TeamHost.work_queue -> MySqlPersistentWorkQueue
 TeamHost.planner_dispatcher(*, demand_builder, worker_id,
                                         owner_token_factory=None) -> DispatcherLoop
@@ -1395,3 +1398,24 @@ aligned layout and request-only value. Both CLI adapter test modules assert
 that a `401 Missing API key` response is non-transient.
 `tests/agents/test_codex_cli.py` also asserts Git inspection receives no
 managed proxy key from the host environment.
+### Delivery lookup and read-only preparation drift (2026-10-03)
+
+`TeamHost.project_entry(..., delivery_id=...)` and
+`TeamHost.requirement_entry(..., delivery_id=...)` may resolve the owning Project from
+the immutable Delivery sidecar when no default Project is configured. A single match is
+required; multiple matches fail closed with a stable Chinese diagnostic. CLI `status`
+uses this path for both native and joint Delivery IDs. Creating a new Requirement still
+requires an explicit Project/default and does not infer one from arbitrary paths.
+
+Every execution or resume path continues to require the exact preparation digest stored
+in its checkpoint. If the repository or selected rules produce a different preparation,
+the backend returns `CHECKPOINT_DRIFT`; it never rebases, rewrites a checkpoint, or
+replays an approval. Read-only `status` retains the historical cursor and carries a
+non-durable `diagnostic` so users can see the drift fact and the required next action.
+This diagnostic is not evidence of a current executable baseline. A new exact recovery
+or verification plan must bind the current preparation before execution.
+
+Good: a unique Delivery ID with no default Project is readable; a changed source returns
+the old cursor plus a Chinese drift diagnosis and leaves the journal byte-identical.
+Base: explicit Project selection continues to work. Bad: silently choose one of several
+Projects, mutate the old checkpoint, or continue with a stale approval.

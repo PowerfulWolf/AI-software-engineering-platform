@@ -955,6 +955,16 @@ function humanizeBlockingText(value) {
     "Manager operation failed; inspect durable delivery facts.": "Manager 操作失败，请检查持久化的交付事实。",
     "Manager rejected the operation; inspect current delivery facts.": "Manager 拒绝了该操作，请检查当前交付事实。",
     "The previous joint integration command failed. Produce a fresh, complete integration plan using the recorded command evidence.": "上一次联合集成命令失败。请依据已记录的命令证据生成新的完整联合集成计划。",
+    "candidate review prompt exceeds its configured Context budget": "候选验证上下文超过配置预算，平台在模型调用前安全停止；请缩小精确验证范围或生成新的验证计划。",
+    "candidate read snapshot exceeds its bounded context budget": "候选读取快照超过有界上下文预算，平台未调用模型；请缩小精确验证范围或生成新的验证计划。",
+    "required candidate source exceeds its bounded budget": "候选必需源码超过有界预算，平台未调用模型；请修订精确验证范围后再继续。",
+    ContextBudgetExceeded: "候选验证上下文超过配置预算，平台未调用模型；请修订精确验证范围后再继续。",
+    "Responses provider returned HTTP 409": "Responses 模型服务返回 HTTP 409，当前模型调用未完成；请检查路由状态后再继续。",
+    AUTHENTICATION_ERROR: "模型服务认证失败，当前阶段未完成；请检查模型凭据和路由配置后再继续。",
+    RATE_LIMITED: "模型服务触发限流，当前阶段未完成；请等待限流恢复或使用已配置的备用路由。",
+    TIMEOUT: "模型服务或执行器超时，当前阶段未完成；请检查服务可用性后再继续。",
+    UNKNOWN_EVIDENCE_REFERENCE: "模型产物引用了不存在的证据，QA/Review 结果未被接受；请让 Coder 按该 finding 修正后重新验证。",
+    ARTIFACT_VALIDATION: "角色产物未通过完整性校验，平台拒绝推进阶段；请保留原记录并按失败原因恢复。",
   };
   if (Object.prototype.hasOwnProperty.call(exact, text)) return exact[text];
   if (
@@ -990,14 +1000,36 @@ function humanizeBlockingText(value) {
     return `代码仓库 ${repository[1]} 已阻塞；请检查该仓库的交付检查点。`;
   }
   const roleFailure = text.match(
-    /^(?:TRANSIENT_INFRA:\s*)?(Coder|QA|Reviewer) failed at attempt (\d+): (.*)$/,
+    /^(?:(?:TRANSIENT_INFRA|POLICY_VIOLATION|INVALID_OUTPUT|VERIFICATION_INCONCLUSIVE):\s*)?(Coder|QA|Reviewer) failed at attempt (\d+): (.*)$/,
   );
   if (roleFailure) {
     const detail = roleFailure[3];
-    const reason = detail.includes("failed provider route left repository changes")
+    const reason = detail.includes("candidate review prompt exceeds its configured Context budget")
+      ? "候选验证上下文超过配置预算，平台在模型调用前安全停止"
+      : detail.includes("candidate read snapshot exceeds its bounded context budget")
+        ? "候选读取快照超过有界上下文预算，平台未调用模型"
+        : detail.includes("required candidate source exceeds its bounded budget")
+          ? "候选必需源码超过有界预算，平台未调用模型"
+          : detail.includes("ContextBudgetExceeded")
+            ? "候选验证上下文超过配置预算，平台未调用模型"
+            : detail.includes("Responses provider returned HTTP 409")
+              ? "Responses 模型服务返回 HTTP 409，当前模型调用未完成"
+              : detail.includes("AUTHENTICATION_ERROR")
+                ? "模型服务认证失败，当前阶段未完成"
+                : detail.includes("RATE_LIMITED")
+                  ? "模型服务触发限流，当前阶段未完成"
+                  : detail.includes("TIMEOUT") || detail.toLowerCase().includes("provider timeout")
+                    ? "模型服务或执行器超时，当前阶段未完成"
+                    : detail.includes("UNKNOWN_EVIDENCE_REFERENCE")
+                      ? "模型产物引用了不存在的证据，QA/Review 结果未被接受"
+                      : detail.includes("ARTIFACT_VALIDATION")
+                        ? "角色产物未通过完整性校验，平台拒绝推进阶段"
+                        : detail.includes("failed provider route left repository changes")
       ? "提供方路由失败后仓库仍有改动"
       : detail.includes("Codex CLI provider execution failed")
         ? "Codex CLI 模型服务执行失败"
+        : detail.includes("interrupted execution left repository changes") || detail.includes("left a dirty worktree")
+          ? "执行中断后工作区仍有未确认改动，平台已暂停并等待精确恢复审批"
         : "执行失败，原始诊断已封存";
     const run = detail.match(/\brun_[0-9a-z]+\b/);
     const digests = [...detail.matchAll(/\b[0-9a-f]{64}\b/g)].slice(0, 2).map((item) => item[0]);
@@ -1006,7 +1038,7 @@ function humanizeBlockingText(value) {
     return `${roleFailure[1]} 第 ${roleFailure[2]} 次执行失败：${reason}${facts.length ? `；${facts.join("；")}` : ""}。`;
   }
   const knowledgeFailure = text.match(
-    /^(Coder|QA|Reviewer) knowledge (preparation|assessment|intent) failed:\s*([A-Z0-9_:-]+)$/i,
+    /^(?:(?:TRANSIENT_INFRA|BUDGET_EXHAUSTED|POLICY_VIOLATION):\s*)?(Coder|QA|Reviewer) knowledge (preparation|assessment|intent) failed:\s*([A-Z0-9_:-]+)$/i,
   );
   if (knowledgeFailure) {
     const phases = { preparation: "准备", assessment: "评估", intent: "意图分析" };
@@ -1026,6 +1058,8 @@ function humanizeBlockingText(value) {
     return "Coder 恢复已安全停止，请检查失败记录和恢复证据后再继续。";
   if (text.startsWith("Coder 恢复已安全停止："))
     return "Coder 恢复已安全停止，请检查失败记录和恢复证据后再继续。";
+  if (text.startsWith("BUDGET_EXHAUSTED") && text.includes("上下文"))
+    return "上下文预算已用尽，平台不会自动重试模型；请缩小精确验证范围后再继续。";
   if (text.startsWith("Pre-execution restart stopped safely:"))
     return "Coder 启动前重启已安全停止，请检查失败记录和恢复证据后再继续。";
   if (text.startsWith("Coder 启动前重启已安全停止："))
