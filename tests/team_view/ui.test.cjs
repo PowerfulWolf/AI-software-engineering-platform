@@ -1009,6 +1009,13 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     ),
     "代码仓库 unit_a 已阻塞；计划阶段校验失败（INVARIANT_VIOLATION），Planner 已安全停止。",
   );
+  assert.equal(
+    vm.runInContext(
+      'humanizeBlockingText("qa knowledge preparation failed: RATE_LIMITED")',
+      context,
+    ),
+    "QA 知识准备失败（原因代码：RATE_LIMITED），请检查模型服务后再继续。",
+  );
   assert.equal(interval.ms, 5000);
   assert.equal(get("scope-label").textContent, "Team 级");
   assert.equal(get("scope-title").textContent, "Fixture team");

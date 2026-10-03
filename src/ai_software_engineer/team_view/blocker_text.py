@@ -61,6 +61,12 @@ _ROLE_FAILURE = re.compile(
     r"^(?:TRANSIENT_INFRA:\s*)?(?P<role>Coder|QA|Reviewer) failed at attempt "
     r"(?P<attempt>\d+): (?P<detail>.*)$"
 )
+_KNOWLEDGE_FAILURE = re.compile(
+    r"^(?P<role>coder|qa|reviewer) knowledge "
+    r"(?P<phase>preparation|assessment|intent) failed:\s*"
+    r"(?P<code>[A-Z0-9_:-]+)$",
+    re.IGNORECASE,
+)
 
 
 def _repository_blocker(text: str) -> str | None:
@@ -98,6 +104,22 @@ def _role_failure(text: str) -> str | None:
     return f"{role} 第 {attempt} 次执行失败：{reason}" + (f"；{suffix}" if suffix else "") + "。"
 
 
+def _knowledge_failure(text: str) -> str | None:
+    match = _KNOWLEDGE_FAILURE.fullmatch(text)
+    if match is None:
+        return None
+    role = {"coder": "Coder", "qa": "QA", "reviewer": "Reviewer"}[
+        match.group("role").lower()
+    ]
+    phase = {
+        "preparation": "准备",
+        "assessment": "评估",
+        "intent": "意图分析",
+    }[match.group("phase").lower()]
+    code = match.group("code").upper()
+    return f"{role} 知识{phase}失败（原因代码：{code}），请检查模型服务后再继续。"
+
+
 def localize_blocking_text(value: str | None) -> str | None:
     """Return Chinese console wording while preserving safe opaque identifiers."""
 
@@ -115,6 +137,9 @@ def localize_blocking_text(value: str | None) -> str | None:
     role_failure = _role_failure(text)
     if role_failure is not None:
         return role_failure
+    knowledge_failure = _knowledge_failure(text)
+    if knowledge_failure is not None:
+        return knowledge_failure
     if text.startswith("Coder recovery stopped safely:"):
         return "Coder 恢复已安全停止，请检查失败记录和恢复证据后再继续。"
     if text.startswith("Coder 恢复已安全停止："):

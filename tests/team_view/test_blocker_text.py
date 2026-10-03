@@ -35,6 +35,12 @@ def test_localizes_role_failure_and_keeps_run_and_evidence_ids() -> None:
     assert "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" in localized
 
 
+def test_localizes_knowledge_preparation_failure_and_keeps_error_code() -> None:
+    assert localize_blocking_text("qa knowledge preparation failed: RATE_LIMITED") == (
+        "QA 知识准备失败（原因代码：RATE_LIMITED），请检查模型服务后再继续。"
+    )
+
+
 def test_unknown_text_and_durable_record_are_not_rewritten() -> None:
     value = "未知原因 run_123 sha256=abc123"
     assert localize_blocking_text(value) == value

@@ -42,6 +42,11 @@ Good: a blocked child with `Repository unit_a is BLOCKED` is shown in Chinese wh
 the original event remain unchanged. Base: already Chinese text passes through unchanged. Bad:
 mutating a journal checkpoint to localize it, or removing a provider error code needed for audit.
 
+Provider preparation, assessment, and intent failures use the same read-side adapter. For
+example, `qa knowledge preparation failed: RATE_LIMITED` is shown as `QA 知识准备失败（原因代码：RATE_LIMITED），请检查模型服务后再继续。`.
+The role, phase, and machine error code are retained in a bounded Chinese sentence; the durable
+Task and Operation records remain unchanged.
+
 ### Tests Required
 
 Cover exact stable messages, repository prefixes, unknown text pass-through and preservation of

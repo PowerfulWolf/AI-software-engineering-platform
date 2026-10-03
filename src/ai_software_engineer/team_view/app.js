@@ -1005,6 +1005,14 @@ function humanizeBlockingText(value) {
       .filter(Boolean);
     return `${roleFailure[1]} 第 ${roleFailure[2]} 次执行失败：${reason}${facts.length ? `；${facts.join("；")}` : ""}。`;
   }
+  const knowledgeFailure = text.match(
+    /^(Coder|QA|Reviewer) knowledge (preparation|assessment|intent) failed:\s*([A-Z0-9_:-]+)$/i,
+  );
+  if (knowledgeFailure) {
+    const phases = { preparation: "准备", assessment: "评估", intent: "意图分析" };
+    const roles = { coder: "Coder", qa: "QA", reviewer: "Reviewer" };
+    return `${roles[knowledgeFailure[1].toLowerCase()]} 知识${phases[knowledgeFailure[2].toLowerCase()]}失败（原因代码：${knowledgeFailure[3].toUpperCase()}），请检查模型服务后再继续。`;
+  }
   if (text.startsWith("Coder recovery stopped safely:"))
     return "Coder 恢复已安全停止，请检查失败记录和恢复证据后再继续。";
   if (text.startsWith("Coder 恢复已安全停止："))
