@@ -10,6 +10,7 @@ import typer
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.domain import AgentRole, TaskStatus
 from ai_software_engineer.manager.production_host import TeamHost
+from ai_software_engineer.manager.python_verification import PytestSelection
 from ai_software_engineer.recovery.entry import open_recovery_plan, read_recovery_task
 from ai_software_engineer.recovery.store import RecoveryRecordMissing
 from ai_software_engineer.recovery.verification_entry import open_candidate_verification_plan
@@ -25,6 +26,22 @@ def _error(error: Exception | None = None) -> NoReturn:
         err=True,
     )
     raise typer.Exit(code=2) from None
+
+
+def _parse_python_tests(values: list[str] | None) -> tuple[PytestSelection, ...] | None:
+    """Parse exact ``node=criterion[,criterion]`` selections for Python/MySQL verification."""
+    if not values:
+        return None
+    selections: list[PytestSelection] = []
+    for value in values:
+        node_id, separator, raw_criteria = value.partition("=")
+        criteria = tuple(item.strip() for item in raw_criteria.split(",") if item.strip())
+        if not separator or not node_id or not criteria:
+            raise ValueError(
+                "--python-test 格式必须为 tests/path.py::test_name=criterion_id[,criterion_id]"
+            )
+        selections.append(PytestSelection(node_id=node_id, criterion_ids=criteria))
+    return tuple(selections)
 
 
 @app.command("propose")
@@ -148,13 +165,28 @@ def verify_propose(
         str,
         typer.Option(help="Child delivery that owns the failed QA checkpoint."),
     ],
+    python_test: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--python-test",
+            help=(
+                "Exact incremental pytest selection as node=criterion[,criterion]; "
+                "repeat for all approved criteria."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Pin the existing Coder candidate and current verifier allocation; no model call."""
     try:
+        python_mysql_tests = _parse_python_tests(python_test)
         plan, path = (
             TeamHost.from_environment()
             .verification_entry(delivery_id=delivery)
-            .propose_project(repository_root=project, delivery_id=delivery)
+            .propose_project(
+                repository_root=project,
+                delivery_id=delivery,
+                python_mysql_tests=python_mysql_tests,
+            )
         )
     except Exception as error:
         _error(error)

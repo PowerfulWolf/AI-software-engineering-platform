@@ -168,3 +168,70 @@ def test_verify_propose_resolves_project_from_delivery(
 
     assert result.exit_code == 0, result.output
     assert host.verification_entry.call_args.kwargs["delivery_id"] == "delivery_candidate"
+
+
+def test_verify_propose_passes_exact_python_incremental_selections(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = Mock()
+    plan.plan_sha256 = "a" * 64
+    plan.inputs.task_id = "task_candidate"
+    plan.inputs.candidate_revision = "b" * 40
+    plan.execution_task_id = "task_verification"
+    plan.definitions = ()
+    host = Mock()
+    host.verification_entry.return_value.propose_project.return_value = (
+        plan,
+        tmp_path / "verification-plan.json",
+    )
+    monkeypatch.setattr(TeamHost, "from_environment", lambda: host)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "verify-propose",
+            "--project",
+            str(tmp_path / "repository"),
+            "--delivery",
+            "delivery_candidate",
+            "--python-test",
+            "tests/test_learning.py::test_first=ac_001_001,ac_001_002",
+            "--python-test",
+            "tests/test_learning.py::test_second=ac_002_001",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    selections = host.verification_entry.return_value.propose_project.call_args.kwargs[
+        "python_mysql_tests"
+    ]
+    assert selections is not None
+    assert [selection.node_id for selection in selections] == [
+        "tests/test_learning.py::test_first",
+        "tests/test_learning.py::test_second",
+    ]
+    assert selections[0].criterion_ids == ("ac_001_001", "ac_001_002")
+
+
+def test_verify_propose_rejects_malformed_python_incremental_selection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host = Mock()
+    monkeypatch.setattr(TeamHost, "from_environment", lambda: host)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "verify-propose",
+            "--project",
+            str(tmp_path / "repository"),
+            "--delivery",
+            "delivery_candidate",
+            "--python-test",
+            "tests/test_learning.py::test_first",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "格式必须为" in result.output
+    host.verification_entry.assert_not_called()

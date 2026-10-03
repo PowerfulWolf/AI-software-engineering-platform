@@ -1,0 +1,22 @@
+{
+  "id": "verification-python-selection-cli-20261004",
+  "title": "Expose exact Python incremental selections in candidate verification CLI",
+  "status": "completed",
+  "phase": "verified_incremental",
+  "created_at": "2026-10-04T07:15:00+08:00",
+  "owner": "codex",
+  "scope": [
+    "src/ai_software_engineer/recovery/cli.py",
+    "tests/recovery/test_cli.py",
+    "docs/operations/cli.md"
+  ],
+  "verification": {
+    "command": ".venv/bin/pytest -q tests/recovery/test_cli.py tests/agents/test_candidate_source_binding.py tests/recovery/test_candidate_verification.py tests/recovery/test_verification_routing.py --tb=short",
+    "result": "43 passed",
+    "ruff": "check and format --check passed",
+    "diff_check": "passed"
+  },
+  "remaining": [
+    "Use the new option to propose and approve a fresh Python/MySQL candidate verification plan."
+  ]
+}
