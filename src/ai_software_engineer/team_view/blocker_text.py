@@ -67,6 +67,11 @@ _KNOWLEDGE_FAILURE = re.compile(
     r"(?P<code>[A-Z0-9_:-]+)$",
     re.IGNORECASE,
 )
+_RECOVERY_APPROVAL_ROUTE = re.compile(
+    r"^Route the blocked delivery to the existing exact recovery approval associated "
+    r"with approval_sha256 (?P<sha>[0-9a-f]{64})\. Do not reset task state or replay "
+    r"any consumed approval\.$"
+)
 
 
 def _repository_blocker(text: str) -> str | None:
@@ -120,6 +125,16 @@ def _knowledge_failure(text: str) -> str | None:
     return f"{role} 知识{phase}失败（原因代码：{code}），请检查模型服务后再继续。"
 
 
+def _recovery_approval_route(text: str) -> str | None:
+    match = _RECOVERY_APPROVAL_ROUTE.fullmatch(text)
+    if match is None:
+        return None
+    return (
+        "请将阻塞交付转入已存在且精确匹配的恢复审批（审批摘要 "
+        f"{match.group('sha')}）。不要重置任务状态，也不要重复使用已消费的审批。"
+    )
+
+
 def localize_blocking_text(value: str | None) -> str | None:
     """Return Chinese console wording while preserving safe opaque identifiers."""
 
@@ -140,6 +155,19 @@ def localize_blocking_text(value: str | None) -> str | None:
     knowledge_failure = _knowledge_failure(text)
     if knowledge_failure is not None:
         return knowledge_failure
+    if text == (
+        "Delivery is blocked because a sub-delivery or joint integration requires "
+        "recovery and the child finding requests human handling."
+    ):
+        return "子交付或联合集成需要恢复，子任务发现需要人工处理。"
+    recovery_route = _recovery_approval_route(text)
+    if recovery_route is not None:
+        return recovery_route
+    if text == (
+        "Resume the existing delivery task only after the exact recovery approval is "
+        "confirmed and the authorized recovery path is available."
+    ):
+        return "确认精确恢复审批并具备授权恢复路径后，才能恢复现有交付任务。"
     if text.startswith("Coder recovery stopped safely:"):
         return "Coder 恢复已安全停止，请检查失败记录和恢复证据后再继续。"
     if text.startswith("Coder 恢复已安全停止："):

@@ -1013,6 +1013,15 @@ function humanizeBlockingText(value) {
     const roles = { coder: "Coder", qa: "QA", reviewer: "Reviewer" };
     return `${roles[knowledgeFailure[1].toLowerCase()]} 知识${phases[knowledgeFailure[2].toLowerCase()]}失败（原因代码：${knowledgeFailure[3].toUpperCase()}），请检查模型服务后再继续。`;
   }
+  if (text === "Delivery is blocked because a sub-delivery or joint integration requires recovery and the child finding requests human handling.")
+    return "子交付或联合集成需要恢复，子任务发现需要人工处理。";
+  const recoveryRoute = text.match(
+    /^Route the blocked delivery to the existing exact recovery approval associated with approval_sha256 ([0-9a-f]{64})\. Do not reset task state or replay any consumed approval\.$/,
+  );
+  if (recoveryRoute)
+    return `请将阻塞交付转入已存在且精确匹配的恢复审批（审批摘要 ${recoveryRoute[1]}）。不要重置任务状态，也不要重复使用已消费的审批。`;
+  if (text === "Resume the existing delivery task only after the exact recovery approval is confirmed and the authorized recovery path is available.")
+    return "确认精确恢复审批并具备授权恢复路径后，才能恢复现有交付任务。";
   if (text.startsWith("Coder recovery stopped safely:"))
     return "Coder 恢复已安全停止，请检查失败记录和恢复证据后再继续。";
   if (text.startsWith("Coder 恢复已安全停止："))

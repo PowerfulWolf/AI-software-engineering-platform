@@ -1016,6 +1016,13 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     ),
     "QA 知识准备失败（原因代码：RATE_LIMITED），请检查模型服务后再继续。",
   );
+  assert.equal(
+    vm.runInContext(
+      'humanizeBlockingText("Delivery is blocked because a sub-delivery or joint integration requires recovery and the child finding requests human handling.")',
+      context,
+    ),
+    "子交付或联合集成需要恢复，子任务发现需要人工处理。",
+  );
   assert.equal(interval.ms, 5000);
   assert.equal(get("scope-label").textContent, "Team 级");
   assert.equal(get("scope-title").textContent, "Fixture team");

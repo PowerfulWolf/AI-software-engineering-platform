@@ -47,6 +47,10 @@ example, `qa knowledge preparation failed: RATE_LIMITED` is shown as `QA 知识�
 The role, phase, and machine error code are retained in a bounded Chinese sentence; the durable
 Task and Operation records remain unchanged.
 
+Manager recovery advice is localized as well, including the exact recovery approval digest. The
+digest remains visible so a human can approve the right immutable record; English coordination
+summaries and route instructions never leak into the Team snapshot or browser detail view.
+
 ### Tests Required
 
 Cover exact stable messages, repository prefixes, unknown text pass-through and preservation of

@@ -41,6 +41,21 @@ def test_localizes_knowledge_preparation_failure_and_keeps_error_code() -> None:
     )
 
 
+def test_localizes_manager_recovery_advice_and_keeps_approval_digest() -> None:
+    digest = "a" * 64
+    assert localize_blocking_text(
+        "Delivery is blocked because a sub-delivery or joint integration requires "
+        "recovery and the child finding requests human handling."
+    ) == "子交付或联合集成需要恢复，子任务发现需要人工处理。"
+    assert localize_blocking_text(
+        "Route the blocked delivery to the existing exact recovery approval associated "
+        f"with approval_sha256 {digest}. Do not reset task state or replay any consumed approval."
+    ) == (
+        "请将阻塞交付转入已存在且精确匹配的恢复审批（审批摘要 "
+        f"{digest}）。不要重置任务状态，也不要重复使用已消费的审批。"
+    )
+
+
 def test_unknown_text_and_durable_record_are_not_rewritten() -> None:
     value = "未知原因 run_123 sha256=abc123"
     assert localize_blocking_text(value) == value
