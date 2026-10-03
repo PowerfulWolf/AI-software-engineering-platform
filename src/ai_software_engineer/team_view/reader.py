@@ -846,23 +846,10 @@ def _request_with_current_work(request: RequestView, tasks: list[TaskView]) -> R
                 "coordination": None,
             }
         )
-    terminal_blockers = tuple(
-        task
-        for task in tasks
-        if task.request_id == request.id
-        and task.terminal
-        and task.status in {"BLOCKED", "FAILED", "REMEDIATION_REQUIRED", "VERIFICATION_INTERRUPTED"}
-        and task.blocker is not None
-    )
-    if terminal_blockers and _waiting(request.stage):
-        current = max(terminal_blockers, key=lambda task: (task.last_activity, task.id))
-        return request.model_copy(
-            update={
-                "blocker": current.blocker,
-                "next_action": current.next_action,
-                "failed_stages": request.failed_stages,
-            }
-        )
+    # A new non-terminal child is the current delivery even when an older
+    # verification/remediation Task still carries a terminal blocker. The
+    # terminal history remains visible in the Task list, but must not pin the
+    # Requirement header to a stale QA/Review failure while Coder is running.
     active = tuple(
         _with_execution_state(task)
         for task in tasks
@@ -872,6 +859,24 @@ def _request_with_current_work(request: RequestView, tasks: list[TaskView]) -> R
         and not _waiting(task.status)
     )
     if not active:
+        terminal_blockers = tuple(
+            task
+            for task in tasks
+            if task.request_id == request.id
+            and task.terminal
+            and task.status
+            in {"BLOCKED", "FAILED", "REMEDIATION_REQUIRED", "VERIFICATION_INTERRUPTED"}
+            and task.blocker is not None
+        )
+        if terminal_blockers and _waiting(request.stage):
+            current = max(terminal_blockers, key=lambda task: (task.last_activity, task.id))
+            return request.model_copy(
+                update={
+                    "blocker": current.blocker,
+                    "next_action": current.next_action,
+                    "failed_stages": request.failed_stages,
+                }
+            )
         return request
     current = max(active, key=lambda task: (task.last_activity, task.id))
     stage = "INTEGRATING" if current.work_kind == "candidate_verification" else "DELIVERING"
@@ -884,6 +889,7 @@ def _request_with_current_work(request: RequestView, tasks: list[TaskView]) -> R
             "coordination": None,
         }
     )
+
 
 
 def _directories(root: Path, pattern: str) -> tuple[Path, ...]:

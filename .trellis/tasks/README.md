@@ -16,6 +16,7 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 
 | 目录 | 状态 / 阶段 | 剩余事项 |
 |---|---|---|
+| [10-03-active-child-over-stale-verification-blocker](10-03-active-child-over-stale-verification-blocker/task.json) | in_progress / implementation | 活动 Coder 恢复优先于旧 QA/Review 终态阻塞；增量回归、推送与服务重载待完成 |
 | [10-02-post-feedback-knowledge-recovery](10-02-post-feedback-knowledge-recovery/task.json) | completed / incremental_verified | exact unfinished知识咨询与clean候选恢复；真实Git/MySQL增量及独立QA/Review通过，待空闲加载并恢复K1 |
 | [10-02-recovery-verdict-context](10-02-recovery-verdict-context/task.json) | completed / incremental_verified | 保留恢复前的 QA/Review finding；增量、Ruff、mypy与独立QA/Review通过；无活动角色时加载，K1继续原生验收 |
 | [10-02-current-child-blocker-display](10-02-current-child-blocker-display/task.json) | completed / incremental_verified | 48项增量与独立QA/Review；静态展示更新，K1仍走原生交付 |

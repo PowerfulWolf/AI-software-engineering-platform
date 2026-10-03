@@ -170,8 +170,21 @@ def test_active_child_task_supersedes_stale_blocked_requirement_projection(
         last_activity=datetime.now(UTC),
         next_action="RUN_DELIVERY",
     )
+    stale_verification = task.model_copy(
+        update={
+            "id": "verification_old_failure",
+            "work_kind": "candidate_verification",
+            "task_id": "task_verify_old_failure",
+            "status": "REMEDIATION_REQUIRED",
+            "checkpoint_stage": "INTEGRATING",
+            "terminal": True,
+            "last_activity": datetime.now(UTC) - timedelta(minutes=5),
+            "blocker": "QA verification failed; continue delivery to create remediation.",
+            "next_action": "Continue delivery for remediation.",
+        }
+    )
 
-    projected = _request_with_current_work(request, [task])
+    projected = _request_with_current_work(request, [stale_verification, task])
 
     assert projected.stage == "DELIVERING"
     assert projected.blocker is None

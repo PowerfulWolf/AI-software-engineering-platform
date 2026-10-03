@@ -107,6 +107,10 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
   必须优先展示子 Task 正在交付（delivery/remediation 为 `DELIVERING`，candidate verification 为
   `INTEGRATING`），清除旧 blocker，并使用子 Task 的 `next_action`。子 Task 再次终止或阻塞后才恢复
   展示联合 checkpoint 的阻塞事实；不得把旧父记录覆盖回存储。
+
+  该优先级也适用于更早的终态 QA/Review 或 remediation 子 Task：它们仍保留在任务历史中，
+  但不能在新的非终态 Coder successor 已运行时把需求顶部钉在旧的验证阻塞上。只有没有活动
+  successor 时，最新终态子 Task 的具体 blocker 才能覆盖父级泛化建议。
 - `RequestView.failed_stages` 是从当前 native child checkpoint 的 `failed_stage` 只读投影的失败阶段集合；
   不得从 blocker 文本猜测阶段，也不得使用已被 successor Task 取代的历史 child checkpoint。浏览器的
   交付流程在有失败阶段时必须把失败阶段之前的节点显示为已完成、失败节点显示为阻塞警告、后续节点
