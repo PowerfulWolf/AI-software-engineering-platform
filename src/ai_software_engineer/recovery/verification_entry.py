@@ -347,7 +347,13 @@ def _verification_task_commands(
     when the approved candidate itself contains Package.swift; the exact expanded
     commands are then sealed in its AgentDefinitions and policy digest.
     """
+    # RepositoryProfile may describe the platform itself and therefore contain
+    # Swift fixture markers even when the candidate is a Python project. Swift
+    # commands are a candidate capability only when this exact candidate owns a
+    # regular top-level Package.swift; profile-wide fixture markers must not
+    # select the Swift executor for every repository.
     commands = set(_task_commands(profile))
+    commands.difference_update(SWIFT_VERIFICATION_COMMANDS)
     completed = subprocess.run(
         (
             "git",

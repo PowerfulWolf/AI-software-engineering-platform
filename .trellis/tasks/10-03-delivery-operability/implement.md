@@ -24,3 +24,13 @@
 `require_focused_tests` 校验，要求 `tests/` 下明确的测试文件或节点；目录、仅 marker、无
 选择器和动态 `pytest.main` 在进程启动前拒绝，并返回中文原因。旧执行记录、候选、审批和
 verdict 不修改；回滚仅需在无活动角色时回滚平台提交并重启。
+
+## 候选验证器误选 Swift
+
+最新验证计划暴露了另一个平台缺陷：平台自身 `RepositoryProfile` 包含 Swift fixture，
+`_task_commands(profile)` 因此带有 Swift 命令，候选 capability 仅凭命令集合错误选择
+`codex_sandbox_swiftpm_v1`。Python 候选的 QA 随后执行 `swift build/test`，因没有
+`Package.swift` 生成环境错误，导致真实 Python 增量测试根本没有机会运行。已让候选命令
+编译先移除 profile 继承的 Swift 命令，仅当候选 revision 自身存在 regular 顶层
+`Package.swift` 时重新加入。保留本次 QA FAIL 及所有旧事实，下一次必须重新 propose/approve
+精确计划，不能重放本次计划。

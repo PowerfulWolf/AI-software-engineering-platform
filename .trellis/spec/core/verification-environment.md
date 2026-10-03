@@ -148,6 +148,22 @@ directory, marker-only and dynamic `pytest.main` invocations.
 `_SelectionGuard` 验证精确节点。新增门禁不迁移历史 Task/Artifact/Approval，旧计划不能因为
 代码更新而重放；候选复核需重新生成并批准绑定当前 policy 的计划。
 
+### Candidate build-system capability selection (2026-10-04)
+
+`RepositoryProfile` 描述的是整个仓库的只读事实，平台仓库本身可能同时包含 Swift 测试
+fixture。候选验证的 `_verification_task_commands(source, profile)` 必须先移除 profile 中
+继承的 Swift 命令，再仅依据候选 revision 顶层的 regular `Package.swift` 恢复它们。否则
+Python 候选会错误选择 `codex_sandbox_swiftpm_v1`，在 QA 前执行 SwiftPM 并以缺少
+`Package.swift` 的环境错误阻塞交付。真实 Python 候选继续使用普通 Responses 增量命令或
+用户明确批准的 Python/MySQL 精确 capability；不能因为宿主仓库有 Swift fixture 而注入 Swift
+receipt。
+
+Good: Python candidate without `Package.swift` has no Swift verifier capability. Base: Swift
+candidate with a regular tracked top-level `Package.swift` receives the existing Swift commands.
+Bad: selecting Swift from `RepositoryProfile.build_systems` alone. Required regression is
+`tests/recovery/test_swift_verification.py` plus a focused candidate verification proposal that
+asserts the capability kind before execution.
+
 ### Sandbox temporary-directory alias collision (2026-10-02)
 
 `python_mysql_sandbox_environment() -> dict[str, str]` supplies the fixed outer PATH/LANG/LC_ALL/

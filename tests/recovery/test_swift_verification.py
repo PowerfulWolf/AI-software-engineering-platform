@@ -9,7 +9,7 @@ import pytest
 from ai_software_engineer.recovery.models import RecoveryRejected
 from ai_software_engineer.recovery.verification_entry import _verification_task_commands
 from ai_software_engineer.recovery.verification_native import NativeCandidateSource
-from ai_software_engineer.repository_profile import RepositoryProfile
+from ai_software_engineer.repository_profile import BuildSystem, BuildSystemFact, RepositoryProfile
 from ai_software_engineer.swift_verification import SWIFT_VERIFICATION_COMMANDS
 
 
@@ -34,6 +34,18 @@ def test_swift_commands_follow_candidate_tree_not_current_checkout(
     _git(tmp_path, "add", "README.md")
     _git(tmp_path, "commit", "-qm", "baseline")
     historical = RepositoryProfile.discover(tmp_path)
+    # The platform repository profile can contain Swift fixtures even when the
+    # candidate itself is Python. The candidate marker must remain authoritative.
+    historical = historical.model_copy(
+        update={
+            "build_systems": (
+                BuildSystemFact(
+                    system=BuildSystem.SWIFT,
+                    markers=("tests/fixtures/swift-sandbox/Package.swift",),
+                ),
+            )
+        }
+    )
     before = historical.to_wire()
     package = tmp_path / "Package.swift"
     if marker == "file":
