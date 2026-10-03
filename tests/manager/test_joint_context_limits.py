@@ -79,10 +79,10 @@ def test_projection_keeps_frozen_rules_and_full_approved_stages(tmp_path: Path) 
     assert projected[-2:] == sources[-2:]  # Nested AGENTS instructions also remain full.
     assert all(source.required for source in projected)
     assert all("Preserve the ledger sequence" not in (s.content or "") for s in projected[1:4])
-    with pytest.raises(ContextBudgetExceeded):
-        FileRunContextBuilder(
-            tmp_path, sources=sources, budget=PRODUCTION_DELIVERY_CONTEXT_BUDGET
-        ).build(make_task(), make_agent(), attempt=1)
+    legacy_bundle = FileRunContextBuilder(
+        tmp_path, sources=sources, budget=PRODUCTION_DELIVERY_CONTEXT_BUDGET
+    ).build(make_task(), make_agent(), attempt=1)
+    assert all(not section.truncated for section in legacy_bundle.sections)
     bundle = FileRunContextBuilder(
         tmp_path, sources=projected, budget=PRODUCTION_DELIVERY_CONTEXT_BUDGET
     ).build(make_task(), make_agent(), attempt=1)
@@ -174,7 +174,7 @@ def test_complete_role_chain_retains_artifacts_and_frozen_read_text(
             sources[0].content or ""
         )
         assert all(not s.truncated for s in context.sections)
-        assert context.budget.max_input_tokens == 128_000
+        assert context.budget.max_input_tokens == 256_000
         assert context.budget.used_input_tokens == sum(s.tokens for s in context.sections)
         for identity in request.input_artifact_ids:
             assert (
@@ -191,7 +191,7 @@ def test_complete_role_chain_retains_artifacts_and_frozen_read_text(
         ).input_artifact_ids
 
 
-@pytest.mark.parametrize("size,accepted", [(300_000, True), (520_000, False)])
+@pytest.mark.parametrize("size,accepted", [(520_000, True), (1_100_000, False)])
 def test_production_budget_accepts_larger_required_inputs_but_remains_bounded(
     tmp_path: Path, size: int, accepted: bool
 ) -> None:
@@ -209,5 +209,5 @@ def test_production_budget_accepts_larger_required_inputs_but_remains_bounded(
             builder.build(make_task(), make_agent(), attempt=1)
     else:
         context = builder.build(make_task(), make_agent(), attempt=1)
-        assert 64_000 < context.budget.used_input_tokens < 128_000
+        assert 64_000 < context.budget.used_input_tokens < 256_000
         assert context.budget.reserved_output_tokens == 4_000

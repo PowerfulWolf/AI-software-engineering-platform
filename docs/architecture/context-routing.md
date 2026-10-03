@@ -71,10 +71,10 @@ Builder 始终生成并优先交付 `policy`、`task`、`role`；提供且不同
 相同 Task、role、attempt、权限、来源正文、candidate revision 和 budget 必须产生相同 section 顺序、hash、token 计数和 `context_id`；`built_at` 仅是观察元数据，不参与身份哈希。
 
 `RuntimeConfig.context_max_input_tokens` 显式传到 `FileRunContextBuilder`，默认仍为 12,000；
-生产 Team Host 的交付阶段设置 128,000，输出预留仍为 4,000。它是本地确定性估算上限，
+生产 Team Host 的交付阶段设置 256,000，输出预留仍为 4,000。它是本地确定性估算上限，
 不是供应商真实 tokenizer 或模型 context window 的声明；不会因超限自动扩大或重试。
 独立候选验证入口 `CandidateVerificationEntry.execute` 同样必须显式复用
-`PRODUCTION_DELIVERY_CONTEXT_BUDGET`，不能落回低层默认值。QA 上下文能装下不代表
+`PRODUCTION_DELIVERY_CONTEXT_BUDGET`（当前为 256,000 input token），不能落回低层默认值。QA 上下文能装下不代表
 Reviewer 加入完整 QA 报告后也能装下；必须以该生产 composition 做顺序回归。
 Console 对逃出独立验证入口的超限返回 `CONTEXT_BUDGET_EXHAUSTED`，保留报告与审批历史、
 明确 Manager 协调修复及新计划恢复，不把它当作模型/业务失败或输出原始 source 文本。

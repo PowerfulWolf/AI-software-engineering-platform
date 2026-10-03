@@ -182,7 +182,12 @@ from ai_software_engineer.work_queue.ports import DeliveryQueuePending
 Clock = Callable[[], datetime]
 ResultT = TypeVar("ResultT")
 PRODUCTION_DELIVERY_CONTEXT_BUDGET = ContextBudget(
-    max_input_tokens=128_000, reserved_output_tokens=4_000
+    # Candidate verification must carry the complete base-to-candidate diff
+    # after the role Context and sealed artifacts have been serialized.  Keep
+    # this as one explicit production contract; BoundCandidateSource still
+    # refuses truncation and checks the final prompt against this limit.
+    max_input_tokens=256_000,
+    reserved_output_tokens=4_000,
 )
 PRODUCTION_DELIVERY_MAX_ATTEMPTS = 3
 _ALL_CAPABILITIES = DELIVERY_CAPABILITIES
