@@ -1007,7 +1007,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
       'humanizeBlockingText("Repository unit_a is BLOCKED; PLANNING (INVARIANT_VIOLATION): Planner stopped safely")',
       context,
     ),
-    "Repository unit_a is BLOCKED; PLANNING (INVARIANT_VIOLATION): Planner stopped safely",
+    "代码仓库 unit_a 已阻塞；计划阶段校验失败（INVARIANT_VIOLATION），Planner 已安全停止。",
   );
   assert.equal(interval.ms, 5000);
   assert.equal(get("scope-label").textContent, "Team 级");
@@ -2324,15 +2324,15 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     "Requirement detail owns exactly one blocker module",
   );
   assert.equal(
-    blockedDetail.match(/Waiting for recovery/g)?.length,
-    1,
-    "identical repository blockers are deduplicated",
+    blockedDetail.match(/等待恢复/g)?.length,
+    2,
+    "the same blocker remains one reason plus the Manager recovery status",
   );
-  assert.match(blockedDetail, /No automatic continuation is available/);
+  assert.match(blockedDetail, /当前没有可自动继续的路径/);
   assert.doesNotMatch(blockedDetail, /Old joint blocker/);
   storedOperations[1].result.next_action = "Waiting for recovery";
   await interval.fn();
-  assert.equal(text(get("detail")).match(/Waiting for recovery/g)?.length, 1);
+  assert.equal(text(get("detail")).match(/等待恢复/g)?.length, 2);
   storedOperations[1].result.next_action = "No automatic continuation is available.";
   fixture.tasks.push({
     ...structuredClone(fixture.tasks[0]),

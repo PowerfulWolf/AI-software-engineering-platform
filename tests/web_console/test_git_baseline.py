@@ -200,9 +200,7 @@ def test_unrelated_long_error_retains_safe_fallback(
     result = console.run_once()
 
     assert result is not None and result.error_code == "COMMAND_REJECTED"
-    assert result.error_summary == (
-        "Manager rejected the operation; inspect current delivery facts."
-    )
+    assert result.error_summary == "Manager 拒绝了该操作，请检查当前交付事实。"  # noqa: RUF001
 
 
 @pytest.mark.parametrize("select_module", [False, True])

@@ -194,8 +194,8 @@ class DeliveryResumeController:
                 DeliveryResumeOutcome.WAITING_HUMAN,
                 ProjectDeliveryResult(checkpoint=current),
                 next_action=(
-                    "No verified candidate is available for automatic continuation; inspect the "
-                    "terminal Task and use explicit recovery if it contains uncommitted Coder work."
+                    "当前没有可自动继续的路径；请检查终态 Task，"  # noqa: RUF001
+                    "如有未提交的 Coder 改动则使用明确的恢复流程。"
                 ),
             )
         if current.candidate_revision is None:
@@ -621,7 +621,7 @@ class DeliveryResumeController:
             return DeliveryResumeResult(
                 outcome=DeliveryResumeOutcome.WAITING_HUMAN,
                 checkpoint=current,
-                next_action=f"Pre-execution restart stopped safely: {error}",
+                next_action=f"Coder 启动前重启已安全停止：{error}",  # noqa: RUF001
             )
         # Attachment precedes execution. A crash or verifier knowledge wait remains reachable
         # through normal native continuation; no second hidden execution path is needed.
@@ -707,7 +707,7 @@ class DeliveryResumeController:
                         outcome=DeliveryResumeOutcome.RECOVERY_APPROVAL_REQUIRED,
                         checkpoint=current,
                         interruption_plan=proposal,
-                        next_action="Approve one new Coder Run on the exact stopped workspace.",
+                        next_action="请在已停止的精确工作区上批准一次新的 Coder 执行。",
                     )
                 assert command.approval_reference is not None
                 execution = self._recovery.execute_interruption(
@@ -776,7 +776,7 @@ class DeliveryResumeController:
         return DeliveryResumeResult(
             outcome=DeliveryResumeOutcome.WAITING_HUMAN,
             checkpoint=checkpoint,
-            next_action=f"Coder recovery stopped safely: {reason}",
+            next_action=f"Coder 恢复已安全停止：{reason}",  # noqa: RUF001
         )
 
     @staticmethod
@@ -789,8 +789,7 @@ class DeliveryResumeController:
             outcome=DeliveryResumeOutcome.RECOVERY_APPROVAL_REQUIRED,
             checkpoint=checkpoint,
             next_action=(
-                "Inspect the captured Coder changes, then rerun request resume with this exact "
-                "plan digest and an approval reference."
+                "请检查已封存的 Coder 改动，然后携带该精确计划摘要和批准引用重新请求恢复。"  # noqa: RUF001
             ),
             recovery_plan_file=str(path),
             recovery_plan_sha256=plan.plan_sha256,
@@ -804,7 +803,7 @@ class DeliveryResumeController:
         return DeliveryResumeResult(
             outcome=DeliveryResumeOutcome.SCOPE_APPROVAL_REQUIRED,
             checkpoint=checkpoint,
-            next_action="Approve the exact omitted file paths before capturing retained work.",
+            next_action="请先批准精确的遗漏文件路径，再封存保留的改动。",  # noqa: RUF001
             scope_supplement_sha256=supplement.supplement_sha256,
             scope_supplement_paths=supplement.paths,
             coder_scope_request=supplement.request,

@@ -584,7 +584,7 @@ def _summarize(
                     ),
                 ),
             )
-            next_action = "Review and approve the exact Coder recovery plan."
+            next_action = "请检查并批准精确的 Coder 恢复计划。"
         elif result.scope_supplement_sha256 is not None:
             approval = ConsoleApprovalRequest(
                 kind="coder_scope",
@@ -606,7 +606,7 @@ def _summarize(
                     *(f"待补充文件 {path}" for path in result.scope_supplement_paths),
                 ),
             )
-            next_action = "Review and approve the exact omitted file paths."
+            next_action = "请检查并批准精确的遗漏文件路径。"
     return ConsoleCommandResult(
         project_id=project_id,
         delivery_id=checkpoint.delivery_id,
@@ -624,7 +624,7 @@ def _safe_summary(error: Exception) -> str:
         or len(value) > 500
         or any(ord(character) < 32 and character not in "\t\n" for character in value)
     ):
-        return "Manager rejected the operation; inspect current delivery facts."
+        return "Manager 拒绝了该操作，请检查当前交付事实。"  # noqa: RUF001
     return value
 
 

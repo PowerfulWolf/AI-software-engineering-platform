@@ -926,6 +926,37 @@ function requestBlockingSummary(request) {
 function humanizeBlockingText(value) {
   const text = String(value || "").trim();
   if (!text) return "暂未记录具体原因。";
+  const exact = {
+    REQUEST_HUMAN: "需要人工处理后再继续交付。",
+    "A child delivery or integration requires recovery.": "子交付或联合集成需要恢复。",
+    "Delivery is blocked by a child delivery or integration requiring recovery. The child finding requests human involvement; no repair or usable approval is established by the supplied hashes alone.": "子交付或联合集成需要恢复，当前交付已阻塞。子任务发现需要人工介入；仅凭现有摘要无法建立可用修复或批准。",
+    "Required context exceeds the configured input budget; no model retry.": "所需上下文超过配置的输入上限，不能重试模型。",
+    "BUDGET_EXHAUSTED: Required context exceeds the configured input budget; no automatic retry.": "BUDGET_EXHAUSTED：所需上下文超过配置的输入上限，不能自动重试。",
+    "Candidate verification stopped before a sealed result was produced.": "候选验证在封存结果生成前停止。",
+    "Candidate verification passed; continue the delivery acceptance policy.": "候选验证已通过，请继续执行交付验收策略。",
+    "Continue the delivery to create and approve a fresh verification plan.": "请继续交付，以创建并批准新的验证计划。",
+    "A successor verification plan replaced this consumed plan.": "后续验证计划已替代本次已消费的计划。",
+    "QA candidate verification is active or awaiting resume.": "QA 候选验证正在执行或等待恢复。",
+    "Reviewer candidate verification is active or awaiting resume.": "Reviewer 候选验证正在执行或等待恢复。",
+    "Verify the complete pinned candidate set together.": "请对已固定的完整候选集合执行联合验证。",
+    "Joint integration failed. Preserve candidates and inspect command evidence; do not merge independently.": "联合集成失败。请保留候选并检查命令证据，不要单独合并。",
+    "Joint candidates passed repository QA/Review and integration. Review the candidate set before merging; nothing was pushed.": "所有候选已通过仓库 QA、Review 和联合集成。合并前请检查候选集合；平台没有推送代码。",
+    "The repository candidate passed native QA and Review. Review the candidate before merging; nothing was pushed.": "仓库候选已通过原生 QA 和 Review。合并前请检查候选；平台没有推送代码。",
+    "Resume only incomplete repository deliveries.": "仅恢复尚未完成的仓库交付。",
+    "No automatic continuation is available; inspect the terminal Task and use explicit recovery if it contains uncommitted Coder work.": "当前没有可自动继续的路径；请检查终态 Task，如有未提交的 Coder 改动则使用明确的恢复流程。",
+    "No automatic continuation is available.": "当前没有可自动继续的路径。",
+    "Review and approve the exact Coder recovery plan.": "请检查并批准精确的 Coder 恢复计划。",
+    "Review and approve the exact omitted file paths.": "请检查并批准精确的遗漏文件路径。",
+    "Approve one new Coder Run on the exact stopped workspace.": "请在已停止的精确工作区上批准一次新的 Coder 执行。",
+    "Approve the exact omitted file paths before capturing retained work.": "请先批准精确的遗漏文件路径，再封存保留的改动。",
+    "Inspect the captured Coder changes, then rerun request resume with this exact plan digest and an approval reference.": "请检查已封存的 Coder 改动，然后携带该精确计划摘要和批准引用重新请求恢复。",
+    "Waiting for recovery": "等待恢复。",
+    "Current recovery source or target facts do not match": "当前恢复来源或目标事实不匹配。",
+    "Manager operation failed; inspect durable delivery facts.": "Manager 操作失败，请检查持久化的交付事实。",
+    "Manager rejected the operation; inspect current delivery facts.": "Manager 拒绝了该操作，请检查当前交付事实。",
+    "The previous joint integration command failed. Produce a fresh, complete integration plan using the recorded command evidence.": "上一次联合集成命令失败。请依据已记录的命令证据生成新的完整联合集成计划。",
+  };
+  if (Object.prototype.hasOwnProperty.call(exact, text)) return exact[text];
   if (
     text.includes("Coder requested continuation after the configured run budget")
   )
@@ -952,6 +983,34 @@ function humanizeBlockingText(value) {
     )
   )
     return "至少一个代码仓库任务仍处于阻塞状态，联合交付尚未完成。";
+  const repository = text.match(/^Repository (.+?) is BLOCKED; (.*)$/);
+  if (repository) {
+    if (repository[2].startsWith("PLANNING (INVARIANT_VIOLATION): Planner stopped safely"))
+      return `代码仓库 ${repository[1]} 已阻塞；计划阶段校验失败（INVARIANT_VIOLATION），Planner 已安全停止。`;
+    return `代码仓库 ${repository[1]} 已阻塞；请检查该仓库的交付检查点。`;
+  }
+  if (text.startsWith("Coder recovery stopped safely:"))
+    return "Coder 恢复已安全停止，请检查失败记录和恢复证据后再继续。";
+  if (text.startsWith("Coder 恢复已安全停止："))
+    return "Coder 恢复已安全停止，请检查失败记录和恢复证据后再继续。";
+  if (text.startsWith("Pre-execution restart stopped safely:"))
+    return "Coder 启动前重启已安全停止，请检查失败记录和恢复证据后再继续。";
+  if (text.startsWith("Coder 启动前重启已安全停止："))
+    return "Coder 启动前重启已安全停止，请检查失败记录和恢复证据后再继续。";
+  if (text.startsWith("failed Coder identity is missing, unsafe or ambiguous") ||
+      text.startsWith("recoverable Coder identity is missing, unsafe or ambiguous"))
+    return "系统未能确认唯一且可信的 Coder 执行记录，本次自动恢复已安全停止。";
+  if (text.startsWith("Rejected plan "))
+    return "计划未通过校验，阶段已阻塞；请在恢复时修正计划并保留原错误证据。";
+  if (text.startsWith("SPEC_CONFLICT"))
+    return "项目规范与平台安全策略冲突，需要人工决定后才能继续。";
+  if (text.startsWith("Manager:"))
+    return "Manager 协调：请检查当前前提并完成恢复。";
+  if (text.startsWith("Approve ")) return "请批准精确的恢复计划后继续。";
+  if (text.startsWith("Review and approve ")) return "请检查并批准精确计划后继续。";
+  if (text.startsWith("Inspect ")) return "请检查当前交付记录和证据后再继续。";
+  if (text.startsWith("Continue ")) return "请继续交付以恢复当前流程。";
+  if (text === "Continue") return "请继续交付以恢复当前流程。";
   return text;
 }
 function requestBlockerSection(request) {
@@ -1996,7 +2055,7 @@ function operationNoticeFor(operation) {
       state: operation.status,
       kind: "error",
       title: `${context} · ${label(operation.intent.action)} · ${label(operation.status)}`,
-      message: operation.error_summary || "操作未完成，请查看需求详情后处理。",
+      message: humanizeBlockingText(operation.error_summary || "操作未完成，请查看需求详情后处理。"),
       target,
       jumpLabel: target ? "打开需求工作区" : null,
     };
@@ -2701,8 +2760,8 @@ function requestOperation(panel, request, discussionSection) {
         failedOperation.error_summary === "Manager rejected the operation; inspect current delivery facts.";
       failure.append(
         el("strong", "Product 回复未完成"),
-        el("p", `失败原因：${request.coordination?.draft.summary || (legacy ? "旧记录未保存具体失败原因，无法判断是否为额度、登录或服务问题。" : failedOperation.error_summary)}`),
-        el("p", `下一步：${request.coordination ? request.next_action : guidance[code] || (legacy ? "更新并重启服务后，点击“继续需求讨论”恢复本轮回复；若仍失败，页面会展示新的错误详情。" : "请附此操作编号排查具体异常，修复后再继续本轮讨论。")}`),
+        el("p", `失败原因：${humanizeBlockingText(request.coordination?.draft.summary || (legacy ? "旧记录未保存具体失败原因，无法判断是否为额度、登录或服务问题。" : failedOperation.error_summary))}`),
+        el("p", `下一步：${humanizeBlockingText(request.coordination ? request.next_action : guidance[code] || (legacy ? "更新并重启服务后，点击“继续需求讨论”恢复本轮回复；若仍失败，页面会展示新的错误详情。" : "请附此操作编号排查具体异常，修复后再继续本轮讨论。"))}`),
         el("p", "已保存的消息和代码基线会保留，无需重新输入或新建需求。", "muted"),
       );
       if (failedOperation?.operation_id)
@@ -6153,7 +6212,7 @@ function managerFlowStatus(request) {
     return el("p", "Manager 协调 · 当前角色已阻塞，等待恢复", "flow-manager blocked");
   if (request.coordination)
     return el("p", `Manager 协调 · ${request.coordination.draft.action === "PROPOSE_RECOVERY"
-      ? "等待恢复" : "等待处理"} · ${request.coordination.draft.summary}`, "flow-manager blocked");
+      ? "等待恢复" : "等待处理"} · ${humanizeBlockingText(request.coordination.draft.summary)}`, "flow-manager blocked");
   const latest = latestOperation(request.id);
   if (latest && ["FAILED", "INTERRUPTED"].includes(latest.status) &&
       deliveryOperationActions.has(latest.intent.action))
@@ -6559,7 +6618,7 @@ function buildDetail(panel = document.getElementById("detail")) {
       overview.append(
         el(
           "p",
-          "下一步 · " + presentation.nextAction,
+          "下一步 · " + humanizeBlockingText(presentation.nextAction),
           "muted request-detail-next",
         ),
       );
@@ -6625,6 +6684,10 @@ function buildDetail(panel = document.getElementById("detail")) {
     el("p", paths(item.scope), "paths"),
     el("p", "最近活动 · " + time(item.last_activity), "muted"),
   );
+  if (item.blocker)
+    dialog.append(el("p", "阻塞原因 · " + humanizeBlockingText(item.blocker), "blocker"));
+  if (taskGroup(item) === "blocked" && item.next_action)
+    dialog.append(el("p", "下一步 · " + humanizeBlockingText(item.next_action), "muted"));
   if (interruptedExecution(item))
     dialog.append(el("p", `${interruptedExecutionReason} 当前交付检查点：${item.status}。`));
   if (waitingExecutionStep(item))

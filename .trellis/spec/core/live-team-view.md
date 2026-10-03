@@ -1,5 +1,47 @@
 # T036 Live team read side
 
+## Blocker wording localization (2026-10-03)
+
+### Scope / Trigger
+
+The read-side Team snapshot and browser detail views expose durable `blocker`, `next_action`,
+Manager coordination summaries, verification failures and recovery results. Historical records
+may contain English from older platform versions and must remain byte-for-byte immutable.
+
+### Signatures and contracts
+
+`localize_blocking_text(value: str | None) -> str | None` is a pure presentation adapter. The
+reader applies it before exposing checkpoint/event reasons through `TaskView` and `RequestView`;
+the browser applies the same mapping to operation summaries and old fixture payloads. It may
+translate stable platform sentences and prefixes, while preserving opaque Task/Run IDs, SHA-256
+digests, repository paths and machine error codes. Status enum values such as `BLOCKED` remain
+machine facts and are rendered with existing Chinese labels.
+
+No state event, Task, Operation, Artifact, verdict, approval or digest is rewritten. Newly
+generated user-facing recovery and integration actions should be Chinese at their producer so
+that non-browser consumers see the same language.
+
+### Validation & Error Matrix
+
+| Input | Read-side result |
+|---|---|
+| Known English blocker or recovery action | Stable Chinese wording |
+| Repository blocker with an opaque unit/path | Chinese prefix; unit/path and error code retained |
+| Unknown diagnostic text | Preserve text safely; never invent a reason |
+| Historical English durable record | Display translated only; immutable record/digest unchanged |
+
+### Good / Base / Bad
+
+Good: a blocked child with `Repository unit_a is BLOCKED` is shown in Chinese while `unit_a` and
+the original event remain unchanged. Base: already Chinese text passes through unchanged. Bad:
+mutating a journal checkpoint to localize it, or removing a provider error code needed for audit.
+
+### Tests Required
+
+Cover exact stable messages, repository prefixes, unknown text pass-through and preservation of
+IDs/digests in the Python localization helper; cover Request/Task details, recent recovery,
+Manager summaries and operation notices in `tests/team_view/ui.test.cjs` and the live reader tests.
+
 ## Scope / Trigger
 
 Changes to team_view, read-only store opening, ase team serve, MySQL aggregation or browser payloads.

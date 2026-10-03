@@ -127,9 +127,9 @@ class ProductionStageCoordinator:
             else "DELIVERY_BLOCKED",
             failure_detail=error.safe_message
             if isinstance(error, StructuredModelError)
-            else "Required context exceeds the configured input budget; no model retry."
+            else "所需上下文超过配置的输入上限，不能重试模型。"  # noqa: RUF001
             if error is not None
-            else "A child delivery or integration requires recovery.",
+            else "子交付或联合集成需要恢复。",
             timeout_kind=error.timeout_kind if isinstance(error, StructuredModelError) else None,
             advertised_actions=actions,
             child_findings=tuple(

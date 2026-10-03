@@ -643,7 +643,7 @@ class JointDeliveryService:
                 checkpoint = self._save(
                     checkpoint,
                     stage=JointStage.DELIVERING,
-                    next_action="Resume only incomplete repository deliveries.",
+                    next_action="仅恢复尚未完成的仓库交付。",
                 )
             elif (
                 checkpoint.stage is JointStage.BLOCKED
@@ -666,10 +666,7 @@ class JointDeliveryService:
                         else checkpoint.planning_feedback
                     ),
                     plan=None,
-                    next_action=(
-                        "The previous joint integration command failed. Produce a fresh, "
-                        "complete integration plan using the recorded command evidence."
-                    ),
+                    next_action="上一次联合集成命令失败。请依据已记录的命令证据生成新的完整联合集成计划。",
                 )
             return JointDeliveryResult(checkpoint=self._advance(checkpoint))
 
@@ -1123,7 +1120,7 @@ class JointDeliveryService:
             checkpoint = self._save(
                 checkpoint,
                 stage=JointStage.INTEGRATING,
-                next_action="Verify the complete pinned candidate set together.",
+                next_action="请对已固定的完整候选集合执行联合验证。",
             )
         if checkpoint.stage is JointStage.INTEGRATING:
             integration_limit = 4 if checkpoint.integration_retry_approval is not None else 3
@@ -1148,8 +1145,7 @@ class JointDeliveryService:
                     stage=JointStage.BLOCKED,
                     integration=evidence,
                     next_action=(
-                        "Joint integration failed. Preserve candidates and inspect command "
-                        "evidence; do not merge independently."
+                        "联合集成失败。请保留候选并检查命令证据，不要单独合并。"  # noqa: RUF001
                     ),
                 )
             checkpoint = self._save(
@@ -1157,8 +1153,8 @@ class JointDeliveryService:
                 stage=JointStage.DONE,
                 integration=evidence,
                 next_action=(
-                    "Joint candidates passed repository QA/Review and integration. Review "
-                    "the candidate set before merging; nothing was pushed."
+                    "所有候选已通过仓库 QA、Review 和联合集成。"
+                    "合并前请检查候选集合；平台没有推送代码。"  # noqa: RUF001
                 ),
             )
         return checkpoint
@@ -1182,8 +1178,8 @@ class JointDeliveryService:
             stage=JointStage.DONE,
             single_repository_acceptance=proof,
             next_action=(
-                "The repository candidate passed native QA and Review. Review the candidate "
-                "before merging; nothing was pushed."
+                "仓库候选已通过原生 QA 和 Review。"
+                "合并前请检查候选；平台没有推送代码。"  # noqa: RUF001
             ),
         )
 

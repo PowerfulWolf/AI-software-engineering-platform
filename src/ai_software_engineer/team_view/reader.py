@@ -64,6 +64,7 @@ from ai_software_engineer.team_workspace import (
     discover_team_workspaces,
 )
 
+from .blocker_text import localize_blocking_text
 from .models import (
     AgentView,
     AssignmentView,
@@ -268,7 +269,7 @@ class ProductionTeamReader:
             presented_next_action = (
                 "原生 QA 与 Review 已通过，继续交付将复核现有证据并完成单仓需求。"  # noqa: RUF001
                 if waiting_single_acceptance
-                else _safe(joint.next_action)
+                else (localize_blocking_text(_safe(joint.next_action)) or _safe(joint.next_action))
             )
             knowledge_gap = None
             if joint.stage is JointStage.WAITING_HUMAN and joint.knowledge_gap_id is not None:
@@ -932,8 +933,12 @@ def _task_base(
         checkpoint_stage=cp.stage,
         terminal=cp.stage in _TERMINAL,
         last_activity=cp.checkpointed_at,
-        blocker=_safe(cp.failure_summary or cp.next_action) if _waiting(cp.stage) else None,
-        next_action=cp.next_action,
+        blocker=(
+            localize_blocking_text(_safe(cp.failure_summary or cp.next_action))
+            if _waiting(cp.stage)
+            else None
+        ),
+        next_action=localize_blocking_text(cp.next_action) or cp.next_action,
         candidate_revision=cp.candidate_revision,
         candidate_branch=_candidate_branch(cp.repository_root, cp.task_id, cp.candidate_revision),
         documents=_stage_refs(cp),
@@ -1030,7 +1035,7 @@ def _verification_view(
     verification_id = f"verification_{reservation.plan_sha256[:32]}"
     current_role = AgentRole.QA
     status, terminal = "VERIFY_QA", False
-    next_action = "QA candidate verification is active or awaiting resume."
+    next_action = "QA 候选验证正在执行或等待恢复。"
     blocker: str | None = None
     last_activity = reservation.committed_at
     documents: list[DocumentView] = []
@@ -1080,7 +1085,7 @@ def _verification_view(
             last_activity = max(last_activity, invocation.admitted_at)
             if role is AgentRole.REVIEWER:
                 current_role, status = AgentRole.REVIEWER, "VERIFY_REVIEW"
-                next_action = "Reviewer candidate verification is active or awaiting resume."
+                next_action = "Reviewer 候选验证正在执行或等待恢复。"
         try:
             completion = store.get_verification_completion(reservation.plan_sha256)
         except RecoveryRecordMissing:
@@ -1102,24 +1107,24 @@ def _verification_view(
         current_role = AgentRole.QA
         if completion.verified:
             status = "VERIFIED"
-            next_action = "Candidate verification passed; continue the delivery acceptance policy."
+            next_action = "候选验证已通过，请继续执行交付验收策略。"  # noqa: RUF001
         else:
             status = "REMEDIATION_REQUIRED"
             blocker = (
-                "QA failed; resume the delivery to create a linked Coder remediation."
+                "QA 验证失败，请继续交付以创建关联的 Coder 修复任务。"  # noqa: RUF001
                 if completion.qa.content.status.value == "FAIL"
-                else "Review rejected; resume the delivery to create a linked Coder remediation."
+                else "Review 被拒绝，请继续交付以创建关联的 Coder 修复任务。"  # noqa: RUF001
             )
             next_action = blocker
     elif abandonment_sha256 is not None:
         terminal = True
         status = "VERIFICATION_INTERRUPTED"
-        blocker = "Candidate verification stopped before a sealed result was produced."
-        next_action = "Continue the delivery to create and approve a fresh verification plan."
+        blocker = "候选验证在封存结果生成前停止。"
+        next_action = "请继续交付，以创建并批准新的验证计划。"  # noqa: RUF001
     elif superseded:
         terminal = True
         status = "VERIFICATION_SUPERSEDED"
-        next_action = "A successor verification plan replaced this consumed plan."
+        next_action = "后续验证计划已替代本次已消费的计划。"
     assignments = tuple(
         AssignmentView(
             agent_id=phase.agent_id,
@@ -1259,7 +1264,7 @@ def _read_task_details(
     )
     blocker = base.blocker if checkpoint_bound else None
     if blocker is None and task.status.value in {"BLOCKED", "FAILED"} and events:
-        blocker = _safe(events[-1].reason)
+        blocker = localize_blocking_text(_safe(events[-1].reason)) or _safe(events[-1].reason)
     continuation = dispatch if isinstance(dispatch, ContinuationDispatchRecord) else None
     recovery = dispatch if isinstance(dispatch, RecoveryDispatchRecord) else None
     source_task_id = (
@@ -1320,7 +1325,10 @@ def _read_task_details(
                 "last_activity": max(cp.checkpointed_at, task.updated_at),
                 "blocker": blocker,
                 "next_action": (
-                    base.next_action if checkpoint_bound else f"Continue {task.status.value}."
+                    base.next_action
+                    if checkpoint_bound
+                    else localize_blocking_text(f"Continue {task.status.value}.")
+                    or f"Continue {task.status.value}."
                 ),
                 "assignments": tuple(
                     AssignmentView(

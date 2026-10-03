@@ -962,7 +962,9 @@ def test_selected_modules_waiting_and_symlink_rejection(tmp_path: Path) -> None:
     reader = ProductionTeamReader(config, {})
     view = reader.snapshot()
     assert view.requests[0].scopes[0].selected_paths == ("module-a", "module-b")
-    assert view.requests[0].blocker == checkpoint.next_action
+    assert view.requests[0].blocker == (
+        "项目规范与平台安全策略冲突，需要人工决定后才能继续。"  # noqa: RUF001
+    )
     assert "hidden_secret" not in view.model_dump_json()
     assert not view.tasks
     link = project.requirements_root / ("delivery_multi_" + "c" * 32)
