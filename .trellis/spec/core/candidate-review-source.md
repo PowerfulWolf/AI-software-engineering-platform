@@ -27,7 +27,11 @@ composition data, not a new approval or AgentRequest wire field.
 - Original Task is parsed from the complete `task://<id>` Context section. Context identity,
   section hashes, role, attempt and revision must match the request. Sealed Plan/Implementation
   must match this Task, original base, parent chain and candidate commit, and equal their complete
-  delivered Context sections after redaction. No parsing of prompt prose or Coder path inventory.
+  delivered Context sections after redaction. A remediation Implementation may have the original
+  Plan followed by the exact persisted QA FAIL or Review REJECT feedback (and bounded Coder progress
+  checkpoints) as parents, and must supersede the prior Implementation. The feedback must bind to
+  that prior candidate and, for Review, to its accepted QA PASS; a first candidate keeps the Plan
+  parent and may only carry Coder progress parents. No parsing of prompt prose or Coder path inventory.
 - Both Git identities must be commit objects. Compare complete original base and candidate trees;
   do not use candidate parent, which loses earlier commits. Every changed path and declared plan
   dependency is required and passes read/Task deny policy before reading. Exact Plan paths only;
@@ -65,7 +69,7 @@ composition data, not a new approval or AgentRequest wire field.
 | Input | Outcome |
 | --- | --- |
 | Large unrelated baseline, small complete candidate difference | Complete source view; no unrelated content |
-| Task/revision/parent/digest or delivered Context mismatch | WorkspacePolicyError; zero model invocation |
+| Task/revision/parent/digest or delivered Context mismatch, including unverified remediation feedback | WorkspacePolicyError; zero model invocation |
 | Denied required path, unsupported blob, missing dependency/object | Refuse complete view, no partial review |
 | Tree/blob/tag identity instead of commit | Refuse before tree reading |
 | Source/process/final prompt exceeds bound | Stable refusal; no truncation, retry or fabricated verdict |

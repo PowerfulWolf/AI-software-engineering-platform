@@ -7,11 +7,15 @@ from unittest.mock import MagicMock
 import pytest
 
 from ai_software_engineer.agents import AgentRunStatus, StoredContextResolver
-from ai_software_engineer.agents.candidate_binding import candidate_read_scope
+from ai_software_engineer.agents.candidate_binding import (
+    candidate_read_scope,
+    validate_candidate_artifact_lineage,
+)
 from ai_software_engineer.agents.codex_cli import SubprocessCodexCommandRunner, _compile_prompt
 from ai_software_engineer.artifacts import FileArtifactStore, seal_artifact
 from ai_software_engineer.context import ContextBudget, InMemoryContextStore
 from ai_software_engineer.domain import AgentRole
+from ai_software_engineer.domain.enums import QaReportStatus
 from ai_software_engineer.git import WorkspacePolicyError
 from ai_software_engineer.manager.production_delivery import ConfiguredDeliveryRouteAdapterFactory
 from ai_software_engineer.orchestration import FileRunContextBuilder
@@ -19,7 +23,13 @@ from ai_software_engineer.recovery.verification_execution import VerificationEvi
 from tests.agents.test_candidate_review_source import repository
 from tests.agents.test_codex_cli import _QaRunner
 from tests.agents.test_openai_compatible import _request
-from tests.domain.factories import NOW, make_implementation_artifact, make_plan_artifact, make_task
+from tests.domain.factories import (
+    NOW,
+    make_implementation_artifact,
+    make_plan_artifact,
+    make_qa_artifact,
+    make_task,
+)
 from tests.manager.test_production_delivery import _config
 from tests.orchestration.test_runner import _definitions
 
@@ -159,6 +169,72 @@ def test_scope_refuses_false_task_lineage_and_integrity(tmp_path: Path, fault: s
         implementation = implementation.model_copy(update={"source_revision": "d" * 40})
     with pytest.raises(WorkspacePolicyError, match="differs"):
         candidate_read_scope(task, plan, implementation, scope.candidate_revision)
+
+
+def test_scope_accepts_qa_remediation_candidate_lineage(tmp_path: Path) -> None:
+    _, scope = repository(tmp_path)
+    task = make_task().model_copy(update={"base_ref": scope.base_revision})
+    source_plan = make_plan_artifact()
+    plan = source_plan.model_copy(
+        update={
+            "task_id": task.id,
+            "source_revision": scope.base_revision,
+            "content": source_plan.content.model_copy(
+                update={
+                    "steps": tuple(
+                        step.model_copy(update={"files": ("dependency.txt",)})
+                        for step in source_plan.content.steps
+                    )
+                }
+            ),
+        }
+    )
+    plan = seal_artifact(plan, validated_at=NOW)
+    previous = seal_artifact(
+        make_implementation_artifact().model_copy(
+            update={
+                "task_id": task.id,
+                "source_revision": "b" * 40,
+                "content": make_implementation_artifact().content.model_copy(
+                    update={"commit_sha": "b" * 40}
+                ),
+            }
+        ),
+        validated_at=NOW,
+    )
+    feedback = seal_artifact(
+        make_qa_artifact().model_copy(
+            update={
+                "task_id": task.id,
+                "source_revision": "b" * 40,
+                "parent_artifact_ids": (previous.artifact_id,),
+                "content": make_qa_artifact().content.model_copy(
+                    update={"status": QaReportStatus.FAIL}
+                ),
+            }
+        ),
+        validated_at=NOW,
+    )
+    remediation = seal_artifact(
+        make_implementation_artifact().model_copy(
+            update={
+                "artifact_id": "art_impl_remediation",
+                "task_id": task.id,
+                "source_revision": scope.candidate_revision,
+                "parent_artifact_ids": (plan.artifact_id, feedback.artifact_id),
+                "supersedes": previous.artifact_id,
+                "content": make_implementation_artifact().content.model_copy(
+                    update={"commit_sha": scope.candidate_revision}
+                ),
+            }
+        ),
+        validated_at=NOW,
+    )
+    artifacts = {item.artifact_id: item for item in (plan, previous, feedback, remediation)}
+
+    validate_candidate_artifact_lineage(task, plan, remediation, artifacts)
+    result = candidate_read_scope(task, plan, remediation, scope.candidate_revision)
+    assert result.candidate_revision == scope.candidate_revision
 
 
 def test_cli_structured_message_encoding_retains_all_fields() -> None:

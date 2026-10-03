@@ -13,6 +13,7 @@ from itertools import pairwise
 from typing import Protocol
 
 from ai_software_engineer.agents import AgentAdapter, AgentRequest, AgentResult, AgentRunStatus
+from ai_software_engineer.agents.candidate_binding import validate_candidate_artifact_lineage
 from ai_software_engineer.artifacts import ArtifactStore, artifact_digest
 from ai_software_engineer.domain import AgentDefinition, AgentRole, Task, TaskStatus
 from ai_software_engineer.domain.artifact import (
@@ -230,15 +231,20 @@ class CandidateVerificationRunner:
             or implementation.task_id != task.id
             or artifact_digest(plan) != inputs.plan_sha256
             or artifact_digest(implementation) != inputs.implementation_sha256
-            or plan.source_revision != task.base_ref
-            or plan.parent_artifact_ids
-            or implementation.parent_artifact_ids != (plan.artifact_id,)
-            or implementation.supersedes is not None
             or implementation.source_revision != inputs.candidate_revision
             or implementation.content.commit_sha != inputs.candidate_revision
             or plan.producer.run_id == implementation.producer.run_id
         ):
             raise RecoveryRejected("original candidate artifact lineage differs from pinned inputs")
+        all_artifacts = {
+            artifact.artifact_id: artifact for artifact in self._artifacts.list_for_task(task.id)
+        }
+        try:
+            validate_candidate_artifact_lineage(task, plan, implementation, all_artifacts)
+        except Exception as error:
+            raise RecoveryRejected(
+                "original candidate artifact lineage differs from pinned inputs"
+            ) from error
         expected = {c.id for c in task.acceptance_criteria}
         if {m.criterion_id for m in plan.content.acceptance_mapping} != expected or {
             m.criterion_id for m in implementation.content.acceptance_mapping

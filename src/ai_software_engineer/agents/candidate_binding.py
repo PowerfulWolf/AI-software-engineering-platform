@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from collections.abc import Mapping
 from pathlib import Path
 
 from ai_software_engineer.agents.candidate_source import (
@@ -15,9 +16,13 @@ from ai_software_engineer.context.builder import estimate_input_tokens
 from ai_software_engineer.domain import AgentRole, Task
 from ai_software_engineer.domain.artifact import (
     Artifact,
+    CoderProgressArtifact,
     ImplementationReportArtifact,
     PlanArtifact,
+    QaReportArtifact,
+    ReviewReportArtifact,
 )
+from ai_software_engineer.domain.enums import QaReportStatus, ReviewVerdict
 from ai_software_engineer.git import WorkspacePolicyError
 from ai_software_engineer.redaction import redact_text
 
@@ -39,7 +44,8 @@ def candidate_read_scope(
             raise WorkspacePolicyError("candidate source artifact identity or integrity differs")
     if (
         plan.source_revision != task.base_ref
-        or implementation.parent_artifact_ids != (plan.artifact_id,)
+        or not implementation.parent_artifact_ids
+        or implementation.parent_artifact_ids[0] != plan.artifact_id
         or implementation.source_revision != candidate_revision
         or implementation.content.commit_sha != candidate_revision
     ):
@@ -56,6 +62,91 @@ def candidate_read_scope(
         raise WorkspacePolicyError(
             "candidate source requires exact revisions and dependencies"
         ) from error
+
+
+def validate_candidate_artifact_lineage(
+    task: Task,
+    plan: Artifact,
+    implementation: Artifact,
+    artifacts: Mapping[str, Artifact],
+) -> None:
+    """Validate a first or remediation Coder candidate and sealed feedback.
+
+    A remediation implementation legitimately has the original Plan plus the exact
+    QA/Review finding as parents and supersedes the previous implementation. The old
+    single-parent rule rejected that durable retry contract before QA could run.
+    """
+    if not isinstance(plan, PlanArtifact) or not isinstance(
+        implementation, ImplementationReportArtifact
+    ):
+        raise WorkspacePolicyError("candidate source requires plan and implementation artifacts")
+    if (
+        plan.task_id != task.id
+        or implementation.task_id != task.id
+        or plan.source_revision != task.base_ref
+        or plan.parent_artifact_ids
+        or not implementation.parent_artifact_ids
+        or implementation.parent_artifact_ids[0] != plan.artifact_id
+        or implementation.source_revision != implementation.content.commit_sha
+    ):
+        raise WorkspacePolicyError("candidate source artifact lineage or revision differs")
+    parents = tuple(
+        artifacts.get(artifact_id) for artifact_id in implementation.parent_artifact_ids[1:]
+    )
+    if any(parent is None for parent in parents):
+        raise WorkspacePolicyError("candidate source artifact lineage or revision differs")
+    if implementation.supersedes is None:
+        if any(not isinstance(parent, CoderProgressArtifact) for parent in parents):
+            raise WorkspacePolicyError("candidate source artifact lineage or revision differs")
+        for parent in parents:
+            assert isinstance(parent, CoderProgressArtifact)
+            if parent.task_id != task.id or parent.producer.role is not AgentRole.CODER:
+                raise WorkspacePolicyError("candidate source artifact lineage or revision differs")
+        return
+
+    previous = artifacts.get(implementation.supersedes)
+    if not isinstance(previous, ImplementationReportArtifact) or previous.task_id != task.id:
+        raise WorkspacePolicyError("candidate source artifact lineage or revision differs")
+    feedback: Artifact | None = None
+    progress: list[CoderProgressArtifact] = []
+    for parent in parents:
+        assert parent is not None
+        if isinstance(parent, CoderProgressArtifact):
+            progress.append(parent)
+        elif feedback is None and isinstance(parent, (QaReportArtifact, ReviewReportArtifact)):
+            feedback = parent
+        else:
+            raise WorkspacePolicyError("candidate source artifact lineage or revision differs")
+    if any(
+        item.task_id != task.id or item.producer.role is not AgentRole.CODER for item in progress
+    ):
+        raise WorkspacePolicyError("candidate source artifact lineage or revision differs")
+    if feedback is None or feedback.task_id != task.id:
+        raise WorkspacePolicyError("candidate source artifact lineage or revision differs")
+    if isinstance(feedback, QaReportArtifact):
+        valid_feedback = (
+            feedback.producer.role is AgentRole.QA
+            and feedback.content.status is QaReportStatus.FAIL
+            and feedback.source_revision == previous.content.commit_sha
+            and feedback.parent_artifact_ids == (previous.artifact_id,)
+        )
+    else:
+        accepted_qa = (
+            artifacts.get(feedback.parent_artifact_ids[0]) if feedback.parent_artifact_ids else None
+        )
+        valid_feedback = (
+            feedback.producer.role is AgentRole.REVIEWER
+            and feedback.content.verdict is ReviewVerdict.REJECT
+            and feedback.source_revision == previous.content.commit_sha
+            and isinstance(accepted_qa, QaReportArtifact)
+            and accepted_qa.task_id == task.id
+            and accepted_qa.producer.role is AgentRole.QA
+            and accepted_qa.content.status is QaReportStatus.PASS
+            and accepted_qa.source_revision == previous.content.commit_sha
+            and accepted_qa.parent_artifact_ids == (previous.artifact_id,)
+        )
+    if not valid_feedback:
+        raise WorkspacePolicyError("candidate source artifact lineage or revision differs")
 
 
 class BoundCandidateSource:
@@ -92,6 +183,7 @@ class BoundCandidateSource:
         if task.id != request.task_id:
             raise WorkspacePolicyError("candidate source Task identity differs")
         artifacts = tuple(self._resolver.get_artifact(i) for i in request.input_artifact_ids)
+        artifacts_by_id = {artifact.artifact_id: artifact for artifact in artifacts}
         plans = [a for a in artifacts if isinstance(a, PlanArtifact)]
         implementations = [a for a in artifacts if isinstance(a, ImplementationReportArtifact)]
         if len(plans) != 1 or len(implementations) != 1:
@@ -116,6 +208,30 @@ class BoundCandidateSource:
                 ) from error
             if not matches:
                 raise WorkspacePolicyError("candidate source artifact differs from Context")
+        referenced_ids = set(implementations[0].parent_artifact_ids)
+        if implementations[0].supersedes is not None:
+            referenced_ids.add(implementations[0].supersedes)
+        for artifact_id in referenced_ids:
+            if artifact_id in artifacts_by_id:
+                continue
+            try:
+                artifacts_by_id[artifact_id] = self._resolver.get_artifact(artifact_id)
+            except Exception as error:
+                raise WorkspacePolicyError(
+                    "candidate source artifact lineage or revision differs"
+                ) from error
+        # A remediation feedback artifact may itself point at the previous QA PASS.
+        for artifact in tuple(artifacts_by_id.values()):
+            if isinstance(artifact, ReviewReportArtifact):
+                for artifact_id in artifact.parent_artifact_ids:
+                    if artifact_id not in artifacts_by_id:
+                        try:
+                            artifacts_by_id[artifact_id] = self._resolver.get_artifact(artifact_id)
+                        except Exception as error:
+                            raise WorkspacePolicyError(
+                                "candidate source artifact lineage or revision differs"
+                            ) from error
+        validate_candidate_artifact_lineage(task, plans[0], implementations[0], artifacts_by_id)
         scope = candidate_read_scope(task, plans[0], implementations[0], request.source_revision)
         result = prompt + candidate_review_snapshot(root, scope, request.permissions)
         if estimate_input_tokens(result) > context.budget.max_input_tokens:

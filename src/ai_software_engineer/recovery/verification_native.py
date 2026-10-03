@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ai_software_engineer.agents import FileModelRouteAttemptStore
+from ai_software_engineer.agents.candidate_binding import validate_candidate_artifact_lineage
 from ai_software_engineer.agents.fallback import model_route_root
 from ai_software_engineer.artifacts import FileArtifactStore, artifact_digest
 from ai_software_engineer.config import ProductionConfig
@@ -122,10 +123,7 @@ class NativeCandidateSourceReader:
         artifacts = FileArtifactStore(root / "artifacts", read_only=True)
         candidate_checkpoint = terminal_candidate_event(runtime.task, runtime.events)
         implementation = artifacts.get(candidate_checkpoint.artifact_ids[0])
-        if (
-            not isinstance(implementation, ImplementationReportArtifact)
-            or len(implementation.parent_artifact_ids) != 1
-        ):
+        if not isinstance(implementation, ImplementationReportArtifact):
             raise ValueError("missing original implementation lineage")
         plan = artifacts.get(implementation.parent_artifact_ids[0])
         candidate = candidate_checkpoint.source_revision
@@ -135,9 +133,20 @@ class NativeCandidateSourceReader:
             or implementation.task_id != runtime.task.id
             or plan.parent_artifact_ids
             or plan.source_revision != runtime.task.base_ref
-            or implementation.source_revision != candidate
+        ):
+            raise ValueError("candidate artifact provenance mismatch")
+        candidate_artifacts = {
+            artifact.artifact_id: artifact for artifact in artifacts.list_for_task(runtime.task.id)
+        }
+        try:
+            validate_candidate_artifact_lineage(
+                runtime.task, plan, implementation, candidate_artifacts
+            )
+        except Exception as error:
+            raise ValueError("candidate artifact provenance mismatch") from error
+        if (
+            implementation.source_revision != candidate
             or implementation.content.commit_sha != candidate
-            or implementation.supersedes is not None
         ):
             raise ValueError("candidate artifact provenance mismatch")
         expected = {criterion.id for criterion in runtime.task.acceptance_criteria}
