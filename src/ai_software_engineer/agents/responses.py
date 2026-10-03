@@ -207,6 +207,7 @@ class ResponsesAgentAdapter:
                 self._workspace_root,
                 self._agent.permissions,
                 execution_guard=self._execution_guard,
+                require_focused_tests=request.role in {AgentRole.QA, AgentRole.REVIEWER},
             ),
         )
         prompt = self._prompt_builder.build(request)

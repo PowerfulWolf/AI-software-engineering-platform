@@ -1,5 +1,6 @@
 """Fail-closed path and command policy for role worktrees."""
 
+import re
 import shlex
 from fnmatch import fnmatchcase
 from pathlib import Path, PurePosixPath
@@ -22,6 +23,12 @@ class CommandPolicyViolation(WorkspacePolicyError):
 
 
 _SHELL_CONTROL_TOKENS: Final = frozenset({";", "&&", "||", "|", ">", ">>", "<", "<<"})
+_PYTEST_SELECTOR = re.compile(
+    r"^tests/(?:[A-Za-z0-9_][A-Za-z0-9_.-]*/)*test_[A-Za-z0-9_.-]+\.py"
+    r"(?:::[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)?)?"
+    r"(?:\[[A-Za-z0-9_.-]+\])?$"
+)
+_PYTEST_EXECUTABLES: Final = frozenset({"pytest", "py.test", "pytest-3"})
 
 
 class WorkspacePolicy:
@@ -33,6 +40,7 @@ class WorkspacePolicy:
         permissions: AgentPermissions,
         *,
         denied_paths: tuple[str, ...] = (),
+        require_focused_tests: bool = False,
     ) -> None:
         self._workspace_root = Path(workspace_root).resolve()
         if not self._workspace_root.is_dir():
@@ -41,6 +49,7 @@ class WorkspacePolicy:
         self._write_paths = _validated_patterns(permissions.write_paths)
         self._denied_paths = _validated_patterns(denied_paths)
         self._commands = _validated_commands(permissions.commands)
+        self._require_focused_tests = require_focused_tests
 
     def authorize_read(self, path: str | PurePosixPath) -> PurePosixPath:
         """Return a normalized readable path or fail closed."""
@@ -63,6 +72,8 @@ class WorkspacePolicy:
             raise CommandPolicyViolation(
                 "Swift verification arguments exceed the restricted policy"
             )
+        if self._require_focused_tests:
+            _authorize_focused_pytest(arguments)
         return arguments
 
     def _authorize_path(
@@ -131,6 +142,48 @@ def _is_shell_like(token: str) -> bool:
         or "$(" in token
         or "`" in token
     )
+
+
+def _authorize_focused_pytest(arguments: tuple[str, ...]) -> None:
+    """Reject verifier commands that can silently collect the whole test suite.
+
+    QA and Reviewer prompts are advisory. This check is the executable boundary for
+    Responses tool calls, including common wrapper forms such as ``uv run`` and
+    ``python -m pytest``. ``pytest.main`` is intentionally rejected because the
+    command policy cannot prove which selectors that Python string will collect.
+    """
+    lowered = tuple(token.lower() for token in arguments)
+    if any("pytest.main" in token for token in lowered):
+        raise CommandPolicyViolation(
+            "pytest 执行被拒绝: QA/Review 必须使用 tests/ 下明确的测试文件或节点选择器,"
+            "不得通过 pytest.main 运行未验证的测试范围"
+        )
+    pytest_index = next(
+        (
+            index
+            for index, token in enumerate(arguments)
+            if Path(token).name.lower() in _PYTEST_EXECUTABLES
+            or (token.lower() == "pytest" and index > 0)
+        ),
+        None,
+    )
+    if pytest_index is None:
+        if "-m" in lowered:
+            marker_index = lowered.index("-m")
+            if marker_index + 1 < len(lowered) and lowered[marker_index + 1] == "pytest":
+                raise CommandPolicyViolation(
+                    "pytest 执行被拒绝: QA/Review 必须提供 tests/ 下明确的测试文件或节点选择器"
+                )
+        if "-c" in lowered and any("pytest" in token for token in lowered):
+            raise CommandPolicyViolation(
+                "pytest 执行被拒绝: QA/Review 不得通过 Python 字符串动态收集全量测试"
+            )
+        return
+    selectors = arguments[pytest_index + 1 :]
+    if not any(_PYTEST_SELECTOR.fullmatch(token) for token in selectors):
+        raise CommandPolicyViolation(
+            "pytest 执行被拒绝: QA/Review 必须提供 tests/ 下明确的测试文件或节点选择器"
+        )
 
 
 def _validate_path_text(value: str, *, label: str, allow_glob: bool = False) -> None:

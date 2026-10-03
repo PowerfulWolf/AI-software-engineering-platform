@@ -15,3 +15,12 @@
 现明确要求每次 pytest 都带 `tests/` 下的文件或节点选择器；缺少验收映射时返回
 `INCREMENTAL_TEST_SELECTION_REQUIRED`，不得自行扩大到全仓。该修复只改变后续 Agent 的
 可执行指引，不修改已经封存的 run、artifact 或 verdict。
+
+## QA/Review 命令边界
+
+真实候选复核证明仅靠 prompt 约束不足：Responses Agent 仍可能通过
+`pytest -m not mysql`、`pytest tests` 或 `uv run python -c 'pytest.main(...)'` 启动全量收集，
+导致用户要求的增量测试门禁失效。后续 QA/Reviewer 的 Responses 工具执行器启用机器级
+`require_focused_tests` 校验，要求 `tests/` 下明确的测试文件或节点；目录、仅 marker、无
+选择器和动态 `pytest.main` 在进程启动前拒绝，并返回中文原因。旧执行记录、候选、审批和
+verdict 不修改；回滚仅需在无活动角色时回滚平台提交并重启。

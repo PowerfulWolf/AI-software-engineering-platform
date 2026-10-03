@@ -155,6 +155,38 @@ def test_command_policy_matches_complete_token_prefixes(tmp_path: Path) -> None:
         policy.authorize_command(())
 
 
+def test_verifier_command_policy_requires_focused_pytest_selectors(tmp_path: Path) -> None:
+    permissions = _permissions().model_copy(update={"commands": ("pytest", "python")})
+    policy = WorkspacePolicy(tmp_path, permissions, require_focused_tests=True)
+
+    assert policy.authorize_command(("pytest", "tests/unit/test_service.py", "-q")) == (
+        "pytest",
+        "tests/unit/test_service.py",
+        "-q",
+    )
+    assert policy.authorize_command(
+        ("python", "-m", "pytest", "tests/unit/test_service.py::test_one")
+    ) == ("python", "-m", "pytest", "tests/unit/test_service.py::test_one")
+
+    for arguments in (
+        ("pytest",),
+        ("pytest", "tests/unit"),
+        ("pytest", "-m", "not", "mysql"),
+        ("python", "-c", "import pytest; pytest.main(['tests/unit/test_service.py'])"),
+    ):
+        with pytest.raises(CommandPolicyViolation, match="pytest"):
+            policy.authorize_command(arguments)
+
+
+def test_verifier_command_policy_handles_uv_pytest_wrapper(tmp_path: Path) -> None:
+    permissions = _permissions().model_copy(update={"commands": ("uv",)})
+    policy = WorkspacePolicy(tmp_path, permissions, require_focused_tests=True)
+
+    assert policy.authorize_command(("uv", "run", "pytest", "tests/unit/test_service.py"))
+    with pytest.raises(CommandPolicyViolation, match="pytest"):
+        policy.authorize_command(("uv", "run", "pytest", "tests"))
+
+
 @pytest.mark.parametrize(
     "arguments",
     (

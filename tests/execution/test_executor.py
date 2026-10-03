@@ -32,6 +32,7 @@ def _executor(
     environment_allowlist: tuple[str, ...] = ("PATH", "LANG", "LC_ALL"),
     default_timeout_seconds: float = 600.0,
     max_output_bytes: int = 1_000_000,
+    require_focused_tests: bool = False,
 ) -> SubprocessCommandExecutor:
     return SubprocessCommandExecutor(
         tmp_path,
@@ -40,6 +41,7 @@ def _executor(
         environment_allowlist=environment_allowlist,
         default_timeout_seconds=default_timeout_seconds,
         max_output_bytes=max_output_bytes,
+        require_focused_tests=require_focused_tests,
     )
 
 
@@ -98,6 +100,18 @@ def test_policy_rejects_unauthorized_and_shell_like_argv(tmp_path: Path) -> None
         executor.run(("echo", "not-allowlisted"))
     with pytest.raises(CommandPolicyViolation):
         executor.run((sys.executable, "-c", "print('x')", ";", "echo", "bad"))
+
+
+def test_focused_test_policy_is_enforced_before_process_start(tmp_path: Path) -> None:
+    permissions = _permissions().model_copy(update={"commands": (sys.executable, "pytest")})
+    executor = SubprocessCommandExecutor(
+        tmp_path,
+        permissions,
+        require_focused_tests=True,
+    )
+
+    with pytest.raises(CommandPolicyViolation, match="pytest"):
+        executor.run(("pytest", "-m", "not", "mysql"))
 
 
 def test_timeout_terminates_the_process_group_without_output_evidence(tmp_path: Path) -> None:

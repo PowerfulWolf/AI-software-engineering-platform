@@ -105,6 +105,7 @@ class SubprocessCommandExecutor:
         default_timeout_seconds: float = 600.0,
         max_output_bytes: int = 1_000_000,
         execution_guard: CommandExecutionGuard | None = None,
+        require_focused_tests: bool = False,
     ) -> None:
         settings = CommandExecutorSettings(
             environment_allowlist=environment_allowlist,
@@ -117,6 +118,7 @@ class SubprocessCommandExecutor:
             self._workspace_root,
             permissions,
             denied_paths=denied_paths,
+            require_focused_tests=require_focused_tests,
         )
         self._environment = dict(environment if environment is not None else os.environ)
         self._environment_allowlist = settings.environment_allowlist

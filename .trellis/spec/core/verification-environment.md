@@ -125,6 +125,29 @@ exact retained intent, and keep the original candidate available for recovery.
 
 ## Bounded pytest diagnostics (2026-10-02)
 
+### Responses verifier incremental command gate (2026-10-04)
+
+自然语言 prompt 不能作为 QA/Reviewer 测试范围的唯一门禁。Responses tool 仍可收到模型
+构造的 tokenized `run_command`，因此验证角色的 `SubprocessCommandExecutor` 必须开启
+`require_focused_tests`：直接 `pytest`、`uv run pytest` 和 `python -m pytest` 至少包含一个
+`tests/**/test_*.py` 文件或节点选择器；目录、只带 marker、裸 `pytest` 和通过 `-c` 动态调用
+`pytest.main` 在启动子进程前 fail closed。拒绝消息使用中文，不能将失败伪造成 QA PASS 或
+环境 ERROR。Coder 的普通命令权限和受控 Python/MySQL 精确 runner 不受此开关改变。
+
+Good: `pytest tests/manager/test_team_host.py -q` or
+`python -m pytest tests/manager/test_team_host.py::test_status -q`. Bad:
+`pytest -m not mysql`, `pytest tests`, or `uv run python -c 'pytest.main(...)'`.
+
+Required focused checks: `tests/git/test_policy.py::test_verifier_command_policy_requires_focused_pytest_selectors`,
+`tests/git/test_policy.py::test_verifier_command_policy_handles_uv_pytest_wrapper` and
+`tests/execution/test_executor.py::test_focused_test_policy_is_enforced_before_process_start`.
+The assertions must prove accepted file/node selectors and pre-process rejection of bare,
+directory, marker-only and dynamic `pytest.main` invocations.
+
+机器校验只约束可识别的 pytest 命令形态；受控 runner 仍通过独立的 hash-bound
+`_SelectionGuard` 验证精确节点。新增门禁不迁移历史 Task/Artifact/Approval，旧计划不能因为
+代码更新而重放；候选复核需重新生成并批准绑定当前 policy 的计划。
+
 ### Sandbox temporary-directory alias collision (2026-10-02)
 
 `python_mysql_sandbox_environment() -> dict[str, str]` supplies the fixed outer PATH/LANG/LC_ALL/
