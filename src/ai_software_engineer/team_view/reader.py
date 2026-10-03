@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
 from pymysql.cursors import DictCursor
 
-from ai_software_engineer.agents.fallback import FileModelRouteAttemptStore, model_route_root
+from ai_software_engineer.agents.fallback import (
+    FileModelRouteAttemptStore,
+    ModelRouteAttempt,
+    model_route_root,
+)
 from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.domain.coordination import ManagerCoordinationAdvice
@@ -128,6 +132,60 @@ class _Native:
     intake: ProjectDeliveryIntake
     sidecar: Path
     history: tuple[ProjectDeliveryCheckpoint, ...]
+
+
+@dataclass(slots=True)
+class _ModelRouteAttemptCache:
+    """Cache immutable route facts for one Team snapshot.
+
+    A snapshot can project the same sidecar run ledger for the current Task,
+    successor Tasks, and verification reservations.  The ledger is immutable
+    from the read model's point of view, so decoding each run once per snapshot
+    preserves the existing corruption checks while avoiding quadratic polling
+    work as the execution history grows.
+    """
+
+    _by_root: dict[Path, tuple[ModelRouteAttempt, ...]] = field(default_factory=dict)
+
+    def attempts(self, root: Path) -> tuple[ModelRouteAttempt, ...]:
+        cached = self._by_root.get(root)
+        if cached is not None:
+            return cached
+        _reject_symlinks(root)
+        if not root.exists():
+            self._by_root[root] = ()
+            return ()
+        store = FileModelRouteAttemptStore(root, read_only=True)
+        decoded: list[ModelRouteAttempt] = []
+        for directory in _directories(root, "run_*"):
+            _files(directory, "*.json")
+            decoded.extend(store.list_for_run(directory.name))
+        result = tuple(decoded)
+        self._by_root[root] = result
+        return result
+
+
+@dataclass(slots=True)
+class _CandidateBranchCache:
+    """Reuse immutable Git branch lookups within one read snapshot."""
+
+    _by_identity: dict[tuple[str, str | None, str | None, str | None], str | None] = field(
+        default_factory=dict
+    )
+
+    def resolve(
+        self,
+        repository_root: str,
+        task_id: str | None,
+        candidate_revision: str | None,
+        branch_name: str | None = None,
+    ) -> str | None:
+        identity = (repository_root, task_id, candidate_revision, branch_name)
+        if identity not in self._by_identity:
+            self._by_identity[identity] = _candidate_branch(
+                repository_root, task_id, candidate_revision, branch_name=branch_name
+            )
+        return self._by_identity[identity]
 
 
 class ProductionTeamReader:
@@ -409,6 +467,7 @@ class ProductionTeamReader:
         tasks: list[TaskView] = []
         native_views: list[tuple[_Native, TaskView]] = []
         native_by_task: dict[str, tuple[_Native, str, ScopeView]] = {}
+        branch_cache = _CandidateBranchCache()
         if natives:
             assert selected is not None
             for native in natives:
@@ -434,6 +493,7 @@ class ProductionTeamReader:
                             selected.manifest.project_id,
                             request_id,
                             scope,
+                            branch_cache=branch_cache,
                         ),
                     )
                 )
@@ -454,6 +514,7 @@ class ProductionTeamReader:
             native.checkpoint.dispatch_commit_id is not None for native in natives
         )
         projected_native_views: list[tuple[_Native, TaskView]] = []
+        route_attempts = _ModelRouteAttemptCache()
         if requires_sql:
             assert selected is not None
             connection = open_mysql_connection(self.config.require_mysql_dsn(self._environment))
@@ -462,7 +523,13 @@ class ProductionTeamReader:
                     cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
                     cursor.execute("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
                     for native, base in native_views:
-                        view = _read_task_details(native, cursor, base)
+                        view = _read_task_details(
+                            native,
+                            cursor,
+                            base,
+                            route_attempts=route_attempts,
+                            branch_cache=branch_cache,
+                        )
                         successor = _active_successor_dispatch(native, cursor)
                         if successor is not None:
                             view = _read_task_details(
@@ -470,6 +537,8 @@ class ProductionTeamReader:
                                 cursor,
                                 base,
                                 dispatch_override=successor,
+                                route_attempts=route_attempts,
+                                branch_cache=branch_cache,
                             )
                         # A remediation/continuation may publish a successor Task while
                         # the native checkpoint still retains its predecessor history. Read
@@ -489,6 +558,8 @@ class ProductionTeamReader:
                                         base.request_id,
                                         base.scope,
                                     ),
+                                    route_attempts=route_attempts,
+                                    branch_cache=branch_cache,
                                 )
                             )
                         view = _merge_task_history(view, tuple(historical_views))
@@ -500,6 +571,8 @@ class ProductionTeamReader:
                             native_by_task,
                             team_id=team.manifest.team_id,
                             project_id=selected.manifest.project_id,
+                            route_attempts=route_attempts,
+                            branch_cache=branch_cache,
                         )
                     )
             finally:
@@ -1032,11 +1105,22 @@ def _read_task(
     request_id: str,
     scope: ScopeView,
     cursor: DictCursor,
+    *,
+    route_attempts: _ModelRouteAttemptCache | None = None,
+    branch_cache: _CandidateBranchCache | None = None,
 ) -> TaskView:
     return _read_task_details(
         native,
         cursor,
-        _task_base(native, project_id, request_id, scope),
+        _task_base(
+            native,
+            project_id,
+            request_id,
+            scope,
+            branch_cache=branch_cache,
+        ),
+        route_attempts=route_attempts,
+        branch_cache=branch_cache,
     )
 
 
@@ -1045,6 +1129,8 @@ def _task_base(
     project_id: str,
     request_id: str,
     scope: ScopeView,
+    *,
+    branch_cache: _CandidateBranchCache | None = None,
 ) -> TaskView:
     cp = native.checkpoint
     return TaskView(
@@ -1065,7 +1151,11 @@ def _task_base(
         ),
         next_action=localize_blocking_text(cp.next_action) or cp.next_action,
         candidate_revision=cp.candidate_revision,
-        candidate_branch=_candidate_branch(cp.repository_root, cp.task_id, cp.candidate_revision),
+        candidate_branch=(
+            branch_cache.resolve(cp.repository_root, cp.task_id, cp.candidate_revision)
+            if branch_cache is not None
+            else _candidate_branch(cp.repository_root, cp.task_id, cp.candidate_revision)
+        ),
         documents=_stage_refs(cp),
     )
 
@@ -1076,6 +1166,8 @@ def _read_verifications(
     *,
     team_id: str,
     project_id: str,
+    route_attempts: _ModelRouteAttemptCache | None = None,
+    branch_cache: _CandidateBranchCache | None = None,
 ) -> tuple[TaskView, ...]:
     """Project verification reservations as first-class read-side work items."""
     cursor.execute(
@@ -1116,7 +1208,15 @@ def _read_verifications(
         if reservation.repository_id != native.checkpoint.repository_id:
             raise ValueError("verification reservation project mismatch")
         if reservation.source_task_id not in validated_sources:
-            source_view = _read_task(native, project_id, request_id, source_scope, cursor)
+            source_view = _read_task(
+                native,
+                project_id,
+                request_id,
+                source_scope,
+                cursor,
+                route_attempts=route_attempts,
+                branch_cache=branch_cache,
+            )
             if source_view.task_id != reservation.source_task_id:
                 raise ValueError("verification reservation source Task is missing")
             validated_sources[reservation.source_task_id] = source_view
@@ -1139,6 +1239,7 @@ def _read_verifications(
                 team_id=team_id,
                 project_id=project_id,
                 source_branch=validated_sources[reservation.source_task_id].candidate_branch,
+                route_attempts=route_attempts,
             )
         )
     return tuple(result)
@@ -1156,6 +1257,7 @@ def _verification_view(
     team_id: str,
     project_id: str,
     source_branch: str | None = None,
+    route_attempts: _ModelRouteAttemptCache | None = None,
 ) -> TaskView:
     verification_id = f"verification_{reservation.plan_sha256[:32]}"
     current_role = AgentRole.QA
@@ -1283,7 +1385,12 @@ def _verification_view(
         # Verifier requests judge the immutable source Task/candidate.  The
         # distinct reservation Task scopes leases and worktrees, while the
         # invocation digest identifies the exact source-Task Run shown here.
-        runs=_read_runs(native, reservation.source_task_id, run_ids=run_ids),
+        runs=_read_runs(
+            native,
+            reservation.source_task_id,
+            run_ids=run_ids,
+            route_attempts=route_attempts,
+        ),
         documents=tuple(documents),
     )
 
@@ -1294,6 +1401,8 @@ def _read_task_details(
     base: TaskView,
     *,
     dispatch_override: DeliveryAllocation | None = None,
+    route_attempts: _ModelRouteAttemptCache | None = None,
+    branch_cache: _CandidateBranchCache | None = None,
 ) -> TaskView:
     cp = native.checkpoint
     if cp.dispatch_commit_id is None and dispatch_override is None:
@@ -1483,11 +1592,23 @@ def _read_task_details(
                     for p in dispatch.phases
                 ),
                 "timeline": timeline,
-                "runs": _read_runs(native, task.id),
+                "runs": _read_runs(native, task.id, route_attempts=route_attempts),
                 "documents": base.documents + docs,
                 "candidate_revision": candidate_revision,
-                "candidate_branch": _candidate_branch(
-                    cp.repository_root, task.id, candidate_revision, branch_name=task.branch_name
+                "candidate_branch": (
+                    branch_cache.resolve(
+                        cp.repository_root,
+                        task.id,
+                        candidate_revision,
+                        branch_name=task.branch_name,
+                    )
+                    if branch_cache is not None
+                    else _candidate_branch(
+                        cp.repository_root,
+                        task.id,
+                        candidate_revision,
+                        branch_name=task.branch_name,
+                    )
                 ),
             }
         )
@@ -1546,35 +1667,35 @@ def _active_successor_dispatch(
 
 
 def _read_runs(
-    native: _Native, task_id: str, *, run_ids: set[str] | None = None
+    native: _Native,
+    task_id: str,
+    *,
+    run_ids: set[str] | None = None,
+    route_attempts: _ModelRouteAttemptCache | None = None,
 ) -> tuple[RunView, ...]:
     root = model_route_root(native.sidecar)
-    _reject_symlinks(root)
-    if not root.exists():
-        return ()
-    store = FileModelRouteAttemptStore(root, read_only=True)
     runs: list[RunView] = []
-    for directory in _directories(root, "run_*"):
-        _files(directory, "*.json")  # reject symlinks before asking the typed store to decode
-        for attempt in store.list_for_run(directory.name):
-            if attempt.task_id == task_id and (run_ids is None or attempt.run_id in run_ids):
-                runs.append(
-                    RunView(
-                        run_id=attempt.run_id,
-                        role=attempt.role,
-                        provider=_safe(attempt.provider),
-                        model=_safe(attempt.model),
-                        route_kind=attempt.route_kind,
-                        connection_mode=attempt.connection_mode,
-                        route_index=attempt.route_index,
-                        outcome=attempt.outcome.value,
-                        error_code=attempt.error_code.value if attempt.error_code else None,
-                        duration_ms=attempt.result.duration_ms,
-                        completed_at=attempt.completed_at,
-                        source_uri=f"model-route://{attempt.run_id}/{attempt.route_index}",
-                        sha256=attempt.attempt_sha256,
-                    )
+    if route_attempts is None:
+        route_attempts = _ModelRouteAttemptCache()
+    for attempt in route_attempts.attempts(root):
+        if attempt.task_id == task_id and (run_ids is None or attempt.run_id in run_ids):
+            runs.append(
+                RunView(
+                    run_id=attempt.run_id,
+                    role=attempt.role,
+                    provider=_safe(attempt.provider),
+                    model=_safe(attempt.model),
+                    route_kind=attempt.route_kind,
+                    connection_mode=attempt.connection_mode,
+                    route_index=attempt.route_index,
+                    outcome=attempt.outcome.value,
+                    error_code=attempt.error_code.value if attempt.error_code else None,
+                    duration_ms=attempt.result.duration_ms,
+                    completed_at=attempt.completed_at,
+                    source_uri=f"model-route://{attempt.run_id}/{attempt.route_index}",
+                    sha256=attempt.attempt_sha256,
                 )
+            )
     return tuple(sorted(runs, key=lambda r: (r.completed_at, r.run_id, r.route_index)))
 
 

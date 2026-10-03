@@ -1,0 +1,24 @@
+{
+  "id": "team-view-route-ledger-cache-20261004",
+  "title": "限制 Team View 轮询的模型调用记录读取开销",
+  "status": "completed",
+  "phase": "incremental_verified",
+  "created_at": "2026-10-04T08:10:00+08:00",
+  "owner": "codex",
+  "scope": [
+    "src/ai_software_engineer/team_view/reader.py",
+    "tests/team_view/test_run_attempt_cache.py",
+    ".trellis/spec/core/live-team-view.md"
+  ],
+  "constraints": [
+    "Read-side only; do not rewrite durable delivery facts",
+    "Do not share freshness cache across snapshots",
+    "Run only incremental Team View tests"
+  ],
+  "verification": {
+    "good": "Each sidecar route ledger is decoded once per snapshot and all views retain the same typed runs.",
+    "base": "Missing or empty route ledgers still render an empty runs list.",
+    "bad": "Polling repeatedly decodes every run for every view or hides newly published/corrupt facts."
+  },
+  "rollback": "Revert the platform commit and restart ase-console; preserve all sidecar facts."
+}

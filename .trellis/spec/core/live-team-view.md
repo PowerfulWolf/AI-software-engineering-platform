@@ -123,6 +123,12 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
   ownership. Never match by titles/prose or construct a Host to repair reads.
 - Capture file prefixes before SQL snapshot; event-linked artifacts support gate evidence. Completed
   model-route records can precede state transitions but cannot become verdict authority.
+- A single snapshot may project one sidecar's model-route ledger for several current, historical,
+  and verification Tasks. Decode and integrity-check each immutable `run_*` ledger at most once per
+  snapshot, then filter the cached typed attempts by Task/run identity. Never cache these facts across
+  snapshots: a new snapshot must observe newly published attempts and re-run symlink, file and digest
+  checks. This keeps five-second browser polling bounded as execution history grows without weakening
+  read-side fail-closed behavior.
 - Open the MySQL read snapshot only when at least one native delivery has a current dispatch commit or
   a historical Task source. A pre-dispatch terminal checkpoint with no `dispatch_commit_id` and no
   historical `task_id` is fully projected from its validated filesystem checkpoint: it remains a
