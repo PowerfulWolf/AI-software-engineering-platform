@@ -854,6 +854,8 @@ def test_qa_semantic_artifact_failure_has_safe_actionable_diagnostics(
     assert "`.venv/bin/pytest`" in runner.prompt
     assert "run that absolute executable from the current candidate worktree" in runner.prompt
     assert "Do not run the repository-wide test suite" in runner.prompt
+    assert "hard incremental-test gate" in runner.prompt
+    assert "INCREMENTAL_TEST_SELECTION_REQUIRED" in runner.prompt
     assert "broader optional regression remains the human release gate" in runner.prompt
     assert f"Manager provisioned the exact QA runner `{qa_runner}`" in runner.prompt
     assert runner.environment["ASE_PROJECT_PYTEST"] == str(qa_runner)
