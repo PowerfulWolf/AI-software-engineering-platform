@@ -26,9 +26,12 @@ qualifier when a recovery name is occupied; CLI exposes `--target-branch-name`.
   Only the trusted deterministic projection may read an approved legacy Product with no name.
 - Same Task uses the existing Coder worktree/branch across QA rework, retry and restart.
   New successor Tasks retain source kind and append a meaningful purpose: `recovery`,
-  `review-fixes`, or `prerequisite-repair`. Extend the immediate source, not the first Product
-  name, so repeated generations preserve their own scenes. Never add IDs/attempt counters,
-  truncate into another name, rename a source branch or overwrite an occupied target.
+  `review-fixes`, or `prerequisite-repair`. Before appending, collapse any trailing generated
+  purpose suffixes back to the stable Product business slug. This keeps repeated generations
+  bounded while preserving the original scope; a business slug ending in a reserved purpose
+  word is still treated as business text when it has no generated separator. Never add
+  IDs/attempt counters, truncate into another name, rename a source branch or overwrite an
+  occupied target.
 - Branch name is not ownership. Always also check Task/path/role/registration/common-dir/HEAD.
   A caller-provided WorktreeRef cannot choose the manager's trusted branch mapping.
 - Before removing a clean semantic Coder worktree, the Git manager atomically creates and
@@ -71,7 +74,8 @@ qualifier when a recovery name is occupied; CLI exposes `--target-branch-name`.
 ## 5. Good / Base / Bad Cases
 
 Good: `ai/feature/account-trends` → same Task QA rework retains that name; a separately
-approved interrupted recovery uses `ai/feature/account-trends-recovery`.
+approved interrupted recovery uses `ai/feature/account-trends-recovery`, and another
+review-fix still uses `ai/feature/account-trends-review-fixes` rather than appending again.
 Base: `ai/bugfix/project-switch` is an independent defect request.
 Bad: `ai/task_continue_<hash>/attempt-1` for a new requirement, or switching feature to
 bugfix merely because Reviewer rejected a candidate.

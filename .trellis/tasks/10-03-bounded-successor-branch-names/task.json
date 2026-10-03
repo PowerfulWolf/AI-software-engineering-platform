@@ -1,0 +1,19 @@
+{
+  "id": "bounded-successor-branch-names-20261003",
+  "title": "Bound successor branch names across repeated recovery",
+  "status": "completed",
+  "phase": "incremental_verified",
+  "created_at": "2026-10-03T18:00:00+08:00",
+  "owner": "codex",
+  "scope": [
+    "src/ai_software_engineer/domain/branch.py",
+    "tests/git/test_semantic_branches.py",
+    ".trellis/spec/core/branch-naming.md",
+    "docs/architecture/git-worktree.md"
+  ],
+  "constraints": [
+    "Preserve existing branch names and immutable Task/Artifact history",
+    "Do not rebase, rename, merge or mutate an existing candidate branch",
+    "Run only incremental tests"
+  ]
+}

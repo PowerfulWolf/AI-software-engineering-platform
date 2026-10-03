@@ -34,8 +34,10 @@ ai/bugfix/<问题短名>
 Product 提出英文小写 kebab-case 业务短名，随 ProductSpec 一起批准并冻结到 Task.branch_name。
 类型取决于原始需求：新增功能是 feature，独立缺陷是 bugfix；QA/Review 返工不改变类型。
 公开分支不包含 Task ID、哈希短 ID 或 attempt-N；Task ID/attempt 仍用于内部 worktree 路径隔离。
-同 Task 普通续跑复用同一分支和受校验工作树，不因执行次数改名。另立的恢复/修复 Task 在
-直接来源名称上追加 recovery、review-fixes 或 prerequisite-repair，保留原现场与原类型。
+同 Task 普通续跑复用同一分支和受校验工作树，不因执行次数改名。另立的恢复/修复 Task 保留
+原现场与原类型，并从稳定的业务短名追加 recovery、review-fixes 或 prerequisite-repair。
+如果来源分支已经包含这些平台生成的后缀，创建 successor 前先去掉连续的生成后缀再追加当前目的，
+避免多轮返工让分支名递归增长。分支冲突仍然必须失败并重新提出有意义的限定名。
 
 同名分支不能被覆盖或冒领：批准前通过 Product 讨论补充更具体的业务限定词；中断恢复可用
 `ase recovery propose ... --target-branch-name ai/feature/<更具体的恢复短名>` 提案，再批准新摘要。

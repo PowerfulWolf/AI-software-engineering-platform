@@ -235,13 +235,20 @@ def test_short_business_names_use_the_same_rule_for_both_kinds(kind: str, slug: 
     assert TypeAdapter(BranchName).validate_python(name) == name
 
 
-def test_successors_keep_original_kind_and_extend_the_source_name() -> None:
+def test_successors_keep_original_kind_and_bound_generated_suffixes() -> None:
     assert successor_branch("ai/feature/trends", "review-fixes") == "ai/feature/trends-review-fixes"
     assert successor_branch("ai/bugfix/switch", "recovery") == "ai/bugfix/switch-recovery"
     assert (
-        successor_branch("ai/feature/trends-recovery", "recovery")
-        == "ai/feature/trends-recovery-recovery"
+        successor_branch("ai/feature/trends-recovery", "recovery") == "ai/feature/trends-recovery"
     )
+    assert (
+        successor_branch(
+            "ai/feature/trends-recovery-recovery-review-fixes-prerequisite-repair",
+            "review-fixes",
+        )
+        == "ai/feature/trends-review-fixes"
+    )
+    assert successor_branch("ai/feature/recovery", "recovery") == "ai/feature/recovery-recovery"
     assert successor_branch(None, "recovery") is None  # historical unclassified Task
 
 

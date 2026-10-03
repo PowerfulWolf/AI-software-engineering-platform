@@ -34,16 +34,31 @@ BRANCH_NAMING_INSTRUCTIONS = (
     "distinguish unrelated requirements; never reuse another requirement's branch."
 )
 
+_SUCCESSOR_SUFFIXES = ("recovery", "review-fixes", "prerequisite-repair")
+_SUCCESSOR_SUFFIX_RE = re.compile(
+    rf"(?:-(?:{'|'.join(re.escape(item) for item in _SUCCESSOR_SUFFIXES)}))+$"
+)
+
+
+def _successor_root(original: BranchName) -> str:
+    """Return the stable Product branch slug behind generated suffixes."""
+    kind, slug = original.split("/", 2)[1:]
+    root_slug = _SUCCESSOR_SUFFIX_RE.sub("", slug)
+    return f"ai/{kind}/{root_slug}"
+
 
 def successor_branch(
     original: BranchName | None,
     purpose: Literal["recovery", "review-fixes", "prerequisite-repair"],
 ) -> BranchName | None:
-    """Preserve kind and ancestry; never truncate into a collision or invent an ID.
+    """Preserve kind and business scope without recursively growing the name.
 
     None is reserved for historical unclassified deliveries. The source Task, not
-    the initial ProductSpec, owns the current name across multiple successors.
+    the initial ProductSpec, owns the current name across multiple successors. Generated
+    purpose suffixes are collapsed before the next purpose is appended. Collision checks
+    remain the caller's responsibility; this helper never truncates or invents an ID.
     """
     if original is None:
         return None
-    return TypeAdapter(BranchName).validate_python(f"{original}-{purpose}")
+    root = _successor_root(original)
+    return TypeAdapter(BranchName).validate_python(f"{root}-{purpose}")
