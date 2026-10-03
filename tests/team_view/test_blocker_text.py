@@ -54,6 +54,9 @@ def test_localizes_manager_recovery_advice_and_keeps_approval_digest() -> None:
         "请将阻塞交付转入已存在且精确匹配的恢复审批（审批摘要 "
         f"{digest}）。不要重置任务状态，也不要重复使用已消费的审批。"
     )
+    assert localize_blocking_text("Authorized human recovery approver or delivery owner") == (
+        "已授权的人工恢复审批人或交付负责人"
+    )
 
 
 def test_unknown_text_and_durable_record_are_not_rewritten() -> None:

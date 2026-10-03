@@ -168,6 +168,8 @@ def localize_blocking_text(value: str | None) -> str | None:
         "confirmed and the authorized recovery path is available."
     ):
         return "确认精确恢复审批并具备授权恢复路径后，才能恢复现有交付任务。"
+    if text == "Authorized human recovery approver or delivery owner":
+        return "已授权的人工恢复审批人或交付负责人"
     if text.startswith("Coder recovery stopped safely:"):
         return "Coder 恢复已安全停止，请检查失败记录和恢复证据后再继续。"
     if text.startswith("Coder 恢复已安全停止："):

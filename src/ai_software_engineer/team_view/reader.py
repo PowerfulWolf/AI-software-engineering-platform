@@ -13,6 +13,7 @@ from pymysql.cursors import DictCursor
 from ai_software_engineer.agents.fallback import FileModelRouteAttemptStore, model_route_root
 from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.config import ProductionConfig
+from ai_software_engineer.domain.coordination import ManagerCoordinationAdvice
 from ai_software_engineer.domain.enums import AgentRole, TaskStatus, TeamRole, WorkItemStatus
 from ai_software_engineer.domain.task import Task, task_matches_dispatch
 from ai_software_engineer.domain.workforce import AgentProfile
@@ -88,6 +89,23 @@ _CURRENT_ROLE = {
     TaskStatus.QA: AgentRole.QA,
     TaskStatus.REVIEW: AgentRole.REVIEWER,
 }
+
+
+def _present_coordination(
+    advice: ManagerCoordinationAdvice | None,
+) -> ManagerCoordinationAdvice | None:
+    """Translate Manager's read-only proposal without changing its durable record."""
+
+    if advice is None:
+        return None
+    draft = advice.draft.model_copy(
+        update={
+            field: localize_blocking_text(getattr(advice.draft, field))
+            or getattr(advice.draft, field)
+            for field in ("summary", "next_action", "responsible_actor", "resume_condition")
+        }
+    )
+    return advice.model_copy(update={"draft": draft})
 
 
 def _validate_task_dispatch_identity(current: Task, dispatch: Task) -> None:
@@ -384,7 +402,7 @@ class ProductionTeamReader:
                     design_recovery_available=design_recovery_available,
                     design_budget=design_budget,
                     stage_budget=active_budget,
-                    coordination=joint.coordination,
+                    coordination=_present_coordination(joint.coordination),
                 )
             )
         tasks: list[TaskView] = []
