@@ -989,6 +989,22 @@ function humanizeBlockingText(value) {
       return `代码仓库 ${repository[1]} 已阻塞；计划阶段校验失败（INVARIANT_VIOLATION），Planner 已安全停止。`;
     return `代码仓库 ${repository[1]} 已阻塞；请检查该仓库的交付检查点。`;
   }
+  const roleFailure = text.match(
+    /^(?:TRANSIENT_INFRA:\s*)?(Coder|QA|Reviewer) failed at attempt (\d+): (.*)$/,
+  );
+  if (roleFailure) {
+    const detail = roleFailure[3];
+    const reason = detail.includes("failed provider route left repository changes")
+      ? "提供方路由失败后仓库仍有改动"
+      : detail.includes("Codex CLI provider execution failed")
+        ? "Codex CLI 模型服务执行失败"
+        : "执行失败，原始诊断已封存";
+    const run = detail.match(/\brun_[0-9a-z]+\b/);
+    const digests = [...detail.matchAll(/\b[0-9a-f]{64}\b/g)].slice(0, 2).map((item) => item[0]);
+    const facts = [run?.[0] ? `执行记录 ${run[0]}` : "", ...digests.map((digest) => `证据摘要 ${digest}`)]
+      .filter(Boolean);
+    return `${roleFailure[1]} 第 ${roleFailure[2]} 次执行失败：${reason}${facts.length ? `；${facts.join("；")}` : ""}。`;
+  }
   if (text.startsWith("Coder recovery stopped safely:"))
     return "Coder 恢复已安全停止，请检查失败记录和恢复证据后再继续。";
   if (text.startsWith("Coder 恢复已安全停止："))

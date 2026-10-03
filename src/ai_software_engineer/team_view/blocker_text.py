@@ -57,6 +57,10 @@ _EXACT: dict[str, str] = {
 _REPOSITORY_BLOCKED = re.compile(
     r"^Repository (?P<repository>.+?) is BLOCKED; (?P<detail>.*)$"
 )
+_ROLE_FAILURE = re.compile(
+    r"^(?:TRANSIENT_INFRA:\s*)?(?P<role>Coder|QA|Reviewer) failed at attempt "
+    r"(?P<attempt>\d+): (?P<detail>.*)$"
+)
 
 
 def _repository_blocker(text: str) -> str | None:
@@ -75,6 +79,25 @@ def _repository_blocker(text: str) -> str | None:
     return f"代码仓库 {repository} 已阻塞；请检查该仓库的交付检查点。"
 
 
+def _role_failure(text: str) -> str | None:
+    match = _ROLE_FAILURE.fullmatch(text)
+    if match is None:
+        return None
+    role, attempt, detail = match.group("role"), match.group("attempt"), match.group("detail")
+    run_id = re.search(r"\brun_[0-9a-z]+\b", detail)
+    digests = re.findall(r"\b[0-9a-f]{64}\b", detail)
+    if "failed provider route left repository changes" in detail:
+        reason = "提供方路由失败后仓库仍有改动"
+    elif "Codex CLI provider execution failed" in detail:
+        reason = "Codex CLI 模型服务执行失败"
+    else:
+        reason = "执行失败，原始诊断已封存"
+    facts = [f"执行记录 {run_id.group(0)}"] if run_id else []
+    facts.extend(f"证据摘要 {digest}" for digest in digests[:2])
+    suffix = "；".join(facts)
+    return f"{role} 第 {attempt} 次执行失败：{reason}" + (f"；{suffix}" if suffix else "") + "。"
+
+
 def localize_blocking_text(value: str | None) -> str | None:
     """Return Chinese console wording while preserving safe opaque identifiers."""
 
@@ -89,6 +112,9 @@ def localize_blocking_text(value: str | None) -> str | None:
     repository = _repository_blocker(text)
     if repository is not None:
         return repository
+    role_failure = _role_failure(text)
+    if role_failure is not None:
+        return role_failure
     if text.startswith("Coder recovery stopped safely:"):
         return "Coder 恢复已安全停止，请检查失败记录和恢复证据后再继续。"
     if text.startswith("Coder 恢复已安全停止："):

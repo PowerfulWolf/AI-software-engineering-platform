@@ -21,6 +21,12 @@ No state event, Task, Operation, Artifact, verdict, approval or digest is rewrit
 generated user-facing recovery and integration actions should be Chinese at their producer so
 that non-browser consumers see the same language.
 
+When a blocked Requirement has a newer terminal child Task, its read-side `blocker` and
+`next_action` prefer that child observation over stale generic Manager advice. Role execution
+failures are rendered as Chinese while retaining any `run_*` identity and SHA-256 evidence
+tokens. Manager coordination remains a separate flow status and does not replace the child
+failure reason.
+
 ### Validation & Error Matrix
 
 | Input | Read-side result |

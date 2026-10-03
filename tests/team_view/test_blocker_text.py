@@ -23,6 +23,18 @@ def test_localizes_repository_blocker_but_keeps_opaque_identity() -> None:
     )
 
 
+def test_localizes_role_failure_and_keeps_run_and_evidence_ids() -> None:
+    value = (
+        "TRANSIENT_INFRA: Reviewer failed at attempt 3: reviewer run run_abc123 failed: "
+        "Codex CLI provider execution failed; stdout_sha256="
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    )
+    localized = localize_blocking_text(value)
+    assert localized.startswith("Reviewer 第 3 次执行失败：Codex CLI 模型服务执行失败")
+    assert "run_abc123" in localized
+    assert "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" in localized
+
+
 def test_unknown_text_and_durable_record_are_not_rewritten() -> None:
     value = "未知原因 run_123 sha256=abc123"
     assert localize_blocking_text(value) == value
