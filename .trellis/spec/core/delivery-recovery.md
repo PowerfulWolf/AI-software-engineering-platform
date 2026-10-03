@@ -2498,3 +2498,35 @@ covers live clean/dirty, exact removal, missing marker and branch drift without 
 No production migration or historical record repair. K1 d4 Task, e41 candidate, original QA FAIL and
 rejected Operations remain durable. After idle activation, Continue with exact incremental selectors
 and approve the new digest; do not reuse consumed plans. Revert commit/idle restart for rollback.
+
+# Scenario: terminal candidate remediation after preparation drift (2026-10-04)
+
+## Scope / contract
+
+When a terminal Delivery already has a candidate revision and an exact candidate-verification
+completion, `DeliveryResumeController.resume` must consume that completion before calling the native
+`retry_interrupted_stage` path. The native checkpoint may retain an older preparation digest after
+the platform or project workspace has advanced; that drift is still a read-side diagnostic for the
+old native stage and must not make a sealed QA/Review result unreachable.
+
+- A completion with QA FAIL or Review REJECT routes through the existing remediation service, which
+  prepares a successor from the current approved project baseline and preserves the old Task,
+  candidate, artifacts, and verification completion.
+- A completion with QA PASS plus Review APPROVE is adopted only through the existing exact
+  verification gate; no Task or historical event is rewritten.
+- A completion with an inconclusive executor result still follows the exact verification retry or
+  prerequisite-approval path. No Coder starts from a mere receipt or a stale native cursor.
+- If no completion exists, the original native retry/recovery path remains unchanged.
+
+## Validation / existing data / rollback
+
+The read-side lookup is limited to the current scoped candidate-verification store and exact plan
+completion. Missing, malformed, stale, or unrelated plans fall through to the normal native path;
+no old record is repaired in place and no consumed approval is replayed. Existing Delivery and
+Task facts require no migration. Revert the platform commit and restart while idle to roll back;
+the durable candidate and verification records remain valid and can be resumed through a fresh
+exact plan.
+
+`tests/recovery/test_delivery_continuation.py::test_terminal_candidate_completion_bypasses_stale_native_retry`
+guards the ordering and ensures no stale native retry is attempted before the immutable completion
+is handed to remediation/adoption.

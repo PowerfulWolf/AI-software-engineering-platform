@@ -170,6 +170,30 @@ class DeliveryResumeController:
                 result,
                 next_action=_checkpoint_next_action(result.checkpoint),
             )
+
+        # A terminal candidate may already have an exact independent-verification
+        # completion. That completion is the durable handoff for remediation (or
+        # candidate adoption), so consume it before retrying the old native stage.
+        # The old Delivery checkpoint can legitimately reference a preparation
+        # digest that drifted after the candidate was sealed. Retrying first would
+        # re-run that stale preparation gate and make an actionable QA/Review
+        # result unreachable.
+        if current.task_id is not None and current.candidate_revision is not None:
+            latest = self._verification.latest_project(
+                repository_root=current.repository_root,
+                delivery_id=current.delivery_id,
+            )
+            if latest is not None:
+                verification_store, verification_plan, _ = latest
+                try:
+                    completion = verification_store.get_verification_completion(
+                        verification_plan.plan_sha256
+                    )
+                except RecoveryRecordMissing:
+                    completion = None
+                if completion is not None:
+                    return self._continue_completion(verification_plan, completion)
+
         retried = self._entry.retry_interrupted_stage(command)
         if retried.checkpoint != current:
             outcome = (

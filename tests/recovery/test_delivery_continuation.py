@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -57,6 +58,53 @@ from tests.recovery.test_candidate_verification import Admission, setup_verifica
 from tests.recovery.test_execution_records import continuation_allocation
 
 NOW = datetime(2026, 9, 9, 8, 0, tzinfo=UTC)
+
+
+def test_terminal_candidate_completion_bypasses_stale_native_retry(
+    tmp_path: Path,
+) -> None:
+    """A sealed QA/Review result remains reachable after preparation drift."""
+    current = SimpleNamespace(
+        stage=DeliveryStage.BLOCKED,
+        task_id="task_terminal_candidate",
+        candidate_revision="a" * 40,
+        repository_root=str(tmp_path / "repository"),
+        delivery_id="delivery_terminal_candidate",
+    )
+    entry = Mock()
+    entry.status.return_value = SimpleNamespace(checkpoint=current)
+    entry.retry_interrupted_stage.side_effect = AssertionError(
+        "stale native retry must not run before candidate completion"
+    )
+    verification_store = Mock()
+    verification_plan = Mock(plan_sha256="plan_sha256")
+    completion = Mock()
+    verification_store.get_verification_completion.return_value = completion
+    verification = Mock()
+    verification.latest_project.return_value = (
+        verification_store,
+        verification_plan,
+        tmp_path / "verification-plan.json",
+    )
+    controller = DeliveryResumeController(
+        config=Mock(),
+        environment={},
+        backend=Mock(),
+        entry=entry,
+        recovery=Mock(),
+        verification=verification,
+    )
+    expected = object()
+    controller._continue_completion = Mock(return_value=expected)
+
+    result = controller.resume(ResumeProjectDelivery(delivery_id=current.delivery_id))
+
+    assert result is expected
+    verification.latest_project.assert_called_once_with(
+        repository_root=current.repository_root,
+        delivery_id=current.delivery_id,
+    )
+    controller._continue_completion.assert_called_once_with(verification_plan, completion)
 
 
 @pytest.mark.parametrize(
@@ -624,6 +672,7 @@ def test_inconclusive_verification_proposes_fresh_qa_without_coder(
         repository_root=plan.scope.repository_root,
         delivery_id=plan.scope.delivery_id,
         native_ui_scenario=None,
+        python_mysql_tests=None,
         manager_advice=None,
     )
     backend.run_prepared_allocation.assert_not_called()

@@ -34,3 +34,12 @@ verdict 不修改；回滚仅需在无活动角色时回滚平台提交并重启
 编译先移除 profile 继承的 Swift 命令，仅当候选 revision 自身存在 regular 顶层
 `Package.swift` 时重新加入。保留本次 QA FAIL 及所有旧事实，下一次必须重新 propose/approve
 精确计划，不能重放本次计划。
+
+## 终态候选在基线漂移后的继续路径
+
+验证 K1 候选时发现，旧 Delivery checkpoint 的 preparation digest 漂移会在
+`retry_interrupted_stage` 先于候选验证完成被调用，导致已封存的 QA/Review 结果无法路由到
+Coder 修复。`DeliveryResumeController` 现在先在当前候选作用域读取唯一的
+`CandidateVerificationCompletion`，再交给既有 remediation/adoption 门；没有 completion 时
+仍走原生重试。该顺序只改变读侧路由，不修改历史 Task、StateEvent、Artifact、Approval 或
+completion。新增增量回归覆盖 stale native retry 被跳过的事实。
