@@ -29,6 +29,10 @@ TeamHost.project_entry(project_id: ProjectId | None = None,
                       *, delivery_id: DeliveryId | None = None) -> UnifiedProjectEntryService
 TeamHost.requirement_entry(project_id: ProjectId | None = None,
                            *, delivery_id: DeliveryId | None = None) -> JointDeliveryService
+TeamHost.recovery_entry(project_id: ProjectId | None = None,
+                        *, delivery_id: DeliveryId | None = None) -> NativeRecoveryEntry
+TeamHost.verification_entry(project_id: ProjectId | None = None,
+                            *, delivery_id: DeliveryId | None = None) -> CandidateVerificationEntry
 TeamHost.work_queue -> MySqlPersistentWorkQueue
 TeamHost.planner_dispatcher(*, demand_builder, worker_id,
                                         owner_token_factory=None) -> DispatcherLoop

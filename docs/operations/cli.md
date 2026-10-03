@@ -211,7 +211,10 @@ ase verify-run --plan /absolute/sidecar/state/candidate-verification-delivery_ch
 ```
 
 `verify-propose` 从原生 Task/event/dispatch/artifact 和联合父需求读取当前事实，固定原 candidate、
-QA/Reviewer Agent、模型、权限及独立验证 Task；`verify-inspect` 纯只读。前三步不调用模型。
+QA/Reviewer Agent、模型、权限及独立验证 Task；`--delivery` 也用于在没有默认 Project 时从
+唯一匹配的 Project sidecar 恢复作用域，多个或零个匹配都会安全拒绝。后续
+`verify-inspect`、`verify-approve`、`verify-run` 从计划读取同一 delivery ID，继续使用同一
+Project runtime。`verify-inspect` 纯只读。前三步不调用模型。
 `verify-run` 只调用 QA，再在 QA PASS 后调用 Reviewer；它使用新的 Assignment/Lease/worktree，
 但 report 的 Task 和 candidate 仍是原始身份，不创建假 Coder、不重置原 Task、不发布 DONE 事件。
 

@@ -48,7 +48,7 @@ def propose(
     try:
         plan, path = (
             TeamHost.from_environment()
-            .recovery_entry()
+            .recovery_entry(delivery_id=delivery)
             .propose(
                 repository_root=project,
                 delivery_id=delivery,
@@ -113,11 +113,11 @@ def approve(
 ) -> None:
     """Human confirms exact plan digest, original solution reuse, base and captured edits."""
     try:
-        TeamHost.from_environment().recovery_entry().approve(
-            plan,
-            confirmed_plan=confirm,
-            reference=reference,
-        )
+        config = ProductionConfig.from_environment(os.environ)
+        _, value = open_recovery_plan(config, plan)
+        TeamHost.from_environment().recovery_entry(
+            delivery_id=value.source.scope.delivery_id
+        ).approve(plan, confirmed_plan=confirm, reference=reference)
     except Exception as error:
         _error(error)
     typer.echo("Recovery approved and sealed. No Agent has been started.")
@@ -127,7 +127,13 @@ def approve(
 def run_recovery(plan: Annotated[Path, typer.Option()]) -> None:
     """Allocate, seed and run a fresh serial Coder → QA → Reviewer attempt."""
     try:
-        result = TeamHost.from_environment().recovery_entry().execute(plan)
+        config = ProductionConfig.from_environment(os.environ)
+        _, value = open_recovery_plan(config, plan)
+        result = (
+            TeamHost.from_environment()
+            .recovery_entry(delivery_id=value.source.scope.delivery_id)
+            .execute(plan)
+        )
     except Exception as error:
         _error(error)
     typer.echo(json.dumps(result.to_wire(), ensure_ascii=False, indent=2))
@@ -147,7 +153,7 @@ def verify_propose(
     try:
         plan, path = (
             TeamHost.from_environment()
-            .verification_entry()
+            .verification_entry(delivery_id=delivery)
             .propose_project(repository_root=project, delivery_id=delivery)
         )
     except Exception as error:
@@ -247,10 +253,10 @@ def verify_approve(
 ) -> None:
     """Seal explicit human approval for exactly one candidate verification plan."""
     try:
-        TeamHost.from_environment().verification_entry().approve(
-            plan,
-            confirmed_plan=confirm,
-            reference=reference,
+        config = ProductionConfig.from_environment(os.environ)
+        _, value = open_candidate_verification_plan(config, os.environ, plan)
+        TeamHost.from_environment().verification_entry(delivery_id=value.scope.delivery_id).approve(
+            plan, confirmed_plan=confirm, reference=reference
         )
     except Exception as error:
         _error(error)
@@ -261,7 +267,13 @@ def verify_approve(
 def verify_run(plan: Annotated[Path, typer.Option()]) -> None:
     """Run only independent QA then Reviewer against the pinned candidate commit."""
     try:
-        completion = TeamHost.from_environment().verification_entry().execute(plan)
+        config = ProductionConfig.from_environment(os.environ)
+        _, value = open_candidate_verification_plan(config, os.environ, plan)
+        completion = (
+            TeamHost.from_environment()
+            .verification_entry(delivery_id=value.scope.delivery_id)
+            .execute(plan)
+        )
     except Exception as error:
         _error(error)
     typer.echo(

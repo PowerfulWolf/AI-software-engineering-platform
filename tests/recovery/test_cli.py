@@ -133,5 +133,38 @@ def test_proposal_mode_is_explicit_and_printed(
     assert host.recovery_entry.return_value.propose.call_args.kwargs["target_branch_name"] == (
         target_name
     )
+    assert host.recovery_entry.call_args.kwargs["delivery_id"] == "delivery_original"
     if target_name is not None:
         assert target_name in result.output
+
+
+def test_verify_propose_resolves_project_from_delivery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A verification command must pass its delivery to project resolution."""
+    plan = Mock()
+    plan.plan_sha256 = "a" * 64
+    plan.inputs.task_id = "task_candidate"
+    plan.inputs.candidate_revision = "b" * 40
+    plan.execution_task_id = "task_verification"
+    plan.definitions = ()
+    host = Mock()
+    host.verification_entry.return_value.propose_project.return_value = (
+        plan,
+        tmp_path / "verification-plan.json",
+    )
+    monkeypatch.setattr(TeamHost, "from_environment", lambda: host)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "verify-propose",
+            "--project",
+            str(tmp_path / "repository"),
+            "--delivery",
+            "delivery_candidate",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert host.verification_entry.call_args.kwargs["delivery_id"] == "delivery_candidate"

@@ -160,18 +160,28 @@ class TeamHost:
     ) -> JointDeliveryService:
         return self._runtime(self._resolve_project_id(project_id, delivery_id)).requirements
 
-    def recovery_entry(self, project_id: str | None = None) -> NativeRecoveryEntry:
+    def recovery_entry(
+        self,
+        project_id: str | None = None,
+        *,
+        delivery_id: str | None = None,
+    ) -> NativeRecoveryEntry:
         """Explicit human recovery; does not restart an old terminal delivery."""
         from ai_software_engineer.recovery.entry import NativeRecoveryEntry
 
-        runtime = self._runtime(self._resolve_project_id(project_id))
+        runtime = self._runtime(self._resolve_project_id(project_id, delivery_id))
         return NativeRecoveryEntry(self._config, self._environment, runtime.backend)
 
-    def verification_entry(self, project_id: str | None = None) -> CandidateVerificationEntry:
+    def verification_entry(
+        self,
+        project_id: str | None = None,
+        *,
+        delivery_id: str | None = None,
+    ) -> CandidateVerificationEntry:
         """Independent QA/Reviewer verification of a pinned candidate; never reruns Coder."""
         from ai_software_engineer.recovery.verification_entry import CandidateVerificationEntry
 
-        runtime = self._runtime(self._resolve_project_id(project_id))
+        runtime = self._runtime(self._resolve_project_id(project_id, delivery_id))
         return CandidateVerificationEntry(self._config, self._environment, runtime.backend)
 
     def resume_delivery(

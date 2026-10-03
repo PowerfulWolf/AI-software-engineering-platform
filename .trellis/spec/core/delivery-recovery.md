@@ -861,7 +861,13 @@ delivery outcomes are separately recorded, not inferred from offline tests. No a
 
 ### Implemented entry signatures and storage
 
-`TeamHost.recovery_entry() -> NativeRecoveryEntry` in `recovery/entry.py`:
+`TeamHost.recovery_entry(project_id=None, *, delivery_id=None) -> NativeRecoveryEntry` in
+`recovery/entry.py` resolves the Project from an explicit `project_id`, the configured default, or
+the unique sidecar containing `delivery_id`; ambiguous or missing matches fail closed. The
+verification entry follows the same rule:
+`TeamHost.verification_entry(project_id=None, *, delivery_id=None) -> CandidateVerificationEntry`.
+Operator commands load the immutable plan before approval/execution and pass its delivery ID to the
+entry, so a service with no default Project does not lose the Project scope between proposal and run.
 
 ```python
 scope_supplement(checkpoint: ProjectDeliveryCheckpoint) -> RecoveryScopeSupplement | None
