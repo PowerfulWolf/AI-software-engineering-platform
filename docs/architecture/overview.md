@@ -254,7 +254,7 @@ json_payload = DashboardRenderer().render_json(read_api)
 ### 静态 Renderer 的四个视图
 
 - Task board：delivery/scheduling status、attempt、candidate、QA/Review 和 artifact/evidence IDs；
-- Run timeline：State、Evaluation、Artifact、Evidence、Assignment、Lease、Handoff 按时间排序，保留 URI/digest；
+- Run timeline：State、Evaluation、Artifact、Evidence、Assignment、Lease、Handoff 按时间排序，保留 URI/digest；QA/Review 报告的 finding、命令、位置、evidence ID 与 Coder 的 parent/supersedes/candidate lineage 作为只读 details 展示，跨 successor/remediation Task 的历史合并到完整执行记录，不固定截断；
 - Agent capacity/detail：角色、模型、Run/Lease 引用，只统计 projection 中的 ACTIVE lease；总容量未知时显式 `capacity_known=false`；
 - Human inbox：从 `WAITING_HUMAN` WorkItem 或 `BLOCKED` Task 推导，保留 reason/evidence/handoff 引用。
 

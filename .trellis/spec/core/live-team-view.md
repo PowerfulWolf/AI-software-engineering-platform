@@ -1,5 +1,27 @@
 # T036 Live team read side
 
+## 完整 QA/Review 返工执行记录（2026-10-03）
+
+### Scope / Trigger
+
+任务经过 `Coder → QA FAIL → Coder → QA PASS → Reviewer REJECT → Coder` 等多轮返工，或 QA/Review 通过后进入新的 remediation/continuation Task 时适用。执行记录是只读审计投影，不能替代 Task 状态机、Artifact verdict 或 Manager Operation。
+
+### Contracts
+
+- `TimelineEntry.details` 对 typed `implementation-report`、`coder-progress`、`qa-report` 和 `review-report` 只投影有界摘要：Artifact SHA、source/candidate revision、parent IDs、supersedes、changed files、测试命令/状态/evidence ID，以及 QA/Review finding 的 code、message、文件/行、recommendation 和 evidence IDs。
+- `ProductionTeamReader` 使用已验证 native checkpoint history 为同一 delivery 读取每个历史 Task；当前 Task 仍是唯一状态/调度事实，历史 Task 的 timeline、runs、documents 只合并到 `TaskView.execution_history`，并以 `history_task_ids` 标识轮次。不得固定截断为八条或删除旧 Task。
+- `TaskView.timeline` 保持当前 Task 兼容语义；`execution_history` 按时间完整排序并包含 `task_id`，前端必须区分“当前轮”和“历史轮”。跨 successor 的历史不改变当前 `status`、`blocker`、`candidate_revision` 或任何 verdict。
+- Coder Artifact 的 `parent_artifact_ids`/`supersedes` 是“是否接收上轮反馈”的可验证 lineage；UI 可以显示已接收输入，但不得宣称 finding 已修复或替 QA/Review 作判断。
+- 读侧递归执行已有 redaction，URI、Run/Task/Artifact/Evidence ID 与 SHA 以文本展示。旧报告缺少 findings 或旧 Task 缺少 `execution_history` 时以空数组兼容。
+
+### Good / Base / Bad
+
+Good：QA FAIL 的 finding 和 evidence 出现在完整历史中，下一轮 Coder 的父 Artifact 与新 candidate 可追溯；Review REJECT 后再次返工仍保留全部轮次。Base：单轮 DONE 和没有 finding 的旧报告正常显示。Bad：页面只显示最新八条、只写“QA 失败”而隐藏 finding，或用当前 Operation/最新 verdict 覆盖历史。
+
+### Validation
+
+增量契约覆盖 projection details、跨 successor Task 合并、空 finding 兼容、超过八条记录和浏览器详情；不要求全量测试。读侧故障 fail closed，不能为缺失历史猜测 verdict。
+
 ## Blocker wording localization (2026-10-03)
 
 ### Scope / Trigger

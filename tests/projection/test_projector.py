@@ -4,7 +4,13 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from ai_software_engineer.domain import AgentRole, TaskStatus
+from ai_software_engineer.domain import (
+    AgentRole,
+    Finding,
+    FindingSeverity,
+    QaReportStatus,
+    TaskStatus,
+)
 from ai_software_engineer.evidence import (
     CommandEvidencePayload,
     CommandEvidenceRecord,
@@ -129,3 +135,54 @@ def test_control_orchestrator_run_remains_in_timeline_without_fake_team_member()
     assert snapshot.runs[0].role is AgentRole.ORCHESTRATOR
     assert snapshot.runs[0].agent_id == plan.producer.agent_id
     assert snapshot.agents == ()
+
+
+def test_projection_keeps_qa_review_findings_and_coder_lineage_details() -> None:
+    from tests.domain.factories import make_implementation_artifact, make_qa_artifact
+
+    implementation = make_implementation_artifact()
+    finding = Finding(
+        finding_id="finding_projection_qa",
+        severity=FindingSeverity.MAJOR,
+        code="MISSING_REGRESSION",
+        message="回归测试没有覆盖空输入。",
+        file="src/example.py",
+        line=42,
+        evidence_ids=("ev_qa_tests",),
+        recommendation="补充空输入回归测试。",
+    )
+    qa = make_qa_artifact().model_copy(
+        update={
+            "artifact_id": "art_qa_projection_feedback",
+            "content": make_qa_artifact().content.model_copy(
+                update={"status": QaReportStatus.FAIL, "findings": (finding,)}
+            ),
+            "created_at": NOW.replace(minute=1),
+        }
+    )
+    repaired = implementation.model_copy(
+        update={
+            "artifact_id": "art_impl_projection_repaired",
+            "parent_artifact_ids": ("art_plan_001", qa.artifact_id),
+            "supersedes": implementation.artifact_id,
+            "created_at": NOW.replace(minute=2),
+            "content": implementation.content.model_copy(
+                update={"commit_sha": "c" * 40}
+            ),
+        }
+    )
+    snapshot = RunProjectionBuilder().build(
+        ProjectionFacts.from_iterables(
+            tasks=(make_task().model_copy(update={"status": TaskStatus.QA}),),
+            artifacts=(implementation, qa, repaired),
+        )
+    )
+    entries = snapshot.tasks[0].timeline
+    qa_entry = next(item for item in entries if item.id == qa.artifact_id)
+    repaired_entry = next(item for item in entries if item.id == repaired.artifact_id)
+    assert qa_entry.summary == "QA 报告 · FAIL"
+    assert qa_entry.details["findings"][0]["message"] == "回归测试没有覆盖空输入。"
+    assert qa_entry.details["findings"][0]["evidence_ids"] == ["ev_qa_tests"]
+    assert repaired_entry.details["parent_artifact_ids"] == ["art_plan_001", qa.artifact_id]
+    assert repaired_entry.details["supersedes"] == implementation.artifact_id
+    assert repaired_entry.details["candidate_revision"] == "c" * 40

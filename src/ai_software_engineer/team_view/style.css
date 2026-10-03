@@ -977,6 +977,22 @@ main[data-page="requests"] #detail {
   display: grid;
   gap: 12px;
 }
+
+.execution-history {
+  max-height: 60vh;
+  overflow: auto;
+  padding-left: 1.4rem;
+}
+
+.execution-history-entry {
+  border-bottom: 1px solid var(--line);
+  padding: 10px 0 12px;
+}
+
+.execution-history-entry:last-child { border-bottom: 0; }
+.execution-findings, .execution-tests { margin: 6px 0 0; padding-left: 1.2rem; }
+.execution-findings li, .execution-tests li { margin: 4px 0; }
+.execution-detail-line { margin: 4px 0; }
 .dialogue-message {
   width: min(84%, 720px);
   display: grid;

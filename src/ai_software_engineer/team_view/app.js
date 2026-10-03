@@ -6492,6 +6492,84 @@ function refreshDiagnosticActivity(details, operation) {
   }, true);
 }
 
+function executionDetailLine(labelText, value) {
+  if (value === null || value === undefined || value === "") return null;
+  return el("p", `${labelText} · ${String(value)}`, "execution-detail-line");
+}
+
+function appendExecutionArtifactDetails(target, entry) {
+  const details = entry.details || {};
+  const lineage = [];
+  if (Array.isArray(details.parent_artifact_ids) && details.parent_artifact_ids.length)
+    lineage.push(`输入产物 ${details.parent_artifact_ids.join("、")}`);
+  if (details.supersedes) lineage.push(`替代产物 ${details.supersedes}`);
+  if (lineage.length) target.append(el("p", lineage.join("；"), "paths"));
+  const candidate = details.candidate_revision || details.source_revision;
+  const candidateLine = executionDetailLine("候选版本", candidate);
+  if (candidateLine) target.append(candidateLine);
+  if (details.artifact_sha256)
+    target.append(el("p", "产物 SHA-256 · " + details.artifact_sha256, "paths"));
+  if (details.status || details.verdict) {
+    const outcome = details.status || details.verdict;
+    target.append(el("p", `结果 · ${outcome}`, outcome === "PASS" || outcome === "APPROVE" ? "success" : "blocker"));
+  }
+  if (details.summary) target.append(el("p", details.summary, "muted"));
+  const findings = Array.isArray(details.findings) ? details.findings : [];
+  if (findings.length) {
+    target.append(el("strong", `发现 · ${findings.length} 项`));
+    const list = el("ul", undefined, "execution-findings");
+    for (const finding of findings) {
+      const item = el("li");
+      const identity = [finding.severity, finding.code, finding.finding_id].filter(Boolean).join(" · ");
+      if (identity) item.append(el("strong", identity));
+      if (finding.message) item.append(el("p", finding.message));
+      if (finding.file || finding.line)
+        item.append(el("p", `位置 · ${finding.file || "未提供"}${finding.line ? `:${finding.line}` : ""}`, "paths"));
+      if (finding.recommendation) item.append(el("p", "建议 · " + finding.recommendation, "muted"));
+      if (Array.isArray(finding.evidence_ids) && finding.evidence_ids.length)
+        item.append(el("p", "证据 · " + finding.evidence_ids.join("、"), "paths"));
+      list.append(item);
+    }
+    target.append(list);
+  } else if (details.kind === "qa-report" || details.kind === "review-report") {
+    target.append(el("p", "未提供 finding。", "muted"));
+  }
+  const tests = Array.isArray(details.tests_run) ? details.tests_run : [];
+  if (tests.length) {
+    target.append(el("strong", "命令 / 测试"));
+    const list = el("ul", undefined, "execution-tests");
+    for (const test of tests) {
+      const suffix = [test.status, test.evidence_id].filter(Boolean).join(" · ");
+      list.append(el("li", `${test.command || "未提供命令"}${suffix ? ` · ${suffix}` : ""}`));
+    }
+    target.append(list);
+  }
+  const changed = Array.isArray(details.changed_files) ? details.changed_files : [];
+  if (changed.length)
+    target.append(el("p", "修改文件 · " + changed.map(item => item.path || "未提供").join("、"), "paths"));
+  if (lineage.some(value => value.startsWith("输入产物")) &&
+      (details.kind === "implementation-report" || details.kind === "coder-progress"))
+    target.append(el("p", "Coder 已接收上轮 QA/Review 反馈作为本轮输入。", "success"));
+}
+
+function appendExecutionEntry(target, entry, currentTaskId) {
+  const item = el("li", undefined, "execution-history-entry");
+  const current = entry.task_id && entry.task_id === currentTaskId;
+  item.append(
+    el("div", entry.summary),
+    el("span", current ? "当前轮" : "历史轮", "badge"),
+    el("div", time(entry.occurred_at), "muted"),
+    entry.task_id ? el("div", "任务 · " + entry.task_id, "paths") : null,
+    el("div", entry.source_uri, "paths"),
+  );
+  if (entry.kind === "artifact") appendExecutionArtifactDetails(item, entry);
+  if (entry.kind === "state_event" && entry.details?.reason)
+    item.append(el("p", "状态原因 · " + entry.details.reason, "muted"));
+  if (entry.kind === "evidence" && entry.details?.operation_id)
+    item.append(el("p", "操作 · " + entry.details.operation_id, "paths"));
+  target.append(item);
+}
+
 function renderDetail({ incremental = false } = {}) {
   const opener = document.activeElement;
   renderView(document.getElementById("detail"), `detail:${page}:${currentProjectId()}:${selected?.kind}:${selected?.id}`,
@@ -6755,17 +6833,14 @@ function buildDetail(panel = document.getElementById("detail")) {
         `${snapshot.agents.find((x) => x.id === a.agent_id)?.name || a.agent_id} · ${label(a.role)} · ${a.planned_provider} / ${a.planned_model}${a.current_stage ? " · 当前阶段" : ""}`,
       ),
     );
-  dialog.append(el("h2", "执行与阶段时间线"));
-  const list = el("ol");
-  for (const entry of item.timeline) {
-    const li = el("li");
-    li.append(
-      el("div", entry.summary),
-      el("div", time(entry.occurred_at), "muted"),
-      el("div", entry.source_uri, "paths"),
-    );
-    list.append(li);
-  }
+  const history = item.execution_history?.length ? item.execution_history : item.timeline;
+  dialog.append(el("h2", "执行记录（完整历史）"));
+  dialog.append(el("p", `共 ${history.length} 条记录；当前 Task ${item.task_id || item.id}。历史轮次保留用于审计，不代表当前状态。`, "muted"));
+  if (item.history_task_ids?.length > 1)
+    dialog.append(el("p", "关联 Task · " + item.history_task_ids.join(" → "), "paths"));
+  const list = el("ol", undefined, "execution-history");
+  for (const entry of history) appendExecutionEntry(list, entry, item.task_id);
+  if (!history.length) list.append(el("li", "暂无已保存的执行记录。", "muted"));
   dialog.append(list);
   dialog.append(el("h2", "已完成的模型调用"));
   dialog.append(roleExecutionActivity(item));

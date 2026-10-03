@@ -10,12 +10,18 @@ from typing import Final
 
 from ai_software_engineer.domain.artifact import (
     Artifact,
+    ChangedFile,
+    CoderProgressArtifact,
+    Finding,
     ImplementationReportArtifact,
+    ImplementationTestRun,
     QaReportArtifact,
+    QaTestRun,
     ReviewReportArtifact,
 )
 from ai_software_engineer.domain.enums import AgentRole, TeamRole
 from ai_software_engineer.domain.event import StateEvent
+from ai_software_engineer.domain.model import JsonValue
 from ai_software_engineer.domain.task import Task, TaskId
 from ai_software_engineer.domain.workforce import (
     AgentRunAllocation,
@@ -151,7 +157,10 @@ class RunProjectionBuilder:
                     occurred_at=event.occurred_at,
                     task_id=task.id,
                     role=event.actor,
-                    summary=f"Task state {event.from_status.value} → {event.to_status.value}",
+                    summary=(
+                        f"状态 · {_status_label(event.from_status.value)} → "
+                        f"{_status_label(event.to_status.value)}"
+                    ),
                     source_uri=f"state://{task.id}/{event.event_id}",
                     details={
                         "from_status": event.from_status.value,
@@ -176,7 +185,7 @@ class RunProjectionBuilder:
                     task_id=task.id,
                     run_id=run_id,
                     role=role,
-                    summary=f"Evaluation event {evaluation_event.kind.value}",
+                    summary=f"评估事件 · {evaluation_event.kind.value}",
                     source_uri=f"evaluation://{evaluation_event.case_id}/{evaluation_event.event_id}",
                     details={
                         "case_id": evaluation_event.case_id,
@@ -641,6 +650,7 @@ def _latest_review(artifacts: tuple[Artifact, ...]) -> str | None:
 
 
 def _artifact_entry(artifact: Artifact) -> TimelineEntry:
+    details = _artifact_details(artifact)
     return TimelineEntry(
         id=artifact.artifact_id,
         kind=ProjectionEventKind.ARTIFACT,
@@ -648,14 +658,10 @@ def _artifact_entry(artifact: Artifact) -> TimelineEntry:
         task_id=artifact.task_id,
         run_id=artifact.producer.run_id,
         role=artifact.producer.role,
-        summary=f"Artifact {artifact.kind.value}",
+        summary=_artifact_summary(artifact),
         source_uri=f"artifact://{artifact.artifact_id}",
         source_sha256=artifact.integrity.sha256,
-        details={
-            "kind": artifact.kind.value,
-            "source_revision": artifact.source_revision,
-            "context_manifest_id": artifact.context_manifest_id,
-        },
+        details=details,
     )
 
 
@@ -667,7 +673,7 @@ def _evidence_entry(record: EvidenceRecord) -> TimelineEntry:
         task_id=record.identity.task_id,
         run_id=record.identity.run_id,
         role=record.identity.role,
-        summary=f"Evidence {record.kind.value}",
+        summary=f"证据 · {record.kind.value}",
         source_uri=record.uri,
         source_sha256=record.record_sha256,
         details={"kind": record.kind.value, "operation_id": record.operation_id},
@@ -688,6 +694,138 @@ def _lease_entry(lease: TaskLease, task_id: TaskId) -> TimelineEntry:
             "expires_at": lease.expires_at.isoformat(),
         },
     )
+
+
+def _status_label(value: str) -> str:
+    return {
+        "NEW": "待启动",
+        "PLANNING": "计划中",
+        "IMPLEMENTING": "实现中",
+        "CONTINUE_REQUIRED": "等待继续实现",
+        "QUEUED": "排队中",
+        "QA": "测试中",
+        "REVIEW": "评审中",
+        "DONE": "已完成",
+        "BLOCKED": "阻塞中",
+        "FAILED": "失败",
+    }.get(value, value)
+
+
+def _artifact_summary(artifact: Artifact) -> str:
+    if isinstance(artifact, CoderProgressArtifact):
+        return "Coder 进度记录"
+    if isinstance(artifact, ImplementationReportArtifact):
+        return "Coder 实现报告"
+    if isinstance(artifact, QaReportArtifact):
+        return f"QA 报告 · {artifact.content.status.value}"
+    if isinstance(artifact, ReviewReportArtifact):
+        return f"Review 报告 · {artifact.content.verdict.value}"
+    return "执行计划"
+
+
+def _finding_details(finding: Finding) -> dict[str, JsonValue]:
+    # Finding is a typed domain object. Keeping an explicit allowlist prevents
+    # arbitrary provider payloads from entering the read projection.
+    return {
+        "finding_id": finding.finding_id,
+        "severity": finding.severity.value,
+        "code": finding.code,
+        "message": finding.message,
+        "file": finding.file,
+        "line": finding.line,
+        "evidence_ids": list(finding.evidence_ids),
+        "recommendation": finding.recommendation,
+    }
+
+
+def _changed_file_details(items: Iterable[ChangedFile]) -> list[JsonValue]:
+    return [
+        {
+            "path": item.path,
+            "change": item.change.value,
+            "lines_added": item.lines_added,
+            "lines_deleted": item.lines_deleted,
+        }
+        for item in items
+    ]
+
+
+def _test_details(items: Iterable[ImplementationTestRun | QaTestRun]) -> list[JsonValue]:
+    return [
+        {
+            "command": item.command,
+            "status": item.status.value,
+            "evidence_id": item.evidence_id,
+            "duration_ms": item.duration_ms,
+        }
+        for item in items
+    ]
+
+
+def _artifact_details(artifact: Artifact) -> dict[str, JsonValue]:
+    details: dict[str, JsonValue] = {
+        "kind": artifact.kind.value,
+        "artifact_sha256": artifact.integrity.sha256,
+        "source_revision": artifact.source_revision,
+        "context_manifest_id": artifact.context_manifest_id,
+        "parent_artifact_ids": list(artifact.parent_artifact_ids),
+        "supersedes": artifact.supersedes,
+    }
+    if isinstance(artifact, ImplementationReportArtifact):
+        implementation_content = artifact.content
+        details.update(
+            {
+                "candidate_revision": implementation_content.commit_sha,
+                "changed_files": _changed_file_details(implementation_content.changed_files),
+                "tests_run": _test_details(implementation_content.tests_run),
+                "known_risks": list(implementation_content.known_risks),
+                "blocked_reason": implementation_content.blocked_reason,
+            }
+        )
+    elif isinstance(artifact, CoderProgressArtifact):
+        progress_content = artifact.content
+        details.update(
+            {
+                "status": progress_content.status.value,
+                "checkpoint_sequence": progress_content.checkpoint_sequence,
+                "summary": progress_content.summary,
+                "changed_files": _changed_file_details(progress_content.changed_files),
+                "completed_step_ids": list(progress_content.completed_step_ids),
+                "remaining_step_ids": list(progress_content.remaining_step_ids),
+                "tests_run": _test_details(progress_content.tests_run),
+                "next_actions": list(progress_content.next_actions),
+            }
+        )
+    elif isinstance(artifact, QaReportArtifact):
+        qa_content = artifact.content
+        details.update(
+            {
+                "status": qa_content.status.value,
+                "criteria_results": [
+                    {
+                        "criterion_id": item.criterion_id,
+                        "status": item.status.value,
+                        "evidence_ids": list(item.evidence_ids),
+                        "notes": item.notes,
+                    }
+                    for item in qa_content.criteria_results
+                ],
+                "tests_run": _test_details(qa_content.tests_run),
+                "findings": [_finding_details(item) for item in qa_content.findings],
+            }
+        )
+    elif isinstance(artifact, ReviewReportArtifact):
+        review_content = artifact.content
+        details.update(
+            {
+                "verdict": review_content.verdict.value,
+                "checked_dimensions": [item.value for item in review_content.checked_dimensions],
+                "evidence_ids": list(review_content.evidence),
+                "summary": review_content.summary,
+                "findings": [_finding_details(item) for item in review_content.findings],
+            }
+        )
+    return details
 
 
 def _usage_status(value: str) -> RunProjectionStatus:

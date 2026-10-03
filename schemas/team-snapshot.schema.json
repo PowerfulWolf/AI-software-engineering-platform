@@ -1324,11 +1324,27 @@
           "title": "Documents",
           "type": "array"
         },
+        "execution_history": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/TimelineEntry"
+          },
+          "title": "Execution History",
+          "type": "array"
+        },
         "execution_liveness": {
           "const": "UNKNOWN",
           "default": "UNKNOWN",
           "title": "Execution Liveness",
           "type": "string"
+        },
+        "history_task_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "History Task Ids",
+          "type": "array"
         },
         "id": {
           "title": "Id",

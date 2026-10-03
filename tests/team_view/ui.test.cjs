@@ -2629,6 +2629,27 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   assert.match(text(get("detail")), /RATE_LIMITED/);
   assert.match(text(get("detail")), /2.5 秒/);
   assert.ok(text(get("detail")).includes(malicious));
+  fixture.tasks[0].task_id = "task_current_round";
+  fixture.tasks[0].history_task_ids = ["task_current_round", "task_old_round"];
+  fixture.tasks[0].execution_history = Array.from({length: 12}, (_, index) => ({
+    id: "history_entry_" + index,
+    kind: index === 9 ? "artifact" : "state_event",
+    occurred_at: `2026-09-05T01:${String(index).padStart(2, "0")}:00Z`,
+    task_id: index < 10 ? "task_old_round" : "task_current_round",
+    summary: index === 9 ? "QA 报告 · FAIL" : "状态 · 历史执行",
+    source_uri: "history://entry/" + index,
+    details: index === 9 ? {
+      kind: "qa-report", status: "FAIL", artifact_sha256: "a".repeat(64),
+      findings: [{finding_id: "finding_qa", severity: "MAJOR", message: "缺少回归测试。", file: "src/example.py", line: 42, evidence_ids: ["ev_qa"]}],
+    } : {},
+  }));
+  fixture.tasks[0].timeline = fixture.tasks[0].execution_history.slice(-2);
+  await interval.fn();
+  vm.runInContext('showDetail("task","d1")', context);
+  assert.match(text(get("detail")), /执行记录（完整历史）/);
+  assert.match(text(get("detail")), /共 12 条记录/);
+  assert.match(text(get("detail")), /缺少回归测试/);
+  assert.match(text(get("detail")), /历史轮/);
   const details = descend(get("detail")).find((n) => n.tag === "details");
   details.open = true;
   await interval.fn();

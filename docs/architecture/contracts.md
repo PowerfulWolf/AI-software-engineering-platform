@@ -48,7 +48,7 @@ Reviewer 中断且终态事件或精确的独立验证入场/制品证明已封�
 | 角色 | 读取 | 写入 | 可执行 | 不能做 | 输出 |
 |---|---|---|---|---|---|
 | Orchestrator | Task、全部 artifact、策略和 Git 元数据 | 状态事件、artifact 索引、运行元数据 | 受 allowlist 的 Git/测试/Agent 启动 | 不写业务代码，不替代 Reviewer | 状态迁移、路由决定 |
-| Coder | 任务上下文、规范、相关代码、上次 coder-progress、QA/Review findings | 生产代码、单元测试、provisional report | lint、unit test、受限构建 | 修改 verdict、修改 Trellis 规则、访问 secrets 或 Git 元数据 | 未完成：coder-progress；完成：intended diff，由平台封装 commit + implementation-report |
+| Coder | 任务上下文、规范、相关代码、上次 coder-progress、QA/Review findings | 生产代码、单元测试、provisional report | lint、unit test、受限构建 | 修改 verdict、修改 Trellis 规则、访问 secrets 或 Git 元数据 | 未完成：coder-progress；完成：intended diff，由平台封装 commit + implementation-report；读模型通过 parent/supersedes/candidate lineage 显示是否接收上轮反馈 |
 | QA | PRD、验收标准、候选 diff、生产代码、测试规范 | QA 测试目录、qa-report | 测试、静态检查、只读构建 | 修改生产代码、批准代码、改写 Coder artifact | qa-report |
 | Reviewer | PRD、plan、diff、implementation-report、qa-report、规范 | review-report（仅 artifact store） | 只读检查、测试复跑 | 修改仓库、修改 QA verdict、直接 merge | review-report |
 

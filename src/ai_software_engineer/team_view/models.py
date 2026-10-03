@@ -100,6 +100,11 @@ class TaskView(DomainModel):
     role_queue: tuple[RoleQueueView, ...] = ()
     assignments: tuple[AssignmentView, ...] = ()
     timeline: tuple[TimelineEntry, ...] = ()
+    # ``timeline`` remains the exact current Task projection for compatibility.
+    # ``execution_history`` is the complete read-only history across
+    # successor/remediation Tasks; it never drives scheduling or verdicts.
+    execution_history: tuple[TimelineEntry, ...] = ()
+    history_task_ids: tuple[str, ...] = ()
     runs: tuple[RunView, ...] = ()
     documents: tuple[DocumentView, ...] = ()
 

@@ -15,6 +15,7 @@ from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.domain.coordination import ManagerCoordinationAdvice
 from ai_software_engineer.domain.enums import AgentRole, TaskStatus, TeamRole, WorkItemStatus
+from ai_software_engineer.domain.model import JsonValue
 from ai_software_engineer.domain.task import Task, task_matches_dispatch
 from ai_software_engineer.domain.workforce import AgentProfile
 from ai_software_engineer.evaluation import FileEvaluationEventStore
@@ -43,7 +44,7 @@ from ai_software_engineer.multi_directory.retirement import RequirementRetiremen
 from ai_software_engineer.multi_directory.scope import git_read
 from ai_software_engineer.multi_directory.store import JointJournal
 from ai_software_engineer.project_workspace import ProjectWorkspace
-from ai_software_engineer.projection.models import ProjectionFacts
+from ai_software_engineer.projection.models import ProjectionFacts, TimelineEntry
 from ai_software_engineer.projection.projector import RunProjectionBuilder
 from ai_software_engineer.recovery.models import RecoveryScope
 from ai_software_engineer.recovery.store import FileRecoveryStore, RecoveryRecordMissing
@@ -470,6 +471,29 @@ class ProductionTeamReader:
                                 base,
                                 dispatch_override=successor,
                             )
+                        # A remediation/continuation may publish a successor Task while
+                        # the native checkpoint still retains its predecessor history. Read
+                        # every validated historical Task and merge only its immutable
+                        # timeline/run/document facts into the current read model.
+                        historical_views = []
+                        for task_id, source_native in sorted(
+                            _native_task_sources(native).items()
+                        ):
+                            if task_id == view.task_id:
+                                continue
+                            historical_views.append(
+                                _read_task_details(
+                                    source_native,
+                                    cursor,
+                                    _task_base(
+                                        source_native,
+                                        base.project_id,
+                                        base.request_id,
+                                        base.scope,
+                                    ),
+                                )
+                            )
+                        view = _merge_task_history(view, tuple(historical_views))
                         tasks.append(view)
                         projected_native_views.append((native, view))
                     tasks.extend(
@@ -738,6 +762,65 @@ def _native_task_sources(native: _Native) -> dict[str, _Native]:
 
 def _safe(text: str) -> str:
     return redact_text(text).text
+
+
+def _safe_json(value: object) -> JsonValue:
+    """Redact strings inside timeline details without dropping audit facts."""
+    if isinstance(value, str):
+        return _safe(value)
+    if isinstance(value, dict):
+        return {str(key): _safe_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_safe_json(item) for item in value]
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return _safe(str(value))
+
+
+def _merge_task_history(current: TaskView, historical: tuple[TaskView, ...]) -> TaskView:
+    """Merge immutable delivery history while retaining current Task authority."""
+    candidates = (current, *historical)
+    entries: dict[tuple[str | None, str, str], TimelineEntry] = {}
+    for view in candidates:
+        for entry in view.timeline:
+            entries[(entry.task_id, entry.kind.value, entry.id)] = entry
+    ordered = tuple(
+        sorted(
+            entries.values(),
+            key=lambda item: (item.occurred_at, item.task_id or "", item.kind.value, item.id),
+        )
+    )
+    runs = {
+        (run.run_id, run.route_index): run
+        for view in candidates
+        for run in view.runs
+    }
+    documents = {
+        (document.source_uri, document.sha256): document
+        for view in candidates
+        for document in view.documents
+    }
+    task_ids = tuple(
+        dict.fromkeys(view.task_id or view.id for view in candidates if view.task_id or view.id)
+    )
+    return current.model_copy(
+        update={
+            "execution_history": ordered,
+            "history_task_ids": task_ids,
+            "runs": tuple(
+                sorted(
+                    runs.values(),
+                    key=lambda run: (run.completed_at, run.run_id, run.route_index),
+                )
+            ),
+            "documents": tuple(
+                sorted(
+                    documents.values(),
+                    key=lambda document: (document.source_uri, document.sha256),
+                )
+            ),
+        }
+    )
 
 
 def _design_recovery_available(
@@ -1291,7 +1374,12 @@ def _read_task_details(
         )
     )
     timeline = tuple(
-        entry.model_copy(update={"summary": _safe(entry.summary), "details": {}})
+        entry.model_copy(
+            update={
+                "summary": _safe(entry.summary),
+                "details": _safe_json(entry.details),
+            }
+        )
         for entry in projection.tasks[0].timeline
     )
     docs = tuple(
