@@ -179,7 +179,11 @@ class DeliveryResumeController:
         # Keep the latest plan in hand so the normal approval/execution handling
         # below can continue without retrying the old stage.
         latest: tuple[FileRecoveryStore, CandidateVerificationPlan, Path] | None = None
-        terminal_candidate = current.task_id is not None and current.candidate_revision is not None
+        terminal_candidate = (
+            current.task_id is not None
+            and current.candidate_revision is not None
+            and current.task_status in {TaskStatus.BLOCKED, TaskStatus.FAILED}
+        )
         if terminal_candidate:
             latest = self._verification.latest_project(
                 repository_root=current.repository_root,

@@ -67,6 +67,7 @@ def test_terminal_candidate_completion_bypasses_stale_native_retry(
     current = SimpleNamespace(
         stage=DeliveryStage.BLOCKED,
         task_id="task_terminal_candidate",
+        task_status=TaskStatus.BLOCKED,
         candidate_revision="a" * 40,
         repository_root=str(tmp_path / "repository"),
         delivery_id="delivery_terminal_candidate",
@@ -114,6 +115,7 @@ def test_terminal_candidate_without_plan_bypasses_stale_native_retry(
     current = SimpleNamespace(
         stage=DeliveryStage.BLOCKED,
         task_id="task_terminal_candidate",
+        task_status=TaskStatus.BLOCKED,
         candidate_revision="a" * 40,
         repository_root=str(tmp_path / "repository"),
         delivery_id="delivery_terminal_candidate",
@@ -157,6 +159,44 @@ def test_terminal_candidate_without_plan_bypasses_stale_native_retry(
         delivery_id=current.delivery_id,
     )
     entry.retry_interrupted_stage.assert_not_called()
+
+
+@pytest.mark.parametrize("status", [TaskStatus.QA, TaskStatus.REVIEW])
+def test_nonterminal_verifier_keeps_native_resume(status: TaskStatus) -> None:
+    """A blocked Delivery cursor does not make its live verifier Task terminal."""
+    current = SimpleNamespace(
+        stage=DeliveryStage.BLOCKED,
+        task_id="task_pending_verifier",
+        task_status=status,
+        candidate_revision="a" * 40,
+        repository_root="/repository",
+        delivery_id="delivery_pending_verifier",
+    )
+    entry = Mock()
+    entry.status.return_value = SimpleNamespace(checkpoint=current)
+    resumed = SimpleNamespace(
+        checkpoint=SimpleNamespace(
+            stage=DeliveryStage.DELIVERING, next_action=DeliveryNextAction.RUN_DELIVERY
+        )
+    )
+    entry.retry_interrupted_stage.return_value = resumed
+    verification = Mock()
+    controller = DeliveryResumeController(
+        config=Mock(),
+        environment={},
+        backend=Mock(),
+        entry=entry,
+        recovery=Mock(),
+        verification=verification,
+    )
+    expected = object()
+    controller._result = Mock(return_value=expected)
+    command = ResumeProjectDelivery(delivery_id=current.delivery_id)
+
+    assert controller.resume(command) is expected
+    entry.retry_interrupted_stage.assert_called_once_with(command)
+    verification.latest_project.assert_not_called()
+    verification.propose_project.assert_not_called()
 
 
 @pytest.mark.parametrize(
