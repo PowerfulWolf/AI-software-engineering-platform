@@ -168,6 +168,19 @@ def test_git_head_ref_and_expected_revision_are_verified(tmp_path: Path) -> None
         discover_repository_profile(project, observed_at=OBSERVED, revision="b" * 40)
 
 
+def test_git_worktree_file_binds_explicit_adapter_revision(tmp_path: Path) -> None:
+    project = tmp_path / "linked-worktree"
+    project.mkdir()
+    revision = "d" * 40
+    (project / ".git").write_text("gitdir: /outside/managed/worktree\n", encoding="utf-8")
+
+    profile = discover_repository_profile(project, observed_at=OBSERVED, revision=revision)
+
+    assert profile.vcs.kind is VcsKind.GIT
+    assert profile.vcs.revision == revision
+    assert profile.source_revision == revision
+
+
 def test_git_packed_refs_preserve_revision_for_native_rule_recovery(tmp_path: Path) -> None:
     project = tmp_path / "packed-git-project"
     git_dir = project / ".git"

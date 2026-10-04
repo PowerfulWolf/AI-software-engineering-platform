@@ -168,6 +168,11 @@ ase request resume DELIVERY_ID
   `reconcile` 和 `deliver` 使用同一 `delivery_runtime`，取回最新 DONE，父继续 integration。
   Recovery Bad：preflight 用当前 child runtime 通过后，execution 又从父 preparation 新建 runtime，
   将合法恢复误报为 `delivery preparation checkpoint drifted`。
+- Recovery source Good：历史 child 的 Preparation/Profile 若因 Git worktree 的外置 `.git` 元数据只能
+  记录 `unknown`，必须优先使用该 child successor Task 的精确 `base_ref`，并校验 Task/repository
+  绑定；新的 Preparation 在 profile discovery 时要显式绑定 `DirectoryUnit.base_revision`。不得从
+  当前 checkout 的 HEAD 猜测或改写历史 profile。Recovery Bad：把 `unknown` 当作可执行 revision，
+  或以当前主 checkout HEAD 替代 successor Task 的冻结基线。
 - Integration Recovery Good：测试可执行文件缺失时先封存 `command could not start` 和候选集合，
   父需求显示 BLOCKED；用户继续后 Planner 产生引用候选中已有测试的新计划，子仓库仍保持原
   Reviewer candidate。

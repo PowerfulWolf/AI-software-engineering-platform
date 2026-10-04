@@ -57,6 +57,7 @@ from ai_software_engineer.manager.production_backend import (
     MultiRepositoryStructuredClientFactory,
     ProductionProjectDeliveryBackend,
     StructuredClientFactory,
+    _is_durable_git_revision,
     _task_commands,
 )
 from ai_software_engineer.manager.store import FileProjectPreparationStore
@@ -172,7 +173,16 @@ class ProductionJointBackend:
         result = self.native.prepare(unit.root)
         if result.status is not PrepareProjectStatus.PREPARED:
             return PreparedUnit(unit_id=unit.id, result=result)
-        profile = RepositoryProfile.discover(unit.root, repository_id=result.repository_id)
+        # A repository checkout may itself be a Git worktree.  RepositoryProfile
+        # intentionally treats a ``.git`` file as an opaque external gitdir, so
+        # it records ``unknown`` unless the durable baseline is supplied by the
+        # caller.  The joint scope already captured that baseline; bind it into
+        # the profile instead of sealing an unusable frozen preparation.
+        profile = RepositoryProfile.discover(
+            unit.root,
+            repository_id=result.repository_id,
+            revision=unit.base_revision,
+        )
         sources = list(self.native.prepared_context(result))
         for index, source in enumerate(profile.native_rules):
             path = Path(unit.root) / source.relative_path
@@ -346,11 +356,26 @@ class ProductionJointBackend:
                     workspace.root,
                     historical_preparation.repository_profile_sha256,
                 )
+                source_revision = profile.source_revision
+                if not _is_durable_git_revision(source_revision):
+                    # Older recoveries could seal a profile with ``unknown``
+                    # when the target was a Git worktree.  The native Task is
+                    # the immutable source-of-truth for that successor's
+                    # base_ref; use it only after validating the exact Task and
+                    # repository binding, never by reading mutable HEAD.
+                    if current.task_id is None:
+                        raise ValueError(
+                            "native child preparation has no durable Git source revision"
+                        )
+                    source_revision = self.native.task_source_revision(
+                        current.task_id,
+                        repository_root=current.repository_root,
+                    )
                 backend = self._derived_backend(
                     checkpoint,
                     unit_id,
                     frozen_preparation=historical,
-                    frozen_source_revision=profile.source_revision,
+                    frozen_source_revision=source_revision,
                 )
         return backend, self._entry(checkpoint, unit_id, backend=backend)
 

@@ -4,9 +4,11 @@ import json
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from ai_software_engineer.domain import TaskStatus
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.domain.project_delivery import ProjectPreparation
 from ai_software_engineer.execution import (
@@ -27,6 +29,7 @@ from ai_software_engineer.manager.production_agents import ProductDraft
 from ai_software_engineer.multi_directory.integration_commands import is_test_command
 from ai_software_engineer.multi_directory.models import (
     Candidate,
+    ChildDelivery,
     DialogueMessage,
     IntegrationCommandError,
     IntegrationEvidence,
@@ -41,6 +44,7 @@ from ai_software_engineer.multi_directory.models import (
 )
 from ai_software_engineer.multi_directory.production import (
     DerivedStageInputs,
+    ProductionJointBackend,
     _execute_integration_command,
     _integration_permissions,
     _python_integration_environment,
@@ -206,6 +210,117 @@ def test_dependency_order_and_done_require_joint_evidence(tmp_path: Path) -> Non
         )
 
 
+def test_delivery_runtime_rebinds_legacy_worktree_profile_from_task_base(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A legacy ``unknown`` profile must not block a frozen successor runtime."""
+
+    parent = checkpoint(tmp_path)
+    unit = parent.scope.units[0]
+    now = datetime.now(UTC)
+    child = ProjectDeliveryCheckpoint.create(
+        delivery_id="delivery_child_legacy_profile",
+        sequence=1,
+        repository_id=parent.preparations[0].result.repository_id,
+        repository_root=unit.root,
+        preparation_sha256="f" * 64,
+        product_spec_id="product_child",
+        product_spec_sha256="1" * 64,
+        approval_id="approval_child",
+        approval_sha256="2" * 64,
+        technical_design_id="design_child",
+        technical_design_sha256="3" * 64,
+        execution_plan_id="plan_child",
+        execution_plan_sha256="4" * 64,
+        planning_preview_id="preview_child",
+        planning_preview_sha256="5" * 64,
+        dispatch_commit_id="dispatch_child",
+        dispatch_commit_sha256="6" * 64,
+        task_id="task_successor",
+        task_revision=1,
+        task_status=TaskStatus.BLOCKED,
+        stage=DeliveryStage.BLOCKED,
+        stage_attempts=DeliveryStageAttempts(delivering=1),
+        next_action=DeliveryNextAction.REQUEST_HUMAN,
+        failure_code=DeliveryFailureCode.INVARIANT_VIOLATION,
+        failure_summary="provider route left retained changes",
+        failed_stage=DeliveryStage.DELIVERING,
+        checkpointed_at=now,
+    )
+    current = JointCheckpoint.seal(
+        {
+            **parent.to_wire(),
+            "children": (ChildDelivery(unit_id=unit.id, checkpoint=child),),
+        }
+    )
+    historical_preparation = parent.preparations[0].result.preparation
+    assert historical_preparation is not None
+    historical_preparation = historical_preparation.model_copy(
+        update={"preparation_sha256": "f" * 64}
+    )
+    historical_result = parent.preparations[0].result.model_copy(
+        update={"preparation": historical_preparation}
+    )
+    captured: list[str] = []
+
+    class _Catalog:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def for_delivery(self, _delivery_id: str) -> object:
+            return self
+
+        def list(self, _delivery_id: str) -> tuple[ProjectDeliveryCheckpoint, ...]:
+            return (child,)
+
+    monkeypatch.setattr(
+        "ai_software_engineer.multi_directory.production.ProjectDeliveryCheckpointCatalog",
+        _Catalog,
+    )
+    monkeypatch.setattr(
+        "ai_software_engineer.multi_directory.production._load_preparation_result",
+        lambda *_args: historical_result,
+    )
+    monkeypatch.setattr(
+        "ai_software_engineer.multi_directory.production.load_repository_profile",
+        lambda *_args: SimpleNamespace(
+            repository_id=historical_preparation.repository_id,
+            source_revision="unknown",
+        ),
+    )
+
+    backend = object.__new__(ProductionJointBackend)
+    backend.native = SimpleNamespace(
+        task_source_revision=lambda task_id, *, repository_root: (
+            captured.append(f"task:{task_id}:{repository_root}") or "a" * 40
+        )
+    )
+    backend.factory = lambda *_args, **kwargs: captured.append(
+        f"factory:{kwargs.get('frozen_source_revision', _args[-1])}"
+    ) or "backend"
+    backend.clients = object()
+    backend.team = SimpleNamespace()
+    backend.project = SimpleNamespace(
+        root=tmp_path,
+        repository_registry=lambda: SimpleNamespace(
+            registry_root=tmp_path,
+            register=lambda repository_root, repository_id: SimpleNamespace(
+                root=Path(repository_root), repository_id=repository_id
+            ),
+        ),
+    )
+    backend.environment = {}
+    monkeypatch.setattr(
+        backend,
+        "_entry",
+        lambda _checkpoint, _unit_id, *, backend: ("entry", backend),
+    )
+
+    _runtime_backend, entry = backend.delivery_runtime(current, unit.id)
+
+    assert entry == ("entry", "backend")
+    assert "task:task_successor:" + unit.root in captured
+    assert "factory:" + "a" * 40 in captured
 def test_projection_is_deterministic_and_requires_exact_root(tmp_path: Path) -> None:
     cp = checkpoint(tmp_path)
     unit = cp.scope.units[0]

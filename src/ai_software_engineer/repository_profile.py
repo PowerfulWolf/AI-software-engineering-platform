@@ -250,7 +250,14 @@ class RepositoryProfile(DomainModel):
         if revision is not None:
             _validate_revision(revision)
             detected_revision = vcs.revision or UNKNOWN
-            if detected_revision != revision:
+            if vcs.kind is VcsKind.GIT and vcs.revision is None:
+                # A linked Git worktree stores a .git file whose external
+                # gitdir is outside this read boundary.  The caller may still
+                # provide the revision obtained from its explicit Git adapter;
+                # bind that durable fact into the profile without traversing
+                # the external directory.
+                vcs = vcs.model_copy(update={"revision": revision})
+            elif detected_revision != revision:
                 raise RepositoryProfileMetadataError(
                     "expected project revision does not match locally readable VCS revision"
                 )

@@ -262,6 +262,40 @@ def test_planner_retry_uses_a_new_run_identity_after_a_failed_run(
     assert command.run_id != base_run_id
 
 
+def test_task_source_revision_reads_only_the_exact_task_repository_and_base(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Historical Git-worktree preparations can recover from the successor Task base."""
+
+    class _TaskStore:
+        def __init__(self, dsn: str) -> None:
+            assert dsn == "mysql://test"
+
+        def get(self, task_id: str) -> object:
+            assert task_id == "task_successor"
+            return SimpleNamespace(
+                repository=str(tmp_path / "repository"),
+                base_ref="a" * 40,
+            )
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(production_backend, "MySqlTaskRepository", _TaskStore)
+    backend = object.__new__(ProductionProjectDeliveryBackend)
+    backend._dsn = "mysql://test"
+
+    assert (
+        backend.task_source_revision(
+            "task_successor", repository_root=str(tmp_path / "repository")
+        )
+        == "a" * 40
+    )
+
+    with pytest.raises(ValueError, match="another repository"):
+        backend.task_source_revision("task_successor", repository_root=str(tmp_path / "other"))
+
+
 class _ScriptedClientFactory(StructuredClientFactory):
     def for_project(
         self,

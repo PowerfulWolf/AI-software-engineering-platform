@@ -1,0 +1,26 @@
+{
+  "id": "frozen-worktree-source-revision-20261004",
+  "title": "历史 Git worktree 恢复使用 successor Task 的封存基线",
+  "status": "in_progress",
+  "phase": "incremental_verified",
+  "created_at": "2026-10-04T19:00:00+08:00",
+  "owner": "codex",
+  "baseline": "c7ce8f9",
+  "scope": [
+    "RepositoryProfile 对外置 Git worktree 的显式基线绑定",
+    "联合交付历史 child runtime 的 successor Task source revision 恢复",
+    "生产恢复规范和增量回归测试"
+  ],
+  "acceptance": [
+    "新准备从 DirectoryUnit.base_revision 绑定 profile，不读取外置 gitdir 或当前 checkout HEAD",
+    "历史 profile 为 unknown 时，runtime 仅从精确匹配 repository_root 的 successor Task.base_ref 恢复",
+    "source revision 不可验证、Task/repository 不匹配或历史事实冲突时继续 fail closed",
+    "旧 Task、Run、checkpoint、worktree 和审批记录保持不可变"
+  ],
+  "verification": [
+    "pytest tests/repository_profile/test_discovery.py tests/manager/test_production_backend.py tests/manager/test_joint_contracts.py tests/manager/test_team_host.py tests/recovery/test_joint_resume.py -q",
+    "pytest tests/agents/test_responses.py tests/team_view/test_blocker_text.py tests/web_console/test_manager.py -q",
+    "ruff check changed files; mypy changed source files; compileall; git diff --check"
+  ],
+  "rollback": "回滚平台提交并重启 ASE Console；保留 .ase 中所有历史 Run、Task、checkpoint、candidate、QA/Review 和审批事实，不直接改库。"
+}

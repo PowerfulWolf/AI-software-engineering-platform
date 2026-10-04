@@ -606,6 +606,10 @@ this does not authorize rebasing old approval or QA/Review evidence in place.
   `target_preparation_sha256`、RepositoryProfile `source_revision` 与 `target_base_revision` 必须来自同一
   当前 clean HEAD。禁止用 frozen child backend 产生 target preparation 后再把当前 HEAD 写入计划；否则
   主分支正常前进后，所有旧 Requirement 都会稳定失败为 `target profile mismatch`。
+- 如果历史 Git worktree preparation 的 `RepositoryProfile.source_revision` 是 `unknown`，child runtime
+  必须从该 successor Task 的精确 `base_ref` 恢复 durable source revision，并校验 Task 与 repository
+  根一致；新 preparation 通过 `RepositoryProfile.discover(..., revision=DirectoryUnit.base_revision)`
+  绑定显式基线。不得读取外置 gitdir、当前 HEAD 或覆盖历史 profile。
 
 ## 4. Validation & Error Matrix
 
@@ -632,6 +636,7 @@ this does not authorize rebasing old approval or QA/Review evidence in place.
 | 新 intake 的 target project dirty/not Git/HEAD 在准备期间漂移 | delivery precondition | stable failure + preserved project/worktree |
 | 已有 Requirement 的配置 checkout HEAD 前进或 dirty | Requirement-owned baseline | 不影响旧交付；Task.base_ref 仍为封存 revision |
 | frozen Requirement child 阻塞后，配置 checkout HEAD 前进 | recovery composition | source/entry 保留旧基线；recovery/verification target 使用当前 Project backend 并生成同一 HEAD 的 profile、preparation 与 plan |
+| 历史 Git worktree profile 为 `unknown` | delivery runtime + successor Task | 使用精确 Task.base_ref；Task/repository 不匹配或 base 非 durable Git revision 时拒绝 |
 | Requirement baseline worktree/commit 漂移 | reconciliation | typed source drift；保留现场，不 fallback 到配置 checkout |
 | Coder provisional report/diff 不匹配、越权路径或 finalization 后 dirty | Codex Git guard | policy/invalid-output failure；不进入 QA |
 | Coder 返回合法未完成 checkpoint | artifact/worktree/state guards | 保存 progress，重新排队下一次 Coder；不进入 QA |

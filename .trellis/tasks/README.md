@@ -21,6 +21,7 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 | [10-03-bounded-successor-branch-names](10-03-bounded-successor-branch-names/task.json) | completed / incremental_verified | 新 successor 从稳定业务根名生成；29 项语义分支测试、相关恢复选择测试、Ruff、mypy 通过；待提交推送并重载服务 |
 | [10-03-active-child-over-stale-verification-blocker](10-03-active-child-over-stale-verification-blocker/task.json) | in_progress / implementation | 活动 Coder 恢复优先于旧 QA/Review 终态阻塞；增量回归、推送与服务重载待完成 |
 | [10-04-team-view-route-ledger-cache](10-04-team-view-route-ledger-cache/task.json) | completed / incremental_verified | Team snapshot 在单次读取内复用模型路由记录；7 项 Team View 增量测试通过，待提交推送并重载服务 |
+| [10-04-frozen-worktree-source-revision](10-04-frozen-worktree-source-revision/task.json) | in_progress / incremental_verified | 历史 linked worktree profile 使用 successor Task.base_ref 恢复；增量回归通过，待提交推送、重载 Console 并继续原交付 |
 | [10-02-post-feedback-knowledge-recovery](10-02-post-feedback-knowledge-recovery/task.json) | completed / incremental_verified | exact unfinished知识咨询与clean候选恢复；真实Git/MySQL增量及独立QA/Review通过，待空闲加载并恢复K1 |
 | [10-02-recovery-verdict-context](10-02-recovery-verdict-context/task.json) | completed / incremental_verified | 保留恢复前的 QA/Review finding；增量、Ruff、mypy与独立QA/Review通过；无活动角色时加载，K1继续原生验收 |
 | [10-02-current-child-blocker-display](10-02-current-child-blocker-display/task.json) | completed / incremental_verified | 48项增量与独立QA/Review；静态展示更新，K1仍走原生交付 |

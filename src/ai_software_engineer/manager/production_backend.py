@@ -483,6 +483,27 @@ class ProductionProjectDeliveryBackend:
         _require_git_revision(repository_root, self._frozen_source_revision)
         return self._frozen_source_revision
 
+    def task_source_revision(self, task_id: str, *, repository_root: str) -> str:
+        """Read a successor Task's durable Git base for historical recovery.
+
+        A legacy preparation can contain a RepositoryProfile whose revision is
+        ``unknown`` when it was created from a Git worktree.  Recovery may use
+        the Task's frozen ``base_ref`` as the source revision, but only after
+        checking the exact Task repository and the durable revision shape.  It
+        must never infer this value from the mutable checkout.
+        """
+
+        repository = MySqlTaskRepository(self._dsn)
+        try:
+            task = repository.get(task_id)
+        finally:
+            repository.close()
+        if Path(task.repository).resolve() != Path(repository_root).resolve():
+            raise ValueError("native child Task belongs to another repository")
+        if not _is_durable_git_revision(task.base_ref):
+            raise ValueError("native child Task has no durable Git source revision")
+        return task.base_ref
+
     def start_product(
         self,
         delivery_id: str,
@@ -1258,9 +1279,14 @@ class ProductionProjectDeliveryBackend:
         profile = load_repository_profile(workspace.root, prepared.repository_profile_sha256)
         if profile.repository_id != prepared.repository_id:
             raise ValueError("prepared profile belongs to another project")
+        # A legacy Git-worktree profile may retain ``unknown`` because its
+        # external gitdir was intentionally not read.  A frozen source
+        # revision supplied by the validated checkpoint/Task is still the
+        # authoritative binding; any concrete conflicting profile revision is
+        # rejected.
         if (
             self._frozen_source_revision is not None
-            and profile.source_revision != self._frozen_source_revision
+            and profile.source_revision not in {self._frozen_source_revision, "unknown"}
         ):
             raise ValueError("frozen preparation does not match the Requirement source revision")
         compilation = self._baseline_store.get(workspace, preparation.baseline_compilation_sha256)
