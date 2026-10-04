@@ -1032,6 +1032,36 @@ def test_dirty_failure_preserves_safe_diagnostics_without_enabling_retry(
     assert adapter.run(request) == result
 
 
+@pytest.mark.parametrize("returncode", [-2, -9, -15])
+def test_signalled_dirty_run_does_not_classify_stderr_authentication_words(
+    tmp_path: Path,
+    returncode: int,
+) -> None:
+    root, base = _repository(tmp_path)
+    request = _coder_request().model_copy(update={"source_revision": base})
+    result = CodexCliAgentAdapter(
+        workspace_root=root,
+        model="fixture",
+        agent_id="agent_coder_001",
+        agent_version="v0.1",
+        prompt_builder=StaticPromptBuilder(),
+        runner=_DirtyFailureRunner(
+            CodexInvocationResult(
+                returncode=returncode, stderr="Authentication configured; 401 diagnostic"
+            )
+        ),
+    ).run(request)
+
+    assert result.error is not None
+    assert result.error.code is AgentErrorCode.POLICY_VIOLATION
+    assert result.error.transient is False
+    assert f"cause=INTERRUPTED; returncode={returncode}" in result.error.message
+    assert "AUTHENTICATION_ERROR" not in result.error.message
+    assert result.artifact is None
+    assert _git(root, "rev-parse", "HEAD") == base
+    assert (root / "src/partial.py").exists()
+
+
 def test_subprocess_capture_retains_trailing_failure_marker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -1,5 +1,50 @@
 # 多目录联合交付契约
 
+## Frozen preparation storage versus model input (2026-10-04)
+
+### Scope / Trigger
+
+Large native rule corpora during named Requirement intake. Complete frozen knowledge is durable
+source data; it is not the serialized model prompt. Never discard mandatory rules to fit a prompt.
+
+### Signatures
+
+`ProductionJointBackend.prepare(DirectoryUnit) -> PreparedUnit` uses
+`MAX_FROZEN_PREPARATION_BYTES = 4_000_000` for summed UTF-8 inline source bodies. Each native file
+still has a 256,000 byte limit. `RequirementPreparationContextExceeded(actual_bytes, limit_bytes)`
+is an internal typed ValueError with safe Chinese guidance, not a new wire enum.
+
+### Contracts and validation matrix
+
+| Facts | Required behavior |
+|---|---|
+| About 1.3 MB across individually bounded native files | Freeze complete URI/hash/body facts; no truncation |
+| Aggregate above 4 MB or single file above 256 KB | Reject with typed storage limit; no provider invocation |
+| Typed refusal in PREPARING | Append BLOCKED with Chinese next_action; do not leave an apparently active preparation |
+| Symlink, source hash or Git revision drift | Existing fail-closed rejection remains |
+| Model preparation | Full frozen snapshot remains retrievable; native references retain AGENTS text; existing token gates remain |
+
+No approved historical preparation, source hash, role permission, Task or verdict is modified.
+Expected storage refusal grants no retry or execution authority. A blocked intake can be formally
+closed; a failed legacy PREPARING intake may be retried by typed Create against its unchanged exact
+Git baseline, then its unapproved READY draft may be formally retired. Baseline changes require a
+new input identity, never replacement of sealed source bytes.
+
+### Good / Base / Bad and tests
+
+Good: complete 1.3 MB frozen corpus with a small reference prompt and verified knowledge reads.
+Base: small native corpus unchanged. Bad: send the full corpus as a prompt, silently truncate,
+or treat a refused intake as still executing. `test_joint_context_limits.py` uses real temporary
+Git corpora for aggregate success/refusal and full body/reference assertions;
+`test_requirement_retirement.py` asserts durable BLOCKED, zero Product facts and CLOSED history.
+
+### Wrong vs Correct
+
+Wrong: equate `sum(len(body)) > 1_000_000` with model capacity and leave PREPARING on rejection.
+Correct: bound frozen UTF-8 storage separately, seal expected refusal, then enforce prompt tokens
+after projection/retrieval. Existing `test_complete_role_chain_retains_artifacts_and_frozen_read_text`
+continues to assert complete frozen knowledge and exact artifacts throughout independent delivery.
+
 ## 1. Scope / Trigger
 
 适用于 `multi_directory/`、Host/CLI、批准投影、候选集合及恢复。入口在一个已选择的 Project 中接受

@@ -118,6 +118,10 @@ def _role_failure(text: str) -> str | None:
         reason = "候选验证上下文超过配置预算，平台未调用模型"
     elif "Responses provider returned HTTP 409" in detail:
         reason = "Responses 模型服务返回 HTTP 409，当前模型调用未完成"
+    elif "Codex CLI left changes after a failed execution" in detail and re.search(
+        r"returncode=-[2-9][0-9]*(?:;|$)|returncode=-1[0-9]+(?:;|$)", detail
+    ):
+        reason = f"{role} 执行被中断，改动已保留，但未产出可接纳的报告，等待精确恢复审批"
     elif "AUTHENTICATION_ERROR" in detail:
         reason = "模型服务认证失败，当前阶段未完成"
     elif "RATE_LIMITED" in detail:

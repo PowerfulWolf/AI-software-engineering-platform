@@ -19,6 +19,7 @@ from ai_software_engineer.manager.production_agents import (
     ProductDraft,
     RequirementDraft,
 )
+from ai_software_engineer.multi_directory.errors import RequirementPreparationContextExceeded
 from ai_software_engineer.multi_directory.models import (
     DialogueMessage,
     JointApproval,
@@ -148,6 +149,32 @@ def _product_spec(checkpoint: JointCheckpoint) -> JointProductSpec:
             ),
         ),
     )
+
+
+def test_frozen_preparation_overflow_is_durable_blocked_and_can_be_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, root = _service(tmp_path, monkeypatch)
+
+    def exceeded(unit: DirectoryUnit) -> NoReturn:
+        del unit
+        raise RequirementPreparationContextExceeded(actual_bytes=4_000_001, limit_bytes=4_000_000)
+
+    monkeypatch.setattr(service.backend, "prepare", exceeded)
+    result = service.create(CreateRequirement(name="Large rules", repository_roots=(str(root),)))
+    assert result.checkpoint.stage is JointStage.BLOCKED
+    assert "冻结数据超过存储上限" in result.checkpoint.next_action
+    assert not result.checkpoint.preparations
+    assert result.checkpoint.product_spec is None
+    assert service.journal.current(result.checkpoint.delivery_id) == result.checkpoint
+    closed = service.close_requirement(
+        CloseRequirement(
+            delivery_id=result.checkpoint.delivery_id,
+            expected_checkpoint_sha256=result.checkpoint.checkpoint_sha256,
+        )
+    )
+    assert closed.checkpoint.stage is JointStage.CLOSED
+    assert len(service.journal.history(result.checkpoint.delivery_id)) == 3
 
 
 def test_edit_replaces_exact_draft_and_preserves_original_journal(

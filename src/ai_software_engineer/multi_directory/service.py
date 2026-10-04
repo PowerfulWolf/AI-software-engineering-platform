@@ -847,7 +847,16 @@ class JointDeliveryService:
             existing = {p.unit_id for p in checkpoint.preparations}
             for unit in checkpoint.scope.units:
                 if unit.id not in existing:
-                    prepared = self.backend.prepare(unit)
+                    from ai_software_engineer.multi_directory.errors import (
+                        RequirementPreparationContextExceeded,
+                    )
+
+                    try:
+                        prepared = self.backend.prepare(unit)
+                    except RequirementPreparationContextExceeded as error:
+                        return self._save(
+                            checkpoint, stage=JointStage.BLOCKED, next_action=str(error)
+                        )
                     if prepared.unit_id != unit.id:
                         raise ValueError("preparation belongs to a different unit")
                     checkpoint = self._save(
@@ -1178,8 +1187,7 @@ class JointDeliveryService:
             stage=JointStage.DONE,
             single_repository_acceptance=proof,
             next_action=(
-                "仓库候选已通过原生 QA 和 Review。"
-                "合并前请检查候选；平台没有推送代码。"  # noqa: RUF001
+                "仓库候选已通过原生 QA 和 Review。合并前请检查候选；平台没有推送代码。"  # noqa: RUF001
             ),
         )
 

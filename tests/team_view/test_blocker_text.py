@@ -84,6 +84,19 @@ def test_localizes_interrupted_codex_timeout_with_retained_changes() -> None:
     assert "预算耗尽" not in localized
 
 
+def test_signalled_historical_cli_exit_is_presented_as_interruption() -> None:
+    localized = localize_blocking_text(
+        "Coder failed at attempt 1: coder run run_abc123 failed: "
+        "Codex CLI left changes after a failed execution; cause=AUTHENTICATION_ERROR; "
+        "returncode=-15; stdout_sha256=" + "a" * 64
+    )
+    assert localized is not None
+    assert "执行被中断，改动已保留" in localized
+    assert "模型服务认证失败" not in localized
+    assert "run_abc123" in localized
+    assert "a" * 64 in localized
+
+
 def test_localizes_knowledge_preparation_failure_and_keeps_error_code() -> None:
     assert localize_blocking_text("qa knowledge preparation failed: RATE_LIMITED") == (
         "QA 知识准备失败（原因代码：RATE_LIMITED），请检查模型服务后再继续。"

@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -18,7 +19,10 @@ from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.baseline import ProjectSpecBaseline, _baseline_digest
 from ai_software_engineer.manager.production_backend import PRODUCTION_DELIVERY_CONTEXT_BUDGET
 from ai_software_engineer.multi_directory.models import JointCheckpoint
-from ai_software_engineer.multi_directory.production import approved_joint_context_sources
+from ai_software_engineer.multi_directory.production import (
+    ProductionJointBackend,
+    approved_joint_context_sources,
+)
 from ai_software_engineer.orchestration import FileRunContextBuilder, RetryingOrchestrator
 from ai_software_engineer.repository_profile import RepositoryProfile
 from ai_software_engineer.store import SqliteTaskRepository
@@ -26,8 +30,50 @@ from tests.domain.factories import make_agent, make_task
 from tests.knowledge.test_delivery_context import Clients
 from tests.manager.test_baseline import hard_rule
 from tests.manager.test_joint_contracts import checkpoint
+from tests.manager.test_production_backend import _git, _git_output
 from tests.orchestration.test_retry import ScriptedAdapter
 from tests.orchestration.test_runner import _clock, _definitions, _task
+
+
+@pytest.mark.parametrize("count,accepted", [(6, True), (20, False)])
+def test_preparation_freezes_large_rule_corpus_without_expanding_model_input(
+    tmp_path: Path, count: int, accepted: bool
+) -> None:
+    current = checkpoint(tmp_path)
+    unit = current.scope.units[0]
+    root = Path(unit.root)
+    rules = root / ".trellis/spec/core"
+    rules.mkdir(parents=True)
+    body = "Frozen project rule.\n" * 11_000
+    for index in range(count):
+        (rules / f"rule-{index}.md").write_text(body)
+    (root / "AGENTS.md").write_text("Read applicable frozen project rules.\n")
+    _git("init", "-b", "main", cwd=root)
+    _git("config", "user.name", "Test", cwd=root)
+    _git("config", "user.email", "test@example.invalid", cwd=root)
+    _git("add", ".", cwd=root)
+    _git("commit", "-m", "Freeze project rules", cwd=root)
+    unit = unit.model_copy(update={"base_revision": _git_output("rev-parse", "HEAD", cwd=root)})
+    native = Mock()
+    native.prepare.return_value = current.preparations[0].result
+    native.prepared_context.return_value = ()
+    backend = ProductionJointBackend(
+        native=native, factory=Mock(), clients=Mock(), team=Mock(), project=Mock(), environment={}
+    )
+    if not accepted:
+        with pytest.raises(ValueError, match="冻结数据超过存储上限"):
+            backend.prepare(unit)
+        return
+
+    prepared = backend.prepare(unit)
+    assert len(prepared.context_sources) == count + 1
+    assert sum(len((s.content or "").encode()) for s in prepared.context_sources) > 1_000_000
+    assert all(s.content == body for s in prepared.context_sources if "rule-" in s.uri)
+    projected = native_rule_prompt_sources(prepared.context_sources)
+    assert sum(len(s.content or "") for s in projected) < 10_000
+    assert next(s.content for s in projected if s.uri.endswith("AGENTS.md")) == (
+        "Read applicable frozen project rules.\n"
+    )
 
 
 def joint_sources(tmp_path: Path) -> tuple[JointCheckpoint, tuple[ContextSource, ...]]:

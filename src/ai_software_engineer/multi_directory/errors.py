@@ -29,4 +29,20 @@ class RequirementSourceRevisionDrift(ValueError):
     """A Requirement cannot continue after one of its pinned Git revisions changes."""
 
 
-__all__ = ["RequirementGitBaselineRequired", "RequirementSourceRevisionDrift"]
+class RequirementPreparationContextExceeded(ValueError):
+    """Frozen source storage exceeded its bounded size before any model invocation."""
+
+    def __init__(self, *, actual_bytes: int, limit_bytes: int) -> None:
+        self.actual_bytes = actual_bytes
+        self.limit_bytes = limit_bytes
+        super().__init__(
+            f"项目规范冻结数据超过存储上限 ({actual_bytes} 字节, 上限 {limit_bytes} 字节)。"
+            "请检查规范大小和所选范围后重新创建需求; 平台未截断规范或启动模型。"
+        )
+
+
+__all__ = [
+    "RequirementGitBaselineRequired",
+    "RequirementPreparationContextExceeded",
+    "RequirementSourceRevisionDrift",
+]

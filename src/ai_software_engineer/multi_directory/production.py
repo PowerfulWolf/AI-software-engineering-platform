@@ -61,7 +61,10 @@ from ai_software_engineer.manager.production_backend import (
     _task_commands,
 )
 from ai_software_engineer.manager.store import FileProjectPreparationStore
-from ai_software_engineer.multi_directory.errors import RequirementSourceRevisionDrift
+from ai_software_engineer.multi_directory.errors import (
+    RequirementPreparationContextExceeded,
+    RequirementSourceRevisionDrift,
+)
 from ai_software_engineer.multi_directory.integration_commands import (
     TEST_PREFIXES,
 )
@@ -94,6 +97,8 @@ from ai_software_engineer.repository_profile import RepositoryProfile
 from ai_software_engineer.repository_workspace import RepositoryWorkspace
 from ai_software_engineer.runtime_workspace import load_repository_profile
 from ai_software_engineer.team_workspace import TeamWorkspace
+
+MAX_FROZEN_PREPARATION_BYTES = 4_000_000
 
 
 def approved_joint_context_source(checkpoint: JointCheckpoint, unit_id: str) -> ContextSource:
@@ -189,7 +194,9 @@ class ProductionJointBackend:
             if not path.resolve().is_relative_to(Path(unit.root)) or path.is_symlink():
                 raise ValueError("native rule escapes the selected repository")
             if source.byte_length > 256_000:
-                raise ValueError("native rule exceeds joint context budget")
+                raise RequirementPreparationContextExceeded(
+                    actual_bytes=source.byte_length, limit_bytes=256_000
+                )
             data = path.read_bytes()
             if hashlib.sha256(data).hexdigest() != source.sha256:
                 raise ValueError("native rule changed during preparation")
@@ -201,8 +208,13 @@ class ProductionJointBackend:
                     required=True,
                 )
             )
-        if sum(len(s.content or "") for s in sources) > 1_000_000:
-            raise ValueError("prepared joint context exceeds budget")
+        # These are complete frozen storage facts. Prompt token limits are enforced
+        # separately after reference projection and verified knowledge retrieval.
+        frozen_bytes = sum(len((s.content or "").encode("utf-8")) for s in sources)
+        if frozen_bytes > MAX_FROZEN_PREPARATION_BYTES:
+            raise RequirementPreparationContextExceeded(
+                actual_bytes=frozen_bytes, limit_bytes=MAX_FROZEN_PREPARATION_BYTES
+            )
         self._require_intake_source(unit)
         return PreparedUnit(
             unit_id=unit.id,

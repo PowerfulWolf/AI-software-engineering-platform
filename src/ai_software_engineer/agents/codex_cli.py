@@ -979,11 +979,15 @@ def _workspace_unchanged(root: Path, initial_head: str) -> bool:
 def _classify_cli_failure(
     invocation: CodexInvocationResult,
 ) -> tuple[AgentErrorCode, bool]:
+    if invocation.returncode < 0:
+        return AgentErrorCode.PROVIDER_ERROR, False
     code = _recognized_cli_failure(invocation) or AgentErrorCode.PROVIDER_UNAVAILABLE
     return code, code not in {AgentErrorCode.AUTHENTICATION_ERROR, AgentErrorCode.INVALID_OUTPUT}
 
 
 def _recognized_cli_failure(invocation: CodexInvocationResult) -> AgentErrorCode | None:
+    if invocation.returncode < 0:
+        return None
     text = invocation.stderr.lower()
     if "error:" in text:
         text = text[text.index("error:") :]
@@ -1005,7 +1009,13 @@ def _recognized_cli_failure(invocation: CodexInvocationResult) -> AgentErrorCode
 
 def _failure_diagnostic(invocation: CodexInvocationResult) -> str:
     code = AgentErrorCode.TIMEOUT if invocation.timed_out else _recognized_cli_failure(invocation)
-    cause = code.value if code is not None else "UNKNOWN_EXIT"
+    cause = (
+        code.value
+        if code is not None
+        else "INTERRUPTED"
+        if invocation.returncode < 0
+        else "UNKNOWN_EXIT"
+    )
     return (
         f"cause={cause}; returncode={invocation.returncode}; "
         f"stdout_sha256={hashlib.sha256(invocation.stdout.encode()).hexdigest()}; "

@@ -1,0 +1,8 @@
+{
+  "id": "fresh-intake-frozen-budget-20261004",
+  "title": "让大规范仓库可重新接单并准确记录冻结存储超限和执行中断",
+  "status": "in_progress",
+  "baseline": "3c47636",
+  "scope": ["multi_directory frozen preparation", "Codex negative exit diagnostics", "Chinese blocker projection", "incremental contracts"],
+  "rollback": "回退平台提交并在空闲时重启；保留所有新旧需求、模型调用、工作区和审批"
+}
