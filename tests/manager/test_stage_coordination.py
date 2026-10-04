@@ -105,6 +105,13 @@ def test_automatic_design_retry_uses_new_window_and_preserves_approval(
                 transient=False,
                 timeout_kind="local_execution_limit",
             )
+        if len(windows) == 2:
+            budget = input_payload["stage_budget"]
+            assert isinstance(budget, Mapping)
+            assert budget["attempts"] == 1, "this call's reservation is already included"
+            assert budget["capacity_timeouts"] == 1
+            assert budget["next_timeout_seconds"] == timeout_seconds == 1200
+            assert not str(input_payload["next_action"]).startswith("Manager:")
         return complete(
             instructions=instructions,
             input_payload=input_payload,

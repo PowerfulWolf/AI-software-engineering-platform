@@ -44,7 +44,11 @@ from ai_software_engineer.multi_directory.attachments import (
     MAX_REQUIREMENT_SCREENSHOTS,
     RequirementAttachmentStore,
 )
-from ai_software_engineer.multi_directory.budget import DesignRetryPolicy, stage_timeout_seconds
+from ai_software_engineer.multi_directory.budget import (
+    DesignRetryPolicy,
+    stage_budget,
+    stage_timeout_seconds,
+)
 from ai_software_engineer.multi_directory.integration_commands import planner_command_policy
 from ai_software_engineer.multi_directory.models import (
     Candidate,
@@ -96,6 +100,11 @@ _POLICY = (
     "not independent product conversations. Report ambiguities; do not invent facts. "
     "Write user-facing summaries, questions and blocking explanations in Simplified Chinese; "
     "preserve exact opaque IDs, enum values and technical names. "
+    "This invocation has passed the application stage gates. When supplied, stage_budget "
+    "is trusted current policy data; attempts includes this call's reserved work attempt, "
+    "so exhaustion of future work does not invalidate this admitted invocation. "
+    "Do not reopen retry authorization from historical coordination/next_action text. "
+    "Budget and admission do not prove provider health, approve new scope or produce verdicts. "
 )
 
 
@@ -1239,6 +1248,9 @@ class JointDeliveryService:
             TeamRole.DESIGNER: "design",
             TeamRole.PLANNER: "plan",
         }[role]
+        budget = stage_budget(self.execution_retry_policy, checkpoint.stage, checkpoint.attempts)
+        if budget is not None:
+            payload["stage_budget"] = budget.to_wire()
         timeout_seconds = stage_timeout_seconds(
             checkpoint.attempts,
             stage_counter,
@@ -1341,6 +1353,14 @@ class JointDeliveryService:
         if attempts.get(name, 0) >= limit:
             raise ValueError(f"joint {name} attempt budget exhausted; inspect checkpoint evidence")
         attempts[name] = attempts.get(name, 0) + 1
+        if checkpoint.next_action.startswith("Manager: "):
+            # The stage guard admitted a new invocation. Retain the old advice in
+            # history, but do not hand its former pause to knowledge consultation.
+            return self._save(
+                checkpoint,
+                attempts=attempts,
+                next_action="正在准备本轮阶段执行；已检查既有范围与预算，历史协调记录保留。",  # noqa: RUF001
+            )
         return self._save(checkpoint, attempts=attempts)
 
     def _stage_workflow(self, checkpoint: JointCheckpoint) -> StageWorkflowGate:

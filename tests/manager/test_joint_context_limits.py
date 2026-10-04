@@ -24,6 +24,7 @@ from ai_software_engineer.manager.production_backend import PRODUCTION_DELIVERY_
 from ai_software_engineer.multi_directory.models import (
     JointCheckpoint,
     JointExecutionPlan,
+    JointStage,
     JointTechnicalDesign,
 )
 from ai_software_engineer.multi_directory.production import (
@@ -144,12 +145,36 @@ def test_projection_keeps_frozen_rules_and_full_approved_stages(tmp_path: Path) 
 
 
 @pytest.mark.parametrize("stage", ["product", "design", "plan"])
+@pytest.mark.parametrize("last_attempt", [False, True])
 def test_joint_stage_producer_projects_prompt_but_passes_full_checkpoint_to_knowledge(
     tmp_path: Path,
     stage: str,
+    last_attempt: bool,
 ) -> None:
     current, _ = joint_sources(tmp_path)
     assert current.product_spec and current.design and current.plan
+    active_stage = {
+        "product": JointStage.PRODUCT_DISCOVERY,
+        "design": JointStage.DESIGNING,
+        "plan": JointStage.PLANNING,
+    }[stage]
+    policy = ExecutionRetryPolicy()
+    reserved = (
+        {
+            "product": policy.product.max_attempts,
+            "design": policy.designer.max_attempts,
+            "plan": policy.planner.max_attempts,
+        }[stage]
+        if last_attempt
+        else 1
+    )
+    current = JointCheckpoint.seal(
+        {
+            **current.to_wire(),
+            "stage": active_stage,
+            "attempts": {stage: reserved, stage + "_capacity_timeout": 1},
+        }
+    )
     before = current.to_wire()
     output = {
         "product": current.product_spec.product,
@@ -164,7 +189,7 @@ def test_joint_stage_producer_projects_prompt_but_passes_full_checkpoint_to_know
     service = object.__new__(JointDeliveryService)
     service.backend = Mock()
     service.backend.client.return_value = client
-    service.execution_retry_policy = ExecutionRetryPolicy()
+    service.execution_retry_policy = policy
     service.attachments = Mock()
 
     assert service._produce(current, model, "Produce the requested stage.") == output
@@ -177,6 +202,14 @@ def test_joint_stage_producer_projects_prompt_but_passes_full_checkpoint_to_know
     assert payload["plan"] == before["plan"]
     assert payload["approval"] == before["approval"]
     assert payload["scope"] == before["scope"]
+    assert (
+        payload["stage_budget"]["role"]
+        == {"product": "product", "design": "designer", "plan": "planner"}[stage]
+    )
+    assert payload["stage_budget"]["attempts"] == reserved
+    assert payload["stage_budget"].get("exhausted") == ("work" if last_attempt else None)
+    assert payload["stage_budget"]["capacity_timeouts"] == 1
+    assert payload["stage_budget"]["next_timeout_seconds"] == 1200
     assert service.backend.client.call_args.args[0] is current
     assert current.to_wire() == before
 

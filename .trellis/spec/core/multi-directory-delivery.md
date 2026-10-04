@@ -1,5 +1,49 @@
 # 多目录联合交付契约
 
+## Current upstream budget and retry cursor (2026-10-04)
+
+`JointDeliveryService._produce(checkpoint, model, instructions)` adds `stage_budget` from
+`stage_budget(self.execution_retry_policy, checkpoint.stage, checkpoint.attempts)` to the payload
+copy for active Product/Designer/Planner. It uses the same typed StageBudget as diagnosis and
+read projection; no separate counters or model-computed limits. `attempts` includes this call's
+work reservation. `exhausted=work` describes the ability to reserve a **future** call, not rejection
+of the last already-admitted invocation. `next_timeout_seconds` matches the current call's bounded
+window. None for other stages does not invent upstream authority.
+
+`_attempt(checkpoint, name, limit)` replaces a prior `Manager: ...` next_action with a Chinese
+current-execution hint while reserving the new attempt. History retains the original advisory;
+non-Manager design/plan rejection hints remain intact. Producer and knowledge-assessment prompts
+identify the supplied budget as application facts and forbid reopening admission from historical
+cursor text. They do not suppress actual business, external capability, scope or upstream-verdict
+gaps and do not prove provider health. No prompt grants tools, changes permission or approves work.
+
+| Case | Expected result |
+|---|---|
+| Local timeout→permitted retry | fresh reservation, capacity=1, window=1200, old Manager pause absent from current cursor |
+| Last admitted work attempt | current output is still accepted if valid; no next-call reservation available |
+| Rejected design/plan | typed feedback and rejection hint remain available to the correcting role |
+| Real missing external facts | KnowledgeGap still needs an exact approved resolution |
+| Old frozen requirement | unchanged Product/design/scope/preparations and snapshot hashes; fresh context uses new facts |
+
+Tests: `test_stage_coordination.py::test_automatic_design_retry_uses_new_window_and_preserves_approval`
+drives actual timeout/Manager/service retry and checks the next producer payload/cursor.
+`test_joint_context_limits.py` covers all three roles and last-attempt boundaries while asserting
+complete frozen backend input and approved source facts. Knowledge consultation/gap/stage tests
+preserve the independent evidence/approval gates. Run these explicit files; no full suite required.
+
+Existing Planner gap 848af72f and resolution 52429d8a remain sealed and visible. The answer was
+approved through the Console endpoint with verified current checkpoint/config/model-call sources;
+normal Continue resumes it, without SQL mutation or resetting counts. New payload/context hashes
+do not rewrite history. Deploy while idle; newer role source baselines require the existing exact
+recovery/replanning approval. Revert the code and reconstruct the idle Host to roll back, retaining
+all checkpoints, approvals, calls and gaps. StageBudget is an internal generic-payload field; wire
+schemas and persistent tables remain unchanged.
+
+Root cause: replacing coordination metadata on a new reservation did not replace its stale cursor,
+and the upstream input lacked the policy needed to interpret counters. Fixing Manager diagnosis
+alone left knowledge assessment vulnerable. This shared projection now covers producer,
+consultation, diagnosis and UI; no generated spec templates need updating.
+
 ## Frozen preparation storage versus model input (2026-10-04)
 
 `JointDeliveryService._produce(checkpoint, model, instructions)` projects every PreparedUnit's
