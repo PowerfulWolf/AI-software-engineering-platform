@@ -6,23 +6,31 @@ from unittest.mock import Mock
 
 import pytest
 
+from ai_software_engineer.agents import StructuredModelResult
 from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.context import ContextSource, FileContextStore
 from ai_software_engineer.context.native import native_rule_prompt_sources
 from ai_software_engineer.context.ports import ContextBudgetExceeded
 from ai_software_engineer.context.profile import repository_profile_context
 from ai_software_engineer.domain import AgentRole, TaskStatus
+from ai_software_engineer.domain.retry_policy import ExecutionRetryPolicy
 from ai_software_engineer.knowledge.context import snapshot_from_sources
 from ai_software_engineer.knowledge.delivery import KnowledgeDeliveryGate
 from ai_software_engineer.knowledge.runtime import KnowledgeRunContextBuilder
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.baseline import ProjectSpecBaseline, _baseline_digest
+from ai_software_engineer.manager.production_agents import ProductDraft
 from ai_software_engineer.manager.production_backend import PRODUCTION_DELIVERY_CONTEXT_BUDGET
-from ai_software_engineer.multi_directory.models import JointCheckpoint
+from ai_software_engineer.multi_directory.models import (
+    JointCheckpoint,
+    JointExecutionPlan,
+    JointTechnicalDesign,
+)
 from ai_software_engineer.multi_directory.production import (
     ProductionJointBackend,
     approved_joint_context_sources,
 )
+from ai_software_engineer.multi_directory.service import JointDeliveryService
 from ai_software_engineer.orchestration import FileRunContextBuilder, RetryingOrchestrator
 from ai_software_engineer.repository_profile import RepositoryProfile
 from ai_software_engineer.store import SqliteTaskRepository
@@ -133,6 +141,44 @@ def test_projection_keeps_frozen_rules_and_full_approved_stages(tmp_path: Path) 
         tmp_path, sources=projected, budget=PRODUCTION_DELIVERY_CONTEXT_BUDGET
     ).build(make_task(), make_agent(), attempt=1)
     assert all(not section.truncated for section in bundle.sections)
+
+
+@pytest.mark.parametrize("stage", ["product", "design", "plan"])
+def test_joint_stage_producer_projects_prompt_but_passes_full_checkpoint_to_knowledge(
+    tmp_path: Path,
+    stage: str,
+) -> None:
+    current, _ = joint_sources(tmp_path)
+    assert current.product_spec and current.design and current.plan
+    before = current.to_wire()
+    output = {
+        "product": current.product_spec.product,
+        "design": current.design,
+        "plan": current.plan,
+    }[stage]
+    model = {"product": ProductDraft, "design": JointTechnicalDesign, "plan": JointExecutionPlan}[
+        stage
+    ]
+    client = Mock()
+    client.complete.return_value = StructuredModelResult(payload=output.to_wire(), duration_ms=1)
+    service = object.__new__(JointDeliveryService)
+    service.backend = Mock()
+    service.backend.client.return_value = client
+    service.execution_retry_policy = ExecutionRetryPolicy()
+    service.attachments = Mock()
+
+    assert service._produce(current, model, "Produce the requested stage.") == output
+    payload = client.complete.call_args.kwargs["input_payload"]
+    assert len(json.dumps(payload, ensure_ascii=False)) < 50_000
+    assert "General project guidance." not in json.dumps(payload)
+    assert "Read applicable project rules before coding." in json.dumps(payload)
+    assert payload["product_spec"] == before["product_spec"]
+    assert payload["design"] == before["design"]
+    assert payload["plan"] == before["plan"]
+    assert payload["approval"] == before["approval"]
+    assert payload["scope"] == before["scope"]
+    assert service.backend.client.call_args.args[0] is current
+    assert current.to_wire() == before
 
 
 @pytest.mark.parametrize("rework", ["none", "qa", "progress"])

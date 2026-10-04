@@ -10,6 +10,7 @@ from typing import Annotated, Protocol, TypeVar
 from pydantic import AwareDatetime, Field, ValidationError
 
 from ai_software_engineer.agents import AgentErrorCode, StructuredModelClient, StructuredModelError
+from ai_software_engineer.context.native import native_rule_prompt_sources
 from ai_software_engineer.context.ports import ContextBudgetExceeded
 from ai_software_engineer.domain.branch import BRANCH_NAMING_INSTRUCTIONS
 from ai_software_engineer.domain.enums import TeamRole
@@ -93,6 +94,8 @@ _POLICY = (
     "Do not modify files, run delivery, approve, merge, push, or expose secrets. "
     "Return only the typed artifact requested. All supplied directories belong to ONE request, "
     "not independent product conversations. Report ambiguities; do not invent facts. "
+    "Write user-facing summaries, questions and blocking explanations in Simplified Chinese; "
+    "preserve exact opaque IDs, enum values and technical names. "
 )
 
 
@@ -1195,6 +1198,15 @@ class JointDeliveryService:
         self, checkpoint: JointCheckpoint, model: type[Output], instructions: str
     ) -> Output:
         payload = checkpoint.to_wire()
+        # Knowledge client construction below consumes the exact complete checkpoint.
+        # Only the model payload uses references; approval and frozen source facts
+        # remain unchanged and the bodies remain available through verified reads.
+        payload["preparations"] = [
+            prepared.model_copy(
+                update={"context_sources": native_rule_prompt_sources(prepared.context_sources)}
+            ).to_wire()
+            for prepared in checkpoint.preparations
+        ]
         payload["product_spec_sha256"] = (
             digest(checkpoint.product_spec) if checkpoint.product_spec else None
         )

@@ -1,5 +1,12 @@
 # Bounded Manager coordination
 
+Stage and verification Manager prompts require user-facing summaries, next actions, responsible
+actor and resume conditions in Simplified Chinese. Opaque IDs, enums and technical names remain
+exact; the language requirement does not change advertised capabilities, verdict independence,
+approval authority or historical advice. Newly emitted advice follows this contract; old immutable
+advice is not overwritten merely to translate it. Joint Product/Designer/Planner instructions use
+the same Chinese presentation requirement for summaries, questions and blocking explanations.
+
 ## Scope / signatures
 
 Manager is a model-backed proposal role, not a deterministic-only placeholder. Both existing

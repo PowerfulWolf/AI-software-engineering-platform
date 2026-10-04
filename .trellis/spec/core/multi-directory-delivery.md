@@ -2,6 +2,18 @@
 
 ## Frozen preparation storage versus model input (2026-10-04)
 
+`JointDeliveryService._produce(checkpoint, model, instructions)` projects every PreparedUnit's
+native sources with `native_rule_prompt_sources` in the **payload copy** for ProductDraft,
+JointTechnicalDesign and JointExecutionPlan. `backend.client(checkpoint, role)` still receives the
+unchanged original checkpoint for full frozen knowledge snapshot/retrieval. AGENTS bodies remain
+full; other native bodies become digest/URI references with mandatory consultation guidance.
+scope, ProductSpec, approval, design, plan and their digests remain complete. No preparation or
+checkpoint is written by projection. All three stage producers must pass the same regression
+for bounded payload, full upstream stage facts, unmodified original checkpoint and full knowledge.
+Never apply the prompt projection back into approved preparation or feed the complete frozen
+native corpus as redundant model context. The real pre-fix K1 checkpoint serialized to 1,205,326
+bytes; projection measured 100,843 bytes. This does not prove the cause of external HTTP 504.
+
 ### Scope / Trigger
 
 Large native rule corpora during named Requirement intake. Complete frozen knowledge is durable
