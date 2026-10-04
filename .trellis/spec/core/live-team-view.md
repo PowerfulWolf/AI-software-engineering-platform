@@ -81,6 +81,21 @@ Manager summaries and operation notices in `tests/team_view/ui.test.cjs` and the
 
 ## Scope / Trigger
 
+### 活动角色的下一步提示
+
+`_with_execution_state(TaskView) -> TaskView` 是纯读投影：非终态、无 blocker 的 Task，只有当前
+阶段对应的 role queue item 为 `RUNNING` 且 `lease_liveness=LEASE_VALID` 时，提示
+`Coder/QA/Reviewer 正在执行，请等待当前执行完成。执行租约有效，细分进度暂未上报。`。
+`IMPLEMENTING/QA/REVIEW` 分别匹配 Coder/QA/Reviewer。`_request_with_current_work` 将同一提示
+带到需求头部，避免活动恢复 Task 仍提示“请继续交付”。租约有效不证明模型调用、在线执行器或
+进度百分比；不得改变 `execution_liveness`、run 结果、Task 或 durable next_action。
+
+Good：当前角色有效租约显示等待完成。Base：仅 LEASED/UNKNOWN 保留原提示。Bad：用旧角色的
+有效租约、过期租约或历史模型分配冒充执行。知识等待和过期租约中断保持优先级，终态 blocker
+保持原事实。`test_live.py::test_valid_current_role_lease_presents_wait_instead_of_continue` 覆盖三角色
+及未知/仅领取分支；现有 waiting/interrupted/current child fixtures 验证优先级。存量只读展示，
+无需改库；空闲加载与回滚均不改历史。
+
 Changes to team_view, read-only store opening, ase team serve, MySQL aggregation or browser payloads.
 Existing DashboardRenderer stays pure; socket lives in separate server composition.
 

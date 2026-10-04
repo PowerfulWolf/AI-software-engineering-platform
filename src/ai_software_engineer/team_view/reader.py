@@ -988,6 +988,25 @@ def _with_execution_state(task: TaskView) -> TaskView:
             }
         )
     if not _execution_interrupted(task):
+        role_status = {
+            AgentRole.CODER: "IMPLEMENTING",
+            AgentRole.QA: "QA",
+            AgentRole.REVIEWER: "REVIEW",
+        }
+        if not task.terminal and task.blocker is None:
+            for step in task.role_queue:
+                if (
+                    step.status is WorkItemStatus.RUNNING
+                    and step.lease_liveness == "LEASE_VALID"
+                    and role_status.get(step.role) == task.status
+                ):
+                    title = "QA" if step.role is AgentRole.QA else step.role.value.title()
+                    return task.model_copy(
+                        update={
+                            "next_action": f"{title} 正在执行。请等待当前执行完成。"
+                            "执行租约有效。细分进度暂未上报。",
+                        }
+                    )
         return task
     return task.model_copy(
         update={

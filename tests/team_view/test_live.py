@@ -121,6 +121,67 @@ def test_candidate_branch_is_read_from_the_exact_candidate_ref(tmp_path: Path) -
     assert _candidate_branch(str(repository), task_id, "f" * 40) is None
 
 
+@pytest.mark.parametrize(
+    ("role", "status", "title"),
+    [
+        (AgentRole.CODER, "IMPLEMENTING", "Coder"),
+        (AgentRole.QA, "QA", "QA"),
+        (AgentRole.REVIEWER, "REVIEW", "Reviewer"),
+    ],
+)
+def test_valid_current_role_lease_presents_wait_instead_of_continue(
+    role: AgentRole, status: str, title: str
+) -> None:
+    scope = ScopeView(root="/workspace/repository", selected_paths=(".",))
+    request = RequestView(
+        id="delivery_multi_running",
+        project_id="project_test",
+        title="Running role",
+        stage="BLOCKED",
+        scopes=(scope,),
+        next_action="Old recovery wait",
+        checkpoint_sha256="a" * 64,
+    )
+    task = TaskView(
+        id="delivery_running_role",
+        project_id=request.project_id,
+        request_id=request.id,
+        title=request.title,
+        scope=scope,
+        status=status,
+        checkpoint_stage="DELIVERING",
+        terminal=False,
+        last_activity=datetime.now(UTC),
+        next_action="请继续交付以恢复当前流程。",
+        role_queue=(
+            RoleQueueView(
+                work_item_id="work_current_role",
+                role=role,
+                attempt=1,
+                status=WorkItemStatus.RUNNING,
+                heartbeat_at=datetime.now(UTC),
+                lease_expires_at=datetime.now(UTC) + timedelta(seconds=60),
+                lease_liveness="LEASE_VALID",
+            ),
+        ),
+    )
+    result = _request_with_current_work(request, [task])
+    assert result.next_action.startswith(f"{title} 正在执行")
+    assert "等待" in result.next_action
+    assert "继续交付" not in result.next_action
+    assert "模型调用" not in result.next_action
+    assert task.next_action == "请继续交付以恢复当前流程。"
+    step = task.role_queue[0]
+    for changed in (
+        step.model_copy(update={"lease_liveness": "UNKNOWN"}),
+        step.model_copy(update={"status": WorkItemStatus.LEASED}),
+    ):
+        unknown = task.model_copy(update={"role_queue": (changed,)})
+        assert _request_with_current_work(request, [unknown]).next_action == task.next_action
+    wrong_stage = task.model_copy(update={"status": "QUEUED"})
+    assert _request_with_current_work(request, [wrong_stage]).next_action == task.next_action
+
+
 @pytest.mark.parametrize("queue_status", [WorkItemStatus.RUNNING, WorkItemStatus.RETRY_SCHEDULED])
 def test_active_child_task_supersedes_stale_blocked_requirement_projection(
     queue_status: WorkItemStatus,
