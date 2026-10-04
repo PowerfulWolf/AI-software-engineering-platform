@@ -35,3 +35,6 @@
 - 首次正式删除 `operation_7b5db7773de9d54c4131e372cc1de5e3` 安全拒绝 `REQUIREMENT_ACTIVE`。已关闭 K1 仍有3个旧 IMPLEMENTING Task及lease-expired RETRY_SCHEDULED队列。没有写tombstone或调用模型。
 - 已补明确用户撤销需求的 typed cancellation/queue settlement：用户决定封存为 Schema-valid resolution receipt，完整历史进程锁、authority fence、exact Task/queue snapshot 和有效 Lease 检查后终止旧 Task/关闭旧队列。原终态/历史/草稿不改写。独立只读复核通过。
 - 取消补充增量：新的 queue MySQL `17 passed in 1.90s`；真实公开删除取消+原有 guard MySQL 串行 `4 passed, 5 deselected in 0.89s`；取消/guard 非 MySQL `22 passed, 4 deselected`。三个变更源码标准 strict mypy、相关 Ruff/format/diffcheck通过。提交部署后记录成功Operation与前后校验。不会执行新需求。
+
+- 取消补充提交 `38762ab3310fcea6ea50f8193696924ea25f0d93` 已推送/空闲部署，PID 74641。第一份 K1 正式删除成功：`operation_3173ddeb5955c209f104c97b564e5c6a`，29个历史Task的取消receipt已封存，只有3个原非终态Task新增取消状态事件，未调用模型。
+- 删除后 public Team GET 的旧verification source过滤缺陷已补：完整retired parent/native历史+精确(repository_id,task_id)过滤，保留active missingSource拒绝并防全局Task身份复用。新public回归先红于503，最终新回归/身份冲突/原replanning负例 `5 passed in 37.00s`；相关其他4个live MySQL用例之前通过。旧负例仅迁移到history读取seam，拒绝断言未弱化。相关Ruff/format/mypy及独立只读复核通过。

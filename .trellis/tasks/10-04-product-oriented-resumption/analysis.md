@@ -17,3 +17,10 @@ RETRY_SCHEDULED 留存。严格 guard 正确拒绝删除；缺少用户撤销需
 产品闭环缺口。修复必须把用户精确删除意图变成 immutable cancellation resolution，再在
 Task process locks / queue authority fence 下追加取消事件并关闭旧队列，不能通过 SQL 修状态、
 模型续跑或隐藏旧队列完成删除。原 Task/event/verdict 的历史事实保留，取消是新增审计事实。
+
+
+第二个生产验收缺口在只读删除投影：删除后旧验证 reservation 的 source Task 已从可见
+native 映射移除，但 `_read_verifications` 仍按同仓库缺 source 报损坏，导致 GET Team 503。
+投影必须先用已校验的完整 parent/native 历史按精确仓库/Task 身份过滤退役验证事实，再判断
+活跃 source 是否缺失。不能通过吞异常或一律忽略 missing source 修复；需同仓库其他 DONE
+与旧 verification 共存的回归，避免只有简单无验证 fixture 通过而真实产品入口失败。

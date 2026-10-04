@@ -858,3 +858,25 @@ An active child Delivery or current Task queue fact takes precedence over stale 
 coordination advice. A terminal BLOCKED/FAILED Task remains blocked in the UI; a Continue
 operation or a planned assignment does not make it executing without a current lease and
 heartbeat. These are read-side rules only and never repair a journal or SQL fact.
+
+
+### Deleted Requirement verification history
+
+Read-side retirement filtering must use every validated JointJournal checkpoint and the
+full native delivery history, including previously replaced/derived child identities.
+VerificationReservation is still durable audit data after deletion; before projecting or
+reporting a missing source Task, exclude only the exact `(repository_id, source_task_id)`
+pairs owned by a validated retired parent. Do not hide arbitrary missing sources: active
+reservations in a visible repository still fail closed on missing/cross-repository sources.
+Retired and visible native sources cannot share a global Task ID, including across different
+repositories; reject this ambiguity before SQL projection.
+
+`ProductionTeamReader.snapshot(project_id)` and `GET /api/v1/team` must continue to return
+visible requirements, other DONE work and correct project counts after a deleted source
+has old verification reservations. The reader remains read-only: no cancellation, Task
+update, verification completion or record deletion can occur during projection.
+
+Regression cases must combine a deleted requirement's historical child/reservation with
+another visible delivery in the same repository, then assert successful public GET, no
+retired parent/native/verification in requests/tasks/agent references, and unchanged visible
+DONE work. A missing active source must remain a TeamReadError/503 rather than disappearing.

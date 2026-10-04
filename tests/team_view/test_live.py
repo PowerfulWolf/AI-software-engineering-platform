@@ -706,7 +706,7 @@ def test_joint_reader_preserves_child_ownership_through_integration_replanning(
     observe("DONE")
     assert observed == ["PLANNING", "INTEGRATING", "DONE"]
 
-    original_current = JointJournal.current
+    original_history = JointJournal.history
     first, second = result.children
     future_values = first.checkpoint.to_wire()
     future_values.pop("checkpoint_sha256")
@@ -738,17 +738,19 @@ def test_joint_reader_preserves_child_ownership_through_integration_replanning(
             }
         )
 
-        def current(
+        def history(
             journal: JointJournal,
             delivery_id: str,
             captured: JointCheckpoint = corrupt,
-        ) -> JointCheckpoint | None:
+        ) -> tuple[JointCheckpoint, ...]:
+            records = original_history(journal, delivery_id)
             if delivery_id == result.delivery_id:
-                return captured
-            return original_current(journal, delivery_id)
+                assert records and records[-1] == result
+                return (*records[:-1], captured)
+            return records
 
         with monkeypatch.context() as patch:
-            patch.setattr(JointJournal, "current", current)
+            patch.setattr(JointJournal, "history", history)
             with pytest.raises(TeamReadError):
                 reader.snapshot()
 

@@ -255,15 +255,17 @@ class ProductionTeamReader:
             else frozenset()
         )
         all_joints: list[JointCheckpoint] = []
+        retired_native_ids: set[str] = set()
         for path in _directories(
             selected.requirements_root if selected is not None else Path("/nonexistent"),
             "delivery_multi_*",
         ):
             assert journal is not None
             assert selected is not None
-            checkpoint = journal.current(path.name)
-            if checkpoint is None:
+            history = journal.history(path.name)
+            if not history:
                 continue  # an operation lock can precede the first committed checkpoint
+            checkpoint = history[-1]
             if (
                 checkpoint.team_id != team.manifest.team_id
                 or checkpoint.team_manifest_sha256 != team.manifest.manifest_sha256
@@ -272,21 +274,24 @@ class ProductionTeamReader:
             ):
                 raise ValueError("Requirement Team or Project mismatch")
             all_joints.append(checkpoint)
-        retired_native_ids = frozenset(
-            native_id
-            for joint in all_joints
-            if joint.delivery_id in retired
-            for native_id in _owned_native_delivery_ids(joint)
-        )
+            if checkpoint.delivery_id in retired:
+                for record in history:
+                    retired_native_ids.update(_owned_native_delivery_ids(record))
         joints = [joint for joint in all_joints if joint.delivery_id not in retired]
-        natives = (
-            tuple(
-                native
-                for native in _read_native(selected)
-                if native.checkpoint.delivery_id not in retired_native_ids
-            )
-            if selected is not None
-            else ()
+        all_natives = _read_native(selected) if selected is not None else ()
+        # A reservation's source is deliberately absent from the visible map
+        # after product deletion. Bind exclusion to the validated native history
+        # and repository, rather than treating any missing source as harmless.
+        retired_task_sources = frozenset(
+            (native.checkpoint.repository_id, task_id)
+            for native in all_natives
+            if native.checkpoint.delivery_id in retired_native_ids
+            for task_id in _native_task_sources(native)
+        )
+        natives = tuple(
+            native
+            for native in all_natives
+            if native.checkpoint.delivery_id not in retired_native_ids
         )
         by_id = {n.checkpoint.delivery_id: n for n in natives}
         ownership: dict[str, tuple[str, ScopeView]] = {}
@@ -525,6 +530,11 @@ class ProductionTeamReader:
                     ):
                         raise ValueError("ambiguous native Task ownership")
                     native_by_task[task_id] = (source_native, request_id, scope)
+        retired_task_ids = {task_id for _, task_id in retired_task_sources}
+        if retired_task_ids.intersection(native_by_task):
+            # Task IDs are global SQL identities. Hiding a retired owner cannot
+            # legitimize another native delivery's reuse, even across repositories.
+            raise ValueError("ambiguous native Task ownership")
 
         # Filesystem prefixes first, SQL snapshot second: SQL cannot lag the captured checkpoints.
         # A pre-dispatch failure has no SQL Task, Assignment or verification source to enrich.
@@ -590,6 +600,7 @@ class ProductionTeamReader:
                             native_by_task,
                             team_id=team.manifest.team_id,
                             project_id=selected.manifest.project_id,
+                            retired_task_sources=retired_task_sources,
                             route_attempts=route_attempts,
                             branch_cache=branch_cache,
                         )
@@ -1438,6 +1449,7 @@ def _read_verifications(
     *,
     team_id: str,
     project_id: str,
+    retired_task_sources: frozenset[tuple[str, str]] = frozenset(),
     route_attempts: _ModelRouteAttemptCache | None = None,
     branch_cache: _CandidateBranchCache | None = None,
 ) -> tuple[TaskView, ...]:
@@ -1460,6 +1472,8 @@ def _read_verifications(
         )
         if completion_sha256 is not None and abandonment_sha256 is not None:
             raise ValueError("verification reservation has conflicting releases")
+        if (reservation.repository_id, reservation.source_task_id) in retired_task_sources:
+            continue
         reservations.append((reservation, completion_sha256, abandonment_sha256))
         key = (str(reservation.repository_id), str(reservation.source_task_id))
         latest = latest_by_source.get(key)
