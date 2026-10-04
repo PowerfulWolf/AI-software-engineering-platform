@@ -2540,3 +2540,27 @@ is handed to remediation/adoption.
 `tests/recovery/test_delivery_continuation.py::test_terminal_candidate_without_plan_bypasses_stale_native_retry`
 guards the no-plan case and ensures a fresh exact verification proposal remains reachable after
 preparation drift.
+
+## Scenario: unstarted successor preparation rebind (2026-10-04)
+
+When the current native cursor is `DELIVERING` with `task_status=NEW`, `task_revision=0`, no
+candidate, no failure fields, and the read-only status observes a preparation digest mismatch,
+`DeliveryResumeController` may enter the pre-execution restart seam. The SQL snapshot must prove
+the Task has zero events/attempts, no retry failures, no queue claim/admission, and that the
+dispatch, Task, checkpoint and repository identities agree. The same proof accepts a prior
+`pre_execution_restart` continuation dispatch and resolves its original Planner allocation;
+ordinary Coder recovery still rejects a Task with any execution evidence.
+
+The resulting `PreExecutionRestartPlan` sets `restart_kind=preparation_rebind`, binds the source
+checkpoint/Task/dispatch and approved stage digests, and records the current preparation and base.
+The exact plan is stored and approved with the existing restart authorization. Approval creates a
+new append-only continuation Task on the current base and appends the new Delivery cursor before
+any model call. A changed source or an unchanged preparation returns no plan; it never mutates the
+old checkpoint or treats the old dispatch as successful.
+
+Required incremental checks: `test_delivery_continuation.py` covers the Controller approval gate;
+`test_restart_contracts.py` covers the new plan wire/schema and immutable authorization;
+`test_pre_execution_restart.py` covers legacy restart compatibility. Good: clean NEW successor
+gets one exact rebind plan and then serial Coder → QA → Reviewer. Base: repeated Continue returns
+the same plan without a model call. Bad: a dirty worktree, role claim, or existing event is
+rebound or approved as success.

@@ -154,6 +154,19 @@
       "title": "Schema Version",
       "type": "string"
     },
+    "restart_kind": {
+      "anyOf": [
+        {
+          "const": "preparation_rebind",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Restart Kind"
+    },
     "scope": {
       "$ref": "#/$defs/RecoveryScope"
     },

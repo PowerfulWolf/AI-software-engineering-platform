@@ -9,12 +9,13 @@ from ai_software_engineer.agents.fallback import model_route_root
 from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.context import ContextSource, FileContextStore
-from ai_software_engineer.domain import Task
+from ai_software_engineer.domain import Task, TaskStatus
 from ai_software_engineer.domain.branch import successor_branch
 from ai_software_engineer.manager import production_backend
 from ai_software_engineer.manager.delivery import ResumeProjectDelivery
 from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryFailureCode,
+    DeliveryStage,
     FileProjectDeliveryCheckpointStore,
     ProjectDeliveryCheckpoint,
 )
@@ -74,7 +75,15 @@ class PreExecutionRestartService:
         self.config, self.environment, self.backend = config, dict(environment), backend
 
     def propose(self, checkpoint: ProjectDeliveryCheckpoint) -> RestartProposal | None:
-        if (
+        preparation_rebind = (
+            checkpoint.stage is DeliveryStage.DELIVERING
+            and checkpoint.task_status is TaskStatus.NEW
+            and checkpoint.task_revision == 0
+            and checkpoint.candidate_revision is None
+            and checkpoint.failed_stage is None
+            and checkpoint.failure_code is None
+        )
+        if not preparation_rebind and (
             checkpoint.failure_code is not DeliveryFailureCode.RETRY_BUDGET_EXHAUSTED
             or checkpoint.task_revision != 2
         ):
@@ -101,7 +110,12 @@ class PreExecutionRestartService:
         ).list(scope.delivery_id)
         if not history or history[-1] != checkpoint:
             raise RecoveryRejected("restart source checkpoint changed")
-        runtime = read_pre_execution_snapshot(self.config, self.environment, history)
+        runtime = read_pre_execution_snapshot(
+            self.config,
+            self.environment,
+            history,
+            allow_unstarted=preparation_rebind,
+        )
         if runtime is None:
             return None
         _require_no_execution(self.config, root, runtime)
@@ -112,6 +126,7 @@ class PreExecutionRestartService:
             checkpoint,
             runtime.task,
             runtime.planner_dispatch,
+            current_dispatch=runtime.dispatch if preparation_rebind else None,
         )
         parent_id, parent_sha = _parent(team, checkpoint, stages.approval)
         sources = approved_parent_context(self.config, scope, parent_id, parent_sha)
@@ -119,10 +134,12 @@ class PreExecutionRestartService:
         prepared = preparation.preparation
         if prepared is None:
             raise RecoveryRejected("restart requires conflict-free current preparation")
+        if preparation_rebind and prepared.preparation_sha256 == checkpoint.preparation_sha256:
+            return None
         base = self.backend.delivery_base_revision(Path(scope.repository_root))
         # This repair changes execution/context policy only, not source or scope. A rebase
         # needs a different explicit plan contract; it must not sneak into a bug recovery.
-        if (
+        if not preparation_rebind and (
             base != runtime.task.base_ref
             or prepared.preparation_sha256 != checkpoint.preparation_sha256
         ):
@@ -131,6 +148,7 @@ class PreExecutionRestartService:
             )
         plan = PreExecutionRestartPlan(
             scope=scope,
+            restart_kind="preparation_rebind" if preparation_rebind else None,
             source_task_id=runtime.task.id,
             source_task_sha256=digest(runtime.task.to_wire()),
             source_events_sha256=digest([event.to_wire() for event in runtime.events]),
@@ -220,6 +238,11 @@ class PreExecutionRestartService:
                 **original.to_wire(),
                 "id": task_id,
                 "branch_name": plan.target_branch_name,
+                "base_ref": (
+                    plan.target_base_revision
+                    if plan.restart_kind == "preparation_rebind"
+                    else original.base_ref
+                ),
                 "created_at": now,
                 "updated_at": now,
                 "metadata": {
@@ -367,16 +390,26 @@ def require_restart_dispatch(
 
 
 def restart_context(plan: PreExecutionRestartPlan) -> tuple[ContextSource, ...]:
+    if plan.restart_kind == "preparation_rebind":
+        content = (
+            f"Original Task {plan.source_task_id} was dispatched but never started. "
+            "Its preparation facts changed before the first role claimed work. "
+            "This approved successor is bound to the current preparation and base; "
+            "it is a fresh execution of the same approved requirement, not retained code. "
+            "Independent Coder, QA and Reviewer gates remain mandatory."
+        )
+    else:
+        content = (
+            f"Original Task {plan.source_task_id} stopped before the first Coder. "
+            "This is an approved fresh execution of the same requirements, not retained code. "
+            "No implementation or passing verdict exists; all original acceptance gates apply."
+        )
     return (
         *plan.context_sources,
         ContextSource(
             source_id="restart.authorization",
             uri=f"pre-execution-restart://{plan.plan_sha256}",
-            content=(
-                f"Original Task {plan.source_task_id} stopped before the first Coder. "
-                "This is an approved fresh execution of the same requirements, not retained code. "
-                "No implementation or passing verdict exists; all original acceptance gates apply."
-            ),
+            content=content,
             required=True,
             priority=2,
         ),

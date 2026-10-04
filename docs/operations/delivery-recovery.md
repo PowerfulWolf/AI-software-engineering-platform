@@ -44,8 +44,12 @@ UNKNOWN_EXIT 只能证明进程失败，不能单独证明额度原因。
    `ase request resume <需求ID> --approve-plan <摘要> --approval-reference <批准说明>`。
 4. 新 Task 接回同一需求，仍需独立 Coder → QA → Reviewer；原审批、失败 Task 和事件保留。
    不需要删除需求、重做 Product 讨论，也不会把没有实现过的内容交给 QA。
-5. 若提示已有工作区/上下文/角色执行记录，或基线/准备资料已变化，停止自动重启并核对事实；
-   不删除现场来强行满足条件。新 Task 再次在上下文阶段失败时，不自动无限创建 Task。
+5. 若提示已有工作区/上下文/角色执行记录，停止自动重启并核对事实；不删除现场来强行满足
+   条件。若页面显示“准备资料在首个角色执行前漂移”，平台会生成
+   `restart_kind=preparation_rebind` 的新精确计划：它绑定当前准备摘要/基线，只有在原 Task
+   仍为 NEW、没有事件、调用、claim 或工作区时才可批准。批准后平台创建追加 successor，再进入
+   Coder → QA → Reviewer；Manager 不能把旧 dispatch 直接当成功。新 Task 再次在上下文阶段失败时，
+   不自动无限创建 Task。
 
 **存量数据处置**：无需改库或迁移旧 journal。K1 自动知识采集首个闭环（需求
 `delivery_multi_33d30fe0776a232e31617caa9e702b915dcb4c65`，原 Task

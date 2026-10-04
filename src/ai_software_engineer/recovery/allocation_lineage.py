@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from ai_software_engineer.domain import TaskStatus
 from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryStage,
     ProjectDeliveryCheckpoint,
@@ -32,7 +33,16 @@ def continuation_source_checkpoints(
         and checkpoint.delivery_id == allocation.source_delivery_id
         and checkpoint.dispatch_commit_id == allocation.source_dispatch_id
         and checkpoint.task_id == allocation.source_task_id
-        and checkpoint.stage in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
+        and (
+            checkpoint.stage in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
+            or (
+                allocation.continuation_kind == "pre_execution_restart"
+                and checkpoint.stage is DeliveryStage.DELIVERING
+                and checkpoint.task_status is TaskStatus.NEW
+                and checkpoint.task_revision == 0
+                and checkpoint.candidate_revision is None
+            )
+        )
         and (
             (
                 checkpoint.candidate_revision is None

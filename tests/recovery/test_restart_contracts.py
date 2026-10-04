@@ -94,6 +94,16 @@ def test_restart_plan_and_authorization_are_exact_durable_records(tmp_path: Path
         store.put_restart_plan(foreign)
 
 
+def test_preparation_rebind_plan_is_an_exact_restart_record(tmp_path: Path) -> None:
+    plan = restart_plan(tmp_path).model_copy(update={"restart_kind": "preparation_rebind"})
+    plan = plan.model_copy(update={"plan_sha256": plan.recompute_sha256()})
+    store = FileRecoveryStore.initialize(tmp_path / "rebind-records", scope=plan.scope)
+    store.put_restart_plan(plan)
+    schema = json.loads(Path("schemas/pre-execution-restart.schema.json").read_text())
+    Draft202012Validator(schema).validate(plan.to_wire())
+    assert store.get_restart_plan(plan.plan_sha256) == plan
+
+
 @pytest.mark.parametrize(
     "change",
     [

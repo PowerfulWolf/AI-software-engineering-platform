@@ -1424,6 +1424,29 @@ the old cursor plus a Chinese drift diagnosis and leaves the journal byte-identi
 Base: explicit Project selection continues to work. Bad: silently choose one of several
 Projects, mutate the old checkpoint, or continue with a stale approval.
 
+### Preparation drift before the first role claim (2026-10-04)
+
+An already materialized successor can be `DELIVERING` with `task_status=NEW` and
+`task_revision=0` while no Coder, QA, or Reviewer has claimed work. If its preparation digest
+no longer matches the current repository facts, read-only status keeps the old cursor and
+reports the drift in Chinese. A normal retry is unsafe because the existing dispatch was bound
+to the old preparation.
+
+The Manager may propose an exact `PreExecutionRestartPlan` with
+`restart_kind=preparation_rebind`. The plan binds the source Delivery checkpoint, source Task
+and dispatch digests, approved Product/Design/Plan lineage, current preparation digest and base
+revision, current policy/config digest, and a new successor branch. The proposal is valid only
+when the source Task is `NEW`, has zero events/attempts, no queue claim/admission, no artifacts,
+no context or model invocation, and no retained worktree. It is stored and approved through the
+existing exact restart approval gate.
+
+Approval creates an append-only successor dispatch and Task using the current preparation/base,
+then appends a new Delivery checkpoint before any model call. The old Task, dispatch, checkpoint,
+and preparation facts remain immutable; Coder, QA, and Reviewer still run serially on the fresh
+successor. If any pre-execution fact changes, or any execution evidence exists, the proposal is
+rejected and ordinary Coder recovery remains required. Manager approval never turns a failed
+provider Run or dirty worktree into success.
+
 ### Dirty provider failure and stale action projection (2026-10-04)
 
 When a provider route fails after the Coder has changed its owned worktree, the dirty-worktree

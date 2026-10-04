@@ -785,6 +785,14 @@ substitute for QA/Review verdicts. See `.trellis/spec/core/verification-environm
 - `pre-execution-restart.schema.json`：首次 Coder 启动前上下文失败的独立重启计划，绑定原
   Task/事件/dispatch/审批链、冻结父上下文和当前预算；不包含虚构的 Coder Run 或代码 capture。
   精确批准后生成 `continuation_kind=pre_execution_restart` 的新 Task，原终态记录保持不变。
+  `restart_kind=preparation_rebind` 是它的兼容扩展：只适用于已经派发但仍为 `NEW`、且首个
+  角色尚未领取的 successor，在只读事实证明没有事件、尝试、retry failure、queue claim/admission、
+  artifact、context、model invocation 或 worktree 时，因当前 preparation/base 与旧 dispatch 漂移而
+  需要重新绑定。该计划同时绑定原 checkpoint/Task/dispatch、批准的 Product/Design/Plan lineage、
+  当前 preparation/base/config digest 和新的 successor branch；精确批准后追加 successor Task 与
+  checkpoint，再进入普通 Coder→QA→Reviewer。旧 Task、dispatch、checkpoint 和历史准备事实保持
+  append-only，旧 dispatch 不能被当作成功，也不能用 Manager 普通审批绕过这次重绑。已有任何执行证据、
+  脏工作树或候选时必须转入相应的 Coder recovery/candidate verification，而不是生成 rebind 计划。
 - `recovery-execution.schema.json`：RecoveryDispatchRecord / ContinuationDispatchRecord /
   RecoverySeedRecord / RecoveryInvocationRecord。普通 Continuation 绑定被拒候选、验证 completion、
   当前 preparation、修复 Task 和新的 Coder/QA/Reviewer allocation；pre_execution_restart

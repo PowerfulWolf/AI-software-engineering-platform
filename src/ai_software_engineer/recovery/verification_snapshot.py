@@ -258,8 +258,15 @@ def read_pre_execution_snapshot(
     config: ProductionConfig,
     environment: Mapping[str, str],
     history: tuple[ProjectDeliveryCheckpoint, ...],
+    *,
+    allow_unstarted: bool = False,
 ) -> CandidateRuntimeSnapshot | None:
-    """Recognize only the original, never-invoked Task's context-budget failure."""
+    """Read a never-invoked Task for restart or preparation rebinding.
+
+    The default remains the narrowly recognized historical context-budget failure.
+    ``allow_unstarted`` is a separate, stricter shape used only when the Delivery
+    cursor is already materialized at DELIVERING and the preparation digest drifted.
+    """
     if not history:
         return None
     cp = history[-1]
@@ -271,7 +278,7 @@ def read_pre_execution_snapshot(
             cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
             cursor.execute("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
             task, revision, events = _read_task_facts(cursor, cp)
-            if not (
+            original_failure = (
                 revision == 2
                 and task.attempts == 1
                 and not task.retry_failures
@@ -283,29 +290,53 @@ def read_pre_execution_snapshot(
                 and events[1].from_status is TaskStatus.PLANNING
                 and events[1].to_status is TaskStatus.BLOCKED
                 and events[1].reason == _PRE_AGENT_CONTEXT_BUDGET_REASON
-            ):
+            )
+            unstarted_rebind = (
+                allow_unstarted
+                and cp.stage is DeliveryStage.DELIVERING
+                and cp.task_status is TaskStatus.NEW
+                and cp.task_revision == 0
+                and cp.failed_stage is None
+                and cp.failure_code is None
+                and task.status is TaskStatus.NEW
+                and task.attempts == 0
+                and not task.retry_failures
+                and not events
+            )
+            if not (original_failure or unstarted_rebind):
                 return None
             allocations = _read_allocations(cursor, history)
             dispatch = allocations[cp.dispatch_commit_id]
-            if not isinstance(dispatch, DispatchCommitRecord):
+            invalid_dispatch = not isinstance(dispatch, DispatchCommitRecord) and not (
+                unstarted_rebind and isinstance(dispatch, ContinuationDispatchRecord)
+            )
+            if invalid_dispatch and original_failure:
                 raise RecoveryRejected(
-                    "pre-execution restart already attempted; inspect the new context failure"
+                    "pre-execution restart already attempted; "
+                    "inspect the new context failure"
                 )
+            if invalid_dispatch:
+                return None
             if (
-                cp.stage is not DeliveryStage.BLOCKED
-                or cp.failed_stage is not DeliveryStage.DELIVERING
-                or cp.task_revision != revision
+                cp.task_revision != revision
                 or cp.task_status is not task.status
                 or cp.repository_root != task.repository
                 or not task_matches_dispatch(task, dispatch.task)
-                or task.updated_at != events[-1].occurred_at
-                or not task.created_at <= events[0].occurred_at <= events[1].occurred_at
-                or any(
-                    e.task_id != task.id
-                    or e.attempt != 1
-                    or e.artifact_ids
-                    or e.source_revision != task.base_ref
-                    for e in events
+                or (
+                    original_failure
+                    and (
+                        cp.stage is not DeliveryStage.BLOCKED
+                        or cp.failed_stage is not DeliveryStage.DELIVERING
+                        or task.updated_at != events[-1].occurred_at
+                        or not task.created_at <= events[0].occurred_at <= events[1].occurred_at
+                        or any(
+                            e.task_id != task.id
+                            or e.attempt != 1
+                            or e.artifact_ids
+                            or e.source_revision != task.base_ref
+                            for e in events
+                        )
+                    )
                 )
             ):
                 raise RecoveryRejected("pre-execution failure facts are inconsistent")
@@ -318,7 +349,12 @@ def read_pre_execution_snapshot(
             cursor.execute("SELECT id FROM work_queue_admissions WHERE task_id=%s", (task.id,))
             if cursor.fetchone() is not None:
                 raise RecoveryRejected("pre-execution source already has a queue admission")
-            return CandidateRuntimeSnapshot(task, revision, dispatch, dispatch, events)
+            planner_dispatch = (
+                dispatch
+                if isinstance(dispatch, DispatchCommitRecord)
+                else resolve_planner_dispatch(dispatch, allocations, history)
+            )
+            return CandidateRuntimeSnapshot(task, revision, dispatch, planner_dispatch, events)
     finally:
         connection.rollback()
         connection.close()

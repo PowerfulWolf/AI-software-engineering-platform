@@ -158,6 +158,20 @@ class DeliveryResumeController:
             current.task_id is not None and current.candidate_revision is not None
         )
         if diagnostic and not has_candidate_boundary:
+            # A materialized NEW Task with no role execution is safe to rebind to
+            # the current preparation through the exact pre-execution approval
+            # seam.  Other drift remains read-only and must not be replayed.
+            if (
+                current.stage is DeliveryStage.DELIVERING
+                and current.task_status is TaskStatus.NEW
+                and current.task_revision == 0
+                and current.candidate_revision is None
+                and current.failure_code is None
+                and current.failed_stage is None
+            ):
+                restart = self._continue_pre_execution_restart(current, command)
+                if restart is not None:
+                    return restart
             return self._result(
                 DeliveryResumeOutcome.WAITING_HUMAN,
                 status,

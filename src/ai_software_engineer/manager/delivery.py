@@ -807,8 +807,21 @@ class UnifiedProjectEntryService:
             ):
                 raise DeliveryCommandRejected("restart replay identity mismatch")
             return ProjectDeliveryResult(checkpoint=current)
+        if plan.restart_kind == "preparation_rebind":
+            source_matches = (
+                current.stage is DeliveryStage.DELIVERING
+                and current.task_status is TaskStatus.NEW
+                and current.task_revision == 0
+                and current.failure_code is None
+                and current.failed_stage is None
+            )
+        else:
+            source_matches = (
+                current.stage is DeliveryStage.BLOCKED
+                and current.checkpoint_sha256 == plan.source_checkpoint_sha256
+            )
         if (
-            current.stage is not DeliveryStage.BLOCKED
+            not source_matches
             or current.checkpoint_sha256 != plan.source_checkpoint_sha256
             or current.task_id != plan.source_task_id
             or current.candidate_revision is not None

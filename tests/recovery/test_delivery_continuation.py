@@ -60,6 +60,44 @@ from tests.recovery.test_execution_records import continuation_allocation
 NOW = datetime(2026, 9, 9, 8, 0, tzinfo=UTC)
 
 
+def test_unstarted_preparation_drift_offers_exact_rebind_before_generic_wait(
+    tmp_path: Path,
+) -> None:
+    """A NEW dispatched Task gets the approval gate instead of a dead-end drift wait."""
+    current = SimpleNamespace(
+        stage=DeliveryStage.DELIVERING,
+        task_id="task_continue_unstarted",
+        task_status=TaskStatus.NEW,
+        task_revision=0,
+        candidate_revision=None,
+        failure_code=None,
+        failed_stage=None,
+        repository_root=str(tmp_path / "repository"),
+        delivery_id="delivery_unstarted_rebind",
+    )
+    entry = Mock()
+    entry.status.return_value = SimpleNamespace(
+        checkpoint=current,
+        diagnostic=(
+            "交付绑定的代码基线已漂移：历史准备摘要 old，当前准备摘要 new。"  # noqa: RUF001
+            "平台不会自动 rebase 或覆盖历史事实。"
+        ),
+    )
+    controller = DeliveryResumeController(
+        config=Mock(),
+        environment={},
+        backend=Mock(),
+        entry=entry,
+        recovery=Mock(),
+        verification=Mock(),
+    )
+    expected = object()
+    controller._continue_pre_execution_restart = Mock(return_value=expected)
+
+    assert controller.resume(ResumeProjectDelivery(delivery_id=current.delivery_id)) is expected
+    controller._continue_pre_execution_restart.assert_called_once()
+
+
 def test_terminal_candidate_completion_bypasses_stale_native_retry(
     tmp_path: Path,
 ) -> None:

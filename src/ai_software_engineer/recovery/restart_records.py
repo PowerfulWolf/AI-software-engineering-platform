@@ -15,6 +15,10 @@ from ai_software_engineer.recovery.models import FullCommit, RecoveryRejected, R
 class PreExecutionRestartPlan(DomainModel):
     kind: Literal["pre_execution_restart"] = "pre_execution_restart"
     schema_version: Literal["v0.1"] = "v0.1"
+    # Historical plans omit this field.  The preparation-rebind variant uses the
+    # same exact approval/storage contract while making its source/target intent
+    # explicit and preserving the old digest for legacy records.
+    restart_kind: Literal["preparation_rebind"] | None = None
     scope: RecoveryScope
     source_task_id: TaskId
     source_task_sha256: StageSha256
@@ -44,7 +48,12 @@ class PreExecutionRestartPlan(DomainModel):
         return self
 
     def recompute_sha256(self) -> str:
-        return digest(self.model_dump(mode="json", exclude={"plan_sha256"}))
+        payload = self.model_dump(mode="json", exclude={"plan_sha256"})
+        # Keep the historical digest shape byte-for-byte when the new mode is
+        # absent; only preparation-rebind plans add the discriminator.
+        if self.restart_kind is None:
+            payload.pop("restart_kind", None)
+        return digest(payload)
 
     def validate_integrity(self) -> None:
         type(self).model_validate(self.to_wire())

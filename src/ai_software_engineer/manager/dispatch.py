@@ -414,7 +414,9 @@ class ContinuationDispatchRecord(DomainModel):
     execution_plan_sha256: DispatchSha256
     execution_plan_phase_ids: tuple[PlanPhaseId, PlanPhaseId, PlanPhaseId]
     continuation_kind: Literal[
-        "verification_remediation", "prerequisite_repair", "pre_execution_restart"
+        "verification_remediation",
+        "prerequisite_repair",
+        "pre_execution_restart",
     ]
     prerequisite_repair_sha256: DispatchSha256 | None = None
     continuation_sha256: DispatchSha256
