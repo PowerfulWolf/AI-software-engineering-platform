@@ -1032,6 +1032,13 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   );
   assert.equal(
     vm.runInContext(
+      'humanizeBlockingText("POLICY_VIOLATION: Coder failed at attempt 1: coder run run_abc123 failed: failed provider route left repository changes; provider_diagnostic=Responses provider returned HTTP 429")',
+      context,
+    ),
+    "Coder 第 1 次执行失败：提供方路由失败后仓库仍有改动；模型服务返回 HTTP 429，改动已保留，等待精确恢复审批；执行记录 run_abc123。",
+  );
+  assert.equal(
+    vm.runInContext(
       'humanizeBlockingText("Delivery is blocked because a sub-delivery or joint integration requires recovery and the child finding requests human handling.")',
       context,
     ),

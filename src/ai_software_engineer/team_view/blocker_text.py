@@ -128,7 +128,15 @@ def _role_failure(text: str) -> str | None:
     elif "ARTIFACT_VALIDATION" in detail:
         reason = "角色产物未通过完整性校验，平台拒绝推进阶段"
     elif "failed provider route left repository changes" in detail:
-        reason = "提供方路由失败后仓库仍有改动"
+        if match := re.search(r"provider_diagnostic=Responses provider returned HTTP (\d{3})", detail):
+            reason = (
+                "提供方路由失败后仓库仍有改动；模型服务返回 HTTP "
+                f"{match.group(1)}，改动已保留，等待精确恢复审批"
+            )
+        elif "provider_diagnostic=Responses provider is unavailable" in detail:
+            reason = "提供方路由失败后仓库仍有改动；模型服务暂不可用，改动已保留，等待精确恢复审批"
+        else:
+            reason = "提供方路由失败后仓库仍有改动，改动已保留，等待精确恢复审批"
     elif "Codex CLI provider execution failed" in detail:
         reason = "Codex CLI 模型服务执行失败"
     elif (

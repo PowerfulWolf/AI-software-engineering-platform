@@ -251,6 +251,7 @@ class ConsoleCommandResult(DomainModel):
     checkpoint_sha256: CheckpointDigest | None = None
     stage: NonEmptyStr
     next_action: NonEmptyStr
+    diagnostic: Annotated[str, StringConstraints(min_length=1, max_length=500)] | None = None
     approval: ConsoleApprovalRequest | None = None
 
     @model_validator(mode="after")

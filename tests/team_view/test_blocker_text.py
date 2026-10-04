@@ -50,6 +50,19 @@ def test_localizes_policy_classified_role_failure() -> None:
     assert "候选验证上下文超过配置预算" in localized
 
 
+def test_localizes_dirty_provider_failure_with_safe_route_detail() -> None:
+    localized = localize_blocking_text(
+        "POLICY_VIOLATION: Coder failed at attempt 1: coder run run_abc123 failed: "
+        "failed provider route left repository changes; "
+        "provider_diagnostic=Responses provider returned HTTP 429"
+    )
+
+    assert localized is not None
+    assert "模型服务返回 HTTP 429" in localized
+    assert "改动已保留，等待精确恢复审批" in localized
+    assert "run_abc123" in localized
+
+
 def test_localizes_knowledge_preparation_failure_and_keeps_error_code() -> None:
     assert localize_blocking_text("qa knowledge preparation failed: RATE_LIMITED") == (
         "QA 知识准备失败（原因代码：RATE_LIMITED），请检查模型服务后再继续。"

@@ -19,6 +19,7 @@ from ai_software_engineer.domain import AgentRole
 from ai_software_engineer.domain.project_delivery import PlanTestMatrixError, PlanTestMatrixIssue
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
+    ProjectDeliveryResult,
     ReplyToProduct,
     ResumeProjectDelivery,
     UnifiedProjectEntryService,
@@ -693,6 +694,36 @@ def test_interruption_approval_has_its_own_exact_plan_and_summary(
         assert not any("与已批准 seed 完全一致" in fact for fact in result.approval.facts)
     else:
         assert any("与已批准 seed 完全一致" in fact for fact in result.approval.facts)
+
+
+def test_preparation_diagnostic_replaces_stale_run_action_in_console_result(
+    tmp_path: Path,
+) -> None:
+    from ai_software_engineer.web_console.manager import _summarize
+
+    checkpoint = ProjectDeliveryCheckpoint.create(
+        delivery_id="delivery_" + "b" * 40,
+        sequence=1,
+        previous_checkpoint_sha256=None,
+        repository_id="repository_" + "c" * 40,
+        repository_root=str(tmp_path),
+        stage=DeliveryStage.WAITING_HUMAN,
+        stage_attempts=DeliveryStageAttempts(delivering=1),
+        next_action=DeliveryNextAction.RUN_DELIVERY,
+        failure_code=DeliveryFailureCode.CHECKPOINT_DRIFT,
+        failure_summary="历史准备事实已漂移",
+        checkpointed_at=datetime(2026, 10, 4, tzinfo=UTC),
+    )
+    diagnostic = "交付准备摘要已漂移 请重新准备并生成精确恢复计划"
+
+    result = _summarize(
+        ProjectDeliveryResult(checkpoint=checkpoint, diagnostic=diagnostic),
+        project_id=PROJECT_ID,
+    )
+
+    assert result.diagnostic == diagnostic
+    assert result.next_action == diagnostic
+    assert result.next_action != "RUN_DELIVERY"
 
 
 def test_continue_sends_an_exact_scope_approval_separately_from_plan_approval(

@@ -155,6 +155,20 @@
           "title": "Next Action",
           "type": "string"
         },
+        "diagnostic": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Diagnostic"
+        },
         "approval": {
           "anyOf": [
             {

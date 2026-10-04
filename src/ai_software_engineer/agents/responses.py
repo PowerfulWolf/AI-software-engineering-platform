@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 
 from pydantic import TypeAdapter
 
-from ai_software_engineer.agents.diagnostics import http_error_detail
+from ai_software_engineer.agents.diagnostics import http_error_detail, safe_diagnostic
 from ai_software_engineer.agents.execution import ExecutionGuard, execution_scope
 from ai_software_engineer.agents.json_schema import strict_output_schema
 from ai_software_engineer.agents.models import (
@@ -739,7 +739,13 @@ def _safe_failure(
 ) -> AgentResult:
     if not _workspace_unchanged(root, initial_head):
         code = AgentErrorCode.POLICY_VIOLATION
-        message = "failed provider route left repository changes"
+        # A dirty provider failure is never eligible for fallback or automatic
+        # retry, but discarding the already classified provider error makes
+        # recovery needlessly opaque.  The caller's message is already bounded
+        # for HTTP failures; sanitize and bound it again here because this is
+        # the common safety boundary for transport, decoding and policy errors.
+        detail = safe_diagnostic(message, limit=240)
+        message = "failed provider route left repository changes; " f"provider_diagnostic={detail}"
         transient = False
         timed_out = False
     return AgentResult(

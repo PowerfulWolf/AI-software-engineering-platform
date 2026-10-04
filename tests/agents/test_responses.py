@@ -410,6 +410,43 @@ def test_quota_failure_with_partial_changes_is_not_fallback_eligible(tmp_path: P
     assert result.error is not None
     assert result.error.code is AgentErrorCode.POLICY_VIOLATION
     assert result.error.transient is False
+    assert "failed provider route left repository changes" in result.error.message
+    assert "provider_diagnostic=Responses provider returned HTTP 429" in result.error.message
+
+
+def test_dirty_provider_failure_keeps_safe_transport_diagnostic(tmp_path: Path) -> None:
+    root, base = _repository(tmp_path)
+    request, definition = _request(base)
+    secret = "private-task-and-provider-secret"
+
+    class TransportFailure:
+        def post(
+            self,
+            url: str,
+            headers: Mapping[str, str],
+            body: bytes,
+            timeout_seconds: float,
+        ) -> HttpResponse:
+            del url, headers, body, timeout_seconds
+            (root / "src" / "partial.py").write_text(secret, encoding="utf-8")
+            raise OSError("provider socket failed " + secret)
+
+    result = ResponsesAgentAdapter(
+        workspace_root=root,
+        endpoint="https://example.invalid/v1/responses",
+        api_key="test-key",
+        model="deepseek-v4-pro",
+        agent=definition,
+        prompt_builder=StaticPromptBuilder(),
+        transport=TransportFailure(),
+    ).run(request)
+
+    assert result.error is not None
+    assert result.error.code is AgentErrorCode.POLICY_VIOLATION
+    assert result.error.transient is False
+    assert "provider_diagnostic=Responses provider is unavailable" in result.error.message
+    assert secret not in result.model_dump_json()
+    assert (root / "src" / "partial.py").read_text(encoding="utf-8") == secret
 
 
 def test_authentication_error_is_typed_and_safe(tmp_path: Path) -> None:

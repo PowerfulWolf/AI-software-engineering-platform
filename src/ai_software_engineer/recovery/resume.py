@@ -84,6 +84,7 @@ class DeliveryResumeResult(DomainModel):
     outcome: DeliveryResumeOutcome
     checkpoint: ProjectDeliveryCheckpoint
     next_action: NonEmptyStr
+    diagnostic: NonEmptyStr | None = None
     verification_plan_file: NonEmptyStr | None = None
     verification_plan_sha256: str | None = None
     verification_completion_sha256: str | None = None
@@ -146,7 +147,22 @@ class DeliveryResumeController:
         self._verification = verification
 
     def resume(self, command: ResumeProjectDelivery) -> DeliveryResumeResult:
-        current = self._entry.status(command.delivery_id).checkpoint
+        status = self._entry.status(command.delivery_id)
+        current = status.checkpoint
+        diagnostic = getattr(status, "diagnostic", None)
+        # A preparation mismatch is a read-side fact, not permission to replay
+        # the old cursor.  A sealed candidate is the one deliberate exception:
+        # its QA/Review verification can still be proposed or consumed against
+        # the current baseline, as required by delivery-recovery.
+        has_candidate_boundary = (
+            current.task_id is not None and current.candidate_revision is not None
+        )
+        if diagnostic and not has_candidate_boundary:
+            return self._result(
+                DeliveryResumeOutcome.WAITING_HUMAN,
+                status,
+                next_action=diagnostic,
+            )
         if command.coder_scope_request is not None and (
             current.stage not in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
             or current.candidate_revision is not None
@@ -929,6 +945,7 @@ class DeliveryResumeController:
             outcome=outcome,
             checkpoint=result.checkpoint,
             next_action=next_action,
+            diagnostic=result.diagnostic,
             verification_completion_sha256=(
                 completion.completion_sha256 if completion is not None else None
             ),

@@ -1423,3 +1423,23 @@ Good: a unique Delivery ID with no default Project is readable; a changed source
 the old cursor plus a Chinese drift diagnosis and leaves the journal byte-identical.
 Base: explicit Project selection continues to work. Bad: silently choose one of several
 Projects, mutate the old checkpoint, or continue with a stale approval.
+
+### Dirty provider failure and stale action projection (2026-10-04)
+
+When a provider route fails after the Coder has changed its owned worktree, the dirty-worktree
+guard is an intentional safety boundary. It must retain `POLICY_VIOLATION`, preserve the exact
+worktree and failed Run, and reject fallback/reset/QA admission. The safe provider diagnostic is
+appended to the role failure and shown in Chinese so a human can distinguish HTTP rate limiting,
+provider unavailability, and other route failures before approving a recovery plan. Manager may
+approve only the exact recovery/reapply plan after inspecting the retained changes; it cannot
+approve the failed Run as successful or bypass independent QA/Review.
+
+Read-only preparation drift also keeps the immutable checkpoint cursor, but its diagnostic must
+be propagated through `ConsoleCommandResult`. The browser must render the Chinese drift guidance
+as the current operation result and must not keep presenting the stale `RUN_DELIVERY` action.
+The cursor, state events, approvals, artifacts, and historical Run bytes are never rewritten.
+
+Required incremental checks: `tests/agents/test_responses.py`, `tests/team_view/test_blocker_text.py`,
+`tests/team_view/ui.test.cjs`, and the focused Web Console Manager tests covering diagnostic
+propagation. No production-data migration is needed; existing deliveries resume through a fresh
+exact recovery or candidate-verification plan bound to the current preparation.

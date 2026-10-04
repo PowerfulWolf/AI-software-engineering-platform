@@ -1,0 +1,23 @@
+{
+  "id": "provider-dirty-failure-diagnostics-20261004",
+  "title": "保留 Responses 提供方失败诊断并正确展示恢复阻塞",
+  "status": "in_progress",
+  "phase": "implementation",
+  "scope": [
+    "Responses AgentAdapter 的工作区改动失败诊断",
+    "交付状态对准备摘要漂移的阻塞展示",
+    "中文控制台文案和增量回归测试"
+  ],
+  "baseline": "82767c0",
+  "acceptance": [
+    "Responses 路由失败后仍保留工作区时，状态为不可重试的 POLICY_VIOLATION，同时保留经过脱敏和限长的提供方诊断",
+    "交付状态发现准备摘要漂移时，用户可见下一步必须是恢复/重新准备，而不是 RUN_DELIVERY",
+    "旧失败 Run、工作区、Task 和 approval 不被修改；增量测试覆盖 HTTP、传输异常和状态展示"
+  ],
+  "verification": [
+    "uv run pytest tests/agents/test_responses.py -q",
+    "uv run pytest tests/team_view/test_blocker_text.py tests/web_console/test_manager.py -q",
+    "node --test tests/team_view/ui.test.cjs"
+  ],
+  "rollback": "回滚本次代码提交；不删除任何 .ase sidecar 事实或恢复记录"
+}

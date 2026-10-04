@@ -317,6 +317,18 @@ def _summarize(
     checkpoint = result.checkpoint
     approval: ConsoleApprovalRequest | None = None
     next_action = str(checkpoint.next_action)
+    result_diagnostic = (
+        result.diagnostic
+        if isinstance(result, (ProjectDeliveryResult, DeliveryResumeResult))
+        else None
+    )
+    diagnostic = safe_diagnostic(result_diagnostic) if result_diagnostic else None
+    # Read-only preparation drift must be visible as the operation's actionable
+    # result.  Keeping the checkpoint cursor and exposing the diagnostic are
+    # separate facts: the cursor remains immutable, while the browser must not
+    # continue to render the stale RUN_DELIVERY action.
+    if diagnostic is not None:
+        next_action = diagnostic
     if isinstance(result, JointDeliveryResult) and result.integration_retry_proposal is not None:
         proposal = result.integration_retry_proposal
         approval = ConsoleApprovalRequest(
@@ -613,6 +625,7 @@ def _summarize(
         checkpoint_sha256=checkpoint.checkpoint_sha256,
         stage=str(checkpoint.stage),
         next_action=next_action,
+        diagnostic=diagnostic,
         approval=approval,
     )
 

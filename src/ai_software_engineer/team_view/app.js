@@ -604,6 +604,18 @@ function requestPresentation(request) {
   if (interruptedRequestTask(request))
     return {group: "blocked", status: "EXECUTION_INTERRUPTED",
       blocker: interruptedExecutionReason, nextAction: interruptedExecutionNext};
+  const latestResult = latestOperation(request.id)?.result;
+  if (
+    latestResult?.diagnostic &&
+    latestResult.stage === "WAITING_HUMAN" &&
+    latestResult.checkpoint_sha256 === request.checkpoint_sha256
+  )
+    return {
+      group: "blocked",
+      status: "WAITING_HUMAN",
+      blocker: latestResult.diagnostic,
+      nextAction: latestResult.diagnostic,
+    };
   const running = activeOperation(request.id);
   const deliveryOperation =
     running && deliveryOperationActions.has(running.intent.action)
@@ -1025,7 +1037,13 @@ function humanizeBlockingText(value) {
                       : detail.includes("ARTIFACT_VALIDATION")
                         ? "角色产物未通过完整性校验，平台拒绝推进阶段"
                         : detail.includes("failed provider route left repository changes")
-      ? "提供方路由失败后仓库仍有改动"
+      ? (() => {
+          const http = detail.match(/provider_diagnostic=Responses provider returned HTTP (\d{3})/);
+          if (http) return `提供方路由失败后仓库仍有改动；模型服务返回 HTTP ${http[1]}，改动已保留，等待精确恢复审批`;
+          if (detail.includes("provider_diagnostic=Responses provider is unavailable"))
+            return "提供方路由失败后仓库仍有改动；模型服务暂不可用，改动已保留，等待精确恢复审批";
+          return "提供方路由失败后仓库仍有改动，改动已保留，等待精确恢复审批";
+        })()
       : detail.includes("Codex CLI provider execution failed")
         ? "Codex CLI 模型服务执行失败"
         : detail.includes("interrupted execution left repository changes") || detail.includes("left a dirty worktree")
@@ -2135,7 +2153,9 @@ function operationNoticeFor(operation) {
       title: `${context} · ${label(operation.intent.action)} · 需要处理`,
       message: knowledgeApproved
         ? "知识解答已批准。请进入需求工作区继续原需求。"
-        : "操作需要你的处理，具体原因和下一步已收口到需求详情。",
+        : operation.result?.diagnostic
+          ? humanizeBlockingText(operation.result.diagnostic)
+          : "操作需要你的处理，具体原因和下一步已收口到需求详情。",
       target,
       jumpLabel: target ? "打开需求工作区" : null,
     };

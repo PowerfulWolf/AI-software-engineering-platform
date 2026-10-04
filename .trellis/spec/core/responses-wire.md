@@ -28,6 +28,11 @@ No domain Artifact Schema or persisted Task/verdict contract changes.
   before truncating to 240 characters, and never expose raw HTML/body/prompt or credential URLs.
 - `ManagerConsoleAdapter.execute` maps `AgentRunFailed` to `MODEL_<typed code>` with bounded,
   sanitized role/cause. Unknown exceptions still use safe MANAGER_FAILURE handling.
+- A Responses provider failure that leaves a Coder worktree dirty keeps the
+  `POLICY_VIOLATION` classification and appends a bounded `provider_diagnostic=` detail after
+  secret redaction. The safety guard still forbids fallback, reset, automatic retry, artifact
+  creation, and QA/Review admission; the preserved worktree must go through an exact recovery
+  plan and human approval.
 - An admitted failed verification run remains consumed. Changing adapter code never permits replay;
   the next live verification uses a fresh exact plan and approval through the ordinary entry.
 - Codex CLI `_validation_rule(error: ValidationError) -> str` maps the first validation error
@@ -49,6 +54,7 @@ No domain Artifact Schema or persisted Task/verdict contract changes.
 | Raw/non-JSON response body | Generic bounded message, never raw body |
 | CLI semantic report error | Fixed rule code plus existing type/root/hash; no private values |
 | Unknown CLI validation message | UNCLASSIFIED; no arbitrary message or value leakage |
+| Provider route fails after writing worktree changes | POLICY_VIOLATION with bounded provider detail; preserve worktree and require exact recovery approval |
 
 ## 5. Good/Base/Bad Cases
 
