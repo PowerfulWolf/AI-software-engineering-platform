@@ -3,7 +3,7 @@
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -58,6 +58,36 @@ from tests.recovery.test_candidate_verification import Admission, setup_verifica
 from tests.recovery.test_execution_records import continuation_allocation
 
 NOW = datetime(2026, 9, 9, 8, 0, tzinfo=UTC)
+
+
+def test_terminal_coder_preparation_drift_offers_exact_recovery(tmp_path: Path) -> None:
+    """Updating main must not hide capture/recovery behind a generic drift wait."""
+    current = SimpleNamespace(
+        stage=DeliveryStage.BLOCKED,
+        task_id="task_terminal_coder",
+        task_status=TaskStatus.BLOCKED,
+        candidate_revision=None,
+        repository_root=str(tmp_path / "repository"),
+        delivery_id="delivery_terminal_coder",
+    )
+    entry = Mock()
+    entry.status.return_value = SimpleNamespace(checkpoint=current, diagnostic="baseline drift")
+    controller = DeliveryResumeController(
+        config=Mock(),
+        environment={},
+        backend=Mock(),
+        entry=entry,
+        recovery=Mock(),
+        verification=Mock(),
+    )
+    expected = object()
+    command = ResumeProjectDelivery(delivery_id=current.delivery_id)
+
+    with patch.object(controller, "_continue_coder_recovery", return_value=expected) as recover:
+        assert controller.resume(command) is expected
+        recover.assert_called_once_with(current, command)
+    entry.resume.assert_not_called()
+    entry.retry_interrupted_stage.assert_not_called()
 
 
 def test_unstarted_preparation_drift_offers_exact_rebind_before_generic_wait(

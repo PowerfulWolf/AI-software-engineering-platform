@@ -51,7 +51,7 @@ from ai_software_engineer.recovery.resume import DeliveryResumeOutcome, Delivery
 from ai_software_engineer.role_workspace import RoleWorktreeBinding
 from tests.domain.factories import make_coder_progress_artifact
 from tests.e2e.test_joint_delivery import setup_host
-from tests.manager.test_production_backend import _git, _ScriptedClientFactory
+from tests.manager.test_production_backend import _git, _git_output, _ScriptedClientFactory
 from tests.manager.test_production_backend import mysql_dsn as mysql_dsn
 
 
@@ -700,6 +700,18 @@ def test_nontransient_invalid_output_is_a_recoverable_native_source(
     assert plan.capture.patch == ""
     assert plan.capture.files == ()
     assert source_worktree.is_dir()
+
+    # Ordinary failed-Coder recovery shares the stable Product root allocator
+    # with pre-agent restarts, and preserves every previously occupied ref.
+    assert plan.target_branch_name is not None
+    original_target = plan.target_branch_name
+    _git("branch", original_target, "HEAD", cwd=project)
+    next_plan, _ = host.recovery_entry().propose_delivery(checkpoint)
+    assert next_plan.target_branch_name == original_target + "-2"
+    _git("branch", next_plan.target_branch_name, "HEAD", cwd=project)
+    third_plan, _ = host.recovery_entry().propose_delivery(checkpoint)
+    assert third_plan.target_branch_name == original_target + "-3"
+    assert _git_output("rev-parse", original_target, cwd=project) == plan.target_base_revision
 
 
 def test_inspection_does_not_initialize_missing_platform(tmp_path: Path) -> None:

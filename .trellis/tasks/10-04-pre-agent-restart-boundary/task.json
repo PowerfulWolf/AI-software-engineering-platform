@@ -2,7 +2,7 @@
   "id": "pre-agent-restart-boundary-20261004",
   "title": "修复首个 Coder 启动前恢复的 Git 分支与证据边界",
   "status": "in_progress",
-  "phase": "implementation",
+  "phase": "incremental_verified",
   "created_at": "2026-10-04T20:00:00+08:00",
   "owner": "codex",
   "scope": [
@@ -13,7 +13,12 @@
     "tests/recovery/test_restart_contracts.py",
     "tests/git/test_semantic_branches.py",
     ".trellis/spec/core/delivery-recovery.md",
-    ".trellis/spec/core/branch-naming.md"
+    ".trellis/spec/core/branch-naming.md",
+    "src/ai_software_engineer/recovery/entry.py",
+    "src/ai_software_engineer/recovery/resume.py",
+    "tests/recovery/test_delivery_continuation.py",
+    "tests/recovery/test_pre_execution_restart.py",
+    "tests/recovery/test_native.py"
   ],
   "constraints": [
     "不得直接修改生产 MySQL、既有 Task、StateEvent、Artifact、Lease 或审批记录",
@@ -23,7 +28,8 @@
   "verification": {
     "good": "真实 Git 仓库中已占用 recovery 分支时选择唯一 recovery-2，并能继续通过 fake Coder、QA、Reviewer",
     "base": "无分支占用时保持 recovery；无效 Git 根或 Git 查询异常 fail closed",
-    "bad": "sidecar 路径、活动租约、非唯一 queue admission、角色 artifact 或绕过 preparation digest 的恢复计划均被拒绝"
+    "bad": "sidecar 路径、活动租约、非唯一 queue admission、角色 artifact 或绕过 preparation digest 的恢复计划均被拒绝",
+    "results": "70 related tests passed; 3 receipt/lock fixtures repaired and passed; real Git/MySQL bootstrap joint delivery and ordinary recovery collision regressions passed; Ruff/format and 4 source-file mypy passed."
   },
   "rollback": "回退平台提交并重启 ase-console；不删除 sidecar 中已产生的恢复计划、Task、事件或工作区"
 }

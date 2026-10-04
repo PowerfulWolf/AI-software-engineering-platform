@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pymysql.cursors import DictCursor
 
 from ai_software_engineer.config import ProductionConfig
-from ai_software_engineer.domain import Task, TaskStatus
+from ai_software_engineer.domain import AgentRole, Task, TaskStatus, WorkItemStatus
 from ai_software_engineer.domain.event import StateEvent
 from ai_software_engineer.domain.task import task_matches_dispatch
 from ai_software_engineer.manager.delivery_checkpoint import (
@@ -43,7 +43,7 @@ from ai_software_engineer.work_queue.execution_store import (
     RoleQueueAdmission,
     _decode,
 )
-from ai_software_engineer.work_queue.models import QueuedWorkItem
+from ai_software_engineer.work_queue.models import QueueArtifactReceipt, QueuedWorkItem
 
 _PRE_AGENT_CONTEXT_BUDGET_REASON = (
     "BUDGET_EXHAUSTED: Required context exceeds the configured input budget; no automatic retry."
@@ -87,6 +87,7 @@ class CandidateRuntimeSnapshot:
     dispatch: DeliveryAllocation
     planner_dispatch: DispatchCommitRecord
     events: tuple[StateEvent, ...]
+    bootstrap_plan_receipt: QueueArtifactReceipt | None = None
 
 
 def validate_candidate_snapshot(
@@ -409,11 +410,11 @@ def read_pre_execution_snapshot(
             # silently ignore an un-reaped claim: the resume supervisor reaps
             # it first, preserving the LEASE_EXPIRED audit event.  A direct
             # read therefore fails closed on every remaining ACTIVE row.
-            cursor.execute(
-                "SELECT lease_id FROM work_queue_claims "
-                "WHERE task_id=%s AND state='ACTIVE'",
-                (task.id,),
-            )
+            startup = pre_agent_worktree_conflict or pre_agent_startup_failure
+            claim_query = "SELECT lease_id FROM work_queue_claims WHERE task_id=%s"
+            if startup:
+                claim_query += " AND state='ACTIVE'"
+            cursor.execute(claim_query, (task.id,))
             if cursor.fetchone() is not None:
                 raise RecoveryRejected("pre-execution source already has a role claim")
             cursor.execute(
@@ -421,6 +422,7 @@ def read_pre_execution_snapshot(
                 (task.id,),
             )
             admission_row = cursor.fetchone()
+            plan_receipt = None
             if admission_row is not None:
                 if not (pre_agent_worktree_conflict or pre_agent_startup_failure):
                     raise RecoveryRejected("pre-execution source already has a queue admission")
@@ -460,7 +462,7 @@ def read_pre_execution_snapshot(
                 if (
                     step.allocation_sha256 != admission.allocation_sha256
                     or step.boundary.task_id != task.id
-                    or step.boundary.role.value != "coder"
+                    or step.boundary.role is not AgentRole.CODER
                     or step.boundary.attempt != 1
                     or step.boundary.checkpoint_sequence != revision
                     or step.boundary.source_revision != task.base_ref
@@ -478,11 +480,29 @@ def read_pre_execution_snapshot(
                 if (
                     item.id != step.work_item.id
                     or item.task_id != task.id
-                    or item.role.value != "coder"
+                    or item.role is not AgentRole.CODER
                     or item.attempt != 1
                     or item.checkpoint_sequence != revision
                     or item.repository_id != dispatch.repository_id
-                    or item.status.value not in {"READY", "RETRY_SCHEDULED"}
+                    or item.status not in {WorkItemStatus.READY, WorkItemStatus.RETRY_SCHEDULED}
+                    or item.model_dump(
+                        exclude={
+                            "status",
+                            "dispatch_sequence",
+                            "wait_reason",
+                            "available_at",
+                            "updated_at",
+                        }
+                    )
+                    != step.work_item.model_dump(
+                        exclude={
+                            "status",
+                            "dispatch_sequence",
+                            "wait_reason",
+                            "available_at",
+                            "updated_at",
+                        }
+                    )
                 ):
                     raise RecoveryRejected("pre-agent queue item is not an unclaimed Coder")
                 cursor.execute(
@@ -494,6 +514,7 @@ def read_pre_execution_snapshot(
                 if accepted_rows:
                     _decode(accepted_rows[0], AcceptedRoleArtifact)
                     raise RecoveryRejected("pre-agent source already has an accepted role artifact")
+                plan_receipt = admission.legacy_artifacts[0]
             elif pre_agent_worktree_conflict or pre_agent_startup_failure:
                 # Queue tables are append-only and may outlive a failed
                 # admission transaction in an older deployment.  An orphaned
@@ -520,7 +541,9 @@ def read_pre_execution_snapshot(
                 if isinstance(dispatch, DispatchCommitRecord)
                 else resolve_planner_dispatch(dispatch, allocations, history)
             )
-            return CandidateRuntimeSnapshot(task, revision, dispatch, planner_dispatch, events)
+            return CandidateRuntimeSnapshot(
+                task, revision, dispatch, planner_dispatch, events, plan_receipt
+            )
     finally:
         connection.rollback()
         connection.close()

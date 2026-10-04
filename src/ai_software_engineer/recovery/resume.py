@@ -158,6 +158,15 @@ class DeliveryResumeController:
             current.task_id is not None and current.candidate_revision is not None
         )
         if diagnostic and not has_candidate_boundary:
+            if (
+                current.stage in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
+                and current.task_id is not None
+                and current.task_status in {TaskStatus.BLOCKED, TaskStatus.FAILED}
+            ):
+                # The recovery proposal validates the sealed original stages,
+                # retained work and current target preparation separately. A
+                # baseline diagnostic must not hide this exact approval gate.
+                return self._continue_coder_recovery(current, command)
             # A materialized NEW Task with no role execution is safe to rebind to
             # the current preparation through the exact pre-execution approval
             # seam.  Other drift remains read-only and must not be replayed.

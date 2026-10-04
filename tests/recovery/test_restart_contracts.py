@@ -1,5 +1,7 @@
 """Fail-closed restart classification and exact append-only approval contracts."""
 
+import fcntl
+import hashlib
 import json
 from datetime import timedelta
 from pathlib import Path
@@ -8,6 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 from jsonschema import Draft202012Validator
 
+from ai_software_engineer.artifacts import FileArtifactStore, seal_artifact
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
 from ai_software_engineer.context import ContextBudget
 from ai_software_engineer.domain import AgentRole, TaskStatus
@@ -20,11 +23,82 @@ from ai_software_engineer.recovery.models import (
     RecoveryRejected,
     VerifiedRecoveryDecision,
 )
+from ai_software_engineer.recovery.restart import _require_no_execution
 from ai_software_engineer.recovery.restart_records import PreExecutionRestartPlan
 from ai_software_engineer.recovery.store import FileRecoveryStore
+from ai_software_engineer.work_queue.models import QueueArtifactReceipt
+from tests.domain.factories import make_plan_artifact
 from tests.e2e.test_delivery_checkpoint import _checkpoint, _full_fields
 from tests.manager.test_dispatch_authority import _durable_facts
 from tests.recovery.test_authorization import make_plan
+
+
+@pytest.mark.parametrize("bad", [None, "receipt", "live-worker"])
+def test_pre_agent_plan_receipt_and_worker_lock_are_verified(
+    tmp_path: Path, bad: str | None
+) -> None:
+    _, _, dispatch, _, _ = _durable_facts(tmp_path)
+    task = dispatch.task
+    artifact = seal_artifact(
+        make_plan_artifact().model_copy(
+            update={
+                "task_id": task.id,
+                "source_revision": task.base_ref,
+            }
+        ),
+        validated_at=task.updated_at,
+    )
+    root = tmp_path / "sidecar"
+    FileArtifactStore(root / "artifacts").put(artifact)
+    (root / "contexts").mkdir()
+    events = (
+        StateEvent(
+            event_id="evt_pre_agent_plan",
+            task_id=task.id,
+            from_status=TaskStatus.PLANNING,
+            to_status=TaskStatus.IMPLEMENTING,
+            actor=AgentRole.ORCHESTRATOR,
+            reason="plan_validated",
+            artifact_ids=(artifact.artifact_id,),
+            source_revision=task.base_ref,
+            occurred_at=task.updated_at,
+            attempt=1,
+        ),
+    )
+    snapshot = module.CandidateRuntimeSnapshot(
+        task,
+        2,
+        dispatch,
+        dispatch,
+        events,
+        QueueArtifactReceipt(
+            artifact_id=artifact.artifact_id,
+            sha256="0" * 64 if bad == "receipt" else artifact.integrity.sha256,
+        ),
+    )
+    config = ProductionConfig(
+        platform_root=str(tmp_path / "platform"),
+        model_routes=(
+            ProviderRouteConfig(
+                provider="codex", model="offline", kind=ModelProviderKind.CODEX_CLI
+            ),
+        ),
+    )
+    locks = root / "state/queue-worker-locks"
+    locks.mkdir(parents=True)
+    lock = locks / (hashlib.sha256(task.id.encode()).hexdigest() + ".lock")
+    with lock.open("w") as stream:
+        if bad == "live-worker":
+            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if bad is None:
+            _require_no_execution(
+                config, root, snapshot, allow_plan_artifact=True, allow_pre_agent_context=True
+            )
+        else:
+            with pytest.raises(RecoveryRejected):
+                _require_no_execution(
+                    config, root, snapshot, allow_plan_artifact=True, allow_pre_agent_context=True
+                )
 
 
 def restart_plan(tmp_path: Path) -> PreExecutionRestartPlan:

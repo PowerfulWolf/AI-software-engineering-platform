@@ -24,7 +24,7 @@ from ai_software_engineer.domain import (
     TaskStatus,
     TeamRole,
 )
-from ai_software_engineer.domain.branch import BranchName, successor_branch
+from ai_software_engineer.domain.branch import BranchName, available_successor_branch
 from ai_software_engineer.domain.task import task_matches_dispatch
 from ai_software_engineer.git import GitWorktreeManager, WorktreeNotFound, WorktreeSpec
 from ai_software_engineer.knowledge.gaps import (
@@ -357,8 +357,10 @@ class NativeRecoveryEntry:
             rebound_paths,
             _task_commands(self.backend._facts(prepared_result).profile),
         )
-        target_branch_name = target_branch_name or successor_branch(
-            original.task.branch_name, "recovery"
+        target_branch_name = target_branch_name or available_successor_branch(
+            original.product.branch_name or original.task.branch_name,
+            "recovery",
+            is_occupied=manager.branch_exists,
         )
         if target_branch_name is not None:
             target_branch_name = TypeAdapter(BranchName).validate_python(target_branch_name)

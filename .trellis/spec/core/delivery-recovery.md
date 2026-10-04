@@ -2588,8 +2588,78 @@ The exact restart plan roots its successor branch in the approved ProductSpec br
 purpose branch is still occupied by an earlier successor in the same delivery lineage, the
 platform chooses the first unused numeric qualifier (`-2`, `-3`, …), includes it in the plan
 digest, and requires the same exact human approval before appending a fresh Task. A Task with any
-real Agent evidence, dirty workspace, claim or candidate is rejected from this path and routed to
+real Agent evidence, dirty workspace, ACTIVE claim or candidate is rejected from this path and routed to
 normal Coder recovery instead.
+
+### Scenario: terminal Coder recovery after baseline drift and bootstrap proof
+
+#### 1. Scope / Trigger
+
+A terminal failed Coder without a candidate may retain an older preparation after platform fixes
+advance main. The read-side diagnostic must not hide its exact interrupted-work recovery gate.
+Startup failures may also leave a valid deterministic plan and an expired first-Coder claim.
+
+#### 2. Signatures
+
+`DeliveryResumeController.resume(ResumeProjectDelivery) -> DeliveryResumeResult` routes terminal
+`BLOCKED/FAILED` Delivery and Task facts without a candidate to `_continue_coder_recovery` even
+when `status.diagnostic` is present. `CandidateRuntimeSnapshot.bootstrap_plan_receipt` is an
+internal optional `QueueArtifactReceipt`, carried from typed queue admission into
+`_require_no_execution(config, root, runtime, allow_plan_artifact=True)`.
+
+#### 3. Contracts
+
+Original stage artifacts and source preparation remain frozen; the native recovery service
+independently verifies original facts, retained patch, current target preparation and exact plan
+approval. The controller never replays the old terminal Task or overrides a diagnostic as success.
+Startup conflict/configuration failures reject any ACTIVE claim; ordinary context-budget and
+preparation-rebind proofs continue to reject every claim history. Only startup bootstrap accepts
+one validated admission, one Coder step/item and no accepted role artifact. The item must match
+the step's immutable fields; only scheduling fields `status`, `dispatch_sequence`, `wait_reason`,
+`available_at`, `updated_at` may differ. Its status must be `READY` or `RETRY_SCHEDULED`.
+The sole orchestrator plan must match event ID, Task base revision and admission receipt SHA-256.
+Worker lock parents must be nonsymlink and a live exclusive lock rejects before approval.
+
+#### 4. Validation & Error Matrix
+
+| Facts | Result |
+|---|---|
+| Terminal Coder + no candidate + baseline diagnostic | Propose verified recovery against current base; require exact approval |
+| Existing candidate | Existing independent verification/remediation path |
+| Nonterminal Task + diagnostic | Existing NEW rebind proof or human wait; no terminal recovery |
+| Sole bootstrap + normally reaped expired claim | Retain history and verify exact restart proof |
+| ACTIVE claim, live/symlink Worker lock, altered item or wrong plan receipt | Reject; no new role invocation |
+
+#### 5. Good / Base / Bad Cases
+
+Good: main advances after an interrupted Coder, its captured patch is preserved and a fresh exact
+recovery plan uses the approved Product root with the next unused numeric branch qualifier.
+Base: repeated proposal with unchanged facts never mutates old Task/events/worktrees.
+Bad: treating queue STARTED as a model call, ignoring an ACTIVE claim or trusting only a plan ID.
+
+#### 6. Tests Required
+
+`test_delivery_continuation.py::test_terminal_coder_preparation_drift_offers_exact_recovery`
+asserts no native replay. `test_restart_contracts.py::test_pre_agent_plan_receipt_and_worker_lock_are_verified`
+covers valid plan, wrong receipt and live lock. The real Git/MySQL
+`test_pre_execution_restart.py::test_worktree_collision_with_bootstrap_queue_restarts_on_unused_branch`
+rejects ACTIVE claim, reaps normally, completes fake Coder → QA → Reviewer → joint DONE, and
+asserts old Task/events/dirty worktree remain unchanged. `test_native.py` covers occupied ordinary
+recovery names allocating `-2` then `-3` without moving old refs. These fixtures do not establish
+that the separate live K1 requirement has passed native QA/Review.
+
+#### 7. Wrong vs Correct
+
+Wrong: return a generic drift wait before the terminal recovery seam, or append `-recovery` to
+an already numbered successor name. Correct: verify frozen source and current target separately;
+allocate from approved Product root and bind the exact new name/base/patch to approval.
+
+#### 存量数据处置与回滚
+
+No migration or direct database writes. While idle, load the fix, advance the target clone with
+fast-forward, generate a fresh plan via Continue and approve its current digest. Old plans remain
+auditable and become stale if the target base changes. Preserve all patches, Tasks, failures,
+claims and approvals. Revert the platform commit and restart while idle for rollback.
 
 ### Legacy linked-worktree context and unstarted successor counters
 

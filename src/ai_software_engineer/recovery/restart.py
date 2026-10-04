@@ -516,6 +516,11 @@ def _require_no_execution(
             or artifacts[0].artifact_id != expected_ids[0]
             or artifacts[0].kind is not ArtifactKind.PLAN
             or artifacts[0].producer.role is not AgentRole.ORCHESTRATOR
+            or artifacts[0].source_revision != runtime.task.base_ref
+            or (
+                runtime.bootstrap_plan_receipt is not None
+                and artifacts[0].integrity.sha256 != runtime.bootstrap_plan_receipt.sha256
+            )
         ):
             raise RecoveryRejected("pre-agent restart has unexpected planning artifacts")
     elif artifacts:
@@ -549,6 +554,7 @@ def _require_no_execution(
     if worktree.exists() or worktree.is_symlink():
         raise RecoveryRejected("pre-execution source has a retained workspace; inspect it first")
     lock_root = root / "state/queue-worker-locks"
+    _reject_symlinks(lock_root)
     lock_path = lock_root / f"{hashlib.sha256(runtime.task.id.encode()).hexdigest()}.lock"
     if lock_path.exists() or lock_path.is_symlink():
         if lock_path.is_symlink():

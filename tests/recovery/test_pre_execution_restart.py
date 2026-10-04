@@ -1,7 +1,8 @@
 """First context compilation failure must not require an invented Coder identity."""
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
+from itertools import groupby
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,7 @@ from ai_software_engineer.manager.delivery import (
 )
 from ai_software_engineer.manager.dispatch import ContinuationDispatchRecord
 from ai_software_engineer.manager.production_host import TeamHost
+from ai_software_engineer.manager.queue_capacity import production_role_queue
 from ai_software_engineer.multi_directory.models import JointDeliveryResult
 from ai_software_engineer.multi_directory.service import CreateRequirement
 from ai_software_engineer.recovery.models import RecoveryAuthorization, RecoveryScope
@@ -33,8 +35,102 @@ from ai_software_engineer.store import MySqlTaskRepository
 from ai_software_engineer.team_view.reader import ProductionTeamReader
 from ai_software_engineer.web_console.manager import _summarize
 from tests.e2e.test_joint_delivery import setup_host
+from tests.manager.test_production_backend import _git, _git_output
 from tests.manager.test_production_backend import mysql_dsn as mysql_dsn
 from tests.recovery.test_resume import _ResumeFactory
+
+
+@pytest.mark.mysql
+def test_worktree_collision_with_bootstrap_queue_restarts_on_unused_branch(
+    tmp_path: Path, mysql_dsn: str
+) -> None:
+    config, environment, models, projects = setup_host(tmp_path)
+    routes = _ResumeFactory(verification_fails=False)
+    host = TeamHost(
+        config=config,
+        environment=environment,
+        structured_clients=models,
+        delivery_route_adapters=routes,
+    )
+    entry = host.requirement_entry()
+    entry.coordinator = None
+    created = entry.create(
+        CreateRequirement(
+            name="Restart with retained branch",
+            repository_roots=tuple(map(str, projects)),
+        )
+    ).checkpoint
+    product = entry.reply(
+        ReplyToProduct(
+            delivery_id=created.delivery_id,
+            expected_checkpoint_sha256=created.checkpoint_sha256,
+            message="Update both greetings.",
+        )
+    ).checkpoint
+    branch = "ai/feature/restart-with-retained-branch"
+    # Both refs belong to a retained old execution. Never rename or remove them
+    # to make the new Coder startup succeed.
+    for name in (branch, branch + "-recovery"):
+        _git("branch", name, "HEAD", cwd=projects[0])
+    retained = tmp_path / "retained-old-coder"
+    _git("worktree", "add", str(retained), branch + "-recovery", cwd=projects[0])
+    (retained / "unsaved.txt").write_text("preserve this old work")
+    blocked = entry.approve(
+        ApproveProductSpec(
+            delivery_id=product.delivery_id,
+            expected_checkpoint_sha256=product.checkpoint_sha256,
+            approval_reference="original-product-approval",
+        )
+    ).checkpoint
+    source = blocked.children[0].checkpoint
+    assert source.failure_summary == "Delivery stopped safely (WorktreeAlreadyExists)"
+    assert source.task_id is not None
+    assert not routes.requests
+    queue = production_role_queue(mysql_dsn)
+    leases = tuple(
+        lease
+        for lease in queue.list_active_leases(now=datetime.now(UTC))
+        if lease.task_id == source.task_id
+    )
+    assert leases
+    with MySqlTaskRepository(mysql_dsn) as repository:
+        before = repository.get(source.task_id), repository.list_events(source.task_id)
+    # An ACTIVE claim cannot become absence merely because recovery needs it.
+    denied = host.resume_delivery(ResumeProjectDelivery(delivery_id=blocked.delivery_id))
+    assert isinstance(denied, JointDeliveryResumeResult)
+    assert denied.continuation.outcome.value == "WAITING_HUMAN"
+    assert "role claim" in denied.continuation.next_action
+    expired_at = max(lease.expires_at for lease in leases) + timedelta(seconds=1)
+    queue.reclaim_expired(now=expired_at, retry_at=expired_at + timedelta(seconds=1))
+    proposed = host.resume_delivery(ResumeProjectDelivery(delivery_id=blocked.delivery_id))
+    assert isinstance(proposed, JointDeliveryResumeResult)
+    assert proposed.continuation.outcome.value == "RESTART_APPROVAL_REQUIRED", proposed
+    plan = proposed.continuation.restart_plan
+    assert plan is not None and plan.restart_kind == "pre_agent_worktree_conflict"
+    assert plan.target_branch_name == branch + "-recovery-2"
+    completed = host.resume_delivery(
+        ResumeProjectDelivery(
+            delivery_id=blocked.delivery_id,
+            approved_plan_sha256=plan.plan_sha256,
+            approval_reference="exact-unused-branch-restart",
+        )
+    )
+    assert isinstance(completed, JointDeliveryResult)
+    assert completed.checkpoint.stage.value == "DONE", completed
+    with MySqlTaskRepository(mysql_dsn) as repository:
+        assert before == (repository.get(source.task_id), repository.list_events(source.task_id))
+    assert (retained / "unsaved.txt").read_text() == "preserve this old work"
+    assert _git_output("rev-parse", "HEAD", cwd=retained) == before[0].base_ref
+    roles = tuple(
+        request.role
+        for request in routes.requests
+        if request.task_id == f"task_continue_{plan.plan_sha256[:32]}"
+    )
+    assert [role for role, _ in groupby(roles)] == [
+        AgentRole.CODER,
+        AgentRole.QA,
+        AgentRole.REVIEWER,
+    ]
 
 
 @pytest.mark.mysql

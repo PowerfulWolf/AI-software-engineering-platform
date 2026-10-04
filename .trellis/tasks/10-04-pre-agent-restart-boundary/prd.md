@@ -14,12 +14,12 @@
 
 ## 验收标准
 
-- [ ] 已占用的稳定 recovery 分支选择 `recovery-2`，且不会生成递归分支名。
-- [ ] 非 Git sidecar 或 Git 查询异常不能被当成“分支不存在”。
-- [ ] 活动 lease、额外 queue 记录、非 plan artifact、Coder model route 或保留 worktree 会阻止恢复。
-- [ ] 首个 Coder 之前产生的合法 plan/context/admission 仍可在精确批准后继续。
-- [ ] preparation digest 校验始终使用当前 dispatch，禁止绕过上游批准链。
-- [ ] 增量测试、Ruff、mypy 和 diff 检查通过；规范记录 queue STARTED、context 编译、模型调用和 worktree 创建是不同事实。
+- [x] 已占用的稳定 recovery 分支选择 `recovery-2`，且不会生成递归分支名。
+- [x] 非 Git sidecar 或 Git 查询异常不能被当成“分支不存在”。
+- [x] 活动 lease、额外 queue 记录、非 plan artifact、Coder model route 或保留 worktree 会阻止恢复。
+- [x] 首个 Coder 之前产生的合法 plan/context/admission 仍可在精确批准后继续。
+- [x] preparation digest 校验始终使用当前 dispatch，禁止绕过上游批准链。
+- [x] 增量测试、Ruff、mypy 和 diff 检查通过；规范记录 queue STARTED、context 编译、模型调用和 worktree 创建是不同事实。
 
 ## 存量数据处置
 

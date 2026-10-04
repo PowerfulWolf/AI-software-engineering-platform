@@ -16,6 +16,11 @@ of trusted frozen Task intent. `CapturedChanges.branch_name` preserves the actua
 `RecoveryPlan.target_branch_name` is bound to exact plan approval.
 `NativeRecoveryEntry.propose(..., target_branch_name=None)` supports an explicit semantic
 qualifier when a recovery name is occupied; CLI exposes `--target-branch-name`.
+Both ordinary failed-Coder recovery and pre-agent restart call
+`available_successor_branch(approved_product.branch_name or source_task.branch_name,
+purpose, is_occupied=manager.branch_exists)` with the real target repository root.
+Numeric successor qualifiers are never fed back as a new business root when the approved
+Product name is available. Explicit names still reject occupied refs without choosing another name.
 
 ## 3. Contracts
 
