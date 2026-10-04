@@ -68,6 +68,7 @@ from ai_software_engineer.domain import (
     WorkItemStatus,
     derive_delivery_task,
 )
+from ai_software_engineer.git.policy import delivery_write_paths
 from ai_software_engineer.manager.baseline import (
     FileProjectBaselineCompilationStore,
     ProjectSpecBaseline,
@@ -1589,7 +1590,7 @@ def _task_constraints(
         )
     )
     return TaskConstraints(
-        allowed_paths=affected,
+        allowed_paths=delivery_write_paths(affected),
         denied_paths=denied,
         allowed_commands=_task_commands(profile),
         max_attempts=max_attempts,
@@ -1635,7 +1636,7 @@ def _delivery_role_permissions(
     """Compile the current machine-enforced policy for one delivery role."""
     return AgentPermissions(
         read_paths=("**",),
-        write_paths=allowed_paths if role is AgentRole.CODER else (),
+        write_paths=delivery_write_paths(allowed_paths) if role is AgentRole.CODER else (),
         commands=commands,
         network=NetworkAccess.MODEL_ENDPOINT_ONLY,
     )

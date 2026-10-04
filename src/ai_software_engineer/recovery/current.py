@@ -204,7 +204,10 @@ class NativeRecoveryFactsVerifier:
             ("merge-base", "--is-ancestor", source.base_revision, plan.target_base_revision),
             cwd=root,
         )
-        manager.verify_capture(
+        verify_capture = (
+            manager.verify_legacy_capture if plan.quarantined_paths else manager.verify_capture
+        )
+        verify_capture(
             plan.capture.to_capture(), plan.permissions, denied_paths=original.denied_paths
         )
         return NativeRecoveryFacts(original, target, profile, baseline)

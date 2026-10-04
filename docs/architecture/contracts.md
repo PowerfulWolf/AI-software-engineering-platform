@@ -967,3 +967,7 @@ recovery alone resolves it; Git blob/mode, checkpoint and original policy are bo
 supplement. The scope approval and recovery-plan approval remain separate. No running or historical
 Task permissions change. Optional omitted fields preserve historical wire/digest identity. See
 `.trellis/spec/core/delivery-recovery.md` D5.1 for rejection and existing-data handling.
+
+## 恢复计划的规范改动隔离
+
+`RecoveryPlan.quarantined_paths` 是 additive 可选字段，省略时旧 plan 与 approval digest 不变。非空时精确等于完整 capture 中所有 `.trellis` 路径、排序且唯一，并且必须 `input_mode=coder_reapply`。原规范改动只用于只读审计，完整旧补丁保留但隔离路径不得应用；新 Coder scope 没有规范写权限。旧同名路径自动纠正计划和未隔离的规范 capture 仍可读取校验，执行时要求重新提案。完整实现签名、错误矩阵、测试与存量操作见 `.trellis/spec/core/delivery-recovery.md`。

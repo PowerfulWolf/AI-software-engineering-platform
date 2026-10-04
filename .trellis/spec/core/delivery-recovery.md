@@ -578,92 +578,95 @@ cross-team/missing run/context, corrupted Product/approval/Designer/Planner/pare
 byte snapshots of project/sidecar. Dedicated MySQL test DB only; real source observation is separately
 recorded and is not independent QA/Review evidence for the original feature.
 
-## Scenario: exact stale-path rebinding in a recovery plan
+## Recovery path identity and quarantined native rules (2026-10-04)
 
-### 1. Scope / Trigger
+### Scope and signatures
 
-Use only while proposing recovery when an exact, non-glob Coder write path no longer exists in the
-current repository profile and the repository contains exactly one safe tracked file with the same
-basename. This repairs an obsolete Designer location without broadening Coder authority silently.
-
-### 2. Signatures
+Recovery must preserve complete repository-relative design paths. A missing file may be an
+intended new module; a matching basename does not prove relocation. Native proposal no longer
+produces `RecoveryPathRebinding`. Historical bindings remain readable/hash-verifiable, but
+`require_execution_supported()` rejects them and requests a newly proposed exact plan.
 
 ```python
-class RecoveryPathRebinding(DomainModel):
-    source_path: RelativePath
-    target_path: RelativePath
-    reason: Literal["missing_source_path_unique_match"]
-
-class RecoveryPlan(DomainModel):
-    path_rebindings: tuple[RecoveryPathRebinding, ...] | None
-
-RecoveryPlan.rebound_write_paths(source_paths: tuple[str, ...]) -> tuple[str, ...]
+is_protected_rule_path(path: str | PurePosixPath) -> bool
+delivery_write_paths(paths: tuple[str, ...]) -> tuple[str, ...]
+WorkspacePolicy.authorize_write(path) -> PurePosixPath
+WorkspacePolicy.authorize_historical_capture(path) -> PurePosixPath
+GitWorktreeManager.capture_legacy_changes(worktree, permissions, *,
+    denied_paths=(), base_revision=None) -> WorktreeChangeCapture
+GitWorktreeManager.verify_legacy_capture(capture, permissions, *, denied_paths=()) -> None
+RecoveryPlan.quarantined_paths: tuple[RelativePath, ...] | None
 ```
 
-`path_rebindings=None` is omitted from the canonical wire form so previously approved plan digests
-remain valid. A new plan binds every replacement into `plan_sha256` and requires the normal explicit
-human approval before any recovery Task is created.
+### Contracts
 
-### 3. Contracts
+Every `.trellis` path segment (casefolded, including macOS aliases and resolved in-root symlink targets), is hard read-only for
+role writes. `delivery_write_paths` removes explicit protected grants from new Task constraints
+and Coder permissions; broad globs still face `WorkspacePolicy.authorize_write`. Candidate
+finalization, progress, typed tools and ordinary capture/seed use this same gate. Native Codex
+prompts also state the restriction and the authorized `docs/` knowledge alternative. Native CLI
+execution retains its existing workspace sandbox; prompt text is not an OS exclusion rule, so
+Git/candidate validation remains mandatory and any native rule change cannot be accepted.
 
-- Only an exact missing write path can be replaced. Globs, existing source paths and paths present in
-  the captured patch are never rebound.
-- Candidate discovery uses the current repository's tracked-file inventory. It requires exactly one
-  same-basename match outside denied globs; zero or multiple matches leave the original policy
-  unchanged so later validation fails closed.
-- Rebinding is one-to-one, source and target must differ, and duplicate sources/targets reject.
-- The target Coder permissions, current-facts verifier, rebound ProjectRequest, execution Task
-  constraints and recovery Context must all use the same `rebound_write_paths(...)` result. The
-  Context names every approved `source_path -> target_path` correction explicitly.
-- Rebinding cannot expand read paths, commands, network, merge or state-change privileges.
+The dedicated historical capture is read-only and double-observed. It checks original read/write
+allowlists, explicit denies, ownership, containment, no-follow regular files, size, UTF-8, staging,
+revision and secret rules. It never grants write or seed authority. An old mistakenly allowed
+rule path can be archived; omitted or explicitly denied rule paths cannot be scope-approved.
+The source Task, Context, failure, complete patch and old approval remain immutable.
 
-### 4. Validation & Error Matrix
+`quarantined_paths` is absent for ordinary and historical plans, preserving their exact digest.
+When present, it is sorted, unique, nonempty and equals **all** protected capture files. It
+requires `input_mode=coder_reapply` and a target permission set without explicit protected grants.
+A protected capture with no quarantine is readable but rejected at execution admission.
+`NativeRecoveryFactsVerifier` rechecks the exact frozen source grants and complete source capture;
+`RecoveryAuthorizationService` requires the read-only legacy capability for such plans. The seed
+receipt binds a **clean** fresh target, not the old patch. Coder receives the entire required,
+nontruncated patch plus an explicit instruction never to reapply quarantined paths. New Task
+constraints are the approved target permissions. Full-path placement remains the approved design;
+necessary engineering knowledge belongs in already authorized `docs/` files.
 
-| Current repository fact | Result |
+Console `coder_recovery` approval facts show the exact target base/branch, clean reapplication mode
+and each rule path retained for audit only. All roles still need a real claim and the same
+candidate must pass independent QA and Review. This appends a successor Task within the **same
+Requirement**; it does not repeat ProductSpec approval or erase old failures.
+
+### Validation matrix and cases
+
+| Facts | Result |
 |---|---|
-| Missing `web_console/static/app.js`, unique tracked `team_view/app.js` | bind exact replacement in the plan |
-| Source exists or is captured | preserve source path; no rebinding |
-| Source is a glob | preserve glob; no basename inference |
-| Zero/multiple same-basename matches | preserve source; target-policy verification rejects if invalid |
-| Unique match is denied | preserve source; never authorize denied target |
-| Tampered/duplicate/cyclic replacement | plan validation rejects before persistence |
+| New `learning_collection/audit.py`, existing `knowledge/audit.py` | Preserve intended full path; no inferred replacement |
+| Ordinary safe interrupted source | Existing capture/seed behavior; quarantine omitted |
+| Old granted Trellis edits | Full audit capture + exact quarantine + clean reapply approval |
+| Protected capture without quarantine or legacy inferred rebinding | Readable, execution rejected; propose again |
+| New/denied protected path or protected scope request | Reject; cannot approve away hard policy |
+| Missing/extra/duplicate quarantine, non-reapply, protected target grant | Plan validation rejects |
+| Source drift, incomplete patch, dirty initial target, changed preparation/base | Reject before Coder invocation |
 
-### 5. Good / Base / Bad Cases
+Good: an old scope mistake is fully preserved while a new same-Requirement Task finishes on the
+current base. Base: no protected edits and old omitted fields retain digest identity. Bad: rename
+by basename, silently drop the rule patch, relax a deny, or apply the full patch to the new base.
 
-- Good: the user sees and approves one exact stale-to-current file correction, then the fresh Coder
-  Task can edit only that target.
-- Base: all planned paths still exist; `path_rebindings` remains absent and legacy digest behavior is
-  unchanged.
-- Bad: replace by directory similarity, silently add both paths, or turn the basename into `**/app.js`.
+### Required tests and wrong versus correct
 
-### 6. Tests Required
+`test_protected_recovery.py` covers exact digest/schema/context, hard target narrowing, complete
+read-only audit, stale source, deny precedence and failed seeding. `test_protected_native.py`
+creates actual legacy facts using real Git/MySQL, approves quarantine, finishes offline serial
+Coder → QA → Reviewer, and verifies original Task/events/worktree and native rules remain intact.
+`test_policy.py` covers exact/glob/nested/symlink hard rejection. `test_manager.py` reads immutable
+recovery envelopes and shows quarantine facts for single and joint Console approvals.
 
-- `tests/recovery/test_models.py`: plan digest, legacy omission, exact permission mapping and invalid
-  duplicate/authority expansion.
-- `tests/recovery/test_reapply.py`: unique tracked match, ambiguous/captured/denied/glob cases and
-  recovery task/context use of the approved target.
-- `tests/recovery/test_native.py`: an exhausted multi-attempt CoderProgress source can produce a
-  recovery plan without rewriting its original Task or checkpoint.
+Wrong: `basename == audit.py` is identity, or an approved design makes `.trellis` writable.
+Correct: keep full paths; audit old mistakes separately; explicitly approve clean recovery under
+current hard policy; independently validate the resulting candidate.
 
-### 7. Wrong vs Correct
+### 存量数据处置与回滚
 
-```python
-# Wrong: silently broaden a stale file permission.
-target_permissions.write_paths += ("**/app.js",)
-
-# Correct: bind one auditable exact replacement into the human-approved plan.
-plan.path_rebindings = (
-    RecoveryPathRebinding(
-        source_path="src/web_console/static/app.js",
-        target_path="src/team_view/app.js",
-    ),
-)
-```
-
-Wrong: assume `route.completed_at <= checkpoint.checkpointed_at` proves ownership. Legacy native
-checkpoints retain the initiating command timestamp, which may precede a run. Correct: bind explicit
-run/task/context/revision and state/approval chains; do not rewrite historical timestamps or infer
-provider failure cause from them.
+No SQL migration, direct database write, budget refund, source worktree cleanup or terminal reset.
+While idle, deploy the fix, fast-forward the target clone, restart the Host, submit formal Continue
+and approve its newly generated current plan digest. Old d9ab670f… K1 plan remains sealed and
+readable, but has both inferred rebinding and unquarantined rules, so it cannot execute. The new
+plan preserves every byte of the old capture and binds the current base and clean recovery policy.
+Revert this platform commit and restart while idle for rollback; all history remains.
 
 ## Increment C2 — seed a fresh repository checkout
 

@@ -12,9 +12,9 @@ from pydantic import ValidationError
 
 from ai_software_engineer.context import ContextBudget, ContextBudgetExceeded, FileContextBuilder
 from ai_software_engineer.domain import AgentRole
+from ai_software_engineer.manager.production_backend import _delivery_role_permissions
 from ai_software_engineer.recovery import RecoveryAuthorization, RecoveryPlan, RecoveryRejected
 from ai_software_engineer.recovery.context import recovery_context_sources, validate_reapply_context
-from ai_software_engineer.recovery.entry import _rebind_missing_write_paths
 from ai_software_engineer.recovery.models import CapturedChanges, digest
 from ai_software_engineer.recovery.records import RecoverySeedRecord
 from ai_software_engineer.recovery.store import FileRecoveryStore
@@ -22,41 +22,13 @@ from tests.recovery.test_authorization import Human, approval, make_plan
 from tests.recovery.test_task_record import record_for
 
 
-def test_missing_write_path_is_rebound_only_to_one_safe_tracked_match() -> None:
-    stale = "src/ai_software_engineer/web_console/static/app.js"
-    actual = "src/ai_software_engineer/team_view/app.js"
-    unchanged = "tests/team_view/ui.test.cjs"
-
-    paths, rebindings = _rebind_missing_write_paths(
-        (stale, unchanged),
-        tracked_paths=(actual, unchanged),
-        captured_paths=(),
-        denied_paths=(),
-    )
-
-    assert paths == (actual, unchanged)
-    assert tuple((item.source_path, item.target_path) for item in rebindings) == ((stale, actual),)
-    for tracked, captured, denied in (
-        ((actual, "legacy/app.js", unchanged), (), ()),
-        ((actual, unchanged), (stale,), ()),
-        ((actual, unchanged), (), ("src/**",)),
-    ):
-        paths, rebindings = _rebind_missing_write_paths(
-            (stale, unchanged),
-            tracked_paths=tracked,
-            captured_paths=captured,
-            denied_paths=denied,
-        )
-        assert paths == (stale, unchanged)
-        assert rebindings == ()
-    paths, rebindings = _rebind_missing_write_paths(
-        ("src/**/app.js",),
-        tracked_paths=(actual,),
-        captured_paths=(),
-        denied_paths=(),
-    )
-    assert paths == ("src/**/app.js",)
-    assert rebindings == ()
+def test_new_module_path_is_not_rebound_to_an_unrelated_same_basename() -> None:
+    # Recovery proposal and current-facts validation use this exact compiler.
+    intended = "src/ai_software_engineer/learning_collection/audit.py"
+    unrelated = "src/ai_software_engineer/knowledge/audit.py"
+    permissions = _delivery_role_permissions(AgentRole.CODER, (intended,), ())
+    assert permissions.write_paths == (intended,)
+    assert unrelated not in permissions.write_paths
 
 
 def test_approved_path_rebinding_is_visible_in_recovery_context(tmp_path: Path) -> None:

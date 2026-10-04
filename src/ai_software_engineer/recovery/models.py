@@ -29,6 +29,7 @@ from ai_software_engineer.git.capture import (
     MAX_CAPTURE_FILES,
     WorktreeChangeCapture,
 )
+from ai_software_engineer.git.policy import is_protected_rule_path
 from ai_software_engineer.git.ports import AttemptNumber, WorktreeRef
 from ai_software_engineer.manager.delivery_checkpoint import DeliveryId
 from ai_software_engineer.redaction import redact_text
@@ -350,6 +351,9 @@ class RecoveryPlan(DomainModel):
     target_permissions: AgentPermissions | None = None
     # None is omitted from wire/digest so historical plans retain their identity.
     path_rebindings: tuple[RecoveryPathRebinding, ...] | None = None
+    # Historical rule edits kept in the full audit patch, never reapplied.
+    # None preserves every legacy plan/approval digest.
+    quarantined_paths: tuple[RelativePath, ...] | None = Field(default=None, min_length=1)
     denied_paths: tuple[str, ...]
     created_at: AwareDatetime
     plan_sha256: StageSha256
@@ -398,11 +402,47 @@ class RecoveryPlan(DomainModel):
         return "task_recovery_" + self.plan_sha256[:32]
 
     def require_execution_supported(self) -> None:
+        protected = tuple(
+            item.path for item in self.capture.files if is_protected_rule_path(item.path)
+        )
+        if protected and self.quarantined_paths is None:
+            raise RecoveryRejected(
+                "旧恢复计划含 Trellis 规范改动; 请重新生成隔离这些改动的精确计划"
+            )
+        if self.effective_path_rebindings:
+            raise RecoveryRejected("旧恢复计划按同名文件改写路径; 请按完整路径重新生成恢复计划")
+        if any(
+            is_protected_rule_path(path) for path in self.effective_target_permissions.write_paths
+        ):
+            raise RecoveryRejected("恢复目标不能授予 Trellis 规范写权限; 请重新生成恢复计划")
         if self.retry_of_plan_sha256 is not None:
             raise RecoveryRejected(
                 "historical pre-provider retry is read-only; "
                 "propose from the latest actual Coder progress"
             )
+
+    @model_validator(mode="after")
+    def validate_quarantine(self) -> Self:
+        paths = self.quarantined_paths
+        if paths is None:
+            return self  # Read-only compatibility; execution admission rejects above.
+        protected = tuple(
+            sorted(item.path for item in self.capture.files if is_protected_rule_path(item.path))
+        )
+        if (
+            not paths
+            or paths != tuple(sorted(set(paths)))
+            or paths != protected
+            or self.input_mode != "coder_reapply"
+            or any(
+                is_protected_rule_path(path)
+                for path in self.effective_target_permissions.write_paths
+            )
+        ):
+            raise ValueError(
+                "quarantined rules require a complete exact audit and clean Coder reapplication"
+            )
+        return self
 
     @property
     def effective_target_permissions(self) -> AgentPermissions:

@@ -31,6 +31,16 @@ _PYTEST_SELECTOR = re.compile(
 _PYTEST_EXECUTABLES: Final = frozenset({"pytest", "py.test", "pytest-3"})
 
 
+def is_protected_rule_path(path: str | PurePosixPath) -> bool:
+    """Trellis belongs to the organization; no role grant makes it writable."""
+    return any(part.casefold() == ".trellis" for part in PurePosixPath(path).parts)
+
+
+def delivery_write_paths(paths: tuple[str, ...]) -> tuple[str, ...]:
+    """Remove explicit native-rule paths; broad globs still face the runtime gate."""
+    return tuple(path for path in paths if not is_protected_rule_path(path))
+
+
 class WorkspacePolicy:
     """Authorize normalized repository operations against effective Agent permissions."""
 
@@ -59,6 +69,15 @@ class WorkspacePolicy:
         """Return a normalized writable path or fail closed."""
         return self._authorize_path(path, self._write_paths, operation="write")
 
+    def authorize_historical_capture(self, path: str | PurePosixPath) -> PurePosixPath:
+        """Read-only audit of old grants, never permission to write or seed them.
+
+        Original read/write allowlists and explicit denies still apply. Only the
+        dedicated legacy-capture service uses this check to preserve old mistakes.
+        """
+        self.authorize_read(path)
+        return self._authorize_path(path, self._write_paths, operation="historical capture")
+
     def authorize_command(self, arguments: tuple[str, ...]) -> tuple[str, ...]:
         """Return safe argv when it starts with one complete allowed token prefix."""
         if not arguments or any(_is_shell_like(token) for token in arguments):
@@ -86,6 +105,16 @@ class WorkspacePolicy:
         normalized = _normalize_runtime_path(path)
         rendered = normalized.as_posix()
         self._validate_containment(normalized, operation=operation)
+        if operation == "write" and (
+            is_protected_rule_path(normalized)
+            or is_protected_rule_path(
+                (self._workspace_root / normalized)
+                .resolve()
+                .relative_to(self._workspace_root)
+                .as_posix()
+            )
+        ):
+            raise PathPolicyViolation(f"Trellis 规范为只读, 禁止 Agent 写入: {rendered}")
         if any(fnmatchcase(rendered, pattern) for pattern in self._denied_paths):
             raise PathPolicyViolation(f"{operation} path is explicitly denied: {rendered}")
         if not any(fnmatchcase(rendered, pattern) for pattern in allowed_patterns):

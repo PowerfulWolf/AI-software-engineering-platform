@@ -1,6 +1,6 @@
 """Policy-bound recovery authorization; deliberately no execution or model port."""
 
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from pydantic import ValidationError
 
@@ -50,6 +50,19 @@ class HumanRecoveryVerifier(Protocol):
     """Trusted channel; exact command replay must be idempotent across process loss."""
 
     def verify(self, command: RecoveryApprovalCommand) -> VerifiedRecoveryDecision: ...
+
+
+@runtime_checkable
+class LegacyRecoveryCaptureVerifier(Protocol):
+    """Read-only audit capability; no source writes, patch application or Agent access."""
+
+    def verify_legacy_capture(
+        self,
+        capture: WorktreeChangeCapture,
+        permissions: AgentPermissions,
+        *,
+        denied_paths: tuple[str, ...] = (),
+    ) -> None: ...
 
 
 class RecoveryAuthorizationService:
@@ -109,8 +122,15 @@ class RecoveryAuthorizationService:
 
     def _require_current(self, plan: RecoveryPlan) -> None:
         plan.validate_integrity()
+        plan.require_execution_supported()
         self._facts.validate(plan)
-        self._captures.verify_capture(
+        if plan.quarantined_paths:
+            if not isinstance(self._captures, LegacyRecoveryCaptureVerifier):
+                raise RecoveryRejected("恢复执行器缺少只读历史补丁审计能力")
+            verify_capture = self._captures.verify_legacy_capture
+        else:
+            verify_capture = self._captures.verify_capture
+        verify_capture(
             plan.capture.to_capture(),
             plan.permissions,
             denied_paths=plan.denied_paths,

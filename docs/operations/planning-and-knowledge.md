@@ -123,3 +123,9 @@ Artifact、Context、admission、知识记录、索引、原文和选择。不�
 
 原 T047–T049 任务编号、当时验证与部署状态，以及后续历史修正见
 [规划与知识运行原文](../archive/2026-09-28-planning-knowledge-source.md)。
+
+## 平台修复与同一需求恢复
+
+平台 Bug 修复不要求重新创建业务需求。部署后通过当前 Requirement 的继续、重试或精确恢复推进，保留 Product 审批、原 Task、失败、QA/Review 返工及全部执行记录。只有产品范围真的变更才重新确认受影响的产品内容；已运行角色的基线变化必须由正式恢复计划明确批准。追加 successor Task 是同一需求中的执行接续，不是新的 Requirement。
+
+恢复不得以同名文件猜测路径。旧 Coder 误改 `.trellis` 规范时，完整旧补丁和工作区保留，平台生成 `quarantined_paths` 精确列出审计保留但禁止应用的文件，并要求 `coder_reapply` 从干净新基线继续。审批卡显示新基线、分支、模式及隔离路径。Coder 只能在已授权 docs 内沉淀知识，不能批准自己的 QA/Review 或获得规范写权限。部署后点击继续取得新计划、核对并批准；不要批准旧错误计划，不要手工删除 dirty 文件或改 Task 状态。

@@ -758,13 +758,19 @@ def test_continue_sends_an_exact_scope_approval_separately_from_plan_approval(
 
 @pytest.mark.parametrize("joint", [False, True])
 @pytest.mark.parametrize("semantic", [False, True])
+@pytest.mark.parametrize("quarantine", [False, True])
 def test_continue_reads_the_persisted_recovery_envelope_through_the_recovery_entry(
     tmp_path: Path,
     joint: bool,
     semantic: bool,
+    quarantine: bool,
 ) -> None:
     adapter, host, entry = _adapter(tmp_path)
     plan = make_plan(tmp_path / "project")
+    if quarantine:
+        from tests.recovery.test_protected_recovery import _quarantine_plan
+
+        plan = _quarantine_plan(tmp_path)
     if semantic:
         capture = plan.capture.to_capture()
         capture = replace(capture, worktree=replace(capture.worktree, branch="ai/feature/trends"))
@@ -826,6 +832,12 @@ def test_continue_reads_the_persisted_recovery_envelope_through_the_recovery_ent
 
     assert result.approval is not None
     assert result.approval.kind == "coder_recovery"
+    if quarantine:
+        assert "从干净基线重新实现; 完整旧补丁作为历史输入, 不直接应用。" in result.approval.facts
+        assert any(
+            ".trellis/spec/core/contracts.md" in fact and "禁止重新应用" in fact
+            for fact in result.approval.facts
+        )
     if semantic:
         assert "目标分支 ai/feature/trends-recovery" in result.approval.facts
     assert result.approval.plan_sha256 == plan.plan_sha256

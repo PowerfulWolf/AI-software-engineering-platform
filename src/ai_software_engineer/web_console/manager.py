@@ -588,6 +588,15 @@ def _summarize(
                     f"保留改动 {len(recovery_plan.capture.files)} 个文件",
                     f"目标基线 {recovery_plan.target_base_revision}",
                     *(
+                        ("从干净基线重新实现; 完整旧补丁作为历史输入, 不直接应用。",)
+                        if recovery_plan.input_mode == "coder_reapply"
+                        else ()
+                    ),
+                    *(
+                        f"仅保留审计, 禁止重新应用的规范改动 {path}"
+                        for path in (recovery_plan.quarantined_paths or ())
+                    ),
+                    *(
                         (f"目标分支 {recovery_plan.target_branch_name}",)
                         if recovery_plan.target_branch_name is not None
                         else ()

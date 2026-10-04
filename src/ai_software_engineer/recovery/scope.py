@@ -9,6 +9,7 @@ from ai_software_engineer.git import (
     WorkspacePolicy,
     WorktreeRef,
 )
+from ai_software_engineer.git.policy import is_protected_rule_path
 from ai_software_engineer.recovery.models import (
     RecoveryRejected,
     RecoveryRequestedFile,
@@ -45,6 +46,16 @@ def inspect_recovery_scope_supplement(
             raise RecoveryRejected("requested scope does not bind the accepted Coder progress")
         requested_files = _requested_files(manager, worktree, original, request, changed_paths)
     for path in (*changed_paths, *(request.paths if request else ())):
+        if is_protected_rule_path(path):
+            # An old mistaken grant is auditable, never scope-expandable. New or
+            # requested protected paths are rejected rather than offered for approval.
+            if request is not None and path in request.paths:
+                raise RecoveryRejected("Trellis 规范只读, 不能申请恢复写入范围")
+            try:
+                policy.authorize_historical_capture(path)
+            except PathPolicyViolation as error:
+                raise RecoveryRejected(f"Trellis 规范改动不能获得恢复授权: {error}") from error
+            continue
         for authorize in (policy.authorize_read, policy.authorize_write):
             try:
                 authorize(path)

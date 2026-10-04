@@ -408,6 +408,49 @@ class GitWorktreeManager:
         if observed != capture:
             raise WorktreeCaptureRejected("preserved work no longer matches capture")
 
+    def capture_legacy_changes(
+        self,
+        worktree: WorktreeRef,
+        permissions: AgentPermissions,
+        *,
+        denied_paths: tuple[str, ...] = (),
+        base_revision: str | None = None,
+    ) -> WorktreeChangeCapture:
+        """Archive historical mistaken grants without authorizing their reuse.
+
+        This is a read-only fact. Ordinary capture, seed and candidate gates never
+        use this policy. Recovery must quarantine protected paths on a clean base.
+        """
+        self._validate_repository()
+        self._validate_repository_filters()
+        if worktree.role is not AgentRole.CODER or worktree.detached:
+            raise WorktreeCaptureRejected("only Coder work can be captured for recovery")
+        first = self._capture_changes_once(
+            worktree, permissions, denied_paths, base_revision=base_revision, historical_audit=True
+        )
+        second = self._capture_changes_once(
+            worktree, permissions, denied_paths, base_revision=base_revision, historical_audit=True
+        )
+        if first != second:
+            raise WorktreeCaptureRejected("worktree changed during capture")
+        return first
+
+    def verify_legacy_capture(
+        self,
+        capture: WorktreeChangeCapture,
+        permissions: AgentPermissions,
+        *,
+        denied_paths: tuple[str, ...] = (),
+    ) -> None:
+        observed = self.capture_legacy_changes(
+            capture.worktree,
+            permissions,
+            denied_paths=denied_paths,
+            base_revision=capture.base_revision,
+        )
+        if observed != capture:
+            raise WorktreeCaptureRejected("preserved work no longer matches capture")
+
     def seed_changes(
         self,
         capture: WorktreeChangeCapture,
@@ -541,6 +584,7 @@ class GitWorktreeManager:
         denied_paths: tuple[str, ...],
         *,
         base_revision: str | None = None,
+        historical_audit: bool = False,
     ) -> WorktreeChangeCapture:
         # recover validates full SHA, registered ownership, exact branch and HEAD;
         # validate the supplied ref as well, not merely its derived Task/attempt.
@@ -563,6 +607,9 @@ class GitWorktreeManager:
                 ("merge-base", "--is-ancestor", diff_base, worktree.head_revision), cwd=root
             )
         policy = WorkspacePolicy(root, permissions, denied_paths=denied_paths)
+        authorize_capture = (
+            policy.authorize_historical_capture if historical_audit else policy.authorize_write
+        )
         untracked_paths = _decode_nul_paths(
             self._run_git_bytes(("ls-files", "--others", "--exclude-standard", "-z"), cwd=root)
         )
@@ -605,7 +652,7 @@ class GitWorktreeManager:
             try:
                 path = raw_path.decode("utf-8")
                 policy.authorize_read(path)
-                policy.authorize_write(path)
+                authorize_capture(path)
                 content = read_capture_file(root, path, executable=fields[1] == b"100755")
                 # Bound the untrusted working-tree snapshot that recovery actually
                 # captures.  The committed base blob is already trusted repository
@@ -623,7 +670,7 @@ class GitWorktreeManager:
                 raise WorktreeCaptureRejected("duplicate capture path")
             try:
                 policy.authorize_read(path)
-                policy.authorize_write(path)
+                authorize_capture(path)
                 candidate = root / path
                 content = read_capture_file(
                     root, path, executable=bool(candidate.lstat().st_mode & 0o100)

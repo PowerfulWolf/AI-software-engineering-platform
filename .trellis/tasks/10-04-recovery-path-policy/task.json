@@ -1,0 +1,9 @@
+{
+  "id": "recovery-path-policy",
+  "name": "恢复路径身份与 Trellis 硬权限",
+  "status": "completed",
+  "phase": "validated_requirement_execution_paused",
+  "created_at": "2026-10-04",
+  "base_commit": "ff91c78b4d03e34caaa52854aa662624c2141b9d",
+  "completed_at": "2026-10-04"
+}

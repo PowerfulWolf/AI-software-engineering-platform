@@ -625,6 +625,25 @@
           ],
           "default": null,
           "title": "Retry Of Checkpoint Sha256"
+        },
+        "quarantined_paths": {
+          "anyOf": [
+            {
+              "items": {
+                "minLength": 1,
+                "pattern": "^[^\\x00-\\x1f]+$",
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": true
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Quarantined Paths"
         }
       },
       "required": [
@@ -639,7 +658,31 @@
         "kind"
       ],
       "title": "RecoveryPlan",
-      "type": "object"
+      "type": "object",
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "quarantined_paths"
+            ],
+            "properties": {
+              "quarantined_paths": {
+                "type": "array"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "input_mode"
+            ],
+            "properties": {
+              "input_mode": {
+                "const": "coder_reapply"
+              }
+            }
+          }
+        }
+      ]
     },
     "RecoveryScope": {
       "additionalProperties": false,

@@ -235,6 +235,14 @@ def recovery_context_sources(plan: RecoveryPlan) -> tuple[ContextSource, ...]:
         f"{item.target_path}; follow the target path. "
         for item in plan.effective_path_rebindings
     )
+    quarantine = (
+        "Do not reapply or modify these quarantined native rule paths: "
+        + ", ".join(plan.quarantined_paths)
+        + ". Their complete edits are retained only for audit. Trellis is read-only; "
+        "record necessary engineering knowledge in already authorized docs/ files. "
+        if plan.quarantined_paths
+        else ""
+    )
     origin = ContextSource(
         source_id="recovery.origin",
         uri=f"recovery://{plan.plan_sha256}",
@@ -253,8 +261,10 @@ def recovery_context_sources(plan: RecoveryPlan) -> tuple[ContextSource, ...]:
                 "Inspect and finish them. "
             )
             + path_corrections
-            + "Verify, commit a candidate and produce your own report. Old edits are not a "
-            "completed implementation or QA/Review verdict."
+            + quarantine
+            + "Verify and produce your own provisional implementation report or progress. "
+            "Do not run git add/commit; the platform validates and commits the candidate. "
+            "Old edits are not a completed implementation or QA/Review verdict."
         ),
         priority=10,
     )

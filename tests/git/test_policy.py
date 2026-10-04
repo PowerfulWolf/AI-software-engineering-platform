@@ -84,6 +84,40 @@ def _permissions() -> AgentPermissions:
     )
 
 
+@pytest.mark.parametrize(
+    "path",
+    (
+        ".trellis/spec/core/contracts.md",
+        "nested/.trellis/tasks/x.md",
+        ".TRELLIS/spec/core/contracts.md",
+        "nested/.TreLLis/tasks/x.md",
+    ),
+)
+@pytest.mark.parametrize(
+    "write_paths",
+    (
+        ("**",),
+        (
+            "**/.trellis/**",
+            ".trellis/**",
+            ".TRELLIS/**",
+            "nested/.TreLLis/**",
+            "nested/.trellis/**",
+        ),
+    ),
+)
+def test_trellis_write_is_hard_denied_even_when_explicitly_allowed(
+    tmp_path: Path, path: str, write_paths: tuple[str, ...]
+) -> None:
+    permissions = _permissions().model_copy(
+        update={"read_paths": ("**",), "write_paths": write_paths}
+    )
+    policy = WorkspacePolicy(tmp_path, permissions)
+    assert policy.authorize_read(path) == PurePosixPath(path)
+    with pytest.raises(PathPolicyViolation, match="只读"):
+        policy.authorize_write(path)
+
+
 def test_path_policy_enforces_separate_allowlists_and_deny_precedence(
     tmp_path: Path,
 ) -> None:
@@ -106,6 +140,17 @@ def test_path_policy_enforces_separate_allowlists_and_deny_precedence(
         policy.authorize_write("src/generated/client.py")
     with pytest.raises(PathPolicyViolation):
         policy.authorize_read("docs/architecture.md")
+
+
+def test_trellis_write_cannot_escape_hard_deny_through_a_symlink(tmp_path: Path) -> None:
+    protected = tmp_path / ".trellis/spec"
+    protected.mkdir(parents=True)
+    (tmp_path / "rules").symlink_to(protected, target_is_directory=True)
+    permissions = _permissions().model_copy(update={"read_paths": ("**",), "write_paths": ("**",)})
+    policy = WorkspacePolicy(tmp_path, permissions)
+    policy.authorize_read("rules/contracts.md")
+    with pytest.raises(PathPolicyViolation, match="只读"):
+        policy.authorize_write("rules/contracts.md")
 
 
 @pytest.mark.parametrize(

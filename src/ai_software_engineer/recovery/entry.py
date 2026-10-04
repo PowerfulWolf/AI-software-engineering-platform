@@ -4,8 +4,7 @@ import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from fnmatch import fnmatchcase
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from pydantic import TypeAdapter, ValidationError
@@ -27,6 +26,7 @@ from ai_software_engineer.domain import (
 from ai_software_engineer.domain.branch import BranchName, available_successor_branch
 from ai_software_engineer.domain.task import task_matches_dispatch
 from ai_software_engineer.git import GitWorktreeManager, WorktreeNotFound, WorktreeSpec
+from ai_software_engineer.git.policy import is_protected_rule_path
 from ai_software_engineer.knowledge.gaps import (
     KnowledgeGap,
     KnowledgeGapRaised,
@@ -64,7 +64,6 @@ from ai_software_engineer.recovery.models import (
     RecoveryApprovalCommand,
     RecoveryAuthorization,
     RecoveryInputMode,
-    RecoveryPathRebinding,
     RecoveryPlan,
     RecoveryRejected,
     RecoveryScope,
@@ -113,40 +112,6 @@ def _require_seed_recovery_route(config: ProductionConfig) -> ProviderRouteConfi
     if not routes:
         raise RecoveryRejected("seed recovery requires an explicit Coder Codex route")
     return routes[0]
-
-
-def _rebind_missing_write_paths(
-    allowed_paths: tuple[str, ...],
-    *,
-    tracked_paths: tuple[str, ...],
-    captured_paths: tuple[str, ...],
-    denied_paths: tuple[str, ...],
-) -> tuple[tuple[str, ...], tuple[RecoveryPathRebinding, ...]]:
-    """Replace only a missing exact path with one uniquely matching tracked basename."""
-
-    tracked = set(tracked_paths)
-    captured = set(captured_paths)
-    replacements: dict[str, str] = {}
-    rebindings: list[RecoveryPathRebinding] = []
-    for source in allowed_paths:
-        if any(token in source for token in "*?[") or source in tracked or source in captured:
-            continue
-        name = PurePosixPath(source).name
-        candidates = tuple(
-            path
-            for path in tracked_paths
-            if PurePosixPath(path).name == name
-            and not any(fnmatchcase(path, pattern) for pattern in denied_paths)
-        )
-        if len(candidates) != 1 or candidates[0] in allowed_paths:
-            continue
-        target = candidates[0]
-        replacements[source] = target
-        rebindings.append(RecoveryPathRebinding(source_path=source, target_path=target))
-    return (
-        tuple(replacements.get(path, path) for path in allowed_paths),
-        tuple(rebindings),
-    )
 
 
 def _append_exact_paths(current: tuple[str, ...], additions: tuple[str, ...]) -> tuple[str, ...]:
@@ -332,7 +297,7 @@ class NativeRecoveryEntry:
         elif approved_scope_sha256 is not None or scope_approval_reference is not None:
             raise RecoveryRejected("recovery scope approval does not match current changed paths")
         source_permissions = expanded_recovery_permissions(original.permissions, supplement)
-        capture = manager.capture_changes(
+        capture = manager.capture_legacy_changes(
             old,
             source_permissions,
             denied_paths=original.denied_paths,
@@ -342,20 +307,14 @@ class NativeRecoveryEntry:
         allowed_paths = constraints.allowed_paths if constraints is not None else ()
         if supplement is not None:
             allowed_paths = _append_exact_paths(allowed_paths, supplement.paths)
-        tracked_paths = tuple(
-            path
-            for path in manager._run_git(("ls-files", "-z"), cwd=Path(repository_root)).split("\0")
-            if path
+        quarantined_paths = tuple(
+            path for path in capture.changed_paths if is_protected_rule_path(path)
         )
-        rebound_paths, path_rebindings = _rebind_missing_write_paths(
-            allowed_paths,
-            tracked_paths=tracked_paths,
-            captured_paths=tuple(path for path, _ in capture.file_sha256s),
-            denied_paths=original.denied_paths,
-        )
+        if quarantined_paths:
+            input_mode = "coder_reapply"
         target_permissions = _delivery_role_permissions(
             AgentRole.CODER,
-            rebound_paths,
+            allowed_paths,
             _task_commands(self.backend._facts(prepared_result).profile),
         )
         target_branch_name = target_branch_name or available_successor_branch(
@@ -382,7 +341,7 @@ class NativeRecoveryEntry:
             scope_approval_reference=scope_approval_reference if supplement is not None else None,
             permissions=source_permissions,
             target_permissions=target_permissions,
-            path_rebindings=path_rebindings or None,
+            quarantined_paths=quarantined_paths or None,
             denied_paths=original.denied_paths,
             created_at=datetime.now(UTC),
         )

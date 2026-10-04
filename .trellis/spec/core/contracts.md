@@ -72,7 +72,7 @@ Task constraint 冲突，必须产生 `SPEC_CONFLICT` 并使 WorkItem 进入 `WA
 
 ### Machine workspace policy
 
-`WorkspacePolicy` 绑定一个 manager-owned role worktree root 和该 role 的 `AgentPermissions`。read/write allowlist 分别判断，Task deny glob 永远优先；absolute、`..`、`.git`、非 canonical path 和解析后越过 root 的 symlink 一律拒绝。任何遗漏路径都不能隐式扩权，必须进入显式恢复范围审批。command entry 解析为 token prefix，不能用 `git` 或字符串包含关系误授权 `git push`。policy violation 抛包含安全相对路径的稳定错误，调用方后续必须将拒绝路径/argv 写成 evidence；自然语言 prompt 不参与授权。
+`WorkspacePolicy` 绑定一个 manager-owned role worktree root 和该 role 的 `AgentPermissions`。read/write allowlist 分别判断，Task deny glob 永远优先；absolute、`..`、`.git`、非 canonical path 和解析后越过 root 的 symlink 一律拒绝。任何遗漏路径都不能隐式扩权，必须进入显式恢复范围审批。任意层级 `.trellis` 及解析到该目录的符号链接目标为硬只读，宽 glob、设计 affected_paths 或人工范围审批都不能授予写入；新 Task/Coder permission 编译剔除明确规范路径。历史误授权仅可专用只读 capture 审计，并经完整隔离计划从干净基线恢复，见 `delivery-recovery.md`。command entry 解析为 token prefix，不能用 `git` 或字符串包含关系误授权 `git push`。policy violation 抛包含安全相对路径的稳定错误，调用方后续必须将拒绝路径/argv 写成 evidence；自然语言 prompt 不参与授权。
 
 ### Artifact boundary
 
