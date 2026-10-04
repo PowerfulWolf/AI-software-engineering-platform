@@ -14,15 +14,27 @@ from typing import Protocol
 from pymysql.cursors import DictCursor
 
 from ai_software_engineer.domain.enums import TaskStatus, WorkItemStatus
+from ai_software_engineer.domain.task import Task
 from ai_software_engineer.domain.workforce import TaskLease
 from ai_software_engineer.manager.delivery_checkpoint import (
     FileProjectDeliveryCheckpointStore,
     ProjectDeliveryCheckpoint,
 )
+from ai_software_engineer.multi_directory.cancellation import (
+    FileRequirementCancellationStore,
+    RequirementCancellationQueue,
+    RequirementCancellationRejected,
+    RequirementCancellationService,
+    RequirementCancellationTarget,
+)
 from ai_software_engineer.multi_directory.models import JointCheckpoint
 from ai_software_engineer.multi_directory.store import JointJournal
 from ai_software_engineer.project_workspace import ProjectWorkspace
-from ai_software_engineer.store.mysql_repository import _decode_task, open_mysql_connection
+from ai_software_engineer.store.mysql_repository import (
+    MySqlTaskRepository,
+    _decode_task,
+    open_mysql_connection,
+)
 from ai_software_engineer.work_queue.models import QueuedWorkItem
 
 
@@ -55,8 +67,35 @@ class ProductionRequirementDeletionGuard:
                 stack.enter_context(_task_lock(sidecar / "state/queue-worker-locks", task_id))
             if self._targets(checkpoint) != targets:
                 raise RequirementDeletionRejected("工程执行记录已变化, 请刷新需求后再删除。")
+            if targets and isinstance(self.queue, RequirementCancellationQueue):
+                self._settle_cancelled(checkpoint, targets)
             self._require_inactive(targets)
             yield
+
+    def _settle_cancelled(
+        self, checkpoint: JointCheckpoint, targets: dict[str, tuple[Path, str]]
+    ) -> None:
+        assert isinstance(self.queue, RequirementCancellationQueue)
+        self._require_no_leases(targets)
+        # Read and validate every historical Task owner before opening a writer.
+        tasks = self._read_tasks(targets)
+        repositories = {
+            repo.root: repo.repository_id for repo in self.project.repository_registry().discover()
+        }
+        inventory = tuple(
+            RequirementCancellationTarget(task=tasks[task_id], repository_id=repositories[sidecar])
+            for task_id, (sidecar, _) in sorted(targets.items())
+        )
+        records = FileRequirementCancellationStore(
+            self.project.requirements_root / checkpoint.delivery_id
+        )
+        try:
+            with MySqlTaskRepository(self._dsn) as repository:
+                RequirementCancellationService(repository, self.queue, records).cancel(
+                    checkpoint, inventory
+                )
+        except RequirementCancellationRejected as error:
+            raise RequirementDeletionRejected(str(error)) from error
 
     def _targets(self, checkpoint: JointCheckpoint) -> dict[str, tuple[Path, str]]:
         self.project.validate_current()
@@ -99,15 +138,24 @@ class ProductionRequirementDeletionGuard:
     def _require_inactive(self, targets: dict[str, tuple[Path, str]]) -> None:
         if not targets:
             return
-        now = datetime.now(UTC)
-        if any(lease.task_id in targets for lease in self.queue.list_active_leases(now=now)):
-            raise RequirementDeletionRejected("需求仍有有效的工程执行许可, 请等待执行停止后删除。")
+        self._require_no_leases(targets)
         for task_id in targets:
             if any(
                 item.status is not WorkItemStatus.CLOSED
                 for item in self.queue.items_for_task(task_id)
             ):
                 raise RequirementDeletionRejected("需求仍有未结束的工程队列, 请先停止执行后删除。")
+        for task in self._read_tasks(targets).values():
+            if task.status not in {TaskStatus.DONE, TaskStatus.BLOCKED, TaskStatus.FAILED}:
+                raise RequirementDeletionRejected("需求的工程任务尚未终止, 请先停止执行后删除。")
+
+    def _require_no_leases(self, targets: dict[str, tuple[Path, str]]) -> None:
+        now = datetime.now(UTC)
+        if any(lease.task_id in targets for lease in self.queue.list_active_leases(now=now)):
+            raise RequirementDeletionRejected("需求仍有有效的工程执行许可, 请等待执行停止后删除。")
+
+    def _read_tasks(self, targets: dict[str, tuple[Path, str]]) -> dict[str, Task]:
+        tasks: dict[str, Task] = {}
         with (
             closing(open_mysql_connection(self._dsn)) as connection,
             connection.cursor(DictCursor) as cursor,
@@ -131,10 +179,8 @@ class ProductionRequirementDeletionGuard:
                     raise RequirementDeletionRejected(
                         "需求的执行任务归属或状态不一致, 暂不能删除。"
                     )
-                if task.status not in {TaskStatus.DONE, TaskStatus.BLOCKED, TaskStatus.FAILED}:
-                    raise RequirementDeletionRejected(
-                        "需求的工程任务尚未终止, 请先停止执行后删除。"
-                    )
+                tasks[task_id] = task
+        return tasks
 
 
 @contextmanager

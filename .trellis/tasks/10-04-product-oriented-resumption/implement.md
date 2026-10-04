@@ -26,3 +26,12 @@
 ## 存量处置、部署与回滚
 
 服务重启必须在提交推送后、无运行中 Operation/lease/process 时进行。两个 K1 只能通过正式产品删除入口退役，不能 SQL 改状态、删除目录、重开终态或清理 dirty worktree。回滚代码时保留 receipt/policy 的只读兼容读取和 Requirement tombstone；不要恢复旧需求身份或执行旧 unsafe plan。
+
+
+## 生产发布与存量验收
+
+- 主实现提交 `47003197eb31ecfd0ade0cd4cdf6f52db9351def` 已推送 main；目标 clone 干净 fast-forward 后，在无 active Operation 时重启，新 PID 66555，Console `delivery_ready=true`。
+- 删除前封存两 K1 /其他 DONE 需求的精确 checkpoint、1743 个审计文件 SHA、23 个 dirty 文件 SHA/HEAD，以及31个历史Task、127条StateEvent、61个队列项、266条队列事件、68条claim只读快照。隔离测试库与生产DSN精确不同。
+- 首次正式删除 `operation_7b5db7773de9d54c4131e372cc1de5e3` 安全拒绝 `REQUIREMENT_ACTIVE`。已关闭 K1 仍有3个旧 IMPLEMENTING Task及lease-expired RETRY_SCHEDULED队列。没有写tombstone或调用模型。
+- 已补明确用户撤销需求的 typed cancellation/queue settlement：用户决定封存为 Schema-valid resolution receipt，完整历史进程锁、authority fence、exact Task/queue snapshot 和有效 Lease 检查后终止旧 Task/关闭旧队列。原终态/历史/草稿不改写。独立只读复核通过。
+- 取消补充增量：新的 queue MySQL `17 passed in 1.90s`；真实公开删除取消+原有 guard MySQL 串行 `4 passed, 5 deselected in 0.89s`；取消/guard 非 MySQL `22 passed, 4 deselected`。三个变更源码标准 strict mypy、相关 Ruff/format/diffcheck通过。提交部署后记录成功Operation与前后校验。不会执行新需求。

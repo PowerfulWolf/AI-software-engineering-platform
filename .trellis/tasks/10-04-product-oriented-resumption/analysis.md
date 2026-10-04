@@ -9,3 +9,11 @@
 能力边界：第一版只自动续跑普通首次 Coder 的合法文本草稿一次；receipt 到预算/队列提交前的重启可重放。admission 发布之后调用不确定时保留现场并走工程处理及正式 recovery，不自动重绑，不退款，不虚构完成。后续扩大范围须新契约和公共组合回归。
 
 产品删除正式撤销继续/审批入口，不抹去工程审计。两个旧 K1 不再被用作未知特例的生产测试环境；后续业务交付等待用户重新决定。
+
+
+生产删除验收发现额外的存量失败模式：父需求已 CLOSED、最新 Task 为 BLOCKED，仍不能
+据此推断全部历史 Task/队列停止。旧 K1 有三条 lease-expired IMPLEMENTING +
+RETRY_SCHEDULED 留存。严格 guard 正确拒绝删除；缺少用户撤销需求后的工程终止服务是
+产品闭环缺口。修复必须把用户精确删除意图变成 immutable cancellation resolution，再在
+Task process locks / queue authority fence 下追加取消事件并关闭旧队列，不能通过 SQL 修状态、
+模型续跑或隐藏旧队列完成删除。原 Task/event/verdict 的历史事实保留，取消是新增审计事实。

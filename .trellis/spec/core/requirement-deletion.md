@@ -29,9 +29,10 @@ HTTP 删除或目录清理入口。tombstone 继续使用 `requirement-retiremen
   deleted checkpoint 重放成功且不改 tombstone 时间/字节，其他 digest 或 replaced 记录拒绝。
 - 有 Task 的历史必须配置 production deletion guard；guard 遍历所有联合及原生子交付历史，
   保留全部历史 Task，持有现有 `state/queue-worker-locks/<sha256(task_id)>.lock`，不清理代码。
-- Task 必须是 `DONE/BLOCKED/FAILED`，queue steps 必须 `CLOSED`，无有效 Lease 且进程锁可独占。
-  Task/queue facts 从 typed 端口与只读 SQL 获得，不构造 Task writer，不执行 DDL、不改 verdict。
-  缺失、漂移、跨仓归属、live process、有效 lease、未结束 queue 都拒绝，不能靠 UI 隐藏处理。
+- 最终删除准入时 Task 必须是 `DONE/BLOCKED/FAILED`，queue steps 必须 `CLOSED`，无有效 Lease 且进程锁可独占。
+  Task/queue facts 从 typed 端口与只读 SQL 获得。明确用户删除可先调用下节取消服务终止已停止的旧执行，
+  使用现有 TaskRepository/StateEvent 和队列 service，不能手工改 SQL 或 verdict。无取消能力的 guard 仍严格拒绝非终态/未closed队列。
+  缺失、漂移、跨仓归属、live process、有效 lease 都拒绝，不能靠 UI 隐藏处理。
 - 新建同名、同scope需求派生新的 delivery identity；仍保留当前输入的幂等创建，永不调用
   `retirements.restore(old_id)`，不复用旧 Product approval / design / plan / Task /候选或预算。
 - 已删 parent 的列表、计数、详情、child Tasks、Agent assignment 均从同一 retirement 事实过滤。
@@ -49,7 +50,7 @@ HTTP 删除或目录清理入口。tombstone 继续使用 `requirement-retiremen
 | exact idle BLOCKED/CLOSED | 写一次 tombstone，原 journal / Task / artifact / dirty代码不变 |
 | 相同删除重放 | 返回原 checkpoint，原 tombstone 字节不变 |
 | stale checkpoint / other Project | 拒绝，无 tombstone |
-| live Worker lock /有效 Lease /未closed queue/非terminal Task | `RequirementDeletionRejected`，Console `REQUIREMENT_ACTIVE`，中文下一步 |
+| live Worker lock /有效 Lease /不可核验的队列或任务 | `RequirementDeletionRejected`，Console `REQUIREMENT_ACTIVE`，中文下一步 |
 | deleted parent Continue/approval/restart | 拒绝，零新增模型调用 |
 | 同名新建 | 新 identity + 原产品准备流程，旧 tombstone/history永久保留 |
 | corrupted retirement/history | fail closed，不能用缺失数据冒充无活动 |
@@ -71,3 +72,67 @@ Bad：同名create撤销tombstone、直接删除sidecar、只过滤列表而chil
 检查Operation成功、reader列表/详情/计数/child一致，以及原历史/hash不变。不得直接生产SQL写入、
 删目录或清理dirty worktree。回滚代码需在空闲时进行，保留已删 retirement；旧版本同名create
 会复活记录，应暂停create直到修复版本重新加载，不能把回滚作为撤销删除。
+
+
+## Explicit deletion settles abandoned execution (2026-10-05)
+
+Scope: an exact DELETE_REQUIREMENT of a stopped BLOCKED/CLOSED parent explicitly withdraws
+all its historical delivery work. Closing the parent alone never proves its historical Tasks
+are terminal. Legacy lease-expired IMPLEMENTING Tasks with RETRY_SCHEDULED items must be
+cancelled through the typed application service; rejecting forever or editing SQL manually
+is not an acceptable product workflow.
+
+Interfaces: `RequirementCancellationReceipt` binds Project/Requirement/checkpoint, exact Task
+snapshots and queue inventory, requested user deletion and SHA-256; the immutable resolution
+receipt is written before cancelling. `MySqlRoleQueue.cancellation_fence(cursor, task_id)`
+uses the queue authority lock and refuses any valid Lease.
+`MySqlRoleQueue.close_cancelled_task(task, *, expected_items, cancellation_sha256, now)` requires the current
+exact terminal Task snapshot, closes abandoned work and appends REQUIREMENT_CANCELLED facts.
+`verify_cancelled_inventory(cursor, task, expected_items, *, cancellation_sha256, now)` also
+checks the sealed inventory under the same authority fence; it rejects new items or drift
+and accepts only a receipt-bound exact CLOSED successor with its cancellation event.
+The production deletion guard holds all historical Task process locks, checks all owners,
+Task snapshots and leases before mutation, then uses existing TaskRepository/StateEvent to
+terminate nonterminal Tasks as BLOCKED (NEW uses the existing FAILED edge) with a
+receipt-bound Chinese reason. Terminal Tasks
+and old events/verdicts/artifacts remain unchanged. No Worker/model call or new claim is made.
+Only after all Tasks and queues satisfy the original stop guard may retirement be committed.
+
+| Condition | Required behavior |
+| --- | --- |
+| Exact requested delete + stopped legacy Task + expired/released Lease | Seal resolution, append cancellation StateEvent, close queue, retire parent |
+| Live process lock / valid Lease / owner or snapshot drift | Refuse; no automatic termination of live work |
+| Receipt exists, Task/queue settlement interrupted | Revalidate unchanged scope and replay remaining steps; no model or duplicate event |
+| Queue close with nonterminal/mismatched Task | Refuse; no CLOSED fact |
+| Repeated deleted identity | Original tombstone and resolution preserved; no new event |
+
+Good: user deletes the old stopped K1 and its three abandoned retries are audited as cancelled.
+Base: already terminal/closed work needs no settlement. Bad: clearing queue without terminating
+Task, claiming a model Run to simulate cancellation, or using terminal cancellation to reopen work.
+
+Required incremental tests: manager cancellation process/lease/ownership/drift and partial
+restart cases; work_queue cancellation MySQL validates current terminal snapshot, active Lease
+rejection, expired owner fencing, idempotency and no new claim. Existing deletion negative guard
+remains strict when the optional cancellation service is unavailable. No production SQL patch.
+
+
+Receipt signatures and storage:
+
+```text
+RequirementCancellationReceipt(team_id, team_manifest_sha256, project_id,
+  project_manifest_sha256, delivery_id, checkpoint_sha256, human_action,
+  tasks: tuple[CancellationTaskInventory, ...], cancellation_sha256)
+CancellationTaskInventory(task, repository_id, task_snapshot_sha256,
+  state_revision, state_events_sha256, source_revision, queue_items,
+  queue_inventory_sha256)
+FileRequirementCancellationStore(requirement_root).find()/put(receipt)
+# <requirements>/<delivery_id>/cancellations/receipt.json (0600)
+```
+
+The receipt MUST NOT be a top-level JSON beside numbered JointCheckpoint files, because
+JointJournal validates all top-level JSON as its immutable sequence. Native Task scalar
+status and typed snapshot must agree; a deletion never silently repairs corrupted indexes.
+Current operator origin denotes a trusted local submission, not authenticated RBAC or a
+model self-approval. This session's submission is explicitly delegated by the user's request.
+Original StateEvents, queue history, verdicts and dirty worktrees remain unchanged; audit
+adds only exact cancellation resolution/state/queue events and the retirement tombstone.

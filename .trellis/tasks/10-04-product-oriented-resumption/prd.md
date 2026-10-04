@@ -21,6 +21,7 @@
 - [x] 同 Run fallback 不越过 dirty admission；无草稿服务故障仍能正常重试。
 - [x] Queue waiting/heartbeat/重试状态和产品页一致；无假运行、泛化“请产品批准工程问题”或八条历史截断。
 - [x] 增量 Ruff/mypy/contract/unit/public-entry/Git-MySQL/DOM 测试通过，独立复核；不跑全量。
+- [ ] 正式删除能审计终止旧需求遗留的已停止非终态 Task/队列；live process/有效 Lease 仍拒绝，不调用模型、不手工改库。
 - [ ] 提交推送、空闲部署，两个 K1 正式删除且产品界面/继续入口一致；其他需求不受影响，原审计事实不改写，没有新 K1 或模型调用。
 
 ## 允许路径与约束

@@ -8,22 +8,22 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal, Self, cast
 
-from pydantic import ValidationError, model_validator
+from pydantic import TypeAdapter, ValidationError, model_validator
 from pymysql.cursors import DictCursor
 
 from ai_software_engineer.artifacts import ArtifactStore
 from ai_software_engineer.artifacts.ports import ArtifactRef
 from ai_software_engineer.domain.artifact import Artifact, Sha256
-from ai_software_engineer.domain.enums import WorkItemStatus
+from ai_software_engineer.domain.enums import TaskStatus, WorkItemStatus
 from ai_software_engineer.domain.identity import ContextId, RepositoryId, RunId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
-from ai_software_engineer.domain.task import TaskId
+from ai_software_engineer.domain.task import Task, TaskId
 from ai_software_engineer.domain.workforce import (
     LeaseId,
     RoleAssignment,
@@ -112,6 +112,8 @@ class WorkforceFacts:
 CapacityReader = Callable[[DictCursor, datetime], WorkforceFacts]
 AuthorityLock = Callable[[DictCursor], None]
 _TABLES = ("work_queue_admissions", "work_queue_steps", "work_queue_accepted_artifacts")
+_CANCELLATION_DIGEST = TypeAdapter(Sha256)
+_TERMINAL_TASK_STATUSES = frozenset({TaskStatus.BLOCKED, TaskStatus.FAILED, TaskStatus.DONE})
 
 
 def read_queue_workforce(cursor: DictCursor, now: datetime) -> WorkforceFacts:
@@ -259,6 +261,247 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                 (task_id,),
             )
             return tuple(self._decode_item(row) for row in cursor.fetchall())
+
+    def cancellation_fence(self, cursor: DictCursor, task_id: str) -> None:
+        """Fence a user-cancelled Task mutation against current execution authority.
+
+        The caller owns all historical Task process locks and has already sealed
+        the exact deletion receipt. This callback is compatible with the existing
+        MySqlTaskRepository mutation fence; it neither terminates Task state nor
+        releases a claim itself.
+        """
+        self._lock_authority(cursor)
+        self._require_cancelled_task_idle(cursor, task_id, now=self._clock())
+
+    def close_cancelled_task(
+        self,
+        task: Task,
+        *,
+        expected_items: tuple[QueuedWorkItem, ...],
+        cancellation_sha256: str,
+        now: datetime,
+    ) -> tuple[QueuedWorkItem, ...]:
+        """Close abandoned work only after the exact Task was durably terminated.
+
+        Cancellation is not a Worker execution or a completion verdict. No claim,
+        Assignment, successor Run or accepted Artifact is created. Existing closed
+        work and immutable retry/wait history retain their original facts.
+        """
+        self._require_aware(now, "cancellation clock")
+        digest = _CANCELLATION_DIGEST.validate_python(cancellation_sha256)
+        if task.status not in _TERMINAL_TASK_STATUSES:
+            raise QueueConflict("取消队列前必须先将任务按审计事件结束")
+        with (
+            closing(open_mysql_connection(self._dsn)) as connection,
+            self._transaction(connection),
+            connection.cursor(DictCursor) as cursor,
+        ):
+            self._lock_authority(cursor)
+            cursor.execute(
+                "SELECT id,status,payload_json FROM tasks WHERE id=%s FOR UPDATE", (task.id,)
+            )
+            task_row = cursor.fetchone()
+            if task_row is None:
+                raise QueueNotFound("取消队列的任务不存在")
+            current_task = self._decode_model(task_row, "payload_json", Task)
+            if task_row["id"] != current_task.id or task_row["status"] != current_task.status.value:
+                raise QueueCorruption("取消队列的任务索引与正文不一致")
+            if current_task.to_wire() != task.to_wire():
+                raise QueueConflict("取消队列的任务快照已变化")
+            if now < task.updated_at:
+                raise QueueConflict("取消队列的时间早于任务结束时间")
+            items = self.verify_cancelled_inventory(
+                cursor, task, expected_items, cancellation_sha256=digest, now=now
+            )
+            # A stale event timestamp must not conceal a currently valid lease,
+            # and a caller-supplied future timestamp cannot skip a live owner.
+            live_now = self._clock()
+            self._require_aware(live_now, "cancellation authority clock")
+            expired_claims = self._require_cancelled_task_idle(
+                cursor, task.id, now=min(now, live_now)
+            )
+            item_by_id = {item.id: item for item in items}
+            for row in expired_claims:
+                claim_item = item_by_id.get(self._text(row, "work_item_id"))
+                assignment = self._decode_model(row, "assignment_json", RoleAssignment)
+                if claim_item is None or assignment.repository_id != claim_item.repository_id:
+                    raise QueueCorruption("取消队列的租约与仓库工作项不一致")
+            for row in expired_claims:
+                self._release_claim(
+                    cursor, self._text(row, "lease_id"), state="EXPIRED", ended_at=now
+                )
+            closed_items = []
+            for item in items:
+                if item.status is WorkItemStatus.CLOSED:
+                    closed_items.append(item)
+                    continue
+                closed = item.model_copy(
+                    update={
+                        "status": WorkItemStatus.CLOSED,
+                        "wait_reason": None,
+                        "available_at": None,
+                        "updated_at": now,
+                    }
+                )
+                self._update_item(cursor, closed)
+                self._append_event(
+                    cursor,
+                    closed,
+                    from_status=item.status,
+                    event_type="REQUIREMENT_CANCELLED",
+                    lease_id=None,
+                    occurred_at=now,
+                    detail={
+                        "cancellation_sha256": digest,
+                        "task_sha256": record_digest(task),
+                        "previous_work_item": item.to_wire(),
+                        "expired_lease_ids": [
+                            self._text(row, "lease_id")
+                            for row in expired_claims
+                            if row["work_item_id"] == item.id
+                        ],
+                    },
+                )
+                closed_items.append(closed)
+            return tuple(closed_items)
+
+    def verify_cancelled_inventory(
+        self,
+        cursor: DictCursor,
+        task: Task,
+        expected_items: tuple[QueuedWorkItem, ...],
+        *,
+        cancellation_sha256: str,
+        now: datetime,
+    ) -> tuple[QueuedWorkItem, ...]:
+        """Fence the receipt's exact queue inventory, including partial replay.
+
+        This shares the caller's SQL transaction. The deletion application uses
+        it in the Task mutation fence as well as the queue close transaction, so
+        an unclaimed scheduling change cannot expand the sealed cancellation.
+        """
+        self._require_aware(now, "cancellation inventory clock")
+        digest = _CANCELLATION_DIGEST.validate_python(cancellation_sha256)
+        self._lock_authority(cursor)
+        expected = {item.id: item for item in expected_items}
+        if len(expected) != len(expected_items) or any(
+            item.task_id != task.id or item.repository_scopes != (task.repository,)
+            for item in expected_items
+        ):
+            raise QueueConflict("删除凭据的队列范围与任务不一致")
+        cursor.execute(
+            "SELECT id,task_id,repository_id,status,payload_json FROM work_queue_items "
+            "WHERE task_id=%s ORDER BY checkpoint_sequence,attempt,id FOR UPDATE",
+            (task.id,),
+        )
+        items = tuple(self._cancellation_item(row, task) for row in cursor.fetchall())
+        if {item.id for item in items} != set(expected):
+            raise QueueConflict("删除凭据封存后的队列范围已变化")
+        repository_ids = {item.repository_id for item in items}
+        if len(repository_ids) > 1:
+            raise QueueCorruption("取消队列的任务跨越了不同仓库")
+        cursor.execute(
+            "SELECT id,task_id,payload_json,sha256 FROM work_queue_admissions "
+            "WHERE id=%s FOR UPDATE",
+            (task.id,),
+        )
+        admission_row = cursor.fetchone()
+        if admission_row is not None:
+            admission = _decode(admission_row, RoleQueueAdmission)
+            if any(item.repository_id != admission.repository_id for item in items):
+                raise QueueCorruption("取消队列的仓库与原始派发不一致")
+        for item in items:
+            original = expected[item.id]
+            if now < item.updated_at:
+                raise QueueConflict("取消队列的时间早于最近的调度事实")
+            replay = self._check_cancellation_replay(cursor, item, digest)
+            if item == original:
+                continue
+            closed = original.model_copy(
+                update={
+                    "status": WorkItemStatus.CLOSED,
+                    "wait_reason": None,
+                    "available_at": None,
+                    "updated_at": now,
+                }
+            )
+            if original.status is WorkItemStatus.CLOSED or item != closed or not replay:
+                raise QueueConflict("删除凭据封存后的队列事实已变化")
+        return items
+
+    def _require_cancelled_task_idle(
+        self, cursor: DictCursor, task_id: str, *, now: datetime
+    ) -> tuple[Mapping[str, object], ...]:
+        self._require_aware(now, "cancellation authority clock")
+        cursor.execute(
+            "SELECT lease_id,work_item_id,task_id,assignment_json,lease_json,expires_at "
+            "FROM work_queue_claims WHERE state='ACTIVE' AND "
+            "(task_id=%s OR work_item_id IN "
+            "(SELECT id FROM work_queue_items WHERE task_id=%s)) "
+            "ORDER BY lease_id FOR UPDATE",
+            (task_id, task_id),
+        )
+        rows = tuple(cursor.fetchall())
+        for row in rows:
+            lease = self._decode_model(row, "lease_json", TaskLease)
+            assignment = self._decode_model(row, "assignment_json", RoleAssignment)
+            if (
+                row["task_id"] != task_id
+                or lease.task_id != task_id
+                or assignment.task_id != task_id
+                or row["lease_id"] != lease.id
+                or assignment.lease_id != lease.id
+                or lease.assignment_id != assignment.id
+                or lease.agent_id != assignment.agent_id
+                or self._parse_time(self._text(row, "expires_at")) != lease.expires_at
+            ):
+                raise QueueCorruption("取消任务的租约身份或时限不一致")
+            if lease.expires_at > now:
+                raise QueueConflict("任务仍有有效执行租约, 不能删除需求")
+        if any(
+            lease.task_id == task_id and lease.expires_at > now
+            for lease in self._external_facts(cursor, now).leases
+        ):
+            raise QueueConflict("任务仍有有效执行租约, 不能删除需求")
+        return rows
+
+    def _cancellation_item(self, row: Mapping[str, object], task: Task) -> QueuedWorkItem:
+        item = self._decode_item(row)
+        if (
+            row["task_id"] != item.task_id
+            or item.task_id != task.id
+            or row["repository_id"] != item.repository_id
+            or row["status"] != item.status.value
+            or item.repository_scopes != (task.repository,)
+        ):
+            raise QueueCorruption("取消队列的工作项与任务仓库不一致")
+        return item
+
+    def _check_cancellation_replay(
+        self, cursor: DictCursor, item: QueuedWorkItem, digest: str
+    ) -> bool:
+        cursor.execute(
+            "SELECT payload_json FROM work_queue_events WHERE work_item_id=%s "
+            "AND event_type='REQUIREMENT_CANCELLED' ORDER BY sequence DESC LIMIT 1 FOR UPDATE",
+            (item.id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return False
+        try:
+            payload: object = json.loads(self._text(row, "payload_json"))
+            if not isinstance(payload, dict) or not isinstance(payload.get("detail"), dict):
+                raise ValueError("invalid cancellation event")
+            detail = payload["detail"]
+            saved_digest = _CANCELLATION_DIGEST.validate_python(detail["cancellation_sha256"])
+            saved_item = QueuedWorkItem.model_validate(payload["work_item"])
+        except (KeyError, ValueError, TypeError, ValidationError) as error:
+            raise QueueCorruption("需求取消事件正文损坏") from error
+        if saved_item != item or item.status is not WorkItemStatus.CLOSED:
+            raise QueueCorruption("需求取消事件与当前队列事实不一致")
+        if saved_digest != digest:
+            raise QueueConflict("已取消工作项绑定了另一份删除凭据")
+        return True
 
     def _find[T: DomainModel](self, table: str, key: str, model: type[T]) -> T | None:
         if table not in _TABLES:
