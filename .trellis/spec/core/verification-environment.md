@@ -674,3 +674,24 @@ Real OS checks require explicit `ASE_RUN_SANDBOX_TESTS=1` and
 `ASE_TEST_CODEX_EXECUTABLE=/absolute/codex`; no production DSN or model invocation is used.
 The official profile reference is <https://developers.openai.com/codex/permissions>; observed
 denial tests remain authoritative for the installed version. Historical Swift plans are unchanged.
+
+## Automatic Python capability selection (2026-10-04)
+
+When a terminal candidate is a Python repository and the approved Plan/implementation lineage
+already contains exact `tests/**/test_*.py::node` selectors covering every acceptance criterion,
+`CandidateVerificationEntry.propose()` derives the same `PythonMysqlSandboxCapability` that an
+operator would submit with `ase verify-propose --python-test`. File-only paths, symbolic `K1-Txx`
+labels, marker expressions and incomplete mappings are ignored; the plan then remains without a
+controlled capability and the UI must request explicit bounded selections. The helper reads only
+sealed Plan/implementation artifacts and the registered RepositoryProfile, never candidate source
+text or model prose.
+
+This automatic derivation still creates a new candidate-bound plan and requires exact human
+approval. It does not execute tests, reuse an old approval, broaden QA/Reviewer command tools or
+turn a provider failure into a verdict. A Python plan without this capability must not be presented
+as an executable QA plan: the next action names the missing exact selections in Chinese.
+
+Required regression: a Python candidate with selectors embedded in Plan test strategies gets one
+selection per exact node with the union of its criterion IDs; an incomplete or file-only mapping
+returns no capability. Swift selection continues to depend only on a regular top-level candidate
+`Package.swift`.

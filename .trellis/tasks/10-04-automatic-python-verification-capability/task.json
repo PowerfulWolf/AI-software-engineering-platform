@@ -1,0 +1,25 @@
+{
+  "id": "automatic-python-verification-capability-20261004",
+  "title": "Python 候选自动生成受控增量验证能力",
+  "status": "completed",
+  "phase": "incremental_verified",
+  "created_at": "2026-10-04T18:00:00+08:00",
+  "owner": "codex",
+  "scope": [
+    "src/ai_software_engineer/recovery/verification_entry.py",
+    "tests/recovery/test_python_verification_plan.py",
+    ".trellis/spec/core/verification-environment.md"
+  ],
+  "constraints": [
+    "候选、Plan、implementation artifact 和 RepositoryProfile 只读；不修改历史 Task、StateEvent、verdict、审批或候选提交",
+    "只接受 approved plan lineage 中的 tests/**/test_*.py::node 精确选择，文件级/符号级/不完整映射必须回人工",
+    "生成新 Python/MySQL capability 后仍需 exact plan 人工审批；不扩展 QA/Reviewer 原生命令工具",
+    "只运行恢复与验证计划增量测试，不运行全量测试"
+  ],
+  "verification": {
+    "good": "Python 候选从封存 Plan/implementation mapping 推导覆盖全部 criterion 的精确节点，生成新的受控 capability 计划并等待 exact approval。",
+    "base": "非 Python、Swift 候选和不完整/文件级 mapping 保持原行为，并要求显式人工选择。",
+    "bad": "从模型自由文本、目录、marker 或旧审批猜测测试范围，或给 QA/Reviewer 打开 shell/exec。"
+  },
+  "rollback": "回退平台提交并重启 ase-console；保留已有候选、计划、审批、QA/Review 和失败审计记录。"
+}

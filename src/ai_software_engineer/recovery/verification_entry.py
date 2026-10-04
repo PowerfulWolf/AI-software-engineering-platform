@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from collections.abc import Mapping, Set
 from contextlib import suppress
@@ -13,7 +14,7 @@ from pathlib import Path
 from ai_software_engineer.agents import StoredContextResolver
 from ai_software_engineer.agents.candidate_binding import candidate_read_scope
 from ai_software_engineer.agents.candidate_source import candidate_review_snapshot
-from ai_software_engineer.artifacts import FileArtifactStore
+from ai_software_engineer.artifacts import ArtifactStoreError, FileArtifactStore
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.context import ContextSource, FileContextStore
 from ai_software_engineer.domain import (
@@ -23,7 +24,12 @@ from ai_software_engineer.domain import (
     WorkItem,
     WorkItemStatus,
 )
-from ai_software_engineer.domain.artifact import QaReportArtifact, classify_qa_failure
+from ai_software_engineer.domain.artifact import (
+    ImplementationReportArtifact,
+    PlanArtifact,
+    QaReportArtifact,
+    classify_qa_failure,
+)
 from ai_software_engineer.domain.enums import QaFailureDisposition, QaReportStatus
 from ai_software_engineer.git import GitWorktreeManager
 from ai_software_engineer.knowledge.administration import list_gap_views
@@ -113,7 +119,7 @@ from ai_software_engineer.recovery.verification_records import (
     verification_inputs_are_current,
 )
 from ai_software_engineer.redaction import redact_text
-from ai_software_engineer.repository_profile import RepositoryProfile
+from ai_software_engineer.repository_profile import BuildSystem, RepositoryProfile
 from ai_software_engineer.runtime_workspace import load_repository_profile
 from ai_software_engineer.scheduling import ModelRouter, PortfolioScheduler
 from ai_software_engineer.scheduling.models import (
@@ -627,6 +633,74 @@ def _python_capability(
     )
 
 
+_PYTEST_NODE_IN_TEXT = re.compile(
+    r"tests/(?:[A-Za-z0-9_][A-Za-z0-9_.-]*/)*test_[A-Za-z0-9_.-]+\.py::"
+    r"[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)?"
+    r"(?:\[[A-Za-z0-9_.-]+\])?"
+)
+
+
+def _automatic_python_mysql_tests(
+    source: NativeCandidateSource,
+) -> tuple[PytestSelection, ...] | None:
+    """Extract exact incremental selectors from the approved plan.
+
+    A Python candidate must not silently fall through to a model-only verifier.  The
+    approved Plan artifact is the only source for automatic selectors; file-level,
+    marker-only and symbolic test labels are ignored.  If the approved mapping does
+    not cover every criterion with an exact ``tests/**/test_*.py::node`` selector,
+    the caller keeps the explicit human ``--python-test`` path instead of guessing.
+    """
+    preparation = source.stages.preparation
+    # Some historical verification fixtures predate the profile digest on the
+    # preparation record.  They cannot be trusted for candidate-derived
+    # capability selection, so retain the explicit human selector path instead
+    # of failing the entire resume with an AttributeError.
+    profile_sha256 = getattr(preparation, "repository_profile_sha256", None)
+    if profile_sha256 is None:
+        return None
+    profile = load_repository_profile(
+        Path(preparation.repository_workspace_root),
+        profile_sha256,
+    )
+    if not any(fact.system is BuildSystem.PYTHON for fact in profile.build_systems):
+        return None
+    artifacts = FileArtifactStore(
+        Path(source.stages.preparation.repository_workspace_root) / "artifacts",
+        read_only=True,
+    )
+    try:
+        plan = artifacts.get(source.inputs.plan_id)
+        implementation = artifacts.get(source.inputs.implementation_id)
+    except (ArtifactStoreError, OSError, ValueError):
+        return None
+    if not isinstance(plan, PlanArtifact) or not isinstance(
+        implementation, ImplementationReportArtifact
+    ):
+        return None
+    expected = {criterion.id for criterion in source.runtime.task.acceptance_criteria}
+    if {item.criterion_id for item in plan.content.acceptance_mapping} != expected:
+        return None
+
+    criteria_by_node: dict[str, set[str]] = {}
+    for mapping in plan.content.acceptance_mapping:
+        for node_id in _PYTEST_NODE_IN_TEXT.findall(mapping.test_strategy):
+            criteria_by_node.setdefault(node_id, set()).add(mapping.criterion_id)
+    # A completed Coder report may contain the full selectors even when the plan's
+    # prose uses a symbolic K1-Txx label.  Accept only the same exact node grammar.
+    for mapping in implementation.content.acceptance_mapping:
+        for test in mapping.tests:
+            if _PYTEST_NODE_IN_TEXT.fullmatch(test):
+                criteria_by_node.setdefault(test, set()).add(mapping.criterion_id)
+    covered = set().union(*criteria_by_node.values()) if criteria_by_node else set()
+    if covered != expected or len(criteria_by_node) > 32:
+        return None
+    return tuple(
+        PytestSelection(node_id=node_id, criterion_ids=tuple(sorted(criteria)))
+        for node_id, criteria in sorted(criteria_by_node.items())
+    )
+
+
 class CandidateVerificationEntry:
     def __init__(
         self,
@@ -1001,6 +1075,14 @@ class CandidateVerificationEntry:
         source = NativeCandidateSourceReader(self.config, self.environment).inspect(scope)
         if native_ui_scenario is not None and python_mysql_tests is not None:
             raise RecoveryRejected("Python/MySQL and native UI proposals must be separate")
+        if native_ui_scenario is None and python_mysql_tests is None:
+            # Python candidates need the same manager-owned controlled runner as an
+            # explicitly submitted ``verify-propose --python-test`` command.  Without
+            # this selection, Codex verifiers have no shell/file tools by design and
+            # would produce a predictable NOT_TESTED report.  The helper only derives
+            # exact selectors already present in the approved plan/artifact lineage;
+            # incomplete mappings remain an explicit human prerequisite.
+            python_mysql_tests = _automatic_python_mysql_tests(source)
         now = datetime.now(UTC)
         execution_id = (
             f"task_verify_{digest({'task': source.inputs.task_id, 'time': now.isoformat()})[:32]}"
