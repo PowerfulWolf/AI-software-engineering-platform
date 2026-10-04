@@ -19,7 +19,12 @@ class PreExecutionRestartPlan(DomainModel):
     # same exact approval/storage contract while making its source/target intent
     # explicit and preserving the old digest for legacy records.
     restart_kind: (
-        Literal["preparation_rebind", "pre_agent_worktree_conflict", "pre_agent_startup_failure"]
+        Literal[
+            "preparation_rebind",
+            "pre_agent_worktree_conflict",
+            "pre_agent_startup_failure",
+            "pre_agent_knowledge_timeout",
+        ]
         | None
     ) = None
     scope: RecoveryScope
@@ -29,6 +34,7 @@ class PreExecutionRestartPlan(DomainModel):
     source_checkpoint_sha256: StageSha256
     source_dispatch_id: NonEmptyStr
     source_dispatch_sha256: StageSha256
+    source_base_revision: FullCommit | None = None
     approved_stages_sha256: StageSha256
     parent_delivery_id: NonEmptyStr | None = None
     parent_checkpoint_sha256: StageSha256 | None = None
@@ -48,6 +54,8 @@ class PreExecutionRestartPlan(DomainModel):
             raise ValueError("restart parent identity must be complete")
         if self.context_budget.used_input_tokens != 0:
             raise ValueError("restart declares a budget, not fabricated context usage")
+        if self.restart_kind == "pre_agent_knowledge_timeout" and self.source_base_revision is None:
+            raise ValueError("knowledge restart must bind the original source base")
         return self
 
     def recompute_sha256(self) -> str:
@@ -56,6 +64,8 @@ class PreExecutionRestartPlan(DomainModel):
         # absent; only preparation-rebind plans add the discriminator.
         if self.restart_kind is None:
             payload.pop("restart_kind", None)
+        if self.source_base_revision is None:
+            payload.pop("source_base_revision", None)
         return digest(payload)
 
     def validate_integrity(self) -> None:

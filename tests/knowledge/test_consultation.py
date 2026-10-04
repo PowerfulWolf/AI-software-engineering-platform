@@ -153,7 +153,9 @@ def test_real_composition_seam_consults_and_replays(tmp_path: Path, role: TeamRo
         (TeamRole.PRODUCT, 300),
         (TeamRole.DESIGNER, 300),
         (TeamRole.PLANNER, 300),
-        (TeamRole.CODER, 120),
+        (TeamRole.CODER, 300),
+        (TeamRole.QA, 300),
+        (TeamRole.REVIEWER, 300),
     ],
 )
 def test_upstream_knowledge_calls_share_expanded_stage_window(

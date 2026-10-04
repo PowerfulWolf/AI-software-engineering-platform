@@ -24,6 +24,18 @@ schemas = {
 }
 # Pydantic validators are not emitted by model_json_schema. Preserve the wire
 # constraints instead of silently erasing them whenever a new field is added.
+schemas["pre-execution-restart"]["allOf"] = [
+    {
+        "if": {
+            "required": ["restart_kind"],
+            "properties": {"restart_kind": {"const": "pre_agent_knowledge_timeout"}},
+        },
+        "then": {
+            "required": ["source_base_revision"],
+            "properties": {"source_base_revision": {"type": "string"}},
+        },
+    }
+]
 console = schemas["console-operation"]
 definitions = console["$defs"]
 for name in ("CreateRequirementIntent", "UpdateRequirementIntent"):

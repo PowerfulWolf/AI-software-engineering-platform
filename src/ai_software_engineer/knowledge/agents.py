@@ -52,6 +52,15 @@ from ai_software_engineer.redaction import redact_text
 _CHINESE_GAP_QUESTION = "请补充当前工作缺少的关键事实。请说明可核验的依据。"
 _CHINESE_REQUIRED_DECISION = "请提供已核实的信息。请确认将此解答用于当前需求。"
 
+_DELIVERY_KNOWLEDGE_MAX_TIMEOUT_SECONDS = 600
+
+
+def knowledge_phase_timeout(role: TeamRole, timeout_seconds: int) -> int:
+    """Keep consultation inside the role/stage's admitted execution window."""
+    if role in {TeamRole.PRODUCT, TeamRole.DESIGNER, TeamRole.PLANNER}:
+        return timeout_seconds
+    return min(timeout_seconds, _DELIVERY_KNOWLEDGE_MAX_TIMEOUT_SECONDS)
+
 
 def _human_gap_question(question: str | None) -> str:
     """Keep human-facing gap prompts Chinese without translating unverified model text."""
@@ -518,11 +527,7 @@ class KnowledgeAwareStructuredClient:
                 self.binding,
                 self.snapshot,
                 enriched,
-                timeout_seconds=(
-                    timeout_seconds
-                    if self.binding.role in {TeamRole.PRODUCT, TeamRole.DESIGNER, TeamRole.PLANNER}
-                    else min(timeout_seconds, 120)
-                ),
+                timeout_seconds=knowledge_phase_timeout(self.binding.role, timeout_seconds),
             )
         except ValidationError as error:
             raise StructuredModelError(

@@ -166,6 +166,9 @@ class DeliveryResumeController:
                 # The recovery proposal validates the sealed original stages,
                 # retained work and current target preparation separately. A
                 # baseline diagnostic must not hide this exact approval gate.
+                restart = self._continue_pre_execution_restart(current, command)
+                if restart is not None:
+                    return restart
                 return self._continue_coder_recovery(current, command)
             # A materialized NEW Task with no role execution is safe to rebind to
             # the current preparation through the exact pre-execution approval
@@ -673,14 +676,24 @@ class DeliveryResumeController:
         # live Worker.  A non-expired claim is left untouched and still fails
         # the restart proof below.
         self._reclaim_expired_role_claims()
-        service = PreExecutionRestartService(self._config, self._environment, self._backend)
+        # The native entry retains its frozen source. A new exact restart plan
+        # must inspect the current target, as recovery and verification already do.
+        service = PreExecutionRestartService(
+            self._config, self._environment, self._verification.backend
+        )
         try:
             proposal = service.propose(current)
             if proposal is None:
                 return None
             plan = proposal.store().put_restart_plan(proposal.plan)
             if command.approved_plan_sha256 != plan.plan_sha256:
-                if plan.restart_kind == "pre_agent_worktree_conflict":
+                if plan.restart_kind == "pre_agent_knowledge_timeout":
+                    next_action = (
+                        "首个 Coder 的知识咨询超时，原任务已停止，未执行代码开发。"  # noqa: RUF001
+                        "请审核并批准精确重启计划；新 Task 将绑定已批准的新基线，"  # noqa: RUF001
+                        "保留原知识调用和失败历史，并重新经过独立 QA、Reviewer。"  # noqa: RUF001
+                    )
+                elif plan.restart_kind == "pre_agent_worktree_conflict":
                     next_action = (
                         "原 Task 在 Coder 启动前因目标分支或工作区已被其他保留任务占用而阻塞，"  # noqa: RUF001
                         "没有待恢复的代码。请审核并批准精确重启计划；平台会使用唯一 successor 分支，"  # noqa: E501, RUF001
@@ -718,7 +731,7 @@ class DeliveryResumeController:
             )
         # Attachment precedes execution. A crash or verifier knowledge wait remains reachable
         # through normal native continuation; no second hidden execution path is needed.
-        result = self._entry.resume(
+        result = self._entry.with_backend(self._verification.backend).resume(
             ResumeProjectDelivery(
                 delivery_id=current.delivery_id,
                 submitted_at=command.submitted_at,

@@ -16,6 +16,7 @@ from ai_software_engineer.knowledge.agents import (
     KnowledgeAwareStructuredClient,
     KnowledgeConsultationService,
     RepositoryInspection,
+    knowledge_phase_timeout,
 )
 from ai_software_engineer.knowledge.context import snapshot_from_sources
 from ai_software_engineer.knowledge.context_reads import (
@@ -275,7 +276,7 @@ class KnowledgeRunContextBuilder:
             binding,
             snapshot,
             {"task": task.to_wire(), "context": base.to_wire()},
-            timeout_seconds=min(agent.timeout_seconds, 120),
+            timeout_seconds=knowledge_phase_timeout(binding.role, agent.timeout_seconds),
         )
         if requires_frozen_reads(base):
             reads = retrieved_context_section(consultation, self.records)

@@ -98,6 +98,20 @@ def test_native_rules_and_consultation_are_in_exact_role_context(
     assert records.get("consultations", receipt.binding.run_id, KnowledgeConsultation) == receipt
 
 
+@pytest.mark.parametrize("role", (AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER))
+@pytest.mark.parametrize("role_timeout", (60, 1200))
+def test_native_knowledge_window_is_bounded_by_role_without_hidden_two_minute_cap(
+    tmp_path: Path,
+    role: AgentRole,
+    role_timeout: int,
+) -> None:
+    model = Model()
+    task, _, _, builder = _builder(tmp_path, model=model)
+    definition = _definitions()[role].model_copy(update={"timeout_seconds": role_timeout})
+    builder.build(task, definition, attempt=1)
+    assert model.timeouts == [min(role_timeout, 600)] * 2
+
+
 def test_active_retrieval_then_independent_native_delivery(tmp_path: Path) -> None:
     task, contexts, records, builder = _builder(tmp_path)
     artifacts = FileArtifactStore(tmp_path / "artifacts")

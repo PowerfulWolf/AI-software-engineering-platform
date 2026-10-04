@@ -50,6 +50,12 @@ _PRE_AGENT_CONTEXT_BUDGET_REASON = (
 )
 _PRE_AGENT_WORKTREE_CONFLICT_MARKER = "WorktreeAlreadyExists"
 _PRE_AGENT_STARTUP_FAILURE_MARKER = "not configured for live execution"
+PRE_AGENT_KNOWLEDGE_TIMEOUT_SUMMARIES = frozenset(
+    {
+        "coder knowledge preparation failed: TIMEOUT",
+        "coder knowledge preparation reached local time limit",
+    }
+)
 
 
 def retained_candidate_checkpoint(
@@ -338,6 +344,40 @@ def read_pre_execution_snapshot(
                 and events[1].to_status is TaskStatus.IMPLEMENTING
                 and events[1].reason == "plan_validated"
             )
+            pre_agent_knowledge_timeout = (
+                cp.stage in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
+                and cp.failed_stage is DeliveryStage.DELIVERING
+                and cp.failure_summary in PRE_AGENT_KNOWLEDGE_TIMEOUT_SUMMARIES
+                and cp.failure_code
+                in {
+                    DeliveryFailureCode.RETRY_BUDGET_EXHAUSTED,  # legacy projection
+                    DeliveryFailureCode.TRANSIENT_PROVIDER_FAILURE,
+                    DeliveryFailureCode.RESOURCE_UNAVAILABLE,
+                }
+                and revision == 3
+                and task.attempts == 1
+                and not task.retry_failures
+                and task.status is TaskStatus.BLOCKED
+                and len(events) == 3
+                and events[0].from_status is TaskStatus.NEW
+                and events[0].to_status is TaskStatus.PLANNING
+                and events[0].reason == "task_validated"
+                and events[1].from_status is TaskStatus.PLANNING
+                and events[1].to_status is TaskStatus.IMPLEMENTING
+                and events[1].reason == "plan_validated"
+                and events[2].from_status is TaskStatus.IMPLEMENTING
+                and events[2].to_status is TaskStatus.BLOCKED
+                and events[2].reason == f"TRANSIENT_INFRA: {cp.failure_summary}"
+                and len(events[1].artifact_ids) == 1
+                and events[2].artifact_ids == events[1].artifact_ids
+                and events[1].occurred_at <= events[2].occurred_at
+                and all(e.actor is AgentRole.ORCHESTRATOR for e in events)
+            )
+            bootstrap_failure = (
+                pre_agent_worktree_conflict
+                or pre_agent_startup_failure
+                or pre_agent_knowledge_timeout
+            )
             unstarted_rebind = (
                 allow_unstarted
                 and cp.stage is DeliveryStage.DELIVERING
@@ -355,6 +395,7 @@ def read_pre_execution_snapshot(
                 or unstarted_rebind
                 or pre_agent_worktree_conflict
                 or pre_agent_startup_failure
+                or pre_agent_knowledge_timeout
             ):
                 return None
             allocations = _read_allocations(cursor, history)
@@ -363,9 +404,7 @@ def read_pre_execution_snapshot(
                 (unstarted_rebind or pre_agent_worktree_conflict or pre_agent_startup_failure)
                 and isinstance(dispatch, ContinuationDispatchRecord)
             )
-            if invalid_dispatch and (
-                original_failure or pre_agent_worktree_conflict or pre_agent_startup_failure
-            ):
+            if invalid_dispatch and (original_failure or bootstrap_failure):
                 raise RecoveryRejected(
                     "pre-execution restart already attempted; inspect the new context failure"
                 )
@@ -377,7 +416,7 @@ def read_pre_execution_snapshot(
                 or cp.repository_root != task.repository
                 or not task_matches_dispatch(task, dispatch.task)
                 or (
-                    (original_failure or pre_agent_worktree_conflict or pre_agent_startup_failure)
+                    (original_failure or bootstrap_failure)
                     and (
                         cp.stage not in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
                         or cp.failed_stage is not DeliveryStage.DELIVERING
@@ -395,7 +434,7 @@ def read_pre_execution_snapshot(
                             for e in events
                         )
                         or (
-                            (pre_agent_worktree_conflict or pre_agent_startup_failure)
+                            bootstrap_failure
                             and (
                                 len(events[1].artifact_ids) != 1
                                 or not events[1].artifact_ids[0].startswith("art_plan_")
@@ -410,7 +449,7 @@ def read_pre_execution_snapshot(
             # silently ignore an un-reaped claim: the resume supervisor reaps
             # it first, preserving the LEASE_EXPIRED audit event.  A direct
             # read therefore fails closed on every remaining ACTIVE row.
-            startup = pre_agent_worktree_conflict or pre_agent_startup_failure
+            startup = bootstrap_failure
             claim_query = "SELECT lease_id FROM work_queue_claims WHERE task_id=%s"
             if startup:
                 claim_query += " AND state='ACTIVE'"
@@ -424,7 +463,7 @@ def read_pre_execution_snapshot(
             admission_row = cursor.fetchone()
             plan_receipt = None
             if admission_row is not None:
-                if not (pre_agent_worktree_conflict or pre_agent_startup_failure):
+                if not bootstrap_failure:
                     raise RecoveryRejected("pre-execution source already has a queue admission")
                 # T046 creates the immutable RoleQueueAdmission after the
                 # deterministic plan boundary and before the first Worker
@@ -464,12 +503,13 @@ def read_pre_execution_snapshot(
                     or step.boundary.task_id != task.id
                     or step.boundary.role is not AgentRole.CODER
                     or step.boundary.attempt != 1
-                    or step.boundary.checkpoint_sequence != revision
+                    or step.boundary.checkpoint_sequence
+                    != (revision - 1 if pre_agent_knowledge_timeout else revision)
                     or step.boundary.source_revision != task.base_ref
                 ):
                     raise RecoveryRejected("pre-agent queue step does not match source")
                 cursor.execute(
-                    "SELECT id,payload_json FROM work_queue_items WHERE task_id=%s "
+                    "SELECT id,task_id,status,payload_json FROM work_queue_items WHERE task_id=%s "
                     "ORDER BY checkpoint_sequence,attempt,id",
                     (task.id,),
                 )
@@ -478,13 +518,21 @@ def read_pre_execution_snapshot(
                     raise RecoveryRejected("pre-agent queue item is missing or ambiguous")
                 item = QueuedWorkItem.model_validate_json(item_rows[0]["payload_json"])
                 if (
-                    item.id != step.work_item.id
+                    item_rows[0]["id"] != item.id
+                    or item_rows[0]["task_id"] != item.task_id
+                    or item_rows[0]["status"] != item.status.value
+                    or item.id != step.work_item.id
                     or item.task_id != task.id
                     or item.role is not AgentRole.CODER
                     or item.attempt != 1
-                    or item.checkpoint_sequence != revision
+                    or item.checkpoint_sequence != step.boundary.checkpoint_sequence
                     or item.repository_id != dispatch.repository_id
-                    or item.status not in {WorkItemStatus.READY, WorkItemStatus.RETRY_SCHEDULED}
+                    or item.status
+                    not in (
+                        {WorkItemStatus.CLOSED}
+                        if pre_agent_knowledge_timeout
+                        else {WorkItemStatus.READY, WorkItemStatus.RETRY_SCHEDULED}
+                    )
                     or item.model_dump(
                         exclude={
                             "status",
@@ -515,6 +563,10 @@ def read_pre_execution_snapshot(
                     _decode(accepted_rows[0], AcceptedRoleArtifact)
                     raise RecoveryRejected("pre-agent source already has an accepted role artifact")
                 plan_receipt = admission.legacy_artifacts[0]
+            elif pre_agent_knowledge_timeout:
+                raise RecoveryRejected(
+                    "pre-Coder knowledge timeout has no verified queue admission"
+                )
             elif pre_agent_worktree_conflict or pre_agent_startup_failure:
                 # Queue tables are append-only and may outlive a failed
                 # admission transaction in an older deployment.  An orphaned

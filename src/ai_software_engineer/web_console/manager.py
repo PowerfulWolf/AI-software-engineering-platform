@@ -548,7 +548,17 @@ def _summarize(
                 title="批准 Coder 启动前重启",
                 facts=(
                     f"原任务 {restart.source_task_id}",
-                    "原任务在首次上下文编译时阻塞, Coder 尚未启动, 没有代码或候选需要恢复。",
+                    (
+                        "原任务在 Coder 知识咨询时超时; 知识模型调用已保留, "
+                        "代码开发尚未启动, 没有代码或候选需要恢复。"
+                        if restart.restart_kind == "pre_agent_knowledge_timeout"
+                        else "原任务在 Coder 启动前安全停止, 没有代码或候选需要恢复。"
+                    ),
+                    *(
+                        (f"原基线 {restart.source_base_revision}",)
+                        if restart.source_base_revision
+                        else ()
+                    ),
                     f"目标基线 {restart.target_base_revision}",
                     *(
                         (f"目标分支 {restart.target_branch_name}",)

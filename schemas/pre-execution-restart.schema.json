@@ -160,7 +160,8 @@
           "enum": [
             "preparation_rebind",
             "pre_agent_worktree_conflict",
-            "pre_agent_startup_failure"
+            "pre_agent_startup_failure",
+            "pre_agent_knowledge_timeout"
           ],
           "type": "string"
         },
@@ -203,6 +204,19 @@
       "pattern": "^[a-f0-9]{64}$",
       "title": "Source Dispatch Sha256",
       "type": "string"
+    },
+    "source_base_revision": {
+      "anyOf": [
+        {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Source Base Revision"
     },
     "approved_stages_sha256": {
       "pattern": "^[a-f0-9]{64}$",
@@ -311,6 +325,30 @@
   ],
   "title": "PreExecutionRestartPlan",
   "type": "object",
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "restart_kind"
+        ],
+        "properties": {
+          "restart_kind": {
+            "const": "pre_agent_knowledge_timeout"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "source_base_revision"
+        ],
+        "properties": {
+          "source_base_revision": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  ],
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ai-software-engineer.local/schemas/pre-execution-restart.schema.json"
 }

@@ -1,5 +1,73 @@
 # Explicit delivery recovery — T044
 
+## First Coder knowledge timeout before code execution (2026-10-04)
+
+### Scope and signatures
+
+`read_pre_execution_snapshot(config, environment, history)` recognizes the original Planner
+Task's first knowledge timeout before a Coder adapter, worktree or candidate exists.
+`PreExecutionRestartService.propose(checkpoint)` publishes
+`PreExecutionRestartPlan.restart_kind="pre_agent_knowledge_timeout"` under the existing
+immutable plan/exact authorization contract. `UnifiedProjectEntryService.with_backend(backend)`
+reopens the same catalog/namespace for the approved target after successor attachment; it does
+not modify the historical backend or bypass `resume`, claimed Workers, QA or Reviewer.
+
+### Contract
+
+- Require BLOCKED Task at attempt 1/revision 3, no retry failures, and exactly
+  `NEW→PLANNING(task_validated)→IMPLEMENTING(plan_validated)→BLOCKED`.
+  The terminal reason is exactly `TRANSIENT_INFRA: coder knowledge preparation reached local
+  time limit`, or the legacy `TRANSIENT_INFRA: coder knowledge preparation failed: TIMEOUT`.
+  All events bind the same Task/base/attempt, have orchestrator actors and ordered timestamps.
+  Initial event has no artifacts; the other events reference exactly the same sealed plan.
+- Read a consistent SQL snapshot. Require an original `DispatchCommitRecord`, verified sole
+  plan receipt/admission, one Coder step at checkpoint 2, one CLOSED WorkItem with matching
+  SQL ID/Task/status and payload, no ACTIVE claim, and no accepted role artifact. Released
+  knowledge claims are history; they are not code execution. A successor is ineligible for
+  another fresh restart. Existing `_require_no_execution` verifies plan hash, initial contexts,
+  absence of role routes/worktree and absence of a live Worker lock. Never erase evidence to
+  manufacture absence.
+- Proposals use the **current target** backend, while the historical native entry remains
+  frozen. Bind `source_base_revision` (original) separately from `target_base_revision` (approved
+  current base), preparation, config, parent/approved-stage chain, context budget and branch.
+  Source Task/event/dispatch/checkpoint digests must remain unchanged. The new discriminator
+  requires a non-null `source_base_revision` in Python and JSON Schema. Absent optional fields
+  remain absent from legacy digests.
+- Approval and dispatch recheck current facts inside the existing MySQL fence. Attach the new
+  Task before execution, then resume the same durable entry with the current target backend.
+  Later fresh Hosts recover the successor's frozen preparation and Task base from durable
+  history. The old Task remains terminal, with attempts, knowledge calls and failures retained.
+  Scope, acceptance, retry policy and independent QA/Review are copied without resetting the old
+  allowance or accepting knowledge as a verdict.
+
+### Validation matrix and tests
+
+| Facts | Result |
+| --- | --- |
+| Exact first knowledge timeout, zero code, no approval | current-base plan; no delivery adapter call |
+| Main or native rules advance after proposal | different exact plan; stale approval cannot execute |
+| Exact current plan approved | successor at target base; ordinary Coder→QA→Reviewer |
+| Unknown/extra event, retry, wrong source/plan or recursive successor | no fresh restart |
+| ACTIVE claim, bad/missing admission, wrong item state/index, accepted output, worktree/route/live lock | fail closed, retain history |
+
+Good: deploy a platform fix, approve the new exact baseline, and complete the same Requirement.
+Base: repeat proposal yields the same digest with no model call. Bad: conflate original and target
+bases, run the approved successor through the old frozen backend, or reopen the old terminal Task.
+`tests/recovery/test_pre_execution_restart.py::test_first_coder_knowledge_timeout_restarts_on_exact_current_base`
+uses isolated Git/MySQL and offline adapters to assert stale approval rejection, main/native-rule
+changes, unchanged old Task/events, same scope, independent roles and parent DONE.
+`test_restart_contracts.py` covers the absence matrix, optional digest compatibility and Schema.
+
+### Existing data and rollback
+
+No migration or SQL rewrite. Deploy the compatible version while operations are idle, fast-forward
+the target repository, Continue the original Requirement, inspect and approve the returned exact
+plan, then continue normal delivery. Legacy TIMEOUT misclassification remains sealed; new code
+can classify that exact historical shape without inventing a provider failure. Approval is an
+audited operator action, not an automatic Manager verdict. Roll back code only before consuming
+new plans; after new-kind records exist, preserve a compatible reader and prefer a forward fix.
+
+
 ## Expired first recovery invocation with an exactly approved workspace (2026-10-01)
 
 `RecoveryInterruptionService.propose() -> RecoveryInterruptionPlan` and

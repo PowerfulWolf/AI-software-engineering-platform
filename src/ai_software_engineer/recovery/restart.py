@@ -47,6 +47,7 @@ from ai_software_engineer.recovery.remediation import _snapshot
 from ai_software_engineer.recovery.restart_records import PreExecutionRestartPlan
 from ai_software_engineer.recovery.store import FileRecoveryStore, RecoveryRecordMissing
 from ai_software_engineer.recovery.verification_snapshot import (
+    PRE_AGENT_KNOWLEDGE_TIMEOUT_SUMMARIES,
     CandidateRuntimeSnapshot,
     read_pre_execution_snapshot,
 )
@@ -110,13 +111,30 @@ class PreExecutionRestartService:
             and checkpoint.failure_summary is not None
             and "not configured for live execution" in checkpoint.failure_summary
         )
-        pre_agent_restart = pre_agent_worktree_conflict or pre_agent_startup_failure
+        pre_agent_knowledge_timeout = (
+            checkpoint.stage in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
+            and checkpoint.failed_stage is DeliveryStage.DELIVERING
+            and checkpoint.task_id is not None
+            and checkpoint.task_revision == 3
+            and checkpoint.task_status is TaskStatus.BLOCKED
+            and checkpoint.candidate_revision is None
+            and checkpoint.failure_summary in PRE_AGENT_KNOWLEDGE_TIMEOUT_SUMMARIES
+            and checkpoint.failure_code
+            in {
+                DeliveryFailureCode.RETRY_BUDGET_EXHAUSTED,
+                DeliveryFailureCode.TRANSIENT_PROVIDER_FAILURE,
+                DeliveryFailureCode.RESOURCE_UNAVAILABLE,
+            }
+        )
+        pre_agent_restart = (
+            pre_agent_worktree_conflict or pre_agent_startup_failure or pre_agent_knowledge_timeout
+        )
         if not preparation_rebind and (
             (
                 checkpoint.failure_code is not DeliveryFailureCode.RETRY_BUDGET_EXHAUSTED
                 and not pre_agent_restart
             )
-            or checkpoint.task_revision != 2
+            or (checkpoint.task_revision != 2 and not pre_agent_knowledge_timeout)
         ):
             return None
         team = TeamWorkspace.initialize(
@@ -174,9 +192,9 @@ class PreExecutionRestartService:
         if preparation_rebind and prepared.preparation_sha256 == checkpoint.preparation_sha256:
             return None
         base = self.backend.delivery_base_revision(Path(scope.repository_root))
-        # This repair changes execution/context policy only, not source or scope. A rebase
-        # needs a different explicit plan contract; it must not sneak into a bug recovery.
-        if not preparation_rebind and (
+        # Only the explicit no-code preparation/knowledge variants may bind a
+        # newer base. Other legacy restart kinds retain their original contract.
+        if not (preparation_rebind or pre_agent_knowledge_timeout) and (
             base != runtime.task.base_ref
             or prepared.preparation_sha256 != checkpoint.preparation_sha256
         ):
@@ -191,12 +209,17 @@ class PreExecutionRestartService:
         branch_root = stages.product.branch_name or runtime.task.branch_name
         restart_kind: (
             Literal[
-                "preparation_rebind", "pre_agent_worktree_conflict", "pre_agent_startup_failure"
+                "preparation_rebind",
+                "pre_agent_worktree_conflict",
+                "pre_agent_startup_failure",
+                "pre_agent_knowledge_timeout",
             ]
             | None
         ) = (
             "preparation_rebind"
             if preparation_rebind
+            else "pre_agent_knowledge_timeout"
+            if pre_agent_knowledge_timeout
             else "pre_agent_worktree_conflict"
             if pre_agent_worktree_conflict
             else "pre_agent_startup_failure"
@@ -217,6 +240,9 @@ class PreExecutionRestartService:
             source_checkpoint_sha256=checkpoint.checkpoint_sha256,
             source_dispatch_id=runtime.dispatch.id,
             source_dispatch_sha256=runtime.dispatch.dispatch_sha256,
+            source_base_revision=(
+                runtime.task.base_ref if preparation_rebind or pre_agent_knowledge_timeout else None
+            ),
             approved_stages_sha256=digest(
                 [
                     stages.preparation.to_wire(),
@@ -307,6 +333,7 @@ class PreExecutionRestartService:
                         "preparation_rebind",
                         "pre_agent_worktree_conflict",
                         "pre_agent_startup_failure",
+                        "pre_agent_knowledge_timeout",
                     }
                     else original.base_ref
                 ),
@@ -441,7 +468,8 @@ def require_restart_dispatch(
         or dispatch.continuation_plan_sha256 != plan.plan_sha256
         or dispatch.source_task_id != plan.source_task_id
         or dispatch.source_dispatch_id != plan.source_dispatch_id
-        or dispatch.source_base_revision != plan.target_base_revision
+        or dispatch.source_base_revision != (plan.source_base_revision or plan.target_base_revision)
+        or dispatch.source_revision != dispatch.source_base_revision
         or dispatch.source_delivery_id != plan.scope.delivery_id
         or dispatch.repository_id != plan.scope.repository_id
         or dispatch.task.repository != plan.scope.repository_root
@@ -478,6 +506,14 @@ def restart_context(plan: PreExecutionRestartPlan) -> tuple[ContextSource, ...]:
             "provider execution setup was unavailable. This approved successor is a fresh "
             "execution of the same requirements on the approved current baseline; it does not "
             "reuse an Agent result or retained code."
+        )
+    elif plan.restart_kind == "pre_agent_knowledge_timeout":
+        content = (
+            f"Original Task {plan.source_task_id} stopped during knowledge consultation before "
+            "the first Coder execution. The original knowledge calls and terminal Task remain "
+            "historical facts, not implementation or verdicts. This exact approval binds a new "
+            "Task to the approved current baseline and bounded knowledge window; all original "
+            "acceptance and independent QA/Reviewer gates remain required."
         )
     else:
         content = (

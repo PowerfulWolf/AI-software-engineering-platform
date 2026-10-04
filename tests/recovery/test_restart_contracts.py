@@ -13,9 +13,11 @@ from jsonschema import Draft202012Validator
 from ai_software_engineer.artifacts import FileArtifactStore, seal_artifact
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
 from ai_software_engineer.context import ContextBudget
-from ai_software_engineer.domain import AgentRole, TaskStatus
+from ai_software_engineer.domain import AgentRole, TaskStatus, WorkItemStatus
 from ai_software_engineer.domain.event import StateEvent
+from ai_software_engineer.domain.retry_policy import DeliveryRetryFailure
 from ai_software_engineer.manager.delivery_checkpoint import DeliveryFailureCode, DeliveryStage
+from ai_software_engineer.orchestration.steps import RoleRunBoundary
 from ai_software_engineer.recovery import verification_snapshot as module
 from ai_software_engineer.recovery.models import (
     RecoveryApprovalCommand,
@@ -26,14 +28,209 @@ from ai_software_engineer.recovery.models import (
 from ai_software_engineer.recovery.restart import _require_no_execution
 from ai_software_engineer.recovery.restart_records import PreExecutionRestartPlan
 from ai_software_engineer.recovery.store import FileRecoveryStore
+from ai_software_engineer.work_queue.execution_store import (
+    AcceptedRoleArtifact,
+    QueuedRoleStep,
+    RoleQueueAdmission,
+    record_digest,
+)
 from ai_software_engineer.work_queue.models import QueueArtifactReceipt
+from ai_software_engineer.work_queue.ports import QueueCorruption
 from tests.domain.factories import make_plan_artifact
 from tests.e2e.test_delivery_checkpoint import _checkpoint, _full_fields
 from tests.manager.test_dispatch_authority import _durable_facts
 from tests.recovery.test_authorization import make_plan
+from tests.work_queue.test_dispatcher import item
 
 
-@pytest.mark.parametrize("bad", [None, "receipt", "live-worker"])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "legacy",
+        "unknown_tail",
+        "attempt",
+        "retry",
+        "event_source",
+        "extra_event",
+        "different_plan",
+        "active_claim",
+        "missing_admission",
+        "bad_admission_digest",
+        "extra_step",
+        "step_source",
+        "item_running",
+        "item_row",
+        "accepted_artifact",
+        "successor",
+    ],
+)
+def test_knowledge_timeout_restart_requires_complete_absence_proof(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fault: str | None,
+) -> None:
+    _, _, dispatch, _, _ = _durable_facts(tmp_path)
+    task = dispatch.task.model_copy(update={"status": TaskStatus.BLOCKED, "attempts": 1})
+    reason = (
+        "coder knowledge preparation failed: TIMEOUT"
+        if fault == "legacy"
+        else "coder knowledge preparation reached local time limit"
+    )
+    receipt = QueueArtifactReceipt(artifact_id="art_plan_timeout", sha256="a" * 64)
+    events = tuple(
+        StateEvent(
+            event_id=f"evt_knowledge_timeout_{i}",
+            task_id=task.id,
+            from_status=start,
+            to_status=end,
+            actor=AgentRole.ORCHESTRATOR,
+            reason=why,
+            artifact_ids=() if i == 0 else (receipt.artifact_id,),
+            source_revision=task.base_ref,
+            occurred_at=task.updated_at,
+            attempt=1,
+        )
+        for i, (start, end, why) in enumerate(
+            (
+                (TaskStatus.NEW, TaskStatus.PLANNING, "task_validated"),
+                (TaskStatus.PLANNING, TaskStatus.IMPLEMENTING, "plan_validated"),
+                (TaskStatus.IMPLEMENTING, TaskStatus.BLOCKED, "TRANSIENT_INFRA: " + reason),
+            )
+        )
+    )
+    cp = _checkpoint(
+        Path(task.repository),
+        **{
+            **_full_fields(),
+            "repository_id": dispatch.repository_id,
+            "dispatch_commit_id": dispatch.id,
+            "dispatch_commit_sha256": dispatch.dispatch_sha256,
+            "task_id": task.id,
+            "task_revision": 3,
+            "task_status": task.status,
+            "candidate_revision": None,
+            "stage": DeliveryStage.BLOCKED,
+            "failure_code": (
+                DeliveryFailureCode.RETRY_BUDGET_EXHAUSTED
+                if fault == "legacy"
+                else DeliveryFailureCode.RESOURCE_UNAVAILABLE
+            ),
+            "failure_summary": reason,
+            "failed_stage": DeliveryStage.DELIVERING,
+        },
+    )
+    if fault == "attempt":
+        task = task.model_copy(update={"attempts": 2})
+    elif fault == "retry":
+        task = task.model_copy(
+            update={
+                "retry_failures": (
+                    DeliveryRetryFailure(role=AgentRole.CODER, attempt=1, code="TIMEOUT"),
+                )
+            }
+        )
+    elif fault == "unknown_tail":
+        events = (*events[:2], events[2].model_copy(update={"reason": "unknown interruption"}))
+    elif fault == "event_source":
+        events = (*events[:2], events[2].model_copy(update={"source_revision": "f" * 40}))
+    elif fault == "different_plan":
+        events = (*events[:2], events[2].model_copy(update={"artifact_ids": ("art_plan_other",)}))
+    elif fault == "extra_event":
+        events = (*events, events[2])
+    work = item(task_id=task.id, repository_id=dispatch.repository_id, checkpoint_sequence=2)
+    step = QueuedRoleStep(
+        work_item=work,
+        allocation_sha256=dispatch.dispatch_sha256,
+        boundary=RoleRunBoundary(
+            task.id, AgentRole.CODER, 1, 2, "f" * 40 if fault == "step_source" else task.base_ref
+        ),
+    )
+    admission = RoleQueueAdmission(
+        task_id=task.id,
+        repository_id=dispatch.repository_id,
+        allocation_sha256=dispatch.dispatch_sha256,
+        legacy_artifacts=(receipt,),
+    )
+
+    def row(record: RoleQueueAdmission | QueuedRoleStep | AcceptedRoleArtifact) -> dict[str, str]:
+        key = (
+            record.task_id
+            if isinstance(record, RoleQueueAdmission)
+            else record.work_item.id
+            if isinstance(record, QueuedRoleStep)
+            else record.receipt.artifact_id
+        )
+        return {
+            "id": key,
+            "task_id": task.id,
+            "payload_json": record.model_dump_json(),
+            "sha256": record_digest(record),
+        }
+
+    admitted = row(admission)
+    if fault == "bad_admission_digest":
+        admitted["sha256"] = "0" * 64
+    closed = work.model_copy(
+        update={
+            "status": (WorkItemStatus.RUNNING if fault == "item_running" else WorkItemStatus.CLOSED)
+        }
+    )
+    item_row = {
+        "id": "work_foreign_001" if fault == "item_row" else work.id,
+        "task_id": task.id,
+        "status": closed.status.value,
+        "payload_json": closed.model_dump_json(),
+    }
+    accepted = AcceptedRoleArtifact(
+        task_id=task.id,
+        work_item_id=work.id,
+        lease_id="lease_timeout_001",
+        dispatch_sequence=0,
+        checkpoint_sequence=2,
+        run_id="run_timeout_001",
+        context_manifest_id="ctx_" + "a" * 64,
+        source_revision=task.base_ref,
+        receipt=receipt,
+    )
+    cursor, connection = MagicMock(), MagicMock()
+    connection.cursor.return_value.__enter__.return_value = cursor
+    cursor.fetchone.side_effect = [
+        {"lease_id": "live"} if fault == "active_claim" else None,
+        None if fault == "missing_admission" else admitted,
+    ]
+    cursor.fetchall.side_effect = [
+        [row(step)] * (2 if fault == "extra_step" else 1),
+        [item_row],
+        [row(accepted)] if fault == "accepted_artifact" else [],
+    ]
+    monkeypatch.setattr(module, "open_mysql_connection", lambda _: connection)
+    monkeypatch.setattr(ProductionConfig, "require_mysql_dsn", lambda *_: "offline-fixture")
+    monkeypatch.setattr(module, "_read_task_facts", lambda *_: (task, 3, events))
+    # A successor must not get another fresh allowance when it times out again.
+    allocations = {dispatch.id: object() if fault == "successor" else dispatch}
+    monkeypatch.setattr(module, "_read_allocations", lambda *_: allocations)
+    config = ProductionConfig(
+        platform_root=str(tmp_path / "platform"),
+        model_routes=(
+            ProviderRouteConfig(
+                provider="codex", model="offline", kind=ModelProviderKind.CODEX_CLI
+            ),
+        ),
+    )
+    if fault in {None, "legacy"}:
+        result = module.read_pre_execution_snapshot(config, {}, (cp,))
+        assert result and result.bootstrap_plan_receipt == receipt
+    elif fault in {"unknown_tail", "attempt", "retry", "extra_event", "different_plan"}:
+        assert module.read_pre_execution_snapshot(config, {}, (cp,)) is None
+    else:
+        with pytest.raises((RecoveryRejected, QueueCorruption)):
+            module.read_pre_execution_snapshot(config, {}, (cp,))
+    connection.rollback.assert_called_once()
+    connection.close.assert_called_once()
+
+
+@pytest.mark.parametrize("bad", [None, "receipt", "live-worker", "worktree", "context"])
 def test_pre_agent_plan_receipt_and_worker_lock_are_verified(
     tmp_path: Path, bad: str | None
 ) -> None:
@@ -84,6 +281,21 @@ def test_pre_agent_plan_receipt_and_worker_lock_are_verified(
             ),
         ),
     )
+    if bad == "worktree":
+        (Path(config.platform_root) / "worktrees" / dispatch.repository_id / task.id).mkdir(
+            parents=True
+        )
+    if bad == "context":
+        from ai_software_engineer.context import FileContextStore
+        from ai_software_engineer.orchestration import FileRunContextBuilder
+        from tests.domain.factories import make_agent
+
+        context = FileRunContextBuilder(Path(task.repository)).build(
+            task,
+            make_agent(),
+            attempt=2,
+        )
+        FileContextStore(root / "contexts").put(context)
     locks = root / "state/queue-worker-locks"
     locks.mkdir(parents=True)
     lock = locks / (hashlib.sha256(task.id.encode()).hexdigest() + ".lock")
@@ -176,6 +388,41 @@ def test_preparation_rebind_plan_is_an_exact_restart_record(tmp_path: Path) -> N
     schema = json.loads(Path("schemas/pre-execution-restart.schema.json").read_text())
     Draft202012Validator(schema).validate(plan.to_wire())
     assert store.get_restart_plan(plan.plan_sha256) == plan
+
+
+def test_knowledge_restart_binds_both_bases_and_preserves_legacy_digest(tmp_path: Path) -> None:
+    from pydantic import ValidationError
+
+    from ai_software_engineer.recovery.models import digest
+
+    legacy = restart_plan(tmp_path)
+    old_shape = legacy.model_dump(
+        mode="json",
+        exclude={
+            "plan_sha256",
+            "restart_kind",
+            "source_base_revision",
+        },
+    )
+    assert legacy.recompute_sha256() == digest(old_shape)
+    plan = legacy.model_copy(
+        update={
+            "restart_kind": "pre_agent_knowledge_timeout",
+            "source_base_revision": "b" * 40,
+        }
+    )
+    plan = plan.model_copy(update={"plan_sha256": plan.recompute_sha256()})
+    plan.validate_integrity()
+    schema = json.loads(Path("schemas/pre-execution-restart.schema.json").read_text())
+    validator = Draft202012Validator(schema)
+    validator.validate(plan.to_wire())
+    missing = plan.to_wire()
+    missing.pop("source_base_revision")
+    assert tuple(validator.iter_errors(missing))
+    with pytest.raises(ValidationError):
+        PreExecutionRestartPlan.model_validate(missing)
+    with pytest.raises(RecoveryRejected, match="digest"):
+        plan.model_copy(update={"source_base_revision": "c" * 40}).validate_integrity()
 
 
 @pytest.mark.parametrize(

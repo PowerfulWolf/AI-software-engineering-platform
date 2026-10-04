@@ -96,6 +96,12 @@ def _blocked_failure_code(delivery: BlockedResult) -> DeliveryFailureCode:
         return DeliveryFailureCode.PERMISSION_DENIED
     if delivery.classification is RetryClassification.PLATFORM_BUG:
         return DeliveryFailureCode.INVARIANT_VIOLATION
+    if delivery.classification is RetryClassification.TRANSIENT_INFRA:
+        return (
+            DeliveryFailureCode.RESOURCE_UNAVAILABLE
+            if delivery.reason.endswith(" knowledge preparation reached local time limit")
+            else DeliveryFailureCode.TRANSIENT_PROVIDER_FAILURE
+        )
     return DeliveryFailureCode.RETRY_BUDGET_EXHAUSTED
 
 
@@ -385,6 +391,12 @@ class UnifiedProjectEntryService:
         self._backend = backend
         self._catalog = catalog
         self._delivery_namespace = delivery_namespace
+
+    def with_backend(self, backend: ProjectDeliveryBackend) -> UnifiedProjectEntryService:
+        """Reopen the same durable entry against an explicitly approved target."""
+        return UnifiedProjectEntryService(
+            backend=backend, catalog=self._catalog, delivery_namespace=self._delivery_namespace
+        )
 
     def start(self, command: StartProjectDelivery) -> ProjectDeliveryResult:
         if command.additional_repository_roots:

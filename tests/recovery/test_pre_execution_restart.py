@@ -1,6 +1,7 @@
 """First context compilation failure must not require an invented Coder identity."""
 
 import json
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from itertools import groupby
 from pathlib import Path
@@ -8,6 +9,7 @@ from pathlib import Path
 import pytest
 from jsonschema import Draft202012Validator
 
+from ai_software_engineer.agents import AgentErrorCode, StructuredModelError, StructuredModelResult
 from ai_software_engineer.context import ContextBudget, FileContextStore
 from ai_software_engineer.domain import AgentRole, TaskStatus
 from ai_software_engineer.domain.retry_policy import TransientRetryPolicy
@@ -34,10 +36,160 @@ from ai_software_engineer.runtime import _default_case_id
 from ai_software_engineer.store import MySqlTaskRepository
 from ai_software_engineer.team_view.reader import ProductionTeamReader
 from ai_software_engineer.web_console.manager import _summarize
-from tests.e2e.test_joint_delivery import setup_host
+from tests.e2e.test_joint_delivery import JointModels, setup_host
 from tests.manager.test_production_backend import _git, _git_output
 from tests.manager.test_production_backend import mysql_dsn as mysql_dsn
-from tests.recovery.test_resume import _ResumeFactory
+from tests.recovery.test_resume import _KnowledgeFixtureFactory, _ResumeFactory
+
+
+class _FirstCoderKnowledgeTimeout(JointModels):
+    fail = True
+
+    def complete(
+        self,
+        *,
+        instructions: str,
+        input_payload: Mapping[str, object],
+        output_schema: Mapping[str, object],
+        timeout_seconds: int,
+        input_images: tuple[Path, ...] = (),
+    ) -> StructuredModelResult:
+        bound = input_payload.get("binding")
+        coder = isinstance(bound, dict) and bound.get("role") == "coder"
+        title = output_schema["title"]
+        if self.fail and coder and title == "KnowledgeIntent":
+            return StructuredModelResult(payload={"queries": ["delivery policy"]}, duration_ms=0)
+        if self.fail and coder and title == "KnowledgeAssessment":
+            self.fail = False
+            raise StructuredModelError(
+                AgentErrorCode.TIMEOUT,
+                "local knowledge execution window exhausted",
+                transient=False,
+                timeout_kind="local_execution_limit",
+            )
+        return super().complete(
+            instructions=instructions,
+            input_payload=input_payload,
+            output_schema=output_schema,
+            timeout_seconds=timeout_seconds,
+            input_images=input_images,
+        )
+
+
+@pytest.mark.mysql
+def test_first_coder_knowledge_timeout_restarts_on_exact_current_base(
+    tmp_path: Path,
+    mysql_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, environment, _, projects = setup_host(tmp_path)
+    for project in projects:
+        (project / "AGENTS.md").write_text("# Delivery policy\nUse independent verification.\n")
+        _git("add", "AGENTS.md", cwd=project)
+        _git("commit", "-m", "native delivery rules", cwd=project)
+    models = _FirstCoderKnowledgeTimeout()
+    monkeypatch.setattr(
+        production_backend.ConfiguredStructuredClientFactory,
+        "for_project",
+        lambda *args, **kwargs: models,
+    )
+    routes = _ResumeFactory(verification_fails=False, transient_qa_failures=0)
+    host = TeamHost(
+        config=config,
+        environment=environment,
+        structured_clients=models,
+        delivery_route_adapters=_KnowledgeFixtureFactory(routes),
+    )
+    entry = host.requirement_entry()
+    entry.coordinator = None
+    created = entry.create(
+        CreateRequirement(
+            name="Knowledge timeout restart",
+            repository_roots=tuple(map(str, projects)),
+        )
+    ).checkpoint
+    product = entry.reply(
+        ReplyToProduct(
+            delivery_id=created.delivery_id,
+            expected_checkpoint_sha256=created.checkpoint_sha256,
+            message="Update both greetings.",
+        )
+    ).checkpoint
+    blocked = entry.approve(
+        ApproveProductSpec(
+            delivery_id=product.delivery_id,
+            expected_checkpoint_sha256=product.checkpoint_sha256,
+            approval_reference="product-owner-approval",
+        )
+    ).checkpoint
+    assert blocked.stage.value == "BLOCKED"
+    source = blocked.children[0].checkpoint
+    assert source.failure_code is not None
+    assert source.failure_code.value == "RESOURCE_UNAVAILABLE"
+    assert source.task_id is not None and source.task_revision == 3
+    assert source.candidate_revision is None and not routes.requests
+    with MySqlTaskRepository(mysql_dsn) as repository:
+        before = repository.get(source.task_id), repository.list_events(source.task_id)
+    assert before[0].status is TaskStatus.BLOCKED and before[0].attempts == 1
+    proposed = host.resume_delivery(ResumeProjectDelivery(delivery_id=blocked.delivery_id))
+    assert isinstance(proposed, JointDeliveryResumeResult)
+    plan = proposed.continuation.restart_plan
+    assert plan is not None and plan.restart_kind == "pre_agent_knowledge_timeout"
+    Draft202012Validator(
+        json.loads(Path("schemas/pre-execution-restart.schema.json").read_text())
+    ).validate(plan.to_wire())
+    public = _summarize(proposed, project_id="project_test")
+    assert public.approval and "知识咨询" in " ".join(public.approval.facts)
+    assert not routes.requests
+    # A newer code/native-rule baseline must produce a different exact plan,
+    # never execute under the old grant or rewrite the frozen parent sources.
+    (projects[0] / "AGENTS.md").write_text(
+        "# Delivery policy\nUse independent verification and current native rules.\n"
+    )
+    _git("add", "AGENTS.md", cwd=projects[0])
+    _git("commit", "-m", "updated platform rules", cwd=projects[0])
+    current_base = _git_output("rev-parse", "HEAD", cwd=projects[0])
+    refreshed = host.resume_delivery(
+        ResumeProjectDelivery(
+            delivery_id=blocked.delivery_id,
+            approved_plan_sha256=plan.plan_sha256,
+            approval_reference="stale-baseline-approval",
+        )
+    )
+    assert isinstance(refreshed, JointDeliveryResumeResult)
+    current = refreshed.continuation.restart_plan
+    assert current and current.plan_sha256 != plan.plan_sha256
+    assert current.target_base_revision == current_base and not routes.requests
+    completed = host.resume_delivery(
+        ResumeProjectDelivery(
+            delivery_id=blocked.delivery_id,
+            approved_plan_sha256=current.plan_sha256,
+            approval_reference="exact-current-baseline-approval",
+        )
+    )
+    assert isinstance(completed, JointDeliveryResult)
+    assert completed.checkpoint.stage.value == "DONE", (
+        completed.continuation.next_action
+        if isinstance(completed, JointDeliveryResumeResult)
+        else completed
+    )
+    assert completed.checkpoint.product_spec == blocked.product_spec
+    assert completed.checkpoint.approval == blocked.approval
+    assert [r.role for r in routes.requests] == [
+        AgentRole.CODER,
+        AgentRole.QA,
+        AgentRole.REVIEWER,
+    ] * 2
+    assert routes.requests[0].source_revision == current_base
+    assert routes.requests[1].source_revision == routes.requests[2].source_revision
+    with MySqlTaskRepository(mysql_dsn) as repository:
+        assert (repository.get(source.task_id), repository.list_events(source.task_id)) == before
+        successor_id = completed.checkpoint.children[0].checkpoint.task_id
+        assert successor_id is not None
+        successor = repository.get(successor_id)
+        assert successor.base_ref == current_base
+        assert successor.constraints == before[0].constraints
+        assert successor.acceptance_criteria == before[0].acceptance_criteria
 
 
 @pytest.mark.mysql

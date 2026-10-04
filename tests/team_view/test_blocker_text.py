@@ -105,6 +105,12 @@ def test_signalled_historical_cli_exit_is_presented_as_interruption() -> None:
 
 
 def test_localizes_knowledge_preparation_failure_and_keeps_error_code() -> None:
+    assert (
+        localize_blocking_text(
+            "TRANSIENT_INFRA: coder knowledge preparation reached local time limit"
+        )
+        == "Coder 知识准备达到本地执行时限，尚未开始该角色执行；请检查并批准精确恢复计划。"
+    )
     assert localize_blocking_text("qa knowledge preparation failed: RATE_LIMITED") == (
         "QA 知识准备失败（原因代码：RATE_LIMITED），请检查模型服务后再继续。"
     )

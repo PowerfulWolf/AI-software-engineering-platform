@@ -36,8 +36,15 @@ invocation is rejected before model launch with `execution time budget exhausted
 approval, feedback, product/design/plan artifact or historical checkpoint is rewritten. A
 successful invocation consumes its normal work attempt; prior capacity facts remain audit
 history. Unknown process interruption does not refund. The knowledge intent/assessment
-subcalls for these three roles receive the same expanded window; Delivery roles retain their
-120-second consultation cap. Manager's real model calls have independent durable work, transient
+subcalls for these three roles receive the same expanded window. Delivery consultation uses
+`knowledge_phase_timeout(role, timeout_seconds)`: the minimum of the role's admitted timeout
+and 600 seconds, shared by both `KnowledgeAwareStructuredClient` and
+`KnowledgeRunContextBuilder`. There is no hidden 120-second cap. A typed local consultation
+limit produces `knowledge preparation reached local time limit`, does not debit the transient
+budget or fabricate an AgentRun, and projects `RESOURCE_UNAVAILABLE`; other non-budget
+`TRANSIENT_INFRA` outcomes project `TRANSIENT_PROVIDER_FAILURE`. Only a proven first Coder
+pre-code timeout may obtain a separately approved fresh Task under `delivery-recovery.md`.
+Manager's real model calls have independent durable work, transient
 and capacity records; ownership and coordination boundaries are in `manager-coordination.md`.
 
 `StageBudget` projects `capacity_timeouts`, configured `max_capacity_timeouts`, `max_timeout_seconds`, next window and
@@ -75,7 +82,10 @@ recovery while capacity is exhausted.
 `tests/agents/test_structured_models.py` asserts local vs explicit provider evidence and route
 count; `tests/manager/test_stage_retry_budget.py` asserts all three stage counters, windows,
 restart, success and exhaustion; `tests/knowledge/test_consultation.py` asserts upstream subcalls
-receive the expanded window; `tests/team_view/test_design_budget.py` and UI/Console tests assert
+receive the expanded window and delivery windows retain the caller's limit up to 600 seconds;
+`test_delivery_context.py` covers native Coder/QA/Reviewer at 60 and 1200 seconds;
+`test_execution_retry_budget.py` asserts local knowledge stops without a transient debit or Coder
+call. `tests/team_view/test_design_budget.py` and UI/Console tests assert
 the projection, action suppression and distinct `MODEL_EXECUTION_LIMIT` code.
 
 ### 7. Wrong vs Correct

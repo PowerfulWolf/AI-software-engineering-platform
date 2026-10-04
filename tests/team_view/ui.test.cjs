@@ -1022,6 +1022,13 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     ),
     "QA 知识准备失败（原因代码：RATE_LIMITED），请检查模型服务后再继续。",
   );
+  assert.equal(
+    vm.runInContext(
+      'humanizeBlockingText("TRANSIENT_INFRA: coder knowledge preparation reached local time limit")',
+      context,
+    ),
+    "Coder 知识准备达到本地执行时限，尚未开始该角色执行；请检查并批准精确恢复计划。",
+  );
   assert.match(
     vm.runInContext(
       'humanizeBlockingText("POLICY_VIOLATION: QA failed at attempt 1: qa run run_abc123 failed: candidate review prompt exceeds its configured Context budget")',

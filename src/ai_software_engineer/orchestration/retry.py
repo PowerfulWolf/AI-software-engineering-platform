@@ -842,7 +842,11 @@ class RetryingOrchestrator(SerialOrchestrator):
         return self._blocked(
             self._repository.get(task.id),
             classification,
-            f"{role.value} knowledge preparation failed: {error.code.value}",
+            (
+                f"{role.value} knowledge preparation reached local time limit"
+                if error.expandable_timeout
+                else f"{role.value} knowledge preparation failed: {error.code.value}"
+            ),
             current.attempts,
             (),
             tuple(a.artifact_id for a in self._artifacts_for_task(task.id)),

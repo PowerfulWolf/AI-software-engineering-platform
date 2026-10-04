@@ -1056,6 +1056,13 @@ function humanizeBlockingText(value) {
       .filter(Boolean);
     return `${roleFailure[1]} 第 ${roleFailure[2]} 次执行失败：${reason}${facts.length ? `；${facts.join("；")}` : ""}。`;
   }
+  const localKnowledgeTimeout = text.match(
+    /^(?:TRANSIENT_INFRA:\s*)?(coder|qa|reviewer) knowledge preparation reached local time limit$/i,
+  );
+  if (localKnowledgeTimeout) {
+    const roles = { coder: "Coder", qa: "QA", reviewer: "Reviewer" };
+    return `${roles[localKnowledgeTimeout[1].toLowerCase()]} 知识准备达到本地执行时限，尚未开始该角色执行；请检查并批准精确恢复计划。`;
+  }
   const knowledgeFailure = text.match(
     /^(?:(?:TRANSIENT_INFRA|BUDGET_EXHAUSTED|POLICY_VIOLATION):\s*)?(Coder|QA|Reviewer) knowledge (preparation|assessment|intent) failed:\s*([A-Z0-9_:-]+)$/i,
   );

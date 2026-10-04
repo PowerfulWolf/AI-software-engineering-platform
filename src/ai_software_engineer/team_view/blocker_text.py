@@ -169,6 +169,15 @@ def _role_failure(text: str) -> str | None:
 
 
 def _knowledge_failure(text: str) -> str | None:
+    local = re.fullmatch(
+        r"(?:TRANSIENT_INFRA:\s*)?(coder|qa|reviewer) knowledge preparation "
+        r"reached local time limit",
+        text,
+        re.IGNORECASE,
+    )
+    if local:
+        role = {"coder": "Coder", "qa": "QA", "reviewer": "Reviewer"}[local[1].lower()]
+        return f"{role} 知识准备达到本地执行时限，尚未开始该角色执行；请检查并批准精确恢复计划。"
     match = _KNOWLEDGE_FAILURE.fullmatch(text)
     if match is None:
         return None

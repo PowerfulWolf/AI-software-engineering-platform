@@ -240,11 +240,19 @@ def test_separated_retry_requires_a_fresh_role_permit(tmp_path: Path) -> None:
         assert sum(r.role is AgentRole.CODER for r in adapter.requests) == 1
 
 
-@pytest.mark.parametrize("code", [AgentErrorCode.TIMEOUT, AgentErrorCode.INVALID_OUTPUT])
+@pytest.mark.parametrize(
+    ("code", "local_limit"),
+    [
+        (AgentErrorCode.TIMEOUT, False),
+        (AgentErrorCode.TIMEOUT, True),
+        (AgentErrorCode.INVALID_OUTPUT, False),
+    ],
+)
 def test_knowledge_error_has_typed_budget_and_no_fabricated_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     code: AgentErrorCode,
+    local_limit: bool,
 ) -> None:
     from ai_software_engineer.agents import StructuredModelError
     from ai_software_engineer.orchestration import BlockedResult, RetryClassification
@@ -259,7 +267,12 @@ def test_knowledge_error_has_typed_budget_and_no_fabricated_run(
         nonlocal failed
         if args[1].role is AgentRole.CODER and not failed:
             failed = True
-            raise StructuredModelError(code, "fixture knowledge failure", transient=True)
+            raise StructuredModelError(
+                code,
+                "fixture knowledge failure",
+                transient=not local_limit,
+                timeout_kind="local_execution_limit" if local_limit else None,
+            )
         return build(*args, **kwargs)
 
     monkeypatch.setattr(builder, "build", build_or_fail)
@@ -274,7 +287,17 @@ def test_knowledge_error_has_typed_budget_and_no_fabricated_run(
             identities=AttemptIdentityFactory(),
             clock=_clock,
         ).run_task(task.id)
-        if code is AgentErrorCode.TIMEOUT:
+        if local_limit:
+            from ai_software_engineer.manager.delivery import _blocked_failure_code
+            from ai_software_engineer.manager.delivery_checkpoint import DeliveryFailureCode
+
+            assert isinstance(result, BlockedResult)
+            assert result.classification is RetryClassification.TRANSIENT_INFRA
+            assert result.reason == "coder knowledge preparation reached local time limit"
+            assert _blocked_failure_code(result) is DeliveryFailureCode.RESOURCE_UNAVAILABLE
+            assert result.task.attempts == 1 and result.task.retry_failures is None
+            assert [request.role for request in adapter.requests] == [AgentRole.ORCHESTRATOR]
+        elif code is AgentErrorCode.TIMEOUT:
             assert result.task.status is TaskStatus.DONE
             assert result.task.retry_failures is not None
             assert result.task.retry_failures[0].run_id is None
