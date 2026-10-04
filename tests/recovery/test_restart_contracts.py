@@ -225,7 +225,7 @@ def test_worktree_conflict_before_coder_is_restartable_without_agent_evidence(
             to_status=end,
             actor=AgentRole.ORCHESTRATOR,
             reason=reason,
-            artifact_ids=(),
+            artifact_ids=("art_plan_worktree_conflict",) if index == 1 else (),
             source_revision=task.base_ref,
             occurred_at=task.updated_at,
             attempt=1,

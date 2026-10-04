@@ -10,7 +10,7 @@ from ai_software_engineer.agents.fallback import model_route_root
 from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.context import ContextSource, FileContextStore
-from ai_software_engineer.domain import Task, TaskStatus
+from ai_software_engineer.domain import AgentRole, ArtifactKind, Task, TaskStatus
 from ai_software_engineer.domain.branch import available_successor_branch
 from ai_software_engineer.git import GitWorktreeManager
 from ai_software_engineer.manager import production_backend
@@ -134,7 +134,12 @@ class PreExecutionRestartService:
         )
         if runtime is None:
             return None
-        _require_no_execution(self.config, root, runtime)
+        _require_no_execution(
+            self.config,
+            root,
+            runtime,
+            allow_plan_artifact=pre_agent_worktree_conflict,
+        )
         stages = read_approved_stages(
             self.config,
             root,
@@ -461,10 +466,23 @@ def _require_no_execution(
     config: ProductionConfig,
     root: Path,
     runtime: CandidateRuntimeSnapshot,
+    *,
+    allow_plan_artifact: bool = False,
 ) -> None:
     for directory in (root / "artifacts", root / "contexts", model_route_root(root)):
         _reject_symlinks(directory)
-    if FileArtifactStore(root / "artifacts", read_only=True).list_for_task(runtime.task.id):
+    artifacts = FileArtifactStore(root / "artifacts", read_only=True).list_for_task(runtime.task.id)
+    if allow_plan_artifact:
+        expected_ids = runtime.events[-1].artifact_ids if runtime.events else ()
+        if (
+            len(artifacts) != 1
+            or len(expected_ids) != 1
+            or artifacts[0].artifact_id != expected_ids[0]
+            or artifacts[0].kind is not ArtifactKind.PLAN
+            or artifacts[0].producer.role is not AgentRole.ORCHESTRATOR
+        ):
+            raise RecoveryRejected("pre-agent restart has unexpected planning artifacts")
+    elif artifacts:
         raise RecoveryRejected("pre-execution source already has artifacts")
     contexts = FileContextStore(root / "contexts", read_only=True)
     for path in (root / "contexts").glob("*.json"):

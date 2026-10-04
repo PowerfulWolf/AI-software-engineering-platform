@@ -352,9 +352,20 @@ def read_pre_execution_snapshot(
                         or any(
                             e.task_id != task.id
                             or e.attempt != 1
-                            or e.artifact_ids
                             or e.source_revision != task.base_ref
+                            or (
+                                e.artifact_ids
+                                if original_failure
+                                else e is events[0] and e.artifact_ids
+                            )
                             for e in events
+                        )
+                        or (
+                            pre_agent_worktree_conflict
+                            and (
+                                len(events[1].artifact_ids) != 1
+                                or not events[1].artifact_ids[0].startswith("art_plan_")
+                            )
                         )
                     )
                 )
