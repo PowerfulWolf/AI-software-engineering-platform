@@ -2516,7 +2516,13 @@ old native stage and must not make a sealed QA/Review result unreachable.
   verification gate; no Task or historical event is rewritten.
 - A completion with an inconclusive executor result still follows the exact verification retry or
   prerequisite-approval path. No Coder starts from a mere receipt or a stale native cursor.
-- If no completion exists, the original native retry/recovery path remains unchanged.
+- If no completion exists but the terminal cursor retains a candidate revision, the controller
+  proposes a fresh candidate-verification plan directly. It must not call
+  `retry_interrupted_stage` first: that native path validates the old preparation digest and can
+  make the fresh plan unreachable after a legitimate preparation drift. The fresh plan binds the
+  current read-only candidate facts and preparation; it does not re-run Coder or alter the old
+  Task, checkpoint, artifacts, approvals, verdicts or preparation history.
+- If no candidate revision exists, the original native retry/recovery path remains unchanged.
 
 ## Validation / existing data / rollback
 
@@ -2530,3 +2536,7 @@ exact plan.
 `tests/recovery/test_delivery_continuation.py::test_terminal_candidate_completion_bypasses_stale_native_retry`
 guards the ordering and ensures no stale native retry is attempted before the immutable completion
 is handed to remediation/adoption.
+
+`tests/recovery/test_delivery_continuation.py::test_terminal_candidate_without_plan_bypasses_stale_native_retry`
+guards the no-plan case and ensures a fresh exact verification proposal remains reachable after
+preparation drift.

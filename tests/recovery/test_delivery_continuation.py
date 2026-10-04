@@ -107,6 +107,58 @@ def test_terminal_candidate_completion_bypasses_stale_native_retry(
     controller._continue_completion.assert_called_once_with(verification_plan, completion)
 
 
+def test_terminal_candidate_without_plan_bypasses_stale_native_retry(
+    tmp_path: Path,
+) -> None:
+    """Preparation drift must still allow a fresh plan for a retained candidate."""
+    current = SimpleNamespace(
+        stage=DeliveryStage.BLOCKED,
+        task_id="task_terminal_candidate",
+        candidate_revision="a" * 40,
+        repository_root=str(tmp_path / "repository"),
+        delivery_id="delivery_terminal_candidate",
+    )
+    entry = Mock()
+    entry.status.return_value = SimpleNamespace(checkpoint=current)
+    entry.retry_interrupted_stage.side_effect = AssertionError(
+        "stale native retry must not run before fresh candidate verification"
+    )
+    verification_plan = SimpleNamespace(
+        plan_sha256="plan_sha256",
+        prerequisite_incident_sha256=None,
+        manager_advice=None,
+        reused_qa=None,
+        executor_capability=None,
+        native_ui=None,
+    )
+    verification = Mock()
+    verification.latest_project.return_value = None
+    verification.coordinate.return_value = None
+    verification.propose_project.return_value = (
+        verification_plan,
+        tmp_path / "verification-plan.json",
+    )
+    controller = DeliveryResumeController(
+        config=Mock(),
+        environment={},
+        backend=Mock(),
+        entry=entry,
+        recovery=Mock(),
+        verification=verification,
+    )
+    expected = object()
+    controller._approval_required = Mock(return_value=expected)
+
+    result = controller.resume(ResumeProjectDelivery(delivery_id=current.delivery_id))
+
+    assert result is expected
+    verification.propose_project.assert_called_once_with(
+        repository_root=current.repository_root,
+        delivery_id=current.delivery_id,
+    )
+    entry.retry_interrupted_stage.assert_not_called()
+
+
 @pytest.mark.parametrize(
     "status", [TaskStatus.QA, TaskStatus.REVIEW, TaskStatus.BLOCKED, TaskStatus.FAILED]
 )

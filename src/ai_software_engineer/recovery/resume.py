@@ -171,14 +171,16 @@ class DeliveryResumeController:
                 next_action=_checkpoint_next_action(result.checkpoint),
             )
 
-        # A terminal candidate may already have an exact independent-verification
-        # completion. That completion is the durable handoff for remediation (or
-        # candidate adoption), so consume it before retrying the old native stage.
-        # The old Delivery checkpoint can legitimately reference a preparation
-        # digest that drifted after the candidate was sealed. Retrying first would
-        # re-run that stale preparation gate and make an actionable QA/Review
-        # result unreachable.
-        if current.task_id is not None and current.candidate_revision is not None:
+        # A terminal candidate is already a sealed implementation boundary. Its
+        # next operation is independent QA/Review verification, even when the
+        # Delivery checkpoint still points at an older preparation digest. The
+        # old native retry path re-runs that stale preparation gate and can make
+        # a fresh verification plan unreachable after a harmless baseline drift.
+        # Keep the latest plan in hand so the normal approval/execution handling
+        # below can continue without retrying the old stage.
+        latest: tuple[FileRecoveryStore, CandidateVerificationPlan, Path] | None = None
+        terminal_candidate = current.task_id is not None and current.candidate_revision is not None
+        if terminal_candidate:
             latest = self._verification.latest_project(
                 repository_root=current.repository_root,
                 delivery_id=current.delivery_id,
@@ -194,25 +196,26 @@ class DeliveryResumeController:
                 if completion is not None:
                     return self._continue_completion(verification_plan, completion)
 
-        retried = self._entry.retry_interrupted_stage(command)
-        if retried.checkpoint != current:
-            outcome = (
-                DeliveryResumeOutcome.WAITING_HUMAN
-                if retried.checkpoint.stage
-                in {
-                    DeliveryStage.WAITING_PRODUCT_REPLY,
-                    DeliveryStage.WAITING_PRODUCT_APPROVAL,
-                    DeliveryStage.WAITING_HUMAN,
-                    DeliveryStage.BLOCKED,
-                    DeliveryStage.FAILED,
-                }
-                else DeliveryResumeOutcome.CONTINUED
-            )
-            return self._result(
-                outcome,
-                retried,
-                next_action=_checkpoint_next_action(retried.checkpoint),
-            )
+        if not terminal_candidate:
+            retried = self._entry.retry_interrupted_stage(command)
+            if retried.checkpoint != current:
+                outcome = (
+                    DeliveryResumeOutcome.WAITING_HUMAN
+                    if retried.checkpoint.stage
+                    in {
+                        DeliveryStage.WAITING_PRODUCT_REPLY,
+                        DeliveryStage.WAITING_PRODUCT_APPROVAL,
+                        DeliveryStage.WAITING_HUMAN,
+                        DeliveryStage.BLOCKED,
+                        DeliveryStage.FAILED,
+                    }
+                    else DeliveryResumeOutcome.CONTINUED
+                )
+                return self._result(
+                    outcome,
+                    retried,
+                    next_action=_checkpoint_next_action(retried.checkpoint),
+                )
         if current.task_id is None:
             return self._result(
                 DeliveryResumeOutcome.WAITING_HUMAN,
@@ -245,10 +248,11 @@ class DeliveryResumeController:
         if command.coder_scope_request is not None:
             raise RecoveryRejected("requested Coder scope requires terminal pre-candidate recovery")
 
-        latest = self._verification.latest_project(
-            repository_root=current.repository_root,
-            delivery_id=current.delivery_id,
-        )
+        if latest is None and not terminal_candidate:
+            latest = self._verification.latest_project(
+                repository_root=current.repository_root,
+                delivery_id=current.delivery_id,
+            )
         if command.python_mysql_tests is not None:
             if (
                 latest is not None
