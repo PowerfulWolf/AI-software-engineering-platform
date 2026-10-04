@@ -38,6 +38,7 @@ from ai_software_engineer.manager.queue_capacity import production_role_queue
 from ai_software_engineer.manager.spec_rules import ProductionProjectRuleProvider
 from ai_software_engineer.manager.stage_coordination import ProductionStageCoordinator
 from ai_software_engineer.manager.team_roster import production_team_roster
+from ai_software_engineer.multi_directory.deletion import ProductionRequirementDeletionGuard
 from ai_software_engineer.multi_directory.models import JointDeliveryResult, JointStage
 from ai_software_engineer.multi_directory.production import ProductionJointBackend
 from ai_software_engineer.multi_directory.service import JointDeliveryService
@@ -194,6 +195,10 @@ class TeamHost:
         )
 
         runtime = self._runtime(self._resolve_project_id(project_id, command.delivery_id))
+        if not str(command.delivery_id).startswith("delivery_multi_"):
+            runtime.requirements.retirements.require_native_active(
+                command.delivery_id, runtime.requirements.journal
+            )
         if str(command.delivery_id).startswith("delivery_multi_"):
             joint = runtime.requirements.status(command.delivery_id).checkpoint
             if joint.stage is JointStage.BLOCKED and joint.integration is None:
@@ -403,6 +408,9 @@ class TeamHost:
         requirements = JointDeliveryService(
             team=self._team,
             project=project,
+            deletion_guard=ProductionRequirementDeletionGuard(
+                project, self._work_queue, self._config.require_mysql_dsn(self._environment)
+            ),
             execution_retry_policy=self._config.execution_retry_policy,
             coordinator=ProductionStageCoordinator(
                 self._config,

@@ -1,0 +1,1757 @@
+{
+  "$defs": {
+    "AgentErrorCode": {
+      "description": "Stable failure categories consumed by Orchestrator retry routing.",
+      "enum": [
+        "TIMEOUT",
+        "QUOTA_EXHAUSTED",
+        "RATE_LIMITED",
+        "AUTHENTICATION_ERROR",
+        "PROVIDER_UNAVAILABLE",
+        "INVALID_OUTPUT",
+        "PROVIDER_ERROR",
+        "POLICY_VIOLATION",
+        "WORK_INTERRUPTED"
+      ],
+      "title": "AgentErrorCode",
+      "type": "string"
+    },
+    "AgentFailure": {
+      "additionalProperties": false,
+      "description": "Typed failure evidence with an explicit retry classification.",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/AgentErrorCode"
+        },
+        "message": {
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "transient": {
+          "title": "Transient",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "transient"
+      ],
+      "title": "AgentFailure",
+      "type": "object",
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "code"
+            ],
+            "properties": {
+              "code": {
+                "const": "WORK_INTERRUPTED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "transient": {
+                "const": false
+              }
+            }
+          }
+        }
+      ]
+    },
+    "AgentProducer": {
+      "additionalProperties": false,
+      "description": "The Agent Run identity that produced an Artifact.",
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/AgentRole"
+        },
+        "agent_id": {
+          "minLength": 1,
+          "title": "Agent Id",
+          "type": "string"
+        },
+        "agent_version": {
+          "minLength": 1,
+          "title": "Agent Version",
+          "type": "string"
+        },
+        "run_id": {
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "agent_id",
+        "agent_version",
+        "run_id"
+      ],
+      "title": "AgentProducer",
+      "type": "object"
+    },
+    "AgentRole": {
+      "description": "Delivery-runtime roles bound to Task artifacts and state transitions.",
+      "enum": [
+        "orchestrator",
+        "coder",
+        "qa",
+        "reviewer"
+      ],
+      "title": "AgentRole",
+      "type": "string"
+    },
+    "AgentRunStatus": {
+      "description": "Terminal status of one isolated Agent Run.",
+      "enum": [
+        "SUCCEEDED",
+        "FAILED",
+        "TIMED_OUT"
+      ],
+      "title": "AgentRunStatus",
+      "type": "string"
+    },
+    "AgentUsage": {
+      "additionalProperties": false,
+      "description": "Provider-neutral token usage reported for one Agent Run.",
+      "properties": {
+        "input_tokens": {
+          "minimum": 0,
+          "title": "Input Tokens",
+          "type": "integer"
+        },
+        "output_tokens": {
+          "minimum": 0,
+          "title": "Output Tokens",
+          "type": "integer"
+        },
+        "total_tokens": {
+          "minimum": 0,
+          "title": "Total Tokens",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "total_tokens"
+      ],
+      "title": "AgentUsage",
+      "type": "object"
+    },
+    "ArtifactIntegrity": {
+      "additionalProperties": false,
+      "description": "ArtifactStore-owned validation state and content digest.",
+      "properties": {
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "validated": {
+          "title": "Validated",
+          "type": "boolean"
+        },
+        "validated_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Validated At"
+        }
+      },
+      "required": [
+        "sha256",
+        "validated"
+      ],
+      "title": "ArtifactIntegrity",
+      "type": "object"
+    },
+    "ChangeType": {
+      "enum": [
+        "added",
+        "modified",
+        "deleted",
+        "renamed"
+      ],
+      "title": "ChangeType",
+      "type": "string"
+    },
+    "ChangedFile": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "change": {
+          "$ref": "#/$defs/ChangeType"
+        },
+        "lines_added": {
+          "minimum": 0,
+          "title": "Lines Added",
+          "type": "integer"
+        },
+        "lines_deleted": {
+          "minimum": 0,
+          "title": "Lines Deleted",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "change",
+        "lines_added",
+        "lines_deleted"
+      ],
+      "title": "ChangedFile",
+      "type": "object"
+    },
+    "CoderProgressArtifact": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "coder-progress",
+          "default": "coder-progress",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "pattern": "^v[0-9]+\\.[0-9]+$",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "producer": {
+          "$ref": "#/$defs/AgentProducer"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "context_manifest_id": {
+          "minLength": 1,
+          "title": "Context Manifest Id",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "parent_artifact_ids": {
+          "items": {
+            "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+            "type": "string"
+          },
+          "title": "Parent Artifact Ids",
+          "type": "array"
+        },
+        "supersedes": {
+          "anyOf": [
+            {
+              "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Supersedes"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "content": {
+          "$ref": "#/$defs/CoderProgressContent"
+        },
+        "integrity": {
+          "$ref": "#/$defs/ArtifactIntegrity"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "task_id",
+        "schema_version",
+        "producer",
+        "source_revision",
+        "context_manifest_id",
+        "created_at",
+        "parent_artifact_ids",
+        "evidence",
+        "content",
+        "integrity"
+      ],
+      "title": "CoderProgressArtifact",
+      "type": "object"
+    },
+    "CoderProgressContent": {
+      "additionalProperties": false,
+      "description": "A non-candidate implementation checkpoint that requests another bounded Coder run.",
+      "properties": {
+        "status": {
+          "const": "CONTINUE_REQUIRED",
+          "default": "CONTINUE_REQUIRED",
+          "title": "Status",
+          "type": "string"
+        },
+        "checkpoint_sequence": {
+          "minimum": 1,
+          "title": "Checkpoint Sequence",
+          "type": "integer"
+        },
+        "summary": {
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        },
+        "changed_files": {
+          "items": {
+            "$ref": "#/$defs/ChangedFile"
+          },
+          "title": "Changed Files",
+          "type": "array"
+        },
+        "completed_step_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Completed Step Ids",
+          "type": "array"
+        },
+        "remaining_step_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Remaining Step Ids",
+          "type": "array"
+        },
+        "tests_run": {
+          "items": {
+            "$ref": "#/$defs/ImplementationTestRun"
+          },
+          "title": "Tests Run",
+          "type": "array"
+        },
+        "next_actions": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Next Actions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "checkpoint_sequence",
+        "summary",
+        "changed_files",
+        "completed_step_ids",
+        "remaining_step_ids",
+        "tests_run",
+        "next_actions"
+      ],
+      "title": "CoderProgressContent",
+      "type": "object"
+    },
+    "Evidence": {
+      "additionalProperties": false,
+      "description": "A stable reference to independently inspectable proof.",
+      "properties": {
+        "evidence_id": {
+          "pattern": "^ev_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Evidence Id",
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/EvidenceType"
+        },
+        "uri": {
+          "minLength": 1,
+          "title": "Uri",
+          "type": "string"
+        },
+        "locator": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Locator"
+        },
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "required": {
+          "default": false,
+          "title": "Required",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "evidence_id",
+        "type",
+        "uri",
+        "description",
+        "sha256"
+      ],
+      "title": "Evidence",
+      "type": "object"
+    },
+    "EvidenceType": {
+      "enum": [
+        "test",
+        "command",
+        "diff",
+        "file",
+        "log",
+        "metric"
+      ],
+      "title": "EvidenceType",
+      "type": "string"
+    },
+    "Finding": {
+      "additionalProperties": false,
+      "description": "A severity-rated issue linked to one or more Evidence entries.",
+      "properties": {
+        "finding_id": {
+          "minLength": 1,
+          "title": "Finding Id",
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/FindingSeverity"
+        },
+        "code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Code"
+        },
+        "message": {
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "File"
+        },
+        "line": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Line"
+        },
+        "evidence_ids": {
+          "items": {
+            "pattern": "^ev_[a-z0-9][a-z0-9_-]{2,63}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "recommendation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Recommendation"
+        }
+      },
+      "required": [
+        "finding_id",
+        "severity",
+        "message",
+        "evidence_ids"
+      ],
+      "title": "Finding",
+      "type": "object"
+    },
+    "FindingSeverity": {
+      "enum": [
+        "INFO",
+        "MINOR",
+        "MAJOR",
+        "BLOCKER"
+      ],
+      "title": "FindingSeverity",
+      "type": "string"
+    },
+    "ImplementationAcceptanceMapping": {
+      "additionalProperties": false,
+      "properties": {
+        "criterion_id": {
+          "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Criterion Id",
+          "type": "string"
+        },
+        "implementation": {
+          "minLength": 1,
+          "title": "Implementation",
+          "type": "string"
+        },
+        "tests": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Tests",
+          "type": "array"
+        }
+      },
+      "required": [
+        "criterion_id",
+        "implementation",
+        "tests"
+      ],
+      "title": "ImplementationAcceptanceMapping",
+      "type": "object"
+    },
+    "ImplementationReportArtifact": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "implementation-report",
+          "default": "implementation-report",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "pattern": "^v[0-9]+\\.[0-9]+$",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "producer": {
+          "$ref": "#/$defs/AgentProducer"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "context_manifest_id": {
+          "minLength": 1,
+          "title": "Context Manifest Id",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "parent_artifact_ids": {
+          "items": {
+            "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+            "type": "string"
+          },
+          "title": "Parent Artifact Ids",
+          "type": "array"
+        },
+        "supersedes": {
+          "anyOf": [
+            {
+              "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Supersedes"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "content": {
+          "$ref": "#/$defs/ImplementationReportContent"
+        },
+        "integrity": {
+          "$ref": "#/$defs/ArtifactIntegrity"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "task_id",
+        "schema_version",
+        "producer",
+        "source_revision",
+        "context_manifest_id",
+        "created_at",
+        "parent_artifact_ids",
+        "evidence",
+        "content",
+        "integrity"
+      ],
+      "title": "ImplementationReportArtifact",
+      "type": "object"
+    },
+    "ImplementationReportContent": {
+      "additionalProperties": false,
+      "properties": {
+        "project_observations": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ProjectObservation"
+          },
+          "maxItems": 8,
+          "title": "Project Observations",
+          "type": "array"
+        },
+        "commit_sha": {
+          "pattern": "^[a-f0-9]{7,64}$",
+          "title": "Commit Sha",
+          "type": "string"
+        },
+        "changed_files": {
+          "items": {
+            "$ref": "#/$defs/ChangedFile"
+          },
+          "minItems": 1,
+          "title": "Changed Files",
+          "type": "array"
+        },
+        "acceptance_mapping": {
+          "items": {
+            "$ref": "#/$defs/ImplementationAcceptanceMapping"
+          },
+          "title": "Acceptance Mapping",
+          "type": "array"
+        },
+        "tests_run": {
+          "items": {
+            "$ref": "#/$defs/ImplementationTestRun"
+          },
+          "title": "Tests Run",
+          "type": "array"
+        },
+        "known_risks": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Known Risks",
+          "type": "array"
+        },
+        "blocked_reason": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Blocked Reason"
+        }
+      },
+      "required": [
+        "commit_sha",
+        "changed_files",
+        "acceptance_mapping",
+        "tests_run",
+        "known_risks"
+      ],
+      "title": "ImplementationReportContent",
+      "type": "object"
+    },
+    "ImplementationTestRun": {
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "minLength": 1,
+          "title": "Command",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/ImplementationTestStatus"
+        },
+        "evidence_id": {
+          "pattern": "^ev_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Evidence Id",
+          "type": "string"
+        },
+        "duration_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration Ms"
+        }
+      },
+      "required": [
+        "command",
+        "status",
+        "evidence_id"
+      ],
+      "title": "ImplementationTestRun",
+      "type": "object"
+    },
+    "ImplementationTestStatus": {
+      "enum": [
+        "PASS",
+        "FAIL",
+        "NOT_RUN"
+      ],
+      "title": "ImplementationTestStatus",
+      "type": "string"
+    },
+    "JsonValue": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "PlanAcceptanceMapping": {
+      "additionalProperties": false,
+      "properties": {
+        "criterion_id": {
+          "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Criterion Id",
+          "type": "string"
+        },
+        "step_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Step Ids",
+          "type": "array"
+        },
+        "test_strategy": {
+          "minLength": 1,
+          "title": "Test Strategy",
+          "type": "string"
+        }
+      },
+      "required": [
+        "criterion_id",
+        "step_ids",
+        "test_strategy"
+      ],
+      "title": "PlanAcceptanceMapping",
+      "type": "object"
+    },
+    "PlanArtifact": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "plan",
+          "default": "plan",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "pattern": "^v[0-9]+\\.[0-9]+$",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "producer": {
+          "$ref": "#/$defs/AgentProducer"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "context_manifest_id": {
+          "minLength": 1,
+          "title": "Context Manifest Id",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "parent_artifact_ids": {
+          "items": {
+            "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+            "type": "string"
+          },
+          "title": "Parent Artifact Ids",
+          "type": "array"
+        },
+        "supersedes": {
+          "anyOf": [
+            {
+              "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Supersedes"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "content": {
+          "$ref": "#/$defs/PlanContent"
+        },
+        "integrity": {
+          "$ref": "#/$defs/ArtifactIntegrity"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "task_id",
+        "schema_version",
+        "producer",
+        "source_revision",
+        "context_manifest_id",
+        "created_at",
+        "parent_artifact_ids",
+        "evidence",
+        "content",
+        "integrity"
+      ],
+      "title": "PlanArtifact",
+      "type": "object"
+    },
+    "PlanContent": {
+      "additionalProperties": false,
+      "properties": {
+        "goal": {
+          "minLength": 1,
+          "title": "Goal",
+          "type": "string"
+        },
+        "assumptions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Assumptions",
+          "type": "array"
+        },
+        "steps": {
+          "items": {
+            "$ref": "#/$defs/PlanStep"
+          },
+          "minItems": 1,
+          "title": "Steps",
+          "type": "array"
+        },
+        "acceptance_mapping": {
+          "items": {
+            "$ref": "#/$defs/PlanAcceptanceMapping"
+          },
+          "title": "Acceptance Mapping",
+          "type": "array"
+        },
+        "risks": {
+          "items": {
+            "$ref": "#/$defs/PlanRisk"
+          },
+          "title": "Risks",
+          "type": "array"
+        }
+      },
+      "required": [
+        "goal",
+        "assumptions",
+        "steps",
+        "acceptance_mapping",
+        "risks"
+      ],
+      "title": "PlanContent",
+      "type": "object"
+    },
+    "PlanRisk": {
+      "additionalProperties": false,
+      "properties": {
+        "risk": {
+          "minLength": 1,
+          "title": "Risk",
+          "type": "string"
+        },
+        "mitigation": {
+          "minLength": 1,
+          "title": "Mitigation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "risk",
+        "mitigation"
+      ],
+      "title": "PlanRisk",
+      "type": "object"
+    },
+    "PlanStep": {
+      "additionalProperties": false,
+      "properties": {
+        "step_id": {
+          "minLength": 1,
+          "title": "Step Id",
+          "type": "string"
+        },
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "files": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Files",
+          "type": "array"
+        },
+        "verification": {
+          "minLength": 1,
+          "title": "Verification",
+          "type": "string"
+        }
+      },
+      "required": [
+        "step_id",
+        "description",
+        "files",
+        "verification"
+      ],
+      "title": "PlanStep",
+      "type": "object"
+    },
+    "ProjectObservation": {
+      "additionalProperties": false,
+      "description": "A scoped discovery proposal, never a verdict or executable policy.",
+      "properties": {
+        "observation_id": {
+          "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+          "title": "Observation Id",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "fact": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Fact",
+          "type": "string"
+        },
+        "applicability": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Applicability",
+          "type": "string"
+        },
+        "evidence_ids": {
+          "items": {
+            "pattern": "^ev_[a-z0-9][a-z0-9_-]{2,63}$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Evidence Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "observation_id",
+        "title",
+        "fact",
+        "applicability",
+        "evidence_ids"
+      ],
+      "title": "ProjectObservation",
+      "type": "object"
+    },
+    "QaCriterionResult": {
+      "additionalProperties": false,
+      "properties": {
+        "criterion_id": {
+          "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Criterion Id",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/QaCriterionStatus"
+        },
+        "evidence_ids": {
+          "items": {
+            "pattern": "^ev_[a-z0-9][a-z0-9_-]{2,63}$",
+            "type": "string"
+          },
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Notes"
+        }
+      },
+      "required": [
+        "criterion_id",
+        "status",
+        "evidence_ids"
+      ],
+      "title": "QaCriterionResult",
+      "type": "object"
+    },
+    "QaCriterionStatus": {
+      "enum": [
+        "PASS",
+        "FAIL",
+        "NOT_TESTED"
+      ],
+      "title": "QaCriterionStatus",
+      "type": "string"
+    },
+    "QaReportArtifact": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "qa-report",
+          "default": "qa-report",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "pattern": "^v[0-9]+\\.[0-9]+$",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "producer": {
+          "$ref": "#/$defs/AgentProducer"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "context_manifest_id": {
+          "minLength": 1,
+          "title": "Context Manifest Id",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "parent_artifact_ids": {
+          "items": {
+            "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+            "type": "string"
+          },
+          "title": "Parent Artifact Ids",
+          "type": "array"
+        },
+        "supersedes": {
+          "anyOf": [
+            {
+              "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Supersedes"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "content": {
+          "$ref": "#/$defs/QaReportContent"
+        },
+        "integrity": {
+          "$ref": "#/$defs/ArtifactIntegrity"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "task_id",
+        "schema_version",
+        "producer",
+        "source_revision",
+        "context_manifest_id",
+        "created_at",
+        "parent_artifact_ids",
+        "evidence",
+        "content",
+        "integrity"
+      ],
+      "title": "QaReportArtifact",
+      "type": "object"
+    },
+    "QaReportContent": {
+      "additionalProperties": false,
+      "properties": {
+        "project_observations": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ProjectObservation"
+          },
+          "maxItems": 8,
+          "title": "Project Observations",
+          "type": "array"
+        },
+        "status": {
+          "$ref": "#/$defs/QaReportStatus"
+        },
+        "criteria_results": {
+          "items": {
+            "$ref": "#/$defs/QaCriterionResult"
+          },
+          "minItems": 1,
+          "title": "Criteria Results",
+          "type": "array"
+        },
+        "tests_run": {
+          "items": {
+            "$ref": "#/$defs/QaTestRun"
+          },
+          "title": "Tests Run",
+          "type": "array"
+        },
+        "findings": {
+          "items": {
+            "$ref": "#/$defs/Finding"
+          },
+          "title": "Findings",
+          "type": "array"
+        },
+        "environment": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Environment"
+        }
+      },
+      "required": [
+        "status",
+        "criteria_results",
+        "tests_run",
+        "findings"
+      ],
+      "title": "QaReportContent",
+      "type": "object"
+    },
+    "QaReportStatus": {
+      "enum": [
+        "PASS",
+        "FAIL"
+      ],
+      "title": "QaReportStatus",
+      "type": "string"
+    },
+    "QaTestRun": {
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "minLength": 1,
+          "title": "Command",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/QaTestStatus"
+        },
+        "evidence_id": {
+          "pattern": "^ev_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Evidence Id",
+          "type": "string"
+        },
+        "duration_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration Ms"
+        }
+      },
+      "required": [
+        "command",
+        "status",
+        "evidence_id"
+      ],
+      "title": "QaTestRun",
+      "type": "object"
+    },
+    "QaTestStatus": {
+      "enum": [
+        "PASS",
+        "FAIL",
+        "ERROR"
+      ],
+      "title": "QaTestStatus",
+      "type": "string"
+    },
+    "ReviewDimension": {
+      "enum": [
+        "correctness",
+        "acceptance",
+        "regression",
+        "security",
+        "maintainability",
+        "performance",
+        "契约一致性"
+      ],
+      "title": "ReviewDimension",
+      "type": "string"
+    },
+    "ReviewReportArtifact": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "review-report",
+          "default": "review-report",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "pattern": "^v[0-9]+\\.[0-9]+$",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "producer": {
+          "$ref": "#/$defs/AgentProducer"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "context_manifest_id": {
+          "minLength": 1,
+          "title": "Context Manifest Id",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "parent_artifact_ids": {
+          "items": {
+            "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+            "type": "string"
+          },
+          "title": "Parent Artifact Ids",
+          "type": "array"
+        },
+        "supersedes": {
+          "anyOf": [
+            {
+              "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Supersedes"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "content": {
+          "$ref": "#/$defs/ReviewReportContent"
+        },
+        "integrity": {
+          "$ref": "#/$defs/ArtifactIntegrity"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "task_id",
+        "schema_version",
+        "producer",
+        "source_revision",
+        "context_manifest_id",
+        "created_at",
+        "parent_artifact_ids",
+        "evidence",
+        "content",
+        "integrity"
+      ],
+      "title": "ReviewReportArtifact",
+      "type": "object"
+    },
+    "ReviewReportContent": {
+      "additionalProperties": false,
+      "properties": {
+        "project_observations": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ProjectObservation"
+          },
+          "maxItems": 8,
+          "title": "Project Observations",
+          "type": "array"
+        },
+        "verdict": {
+          "$ref": "#/$defs/ReviewVerdict"
+        },
+        "findings": {
+          "items": {
+            "$ref": "#/$defs/Finding"
+          },
+          "title": "Findings",
+          "type": "array"
+        },
+        "checked_dimensions": {
+          "items": {
+            "$ref": "#/$defs/ReviewDimension"
+          },
+          "minItems": 1,
+          "title": "Checked Dimensions",
+          "type": "array"
+        },
+        "evidence": {
+          "items": {
+            "pattern": "^ev_[a-z0-9][a-z0-9_-]{2,63}$",
+            "type": "string"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Summary"
+        }
+      },
+      "required": [
+        "verdict",
+        "findings",
+        "checked_dimensions",
+        "evidence"
+      ],
+      "title": "ReviewReportContent",
+      "type": "object"
+    },
+    "ReviewVerdict": {
+      "enum": [
+        "APPROVE",
+        "REJECT"
+      ],
+      "title": "ReviewVerdict",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Immutable typed output; success and failure states are mutually exclusive.",
+  "properties": {
+    "run_id": {
+      "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "task_id": {
+      "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+      "title": "Task Id",
+      "type": "string"
+    },
+    "role": {
+      "$ref": "#/$defs/AgentRole"
+    },
+    "attempt": {
+      "maximum": 400,
+      "minimum": 1,
+      "title": "Attempt",
+      "type": "integer"
+    },
+    "source_revision": {
+      "minLength": 1,
+      "title": "Source Revision",
+      "type": "string"
+    },
+    "context_manifest_id": {
+      "pattern": "^ctx_[a-f0-9]{64}$",
+      "title": "Context Manifest Id",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/AgentRunStatus"
+    },
+    "artifact": {
+      "anyOf": [
+        {
+          "discriminator": {
+            "mapping": {
+              "coder-progress": "#/$defs/CoderProgressArtifact",
+              "implementation-report": "#/$defs/ImplementationReportArtifact",
+              "plan": "#/$defs/PlanArtifact",
+              "qa-report": "#/$defs/QaReportArtifact",
+              "review-report": "#/$defs/ReviewReportArtifact"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/PlanArtifact"
+            },
+            {
+              "$ref": "#/$defs/CoderProgressArtifact"
+            },
+            {
+              "$ref": "#/$defs/ImplementationReportArtifact"
+            },
+            {
+              "$ref": "#/$defs/QaReportArtifact"
+            },
+            {
+              "$ref": "#/$defs/ReviewReportArtifact"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Artifact"
+    },
+    "error": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AgentFailure"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "usage": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AgentUsage"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "duration_ms": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Duration Ms",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "run_id",
+    "task_id",
+    "role",
+    "attempt",
+    "source_revision",
+    "context_manifest_id",
+    "status"
+  ],
+  "title": "AgentResult",
+  "type": "object",
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "SUCCEEDED"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "artifact"
+        ],
+        "properties": {
+          "artifact": {
+            "type": "object"
+          },
+          "error": {
+            "type": "null"
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object"
+          },
+          "artifact": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "TIMED_OUT"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "error": {
+            "properties": {
+              "code": {
+                "const": "TIMEOUT"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": [
+              "code"
+            ],
+            "properties": {
+              "code": {
+                "const": "TIMEOUT"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "status": {
+            "const": "TIMED_OUT"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": [
+              "code"
+            ],
+            "properties": {
+              "code": {
+                "const": "WORK_INTERRUPTED"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "status": {
+            "const": "FAILED"
+          }
+        }
+      }
+    }
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/agent-result.schema.json"
+}

@@ -69,7 +69,7 @@ _EXACT: dict[str, str] = {
 _REPOSITORY_BLOCKED = re.compile(r"^Repository (?P<repository>.+?) is BLOCKED; (?P<detail>.*)$")
 _ROLE_FAILURE = re.compile(
     r"^(?:(?:TRANSIENT_INFRA|POLICY_VIOLATION|INVALID_OUTPUT|"
-    r"VERIFICATION_INCONCLUSIVE):\s*)?(?P<role>Coder|QA|Reviewer) failed at attempt "
+    r"VERIFICATION_INCONCLUSIVE|WORK_INTERRUPTED):\s*)?(?P<role>Coder|QA|Reviewer) failed at attempt "
     r"(?P<attempt>\d+): (?P<detail>.*)$"
 )
 _KNOWLEDGE_FAILURE = re.compile(
@@ -109,7 +109,9 @@ def _role_failure(text: str) -> str | None:
     role, attempt, detail = match.group("role"), match.group("attempt"), match.group("detail")
     run_id = re.search(r"\brun_[0-9a-z]+\b", detail)
     digests = re.findall(r"\b[0-9a-f]{64}\b", detail)
-    if "candidate review prompt exceeds its configured Context budget" in detail:
+    if detail.startswith("工程执行已中断。草稿已保留。"):
+        reason = "工程执行中断，草稿已保留，由工程团队核对并处理"
+    elif "candidate review prompt exceeds its configured Context budget" in detail:
         reason = "候选验证上下文超过配置预算，平台在模型调用前安全停止"
     elif "candidate read snapshot exceeds its bounded context budget" in detail:
         reason = "候选读取快照超过有界上下文预算，平台未调用模型"

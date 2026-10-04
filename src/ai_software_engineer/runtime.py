@@ -18,6 +18,7 @@ from ai_software_engineer.agents import (
     OpenAICompatibleAgentAdapter,
     StoredContextResolver,
 )
+from ai_software_engineer.agents.continuation import InterruptionRetryControl
 from ai_software_engineer.artifacts import ArtifactStore, FileArtifactStore
 from ai_software_engineer.context import ContextBudget, ContextSource, FileContextStore
 from ai_software_engineer.domain import (
@@ -241,11 +242,13 @@ class RuntimeSession:
         transition_gate: DeliveryTransitionGate | None = None,
         human_action_recorder: RuntimeHumanActionRecorder | None = None,
         artifact_store: ArtifactStore | None = None,
+        interruption_control: InterruptionRetryControl | None = None,
     ) -> None:
         self._config = config
         self._context_builder = context_builder
         self._transition_gate = transition_gate
         self._human_action_recorder = human_action_recorder
+        self._interruption_control = interruption_control
         self._agent_definitions = _validate_agent_definitions(
             agent_definitions if agent_definitions is not None else config.agent_definitions()
         )
@@ -359,6 +362,7 @@ class RuntimeSession:
             agent_definitions=self._agent_definitions,
             transition_gate=self._transition_gate,
             execution_control=control,
+            interruption_control=self._interruption_control,
         )
         return RuntimeRunResult(case_id=selected_case, result=runner.run_task(task.id))
 

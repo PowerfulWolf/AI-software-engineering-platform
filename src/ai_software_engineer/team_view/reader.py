@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from pymysql.cursors import DictCursor
 
@@ -17,6 +18,7 @@ from ai_software_engineer.agents.fallback import (
 )
 from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.config import ProductionConfig
+from ai_software_engineer.domain.continuation import task_intent_sha256
 from ai_software_engineer.domain.coordination import ManagerCoordinationAdvice
 from ai_software_engineer.domain.enums import AgentRole, TaskStatus, TeamRole, WorkItemStatus
 from ai_software_engineer.domain.model import JsonValue
@@ -24,7 +26,9 @@ from ai_software_engineer.domain.task import Task, task_matches_dispatch
 from ai_software_engineer.domain.workforce import AgentProfile
 from ai_software_engineer.evaluation import FileEvaluationEventStore
 from ai_software_engineer.knowledge.administration import find_gap_records
-from ai_software_engineer.knowledge.gaps import KnowledgeGap
+from ai_software_engineer.knowledge.gaps import GapRoute, KnowledgeGap, KnowledgeGapRouting
+from ai_software_engineer.knowledge.models import digest as knowledge_digest
+from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.knowledge.views import read_gap_view
 from ai_software_engineer.manager.delivery import _delivery_id
 from ai_software_engineer.manager.delivery_checkpoint import (
@@ -47,8 +51,18 @@ from ai_software_engineer.multi_directory.production import DerivedStageInputs
 from ai_software_engineer.multi_directory.retirement import RequirementRetirementStore
 from ai_software_engineer.multi_directory.scope import git_read
 from ai_software_engineer.multi_directory.store import JointJournal
+from ai_software_engineer.orchestration.continuation_models import (
+    ContinuationRecordMissing,
+    ContinuationScope,
+    ExecutionInterruptionReceipt,
+)
+from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
 from ai_software_engineer.project_workspace import ProjectWorkspace
-from ai_software_engineer.projection.models import ProjectionFacts, TimelineEntry
+from ai_software_engineer.projection.models import (
+    ProjectionEventKind,
+    ProjectionFacts,
+    TimelineEntry,
+)
 from ai_software_engineer.projection.projector import RunProjectionBuilder
 from ai_software_engineer.recovery.models import RecoveryScope
 from ai_software_engineer.recovery.store import FileRecoveryStore, RecoveryRecordMissing
@@ -74,6 +88,7 @@ from .blocker_text import localize_blocking_text
 from .models import (
     AgentView,
     AssignmentView,
+    DeliveryExecutionView,
     DialogueAttachmentView,
     DialogueTurnView,
     DocumentView,
@@ -132,6 +147,7 @@ class _Native:
     intake: ProjectDeliveryIntake
     sidecar: Path
     history: tuple[ProjectDeliveryCheckpoint, ...]
+    team_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -349,6 +365,7 @@ class ProductionTeamReader:
                 else (localize_blocking_text(_safe(joint.next_action)) or _safe(joint.next_action))
             )
             knowledge_gap = None
+            knowledge_route = None
             if joint.stage is JointStage.WAITING_HUMAN and joint.knowledge_gap_id is not None:
                 assert selected is not None
                 records = find_gap_records(
@@ -359,6 +376,7 @@ class ProductionTeamReader:
                     records.get("gaps", joint.knowledge_gap_id, KnowledgeGap),
                     current_gap_id=joint.knowledge_gap_id,
                 )
+                knowledge_route = _knowledge_route(records, knowledge_gap.gap)
                 presented_next_action = (
                     "知识解答已批准，点击“继续交付”恢复原需求，无需重复解答。"  # noqa: RUF001
                     if knowledge_gap.resolution is not None
@@ -448,6 +466,7 @@ class ProductionTeamReader:
                     checkpoint_sha256=joint.checkpoint_sha256,
                     knowledge_gap=knowledge_gap,
                     knowledge_wait_stage=joint.knowledge_wait_stage,
+                    knowledge_route=knowledge_route,
                     design_recheck_available=recheck_available,
                     design_recheck_pending=bool(
                         joint.stage is JointStage.DESIGNING
@@ -607,6 +626,7 @@ class ProductionTeamReader:
                             checkpoint_sha256=cp.checkpoint_sha256,
                         )
                     )
+        tasks = [_with_execution_state(task) for task in tasks]
         requests = [_request_with_current_work(request, tasks) for request in requests]
         known_agents = {p.id for p in profiles}
         if any(a.agent_id not in known_agents for t in tasks for a in t.assignments):
@@ -804,7 +824,7 @@ def _read_native(project: ProjectWorkspace) -> tuple[_Native, ...]:
                 or intake.repository_root != cp.repository_root
             ):
                 raise ValueError("native checkpoint project mismatch")
-            result.append(_Native(cp, intake, sidecar, records))
+            result.append(_Native(cp, intake, sidecar, records, project.team.manifest.team_id))
     if len({n.checkpoint.delivery_id for n in result}) != len(result):
         raise ValueError("ambiguous native delivery")
     return tuple(result)
@@ -827,6 +847,7 @@ def _native_task_sources(native: _Native) -> dict[str, _Native]:
             intake=native.intake,
             sidecar=native.sidecar,
             history=native.history[: index + 1],
+            team_id=native.team_id,
         )
     return result
 
@@ -942,6 +963,99 @@ def _waiting(stage: str) -> bool:
     return stage.startswith("WAITING_") or stage in {"BLOCKED", "FAILED"}
 
 
+def _knowledge_route(records: KnowledgeRecordStore, gap: KnowledgeGap) -> GapRoute | None:
+    """Read the sealed responsibility route; absent legacy facts remain unclassified."""
+    routing = records.find("gap-routes", gap.gap_id, KnowledgeGapRouting)
+    if routing is None:
+        return None
+    if routing.gap_id != gap.gap_id or routing.routing_sha256 != knowledge_digest(
+        routing.model_dump(mode="json", exclude={"routing_sha256"})
+    ):
+        raise ValueError("knowledge route read binding mismatch")
+    return routing.route
+
+
+def _continuation_history(
+    sidecar: Path,
+    task: Task,
+    expected_scope: ContinuationScope,
+) -> tuple[tuple[TimelineEntry, ...], ExecutionInterruptionReceipt | None]:
+    """Project sealed execution facts only; a capture is never progress or a verdict."""
+    root = sidecar / "state" / "continuations" / task.id
+    _reject_symlinks(root)
+    if not root.exists():
+        return (), None
+    store = FileContinuationStore(root, task_id=task.id)
+    receipt = store.receipt_for_task(task.id)
+    if receipt is None:
+        return (), None
+    policy = task.interruption_continuation_policy
+    if (
+        receipt.scope != expected_scope
+        or receipt.request.source_revision != task.base_ref
+        or receipt.task_intent_sha256 != task_intent_sha256(task)
+        or policy is None
+        or receipt.policy_sha256 != policy.policy_sha256
+    ):
+        raise ValueError("continuation receipt does not match delivery facts")
+    entries = [
+        TimelineEntry(
+            id="interruption_" + receipt.receipt_sha256,
+            kind=ProjectionEventKind.EVIDENCE,
+            occurred_at=receipt.created_at,
+            task_id=task.id,
+            run_id=receipt.request.run_id,
+            role=AgentRole.CODER,
+            summary="开发达到本地执行时限。草稿已封存。"
+            if receipt.cause == "local_execution_limit"
+            else "开发遇到临时模型服务故障。草稿已封存。",
+            source_uri=(root / "receipt.json").as_uri(),
+            source_sha256=receipt.receipt_sha256,
+            details={
+                "kind": receipt.kind,
+                "cause": receipt.cause,
+                "original_error_code": receipt.original_error_code.value,
+                "changed_paths": list(receipt.mutation_paths),
+                "policy_sha256": receipt.policy_sha256,
+                "receipt_sha256": receipt.receipt_sha256,
+                "is_progress_or_candidate": False,
+            },
+        )
+    ]
+    try:
+        admission = store.get_admission(task.id)
+    except ContinuationRecordMissing:
+        return tuple(entries), receipt
+    if (
+        admission.new_request.source_revision != task.base_ref
+        or admission.new_request.permissions != receipt.request.permissions
+    ):
+        raise ValueError("continuation admission changed source or permissions")
+    entries.append(
+        TimelineEntry(
+            id="admission_" + admission.admission_sha256,
+            kind=ProjectionEventKind.EVIDENCE,
+            occurred_at=admission.created_at,
+            task_id=task.id,
+            run_id=admission.new_request.run_id,
+            role=AgentRole.CODER,
+            summary="平台按既有工程授权允许单次开发接续。实际执行状态以当前队列为准。",
+            source_uri=(root / "admission.json").as_uri(),
+            source_sha256=admission.admission_sha256,
+            details={
+                "kind": admission.kind,
+                "authorization_source": admission.authorization_source,
+                "receipt_sha256": admission.receipt_sha256,
+                "policy_sha256": admission.policy_sha256,
+                "interrupted_run_id": admission.interrupted_run_id,
+                "next_work_item_id": admission.next_work_item_id,
+                "next_lease_id": admission.next_lease_id,
+            },
+        )
+    )
+    return tuple(entries), receipt
+
+
 def _execution_interrupted(task: TaskView) -> bool:
     return not task.terminal and any(
         step.lease_liveness == "LEASE_EXPIRED"
@@ -973,51 +1087,184 @@ def _queue_wait(task: TaskView) -> RoleQueueView | None:
     )
 
 
-def _with_execution_state(task: TaskView) -> TaskView:
+def _task_execution(task: TaskView) -> DeliveryExecutionView:
+    if task.terminal:
+        if task.work_kind == "candidate_verification":
+            if task.status == "VERIFIED":
+                return DeliveryExecutionView(
+                    state="COMPLETED",
+                    responsibility="team",
+                    reason_code="CANDIDATE_VERIFIED",
+                    reason="本次候选验证已通过; 整体交付以需求验收状态为准。",
+                    next_action="查看本次候选的 QA 与 Review 验收记录。",
+                )
+            if task.status == "VERIFICATION_SUPERSEDED":
+                return DeliveryExecutionView(
+                    state="SUPERSEDED",
+                    responsibility="team",
+                    reason_code="VERIFICATION_SUPERSEDED",
+                    reason="本次历史验证已由后续计划替代, 记录保留用于审计。",
+                    next_action="查看后续验证计划与当前交付状态。",
+                )
+        complete = task.status == "DONE"
+        return DeliveryExecutionView(
+            state="COMPLETED" if complete else "STOPPED",
+            responsibility="team" if complete else "engineering",
+            reason_code="DELIVERY_DONE" if complete else task.failure_code or "DELIVERY_STOPPED",
+            reason="交付验证已完成。" if complete else "当前交付已停止, 历史与工作现场保留。",
+            next_action="查看交付结果与验收记录。"
+            if complete
+            else "由工程团队核对停止原因和安全恢复路径; 当前无需产品操作。",
+        )
     waiting = _queue_wait(task)
     if waiting is not None:
-        reason = (
-            "当前角色等待知识前提确认, 已暂停执行。"
-            if (waiting.wait_reason or "").startswith("KNOWLEDGE_GAP:")
-            else "当前角色等待外部前提, 已暂停执行。"
+        return DeliveryExecutionView(
+            state="WAITING",
+            responsibility="engineering",
+            reason_code=waiting.status.value,
+            reason="当前角色等待前提处理, 已暂停执行。",
+            next_action="由工程团队核对当前前提并处理; 如需业务决定, 会提出具体问题。",
         )
-        return task.model_copy(
+    if _execution_interrupted(task):
+        return DeliveryExecutionView(
+            state="UNKNOWN",
+            responsibility="engineering",
+            reason_code="EXECUTION_CLAIM_EXPIRED",
+            reason="当前执行状态无法确认, 团队需核验旧执行是否结束。交付阶段和已保存改动仍保留。",
+            next_action="由工程团队核验执行状态与已保存改动; 当前无需产品操作。",
+        )
+    role_status = {
+        AgentRole.CODER: "IMPLEMENTING",
+        AgentRole.QA: "QA",
+        AgentRole.REVIEWER: "REVIEW",
+    }
+    current = next(
+        (
+            step
+            for step in reversed(task.role_queue)
+            if step.status is not WorkItemStatus.CLOSED
+            and role_status.get(step.role) == task.status
+        ),
+        None,
+    )
+    if current is not None:
+        title = "QA" if current.role is AgentRole.QA else current.role.value.title()
+        if current.status is WorkItemStatus.RUNNING and current.lease_liveness == "LEASE_VALID":
+            return DeliveryExecutionView(
+                state="RUNNING",
+                responsibility="team",
+                reason_code="ROLE_RUNNING",
+                reason=f"{title} 正在执行。细分进度暂未上报。",
+                next_action=f"{title} 正在执行。请等待当前执行完成。",
+            )
+        if current.status is WorkItemStatus.RETRY_SCHEDULED:
+            return DeliveryExecutionView(
+                state="RETRY_SCHEDULED",
+                responsibility="team",
+                reason_code="ROLE_RETRY_SCHEDULED",
+                reason="当前执行已安排重试, 交付阶段保持不变。",
+                next_action="ASE 团队按现有授权与预算重新调度; 当前无需你操作。",
+                available_at=current.available_at,
+            )
+        if current.status in {WorkItemStatus.READY, WorkItemStatus.LEASED}:
+            return DeliveryExecutionView(
+                state="QUEUED",
+                responsibility="team",
+                reason_code="ROLE_QUEUED",
+                reason=f"{title} 已排队, 尚未开始执行。",
+                next_action="等待团队调度; 当前无需你操作。",
+            )
+    return DeliveryExecutionView(
+        state="UNKNOWN",
+        responsibility="engineering",
+        reason_code="EXECUTION_NOT_OBSERVED",
+        reason="尚无足够事实确认当前执行状态。",
+        next_action="由工程团队核对执行状态; 交付阶段不代表模型正在调用。",
+    )
+
+
+def _with_execution_state(task: TaskView) -> TaskView:
+    execution = _task_execution(task)
+    if task.execution is not None:
+        execution = execution.model_copy(
             update={
-                "blocker": reason,
-                "next_action": "请通过“继续交付”接回当前等待, 按精确前提处理后恢复。",
+                "policy_id": task.execution.policy_id,
+                "receipt_uri": task.execution.receipt_uri,
             }
         )
-    if not _execution_interrupted(task):
-        role_status = {
-            AgentRole.CODER: "IMPLEMENTING",
-            AgentRole.QA: "QA",
-            AgentRole.REVIEWER: "REVIEW",
-        }
-        if not task.terminal and task.blocker is None:
-            for step in task.role_queue:
-                if (
-                    step.status is WorkItemStatus.RUNNING
-                    and step.lease_liveness == "LEASE_VALID"
-                    and role_status.get(step.role) == task.status
-                ):
-                    title = "QA" if step.role is AgentRole.QA else step.role.value.title()
-                    return task.model_copy(
-                        update={
-                            "next_action": f"{title} 正在执行。请等待当前执行完成。"
-                            "执行租约有效。细分进度暂未上报。",
-                        }
-                    )
-        return task
-    return task.model_copy(
-        update={
-            "blocker": "执行租约已失效。当前执行已中断。交付阶段和已保存改动仍保留。",
-            "next_action": "请通过“继续交付”检查并恢复当前执行。",
-        }
-    )
+    updates: dict[str, object] = {"execution": execution}
+    if execution.state in {"WAITING", "RUNNING", "QUEUED", "RETRY_SCHEDULED"}:
+        updates["next_action"] = execution.next_action
+        updates["blocker"] = execution.reason if execution.state == "WAITING" else None
+    elif _execution_interrupted(task):
+        updates.update(blocker=execution.reason, next_action=execution.next_action)
+    return task.model_copy(update=updates)
+
+
+def _with_request_execution(request: RequestView) -> RequestView:
+    if request.stage in {"WAITING_PRODUCT_REPLY", "WAITING_PRODUCT_APPROVAL"}:
+        execution = DeliveryExecutionView(
+            state="WAITING",
+            responsibility="product",
+            reason_code=request.stage,
+            reason="需要确认业务需求。"
+            if request.stage == "WAITING_PRODUCT_REPLY"
+            else "产品方案等待批准。",
+            next_action=request.next_action,
+            action_required=True,
+        )
+    elif (
+        request.stage not in {"DONE", "CLOSED"}
+        and request.knowledge_gap is not None
+        and request.knowledge_gap.is_current
+    ):
+        route = request.knowledge_route
+        resolved = request.knowledge_gap.resolution is not None
+        responsibility: Literal["product", "team", "engineering"] = (
+            "team"
+            if resolved or route in {"PRODUCT", "DESIGNER", "RESEARCH", "WAITING_DEPENDENCY"}
+            else "product"
+            if route in {"USER", "ACCEPT_RISK"}
+            else "engineering"
+        )
+        execution = DeliveryExecutionView(
+            state="WAITING",
+            responsibility=responsibility,
+            reason_code="KNOWLEDGE_GAP",
+            reason="知识解答已批准, 等待团队接续。"
+            if resolved
+            else "当前知识前提尚未确认, 执行已暂停。",
+            next_action=request.next_action
+            if responsibility == "product"
+            else "由 ASE 团队核对知识前提并处理; 需要业务决定时会提出具体问题。",
+            action_required=responsibility == "product",
+        )
+    elif request.stage in {"DONE", "CLOSED"}:
+        execution = DeliveryExecutionView(
+            state="COMPLETED" if request.stage == "DONE" else "STOPPED",
+            responsibility="team",
+            reason_code=request.stage,
+            reason="需求已交付。" if request.stage == "DONE" else "需求已关闭, 历史保留。",
+            next_action=request.next_action,
+        )
+    else:
+        execution = DeliveryExecutionView(
+            state="WAITING" if _waiting(request.stage) else "UNKNOWN",
+            responsibility="engineering" if _waiting(request.stage) else "team",
+            reason_code=request.stage,
+            reason="工程前提待处理。"
+            if _waiting(request.stage)
+            else "当前阶段已记录, 具体执行状态待上报。",
+            next_action="由工程团队处理当前前提; 当前无需产品操作。"
+            if _waiting(request.stage)
+            else request.next_action,
+        )
+    return request.model_copy(update={"execution": execution})
 
 
 def _request_with_current_work(request: RequestView, tasks: list[TaskView]) -> RequestView:
     """Prefer a newer active child Task over a stale terminal joint observation."""
+    request = _with_request_execution(request)
     # Knowledge waits preserve the child's delivery checkpoint; it is not active work.
     if request.knowledge_gap is not None and request.knowledge_gap.is_current:
         return request
@@ -1034,7 +1281,10 @@ def _request_with_current_work(request: RequestView, tasks: list[TaskView]) -> R
         assert waiting is not None
         return request.model_copy(
             update={
-                "stage": waiting.status.value,
+                "stage": "INTEGRATING"
+                if current.work_kind == "candidate_verification"
+                else "DELIVERING",
+                "execution": current.execution,
                 "next_action": current.next_action,
                 "blocker": current.blocker,
                 "failed_stages": (),
@@ -1070,6 +1320,7 @@ def _request_with_current_work(request: RequestView, tasks: list[TaskView]) -> R
                     "blocker": current.blocker,
                     "next_action": current.next_action,
                     "failed_stages": request.failed_stages,
+                    "execution": _with_execution_state(current).execution,
                 }
             )
         return request
@@ -1078,6 +1329,7 @@ def _request_with_current_work(request: RequestView, tasks: list[TaskView]) -> R
     return request.model_copy(
         update={
             "stage": stage,
+            "execution": current.execution,
             "next_action": current.next_action,
             "blocker": current.blocker,
             "failed_stages": (),
@@ -1168,6 +1420,7 @@ def _task_base(
             if _waiting(cp.stage)
             else None
         ),
+        failure_code=cp.failure_code,
         next_action=localize_blocking_text(cp.next_action) or cp.next_action,
         candidate_revision=cp.candidate_revision,
         candidate_branch=(
@@ -1559,7 +1812,25 @@ def _read_task_details(
         allocation_sha256=dispatch.dispatch_sha256,
         now=datetime.now(UTC),
     )
-    return _with_execution_state(
+    continuation_receipt = None
+    if native.team_id is not None:
+        history, continuation_receipt = _continuation_history(
+            native.sidecar,
+            task,
+            ContinuationScope(
+                team_id=native.team_id,
+                project_id=base.project_id,
+                repository_id=dispatch.repository_id,
+                requirement_id=cp.delivery_id,
+                dispatch_sha256=dispatch.dispatch_sha256,
+            ),
+        )
+        timeline = tuple(
+            sorted((*timeline, *history), key=lambda entry: (entry.occurred_at, entry.id))
+        )
+    elif (native.sidecar / "state" / "continuations" / task.id).exists():
+        raise ValueError("continuation history is missing its Team binding")
+    view = _with_execution_state(
         base.model_copy(
             update={
                 "role_queue": role_queue,
@@ -1632,6 +1903,21 @@ def _read_task_details(
             }
         )
     )
+    if continuation_receipt is not None:
+        assert view.execution is not None
+        view = view.model_copy(
+            update={
+                "execution": view.execution.model_copy(
+                    update={
+                        "policy_id": continuation_receipt.policy_sha256,
+                        "receipt_uri": (
+                            native.sidecar / "state" / "continuations" / task.id / "receipt.json"
+                        ).as_uri(),
+                    }
+                )
+            }
+        )
+    return view
 
 
 def _active_successor_dispatch(

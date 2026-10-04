@@ -60,6 +60,7 @@ from ai_software_engineer.domain import (
     ReviewReportArtifact,
     ReviewVerdict,
     RiskTier,
+    Task,
     TaskConstraints,
     TaskStatus,
     TeamRole,
@@ -867,6 +868,9 @@ class ProductionProjectDeliveryBackend:
         task_id = f"task_{_suffix(checkpoint.delivery_id)}"
         base_ref = self.delivery_base_revision(facts.workspace.repository_root)
         retry_policy = self._config.execution_retry_policy.delivery_policy()
+        from ai_software_engineer.domain.continuation import InterruptionContinuationPolicy
+
+        interruption_policy = InterruptionContinuationPolicy()
         constraints = _task_constraints(
             facts.profile, design, max_attempts=retry_policy.execution_limit
         )
@@ -882,6 +886,7 @@ class ProductionProjectDeliveryBackend:
             base_ref=base_ref,
             max_attempts=retry_policy.execution_limit,
             retry_policy=retry_policy,
+            interruption_continuation_policy=interruption_policy,
             created_at=checkpoint.checkpointed_at,
             constraints=constraints,
             owner="project-manager",
@@ -975,6 +980,7 @@ class ProductionProjectDeliveryBackend:
             base_ref=base_ref,
             max_attempts=retry_policy.execution_limit,
             retry_policy=retry_policy,
+            interruption_continuation_policy=interruption_policy,
             task_created_at=checkpoint.checkpointed_at,
             committed_at=checkpoint.checkpointed_at + timedelta(seconds=1),
             constraints=constraints,
@@ -1051,6 +1057,7 @@ class ProductionProjectDeliveryBackend:
             facts.planning.get_execution_plan(dispatch.execution_plan_id),
             extra_context=extra_context,
             route_scope=route_scope,
+            requirement_id=checkpoint.delivery_id,
         )
         return result
 
@@ -1065,6 +1072,7 @@ class ProductionProjectDeliveryBackend:
         route_adapters: DeliveryRouteAdapterFactory | None = None,
         extra_context: tuple[ContextSource, ...] = (),
         route_scope: tuple[ProviderRouteConfig, ...] | None = None,
+        requirement_id: str | None = None,
     ) -> RetryResult:
         """Trusted composition after native or recovery allocation authorization."""
         facts = self._facts(preparation)
@@ -1117,8 +1125,74 @@ class ProductionProjectDeliveryBackend:
             or self._delivery_route_adapters
             or ConfiguredDeliveryRouteAdapterFactory()
         )
+        interruption_control = None
+        active_runtime: RuntimeSession | None = None
         if isinstance(selected_adapters, ConfiguredDeliveryRouteAdapterFactory):
             selected_adapters = selected_adapters.with_execution_guard(worker_guard)
+            if dispatch.task.interruption_continuation_policy is not None:
+                from ai_software_engineer.git import GitWorktreeManager
+                from ai_software_engineer.orchestration.continuation import NativeCoderContinuation
+                from ai_software_engineer.orchestration.continuation_models import ContinuationScope
+                from ai_software_engineer.orchestration.continuation_store import (
+                    FileContinuationStore,
+                )
+                from ai_software_engineer.work_queue.models import QueueClaim
+
+                if requirement_id is None:
+                    raise ValueError("continuation requires a verified native Requirement identity")
+
+                def current_task() -> Task:
+                    if active_runtime is None:
+                        raise ValueError("continuation runtime is not bound")
+                    return active_runtime.task_repository.get(dispatch.task_id)
+
+                def current_revision() -> int:
+                    if active_runtime is None:
+                        raise ValueError("continuation runtime is not bound")
+                    return active_runtime.task_repository.current_revision(dispatch.task_id)
+
+                def current_claim() -> QueueClaim:
+                    worker_guard.check()
+                    assert worker_guard.lease is not None
+                    return worker_guard.lease.claim
+
+                continuation_root = facts.workspace.directory("state") / "continuations"
+                if any(
+                    path.is_symlink() for path in (continuation_root, *continuation_root.parents)
+                ):
+                    raise ValueError("continuation parent must not contain symlinks")
+                continuation_root.mkdir(mode=0o700, exist_ok=True)
+                interruption_control = NativeCoderContinuation(
+                    scope=ContinuationScope(
+                        team_id=self._config.team_id,
+                        project_id=facts.workspace.manifest.project_id,
+                        repository_id=dispatch.repository_id,
+                        requirement_id=requirement_id,
+                        dispatch_sha256=dispatch.dispatch_sha256,
+                    ),
+                    store=FileContinuationStore.initialize(
+                        continuation_root / dispatch.task_id, task_id=dispatch.task_id
+                    ),
+                    git_workspace=GitWorktreeManager(
+                        facts.workspace.repository_root,
+                        Path(self._config.platform_root).expanduser().resolve()
+                        / "worktrees"
+                        / str(dispatch.repository_id),
+                        branch_names={dispatch.task_id: dispatch.task.branch_name},
+                    ),
+                    guard=worker_guard,
+                    current_task=current_task,
+                    current_revision=current_revision,
+                    claim=current_claim,
+                    has_accepted_output=lambda: any(
+                        item.producer.role is not AgentRole.ORCHESTRATOR
+                        for item in accepted_artifacts.list_for_task(dispatch.task_id)
+                    ),
+                    clock=lambda: datetime.now(UTC),
+                )
+                selected_adapters = selected_adapters.with_interruption_control(
+                    interruption_control
+                )
         adapter = DispatchDeliveryAgentAdapter(
             dispatch=dispatch,
             definitions=definitions,
@@ -1238,6 +1312,7 @@ class ProductionProjectDeliveryBackend:
             environment=self._environment,
             agent_adapter=adapter,
             artifact_store=accepted_artifacts,
+            interruption_control=interruption_control,
             agent_definitions=definitions,
             repository_root=facts.workspace.repository_root,
             context_builder=knowledge_contexts,
@@ -1252,6 +1327,7 @@ class ProductionProjectDeliveryBackend:
             if isinstance(knowledge_contexts, KnowledgeRunContextBuilder)
             else None,
         ) as runtime:
+            active_runtime = runtime
             supervisor = QueuedDeliverySupervisor(
                 queue=queue,
                 guard=worker_guard,

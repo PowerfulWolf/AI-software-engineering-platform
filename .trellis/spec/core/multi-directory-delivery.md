@@ -705,7 +705,8 @@ approval, then execute a bounded test through the unchanged evidence/verdict gua
 ### 1. Scope / Trigger
 
 Applies when a browser user corrects the title or Repository scope of an unstarted Requirement, or
-removes a Requirement before ProductSpec approval from the current Project inventory. Joint intake
+removes an unapproved draft or an already stopped BLOCKED/CLOSED Requirement from the current
+Project inventory. Joint intake
 identity includes title and scope, and
 checkpoint intake fields are immutable, so an edit must publish a replacement rather than rewrite a
 journal. Delete is visibility retirement, never evidence erasure.
@@ -751,7 +752,8 @@ The public storage contract is `schemas/requirement-retirement.schema.json` at
 - Delete accepts exact named Requirements in `READY_FOR_DISCUSSION`, `PRODUCT_DISCOVERY`,
   `WAITING_PRODUCT_REPLY` or `WAITING_PRODUCT_APPROVAL`, provided approval, Design, Plan, children
   and integration facts are absent. Unapproved ProductSpec and Dialogue are preserved in the retired
-  journal. ProductSpec approval closes the deletion boundary.
+  journal. ProductSpec approval prevents deleting an active Requirement; already stopped
+  BLOCKED/CLOSED Requirements remain deletable after independent execution-stop checks.
 - Update discovers and validates the new 1–32 directory scope, derives its normal content-addressed
   Delivery ID, creates/reopens that replacement through `_intake`, then retires the original. A
   replacement failure leaves the original visible. If this update created a partial replacement
@@ -762,7 +764,10 @@ The public storage contract is `schemas/requirement-retirement.schema.json` at
 - A BLOCKED close appends `CLOSED`. Restart accepts only the exact current `CLOSED` checkpoint and
   appends `BLOCKED`; it does not call a provider or resume work. The existing resume command remains
   the explicit execution boundary.
-- Deletion of BLOCKED/CLOSED Requirements is allowed. Current read projections must remove the joint
+- Deletion of BLOCKED/CLOSED Requirements requires the production deletion guard: retain all
+  historical Task process locks through publication, require terminal Task snapshots, closed queue
+  steps and no active Lease. No Task state, verdict or dirty worktree is changed. Current read
+  projections must remove the joint
   Requirement plus all child/native Tasks it owns, including Agent queue entries, while preserving
   their journals and sidecars for audit.
 - The retirement record binds exact Team/Project manifest digests. Every entry binds the retired
@@ -771,8 +776,10 @@ The public storage contract is `schemas/requirement-retirement.schema.json` at
   atomically replaced under a process lock and fsynced.
 - Retrying the same logical retirement is idempotent even if `retired_at` differs. A changed reason,
   checkpoint or replacement identity is a conflict.
-- Recreating the exact input of an explicitly deleted draft restores it. A draft superseded by edit
-  cannot be silently reopened under the old identity.
+- Recreating the exact input of an explicitly deleted Requirement derives a fresh content-addressed
+  identity from the prior tombstone. The new input remains idempotent while the old tombstone,
+  approval and history remain unchanged. A draft superseded by edit cannot be silently reopened
+  under the old identity. Full execution and error contracts are in `requirement-deletion.md`.
 
 ### 4. Validation & Error Matrix
 
@@ -794,7 +801,8 @@ The public storage contract is `schemas/requirement-retirement.schema.json` at
 | retirement digest/owner/checkpoint drift | fail the read and command closed |
 | replacement journal missing or foreign | fail closed; do not hide corruption |
 | newly-created replacement preparation blocks/fails | original remains visible; partial replacement is retired, not erased |
-| recreate exact deleted input | restore exact draft after normal intake validation |
+| recreate exact deleted input | fresh identity and original preparation flow; never restore old journal/approval |
+| delete with live process, Lease, open queue or nonterminal Task | reject, leave Requirement visible and all history intact |
 | recreate superseded input | reject as superseded |
 
 ### 5. Good / Base / Bad Cases
@@ -814,6 +822,10 @@ existence and tamper failure. Manager/schema tests assert
 typed intent delegation and Python-to-JSON-Schema parity. Reader tests assert retired Requirements
 leave the selected list, Project count, native Task projection and Agent queues without deleting the
 source journal or Repository sidecar.
+`tests/manager/test_requirement_deletion.py` covers actual process locks and native Task history,
+with isolated MySQL tests for terminal snapshots. `tests/web_console/test_requirement_deletion_entry.py`
+drives HTTP -> Operation -> Manager -> service -> reader, exact deletion replay, hidden counts,
+zero-model execution refusal and unchanged audit bytes. Shared isolated MySQL tests must run serially.
 
 ### 7. Wrong vs Correct
 

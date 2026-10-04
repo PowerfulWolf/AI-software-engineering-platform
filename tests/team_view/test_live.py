@@ -177,7 +177,9 @@ def test_valid_current_role_lease_presents_wait_instead_of_continue(
         step.model_copy(update={"status": WorkItemStatus.LEASED}),
     ):
         unknown = task.model_copy(update={"role_queue": (changed,)})
-        assert _request_with_current_work(request, [unknown]).next_action == task.next_action
+        observed = _request_with_current_work(request, [unknown])
+        assert observed.execution is not None and observed.execution.state != "RUNNING"
+        assert "正在执行" not in observed.execution.next_action
     wrong_stage = task.model_copy(update={"status": "QUEUED"})
     assert _request_with_current_work(request, [wrong_stage]).next_action == task.next_action
 
@@ -269,7 +271,8 @@ def test_active_child_task_supersedes_stale_blocked_requirement_projection(
     )
     interrupted = _request_with_current_work(request, [expired])
     assert interrupted.stage == "DELIVERING"
-    assert interrupted.blocker is not None and "租约" in interrupted.blocker
+    assert interrupted.blocker is not None and "无法确认" in interrupted.blocker
+    assert interrupted.execution is not None and interrupted.execution.state == "UNKNOWN"
     assert interrupted.coordination is None
     assert expired.status == "IMPLEMENTING"
 
@@ -312,8 +315,9 @@ def test_current_queue_wait_overrides_stale_parent_and_active_delivery(
         ),
     )
     projected = _request_with_current_work(request, [task])
-    assert projected.stage == status.value
-    assert projected.blocker is not None and "知识" in projected.blocker
+    assert projected.stage == "DELIVERING"
+    assert projected.blocker is not None and "前提" in projected.blocker
+    assert projected.execution is not None and projected.execution.responsibility == "engineering"
     assert projected.coordination is None
     assert task.status == "IMPLEMENTING"
 

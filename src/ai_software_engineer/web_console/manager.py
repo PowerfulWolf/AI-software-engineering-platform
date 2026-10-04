@@ -24,6 +24,7 @@ from ai_software_engineer.manager.delivery_checkpoint import (
 from ai_software_engineer.manager.model_execution import ManagerExecutionRejected
 from ai_software_engineer.manager.python_verification import PythonMysqlSandboxCapability
 from ai_software_engineer.manager.verification_environment import SwiftSandboxCapability
+from ai_software_engineer.multi_directory.deletion import RequirementDeletionRejected
 from ai_software_engineer.multi_directory.errors import (
     RequirementGitBaselineRequired,
     RequirementSourceRevisionDrift,
@@ -140,7 +141,7 @@ class ManagerConsoleAdapter:
                 return ConsoleCommandResult(
                     project_id=intent.project_id,
                     stage="REQUIREMENT_DELETED",
-                    next_action="Requirement removed from the current Project view.",
+                    next_action="需求已删除, 历史交付记录保留用于审计。",
                 )
             if isinstance(intent, ProductReplyIntent):
                 replied = self._entry(intent.project_id, intent.delivery_id).reply(
@@ -253,6 +254,8 @@ class ManagerConsoleAdapter:
                 "STALE_CHECKPOINT",
                 "The displayed delivery changed. Refresh the workspace and try again.",
             ) from error
+        except RequirementDeletionRejected as error:
+            raise ConsoleCommandRejected("REQUIREMENT_ACTIVE", _safe_summary(error)) from error
         except ContextBudgetExceeded as error:
             raise ConsoleCommandRejected(
                 "CONTEXT_BUDGET_EXHAUSTED",

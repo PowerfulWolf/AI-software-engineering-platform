@@ -22,6 +22,7 @@ from ai_software_engineer.agents import (
 )
 from ai_software_engineer.agents.candidate_binding import BoundCandidateSource
 from ai_software_engineer.agents.codex_cli import InitialWorkspaceAdmission
+from ai_software_engineer.agents.continuation import CoderInterruptionControl
 from ai_software_engineer.agents.execution import ExecutionGuard
 from ai_software_engineer.agents.fallback import model_route_root
 from ai_software_engineer.config import (
@@ -72,10 +73,12 @@ class ConfiguredDeliveryRouteAdapterFactory:
         initial_workspace_admission: InitialWorkspaceAdmission | None = None,
         execution_guard: ExecutionGuard | None = None,
         verification_evidence: VerificationEvidenceProvider | None = None,
+        interruption_control: CoderInterruptionControl | None = None,
     ) -> None:
         self._initial_admission = initial_workspace_admission
         self._execution_guard = execution_guard
         self._verification_evidence = verification_evidence
+        self._interruption_control = interruption_control
 
     def with_execution_guard(self, guard: ExecutionGuard) -> ConfiguredDeliveryRouteAdapterFactory:
         """Bind Worker ownership while preserving explicitly approved recovery admission."""
@@ -83,6 +86,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             initial_workspace_admission=self._initial_admission,
             execution_guard=guard,
             verification_evidence=self._verification_evidence,
+            interruption_control=self._interruption_control,
         )
 
     def with_verification_evidence(
@@ -92,6 +96,17 @@ class ConfiguredDeliveryRouteAdapterFactory:
             initial_workspace_admission=self._initial_admission,
             execution_guard=self._execution_guard,
             verification_evidence=provider,
+            interruption_control=self._interruption_control,
+        )
+
+    def with_interruption_control(
+        self, control: CoderInterruptionControl
+    ) -> ConfiguredDeliveryRouteAdapterFactory:
+        return ConfiguredDeliveryRouteAdapterFactory(
+            initial_workspace_admission=self._initial_admission,
+            execution_guard=self._execution_guard,
+            verification_evidence=self._verification_evidence,
+            interruption_control=control,
         )
 
     def create(
@@ -145,6 +160,9 @@ class ConfiguredDeliveryRouteAdapterFactory:
                 environment=environment,
                 initial_workspace_admission=(
                     self._initial_admission if definition.role is AgentRole.CODER else None
+                ),
+                interruption_control=(
+                    self._interruption_control if definition.role is AgentRole.CODER else None
                 ),
             )
         assert route.api_key_env is not None and route.endpoint is not None

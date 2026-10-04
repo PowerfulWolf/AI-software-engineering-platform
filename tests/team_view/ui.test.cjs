@@ -2964,7 +2964,8 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   await interval.fn();
   vm.runInContext('showDetail("request","r1")', context);
   const driftDetail = get("detail");
-  assert.match(text(driftDetail), /代码版本已变化/);
+  assert.match(text(driftDetail), /需求工程基线无法验证/);
+  assert.match(text(driftDetail), /普通代码更新不要求产品重新创建需求/);
   assert.doesNotMatch(
     text(driftDetail),
     /上次 Product Agent 执行已中断/,

@@ -1,5 +1,76 @@
 # T036 Live team read side
 
+## 面向产品负责人的执行状态与工程处理（2026-10-04）
+
+### Scope / Signatures
+
+用户是产品负责人，业务决定与工程操作必须分开。新增只读 `DeliveryExecutionView`，
+由 `TaskView.execution` 与 `RequestView.execution` 共同使用，字段为 `state`、
+`responsibility(product/team/engineering)`、`reason_code`、`reason`、`next_action`、
+`action_required`、真实 `available_at` 和可选工程 policy/receipt 引用。
+`_with_execution_state(TaskView) -> TaskView` 与
+`_request_with_current_work(RequestView, list[TaskView]) -> RequestView` 只投影事实。
+`_continuation_history(sidecar, task, expected_scope)` 只读已有 `FileContinuationStore`，
+缺失时不创建目录。
+
+### Contracts
+
+- Task 的交付阶段与当前执行状态分开。角色排队、重试、等待均不把 `IMPLEMENTING` 等 checkpoint
+  改成另一阶段；Requirement 交付期间的角色等待保留 `DELIVERING/INTEGRATING`，单独投影 execution。
+- 当前阶段对应的 typed queue item `RUNNING + LEASE_VALID` 才显示角色执行；`READY/LEASED` 显示
+  已排队。缺少执行事实保持 `UNKNOWN`。租约过期只能证明 claim 失效，不能证明进程停止；
+  展示“状态无法确认，由工程团队核验”，不得宣称已中断或默认请产品审批。
+- `RETRY_SCHEDULED` 的时间只来自实际 WorkItem `available_at`，不猜倒计时或承诺已经启动。
+  重试、排队和未确认阶段使用静态暂停样式，不能出现执行动画。
+- 只有明确的产品回复/产品批准阶段，或已校验 `KnowledgeGapRouting` 的 `USER/ACCEPT_RISK`
+  路由请求产品操作。PRODUCT/DESIGNER/RESEARCH 是团队工作；未知 legacy route 和工程等待进入
+  工程核验。责任不能从 question、Manager 自由文本、英文诊断或“人工等待”字样猜测。
+  gap-routes 必须与当前 gap ID 精确绑定并验证 canonical digest。
+- `action_required` 指产品是否需要作业务决定。工程管理员沿用可信本机操作入口，技术审批与
+  知识处理放“工程管理”折叠区，明确这只是职责分流，并未引入独立账户 RBAC。
+- 产品摘要回答当前阶段、实际执行、原因、责任方和下一步。Task/Run/lease/hash/source URI/
+  policy/receipt 位于工程详情，不能成为正常产品推进的输入。
+- receipt/admission 只作为完整历史。读取必须绑定同 Team/Project/Repository/native delivery ID、
+  dispatch SHA、Task intent SHA、source revision 与冻结 policy；admission 保持原 source/permissions。
+  receipt 不是模型 progress、候选或 verdict；policy admission 不能记成真实人工批准。
+  新 QA/Reviewer claim 优先于旧 Coder receipt，旧记录不重新形成当前阻塞。
+- 独立候选验证的 `VERIFIED` 只投影本次候选验证已通过（`COMPLETED/team`），不能宣称整个需求
+  已交付。`VERIFICATION_SUPERSEDED` 投影 `SUPERSEDED/team` 和历史已替代说明，不能作为新的
+  工程故障或建议恢复旧计划；`VERIFICATION_INTERRUPTED` 与否定 verdict 仍保留停止/返工事实。
+- 保留所有 QA/Review findings、每轮 Coder 输入 lineage 与每次中断/准入记录，不截断为八条。
+  “收到反馈”仍不能显示“已修复”。轮询使需求从等待转为重试/执行时，保留当前选择并跟随分组；
+  只有用户主动切换分组才重新选择，不能丢失正在查看的需求详情。
+
+### Validation / Good, Base, Bad
+
+| 输入 | 展示与禁止行为 |
+|---|---|
+| 当前 Coder 有效运行 claim | 实现阶段 + 执行中，不把它称为已完成模型调用 |
+| 工程 WAITING_HUMAN 或未知 legacy 等待 | 等待工程处理，不要求产品批准技术 hash |
+| 已批准知识/typed团队检索 route | 团队接续/处理，原业务批准保留 |
+| 已安排 retry + available_at | 真实重试时间，静态阶段，不冒充角色运行 |
+| expired claim、无停机 receipt | 执行状态待确认，不从失效租约推断停机 |
+| 合法旧 receipt + 当前 QA claim | 中断在历史，当前显示 QA 执行 |
+| receipt scope/intent/policy drift | fail closed，不写库或修补 sealed 事实 |
+| 等待转活跃、12+返工记录 | 详情选择保持，全部历史保留 |
+
+Good：产品只看到工程团队处理前提，管理员展开工程管理后操作精确计划；已保存故障与准入均可审计。
+Base：旧 payload 没有 execution 时保留兼容渲染；read-side 不追溯授权旧 Task。
+Bad：隐藏 hash 但仍要求产品逐次批准技术故障；把已失效 lease 当作进程停止证明；
+用旧中断 receipt 掩盖已开始的 QA；切换状态后清空已选择的需求。
+
+### Tests / Operations
+
+增量测试：`test_product_execution.py`、`test_continuation_history.py`、相关 `test_live.py` 投影与
+Schema 用例、`product-execution.test.cjs`、现有完整历史/知识/控制门禁 DOM，以及真实 Chrome 的
+`browser/product-execution.test.cjs`、`execution-history.test.cjs`、`polling-state.test.cjs`。
+读侧与 API 不构造 mutation Host；测试需证明读取前后文件 bytes 不变、缺失 sidecar 不创建、
+scope/intent/policy 变化拒绝。MySQL fixture 必须串行，避免共享测试库重置互相污染。
+
+存量无需改库或重写 journal；新服务只增加兼容投影并读取已验证历史。
+空闲加载前端后刷新可见；回滚此读侧提交并刷新不删除 receipt、Task 或历史批准。
+本节替代历史章节中把 lease 过期直接称为“执行已中断”、把通用工程等待要求用户继续审批的文案。
+
 ## 完整 QA/Review 返工执行记录（2026-10-03）
 
 ### Scope / Trigger

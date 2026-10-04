@@ -4,7 +4,18 @@
   "title": "Task",
   "type": "object",
   "additionalProperties": false,
-  "required": ["id", "title", "description", "repository", "base_ref", "acceptance_criteria", "status", "max_attempts", "created_at", "updated_at"],
+  "required": [
+    "id",
+    "title",
+    "description",
+    "repository",
+    "base_ref",
+    "acceptance_criteria",
+    "status",
+    "max_attempts",
+    "created_at",
+    "updated_at"
+  ],
   "$defs": {
     "DeliveryRetryPolicy": {
       "additionalProperties": false,
@@ -101,28 +112,160 @@
       },
       "title": "TransientRetryPolicy",
       "type": "object"
+    },
+    "InterruptionContinuationPolicy": {
+      "additionalProperties": false,
+      "description": "Frozen narrow capability; legacy Tasks have no implicit authorization.",
+      "properties": {
+        "kind": {
+          "const": "interruption_continuation_policy",
+          "default": "interruption_continuation_policy",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "authorization_source": {
+          "const": "organization_engineering_policy",
+          "default": "organization_engineering_policy",
+          "title": "Authorization Source",
+          "type": "string"
+        },
+        "capability_id": {
+          "const": "git-text-mutation-inventory-v1",
+          "default": "git-text-mutation-inventory-v1",
+          "title": "Capability Id",
+          "type": "string"
+        },
+        "max_continuations": {
+          "const": 1,
+          "default": 1,
+          "maximum": 1,
+          "minimum": 1,
+          "title": "Max Continuations",
+          "type": "integer"
+        },
+        "allowed_causes": {
+          "default": [
+            "local_execution_limit",
+            "provider_transient"
+          ],
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "const": "local_execution_limit",
+              "type": "string"
+            },
+            {
+              "const": "provider_transient",
+              "type": "string"
+            }
+          ],
+          "title": "Allowed Causes",
+          "type": "array"
+        },
+        "allowed_changes": {
+          "default": [
+            "text_added",
+            "text_modified"
+          ],
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "const": "text_added",
+              "type": "string"
+            },
+            {
+              "const": "text_modified",
+              "type": "string"
+            }
+          ],
+          "title": "Allowed Changes",
+          "type": "array"
+        }
+      },
+      "title": "InterruptionContinuationPolicy",
+      "type": "object"
     }
   },
   "properties": {
-    "branch_name": {"anyOf":[{"maxLength":240,"minLength":11,"pattern":"^ai/(feature|bugfix)/[a-z][a-z0-9]*(?:-[a-z0-9]+)*$","type":"string"},{"type":"null"}],"default":null,"title":"Branch Name"},
-    "id": {"type": "string", "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$"},
-    "title": {"type": "string", "minLength": 1, "maxLength": 200},
-    "description": {"type": "string", "minLength": 1},
-    "repository": {"type": "string", "minLength": 1, "description": "Local path or approved clone URL"},
-    "base_ref": {"type": "string", "minLength": 1},
+    "branch_name": {
+      "anyOf": [
+        {
+          "maxLength": 240,
+          "minLength": 11,
+          "pattern": "^ai/(feature|bugfix)/[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Branch Name"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "repository": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Local path or approved clone URL"
+    },
+    "base_ref": {
+      "type": "string",
+      "minLength": 1
+    },
     "acceptance_criteria": {
       "type": "array",
       "minItems": 1,
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "description", "required", "verification"],
+        "required": [
+          "id",
+          "description",
+          "required",
+          "verification"
+        ],
         "properties": {
-          "id": {"type": "string", "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$"},
-          "description": {"type": "string", "minLength": 1},
-          "required": {"type": "boolean"},
-          "verification": {"type": "string", "minLength": 1},
-          "test_ids": {"type": "array", "items": {"type": "string"}}
+          "id": {
+            "type": "string",
+            "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "verification": {
+            "type": "string",
+            "minLength": 1
+          },
+          "test_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         }
       }
     },
@@ -130,22 +273,97 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "allowed_paths": {"type": "array", "items": {"type": "string"}},
-        "denied_paths": {"type": "array", "items": {"type": "string"}},
-        "allowed_commands": {"type": "array", "items": {"type": "string"}},
-        "max_attempts": {"type": "integer", "minimum": 1, "maximum": 400},
-        "notes": {"type": "string"}
+        "allowed_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "denied_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "allowed_commands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 400
+        },
+        "notes": {
+          "type": "string"
+        }
       }
     },
-    "status": {"enum": ["NEW", "PLANNING", "IMPLEMENTING", "CONTINUE_REQUIRED", "QUEUED", "QA", "REVIEW", "DONE", "BLOCKED", "FAILED"]},
-    "max_attempts": {"type": "integer", "minimum": 1, "maximum": 400},
-    "attempts": {"type": "integer", "minimum": 0, "maximum": 400},
-    "owner": {"type": "string"},
-    "labels": {"type": "array", "items": {"type": "string"}},
-    "created_at": {"type": "string", "format": "date-time"},
-    "updated_at": {"type": "string", "format": "date-time"},
-    "retry_policy": {"$ref": "#/$defs/DeliveryRetryPolicy"},
-    "retry_failures": {"type": "array", "items": {"$ref": "#/$defs/DeliveryRetryFailure"}},
-    "metadata": {"type": "object"}
+    "status": {
+      "enum": [
+        "NEW",
+        "PLANNING",
+        "IMPLEMENTING",
+        "CONTINUE_REQUIRED",
+        "QUEUED",
+        "QA",
+        "REVIEW",
+        "DONE",
+        "BLOCKED",
+        "FAILED"
+      ]
+    },
+    "max_attempts": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 400
+    },
+    "attempts": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 400
+    },
+    "owner": {
+      "type": "string"
+    },
+    "labels": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "retry_policy": {
+      "$ref": "#/$defs/DeliveryRetryPolicy"
+    },
+    "retry_failures": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/DeliveryRetryFailure"
+      }
+    },
+    "metadata": {
+      "type": "object"
+    },
+    "interruption_continuation_policy": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/InterruptionContinuationPolicy"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
   }
 }

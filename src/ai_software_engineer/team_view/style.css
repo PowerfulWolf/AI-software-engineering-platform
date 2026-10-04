@@ -990,6 +990,30 @@ main[data-page="requests"] #detail {
 }
 
 .execution-history-entry:last-child { border-bottom: 0; }
+
+.product-execution-summary {
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px solid #dfe5ed;
+  border-radius: 8px;
+  background: #f8f9fb;
+}
+.product-execution-summary p { margin: 6px 0; }
+.product-execution-summary .execution-phase,
+.product-execution-summary .execution-state { font-weight: 600; }
+.engineering-details { margin: 10px 0; }
+.engineering-details > summary {
+  color: #536174;
+  cursor: pointer;
+  font-size: 13px;
+}
+.engineering-details[open] > summary { margin-bottom: 10px; }
+.engineering-details .approval-box { margin-top: 10px; }
+.delivery-flow li.paused {
+  border-color: #cbd5e1;
+  background: #f1f5f9;
+  color: #536174;
+}
 .execution-findings, .execution-tests { margin: 6px 0 0; padding-left: 1.2rem; }
 .execution-findings li, .execution-tests li { margin: 4px 0; }
 .execution-detail-line { margin: 4px 0; }

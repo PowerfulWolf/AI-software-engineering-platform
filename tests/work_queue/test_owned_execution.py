@@ -9,7 +9,11 @@ from pathlib import Path
 import pytest
 
 from ai_software_engineer.agents import CodexCliAgentAdapter
-from ai_software_engineer.agents.codex_cli import CodexCliError, SubprocessCodexCommandRunner
+from ai_software_engineer.agents.codex_cli import (
+    CodexCliError,
+    CodexExecutionUnconfirmed,
+    SubprocessCodexCommandRunner,
+)
 from ai_software_engineer.execution import SubprocessCommandExecutor
 from ai_software_engineer.work_queue.ports import DeliveryQueuePending, QueueLeaseLost
 from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
@@ -40,6 +44,11 @@ def test_owned_codex_delivers_large_prompt_after_first_lease_poll(
     assert not result.timed_out
     assert result.returncode == 0
     assert result.stdout.strip() == str(len(prompt))
+    assert result.process_stop is not None
+    result.process_stop.validate_integrity()
+    assert result.process_stop.kind == "completed"
+    with pytest.raises(ProcessLookupError):
+        os.killpg(result.process_stop.group_id, 0)
 
 
 def test_owned_codex_timeout_terminates_child_after_prompt_delivery(tmp_path: Path) -> None:
@@ -55,8 +64,34 @@ def test_owned_codex_timeout_terminates_child_after_prompt_delivery(tmp_path: Pa
         timeout_seconds=0.5,
     )
     assert result.timed_out
+    assert result.process_stop is not None
+    result.process_stop.validate_integrity()
+    assert result.process_stop.kind == "local_execution_limit"
+    assert result.process_stop.returncode == result.returncode
     with pytest.raises(ProcessLookupError):
         os.kill(int(result.stdout.strip()), 0)
+
+
+def test_local_limit_records_actual_graceful_exit_without_claiming_completion(
+    tmp_path: Path,
+) -> None:
+    result = SubprocessCodexCommandRunner(Guard()).run(
+        (
+            sys.executable,
+            "-c",
+            "import signal,time; signal.signal(signal.SIGTERM,lambda *args: exit(0)); "
+            "time.sleep(30)",
+        ),
+        cwd=tmp_path,
+        environment={},
+        stdin="",
+        timeout_seconds=0.5,
+    )
+    assert result.timed_out
+    assert result.returncode == 0
+    assert result.process_stop is not None
+    assert result.process_stop.kind == "local_execution_limit"
+    result.process_stop.validate_integrity()
 
 
 class Guard:
@@ -74,6 +109,28 @@ class Guard:
         self.check()
         yield
         self.check()
+
+
+@pytest.mark.parametrize("code", ["exit(0)", "exit(1)", "import time; time.sleep(30)"])
+def test_owned_runner_refuses_every_result_without_group_stop_proof(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: str
+) -> None:
+    killpg = os.killpg
+
+    def unavailable(group: int, sig: int) -> None:
+        if sig == 0:
+            raise PermissionError("test cannot observe process group")
+        killpg(group, sig)
+
+    monkeypatch.setattr(os, "killpg", unavailable)
+    with pytest.raises(CodexExecutionUnconfirmed):
+        SubprocessCodexCommandRunner(Guard()).run(
+            (sys.executable, "-c", code),
+            cwd=tmp_path,
+            environment={},
+            stdin="",
+            timeout_seconds=0.3,
+        )
 
 
 def test_owned_codex_start_failure_keeps_typed_error(tmp_path: Path) -> None:

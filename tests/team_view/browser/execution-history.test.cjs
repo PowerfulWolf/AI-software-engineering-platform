@@ -53,7 +53,11 @@ test("task detail renders every round with QA findings and Coder feedback lineag
   assert.match(text, /执行记录（完整历史）/);
   assert.match(text, /缺少空输入回归测试/);
   assert.match(text, /Coder 已接收上轮 QA\/Review 反馈/);
-  assert.match(text, /task_old_round/);
-  assert.match(text, /task_current_round/);
-  assert.match(text, /b{40}/);
+  assert.doesNotMatch(text, /task_old_round|task_current_round/);
+  await h.page.getByText("任务工程详情", {exact: true}).click();
+  assert.match(await h.page.locator(".task-detail-dialog").innerText(), /task_old_round/);
+  assert.match(await h.page.locator(".task-detail-dialog").innerText(), /task_current_round/);
+  assert.doesNotMatch(text, /b{40}/, "technical candidate identity is collapsed by default");
+  await h.page.getByText("产物工程详情", {exact: true}).nth(1).click();
+  assert.match(await h.page.locator(".task-detail-dialog").innerText(), /b{40}/);
 });

@@ -71,6 +71,23 @@ class JointModels(StructuredClientFactory, StructuredModelClient):
     ) -> StructuredModelResult:
         del input_images
         title = str(output_schema["title"])
+        # Production TeamHost also invokes the typed Manager coordinator when a
+        # joint stage reaches a durable BLOCKED checkpoint.  This fixture models
+        # that call explicitly instead of interpreting the Manager payload as a
+        # DirectoryScope (which would raise a misleading schema error before the
+        # reader can inspect the sealed child facts).  Keep manager calls out of
+        # ``calls``: that list intentionally tracks stage producer invocations.
+        if title == "ManagerCoordinationDraft":
+            return StructuredModelResult(
+                payload={
+                    "action": "WAITING_HUMAN",
+                    "summary": "Inspect the durable blocked-stage evidence.",
+                    "next_action": "Review child or integration evidence before resuming.",
+                    "responsible_actor": "delivery manager",
+                    "resume_condition": "A valid recovery or retry action is available.",
+                },
+                duration_ms=0,
+            )
         if title == "KnowledgeIntent":
             return StructuredModelResult(payload={"queries": []}, duration_ms=0)
         self.calls.append(title)

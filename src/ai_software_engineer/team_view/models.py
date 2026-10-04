@@ -7,6 +7,7 @@ from pydantic import AwareDatetime
 from ai_software_engineer.domain.coordination import ManagerCoordinationAdvice
 from ai_software_engineer.domain.enums import AgentRole, TeamRole, WorkItemStatus
 from ai_software_engineer.domain.model import CodexConnectionMode, DomainModel, ProviderRouteKind
+from ai_software_engineer.knowledge.gaps import GapRoute
 from ai_software_engineer.knowledge.views import KnowledgeGapView
 from ai_software_engineer.multi_directory.budget import DesignBudget, StageBudget
 from ai_software_engineer.projection.models import TimelineEntry
@@ -75,6 +76,31 @@ class RoleQueueView(DomainModel):
     lease_expires_at: AwareDatetime | None = None
     lease_liveness: Literal["UNKNOWN", "LEASE_VALID", "LEASE_EXPIRED"] = "UNKNOWN"
     wait_reason: str | None = None
+    available_at: AwareDatetime | None = None
+
+
+class DeliveryExecutionView(DomainModel):
+    """Product-facing execution facts, separate from delivery stage and verdict."""
+
+    state: Literal[
+        "RUNNING",
+        "QUEUED",
+        "WAITING",
+        "RETRY_SCHEDULED",
+        "INTERRUPTED",
+        "STOPPED",
+        "UNKNOWN",
+        "COMPLETED",
+        "SUPERSEDED",
+    ]
+    responsibility: Literal["product", "team", "engineering"]
+    reason_code: str
+    reason: str
+    next_action: str
+    action_required: bool = False
+    available_at: AwareDatetime | None = None
+    policy_id: str | None = None
+    receipt_uri: str | None = None
 
 
 class TaskView(DomainModel):
@@ -93,6 +119,8 @@ class TaskView(DomainModel):
     terminal: bool
     last_activity: AwareDatetime
     execution_liveness: Literal["UNKNOWN"] = "UNKNOWN"
+    execution: DeliveryExecutionView | None = None
+    failure_code: str | None = None
     blocker: str | None = None
     next_action: str
     candidate_revision: str | None = None
@@ -117,12 +145,14 @@ class RequestView(DomainModel):
     scopes: tuple[ScopeView, ...]
     next_action: str
     blocker: str | None = None
+    execution: DeliveryExecutionView | None = None
     failed_stages: tuple[str, ...] = ()
     dialogue: tuple[DialogueTurnView, ...] = ()
     documents: tuple[DocumentView, ...] = ()
     checkpoint_sha256: str
     knowledge_gap: KnowledgeGapView | None = None
     knowledge_wait_stage: str | None = None
+    knowledge_route: GapRoute | None = None
     design_recheck_available: bool = False
     design_recheck_pending: bool = False
     knowledge_rechecked_gap_ids: tuple[str, ...] = ()

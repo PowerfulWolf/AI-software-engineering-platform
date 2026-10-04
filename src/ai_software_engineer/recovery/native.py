@@ -51,9 +51,14 @@ from ai_software_engineer.manager.mysql_dispatch_authority import _decode_alloca
 from ai_software_engineer.manager.production_backend import _designer_run_id
 from ai_software_engineer.manager.store import FileProjectPreparationStore
 from ai_software_engineer.multi_directory.production import DerivedStageInputs
+from ai_software_engineer.multi_directory.retirement import (
+    RequirementRetiredError,
+    RequirementRetirementStore,
+)
 from ai_software_engineer.multi_directory.store import JointJournal
 from ai_software_engineer.planning import FileExecutionPlanStore
 from ai_software_engineer.product import FileProductRecordStore
+from ai_software_engineer.project_workspace import ProjectWorkspace
 from ai_software_engineer.recovery.allocation_lineage import (
     allocation_preparation_sha256,
     resolve_planner_dispatch,
@@ -142,6 +147,8 @@ class NativeRecoverySourceReader:
             TypeAdapter(RunId).validate_python(failed_run_id)
             TypeAdapter(ContextId).validate_python(failed_context_id)
             return self._inspect(scope, failed_run_id, failed_context_id)
+        except RequirementRetiredError as error:
+            raise RecoveryRejected(str(error)) from error
         except Exception as error:
             # Public diagnostic never includes native prose, provider output, or a DSN.
             raise RecoveryRejected(
@@ -158,7 +165,8 @@ class NativeRecoverySourceReader:
                 name=self._config.team_name,
                 read_only=True,
             )
-            _, repository = team.project_registry().locate_repository(scope.repository_id)
+            project, repository = team.project_registry().locate_repository(scope.repository_id)
+            _require_native_active(project, scope.delivery_id)
             root = repository.root
             journal = FileProjectDeliveryCheckpointStore(
                 root / "state/project-deliveries", read_only=True
@@ -188,6 +196,8 @@ class NativeRecoverySourceReader:
                 raise ValueError("recoverable Coder run is missing or ambiguous")
             run_id, context_id = candidates[0]
             return self._inspect(scope, run_id, context_id)
+        except RequirementRetiredError as error:
+            raise RecoveryRejected(str(error)) from error
         except Exception as error:
             raise RecoveryRejected(
                 "recoverable Coder identity is missing, unsafe or ambiguous"
@@ -202,7 +212,8 @@ class NativeRecoverySourceReader:
             name=self._config.team_name,
             read_only=True,
         )
-        _, repository = team.project_registry().locate_repository(scope.repository_id)
+        project, repository = team.project_registry().locate_repository(scope.repository_id)
+        _require_native_active(project, scope.delivery_id)
         root = repository.root
         for relative in (
             "state/product",
@@ -604,6 +615,21 @@ def _preparation(root: Path, repository_id: str, expected: str) -> ProjectPrepar
     return matches[0]
 
 
+def _require_native_active(
+    project: ProjectWorkspace, delivery_id: str, *, journal: JointJournal | None = None
+) -> None:
+    RequirementRetirementStore(
+        project.requirements_root,
+        team_id=project.team.manifest.team_id,
+        team_manifest_sha256=project.team.manifest.manifest_sha256,
+        project_id=project.manifest.project_id,
+        project_manifest_sha256=project.manifest.manifest_sha256,
+        read_only=True,
+    ).require_native_active(
+        delivery_id, journal or JointJournal(project.requirements_root, read_only=True)
+    )
+
+
 def _parent(
     team: TeamWorkspace,
     cp: ProjectDeliveryCheckpoint,
@@ -617,6 +643,7 @@ def _parent(
         journal = JointJournal(project.requirements_root, read_only=True)
         if journals is not None:
             journals[project.requirements_root] = journal
+    _require_native_active(project, cp.delivery_id, journal=journal)
     matches: list[tuple[str, str]] = []
     for directory in sorted(project.requirements_root.glob("delivery_multi_*")):
         _reject_symlinks(directory)

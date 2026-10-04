@@ -1113,6 +1113,17 @@
           ],
           "default": null,
           "title": "Retry Failures"
+        },
+        "interruption_continuation_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InterruptionContinuationPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -1279,6 +1290,86 @@
         }
       },
       "title": "TransientRetryPolicy",
+      "type": "object"
+    },
+    "InterruptionContinuationPolicy": {
+      "additionalProperties": false,
+      "description": "Frozen narrow capability; legacy Tasks have no implicit authorization.",
+      "properties": {
+        "kind": {
+          "const": "interruption_continuation_policy",
+          "default": "interruption_continuation_policy",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "authorization_source": {
+          "const": "organization_engineering_policy",
+          "default": "organization_engineering_policy",
+          "title": "Authorization Source",
+          "type": "string"
+        },
+        "capability_id": {
+          "const": "git-text-mutation-inventory-v1",
+          "default": "git-text-mutation-inventory-v1",
+          "title": "Capability Id",
+          "type": "string"
+        },
+        "max_continuations": {
+          "const": 1,
+          "default": 1,
+          "maximum": 1,
+          "minimum": 1,
+          "title": "Max Continuations",
+          "type": "integer"
+        },
+        "allowed_causes": {
+          "default": [
+            "local_execution_limit",
+            "provider_transient"
+          ],
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "const": "local_execution_limit",
+              "type": "string"
+            },
+            {
+              "const": "provider_transient",
+              "type": "string"
+            }
+          ],
+          "title": "Allowed Causes",
+          "type": "array"
+        },
+        "allowed_changes": {
+          "default": [
+            "text_added",
+            "text_modified"
+          ],
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "const": "text_added",
+              "type": "string"
+            },
+            {
+              "const": "text_modified",
+              "type": "string"
+            }
+          ],
+          "title": "Allowed Changes",
+          "type": "array"
+        }
+      },
+      "title": "InterruptionContinuationPolicy",
       "type": "object"
     }
   },

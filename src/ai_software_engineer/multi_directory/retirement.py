@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Annotated, Literal, Self
 
-from pydantic import AwareDatetime, Field, model_validator
+from pydantic import AwareDatetime, Field, TypeAdapter, model_validator
 
 from ai_software_engineer.domain.identity import ProjectId, TeamId
 from ai_software_engineer.domain.model import DomainModel
@@ -26,6 +26,13 @@ _MAX_RETIREMENT_BYTES = 256_000
 
 class RequirementRetirementError(RuntimeError):
     """Raised when the current Requirement visibility record is unsafe."""
+
+
+class RequirementRetiredError(ValueError):
+    """Product deletion permanently revokes ordinary delivery and approval entry."""
+
+    def __init__(self) -> None:
+        super().__init__("需求已删除或被新草稿替换, 不能继续执行或审批。")
 
 
 class RequirementRetirementEntry(DomainModel):
@@ -153,6 +160,34 @@ class RequirementRetirementStore:
             None,
         )
 
+    def require_native_active(self, delivery_id: str, journal: JointJournal) -> None:
+        """A direct child command cannot bypass its deleted parent Requirement."""
+        TypeAdapter(DeliveryId).validate_python(delivery_id)
+        retired_ids = self.retired_delivery_ids(journal)
+        for parent_id in sorted(retired_ids):
+            history = journal.history(parent_id)
+            if any(
+                child.checkpoint.delivery_id == delivery_id
+                for parent in history
+                for child in parent.children
+            ):
+                raise RequirementRetiredError()
+            parent = history[-1]
+            if parent.plan is None:
+                continue
+            # Lazy imports keep the retirement storage contract independent of
+            # production composition while sharing its deterministic child ID.
+            from ai_software_engineer.manager.delivery import _delivery_id
+            from ai_software_engineer.multi_directory.production import DerivedStageInputs
+
+            for unit in parent.plan.units:
+                derived = DerivedStageInputs(parent, unit.unit_id)
+                if (
+                    _delivery_id(derived.root, derived.requirement, namespace=parent.project_id)
+                    == delivery_id
+                ):
+                    raise RequirementRetiredError()
+
     def retire(
         self,
         checkpoint: JointCheckpoint,
@@ -264,6 +299,7 @@ def _no_symlinks(path: Path) -> None:
 
 
 __all__ = [
+    "RequirementRetiredError",
     "RequirementRetirement",
     "RequirementRetirementEntry",
     "RequirementRetirementError",

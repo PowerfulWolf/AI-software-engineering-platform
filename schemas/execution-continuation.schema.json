@@ -1,0 +1,786 @@
+{
+  "$defs": {
+    "AgentErrorCode": {
+      "description": "Stable failure categories consumed by Orchestrator retry routing.",
+      "enum": [
+        "TIMEOUT",
+        "QUOTA_EXHAUSTED",
+        "RATE_LIMITED",
+        "AUTHENTICATION_ERROR",
+        "PROVIDER_UNAVAILABLE",
+        "INVALID_OUTPUT",
+        "PROVIDER_ERROR",
+        "POLICY_VIOLATION",
+        "WORK_INTERRUPTED"
+      ],
+      "title": "AgentErrorCode",
+      "type": "string"
+    },
+    "AgentPermissions": {
+      "additionalProperties": false,
+      "description": "The executable path, command, network, and state capabilities of an Agent.",
+      "properties": {
+        "read_paths": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Read Paths",
+          "type": "array"
+        },
+        "write_paths": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Write Paths",
+          "type": "array"
+        },
+        "commands": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Commands",
+          "type": "array"
+        },
+        "network": {
+          "$ref": "#/$defs/NetworkAccess"
+        },
+        "can_change_state": {
+          "default": false,
+          "title": "Can Change State",
+          "type": "boolean"
+        },
+        "can_merge": {
+          "default": false,
+          "title": "Can Merge",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "read_paths",
+        "write_paths",
+        "commands",
+        "network"
+      ],
+      "title": "AgentPermissions",
+      "type": "object"
+    },
+    "AgentRequest": {
+      "additionalProperties": false,
+      "description": "Immutable input envelope supplied to one Agent adapter invocation.",
+      "properties": {
+        "run_id": {
+          "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/AgentRole"
+        },
+        "attempt": {
+          "maximum": 400,
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "context_manifest_id": {
+          "pattern": "^ctx_[a-f0-9]{64}$",
+          "title": "Context Manifest Id",
+          "type": "string"
+        },
+        "input_artifact_ids": {
+          "items": {
+            "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+            "type": "string"
+          },
+          "title": "Input Artifact Ids",
+          "type": "array"
+        },
+        "permissions": {
+          "$ref": "#/$defs/AgentPermissions"
+        },
+        "output_schema": {
+          "minLength": 1,
+          "title": "Output Schema",
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "maximum": 3600,
+          "minimum": 1,
+          "title": "Timeout Seconds",
+          "type": "integer"
+        },
+        "continuation_checkpoint_id": {
+          "anyOf": [
+            {
+              "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Continuation Checkpoint Id"
+        },
+        "continuation_changed_paths": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Continuation Changed Paths",
+          "type": "array"
+        },
+        "expected_parent_artifact_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Parent Artifact Ids"
+        },
+        "expected_supersedes_by_kind": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "propertyNames": {
+                "$ref": "#/$defs/ArtifactKind"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Supersedes By Kind"
+        }
+      },
+      "required": [
+        "run_id",
+        "task_id",
+        "role",
+        "attempt",
+        "source_revision",
+        "context_manifest_id",
+        "input_artifact_ids",
+        "permissions",
+        "output_schema",
+        "timeout_seconds"
+      ],
+      "title": "AgentRequest",
+      "type": "object"
+    },
+    "AgentRole": {
+      "description": "Delivery-runtime roles bound to Task artifacts and state transitions.",
+      "enum": [
+        "orchestrator",
+        "coder",
+        "qa",
+        "reviewer"
+      ],
+      "title": "AgentRole",
+      "type": "string"
+    },
+    "ArtifactKind": {
+      "enum": [
+        "plan",
+        "coder-progress",
+        "implementation-report",
+        "qa-report",
+        "review-report"
+      ],
+      "title": "ArtifactKind",
+      "type": "string"
+    },
+    "CapturedChanges": {
+      "additionalProperties": false,
+      "properties": {
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "attempt": {
+          "maximum": 400,
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "source_revision": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "worktree_path": {
+          "pattern": "^/[^\\x00-\\x1f]*$",
+          "title": "Worktree Path",
+          "type": "string"
+        },
+        "patch": {
+          "maxLength": 1000000,
+          "title": "Patch",
+          "type": "string"
+        },
+        "index_diff_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Index Diff Sha256",
+          "type": "string"
+        },
+        "files": {
+          "items": {
+            "$ref": "#/$defs/CapturedFile"
+          },
+          "maxItems": 256,
+          "title": "Files",
+          "type": "array"
+        },
+        "capture_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Capture Sha256",
+          "type": "string"
+        },
+        "base_revision": {
+          "anyOf": [
+            {
+              "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Revision"
+        },
+        "branch_name": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 11,
+              "pattern": "^ai/(feature|bugfix)/[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Branch Name"
+        }
+      },
+      "required": [
+        "task_id",
+        "attempt",
+        "source_revision",
+        "worktree_path",
+        "patch",
+        "index_diff_sha256",
+        "files",
+        "capture_sha256"
+      ],
+      "title": "CapturedChanges",
+      "type": "object"
+    },
+    "CapturedFile": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "minLength": 1,
+          "pattern": "^[^\\x00-\\x1f]+$",
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "title": "CapturedFile",
+      "type": "object"
+    },
+    "ContinuationAdmission": {
+      "additionalProperties": false,
+      "description": "One Task's replacement invocation, authorized by frozen engineering policy.",
+      "properties": {
+        "kind": {
+          "const": "continuation_admission",
+          "default": "continuation_admission",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "authorization_source": {
+          "const": "authorized_by_policy",
+          "default": "authorized_by_policy",
+          "title": "Authorization Source",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/ContinuationScope"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "interrupted_run_id": {
+          "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Interrupted Run Id",
+          "type": "string"
+        },
+        "receipt_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Receipt Sha256",
+          "type": "string"
+        },
+        "policy_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Policy Sha256",
+          "type": "string"
+        },
+        "new_request": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/AgentRequest"
+            },
+            {
+              "properties": {
+                "role": {
+                  "const": "coder"
+                },
+                "attempt": {
+                  "const": 2
+                },
+                "continuation_checkpoint_id": {
+                  "type": "null"
+                }
+              }
+            }
+          ]
+        },
+        "next_work_item_id": {
+          "pattern": "^work_[a-z0-9][a-z0-9_-]{2,95}$",
+          "title": "Next Work Item Id",
+          "type": "string"
+        },
+        "next_lease_id": {
+          "pattern": "^lease_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Next Lease Id",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "admission_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Admission Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "task_id",
+        "interrupted_run_id",
+        "receipt_sha256",
+        "policy_sha256",
+        "new_request",
+        "next_work_item_id",
+        "next_lease_id",
+        "created_at",
+        "admission_sha256"
+      ],
+      "title": "ContinuationAdmission",
+      "type": "object"
+    },
+    "ContinuationScope": {
+      "additionalProperties": false,
+      "properties": {
+        "team_id": {
+          "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Team Id",
+          "type": "string"
+        },
+        "project_id": {
+          "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "repository_id": {
+          "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "requirement_id": {
+          "pattern": "^delivery_[a-z0-9][a-z0-9_-]{2,95}$",
+          "title": "Requirement Id",
+          "type": "string"
+        },
+        "dispatch_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Dispatch Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "team_id",
+        "project_id",
+        "repository_id",
+        "requirement_id",
+        "dispatch_sha256"
+      ],
+      "title": "ContinuationScope",
+      "type": "object"
+    },
+    "ExecutionInterruptionReceipt": {
+      "additionalProperties": false,
+      "description": "Capture plus trusted executor references, never progress or a verdict.",
+      "properties": {
+        "kind": {
+          "const": "execution_interruption_receipt",
+          "default": "execution_interruption_receipt",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/ContinuationScope"
+        },
+        "request": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/AgentRequest"
+            },
+            {
+              "properties": {
+                "role": {
+                  "const": "coder"
+                },
+                "attempt": {
+                  "const": 1
+                },
+                "continuation_checkpoint_id": {
+                  "type": "null"
+                }
+              }
+            }
+          ]
+        },
+        "task_intent_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Task Intent Sha256",
+          "type": "string"
+        },
+        "task_revision": {
+          "minimum": 1,
+          "title": "Task Revision",
+          "type": "integer"
+        },
+        "original_work_item_id": {
+          "pattern": "^work_[a-z0-9][a-z0-9_-]{2,95}$",
+          "title": "Original Work Item Id",
+          "type": "string"
+        },
+        "claim_lease_id": {
+          "pattern": "^lease_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Claim Lease Id",
+          "type": "string"
+        },
+        "policy_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Policy Sha256",
+          "type": "string"
+        },
+        "cause": {
+          "enum": [
+            "local_execution_limit",
+            "provider_transient"
+          ],
+          "title": "Cause",
+          "type": "string"
+        },
+        "original_error_code": {
+          "$ref": "#/$defs/AgentErrorCode"
+        },
+        "process_stop": {
+          "$ref": "#/$defs/NativeProcessStop"
+        },
+        "process_stop_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Process Stop Sha256",
+          "type": "string"
+        },
+        "capture": {
+          "$ref": "#/$defs/CapturedChanges"
+        },
+        "inventory_before": {
+          "$ref": "#/$defs/WorkspaceMutationInventory"
+        },
+        "inventory_after": {
+          "$ref": "#/$defs/WorkspaceMutationInventory"
+        },
+        "inventory_before_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Inventory Before Sha256",
+          "type": "string"
+        },
+        "inventory_after_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Inventory After Sha256",
+          "type": "string"
+        },
+        "mutation_paths": {
+          "items": {
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f]+$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Mutation Paths",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "receipt_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Receipt Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "request",
+        "task_intent_sha256",
+        "task_revision",
+        "original_work_item_id",
+        "claim_lease_id",
+        "policy_sha256",
+        "cause",
+        "original_error_code",
+        "process_stop",
+        "process_stop_sha256",
+        "capture",
+        "inventory_before",
+        "inventory_after",
+        "inventory_before_sha256",
+        "inventory_after_sha256",
+        "mutation_paths",
+        "created_at",
+        "receipt_sha256"
+      ],
+      "title": "ExecutionInterruptionReceipt",
+      "type": "object",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "cause": {
+                "const": "local_execution_limit"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "original_error_code": {
+                "const": "TIMEOUT"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "original_error_code": {
+                "enum": [
+                  "PROVIDER_UNAVAILABLE",
+                  "QUOTA_EXHAUSTED",
+                  "RATE_LIMITED",
+                  "TIMEOUT"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "MutationFile": {
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "file",
+            "symlink",
+            "git_directory"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "sha256": {
+          "title": "Sha256",
+          "type": "string"
+        },
+        "mode": {
+          "title": "Mode",
+          "type": "integer"
+        },
+        "size": {
+          "title": "Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "kind",
+        "sha256",
+        "mode",
+        "size"
+      ],
+      "title": "MutationFile",
+      "type": "object"
+    },
+    "NativeProcessStop": {
+      "additionalProperties": false,
+      "description": "Trusted runner observation of its own session after process-group shutdown.",
+      "properties": {
+        "process_id": {
+          "exclusiveMinimum": 0,
+          "title": "Process Id",
+          "type": "integer"
+        },
+        "group_id": {
+          "exclusiveMinimum": 0,
+          "title": "Group Id",
+          "type": "integer"
+        },
+        "returncode": {
+          "title": "Returncode",
+          "type": "integer"
+        },
+        "kind": {
+          "enum": [
+            "completed",
+            "failed",
+            "local_execution_limit"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "stopped_at": {
+          "format": "date-time",
+          "title": "Stopped At",
+          "type": "string"
+        },
+        "stop_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Stop Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "process_id",
+        "group_id",
+        "returncode",
+        "kind",
+        "stopped_at",
+        "stop_sha256"
+      ],
+      "title": "NativeProcessStop",
+      "type": "object"
+    },
+    "NetworkAccess": {
+      "enum": [
+        "none",
+        "model_endpoint_only",
+        "allowlist"
+      ],
+      "title": "NetworkAccess",
+      "type": "string"
+    },
+    "WorkspaceMutationInventory": {
+      "properties": {
+        "files": {
+          "items": {
+            "$ref": "#/$defs/MutationFile"
+          },
+          "title": "Files",
+          "type": "array"
+        }
+      },
+      "required": [
+        "files"
+      ],
+      "title": "WorkspaceMutationInventory",
+      "type": "object"
+    }
+  },
+  "discriminator": {
+    "mapping": {
+      "continuation_admission": "#/$defs/ContinuationAdmission",
+      "execution_interruption_receipt": "#/$defs/ExecutionInterruptionReceipt"
+    },
+    "propertyName": "kind"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/ExecutionInterruptionReceipt"
+    },
+    {
+      "$ref": "#/$defs/ContinuationAdmission"
+    }
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/execution-continuation.schema.json"
+}

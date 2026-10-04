@@ -13,6 +13,7 @@ import time
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -20,7 +21,12 @@ from pydantic import TypeAdapter, ValidationError
 
 from ai_software_engineer.agents.candidate_binding import BoundCandidateSource
 from ai_software_engineer.agents.codex_policy import candidate_read_snapshot, no_command_arguments
-from ai_software_engineer.agents.execution import ExecutionGuard, execution_scope
+from ai_software_engineer.agents.continuation import (
+    CoderInterruptionControl,
+    InterruptionAdmissionRejected,
+    InterruptionObservation,
+)
+from ai_software_engineer.agents.execution import ExecutionGuard, NativeProcessStop, execution_scope
 from ai_software_engineer.agents.json_schema import strict_output_schema
 from ai_software_engineer.agents.models import (
     AgentErrorCode,
@@ -55,6 +61,7 @@ from ai_software_engineer.git import (
     WorkspacePolicy,
     WorkspacePolicyError,
 )
+from ai_software_engineer.git.mutation import MutationInventoryRejected, WorkspaceMutationInventory
 from ai_software_engineer.redaction import redact_text
 
 
@@ -64,6 +71,10 @@ class CodexCliError(AgentError):
 
 class CodexCliConfigurationError(AgentConfigurationError, CodexCliError):
     """Raised when the executable or worktree boundary is invalid."""
+
+
+class CodexExecutionUnconfirmed(CodexCliError):
+    """The owned runner cannot establish that its process session stopped."""
 
 
 class _CodexOutputContractError(ValueError):
@@ -116,6 +127,7 @@ class CodexInvocationResult:
     stdout: str = ""
     stderr: str = ""
     timed_out: bool = False
+    process_stop: NativeProcessStop | None = None
 
 
 class CodexCommandRunner(Protocol):
@@ -226,22 +238,68 @@ class SubprocessCodexCommandRunner:
                     os.killpg(process.pid, signal.SIGKILL)
                 return process.communicate()
 
+        def stopped(kind: str) -> NativeProcessStop | None:
+            # communicate() reaps the leader, but descendants can survive it.
+            # Only the owned process session's absence establishes this fact.
+            for sent in (signal.SIGTERM, signal.SIGKILL):
+                try:
+                    os.killpg(process.pid, 0)
+                except ProcessLookupError:
+                    return NativeProcessStop.create(
+                        process_id=process.pid,
+                        group_id=process.pid,
+                        returncode=process.returncode,
+                        kind=kind,
+                        stopped_at=datetime.now(UTC),
+                    )
+                except PermissionError:
+                    return None
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, sent)
+                deadline = time.monotonic() + 1
+                while time.monotonic() < deadline:
+                    try:
+                        os.killpg(process.pid, 0)
+                    except ProcessLookupError:
+                        return NativeProcessStop.create(
+                            process_id=process.pid,
+                            group_id=process.pid,
+                            returncode=process.returncode,
+                            kind=kind,
+                            stopped_at=datetime.now(UTC),
+                        )
+                    except PermissionError:
+                        return None
+                    time.sleep(0.02)
+            return None
+
         try:
             while True:
                 guard.check()
                 if time.monotonic() - started >= timeout_seconds:
                     stdout, stderr = stop()
-                    return CodexInvocationResult(-1, _bounded(stdout), _bounded(stderr), True)
+                    proof = stopped("local_execution_limit")
+                    if proof is None:
+                        raise CodexExecutionUnconfirmed("原执行进程停止状态无法确认")
+                    guard.check()
+                    return CodexInvocationResult(
+                        process.returncode, _bounded(stdout), _bounded(stderr), True, proof
+                    )
                 try:
                     stdout, stderr = process.communicate(timeout=0.2)
                     guard.check()
+                    proof = stopped("completed" if process.returncode == 0 else "failed")
+                    if proof is None:
+                        raise CodexExecutionUnconfirmed("原执行进程停止状态无法确认")
+                    guard.check()
                     return CodexInvocationResult(
-                        process.returncode, _bounded(stdout), _bounded(stderr)
+                        process.returncode, _bounded(stdout), _bounded(stderr), False, proof
                     )
                 except subprocess.TimeoutExpired:
                     continue
         except BaseException:
             stop()
+            stopped("completed" if process.returncode == 0 else "failed")
             raise
 
 
@@ -266,6 +324,7 @@ class CodexCliAgentAdapter:
         candidate_commit_skill: CandidateCommitSkill | None = None,
         execution_guard: ExecutionGuard | None = None,
         candidate_source: BoundCandidateSource | None = None,
+        interruption_control: CoderInterruptionControl | None = None,
     ) -> None:
         root = Path(workspace_root).expanduser().resolve(strict=False)
         if not root.is_dir() or root.is_symlink():
@@ -286,6 +345,7 @@ class CodexCliAgentAdapter:
         self._agent_version = agent_version
         self._prompt_builder = prompt_builder or RequestPromptBuilder()
         self._candidate_source = candidate_source
+        self._interruption_control = interruption_control
         self._executable = executable
         self._proxy_overrides = codex_cli_proxy_overrides(proxy_base_url, proxy_api_key_env)
         self._reasoning_effort = reasoning_effort
@@ -322,6 +382,18 @@ class CodexCliAgentAdapter:
                 AgentErrorCode.POLICY_VIOLATION,
                 "Codex worktree changes violated the machine policy: "
                 + _workspace_policy_diagnostic(error),
+                transient=False,
+                duration_ms=_elapsed_ms(started),
+            )
+        except (
+            CodexExecutionUnconfirmed,
+            MutationInventoryRejected,
+            InterruptionAdmissionRejected,
+        ):
+            result = _failure(
+                request,
+                AgentErrorCode.WORK_INTERRUPTED,
+                "工程执行现场无法安全核验。已停止后续执行。需要工程检查。",
                 transient=False,
                 duration_ms=_elapsed_ms(started),
             )
@@ -364,7 +436,23 @@ class CodexCliAgentAdapter:
         )
         if initial_head != expected_head:
             raise CodexCliError("worktree HEAD does not match AgentRequest source revision")
-        if self._initial_admission is not None and not self._initial_admission_consumed:
+        try:
+            continuation_prompt = (
+                self._interruption_control.prepare(request, self._workspace_root)
+                if self._interruption_control is not None
+                else None
+            )
+        except InterruptionAdmissionRejected:
+            return _failure(
+                request,
+                AgentErrorCode.WORK_INTERRUPTED,
+                "工程续跑准入校验未通过。未调用模型。需要工程处理。",
+                transient=False,
+                duration_ms=_elapsed_ms(started),
+            )
+        if continuation_prompt is not None:
+            pass  # The trusted control has checked the exact one-use admission.
+        elif self._initial_admission is not None and not self._initial_admission_consumed:
             try:
                 self._initial_admission.authorize(request, self._workspace_root)
             except Exception as error:
@@ -391,6 +479,8 @@ class CodexCliAgentAdapter:
             prompt.to_messages(include_images=False),
             manager_qa_runner=qa_runner,
         )
+        if continuation_prompt is not None:
+            compiled_prompt += continuation_prompt
         verifier = request.role in {AgentRole.QA, AgentRole.REVIEWER}
         if verifier and self._candidate_source is None:
             compiled_prompt += candidate_read_snapshot(
@@ -421,6 +511,20 @@ class CodexCliAgentAdapter:
                 compiled_prompt = self._candidate_source.append(
                     request, self._workspace_root, compiled_prompt
                 )
+            try:
+                inventory_before = (
+                    self._interruption_control.started(request, self._workspace_root)
+                    if self._interruption_control is not None
+                    else None
+                )
+            except MutationInventoryRejected:
+                return _failure(
+                    request,
+                    AgentErrorCode.WORK_INTERRUPTED,
+                    "工作区变更无法安全核验。未调用模型。需要工程检查。",
+                    transient=False,
+                    duration_ms=_elapsed_ms(started),
+                )
             invocation = self._runner.run(
                 (
                     self._executable,
@@ -450,6 +554,16 @@ class CodexCliAgentAdapter:
                 timeout_seconds=float(request.timeout_seconds),
             )
             if invocation.timed_out:
+                interrupted = self._interrupted_result(
+                    request,
+                    invocation,
+                    inventory_before,
+                    output_path.exists(),
+                    started,
+                    original_error_code=AgentErrorCode.TIMEOUT,
+                )
+                if interrupted is not None:
+                    return interrupted
                 if not _workspace_unchanged(self._workspace_root, initial_head):
                     return _failure(
                         request,
@@ -468,6 +582,21 @@ class CodexCliAgentAdapter:
                     timed_out=True,
                 )
             if invocation.returncode != 0:
+                code, transient = _classify_cli_failure(invocation)
+                interrupted = (
+                    self._interrupted_result(
+                        request,
+                        invocation,
+                        inventory_before,
+                        output_path.exists(),
+                        started,
+                        original_error_code=code,
+                    )
+                    if transient
+                    else None
+                )
+                if interrupted is not None:
+                    return interrupted
                 if not _workspace_unchanged(self._workspace_root, initial_head):
                     return _failure(
                         request,
@@ -484,6 +613,10 @@ class CodexCliAgentAdapter:
                     "Codex CLI provider execution failed; " + _failure_diagnostic(invocation),
                     transient=transient,
                     duration_ms=_elapsed_ms(started),
+                )
+            if self._interruption_control is not None and inventory_before is not None:
+                self._interruption_control.finished(
+                    request, self._workspace_root, before=inventory_before
                 )
             try:
                 raw_output = output_path.read_text(encoding="utf-8")
@@ -543,6 +676,43 @@ class CodexCliAgentAdapter:
                 transient=False,
                 duration_ms=_elapsed_ms(started),
             )
+
+    def _interrupted_result(
+        self,
+        request: AgentRequest,
+        invocation: CodexInvocationResult,
+        before: WorkspaceMutationInventory | None,
+        output_present: bool,
+        started: float,
+        *,
+        original_error_code: AgentErrorCode,
+    ) -> AgentResult | None:
+        control = self._interruption_control
+        if control is None or before is None or request.role is not AgentRole.CODER:
+            return None
+        observed = control.interrupted(
+            request,
+            self._workspace_root,
+            before=before,
+            cause="local_execution_limit" if invocation.timed_out else "provider_transient",
+            original_error_code=original_error_code,
+            process_stop=invocation.process_stop,
+            output_present=output_present,
+        )
+        if observed is InterruptionObservation.UNCHANGED:
+            return None
+        return _failure(
+            request,
+            AgentErrorCode.WORK_INTERRUPTED,
+            "工程执行已中断。草稿已保留。"
+            + (
+                "平台已核验现场。将通过新的执行记录继续。"
+                if observed is InterruptionObservation.CAPTURED
+                else "现场不满足自动继续条件。需要工程处理。"
+            ),
+            transient=False,
+            duration_ms=_elapsed_ms(started),
+        )
 
     def _finalize_coder_candidate(
         self,

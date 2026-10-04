@@ -16,6 +16,7 @@ from ai_software_engineer.agents import (
     AgentRunStatus,
     RunId,
 )
+from ai_software_engineer.agents.continuation import InterruptionRetryControl
 from ai_software_engineer.artifacts import ArtifactStore, seal_artifact
 from ai_software_engineer.context.models import ContextId
 from ai_software_engineer.domain.agent import ROLE_OUTPUTS, AgentDefinition
@@ -149,10 +150,12 @@ class SerialOrchestrator:
         clock: Clock | None = None,
         transition_gate: DeliveryTransitionGate | None = None,
         execution_control: BoundedRunControl | None = None,
+        interruption_control: InterruptionRetryControl | None = None,
     ) -> None:
         self._repository = repository
         self._transition_gate = transition_gate
         self.execution_control = execution_control
+        self._interruption_control = interruption_control
         self._artifact_store = artifact_store
         self._context_builder = context_builder
         self._agent_adapter = agent_adapter

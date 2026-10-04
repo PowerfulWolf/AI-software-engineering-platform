@@ -49,6 +49,7 @@ from ai_software_engineer.multi_directory.budget import (
     stage_budget,
     stage_timeout_seconds,
 )
+from ai_software_engineer.multi_directory.deletion import RequirementDeletionGuard
 from ai_software_engineer.multi_directory.integration_commands import planner_command_policy
 from ai_software_engineer.multi_directory.models import (
     Candidate,
@@ -78,7 +79,10 @@ from ai_software_engineer.multi_directory.planning import (
     planner_test_requirements,
     rejection_feedback,
 )
-from ai_software_engineer.multi_directory.retirement import RequirementRetirementStore
+from ai_software_engineer.multi_directory.retirement import (
+    RequirementRetiredError,
+    RequirementRetirementStore,
+)
 from ai_software_engineer.multi_directory.scope import (
     DirectoryScope,
     DirectoryUnit,
@@ -177,7 +181,7 @@ class UpdateRequirement(DomainModel):
 
 
 class DeleteRequirement(DomainModel):
-    """Retire a Requirement before ProductSpec approval from the current Project view."""
+    """Delete an exact draft or stopped Requirement, retaining its audit history."""
 
     delivery_id: DeliveryId
     expected_checkpoint_sha256: CheckpointDigest
@@ -234,9 +238,11 @@ class JointDeliveryService:
         design_retry_policy: DesignRetryPolicy | None = None,
         execution_retry_policy: ExecutionRetryPolicy | None = None,
         coordinator: StageCoordinator | None = None,
+        deletion_guard: RequirementDeletionGuard | None = None,
     ) -> None:
         self.backend = backend
         self.coordinator = coordinator
+        self.deletion_guard = deletion_guard
         self.team = team
         self.project = project
         self.design_retry_policy = design_retry_policy or DesignRetryPolicy()
@@ -303,15 +309,33 @@ class JointDeliveryService:
     def delete_requirement(self, command: DeleteRequirement) -> JointDeliveryResult:
         """Retire the exact displayed Requirement without deleting its journal."""
         with self.journal.lock(command.delivery_id):
-            checkpoint = self._current(command.delivery_id)
+            checkpoint = self.journal.current(command.delivery_id)
+            if checkpoint is None:
+                raise ValueError("joint delivery not found")
+            self._team_binding(checkpoint)
             self._expected(checkpoint, command.expected_checkpoint_sha256)
+            retired_ids = self.retirements.retired_delivery_ids(self.journal)
+            if command.delivery_id in retired_ids:
+                retirement = self.retirements.entry(command.delivery_id)
+                if retirement is None or retirement.reason != "deleted":
+                    raise ValueError("Requirement input was superseded by a newer draft")
+                return JointDeliveryResult(checkpoint=checkpoint)
             self._require_deletable(checkpoint)
-            self.retirements.retire(
-                checkpoint,
-                reason="deleted",
-                retired_at=command.submitted_at,
-            )
+            if self.deletion_guard is None:
+                if any(
+                    child.checkpoint.task_id is not None
+                    for item in self.journal.history(checkpoint.delivery_id)
+                    for child in item.children
+                ):
+                    raise ValueError("未配置工程执行停止校验, 不能删除已有执行任务的需求。")
+                self._retire_deleted(checkpoint, command.submitted_at)
+            else:
+                with self.deletion_guard.protect(checkpoint):
+                    self._retire_deleted(checkpoint, command.submitted_at)
             return JointDeliveryResult(checkpoint=checkpoint)
+
+    def _retire_deleted(self, checkpoint: JointCheckpoint, submitted_at: datetime) -> None:
+        self.retirements.retire(checkpoint, reason="deleted", retired_at=submitted_at)
 
     def close_requirement(self, command: CloseRequirement) -> JointDeliveryResult:
         """Close the exact displayed blocker without erasing delivery evidence."""
@@ -475,8 +499,24 @@ class JointDeliveryService:
                 raise ValueError("Team delivery workspace must be outside target repositories")
         require_git_baselines(scope)
         delivery_id = self._delivery_id(scope, title, requirement)
+        while delivery_id in retired_delivery_ids:
+            retirement = self.retirements.entry(delivery_id)
+            if retirement is None or retirement.reason != "deleted":
+                raise ValueError("Requirement input was superseded by a newer draft")
+            identity = hashlib.sha256(
+                (
+                    delivery_id
+                    + "\n"
+                    + retirement.checkpoint_sha256
+                    + "\n"
+                    + retirement.retired_at.isoformat()
+                ).encode()
+            ).hexdigest()[:40]
+            delivery_id = f"delivery_multi_{identity}"
         with self.journal.lock(delivery_id):
             checkpoint = self.journal.current(delivery_id)
+            if delivery_id in self.retirements.retired_delivery_ids(self.journal):
+                raise ValueError("Requirement was deleted concurrently; retry creation")
             created_here = checkpoint is None
             if checkpoint is not None and require_editable_result:
                 self._require_editable(checkpoint)
@@ -514,15 +554,6 @@ class JointDeliveryService:
                             retired_at=submitted_at,
                         )
                 raise
-            retirement = self.retirements.entry(delivery_id)
-            if (
-                delivery_id in retired_delivery_ids
-                and retirement is not None
-                and retirement.reason == "deleted"
-            ):
-                self.retirements.restore(delivery_id)
-            elif delivery_id in retired_delivery_ids:
-                raise ValueError("Requirement input was superseded by a newer draft")
             return result
 
     def reply(self, command: ReplyToProduct) -> JointDeliveryResult:
@@ -1387,7 +1418,7 @@ class JointDeliveryService:
         self._team_binding(result)
         retired_delivery_ids = self.retirements.retired_delivery_ids(self.journal)
         if delivery_id in retired_delivery_ids:
-            raise ValueError("Requirement is retired")
+            raise RequirementRetiredError()
         return result
 
     def _delivery_id(self, scope: DirectoryScope, title: str, requirement: str | None) -> str:

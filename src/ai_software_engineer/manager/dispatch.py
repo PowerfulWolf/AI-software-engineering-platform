@@ -21,6 +21,7 @@ from typing import Annotated, Literal, Protocol, Self
 from pydantic import AwareDatetime, Field, StringConstraints, model_validator
 
 from ai_software_engineer.domain.agent import AgentId
+from ai_software_engineer.domain.continuation import InterruptionContinuationPolicy
 from ai_software_engineer.domain.enums import (
     AgentRole,
     BrainTier,
@@ -595,6 +596,9 @@ class CommitDispatchRequest(DomainModel):
     base_ref: NonEmptyStr
     max_attempts: AttemptLimit
     retry_policy: DeliveryRetryPolicy | None = None
+    interruption_continuation_policy: InterruptionContinuationPolicy | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     task_created_at: AwareDatetime
     committed_at: AwareDatetime
     constraints: TaskConstraints | None = None
@@ -841,6 +845,7 @@ class ManagerDispatchService:
             base_ref=request.base_ref,
             max_attempts=request.max_attempts,
             retry_policy=request.retry_policy,
+            interruption_continuation_policy=request.interruption_continuation_policy,
             created_at=request.task_created_at,
             constraints=request.constraints,
             owner=request.owner,

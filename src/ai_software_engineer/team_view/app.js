@@ -189,6 +189,8 @@ const labels = {
   REVIEW: "评审中",
   VERIFY_QA: "候选测试中",
   VERIFY_REVIEW: "候选评审中",
+  VERIFIED: "候选验证已通过",
+  VERIFICATION_SUPERSEDED: "历史验证已替代",
   DONE: "已完成",
   CLOSED: "已关闭",
   BLOCKED: "已阻塞",
@@ -199,6 +201,11 @@ const labels = {
   READY: "等待调度",
   LEASED: "已领取",
   RETRY_SCHEDULED: "等待重试",
+  WAITING_ENGINEERING: "等待工程处理",
+  WAITING_TEAM: "团队处理中",
+  WAITING_PRODUCT_DECISION: "需要产品确认",
+  EXECUTION_UNKNOWN: "执行状态待确认",
+  ENGINEERING_STOPPED: "交付已停止",
   coder: "实现",
   qa: "测试",
   reviewer: "评审",
@@ -462,6 +469,8 @@ const canControlCurrentTeam = () =>
   snapshot.team_id === consoleTeamId;
 function assignmentBadge(task, assignment) {
   if (task.terminal) return badge(task.status);
+  if (task.execution && task.role_queue?.some(step => step.role === assignment.role && step.status !== "CLOSED"))
+    return badge(executionPresentationStatus(task.execution));
   const waiting = waitingExecutionStep(task);
   if (waiting?.role === assignment.role) return badge(waiting.status);
   if (interruptedExecution(task) && task.role_queue.some(step =>
@@ -493,13 +502,56 @@ function interruptedStep(step) {
       (step.status === "RETRY_SCHEDULED" && step.wait_reason?.startsWith("lease_expired:")));
 }
 function interruptedExecution(task) {
+  if (task.execution) return task.execution.reason_code === "EXECUTION_CLAIM_EXPIRED" ||
+    task.execution.state === "INTERRUPTED";
   return !task.terminal && task.role_queue?.some(interruptedStep);
 }
 function waitingExecutionStep(task) {
   return !task.terminal && task.role_queue?.find(step =>
     ["WAITING_HUMAN", "WAITING_DEPENDENCY"].includes(step.status));
 }
+function executionPresentationStatus(execution) {
+  if (execution.state === "COMPLETED" && execution.reason_code === "CANDIDATE_VERIFIED")
+    return "VERIFIED";
+  if (execution.state === "WAITING") return {
+    product: "WAITING_PRODUCT_DECISION", team: "WAITING_TEAM", engineering: "WAITING_ENGINEERING",
+  }[execution.responsibility];
+  return {RUNNING: "RUNNING", QUEUED: "READY", RETRY_SCHEDULED: "RETRY_SCHEDULED",
+    INTERRUPTED: "INTERRUPTED", STOPPED: "ENGINEERING_STOPPED", UNKNOWN: "EXECUTION_UNKNOWN",
+    COMPLETED: "DONE", SUPERSEDED: "VERIFICATION_SUPERSEDED"}[execution.state] || "EXECUTION_UNKNOWN";
+}
+function engineeringDetails(title = "工程详情", key = title) {
+  const details = el("details", undefined, "engineering-details");
+  details.dataset.key = `engineering:${key}`;
+  details.append(el("summary", title));
+  return details;
+}
+function deliveryPhase(item) {
+  const task = item.request_id ? item : currentRequestTasks(item)
+    .filter(task => !task.terminal).sort((a, b) => b.last_activity.localeCompare(a.last_activity))[0];
+  const status = task?.status || item.knowledge_wait_stage || item.stage || item.status;
+  return {IMPLEMENTING: "实现", QA: "测试", REVIEW: "评审", CONTINUE_REQUIRED: "实现",
+    QUEUED: "实现", DELIVERING: "实现", INTEGRATING: "联合验收"}[status] || label(status);
+}
+function productExecutionSummary(item) {
+  if (!item.execution) return null;
+  const execution = item.execution;
+  const section = el("div", undefined, "product-execution-summary");
+  section.append(
+    el("p", "交付阶段 · " + deliveryPhase(item), "execution-phase"),
+    el("p", "当前执行 · " + label(executionPresentationStatus(execution)), "execution-state"),
+    el("p", execution.reason),
+    el("p", "处理方 · " + {product: "产品负责人", team: "ASE 团队", engineering: "工程团队"}[execution.responsibility], "muted"),
+    el("p", "下一步 · " + execution.next_action, "muted"),
+  );
+  if (execution.available_at)
+    section.append(el("p", "计划重试时间 · " + time(execution.available_at), "muted"));
+  if (execution.action_required && execution.responsibility === "product")
+    section.append(el("p", "需要你确认业务决定。", "product-decision-required"));
+  return section;
+}
 function taskPresentationStatus(task) {
+  if (task.execution && !task.terminal) return executionPresentationStatus(task.execution);
   return waitingExecutionStep(task)?.status ||
     (interruptedExecution(task) ? "EXECUTION_INTERRUPTED" : task.status || task.stage);
 }
@@ -515,6 +567,11 @@ const interruptedExecutionReason = "执行租约已失效，当前执行已中�
 const interruptedExecutionNext = "请通过“继续交付”检查并恢复当前执行。";
 function taskGroup(task) {
   if (task.status === "DONE") return "completed";
+  if (task.execution && !task.terminal) {
+    if (["WAITING", "STOPPED", "INTERRUPTED"].includes(task.execution.state) ||
+        task.execution.reason_code === "EXECUTION_CLAIM_EXPIRED") return "blocked";
+    return "active";
+  }
   if (
     task.blocker || interruptedExecution(task) ||
     task.role_queue?.some((step) => step.status.startsWith("WAITING_")) ||
@@ -595,6 +652,15 @@ function operationChildBlocker(request, operation) {
     Date.parse(task.last_activity) > Date.parse(operation.requested_at) ? task : null;
 }
 function requestPresentation(request) {
+  if (request.execution && !productDiscussionStages.has(request.stage)) {
+    const execution = request.execution;
+    const group = request.stage === "CLOSED" ? "closed" : request.stage === "DONE" ? "completed"
+      : ["WAITING", "STOPPED", "INTERRUPTED"].includes(execution.state) ||
+        execution.reason_code === "EXECUTION_CLAIM_EXPIRED" ? "blocked" : "active";
+    return {group, status: ["DONE", "CLOSED"].includes(request.stage) ? request.stage
+      : executionPresentationStatus(execution),
+      blocker: group === "blocked" ? execution.reason : null, nextAction: execution.next_action};
+  }
   const waitingTask = waitingRequestTask(request);
   if (waitingTask)
     return {group: "blocked", status: approvedKnowledge(request)
@@ -816,6 +882,15 @@ function stageFailureGuidance(operation) {
 
 function requestBlockingSummary(request) {
   if (requestPresentation(request).group !== "blocked") return null;
+  if (request.execution && request.execution.responsibility !== "product")
+    return {
+      reasons: [{reason: request.execution.reason, scopes: []}],
+      operationReason: null,
+      approval: latestApproval(request.id, request.checkpoint_sha256),
+      suggestedAction: request.execution.next_action,
+      approvedKnowledge: false,
+      responsibility: request.execution.responsibility,
+    };
   if (canRetryDesign(request)) {
     const operation = latestOperation(request.id);
     const guidance = stageFailureGuidance(operation);
@@ -1013,11 +1088,13 @@ function humanizeBlockingText(value) {
     return `代码仓库 ${repository[1]} 已阻塞；请检查该仓库的交付检查点。`;
   }
   const roleFailure = text.match(
-    /^(?:(?:TRANSIENT_INFRA|POLICY_VIOLATION|INVALID_OUTPUT|VERIFICATION_INCONCLUSIVE):\s*)?(Coder|QA|Reviewer) failed at attempt (\d+): (.*)$/,
+    /^(?:(?:TRANSIENT_INFRA|POLICY_VIOLATION|INVALID_OUTPUT|VERIFICATION_INCONCLUSIVE|WORK_INTERRUPTED):\s*)?(Coder|QA|Reviewer) failed at attempt (\d+): (.*)$/,
   );
   if (roleFailure) {
     const detail = roleFailure[3];
-    const reason = detail.includes("candidate review prompt exceeds its configured Context budget")
+    const reason = detail.startsWith("工程执行已中断。草稿已保留。")
+      ? "工程执行中断，草稿已保留，由工程团队核对并处理"
+      : detail.includes("candidate review prompt exceeds its configured Context budget")
       ? "候选验证上下文超过配置预算，平台在模型调用前安全停止"
       : detail.includes("candidate read snapshot exceeds its bounded context budget")
         ? "候选读取快照超过有界上下文预算，平台未调用模型"
@@ -1171,6 +1248,8 @@ function requestBlockerSection(request) {
 }
 
 function recoveryApprovalBox(request, approval) {
+  const management = engineeringDetails("工程管理 · 需工程授权者处理");
+  management.append(el("p", "以下操作供工程授权者使用；产品负责人无需决定技术恢复方式。当前仍使用可信本机操作入口，未引入独立账户权限。", "muted"));
   const box = el("div", undefined, "approval-box request-blocking-approval");
   box.append(el("h3", approval.title));
   for (const fact of approval.facts) box.append(el("p", fact, "paths"));
@@ -1201,7 +1280,8 @@ function recoveryApprovalBox(request, approval) {
       "primary",
     ),
   );
-  return box;
+  management.append(box);
+  return management;
 }
 function paths(scope) {
   return scope.selected_paths
@@ -2730,7 +2810,12 @@ function requestOperation(panel, request, discussionSection) {
       undefined,
       "detail-section request-operation",
     );
-    section.append(content);
+    if (request.execution?.responsibility !== "product" && request.execution &&
+        !productDiscussionStages.has(request.stage) && content.tagName?.toLowerCase() !== "details") {
+      const management = engineeringDetails("工程管理", request.id + ":operation");
+      management.append(el("p", "由工程授权者处理此操作；产品负责人无需决定技术恢复方式。", "muted"), content);
+      section.append(management);
+    } else section.append(content);
     panel.append(section);
   };
   const appendDiscussionContent = (content) => {
@@ -2776,16 +2861,16 @@ function requestOperation(panel, request, discussionSection) {
     );
   }
   if (sourceRevisionDrift && !running) {
-    const box = el("div", undefined, "operation-error");
+    const box = engineeringDetails("工程管理 · 需求基线需要处理", request.id + ":baseline");
     box.append(
-      el("h3", "代码版本已变化"),
+      el("h3", "需求工程基线无法验证"),
       el(
         "p",
-        "该需求绑定的代码版本与当前 Repository HEAD 不一致，不能继续当前流程。请基于当前代码创建一个新需求。",
+        "工程团队需要恢复并核验该需求保留的基线工作区，处理前暂停执行。普通代码更新不要求产品重新创建需求。",
       ),
       el(
         "p",
-        "旧需求及讨论记录会继续保留，确认新需求创建成功后可以删除旧需求。",
+        "以下重建入口供工程人员在确认原基线无法恢复后使用。旧需求及讨论记录继续保留。",
         "muted",
       ),
       deliveryButton(
@@ -3250,6 +3335,9 @@ function renderRequests(content) {
     ["closed", "已关闭"],
     ["completed", "已完成"],
   ];
+  const selectedRequest = selected?.kind === "task"
+    ? requestById(taskById(selected.id)?.request_id) : selected ? requestById(selected.id) : null;
+  if (selectedRequest) requestFilter = requestGroup(selectedRequest);
   const counts = Object.fromEntries(
     groups.map(([key]) => [
       key,
@@ -3265,6 +3353,7 @@ function renderRequests(content) {
       `${title} ${counts[key]}`,
       () => {
         requestFilter = key;
+        selected = null;
         render();
       },
       requestFilter === key ? "selected" : "",
@@ -6268,16 +6357,25 @@ function deliveryFlow(request) {
     if (index === current && !failedStageIndexes.has(index)) state = "current";
     if (interruptedStages.has(index)) state = "blocked";
     if (waitingStages.has(index)) state = "blocked";
+    if (index === current && state === "current" && request.execution &&
+        ["UNKNOWN", "QUEUED", "RETRY_SCHEDULED"].includes(request.execution.state)) state = "paused";
     const step = el("li", undefined, state);
     if (state === "blocked") step.setAttribute("title", `${title}：阻塞`);
     if (state === "current") step.setAttribute("aria-current", "step");
     step.append(el("span", String(index + 1)), el("strong", title));
     if (state === "blocked") step.append(el("small", interruptedStages.has(index) ? "执行中断" : "已阻塞", "flow-state"));
+    if (state === "paused") step.append(el("small", label(executionPresentationStatus(request.execution)), "flow-state"));
     flow.append(step);
   });
   return flow;
 }
 function managerFlowStatus(request) {
+  if (["DONE", "CLOSED"].includes(request.stage)) return null;
+  if (request.execution && !productDiscussionStages.has(request.stage)) {
+    if (["COMPLETED", "RUNNING", "QUEUED", "RETRY_SCHEDULED"].includes(request.execution.state))
+      return null;
+    return el("p", `${request.execution.responsibility === "product" ? "产品确认" : "ASE 团队协调"} · ${label(executionPresentationStatus(request.execution))}`, "flow-manager blocked");
+  }
   const operation = activeOperation(request.id);
   if (operation && deliveryOperationActions.has(operation.intent.action)) {
     const state = operation.status === "QUEUED" ? "等待执行" : "处理中";
@@ -6332,7 +6430,7 @@ function approvedKnowledge(item) {
 }
 
 function knowledgeGapKey(item) {
-  return `${item.project_id}/${item.id}/${item.checkpoint_sha256}/${item.stage}/${item.knowledge_gap?.resolution?.resolution_id || "pending"}`;
+  return `${item.project_id}/${item.id}/${item.checkpoint_sha256}/${item.stage}/${item.knowledge_gap?.resolution?.resolution_id || "pending"}/${item.execution?.responsibility || "legacy"}`;
 }
 
 function knowledgeGapSection(item) {
@@ -6565,12 +6663,14 @@ function appendExecutionArtifactDetails(target, entry) {
   if (Array.isArray(details.parent_artifact_ids) && details.parent_artifact_ids.length)
     lineage.push(`输入产物 ${details.parent_artifact_ids.join("、")}`);
   if (details.supersedes) lineage.push(`替代产物 ${details.supersedes}`);
-  if (lineage.length) target.append(el("p", lineage.join("；"), "paths"));
+  const engineering = engineeringDetails("产物工程详情", entry.id);
+  if (lineage.length) engineering.append(el("p", lineage.join("；"), "paths"));
   const candidate = details.candidate_revision || details.source_revision;
   const candidateLine = executionDetailLine("候选版本", candidate);
-  if (candidateLine) target.append(candidateLine);
+  if (candidateLine) engineering.append(candidateLine);
   if (details.artifact_sha256)
-    target.append(el("p", "产物 SHA-256 · " + details.artifact_sha256, "paths"));
+    engineering.append(el("p", "产物 SHA-256 · " + details.artifact_sha256, "paths"));
+  if (lineage.length || candidateLine || details.artifact_sha256) target.append(engineering);
   if (details.status || details.verdict) {
     const outcome = details.status || details.verdict;
     target.append(el("p", `结果 · ${outcome}`, outcome === "PASS" || outcome === "APPROVE" ? "success" : "blocker"));
@@ -6621,12 +6721,16 @@ function appendExecutionEntry(target, entry, currentTaskId) {
     el("div", entry.summary),
     el("span", current ? "当前轮" : "历史轮", "badge"),
     el("div", time(entry.occurred_at), "muted"),
-    entry.task_id ? el("div", "任务 · " + entry.task_id, "paths") : null,
-    el("div", entry.source_uri, "paths"),
   );
+  const engineering = engineeringDetails("记录工程详情", entry.id);
+  if (entry.task_id) engineering.append(el("div", "任务 · " + entry.task_id, "paths"));
+  engineering.append(el("div", entry.source_uri, "paths"));
+  if (entry.source_sha256) engineering.append(el("div", "记录摘要 · " + entry.source_sha256, "paths"));
+  if (entry.run_id) engineering.append(el("div", "执行编号 · " + entry.run_id, "paths"));
+  item.append(engineering);
   if (entry.kind === "artifact") appendExecutionArtifactDetails(item, entry);
   if (entry.kind === "state_event" && entry.details?.reason)
-    item.append(el("p", "状态原因 · " + entry.details.reason, "muted"));
+    engineering.append(el("p", "状态原因 · " + entry.details.reason, "muted"));
   if (entry.kind === "evidence" && entry.details?.operation_id)
     item.append(el("p", "操作 · " + entry.details.operation_id, "paths"));
   target.append(item);
@@ -6782,12 +6886,17 @@ function buildDetail(panel = document.getElementById("detail")) {
     overview.append(
       top,
       el("h3", item.title, "request-detail-title"),
-      el("p", item.id, "paths request-detail-id"),
       badge(presentation.status),
     );
+    if (item.execution) overview.append(productExecutionSummary(item));
+    const identity = engineeringDetails("需求工程详情", item.id);
+    identity.append(el("p", item.id, "paths request-detail-id"));
+    if (item.execution?.policy_id) identity.append(el("p", "工程授权 · " + item.execution.policy_id, "paths"));
+    if (item.execution?.receipt_uri) identity.append(el("p", "执行事实 · " + item.execution.receipt_uri, "paths"));
+    overview.append(identity);
     if (item.stage_budget || (item.stage === "DESIGNING" && item.design_budget))
       overview.append(el("p", designBudgetSummary(item), "muted"));
-    if (presentation.group !== "blocked")
+    if (presentation.group !== "blocked" && !item.execution)
       overview.append(
         el(
           "p",
@@ -6798,7 +6907,11 @@ function buildDetail(panel = document.getElementById("detail")) {
     panel.append(overview);
     const blocking = requestBlockerSection(item);
     if (blocking) panel.append(blocking);
-    panel.append(knowledgeGapSection(item));
+    if (item.knowledge_gap?.is_current && item.execution && item.execution.responsibility !== "product") {
+      const knowledge = engineeringDetails("工程知识处理", item.id + ":knowledge");
+      knowledge.append(knowledgeGapSection(item));
+      panel.append(knowledge);
+    } else panel.append(knowledgeGapSection(item));
     const flow = viewGroup(el("section", undefined, "detail-section"), "delivery-flow");
     flow.append(el("h2", "交付流程"));
     const manager = managerFlowStatus(item);
@@ -6850,27 +6963,31 @@ function buildDetail(panel = document.getElementById("detail")) {
   dialog.append(
     top,
     el("h3", item.title),
-    el("p", item.id, "paths"),
     badge(taskPresentationStatus(item)),
   );
+  if (item.execution) dialog.append(productExecutionSummary(item));
+  const engineering = engineeringDetails("任务工程详情", item.id);
+  engineering.append(el("p", item.id, "paths"));
+  if (item.execution?.policy_id) engineering.append(el("p", "工程授权 · " + item.execution.policy_id, "paths"));
+  if (item.execution?.receipt_uri) engineering.append(el("p", "执行事实 · " + item.execution.receipt_uri, "paths"));
   dialog.append(
     el("p", paths(item.scope), "paths"),
     el("p", "最近活动 · " + time(item.last_activity), "muted"),
   );
   if (item.blocker)
-    dialog.append(el("p", "阻塞原因 · " + humanizeBlockingText(item.blocker), "blocker"));
+    engineering.append(el("p", "原始阻塞原因 · " + humanizeBlockingText(item.blocker), "blocker"));
   if (taskGroup(item) === "blocked" && item.next_action)
-    dialog.append(el("p", "下一步 · " + humanizeBlockingText(item.next_action), "muted"));
-  if (interruptedExecution(item))
+    engineering.append(el("p", "原始下一步 · " + humanizeBlockingText(item.next_action), "muted"));
+  if (interruptedExecution(item) && !item.execution)
     dialog.append(el("p", `${interruptedExecutionReason} 当前交付检查点：${item.status}。`));
   if (waitingExecutionStep(item))
     dialog.append(el("p", `当前角色已暂停，交付检查点保留在${label(item.status)}。`));
   if (item.candidate_revision)
-    dialog.append(el("p", "候选版本 · " + item.candidate_revision, "paths"));
+    engineering.append(el("p", "候选版本 · " + item.candidate_revision, "paths"));
   if (item.candidate_branch)
-    dialog.append(el("p", "候选分支 · " + item.candidate_branch, "paths"));
+    engineering.append(el("p", "候选分支 · " + item.candidate_branch, "paths"));
   if (item.role_queue?.length) {
-    dialog.append(el("h2", "角色执行队列"));
+    engineering.append(el("h2", "角色执行队列"));
     for (const step of item.role_queue) {
       const lease = {
         LEASE_VALID: "租约有效",
@@ -6880,13 +6997,14 @@ function buildDetail(panel = document.getElementById("detail")) {
       const status = step.status === "CLOSED" ? "本次执行已结束"
         : interruptedStep(step)
           ? "执行中断" : label(step.status);
-      dialog.append(el("p", `${label(step.role)} · 第 ${step.attempt} 次 · ${status} · ${lease}`));
+      engineering.append(el("p", `${label(step.role)} · 第 ${step.attempt} 次 · ${status} · ${lease}`));
       if (step.heartbeat_at)
-        dialog.append(el("p", "最近心跳 · " + time(step.heartbeat_at), "muted"));
+        engineering.append(el("p", "最近心跳 · " + time(step.heartbeat_at), "muted"));
       if (step.wait_reason?.startsWith("KNOWLEDGE_GAP:"))
-        dialog.append(el("p", "等待补充知识，详情见需求的阻塞信息。", "muted"));
+        engineering.append(el("p", "等待补充知识，详情见需求的阻塞信息。", "muted"));
     }
   }
+  dialog.append(engineering);
   dialog.append(el("h2", "成员与分配模型"));
   for (const a of item.assignments)
     dialog.append(
@@ -6897,9 +7015,10 @@ function buildDetail(panel = document.getElementById("detail")) {
     );
   const history = item.execution_history?.length ? item.execution_history : item.timeline;
   dialog.append(el("h2", "执行记录（完整历史）"));
-  dialog.append(el("p", `共 ${history.length} 条记录；当前 Task ${item.task_id || item.id}。历史轮次保留用于审计，不代表当前状态。`, "muted"));
+  dialog.append(el("p", `共 ${history.length} 条记录。历史轮次完整保留，不代表当前状态。`, "muted"));
+  engineering.append(el("p", "当前 Task · " + (item.task_id || item.id), "paths"));
   if (item.history_task_ids?.length > 1)
-    dialog.append(el("p", "关联 Task · " + item.history_task_ids.join(" → "), "paths"));
+    engineering.append(el("p", "关联 Task · " + item.history_task_ids.join(" → "), "paths"));
   const list = el("ol", undefined, "execution-history");
   for (const entry of history) appendExecutionEntry(list, entry, item.task_id);
   if (!history.length) list.append(el("li", "暂无已保存的执行记录。", "muted"));

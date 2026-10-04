@@ -3,6 +3,10 @@
 from enum import StrEnum
 
 from ai_software_engineer.agents import AgentErrorCode, AgentRunStatus, RunId
+from ai_software_engineer.agents.continuation import (
+    InterruptionAdmissionRejected,
+    InterruptionBudgetExhausted,
+)
 from ai_software_engineer.agents.structured import StructuredModelError
 from ai_software_engineer.context import ContextBudgetExceeded
 from ai_software_engineer.context.models import ContextId
@@ -582,6 +586,25 @@ class RetryingOrchestrator(SerialOrchestrator):
         feedback: tuple[Artifact, ...] = tuple(item for item in (qa, review) if item is not None)
         inputs = (plan, *feedback, *((progress,) if progress is not None else ()))
         parents = tuple(item.artifact_id for item in inputs)
+        if self._interruption_control is not None:
+            try:
+                self._guard_write()
+                restored_attempt = self._interruption_control.resume(
+                    self._repository.get(task.id), self._repository
+                )
+            except InterruptionAdmissionRejected as error:
+                return self._blocked(
+                    self._repository.get(task.id),
+                    RetryClassification.BUDGET_EXHAUSTED
+                    if isinstance(error, InterruptionBudgetExhausted)
+                    else RetryClassification.TRANSIENT_INFRA,
+                    "工程中断现场不满足安全续跑条件。草稿和历史已保留。需要工程处理。",
+                    attempt,
+                    (),
+                    tuple(item.artifact_id for item in feedback),
+                )
+            if restored_attempt is not None:
+                attempt = restored_attempt
         while True:
             self._record_attempt(task, attempt)
             try:
@@ -644,10 +667,28 @@ class RetryingOrchestrator(SerialOrchestrator):
                 if next_attempt is not None:
                     attempt = next_attempt
                     continue
+                current = self._repository.get(task.id)
+                interrupted = (
+                    error.result.error is not None
+                    and error.result.error.code is AgentErrorCode.WORK_INTERRUPTED
+                )
+                interruption_exhausted = interrupted and (
+                    current.work_budget_exhausted
+                    or current.attempts >= current.max_attempts
+                    or (
+                        current.retry_policy is not None
+                        and current.transient_failures(AgentRole.CODER)
+                        >= current.retry_policy.transient_limit(AgentRole.CODER)
+                    )
+                )
                 return self._blocked(
-                    self._repository.get(task.id),
-                    _classification(error),
-                    f"Coder failed at attempt {attempt}: {error}",
+                    current,
+                    RetryClassification.BUDGET_EXHAUSTED
+                    if interruption_exhausted
+                    else _classification(error),
+                    "工程续跑额度已用尽。草稿和失败历史已保留。需要工程处理。"
+                    if interruption_exhausted
+                    else f"Coder failed at attempt {attempt}: {error}",
                     attempt,
                     (),
                     tuple(item.artifact_id for item in feedback),
@@ -856,6 +897,11 @@ class RetryingOrchestrator(SerialOrchestrator):
     def _retry_failure(self, task: Task, error: AgentRunFailed) -> int | None:
         current = self._repository.get(task.id)
         result = error.result
+        if result.error is not None and result.error.code is AgentErrorCode.WORK_INTERRUPTED:
+            if result.role is not AgentRole.CODER or self._interruption_control is None:
+                return None
+            self._guard_write()
+            return self._interruption_control.next_attempt(current, result, self._repository)
         if current.retry_policy is None:
             return (
                 current.attempts + 1

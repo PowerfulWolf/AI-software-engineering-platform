@@ -49,6 +49,7 @@ class AgentErrorCode(StrEnum):
     INVALID_OUTPUT = "INVALID_OUTPUT"
     PROVIDER_ERROR = "PROVIDER_ERROR"
     POLICY_VIOLATION = "POLICY_VIOLATION"
+    WORK_INTERRUPTED = "WORK_INTERRUPTED"
 
 
 class FakeBehavior(StrEnum):
@@ -69,6 +70,12 @@ class AgentFailure(DomainModel):
     code: AgentErrorCode
     message: NonEmptyStr
     transient: StrictBool
+
+    @model_validator(mode="after")
+    def prevent_inline_dirty_retry(self) -> Self:
+        if self.code is AgentErrorCode.WORK_INTERRUPTED and self.transient:
+            raise ValueError("WORK_INTERRUPTED requires new admission, not inline transient retry")
+        return self
 
 
 class AgentUsage(DomainModel):

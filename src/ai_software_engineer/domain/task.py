@@ -5,6 +5,7 @@ from typing import Annotated, Self
 from pydantic import AwareDatetime, Field, StrictBool, StringConstraints, model_validator
 
 from ai_software_engineer.domain.branch import BranchName
+from ai_software_engineer.domain.continuation import InterruptionContinuationPolicy
 from ai_software_engineer.domain.enums import AgentRole, TaskStatus
 from ai_software_engineer.domain.model import DomainModel, JsonValue, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.retry_policy import (
@@ -74,6 +75,9 @@ class Task(DomainModel):
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
     retry_policy: DeliveryRetryPolicy | None = None
     retry_failures: tuple[DeliveryRetryFailure, ...] | None = None
+    interruption_continuation_policy: InterruptionContinuationPolicy | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def validate_task_invariants(self) -> Self:

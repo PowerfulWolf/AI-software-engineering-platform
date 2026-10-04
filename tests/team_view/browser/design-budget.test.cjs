@@ -136,6 +136,7 @@ test("Manager wait retains original stage and cannot replace exact approval", as
   }}));
   await h.tick();
   await h.page.evaluate(() => showDetail("request", "request_fixture"));
+  await h.page.getByText("工程管理 · 需工程授权者处理", {exact: true}).click();
   assert.equal(await detail.getByRole("button", {name: "批准并继续", exact: true}).count(), 1);
   assert.equal(await detail.getByRole("button", {name: "重试 Planner", exact: true}).count(), 0);
 });

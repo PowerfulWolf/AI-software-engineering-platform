@@ -162,6 +162,7 @@ test("a new checkpoint removes a stale exact approval instead of reusing its con
   await h.requests();
   await h.page.evaluate(() => showDetail("request", "request_fixture"));
   const approve = h.page.locator("#detail").getByRole("button", {name: "批准并继续", exact: true});
+  await h.page.getByText("工程管理 · 需工程授权者处理", {exact: true}).click();
   await approve.waitFor();
   await approve.evaluate(node => { window.staleApproval = node; });
   h.team.requests[0].checkpoint_sha256 = "e".repeat(64);

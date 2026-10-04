@@ -126,6 +126,99 @@
       ],
       "type": "string"
     },
+    "DeliveryExecutionView": {
+      "additionalProperties": false,
+      "description": "Product-facing execution facts, separate from delivery stage and verdict.",
+      "properties": {
+        "action_required": {
+          "default": false,
+          "title": "Action Required",
+          "type": "boolean"
+        },
+        "available_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Available At"
+        },
+        "next_action": {
+          "title": "Next Action",
+          "type": "string"
+        },
+        "policy_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Policy Id"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "reason_code": {
+          "title": "Reason Code",
+          "type": "string"
+        },
+        "receipt_uri": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Receipt Uri"
+        },
+        "responsibility": {
+          "enum": [
+            "product",
+            "team",
+            "engineering"
+          ],
+          "title": "Responsibility",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "RUNNING",
+            "QUEUED",
+            "WAITING",
+            "RETRY_SCHEDULED",
+            "INTERRUPTED",
+            "STOPPED",
+            "UNKNOWN",
+            "COMPLETED",
+            "SUPERSEDED"
+          ],
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "state",
+        "responsibility",
+        "reason_code",
+        "reason",
+        "next_action"
+      ],
+      "title": "DeliveryExecutionView",
+      "type": "object"
+    },
     "DesignBudget": {
       "additionalProperties": false,
       "description": "Read-only observation; unknown legacy transient counts default to zero.",
@@ -860,6 +953,17 @@
           "title": "Documents",
           "type": "array"
         },
+        "execution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DeliveryExecutionView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "failed_stages": {
           "default": [],
           "items": {
@@ -890,6 +994,27 @@
           },
           "title": "Knowledge Rechecked Gap Ids",
           "type": "array"
+        },
+        "knowledge_route": {
+          "anyOf": [
+            {
+              "enum": [
+                "USER",
+                "PRODUCT",
+                "DESIGNER",
+                "RESEARCH",
+                "ACCEPT_RISK",
+                "WAITING_HUMAN",
+                "WAITING_DEPENDENCY"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Knowledge Route"
         },
         "knowledge_wait_stage": {
           "anyOf": [
@@ -968,6 +1093,19 @@
         "attempt": {
           "title": "Attempt",
           "type": "integer"
+        },
+        "available_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Available At"
         },
         "heartbeat_at": {
           "anyOf": [
@@ -1324,6 +1462,17 @@
           "title": "Documents",
           "type": "array"
         },
+        "execution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DeliveryExecutionView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "execution_history": {
           "default": [],
           "items": {
@@ -1337,6 +1486,18 @@
           "default": "UNKNOWN",
           "title": "Execution Liveness",
           "type": "string"
+        },
+        "failure_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failure Code"
         },
         "history_task_ids": {
           "default": [],
@@ -1604,8 +1765,6 @@
       "type": "string"
     }
   },
-  "$id": "https://ai-software-engineer.local/schemas/team-snapshot.schema.json",
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
     "agents": {

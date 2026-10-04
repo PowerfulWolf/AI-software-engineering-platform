@@ -1,7 +1,19 @@
 {
   "$defs": {
-    "CodexConnectionMode": {"enum": ["direct", "proxy"], "type": "string"},
-    "ProviderRouteKind": {"enum": ["codex_cli", "responses"], "type": "string"},
+    "CodexConnectionMode": {
+      "enum": [
+        "direct",
+        "proxy"
+      ],
+      "type": "string"
+    },
+    "ProviderRouteKind": {
+      "enum": [
+        "codex_cli",
+        "responses"
+      ],
+      "type": "string"
+    },
     "AgentErrorCode": {
       "description": "Stable failure categories consumed by Orchestrator retry routing.",
       "enum": [
@@ -12,7 +24,8 @@
         "PROVIDER_UNAVAILABLE",
         "INVALID_OUTPUT",
         "PROVIDER_ERROR",
-        "POLICY_VIOLATION"
+        "POLICY_VIOLATION",
+        "WORK_INTERRUPTED"
       ],
       "title": "AgentErrorCode",
       "type": "string"
@@ -91,8 +104,28 @@
       "title": "Model",
       "type": "string"
     },
-    "route_kind": {"anyOf": [{"$ref": "#/$defs/ProviderRouteKind"}, {"type": "null"}], "default": null},
-    "connection_mode": {"anyOf": [{"$ref": "#/$defs/CodexConnectionMode"}, {"type": "null"}], "default": null},
+    "route_kind": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProviderRouteKind"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "connection_mode": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CodexConnectionMode"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "reasoning_effort": {
       "$ref": "#/$defs/ReasoningEffort"
     },

@@ -106,6 +106,7 @@ def read_role_queue(
                 lease_expires_at=expiry,
                 lease_liveness=liveness,
                 wait_reason=item.wait_reason,
+                available_at=item.available_at,
             )
         )
     if sum(view.status is not WorkItemStatus.CLOSED for view in result) > 1:

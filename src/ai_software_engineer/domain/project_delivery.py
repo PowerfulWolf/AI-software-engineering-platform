@@ -17,6 +17,7 @@ from typing import Annotated, Literal, Self
 from pydantic import AwareDatetime, Field, StrictBool, StrictInt, StringConstraints, model_validator
 
 from ai_software_engineer.domain.branch import BranchName
+from ai_software_engineer.domain.continuation import InterruptionContinuationPolicy
 from ai_software_engineer.domain.enums import (
     AgentRole,
     BrainTier,
@@ -990,6 +991,7 @@ def derive_delivery_task(
     base_ref: str,
     max_attempts: AttemptLimit,
     retry_policy: DeliveryRetryPolicy | None = None,
+    interruption_continuation_policy: InterruptionContinuationPolicy | None = None,
     created_at: datetime,
     constraints: TaskConstraints | None = None,
     owner: str | None = None,
@@ -1030,6 +1032,7 @@ def derive_delivery_task(
         status=TaskStatus.NEW,
         max_attempts=max_attempts,
         retry_policy=retry_policy,
+        interruption_continuation_policy=interruption_continuation_policy,
         owner=owner,
         labels=labels,
         created_at=created_at,

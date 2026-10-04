@@ -185,3 +185,12 @@ def test_unknown_text_and_durable_record_are_not_rewritten() -> None:
     value = "未知原因 run_123 sha256=abc123"
     assert localize_blocking_text(value) == value
     assert localize_blocking_text(None) is None
+
+
+def test_stopped_engineering_work_is_not_described_as_product_approval() -> None:
+    value = "WORK_INTERRUPTED: Coder failed at attempt 1: 工程执行已中断。草稿已保留。现场不满足自动继续条件。需要工程处理。"
+    localized = localize_blocking_text(value)
+    assert localized is not None
+    assert "工程团队" in localized
+    assert "等待精确恢复审批" not in localized
+    assert "WORK_INTERRUPTED" not in localized

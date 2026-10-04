@@ -202,7 +202,7 @@ def test_edit_replaces_exact_draft_and_preserves_original_journal(
     assert retired is not None
     assert retired.reason == "replaced"
     assert retired.replacement_delivery_id == replacement.delivery_id
-    with pytest.raises(ValueError, match="retired"):
+    with pytest.raises(ValueError, match=r"删除|替换"):
         service.status(original.delivery_id)
 
 
@@ -565,3 +565,128 @@ def test_retirement_retry_ignores_timestamp_and_replacement_must_exist(
     )
     with pytest.raises(RequirementRetirementError, match="replacement journal is missing"):
         service.retirements.retired_delivery_ids(service.journal)
+
+
+def test_delete_replay_keeps_exact_tombstone_and_rejects_other_checkpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, repository = _service(tmp_path, monkeypatch)
+    checkpoint = service.create(
+        CreateRequirement(name="Delete once", repository_roots=(str(repository),))
+    ).checkpoint
+    command = DeleteRequirement(
+        delivery_id=checkpoint.delivery_id,
+        expected_checkpoint_sha256=checkpoint.checkpoint_sha256,
+        submitted_at=NOW,
+    )
+    service.delete_requirement(command)
+    original_bytes = service.retirements.path.read_bytes()
+    assert service.delete_requirement(command).checkpoint == checkpoint
+    assert service.retirements.path.read_bytes() == original_bytes
+    with pytest.raises(DeliveryCheckpointStale):
+        service.delete_requirement(
+            command.model_copy(update={"expected_checkpoint_sha256": "f" * 64})
+        )
+
+
+def test_same_name_creation_after_deletion_has_new_identity_and_no_old_approval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, repository = _service(tmp_path, monkeypatch)
+    command = CreateRequirement(name="K1", repository_roots=(str(repository),), submitted_at=NOW)
+    original = service.create(command).checkpoint
+    blocked = service._save(original, stage=JointStage.BLOCKED, next_action="Stopped")
+    service.delete_requirement(
+        DeleteRequirement(
+            delivery_id=blocked.delivery_id,
+            expected_checkpoint_sha256=blocked.checkpoint_sha256,
+            submitted_at=NOW,
+        )
+    )
+    old_history = service.journal.history(blocked.delivery_id)
+    original_retirement = service.retirements.retirement()
+    created = service.create(command).checkpoint
+    assert created.delivery_id != blocked.delivery_id
+    assert created.stage is JointStage.READY_FOR_DISCUSSION
+    assert created.product_spec is None
+    assert created.approval is None
+    assert created.design is None
+    assert created.plan is None
+    assert service.create(command).checkpoint == created
+    assert service.retirements.retirement() == original_retirement
+    assert service.journal.history(blocked.delivery_id) == old_history
+    with pytest.raises(ValueError, match=r"删除|替换"):
+        service.status(blocked.delivery_id)
+
+
+def test_deleted_requirement_cannot_be_resumed_approved_closed_or_restarted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ai_software_engineer.manager.delivery import ApproveProductSpec, ResumeProjectDelivery
+
+    service, repository = _service(tmp_path, monkeypatch)
+    original = service.create(
+        CreateRequirement(name="K1", repository_roots=(str(repository),))
+    ).checkpoint
+    blocked = service._save(original, stage=JointStage.BLOCKED, next_action="Stopped")
+    closed = service.close_requirement(
+        CloseRequirement(
+            delivery_id=blocked.delivery_id, expected_checkpoint_sha256=blocked.checkpoint_sha256
+        )
+    ).checkpoint
+    service.delete_requirement(
+        DeleteRequirement(
+            delivery_id=closed.delivery_id, expected_checkpoint_sha256=closed.checkpoint_sha256
+        )
+    )
+    with pytest.raises(ValueError, match=r"删除|替换"):
+        service.resume(ResumeProjectDelivery(delivery_id=closed.delivery_id))
+    with pytest.raises(ValueError, match=r"删除|替换"):
+        service.approve(
+            ApproveProductSpec(
+                delivery_id=closed.delivery_id,
+                expected_checkpoint_sha256=closed.checkpoint_sha256,
+                approval_reference="human:old-approval",
+            )
+        )
+    with pytest.raises(ValueError, match=r"删除|替换"):
+        service.close_requirement(
+            CloseRequirement(
+                delivery_id=closed.delivery_id, expected_checkpoint_sha256=closed.checkpoint_sha256
+            )
+        )
+    with pytest.raises(ValueError, match=r"删除|替换"):
+        service.restart_requirement(
+            RestartRequirement(
+                delivery_id=closed.delivery_id, expected_checkpoint_sha256=closed.checkpoint_sha256
+            )
+        )
+
+
+def test_delete_rejects_other_project_without_changing_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, repository = _service(tmp_path, monkeypatch)
+    original = service.create(
+        CreateRequirement(name="K1", repository_roots=(str(repository),))
+    ).checkpoint
+    other = service.team.project_registry().register(project_id="project_other", name="Other")
+    forged = JointCheckpoint.seal(
+        {
+            **original.to_wire(),
+            "delivery_id": "delivery_multi_" + "f" * 40,
+            "project_id": other.manifest.project_id,
+            "project_manifest_sha256": other.manifest.manifest_sha256,
+            "sequence": 1,
+            "previous_checkpoint_sha256": None,
+        }
+    )
+    service.journal.append(forged, expected=None)
+    with pytest.raises(ValueError, match="another Team or Project"):
+        service.delete_requirement(
+            DeleteRequirement(
+                delivery_id=forged.delivery_id, expected_checkpoint_sha256=forged.checkpoint_sha256
+            )
+        )
+    assert service.journal.current(forged.delivery_id) == forged
+    assert not service.retirements.retirement().entries
