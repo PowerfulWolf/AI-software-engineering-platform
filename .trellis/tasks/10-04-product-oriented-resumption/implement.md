@@ -38,3 +38,42 @@
 
 - 取消补充提交 `38762ab3310fcea6ea50f8193696924ea25f0d93` 已推送/空闲部署，PID 74641。第一份 K1 正式删除成功：`operation_3173ddeb5955c209f104c97b564e5c6a`，29个历史Task的取消receipt已封存，只有3个原非终态Task新增取消状态事件，未调用模型。
 - 删除后 public Team GET 的旧verification source过滤缺陷已补：完整retired parent/native历史+精确(repository_id,task_id)过滤，保留active missingSource拒绝并防全局Task身份复用。新public回归先红于503，最终新回归/身份冲突/原replanning负例 `5 passed in 37.00s`；相关其他4个live MySQL用例之前通过。旧负例仅迁移到history读取seam，拒绝断言未弱化。相关Ruff/format/mypy及独立只读复核通过。
+
+
+## 最终发布与存量数据处置（2026-10-05）
+
+只读过滤修复提交 `3653bcc` 已推送并部署，当前服务 PID 88817、`delivery_ready=true`。
+两个精确需求均通过正式 DELETE_REQUIREMENT Operation 删除：
+
+| 原需求 | Requirement ID | 成功 Operation |
+| --- | --- | --- |
+| 已关闭 K1 | delivery_multi_33d30fe0776a232e31617caa9e702b915dcb4c65 | operation_3173ddeb5955c209f104c97b564e5c6a |
+| 阻塞的重建 K1 | delivery_multi_74df2af872dd99c7b3369341c6a663c707aebb97 | operation_06ab2060c1ed6146c6033c8a0b889b75 |
+
+两个 Operation 都 SUCCEEDED/REQUIREMENT_DELETED，model-calls 均为空。本次代提交来自用户
+明确删除两份需求的委托；初次 guard 拒绝的 Operation 也保留，不冒称模型自治审批。
+
+- Team API 与真实 Chrome 页面均只有原有“增加配置应用按钮”需求，保持 DONE 和原 checkpoint `fc401e5a2d4edaec3bcd7764f477a1ccdc699c7ee221a63552c67902be60e3a3`；Project count 3→1。
+- 已删 parent、child、旧验证及相关 Agent 引用消失；native Continue 的只读 retirement gate 对两份子交付均明确拒绝。未 POST Continue 或新业务执行。
+- 前后核验 1743 个原封存文件、23 个 dirty 文件和原 HEAD 完全相同。原 127 条 StateEvent、266 条 queue event 逐条不变，68 条 claim 不变，所有旧 terminal Task 快照/revision 不变。
+- 仅3个旧 IMPLEMENTING Task 追加用户取消事件成为 BLOCKED，revision 各+1；对应3个暂停队列增加 REQUIREMENT_CANCELLED 并 CLOSED。两个新的 cancellation receipt 与2条 retirement 记录封存，旧3条 retirement 保持不变。
+- 新增生产 Operation 仅为3次 DELETE（1次安全拒绝、2次成功），均零模型调用；无新 Requirement、Assignment、Lease、Run或业务交付。
+- 只读校验结果保存在 `/tmp/ase-k1-deletion-{before,after}.json`，SQL before审计与执行Operation记录同前缀文件；临时审计文件0600、不提交仓库。不通过生产SQL补丁改状态，不删除dirty工作区。
+
+最终增量命令与结果：
+
+```sh
+.venv/bin/pytest -q tests/work_queue/test_requirement_queue_cancellation.py
+# 17 passed
+.venv/bin/pytest -q tests/manager/test_requirement_cancellation.py::test_public_delete_real_queue_settles_nonterminal_and_retains_immutable_history tests/manager/test_requirement_deletion.py -m mysql
+# 4 passed, 5 deselected
+.venv/bin/pytest -q tests/team_view/test_deleted_verifications.py tests/team_view/test_live.py::test_joint_reader_preserves_child_ownership_through_integration_replanning
+# 5 passed
+```
+
+上述 MySQL 均串行使用核验过的隔离测试DSN。生产Task/queue的写入来自已批准删除意图触发的
+应用服务和原有审计存储。全量 tests 按用户约定未运行；不宣称零 Bug 或通用崩溃恢复。
+
+回滚须在服务空闲时进行，且保留 receipt/policy 兼容读取、已删需求及旧verification过滤、
+同名create不复活tombstone的修复。已删身份不能复活、恢复旧批准或执行旧unsafe plan；工程
+历史/草稿只能用于审计。后续仅在用户明确要求后新建业务需求并重新交付。

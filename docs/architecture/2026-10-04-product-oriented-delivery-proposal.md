@@ -116,7 +116,7 @@ v1 正常 capture 只覆盖有界文本新增/修改。删除、改名、文件�
 
 ## 5. 现有 K1 与存量数据
 
-本轮没有启动 K1、批准恢复或改写终态 Task。安全删除入口已实现，部署后将按用户要求通过正式 DELETE_REQUIREMENT 退役两个 K1；Requirement tombstone、sealed artifact/event、历史 worktree 和审计记录保留，产品列表、详情和继续入口均拒绝已退役身份。
+本轮没有启动 K1、批准恢复或改写终态 Task。已按用户要求通过正式 DELETE_REQUIREMENT 退役两个 K1，两个 Operation 均成功且无模型调用；Requirement tombstone、sealed artifact/event、历史 worktree 和审计记录保留，产品列表、详情和继续入口均拒绝已退役身份。
 
 旧草稿和完整历史按正式退役事实保留，不再启动旧身份。后续如用户重新提出需求，必须使用当前版本新建全新 Requirement；旧 tombstone 不会复活旧审批、Task 或预算。用户已委托的工程代办必须保留代理人与 exact 授权记录；不能冒称产品新批准或自治完成。
 

@@ -1,8 +1,15 @@
 {
   "id": "product-oriented-resumption",
   "name": "面向产品用户的交付中断与工程恢复重构",
-  "status": "in_progress",
-  "phase": "implementation_and_incremental_verification",
+  "status": "completed",
+  "phase": "released_and_existing_requirements_deleted",
   "created_at": "2026-10-04",
-  "base_commit": "31624029135aef96b1029cff2d08028f16fa9b59"
+  "base_commit": "31624029135aef96b1029cff2d08028f16fa9b59",
+  "completed_at": "2026-10-05",
+  "implementation_commits": [
+    "47003197eb31ecfd0ade0cd4cdf6f52db9351def",
+    "38762ab3310fcea6ea50f8193696924ea25f0d93",
+    "3653bcc"
+  ],
+  "new_requirement_delivery": "deferred_by_user"
 }
