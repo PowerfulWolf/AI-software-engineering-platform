@@ -24,7 +24,7 @@ from ai_software_engineer.manager.model_execution import (
     MySqlManagerClaimAuthority,
 )
 from ai_software_engineer.manager.model_store import MySqlManagerRecordStore
-from ai_software_engineer.multi_directory.budget import stage_budget
+from ai_software_engineer.multi_directory.budget import StageBudget, stage_budget
 
 if TYPE_CHECKING:
     from ai_software_engineer.manager.production_backend import StructuredClientFactory
@@ -88,6 +88,7 @@ class StageBlockage(DomainModel):
     failure_detail: str
     timeout_kind: str | None
     advertised_actions: tuple[CoordinationAction, ...]
+    retry_budget: StageBudget | None
     child_findings: tuple[str, ...]
 
 
@@ -163,6 +164,9 @@ class ProductionStageCoordinator:
             failure_detail=failure_detail,
             timeout_kind=error.timeout_kind if isinstance(error, StructuredModelError) else None,
             advertised_actions=actions,
+            retry_budget=stage_budget(
+                self.config.execution_retry_policy, checkpoint.stage, checkpoint.attempts
+            ),
             child_findings=child_findings,
         )
         identity = digest(blockage.to_wire())
@@ -194,6 +198,10 @@ class ProductionStageCoordinator:
                 "Write summary, next_action, responsible_actor and resume_condition in "
                 "Simplified Chinese; preserve exact IDs, error codes and technical names. "
                 "The typed failure classification and remaining capabilities are authoritative. "
+                "retry_budget gives the trusted used/max work, transient and local-window "
+                "counts, exhaustion and next execution window. An advertised RETRY_STAGE "
+                "already passed the existing-authorization and remaining-budget guard; "
+                "do not request human confirmation of those supplied policy facts. "
                 "RETRY_STAGE only retries an already-authorized unfinished producer within budget; "
                 "a local time limit does not prove useful reasoning or provider health. "
                 "PROPOSE_RECOVERY routes to existing exact recovery approval, never resets Task "

@@ -59,6 +59,32 @@ def test_automatic_design_retry_uses_new_window_and_preserves_approval(
 ) -> None:
     service, backend, seed, _ = setup_design(tmp_path)
     service.coordinator, manager_client = coordinator(tmp_path, monkeypatch, service)
+    manager_reply = manager_client.complete.return_value
+
+    def require_budget(**kwargs: object) -> StructuredModelResult:
+        supplied = kwargs["input_payload"]
+        assert isinstance(supplied, Mapping)
+        budget = supplied.get("retry_budget")
+        if not isinstance(budget, Mapping):
+            return StructuredModelResult(
+                payload=ManagerCoordinationDraft(
+                    action="WAITING_HUMAN",
+                    summary="没有提供剩余预算事实。",
+                    next_action="请交付负责人核实预算。",
+                    responsible_actor="交付负责人",
+                    resume_condition="核实原授权和剩余预算。",
+                ).to_wire(),
+                duration_ms=1,
+            )
+        assert budget["role"] == "designer"
+        assert budget["attempts"] == 0
+        assert budget["transient_failures"] == 0
+        assert budget["capacity_timeouts"] == 1
+        assert budget["next_timeout_seconds"] == 1200
+        assert budget.get("exhausted") is None
+        return manager_reply
+
+    manager_client.complete.side_effect = require_budget
     backend.designs = [backend.designs[1]]
     complete = backend.complete
     windows = []
@@ -119,6 +145,16 @@ def test_upstream_diagnosis_advertises_only_bounded_authorized_retry(
         "WAITING_HUMAN",
         "RETRY_STAGE",
     ]
+    budget = client.complete.call_args.kwargs["input_payload"]["retry_budget"]
+    assert (
+        budget["role"]
+        == {
+            JointStage.PRODUCT_DISCOVERY: "product",
+            JointStage.DESIGNING: "designer",
+            JointStage.PLANNING: "planner",
+        }[stage]
+    )
+    assert budget.get("exhausted") is None
     saved = service._save(seed, coordination=advice, next_action="Manager's proposal")
     assert value.diagnose(saved, error) == advice
     assert client.complete.call_count == 1
@@ -139,15 +175,32 @@ def test_non_retryable_failure_cannot_acquire_retry_from_manager_text(
     assert client.complete.call_args.kwargs["input_payload"]["advertised_actions"] == [
         "WAITING_HUMAN"
     ]
+    assert (
+        client.complete.call_args.kwargs["input_payload"]["retry_budget"].get("exhausted") is None
+    )
     assert service.status(seed.delivery_id).checkpoint == seed
 
 
-def test_exhausted_capacity_disallows_retry_and_read_only_advice_survives_reopen(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("counter", "exhausted"),
+    [
+        ("design", "work"),
+        ("design_transient", "transient"),
+        ("design_capacity_timeout", "capacity"),
+    ],
+)
+def test_exhausted_budget_disallows_retry_and_read_only_advice_survives_reopen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, counter: str, exhausted: str
 ) -> None:
     service, _, seed, _ = setup_design(tmp_path)
-    seed = service._save(seed, attempts={"design_capacity_timeout": 3})
     value, client = coordinator(tmp_path, monkeypatch, service, action="WAITING_HUMAN")
+    limits = value.config.execution_retry_policy
+    bound = {
+        "work": limits.designer.max_attempts,
+        "transient": limits.designer.max_transient_failures,
+        "capacity": limits.execution_time.designer.max_capacity_timeouts,
+    }[exhausted]
+    seed = service._save(seed, attempts={counter: bound})
     advice = value.diagnose(
         seed,
         StructuredModelError(
@@ -160,6 +213,13 @@ def test_exhausted_capacity_disallows_retry_and_read_only_advice_survives_reopen
     assert client.complete.call_args.kwargs["input_payload"]["advertised_actions"] == [
         "WAITING_HUMAN"
     ]
+    budget = client.complete.call_args.kwargs["input_payload"]["retry_budget"]
+    assert budget["exhausted"] == exhausted
+    if exhausted == "capacity":
+        assert budget["capacity_timeouts"] == budget["max_capacity_timeouts"] == bound
+        assert budget.get("next_timeout_seconds") is None
+    else:
+        assert budget["next_timeout_seconds"] == 600
     with pytest.raises(ValueError, match="source facts"):
         service._save(
             service._current(seed.delivery_id),
@@ -218,7 +278,7 @@ def test_service_rechecks_advice_before_journal_publication(
 
 @pytest.mark.parametrize("stage", [JointStage.DELIVERING, JointStage.BLOCKED])
 def test_delivery_findings_never_allow_automatic_stage_retry(
-    tmp_path: Path, stage: JointStage
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: JointStage
 ) -> None:
     service, _, seed, _ = setup_design(tmp_path)
     current = seed.model_copy(update={"stage": stage})
@@ -226,3 +286,6 @@ def test_delivery_findings_never_allow_automatic_stage_retry(
     assert "RETRY_STAGE" not in module.allowed_coordination_actions(
         service.execution_retry_policy, current, error
     )
+    value, client = coordinator(tmp_path, monkeypatch, service, action="WAITING_HUMAN")
+    value.diagnose(current, error)
+    assert client.complete.call_args.kwargs["input_payload"].get("retry_budget") is None

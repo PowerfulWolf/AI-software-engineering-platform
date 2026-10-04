@@ -97,6 +97,42 @@ Bad: use the ProductSpec digest as the recovery approval identifier or send only
 finding. `tests/manager/test_stage_coordination.py::test_blockage_does_not_present_product_approval_as_recovery_authority`
 guards the digest separation.
 
+#### Stage retry budget facts (2026-10-04)
+
+`StageBlockage.retry_budget: StageBudget | None` is computed by the same
+`stage_budget(execution_retry_policy, checkpoint.stage, checkpoint.attempts)` used to advertise
+actions. For Product/Designer/Planner it includes used/max work, transient and capacity counts,
+the next execution window and exhaustion reason. Other stages omit it. Never derive a second
+counter set from prose or confuse an available budget with approval for recovery/new scope.
+The Manager prompt identifies this as trusted policy facts and explains that advertised
+`RETRY_STAGE` already passed the existing-authority and budget guard. The service still checks
+the actual action and current source facts before retrying.
+
+| Input | Result |
+|---|---|
+| Designer local expiry, capacity=1/3 | work reservation refunded; 1200-second next window appears in diagnosis |
+| Exhausted work/transient/capacity | exhaustion appears in diagnosis; no advertised RETRY_STAGE |
+| Policy/context/unknown failure with budget remaining | counts do not authorize retry; WAIT only |
+| Delivery/verifier finding | no fabricated upstream budget; existing recovery/verdict path remains |
+
+The regression uses the real JointDeliveryService and ProductionStageCoordinator with a fake
+Manager that selects WAIT when budget facts are absent, reproducing the production pause. On
+the corrected input it selects RETRY_STAGE and the same Product approval proceeds through
+600→1200. The bounded/non-retryable/exhausted/non-upstream fixtures protect the authority seam.
+
+Existing K1 timeout and Manager advice remain immutable. Normal Continue consumes the existing
+1200-second allowance without SQL repair or budget reset. New diagnostic contexts have a new
+input hash; Manager's requirement/stage episode is unchanged. StageBlockage is an internal
+typed model input stored inside the existing generic context payload, not a new wire schema.
+Roll out only after active operations finish; role source baselines stay pinned until an exact
+recovery/replanning contract permits a new baseline. Revert code and reconstruct the idle Host
+to roll back; preserve checkpoints, approvals and diagnostic histories.
+
+Root cause: the action guard had correct counts, but model context omitted them. Prior fixtures
+always returned RETRY_STAGE regardless of input and hid the missing-facts pause. Merely changing
+the UI or increasing retry limits would leave that failure. Reusing the typed budget projection
+keeps presentation, diagnosis and dispatch consistent; no generated spec templates exist here.
+
 ## Executable APIs and persistence
 
 Source: `manager/model_execution.py`, `manager/model_store.py`, `manager/stage_coordination.py`,
