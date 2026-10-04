@@ -17,4 +17,6 @@ worktree，不能借恢复之名 reset、rebase、覆盖或跳过独立 QA/Revie
 - `RepositoryProfile.discover(..., revision=...)` 的 linked worktree 适配；
 - `ProductionJointBackend.delivery_runtime()` 的历史 profile 兼容；
 - Manager backend 的精确 Task source revision 读取；
+- 未启动 successor 的父级累计 delivering 次数不得阻止平台启动恢复；
+- Manager 阻塞输入不得把 ProductSpec 摘要当作恢复审批，且必须携带 child 的结构化失败事实；
 - 规范、contract regression 和存量恢复操作说明。

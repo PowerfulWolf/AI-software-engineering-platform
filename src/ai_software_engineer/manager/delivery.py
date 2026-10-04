@@ -616,7 +616,6 @@ class UnifiedProjectEntryService:
             and current.task_status is TaskStatus.NEW
             and current.task_revision == 0
             and current.candidate_revision is None
-            and current.stage_attempts.delivering == 0
             and current.failed_stage in {None, DeliveryStage.DELIVERING}
         )
         pending_verifier = (

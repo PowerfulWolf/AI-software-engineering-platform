@@ -2564,3 +2564,82 @@ Required incremental checks: `test_delivery_continuation.py` covers the Controll
 gets one exact rebind plan and then serial Coder → QA → Reviewer. Base: repeated Continue returns
 the same plan without a model call. Bad: a dirty worktree, role claim, or existing event is
 rebound or approved as success.
+
+### Legacy linked-worktree context and unstarted successor counters
+
+`rebind_native_rule_sources(repository_root, profile, sources, source_revision=...)` may receive
+the exact durable `Task.base_ref` when a historical linked-worktree `RepositoryProfile` has
+`source_revision=unknown`. It validates the supplied full Git SHA against every sealed native
+rule blob and rejects a concrete profile revision that differs. It never reads the mutable
+checkout, rewrites the historical profile, or accepts a missing/invalid revision. A source set
+with no native rules remains valid without a revision because no native blob is being read.
+
+`UnifiedProjectEntryService.retry_interrupted_stage` determines whether a successor has started
+from successor Task facts (`NEW`, revision `0`, no candidate and matching delivery identity).
+`stage_attempts.delivering` belongs to the append-only parent delivery cursor and may include
+attempts inherited from the predecessor; it is not evidence that the current successor Coder ran.
+An unstarted successor with inherited counters may resume platform-interrupted delivery startup.
+Any Task event, claim, lease, retry failure or candidate still fails closed and uses the ordinary
+recovery path.
+
+#### 1. Scope / Trigger
+
+Trigger: a recovery allocation uses a historical linked-worktree profile with
+`source_revision=unknown`, or a NEW successor is paired with a parent cursor whose cumulative
+delivery counter is nonzero.
+
+#### 2. Signatures
+
+```python
+rebind_native_rule_sources(
+    repository_root: Path,
+    profile: RepositoryProfile,
+    sources: tuple[ContextSource, ...],
+    *,
+    source_revision: str | None = None,
+) -> tuple[ContextSource, ...]
+
+UnifiedProjectEntryService.retry_interrupted_stage(
+    ResumeProjectDelivery,
+) -> ProjectDeliveryResult
+```
+
+#### 3. Contracts
+
+The production recovery caller supplies `dispatch.task.base_ref` as `source_revision`. The helper
+reads each native body with `git cat-file <revision>:<relative_path>` and compares the sealed
+URI, byte length and SHA-256 before returning inline content. `source_revision` is never inferred
+from checkout HEAD and historical profiles are immutable. Startup retry is eligible only when the
+current Task is `NEW`, revision `0`, has no candidate, and has no execution evidence; parent
+`stage_attempts.delivering` is not current Task evidence.
+
+#### 4. Validation & Error Matrix
+
+| Input | Result |
+|---|---|
+| linked profile `unknown` + exact 40/64-hex Task base | read sealed Git blobs and continue |
+| concrete profile revision differs from supplied revision | reject with revision mismatch |
+| missing/invalid revision or blob hash/length mismatch | reject with sealed native rule error |
+| no native sources | preserve empty/non-native sources without Git read |
+| NEW successor with inherited parent delivery count | allow platform-interrupted startup retry |
+| Task event, lease, claim, retry failure or candidate exists | reject ordinary startup retry |
+
+#### 5. Good / Base / Bad Cases
+
+- Good: a linked worktree profile is `unknown`, but the successor Task base is durable and the
+  native blobs match it exactly.
+- Base: no native sources are selected; no revision is needed for a read that does not occur.
+- Bad: reset dirty worktree, use mutable HEAD, rewrite the profile digest, or treat inherited
+  parent counters as a Coder attempt.
+
+#### 6. Tests Required
+
+`tests/context/test_native_sources.py::test_linked_worktree_legacy_profile_rebinds_from_explicit_task_revision`
+asserts real linked-worktree `git cat-file` reads and preserves checkout contents.
+`tests/e2e/test_unified_project_entry.py::test_resume_retries_delivery_startup_before_any_coder_run`
+asserts a successor with `delivering=28` still resumes while retaining the NEW/0/no-candidate guard.
+
+#### 7. Wrong vs Correct
+
+Wrong: require `stage_attempts.delivering == 0` or read native rules from the current checkout.
+Correct: validate current Task execution facts and read only the exact Task base revision.

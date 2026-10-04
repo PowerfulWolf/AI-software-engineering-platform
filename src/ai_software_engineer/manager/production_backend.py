@@ -1149,7 +1149,10 @@ class ProductionProjectDeliveryBackend:
             delivery_sources = tuple(unique_sources.values())
         if isinstance(dispatch, (ContinuationDispatchRecord, RecoveryDispatchRecord)):
             delivery_sources = rebind_native_rule_sources(
-                facts.workspace.repository_root, facts.profile, delivery_sources
+                facts.workspace.repository_root,
+                facts.profile,
+                delivery_sources,
+                source_revision=dispatch.task.base_ref,
             )
         runtime_config = RuntimeConfig(
             endpoint="https://runtime.invalid/v1/responses",

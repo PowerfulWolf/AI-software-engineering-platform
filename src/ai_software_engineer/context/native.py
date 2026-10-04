@@ -54,6 +54,8 @@ def rebind_native_rule_sources(
     repository_root: Path,
     profile: RepositoryProfile,
     sources: tuple[ContextSource, ...],
+    *,
+    source_revision: str | None = None,
 ) -> tuple[ContextSource, ...]:
     """Keep source scopes/identity, but use the successor's sealed native revision.
 
@@ -63,6 +65,13 @@ def rebind_native_rule_sources(
     Absent bodies stay absent so historical omissions remain explicit.
     """
     profile.validate_integrity()
+    if not any(source.source_id.startswith("native.rule.") for source in sources):
+        return sources
+    revision = source_revision or profile.vcs.revision
+    if revision is None or re.fullmatch(r"[a-f0-9]{40}|[a-f0-9]{64}", revision) is None:
+        raise ValueError("native rule requires a sealed Git revision")
+    if profile.vcs.revision not in {None, "unknown", revision}:
+        raise ValueError("native rule revision differs from the sealed profile")
     references = {item.uri: item for item in profile.native_rules}
     result = []
     for source in sources:
@@ -72,9 +81,6 @@ def rebind_native_rule_sources(
         reference = references.get(source.uri)
         if reference is None:
             raise ValueError("native rule is not in the sealed profile")
-        revision = profile.vcs.revision
-        if revision is None or re.fullmatch(r"[a-f0-9]{40}|[a-f0-9]{64}", revision) is None:
-            raise ValueError("native rule requires a sealed Git revision")
         if reference.byte_length > 256_000:
             raise ValueError("native rule exceeds context limit")
         object_name = f"{revision}:{reference.relative_path}"

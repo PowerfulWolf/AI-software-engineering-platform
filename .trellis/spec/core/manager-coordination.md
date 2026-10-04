@@ -63,6 +63,33 @@ Wrong: `except Exception: manager.run_again()` or giving Manager store/shell/app
 Correct: seal typed failure, enforce independent budgets, validate one bounded proposal, then
 revalidate the current deterministic action guard. Preserve original delivery phase in projections.
 
+Cross-stage blockage input keeps ProductSpec identity separate from recovery authority. The
+`product_spec_sha256` field is informational; `approval_sha256` is omitted unless an exact recovery
+authorization is actually present. Manager must not infer a recovery approval from a ProductSpec
+digest. Child findings include the child unit, stage, failure code, failure summary, Task identity,
+Task status and next action, so a blocked parent can explain the current fact and route the exact
+remedy. This input is still proposal context: Manager cannot approve, reset, or fabricate recovery.
+
+#### Blockage input contract
+
+`StageBlockage` carries `product_spec_sha256: str | None`, `approval_sha256: str | None`, and
+`child_findings: tuple[str, ...]`. `approval_sha256` is omitted when no exact recovery
+authorization exists. Each child finding includes `unit`, `stage`, `failure_code`,
+`failure_summary`, `task_id`, `task_status`, and `next_action`; these are read-only facts for the
+Manager prompt. The deterministic service validates the advertised action again before publishing
+advice.
+
+| Case | Required behavior |
+|---|---|
+| ProductSpec exists but no recovery authorization | send `product_spec_sha256`, omit `approval_sha256` |
+| Child is blocked | include its current failure code/summary and Task facts |
+| Manager proposes approval/reset from a digest | reject as unadvertised or unauthorized |
+
+Good: Manager receives the exact child reason and proposes the authorized recovery route.
+Bad: use the ProductSpec digest as the recovery approval identifier or send only a generic child
+finding. `tests/manager/test_stage_coordination.py::test_blockage_does_not_present_product_approval_as_recovery_authority`
+guards the digest separation.
+
 ## Executable APIs and persistence
 
 Source: `manager/model_execution.py`, `manager/model_store.py`, `manager/stage_coordination.py`,

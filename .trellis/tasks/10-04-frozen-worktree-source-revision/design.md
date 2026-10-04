@@ -11,3 +11,10 @@ MySQL 中该 child successor Task，要求 Task 的 `repository` 与当前 child
 
 这条兼容路径只修复 runtime 装配，不改变旧的 Run、Task、checkpoint、dirty worktree、
 recovery approval、candidate 或 QA/Review verdict。
+
+原生 Context 重绑定继续使用 Task 的精确 `base_ref` 作为只读 Git 对象来源；它只验证历史
+profile 已封存的 URI、长度和 SHA，不修改历史 profile。恢复入口按当前 successor Task 的
+`NEW/revision=0/no candidate` 事实判断是否尚未启动，不能把父交付 cursor 累计的
+`stage_attempts.delivering` 当成 successor 的执行记录。StageBlockage 将 ProductSpec digest
+单独标注，并把 child 阶段、失败代码、失败摘要、Task 状态和下一步动作交给 Manager；没有
+精确 recovery authorization 时不填 `approval_sha256`。

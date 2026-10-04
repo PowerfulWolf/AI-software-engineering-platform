@@ -8,7 +8,7 @@ import pytest
 from ai_software_engineer.context import ContextSource
 from ai_software_engineer.domain import AgentRole
 from ai_software_engineer.repository_profile import RepositoryProfile
-from tests.manager.test_production_backend import _git
+from tests.manager.test_production_backend import _git, _git_output
 
 
 def test_successor_native_sources_use_frozen_revision_and_preserve_role_scope(
@@ -57,3 +57,39 @@ def test_successor_native_sources_use_frozen_revision_and_preserve_role_scope(
     uncommitted = RepositoryProfile.discover(root, repository_id="repository_fixture")
     with pytest.raises(ValueError, match="native rule differs from the sealed profile"):
         rebind_native_rule_sources(root, uncommitted, (source,))
+
+
+def test_linked_worktree_legacy_profile_rebinds_from_explicit_task_revision(
+    tmp_path: Path,
+) -> None:
+    from ai_software_engineer.context.native import rebind_native_rule_sources
+
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    _git("init", "-b", "main", cwd=source_root)
+    rules = source_root / "README.md"
+    rules.write_text("Rules from the sealed base.\n")
+    _git("add", ".", cwd=source_root)
+    _git("commit", "-m", "base", cwd=source_root)
+    revision = _git_output("rev-parse", "HEAD", cwd=source_root)
+    linked_root = tmp_path / "linked"
+    _git("worktree", "add", str(linked_root), revision, cwd=source_root)
+
+    legacy = RepositoryProfile.discover(linked_root, repository_id="repository_fixture")
+    assert legacy.source_revision == "unknown"
+    source = ContextSource(
+        source_id="native.rule.0",
+        uri=legacy.native_rules[0].uri,
+        content=rules.read_text(),
+        required=True,
+        roles=(AgentRole.QA,),
+    )
+
+    result = rebind_native_rule_sources(
+        linked_root,
+        legacy,
+        (source,),
+        source_revision=revision,
+    )
+
+    assert result[0].content == "Rules from the sealed base.\n"

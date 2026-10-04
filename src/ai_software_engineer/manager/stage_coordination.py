@@ -28,7 +28,7 @@ from ai_software_engineer.multi_directory.budget import stage_budget
 
 if TYPE_CHECKING:
     from ai_software_engineer.manager.production_backend import StructuredClientFactory
-    from ai_software_engineer.multi_directory.models import JointCheckpoint
+    from ai_software_engineer.multi_directory.models import ChildDelivery, JointCheckpoint
 
 
 def stage_facts_sha256(checkpoint: JointCheckpoint) -> str:
@@ -80,12 +80,32 @@ class StageBlockage(DomainModel):
     scope: ManagerRunScope
     source_facts_sha256: str
     source_revisions: tuple[str, ...]
+    # ProductSpec approval is not recovery authority.  Keep it separate from
+    # recovery approvals so Manager cannot mistake one digest for the other.
     approval_sha256: str | None
+    product_spec_sha256: str | None
     failure_code: str
     failure_detail: str
     timeout_kind: str | None
     advertised_actions: tuple[CoordinationAction, ...]
     child_findings: tuple[str, ...]
+
+
+def _child_finding(child: ChildDelivery) -> str:
+    checkpoint = child.checkpoint
+    failure_code = checkpoint.failure_code.value if checkpoint.failure_code else "无"
+    task_status = checkpoint.task_status.value if checkpoint.task_status else "无"
+    return "; ".join(
+        (
+            f"子交付 {child.unit_id}",
+            f"阶段={checkpoint.stage.value}",
+            f"失败代码={failure_code}",
+            f"失败原因={checkpoint.failure_summary or '无'}",
+            f"Task={checkpoint.task_id or '无'}",
+            f"Task状态={task_status}",
+            f"下一步={checkpoint.next_action.value}",
+        )
+    )
 
 
 class ProductionStageCoordinator:
@@ -113,30 +133,37 @@ class ProductionStageCoordinator:
             stage=checkpoint.stage.value,
         )
         facts_sha = stage_facts_sha256(checkpoint)
+        child_findings = tuple(
+            _child_finding(child)
+            for child in checkpoint.children
+            if child.checkpoint.stage.value != "DONE"
+        )
+        failure_detail = (
+            error.safe_message
+            if isinstance(error, StructuredModelError)
+            else "所需上下文超过配置的输入上限，不能重试模型。"  # noqa: RUF001
+            if error is not None
+            else "; ".join(child_findings)
+            if child_findings
+            else "子交付或联合集成需要恢复。"
+        )
         blockage = StageBlockage(
             scope=scope,
             source_facts_sha256=facts_sha,
             source_revisions=tuple(u.base_revision or "unknown" for u in checkpoint.scope.units),
-            approval_sha256=checkpoint.approval.product_spec_sha256
-            if checkpoint.approval
-            else None,
+            approval_sha256=None,
+            product_spec_sha256=(
+                digest(checkpoint.product_spec.to_wire()) if checkpoint.product_spec else None
+            ),
             failure_code=error.code.value
             if isinstance(error, StructuredModelError)
             else "CONTEXT_BUDGET_EXHAUSTED"
             if error is not None
             else "DELIVERY_BLOCKED",
-            failure_detail=error.safe_message
-            if isinstance(error, StructuredModelError)
-            else "所需上下文超过配置的输入上限，不能重试模型。"  # noqa: RUF001
-            if error is not None
-            else "子交付或联合集成需要恢复。",
+            failure_detail=failure_detail,
             timeout_kind=error.timeout_kind if isinstance(error, StructuredModelError) else None,
             advertised_actions=actions,
-            child_findings=tuple(
-                c.checkpoint.next_action
-                for c in checkpoint.children
-                if c.checkpoint.stage.value != "DONE"
-            ),
+            child_findings=child_findings,
         )
         identity = digest(blockage.to_wire())
         previous = checkpoint.coordination

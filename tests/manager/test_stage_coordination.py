@@ -179,6 +179,19 @@ def test_context_capacity_diagnosis_cannot_retry_model(
     assert supplied["failure_code"] == "CONTEXT_BUDGET_EXHAUSTED"
 
 
+def test_blockage_does_not_present_product_approval_as_recovery_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, _, seed, _ = setup_design(tmp_path)
+    value, client = coordinator(tmp_path, monkeypatch, service, action="WAITING_HUMAN")
+
+    value.diagnose(seed, None)
+
+    supplied = client.complete.call_args.kwargs["input_payload"]
+    assert supplied.get("approval_sha256") is None
+    assert supplied["product_spec_sha256"] == module.digest(seed.product_spec.to_wire())
+
+
 @pytest.mark.parametrize("tamper", ["stale", "unavailable"])
 def test_service_rechecks_advice_before_journal_publication(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tamper: str

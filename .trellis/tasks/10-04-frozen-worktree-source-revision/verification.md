@@ -8,6 +8,9 @@
 - `81 passed`：Responses dirty diagnostics、blocker text、web console manager；
 - 新增 legacy `unknown` profile 的 `delivery_runtime → _derived_backend` 回归通过；
 - Ruff、Mypy（3 个变更源文件）、compileall、`git diff --check` 通过。
+- 新增回归：linked-worktree `unknown` profile 使用精确 Task revision 重绑定 native rules；
+  未启动 successor 在父级 `delivering=28` 时仍可恢复；StageBlockage 不再把 ProductSpec digest
+  伪装为恢复审批。
 
 真实存量处置：不修改 `.ase`、MySQL 或历史 journal。提交并重启新 Console 后，使用原
 `CONTINUE_DELIVERY` 入口重新读取当前 checkpoint；若返回精确 recovery/verification approval，

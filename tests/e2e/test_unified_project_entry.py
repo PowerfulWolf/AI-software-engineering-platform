@@ -899,10 +899,14 @@ def test_resume_retries_legacy_mysql_dispatch_failure_before_task(tmp_path: Path
     assert backend.dispatch_calls == 2
 
 
-@pytest.mark.parametrize("legacy_without_failed_stage", (False, True))
+@pytest.mark.parametrize(
+    ("legacy_without_failed_stage", "inherited_delivery_attempts"),
+    ((False, 0), (True, 0), (False, 28)),
+)
 def test_resume_retries_delivery_startup_before_any_coder_run(
     tmp_path: Path,
     legacy_without_failed_stage: bool,
+    inherited_delivery_attempts: int,
 ) -> None:
     project = _copy_fixture(tmp_path, "python")
     platform = tmp_path / "platform"
@@ -950,6 +954,22 @@ def test_resume_retries_delivery_startup_before_any_coder_run(
         assert blocked.failed_stage is None
     else:
         assert blocked.failed_stage is DeliveryStage.DELIVERING
+
+    if inherited_delivery_attempts:
+        payload = blocked.to_wire()
+        payload["stage_attempts"] = {
+            **payload["stage_attempts"],
+            "delivering": inherited_delivery_attempts,
+        }
+        blocked = ProjectDeliveryCheckpoint.create(
+            **{
+                **payload,
+                "sequence": blocked.sequence + 1,
+                "previous_checkpoint_sha256": blocked.checkpoint_sha256,
+                "checkpointed_at": NOW + timedelta(minutes=3),
+            }
+        )
+        catalog.for_delivery(blocked.delivery_id).put(blocked)
 
     recovery = Mock()
     verification = Mock()
