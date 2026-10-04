@@ -362,7 +362,7 @@ class NativeRecoveryEntry:
         )
         if target_branch_name is not None:
             target_branch_name = TypeAdapter(BranchName).validate_python(target_branch_name)
-            if manager._branch_exists(target_branch_name):
+            if manager.branch_exists(target_branch_name):
                 raise RecoveryRejected(
                     "recovery target branch already exists; propose again with "
                     "--target-branch-name and a meaningful scope qualifier, "

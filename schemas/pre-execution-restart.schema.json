@@ -159,7 +159,8 @@
         {
           "enum": [
             "preparation_rebind",
-            "pre_agent_worktree_conflict"
+            "pre_agent_worktree_conflict",
+            "pre_agent_startup_failure"
           ],
           "type": "string"
         },

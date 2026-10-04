@@ -37,11 +37,19 @@ from ai_software_engineer.store.mysql_repository import (
     _text,
     open_mysql_connection,
 )
+from ai_software_engineer.work_queue.execution_store import (
+    AcceptedRoleArtifact,
+    QueuedRoleStep,
+    RoleQueueAdmission,
+    _decode,
+)
+from ai_software_engineer.work_queue.models import QueuedWorkItem
 
 _PRE_AGENT_CONTEXT_BUDGET_REASON = (
     "BUDGET_EXHAUSTED: Required context exceeds the configured input budget; no automatic retry."
 )
 _PRE_AGENT_WORKTREE_CONFLICT_MARKER = "WorktreeAlreadyExists"
+_PRE_AGENT_STARTUP_FAILURE_MARKER = "not configured for live execution"
 
 
 def retained_candidate_checkpoint(
@@ -311,6 +319,24 @@ def read_pre_execution_snapshot(
                 and events[1].to_status is TaskStatus.IMPLEMENTING
                 and events[1].reason == "plan_validated"
             )
+            pre_agent_startup_failure = (
+                cp.stage in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
+                and cp.failed_stage is DeliveryStage.DELIVERING
+                and cp.failure_code is DeliveryFailureCode.PERMISSION_DENIED
+                and cp.failure_summary is not None
+                and _PRE_AGENT_STARTUP_FAILURE_MARKER in cp.failure_summary
+                and revision == 2
+                and task.attempts == 1
+                and not task.retry_failures
+                and task.status is TaskStatus.IMPLEMENTING
+                and len(events) == 2
+                and events[0].from_status is TaskStatus.NEW
+                and events[0].to_status is TaskStatus.PLANNING
+                and events[0].reason == "task_validated"
+                and events[1].from_status is TaskStatus.PLANNING
+                and events[1].to_status is TaskStatus.IMPLEMENTING
+                and events[1].reason == "plan_validated"
+            )
             unstarted_rebind = (
                 allow_unstarted
                 and cp.stage is DeliveryStage.DELIVERING
@@ -323,15 +349,22 @@ def read_pre_execution_snapshot(
                 and not task.retry_failures
                 and not events
             )
-            if not (original_failure or unstarted_rebind or pre_agent_worktree_conflict):
+            if not (
+                original_failure
+                or unstarted_rebind
+                or pre_agent_worktree_conflict
+                or pre_agent_startup_failure
+            ):
                 return None
             allocations = _read_allocations(cursor, history)
             dispatch = allocations[cp.dispatch_commit_id]
             invalid_dispatch = not isinstance(dispatch, DispatchCommitRecord) and not (
-                (unstarted_rebind or pre_agent_worktree_conflict)
+                (unstarted_rebind or pre_agent_worktree_conflict or pre_agent_startup_failure)
                 and isinstance(dispatch, ContinuationDispatchRecord)
             )
-            if invalid_dispatch and (original_failure or pre_agent_worktree_conflict):
+            if invalid_dispatch and (
+                original_failure or pre_agent_worktree_conflict or pre_agent_startup_failure
+            ):
                 raise RecoveryRejected(
                     "pre-execution restart already attempted; inspect the new context failure"
                 )
@@ -343,7 +376,7 @@ def read_pre_execution_snapshot(
                 or cp.repository_root != task.repository
                 or not task_matches_dispatch(task, dispatch.task)
                 or (
-                    (original_failure or pre_agent_worktree_conflict)
+                    (original_failure or pre_agent_worktree_conflict or pre_agent_startup_failure)
                     and (
                         cp.stage not in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
                         or cp.failed_stage is not DeliveryStage.DELIVERING
@@ -361,7 +394,7 @@ def read_pre_execution_snapshot(
                             for e in events
                         )
                         or (
-                            pre_agent_worktree_conflict
+                            (pre_agent_worktree_conflict or pre_agent_startup_failure)
                             and (
                                 len(events[1].artifact_ids) != 1
                                 or not events[1].artifact_ids[0].startswith("art_plan_")
@@ -371,15 +404,117 @@ def read_pre_execution_snapshot(
                 )
             ):
                 raise RecoveryRejected("pre-execution failure facts are inconsistent")
+            # An ACTIVE claim is execution evidence until the normal queue
+            # reaper changes it to EXPIRED.  Do not compare clocks here and
+            # silently ignore an un-reaped claim: the resume supervisor reaps
+            # it first, preserving the LEASE_EXPIRED audit event.  A direct
+            # read therefore fails closed on every remaining ACTIVE row.
             cursor.execute(
-                "SELECT lease_id FROM work_queue_claims WHERE task_id=%s",
+                "SELECT lease_id FROM work_queue_claims "
+                "WHERE task_id=%s AND state='ACTIVE'",
                 (task.id,),
             )
             if cursor.fetchone() is not None:
                 raise RecoveryRejected("pre-execution source already has a role claim")
-            cursor.execute("SELECT id FROM work_queue_admissions WHERE task_id=%s", (task.id,))
-            if cursor.fetchone() is not None:
-                raise RecoveryRejected("pre-execution source already has a queue admission")
+            cursor.execute(
+                "SELECT id,task_id,payload_json,sha256 FROM work_queue_admissions WHERE task_id=%s",
+                (task.id,),
+            )
+            admission_row = cursor.fetchone()
+            if admission_row is not None:
+                if not (pre_agent_worktree_conflict or pre_agent_startup_failure):
+                    raise RecoveryRejected("pre-execution source already has a queue admission")
+                # T046 creates the immutable RoleQueueAdmission after the
+                # deterministic plan boundary and before the first Worker
+                # claim.  A worktree collision can therefore leave this
+                # bootstrap record even though no Agent ever started.  It is
+                # safe to retain only when its complete, integrity-checked
+                # identity matches the source dispatch and its sole legacy
+                # artifact is the accepted planning artifact.
+                if not {"id", "task_id", "payload_json", "sha256"}.issubset(admission_row):
+                    raise RecoveryRejected("pre-agent queue admission is incomplete")
+                admission = _decode(admission_row, RoleQueueAdmission)
+                if (
+                    admission.task_id != task.id
+                    or admission.repository_id != dispatch.repository_id
+                    or admission.allocation_sha256 != dispatch.dispatch_sha256
+                    or tuple(receipt.artifact_id for receipt in admission.legacy_artifacts)
+                    != events[-1].artifact_ids
+                ):
+                    raise RecoveryRejected("pre-agent queue admission does not match source")
+                if (
+                    len(admission.legacy_artifacts) != 1
+                    or len(events[-1].artifact_ids) != 1
+                    or admission.legacy_artifacts[0].artifact_id != events[-1].artifact_ids[0]
+                ):
+                    raise RecoveryRejected("pre-agent admission must contain the sole plan receipt")
+                cursor.execute(
+                    "SELECT id,task_id,payload_json,sha256 FROM work_queue_steps "
+                    "WHERE task_id=%s ORDER BY id",
+                    (task.id,),
+                )
+                step_rows = tuple(cursor.fetchall())
+                if len(step_rows) != 1:
+                    raise RecoveryRejected("pre-agent queue step is missing or ambiguous")
+                step = _decode(step_rows[0], QueuedRoleStep)
+                if (
+                    step.allocation_sha256 != admission.allocation_sha256
+                    or step.boundary.task_id != task.id
+                    or step.boundary.role.value != "coder"
+                    or step.boundary.attempt != 1
+                    or step.boundary.checkpoint_sequence != revision
+                    or step.boundary.source_revision != task.base_ref
+                ):
+                    raise RecoveryRejected("pre-agent queue step does not match source")
+                cursor.execute(
+                    "SELECT id,payload_json FROM work_queue_items WHERE task_id=%s "
+                    "ORDER BY checkpoint_sequence,attempt,id",
+                    (task.id,),
+                )
+                item_rows = tuple(cursor.fetchall())
+                if len(item_rows) != 1:
+                    raise RecoveryRejected("pre-agent queue item is missing or ambiguous")
+                item = QueuedWorkItem.model_validate_json(item_rows[0]["payload_json"])
+                if (
+                    item.id != step.work_item.id
+                    or item.task_id != task.id
+                    or item.role.value != "coder"
+                    or item.attempt != 1
+                    or item.checkpoint_sequence != revision
+                    or item.repository_id != dispatch.repository_id
+                    or item.status.value not in {"READY", "RETRY_SCHEDULED"}
+                ):
+                    raise RecoveryRejected("pre-agent queue item is not an unclaimed Coder")
+                cursor.execute(
+                    "SELECT id,task_id,payload_json,sha256 FROM work_queue_accepted_artifacts "
+                    "WHERE task_id=%s ORDER BY id",
+                    (task.id,),
+                )
+                accepted_rows = tuple(cursor.fetchall())
+                if accepted_rows:
+                    _decode(accepted_rows[0], AcceptedRoleArtifact)
+                    raise RecoveryRejected("pre-agent source already has an accepted role artifact")
+            elif pre_agent_worktree_conflict or pre_agent_startup_failure:
+                # Queue tables are append-only and may outlive a failed
+                # admission transaction in an older deployment.  An orphaned
+                # step/item or accepted receipt is evidence, not absence.
+                for table, query in (
+                    (
+                        "work_queue_steps",
+                        "SELECT id FROM work_queue_steps WHERE task_id=%s",
+                    ),
+                    (
+                        "work_queue_items",
+                        "SELECT id FROM work_queue_items WHERE task_id=%s",
+                    ),
+                    (
+                        "work_queue_accepted_artifacts",
+                        "SELECT id FROM work_queue_accepted_artifacts WHERE task_id=%s",
+                    ),
+                ):
+                    cursor.execute(query, (task.id,))
+                    if tuple(cursor.fetchall()):
+                        raise RecoveryRejected(f"pre-agent source has an orphaned {table} record")
             planner_dispatch = (
                 dispatch
                 if isinstance(dispatch, DispatchCommitRecord)

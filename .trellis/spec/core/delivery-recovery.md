@@ -2562,20 +2562,27 @@ Required incremental checks: `test_delivery_continuation.py` covers the Controll
 `test_restart_contracts.py` covers the new plan wire/schema and immutable authorization;
 `test_pre_execution_restart.py` covers legacy restart compatibility. Good: clean NEW successor
 gets one exact rebind plan and then serial Coder → QA → Reviewer. Base: repeated Continue returns
-the same plan without a model call. Bad: a dirty worktree, role claim, or existing event is
-rebound or approved as success.
+the same plan without a model call. Bad: a dirty worktree, role claim, live Worker lock, extra
+queue evidence, malformed admission or existing Agent route is rebound or approved as success.
 
 ### Worktree collision before the first Coder (2026-10-04)
 
 `WorktreeAlreadyExists` can be raised while the delivery executor opens the Coder worktree,
 after the orchestrator has durably appended `NEW → PLANNING → IMPLEMENTING` but before any Coder
-artifact, context, model invocation, lease claim, queue admission, candidate or dirty worktree
-exists for that Task. This is a platform startup failure, not Coder work that a Manager may
-approve away. The read-only SQL snapshot may classify it as a
+model invocation, accepted role artifact, candidate or dirty worktree exists for that Task.
+The deterministic plan artifact, orchestrator/Coder context compilation, queue admission and
+`STARTED` queue event may already exist; each is a different fact from an Agent call or a live
+worktree. This is a platform startup failure, not Coder work that a Manager may approve away.
+The read-only SQL snapshot may classify it as a
 `restart_kind=pre_agent_worktree_conflict` restart only when the checkpoint is terminal,
 `failure_code=INVARIANT_VIOLATION`, the failure summary contains the stable conflict marker,
-and all absence facts are rechecked. The old Task, event history and occupied worktree remain
-immutable.
+and all absence facts are rechecked. The old Task, event history, expired-claim audit and occupied
+worktree remain immutable. The resume supervisor first runs the normal bounded queue reaper; an
+ACTIVE claim that remains after that fence, a live Worker lock, an accepted role artifact, a
+second queue item/step, a mismatched admission or any model-route record rejects the restart. A
+valid admission must bind exactly one Coder step at the source revision and contain the sole
+legacy plan receipt. Recovery checks the receipt and queue identities with typed decoders; it
+never treats a malformed row as absence.
 
 The exact restart plan roots its successor branch in the approved ProductSpec branch. If the
 purpose branch is still occupied by an earlier successor in the same delivery lineage, the

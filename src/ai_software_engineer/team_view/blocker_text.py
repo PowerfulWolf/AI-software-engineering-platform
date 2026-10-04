@@ -62,6 +62,7 @@ _EXACT: dict[str, str] = {
     "TIMEOUT": "模型服务或执行器超时，当前阶段未完成；请检查服务可用性后再继续。",
     "UNKNOWN_EVIDENCE_REFERENCE": "模型产物引用了不存在的证据，QA/Review 结果未被接受；请让 Coder 按该 finding 修正后重新验证。",
     "ARTIFACT_VALIDATION": "角色产物未通过完整性校验，平台拒绝推进阶段；请保留原记录并按失败原因恢复。",
+    "Delivery is not configured for live execution": "首个 Coder 启动前执行配置不可用，平台已安全停止；请检查模型路由和凭据后批准精确重启。",
 }
 
 _REPOSITORY_BLOCKED = re.compile(r"^Repository (?P<repository>.+?) is BLOCKED; (?P<detail>.*)$")
@@ -131,6 +132,8 @@ def _role_failure(text: str) -> str | None:
         reason = (
             "Coder 启动前发现目标分支或工作区已被其他保留任务占用，平台已安全停止并等待精确重启审批"
         )
+    elif "not configured for live execution" in detail:
+        reason = "首个 Coder 启动前执行配置不可用，平台已安全停止并等待精确重启审批"
     elif "failed provider route left repository changes" in detail:
         if match := re.search(
             r"provider_diagnostic=Responses provider returned HTTP (\d{3})", detail
@@ -225,6 +228,8 @@ def localize_blocking_text(value: str | None) -> str | None:
         return "上下文预算已用尽，平台不会自动重试模型；请缩小精确验证范围后再继续。"
     if "WorktreeAlreadyExists" in text:
         return "Coder 启动前发现目标分支或工作区已被其他保留任务占用，平台已安全停止并等待精确重启审批。"
+    if "not configured for live execution" in text:
+        return "首个 Coder 启动前执行配置不可用，平台已安全停止并等待精确重启审批。"
     if text.startswith("Pre-execution restart stopped safely:"):
         return "Coder 启动前重启已安全停止，请检查失败记录和恢复证据后再继续。"
     if text.startswith("Coder 启动前重启已安全停止："):

@@ -33,7 +33,10 @@ qualifier when a recovery name is occupied; CLI exposes `--target-branch-name`.
   IDs/attempt counters, truncate into another name, rename a source branch or overwrite an
   occupied target.
 - Branch name is not ownership. Always also check Task/path/role/registration/common-dir/HEAD.
-  A caller-provided WorktreeRef cannot choose the manager's trusted branch mapping.
+  A caller-provided WorktreeRef cannot choose the manager's trusted branch mapping. Read-only
+  collision probes must receive the actual Git repository root (never a Project sidecar), validate
+  that root before querying refs, and treat only Git's status 1 as "ref absent". Any other Git
+  status or repository error fails closed; it must not make an occupied branch appear available.
 - Before removing a clean semantic Coder worktree, the Git manager atomically creates and
   fsyncs an empty manager-owned removal marker beside that worktree. Its filename contains
   SHA-256 of canonical JSON `{version: 1, repository, worktree, branch, spec}`; `spec` is

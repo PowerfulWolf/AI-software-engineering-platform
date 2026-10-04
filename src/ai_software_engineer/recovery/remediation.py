@@ -210,7 +210,7 @@ class CandidateRemediationService:
         successor_name = available_successor_branch(
             branch_root,
             "prerequisite-repair" if repair_plan is not None else "review-fixes",
-            is_occupied=branch_manager._branch_exists,
+            is_occupied=branch_manager.branch_exists,
         )
         task = Task.model_validate(
             {

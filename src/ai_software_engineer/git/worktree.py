@@ -766,7 +766,22 @@ class GitWorktreeManager:
             ("show-ref", "--verify", "--quiet", f"refs/heads/{branch}"),
             cwd=self._repository,
         )
-        return completed.returncode == 0
+        if completed.returncode == 0:
+            return True
+        if completed.returncode == 1:
+            return False
+        message = completed.stderr.strip() or "Git could not inspect the branch"
+        raise GitCommandError(message)
+
+    def branch_exists(self, branch: str) -> bool:
+        """Return whether a local branch exists after validating the Git root.
+
+        Recovery branch selection runs before a worktree is created.  Keep that
+        read-only probe fail closed: a missing ref is the only negative result;
+        an invalid repository or Git failure is an execution error.
+        """
+        self._validate_repository()
+        return self._branch_exists(branch)
 
     def _target_path(self, spec: WorktreeSpec) -> Path:
         return self._worktree_root / spec.task_id / f"{spec.role.value}-attempt-{spec.attempt:02d}"

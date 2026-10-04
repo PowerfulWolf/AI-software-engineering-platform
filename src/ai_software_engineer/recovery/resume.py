@@ -657,6 +657,13 @@ class DeliveryResumeController:
     ) -> DeliveryResumeResult | None:
         from ai_software_engineer.recovery.restart import PreExecutionRestartService
 
+        # Recovery is also a bounded queue-supervisor entry point.  Reap an
+        # expired claim before proving that the source Task has never started;
+        # this preserves the lease-expiry event and releases the stale claim
+        # through the queue service instead of treating an old ACTIVE row as a
+        # live Worker.  A non-expired claim is left untouched and still fails
+        # the restart proof below.
+        self._reclaim_expired_role_claims()
         service = PreExecutionRestartService(self._config, self._environment, self._backend)
         try:
             proposal = service.propose(current)
@@ -669,6 +676,12 @@ class DeliveryResumeController:
                         "原 Task 在 Coder 启动前因目标分支或工作区已被其他保留任务占用而阻塞，"  # noqa: RUF001
                         "没有待恢复的代码。请审核并批准精确重启计划；平台会使用唯一 successor 分支，"  # noqa: E501, RUF001
                         "重新执行 Coder、QA、Reviewer。"
+                    )
+                elif plan.restart_kind == "pre_agent_startup_failure":
+                    next_action = (
+                        "原 Task 在首个 Coder 启动前因执行配置不可用而安全阻塞，未产生可恢复代码。"  # noqa: RUF001
+                        "请确认当前模型路由和凭据已配置，再审核并批准精确重启计划；平台会在当前基线"  # noqa: RUF001
+                        "上创建唯一 successor，重新执行 Coder、QA、Reviewer。"  # noqa: RUF001
                     )
                 else:
                     next_action = (
@@ -706,6 +719,18 @@ class DeliveryResumeController:
             DeliveryResumeOutcome.CONTINUED,
             result,
             next_action=_checkpoint_next_action(result.checkpoint),
+        )
+
+    def _reclaim_expired_role_claims(self) -> None:
+        """Run the normal bounded queue reaper before a startup restart proof."""
+        from datetime import UTC, datetime, timedelta
+
+        from ai_software_engineer.manager.queue_capacity import production_role_queue
+
+        now = datetime.now(UTC)
+        production_role_queue(self._config.require_mysql_dsn(self._environment)).reclaim_expired(
+            now=now,
+            retry_at=now + timedelta(seconds=1),
         )
 
     def _continue_coder_recovery(

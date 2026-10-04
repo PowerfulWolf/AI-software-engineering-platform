@@ -1,5 +1,8 @@
 """Audited fresh execution after an initial context failure, never Coder adoption."""
 
+import fcntl
+import hashlib
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -96,10 +99,22 @@ class PreExecutionRestartService:
             and checkpoint.failure_summary is not None
             and "WorktreeAlreadyExists" in checkpoint.failure_summary
         )
+        pre_agent_startup_failure = (
+            checkpoint.stage in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
+            and checkpoint.failed_stage is DeliveryStage.DELIVERING
+            and checkpoint.task_id is not None
+            and checkpoint.task_revision == 2
+            and checkpoint.task_status is TaskStatus.IMPLEMENTING
+            and checkpoint.candidate_revision is None
+            and checkpoint.failure_code is DeliveryFailureCode.PERMISSION_DENIED
+            and checkpoint.failure_summary is not None
+            and "not configured for live execution" in checkpoint.failure_summary
+        )
+        pre_agent_restart = pre_agent_worktree_conflict or pre_agent_startup_failure
         if not preparation_rebind and (
             (
                 checkpoint.failure_code is not DeliveryFailureCode.RETRY_BUDGET_EXHAUSTED
-                and not pre_agent_worktree_conflict
+                and not pre_agent_restart
             )
             or checkpoint.task_revision != 2
         ):
@@ -138,7 +153,8 @@ class PreExecutionRestartService:
             self.config,
             root,
             runtime,
-            allow_plan_artifact=pre_agent_worktree_conflict,
+            allow_plan_artifact=pre_agent_restart,
+            allow_pre_agent_context=pre_agent_restart,
         )
         stages = read_approved_stages(
             self.config,
@@ -147,7 +163,7 @@ class PreExecutionRestartService:
             checkpoint,
             runtime.task,
             runtime.planner_dispatch,
-            current_dispatch=runtime.dispatch if preparation_rebind else None,
+            current_dispatch=runtime.dispatch,
         )
         parent_id, parent_sha = _parent(team, checkpoint, stages.approval)
         sources = approved_parent_context(self.config, scope, parent_id, parent_sha)
@@ -168,22 +184,29 @@ class PreExecutionRestartService:
                 "restart source/preparation changed; explicit replanning required"
             )
         branch_manager = GitWorktreeManager(
-            root,
+            scope.repository_root,
             Path(self.config.platform_root) / "worktrees" / scope.repository_id,
             branch_names={},
         )
         branch_root = stages.product.branch_name or runtime.task.branch_name
-        restart_kind: Literal["preparation_rebind", "pre_agent_worktree_conflict"] | None = (
+        restart_kind: (
+            Literal[
+                "preparation_rebind", "pre_agent_worktree_conflict", "pre_agent_startup_failure"
+            ]
+            | None
+        ) = (
             "preparation_rebind"
             if preparation_rebind
             else "pre_agent_worktree_conflict"
             if pre_agent_worktree_conflict
+            else "pre_agent_startup_failure"
+            if pre_agent_startup_failure
             else None
         )
         target_branch = available_successor_branch(
             branch_root,
             "recovery",
-            is_occupied=branch_manager._branch_exists,
+            is_occupied=branch_manager.branch_exists,
         )
         plan = PreExecutionRestartPlan(
             scope=scope,
@@ -279,7 +302,12 @@ class PreExecutionRestartService:
                 "branch_name": plan.target_branch_name,
                 "base_ref": (
                     plan.target_base_revision
-                    if plan.restart_kind == "preparation_rebind"
+                    if plan.restart_kind
+                    in {
+                        "preparation_rebind",
+                        "pre_agent_worktree_conflict",
+                        "pre_agent_startup_failure",
+                    }
                     else original.base_ref
                 ),
                 "created_at": now,
@@ -444,6 +472,13 @@ def restart_context(plan: PreExecutionRestartPlan) -> tuple[ContextSource, ...]:
             "This approved successor uses a unique branch rooted at the ProductSpec; it is a "
             "fresh execution of the same requirements, not retained code."
         )
+    elif plan.restart_kind == "pre_agent_startup_failure":
+        content = (
+            f"Original Task {plan.source_task_id} stopped before the first Coder because the "
+            "provider execution setup was unavailable. This approved successor is a fresh "
+            "execution of the same requirements on the approved current baseline; it does not "
+            "reuse an Agent result or retained code."
+        )
     else:
         content = (
             f"Original Task {plan.source_task_id} stopped before the first Coder. "
@@ -468,6 +503,7 @@ def _require_no_execution(
     runtime: CandidateRuntimeSnapshot,
     *,
     allow_plan_artifact: bool = False,
+    allow_pre_agent_context: bool = False,
 ) -> None:
     for directory in (root / "artifacts", root / "contexts", model_route_root(root)):
         _reject_symlinks(directory)
@@ -487,7 +523,18 @@ def _require_no_execution(
     contexts = FileContextStore(root / "contexts", read_only=True)
     for path in (root / "contexts").glob("*.json"):
         _reject_symlinks(path)
-        if contexts.get(path.stem).task_id == runtime.task.id:
+        context = contexts.get(path.stem)
+        if context.task_id != runtime.task.id:
+            continue
+        if allow_pre_agent_context:
+            if (
+                context.role not in {AgentRole.ORCHESTRATOR, AgentRole.CODER}
+                or context.attempt != 1
+                or context.source_revision != runtime.task.base_ref
+            ):
+                raise RecoveryRejected("pre-agent context does not match source Coder")
+            continue
+        if context.task_id == runtime.task.id:
             raise RecoveryRejected("pre-execution source already has a role context")
     routes_root = model_route_root(root)
     if routes_root.exists():
@@ -501,3 +548,23 @@ def _require_no_execution(
     )
     if worktree.exists() or worktree.is_symlink():
         raise RecoveryRejected("pre-execution source has a retained workspace; inspect it first")
+    lock_root = root / "state/queue-worker-locks"
+    lock_path = lock_root / f"{hashlib.sha256(runtime.task.id.encode()).hexdigest()}.lock"
+    if lock_path.exists() or lock_path.is_symlink():
+        if lock_path.is_symlink():
+            raise RecoveryRejected("pre-execution source has an unsafe Worker lock")
+        try:
+            fd = os.open(lock_path, os.O_RDWR | os.O_NOFOLLOW)
+        except OSError as error:
+            raise RecoveryRejected("pre-execution Worker lock cannot be inspected") from error
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                raise RecoveryRejected("pre-execution source has a live Worker process") from error
+            finally:
+                os.close(fd)
+        except RecoveryRejected:
+            raise
+        except OSError as error:
+            raise RecoveryRejected("pre-execution Worker lock cannot be inspected") from error

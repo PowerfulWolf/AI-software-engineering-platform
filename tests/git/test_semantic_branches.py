@@ -1,5 +1,6 @@
 """Semantic names are frozen intent, never inferred ownership or retry IDs."""
 
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 
@@ -13,7 +14,9 @@ from ai_software_engineer.domain.branch import (
     successor_branch,
 )
 from ai_software_engineer.git import (
+    GitCommandError,
     GitWorktreeManager,
+    InvalidRepository,
     UnmanagedWorktree,
     WorktreeAlreadyExists,
     WorktreeIdentityDrift,
@@ -83,6 +86,26 @@ def test_clean_semantic_branch_can_be_restored(tmp_path: Path) -> None:
     assert restored == ref
     restarted.remove(restored)
     assert restarted.restore_clean_coder(spec) == ref
+
+
+def test_branch_existence_probe_validates_repository_and_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = _create_fixture_repository(tmp_path)
+    manager = GitWorktreeManager(repository, tmp_path / "roles")
+    assert manager.branch_exists("ai/feature/absent") is False
+    with pytest.raises(InvalidRepository):
+        GitWorktreeManager(tmp_path / "sidecar", tmp_path / "roles").branch_exists(
+            "ai/feature/absent"
+        )
+
+    def failed_probe(*_: object, **__: object) -> object:
+        return subprocess.CompletedProcess(("git",), 128, "", "fatal: repository unavailable")
+
+    monkeypatch.setattr(manager, "_validate_repository", lambda: None)
+    monkeypatch.setattr(manager, "_invoke_git", failed_probe)
+    with pytest.raises(GitCommandError, match="repository unavailable"):
+        manager.branch_exists("ai/feature/absent")
 
 
 @pytest.mark.parametrize("damage", [None, "dirty", "missing-marker", "branch-drift"])
