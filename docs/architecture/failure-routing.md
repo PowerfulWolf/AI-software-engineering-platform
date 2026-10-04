@@ -54,6 +54,17 @@
 
 ## 4. 升级内容
 
+`manager/delivery.py::_blocked_failure_code(BlockedResult) -> DeliveryFailureCode` 不得把所有
+安全停止兜底解释为预算耗尽。既有 `POLICY_VIOLATION` 映射到 `PERMISSION_DENIED`，
+`PLATFORM_BUG` 映射到 `INVARIANT_VIOLATION`，`INVALID_OUTPUT` 和
+`VERIFICATION_INCONCLUSIVE` 保留各自映射；预算/返工额度耗尽仍保留
+`RETRY_BUDGET_EXHAUSTED`。原 classification、reason、attempt、artifact/event IDs 不变，
+不退款、不重试 dirty worktree、不重开终态。该边界不新增 wire enum 或改变状态机。
+Good：第 1 次安全拒绝可在重开只读 journal 后保持正确代码；Base：真实额度耗尽仍为预算代码；
+Bad：因为 Task BLOCKED 就显示预算耗尽，或把保留改动当合法 coder-progress 自动继续。
+`tests/e2e/test_unified_project_entry.py` 覆盖精确批准 Product 后完整离线链、暂停、重读的分类。
+存量 checkpoint 保留原封存代码；控制台按原始 reason 解释暂停，并通过最新精确恢复计划继续。
+
 进入 `WAITING_*` 时必须持久化等待原因、恢复条件、最后 checkpoint、相关 evidence 和 Lease 释放
 事实。进入终态 `BLOCKED` 时还必须生成可供人类处理的摘要：发生阶段、最后有效 revision、已尝试
 次数、阻塞分类、最小需要的决定、完整 evidence 路径和建议下一步。不要只返回“Agent failed”。

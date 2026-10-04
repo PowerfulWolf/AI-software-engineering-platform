@@ -766,6 +766,15 @@ marks the corresponding Coder/QA/Reviewer step blocked, never current/animated. 
 checkpoint stays unchanged. Only new queue facts can remove the waiting presentation.
 ### Blocker detail localization (2026-10-03)
 
+`team_view/blocker_text.py::_role_failure` checks the exact Codex diagnostic
+`Codex CLI left changes after an interrupted execution; cause=TIMEOUT` before generic
+TIMEOUT wording. The Chinese read-side reason states the local execution timeout, retained
+changes, missing admissible report and exact recovery approval. Keep Run and bounded evidence
+SHA references; do not claim provider outage, deliberate permission abuse or exhausted retries.
+Generic clean timeout retains its existing wording. Recompute from old durable reasons on GET;
+never rewrite sealed Task/checkpoint/Run facts. Regression:
+`tests/team_view/test_blocker_text.py::test_localizes_interrupted_codex_timeout_with_retained_changes`.
+
 The read-side presentation must preserve the stable cause of a blocked role. Candidate
 context-budget refusals, authentication/limit/timeout failures, invalid evidence
 references, artifact validation failures and interrupted dirty worktrees each have a

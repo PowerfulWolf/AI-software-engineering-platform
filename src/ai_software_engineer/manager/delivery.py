@@ -92,6 +92,10 @@ def _blocked_failure_code(delivery: BlockedResult) -> DeliveryFailureCode:
         return DeliveryFailureCode.INVALID_AGENT_OUTPUT
     if delivery.classification is RetryClassification.VERIFICATION_INCONCLUSIVE:
         return DeliveryFailureCode.VERIFICATION_INCONCLUSIVE
+    if delivery.classification is RetryClassification.POLICY_VIOLATION:
+        return DeliveryFailureCode.PERMISSION_DENIED
+    if delivery.classification is RetryClassification.PLATFORM_BUG:
+        return DeliveryFailureCode.INVARIANT_VIOLATION
     return DeliveryFailureCode.RETRY_BUDGET_EXHAUSTED
 
 

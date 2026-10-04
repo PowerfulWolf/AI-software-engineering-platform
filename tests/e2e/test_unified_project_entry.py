@@ -505,6 +505,24 @@ class _VerificationInconclusiveBackend(_BlockedDeliveryBackend):
         )
 
 
+class _SafetyStoppedDeliveryBackend(_BlockedDeliveryBackend):
+    def __init__(self, platform: Path, classification: RetryClassification) -> None:
+        super().__init__(platform)
+        self.classification = classification
+
+    def run_delivery(self, checkpoint: ProjectDeliveryCheckpoint) -> BlockedResult:
+        return (
+            super()
+            .run_delivery(checkpoint)
+            .model_copy(
+                update={
+                    "classification": self.classification,
+                    "reason": "delivery stopped at the first execution for safety",
+                }
+            )
+        )
+
+
 class _InvalidPlannerBackend(_OfflineBackend):
     def run_planner(self, checkpoint: ProjectDeliveryCheckpoint) -> PlanningStageResult:
         del checkpoint
@@ -754,6 +772,54 @@ def test_delivery_budget_exhaustion_returns_stable_blocked_checkpoint(
     assert blocked.delivery.reason == "delivery retry budget exhausted"
     reopened = service.status(blocked.checkpoint.delivery_id)
     assert reopened.checkpoint == blocked.checkpoint
+
+
+@pytest.mark.parametrize(
+    ("classification", "expected_code"),
+    [
+        (RetryClassification.POLICY_VIOLATION, DeliveryFailureCode.PERMISSION_DENIED),
+        (RetryClassification.PLATFORM_BUG, DeliveryFailureCode.INVARIANT_VIOLATION),
+    ],
+)
+def test_first_execution_safety_stop_does_not_report_budget_exhaustion(
+    tmp_path: Path,
+    classification: RetryClassification,
+    expected_code: DeliveryFailureCode,
+) -> None:
+    project = _copy_fixture(tmp_path, "python")
+    backend = _SafetyStoppedDeliveryBackend(tmp_path / "platform", classification)
+    service = UnifiedProjectEntryService(
+        backend=backend,
+        catalog=ProjectDeliveryCheckpointCatalog(backend.repository_registry_root),
+    )
+    started = service.start(
+        StartProjectDelivery(
+            repository_root=str(project.resolve()),
+            requirement="Preserve a safely stopped first execution.",
+            submitted_at=NOW,
+        )
+    )
+    stopped = service.approve(
+        ApproveProductSpec(
+            delivery_id=started.checkpoint.delivery_id,
+            expected_checkpoint_sha256=started.checkpoint.checkpoint_sha256,
+            approval_reference="e2e-first-execution-safety-stop",
+            submitted_at=NOW + timedelta(minutes=1),
+        )
+    )
+
+    assert stopped.checkpoint.stage is DeliveryStage.BLOCKED
+    assert stopped.checkpoint.task_status is TaskStatus.BLOCKED
+    assert stopped.checkpoint.failure_code is expected_code
+    assert stopped.checkpoint.failure_summary == (
+        "delivery stopped at the first execution for safety"
+    )
+    assert isinstance(stopped.delivery, BlockedResult)
+    assert stopped.delivery.classification is classification
+    assert stopped.delivery.attempt == 1
+    assert stopped.delivery.task.attempts == 1
+    assert stopped.delivery.event_ids == ("evt_delivery_blocked",)
+    assert service.status(stopped.checkpoint.delivery_id).checkpoint == stopped.checkpoint
 
 
 def test_environment_only_qa_failure_preserves_candidate_for_verification(

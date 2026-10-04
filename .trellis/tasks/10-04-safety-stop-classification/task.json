@@ -1,0 +1,9 @@
+{
+  "id": "safety-stop-classification-20261004",
+  "title": "纠正首次安全暂停误报预算耗尽及超时保留改动的中文提示",
+  "status": "in_progress",
+  "phase": "regression",
+  "baseline": "cf297a2",
+  "scope": ["src/ai_software_engineer/manager/delivery.py", "src/ai_software_engineer/team_view/blocker_text.py", "tests/e2e/test_unified_project_entry.py", "tests/team_view/test_blocker_text.py"],
+  "rollback": "回退本次平台提交并在空闲时重启；保留原 Task、checkpoint、Run、审批及 dirty worktree"
+}

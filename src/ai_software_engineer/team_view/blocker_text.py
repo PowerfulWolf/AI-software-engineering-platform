@@ -122,6 +122,8 @@ def _role_failure(text: str) -> str | None:
         reason = "模型服务认证失败，当前阶段未完成"
     elif "RATE_LIMITED" in detail:
         reason = "模型服务触发限流，当前阶段未完成"
+    elif "Codex CLI left changes after an interrupted execution; cause=TIMEOUT" in detail:
+        reason = f"{role} 执行超时，改动已保留，但未产出可接纳的报告，等待精确恢复审批"
     elif "TIMEOUT" in detail or "provider timeout" in detail.lower():
         reason = "模型服务或执行器超时，当前阶段未完成"
     elif "UNKNOWN_EVIDENCE_REFERENCE" in detail:

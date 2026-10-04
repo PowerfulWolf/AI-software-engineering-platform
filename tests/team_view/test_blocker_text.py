@@ -69,6 +69,21 @@ def test_localizes_pre_agent_worktree_conflict() -> None:
     )
 
 
+def test_localizes_interrupted_codex_timeout_with_retained_changes() -> None:
+    digest = "a" * 64
+    localized = localize_blocking_text(
+        "POLICY_VIOLATION: Coder failed at attempt 1: coder run run_abc123 failed: "
+        "Codex CLI left changes after an interrupted execution; cause=TIMEOUT; "
+        f"returncode=-1; stdout_sha256={digest}"
+    )
+
+    assert localized is not None
+    assert "Coder 执行超时，改动已保留，但未产出可接纳的报告，等待精确恢复审批" in localized
+    assert "run_abc123" in localized
+    assert digest in localized
+    assert "预算耗尽" not in localized
+
+
 def test_localizes_knowledge_preparation_failure_and_keeps_error_code() -> None:
     assert localize_blocking_text("qa knowledge preparation failed: RATE_LIMITED") == (
         "QA 知识准备失败（原因代码：RATE_LIMITED），请检查模型服务后再继续。"
