@@ -7,7 +7,11 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from ai_software_engineer.domain import AgentPermissions, AgentRole, NetworkAccess
-from ai_software_engineer.domain.branch import BranchName, successor_branch
+from ai_software_engineer.domain.branch import (
+    BranchName,
+    available_successor_branch,
+    successor_branch,
+)
 from ai_software_engineer.git import (
     GitWorktreeManager,
     UnmanagedWorktree,
@@ -250,6 +254,25 @@ def test_successors_keep_original_kind_and_bound_generated_suffixes() -> None:
     )
     assert successor_branch("ai/feature/recovery", "recovery") == "ai/feature/recovery-recovery"
     assert successor_branch(None, "recovery") is None  # historical unclassified Task
+
+
+def test_available_successor_keeps_product_root_and_avoids_owned_refs() -> None:
+    occupied = {
+        "ai/feature/trends-review-fixes",
+        "ai/feature/trends-review-fixes-2",
+    }
+    assert (
+        available_successor_branch(
+            "ai/feature/trends-recovery-recovery",
+            "review-fixes",
+            is_occupied=occupied.__contains__,
+        )
+        == "ai/feature/trends-review-fixes-3"
+    )
+
+
+def test_available_successor_does_not_invent_a_branch_for_legacy_task() -> None:
+    assert available_successor_branch(None, "recovery", is_occupied=lambda _: True) is None
 
 
 def test_semantic_seed_validates_both_source_and_target_bindings(tmp_path: Path) -> None:

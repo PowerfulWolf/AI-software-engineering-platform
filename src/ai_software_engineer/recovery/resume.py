@@ -664,13 +664,22 @@ class DeliveryResumeController:
                 return None
             plan = proposal.store().put_restart_plan(proposal.plan)
             if command.approved_plan_sha256 != plan.plan_sha256:
+                if plan.restart_kind == "pre_agent_worktree_conflict":
+                    next_action = (
+                        "原 Task 在 Coder 启动前因目标分支或工作区已被其他保留任务占用而阻塞，"  # noqa: RUF001
+                        "没有待恢复的代码。请审核并批准精确重启计划；平台会使用唯一 successor 分支，"  # noqa: E501, RUF001
+                        "重新执行 Coder、QA、Reviewer。"
+                    )
+                else:
+                    next_action = (
+                        "原 Task 在 Coder 启动前因上下文超限阻塞，没有待恢复的代码。"  # noqa: RUF001
+                        "请审核并批准精确重启计划；新 Task 保留原需求范围，重新执行 Coder、QA、Reviewer。"  # noqa: E501, RUF001
+                    )
                 return DeliveryResumeResult(
                     outcome=DeliveryResumeOutcome.RESTART_APPROVAL_REQUIRED,
                     checkpoint=current,
                     restart_plan=plan,
-                    next_action="原 Task 在 Coder 启动前因上下文超限阻塞, 没有待恢复的代码。"
-                    "请审核并批准精确重启计划; 新 Task 保留原需求范围, "
-                    "重新执行 Coder、QA、Reviewer。",
+                    next_action=next_action,
                 )
             dispatch = service.approve_and_dispatch(proposal, command)
             self._entry.begin_pre_execution_restart(

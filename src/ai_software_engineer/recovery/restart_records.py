@@ -18,7 +18,7 @@ class PreExecutionRestartPlan(DomainModel):
     # Historical plans omit this field.  The preparation-rebind variant uses the
     # same exact approval/storage contract while making its source/target intent
     # explicit and preserving the old digest for legacy records.
-    restart_kind: Literal["preparation_rebind"] | None = None
+    restart_kind: Literal["preparation_rebind", "pre_agent_worktree_conflict"] | None = None
     scope: RecoveryScope
     source_task_id: TaskId
     source_task_sha256: StageSha256

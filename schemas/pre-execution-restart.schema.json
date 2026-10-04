@@ -157,7 +157,10 @@
     "restart_kind": {
       "anyOf": [
         {
-          "const": "preparation_rebind",
+          "enum": [
+            "preparation_rebind",
+            "pre_agent_worktree_conflict"
+          ],
           "type": "string"
         },
         {

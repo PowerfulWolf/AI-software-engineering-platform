@@ -63,6 +63,12 @@ def test_localizes_dirty_provider_failure_with_safe_route_detail() -> None:
     assert "run_abc123" in localized
 
 
+def test_localizes_pre_agent_worktree_conflict() -> None:
+    assert localize_blocking_text("Delivery stopped safely (WorktreeAlreadyExists)") == (
+        "Coder 启动前发现目标分支或工作区已被其他保留任务占用，平台已安全停止并等待精确重启审批。"
+    )
+
+
 def test_localizes_knowledge_preparation_failure_and_keeps_error_code() -> None:
     assert localize_blocking_text("qa knowledge preparation failed: RATE_LIMITED") == (
         "QA 知识准备失败（原因代码：RATE_LIMITED），请检查模型服务后再继续。"

@@ -127,8 +127,14 @@ def _role_failure(text: str) -> str | None:
         reason = "模型产物引用了不存在的证据，QA/Review 结果未被接受"
     elif "ARTIFACT_VALIDATION" in detail:
         reason = "角色产物未通过完整性校验，平台拒绝推进阶段"
+    elif "WorktreeAlreadyExists" in detail:
+        reason = (
+            "Coder 启动前发现目标分支或工作区已被其他保留任务占用，平台已安全停止并等待精确重启审批"
+        )
     elif "failed provider route left repository changes" in detail:
-        if match := re.search(r"provider_diagnostic=Responses provider returned HTTP (\d{3})", detail):
+        if match := re.search(
+            r"provider_diagnostic=Responses provider returned HTTP (\d{3})", detail
+        ):
             reason = (
                 "提供方路由失败后仓库仍有改动；模型服务返回 HTTP "
                 f"{match.group(1)}，改动已保留，等待精确恢复审批"
@@ -217,6 +223,8 @@ def localize_blocking_text(value: str | None) -> str | None:
         return "Coder 恢复已安全停止，请检查失败记录和恢复证据后再继续。"
     if text.startswith("BUDGET_EXHAUSTED") and "上下文" in text:
         return "上下文预算已用尽，平台不会自动重试模型；请缩小精确验证范围后再继续。"
+    if "WorktreeAlreadyExists" in text:
+        return "Coder 启动前发现目标分支或工作区已被其他保留任务占用，平台已安全停止并等待精确重启审批。"
     if text.startswith("Pre-execution restart stopped safely:"):
         return "Coder 启动前重启已安全停止，请检查失败记录和恢复证据后再继续。"
     if text.startswith("Coder 启动前重启已安全停止："):

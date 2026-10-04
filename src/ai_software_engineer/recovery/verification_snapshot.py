@@ -15,6 +15,7 @@ from ai_software_engineer.domain import Task, TaskStatus
 from ai_software_engineer.domain.event import StateEvent
 from ai_software_engineer.domain.task import task_matches_dispatch
 from ai_software_engineer.manager.delivery_checkpoint import (
+    DeliveryFailureCode,
     DeliveryStage,
     ProjectDeliveryCheckpoint,
 )
@@ -40,6 +41,7 @@ from ai_software_engineer.store.mysql_repository import (
 _PRE_AGENT_CONTEXT_BUDGET_REASON = (
     "BUDGET_EXHAUSTED: Required context exceeds the configured input budget; no automatic retry."
 )
+_PRE_AGENT_WORKTREE_CONFLICT_MARKER = "WorktreeAlreadyExists"
 
 
 def retained_candidate_checkpoint(
@@ -291,6 +293,24 @@ def read_pre_execution_snapshot(
                 and events[1].to_status is TaskStatus.BLOCKED
                 and events[1].reason == _PRE_AGENT_CONTEXT_BUDGET_REASON
             )
+            pre_agent_worktree_conflict = (
+                cp.stage in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
+                and cp.failed_stage is DeliveryStage.DELIVERING
+                and cp.failure_code is DeliveryFailureCode.INVARIANT_VIOLATION
+                and cp.failure_summary is not None
+                and _PRE_AGENT_WORKTREE_CONFLICT_MARKER in cp.failure_summary
+                and revision == 2
+                and task.attempts == 1
+                and not task.retry_failures
+                and task.status is TaskStatus.IMPLEMENTING
+                and len(events) == 2
+                and events[0].from_status is TaskStatus.NEW
+                and events[0].to_status is TaskStatus.PLANNING
+                and events[0].reason == "task_validated"
+                and events[1].from_status is TaskStatus.PLANNING
+                and events[1].to_status is TaskStatus.IMPLEMENTING
+                and events[1].reason == "plan_validated"
+            )
             unstarted_rebind = (
                 allow_unstarted
                 and cp.stage is DeliveryStage.DELIVERING
@@ -303,17 +323,17 @@ def read_pre_execution_snapshot(
                 and not task.retry_failures
                 and not events
             )
-            if not (original_failure or unstarted_rebind):
+            if not (original_failure or unstarted_rebind or pre_agent_worktree_conflict):
                 return None
             allocations = _read_allocations(cursor, history)
             dispatch = allocations[cp.dispatch_commit_id]
             invalid_dispatch = not isinstance(dispatch, DispatchCommitRecord) and not (
-                unstarted_rebind and isinstance(dispatch, ContinuationDispatchRecord)
+                (unstarted_rebind or pre_agent_worktree_conflict)
+                and isinstance(dispatch, ContinuationDispatchRecord)
             )
-            if invalid_dispatch and original_failure:
+            if invalid_dispatch and (original_failure or pre_agent_worktree_conflict):
                 raise RecoveryRejected(
-                    "pre-execution restart already attempted; "
-                    "inspect the new context failure"
+                    "pre-execution restart already attempted; inspect the new context failure"
                 )
             if invalid_dispatch:
                 return None
@@ -323,9 +343,9 @@ def read_pre_execution_snapshot(
                 or cp.repository_root != task.repository
                 or not task_matches_dispatch(task, dispatch.task)
                 or (
-                    original_failure
+                    (original_failure or pre_agent_worktree_conflict)
                     and (
-                        cp.stage is not DeliveryStage.BLOCKED
+                        cp.stage not in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
                         or cp.failed_stage is not DeliveryStage.DELIVERING
                         or task.updated_at != events[-1].occurred_at
                         or not task.created_at <= events[0].occurred_at <= events[1].occurred_at

@@ -20,10 +20,11 @@ from ai_software_engineer.domain import (
     WorkItem,
     WorkItemStatus,
 )
-from ai_software_engineer.domain.branch import successor_branch
+from ai_software_engineer.domain.branch import available_successor_branch
 from ai_software_engineer.domain.prerequisite_repair import PrerequisiteRepairPlan
 from ai_software_engineer.domain.project_delivery import derive_delivery_task
 from ai_software_engineer.domain.task import TaskConstraints
+from ai_software_engineer.git import GitWorktreeManager
 from ai_software_engineer.manager.dispatch import (
     ContinuationDispatchRecord,
     DispatchPhaseCommit,
@@ -192,13 +193,29 @@ class CandidateRemediationService:
         source_dispatch_id = source.checkpoint.dispatch_commit_id
         if source_dispatch_id is None:
             raise RecoveryRejected("candidate source has no dispatch identity")
+        # Successor names are rooted in the approved ProductSpec, not in the
+        # previous successor Task.  The latter caused names such as
+        # ``recovery-recovery-review-fixes`` after several rounds and could
+        # collide with a retained failed worktree.  A read-only Git ref check
+        # selects a numeric qualifier only when this delivery lineage already
+        # owns the semantic candidate.
+        branch_manager = GitWorktreeManager(
+            prepared.repository_root,
+            Path(self._config.platform_root) / "worktrees" / prepared.repository_id,
+            branch_names={},
+        )
+        branch_root = source.stages.product.branch_name or (
+            previous.task.branch_name if previous is not None else source.runtime.task.branch_name
+        )
+        successor_name = available_successor_branch(
+            branch_root,
+            "prerequisite-repair" if repair_plan is not None else "review-fixes",
+            is_occupied=branch_manager._branch_exists,
+        )
         task = Task.model_validate(
             {
                 **task.to_wire(),
-                "branch_name": successor_branch(
-                    (previous.task if previous is not None else source.runtime.task).branch_name,
-                    "prerequisite-repair" if repair_plan is not None else "review-fixes",
-                ),
+                "branch_name": successor_name,
                 "metadata": {
                     **task.metadata,
                     "continuation_kind": continuation_kind,

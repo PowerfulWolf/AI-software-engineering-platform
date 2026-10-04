@@ -793,6 +793,10 @@ substitute for QA/Review verdicts. See `.trellis/spec/core/verification-environm
   checkpoint，再进入普通 Coder→QA→Reviewer。旧 Task、dispatch、checkpoint 和历史准备事实保持
   append-only，旧 dispatch 不能被当作成功，也不能用 Manager 普通审批绕过这次重绑。已有任何执行证据、
   脏工作树或候选时必须转入相应的 Coder recovery/candidate verification，而不是生成 rebind 计划。
+  若首个 Coder 启动前因语义分支已被保留 Task 占用而安全失败，严格的无执行证据快照可使用
+  `restart_kind=pre_agent_worktree_conflict`；该计划同样必须精确批准，并从 ProductSpec 的稳定
+  分支根生成唯一 successor（必要时使用 `-2`、`-3` 等数字限定）。Manager 不能把普通协调审批
+  当作这项恢复授权。
 - `recovery-execution.schema.json`：RecoveryDispatchRecord / ContinuationDispatchRecord /
   RecoverySeedRecord / RecoveryInvocationRecord。普通 Continuation 绑定被拒候选、验证 completion、
   当前 preparation、修复 Task 和新的 Coder/QA/Reviewer allocation；pre_execution_restart

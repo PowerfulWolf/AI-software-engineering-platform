@@ -210,3 +210,70 @@ def test_restart_requires_exact_initial_context_failure(
         assert (result is not None) == (change is None)
     connection.rollback.assert_called_once()
     connection.close.assert_called_once()
+
+
+def test_worktree_conflict_before_coder_is_restartable_without_agent_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, _, dispatch, _, _ = _durable_facts(tmp_path)
+    task = dispatch.task.model_copy(update={"status": TaskStatus.IMPLEMENTING, "attempts": 1})
+    events = tuple(
+        StateEvent(
+            event_id=f"evt_worktree_conflict_{index}",
+            task_id=task.id,
+            from_status=start,
+            to_status=end,
+            actor=AgentRole.ORCHESTRATOR,
+            reason=reason,
+            artifact_ids=(),
+            source_revision=task.base_ref,
+            occurred_at=task.updated_at,
+            attempt=1,
+        )
+        for index, (start, end, reason) in enumerate(
+            (
+                (TaskStatus.NEW, TaskStatus.PLANNING, "task_validated"),
+                (TaskStatus.PLANNING, TaskStatus.IMPLEMENTING, "plan_validated"),
+            )
+        )
+    )
+    cp = _checkpoint(
+        Path(task.repository),
+        **{
+            **_full_fields(),
+            "repository_id": dispatch.repository_id,
+            "dispatch_commit_id": dispatch.id,
+            "dispatch_commit_sha256": dispatch.dispatch_sha256,
+            "task_id": task.id,
+            "task_revision": 2,
+            "task_status": task.status,
+            "candidate_revision": None,
+            "stage": DeliveryStage.BLOCKED,
+            "failure_code": DeliveryFailureCode.INVARIANT_VIOLATION,
+            "failure_summary": "Delivery stopped safely (WorktreeAlreadyExists)",
+            "failed_stage": DeliveryStage.DELIVERING,
+        },
+    )
+    cursor, connection = MagicMock(), MagicMock()
+    connection.cursor.return_value.__enter__.return_value = cursor
+    cursor.fetchone.side_effect = [None, None]
+    monkeypatch.setattr(module, "open_mysql_connection", lambda _: connection)
+    monkeypatch.setattr(ProductionConfig, "require_mysql_dsn", lambda *_: "offline-fixture")
+    monkeypatch.setattr(module, "_read_task_facts", lambda *_: (task, 2, events))
+    monkeypatch.setattr(module, "_read_allocations", lambda *_: {dispatch.id: dispatch})
+    config = ProductionConfig(
+        platform_root=str(tmp_path / "platform"),
+        model_routes=(
+            ProviderRouteConfig(
+                provider="codex",
+                model="offline",
+                kind=ModelProviderKind.CODEX_CLI,
+            ),
+        ),
+    )
+    result = module.read_pre_execution_snapshot(config, {}, (cp,))
+    assert result is not None
+    assert result.task.status is TaskStatus.IMPLEMENTING
+    assert result.events[-1].reason == "plan_validated"
+    connection.rollback.assert_called_once()
+    connection.close.assert_called_once()

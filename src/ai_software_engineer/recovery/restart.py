@@ -3,6 +3,7 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from ai_software_engineer.agents import FileModelRouteAttemptStore
 from ai_software_engineer.agents.fallback import model_route_root
@@ -10,7 +11,8 @@ from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.context import ContextSource, FileContextStore
 from ai_software_engineer.domain import Task, TaskStatus
-from ai_software_engineer.domain.branch import successor_branch
+from ai_software_engineer.domain.branch import available_successor_branch
+from ai_software_engineer.git import GitWorktreeManager
 from ai_software_engineer.manager import production_backend
 from ai_software_engineer.manager.delivery import ResumeProjectDelivery
 from ai_software_engineer.manager.delivery_checkpoint import (
@@ -83,8 +85,22 @@ class PreExecutionRestartService:
             and checkpoint.failed_stage is None
             and checkpoint.failure_code is None
         )
+        pre_agent_worktree_conflict = (
+            checkpoint.stage in {DeliveryStage.BLOCKED, DeliveryStage.FAILED}
+            and checkpoint.failed_stage is DeliveryStage.DELIVERING
+            and checkpoint.task_id is not None
+            and checkpoint.task_revision == 2
+            and checkpoint.task_status is TaskStatus.IMPLEMENTING
+            and checkpoint.candidate_revision is None
+            and checkpoint.failure_code is DeliveryFailureCode.INVARIANT_VIOLATION
+            and checkpoint.failure_summary is not None
+            and "WorktreeAlreadyExists" in checkpoint.failure_summary
+        )
         if not preparation_rebind and (
-            checkpoint.failure_code is not DeliveryFailureCode.RETRY_BUDGET_EXHAUSTED
+            (
+                checkpoint.failure_code is not DeliveryFailureCode.RETRY_BUDGET_EXHAUSTED
+                and not pre_agent_worktree_conflict
+            )
             or checkpoint.task_revision != 2
         ):
             return None
@@ -146,9 +162,27 @@ class PreExecutionRestartService:
             raise RecoveryRejected(
                 "restart source/preparation changed; explicit replanning required"
             )
+        branch_manager = GitWorktreeManager(
+            root,
+            Path(self.config.platform_root) / "worktrees" / scope.repository_id,
+            branch_names={},
+        )
+        branch_root = stages.product.branch_name or runtime.task.branch_name
+        restart_kind: Literal["preparation_rebind", "pre_agent_worktree_conflict"] | None = (
+            "preparation_rebind"
+            if preparation_rebind
+            else "pre_agent_worktree_conflict"
+            if pre_agent_worktree_conflict
+            else None
+        )
+        target_branch = available_successor_branch(
+            branch_root,
+            "recovery",
+            is_occupied=branch_manager._branch_exists,
+        )
         plan = PreExecutionRestartPlan(
             scope=scope,
-            restart_kind="preparation_rebind" if preparation_rebind else None,
+            restart_kind=restart_kind,
             source_task_id=runtime.task.id,
             source_task_sha256=digest(runtime.task.to_wire()),
             source_events_sha256=digest([event.to_wire() for event in runtime.events]),
@@ -169,7 +203,7 @@ class PreExecutionRestartService:
             parent_checkpoint_sha256=parent_sha,
             target_preparation_sha256=prepared.preparation_sha256,
             target_base_revision=base,
-            target_branch_name=successor_branch(runtime.task.branch_name, "recovery"),
+            target_branch_name=target_branch,
             config_sha256=digest(self.config.to_wire()),
             context_budget=production_backend.PRODUCTION_DELIVERY_CONTEXT_BUDGET,
             context_sources=sources,
@@ -397,6 +431,13 @@ def restart_context(plan: PreExecutionRestartPlan) -> tuple[ContextSource, ...]:
             "This approved successor is bound to the current preparation and base; "
             "it is a fresh execution of the same approved requirement, not retained code. "
             "Independent Coder, QA and Reviewer gates remain mandatory."
+        )
+    elif plan.restart_kind == "pre_agent_worktree_conflict":
+        content = (
+            f"Original Task {plan.source_task_id} stopped before the first Coder because its "
+            "semantic branch/worktree was already owned by another retained Task. "
+            "This approved successor uses a unique branch rooted at the ProductSpec; it is a "
+            "fresh execution of the same requirements, not retained code."
         )
     else:
         content = (

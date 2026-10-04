@@ -1,6 +1,7 @@
 """Approval-bound branch vocabulary; Task/run IDs remain internal identities."""
 
 import re
+from collections.abc import Callable
 from typing import Annotated, Literal
 
 from pydantic import AfterValidator, StringConstraints, TypeAdapter
@@ -62,3 +63,31 @@ def successor_branch(
         return None
     root = _successor_root(original)
     return TypeAdapter(BranchName).validate_python(f"{root}-{purpose}")
+
+
+def available_successor_branch(
+    original: BranchName | None,
+    purpose: Literal["recovery", "review-fixes", "prerequisite-repair"],
+    *,
+    is_occupied: Callable[[str], bool],
+) -> BranchName | None:
+    """Choose an unused semantic successor name for one delivery lineage.
+
+    A repeated recovery must not append another generated suffix to the source
+    Task (for example ``recovery-recovery``), and it must not reuse a branch
+    still owned by an earlier immutable successor.  The first candidate keeps
+    the historical semantic name; subsequent candidates add a bounded numeric
+    qualifier to the same stable Product slug.  The caller supplies the
+    read-only Git ownership check so this domain helper never mutates refs.
+    """
+    candidate = successor_branch(original, purpose)
+    if candidate is None or not is_occupied(candidate):
+        return candidate
+    root = _successor_root(original) if original is not None else None
+    if root is None:
+        return None
+    for ordinal in range(2, 1000):
+        candidate = TypeAdapter(BranchName).validate_python(f"{root}-{purpose}-{ordinal}")
+        if not is_occupied(candidate):
+            return candidate
+    raise ValueError("no available semantic successor branch")

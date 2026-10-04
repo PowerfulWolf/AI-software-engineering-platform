@@ -2565,6 +2565,25 @@ gets one exact rebind plan and then serial Coder → QA → Reviewer. Base: repe
 the same plan without a model call. Bad: a dirty worktree, role claim, or existing event is
 rebound or approved as success.
 
+### Worktree collision before the first Coder (2026-10-04)
+
+`WorktreeAlreadyExists` can be raised while the delivery executor opens the Coder worktree,
+after the orchestrator has durably appended `NEW → PLANNING → IMPLEMENTING` but before any Coder
+artifact, context, model invocation, lease claim, queue admission, candidate or dirty worktree
+exists for that Task. This is a platform startup failure, not Coder work that a Manager may
+approve away. The read-only SQL snapshot may classify it as a
+`restart_kind=pre_agent_worktree_conflict` restart only when the checkpoint is terminal,
+`failure_code=INVARIANT_VIOLATION`, the failure summary contains the stable conflict marker,
+and all absence facts are rechecked. The old Task, event history and occupied worktree remain
+immutable.
+
+The exact restart plan roots its successor branch in the approved ProductSpec branch. If the
+purpose branch is still occupied by an earlier successor in the same delivery lineage, the
+platform chooses the first unused numeric qualifier (`-2`, `-3`, …), includes it in the plan
+digest, and requires the same exact human approval before appending a fresh Task. A Task with any
+real Agent evidence, dirty workspace, claim or candidate is rejected from this path and routed to
+normal Coder recovery instead.
+
 ### Legacy linked-worktree context and unstarted successor counters
 
 `rebind_native_rule_sources(repository_root, profile, sources, source_revision=...)` may receive

@@ -9,6 +9,14 @@
 - `.venv/bin/python -m mypy src/ai_software_engineer/domain/branch.py`：通过。
 - `git diff --check`：通过。
 
+本轮增量回归补充：
+
+- `tests/git/test_semantic_branches.py` 验证稳定 Product 根与已占用 `-2` 分支的 `-3` 选择，
+  以及无名历史 Task 保持 `None`。
+- `tests/recovery/test_restart_contracts.py` 验证 `WorktreeAlreadyExists` 在首个 Coder 之前、
+  且没有任何 Agent 证据时可进入严格快照分类。
+- `ruff` 与 `mypy` 对 5 个变更源文件及新增测试通过。
+
 ## 限制
 
 未运行仓库全量测试。一次带 MySQL 的恢复集成选择测试在既有恢复 fixture 的候选验证计划未生成处失败，

@@ -51,12 +51,13 @@ qualifier when a recovery name is occupied; CLI exposes `--target-branch-name`.
 - Missing fields are omitted even from ordinary model serialization. Historical unnamed
   Tasks retain `ai/<task-id>/attempt-N`; never guess their original feature/bugfix type or
   rewrite old Product/Task/dispatch/capture/approval bytes. QA/Reviewer stay detached.
-- A name collision fails closed. Before initial approval, ask Product for a more specific
-  name. For interrupted recovery, propose a new target name and approve the new exact plan.
-  No reuse based only on a matching candidate SHA. Post-dispatch names are frozen; changing
-  a sealed Task or moving the old ref is forbidden.
-  There is no rename UI for a dispatched Task: use a separately approved requirement
-  with a more specific business name; recovery alone has the explicit CLI override.
+- A name collision fails closed for an unrelated Product request. For an append-only successor
+  in the same delivery lineage, the platform first reuses the stable Product root and purpose,
+  then allocates a deterministic numeric qualifier (`-2`, `-3`, …) when an earlier immutable
+  successor still owns that ref. This preserves both histories without recursively appending
+  generated suffixes. Post-dispatch names are frozen; changing a sealed Task or moving the old
+  ref is forbidden. There is no rename UI for a dispatched Task: use a separately approved
+  requirement with a more specific business name; recovery plans bind the selected exact name.
 
 ## 4. Validation & Error Matrix
 
