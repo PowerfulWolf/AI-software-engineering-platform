@@ -1,5 +1,57 @@
 # Production Team Host Contract
 
+## Designer full-path identity and safe rejection diagnostics (2026-10-04)
+
+### Scope / Signatures / Contracts
+
+`design.service._validate_affected_paths(design: TechnicalDesign) -> None` checks canonical
+repository-relative paths in every `DesignComponent.affected_paths`. A full path identifies a
+file; matching basenames across directories never prove relocation or invalid design intent.
+RepositoryProfile language/build markers and native rules are discovery facts, not a complete
+file inventory or a prohibition on new modules. Valid `learning_collection/ports.py`, `store.py`
+and `docs/architecture/contracts.md` cannot be rejected because another directory has the same
+filename. Placement correctness remains acceptance-mapped work for independent QA/Review.
+
+Absolute, traversal, normalized-away segments, repeated separators and backslashes still reject
+before a Designer receipt or planning authorization. Task allow/deny, tool role restrictions,
+hidden policy directories and candidate validation remain independent mandatory write gates.
+Designer path validity never grants permission to write `.trellis`.
+
+`ProductionProjectDeliveryBackend._guard(label, operation)` maps only known application-owned
+`DesignerOutputRejected` messages to specific Chinese `INVARIANT_VIOLATION` summaries. Unknown
+exception text uses a safe generic reason, never provider text, credentials or raw output. Reader
+and browser localize historical `Designer stopped safely (DesignerOutputRejected)` without
+inventing a cause that the old record did not preserve. No public Schema or SQL change.
+
+### Validation Matrix / Good, Base, Bad
+
+| Input | Result |
+|---|---|
+| Same basename in different modules or documentation directories | Accept the full-path design; no file write |
+| Existing full relative path | Existing design admission and artifact lineage |
+| Absolute/traversal/noncanonical path | Reject; no planning receipt or Product revision advance |
+| Known rejection | Specific Chinese cause with DesignerOutputRejected identity |
+| Unknown rejection containing a secret | Generic safe reason; preserve original exception cause internally |
+| Historical class-only record | Chinese presentation; immutable bytes/hash unchanged |
+
+### Tests / Wrong vs Correct
+
+`tests/design/test_service.py` exercises the actual adapter/service/immutable receipt path for
+duplicate filenames, coverage/identity rejection and invalid path boundaries.
+`test_production_backend.py::test_designer_rejection_exposes_only_safe_contract_diagnostics`
+checks failure classification, useful reasons and secret rejection. Python localization and the
+DOM harness check the legacy message. Only these files/nodes and lint/type checks are required.
+Wrong: `known_by_basename[path.name] → invented location`. Correct: validate exact paths, keep
+machine write policy and independently verify that implementation satisfies the approved design.
+
+### 存量数据处置与回滚
+
+The fresh K1 child stopped in DESIGNING before Task creation. After loading the fix while idle,
+ordinary Continue retries that unfinished native stage and retains the exact Product approval,
+joint Design/Plan, old failures and attempt counters. No database edits or new business verdict.
+Do not silently update the frozen source; a newer role baseline requires a separately approved
+recovery/replanning boundary. Revert this commit and reconstruct the idle Host for rollback.
+
 ## 1. Scope / Trigger
 
 本规范适用于 `ase project start/reply/approve/status/resume` 的生产装配，以及任何修改

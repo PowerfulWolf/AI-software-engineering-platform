@@ -983,6 +983,12 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   );
   assert.equal(
     vm.runInContext(
+      'humanizeBlockingText("Designer stopped safely (DesignerOutputRejected)")', context,
+    ),
+    "技术设计输出未通过校验（DesignerOutputRejected），请检查设计及失败记录。",
+  );
+  assert.equal(
+    vm.runInContext(
       'humanizeBlockingText("Coder recovery stopped safely: failed Coder identity is missing, unsafe or ambiguous")',
       context,
     ),

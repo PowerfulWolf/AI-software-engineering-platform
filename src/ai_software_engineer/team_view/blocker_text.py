@@ -14,6 +14,7 @@ import re
 
 
 _EXACT: dict[str, str] = {
+    "Designer stopped safely (DesignerOutputRejected)": "技术设计输出未通过校验（DesignerOutputRejected），请检查设计及失败记录。",
     "REQUEST_HUMAN": "需要人工处理后再继续交付。",
     "A child delivery or integration requires recovery.": "子交付或联合集成需要恢复。",
     (

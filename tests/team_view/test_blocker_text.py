@@ -5,6 +5,13 @@ import pytest
 from ai_software_engineer.team_view.blocker_text import localize_blocking_text
 
 
+def test_historical_designer_rejection_is_localized_without_inventing_the_cause() -> None:
+    original = "Designer stopped safely (DesignerOutputRejected)"
+    localized = localize_blocking_text(original)
+    assert localized == "技术设计输出未通过校验（DesignerOutputRejected），请检查设计及失败记录。"
+    assert "路径" not in localized
+
+
 def test_localizes_stable_recovery_and_manager_blockers() -> None:
     assert localize_blocking_text("A child delivery or integration requires recovery.") == (
         "子交付或联合集成需要恢复。"

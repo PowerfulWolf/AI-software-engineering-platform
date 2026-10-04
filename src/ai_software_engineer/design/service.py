@@ -200,7 +200,7 @@ class DesignerService:
             raise DesignerOutputRejected(
                 "TechnicalDesign lineage or requirement/acceptance coverage is invalid"
             ) from error
-        _validate_affected_paths(command.repository_profile, design)
+        _validate_affected_paths(design)
         if design.version != 1:
             raise DesignerOutputRejected("v0.1 Designer supports one immutable design version")
         next_request = _request_with_status(
@@ -403,17 +403,14 @@ class DesignerService:
             raise DesignerOutputRejected("Designer result identity does not match request")
 
 
-def _validate_affected_paths(profile: RepositoryProfile, design: TechnicalDesign) -> None:
-    """Reject invented locations for files already observed in the repository."""
+def _validate_affected_paths(design: TechnicalDesign) -> None:
+    """Validate full relative paths; a basename does not identify an existing file.
 
-    known_paths = (
-        {marker for fact in profile.languages for marker in fact.markers}
-        | {marker for fact in profile.build_systems for marker in fact.markers}
-        | {source.relative_path for source in profile.native_rules}
-    )
-    known_by_name: dict[str, set[str]] = {}
-    for known_path in known_paths:
-        known_by_name.setdefault(PurePosixPath(known_path).name, set()).add(known_path)
+    A design can introduce another module's store.py or another directory's
+    contracts.md. RepositoryProfile markers neither express modification intent
+    nor enumerate every file. Actual writes still pass Task and tool policy;
+    implementation placement remains subject to independent QA and Review.
+    """
     for component in design.components:
         for value in component.affected_paths:
             path = PurePosixPath(value)
@@ -425,14 +422,6 @@ def _validate_affected_paths(profile: RepositoryProfile, design: TechnicalDesign
             ):
                 raise DesignerOutputRejected(
                     "TechnicalDesign affected paths must be canonical repository-relative paths"
-                )
-            if value in known_paths or any(
-                known.startswith(value.rstrip("/") + "/") for known in known_paths
-            ):
-                continue
-            if not any(token in value for token in "*?[") and known_by_name.get(path.name):
-                raise DesignerOutputRejected(
-                    "TechnicalDesign affected path invents a location for an existing file"
                 )
 
 

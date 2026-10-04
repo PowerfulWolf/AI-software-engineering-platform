@@ -35,6 +35,7 @@ from ai_software_engineer.context.native import (
 )
 from ai_software_engineer.context.profile import repository_profile_context
 from ai_software_engineer.design import (
+    DesignerOutputRejected,
     DesignerService,
     DesignerServiceResult,
     FileDesignRecordStore,
@@ -1287,10 +1288,10 @@ class ProductionProjectDeliveryBackend:
         # revision supplied by the validated checkpoint/Task is still the
         # authoritative binding; any concrete conflicting profile revision is
         # rejected.
-        if (
-            self._frozen_source_revision is not None
-            and profile.source_revision not in {self._frozen_source_revision, "unknown"}
-        ):
+        if self._frozen_source_revision is not None and profile.source_revision not in {
+            self._frozen_source_revision,
+            "unknown",
+        }:
             raise ValueError("frozen preparation does not match the Requirement source revision")
         compilation = self._baseline_store.get(workspace, preparation.baseline_compilation_sha256)
         baseline = compilation.compiled_spec
@@ -1415,6 +1416,28 @@ class ProductionProjectDeliveryBackend:
             raise DeliveryBackendFailure(
                 DeliveryFailureCode.CHECKPOINT_DRIFT,
                 f"{label} rejected stale or inconsistent facts: {error}",
+            ) from error
+        except DesignerOutputRejected as error:
+            # Only stable application-owned reasons are safe to expose. Never
+            # echo arbitrary adapter/provider text through a validation error.
+            reason = {
+                "successful Designer result has no TechnicalDesign": "成功输出缺少技术设计。",
+                "TechnicalDesign lineage or requirement/acceptance coverage is invalid": (
+                    "技术设计的来源链、需求或验收条件覆盖不正确。"
+                ),
+                "TechnicalDesign affected paths must be canonical repository-relative paths": (
+                    "技术设计的文件路径必须是规范的仓库相对路径。"
+                ),
+                "v0.1 Designer supports one immutable design version": (
+                    "当前版本仅支持一个不可变的原生技术设计版本。"
+                ),
+                "failed Designer result has no typed error": "失败输出缺少结构化错误。",
+                "Designer adapter returned invalid output": "技术设计输出不符合产物契约。",
+                "Designer result identity does not match request": "技术设计输出身份与请求不匹配。",
+            }.get(str(error), "技术设计输出未通过契约校验，请检查设计及失败记录。")  # noqa: RUF001
+            raise DeliveryBackendFailure(
+                DeliveryFailureCode.INVARIANT_VIOLATION,
+                f"技术设计已安全停止（DesignerOutputRejected）：{reason}",  # noqa: RUF001
             ) from error
         except Exception as error:
             raise DeliveryBackendFailure(

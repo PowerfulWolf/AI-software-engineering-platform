@@ -277,18 +277,28 @@ def test_stale_product_facts_run_conflict_and_bad_coverage_fail_closed(tmp_path:
         bad_service.run(bad_command)
 
 
-def test_designer_rejects_invented_location_for_an_existing_source_file(
+@pytest.mark.parametrize(
+    ("existing_path", "new_path"),
+    [
+        ("src/old/ports.py", "src/new/ports.py"),
+        ("src/old/models.py", "src/new/models.py"),
+        ("src/old/store.py", "src/new/store.py"),
+        ("src/old/audit.py", "src/new/audit.py"),
+        (".trellis/spec/core/contracts.md", "docs/architecture/contracts.md"),
+    ],
+)
+def test_designer_accepts_distinct_files_with_the_same_basename(
     tmp_path: Path,
+    existing_path: str,
+    new_path: str,
 ) -> None:
-    case = tmp_path / "wrong-existing-path"
-    actual = case / "project/src/ai_software_engineer/team_view/app.js"
+    case = tmp_path / "same-basename"
+    actual = case / "project" / existing_path
     actual.parent.mkdir(parents=True)
     actual.write_text("'use strict';\n", encoding="utf-8")
     command, product_store, advancer = approved_facts(case)
     original = design_for(command)
-    component = original.components[0].model_copy(
-        update={"affected_paths": ("src/ai_software_engineer/web_console/static/app.js",)}
-    )
+    component = original.components[0].model_copy(update={"affected_paths": (new_path,)})
     design = TechnicalDesign.create(
         command.product_spec,
         command.product_approval,
@@ -314,7 +324,50 @@ def test_designer_rejects_invented_location_for_an_existing_source_file(
         advancer,
     )
 
-    with pytest.raises(DesignerOutputRejected, match="invents a location"):
+    result = service.run(command)
+
+    assert result.run_record.outcome is DesignRunOutcome.READY_FOR_PLANNING
+    assert result.technical_design == design
+    assert advancer.calls == 1
+    assert not (case / "project" / new_path).exists()
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/tmp/new.py", "../new.py", "src/../new.py", "./src/new.py", "src//new.py", "src\\new.py"],
+)
+def test_designer_still_rejects_noncanonical_repository_paths(tmp_path: Path, path: str) -> None:
+    command, product_store, advancer = approved_facts(tmp_path)
+    original = design_for(command)
+    design = TechnicalDesign.create(
+        command.product_spec,
+        command.product_approval,
+        design_id=original.id,
+        version=original.version,
+        summary=original.summary,
+        components=(original.components[0].model_copy(update={"affected_paths": (path,)}),),
+        requirement_mappings=original.requirement_mappings,
+        acceptance_mappings=original.acceptance_mappings,
+        implementation_steps=original.implementation_steps,
+        risks=original.risks,
+        created_at=original.created_at,
+    )
+    service = _service(
+        tmp_path,
+        product_store,
+        FakeDesignerAgentAdapter(
+            default=FakeDesignerScenario(
+                behavior=FakeDesignerBehavior.READY, technical_design=design
+            ),
+        ),
+        advancer,
+    )
+
+    with pytest.raises(DesignerOutputRejected, match="canonical"):
         service.run(command)
 
     assert advancer.calls == 0
+    assert product_store.current_request_revision(command.request_revision.request.id) == (
+        command.request_revision
+    )
+    assert FileDesignRecordStore(tmp_path / "design-records").find_run(command.run_id) is None

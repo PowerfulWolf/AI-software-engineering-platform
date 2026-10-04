@@ -29,6 +29,7 @@ from ai_software_engineer.config import (
     ProviderRouteConfig,
 )
 from ai_software_engineer.context import ContextBudget, FileContextStore
+from ai_software_engineer.design import DesignerOutputRejected
 from ai_software_engineer.domain import (
     AgentDefinition,
     AgentProducer,
@@ -286,9 +287,7 @@ def test_task_source_revision_reads_only_the_exact_task_repository_and_base(
     backend._dsn = "mysql://test"
 
     assert (
-        backend.task_source_revision(
-            "task_successor", repository_root=str(tmp_path / "repository")
-        )
+        backend.task_source_revision("task_successor", repository_root=str(tmp_path / "repository"))
         == "a" * 40
     )
 
@@ -566,6 +565,40 @@ def test_mysql_dispatch_unavailable_is_classified_as_retryable() -> None:
 
     assert caught.value.code is DeliveryFailureCode.RESOURCE_UNAVAILABLE
     assert caught.value.safe_summary == "Dispatch is temporarily unavailable"
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        (
+            "TechnicalDesign affected paths must be canonical repository-relative paths",
+            "技术设计的文件路径必须是规范的仓库相对路径。",
+        ),
+        (
+            "TechnicalDesign lineage or requirement/acceptance coverage is invalid",
+            "技术设计的来源链、需求或验收条件覆盖不正确。",
+        ),
+        (
+            "private provider response api_key=do-not-leak",
+            "技术设计输出未通过契约校验，请检查设计及失败记录。",  # noqa: RUF001
+        ),
+    ],
+)
+def test_designer_rejection_exposes_only_safe_contract_diagnostics(
+    message: str,
+    expected: str,
+) -> None:
+    def fail() -> Never:
+        raise DesignerOutputRejected(message)
+
+    with pytest.raises(DeliveryBackendFailure) as caught:
+        production_backend.ProductionProjectDeliveryBackend._guard("Designer", fail)
+
+    assert caught.value.code is DeliveryFailureCode.INVARIANT_VIOLATION
+    assert caught.value.safe_summary == (
+        f"技术设计已安全停止（DesignerOutputRejected）：{expected}"  # noqa: RUF001
+    )
+    assert "do-not-leak" not in caught.value.safe_summary
 
 
 @pytest.fixture

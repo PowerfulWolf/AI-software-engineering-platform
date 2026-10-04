@@ -939,6 +939,7 @@ function humanizeBlockingText(value) {
   const text = String(value || "").trim();
   if (!text) return "暂未记录具体原因。";
   const exact = {
+    "Designer stopped safely (DesignerOutputRejected)": "技术设计输出未通过校验（DesignerOutputRejected），请检查设计及失败记录。",
     REQUEST_HUMAN: "需要人工处理后再继续交付。",
     "A child delivery or integration requires recovery.": "子交付或联合集成需要恢复。",
     "Delivery is blocked by a child delivery or integration requiring recovery. The child finding requests human involvement; no repair or usable approval is established by the supplied hashes alone.": "子交付或联合集成需要恢复，当前交付已阻塞。子任务发现需要人工介入；仅凭现有摘要无法建立可用修复或批准。",
