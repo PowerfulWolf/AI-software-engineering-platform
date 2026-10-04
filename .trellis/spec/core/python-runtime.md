@@ -1567,6 +1567,9 @@ RuntimeSession(config, *, agent_adapter=None, agent_definitions=None,
   Task 的完整检出副本重复进入 Agent context；
 - native rule source 必须是 root-relative POSIX path、`project://<repository_id>/<path>` URI、
   UTF-8 content SHA 和 source revision；profile digest 排除 `observed_at`，相同项目事实可重放；
+- Git `packed-refs` 使用原生 `<object-id> <ref>` 顺序解析；只要 HEAD 指向已封存 ref，
+  `RepositoryProfile.vcs.revision/source_revision` 就必须保留提交 SHA，供恢复时重新绑定 native rule。
+  无法证明 revision 时只能显式为 UNKNOWN，并不得把该 profile 当作可恢复的 sealed Git 基线。
 - RepositoryProfile 只发现 rule source，不把 Markdown 自然语言自动转换为 SpecRule，也不推断
   test entrypoint；
 - SpecCompiler 至少需要一个 `PLATFORM_HARD` rule，并自动加入 Task 的显式 constraints；rule source

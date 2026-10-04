@@ -168,6 +168,24 @@ def test_git_head_ref_and_expected_revision_are_verified(tmp_path: Path) -> None
         discover_repository_profile(project, observed_at=OBSERVED, revision="b" * 40)
 
 
+def test_git_packed_refs_preserve_revision_for_native_rule_recovery(tmp_path: Path) -> None:
+    project = tmp_path / "packed-git-project"
+    git_dir = project / ".git"
+    git_dir.mkdir(parents=True)
+    revision = "c" * 40
+    (git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    (git_dir / "packed-refs").write_text(
+        f"# pack-refs with: peeled fully-peeled\n{revision} refs/heads/main\n",
+        encoding="ascii",
+    )
+    (project / "AGENTS.md").write_text("rules\n", encoding="utf-8")
+
+    profile = discover_repository_profile(project, observed_at=OBSERVED)
+
+    assert profile.vcs.revision == revision
+    assert profile.source_revision == revision
+
+
 def test_discovery_rejects_symlink_escape(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()

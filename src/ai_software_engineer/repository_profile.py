@@ -575,7 +575,11 @@ def _read_git_info(root: Path, git_dir: Path, marker: str) -> VcsInfo:
                 if packed_refs.is_file():
                     for line in packed_refs.read_text(encoding="ascii").splitlines():
                         if line and not line.startswith(("#", "^")):
-                            candidate_ref, _, candidate_revision = line.partition(" ")
+                            # Git's packed-refs format is ``<object-id> <ref>``.
+                            # Do not reverse these fields: a profile with an
+                            # apparent branch but ``unknown`` revision cannot
+                            # rebind native rules during recovery.
+                            candidate_revision, _, candidate_ref = line.partition(" ")
                             if candidate_ref == ref:
                                 revision = candidate_revision.strip()
                                 break

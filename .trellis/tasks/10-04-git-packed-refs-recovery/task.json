@@ -1,0 +1,24 @@
+{
+  "id": "git-packed-refs-recovery-20261004",
+  "title": "修复 packed-refs 导致恢复缺少 sealed Git revision",
+  "status": "completed",
+  "phase": "incremental_verified",
+  "created_at": "2026-10-04T19:00:00+08:00",
+  "owner": "codex",
+  "scope": [
+    "src/ai_software_engineer/repository_profile.py",
+    "tests/repository_profile/test_discovery.py",
+    ".trellis/spec/core/python-runtime.md"
+  ],
+  "constraints": [
+    "不修改现有 Delivery、Task、StateEvent、Artifact 或审批记录",
+    "仅修复 Git packed-refs 的只读解析并运行增量 RepositoryProfile 测试",
+    "恢复失败时保留原候选、失败报告和审计历史"
+  ],
+  "verification": {
+    "good": "HEAD 指向 packed-refs 中的分支时保留 object-id 作为 source_revision",
+    "base": "直接 refs/heads 文件和无 Git 项目保持原行为",
+    "bad": "把 packed-refs 的 object-id/ref 顺序反解析为 unknown，导致 native rule 无法恢复"
+  },
+  "rollback": "回退平台提交并重启 ase-console；不清理 sidecar 中既有恢复记录"
+}
