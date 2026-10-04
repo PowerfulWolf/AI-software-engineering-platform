@@ -1,0 +1,25 @@
+{
+  "id": "bounded-verification-plan-scan-20261004",
+  "title": "按当前候选限制验证计划恢复扫描",
+  "status": "completed",
+  "phase": "incremental_verified",
+  "created_at": "2026-10-04T16:00:00+08:00",
+  "owner": "codex",
+  "scope": [
+    "src/ai_software_engineer/recovery/verification_entry.py",
+    "tests/recovery/test_latest_verification_plan.py",
+    ".trellis/spec/core/verification-role-recovery.md"
+  ],
+  "constraints": [
+    "只读扫描，不修改历史验证计划、审批、Task 或候选事实",
+    "每个历史计划仍必须完成 Schema、完整性和作用域校验",
+    "只对当前候选 SHA 匹配的计划执行重型 NativeVerificationFacts 校验",
+    "只运行恢复相关增量测试，不运行全量测试"
+  ],
+  "verification": {
+    "good": "历史计划完整校验后按当前候选 SHA 过滤，匹配计划才执行完整事实校验并返回最新有效计划。",
+    "base": "没有匹配或有效计划时返回 None；新 snapshot 仍重新读取全部记录。",
+    "bad": "跳过历史计划的 Schema/哈希/作用域错误，或把旧候选的有效计划用于当前候选恢复。"
+  },
+  "rollback": "回退平台提交并重启 ase-console；保留所有 sidecar 历史和审批记录。"
+}

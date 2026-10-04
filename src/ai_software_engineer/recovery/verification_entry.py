@@ -692,6 +692,8 @@ class CandidateVerificationEntry:
         if not root.exists():
             return None
         store = FileRecoveryStore(root, scope=scope)
+        facts = NativeVerificationFacts(self.config, self.environment, store=store)
+        candidate_revision = source.inputs.candidate_revision
         plans: list[tuple[CandidateVerificationPlan, Path]] = []
         for path in sorted(root.glob("verification-plan-*.json")):
             _reject_symlinks(path)
@@ -702,8 +704,15 @@ class CandidateVerificationEntry:
             plan = store.get_verification_plan(plan_sha256)
             if plan.scope != scope:
                 raise RecoveryRejected("candidate verification plan scope drifted")
+            # Every historical plan is still parsed and integrity checked above, but
+            # only plans for the currently sealed candidate can be eligible for
+            # recovery.  Full native validation re-reads the candidate source,
+            # checkpoint history, artifacts, Git and policy; doing that for old
+            # candidates made resume cost grow with the complete plan ledger.
+            if plan.inputs.candidate_revision != candidate_revision:
+                continue
             try:
-                NativeVerificationFacts(self.config, self.environment, store=store).validate(plan)
+                facts.validate(plan)
             except RecoveryRejected:
                 continue
             plans.append((plan, path))

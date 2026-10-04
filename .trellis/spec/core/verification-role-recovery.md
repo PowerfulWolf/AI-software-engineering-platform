@@ -64,6 +64,22 @@ Normal Manager Continue → exact approval → execution remains the public work
 - Console approval must explicitly say only Reviewer will execute and show retained QA artifact,
   source plan/admission and Reviewer route. It must not label standalone QA as a native Task event.
 
+### 3.1 Current-candidate plan lookup
+
+`CandidateVerificationEntry.latest_project()` may scan an append-only ledger containing plans for
+many historical candidate commits. Each `verification-plan-<sha>.json` must first be read through
+the scoped `FileRecoveryStore`, which preserves filename, Schema, digest, scope and referenced-record
+validation. After that typed read, compare `plan.inputs.candidate_revision` with the candidate SHA
+from the freshly inspected terminal source. Plans for another candidate are historical facts and are
+not eligible for the current recovery, so they must not invoke `NativeVerificationFacts.validate()`.
+
+Only plans whose candidate SHA matches the current source receive the full current-fact validation
+(checkpoint history, artifacts, Git, policy, allocation and retained evidence). This is a per-call
+read bound, not a cache: a new snapshot reopens and validates the complete plan ledger so newly
+published or corrupted records cannot be hidden. A malformed or tampered historical plan still
+fails closed during its typed read; candidate filtering must never turn integrity errors into an
+ignored record.
+
 ## 4. Validation & Error Matrix
 
 | Facts | Result |
