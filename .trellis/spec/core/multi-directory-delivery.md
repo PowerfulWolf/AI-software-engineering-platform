@@ -28,6 +28,37 @@ ase request resume DELIVERY_ID
 
 ## 3. Contracts
 
+### 重复读取联合历史的验证复用（2026-10-04）
+
+`JointJournal.history(delivery_id) -> tuple[JointCheckpoint, ...]` 与 `current` 保持完整历史
+和强校验。实例最多保存 512 个已验证条目，键绑定真实路径，值含真实文件字节 SHA-256、前一个
+文件的字节 SHA-256 和私有 typed checkpoint。每次读取仍检查全部路径与原字节；仅字节和前驱
+字节均未变化时复用先前 decoder/integrity/successor 验证。内容变更必须重新解析、重验摘要，前驱
+变更必须重验链边界；不得用 mtime、size、调用方自报 digest 或永久 process cache 代替重读。
+返回 deep copy，防止 `attempts` 等嵌套 dict 的调用方修改污染后续读结果。缓存不写文件，不裁剪
+历史，也不授权审批、执行或状态迁移。
+
+原生 `NativeRecoverySourceReader` 按 Project 的 requirements root 复用只读 `JointJournal`；
+同一个 `NativeRecoveryEntry` 的当前计划校验、审批、封存、执行和终态接回复用同一个
+`NativeRecoveryFactsVerifier`。每次 inspect 仍重新验证 source/target、当前文件字节、Git、审批、
+scope、manifest 和 policy；只有未变更历史的重复解码省略。
+
+| 输入 / 变化 | 行为 |
+|---|---|
+| 完全相同字节及前驱 | 返回独立深复制；不重复重型 decoder |
+| 新追加合法 checkpoint | 读取并验证新条目与新边界；即时可见 |
+| 暖缓存后正文篡改 / 重新封存旧祖先 | 拒绝摘要或链不匹配 |
+| 删除初始记录 / symlink | 拒绝；缓存不能冒充缺失事实 |
+| 调用方修改返回 attempts dict | 不影响后续读结果 |
+| 超过 512 个条目 / 进程重启 | 有界逐出 / 冷启动重验；保留全部原文件 |
+
+Good：恢复多次核对同一已批准历史时复用已验证条目，但发现追加立即重验。Base：冷读完整校验，
+新进程不依赖缓存。Bad：只比较最新 checkpoint 的自报 digest，跳过旧链或隐藏篡改。
+增量测试 `tests/manager/test_joint_journal_read_reuse.py` 覆盖以上矩阵；
+`test_joint_contracts.py` 保持显式 integration replan 的严格不可变规则；原生恢复测试必须仍拒绝
+损坏、遗漏联合父身份等事实。存量无需迁移或改库；缓存只存在于当前实例，回滚提交并空闲重启
+即可恢复旧读取路径。
+
 `DirectoryScope → 全部 PrepareProjectResult → JointProductSpec → exact human approval
 → JointTechnicalDesign → JointExecutionPlan → per-repository delivery → integration evidence`。
 多目录不是多个互不相关的 Product 会话。子仓库 Product/Design/Plan 是已批准联合事实的确定性

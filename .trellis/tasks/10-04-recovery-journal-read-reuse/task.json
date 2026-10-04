@@ -1,0 +1,19 @@
+{
+  "id": "recovery-journal-read-reuse-20261004",
+  "title": "消除恢复审批重复验证联合历史导致的长时间预检",
+  "status": "in_progress",
+  "phase": "incremental_verified",
+  "scope": [
+    "src/ai_software_engineer/multi_directory/store.py",
+    "src/ai_software_engineer/recovery/native.py",
+    "src/ai_software_engineer/recovery/entry.py",
+    "tests/manager/test_joint_journal_read_reuse.py",
+    ".trellis/spec/core/multi-directory-delivery.md"
+  ],
+  "constraints": [
+    "只跑增量；不修改生产历史，不删除或裁剪 checkpoint",
+    "每次重读原字节与路径，拒绝篡改、链断裂和 symlink",
+    "当前模型执行不受打断，提交后仅在空闲时加载平台"
+  ],
+  "rollback": "回退本任务平台提交并在空闲时重启；保留需求、Task、审批和工作区"
+}

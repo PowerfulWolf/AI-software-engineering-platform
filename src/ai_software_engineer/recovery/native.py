@@ -132,6 +132,7 @@ class NativeRecoverySourceReader:
     def __init__(self, config: ProductionConfig, environment: Mapping[str, str]) -> None:
         self._config = config
         self._environment = dict(environment)
+        self._parent_journals: dict[Path, JointJournal] = {}
 
     def inspect(
         self, scope: RecoveryScope, *, failed_run_id: str, failed_context_id: str
@@ -249,7 +250,7 @@ class NativeRecoverySourceReader:
         )
         preparation, product, approval = stages.preparation, stages.product, stages.approval
         design, plan = stages.design, stages.plan
-        parent_id, parent_sha = _parent(team, cp, approval)
+        parent_id, parent_sha = _parent(team, cp, approval, journals=self._parent_journals)
         _reject_symlinks(root / "contexts" / f"{context_id}.json")
         # Bounded regular-file preflight prevents a FIFO/oversized Context read.
         _read_regular(root / "contexts" / f"{context_id}.json", 8_000_000)
@@ -368,7 +369,7 @@ class NativeRecoverySourceReader:
             != stages
         ):
             raise ValueError("approved request changed during inspection")
-        if _parent(team, cp, approval) != (parent_id, parent_sha):
+        if _parent(team, cp, approval, journals=self._parent_journals) != (parent_id, parent_sha):
             raise ValueError("parent changed during inspection")
         accepted_progress = accepted_scope_progress(root, task, events, worktree_revision)
         return NativeRecoverySource(
@@ -604,10 +605,18 @@ def _preparation(root: Path, repository_id: str, expected: str) -> ProjectPrepar
 
 
 def _parent(
-    team: TeamWorkspace, cp: ProjectDeliveryCheckpoint, approval: ProductSpecApproval
+    team: TeamWorkspace,
+    cp: ProjectDeliveryCheckpoint,
+    approval: ProductSpecApproval,
+    *,
+    journals: dict[Path, JointJournal] | None = None,
 ) -> tuple[str | None, str | None]:
     project, repository = team.project_registry().locate_repository(cp.repository_id)
-    journal = JointJournal(project.requirements_root, read_only=True)
+    journal = journals.get(project.requirements_root) if journals is not None else None
+    if journal is None:
+        journal = JointJournal(project.requirements_root, read_only=True)
+        if journals is not None:
+            journals[project.requirements_root] = journal
     matches: list[tuple[str, str]] = []
     for directory in sorted(project.requirements_root.glob("delivery_multi_*")):
         _reject_symlinks(directory)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import os
 import tempfile
 from collections.abc import Iterator
@@ -20,6 +21,10 @@ class JointJournal:
     def __init__(self, root: Path, *, read_only: bool = False) -> None:
         self.root = root.absolute()
         self._read_only = read_only
+        # Only exact bytes and their exact predecessor may reuse validation.
+        # Private copies prevent a caller's nested dict mutations from leaking
+        # back into a later read. This is bounded, process-local read reuse.
+        self._verified: dict[Path, tuple[str, str | None, JointCheckpoint]] = {}
         _no_symlinks(self.root)
         if read_only:
             if not self.root.is_dir():
@@ -57,16 +62,29 @@ class JointJournal:
 
     def history(self, delivery_id: str) -> tuple[JointCheckpoint, ...]:
         previous: JointCheckpoint | None = None
+        previous_bytes_sha256: str | None = None
         history: list[JointCheckpoint] = []
         for path in sorted(self.directory(delivery_id).glob("*.json")):
             _no_symlinks(path)
-            item = JointCheckpoint.model_validate_json(path.read_text(encoding="utf-8"))
-            item.validate_integrity()
+            payload = path.read_bytes()
+            bytes_sha256 = hashlib.sha256(payload).hexdigest()
+            cached = self._verified.get(path)
+            same_bytes = cached is not None and cached[0] == bytes_sha256
+            if same_bytes and cached is not None:
+                item = cached[2]
+            else:
+                item = JointCheckpoint.model_validate_json(payload)
+                item.validate_integrity()
             if item.delivery_id != delivery_id or path.name != f"{item.sequence:06d}.json":
                 raise ValueError("joint journal identity mismatch")
-            _validate_successor(previous, item)
+            if not same_bytes or cached is None or cached[1] != previous_bytes_sha256:
+                _validate_successor(previous, item)
+            if path not in self._verified and len(self._verified) >= 512:
+                self._verified.pop(next(iter(self._verified)))
+            self._verified[path] = (bytes_sha256, previous_bytes_sha256, item)
             previous = item
-            history.append(item)
+            previous_bytes_sha256 = bytes_sha256
+            history.append(item.model_copy(deep=True))
         return tuple(history)
 
     def append(self, checkpoint: JointCheckpoint, *, expected: str | None) -> JointCheckpoint:

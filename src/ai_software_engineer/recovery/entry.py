@@ -267,6 +267,7 @@ class NativeRecoveryEntry:
         backend: ProductionProjectDeliveryBackend,
     ) -> None:
         self.config, self.environment, self.backend = config, dict(environment), backend
+        self._facts = NativeRecoveryFactsVerifier(config, self.environment)
 
     def propose(
         self,
@@ -487,7 +488,7 @@ class NativeRecoveryEntry:
     def require_current_plan(self, path: Path) -> RecoveryPlan:
         """Reject a plan whose retained work, policy, target, or scope approval drifted."""
         _, plan = self.open_plan(path)
-        NativeRecoveryFactsVerifier(self.config, self.environment).validate(plan)
+        self._facts.validate(plan)
         return plan
 
     def approve(self, path: Path, *, confirmed_plan: str, reference: str) -> None:
@@ -521,7 +522,7 @@ class NativeRecoveryEntry:
     ) -> tuple[
         RecoveryAuthorizationService, AuthorizedRecoveryTaskBuilder, RecoveryTaskSealingService
     ]:
-        facts = NativeRecoveryFactsVerifier(self.config, self.environment)
+        facts = self._facts
         service = RecoveryAuthorizationService(
             store,
             facts=facts,
@@ -583,7 +584,7 @@ class NativeRecoveryEntry:
                 raise RecoveryRejected(
                     "recovery Coder invocation is uncertain; inspect its Task before a successor"
                 )
-            facts = NativeRecoveryFactsVerifier(self.config, self.environment).inspect(plan)
+            facts = self._facts.inspect(plan)
             preparation = self.backend.prepare(plan.source.scope.repository_root)
             if preparation.preparation != facts.target:
                 raise RecoveryRejected("recovery target changed before terminal adoption")
@@ -710,7 +711,7 @@ class NativeRecoveryEntry:
         )
         if gap is None:
             return None
-        NativeRecoveryFactsVerifier(self.config, self.environment).validate(plan)
+        self._facts.validate(plan)
         authorization = store.get_authorization(plan.plan_sha256)
         if not authorization.decision.approved:
             raise RecoveryRejected("recovery knowledge wait requires exact approval")

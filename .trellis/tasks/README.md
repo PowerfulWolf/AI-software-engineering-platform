@@ -16,6 +16,7 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 
 | 目录 | 状态 / 阶段 | 剩余事项 |
 |---|---|---|
+| [10-04-recovery-journal-read-reuse](10-04-recovery-journal-read-reuse/task.json) | in_progress / incremental_verified | 33 项 journal/联合契约及 2 项 native 恢复通过；当前 K1 模型运行结束后才能加载 |
 | [10-04-pre-agent-restart-boundary](10-04-pre-agent-restart-boundary/task.json) | in_progress / incremental_verified | Git/queue/plan/lock 增量边界及终态基线漂移恢复通过；补充修复待推送和加载，K1 仍需真实独立 QA/Review |
 | [10-03-execution-feedback-history](10-03-execution-feedback-history/task.json) | in_progress / implementation | 完成 QA/Review finding、Coder 反馈 lineage 与跨 successor Task 的完整执行记录；增量验证、推送与服务重载待完成 |
 | [10-03-delivery-operability](10-03-delivery-operability/task.json) | in_progress / implementation | 修复 Delivery 自动 Project 定位、基线漂移诊断、阻塞中文细节和当前子交付状态展示；增量验证与真实 K1 恢复待完成 |
