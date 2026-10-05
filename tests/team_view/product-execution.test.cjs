@@ -71,6 +71,20 @@ test("only typed product responsibility asks a business decision", () => {
   assert.equal(run("requestPresentation(request).status"), "WAITING_PRODUCT_DECISION");
 });
 
+test("legacy upstream actions render Chinese in execution and suggested-action regions without mutation", () => {
+  const run = setup();
+  run(`execution.reason = "Reply to the Product Agent questions.";
+    execution.next_action = "Review product_spec and approve this exact checkpoint, or reply with revisions.";`);
+  const summary = text(run("productExecutionSummary(request)"));
+  assert.match(summary, /请回答 Product Agent 的问题/);
+  assert.match(summary, /下一步 · 请审阅本版产品规格并批准，或回复需要修改的内容/);
+  const blockers = text(run("requestBlockerSection(request)"));
+  assert.match(blockers, /建议操作 请审阅本版产品规格并批准，或回复需要修改的内容/);
+  assert.doesNotMatch(summary + blockers, /Review product_spec|Reply to the Product/);
+  assert.equal(run("execution.next_action"), "Review product_spec and approve this exact checkpoint, or reply with revisions.");
+  assert.equal(run("execution.reason"), "Reply to the Product Agent questions.");
+});
+
 test("closed Requirement keeps its closed group and has no pending coordination", () => {
   const run = setup();
   run('request.stage = "CLOSED"; execution.state = "STOPPED"');

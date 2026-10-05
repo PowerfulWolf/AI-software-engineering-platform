@@ -1,8 +1,105 @@
 # ruff: noqa: E501, RUF001
 
+import json
+import shutil
+import subprocess
+from pathlib import Path
+
 import pytest
 
 from ai_software_engineer.team_view.blocker_text import localize_blocking_text
+
+_UPSTREAM_STAGE_ACTIONS: tuple[tuple[str, str], ...] = (
+    ("Prepare every selected directory.", "准备所有已选择的代码目录。"),
+    (
+        "Requirement project prepared. Discuss your requirement in this workspace.",
+        "需求项目已准备好，请在此工作区描述并讨论需求。",
+    ),
+    (
+        "Discover one product across all prepared directories.",
+        "Product Agent 将梳理所有已准备代码目录的统一需求。",
+    ),
+    ("Revise the unified ProductSpec.", "Product Agent 将根据本次回复修订统一产品规格。"),
+    ("Reply to the Product Agent questions.", "请回答 Product Agent 的问题。"),
+    (
+        "Review product_spec and approve this exact checkpoint, or reply with revisions.",
+        "请审阅本版产品规格并批准，或回复需要修改的内容。",
+    ),
+    (
+        "Design all participating repositories against the approved product.",
+        "Designer 将依据已批准的产品规格设计所有参与交付的代码仓库。",
+    ),
+    (
+        "Plan the bounded repository order and joint integration checks.",
+        "Planner 将制定有界的仓库交付顺序与联合集成检查计划。",
+    ),
+    (
+        "Execute each repository with independent QA and Reviewer.",
+        "按计划交付各代码仓库，并由独立 QA 和 Reviewer 验证。",
+    ),
+    (
+        "Resume with the exact approved knowledge resolution.",
+        "使用本次已批准的精确知识解答继续交付。",
+    ),
+    (
+        "Resolve the recorded project specification conflicts before a new intake.",
+        "请先处理已记录的项目规范冲突，再开始接收新需求。",
+    ),
+    (
+        "Requirement closed by user; delivery history is retained.",
+        "需求已由用户关闭，交付历史仍完整保留。",
+    ),
+    (
+        "Requirement restarted; continue delivery from the retained checkpoint.",
+        "需求已重新打开，请从保留的交付进度继续。",
+    ),
+    (
+        "Design recheck requested. Continue to inspect the retained questions "
+        "against approved Product facts and exact repository revisions. "
+        "This is not approval of proposed behavior changes; budgets are unchanged.",
+        "已请求重新核对设计。请继续依据已批准的产品事实和精确仓库版本检查保留的问题。"
+        "这不代表批准拟议的行为变更，执行预算保持不变。",
+    ),
+)
+
+
+@pytest.mark.parametrize(("original", "expected"), _UPSTREAM_STAGE_ACTIONS)
+def test_fixed_upstream_stage_actions_have_chinese_read_side_wording(
+    original: str, expected: str
+) -> None:
+    assert localize_blocking_text(original) == expected
+    assert localize_blocking_text(f"用户引用：{original}") == f"用户引用：{original}"
+
+
+def test_browser_and_reader_agree_on_fixed_upstream_stage_actions() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is required for the browser/reader wording contract")
+    app = Path(__file__).parents[2] / "src/ai_software_engineer/team_view/app.js"
+    script = r"""
+const fs = require("node:fs");
+const vm = require("node:vm");
+const context = vm.createContext({document: {getElementById: () => ({addEventListener() {}})}});
+const source = fs.readFileSync(process.argv[1], "utf8")
+  .replace(/\nrefresh\(\);\nsetInterval\(refresh, 5000\);\s*$/, "\n");
+vm.runInContext(source, context);
+context.messages = JSON.parse(fs.readFileSync(0, "utf8"));
+process.stdout.write(JSON.stringify(vm.runInContext("messages.map(humanizeBlockingText)", context)));
+"""
+    result = subprocess.run(
+        (node, "-e", script, str(app)),
+        input=json.dumps(
+            [source for source, _ in _UPSTREAM_STAGE_ACTIONS]
+            + [f"用户引用：{source}" for source, _ in _UPSTREAM_STAGE_ACTIONS]
+        ),
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=10,
+    )
+    assert json.loads(result.stdout) == [expected for _, expected in _UPSTREAM_STAGE_ACTIONS] + [
+        f"用户引用：{source}" for source, _ in _UPSTREAM_STAGE_ACTIONS
+    ]
 
 
 def test_historical_designer_rejection_is_localized_without_inventing_the_cause() -> None:
@@ -41,6 +138,7 @@ def test_localizes_role_failure_and_keeps_run_and_evidence_ids() -> None:
         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     )
     localized = localize_blocking_text(value)
+    assert localized is not None
     assert localized.startswith("Reviewer 第 3 次执行失败：Codex CLI 模型服务执行失败")
     assert "run_abc123" in localized
     assert "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" in localized
@@ -156,6 +254,7 @@ def test_localizes_known_role_blockers_with_actionable_details(
 ) -> None:
     localized = localize_blocking_text(f"QA failed at attempt 1: {detail}")
 
+    assert localized is not None
     assert reason in localized
     assert "QA 第 1 次执行失败" in localized
 

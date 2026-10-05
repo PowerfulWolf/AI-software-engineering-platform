@@ -1,0 +1,29 @@
+{
+  "id": "stage-actions-chinese-20261005",
+  "title": "上游固定阶段操作提示统一中文只读展示",
+  "status": "completed",
+  "phase": "incremental_verified",
+  "created_at": "2026-10-05",
+  "completed_at": "2026-10-05T11:52:24Z",
+  "owner": "codex",
+  "scope": [
+    "src/ai_software_engineer/team_view/blocker_text.py",
+    "src/ai_software_engineer/team_view/app.js",
+    "tests/team_view/test_blocker_text.py",
+    "tests/team_view/product-execution.test.cjs",
+    "tests/team_view/browser/product-execution.test.cjs",
+    ".trellis/spec/core/web-console.md"
+  ],
+  "constraints": [
+    "复用既有 Python/JS 精确展示映射，不更改 producer、状态机、Schema、审批或重试预算",
+    "仅翻译已确认的 14 条固定上游控制提示，不推断动态错误或改写任意用户正文",
+    "不修改历史原始 bytes/hash、journal、Operation、checkpoint 或数据库",
+    "不调用生产写 API、部署、commit 或 push，不运行全量测试"
+  ],
+  "verification": {
+    "good": "当前产品审批、执行摘要及历史操作提示显示中文，Python/JS 翻译契约一致。",
+    "base": "已中文及未知正文保持原值，精确产品审批按钮与当前 checkpoint 不变。",
+    "bad": "因文案修复改写封存事实、宽泛翻译用户正文或改变审批/阶段流转。"
+  },
+  "rollback": "回退本次展示代码及文档提交，服务空闲后重启 Python reader 并刷新前端；无需改库。"
+}

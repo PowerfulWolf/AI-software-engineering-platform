@@ -795,9 +795,9 @@ function productExecutionSummary(item) {
   section.append(
     el("p", "交付阶段 · " + deliveryPhase(item), "execution-phase"),
     el("p", "当前执行 · " + label(executionPresentationStatus(execution)), "execution-state"),
-    el("p", execution.reason),
+    el("p", humanizeBlockingText(execution.reason)),
     el("p", "处理方 · " + {product: "产品负责人", team: "ASE 团队", engineering: "工程团队"}[execution.responsibility], "muted"),
-    el("p", "下一步 · " + execution.next_action, "muted"),
+    el("p", "下一步 · " + humanizeBlockingText(execution.next_action), "muted"),
   );
   if (execution.available_at)
     section.append(el("p", "计划重试时间 · " + time(execution.available_at), "muted"));
@@ -1270,6 +1270,20 @@ function humanizeBlockingText(value) {
   const text = String(value || "").trim();
   if (!text) return "暂未记录具体原因。";
   const exact = {
+    "Prepare every selected directory.": "准备所有已选择的代码目录。",
+    "Requirement project prepared. Discuss your requirement in this workspace.": "需求项目已准备好，请在此工作区描述并讨论需求。",
+    "Discover one product across all prepared directories.": "Product Agent 将梳理所有已准备代码目录的统一需求。",
+    "Revise the unified ProductSpec.": "Product Agent 将根据本次回复修订统一产品规格。",
+    "Reply to the Product Agent questions.": "请回答 Product Agent 的问题。",
+    "Review product_spec and approve this exact checkpoint, or reply with revisions.": "请审阅本版产品规格并批准，或回复需要修改的内容。",
+    "Design all participating repositories against the approved product.": "Designer 将依据已批准的产品规格设计所有参与交付的代码仓库。",
+    "Plan the bounded repository order and joint integration checks.": "Planner 将制定有界的仓库交付顺序与联合集成检查计划。",
+    "Execute each repository with independent QA and Reviewer.": "按计划交付各代码仓库，并由独立 QA 和 Reviewer 验证。",
+    "Resume with the exact approved knowledge resolution.": "使用本次已批准的精确知识解答继续交付。",
+    "Resolve the recorded project specification conflicts before a new intake.": "请先处理已记录的项目规范冲突，再开始接收新需求。",
+    "Requirement closed by user; delivery history is retained.": "需求已由用户关闭，交付历史仍完整保留。",
+    "Requirement restarted; continue delivery from the retained checkpoint.": "需求已重新打开，请从保留的交付进度继续。",
+    "Design recheck requested. Continue to inspect the retained questions against approved Product facts and exact repository revisions. This is not approval of proposed behavior changes; budgets are unchanged.": "已请求重新核对设计。请继续依据已批准的产品事实和精确仓库版本检查保留的问题。这不代表批准拟议的行为变更，执行预算保持不变。",
     "Designer stopped safely (DesignerOutputRejected)": "技术设计输出未通过校验（DesignerOutputRejected），请检查设计及失败记录。",
     REQUEST_HUMAN: "需要人工处理后再继续交付。",
     "A child delivery or integration requires recovery.": "子交付或联合集成需要恢复。",
@@ -1496,7 +1510,7 @@ function requestBlockerSection(request) {
   const next = el("div", undefined, "request-blocking-next");
   next.append(
     el("span", "建议操作", "request-blocking-kicker"),
-    el("p", summary.suggestedAction),
+    el("p", humanizeBlockingText(summary.suggestedAction)),
   );
   section.append(next);
   if (summary.approval)
@@ -7021,7 +7035,7 @@ function appendEngineeringExecutionDetails(target, technical, details) {
     if (details.operator_id) target.append(el("p", "实际处理者 · " + details.operator_id, "muted"));
     target.append(el("p", "此记录是工程决定；实际执行和验收结果以之后的角色报告为准。", "muted"));
   } else if (details.kind === "engineering_disposition_record") {
-    if (details.next_action) target.append(el("p", "下一步 · " + details.next_action));
+    if (details.next_action) target.append(el("p", "下一步 · " + humanizeBlockingText(details.next_action)));
     technical.append(el("p", "工程原因类型 · " + details.rejection_code, "paths"));
   } else if (details.kind === "verifier_preparation_checkpoint") {
     target.append(el("p", "角色模型调用之前的验证准备 · " + {
@@ -7052,7 +7066,7 @@ function requestOperationHistory(panel, request) {
     const item = viewBlock(el("li", undefined, "execution-history-entry"), "operation:" + record.operation_id, record);
     item.append(el("strong", label(record.intent.action)), badge(record.status), el("p", time(record.updated_at), "muted"));
     if (record.error_summary) item.append(el("p", humanizeBlockingText(record.error_summary), "error"));
-    if (record.result?.next_action) item.append(el("p", record.result.next_action));
+    if (record.result?.next_action) item.append(el("p", humanizeBlockingText(record.result.next_action)));
     const technical = engineeringDetails("操作工程详情", record.operation_id);
     technical.append(el("p", "操作 · " + record.operation_id, "paths"));
     if (record.intent.expected_checkpoint_sha256)

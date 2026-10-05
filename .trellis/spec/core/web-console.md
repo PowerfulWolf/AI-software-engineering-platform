@@ -9,6 +9,35 @@ Operation 持久化或 `ase-console` 生产装配时必须遵守本规范。只�
 
 v0.1 是可信本机、单用户、loopback 控制台，不是远程多租户控制面。
 
+### 上游阶段提示的中文读侧展示（2026-10-05）
+
+`localize_blocking_text(value: str | None) -> str | None` 与浏览器兼容函数
+`humanizeBlockingText(value) -> string` 继续作为既有读侧文案入口。`multi_directory/service.py`
+封存的 14 条固定英文上游 `next_action` 使用有限精确字面映射：准备与讨论、Product 回复/修订/
+审批、批准进入设计、设计重检、进入计划/执行、已批准知识恢复、项目规范冲突及关闭/重新打开。
+Python reader 的 `next_action`、`blocker`、execution 派生提示，以及尚未重启 reader 时的浏览器
+展示须保持中文语义一致，不推断阶段提示已成为真实角色运行或已批准事实。
+
+`productExecutionSummary` 的原因和下一步、`requestBlockerSection` 的建议操作、历史 Operation
+下一步与工程记录下一步使用同一 renderer。原 RequestView、Operation、journal、checkpoint、
+审批与诊断 bytes/hash 不改变。翻译展示历史提示并不把它变成当前阻塞，也不删除历史。
+
+| 输入 | 展示契约 |
+| --- | --- |
+| 待产品审批的固定英文提示 | “请审阅本版产品规格并批准，或回复需要修改的内容。”；原精确审批控件保持 |
+| 关闭/重新打开、准备/设计/计划固定提示 | 中文阶段下一步；不能据此猜测调用正在运行 |
+| 用户正文引用固定句子、未知动态错误 | 保留原文；不得新增宽泛全文替换或猜测错误原因 |
+| 当前 reader 未重启、历史 Operation 仍为英文 | 浏览器精确映射兼容展示，原投影对象不被修改 |
+
+测试：`test_blocker_text.py` 参数化验证有限集合、用户引用保留与实际 JavaScript renderer 一致；
+`product-execution.test.cjs` 验证摘要/建议路径；`browser/product-execution.test.cjs` 验证真实
+待产品审批 DOM、原事实未改变及产品审批按钮保持。Good：旧事实中文展示、仍绑定原 checkpoint；
+Base：已中文及未知正文不变；Bad：改写 journal 或改变审批事实来修文案。
+
+存量数据无需迁移或改库，所有原封存事实完整保留。前端资产更新后刷新页面，Python reader
+在当前 Operation 自然结束且服务空闲后重启即可更新 API 投影。无需重建 Requirement、改预算
+或重复批准。回滚恢复本次展示代码，在空闲时重启 reader 并刷新前端。
+
 ## 2. Signatures
 
 ```python
