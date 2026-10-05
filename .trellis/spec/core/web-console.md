@@ -9,6 +9,59 @@ Operation 持久化或 `ase-console` 生产装配时必须遵守本规范。只�
 
 v0.1 是可信本机、单用户、loopback 控制台，不是远程多租户控制面。
 
+### 跨阶段交付操作的当前进展与完整历史（2026-10-05）
+
+Scope：`src/ai_software_engineer/team_view/app.js` 的需求操作记录与 ACTIVE 通知。一个
+`CONTINUE_DELIVERY` 可以跨 Designer/Planner/Coder/QA/Reviewer，Operation 是命令执行事实，
+原动作名、RUNNING 和更新时间不能被解释为交付一直停在同一阶段。
+
+签名：`currentOperationProgress(operation, request) -> {title, reason, responsibility, nextAction} | null`、
+`operationPurpose(operation) -> string | null`；`activeOperation(deliveryId, projectId = null)` 在
+当前节点、执行准备和 live progress 调用中必须传入 Project，避免另一 Project 的同名 ID
+排在列表前面而遮住本项目工作。审批/恢复门禁保持原契约。
+
+- live progress 只绑定同 `request.id`、`request.project_id`、当前 active `operation_id`，且必须
+  `status=RUNNING` 并属于 `deliveryOperationActions`。`deliveryPhase` 和 `requestNodeExecution`
+  派生当前阶段与节点状态；当前等待/过期/知识/产品决定/工程 UNKNOWN 的优先级保持。
+- 当前行主标题是“当前阶段 · 计划编排 · 执行中”等；副行保留“发起操作 · 继续交付”，另标
+  “操作状态”和“操作更新”。阶段进展来自 Requirement/Task，时间来自原 Operation，不能
+  伪造阶段更新时间。有限动作目的只是命令意图，例如 Continue 为“接续已保存的交付进度”，
+  不无条件宣称产品已批准、前一阶段已完成或验收通过。
+- 原因/处理方/下一步只复用当前节点和 typed execution；未知工程态不能称为自动恢复，
+  产品待确认不能统一写“无需产品操作”。当前 ACTIVE 通知复用同一 progress，保持原
+  `operationNoticeKey`，已确认的 ACTIVE 不随阶段变化再次弹出。
+- 历史 SUCCEEDED/FAILED/INTERRUPTED 保留原命令结果、诊断和下一步，不附当前需求阶段。
+  QUEUED 只显示等待 Manager 处理；lifecycle、工程调查及无关 Project/Requirement 不附
+  本次交付进展。记录仍完整保留，不能截为八条。
+- `requestOperationHistory` 的列表必须为 keyed `viewGroup`，行 `viewBlock` 签名必须包含
+  `{record, progress}`。Requirement/Task-only 更新刷新当前行，原封存历史行保留 DOM；
+  排障 details 沿原 operation key 保留展开状态。没有 keyed 列表时行签名不会参与 reconcile。
+- `operation_id`、`intent.expected_checkpoint_sha256` 默认位于折叠的“排障信息（供工程人员
+  使用）”，摘要标“发起操作时的需求版本摘要”，不是最新阶段版本或产品需填写的信息。
+  原 ID、hash、journal 与审核历史不修改。
+
+| 输入 | 展示与禁止行为 |
+| --- | --- |
+| 同一 RUNNING Operation，DESIGNING→PLANNING | 主标题更新技术设计→计划编排，保留原动作/status/time/input摘要 |
+| 同一 Operation，IMPLEMENTING→QA→REVIEW + 有效角色 claim | 实现→测试→评审，历史 row 不被整体替换 |
+| RUNNING 命令仍收尾，但当前 WAITING/product决定 | 当前阻塞/待审批及真实产品下一步，原命令状态另列 |
+| native UNKNOWN/READY，或另一 Project 的同ID先出现 | 工程处理/已排队或本项目真实准备态，不能冒充模型运行 |
+| QUEUED/终态历史/工程/lifecycle | 不附当前阶段，不从原输入摘要猜新进度 |
+| 当前 ACTIVE 通知已确认后阶段变化 | 历史行刷新，通知保持关闭；未确认通知内容随阶段更新 |
+
+Good：同一继续操作进入计划后产品能看见“计划编排 · 执行中”，工程人员仍可展开原输入版本。
+Base：旧 Operation 没有 result 时仍保留动作/status/time，缺少当前匹配事实不附 live progress。
+Bad：改写 Continue 动作名为“计划”、用旧成功命令推断 QA 通过、为所有历史记录套最新阶段，
+或只改 row signature 却留下未 keyed 的父列表。
+
+验证：`operation-progress.test.cjs` 对相同 Operation bytes、Project/Req/当前身份、未知/排队/
+准备/业务等待做矩阵断言；真实 Chrome `browser/execution-history.test.cjs` 对跨五阶段轮询、
+历史 DOM 身份、details 展开、ID/hash默认隐藏、通知更新与不重弹做断言。运行同包的
+product-execution/engineering-wait/ui 与 browser/product-execution/polling-state 增量回归。
+
+存量数据无需迁移或改库；只更新前端资产并刷新即可读取原需求，不重启正在执行的角色、
+不重复业务审批。回滚展示资产并刷新，原命令、预算、工作区及审批事实完整保留。
+
 ### 上游阶段提示的中文读侧展示（2026-10-05）
 
 `localize_blocking_text(value: str | None) -> str | None` 与浏览器兼容函数

@@ -414,10 +414,11 @@ const operationTarget = (operation) =>
 const currentProjectId = () => snapshot?.selected_project_id || null;
 const projectSwitchPending = () =>
   requestedProjectId !== null && requestedProjectId !== currentProjectId();
-const activeOperation = (deliveryId) =>
+const activeOperation = (deliveryId, projectId = null) =>
   operations.find(
     (operation) =>
       operationTarget(operation) === deliveryId &&
+      (!projectId || operation.intent.project_id === projectId) &&
       ["QUEUED", "RUNNING"].includes(operation.status),
   );
 const latestOperation = (deliveryId) =>
@@ -793,6 +794,32 @@ function deliveryPhase(item) {
   return {IMPLEMENTING: "实现", QA: "测试", REVIEW: "评审", CONTINUE_REQUIRED: "实现",
     QUEUED: "实现", DELIVERING: "实现", VERIFY_QA: "候选测试", VERIFY_REVIEW: "候选评审", INTEGRATING: "联合验收"}[status] || label(status);
 }
+function operationPurpose(operation) {
+  return {
+    PRODUCT_REPLY: "记录产品回复并继续梳理需求。",
+    PRODUCT_APPROVAL: "确认本版产品规格并推进后续交付。",
+    CONTINUE_DELIVERY: "接续已保存的交付进度。",
+    RECOVER_DESIGN: "处理本次技术设计恢复。",
+    RECHECK_DESIGN: "核对保留的设计问题与产品需求。",
+  }[operation.intent.action] || null;
+}
+function currentOperationProgress(operation, request) {
+  if (!request || operation.status !== "RUNNING" || !deliveryOperationActions.has(operation.intent.action) ||
+      operationTarget(operation) !== request.id || operation.intent.project_id !== request.project_id ||
+      activeOperation(request.id, request.project_id)?.operation_id !== operation.operation_id) return null;
+  const node = requestNodeExecution(request);
+  const execution = request.execution;
+  const responsibility = node.responsibility || (node.requiresEngineeringCheck ? "engineering"
+    : ["WAITING_PRODUCT_REPLY", "WAITING_PRODUCT_APPROVAL"].includes(request.stage) ? "product" : execution?.responsibility);
+  return {
+    title: `当前阶段 · ${deliveryPhase(request)} · ${node.label}`,
+    reason: node.upstreamProcessing ? "当前节点正在执行，请等待本阶段处理完成。"
+      : humanizeBlockingText(node.reason || execution?.reason || request.blocker),
+    responsibility: {product: "产品负责人", team: "ASE 团队", engineering: "工程团队"}[responsibility] || null,
+    nextAction: node.upstreamProcessing ? "请等待本轮处理完成。"
+      : humanizeBlockingText(node.nextAction || execution?.next_action || request.next_action),
+  };
+}
 function productExecutionSummary(item) {
   if (!item.execution) return null;
   const execution = item.execution;
@@ -850,7 +877,7 @@ function preparingTaskExecution(task) {
       waitingExecutionStep(task) || interruptedExecution(task) ||
       ["WAITING", "STOPPED", "INTERRUPTED"].includes(task.execution?.state)) return false;
   const request = requestById(task.request_id);
-  const operation = request && activeOperation(request.id);
+  const operation = request && activeOperation(request.id, request.project_id);
   return Boolean(operation?.status === "RUNNING" && operation.intent.project_id === request.project_id &&
     deliveryOperationActions.has(operation.intent.action));
 }
@@ -956,7 +983,7 @@ function requestNodeExecution(request) {
   if (request.stage === "CLOSED") return {state: "closed", label: "已关闭", status: "CLOSED"};
   const execution = request.execution;
   const tasks = currentRequestTasks(request);
-  const active = activeOperation(request.id);
+  const active = activeOperation(request.id, request.project_id);
   const operation = active && active.intent.project_id === request.project_id &&
     deliveryOperationActions.has(active.intent.action) ? active : null;
   const waiting = tasks.find(task => waitingExecutionStep(task));
@@ -2650,6 +2677,7 @@ function operationNoticeFor(operation) {
   const request = snapshot && targetId ? requestById(targetId) : null;
   const target = request && request.project_id === operation.intent.project_id
     ? targetId : null;
+  const progress = currentOperationProgress(operation, request);
   const needsHumanAttention = operationNeedsHumanAttention(operation);
   const knowledgeApproved =
     needsHumanAttention &&
@@ -2667,6 +2695,9 @@ function operationNoticeFor(operation) {
       message:
         operation.status === "QUEUED"
           ? "操作已安全接收，正在等待 Manager 执行。关闭弹窗不会中断任务。"
+          : progress
+            ? [progress.title, progress.reason, progress.responsibility && "处理方 · " + progress.responsibility,
+              progress.nextAction && "下一步 · " + progress.nextAction, "关闭弹窗不会改变交付状态。"].filter(Boolean).join("\n")
           : operation.intent.action === "INSPECT_DELIVERY_WAIT"
             ? "工程团队正在核验原执行与现场。调查期间保留原等待状态，调查不会产生验收结论。"
           : operation.intent.action === "RESOLVE_DELIVERY_WAIT"
@@ -7276,16 +7307,29 @@ function requestOperationHistory(panel, request) {
   const section = viewGroup(el("section", undefined, "detail-section"), "requirement-operation-history");
   section.append(el("h2", "操作记录（完整历史）"),
     el("p", `共 ${records.length} 条操作。操作成功仅表示命令返回，交付阶段和验收结果以执行记录为准。`, "muted"));
-  const list = el("ol", undefined, "execution-history");
+  const list = viewGroup(el("ol", undefined, "execution-history"), "requirement-operation-history-list");
   for (const record of records) {
-    const item = viewBlock(el("li", undefined, "execution-history-entry"), "operation:" + record.operation_id, record);
-    item.append(el("strong", label(record.intent.action)), badge(record.status), el("p", time(record.updated_at), "muted"));
+    const progress = currentOperationProgress(record, request);
+    const item = viewBlock(el("li", undefined, "execution-history-entry"), "operation:" + record.operation_id, {record, progress});
+    if (progress) {
+      item.append(el("strong", progress.title), el("p", "发起操作 · " + label(record.intent.action), "muted"));
+      if (progress.reason) item.append(el("p", "当前原因 · " + progress.reason));
+      if (progress.responsibility) item.append(el("p", "处理方 · " + progress.responsibility, "muted"));
+      if (progress.nextAction) item.append(el("p", "下一步 · " + progress.nextAction));
+    } else item.append(el("strong", label(record.intent.action)));
+    const purpose = operationPurpose(record);
+    if (purpose) item.append(el("p", "操作目的 · " + purpose, "muted"));
+    const status = el("p", "操作状态 · ", "muted");
+    status.append(badge(record.status));
+    item.append(status, el("p", "操作更新 · " + time(record.updated_at), "muted"));
+    if (record.status === "QUEUED") item.append(el("p", "操作已接收，等待 Manager 处理。", "muted"));
     if (record.error_summary) item.append(el("p", humanizeBlockingText(record.error_summary), "error"));
-    if (record.result?.next_action) item.append(el("p", humanizeBlockingText(record.result.next_action)));
-    const technical = engineeringDetails("操作工程详情", record.operation_id);
+    if (!progress && record.result?.next_action) item.append(el("p", humanizeBlockingText(record.result.next_action)));
+    const technical = engineeringDetails("排障信息（供工程人员使用）", record.operation_id);
+    technical.append(el("p", "这些标识用于工程核验，无需产品负责人填写。", "muted"));
     technical.append(el("p", "操作 · " + record.operation_id, "paths"));
     if (record.intent.expected_checkpoint_sha256)
-      technical.append(el("p", "需求记录摘要 · " + record.intent.expected_checkpoint_sha256, "paths"));
+      technical.append(el("p", "发起操作时的需求版本摘要 · " + record.intent.expected_checkpoint_sha256, "paths"));
     const proof = record.result?.engineering_wait_investigation;
     if (proof) {
       appendEngineeringInvestigation(item, proof);

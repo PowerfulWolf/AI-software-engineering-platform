@@ -68,3 +68,58 @@ readiness/UI contracts. Use `node --check` and `git diff --check`. No full repos
 Existing data: no migration or journal rewrite. Refresh the browser once to load the compatible
 frontend; normal polling then preserves in-tab state. A full browser reload still starts a new view.
 Rollback the frontend change and refresh; original polling behavior returns, persistent facts remain.
+
+## Live progress inside an immutable Operation row (2026-10-05)
+
+`currentOperationProgress(operation, request)` is a pure read-side derivation shared by the
+active operation history and its visible notification. Its `title`, `reason`, `responsibility`
+and `nextAction` use `deliveryPhase(request)` and `requestNodeExecution(request)`. A live
+projection requires the exact Requirement/Project and current RUNNING delivery operation;
+`activeOperation(deliveryId, projectId)` performs the scoped match. Input checkpoint digests
+identify the version at command submission, not the latest phase after that command advances.
+
+The original history renderer contained no current-phase display; its list also lacked a
+`viewGroup`, so the row keys alone did not enable child reconciliation. The reported fixed
+action label must not be attributed to an already-running row cache. Once the list is a
+keyed group, nested blocks have their own dependencies: invalidating `pollingDetailFacts()`
+is insufficient if a retained child only includes immutable command facts. The new row
+must include `{record, progress}`. Do not change Operation bytes, timestamps or hashes to
+trigger rendering. Native role phase changes must also participate even when the command
+remains RUNNING throughout.
+
+| Input change | Required result | Regression assertion |
+| --- | --- | --- |
+| Same Operation object, DESIGNING → PLANNING | Current row changes from technical design to planning | Original serialized Operation identical; row title and signature change |
+| Same command, Coder → QA → Reviewer | Current phase follows the actual current Task | Implementation, testing and review titles update without invented verdicts |
+| Current wait while command is RUNNING | Show real blocked phase, responsibility and next action | Product decision is not replaced by a generic request to wait |
+| Sealed history, queued command or unrelated scope/action | No current-phase overlay | Historical outcomes unchanged; foreign Project cannot steal active match |
+| Visible ACTIVE notice changes stage | Update its content; preserve acknowledgment key | Closed notice does not reopen during later phase changes |
+| Opaque ID and command-input digest | Default collapsed engineering troubleshooting details | Product text describes progress; disclosure identifies the submission version |
+
+Good: a single Continue advances from Designer to Planner; the product user sees the current
+planning phase and next step, while the initiating action and input version remain auditable.
+Base: completed, failed or interrupted records keep their own command outcome without borrowing
+today's Requirement stage. Bad: label a new stage only during a full reload, stamp the current
+checkpoint onto old input facts, infer model liveness from the Operation, or replay notifications
+under a new per-stage acknowledgment key.
+
+### Bug analysis and prevention
+
+- **Root cause (C/D/E):** the Operation-history renderer treated the command label and status
+  as complete progress, leaving the product user with only an action and opaque IDs. It omitted
+  the shared Requirement phase. Row signatures also omitted derived facts, but the ungrouped
+  list meant this was a latent incremental-rendering defect, not proof of the observed old label.
+- **Earlier scope:** node/card fixes introduced shared execution facts, but did not update the
+  separate Operation-history renderer or test one unchanged command across multiple phases.
+- **Prevention:** shared live progress, complete nested signatures, and real Chrome polling
+  tests with unchanged Operation bytes. Review every `viewBlock` that renders derived cross-entity
+  values for dependencies on those entities; keep immutable history distinct from live overlays.
+- **Related surface:** the active notification consumes the same progress and retains the
+  original ACTIVE key. This does not introduce durable stage events, backend execution authority,
+  invented completion time, or a model heartbeat.
+
+Executable coverage: `tests/team_view/operation-progress.test.cjs` and
+`tests/team_view/browser/execution-history.test.cjs`, plus affected polling and product-state
+regressions. No template mirror exists in this repository; the maintained spec and tests are
+the prevention boundary. Existing data needs no migration: update frontend assets and refresh;
+rollback assets without modifying history or restarting an active role.

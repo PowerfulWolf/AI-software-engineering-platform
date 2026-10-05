@@ -147,7 +147,8 @@ test("Task updates retain expanded artifacts in the same modal", async t => {
   await h.tick();
   assert.equal(await h.page.locator(".task-detail-dialog").evaluate(node => node === window.polledTaskDialog), true);
   assert.equal(await document.evaluate(node => node === window.polledTaskDocument && node.open), true);
-  assert.match(await h.page.locator(".task-detail-dialog").innerText(), /测试中/);
+  assert.equal(await h.page.evaluate(() => snapshot.tasks.find(item => item.id === "task_fixture").status), "QA");
+  assert.match(await h.page.locator(".task-detail-dialog").innerText(), /等待工程处理/);
 });
 
 test("a new checkpoint removes a stale exact approval instead of reusing its control", async t => {

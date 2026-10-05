@@ -1,7 +1,7 @@
 // Focused browser contract for complete QA/Review/Coder execution history.
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
-const { ui } = require("./fixture.cjs");
+const { ui, operation } = require("./fixture.cjs");
 
 const entry = (taskId, index, kind = "state_event", details = {}) => ({
   id: `entry_${taskId}_${index}`,
@@ -11,6 +11,66 @@ const entry = (taskId, index, kind = "state_event", details = {}) => ({
   summary: kind === "artifact" ? "QA 报告 · FAIL" : `状态 · 第 ${index} 轮`,
   source_uri: `${kind}://${taskId}/${index}`,
   details,
+});
+
+test("one unchanged running operation follows design, planning and each native role during polling", async (t) => {
+  const h = await ui(t);
+  await h.requests();
+  const request = h.team.requests[0];
+  const active = operation("RUNNING", {intent: {action: "CONTINUE_DELIVERY", project_id: request.project_id,
+    delivery_id: request.id, expected_checkpoint_sha256: "a".repeat(64)}});
+  h.state.operations = [operation("SUCCEEDED", {operation_id: "history_old"}), active,
+    operation("RUNNING", {operation_id: "foreign_project", intent: {...active.intent, project_id: "other_project"}})];
+  request.checkpoint_sha256 = "b".repeat(64);
+  request.execution = {state: "UNKNOWN", responsibility: "team", reason: "尚无执行器心跳。",
+    next_action: "核验执行事实。", action_required: false};
+  const original = JSON.stringify(active);
+  const currentRow = h.page.locator("#detail .execution-history-entry").filter({hasText: "operation_fixture"});
+  const oldRow = h.page.locator("#detail .execution-history-entry").filter({hasText: "history_old"});
+  for (const [stage, status, role, phase] of [["DESIGNING", null, null, "技术设计"], ["PLANNING", null, null, "计划编排"],
+    ["DELIVERING", "IMPLEMENTING", "coder", "实现"], ["DELIVERING", "QA", "qa", "测试"], ["DELIVERING", "REVIEW", "reviewer", "评审"]]) {
+    request.stage = stage;
+    h.team.tasks = status ? [{id: "task_current", project_id: request.project_id, request_id: request.id, title: "当前任务",
+      status, terminal: false, last_activity: "2026-10-05T13:00:00Z", scope: {root: "/fixture", selected_paths: ["."]},
+      role_queue: [{role, status: "RUNNING", lease_liveness: "LEASE_VALID"}], assignments: [], runs: [], documents: [], timeline: []}] : [];
+    await h.tick();
+    if (stage === "DESIGNING") {
+      await h.page.evaluate(() => showDetail("request", "request_fixture"));
+      await h.close();
+      await currentRow.locator("details summary").click();
+      await oldRow.evaluate(node => {window.oldOperationRow = node;});
+    }
+    assert.equal(await currentRow.locator("strong").first().innerText(), `当前阶段 · ${phase} · 执行中`);
+    assert.match(await currentRow.innerText(), /发起操作 · 继续交付/);
+    assert.match(await currentRow.innerText(), /发起操作时的需求版本摘要/);
+    assert.equal(await currentRow.locator("details").evaluate(node => node.open), true, "expanded engineering details survive progress changes");
+    assert.equal(await oldRow.evaluate(node => window.oldOperationRow === node), true, "unchanged sealed history retains its DOM");
+    assert.doesNotMatch(await oldRow.innerText(), /当前阶段 ·/);
+    assert.equal(JSON.stringify(active), original);
+  }
+  await currentRow.locator("details summary").click();
+  assert.doesNotMatch(await currentRow.innerText(), /operation_fixture|a{64}|b{64}/);
+  assert.match(await currentRow.innerText(), /排障信息（供工程人员使用）/);
+  assert.equal(await h.page.locator("#detail .execution-history-entry").count(), 2);
+  assert.equal(await h.page.locator("#notification").isVisible(), false, "acknowledged ACTIVE notice does not reopen at the next phase");
+});
+
+test("visible active notification follows phase while preserving its existing acknowledgement identity", async (t) => {
+  const h = await ui(t);
+  await h.requests();
+  const request = h.team.requests[0];
+  request.stage = "DESIGNING";
+  h.state.operations = [operation("RUNNING")];
+  await h.tick();
+  const notification = h.page.locator("#notification");
+  assert.match(await notification.innerText(), /当前阶段 · 技术设计 · 执行中/);
+  request.stage = "PLANNING";
+  await h.tick();
+  assert.match(await notification.innerText(), /当前阶段 · 计划编排 · 执行中/);
+  await h.close();
+  request.stage = "INTEGRATING";
+  await h.tick();
+  assert.equal(await notification.isVisible(), false);
 });
 
 test("task detail renders every round with QA findings and Coder feedback lineage", async (t) => {

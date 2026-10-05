@@ -1,0 +1,11 @@
+{
+  "id": "operation-live-progress-20261005",
+  "title": "交付操作记录实时展示当前阶段和产品下一步",
+  "status": "completed",
+  "phase": "independent_review_passed",
+  "created_at": "2026-10-05",
+  "owner": "codex",
+  "scope": ["src/ai_software_engineer/team_view/app.js", "tests/team_view/operation-progress.test.cjs", "tests/team_view/browser/execution-history.test.cjs", "tests/team_view/browser/polling-state.test.cjs", ".trellis/spec/core/web-console.md", ".trellis/spec/core/incremental-polling.md"],
+  "constraints": ["仅只读展示，不操作生产、修改持久事实、提交或部署", "当前进展精确绑定同 Project、Requirement 与当前 RUNNING 交付 Operation", "完整保留原动作、命令状态、输入版本、时间及历史", "不推测模型在线、阶段完成、审批或验收通过", "仅增量 Node/Chrome 检查"],
+  "rollback": "回退前端展示资产并刷新；原 Operation、Requirement journal、审批、执行事实与工作区保持。"
+}
