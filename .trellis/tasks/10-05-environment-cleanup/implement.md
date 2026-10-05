@@ -10,9 +10,11 @@
 - 已删除425个旧ASE普通临时文件，逻辑85498138bytes、占盘86536192bytes，零identity漂移/占用项被删除。
 - 临时测试目录待Project增量完成后清理，不碰系统、Codex运行目录或生产服务环境。
 
-## 待完成
+## 存量数据处置与最终结果
 
-Project retirement契约、增量/独立检查、提交推送、空闲更新、生产退休及前后API/页面验证。所有生产记录处置通过typed退休入口，不直接SQL写入、不改旧manifest或Task/verdict；归档保留原Requirement退休事实。
+已通过精确、typed空Project退休入口删除 project_ase_self_validation_20260929。Team永久receipt先发布，原sidecar整体移入project-archives；58个inventory条目（30文件）的type/mode/byte SHA前后完全相同。原Project/Repository manifests、已删除K1的Requirement journal和tombstone保持原字节；旧ID已永久拒绝打开。未写SQL、未改Task/verdict/审批，删除操作前后源码Git HEAD/status/worktree一致。
+
+重启后API和完整刷新页面均仅显示ai-project、app-cloud、codex。其他三Project的完整需求/Task/候选/角色历史事实与清理前snapshot一致（仅排除as_of和Project catalog列表）；262条Operations逐字结构相同、零QUEUED/RUNNING。未创建需求、未恢复业务交付、未调用ASE生产模型。
 
 ## 增量验证完成
 
@@ -28,3 +30,17 @@ Project retirement契约、增量/独立检查、提交推送、空闲更新、�
 ## 真实初始化目录兼容
 
 首次生产退休被检查拒绝，receipt未发布、archive未创建，已恢复服务且262条Operations保持原样。state/product、state/design、state/planning以及spec-conflicts/project-baseline-compilations由标准store/编译查询初始化为精确空目录。补最小识别：只允许这四个标准、非symlink且完全空的目录，其他文件/未知目录/更深子目录仍拒绝。增量retirement+Schema回归76 passed，真实形状定向10 passed，Ruff/format/strict Mypy通过。失败前置命令审计完整保留在外置maintenance/failed-preflight。
+
+## 清理与页面验收
+
+- 425个旧普通文件、31个旧测试/缓存目录、2份已有持久副本的临时审计JSON全部移除，共458个原计划顶层/tmp条目。清理内容415,518,235 bytes（约396 MiB）；旧普通文件及目录测得原占盘540,409,856 bytes，未将测得占盘等同APFS实际空闲空间增量。
+- 完成后的增量验证scratch另清理：/tmp/ase-project-retirement-check-20261005及两个本轮pytest系统临时目录。/tmp旧ASE相关顶层条目为零；系统、Codex及不明用途文件保留。
+- 23条已不存在路径的Git worktree登记已prune；实际存在的worktree/branch refs未删。
+- 唯一未提交Git测试现场整体保留在外置maintenance/preserved；稳定Playwright缓存位于Library/Caches/ase-validation/node，不再依赖/tmp。
+- 真实Chrome页面完整刷新后3个Project正确。拦截所有非GET/HEAD/OPTIONS请求，实际零写请求、零pageerror、零API错误；已目视检查Project选择菜单截图。
+
+## 已知边界与回滚
+
+仅提供pre-execution空Project底层退休能力，没有页面删除按钮、一般Project删除或工程历史级联删除。已打开旧Project页面需完整刷新；当前team读取接口对旧ID沿用TEAM_UNAVAILABLE/503，未扩展通用错误/选择回退UI。活动页面和其余Project读取均正常。
+
+缓存可重建，唯一草稿有完整归档。永久退休不通过删receipt/改旧manifest恢复；若平台版本需要回退，保留退休reader/身份保护并优先向前修复。审计目录为/Users/zhangjunshuai/workspace/code/.ase/maintenance/environment-cleanup-20261005，Project原数据归档为同platform根下project-archives/project_ase_self_validation_20260929。上述外置事实未进入Git。
