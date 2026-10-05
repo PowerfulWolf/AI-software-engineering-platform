@@ -1,0 +1,9 @@
+{
+  "id": "team-snapshot-schema-sync-20261005",
+  "title": "同步团队快照静态Schema与真实typed输出",
+  "status": "completed",
+  "phase": "verified",
+  "created_at": "2026-10-05",
+  "owner": "codex",
+  "constraints": ["不修改运行模型", "完整精确Schema同步", "保留additionalProperties拒绝", "仅增量测试"]
+}

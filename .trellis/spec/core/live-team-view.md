@@ -853,7 +853,26 @@ uses its separate approved execution contract.
 `read_role_queue(cursor, *, task_id, repository_id, allocation_sha256, now) -> tuple[RoleQueueView, ...]`
 reads inside the existing READ ONLY SQL snapshot. `TaskView.role_queue` defaults to `()` for legacy
 Tasks. `RoleQueueView` carries work_item_id, role, attempt, status, agent_id, heartbeat_at,
-lease_expires_at, lease_liveness and wait_reason; schema parity is required.
+lease_expires_at, lease_liveness, wait_reason, wait_disposition and wait_disposition_sha256;
+`TaskView` also projects task_revision and task_intent_sha256. Schema parity is required.
+
+The static `schemas/team-snapshot.schema.json` is the complete `TeamSnapshot.model_json_schema()`
+plus its existing `$id` and JSON Schema dialect. Synchronize all reachable `$defs`, including typed
+`DeliveryDisposition` and its facts/action/responsibility contracts; do not patch only the top-level
+properties or drop valid read fields to satisfy an old schema. Keep every model's existing
+`additionalProperties=false`, required fields and nullable/default semantics. These four optional
+read fields accept legacy omission or explicit null without granting engineering authority.
+`to_wire()` continues to omit absent optional values. Exact digest/facts binding remains enforced
+by the typed domain validators and verified reader, rather than inferred from schema shape alone.
+
+Incremental schema gates: `test_live.py::test_wire_schema_and_extra_fields` and
+`test_snapshot_schema.py` require complete exact parity, a populated task/wait-disposition roundtrip,
+omitted/null legacy values, nested unknown-field rejection and wrong optional types. Regenerate only
+the owning schema and retain both `$id`/`$schema`; no SQL/journal migration is needed for a static
+declaration that lagged already-existing typed output. Reverting this declaration-only repair
+restores the former parity failure; preserve all durable facts and do not remove runtime fields
+to accommodate the old declaration. Running a multi-schema generator for this repair would touch
+unrelated contracts and is unnecessary.
 
 ### Contract and validation matrix
 
