@@ -33,6 +33,18 @@ Scope：`src/ai_software_engineer/team_view/app.js` 的需求操作记录与 ACT
 - 历史 SUCCEEDED/FAILED/INTERRUPTED 保留原命令结果、诊断和下一步，不附当前需求阶段。
   QUEUED 只显示等待 Manager 处理；lifecycle、工程调查及无关 Project/Requirement 不附
   本次交付进展。记录仍完整保留，不能截为八条。
+- `recordedOperationOutcome(operation)` 只读 SUCCEEDED 交付工作 Operation 的封存 `result.stage`，
+  主标题明示“操作已结束 · 当次交付已阻塞/等待处理”等。只有当次 result.stage=DONE 才显示
+  “当次需求已交付”；CLOSED 是已关闭，DESIGNING/PLANNING 等仅为当次停留阶段。没有结果、
+  未知阶段或非交付动作不猜完整交付。产品命令状态文案为“命令已完成”，原始 `SUCCEEDED`
+  在排障详情保留；该记录的完成命令 badge 采用局部静态中性样式，不能继承 current 蓝色，
+  也不能因命令成功变成绿色；当次阻塞主标题使用局部红色。命令返回成功不能作为产品交付
+  成功。封存 `result.diagnostic` 可作为
+  “当次原因”展示，后续 Requirement 已 DONE 也不覆盖旧 BLOCKED 记录。
+- 固定 `Designer did not publish a verified planning handoff` 使用 humanizeBlockingText 有限
+  精确映射，说明设计到计划的交接尚未通过校验，由工程团队核验具体原因并处理，不推断
+  实体文件丢失；原英文bytes不变，
+  用户正文引用或未知动态诊断不进行宽泛替换。该提示不授权产品批准技术恢复或改变状态。
 - `requestOperationHistory` 的列表必须为 keyed `viewGroup`，行 `viewBlock` 签名必须包含
   `{record, progress}`。Requirement/Task-only 更新刷新当前行，原封存历史行保留 DOM；
   排障 details 沿原 operation key 保留展开状态。没有 keyed 列表时行签名不会参与 reconcile。
@@ -47,6 +59,8 @@ Scope：`src/ai_software_engineer/team_view/app.js` 的需求操作记录与 ACT
 | RUNNING 命令仍收尾，但当前 WAITING/product决定 | 当前阻塞/待审批及真实产品下一步，原命令状态另列 |
 | native UNKNOWN/READY，或另一 Project 的同ID先出现 | 工程处理/已排队或本项目真实准备态，不能冒充模型运行 |
 | QUEUED/终态历史/工程/lifecycle | 不附当前阶段，不从原输入摘要猜新进度 |
+| SUCCEEDED + result.stage BLOCKED/WAITING_HUMAN | 当次交付阻塞/等待，不把命令成功展示为产品成功 |
+| SUCCEEDED + DONE/CLOSED/PLANNING/无result | 仅DONE是当次已交付，其余为关闭/当次停留/单纯命令完成 |
 | 当前 ACTIVE 通知已确认后阶段变化 | 历史行刷新，通知保持关闭；未确认通知内容随阶段更新 |
 
 Good：同一继续操作进入计划后产品能看见“计划编排 · 执行中”，工程人员仍可展开原输入版本。

@@ -803,6 +803,21 @@ function operationPurpose(operation) {
     RECHECK_DESIGN: "核对保留的设计问题与产品需求。",
   }[operation.intent.action] || null;
 }
+function recordedOperationOutcome(operation) {
+  if (operation.status !== "SUCCEEDED" || !deliveryOperationActions.has(operation.intent.action)) return null;
+  const stage = operation.result?.stage;
+  const outcomes = {
+    BLOCKED: "当次交付已阻塞", FAILED: "当次交付失败", WAITING_HUMAN: "当次交付等待处理",
+    WAITING_DEPENDENCY: "当次交付等待依赖", WAITING_PRODUCT_REPLY: "当次需求等待补充",
+    WAITING_PRODUCT_APPROVAL: "当次产品规格等待批准", WAITING_DELIVERY_FINALIZATION: "当次交付等待确认",
+    DONE: "当次需求已交付", CLOSED: "当次需求已关闭",
+  };
+  const stoppedStage = ["PRODUCT_DISCOVERY", "DESIGNING", "PLANNING", "DELIVERING", "INTEGRATING"].includes(stage);
+  const outcome = Object.hasOwn(outcomes, stage) ? outcomes[stage] : stoppedStage ? "当次停留阶段 · " + label(stage) : null;
+  if (!outcome) return null;
+  return {title: "操作已结束 · " + outcome,
+    className: ["BLOCKED", "FAILED"].includes(stage) || stage.startsWith("WAITING_") ? "error" : ""};
+}
 function currentOperationProgress(operation, request) {
   if (!request || operation.status !== "RUNNING" || !deliveryOperationActions.has(operation.intent.action) ||
       operationTarget(operation) !== request.id || operation.intent.project_id !== request.project_id ||
@@ -1472,6 +1487,7 @@ function humanizeBlockingText(value) {
   if (!text) return "暂未记录具体原因。";
   const exact = {
     "The console host stopped before the operation completed.": "服务在本次操作完成前已停止，操作已中断。已保存的交付进度和审批仍保留。",
+    "Designer did not publish a verified planning handoff": "设计到计划的交接尚未通过校验，当前交付已阻塞。由工程团队核验具体原因并处理。",
     "Prepare every selected directory.": "准备所有已选择的代码目录。",
     "Requirement project prepared. Discuss your requirement in this workspace.": "需求项目已准备好，请在此工作区描述并讨论需求。",
     "Discover one product across all prepared directories.": "Product Agent 将梳理所有已准备代码目录的统一需求。",
@@ -7310,24 +7326,36 @@ function requestOperationHistory(panel, request) {
   const list = viewGroup(el("ol", undefined, "execution-history"), "requirement-operation-history-list");
   for (const record of records) {
     const progress = currentOperationProgress(record, request);
+    const outcome = recordedOperationOutcome(record);
     const item = viewBlock(el("li", undefined, "execution-history-entry"), "operation:" + record.operation_id, {record, progress});
     if (progress) {
       item.append(el("strong", progress.title), el("p", "发起操作 · " + label(record.intent.action), "muted"));
       if (progress.reason) item.append(el("p", "当前原因 · " + progress.reason));
       if (progress.responsibility) item.append(el("p", "处理方 · " + progress.responsibility, "muted"));
       if (progress.nextAction) item.append(el("p", "下一步 · " + progress.nextAction));
+    } else if (outcome) {
+      item.append(el("strong", outcome.title, outcome.className), el("p", "发起操作 · " + label(record.intent.action), "muted"),
+        el("p", "记录的是当次操作结束时的交付状态；当前进度请查看上方交付流程。", "muted"));
     } else item.append(el("strong", label(record.intent.action)));
     const purpose = operationPurpose(record);
     if (purpose) item.append(el("p", "操作目的 · " + purpose, "muted"));
     const status = el("p", "操作状态 · ", "muted");
-    status.append(badge(record.status));
+    const commandStatus = badge(record.status);
+    if (record.status === "SUCCEEDED") {
+      commandStatus.textContent = "命令已完成";
+      commandStatus.className = "badge";
+    }
+    status.append(commandStatus);
     item.append(status, el("p", "操作更新 · " + time(record.updated_at), "muted"));
     if (record.status === "QUEUED") item.append(el("p", "操作已接收，等待 Manager 处理。", "muted"));
     if (record.error_summary) item.append(el("p", humanizeBlockingText(record.error_summary), "error"));
+    if (record.status === "SUCCEEDED" && deliveryOperationActions.has(record.intent.action) && record.result?.diagnostic)
+      item.append(el("p", "当次原因 · " + humanizeBlockingText(record.result.diagnostic), "error"));
     if (!progress && record.result?.next_action) item.append(el("p", humanizeBlockingText(record.result.next_action)));
     const technical = engineeringDetails("排障信息（供工程人员使用）", record.operation_id);
     technical.append(el("p", "这些标识用于工程核验，无需产品负责人填写。", "muted"));
     technical.append(el("p", "操作 · " + record.operation_id, "paths"));
+    technical.append(el("p", "原始命令状态 · " + record.status, "paths"));
     if (record.intent.expected_checkpoint_sha256)
       technical.append(el("p", "发起操作时的需求版本摘要 · " + record.intent.expected_checkpoint_sha256, "paths"));
     const proof = record.result?.engineering_wait_investigation;

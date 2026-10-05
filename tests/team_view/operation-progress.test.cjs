@@ -139,3 +139,46 @@ test("active notice follows exact phase without changing its acknowledgement key
   h.data.operation.intent.project_id = "other_project";
   assert.doesNotMatch(h.run("operationNoticeFor(data.operation).message"), /当前阶段 ·|计划编排/);
 });
+
+test("succeeded delivery history reports its sealed blocked, waiting or done result instead of product success", () => {
+  const h = harness();
+  const titles = {BLOCKED: "操作已结束 · 当次交付已阻塞", WAITING_HUMAN: "操作已结束 · 当次交付等待处理",
+    DONE: "操作已结束 · 当次需求已交付"};
+  for (const [stage, expected] of Object.entries(titles)) {
+    h.data.operation.status = "SUCCEEDED";
+    h.data.operation.result = {stage, next_action: "查看当次执行记录。"};
+    const original = JSON.stringify(h.data.operation);
+    const row = rows(h.render())[0];
+    assert.equal(row.children[0].textContent, expected);
+    assert.match(text(row), /发起操作 · 继续交付/);
+    assert.match(text(row), /命令已完成/);
+    assert.equal(descend(row).find(node => node.textContent === "命令已完成").className, "badge", "completed commands have a static neutral badge");
+    assert.doesNotMatch(text(row), /执行成功|当前阶段 ·/);
+    assert.equal(JSON.stringify(h.data.operation), original);
+    h.data.request.stage = "DONE";
+    assert.equal(rows(h.render())[0].children[0].textContent, expected, "later Requirement facts never overwrite the sealed outcome");
+  }
+  h.data.operation.result = null;
+  const noResult = text(rows(h.render())[0]);
+  assert.match(noResult, /命令已完成/);
+  assert.doesNotMatch(noResult, /当次需求已交付|当次交付已阻塞|当前阶段 ·|执行成功/);
+  for (const stage of ["DESIGNING", "PLANNING", "CLOSED", "unknown_result", "toString"]) {
+    h.data.operation.result = {stage, next_action: "查看当次记录。"};
+    assert.doesNotMatch(text(rows(h.render())[0]), /当次需求已交付|当前阶段 ·/);
+  }
+  h.data.operation.result = {stage: "DONE", next_action: "项目操作完成。"};
+  h.data.operation.intent.action = "CLOSE_REQUIREMENT";
+  assert.doesNotMatch(text(rows(h.render())[0]), /当次需求已交付/);
+});
+
+test("sealed outcome diagnostic and current missing planning handoff render exact Chinese without altering facts", () => {
+  const h = harness();
+  const original = "Designer did not publish a verified planning handoff";
+  h.data.operation.status = "SUCCEEDED";
+  h.data.operation.result = {stage: "BLOCKED", diagnostic: original, next_action: "工程团队核验交接记录后继续。"};
+  assert.match(text(rows(h.render())[0]), /当次原因 · 设计到计划的交接尚未通过校验，当前交付已阻塞/);
+  assert.match(h.run('humanizeBlockingText(data.operation.result.diagnostic)'), /由工程团队核验具体原因并处理/);
+  assert.equal(h.data.operation.result.diagnostic, original);
+  h.context.quoted = `用户原文引用：${original}`;
+  assert.equal(h.run("humanizeBlockingText(quoted)"), h.context.quoted);
+});

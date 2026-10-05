@@ -19,6 +19,14 @@ RUNNING不冒充native角色claim；产品等待/工程等待/排队优先。
 opaque ID和输入checkpoint折叠并明确为“发起操作时的需求版本摘要”。不生成阶段历史或
 百分比，不推断模型在线或已完成验收。通知保持原ACTIVE key，关闭后阶段变化不再弹出。
 
+生产续验发现SUCCEEDED + result.stage=BLOCKED的历史命令显示“执行成功”而忽略封存阶段。
+追加recordedOperationOutcome以原result.stage为唯一依据，显示当次阻塞/等待/交付结果，
+命令成功标签改为“命令已完成”，原SUCCEEDED放折叠审计。后续Req DONE不覆盖原BLOCKED。
+仅result.stage DONE表示当次交付；中间阶段/关闭/缺结果不推断完成。固定Designer missing
+planning handoff中文精确映射，原诊断保留，交接故障由工程处理，不新增技术审批。
+完成命令badge局部改为静态中性灰，阻塞标题局部CSS红色；不改全局badge，也不以命令完成
+把阻塞结果染绿。固定诊断只表达交接尚未通过校验，不推断实体文件缺失。
+
 # 影响与存量
 
 只读前端，无Schema/API/持久数据变化。正在运行的Planner保留；不生产写、不部署。

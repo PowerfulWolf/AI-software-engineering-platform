@@ -73,6 +73,38 @@ test("visible active notification follows phase while preserving its existing ac
   assert.equal(await notification.isVisible(), false);
 });
 
+test("sealed succeeded command outcomes keep their actual delivery result after the Requirement advances", async (t) => {
+  const h = await ui(t);
+  await h.requests();
+  const original = "Designer did not publish a verified planning handoff";
+  h.team.requests[0].stage = "PLANNING";
+  h.state.operations = ["BLOCKED", "WAITING_HUMAN", "DONE", null].map((stage, index) => operation("SUCCEEDED", {
+    operation_id: "outcome_" + index,
+    result: stage ? {stage, diagnostic: stage === "BLOCKED" ? original : null, next_action: "查看当次执行记录。"} : null,
+  }));
+  const expected = ["操作已结束 · 当次交付已阻塞", "操作已结束 · 当次交付等待处理", "操作已结束 · 当次需求已交付", "继续交付"];
+  await h.tick();
+  if (await h.page.locator("#notification").isVisible()) await h.close();
+  await h.page.evaluate(() => showDetail("request", "request_fixture"));
+  for (let index = 0; index < expected.length; index++) {
+    const row = h.page.locator("#detail .execution-history-entry").filter({hasText: "outcome_" + index});
+    assert.equal(await row.locator("strong").first().innerText(), expected[index]);
+    assert.match(await row.innerText(), /命令已完成/);
+    assert.equal(await row.locator(".badge").getAttribute("class"), "badge");
+    assert.deepEqual(await row.locator(".badge").evaluate(node => ({color: getComputedStyle(node).color,
+      background: getComputedStyle(node).backgroundColor})), {color: "rgb(64, 83, 106)", background: "rgb(237, 240, 245)"});
+    assert.doesNotMatch(await row.innerText(), /执行成功|当前阶段 ·|outcome_\d/);
+  }
+  const blocked = h.page.locator("#detail .execution-history-entry").filter({hasText: "outcome_0"});
+  assert.equal(await blocked.locator("strong").first().evaluate(node => getComputedStyle(node).color), "rgb(198, 40, 40)");
+  assert.match(await blocked.innerText(), /当次原因 · 设计到计划的交接尚未通过校验，当前交付已阻塞/);
+  assert.doesNotMatch(await blocked.innerText(), /Designer did not publish/);
+  assert.equal(await h.page.evaluate(() => operations.find(item => item.operation_id === "outcome_0").result.diagnostic), original);
+  h.team.requests[0].stage = "DONE";
+  await h.tick();
+  assert.equal(await blocked.locator("strong").first().innerText(), expected[0]);
+});
+
 test("task detail renders every round with QA findings and Coder feedback lineage", async (t) => {
   const h = await ui(t);
   h.team.tasks.push({

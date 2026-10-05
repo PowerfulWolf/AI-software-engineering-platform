@@ -540,6 +540,7 @@ h3 {
   background: #e9effd;
   color: #244fa7;
 }
+.execution-history-entry > strong.error { color: #c62828; }
 .badge.blocked {
   background: #fff0df;
   color: var(--warn);
