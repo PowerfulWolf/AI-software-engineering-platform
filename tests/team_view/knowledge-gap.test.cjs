@@ -671,6 +671,7 @@ test("same-checkpoint stage change discards an obsolete pending knowledge form",
 test("empty diagnostics distinguish valid role execution from completed call records", async () => {
   const h = harness(async () => ({ok: true, json: async () => []}));
   vm.runInContext(`
+    snapshot.requests[0].scopes = [{delivery_id: "native-1"}];
     snapshot.tasks = [{id: "native-1", request_id: "r1", project_id: "project_test",
       status: "IMPLEMENTING", terminal: false, last_activity: "2026-10-01T14:09:00Z",
       role_queue: [{role: "coder", status: "RUNNING", lease_liveness: "LEASE_VALID",

@@ -143,7 +143,7 @@ function pollingKnowledgeFacts() {
 function pollingDetailFacts() {
   const item = selected?.kind === "task" ? taskById(selected.id)
     : selected ? requestById(selected.id) : null;
-  const tasks = selected?.kind === "request" && item ? currentRequestTasks(item) : [];
+  const tasks = selected?.kind === "request" && item ? requestTasks(item) : [];
   return [page, selected, item, tasks, snapshot?.agents, pollingControlFacts(),
     item ? operations.filter(operation => operationTarget(operation) === item.id) : [],
     page === "requests" && Boolean(snapshot?.requests.length)];
@@ -931,9 +931,12 @@ function requestTasks(request) {
   return snapshot.tasks.filter((task) => task.request_id === request.id);
 }
 function currentRequestTasks(request) {
+  const currentDeliveryIds = new Set((request.scopes || [])
+    .map(scope => scope.delivery_id).filter(Boolean));
   const currentByDelivery = new Map();
   for (const task of requestTasks(request)) {
     const deliveryId = task.source_delivery_id || task.id;
+    if (!currentDeliveryIds.has(deliveryId)) continue;
     const previous = currentByDelivery.get(deliveryId);
     if (
       !previous ||
@@ -942,6 +945,11 @@ function currentRequestTasks(request) {
       currentByDelivery.set(deliveryId, task);
   }
   return [...currentByDelivery.values()];
+}
+function isHistoricalRequestTask(task) {
+  const request = snapshot.requests.find(item => item.id === task.request_id &&
+    item.project_id === task.project_id);
+  return Boolean(request && !currentRequestTasks(request).some(current => current.id === task.id));
 }
 function failedDeliveryRoleStages(request) {
   if (!(request.failed_stages || []).includes("DELIVERING") &&
@@ -971,7 +979,7 @@ function activeRequestTask(request) {
   )
     return null;
   return (
-    requestTasks(request)
+    currentRequestTasks(request)
       .filter((task) => taskGroup(task) === "active")
       .sort((left, right) =>
         right.last_activity.localeCompare(left.last_activity),
@@ -3083,7 +3091,9 @@ function taskRow(work, agentId) {
   const agent = snapshot.agents.find(candidate => candidate.id === agentId);
   const historicalRequest = work.kind === "request" && agent?.history_delivery_ids.includes(task.id) &&
     !agent.assigned_delivery_ids.includes(task.id);
-  if (a) row.append(assignmentBadge(task, a));
+  const historicalTask = work.kind === "task" && isHistoricalRequestTask(task);
+  if (historicalTask) row.append(el("span", "历史记录", "badge"));
+  else if (a) row.append(assignmentBadge(task, a));
   else if (historicalRequest) row.append(el("span", "本轮已完成", "badge done"));
   else if (work.kind === "request") row.append(requestNodeBadge(task));
   else row.append(badge(taskPresentationStatus(task)));
@@ -3110,16 +3120,17 @@ function taskRow(work, agentId) {
   n.append(overview);
   viewBlock(n, `work:${work.kind}:${task.id}`, [work.kind, task.id, request?.title || task.title,
     fullPath, a?.role, snapshot.agents.find(agent => agent.id === agentId)?.roles,
-    historicalRequest, work.kind === "request" ? requestNodeExecution(task) : taskPresentationStatus(task), a]);
+    historicalRequest, historicalTask, work.kind === "request" ? requestNodeExecution(task) : taskPresentationStatus(task), a]);
   return n;
 }
 function renderTeam(content) {
   const summary = el("section", undefined, "summary team-summary");
   const blockedRequestCount = snapshot.requests.filter(request => requestGroup(request) === "blocked").length;
+  const unfinishedTaskCount = snapshot.tasks.filter(task => !task.terminal && !isHistoricalRequestTask(task)).length;
   for (const [count, title] of [
     [snapshot.agents.length, "位团队成员"],
     [
-      snapshot.tasks.filter((t) => !t.terminal).length,
+      unfinishedTaskCount,
       "项当前 Project 未结束任务",
     ],
     [
@@ -3132,7 +3143,7 @@ function renderTeam(content) {
     summary.append(n);
   }
   viewBlock(summary, "team-summary", [snapshot.agents.length,
-    snapshot.tasks.filter(task => !task.terminal).length, blockedRequestCount]);
+    unfinishedTaskCount, blockedRequestCount]);
   content.append(summary);
   if (!snapshot.agents.length)
     content.append(
@@ -3221,6 +3232,7 @@ function renderTeam(content) {
   const blockedIds = new Set(
     [...assigned, ...history]
       .filter((work) => agentWorkGroup(work) === "blocked" &&
+        (work.kind !== "task" || !isHistoricalRequestTask(work.item)) &&
         (work.kind !== "request" || assigned.some(item => item.id === work.id)))
       .map((work) => work.id),
   );
@@ -7373,6 +7385,26 @@ function requestOperationHistory(panel, request) {
   section.append(list);
   panel.append(section);
 }
+function requestHistoricalDeliveryRecords(panel, request) {
+  const history = requestTasks(request).filter(isHistoricalRequestTask)
+    .sort((left, right) => left.last_activity.localeCompare(right.last_activity));
+  if (!history.length) return;
+  const section = viewGroup(el("section", undefined, "detail-section"), "historical-delivery-records");
+  const fold = el("details", undefined, "historical-delivery-records");
+  fold.dataset.key = "historical-delivery:" + request.id;
+  fold.append(el("summary", `历史仓库交付记录（${history.length} 条）`),
+    el("p", "以下记录保留当次执行结果，不代表当前交付状态。", "muted"));
+  for (const task of history) {
+    const entry = viewBlock(el("div", undefined, "execution-history-entry"), "historical-task:" + task.id, task);
+    const phase = deliveryPhase(task), status = label(task.status);
+    entry.append(el("p", `${phase === status ? status : phase + " · " + status} · ${time(task.last_activity)}`));
+    if (task.blocker) entry.append(el("p", "当次原因 · " + humanizeBlockingText(task.blocker)));
+    entry.append(button("查看当次执行记录", () => showDetail("task", task.id), "secondary"));
+    fold.append(entry);
+  }
+  section.append(fold);
+  panel.append(section);
+}
 
 function renderDetail({ incremental = false } = {}) {
   const opener = document.activeElement;
@@ -7588,6 +7620,7 @@ function buildDetail(panel = document.getElementById("detail")) {
       discussionSection.append(modelCallDiagnostics(lastOperation));
     deliveryResult(panel, item);
     requestOperationHistory(panel, item);
+    requestHistoricalDeliveryRecords(panel, item);
     const artifacts = viewGroup(el("section", undefined, "detail-section stage-artifacts"), "stage-artifacts");
     artifacts.append(el("h2", "阶段产物"));
     documentList(artifacts, item.documents);

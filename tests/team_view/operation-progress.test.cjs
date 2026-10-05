@@ -17,7 +17,7 @@ const text = node => node.textContent + node.children.map(item => typeof item ==
 function harness() {
   const data = {
     request: {id: "request_current", project_id: "project_current", stage: "DESIGNING", checkpoint_sha256: "b".repeat(64),
-      scopes: [], documents: [], next_action: "旧阶段提示", execution: {state: "UNKNOWN", responsibility: "team",
+      scopes: [{delivery_id: "task_current"}], documents: [], next_action: "旧阶段提示", execution: {state: "UNKNOWN", responsibility: "team",
         reason: "尚无执行器心跳。", next_action: "核验执行事实。", action_required: false}},
     operation: {operation_id: "operation_current", status: "RUNNING", updated_at: "2026-10-05T12:44:30Z",
       intent: {action: "CONTINUE_DELIVERY", project_id: "project_current", delivery_id: "request_current",

@@ -18,7 +18,7 @@ function state() {
   vm.runInContext(`
     snapshot = {selected_project_id: "p", requests: [], tasks: []};
     const request = {id: "r", project_id: "p", stage: "DELIVERING",
-      checkpoint_sha256: "current", next_action: "Continue", failed_stages: [],
+      checkpoint_sha256: "current", next_action: "Continue", failed_stages: [], scopes: [{delivery_id: "t"}],
       coordination: {draft: {action: "PROPOSE_RECOVERY", summary: "old blocker"}}};
     const task = {id: "t", request_id: "r", status: "IMPLEMENTING", terminal: false,
       last_activity: "2026-10-01T00:00:00Z", next_action: "Continue",

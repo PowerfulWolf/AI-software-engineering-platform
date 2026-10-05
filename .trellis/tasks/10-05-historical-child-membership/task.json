@@ -1,0 +1,9 @@
+{
+  "id": "historical-child-membership-20261005",
+  "title": "恢复后保留历史子交付归属，避免同名需求重复展示",
+  "status": "in_progress",
+  "phase": "verified_pending_production_read_check",
+  "created_at": "2026-10-05",
+  "owner": "codex",
+  "constraints": ["仅只读投影", "不可按标题去重", "不修改或删除生产历史", "仅增量测试"]
+}

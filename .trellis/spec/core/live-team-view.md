@@ -253,6 +253,11 @@ Existing ASE_CONFIG/database.dsn_env applies. No model credentials needed by rea
   `PLANNING + plan=null + DONE children` is valid. Use DerivedStageInputs only for unattached
   in-flight children when a plan exists. Reject unknown/reference-only child units and ambiguous
   ownership. Never match by titles/prose or construct a Host to repair reads.
+- Requirement membership persists through every validated joint checkpoint, including when an
+  upstream correction clears the current children and plan. Historical native children remain
+  audit work of the same parent and cannot fall back to independent Requirements. Current scope,
+  execution, blockers and Agent queues use only the latest checkpoint's children/plan; historical
+  membership must not make a superseded native source current again.
 - Capture file prefixes before SQL snapshot; event-linked artifacts support gate evidence. Completed
   model-route records can precede state transitions but cannot become verdict authority.
 - A single snapshot may project one sidecar's model-route ledger for several current, historical,
@@ -767,8 +772,10 @@ RequirementRetirementStore(..., read_only=True).retired_delivery_ids(journal)
 - Snapshot reads and Project summaries exclude retired `delivery_multi_*` identities from current
   Requirement lists and counts, while leaving immutable journal files untouched.
 - The reader derives every owned native Delivery from the retired joint checkpoint's committed
-  children and execution plan, then excludes those native Tasks before standalone fallback and Agent
-  queue projection. Audit sidecars remain on disk but cannot reappear as unrelated current work.
+  children and execution plan across its entire validated journal history, then excludes those native
+  Tasks before standalone fallback and Agent queue projection. The same historical membership
+  verifier used for active parents checks exact unit/root/checkpoint ancestry and rejects ambiguous
+  active/retired owners. Audit sidecars remain on disk but cannot reappear as unrelated current work.
 - The reader validates the retirement digest, Team/Project lineage, exact retired checkpoint and any
   replacement journal before filtering. A malformed exclusion list is corruption, not permission to
   hide arbitrary work.
@@ -926,3 +933,119 @@ Regression cases must combine a deleted requirement's historical child/reservati
 another visible delivery in the same repository, then assert successful public GET, no
 retired parent/native/verification in requests/tasks/agent references, and unchanged visible
 DONE work. A missing active source must remain a TeamReadError/503 rather than disappearing.
+
+## Historical child membership after same-Requirement upstream correction
+
+### 1. Scope / trigger
+
+An exact authorized upstream correction can clear current `children` and `plan` while retaining old
+native failure facts in the joint journal. The original Requirement remains the product identity.
+Its historical native child must remain subordinate audit work, even before a new plan/child exists.
+
+### 2. Signatures
+
+```python
+_joint_scopes(JointCheckpoint, Mapping[str, _Native]) -> tuple[ScopeView, ...]
+_native_requirement_ownership(
+    Mapping[str, tuple[JointCheckpoint, ...]], Mapping[str, _Native]
+) -> dict[str, _NativeRequirementOwner]
+_current_requirement_work(
+    list[TaskView], *, historical_native_ids: frozenset[str]
+) -> list[TaskView]
+_agent_views(
+    tuple[AgentProfile, ...], list[RequestView], list[TaskView], *,
+    historical_work_ids: frozenset[str] = frozenset()
+) -> tuple[AgentView, ...]
+```
+
+### 3. Contracts
+
+- Read and validate every joint/native journal prefix before folding membership. Check Team/Project
+  binding on every retained parent checkpoint. Attached children require their exact native ID,
+  known unit, code scope/root and exact checkpoint in the stored native history. A current native
+  advancement may preserve that old exact prefix; a replacement/future reference may not.
+- Derive native IDs only for an unattached planned code unit using `DerivedStageInputs`. An attached
+  child always keeps its committed native identity, even when a plan changes or disappears.
+- The permanent membership key is native ID; the typed owner binds parent ID, unit ID and ScopeView.
+  Repeated observations must have the same owner/scope. Cross-parent, cross-unit/root/repository or
+  active/retired conflicts fail closed. Never infer ownership from title, prose or timestamps.
+- Permanent membership controls standalone fallback and historical `TaskView.request_id`; current
+  `RequestView.scopes[].delivery_id` still comes exclusively from the latest checkpoint. Empty
+  current plan/children leaves the scope ID empty; it does not recover an old child pointer.
+- Keep historical Task status, blocker, assignments, queue, timestamps and evidence unchanged.
+  Exclude noncurrent native sources from live parent composition and Agent assigned/current lists;
+  verification/remediation descendants use `source_delivery_id` for that comparison. Member history
+  remains available, including historical work whose checkpoint itself is not terminal.
+- Frontend current-work helpers, phase/blocker projection, member blocked queues and current work
+  counts must use the same latest-scope identity distinction. The full Requirement audit query
+  retains every owned Task. A genuine independent same-title native Requirement remains visible.
+  `app.js::currentRequestTasks(request)` first accepts only `(task.source_delivery_id || task.id)`
+  in `request.scopes[].delivery_id`, then chooses the latest observation per source.
+  `activeRequestTask` uses that same current set. Empty current scope IDs produce no current Task.
+  `isHistoricalRequestTask(task)` requires exact parent/project and excludes Tasks outside that
+  current set. `renderTeam` excludes those records from unfinished counts and blocked queues,
+  and `taskRow` labels them `历史记录` without changing their saved terminal/status facts.
+  `requestHistoricalDeliveryRecords(panel, request)` keeps a folded, keyed history section and
+  original `showDetail("task", task.id)` links; original failures remain readable there and in the
+  engineering disclosure. History has no delivery command or verdict controls.
+  `pollingDetailFacts()` signs the full owned `requestTasks(item)` inventory for Requirement detail,
+  because that surface consumes current and historical work. Updating only an old record must
+  refresh its reason/time without changing current state or collapsing the history disclosure.
+- Retired parent filtering reuses the same full-history ownership checks. Snapshot reads cannot
+  delete a child, rewrite a journal, synthesize verdicts or construct mutation-capable Host services.
+
+### 4. Validation and error matrix
+
+| Facts | Expected read projection |
+|---|---|
+| Old BLOCKED child; current DESIGNING/PLANNING has empty children/plan | One parent Requirement; old child audit Task still references parent |
+| Old child and later current child | Both audit Tasks belong to parent; scope/header/blocker/current queue use later child |
+| Exact old native checkpoint, native has subsequently advanced | Accept stored history prefix; Task facts use latest native checkpoint |
+| Same title on an independently submitted native delivery | Keep separate Requirement by exact ID |
+| Unknown unit, wrong root/repository, absent or replaced/future checkpoint | Whole selected snapshot rejects with TeamReadError |
+| One native claimed by multiple parents, including a retired owner | Reject ambiguity before retired/current filtering |
+| Historical candidate verification/remediation source | Remains audit data; does not override current parent or member queue |
+| Current child replaced/cleared during browser polling | Header, flow, queue/count and repository links update together; historical record remains accessible |
+| Historical nonterminal Task with retained assignment | Grey historical label, no current unfinished count or executing member state; saved Task remains nonterminal |
+
+### 5. Good / base / bad
+
+Good: K1 corrects design in the same Requirement and the old failed native observation remains in
+its audit history. Base: a normal attached child retains identity during integration replanning.
+Bad: because current children are empty, label the old native as another same-title Requirement or
+reinsert it as the current blocker. Deleting that apparent duplicate would discard the distinction
+instead of repairing the read model.
+
+### 6. Required incremental tests
+
+`tests/team_view/test_live.py` covers cleared children in DESIGNING/PLANNING, later-child isolation,
+same-title standalone preservation, old-prefix advancement, all retained-reference corruption
+cases, active/retired parent ambiguity, historical member assignments and verifier/remediation
+source filtering. Assert before/after file inventories are identical. Retain the existing
+`test_joint_reader_*`, real in-flight role and retirement regressions; use the isolated test database
+serially for selected MySQL cases. UI regressions must render the actual Requirement list/header
+and member queue from the same snapshot shape. No full test suite is required for this repair.
+`tests/team_view/historical-child.test.cjs` covers empty current IDs, newer source-bound verifier,
+old active/waiting/expired role exclusion and independent same-title native scope. Real Chrome
+`browser/historical-child.test.cjs` checks original history navigation, no current red node or
+blocked member queue, grey history label and unchanged nonterminal inventory. Retain affected
+delivery-status, engineering-wait, operation-progress, UI and browser polling/history contracts;
+fixtures must provide truthful current scope bindings rather than bypassing this filter.
+
+### 7. Existing-data disposition, rollback and failure analysis
+
+No SQL/journal migration or deletion is needed. K1's verified historical child already establishes
+its parent membership; deploy/reload the fixed reader while execution is idle, then refresh the same
+Project. Continue against that original Requirement's current exact checkpoint if it needs an
+authorized action. Roll back code while idle and preserve all old/current immutable records.
+
+1. **Root cause (cross-layer state projection):** identity membership was reconstructed only from
+   the latest checkpoint; current-execution reset incorrectly became loss of historical ownership.
+2. **Why previous fixes missed it:** integration replanning tests kept DONE children, while retirement
+   alone scanned full history. Neither covered upstream correction clearing both current pointers.
+3. **Prevention:** centralize exact historical membership and current scope projection; regress the
+   empty-current window before a later child exists, with no production writes.
+4. **Systematic expansion:** apply the same source distinction to parent live blockers, candidate
+   verification/remediation descendants, member queues and counters, not only list deduplication.
+5. **Knowledge capture:** this contract and the new Trellis task document the historical/current
+   boundary. No generated specification/template mirror exists for this read-side module.

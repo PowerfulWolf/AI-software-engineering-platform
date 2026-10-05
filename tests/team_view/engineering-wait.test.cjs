@@ -30,7 +30,7 @@ function fixture() {
     wait_disposition_sha256: digest("d"), wait_disposition: {facts, responsibility: "engineering",
       reason: "执行结果待核验，现场保留。", next_action: "工程授权者调查原执行。"}};
   const request = {id: "requirement_current", project_id: "project_current", title: "交付需求",
-    checkpoint_sha256: digest("a"), stage: "DELIVERING", scopes: [], documents: [],
+    checkpoint_sha256: digest("a"), stage: "DELIVERING", scopes: [{delivery_id: "delivery_current"}], documents: [],
     execution: {state: "WAITING", responsibility: "engineering", reason_code: "EXECUTION_UNCERTAIN",
       reason: step.wait_disposition.reason, next_action: step.wait_disposition.next_action}};
   const task = {id: "delivery_current", task_id: facts.task_id, request_id: request.id,

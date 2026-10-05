@@ -1081,8 +1081,9 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   assert.match(text(get("content")), /实现 · 任务队列/);
   assert.match(text(get("content")), /待完成 1/);
   assert.match(text(get("content")), /进行中 1/);
-  assert.match(text(get("content")), /已阻塞 1/);
-  assert.match(text(get("content")), /已完成 1/);
+  assert.match(text(get("content")), /已阻塞 0/);
+  assert.match(text(get("content")), /已完成 2/);
+  assert.match(text(get("content")), /历史记录/);
   const activeQueueCard = descend(get("content")).find(
     (node) =>
       node.className === "work-row" &&
@@ -2401,10 +2402,12 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   });
   await interval.fn();
   assert.doesNotMatch(
-    text(get("detail")),
+    text(get("detail").querySelector(".request-blocking-section")),
     /Superseded QA failure|Obsolete QA retry advice/,
     "old verification failures are audit evidence, not current requirement blockers",
   );
+  assert.match(text(get("detail").querySelector(".historical-delivery-records")), /Superseded QA failure/,
+    "superseded failures remain accessible in the explicit historical section");
   fixture.tasks.push({
     ...structuredClone(fixture.tasks[0]),
     id: "verification_latest_blocker",

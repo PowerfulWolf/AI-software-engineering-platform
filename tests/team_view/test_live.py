@@ -66,6 +66,7 @@ from ai_software_engineer.runtime_workspace import (
 )
 from ai_software_engineer.store.mysql_repository import open_mysql_connection
 from ai_software_engineer.team_view.models import (
+    AssignmentView,
     ProjectView,
     RequestView,
     RoleQueueView,
@@ -78,6 +79,7 @@ from ai_software_engineer.team_view.reader import (
     ProductionTeamReader,
     _agent_views,
     _candidate_branch,
+    _current_requirement_work,
     _request_with_current_work,
 )
 from ai_software_engineer.team_view.server import create_team_server
@@ -1156,6 +1158,446 @@ def test_retired_requirement_is_hidden_and_excluded_from_project_count(tmp_path:
     assert snapshot.agents[0].history_delivery_ids == ()
     selected = next(item for item in snapshot.projects if item.id == project.manifest.project_id)
     assert selected.requirement_count == 0
+
+
+def _historical_child_fixture(
+    tmp_path: Path,
+) -> tuple[ProductionConfig, JointJournal, JointCheckpoint, FileProjectDeliveryCheckpointStore]:
+    config = ProductionConfig(
+        platform_root=str(tmp_path / "platform"),
+        model_routes=(
+            ProviderRouteConfig(
+                provider="codex", model="gpt-5.5", kind=ModelProviderKind.CODEX_CLI
+            ),
+        ),
+    )
+    team = TeamWorkspace.initialize(
+        config.platform_root, team_id=config.team_id, name=config.team_name
+    )
+    project = team.project_registry().register(project_id="project_test", name="Test Project")
+    repository_root = tmp_path / "code"
+    repository_root.mkdir()
+    repository = project.repository_registry().register(repository_root)
+    store = FileProjectDeliveryCheckpointStore(repository.root / "state/project-deliveries")
+    now = datetime.now(UTC)
+    child = _put_unstarted_child(
+        store,
+        delivery_id="delivery_historical_child",
+        repository_id=repository.repository_id,
+        repository_root=str(repository_root),
+        recorded_at=now + timedelta(minutes=2),
+    )
+    parent = JointCheckpoint.seal(
+        {
+            "delivery_id": "delivery_multi_" + "a" * 40,
+            "team_id": team.manifest.team_id,
+            "team_manifest_sha256": team.manifest.manifest_sha256,
+            "project_id": project.manifest.project_id,
+            "project_manifest_sha256": project.manifest.manifest_sha256,
+            "sequence": 1,
+            "stage": JointStage.BLOCKED,
+            "scope": DirectoryScope(
+                units=(
+                    DirectoryUnit(
+                        id="unit_" + "a" * 16,
+                        root=str(repository_root),
+                        selected_paths=("src", "tests"),
+                        base_revision="b" * 40,
+                    ),
+                )
+            ),
+            "title": "K1 自动知识采集首个闭环",
+            "submitted_at": now,
+            "children": (ChildDelivery(unit_id="unit_" + "a" * 16, checkpoint=child),),
+            "next_action": "旧设计交付已阻塞。",
+        }
+    )
+    journal = JointJournal(project.requirements_root)
+    journal.append(parent, expected=None)
+    return config, journal, parent, store
+
+
+def _put_unstarted_child(
+    store: FileProjectDeliveryCheckpointStore,
+    *,
+    delivery_id: str,
+    repository_id: str,
+    repository_root: str,
+    recorded_at: datetime,
+    failure_summary: str = "旧设计失败。",
+) -> ProjectDeliveryCheckpoint:
+    store.put_intake(
+        ProjectDeliveryIntake.create(
+            delivery_id=delivery_id,
+            repository_id=repository_id,
+            repository_root=repository_root,
+            title="K1 自动知识采集首个闭环",
+            requirement="Verified parent projection or independently submitted same-title work.",
+            submitted_at=recorded_at,
+        )
+    )
+    return store.put(
+        ProjectDeliveryCheckpoint.create(
+            delivery_id=delivery_id,
+            sequence=1,
+            repository_id=repository_id,
+            repository_root=repository_root,
+            stage=DeliveryStage.BLOCKED,
+            stage_attempts=DeliveryStageAttempts(designing=1),
+            next_action=DeliveryNextAction.REQUEST_HUMAN,
+            failure_code=DeliveryFailureCode.INVALID_AGENT_OUTPUT,
+            failure_summary=failure_summary,
+            failed_stage=DeliveryStage.DESIGNING,
+            checkpointed_at=recorded_at,
+        )
+    )
+
+
+@pytest.mark.parametrize("stage", [JointStage.DESIGNING, JointStage.PLANNING])
+def test_joint_historical_child_keeps_membership_when_current_children_are_cleared(
+    tmp_path: Path, stage: JointStage
+) -> None:
+    config, journal, parent, _ = _historical_child_fixture(tmp_path)
+    current = journal.append(
+        JointCheckpoint.seal(
+            {
+                **parent.to_wire(),
+                "sequence": 2,
+                "previous_checkpoint_sha256": parent.checkpoint_sha256,
+                "stage": stage,
+                "children": (),
+                "plan": None,
+                "next_action": "团队正在修正原需求的设计或计划。",
+            }
+        ),
+        expected=parent.checkpoint_sha256,
+    )
+    before = _bytes(Path(config.platform_root))
+
+    snapshot = ProductionTeamReader(config, {}).snapshot()
+
+    assert _bytes(Path(config.platform_root)) == before
+    assert len(snapshot.requests) == 1
+    request = snapshot.requests[0]
+    assert request.id == parent.delivery_id
+    assert request.stage == current.stage
+    assert request.next_action == current.next_action
+    assert request.blocker is None
+    assert request.failed_stages == ()
+    assert request.scopes[0].delivery_id is None
+    assert request.scopes[0].selected_paths == ("src", "tests")
+    assert len(snapshot.tasks) == 1
+    historical = snapshot.tasks[0]
+    assert historical.id == parent.children[0].checkpoint.delivery_id
+    assert historical.request_id == parent.delivery_id
+    assert historical.scope.delivery_id == historical.id
+    assert historical.scope.selected_paths == request.scopes[0].selected_paths
+    assert historical.status == "BLOCKED"
+    assert historical.blocker == "旧设计失败。"
+    assert journal.history(parent.delivery_id) == (parent, current)
+
+
+def test_joint_historical_child_does_not_replace_current_scope_or_blocker(tmp_path: Path) -> None:
+    config, journal, parent, store = _historical_child_fixture(tmp_path)
+    old = parent.children[0].checkpoint
+    current_child = _put_unstarted_child(
+        store,
+        delivery_id="delivery_new_child",
+        repository_id=old.repository_id,
+        repository_root=old.repository_root,
+        recorded_at=old.checkpointed_at - timedelta(minutes=1),
+        failure_summary="新设计失败。",
+    )
+    current = journal.append(
+        JointCheckpoint.seal(
+            {
+                **parent.to_wire(),
+                "sequence": 2,
+                "previous_checkpoint_sha256": parent.checkpoint_sha256,
+                "children": (
+                    ChildDelivery(unit_id=parent.children[0].unit_id, checkpoint=current_child),
+                ),
+                "next_action": "新的设计交付已阻塞。",
+            }
+        ),
+        expected=parent.checkpoint_sha256,
+    )
+    before = _bytes(Path(config.platform_root))
+
+    snapshot = ProductionTeamReader(config, {}).snapshot()
+
+    assert _bytes(Path(config.platform_root)) == before
+    assert len(snapshot.requests) == 1
+    request = snapshot.requests[0]
+    assert request.id == parent.delivery_id
+    assert request.checkpoint_sha256 == current.checkpoint_sha256
+    assert request.scopes[0].delivery_id == current_child.delivery_id
+    assert {task.request_id for task in snapshot.tasks} == {parent.delivery_id}
+    assert {task.id for task in snapshot.tasks} == {old.delivery_id, current_child.delivery_id}
+    current_view = next(task for task in snapshot.tasks if task.id == current_child.delivery_id)
+    assert request.blocker == current_view.blocker
+    assert request.next_action == current_view.next_action
+    assert request.failed_stages == ("DESIGNING",)
+
+
+def test_joint_historical_membership_preserves_same_title_independent_native(
+    tmp_path: Path,
+) -> None:
+    config, journal, parent, store = _historical_child_fixture(tmp_path)
+    old = parent.children[0].checkpoint
+    journal.append(
+        JointCheckpoint.seal(
+            {
+                **parent.to_wire(),
+                "sequence": 2,
+                "previous_checkpoint_sha256": parent.checkpoint_sha256,
+                "stage": JointStage.PLANNING,
+                "children": (),
+            }
+        ),
+        expected=parent.checkpoint_sha256,
+    )
+    standalone = _put_unstarted_child(
+        store,
+        delivery_id="delivery_independent_same_title",
+        repository_id=old.repository_id,
+        repository_root=old.repository_root,
+        recorded_at=old.checkpointed_at,
+    )
+
+    snapshot = ProductionTeamReader(config, {}).snapshot()
+
+    assert {request.id for request in snapshot.requests} == {
+        parent.delivery_id,
+        standalone.delivery_id,
+    }
+    assert len({request.title for request in snapshot.requests}) == 1
+    assert next(task for task in snapshot.tasks if task.id == old.delivery_id).request_id == (
+        parent.delivery_id
+    )
+    independent = next(task for task in snapshot.tasks if task.id == standalone.delivery_id)
+    assert independent.request_id == standalone.delivery_id
+
+
+@pytest.mark.parametrize("tamper", ["root", "repository", "missing", "replaced", "future", "unit"])
+def test_joint_historical_child_membership_rejects_invalid_retained_reference(
+    tmp_path: Path, tamper: str
+) -> None:
+    config, journal, parent, _ = _historical_child_fixture(tmp_path)
+    original = parent.children[0]
+    values = original.checkpoint.to_wire()
+    values.pop("checkpoint_sha256")
+    if tamper == "root":
+        values["repository_root"] = str(tmp_path / "different_code")
+    elif tamper == "repository":
+        values["repository_id"] = "repository_different"
+    elif tamper == "missing":
+        values["delivery_id"] = "delivery_missing"
+    elif tamper == "replaced":
+        values["failure_summary"] = "Replaced sealed checkpoint."
+    elif tamper == "future":
+        values.update(sequence=2, previous_checkpoint_sha256=original.checkpoint.checkpoint_sha256)
+    corrupted = ChildDelivery(
+        unit_id="unit_" + "f" * 16 if tamper == "unit" else original.unit_id,
+        checkpoint=ProjectDeliveryCheckpoint.create(**values),
+    )
+    retained = journal.append(
+        JointCheckpoint.seal(
+            {
+                **parent.to_wire(),
+                "sequence": 2,
+                "previous_checkpoint_sha256": parent.checkpoint_sha256,
+                "children": (corrupted,),
+            }
+        ),
+        expected=parent.checkpoint_sha256,
+    )
+    journal.append(
+        JointCheckpoint.seal(
+            {
+                **retained.to_wire(),
+                "sequence": 3,
+                "previous_checkpoint_sha256": retained.checkpoint_sha256,
+                "stage": JointStage.PLANNING,
+                "children": (),
+            }
+        ),
+        expected=retained.checkpoint_sha256,
+    )
+    before = _bytes(Path(config.platform_root))
+
+    with pytest.raises(TeamReadError):
+        ProductionTeamReader(config, {}).snapshot()
+
+    assert _bytes(Path(config.platform_root)) == before
+
+
+@pytest.mark.parametrize("retired_conflict", [False, True])
+def test_joint_historical_child_membership_rejects_ambiguous_parent(
+    tmp_path: Path, retired_conflict: bool
+) -> None:
+    config, journal, parent, _ = _historical_child_fixture(tmp_path)
+    journal.append(
+        JointCheckpoint.seal(
+            {
+                **parent.to_wire(),
+                "sequence": 2,
+                "previous_checkpoint_sha256": parent.checkpoint_sha256,
+                "stage": JointStage.PLANNING,
+                "children": (),
+            }
+        ),
+        expected=parent.checkpoint_sha256,
+    )
+    other = journal.append(
+        JointCheckpoint.seal({**parent.to_wire(), "delivery_id": "delivery_multi_" + "c" * 40}),
+        expected=None,
+    )
+    if retired_conflict:
+        RequirementRetirementStore(
+            journal.root,
+            team_id=other.team_id,
+            team_manifest_sha256=other.team_manifest_sha256,
+            project_id=other.project_id,
+            project_manifest_sha256=other.project_manifest_sha256,
+        ).retire(other, reason="deleted", retired_at=datetime.now(UTC))
+    before = _bytes(Path(config.platform_root))
+
+    with pytest.raises(TeamReadError):
+        ProductionTeamReader(config, {}).snapshot()
+
+    assert _bytes(Path(config.platform_root)) == before
+
+
+def test_joint_historical_child_membership_accepts_exact_native_history_prefix(
+    tmp_path: Path,
+) -> None:
+    config, journal, parent, store = _historical_child_fixture(tmp_path)
+    old = parent.children[0].checkpoint
+    values = old.to_wire()
+    values.pop("checkpoint_sha256")
+    advanced = store.put(
+        ProjectDeliveryCheckpoint.create(
+            **{
+                **values,
+                "sequence": 2,
+                "previous_checkpoint_sha256": old.checkpoint_sha256,
+                "checkpointed_at": old.checkpointed_at + timedelta(seconds=1),
+            }
+        )
+    )
+    journal.append(
+        JointCheckpoint.seal(
+            {
+                **parent.to_wire(),
+                "sequence": 2,
+                "previous_checkpoint_sha256": parent.checkpoint_sha256,
+                "stage": JointStage.PLANNING,
+                "children": (),
+            }
+        ),
+        expected=parent.checkpoint_sha256,
+    )
+
+    snapshot = ProductionTeamReader(config, {}).snapshot()
+
+    assert len(snapshot.requests) == 1
+    assert snapshot.tasks[0].request_id == parent.delivery_id
+    assert snapshot.tasks[0].last_activity == advanced.checkpointed_at
+
+
+def test_historical_member_work_keeps_assignments_without_entering_current_queue() -> None:
+    profile = AgentProfile(
+        id="agent_coder_history",
+        version="v0.1",
+        display_name="Coder",
+        capabilities=("coder",),
+        eligible_roles=(TeamRole.CODER,),
+        max_parallel_assignments=1,
+        default_model_policy_id="model_policy_test",
+    )
+    task = TaskView(
+        id="delivery_historical_child",
+        project_id="project_test",
+        request_id="delivery_multi_parent",
+        title="Historical child",
+        scope=ScopeView(
+            root="/workspace/code", selected_paths=(".",), delivery_id="delivery_historical_child"
+        ),
+        status="IMPLEMENTING",
+        checkpoint_stage="DELIVERING",
+        terminal=False,
+        last_activity=datetime.now(UTC),
+        next_action="Historical checkpoint.",
+        assignments=(
+            AssignmentView(
+                agent_id=profile.id,
+                role=AgentRole.CODER,
+                planned_provider="codex",
+                planned_model="gpt-5.5",
+                current_stage=True,
+            ),
+        ),
+    )
+
+    (view,) = _agent_views((profile,), [], [task], historical_work_ids=frozenset({task.id}))
+
+    assert view.assigned_delivery_ids == ()
+    assert view.current_stage_delivery_ids == ()
+    assert view.history_delivery_ids == (task.id,)
+    assert task.assignments[0].current_stage
+    assert not task.terminal
+
+
+@pytest.mark.parametrize("work_kind", ["candidate_verification", "remediation"])
+def test_historical_native_descendant_does_not_become_current_requirement_work(
+    work_kind: str,
+) -> None:
+    old_native_id = "delivery_historical_child"
+    request = RequestView(
+        id="delivery_multi_parent",
+        project_id="project_test",
+        title="Original Requirement",
+        stage="BLOCKED",
+        scopes=(ScopeView(root="/workspace/code", selected_paths=(".",)),),
+        next_action="等待当前需求的确切处理动作。",
+        blocker="当前需求原因。",
+        checkpoint_sha256="a" * 64,
+    )
+    descendant = TaskView.model_validate(
+        {
+            "id": "historical_descendant",
+            "project_id": request.project_id,
+            "request_id": request.id,
+            "source_delivery_id": old_native_id,
+            "work_kind": work_kind,
+            "title": "Retained audit work",
+            "scope": ScopeView(
+                root="/workspace/code", selected_paths=(".",), delivery_id=old_native_id
+            ),
+            "status": "IMPLEMENTING",
+            "checkpoint_stage": "DELIVERING",
+            "terminal": False,
+            "last_activity": datetime.now(UTC),
+            "next_action": "Historical execution cannot claim current parent work.",
+        }
+    )
+
+    current = _current_requirement_work(
+        [descendant], historical_native_ids=frozenset({old_native_id})
+    )
+    observed = _request_with_current_work(request, current)
+
+    assert current == []
+    assert observed.stage == request.stage
+    assert observed.blocker == request.blocker
+    assert observed.next_action == request.next_action
+    assert descendant.source_delivery_id == old_native_id
+    assert descendant.request_id == request.id
+    assert not descendant.terminal
+    assert _current_requirement_work([descendant], historical_native_ids=frozenset()) == [
+        descendant
+    ]
 
 
 def test_product_dialogue_is_projected_in_order_with_safe_attachment_metadata(

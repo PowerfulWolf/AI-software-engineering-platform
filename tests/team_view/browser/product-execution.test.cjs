@@ -179,6 +179,7 @@ test("host interruption turns the retained stage and Designer queue red and offe
 test("claimed role changes update member queues without painting other assignments as executing", async (t) => {
   const h = await ui(t);
   const request = h.team.requests[0];
+  request.scopes = [{root: "/fixture", selected_paths: ["src/**"], delivery_id: "native"}];
   Object.assign(request, {stage: "DELIVERING", execution: {state: "UNKNOWN", responsibility: "engineering",
     reason: "尚无执行事实。", next_action: "核验执行状态。", action_required: false}});
   const task = {id: "native", request_id: request.id, project_id: request.project_id, title: "当前任务",

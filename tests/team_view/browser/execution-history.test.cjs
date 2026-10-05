@@ -22,6 +22,7 @@ test("one unchanged running operation follows design, planning and each native r
   h.state.operations = [operation("SUCCEEDED", {operation_id: "history_old"}), active,
     operation("RUNNING", {operation_id: "foreign_project", intent: {...active.intent, project_id: "other_project"}})];
   request.checkpoint_sha256 = "b".repeat(64);
+  request.scopes = [{root: "/fixture", selected_paths: ["."], delivery_id: "task_current"}];
   request.execution = {state: "UNKNOWN", responsibility: "team", reason: "尚无执行器心跳。",
     next_action: "核验执行事实。", action_required: false};
   const original = JSON.stringify(active);

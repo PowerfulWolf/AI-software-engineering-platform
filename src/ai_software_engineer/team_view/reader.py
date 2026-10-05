@@ -165,6 +165,13 @@ class _Native:
     team_id: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _NativeRequirementOwner:
+    request_id: str
+    unit_id: str
+    scope: ScopeView
+
+
 @dataclass(slots=True)
 class _ModelRouteAttemptCache:
     """Cache immutable route facts for one Team snapshot.
@@ -270,7 +277,7 @@ class ProductionTeamReader:
             else frozenset()
         )
         all_joints: list[JointCheckpoint] = []
-        retired_native_ids: set[str] = set()
+        joint_histories: dict[str, tuple[JointCheckpoint, ...]] = {}
         for path in _directories(
             selected.requirements_root if selected is not None else Path("/nonexistent"),
             "delivery_multi_*",
@@ -281,19 +288,23 @@ class ProductionTeamReader:
             if not history:
                 continue  # an operation lock can precede the first committed checkpoint
             checkpoint = history[-1]
-            if (
-                checkpoint.team_id != team.manifest.team_id
-                or checkpoint.team_manifest_sha256 != team.manifest.manifest_sha256
-                or checkpoint.project_id != selected.manifest.project_id
-                or checkpoint.project_manifest_sha256 != selected.manifest.manifest_sha256
-            ):
-                raise ValueError("Requirement Team or Project mismatch")
+            for record in history:
+                if (
+                    record.team_id != team.manifest.team_id
+                    or record.team_manifest_sha256 != team.manifest.manifest_sha256
+                    or record.project_id != selected.manifest.project_id
+                    or record.project_manifest_sha256 != selected.manifest.manifest_sha256
+                ):
+                    raise ValueError("Requirement Team or Project mismatch")
             all_joints.append(checkpoint)
-            if checkpoint.delivery_id in retired:
-                for record in history:
-                    retired_native_ids.update(_owned_native_delivery_ids(record))
+            joint_histories[checkpoint.delivery_id] = history
         joints = [joint for joint in all_joints if joint.delivery_id not in retired]
         all_natives = _read_native(selected) if selected is not None else ()
+        all_by_id = {native.checkpoint.delivery_id: native for native in all_natives}
+        ownership = _native_requirement_ownership(joint_histories, all_by_id)
+        retired_native_ids = {
+            native_id for native_id, owner in ownership.items() if owner.request_id in retired
+        }
         # A reservation's source is deliberately absent from the visible map
         # after product deletion. Bind exclusion to the validated native history
         # and repository, rather than treating any missing source as harmless.
@@ -309,50 +320,13 @@ class ProductionTeamReader:
             if native.checkpoint.delivery_id not in retired_native_ids
         )
         by_id = {n.checkpoint.delivery_id: n for n in natives}
-        ownership: dict[str, tuple[str, ScopeView]] = {}
+        current_native_ids: set[str] = set()
         requests: list[RequestView] = []
         for joint in joints:
-            children = {child.unit_id: child.checkpoint for child in joint.children}
-            if not children.keys() <= {unit.id for unit in joint.scope.units}:
-                raise ValueError("committed child unit is outside the Requirement scope")
-            scopes: list[ScopeView] = []
-            for unit in joint.scope.units:
-                native_id: str | None = None
-                reference = joint.design is not None and unit.id in joint.design.reference_only
-                child_checkpoint = children.get(unit.id)
-                if child_checkpoint is not None:
-                    if reference or child_checkpoint.repository_root != unit.root:
-                        raise ValueError("committed child code scope mismatch")
-                    # A sealed child keeps its identity when integration recovery clears or
-                    # replaces the parent plan. Derivation is only for the initial window
-                    # before that child has been attached to the parent journal.
-                    native_id = child_checkpoint.delivery_id
-                elif joint.plan is not None and not reference:
-                    derived = DerivedStageInputs(joint, unit.id)
-                    native_id = _delivery_id(
-                        derived.root,
-                        derived.requirement,
-                        namespace=joint.project_id,
-                    )
-                scope = ScopeView(
-                    root=unit.root,
-                    selected_paths=unit.selected_paths,
-                    reference_only=reference,
-                    delivery_id=native_id,
-                )
-                if native_id is not None:
-                    if native_id in ownership:
-                        raise ValueError("ambiguous native Requirement ownership")
-                    ownership[native_id] = (joint.delivery_id, scope)
-                scopes.append(scope)
-            for child in joint.children:
-                stored = by_id.get(child.checkpoint.delivery_id)
-                if (
-                    stored is None
-                    or child.checkpoint.delivery_id not in ownership
-                    or not checkpoint_is_ancestor(stored.history, child.checkpoint)
-                ):
-                    raise ValueError("committed child checkpoint mismatch")
+            scopes = _joint_scopes(joint, all_by_id)
+            current_native_ids.update(
+                scope.delivery_id for scope in scopes if scope.delivery_id is not None
+            )
             documents = tuple(
                 DocumentView(
                     name=name,
@@ -511,16 +485,16 @@ class ProductionTeamReader:
             assert selected is not None
             for native in natives:
                 cp = native.checkpoint
-                request_id, scope = ownership.get(
-                    cp.delivery_id,
-                    (
-                        cp.delivery_id,
-                        ScopeView(
-                            root=cp.repository_root,
-                            selected_paths=(".",),
-                            delivery_id=cp.delivery_id,
-                        ),
-                    ),
+                owner = ownership.get(cp.delivery_id)
+                request_id = owner.request_id if owner is not None else cp.delivery_id
+                scope = (
+                    owner.scope
+                    if owner is not None
+                    else ScopeView(
+                        root=cp.repository_root,
+                        selected_paths=(".",),
+                        delivery_id=cp.delivery_id,
+                    )
                 )
                 if scope.root != cp.repository_root:
                     raise ValueError("child code scope mismatch")
@@ -653,11 +627,17 @@ class ProductionTeamReader:
                         )
                     )
         tasks = [_with_execution_state(task) for task in tasks]
-        requests = [_request_with_current_work(request, tasks) for request in requests]
+        current_tasks = _current_requirement_work(
+            tasks, historical_native_ids=frozenset(ownership) - current_native_ids
+        )
+        historical_work_ids = frozenset(task.id for task in tasks) - frozenset(
+            task.id for task in current_tasks
+        )
+        requests = [_request_with_current_work(request, current_tasks) for request in requests]
         known_agents = {p.id for p in profiles}
         if any(a.agent_id not in known_agents for t in tasks for a in t.assignments):
             raise ValueError("assignment references an unknown Team member")
-        agents = _agent_views(profiles, requests, tasks)
+        agents = _agent_views(profiles, requests, tasks, historical_work_ids=historical_work_ids)
         return TeamSnapshot(
             as_of=datetime.now(UTC),
             team_id=team.manifest.team_id,
@@ -732,6 +712,8 @@ def _agent_views(
     profiles: tuple[AgentProfile, ...],
     requests: list[RequestView],
     tasks: list[TaskView],
+    *,
+    historical_work_ids: frozenset[str] = frozenset(),
 ) -> tuple[AgentView, ...]:
     """Project Requirement stages and native Task assignments share one Agent queue."""
 
@@ -744,12 +726,14 @@ def _agent_views(
             task.id
             for task in tasks
             if not task.terminal
+            and task.id not in historical_work_ids
             and any(assignment.agent_id == profile.id for assignment in task.assignments)
         ]
         current = [
             task.id
             for task in tasks
             if not task.terminal
+            and task.id not in historical_work_ids
             and any(
                 assignment.agent_id == profile.id and assignment.current_stage
                 for assignment in task.assignments
@@ -758,7 +742,7 @@ def _agent_views(
         history = [
             task.id
             for task in tasks
-            if task.terminal
+            if (task.terminal or task.id in historical_work_ids)
             and any(assignment.agent_id == profile.id for assignment in task.assignments)
         ]
         for request in requests:
@@ -801,22 +785,74 @@ def _retired_requirement_ids(project: ProjectWorkspace, journal: JointJournal) -
     ).retired_delivery_ids(journal)
 
 
-def _owned_native_delivery_ids(joint: JointCheckpoint) -> frozenset[str]:
-    """Return every native delivery identity derived from one joint Requirement."""
-    result = {child.checkpoint.delivery_id for child in joint.children}
+def _joint_scopes(joint: JointCheckpoint, natives: Mapping[str, _Native]) -> tuple[ScopeView, ...]:
+    """Project one checkpoint's current scope and validate its exact child observations."""
+    children = {child.unit_id: child.checkpoint for child in joint.children}
+    if not children.keys() <= {unit.id for unit in joint.scope.units}:
+        raise ValueError("committed child unit is outside the Requirement scope")
+    scopes: list[ScopeView] = []
     for unit in joint.scope.units:
         reference = joint.design is not None and unit.id in joint.design.reference_only
-        if joint.plan is None or reference:
-            continue
-        derived = DerivedStageInputs(joint, unit.id)
-        result.add(
-            _delivery_id(
+        native_id: str | None = None
+        child = children.get(unit.id)
+        if child is not None:
+            if reference or child.repository_root != unit.root:
+                raise ValueError("committed child code scope mismatch")
+            stored = natives.get(child.delivery_id)
+            if stored is None or not checkpoint_is_ancestor(stored.history, child):
+                raise ValueError("committed child checkpoint mismatch")
+            native_id = child.delivery_id
+        elif joint.plan is not None and not reference:
+            # Derive only an unattached child; an attached identity survives replanning.
+            derived = DerivedStageInputs(joint, unit.id)
+            native_id = _delivery_id(
                 derived.root,
                 derived.requirement,
                 namespace=joint.project_id,
             )
+        if native_id is not None:
+            stored = natives.get(native_id)
+            if stored is not None and stored.checkpoint.repository_root != unit.root:
+                raise ValueError("child code scope mismatch")
+        scopes.append(
+            ScopeView(
+                root=unit.root,
+                selected_paths=unit.selected_paths,
+                reference_only=reference,
+                delivery_id=native_id,
+            )
         )
-    return frozenset(result)
+    return tuple(scopes)
+
+
+def _native_requirement_ownership(
+    histories: Mapping[str, tuple[JointCheckpoint, ...]],
+    natives: Mapping[str, _Native],
+) -> dict[str, _NativeRequirementOwner]:
+    """Keep identity membership through history without making old work current."""
+    owners: dict[str, _NativeRequirementOwner] = {}
+    for request_id, records in histories.items():
+        for record in records:
+            if record.delivery_id != request_id:
+                raise ValueError("Requirement journal ownership mismatch")
+            for unit, scope in zip(record.scope.units, _joint_scopes(record, natives), strict=True):
+                if scope.delivery_id is None:
+                    continue
+                owner = _NativeRequirementOwner(request_id, unit.id, scope)
+                existing = owners.get(scope.delivery_id)
+                if existing is not None and existing != owner:
+                    raise ValueError("ambiguous native Requirement ownership")
+                owners[scope.delivery_id] = owner
+    return owners
+
+
+def _current_requirement_work(
+    tasks: list[TaskView], *, historical_native_ids: frozenset[str]
+) -> list[TaskView]:
+    """Keep historical delivery and verification/remediation descendants out of live work."""
+    return [
+        task for task in tasks if (task.source_delivery_id or task.id) not in historical_native_ids
+    ]
 
 
 def _read_native(project: ProjectWorkspace) -> tuple[_Native, ...]:
