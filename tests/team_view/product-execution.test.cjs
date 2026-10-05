@@ -129,3 +129,121 @@ test("exact technical approval remains in explicit engineering management disclo
   assert.match(text(approval), /产品负责人无需决定技术恢复方式/);
   assert.match(text(approval), /SHA exact/);
 });
+
+test("an active upstream operation shows node processing while executor facts stay unknown", () => {
+  const run = setup();
+  for (const stage of ["PRODUCT_DISCOVERY", "DESIGNING", "PLANNING", "INTEGRATING"]) {
+    run(`snapshot.tasks = []; request.stage = ${JSON.stringify(stage)};
+      execution.state = "UNKNOWN"; execution.responsibility = "team";
+      execution.reason_code = "EXECUTION_UNCONFIRMED"; execution.reason = "尚无执行器心跳。";
+      operations = [{status: "RUNNING", requested_at: "2026-10-04T00:00:00Z",
+        updated_at: "2026-10-04T00:00:00Z", intent: {action: "PRODUCT_APPROVAL", delivery_id: "r", project_id: "p"}}];`);
+    assert.equal(run("requestNodeExecution(request).state"), "running", stage);
+    assert.match(text(run("productExecutionSummary(request)")), /当前执行 · 执行中/);
+    assert.doesNotMatch(text(run("managerFlowStatus(request)")), /待确认|阻塞/);
+    assert.equal(run("execution.state"), "UNKNOWN");
+    assert.match(run("requestNodeBadge(request).textContent"), /执行中/);
+  }
+});
+
+test("delivery nodes keep unknown, queue and retry gray and durable waiting red", () => {
+  const run = setup();
+  run(`snapshot.tasks = []; request.stage = "DESIGNING"; request.scopes = [];
+    execution.state = "UNKNOWN"; execution.responsibility = "team";
+    operations = [];`);
+  assert.equal(run("requestNodeExecution(request).state"), "paused");
+  assert.equal(run("deliveryFlow(request).children[1].className"), "paused");
+  run(`operations = [{status: "QUEUED", updated_at: "2026-10-04T00:00:00Z",
+    intent: {action: "PRODUCT_APPROVAL", delivery_id: "r", project_id: "p"}}]`);
+  assert.equal(run("requestNodeExecution(request).label"), "已排队");
+  assert.equal(run("deliveryFlow(request).children[1].className"), "paused");
+  run('operations[0].status = "RUNNING"; execution.state = "QUEUED"');
+  assert.equal(run("requestNodeExecution(request).label"), "已排队", "typed queued execution outranks the processing operation");
+  run('operations[0].status = "RUNNING"; execution.state = "RETRY_SCHEDULED"');
+  assert.equal(run("requestNodeExecution(request).label"), "待重试");
+  run('execution.state = "WAITING"; execution.responsibility = "engineering"');
+  assert.equal(run("requestNodeExecution(request).state"), "blocked");
+  assert.equal(run("deliveryFlow(request).children[1].className"), "blocked");
+  assert.equal(run("requestPresentation(request).group"), "blocked");
+  run('execution.state = "UNKNOWN"; execution.reason_code = "EXECUTION_CLAIM_EXPIRED"');
+  assert.equal(run("requestNodeExecution(request).state"), "blocked");
+  assert.equal(run("deliveryFlow(request).children[1].className"), "blocked");
+  run('execution.reason_code = "EXECUTION_UNCONFIRMED"; operations[0].intent.project_id = "other"');
+  assert.equal(run("requestNodeExecution(request).state"), "paused");
+});
+
+test("product decisions remain red and completed delivery has seven green completed nodes", () => {
+  const run = setup();
+  run('snapshot.tasks = []; request.scopes = []; execution.state = "UNKNOWN"');
+  for (const [stage, expected] of [["WAITING_PRODUCT_REPLY", "需确认"], ["WAITING_PRODUCT_APPROVAL", "待审批"]]) {
+    run(`request.stage = ${JSON.stringify(stage)}; operations = [{status: "SUCCEEDED", updated_at: "2026-10-04T00:00:00Z",
+      intent: {action: "PRODUCT_REPLY", delivery_id: "r", project_id: "p"}}]`);
+    assert.equal(run("requestNodeExecution(request).label"), expected);
+    assert.equal(run("deliveryFlow(request).children[0].className"), "blocked");
+  }
+  run('request.stage = "DONE"; execution.state = "COMPLETED"');
+  assert.equal(run('deliveryFlow(request).children.every(step => step.className === "done")'), true);
+  assert.match(text(run("deliveryFlow(request).children[6]")), /已完成/);
+  run('request.stage = "CLOSED"; execution.state = "STOPPED"');
+  assert.equal(run('deliveryFlow(request).children.some(step => step.className === "done")'), false);
+});
+
+test("typed unknown execution retains budget, recheck and exact-approval gates until a legal retry", () => {
+  const run = setup();
+  run(`snapshot.tasks = []; request.stage = "DESIGNING"; request.scopes = [];
+    execution.state = "UNKNOWN"; execution.responsibility = "team"; operations = [];
+    request.stage_budget = {role: "designer", exhausted: "work", attempts: 3, max_attempts: 3, transient_failures: 0, max_transient_failures: 5};`);
+  assert.equal(run("requestNodeExecution(request).label"), "设计预算已用尽");
+  assert.equal(run("requestPresentation(request).group"), "blocked");
+  run('request.design_recovery_available = true');
+  assert.equal(run("requestNodeExecution(request).label"), "设计待恢复");
+  run('request.design_recovery_available = false; request.stage_budget = null; request.design_recheck_pending = true');
+  assert.equal(run("requestNodeExecution(request).state"), "blocked");
+  run(`request.design_recheck_pending = false;
+    operations = [{status: "SUCCEEDED", updated_at: "2026-10-04T00:00:00Z",
+      intent: {action: "CONTINUE_DELIVERY", delivery_id: "r", project_id: "p"},
+      result: {delivery_id: "r", checkpoint_sha256: "current", approval: {kind: "coder_scope", title: "新增文件范围", plan_sha256: "exact"}}}];`);
+  assert.equal(run("requestNodeExecution(request).label"), "待工程确认");
+  run(`operations = [{status: "RUNNING", updated_at: "2026-10-04T00:00:00Z",
+    intent: {action: "CONTINUE_DELIVERY", delivery_id: "r", project_id: "p"}}];
+    request.stage_budget = {role: "designer", exhausted: "work", attempts: 3, max_attempts: 3};`);
+  assert.equal(run("requestNodeExecution(request).state"), "running", "a reserved final work attempt is still processing");
+});
+
+test("a current successor without a claim stays gray ahead of historical operation failures or advice", () => {
+  const run = setup();
+  run(`execution.state = "UNKNOWN"; execution.responsibility = "team";
+    request.coordination = null; task.role_queue = []; task.last_activity = "2026-10-04T00:02:00Z";
+    operations = [{status: "FAILED", updated_at: "2026-10-04T00:01:00Z", result: null,
+      error_code: "EXECUTION_FAILED", error_summary: "旧操作失败",
+      intent: {action: "CONTINUE_DELIVERY", delivery_id: "r", project_id: "p", expected_checkpoint_sha256: "old"}}];`);
+  for (const status of ["NEW", "PLANNING", "IMPLEMENTING"]) {
+    run(`task.status = "${status}"`);
+    assert.equal(run("requestNodeExecution(request).state"), "paused", status);
+    assert.equal(run("requestPresentation(request).group"), "active", status);
+    assert.doesNotMatch(text(run("productExecutionSummary(request)")), /旧操作失败/, status);
+  }
+  run('operations = []; request.coordination = {draft: {action: "WAITING_HUMAN", summary: "旧协调建议"}}');
+  assert.equal(run("requestNodeExecution(request).state"), "paused");
+  assert.equal(run("requestPresentation(request).group"), "active");
+});
+
+test("a failed upstream operation stays red after its stage attempt advances the input checkpoint", () => {
+  const run = setup();
+  run(`snapshot.tasks = []; request.stage = "DESIGNING"; request.coordination = null;
+    request.checkpoint_sha256 = "after-stage-attempt";
+    execution.state = "UNKNOWN"; execution.responsibility = "team";
+    operations = [{status: "FAILED", requested_at: "2026-10-04T00:02:00Z",
+      updated_at: "2026-10-04T00:03:00Z", result: null,
+      error_code: "EXECUTION_FAILED", error_summary: "本轮失败",
+      intent: {action: "PRODUCT_APPROVAL", delivery_id: "r", project_id: "p",
+        expected_checkpoint_sha256: "before-stage-attempt"}}];`);
+  for (const action of ["PRODUCT_APPROVAL", "CONTINUE_DELIVERY"]) {
+    run(`operations[0].intent.action = "${action}"`);
+    assert.equal(run("requestNodeExecution(request).state"), "blocked", action);
+    assert.equal(run("requestNodeExecution(request).reason"), "本轮失败", action);
+    assert.equal(run("requestPresentation(request).group"), "blocked", action);
+  }
+  run('operations[0].intent.project_id = "other-project"');
+  assert.equal(run("requestNodeExecution(request).state"), "paused", "another project cannot establish this failure");
+});

@@ -207,3 +207,79 @@ test(`new terminal ${role} failure remains blocked while its Continue operation 
     "the previous terminal failure cannot mask preparation of a new authorized recovery");
   assert.doesNotMatch(run("managerFlowStatus(request).textContent"), /当前角色已阻塞/);
 });
+
+test("native flow uses the current claimed role after QA and review rework, not an older task", () => {
+  const run = state();
+  run(`request.coordination = null; request.scopes = [{delivery_id: "t"}];
+    task.source_delivery_id = "t"; task.id = "candidate_verification";
+    task.last_activity = "2026-10-01T00:02:00Z";
+    snapshot.tasks.unshift({id: "t", request_id: "r", source_delivery_id: "t", status: "REVIEW", terminal: true,
+      last_activity: "2026-10-01T00:00:00Z", role_queue: [], timeline: [{details: {kind: "qa-report", status: "PASS"}}]});`);
+  for (const [status, role, index] of [["IMPLEMENTING", "coder", 3], ["QA", "qa", 4], ["REVIEW", "reviewer", 5]]) {
+    run(`task.status = ${JSON.stringify(status)};
+      task.role_queue[0] = {role: ${JSON.stringify(role)}, status: "RUNNING", lease_liveness: "LEASE_VALID"};
+      task.execution_history = [{details: {kind: "qa-report", status: "FAIL"}}, {details: {kind: "review-report", verdict: "REJECT"}}];`);
+    assert.equal(run(`deliveryFlow(request).children[${index}].className`), "current", status);
+    assert.equal(run(`deliveryFlow(request).children.slice(${index + 1}).some(step => step.className === "done")`), false, status);
+    if (index > 3) assert.equal(run("deliveryFlow(request).children[3].className"), "done");
+  }
+  run('task.role_queue[0].role = "coder"');
+  assert.equal(run("deliveryFlow(request).children[5].className"), "paused", "a different role cannot prove Review is executing");
+  run('request.stage = "DONE"');
+  assert.equal(run('deliveryFlow(request).children.every(step => step.className === "done")'), true, "old/current task phases cannot override DONE");
+  run('request.failed_stages = ["DESIGNING", "DELIVERING"]; task.role_queue[0].status = "WAITING_HUMAN"');
+  assert.equal(run('deliveryFlow(request).children.every(step => step.className === "done")'), true, "retained waits and failures cannot turn DONE red");
+});
+
+test("native queue and expired-claim facts override a running manager operation with unknown execution", () => {
+  const run = state();
+  run(`request.scopes = [{delivery_id: "t"}];
+    request.execution = {state: "UNKNOWN", responsibility: "team", reason_code: "EXECUTION_UNCONFIRMED", reason: "无心跳", next_action: "核验"};
+    operations = [{status: "RUNNING", requested_at: "2026-10-01T00:01:00Z", updated_at: "2026-10-01T00:01:00Z",
+      intent: {action: "CONTINUE_DELIVERY", delivery_id: "r", project_id: "p"}}];`);
+  for (const status of ["READY", "LEASED"]) {
+    run(`task.role_queue[0].status = ${JSON.stringify(status)}`);
+    assert.equal(run("deliveryFlow(request).children[3].className"), "paused");
+  }
+  for (const status of ["WAITING_HUMAN", "WAITING_DEPENDENCY"]) {
+    run(`task.role_queue[0].status = ${JSON.stringify(status)}`);
+    assert.equal(run("deliveryFlow(request).children[3].className"), "blocked");
+    assert.equal(run("requestPresentation(request).group"), "blocked");
+  }
+  run('task.role_queue[0] = {role: "coder", status: "RETRY_SCHEDULED", lease_liveness: "LEASE_EXPIRED", wait_reason: "lease_expired:claim_old"}');
+  assert.equal(run("deliveryFlow(request).children[3].className"), "blocked");
+  assert.equal(run("requestPresentation(request).group"), "blocked");
+  run('task.status = "BLOCKED"; task.terminal = true; task.blocker = "Fresh failure"; task.last_activity = "2026-10-01T00:02:00Z"; task.role_queue[0].status = "CLOSED"');
+  assert.equal(run("requestPresentation(request).blocker"), "Fresh failure");
+  assert.equal(run("deliveryFlow(request).children[3].className"), "blocked");
+});
+
+test("reader-shaped candidate verification keeps its current gate ahead of parent integration", () => {
+  const run = state();
+  run(`request.stage = "INTEGRATING"; request.coordination = null; request.scopes = [{delivery_id: "t"}];
+    request.execution = {state: "UNKNOWN", responsibility: "team", reason_code: "EXECUTION_UNCONFIRMED", reason: "无心跳", next_action: "核验"};
+    task.id = "verification_candidate"; task.source_delivery_id = "t"; task.work_kind = "candidate_verification";
+    task.role_queue = []; task.last_activity = "2026-10-01T00:02:00Z";
+    snapshot.tasks.unshift({id: "t", source_delivery_id: "t", request_id: "r", status: "REVIEW", terminal: true,
+      last_activity: "2026-10-01T00:00:00Z", role_queue: []});
+    operations = [{status: "RUNNING", requested_at: "2026-10-01T00:01:00Z", updated_at: "2026-10-01T00:01:00Z",
+      intent: {action: "CONTINUE_DELIVERY", delivery_id: "r", project_id: "p"}}];`);
+  for (const [status, index] of [["VERIFY_QA", 4], ["VERIFY_REVIEW", 5]]) {
+    run(`task.status = ${JSON.stringify(status)}`);
+    assert.equal(run(`deliveryFlow(request).children[${index}].className`), "paused", status);
+    assert.equal(run(`deliveryFlow(request).children.slice(${index}).some(step => step.className === "done")`), false, status);
+    assert.equal(run("requestNodeExecution(request).state"), "paused", "parent Operation does not prove the verifier is running");
+  }
+});
+
+test("a residual Coder claim cannot animate a queued or continuation-required checkpoint", () => {
+  const run = state();
+  run('request.coordination = null; request.scopes = [{delivery_id: "t"}]');
+  for (const status of ["QUEUED", "CONTINUE_REQUIRED"]) {
+    run(`task.status = ${JSON.stringify(status)}`);
+    assert.equal(run("deliveryFlow(request).children[3].className"), "paused", status);
+    assert.equal(run("requestNodeExecution(request).state"), "paused", status);
+  }
+  run('task.status = "IMPLEMENTING"');
+  assert.equal(run("deliveryFlow(request).children[3].className"), "current");
+});

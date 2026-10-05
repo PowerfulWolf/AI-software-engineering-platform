@@ -34,7 +34,7 @@ test("product execution summary separates phase from engineering wait and retry"
   await h.tick();
   assert.equal(await h.page.locator(".delivery-flow li.current").count(), 0);
   assert.equal(await h.page.locator(".delivery-flow li.paused").count(), 1);
-  assert.match(await summary.innerText(), /等待重试/);
+  assert.match(await summary.innerText(), /待重试/);
   assert.match(await summary.innerText(), /计划重试时间/);
 });
 
@@ -56,4 +56,65 @@ test("legacy product approval facts show Chinese actions and retain the original
   assert.equal(await h.page.evaluate(() => snapshot.requests[0].execution.next_action), original);
   assert.equal(await h.page.evaluate(() => operations[0].result.next_action), original);
   assert.equal(await detail.getByRole("button", {name: "批准 ProductSpec 并开始交付", exact: true}).count(), 1);
+});
+
+test("delivery node colors follow operation, wait and completion facts instead of executor heartbeat", async (t) => {
+  const h = await ui(t);
+  await h.requests();
+  const request = h.team.requests[0];
+  Object.assign(request, {stage: "DESIGNING", execution: {state: "UNKNOWN", responsibility: "team",
+    reason_code: "EXECUTION_UNCONFIRMED", reason: "尚无执行器心跳。", next_action: "请核对执行状态。", action_required: false}});
+  h.state.operations = [operation("RUNNING", {intent: {action: "PRODUCT_APPROVAL", delivery_id: request.id, project_id: request.project_id}})];
+  await h.tick();
+  await h.page.evaluate(() => showDetail("request", "request_fixture"));
+  const flow = h.page.locator(".delivery-flow");
+  const color = index => flow.locator("li").nth(index).locator("span").evaluate(node => getComputedStyle(node).backgroundColor);
+  assert.equal(await color(0), "rgb(23, 99, 75)");
+  assert.equal(await color(1), "rgb(36, 89, 204)");
+  assert.match(await flow.locator("li").nth(1).innerText(), /执行中/);
+  assert.equal(await flow.locator("li").nth(1).getAttribute("aria-current"), "step");
+  assert.match(await h.page.locator(".request-node-badge").first().innerText(), /执行中/);
+  assert.match(await h.page.locator(".product-execution-summary").innerText(), /当前执行 · 执行中/);
+  assert.equal(await h.page.evaluate(() => snapshot.requests[0].execution.state), "UNKNOWN");
+  await h.close();
+  await h.page.getByText("需求工程详情", {exact: true}).click();
+  assert.match(await h.page.locator("#detail").innerText(), /执行事实状态 · 执行状态待确认/);
+  request.execution.state = "WAITING"; request.execution.responsibility = "engineering";
+  await h.tick();
+  assert.equal(await color(1), "rgb(198, 40, 40)");
+  assert.match(await flow.locator("li").nth(1).innerText(), /已阻塞/);
+  request.execution.state = "UNKNOWN"; request.execution.responsibility = "team";
+  h.state.operations[0].status = "QUEUED";
+  await h.tick();
+  assert.equal(await color(1), "rgb(226, 232, 240)");
+  assert.match(await flow.locator("li").nth(1).innerText(), /已排队/);
+  h.state.operations = [];
+  await h.tick();
+  assert.match(await flow.locator("li").nth(1).innerText(), /待执行|待核对/);
+  request.stage = "DONE"; request.execution.state = "COMPLETED";
+  await h.tick();
+  assert.equal(await flow.locator("li.done").count(), 7);
+  assert.equal(await color(6), "rgb(23, 99, 75)");
+  assert.match(await flow.locator("li").nth(6).innerText(), /已完成/);
+});
+
+test("polling updates the card phase when all three native role nodes stay running", async (t) => {
+  const h = await ui(t);
+  await h.requests();
+  const request = h.team.requests[0];
+  Object.assign(request, {stage: "DELIVERING", scopes: [{root: "/fixture", selected_paths: ["."], delivery_id: "native_current"}],
+    execution: {state: "UNKNOWN", responsibility: "team", reason_code: "EXECUTION_UNCONFIRMED",
+      reason: "尚无执行器心跳。", next_action: "核对状态。", action_required: false}});
+  const task = {id: "native_current", project_id: request.project_id, request_id: request.id, title: request.title,
+    status: "IMPLEMENTING", terminal: false, last_activity: "2026-10-04T00:01:00Z", next_action: "请等待当前角色。",
+    scope: request.scopes[0], role_queue: [], assignments: [], documents: [], timeline: [], runs: []};
+  h.team.tasks.push(task);
+  for (const [status, role, phase] of [["IMPLEMENTING", "coder", "实现"], ["QA", "qa", "测试"], ["REVIEW", "reviewer", "评审"]]) {
+    task.status = status;
+    task.role_queue = [{role, status: "RUNNING", lease_liveness: "LEASE_VALID"}];
+    await h.tick();
+    assert.equal(await h.page.locator("#content .request-node-badge").innerText(), `${phase} · 执行中`);
+    await h.page.evaluate(() => showDetail("request", "request_fixture"));
+    assert.equal(await h.page.locator("#detail .request-node-badge").innerText(), `${phase} · 执行中`);
+  }
 });

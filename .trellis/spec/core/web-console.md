@@ -40,6 +40,47 @@ Base：已中文及未知正文不变；Bad：改写 journal 或改变审批事�
 
 ## 2. Signatures
 
+### 流程节点状态与执行器状态（2026-10-05）
+
+`requestNodeExecution(request)` 是共享前端读侧派生，不修改 API `execution`、Operation 或
+持久事实。流程、需求卡片、详情与 Manager 说明采用同一节点事实。蓝色“执行中”表示当前
+交付节点正在处理；绿色“已完成”表示阶段已通过；红色表示阻塞、需确认或待审批；灰色表示
+排队、待重试、待执行或状态待核对。颜色须有文字和当前节点 `aria-current=step` 辅助。
+
+| 当前事实（按优先级） | 节点展示 |
+| --- | --- |
+| Requirement DONE | 七个节点全部绿色已完成，不被旧 Task 阶段覆盖 |
+| CLOSED | 已关闭灰色，不把关闭作为通过所有阶段的事实 |
+| 产品待回复/待审批 | 红色需确认/待审批，旧成功 Product 操作不代表已批准 |
+| 当前知识/角色/依赖等待、claim 过期或中断 | 红色阻塞，即便 Manager Operation 仍在收尾 |
+| 当前角色新终态失败，last_activity 晚于 Operation.requested_at | 红色失败 gate，保留原 operationChildBlocker 的时间边界 |
+| WorkItem READY/LEASED、typed execution QUEUED、Operation QUEUED 或 RETRY_SCHEDULED | 灰色已排队/待重试，不宣称模型已执行 |
+| 已进入 PRODUCT_DISCOVERY/DESIGNING/PLANNING/INTEGRATING，同需求同 Project 工作 Operation RUNNING，且无上列事实 | 当前节点蓝色执行中 |
+| 当前 native 角色与 Task 阶段匹配、RUNNING + LEASE_VALID | 对应 Coder/QA/Review 节点蓝色执行中 |
+| 无有效处理或 claim 事实 | 灰色待执行/状态待核对，不从阶段名称猜执行 |
+
+上游节点处理可以包含知识核对和产物生成，并不证明执行器/模型在线；API heartbeat/execution
+UNKNOWN 原样保留，技术状态放需求工程详情，产品提示为“当前节点正在执行，请等待本阶段处理
+完成。”。生命周期关闭/重开命令不属于阶段工作 Operation，其他 Project 的同名 ID 也不授权展示。
+
+流程位置使用 `currentRequestTasks`；候选验证或返工的当前 Task 优先于旧 native Task。QA FAIL
+或 Review REJECT 后，当前 Coder 的实现节点执行中，后续测试/评审保持灰色；当前 QA 时实现
+已完成，当前 Review 时实现与测试已完成。不从旧 candidate 的原始 PASS/APPROVE artifact 猜
+当前通过，也不删除历史否定结论。
+
+当前无阻塞的非终态子 Task 若缺少运行 claim，保持灰色状态待核对；旧 FAILED Operation 或
+Manager advice 不能遮住该 successor，包括 NEW/PLANNING 的当前工作。没有当前子工作时，
+最新同 Project 的交付 FAILED Operation 表示操作已停止，显示红色阻塞。FAILED.result 按
+ConsoleOperation Schema 必须为 null；expected_checkpoint_sha256 是操作输入，阶段 attempt
+可先追加新 checkpoint 再失败，不得要求该输入摘要仍等于当前 checkpoint 才展示失败。
+card 增量签名同时包含节点事实与 deliveryPhase，角色一直 RUNNING
+但 IMPLEMENTING → QA → REVIEW 时仍需刷新阶段文字，不能保留旧“实现 · 执行中”。
+
+验证：product-execution/delivery-status 轻量矩阵及真实 Chrome computed styles，涵盖上游
+UNKNOWN+RUNNING、队列/重试、durable wait/expired、新失败、角色返工、旧 Task 冲突、DONE
+与 CLOSED。纯前端修复无需改库；部署资产刷新页面即可继续原需求，回滚资产并刷新保留所有
+历史 bytes/hash、审批、预算与状态。
+
 ```python
 ProjectConsole.submit(
     intent: ConsoleIntent,

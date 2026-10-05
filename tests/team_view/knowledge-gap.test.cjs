@@ -163,10 +163,10 @@ test("blocked delivery flow uses a visible warning treatment", () => {
     path.join(__dirname, "../../src/ai_software_engineer/team_view/style.css"),
     "utf8",
   );
-  assert.match(styles, /\.delivery-flow li\.blocked\s*\{[^}]*color:\s*var\(--warn\);/s);
+  assert.match(styles, /\.delivery-flow li\.blocked\s*\{[^}]*color:\s*#c62828;/s);
   assert.match(
     styles,
-    /\.delivery-flow li\.blocked span\s*\{[^}]*background:\s*var\(--warn\);/s,
+    /\.delivery-flow li\.blocked span\s*\{[^}]*background:\s*#c62828;/s,
   );
 });
 

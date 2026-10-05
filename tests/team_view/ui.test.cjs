@@ -2207,7 +2207,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
       node.className.includes("request") &&
       text(node).includes(malicious),
   );
-  assert.match(text(activeRequirementCard), /测试中/);
+  assert.match(text(activeRequirementCard), /测试 · 状态待核对/);
   assert.doesNotMatch(text(activeRequirementCard), /Old joint blocker/);
   const activeDeliveryFlow = descend(get("detail")).find(
     (node) =>
@@ -2256,9 +2256,8 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   const authoritativeQaFlow = descend(get("detail")).find(
     (node) => node.className === "delivery-flow",
   );
-  const authoritativeQaCurrent = authoritativeQaFlow.children.find(
-    (node) => node.className === "current",
-  );
+  const authoritativeQaCurrent = authoritativeQaFlow.children[4];
+  assert.equal(authoritativeQaCurrent.className, "paused", "phase alone is not a running claim");
   assert.match(
     text(authoritativeQaCurrent),
     /5.*测试/,
@@ -2280,13 +2279,12 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   const activeLeaseQaFlow = descend(get("detail")).find(
     (node) => node.className === "delivery-flow",
   );
-  const activeLeaseQaCurrent = activeLeaseQaFlow.children.find(
-    (node) => node.className === "current",
-  );
+  const activeLeaseQaCurrent = activeLeaseQaFlow.children[4];
+  assert.equal(activeLeaseQaCurrent.className, "paused", "this legacy verification fixture has no running lease facts");
   assert.match(
     text(activeLeaseQaCurrent),
     /5.*测试/,
-    "an active QA verification lease must override the joint INTEGRATING checkpoint",
+    "the current QA verification phase must override the joint INTEGRATING checkpoint",
   );
   assert.match(text(get("detail")), /查看仓库任务 · 候选测试中/);
   assert.doesNotMatch(text(get("detail")), /VERIFY_QA/);
@@ -2374,16 +2372,16 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     1,
     "Requirement detail owns exactly one blocker module",
   );
-  assert.equal(
-    blockedDetail.match(/等待恢复/g)?.length,
-    2,
-    "the same blocker remains one reason plus the Manager recovery status",
-  );
+  assert.match(text(get("detail").querySelector(".request-blocking-section")), /等待恢复/);
+  assert.match(text(get("detail").querySelector(".flow-manager")), /等待恢复/);
   assert.match(blockedDetail, /当前没有可自动继续的路径/);
   assert.doesNotMatch(blockedDetail, /Old joint blocker/);
   storedOperations[1].result.next_action = "Waiting for recovery";
   await interval.fn();
-  assert.equal(text(get("detail")).match(/等待恢复/g)?.length, 2);
+  assert.match(text(get("detail").querySelector(".request-blocking-section")), /等待恢复/);
+  assert.match(text(get("detail").querySelector(".flow-manager")), /等待恢复/);
+  assert.match(text(get("detail").querySelector(".execution-history")), /等待恢复/,
+    "complete Operation history retains its original next step without constraining the number of recovery rounds");
   storedOperations[1].result.next_action = "No automatic continuation is available.";
   fixture.tasks.push({
     ...structuredClone(fixture.tasks[0]),
@@ -2612,9 +2610,8 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     "deliveryFlow(snapshot.requests[0])",
     context,
   );
-  const currentDelivery = descend(finalizationFlow).find(
-    (node) => node.className === "current",
-  );
+  const currentDelivery = finalizationFlow.children[6];
+  assert.equal(currentDelivery.className, "blocked", "final confirmation does not imply execution");
   assert.match(text(currentDelivery), /7\s+交付/);
   fixture.requests[0] = beforeSingleFinalization;
   await interval.fn();

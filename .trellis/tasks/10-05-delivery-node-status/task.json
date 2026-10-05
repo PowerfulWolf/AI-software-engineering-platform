@@ -1,0 +1,12 @@
+{
+  "id": "delivery-node-status-20261005",
+  "title": "流程节点按实际处理事实展示蓝绿红灰状态",
+  "status": "completed",
+  "phase": "independently_verified",
+  "created_at": "2026-10-05",
+  "verified_at": "2026-10-05T12:28:34Z",
+  "owner": "codex",
+  "scope": ["src/ai_software_engineer/team_view/app.js", "src/ai_software_engineer/team_view/style.css", "tests/team_view/product-execution.test.cjs", "tests/team_view/delivery-status.test.cjs", "tests/team_view/knowledge-gap.test.cjs", "tests/team_view/ui.test.cjs", "tests/team_view/browser/product-execution.test.cjs", ".trellis/spec/core/web-console.md"],
+  "constraints": ["纯前端读侧派生，不修改 API 或 durable facts", "节点处理中不代表执行器或模型在线", "真实等待、中断、过期 claim 及当前角色失败优先", "只运行相关增量测试，不运行全量、不操作生产、不部署提交"],
+  "rollback": "回退本次前端资产并刷新页面，无需数据库迁移或修改历史记录。"
+}

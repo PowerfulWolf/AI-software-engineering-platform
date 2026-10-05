@@ -1897,7 +1897,6 @@ main[data-page="requests"] .page-context {
   background: #edf0f5;
   font-weight: 700;
 }
-.delivery-flow li.done span,
 .delivery-flow li.current span {
   background: var(--accent);
   color: white;
@@ -1905,11 +1904,14 @@ main[data-page="requests"] .page-context {
 .delivery-flow li.current {
   color: var(--accent);
 }
+.delivery-flow li.done { color: var(--good); }
+.delivery-flow li.done span { background: var(--good); color: white; }
+.delivery-flow li.paused span { background: #e2e8f0; color: #536174; }
 .delivery-flow li.blocked {
-  color: var(--warn);
+  color: #c62828;
 }
 .delivery-flow li.blocked span {
-  background: var(--warn);
+  background: #c62828;
   color: white;
 }
 .delivery-flow .flow-state {
@@ -1929,9 +1931,13 @@ main[data-page="requests"] .page-context {
   background: #e9effd;
 }
 .flow-manager.blocked {
-  color: var(--warn);
-  background: #fff0e6;
+  color: #c62828;
+  background: #fef2f2;
 }
+.flow-manager.paused, .request-node-badge.paused, .request-node-badge.closed { color: #536174; background: #f1f5f9; }
+.request-node-badge.running { color: var(--accent); background: #e9effd; }
+.request-node-badge.done { color: var(--good); background: #e9f5ef; }
+.request-node-badge.blocked { color: #c62828; background: #fef2f2; }
 .model-route-list,
 .agent-model-list {
   overflow: hidden;
