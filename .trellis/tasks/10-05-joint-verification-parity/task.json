@@ -1,8 +1,8 @@
 {
   "id": "joint-verification-parity-20261005",
   "title": "联合设计验证约束对齐原生契约并恢复无 Task 的交付",
-  "status": "verified_pending_production",
-  "phase": "implemented",
+  "status": "completed",
+  "phase": "production_continue_verified",
   "created_at": "2026-10-05",
   "owner": "codex",
   "constraints": ["不放宽已批准的验证层级或角色权限", "只读核验失败事实后使用 typed 恢复，不直接改 SQL/journal/verdict", "旧产物、审批、失败、预算和工作现场保留", "仅相关增量测试"]
