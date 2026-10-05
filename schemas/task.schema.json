@@ -115,6 +115,52 @@
     },
     "InterruptionContinuationPolicy": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "capability_id": {
+                "const": "git-regular-text-mutation-inventory-v2"
+              },
+              "allowed_changes": {
+                "const": [
+                  "text_added",
+                  "text_modified",
+                  "text_deleted",
+                  "regular_mode_changed"
+                ]
+              }
+            },
+            "required": [
+              "capability_id",
+              "allowed_changes"
+            ]
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "v1"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "capability_id": {
+                "const": "git-text-mutation-inventory-v1"
+              },
+              "max_continuations": {
+                "const": 1
+              },
+              "allowed_changes": {
+                "const": [
+                  "text_added",
+                  "text_modified"
+                ]
+              }
+            }
+          }
+        }
+      ],
       "description": "Frozen narrow capability; legacy Tasks have no implicit authorization.",
       "properties": {
         "kind": {
@@ -124,8 +170,11 @@
           "type": "string"
         },
         "schema_version": {
-          "const": "v1",
           "default": "v1",
+          "enum": [
+            "v1",
+            "v2"
+          ],
           "title": "Schema Version",
           "type": "string"
         },
@@ -136,15 +185,17 @@
           "type": "string"
         },
         "capability_id": {
-          "const": "git-text-mutation-inventory-v1",
           "default": "git-text-mutation-inventory-v1",
+          "enum": [
+            "git-text-mutation-inventory-v1",
+            "git-regular-text-mutation-inventory-v2"
+          ],
           "title": "Capability Id",
           "type": "string"
         },
         "max_continuations": {
-          "const": 1,
           "default": 1,
-          "maximum": 1,
+          "maximum": 199,
           "minimum": 1,
           "title": "Max Continuations",
           "type": "integer"
@@ -174,24 +225,342 @@
             "text_added",
             "text_modified"
           ],
-          "maxItems": 2,
-          "minItems": 2,
-          "prefixItems": [
-            {
-              "const": "text_added",
-              "type": "string"
-            },
-            {
-              "const": "text_modified",
-              "type": "string"
-            }
-          ],
+          "items": {
+            "enum": [
+              "text_added",
+              "text_modified",
+              "text_deleted",
+              "regular_mode_changed"
+            ],
+            "type": "string"
+          },
           "title": "Allowed Changes",
           "type": "array"
         }
       },
       "title": "InterruptionContinuationPolicy",
       "type": "object"
+    },
+    "AcceptanceCriterion": {
+      "additionalProperties": false,
+      "description": "One independently verifiable condition for Task delivery.",
+      "properties": {
+        "id": {
+          "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "required": {
+          "title": "Required",
+          "type": "boolean"
+        },
+        "verification": {
+          "minLength": 1,
+          "title": "Verification",
+          "type": "string"
+        },
+        "test_ids": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Test Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "description",
+        "required",
+        "verification"
+      ],
+      "title": "AcceptanceCriterion",
+      "type": "object"
+    },
+    "EngineeringCapability": {
+      "enum": [
+        "verification_refresh",
+        "swift_sandbox",
+        "python_mysql_sandbox",
+        "native_ui_sandbox",
+        "in_scope_prerequisite_repair",
+        "pre_execution_rebind",
+        "execution_baseline_rebind",
+        "owned_mysql_cleanup"
+      ],
+      "title": "EngineeringCapability",
+      "type": "string"
+    },
+    "EngineeringGrant": {
+      "additionalProperties": false,
+      "properties": {
+        "capability": {
+          "$ref": "#/$defs/EngineeringCapability"
+        },
+        "max_admissions": {
+          "maximum": 20,
+          "minimum": 1,
+          "title": "Max Admissions",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "capability",
+        "max_admissions"
+      ],
+      "title": "EngineeringGrant",
+      "type": "object"
+    },
+    "EngineeringPolicy": {
+      "additionalProperties": false,
+      "description": "Versioned organization decision frozen only on newly admitted Tasks.",
+      "properties": {
+        "kind": {
+          "const": "engineering_policy",
+          "default": "engineering_policy",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "policy_id": {
+          "default": "local-bounded-engineering-v1",
+          "minLength": 1,
+          "title": "Policy Id",
+          "type": "string"
+        },
+        "policy_version": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Policy Version",
+          "type": "integer"
+        },
+        "authorization_source": {
+          "const": "organization_engineering_policy",
+          "default": "organization_engineering_policy",
+          "title": "Authorization Source",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/EngineeringScope"
+        },
+        "issued_by": {
+          "$ref": "#/$defs/LocalOperatorPrincipal"
+        },
+        "grants": {
+          "items": {
+            "$ref": "#/$defs/EngineeringGrant"
+          },
+          "minItems": 1,
+          "title": "Grants",
+          "type": "array"
+        },
+        "max_total_admissions": {
+          "default": 12,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Total Admissions",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "scope",
+        "issued_by",
+        "grants"
+      ],
+      "title": "EngineeringPolicy",
+      "type": "object"
+    },
+    "EngineeringScope": {
+      "additionalProperties": false,
+      "properties": {
+        "team_id": {
+          "minLength": 1,
+          "title": "Team Id",
+          "type": "string"
+        },
+        "project_id": {
+          "minLength": 1,
+          "title": "Project Id",
+          "type": "string"
+        },
+        "repository_id": {
+          "minLength": 1,
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "repository_root": {
+          "minLength": 1,
+          "title": "Repository Root",
+          "type": "string"
+        }
+      },
+      "required": [
+        "team_id",
+        "project_id",
+        "repository_id",
+        "repository_root"
+      ],
+      "title": "EngineeringScope",
+      "type": "object"
+    },
+    "JsonValue": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "LocalOperatorPrincipal": {
+      "additionalProperties": false,
+      "description": "Trusted local composition identity; request/model text cannot add duties.",
+      "properties": {
+        "kind": {
+          "const": "trusted_local_operator",
+          "default": "trusted_local_operator",
+          "title": "Kind",
+          "type": "string"
+        },
+        "operator_id": {
+          "minLength": 1,
+          "title": "Operator Id",
+          "type": "string"
+        },
+        "duties": {
+          "items": {
+            "$ref": "#/$defs/OperatorDuty"
+          },
+          "minItems": 1,
+          "title": "Duties",
+          "type": "array"
+        }
+      },
+      "required": [
+        "operator_id",
+        "duties"
+      ],
+      "title": "LocalOperatorPrincipal",
+      "type": "object"
+    },
+    "OperatorDuty": {
+      "enum": [
+        "PRODUCT",
+        "ENGINEERING"
+      ],
+      "title": "OperatorDuty",
+      "type": "string"
+    },
+    "TaskConstraints": {
+      "additionalProperties": false,
+      "description": "Machine-consumable restrictions attached to a Task.",
+      "properties": {
+        "allowed_paths": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Allowed Paths",
+          "type": "array"
+        },
+        "denied_paths": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Denied Paths",
+          "type": "array"
+        },
+        "allowed_commands": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Allowed Commands",
+          "type": "array"
+        },
+        "max_attempts": {
+          "anyOf": [
+            {
+              "maximum": 400,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Attempts"
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Notes"
+        }
+      },
+      "title": "TaskConstraints",
+      "type": "object"
+    },
+    "TaskStatus": {
+      "enum": [
+        "NEW",
+        "PLANNING",
+        "IMPLEMENTING",
+        "CONTINUE_REQUIRED",
+        "QUEUED",
+        "QA",
+        "REVIEW",
+        "DONE",
+        "BLOCKED",
+        "FAILED"
+      ],
+      "title": "TaskStatus",
+      "type": "string"
     }
   },
   "properties": {
@@ -358,6 +727,17 @@
       "anyOf": [
         {
           "$ref": "#/$defs/InterruptionContinuationPolicy"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "engineering_policy": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/EngineeringPolicy"
         },
         {
           "type": "null"

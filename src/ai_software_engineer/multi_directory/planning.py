@@ -126,6 +126,11 @@ def compile_joint_plan(checkpoint: JointCheckpoint, plan: JointExecutionPlan) ->
         design = designs.get(unit.unit_id)
         if design is None:
             raise ValueError("plan references unknown write unit")
+        if (
+            unit.plan.execution_window is not None
+            and unit.plan.execution_window != checkpoint.execution_window
+        ):
+            raise ValueError("joint Planner cannot change the trusted frozen execution window")
         graph = unit.plan.work_graph
         if graph is None:
             if (
@@ -135,7 +140,16 @@ def compile_joint_plan(checkpoint: JointCheckpoint, plan: JointExecutionPlan) ->
                 raise ComplexPlanRequired()
             graph = design_work_graph(design, package_id="package_" + unit.unit_id)
         units.append(
-            unit.model_copy(update={"plan": unit.plan.model_copy(update={"work_graph": graph})})
+            unit.model_copy(
+                update={
+                    "plan": unit.plan.model_copy(
+                        update={
+                            "work_graph": graph,
+                            "execution_window": checkpoint.execution_window,
+                        }
+                    )
+                }
+            )
         )
     feedback = checkpoint.planning_feedback
     return JointExecutionPlan.model_validate(
@@ -168,6 +182,10 @@ def design_work_graph(design: TechnicalDesignDraft, *, package_id: str) -> PlanW
                         acceptance_criterion_ids=(mapping.acceptance_criterion_id,),
                         level=level,
                         verification=mapping.verification_strategy,
+                        verification_argv=mapping.verification_argv,
+                        verification_inspection=mapping.verification_inspection,
+                        planned_test_files=mapping.planned_test_files,
+                        controlled_capability_kind=mapping.controlled_capability_kind,
                     )
                     for index, mapping in enumerate(design.acceptance_mappings, 1)
                     for level_index, level in enumerate(mapping.test_levels, 1)

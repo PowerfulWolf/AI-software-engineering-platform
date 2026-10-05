@@ -4,14 +4,60 @@
   "title": "Agent projection",
   "type": "object",
   "additionalProperties": false,
-  "required": ["agent_id", "eligible_roles", "run_ids", "lease_ids", "models"],
+  "required": [
+    "agent_id",
+    "eligible_roles",
+    "run_ids",
+    "lease_ids",
+    "models"
+  ],
   "properties": {
-    "agent_id": {"type": "string", "minLength": 1},
-    "display_name": {"type": "string", "minLength": 1},
-    "active": {"type": "boolean"},
-    "eligible_roles": {"type": "array", "items": {"enum": ["manager", "product", "designer", "planner", "coder", "qa", "reviewer"]}},
-    "run_ids": {"type": "array", "items": {"type": "string", "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$"}},
-    "lease_ids": {"type": "array", "items": {"type": "string", "minLength": 1}},
-    "models": {"type": "array", "items": {"type": "string", "minLength": 1}}
-  }
+    "agent_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "display_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "active": {
+      "type": "boolean"
+    },
+    "eligible_roles": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "manager",
+          "product",
+          "designer",
+          "planner",
+          "coder",
+          "qa",
+          "reviewer"
+        ]
+      }
+    },
+    "run_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$"
+      }
+    },
+    "lease_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "models": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "$defs": {}
 }

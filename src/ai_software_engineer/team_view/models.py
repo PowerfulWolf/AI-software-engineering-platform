@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import AwareDatetime
 
 from ai_software_engineer.domain.coordination import ManagerCoordinationAdvice
+from ai_software_engineer.domain.delivery_disposition import DeliveryDisposition
 from ai_software_engineer.domain.enums import AgentRole, TeamRole, WorkItemStatus
 from ai_software_engineer.domain.model import CodexConnectionMode, DomainModel, ProviderRouteKind
 from ai_software_engineer.knowledge.gaps import GapRoute
@@ -76,6 +77,8 @@ class RoleQueueView(DomainModel):
     lease_expires_at: AwareDatetime | None = None
     lease_liveness: Literal["UNKNOWN", "LEASE_VALID", "LEASE_EXPIRED"] = "UNKNOWN"
     wait_reason: str | None = None
+    wait_disposition: DeliveryDisposition | None = None
+    wait_disposition_sha256: str | None = None
     available_at: AwareDatetime | None = None
 
 
@@ -109,6 +112,8 @@ class TaskView(DomainModel):
     request_id: str
     work_kind: Literal["delivery", "candidate_verification", "remediation"] = "delivery"
     task_id: str | None = None
+    task_revision: int | None = None
+    task_intent_sha256: str | None = None
     source_delivery_id: str | None = None
     source_task_id: str | None = None
     plan_sha256: str | None = None

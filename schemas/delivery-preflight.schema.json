@@ -1,0 +1,210 @@
+{
+  "$defs": {
+    "DeliveryPreflightObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "requirement_id": {
+          "minLength": 1,
+          "title": "Requirement Id",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "READY",
+            "WAIT_ENGINEERING"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "reason_code": {
+          "minLength": 1,
+          "title": "Reason Code",
+          "type": "string"
+        },
+        "executable": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Executable"
+        },
+        "executable_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Executable Sha256"
+        },
+        "controlled_discovery_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Controlled Discovery Sha256"
+        },
+        "native_wait_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativeVerificationWaitReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "requirement_id",
+        "status",
+        "reason_code"
+      ],
+      "title": "DeliveryPreflightObservation",
+      "type": "object"
+    },
+    "DeliveryPreflightScope": {
+      "additionalProperties": false,
+      "properties": {
+        "team_id": {
+          "minLength": 1,
+          "title": "Team Id",
+          "type": "string"
+        },
+        "project_id": {
+          "minLength": 1,
+          "title": "Project Id",
+          "type": "string"
+        },
+        "repository_id": {
+          "minLength": 1,
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "requirement_id": {
+          "minLength": 1,
+          "title": "Requirement Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "team_id",
+        "project_id",
+        "repository_id",
+        "requirement_id"
+      ],
+      "title": "DeliveryPreflightScope",
+      "type": "object"
+    },
+    "NativeVerificationWaitReason": {
+      "enum": [
+        "LEGACY_VERIFICATION_AUTHORITY_REQUIRED",
+        "CONTROLLED_VERIFICATION_ENTRYPOINT_UNSUPPORTED",
+        "CONTROLLED_SWIFT_FILTER_UNSUPPORTED",
+        "CONTROLLED_NATIVE_UI_PREREQUISITE_REQUIRED",
+        "CONTROLLED_VERIFICATION_CAPABILITY_UNAVAILABLE",
+        "CONTROLLED_VERIFICATION_FACTS_CHANGED",
+        "CONTROLLED_VERIFICATION_EXECUTION_UNCERTAIN",
+        "CONTROLLED_VERIFICATION_COMMAND_TIMEOUT",
+        "CONTROLLED_VERIFICATION_COMMAND_START_FAILED"
+      ],
+      "title": "NativeVerificationWaitReason",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "const": "delivery_preflight_v1",
+      "default": "delivery_preflight_v1",
+      "title": "Kind",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "#/$defs/DeliveryPreflightScope"
+    },
+    "task_id": {
+      "minLength": 1,
+      "title": "Task Id",
+      "type": "string"
+    },
+    "source_revision": {
+      "minLength": 1,
+      "title": "Source Revision",
+      "type": "string"
+    },
+    "plan_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Plan Sha256",
+      "type": "string"
+    },
+    "frozen_policy_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Frozen Policy Sha256",
+      "type": "string"
+    },
+    "requirements_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Requirements Sha256",
+      "type": "string"
+    },
+    "observations": {
+      "items": {
+        "$ref": "#/$defs/DeliveryPreflightObservation"
+      },
+      "title": "Observations",
+      "type": "array"
+    },
+    "status": {
+      "enum": [
+        "READY",
+        "WAIT_ENGINEERING"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "checked_at": {
+      "format": "date-time",
+      "title": "Checked At",
+      "type": "string"
+    },
+    "receipt_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Receipt Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "scope",
+    "task_id",
+    "source_revision",
+    "plan_sha256",
+    "frozen_policy_sha256",
+    "requirements_sha256",
+    "observations",
+    "status",
+    "checked_at",
+    "receipt_sha256"
+  ],
+  "title": "DeliveryPreflightReceipt",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/delivery-preflight.schema.json"
+}

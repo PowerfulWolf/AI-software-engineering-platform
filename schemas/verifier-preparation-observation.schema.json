@@ -1,0 +1,73 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "native_execution_state": {
+      "enum": [
+        "NOT_STARTED",
+        "FINISHED",
+        "UNCERTAIN"
+      ],
+      "title": "Native Execution State",
+      "type": "string"
+    },
+    "native_binding_plan_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Native Binding Plan Sha256"
+    },
+    "native_started_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Native Started Sha256"
+    },
+    "native_finished_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Native Finished Sha256"
+    },
+    "native_failure_code": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Native Failure Code"
+    }
+  },
+  "required": [
+    "native_execution_state"
+  ],
+  "title": "VerifierPreparationObservation",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/verifier-preparation-observation.schema.json"
+}

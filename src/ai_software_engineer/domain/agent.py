@@ -27,20 +27,26 @@ ROLE_OUTPUTS: Final[dict[AgentRole, tuple[ArtifactKind, ...]]] = {
     AgentRole.REVIEWER: (ArtifactKind.REVIEW_REPORT,),
 }
 
+DELIVERY_ROLE_INPUTS: Final[dict[AgentRole, tuple[ArtifactKind, ...]]] = {
+    AgentRole.ORCHESTRATOR: (),
+    AgentRole.CODER: (
+        ArtifactKind.PLAN,
+        ArtifactKind.CODER_PROGRESS,
+        ArtifactKind.IMPLEMENTATION_REPORT,
+        ArtifactKind.QA_REPORT,
+        ArtifactKind.REVIEW_REPORT,
+    ),
+    AgentRole.QA: (ArtifactKind.PLAN, ArtifactKind.IMPLEMENTATION_REPORT, ArtifactKind.QA_REPORT),
+    AgentRole.REVIEWER: (
+        ArtifactKind.PLAN,
+        ArtifactKind.IMPLEMENTATION_REPORT,
+        ArtifactKind.QA_REPORT,
+        ArtifactKind.REVIEW_REPORT,
+    ),
+}
 ROLE_INPUTS: Final[dict[AgentRole, frozenset[ArtifactKind]]] = {
-    AgentRole.ORCHESTRATOR: frozenset(ArtifactKind),
-    AgentRole.CODER: frozenset(
-        {
-            ArtifactKind.PLAN,
-            ArtifactKind.CODER_PROGRESS,
-            ArtifactKind.QA_REPORT,
-            ArtifactKind.REVIEW_REPORT,
-        }
-    ),
-    AgentRole.QA: frozenset({ArtifactKind.PLAN, ArtifactKind.IMPLEMENTATION_REPORT}),
-    AgentRole.REVIEWER: frozenset(
-        {ArtifactKind.PLAN, ArtifactKind.IMPLEMENTATION_REPORT, ArtifactKind.QA_REPORT}
-    ),
+    role: frozenset(ArtifactKind) if role is AgentRole.ORCHESTRATOR else frozenset(kinds)
+    for role, kinds in DELIVERY_ROLE_INPUTS.items()
 }
 
 

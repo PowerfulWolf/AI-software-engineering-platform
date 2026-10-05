@@ -12,8 +12,16 @@
     "retirement_sha256"
   ],
   "properties": {
-    "schema_version": { "const": "v0.1", "default": "v0.1" },
-    "scope": { "enum": ["team", "project"] },
+    "schema_version": {
+      "const": "v0.1",
+      "default": "v0.1"
+    },
+    "scope": {
+      "enum": [
+        "team",
+        "project"
+      ]
+    },
     "team_id": {
       "type": "string",
       "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$"
@@ -26,18 +34,41 @@
       "type": "array",
       "maxItems": 128,
       "uniqueItems": true,
-      "items": { "type": "string", "pattern": "^[a-z][a-z0-9_.-]{1,63}$" }
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_.-]{1,63}$"
+      }
     },
-    "retirement_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+    "retirement_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
   },
   "allOf": [
     {
       "if": {
-        "properties": { "scope": { "const": "project" } },
-        "required": ["scope"]
+        "properties": {
+          "scope": {
+            "const": "project"
+          }
+        },
+        "required": [
+          "scope"
+        ]
       },
-      "then": { "required": ["project_id"] },
-      "else": { "not": { "required": ["project_id"] } }
+      "then": {
+        "required": [
+          "project_id"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "project_id"
+          ]
+        }
+      }
     }
-  ]
+  ],
+  "$defs": {}
 }

@@ -275,8 +275,11 @@ New settings cannot add/reorder routes on a retained dispatch. Recovery may narr
 
 ### 8.3 Good / Base / Bad, tests and operations
 
-- Good: lease loss returns recoverable pending, a new claim reopens the same worktree and reaches
-  DONE through separate QA/Reviewer claims. Base: legacy terminal evidence is read without adoption.
+- Good: lease loss preserves the same worktree. An exact sealed outcome can be replayed, or a
+  verified NOT_STARTED/owned-stop checkpoint can be resumed under its authorized resolution;
+  independent QA/Reviewer claims still precede DONE. A durable invocation start without outcome
+  or trusted stop proof instead becomes EXECUTION_UNCERTAIN engineering waiting after reclaim,
+  with no repeated model call or candidate. Base: legacy terminal evidence is read without adoption.
 - Bad: catch every QueueConflict as temporary, or use queue CLOSED as evidence of QA PASS.
 - Wrong: remove all clean worktrees in `finally`; the interrupted Coder branch survives but cannot be
   recreated. Correct: clean only on a normal terminal result, retaining interrupted execution state.
@@ -394,3 +397,43 @@ the 0.2s polling interval, and a prompt larger than pipe capacity; assert exact 
 no timeout, 0600 mode and zero hard links. Retain owner-loss/Task-lock/candidate-finalization tests.
 Wrong: `communicate(prompt, timeout=.2)` then `communicate(None, timeout=.2)`.
 Correct: `Popen(stdin=anonymous_prompt)` then ownership-fenced output-only polling.
+## Cross-connection Task snapshot reads
+
+`MySqlTaskRepository` uses session `READ COMMITTED`: a long-lived Worker repository must observe
+reservations committed by queue/engineering services on another connection. Plain `get` and
+`current_revision` must not retain the first implicit InnoDB `REPEATABLE READ` snapshot. Mutations
+still use explicit transactions, Task row locks, expected revision and owner-fence checks; a fresh
+read grants no mutation authority. Replay must recheck exact sealed input under the write fence.
+
+Good: repository A reads an old snapshot, queue B reserves a successor, A then sees the committed
+counter/checkpoint. Bad: process memory or a stale snapshot causes the runner to schedule the old
+attempt again. `tests/work_queue/test_wait_resolution_mysql.py` and storage cross-connection tests
+exercise this boundary; tests use only the isolated serial MySQL database.
+
+### 8.7 Reclaimed preparation contexts and rejected accepted-history order
+
+Production `FileRunContextBuilder(..., claim_context=...)` receives a trusted
+required `execution.claim` source only while the actual delivery Worker owns its
+lease. Its body binds Task, WorkItem, lease, assignment, role, attempt, checkpoint
+and dispatch generation. It is inserted before baseline and knowledge consultation,
+so the knowledge gate approves the final immutable Context. A NOT_STARTED
+preparation resumed in the same slot/attempt obtains a fresh claim, Run and Context;
+identical source/role/attempt does not authorize reuse of the old execution Context.
+Planning probes do not call this provider. Recorded results replay their original
+Run/Context rather than minting a new invocation.
+
+`ArtifactOrderingError` from accepted-history selection is an engineering
+`PLATFORM_BUG` wait at the claimed Supervisor boundary. The owner-fenced transition
+preserves delivery stage/source, releases the lease, and has a Chinese next action.
+It does not keep an apparently running WorkItem until lease expiry or guess using
+provider timestamps/random IDs. A repeat Supervisor visit reads the same wait and
+makes no new model call. Original unsealed/cyclic/ambiguous records are retained for
+investigation; this refusal supplies no new authority and rewrites no audit facts.
+
+Good: failed preparation resumes after an exact NOT_STARTED resolution with the
+same WorkItem/attempt and a new dispatch generation/Context. Base: original sealed
+outcomes replay without model execution. Bad: content-addressed Context omits claim
+identity, or ambiguous accepted output escapes as an unclassified Backend exception.
+Required regressions: `tests/orchestration/test_context_registry.py`, public
+`qa_unstarted` in `test_production_continuation_v2.py`, and
+`test_worker_mysql.py::test_ambiguous_accepted_history_waits_and_releases_the_real_claim`.

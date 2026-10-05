@@ -3,264 +3,1350 @@
   "$id": "https://ai-software-engineer.local/schemas/project-stage-defs.schema.json",
   "title": "Project Stage Contract Definitions",
   "$defs": {
-    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
-    "nonEmpty": {"type": "string", "minLength": 1},
-    "projectId": {"type": "string", "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"},
-    "repositoryId": {"type": "string", "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$"},
-    "requestId": {"type": "string", "pattern": "^request_[a-z0-9][a-z0-9_-]{2,63}$"},
-    "productSpecId": {"type": "string", "pattern": "^product_spec_[a-z0-9][a-z0-9_-]{2,63}$"},
-    "approvalId": {"type": "string", "pattern": "^product_approval_[a-f0-9]{64}$"},
-    "technicalDesignId": {"type": "string", "pattern": "^technical_design_[a-z0-9][a-z0-9_-]{2,63}$"},
-    "executionPlanId": {"type": "string", "pattern": "^execution_plan_[a-z0-9][a-z0-9_-]{2,63}$"},
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "nonEmpty": {
+      "type": "string",
+      "minLength": 1
+    },
+    "projectId": {
+      "type": "string",
+      "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"
+    },
+    "repositoryId": {
+      "type": "string",
+      "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$"
+    },
+    "requestId": {
+      "type": "string",
+      "pattern": "^request_[a-z0-9][a-z0-9_-]{2,63}$"
+    },
+    "productSpecId": {
+      "type": "string",
+      "pattern": "^product_spec_[a-z0-9][a-z0-9_-]{2,63}$"
+    },
+    "approvalId": {
+      "type": "string",
+      "pattern": "^product_approval_[a-f0-9]{64}$"
+    },
+    "technicalDesignId": {
+      "type": "string",
+      "pattern": "^technical_design_[a-z0-9][a-z0-9_-]{2,63}$"
+    },
+    "executionPlanId": {
+      "type": "string",
+      "pattern": "^execution_plan_[a-z0-9][a-z0-9_-]{2,63}$"
+    },
     "acceptanceCriterion": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "description", "required", "verification", "test_ids"],
+      "required": [
+        "id",
+        "description",
+        "required",
+        "verification",
+        "test_ids"
+      ],
       "properties": {
-        "id": {"type": "string", "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$"},
-        "description": {"$ref": "#/$defs/nonEmpty"},
-        "required": {"type": "boolean"},
-        "verification": {"$ref": "#/$defs/nonEmpty"},
-        "test_ids": {"type": "array", "items": {"$ref": "#/$defs/nonEmpty"}, "uniqueItems": true}
+        "id": {
+          "type": "string",
+          "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$"
+        },
+        "description": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "verification": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "test_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nonEmpty"
+          },
+          "uniqueItems": true
+        }
       }
     },
     "ProjectPreparation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "schema_version", "team_id", "project_id", "project_manifest_sha256", "repository_id", "repository_root", "repository_workspace_root", "team_root", "repository_profile_sha256", "runtime_binding_sha256", "baseline_spec_sha256", "baseline_source_uris", "status", "prepared_at", "preparation_sha256"],
+      "required": [
+        "kind",
+        "schema_version",
+        "team_id",
+        "project_id",
+        "project_manifest_sha256",
+        "repository_id",
+        "repository_root",
+        "repository_workspace_root",
+        "team_root",
+        "repository_profile_sha256",
+        "runtime_binding_sha256",
+        "baseline_spec_sha256",
+        "baseline_source_uris",
+        "status",
+        "prepared_at",
+        "preparation_sha256"
+      ],
       "properties": {
-        "kind": {"const": "repository_preparation"},
-        "schema_version": {"const": "v0.2"},
-        "team_id": {"type": "string", "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$"},
-        "project_id": {"$ref": "#/$defs/projectId"},
-        "project_manifest_sha256": {"$ref": "#/$defs/sha256"},
-        "repository_id": {"$ref": "#/$defs/repositoryId"},
-        "repository_root": {"type": "string", "pattern": "^/", "minLength": 2},
-        "repository_workspace_root": {"type": "string", "pattern": "^/", "minLength": 2},
-        "team_root": {"type": "string", "pattern": "^/", "minLength": 2},
-        "repository_profile_sha256": {"$ref": "#/$defs/sha256"},
-        "runtime_binding_sha256": {"$ref": "#/$defs/sha256"},
-        "baseline_spec_sha256": {"$ref": "#/$defs/sha256"},
-        "baseline_source_uris": {"type": "array", "items": {"$ref": "#/$defs/nonEmpty"}, "uniqueItems": true},
-        "status": {"const": "PREPARED"},
-        "prepared_at": {"type": "string", "format": "date-time"},
-        "preparation_sha256": {"$ref": "#/$defs/sha256"}
+        "kind": {
+          "const": "repository_preparation"
+        },
+        "schema_version": {
+          "const": "v0.2"
+        },
+        "team_id": {
+          "type": "string",
+          "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$"
+        },
+        "project_id": {
+          "$ref": "#/$defs/projectId"
+        },
+        "project_manifest_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "repository_id": {
+          "$ref": "#/$defs/repositoryId"
+        },
+        "repository_root": {
+          "type": "string",
+          "pattern": "^/",
+          "minLength": 2
+        },
+        "repository_workspace_root": {
+          "type": "string",
+          "pattern": "^/",
+          "minLength": 2
+        },
+        "team_root": {
+          "type": "string",
+          "pattern": "^/",
+          "minLength": 2
+        },
+        "repository_profile_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "runtime_binding_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "baseline_spec_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "baseline_source_uris": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nonEmpty"
+          },
+          "uniqueItems": true
+        },
+        "status": {
+          "const": "PREPARED"
+        },
+        "prepared_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "preparation_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
       }
     },
     "ProjectRequest": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "schema_version", "id", "repository_id", "preparation_sha256", "title", "original_request", "status", "created_at", "updated_at", "request_sha256"],
+      "required": [
+        "kind",
+        "schema_version",
+        "id",
+        "repository_id",
+        "preparation_sha256",
+        "title",
+        "original_request",
+        "status",
+        "created_at",
+        "updated_at",
+        "request_sha256"
+      ],
       "properties": {
-        "kind": {"const": "project_request"},
-        "schema_version": {"const": "v0.1"},
-        "id": {"$ref": "#/$defs/requestId"},
-        "repository_id": {"$ref": "#/$defs/repositoryId"},
-        "preparation_sha256": {"$ref": "#/$defs/sha256"},
-        "title": {"type": "string", "minLength": 1, "maxLength": 200},
-        "original_request": {"$ref": "#/$defs/nonEmpty"},
-        "status": {"enum": ["PRODUCT_DISCOVERY", "WAITING_PRODUCT_APPROVAL", "DESIGNING", "PLANNING", "READY_FOR_DELIVERY", "DELIVERING", "REPORTING", "DONE", "WAITING_HUMAN", "BLOCKED"]},
-        "created_at": {"type": "string", "format": "date-time"},
-        "updated_at": {"type": "string", "format": "date-time"},
-        "request_sha256": {"$ref": "#/$defs/sha256"}
+        "kind": {
+          "const": "project_request"
+        },
+        "schema_version": {
+          "const": "v0.1"
+        },
+        "id": {
+          "$ref": "#/$defs/requestId"
+        },
+        "repository_id": {
+          "$ref": "#/$defs/repositoryId"
+        },
+        "preparation_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "original_request": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "status": {
+          "enum": [
+            "PRODUCT_DISCOVERY",
+            "WAITING_PRODUCT_APPROVAL",
+            "DESIGNING",
+            "PLANNING",
+            "READY_FOR_DELIVERY",
+            "DELIVERING",
+            "REPORTING",
+            "DONE",
+            "WAITING_HUMAN",
+            "BLOCKED"
+          ]
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "request_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
       }
     },
     "productRequirement": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "statement", "priority", "rationale", "acceptance_criterion_ids"],
+      "required": [
+        "id",
+        "statement",
+        "priority",
+        "rationale",
+        "acceptance_criterion_ids"
+      ],
       "properties": {
-        "id": {"type": "string", "pattern": "^req_[a-z0-9][a-z0-9_-]{1,63}$"},
-        "statement": {"$ref": "#/$defs/nonEmpty"},
-        "priority": {"enum": ["MUST", "SHOULD", "COULD"]},
-        "rationale": {"$ref": "#/$defs/nonEmpty"},
-        "acceptance_criterion_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$"}}
+        "id": {
+          "type": "string",
+          "pattern": "^req_[a-z0-9][a-z0-9_-]{1,63}$"
+        },
+        "statement": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "priority": {
+          "enum": [
+            "MUST",
+            "SHOULD",
+            "COULD"
+          ]
+        },
+        "rationale": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "acceptance_criterion_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$"
+          }
+        }
       }
     },
     "productDecision": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "question", "decision", "rationale", "decided_by", "decided_at"],
+      "required": [
+        "id",
+        "question",
+        "decision",
+        "rationale",
+        "decided_by",
+        "decided_at"
+      ],
       "properties": {
-        "id": {"type": "string", "pattern": "^decision_[a-z0-9][a-z0-9_-]{1,63}$"},
-        "question": {"$ref": "#/$defs/nonEmpty"},
-        "decision": {"$ref": "#/$defs/nonEmpty"},
-        "rationale": {"$ref": "#/$defs/nonEmpty"},
-        "decided_by": {"$ref": "#/$defs/nonEmpty"},
-        "decided_at": {"type": "string", "format": "date-time"}
+        "id": {
+          "type": "string",
+          "pattern": "^decision_[a-z0-9][a-z0-9_-]{1,63}$"
+        },
+        "question": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "decision": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "rationale": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "decided_by": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "decided_at": {
+          "type": "string",
+          "format": "date-time"
+        }
       }
     },
     "ProductSpec": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "schema_version", "id", "request_id", "repository_id", "version", "status", "summary", "goals", "non_goals", "requirements", "acceptance_criteria", "assumptions", "open_questions", "decisions", "created_at", "product_spec_sha256"],
+      "required": [
+        "kind",
+        "schema_version",
+        "id",
+        "request_id",
+        "repository_id",
+        "version",
+        "status",
+        "summary",
+        "goals",
+        "non_goals",
+        "requirements",
+        "acceptance_criteria",
+        "assumptions",
+        "open_questions",
+        "decisions",
+        "created_at",
+        "product_spec_sha256"
+      ],
       "properties": {
-        "branch_name": {"anyOf":[{"maxLength":240,"minLength":11,"pattern":"^ai/(feature|bugfix)/[a-z][a-z0-9]*(?:-[a-z0-9]+)*$","type":"string"},{"type":"null"}],"default":null,"title":"Branch Name"},
-        "kind": {"const": "product_spec"},
-        "schema_version": {"const": "v0.1"},
-        "id": {"$ref": "#/$defs/productSpecId"},
-        "request_id": {"$ref": "#/$defs/requestId"},
-        "repository_id": {"$ref": "#/$defs/repositoryId"},
-        "version": {"type": "integer", "minimum": 1},
-        "status": {"enum": ["DRAFT", "READY_FOR_REVIEW"]},
-        "summary": {"$ref": "#/$defs/nonEmpty"},
-        "goals": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/nonEmpty"}},
-        "non_goals": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/nonEmpty"}},
-        "requirements": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/productRequirement"}},
-        "acceptance_criteria": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/acceptanceCriterion"}},
-        "assumptions": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/nonEmpty"}},
-        "open_questions": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/nonEmpty"}},
-        "decisions": {"type": "array", "items": {"$ref": "#/$defs/productDecision"}},
-        "supersedes": {"$ref": "#/$defs/productSpecId"},
-        "created_at": {"type": "string", "format": "date-time"},
-        "product_spec_sha256": {"$ref": "#/$defs/sha256"}
+        "branch_name": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 11,
+              "pattern": "^ai/(feature|bugfix)/[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Branch Name"
+        },
+        "kind": {
+          "const": "product_spec"
+        },
+        "schema_version": {
+          "const": "v0.1"
+        },
+        "id": {
+          "$ref": "#/$defs/productSpecId"
+        },
+        "request_id": {
+          "$ref": "#/$defs/requestId"
+        },
+        "repository_id": {
+          "$ref": "#/$defs/repositoryId"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "status": {
+          "enum": [
+            "DRAFT",
+            "READY_FOR_REVIEW"
+          ]
+        },
+        "summary": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "goals": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmpty"
+          }
+        },
+        "non_goals": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmpty"
+          }
+        },
+        "requirements": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/productRequirement"
+          }
+        },
+        "acceptance_criteria": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/acceptanceCriterion"
+          }
+        },
+        "assumptions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmpty"
+          }
+        },
+        "open_questions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmpty"
+          }
+        },
+        "decisions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/productDecision"
+          }
+        },
+        "supersedes": {
+          "$ref": "#/$defs/productSpecId"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "product_spec_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
       }
     },
     "ProductSpecApproval": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "schema_version", "id", "request_id", "repository_id", "product_spec_id", "product_spec_sha256", "decision", "operator_id", "rationale", "decided_at", "approval_sha256"],
+      "required": [
+        "kind",
+        "schema_version",
+        "id",
+        "request_id",
+        "repository_id",
+        "product_spec_id",
+        "product_spec_sha256",
+        "decision",
+        "operator_id",
+        "rationale",
+        "decided_at",
+        "approval_sha256"
+      ],
       "properties": {
-        "kind": {"const": "product_spec_approval"},
-        "schema_version": {"const": "v0.1"},
-        "id": {"$ref": "#/$defs/approvalId"},
-        "request_id": {"$ref": "#/$defs/requestId"},
-        "repository_id": {"$ref": "#/$defs/repositoryId"},
-        "product_spec_id": {"$ref": "#/$defs/productSpecId"},
-        "product_spec_sha256": {"$ref": "#/$defs/sha256"},
-        "decision": {"enum": ["APPROVED", "REQUEST_CHANGES"]},
-        "operator_id": {"$ref": "#/$defs/nonEmpty"},
-        "rationale": {"$ref": "#/$defs/nonEmpty"},
-        "decided_at": {"type": "string", "format": "date-time"},
-        "approval_sha256": {"$ref": "#/$defs/sha256"}
+        "kind": {
+          "const": "product_spec_approval"
+        },
+        "schema_version": {
+          "const": "v0.1"
+        },
+        "id": {
+          "$ref": "#/$defs/approvalId"
+        },
+        "request_id": {
+          "$ref": "#/$defs/requestId"
+        },
+        "repository_id": {
+          "$ref": "#/$defs/repositoryId"
+        },
+        "product_spec_id": {
+          "$ref": "#/$defs/productSpecId"
+        },
+        "product_spec_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "decision": {
+          "enum": [
+            "APPROVED",
+            "REQUEST_CHANGES"
+          ]
+        },
+        "operator_id": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "rationale": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "decided_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "approval_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
       }
     },
     "designComponent": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "name", "responsibility", "affected_paths"],
+      "required": [
+        "id",
+        "name",
+        "responsibility",
+        "affected_paths"
+      ],
       "properties": {
-        "id": {"type": "string", "pattern": "^component_[a-z0-9][a-z0-9_-]{1,63}$"},
-        "name": {"$ref": "#/$defs/nonEmpty"},
-        "responsibility": {"$ref": "#/$defs/nonEmpty"},
-        "affected_paths": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/nonEmpty"}}
+        "id": {
+          "type": "string",
+          "pattern": "^component_[a-z0-9][a-z0-9_-]{1,63}$"
+        },
+        "name": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "responsibility": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "affected_paths": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmpty"
+          }
+        }
       }
     },
     "requirementMapping": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["requirement_id", "component_ids", "approach"],
+      "required": [
+        "requirement_id",
+        "component_ids",
+        "approach"
+      ],
       "properties": {
-        "requirement_id": {"type": "string", "pattern": "^req_[a-z0-9][a-z0-9_-]{1,63}$"},
-        "component_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^component_[a-z0-9][a-z0-9_-]{1,63}$"}},
-        "approach": {"$ref": "#/$defs/nonEmpty"}
+        "requirement_id": {
+          "type": "string",
+          "pattern": "^req_[a-z0-9][a-z0-9_-]{1,63}$"
+        },
+        "component_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^component_[a-z0-9][a-z0-9_-]{1,63}$"
+          }
+        },
+        "approach": {
+          "$ref": "#/$defs/nonEmpty"
+        }
       }
     },
     "acceptanceMapping": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["acceptance_criterion_id", "verification_strategy", "test_levels"],
+      "required": [
+        "acceptance_criterion_id",
+        "verification_strategy",
+        "test_levels"
+      ],
       "properties": {
-        "acceptance_criterion_id": {"type": "string", "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$"},
-        "verification_strategy": {"$ref": "#/$defs/nonEmpty"},
-        "test_levels": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/nonEmpty"}}
+        "acceptance_criterion_id": {
+          "type": "string",
+          "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$"
+        },
+        "verification_strategy": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "test_levels": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmpty"
+          }
+        }
       }
     },
     "designStep": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "description", "component_ids", "verification"],
+      "required": [
+        "id",
+        "description",
+        "component_ids",
+        "verification"
+      ],
       "properties": {
-        "id": {"type": "string", "pattern": "^design_step_[a-z0-9][a-z0-9_-]{1,63}$"},
-        "description": {"$ref": "#/$defs/nonEmpty"},
-        "component_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^component_[a-z0-9][a-z0-9_-]{1,63}$"}},
-        "verification": {"$ref": "#/$defs/nonEmpty"}
+        "id": {
+          "type": "string",
+          "pattern": "^design_step_[a-z0-9][a-z0-9_-]{1,63}$"
+        },
+        "description": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "component_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^component_[a-z0-9][a-z0-9_-]{1,63}$"
+          }
+        },
+        "verification": {
+          "$ref": "#/$defs/nonEmpty"
+        }
       }
     },
     "designRisk": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "description", "tier", "mitigation"],
+      "required": [
+        "id",
+        "description",
+        "tier",
+        "mitigation"
+      ],
       "properties": {
-        "id": {"type": "string", "pattern": "^design_risk_[a-z0-9][a-z0-9_-]{1,63}$"},
-        "description": {"$ref": "#/$defs/nonEmpty"},
-        "tier": {"enum": ["low", "normal", "high", "critical"]},
-        "mitigation": {"$ref": "#/$defs/nonEmpty"}
+        "id": {
+          "type": "string",
+          "pattern": "^design_risk_[a-z0-9][a-z0-9_-]{1,63}$"
+        },
+        "description": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "tier": {
+          "enum": [
+            "low",
+            "normal",
+            "high",
+            "critical"
+          ]
+        },
+        "mitigation": {
+          "$ref": "#/$defs/nonEmpty"
+        }
       }
     },
     "TechnicalDesign": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "schema_version", "id", "request_id", "repository_id", "product_spec_id", "product_spec_sha256", "product_approval_id", "version", "status", "summary", "components", "requirement_mappings", "acceptance_mappings", "implementation_steps", "risks", "created_at", "technical_design_sha256"],
+      "required": [
+        "kind",
+        "schema_version",
+        "id",
+        "request_id",
+        "repository_id",
+        "product_spec_id",
+        "product_spec_sha256",
+        "product_approval_id",
+        "version",
+        "status",
+        "summary",
+        "components",
+        "requirement_mappings",
+        "acceptance_mappings",
+        "implementation_steps",
+        "risks",
+        "created_at",
+        "technical_design_sha256"
+      ],
       "properties": {
-        "kind": {"const": "technical_design"},
-        "schema_version": {"const": "v0.1"},
-        "id": {"$ref": "#/$defs/technicalDesignId"},
-        "request_id": {"$ref": "#/$defs/requestId"},
-        "repository_id": {"$ref": "#/$defs/repositoryId"},
-        "product_spec_id": {"$ref": "#/$defs/productSpecId"},
-        "product_spec_sha256": {"$ref": "#/$defs/sha256"},
-        "product_approval_id": {"$ref": "#/$defs/approvalId"},
-        "version": {"type": "integer", "minimum": 1},
-        "status": {"const": "READY_FOR_PLANNING"},
-        "summary": {"$ref": "#/$defs/nonEmpty"},
-        "components": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/designComponent"}},
-        "requirement_mappings": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/requirementMapping"}},
-        "acceptance_mappings": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/acceptanceMapping"}},
-        "implementation_steps": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/designStep"}},
-        "risks": {"type": "array", "items": {"$ref": "#/$defs/designRisk"}},
-        "complexity_facts": {"$ref": "https://ai-software-engineer.local/schemas/design-complexity-facts.schema.json"},
-        "created_at": {"type": "string", "format": "date-time"},
-        "technical_design_sha256": {"$ref": "#/$defs/sha256"}
+        "kind": {
+          "const": "technical_design"
+        },
+        "schema_version": {
+          "const": "v0.1"
+        },
+        "id": {
+          "$ref": "#/$defs/technicalDesignId"
+        },
+        "request_id": {
+          "$ref": "#/$defs/requestId"
+        },
+        "repository_id": {
+          "$ref": "#/$defs/repositoryId"
+        },
+        "product_spec_id": {
+          "$ref": "#/$defs/productSpecId"
+        },
+        "product_spec_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "product_approval_id": {
+          "$ref": "#/$defs/approvalId"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "status": {
+          "const": "READY_FOR_PLANNING"
+        },
+        "summary": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "components": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/designComponent"
+          }
+        },
+        "requirement_mappings": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/requirementMapping"
+          }
+        },
+        "acceptance_mappings": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/acceptanceMapping"
+          }
+        },
+        "implementation_steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/designStep"
+          }
+        },
+        "risks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/designRisk"
+          }
+        },
+        "complexity_facts": {
+          "$ref": "https://ai-software-engineer.local/schemas/design-complexity-facts.schema.json"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "technical_design_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
       }
     },
     "planPhase": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "role", "objective", "required_capabilities", "risk", "minimum_brain_tier", "checkpoints", "critical_path"],
+      "required": [
+        "id",
+        "role",
+        "objective",
+        "required_capabilities",
+        "risk",
+        "minimum_brain_tier",
+        "checkpoints",
+        "critical_path"
+      ],
       "properties": {
-        "id": {"type": "string", "pattern": "^phase_[a-z0-9][a-z0-9_-]{1,63}$"},
-        "role": {"enum": ["coder", "qa", "reviewer"]},
-        "objective": {"$ref": "#/$defs/nonEmpty"},
-        "required_capabilities": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/nonEmpty"}},
-        "risk": {"enum": ["low", "normal", "high", "critical"]},
-        "minimum_brain_tier": {"enum": ["economy", "standard", "reasoning", "critical"]},
-        "checkpoints": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/nonEmpty"}},
-        "critical_path": {"type": "boolean"}
+        "id": {
+          "type": "string",
+          "pattern": "^phase_[a-z0-9][a-z0-9_-]{1,63}$"
+        },
+        "role": {
+          "enum": [
+            "coder",
+            "qa",
+            "reviewer"
+          ]
+        },
+        "objective": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "required_capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmpty"
+          }
+        },
+        "risk": {
+          "enum": [
+            "low",
+            "normal",
+            "high",
+            "critical"
+          ]
+        },
+        "minimum_brain_tier": {
+          "enum": [
+            "economy",
+            "standard",
+            "reasoning",
+            "critical"
+          ]
+        },
+        "checkpoints": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmpty"
+          }
+        },
+        "critical_path": {
+          "type": "boolean"
+        }
       }
     },
     "ExecutionPlan": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "schema_version", "id", "request_id", "repository_id", "product_spec_id", "product_spec_sha256", "technical_design_id", "technical_design_sha256", "version", "status", "phases", "feasibility_evidence_uris", "created_at", "execution_plan_sha256"],
+      "required": [
+        "kind",
+        "schema_version",
+        "id",
+        "request_id",
+        "repository_id",
+        "product_spec_id",
+        "product_spec_sha256",
+        "technical_design_id",
+        "technical_design_sha256",
+        "version",
+        "status",
+        "phases",
+        "feasibility_evidence_uris",
+        "created_at",
+        "execution_plan_sha256"
+      ],
       "properties": {
-        "kind": {"const": "execution_plan"},
-        "schema_version": {"const": "v0.1"},
-        "id": {"$ref": "#/$defs/executionPlanId"},
-        "request_id": {"$ref": "#/$defs/requestId"},
-        "repository_id": {"$ref": "#/$defs/repositoryId"},
-        "product_spec_id": {"$ref": "#/$defs/productSpecId"},
-        "product_spec_sha256": {"$ref": "#/$defs/sha256"},
-        "technical_design_id": {"$ref": "#/$defs/technicalDesignId"},
-        "technical_design_sha256": {"$ref": "#/$defs/sha256"},
-        "version": {"type": "integer", "minimum": 1},
-        "status": {"const": "READY_FOR_DISPATCH"},
+        "kind": {
+          "const": "execution_plan"
+        },
+        "schema_version": {
+          "const": "v0.1"
+        },
+        "id": {
+          "$ref": "#/$defs/executionPlanId"
+        },
+        "request_id": {
+          "$ref": "#/$defs/requestId"
+        },
+        "repository_id": {
+          "$ref": "#/$defs/repositoryId"
+        },
+        "product_spec_id": {
+          "$ref": "#/$defs/productSpecId"
+        },
+        "product_spec_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "technical_design_id": {
+          "$ref": "#/$defs/technicalDesignId"
+        },
+        "technical_design_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "status": {
+          "const": "READY_FOR_DISPATCH"
+        },
         "phases": {
           "type": "array",
           "prefixItems": [
-            {"allOf": [{"$ref": "#/$defs/planPhase"}, {"properties": {"role": {"const": "coder"}}}]},
-            {"allOf": [{"$ref": "#/$defs/planPhase"}, {"properties": {"role": {"const": "qa"}}}]},
-            {"allOf": [{"$ref": "#/$defs/planPhase"}, {"properties": {"role": {"const": "reviewer"}}}]}
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/planPhase"
+                },
+                {
+                  "properties": {
+                    "role": {
+                      "const": "coder"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/planPhase"
+                },
+                {
+                  "properties": {
+                    "role": {
+                      "const": "qa"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/planPhase"
+                },
+                {
+                  "properties": {
+                    "role": {
+                      "const": "reviewer"
+                    }
+                  }
+                }
+              ]
+            }
           ],
           "minItems": 3,
           "maxItems": 3
         },
-        "feasibility_evidence_uris": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/nonEmpty"}},
-        "work_graph": {"$ref": "https://ai-software-engineer.local/schemas/plan-work-graph.schema.json"},
-        "revision_feedback": {"$ref": "https://ai-software-engineer.local/schemas/plan-revision-feedback.schema.json"},
-        "created_at": {"type": "string", "format": "date-time"},
-        "execution_plan_sha256": {"$ref": "#/$defs/sha256"}
+        "feasibility_evidence_uris": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmpty"
+          }
+        },
+        "work_graph": {
+          "$ref": "https://ai-software-engineer.local/schemas/plan-work-graph.schema.json"
+        },
+        "revision_feedback": {
+          "$ref": "https://ai-software-engineer.local/schemas/plan-revision-feedback.schema.json"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "execution_plan_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "execution_window": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanExecutionWindow"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
       }
+    },
+    "AgentRole": {
+      "description": "Delivery-runtime roles bound to Task artifacts and state transitions.",
+      "enum": [
+        "orchestrator",
+        "coder",
+        "qa",
+        "reviewer"
+      ],
+      "title": "AgentRole",
+      "type": "string"
+    },
+    "BrainTier": {
+      "enum": [
+        "economy",
+        "standard",
+        "reasoning",
+        "critical"
+      ],
+      "title": "BrainTier",
+      "type": "string"
+    },
+    "PlanExecutionWindow": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "serial_coder_window_v1",
+          "default": "serial_coder_window_v1",
+          "title": "Kind",
+          "type": "string"
+        },
+        "hard_seconds": {
+          "maximum": 3600,
+          "minimum": 2,
+          "title": "Hard Seconds",
+          "type": "integer"
+        },
+        "finalization_reserve_seconds": {
+          "maximum": 300,
+          "minimum": 1,
+          "title": "Finalization Reserve Seconds",
+          "type": "integer"
+        },
+        "reserve_rework_attempts": {
+          "default": 1,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Reserve Rework Attempts",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "hard_seconds",
+        "finalization_reserve_seconds"
+      ],
+      "title": "PlanExecutionWindow",
+      "type": "object"
+    },
+    "PlanPhaseDemand": {
+      "additionalProperties": false,
+      "description": "Abstract workforce demand; never a concrete assignment or model selection.",
+      "properties": {
+        "id": {
+          "pattern": "^phase_[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/AgentRole"
+        },
+        "objective": {
+          "minLength": 1,
+          "title": "Objective",
+          "type": "string"
+        },
+        "required_capabilities": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Required Capabilities",
+          "type": "array"
+        },
+        "risk": {
+          "$ref": "#/$defs/RiskTier"
+        },
+        "minimum_brain_tier": {
+          "$ref": "#/$defs/BrainTier"
+        },
+        "checkpoints": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Checkpoints",
+          "type": "array"
+        },
+        "critical_path": {
+          "default": true,
+          "title": "Critical Path",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "role",
+        "objective",
+        "required_capabilities",
+        "risk",
+        "minimum_brain_tier",
+        "checkpoints"
+      ],
+      "title": "PlanPhaseDemand",
+      "type": "object"
+    },
+    "PlanRevisionFeedback": {
+      "additionalProperties": false,
+      "properties": {
+        "previous_plan_id": {
+          "pattern": "^execution_plan_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Previous Plan Id",
+          "type": "string"
+        },
+        "previous_plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Previous Plan Sha256",
+          "type": "string"
+        },
+        "reason_codes": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Reason Codes",
+          "type": "array"
+        },
+        "required_changes": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Required Changes",
+          "type": "array"
+        }
+      },
+      "required": [
+        "previous_plan_id",
+        "previous_plan_sha256",
+        "reason_codes",
+        "required_changes"
+      ],
+      "title": "PlanRevisionFeedback",
+      "type": "object"
+    },
+    "PlanTestItem": {
+      "additionalProperties": false,
+      "properties": {
+        "verification_argv": {
+          "anyOf": [
+            {
+              "items": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Verification Argv"
+        },
+        "planned_test_files": {
+          "anyOf": [
+            {
+              "items": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Planned Test Files"
+        },
+        "verification_inspection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlannedVerificationInspection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "controlled_capability_kind": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Controlled Capability Kind"
+        },
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "acceptance_criterion_ids": {
+          "items": {
+            "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Acceptance Criterion Ids",
+          "type": "array"
+        },
+        "level": {
+          "minLength": 1,
+          "title": "Level",
+          "type": "string"
+        },
+        "verification": {
+          "minLength": 1,
+          "title": "Verification",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "acceptance_criterion_ids",
+        "level",
+        "verification"
+      ],
+      "title": "PlanTestItem",
+      "type": "object"
+    },
+    "PlanWorkGraph": {
+      "additionalProperties": false,
+      "properties": {
+        "packages": {
+          "items": {
+            "$ref": "#/$defs/PlanWorkPackage"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Packages",
+          "type": "array"
+        },
+        "max_parallelism": {
+          "default": 1,
+          "maximum": 4,
+          "minimum": 1,
+          "title": "Max Parallelism",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "packages"
+      ],
+      "title": "PlanWorkGraph",
+      "type": "object"
+    },
+    "PlanWorkPackage": {
+      "additionalProperties": false,
+      "description": "Bounded abstract Task proposal; roles within each Task stay serial.",
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "component_ids": {
+          "items": {
+            "pattern": "^component_[a-z0-9][a-z0-9_-]{1,63}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Component Ids",
+          "type": "array"
+        },
+        "step_ids": {
+          "items": {
+            "pattern": "^design_step_[a-z0-9][a-z0-9_-]{1,63}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Step Ids",
+          "type": "array"
+        },
+        "acceptance_criterion_ids": {
+          "items": {
+            "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Acceptance Criterion Ids",
+          "type": "array"
+        },
+        "depends_on": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Depends On",
+          "type": "array"
+        },
+        "risk": {
+          "$ref": "#/$defs/RiskTier"
+        },
+        "checkpoints": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Checkpoints",
+          "type": "array"
+        },
+        "tests": {
+          "items": {
+            "$ref": "#/$defs/PlanTestItem"
+          },
+          "minItems": 1,
+          "title": "Tests",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "component_ids",
+        "step_ids",
+        "acceptance_criterion_ids",
+        "risk",
+        "checkpoints",
+        "tests"
+      ],
+      "title": "PlanWorkPackage",
+      "type": "object"
+    },
+    "PlannedVerificationInspection": {
+      "additionalProperties": false,
+      "description": "An explicit approved inspection target, never a test or verdict.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "document",
+            "source",
+            "native_ui"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "paths": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Paths",
+          "type": "array"
+        },
+        "checklist": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Checklist",
+          "type": "array"
+        },
+        "scenario_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scenario Sha256"
+        }
+      },
+      "required": [
+        "kind",
+        "checklist"
+      ],
+      "title": "PlannedVerificationInspection",
+      "type": "object"
+    },
+    "RiskTier": {
+      "enum": [
+        "low",
+        "normal",
+        "high",
+        "critical"
+      ],
+      "title": "RiskTier",
+      "type": "string"
     }
   }
 }

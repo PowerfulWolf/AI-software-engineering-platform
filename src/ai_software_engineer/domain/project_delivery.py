@@ -18,6 +18,7 @@ from pydantic import AwareDatetime, Field, StrictBool, StrictInt, StringConstrai
 
 from ai_software_engineer.domain.branch import BranchName
 from ai_software_engineer.domain.continuation import InterruptionContinuationPolicy
+from ai_software_engineer.domain.engineering_authority import EngineeringPolicy
 from ai_software_engineer.domain.enums import (
     AgentRole,
     BrainTier,
@@ -27,6 +28,11 @@ from ai_software_engineer.domain.enums import (
     RequirementPriority,
     RiskTier,
     TaskStatus,
+)
+from ai_software_engineer.domain.execution_window import (
+    PlanExecutionWindow,
+    PlannedVerificationInspection,
+    validate_inspection_levels,
 )
 from ai_software_engineer.domain.identity import ProjectId, RepositoryId, TeamId
 from ai_software_engineer.domain.model import DomainModel, JsonValue, NonEmptyStr, ensure_unique
@@ -436,10 +442,30 @@ class AcceptanceDesignMapping(DomainModel):
     acceptance_criterion_id: AcceptanceCriterionId
     verification_strategy: NonEmptyStr
     test_levels: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1)]
+    verification_argv: tuple[NonEmptyStr, ...] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    planned_test_files: tuple[NonEmptyStr, ...] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    verification_inspection: PlannedVerificationInspection | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    controlled_capability_kind: NonEmptyStr | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def validate_test_levels(self) -> Self:
         ensure_unique(self.test_levels, "AcceptanceDesignMapping test_levels")
+        return self
+
+    @model_validator(mode="after")
+    def validate_verification_entry(self) -> Self:
+        if self.verification_argv is not None and self.verification_inspection is not None:
+            raise ValueError("verification command and inspection are mutually exclusive")
+        if self.verification_inspection is not None:
+            validate_inspection_levels(self.verification_inspection, self.test_levels)
         return self
 
 
@@ -603,10 +629,30 @@ class PlanPhaseDemand(DomainModel):
 
 
 class PlanTestItem(DomainModel):
+    verification_argv: tuple[NonEmptyStr, ...] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    planned_test_files: tuple[NonEmptyStr, ...] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    verification_inspection: PlannedVerificationInspection | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    controlled_capability_kind: NonEmptyStr | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     id: NonEmptyStr
     acceptance_criterion_ids: Annotated[tuple[AcceptanceCriterionId, ...], Field(min_length=1)]
     level: NonEmptyStr
     verification: NonEmptyStr
+
+    @model_validator(mode="after")
+    def validate_verification_entry(self) -> Self:
+        if self.verification_argv is not None and self.verification_inspection is not None:
+            raise ValueError("verification command and inspection are mutually exclusive")
+        if self.verification_inspection is not None:
+            validate_inspection_levels(self.verification_inspection, (self.level,))
+        return self
 
 
 class PlanTestMatrixIssue(DomainModel):
@@ -692,6 +738,10 @@ class PlanRevisionFeedback(DomainModel):
 class ExecutionPlan(DomainModel):
     """Planner-owned serial plan containing demand but no concrete allocation."""
 
+    execution_window: PlanExecutionWindow | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
     kind: Literal["execution_plan"] = "execution_plan"
     schema_version: Literal["v0.1"] = "v0.1"
     id: ExecutionPlanId
@@ -730,6 +780,7 @@ class ExecutionPlan(DomainModel):
         phases: tuple[PlanPhaseDemand, ...],
         created_at: datetime,
         feasibility_evidence_uris: tuple[str, ...] = (),
+        execution_window: PlanExecutionWindow | None = None,
         work_graph: PlanWorkGraph | None = None,
         revision_feedback: PlanRevisionFeedback | None = None,
     ) -> ExecutionPlan:
@@ -745,6 +796,7 @@ class ExecutionPlan(DomainModel):
             version=version,
             phases=phases,
             feasibility_evidence_uris=feasibility_evidence_uris,
+            execution_window=execution_window,
             work_graph=work_graph,
             revision_feedback=revision_feedback,
             created_at=created_at,
@@ -992,6 +1044,7 @@ def derive_delivery_task(
     max_attempts: AttemptLimit,
     retry_policy: DeliveryRetryPolicy | None = None,
     interruption_continuation_policy: InterruptionContinuationPolicy | None = None,
+    engineering_policy: EngineeringPolicy | None = None,
     created_at: datetime,
     constraints: TaskConstraints | None = None,
     owner: str | None = None,
@@ -1033,6 +1086,7 @@ def derive_delivery_task(
         max_attempts=max_attempts,
         retry_policy=retry_policy,
         interruption_continuation_policy=interruption_continuation_policy,
+        engineering_policy=engineering_policy,
         owner=owner,
         labels=labels,
         created_at=created_at,

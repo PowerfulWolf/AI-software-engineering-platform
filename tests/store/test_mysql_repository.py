@@ -156,6 +156,24 @@ def test_unknown_task_operations_raise_typed_error(
         repository.list_events("task_missing_001")
 
 
+def test_long_lived_repository_observes_cross_connection_reservation_and_checkpoint(
+    repository: MySqlTaskRepository,
+) -> None:
+    task = make_task()
+    repository.create(task)
+    assert repository.get(task.id).attempts == 0
+    assert repository.current_revision(task.id) == 0
+    with MySqlTaskRepository(_dsn()) as other:
+        other.record_attempt(task.id, 1)
+        other.append_event(make_state_event())
+    current = repository.get(task.id)
+    assert current.attempts == 1 and current.status is TaskStatus.PLANNING
+    assert repository.current_revision(task.id) == 1
+    with pytest.raises(InvalidStateEvent):
+        repository.append_event(make_state_event(event_id="evt_stale_reader_001"))
+    assert repository.current_revision(task.id) == 1
+
+
 @pytest.mark.parametrize("race_round", range(10))
 def test_competing_connections_cannot_publish_the_same_revision(
     repository: MySqlTaskRepository,

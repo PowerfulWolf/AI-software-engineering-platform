@@ -2158,7 +2158,10 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     delivery_id: "r1",
     expected_checkpoint_sha256: "a".repeat(64),
   });
-  assert.doesNotMatch(text(get("detail")), /a{64}/);
+  const productText = node => node.className?.split(/\s+/).includes("engineering-details")
+    ? "" : typeof node === "string" ? node : node.textContent + node.children.map(productText).join(" ");
+  assert.doesNotMatch(productText(get("detail")), /a{64}/,
+    "opaque operation bindings belong inside collapsed engineering details");
   assert.match(text(get("notification")), /继续交付.*已重新排队/);
   await descend(get("notification")).find(
     (node) => node.tag === "button" && node.textContent === "知道了",

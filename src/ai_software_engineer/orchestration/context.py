@@ -1,6 +1,7 @@
 """Compose explicit upstream Artifacts into role-scoped Agent Run contexts."""
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
@@ -15,6 +16,7 @@ from ai_software_engineer.context.builder import DEFAULT_CONTEXT_BUDGET
 from ai_software_engineer.context.ports import ContextSourceError
 from ai_software_engineer.domain.agent import AgentDefinition
 from ai_software_engineer.domain.artifact import Artifact
+from ai_software_engineer.domain.enums import AgentRole
 from ai_software_engineer.domain.task import Task
 
 
@@ -42,11 +44,13 @@ class FileRunContextBuilder:
         sources: tuple[ContextSource, ...] = (),
         context_store: ContextStore | None = None,
         budget: ContextBudget = DEFAULT_CONTEXT_BUDGET,
+        claim_context: Callable[[], ContextSource] | None = None,
     ) -> None:
         self._repository_root = Path(repository_root)
         self._sources = sources
         self._context_store = context_store
         self._budget = budget
+        self._claim_context = claim_context
 
     def build(
         self,
@@ -59,10 +63,15 @@ class FileRunContextBuilder:
     ) -> ContextBundle:
         """Compile machine policy, Task, role and persisted Artifact wire payloads."""
         artifact_sources = self._artifact_sources(task, agent, input_artifacts)
+        claim_sources = (
+            (self._claim_context(),)
+            if self._claim_context is not None and agent.role is not AgentRole.ORCHESTRATOR
+            else ()
+        )
         builder = FileContextBuilder(
             self._repository_root,
             agent.permissions,
-            sources=self._sources + artifact_sources,
+            sources=self._sources + artifact_sources + claim_sources,
             budget=self._budget,
         )
         bundle = builder.build(

@@ -106,3 +106,49 @@ Incremental contract/Git/Codex/fallback/retry/queue/public-entry/Console/DOM tes
 positive and refusal outcomes plus budget idempotency across write/crash windows. No production SQL
 repair, history rewriting or dirty cleanup. Deploy while idle. Revert code only while idle and retain
 new immutable policy/receipt readers; older policy-less Task facts remain valid.
+
+## v2 multi-round and synchronous Responses continuation
+
+The v1 matrix above remains the historical capability: it does not gain deletion,
+rename, mode-change or synchronous execution authority. New v2 Tasks freeze their
+own policy and publish per-Run append-only receipts/admissions; old v1 bytes/digests
+remain unchanged. `CapturedMutations` contains complete before/after regular UTF-8
+bodies and patches, including deletion, addition and 0644/0755 changes. Binary,
+symlink, sensitive, denied, ignored-policy and drifting mutations are refused.
+
+`agents.execution.ExecutionStop = NativeProcessStop | SynchronousToolLoopStop`.
+The synchronous stop has `origin=synchronous_responses_tool_loop`, exact Task/Run
+and `request_sha256`, unique `completed_operation_ids`, `kind`, `stopped_at` and
+`stop_sha256`. It has no native PID/group fields. Only the trusted synchronous
+Responses adapter can seal it after its local restricted registry operations have
+all returned. `require_request(request)` checks the entire original request digest.
+Unknown command completion, owner loss, Host interruption or a received final body
+cannot create an absent-output continuation receipt. A provider failure uses
+`kind=failed`; a local window limit uses `kind=local_execution_limit`. Both Python
+and `execution-continuation.schema.json` require v2 and matching cause/stop kind.
+
+`SubprocessCommandExecutor.run` raises `CommandExecutionUncertain` if it cannot
+prove the owned command group and output drains stopped. It is deliberately not a
+`CommandExecutionError`: the registry must not convert it to an ordinary tool
+refusal. A reaped leader alone is insufficient. `QueuedDeliverySupervisor` seals an
+owner-fenced `EXECUTION_UNCERTAIN` wait, releases the lease and preserves the Task
+checkpoint/worktree. `PolicyBoundToolRegistry.write_file` preserves existing
+regular permission bits (special bits refused), uses 0644 for new files, and applies
+the mode before fsync/atomic replace. A mkstemp 0600 file must not become the source
+file: it breaks complete mutation capture and executable source behavior.
+
+Good: a Responses Coder writes a lawful file, receives a typed provider failure,
+and its stopped synchronous loop produces a complete v2 receipt; a new claim and
+Run/Context continue the same worktree. Base: a clean or v1 execution keeps its old
+bounded behavior. Bad: the HTTP final body arrives at the deadline and the adapter
+checks time first, incorrectly records output absent, then starts another model.
+Returned successful bodies are classified before the limit check; a known final
+whose finishing exceeds the window enters engineering investigation without a
+receipt, candidate acceptance or repeated invocation.
+
+Required increments: `tests/agents/test_responses_continuation.py`,
+`tests/agents/test_http_deadline.py`, `tests/orchestration/test_synchronous_continuation.py`
+and `tests/tools/test_registry.py`. Assert both the HTTP-return and decode-return
+late-final boundaries, all completed operation identities, no same-Run dirty
+fallback, provider versus local budget debit, v1/synchronous Schema refusal, mode
+preservation and real executor uncertainty escaping the tool registry.

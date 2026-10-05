@@ -1,0 +1,38 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "const": "serial_coder_window_v1",
+      "default": "serial_coder_window_v1",
+      "title": "Kind",
+      "type": "string"
+    },
+    "hard_seconds": {
+      "maximum": 3600,
+      "minimum": 2,
+      "title": "Hard Seconds",
+      "type": "integer"
+    },
+    "finalization_reserve_seconds": {
+      "maximum": 300,
+      "minimum": 1,
+      "title": "Finalization Reserve Seconds",
+      "type": "integer"
+    },
+    "reserve_rework_attempts": {
+      "default": 1,
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Reserve Rework Attempts",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "hard_seconds",
+    "finalization_reserve_seconds"
+  ],
+  "title": "PlanExecutionWindow",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/plan-execution-window.schema.json"
+}

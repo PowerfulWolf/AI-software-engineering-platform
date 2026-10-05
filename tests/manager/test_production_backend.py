@@ -763,6 +763,66 @@ def test_host_records_isolated_delivery_without_polluting_project(
 
     assert workforce.get_policy(legacy_policy.id) == legacy_policy
     assert workforce.get_policy(new_policy.id, version=new_policy.version) == new_policy
+    if lose_lease:
+        from ai_software_engineer.domain import TaskStatus
+        from ai_software_engineer.domain.delivery_disposition import DeliveryResponsibility
+        from ai_software_engineer.domain.delivery_resolution import (
+            DeliveryProofMissing,
+            InspectDeliveryWait,
+        )
+        from ai_software_engineer.knowledge.store import KnowledgeRecordStore
+        from ai_software_engineer.work_queue.invocation import (
+            DeliveryInvocationOutcome,
+            DeliveryInvocationStart,
+        )
+
+        # The adapter was entered after a durable start. A lease expiry cannot
+        # prove that execution never began, even when this fixture knows it did.
+        checkpoint = approved.checkpoint
+        assert checkpoint.stage is DeliveryStage.DELIVERING
+        assert checkpoint.task_status is TaskStatus.IMPLEMENTING
+        assert checkpoint.task_id is not None
+        assert checkpoint.candidate_revision is None
+        (waiting,) = host.work_queue.items_for_task(checkpoint.task_id)
+        assert waiting.status is WorkItemStatus.WAITING_DEPENDENCY
+        disposition = waiting.wait_disposition
+        assert disposition is not None
+        assert disposition.facts.classification == "EXECUTION_UNCERTAIN"
+        assert disposition.responsibility is DeliveryResponsibility.ENGINEERING
+        assert disposition.resume_condition == "verified_execution_resolution"
+        assert not invoked and not host.work_queue.accepted(checkpoint.task_id)
+        assert not host.work_queue.list_active_leases(now=datetime.now(UTC))
+        sidecar = project_workspace.root / "repositories" / str(checkpoint.repository_id)
+        records = KnowledgeRecordStore(sidecar / "state/invocations", read_only=True)
+        (start,) = records.list("invocation-starts", DeliveryInvocationStart)
+        start.validate_integrity()
+        assert start.work_item_id == waiting.id and start.lease_id == lease.id
+        assert not records.list("invocation-outcomes", DeliveryInvocationOutcome)
+        proof = host.inspect_delivery_wait(
+            InspectDeliveryWait(
+                work_item_id=waiting.id,
+                expected_disposition_sha256=disposition.disposition_sha256,
+                expected_task_intent_sha256=disposition.facts.task_intent_sha256,
+                expected_source_revision=disposition.facts.source_revision,
+                expected_checkpoint_sequence=disposition.facts.checkpoint_sequence,
+            ),
+            project_id=project_workspace.manifest.project_id,
+            delivery_id=checkpoint.delivery_id,
+        )
+        assert proof.invocation_start_sha256 == start.start_sha256
+        assert proof.original_run_id == start.request.run_id
+        assert DeliveryProofMissing.OUTCOME_UNKNOWN in proof.missing
+        assert DeliveryProofMissing.STOP_UNRECORDED in proof.missing
+        assert not proof.permitted_resolutions
+        again = service.resume(ResumeProjectDelivery(delivery_id=checkpoint.delivery_id))
+        assert again.checkpoint.stage is DeliveryStage.DELIVERING
+        assert not invoked
+        assert host.work_queue.items_for_task(checkpoint.task_id) == (waiting,)
+        assert records.list("invocation-starts", DeliveryInvocationStart) == (start,)
+        assert not host.work_queue.list_active_leases(now=datetime.now(UTC))
+        assert (project / "hello.txt").read_text(encoding="utf-8") == "hello\n"
+        assert not (project / ".ase").exists()
+        return
     if input_limit == 1:
         assert approved.checkpoint.stage is DeliveryStage.BLOCKED
         assert approved.checkpoint.task_status is not None

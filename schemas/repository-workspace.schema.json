@@ -17,8 +17,12 @@
     "manifest_sha256"
   ],
   "properties": {
-    "schema_version": {"const": "v0.2"},
-    "layout_version": {"const": "v0.2"},
+    "schema_version": {
+      "const": "v0.2"
+    },
+    "layout_version": {
+      "const": "v0.2"
+    },
     "project_id": {
       "type": "string",
       "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"
@@ -31,8 +35,16 @@
       "type": "string",
       "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$"
     },
-    "repository_root": {"type": "string", "pattern": "^/", "minLength": 2},
-    "ai_workspace_root": {"type": "string", "pattern": "^/", "minLength": 2},
+    "repository_root": {
+      "type": "string",
+      "pattern": "^/",
+      "minLength": 2
+    },
+    "ai_workspace_root": {
+      "type": "string",
+      "pattern": "^/",
+      "minLength": 2
+    },
     "layout": {
       "type": "object",
       "additionalProperties": false,
@@ -53,23 +65,58 @@
         "spec_conflicts"
       ],
       "properties": {
-        "profile": {"const": "profile"},
-        "assignments": {"const": "assignments"},
-        "knowledge": {"const": "knowledge"},
-        "policy": {"const": "policy"},
-        "state": {"const": "state"},
-        "artifacts": {"const": "artifacts"},
-        "contexts": {"const": "contexts"},
-        "evidence": {"const": "evidence"},
-        "evaluations": {"const": "evaluations"},
-        "handoffs": {"const": "handoffs"},
-        "runs": {"const": "runs"},
-        "locks": {"const": "locks"},
-        "logs": {"const": "logs"},
-        "spec_conflicts": {"const": "spec-conflicts"}
+        "profile": {
+          "const": "profile"
+        },
+        "assignments": {
+          "const": "assignments"
+        },
+        "knowledge": {
+          "const": "knowledge"
+        },
+        "policy": {
+          "const": "policy"
+        },
+        "state": {
+          "const": "state"
+        },
+        "artifacts": {
+          "const": "artifacts"
+        },
+        "contexts": {
+          "const": "contexts"
+        },
+        "evidence": {
+          "const": "evidence"
+        },
+        "evaluations": {
+          "const": "evaluations"
+        },
+        "handoffs": {
+          "const": "handoffs"
+        },
+        "runs": {
+          "const": "runs"
+        },
+        "locks": {
+          "const": "locks"
+        },
+        "logs": {
+          "const": "logs"
+        },
+        "spec_conflicts": {
+          "const": "spec-conflicts"
+        }
       }
     },
-    "created_at": {"type": "string", "format": "date-time"},
-    "manifest_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
-  }
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "manifest_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  },
+  "$defs": {}
 }

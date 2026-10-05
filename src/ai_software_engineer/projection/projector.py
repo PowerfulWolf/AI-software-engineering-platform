@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
+from functools import cmp_to_key
 from itertools import pairwise
 from typing import Final
 
+from ai_software_engineer.artifacts.ordering import (
+    compare_artifact_order,
+    latest_accepted_artifact,
+)
 from ai_software_engineer.domain.artifact import (
     Artifact,
     ChangedFile,
@@ -39,6 +44,7 @@ from ai_software_engineer.evidence.models import AgentUsageEvidenceRecord, Evide
 
 from .models import (
     AgentProjection,
+    ArtifactStreamPosition,
     LeaseProjection,
     LeaseProjectionStatus,
     ProjectionEventKind,
@@ -89,6 +95,11 @@ class RunProjectionBuilder:
         self._validate_facts(facts)
         state_by_task = _group(facts.state_events, lambda item: item.task_id)
         artifacts_by_task = _group(facts.artifacts, lambda item: item.task_id)
+        artifact_positions = {item.artifact_id: item for item in facts.artifact_positions}
+        trusted_order = {
+            identity: (item.stream, item.sequence, item.ordinal)
+            for identity, item in artifact_positions.items()
+        }
         evidence_by_task = _group(facts.evidence, lambda item: item.identity.task_id)
         eval_by_task = _group(facts.evaluation_events, lambda item: item.task_id)
         handoff_by_task = _group(facts.handoffs, lambda item: item.task_id)
@@ -98,13 +109,15 @@ class RunProjectionBuilder:
         assignments_by_id = {item.id: item for item in facts.assignments}
         leases_by_task = _group(facts.leases, lambda item: item.task_id)
 
-        runs = self._build_runs(facts)
+        runs = self._build_runs(facts, artifact_positions, trusted_order)
         runs_by_task = _group(runs, lambda item: item.task_id)
         tasks = tuple(
             self._build_task(
                 task,
                 state_events=state_by_task.get(task.id, ()),
                 artifacts=artifacts_by_task.get(task.id, ()),
+                artifact_positions=artifact_positions,
+                trusted_order=trusted_order,
                 evidence=evidence_by_task.get(task.id, ()),
                 evaluation_events=eval_by_task.get(task.id, ()),
                 handoffs=handoff_by_task.get(task.id, ()),
@@ -137,6 +150,8 @@ class RunProjectionBuilder:
         *,
         state_events: tuple[StateEvent, ...],
         artifacts: tuple[Artifact, ...],
+        artifact_positions: Mapping[str, ArtifactStreamPosition],
+        trusted_order: Mapping[str, tuple[str, int, int]],
         evidence: tuple[EvidenceRecord, ...],
         evaluation_events: tuple[EvaluationEvent, ...],
         handoffs: tuple[HandoffBundle, ...],
@@ -193,8 +208,10 @@ class RunProjectionBuilder:
                     },
                 )
             )
-        for artifact in sorted(artifacts, key=lambda item: (item.created_at, item.artifact_id)):
-            timeline.append(_artifact_entry(artifact))
+        for index, artifact in enumerate(_ordered_artifacts(artifacts, trusted_order)):
+            timeline.append(
+                _artifact_entry(artifact, index, artifact_positions.get(artifact.artifact_id))
+            )
         for record in sorted(evidence, key=lambda item: (item.captured_at, item.evidence_id)):
             timeline.append(_evidence_entry(record))
         for assignment in sorted(assignments, key=lambda item: (item.assigned_at, item.id)):
@@ -230,9 +247,9 @@ class RunProjectionBuilder:
         for lease in sorted(leases, key=lambda item: item.id):
             timeline.append(_lease_entry(lease, task.id))
 
-        candidate = _latest_candidate(artifacts)
-        latest_qa = _latest_qa(artifacts)
-        latest_review = _latest_review(artifacts)
+        candidate = _latest_candidate(artifacts, trusted_order)
+        latest_qa = _latest_qa(artifacts, trusted_order)
+        latest_review = _latest_review(artifacts, trusted_order)
         repository_id = work_item.repository_id if work_item is not None else _first_project(runs)
         return TaskProjection(
             task_id=task.id,
@@ -263,12 +280,15 @@ class RunProjectionBuilder:
                 if handoffs
                 else None
             ),
-            timeline=tuple(
-                sorted(timeline, key=lambda item: (item.occurred_at, item.kind.value, item.id))
-            ),
+            timeline=tuple(sorted(timeline, key=timeline_sort_key)),
         )
 
-    def _build_runs(self, facts: ProjectionFacts) -> tuple[RunProjection, ...]:
+    def _build_runs(
+        self,
+        facts: ProjectionFacts,
+        artifact_positions: Mapping[str, ArtifactStreamPosition],
+        trusted_order: Mapping[str, tuple[str, int, int]],
+    ) -> tuple[RunProjection, ...]:
         allocations = {item.run_id: item for item in facts.allocations}
         by_run_evidence = _group(facts.evidence, lambda item: item.identity.run_id)
         by_run_artifacts = _group(facts.artifacts, lambda item: item.producer.run_id)
@@ -288,12 +308,7 @@ class RunProjectionBuilder:
                     key=lambda item: (item.captured_at, item.evidence_id),
                 )
             )
-            artifacts = tuple(
-                sorted(
-                    by_run_artifacts.get(run_id, ()),
-                    key=lambda item: (item.created_at, item.artifact_id),
-                )
-            )
+            artifacts = _ordered_artifacts(by_run_artifacts.get(run_id, ()), trusted_order)
             events = tuple(
                 sorted(
                     by_run_events.get(run_id, ()),
@@ -373,7 +388,10 @@ class RunProjectionBuilder:
                 provider = provider or usage.provider
                 model = model or usage.model
                 output_status = output_status or usage.status.value
-            timeline = [_artifact_entry(item) for item in artifacts]
+            timeline = [
+                _artifact_entry(item, index, artifact_positions.get(item.artifact_id))
+                for index, item in enumerate(artifacts)
+            ]
             timeline.extend(_evidence_entry(item) for item in evidence)
             timeline.extend(
                 TimelineEntry(
@@ -410,11 +428,7 @@ class RunProjectionBuilder:
                     artifact_ids=tuple(item.artifact_id for item in artifacts),
                     evidence_ids=tuple(item.evidence_id for item in evidence),
                     evaluation_event_ids=tuple(item.event_id for item in events),
-                    timeline=tuple(
-                        sorted(
-                            timeline, key=lambda item: (item.occurred_at, item.kind.value, item.id)
-                        )
-                    ),
+                    timeline=tuple(sorted(timeline, key=timeline_sort_key)),
                 )
             )
         return tuple(runs)
@@ -501,6 +515,23 @@ class RunProjectionBuilder:
         _ensure_unique(facts.tasks, lambda item: item.id, "Task")
         _ensure_unique(facts.state_events, lambda item: item.event_id, "StateEvent")
         _ensure_unique(facts.artifacts, lambda item: item.artifact_id, "Artifact")
+        for artifact in facts.artifacts:
+            if not artifact.integrity.validated or artifact.integrity.validated_at is None:
+                raise ProjectionConflict("artifact projection requires sealed validation facts")
+        _ensure_unique(facts.artifact_positions, lambda item: item.artifact_id, "Artifact position")
+        artifacts = {item.artifact_id: item for item in facts.artifacts}
+        for position in facts.artifact_positions:
+            positioned_artifact = artifacts.get(position.artifact_id)
+            if positioned_artifact is None or (
+                positioned_artifact.task_id,
+                positioned_artifact.integrity.sha256,
+            ) != (
+                position.task_id,
+                position.artifact_sha256,
+            ):
+                raise ProjectionConflict(
+                    "artifact stream position changed its exact sealed binding"
+                )
         _ensure_unique(facts.evidence, lambda item: item.evidence_id, "Evidence")
         _ensure_unique(facts.evaluation_events, lambda item: item.event_id, "EvaluationEvent")
         _ensure_unique(facts.handoffs, lambda item: item.handoff_id, "Handoff")
@@ -622,39 +653,65 @@ def _first_project(runs: tuple[RunProjection, ...]) -> str | None:
     return projects[0] if projects else None
 
 
-def _latest_candidate(artifacts: tuple[Artifact, ...]) -> str | None:
-    candidates = [item for item in artifacts if isinstance(item, ImplementationReportArtifact)]
-    return (
-        max(candidates, key=lambda item: (item.created_at, item.artifact_id)).content.commit_sha
-        if candidates
-        else None
+def _ordered_artifacts(
+    artifacts: tuple[Artifact, ...], trusted_order: Mapping[str, tuple[str, int, int]]
+) -> tuple[Artifact, ...]:
+    def compare(left: Artifact, right: Artifact) -> int:
+        return (
+            compare_artifact_order(left, right, artifacts=artifacts, trusted_order=trusted_order)
+            or 0
+        )
+
+    return tuple(sorted(artifacts, key=cmp_to_key(compare)))
+
+
+def _latest_candidate(
+    artifacts: tuple[Artifact, ...], trusted_order: Mapping[str, tuple[str, int, int]]
+) -> str | None:
+    latest = latest_accepted_artifact(
+        artifacts, ImplementationReportArtifact, trusted_order=trusted_order
     )
+    return latest.content.commit_sha if latest is not None else None
 
 
-def _latest_qa(artifacts: tuple[Artifact, ...]) -> str | None:
-    candidates = [item for item in artifacts if isinstance(item, QaReportArtifact)]
-    return (
-        max(candidates, key=lambda item: (item.created_at, item.artifact_id)).content.status.value
-        if candidates
-        else None
-    )
+def _latest_qa(
+    artifacts: tuple[Artifact, ...], trusted_order: Mapping[str, tuple[str, int, int]]
+) -> str | None:
+    latest = latest_accepted_artifact(artifacts, QaReportArtifact, trusted_order=trusted_order)
+    return latest.content.status.value if latest is not None else None
 
 
-def _latest_review(artifacts: tuple[Artifact, ...]) -> str | None:
-    candidates = [item for item in artifacts if isinstance(item, ReviewReportArtifact)]
-    return (
-        max(candidates, key=lambda item: (item.created_at, item.artifact_id)).content.verdict.value
-        if candidates
-        else None
-    )
+def _latest_review(
+    artifacts: tuple[Artifact, ...], trusted_order: Mapping[str, tuple[str, int, int]]
+) -> str | None:
+    latest = latest_accepted_artifact(artifacts, ReviewReportArtifact, trusted_order=trusted_order)
+    return latest.content.verdict.value if latest is not None else None
 
 
-def _artifact_entry(artifact: Artifact) -> TimelineEntry:
+def _artifact_entry(
+    artifact: Artifact, history_position: int, position: ArtifactStreamPosition | None
+) -> TimelineEntry:
+    validated_at = artifact.integrity.validated_at
+    if not artifact.integrity.validated or validated_at is None:
+        raise ProjectionConflict("artifact timeline requires a sealed validation timestamp")
     details = _artifact_details(artifact)
+    details.update(
+        {
+            "provider_created_at": artifact.created_at.isoformat(),
+            "validated_at": validated_at.isoformat(),
+            "artifact_history_position": history_position,
+        }
+    )
+    if position is not None:
+        details["durable_order"] = {
+            "stream": position.stream,
+            "sequence": position.sequence,
+            "ordinal": position.ordinal,
+        }
     return TimelineEntry(
         id=artifact.artifact_id,
         kind=ProjectionEventKind.ARTIFACT,
-        occurred_at=artifact.created_at,
+        occurred_at=validated_at,
         task_id=artifact.task_id,
         run_id=artifact.producer.run_id,
         role=artifact.producer.role,
@@ -662,6 +719,19 @@ def _artifact_entry(artifact: Artifact) -> TimelineEntry:
         source_uri=f"artifact://{artifact.artifact_id}",
         source_sha256=artifact.integrity.sha256,
         details=details,
+    )
+
+
+def timeline_sort_key(entry: TimelineEntry) -> tuple[datetime, str, str, int, str]:
+    """Keep the verified artifact order when Console merges additional history."""
+    position = entry.details.get("artifact_history_position")
+    artifact_position = position if type(position) is int else 0
+    return (
+        entry.occurred_at,
+        entry.task_id or "",
+        entry.kind.value,
+        artifact_position,
+        "" if entry.kind is ProjectionEventKind.ARTIFACT else entry.id,
     )
 
 
@@ -812,6 +882,7 @@ def _artifact_details(artifact: Artifact) -> dict[str, JsonValue]:
                 ],
                 "tests_run": _test_details(qa_content.tests_run),
                 "findings": [_finding_details(item) for item in qa_content.findings],
+                "environment": qa_content.environment,
             }
         )
     elif isinstance(artifact, ReviewReportArtifact):

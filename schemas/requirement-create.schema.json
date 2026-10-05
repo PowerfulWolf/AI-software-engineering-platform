@@ -31,5 +31,6 @@
   "title": "CreateRequirement",
   "type": "object",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ai-software-engineer.local/schemas/requirement-create.schema.json"
+  "$id": "https://ai-software-engineer.local/schemas/requirement-create.schema.json",
+  "$defs": {}
 }

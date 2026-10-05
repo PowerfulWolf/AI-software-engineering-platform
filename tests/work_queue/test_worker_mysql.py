@@ -17,6 +17,7 @@ from ai_software_engineer.agents import AgentRequest, AgentResult
 from ai_software_engineer.agents.execution import current_execution_guard
 from ai_software_engineer.agents.structured import StructuredModelResult
 from ai_software_engineer.artifacts import FileArtifactStore, seal_artifact
+from ai_software_engineer.artifacts.ordering import ArtifactOrderingError
 from ai_software_engineer.context import FileContextStore
 from ai_software_engineer.domain import AgentRole, RiskTier, StateEvent, TaskStatus, WorkItemStatus
 from ai_software_engineer.domain.retry_policy import DeliveryRetryPolicy
@@ -36,11 +37,12 @@ from ai_software_engineer.manager.production_backend import _terminal_delivery_r
 from ai_software_engineer.manager.queue_capacity import production_role_queue
 from ai_software_engineer.orchestration import FileRunContextBuilder, RetryDeliveryResult
 from ai_software_engineer.orchestration.state_machine import build_event
-from ai_software_engineer.orchestration.steps import RoleRunBoundary
+from ai_software_engineer.orchestration.steps import BoundedRunControl, RoleRunBoundary
 from ai_software_engineer.runtime import (
     RuntimeConfig,
     RuntimePaths,
     RuntimePersistence,
+    RuntimeRunResult,
     RuntimeSession,
 )
 from ai_software_engineer.scheduling import ModelRouter, PortfolioScheduler
@@ -66,6 +68,7 @@ from ai_software_engineer.work_queue.ports import (
 )
 from ai_software_engineer.work_queue.worker import (
     AcceptedArtifactStore,
+    DeliveryWaiting,
     QueuedDeliverySupervisor,
     WorkerExecutionGuard,
     WorkerKnowledgeWait,
@@ -837,3 +840,52 @@ def test_completion_rechecks_ownership_inside_transaction(
         queue.get(next_step.work_item.id)
     with pytest.raises(QueueNotFound):
         queue.step(next_step.work_item.id)
+
+
+def test_ambiguous_accepted_history_waits_and_releases_the_real_claim(
+    mysql_dsn: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue = MySqlRoleQueue(mysql_dsn)
+    adapter = ObservedAdapter(queue)
+    with runtime_fixture(tmp_path, mysql_dsn, queue, adapter) as (runtime, supervisor):
+        original = RuntimeSession.run_step
+        observations: list[QueueClaim] = []
+
+        def refuse(
+            session: RuntimeSession,
+            task_id: str,
+            control: BoundedRunControl,
+        ) -> RuntimeRunResult | RoleRunBoundary:
+            if supervisor.guard.lease is None:
+                return original(session, task_id, control)
+            observations.append(supervisor.guard.lease.claim)
+            raise ArtifactOrderingError("accepted history has no unique publication order")
+
+        monkeypatch.setattr(RuntimeSession, "run_step", refuse)
+        with pytest.raises(DeliveryWaiting) as waiting:
+            run_supervisor(runtime, supervisor)
+        assert len(observations) == 1
+        (claim,) = observations
+        (item,) = tuple(
+            i
+            for i in queue.items_for_task(claim.work_item.task_id)
+            if i.status is not WorkItemStatus.CLOSED
+        )
+        assert item.id == claim.work_item.id
+        assert item.status is WorkItemStatus.WAITING_DEPENDENCY
+        assert item.wait_disposition == waiting.value.disposition
+        assert waiting.value.disposition.facts.classification == "PLATFORM_BUG"
+        assert (
+            waiting.value.disposition.facts.source_revision
+            == queue.step(item.id).boundary.source_revision
+        )
+        assert runtime.task_repository.get(item.task_id).status is TaskStatus.IMPLEMENTING
+        assert not queue.list_active_leases(now=datetime.now(UTC))
+        assert supervisor.guard.lease is None
+        assert adapter.invocation_claims == []
+        with pytest.raises(DeliveryWaiting):
+            run_supervisor(runtime, supervisor)
+        assert len(observations) == 1
+        assert queue.get(item.id) == item

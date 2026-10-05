@@ -1,0 +1,71 @@
+{
+  "additionalProperties": false,
+  "description": "A real claimed preflight gate stopped before publishing an invocation start.",
+  "properties": {
+    "kind": {
+      "const": "delivery_preflight_checkpoint",
+      "default": "delivery_preflight_checkpoint",
+      "title": "Kind",
+      "type": "string"
+    },
+    "work_item_id": {
+      "minLength": 1,
+      "title": "Work Item Id",
+      "type": "string"
+    },
+    "lease_id": {
+      "minLength": 1,
+      "title": "Lease Id",
+      "type": "string"
+    },
+    "task_id": {
+      "minLength": 1,
+      "title": "Task Id",
+      "type": "string"
+    },
+    "task_snapshot_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Task Snapshot Sha256",
+      "type": "string"
+    },
+    "checkpoint_sequence": {
+      "title": "Checkpoint Sequence",
+      "type": "integer"
+    },
+    "source_revision": {
+      "minLength": 1,
+      "title": "Source Revision",
+      "type": "string"
+    },
+    "receipt_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Receipt Sha256",
+      "type": "string"
+    },
+    "checked_at": {
+      "format": "date-time",
+      "title": "Checked At",
+      "type": "string"
+    },
+    "checkpoint_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Checkpoint Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "work_item_id",
+    "lease_id",
+    "task_id",
+    "task_snapshot_sha256",
+    "checkpoint_sequence",
+    "source_revision",
+    "receipt_sha256",
+    "checked_at",
+    "checkpoint_sha256"
+  ],
+  "title": "DeliveryPreflightCheckpoint",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/delivery-preflight-checkpoint.schema.json"
+}

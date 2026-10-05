@@ -12,7 +12,8 @@ from ai_software_engineer.domain import AgentRole, TaskStatus
 from ai_software_engineer.manager.production_host import TeamHost
 from ai_software_engineer.manager.python_verification import PytestSelection
 from ai_software_engineer.recovery.entry import open_recovery_plan, read_recovery_task
-from ai_software_engineer.recovery.store import RecoveryRecordMissing
+from ai_software_engineer.recovery.models import RecoveryAuthorization
+from ai_software_engineer.recovery.store import RecoveryRecordMissing, authority_approved
 from ai_software_engineer.recovery.verification_entry import open_candidate_verification_plan
 
 app = typer.Typer(help="Explicitly recover a failed pre-candidate Coder with preserved edits.")
@@ -226,7 +227,7 @@ def verify_inspect(plan: Annotated[Path, typer.Option()]) -> None:
         config = ProductionConfig.from_environment(os.environ)
         store, value = open_candidate_verification_plan(config, os.environ, plan)
         try:
-            authorization = store.get_verification_authorization(value.plan_sha256)
+            authorization = store.get_verification_authority(value.plan_sha256)
         except RecoveryRecordMissing:
             authorization = None
         try:
@@ -251,7 +252,18 @@ def verify_inspect(plan: Annotated[Path, typer.Option()]) -> None:
             {
                 "plan_file": str(plan),
                 "plan_sha256": value.plan_sha256,
-                "approved": bool(authorization and authorization.decision.approved),
+                "approved": bool(
+                    isinstance(authorization, RecoveryAuthorization)
+                    and authorization.decision.approved
+                ),
+                "authorized": bool(authorization and authority_approved(authorization)),
+                "authorization_source": (
+                    "human_decision"
+                    if isinstance(authorization, RecoveryAuthorization)
+                    else "organization_engineering_policy"
+                    if authorization
+                    else None
+                ),
                 "source_task_id": value.inputs.task_id,
                 "verification_task_id": value.execution_task_id,
                 "candidate_commit": value.inputs.candidate_revision,

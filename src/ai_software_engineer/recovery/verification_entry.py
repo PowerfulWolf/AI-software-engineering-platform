@@ -30,6 +30,12 @@ from ai_software_engineer.domain.artifact import (
     QaReportArtifact,
     classify_qa_failure,
 )
+from ai_software_engineer.domain.engineering_authority import (
+    EngineeringAdmission,
+    EngineeringCapability,
+    LocalOperatorPrincipal,
+    OperatorDuty,
+)
 from ai_software_engineer.domain.enums import QaFailureDisposition, QaReportStatus
 from ai_software_engineer.git import GitWorktreeManager
 from ai_software_engineer.knowledge.administration import list_gap_views
@@ -43,6 +49,8 @@ from ai_software_engineer.manager.dispatch import (
     DispatchWorkforceSnapshot,
     VerificationReservation,
 )
+from ai_software_engineer.manager.engineering_authority import EngineeringAuthority
+from ai_software_engineer.manager.leader_recovery import ManagerIncident, ManagerIncidentKind
 from ai_software_engineer.manager.model_execution import ManagerModelExecutor
 from ai_software_engineer.manager.model_store import MySqlManagerRecordStore
 from ai_software_engineer.manager.mysql_dispatch_authority import MySqlDispatchAuthority
@@ -80,6 +88,7 @@ from ai_software_engineer.manager.verification_coordination import (
 )
 from ai_software_engineer.manager.verification_environment import (
     SwiftSandboxCapability,
+    admit_registered_verification_refresh,
     discover_swift_sandbox_capability,
 )
 from ai_software_engineer.orchestration import FileRunContextBuilder
@@ -137,6 +146,23 @@ def verification_store_root(source: NativeCandidateSource) -> Path:
         / "state"
         / f"candidate-verification-{source.scope.delivery_id}"
     )
+
+
+def verification_engineering_capabilities(
+    plan: CandidateVerificationPlan,
+) -> tuple[EngineeringCapability, ...]:
+    """Only the versioned, already implemented executor adapters can be admitted."""
+    result = [EngineeringCapability.VERIFICATION_REFRESH]
+    if isinstance(plan.executor_capability, PythonMysqlSandboxCapability):
+        result.append(EngineeringCapability.PYTHON_MYSQL_SANDBOX)
+        result.append(EngineeringCapability.OWNED_MYSQL_CLEANUP)
+    elif isinstance(plan.executor_capability, SwiftSandboxCapability):
+        result.append(EngineeringCapability.SWIFT_SANDBOX)
+    elif plan.executor_capability is not None:
+        raise RecoveryRejected("验证执行能力未注册，需工程负责人处理")  # noqa: RUF001
+    if plan.native_ui is not None:
+        result.append(EngineeringCapability.NATIVE_UI_SANDBOX)
+    return tuple(result)
 
 
 def _manager_executor(
@@ -518,6 +544,14 @@ class NativeVerificationFacts(VerificationFacts):
     def validate(self, plan: CandidateVerificationPlan) -> None:
         source = NativeCandidateSourceReader(self.config, self.environment).inspect(plan.scope)
         if self.store is not None:
+            try:
+                engineering = self.store.get_engineering_admission(plan.plan_sha256)
+            except RecoveryRecordMissing:
+                pass
+            else:
+                EngineeringAuthority.validate(task=source.runtime.task, record=engineering)
+                if engineering.capabilities != verification_engineering_capabilities(plan):
+                    raise RecoveryRejected("verification capability differs from frozen authority")
             validate_retained_qa_artifacts(
                 self.store,
                 plan,
@@ -688,10 +722,10 @@ def _automatic_python_mysql_tests(
             criteria_by_node.setdefault(node_id, set()).add(mapping.criterion_id)
     # A completed Coder report may contain the full selectors even when the plan's
     # prose uses a symbolic K1-Txx label.  Accept only the same exact node grammar.
-    for mapping in implementation.content.acceptance_mapping:
-        for test in mapping.tests:
+    for implementation_mapping in implementation.content.acceptance_mapping:
+        for test in implementation_mapping.tests:
             if _PYTEST_NODE_IN_TEXT.fullmatch(test):
-                criteria_by_node.setdefault(test, set()).add(mapping.criterion_id)
+                criteria_by_node.setdefault(test, set()).add(implementation_mapping.criterion_id)
     covered = set().union(*criteria_by_node.values()) if criteria_by_node else set()
     if covered != expected or len(criteria_by_node) > 32:
         return None
@@ -707,9 +741,38 @@ class CandidateVerificationEntry:
         config: ProductionConfig,
         environment: Mapping[str, str],
         backend: ProductionProjectDeliveryBackend,
+        *,
+        engineering_authority: EngineeringAuthority | None = None,
+        operator_principal: LocalOperatorPrincipal | None = None,
     ) -> None:
         self.config, self.environment, self.backend = config, dict(environment), backend
         self._route_factory = backend._delivery_route_adapters
+        self.engineering_authority = engineering_authority
+        self.operator_principal = operator_principal
+
+    def authorize_policy(self, path: Path) -> EngineeringAdmission | None:
+        """Admit current exact native verification through frozen engineering policy."""
+        if self.engineering_authority is None:
+            return None
+        store, plan = self.open(path)
+        source = NativeCandidateSourceReader(self.config, self.environment).inspect(plan.scope)
+        if source.runtime.task.engineering_policy is None:
+            return None
+        authority = self.engineering_authority
+        return admit_registered_verification_refresh(
+            incident=ManagerIncident(
+                id=f"manager_incident_{plan.plan_sha256[:32]}",
+                kind=ManagerIncidentKind.WORKFLOW,
+                summary="精确候选需要重新进行独立 QA 与 Review 验证",
+                delivery_id=plan.scope.delivery_id,
+                repository_root=plan.scope.repository_root,
+            ),
+            admit=lambda: self._admission(store, plan).authorize_policy(
+                task=source.runtime.task,
+                authority=authority,
+                capabilities=verification_engineering_capabilities(plan),
+            ),
+        )
 
     def open_plan(self, path: Path) -> tuple[FileRecoveryStore, CandidateVerificationPlan]:
         """Open one exact persisted verification-plan envelope through its scoped store."""
@@ -1200,6 +1263,8 @@ class CandidateVerificationEntry:
         return open_candidate_verification_plan(self.config, self.environment, path)
 
     def approve(self, path: Path, *, confirmed_plan: str, reference: str) -> None:
+        if self.operator_principal is not None:
+            self.operator_principal.require_duty(OperatorDuty.ENGINEERING)
         store, plan = self.open(path)
         admission = self._admission(store, plan)
         command = RecoveryApprovalCommand(
@@ -1221,7 +1286,7 @@ class CandidateVerificationEntry:
             command = previous.command
         admission.approve(
             command,
-            human=ExplicitVerificationHuman(confirmed_plan),
+            human=ExplicitVerificationHuman(confirmed_plan, self.operator_principal),
         )
 
     def execute(

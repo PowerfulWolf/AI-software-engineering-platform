@@ -23,6 +23,7 @@ from ai_software_engineer.agents.candidate_binding import BoundCandidateSource
 from ai_software_engineer.agents.codex_policy import candidate_read_snapshot, no_command_arguments
 from ai_software_engineer.agents.continuation import (
     CoderInterruptionControl,
+    ContinuationExecutionUncertain,
     InterruptionAdmissionRejected,
     InterruptionObservation,
 )
@@ -41,6 +42,9 @@ from ai_software_engineer.agents.ports import (
     AgentError,
     AgentRequestConflict,
 )
+from ai_software_engineer.agents.workspace_admission import (
+    InitialWorkspaceAdmission as InitialWorkspaceAdmission,
+)
 from ai_software_engineer.config.codex_proxy import (
     codex_cli_proxy_key_environment,
     codex_cli_proxy_overrides,
@@ -52,6 +56,7 @@ from ai_software_engineer.domain.artifact import (
     ImplementationReportArtifact,
     validate_artifact_payload,
 )
+from ai_software_engineer.domain.coder_work import validate_coder_slice_output
 from ai_software_engineer.domain.enums import AgentRole
 from ai_software_engineer.git import (
     CandidateCommitError,
@@ -111,12 +116,6 @@ class _CodexOutputContractError(ValueError):
         if self.validation_rule is not None:
             facts.append(f"validation_rule={self.validation_rule}")
         return "; ".join(facts)
-
-
-class InitialWorkspaceAdmission(Protocol):
-    """Trusted explicit admission of an exact recovery seed, never a dirty flag."""
-
-    def authorize(self, request: AgentRequest, workspace_root: Path) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -376,6 +375,8 @@ class CodexCliAgentAdapter:
         started = time.monotonic()
         try:
             result = self._execute(request, started)
+        except ContinuationExecutionUncertain:
+            raise
         except WorkspacePolicyError as error:
             result = _failure(
                 request,
@@ -385,8 +386,9 @@ class CodexCliAgentAdapter:
                 transient=False,
                 duration_ms=_elapsed_ms(started),
             )
+        except CodexExecutionUnconfirmed as error:
+            raise ContinuationExecutionUncertain("无法证明原生执行已停止") from error
         except (
-            CodexExecutionUnconfirmed,
             MutationInventoryRejected,
             InterruptionAdmissionRejected,
         ):
@@ -442,6 +444,8 @@ class CodexCliAgentAdapter:
                 if self._interruption_control is not None
                 else None
             )
+        except ContinuationExecutionUncertain:
+            raise
         except InterruptionAdmissionRejected:
             return _failure(
                 request,
@@ -723,6 +727,8 @@ class CodexCliAgentAdapter:
         """Turn one policy-checked Coder draft into a Git candidate outside the Agent sandbox."""
         if request.role is not AgentRole.CODER:
             return artifact
+        if request.work_slice is not None:
+            validate_coder_slice_output(request.work_slice, artifact)
         if isinstance(artifact, CoderProgressArtifact):
             return artifact
         final_head = _git(self._workspace_root, "rev-parse", "HEAD")
@@ -832,7 +838,11 @@ def _compile_prompt(
     *,
     manager_qa_runner: Path | None = None,
 ) -> str:
-    completion_reserve = _completion_reserve_seconds(request.timeout_seconds)
+    completion_reserve = (
+        request.work_slice.window.finalization_reserve_seconds
+        if request.work_slice is not None
+        else _completion_reserve_seconds(request.timeout_seconds)
+    )
     execution_budget = (
         f"The hard execution limit is {request.timeout_seconds} seconds. "
         f"Reserve the final {completion_reserve} seconds for required finalization. "

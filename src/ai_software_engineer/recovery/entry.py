@@ -24,6 +24,7 @@ from ai_software_engineer.domain import (
     TeamRole,
 )
 from ai_software_engineer.domain.branch import BranchName, available_successor_branch
+from ai_software_engineer.domain.engineering_authority import LocalOperatorPrincipal, OperatorDuty
 from ai_software_engineer.domain.task import task_matches_dispatch
 from ai_software_engineer.git import GitWorktreeManager, WorktreeNotFound, WorktreeSpec
 from ai_software_engineer.git.policy import is_protected_rule_path
@@ -208,17 +209,22 @@ def read_recovery_task(
 class ExplicitRecoveryHuman:
     """Local operator port, instantiated only after exact plan confirmation."""
 
-    def __init__(self, confirmed_plan: str | None) -> None:
+    def __init__(
+        self, confirmed_plan: str | None, principal: LocalOperatorPrincipal | None = None
+    ) -> None:
         self.confirmed_plan = confirmed_plan
+        self.principal = principal
 
     def verify(self, command: RecoveryApprovalCommand) -> VerifiedRecoveryDecision:
+        if self.principal is not None:
+            self.principal.require_duty(OperatorDuty.ENGINEERING)
         if command.plan_sha256 != self.confirmed_plan:
             raise RecoveryRejected("explicit human confirmation of this exact plan is required")
         return VerifiedRecoveryDecision(
             plan_sha256=command.plan_sha256,
             approval_reference=command.approval_reference,
             approved=True,
-            operator_id="local-operator",
+            operator_id=self.principal.operator_id if self.principal else "local-operator",
             rationale="Explicitly approved original solution reuse, target base and captured edits",
             decided_at=command.submitted_at,
         )
@@ -230,8 +236,11 @@ class NativeRecoveryEntry:
         config: ProductionConfig,
         environment: Mapping[str, str],
         backend: ProductionProjectDeliveryBackend,
+        *,
+        operator_principal: LocalOperatorPrincipal | None = None,
     ) -> None:
         self.config, self.environment, self.backend = config, dict(environment), backend
+        self.operator_principal = operator_principal
         self._facts = NativeRecoveryFactsVerifier(config, self.environment)
 
     def propose(
@@ -451,6 +460,8 @@ class NativeRecoveryEntry:
         return plan
 
     def approve(self, path: Path, *, confirmed_plan: str, reference: str) -> None:
+        if self.operator_principal is not None:
+            self.operator_principal.require_duty(OperatorDuty.ENGINEERING)
         store, plan = self.open_plan(path)
         command = RecoveryApprovalCommand(
             operation_id=f"op_recovery_{plan.plan_sha256[:32]}",
@@ -489,7 +500,7 @@ class NativeRecoveryEntry:
             captures=self._manager(
                 plan.source.scope, {plan.capture.task_id: plan.capture.branch_name}
             ),
-            human=ExplicitRecoveryHuman(confirmed),
+            human=ExplicitRecoveryHuman(confirmed, self.operator_principal),
         )
         builder = AuthorizedRecoveryTaskBuilder(service, facts)
         return service, builder, RecoveryTaskSealingService(store, builder)
@@ -594,7 +605,7 @@ class NativeRecoveryEntry:
                     submitted_at=datetime.now(UTC),
                 )
                 decision = (
-                    ExplicitRecoveryHuman(confirmed_plan)
+                    ExplicitRecoveryHuman(confirmed_plan, self.operator_principal)
                     .verify(command)
                     .model_copy(
                         update={

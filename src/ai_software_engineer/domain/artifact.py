@@ -28,6 +28,10 @@ from ai_software_engineer.domain.enums import (
     ReviewDimension,
     ReviewVerdict,
 )
+from ai_software_engineer.domain.execution_window import (
+    PlanExecutionWindow,
+    PlannedVerificationRequirement,
+)
 from ai_software_engineer.domain.model import (
     DomainModel,
     JsonValue,
@@ -118,6 +122,12 @@ class PlanRisk(DomainModel):
 
 
 class PlanContent(DomainModel):
+    verification_requirements: tuple[PlannedVerificationRequirement, ...] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    execution_window: PlanExecutionWindow | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     goal: NonEmptyStr
     assumptions: tuple[str, ...]
     steps: Annotated[tuple[PlanStep, ...], Field(min_length=1)]

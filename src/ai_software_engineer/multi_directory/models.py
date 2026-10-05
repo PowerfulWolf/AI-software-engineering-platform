@@ -11,6 +11,8 @@ from pydantic import AwareDatetime, Field, model_validator
 
 from ai_software_engineer.context import ContextSource
 from ai_software_engineer.domain.coordination import ManagerCoordinationAdvice
+from ai_software_engineer.domain.engineering_authority import LocalOperatorPrincipal, OperatorDuty
+from ai_software_engineer.domain.execution_window import PlanExecutionWindow
 from ai_software_engineer.domain.identity import ProjectId, TeamId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.project_delivery import (
@@ -104,6 +106,15 @@ class JointApproval(DomainModel):
     checkpoint_sha256: Digest
     reference: NonEmptyStr
     approved_at: AwareDatetime
+    operator_principal: LocalOperatorPrincipal | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @model_validator(mode="after")
+    def require_product_authority(self) -> Self:
+        if self.operator_principal is not None:
+            self.operator_principal.require_duty(OperatorDuty.PRODUCT)
+        return self
 
 
 class UnitDesign(DomainModel):
@@ -417,6 +428,9 @@ class SingleRepositoryAcceptance(DomainModel):
 
 
 class JointCheckpoint(DomainModel):
+    execution_window: PlanExecutionWindow | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     delivery_id: DeliveryId
     team_id: TeamId
     team_manifest_sha256: Digest
@@ -459,6 +473,10 @@ class JointCheckpoint(DomainModel):
 
     @model_validator(mode="after")
     def validate_chain(self) -> Self:
+        if self.plan is not None and any(
+            unit.plan.execution_window != self.execution_window for unit in self.plan.units
+        ):
+            raise ValueError("joint plan must retain the frozen requirement execution window")
         if self.coordination is not None and (
             self.coordination.requirement_id != self.delivery_id
             or self.coordination.stage != self.stage.value

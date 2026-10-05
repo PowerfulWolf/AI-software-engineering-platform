@@ -4,10 +4,16 @@ from enum import StrEnum
 
 from ai_software_engineer.agents import AgentErrorCode, AgentRunStatus, RunId
 from ai_software_engineer.agents.continuation import (
+    ContinuationExecutionUncertain,
     InterruptionAdmissionRejected,
     InterruptionBudgetExhausted,
 )
 from ai_software_engineer.agents.structured import StructuredModelError
+from ai_software_engineer.artifacts.ordering import (
+    ArtifactOrderingError,
+    compare_artifact_order,
+    latest_accepted_artifact,
+)
 from ai_software_engineer.context import ContextBudgetExceeded
 from ai_software_engineer.context.models import ContextId
 from ai_software_engineer.domain.artifact import (
@@ -168,7 +174,6 @@ class RetryingOrchestrator(SerialOrchestrator):
         artifacts = self._artifacts_for_task(task.id)
         plan = _latest(artifacts, PlanArtifact)
         implementation = _latest(artifacts, ImplementationReportArtifact)
-        progress = _latest(artifacts, CoderProgressArtifact)
         qa = _latest(artifacts, QaReportArtifact)
         review = _latest(artifacts, ReviewReportArtifact)
         event_ids: list[str] = [event.event_id for event in existing_events]
@@ -225,8 +230,8 @@ class RetryingOrchestrator(SerialOrchestrator):
         if plan is None:
             return self._blocked(
                 self._repository.get(task.id),
-                RetryClassification.REQUIREMENT_AMBIGUITY,
-                "cannot continue without a persisted plan Artifact",
+                RetryClassification.INVALID_OUTPUT,
+                "已保存的执行计划产物缺失, 需要工程核验记录后继续。",
                 max(task.attempts, 1),
                 event_ids,
                 (),
@@ -234,7 +239,15 @@ class RetryingOrchestrator(SerialOrchestrator):
 
         while True:
             task = self._repository.get(task.id)
-            active_progress = _active_progress(progress, implementation)
+            coder_source = self._current_coder_input(task)
+            active_progress = coder_source.active_progress
+            if (
+                coder_source.baseline is not None
+                and implementation is not None
+                and implementation.artifact_id
+                == coder_source.baseline.superseded_implementation_artifact_id
+            ):
+                recover_candidate = False
             if task.status is TaskStatus.CONTINUE_REQUIRED:
                 if active_progress is None:
                     return self._blocked(
@@ -353,7 +366,6 @@ class RetryingOrchestrator(SerialOrchestrator):
                     coder_artifact, task, event_id = result
                     event_ids.append(event_id)
                     if isinstance(coder_artifact, CoderProgressArtifact):
-                        progress = coder_artifact
                         checkpointed_artifact_ids.add(coder_artifact.artifact_id)
                         continue
                     implementation = coder_artifact
@@ -370,7 +382,13 @@ class RetryingOrchestrator(SerialOrchestrator):
                     )
                 current_qa = (
                     qa
-                    if qa is not None and qa.source_revision == implementation.content.commit_sha
+                    if qa is not None
+                    and qa.source_revision == implementation.content.commit_sha
+                    and qa.parent_artifact_ids == (implementation.artifact_id,)
+                    and (
+                        self._verification_reservation is None
+                        or self._verification_reservation.is_current(task, qa)
+                    )
                     else None
                 )
                 if current_qa is None:
@@ -381,6 +399,10 @@ class RetryingOrchestrator(SerialOrchestrator):
                         seen_run_ids,
                         run_ids,
                         context_ids,
+                        previous=qa
+                        if qa is not None
+                        and qa.source_revision == implementation.content.commit_sha
+                        else None,
                     )
                     if isinstance(qa_result, BlockedResult):
                         return qa_result.model_copy(
@@ -447,6 +469,12 @@ class RetryingOrchestrator(SerialOrchestrator):
                     review
                     if review is not None
                     and review.source_revision == implementation.content.commit_sha
+                    and review.parent_artifact_ids == (qa.artifact_id,)
+                    and qa.parent_artifact_ids == (implementation.artifact_id,)
+                    and (
+                        self._verification_reservation is None
+                        or self._verification_reservation.is_current(task, review)
+                    )
                     else None
                 )
                 if current_review is None:
@@ -458,6 +486,10 @@ class RetryingOrchestrator(SerialOrchestrator):
                         seen_run_ids,
                         run_ids,
                         context_ids,
+                        previous=review
+                        if review is not None
+                        and review.source_revision == implementation.content.commit_sha
+                        else None,
                     )
                     if isinstance(review_result, BlockedResult):
                         return review_result.model_copy(
@@ -583,15 +615,35 @@ class RetryingOrchestrator(SerialOrchestrator):
         context_ids: list[str],
     ) -> tuple[ImplementationReportArtifact | CoderProgressArtifact, Task, str] | BlockedResult:
         attempt = max(task.attempts, 1)
-        feedback: tuple[Artifact, ...] = tuple(item for item in (qa, review) if item is not None)
+        from ai_software_engineer.domain.coder_feedback import coder_feedback
+
+        feedback = coder_feedback(previous, qa, review)
         inputs = (plan, *feedback, *((progress,) if progress is not None else ()))
+        coder_source = self._current_coder_input(task)
+        baseline = coder_source.baseline
+        progress_supersedes = (
+            progress.artifact_id
+            if progress is not None
+            else baseline.superseded_progress_artifact_id
+            if baseline is not None
+            else None
+        )
         parents = tuple(item.artifact_id for item in inputs)
+        if self.execution_control is not None:
+            self.execution_control.before_checkpoint_recovery(
+                task,
+                AgentRole.CODER,
+                attempt,
+                coder_source.source_revision,
+            )
         if self._interruption_control is not None:
             try:
                 self._guard_write()
                 restored_attempt = self._interruption_control.resume(
                     self._repository.get(task.id), self._repository
                 )
+            except ContinuationExecutionUncertain:
+                raise
             except InterruptionAdmissionRejected as error:
                 return self._blocked(
                     self._repository.get(task.id),
@@ -602,6 +654,7 @@ class RetryingOrchestrator(SerialOrchestrator):
                     attempt,
                     (),
                     tuple(item.artifact_id for item in feedback),
+                    source_revision=coder_source.source_revision,
                 )
             if restored_attempt is not None:
                 attempt = restored_attempt
@@ -618,9 +671,7 @@ class RetryingOrchestrator(SerialOrchestrator):
                     input_artifacts=inputs,
                     expected_parents=parents,
                     expected_supersedes_by_kind={
-                        ArtifactKind.CODER_PROGRESS: (
-                            progress.artifact_id if progress is not None else None
-                        ),
+                        ArtifactKind.CODER_PROGRESS: progress_supersedes,
                         ArtifactKind.IMPLEMENTATION_REPORT: (
                             previous.artifact_id if previous is not None else None
                         ),
@@ -692,6 +743,7 @@ class RetryingOrchestrator(SerialOrchestrator):
                     attempt,
                     (),
                     tuple(item.artifact_id for item in feedback),
+                    source_revision=coder_source.source_revision,
                 )
             except StructuredModelError as error:
                 outcome = self._knowledge_failure(task, error)
@@ -700,7 +752,12 @@ class RetryingOrchestrator(SerialOrchestrator):
                     continue
                 return outcome
             except DeliveryContractViolation as error:
-                self._fail_platform(self._repository.get(task.id), attempt, str(error))
+                self._fail_platform(
+                    self._repository.get(task.id),
+                    attempt,
+                    str(error),
+                    source_revision=coder_source.source_revision,
+                )
                 raise
 
     def _run_qa_with_retries(
@@ -711,6 +768,8 @@ class RetryingOrchestrator(SerialOrchestrator):
         seen_run_ids: set[str],
         run_ids: list[str],
         context_ids: list[str],
+        *,
+        previous: QaReportArtifact | None = None,
     ) -> tuple[QaReportArtifact, Task] | BlockedResult:
         attempt = max(task.attempts, 1)
         while True:
@@ -721,8 +780,10 @@ class RetryingOrchestrator(SerialOrchestrator):
                     AgentRole.QA,
                     attempt=attempt,
                     candidate_revision=implementation.content.commit_sha,
-                    input_artifacts=(plan, implementation),
+                    input_artifacts=(plan, implementation)
+                    + ((previous,) if previous is not None else ()),
                     expected_parents=(implementation.artifact_id,),
+                    expected_supersedes=previous.artifact_id if previous is not None else None,
                     seen_run_ids=seen_run_ids,
                 )
                 qa = completed.artifact
@@ -757,7 +818,12 @@ class RetryingOrchestrator(SerialOrchestrator):
                     continue
                 return outcome
             except DeliveryContractViolation as error:
-                self._fail_platform(self._repository.get(task.id), attempt, str(error))
+                self._fail_platform(
+                    self._repository.get(task.id),
+                    attempt,
+                    str(error),
+                    source_revision=implementation.content.commit_sha,
+                )
                 raise
 
     def _run_review_with_retries(
@@ -769,6 +835,8 @@ class RetryingOrchestrator(SerialOrchestrator):
         seen_run_ids: set[str],
         run_ids: list[str],
         context_ids: list[str],
+        *,
+        previous: ReviewReportArtifact | None = None,
     ) -> tuple[ReviewReportArtifact, Task] | BlockedResult:
         attempt = max(task.attempts, 1)
         while True:
@@ -779,8 +847,10 @@ class RetryingOrchestrator(SerialOrchestrator):
                     AgentRole.REVIEWER,
                     attempt=attempt,
                     candidate_revision=implementation.content.commit_sha,
-                    input_artifacts=(plan, implementation, qa),
+                    input_artifacts=(plan, implementation, qa)
+                    + ((previous,) if previous is not None else ()),
                     expected_parents=(qa.artifact_id,),
+                    expected_supersedes=previous.artifact_id if previous is not None else None,
                     seen_run_ids=seen_run_ids,
                 )
                 review = completed.artifact
@@ -814,7 +884,12 @@ class RetryingOrchestrator(SerialOrchestrator):
                     continue
                 return outcome
             except DeliveryContractViolation as error:
-                self._fail_platform(self._repository.get(task.id), attempt, str(error))
+                self._fail_platform(
+                    self._repository.get(task.id),
+                    attempt,
+                    str(error),
+                    source_revision=implementation.content.commit_sha,
+                )
                 raise
 
     def _blocked(
@@ -827,6 +902,43 @@ class RetryingOrchestrator(SerialOrchestrator):
         artifact_ids: tuple[ArtifactId, ...],
         source_revision: str | None = None,
     ) -> BlockedResult:
+        implementation = _latest(self._artifacts_for_task(task.id), ImplementationReportArtifact)
+        retained_candidate = None
+        if implementation is not None:
+            baseline_input = (
+                self._coder_execution_inputs.current(
+                    task, implementation=implementation, progress=None
+                )
+                if self._coder_execution_inputs is not None
+                else None
+            )
+            if (
+                baseline_input is None
+                or baseline_input.baseline is None
+                or implementation.artifact_id
+                != baseline_input.baseline.superseded_implementation_artifact_id
+            ):
+                self._validate_implementation(task, implementation)
+                retained_candidate = implementation.content.commit_sha
+        if (
+            task.engineering_policy is not None
+            and self._delivery_failure_control is not None
+            and classification
+            in {
+                RetryClassification.REQUIREMENT_AMBIGUITY,
+                RetryClassification.VERIFICATION_INCONCLUSIVE,
+                RetryClassification.PLATFORM_BUG,
+                RetryClassification.INVALID_OUTPUT,
+                RetryClassification.TRANSIENT_INFRA,
+            }
+        ):
+            self._delivery_failure_control.wait(
+                task,
+                classification=classification.value,
+                reason=reason,
+                source_revision=source_revision or task.base_ref,
+                artifact_ids=artifact_ids,
+            )
         if task.status not in {TaskStatus.BLOCKED, TaskStatus.FAILED}:
             _, event_id = self._transition(
                 task,
@@ -844,20 +956,29 @@ class RetryingOrchestrator(SerialOrchestrator):
             attempt=attempt,
             artifact_ids=artifact_ids,
             event_ids=tuple(event_ids),
-            candidate_revision=(
-                source_revision
-                if source_revision is not None and source_revision != task.base_ref
-                else None
-            ),
+            candidate_revision=retained_candidate,
         )
 
-    def _fail_platform(self, task: Task, attempt: int, reason: str) -> None:
+    def _fail_platform(
+        self, task: Task, attempt: int, reason: str, *, source_revision: str
+    ) -> None:
         if task.status not in {TaskStatus.DONE, TaskStatus.BLOCKED, TaskStatus.FAILED}:
+            if task.engineering_policy is not None and self._delivery_failure_control is not None:
+                self._delivery_failure_control.wait(
+                    task,
+                    classification=RetryClassification.PLATFORM_BUG.value,
+                    reason=reason,
+                    source_revision=source_revision,
+                    artifact_ids=tuple(
+                        artifact.artifact_id for artifact in self._artifacts_for_task(task.id)
+                    ),
+                )
+                return
             self._transition(
                 task,
                 TaskStatus.FAILED,
                 reason=f"{RetryClassification.PLATFORM_BUG.value}: {reason}",
-                source_revision=task.base_ref,
+                source_revision=source_revision,
                 attempt=attempt,
             )
 
@@ -973,18 +1094,22 @@ def _latest[
         ReviewReportArtifact,
     )
 ](artifacts: tuple[Artifact, ...], artifact_type: type[ArtifactT]) -> ArtifactT | None:
-    candidates = tuple(item for item in artifacts if isinstance(item, artifact_type))
-    return max(candidates, key=lambda item: (item.created_at, item.artifact_id), default=None)
+    return latest_accepted_artifact(artifacts, artifact_type)
 
 
 def _active_progress(
     progress: CoderProgressArtifact | None,
     implementation: ImplementationReportArtifact | None,
+    artifacts: tuple[Artifact, ...] = (),
 ) -> CoderProgressArtifact | None:
     if progress is None:
         return None
-    if implementation is not None and progress.created_at <= implementation.created_at:
-        return None
+    if implementation is not None:
+        order = compare_artifact_order(progress, implementation, artifacts=artifacts)
+        if order is None:
+            raise ArtifactOrderingError("Coder progress and candidate have no publication order")
+        if order <= 0:
+            return None
     return progress
 
 

@@ -12,6 +12,7 @@ from ai_software_engineer.agents.diagnostics import safe_diagnostic
 from ai_software_engineer.design.models import DesignCommitCheckpoint
 from ai_software_engineer.design.store import DesignRecordStore
 from ai_software_engineer.domain.enums import ProjectRequestStatus
+from ai_software_engineer.domain.execution_window import PlanExecutionWindow
 from ai_software_engineer.domain.identity import RunId
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.domain.project_delivery import (
@@ -121,6 +122,9 @@ class ProduceExecutionPlanCommand(DomainModel):
     expected_execution_plan_version: int = Field(ge=1)
     transitioned_at: AwareDatetime
     human_upgrade: HumanPlanningUpgrade | None = None
+    execution_window: PlanExecutionWindow | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 class PlanningStageResult(DomainModel):
@@ -191,6 +195,7 @@ class PlannerStageService:
             expected_execution_plan_version=command.expected_execution_plan_version,
             built_at=command.transitioned_at,
             planning_decision=decision,
+            execution_window=command.execution_window,
         )
         request = PlannerAgentRequest(
             run_id=command.run_id,
@@ -239,6 +244,8 @@ class PlannerStageService:
             )
         try:
             plan = validate_planner_result(request, result)
+            if plan.execution_window != context.execution_window:
+                raise ValueError("Planner output changed the trusted execution window")
             validate_execution_plan(command.product_spec, command.technical_design, plan)
             validate_execution_plan_revision(
                 plan, self._execution_plans.find_for_request(plan.request_id)

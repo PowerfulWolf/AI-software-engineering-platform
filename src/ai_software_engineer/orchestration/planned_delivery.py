@@ -29,6 +29,7 @@ from ai_software_engineer.domain import (
     TaskStatus,
     TechnicalDesign,
 )
+from ai_software_engineer.domain.execution_window import PlannedVerificationRequirement
 from ai_software_engineer.domain.project_delivery import validate_execution_plan
 from ai_software_engineer.domain.task import task_matches_dispatch
 from ai_software_engineer.store import TaskNotFound, TaskRepository
@@ -166,7 +167,44 @@ class ExecutionPlanAgentAdapter:
                     )
                 )
                 strategies[criterion.id] = strategies[criterion.id] + "; " + "; ".join(tests)
+        requirements = None
+        if self._execution_plan.execution_window is not None:
+            if graph is not None:
+                requirements = tuple(
+                    PlannedVerificationRequirement(
+                        id=package.id + "_" + test.id,
+                        role=AgentRole.QA,
+                        criterion_ids=test.acceptance_criterion_ids,
+                        argv=test.verification_argv,
+                        inspection=test.verification_inspection,
+                        verification_levels=(test.level,),
+                        planned_new_files=test.planned_test_files or (),
+                        controlled_capability_kind=test.controlled_capability_kind,
+                    )
+                    for package in graph.packages
+                    for test in package.tests
+                    if test.verification_argv is not None
+                    or test.verification_inspection is not None
+                )
+            else:
+                requirements = tuple(
+                    PlannedVerificationRequirement(
+                        id="verify_" + mapping.acceptance_criterion_id,
+                        role=AgentRole.QA,
+                        criterion_ids=(mapping.acceptance_criterion_id,),
+                        argv=mapping.verification_argv,
+                        inspection=mapping.verification_inspection,
+                        verification_levels=mapping.test_levels,
+                        planned_new_files=mapping.planned_test_files or (),
+                        controlled_capability_kind=mapping.controlled_capability_kind,
+                    )
+                    for mapping in self._technical_design.acceptance_mappings
+                    if mapping.verification_argv is not None
+                    or mapping.verification_inspection is not None
+                )
         content = PlanContent(
+            verification_requirements=requirements,
+            execution_window=self._execution_plan.execution_window,
             goal=self._product_spec.summary,
             assumptions=self._product_spec.assumptions,
             steps=steps,

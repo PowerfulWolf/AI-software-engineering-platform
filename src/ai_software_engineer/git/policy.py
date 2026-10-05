@@ -174,12 +174,11 @@ def _is_shell_like(token: str) -> bool:
 
 
 def _authorize_focused_pytest(arguments: tuple[str, ...]) -> None:
-    """Reject verifier commands that can silently collect the whole test suite.
+    """Every pytest position must be focused, including additional selectors.
 
-    QA and Reviewer prompts are advisory. This check is the executable boundary for
-    Responses tool calls, including common wrapper forms such as ``uv run`` and
-    ``python -m pytest``. ``pytest.main`` is intentionally rejected because the
-    command policy cannot prove which selectors that Python string will collect.
+    A valid file followed by ``tests`` or ``.`` still collects the full suite.
+    Unsupported configuration/path switches fail closed instead of being
+    interpreted as evidence that the plan's test entry point is bounded.
     """
     lowered = tuple(token.lower() for token in arguments)
     if any("pytest.main" in token for token in lowered):
@@ -192,24 +191,68 @@ def _authorize_focused_pytest(arguments: tuple[str, ...]) -> None:
             index
             for index, token in enumerate(arguments)
             if Path(token).name.lower() in _PYTEST_EXECUTABLES
-            or (token.lower() == "pytest" and index > 0)
         ),
         None,
     )
     if pytest_index is None:
-        if "-m" in lowered:
-            marker_index = lowered.index("-m")
-            if marker_index + 1 < len(lowered) and lowered[marker_index + 1] == "pytest":
-                raise CommandPolicyViolation(
-                    "pytest 执行被拒绝: QA/Review 必须提供 tests/ 下明确的测试文件或节点选择器"
-                )
         if "-c" in lowered and any("pytest" in token for token in lowered):
             raise CommandPolicyViolation(
                 "pytest 执行被拒绝: QA/Review 不得通过 Python 字符串动态收集全量测试"
             )
         return
+    flags = frozenset(
+        {
+            "-q",
+            "-qq",
+            "-v",
+            "-vv",
+            "-s",
+            "-x",
+            "--disable-warnings",
+            "--strict-markers",
+            "--strict-config",
+            "--no-header",
+            "--no-summary",
+        }
+    )
+    value_options = frozenset(
+        {
+            "-k",
+            "-m",
+            "--maxfail",
+            "--tb",
+            "--capture",
+            "--color",
+            "--durations",
+        }
+    )
     selectors = arguments[pytest_index + 1 :]
-    if not any(_PYTEST_SELECTOR.fullmatch(token) for token in selectors):
+    selected = False
+    index = 0
+    while index < len(selectors):
+        token = selectors[index]
+        if token == "--" or token in flags:
+            index += 1
+            continue
+        option, separator, value = token.partition("=")
+        if option in value_options:
+            if separator:
+                if not value:
+                    raise CommandPolicyViolation("pytest 选项缺少值")
+                index += 1
+            else:
+                if index + 1 >= len(selectors) or selectors[index + 1].startswith("-"):
+                    raise CommandPolicyViolation("pytest 选项缺少值")
+                index += 2
+            continue
+        if not _PYTEST_SELECTOR.fullmatch(token):
+            raise CommandPolicyViolation(
+                "pytest 执行被拒绝: 每个测试位置必须是 tests/ 下明确的文件或节点; "
+                "禁止附加目录、全量范围或未验证的配置选项"
+            )
+        selected = True
+        index += 1
+    if not selected:
         raise CommandPolicyViolation(
             "pytest 执行被拒绝: QA/Review 必须提供 tests/ 下明确的测试文件或节点选择器"
         )

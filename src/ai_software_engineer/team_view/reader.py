@@ -7,8 +7,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
+from pydantic import Field
 from pymysql.cursors import DictCursor
 
 from ai_software_engineer.agents.fallback import (
@@ -18,10 +19,17 @@ from ai_software_engineer.agents.fallback import (
 )
 from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.config import ProductionConfig
+from ai_software_engineer.domain.artifact import Artifact
 from ai_software_engineer.domain.continuation import task_intent_sha256
 from ai_software_engineer.domain.coordination import ManagerCoordinationAdvice
-from ai_software_engineer.domain.enums import AgentRole, TaskStatus, TeamRole, WorkItemStatus
-from ai_software_engineer.domain.model import JsonValue
+from ai_software_engineer.domain.enums import (
+    AgentRole,
+    ArtifactKind,
+    TaskStatus,
+    TeamRole,
+    WorkItemStatus,
+)
+from ai_software_engineer.domain.model import DomainModel, JsonValue
 from ai_software_engineer.domain.task import Task, task_matches_dispatch
 from ai_software_engineer.domain.workforce import AgentProfile
 from ai_software_engineer.evaluation import FileEvaluationEventStore
@@ -52,20 +60,26 @@ from ai_software_engineer.multi_directory.retirement import RequirementRetiremen
 from ai_software_engineer.multi_directory.scope import git_read
 from ai_software_engineer.multi_directory.store import JointJournal
 from ai_software_engineer.orchestration.continuation_models import (
-    ContinuationRecordMissing,
     ContinuationScope,
     ExecutionInterruptionReceipt,
 )
 from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
 from ai_software_engineer.project_workspace import ProjectWorkspace
 from ai_software_engineer.projection.models import (
+    ArtifactHistoryFacts,
+    ArtifactStreamPosition,
     ProjectionEventKind,
     ProjectionFacts,
     TimelineEntry,
 )
-from ai_software_engineer.projection.projector import RunProjectionBuilder
+from ai_software_engineer.projection.projector import RunProjectionBuilder, timeline_sort_key
 from ai_software_engineer.recovery.models import RecoveryScope
-from ai_software_engineer.recovery.store import FileRecoveryStore, RecoveryRecordMissing
+from ai_software_engineer.recovery.store import (
+    FileRecoveryStore,
+    RecoveryRecordMissing,
+    authority_approved,
+    authority_sha256,
+)
 from ai_software_engineer.redaction import redact_text
 from ai_software_engineer.repository_workspace import RepositoryWorkspaceManifest
 from ai_software_engineer.runtime_workspace import (
@@ -83,6 +97,7 @@ from ai_software_engineer.team_workspace import (
     _reject_symlinks,
     discover_team_workspaces,
 )
+from ai_software_engineer.work_queue.models import QueuedWorkItem
 
 from .blocker_text import localize_blocking_text
 from .models import (
@@ -898,7 +913,7 @@ def _merge_task_history(current: TaskView, historical: tuple[TaskView, ...]) -> 
     ordered = tuple(
         sorted(
             entries.values(),
-            key=lambda item: (item.occurred_at, item.task_id or "", item.kind.value, item.id),
+            key=timeline_sort_key,
         )
     )
     runs = {(run.run_id, run.route_index): run for view in candidates for run in view.runs}
@@ -990,81 +1005,132 @@ def _continuation_history(
     sidecar: Path,
     task: Task,
     expected_scope: ContinuationScope,
+    artifacts: tuple[Artifact, ...] = (),
 ) -> tuple[tuple[TimelineEntry, ...], ExecutionInterruptionReceipt | None]:
-    """Project sealed execution facts only; a capture is never progress or a verdict."""
+    """Read every immutable interruption/admission, including feedback-bound sources."""
     root = sidecar / "state" / "continuations" / task.id
     _reject_symlinks(root)
     if not root.exists():
         return (), None
     store = FileContinuationStore(root, task_id=task.id)
-    receipt = store.receipt_for_task(task.id)
-    if receipt is None:
+    receipts = store.receipts_for_task(task.id)
+    if not receipts:
         return (), None
     policy = task.interruption_continuation_policy
-    if (
-        receipt.scope != expected_scope
-        or receipt.request.source_revision != task.base_ref
-        or receipt.task_intent_sha256 != task_intent_sha256(task)
-        or policy is None
-        or receipt.policy_sha256 != policy.policy_sha256
-    ):
-        raise ValueError("continuation receipt does not match delivery facts")
-    entries = [
-        TimelineEntry(
-            id="interruption_" + receipt.receipt_sha256,
-            kind=ProjectionEventKind.EVIDENCE,
-            occurred_at=receipt.created_at,
-            task_id=task.id,
-            run_id=receipt.request.run_id,
-            role=AgentRole.CODER,
-            summary="开发达到本地执行时限。草稿已封存。"
-            if receipt.cause == "local_execution_limit"
-            else "开发遇到临时模型服务故障。草稿已封存。",
-            source_uri=(root / "receipt.json").as_uri(),
-            source_sha256=receipt.receipt_sha256,
-            details={
-                "kind": receipt.kind,
-                "cause": receipt.cause,
-                "original_error_code": receipt.original_error_code.value,
-                "changed_paths": list(receipt.mutation_paths),
-                "policy_sha256": receipt.policy_sha256,
-                "receipt_sha256": receipt.receipt_sha256,
-                "is_progress_or_candidate": False,
-            },
+    by_id = {artifact.artifact_id: artifact for artifact in artifacts}
+    by_digest = {receipt.receipt_sha256: receipt for receipt in receipts}
+    baseline_root = sidecar / "state" / "execution-baselines" / task.id
+    baselines = {}
+    if baseline_root.is_dir():
+        from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
+
+        baselines = {
+            binding.binding_sha256: binding
+            for binding in FileExecutionBaselineStore(
+                baseline_root, read_only=True
+            ).bindings_for_task(task.id)
+        }
+    entries: list[TimelineEntry] = []
+    for receipt in receipts:
+        receipt.validate_integrity()
+        source = receipt.request.source_revision
+        baseline = baselines.get(receipt.request.execution_baseline_sha256 or "")
+        if receipt.request.execution_baseline_sha256 is not None:
+            if baseline is None:
+                raise ValueError("continuation receipt lacks its exact execution baseline binding")
+            baseline.require_task(task)
+            if (
+                receipt.request.execution_base_ref != baseline.execution_base_ref
+                or baseline.scope.team_id != expected_scope.team_id
+                or baseline.scope.project_id != expected_scope.project_id
+                or baseline.scope.repository_id != expected_scope.repository_id
+            ):
+                raise ValueError("continuation receipt changed its baseline scope or input")
+        if (
+            receipt.scope != expected_scope
+            or receipt.task_intent_sha256 != task_intent_sha256(task)
+            or policy is None
+            or receipt.policy_sha256 != policy.policy_sha256
+        ):
+            raise ValueError("continuation receipt does not match delivery facts")
+        if source != task.base_ref and (
+            baseline is None or source != baseline.execution_source_revision
+        ):
+            inputs = tuple(by_id.get(identity) for identity in receipt.request.input_artifact_ids)
+            if receipt.schema_version != "v2" or not any(
+                artifact is not None
+                and artifact.task_id == task.id
+                and artifact.source_revision == source
+                and artifact.kind
+                in {ArtifactKind.QA_REPORT, ArtifactKind.REVIEW_REPORT, ArtifactKind.CODER_PROGRESS}
+                for artifact in inputs
+            ):
+                raise ValueError("continuation receipt lacks accepted current-source lineage")
+        filename = (
+            "receipt.json"
+            if receipt.schema_version == "v1"
+            else f"receipt-{receipt.request.run_id}.json"
         )
-    ]
-    try:
-        admission = store.get_admission(task.id)
-    except ContinuationRecordMissing:
-        return tuple(entries), receipt
-    if (
-        admission.new_request.source_revision != task.base_ref
-        or admission.new_request.permissions != receipt.request.permissions
-    ):
-        raise ValueError("continuation admission changed source or permissions")
-    entries.append(
-        TimelineEntry(
-            id="admission_" + admission.admission_sha256,
-            kind=ProjectionEventKind.EVIDENCE,
-            occurred_at=admission.created_at,
-            task_id=task.id,
-            run_id=admission.new_request.run_id,
-            role=AgentRole.CODER,
-            summary="平台按既有工程授权允许单次开发接续。实际执行状态以当前队列为准。",
-            source_uri=(root / "admission.json").as_uri(),
-            source_sha256=admission.admission_sha256,
-            details={
-                "kind": admission.kind,
-                "authorization_source": admission.authorization_source,
-                "receipt_sha256": admission.receipt_sha256,
-                "policy_sha256": admission.policy_sha256,
-                "interrupted_run_id": admission.interrupted_run_id,
-                "next_work_item_id": admission.next_work_item_id,
-                "next_lease_id": admission.next_lease_id,
-            },
+        entries.append(
+            TimelineEntry(
+                id="interruption_" + receipt.receipt_sha256,
+                kind=ProjectionEventKind.EVIDENCE,
+                occurred_at=receipt.created_at,
+                task_id=task.id,
+                run_id=receipt.request.run_id,
+                role=AgentRole.CODER,
+                summary="开发达到本地执行时限。草稿已封存。"
+                if receipt.cause == "local_execution_limit"
+                else "开发遇到临时模型服务故障。草稿已封存。",
+                source_uri=(root / filename).as_uri(),
+                source_sha256=receipt.receipt_sha256,
+                details={
+                    "kind": receipt.kind,
+                    "cause": receipt.cause,
+                    "original_error_code": receipt.original_error_code.value,
+                    "changed_paths": list(receipt.mutation_paths),
+                    "policy_sha256": receipt.policy_sha256,
+                    "receipt_sha256": receipt.receipt_sha256,
+                    "source_revision": source,
+                    "is_progress_or_candidate": False,
+                },
+            )
         )
-    )
-    return tuple(entries), receipt
+    for admission in store.admissions_for_task(task.id):
+        admitted_receipt = by_digest.get(admission.receipt_sha256)
+        if admitted_receipt is None or (
+            admission.new_request.source_revision != admitted_receipt.request.source_revision
+            or admission.new_request.permissions != admitted_receipt.request.permissions
+        ):
+            raise ValueError("continuation admission changed source or permissions")
+        filename = (
+            "admission.json"
+            if admission.schema_version == "v1"
+            else f"admission-{admission.new_request.run_id}.json"
+        )
+        entries.append(
+            TimelineEntry(
+                id="admission_" + admission.admission_sha256,
+                kind=ProjectionEventKind.EVIDENCE,
+                occurred_at=admission.created_at,
+                task_id=task.id,
+                run_id=admission.new_request.run_id,
+                role=AgentRole.CODER,
+                summary="平台按冻结工程授权安排一次开发接续。实际状态以当前队列为准。",
+                source_uri=(root / filename).as_uri(),
+                source_sha256=admission.admission_sha256,
+                details={
+                    "kind": admission.kind,
+                    "authorization_source": admission.authorization_source,
+                    "receipt_sha256": admission.receipt_sha256,
+                    "policy_sha256": admission.policy_sha256,
+                    "interrupted_run_id": admission.interrupted_run_id,
+                    "next_work_item_id": admission.next_work_item_id,
+                    "next_lease_id": admission.next_lease_id,
+                },
+            )
+        )
+    return tuple(entries), receipts[-1]
 
 
 def _execution_interrupted(task: TaskView) -> bool:
@@ -1117,6 +1183,30 @@ def _task_execution(task: TaskView) -> DeliveryExecutionView:
                     reason="本次历史验证已由后续计划替代, 记录保留用于审计。",
                     next_action="查看后续验证计划与当前交付状态。",
                 )
+        for entry in reversed(task.timeline):
+            details = entry.details
+            if (
+                entry.task_id == task.task_id
+                and details.get("kind") == "engineering_disposition_record"
+                and details.get("source_task_status") == task.status
+            ):
+                responsibility = details.get("responsibility")
+                reason_code = details.get("reason_code")
+                next_action = details.get("next_action")
+                if (
+                    responsibility not in {"product", "team", "engineering"}
+                    or not isinstance(reason_code, str)
+                    or not isinstance(next_action, str)
+                ):
+                    raise ValueError("terminal engineering projection changed its typed facts")
+                return DeliveryExecutionView(
+                    state="STOPPED",
+                    responsibility=cast(Literal["product", "team", "engineering"], responsibility),
+                    reason_code=reason_code,
+                    reason=entry.summary,
+                    next_action=next_action,
+                    action_required=responsibility == "product",
+                )
         complete = task.status == "DONE"
         return DeliveryExecutionView(
             state="COMPLETED" if complete else "STOPPED",
@@ -1129,6 +1219,19 @@ def _task_execution(task: TaskView) -> DeliveryExecutionView:
         )
     waiting = _queue_wait(task)
     if waiting is not None:
+        if waiting.wait_disposition is not None:
+            disposition = waiting.wait_disposition
+            detail = (
+                localize_blocking_text(_safe(disposition.detail)) if disposition.detail else None
+            )
+            return DeliveryExecutionView(
+                state="WAITING",
+                responsibility=disposition.responsibility.value,
+                reason_code=disposition.facts.classification,
+                reason=_safe(disposition.reason) + (" " + detail if detail else ""),
+                next_action=disposition.next_action,
+                action_required=disposition.responsibility.value == "product",
+            )
         return DeliveryExecutionView(
             state="WAITING",
             responsibility="engineering",
@@ -1207,7 +1310,14 @@ def _with_execution_state(task: TaskView) -> TaskView:
     if execution.state in {"WAITING", "RUNNING", "QUEUED", "RETRY_SCHEDULED"}:
         updates["next_action"] = execution.next_action
         updates["blocker"] = execution.reason if execution.state == "WAITING" else None
-    elif _execution_interrupted(task):
+    elif _execution_interrupted(task) or (
+        execution.state == "STOPPED"
+        and any(
+            entry.task_id == task.task_id
+            and entry.details.get("kind") == "engineering_disposition_record"
+            for entry in task.timeline
+        )
+    ):
         updates.update(blocker=execution.reason, next_action=execution.next_action)
     return task.model_copy(update=updates)
 
@@ -1566,11 +1676,11 @@ def _verification_view(
         )
         store = FileRecoveryStore(store_root, scope=scope)
         plan = store.get_verification_plan(reservation.plan_sha256)
-        authorization = store.get_verification_authorization(reservation.plan_sha256)
+        authorization = store.get_verification_authority(reservation.plan_sha256)
         if (
             plan.execution_task_id != reservation.task_id
             or plan.inputs.task_id != reservation.source_task_id
-            or not authorization.decision.approved
+            or not authority_approved(authorization)
         ):
             raise ValueError("verification reservation lineage mismatch")
         documents.extend(
@@ -1582,9 +1692,9 @@ def _verification_view(
                     content=_safe(plan.model_dump_json(indent=2)),
                 ),
                 DocumentView(
-                    name="CandidateVerificationApproval",
+                    name="CandidateVerificationAuthority",
                     source_uri=f"candidate-verification://{reservation.plan_sha256}/approval",
-                    sha256=authorization.authorization_sha256,
+                    sha256=authority_sha256(authorization),
                     content=_safe(authorization.model_dump_json(indent=2)),
                 ),
             )
@@ -1747,11 +1857,13 @@ def _read_task_details(
         for e, r in zip(events, event_rows, strict=True)
     ):
         raise ValueError("state event row identity mismatch")
-    artifact_store = FileArtifactStore(native.sidecar / "artifacts", read_only=True)
-    artifact_ids = sorted({identity for e in events for identity in e.artifact_ids})
-    for identity in artifact_ids:
-        _reject_symlinks(native.sidecar / "artifacts" / f"{identity}.json")
-    artifacts = tuple(artifact_store.get(identity) for identity in artifact_ids)
+    artifact_history = _read_accepted_artifact_history(
+        cursor,
+        task_id=task.id,
+        sidecar=native.sidecar,
+        state_artifact_ids=tuple(identity for event in events for identity in event.artifact_ids),
+    )
+    artifacts = artifact_history.artifacts
     evaluation_store = FileEvaluationEventStore(native.sidecar / "evaluations", read_only=True)
     # Read a finite published prefix; later events cannot silently change this SQL snapshot.
     evaluation = tuple(
@@ -1765,6 +1877,7 @@ def _read_task_details(
             tasks=(task,),
             state_events=events,
             artifacts=artifacts,
+            artifact_positions=artifact_history.positions,
             evaluation_events=evaluation,
             assignments=tuple(p.assignment for p in dispatch.phases),
         )
@@ -1828,6 +1941,20 @@ def _read_task_details(
     )
     continuation_receipt = None
     if native.team_id is not None:
+        from ai_software_engineer.domain.engineering_authority import EngineeringScope
+        from ai_software_engineer.team_view.engineering_history import engineering_history
+
+        engineering_entries = engineering_history(
+            native.sidecar,
+            task,
+            EngineeringScope(
+                team_id=native.team_id,
+                project_id=base.project_id,
+                repository_id=dispatch.repository_id,
+                repository_root=task.repository,
+            ),
+            cp.delivery_id,
+        )
         history, continuation_receipt = _continuation_history(
             native.sidecar,
             task,
@@ -1838,9 +1965,13 @@ def _read_task_details(
                 requirement_id=cp.delivery_id,
                 dispatch_sha256=dispatch.dispatch_sha256,
             ),
+            artifacts,
         )
         timeline = tuple(
-            sorted((*timeline, *history), key=lambda entry: (entry.occurred_at, entry.id))
+            sorted(
+                (*timeline, *history, *engineering_entries),
+                key=timeline_sort_key,
+            )
         )
     elif (native.sidecar / "state" / "continuations" / task.id).exists():
         raise ValueError("continuation history is missing its Team binding")
@@ -1860,6 +1991,8 @@ def _read_task_details(
                 "source_task_id": source_task_id,
                 "plan_sha256": plan_sha256,
                 "task_id": task.id,
+                "task_revision": row["revision"],
+                "task_intent_sha256": task_intent_sha256(task),
                 "status": task.status.value,
                 "checkpoint_stage": (
                     base.checkpoint_stage if checkpoint_bound else task.status.value
@@ -1925,7 +2058,15 @@ def _read_task_details(
                     update={
                         "policy_id": continuation_receipt.policy_sha256,
                         "receipt_uri": (
-                            native.sidecar / "state" / "continuations" / task.id / "receipt.json"
+                            native.sidecar
+                            / "state"
+                            / "continuations"
+                            / task.id
+                            / (
+                                "receipt.json"
+                                if continuation_receipt.schema_version == "v1"
+                                else f"receipt-{continuation_receipt.request.run_id}.json"
+                            )
                         ).as_uri(),
                     }
                 )
@@ -1983,6 +2124,124 @@ def _active_successor_dispatch(
     if len(candidates) != 1:
         raise ValueError("ambiguous active successor dispatch")
     return candidates[0]
+
+
+class _ArtifactClaimPayload(DomainModel):
+    work_item: QueuedWorkItem
+    detail: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+def _read_accepted_artifact_history(
+    cursor: DictCursor,
+    *,
+    task_id: str,
+    sidecar: Path,
+    state_artifact_ids: tuple[str, ...],
+) -> ArtifactHistoryFacts:
+    """Include every accepted role result, even when its wait added no StateEvent."""
+    from ai_software_engineer.work_queue.execution_store import AcceptedRoleArtifact, _decode
+
+    cursor.execute(
+        "SELECT TABLE_NAME FROM information_schema.TABLES "
+        "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='work_queue_accepted_artifacts'"
+    )
+    table = cursor.fetchone()
+    accepted: tuple[AcceptedRoleArtifact, ...] = ()
+    if table is not None:
+        if table.get("TABLE_NAME") != "work_queue_accepted_artifacts":
+            raise ValueError("unexpected accepted artifact history schema")
+        cursor.execute(
+            "SELECT id,task_id,payload_json,sha256 FROM work_queue_accepted_artifacts "
+            "WHERE task_id=%s ORDER BY id",
+            (task_id,),
+        )
+        accepted = tuple(_decode(row, AcceptedRoleArtifact) for row in cursor.fetchall())
+    store = FileArtifactStore(sidecar / "artifacts", read_only=True)
+    identities = tuple(
+        dict.fromkeys((*state_artifact_ids, *(item.receipt.artifact_id for item in accepted)))
+    )
+    artifacts: dict[str, Artifact] = {}
+    for identity in identities:
+        _reject_symlinks(sidecar / "artifacts" / f"{identity}.json")
+        artifact = store.get(identity)
+        if artifact.task_id != task_id:
+            raise ValueError("artifact history belongs to another Task")
+        artifacts[identity] = artifact
+    positions = {
+        identity: ArtifactStreamPosition(
+            task_id=task_id,
+            artifact_id=identity,
+            artifact_sha256=artifacts[identity].integrity.sha256,
+            stream=f"state_artifact_references:{task_id}",
+            sequence=index + 1,
+        )
+        for index, identity in enumerate(dict.fromkeys(state_artifact_ids))
+    }
+    for receipt in accepted:
+        artifact = artifacts[receipt.receipt.artifact_id]
+        if (
+            receipt.task_id,
+            receipt.receipt.sha256,
+            receipt.run_id,
+            receipt.context_manifest_id,
+            receipt.source_revision,
+        ) != (
+            task_id,
+            artifact.integrity.sha256,
+            artifact.producer.run_id,
+            artifact.context_manifest_id,
+            artifact.source_revision,
+        ):
+            raise ValueError("accepted role artifact history changed its exact receipt binding")
+    claims_by_lease: dict[str, list[dict[str, object]]] = {}
+    if accepted:
+        lease_ids = tuple(dict.fromkeys(receipt.lease_id for receipt in accepted))
+        placeholders = ",".join("%s" for _ in lease_ids)
+        cursor.execute(
+            "SELECT sequence,work_item_id,lease_id,payload_json FROM work_queue_events "
+            f"WHERE lease_id IN ({placeholders}) AND event_type='CLAIMED' ORDER BY sequence",
+            lease_ids,
+        )
+        for claim_row in cursor.fetchall():
+            claims_by_lease.setdefault(_text(claim_row, "lease_id"), []).append(claim_row)
+    for receipt in accepted:
+        artifact = artifacts[receipt.receipt.artifact_id]
+        claims = claims_by_lease.get(receipt.lease_id, [])
+        if len(claims) != 1:
+            raise ValueError("accepted artifact history has no unique durable claim position")
+        claim = claims[0]
+        item = _ArtifactClaimPayload.model_validate_json(_text(claim, "payload_json")).work_item
+        if (
+            claim["work_item_id"],
+            claim["lease_id"],
+            item.id,
+            item.task_id,
+            item.role,
+            item.status,
+            item.dispatch_sequence,
+            item.checkpoint_sequence,
+        ) != (
+            receipt.work_item_id,
+            receipt.lease_id,
+            receipt.work_item_id,
+            task_id,
+            artifact.producer.role,
+            WorkItemStatus.LEASED,
+            receipt.dispatch_sequence,
+            receipt.checkpoint_sequence,
+        ):
+            raise ValueError("accepted artifact history changed its exact claim binding")
+        sequence = claim["sequence"]
+        if type(sequence) is not int:
+            raise ValueError("accepted artifact history has an invalid durable sequence")
+        positions[artifact.artifact_id] = ArtifactStreamPosition(
+            task_id=task_id,
+            artifact_id=artifact.artifact_id,
+            artifact_sha256=artifact.integrity.sha256,
+            stream="work_queue_events",
+            sequence=sequence,
+        )
+    return ArtifactHistoryFacts(tuple(artifacts.values()), tuple(positions.values()))
 
 
 def _read_runs(

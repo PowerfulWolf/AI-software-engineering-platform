@@ -1,6 +1,9 @@
 """Role isolation and fail-closed behavior of the policy-bound tool registry."""
 
 import hashlib
+import os
+import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -12,7 +15,11 @@ from ai_software_engineer.domain import (
     ArtifactKind,
     NetworkAccess,
 )
-from ai_software_engineer.execution import CommandResult
+from ai_software_engineer.execution import (
+    CommandExecutionUncertain,
+    CommandResult,
+    SubprocessCommandExecutor,
+)
 from ai_software_engineer.tools import (
     PolicyBoundToolRegistry,
     ReadFileRequest,
@@ -240,6 +247,7 @@ def test_bound_registry_rejects_another_run_or_role(tmp_path: Path) -> None:
                 path="src/app.py",
             )
         )
+
     with pytest.raises(ToolRequestIdentityMismatch):
         registry.execute(
             ReadFileRequest(
@@ -249,3 +257,67 @@ def test_bound_registry_rejects_another_run_or_role(tmp_path: Path) -> None:
                 path="src/app.py",
             )
         )
+
+
+@pytest.mark.parametrize("mode", (None, 0o644, 0o755))
+def test_atomic_write_preserves_regular_mode_and_new_files_are_0644(
+    tmp_path: Path,
+    mode: int | None,
+) -> None:
+    (tmp_path / "src").mkdir()
+    target = tmp_path / "src/app.py"
+    if mode is not None:
+        target.write_text("before\n")
+        target.chmod(mode)
+    registry = PolicyBoundToolRegistry(tmp_path, _agent(AgentRole.CODER))
+    result = registry.execute(
+        WriteFileRequest(
+            run_id="run_tool_registry_001",
+            role=AgentRole.CODER,
+            operation_id="tool.write",
+            path="src/app.py",
+            content="after\n",
+        )
+    )
+    assert isinstance(result, WriteFileResult)
+    assert target.read_text() == "after\n"
+    assert stat.S_IMODE(target.stat().st_mode) == (0o644 if mode is None else mode)
+
+
+def test_real_command_uncertain_stop_is_not_converted_to_tool_rejection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Start and reap a real command, then simulate inability to inspect the
+    # owned group. No live fixture child is left behind by the injected fault.
+    original_killpg = os.killpg
+    observed: list[int] = []
+
+    def unknown_group(pid: int, sig: int) -> None:
+        if sig == 0:
+            observed.append(pid)
+            raise PermissionError("cannot inspect owned group")
+        original_killpg(pid, sig)
+
+    monkeypatch.setattr("ai_software_engineer.execution.os.killpg", unknown_group)
+    agent = _agent(AgentRole.CODER).model_copy(
+        update={
+            "permissions": _agent(AgentRole.CODER).permissions.model_copy(
+                update={
+                    "commands": (sys.executable,),
+                }
+            ),
+        }
+    )
+    executor = SubprocessCommandExecutor(tmp_path, agent.permissions)
+    registry = PolicyBoundToolRegistry(tmp_path, agent, command_executor=executor)
+    with pytest.raises(CommandExecutionUncertain, match="group state is unknown"):
+        registry.execute(
+            RunCommandRequest(
+                run_id="run_tool_registry_001",
+                role=AgentRole.CODER,
+                operation_id="tool.command",
+                argv=(sys.executable, "-c", "print('finished')"),
+            )
+        )
+    assert observed

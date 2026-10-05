@@ -8,14 +8,28 @@ from ai_software_engineer.agents import AgentRequest
 from ai_software_engineer.artifacts import ArtifactStore, artifact_digest
 from ai_software_engineer.domain.agent import AgentDefinition
 from ai_software_engineer.domain.artifact import QaReportArtifact
+from ai_software_engineer.domain.engineering_authority import (
+    EngineeringAdmission,
+    EngineeringCapability,
+    LocalOperatorPrincipal,
+    OperatorDuty,
+)
 from ai_software_engineer.domain.enums import AgentRole, QaReportStatus
+from ai_software_engineer.domain.task import Task
+from ai_software_engineer.manager.engineering_authority import EngineeringAuthority
 from ai_software_engineer.recovery.models import (
     RecoveryApprovalCommand,
     RecoveryAuthorization,
     RecoveryRejected,
     VerifiedRecoveryDecision,
+    digest,
 )
-from ai_software_engineer.recovery.store import FileRecoveryStore, RecoveryRecordMissing
+from ai_software_engineer.recovery.store import (
+    FileRecoveryStore,
+    RecoveryRecordMissing,
+    authority_approved,
+    authority_sha256,
+)
 from ai_software_engineer.recovery.verification import CandidateVerificationResult
 from ai_software_engineer.recovery.verification_qa import validate_retained_qa_artifacts
 from ai_software_engineer.recovery.verification_records import (
@@ -39,17 +53,22 @@ class VerificationHuman(Protocol):
 class ExplicitVerificationHuman:
     """Local human confirmation for this exact candidate verification plan only."""
 
-    def __init__(self, confirmed_plan: str | None) -> None:
+    def __init__(
+        self, confirmed_plan: str | None, principal: LocalOperatorPrincipal | None = None
+    ) -> None:
         self.confirmed_plan = confirmed_plan
+        self.principal = principal
 
     def verify(self, command: RecoveryApprovalCommand) -> VerifiedRecoveryDecision:
+        if self.principal is not None:
+            self.principal.require_duty(OperatorDuty.ENGINEERING)
         if self.confirmed_plan != command.plan_sha256:
             raise RecoveryRejected("explicit confirmation of the verification plan is required")
         return VerifiedRecoveryDecision(
             plan_sha256=command.plan_sha256,
             approval_reference=command.approval_reference,
             approved=True,
-            operator_id="local-operator",
+            operator_id=self.principal.operator_id if self.principal else "local-operator",
             rationale="Approved independent QA and Review of the pinned original candidate",
             decided_at=command.submitted_at,
         )
@@ -88,6 +107,14 @@ class CandidateVerificationAdmission:
             raise RecoveryRejected("approval targets another verification plan")
         plan = self.store.get_verification_plan(self.plan_sha256)
         try:
+            self.store.get_engineering_admission(self.plan_sha256)
+        except RecoveryRecordMissing:
+            pass
+        else:
+            raise RecoveryRejected(
+                "policy admission is not a human approval and cannot be replaced"
+            )
+        try:
             previous = self.store.get_verification_authorization(self.plan_sha256)
         except RecoveryRecordMissing:
             pass
@@ -104,8 +131,8 @@ class CandidateVerificationAdmission:
     def admit(self, inputs: CandidateVerificationInputs, request: AgentRequest) -> None:
         with self.store.execution_lock():
             plan = self.store.get_verification_plan(self.plan_sha256)
-            authorization = self.store.get_verification_authorization(self.plan_sha256)
-            if plan.inputs != inputs or not authorization.decision.approved:
+            authorization = self.store.get_verification_authority(self.plan_sha256)
+            if plan.inputs != inputs or not authority_approved(authorization):
                 raise RecoveryRejected("verification is not approved for these inputs")
             self.facts.validate(plan)
             try:
@@ -118,7 +145,7 @@ class CandidateVerificationAdmission:
             self.store.put_verification_invocation(
                 CandidateVerificationInvocation.create(
                     plan_sha256=self.plan_sha256,
-                    authorization_sha256=authorization.authorization_sha256,
+                    authorization_sha256=authority_sha256(authorization),
                     request=request,
                     admitted_at=self.clock(),
                 )
@@ -130,9 +157,9 @@ class CandidateVerificationAdmission:
         definitions: Mapping[AgentRole, AgentDefinition],
     ) -> None:
         plan = self.store.get_verification_plan(self.plan_sha256)
-        authorization = self.store.get_verification_authorization(self.plan_sha256)
+        authorization = self.store.get_verification_authority(self.plan_sha256)
         if (
-            not authorization.decision.approved
+            not authority_approved(authorization)
             or plan.inputs != inputs
             or dict(definitions) != {d.role: d for d in plan.definitions}
         ):
@@ -166,7 +193,7 @@ class CandidateVerificationAdmission:
                 if previous.qa != result.qa or previous.review != result.review:
                     raise RecoveryRejected("completion conflicts with the recorded result")
                 return previous
-            authorization = self.store.get_verification_authorization(self.plan_sha256)
+            authorization = self.store.get_verification_authority(self.plan_sha256)
             qa = (
                 None
                 if plan.reused_qa is not None
@@ -180,7 +207,7 @@ class CandidateVerificationAdmission:
             return self.store.put_verification_completion(
                 CandidateVerificationCompletion.create(
                     plan_sha256=self.plan_sha256,
-                    authorization_sha256=authorization.authorization_sha256,
+                    authorization_sha256=authority_sha256(authorization),
                     qa_invocation_sha256=(qa.invocation_sha256 if qa is not None else None),
                     reviewer_invocation_sha256=reviewer.invocation_sha256
                     if reviewer is not None
@@ -190,6 +217,35 @@ class CandidateVerificationAdmission:
                     completed_at=self.clock(),
                 )
             )
+
+    def authorize_policy(
+        self,
+        *,
+        task: Task,
+        authority: EngineeringAuthority,
+        capabilities: tuple[EngineeringCapability, ...],
+    ) -> EngineeringAdmission:
+        """Apply organization authority to current exact facts; no human is invented."""
+        plan = self.store.get_verification_plan(self.plan_sha256)
+        self.facts.validate(plan)
+        if task.id != plan.inputs.task_id or digest(task.to_wire()) != plan.inputs.task_sha256:
+            raise RecoveryRejected("engineering authority targets another Task")
+        try:
+            self.store.get_verification_authorization(self.plan_sha256)
+        except RecoveryRecordMissing:
+            pass
+        else:
+            raise RecoveryRejected("an existing human decision cannot be replaced by policy")
+        result = authority.admit(
+            task=task,
+            store=self.store,
+            plan_sha256=self.plan_sha256,
+            facts_sha256=plan.plan_sha256,
+            capabilities=capabilities,
+            at=self.clock(),
+        )
+        self.facts.validate(plan)
+        return result
 
     def _validate_inputs(self, plan: CandidateVerificationPlan, request: AgentRequest) -> None:
         validate_retained_qa_artifacts(self.store, plan, self.artifacts)

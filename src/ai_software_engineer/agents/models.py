@@ -12,8 +12,11 @@ from ai_software_engineer.domain.artifact import (
     ArtifactId,
     CoderProgressArtifact,
     ImplementationReportArtifact,
+    Sha256,
 )
 from ai_software_engineer.domain.enums import AgentRole, ArtifactKind
+from ai_software_engineer.domain.execution_baseline import FullGitRevision
+from ai_software_engineer.domain.execution_window import CoderWorkSlice
 from ai_software_engineer.domain.identity import RunId as RunId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.retry_policy import ExecutionAttempt
@@ -105,6 +108,13 @@ class AgentRequest(DomainModel):
     permissions: AgentPermissions
     output_schema: NonEmptyStr
     timeout_seconds: TimeoutSeconds
+    work_slice: CoderWorkSlice | None = Field(default=None, exclude_if=lambda value: value is None)
+    execution_baseline_sha256: Sha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    execution_base_ref: FullGitRevision | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     continuation_checkpoint_id: ArtifactId | None = None
     continuation_changed_paths: tuple[NonEmptyStr, ...] = ()
     expected_parent_artifact_ids: tuple[ArtifactId, ...] | None = None
@@ -112,6 +122,26 @@ class AgentRequest(DomainModel):
 
     @model_validator(mode="after")
     def validate_artifact_ids(self) -> Self:
+        if (self.execution_baseline_sha256 is None) != (self.execution_base_ref is None):
+            raise ValueError("baseline request must bind both exact record and execution base")
+        if self.execution_baseline_sha256 is not None and self.role not in {
+            AgentRole.CODER,
+            AgentRole.QA,
+            AgentRole.REVIEWER,
+        }:
+            raise ValueError("execution baseline input belongs only to delivery roles")
+        if self.work_slice is not None:
+            work = self.work_slice
+            if (
+                self.role is not AgentRole.CODER
+                or (work.task_id, work.attempt, work.source_revision)
+                != (self.task_id, self.attempt, self.source_revision)
+                or work.plan_artifact_id not in self.input_artifact_ids
+                or work.window.hard_seconds != self.timeout_seconds
+            ):
+                raise ValueError(
+                    "work slice must bind this exact Coder request and execution window"
+                )
         ensure_unique(self.input_artifact_ids, "AgentRequest input_artifact_ids")
         if self.expected_parent_artifact_ids is not None:
             ensure_unique(self.expected_parent_artifact_ids, "expected parent Artifact IDs")

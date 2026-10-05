@@ -1,26 +1,30 @@
 """A verifier receives complete candidate differences, not unrelated repository bulk."""
 
 import hashlib
-import json
 from pathlib import Path
 
 import pytest
+from pydantic import TypeAdapter
 
 from ai_software_engineer.agents.candidate_source import (
     CandidateReadScope,
     candidate_review_snapshot,
 )
 from ai_software_engineer.domain import AgentRole
+from ai_software_engineer.domain.model import JsonValue
 from ai_software_engineer.git import WorkspacePolicyError
 from tests.agents.test_codex_cli import _git, _repository
 from tests.orchestration.test_runner import _definitions
 
 
-def source_payload(snapshot: str) -> dict[str, object]:
+def source_payload(snapshot: str) -> dict[str, JsonValue]:
     header, difference = snapshot.split("\nSOURCE_DIFF_BEGIN\n", 1)
-    payload = json.loads(header.split("\nSOURCE_PACKAGE=", 1)[1])
+    payload = TypeAdapter(dict[str, JsonValue]).validate_json(
+        header.split("\nSOURCE_PACKAGE=", 1)[1]
+    )
     framed = difference.encode()
     length = payload["diff_delivered_bytes"]
+    assert type(length) is int
     assert framed[length:] == b"\nSOURCE_DIFF_END\n"
     difference = framed[:length].decode()
     assert payload["diff_complete_hunks"] is True
@@ -28,6 +32,18 @@ def source_payload(snapshot: str) -> dict[str, object]:
     assert payload["diff_delivered_sha256"] == hashlib.sha256(difference.encode()).hexdigest()
     payload["diff"] = difference
     return payload
+
+
+def _source_files(payload: dict[str, JsonValue]) -> dict[str, dict[str, JsonValue]]:
+    values = payload["files"]
+    assert isinstance(values, list)
+    files: dict[str, dict[str, JsonValue]] = {}
+    for item in values:
+        assert isinstance(item, dict)
+        path = item["path"]
+        assert isinstance(path, str)
+        files[path] = item
+    return files
 
 
 def repository(tmp_path: Path) -> tuple[Path, CandidateReadScope]:
@@ -65,7 +81,7 @@ def test_complete_diff_and_dependencies_ignore_unrelated_baseline(tmp_path: Path
     payload = source_payload(snapshot)
     assert payload["base_revision"] == scope.base_revision
     assert payload["candidate_revision"] == scope.candidate_revision
-    files = {item["path"]: item for item in payload["files"]}
+    files = _source_files(payload)
     assert not files["README.md"]["full_content_read"]
     assert files["new.py"]["full_content_read"]
     assert files["dependency.txt"]["full_content_read"]
@@ -104,12 +120,14 @@ def test_complete_deletion_rename_and_mode_change(tmp_path: Path) -> None:
     scope = scope.model_copy(update={"candidate_revision": _git(root, "rev-parse", "HEAD")})
     snapshot = candidate_review_snapshot(root, scope, _definitions()[AgentRole.QA].permissions)
     payload = source_payload(snapshot)
-    files = {item["path"]: item for item in payload["files"]}
+    files = _source_files(payload)
     assert files["README.md"]["change"] == "deleted"
     assert files["dependency.txt"]["change"] == "deleted"
     assert files["renamed.md"]["change"] == "added"
     assert files["renamed.md"]["full_content_read"]
-    assert "first change must remain visible" in payload["diff"]
+    diff = payload["diff"]
+    assert isinstance(diff, str)
+    assert "first change must remain visible" in diff
 
 
 @pytest.mark.parametrize("kind", ["binary", "symlink", "non_utf8"])
@@ -159,6 +177,7 @@ def test_complete_diff_frame_preserves_data_that_looks_like_boundaries(tmp_path:
         )
     )
     difference = payload["diff"]
+    assert isinstance(difference, str)
     assert '+"quote"\\backslash' in difference
     assert "+中文" in difference
     assert "+SOURCE_DIFF_BEGIN\n+SOURCE_DIFF_END\n" in difference

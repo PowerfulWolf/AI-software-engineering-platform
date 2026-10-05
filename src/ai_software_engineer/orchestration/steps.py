@@ -68,5 +68,20 @@ class BoundedRunControl:
             raise RoleRunPending(boundary)
         self._consumed = True
 
+    def before_checkpoint_recovery(
+        self,
+        task: Task,
+        role: Literal[AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER],
+        attempt: int,
+        source_revision: str,
+    ) -> None:
+        """A probe schedules recovery before touching role-owned continuation facts."""
+        self.before_write()
+        boundary = RoleRunBoundary(
+            task.id, role, attempt, self._repository.current_revision(task.id), source_revision
+        )
+        if self._consumed or boundary != self._permit:
+            raise RoleRunPending(boundary)
+
 
 __all__ = ["BoundedRunControl", "RoleRunBoundary", "RoleRunPending"]

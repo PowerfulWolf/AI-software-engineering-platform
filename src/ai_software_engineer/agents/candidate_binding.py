@@ -13,6 +13,7 @@ from ai_software_engineer.agents.models import AgentRequest
 from ai_software_engineer.agents.openai_compatible import ContextResolver
 from ai_software_engineer.artifacts import artifact_digest
 from ai_software_engineer.context.builder import estimate_input_tokens
+from ai_software_engineer.context.execution_baseline import execution_baseline_from_context
 from ai_software_engineer.domain import AgentRole, Task
 from ai_software_engineer.domain.artifact import (
     Artifact,
@@ -23,12 +24,18 @@ from ai_software_engineer.domain.artifact import (
     ReviewReportArtifact,
 )
 from ai_software_engineer.domain.enums import QaReportStatus, ReviewVerdict
+from ai_software_engineer.domain.execution_baseline import ExecutionBaselineBinding
 from ai_software_engineer.git import WorkspacePolicyError
 from ai_software_engineer.redaction import redact_text
 
 
 def candidate_read_scope(
-    task: Task, plan: Artifact, implementation: Artifact, candidate_revision: str
+    task: Task,
+    plan: Artifact,
+    implementation: Artifact,
+    candidate_revision: str,
+    *,
+    execution_baseline: ExecutionBaselineBinding | None = None,
 ) -> CandidateReadScope:
     """Only sealed same-Task lineage can select the base and planned dependencies."""
     if not isinstance(plan, PlanArtifact) or not isinstance(
@@ -50,10 +57,16 @@ def candidate_read_scope(
         or implementation.content.commit_sha != candidate_revision
     ):
         raise WorkspacePolicyError("candidate source artifact lineage or revision differs")
+    if execution_baseline is not None:
+        execution_baseline.require_task(task)
     try:
         return CandidateReadScope(
             task_id=task.id,
-            base_revision=task.base_ref,
+            base_revision=(
+                execution_baseline.execution_base_ref
+                if execution_baseline is not None
+                else task.base_ref
+            ),
             candidate_revision=candidate_revision,
             related_paths=tuple(path for step in plan.content.steps for path in step.files),
             denied_paths=task.constraints.denied_paths if task.constraints else (),
@@ -108,11 +121,18 @@ def validate_candidate_artifact_lineage(
     if not isinstance(previous, ImplementationReportArtifact) or previous.task_id != task.id:
         raise WorkspacePolicyError("candidate source artifact lineage or revision differs")
     feedback: Artifact | None = None
+    supporting_qa: QaReportArtifact | None = None
     progress: list[CoderProgressArtifact] = []
     for parent in parents:
         assert parent is not None
         if isinstance(parent, CoderProgressArtifact):
             progress.append(parent)
+        elif (
+            isinstance(parent, QaReportArtifact)
+            and parent.content.status is QaReportStatus.PASS
+            and supporting_qa is None
+        ):
+            supporting_qa = parent
         elif feedback is None and isinstance(parent, (QaReportArtifact, ReviewReportArtifact)):
             feedback = parent
         else:
@@ -125,12 +145,14 @@ def validate_candidate_artifact_lineage(
         raise WorkspacePolicyError("candidate source artifact lineage or revision differs")
     if isinstance(feedback, QaReportArtifact):
         valid_feedback = (
-            feedback.producer.role is AgentRole.QA
+            supporting_qa is None
+            and feedback.producer.role is AgentRole.QA
             and feedback.content.status is QaReportStatus.FAIL
             and feedback.source_revision == previous.content.commit_sha
             and feedback.parent_artifact_ids == (previous.artifact_id,)
         )
     else:
+        assert isinstance(feedback, ReviewReportArtifact)
         accepted_qa = (
             artifacts.get(feedback.parent_artifact_ids[0]) if feedback.parent_artifact_ids else None
         )
@@ -144,6 +166,7 @@ def validate_candidate_artifact_lineage(
             and accepted_qa.content.status is QaReportStatus.PASS
             and accepted_qa.source_revision == previous.content.commit_sha
             and accepted_qa.parent_artifact_ids == (previous.artifact_id,)
+            and (supporting_qa is None or supporting_qa == accepted_qa)
         )
     if not valid_feedback:
         raise WorkspacePolicyError("candidate source artifact lineage or revision differs")
@@ -221,9 +244,9 @@ class BoundCandidateSource:
                     "candidate source artifact lineage or revision differs"
                 ) from error
         # A remediation feedback artifact may itself point at the previous QA PASS.
-        for artifact in tuple(artifacts_by_id.values()):
-            if isinstance(artifact, ReviewReportArtifact):
-                for artifact_id in artifact.parent_artifact_ids:
+        for lineage_artifact in tuple(artifacts_by_id.values()):
+            if isinstance(lineage_artifact, ReviewReportArtifact):
+                for artifact_id in lineage_artifact.parent_artifact_ids:
                     if artifact_id not in artifacts_by_id:
                         try:
                             artifacts_by_id[artifact_id] = self._resolver.get_artifact(artifact_id)
@@ -232,7 +255,15 @@ class BoundCandidateSource:
                                 "candidate source artifact lineage or revision differs"
                             ) from error
         validate_candidate_artifact_lineage(task, plans[0], implementations[0], artifacts_by_id)
-        scope = candidate_read_scope(task, plans[0], implementations[0], request.source_revision)
+        try:
+            baseline = execution_baseline_from_context(context, request, task)
+        except ValueError as error:
+            raise WorkspacePolicyError(
+                "candidate source execution baseline binding differs"
+            ) from error
+        scope = candidate_read_scope(
+            task, plans[0], implementations[0], request.source_revision, execution_baseline=baseline
+        )
         result = prompt + candidate_review_snapshot(root, scope, request.permissions)
         if estimate_input_tokens(result) > context.budget.max_input_tokens:
             raise WorkspacePolicyError(

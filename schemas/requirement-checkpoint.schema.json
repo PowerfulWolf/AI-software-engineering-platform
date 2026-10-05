@@ -51,6 +51,62 @@
           "minItems": 1,
           "title": "Test Levels",
           "type": "array"
+        },
+        "verification_argv": {
+          "anyOf": [
+            {
+              "items": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Verification Argv"
+        },
+        "planned_test_files": {
+          "anyOf": [
+            {
+              "items": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Planned Test Files"
+        },
+        "controlled_capability_kind": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Controlled Capability Kind"
+        },
+        "verification_inspection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlannedVerificationInspection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -682,6 +738,17 @@
             }
           ],
           "default": null
+        },
+        "execution_window": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanExecutionWindow"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -942,6 +1009,17 @@
           "format": "date-time",
           "title": "Approved At",
           "type": "string"
+        },
+        "operator_principal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalOperatorPrincipal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -3264,6 +3342,133 @@
       ],
       "title": "UnitPlan",
       "type": "object"
+    },
+    "PlanExecutionWindow": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "serial_coder_window_v1",
+          "default": "serial_coder_window_v1",
+          "title": "Kind",
+          "type": "string"
+        },
+        "hard_seconds": {
+          "maximum": 3600,
+          "minimum": 2,
+          "title": "Hard Seconds",
+          "type": "integer"
+        },
+        "finalization_reserve_seconds": {
+          "maximum": 300,
+          "minimum": 1,
+          "title": "Finalization Reserve Seconds",
+          "type": "integer"
+        },
+        "reserve_rework_attempts": {
+          "default": 1,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Reserve Rework Attempts",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "hard_seconds",
+        "finalization_reserve_seconds"
+      ],
+      "title": "PlanExecutionWindow",
+      "type": "object"
+    },
+    "PlannedVerificationInspection": {
+      "additionalProperties": false,
+      "description": "An explicit approved inspection target, never a test or verdict.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "document",
+            "source",
+            "native_ui"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "paths": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Paths",
+          "type": "array"
+        },
+        "checklist": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Checklist",
+          "type": "array"
+        },
+        "scenario_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scenario Sha256"
+        }
+      },
+      "required": [
+        "kind",
+        "checklist"
+      ],
+      "title": "PlannedVerificationInspection",
+      "type": "object"
+    },
+    "LocalOperatorPrincipal": {
+      "additionalProperties": false,
+      "description": "Trusted local composition identity; request/model text cannot add duties.",
+      "properties": {
+        "kind": {
+          "const": "trusted_local_operator",
+          "default": "trusted_local_operator",
+          "title": "Kind",
+          "type": "string"
+        },
+        "operator_id": {
+          "minLength": 1,
+          "title": "Operator Id",
+          "type": "string"
+        },
+        "duties": {
+          "items": {
+            "$ref": "#/$defs/OperatorDuty"
+          },
+          "minItems": 1,
+          "title": "Duties",
+          "type": "array"
+        }
+      },
+      "required": [
+        "operator_id",
+        "duties"
+      ],
+      "title": "LocalOperatorPrincipal",
+      "type": "object"
+    },
+    "OperatorDuty": {
+      "enum": [
+        "PRODUCT",
+        "ENGINEERING"
+      ],
+      "title": "OperatorDuty",
+      "type": "string"
     }
   },
   "additionalProperties": false,
@@ -3552,6 +3757,17 @@
       "pattern": "^[a-f0-9]{64}$",
       "title": "Checkpoint Sha256",
       "type": "string"
+    },
+    "execution_window": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PlanExecutionWindow"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     }
   },
   "required": [

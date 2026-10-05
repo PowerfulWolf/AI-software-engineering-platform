@@ -38,6 +38,9 @@
 
 ## Files
 
+- [`engineering-authority.md`](engineering-authority.md): versioned engineering policy, trusted
+  Product/Engineering duties, exact nonterminal wait investigations and resolutions.
+
 - [`engineering-continuation.md`](engineering-continuation.md): frozen Coder interruption policy,
   owned process-stop facts, complete mutation receipts, one-use admission and claimed restart.
 
@@ -87,3 +90,9 @@
 - [`active-knowledge.md`](active-knowledge.md)
 - [`knowledge-index.md`](knowledge-index.md)
 - [`product-failure-diagnostics.md`](product-failure-diagnostics.md)
+- [`delivery-disposition.md`](delivery-disposition.md): shared waiting responsibility, resume facts,
+  checkpoint preservation and terminal boundaries.
+- [`delivery-preflight.md`](delivery-preflight.md): frozen execution windows, serial work slices,
+  registered verification and claimed preparation before model invocation.
+- [`execution-baseline.md`](execution-baseline.md): same-Task source rebinding, complete retained
+  patches, exact engineering decisions and historical source/queue accounting.

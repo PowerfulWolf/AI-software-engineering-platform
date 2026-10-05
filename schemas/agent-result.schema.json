@@ -944,6 +944,32 @@
     "PlanContent": {
       "additionalProperties": false,
       "properties": {
+        "verification_requirements": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/PlannedVerificationRequirement"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Verification Requirements"
+        },
+        "execution_window": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanExecutionWindow"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "goal": {
           "minLength": 1,
           "title": "Goal",
@@ -987,6 +1013,42 @@
         "risks"
       ],
       "title": "PlanContent",
+      "type": "object"
+    },
+    "PlanExecutionWindow": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "serial_coder_window_v1",
+          "default": "serial_coder_window_v1",
+          "title": "Kind",
+          "type": "string"
+        },
+        "hard_seconds": {
+          "maximum": 3600,
+          "minimum": 2,
+          "title": "Hard Seconds",
+          "type": "integer"
+        },
+        "finalization_reserve_seconds": {
+          "maximum": 300,
+          "minimum": 1,
+          "title": "Finalization Reserve Seconds",
+          "type": "integer"
+        },
+        "reserve_rework_attempts": {
+          "default": 1,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Reserve Rework Attempts",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "hard_seconds",
+        "finalization_reserve_seconds"
+      ],
+      "title": "PlanExecutionWindow",
       "type": "object"
     },
     "PlanRisk": {
@@ -1044,6 +1106,158 @@
         "verification"
       ],
       "title": "PlanStep",
+      "type": "object"
+    },
+    "PlannedVerificationInspection": {
+      "additionalProperties": false,
+      "description": "An explicit approved inspection target, never a test or verdict.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "document",
+            "source",
+            "native_ui"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "paths": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Paths",
+          "type": "array"
+        },
+        "checklist": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Checklist",
+          "type": "array"
+        },
+        "scenario_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scenario Sha256"
+        }
+      },
+      "required": [
+        "kind",
+        "checklist"
+      ],
+      "title": "PlannedVerificationInspection",
+      "type": "object"
+    },
+    "PlannedVerificationRequirement": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "qa",
+            "reviewer"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "criterion_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Criterion Ids",
+          "type": "array"
+        },
+        "argv": {
+          "anyOf": [
+            {
+              "items": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Argv"
+        },
+        "inspection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlannedVerificationInspection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "verification_levels": {
+          "anyOf": [
+            {
+              "items": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Verification Levels"
+        },
+        "planned_new_files": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Planned New Files",
+          "type": "array"
+        },
+        "controlled_capability_kind": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Controlled Capability Kind"
+        }
+      },
+      "required": [
+        "id",
+        "role",
+        "criterion_ids"
+      ],
+      "title": "PlannedVerificationRequirement",
       "type": "object"
     },
     "ProjectObservation": {

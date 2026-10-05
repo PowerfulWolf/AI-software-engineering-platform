@@ -1,0 +1,782 @@
+"""Production-only baseline facts: real process locks, idle queue and sealed calls.
+
+Request bodies select an immutable target and exact plan. They cannot assert that
+an executor stopped, grant write paths, or replace original native instructions.
+"""
+
+from __future__ import annotations
+
+import hashlib
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Literal
+
+from pydantic import Field
+from pymysql.cursors import DictCursor
+
+from ai_software_engineer.agents.models import AgentRunStatus
+from ai_software_engineer.artifacts import ArtifactStore, artifact_digest
+from ai_software_engineer.domain.agent import AgentPermissions
+from ai_software_engineer.domain.artifact import (
+    CoderProgressArtifact,
+    ImplementationReportArtifact,
+    PlanArtifact,
+    Sha256,
+)
+from ai_software_engineer.domain.continuation import task_intent_sha256
+from ai_software_engineer.domain.engineering_authority import EngineeringScope
+from ai_software_engineer.domain.enums import AgentRole, TaskStatus, WorkItemStatus
+from ai_software_engineer.domain.execution_baseline import (
+    BaselineInputMode,
+    ExecutionBaselineBinding,
+    FullGitRevision,
+)
+from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
+from ai_software_engineer.domain.retry_policy import TRANSIENT_CODES, DeliveryRetryFailure
+from ai_software_engineer.domain.task import Task, TaskId, task_matches_dispatch
+from ai_software_engineer.domain.workforce import RoleAssignment
+from ai_software_engineer.git import GitWorktreeManager, WorktreeNotFound
+from ai_software_engineer.git.ports import WorktreeRef, WorktreeSpec
+from ai_software_engineer.knowledge.store import KnowledgeRecordStore
+from ai_software_engineer.manager.baseline_models import (
+    BaselineExecutionFacts,
+    BaselineExecutionReservation,
+    ExecutionBaselinePlan,
+)
+from ai_software_engineer.manager.delivery_checkpoint import DeliveryId
+from ai_software_engineer.manager.delivery_preflight import (
+    DeliveryPreflightCheckpoint,
+    DeliveryPreflightReceipt,
+)
+from ai_software_engineer.manager.dispatch import DeliveryAllocation
+from ai_software_engineer.manager.execution_baseline import StoredCoderExecutionInputResolver
+from ai_software_engineer.orchestration.continuation import NativeCoderContinuation
+from ai_software_engineer.orchestration.continuation_models import ExecutionInterruptionReceipt
+from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
+from ai_software_engineer.orchestration.retry import _active_progress, _latest
+from ai_software_engineer.recovery.models import digest
+from ai_software_engineer.repository_profile import NativeRuleSource, native_rule_kinds
+from ai_software_engineer.store import TaskRepository
+from ai_software_engineer.work_queue.execution_store import MySqlRoleQueue, QueuedRoleStep
+from ai_software_engineer.work_queue.invocation import (
+    DeliveryInvocationOutcome,
+    DeliveryInvocationStart,
+)
+from ai_software_engineer.work_queue.models import QueueClaim, QueuedWorkItem
+from ai_software_engineer.work_queue.worker import AcceptedArtifactStore, WorkerExecutionGuard
+
+
+class BaselineProposeCommand(DomainModel):
+    delivery_id: DeliveryId
+    task_id: TaskId
+    expected_task_intent_sha256: Sha256
+    expected_task_revision: int = Field(ge=1)
+    expected_work_item_id: NonEmptyStr
+    expected_source_revision: FullGitRevision
+    target_base_ref: FullGitRevision
+    input_mode: BaselineInputMode = BaselineInputMode.PRESERVE_DRAFT
+
+    def require_plan(self, plan: ExecutionBaselinePlan) -> None:
+        plan.validate_integrity()
+        facts = plan.facts
+        if (
+            facts.task.id,
+            task_intent_sha256(facts.task),
+            facts.task_revision,
+            facts.work_item_id,
+            plan.dirty_capture.source_revision,
+            plan.target_base_ref,
+            plan.input_mode,
+        ) != (
+            self.task_id,
+            self.expected_task_intent_sha256,
+            self.expected_task_revision,
+            self.expected_work_item_id,
+            self.expected_source_revision,
+            self.target_base_ref,
+            self.input_mode,
+        ):
+            raise ValueError("工程执行基线事实已变化, 请刷新后重新调查")
+
+
+class BaselineExecuteCommand(DomainModel):
+    delivery_id: DeliveryId
+    task_id: TaskId
+    expected_plan_sha256: Sha256
+    reference: NonEmptyStr = Field(max_length=2000)
+
+    def require_plan(self, plan: ExecutionBaselinePlan) -> None:
+        plan.validate_integrity()
+        if (plan.facts.task.id, plan.plan_sha256) != (self.task_id, self.expected_plan_sha256):
+            raise ValueError("工程决定未绑定当前需求和精确执行基线计划")
+
+
+class BaselineInvocationProof(DomainModel):
+    work_item_id: NonEmptyStr
+    step_sha256: Sha256
+    start_sha256: Sha256 | None = None
+    outcome_sha256: Sha256 | None = None
+    interruption_receipt_sha256: Sha256 | None = None
+    preflight_checkpoint_sha256: Sha256 | None = None
+    preflight_checkpoint_sha256s: tuple[Sha256, ...] = Field(
+        default=(), exclude_if=lambda value: not value
+    )
+    proof_kind: Literal[
+        "definitive_outcome", "owned_process_stopped", "unclaimed", "claimed_preflight"
+    ]
+
+
+class BaselineQuiescenceProof(DomainModel):
+    kind: Literal["baseline_quiescence_v1"] = "baseline_quiescence_v1"
+    task_id: TaskId
+    task_revision: int
+    task_snapshot_sha256: Sha256
+    task_events_sha256: Sha256
+    allocation_sha256: Sha256
+    queue_snapshot_sha256: Sha256
+    assignments_sha256: Sha256
+    task_process_lock: Literal["held"] = "held"
+    queue_authority_and_task_row: Literal["held_no_active_claim"] = "held_no_active_claim"
+    invocations: tuple[BaselineInvocationProof, ...]
+
+
+MAX_NATIVE_RULE_BYTES = 1_000_000
+MAX_NATIVE_RULE_TOTAL_BYTES = 8_000_000
+
+
+def native_rules_at_revision(
+    git: GitWorktreeManager,
+    *,
+    repository_id: str,
+    revision: str,
+) -> tuple[NativeRuleSource, ...]:
+    """Discover the entire immutable tree, including newly added instruction files."""
+    # Full SHA only; a movable branch cannot become an engineering plan input.
+    if git._resolve_revision(revision) != revision:
+        raise ValueError("执行基线只接受完整、不可变的 Git 提交")
+    records = git._run_git_bytes(("ls-tree", "-r", "-z", revision), cwd=git._repository)
+    result: list[NativeRuleSource] = []
+    total = 0
+    for record in records.split(b"\0"):
+        if not record:
+            continue
+        metadata, separator, path_bytes = record.partition(b"\t")
+        if not separator:
+            raise ValueError("目标基线 Git 文件清单格式异常")
+        relative = path_bytes.decode("utf-8")
+        kinds = native_rule_kinds(relative)
+        if not kinds:
+            continue
+        mode, kind, blob = metadata.decode("ascii").split(" ")
+        if mode not in {"100644", "100755"} or kind != "blob":
+            raise ValueError("目标基线的原生规范必须是普通文本文件")
+        size = int(git._run_git(("cat-file", "-s", blob), cwd=git._repository))
+        total += size
+        if size > MAX_NATIVE_RULE_BYTES or total > MAX_NATIVE_RULE_TOTAL_BYTES:
+            raise ValueError("目标基线原生规范超过有界读取预算")
+        body = git._run_git_bytes(("cat-file", "blob", blob), cwd=git._repository)
+        body.decode("utf-8")
+        if len(body) != size:
+            raise ValueError("目标基线原生规范读取不完整")
+        result.append(
+            NativeRuleSource(
+                uri=f"project://{repository_id}/{relative}",
+                relative_path=relative,
+                kinds=kinds,
+                sha256=hashlib.sha256(body).hexdigest(),
+                byte_length=size,
+            )
+        )
+    return tuple(sorted(result, key=lambda item: item.relative_path))
+
+
+class ProductionBaselineFactCollector:
+    """Trusted service composition; no model/API supplied facts are accepted.
+
+    Lock order matches the Worker: Task process lock, queue authority, Task row.
+    All ACTIVE claims are excluded even if expired. Git mutations are deliberately
+    not part of collect(): the sealed adapter plan owns its exact crash replay.
+    """
+
+    def __init__(
+        self,
+        *,
+        allocation: DeliveryAllocation,
+        scope: EngineeringScope,
+        requirement_id: DeliveryId,
+        repository: TaskRepository,
+        queue: MySqlRoleQueue,
+        artifacts: ArtifactStore,
+        git: GitWorktreeManager,
+        sidecar_state: Path,
+        locks_root: Path,
+        permissions: AgentPermissions,
+        source_native_rules: tuple[NativeRuleSource, ...],
+        runtime_manifest_sha256: str,
+        inputs: StoredCoderExecutionInputResolver,
+    ) -> None:
+        allocation.validate_integrity()
+        self.allocation, self.scope, self.requirement_id = allocation, scope, requirement_id
+        self.repository, self.queue, self.git = repository, queue, git
+        self.state, self.locks_root, self.permissions = sidecar_state, locks_root, permissions
+        self.native_rules, self.runtime_manifest_sha256, self.inputs = (
+            source_native_rules,
+            runtime_manifest_sha256,
+            inputs,
+        )
+        self.guard = WorkerExecutionGuard()
+        self.artifacts = AcceptedArtifactStore(artifacts, queue, allocation.task_id, self.guard)
+        self._scope_held = False
+        self._idle_cursor: DictCursor | None = None
+
+    @contextmanager
+    def execution_scope(self) -> Iterator[None]:
+        if self._scope_held:
+            raise ValueError("执行基线调查不允许嵌套执行")
+        with (
+            self.guard.task_scope(self.locks_root, self.allocation.task_id),
+            self.queue.idle_task_scope(self.allocation.task_id) as cursor,
+        ):
+            self._scope_held = True
+            self._idle_cursor = cursor
+            try:
+                yield
+            finally:
+                self._scope_held = False
+                self._idle_cursor = None
+
+    def publish_completion(
+        self, plan: ExecutionBaselinePlan, binding: ExecutionBaselineBinding
+    ) -> None:
+        if not self._scope_held or self._idle_cursor is None:
+            raise ValueError("基线队列接续缺少原持锁执行范围和 SQL 屏障")
+        if binding.task_id != self.allocation.task_id or binding.scope != self.scope:
+            raise ValueError("基线队列接续不属于当前需求和原批准范围")
+        from ai_software_engineer.work_queue.baseline import consume_baseline
+
+        consume_baseline(self.queue, plan, binding, cursor=self._idle_cursor)
+
+    def collect(self, target_base_ref: str) -> BaselineExecutionFacts:
+        if not self._scope_held:
+            raise ValueError("执行基线调查缺少真实停机锁和队列屏障")
+        task = self.repository.get(self.allocation.task_id)
+        revision = self.repository.current_revision(task.id)
+        if not task_matches_dispatch(task, self.allocation.task) or (
+            task.repository != self.scope.repository_root
+            or task.metadata.get("repository_id") != self.scope.repository_id
+            or (task.engineering_policy is not None and task.engineering_policy.scope != self.scope)
+            or task.status is not TaskStatus.IMPLEMENTING
+        ):
+            raise ValueError("执行基线调查与原批准范围或当前 Coder checkpoint 不一致")
+        admission = self.queue.admission(task.id)
+        if admission is None or admission.allocation_sha256 != self.allocation.dispatch_sha256:
+            raise ValueError("执行基线缺少原分配的真实队列接纳记录")
+        items = self.queue.items_for_task(task.id)
+        current = tuple(item for item in items if item.status is not WorkItemStatus.CLOSED)
+        if len(current) != 1:
+            raise ValueError("执行基线必须对应唯一尚未结束的 Coder 工作项")
+        item = current[0]
+        if item.status in {WorkItemStatus.LEASED, WorkItemStatus.RUNNING} or (
+            item.task_id,
+            item.repository_id,
+            item.role,
+            item.checkpoint_sequence,
+        ) != (task.id, self.scope.repository_id, AgentRole.CODER, revision):
+            raise ValueError("Coder 工作项仍在执行或已偏离当前 Task checkpoint")
+        step = self.queue.step(item.id)
+        self._require_step(item, step)
+        artifacts = self.artifacts.list_for_task(task.id)
+        plan = _latest(artifacts, PlanArtifact)
+        implementation = _latest(artifacts, ImplementationReportArtifact)
+        progress = _latest(artifacts, CoderProgressArtifact)
+        previous_source = self.inputs.current(task, implementation=implementation, progress=None)
+        current_implementation = implementation
+        if previous_source.baseline is not None:
+            baseline = previous_source.baseline
+            if (
+                progress is not None
+                and progress.artifact_id == baseline.superseded_progress_artifact_id
+            ):
+                progress = None
+            if (
+                current_implementation is not None
+                and current_implementation.artifact_id
+                == baseline.superseded_implementation_artifact_id
+            ):
+                current_implementation = None
+        progress = _active_progress(progress, current_implementation, artifacts)
+        if plan is None:
+            raise ValueError("执行基线调查缺少已接纳的原始交付计划")
+        for artifact in artifacts:
+            if (
+                not artifact.integrity.validated
+                or artifact_digest(artifact) != artifact.integrity.sha256
+            ):
+                raise ValueError("执行基线输入产物完整性异常")
+        source = self.inputs.current(task, implementation=implementation, progress=progress)
+        if step.boundary.source_revision != source.source_revision:
+            raise ValueError("Coder 队列源版本与当前已接纳输入不一致")
+        target_rules = native_rules_at_revision(
+            self.git, repository_id=self.scope.repository_id, revision=target_base_ref
+        )
+        frozen_rules = tuple(sorted(self.native_rules, key=lambda rule: rule.relative_path))
+        if target_rules != frozen_rules:
+            raise ValueError("目标代码基线改变了原批准的项目规范, 需要另行确认规范或范围")
+        assignments = tuple(
+            assignment
+            for assignment in self.queue.list_assignments()
+            if assignment.task_id == task.id
+        )
+        receipts = self._receipts(task)
+        invocation_proofs = self._invocations(task, items, receipts, assignments)
+        reservation = self._reservation(task, item, receipts)
+        proof = BaselineQuiescenceProof(
+            task_id=task.id,
+            task_revision=revision,
+            task_snapshot_sha256=digest(task.to_wire()),
+            task_events_sha256=digest(
+                [event.to_wire() for event in self.repository.list_events(task.id)]
+            ),
+            allocation_sha256=self.allocation.dispatch_sha256,
+            queue_snapshot_sha256=digest([queued.to_wire() for queued in items]),
+            assignments_sha256=digest([assignment.to_wire() for assignment in assignments]),
+            invocations=invocation_proofs,
+        )
+        if self.inputs.store is None:
+            raise ValueError("执行基线缺少可信 append-only 事实存储")
+        self.inputs.store.records.put("baseline-quiescence", digest(proof.to_wire()), proof)
+        previous = source.baseline.resolved_interruption_receipt_sha256s if source.baseline else ()
+        resolved = tuple(
+            dict.fromkeys((*previous, *(receipt.receipt_sha256 for receipt in receipts)))
+        )
+        values = BaselineExecutionFacts(
+            task=task,
+            scope=self.scope,
+            task_revision=revision,
+            work_item_id=item.id,
+            checkpoint_sequence=item.checkpoint_sequence,
+            quiescence_proof_sha256=digest(proof.to_wire()),
+            runtime_manifest_sha256=self.runtime_manifest_sha256,
+            source_native_rules_sha256=digest([rule.to_wire() for rule in frozen_rules]),
+            target_native_rules_sha256=digest([rule.to_wire() for rule in target_rules]),
+            source_artifact_ids=tuple(sorted(artifact.artifact_id for artifact in artifacts)),
+            implementation_artifact_id=implementation.artifact_id if implementation else None,
+            progress_artifact_id=progress.artifact_id if progress else None,
+            resolved_interruption_receipt_sha256s=resolved,
+            continuation=reservation,
+            permissions=self.permissions,
+            denied_paths=task.constraints.denied_paths if task.constraints else (),
+            facts_sha256="0" * 64,
+        )
+        return values.model_copy(
+            update={
+                "facts_sha256": digest(values.model_dump(mode="json", exclude={"facts_sha256"}))
+            }
+        )
+
+    def completed_task(self, binding: ExecutionBaselineBinding) -> Task:
+        if (
+            not self._scope_held
+            or binding.scope != self.scope
+            or binding.task_id != self.allocation.task_id
+        ):
+            raise ValueError("已完成基线未绑定当前持锁需求")
+        task = self.repository.get(binding.task_id)
+        if not task_matches_dispatch(task, self.allocation.task):
+            raise ValueError("已完成基线的原批准范围发生变化")
+        binding.require_task(task)
+        return task
+
+    def source_worktree(self, facts: BaselineExecutionFacts) -> WorktreeRef:
+        if not self._scope_held or facts.task.id != self.allocation.task_id:
+            raise ValueError("执行基线工作区不属于当前持锁需求")
+        artifacts = self.artifacts.list_for_task(facts.task.id)
+        implementation = _latest(artifacts, ImplementationReportArtifact)
+        progress = _latest(artifacts, CoderProgressArtifact)
+        previous_source = self.inputs.current(
+            facts.task, implementation=implementation, progress=None
+        )
+        current_implementation = implementation
+        if previous_source.baseline is not None:
+            baseline = previous_source.baseline
+            if (
+                progress is not None
+                and progress.artifact_id == baseline.superseded_progress_artifact_id
+            ):
+                progress = None
+            if (
+                current_implementation is not None
+                and current_implementation.artifact_id
+                == baseline.superseded_implementation_artifact_id
+            ):
+                current_implementation = None
+        progress = _active_progress(progress, current_implementation, artifacts)
+        source = self.inputs.current(facts.task, implementation=implementation, progress=progress)
+        spec = WorktreeSpec(
+            task_id=facts.task.id,
+            role=AgentRole.CODER,
+            attempt=1,
+            source_revision=source.source_revision,
+        )
+        try:
+            return self.git.recover(spec)
+        except WorktreeNotFound:
+            # Preflight can stop before RoleAwareAgentAdapter creates any checkout.
+            # This is the first clean checkout, never reconstruction of lost work.
+            invocation_root = self.state / "invocations"
+            starts = (
+                KnowledgeRecordStore(invocation_root, read_only=True).list(
+                    "invocation-starts", DeliveryInvocationStart
+                )
+                if invocation_root.is_dir()
+                else ()
+            )
+            if (
+                facts.continuation is None
+                or facts.continuation.retry_cause != "uninvoked"
+                or implementation is not None
+                or progress is not None
+                or source.baseline is not None
+                or source.source_revision != facts.task.base_ref
+                or self._receipts(facts.task)
+                or any(
+                    start.request.task_id == facts.task.id and start.request.role is AgentRole.CODER
+                    for start in starts
+                )
+            ):
+                raise ValueError("已开始执行的 Coder 工作区缺失, 保留历史并等待工程调查") from None
+            # Git.create rejects any surviving branch, unsafe path or registration.
+            return self.git.create(spec)
+
+    def _require_step(self, item: QueuedWorkItem, step: QueuedRoleStep) -> None:
+        if step.allocation_sha256 != self.allocation.dispatch_sha256 or (
+            item.id,
+            item.task_id,
+            item.repository_id,
+            item.role,
+            item.attempt,
+            item.checkpoint_sequence,
+        ) != (
+            step.work_item.id,
+            step.work_item.task_id,
+            step.work_item.repository_id,
+            step.boundary.role,
+            step.boundary.attempt,
+            step.boundary.checkpoint_sequence,
+        ):
+            raise ValueError("执行基线队列工作项与原分配不一致")
+
+    def _receipts(self, task: Task) -> tuple[ExecutionInterruptionReceipt, ...]:
+        root = self.state / "continuations" / task.id
+        if not root.exists():
+            return ()
+        receipts = FileContinuationStore(root, task_id=task.id).receipts_for_task(task.id)
+        for receipt in receipts:
+            policy = task.interruption_continuation_policy
+            if (
+                (
+                    receipt.scope.team_id,
+                    receipt.scope.project_id,
+                    receipt.scope.repository_id,
+                    receipt.scope.requirement_id,
+                    receipt.scope.dispatch_sha256,
+                    receipt.task_intent_sha256,
+                    receipt.request.permissions,
+                )
+                != (
+                    self.scope.team_id,
+                    self.scope.project_id,
+                    self.scope.repository_id,
+                    self.requirement_id,
+                    self.allocation.dispatch_sha256,
+                    task_intent_sha256(task),
+                    self.permissions,
+                )
+                or policy is None
+                or receipt.policy_sha256 != policy.policy_sha256
+            ):
+                raise ValueError("原停机记录未绑定原需求、分配和冻结权限")
+            NativeCoderContinuation._require_stopped(receipt.process_stop, receipt.request)
+        return receipts
+
+    def _invocations(
+        self,
+        task: Task,
+        items: tuple[QueuedWorkItem, ...],
+        receipts: tuple[ExecutionInterruptionReceipt, ...],
+        assignments: tuple[RoleAssignment, ...],
+    ) -> tuple[BaselineInvocationProof, ...]:
+        root = self.state / "invocations"
+        records = KnowledgeRecordStore(root, read_only=True) if root.is_dir() else None
+        starts = (
+            tuple(
+                start
+                for start in records.list("invocation-starts", DeliveryInvocationStart)
+                if start.request.task_id == task.id
+            )
+            if records
+            else ()
+        )
+        outcomes = (
+            tuple(
+                outcome
+                for outcome in records.list("invocation-outcomes", DeliveryInvocationOutcome)
+                if outcome.start.request.task_id == task.id
+            )
+            if records
+            else ()
+        )
+        starts_by_id = {start.work_item_id: start for start in starts}
+        outcomes_by_id = {outcome.start.work_item_id: outcome for outcome in outcomes}
+        if len(starts_by_id) != len(starts) or len(outcomes_by_id) != len(outcomes):
+            raise ValueError("原调用日志含重复执行身份")
+        if not {receipt.request.run_id for receipt in receipts}.issubset(
+            {start.request.run_id for start in starts}
+        ):
+            raise ValueError("原停机日志缺少相应调用启动记录")
+        item_ids = {item.id for item in items}
+        if not set(starts_by_id).issubset(item_ids) or not set(outcomes_by_id).issubset(item_ids):
+            raise ValueError("原调用日志含未归属当前 Task 队列的执行")
+        result = []
+        for item in items:
+            start, outcome = starts_by_id.get(item.id), outcomes_by_id.get(item.id)
+            claims = self.queue.claims_for_work_item(item.id)
+            preflight_claims = tuple(
+                claim for claim in claims if start is None or claim.lease.id != start.lease_id
+            )
+            markers = self._preflight_markers(task, item, preflight_claims)
+            step = (
+                self.queue.step_for_invocation(item.id, start.request.execution_baseline_sha256)
+                if start is not None
+                else self.queue.step(item.id)
+            )
+            self._require_step(item, step)
+            receipt = next(
+                (
+                    entry
+                    for entry in receipts
+                    if start and entry.request.run_id == start.request.run_id
+                ),
+                None,
+            )
+            if start is not None:
+                start.validate_integrity()
+                if (
+                    start.work_item_id,
+                    start.checkpoint_sequence,
+                    start.request.task_id,
+                    start.request.role,
+                    start.request.attempt,
+                    start.request.source_revision,
+                ) != (
+                    item.id,
+                    item.checkpoint_sequence,
+                    task.id,
+                    item.role,
+                    item.attempt,
+                    step.boundary.source_revision,
+                ):
+                    raise ValueError("原调用未绑定精确队列角色、attempt 和源版本")
+                claim = self.queue.original_claim(start.lease_id)
+                if (
+                    claim.work_item.id,
+                    claim.work_item.task_id,
+                    claim.work_item.role,
+                    claim.work_item.attempt,
+                    claim.work_item.checkpoint_sequence,
+                ) != (item.id, task.id, item.role, item.attempt, item.checkpoint_sequence):
+                    raise ValueError("原调用与真实历史 claim 不一致")
+                if outcome is not None:
+                    outcome.validate_integrity()
+                    if outcome.start != start:
+                        raise ValueError("原调用结果未绑定精确启动记录")
+                    proof_kind: Literal["definitive_outcome", "owned_process_stopped"] = (
+                        "definitive_outcome"
+                    )
+                elif receipt is not None:
+                    if (
+                        receipt.request != start.request
+                        or receipt.original_work_item_id != item.id
+                        or receipt.claim_lease_id != start.lease_id
+                    ):
+                        raise ValueError("停机证明不属于精确原调用")
+                    proof_kind = "owned_process_stopped"
+                else:
+                    raise ValueError("原调用结果或真实停机事实不完整, 保留现场等待工程调查")
+                result.append(
+                    BaselineInvocationProof(
+                        work_item_id=item.id,
+                        step_sha256=digest(step.to_wire()),
+                        start_sha256=start.start_sha256,
+                        outcome_sha256=outcome.outcome_sha256 if outcome else None,
+                        interruption_receipt_sha256=receipt.receipt_sha256 if receipt else None,
+                        preflight_checkpoint_sha256s=tuple(
+                            marker.checkpoint_sha256 for marker in markers
+                        ),
+                        proof_kind=proof_kind,
+                    )
+                )
+                continue
+            if outcome is not None or receipt is not None:
+                raise ValueError("原调用缺少启动记录, 禁止猜测为未执行")
+            # Another checkpoint can legitimately reuse the role/attempt. Only
+            # this immutable WorkItem's real claims prove it was ever owned.
+            result.append(
+                BaselineInvocationProof(
+                    work_item_id=item.id,
+                    step_sha256=digest(step.to_wire()),
+                    preflight_checkpoint_sha256=markers[0].checkpoint_sha256
+                    if len(markers) == 1
+                    else None,
+                    preflight_checkpoint_sha256s=tuple(
+                        marker.checkpoint_sha256 for marker in markers
+                    ),
+                    proof_kind="claimed_preflight" if markers else "unclaimed",
+                )
+            )
+        return tuple(result)
+
+    def _reservation(
+        self,
+        task: Task,
+        item: QueuedWorkItem,
+        receipts: tuple[ExecutionInterruptionReceipt, ...],
+    ) -> BaselineExecutionReservation:
+        root = self.state / "invocations"
+        records = KnowledgeRecordStore(root, read_only=True) if root.is_dir() else None
+        start = (
+            records.find("invocation-starts", item.id, DeliveryInvocationStart) if records else None
+        )
+        if start is None:
+            if item.attempt not in {max(task.attempts, 1), task.attempts + 1}:
+                raise ValueError("未调用的工作项没有精确当前或下一执行预留")
+            if item.attempt > task.attempts and (
+                task.work_budget_exhausted or item.attempt > task.max_attempts
+            ):
+                raise ValueError("代码基线更新不补充原工作额度")
+            return BaselineExecutionReservation(
+                current_attempt=item.attempt,
+                next_execution_attempt=item.attempt,
+                retry_cause="uninvoked",
+                reservation_already_applied=item.attempt == task.attempts,
+            )
+        outcome = (
+            records.find("invocation-outcomes", item.id, DeliveryInvocationOutcome)
+            if records
+            else None
+        )
+        receipt = next(
+            (entry for entry in receipts if entry.request.run_id == start.request.run_id), None
+        )
+        if outcome is not None and outcome.result.status is AgentRunStatus.SUCCEEDED:
+            raise ValueError("原调用已有成功结果, 需要先接纳封存结果, 不能用基线更新覆盖")
+        failure = None
+        if receipt is not None:
+            cause = receipt.cause
+            error_code = receipt.original_error_code.value
+        elif (
+            outcome is not None
+            and outcome.result.error is not None
+            and outcome.result.error.code.value in TRANSIENT_CODES
+        ):
+            cause = "provider_transient"
+            error_code = outcome.result.error.code.value
+        else:
+            raise ValueError("基线更新没有明确、可预算的原调用终结事实")
+        successor = start.request.attempt + 1
+        if cause == "provider_transient":
+            failure = DeliveryRetryFailure.model_validate(
+                {
+                    "role": "coder",
+                    "attempt": start.request.attempt,
+                    "run_id": start.request.run_id,
+                    "code": error_code,
+                }
+            )
+            reserved = task.with_retry_failure(failure)
+            if reserved.attempts != successor:
+                raise ValueError("基线接续没有剩余的服务故障额度")
+            already = reserved == task
+        else:
+            already = task.attempts == successor
+            if not already and (
+                task.attempts != start.request.attempt
+                or task.work_budget_exhausted
+                or successor > task.max_attempts
+            ):
+                raise ValueError("基线接续没有剩余的工作额度或精确原执行身份")
+        return BaselineExecutionReservation(
+            current_attempt=start.request.attempt,
+            next_execution_attempt=successor,
+            retry_cause=cause,
+            original_run_id=start.request.run_id,
+            current_invocation_start_sha256=start.start_sha256,
+            current_invocation_outcome_sha256=outcome.outcome_sha256 if outcome else None,
+            interruption_receipt_sha256=receipt.receipt_sha256 if receipt else None,
+            retry_failure=failure,
+            reservation_already_applied=already,
+        )
+
+    def _preflight_markers(
+        self, task: Task, item: QueuedWorkItem, claims: tuple[QueueClaim, ...]
+    ) -> tuple[DeliveryPreflightCheckpoint, ...]:
+        if not claims:
+            return ()
+        root = self.state / "delivery-preflight"
+        if not root.is_dir():
+            raise ValueError("历史 claim 没有可验证的调用或执行前停止记录")
+        records = KnowledgeRecordStore(root, read_only=True)
+        claims_by_lease = {claim.lease.id: claim for claim in claims}
+        if len(claims_by_lease) != len(claims):
+            raise ValueError("执行前停止调查含重复的历史 claim")
+        matches: dict[str, DeliveryPreflightCheckpoint] = {}
+        for marker in records.list("preflight-checkpoints", DeliveryPreflightCheckpoint):
+            if marker.work_item_id != item.id or marker.lease_id not in claims_by_lease:
+                continue
+            marker.validate_integrity()
+            prior = records.get(
+                "preflight-receipts", marker.receipt_sha256, DeliveryPreflightReceipt
+            )
+            prior.validate_integrity()
+            claim = claims_by_lease[marker.lease_id]
+            step = self.queue.step_for_claim(claim)
+            self._require_step(item, step)
+            if (
+                marker.task_id,
+                marker.checkpoint_sequence,
+                marker.source_revision,
+                prior.task_id,
+                prior.scope.repository_id,
+                prior.scope.team_id,
+                prior.scope.project_id,
+                prior.scope.requirement_id,
+                prior.source_revision,
+                claim.work_item.id,
+                claim.work_item.task_id,
+                claim.work_item.role,
+                claim.work_item.attempt,
+                claim.work_item.checkpoint_sequence,
+            ) != (
+                task.id,
+                item.checkpoint_sequence,
+                step.boundary.source_revision,
+                task.id,
+                self.scope.repository_id,
+                self.scope.team_id,
+                self.scope.project_id,
+                self.requirement_id,
+                step.boundary.source_revision,
+                item.id,
+                task.id,
+                item.role,
+                item.attempt,
+                item.checkpoint_sequence,
+            ) or prior.status != "WAIT_ENGINEERING":
+                raise ValueError("执行前停止记录与真实原 claim 不一致")
+            if marker.lease_id in matches:
+                raise ValueError("同一历史 claim 有多个执行前停止记录, 无法证明精确调用边界")
+            matches[marker.lease_id] = marker
+        if set(matches) != set(claims_by_lease):
+            raise ValueError("历史 claim 没有可验证的调用或执行前停止记录")
+        return tuple(matches[identity] for identity in sorted(matches))

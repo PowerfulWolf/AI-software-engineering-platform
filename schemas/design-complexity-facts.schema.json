@@ -50,5 +50,6 @@
   "title": "DesignComplexityFacts",
   "type": "object",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ai-software-engineer.local/schemas/design-complexity-facts.schema.json"
+  "$id": "https://ai-software-engineer.local/schemas/design-complexity-facts.schema.json",
+  "$defs": {}
 }

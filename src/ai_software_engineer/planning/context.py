@@ -7,10 +7,11 @@ import json
 from datetime import datetime
 from typing import Literal, Self
 
-from pydantic import AwareDatetime, model_validator
+from pydantic import AwareDatetime, Field, model_validator
 
 from ai_software_engineer.design.models import DesignCommitCheckpoint
 from ai_software_engineer.domain.enums import ProjectRequestStatus
+from ai_software_engineer.domain.execution_window import PlanExecutionWindow
 from ai_software_engineer.domain.identity import ContextId, RepositoryId
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.domain.project_delivery import (
@@ -75,6 +76,9 @@ class PlannerContextManifest(DomainModel):
     planning_authorization: StageAdvanceAuthorization
     expected_execution_plan_version: int
     planning_decision: PlanningDecision | None = None
+    execution_window: PlanExecutionWindow | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     permissions: PlannerAgentPermissions = PLANNER_AGENT_PERMISSIONS
     built_at: AwareDatetime
     context_sha256: StageSha256
@@ -130,6 +134,7 @@ class PlannerContextBuilder:
         expected_execution_plan_version: int,
         built_at: datetime,
         planning_decision: PlanningDecision | None = None,
+        execution_window: PlanExecutionWindow | None = None,
     ) -> PlannerContextManifest:
         if built_at.tzinfo is None or built_at.utcoffset() is None:
             raise PlannerContextError("Planner context built_at must be timezone-aware")
@@ -157,6 +162,7 @@ class PlannerContextBuilder:
             planning_authorization=planning_authorization,
             expected_execution_plan_version=expected_execution_plan_version,
             planning_decision=planning_decision,
+            execution_window=execution_window,
             permissions=PLANNER_AGENT_PERMISSIONS,
             built_at=built_at,
             context_sha256="0" * 64,

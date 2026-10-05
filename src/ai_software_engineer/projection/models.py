@@ -16,7 +16,7 @@ from typing import Annotated, Literal, Self
 
 from pydantic import AwareDatetime, Field, StrictBool, StrictInt, StringConstraints, model_validator
 
-from ai_software_engineer.domain.artifact import Artifact, ArtifactId, EvidenceId
+from ai_software_engineer.domain.artifact import Artifact, ArtifactId, EvidenceId, Sha256
 from ai_software_engineer.domain.enums import (
     AgentRole,
     TaskStatus,
@@ -40,6 +40,25 @@ from ai_software_engineer.evaluation.models import EvaluationEvent, EvaluationEv
 from ai_software_engineer.evidence.models import EvidenceRecord
 
 ProjectionId = Annotated[str, StringConstraints(min_length=1, max_length=128)]
+
+
+class ArtifactStreamPosition(DomainModel):
+    """An adapter-verified position in one durable artifact acceptance stream."""
+
+    task_id: TaskId
+    artifact_id: ArtifactId
+    artifact_sha256: Sha256
+    stream: NonEmptyStr
+    sequence: Annotated[StrictInt, Field(ge=1)]
+    ordinal: Annotated[StrictInt, Field(ge=0)] = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactHistoryFacts:
+    """Sealed artifacts and their independently verified durable positions."""
+
+    artifacts: tuple[Artifact, ...] = ()
+    positions: tuple[ArtifactStreamPosition, ...] = ()
 
 
 class RunProjectionStatus(StrEnum):
@@ -213,6 +232,7 @@ class ProjectionFacts:
     tasks: tuple[Task, ...] = ()
     state_events: tuple[StateEvent, ...] = ()
     artifacts: tuple[Artifact, ...] = ()
+    artifact_positions: tuple[ArtifactStreamPosition, ...] = ()
     evidence: tuple[EvidenceRecord, ...] = ()
     evaluation_events: tuple[EvaluationEvent, ...] = ()
     handoffs: tuple[HandoffBundle, ...] = ()
@@ -230,6 +250,7 @@ class ProjectionFacts:
         tasks: Iterable[Task] = (),
         state_events: Iterable[StateEvent] = (),
         artifacts: Iterable[Artifact] = (),
+        artifact_positions: Iterable[ArtifactStreamPosition] = (),
         evidence: Iterable[EvidenceRecord] = (),
         evaluation_events: Iterable[EvaluationEvent] = (),
         handoffs: Iterable[HandoffBundle] = (),
@@ -244,6 +265,7 @@ class ProjectionFacts:
             tasks=tuple(tasks),
             state_events=tuple(state_events),
             artifacts=tuple(artifacts),
+            artifact_positions=tuple(artifact_positions),
             evidence=tuple(evidence),
             evaluation_events=tuple(evaluation_events),
             handoffs=tuple(handoffs),
@@ -258,6 +280,8 @@ class ProjectionFacts:
 
 __all__ = [
     "AgentProjection",
+    "ArtifactHistoryFacts",
+    "ArtifactStreamPosition",
     "LeaseProjection",
     "LeaseProjectionStatus",
     "ProjectionEventKind",

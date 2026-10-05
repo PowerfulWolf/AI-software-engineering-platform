@@ -528,6 +528,265 @@
       "title": "DispatchPhaseCommit",
       "type": "object"
     },
+    "EngineeringCapability": {
+      "enum": [
+        "verification_refresh",
+        "swift_sandbox",
+        "python_mysql_sandbox",
+        "native_ui_sandbox",
+        "in_scope_prerequisite_repair",
+        "pre_execution_rebind",
+        "execution_baseline_rebind",
+        "owned_mysql_cleanup"
+      ],
+      "title": "EngineeringCapability",
+      "type": "string"
+    },
+    "EngineeringGrant": {
+      "additionalProperties": false,
+      "properties": {
+        "capability": {
+          "$ref": "#/$defs/EngineeringCapability"
+        },
+        "max_admissions": {
+          "maximum": 20,
+          "minimum": 1,
+          "title": "Max Admissions",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "capability",
+        "max_admissions"
+      ],
+      "title": "EngineeringGrant",
+      "type": "object"
+    },
+    "EngineeringPolicy": {
+      "additionalProperties": false,
+      "description": "Versioned organization decision frozen only on newly admitted Tasks.",
+      "properties": {
+        "kind": {
+          "const": "engineering_policy",
+          "default": "engineering_policy",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "policy_id": {
+          "default": "local-bounded-engineering-v1",
+          "minLength": 1,
+          "title": "Policy Id",
+          "type": "string"
+        },
+        "policy_version": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Policy Version",
+          "type": "integer"
+        },
+        "authorization_source": {
+          "const": "organization_engineering_policy",
+          "default": "organization_engineering_policy",
+          "title": "Authorization Source",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/EngineeringScope"
+        },
+        "issued_by": {
+          "$ref": "#/$defs/LocalOperatorPrincipal"
+        },
+        "grants": {
+          "items": {
+            "$ref": "#/$defs/EngineeringGrant"
+          },
+          "minItems": 1,
+          "title": "Grants",
+          "type": "array"
+        },
+        "max_total_admissions": {
+          "default": 12,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Total Admissions",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "scope",
+        "issued_by",
+        "grants"
+      ],
+      "title": "EngineeringPolicy",
+      "type": "object"
+    },
+    "EngineeringScope": {
+      "additionalProperties": false,
+      "properties": {
+        "team_id": {
+          "minLength": 1,
+          "title": "Team Id",
+          "type": "string"
+        },
+        "project_id": {
+          "minLength": 1,
+          "title": "Project Id",
+          "type": "string"
+        },
+        "repository_id": {
+          "minLength": 1,
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "repository_root": {
+          "minLength": 1,
+          "title": "Repository Root",
+          "type": "string"
+        }
+      },
+      "required": [
+        "team_id",
+        "project_id",
+        "repository_id",
+        "repository_root"
+      ],
+      "title": "EngineeringScope",
+      "type": "object"
+    },
+    "InterruptionContinuationPolicy": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "capability_id": {
+                "const": "git-regular-text-mutation-inventory-v2"
+              },
+              "allowed_changes": {
+                "const": [
+                  "text_added",
+                  "text_modified",
+                  "text_deleted",
+                  "regular_mode_changed"
+                ]
+              }
+            },
+            "required": [
+              "capability_id",
+              "allowed_changes"
+            ]
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "v1"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "capability_id": {
+                "const": "git-text-mutation-inventory-v1"
+              },
+              "max_continuations": {
+                "const": 1
+              },
+              "allowed_changes": {
+                "const": [
+                  "text_added",
+                  "text_modified"
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "description": "Frozen narrow capability; legacy Tasks have no implicit authorization.",
+      "properties": {
+        "kind": {
+          "const": "interruption_continuation_policy",
+          "default": "interruption_continuation_policy",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "default": "v1",
+          "enum": [
+            "v1",
+            "v2"
+          ],
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "authorization_source": {
+          "const": "organization_engineering_policy",
+          "default": "organization_engineering_policy",
+          "title": "Authorization Source",
+          "type": "string"
+        },
+        "capability_id": {
+          "default": "git-text-mutation-inventory-v1",
+          "enum": [
+            "git-text-mutation-inventory-v1",
+            "git-regular-text-mutation-inventory-v2"
+          ],
+          "title": "Capability Id",
+          "type": "string"
+        },
+        "max_continuations": {
+          "default": 1,
+          "maximum": 199,
+          "minimum": 1,
+          "title": "Max Continuations",
+          "type": "integer"
+        },
+        "allowed_causes": {
+          "default": [
+            "local_execution_limit",
+            "provider_transient"
+          ],
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "const": "local_execution_limit",
+              "type": "string"
+            },
+            {
+              "const": "provider_transient",
+              "type": "string"
+            }
+          ],
+          "title": "Allowed Causes",
+          "type": "array"
+        },
+        "allowed_changes": {
+          "default": [
+            "text_added",
+            "text_modified"
+          ],
+          "items": {
+            "enum": [
+              "text_added",
+              "text_modified",
+              "text_deleted",
+              "regular_mode_changed"
+            ],
+            "type": "string"
+          },
+          "title": "Allowed Changes",
+          "type": "array"
+        }
+      },
+      "title": "InterruptionContinuationPolicy",
+      "type": "object"
+    },
     "JsonValue": {
       "anyOf": [
         {
@@ -558,6 +817,37 @@
           "type": "null"
         }
       ]
+    },
+    "LocalOperatorPrincipal": {
+      "additionalProperties": false,
+      "description": "Trusted local composition identity; request/model text cannot add duties.",
+      "properties": {
+        "kind": {
+          "const": "trusted_local_operator",
+          "default": "trusted_local_operator",
+          "title": "Kind",
+          "type": "string"
+        },
+        "operator_id": {
+          "minLength": 1,
+          "title": "Operator Id",
+          "type": "string"
+        },
+        "duties": {
+          "items": {
+            "$ref": "#/$defs/OperatorDuty"
+          },
+          "minItems": 1,
+          "title": "Duties",
+          "type": "array"
+        }
+      },
+      "required": [
+        "operator_id",
+        "duties"
+      ],
+      "title": "LocalOperatorPrincipal",
+      "type": "object"
     },
     "ModelRouteReason": {
       "enum": [
@@ -664,6 +954,14 @@
       ],
       "title": "ModelSelection",
       "type": "object"
+    },
+    "OperatorDuty": {
+      "enum": [
+        "PRODUCT",
+        "ENGINEERING"
+      ],
+      "title": "OperatorDuty",
+      "type": "string"
     },
     "ProviderRouteKind": {
       "enum": [
@@ -1124,6 +1422,17 @@
             }
           ],
           "default": null
+        },
+        "engineering_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EngineeringPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -1290,86 +1599,6 @@
         }
       },
       "title": "TransientRetryPolicy",
-      "type": "object"
-    },
-    "InterruptionContinuationPolicy": {
-      "additionalProperties": false,
-      "description": "Frozen narrow capability; legacy Tasks have no implicit authorization.",
-      "properties": {
-        "kind": {
-          "const": "interruption_continuation_policy",
-          "default": "interruption_continuation_policy",
-          "title": "Kind",
-          "type": "string"
-        },
-        "schema_version": {
-          "const": "v1",
-          "default": "v1",
-          "title": "Schema Version",
-          "type": "string"
-        },
-        "authorization_source": {
-          "const": "organization_engineering_policy",
-          "default": "organization_engineering_policy",
-          "title": "Authorization Source",
-          "type": "string"
-        },
-        "capability_id": {
-          "const": "git-text-mutation-inventory-v1",
-          "default": "git-text-mutation-inventory-v1",
-          "title": "Capability Id",
-          "type": "string"
-        },
-        "max_continuations": {
-          "const": 1,
-          "default": 1,
-          "maximum": 1,
-          "minimum": 1,
-          "title": "Max Continuations",
-          "type": "integer"
-        },
-        "allowed_causes": {
-          "default": [
-            "local_execution_limit",
-            "provider_transient"
-          ],
-          "maxItems": 2,
-          "minItems": 2,
-          "prefixItems": [
-            {
-              "const": "local_execution_limit",
-              "type": "string"
-            },
-            {
-              "const": "provider_transient",
-              "type": "string"
-            }
-          ],
-          "title": "Allowed Causes",
-          "type": "array"
-        },
-        "allowed_changes": {
-          "default": [
-            "text_added",
-            "text_modified"
-          ],
-          "maxItems": 2,
-          "minItems": 2,
-          "prefixItems": [
-            {
-              "const": "text_added",
-              "type": "string"
-            },
-            {
-              "const": "text_modified",
-              "type": "string"
-            }
-          ],
-          "title": "Allowed Changes",
-          "type": "array"
-        }
-      },
-      "title": "InterruptionContinuationPolicy",
       "type": "object"
     }
   },

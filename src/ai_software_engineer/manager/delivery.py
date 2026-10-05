@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Protocol, Self
@@ -132,6 +133,14 @@ class DeliveryBackendFailure(UnifiedProjectEntryError):
         super().__init__(safe_summary)
         self.code = code
         self.safe_summary = safe_summary
+        self.snapshot = snapshot
+
+
+class DeliveryBackendPending(DeliveryQueuePending):
+    """A durable nonterminal Task checkpoint observed after a scheduling wait."""
+
+    def __init__(self, snapshot: DeliveryFailureSnapshot) -> None:
+        super().__init__("交付检查点已保留，具体等待责任和恢复条件以队列记录为准。")  # noqa: RUF001
         self.snapshot = snapshot
 
 
@@ -387,18 +396,24 @@ class UnifiedProjectEntryService:
         backend: ProjectDeliveryBackend,
         catalog: ProjectDeliveryCheckpointCatalog,
         delivery_namespace: str | None = None,
+        product_action_authorizer: Callable[[], None] | None = None,
     ) -> None:
         self._backend = backend
         self._catalog = catalog
         self._delivery_namespace = delivery_namespace
+        self._product_action_authorizer = product_action_authorizer
 
     def with_backend(self, backend: ProjectDeliveryBackend) -> UnifiedProjectEntryService:
         """Reopen the same durable entry against an explicitly approved target."""
         return UnifiedProjectEntryService(
-            backend=backend, catalog=self._catalog, delivery_namespace=self._delivery_namespace
+            backend=backend,
+            catalog=self._catalog,
+            delivery_namespace=self._delivery_namespace,
+            product_action_authorizer=self._product_action_authorizer,
         )
 
     def start(self, command: StartProjectDelivery) -> ProjectDeliveryResult:
+        self._authorize_product_action()
         if command.additional_repository_roots:
             raise ValueError("multiple directories require the organization joint delivery host")
         delivery_id = _delivery_id(
@@ -497,6 +512,7 @@ class UnifiedProjectEntryService:
         return self._checkpoint_product(store, prepared, product, at=command.submitted_at)
 
     def reply(self, command: ReplyToProduct) -> ProjectDeliveryResult:
+        self._authorize_product_action()
         store, current = self._current(command.delivery_id)
         self._require_expected(current, command.expected_checkpoint_sha256)
         if current.stage is not DeliveryStage.WAITING_PRODUCT_REPLY:
@@ -515,6 +531,7 @@ class UnifiedProjectEntryService:
         return self._checkpoint_product(store, current, product, at=command.submitted_at)
 
     def approve(self, command: ApproveProductSpec) -> ProjectDeliveryResult:
+        self._authorize_product_action()
         store, current = self._current(command.delivery_id)
         self._require_expected(current, command.expected_checkpoint_sha256)
         if current.stage is not DeliveryStage.WAITING_PRODUCT_APPROVAL:
@@ -542,8 +559,15 @@ class UnifiedProjectEntryService:
         )
         return self._continue_after_product(store, current, product, at=command.submitted_at)
 
+    def _authorize_product_action(self) -> None:
+        """Reject untrusted Product writes before preparation, reconciliation or journal writes."""
+        if self._product_action_authorizer is not None:
+            self._product_action_authorizer()
+
     def resume(self, command: ResumeProjectDelivery) -> ProjectDeliveryResult:
         store, current = self._current(command.delivery_id)
+        if current.stage in {DeliveryStage.PREPARING, DeliveryStage.PRODUCT_DISCOVERY}:
+            self._authorize_product_action()
         self._backend.reconcile(current)
         if current.stage in {
             DeliveryStage.WAITING_PRODUCT_REPLY,
@@ -620,6 +644,13 @@ class UnifiedProjectEntryService:
     def retry_interrupted_stage(self, command: ResumeProjectDelivery) -> ProjectDeliveryResult:
         """Resume a platform-interrupted stage without resetting a terminal Task."""
         store, current = self._current(command.delivery_id)
+        if current.failed_stage in {
+            DeliveryStage.PREPARING,
+            DeliveryStage.PRODUCT_DISCOVERY,
+            DeliveryStage.WAITING_PRODUCT_REPLY,
+            DeliveryStage.WAITING_PRODUCT_APPROVAL,
+        }:
+            self._authorize_product_action()
         self._backend.reconcile(current)
         retryable = {
             DeliveryFailureCode.PERMISSION_DENIED,
@@ -1157,6 +1188,36 @@ class UnifiedProjectEntryService:
     ) -> ProjectDeliveryResult:
         try:
             delivery = self._backend.run_delivery(current)
+        except DeliveryBackendPending as pending:
+            snapshot = pending.snapshot
+            if (
+                snapshot.task.id != current.task_id
+                or snapshot.task.repository != current.repository_root
+            ):
+                raise DeliveryCommandRejected(
+                    "pending snapshot does not match delivery"
+                ) from pending
+            if snapshot.task_revision < (current.task_revision or 0):
+                raise DeliveryCommandRejected(
+                    "pending snapshot revision moved backwards"
+                ) from pending
+            if (current.task_revision, current.task_status, current.candidate_revision) == (
+                snapshot.task_revision,
+                snapshot.task.status,
+                snapshot.candidate_revision,
+            ):
+                return ProjectDeliveryResult(checkpoint=current, product=product)
+            checkpoint = self._next(
+                store,
+                current,
+                stage=DeliveryStage.DELIVERING,
+                next_action=DeliveryNextAction.RUN_DELIVERY,
+                task_revision=snapshot.task_revision,
+                task_status=snapshot.task.status,
+                candidate_revision=snapshot.candidate_revision,
+                at=max(at, snapshot.task.updated_at),
+            )
+            return ProjectDeliveryResult(checkpoint=checkpoint, product=product)
         except DeliveryQueuePending:
             return ProjectDeliveryResult(checkpoint=current, product=product)
         except DeliveryBackendFailure as error:

@@ -11,6 +11,7 @@ from typing import Literal, cast
 
 from pydantic import TypeAdapter
 
+from ai_software_engineer.agents.continuation import same_continuation_inputs
 from ai_software_engineer.domain.identity import RunId
 from ai_software_engineer.domain.task import TaskId
 from ai_software_engineer.orchestration.continuation_models import (
@@ -53,7 +54,7 @@ def _open_directory(path: Path) -> int:
 
 
 class FileContinuationStore:
-    """Read-only open; each Task has exactly one immutable receipt and admission."""
+    """Read-only open; v1 fixed files and v2 per-Run append-only records."""
 
     def __init__(self, root: str | Path, *, task_id: str) -> None:
         self._root, self._task_id = self._placement(root, task_id)
@@ -106,38 +107,180 @@ class FileContinuationStore:
     def put_receipt(self, receipt: ExecutionInterruptionReceipt) -> ExecutionInterruptionReceipt:
         receipt.validate_integrity()
         self._validate_receipt(receipt)
-        return self._put("receipt.json", receipt, ExecutionInterruptionReceipt)
+        self._validate_predecessor(receipt)
+        records = self.receipts_for_task(self._task_id)
+        for prior in records:
+            if prior.schema_version != receipt.schema_version:
+                raise ContinuationConflict(
+                    "Task continuation ledger cannot change authority version"
+                )
+            if (
+                prior.request.attempt == receipt.request.attempt
+                and prior.request.run_id != receipt.request.run_id
+            ):
+                raise ContinuationConflict("execution attempt already has another interruption Run")
+        name = (
+            "receipt.json"
+            if receipt.schema_version == "v1"
+            else f"receipt-{receipt.request.run_id}.json"
+        )
+        return self._put(name, receipt, ExecutionInterruptionReceipt)
 
     def get_receipt(self, run_id: str) -> ExecutionInterruptionReceipt:
+        checked_run = self._checked_run(run_id)
         try:
-            checked_run = TypeAdapter(RunId).validate_python(run_id)
-        except ValueError as error:
-            raise ContinuationRejected("invalid interruption Run identity") from error
-        record = self._get("receipt.json", ExecutionInterruptionReceipt)
+            record = self._get(f"receipt-{checked_run}.json", ExecutionInterruptionReceipt)
+            if record.schema_version != "v2":
+                raise ContinuationRejected("per-Run receipt requires v2 authority")
+        except ContinuationRecordMissing:
+            record = self._get("receipt.json", ExecutionInterruptionReceipt)
+            if record.schema_version != "v1":
+                raise ContinuationRejected("legacy receipt requires v1 authority") from None
         self._validate_receipt(record)
         if record.request.run_id != checked_run:
             raise ContinuationRejected("interruption receipt belongs to another Run")
+        self._validate_predecessor(record)
         return record
 
-    def receipt_for_task(self, task_id: str) -> ExecutionInterruptionReceipt | None:
+    def receipts_for_task(self, task_id: str) -> tuple[ExecutionInterruptionReceipt, ...]:
         self._require_task(task_id)
-        try:
-            record = self._get("receipt.json", ExecutionInterruptionReceipt)
-        except ContinuationRecordMissing:
-            return None
-        self._validate_receipt(record)
-        return record
+        records = []
+        for name in self._record_names("receipt"):
+            record = self._get(name, ExecutionInterruptionReceipt)
+            self._validate_receipt(record)
+            expected = (
+                "receipt.json"
+                if record.schema_version == "v1"
+                else f"receipt-{record.request.run_id}.json"
+            )
+            if name != expected:
+                raise ContinuationRejected("receipt filename does not match its version and Run")
+            records.append(record)
+        if (
+            len({record.schema_version for record in records}) > 1
+            or len({record.request.run_id for record in records}) != len(records)
+            or len({record.request.attempt for record in records}) != len(records)
+        ):
+            raise ContinuationRejected("Task interruption ledger contains conflicting identities")
+        for record in records:
+            self._validate_predecessor(record)
+        return tuple(
+            sorted(records, key=lambda record: (record.request.attempt, record.request.run_id))
+        )
+
+    def receipt_for_task(self, task_id: str) -> ExecutionInterruptionReceipt | None:
+        records = self.receipts_for_task(task_id)
+        return records[-1] if records else None
 
     def put_admission(self, record: ContinuationAdmission) -> ContinuationAdmission:
         record.validate_integrity()
         self._validate_admission(record)
-        return self._put("admission.json", record, ContinuationAdmission)
+        for prior in self.admissions_for_task(self._task_id):
+            if prior.schema_version != record.schema_version:
+                raise ContinuationConflict(
+                    "Task continuation ledger cannot change authority version"
+                )
+            if (
+                prior.interrupted_run_id == record.interrupted_run_id
+                or prior.new_request.attempt == record.new_request.attempt
+            ) and prior.to_wire() != record.to_wire():
+                raise ContinuationConflict("interruption already has a different one-use successor")
+        name = (
+            "admission.json"
+            if record.schema_version == "v1"
+            else f"admission-{record.new_request.run_id}.json"
+        )
+        return self._put(name, record, ContinuationAdmission)
 
-    def get_admission(self, task_id: str) -> ContinuationAdmission:
-        self._require_task(task_id)
-        record = self._get("admission.json", ContinuationAdmission)
+    def admission_for_run(self, run_id: str) -> ContinuationAdmission | None:
+        checked_run = self._checked_run(run_id)
+        try:
+            record = self._get(f"admission-{checked_run}.json", ContinuationAdmission)
+            if record.schema_version != "v2":
+                raise ContinuationRejected("per-Run admission requires v2 authority")
+        except ContinuationRecordMissing:
+            try:
+                record = self._get("admission.json", ContinuationAdmission)
+            except ContinuationRecordMissing:
+                return None
+            if record.schema_version != "v1":
+                raise ContinuationRejected("legacy admission requires v1 authority") from None
+            if record.new_request.run_id != checked_run:
+                return None
+        if record.new_request.run_id != checked_run:
+            raise ContinuationRejected("admission belongs to another replacement Run")
         self._validate_admission(record)
         return record
+
+    def admissions_for_task(self, task_id: str) -> tuple[ContinuationAdmission, ...]:
+        self._require_task(task_id)
+        records = []
+        for name in self._record_names("admission"):
+            record = self._get(name, ContinuationAdmission)
+            self._validate_admission(record)
+            expected = (
+                "admission.json"
+                if record.schema_version == "v1"
+                else f"admission-{record.new_request.run_id}.json"
+            )
+            if name != expected:
+                raise ContinuationRejected("admission filename does not match its version and Run")
+            records.append(record)
+        if (
+            len({record.schema_version for record in records}) > 1
+            or len({record.new_request.run_id for record in records}) != len(records)
+            or len({record.interrupted_run_id for record in records}) != len(records)
+            or len({record.new_request.attempt for record in records}) != len(records)
+        ):
+            raise ContinuationRejected("Task admission ledger contains conflicting successors")
+        return tuple(
+            sorted(
+                records, key=lambda record: (record.new_request.attempt, record.new_request.run_id)
+            )
+        )
+
+    def get_admission(self, task_id: str) -> ContinuationAdmission:
+        records = self.admissions_for_task(task_id)
+        if not records:
+            raise ContinuationRecordMissing("continuation admission is missing")
+        return records[-1]
+
+    @staticmethod
+    def _checked_run(run_id: str) -> RunId:
+        try:
+            return TypeAdapter(RunId).validate_python(run_id)
+        except ValueError as error:
+            raise ContinuationRejected("invalid continuation Run identity") from error
+
+    def _record_names(self, prefix: Literal["receipt", "admission"]) -> tuple[str, ...]:
+        with self._directory() as directory:
+            names = tuple(sorted(name for name in os.listdir(directory) if name.startswith(prefix)))
+        for name in names:
+            if name == f"{prefix}.json":
+                continue
+            if not name.startswith(f"{prefix}-") or not name.endswith(".json"):
+                raise ContinuationRejected("unknown continuation record filename")
+            self._checked_run(name[len(prefix) + 1 : -5])
+        return names
+
+    def _validate_predecessor(self, record: ExecutionInterruptionReceipt) -> None:
+        if record.schema_version == "v1":
+            return
+        prior = self.admission_for_run(record.request.run_id)
+        if record.previous_admission_sha256 is None:
+            if prior is not None:
+                raise ContinuationRejected("replacement interruption must bind its admission")
+            return
+        if (
+            prior is None
+            or prior.schema_version != record.schema_version
+            or prior.admission_sha256 != record.previous_admission_sha256
+            or prior.new_request != record.request
+            or prior.next_work_item_id != record.original_work_item_id
+            or prior.next_lease_id != record.claim_lease_id
+            or prior.created_at > record.created_at
+        ):
+            raise ContinuationRejected("interruption does not bind the exact preceding admission")
 
     def _require_task(self, task_id: str) -> None:
         if task_id != self._task_id:
@@ -155,9 +298,20 @@ class FileContinuationStore:
         receipt = self.get_receipt(record.interrupted_run_id)
         if (
             record.scope != receipt.scope
+            or record.schema_version != receipt.schema_version
             or record.receipt_sha256 != receipt.receipt_sha256
             or record.policy_sha256 != receipt.policy_sha256
             or record.created_at < receipt.created_at
+            or record.new_request.context_manifest_id == receipt.request.context_manifest_id
+            or record.next_work_item_id == receipt.original_work_item_id
+            or record.next_lease_id == receipt.claim_lease_id
+            or not same_continuation_inputs(
+                record.new_request, receipt.request, cause=receipt.cause
+            )
+            or (
+                record.schema_version == "v2"
+                and record.interrupted_attempt != receipt.request.attempt
+            )
         ):
             raise ContinuationRejected(
                 "continuation admission does not reference the exact receipt"
@@ -229,9 +383,7 @@ class FileContinuationStore:
             finally:
                 os.close(descriptor)
 
-    def _put[R: _Record](
-        self, name: Literal["receipt.json", "admission.json"], record: R, model: type[R]
-    ) -> R:
+    def _put[R: _Record](self, name: str, record: R, model: type[R]) -> R:
         wire = record.to_wire()
         try:
             existing = self._get(name, model)

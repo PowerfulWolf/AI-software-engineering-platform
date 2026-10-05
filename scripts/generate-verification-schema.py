@@ -6,6 +6,7 @@ from typing import Annotated
 
 from pydantic import Field, TypeAdapter
 
+from ai_software_engineer.domain.engineering_authority import EngineeringAdmission
 from ai_software_engineer.domain.prerequisite_repair import PrerequisiteRepairPlan
 from ai_software_engineer.manager.verification_coordination import ManagerVerificationAdvice
 from ai_software_engineer.manager.verification_environment import VerificationEnvironmentIncident
@@ -30,7 +31,8 @@ schema = TypeAdapter(
         | PrerequisiteRepairPlan
         | VerificationExecutionRecord
         | CandidateExecutorPrerequisite
-        | MysqlResourceRecord,
+        | MysqlResourceRecord
+        | EngineeringAdmission,
         Field(discriminator="kind"),
     ]
 ).json_schema()

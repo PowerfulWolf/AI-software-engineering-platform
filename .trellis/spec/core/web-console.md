@@ -75,6 +75,16 @@ production_console_app(
 - `RECOVER_DESIGN(project_id, delivery_id, expected_checkpoint_sha256)`；只允许 Manager 从
   当前联合 Requirement checkpoint、hash-chain 中的 Design `WAITING_HUMAN` 和已批准
   `KnowledgeResolution` 重建恢复事实，浏览器不能携带预算、Gap 答案或状态值。
+- `INSPECT_DELIVERY_WAIT(project_id, delivery_id, expected_checkpoint_sha256, work_item_id,
+  expected_disposition_sha256, expected_task_intent_sha256, expected_source_revision,
+  expected_checkpoint_sequence)`；仅工程职责可调查当前非终态等待。
+- `RESOLVE_DELIVERY_WAIT(上述精确绑定, resolution_kind, proof_sha256)`；仅消费服务封存的
+  当前完整调查，浏览器不得携带 actor、stop/ready bool 或 retry cause/failure。
+- `PROPOSE_EXECUTION_BASELINE(project_id, delivery_id, expected_checkpoint_sha256, task_id,
+  expected_task_intent_sha256, expected_task_revision, expected_work_item_id,
+  expected_source_revision, target_base_ref, input_mode)`；仅工程职责，完整目标提交，默认保留草稿。
+- `EXECUTE_EXECUTION_BASELINE(project_id, delivery_id, expected_checkpoint_sha256, task_id,
+  expected_plan_sha256, reference)`；仅工程职责，消费精确当前封存计划，在原需求分支执行。
 
 公开持久化契约是 `schemas/console-operation.schema.json`。
 
@@ -220,6 +230,17 @@ production_console_app(
 - `SUCCEEDED` 只表示 Manager 命令已完整返回，不等于 Delivery 已推进。若 result stage 仍是
   `WAITING_HUMAN/BLOCKED/FAILED` 且没有可批准计划，弹窗必须显示 safe `next_action`；同一
   Requirement 只提示最新一项需要人工关注的结果，避免历史通知重复弹出。
+- 需求的“操作记录（完整历史）”是所选需求全部持久化 Operation 的审计入口，不是常驻
+  全局通知卡。它展示调查缺项、精确工程决定、实际处理者与命令结果；完整记录不截为 8 条。
+  工程摘要/hash 放在折叠详情，日常产品摘要只展示责任、原因与下一步。
+- 当前非终态 WorkItem 的工程等待只能用折叠工程区的调查/处理入口，不能用 generic
+  “继续交付”绕过 proof。调查成功展示缺项或被允许的处理方式；决定成功仍等待读取新的
+  durable execution facts。`INSPECT_DELIVERY_WAIT/RESOLVE_DELIVERY_WAIT` 的 RUNNING 通知
+  说明正在核验/处理，不将当前工程等待改为“开发中”。工程折叠区保留轮询与提交前的展开
+  偏好，旧 checkpoint/disposition/proof 的按钮不得继续提交。
+- 原分支基线更新只出现在有精确 Task intent/revision/source 的 IMPLEMENTING Coder 工程区。
+  调查完整草稿与目标代码后显示封存计划；冲突必须明确提出 coder_reapply 新计划，不能在旧
+  批准下切换。QA/Review 阶段不提供 Coder 分支更新按钮，操作成功也不推断独立验收通过。
 - 阻塞原因只在 Requirement 详情的“阻塞信息”同级 section 展示。该 section 合并相同子仓原因，
   按“当前阻塞 / 最近一次恢复 / 建议操作”呈现，并把已知内部英文状态转换为面向用户的说明。
   Operation 通知只在能够精确定位 Requirement 时提供“打开需求工作区”；该按钮必须切换到需求页、

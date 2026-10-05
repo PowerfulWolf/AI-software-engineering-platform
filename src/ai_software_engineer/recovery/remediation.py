@@ -21,6 +21,7 @@ from ai_software_engineer.domain import (
     WorkItemStatus,
 )
 from ai_software_engineer.domain.branch import available_successor_branch
+from ai_software_engineer.domain.engineering_authority import EngineeringAdmission
 from ai_software_engineer.domain.prerequisite_repair import PrerequisiteRepairPlan
 from ai_software_engineer.domain.project_delivery import derive_delivery_task
 from ai_software_engineer.domain.task import TaskConstraints
@@ -32,6 +33,7 @@ from ai_software_engineer.manager.dispatch import (
     _record_digest,
     continuation_attempt_identity,
 )
+from ai_software_engineer.manager.engineering_authority import EngineeringAuthority
 from ai_software_engineer.manager.mysql_dispatch_authority import MySqlDispatchAuthority
 from ai_software_engineer.manager.preparation import PrepareProjectResult
 from ai_software_engineer.manager.production_backend import (
@@ -45,7 +47,11 @@ from ai_software_engineer.recovery.context import (
     verification_feedback_context,
 )
 from ai_software_engineer.recovery.models import RecoveryRejected, digest
-from ai_software_engineer.recovery.store import FileRecoveryStore
+from ai_software_engineer.recovery.store import (
+    FileRecoveryStore,
+    authority_approved,
+    authority_at,
+)
 from ai_software_engineer.recovery.verification_entry import NativeVerificationFacts
 from ai_software_engineer.recovery.verification_native import (
     NativeCandidateSource,
@@ -107,6 +113,10 @@ class CandidateRemediationService:
             require_repair_authority(
                 store, repair_plan, plan, completion, source.terminal_checkpoint.checkpoint_sha256
             )
+            repair_authority = store.get_repair_authority(repair_plan.plan_sha256)
+            if isinstance(repair_authority, EngineeringAdmission):
+                EngineeringAuthority.validate(task=source.runtime.task, record=repair_authority)
+                EngineeringAuthority.require_in_scope_repair(source.runtime.task, repair_plan)
         context_sources = remediation_context(
             repository_root=source.scope.repository_root,
             source_delivery_id=source.scope.delivery_id,
@@ -160,7 +170,7 @@ class CandidateRemediationService:
             else source.terminal_checkpoint.checkpointed_at
         )
         if repair_plan is not None:
-            now = store.get_repair_authorization(repair_plan.plan_sha256).decision.decided_at
+            now = authority_at(store.get_repair_authority(repair_plan.plan_sha256))
         original_request = source.stages.request
         rebound_request = ProjectRequest.create(
             request_id=original_request.id,
@@ -511,10 +521,10 @@ def require_repair_authority(
 ) -> None:
     """No environment report alone may grant Coder access or widen a Task scope."""
     stored = store.get_repair_plan(repair.plan_sha256)
-    authorization = store.get_repair_authorization(repair.plan_sha256)
+    authorization = store.get_repair_authority(repair.plan_sha256)
     if (
         stored != repair
-        or not authorization.decision.approved
+        or not authority_approved(authorization)
         or repair.source_plan_sha256 != plan.plan_sha256
         or repair.source_evidence_sha256 != completion.evidence_sha256
         or repair.native_checkpoint_sha256 != checkpoint_sha256

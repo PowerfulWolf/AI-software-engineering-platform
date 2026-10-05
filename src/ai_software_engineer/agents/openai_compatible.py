@@ -5,14 +5,19 @@ objects never leave this module; the Orchestrator receives only ``AgentResult`` 
 """
 
 import json
+import math
+import socket
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal, Protocol, cast
+from http.client import HTTPConnection, HTTPMessage, HTTPSConnection
+from http.client import HTTPResponse as StdlibHttpResponse
+from io import BufferedIOBase, BytesIO
+from typing import IO, Any, Literal, Protocol, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
+from urllib.request import HTTPHandler, HTTPRedirectHandler, HTTPSHandler, build_opener
 from urllib.request import Request as UrlRequest
-from urllib.request import urlopen
 
 from pydantic import Field
 
@@ -85,7 +90,7 @@ class HttpResponse:
 
 
 class HttpTransport(Protocol):
-    """Minimal transport seam used by the real adapter and its tests."""
+    """Synchronous bounded transport; timeout is the whole call's remaining window."""
 
     def post(
         self,
@@ -132,6 +137,113 @@ class OpenAICompatibleConfigurationError(AgentConfigurationError):
     """Raised for an invalid endpoint, model or adapter identity."""
 
 
+class _SocketReader(Protocol):
+    def read1(self, size: int) -> bytes: ...
+    def close(self) -> None: ...
+    def fileno(self) -> int: ...
+
+
+class _DeadlineSocketReader(BufferedIOBase):
+    """Bound status, headers and chunk framing as well as body socket reads."""
+
+    def __init__(self, source: _SocketReader, sock: socket.socket, deadline: float) -> None:
+        self.source, self.sock, self.deadline = source, sock, deadline
+
+    def read1(self, size: int = -1) -> bytes:
+        self.sock.settimeout(_http_remaining(self.deadline))
+        value = self.source.read1(65_536 if size < 0 else size)
+        _http_remaining(self.deadline)
+        return value
+
+    def read(self, size: int | None = -1) -> bytes:
+        chunks: list[bytes] = []
+        remaining = -1 if size is None else size
+        while remaining != 0:
+            value = self.read1(min(remaining, 65_536) if remaining > 0 else 65_536)
+            if not value:
+                break
+            chunks.append(value)
+            if remaining > 0:
+                remaining -= len(value)
+        return b"".join(chunks)
+
+    def readline(self, size: int | None = -1) -> bytes:
+        # http.client has strict line/count limits. One buffered byte at a time
+        # prevents readline internally renewing timeout on an incomplete header.
+        parts: list[bytes] = []
+        limit = -1 if size is None else size
+        while limit < 0 or len(parts) < limit:
+            value = self.read1(1)
+            if not value:
+                break
+            parts.append(value)
+            if value == b"\n":
+                break
+        return b"".join(parts)
+
+    def fileno(self) -> int:
+        return self.source.fileno()
+
+    def close(self) -> None:
+        self.source.close()
+        super().close()
+
+
+def urlopen(request: UrlRequest, *, timeout: float) -> StdlibHttpResponse:
+    """Keep urllib's standard proxy/TLS behavior, with one deadline-aware reader.
+
+    Per-call connection classes carry no global/thread-local state. There is no
+    background transport thread to outlive a claimed synchronous tool loop.
+    """
+    deadline = time.monotonic() + timeout
+
+    class BoundResponse(StdlibHttpResponse):
+        def __init__(
+            self,
+            sock: socket.socket,
+            debuglevel: int = 0,
+            method: str | None = None,
+            url: str | None = None,
+        ) -> None:
+            super().__init__(sock, debuglevel=debuglevel, method=method, url=url)
+            if self.fp is None:
+                raise OSError("provider response has no owned socket stream")
+            # http.client's annotation names its concrete BufferedReader, while
+            # runtime accepts this private binary reader with the same IO seam.
+            self.fp = cast(Any, _DeadlineSocketReader(cast(_SocketReader, self.fp), sock, deadline))
+
+    class BoundHttpConnection(HTTPConnection):
+        response_class = BoundResponse
+
+    class BoundHttpsConnection(HTTPSConnection):
+        response_class = BoundResponse
+
+    class BoundHttpHandler(HTTPHandler):
+        def http_open(self, req: UrlRequest) -> StdlibHttpResponse:
+            return self.do_open(BoundHttpConnection, req)
+
+    class BoundHttpsHandler(HTTPSHandler):
+        def https_open(self, req: UrlRequest) -> StdlibHttpResponse:
+            return self.do_open(BoundHttpsConnection, req, context=None)
+
+    class ExactEndpointHandler(HTTPRedirectHandler):
+        def redirect_request(
+            self,
+            req: UrlRequest,
+            fp: IO[bytes],
+            code: int,
+            msg: str,
+            headers: HTTPMessage,
+            newurl: str,
+        ) -> None:
+            # A model endpoint is exact authority. Redirects cannot turn POST
+            # into GET or carry its bearer credentials to another origin.
+            return None
+
+    opener = build_opener(BoundHttpHandler(), BoundHttpsHandler(), ExactEndpointHandler())
+    return cast(StdlibHttpResponse, opener.open(request, timeout=_http_remaining(deadline)))
+
+
 class UrllibHttpTransport:
     """Small bounded stdlib transport for OpenAI-compatible JSON POST requests."""
 
@@ -147,10 +259,13 @@ class UrllibHttpTransport:
         body: bytes,
         timeout_seconds: float,
     ) -> HttpResponse:
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+            raise ValueError("HTTP timeout must be a finite positive window")
+        deadline = time.monotonic() + timeout_seconds
         request = UrlRequest(url, data=body, headers=dict(headers), method="POST")
         try:
-            with urlopen(request, timeout=timeout_seconds) as response:
-                payload = response.read(self._max_response_bytes + 1)
+            with urlopen(request, timeout=_http_remaining(deadline)) as response:
+                payload = _read_http_body(response, deadline, self._max_response_bytes)
                 if len(payload) > self._max_response_bytes:
                     raise OSError("provider response exceeds configured limit")
                 return HttpResponse(
@@ -162,7 +277,8 @@ class UrllibHttpTransport:
                     correlation_id=safe_request_id(response.headers.get("x-correlation-id")),
                 )
         except HTTPError as error:
-            payload = error.read(self._max_response_bytes + 1)
+            with error:
+                payload = _read_http_body(error, deadline, self._max_response_bytes)
             if len(payload) > self._max_response_bytes:
                 payload = b""
             return HttpResponse(
@@ -182,6 +298,44 @@ class UrllibHttpTransport:
             if isinstance(reason, TimeoutError):
                 raise TimeoutError("provider request timed out") from error
             raise OSError("provider request failed") from error
+
+
+def _http_remaining(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("provider request exceeded its execution window")
+    return remaining
+
+
+def _read_http_body(
+    response: StdlibHttpResponse | HTTPError,
+    deadline: float,
+    max_bytes: int,
+) -> bytes:
+    """A trickling body cannot reset a socket inactivity timeout indefinitely.
+
+    urllib HTTPError wraps the same real HTTPResponse. BytesIO is supported only
+    for an already-buffered error body; it cannot hide a background network read.
+    Every real socket read uses read1 and the current remaining deadline.
+    """
+    stream = response.fp if isinstance(response, HTTPError) else response
+    if not isinstance(stream, (StdlibHttpResponse, BytesIO)):
+        raise OSError("provider response has no bounded synchronous stream")
+    chunks: list[bytes] = []
+    size = 0
+    while size <= max_bytes:
+        remaining = _http_remaining(deadline)
+        if isinstance(stream, StdlibHttpResponse) and not stream.isclosed():
+            if not isinstance(stream.fp, _DeadlineSocketReader):
+                raise OSError("provider response socket cannot be bounded")
+            stream.fp.sock.settimeout(remaining)
+        chunk = stream.read1(min(65_536, max_bytes + 1 - size))
+        _http_remaining(deadline)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        size += len(chunk)
+    return b"".join(chunks)
 
 
 def _output_contract(request: AgentRequest) -> WirePayload:
@@ -244,6 +398,7 @@ class RequestPromptBuilder:
                 "input_artifact_ids": list(request.input_artifact_ids),
                 "output_contract": _output_contract(request),
                 "output_schema": request.output_schema,
+                "work_slice": request.work_slice.to_wire() if request.work_slice else None,
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -324,6 +479,9 @@ class ContextPromptBuilder:
             "input_artifact_ids": cast(JsonValue, list(request.input_artifact_ids)),
             "output_schema": request.output_schema,
             "output_contract": _output_contract(request),
+            "work_slice": cast(JsonValue, request.work_slice.to_wire())
+            if request.work_slice
+            else None,
         }
         return PromptPayload(
             messages=(

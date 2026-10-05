@@ -7,7 +7,10 @@ from unittest.mock import patch
 
 import pytest
 
-from ai_software_engineer.manager.python_verification import PytestSelection
+from ai_software_engineer.manager.python_verification import (
+    PytestSelection,
+    PythonMysqlHostPrerequisites,
+)
 from ai_software_engineer.manager.python_verification_discovery import (
     candidate_denied_paths,
     dependency_fingerprint,
@@ -131,3 +134,114 @@ def test_secret_like_untouched_denied_filename_is_not_sealed_or_echoed(tmp_path:
         with pytest.raises(ValueError, match="secret-like") as failure:
             candidate_denied_paths(tmp_path, "a" * 40, ("private/*",))
         assert "fixture-credential" not in str(failure.value)
+
+
+def _host_prerequisites(tmp_path: Path) -> PythonMysqlHostPrerequisites:
+    runtime = (tmp_path / "runtime").resolve()
+    return PythonMysqlHostPrerequisites(
+        sandbox_executable=str(tmp_path / "codex"),
+        sandbox_executable_sha256="a" * 64,
+        python_executable=str(runtime / "python"),
+        python_executable_sha256="b" * 64,
+        python_runtime_root=str(runtime),
+        python_runtime_sha256="c" * 64,
+        dependency_root=str(tmp_path / "dependencies"),
+        dependency_sha256="d" * 64,
+        runner_path=str(tmp_path / "runner.py"),
+        runner_sha256="e" * 64,
+        docker_executable=str(tmp_path / "docker"),
+        docker_executable_sha256="f" * 64,
+        docker_socket=str(tmp_path / "docker.sock"),
+        docker_daemon_id="fixture-daemon",
+        mysql_image_id="sha256:" + "0" * 64,
+    )
+
+
+def test_host_prerequisites_cannot_be_used_as_candidate_capability(tmp_path: Path) -> None:
+    from ai_software_engineer.manager.python_verification import PythonMysqlSandboxCapability
+
+    host = _host_prerequisites(tmp_path)
+    assert "selections" not in host.to_wire()
+    assert "denied_relative_paths" not in host.to_wire()
+    with pytest.raises(ValueError):
+        PythonMysqlSandboxCapability.model_validate(host.to_wire())
+    with pytest.raises(ValueError):
+        PythonMysqlSandboxCapability.model_validate(
+            {**host.to_wire(), "kind": "codex_sandbox_pytest_mysql_v1"}
+        )
+
+
+def test_candidate_discovery_keeps_exact_selected_files_gate_before_host_discovery(
+    tmp_path: Path,
+) -> None:
+    from ai_software_engineer.manager.python_verification_discovery import (
+        discover_python_mysql_capability,
+    )
+
+    selection = PytestSelection(
+        node_id="tests/test_missing.py::test_case", criterion_ids=("ac_01",)
+    )
+    with (
+        patch(
+            "ai_software_engineer.manager.python_verification_discovery.platform.system",
+            return_value="Darwin",
+        ),
+        patch(
+            "ai_software_engineer.manager.python_verification_discovery.require_selected_candidate_files",
+            side_effect=ValueError("missing exact candidate test"),
+        ),
+        patch(
+            "ai_software_engineer.manager.python_verification_discovery.discover_python_mysql_host_prerequisites"
+        ) as discover,
+        pytest.raises(ValueError, match="missing exact candidate"),
+    ):
+        discover_python_mysql_capability(tmp_path, "a" * 40, (selection,), codex_executable="codex")
+    discover.assert_not_called()
+
+
+def test_candidate_capability_binds_fresh_host_without_changing_legacy_wire_fields(
+    tmp_path: Path,
+) -> None:
+    from ai_software_engineer.manager.python_verification_discovery import (
+        discover_python_mysql_capability,
+    )
+
+    host = _host_prerequisites(tmp_path)
+    selection = PytestSelection(node_id="tests/test_case.py::test_case", criterion_ids=("ac_01",))
+    with (
+        patch(
+            "ai_software_engineer.manager.python_verification_discovery.platform.system",
+            return_value="Darwin",
+        ),
+        patch(
+            "ai_software_engineer.manager.python_verification_discovery.require_selected_candidate_files"
+        ) as require,
+        patch(
+            "ai_software_engineer.manager.python_verification_discovery.candidate_denied_paths",
+            return_value=("private/secret.txt",),
+        ),
+        patch(
+            "ai_software_engineer.manager.python_verification_discovery.discover_python_mysql_host_prerequisites",
+            return_value=host,
+        ) as discover,
+    ):
+        result = discover_python_mysql_capability(
+            tmp_path, "a" * 40, (selection,), codex_executable="codex"
+        )
+    require.assert_called_once_with(tmp_path, "a" * 40, (selection,))
+    discover.assert_called_once_with(
+        codex_executable="codex",
+        docker_executable="docker",
+        docker_socket=None,
+        mysql_image="mysql:8.0",
+    )
+    expected = {
+        **host.to_wire(),
+        "kind": "codex_sandbox_pytest_mysql_v1",
+        "selections": [selection.to_wire()],
+        "denied_relative_paths": ["private/secret.txt"],
+        "max_cases": 256,
+        "resource_timeout_seconds": 1200,
+        "transport": "pymysql_unix_proxy_docker_exec_loopback",
+    }
+    assert result.to_wire() == expected

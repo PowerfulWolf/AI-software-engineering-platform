@@ -2,6 +2,7 @@
 
 import hashlib
 import os
+import stat
 import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Protocol
@@ -156,12 +157,26 @@ class PolicyBoundToolRegistry:
                     "parent directory does not exist",
                 )
             payload = request.content.encode("utf-8")
+            # mkstemp starts at 0600. Replacing a source file with that mode
+            # would lose executable bits and make a valid draft unresumable.
+            # File tools preserve regular permissions; new source defaults to
+            # 0644 regardless of the Host's umask, without acquiring special bits.
+            mode = (
+                stat.S_IMODE(absolute.stat(follow_symlinks=False).st_mode)
+                if absolute.exists()
+                else 0o644
+            )
+            if mode & 0o7000:
+                return self._rejected(
+                    request, "WRITE_DENIED", "special file permissions cannot be preserved"
+                )
             # A same-directory temporary + replace prevents readers from seeing a
             # partially written report and does not follow an existing target link.
             fd, temporary_name = tempfile.mkstemp(prefix=".ase-tool-", dir=parent)
             try:
                 with os.fdopen(fd, "wb") as stream:
                     stream.write(payload)
+                    os.fchmod(stream.fileno(), mode)
                     stream.flush()
                     os.fsync(stream.fileno())
                 os.replace(temporary_name, absolute)

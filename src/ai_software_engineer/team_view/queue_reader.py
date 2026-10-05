@@ -106,6 +106,12 @@ def read_role_queue(
                 lease_expires_at=expiry,
                 lease_liveness=liveness,
                 wait_reason=item.wait_reason,
+                wait_disposition=item.wait_disposition,
+                wait_disposition_sha256=(
+                    item.wait_disposition.disposition_sha256
+                    if item.wait_disposition is not None
+                    else None
+                ),
                 available_at=item.available_at,
             )
         )

@@ -15,7 +15,9 @@
     "manifest_sha256"
   ],
   "properties": {
-    "schema_version": {"const": "v0.2"},
+    "schema_version": {
+      "const": "v0.2"
+    },
     "team_id": {
       "type": "string",
       "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$"
@@ -28,9 +30,24 @@
       "type": "string",
       "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"
     },
-    "name": {"type": "string", "minLength": 1, "maxLength": 200},
-    "project_root": {"type": "string", "pattern": "^/", "minLength": 2},
-    "created_at": {"type": "string", "format": "date-time"},
-    "manifest_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
-  }
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "project_root": {
+      "type": "string",
+      "pattern": "^/",
+      "minLength": 2
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "manifest_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  },
+  "$defs": {}
 }

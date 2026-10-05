@@ -10,18 +10,19 @@ from typing import Annotated, Literal, Self
 from pydantic import AwareDatetime, Field, StrictInt, model_validator
 
 from ai_software_engineer.agents.continuation import InterruptionAdmissionRejected
-from ai_software_engineer.agents.execution import NativeProcessStop
+from ai_software_engineer.agents.execution import ExecutionStop, SynchronousToolLoopStop
 from ai_software_engineer.agents.models import AgentErrorCode, AgentRequest
 from ai_software_engineer.domain.continuation import ContinuationCause
 from ai_software_engineer.domain.enums import AgentRole
 from ai_software_engineer.domain.identity import ProjectId, RepositoryId, RunId, TeamId
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.domain.project_delivery import StageSha256
-from ai_software_engineer.domain.retry_policy import TRANSIENT_CODES
+from ai_software_engineer.domain.retry_policy import TRANSIENT_CODES, ExecutionAttempt
 from ai_software_engineer.domain.task import TaskId
 from ai_software_engineer.domain.workforce import LeaseId
 from ai_software_engineer.git.mutation import WorkspaceMutationInventory
 from ai_software_engineer.manager.delivery_checkpoint import DeliveryId
+from ai_software_engineer.orchestration.continuation_capture import CapturedMutations
 from ai_software_engineer.recovery.models import CapturedChanges, RelativePath, digest
 from ai_software_engineer.work_queue.models import WorkItemId
 
@@ -50,7 +51,7 @@ class ExecutionInterruptionReceipt(DomainModel):
     """Capture plus trusted executor references, never progress or a verdict."""
 
     kind: Literal["execution_interruption_receipt"] = "execution_interruption_receipt"
-    schema_version: Literal["v1"] = "v1"
+    schema_version: Literal["v1", "v2"] = "v1"
     scope: ContinuationScope
     request: AgentRequest
     task_intent_sha256: StageSha256
@@ -60,16 +61,19 @@ class ExecutionInterruptionReceipt(DomainModel):
     policy_sha256: StageSha256
     cause: ContinuationCause
     original_error_code: AgentErrorCode
-    process_stop: NativeProcessStop
+    process_stop: ExecutionStop
     process_stop_sha256: StageSha256
-    capture: CapturedChanges
+    capture: CapturedChanges | CapturedMutations
     inventory_before: WorkspaceMutationInventory
     inventory_after: WorkspaceMutationInventory
     inventory_before_sha256: StageSha256
     inventory_after_sha256: StageSha256
-    mutation_paths: Annotated[tuple[RelativePath, ...], Field(min_length=1)]
+    mutation_paths: tuple[RelativePath, ...]
     created_at: AwareDatetime
     receipt_sha256: StageSha256
+    previous_admission_sha256: StageSha256 | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @classmethod
     def create(cls, **values: object) -> Self:
@@ -79,12 +83,37 @@ class ExecutionInterruptionReceipt(DomainModel):
     @model_validator(mode="after")
     def validate_interruption_identity(self) -> Self:
         request, capture = self.request, self.capture
+        if (self.schema_version == "v1" and not isinstance(capture, CapturedChanges)) or (
+            self.schema_version == "v2" and not isinstance(capture, CapturedMutations)
+        ):
+            raise ValueError("interruption version must bind its exact capture capability")
+        if isinstance(capture, CapturedMutations):
+            observed = {item.path: item for item in self.inventory_after.files}
+            for mutation in capture.mutations:
+                actual = observed.get(mutation.path)
+                if mutation.after is None:
+                    if actual is not None:
+                        raise ValueError("deleted mutation must be absent from final inventory")
+                elif (
+                    actual is None
+                    or actual.kind != "file"
+                    or actual.sha256 != mutation.after.sha256
+                    or actual.mode != mutation.after.mode
+                    or actual.size != mutation.after.size
+                ):
+                    raise ValueError("mutation after-body must match complete final inventory")
         if (
             self.inventory_before.sha256 != self.inventory_before_sha256
             or self.inventory_after.sha256 != self.inventory_after_sha256
         ):
             raise ValueError("interruption receipt inventory body and digest must match")
         self.process_stop.validate_integrity()
+        if isinstance(self.process_stop, SynchronousToolLoopStop):
+            if self.schema_version != "v2" or (self.cause == "local_execution_limit") != (
+                self.process_stop.kind == "local_execution_limit"
+            ):
+                raise ValueError("synchronous provider stops require the v2 continuation contract")
+            self.process_stop.require_request(request)
         if (
             self.process_stop_sha256 != self.process_stop.stop_sha256
             or self.created_at < self.process_stop.stopped_at
@@ -96,14 +125,22 @@ class ExecutionInterruptionReceipt(DomainModel):
             raise ValueError("interruption receipt must bind the prior exact process stop")
         if (
             request.role is not AgentRole.CODER
-            or request.attempt != 1
-            or request.continuation_checkpoint_id is not None
+            or (
+                self.schema_version == "v1"
+                and (
+                    request.attempt != 1
+                    or request.continuation_checkpoint_id is not None
+                    or self.previous_admission_sha256 is not None
+                )
+            )
             or capture.task_id != request.task_id
-            or capture.attempt != request.attempt
+            or capture.attempt != 1
             or capture.source_revision != request.source_revision
             or capture.to_capture().effective_base_revision != request.source_revision
         ):
-            raise ValueError("interruption capture must bind the same first Coder identity")
+            raise ValueError("interruption capture must bind the exact Coder checkout identity")
+        if self.schema_version == "v1" and not self.mutation_paths:
+            raise ValueError("v1 interruption requires nonempty mutation paths")
         if self.mutation_paths != tuple(sorted(set(self.mutation_paths))):
             raise ValueError("interruption mutation paths must be sorted and unique")
         if (
@@ -132,7 +169,7 @@ class ContinuationAdmission(DomainModel):
     """One Task's replacement invocation, authorized by frozen engineering policy."""
 
     kind: Literal["continuation_admission"] = "continuation_admission"
-    schema_version: Literal["v1"] = "v1"
+    schema_version: Literal["v1", "v2"] = "v1"
     authorization_source: Literal["authorized_by_policy"] = "authorized_by_policy"
     scope: ContinuationScope
     task_id: TaskId
@@ -144,6 +181,9 @@ class ContinuationAdmission(DomainModel):
     next_lease_id: LeaseId
     created_at: AwareDatetime
     admission_sha256: StageSha256
+    interrupted_attempt: ExecutionAttempt | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @classmethod
     def create(cls, **values: object) -> Self:
@@ -156,11 +196,26 @@ class ContinuationAdmission(DomainModel):
         if (
             request.task_id != self.task_id
             or request.role is not AgentRole.CODER
-            or request.attempt != 2
             or request.run_id == self.interrupted_run_id
-            or request.continuation_checkpoint_id is not None
+            or (
+                self.schema_version == "v1"
+                and (
+                    request.attempt != 2
+                    or request.continuation_checkpoint_id is not None
+                    or self.interrupted_attempt is not None
+                )
+            )
+            or (
+                self.schema_version == "v2"
+                and (
+                    self.interrupted_attempt is None
+                    or request.attempt != self.interrupted_attempt + 1
+                )
+            )
         ):
-            raise ValueError("continuation admission requires a distinct second Coder Run")
+            raise ValueError(
+                "continuation admission requires the exact distinct successor Coder Run"
+            )
         return self
 
     def recompute_sha256(self) -> str:

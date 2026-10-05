@@ -21,10 +21,10 @@ from ai_software_engineer.agents import (
     StoredContextResolver,
 )
 from ai_software_engineer.agents.candidate_binding import BoundCandidateSource
-from ai_software_engineer.agents.codex_cli import InitialWorkspaceAdmission
 from ai_software_engineer.agents.continuation import CoderInterruptionControl
 from ai_software_engineer.agents.execution import ExecutionGuard
 from ai_software_engineer.agents.fallback import model_route_root
+from ai_software_engineer.agents.workspace_admission import InitialWorkspaceAdmission
 from ai_software_engineer.config import (
     ModelProviderKind,
     ProductionConfig,
@@ -33,6 +33,11 @@ from ai_software_engineer.config import (
 )
 from ai_software_engineer.config.codex_proxy import codex_cli_proxy_key_environment
 from ai_software_engineer.domain import AgentDefinition, AgentRole, TeamRole
+from ai_software_engineer.domain.native_verification import (
+    NativeVerificationWaiting,
+    NativeVerificationWaitReason,
+    role_verification_digest,
+)
 from ai_software_engineer.git import DirtyWorktree, GitWorktreeManager
 from ai_software_engineer.manager.dispatch import (
     DeliveryAllocation,
@@ -46,6 +51,8 @@ from ai_software_engineer.role_workspace import (
 )
 
 if TYPE_CHECKING:
+    from ai_software_engineer.manager.native_verification import RegisteredNativePythonVerifier
+    from ai_software_engineer.manager.verifier_preparation import VerifierPreparationObservation
     from ai_software_engineer.recovery.verification_execution import VerificationEvidenceProvider
 
 
@@ -74,11 +81,13 @@ class ConfiguredDeliveryRouteAdapterFactory:
         execution_guard: ExecutionGuard | None = None,
         verification_evidence: VerificationEvidenceProvider | None = None,
         interruption_control: CoderInterruptionControl | None = None,
+        registered_verifier: RegisteredNativePythonVerifier | None = None,
     ) -> None:
         self._initial_admission = initial_workspace_admission
         self._execution_guard = execution_guard
         self._verification_evidence = verification_evidence
         self._interruption_control = interruption_control
+        self._registered_verifier = registered_verifier
 
     def with_execution_guard(self, guard: ExecutionGuard) -> ConfiguredDeliveryRouteAdapterFactory:
         """Bind Worker ownership while preserving explicitly approved recovery admission."""
@@ -87,6 +96,20 @@ class ConfiguredDeliveryRouteAdapterFactory:
             execution_guard=guard,
             verification_evidence=self._verification_evidence,
             interruption_control=self._interruption_control,
+            registered_verifier=self._registered_verifier,
+        )
+
+    def with_initial_workspace_admission(
+        self,
+        admission: InitialWorkspaceAdmission,
+    ) -> ConfiguredDeliveryRouteAdapterFactory:
+        """Use the trusted exact source admission without adding model-supplied authority."""
+        return ConfiguredDeliveryRouteAdapterFactory(
+            initial_workspace_admission=admission,
+            execution_guard=self._execution_guard,
+            verification_evidence=self._verification_evidence,
+            interruption_control=self._interruption_control,
+            registered_verifier=self._registered_verifier,
         )
 
     def with_verification_evidence(
@@ -97,6 +120,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
             execution_guard=self._execution_guard,
             verification_evidence=provider,
             interruption_control=self._interruption_control,
+            registered_verifier=self._registered_verifier,
         )
 
     def with_interruption_control(
@@ -107,7 +131,53 @@ class ConfiguredDeliveryRouteAdapterFactory:
             execution_guard=self._execution_guard,
             verification_evidence=self._verification_evidence,
             interruption_control=control,
+            registered_verifier=self._registered_verifier,
         )
+
+    def with_registered_verifier(
+        self, registry: RegisteredNativePythonVerifier
+    ) -> ConfiguredDeliveryRouteAdapterFactory:
+        """Preserve the same trusted discovery and exact candidate executor registration."""
+        return ConfiguredDeliveryRouteAdapterFactory(
+            initial_workspace_admission=self._initial_admission,
+            execution_guard=self._execution_guard,
+            verification_evidence=self._verification_evidence,
+            interruption_control=self._interruption_control,
+            registered_verifier=registry,
+        )
+
+    def prepare_verifier(
+        self,
+        *,
+        request: AgentRequest,
+        route: ProviderRouteConfig,
+        binding: RoleWorktreeBinding,
+        config: ProductionConfig,
+    ) -> None:
+        """Trusted pre-model seam; no role model, verdict, or new recovery Task."""
+        if self._registered_verifier is None or self._verification_evidence is not None:
+            return
+        self._registered_verifier.prepare_verifier(
+            request=request,
+            workspace_root=Path(binding.worktree.path),
+            guard=self._execution_guard,
+            allow_ordinary_commands=route.kind is ModelProviderKind.RESPONSES,
+            route_sha256=_verifier_route_sha256(route, config),
+        )
+
+    def requires_verifier_preparation(self) -> bool:
+        return self._registered_verifier is not None and self._verification_evidence is None
+
+    def observe_verifier_preparation(
+        self,
+        request: AgentRequest,
+        lease_id: str,
+    ) -> VerifierPreparationObservation:
+        from ai_software_engineer.manager.verifier_preparation import VerifierPreparationObservation
+
+        if self._registered_verifier is None:
+            return VerifierPreparationObservation(native_execution_state="NOT_STARTED")
+        return self._registered_verifier.observe_verifier_preparation(request, lease_id)
 
     def create(
         self,
@@ -122,7 +192,20 @@ class ConfiguredDeliveryRouteAdapterFactory:
         from ai_software_engineer.agents.openai_compatible import PromptBuilder
 
         prompt_builder: PromptBuilder = ContextPromptBuilder(context_resolver)
-        if self._verification_evidence is not None:
+        verification_evidence = self._verification_evidence
+        if (
+            verification_evidence is None
+            and self._registered_verifier is not None
+            and definition.role in (AgentRole.QA, AgentRole.REVIEWER)
+        ):
+            verification_evidence = self._registered_verifier.provider_for(
+                workspace_root=Path(binding.worktree.path),
+                guard=self._execution_guard,
+                allow_ordinary_commands=route.kind is ModelProviderKind.RESPONSES,
+                require_prepared=True,
+                route_sha256=_verifier_route_sha256(route, config),
+            )
+        if verification_evidence is not None:
             from ai_software_engineer.recovery.verification_execution import (
                 VerificationEvidencePromptBuilder,
             )
@@ -131,7 +214,7 @@ class ConfiguredDeliveryRouteAdapterFactory:
                 raise ProductionConfigError("controlled verification evidence is verifier-only")
             prompt_builder = VerificationEvidencePromptBuilder(
                 prompt_builder,
-                self._verification_evidence,
+                verification_evidence,
                 Path(binding.worktree.path),
                 self._execution_guard,
             )
@@ -181,6 +264,12 @@ class ConfiguredDeliveryRouteAdapterFactory:
             reasoning_effort=route.reasoning_effort,
             agent=definition,
             prompt_builder=prompt_builder,
+            initial_workspace_admission=(
+                self._initial_admission if definition.role is AgentRole.CODER else None
+            ),
+            interruption_control=(
+                self._interruption_control if definition.role is AgentRole.CODER else None
+            ),
         )
 
 
@@ -246,7 +335,40 @@ class DispatchDeliveryAgentAdapter:
         self._route_validator = route_validator
         self._coder: RoleWorktreeBinding | None = None
         self._verifiers: dict[tuple[AgentRole, int], RoleWorktreeBinding] = {}
-        self._adapters: dict[tuple[AgentRole, int], AgentAdapter] = {}
+        self._adapters: dict[tuple[AgentRole, int, str], AgentAdapter] = {}
+        self._prepared_verifier_routes: dict[str, tuple[ProviderRouteConfig, ...]] = {}
+
+    def prepare_verifier(self, request: AgentRequest) -> None:
+        """Open exact original role workspace and prepare before invocation-start."""
+        if request.role not in (AgentRole.QA, AgentRole.REVIEWER):
+            return
+        if not isinstance(self._route_adapters, ConfiguredDeliveryRouteAdapterFactory):
+            return
+        if (
+            isinstance(self._dispatch, VerificationReservation)
+            or request.task_id != self._dispatch.task_id
+        ):
+            raise ProductionConfigError("native preparation requires the original delivery Task")
+        binding = self._binding(request)
+        routes = self._ordered_routes(self._definitions[request.role])
+        if self._route_validator is not None:
+            self._route_validator(request.role, routes)
+        for route in routes:
+            self._route_adapters.prepare_verifier(
+                request=request, route=route, binding=binding, config=self._config
+            )
+        self._prepared_verifier_routes[role_verification_digest(request.to_wire())] = routes
+
+    def observe_verifier_preparation(
+        self,
+        request: AgentRequest,
+        lease_id: str,
+    ) -> VerifierPreparationObservation:
+        from ai_software_engineer.manager.verifier_preparation import VerifierPreparationObservation
+
+        if not isinstance(self._route_adapters, ConfiguredDeliveryRouteAdapterFactory):
+            return VerifierPreparationObservation(native_execution_state="NOT_STARTED")
+        return self._route_adapters.observe_verifier_preparation(request, lease_id)
 
     def run(self, request: AgentRequest) -> AgentResult:
         if isinstance(self._dispatch, VerificationReservation):
@@ -266,10 +388,11 @@ class DispatchDeliveryAgentAdapter:
                 raise ProductionConfigError("candidate verification cannot invoke Orchestrator")
             return self._plan_adapter.run(request)
         binding = self._binding(request)
-        key = (request.role, binding.worktree.attempt)
+        configured = self._routes_for_request(request)
+        key = (request.role, binding.worktree.attempt, role_verification_digest(request.to_wire()))
         adapter = self._adapters.get(key)
         if adapter is None:
-            adapter = self._route_adapter(request.role, binding)
+            adapter = self._route_adapter(request.role, binding, configured=configured)
             self._adapters[key] = adapter
         return adapter.run(request)
 
@@ -316,9 +439,11 @@ class DispatchDeliveryAgentAdapter:
         self,
         role: AgentRole,
         binding: RoleWorktreeBinding,
+        *,
+        configured: tuple[ProviderRouteConfig, ...] | None = None,
     ) -> AgentAdapter:
         definition = self._definitions[role]
-        configured = self._ordered_routes(definition)
+        configured = configured or self._ordered_routes(definition)
         if self._route_validator is not None:
             self._route_validator(role, configured)
         routes: list[ProviderAgentRoute] = []
@@ -347,6 +472,22 @@ class DispatchDeliveryAgentAdapter:
                 model_route_root(self._repository_workspace_root)
             ),
         )
+
+    def _routes_for_request(self, request: AgentRequest) -> tuple[ProviderRouteConfig, ...]:
+        configured = self._ordered_routes(self._definitions[request.role])
+        if request.role not in (AgentRole.QA, AgentRole.REVIEWER):
+            return configured
+        prepared = self._prepared_verifier_routes.get(role_verification_digest(request.to_wire()))
+        if prepared is not None:
+            if configured != prepared:
+                raise NativeVerificationWaiting(NativeVerificationWaitReason.FACTS_CHANGED)
+            return prepared
+        if (
+            isinstance(self._route_adapters, ConfiguredDeliveryRouteAdapterFactory)
+            and self._route_adapters.requires_verifier_preparation()
+        ):
+            raise NativeVerificationWaiting(NativeVerificationWaitReason.FACTS_CHANGED)
+        return configured
 
     def _ordered_routes(
         self,
@@ -392,3 +533,12 @@ __all__ = [
     "DeliveryRouteAdapterFactory",
     "DispatchDeliveryAgentAdapter",
 ]
+
+
+def _verifier_route_sha256(route: ProviderRouteConfig, config: ProductionConfig) -> str:
+    return role_verification_digest(
+        {
+            "route": route.to_wire(),
+            "connection_mode": config.effective_connection_mode(route),
+        }
+    )

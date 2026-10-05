@@ -13,5 +13,6 @@ ProjectId = Annotated[str, StringConstraints(pattern=r"^project_[a-z0-9][a-z0-9_
 RepositoryId = Annotated[str, StringConstraints(pattern=r"^repository_[a-z0-9][a-z0-9_-]{2,63}$")]
 RunId = Annotated[str, StringConstraints(pattern=r"^run_[a-z0-9][a-z0-9_-]{2,63}$")]
 ContextId = Annotated[str, StringConstraints(pattern=r"^ctx_[a-f0-9]{64}$")]
+OperationId = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_.:-]{0,127}$")]
 
-__all__ = ["ContextId", "ProjectId", "RepositoryId", "RunId", "TeamId"]
+__all__ = ["ContextId", "OperationId", "ProjectId", "RepositoryId", "RunId", "TeamId"]

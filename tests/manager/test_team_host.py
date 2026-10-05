@@ -12,6 +12,7 @@ import pytest
 from ai_software_engineer.agents import StructuredModelClient, StructuredModelResult
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
 from ai_software_engineer.domain import TeamRole
+from ai_software_engineer.domain.engineering_authority import LocalOperatorPrincipal
 from ai_software_engineer.knowledge.gaps import KnowledgeGapRaised
 from ai_software_engineer.knowledge_documents import (
     ProjectKnowledgeDocumentStore,
@@ -120,6 +121,10 @@ def test_recovery_uses_current_project_backend_when_child_delivery_is_frozen(
     host = object.__new__(TeamHost)
     host._config = _config(tmp_path / "platform", "team_alpha")
     host._environment = {"ASE_MYSQL_DSN": "connectivity-only"}
+    host._team = TeamWorkspace.initialize(
+        tmp_path / "platform", team_id="team_alpha", name="team_alpha"
+    )
+    host._operator_principal = LocalOperatorPrincipal.trusted_local()
     current_backend = cast(Any, SimpleNamespace(_delivery_route_adapters=None))
     frozen_child_backend = cast(Any, SimpleNamespace(_delivery_route_adapters=None))
     runtime = cast(Any, SimpleNamespace(backend=current_backend, entry=object()))

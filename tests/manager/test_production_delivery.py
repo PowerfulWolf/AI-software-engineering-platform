@@ -109,6 +109,7 @@ def test_verification_request_binds_source_task_not_checkout_task(
     provider = MagicMock()
     open_binding = MagicMock(return_value=binding)
     monkeypatch.setattr(adapter, "_binding", open_binding)
+    monkeypatch.setattr(adapter, "_routes_for_request", MagicMock(return_value=()))
     monkeypatch.setattr(adapter, "_route_adapter", MagicMock(return_value=provider))
     request = _orchestrator_request(
         reservation.task_id if use_execution_task else reservation.source_task_id

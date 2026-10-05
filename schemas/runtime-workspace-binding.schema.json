@@ -23,13 +23,21 @@
     "binding_sha256"
   ],
   "properties": {
-    "kind": {"const": "runtime_workspace_binding"},
-    "schema_version": {"const": "v0.2"},
+    "kind": {
+      "const": "runtime_workspace_binding"
+    },
+    "schema_version": {
+      "const": "v0.2"
+    },
     "team_id": {
       "type": "string",
       "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$"
     },
-    "team_root": {"type": "string", "pattern": "^/", "minLength": 2},
+    "team_root": {
+      "type": "string",
+      "pattern": "^/",
+      "minLength": 2
+    },
     "team_manifest_sha256": {
       "type": "string",
       "pattern": "^[a-f0-9]{64}$"
@@ -38,7 +46,11 @@
       "type": "string",
       "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$"
     },
-    "project_root": {"type": "string", "pattern": "^/", "minLength": 2},
+    "project_root": {
+      "type": "string",
+      "pattern": "^/",
+      "minLength": 2
+    },
     "project_manifest_sha256": {
       "type": "string",
       "pattern": "^[a-f0-9]{64}$"
@@ -47,25 +59,82 @@
       "type": "string",
       "pattern": "^repository_[a-z0-9][a-z0-9_-]{2,63}$"
     },
-    "repository_root": {"type": "string", "pattern": "^/", "minLength": 2},
-    "repository_workspace_root": {"type": "string", "pattern": "^/", "minLength": 2},
-    "repository_manifest_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
-    "repository_profile_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "repository_root": {
+      "type": "string",
+      "pattern": "^/",
+      "minLength": 2
+    },
+    "repository_workspace_root": {
+      "type": "string",
+      "pattern": "^/",
+      "minLength": 2
+    },
+    "repository_manifest_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "repository_profile_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
     "paths": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["database", "artifacts", "contexts", "evaluation_events", "handoffs", "evidence", "runs"],
+      "required": [
+        "database",
+        "artifacts",
+        "contexts",
+        "evaluation_events",
+        "handoffs",
+        "evidence",
+        "runs"
+      ],
       "properties": {
-        "database": {"type": "string", "pattern": "^/", "minLength": 2},
-        "artifacts": {"type": "string", "pattern": "^/", "minLength": 2},
-        "contexts": {"type": "string", "pattern": "^/", "minLength": 2},
-        "evaluation_events": {"type": "string", "pattern": "^/", "minLength": 2},
-        "handoffs": {"type": "string", "pattern": "^/", "minLength": 2},
-        "evidence": {"type": "string", "pattern": "^/", "minLength": 2},
-        "runs": {"type": "string", "pattern": "^/", "minLength": 2}
+        "database": {
+          "type": "string",
+          "pattern": "^/",
+          "minLength": 2
+        },
+        "artifacts": {
+          "type": "string",
+          "pattern": "^/",
+          "minLength": 2
+        },
+        "contexts": {
+          "type": "string",
+          "pattern": "^/",
+          "minLength": 2
+        },
+        "evaluation_events": {
+          "type": "string",
+          "pattern": "^/",
+          "minLength": 2
+        },
+        "handoffs": {
+          "type": "string",
+          "pattern": "^/",
+          "minLength": 2
+        },
+        "evidence": {
+          "type": "string",
+          "pattern": "^/",
+          "minLength": 2
+        },
+        "runs": {
+          "type": "string",
+          "pattern": "^/",
+          "minLength": 2
+        }
       }
     },
-    "bound_at": {"type": "string", "format": "date-time"},
-    "binding_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
-  }
+    "bound_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "binding_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  },
+  "$defs": {}
 }

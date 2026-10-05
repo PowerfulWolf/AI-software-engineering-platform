@@ -7,10 +7,11 @@ import json
 import os
 import subprocess
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Protocol, TypeVar, cast, runtime_checkable
+from typing import Literal, Protocol, TypeVar, cast, runtime_checkable
 
 from ai_software_engineer.agents import (
     CodexCliStructuredModelClient,
@@ -69,7 +70,16 @@ from ai_software_engineer.domain import (
     WorkItemStatus,
     derive_delivery_task,
 )
+from ai_software_engineer.domain.agent import DELIVERY_ROLE_INPUTS
+from ai_software_engineer.domain.engineering_authority import (
+    EngineeringPolicy,
+    EngineeringScope,
+    LocalOperatorPrincipal,
+    OperatorDuty,
+)
+from ai_software_engineer.domain.execution_window import PlanExecutionWindow
 from ai_software_engineer.git.policy import delivery_write_paths
+from ai_software_engineer.knowledge.models import digest
 from ai_software_engineer.manager.baseline import (
     FileProjectBaselineCompilationStore,
     ProjectSpecBaseline,
@@ -77,6 +87,7 @@ from ai_software_engineer.manager.baseline import (
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
     DeliveryBackendFailure,
+    DeliveryBackendPending,
     DeliveryFailureSnapshot,
     ReplyToProduct,
     StartProjectDelivery,
@@ -88,6 +99,7 @@ from ai_software_engineer.manager.delivery_checkpoint import (
     ProjectDeliveryCheckpoint,
     checkpoint_sha256_is_ancestor,
 )
+from ai_software_engineer.manager.delivery_preflight import DeliveryPreflightReceipt
 from ai_software_engineer.manager.dispatch import (
     CommitDispatchRequest,
     ContinuationDispatchRecord,
@@ -100,8 +112,13 @@ from ai_software_engineer.manager.dispatch import (
     ManagerDispatchService,
     RecoveryDispatchRecord,
 )
+from ai_software_engineer.manager.execution_baseline import ExecutionBaselineService
 from ai_software_engineer.manager.mysql_dispatch_authority import (
     MySqlDispatchAuthority,
+)
+from ai_software_engineer.manager.native_verification import (
+    NativeRoleVerificationInputsReader,
+    RegisteredNativePythonVerifier,
 )
 from ai_software_engineer.manager.preparation import (
     ManagerSkillService,
@@ -140,6 +157,7 @@ from ai_software_engineer.orchestration import (
     RetryDeliveryResult,
     RetryResult,
 )
+from ai_software_engineer.orchestration.execution_baseline import CoderExecutionInputResolver
 from ai_software_engineer.planning import (
     FileExecutionPlanStore,
     PlannerContextBuilder,
@@ -180,7 +198,8 @@ from ai_software_engineer.scheduling import ModelRouter, PortfolioScheduler
 from ai_software_engineer.spec_compiler import SpecRule
 from ai_software_engineer.store import MySqlTaskRepository, TaskRepository
 from ai_software_engineer.swift_verification import SWIFT_VERIFICATION_COMMANDS
-from ai_software_engineer.work_queue.execution_store import MySqlRoleQueue
+from ai_software_engineer.work_queue.execution_store import MySqlRoleQueue, QueuedRoleStep
+from ai_software_engineer.work_queue.invocation import DurableInvocationControl
 from ai_software_engineer.work_queue.ports import DeliveryQueuePending
 
 Clock = Callable[[], datetime]
@@ -195,21 +214,7 @@ PRODUCTION_DELIVERY_CONTEXT_BUDGET = ContextBudget(
 )
 PRODUCTION_DELIVERY_MAX_ATTEMPTS = 3
 _ALL_CAPABILITIES = DELIVERY_CAPABILITIES
-_ROLE_INPUTS: dict[AgentRole, tuple[ArtifactKind, ...]] = {
-    AgentRole.ORCHESTRATOR: (),
-    AgentRole.CODER: (
-        ArtifactKind.PLAN,
-        ArtifactKind.CODER_PROGRESS,
-        ArtifactKind.QA_REPORT,
-        ArtifactKind.REVIEW_REPORT,
-    ),
-    AgentRole.QA: (ArtifactKind.PLAN, ArtifactKind.IMPLEMENTATION_REPORT),
-    AgentRole.REVIEWER: (
-        ArtifactKind.PLAN,
-        ArtifactKind.IMPLEMENTATION_REPORT,
-        ArtifactKind.QA_REPORT,
-    ),
-}
+_ROLE_INPUTS = DELIVERY_ROLE_INPUTS
 _ROLE_OUTPUTS = {
     AgentRole.ORCHESTRATOR: (ArtifactKind.PLAN,),
     AgentRole.CODER: (ArtifactKind.CODER_PROGRESS, ArtifactKind.IMPLEMENTATION_REPORT),
@@ -402,6 +407,7 @@ class ProductionProjectDeliveryBackend:
         trusted_plan_projection: bool = False,
         trusted_legacy_product_projection: bool = False,
         role_queue: MySqlRoleQueue | None = None,
+        operator_principal: LocalOperatorPrincipal | None = None,
     ) -> None:
         if (frozen_preparation is None) != (frozen_source_revision is None):
             raise ValueError("frozen preparation and source revision must be supplied together")
@@ -414,6 +420,7 @@ class ProductionProjectDeliveryBackend:
             if not _is_durable_git_revision(cast(str, frozen_source_revision)):
                 raise ValueError("frozen delivery requires a durable Git source revision")
         self._role_queue = role_queue
+        self._operator_principal = operator_principal or LocalOperatorPrincipal.trusted_local()
         self._config = config
         self._environment = dict(environment)
         self._organization = organization
@@ -507,12 +514,18 @@ class ProductionProjectDeliveryBackend:
             raise ValueError("native child Task has no durable Git source revision")
         return task.base_ref
 
+    def authorize_product_action(self) -> None:
+        """Trusted Host/Backend boundary; neither request nor model can supply duties."""
+        self._operator_principal.require_duty(OperatorDuty.PRODUCT)
+
     def start_product(
         self,
         delivery_id: str,
         preparation: PrepareProjectResult,
         command: StartProjectDelivery,
     ) -> ProductDiscoveryResult:
+        self.authorize_product_action()
+
         def execute() -> ProductDiscoveryResult:
             facts = self._facts(preparation)
             service = self._product_service(facts)
@@ -542,6 +555,8 @@ class ProductionProjectDeliveryBackend:
         checkpoint: ProjectDeliveryCheckpoint,
         command: ReplyToProduct,
     ) -> ProductDiscoveryResult:
+        self.authorize_product_action()
+
         def execute() -> ProductDiscoveryResult:
             facts = self._facts_for_checkpoint(checkpoint)
             service = self._product_service(facts)
@@ -572,6 +587,8 @@ class ProductionProjectDeliveryBackend:
         checkpoint: ProjectDeliveryCheckpoint,
         command: ApproveProductSpec,
     ) -> ProductDiscoveryResult:
+        self.authorize_product_action()
+
         def execute() -> ProductDiscoveryResult:
             facts = self._facts_for_checkpoint(checkpoint)
             assert checkpoint.request_id is not None
@@ -680,6 +697,13 @@ class ProductionProjectDeliveryBackend:
                 request_revisions=facts.product,
                 design_records=facts.design,
             )
+            from ai_software_engineer.multi_directory.production import DerivedStageInputs
+
+            projected_window = (
+                self._structured_clients.plan.execution_window
+                if isinstance(self._structured_clients, DerivedStageInputs)
+                else None
+            )
             return service.produce(
                 ProduceExecutionPlanCommand(
                     run_id=planner_run_id,
@@ -691,6 +715,16 @@ class ProductionProjectDeliveryBackend:
                     planning_authorization=authorization,
                     expected_execution_plan_version=1,
                     transitioned_at=transitioned_at,
+                    execution_window=(
+                        prior_run.execution_plan.execution_window
+                        if prior_run is not None
+                        and prior_run.outcome is PlannerRunOutcome.READY_FOR_DELIVERY
+                        and prior_run.execution_plan is not None
+                        else projected_window
+                        or PlanExecutionWindow.for_seconds(
+                            _delivery_timeout_seconds(AgentRole.CODER)
+                        )
+                    ),
                 )
             )
 
@@ -702,41 +736,48 @@ class ProductionProjectDeliveryBackend:
     def run_delivery(self, checkpoint: ProjectDeliveryCheckpoint) -> RetryResult:
         try:
             return self._guard("Delivery", lambda: self._run_delivery(checkpoint))
+        except DeliveryQueuePending as pending:
+            if checkpoint.task_id is None:
+                raise
+            raise DeliveryBackendPending(self._delivery_snapshot(checkpoint.task_id)) from pending
         except DeliveryBackendFailure as error:
             if checkpoint.task_id is None:
                 raise
-            repository = MySqlTaskRepository(self._dsn)
-            try:
-                task = repository.get(checkpoint.task_id)
-                events = repository.list_events(task.id)
-                revision = repository.current_revision(task.id)
-                if (
-                    revision != len(events)
-                    or repository.get(task.id) != task
-                    or repository.current_revision(task.id) != revision
-                    or (events and events[-1].to_status is not task.status)
-                ):
-                    raise ValueError("failure snapshot event revision mismatch")
-                candidate = next(
-                    (
-                        event.source_revision
-                        for event in reversed(events)
-                        if event.reason == "candidate_ready"
-                    ),
-                    None,
-                )
-                snapshot = DeliveryFailureSnapshot(
-                    task=task,
-                    task_revision=revision,
-                    candidate_revision=candidate,
-                )
-            finally:
-                repository.close()
+            snapshot = self._delivery_snapshot(checkpoint.task_id)
             raise DeliveryBackendFailure(
                 error.code,
                 error.safe_summary,
                 snapshot=snapshot,
             ) from error
+
+    def _delivery_snapshot(self, task_id: str) -> DeliveryFailureSnapshot:
+        repository = MySqlTaskRepository(self._dsn)
+        try:
+            task = repository.get(task_id)
+            events = repository.list_events(task.id)
+            revision = repository.current_revision(task.id)
+            if (
+                revision != len(events)
+                or repository.get(task.id) != task
+                or repository.current_revision(task.id) != revision
+                or (events and events[-1].to_status is not task.status)
+            ):
+                raise ValueError("delivery checkpoint snapshot event revision mismatch")
+            candidate = next(
+                (
+                    event.source_revision
+                    for event in reversed(events)
+                    if event.reason in {"candidate_ready", "candidate_recovered"}
+                ),
+                None,
+            )
+            return DeliveryFailureSnapshot(
+                task=task,
+                task_revision=revision,
+                candidate_revision=candidate,
+            )
+        finally:
+            repository.close()
 
     def reconcile(self, checkpoint: ProjectDeliveryCheckpoint) -> None:
         def execute() -> None:
@@ -870,7 +911,23 @@ class ProductionProjectDeliveryBackend:
         retry_policy = self._config.execution_retry_policy.delivery_policy()
         from ai_software_engineer.domain.continuation import InterruptionContinuationPolicy
 
-        interruption_policy = InterruptionContinuationPolicy()
+        interruption_policy = InterruptionContinuationPolicy.for_retry_budget(
+            max_work_attempts=retry_policy.max_work_attempts,
+            max_coder_transient_failures=retry_policy.transient_limit(AgentRole.CODER),
+        )
+        engineering_policy = (
+            EngineeringPolicy.bounded_local(
+                scope=EngineeringScope(
+                    team_id=self._config.team_id,
+                    project_id=facts.workspace.manifest.project_id,
+                    repository_id=facts.workspace.repository_id,
+                    repository_root=str(facts.workspace.repository_root),
+                ),
+                principal=self._operator_principal,
+            )
+            if OperatorDuty.ENGINEERING in self._operator_principal.duties
+            else None
+        )
         constraints = _task_constraints(
             facts.profile, design, max_attempts=retry_policy.execution_limit
         )
@@ -887,6 +944,7 @@ class ProductionProjectDeliveryBackend:
             max_attempts=retry_policy.execution_limit,
             retry_policy=retry_policy,
             interruption_continuation_policy=interruption_policy,
+            engineering_policy=engineering_policy,
             created_at=checkpoint.checkpointed_at,
             constraints=constraints,
             owner="project-manager",
@@ -981,6 +1039,7 @@ class ProductionProjectDeliveryBackend:
             max_attempts=retry_policy.execution_limit,
             retry_policy=retry_policy,
             interruption_continuation_policy=interruption_policy,
+            engineering_policy=engineering_policy,
             task_created_at=checkpoint.checkpointed_at,
             committed_at=checkpoint.checkpointed_at + timedelta(seconds=1),
             constraints=constraints,
@@ -1089,6 +1148,7 @@ class ProductionProjectDeliveryBackend:
         from ai_software_engineer.work_queue.worker import (
             AcceptedArtifactStore,
             QueuedDeliverySupervisor,
+            WorkerDeliveryFailureControl,
             WorkerExecutionGuard,
             WorkerKnowledgeWait,
         )
@@ -1127,9 +1187,74 @@ class ProductionProjectDeliveryBackend:
         )
         interruption_control = None
         active_runtime: RuntimeSession | None = None
+        from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
+        from ai_software_engineer.manager.execution_baseline import (
+            StoredCoderExecutionInputResolver,
+        )
+
+        baseline_inputs = StoredCoderExecutionInputResolver(
+            FileExecutionBaselineStore(
+                facts.workspace.directory("state") / "execution-baselines" / dispatch.task_id,
+            )
+        )
+
+        def current_task() -> Task:
+            if active_runtime is None:
+                raise ValueError("delivery runtime is not bound")
+            return active_runtime.task_repository.get(dispatch.task_id)
+
+        native_registry = None
         if isinstance(selected_adapters, ConfiguredDeliveryRouteAdapterFactory):
             selected_adapters = selected_adapters.with_execution_guard(worker_guard)
+            if baseline_inputs.store is not None and baseline_inputs.store.bindings_for_task(
+                dispatch.task_id
+            ):
+                from ai_software_engineer.git import GitWorktreeManager
+                from ai_software_engineer.manager.baseline_admission import (
+                    BaselineInitialWorkspaceAdmission,
+                )
+
+                selected_adapters = selected_adapters.with_initial_workspace_admission(
+                    BaselineInitialWorkspaceAdmission(
+                        inputs=baseline_inputs,
+                        task_reader=current_task,
+                        artifacts=accepted_artifacts,
+                        guard=worker_guard,
+                        git=GitWorktreeManager(
+                            facts.workspace.repository_root,
+                            Path(self._config.platform_root).expanduser().resolve()
+                            / "worktrees"
+                            / dispatch.repository_id,
+                            branch_names={dispatch.task_id: dispatch.task.branch_name},
+                        ),
+                    ),
+                )
+            if dispatch.task.engineering_policy is not None:
+                from ai_software_engineer.manager.native_verification_facts import (
+                    ProductionNativeVerificationFacts,
+                )
+
+                if requirement_id is None:
+                    raise ValueError("native verification requires a verified Requirement identity")
+                native_registry = self._native_verifier(
+                    facts,
+                    dispatch.task,
+                    requirement_id,
+                    inputs_reader=ProductionNativeVerificationFacts(
+                        task_reader=current_task,
+                        artifacts=accepted_artifacts,
+                        contexts=FileContextStore(paths.contexts),
+                        guard=worker_guard,
+                        definitions=definitions,
+                        worktrees_root=Path(self._config.platform_root).expanduser().resolve()
+                        / "worktrees",
+                        repository_id=dispatch.repository_id,
+                        inputs=baseline_inputs,
+                    ),
+                )
+                selected_adapters = selected_adapters.with_registered_verifier(native_registry)
             if dispatch.task.interruption_continuation_policy is not None:
+                from ai_software_engineer.agents.models import AgentRequest
                 from ai_software_engineer.git import GitWorktreeManager
                 from ai_software_engineer.orchestration.continuation import NativeCoderContinuation
                 from ai_software_engineer.orchestration.continuation_models import ContinuationScope
@@ -1141,11 +1266,6 @@ class ProductionProjectDeliveryBackend:
                 if requirement_id is None:
                     raise ValueError("continuation requires a verified native Requirement identity")
 
-                def current_task() -> Task:
-                    if active_runtime is None:
-                        raise ValueError("continuation runtime is not bound")
-                    return active_runtime.task_repository.get(dispatch.task_id)
-
                 def current_revision() -> int:
                     if active_runtime is None:
                         raise ValueError("continuation runtime is not bound")
@@ -1155,6 +1275,198 @@ class ProductionProjectDeliveryBackend:
                     worker_guard.check()
                     assert worker_guard.lease is not None
                     return worker_guard.lease.claim
+
+                def current_source_revision() -> str:
+                    if active_runtime is None:
+                        raise ValueError("continuation runtime is not bound")
+                    from ai_software_engineer.domain.artifact import CoderProgressArtifact
+                    from ai_software_engineer.orchestration.retry import _active_progress, _latest
+
+                    values = accepted_artifacts.list_for_task(dispatch.task_id)
+                    implementation = _latest(values, ImplementationReportArtifact)
+                    snapshot = current_task()
+                    source = baseline_inputs.current(
+                        snapshot, implementation=implementation, progress=None
+                    )
+                    progress = _latest(values, CoderProgressArtifact)
+                    current_implementation = implementation
+                    if source.baseline is not None:
+                        if (
+                            progress is not None
+                            and progress.artifact_id
+                            == source.baseline.superseded_progress_artifact_id
+                        ):
+                            progress = None
+                        if (
+                            current_implementation is not None
+                            and current_implementation.artifact_id
+                            == source.baseline.superseded_implementation_artifact_id
+                        ):
+                            current_implementation = None
+                    return baseline_inputs.current(
+                        snapshot,
+                        implementation=implementation,
+                        progress=_active_progress(
+                            progress, current_implementation, artifacts=values
+                        ),
+                    ).source_revision
+
+                def resolved_receipts() -> tuple[str, ...]:
+                    assert baseline_inputs.store is not None
+                    bindings = baseline_inputs.store.bindings_for_task(dispatch.task_id)
+                    return tuple(
+                        sorted(
+                            {
+                                identity
+                                for binding in bindings
+                                for identity in binding.resolved_interruption_receipt_sha256s
+                            }
+                        )
+                    )
+
+                def validate_active_request(request: AgentRequest) -> None:
+                    # Use the same persisted-artifact selectors as the serial
+                    # orchestrator. Feedback/progress are authority-bearing input,
+                    # never a reason to ban all prior role output.
+                    from ai_software_engineer.domain.artifact import (
+                        CoderProgressArtifact,
+                        ImplementationReportArtifact,
+                        PlanArtifact,
+                        QaReportArtifact,
+                        ReviewReportArtifact,
+                    )
+                    from ai_software_engineer.domain.coder_feedback import coder_feedback
+                    from ai_software_engineer.domain.coder_work import (
+                        CoderSliceRejected,
+                        select_coder_work_slice,
+                    )
+                    from ai_software_engineer.domain.enums import ArtifactKind
+                    from ai_software_engineer.orchestration.continuation_models import (
+                        ContinuationRejected,
+                    )
+                    from ai_software_engineer.orchestration.retry import _active_progress, _latest
+
+                    artifacts = accepted_artifacts.list_for_task(dispatch.task_id)
+                    selected_plan = _latest(artifacts, PlanArtifact)
+                    implementation = _latest(artifacts, ImplementationReportArtifact)
+                    snapshot = current_task()
+                    preliminary_source = baseline_inputs.current(
+                        snapshot, implementation=implementation, progress=None
+                    )
+                    selected_progress = _latest(artifacts, CoderProgressArtifact)
+                    current_implementation = implementation
+                    if preliminary_source.baseline is not None:
+                        baseline = preliminary_source.baseline
+                        if (
+                            selected_progress is not None
+                            and selected_progress.artifact_id
+                            == baseline.superseded_progress_artifact_id
+                        ):
+                            selected_progress = None
+                        if (
+                            current_implementation is not None
+                            and current_implementation.artifact_id
+                            == baseline.superseded_implementation_artifact_id
+                        ):
+                            current_implementation = None
+                    selected_progress = _active_progress(
+                        selected_progress, current_implementation, artifacts=artifacts
+                    )
+                    qa = _latest(artifacts, QaReportArtifact)
+                    review = _latest(artifacts, ReviewReportArtifact)
+                    if selected_plan is None:
+                        raise ContinuationRejected(
+                            "Coder continuation has no approved persisted plan"
+                        )
+                    inputs = (
+                        selected_plan,
+                        *coder_feedback(implementation, qa, review),
+                        *((selected_progress,) if selected_progress is not None else ()),
+                    )
+                    expected_supersedes = {
+                        ArtifactKind.CODER_PROGRESS: (
+                            selected_progress.artifact_id if selected_progress is not None else None
+                        ),
+                        ArtifactKind.IMPLEMENTATION_REPORT: (
+                            implementation.artifact_id if implementation is not None else None
+                        ),
+                    }
+                    expected_progress_paths = (
+                        tuple(sorted(item.path for item in selected_progress.content.changed_files))
+                        if selected_progress is not None
+                        else ()
+                    )
+                    snapshot = current_task()
+                    coder_source = baseline_inputs.current(
+                        snapshot,
+                        implementation=implementation,
+                        progress=selected_progress,
+                    )
+                    selected_progress = coder_source.active_progress
+                    expected_supersedes[ArtifactKind.CODER_PROGRESS] = (
+                        selected_progress.artifact_id
+                        if selected_progress is not None
+                        else coder_source.baseline.superseded_progress_artifact_id
+                        if coder_source.baseline is not None
+                        else None
+                    )
+                    inputs = (
+                        selected_plan,
+                        *coder_feedback(implementation, qa, review),
+                        *((selected_progress,) if selected_progress is not None else ()),
+                    )
+                    expected_progress_paths = (
+                        tuple(sorted(item.path for item in selected_progress.content.changed_files))
+                        if selected_progress is not None
+                        else ()
+                    )
+                    # The old sealed request is rechecked after atomic budget
+                    # reservation. Reconstruct only that prior execution identity;
+                    # an actual invocation always binds the current reservation.
+                    if request.attempt not in (snapshot.attempts, snapshot.attempts - 1):
+                        raise ContinuationRejected(
+                            "Coder slice has no current or sealed prior reservation"
+                        )
+                    slice_task = (
+                        snapshot
+                        if request.attempt == snapshot.attempts
+                        else snapshot.model_copy(update={"attempts": request.attempt})
+                    )
+                    try:
+                        expected_slice = select_coder_work_slice(
+                            slice_task,
+                            selected_plan,
+                            attempt=request.attempt,
+                            source_revision=request.source_revision,
+                            progress=selected_progress,
+                        )
+                    except CoderSliceRejected as error:
+                        raise ContinuationRejected(
+                            "Coder slice does not match current approved work"
+                        ) from error
+                    if (
+                        request.work_slice != expected_slice
+                        or request.execution_base_ref
+                        != (coder_source.execution_base_ref if coder_source.baseline else None)
+                        or request.execution_baseline_sha256
+                        != (coder_source.baseline.binding_sha256 if coder_source.baseline else None)
+                        or request.role is not AgentRole.CODER
+                        or request.task_id != dispatch.task_id
+                        or request.permissions != definitions[AgentRole.CODER].permissions
+                        or request.source_revision != current_source_revision()
+                        or request.input_artifact_ids != tuple(item.artifact_id for item in inputs)
+                        or request.expected_parent_artifact_ids
+                        != tuple(item.artifact_id for item in inputs)
+                        or request.expected_supersedes_by_kind != expected_supersedes
+                        or request.continuation_checkpoint_id
+                        != (
+                            selected_progress.artifact_id if selected_progress is not None else None
+                        )
+                        or request.continuation_changed_paths != expected_progress_paths
+                    ):
+                        raise ContinuationRejected(
+                            "Coder request changed current feedback or progress authority"
+                        )
 
                 continuation_root = facts.workspace.directory("state") / "continuations"
                 if any(
@@ -1188,6 +1500,14 @@ class ProductionProjectDeliveryBackend:
                         item.producer.role is not AgentRole.ORCHESTRATOR
                         for item in accepted_artifacts.list_for_task(dispatch.task_id)
                     ),
+                    has_accepted_output_for_request=lambda request: any(
+                        item.producer.run_id == request.run_id
+                        and item.context_manifest_id == request.context_manifest_id
+                        for item in accepted_artifacts.list_for_task(dispatch.task_id)
+                    ),
+                    current_source_revision=current_source_revision,
+                    validate_active_request=validate_active_request,
+                    resolved_interruption_receipts=resolved_receipts,
                     clock=lambda: datetime.now(UTC),
                 )
                 selected_adapters = selected_adapters.with_interruption_control(
@@ -1278,6 +1598,33 @@ class ProductionProjectDeliveryBackend:
                 )
                 if requirement_records.is_dir():
                     audit_stores.append(KnowledgeRecordStore(requirement_records))
+
+        def claimed_context() -> ContextSource:
+            worker_guard.check()
+            assert worker_guard.lease is not None
+            claim = worker_guard.lease.claim
+            return ContextSource(
+                source_id="execution.claim",
+                uri=f"claim://{claim.lease.id}",
+                content=json.dumps(
+                    {
+                        "task_id": claim.work_item.task_id,
+                        "work_item_id": claim.work_item.id,
+                        "lease_id": claim.lease.id,
+                        "assignment_id": claim.assignment.id,
+                        "dispatch_sequence": claim.work_item.dispatch_sequence,
+                        "role": claim.work_item.role.value,
+                        "attempt": claim.work_item.attempt,
+                        "checkpoint_sequence": claim.work_item.checkpoint_sequence,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                roles=(claim.work_item.role,),
+                priority=5,
+                required=True,
+            )
+
         run_contexts = FileRunContextBuilder(
             facts.workspace.repository_root,
             sources=(
@@ -1286,14 +1633,20 @@ class ProductionProjectDeliveryBackend:
                 else runtime_config.context_sources
             ),
             context_store=contexts,
+            claim_context=claimed_context,
             budget=ContextBudget(
                 max_input_tokens=runtime_config.context_max_input_tokens,
                 reserved_output_tokens=4_000,
             ),
         )
+        from ai_software_engineer.orchestration.execution_baseline import BaselineRunContextBuilder
+
+        baseline_contexts = BaselineRunContextBuilder(
+            run_contexts, contexts=contexts, resolver=baseline_inputs
+        )
         knowledge_contexts = (
             KnowledgeRunContextBuilder(
-                run_contexts,
+                baseline_contexts,
                 contexts=contexts,
                 clients=ConfiguredStructuredClientFactory(self._config, self._environment),
                 repository_root=facts.workspace.repository_root,
@@ -1305,14 +1658,57 @@ class ProductionProjectDeliveryBackend:
                 wait_port=WorkerKnowledgeWait(worker_guard, knowledge_records),
             )
             if isinstance(selected_adapters, ConfiguredDeliveryRouteAdapterFactory)
-            else run_contexts
+            else baseline_contexts
         )
+        failure_control = WorkerDeliveryFailureControl(worker_guard)
+        invocation_control = DurableInvocationControl(
+            KnowledgeRecordStore(facts.workspace.directory("state") / "invocations"),
+            worker_guard,
+        )
+        from ai_software_engineer.manager.preflight_gate import PreflightInvocationControl
+        from ai_software_engineer.work_queue.verification_reservation import (
+            QueuedVerificationReservation,
+        )
+
+        def inspect_preflight(task: Task, source: str) -> DeliveryPreflightReceipt | None:
+            if native_registry is None:
+                return None
+            from ai_software_engineer.orchestration.retry import _latest
+
+            selected_plan = _latest(accepted_artifacts.list_for_task(task.id), PlanArtifact)
+            if selected_plan is None:
+                raise ValueError("preflight requires the accepted Plan artifact")
+            return self._inspect_native_prerequisites(
+                facts,
+                task,
+                selected_plan,
+                definitions,
+                native_registry,
+                source,
+            )
+
         with RuntimeSession(
             runtime_config,
             environment=self._environment,
             agent_adapter=adapter,
             artifact_store=accepted_artifacts,
             interruption_control=interruption_control,
+            coder_execution_inputs=baseline_inputs,
+            verification_reservation=QueuedVerificationReservation(queue),
+            delivery_failure_control=failure_control,
+            invocation_control=PreflightInvocationControl(
+                delegate=invocation_control,
+                guard=worker_guard,
+                task_reader=current_task,
+                inspect=inspect_preflight,
+                records=KnowledgeRecordStore(
+                    facts.workspace.directory("state") / "delivery-preflight"
+                ),
+                failure_control=failure_control,
+                prepare_verifier=adapter.prepare_verifier,
+                observe_verifier=adapter.observe_verifier_preparation,
+                resumed_preparation=queue.preparation_resume_consumed,
+            ),
             agent_definitions=definitions,
             repository_root=facts.workspace.repository_root,
             context_builder=knowledge_contexts,
@@ -1343,10 +1739,129 @@ class ProductionProjectDeliveryBackend:
                 runtime,
                 dispatch.task_id,
                 terminal_result=lambda: _terminal_delivery_result(
-                    runtime.task_repository, accepted_artifacts, dispatch.task_id
+                    runtime.task_repository,
+                    accepted_artifacts,
+                    dispatch.task_id,
+                    coder_execution_inputs=baseline_inputs,
                 ),
                 close_worktrees=adapter.close_clean_worktrees,
             )
+
+    def _native_verifier(
+        self,
+        facts: _ProjectFacts,
+        task: Task,
+        requirement_id: str,
+        *,
+        inputs_reader: NativeRoleVerificationInputsReader | None = None,
+    ) -> RegisteredNativePythonVerifier:
+        from ai_software_engineer.manager.delivery_preflight import DeliveryPreflightScope
+        from ai_software_engineer.manager.native_verification import RegisteredNativePythonVerifier
+
+        if task.engineering_policy is None:
+            raise ValueError("native verifier requires frozen engineering authority")
+        return RegisteredNativePythonVerifier(
+            scope=DeliveryPreflightScope(
+                team_id=self._config.team_id,
+                project_id=facts.workspace.manifest.project_id,
+                repository_id=facts.workspace.repository_id,
+                requirement_id=requirement_id,
+            ),
+            engineering_scope=task.engineering_policy.scope,
+            repository_workspace_root=facts.workspace.root,
+            codex_executable=self._config.codex_executable,
+            inputs_reader=inputs_reader,
+        )
+
+    def _inspect_native_prerequisites(
+        self,
+        facts: _ProjectFacts,
+        task: Task,
+        plan: PlanArtifact,
+        definitions: Mapping[AgentRole, AgentDefinition],
+        registry: RegisteredNativePythonVerifier,
+        source: str,
+    ) -> DeliveryPreflightReceipt:
+        from ai_software_engineer.artifacts import artifact_digest
+        from ai_software_engineer.domain.native_verification import NativeVerificationWaiting
+        from ai_software_engineer.manager.delivery_preflight import inspect_delivery_prerequisites
+
+        discovery_failure = None
+        try:
+            capabilities = registry.discover(task, plan, registry.scope, source_revision=source)
+        except NativeVerificationWaiting as error:
+            discovery_failure = error.reason
+            capabilities = ()
+        if plan.content.verification_requirements is None:
+            raise ValueError(
+                "new engineering-policy Task requires planned verification requirements"
+            )
+        route_kinds: dict[AgentRole, Literal["codex_cli", "responses"]] = {
+            role: self._config.routes_for(team_role)[0].kind.value
+            for role, team_role in (
+                (AgentRole.QA, TeamRole.QA),
+                (AgentRole.REVIEWER, TeamRole.REVIEWER),
+            )
+        }
+        return inspect_delivery_prerequisites(
+            scope=registry.scope,
+            task=task,
+            plan_sha256=artifact_digest(plan),
+            requirements=plan.content.verification_requirements,
+            definitions=definitions,
+            route_kinds=route_kinds,
+            environment=self._environment,
+            controlled_capabilities=capabilities,
+            controlled_discovery_failure=discovery_failure,
+            checked_at=self._clock(),
+            source_revision=source,
+        )
+
+    def inspect_delivery_wait_prerequisites(
+        self,
+        task: Task,
+        step: QueuedRoleStep,
+        checkpoint: ProjectDeliveryCheckpoint,
+    ) -> DeliveryPreflightReceipt:
+        """Recheck current prerequisites using the same production executor registration."""
+        from ai_software_engineer.orchestration.retry import _latest
+        from ai_software_engineer.work_queue.worker import (
+            AcceptedArtifactStore,
+            WorkerExecutionGuard,
+        )
+
+        facts = self._facts_for_checkpoint(checkpoint)
+        authority = MySqlDispatchAuthority(
+            self._dsn,
+            request_revisions=facts.product,
+            planner_records=facts.planning,
+        )
+        dispatch = authority.get_allocation(cast(str, checkpoint.dispatch_commit_id))
+        if task.id != checkpoint.task_id or task.id != step.work_item.task_id:
+            raise ValueError("prerequisite investigation belongs to another native Task")
+        queue = self._role_queue
+        if queue is None:
+            from ai_software_engineer.manager.queue_capacity import production_role_queue
+
+            queue = production_role_queue(self._dsn)
+        artifacts = AcceptedArtifactStore(
+            FileArtifactStore(_runtime_paths(facts.workspace).artifacts),
+            queue,
+            task.id,
+            WorkerExecutionGuard(),
+        )
+        plan = _latest(artifacts.list_for_task(task.id), PlanArtifact)
+        if plan is None:
+            raise ValueError("prerequisite investigation has no accepted Plan")
+        registry = self._native_verifier(facts, task, checkpoint.delivery_id)
+        return self._inspect_native_prerequisites(
+            facts,
+            task,
+            plan,
+            _agent_definitions(dispatch, _task_commands(facts.profile)),
+            registry,
+            step.boundary.source_revision,
+        )
 
     def _facts(self, preparation: PrepareProjectResult) -> _ProjectFacts:
         if preparation.status is not PrepareProjectStatus.PREPARED:
@@ -1385,7 +1900,54 @@ class ProductionProjectDeliveryBackend:
             planning=FileExecutionPlanStore(state / "planning"),
         )
 
+    def _read_sealed_preparation(
+        self, checkpoint: ProjectDeliveryCheckpoint
+    ) -> PrepareProjectResult:
+        """Reopen original approved records; target/runtime upgrade is a separate operation."""
+        from ai_software_engineer.manager.sealed_preparation import load_sealed_preparation
+
+        checkpoint.validate_integrity()
+        if checkpoint.preparation_sha256 is None:
+            raise ValueError("需求缺少原始已批准准备记录")
+        repository_root = Path(checkpoint.repository_root)
+        workspace_root = self._registry.registry_root / checkpoint.repository_id
+        if any(path.is_symlink() for path in (workspace_root, *workspace_root.parents)):
+            raise ValueError("原始需求工作空间路径不安全")
+        # This is a read-only reopen, not register/prepare/discover. Missing
+        # sidecars cannot be recreated to manufacture an old approved context.
+        workspace = self._registry._open_existing(
+            checkpoint.repository_id,
+            repository_root,
+            workspace_root,
+        )
+        return load_sealed_preparation(
+            workspace, checkpoint.preparation_sha256, organization=self._organization
+        )
+
+    def _sealed_facts_for_checkpoint(self, checkpoint: ProjectDeliveryCheckpoint) -> _ProjectFacts:
+        return self._facts(self._read_sealed_preparation(checkpoint))
+
     def _facts_for_checkpoint(self, checkpoint: ProjectDeliveryCheckpoint) -> _ProjectFacts:
+        if checkpoint.task_id is not None:
+            from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
+
+            workspace = self._registry.register(
+                checkpoint.repository_root,
+                repository_id=checkpoint.repository_id,
+            )
+            baseline_root = (
+                workspace.directory("state") / "execution-baselines" / checkpoint.task_id
+            )
+            if baseline_root.is_dir():
+                bindings = FileExecutionBaselineStore(
+                    baseline_root, read_only=True
+                ).bindings_for_task(
+                    checkpoint.task_id,
+                )
+                if bindings:
+                    with closing(MySqlTaskRepository(self._dsn)) as repository:
+                        bindings[-1].require_task(repository.get(checkpoint.task_id))
+                    return self._sealed_facts_for_checkpoint(checkpoint)
         try:
             preparation = self.prepare(checkpoint.repository_root)
         except ProjectPreparationDrift as error:
@@ -1404,6 +1966,77 @@ class ProductionProjectDeliveryBackend:
                 else None,
             )
         return self._facts(preparation)
+
+    def execution_baseline_service(
+        self,
+        checkpoint: ProjectDeliveryCheckpoint,
+        *,
+        repository: MySqlTaskRepository,
+        project_id: str,
+    ) -> ExecutionBaselineService:
+        """Compose exact same-Task source recovery from frozen approved inputs."""
+        from ai_software_engineer.domain.engineering_authority import EngineeringScope
+        from ai_software_engineer.git import GitWorktreeManager
+        from ai_software_engineer.git.baseline import GitExecutionBaselineAdapter
+        from ai_software_engineer.manager.baseline_production import ProductionBaselineFactCollector
+        from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
+        from ai_software_engineer.manager.execution_baseline import (
+            ExecutionBaselineService,
+            StoredCoderExecutionInputResolver,
+        )
+        from ai_software_engineer.manager.queue_capacity import production_role_queue
+
+        facts = self._sealed_facts_for_checkpoint(checkpoint)
+        if checkpoint.task_id is None or checkpoint.dispatch_commit_id is None:
+            raise ValueError("需求尚无已批准的交付任务, 不能更新执行基线")
+        authority = MySqlDispatchAuthority(
+            self._dsn,
+            request_revisions=facts.product,
+            planner_records=facts.planning,
+        )
+        dispatch = authority.get_allocation(checkpoint.dispatch_commit_id)
+        task = repository.get(checkpoint.task_id)
+        if dispatch.task_id != task.id or facts.workspace.manifest.project_id != project_id:
+            raise ValueError("执行基线未绑定当前 Project 的原批准交付任务")
+        store = FileExecutionBaselineStore(
+            facts.workspace.directory("state") / "execution-baselines" / task.id,
+        )
+        queue = self._role_queue or production_role_queue(self._dsn)
+        manager = GitWorktreeManager(
+            facts.workspace.repository_root,
+            Path(self._config.platform_root).expanduser().resolve()
+            / "worktrees"
+            / dispatch.repository_id,
+            branch_names={task.id: task.branch_name},
+        )
+        collector = ProductionBaselineFactCollector(
+            allocation=dispatch,
+            scope=EngineeringScope(
+                team_id=self._config.team_id,
+                project_id=project_id,
+                repository_id=dispatch.repository_id,
+                repository_root=str(facts.workspace.repository_root),
+            ),
+            requirement_id=checkpoint.delivery_id,
+            repository=repository,
+            queue=queue,
+            artifacts=FileArtifactStore(facts.workspace.directory("artifacts"), read_only=True),
+            git=manager,
+            sidecar_state=facts.workspace.directory("state"),
+            locks_root=facts.workspace.directory("state") / "queue-worker-locks",
+            permissions=_agent_definitions(dispatch, _task_commands(facts.profile))[
+                AgentRole.CODER
+            ].permissions,
+            source_native_rules=facts.profile.native_rules,
+            runtime_manifest_sha256=digest(self._config.to_wire()),
+            inputs=StoredCoderExecutionInputResolver(store),
+        )
+        return ExecutionBaselineService(
+            store=store,
+            git=GitExecutionBaselineAdapter(manager),
+            facts=collector,
+            publish_completion=collector.publish_completion,
+        )
 
     def _product_service(self, facts: _ProjectFacts) -> ProductDiscoveryService:
         preparation = facts.preparation.preparation
@@ -1527,6 +2160,8 @@ def _terminal_delivery_result(
     repository: TaskRepository,
     artifacts: ArtifactStore,
     task_id: str,
+    *,
+    coder_execution_inputs: CoderExecutionInputResolver | None = None,
 ) -> RetryResult | None:
     """Rebuild a sealed runtime result after Task completion beat checkpointing.
 
@@ -1547,6 +2182,58 @@ def _terminal_delivery_result(
     ):
         raise ValueError("terminal Task event stream is inconsistent")
     event_ids = tuple(event.event_id for event in events)
+    if task.status is not TaskStatus.DONE:
+        from ai_software_engineer.artifacts.ordering import latest_accepted_artifact
+
+        accepted = artifacts.list_for_task(task.id)
+        if any(artifact.task_id != task.id for artifact in accepted):
+            raise ValueError("terminal accepted artifact history belongs to another Task")
+        retained_implementation = latest_accepted_artifact(accepted, ImplementationReportArtifact)
+        source = (
+            coder_execution_inputs.current(
+                task, implementation=retained_implementation, progress=None
+            )
+            if coder_execution_inputs is not None
+            else None
+        )
+        retained_candidate = None
+        if retained_implementation is not None and (
+            source is None
+            or source.baseline is None
+            or retained_implementation.artifact_id
+            != source.baseline.superseded_implementation_artifact_id
+        ):
+            if (
+                retained_implementation.source_revision
+                != retained_implementation.content.commit_sha
+                or {
+                    mapping.criterion_id
+                    for mapping in retained_implementation.content.acceptance_mapping
+                }
+                != {criterion.id for criterion in task.acceptance_criteria}
+            ):
+                raise ValueError(
+                    "terminal retained candidate has invalid source or acceptance coverage"
+                )
+            retained_candidate = retained_implementation.content.commit_sha
+        classification, reason = _terminal_failure_reason(events[-1].reason)
+        artifact_ids = tuple(
+            dict.fromkeys(
+                (
+                    *(artifact_id for event in events for artifact_id in event.artifact_ids),
+                    *(artifact.artifact_id for artifact in accepted),
+                )
+            )
+        )
+        return BlockedResult(
+            task=task,
+            classification=classification,
+            reason=reason,
+            attempt=max(task.attempts, 1),
+            artifact_ids=artifact_ids,
+            event_ids=event_ids,
+            candidate_revision=retained_candidate,
+        )
     candidate = next(
         (
             event.source_revision
@@ -1556,20 +2243,6 @@ def _terminal_delivery_result(
         ),
         None,
     )
-    if task.status is not TaskStatus.DONE:
-        classification, reason = _terminal_failure_reason(events[-1].reason)
-        artifact_ids = tuple(
-            dict.fromkeys(artifact_id for event in events for artifact_id in event.artifact_ids)
-        )
-        return BlockedResult(
-            task=task,
-            classification=classification,
-            reason=reason,
-            attempt=max(task.attempts, 1),
-            artifact_ids=artifact_ids,
-            event_ids=event_ids,
-            candidate_revision=candidate,
-        )
     if events[-1].reason != "review_approved" or len(events[-1].artifact_ids) != 4:
         raise ValueError("DONE Task has no complete review_approved artifact set")
     result_artifacts: tuple[Artifact, ...] = tuple(

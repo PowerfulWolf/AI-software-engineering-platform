@@ -11,6 +11,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from datetime import datetime
 from functools import wraps
 from pathlib import Path
 from typing import Literal, TypeVar, cast
@@ -19,6 +20,11 @@ from pydantic import TypeAdapter
 
 from ai_software_engineer.artifacts import artifact_digest
 from ai_software_engineer.domain.artifact import QaReportArtifact, ReviewReportArtifact
+from ai_software_engineer.domain.delivery_resolution import EngineeringDispositionRecord
+from ai_software_engineer.domain.engineering_authority import (
+    EngineeringAdmission,
+    EngineeringCapability,
+)
 from ai_software_engineer.domain.enums import (
     AgentRole,
     QaCriterionStatus,
@@ -90,11 +96,33 @@ _Record = TypeVar(
     RecoveryInterruptionPlan,
     RecoveryInterruptionInvocation,
     MysqlResourceRecord,
+    EngineeringAdmission,
+    EngineeringDispositionRecord,
 )
 
 
 class RecoveryRecordMissing(RecoveryRejected):
     """An exact plan or authorization has never been published."""
+
+
+def authority_sha256(record: RecoveryAuthorization | EngineeringAdmission) -> str:
+    return (
+        record.admission_sha256
+        if isinstance(record, EngineeringAdmission)
+        else record.authorization_sha256
+    )
+
+
+def authority_at(record: RecoveryAuthorization | EngineeringAdmission) -> datetime:
+    return (
+        record.admitted_at
+        if isinstance(record, EngineeringAdmission)
+        else record.decision.decided_at
+    )
+
+
+def authority_approved(record: RecoveryAuthorization | EngineeringAdmission) -> bool:
+    return isinstance(record, EngineeringAdmission) or record.decision.approved
 
 
 def _mysql_observation_matches(record: MysqlResourceRecord, created: MysqlResourceRecord) -> bool:
@@ -243,6 +271,119 @@ class FileRecoveryStore:
         plan.validate_integrity()
         self._validate_scope(plan)
         return self._put("plan", plan.plan_sha256, plan, RecoveryPlan)
+
+    def put_engineering_admission(self, record: EngineeringAdmission) -> EngineeringAdmission:
+        record.validate_integrity()
+        scope = record.policy.scope
+        if (
+            scope.team_id != self._scope.team_id
+            or scope.repository_id != self._scope.repository_id
+            or scope.repository_root != self._scope.repository_root
+        ):
+            raise RecoveryRejected("engineering admission scope mismatch")
+        return self._put("engineering-admission", record.plan_sha256, record, EngineeringAdmission)
+
+    def get_engineering_admission(self, plan_sha256: str) -> EngineeringAdmission:
+        record = self._get("engineering-admission", plan_sha256, EngineeringAdmission)
+        if record.plan_sha256 != plan_sha256:
+            raise RecoveryRejected("engineering admission identity mismatch")
+        scope = record.policy.scope
+        if (
+            scope.team_id != self._scope.team_id
+            or scope.repository_id != self._scope.repository_id
+            or scope.repository_root != self._scope.repository_root
+        ):
+            raise RecoveryRejected("engineering admission scope mismatch")
+        return record
+
+    def list_engineering_admissions(self) -> tuple[EngineeringAdmission, ...]:
+        with self._directory() as directory:
+            names = sorted(
+                name
+                for name in os.listdir(directory)
+                if name.startswith("engineering-admission-") and name.endswith(".json")
+            )
+        if len(names) > 100:
+            raise RecoveryRejected("engineering admission inventory exceeds budget bound")
+        return tuple(
+            self.get_engineering_admission(
+                name.removeprefix("engineering-admission-").removesuffix(".json")
+            )
+            for name in names
+        )
+
+    def put_engineering_disposition(
+        self,
+        record: EngineeringDispositionRecord,
+    ) -> EngineeringDispositionRecord:
+        record.validate_integrity()
+        if (
+            record.delivery_id != self._scope.delivery_id
+            or record.repository_root != self._scope.repository_root
+        ):
+            raise RecoveryRejected("engineering disposition scope mismatch")
+        return self._put(
+            "engineering-disposition", record.record_sha256, record, EngineeringDispositionRecord
+        )
+
+    def get_engineering_disposition(self, record_sha256: str) -> EngineeringDispositionRecord:
+        record = self._get("engineering-disposition", record_sha256, EngineeringDispositionRecord)
+        record.validate_integrity()
+        if (
+            record.record_sha256 != record_sha256
+            or record.delivery_id != self._scope.delivery_id
+            or record.repository_root != self._scope.repository_root
+        ):
+            raise RecoveryRejected("engineering disposition scope or identity mismatch")
+        return record
+
+    def list_engineering_dispositions(self) -> tuple[EngineeringDispositionRecord, ...]:
+        with self._directory() as directory:
+            names = sorted(
+                name
+                for name in os.listdir(directory)
+                if name.startswith("engineering-disposition-") and name.endswith(".json")
+            )
+        return tuple(
+            self.get_engineering_disposition(
+                name.removeprefix("engineering-disposition-").removesuffix(".json"),
+            )
+            for name in names
+        )
+
+    def get_verification_authority(
+        self, plan_sha256: str
+    ) -> RecoveryAuthorization | EngineeringAdmission:
+        try:
+            policy = self.get_engineering_admission(plan_sha256)
+        except RecoveryRecordMissing:
+            return self.get_verification_authorization(plan_sha256)
+        plan = self.get_verification_plan(plan_sha256)
+        if (
+            policy.task_id != plan.inputs.task_id
+            or policy.facts_sha256 != plan.plan_sha256
+            or policy.admitted_at < plan.created_at
+            or EngineeringCapability.VERIFICATION_REFRESH not in policy.capabilities
+        ):
+            raise RecoveryRejected("verification engineering authority differs from plan")
+        return policy
+
+    def get_repair_authority(
+        self, plan_sha256: str
+    ) -> RecoveryAuthorization | EngineeringAdmission:
+        try:
+            policy = self.get_engineering_admission(plan_sha256)
+        except RecoveryRecordMissing:
+            return self.get_repair_authorization(plan_sha256)
+        plan = self.get_repair_plan(plan_sha256)
+        if (
+            policy.task_id != plan.source_task_id
+            or policy.facts_sha256 != plan.plan_sha256
+            or policy.admitted_at < plan.created_at
+            or policy.capabilities != (EngineeringCapability.IN_SCOPE_PREREQUISITE_REPAIR,)
+        ):
+            raise RecoveryRejected("repair engineering authority differs from plan")
+        return policy
 
     def put_restart_plan(self, plan: PreExecutionRestartPlan) -> PreExecutionRestartPlan:
         plan.validate_integrity()
@@ -995,12 +1136,12 @@ class FileRecoveryStore:
     def _validate_verification_invocation(self, record: CandidateVerificationInvocation) -> None:
         record.validate_integrity()
         plan = self.get_verification_plan(record.plan_sha256)
-        authorization = self.get_verification_authorization(record.plan_sha256)
+        authorization = self.get_verification_authority(record.plan_sha256)
         definition = next(d for d in plan.definitions if d.role is record.request.role)
         if (
-            not authorization.decision.approved
-            or record.authorization_sha256 != authorization.authorization_sha256
-            or record.admitted_at < authorization.decision.decided_at
+            not authority_approved(authorization)
+            or record.authorization_sha256 != authority_sha256(authorization)
+            or record.admitted_at < authority_at(authorization)
             or record.request.task_id != plan.inputs.task_id
             or record.request.source_revision != plan.inputs.candidate_revision
             or record.request.permissions != definition.permissions
@@ -1055,8 +1196,8 @@ class FileRecoveryStore:
     def _validate_verification_completion(self, record: CandidateVerificationCompletion) -> None:
         record.validate_integrity()
         plan = self.get_verification_plan(record.plan_sha256)
-        authorization = self.get_verification_authorization(record.plan_sha256)
-        if record.authorization_sha256 != authorization.authorization_sha256:
+        authorization = self.get_verification_authority(record.plan_sha256)
+        if record.authorization_sha256 != authority_sha256(authorization):
             raise RecoveryRejected("completion authorization mismatch")
         reports: list[tuple[AgentRole, QaReportArtifact | ReviewReportArtifact, str | None]] = []
         if plan.reused_qa is not None:
@@ -1238,6 +1379,8 @@ class FileRecoveryStore:
             raise RecoveryRejected("invalid recovery record identity") from error
         if category not in (
             "scope",
+            "engineering-admission",
+            "engineering-disposition",
             "plan",
             "restart-plan",
             "restart-authorization",

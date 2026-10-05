@@ -3,7 +3,12 @@
   "$id": "https://ai-software-engineer.local/schemas/coder-output.schema.json",
   "title": "Coder run output",
   "oneOf": [
-    {"$ref": "coder-progress.schema.json"},
-    {"$ref": "implementation-report.schema.json"}
-  ]
+    {
+      "$ref": "coder-progress.schema.json"
+    },
+    {
+      "$ref": "implementation-report.schema.json"
+    }
+  ],
+  "$defs": {}
 }

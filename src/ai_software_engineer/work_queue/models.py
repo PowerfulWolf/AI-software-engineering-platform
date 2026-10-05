@@ -42,6 +42,14 @@ class QueuedWorkItem(WorkItem):
         if self.attempt < 1:
             raise ValueError("QueuedWorkItem attempt must be at least 1")
         ensure_unique(self.repository_scopes, "QueuedWorkItem repository_scopes")
+        if self.wait_disposition is not None:
+            facts = self.wait_disposition.facts
+            if (facts.work_item_id, facts.role, facts.checkpoint_sequence) != (
+                self.id,
+                self.role,
+                self.checkpoint_sequence,
+            ):
+                raise ValueError("wait disposition must bind the exact queued role checkpoint")
         if self.parent_work_item_id == self.id:
             raise ValueError("QueuedWorkItem cannot be its own parent")
         return self

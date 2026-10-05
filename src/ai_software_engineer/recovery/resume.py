@@ -3,14 +3,27 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Self
 
 from pydantic import model_validator
 
+from ai_software_engineer.agents.diagnostics import safe_diagnostic
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.domain import AgentRole, QaCriterionStatus, QaTestStatus, TaskStatus
+from ai_software_engineer.domain.continuation import task_intent_sha256
+from ai_software_engineer.domain.delivery_disposition import (
+    DeliveryFailureFacts,
+    decide_delivery_disposition,
+)
+from ai_software_engineer.domain.delivery_resolution import EngineeringDispositionRecord
+from ai_software_engineer.domain.engineering_authority import (
+    EngineeringCapability,
+    LocalOperatorPrincipal,
+    OperatorDuty,
+)
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.domain.prerequisite_repair import PrerequisiteRepairPlan
 from ai_software_engineer.knowledge.gaps import KnowledgeGap
@@ -22,6 +35,11 @@ from ai_software_engineer.manager.delivery import (
 from ai_software_engineer.manager.delivery_checkpoint import (
     DeliveryStage,
     ProjectDeliveryCheckpoint,
+)
+from ai_software_engineer.manager.engineering_authority import (
+    EngineeringAuthority,
+    EngineeringAuthorityRejected,
+    EngineeringRejectionKind,
 )
 from ai_software_engineer.manager.production_backend import (
     ProductionProjectDeliveryBackend,
@@ -47,10 +65,15 @@ from ai_software_engineer.recovery.models import (
     RecoveryScopeSupplement,
     VerificationExecutionBlocked,
     VerifiedRecoveryDecision,
+    digest,
 )
 from ai_software_engineer.recovery.remediation import CandidateRemediationService
 from ai_software_engineer.recovery.restart_records import PreExecutionRestartPlan
-from ai_software_engineer.recovery.store import FileRecoveryStore, RecoveryRecordMissing
+from ai_software_engineer.recovery.store import (
+    FileRecoveryStore,
+    RecoveryRecordMissing,
+    authority_approved,
+)
 from ai_software_engineer.recovery.verification_entry import CandidateVerificationEntry
 from ai_software_engineer.recovery.verification_native import (
     NativeCandidateSource,
@@ -96,6 +119,7 @@ class DeliveryResumeResult(DomainModel):
     prerequisite_repair_plan: PrerequisiteRepairPlan | None = None
     restart_plan: PreExecutionRestartPlan | None = None
     interruption_plan: RecoveryInterruptionPlan | None = None
+    engineering_disposition: EngineeringDispositionRecord | None = None
 
 
 class JointDeliveryResumeResult(JointDeliveryResult):
@@ -138,6 +162,8 @@ class DeliveryResumeController:
         entry: UnifiedProjectEntryService,
         recovery: NativeRecoveryEntry,
         verification: CandidateVerificationEntry,
+        engineering_authority: EngineeringAuthority | None = None,
+        operator_principal: LocalOperatorPrincipal | None = None,
     ) -> None:
         self._config = config
         self._environment = dict(environment)
@@ -145,8 +171,19 @@ class DeliveryResumeController:
         self._entry = entry
         self._recovery = recovery
         self._verification = verification
+        self._engineering_authority = engineering_authority
+        self._operator_principal = operator_principal
 
     def resume(self, command: ResumeProjectDelivery) -> DeliveryResumeResult:
+        if self._operator_principal is not None and any(
+            value is not None
+            for value in (
+                command.approved_plan_sha256,
+                command.approved_scope_sha256,
+                command.approved_repair_sha256,
+            )
+        ):
+            self._operator_principal.require_duty(OperatorDuty.ENGINEERING)
         status = self._entry.status(command.delivery_id)
         current = status.checkpoint
         diagnostic = getattr(status, "diagnostic", None)
@@ -349,20 +386,20 @@ class DeliveryResumeController:
         if coordinated is not None:
             return coordinated
         try:
-            authorization = store.get_verification_authorization(plan.plan_sha256)
+            authorization = store.get_verification_authority(plan.plan_sha256)
         except RecoveryRecordMissing:
             authorization = None
         if command.approved_plan_sha256 is not None:
             if command.approved_plan_sha256 != plan.plan_sha256:
-                return self._approval_required(current, plan, path)
+                return self._manual_approval_required(current, plan, path)
             assert command.approval_reference is not None
             self._verification.approve(
                 path,
                 confirmed_plan=command.approved_plan_sha256,
                 reference=command.approval_reference,
             )
-            authorization = store.get_verification_authorization(plan.plan_sha256)
-        if authorization is None or not authorization.decision.approved:
+            authorization = store.get_verification_authority(plan.plan_sha256)
+        if authorization is None or not authority_approved(authorization):
             return self._approval_required(current, plan, path)
 
         try:
@@ -613,6 +650,27 @@ class DeliveryResumeController:
             repair = store.put_repair_plan(
                 repair.model_copy(update={"plan_sha256": repair.recompute_sha256()})
             )
+            if self._engineering_authority is not None and source.runtime.task.engineering_policy:
+                try:
+                    self._engineering_authority.require_in_scope_repair(source.runtime.task, repair)
+                    self._engineering_authority.admit(
+                        task=source.runtime.task,
+                        store=store,
+                        plan_sha256=repair.plan_sha256,
+                        facts_sha256=repair.plan_sha256,
+                        capabilities=(EngineeringCapability.IN_SCOPE_PREREQUISITE_REPAIR,),
+                        at=command.submitted_at,
+                    )
+                except RecoveryRejected as error:
+                    return self._engineering_wait(
+                        current,
+                        error,
+                        source=source,
+                        store=store,
+                        plan_sha256=repair.plan_sha256,
+                        role=AgentRole.CODER,
+                    )
+                return self._run_remediation(source_plan, completion, store, repair)
             return DeliveryResumeResult(
                 outcome=DeliveryResumeOutcome.REPAIR_APPROVAL_REQUIRED,
                 checkpoint=current,
@@ -652,7 +710,11 @@ class DeliveryResumeController:
                         plan_sha256=repair.plan_sha256,
                         approval_reference=command.approval_reference,
                         approved=True,
-                        operator_id="console-operator",
+                        operator_id=(
+                            self._operator_principal.operator_id
+                            if self._operator_principal
+                            else "console-operator"
+                        ),
                         rationale="Approved source-changing prerequisite repair, not a QA verdict",
                         decided_at=command.submitted_at,
                     ),
@@ -679,7 +741,10 @@ class DeliveryResumeController:
         # The native entry retains its frozen source. A new exact restart plan
         # must inspect the current target, as recovery and verification already do.
         service = PreExecutionRestartService(
-            self._config, self._environment, self._verification.backend
+            self._config,
+            self._environment,
+            self._verification.backend,
+            operator_principal=self._operator_principal,
         )
         try:
             proposal = service.propose(current)
@@ -940,8 +1005,121 @@ class DeliveryResumeController:
             return True
         return False
 
-    @staticmethod
     def _approval_required(
+        self,
+        current: ProjectDeliveryCheckpoint,
+        plan: CandidateVerificationPlan,
+        path: Path,
+        *,
+        completion: CandidateVerificationCompletion | None = None,
+    ) -> DeliveryResumeResult:
+        if self._engineering_authority is not None:
+            try:
+                admission = self._verification.authorize_policy(path)
+                if admission is not None:
+                    verified = self._verification.execute(path)
+                    return self._continue_completion(plan, verified)
+            except (RecoveryRejected, VerificationExecutionBlocked) as error:
+                store, _ = self._verification.open_plan(path)
+                source = self._native_source(plan)
+                return self._engineering_wait(
+                    current,
+                    error,
+                    source=source,
+                    store=store,
+                    plan_sha256=plan.plan_sha256,
+                    role=AgentRole.REVIEWER if plan.reused_qa is not None else AgentRole.QA,
+                )
+        return self._manual_approval_required(current, plan, path, completion=completion)
+
+    def _engineering_wait(
+        self,
+        current: ProjectDeliveryCheckpoint,
+        error: Exception,
+        *,
+        source: NativeCandidateSource,
+        store: FileRecoveryStore,
+        plan_sha256: str,
+        role: AgentRole,
+    ) -> DeliveryResumeResult:
+        classification = "EXECUTION_UNCERTAIN"
+        rejection_code = "UNVERIFIED_RECOVERY_FACTS"
+        budget_available = True
+        if isinstance(error, EngineeringAuthorityRejected):
+            rejection_code = error.kind.value
+            classification = {
+                EngineeringRejectionKind.LEGACY_AUTHORITY: "ENGINEERING_AUTHORIZATION",
+                EngineeringRejectionKind.FROZEN_INPUT_CHANGED: "SOURCE_PREPARATION_DRIFT",
+                EngineeringRejectionKind.CAPABILITY_UNAVAILABLE: "ENGINEERING_AUTHORIZATION",
+                EngineeringRejectionKind.BUDGET_EXHAUSTED: "BUDGET_EXHAUSTED",
+                EngineeringRejectionKind.SCOPE_CHANGE: "ENGINEERING_AUTHORIZATION",
+            }[error.kind]
+            budget_available = error.kind is not EngineeringRejectionKind.BUDGET_EXHAUSTED
+        elif isinstance(error, VerificationExecutionBlocked):
+            classification = "ENVIRONMENT_UNAVAILABLE"
+            rejection_code = "VERIFICATION_EXECUTION_BLOCKED"
+        task = source.runtime.task
+        if (
+            current.task_id != task.id
+            or current.repository_root != task.repository
+            or source.scope != store._scope
+        ):
+            raise RecoveryRejected("工程处置未绑定当前原任务和恢复作用域")
+        facts = DeliveryFailureFacts.model_validate(
+            {
+                "task_id": task.id,
+                "role": role,
+                "work_item_id": None,
+                "classification": classification,
+                "source_revision": source.inputs.candidate_revision,
+                "task_intent_sha256": task_intent_sha256(task),
+                "checkpoint_sequence": source.inputs.task_revision,
+                "budget_available": budget_available,
+                "evidence_ids": ("engineering-plan://" + plan_sha256,),
+            }
+        )
+        detail = {
+            "LEGACY_AUTHORITY": "旧任务没有冻结工程预授权, 不能追溯授予自动恢复权限。",
+            "FROZEN_INPUT_CHANGED": "任务或仓库工程输入发生变化, 原授权不能接纳新事实。",
+            "CAPABILITY_UNAVAILABLE": "所需执行能力尚未注册或授权, 需工程负责人核验。",
+            "BUDGET_EXHAUSTED": "工程动作额度已耗尽, 需资源授权者决定后续处置。",
+            "SCOPE_CHANGE": "修复涉及原写入范围之外的路径, 需核验精确工程范围。",
+            "VERIFICATION_EXECUTION_BLOCKED": "独立验证的环境或执行前提尚未满足。",
+            "UNVERIFIED_RECOVERY_FACTS": "恢复事实无法安全核验, 需工程负责人调查原执行和证据。",
+        }[rejection_code]
+        disposition = decide_delivery_disposition(facts).model_copy(update={"detail": detail})
+        record = EngineeringDispositionRecord.model_validate(
+            {
+                "delivery_id": current.delivery_id,
+                "native_checkpoint_sha256": current.checkpoint_sha256,
+                "source_task_id": task.id,
+                "source_task_status": task.status,
+                "source_task_snapshot_sha256": digest(task.to_wire()),
+                "repository_root": task.repository,
+                "plan_sha256": plan_sha256,
+                "rejection_code": rejection_code,
+                "source_diagnostic": safe_diagnostic(str(error)),
+                "disposition": disposition.to_wire(),
+                "recorded_at": datetime.now(UTC),
+                "record_sha256": "0" * 64,
+            }
+        )
+        sealed = store.put_engineering_disposition(
+            record.model_copy(
+                update={
+                    "record_sha256": record.recompute_sha256(),
+                }
+            )
+        )
+        return DeliveryResumeResult(
+            outcome=DeliveryResumeOutcome.WAITING_HUMAN,
+            checkpoint=current,
+            next_action=disposition.next_action,
+            engineering_disposition=sealed,
+        )
+
+    @staticmethod
+    def _manual_approval_required(
         current: ProjectDeliveryCheckpoint,
         plan: CandidateVerificationPlan,
         path: Path,

@@ -38,6 +38,10 @@ from ai_software_engineer.domain import (
     TechnicalDesign,
 )
 from ai_software_engineer.domain.branch import BRANCH_NAMING_INSTRUCTIONS, BranchName
+from ai_software_engineer.domain.execution_window import (
+    PlanExecutionWindow,
+    PlannedVerificationInspection,
+)
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.domain.project_delivery import (
     DesignComplexityFacts,
@@ -134,6 +138,18 @@ class AcceptanceMappingDraft(DomainModel):
     acceptance_criterion_id: NonEmptyStr
     verification_strategy: NonEmptyStr
     test_levels: Annotated[tuple[NonEmptyStr, ...], Field(min_length=1)]
+    verification_argv: tuple[NonEmptyStr, ...] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    verification_inspection: PlannedVerificationInspection | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    planned_test_files: tuple[NonEmptyStr, ...] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    controlled_capability_kind: NonEmptyStr | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 class DesignStepDraft(DomainModel):
@@ -170,6 +186,9 @@ class PhaseDraft(DomainModel):
 
 
 class ExecutionPlanDraft(DomainModel):
+    execution_window: PlanExecutionWindow | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     phases: Annotated[tuple[PhaseDraft, ...], Field(min_length=3, max_length=3)]
     work_graph: PlanWorkGraph | None = None
     revision_feedback: PlanRevisionFeedback | None = None
@@ -260,7 +279,11 @@ class StructuredDesignerAgentAdapter(DesignerAgentAdapter):
                     "component scope. Supply complexity_facts for migrations, interface "
                     "compatibility, backfill, security, performance, concurrency, dependencies "
                     "and integration groups. "
-                    "These are facts, not a routing decision; Manager owns planning classification."
+                    "These are facts; Manager owns planning classification. "
+                    "For each acceptance mapping provide exact incremental verification_argv "
+                    "or typed verification_inspection with exact paths and canonical test_levels. "
+                    "Do not claim an executor exists. Unit/integration/e2e need executable tests. "
+                    "Declare planned new tests; never select a full test directory or inline code."
                 ),
                 input_payload=cast(dict[str, object], request.context.to_wire()),
                 output_schema=TechnicalDesignDraft.model_json_schema(),
@@ -423,6 +446,10 @@ def _technical_design(
                 acceptance_criterion_id=item.acceptance_criterion_id,
                 verification_strategy=item.verification_strategy,
                 test_levels=item.test_levels,
+                verification_argv=item.verification_argv,
+                verification_inspection=item.verification_inspection,
+                planned_test_files=item.planned_test_files,
+                controlled_capability_kind=item.controlled_capability_kind,
             )
             for item in draft.acceptance_mappings
         ),
@@ -450,6 +477,11 @@ def _technical_design(
 
 
 def _execution_plan(request: PlannerAgentRequest, draft: ExecutionPlanDraft) -> ExecutionPlan:
+    if (
+        draft.execution_window is not None
+        and draft.execution_window != request.context.execution_window
+    ):
+        raise ValueError("Planner cannot change the trusted frozen execution window")
     phases = tuple(
         PlanPhaseDemand(
             id=f"phase_{item.role}_{index:03d}",
@@ -469,6 +501,7 @@ def _execution_plan(request: PlannerAgentRequest, draft: ExecutionPlanDraft) -> 
         version=request.context.expected_execution_plan_version,
         phases=phases,
         work_graph=draft.work_graph,
+        execution_window=request.context.execution_window,
         revision_feedback=draft.revision_feedback,
         created_at=request.context.built_at,
     )

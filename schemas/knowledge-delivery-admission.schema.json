@@ -37,5 +37,6 @@
     "legacy_artifact_digests"
   ],
   "title": "DeliveryWorkflowAdmission",
-  "type": "object"
+  "type": "object",
+  "$defs": {}
 }

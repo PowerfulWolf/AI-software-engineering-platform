@@ -1,0 +1,1592 @@
+{
+  "$defs": {
+    "AcceptanceCriterion": {
+      "additionalProperties": false,
+      "description": "One independently verifiable condition for Task delivery.",
+      "properties": {
+        "id": {
+          "pattern": "^ac_[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "required": {
+          "title": "Required",
+          "type": "boolean"
+        },
+        "verification": {
+          "minLength": 1,
+          "title": "Verification",
+          "type": "string"
+        },
+        "test_ids": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Test Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "description",
+        "required",
+        "verification"
+      ],
+      "title": "AcceptanceCriterion",
+      "type": "object"
+    },
+    "AgentPermissions": {
+      "additionalProperties": false,
+      "description": "The executable path, command, network, and state capabilities of an Agent.",
+      "properties": {
+        "read_paths": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Read Paths",
+          "type": "array"
+        },
+        "write_paths": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Write Paths",
+          "type": "array"
+        },
+        "commands": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Commands",
+          "type": "array"
+        },
+        "network": {
+          "$ref": "#/$defs/NetworkAccess"
+        },
+        "can_change_state": {
+          "default": false,
+          "title": "Can Change State",
+          "type": "boolean"
+        },
+        "can_merge": {
+          "default": false,
+          "title": "Can Merge",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "read_paths",
+        "write_paths",
+        "commands",
+        "network"
+      ],
+      "title": "AgentPermissions",
+      "type": "object"
+    },
+    "BaselineExecutionFacts": {
+      "additionalProperties": false,
+      "description": "Trusted collector output, never accepted from an API/model request body.",
+      "properties": {
+        "task": {
+          "$ref": "#/$defs/Task"
+        },
+        "scope": {
+          "$ref": "#/$defs/EngineeringScope"
+        },
+        "task_revision": {
+          "minimum": 1,
+          "title": "Task Revision",
+          "type": "integer"
+        },
+        "work_item_id": {
+          "minLength": 1,
+          "title": "Work Item Id",
+          "type": "string"
+        },
+        "checkpoint_sequence": {
+          "minimum": 0,
+          "title": "Checkpoint Sequence",
+          "type": "integer"
+        },
+        "quiescence_proof_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Quiescence Proof Sha256",
+          "type": "string"
+        },
+        "runtime_manifest_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Runtime Manifest Sha256",
+          "type": "string"
+        },
+        "source_native_rules_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Source Native Rules Sha256",
+          "type": "string"
+        },
+        "target_native_rules_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Target Native Rules Sha256",
+          "type": "string"
+        },
+        "source_artifact_ids": {
+          "items": {
+            "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+            "type": "string"
+          },
+          "title": "Source Artifact Ids",
+          "type": "array"
+        },
+        "implementation_artifact_id": {
+          "anyOf": [
+            {
+              "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Implementation Artifact Id"
+        },
+        "progress_artifact_id": {
+          "anyOf": [
+            {
+              "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Progress Artifact Id"
+        },
+        "resolved_interruption_receipt_sha256s": {
+          "default": [],
+          "items": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "title": "Resolved Interruption Receipt Sha256S",
+          "type": "array"
+        },
+        "continuation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BaselineExecutionReservation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "permissions": {
+          "$ref": "#/$defs/AgentPermissions"
+        },
+        "denied_paths": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Denied Paths",
+          "type": "array"
+        },
+        "facts_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Facts Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task",
+        "scope",
+        "task_revision",
+        "work_item_id",
+        "checkpoint_sequence",
+        "quiescence_proof_sha256",
+        "runtime_manifest_sha256",
+        "source_native_rules_sha256",
+        "target_native_rules_sha256",
+        "source_artifact_ids",
+        "permissions",
+        "denied_paths",
+        "facts_sha256"
+      ],
+      "title": "BaselineExecutionFacts",
+      "type": "object"
+    },
+    "BaselineExecutionReservation": {
+      "additionalProperties": false,
+      "description": "Exact current-call accounting, consumed only by the fenced queue service.",
+      "properties": {
+        "current_attempt": {
+          "maximum": 400,
+          "minimum": 1,
+          "title": "Current Attempt",
+          "type": "integer"
+        },
+        "next_execution_attempt": {
+          "maximum": 400,
+          "minimum": 1,
+          "title": "Next Execution Attempt",
+          "type": "integer"
+        },
+        "retry_cause": {
+          "enum": [
+            "uninvoked",
+            "local_execution_limit",
+            "provider_transient"
+          ],
+          "title": "Retry Cause",
+          "type": "string"
+        },
+        "original_run_id": {
+          "anyOf": [
+            {
+              "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Original Run Id"
+        },
+        "current_invocation_start_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Current Invocation Start Sha256"
+        },
+        "current_invocation_outcome_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Current Invocation Outcome Sha256"
+        },
+        "interruption_receipt_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Interruption Receipt Sha256"
+        },
+        "retry_failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DeliveryRetryFailure"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "reservation_already_applied": {
+          "default": false,
+          "title": "Reservation Already Applied",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "current_attempt",
+        "next_execution_attempt",
+        "retry_cause"
+      ],
+      "title": "BaselineExecutionReservation",
+      "type": "object"
+    },
+    "BaselineInputMode": {
+      "enum": [
+        "preserve_draft",
+        "coder_reapply"
+      ],
+      "title": "BaselineInputMode",
+      "type": "string"
+    },
+    "CapturedMutation": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "minLength": 1,
+          "pattern": "^[^\\x00-\\x1f]+$",
+          "title": "Path",
+          "type": "string"
+        },
+        "before": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CapturedMutationBody"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "after": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CapturedMutationBody"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "CapturedMutation",
+      "type": "object"
+    },
+    "CapturedMutationBody": {
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "maxLength": 1000000,
+          "title": "Text",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            420,
+            493
+          ],
+          "title": "Mode",
+          "type": "integer"
+        },
+        "size": {
+          "maximum": 1000000,
+          "minimum": 0,
+          "title": "Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "text",
+        "sha256",
+        "mode",
+        "size"
+      ],
+      "title": "CapturedMutationBody",
+      "type": "object"
+    },
+    "CapturedMutations": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "captured_mutations",
+          "default": "captured_mutations",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v2",
+          "default": "v2",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "attempt": {
+          "const": 1,
+          "default": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "source_revision": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "worktree_path": {
+          "pattern": "^/[^\\x00-\\x1f]*$",
+          "title": "Worktree Path",
+          "type": "string"
+        },
+        "patch": {
+          "maxLength": 1000000,
+          "title": "Patch",
+          "type": "string"
+        },
+        "index_diff_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Index Diff Sha256",
+          "type": "string"
+        },
+        "mutations": {
+          "items": {
+            "$ref": "#/$defs/CapturedMutation"
+          },
+          "maxItems": 256,
+          "title": "Mutations",
+          "type": "array"
+        },
+        "capture_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Capture Sha256",
+          "type": "string"
+        },
+        "base_revision": {
+          "anyOf": [
+            {
+              "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Revision"
+        },
+        "branch_name": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 11,
+              "pattern": "^ai/(feature|bugfix)/[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Branch Name"
+        }
+      },
+      "required": [
+        "task_id",
+        "source_revision",
+        "worktree_path",
+        "patch",
+        "index_diff_sha256",
+        "mutations",
+        "capture_sha256"
+      ],
+      "title": "CapturedMutations",
+      "type": "object"
+    },
+    "DeliveryRetryFailure": {
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "enum": [
+            "coder",
+            "qa",
+            "reviewer"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "attempt": {
+          "maximum": 400,
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "code": {
+          "enum": [
+            "TIMEOUT",
+            "QUOTA_EXHAUSTED",
+            "RATE_LIMITED",
+            "PROVIDER_UNAVAILABLE"
+          ],
+          "title": "Code",
+          "type": "string"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "pattern": "^run_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Run Id"
+        }
+      },
+      "required": [
+        "role",
+        "attempt",
+        "code"
+      ],
+      "title": "DeliveryRetryFailure",
+      "type": "object"
+    },
+    "DeliveryRetryPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "max_work_attempts": {
+          "default": 3,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Work Attempts",
+          "type": "integer"
+        },
+        "coder": {
+          "$ref": "#/$defs/TransientRetryPolicy",
+          "default": {
+            "max_transient_failures": 5
+          }
+        },
+        "qa": {
+          "$ref": "#/$defs/TransientRetryPolicy",
+          "default": {
+            "max_transient_failures": 5
+          }
+        },
+        "reviewer": {
+          "$ref": "#/$defs/TransientRetryPolicy",
+          "default": {
+            "max_transient_failures": 5
+          }
+        }
+      },
+      "title": "DeliveryRetryPolicy",
+      "type": "object"
+    },
+    "EngineeringCapability": {
+      "enum": [
+        "verification_refresh",
+        "swift_sandbox",
+        "python_mysql_sandbox",
+        "native_ui_sandbox",
+        "in_scope_prerequisite_repair",
+        "pre_execution_rebind",
+        "execution_baseline_rebind",
+        "owned_mysql_cleanup"
+      ],
+      "title": "EngineeringCapability",
+      "type": "string"
+    },
+    "EngineeringGrant": {
+      "additionalProperties": false,
+      "properties": {
+        "capability": {
+          "$ref": "#/$defs/EngineeringCapability"
+        },
+        "max_admissions": {
+          "maximum": 20,
+          "minimum": 1,
+          "title": "Max Admissions",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "capability",
+        "max_admissions"
+      ],
+      "title": "EngineeringGrant",
+      "type": "object"
+    },
+    "EngineeringPolicy": {
+      "additionalProperties": false,
+      "description": "Versioned organization decision frozen only on newly admitted Tasks.",
+      "properties": {
+        "kind": {
+          "const": "engineering_policy",
+          "default": "engineering_policy",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "policy_id": {
+          "default": "local-bounded-engineering-v1",
+          "minLength": 1,
+          "title": "Policy Id",
+          "type": "string"
+        },
+        "policy_version": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Policy Version",
+          "type": "integer"
+        },
+        "authorization_source": {
+          "const": "organization_engineering_policy",
+          "default": "organization_engineering_policy",
+          "title": "Authorization Source",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/EngineeringScope"
+        },
+        "issued_by": {
+          "$ref": "#/$defs/LocalOperatorPrincipal"
+        },
+        "grants": {
+          "items": {
+            "$ref": "#/$defs/EngineeringGrant"
+          },
+          "minItems": 1,
+          "title": "Grants",
+          "type": "array"
+        },
+        "max_total_admissions": {
+          "default": 12,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Total Admissions",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "scope",
+        "issued_by",
+        "grants"
+      ],
+      "title": "EngineeringPolicy",
+      "type": "object"
+    },
+    "EngineeringScope": {
+      "additionalProperties": false,
+      "properties": {
+        "team_id": {
+          "minLength": 1,
+          "title": "Team Id",
+          "type": "string"
+        },
+        "project_id": {
+          "minLength": 1,
+          "title": "Project Id",
+          "type": "string"
+        },
+        "repository_id": {
+          "minLength": 1,
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "repository_root": {
+          "minLength": 1,
+          "title": "Repository Root",
+          "type": "string"
+        }
+      },
+      "required": [
+        "team_id",
+        "project_id",
+        "repository_id",
+        "repository_root"
+      ],
+      "title": "EngineeringScope",
+      "type": "object"
+    },
+    "ExecutionBaselineBinding": {
+      "additionalProperties": false,
+      "description": "One completed source rebind, never a role verdict or a new Product approval.",
+      "properties": {
+        "kind": {
+          "const": "execution_baseline_binding",
+          "default": "execution_baseline_binding",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/EngineeringScope"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "task_intent_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Task Intent Sha256",
+          "type": "string"
+        },
+        "sequence": {
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Sequence",
+          "type": "integer"
+        },
+        "previous_binding_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Previous Binding Sha256"
+        },
+        "approved_base_ref": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Approved Base Ref",
+          "type": "string"
+        },
+        "branch_name": {
+          "maxLength": 240,
+          "minLength": 11,
+          "pattern": "^ai/(feature|bugfix)/[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+          "title": "Branch Name",
+          "type": "string"
+        },
+        "worktree_path": {
+          "minLength": 1,
+          "title": "Worktree Path",
+          "type": "string"
+        },
+        "prior_execution_base_ref": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Prior Execution Base Ref",
+          "type": "string"
+        },
+        "prior_source_revision": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Prior Source Revision",
+          "type": "string"
+        },
+        "execution_base_ref": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Execution Base Ref",
+          "type": "string"
+        },
+        "execution_source_revision": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Execution Source Revision",
+          "type": "string"
+        },
+        "input_mode": {
+          "$ref": "#/$defs/BaselineInputMode"
+        },
+        "superseded_implementation_artifact_id": {
+          "anyOf": [
+            {
+              "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Superseded Implementation Artifact Id"
+        },
+        "superseded_progress_artifact_id": {
+          "anyOf": [
+            {
+              "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Superseded Progress Artifact Id"
+        },
+        "source_artifact_ids": {
+          "items": {
+            "pattern": "^art_[a-z0-9][a-z0-9_-]{2,63}$",
+            "type": "string"
+          },
+          "title": "Source Artifact Ids",
+          "type": "array"
+        },
+        "resolved_interruption_receipt_sha256s": {
+          "default": [],
+          "items": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "title": "Resolved Interruption Receipt Sha256S",
+          "type": "array"
+        },
+        "retained_patch": {
+          "$ref": "#/$defs/RetainedExecutionPatch"
+        },
+        "authority_source": {
+          "enum": [
+            "organization_engineering_policy",
+            "engineering_operator_decision"
+          ],
+          "title": "Authority Source",
+          "type": "string"
+        },
+        "authority_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Authority Sha256",
+          "type": "string"
+        },
+        "plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "facts_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Facts Sha256",
+          "type": "string"
+        },
+        "prior_task_revision": {
+          "minimum": 1,
+          "title": "Prior Task Revision",
+          "type": "integer"
+        },
+        "before_inventory_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Before Inventory Sha256",
+          "type": "string"
+        },
+        "after_inventory_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "After Inventory Sha256",
+          "type": "string"
+        },
+        "completed_at": {
+          "format": "date-time",
+          "title": "Completed At",
+          "type": "string"
+        },
+        "binding_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Binding Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "task_id",
+        "task_intent_sha256",
+        "sequence",
+        "approved_base_ref",
+        "branch_name",
+        "worktree_path",
+        "prior_execution_base_ref",
+        "prior_source_revision",
+        "execution_base_ref",
+        "execution_source_revision",
+        "input_mode",
+        "source_artifact_ids",
+        "retained_patch",
+        "authority_source",
+        "authority_sha256",
+        "plan_sha256",
+        "facts_sha256",
+        "prior_task_revision",
+        "before_inventory_sha256",
+        "after_inventory_sha256",
+        "completed_at",
+        "binding_sha256"
+      ],
+      "title": "ExecutionBaselineBinding",
+      "type": "object"
+    },
+    "InterruptionContinuationPolicy": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "capability_id": {
+                "const": "git-regular-text-mutation-inventory-v2"
+              },
+              "allowed_changes": {
+                "const": [
+                  "text_added",
+                  "text_modified",
+                  "text_deleted",
+                  "regular_mode_changed"
+                ]
+              }
+            },
+            "required": [
+              "capability_id",
+              "allowed_changes"
+            ]
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "v1"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "capability_id": {
+                "const": "git-text-mutation-inventory-v1"
+              },
+              "max_continuations": {
+                "const": 1
+              },
+              "allowed_changes": {
+                "const": [
+                  "text_added",
+                  "text_modified"
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "description": "Frozen narrow capability; legacy Tasks have no implicit authorization.",
+      "properties": {
+        "kind": {
+          "const": "interruption_continuation_policy",
+          "default": "interruption_continuation_policy",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "default": "v1",
+          "enum": [
+            "v1",
+            "v2"
+          ],
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "authorization_source": {
+          "const": "organization_engineering_policy",
+          "default": "organization_engineering_policy",
+          "title": "Authorization Source",
+          "type": "string"
+        },
+        "capability_id": {
+          "default": "git-text-mutation-inventory-v1",
+          "enum": [
+            "git-text-mutation-inventory-v1",
+            "git-regular-text-mutation-inventory-v2"
+          ],
+          "title": "Capability Id",
+          "type": "string"
+        },
+        "max_continuations": {
+          "default": 1,
+          "maximum": 199,
+          "minimum": 1,
+          "title": "Max Continuations",
+          "type": "integer"
+        },
+        "allowed_causes": {
+          "default": [
+            "local_execution_limit",
+            "provider_transient"
+          ],
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "const": "local_execution_limit",
+              "type": "string"
+            },
+            {
+              "const": "provider_transient",
+              "type": "string"
+            }
+          ],
+          "title": "Allowed Causes",
+          "type": "array"
+        },
+        "allowed_changes": {
+          "default": [
+            "text_added",
+            "text_modified"
+          ],
+          "items": {
+            "enum": [
+              "text_added",
+              "text_modified",
+              "text_deleted",
+              "regular_mode_changed"
+            ],
+            "type": "string"
+          },
+          "title": "Allowed Changes",
+          "type": "array"
+        }
+      },
+      "title": "InterruptionContinuationPolicy",
+      "type": "object"
+    },
+    "JsonValue": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "LocalOperatorPrincipal": {
+      "additionalProperties": false,
+      "description": "Trusted local composition identity; request/model text cannot add duties.",
+      "properties": {
+        "kind": {
+          "const": "trusted_local_operator",
+          "default": "trusted_local_operator",
+          "title": "Kind",
+          "type": "string"
+        },
+        "operator_id": {
+          "minLength": 1,
+          "title": "Operator Id",
+          "type": "string"
+        },
+        "duties": {
+          "items": {
+            "$ref": "#/$defs/OperatorDuty"
+          },
+          "minItems": 1,
+          "title": "Duties",
+          "type": "array"
+        }
+      },
+      "required": [
+        "operator_id",
+        "duties"
+      ],
+      "title": "LocalOperatorPrincipal",
+      "type": "object"
+    },
+    "MutationFile": {
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "file",
+            "symlink",
+            "git_directory"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "sha256": {
+          "title": "Sha256",
+          "type": "string"
+        },
+        "mode": {
+          "title": "Mode",
+          "type": "integer"
+        },
+        "size": {
+          "title": "Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "kind",
+        "sha256",
+        "mode",
+        "size"
+      ],
+      "title": "MutationFile",
+      "type": "object"
+    },
+    "NetworkAccess": {
+      "enum": [
+        "none",
+        "model_endpoint_only",
+        "allowlist"
+      ],
+      "title": "NetworkAccess",
+      "type": "string"
+    },
+    "OperatorDuty": {
+      "enum": [
+        "PRODUCT",
+        "ENGINEERING"
+      ],
+      "title": "OperatorDuty",
+      "type": "string"
+    },
+    "RetainedExecutionPatch": {
+      "additionalProperties": false,
+      "description": "Reference to complete old execution-base → candidate + dirty mutation bodies.\n\nTrusted collection must validate the body and URI before this reference is\npublished. A digest alone never permits discarding a dirty worktree.",
+      "properties": {
+        "uri": {
+          "minLength": 1,
+          "title": "Uri",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "bytes": {
+          "maximum": 8000000,
+          "minimum": 0,
+          "title": "Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "uri",
+        "sha256",
+        "bytes"
+      ],
+      "title": "RetainedExecutionPatch",
+      "type": "object"
+    },
+    "Task": {
+      "additionalProperties": false,
+      "description": "A bounded request tied to one repository and delivery state.",
+      "properties": {
+        "id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "repository": {
+          "minLength": 1,
+          "title": "Repository",
+          "type": "string"
+        },
+        "base_ref": {
+          "minLength": 1,
+          "title": "Base Ref",
+          "type": "string"
+        },
+        "branch_name": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 11,
+              "pattern": "^ai/(feature|bugfix)/[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Branch Name"
+        },
+        "acceptance_criteria": {
+          "items": {
+            "$ref": "#/$defs/AcceptanceCriterion"
+          },
+          "minItems": 1,
+          "title": "Acceptance Criteria",
+          "type": "array"
+        },
+        "constraints": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskConstraints"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "status": {
+          "$ref": "#/$defs/TaskStatus"
+        },
+        "max_attempts": {
+          "maximum": 400,
+          "minimum": 1,
+          "title": "Max Attempts",
+          "type": "integer"
+        },
+        "attempts": {
+          "default": 0,
+          "maximum": 400,
+          "minimum": 0,
+          "title": "Attempts",
+          "type": "integer"
+        },
+        "owner": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner"
+        },
+        "labels": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Labels",
+          "type": "array"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Metadata",
+          "type": "object"
+        },
+        "retry_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DeliveryRetryPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "retry_failures": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/DeliveryRetryFailure"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retry Failures"
+        },
+        "interruption_continuation_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InterruptionContinuationPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "engineering_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EngineeringPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "description",
+        "repository",
+        "base_ref",
+        "acceptance_criteria",
+        "status",
+        "max_attempts",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "Task",
+      "type": "object"
+    },
+    "TaskConstraints": {
+      "additionalProperties": false,
+      "description": "Machine-consumable restrictions attached to a Task.",
+      "properties": {
+        "allowed_paths": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Allowed Paths",
+          "type": "array"
+        },
+        "denied_paths": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Denied Paths",
+          "type": "array"
+        },
+        "allowed_commands": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Allowed Commands",
+          "type": "array"
+        },
+        "max_attempts": {
+          "anyOf": [
+            {
+              "maximum": 400,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Attempts"
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Notes"
+        }
+      },
+      "title": "TaskConstraints",
+      "type": "object"
+    },
+    "TaskStatus": {
+      "enum": [
+        "NEW",
+        "PLANNING",
+        "IMPLEMENTING",
+        "CONTINUE_REQUIRED",
+        "QUEUED",
+        "QA",
+        "REVIEW",
+        "DONE",
+        "BLOCKED",
+        "FAILED"
+      ],
+      "title": "TaskStatus",
+      "type": "string"
+    },
+    "TransientRetryPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "max_transient_failures": {
+          "default": 5,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Transient Failures",
+          "type": "integer"
+        }
+      },
+      "title": "TransientRetryPolicy",
+      "type": "object"
+    },
+    "WorkspaceMutationInventory": {
+      "properties": {
+        "files": {
+          "items": {
+            "$ref": "#/$defs/MutationFile"
+          },
+          "title": "Files",
+          "type": "array"
+        }
+      },
+      "required": [
+        "files"
+      ],
+      "title": "WorkspaceMutationInventory",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "const": "execution_baseline_plan",
+      "default": "execution_baseline_plan",
+      "title": "Kind",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "v1",
+      "default": "v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "facts": {
+      "$ref": "#/$defs/BaselineExecutionFacts"
+    },
+    "previous_binding": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExecutionBaselineBinding"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "input_mode": {
+      "$ref": "#/$defs/BaselineInputMode"
+    },
+    "target_base_ref": {
+      "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+      "title": "Target Base Ref",
+      "type": "string"
+    },
+    "prepared_source_revision": {
+      "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+      "title": "Prepared Source Revision",
+      "type": "string"
+    },
+    "prepared_dirty_tree": {
+      "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+      "title": "Prepared Dirty Tree",
+      "type": "string"
+    },
+    "prepared_dirty_patch": {
+      "maxLength": 1000000,
+      "title": "Prepared Dirty Patch",
+      "type": "string"
+    },
+    "dirty_capture": {
+      "$ref": "#/$defs/CapturedMutations"
+    },
+    "complete_capture": {
+      "$ref": "#/$defs/CapturedMutations"
+    },
+    "before_inventory": {
+      "$ref": "#/$defs/WorkspaceMutationInventory"
+    },
+    "conflicted": {
+      "default": false,
+      "title": "Conflicted",
+      "type": "boolean"
+    },
+    "plan_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Plan Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "facts",
+    "input_mode",
+    "target_base_ref",
+    "prepared_source_revision",
+    "prepared_dirty_tree",
+    "prepared_dirty_patch",
+    "dirty_capture",
+    "complete_capture",
+    "before_inventory",
+    "plan_sha256"
+  ],
+  "title": "ExecutionBaselinePlan",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/execution-baseline-plan.schema.json"
+}

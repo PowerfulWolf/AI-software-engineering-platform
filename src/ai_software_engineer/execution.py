@@ -28,6 +28,14 @@ class CommandExecutionError(RuntimeError):
     """Raised when an allowlisted command cannot be started."""
 
 
+class CommandExecutionUncertain(RuntimeError):
+    """Owned descendants or output drains could not be proven stopped.
+
+    Deliberately outside CommandExecutionError: registry rejection cannot turn
+    uncertain live execution into an ordinary failed-to-start tool result.
+    """
+
+
 class CommandTimedOut(CommandExecutionError):
     """Raised after the command process group is terminated at its timeout."""
 
@@ -210,6 +218,7 @@ class SubprocessCommandExecutor:
 
         if collectors is None or drain_threads is None:
             raise CommandExecutionError("command output capture was not initialized")
+        _ensure_process_group_stopped(process)
         _join_drain_threads(drain_threads)
         stdout_text, stdout_truncated = collectors[0].result()
         stderr_text, stderr_truncated = collectors[1].result()
@@ -294,29 +303,61 @@ def _join_drain_threads(threads: tuple[threading.Thread, threading.Thread]) -> N
     for thread in threads:
         thread.join(timeout=1.0)
         if thread.is_alive():
-            raise CommandExecutionError("command output pipe did not close")
+            raise CommandExecutionUncertain("command output pipe did not close")
 
 
 def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
     """Terminate the child process group, escalating to SIGKILL if needed."""
     try:
         os.killpg(process.pid, signal.SIGTERM)
-    except (OSError, ProcessLookupError):
+    except ProcessLookupError:
         with suppress(ProcessLookupError):
             process.terminate()
+    except OSError as error:
+        raise CommandExecutionUncertain("owned command group state is unknown") from error
     try:
         process.wait(timeout=1.0)
     except subprocess.TimeoutExpired:
         try:
             os.killpg(process.pid, signal.SIGKILL)
-        except (OSError, ProcessLookupError):
+        except ProcessLookupError:
             with suppress(ProcessLookupError):
                 process.kill()
-        process.wait()
+        except OSError as error:
+            raise CommandExecutionUncertain("owned command group could not be stopped") from error
+        try:
+            process.wait(timeout=1.0)
+        except subprocess.TimeoutExpired as error:
+            raise CommandExecutionUncertain("owned command process did not stop") from error
+    _ensure_process_group_stopped(process)
+
+
+def _ensure_process_group_stopped(process: subprocess.Popen[bytes]) -> None:
+    """A reaped leader does not prove that its owned descendants have stopped."""
+    deadline = time.monotonic() + 1.0
+    while True:
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            return
+        except OSError as error:
+            raise CommandExecutionUncertain("owned command group state is unknown") from error
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return
+        except OSError as error:
+            raise CommandExecutionUncertain(
+                "owned command descendants could not be stopped"
+            ) from error
+        if time.monotonic() >= deadline:
+            raise CommandExecutionUncertain("owned command descendants did not stop")
+        time.sleep(0.01)
 
 
 __all__ = [
     "CommandExecutionError",
+    "CommandExecutionUncertain",
     "CommandExecutor",
     "CommandExecutorSettings",
     "CommandResult",

@@ -12,10 +12,26 @@ from threading import Event, Lock, Thread
 
 from pymysql.cursors import DictCursor
 
+from ai_software_engineer.agents.continuation import ContinuationExecutionUncertain
 from ai_software_engineer.agents.execution import bind_execution_guard
 from ai_software_engineer.artifacts import ArtifactStore
+from ai_software_engineer.artifacts.ordering import ArtifactOrderingError
 from ai_software_engineer.artifacts.ports import ArtifactRef
 from ai_software_engineer.domain import Artifact, WorkItemStatus
+from ai_software_engineer.domain.continuation import task_intent_sha256
+from ai_software_engineer.domain.delivery_disposition import (
+    DeliveryDisposition,
+    DeliveryFailureFacts,
+    DeliveryNextAction,
+    DeliveryResponsibility,
+    decide_delivery_disposition,
+)
+from ai_software_engineer.domain.native_verification import (
+    NativeVerificationWaiting,
+    NativeVerificationWaitReason,
+)
+from ai_software_engineer.domain.task import Task
+from ai_software_engineer.execution import CommandExecutionUncertain
 from ai_software_engineer.knowledge.gaps import (
     KnowledgeGap,
     KnowledgeGapRaised,
@@ -27,6 +43,7 @@ from ai_software_engineer.knowledge.queue import QueueKnowledgeWaitPort
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.orchestration import RetryResult
 from ai_software_engineer.orchestration.steps import BoundedRunControl, RoleRunBoundary
+from ai_software_engineer.redaction import redact_text
 from ai_software_engineer.runtime import RuntimeRunResult, RuntimeSession
 from ai_software_engineer.store import MySqlTaskRepository
 from ai_software_engineer.work_queue.dispatcher import DispatcherLoop, DispatcherTickStatus
@@ -52,6 +69,7 @@ class WorkerLease:
         self._lost = Event()
         self._lifecycle = Lock()
         self._knowledge_wait: KnowledgeGap | None = None
+        self._delivery_wait: DeliveryDisposition | None = None
         self._ttl = claim.lease.expires_at - claim.lease.acquired_at
         self._expires_at = claim.lease.expires_at
         self._thread = Thread(target=self._heartbeat, name="delivery-role-heartbeat", daemon=True)
@@ -93,6 +111,8 @@ class WorkerLease:
                     return
 
     def check(self) -> None:
+        if self._delivery_wait is not None:
+            raise DeliveryWaiting(self._delivery_wait)
         if self._knowledge_wait is not None:
             raise KnowledgeGapRaised(self._knowledge_wait)
         if self._lost.is_set() or datetime.now(UTC) >= self._expires_at:
@@ -122,6 +142,25 @@ class WorkerLease:
             )
             self._stop.set()
 
+    def wait_for_delivery(self, disposition: DeliveryDisposition) -> None:
+        with self._lifecycle:
+            self.check()
+            if disposition.action is DeliveryNextAction.TERMINATE:
+                raise QueueConflict("termination is not a recoverable queue wait")
+            self.queue.wait(
+                self.claim.work_item.id,
+                lease_id=self.claim.lease.id,
+                owner_token=self._token,
+                status=WorkItemStatus.WAITING_HUMAN
+                if disposition.responsibility is DeliveryResponsibility.PRODUCT
+                else WorkItemStatus.WAITING_DEPENDENCY,
+                reason=disposition.reason,
+                now=datetime.now(UTC),
+                disposition=disposition,
+            )
+            self._delivery_wait = disposition
+            self._stop.set()
+
     def wait_for_knowledge(
         self,
         binding: KnowledgeRunBinding,
@@ -144,6 +183,72 @@ class WorkerLease:
             # Worker use its old execution authority after returning from wait.
             self._knowledge_wait = gap
             self._stop.set()
+
+
+class DeliveryWaiting(DeliveryQueuePending):
+    """A committed queue wait, never a terminal Task or a role verdict."""
+
+    def __init__(self, disposition: DeliveryDisposition) -> None:
+        self.disposition = disposition
+        super().__init__(disposition.reason)
+
+
+class WorkerDeliveryFailureControl:
+    """Compose the shared decision with the current, real owner-fenced claim."""
+
+    def __init__(self, guard: WorkerExecutionGuard) -> None:
+        self.guard = guard
+
+    def wait(
+        self,
+        task: Task,
+        *,
+        classification: str,
+        reason: str,
+        source_revision: str,
+        artifact_ids: tuple[str, ...],
+    ) -> None:
+        self.guard.check()
+        lease = self.guard.lease
+        if lease is None:
+            raise QueueConflict("delivery wait requires a real claim")
+        item = lease.claim.work_item
+        if item.task_id != task.id:
+            raise QueueConflict("delivery wait Task does not match the claimed WorkItem")
+        facts = DeliveryFailureFacts.model_validate(
+            {
+                "task_id": task.id,
+                "work_item_id": item.id,
+                "role": item.role,
+                "classification": classification,
+                "source_revision": source_revision,
+                "task_intent_sha256": task_intent_sha256(task),
+                "checkpoint_sequence": item.checkpoint_sequence,
+                "budget_available": (
+                    task.attempts < task.max_attempts
+                    and (
+                        (
+                            task.retry_policy is None
+                            or task.transient_failures(item.role)
+                            < task.retry_policy.transient_limit(item.role)
+                        )
+                        if classification == "TRANSIENT_INFRA"
+                        else not task.work_budget_exhausted
+                    )
+                ),
+                "retry_authorized": False,
+                "evidence_ids": artifact_ids,
+            }
+        )
+        disposition = decide_delivery_disposition(facts).model_copy(
+            update={"detail": redact_text(reason).text}
+        )
+        if disposition.action is DeliveryNextAction.TERMINATE:
+            return
+        # Preserve safe detailed evidence separately from the controlled summary.
+        # A model's text can explain facts but cannot choose their responsibility.
+        lease.wait_for_delivery(disposition)
+        raise DeliveryWaiting(disposition)
 
 
 class WorkerExecutionGuard:
@@ -342,6 +447,8 @@ class QueuedDeliverySupervisor:
             item = pending[0]
             step = self.queue.step(item.id)
             if item.status in {WorkItemStatus.WAITING_HUMAN, WorkItemStatus.WAITING_DEPENDENCY}:
+                if item.wait_disposition is not None:
+                    raise DeliveryWaiting(item.wait_disposition)
                 self._resume_knowledge(item.id, item.wait_reason or "")
             tick = self.dispatcher(step).tick(now=datetime.now(UTC), work_item_id=item.id)
             if tick.status is not DispatcherTickStatus.DISPATCHED:
@@ -375,6 +482,42 @@ class QueuedDeliverySupervisor:
                     if isinstance(outcome, RoleRunBoundary):
                         raise QueueCorruption("terminal outcome is still a boundary")
                     return outcome.result if isinstance(outcome, RuntimeRunResult) else outcome
+            except ArtifactOrderingError:
+                WorkerDeliveryFailureControl(self.guard).wait(
+                    repository.get(task_id),
+                    classification="PLATFORM_BUG",
+                    reason="已接纳的历史产物无法确定当前顺序。原任务和现场已保留。"
+                    "请工程负责人核验封存记录与父链。不能按模型时间或随机编号选择产物。",
+                    source_revision=step.boundary.source_revision,
+                    artifact_ids=(),
+                )
+                raise
+            except (ContinuationExecutionUncertain, CommandExecutionUncertain):
+                WorkerDeliveryFailureControl(self.guard).wait(
+                    repository.get(task_id),
+                    classification="EXECUTION_UNCERTAIN",
+                    reason="执行调用或受控命令是否已结束无法确认。原任务和现场已保留，等待工程核验。",  # noqa: RUF001
+                    source_revision=step.boundary.source_revision,
+                    artifact_ids=(),
+                )
+                raise
+            except NativeVerificationWaiting as error:
+                WorkerDeliveryFailureControl(self.guard).wait(
+                    repository.get(task_id),
+                    classification=(
+                        "EXECUTION_UNCERTAIN"
+                        if error.reason is NativeVerificationWaitReason.EXECUTION_UNCERTAIN
+                        else "ENVIRONMENT_UNAVAILABLE"
+                    ),
+                    reason=str(error),
+                    source_revision=step.boundary.source_revision,
+                    artifact_ids=(
+                        ("native-verification://" + error.record_sha256,)
+                        if error.record_sha256 is not None
+                        else ()
+                    ),
+                )
+                raise
             finally:
                 repository.mutation_fence = None
                 self.guard.lease = None

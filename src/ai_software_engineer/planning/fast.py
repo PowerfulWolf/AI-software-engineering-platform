@@ -43,6 +43,7 @@ def fast_plan(request: PlannerAgentRequest) -> PlannerAgentResult:
                 (AgentRole.REVIEWER, "review"),
             )
         ),
+        execution_window=request.context.execution_window,
         created_at=request.context.built_at,
     )
     return PlannerAgentResult(

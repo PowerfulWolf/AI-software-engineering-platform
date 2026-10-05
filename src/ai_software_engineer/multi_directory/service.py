@@ -13,7 +13,12 @@ from ai_software_engineer.agents import AgentErrorCode, StructuredModelClient, S
 from ai_software_engineer.context.native import native_rule_prompt_sources
 from ai_software_engineer.context.ports import ContextBudgetExceeded
 from ai_software_engineer.domain.branch import BRANCH_NAMING_INSTRUCTIONS
+from ai_software_engineer.domain.engineering_authority import (
+    LocalOperatorPrincipal,
+    OperatorDuty,
+)
 from ai_software_engineer.domain.enums import TeamRole
+from ai_software_engineer.domain.execution_window import PlanExecutionWindow
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.domain.project_delivery import PlanTestMatrixError
 from ai_software_engineer.domain.retry_policy import ExecutionRetryPolicy, StageRetryPolicy
@@ -239,8 +244,12 @@ class JointDeliveryService:
         execution_retry_policy: ExecutionRetryPolicy | None = None,
         coordinator: StageCoordinator | None = None,
         deletion_guard: RequirementDeletionGuard | None = None,
+        operator_principal: LocalOperatorPrincipal | None = None,
+        execution_window: PlanExecutionWindow | None = None,
     ) -> None:
         self.backend = backend
+        self.execution_window = execution_window
+        self.operator_principal = operator_principal or LocalOperatorPrincipal.trusted_local()
         self.coordinator = coordinator
         self.deletion_guard = deletion_guard
         self.team = team
@@ -272,17 +281,20 @@ class JointDeliveryService:
         )
 
     def start(self, command: StartProjectDelivery) -> JointDeliveryResult:
+        self.operator_principal.require_duty(OperatorDuty.PRODUCT)
         scope = discover_scope((command.repository_root, *command.additional_repository_roots))
         return self._intake(scope, command.title, command.requirement, command.submitted_at)
 
     def create(self, command: CreateRequirement) -> JointDeliveryResult:
         """Prepare a named Requirement without invoking Product or any model."""
+        self.operator_principal.require_duty(OperatorDuty.PRODUCT)
         return self._intake(
             discover_scope(command.repository_roots), command.name, None, command.submitted_at
         )
 
     def update_requirement(self, command: UpdateRequirement) -> JointDeliveryResult:
         """Create the edited draft before retiring the exact displayed draft."""
+        self.operator_principal.require_duty(OperatorDuty.PRODUCT)
         scope = discover_scope(command.repository_roots)
         replacement_id = self._delivery_id(scope, command.name, None)
         with self.journal.lock(command.delivery_id):
@@ -308,6 +320,7 @@ class JointDeliveryService:
 
     def delete_requirement(self, command: DeleteRequirement) -> JointDeliveryResult:
         """Retire the exact displayed Requirement without deleting its journal."""
+        self.operator_principal.require_duty(OperatorDuty.PRODUCT)
         with self.journal.lock(command.delivery_id):
             checkpoint = self.journal.current(command.delivery_id)
             if checkpoint is None:
@@ -339,6 +352,7 @@ class JointDeliveryService:
 
     def close_requirement(self, command: CloseRequirement) -> JointDeliveryResult:
         """Close the exact displayed blocker without erasing delivery evidence."""
+        self.operator_principal.require_duty(OperatorDuty.PRODUCT)
         with self.journal.lock(command.delivery_id):
             checkpoint = self._current(command.delivery_id)
             self._expected(checkpoint, command.expected_checkpoint_sha256)
@@ -353,6 +367,7 @@ class JointDeliveryService:
 
     def restart_requirement(self, command: RestartRequirement) -> JointDeliveryResult:
         """Reopen the exact displayed closed Requirement without starting execution."""
+        self.operator_principal.require_duty(OperatorDuty.PRODUCT)
         with self.journal.lock(command.delivery_id):
             checkpoint = self._current(command.delivery_id)
             self._expected(checkpoint, command.expected_checkpoint_sha256)
@@ -369,6 +384,7 @@ class JointDeliveryService:
 
     def recheck_design(self, command: RecheckDesign) -> JointDeliveryResult:
         """Append an investigation handoff, without answering the gap or running a model."""
+        self.operator_principal.require_duty(OperatorDuty.ENGINEERING)
         from ai_software_engineer.knowledge.administration import find_gap_records
         from ai_software_engineer.knowledge.gaps import KnowledgeGap, KnowledgeResolution
         from ai_software_engineer.knowledge.recheck import DesignKnowledgeRecheck
@@ -396,7 +412,7 @@ class JointDeliveryService:
                 gap=gap,
                 source_checkpoint_sha256=checkpoint.checkpoint_sha256,
                 product_spec_sha256=checkpoint.approval.product_spec_sha256,
-                operator_id=command.operator_id,
+                operator_id=self.operator_principal.operator_id,
                 request_reference=command.request_reference,
                 requested_at=command.submitted_at,
             )
@@ -424,6 +440,8 @@ class JointDeliveryService:
         Design knowledge wait.  This prevents a generic budget reset from becoming
         an unbounded retry or from bypassing the human knowledge decision.
         """
+
+        self.operator_principal.require_duty(OperatorDuty.ENGINEERING)
 
         from ai_software_engineer.knowledge.administration import find_gap_records
         from ai_software_engineer.knowledge.gaps import KnowledgeGap, KnowledgeResolution
@@ -472,7 +490,7 @@ class JointDeliveryService:
                 attempts=values,
                 next_action=(
                     "Design budget reset by "
-                    + command.operator_id
+                    + self.operator_principal.operator_id
                     + " under "
                     + command.approval_reference
                     + " ("
@@ -525,6 +543,7 @@ class JointDeliveryService:
                     JointCheckpoint.seal(
                         {
                             "delivery_id": delivery_id,
+                            "execution_window": self.execution_window,
                             "sequence": 1,
                             "stage": JointStage.PREPARING,
                             "team_id": self.team.manifest.team_id,
@@ -557,6 +576,7 @@ class JointDeliveryService:
             return result
 
     def reply(self, command: ReplyToProduct) -> JointDeliveryResult:
+        self.operator_principal.require_duty(OperatorDuty.PRODUCT)
         with self.journal.lock(command.delivery_id):
             checkpoint = self._current(command.delivery_id)
             self._expected(checkpoint, command.expected_checkpoint_sha256)
@@ -597,6 +617,7 @@ class JointDeliveryService:
             return JointDeliveryResult(checkpoint=self._advance(checkpoint))
 
     def approve(self, command: ApproveProductSpec) -> JointDeliveryResult:
+        self.operator_principal.require_duty(OperatorDuty.PRODUCT)
         with self.journal.lock(command.delivery_id):
             checkpoint = self._current(command.delivery_id)
             self._expected(checkpoint, command.expected_checkpoint_sha256)
@@ -614,6 +635,7 @@ class JointDeliveryService:
                     checkpoint_sha256=checkpoint.checkpoint_sha256,
                     reference=command.approval_reference,
                     approved_at=command.submitted_at,
+                    operator_principal=self.operator_principal,
                 ),
                 next_action="Design all participating repositories against the approved product.",
             )
@@ -726,6 +748,7 @@ class JointDeliveryService:
 
     def upgrade_planning(self, command: UpgradeJointPlanning) -> JointDeliveryResult:
         """Explicit human promotion only, durably bound to the exact gate input."""
+        self.operator_principal.require_duty(OperatorDuty.ENGINEERING)
         with self.journal.lock(command.delivery_id):
             checkpoint = self._current(command.delivery_id)
             if checkpoint.checkpoint_sha256 != command.expected_checkpoint_sha256:
@@ -737,7 +760,7 @@ class JointDeliveryService:
             decision = joint_planning_decision(checkpoint)
             upgrade = HumanPlanningUpgrade(
                 input_sha256=decision.input_sha256,
-                operator_id=command.operator_id,
+                operator_id=self.operator_principal.operator_id,
                 rationale=command.rationale,
                 decided_at=command.submitted_at,
             )
@@ -1292,6 +1315,17 @@ class JointDeliveryService:
         if model is JointTechnicalDesign:
             output_schema["required"] = [*output_schema.get("required", []), "blocking_issues"]
         if model is JointExecutionPlan and checkpoint.design is not None:
+            if checkpoint.execution_window is not None:
+                instructions += (
+                    " The supplied execution_window is trusted and frozen for this Requirement. "
+                    "Arrange all approved scope into bounded serial work/checkpoints that fit its "
+                    "hard_seconds less finalization_reserve_seconds; reserve a Coder repair slot "
+                    "when the current work budget permits. Do not enlarge or replace the window. "
+                    "For each verification, preserve exact test levels and provide structured "
+                    "verification_argv plus registered capability, or an exact source/document "
+                    "verification_inspection when the approved level is inspection. "
+                    "Inspection cannot replace unit/integration/e2e tests. "
+                )
             requirements = planner_test_requirements(checkpoint.design)
             payload["required_test_matrix"] = [item.to_wire() for item in requirements]
             output_schema["$defs"]["PlanTestItem"]["properties"]["level"]["enum"] = sorted(

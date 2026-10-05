@@ -14,6 +14,7 @@ import pymysql
 from pydantic import TypeAdapter, ValidationError
 from pymysql.connections import Connection
 
+from ai_software_engineer.domain.delivery_disposition import DeliveryDisposition
 from ai_software_engineer.domain.enums import WorkItemStatus
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.domain.workforce import (
@@ -343,6 +344,7 @@ class MySqlPersistentWorkQueue:
                 update={
                     "status": WorkItemStatus.LEASED,
                     "wait_reason": None,
+                    "wait_disposition": None,
                     "available_at": None,
                     "updated_at": now,
                 }
@@ -628,6 +630,7 @@ class MySqlPersistentWorkQueue:
         status: WorkItemStatus,
         reason: str,
         now: datetime,
+        disposition: DeliveryDisposition | None = None,
     ) -> QueuedWorkItem:
         """Release capacity while preserving a recoverable human/dependency checkpoint."""
         if status not in _WAIT_STATUSES:
@@ -643,6 +646,7 @@ class MySqlPersistentWorkQueue:
             now=now,
             available_at=None,
             event_type="WAITING",
+            disposition=disposition,
         )
 
     def retry(
@@ -672,7 +676,13 @@ class MySqlPersistentWorkQueue:
             event_type="RETRY_SCHEDULED",
         )
 
-    def make_ready(self, work_item_id: WorkItemId | str, *, now: datetime) -> QueuedWorkItem:
+    def make_ready(
+        self,
+        work_item_id: WorkItemId | str,
+        *,
+        now: datetime,
+        expected_disposition_sha256: str | None = None,
+    ) -> QueuedWorkItem:
         """Resume explicitly waiting work after a verified external signal."""
         self._require_aware(now, "resume clock")
         with (
@@ -686,11 +696,17 @@ class MySqlPersistentWorkQueue:
                 raise QueueConflict("only waiting or retry work can become READY")
             if self._active_claim_exists(cursor, current.id):
                 raise QueueCorruption("waiting WorkItem retained an active Lease")
+            if current.wait_disposition is not None:
+                if expected_disposition_sha256 != current.wait_disposition.disposition_sha256:
+                    raise QueueConflict("typed wait requires its exact verified resume signal")
+            elif expected_disposition_sha256 is not None:
+                raise QueueConflict("resume signal does not bind a typed wait")
             ready = current.model_copy(
                 update={
                     "status": WorkItemStatus.READY,
                     "dispatch_sequence": current.dispatch_sequence + 1,
                     "wait_reason": None,
+                    "wait_disposition": None,
                     "available_at": None,
                     "updated_at": now,
                 }
@@ -767,6 +783,7 @@ class MySqlPersistentWorkQueue:
         now: datetime,
         available_at: datetime | None,
         event_type: str,
+        disposition: DeliveryDisposition | None = None,
     ) -> QueuedWorkItem:
         self._require_aware(now, "release clock")
         with (
@@ -779,6 +796,17 @@ class MySqlPersistentWorkQueue:
             self._require_active_claim(cursor, current.id, lease_id, owner_token, now=now)
             if current.status not in _ACTIVE_STATUSES:
                 raise QueueConflict("only active work can release its Lease")
+            if disposition is not None:
+                facts = disposition.facts
+                if (facts.task_id, facts.work_item_id, facts.role, facts.checkpoint_sequence) != (
+                    current.task_id,
+                    current.id,
+                    current.role,
+                    current.checkpoint_sequence,
+                ):
+                    raise QueueConflict("delivery wait does not bind its current role checkpoint")
+                if status not in _WAIT_STATUSES:
+                    raise QueueConflict("typed disposition belongs to an explicit wait")
             released = current.model_copy(
                 update={
                     "status": status,
@@ -788,6 +816,7 @@ class MySqlPersistentWorkQueue:
                         else current.dispatch_sequence
                     ),
                     "wait_reason": reason,
+                    "wait_disposition": disposition,
                     "available_at": available_at,
                     "updated_at": now,
                 }

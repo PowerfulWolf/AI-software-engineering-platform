@@ -1,5 +1,51 @@
 {
   "additionalProperties": false,
+  "allOf": [
+    {
+      "else": {
+        "properties": {
+          "capability_id": {
+            "const": "git-regular-text-mutation-inventory-v2"
+          },
+          "allowed_changes": {
+            "const": [
+              "text_added",
+              "text_modified",
+              "text_deleted",
+              "regular_mode_changed"
+            ]
+          }
+        },
+        "required": [
+          "capability_id",
+          "allowed_changes"
+        ]
+      },
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "v1"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "capability_id": {
+            "const": "git-text-mutation-inventory-v1"
+          },
+          "max_continuations": {
+            "const": 1
+          },
+          "allowed_changes": {
+            "const": [
+              "text_added",
+              "text_modified"
+            ]
+          }
+        }
+      }
+    }
+  ],
   "description": "Frozen narrow capability; legacy Tasks have no implicit authorization.",
   "properties": {
     "kind": {
@@ -9,8 +55,11 @@
       "type": "string"
     },
     "schema_version": {
-      "const": "v1",
       "default": "v1",
+      "enum": [
+        "v1",
+        "v2"
+      ],
       "title": "Schema Version",
       "type": "string"
     },
@@ -21,15 +70,17 @@
       "type": "string"
     },
     "capability_id": {
-      "const": "git-text-mutation-inventory-v1",
       "default": "git-text-mutation-inventory-v1",
+      "enum": [
+        "git-text-mutation-inventory-v1",
+        "git-regular-text-mutation-inventory-v2"
+      ],
       "title": "Capability Id",
       "type": "string"
     },
     "max_continuations": {
-      "const": 1,
       "default": 1,
-      "maximum": 1,
+      "maximum": 199,
       "minimum": 1,
       "title": "Max Continuations",
       "type": "integer"
@@ -59,18 +110,15 @@
         "text_added",
         "text_modified"
       ],
-      "maxItems": 2,
-      "minItems": 2,
-      "prefixItems": [
-        {
-          "const": "text_added",
-          "type": "string"
-        },
-        {
-          "const": "text_modified",
-          "type": "string"
-        }
-      ],
+      "items": {
+        "enum": [
+          "text_added",
+          "text_modified",
+          "text_deleted",
+          "regular_mode_changed"
+        ],
+        "type": "string"
+      },
       "title": "Allowed Changes",
       "type": "array"
     }
@@ -78,5 +126,6 @@
   "title": "InterruptionContinuationPolicy",
   "type": "object",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ai-software-engineer.local/schemas/interruption-continuation-policy.schema.json"
+  "$id": "https://ai-software-engineer.local/schemas/interruption-continuation-policy.schema.json",
+  "$defs": {}
 }

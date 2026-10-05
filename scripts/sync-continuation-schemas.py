@@ -122,8 +122,6 @@ def main() -> None:
             {
                 "properties": {
                     "role": {"const": "coder"},
-                    "attempt": {"const": 1},
-                    "continuation_checkpoint_id": {"type": "null"},
                 }
             },
         ]
@@ -131,11 +129,63 @@ def main() -> None:
     receipt_node["properties"]["mutation_paths"]["uniqueItems"] = True
     receipt_node["allOf"] = [
         {
+            "if": {"properties": {"schema_version": {"const": "v1"}}},
+            "then": {
+                "properties": {
+                    "request": {
+                        "properties": {
+                            "attempt": {"const": 1},
+                            "continuation_checkpoint_id": {"type": "null"},
+                        }
+                    },
+                    "mutation_paths": {"minItems": 1},
+                    "previous_admission_sha256": {"type": "null"},
+                    "capture": {"$ref": "#/$defs/CapturedChanges"},
+                    "process_stop": {"$ref": "#/$defs/NativeProcessStop"},
+                }
+            },
+            "else": {"properties": {"capture": {"$ref": "#/$defs/CapturedMutations"}}},
+        },
+        {"properties": {"capture": {"properties": {"attempt": {"const": 1}}}}},
+        {
             "if": {"properties": {"cause": {"const": "local_execution_limit"}}},
-            "then": {"properties": {"original_error_code": {"const": "TIMEOUT"}}},
+            "then": {
+                "properties": {
+                    "original_error_code": {"const": "TIMEOUT"},
+                    "process_stop": {"properties": {"kind": {"const": "local_execution_limit"}}},
+                }
+            },
             "else": {"properties": {"original_error_code": {"enum": sorted(TRANSIENT_CODES)}}},
-        }
+        },
+        {
+            "if": {
+                "properties": {
+                    "process_stop": {
+                        "required": ["origin"],
+                        "properties": {"origin": {"const": "synchronous_responses_tool_loop"}},
+                    }
+                }
+            },
+            "then": {
+                "properties": {"schema_version": {"const": "v2"}},
+                "allOf": [
+                    {
+                        "if": {"properties": {"cause": {"const": "provider_transient"}}},
+                        "then": {
+                            "properties": {
+                                "process_stop": {
+                                    "properties": {"kind": {"const": "failed"}},
+                                }
+                            }
+                        },
+                    }
+                ],
+            },
+        },
     ]
+    continuation_schema["$defs"]["SynchronousToolLoopStop"]["properties"][
+        "completed_operation_ids"
+    ]["uniqueItems"] = True
     admission_node = continuation_schema["$defs"]["ContinuationAdmission"]
     admission_node["properties"]["new_request"] = {
         "allOf": [
@@ -143,12 +193,33 @@ def main() -> None:
             {
                 "properties": {
                     "role": {"const": "coder"},
-                    "attempt": {"const": 2},
-                    "continuation_checkpoint_id": {"type": "null"},
                 }
             },
         ]
     }
+    admission_node["allOf"] = [
+        {
+            "if": {"properties": {"schema_version": {"const": "v1"}}},
+            "then": {
+                "properties": {
+                    "new_request": {
+                        "properties": {
+                            "attempt": {"const": 2},
+                            "continuation_checkpoint_id": {"type": "null"},
+                        }
+                    },
+                    "interrupted_attempt": {"type": "null"},
+                }
+            },
+            "else": {
+                "required": ["interrupted_attempt"],
+                "properties": {
+                    "interrupted_attempt": {"type": "integer", "minimum": 1, "maximum": 399},
+                    "new_request": {"properties": {"attempt": {"minimum": 2}}},
+                },
+            },
+        }
+    ]
     _write("execution-continuation.schema.json", continuation_schema)
 
 

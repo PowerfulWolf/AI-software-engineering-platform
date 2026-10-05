@@ -52,6 +52,13 @@ class MySqlTaskRepository:
         self.mutation_fence: Callable[[DictCursor, str], None] | None = None
         self._connection = open_mysql_connection(dsn)
         try:
+            # A Repository lives across Worker checkpoints. Scheduling services
+            # can atomically reserve the next identity on another connection;
+            # ordinary get/current_revision reads must observe that committed
+            # checkpoint rather than retain the first implicit InnoDB snapshot.
+            # Mutation transactions still use explicit row and owner fences.
+            with self._connection.cursor() as cursor:
+                cursor.execute("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED", ())
             self._initialize_schema()
         except pymysql.MySQLError as error:
             self._connection.close()

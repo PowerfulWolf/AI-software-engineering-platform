@@ -17,6 +17,7 @@ from pathlib import Path
 
 from ai_software_engineer.manager.python_verification import (
     PytestSelection,
+    PythonMysqlHostPrerequisites,
     PythonMysqlSandboxCapability,
 )
 from ai_software_engineer.manager.python_verification_runner import __file__ as runner_file
@@ -143,24 +144,21 @@ def require_selected_candidate_files(
             raise ValueError("approved pytest selection is not a tracked regular candidate file")
 
 
-def discover_python_mysql_capability(
-    repository: Path,
-    revision: str,
-    selections: tuple[PytestSelection, ...],
+def discover_python_mysql_host_prerequisites(
     *,
     codex_executable: str,
     docker_executable: str = "docker",
     docker_socket: str | None = None,
     mysql_image: str = "mysql:8.0",
-    denied_patterns: tuple[str, ...] = (),
-) -> PythonMysqlSandboxCapability:
-    """No candidate evaluation, container creation, network connection, or image pull."""
+) -> PythonMysqlHostPrerequisites:
+    """Read trusted tools/runtime/daemon/cached image, without inspecting any target.
+
+    This may be used before a Coder claim when a newly planned test file does not
+    yet exist. It is not a candidate-bound capability, authorization or verdict.
+    The exact final source/selector gate remains mandatory before QA/Review.
+    """
     if platform.system() != "Darwin":
         raise ValueError("Python/MySQL capability requires the validated macOS sandbox")
-    require_selected_candidate_files(repository, revision, selections)
-    denied = candidate_denied_paths(repository, revision, denied_patterns)
-    if any(selection.node_id.split("::", 1)[0] in denied for selection in selections):
-        raise ValueError("pytest selection is denied by Task policy")
     sandbox, docker = _binary(codex_executable), _binary(docker_executable)
     if docker_socket is None:
         endpoint = _read_command(
@@ -180,7 +178,7 @@ def discover_python_mysql_capability(
     runtime = Path(sys.base_prefix).resolve(strict=True)
     dependencies = Path(sysconfig.get_path("purelib")).resolve(strict=True)
     runner = Path(runner_file).resolve(strict=True)
-    return PythonMysqlSandboxCapability(
+    return PythonMysqlHostPrerequisites(
         sandbox_executable=str(sandbox),
         sandbox_executable_sha256=_file_sha256(sandbox),
         python_executable=str(python),
@@ -196,6 +194,38 @@ def discover_python_mysql_capability(
         docker_socket=str(socket),
         docker_daemon_id=daemon,
         mysql_image_id=image,
-        selections=selections,
-        denied_relative_paths=denied,
+    )
+
+
+def discover_python_mysql_capability(
+    repository: Path,
+    revision: str,
+    selections: tuple[PytestSelection, ...],
+    *,
+    codex_executable: str,
+    docker_executable: str = "docker",
+    docker_socket: str | None = None,
+    mysql_image: str = "mysql:8.0",
+    denied_patterns: tuple[str, ...] = (),
+) -> PythonMysqlSandboxCapability:
+    """Bind current host prerequisites to exact regular candidate selections."""
+    if platform.system() != "Darwin":
+        raise ValueError("Python/MySQL capability requires the validated macOS sandbox")
+    require_selected_candidate_files(repository, revision, selections)
+    denied = candidate_denied_paths(repository, revision, denied_patterns)
+    if any(selection.node_id.split("::", 1)[0] in denied for selection in selections):
+        raise ValueError("pytest selection is denied by Task policy")
+    host = discover_python_mysql_host_prerequisites(
+        codex_executable=codex_executable,
+        docker_executable=docker_executable,
+        docker_socket=docker_socket,
+        mysql_image=mysql_image,
+    )
+    return PythonMysqlSandboxCapability.model_validate(
+        {
+            **host.to_wire(),
+            "kind": "codex_sandbox_pytest_mysql_v1",
+            "selections": [selection.to_wire() for selection in selections],
+            "denied_relative_paths": list(denied),
+        }
     )

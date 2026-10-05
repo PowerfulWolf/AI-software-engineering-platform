@@ -4,29 +4,61 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
+from contextlib import closing
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.context import ContextSource
+from ai_software_engineer.domain.delivery_resolution import (
+    DeliveryResolution,
+    DeliveryWaitInvestigation,
+    InspectDeliveryWait,
+    ResolveDeliveryWait,
+)
+from ai_software_engineer.domain.engineering_authority import (
+    EngineeringScope,
+    LocalOperatorPrincipal,
+    OperatorDuty,
+)
+from ai_software_engineer.domain.enums import AgentRole
+from ai_software_engineer.domain.execution_baseline import ExecutionBaselineBinding
+from ai_software_engineer.domain.execution_window import PlanExecutionWindow
 from ai_software_engineer.domain.identity import ProjectId
+from ai_software_engineer.git import GitWorktreeManager
 from ai_software_engineer.knowledge.gaps import KnowledgeGap, KnowledgeGapRaised
 from ai_software_engineer.knowledge_selection import (
     effective_project_knowledge_paths,
     effective_team_knowledge_paths,
+)
+from ai_software_engineer.manager.baseline_models import (
+    BaselineOperatorAuthorization,
+    ExecutionBaselinePlan,
+)
+from ai_software_engineer.manager.baseline_production import (
+    BaselineExecuteCommand,
+    BaselineProposeCommand,
 )
 from ai_software_engineer.manager.delivery import (
     ProjectDeliveryCheckpointCatalog,
     ResumeProjectDelivery,
     UnifiedProjectEntryService,
 )
-from ai_software_engineer.manager.delivery_checkpoint import DeliveryStage
+from ai_software_engineer.manager.delivery_checkpoint import (
+    DeliveryStage,
+    ProjectDeliveryCheckpoint,
+)
+from ai_software_engineer.manager.delivery_wait import DeliveryWaitService
+from ai_software_engineer.manager.engineering_authority import EngineeringAuthority
 from ai_software_engineer.manager.preparation import PrepareProjectResult
 from ai_software_engineer.manager.production_backend import (
     ConfiguredStructuredClientFactory,
     ProductionProjectDeliveryBackend,
     StructuredClientFactory,
+    _delivery_timeout_seconds,
 )
 from ai_software_engineer.manager.production_delivery import (
     DeliveryRouteAdapterFactory,
@@ -93,8 +125,10 @@ class TeamHost:
         environment: Mapping[str, str],
         structured_clients: StructuredClientFactory | None = None,
         delivery_route_adapters: DeliveryRouteAdapterFactory | None = None,
+        operator_principal: LocalOperatorPrincipal | None = None,
     ) -> None:
         self._config = config
+        self._operator_principal = operator_principal or LocalOperatorPrincipal.trusted_local()
         self._environment = dict(environment)
         root = Path(config.platform_root).expanduser().resolve(strict=False)
         root.mkdir(parents=True, exist_ok=True)
@@ -136,6 +170,7 @@ class TeamHost:
 
     def create_project(self, *, name: str, project_id: str | None = None) -> ProjectWorkspace:
         """Register one business Project; no Repository or Requirement is implied."""
+        self._operator_principal.require_duty(OperatorDuty.PRODUCT)
         return (
             self._projects.create(name=name)
             if project_id is None
@@ -171,7 +206,12 @@ class TeamHost:
         from ai_software_engineer.recovery.entry import NativeRecoveryEntry
 
         runtime = self._runtime(self._resolve_project_id(project_id, delivery_id))
-        return NativeRecoveryEntry(self._config, self._environment, runtime.backend)
+        return NativeRecoveryEntry(
+            self._config,
+            self._environment,
+            runtime.backend,
+            operator_principal=self._operator_principal,
+        )
 
     def verification_entry(
         self,
@@ -183,7 +223,12 @@ class TeamHost:
         from ai_software_engineer.recovery.verification_entry import CandidateVerificationEntry
 
         runtime = self._runtime(self._resolve_project_id(project_id, delivery_id))
-        return CandidateVerificationEntry(self._config, self._environment, runtime.backend)
+        return CandidateVerificationEntry(
+            self._config,
+            self._environment,
+            runtime.backend,
+            operator_principal=self._operator_principal,
+        )
 
     def resume_delivery(
         self, command: ResumeProjectDelivery, *, project_id: str | None = None
@@ -194,6 +239,15 @@ class TeamHost:
             JointDeliveryResumeResult,
         )
 
+        if any(
+            value is not None
+            for value in (
+                command.approved_plan_sha256,
+                command.approved_scope_sha256,
+                command.approved_repair_sha256,
+            )
+        ):
+            self._operator_principal.require_duty(OperatorDuty.ENGINEERING)
         runtime = self._runtime(self._resolve_project_id(project_id, command.delivery_id))
         if not str(command.delivery_id).startswith("delivery_multi_"):
             runtime.requirements.retirements.require_native_active(
@@ -318,6 +372,7 @@ class TeamHost:
 
         selected_backend = backend or runtime.backend
         current_target_backend = runtime.backend
+        engineering_authority = EngineeringAuthority(self._team.directory("work-items"))
 
         return DeliveryResumeController(
             config=self._config,
@@ -328,11 +383,211 @@ class TeamHost:
                 self._config,
                 self._environment,
                 current_target_backend,
+                operator_principal=self._operator_principal,
             ),
             verification=CandidateVerificationEntry(
                 self._config,
                 self._environment,
                 current_target_backend,
+                engineering_authority=engineering_authority,
+                operator_principal=self._operator_principal,
+            ),
+            engineering_authority=engineering_authority,
+            operator_principal=self._operator_principal,
+        )
+
+    def inspect_delivery_wait(
+        self,
+        command: InspectDeliveryWait,
+        *,
+        project_id: str,
+        delivery_id: str,
+    ) -> DeliveryWaitInvestigation:
+        """Engineering-only investigation of real queue/invocation/workspace facts."""
+        self._operator_principal.require_duty(OperatorDuty.ENGINEERING)
+        with closing(
+            MySqlTaskRepository(self._config.require_mysql_dsn(self._environment))
+        ) as repository:
+            return self._delivery_wait_service(
+                command,
+                project_id=project_id,
+                delivery_id=delivery_id,
+                repository=repository,
+            ).inspect(command)
+
+    def propose_execution_baseline(
+        self,
+        command: BaselineProposeCommand,
+        *,
+        project_id: str,
+    ) -> ExecutionBaselinePlan:
+        """Engineering investigates an exact new source without changing approved scope."""
+        self._operator_principal.require_duty(OperatorDuty.ENGINEERING)
+        native = self._baseline_native_checkpoint(project_id, command.delivery_id, command.task_id)
+        with closing(
+            MySqlTaskRepository(self._config.require_mysql_dsn(self._environment))
+        ) as repository:
+            service = self._runtime(project_id).backend.execution_baseline_service(
+                native,
+                repository=repository,
+                project_id=project_id,
+            )
+            plan = service.propose(command.target_base_ref, input_mode=command.input_mode)
+            command.require_plan(plan)
+            return plan
+
+    def execute_execution_baseline(
+        self,
+        command: BaselineExecuteCommand,
+        *,
+        project_id: str,
+    ) -> ExecutionBaselineBinding:
+        """Seal the engineering decision, publish same-branch source and continue once."""
+        self._operator_principal.require_duty(OperatorDuty.ENGINEERING)
+        native = self._baseline_native_checkpoint(project_id, command.delivery_id, command.task_id)
+        with closing(
+            MySqlTaskRepository(self._config.require_mysql_dsn(self._environment))
+        ) as repository:
+            service = self._runtime(project_id).backend.execution_baseline_service(
+                native,
+                repository=repository,
+                project_id=project_id,
+            )
+            plan = service.store.plan(command.expected_plan_sha256)
+            command.require_plan(plan)
+            authority = service.store.records.find(
+                "baseline-authorities",
+                plan.plan_sha256,
+                BaselineOperatorAuthorization,
+            )
+            if authority is None:
+                authority = BaselineOperatorAuthorization.for_plan(
+                    plan,
+                    principal=self._operator_principal,
+                    submitted_at=datetime.now(UTC),
+                    reference=command.reference,
+                )
+            elif (
+                authority.principal != self._operator_principal
+                or authority.reference != command.reference
+            ):
+                raise ValueError("该执行基线已有不同主体或引用的工程决定")
+            binding = service.execute(plan.plan_sha256, authority=authority)
+        self.resume_delivery(
+            ResumeProjectDelivery(delivery_id=command.delivery_id), project_id=project_id
+        )
+        return binding
+
+    def _baseline_native_checkpoint(
+        self,
+        project_id: str,
+        delivery_id: str,
+        task_id: str,
+    ) -> ProjectDeliveryCheckpoint:
+        runtime = self._runtime(project_id)
+        if delivery_id.startswith("delivery_multi_"):
+            checkpoint = runtime.requirements.status(delivery_id).checkpoint
+            candidates = tuple(child.checkpoint for child in checkpoint.children)
+        else:
+            candidates = (runtime.entry.status(delivery_id).checkpoint,)
+        matching = tuple(candidate for candidate in candidates if candidate.task_id == task_id)
+        if len(matching) != 1:
+            raise ValueError("工程执行基线不属于当前 Project Requirement 的唯一原交付任务")
+        native = matching[0]
+        if native.repository_id is None or native.task_id is None:
+            raise ValueError("工程执行基线缺少当前需求的仓库和交付任务")
+        return native
+
+    def resolve_delivery_wait(
+        self,
+        command: ResolveDeliveryWait,
+        *,
+        project_id: str,
+        delivery_id: str,
+    ) -> DeliveryResolution:
+        """Record an exact engineering decision and atomically consume its wait."""
+        self._operator_principal.require_duty(OperatorDuty.ENGINEERING)
+        with closing(
+            MySqlTaskRepository(self._config.require_mysql_dsn(self._environment))
+        ) as repository:
+            resolution = self._delivery_wait_service(
+                command,
+                project_id=project_id,
+                delivery_id=delivery_id,
+                repository=repository,
+            ).resolve(command)
+        # v0.1 has a synchronous Supervisor, not an unattended fleet. A READY
+        # record alone would leave delivery idle after this authorized action.
+        self.resume_delivery(ResumeProjectDelivery(delivery_id=delivery_id), project_id=project_id)
+        return resolution
+
+    def _delivery_wait_service(
+        self,
+        command: InspectDeliveryWait,
+        *,
+        project_id: str,
+        delivery_id: str,
+        repository: MySqlTaskRepository,
+    ) -> DeliveryWaitService:
+        runtime = self._runtime(project_id)
+        item = self._work_queue.get(command.work_item_id)
+        if delivery_id.startswith("delivery_multi_"):
+            checkpoint = runtime.requirements.status(delivery_id).checkpoint
+            candidates = tuple(child.checkpoint for child in checkpoint.children)
+        else:
+            candidates = (runtime.entry.status(delivery_id).checkpoint,)
+        native = next(
+            (
+                candidate
+                for candidate in candidates
+                if candidate.task_id == item.task_id
+                and candidate.repository_id == item.repository_id
+            ),
+            None,
+        )
+        if native is None:
+            raise ValueError("工程工作项不属于当前 Project Requirement")
+        workspace = next(
+            (
+                workspace
+                for workspace in runtime.project.repository_registry().discover()
+                if workspace.manifest.repository_id == item.repository_id
+            ),
+            None,
+        )
+        if workspace is None or str(workspace.repository_root) != native.repository_root:
+            raise ValueError("工程工作项没有精确注册的 Repository workspace")
+        task = repository.get(item.task_id)
+
+        def consume(resolution: DeliveryResolution) -> None:
+            self._work_queue.resolve_wait(resolution)
+
+        return DeliveryWaitService(
+            repository=repository,
+            queue=self._work_queue,
+            scope=EngineeringScope(
+                team_id=self._config.team_id,
+                project_id=project_id,
+                repository_id=item.repository_id,
+                repository_root=str(workspace.repository_root),
+            ),
+            sidecar_state=workspace.directory("state"),
+            git=GitWorktreeManager(
+                workspace.repository_root,
+                Path(self._config.platform_root).expanduser().resolve()
+                / "worktrees"
+                / item.repository_id,
+                branch_names={task.id: task.branch_name},
+            ),
+            principal=self._operator_principal,
+            consume=consume,
+            artifacts=FileArtifactStore(workspace.directory("artifacts"), read_only=True),
+            prerequisite_collector=lambda current, step: (
+                runtime.backend.inspect_delivery_wait_prerequisites(
+                    current,
+                    step,
+                    native,
+                )
             ),
         )
 
@@ -372,6 +627,7 @@ class TeamHost:
             delivery_route_adapters=self._delivery_route_adapters,
             role_queue=self._work_queue,
             preparation_guard=validate_context,
+            operator_principal=self._operator_principal,
         )
 
         def derived_backend(
@@ -398,20 +654,26 @@ class TeamHost:
                 frozen_source_revision=frozen_source_revision,
                 trusted_plan_projection=True,
                 trusted_legacy_product_projection=True,
+                operator_principal=self._operator_principal,
             )
 
         entry = UnifiedProjectEntryService(
             backend=backend,
             catalog=ProjectDeliveryCheckpointCatalog(registry.registry_root),
             delivery_namespace=project.manifest.project_id,
+            product_action_authorizer=backend.authorize_product_action,
         )
         requirements = JointDeliveryService(
             team=self._team,
             project=project,
+            operator_principal=self._operator_principal,
             deletion_guard=ProductionRequirementDeletionGuard(
                 project, self._work_queue, self._config.require_mysql_dsn(self._environment)
             ),
             execution_retry_policy=self._config.execution_retry_policy,
+            execution_window=PlanExecutionWindow.for_seconds(
+                _delivery_timeout_seconds(AgentRole.CODER)
+            ),
             coordinator=ProductionStageCoordinator(
                 self._config,
                 self._environment,

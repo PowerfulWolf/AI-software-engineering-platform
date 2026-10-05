@@ -232,6 +232,10 @@ const labels = {
   CONTINUE_DELIVERY: "继续交付",
   RECOVER_DESIGN: "恢复设计",
   RECHECK_DESIGN: "重新核对设计",
+  INSPECT_DELIVERY_WAIT: "调查工程等待",
+  RESOLVE_DELIVERY_WAIT: "处理工程等待",
+  PROPOSE_EXECUTION_BASELINE: "调查执行基线更新",
+  EXECUTE_EXECUTION_BASELINE: "更新原需求执行基线",
   QA_FAILURE: "QA 失败",
   REVIEW_REJECTION: "Review 拒绝",
   APPROVE: "已批准",
@@ -526,6 +530,257 @@ function engineeringDetails(title = "工程详情", key = title) {
   details.append(el("summary", title));
   return details;
 }
+const engineeringResolutionLabels = {
+  RETRY_FROM_CHECKPOINT: "确认现场并继续原交付",
+  REPLAY_RECORDED_RESULT: "接纳已封存结果",
+  RESUME_UNINVOKED: "确认前提并继续",
+  REVERIFY_CANDIDATE: "保留候选并重新独立测试",
+  RETRY_VERIFIER_PREPARATION: "保留候选并重试受控验证准备",
+};
+const engineeringProofMissingLabels = {
+  TASK_PROCESS_LIVE: "原任务执行进程仍在运行",
+  INVOCATION_UNRECORDED: "缺少原调用记录",
+  OUTCOME_UNKNOWN: "原调用结果尚未确认",
+  OUTCOME_REJECTED: "原产出已被拒绝，需修复契约并核验现场，不能重复接纳",
+  STOP_UNRECORDED: "缺少可信停止记录",
+  PROCESS_LIVE_OR_UNKNOWN: "进程仍在运行或停止状态未知",
+  CHECKPOINT_UNAVAILABLE: "缺少可验证的工作现场",
+  CHECKPOINT_DRIFT: "原工作现场已变化，需要重新核验",
+  PREREQUISITES_UNVERIFIED: "执行前提尚未核验通过",
+  BUDGET_EXHAUSTED: "已授权执行额度耗尽",
+  ORIGINAL_CLAIM_UNAVAILABLE: "缺少原执行身份和权限记录",
+  VERIFICATION_EVIDENCE_UNAVAILABLE: "缺少已接纳的原 QA 记录或保留候选证据",
+  VERIFIER_PREPARATION_UNAVAILABLE: "缺少原验证准备与执行身份的精确记录",
+  NATIVE_EXECUTION_UNCERTAIN: "原生验证已经开始，执行结果尚未确认",
+};
+function engineeringWaitSteps(request) {
+  if (["DONE", "CLOSED"].includes(request.stage)) return [];
+  return currentRequestTasks(request).filter(task => !task.terminal).flatMap(task =>
+    (task.role_queue || []).filter(step =>
+      ["WAITING_HUMAN", "WAITING_DEPENDENCY"].includes(step.status) &&
+      step.wait_disposition?.responsibility === "engineering" &&
+      step.wait_disposition.facts.work_item_id === step.work_item_id &&
+      (!task.task_id || step.wait_disposition.facts.task_id === task.task_id)
+    ).map(step => ({task, step})));
+}
+function engineeringWaitIntent(request, step) {
+  const facts = step.wait_disposition.facts;
+  return {
+    project_id: request.project_id,
+    delivery_id: request.id,
+    expected_checkpoint_sha256: request.checkpoint_sha256,
+    work_item_id: step.work_item_id,
+    expected_disposition_sha256: step.wait_disposition_sha256,
+    expected_task_intent_sha256: facts.task_intent_sha256,
+    expected_source_revision: facts.source_revision,
+    expected_checkpoint_sequence: facts.checkpoint_sequence,
+  };
+}
+function sameEngineeringWaitIntent(intent, bound) {
+  return Object.entries(bound).every(([key, value]) => intent?.[key] === value);
+}
+function engineeringWaitProof(request, step) {
+  const bound = engineeringWaitIntent(request, step);
+  const operation = [...operations].sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+    .find(item => item.intent.action === "INSPECT_DELIVERY_WAIT" &&
+      sameEngineeringWaitIntent(item.intent, bound));
+  const proof = operation?.status === "SUCCEEDED" ? operation.result?.engineering_wait_investigation : null;
+  if (!proof || operation.result.checkpoint_sha256 !== request.checkpoint_sha256 ||
+      proof.task_id !== step.wait_disposition.facts.task_id ||
+      proof.work_item_id !== bound.work_item_id ||
+      proof.disposition_sha256 !== bound.expected_disposition_sha256 ||
+      proof.task_intent_sha256 !== bound.expected_task_intent_sha256 ||
+      proof.source_revision !== bound.expected_source_revision ||
+      proof.checkpoint_sequence !== bound.expected_checkpoint_sequence ||
+      !/^[a-f0-9]{64}$/.test(proof.proof_sha256)) return null;
+  return proof;
+}
+function engineeringWaitDecision(request, step, proof) {
+  if (!proof) return null;
+  const bound = engineeringWaitIntent(request, step);
+  return operations.find(item => item.status === "SUCCEEDED" &&
+    item.intent.action === "RESOLVE_DELIVERY_WAIT" && sameEngineeringWaitIntent(item.intent, bound) &&
+    item.result?.engineering_wait_resolution?.proof_sha256 === proof.proof_sha256)?.result.engineering_wait_resolution || null;
+}
+async function submitEngineeringWaitOperation(intent) {
+  const request = requestById(intent.delivery_id);
+  const current = request && engineeringWaitSteps(request).find(({step}) =>
+    sameEngineeringWaitIntent(intent, engineeringWaitIntent(request, step)));
+  const proof = current && engineeringWaitProof(request, current.step);
+  if (!current || (intent.action === "RESOLVE_DELIVERY_WAIT" &&
+      (!proof || proof.proof_sha256 !== intent.proof_sha256 ||
+       !(proof.permitted_resolutions || []).includes(intent.resolution_kind) ||
+       proof.missing?.length || engineeringWaitDecision(request, current.step, proof)))) {
+    operationNotice = {kind: "error", title: "工程等待事实已变化",
+      message: "请刷新当前需求并重新调查，旧调查不能用于处理新的执行现场。"};
+    renderDetail();
+    renderNotification();
+    return null;
+  }
+  return submitOperation(intent);
+}
+function appendEngineeringInvestigation(target, proof) {
+  target.append(el("p", "调查结果 · " + proof.next_action));
+  const missing = proof.missing || [];
+  if (missing.length) {
+    target.append(el("strong", "仍需核验的事实"));
+    const list = el("ul");
+    for (const item of missing) list.append(el("li", engineeringProofMissingLabels[item] || item));
+    target.append(list, el("p", "事实未齐全，继续保持工程等待；调查不批准未知执行或验收结论。", "muted"));
+  } else {
+    const permitted = (proof.permitted_resolutions || []).map(item => engineeringResolutionLabels[item]).filter(Boolean);
+    target.append(el("p", permitted.length ? "可处理方式 · " + permitted.join("、") : "尚无可安全执行的处理方式。", "muted"));
+  }
+}
+function engineeringWaitBox(request, task, step) {
+  const management = viewGroup(engineeringDetails("工程处理 · 调查与决定", step.work_item_id),
+    "engineering-wait:" + step.work_item_id);
+  management.append(el("h3", label(step.role) + "阶段工程等待"),
+    el("p", "工程授权者核验执行与现场后记录处理决定。产品负责人无需选择内部恢复方式；服务会检查实际工程职责。", "muted"));
+  const bound = engineeringWaitIntent(request, step);
+  if (!/^[a-f0-9]{64}$/.test(bound.expected_disposition_sha256 || "")) {
+    management.append(el("p", "当前等待缺少精确处置身份。请刷新页面；仍缺失时由工程团队检查服务版本与记录。", "error"));
+    return management;
+  }
+  const proof = engineeringWaitProof(request, step);
+  const proofSha256 = proof?.proof_sha256;
+  const decision = engineeringWaitDecision(request, step, proof);
+  const running = activeOperation(request.id);
+  if (proof) appendEngineeringInvestigation(management, proof);
+  if (decision) {
+    management.append(el("p", "工程决定已记录，实际进度以新的执行事实和独立验收报告为准。当前读取的等待状态仍保留。", "muted"));
+  } else if (canControlCurrentTeam() && !running) {
+    const actions = el("div", undefined, "row");
+    actions.append(deliveryButton(proof ? "重新调查工程等待" : "调查工程等待", () =>
+      submitEngineeringWaitOperation({...bound, action: "INSPECT_DELIVERY_WAIT"}), "secondary"));
+    if (proof && !proof.missing?.length)
+      for (const kind of proof.permitted_resolutions || []) {
+        const title = engineeringResolutionLabels[kind];
+        if (title) actions.append(deliveryButton(title, () => submitEngineeringWaitOperation({
+          ...bound, action: "RESOLVE_DELIVERY_WAIT", resolution_kind: kind, proof_sha256: proofSha256,
+        }), "primary"));
+      }
+    management.append(actions);
+  } else if (running) {
+    management.append(el("p", "工程操作正在处理。原等待只有在新的执行事实成立后才解除。", "muted"));
+  }
+  const technical = viewGroup(engineeringDetails("调查绑定详情", step.work_item_id + ":binding"),
+    "engineering-wait-binding:" + step.work_item_id);
+  technical.append(el("p", "任务 · " + (task.task_id || task.id), "paths"),
+    el("p", "工作项 · " + bound.work_item_id, "paths"),
+    el("p", "执行基线 · " + bound.expected_source_revision, "paths"),
+    el("p", "处置摘要 · " + bound.expected_disposition_sha256, "paths"));
+  if (proof) technical.append(el("p", "调查摘要 · " + proof.proof_sha256, "paths"),
+    el("p", "调查时间 · " + time(proof.inspected_at), "muted"));
+  management.append(technical);
+  appendEngineeringBaseline(management, request, task, step);
+  return management;
+}
+function engineeringBaselineFacts(request, task, step) {
+  const facts = step.wait_disposition?.facts;
+  if (task.terminal || task.status !== "IMPLEMENTING" || step.role !== "coder" ||
+      !["READY", "RETRY_SCHEDULED", "WAITING_HUMAN", "WAITING_DEPENDENCY"].includes(step.status) ||
+      step.lease_liveness === "LEASE_VALID" || !facts || facts.task_id !== task.task_id ||
+      facts.work_item_id !== step.work_item_id ||
+      !Number.isInteger(task.task_revision) || task.task_revision < 1 ||
+      task.task_revision !== facts.checkpoint_sequence ||
+      task.task_intent_sha256 !== facts.task_intent_sha256 ||
+      !/^[a-f0-9]{64}$/.test(task.task_intent_sha256 || "") ||
+      !/^[a-f0-9]{40}$/.test(facts.source_revision || "")) return null;
+  return {project_id: request.project_id, delivery_id: request.id,
+    expected_checkpoint_sha256: request.checkpoint_sha256, task_id: task.task_id,
+    expected_task_intent_sha256: task.task_intent_sha256, expected_task_revision: task.task_revision,
+    expected_work_item_id: step.work_item_id, expected_source_revision: facts.source_revision};
+}
+function engineeringBaselinePlan(request, task, step) {
+  const bound = engineeringBaselineFacts(request, task, step);
+  if (!bound) return null;
+  const operation = [...operations].sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+    .find(item => item.intent.action === "PROPOSE_EXECUTION_BASELINE" &&
+      sameEngineeringWaitIntent(item.intent, bound));
+  const plan = operation?.status === "SUCCEEDED" ? operation.result?.execution_baseline_plan : null;
+  if (!plan || operation.result.checkpoint_sha256 !== request.checkpoint_sha256 ||
+      !/^[a-f0-9]{64}$/.test(plan.plan_sha256 || "") ||
+      plan.facts?.task?.id !== bound.task_id || plan.facts.task_revision !== bound.expected_task_revision ||
+      plan.facts.work_item_id !== bound.expected_work_item_id ||
+      plan.dirty_capture?.source_revision !== bound.expected_source_revision ||
+      plan.target_base_ref !== operation.intent.target_base_ref || plan.input_mode !== operation.intent.input_mode ||
+      !["preserve_draft", "coder_reapply"].includes(plan.input_mode)) return null;
+  return plan;
+}
+async function submitEngineeringBaselineOperation(intent, originalBound) {
+  const request = requestById(intent.delivery_id);
+  const current = request && engineeringWaitSteps(request).find(({task, step}) =>
+    sameEngineeringWaitIntent(engineeringBaselineFacts(request, task, step), originalBound));
+  const plan = current && engineeringBaselinePlan(request, current.task, current.step);
+  if (!current || (intent.action === "EXECUTE_EXECUTION_BASELINE" &&
+      (!plan || plan.plan_sha256 !== intent.expected_plan_sha256 || plan.conflicted))) {
+    operationNotice = {kind: "error", title: "执行基线事实已变化",
+      message: "请刷新当前需求并重新调查；旧计划不能用于更新新的工作现场。"};
+    renderDetail();
+    renderNotification();
+    return null;
+  }
+  if (intent.action === "PROPOSE_EXECUTION_BASELINE" && !/^[a-f0-9]{40}$/.test(intent.target_base_ref || "")) {
+    operationNotice = {kind: "error", title: "目标代码版本不完整",
+      message: "工程负责人需填写已提交代码的完整 40 位版本，平台会核验精确输入和原分支。"};
+    renderNotification();
+    return null;
+  }
+  return submitOperation(intent);
+}
+function appendEngineeringBaseline(target, request, task, step) {
+  const bound = engineeringBaselineFacts(request, task, step);
+  if (!bound) return;
+  const fold = viewGroup(engineeringDetails("工程处理 · 更新原分支基线", step.work_item_id + ":baseline"),
+    "engineering-baseline:" + step.work_item_id);
+  fold.append(el("p", "平台修复后可在同一需求分支更新代码执行基线。调查会保留完整草稿、候选与旧执行记录；批准不替代之后的 QA 和 Review。", "muted"));
+  const plan = engineeringBaselinePlan(request, task, step);
+  const planSha256 = plan?.plan_sha256;
+  const targetBaseRef = plan?.target_base_ref;
+  const inputMode = plan?.input_mode;
+  const active = activeOperation(request.id);
+  const executed = plan && operations.some(item => item.status === "SUCCEEDED" &&
+    item.intent.action === "EXECUTE_EXECUTION_BASELINE" && item.intent.task_id === task.task_id &&
+    item.intent.delivery_id === request.id && item.intent.expected_plan_sha256 === plan.plan_sha256);
+  if (plan) {
+    fold.append(el("p", plan.conflicted ? "原草稿与目标代码存在冲突，原现场保留。需明确提出让 Coder 读取完整旧补丁后适配的新计划。" :
+      plan.input_mode === "coder_reapply" ? "当前计划从目标代码建立干净执行输入，由 Coder 读取完整旧补丁并适配。" :
+      "当前计划在原需求分支保留草稿并更新执行基线。"),
+      el("p", "原需求分支 · " + (plan.facts.task.branch_name || "未提供"), "paths"),
+      el("p", "目标代码版本 · " + plan.target_base_ref, "paths"));
+    const technical = engineeringDetails("执行基线计划绑定", step.work_item_id + ":baseline-plan");
+    technical.append(el("p", "计划摘要 · " + plan.plan_sha256, "paths"),
+      el("p", "当前执行输入 · " + bound.expected_source_revision, "paths"));
+    fold.append(technical);
+  }
+  if (executed) {
+    fold.append(el("p", "此精确计划已执行，后续进度和验收以新的执行记录为准。", "muted"));
+  } else if (canControlCurrentTeam() && !active) {
+    const field = el("label", "目标已提交代码版本（完整 40 位 SHA）");
+    const input = el("input");
+    input.type = "text";
+    input.maxLength = 40;
+    input.value = plan?.target_base_ref || "";
+    input.setAttribute("aria-label", "目标代码完整版本");
+    field.append(input);
+    fold.append(field, deliveryButton("调查并保留原草稿", () => submitEngineeringBaselineOperation({
+      ...bound, action: "PROPOSE_EXECUTION_BASELINE", target_base_ref: input.value.trim(), input_mode: "preserve_draft",
+    }, bound), "secondary"));
+    if (plan?.conflicted) fold.append(deliveryButton("提出 Coder 适配完整旧补丁的计划", () =>
+      submitEngineeringBaselineOperation({...bound, action: "PROPOSE_EXECUTION_BASELINE",
+        target_base_ref: targetBaseRef, input_mode: "coder_reapply"}, bound), "secondary"));
+    if (plan && !plan.conflicted) fold.append(deliveryButton("批准并更新原分支基线", () =>
+      submitEngineeringBaselineOperation({action: "EXECUTE_EXECUTION_BASELINE", project_id: request.project_id,
+        delivery_id: request.id, expected_checkpoint_sha256: request.checkpoint_sha256, task_id: task.task_id,
+        expected_plan_sha256: planSha256,
+        reference: inputMode === "coder_reapply" ? "批准 Coder 从精确目标版本适配完整旧补丁" :
+          "批准在原需求分支保留草稿并更新到精确目标版本"}, bound), "primary"));
+  } else if (active) {
+    fold.append(el("p", "工程基线操作正在处理，交付进度以之后的角色事实为准。", "muted"));
+  }
+  target.append(fold);
+}
 function deliveryPhase(item) {
   const task = item.request_id ? item : currentRequestTasks(item)
     .filter(task => !task.terminal).sort((a, b) => b.last_activity.localeCompare(a.last_activity))[0];
@@ -788,6 +1043,7 @@ function requestPresentation(request) {
 }
 
 function canContinueDelivery(request) {
+  if (engineeringWaitSteps(request).length) return false;
   if (request.design_recheck_pending)
     return !designBudgetExhausted(request) && !activeOperation(request.id);
   return (
@@ -1186,11 +1442,11 @@ function humanizeBlockingText(value) {
 function requestBlockerSection(request) {
   const summary = requestBlockingSummary(request);
   if (!summary) return null;
-  const section = el(
+  const section = viewGroup(el(
     "section",
     undefined,
     "detail-section request-blocking-section",
-  );
+  ), "request-blockers");
   section.append(
     el("h2", summary.approvedKnowledge ? "下一步" : "阻塞信息"),
     el(
@@ -1244,12 +1500,14 @@ function requestBlockerSection(request) {
   section.append(next);
   if (summary.approval)
     section.append(recoveryApprovalBox(request, summary.approval));
+  for (const {task, step} of engineeringWaitSteps(request))
+    section.append(engineeringWaitBox(request, task, step));
   return section;
 }
 
 function recoveryApprovalBox(request, approval) {
   const management = engineeringDetails("工程管理 · 需工程授权者处理");
-  management.append(el("p", "以下操作供工程授权者使用；产品负责人无需决定技术恢复方式。当前仍使用可信本机操作入口，未引入独立账户权限。", "muted"));
+  management.append(el("p", "以下操作供工程授权者使用；产品负责人无需决定技术恢复方式。服务检查可信本机主体的工程职责，并记录实际批准者。", "muted"));
   const box = el("div", undefined, "approval-box request-blocking-approval");
   box.append(el("h3", approval.title));
   for (const fact of approval.facts) box.append(el("p", fact, "paths"));
@@ -2219,6 +2477,14 @@ function operationNoticeFor(operation) {
       message:
         operation.status === "QUEUED"
           ? "操作已安全接收，正在等待 Manager 执行。关闭弹窗不会中断任务。"
+          : operation.intent.action === "INSPECT_DELIVERY_WAIT"
+            ? "工程团队正在核验原执行与现场。调查期间保留原等待状态，调查不会产生验收结论。"
+          : operation.intent.action === "RESOLVE_DELIVERY_WAIT"
+            ? "工程团队正在记录精确处理决定并继续原交付。是否恢复及验收通过以新的执行记录为准。"
+          : operation.intent.action === "PROPOSE_EXECUTION_BASELINE"
+            ? "工程团队正在核验原分支、完整草稿和目标代码版本，尚未改变交付或验收结论。"
+          : operation.intent.action === "EXECUTE_EXECUTION_BASELINE"
+            ? "工程团队正在按精确计划更新原需求执行基线，交付进度以之后的角色执行记录为准。"
           : "交付流程正在执行。你可以关闭弹窗或页面，任务会继续运行。",
     };
   if (["FAILED", "INTERRUPTED"].includes(operation.status))
@@ -6676,6 +6942,12 @@ function appendExecutionArtifactDetails(target, entry) {
     target.append(el("p", `结果 · ${outcome}`, outcome === "PASS" || outcome === "APPROVE" ? "success" : "blocker"));
   }
   if (details.summary) target.append(el("p", details.summary, "muted"));
+  if (details.environment && typeof details.environment === "object" &&
+      !Array.isArray(details.environment) && Object.keys(details.environment).length) {
+    const environment = engineeringDetails("QA 验证环境与未完成原因", entry.id + ":environment");
+    environment.append(el("pre", JSON.stringify(details.environment, null, 2), "paths"));
+    target.append(environment);
+  }
   const findings = Array.isArray(details.findings) ? details.findings : [];
   if (findings.length) {
     target.append(el("strong", `发现 · ${findings.length} 项`));
@@ -6733,14 +7005,82 @@ function appendExecutionEntry(target, entry, currentTaskId) {
     engineering.append(el("p", "状态原因 · " + entry.details.reason, "muted"));
   if (entry.kind === "evidence" && entry.details?.operation_id)
     item.append(el("p", "操作 · " + entry.details.operation_id, "paths"));
+  appendEngineeringExecutionDetails(item, engineering, entry.details || {});
   target.append(item);
+}
+function appendEngineeringExecutionDetails(target, technical, details) {
+  if (details.kind === "delivery_wait_investigation") {
+    const missing = details.missing || [];
+    if (missing.length) target.append(el("p", "待核验 · " + missing.map(value => engineeringProofMissingLabels[value] || value).join("；")));
+    const permitted = (details.permitted_resolutions || []).map(value => engineeringResolutionLabels[value]).filter(Boolean);
+    if (permitted.length) target.append(el("p", "允许的处理方式 · " + permitted.join("、")));
+    target.append(el("p", "调查只记录事实，不改变验收结论。", "muted"));
+  } else if (details.kind === "delivery_wait_resolution") {
+    target.append(el("p", "工程决定 · " + (engineeringResolutionLabels[details.resolution_kind] || details.resolution_kind)));
+    if (details.operator_id) target.append(el("p", "实际处理者 · " + details.operator_id, "muted"));
+    target.append(el("p", "此记录是工程决定；实际执行和验收结果以之后的角色报告为准。", "muted"));
+  } else if (details.kind === "engineering_disposition_record") {
+    if (details.next_action) target.append(el("p", "下一步 · " + details.next_action));
+    technical.append(el("p", "工程原因类型 · " + details.rejection_code, "paths"));
+  } else if (details.kind === "verifier_preparation_checkpoint") {
+    target.append(el("p", "角色模型调用之前的验证准备 · " + {
+      NOT_STARTED: "原生验证尚未执行", FINISHED: "原生验证执行证据已封存",
+      UNCERTAIN: "原生验证已开始，执行结果尚未确认",
+    }[details.native_execution_state]));
+    target.append(el("p", "准备检查不代表 QA 或 Review 通过。", "muted"));
+    if (details.failure_reason) technical.append(el("p", "准备原因类型 · " + details.failure_reason, "paths"));
+  }
+  if (details.authorization_source) technical.append(el("p", "授权来源 · " + {
+    engineering_operator_decision: "工程负责人明确决定",
+    organization_engineering_policy: "组织工程策略自动授权",
+    human_decision: "人工精确批准",
+  }[details.authorization_source], "muted"));
+  if (details.work_item_id) technical.append(el("p", "工作项 · " + details.work_item_id, "paths"));
+  if (details.proof_sha256) technical.append(el("p", "调查摘要 · " + details.proof_sha256, "paths"));
+}
+function requestOperationHistory(panel, request) {
+  const records = [...operations].filter(operation => operationTarget(operation) === request.id &&
+    operation.intent.project_id === request.project_id)
+    .sort((a, b) => a.updated_at.localeCompare(b.updated_at) || a.operation_id.localeCompare(b.operation_id));
+  if (!records.length) return;
+  const section = viewGroup(el("section", undefined, "detail-section"), "requirement-operation-history");
+  section.append(el("h2", "操作记录（完整历史）"),
+    el("p", `共 ${records.length} 条操作。操作成功仅表示命令返回，交付阶段和验收结果以执行记录为准。`, "muted"));
+  const list = el("ol", undefined, "execution-history");
+  for (const record of records) {
+    const item = viewBlock(el("li", undefined, "execution-history-entry"), "operation:" + record.operation_id, record);
+    item.append(el("strong", label(record.intent.action)), badge(record.status), el("p", time(record.updated_at), "muted"));
+    if (record.error_summary) item.append(el("p", humanizeBlockingText(record.error_summary), "error"));
+    if (record.result?.next_action) item.append(el("p", record.result.next_action));
+    const technical = engineeringDetails("操作工程详情", record.operation_id);
+    technical.append(el("p", "操作 · " + record.operation_id, "paths"));
+    if (record.intent.expected_checkpoint_sha256)
+      technical.append(el("p", "需求记录摘要 · " + record.intent.expected_checkpoint_sha256, "paths"));
+    const proof = record.result?.engineering_wait_investigation;
+    if (proof) {
+      appendEngineeringInvestigation(item, proof);
+      technical.append(el("p", "调查摘要 · " + proof.proof_sha256, "paths"));
+    }
+    const decision = record.result?.engineering_wait_resolution;
+    if (decision) appendEngineeringExecutionDetails(item, technical, {
+      ...decision, operator_id: decision.operator_principal?.operator_id,
+    });
+    item.append(technical);
+    list.append(item);
+  }
+  section.append(list);
+  panel.append(section);
 }
 
 function renderDetail({ incremental = false } = {}) {
   const opener = document.activeElement;
+  const expanded = new Set([...document.querySelectorAll("details[open]")]
+    .filter(node => node.dataset.key).map(node => node.dataset.key));
   renderView(document.getElementById("detail"), `detail:${page}:${currentProjectId()}:${selected?.kind}:${selected?.id}`,
     pollingDetailFacts, buildDetail, incremental);
   rememberModalOpener(document.getElementById("detail"), opener);
+  for (const node of document.querySelectorAll("details"))
+    if (node.dataset.key && expanded.has(node.dataset.key)) node.open = true;
   syncModalState();
 }
 function buildDetail(panel = document.getElementById("detail")) {
@@ -6944,6 +7284,7 @@ function buildDetail(panel = document.getElementById("detail")) {
     if (lastOperation?.operation_id && discussionSection)
       discussionSection.append(modelCallDiagnostics(lastOperation));
     deliveryResult(panel, item);
+    requestOperationHistory(panel, item);
     const artifacts = viewGroup(el("section", undefined, "detail-section stage-artifacts"), "stage-artifacts");
     artifacts.append(el("h2", "阶段产物"));
     documentList(artifacts, item.documents);

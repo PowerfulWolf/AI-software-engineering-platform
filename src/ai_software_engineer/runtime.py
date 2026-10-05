@@ -19,6 +19,7 @@ from ai_software_engineer.agents import (
     StoredContextResolver,
 )
 from ai_software_engineer.agents.continuation import InterruptionRetryControl
+from ai_software_engineer.agents.execution import AgentInvocationControl
 from ai_software_engineer.artifacts import ArtifactStore, FileArtifactStore
 from ai_software_engineer.context import ContextBudget, ContextSource, FileContextStore
 from ai_software_engineer.domain import (
@@ -30,6 +31,7 @@ from ai_software_engineer.domain import (
     Task,
     TaskStatus,
 )
+from ai_software_engineer.domain.agent import DELIVERY_ROLE_INPUTS
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.task import TaskId
 from ai_software_engineer.evaluation import (
@@ -47,32 +49,24 @@ from ai_software_engineer.orchestration import (
     TaskNotRunnable,
 )
 from ai_software_engineer.orchestration.context import RunContextBuilder
+from ai_software_engineer.orchestration.disposition_port import DeliveryFailureControl
+from ai_software_engineer.orchestration.execution_baseline import (
+    BaselineRunContextBuilder,
+    CoderExecutionInputResolver,
+)
 from ai_software_engineer.orchestration.runner import DeliveryTransitionGate
 from ai_software_engineer.orchestration.steps import (
     BoundedRunControl,
     RoleRunBoundary,
     RoleRunPending,
 )
+from ai_software_engineer.orchestration.verification_reservation import VerificationReservation
 from ai_software_engineer.store import MySqlTaskRepository, SqliteTaskRepository
 from ai_software_engineer.store.ports import TaskRepository
 
 EnvVarName = Annotated[str, StringConstraints(pattern=r"^[A-Z_][A-Z0-9_]{0,127}$")]
 
-_ROLE_INPUTS: dict[AgentRole, tuple[ArtifactKind, ...]] = {
-    AgentRole.ORCHESTRATOR: (),
-    AgentRole.CODER: (
-        ArtifactKind.PLAN,
-        ArtifactKind.CODER_PROGRESS,
-        ArtifactKind.QA_REPORT,
-        ArtifactKind.REVIEW_REPORT,
-    ),
-    AgentRole.QA: (ArtifactKind.PLAN, ArtifactKind.IMPLEMENTATION_REPORT),
-    AgentRole.REVIEWER: (
-        ArtifactKind.PLAN,
-        ArtifactKind.IMPLEMENTATION_REPORT,
-        ArtifactKind.QA_REPORT,
-    ),
-}
+_ROLE_INPUTS = DELIVERY_ROLE_INPUTS
 _ROLE_OUTPUTS: dict[AgentRole, tuple[ArtifactKind, ...]] = {
     AgentRole.ORCHESTRATOR: (ArtifactKind.PLAN,),
     AgentRole.CODER: (ArtifactKind.CODER_PROGRESS, ArtifactKind.IMPLEMENTATION_REPORT),
@@ -243,12 +237,20 @@ class RuntimeSession:
         human_action_recorder: RuntimeHumanActionRecorder | None = None,
         artifact_store: ArtifactStore | None = None,
         interruption_control: InterruptionRetryControl | None = None,
+        delivery_failure_control: DeliveryFailureControl | None = None,
+        invocation_control: AgentInvocationControl | None = None,
+        coder_execution_inputs: CoderExecutionInputResolver | None = None,
+        verification_reservation: VerificationReservation | None = None,
     ) -> None:
         self._config = config
         self._context_builder = context_builder
         self._transition_gate = transition_gate
         self._human_action_recorder = human_action_recorder
         self._interruption_control = interruption_control
+        self._delivery_failure_control = delivery_failure_control
+        self._invocation_control = invocation_control
+        self._coder_execution_inputs = coder_execution_inputs
+        self._verification_reservation = verification_reservation
         self._agent_definitions = _validate_agent_definitions(
             agent_definitions if agent_definitions is not None else config.agent_definitions()
         )
@@ -349,6 +351,10 @@ class RuntimeSession:
                 reserved_output_tokens=4_000,
             ),
         )
+        if self._coder_execution_inputs is not None:
+            context_builder = BaselineRunContextBuilder(
+                context_builder, self._context_store, self._coder_execution_inputs
+            )
         instrumented = EvaluatingAgentAdapter(
             case_id=selected_case,
             delegate=self._agent_adapter,
@@ -363,6 +369,10 @@ class RuntimeSession:
             transition_gate=self._transition_gate,
             execution_control=control,
             interruption_control=self._interruption_control,
+            delivery_failure_control=self._delivery_failure_control,
+            invocation_control=self._invocation_control,
+            coder_execution_inputs=self._coder_execution_inputs,
+            verification_reservation=self._verification_reservation,
         )
         return RuntimeRunResult(case_id=selected_case, result=runner.run_task(task.id))
 

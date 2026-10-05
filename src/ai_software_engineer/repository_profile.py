@@ -603,23 +603,11 @@ def _read_git_info(root: Path, git_dir: Path, marker: str) -> VcsInfo:
 def _discover_native_rules(
     root: Path, files: Iterable[Path], repository_id: RepositoryId
 ) -> tuple[NativeRuleSource, ...]:
-    kinds_by_path: dict[str, set[NativeRuleKind]] = defaultdict(set)
-    paths = tuple(files)
-    for path in paths:
-        relative = path.relative_to(root).as_posix()
-        name = path.name.lower()
-        if name == "agents.md":
-            kinds_by_path[relative].add(NativeRuleKind.AGENTS)
-        if name.startswith("contributing"):
-            kinds_by_path[relative].add(NativeRuleKind.CONTRIBUTING)
-        if name.startswith("readme"):
-            kinds_by_path[relative].add(NativeRuleKind.README)
-        if name == ".editorconfig":
-            kinds_by_path[relative].add(NativeRuleKind.EDITORCONFIG)
-        if _is_ci_path(relative):
-            kinds_by_path[relative].add(NativeRuleKind.CI)
-        if relative == ".trellis/spec" or relative.startswith(".trellis/spec/"):
-            kinds_by_path[relative].add(NativeRuleKind.TRELLIS_SPEC)
+    kinds_by_path = {
+        path.relative_to(root).as_posix(): kinds
+        for path in files
+        if (kinds := native_rule_kinds(path.relative_to(root).as_posix()))
+    }
     sources: list[NativeRuleSource] = []
     for relative in sorted(kinds_by_path):
         path = root / relative
@@ -640,12 +628,31 @@ def _discover_native_rules(
             NativeRuleSource(
                 uri=uri,
                 relative_path=relative,
-                kinds=tuple(sorted(kinds_by_path[relative], key=lambda kind: kind.value)),
+                kinds=kinds_by_path[relative],
                 sha256=hashlib.sha256(content).hexdigest(),
                 byte_length=len(content),
             )
         )
     return tuple(sources)
+
+
+def native_rule_kinds(relative: str) -> tuple[NativeRuleKind, ...]:
+    """Shared deterministic discovery for the checkout and immutable Git trees."""
+    kinds: set[NativeRuleKind] = set()
+    name = relative.rsplit("/", 1)[-1].lower()
+    if name == "agents.md":
+        kinds.add(NativeRuleKind.AGENTS)
+    if name.startswith("contributing"):
+        kinds.add(NativeRuleKind.CONTRIBUTING)
+    if name.startswith("readme"):
+        kinds.add(NativeRuleKind.README)
+    if name == ".editorconfig":
+        kinds.add(NativeRuleKind.EDITORCONFIG)
+    if _is_ci_path(relative):
+        kinds.add(NativeRuleKind.CI)
+    if relative == ".trellis/spec" or relative.startswith(".trellis/spec/"):
+        kinds.add(NativeRuleKind.TRELLIS_SPEC)
+    return tuple(sorted(kinds, key=lambda kind: kind.value))
 
 
 def _is_ci_path(relative: str) -> bool:

@@ -368,6 +368,43 @@
           ],
           "default": null,
           "title": "Expected Supersedes By Kind"
+        },
+        "work_slice": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CoderWorkSlice"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "execution_baseline_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Baseline Sha256"
+        },
+        "execution_base_ref": {
+          "anyOf": [
+            {
+              "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Base Ref"
         }
       },
       "required": [
@@ -988,6 +1025,227 @@
       "title": "CommandResult",
       "type": "object"
     },
+    "EngineeringAdmission": {
+      "additionalProperties": false,
+      "description": "One exact application of policy, distinct from RecoveryAuthorization.",
+      "properties": {
+        "kind": {
+          "const": "engineering_admission",
+          "default": "engineering_admission",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "authorization_source": {
+          "const": "organization_engineering_policy",
+          "default": "organization_engineering_policy",
+          "title": "Authorization Source",
+          "type": "string"
+        },
+        "task_id": {
+          "minLength": 1,
+          "title": "Task Id",
+          "type": "string"
+        },
+        "task_intent_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Task Intent Sha256",
+          "type": "string"
+        },
+        "policy": {
+          "$ref": "#/$defs/EngineeringPolicy"
+        },
+        "policy_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Policy Sha256",
+          "type": "string"
+        },
+        "plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "facts_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Facts Sha256",
+          "type": "string"
+        },
+        "capabilities": {
+          "items": {
+            "$ref": "#/$defs/EngineeringCapability"
+          },
+          "minItems": 1,
+          "title": "Capabilities",
+          "type": "array"
+        },
+        "admission_number": {
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Admission Number",
+          "type": "integer"
+        },
+        "admitted_at": {
+          "format": "date-time",
+          "title": "Admitted At",
+          "type": "string"
+        },
+        "admission_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Admission Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "task_intent_sha256",
+        "policy",
+        "policy_sha256",
+        "plan_sha256",
+        "facts_sha256",
+        "capabilities",
+        "admission_number",
+        "admitted_at",
+        "admission_sha256"
+      ],
+      "title": "EngineeringAdmission",
+      "type": "object"
+    },
+    "EngineeringCapability": {
+      "enum": [
+        "verification_refresh",
+        "swift_sandbox",
+        "python_mysql_sandbox",
+        "native_ui_sandbox",
+        "in_scope_prerequisite_repair",
+        "pre_execution_rebind",
+        "execution_baseline_rebind",
+        "owned_mysql_cleanup"
+      ],
+      "title": "EngineeringCapability",
+      "type": "string"
+    },
+    "EngineeringGrant": {
+      "additionalProperties": false,
+      "properties": {
+        "capability": {
+          "$ref": "#/$defs/EngineeringCapability"
+        },
+        "max_admissions": {
+          "maximum": 20,
+          "minimum": 1,
+          "title": "Max Admissions",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "capability",
+        "max_admissions"
+      ],
+      "title": "EngineeringGrant",
+      "type": "object"
+    },
+    "EngineeringPolicy": {
+      "additionalProperties": false,
+      "description": "Versioned organization decision frozen only on newly admitted Tasks.",
+      "properties": {
+        "kind": {
+          "const": "engineering_policy",
+          "default": "engineering_policy",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "policy_id": {
+          "default": "local-bounded-engineering-v1",
+          "minLength": 1,
+          "title": "Policy Id",
+          "type": "string"
+        },
+        "policy_version": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Policy Version",
+          "type": "integer"
+        },
+        "authorization_source": {
+          "const": "organization_engineering_policy",
+          "default": "organization_engineering_policy",
+          "title": "Authorization Source",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/EngineeringScope"
+        },
+        "issued_by": {
+          "$ref": "#/$defs/LocalOperatorPrincipal"
+        },
+        "grants": {
+          "items": {
+            "$ref": "#/$defs/EngineeringGrant"
+          },
+          "minItems": 1,
+          "title": "Grants",
+          "type": "array"
+        },
+        "max_total_admissions": {
+          "default": 12,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Total Admissions",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "scope",
+        "issued_by",
+        "grants"
+      ],
+      "title": "EngineeringPolicy",
+      "type": "object"
+    },
+    "EngineeringScope": {
+      "additionalProperties": false,
+      "properties": {
+        "team_id": {
+          "minLength": 1,
+          "title": "Team Id",
+          "type": "string"
+        },
+        "project_id": {
+          "minLength": 1,
+          "title": "Project Id",
+          "type": "string"
+        },
+        "repository_id": {
+          "minLength": 1,
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "repository_root": {
+          "minLength": 1,
+          "title": "Repository Root",
+          "type": "string"
+        }
+      },
+      "required": [
+        "team_id",
+        "project_id",
+        "repository_id",
+        "repository_root"
+      ],
+      "title": "EngineeringScope",
+      "type": "object"
+    },
     "Evidence": {
       "additionalProperties": false,
       "description": "A stable reference to independently inspectable proof.",
@@ -1286,6 +1544,37 @@
       "title": "KnowledgeResolutionSource",
       "type": "object"
     },
+    "LocalOperatorPrincipal": {
+      "additionalProperties": false,
+      "description": "Trusted local composition identity; request/model text cannot add duties.",
+      "properties": {
+        "kind": {
+          "const": "trusted_local_operator",
+          "default": "trusted_local_operator",
+          "title": "Kind",
+          "type": "string"
+        },
+        "operator_id": {
+          "minLength": 1,
+          "title": "Operator Id",
+          "type": "string"
+        },
+        "duties": {
+          "items": {
+            "$ref": "#/$defs/OperatorDuty"
+          },
+          "minItems": 1,
+          "title": "Duties",
+          "type": "array"
+        }
+      },
+      "required": [
+        "operator_id",
+        "duties"
+      ],
+      "title": "LocalOperatorPrincipal",
+      "type": "object"
+    },
     "ManagerIncident": {
       "additionalProperties": false,
       "description": "Safe evidence supplied to the Manager Leader recovery interface.",
@@ -1349,7 +1638,8 @@
       "enum": [
         "RETRY_DELIVERY",
         "REPAIR_TASK_SUBMITTED",
-        "WAITING_HUMAN"
+        "WAITING_HUMAN",
+        "VERIFICATION_ADMITTED"
       ],
       "title": "ManagerRepairDisposition",
       "type": "string"
@@ -1404,6 +1694,19 @@
           ],
           "default": null,
           "title": "Repair Task Id"
+        },
+        "engineering_admission_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Engineering Admission Sha256"
         }
       },
       "required": [
@@ -2309,6 +2612,14 @@
         "allowlist"
       ],
       "title": "NetworkAccess",
+      "type": "string"
+    },
+    "OperatorDuty": {
+      "enum": [
+        "PRODUCT",
+        "ENGINEERING"
+      ],
+      "title": "OperatorDuty",
       "type": "string"
     },
     "PngEvidence": {
@@ -3823,6 +4134,125 @@
       ],
       "title": "VerifiedRecoveryDecision",
       "type": "object"
+    },
+    "CoderWorkSlice": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "coder_work_slice_v1",
+          "default": "coder_work_slice_v1",
+          "title": "Kind",
+          "type": "string"
+        },
+        "task_id": {
+          "minLength": 1,
+          "title": "Task Id",
+          "type": "string"
+        },
+        "attempt": {
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "plan_artifact_id": {
+          "minLength": 1,
+          "title": "Plan Artifact Id",
+          "type": "string"
+        },
+        "plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "window": {
+          "$ref": "#/$defs/PlanExecutionWindow"
+        },
+        "authorized_work_remaining": {
+          "minimum": 1,
+          "title": "Authorized Work Remaining",
+          "type": "integer"
+        },
+        "completed_step_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Completed Step Ids",
+          "type": "array"
+        },
+        "selected_step_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Selected Step Ids",
+          "type": "array"
+        },
+        "later_step_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Later Step Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "task_id",
+        "attempt",
+        "source_revision",
+        "plan_artifact_id",
+        "plan_sha256",
+        "window",
+        "authorized_work_remaining",
+        "completed_step_ids",
+        "selected_step_ids",
+        "later_step_ids"
+      ],
+      "title": "CoderWorkSlice",
+      "type": "object"
+    },
+    "PlanExecutionWindow": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "serial_coder_window_v1",
+          "default": "serial_coder_window_v1",
+          "title": "Kind",
+          "type": "string"
+        },
+        "hard_seconds": {
+          "maximum": 3600,
+          "minimum": 2,
+          "title": "Hard Seconds",
+          "type": "integer"
+        },
+        "finalization_reserve_seconds": {
+          "maximum": 300,
+          "minimum": 1,
+          "title": "Finalization Reserve Seconds",
+          "type": "integer"
+        },
+        "reserve_rework_attempts": {
+          "default": 1,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Reserve Rework Attempts",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "hard_seconds",
+        "finalization_reserve_seconds"
+      ],
+      "title": "PlanExecutionWindow",
+      "type": "object"
     }
   },
   "discriminator": {
@@ -3831,6 +4261,7 @@
       "candidate_verification_completion": "#/$defs/CandidateVerificationCompletion",
       "candidate_verification_invocation": "#/$defs/CandidateVerificationInvocation",
       "candidate_verification_plan": "#/$defs/CandidateVerificationPlan",
+      "engineering_admission": "#/$defs/EngineeringAdmission",
       "manager_verification_advice": "#/$defs/ManagerVerificationAdvice",
       "prerequisite_repair_plan": "#/$defs/PrerequisiteRepairPlan",
       "python_mysql_resource": "#/$defs/MysqlResourceRecord",
@@ -3870,6 +4301,9 @@
     },
     {
       "$ref": "#/$defs/MysqlResourceRecord"
+    },
+    {
+      "$ref": "#/$defs/EngineeringAdmission"
     }
   ],
   "$schema": "https://json-schema.org/draft/2020-12/schema",

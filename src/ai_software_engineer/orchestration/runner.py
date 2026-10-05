@@ -17,7 +17,13 @@ from ai_software_engineer.agents import (
     RunId,
 )
 from ai_software_engineer.agents.continuation import InterruptionRetryControl
+from ai_software_engineer.agents.execution import AgentInvocationControl
 from ai_software_engineer.artifacts import ArtifactStore, seal_artifact
+from ai_software_engineer.artifacts.ordering import (
+    ArtifactOrderingError,
+    compare_artifact_order,
+    latest_accepted_artifact,
+)
 from ai_software_engineer.context.models import ContextId
 from ai_software_engineer.domain.agent import ROLE_OUTPUTS, AgentDefinition
 from ai_software_engineer.domain.artifact import (
@@ -30,6 +36,10 @@ from ai_software_engineer.domain.artifact import (
     QaReportArtifact,
     ReviewReportArtifact,
 )
+from ai_software_engineer.domain.coder_work import (
+    select_coder_work_slice,
+    validate_coder_slice_output,
+)
 from ai_software_engineer.domain.enums import (
     AgentRole,
     ArtifactKind,
@@ -38,11 +48,18 @@ from ai_software_engineer.domain.enums import (
     TaskStatus,
 )
 from ai_software_engineer.domain.event import EventId
+from ai_software_engineer.domain.execution_baseline import (
+    CoderExecutionInput,
+    resolve_coder_execution_input,
+)
 from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.domain.task import Task, TaskId
 from ai_software_engineer.orchestration.context import RunContextBuilder
+from ai_software_engineer.orchestration.disposition_port import DeliveryFailureControl
+from ai_software_engineer.orchestration.execution_baseline import CoderExecutionInputResolver
 from ai_software_engineer.orchestration.state_machine import build_event
 from ai_software_engineer.orchestration.steps import BoundedRunControl
+from ai_software_engineer.orchestration.verification_reservation import VerificationReservation
 from ai_software_engineer.store import TaskRepository
 
 Clock = Callable[[], datetime]
@@ -151,11 +168,19 @@ class SerialOrchestrator:
         transition_gate: DeliveryTransitionGate | None = None,
         execution_control: BoundedRunControl | None = None,
         interruption_control: InterruptionRetryControl | None = None,
+        delivery_failure_control: DeliveryFailureControl | None = None,
+        invocation_control: AgentInvocationControl | None = None,
+        coder_execution_inputs: CoderExecutionInputResolver | None = None,
+        verification_reservation: VerificationReservation | None = None,
     ) -> None:
         self._repository = repository
         self._transition_gate = transition_gate
         self.execution_control = execution_control
         self._interruption_control = interruption_control
+        self._delivery_failure_control = delivery_failure_control
+        self._invocation_control = invocation_control
+        self._coder_execution_inputs = coder_execution_inputs
+        self._verification_reservation = verification_reservation
         self._artifact_store = artifact_store
         self._context_builder = context_builder
         self._agent_adapter = agent_adapter
@@ -332,6 +357,13 @@ class SerialOrchestrator:
         expected_supersedes: ArtifactId | None = None,
         expected_supersedes_by_kind: Mapping[ArtifactKind, ArtifactId | None] | None = None,
     ) -> _CompletedRun:
+        source = (
+            self._current_coder_input(task)
+            if role in {AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER}
+            else None
+        )
+        if source is not None and role is AgentRole.CODER:
+            candidate_revision = source.source_revision
         if self.execution_control is not None:
             self.execution_control.before_run(
                 task, role, attempt, candidate_revision or task.base_ref
@@ -345,9 +377,6 @@ class SerialOrchestrator:
             input_artifacts=input_artifacts,
         )
         run_id = self._identities.new_run_id(task.id, role, attempt)
-        if run_id in seen_run_ids:
-            raise DeliveryContractViolation(f"duplicate Agent run ID: {run_id}")
-        seen_run_ids.add(run_id)
         progress_inputs = tuple(
             artifact for artifact in input_artifacts if isinstance(artifact, CoderProgressArtifact)
         )
@@ -377,12 +406,47 @@ class SerialOrchestrator:
                 if progress is not None
                 else ()
             ),
+            execution_baseline_sha256=(
+                source.baseline.binding_sha256
+                if source is not None and source.baseline is not None
+                else None
+            ),
+            execution_base_ref=(
+                source.execution_base_ref
+                if source is not None and source.baseline is not None
+                else None
+            ),
+            work_slice=(
+                select_coder_work_slice(
+                    task,
+                    next(a for a in input_artifacts if isinstance(a, PlanArtifact)),
+                    attempt=attempt,
+                    source_revision=context.source_revision,
+                    progress=progress,
+                )
+                if role is AgentRole.CODER
+                else None
+            ),
         )
-        result = self._agent_adapter.run(request)
+        if self._invocation_control is not None and role is not AgentRole.ORCHESTRATOR:
+            request = self._invocation_control.prepare(request)
+        if request.run_id in seen_run_ids:
+            raise DeliveryContractViolation(f"duplicate Agent run ID: {request.run_id}")
+        seen_run_ids.add(request.run_id)
+        replayed = (
+            self._invocation_control.result(request)
+            if self._invocation_control is not None and role is not AgentRole.ORCHESTRATOR
+            else None
+        )
+        result = replayed or self._agent_adapter.run(request)
         self._guard_write()
         self._validate_result_identity(request, result)
+        if self._invocation_control is not None and role is not AgentRole.ORCHESTRATOR:
+            self._invocation_control.completed(request, result)
         if result.status is not AgentRunStatus.SUCCEEDED or result.artifact is None:
             raise AgentRunFailed(result)
+        if request.work_slice is not None:
+            validate_coder_slice_output(request.work_slice, result.artifact)
         if result.artifact.parent_artifact_ids != expected_parents:
             raise AgentRunFailed(
                 result.model_copy(
@@ -427,10 +491,51 @@ class SerialOrchestrator:
         self._guard_write()
         reference = self._artifact_store.put(sealed)
         persisted = self._artifact_store.get(reference.artifact_id)
+        if request.work_slice is not None:
+            validate_coder_slice_output(request.work_slice, persisted)
         return _CompletedRun(
             artifact=persisted,
-            context_id=context.context_id,
-            run_id=run_id,
+            context_id=request.context_manifest_id,
+            run_id=request.run_id,
+        )
+
+    def _current_coder_input(self, task: Task) -> CoderExecutionInput:
+        artifacts = self._artifact_store.list_for_task(task.id)
+        implementation = latest_accepted_artifact(artifacts, ImplementationReportArtifact)
+        progress = latest_accepted_artifact(artifacts, CoderProgressArtifact)
+        baseline_input = (
+            self._coder_execution_inputs.current(task, implementation=implementation, progress=None)
+            if self._coder_execution_inputs is not None
+            else None
+        )
+        current_implementation = implementation
+        if baseline_input is not None and baseline_input.baseline is not None:
+            baseline = baseline_input.baseline
+            if (
+                progress is not None
+                and progress.artifact_id == baseline.superseded_progress_artifact_id
+            ):
+                progress = None
+            if (
+                current_implementation is not None
+                and current_implementation.artifact_id
+                == baseline.superseded_implementation_artifact_id
+            ):
+                current_implementation = None
+        if progress is not None and current_implementation is not None:
+            order = compare_artifact_order(progress, current_implementation, artifacts=artifacts)
+            if order is None:
+                raise ArtifactOrderingError(
+                    "Coder progress and candidate have no publication order"
+                )
+            if order <= 0:
+                progress = None
+        if self._coder_execution_inputs is not None:
+            return self._coder_execution_inputs.current(
+                task, implementation=implementation, progress=progress
+            )
+        return resolve_coder_execution_input(
+            task, implementation=implementation, progress=progress, baseline=None
         )
 
     def _transition(

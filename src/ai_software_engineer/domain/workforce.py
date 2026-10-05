@@ -6,6 +6,7 @@ from typing import Annotated, Literal, Self
 from pydantic import AwareDatetime, Field, StrictBool, StrictInt, StringConstraints, model_validator
 
 from ai_software_engineer.domain.agent import AgentId
+from ai_software_engineer.domain.delivery_disposition import DeliveryDisposition
 from ai_software_engineer.domain.enums import (
     AgentRole,
     BrainTier,
@@ -268,6 +269,9 @@ class WorkItem(DomainModel):
     required_capabilities: tuple[NonEmptyStr, ...] = ()
     preferred_agent_id: AgentId | None = None
     wait_reason: NonEmptyStr | None = None
+    wait_disposition: DeliveryDisposition | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     available_at: AwareDatetime | None = None
     created_at: AwareDatetime
     updated_at: AwareDatetime
@@ -281,6 +285,11 @@ class WorkItem(DomainModel):
             raise ValueError("waiting WorkItem requires wait_reason")
         if self.status not in _WAITING_STATUSES and self.wait_reason is not None:
             raise ValueError("non-waiting WorkItem cannot carry wait_reason")
+        if self.wait_disposition is not None:
+            if self.status not in _WAITING_STATUSES:
+                raise ValueError("non-waiting WorkItem cannot carry a wait disposition")
+            if self.wait_disposition.facts.task_id != self.task_id:
+                raise ValueError("wait disposition must bind the same Task")
         if self.status is WorkItemStatus.RETRY_SCHEDULED and (
             self.available_at is None or self.available_at <= self.updated_at
         ):

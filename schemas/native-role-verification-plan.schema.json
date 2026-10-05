@@ -1,0 +1,234 @@
+{
+  "$defs": {
+    "EngineeringScope": {
+      "additionalProperties": false,
+      "properties": {
+        "team_id": {
+          "minLength": 1,
+          "title": "Team Id",
+          "type": "string"
+        },
+        "project_id": {
+          "minLength": 1,
+          "title": "Project Id",
+          "type": "string"
+        },
+        "repository_id": {
+          "minLength": 1,
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "repository_root": {
+          "minLength": 1,
+          "title": "Repository Root",
+          "type": "string"
+        }
+      },
+      "required": [
+        "team_id",
+        "project_id",
+        "repository_id",
+        "repository_root"
+      ],
+      "title": "EngineeringScope",
+      "type": "object"
+    },
+    "NativeRoleVerificationClaim": {
+      "additionalProperties": false,
+      "properties": {
+        "work_item_id": {
+          "minLength": 1,
+          "title": "Work Item Id",
+          "type": "string"
+        },
+        "lease_id": {
+          "minLength": 1,
+          "title": "Lease Id",
+          "type": "string"
+        },
+        "assignment_id": {
+          "minLength": 1,
+          "title": "Assignment Id",
+          "type": "string"
+        },
+        "agent_id": {
+          "minLength": 1,
+          "title": "Agent Id",
+          "type": "string"
+        },
+        "checkpoint_sequence": {
+          "minimum": 0,
+          "title": "Checkpoint Sequence",
+          "type": "integer"
+        },
+        "dispatch_sequence": {
+          "minimum": 0,
+          "title": "Dispatch Sequence",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "work_item_id",
+        "lease_id",
+        "assignment_id",
+        "agent_id",
+        "checkpoint_sequence",
+        "dispatch_sequence"
+      ],
+      "title": "NativeRoleVerificationClaim",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "const": "native_role_verification_plan_v1",
+      "default": "native_role_verification_plan_v1",
+      "title": "Kind",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "#/$defs/EngineeringScope"
+    },
+    "requirement_id": {
+      "minLength": 1,
+      "title": "Requirement Id",
+      "type": "string"
+    },
+    "task_id": {
+      "minLength": 1,
+      "title": "Task Id",
+      "type": "string"
+    },
+    "task_intent_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Task Intent Sha256",
+      "type": "string"
+    },
+    "run_id": {
+      "minLength": 1,
+      "title": "Run Id",
+      "type": "string"
+    },
+    "role": {
+      "enum": [
+        "qa",
+        "reviewer"
+      ],
+      "title": "Role",
+      "type": "string"
+    },
+    "attempt": {
+      "minimum": 1,
+      "title": "Attempt",
+      "type": "integer"
+    },
+    "work_attempt": {
+      "minimum": 1,
+      "title": "Work Attempt",
+      "type": "integer"
+    },
+    "candidate_revision": {
+      "pattern": "^[a-f0-9]{40}$",
+      "title": "Candidate Revision",
+      "type": "string"
+    },
+    "workspace_root": {
+      "minLength": 1,
+      "title": "Workspace Root",
+      "type": "string"
+    },
+    "context_manifest_id": {
+      "minLength": 1,
+      "title": "Context Manifest Id",
+      "type": "string"
+    },
+    "request_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Request Sha256",
+      "type": "string"
+    },
+    "permissions_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Permissions Sha256",
+      "type": "string"
+    },
+    "plan_artifact_id": {
+      "minLength": 1,
+      "title": "Plan Artifact Id",
+      "type": "string"
+    },
+    "plan_artifact_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Plan Artifact Sha256",
+      "type": "string"
+    },
+    "implementation_artifact_id": {
+      "minLength": 1,
+      "title": "Implementation Artifact Id",
+      "type": "string"
+    },
+    "implementation_artifact_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Implementation Artifact Sha256",
+      "type": "string"
+    },
+    "requirements_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Requirements Sha256",
+      "type": "string"
+    },
+    "capability_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Capability Sha256",
+      "type": "string"
+    },
+    "policy_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Policy Sha256",
+      "type": "string"
+    },
+    "claim": {
+      "$ref": "#/$defs/NativeRoleVerificationClaim"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "plan_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Plan Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "scope",
+    "requirement_id",
+    "task_id",
+    "task_intent_sha256",
+    "run_id",
+    "role",
+    "attempt",
+    "work_attempt",
+    "candidate_revision",
+    "workspace_root",
+    "context_manifest_id",
+    "request_sha256",
+    "permissions_sha256",
+    "plan_artifact_id",
+    "plan_artifact_sha256",
+    "implementation_artifact_id",
+    "implementation_artifact_sha256",
+    "requirements_sha256",
+    "capability_sha256",
+    "policy_sha256",
+    "claim",
+    "created_at",
+    "plan_sha256"
+  ],
+  "title": "NativeRoleVerificationPlan",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/native-role-verification-plan.schema.json"
+}

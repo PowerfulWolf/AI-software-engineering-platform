@@ -5,41 +5,175 @@
   "description": "A single-role execution configuration resolved from an organization AgentProfile, RoleAssignment, ModelSelection, and project policy.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["id", "role", "version", "model", "permissions", "input_artifacts", "output_artifacts", "max_retries", "timeout_seconds"],
+  "required": [
+    "id",
+    "role",
+    "version",
+    "model",
+    "permissions",
+    "input_artifacts",
+    "output_artifacts",
+    "max_retries",
+    "timeout_seconds"
+  ],
   "properties": {
-    "id": {"type": "string", "pattern": "^agent_[a-z0-9][a-z0-9_-]{2,63}$"},
-    "role": {"enum": ["orchestrator", "coder", "qa", "reviewer"]},
-    "version": {"type": "string", "minLength": 1},
-    "model": {"type": "string", "minLength": 1},
-    "provider": {"type": "string"},
-    "route_kind": {"anyOf": [{"enum": ["codex_cli", "responses"]}, {"type": "null"}], "default": null},
-    "connection_mode": {"anyOf": [{"enum": ["direct", "proxy"]}, {"type": "null"}], "default": null},
-    "reasoning_effort": {
+    "id": {
+      "type": "string",
+      "pattern": "^agent_[a-z0-9][a-z0-9_-]{2,63}$"
+    },
+    "role": {
+      "enum": [
+        "orchestrator",
+        "coder",
+        "qa",
+        "reviewer"
+      ]
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "provider": {
+      "type": "string"
+    },
+    "route_kind": {
       "anyOf": [
-        {"enum": ["low", "medium", "high", "xhigh"]},
-        {"type": "null"}
+        {
+          "enum": [
+            "codex_cli",
+            "responses"
+          ]
+        },
+        {
+          "type": "null"
+        }
       ],
       "default": null
     },
-    "system_prompt_ref": {"type": "string", "minLength": 1},
+    "connection_mode": {
+      "anyOf": [
+        {
+          "enum": [
+            "direct",
+            "proxy"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "reasoning_effort": {
+      "anyOf": [
+        {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "system_prompt_ref": {
+      "type": "string",
+      "minLength": 1
+    },
     "permissions": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["read_paths", "write_paths", "commands", "network"],
+      "required": [
+        "read_paths",
+        "write_paths",
+        "commands",
+        "network"
+      ],
       "properties": {
-        "read_paths": {"type": "array", "items": {"type": "string"}},
-        "write_paths": {"type": "array", "items": {"type": "string"}},
-        "commands": {"type": "array", "items": {"type": "string"}},
-        "network": {"enum": ["none", "model_endpoint_only", "allowlist"]},
-        "can_change_state": {"type": "boolean", "default": false},
-        "can_merge": {"type": "boolean", "default": false}
+        "read_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "write_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "commands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "network": {
+          "enum": [
+            "none",
+            "model_endpoint_only",
+            "allowlist"
+          ]
+        },
+        "can_change_state": {
+          "type": "boolean",
+          "default": false
+        },
+        "can_merge": {
+          "type": "boolean",
+          "default": false
+        }
       }
     },
-    "input_artifacts": {"type": "array", "items": {"enum": ["plan", "coder-progress", "implementation-report", "qa-report", "review-report"]}},
-    "output_artifacts": {"type": "array", "items": {"enum": ["plan", "coder-progress", "implementation-report", "qa-report", "review-report"]}},
-    "max_retries": {"type": "integer", "minimum": 0, "maximum": 5},
-    "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 3600},
-    "token_budget": {"type": "integer", "minimum": 1},
-    "metadata": {"type": "object"}
-  }
+    "input_artifacts": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "plan",
+          "coder-progress",
+          "implementation-report",
+          "qa-report",
+          "review-report"
+        ]
+      }
+    },
+    "output_artifacts": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "plan",
+          "coder-progress",
+          "implementation-report",
+          "qa-report",
+          "review-report"
+        ]
+      }
+    },
+    "max_retries": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 5
+    },
+    "timeout_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3600
+    },
+    "token_budget": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "metadata": {
+      "type": "object"
+    }
+  },
+  "$defs": {}
 }

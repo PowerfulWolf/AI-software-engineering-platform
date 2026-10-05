@@ -6,14 +6,26 @@ import json
 import subprocess
 import time
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 from urllib.parse import urlparse
 
 from pydantic import TypeAdapter
 
+from ai_software_engineer.agents.continuation import (
+    CoderInterruptionControl,
+    ContinuationExecutionUncertain,
+    InterruptionAdmissionRejected,
+    InterruptionObservation,
+)
 from ai_software_engineer.agents.diagnostics import http_error_detail, safe_diagnostic
-from ai_software_engineer.agents.execution import ExecutionGuard, execution_scope
+from ai_software_engineer.agents.execution import (
+    ExecutionGuard,
+    SynchronousToolLoopStop,
+    execution_scope,
+)
 from ai_software_engineer.agents.json_schema import strict_output_schema
 from ai_software_engineer.agents.models import (
     AgentErrorCode,
@@ -36,6 +48,7 @@ from ai_software_engineer.agents.ports import (
     AgentError,
     AgentRequestConflict,
 )
+from ai_software_engineer.agents.workspace_admission import InitialWorkspaceAdmission
 from ai_software_engineer.domain import AgentDefinition, AgentRole
 from ai_software_engineer.domain.agent import ROLE_OUTPUTS
 from ai_software_engineer.domain.artifact import (
@@ -47,8 +60,10 @@ from ai_software_engineer.domain.artifact import (
     ReviewReportArtifact,
     validate_artifact_payload,
 )
+from ai_software_engineer.domain.coder_work import validate_coder_slice_output
+from ai_software_engineer.domain.continuation import ContinuationCause
 from ai_software_engineer.domain.model import JsonValue, ReasoningEffort, WirePayload
-from ai_software_engineer.execution import SubprocessCommandExecutor
+from ai_software_engineer.execution import CommandResult, SubprocessCommandExecutor
 from ai_software_engineer.git import (
     CandidateCommitError,
     CandidateCommitRequest,
@@ -57,12 +72,19 @@ from ai_software_engineer.git import (
     WorkspacePolicy,
     WorkspacePolicyError,
 )
+from ai_software_engineer.git.mutation import (
+    MutationInventoryRejected,
+    WorkspaceMutationInventory,
+    capture_mutation_inventory,
+)
+from ai_software_engineer.knowledge.models import digest
 from ai_software_engineer.tools import (
     PolicyBoundToolRegistry,
     ReadFileRequest,
     RunCommandRequest,
     WriteFileRequest,
 )
+from ai_software_engineer.tools.models import ToolRejectedResult
 
 
 class ResponsesAgentError(AgentError):
@@ -71,6 +93,45 @@ class ResponsesAgentError(AgentError):
 
 class ResponsesAgentConfigurationError(AgentConfigurationError, ResponsesAgentError):
     """Raised when a Responses route or role workspace is unsafe."""
+
+
+class _LocalExecutionLimit(RuntimeError):
+    """The single monotonic execution window or bounded loop is exhausted."""
+
+
+@dataclass
+class _ExecutionWindow:
+    deadline: float
+    before: WorkspaceMutationInventory | None = None
+    continuation_prompt: str | None = None
+    output_present: bool = False
+    policy_refused: bool = False
+    completed_operations: list[str] = field(default_factory=list)
+
+    def remaining(self) -> float:
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise _LocalExecutionLimit("Responses execution window exhausted")
+        return remaining
+
+
+class _WindowBoundCommandExecutor:
+    """Keep the real restricted executor within the invocation's remaining window."""
+
+    def __init__(self, delegate: SubprocessCommandExecutor, window: _ExecutionWindow) -> None:
+        self.delegate, self.window = delegate, window
+
+    def run(
+        self,
+        arguments: tuple[str, ...],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> CommandResult:
+        remaining = self.window.remaining()
+        return self.delegate.run(
+            arguments,
+            timeout_seconds=min(timeout_seconds or 600.0, remaining),
+        )
 
 
 class ResponsesAgentAdapter:
@@ -92,6 +153,8 @@ class ResponsesAgentAdapter:
         max_tool_calls: int = 100,
         candidate_commit_skill: CandidateCommitSkill | None = None,
         execution_guard: ExecutionGuard | None = None,
+        initial_workspace_admission: InitialWorkspaceAdmission | None = None,
+        interruption_control: CoderInterruptionControl | None = None,
     ) -> None:
         root = Path(workspace_root).expanduser().resolve(strict=False)
         if not root.is_dir() or root.is_symlink():
@@ -107,6 +170,10 @@ class ResponsesAgentAdapter:
         if not 1 <= max_turns <= 100 or not 1 <= max_tool_calls <= 500:
             raise ResponsesAgentConfigurationError("Responses loop bounds are invalid")
         self._execution_guard = execution_guard
+        self._initial_admission = initial_workspace_admission
+        if interruption_control is not None and agent.role is not AgentRole.CODER:
+            raise ResponsesAgentConfigurationError("interruption control is Coder-only")
+        self._interruption_control = interruption_control
         self._workspace_root = root
         self._endpoint = _normalize_endpoint(endpoint)
         self._api_key = api_key
@@ -138,36 +205,81 @@ class ResponsesAgentAdapter:
                 )
             return self._results[request.run_id]
         started = time.monotonic()
+        window = _ExecutionWindow(deadline=started + request.timeout_seconds)
         initial_head = _git(self._workspace_root, "rev-parse", "HEAD")
+        initial_inventory: WorkspaceMutationInventory | None = None
         try:
+            if self._execution_guard is not None:
+                self._execution_guard.check()
+            window.continuation_prompt = (
+                self._interruption_control.prepare(request, self._workspace_root)
+                if self._interruption_control is not None
+                else None
+            )
             _validate_request_binding(
                 request,
                 self._agent,
                 self._workspace_root,
                 initial_head,
                 self._candidate_commit,
+                self._initial_admission if window.continuation_prompt is None else None,
+                continuation_admitted=window.continuation_prompt is not None,
             )
-            result = self._execute(request, started, initial_head)
-        except TimeoutError:
-            result = _safe_failure(
+            initial_inventory = capture_mutation_inventory(self._workspace_root)
+            result = self._execute(request, started, initial_head, initial_inventory, window)
+        except ContinuationExecutionUncertain:
+            raise
+        except InterruptionAdmissionRejected:
+            result = _failed(
                 request,
-                self._workspace_root,
-                initial_head,
-                AgentErrorCode.TIMEOUT,
-                "Responses provider timed out",
-                transient=True,
+                AgentErrorCode.WORK_INTERRUPTED,
+                "工程续跑准入校验未通过。未调用后续模型。现场已保留。需要工程处理。",
                 duration_ms=_elapsed_ms(started),
+            )
+        except _LocalExecutionLimit:
+            result = self._failure_result(
+                request,
+                window,
+                initial_head,
+                initial_inventory,
+                started,
+                AgentErrorCode.TIMEOUT,
+                "本轮执行时间窗口或工具循环额度已耗尽。现场已保留。",
+                transient=False,
+                cause="local_execution_limit",
                 timed_out=True,
             )
-        except OSError:
-            result = _safe_failure(
+        except TimeoutError:
+            local_limit = time.monotonic() >= window.deadline
+            result = self._failure_result(
                 request,
-                self._workspace_root,
+                window,
                 initial_head,
-                AgentErrorCode.PROVIDER_UNAVAILABLE,
-                "Responses provider is unavailable",
-                transient=True,
-                duration_ms=_elapsed_ms(started),
+                initial_inventory,
+                started,
+                AgentErrorCode.TIMEOUT,
+                "本轮执行时间窗口已耗尽。现场已保留。"
+                if local_limit
+                else "Responses provider timed out",
+                transient=not local_limit,
+                timed_out=True,
+                cause="local_execution_limit" if local_limit else "provider_transient",
+            )
+        except OSError:
+            local_limit = time.monotonic() >= window.deadline
+            result = self._failure_result(
+                request,
+                window,
+                initial_head,
+                initial_inventory,
+                started,
+                AgentErrorCode.TIMEOUT if local_limit else AgentErrorCode.PROVIDER_UNAVAILABLE,
+                "本轮执行时间窗口已耗尽。现场已保留。"
+                if local_limit
+                else "Responses provider is unavailable",
+                transient=not local_limit,
+                cause="local_execution_limit" if local_limit else "provider_transient",
+                timed_out=local_limit,
             )
         except (ValueError, KeyError, TypeError, json.JSONDecodeError):
             result = _safe_failure(
@@ -178,8 +290,14 @@ class ResponsesAgentAdapter:
                 "Responses provider returned invalid structured output",
                 transient=False,
                 duration_ms=_elapsed_ms(started),
+                initial_inventory=initial_inventory,
             )
-        except (CandidateCommitError, ResponsesAgentError, WorkspacePolicyError):
+        except (
+            CandidateCommitError,
+            ResponsesAgentError,
+            WorkspacePolicyError,
+            MutationInventoryRejected,
+        ):
             result = _safe_failure(
                 request,
                 self._workspace_root,
@@ -188,26 +306,122 @@ class ResponsesAgentAdapter:
                 "Responses execution violated its machine boundary",
                 transient=False,
                 duration_ms=_elapsed_ms(started),
+                initial_inventory=initial_inventory,
             )
         self._requests[request.run_id] = request
         self._results[request.run_id] = result
         return result
+
+    def _failure_result(
+        self,
+        request: AgentRequest,
+        window: _ExecutionWindow,
+        initial_head: str,
+        initial_inventory: WorkspaceMutationInventory | None,
+        started: float,
+        code: AgentErrorCode,
+        message: str,
+        *,
+        transient: bool,
+        cause: ContinuationCause,
+        timed_out: bool = False,
+    ) -> AgentResult:
+        control = self._interruption_control
+        if control is not None and cause == "local_execution_limit" and window.output_present:
+            raise ContinuationExecutionUncertain(
+                "角色模型已返回最终输出, 但本轮执行窗口在产物收尾前已耗尽。完整草稿已保留。"
+                "工程负责人需核验已返回产物与当前候选事实; 不得重新调用原执行或跳过独立验收。"
+            )
+        if (
+            control is not None
+            and window.before is not None
+            and request.role is AgentRole.CODER
+            and not window.policy_refused
+        ):
+            if self._execution_guard is not None:
+                self._execution_guard.check()
+            stop = SynchronousToolLoopStop.create(
+                task_id=request.task_id,
+                run_id=request.run_id,
+                request_sha256=digest(request.to_wire()),
+                completed_operation_ids=tuple(window.completed_operations),
+                kind="local_execution_limit" if cause == "local_execution_limit" else "failed",
+                stopped_at=datetime.now(UTC),
+            )
+            try:
+                observation = control.interrupted(
+                    request,
+                    self._workspace_root,
+                    before=window.before,
+                    cause=cause,
+                    original_error_code=code,
+                    process_stop=stop,
+                    output_present=window.output_present,
+                )
+            except ContinuationExecutionUncertain:
+                raise
+            except (InterruptionAdmissionRejected, MutationInventoryRejected):
+                return _failed(
+                    request,
+                    AgentErrorCode.WORK_INTERRUPTED,
+                    "工程执行现场无法安全核验。草稿已保留。需要工程处理。",
+                    duration_ms=_elapsed_ms(started),
+                )
+            except WorkspacePolicyError:
+                return _safe_failure(
+                    request,
+                    self._workspace_root,
+                    initial_head,
+                    AgentErrorCode.POLICY_VIOLATION,
+                    "Responses execution violated its machine boundary",
+                    transient=False,
+                    duration_ms=_elapsed_ms(started),
+                    initial_inventory=initial_inventory,
+                )
+            if observation is not InterruptionObservation.UNCHANGED:
+                return _failed(
+                    request,
+                    AgentErrorCode.WORK_INTERRUPTED,
+                    "工程执行已中断。草稿已保留。"
+                    + (
+                        "平台已核验同步工具均已返回。将通过新的执行记录继续。"
+                        if observation is InterruptionObservation.CAPTURED
+                        else "现场不满足自动继续条件。需要工程处理。"
+                    ),
+                    duration_ms=_elapsed_ms(started),
+                )
+        return _safe_failure(
+            request,
+            self._workspace_root,
+            initial_head,
+            code,
+            message,
+            transient=transient,
+            duration_ms=_elapsed_ms(started),
+            timed_out=timed_out,
+            initial_inventory=initial_inventory,
+        )
 
     def _execute(
         self,
         request: AgentRequest,
         started: float,
         initial_head: str,
+        initial_inventory: WorkspaceMutationInventory,
+        window: _ExecutionWindow,
     ) -> AgentResult:
         registry = PolicyBoundToolRegistry(
             self._workspace_root,
             self._agent,
             run_id=request.run_id,
-            command_executor=SubprocessCommandExecutor(
-                self._workspace_root,
-                self._agent.permissions,
-                execution_guard=self._execution_guard,
-                require_focused_tests=request.role in {AgentRole.QA, AgentRole.REVIEWER},
+            command_executor=_WindowBoundCommandExecutor(
+                SubprocessCommandExecutor(
+                    self._workspace_root,
+                    self._agent.permissions,
+                    execution_guard=self._execution_guard,
+                    require_focused_tests=request.role in {AgentRole.QA, AgentRole.REVIEWER},
+                ),
+                window,
             ),
         )
         prompt = self._prompt_builder.build(request)
@@ -221,6 +435,18 @@ class ResponsesAgentAdapter:
             }
             for message in prompt.messages
         ]
+        if window.continuation_prompt is not None:
+            input_items.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": window.continuation_prompt,
+                        }
+                    ],
+                }
+            )
         for attachment in prompt.images:
             input_items.append(
                 {
@@ -237,6 +463,9 @@ class ResponsesAgentAdapter:
             )
         tool_calls = 0
         latest_usage: AgentUsage | None = None
+        if self._interruption_control is not None:
+            window.before = self._interruption_control.started(request, self._workspace_root)
+        window.remaining()
         for turn in range(1, self._max_turns + 1):
             if self._execution_guard is not None:
                 self._execution_guard.check()
@@ -254,33 +483,63 @@ class ResponsesAgentAdapter:
                     "Accept": "application/json",
                 },
                 body,
-                float(request.timeout_seconds),
+                window.remaining(),
             )
             if self._execution_guard is not None:
                 self._execution_guard.check()
             if not 200 <= response.status_code < 300:
+                window.remaining()
                 status, code, transient = _http_failure(response)
+                message = (
+                    f"Responses provider returned HTTP {response.status_code}; "
+                    + http_error_detail(response.body, self._api_key)
+                )
+                if transient:
+                    return self._failure_result(
+                        request,
+                        window,
+                        initial_head,
+                        initial_inventory,
+                        started,
+                        code,
+                        message,
+                        transient=True,
+                        cause="provider_transient",
+                        timed_out=status is AgentRunStatus.TIMED_OUT,
+                    )
                 return _safe_failure(
                     request,
                     self._workspace_root,
                     initial_head,
                     code,
-                    f"Responses provider returned HTTP {response.status_code}; "
-                    + http_error_detail(response.body, self._api_key),
-                    transient=transient,
+                    message,
+                    transient=False,
                     duration_ms=_elapsed_ms(started),
-                    timed_out=status is AgentRunStatus.TIMED_OUT,
+                    initial_inventory=initial_inventory,
                 )
+            # A returned 2xx body may already contain the final artifact. Resolve
+            # that fact before the deadline check can seal an absent-output stop.
+            # Parsing is bounded by the transport response byte limit; no tool
+            # or candidate action is authorized merely by receiving this body.
+            window.output_present = True
             payload = _response_payload(response)
             latest_usage = _usage(payload) or latest_usage
             calls = _function_calls(payload)
             if calls:
+                try:
+                    returned_artifact = _decode_artifact_output(_output_text(payload))
+                except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+                    window.output_present = False
+                else:
+                    window.output_present = returned_artifact.kind in ROLE_OUTPUTS[request.role]
+                window.remaining()
                 response_items = _conversation_output(payload)
                 outputs: list[WirePayload] = []
                 for call_id, name, arguments in calls:
                     tool_calls += 1
                     if tool_calls > self._max_tool_calls:
-                        raise ResponsesAgentError("Responses tool-call budget exceeded")
+                        raise _LocalExecutionLimit("Responses tool-call budget exceeded")
+                    window.remaining()
                     tool_request = _tool_request(
                         request,
                         name,
@@ -294,8 +553,18 @@ class ResponsesAgentAdapter:
                             tool_result = registry.execute(tool_request)
                     else:
                         tool_result = registry.execute(tool_request)
+                    window.completed_operations.append(tool_request.operation_id)
                     if self._execution_guard is not None:
                         self._execution_guard.check()
+                    if isinstance(
+                        tool_result, ToolRejectedResult
+                    ) and tool_result.error_code not in {
+                        "COMMAND_TIMED_OUT",
+                        "COMMAND_FAILED_TO_START",
+                    }:
+                        window.policy_refused = True
+                        raise WorkspacePolicyError("Responses tool request was rejected")
+                    window.remaining()
                     outputs.append(
                         {
                             "type": "function_call_output",
@@ -313,10 +582,18 @@ class ResponsesAgentAdapter:
                 input_items = [*input_items, *response_items, *outputs]
                 continue
             content = _output_text(payload)
+            window.output_present = True
+            window.remaining()
             artifact = _decode_artifact_output(content)
             if artifact.kind not in ROLE_OUTPUTS[request.role]:
                 raise ValueError("provider Artifact is outside the role contract")
             artifact = _normalize_producer(artifact, request, self._agent)
+            window.remaining()
+            if self._interruption_control is not None and window.before is not None:
+                self._interruption_control.finished(
+                    request, self._workspace_root, before=window.before
+                )
+            window.remaining()
             with execution_scope(self._execution_guard):
                 artifact = _finalize_coder_candidate(
                     request,
@@ -331,6 +608,7 @@ class ResponsesAgentAdapter:
                     artifact,
                     self._candidate_commit,
                 )
+            window.remaining()
             return AgentResult(
                 run_id=request.run_id,
                 task_id=request.task_id,
@@ -343,7 +621,7 @@ class ResponsesAgentAdapter:
                 usage=latest_usage,
                 duration_ms=_elapsed_ms(started),
             )
-        raise ResponsesAgentError("Responses turn budget exceeded")
+        raise _LocalExecutionLimit("Responses turn budget exceeded")
 
 
 def _request_body(
@@ -611,6 +889,9 @@ def _validate_request_binding(
     root: Path,
     initial_head: str,
     candidate_commit: CandidateCommitSkill,
+    initial_admission: InitialWorkspaceAdmission | None = None,
+    *,
+    continuation_admitted: bool = False,
 ) -> None:
     if request.role is not agent.role or request.permissions != agent.permissions:
         raise ResponsesAgentConfigurationError("AgentRequest does not match bound AgentDefinition")
@@ -619,6 +900,14 @@ def _validate_request_binding(
         raise ResponsesAgentConfigurationError(
             "Responses worktree is not at the requested source revision"
         )
+    if continuation_admitted:
+        # Only the trusted control's exact one-use admission can reach this seam.
+        return
+    if initial_admission is not None:
+        if request.role is not AgentRole.CODER:
+            raise ResponsesAgentConfigurationError("workspace seed admission is Coder-only")
+        initial_admission.authorize(request, root)
+        return
     observed = candidate_commit.changed_paths()
     if request.continuation_checkpoint_id is None:
         if observed:
@@ -639,6 +928,8 @@ def _finalize_coder_candidate(
     artifact: Artifact,
     skill: CandidateCommitSkill,
 ) -> Artifact:
+    if request.work_slice is not None:
+        validate_coder_slice_output(request.work_slice, artifact)
     if request.role is not AgentRole.CODER or isinstance(artifact, CoderProgressArtifact):
         return artifact
     if not isinstance(artifact, ImplementationReportArtifact):
@@ -736,8 +1027,9 @@ def _safe_failure(
     transient: bool,
     duration_ms: int,
     timed_out: bool = False,
+    initial_inventory: WorkspaceMutationInventory | None = None,
 ) -> AgentResult:
-    if not _workspace_unchanged(root, initial_head):
+    if not _workspace_unchanged(root, initial_head, initial_inventory):
         code = AgentErrorCode.POLICY_VIOLATION
         # A dirty provider failure is never eligible for fallback or automatic
         # retry, but discarding the already classified provider error makes
@@ -745,7 +1037,7 @@ def _safe_failure(
         # for HTTP failures; sanitize and bound it again here because this is
         # the common safety boundary for transport, decoding and policy errors.
         detail = safe_diagnostic(message, limit=240)
-        message = "failed provider route left repository changes; " f"provider_diagnostic={detail}"
+        message = f"failed provider route left repository changes; provider_diagnostic={detail}"
         transient = False
         timed_out = False
     return AgentResult(
@@ -757,6 +1049,26 @@ def _safe_failure(
         context_manifest_id=request.context_manifest_id,
         status=AgentRunStatus.TIMED_OUT if timed_out else AgentRunStatus.FAILED,
         error=AgentFailure(code=code, message=message, transient=transient),
+        duration_ms=max(0, duration_ms),
+    )
+
+
+def _failed(
+    request: AgentRequest,
+    code: AgentErrorCode,
+    message: str,
+    *,
+    duration_ms: int,
+) -> AgentResult:
+    return AgentResult(
+        run_id=request.run_id,
+        task_id=request.task_id,
+        role=request.role,
+        attempt=request.attempt,
+        source_revision=request.source_revision,
+        context_manifest_id=request.context_manifest_id,
+        status=AgentRunStatus.FAILED,
+        error=AgentFailure(code=code, message=message, transient=False),
         duration_ms=max(0, duration_ms),
     )
 
@@ -811,12 +1123,16 @@ def _git_lines(root: Path, *arguments: str) -> tuple[str, ...]:
     return tuple(line for line in _git(root, *arguments).splitlines() if line)
 
 
-def _workspace_unchanged(root: Path, initial_head: str) -> bool:
+def _workspace_unchanged(
+    root: Path, initial_head: str, initial_inventory: WorkspaceMutationInventory | None = None
+) -> bool:
     try:
-        return _git(root, "rev-parse", "HEAD") == initial_head and not _git(
-            root, "status", "--porcelain"
-        )
-    except ResponsesAgentError:
+        if _git(root, "rev-parse", "HEAD") != initial_head:
+            return False
+        if initial_inventory is not None:
+            return capture_mutation_inventory(root) == initial_inventory
+        return not _git(root, "status", "--porcelain")
+    except (ResponsesAgentError, MutationInventoryRejected):
         return False
 
 

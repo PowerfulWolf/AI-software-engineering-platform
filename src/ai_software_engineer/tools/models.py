@@ -12,9 +12,8 @@ from typing import Annotated, Final, Literal
 from pydantic import Field, StrictBool, StrictInt, StringConstraints, TypeAdapter
 
 from ai_software_engineer.domain.enums import AgentRole
-from ai_software_engineer.domain.identity import RunId
+from ai_software_engineer.domain.identity import OperationId, RunId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
-from ai_software_engineer.evidence.models import OperationId
 from ai_software_engineer.execution import CommandResult
 
 ToolPath = Annotated[str, StringConstraints(min_length=1, max_length=1024)]

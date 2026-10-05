@@ -41,8 +41,9 @@ class PytestSelection(DomainModel):
         return self
 
 
-class PythonMysqlSandboxCapability(DomainModel):
-    kind: Literal["codex_sandbox_pytest_mysql_v1"] = "codex_sandbox_pytest_mysql_v1"
+class PythonMysqlRuntimeFacts(DomainModel):
+    """Common trusted host bytes; no target source or execution approval."""
+
     sandbox_executable: NonEmptyStr
     sandbox_executable_sha256: Sha256
     python_executable: NonEmptyStr
@@ -58,13 +59,6 @@ class PythonMysqlSandboxCapability(DomainModel):
     docker_socket: NonEmptyStr
     docker_daemon_id: str = Field(min_length=1, max_length=256)
     mysql_image_id: Annotated[str, StringConstraints(pattern=r"^sha256:[a-f0-9]{64}$")]
-    selections: tuple[PytestSelection, ...] = Field(min_length=1, max_length=32)
-    denied_relative_paths: tuple[str, ...] = Field(default=(), max_length=4096)
-    max_cases: Literal[256] = 256
-    resource_timeout_seconds: Literal[1200] = 1200
-    transport: Literal["pymysql_unix_proxy_docker_exec_loopback"] = (
-        "pymysql_unix_proxy_docker_exec_loopback"
-    )
 
     @field_validator(
         "sandbox_executable",
@@ -88,10 +82,33 @@ class PythonMysqlSandboxCapability(DomainModel):
         return value
 
     @model_validator(mode="after")
-    def fixed_selection(self) -> Self:
-        ensure_unique((selection.node_id for selection in self.selections), "pytest node IDs")
+    def bound_runtime(self) -> Self:
         if not Path(self.python_executable).is_relative_to(self.python_runtime_root):
             raise ValueError("Python executable must belong to the approved runtime")
+        return self
+
+
+class PythonMysqlHostPrerequisites(PythonMysqlRuntimeFacts):
+    """Before-Coder readiness; never a final candidate capability or verdict."""
+
+    kind: Literal["python_mysql_host_prerequisites_v1"] = "python_mysql_host_prerequisites_v1"
+
+
+class PythonMysqlSandboxCapability(PythonMysqlRuntimeFacts):
+    """The same host facts bound to exact approved candidate test selectors."""
+
+    kind: Literal["codex_sandbox_pytest_mysql_v1"] = "codex_sandbox_pytest_mysql_v1"
+    selections: tuple[PytestSelection, ...] = Field(min_length=1, max_length=32)
+    denied_relative_paths: tuple[str, ...] = Field(default=(), max_length=4096)
+    max_cases: Literal[256] = 256
+    resource_timeout_seconds: Literal[1200] = 1200
+    transport: Literal["pymysql_unix_proxy_docker_exec_loopback"] = (
+        "pymysql_unix_proxy_docker_exec_loopback"
+    )
+
+    @model_validator(mode="after")
+    def fixed_selection(self) -> Self:
+        ensure_unique((selection.node_id for selection in self.selections), "pytest node IDs")
         ensure_unique(self.denied_relative_paths, "denied candidate paths")
         for value in self.denied_relative_paths:
             if redact_text(value).occurrences:

@@ -156,6 +156,7 @@ def _validate_successor(previous: JointCheckpoint | None, item: JointCheckpoint)
         "title",
         "requirement",
         "submitted_at",
+        "execution_window",
     ):
         if getattr(item, field) != getattr(previous, field):
             raise ValueError("joint intake is immutable")

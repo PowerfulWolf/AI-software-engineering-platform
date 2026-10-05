@@ -15,6 +15,7 @@ from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.context import ContextSource, FileContextStore
 from ai_software_engineer.domain import AgentRole, ArtifactKind, Task, TaskStatus
 from ai_software_engineer.domain.branch import available_successor_branch
+from ai_software_engineer.domain.engineering_authority import LocalOperatorPrincipal, OperatorDuty
 from ai_software_engineer.git import GitWorktreeManager
 from ai_software_engineer.manager import production_backend
 from ai_software_engineer.manager.delivery import ResumeProjectDelivery
@@ -77,8 +78,11 @@ class PreExecutionRestartService:
         config: ProductionConfig,
         environment: Mapping[str, str],
         backend: production_backend.ProductionProjectDeliveryBackend,
+        *,
+        operator_principal: LocalOperatorPrincipal | None = None,
     ) -> None:
         self.config, self.environment, self.backend = config, dict(environment), backend
+        self.operator_principal = operator_principal
 
     def propose(self, checkpoint: ProjectDeliveryCheckpoint) -> RestartProposal | None:
         preparation_rebind = (
@@ -272,6 +276,8 @@ class PreExecutionRestartService:
         proposal: RestartProposal,
         command: ResumeProjectDelivery,
     ) -> ContinuationDispatchRecord:
+        if self.operator_principal is not None:
+            self.operator_principal.require_duty(OperatorDuty.ENGINEERING)
         plan, store = proposal.plan, proposal.store()
         if command.approved_plan_sha256 != plan.plan_sha256 or command.approval_reference is None:
             raise RecoveryRejected("restart requires exact explicit human approval")
@@ -293,7 +299,11 @@ class PreExecutionRestartService:
                             plan_sha256=plan.plan_sha256,
                             approved=True,
                             approval_reference=command.approval_reference,
-                            operator_id="console-operator",
+                            operator_id=(
+                                self.operator_principal.operator_id
+                                if self.operator_principal
+                                else "console-operator"
+                            ),
                             rationale="Approved fresh execution before first Coder, same scope",
                             decided_at=command.submitted_at,
                         ),

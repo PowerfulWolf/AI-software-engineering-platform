@@ -11,23 +11,75 @@ import json
 import platform
 import shutil
 import subprocess
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Self
 
 from pydantic import Field, field_validator
 
 from ai_software_engineer.domain.artifact import ArtifactId, Sha256
+from ai_software_engineer.domain.engineering_authority import EngineeringAdmission
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.domain.project_delivery import _stage_digest
 from ai_software_engineer.manager.delivery_checkpoint import CommitSha
 from ai_software_engineer.manager.leader_recovery import (
+    ManagerCapabilityKind,
     ManagerIncident,
     ManagerIncidentKind,
     ManagerLeaderRecovery,
     ManagerRepairCapability,
+    ManagerRepairDisposition,
+    ManagerRepairExecution,
+    ManagerRepairMode,
     ManagerRepairResult,
     ManagerRepairSubmission,
 )
+
+
+@dataclass
+class _VerificationRefreshExecutor:
+    incident: ManagerIncident
+    admit: Callable[[], EngineeringAdmission]
+    admission: EngineeringAdmission | None = None
+
+    def execute(self, incident: ManagerIncident) -> ManagerRepairExecution:
+        if incident != self.incident:
+            raise ValueError("verification refresh targets another exact incident")
+        record = self.admit()
+        self.admission = record
+        return ManagerRepairExecution(
+            repaired=False,
+            summary="精确候选验证已获冻结工程授权；环境修复和验收结果仍须真实执行确认。",  # noqa: RUF001
+            evidence_sha256=record.admission_sha256,
+            engineering_admission_sha256=record.admission_sha256,
+        )
+
+
+def admit_registered_verification_refresh(
+    *, incident: ManagerIncident, admit: Callable[[], EngineeringAdmission]
+) -> EngineeringAdmission:
+    """Register the real receipt service; never infer environment health from NOT_TESTED."""
+    capability = ManagerRepairCapability(
+        id="manager_capability_verification_refresh",
+        kind=ManagerCapabilityKind.BUILTIN,
+        incident_kinds=(ManagerIncidentKind.ENVIRONMENT, ManagerIncidentKind.WORKFLOW),
+        mode=ManagerRepairMode.VERIFICATION_REFRESH,
+        max_attempts=3,
+    )
+    executor = _VerificationRefreshExecutor(incident, admit)
+    result = ManagerLeaderRecovery(
+        capabilities=(capability,),
+        executors={capability.id: executor},
+        task_submitter=_NoAutomaticRepairTasks(),
+    ).recover(incident)
+    if (
+        result.disposition is not ManagerRepairDisposition.VERIFICATION_ADMITTED
+        or executor.admission is None
+        or result.engineering_admission_sha256 != executor.admission.admission_sha256
+    ):
+        raise ValueError("verification refresh was not admitted")
+    return executor.admission
 
 
 class SwiftSandboxCapability(DomainModel):

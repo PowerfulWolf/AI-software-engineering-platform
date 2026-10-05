@@ -1,0 +1,105 @@
+{
+  "$defs": {
+    "AgentRole": {
+      "description": "Delivery-runtime roles bound to Task artifacts and state transitions.",
+      "enum": [
+        "orchestrator",
+        "coder",
+        "qa",
+        "reviewer"
+      ],
+      "title": "AgentRole",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Facts from trusted application services, never model routing suggestions.",
+  "properties": {
+    "task_id": {
+      "minLength": 1,
+      "title": "Task Id",
+      "type": "string"
+    },
+    "work_item_id": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Work Item Id"
+    },
+    "role": {
+      "$ref": "#/$defs/AgentRole"
+    },
+    "classification": {
+      "enum": [
+        "TRANSIENT_INFRA",
+        "INVALID_OUTPUT",
+        "QA_FINDING",
+        "VERIFICATION_INCONCLUSIVE",
+        "REVIEW_FINDING",
+        "POLICY_VIOLATION",
+        "REQUIREMENT_AMBIGUITY",
+        "BUDGET_EXHAUSTED",
+        "PLATFORM_BUG",
+        "EXECUTION_UNCERTAIN",
+        "ENVIRONMENT_UNAVAILABLE",
+        "ENGINEERING_AUTHORIZATION",
+        "SOURCE_PREPARATION_DRIFT"
+      ],
+      "title": "Classification",
+      "type": "string"
+    },
+    "source_revision": {
+      "minLength": 1,
+      "title": "Source Revision",
+      "type": "string"
+    },
+    "task_intent_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Task Intent Sha256",
+      "type": "string"
+    },
+    "checkpoint_sequence": {
+      "minimum": 0,
+      "title": "Checkpoint Sequence",
+      "type": "integer"
+    },
+    "budget_available": {
+      "title": "Budget Available",
+      "type": "boolean"
+    },
+    "retry_authorized": {
+      "default": false,
+      "title": "Retry Authorized",
+      "type": "boolean"
+    },
+    "evidence_ids": {
+      "default": [],
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": "Evidence Ids",
+      "type": "array"
+    }
+  },
+  "required": [
+    "task_id",
+    "role",
+    "classification",
+    "source_revision",
+    "task_intent_sha256",
+    "checkpoint_sequence",
+    "budget_available"
+  ],
+  "title": "DeliveryFailureFacts",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/delivery-failure-facts.schema.json"
+}

@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -23,6 +24,13 @@ from ai_software_engineer.git.capture import (
     WorktreeChangeCapture,
     read_capture_file,
     without_hunk_labels,
+)
+from ai_software_engineer.git.mutation_capture import (
+    MAX_MUTATION_BODY_BYTES,
+    FileMutationCapture,
+    MutationTextBody,
+    WorktreeMutationCapture,
+    read_mutation_body,
 )
 from ai_software_engineer.git.policy import PathPolicyViolation, WorkspacePolicy
 from ai_software_engineer.git.ports import WorktreeRef, WorktreeSnapshot, WorktreeSpec
@@ -408,6 +416,47 @@ class GitWorktreeManager:
         if observed != capture:
             raise WorktreeCaptureRejected("preserved work no longer matches capture")
 
+    def capture_mutations(
+        self,
+        worktree: WorktreeRef,
+        permissions: AgentPermissions,
+        *,
+        denied_paths: tuple[str, ...] = (),
+        base_revision: str | None = None,
+    ) -> WorktreeMutationCapture:
+        """Observe regular text add/edit/delete/mode changes with exact before/after bodies.
+
+        Renames are represented as deletion plus addition; both paths must pass
+        policy. No checkout, index write, patch application or ref change occurs.
+        """
+        if worktree.role is not AgentRole.CODER or worktree.detached or worktree.attempt != 1:
+            raise WorktreeCaptureRejected("mutation capture requires the original Coder checkout")
+        first = self._capture_mutations_once(
+            worktree, permissions, denied_paths, base_revision=base_revision
+        )
+        second = self._capture_mutations_once(
+            worktree, permissions, denied_paths, base_revision=base_revision
+        )
+        if first != second:
+            raise WorktreeCaptureRejected("worktree changed during mutation capture")
+        return first
+
+    def verify_mutations(
+        self,
+        capture: WorktreeMutationCapture,
+        permissions: AgentPermissions,
+        *,
+        denied_paths: tuple[str, ...] = (),
+    ) -> None:
+        observed = self.capture_mutations(
+            capture.worktree,
+            permissions,
+            denied_paths=denied_paths,
+            base_revision=capture.base_revision,
+        )
+        if observed != capture:
+            raise WorktreeCaptureRejected("preserved mutation bodies no longer match capture")
+
     def capture_legacy_changes(
         self,
         worktree: WorktreeRef,
@@ -726,6 +775,163 @@ class GitWorktreeManager:
             patch=patch,
             index_diff_sha256=hashlib.sha256(staged).hexdigest(),
             file_sha256s=tuple(sorted(files.items())),
+            base_revision=base_revision,
+        )
+
+    def _capture_mutations_once(
+        self,
+        worktree: WorktreeRef,
+        permissions: AgentPermissions,
+        denied_paths: tuple[str, ...],
+        *,
+        base_revision: str | None = None,
+    ) -> WorktreeMutationCapture:
+        self._validate_owned_worktree(worktree)
+        self.recover(
+            WorktreeSpec(
+                task_id=worktree.task_id,
+                role=worktree.role,
+                attempt=1,
+                source_revision=worktree.head_revision,
+            )
+        )
+        root = worktree.path
+        diff_base = worktree.head_revision
+        if base_revision is not None:
+            diff_base = self._resolve_revision(base_revision)
+            if diff_base != base_revision:
+                raise WorktreeCaptureRejected("mutation capture base must be a full commit SHA")
+            self._run_git(
+                ("merge-base", "--is-ancestor", diff_base, worktree.head_revision), cwd=root
+            )
+        policy = WorkspacePolicy(root, permissions, denied_paths=denied_paths)
+        untracked = _decode_nul_paths(
+            self._run_git_bytes(("ls-files", "--others", "--exclude-standard", "-z"), cwd=root)
+        )
+        flags = self._run_git_bytes(("ls-files", "-v", "-z"), cwd=root)
+        if any(entry and entry[:1] != b"H" for entry in flags.split(b"\0")):
+            raise WorktreeCaptureRejected("nonstandard index flags are not supported")
+        arguments = (
+            "--no-optional-locks",
+            "-c",
+            "core.fileMode=true",
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+        )
+        raw = self._run_git_bytes(
+            (*arguments, "--raw", "--no-abbrev", "-z", diff_base, "--"), cwd=root
+        )
+        entries = raw.split(b"\0")[:-1]
+        if len(entries) % 2 or len(entries) // 2 + len(untracked) > MAX_CAPTURE_FILES:
+            raise WorktreeCaptureRejected("unsupported mutation file inventory")
+        mutations: dict[str, FileMutationCapture] = {}
+        total_bytes = 0
+        for header, raw_path in zip(entries[::2], entries[1::2], strict=True):
+            fields = header.split()
+            if len(fields) != 5:
+                raise WorktreeCaptureRejected("unsupported mutation file inventory")
+            old_mode, new_mode = fields[0].removeprefix(b":"), fields[1]
+            if (
+                fields[4] not in (b"A", b"M", b"D")
+                or old_mode not in (b"000000", b"100644", b"100755")
+                or new_mode not in (b"000000", b"100644", b"100755")
+                or (fields[4] == b"A" and old_mode != b"000000")
+                or (fields[4] == b"D" and new_mode != b"000000")
+                or (fields[4] == b"M" and (old_mode == b"000000" or new_mode == b"000000"))
+            ):
+                raise WorktreeCaptureRejected("mutation capture supports regular text files only")
+            try:
+                path = raw_path.decode("utf-8")
+                policy.authorize_read(path)
+                policy.authorize_write(path)
+                before = None
+                if old_mode != b"000000":
+                    oid = fields[2].decode("ascii")
+                    if not re.fullmatch(r"(?:[a-f0-9]{40}|[a-f0-9]{64})", oid):
+                        raise ValueError("mutation base object identity is invalid")
+                    if self._run_git(("cat-file", "-t", oid), cwd=root) != "blob":
+                        raise ValueError("mutation base must be a regular-file blob")
+                    size = int(self._run_git(("cat-file", "-s", oid), cwd=root))
+                    if not 0 <= size <= MAX_CAPTURE_BYTES:
+                        raise ValueError("mutation base blob exceeds its byte limit")
+                    content = self._run_git_bytes(("cat-file", "blob", oid), cwd=root)
+                    if len(content) != size:
+                        raise ValueError("mutation base blob size drifted")
+                    before = MutationTextBody(
+                        content.decode("utf-8"), 0o755 if old_mode == b"100755" else 0o644
+                    )
+                after = None if new_mode == b"000000" else read_mutation_body(root, path)
+                if after is not None and after.mode != (0o755 if new_mode == b"100755" else 0o644):
+                    raise ValueError("mutation mode differs from Git observation")
+                mutation = FileMutationCapture(path, before, after)
+                total_bytes += sum(body.size for body in (before, after) if body is not None)
+                if total_bytes > MAX_MUTATION_BODY_BYTES or path in mutations:
+                    raise ValueError("mutation bodies exceed the complete inventory bound")
+                mutations[path] = mutation
+            except (OSError, UnicodeError, ValueError) as error:
+                raise WorktreeCaptureRejected(
+                    "cannot capture bounded regular text mutation bodies"
+                ) from error
+        for path in sorted(untracked):
+            policy.authorize_read(path)
+            policy.authorize_write(path)
+            try:
+                after = read_mutation_body(root, path)
+                if path in mutations:
+                    raise ValueError("duplicate mutation path")
+                total_bytes += after.size
+                if total_bytes > MAX_MUTATION_BODY_BYTES:
+                    raise ValueError("mutation bodies exceed the complete inventory bound")
+                mutations[path] = FileMutationCapture(path, None, after)
+            except (OSError, UnicodeError, ValueError) as error:
+                raise WorktreeCaptureRejected(
+                    "cannot capture bounded regular new text file"
+                ) from error
+        staged_paths = _decode_nul_paths(
+            self._run_git_bytes(
+                (*arguments, "--cached", "--name-only", "-z", diff_base, "--"), cwd=root
+            )
+        )
+        if not staged_paths.issubset(mutations):
+            raise WorktreeCaptureRejected("index-only changes require separate recovery authority")
+        patch_arguments = (
+            *arguments,
+            "--binary",
+            "--full-index",
+            "--no-color",
+            "--unified=0",
+            "--inter-hunk-context=0",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+        )
+        patch = without_hunk_labels(
+            self._run_git_bytes((*patch_arguments, diff_base, "--"), cwd=root)
+        )
+        for path in sorted(untracked):
+            patch += without_hunk_labels(
+                self._run_git_diff_bytes(
+                    (*patch_arguments, "--no-index", "--", "/dev/null", path), cwd=root
+                )
+            )
+        staged = without_hunk_labels(
+            self._run_git_bytes((*patch_arguments, "--cached", diff_base, "--"), cwd=root)
+        )
+        for payload in (patch, staged):
+            if len(payload) > MAX_CAPTURE_BYTES:
+                raise WorktreeCaptureRejected("mutation complete patch exceeds its byte limit")
+            try:
+                text = payload.decode("utf-8")
+            except UnicodeError as error:
+                raise WorktreeCaptureRejected("mutation patch is not UTF-8") from error
+            if b"GIT binary patch" in payload or redact_text(text).occurrences:
+                raise WorktreeCaptureRejected("mutation patch contains binary or sensitive content")
+        return WorktreeMutationCapture(
+            worktree=worktree,
+            patch=patch,
+            index_diff_sha256=hashlib.sha256(staged).hexdigest(),
+            mutations=tuple(mutations[path] for path in sorted(mutations)),
             base_revision=base_revision,
         )
 

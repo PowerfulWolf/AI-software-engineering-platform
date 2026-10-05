@@ -18,9 +18,22 @@ from pydantic import (
 )
 
 from ai_software_engineer.agents.model_diagnostics import ModelCallDiagnostic
+from ai_software_engineer.domain.delivery_resolution import (
+    DeliveryResolution,
+    DeliveryResolutionKind,
+    DeliveryWaitInvestigation,
+    EngineeringDispositionRecord,
+    InspectDeliveryWait,
+)
+from ai_software_engineer.domain.execution_baseline import ExecutionBaselineBinding
 from ai_software_engineer.domain.identity import ProjectId, TeamId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr
 from ai_software_engineer.domain.prerequisite_repair import PrerequisiteRepairRequest
+from ai_software_engineer.manager.baseline_models import ExecutionBaselinePlan
+from ai_software_engineer.manager.baseline_production import (
+    BaselineExecuteCommand,
+    BaselineProposeCommand,
+)
 from ai_software_engineer.manager.delivery import CheckpointDigest
 from ai_software_engineer.manager.delivery_checkpoint import DeliveryId
 from ai_software_engineer.manager.native_ui import NativeUiScenario
@@ -59,6 +72,10 @@ class ConsoleAction(StrEnum):
     CONTINUE_DELIVERY = "CONTINUE_DELIVERY"
     RECOVER_DESIGN = "RECOVER_DESIGN"
     RECHECK_DESIGN = "RECHECK_DESIGN"
+    INSPECT_DELIVERY_WAIT = "INSPECT_DELIVERY_WAIT"
+    RESOLVE_DELIVERY_WAIT = "RESOLVE_DELIVERY_WAIT"
+    PROPOSE_EXECUTION_BASELINE = "PROPOSE_EXECUTION_BASELINE"
+    EXECUTE_EXECUTION_BASELINE = "EXECUTE_EXECUTION_BASELINE"
 
 
 class ConsoleOperationStatus(StrEnum):
@@ -206,6 +223,38 @@ class RecheckDesignIntent(DomainModel):
     expected_checkpoint_sha256: CheckpointDigest
 
 
+class _DeliveryWaitIntent(InspectDeliveryWait):
+    project_id: ProjectId
+    delivery_id: DeliveryId
+    expected_checkpoint_sha256: CheckpointDigest
+
+
+class InspectDeliveryWaitIntent(_DeliveryWaitIntent):
+    action: Literal[ConsoleAction.INSPECT_DELIVERY_WAIT] = ConsoleAction.INSPECT_DELIVERY_WAIT
+
+
+class ResolveDeliveryWaitIntent(_DeliveryWaitIntent):
+    action: Literal[ConsoleAction.RESOLVE_DELIVERY_WAIT] = ConsoleAction.RESOLVE_DELIVERY_WAIT
+    resolution_kind: DeliveryResolutionKind
+    proof_sha256: CheckpointDigest
+
+
+class ProposeExecutionBaselineIntent(BaselineProposeCommand):
+    action: Literal[ConsoleAction.PROPOSE_EXECUTION_BASELINE] = (
+        ConsoleAction.PROPOSE_EXECUTION_BASELINE
+    )
+    project_id: ProjectId
+    expected_checkpoint_sha256: CheckpointDigest
+
+
+class ExecuteExecutionBaselineIntent(BaselineExecuteCommand):
+    action: Literal[ConsoleAction.EXECUTE_EXECUTION_BASELINE] = (
+        ConsoleAction.EXECUTE_EXECUTION_BASELINE
+    )
+    project_id: ProjectId
+    expected_checkpoint_sha256: CheckpointDigest
+
+
 ConsoleIntent = Annotated[
     CreateProjectIntent
     | CreateRequirementIntent
@@ -217,7 +266,11 @@ ConsoleIntent = Annotated[
     | ProductApprovalIntent
     | ContinueDeliveryIntent
     | RecoverDesignIntent
-    | RecheckDesignIntent,
+    | RecheckDesignIntent
+    | InspectDeliveryWaitIntent
+    | ResolveDeliveryWaitIntent
+    | ProposeExecutionBaselineIntent
+    | ExecuteExecutionBaselineIntent,
     Field(discriminator="action"),
 ]
 CONSOLE_INTENT_ADAPTER: TypeAdapter[ConsoleIntent] = TypeAdapter(ConsoleIntent)
@@ -253,6 +306,11 @@ class ConsoleCommandResult(DomainModel):
     next_action: NonEmptyStr
     diagnostic: Annotated[str, StringConstraints(min_length=1, max_length=500)] | None = None
     approval: ConsoleApprovalRequest | None = None
+    engineering_wait_investigation: DeliveryWaitInvestigation | None = None
+    engineering_wait_resolution: DeliveryResolution | None = None
+    engineering_disposition: EngineeringDispositionRecord | None = None
+    execution_baseline_plan: ExecutionBaselinePlan | None = None
+    execution_baseline_binding: ExecutionBaselineBinding | None = None
 
     @model_validator(mode="after")
     def validate_resource_result(self) -> Self:
@@ -432,11 +490,13 @@ __all__ = [
     "CreateRequirementIntent",
     "DeleteRequirementIntent",
     "IdempotencyKey",
+    "InspectDeliveryWaitIntent",
     "OperationId",
     "ProductApprovalIntent",
     "ProductReplyIntent",
     "RecheckDesignIntent",
     "RecoverDesignIntent",
+    "ResolveDeliveryWaitIntent",
     "RestartRequirementIntent",
     "UpdateRequirementIntent",
 ]

@@ -122,6 +122,43 @@
           "title": "Timeout Seconds",
           "type": "integer"
         },
+        "work_slice": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CoderWorkSlice"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "execution_baseline_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Baseline Sha256"
+        },
+        "execution_base_ref": {
+          "anyOf": [
+            {
+              "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Execution Base Ref"
+        },
         "continuation_checkpoint_id": {
           "anyOf": [
             {
@@ -335,6 +372,264 @@
       "title": "CapturedFile",
       "type": "object"
     },
+    "CapturedMutation": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "minLength": 1,
+          "pattern": "^[^\\x00-\\x1f]+$",
+          "title": "Path",
+          "type": "string"
+        },
+        "before": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CapturedMutationBody"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "after": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CapturedMutationBody"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "CapturedMutation",
+      "type": "object"
+    },
+    "CapturedMutationBody": {
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "maxLength": 1000000,
+          "title": "Text",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            420,
+            493
+          ],
+          "title": "Mode",
+          "type": "integer"
+        },
+        "size": {
+          "maximum": 1000000,
+          "minimum": 0,
+          "title": "Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "text",
+        "sha256",
+        "mode",
+        "size"
+      ],
+      "title": "CapturedMutationBody",
+      "type": "object"
+    },
+    "CapturedMutations": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "captured_mutations",
+          "default": "captured_mutations",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v2",
+          "default": "v2",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^task_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "attempt": {
+          "const": 1,
+          "default": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "source_revision": {
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "worktree_path": {
+          "pattern": "^/[^\\x00-\\x1f]*$",
+          "title": "Worktree Path",
+          "type": "string"
+        },
+        "patch": {
+          "maxLength": 1000000,
+          "title": "Patch",
+          "type": "string"
+        },
+        "index_diff_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Index Diff Sha256",
+          "type": "string"
+        },
+        "mutations": {
+          "items": {
+            "$ref": "#/$defs/CapturedMutation"
+          },
+          "maxItems": 256,
+          "title": "Mutations",
+          "type": "array"
+        },
+        "capture_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Capture Sha256",
+          "type": "string"
+        },
+        "base_revision": {
+          "anyOf": [
+            {
+              "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Revision"
+        },
+        "branch_name": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 11,
+              "pattern": "^ai/(feature|bugfix)/[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Branch Name"
+        }
+      },
+      "required": [
+        "task_id",
+        "source_revision",
+        "worktree_path",
+        "patch",
+        "index_diff_sha256",
+        "mutations",
+        "capture_sha256"
+      ],
+      "title": "CapturedMutations",
+      "type": "object"
+    },
+    "CoderWorkSlice": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "coder_work_slice_v1",
+          "default": "coder_work_slice_v1",
+          "title": "Kind",
+          "type": "string"
+        },
+        "task_id": {
+          "minLength": 1,
+          "title": "Task Id",
+          "type": "string"
+        },
+        "attempt": {
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "plan_artifact_id": {
+          "minLength": 1,
+          "title": "Plan Artifact Id",
+          "type": "string"
+        },
+        "plan_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "window": {
+          "$ref": "#/$defs/PlanExecutionWindow"
+        },
+        "authorized_work_remaining": {
+          "minimum": 1,
+          "title": "Authorized Work Remaining",
+          "type": "integer"
+        },
+        "completed_step_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Completed Step Ids",
+          "type": "array"
+        },
+        "selected_step_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Selected Step Ids",
+          "type": "array"
+        },
+        "later_step_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Later Step Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "task_id",
+        "attempt",
+        "source_revision",
+        "plan_artifact_id",
+        "plan_sha256",
+        "window",
+        "authorized_work_remaining",
+        "completed_step_ids",
+        "selected_step_ids",
+        "later_step_ids"
+      ],
+      "title": "CoderWorkSlice",
+      "type": "object"
+    },
     "ContinuationAdmission": {
       "additionalProperties": false,
       "description": "One Task's replacement invocation, authorized by frozen engineering policy.",
@@ -346,8 +641,11 @@
           "type": "string"
         },
         "schema_version": {
-          "const": "v1",
           "default": "v1",
+          "enum": [
+            "v1",
+            "v2"
+          ],
           "title": "Schema Version",
           "type": "string"
         },
@@ -389,12 +687,6 @@
               "properties": {
                 "role": {
                   "const": "coder"
-                },
-                "attempt": {
-                  "const": 2
-                },
-                "continuation_checkpoint_id": {
-                  "type": "null"
                 }
               }
             }
@@ -419,6 +711,20 @@
           "pattern": "^[a-f0-9]{64}$",
           "title": "Admission Sha256",
           "type": "string"
+        },
+        "interrupted_attempt": {
+          "anyOf": [
+            {
+              "maximum": 400,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Interrupted Attempt"
         }
       },
       "required": [
@@ -434,7 +740,54 @@
         "admission_sha256"
       ],
       "title": "ContinuationAdmission",
-      "type": "object"
+      "type": "object",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "v1"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "new_request": {
+                "properties": {
+                  "attempt": {
+                    "const": 2
+                  },
+                  "continuation_checkpoint_id": {
+                    "type": "null"
+                  }
+                }
+              },
+              "interrupted_attempt": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "interrupted_attempt"
+            ],
+            "properties": {
+              "interrupted_attempt": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 399
+              },
+              "new_request": {
+                "properties": {
+                  "attempt": {
+                    "minimum": 2
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "ContinuationScope": {
       "additionalProperties": false,
@@ -486,8 +839,11 @@
           "type": "string"
         },
         "schema_version": {
-          "const": "v1",
           "default": "v1",
+          "enum": [
+            "v1",
+            "v2"
+          ],
           "title": "Schema Version",
           "type": "string"
         },
@@ -503,12 +859,6 @@
               "properties": {
                 "role": {
                   "const": "coder"
-                },
-                "attempt": {
-                  "const": 1
-                },
-                "continuation_checkpoint_id": {
-                  "type": "null"
                 }
               }
             }
@@ -551,7 +901,15 @@
           "$ref": "#/$defs/AgentErrorCode"
         },
         "process_stop": {
-          "$ref": "#/$defs/NativeProcessStop"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativeProcessStop"
+            },
+            {
+              "$ref": "#/$defs/SynchronousToolLoopStop"
+            }
+          ],
+          "title": "Process Stop"
         },
         "process_stop_sha256": {
           "pattern": "^[a-f0-9]{64}$",
@@ -559,7 +917,15 @@
           "type": "string"
         },
         "capture": {
-          "$ref": "#/$defs/CapturedChanges"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CapturedChanges"
+            },
+            {
+              "$ref": "#/$defs/CapturedMutations"
+            }
+          ],
+          "title": "Capture"
         },
         "inventory_before": {
           "$ref": "#/$defs/WorkspaceMutationInventory"
@@ -583,7 +949,6 @@
             "pattern": "^[^\\x00-\\x1f]+$",
             "type": "string"
           },
-          "minItems": 1,
           "title": "Mutation Paths",
           "type": "array",
           "uniqueItems": true
@@ -597,6 +962,19 @@
           "pattern": "^[a-f0-9]{64}$",
           "title": "Receipt Sha256",
           "type": "string"
+        },
+        "previous_admission_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Previous Admission Sha256"
         }
       },
       "required": [
@@ -626,6 +1004,59 @@
         {
           "if": {
             "properties": {
+              "schema_version": {
+                "const": "v1"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "request": {
+                "properties": {
+                  "attempt": {
+                    "const": 1
+                  },
+                  "continuation_checkpoint_id": {
+                    "type": "null"
+                  }
+                }
+              },
+              "mutation_paths": {
+                "minItems": 1
+              },
+              "previous_admission_sha256": {
+                "type": "null"
+              },
+              "capture": {
+                "$ref": "#/$defs/CapturedChanges"
+              },
+              "process_stop": {
+                "$ref": "#/$defs/NativeProcessStop"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "capture": {
+                "$ref": "#/$defs/CapturedMutations"
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "capture": {
+              "properties": {
+                "attempt": {
+                  "const": 1
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
               "cause": {
                 "const": "local_execution_limit"
               }
@@ -635,6 +1066,13 @@
             "properties": {
               "original_error_code": {
                 "const": "TIMEOUT"
+              },
+              "process_stop": {
+                "properties": {
+                  "kind": {
+                    "const": "local_execution_limit"
+                  }
+                }
               }
             }
           },
@@ -649,6 +1087,51 @@
                 ]
               }
             }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "process_stop": {
+                "required": [
+                  "origin"
+                ],
+                "properties": {
+                  "origin": {
+                    "const": "synchronous_responses_tool_loop"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "schema_version": {
+                "const": "v2"
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "cause": {
+                      "const": "provider_transient"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "process_stop": {
+                      "properties": {
+                        "kind": {
+                          "const": "failed"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            ]
           }
         }
       ]
@@ -748,6 +1231,107 @@
       ],
       "title": "NetworkAccess",
       "type": "string"
+    },
+    "PlanExecutionWindow": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "serial_coder_window_v1",
+          "default": "serial_coder_window_v1",
+          "title": "Kind",
+          "type": "string"
+        },
+        "hard_seconds": {
+          "maximum": 3600,
+          "minimum": 2,
+          "title": "Hard Seconds",
+          "type": "integer"
+        },
+        "finalization_reserve_seconds": {
+          "maximum": 300,
+          "minimum": 1,
+          "title": "Finalization Reserve Seconds",
+          "type": "integer"
+        },
+        "reserve_rework_attempts": {
+          "default": 1,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Reserve Rework Attempts",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "hard_seconds",
+        "finalization_reserve_seconds"
+      ],
+      "title": "PlanExecutionWindow",
+      "type": "object"
+    },
+    "SynchronousToolLoopStop": {
+      "additionalProperties": false,
+      "description": "Trusted observation after a synchronous Responses route and its tools returned.\n\nThis is not a native process-group observation. The provider generates data;\nonly the bounded local registry runs tools, sequentially and synchronously.\nAn interrupted Host cannot create this receipt, nor can request/model text.",
+      "properties": {
+        "origin": {
+          "const": "synchronous_responses_tool_loop",
+          "default": "synchronous_responses_tool_loop",
+          "title": "Origin",
+          "type": "string"
+        },
+        "task_id": {
+          "minLength": 1,
+          "title": "Task Id",
+          "type": "string"
+        },
+        "run_id": {
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        },
+        "request_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Request Sha256",
+          "type": "string"
+        },
+        "completed_operation_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Completed Operation Ids",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "kind": {
+          "default": "failed",
+          "enum": [
+            "failed",
+            "local_execution_limit"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "stopped_at": {
+          "format": "date-time",
+          "title": "Stopped At",
+          "type": "string"
+        },
+        "stop_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Stop Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "run_id",
+        "request_sha256",
+        "completed_operation_ids",
+        "stopped_at",
+        "stop_sha256"
+      ],
+      "title": "SynchronousToolLoopStop",
+      "type": "object"
     },
     "WorkspaceMutationInventory": {
       "properties": {

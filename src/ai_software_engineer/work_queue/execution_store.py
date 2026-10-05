@@ -12,7 +12,7 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal, Self, cast
+from typing import TYPE_CHECKING, Literal, Self, cast
 
 from pydantic import TypeAdapter, ValidationError, model_validator
 from pymysql.cursors import DictCursor
@@ -20,7 +20,12 @@ from pymysql.cursors import DictCursor
 from ai_software_engineer.artifacts import ArtifactStore
 from ai_software_engineer.artifacts.ports import ArtifactRef
 from ai_software_engineer.domain.artifact import Artifact, Sha256
-from ai_software_engineer.domain.enums import TaskStatus, WorkItemStatus
+from ai_software_engineer.domain.continuation import task_intent_sha256
+from ai_software_engineer.domain.delivery_resolution import (
+    DeliveryResolution,
+    DeliveryResolutionKind,
+)
+from ai_software_engineer.domain.enums import AgentRole, TaskStatus, WorkItemStatus
 from ai_software_engineer.domain.identity import ContextId, RepositoryId, RunId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.task import Task, TaskId
@@ -30,8 +35,9 @@ from ai_software_engineer.domain.workforce import (
     TaskLease,
     validate_assignment_independence,
 )
+from ai_software_engineer.knowledge.models import digest
 from ai_software_engineer.orchestration.steps import RoleRunBoundary
-from ai_software_engineer.store.mysql_repository import open_mysql_connection
+from ai_software_engineer.store.mysql_repository import _decode_task, _encode, open_mysql_connection
 from ai_software_engineer.work_queue.models import (
     CheckpointSequence,
     QueueArtifactReceipt,
@@ -47,6 +53,9 @@ from ai_software_engineer.work_queue.ports import (
     QueueLeaseLost,
     QueueNotFound,
 )
+
+if TYPE_CHECKING:
+    from ai_software_engineer.manager.verifier_preparation import VerifierPreparationIntent
 
 
 def record_digest(value: DomainModel) -> str:
@@ -111,7 +120,12 @@ class WorkforceFacts:
 
 CapacityReader = Callable[[DictCursor, datetime], WorkforceFacts]
 AuthorityLock = Callable[[DictCursor], None]
-_TABLES = ("work_queue_admissions", "work_queue_steps", "work_queue_accepted_artifacts")
+_TABLES = (
+    "work_queue_admissions",
+    "work_queue_steps",
+    "work_queue_accepted_artifacts",
+    "work_queue_execution_baselines",
+)
 _CANCELLATION_DIGEST = TypeAdapter(Sha256)
 _TERMINAL_TASK_STATUSES = frozenset({TaskStatus.BLOCKED, TaskStatus.FAILED, TaskStatus.DONE})
 
@@ -143,7 +157,347 @@ def read_queue_workforce(cursor: DictCursor, now: datetime) -> WorkforceFacts:
 
 
 class MySqlRoleQueue(MySqlPersistentWorkQueue):
+    @contextmanager
+    def idle_task_scope(self, task_id: str) -> Iterator[DictCursor]:
+        """Fence a controlled same-Task Git action against new role claims."""
+        with (
+            closing(open_mysql_connection(self._dsn)) as connection,
+            self._transaction(connection),
+            connection.cursor(DictCursor) as cursor,
+        ):
+            self._lock_authority(cursor)
+            cursor.execute("SELECT id FROM tasks WHERE id=%s FOR UPDATE", (task_id,))
+            if cursor.fetchone() is None:
+                raise QueueNotFound(task_id)
+            cursor.execute(
+                "SELECT lease_id FROM work_queue_claims WHERE task_id=%s "
+                "AND state='ACTIVE' FOR UPDATE",
+                (task_id,),
+            )
+            if cursor.fetchone() is not None:
+                raise QueueLeaseLost(
+                    "baseline action requires all owned role claims to be released"
+                )
+            yield cursor
+
+    def original_claim(self, lease_id: str) -> QueueClaim:
+        """Read the original CLAIMED event, never reconstruct it from current work."""
+        with (
+            closing(open_mysql_connection(self._dsn)) as connection,
+            connection.cursor(DictCursor) as cursor,
+        ):
+            cursor.execute(
+                "SELECT assignment_json,lease_json,model_selection_json,worker_id "
+                "FROM work_queue_claims WHERE lease_id=%s",
+                (lease_id,),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise QueueNotFound(lease_id)
+            cursor.execute(
+                "SELECT payload_json,occurred_at FROM work_queue_events "
+                "WHERE lease_id=%s AND event_type='CLAIMED' ORDER BY sequence",
+                (lease_id,),
+            )
+            events = cursor.fetchall()
+            if len(events) != 1:
+                raise QueueCorruption("original claim has no unique immutable claim event")
+            event = events[0]
+            payload = json.loads(str(event["payload_json"]))
+            return QueueClaim.model_validate(
+                {
+                    "work_item": payload["work_item"],
+                    "assignment": json.loads(str(row["assignment_json"])),
+                    "lease": json.loads(str(row["lease_json"])),
+                    "model_selection": json.loads(str(row["model_selection_json"])),
+                    "worker_id": row["worker_id"],
+                    "claimed_at": event["occurred_at"],
+                }
+            )
+
+    def claims_for_work_item(self, work_item_id: str) -> tuple[QueueClaim, ...]:
+        """Return exact immutable claim identities, never infer from role/attempt."""
+        with (
+            closing(open_mysql_connection(self._dsn)) as connection,
+            connection.cursor(DictCursor) as cursor,
+        ):
+            cursor.execute(
+                "SELECT lease_id FROM work_queue_claims WHERE work_item_id=%s ORDER BY lease_id",
+                (work_item_id,),
+            )
+            lease_ids = tuple(str(row["lease_id"]) for row in cursor.fetchall())
+        return tuple(self.original_claim(identity) for identity in lease_ids)
+
+    def step_for_claim(self, claim: QueueClaim) -> QueuedRoleStep:
+        """Resolve the source that preceded the immutable CLAIMED event, by SQL order."""
+        original = self.original_claim(claim.lease.id)
+        if original != claim:
+            raise QueueConflict("historical source request changed its original claim")
+        with (
+            closing(open_mysql_connection(self._dsn)) as connection,
+            connection.cursor(DictCursor) as cursor,
+        ):
+            cursor.execute(
+                "SELECT sequence FROM work_queue_events WHERE lease_id=%s AND event_type='CLAIMED'",
+                (claim.lease.id,),
+            )
+            rows = cursor.fetchall()
+            if len(rows) != 1:
+                raise QueueCorruption("claim source has no unique event sequence")
+            cursor.execute(
+                "SELECT payload_json FROM work_queue_events WHERE work_item_id=%s "
+                "AND event_type='EXECUTION_BASELINE_REBOUND' AND sequence<%s "
+                "ORDER BY sequence DESC LIMIT 1",
+                (claim.work_item.id, rows[0]["sequence"]),
+            )
+            event = cursor.fetchone()
+        baseline_sha = None
+        if event is not None:
+            payload = json.loads(str(event["payload_json"]))
+            baseline_sha = str(payload["detail"]["binding_sha256"])
+        return self.step_for_invocation(claim.work_item.id, baseline_sha)
+
+    def preparation_resume_consumed(
+        self,
+        intent: VerifierPreparationIntent,
+        claim: QueueClaim,
+    ) -> bool:
+        from ai_software_engineer.work_queue.preparation_resume import preparation_resume_consumed
+
+        return preparation_resume_consumed(self, self._dsn, intent, claim)
+
     """T046 plus explicit native-reservation adoption and accepted-output receipts."""
+
+    def resolve_wait(self, resolution: DeliveryResolution) -> QueuedWorkItem:
+        """Consume sealed engineering proof with Task, queue and budget in one fence."""
+        resolution.validate_integrity()
+        now = self._clock()
+        with (
+            closing(open_mysql_connection(self._dsn)) as connection,
+            self._transaction(connection),
+            connection.cursor(DictCursor) as cursor,
+        ):
+            self._lock_authority(cursor)
+            current = self._get_locked(cursor, resolution.work_item_id, lock=True)
+            cursor.execute(
+                "SELECT payload_json FROM work_queue_events WHERE work_item_id=%s "
+                "AND event_type='WAIT_RESOLVED' ORDER BY sequence DESC FOR UPDATE",
+                (current.id,),
+            )
+            for prior in cursor.fetchall():
+                payload = json.loads(str(prior["payload_json"]))
+                detail = payload.get("detail", {})
+                if detail.get("resolution_sha256") == resolution.resolution_sha256:
+                    if detail.get("resolution") != resolution.to_wire():
+                        raise QueueCorruption(
+                            "consumed engineering decision changed its exact body"
+                        )
+                    return self._get_locked(cursor, str(detail["next_work_item_id"]), lock=True)
+            disposition = current.wait_disposition
+            if (
+                current.status
+                not in {WorkItemStatus.WAITING_HUMAN, WorkItemStatus.WAITING_DEPENDENCY}
+                or disposition is None
+                or disposition.disposition_sha256 != resolution.expected_disposition_sha256
+                or current.task_id != resolution.task_id
+            ):
+                raise QueueConflict("engineering decision does not match the current wait")
+            cursor.execute(
+                "SELECT payload_json,revision FROM tasks WHERE id=%s FOR UPDATE", (current.task_id,)
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise QueueCorruption("waiting Task is missing")
+            task = _decode_task(current.task_id, str(row["payload_json"]))
+            step = self.step(current.id)
+            if (
+                task.status in {TaskStatus.BLOCKED, TaskStatus.FAILED, TaskStatus.DONE}
+                or task_intent_sha256(task) != resolution.expected_task_intent_sha256
+                or digest(task.to_wire()) != resolution.task_snapshot_sha256
+                or row["revision"] != resolution.task_revision
+                or resolution.task_revision != resolution.expected_checkpoint_sequence
+                or record_digest(step) != resolution.step_sha256
+                or step.boundary.source_revision != resolution.expected_source_revision
+            ):
+                raise QueueConflict("engineering decision Task or source facts drifted")
+            cursor.execute(
+                "SELECT lease_id FROM work_queue_claims WHERE work_item_id=%s "
+                "AND state='ACTIVE' FOR UPDATE",
+                (current.id,),
+            )
+            if cursor.fetchone() is not None:
+                raise QueueLeaseLost("a live claim prevents engineering wait resolution")
+            if resolution.resolution_kind in {
+                DeliveryResolutionKind.RETRY_FROM_CHECKPOINT,
+                DeliveryResolutionKind.REVERIFY_CANDIDATE,
+                DeliveryResolutionKind.RETRY_VERIFIER_PREPARATION,
+            }:
+                if current.role not in (AgentRole.CODER, AgentRole.QA, AgentRole.REVIEWER):
+                    raise QueueConflict("wait does not belong to a delivery role")
+                failure = resolution.retry_failure
+                if resolution.resolution_kind is DeliveryResolutionKind.REVERIFY_CANDIDATE:
+                    verification = resolution.verification_retry
+                    if (
+                        current.role is not AgentRole.QA
+                        or verification is None
+                        or verification.candidate_revision != step.boundary.source_revision
+                        or task.work_budget_exhausted
+                        or task.attempts >= task.max_attempts
+                    ):
+                        raise QueueConflict("候选复验缺少精确 QA 证据或冻结工作额度")
+                    cursor.execute(
+                        "SELECT id,task_id,payload_json,sha256 FROM work_queue_accepted_artifacts "
+                        "WHERE task_id=%s",
+                        (task.id,),
+                    )
+                    accepted = tuple(
+                        _decode(record, AcceptedRoleArtifact) for record in cursor.fetchall()
+                    )
+                    if not any(
+                        record.work_item_id == current.id
+                        and record.receipt.artifact_id == verification.previous_qa_artifact_id
+                        and record.receipt.sha256 == verification.previous_qa_sha256
+                        and record.source_revision == verification.candidate_revision
+                        and record.run_id == verification.previous_run_id
+                        and record.context_manifest_id == verification.previous_context_manifest_id
+                        for record in accepted
+                    ):
+                        raise QueueConflict("候选复验没有原 QA 的精确接纳记录")
+                    updated_task = Task.model_validate(
+                        {**task.to_wire(), "attempts": task.attempts + 1}
+                    )
+                elif (
+                    resolution.resolution_kind is DeliveryResolutionKind.RETRY_VERIFIER_PREPARATION
+                ):
+                    preparation = resolution.verifier_preparation
+                    if (
+                        current.role not in {AgentRole.QA, AgentRole.REVIEWER}
+                        or preparation is None
+                        or preparation.native_execution_state != "FINISHED"
+                        or preparation.candidate_revision != step.boundary.source_revision
+                        or task.work_budget_exhausted
+                        or task.attempts >= task.max_attempts
+                    ):
+                        raise QueueConflict("验证准备重试缺少精确已终结证据或冻结工作额度")
+                    updated_task = Task.model_validate(
+                        {**task.to_wire(), "attempts": task.attempts + 1}
+                    )
+                elif resolution.retry_cause == "provider_transient":
+                    if (
+                        failure is None
+                        or failure.role is not current.role
+                        or failure.attempt != task.attempts
+                    ):
+                        raise QueueConflict(
+                            "new execution requires the exact sealed interruption budget fact"
+                        )
+                    updated_task = task.with_retry_failure(failure)
+                elif resolution.retry_cause == "local_execution_limit":
+                    if (
+                        failure is not None
+                        or task.work_budget_exhausted
+                        or task.attempts >= task.max_attempts
+                    ):
+                        raise QueueConflict("local interruption has no frozen work allowance")
+                    updated_task = Task.model_validate(
+                        {**task.to_wire(), "attempts": task.attempts + 1}
+                    )
+                else:
+                    raise QueueConflict("retry requires a typed sealed interruption cause")
+                if updated_task.attempts <= task.attempts:
+                    raise QueueConflict("no frozen execution allowance remains")
+                cursor.execute(
+                    "UPDATE tasks SET payload_json=%s WHERE id=%s",
+                    (_encode(updated_task.to_wire()), task.id),
+                )
+                identity = "work_" + resolution.resolution_sha256
+                next_item = QueuedWorkItem.model_validate(
+                    {
+                        **current.to_wire(),
+                        "id": identity,
+                        "attempt": updated_task.attempts,
+                        "status": WorkItemStatus.READY,
+                        "wait_reason": None,
+                        "wait_disposition": None,
+                        "available_at": None,
+                        "parent_work_item_id": current.id,
+                        "dispatch_sequence": 0,
+                        "created_at": now,
+                        "updated_at": now,
+                    }
+                )
+                boundary = RoleRunBoundary(
+                    task.id,
+                    current.role,
+                    updated_task.attempts,
+                    resolution.task_revision,
+                    resolution.expected_source_revision,
+                )
+                next_step = QueuedRoleStep(
+                    work_item=next_item,
+                    boundary=boundary,
+                    allocation_sha256=step.allocation_sha256,
+                )
+                _put(cursor, "work_queue_steps", identity, task.id, next_step)
+                next_item = self._enqueue_locked(cursor, next_item)
+                settled = current.model_copy(
+                    update={
+                        "status": WorkItemStatus.CLOSED,
+                        "updated_at": now,
+                        "wait_reason": None,
+                        "wait_disposition": None,
+                    }
+                )
+            else:
+                if resolution.retry_failure is not None:
+                    raise QueueConflict("noninvoking resolution cannot add a retry failure")
+                if resolution.resolution_kind is DeliveryResolutionKind.REPLAY_RECORDED_RESULT:
+                    original = resolution.original_authority
+                    if original is None:
+                        raise QueueConflict(
+                            "result replay requires the original producer authority"
+                        )
+                    claim = self.original_claim(original.lease.id)
+                    if (
+                        claim.assignment != original.assignment
+                        or claim.lease != original.lease
+                        or claim.model_selection != original.model_selection
+                        or (
+                            claim.work_item.id,
+                            claim.work_item.role,
+                            claim.work_item.attempt,
+                            claim.work_item.checkpoint_sequence,
+                        )
+                        != (current.id, current.role, current.attempt, current.checkpoint_sequence)
+                        or current.preferred_agent_id != original.assignment.agent_id
+                    ):
+                        raise QueueConflict("result replay changed the original frozen producer")
+                next_item = current.model_copy(
+                    update={
+                        "status": WorkItemStatus.READY,
+                        "updated_at": now,
+                        "wait_reason": None,
+                        "wait_disposition": None,
+                        "dispatch_sequence": current.dispatch_sequence + 1,
+                    }
+                )
+                settled = next_item
+            self._update_item(cursor, settled)
+            self._append_event(
+                cursor,
+                settled,
+                from_status=current.status,
+                event_type="WAIT_RESOLVED",
+                lease_id=None,
+                occurred_at=now,
+                detail={
+                    "resolution_sha256": resolution.resolution_sha256,
+                    "next_work_item_id": next_item.id,
+                    "resolution": resolution.to_wire(),
+                    "budget_refund": False,
+                },
+            )
+            return next_item
 
     def __init__(
         self,
@@ -243,6 +597,18 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
         return self._find("work_queue_admissions", task_id, RoleQueueAdmission)
 
     def step(self, work_item_id: str) -> QueuedRoleStep:
+        from ai_software_engineer.work_queue.baseline import effective_step
+
+        return effective_step(self, self.original_step(work_item_id))
+
+    def step_for_invocation(self, work_item_id: str, baseline_sha256: str | None) -> QueuedRoleStep:
+        from ai_software_engineer.work_queue.baseline import effective_step
+
+        return effective_step(
+            self, self.original_step(work_item_id), baseline_sha256=baseline_sha256, latest=False
+        )
+
+    def original_step(self, work_item_id: str) -> QueuedRoleStep:
         step = self._find("work_queue_steps", work_item_id, QueuedRoleStep)
         if step is None:
             raise QueueNotFound("role step binding missing")
@@ -339,6 +705,7 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                     update={
                         "status": WorkItemStatus.CLOSED,
                         "wait_reason": None,
+                        "wait_disposition": None,
                         "available_at": None,
                         "updated_at": now,
                     }
@@ -421,6 +788,7 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                 update={
                     "status": WorkItemStatus.CLOSED,
                     "wait_reason": None,
+                    "wait_disposition": None,
                     "available_at": None,
                     "updated_at": now,
                 }
@@ -668,6 +1036,8 @@ def _put(cursor: DictCursor, table: str, key: str, task_id: str, record: DomainM
 
 
 def _decode[T: DomainModel](row: dict[str, object], model: type[T]) -> T:
+    from ai_software_engineer.work_queue.baseline import BaselineQueueConsumption
+
     payload = row["payload_json"]
     if not isinstance(payload, str):
         raise QueueCorruption("queue record payload is not text")
@@ -681,6 +1051,8 @@ def _decode[T: DomainModel](row: dict[str, object], model: type[T]) -> T:
         key, task_id = record.work_item.id, record.boundary.task_id
     elif isinstance(record, AcceptedRoleArtifact):
         key, task_id = record.receipt.artifact_id, record.task_id
+    elif isinstance(record, BaselineQueueConsumption):
+        key, task_id = record.binding.binding_sha256, record.task_id
     else:
         raise QueueCorruption("unknown queue record model")
     if row["id"] != key or row["task_id"] != task_id:

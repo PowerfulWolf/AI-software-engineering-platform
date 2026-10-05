@@ -57,6 +57,7 @@ class ManagerRepairMode(StrEnum):
 
     DIRECT = "DIRECT"
     CANDIDATE_DELIVERY = "CANDIDATE_DELIVERY"
+    VERIFICATION_REFRESH = "VERIFICATION_REFRESH"
 
 
 class ManagerRepairDisposition(StrEnum):
@@ -65,6 +66,7 @@ class ManagerRepairDisposition(StrEnum):
     RETRY_DELIVERY = "RETRY_DELIVERY"
     REPAIR_TASK_SUBMITTED = "REPAIR_TASK_SUBMITTED"
     WAITING_HUMAN = "WAITING_HUMAN"
+    VERIFICATION_ADMITTED = "VERIFICATION_ADMITTED"
 
 
 class ManagerIncident(DomainModel):
@@ -123,6 +125,13 @@ class ManagerRepairExecution(DomainModel):
     repaired: StrictBool
     summary: NonEmptyStr
     evidence_sha256: Sha256
+    engineering_admission_sha256: Sha256 | None = None
+
+    @model_validator(mode="after")
+    def admission_is_not_repair_success(self) -> Self:
+        if self.engineering_admission_sha256 is not None and self.repaired:
+            raise ValueError("engineering admission does not establish environment repair")
+        return self
 
     @classmethod
     def create(cls, *, repaired: bool, summary: str, evidence: str) -> Self:
@@ -145,10 +154,21 @@ class ManagerRepairResult(DomainModel):
     capability_id: CapabilityId | None = None
     evidence_sha256: Sha256 | None = None
     repair_task_id: RepairTaskId | None = None
+    engineering_admission_sha256: Sha256 | None = None
 
     @model_validator(mode="after")
     def validate_disposition(self) -> Self:
-        if self.disposition is ManagerRepairDisposition.RETRY_DELIVERY:
+        if self.disposition is ManagerRepairDisposition.VERIFICATION_ADMITTED:
+            if (
+                self.capability_id is None
+                or self.evidence_sha256 is None
+                or self.engineering_admission_sha256 is None
+                or self.repair_task_id is not None
+            ):
+                raise ValueError("verification admission requires exact policy receipt")
+        elif self.engineering_admission_sha256 is not None:
+            raise ValueError("only verification admission may reference engineering authority")
+        elif self.disposition is ManagerRepairDisposition.RETRY_DELIVERY:
             if self.capability_id is None or self.evidence_sha256 is None:
                 raise ValueError("retry disposition requires capability and evidence")
             if self.repair_task_id is not None:
@@ -197,7 +217,11 @@ class ManagerLeaderRecovery:
         self._executors = dict(executors)
         self._task_submitter = task_submitter
         for capability in capabilities:
-            if capability.mode is ManagerRepairMode.DIRECT and capability.id not in self._executors:
+            if (
+                capability.mode
+                in {ManagerRepairMode.DIRECT, ManagerRepairMode.VERIFICATION_REFRESH}
+                and capability.id not in self._executors
+            ):
                 raise ValueError(f"direct Manager capability {capability.id} has no executor")
 
     def recover(self, incident: ManagerIncident) -> ManagerRepairResult:
@@ -230,6 +254,16 @@ class ManagerLeaderRecovery:
                 summary=submission.summary,
             )
         execution = self._executors[capability.id].execute(incident)
+        if capability.mode is ManagerRepairMode.VERIFICATION_REFRESH:
+            if execution.engineering_admission_sha256 is None:
+                return self._waiting_human(execution.summary)
+            return ManagerRepairResult(
+                disposition=ManagerRepairDisposition.VERIFICATION_ADMITTED,
+                capability_id=capability.id,
+                evidence_sha256=execution.evidence_sha256,
+                engineering_admission_sha256=execution.engineering_admission_sha256,
+                summary=execution.summary,
+            )
         if not execution.repaired:
             return self._waiting_human(execution.summary)
         return ManagerRepairResult(

@@ -2,13 +2,26 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol, cast
 
 from ai_software_engineer.agents.diagnostics import safe_diagnostic
 from ai_software_engineer.agents.structured import StructuredModelError
 from ai_software_engineer.context.ports import ContextBudgetExceeded
+from ai_software_engineer.domain.delivery_resolution import (
+    DeliveryResolution,
+    DeliveryWaitInvestigation,
+    InspectDeliveryWait,
+    ResolveDeliveryWait,
+)
+from ai_software_engineer.domain.execution_baseline import ExecutionBaselineBinding
 from ai_software_engineer.domain.project_delivery import PlanTestMatrixError
+from ai_software_engineer.manager.baseline_models import ExecutionBaselinePlan
+from ai_software_engineer.manager.baseline_production import (
+    BaselineExecuteCommand,
+    BaselineProposeCommand,
+)
 from ai_software_engineer.manager.delivery import (
     ApproveProductSpec,
     DeliveryCheckpointStale,
@@ -58,10 +71,14 @@ from .models import (
     CreateProjectIntent,
     CreateRequirementIntent,
     DeleteRequirementIntent,
+    ExecuteExecutionBaselineIntent,
+    InspectDeliveryWaitIntent,
     ProductApprovalIntent,
     ProductReplyIntent,
+    ProposeExecutionBaselineIntent,
     RecheckDesignIntent,
     RecoverDesignIntent,
+    ResolveDeliveryWaitIntent,
     RestartRequirementIntent,
     UpdateRequirementIntent,
 )
@@ -77,6 +94,36 @@ class TeamConsoleHost(Protocol):
     def resume_delivery(
         self, command: ResumeProjectDelivery, *, project_id: str | None = None
     ) -> DeliveryResumeResult | JointDeliveryResult: ...
+
+    def inspect_delivery_wait(
+        self,
+        command: InspectDeliveryWait,
+        *,
+        project_id: str,
+        delivery_id: str,
+    ) -> DeliveryWaitInvestigation: ...
+
+    def resolve_delivery_wait(
+        self,
+        command: ResolveDeliveryWait,
+        *,
+        project_id: str,
+        delivery_id: str,
+    ) -> DeliveryResolution: ...
+
+    def propose_execution_baseline(
+        self,
+        command: BaselineProposeCommand,
+        *,
+        project_id: str,
+    ) -> ExecutionBaselinePlan: ...
+
+    def execute_execution_baseline(
+        self,
+        command: BaselineExecuteCommand,
+        *,
+        project_id: str,
+    ) -> ExecutionBaselineBinding: ...
 
 
 class ManagerConsoleAdapter:
@@ -201,6 +248,98 @@ class ManagerConsoleAdapter:
                     )
                 )
                 return _summarize(result, project_id=intent.project_id)
+            if isinstance(intent, (ProposeExecutionBaselineIntent, ExecuteExecutionBaselineIntent)):
+                current = (
+                    self._entry(intent.project_id, intent.delivery_id)
+                    .status(intent.delivery_id)
+                    .checkpoint
+                )
+                if current.checkpoint_sha256 != intent.expected_checkpoint_sha256:
+                    raise DeliveryCheckpointStale("工程执行基线显示的需求 checkpoint 已变化")
+                data = intent.model_dump(
+                    mode="json", exclude={"action", "project_id", "expected_checkpoint_sha256"}
+                )
+                if isinstance(intent, ProposeExecutionBaselineIntent):
+                    plan = self._host.propose_execution_baseline(
+                        BaselineProposeCommand.model_validate(data),
+                        project_id=intent.project_id,
+                    )
+                    return ConsoleCommandResult(
+                        project_id=intent.project_id,
+                        delivery_id=intent.delivery_id,
+                        checkpoint_sha256=current.checkpoint_sha256,
+                        stage="ENGINEERING_BASELINE_PLAN",
+                        next_action=(
+                            "旧改动与目标代码存在冲突, 请提出明确的 Coder 适配计划。"
+                            if plan.conflicted
+                            else "工程基线计划已封存, 工程人员可决定在原分支继续。"
+                        ),
+                        execution_baseline_plan=plan,
+                    )
+                binding = self._host.execute_execution_baseline(
+                    BaselineExecuteCommand.model_validate(data),
+                    project_id=intent.project_id,
+                )
+                return ConsoleCommandResult(
+                    project_id=intent.project_id,
+                    delivery_id=intent.delivery_id,
+                    checkpoint_sha256=current.checkpoint_sha256,
+                    stage="ENGINEERING_BASELINE_UPDATED",
+                    next_action="原分支执行基线已更新并记录工程决定, 继续原需求的独立交付验收。",
+                    execution_baseline_binding=binding,
+                )
+            if isinstance(intent, (InspectDeliveryWaitIntent, ResolveDeliveryWaitIntent)):
+                current = (
+                    self._entry(intent.project_id, intent.delivery_id)
+                    .status(intent.delivery_id)
+                    .checkpoint
+                )
+                if current.checkpoint_sha256 != intent.expected_checkpoint_sha256:
+                    raise DeliveryCheckpointStale("displayed engineering wait checkpoint changed")
+                bound = {
+                    "work_item_id": intent.work_item_id,
+                    "expected_disposition_sha256": intent.expected_disposition_sha256,
+                    "expected_task_intent_sha256": intent.expected_task_intent_sha256,
+                    "expected_source_revision": intent.expected_source_revision,
+                    "expected_checkpoint_sequence": intent.expected_checkpoint_sequence,
+                }
+                if isinstance(intent, InspectDeliveryWaitIntent):
+                    proof = self._host.inspect_delivery_wait(
+                        InspectDeliveryWait.model_validate(bound),
+                        project_id=intent.project_id,
+                        delivery_id=intent.delivery_id,
+                    )
+                    return ConsoleCommandResult(
+                        project_id=intent.project_id,
+                        delivery_id=intent.delivery_id,
+                        checkpoint_sha256=current.checkpoint_sha256,
+                        stage="ENGINEERING_INVESTIGATION",
+                        next_action=proof.next_action,
+                        engineering_wait_investigation=proof,
+                    )
+                resolution = self._host.resolve_delivery_wait(
+                    ResolveDeliveryWait.model_validate(
+                        {
+                            **bound,
+                            "resolution_kind": intent.resolution_kind,
+                            "proof_sha256": intent.proof_sha256,
+                            "submitted_at": datetime.now(UTC),
+                        }
+                    ),
+                    project_id=intent.project_id,
+                    delivery_id=intent.delivery_id,
+                )
+                return ConsoleCommandResult(
+                    project_id=intent.project_id,
+                    delivery_id=intent.delivery_id,
+                    checkpoint_sha256=current.checkpoint_sha256,
+                    stage="ENGINEERING_WAIT_RESOLVED",
+                    next_action=(
+                        "精确工程决定已记录, 平台以新的执行身份继续原 Task; "
+                        "验收仍由独立 QA 和 Review 完成。"
+                    ),
+                    engineering_wait_resolution=resolution,
+                )
             if isinstance(intent, ContinueDeliveryIntent):
                 current = (
                     self._entry(intent.project_id, intent.delivery_id)
@@ -326,6 +465,7 @@ def _summarize(
         else None
     )
     diagnostic = safe_diagnostic(result_diagnostic) if result_diagnostic else None
+    engineering_disposition = None
     # Read-only preparation drift must be visible as the operation's actionable
     # result.  Keeping the checkpoint cursor and exposing the diagnostic are
     # separate facts: the cursor remains immutable, while the browser must not
@@ -354,6 +494,7 @@ def _summarize(
         result = result.continuation
     if isinstance(result, DeliveryResumeResult):
         next_action = result.next_action
+        engineering_disposition = result.engineering_disposition
         if result.verification_plan_sha256 is not None:
             if host is None:
                 raise ValueError("verification approval requires a trusted plan reader")
@@ -649,6 +790,7 @@ def _summarize(
         next_action=next_action,
         diagnostic=diagnostic,
         approval=approval,
+        engineering_disposition=engineering_disposition,
     )
 
 

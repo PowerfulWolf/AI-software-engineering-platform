@@ -6,6 +6,7 @@ from pydantic import AwareDatetime, Field, StrictBool, StringConstraints, model_
 
 from ai_software_engineer.domain.branch import BranchName
 from ai_software_engineer.domain.continuation import InterruptionContinuationPolicy
+from ai_software_engineer.domain.engineering_authority import EngineeringPolicy
 from ai_software_engineer.domain.enums import AgentRole, TaskStatus
 from ai_software_engineer.domain.model import DomainModel, JsonValue, NonEmptyStr, ensure_unique
 from ai_software_engineer.domain.retry_policy import (
@@ -78,15 +79,39 @@ class Task(DomainModel):
     interruption_continuation_policy: InterruptionContinuationPolicy | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    engineering_policy: EngineeringPolicy | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def validate_task_invariants(self) -> Self:
         ensure_unique((criterion.id for criterion in self.acceptance_criteria), "criterion IDs")
         ensure_unique(self.labels, "labels")
+        if (
+            self.engineering_policy is not None
+            and self.engineering_policy.scope.repository_root != self.repository
+        ):
+            raise ValueError("engineering policy must bind the exact Task repository")
         if self.attempts > self.max_attempts:
             raise ValueError("attempts cannot exceed max_attempts")
         if self.retry_policy is not None and self.max_attempts != self.retry_policy.execution_limit:
             raise ValueError("Task execution limit must match the frozen retry policy")
+        continuation = self.interruption_continuation_policy
+        if (
+            continuation is not None
+            and continuation.schema_version == "v2"
+            and (
+                self.retry_policy is None
+                or continuation.max_continuations
+                > max(
+                    1,
+                    self.retry_policy.max_work_attempts
+                    + self.retry_policy.transient_limit(AgentRole.CODER)
+                    - 1,
+                )
+            )
+        ):
+            raise ValueError("v2 continuation authority must fit the frozen Coder budget")
         if self.retry_failures is not None:
             if self.retry_policy is None:
                 raise ValueError("retry failure facts require a frozen retry policy")

@@ -73,6 +73,52 @@ scope/intent/policy 变化拒绝。MySQL fixture 必须串行，避免共享测�
 
 ## 完整 QA/Review 返工执行记录（2026-10-03）
 
+### 封存时间与可验证的轮次顺序（2026-10-05）
+
+Scope：修改 artifact 接纳历史、最新候选/结论或 Console 合并顺序时适用。
+签名：`_read_accepted_artifact_history(cursor, *, task_id, sidecar, state_artifact_ids)
+-> ArtifactHistoryFacts`、`RunProjectionBuilder.build(ProjectionFacts) -> ProjectionSnapshot`、
+`timeline_sort_key(TimelineEntry) -> tuple[datetime, str, str, int, str]`。
+
+`ProjectionFacts.artifact_positions` 接受 typed `ArtifactStreamPosition`，包含 Task、Artifact ID、
+sealed SHA-256、stream、sequence、ordinal。读侧先在同一 SQL snapshot 校验 accepted receipt，
+再读取唯一原 CLAIMED event，以严格 typed QueuedWorkItem 核验 Task/work item/lease/role、
+checkpoint 和 dispatch generation，才允许把 SQL sequence 送入 pure projection。
+旧库缺少 acceptance table 时仅使用已验证 StateEvent 的 artifact references，按 SQL revision
+与原 references 次序构成独立 stream；不扫描目录来填补未接纳的产物。
+
+`TimelineEntry.occurred_at` 使用 ArtifactStore 封存的 `integrity.validated_at`，原 provider
+`created_at` 保留为 `details.provider_created_at`。同 timestamp 在同一 durable stream 内按
+sequence/ordinal排序；不同 stream 只能依靠已验证 parent/supersedes lineage，不能把两类序号
+当作同一个全局时钟。`latest_accepted_artifact` 同时用于写侧和 candidate/QA/Review摘要，
+没有唯一可证明的最新结果时 fail closed，不使用随机 Artifact ID 或 provider 时间补序。
+Task/Run timeline 与 Console 历史合并都保留派生 artifact_history_position，禁止第二次 merge
+又按 ID 打乱已验证轮次。QA 的完整 environment、finding、criteria、命令、evidence 与父链
+均可读；environment 用安全文本在“QA 验证环境与未完成原因”折叠区展示。
+
+Good：超过八条的多轮 QA FAIL/Review REJECT → Coder修改 → PASS/APPROVE，模型时间重复或
+倒退、随机 ID 与轮次相反时，仍完整按真实接纳历史展示最新结论。
+Base：无 acceptance table 的 legacy StateEvent artifacts 正常显示；不改旧 artifact bytes/hash。
+Bad：缺失/重复原 CLAIMED event、generation/role/Task漂移、非整数序号、position SHA漂移，
+均拒绝投影，读前后零文件变更、零数据库写入。
+
+| 输入问题 | 检测点 | 结果 |
+|---|---|---|
+| accepted receipt 缺唯一原 CLAIMED event | SQL只读 adapter | 拒绝 position，保留原事实 |
+| Task/role/dispatch/checkpoint/lease漂移 | typed claimed WorkItem对照 | ValueError，不以新claim补历史 |
+| position Artifact/task/digest漂移 | pure projector facts校验 | ProjectionConflict，不选latest |
+| unsealed artifact或无validated_at | pure projector facts校验 | ProjectionConflict，不回退provider时间 |
+| 同时钟、同kind且无stream/lineage区分 | shared latest helper | ArtifactOrderingError，不按ID猜测 |
+
+错误示例：`max(reports, key=lambda a: (a.created_at, a.artifact_id))`。
+正确示例：`latest_accepted_artifact(reports, QaReportArtifact, trusted_order=verified_positions)`，
+timeline使用 sealed timestamp，并在每次合并中保留已验证的 artifact_history_position。
+
+增量验证：`tests/team_view/test_accepted_artifact_history.py`、`tests/projection/`、
+`tests/team_view/test_execution_history.py`、`tests/team_view/engineering-wait.test.cjs`。
+存量数据无需迁移或重写：读取旧sealed timestamp与durable references即可；没有证明的记录不
+获追溯新排序权威。回滚读侧实现并刷新界面不会删除历史或改变任何角色结论。
+
 ### Scope / Trigger
 
 任务经过 `Coder → QA FAIL → Coder → QA PASS → Reviewer REJECT → Coder` 等多轮返工，或 QA/Review 通过后进入新的 remediation/continuation Task 时适用。执行记录是只读审计投影，不能替代 Task 状态机、Artifact verdict 或 Manager Operation。
