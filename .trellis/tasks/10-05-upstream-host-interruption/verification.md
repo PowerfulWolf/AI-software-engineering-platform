@@ -22,3 +22,7 @@ Chrome 同时验证中断红色、Designer 队列、exact checkpoint 接续提�
 存量处置：无需改库；原 Operation 中断历史、Product 审批、Requirement checkpoint、预算与岗位身份保持。原 K1 已在只读核验旧 Host 与精确需求工作进程退出后通过公共 CONTINUE 恢复。更新静态资产并刷新即可加载修复，不重启活动 Designer。
 
 已知限制：上游 Host 中断不是模型子进程停止证明，本补丁不实现 owned-run/progress/drain。回滚本次前端提交并刷新，所有原持久化事实保留。
+
+最后窄修同时覆盖保留旧 Coder RUNNING step 且当前 QA RUNNING 的 payload：非当前 Coder assignment 不能继承 QA 的蓝色执行 badge。独立 checker 重跑 product-execution 17/17、Chrome 6/6、语法与 diff 检查通过；实现者最终相关轻量套件 82/82 通过。
+
+部署后的生产只读 Chrome 核验于 2026-10-05T12:59:48Z/13:00:50Z 通过：K1 产品绿色已完成、设计蓝色执行中，Designer 成员及进行中队列一致。零 API 写请求、零页面错误；原始工程 UNKNOWN 保留。审计 JSON/截图存于仓库外的 maintenance/k1-delivery-20261005，未重启服务。

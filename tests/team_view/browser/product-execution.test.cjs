@@ -193,7 +193,7 @@ test("claimed role changes update member queues without painting other assignmen
   await h.page.locator("#nav-team").click();
   await h.page.locator(".agent-roster button").filter({hasText: "coder"}).click();
   assert.match(await h.page.locator(".agent-queue.active .work-row").innerText(), /执行中/);
-  task.status = "QA"; task.role_queue = [{role: "qa", status: "RUNNING", lease_liveness: "LEASE_VALID"}];
+  task.status = "QA"; task.role_queue = [{role: "coder", status: "RUNNING", lease_liveness: "LEASE_VALID"}, {role: "qa", status: "RUNNING", lease_liveness: "LEASE_VALID"}];
   task.assignments.forEach(assignment => {assignment.current_stage = assignment.role === "qa";});
   h.team.agents.forEach(agent => {agent.current_stage_delivery_ids = agent.id === "qa" ? [task.id] : [];});
   await h.tick();

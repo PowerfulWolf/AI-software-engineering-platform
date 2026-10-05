@@ -476,13 +476,15 @@ const canControlCurrentTeam = () =>
   snapshot.team_id === consoleTeamId;
 function assignmentBadge(task, assignment) {
   if (task.terminal) return badge(task.status);
-  if (task.execution && task.role_queue?.some(step => step.role === assignment.role && step.status !== "CLOSED"))
-    return badge(taskPresentationStatus(task));
+  const status = taskPresentationStatus(task);
+  if (task.execution && task.role_queue?.some(step => step.role === assignment.role && step.status !== "CLOSED") &&
+      (assignment.current_stage || status !== "RUNNING"))
+    return badge(status);
   const waiting = waitingExecutionStep(task);
   if (waiting?.role === assignment.role) return badge(waiting.status);
   if (interruptedExecution(task) && task.role_queue.some(step =>
     step.role === assignment.role && interruptedStep(step))) return badge("EXECUTION_INTERRUPTED");
-  if (assignment.current_stage) return badge(taskPresentationStatus(task));
+  if (assignment.current_stage) return badge(status);
   const current = task.assignments.find((candidate) => candidate.current_stage);
   if (!current) return el("span", "已分配 · 等待调度", "badge");
   const assignedOrder = deliveryRoleOrder[assignment.role];

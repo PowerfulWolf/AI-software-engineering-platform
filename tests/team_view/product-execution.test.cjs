@@ -257,6 +257,11 @@ test("native unknown state agrees across task summary, assignment, card and memb
   assert.match(text(run("productExecutionSummary(task)")), /当前执行 · 等待调度/);
   assert.doesNotMatch(text(run("productExecutionSummary(task)")), /尚无执行事实|处理方 · 工程团队/);
   assert.doesNotMatch(run("assignmentBadge(task, task.assignments[0]).className"), /current|blocked/);
+  run(`task.status = "QA"; task.assignments = [{role: "coder", current_stage: false}, {role: "qa", current_stage: true}, {role: "reviewer", current_stage: false}];
+    task.role_queue = [{role: "coder", status: "RUNNING", lease_liveness: "LEASE_VALID"}, {role: "qa", status: "RUNNING", lease_liveness: "LEASE_VALID"}];`);
+  assert.match(run("assignmentBadge(task, task.assignments[0]).textContent"), /本轮已完成/);
+  assert.match(run("assignmentBadge(task, task.assignments[1]).textContent"), /执行中/);
+  assert.doesNotMatch(run("assignmentBadge(task, task.assignments[2]).textContent"), /执行中/);
 });
 
 test("only live matching delivery work makes native bootstrap gray preparation", () => {
