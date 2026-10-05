@@ -1938,6 +1938,7 @@ main[data-page="requests"] .page-context {
 .request-node-badge.running { color: var(--accent); background: #e9effd; }
 .request-node-badge.done { color: var(--good); background: #e9f5ef; }
 .request-node-badge.blocked { color: #c62828; background: #fef2f2; }
+.badge.execution-interrupted { color: #c62828; background: #fef2f2; }
 .model-route-list,
 .agent-model-list {
   overflow: hidden;

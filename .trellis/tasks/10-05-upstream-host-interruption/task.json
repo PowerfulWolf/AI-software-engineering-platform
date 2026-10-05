@@ -1,0 +1,12 @@
+{
+  "id": "upstream-host-interruption-20261005",
+  "title": "上游 Host 中断后显示真实阻塞并继续已批准阶段",
+  "status": "completed",
+  "phase": "independent_review_passed",
+  "created_at": "2026-10-05",
+  "verified_at": "2026-10-05T12:55:25Z",
+  "owner": "codex",
+  "scope": ["src/ai_software_engineer/team_view/app.js", "src/ai_software_engineer/team_view/style.css", "tests/team_view/product-execution.test.cjs", "tests/team_view/delivery-status.test.cjs", "tests/team_view/knowledge-gap.test.cjs", "tests/team_view/ui.test.cjs", "tests/team_view/browser/product-execution.test.cjs", ".trellis/spec/core/web-console.md"],
+  "constraints": ["只改前端显示及已有 typed CONTINUE 入口，不改状态或审批契约", "保留原始中断 Operation、Product 批准、checkpoint 和队列身份", "预算、精确审批、当前等待及 active 作业优先", "只运行增量测试，不操作生产、不提交、不部署"],
+  "rollback": "回退前端资产并刷新；存量 journal、审批、预算、原工作区和模型执行事实均保留。"
+}

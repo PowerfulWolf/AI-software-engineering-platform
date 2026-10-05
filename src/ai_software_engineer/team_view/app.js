@@ -221,6 +221,7 @@ const labels = {
   TIMED_OUT: "执行超时",
   UNKNOWN: "未确认",
   EXECUTION_INTERRUPTED: "执行中断",
+  PREPARING_EXECUTION: "准备执行",
   CREATE_PROJECT: "创建项目",
   CREATE_REQUIREMENT: "创建需求",
   UPDATE_REQUIREMENT: "编辑需求",
@@ -257,6 +258,7 @@ const deliveryOperationActions = new Set([
 ]);
 const deliveryRoleOrder = { coder: 0, qa: 1, reviewer: 2 };
 const deliveryRoleStage = { coder: 3, qa: 4, reviewer: 5 };
+const roleForTaskStatus = {IMPLEMENTING: "coder", QA: "qa", REVIEW: "reviewer", VERIFY_QA: "qa", VERIFY_REVIEW: "reviewer"};
 const teamRoleOrder = {
   manager: 0,
   product: 1,
@@ -402,9 +404,10 @@ const badge = (status) =>
     "badge " +
       (["DONE", "CLOSED"].includes(status)
         ? "done"
-        : status.includes("WAITING") || ["BLOCKED", "FAILED", "EXECUTION_INTERRUPTED"].includes(status)
-          ? "blocked"
-          : "current"),
+        : status.includes("WAITING") || ["BLOCKED", "FAILED", "EXECUTION_INTERRUPTED", "INTERRUPTED", "ENGINEERING_STOPPED"].includes(status)
+          ? ["INTERRUPTED", "ENGINEERING_STOPPED"].includes(status) ? "blocked execution-interrupted" : "blocked"
+          : ["READY", "LEASED", "QUEUED", "RETRY_SCHEDULED", "CONTINUE_REQUIRED", "PREPARING_EXECUTION"].includes(status)
+            ? "" : "current"),
   );
 const operationTarget = (operation) =>
   operation.intent.delivery_id || operation.result?.delivery_id || null;
@@ -474,12 +477,12 @@ const canControlCurrentTeam = () =>
 function assignmentBadge(task, assignment) {
   if (task.terminal) return badge(task.status);
   if (task.execution && task.role_queue?.some(step => step.role === assignment.role && step.status !== "CLOSED"))
-    return badge(executionPresentationStatus(task.execution));
+    return badge(taskPresentationStatus(task));
   const waiting = waitingExecutionStep(task);
   if (waiting?.role === assignment.role) return badge(waiting.status);
   if (interruptedExecution(task) && task.role_queue.some(step =>
     step.role === assignment.role && interruptedStep(step))) return badge("EXECUTION_INTERRUPTED");
-  if (assignment.current_stage) return badge(task.status);
+  if (assignment.current_stage) return badge(taskPresentationStatus(task));
   const current = task.assignments.find((candidate) => candidate.current_stage);
   if (!current) return el("span", "已分配 · 等待调度", "badge");
   const assignedOrder = deliveryRoleOrder[assignment.role];
@@ -791,14 +794,14 @@ function deliveryPhase(item) {
 function productExecutionSummary(item) {
   if (!item.execution) return null;
   const execution = item.execution;
-  const node = item.stage ? requestNodeExecution(item) : null;
+  const node = item.stage ? requestNodeExecution(item) : taskExecutionPresentation(item);
   const section = el("div", undefined, "product-execution-summary");
   section.append(
     el("p", "交付阶段 · " + deliveryPhase(item), "execution-phase"),
     el("p", "当前执行 · " + (node?.label || label(executionPresentationStatus(execution))), "execution-state"),
     el("p", node?.upstreamProcessing ? "当前节点正在执行，请等待本阶段处理完成。" : humanizeBlockingText(node?.reason || execution.reason)),
-    el("p", "处理方 · " + {product: "产品负责人", team: "ASE 团队", engineering: "工程团队"}[execution.responsibility], "muted"),
-    el("p", "下一步 · " + (node?.upstreamProcessing ? "请等待本轮处理完成。" : humanizeBlockingText(execution.next_action)), "muted"),
+    el("p", "处理方 · " + {product: "产品负责人", team: "ASE 团队", engineering: "工程团队"}[node?.responsibility || (node?.requiresEngineeringCheck ? "engineering" : execution.responsibility)], "muted"),
+    el("p", "下一步 · " + (node?.upstreamProcessing ? "请等待本轮处理完成。" : humanizeBlockingText(node?.nextAction || execution.next_action)), "muted"),
   );
   if (execution.available_at)
     section.append(el("p", "计划重试时间 · " + time(execution.available_at), "muted"));
@@ -806,10 +809,48 @@ function productExecutionSummary(item) {
     section.append(el("p", "需要你确认业务决定。", "product-decision-required"));
   return section;
 }
+function taskExecutionPresentation(task) {
+  const status = taskPresentationStatus(task);
+  if (status === "WAITING_ENGINEERING") return engineeringExecutionCheck();
+  if (status === "RUNNING") return runningRolePresentation();
+  if (status === "READY") return queuedRolePresentation();
+  if (status === "RETRY_SCHEDULED") return {state: "paused", label: "待重试", status, responsibility: "team",
+    reason: "模型执行重试已排队。", nextAction: "请等待计划重试，平台将按记录的时间继续。"};
+  if (status === "PREPARING_EXECUTION") return {state: "paused", label: "准备执行", status, responsibility: "team",
+    reason: "平台正在准备已批准的执行计划。", nextAction: "请等待本轮准备完成。"};
+  return {label: label(status), status};
+}
+function runningRolePresentation() {
+  return {state: "running", label: "执行中", status: "RUNNING", responsibility: "team",
+    reason: "当前角色正在执行，请等待本轮处理完成。", nextAction: "请等待本轮角色执行完成。"};
+}
+function queuedRolePresentation() {
+  return {state: "paused", label: "等待调度", status: "READY", responsibility: "team",
+    reason: "当前工作已排队，等待团队调度。", nextAction: "请等待团队领取当前工作。"};
+}
 function taskPresentationStatus(task) {
-  if (task.execution && !task.terminal) return executionPresentationStatus(task.execution);
-  return waitingExecutionStep(task)?.status ||
-    (interruptedExecution(task) ? "EXECUTION_INTERRUPTED" : task.status || task.stage);
+  if (task.terminal) return task.status || task.stage;
+  const waiting = waitingExecutionStep(task);
+  if (waiting) return task.execution?.state === "WAITING" ? executionPresentationStatus(task.execution) : waiting.status;
+  if (interruptedExecution(task)) return "EXECUTION_INTERRUPTED";
+  if (["QUEUED", "CONTINUE_REQUIRED"].includes(task.status)) return task.status;
+  if (task.execution && !["UNKNOWN", "RUNNING"].includes(task.execution.state)) return executionPresentationStatus(task.execution);
+  const steps = (task.role_queue || []).filter(step => step.role === roleForTaskStatus[task.status]);
+  if (steps.some(step => step.status === "RUNNING" && step.lease_liveness === "LEASE_VALID")) return "RUNNING";
+  if (steps.some(step => ["READY", "LEASED", "RETRY_SCHEDULED"].includes(step.status)))
+    return steps.some(step => step.status === "RETRY_SCHEDULED") ? "RETRY_SCHEDULED" : "READY";
+  if (preparingTaskExecution(task)) return "PREPARING_EXECUTION";
+  if (["UNKNOWN", "RUNNING"].includes(task.execution?.state) || roleForTaskStatus[task.status]) return "WAITING_ENGINEERING";
+  return task.status || task.stage;
+}
+function preparingTaskExecution(task) {
+  if (task.terminal || !["NEW", "PLANNING"].includes(task.status) || task.blocker ||
+      waitingExecutionStep(task) || interruptedExecution(task) ||
+      ["WAITING", "STOPPED", "INTERRUPTED"].includes(task.execution?.state)) return false;
+  const request = requestById(task.request_id);
+  const operation = request && activeOperation(request.id);
+  return Boolean(operation?.status === "RUNNING" && operation.intent.project_id === request.project_id &&
+    deliveryOperationActions.has(operation.intent.action));
 }
 function waitingRequestTask(request) {
   if (["DONE", "CLOSED"].includes(request.stage)) return null;
@@ -823,6 +864,7 @@ const interruptedExecutionReason = "执行租约已失效，当前执行已中�
 const interruptedExecutionNext = "请通过“继续交付”检查并恢复当前执行。";
 function taskGroup(task) {
   if (task.status === "DONE") return "completed";
+  if (!task.terminal && taskPresentationStatus(task) === "WAITING_ENGINEERING") return "blocked";
   if (task.execution && !task.terminal) {
     if (["WAITING", "STOPPED", "INTERRUPTED"].includes(task.execution.state) ||
         task.execution.reason_code === "EXECUTION_CLAIM_EXPIRED") return "blocked";
@@ -939,20 +981,25 @@ function requestNodeExecution(request) {
     return {state: "paused", label: tasks.some(task => task.status === "CONTINUE_REQUIRED") ? "待继续" : "已排队", status: "READY"};
   if (execution?.state === "RETRY_SCHEDULED" || tasks.some(task => !task.terminal &&
       task.role_queue?.some(step => step.status === "RETRY_SCHEDULED")))
-    return {state: "paused", label: "待重试", status: "RETRY_SCHEDULED"};
-  const roleForStatus = {IMPLEMENTING: "coder", QA: "qa", REVIEW: "reviewer", VERIFY_QA: "qa", VERIFY_REVIEW: "reviewer"};
+    return {state: "paused", label: "待重试", status: "RETRY_SCHEDULED", responsibility: "team",
+      reason: "模型执行重试已排队。", nextAction: "请等待计划重试，平台将按记录的时间继续。"};
   const roleSteps = tasks.filter(task => !task.terminal).flatMap(task =>
-    (task.role_queue || []).filter(step => step.role === roleForStatus[task.status]));
-  const hasNativeStage = tasks.some(task => !task.terminal && roleForStatus[task.status]);
+    (task.role_queue || []).filter(step => step.role === roleForTaskStatus[task.status]));
+  const hasNativeStage = tasks.some(task => !task.terminal && roleForTaskStatus[task.status]);
   if (operation?.status === "QUEUED" || execution?.state === "QUEUED" ||
       roleSteps.some(step => ["READY", "LEASED"].includes(step.status)))
-    return {state: "paused", label: "已排队", status: "READY"};
+    return {...queuedRolePresentation(), label: "已排队"};
+  const currentTasks = tasks.filter(task => !task.terminal);
+  if (currentTasks.length && currentTasks.every(preparingTaskExecution))
+    return {state: "paused", label: "准备执行", status: "PREPARING_EXECUTION", responsibility: "team",
+      reason: "平台正在准备已批准的执行计划。",
+      nextAction: "平台正在准备已批准的执行计划，请等待本轮准备完成。"};
   const upstream = ["PRODUCT_DISCOVERY", "DESIGNING", "PLANNING", "INTEGRATING"].includes(request.stage);
   if (upstream && !hasNativeStage && operation?.status === "RUNNING")
-    return {state: "running", label: "执行中", status: "RUNNING", upstreamProcessing: true};
+    return {state: "running", label: "执行中", status: "RUNNING", upstreamProcessing: true, responsibility: "team"};
   if (roleSteps.some(step =>
       step.status === "RUNNING" && step.lease_liveness === "LEASE_VALID"))
-    return {state: "running", label: "执行中", status: "RUNNING"};
+    return runningRolePresentation();
   if (!operation && request.design_recovery_available && request.stage_budget?.exhausted !== "capacity")
     return {state: "blocked", label: "设计待恢复", status: "DESIGN_RECOVERY_REQUIRED", reason: request.blocker};
   const approval = !operation && latestApproval(request.id, request.checkpoint_sha256);
@@ -962,17 +1009,35 @@ function requestNodeExecution(request) {
       status: request.stage === "DESIGNING" ? "DESIGN_BUDGET_EXHAUSTED" : "RETRY_BUDGET_EXHAUSTED", reason: designBudgetSummary(request)};
   if (!operation && request.design_recheck_pending)
     return {state: "blocked", label: "待继续核对设计", status: "DESIGNING", reason: request.next_action};
-  if (tasks.some(task => !task.terminal) && !tasks.some(task => !task.terminal && task.blocker))
-    return {state: "paused", label: "状态待核对", status: "EXECUTION_UNKNOWN"};
+  if (tasks.some(task => !task.terminal))
+    return engineeringExecutionCheck();
   const failed = latestOperation(request.id);
-  if (!operation && failed?.status === "FAILED" && deliveryOperationActions.has(failed.intent.action) &&
+  if (!operation && ["FAILED", "INTERRUPTED"].includes(failed?.status) && deliveryOperationActions.has(failed.intent.action) &&
       (!failed.intent.project_id || failed.intent.project_id === request.project_id))
-    return {state: "blocked", label: "已阻塞", status: request.stage, reason: failed.error_summary};
+    return {state: "blocked", label: failed.status === "INTERRUPTED" ? "操作已中断" : "已阻塞",
+      status: failed.status === "INTERRUPTED" ? "EXECUTION_INTERRUPTED" : request.stage,
+      reason: failed.error_summary, operationInterrupted: failed.status === "INTERRUPTED",
+      responsibility: failed.status === "INTERRUPTED" && canResumeUpstreamStage(request) ? "team" : undefined,
+      nextAction: failed.status === "INTERRUPTED" && canResumeUpstreamStage(request)
+        ? upstreamContinuationGuidance(request) : undefined};
   if (!operation && request.coordination && (!request.coordination.stage || request.coordination.stage === request.stage))
     return {state: "blocked", label: "等待处理", status: request.stage, reason: request.coordination.draft.summary};
   if (!operation && (request.blocker || ["BLOCKED", "FAILED"].includes(request.stage)))
     return {state: "blocked", label: "已阻塞", status: request.stage, reason: request.blocker};
-  return {state: "paused", label: request.stage === "READY_FOR_DISCUSSION" ? "待开始" : "状态待核对", status: "EXECUTION_UNKNOWN"};
+  if (request.stage === "READY_FOR_DISCUSSION") return {state: "paused", label: "待开始", status: request.stage};
+  if (canResumeUpstreamStage(request) || (!operation && request.stage === "PRODUCT_DISCOVERY"))
+    return {state: "paused", label: "待继续", status: request.stage, responsibility: "team",
+      reason: "本阶段尚未执行完成，已保存的交付进度与审批仍保留。",
+      nextAction: request.stage === "PRODUCT_DISCOVERY" ? "点击“继续需求讨论”接续上一条已保存的消息。" : upstreamContinuationGuidance(request)};
+  return engineeringExecutionCheck();
+}
+function engineeringExecutionCheck() {
+  return {state: "blocked", label: "等待工程处理", status: "WAITING_ENGINEERING", requiresEngineeringCheck: true,
+    reason: "当前工作缺少可核验的执行状态，由工程团队核验后继续。",
+    nextAction: "工程团队核验当前执行和现场后继续，当前无需产品操作。"};
+}
+function upstreamContinuationGuidance(request) {
+  return `点击“${request.stage === "PLANNING" ? "继续计划" : "继续设计"}”接续已批准的需求，原审批与已用预算保留。`;
 }
 function requestNodeBadge(request) {
   const node = requestNodeExecution(request);
@@ -987,7 +1052,12 @@ function requestPresentation(request) {
     return {group, status: ["DONE", "CLOSED"].includes(request.stage) ? request.stage
       : node.status,
       blocker: group === "blocked" ? node.reason || execution.reason : null,
-      nextAction: node.upstreamProcessing ? "请等待本轮阶段处理完成。" : execution.next_action};
+      nextAction: node.upstreamProcessing ? "请等待本轮阶段处理完成。" : node.nextAction || execution.next_action};
+  }
+  if (!productDiscussionStages.has(request.stage)) {
+    const node = requestNodeExecution(request);
+    if (node.requiresEngineeringCheck || node.operationInterrupted)
+      return {group: "blocked", status: node.status, blocker: node.reason, nextAction: node.nextAction || request.next_action};
   }
   const waitingTask = waitingRequestTask(request);
   if (waitingTask)
@@ -1083,7 +1153,7 @@ function requestPresentation(request) {
     !latestApproval(request.id, request.checkpoint_sha256) &&
     failedDesignOperation?.status === "FAILED" &&
     operationTarget(failedDesignOperation) === request.id &&
-    ["CONTINUE_DELIVERY", "RECOVER_DESIGN"].includes(
+    ["PRODUCT_APPROVAL", "CONTINUE_DELIVERY", "RECOVER_DESIGN"].includes(
       failedDesignOperation.intent.action,
     )
   )
@@ -1117,11 +1187,12 @@ function requestPresentation(request) {
 
 function canContinueDelivery(request) {
   if (engineeringWaitSteps(request).length) return false;
+  if (requestNodeExecution(request).requiresEngineeringCheck) return false;
   if (request.design_recheck_pending)
     return !designBudgetExhausted(request) && !activeOperation(request.id);
   return (
     !designBudgetExhausted(request) &&
-    request.stage !== "DESIGNING" &&
+    !["DESIGNING", "PLANNING"].includes(request.stage) &&
     !productDiscussionStages.has(request.stage) &&
     (requestPresentation(request).group === "blocked" ||
       currentRequestTasks(request).some((task) => taskGroup(task) === "blocked"))
@@ -1133,6 +1204,23 @@ function canRecoverDesign(request) {
     request.stage_budget?.exhausted !== "capacity" && !activeOperation(request.id);
 }
 
+function canResumeUpstreamStage(request) {
+  if (!["DESIGNING", "PLANNING"].includes(request.stage) || activeOperation(request.id) ||
+      currentRequestTasks(request).some(task => !task.terminal) ||
+      request.knowledge_gap?.is_current || request.blocker ||
+      request.design_recheck_pending || request.coordination && (!request.coordination.stage || request.coordination.stage === request.stage) ||
+      request.design_recovery_available || designBudgetExhausted(request) ||
+      latestApproval(request.id, request.checkpoint_sha256) ||
+      ["WAITING", "STOPPED", "INTERRUPTED", "RETRY_SCHEDULED", "QUEUED"].includes(request.execution?.state) ||
+      request.execution?.reason_code === "EXECUTION_CLAIM_EXPIRED") return false;
+  const operation = latestOperation(request.id);
+  if (!operation) return true;
+  if ((operation.intent.project_id && operation.intent.project_id !== request.project_id) ||
+      !deliveryOperationActions.has(operation.intent.action) || isSourceRevisionDrift(operation)) return false;
+  return operation.status === "SUCCEEDED" && !operationNeedsHumanAttention(operation) ||
+    operation.status === "INTERRUPTED" && operation.error_code === "HOST_INTERRUPTED";
+}
+
 function canRetryDesign(request) {
   const operation = latestOperation(request.id);
   return (
@@ -1140,9 +1228,14 @@ function canRetryDesign(request) {
     !latestApproval(request.id, request.checkpoint_sha256) &&
     !request.design_recovery_available &&
     !designBudgetExhausted(request) &&
+    !currentRequestTasks(request).some(task => !task.terminal) &&
+    !["WAITING", "STOPPED", "INTERRUPTED", "QUEUED", "RETRY_SCHEDULED"].includes(request.execution?.state) &&
+    request.execution?.reason_code !== "EXECUTION_CLAIM_EXPIRED" &&
     operation?.status === "FAILED" &&
+    !isSourceRevisionDrift(operation) &&
+    (!operation.intent.project_id || operation.intent.project_id === request.project_id) &&
     operationTarget(operation) === request.id &&
-    ["CONTINUE_DELIVERY", "RECOVER_DESIGN"].includes(operation.intent.action) &&
+    ["PRODUCT_APPROVAL", "CONTINUE_DELIVERY", "RECOVER_DESIGN"].includes(operation.intent.action) &&
     !activeOperation(request.id)
   );
 }
@@ -1211,15 +1304,21 @@ function stageFailureGuidance(operation) {
 
 function requestBlockingSummary(request) {
   if (requestPresentation(request).group !== "blocked") return null;
-  if (request.execution && request.execution.responsibility !== "product")
+  const node = requestNodeExecution(request);
+  if (node.requiresEngineeringCheck)
+    return {reasons: [{reason: node.reason, scopes: []}], operationReason: null,
+      approval: latestApproval(request.id, request.checkpoint_sha256), suggestedAction: node.nextAction,
+      approvedKnowledge: false, responsibility: "engineering"};
+  if (request.execution && request.execution.responsibility !== "product") {
     return {
-      reasons: [{reason: request.execution.reason, scopes: []}],
+      reasons: [{reason: node.reason || request.execution.reason, scopes: []}],
       operationReason: null,
       approval: latestApproval(request.id, request.checkpoint_sha256),
-      suggestedAction: request.execution.next_action,
+      suggestedAction: node.nextAction || request.execution.next_action,
       approvedKnowledge: false,
-      responsibility: request.execution.responsibility,
+      responsibility: node.requiresEngineeringCheck ? "engineering" : request.execution.responsibility,
     };
+  }
   if (canRetryDesign(request)) {
     const operation = latestOperation(request.id);
     const guidance = stageFailureGuidance(operation);
@@ -1343,6 +1442,7 @@ function humanizeBlockingText(value) {
   const text = String(value || "").trim();
   if (!text) return "暂未记录具体原因。";
   const exact = {
+    "The console host stopped before the operation completed.": "服务在本次操作完成前已停止，操作已中断。已保存的交付进度和审批仍保留。",
     "Prepare every selected directory.": "准备所有已选择的代码目录。",
     "Requirement project prepared. Discuss your requirement in this workspace.": "需求项目已准备好，请在此工作区描述并讨论需求。",
     "Discover one product across all prepared directories.": "Product Agent 将梳理所有已准备代码目录的统一需求。",
@@ -2857,6 +2957,26 @@ function renderOperationStatus() {
 function agentWorkGroup(work) {
   return work.kind === "task" ? taskGroup(work.item) : requestGroup(work.item);
 }
+function agentWorkState(work) {
+  if (work.kind === "request") return requestNodeExecution(work.item).state;
+  if (taskGroup(work.item) === "blocked") return "blocked";
+  const status = taskPresentationStatus(work.item);
+  if (["RUNNING", "IMPLEMENTING", "QA", "REVIEW"].includes(status)) return "running";
+  return work.item.terminal ? "done" : "paused";
+}
+function agentMemberStatus(agent) {
+  if (!agent.enabled) return ["已停用", "badge"];
+  const current = agent.current_stage_delivery_ids.map(agentWorkById).filter(Boolean);
+  const states = current.map(agentWorkState);
+  if (states.includes("running")) return ["执行中", "badge current"];
+  if (states.includes("blocked")) return ["已阻塞", "badge blocked"];
+  if (states.includes("paused")) {
+    const labels = new Set(current.filter(work => agentWorkState(work) === "paused").map(work =>
+      work.kind === "request" ? requestNodeExecution(work.item).label : label(taskPresentationStatus(work.item))));
+    return [labels.size === 1 ? [...labels][0] : "待执行", "badge"];
+  }
+  return agent.assigned_delivery_ids.length ? ["等待当前阶段", "badge"] : ["空闲中", "badge done"];
+}
 function collapseVerificationQueue(agent, assigned, history, currentIds) {
   if (!agent.roles.some((role) => ["qa", "reviewer"].includes(role)))
     return { assigned, history };
@@ -2911,6 +3031,13 @@ function taskRow(work, agentId) {
     work.kind === "request" ? task : requestById(task.request_id);
   row.append(el("strong", request ? request.title : task.title, "work-row-title"));
   const a = task.assignments?.find((a) => a.agent_id === agentId);
+  const agent = snapshot.agents.find(candidate => candidate.id === agentId);
+  const historicalRequest = work.kind === "request" && agent?.history_delivery_ids.includes(task.id) &&
+    !agent.assigned_delivery_ids.includes(task.id);
+  if (a) row.append(assignmentBadge(task, a));
+  else if (historicalRequest) row.append(el("span", "本轮已完成", "badge done"));
+  else if (work.kind === "request") row.append(requestNodeBadge(task));
+  else row.append(badge(taskPresentationStatus(task)));
   n.append(row);
   const fullPath =
     work.kind === "task"
@@ -2925,7 +3052,6 @@ function taskRow(work, agentId) {
   const overview = el("div", undefined, "work-row-overview");
   if (a) overview.append(el("span", label(a.role), "work-row-role"));
   else {
-    const agent = snapshot.agents.find((candidate) => candidate.id === agentId);
     if (agent?.roles.length)
       overview.append(
         el("span", agent.roles.map(label).join(" / "), "work-row-role"),
@@ -2934,11 +3060,13 @@ function taskRow(work, agentId) {
   overview.append(scope);
   n.append(overview);
   viewBlock(n, `work:${work.kind}:${task.id}`, [work.kind, task.id, request?.title || task.title,
-    fullPath, a?.role, snapshot.agents.find(agent => agent.id === agentId)?.roles]);
+    fullPath, a?.role, snapshot.agents.find(agent => agent.id === agentId)?.roles,
+    historicalRequest, work.kind === "request" ? requestNodeExecution(task) : taskPresentationStatus(task), a]);
   return n;
 }
 function renderTeam(content) {
   const summary = el("section", undefined, "summary team-summary");
+  const blockedRequestCount = snapshot.requests.filter(request => requestGroup(request) === "blocked").length;
   for (const [count, title] of [
     [snapshot.agents.length, "位团队成员"],
     [
@@ -2946,7 +3074,7 @@ function renderTeam(content) {
       "项当前 Project 未结束任务",
     ],
     [
-      snapshot.requests.filter((r) => r.blocker).length,
+      blockedRequestCount,
       "项当前 Project 待处理需求",
     ],
   ]) {
@@ -2955,7 +3083,7 @@ function renderTeam(content) {
     summary.append(n);
   }
   viewBlock(summary, "team-summary", [snapshot.agents.length,
-    snapshot.tasks.filter(task => !task.terminal).length, snapshot.requests.filter(request => request.blocker).length]);
+    snapshot.tasks.filter(task => !task.terminal).length, blockedRequestCount]);
   content.append(summary);
   if (!snapshot.agents.length)
     content.append(
@@ -2998,13 +3126,7 @@ function renderTeam(content) {
   roster.setAttribute("aria-label", "团队成员列表");
   for (const agent of orderedAgents) {
     const queueState = queueStates.get(agent.id);
-    const memberStatus = !agent.enabled
-      ? ["已停用", "badge"]
-      : queueState.current_stage_delivery_ids.length
-        ? ["执行中", "badge current"]
-        : queueState.assigned_delivery_ids.length
-          ? ["等待当前阶段", "badge"]
-          : ["空闲中", "badge done"];
+    const memberStatus = agentMemberStatus(agent);
     const control = button(
       "",
       () => {
@@ -3021,7 +3143,7 @@ function renderTeam(content) {
     );
     identity.append(el("span", agent.name.slice(0, 1), "avatar"), name);
     control.append(identity, el("span", memberStatus[0], memberStatus[1]));
-    viewBlock(control, `agent:${agent.id}`, [agent, queueState, selectedAgentId]);
+    viewBlock(control, `agent:${agent.id}`, [agent, queueState, memberStatus, selectedAgentId]);
     roster.append(control);
   }
   const agent = orderedAgents.find((item) => item.id === selectedAgentId);
@@ -3049,7 +3171,8 @@ function renderTeam(content) {
   ));
   const blockedIds = new Set(
     [...assigned, ...history]
-      .filter((work) => agentWorkGroup(work) === "blocked")
+      .filter((work) => agentWorkGroup(work) === "blocked" &&
+        (work.kind !== "request" || assigned.some(item => item.id === work.id)))
       .map((work) => work.id),
   );
   const queues = [
@@ -3058,7 +3181,7 @@ function renderTeam(content) {
       assigned.filter(
         (work) =>
           !blockedIds.has(work.id) &&
-          !currentIds.has(work.id),
+          (!currentIds.has(work.id) || agentWorkState(work) !== "running"),
       ),
       "waiting",
     ],
@@ -3066,7 +3189,7 @@ function renderTeam(content) {
       "进行中",
       assigned.filter(
         (work) =>
-          !blockedIds.has(work.id) && currentIds.has(work.id),
+          !blockedIds.has(work.id) && currentIds.has(work.id) && agentWorkState(work) === "running",
       ),
       "active",
     ],
@@ -3158,13 +3281,13 @@ function requestCard(request) {
 }
 function requestOperation(panel, request, discussionSection) {
   if (!canControlCurrentTeam()) return;
-  const appendOperation = (content) => {
+  const appendOperation = (content, normalContinuation = false) => {
     const section = el(
       "section",
       undefined,
       "detail-section request-operation",
     );
-    if (request.execution?.responsibility !== "product" && request.execution &&
+    if (!normalContinuation && request.execution?.responsibility !== "product" && request.execution &&
         !productDiscussionStages.has(request.stage) && content.tagName?.toLowerCase() !== "details") {
       const management = engineeringDetails("工程管理", request.id + ":operation");
       management.append(el("p", "由工程授权者处理此操作；产品负责人无需决定技术恢复方式。", "muted"), content);
@@ -3537,7 +3660,12 @@ function requestOperation(panel, request, discussionSection) {
       }),
     ), "secondary"));
   }
-  if (canRetryDesign(request)) {
+  if (canResumeUpstreamStage(request)) {
+    appendOperation(deliveryButton(request.stage === "PLANNING" ? "继续计划" : "继续设计", () => submitOperation({
+      action: "CONTINUE_DELIVERY", project_id: request.project_id, delivery_id: request.id,
+      expected_checkpoint_sha256: request.checkpoint_sha256,
+    }), "primary"), true);
+  } else if (canRetryDesign(request)) {
     const action = deliveryButton(
       request.stage === "PLANNING" ? "重试 Planner" : "重试 Design",
       () =>
@@ -6735,6 +6863,8 @@ function managerFlowStatus(request) {
   if (["DONE", "CLOSED"].includes(request.stage)) return null;
   if (["WAITING_PRODUCT_REPLY", "WAITING_PRODUCT_APPROVAL"].includes(request.stage))
     return el("p", `产品确认 · ${requestNodeExecution(request).label}`, "flow-manager blocked");
+  if (requestNodeExecution(request).requiresEngineeringCheck)
+    return el("p", "工程团队 · 等待工程处理", "flow-manager blocked");
   if (request.execution && !productDiscussionStages.has(request.stage)) {
     const node = requestNodeExecution(request);
     return el("p", `${request.execution.responsibility === "product" ? "产品确认" : "ASE 团队协调"} · ${node.label}`,

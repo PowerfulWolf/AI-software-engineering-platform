@@ -43,9 +43,10 @@ Base：已中文及未知正文不变；Bad：改写 journal 或改变审批事�
 ### 流程节点状态与执行器状态（2026-10-05）
 
 `requestNodeExecution(request)` 是共享前端读侧派生，不修改 API `execution`、Operation 或
-持久事实。流程、需求卡片、详情与 Manager 说明采用同一节点事实。蓝色“执行中”表示当前
+持久事实。流程、需求卡片、详情、成员任务队列与 Manager 说明采用同一节点事实。蓝色“执行中”表示当前
 交付节点正在处理；绿色“已完成”表示阶段已通过；红色表示阻塞、需确认或待审批；灰色表示
-排队、待重试、待执行或状态待核对。颜色须有文字和当前节点 `aria-current=step` 辅助。
+排队、待重试、准备执行或合法待继续。缺少执行/停止证明的工作显示红色“等待工程处理”，
+原始 UNKNOWN 只留在工程详情。颜色须有文字和当前节点 `aria-current=step` 辅助。
 
 | 当前事实（按优先级） | 节点展示 |
 | --- | --- |
@@ -57,7 +58,9 @@ Base：已中文及未知正文不变；Bad：改写 journal 或改变审批事�
 | WorkItem READY/LEASED、typed execution QUEUED、Operation QUEUED 或 RETRY_SCHEDULED | 灰色已排队/待重试，不宣称模型已执行 |
 | 已进入 PRODUCT_DISCOVERY/DESIGNING/PLANNING/INTEGRATING，同需求同 Project 工作 Operation RUNNING，且无上列事实 | 当前节点蓝色执行中 |
 | 当前 native 角色与 Task 阶段匹配、RUNNING + LEASE_VALID | 对应 Coder/QA/Review 节点蓝色执行中 |
-| 无有效处理或 claim 事实 | 灰色待执行/状态待核对，不从阶段名称猜执行 |
+| NEW/PLANNING 子 Task、同需求同 Project 交付 Operation RUNNING，无等待/过期/blocker | 灰色准备执行，表示确定性初始化，不表示模型运行 |
+| 无 active/子 Task 的 DESIGNING/PLANNING，既有 CONTINUE gates 可用 | 灰色待继续，提供继续设计/继续计划 |
+| 已有 native 工作缺有效处理、claim 或安全继续事实 | 红色等待工程处理，不能从 group=blocked 自动开放 Continue |
 
 上游节点处理可以包含知识核对和产物生成，并不证明执行器/模型在线；API heartbeat/execution
 UNKNOWN 原样保留，技术状态放需求工程详情，产品提示为“当前节点正在执行，请等待本阶段处理
@@ -68,8 +71,9 @@ UNKNOWN 原样保留，技术状态放需求工程详情，产品提示为“当
 已完成，当前 Review 时实现与测试已完成。不从旧 candidate 的原始 PASS/APPROVE artifact 猜
 当前通过，也不删除历史否定结论。
 
-当前无阻塞的非终态子 Task 若缺少运行 claim，保持灰色状态待核对；旧 FAILED Operation 或
-Manager advice 不能遮住该 successor，包括 NEW/PLANNING 的当前工作。没有当前子工作时，
+当前非终态子 Task 若缺少运行/排队或确定性准备事实，显示“等待工程处理”；旧 FAILED
+Operation 或 Manager advice 不能遮住该 successor，也不能凭保留 blocker 文本开放 Continue。
+NEW/PLANNING 仅在匹配交付 Operation 正在执行、无当前等待/过期/blocker 时显示“准备执行”。没有当前子工作时，
 最新同 Project 的交付 FAILED Operation 表示操作已停止，显示红色阻塞。FAILED.result 按
 ConsoleOperation Schema 必须为 null；expected_checkpoint_sha256 是操作输入，阶段 attempt
 可先追加新 checkpoint 再失败，不得要求该输入摘要仍等于当前 checkpoint 才展示失败。
@@ -80,6 +84,47 @@ card 增量签名同时包含节点事实与 deliveryPhase，角色一直 RUNNIN
 UNKNOWN+RUNNING、队列/重试、durable wait/expired、新失败、角色返工、旧 Task 冲突、DONE
 与 CLOSED。纯前端修复无需改库；部署资产刷新页面即可继续原需求，回滚资产并刷新保留所有
 历史 bytes/hash、审批、预算与状态。
+
+## 上游服务中断、正常续接与明确执行状态（2026-10-05）
+
+`canResumeUpstreamStage(request)` 只开放已进入 DESIGNING/PLANNING、没有 active Operation/
+当前非终态子 Task/知识等待/设计 recheck/当前协调等待/精确审批/预算耗尽/已记录 source drift
+的正常接续；最新操作缺失或正常成功，或同 Project 交付操作为 INTERRUPTED/HOST_INTERRUPTED
+时才可用。关闭、删除等 lifecycle 中断不授权执行交付。按钮为“继续设计/继续计划”，直接可见，
+仅提交 `CONTINUE_DELIVERY(project_id, delivery_id, expected_checkpoint_sha256)`，摘要绑定当前
+checkpoint；不得重放首次 PRODUCT_APPROVAL。首次批准后进入设计/计划的 FAILED 同既有
+Design/Planner retry gate 接续，仍受当前预算、source 和审批约束。
+
+`HOST_INTERRUPTED` 的共享节点显示红色“操作已中断”，原 Product 批准和当前阶段保留。
+固定英文 `The console host stopped before the operation completed.` 在当前原因、notification
+及完整 Operation 历史通过统一精确映射显示中文，原始 bytes/hash 不变。INTERRUPTED/已停止
+badge 使用局部红色停止样式，不使用执行中的蓝色，不改变全局 `--warn`。
+
+native `taskPresentationStatus/taskGroup`、Task/Request 产品摘要、assignment、成员侧栏、队列、
+卡片同实际 facts：有效角色 claim 为执行中；READY/LEASED 为等待调度；RETRY_SCHEDULED
+为待重试；合法 bootstrap 为准备执行；缺证据为等待工程处理。已经证实的 claim/queue/
+preparation 同时覆盖产品原因、责任和下一步，不能旁挂旧 UNKNOWN 的工程核验说明。
+UNKNOWN 的原始字段仍在工程详情。`requiresEngineeringCheck` 必须使普通 Continue 不可用，
+不可因红色 group 合成安全调度权限；原工程调查/停止 proof 和精确审批入口保持。
+
+`current_stage_delivery_ids` 只证明岗位归属，不证明模型执行。成员 paused badge 使用具体
+等待调度/待重试/准备执行/待继续文字；Task 工作行优先使用本成员 assignmentBadge，QA 运行
+不能让非当前 Coder/Reviewer 行显示执行中。工作行增量签名包含完整 assignment，连续 RUNNING
+的角色切换也会更新 badge。历史上游岗位属于已完成的那一轮，不因当前后续岗位阻塞而重新
+变成阻塞；native 历史失败仍保留。Team 待处理计数与队列均消费 requestGroup 派生。
+
+### 存量处置与限制
+
+无需改库、改 journal 或重建需求。前端资产刷新即可显示原中断并提供当前 checkpoint 入口。
+本次交付监督只读确认旧 Host 和该需求精确 baseline CWD 下没有 owned Codex 后，经公共
+CONTINUE 创建新 Operation/新 attempt；未知中断旧工作预留不退款，不重复产品批准。
+HOST_INTERRUPTED 只证明 Console Host 停止，不是旧 Codex 的 stop receipt。本补丁不实现
+上游 owned-run/progress/drain，也不新增 runtime guard；后端继续沿既有 source、claim、预算
+和审批 gates 校验。底层上游执行可观测性单独跟进，不能把前端修复声明为已补齐该能力。
+
+定向验证：ProductApproval/Continue 的中断和首轮失败、inputOld→currentNew、安全接续按钮
+实际提交、预算/精确审批/source drift/知识/active gates、native UNKNOWN 与准备执行边界、
+成员连续角色切换、Operation 红色 computed style。回滚前端资产并刷新保留所有历史事实。
 
 ```python
 ProjectConsole.submit(

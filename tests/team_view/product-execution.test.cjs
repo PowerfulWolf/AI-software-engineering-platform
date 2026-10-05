@@ -10,7 +10,7 @@ function setup() {
     addEventListener() {}, setAttribute(name, value) {this.attributes[name] = value;},
     classList: {toggle() {}}});
   const context = vm.createContext({
-    document: {getElementById: element, createElement: element, querySelectorAll: () => []},
+    document: {getElementById: element, createElement: element, createTextNode: text => ({textContent: text, children: []}), querySelectorAll: () => []},
     fetch: () => new Promise(() => {}), AbortController,
     setInterval() {}, setTimeout() {}, clearTimeout() {},
   });
@@ -146,12 +146,13 @@ test("an active upstream operation shows node processing while executor facts st
   }
 });
 
-test("delivery nodes keep unknown, queue and retry gray and durable waiting red", () => {
+test("delivery nodes name safe upstream continuation, queue and retry while durable waiting stays red", () => {
   const run = setup();
   run(`snapshot.tasks = []; request.stage = "DESIGNING"; request.scopes = [];
     execution.state = "UNKNOWN"; execution.responsibility = "team";
     operations = [];`);
   assert.equal(run("requestNodeExecution(request).state"), "paused");
+  assert.equal(run("requestNodeExecution(request).label"), "待继续");
   assert.equal(run("deliveryFlow(request).children[1].className"), "paused");
   run(`operations = [{status: "QUEUED", updated_at: "2026-10-04T00:00:00Z",
     intent: {action: "PRODUCT_APPROVAL", delivery_id: "r", project_id: "p"}}]`);
@@ -169,7 +170,7 @@ test("delivery nodes keep unknown, queue and retry gray and durable waiting red"
   assert.equal(run("requestNodeExecution(request).state"), "blocked");
   assert.equal(run("deliveryFlow(request).children[1].className"), "blocked");
   run('execution.reason_code = "EXECUTION_UNCONFIRMED"; operations[0].intent.project_id = "other"');
-  assert.equal(run("requestNodeExecution(request).state"), "paused");
+  assert.equal(run("requestNodeExecution(request).label"), "等待工程处理");
 });
 
 test("product decisions remain red and completed delivery has seven green completed nodes", () => {
@@ -210,7 +211,7 @@ test("typed unknown execution retains budget, recheck and exact-approval gates u
   assert.equal(run("requestNodeExecution(request).state"), "running", "a reserved final work attempt is still processing");
 });
 
-test("a current successor without a claim stays gray ahead of historical operation failures or advice", () => {
+test("a current successor without a claim asks engineering to verify instead of showing historical failures or advice", () => {
   const run = setup();
   run(`execution.state = "UNKNOWN"; execution.responsibility = "team";
     request.coordination = null; task.role_queue = []; task.last_activity = "2026-10-04T00:02:00Z";
@@ -219,13 +220,100 @@ test("a current successor without a claim stays gray ahead of historical operati
       intent: {action: "CONTINUE_DELIVERY", delivery_id: "r", project_id: "p", expected_checkpoint_sha256: "old"}}];`);
   for (const status of ["NEW", "PLANNING", "IMPLEMENTING"]) {
     run(`task.status = "${status}"`);
-    assert.equal(run("requestNodeExecution(request).state"), "paused", status);
-    assert.equal(run("requestPresentation(request).group"), "active", status);
+    assert.equal(run("requestNodeExecution(request).state"), "blocked", status);
+    assert.equal(run("requestNodeExecution(request).label"), "等待工程处理", status);
+    assert.equal(run("requestPresentation(request).group"), "blocked", status);
+    assert.equal(run("canContinueDelivery(request)"), false, status);
     assert.doesNotMatch(text(run("productExecutionSummary(request)")), /旧操作失败/, status);
   }
   run('operations = []; request.coordination = {draft: {action: "WAITING_HUMAN", summary: "旧协调建议"}}');
-  assert.equal(run("requestNodeExecution(request).state"), "paused");
-  assert.equal(run("requestPresentation(request).group"), "active");
+  assert.equal(run("requestNodeExecution(request).label"), "等待工程处理");
+  assert.equal(run("requestPresentation(request).group"), "blocked");
+  assert.doesNotMatch(text(run("productExecutionSummary(request)")), /旧协调建议|状态待核对/);
+  run('task.blocker = "保留的旧阻塞文本"');
+  assert.equal(run("requestNodeExecution(request).requiresEngineeringCheck"), true);
+  assert.equal(run("canContinueDelivery(request)"), false, "retained blocker text does not authorize unknown execution");
+  run('task.status = "IMPLEMENTING"; task.role_queue = [{role: "coder", status: "RUNNING", lease_liveness: "LEASE_VALID"}]');
+  assert.equal(run("requestNodeExecution(request).state"), "running");
+});
+
+test("native unknown state agrees across task summary, assignment, card and member displays", () => {
+  const run = setup();
+  run(`execution.state = "UNKNOWN"; execution.responsibility = "engineering";
+    execution.reason_code = "EXECUTION_NOT_OBSERVED"; execution.reason = "尚无执行事实";
+    task.role_queue = []; task.assignments = [{role: "coder", current_stage: true, agent_id: "coder"}];`);
+  assert.equal(run("taskGroup(task)"), "blocked");
+  assert.equal(run("taskPresentationStatus(task)"), "WAITING_ENGINEERING");
+  assert.match(run("assignmentBadge(task, task.assignments[0]).textContent"), /等待工程处理/);
+  assert.match(text(run("productExecutionSummary(task)")), /等待工程处理/);
+  assert.doesNotMatch(text(run("productExecutionSummary(task)")), /执行状态待确认|状态待核对/);
+  run('task.role_queue = [{role: "coder", status: "RUNNING", lease_liveness: "LEASE_VALID"}]');
+  assert.equal(run("taskGroup(task)"), "active");
+  assert.equal(run("taskPresentationStatus(task)"), "RUNNING");
+  assert.match(text(run("productExecutionSummary(task)")), /当前执行 · 执行中/);
+  run('task.role_queue[0].status = "READY"; task.role_queue[0].lease_liveness = "UNKNOWN"');
+  assert.equal(run("taskGroup(task)"), "active");
+  assert.equal(run("taskPresentationStatus(task)"), "READY");
+  assert.match(text(run("productExecutionSummary(task)")), /当前执行 · 等待调度/);
+  assert.doesNotMatch(text(run("productExecutionSummary(task)")), /尚无执行事实|处理方 · 工程团队/);
+  assert.doesNotMatch(run("assignmentBadge(task, task.assignments[0]).className"), /current|blocked/);
+});
+
+test("only live matching delivery work makes native bootstrap gray preparation", () => {
+  const run = setup();
+  run(`execution.state = "UNKNOWN"; execution.responsibility = "engineering"; execution.reason = "尚无执行事实";
+    task.role_queue = []; task.execution = execution; task.blocker = null;
+    operations = [{status: "RUNNING", updated_at: "2026-10-05T12:34:00Z",
+      intent: {action: "CONTINUE_DELIVERY", delivery_id: "r", project_id: "p"}}];`);
+  for (const status of ["NEW", "PLANNING"]) {
+    run(`task.status = "${status}"`);
+    assert.equal(run("requestNodeExecution(request).label"), "准备执行", status);
+    assert.equal(run("taskPresentationStatus(task)"), "PREPARING_EXECUTION", status);
+    assert.equal(run("taskGroup(task)"), "active", status);
+    assert.equal(run("requestNodeExecution(request).state"), "paused", status);
+    assert.equal(run("canContinueDelivery(request)"), false, status);
+    assert.doesNotMatch(text(run("productExecutionSummary(request)")), /尚无执行事实|处理方 · 工程团队/);
+  }
+  run('operations[0].intent.action = "INSPECT_DELIVERY_WAIT"');
+  assert.equal(run("requestNodeExecution(request).label"), "等待工程处理");
+  run('operations[0].intent.action = "CONTINUE_DELIVERY"; task.status = "IMPLEMENTING"');
+  assert.equal(run("requestNodeExecution(request).label"), "等待工程处理");
+  run('task.status = "NEW"; operations = []');
+  assert.equal(run("taskPresentationStatus(task)"), "WAITING_ENGINEERING");
+  assert.equal(run("canContinueDelivery(request)"), false);
+});
+
+test("host interruption blocks the retained upstream stage and member queue without altering original facts", () => {
+  const run = setup();
+  const original = "The console host stopped before the operation completed.";
+  run(`snapshot.tasks = []; request.stage = "DESIGNING"; request.scopes = [];
+    execution.state = "UNKNOWN"; execution.responsibility = "team";
+    snapshot.projects = [{id: "p", name: "项目"}];
+    snapshot.agents = [{id: "designer", name: "设计", roles: ["designer"], enabled: true,
+      max_parallel_assignments: 1, assigned_delivery_ids: ["r"], current_stage_delivery_ids: ["r"], history_delivery_ids: []}];
+    selectedAgentId = "designer";
+    operations = [{operation_id: "host-interrupted", status: "INTERRUPTED", result: null,
+      updated_at: "2026-10-05T12:32:00Z", error_code: "HOST_INTERRUPTED",
+      error_summary: ${JSON.stringify(original)},
+      intent: {action: "PRODUCT_APPROVAL", delivery_id: "r", project_id: "p", expected_checkpoint_sha256: "before-attempt"}}];`);
+  assert.equal(run("requestNodeExecution(request).state"), "blocked");
+  assert.equal(run("requestNodeExecution(request).label"), "操作已中断");
+  assert.equal(run("deliveryFlow(request).children[0].className"), "done");
+  assert.equal(run("deliveryFlow(request).children[1].className"), "blocked");
+  assert.match(text(run("productExecutionSummary(request)")), /服务在本次操作完成前已停止|继续设计/);
+  assert.doesNotMatch(text(run("productExecutionSummary(request)")), /状态待核对|当前节点正在执行/);
+  const team = run('(() => {const container = document.createElement("div"); renderTeam(container); return container;})()');
+  assert.match(text(team), /已阻塞/);
+  assert.doesNotMatch(text(team), /执行中/);
+  assert.match(text(team), /操作已中断/);
+  assert.equal(run("execution.state"), "UNKNOWN");
+  assert.equal(run("operations[0].error_summary"), original);
+  assert.equal(run("snapshot.agents[0].current_stage_delivery_ids.join()"), "r");
+  assert.match(run("operationNoticeFor(operations[0]).message"), /服务在本次操作完成前已停止/);
+  assert.match(run('badge("INTERRUPTED").className'), /blocked execution-interrupted/);
+  assert.doesNotMatch(run('badge("INTERRUPTED").className'), /current/);
+  run('operations[0].intent.action = "CLOSE_REQUIREMENT"');
+  assert.equal(run("canResumeUpstreamStage(request)"), false, "lifecycle interruption cannot authorize a delivery continuation");
 });
 
 test("a failed upstream operation stays red after its stage attempt advances the input checkpoint", () => {
@@ -245,5 +333,6 @@ test("a failed upstream operation stays red after its stage attempt advances the
     assert.equal(run("requestPresentation(request).group"), "blocked", action);
   }
   run('operations[0].intent.project_id = "other-project"');
-  assert.equal(run("requestNodeExecution(request).state"), "paused", "another project cannot establish this failure");
+  assert.equal(run("requestNodeExecution(request).label"), "等待工程处理", "another project cannot establish this failure or authorize continuation");
+  assert.notEqual(run("requestNodeExecution(request).reason"), "本轮失败");
 });

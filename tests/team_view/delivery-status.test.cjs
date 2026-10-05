@@ -30,8 +30,8 @@ function state() {
 
 test("current recovery and terminal delivery do not show historical Manager approval", () => {
   const run = state();
-  for (const status of ["IMPLEMENTING", "QA", "REVIEW"]) {
-    run(`task.status = ${JSON.stringify(status)}`);
+  for (const [status, role] of [["IMPLEMENTING", "coder"], ["QA", "qa"], ["REVIEW", "reviewer"]]) {
+    run(`task.status = ${JSON.stringify(status)}; task.role_queue[0].role = ${JSON.stringify(role)}`);
     assert.equal(run("requestPresentation(request).group"), "active");
     assert.equal(run("managerFlowStatus(request)"), null);
   }
@@ -224,7 +224,8 @@ test("native flow uses the current claimed role after QA and review rework, not 
     if (index > 3) assert.equal(run("deliveryFlow(request).children[3].className"), "done");
   }
   run('task.role_queue[0].role = "coder"');
-  assert.equal(run("deliveryFlow(request).children[5].className"), "paused", "a different role cannot prove Review is executing");
+  assert.equal(run("deliveryFlow(request).children[5].className"), "blocked", "a different role cannot prove Review is executing");
+  assert.equal(run("requestNodeExecution(request).label"), "等待工程处理");
   run('request.stage = "DONE"');
   assert.equal(run('deliveryFlow(request).children.every(step => step.className === "done")'), true, "old/current task phases cannot override DONE");
   run('request.failed_stages = ["DESIGNING", "DELIVERING"]; task.role_queue[0].status = "WAITING_HUMAN"');
@@ -266,9 +267,10 @@ test("reader-shaped candidate verification keeps its current gate ahead of paren
       intent: {action: "CONTINUE_DELIVERY", delivery_id: "r", project_id: "p"}}];`);
   for (const [status, index] of [["VERIFY_QA", 4], ["VERIFY_REVIEW", 5]]) {
     run(`task.status = ${JSON.stringify(status)}`);
-    assert.equal(run(`deliveryFlow(request).children[${index}].className`), "paused", status);
+    assert.equal(run(`deliveryFlow(request).children[${index}].className`), "blocked", status);
     assert.equal(run(`deliveryFlow(request).children.slice(${index}).some(step => step.className === "done")`), false, status);
-    assert.equal(run("requestNodeExecution(request).state"), "paused", "parent Operation does not prove the verifier is running");
+    assert.equal(run("requestNodeExecution(request).label"), "等待工程处理", "parent Operation does not prove the verifier is running");
+    assert.equal(run("canContinueDelivery(request)"), false);
   }
 });
 

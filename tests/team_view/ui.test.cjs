@@ -275,6 +275,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
       request_id: "r1",
       title: malicious,
       status: i ? "NEW" : "IMPLEMENTING",
+      role_queue: i ? [] : [{role: "coder", status: "RUNNING", lease_liveness: "LEASE_VALID"}],
       terminal: false,
       scope: {
         root: i ? "/frontend" : "/backend",
@@ -347,6 +348,8 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     {
       ...structuredClone(fixture.tasks[1]),
       id: "d3",
+      source_delivery_id: "d2",
+      last_activity: "2026-09-04T01:00:00Z",
       status: "BLOCKED",
       terminal: true,
       blocker: "等待人工处理",
@@ -355,6 +358,8 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     {
       ...structuredClone(fixture.tasks[1]),
       id: "d4",
+      source_delivery_id: "d2",
+      last_activity: "2026-09-04T02:00:00Z",
       status: "DONE",
       terminal: true,
       assignments: [],
@@ -1136,7 +1141,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   );
   await agentCards[2].events.click();
   assert.match(text(get("content")), /测试 · 任务队列/);
-  assert.match(text(get("content")), /待完成 1/);
+  assert.match(text(get("content")), /已阻塞 1/);
   fixture.tasks.push(
     {
       ...structuredClone(fixture.tasks[0]),
@@ -2010,6 +2015,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   );
   await get("nav-team").events.click();
   fixture.tasks[0].status = "QA";
+  fixture.tasks[0].role_queue = [{role: "qa", status: "RUNNING", lease_liveness: "LEASE_VALID"}];
   fixture.tasks[0].assignments[0].current_stage = false;
   fixture.tasks[0].assignments[1].current_stage = true;
   fixture.agents[0].current_stage_delivery_ids = [];
@@ -2026,6 +2032,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     ...structuredClone(fixture.requests[0]),
     id: "r2",
     title: "第二个需求",
+    stage: "READY_FOR_DISCUSSION",
     checkpoint_sha256: "c".repeat(64),
   });
   await interval.fn();
@@ -2174,6 +2181,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     { sequence: 1, speaker: "user", text: "Clarified requirement", attachments: [] },
   ];
   fixture.tasks[0].status = "QA";
+  fixture.tasks[0].role_queue = [];
   fixture.tasks[0].terminal = false;
   delete fixture.tasks[0].blocker;
   fixture.tasks[1].status = "NEW";
@@ -2196,10 +2204,10 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     true,
     "QUEUED to RUNNING does not reopen an acknowledged active-operation dialog",
   );
-  assert.match(text(get("content")), /进行中 1/);
-  assert.match(text(get("content")), /阻塞中 0/);
+  assert.match(text(get("content")), /进行中 0/);
+  assert.match(text(get("content")), /阻塞中 1/);
   await descend(get("content")).find(
-    (node) => node.tag === "button" && /^进行中 1$/.test(node.textContent),
+    (node) => node.tag === "button" && /^阻塞中 1$/.test(node.textContent),
   ).events.click();
   const activeRequirementCard = descend(get("content")).find(
     (node) =>
@@ -2207,7 +2215,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
       node.className.includes("request") &&
       text(node).includes(malicious),
   );
-  assert.match(text(activeRequirementCard), /测试 · 状态待核对/);
+  assert.match(text(activeRequirementCard), /测试 · 等待工程处理/);
   assert.doesNotMatch(text(activeRequirementCard), /Old joint blocker/);
   const activeDeliveryFlow = descend(get("detail")).find(
     (node) =>
@@ -2216,8 +2224,8 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   assert.match(text(activeDeliveryFlow), /产品.*设计.*计划.*实现.*测试.*评审.*交付/);
   assert.match(
     text(activeDeliveryFlow),
-    /Manager 协调.*处理中/,
-    "the delivery flow exposes Manager coordination separately from its stage nodes",
+    /工程团队.*等待工程处理/,
+    "unknown native execution requires engineering verification despite a running Manager operation",
   );
   fixture.requests[0].stage = "BLOCKED";
   fixture.requests[0].failed_stages = ["DELIVERING"];
@@ -2257,7 +2265,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     (node) => node.className === "delivery-flow",
   );
   const authoritativeQaCurrent = authoritativeQaFlow.children[4];
-  assert.equal(authoritativeQaCurrent.className, "paused", "phase alone is not a running claim");
+  assert.equal(authoritativeQaCurrent.className, "blocked", "phase alone needs engineering verification, not a running claim");
   assert.match(
     text(authoritativeQaCurrent),
     /5.*测试/,
@@ -2280,13 +2288,13 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     (node) => node.className === "delivery-flow",
   );
   const activeLeaseQaCurrent = activeLeaseQaFlow.children[4];
-  assert.equal(activeLeaseQaCurrent.className, "paused", "this legacy verification fixture has no running lease facts");
+  assert.equal(activeLeaseQaCurrent.className, "blocked", "this legacy verification fixture has no running lease facts");
   assert.match(
     text(activeLeaseQaCurrent),
     /5.*测试/,
     "the current QA verification phase must override the joint INTEGRATING checkpoint",
   );
-  assert.match(text(get("detail")), /查看仓库任务 · 候选测试中/);
+  assert.match(text(get("detail")), /查看仓库任务 · 等待工程处理/);
   assert.doesNotMatch(text(get("detail")), /VERIFY_QA/);
   assert.doesNotMatch(text(get("operations")), /Manager 正在执行/);
   fixture.tasks.pop();
@@ -2315,11 +2323,11 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
     text(node).includes("管理"),
   );
   assert.match(text(recoveryCoder), /等待当前阶段/);
-  assert.match(text(recoveryQa), /执行中/);
+  assert.match(text(recoveryQa), /已阻塞/);
   assert.match(text(recoveryManager), /空闲中/);
   await recoveryQa.events.click();
   assert.match(text(get("content")), /测试 · 任务队列/);
-  assert.match(text(get("content")), /进行中 1/);
+  assert.match(text(get("content")), /已阻塞 1/);
   assert.ok(
     descend(get("content")).find(
       (node) =>
@@ -2327,7 +2335,7 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
         text(node).includes(malicious) &&
         text(node).includes("/backend/module-a"),
     ),
-    "the active recovery stays in the backend-reported QA queue",
+    "the retained QA recovery stays visible as blocked until a new execution claim exists",
   );
   await recoveryManager.events.click();
   assert.match(text(get("content")), /管理 · 任务队列/);

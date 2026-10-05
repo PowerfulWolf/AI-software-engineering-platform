@@ -413,6 +413,91 @@ test("failed Design exposes an exact-checkpoint retry, but a running retry hides
   assert.equal(findButton(h, "继续交付"), undefined);
 });
 
+test("interrupted approved upstream work continues the current stage with the current checkpoint", async () => {
+  for (const [stage, previousAction, buttonLabel] of [
+    ["DESIGNING", "PRODUCT_APPROVAL", "继续设计"],
+    ["DESIGNING", "CONTINUE_DELIVERY", "继续设计"],
+    ["PLANNING", "CONTINUE_DELIVERY", "继续计划"],
+  ]) {
+    const submitted = [];
+    const h = harness(async (_url, options = {}) => {
+      if (options.method) submitted.push(JSON.parse(options.body).intent);
+      return {ok: true, json: async () => options.method
+        ? {operation_id: "continue-new", status: "QUEUED", updated_at: "2026-10-05T12:34:00Z", intent: submitted.at(-1)} : []};
+    });
+    h.context.stage = stage; h.context.previousAction = previousAction;
+    vm.runInContext(`
+      snapshot.requests[0].stage = stage; snapshot.requests[0].checkpoint_sha256 = "checkpoint-after-attempt";
+      snapshot.requests[0].execution = {state: "UNKNOWN", responsibility: "engineering", reason: "尚无执行器心跳。", next_action: "核对状态。"};
+      operations = [{operation_id: "original", status: "INTERRUPTED", result: null,
+        error_code: "HOST_INTERRUPTED", error_summary: "The console host stopped before the operation completed.",
+        updated_at: "2026-10-05T12:32:00Z", intent: {action: previousAction, project_id: "project_test", delivery_id: "r1",
+          expected_checkpoint_sha256: "checkpoint-before-attempt"}}];
+      renderDetail();
+    `, h.context);
+    assert.ok(findButton(h, buttonLabel), stage + " " + previousAction);
+    const engineeringSections = all(h.detail()).filter(node => node.className.split(/\s+/).includes("engineering-details"));
+    assert.equal(engineeringSections.some(node => all(node).includes(findButton(h, buttonLabel))), false,
+      "normal stage continuation is visible without opening engineering controls");
+    assert.equal(findButton(h, "批准 ProductSpec 并开始交付"), undefined);
+    await findButton(h, buttonLabel).events.click();
+    assert.deepEqual(submitted, [{action: "CONTINUE_DELIVERY", project_id: "project_test", delivery_id: "r1",
+      expected_checkpoint_sha256: "checkpoint-after-attempt"}]);
+  }
+});
+
+test("upstream continuation keeps budget, exact approval, source and execution gates", () => {
+  const h = harness(async () => ({ok: true, json: async () => []}));
+  vm.runInContext(`
+    snapshot.requests[0].stage = "DESIGNING";
+    snapshot.requests[0].execution = {state: "UNKNOWN", responsibility: "team", reason: "待核验", next_action: "待核验"};
+    operations = []; renderDetail();
+  `, h.context);
+  assert.ok(findButton(h, "继续设计"), "an idle admitted stage can continue");
+  assert.match(text(h.detail()), /待继续/);
+  vm.runInContext(`operations = [{operation_id: "old", status: "INTERRUPTED", result: null,
+    error_code: "HOST_INTERRUPTED", error_summary: "host stopped", updated_at: "2026-10-05T12:32:00Z",
+    intent: {action: "PRODUCT_APPROVAL", delivery_id: "r1", project_id: "project_test"}}];`, h.context);
+  const cases = [
+    'snapshot.requests[0].stage_budget = {exhausted: "work", role: "designer", attempts: 3, max_attempts: 3}',
+    'snapshot.requests[0].design_recovery_available = true',
+    'snapshot.requests[0].execution.state = "WAITING"',
+    'snapshot.requests[0].execution.reason_code = "EXECUTION_CLAIM_EXPIRED"',
+    'operations[0].status = "RUNNING"',
+    'operations[0].error_code = "SOURCE_REVISION_DRIFT"; operations[0].status = "FAILED"',
+    'operations[0].intent.action = "CLOSE_REQUIREMENT"',
+    'operations[0].intent.project_id = "other-project"',
+    'operations.push({operation_id: "exact", status: "SUCCEEDED", updated_at: "2026-10-05T12:33:00Z", intent: {action: "CONTINUE_DELIVERY", delivery_id: "r1", project_id: "project_test"}, result: {delivery_id: "r1", checkpoint_sha256: "checkpoint-a", approval: {kind: "coder_scope", title: "新增范围", plan_sha256: "exact", facts: [], risks: []}}})',
+  ];
+  for (const mutation of cases) {
+    vm.runInContext(`snapshot.requests[0].stage_budget = null; snapshot.requests[0].design_recovery_available = false;
+      snapshot.requests[0].execution.state = "UNKNOWN"; snapshot.requests[0].execution.reason_code = "EXECUTION_UNCONFIRMED";
+      operations = [operations[0]]; operations[0].status = "INTERRUPTED"; operations[0].error_code = "HOST_INTERRUPTED";
+      operations[0].intent.action = "PRODUCT_APPROVAL"; operations[0].intent.project_id = "project_test";
+      ${mutation}; renderDetail();`, h.context);
+    assert.equal(findButton(h, "继续设计"), undefined, mutation);
+  }
+});
+
+test("failed initial Product approval retries the approved upstream stage without approving Product again", async () => {
+  const submitted = [];
+  const h = harness(async (_url, options = {}) => {
+    if (options.method) submitted.push(JSON.parse(options.body).intent);
+    return {ok: true, json: async () => options.method
+      ? {operation_id: "retry", status: "QUEUED", updated_at: "2026-10-05T12:34:00Z", intent: submitted.at(-1)} : []};
+  });
+  vm.runInContext(`snapshot.requests[0].stage = "DESIGNING";
+    operations = [{operation_id: "initial", status: "FAILED", result: null,
+      error_code: "MODEL_PROVIDER_ERROR", error_summary: "provider unavailable", updated_at: "2026-10-05T12:32:00Z",
+      intent: {action: "PRODUCT_APPROVAL", delivery_id: "r1", project_id: "project_test", expected_checkpoint_sha256: "old"}}];
+    renderDetail();`, h.context);
+  assert.ok(findButton(h, "重试 Design"));
+  assert.equal(findButton(h, "批准 ProductSpec 并开始交付"), undefined);
+  await findButton(h, "重试 Design").events.click();
+  assert.deepEqual(submitted, [{action: "CONTINUE_DELIVERY", project_id: "project_test", delivery_id: "r1",
+    expected_checkpoint_sha256: "checkpoint-a"}]);
+});
+
 test("exhausted Design recovery outranks a failed retry and submits the recovery intent", async () => {
   const submitted = [];
   const h = harness(async (_url, options = {}) => {
