@@ -86,6 +86,9 @@ from ai_software_engineer.multi_directory.models import (
 from ai_software_engineer.multi_directory.planning import design_work_graph
 from ai_software_engineer.multi_directory.scope import DirectoryUnit, git_read
 from ai_software_engineer.multi_directory.store import JointJournal
+from ai_software_engineer.multi_directory.verification_recovery import (
+    UnstartedDesignCorrectionProof,
+)
 from ai_software_engineer.product import (
     HumanProductDecisionCommand,
     HumanProductDecisionVerifier,
@@ -172,6 +175,15 @@ class ProductionJointBackend:
         self.team = team
         self.project = project
         self.environment = dict(environment)
+
+    def verify_unstarted_design_rejection(
+        self, checkpoint: JointCheckpoint
+    ) -> UnstartedDesignCorrectionProof:
+        from ai_software_engineer.multi_directory.verification_recovery_production import (
+            ProductionUnstartedDesignVerifier,
+        )
+
+        return ProductionUnstartedDesignVerifier(self.project).verify(checkpoint)
 
     def prepare(self, unit: DirectoryUnit) -> PreparedUnit:
         self._require_intake_source(unit)

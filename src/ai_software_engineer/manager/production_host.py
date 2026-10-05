@@ -254,6 +254,17 @@ class TeamHost:
                 command.delivery_id, runtime.requirements.journal
             )
         if str(command.delivery_id).startswith("delivery_multi_"):
+            from ai_software_engineer.multi_directory.verification_recovery import (
+                unstarted_design_rejection,
+            )
+
+            observed = runtime.requirements.journal.current(command.delivery_id)
+            if observed is not None and unstarted_design_rejection(observed) is not None:
+                # Correct the upstream contract through its own locked, read-only
+                # proof gate, before reconcile can create missing proof inputs or
+                # native recovery can mistake this for Task work. The locked service
+                # rechecks current identity, membership and retirement before writing.
+                return runtime.requirements.resume(command)
             joint = runtime.requirements.status(command.delivery_id).checkpoint
             if joint.stage is JointStage.BLOCKED and joint.integration is None:
                 if not isinstance(runtime.requirements.backend, ProductionJointBackend):

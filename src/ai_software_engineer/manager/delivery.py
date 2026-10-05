@@ -1109,7 +1109,7 @@ class UnifiedProjectEntryService:
                 store,
                 current,
                 DeliveryFailureCode.INVALID_AGENT_OUTPUT,
-                "Designer did not publish a verified planning handoff",
+                designed.run_record.error_message or "Designer 未发布已验证的计划交接产物",
                 at,
             )
         current = self._next(

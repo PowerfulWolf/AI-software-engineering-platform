@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from typing import Annotated, Literal, Self, cast
 
-from pydantic import Field, StringConstraints, model_validator
+from pydantic import Field, StringConstraints, TypeAdapter, ValidationError, model_validator
 
 from ai_software_engineer.agents.structured import (
     StructuredModelClient,
@@ -48,6 +48,7 @@ from ai_software_engineer.domain.project_delivery import (
     PlanRevisionFeedback,
     PlanWorkGraph,
 )
+from ai_software_engineer.domain.task import AcceptanceCriterionId
 from ai_software_engineer.planning import (
     PlannerAgentAdapter,
     PlannerAgentFailure,
@@ -150,6 +151,47 @@ class AcceptanceMappingDraft(DomainModel):
     controlled_capability_kind: NonEmptyStr | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+
+
+class AcceptanceVerificationRejected(ValueError):
+    """Safe actionable failure of the real native acceptance-mapping contract."""
+
+    def __init__(self, criterion_id: str, code: str) -> None:
+        self.criterion_id, self.code = criterion_id, code
+        reasons = {
+            "INSPECTION_LEVELS": "检查不能替代已批准的集成、安全或其他可执行验证层级",
+            "COMMAND_INSPECTION_EXCLUSIVE": "同一验收映射不能同时声明执行命令和检查",
+            "INVALID_MAPPING": "验证映射不符合原生交付契约",
+            "VERIFICATION_LEVELS_REDUCED": (
+                "不得删除原设计要求的验证层级来绕过检查, 请改用可执行验证"
+            ),
+            "VERIFICATION_MAPPING_REMOVED": "不得删除原仓库的验收映射或改为只读来绕过验证修正",
+        }
+        super().__init__(f"验收项 {criterion_id}: {reasons[code]}。请保持验证层级并修正验证方式。")
+
+
+def native_acceptance_mapping(item: AcceptanceMappingDraft) -> AcceptanceDesignMapping:
+    """One contract for native conversion and joint publication admission."""
+    try:
+        return AcceptanceDesignMapping.model_validate(item.to_wire())
+    except ValidationError as error:
+        code = "INVALID_MAPPING"
+        messages = {
+            entry["msg"]
+            for entry in error.errors(include_input=False, include_url=False, include_context=False)
+        }
+        if "Value error, inspection cannot weaken the approved verification levels" in messages:
+            code = "INSPECTION_LEVELS"
+        elif "Value error, verification command and inspection are mutually exclusive" in messages:
+            code = "COMMAND_INSPECTION_EXCLUSIVE"
+        # Exact IDs have already passed the caller's coverage contract. Never echo
+        # the Pydantic rendering: it includes untrusted input paths and text.
+        criterion_id = item.acceptance_criterion_id
+        try:
+            TypeAdapter(AcceptanceCriterionId).validate_python(criterion_id)
+        except ValidationError:
+            criterion_id = "未知验收项"
+        raise AcceptanceVerificationRejected(criterion_id, code) from error
 
 
 class DesignStepDraft(DomainModel):
@@ -302,7 +344,7 @@ class StructuredDesignerAgentAdapter(DesignerAgentAdapter):
             )
         except StructuredModelError as error:
             return _designer_failure(request, error)
-        except ValueError:
+        except ValueError as error:
             return DesignerAgentResult(
                 run_id=request.run_id,
                 repository_id=request.repository_id,
@@ -311,7 +353,11 @@ class StructuredDesignerAgentAdapter(DesignerAgentAdapter):
                 status=DesignerAgentRunStatus.FAILED,
                 error=DesignerAgentFailure(
                     code=DesignerAgentErrorCode.INVALID_OUTPUT,
-                    message="Designer model output failed its typed contract",
+                    message=(
+                        str(error)
+                        if isinstance(error, AcceptanceVerificationRejected)
+                        else "设计产物未通过类型化契约校验"
+                    ),
                     transient=False,
                 ),
             )
@@ -442,16 +488,7 @@ def _technical_design(
             for item in draft.requirement_mappings
         ),
         acceptance_mappings=tuple(
-            AcceptanceDesignMapping(
-                acceptance_criterion_id=item.acceptance_criterion_id,
-                verification_strategy=item.verification_strategy,
-                test_levels=item.test_levels,
-                verification_argv=item.verification_argv,
-                verification_inspection=item.verification_inspection,
-                planned_test_files=item.planned_test_files,
-                controlled_capability_kind=item.controlled_capability_kind,
-            )
-            for item in draft.acceptance_mappings
+            native_acceptance_mapping(item) for item in draft.acceptance_mappings
         ),
         implementation_steps=tuple(
             DesignStep(

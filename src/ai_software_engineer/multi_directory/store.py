@@ -182,13 +182,27 @@ def _validate_successor(previous: JointCheckpoint | None, item: JointCheckpoint)
         ):
             raise ValueError("integration retry requires an exact immutable approval")
     recheck = _validate_recheck(previous, item)
-    if previous.design is not None and item.design != previous.design and not recheck:
+    from ai_software_engineer.multi_directory.verification_recovery import (
+        validate_unstarted_design_successor,
+    )
+
+    correction = validate_unstarted_design_successor(previous, item)
+    if (
+        previous.design is not None
+        and item.design != previous.design
+        and not (recheck or correction)
+    ):
         raise ValueError("committed joint design and plan are immutable")
-    if previous.planning_upgrade is not None and item.planning_upgrade != previous.planning_upgrade:
+    if (
+        previous.planning_upgrade is not None
+        and item.planning_upgrade != previous.planning_upgrade
+        and not correction
+    ):
         raise ValueError("human planning upgrade is immutable")
     if (
         previous.planning_decision is not None
         and not recheck
+        and not correction
         and item.planning_decision != previous.planning_decision
         and (
             previous.planning_upgrade is not None
@@ -218,7 +232,7 @@ def _validate_successor(previous: JointCheckpoint | None, item: JointCheckpoint)
             and item.plan is None
             and item.integration == previous.integration
         )
-        if not explicit_integration_replan:
+        if not (explicit_integration_replan or correction):
             raise ValueError("committed joint design and plan are immutable")
     if previous.stage == "DONE":
         raise ValueError("completed joint delivery is immutable")

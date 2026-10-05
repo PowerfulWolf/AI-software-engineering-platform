@@ -45,6 +45,11 @@ from ai_software_engineer.manager.stage_coordination import (
     allowed_coordination_actions,
     stage_facts_sha256,
 )
+from ai_software_engineer.multi_directory.admission import (
+    JointDesignVerificationRejected,
+    require_native_verification_contract,
+    verification_correction_requirements,
+)
 from ai_software_engineer.multi_directory.attachments import (
     MAX_REQUIREMENT_SCREENSHOTS,
     RequirementAttachmentStore,
@@ -95,6 +100,10 @@ from ai_software_engineer.multi_directory.scope import (
     require_git_baselines,
 )
 from ai_software_engineer.multi_directory.store import JointJournal
+from ai_software_engineer.multi_directory.verification_recovery import (
+    UnstartedDesignCorrectionProof,
+    unstarted_design_rejection,
+)
 from ai_software_engineer.planning.gate import HumanPlanningUpgrade, PlanningMode
 from ai_software_engineer.project_workspace import ProjectWorkspace
 from ai_software_engineer.redaction import redact_text
@@ -154,6 +163,9 @@ class JointBackend(Protocol):
     def integrate(self, checkpoint: JointCheckpoint) -> IntegrationEvidence: ...
     def reconcile(self, checkpoint: JointCheckpoint) -> None: ...
     def validate_plan(self, checkpoint: JointCheckpoint, plan: JointExecutionPlan) -> None: ...
+    def verify_unstarted_design_rejection(
+        self, checkpoint: JointCheckpoint
+    ) -> UnstartedDesignCorrectionProof: ...
     def accept_single_repository(
         self, checkpoint: JointCheckpoint
     ) -> SingleRepositoryAcceptance: ...
@@ -644,6 +656,54 @@ class JointDeliveryService:
     def resume(self, command: ResumeProjectDelivery) -> JointDeliveryResult:
         with self.journal.lock(command.delivery_id):
             checkpoint = self._current(command.delivery_id)
+            rejection = unstarted_design_rejection(checkpoint)
+            if rejection is not None:
+                self.operator_principal.require_duty(OperatorDuty.ENGINEERING)
+                if any(
+                    value is not None
+                    for value in (
+                        command.approved_plan_sha256,
+                        command.approved_scope_sha256,
+                        command.coder_scope_request,
+                        command.prerequisite_repair,
+                        command.native_ui_scenario,
+                        command.python_mysql_tests,
+                        command.approved_repair_sha256,
+                        command.approval_reference,
+                    )
+                ):
+                    raise ValueError("设计契约修正只接受普通继续交付, 不接受其他执行或范围审批。")
+                self._team_binding(checkpoint)
+                self._require_stage_retry_budget(checkpoint, "design")
+                budget = stage_budget(
+                    self.execution_retry_policy, JointStage.DESIGNING, checkpoint.attempts
+                )
+                assert budget is not None
+                if budget.exhausted is not None:
+                    raise ValueError("技术设计的工作或临时故障额度已耗尽, 不能进入新的设计修正。")
+                proof = self.backend.verify_unstarted_design_rejection(checkpoint)
+                assert checkpoint.design is not None
+                if (
+                    proof.checkpoint_sha256 != checkpoint.checkpoint_sha256
+                    or proof.design_sha256 != digest(checkpoint.design)
+                    or not proof.native_run_sha256s
+                ):
+                    raise DeliveryCheckpointStale("设计修正证明不属于当前需求记录。")
+                checkpoint = self._save(
+                    checkpoint,
+                    stage=JointStage.DESIGNING,
+                    design_feedback=checkpoint.design,
+                    design=None,
+                    plan=None,
+                    planning_decision=None,
+                    planning_upgrade=None,
+                    planning_feedback=None,
+                    children=(),
+                    next_action=(
+                        f"已核验原生交付尚无执行任务, 请修正原设计验证契约: {rejection}"
+                        "产品批准与历史预算保持不变, 修正后重新制定计划。"
+                    ),
+                )
             completed = self._complete_single_repository(checkpoint)
             if completed is not None:
                 return JointDeliveryResult(checkpoint=completed)
@@ -737,6 +797,11 @@ class JointDeliveryService:
 
     def status(self, delivery_id: str) -> JointDeliveryResult:
         checkpoint = self._current(delivery_id)
+        if unstarted_design_rejection(checkpoint) is not None:
+            # Console uses status for its exact checkpoint fence. A rejected,
+            # task-free design must remain inspectable even when its proof is
+            # missing; reconcile must not manufacture inputs for that proof.
+            return JointDeliveryResult(checkpoint=checkpoint)
         if checkpoint.stage is JointStage.PREPARING and any(
             unit.base_revision is None for unit in checkpoint.scope.units
         ):
@@ -1018,6 +1083,11 @@ class JointDeliveryService:
                 "Do not list one repository repeatedly for its internal components. "
                 "Use interfaces=[] when no interface contract is needed. "
                 "Correct any prior rejection in next_action. "
+                "An inspection cannot replace executable integration/security/unit/e2e checks. "
+                "If required levels include those checks, keep them and supply the focused "
+                "verification_argv instead of verification_inspection; independent QA/Review "
+                "may additionally inspect source or documents. Never delete verification levels "
+                "to bypass rejected design feedback. "
                 "Component affected_paths are repository-relative and MUST remain "
                 "within selected_paths. "
                 "Use canonical paths such as src/config.py or src/**, not ./src/config.py, "
@@ -1028,17 +1098,21 @@ class JointDeliveryService:
             try:
                 design.validate_for(checkpoint.scope, checkpoint.product_spec)
                 design.require_ready()
+                require_native_verification_contract(
+                    design, checkpoint.design_feedback, self._design_feedback_history(checkpoint)
+                )
             except (
                 DesignInterfaceConsumersError,
                 DesignWritePathsError,
                 DesignReadinessError,
+                JointDesignVerificationRejected,
             ) as exc:
                 checkpoint = self._save(
                     checkpoint,
                     design_feedback=design,
                     next_action=(
-                        f"Rejected design {digest(design)}: {exc}. "
-                        "Return a corrected complete design within the remaining attempt budget."
+                        f"设计 {digest(design)} 未通过接纳校验: {exc}。"
+                        "请在剩余执行额度内提交修正后的完整设计。"
                     ),
                 )
                 continue
@@ -1274,6 +1348,13 @@ class JointDeliveryService:
             digest(checkpoint.product_spec) if checkpoint.product_spec else None
         )
         payload["design_sha256"] = digest(checkpoint.design) if checkpoint.design else None
+        if model is JointTechnicalDesign:
+            payload["required_verification_corrections"] = [
+                item.to_wire()
+                for item in verification_correction_requirements(
+                    self._design_feedback_history(checkpoint)
+                )
+            ]
         if checkpoint.product_spec is not None and checkpoint.design is not None:
             payload["integration_command_policy"] = planner_command_policy()
             payload["required_coverage"] = {
@@ -1363,6 +1444,23 @@ class JointDeliveryService:
         if checkpoint.planning_decision.mode is PlanningMode.SIMPLE:
             return fast_joint_plan(checkpoint)
         return self._stage_output(checkpoint, JointExecutionPlan, instructions)
+
+    def _design_feedback_history(
+        self, checkpoint: JointCheckpoint
+    ) -> tuple[JointTechnicalDesign, ...]:
+        feedback: dict[str, JointTechnicalDesign] = {}
+        for previous in reversed(self.journal.history(checkpoint.delivery_id)):
+            if (
+                previous.product_spec != checkpoint.product_spec
+                or previous.approval != checkpoint.approval
+                or previous.scope != checkpoint.scope
+                or previous.preparations != checkpoint.preparations
+                or (previous.design is not None and previous.design_feedback is None)
+            ):
+                break
+            if previous.design_feedback is not None:
+                feedback[digest(previous.design_feedback)] = previous.design_feedback
+        return tuple(feedback[key] for key in sorted(feedback))
 
     def _require_stage_retry_budget(self, checkpoint: JointCheckpoint, stage: str) -> None:
         stage_timeout_seconds(

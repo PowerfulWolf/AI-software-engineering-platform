@@ -1,5 +1,112 @@
 # 多目录联合交付契约
 
+## Publication parity and correction before native work (2026-10-05)
+
+### Scope and signatures
+
+`require_native_verification_contract(JointTechnicalDesign, feedback=None,
+earlier_feedback=()) -> None` is a publication-only admission guard. It reuses
+`native_acceptance_mapping(AcceptanceMappingDraft) -> AcceptanceDesignMapping`, the
+same conversion used by the native Designer adapter. Neither `JointTechnicalDesign.validate_for`
+nor historical checkpoint model validators call the stricter guard: formerly accepted sealed
+documents and complete old journals must remain readable and digest-stable.
+
+`ProductionUnstartedDesignVerifier(ProjectWorkspace).verify(JointCheckpoint)
+-> UnstartedDesignCorrectionProof` is read-only. `ProductionJointBackend` exposes the same
+proof to `JointDeliveryService.resume(ResumeProjectDelivery)`. Console/Manager retains its exact
+checkpoint gate; the service takes the Requirement journal lock and verifies proof/current hashes
+again before publishing a successor. It does not introduce Product or technical approval.
+
+### Contract
+
+- Source/document inspection cannot stand in for required unit, integration, security or other
+  executable levels. The real native validator owns legal inspection-level combinations and
+  command/inspection exclusivity. Never add looser copies in the joint stage.
+- A rejected Designer output is retained as `design_feedback`, with exact global acceptance IDs
+  and safe Chinese corrective reasons in `next_action`. The ordinary finite Design attempt budget
+  applies; Planner and native delivery cannot receive the rejected design.
+- Correction keeps the original required levels throughout same-approved-Product/scope/preparation
+  rejection history, including knowledge waits and investigation rechecks. A recheck does not
+  approve reduced verification. Replacing feedback with a weaker later draft must not erase an
+  earlier integration or
+  security requirement. Known historical inspection spellings may be compared with their canonical
+  spellings; neither old bytes nor the new actual levels are rewritten. A focused executable
+  `verification_argv` is the correction when inspection cannot satisfy mixed levels. Removing the
+  original unit/acceptance mapping or making that unit reference-only is also rejected.
+- Product acceptance criteria contain verification prose and test IDs, not structured test levels.
+  Do not invent deterministic levels from prose. This admission preserves the native contract and
+  original rejected Design levels; independent QA/Review still checks the approved behavior.
+- Native Designer errors keep safe actual acceptance IDs and reasons in the `DesignRunRecord` and
+  parent failure instead of the generic missing-handoff message. Classification reads exact native
+  ValidationError messages without untrusted input; never authorize recovery from substring matches
+  against the full Pydantic rendering.
+
+### Narrow legacy correction
+
+Ordinary public CONTINUE can correct a BLOCKED parent only with Engineering duty, remaining Design
+budget, unchanged Team/Project/source/scope/Product approval and an existing complete Design/Plan.
+The same admission guard must identify inspection weakening, and every native child must be an
+INVALID_AGENT_OUTPUT failure at DESIGNING. The production verifier reads all parent/native history,
+not merely the latest child projection, and rejects any Task, dispatch, candidate, accepted design,
+plan, preview or verification references. The real failed native Designer run must be
+`FAILED / INVALID_OUTPUT`, with no commit marker, and must bind the exact request revision, Product
+approval authorization, frozen preparation/profile/baseline, run input hash and rebuilt context ID.
+Native intake and ProjectRequest.original_request must equal the deterministic DerivedStageInputs
+requirement, which includes the parent Product/Design/Plan digests and unit identity. All reads use
+read-only stores; an existing clean pinned baseline is recovered/inspected, never prepared or created
+  as proof. All scope units' baselines, profiles and compiled specifications are checked, even units
+  with no current child. Missing, changed or corrupt records fail closed.
+
+The native Designer in this legacy path is the deterministic DerivedStageInputs bridge, not a
+Task worker or model subprocess. A failed native run and absence of its commit marker prove no
+accepted native handoff; they do not claim upstream model processes have stopped. The public
+same-Requirement Operation gate and journal lock remain mandatory. For the current K1 release,
+root separately verified that upstream execution was idle before deployment/continuation.
+
+After proof, the locked service appends DESIGNING, places exact old Design bytes in design_feedback,
+clears current Design/Plan/planning gate/upgrade/feedback/children and keeps the original Product,
+approval, source, preparation, dialogue, budgets and old history. Normal independent Designer then
+corrects the design, Planner produces a new bound plan, and native NEW Task follows. This does not
+resume or reset a terminal Task, refund attempts, change business scope, synthesize a successful
+run/hand-off or generally retry INVALID_OUTPUT. Any execution history excludes this path.
+
+### Validation matrix and tests
+
+| Facts | Behavior |
+|---|---|
+| Legal native inspection combination or focused executable command | Same native/joint publication acceptance |
+| Source inspection + integration, document inspection + security | Chinese exact acceptance feedback; bounded Designer correction |
+| Correct by deleting required levels, including over three rounds | Rejected before Planner; original levels survive all feedback |
+| Old sealed design rejected by new admission | Historical hashes/read remain valid; no automatic rewrite |
+| Genuine stopped native invalid Design, no work, exact context/input | Same-Requirement public CONTINUE, unchanged approval/budget/history |
+| Stale proof/checkpoint, scope/source/approval/request/context/receipt drift | No successor, model invocation or changed stored bytes |
+| Any historical Task/dispatch/candidate/accepted handoff or hidden Design commit | No upstream correction; retain existing engineering recovery path |
+| Product-only principal or exhausted Design budget | Reject without publication |
+
+Incremental tests: `test_joint_verification_admission.py`, `test_joint_verification_recovery.py`,
+`test_joint_designer_feedback.py`, `test_joint_contracts.py`, `test_joint_planner_feedback.py`,
+`test_production_agents.py`. The production fake fixture records an actual native failed Designer
+receipt and reconstructs its full context; it never fabricates a successful role verdict or requires
+SQL execution. Existing role/Schema constraints are unchanged.
+`test_joint_recheck.py` preserves the public knowledge investigation gate; the new admission test
+drives that public recheck and demonstrates that clearing current feedback cannot erase old levels.
+Public `TeamHost.resume_delivery` routes a narrow correction from `journal.current` before
+`status/reconcile` can prepare or recreate missing proof inputs. The missing-baseline Host regression
+asserts zero reconcile/factory calls, no recreated baseline and unchanged Project bytes. Ordinary
+native recovery keeps its existing status/reconcile behavior.
+
+### Stock data and rollback
+
+K1 checkpoint `cf43013b4bb61038a2d65b0e4b0f74bdbdf8297a26d73e9f01e42d67f5543be9`
+passed independent read-only verification of Design `8e239ef83f5bf71c7698c3eee94fb2a0b50b101b6551531d0feef1083d1d7c56`
+and native failed receipt `ccad146b900feb82f7b9a519e0ab1db85ccf0fe474039c7cf86bdb5e4c59e817`.
+The before/after inventory of 4401 Project files was identical. Deploy only while execution is idle,
+reconstruct Host with the trusted service script, then submit the public CONTINUE operation against
+the current exact checkpoint. No SQL or journal edit is needed; root records that operation and its
+successor separately. Roll back code while idle and preserve all old/new immutable records. A host
+too old to understand a newly published correction successor must be upgraded before reading it;
+never restore the refused design or erase the successor to accommodate older code.
+
 ## Current upstream budget and retry cursor (2026-10-04)
 
 `JointDeliveryService._produce(checkpoint, model, instructions)` adds `stage_budget` from
