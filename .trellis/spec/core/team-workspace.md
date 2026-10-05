@@ -147,7 +147,13 @@ caller-supplied idle boolean cannot prove quiescence. The guard must hold actual
 exclusion until archival completes and reject pending/running operations. Retirement is supported
 only before any Task execution: independently verify **all** Requirement journals and their
 Project-owned deleted tombstones, no approval/design/plan/child/integration history, and empty
-Repository execution stores. Reject unknown Project/catalog/Repository/Requirement root entries,
+Repository execution stores. Production preparation may initialize `state/product`, `state/design`,
+`state/planning` (role record store constructors) and
+`spec-conflicts/project-baseline-compilations` (baseline store lookup) before any execution.
+Only these exact immediate child directories may exist in the execution stores, and only when
+each is a real, non-symlink, completely empty directory. Files, nested subdirectories and unknown
+directories still reject retirement; preserve the legal empty directories in the archive inventory.
+Reject unknown Project/catalog/Repository/Requirement root entries,
 advanced feedback/approval/attempt history and hidden execution files. Visible task counts are
 never evidence of emptiness. Projects with
 Task history or unknown/corrupt stores are refused; no SQL cancellation or history rewrite occurs.

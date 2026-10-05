@@ -384,6 +384,10 @@ def _require_empty_project(project: ProjectWorkspace) -> None:
         "logs",
         "spec-conflicts",
     )
+    preinitialized_empty_children: dict[WorkspaceDirectory, frozenset[str]] = {
+        "state": frozenset({"product", "design", "planning"}),
+        "spec-conflicts": frozenset({"project-baseline-compilations"}),
+    }
     if {path.name for path in project.root.iterdir()} != {
         "project.json",
         "knowledge",
@@ -404,8 +408,15 @@ def _require_empty_project(project: ProjectWorkspace) -> None:
         }:
             raise ProjectRetirementRejected("仓库包含未识别的事实, 不能按空项目退休")
         for name in execution_directories:
-            if any(repository.directory(name).iterdir()):
-                raise ProjectRetirementRejected("仓库保留执行或未知运行事实, 不支持空项目退休")
+            allowed = preinitialized_empty_children.get(name, frozenset())
+            for path in repository.directory(name).iterdir():
+                if (
+                    path.name not in allowed
+                    or path.is_symlink()
+                    or not path.is_dir()
+                    or any(path.iterdir())
+                ):
+                    raise ProjectRetirementRejected("仓库保留执行或未知运行事实, 不支持空项目退休")
         if (
             Path(project.team.manifest.platform_root) / "worktrees" / repository.repository_id
         ).exists():

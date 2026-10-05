@@ -12,7 +12,12 @@ from pathlib import Path
 
 import pytest
 
+from ai_software_engineer.design.store import FileDesignRecordStore
 from ai_software_engineer.domain.engineering_authority import LocalOperatorPrincipal, OperatorDuty
+from ai_software_engineer.manager.baseline import (
+    FileProjectBaselineCompilationStore,
+    ProjectBaselineRecordNotFound,
+)
 from ai_software_engineer.multi_directory.models import DialogueMessage, JointCheckpoint, JointStage
 from ai_software_engineer.multi_directory.retirement import (
     RequirementRetirementError,
@@ -20,6 +25,8 @@ from ai_software_engineer.multi_directory.retirement import (
 )
 from ai_software_engineer.multi_directory.scope import DirectoryScope, DirectoryUnit
 from ai_software_engineer.multi_directory.store import JointJournal
+from ai_software_engineer.planning.store import FileExecutionPlanStore
+from ai_software_engineer.product.store import FileProductRecordStore
 from ai_software_engineer.project_retirement import (
     ProjectRetiredError,
     ProjectRetirementReceipt,
@@ -327,6 +334,71 @@ def test_any_native_execution_fact_is_preserved_and_refused(tmp_path: Path, stor
         _retire(project)
     assert fact.read_text() == "durable existing fact"
     assert not _receipt_path(project).exists()
+
+
+def _initialize_preexecution_stores(repository: RepositoryWorkspace) -> None:
+    state = repository.directory("state")
+    FileProductRecordStore(state / "product")
+    FileDesignRecordStore(state / "design")
+    FileExecutionPlanStore(state / "planning")
+    with pytest.raises(ProjectBaselineRecordNotFound):
+        FileProjectBaselineCompilationStore().get(repository, "a" * 64)
+
+
+def test_production_preinitialized_empty_stores_are_preserved_and_can_retire(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    repository = _repository(project, tmp_path)
+    _initialize_preexecution_stores(repository)
+    assert {path.name for path in repository.directory("state").iterdir()} == {
+        "product",
+        "design",
+        "planning",
+    }
+    assert {path.name for path in repository.directory("spec-conflicts").iterdir()} == {
+        "project-baseline-compilations",
+    }
+    before = project_archive_inventory(project.root)
+
+    receipt = _retire(project)
+
+    assert receipt.inventory == before
+    assert project_archive_inventory(Path(receipt.archive_root)) == before
+    assert not project.root.exists()
+
+
+@pytest.mark.parametrize(
+    ("relative", "kind"),
+    [
+        ("state/product/dialogue.json", "file"),
+        ("state/design/unknown", "directory"),
+        ("state/planning/run.json", "file"),
+        ("state/unknown", "directory"),
+        ("spec-conflicts/project-baseline-compilations/conflict.json", "file"),
+        ("spec-conflicts/project-baseline-compilations/unknown", "directory"),
+        ("spec-conflicts/unknown", "directory"),
+        ("logs/unknown", "directory"),
+        ("state/product", "symlink"),
+    ],
+)
+def test_preinitialized_stores_with_actual_or_unknown_facts_still_refuse(
+    tmp_path: Path, relative: str, kind: str
+) -> None:
+    project = _project(tmp_path)
+    repository = _repository(project, tmp_path)
+    _initialize_preexecution_stores(repository)
+    fact = repository.root / relative
+    if kind == "directory":
+        fact.mkdir()
+    elif kind == "symlink":
+        fact.rmdir()
+        fact.symlink_to(tmp_path, target_is_directory=True)
+    else:
+        fact.write_text("preserved execution fact")
+    with pytest.raises(ProjectRetirementRejected, match="执行或未知运行事实"):
+        _retire(project)
+    assert fact.exists() and project.root.exists() and not _receipt_path(project).exists()
 
 
 @pytest.mark.parametrize(
