@@ -1,0 +1,9 @@
+{
+  "id": "environment-cleanup",
+  "name": "删除自验证项目并清理临时环境",
+  "status": "in_progress",
+  "phase": "implementation",
+  "created_at": "2026-10-05",
+  "base_commit": "be3e67412b3b5e351c9fbbbd069147761421308f",
+  "production_business_execution": "deferred_by_user"
+}

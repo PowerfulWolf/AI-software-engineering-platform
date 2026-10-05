@@ -15,7 +15,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 
 from pydantic import AwareDatetime, StringConstraints, TypeAdapter
 
@@ -29,6 +29,14 @@ from ai_software_engineer.repository_workspace import (
     RepositoryWorkspaceRegistry,
 )
 from ai_software_engineer.team_workspace import TeamWorkspace
+
+if TYPE_CHECKING:
+    from ai_software_engineer.domain.engineering_authority import LocalOperatorPrincipal
+    from ai_software_engineer.project_retirement import (
+        ProjectRetirementGuard,
+        ProjectRetirementReceipt,
+        RetireEmptyProject,
+    )
 
 ProjectName = Annotated[str, StringConstraints(min_length=1, max_length=200)]
 Digest = Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
@@ -124,6 +132,16 @@ class ProjectWorkspaceRegistry:
         self._root = Path(team.manifest.platform_root) / "projects"
 
     def register(self, *, project_id: str, name: str) -> ProjectWorkspace:
+        from ai_software_engineer.project_retirement import (
+            project_catalog_lock,
+            require_project_active,
+        )
+
+        with project_catalog_lock(self._team):
+            require_project_active(self._team, project_id)
+            return self._register_active(project_id=project_id, name=name)
+
+    def _register_active(self, *, project_id: str, name: str) -> ProjectWorkspace:
         self._team.validate_current()
         identity = TypeAdapter(ProjectId).validate_python(project_id)
         TypeAdapter(ProjectName).validate_python(name)
@@ -180,7 +198,10 @@ class ProjectWorkspaceRegistry:
         return self.register(project_id=identity, name=name)
 
     def open(self, project_id: ProjectId | str) -> ProjectWorkspace:
+        from ai_software_engineer.project_retirement import require_project_active
+
         identity = TypeAdapter(ProjectId).validate_python(project_id)
+        require_project_active(self._team, identity)
         root = self._root / identity
         _reject_symlinks(root)
         manifest = ProjectManifest.model_validate_json(_read_regular(root / "project.json", 32_000))
@@ -200,6 +221,8 @@ class ProjectWorkspaceRegistry:
         return ProjectWorkspace(team=self._team, manifest=manifest)
 
     def discover(self) -> tuple[ProjectWorkspace, ...]:
+        from ai_software_engineer.project_retirement import read_project_retirement
+
         self._team.validate_current()
         if not self._root.is_dir():
             return ()
@@ -207,9 +230,24 @@ class ProjectWorkspaceRegistry:
         for path in sorted(self._root.iterdir(), key=lambda item: item.name):
             if path.is_symlink():
                 raise ValueError("Project workspace cannot traverse a symlink")
-            if path.is_dir() and path.name.startswith("project_"):
+            if (
+                path.is_dir()
+                and path.name.startswith("project_")
+                and read_project_retirement(self._team, path.name) is None
+            ):
                 projects.append(self.open(path.name))
         return tuple(projects)
+
+    def retire_empty(
+        self,
+        command: RetireEmptyProject,
+        *,
+        principal: LocalOperatorPrincipal,
+        guard: ProjectRetirementGuard,
+    ) -> ProjectRetirementReceipt:
+        from ai_software_engineer.project_retirement import retire_empty_project
+
+        return retire_empty_project(self._team, command, principal=principal, guard=guard)
 
     def locate_repository(
         self, repository_id: RepositoryId | str
@@ -236,6 +274,17 @@ class _ProjectRepositoryRegistry(RepositoryWorkspaceRegistry):
         self._project = project
 
     def register(
+        self,
+        repository_root: str | Path,
+        *,
+        repository_id: RepositoryId | str | None = None,
+    ) -> RepositoryWorkspace:
+        from ai_software_engineer.project_retirement import project_catalog_lock
+
+        with project_catalog_lock(self._project.team):
+            return self._register_active_repository(repository_root, repository_id=repository_id)
+
+    def _register_active_repository(
         self,
         repository_root: str | Path,
         *,

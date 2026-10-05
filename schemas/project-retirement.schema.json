@@ -1,0 +1,279 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-software-engineer.local/schemas/project-retirement.schema.json",
+  "$defs": {
+    "LocalOperatorPrincipal": {
+      "additionalProperties": false,
+      "description": "Trusted local composition identity; request/model text cannot add duties.",
+      "properties": {
+        "kind": {
+          "const": "trusted_local_operator",
+          "default": "trusted_local_operator",
+          "title": "Kind",
+          "type": "string"
+        },
+        "operator_id": {
+          "minLength": 1,
+          "title": "Operator Id",
+          "type": "string"
+        },
+        "duties": {
+          "items": {
+            "$ref": "#/$defs/OperatorDuty"
+          },
+          "minItems": 1,
+          "title": "Duties",
+          "type": "array"
+        }
+      },
+      "required": [
+        "operator_id",
+        "duties"
+      ],
+      "title": "LocalOperatorPrincipal",
+      "type": "object"
+    },
+    "OperatorDuty": {
+      "enum": [
+        "PRODUCT",
+        "ENGINEERING"
+      ],
+      "title": "OperatorDuty",
+      "type": "string"
+    },
+    "ProjectArchiveEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "file",
+            "directory"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "mode": {
+          "maximum": 4095,
+          "minimum": 0,
+          "title": "Mode",
+          "type": "integer"
+        },
+        "bytes": {
+          "maximum": 64000000,
+          "minimum": 0,
+          "title": "Bytes",
+          "type": "integer"
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sha256"
+        }
+      },
+      "required": [
+        "path",
+        "kind",
+        "mode",
+        "bytes"
+      ],
+      "title": "ProjectArchiveEntry",
+      "type": "object"
+    },
+    "ProjectManifest": {
+      "additionalProperties": false,
+      "description": "Immutable identity of one Project within one Team.",
+      "properties": {
+        "schema_version": {
+          "const": "v0.2",
+          "default": "v0.2",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "team_id": {
+          "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Team Id",
+          "type": "string"
+        },
+        "team_manifest_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Team Manifest Sha256",
+          "type": "string"
+        },
+        "project_id": {
+          "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "project_root": {
+          "minLength": 1,
+          "title": "Project Root",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "manifest_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Manifest Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "team_id",
+        "team_manifest_sha256",
+        "project_id",
+        "name",
+        "project_root",
+        "created_at",
+        "manifest_sha256"
+      ],
+      "title": "ProjectManifest",
+      "type": "object"
+    },
+    "ProjectRetirementReceipt": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "empty_project_retirement",
+          "default": "empty_project_retirement",
+          "title": "Kind",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "v1",
+          "default": "v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "team_id": {
+          "pattern": "^team_[a-z0-9][a-z0-9_-]{1,63}$",
+          "title": "Team Id",
+          "type": "string"
+        },
+        "team_manifest_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Team Manifest Sha256",
+          "type": "string"
+        },
+        "project_manifest": {
+          "$ref": "#/$defs/ProjectManifest"
+        },
+        "principal": {
+          "$ref": "#/$defs/LocalOperatorPrincipal"
+        },
+        "reason": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "retired_at": {
+          "format": "date-time",
+          "title": "Retired At",
+          "type": "string"
+        },
+        "archive_root": {
+          "minLength": 1,
+          "title": "Archive Root",
+          "type": "string"
+        },
+        "inventory": {
+          "items": {
+            "$ref": "#/$defs/ProjectArchiveEntry"
+          },
+          "maxItems": 10000,
+          "minItems": 1,
+          "title": "Inventory",
+          "type": "array"
+        },
+        "inventory_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Inventory Sha256",
+          "type": "string"
+        },
+        "retirement_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Retirement Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "team_id",
+        "team_manifest_sha256",
+        "project_manifest",
+        "principal",
+        "reason",
+        "retired_at",
+        "archive_root",
+        "inventory",
+        "inventory_sha256",
+        "retirement_sha256"
+      ],
+      "title": "ProjectRetirementReceipt",
+      "type": "object"
+    },
+    "RetireEmptyProject": {
+      "additionalProperties": false,
+      "properties": {
+        "project_id": {
+          "pattern": "^project_[a-z0-9][a-z0-9_-]{2,63}$",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "expected_manifest_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Expected Manifest Sha256",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "submitted_at": {
+          "format": "date-time",
+          "title": "Submitted At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_id",
+        "expected_manifest_sha256",
+        "reason",
+        "submitted_at"
+      ],
+      "title": "RetireEmptyProject",
+      "type": "object"
+    }
+  },
+  "anyOf": [
+    {
+      "$ref": "#/$defs/RetireEmptyProject"
+    },
+    {
+      "$ref": "#/$defs/ProjectRetirementReceipt"
+    }
+  ]
+}

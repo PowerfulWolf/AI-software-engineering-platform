@@ -130,13 +130,61 @@ learning facts additionally use `spec-document.schema.json`, `spec-activation.sc
 
 ## 4. Validation & Error Matrix
 
+### Narrow empty-Project retirement (2026-10-05)
+
+```python
+ProjectWorkspaceRegistry.retire_empty(
+    command: RetireEmptyProject, *, principal: LocalOperatorPrincipal,
+    guard: ProjectRetirementGuard,
+) -> ProjectRetirementReceipt
+ProjectRetirementGuard.protect(project: ProjectWorkspace) -> ContextManager[None]
+read_project_retirement(team, project_id) -> ProjectRetirementReceipt | None
+```
+
+The command binds the exact Project manifest digest, timestamp and deletion reason. Trusted
+composition supplies a PRODUCT principal and a mandatory guard; model/request text or a
+caller-supplied idle boolean cannot prove quiescence. The guard must hold actual service/operation
+exclusion until archival completes and reject pending/running operations. Retirement is supported
+only before any Task execution: independently verify **all** Requirement journals and their
+Project-owned deleted tombstones, no approval/design/plan/child/integration history, and empty
+Repository execution stores. Reject unknown Project/catalog/Repository/Requirement root entries,
+advanced feedback/approval/attempt history and hidden execution files. Visible task counts are
+never evidence of emptiness. Projects with
+Task history or unknown/corrupt stores are refused; no SQL cancellation or history rewrite occurs.
+
+Seal a complete bounded, symlink-free regular-file/directory inventory with byte SHA, size and
+mode. Publish an immutable receipt at `team/project-retirements/<project_id>.json` before moving
+the whole original sidecar to `project-archives/<project_id>` outside the active catalog. The
+receipt binds Team/Project manifests, trusted principal, full inventory, reason and exact paths.
+The inventory allows at most 10,000 entries, 64 MB per file and 256 MB total; check the actual
+serialized receipt against the same 4 MB publication/read budget before publishing its fence.
+Hold the catalog mutation lock across revalidation/publication/rename. Original Project/Repository
+manifest bytes and Requirement tombstones remain unchanged; the archive is forensic data, not a
+relocated executable workspace. Source Repositories and independent role worktrees are untouched.
+
+`open`/`register` reject retired IDs; `discover` excludes them even after a crash before rename.
+Deterministic same-name `create` clearly rejects its retired ID; it never reuses old facts or
+silently creates a replacement. An explicitly new ID/name is a separate future Product action.
+An absent receipt directory means no historical retirements; malformed/symlink/tampered records
+fail closed. Replay requires the same exact command/principal and only accepts the original
+complete inventory or the matching complete archive; ambiguous source-plus-archive or drift is
+retained and rejected. No restore API is provided. Clear a retired default Project in trusted
+configuration before restarting, because startup registration must also reject the retired ID.
+
+Tests cover exact ownership/approval, deleted Product-only history, active/advanced/hidden execution
+refusal, no guard permission, wrong principal/digest, full inventory drift, symlink/nonregular
+paths, archive crash replay, catalog consistency, default registration refusal and unchanged source.
+Existing-data handling uses this exact typed service while idle. After a receipt exists, retain its
+reader when rolling back and prefer a forward fix; never erase the receipt or modify old manifests.
+
 | Case | Required result |
 |---|---|
 | Fresh external platform root | atomically create one `team/` and its fixed directories |
 | Same Team reopened | exact manifest replay; no overwrite or renamed identity |
 | Second Team identity at same root | reject identity mismatch; preserve existing Team |
 | Create two Projects | two siblings under `projects/`, both bound to the same Team digest |
-| Same Project name created again | deterministic idempotent reopen |
+| Same active Project name created again | deterministic idempotent reopen |
+| Same retired Project name/ID registered again | reject permanently; preserve original archive and receipt |
 | Existing Project ID with another name | reject; do not rewrite manifest |
 | Register one source in two Projects | distinct Repository IDs and sidecars |
 | Locate missing/ambiguous Repository | reject; never select by path guess |
