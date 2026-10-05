@@ -57,6 +57,12 @@ CLI、数据库、Git、模型 SDK 和文件系统实现只能依赖这些端口
 - Git adapter 必须禁用 repository hooks/fsmonitor，拒绝 repository-local external checkout filters，并用 `--no-ext-diff --no-textconv` 检查变更；
 - 依赖必须锁定；新增依赖要记录消除的 failure mode；
 - JSON Schema 是跨语言 wire contract，Python model 必须有一致性测试。
+- 新增共享模型字段时，检查所有静态 Schema 的同名 `$defs`。尤其 `PlanTestItem` 的
+  `verification_argv`、`planned_test_files`、`verification_inspection` 和
+  `controlled_capability_kind` 必须在 `joint-execution-plan`、`requirement-checkpoint`
+  等嵌入契约同步；`additionalProperties=false` 会令遗漏的可选字段成为实际输入拒绝。
+  对由完整模型生成的契约，保留 `$id`/`$schema` 后与 `model_json_schema()` 精确比较；
+  不以忽略差异、删除合法输入字段或接受任意额外属性修复漂移。
 
 ## 4. Validation & Error Matrix
 

@@ -204,6 +204,11 @@ Task.repository/source_revision 的单仓含义。子仓完成后必须验证完
 `requirement-checkpoint.schema.json`、`joint-product-spec.schema.json`、
 `joint-technical-design.schema.json`、`joint-execution-plan.schema.json`。
 Python 入口在 `multi_directory/models.py`、`service.py`，生产桥接在 `production.py`。
+联合计划及 Requirement checkpoint 中嵌入的 `PlanTestItem` 必须保留原生计划的
+`verification_argv`、`planned_test_files`、`verification_inspection`、
+`controlled_capability_kind` 可选字段。静态 Schema 与 `model_json_schema()` 精确一致；
+因 `additionalProperties=false`，缺少嵌入字段会拒绝合法输入，不能靠删除验证信息或放宽
+Schema 一致性测试修复。静态同步不重写已封存产物或审批。
 完整签名、授权投影、路径/命令校验和恢复矩阵见
 [`多目录交付 code-spec`](../../.trellis/spec/core/multi-directory-delivery.md)。
 

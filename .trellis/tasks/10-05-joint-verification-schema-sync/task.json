@@ -1,0 +1,8 @@
+{
+  "id": "joint-verification-schema-sync-20261005",
+  "title": "联合验证计划静态 Schema 与模型精确同步",
+  "status": "completed",
+  "phase": "independent_contract_review_passed",
+  "owner": "codex",
+  "constraints": ["不放宽 exact Schema/model 契约", "仅修已证实静态嵌入漂移", "只跑增量测试", "不修改生产状态或旧产物"]
+}

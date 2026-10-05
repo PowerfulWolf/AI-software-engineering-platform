@@ -1320,6 +1320,17 @@
             }
           ],
           "default": null
+        },
+        "coordination": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ManagerCoordinationAdvice"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -2025,6 +2036,62 @@
           "minLength": 1,
           "title": "Verification",
           "type": "string"
+        },
+        "verification_argv": {
+          "anyOf": [
+            {
+              "items": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Verification Argv"
+        },
+        "planned_test_files": {
+          "anyOf": [
+            {
+              "items": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Planned Test Files"
+        },
+        "verification_inspection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlannedVerificationInspection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "controlled_capability_kind": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Controlled Capability Kind"
         }
       },
       "required": [
