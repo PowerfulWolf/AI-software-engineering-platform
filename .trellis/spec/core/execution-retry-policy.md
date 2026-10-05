@@ -59,6 +59,35 @@ An approved historical Design knowledge wait can recover a *work* allowance, not
 exhausted execution-time allowance; both reader and action guard must suppress that futile
 recovery while capacity is exhausted.
 
+#### Console execution-window label (2026-10-05)
+
+`designBudgetSummary(request: RequestView) -> string` renders
+`StageBudget.next_timeout_seconds` as `当前可用执行窗口 N 秒`. The field is calculated from
+the current stage's durable capacity counter and configured bounds; it describes the window
+that can currently be admitted. It is not a timestamp, countdown or proof of a particular
+invocation's actual timeout. Product, Designer and Planner use the same wording whether the
+corresponding Console Operation is RUNNING or FAILED. The renderer must not infer the active
+model invocation's window from an Operation status. Exhaustion still renders `已达上限` and
+the existing action guards suppress futile retries.
+
+| Facts | Display | Must not infer |
+| --- | --- | --- |
+| Product/Designer/Planner budget, RUNNING Operation | `当前可用执行窗口 N 秒` | Invocation start, remaining time or actual timeout |
+| Same budget, FAILED idle Operation | Same available-window label | A retry has already started |
+| Capacity count at configured limit | `已达上限`, no futile retry | Extra allowance or automatic approval |
+
+Good: a Product automatic retry already running after one capacity timeout shows the available
+1200-second budget without calling it a future invocation. Base: the same counter while idle
+shows the same label. Bad: rename budget as current call time based only on RUNNING or rewrite
+old capacity facts to align with the UI. Real DOM regression is
+`tests/team_view/browser/design-budget.test.cjs`; the affected lightweight budget assertion is
+in `tests/team_view/knowledge-gap.test.cjs`.
+
+This is a read-side wording change. No database, journal, Operation, checkpoint, counter,
+approval or diagnostic migration is needed; retain all historical bytes and hashes. After asset
+deployment, refresh the existing Requirement page. Rollback restores the frontend change and
+refreshes the page, without changing any persisted delivery facts.
+
 ### 4. Validation & Error Matrix
 
 | Evidence | Counter / route | Next call |

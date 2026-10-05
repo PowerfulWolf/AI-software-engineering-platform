@@ -1086,7 +1086,7 @@ function designBudgetSummary(request) {
     const capacityLimit = budget.max_capacity_timeouts ?? 3;
     const time = `；本地执行触顶 ${capacityCount}/${capacityLimit}`;
     const next = capacityCount >= capacityLimit ? "，已达上限"
-      : `，下次时限 ${budget.next_timeout_seconds ?? 600} 秒`;
+      : `，当前可用执行窗口 ${budget.next_timeout_seconds ?? 600} 秒`;
     return `${budget.role} 工作尝试 ${budget.attempts}/${budget.max_attempts}；临时故障 ${budget.transient_failures}/${budget.max_transient_failures}${time}${next}。`;
   }
   const budget = request.design_budget;

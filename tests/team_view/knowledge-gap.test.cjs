@@ -97,7 +97,7 @@ test("local execution limit shows geometric window and prevents a futile retry",
       error_summary: "local execution limit", intent: {action: "CONTINUE_DELIVERY", delivery_id: "r1"}}];
     renderDetail();
   `, h.context);
-  assert.match(text(h.detail()), /本地执行触顶 2\/3.*下次时限 2400 秒/);
+  assert.match(text(h.detail()), /本地执行触顶 2\/3.*当前可用执行窗口 2400 秒/);
   assert.ok(findButton(h, "重试 Planner"));
   vm.runInContext(`
     snapshot.requests[0].stage_budget.capacity_timeouts = 3;
@@ -315,7 +315,12 @@ test("reloaded approved gap shows saved answer and exact-checkpoint continuation
   assert.equal(all(h.detail()).filter(n => n.tag === "form" || n.tag === "textarea").length, 0);
   assert.match(text(h.detail()), /已回答的内容.*A.*产品确认/);
   assert.match(text(h.detail()), /已确认的知识 · 待继续/);
-  assert.doesNotMatch(text(h.detail()), /Resolve and approve|需要你的确认/);
+  for (const region of [".request-detail-overview", ".request-blocking-section", ".knowledge-gap-section"]) {
+    const current = h.detail().querySelector(region);
+    assert.ok(current, region);
+    assert.doesNotMatch(text(current), /Resolve and approve|需要你的确认/, region);
+  }
+  assert.match(text(h.detail().querySelector(".execution-history")), /Resolve and approve knowledge gap gap-a before resuming/);
   assert.doesNotMatch(text(h.get("operations")), /等待人工|操作需要处理/);
   assert.equal(all(h.detail()).filter(n => n.tag === "button" && n.textContent === "继续交付").length, 1);
   await findButton(h, "继续交付").events.click();

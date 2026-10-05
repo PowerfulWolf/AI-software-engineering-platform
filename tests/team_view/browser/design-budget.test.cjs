@@ -22,7 +22,7 @@ test("Product and Planner exhaustion hides futile actions; increased Planner all
   assert.equal(await h.page.locator("#detail").getByRole("button", {name: "重试 Planner", exact: true}).count(), 1);
 });
 
-test("local execution time budget shows next window and hides exhausted retry", async (t) => {
+test("local execution time budget shows available window and hides exhausted retry", async (t) => {
   const h = await ui(t, {operations: [operation("FAILED", {error_code: "MODEL_EXECUTION_LIMIT"})]});
   Object.assign(h.team.requests[0], {stage: "DESIGNING", stage_budget: {role: "designer",
     attempts: 0, max_attempts: 3, transient_failures: 0, max_transient_failures: 5,
@@ -31,13 +31,32 @@ test("local execution time budget shows next window and hides exhausted retry", 
   await h.requests();
   await h.page.evaluate(() => showDetail("request", "request_fixture"));
   const detail = h.page.locator("#detail");
-  assert.match(await detail.innerText(), /本地执行触顶 2\/3，下次时限 2400 秒/);
+  assert.match(await detail.innerText(), /本地执行触顶 2\/3，当前可用执行窗口 2400 秒/);
   h.team.requests[0].stage_budget = {...h.team.requests[0].stage_budget,
     capacity_timeouts: 3, next_timeout_seconds: null, exhausted: "capacity"};
   await h.tick();
   await h.page.evaluate(() => showDetail("request", "request_fixture"));
   assert.match(await detail.innerText(), /本地执行触顶 3\/3，已达上限/);
   assert.equal(await detail.getByRole("button", {name: "重试 Design", exact: true}).count(), 0);
+});
+
+test("stage budget keeps available-window semantics during running and failed upstream operations", async (t) => {
+  const h = await ui(t);
+  await h.requests();
+  const detail = h.page.locator("#detail");
+  for (const status of ["RUNNING", "FAILED"]) {
+    h.state.operations = [operation(status, {error_code: status === "FAILED" ? "MODEL_EXECUTION_LIMIT" : null})];
+    for (const [stage, role] of [["PRODUCT_DISCOVERY", "product"], ["DESIGNING", "designer"], ["PLANNING", "planner"]]) {
+      Object.assign(h.team.requests[0], {stage, stage_budget: {role, attempts: 1, max_attempts: 3,
+        transient_failures: 0, max_transient_failures: 5, capacity_timeouts: 1,
+        max_capacity_timeouts: 3, next_timeout_seconds: 1200}});
+      await h.tick();
+      await h.page.evaluate(() => showDetail("request", "request_fixture"));
+      const text = await detail.innerText();
+      assert.match(text, new RegExp(`${role} 工作尝试 1/3.*当前可用执行窗口 1200 秒`), `${status} ${role}`);
+      assert.doesNotMatch(text, /下次时限/, `${status} ${role}`);
+    }
+  }
 });
 
 test("real browser selects recovery over the failed retry and hides it while running", async (t) => {

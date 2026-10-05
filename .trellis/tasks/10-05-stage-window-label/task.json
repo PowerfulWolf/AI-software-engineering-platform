@@ -1,0 +1,27 @@
+{
+  "id": "stage-window-label-20261005",
+  "title": "上游执行窗口展示使用当前可用预算语义",
+  "status": "completed",
+  "phase": "incremental_verified",
+  "created_at": "2026-10-05",
+  "completed_at": "2026-10-05T11:35:32Z",
+  "owner": "codex",
+  "scope": [
+    "src/ai_software_engineer/team_view/app.js",
+    "tests/team_view/browser/design-budget.test.cjs",
+    "tests/team_view/knowledge-gap.test.cjs",
+    ".trellis/spec/core/execution-retry-policy.md"
+  ],
+  "constraints": [
+    "仅调整只读预算展示及对应增量测试，不修改 API、Schema、运行窗口或重试策略",
+    "不从 Operation 状态猜测真实当前 invocation 的 timeout",
+    "保留所有历史事实的 bytes、hash、审批、错误与计数，不改生产数据库或 journal",
+    "只运行两个受影响测试文件及 JavaScript 语法、diff 检查，不运行全量测试"
+  ],
+  "verification": {
+    "good": "Product、Designer、Planner 的 RUNNING Operation 使用当前可用执行窗口展示，不误称下次时限。",
+    "base": "FAILED 空闲时仍展示同一当前可用预算；容量耗尽保持已达上限并隐藏无效重试。",
+    "bad": "从 Operation RUNNING 猜测 invocation 实际时限，或为修文案改写原始 counter、调用历史。"
+  },
+  "rollback": "回退本次前端及文档提交，刷新控制台页面；无需修改任何持久化数据。"
+}
