@@ -34,6 +34,17 @@ test("polling updates and clears notices while a Requirement draft stays open", 
   await h.page.locator('#composer input[name="name"]').fill("关闭后可以继续编辑");
 });
 
+test("historical preparation budget failures explain the engineering action in Chinese", async (t) => {
+  const h = await ui(t, { operations: [operation("FAILED", {
+    error_summary: "prepared joint context exceeds budget",
+  })] });
+  await h.requests();
+  const text = await h.page.locator("#notification").innerText();
+  assert.match(text, /需求的必需上下文超过配置上限/);
+  assert.match(text, /工程负责人核验上下文预算和已选知识、规范/);
+  assert.doesNotMatch(text, /prepared joint context exceeds budget/);
+});
+
 test("active notice auto-closes on success even over an open form", async (t) => {
   const h = await ui(t);
   await h.requests();

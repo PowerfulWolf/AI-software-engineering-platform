@@ -1275,6 +1275,7 @@ function humanizeBlockingText(value) {
     "A child delivery or integration requires recovery.": "子交付或联合集成需要恢复。",
     "Delivery is blocked by a child delivery or integration requiring recovery. The child finding requests human involvement; no repair or usable approval is established by the supplied hashes alone.": "子交付或联合集成需要恢复，当前交付已阻塞。子任务发现需要人工介入；仅凭现有摘要无法建立可用修复或批准。",
     "Required context exceeds the configured input budget; no model retry.": "所需上下文超过配置的输入上限，不能重试模型。",
+    "prepared joint context exceeds budget": "需求的必需上下文超过配置上限。请工程负责人核验上下文预算和已选知识、规范，再重新执行当前操作。",
     "BUDGET_EXHAUSTED: Required context exceeds the configured input budget; no automatic retry.": "BUDGET_EXHAUSTED：所需上下文超过配置的输入上限，不能自动重试。",
     "Candidate verification stopped before a sealed result was produced.": "候选验证在封存结果生成前停止。",
     "Candidate verification passed; continue the delivery acceptance policy.": "候选验证已通过，请继续执行交付验收策略。",

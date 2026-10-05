@@ -1,6 +1,6 @@
 # 完整恢复重构实现与验收记录
 
-实现与增量验收已完成，独立审查进入发布收口；提交、推送与空闲部署尚待执行。不能以首轮切片或单个 helper 的存在声称整体完成。
+实现、增量验收与独立审查已完成；已提交推送并在空闲时更新服务，发布验收完成。不能以首轮切片或单个 helper 的存在声称整体完成。
 
 用户暂停业务交付保持有效。两个 K1 保持删除，不新建生产需求、不调用生产业务模型、不恢复原需求。只运行受影响增量。
 
@@ -42,7 +42,7 @@
 - verification environment/Python executor/mixed routes/Product 权限：51 passed，2 个显式本地 sandbox/toolchain opt-in 场景未运行。
 - 共享排序、baseline、契约等待与终态候选聚焦组合：45 passed；retry/verification lineage/native continuation：29 passed。
 - MySQL wait resolution：18 passed；新增真实 Worker accepted-history refusal/lease release/reentry：1 passed。
-- DOM 当前状态、完整历史、工程/基线交互：16 passed。
+- DOM 当前状态、完整历史、工程/基线交互：16 passed。真实浏览器工程等待、原分支基线、完整返工历史：3 passed；真实通知回归（包括历史预算错误中文提示）：14 passed。
 - 159 个受影响 Python 文件 Ruff/format/strict Mypy 全通过；git diff --check 通过。
 - public Host continuation/baseline 14 条已通过（12 条原组通过，2 条因环境冲突串行复验通过）。测试 MySQL 曾因根 Agent 两组误并发清库发生环境冲突；已停并发，仅串行重跑受影响用例，不作为平台失败修复，也不隐去验证过程。
 - 旧 backend lease-loss 用例期望未知调用自动 DONE，与新安全契约不符。已改为公开入口精确验证 start 一份/outcome 零、IMPLEMENTING/无候选、工程 EXECUTION_UNCERTAIN 等待、claim 释放、调查明确缺结果/停止证明且无恢复按钮、二次继续零调用。整个 backend 增量文件 17 passed，Ruff/format/strict Mypy通过；共享排序/终态/工程历史最终组合 71 passed。
@@ -61,3 +61,11 @@
 增量 public fixtures 使用真实 Git/MySQL/Context/claim/Artifact 链，模型和低层外部资源用受控 fake ports。它们证明恢复流程与权限契约，不证明真实业务模型、Docker/全部 OS sandbox 的部署验收；本轮遵守暂停业务交付，不以新建需求测试上线。未运行全量测试，也不宣称平台零 Bug。缺能力、超出授权/预算、源冲突或无法确认执行结束仍是明确工程/产品处理边界。
 
 空闲发布后仅做 GET/页面验收；任务状态、候选和 Operation 必须与发布前相同。回滚前停止新增工程操作，保留新 Schema/receipt/binding/authorization 的读能力；不能删除新增表、审计或完整补丁。已经产生新记录时优先前向修复，不能退回不认识这些事实的版本。没有业务调用的新发布可空闲回退到前一提交，保留全部持久化事实，再恢复服务。
+
+## 发布与只读验收
+
+- 主实现提交 `9ae0965b813c455b13106a5e1cb35c723d80f74d` 已推送 origin/main；运行 clone 从 `80122ed` fast-forward，空闲重启成功。
+- 服务 GET 四个 Project 校验 44 条交付/验证记录的 ID/status/checkpoint_stage/task_id/candidate_revision 与发布前逐项相同，261 条 Operation 的 ID/status/revision 不变；零 QUEUED/RUNNING Operation、零 RUNNING role queue，两个 K1 仍不在读取结果中。没有生产模型调用或新需求。
+- Chrome 独立只读 profile 真实打开团队/需求页面，所有非 GET/HEAD/OPTIONS 请求被阻断作为保护；实际零写请求、零 pageerror。截图已人工检查布局。CUA connector 因本机 auth token unavailable 无法连接，改用仓库已有 Playwright/Chrome 路径完成验收。
+- 页面实读发现历史 `prepared joint context exceeds budget` 通知未中文化；补齐共享展示转换，并用真实通知回归 14 条验证。原 Operation、原因原文与摘要不改写，工程下一步清晰。
+- 业务交付继续暂停。两个 K1 不重建，不把本轮 fixture 验证当真实业务交付完成。
