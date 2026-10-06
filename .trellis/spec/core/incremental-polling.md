@@ -142,6 +142,13 @@ requestChapterNavigation(request)     // read-only scroll controls
   Sticky header keeps close/reading controls; nonsticky title/status may wrap fully without
   filling the viewport. Overview signature includes raw `item.status` as well as presentation,
   since a changed delivery phase can have an unchanged WAITING/RUNNING presentation.
+- Current engineering wait uses keyed `.engineering-wait-panel` section, never an outer disclosure.
+  Investigation, missing facts and permitted decisions remain visible in current; only exact identity
+  reference is folded. Optional baseline discovery stays in `details.engineering-baseline-panel`;
+  a current unexecuted plan becomes a visible section of the same keyed group, replacing stale inputs.
+  `.engineering-baseline-form` is a `viewBlock` signed by `[bound, plan, canControlCurrentTeam()]`.
+  Unrelated title/activity changes retain input DOM/value/focus; exact bound/plan/readiness changes or
+  active/executed operations replace/remove controls. Draft values are not persisted as attributes.
 
 ### Validation and error matrix
 
@@ -154,6 +161,9 @@ requestChapterNavigation(request)     // read-only scroll controls
 | Requirement title updates with document selected | Same document/text nodes and selection through keyed chapter ancestry |
 | Stage docs mixed names / history exists | Four main chapters; all documents peer style; history only inside history card |
 | 390 / 1024 / 1440 px | No horizontal overflow; chapter borders/spacing visible; navigation targets visible |
+| Engineering wait / proof missing or permitted | Visible current action/result, folded identity, exact proof-only decisions |
+| SHA draft then unrelated title/activity | Same input/form/value/focus and optional disclosure state; no write requests |
+| New baseline plan / checkpoint or role changes | Current plan visible; old input and callback replaced or removed |
 
 Good: pause a Task report while the team snapshot progresses; resume explicitly to review new facts.
 Base: real-time heartbeat only patches changed activity, leaving selected evidence untouched.

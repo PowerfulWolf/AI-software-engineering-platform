@@ -1303,6 +1303,194 @@ main[data-page="requests"] #detail {
 }
 .engineering-details[open] > summary { margin-bottom: 10px; }
 .engineering-details .approval-box { margin-top: 10px; }
+.engineering-wait-panel {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid #e5cba7;
+  border-left: 3px solid #c99043;
+  border-radius: 10px;
+  background: #fffbf4;
+  overflow-wrap: anywhere;
+}
+.engineering-wait-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  min-width: 0;
+}
+.engineering-wait-heading > h3 {
+  min-width: 0;
+  margin: 0;
+  color: #745020;
+  font-size: 0.9375rem;
+  font-weight: 650;
+  line-height: 1.55;
+}
+.engineering-action-owner {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border: 1px solid #ead9bb;
+  border-radius: 999px;
+  background: #fff4df;
+  color: #795529;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.engineering-wait-description {
+  margin: 0;
+  color: #725d42;
+  font-size: 0.875rem;
+  line-height: 1.65;
+}
+.engineering-wait-panel > p {
+  margin: 0;
+  font-size: 0.875rem;
+  line-height: 1.65;
+}
+.engineering-investigation-result {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid #eadfcd;
+  border-radius: 8px;
+  background: white;
+  font-size: 0.875rem;
+  line-height: 1.65;
+}
+.engineering-investigation-result > p,
+.engineering-investigation-result > ul {
+  margin: 0;
+}
+.engineering-investigation-result > strong {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+.engineering-investigation-result > ul {
+  padding-left: 20px;
+}
+.engineering-investigation-result li {
+  margin: 4px 0;
+  overflow-wrap: anywhere;
+}
+.engineering-wait-actions,
+.engineering-baseline-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+.engineering-wait-actions > button,
+.engineering-baseline-actions > button {
+  max-width: 100%;
+  min-height: 40px;
+  padding: 8px 12px;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.engineering-wait-binding {
+  min-width: 0;
+  margin: 0;
+  padding-top: 12px;
+  border-top: 1px solid #e7dccb;
+}
+.engineering-wait-binding > summary {
+  color: #796b59;
+  font-size: 0.8125rem;
+  font-weight: 400;
+  line-height: 1.6;
+}
+.engineering-wait-binding .paths {
+  margin: 8px 0 0;
+  font-size: 0.75rem;
+  line-height: 1.6;
+}
+.engineering-baseline-panel {
+  min-width: 0;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid #e6d8c3;
+  border-radius: 8px;
+  background: white;
+  overflow-wrap: anywhere;
+}
+.engineering-baseline-panel > summary,
+.engineering-baseline-panel > h4 {
+  margin: 0;
+  color: #5b4b35;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.6;
+}
+.engineering-baseline-panel[open] > summary {
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #e7dccb;
+}
+.engineering-baseline-panel > p {
+  margin: 10px 0;
+  font-size: 0.875rem;
+  line-height: 1.65;
+}
+.engineering-baseline-panel > .engineering-baseline-description {
+  margin: 0;
+  color: var(--muted);
+}
+.engineering-baseline-pending {
+  display: grid;
+  gap: 12px;
+  border-color: #b7c8e7;
+  background: #f8faff;
+}
+.engineering-baseline-pending > p,
+.engineering-baseline-pending > .engineering-details {
+  margin: 0;
+}
+.engineering-baseline-form {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  margin-top: 12px;
+}
+.engineering-baseline-pending > .engineering-baseline-form {
+  margin-top: 0;
+}
+.engineering-baseline-field {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+.engineering-baseline-field > span {
+  font-weight: 600;
+}
+.engineering-baseline-field > input {
+  min-width: 0;
+  width: 100%;
+  min-height: 40px;
+  height: 40px;
+  padding: 8px 10px;
+  font-size: 0.875rem;
+  font-weight: 400;
+  line-height: 1.5;
+}
+.engineering-baseline-field > .engineering-baseline-help {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: 1.6;
+}
 .delivery-flow li.paused {
   border-color: #cbd5e1;
   background: #f1f5f9;
@@ -3209,6 +3397,13 @@ code {
   }
 }
 @media (max-width: 600px) {
+  .engineering-wait-panel,
+  .engineering-baseline-panel {
+    padding: 12px;
+  }
+  .engineering-investigation-result {
+    padding: 10px 12px;
+  }
   #detail.request-detail-panel {
     padding: 12px;
   }

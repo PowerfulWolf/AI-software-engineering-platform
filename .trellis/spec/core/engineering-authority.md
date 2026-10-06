@@ -116,7 +116,8 @@ Product 职责，工程状态只读仍可使用；不能以一次后台恢复绕
 - Console 工程区使用只读 `RoleQueueView.wait_disposition_sha256`，不在浏览器重算或猜测
   disposition 身份。调查/处理提交同时绑定 Project、Requirement 当前 checkpoint 与完整
   WorkItem/Task/source/checkpoint facts；旧按钮闭包在事实或 proof 更新后拒提交。
-- 产品摘要继续显示等待、责任与下一步；折叠的“工程处理 · 调查与决定”显示调查缺项。
+- 产品摘要继续显示等待、责任与下一步；当前工程处理卡片直接显示调查、缺项和允许的决定。
+  调查绑定摘要放在内层参考折叠，不能同时折叠当前必须处理的交互。
   摘要同时保留控制平面封存的具体中文 `disposition.detail`, 如测试入口或工具缺失, 不能只显示
   泛化“工程前提未满足”。展示先使用共享 secret redaction; 原 disposition bytes/hash 不修改。
   只有匹配当前绑定、完整且提供 `permitted_resolutions` 的 proof 才显示对应决定按钮。
@@ -162,10 +163,11 @@ Product 职责，工程状态只读仍可使用；不能以一次后台恢复绕
   Supervisor 必须传原可信 baseline_inputs；旧 candidate_ready 历史不能复活已被新基线废弃的
   候选。DONE 继续要求 exact 四产物及同 SHA 独立 QA/Review，不借终态重建提升验收。
 - Coder 原分支基线更新通过 `PROPOSE_EXECUTION_BASELINE` 和
-  `EXECUTE_EXECUTION_BASELINE` 公开 typed Console 入口。折叠工程区只在已验证的
+  `EXECUTE_EXECUTION_BASELINE` 公开 typed Console 入口。基线工程区只在已验证的
   IMPLEMENTING Task、唯一非活跃 Coder slot、精确 Task intent/revision/source 可读时提供
   操作。默认 preserve_draft；冲突只能显式另提 coder_reapply 新计划。只有当前封存计划
   可以批准，旧 checkpoint/revision/plan 控件拒提交；QA/Review 不提供 Coder 基线变更按钮。
+  无计划时入口默认折叠为可选操作；存在未执行计划时计划与决定直接可见，冲突不隐藏。
 
 ## Validation Matrix
 

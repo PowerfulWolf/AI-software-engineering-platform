@@ -1,0 +1,9 @@
+{
+  "id": "engineering-action-presentation-20261006",
+  "title": "突出当前工程处理交互与统一基线表单",
+  "status": "completed",
+  "phase": "complete",
+  "created_at": "2026-10-06",
+  "owner": "codex",
+  "constraints": ["仅前端展示", "增量验证", "不操作生产交付或审批"]
+}

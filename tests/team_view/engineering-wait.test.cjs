@@ -14,6 +14,11 @@ class Element {
     this.textContent = "";
   }
   append(...nodes) { this.children.push(...nodes); }
+  get classList() {
+    return {add: (...tokens) => {
+      this.className = [...new Set([...(this.className || "").split(/\s+/).filter(Boolean), ...tokens])].join(" ");
+    }};
+  }
   setAttribute(key, value) { this.attributes[key] = value; }
   addEventListener(key, fn) { this.events[key] = fn; }
   set innerHTML(value) { throw new Error("Unsafe HTML: " + value); }

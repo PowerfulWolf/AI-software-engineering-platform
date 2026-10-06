@@ -47,9 +47,11 @@ test("current engineering wait precedes complete folded history and keeps its ac
     return before(node.querySelector(".request-blocking-section"), node.querySelector(".delivery-flow")) &&
       before(node.querySelector(".delivery-flow"), node.querySelector('[data-key^="operation-history:"]'));
   }), true);
-  const engineer = detail.locator('details[data-key="engineering:work_current"]');
+  const engineer = detail.locator('section.engineering-wait-panel[data-key="engineering:work_current"]');
   assert.equal(await engineer.evaluate(node => Boolean(node.closest(".request-blocking-section")) && !node.closest(".request-history-fold")), true);
-  await engineer.locator(":scope > summary").click();
+  assert.equal(await engineer.isVisible(), true, "current engineering intervention is visible with the current blocker");
+  assert.equal(await engineer.locator("details.engineering-wait-binding").evaluate(node => node.open), false,
+    "opaque investigation identities do not compete with the visible action");
   assert.equal(await engineer.getByRole("button", {name: "调查工程等待", exact: true}).isVisible(), true);
   assert.equal(await detail.getByRole("button", {name: "继续交付", exact: true}).count(), 0);
   await operations.locator(":scope > summary").click();

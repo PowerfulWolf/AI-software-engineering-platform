@@ -640,10 +640,15 @@ function appendEngineeringInvestigation(target, proof) {
   }
 }
 function engineeringWaitBox(request, task, step) {
-  const management = viewGroup(engineeringDetails("工程处理 · 调查与决定", step.work_item_id),
+  const management = viewGroup(el("section", undefined, "engineering-wait-panel"),
     "engineering-wait:" + step.work_item_id);
-  management.append(el("h3", label(step.role) + "阶段工程等待"),
-    el("p", "工程授权者核验执行与现场后记录处理决定。产品负责人无需选择内部恢复方式；服务会检查实际工程职责。", "muted"));
+  management.setAttribute("data-key", "engineering:" + step.work_item_id);
+  const heading = viewBlock(el("div", undefined, "engineering-wait-heading"), "engineering-wait-heading", step.role);
+  heading.append(el("h3", label(step.role) + "阶段工程等待"),
+    el("span", "工程团队处理", "engineering-action-owner"));
+  management.append(heading, viewBlock(el("p",
+    "由工程授权者调查当前执行与现场，并记录处理决定。产品负责人无需选择内部恢复方式。",
+    "muted engineering-wait-description"), "engineering-wait-description", step.role));
   const bound = engineeringWaitIntent(request, step);
   if (!/^[a-f0-9]{64}$/.test(bound.expected_disposition_sha256 || "")) {
     management.append(el("p", "当前等待缺少精确处置身份。请刷新页面；仍缺失时由工程团队检查服务版本与记录。", "error"));
@@ -653,13 +658,19 @@ function engineeringWaitBox(request, task, step) {
   const proofSha256 = proof?.proof_sha256;
   const decision = engineeringWaitDecision(request, step, proof);
   const running = activeOperation(request.id);
-  if (proof) appendEngineeringInvestigation(management, proof);
+  if (proof) {
+    const result = viewBlock(el("div", undefined, "engineering-investigation-result"), "engineering-wait-proof", proof);
+    appendEngineeringInvestigation(result, proof);
+    management.append(result);
+  }
   if (decision) {
     management.append(el("p", "工程决定已记录，实际进度以新的执行事实和独立验收报告为准。当前读取的等待状态仍保留。", "muted"));
   } else if (canControlCurrentTeam() && !running) {
-    const actions = el("div", undefined, "row");
+    const actions = viewBlock(el("div", undefined, "engineering-wait-actions"), "engineering-wait-actions",
+      [bound, proof, canControlCurrentTeam()]);
     actions.append(deliveryButton(proof ? "重新调查工程等待" : "调查工程等待", () =>
-      submitEngineeringWaitOperation({...bound, action: "INSPECT_DELIVERY_WAIT"}), "secondary"));
+      submitEngineeringWaitOperation({...bound, action: "INSPECT_DELIVERY_WAIT"}),
+      proof && !proof.missing?.length && proof.permitted_resolutions?.length ? "secondary" : "primary"));
     if (proof && !proof.missing?.length)
       for (const kind of proof.permitted_resolutions || []) {
         const title = engineeringResolutionLabels[kind];
@@ -673,14 +684,15 @@ function engineeringWaitBox(request, task, step) {
   }
   const technical = viewGroup(engineeringDetails("调查绑定详情", step.work_item_id + ":binding"),
     "engineering-wait-binding:" + step.work_item_id);
+  technical.classList.add("engineering-wait-binding");
   technical.append(el("p", "任务 · " + (task.task_id || task.id), "paths"),
     el("p", "工作项 · " + bound.work_item_id, "paths"),
     el("p", "执行基线 · " + bound.expected_source_revision, "paths"),
     el("p", "处置摘要 · " + bound.expected_disposition_sha256, "paths"));
   if (proof) technical.append(el("p", "调查摘要 · " + proof.proof_sha256, "paths"),
     el("p", "调查时间 · " + time(proof.inspected_at), "muted"));
-  management.append(technical);
   appendEngineeringBaseline(management, request, task, step);
+  management.append(technical);
   return management;
 }
 function engineeringBaselineFacts(request, task, step) {
@@ -739,9 +751,6 @@ async function submitEngineeringBaselineOperation(intent, originalBound) {
 function appendEngineeringBaseline(target, request, task, step) {
   const bound = engineeringBaselineFacts(request, task, step);
   if (!bound) return;
-  const fold = viewGroup(engineeringDetails("工程处理 · 更新原分支基线", step.work_item_id + ":baseline"),
-    "engineering-baseline:" + step.work_item_id);
-  fold.append(el("p", "平台修复后可在同一需求分支更新代码执行基线。调查会保留完整草稿、候选与旧执行记录；批准不替代之后的 QA 和 Review。", "muted"));
   const plan = engineeringBaselinePlan(request, task, step);
   const planSha256 = plan?.plan_sha256;
   const targetBaseRef = plan?.target_base_ref;
@@ -750,6 +759,18 @@ function appendEngineeringBaseline(target, request, task, step) {
   const executed = plan && operations.some(item => item.status === "SUCCEEDED" &&
     item.intent.action === "EXECUTE_EXECUTION_BASELINE" && item.intent.task_id === task.task_id &&
     item.intent.delivery_id === request.id && item.intent.expected_plan_sha256 === plan.plan_sha256);
+  const fold = viewGroup(plan && !executed
+    ? el("section", undefined, "engineering-baseline-panel engineering-baseline-pending")
+    : engineeringDetails("可选工程操作 · 更新原分支基线", step.work_item_id + ":baseline"),
+    "engineering-baseline:" + step.work_item_id);
+  fold.classList.add("engineering-baseline-panel");
+  if (plan && !executed) {
+    fold.setAttribute("data-key", "engineering:" + step.work_item_id + ":baseline");
+    fold.append(el("h4", "工程处理 · 更新原分支基线", "engineering-baseline-title"));
+  }
+  fold.append(viewBlock(el("p",
+    "需要同步平台修复时，可在原需求分支更新代码基线。调查先生成计划并保留完整草稿与历史；批准后才更新，之后仍需独立 QA 和 Review。",
+    "muted engineering-baseline-description"), "engineering-baseline-description", Boolean(plan)));
   if (plan) {
     fold.append(el("p", plan.conflicted ? "原草稿与目标代码存在冲突，原现场保留。需明确提出让 Coder 读取完整旧补丁后适配的新计划。" :
       plan.input_mode === "coder_reapply" ? "当前计划从目标代码建立干净执行输入，由 Coder 读取完整旧补丁并适配。" :
@@ -764,25 +785,36 @@ function appendEngineeringBaseline(target, request, task, step) {
   if (executed) {
     fold.append(el("p", "此精确计划已执行，后续进度和验收以新的执行记录为准。", "muted"));
   } else if (canControlCurrentTeam() && !active) {
-    const field = el("label", "目标已提交代码版本（完整 40 位 SHA）");
+    const form = viewBlock(el("div", undefined, "engineering-baseline-form"), "engineering-baseline-controls",
+      [bound, plan, canControlCurrentTeam()]);
+    const field = el("label", undefined, "engineering-baseline-field");
+    field.append(el("span", "目标代码版本"));
     const input = el("input");
     input.type = "text";
     input.maxLength = 40;
     input.value = plan?.target_base_ref || "";
+    input.autocomplete = "off";
+    input.spellcheck = false;
     input.setAttribute("aria-label", "目标代码完整版本");
-    field.append(input);
-    fold.append(field, deliveryButton("调查并保留原草稿", () => submitEngineeringBaselineOperation({
+    const help = el("small", "填写已提交代码的完整 40 位 SHA，由平台核验目标版本。", "engineering-baseline-help");
+    help.id = "engineering-baseline-help-" + step.work_item_id;
+    input.setAttribute("aria-describedby", help.id);
+    field.append(input, help);
+    const actions = el("div", undefined, "engineering-baseline-actions");
+    actions.append(deliveryButton("调查并保留原草稿", () => submitEngineeringBaselineOperation({
       ...bound, action: "PROPOSE_EXECUTION_BASELINE", target_base_ref: input.value.trim(), input_mode: "preserve_draft",
     }, bound), "secondary"));
-    if (plan?.conflicted) fold.append(deliveryButton("提出 Coder 适配完整旧补丁的计划", () =>
+    if (plan?.conflicted) actions.append(deliveryButton("提出 Coder 适配完整旧补丁的计划", () =>
       submitEngineeringBaselineOperation({...bound, action: "PROPOSE_EXECUTION_BASELINE",
         target_base_ref: targetBaseRef, input_mode: "coder_reapply"}, bound), "secondary"));
-    if (plan && !plan.conflicted) fold.append(deliveryButton("批准并更新原分支基线", () =>
+    if (plan && !plan.conflicted) actions.append(deliveryButton("批准并更新原分支基线", () =>
       submitEngineeringBaselineOperation({action: "EXECUTE_EXECUTION_BASELINE", project_id: request.project_id,
         delivery_id: request.id, expected_checkpoint_sha256: request.checkpoint_sha256, task_id: task.task_id,
         expected_plan_sha256: planSha256,
         reference: inputMode === "coder_reapply" ? "批准 Coder 从精确目标版本适配完整旧补丁" :
           "批准在原需求分支保留草稿并更新到精确目标版本"}, bound), "primary"));
+    form.append(field, actions);
+    fold.append(form);
   } else if (active) {
     fold.append(el("p", "工程基线操作正在处理，交付进度以之后的角色事实为准。", "muted"));
   }

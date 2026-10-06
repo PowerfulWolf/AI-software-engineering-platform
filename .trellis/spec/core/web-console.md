@@ -428,14 +428,16 @@ production_console_app(
   当前任务的处理建议。工程摘要/hash 放在内层折叠详情，日常产品摘要只展示责任、原因与下一步。
   历史讨论/操作/仓库折叠键包含 Project/Requirement 身份，轮询保留展开和已加载正文；不复用
   旧 checkpoint 的事件回调。历史资料后置只改变展示，不删除或改写任何 durable facts。
-- 当前非终态 WorkItem 的工程等待只能用折叠工程区的调查/处理入口，不能用 generic
+- 当前非终态 WorkItem 的工程等待使用当前进展中默认可见的工程处理卡片，不能用 generic
   “继续交付”绕过 proof。调查成功展示缺项或被允许的处理方式；决定成功仍等待读取新的
   durable execution facts。`INSPECT_DELIVERY_WAIT/RESOLVE_DELIVERY_WAIT` 的 RUNNING 通知
-  说明正在核验/处理，不将当前工程等待改为“开发中”。工程折叠区保留轮询与提交前的展开
-  偏好，旧 checkpoint/disposition/proof 的按钮不得继续提交。
+  说明正在核验/处理，不将当前工程等待改为“开发中”。当前调查、缺项和允许决定不能藏在
+  参考折叠中；只有身份/hash 参考默认折叠。旧 checkpoint/disposition/proof 按钮不得继续提交。
 - 原分支基线更新只出现在有精确 Task intent/revision/source 的 IMPLEMENTING Coder 工程区。
   调查完整草稿与目标代码后显示封存计划；冲突必须明确提出 coder_reapply 新计划，不能在旧
   批准下切换。QA/Review 阶段不提供 Coder 分支更新按钮，操作成功也不推断独立验收通过。
+  无计划时基线是可选折叠操作，已生成但未执行的精确计划与决定区域直接展示。SHA 表单用
+  bound、plan 和当前控制门禁签名保留 DOM；无关轮询保留草稿，事实变化使旧控件失效。
 - 阻塞原因只在 Requirement 详情的“阻塞信息”同级 section 展示。该 section 合并相同子仓原因，
   按“当前阻塞 / 最近一次恢复 / 建议操作”呈现，并把已知内部英文状态转换为面向用户的说明。
   Operation 通知只在能够精确定位 Requirement 时提供“打开需求工作区”；该按钮必须切换到需求页、
