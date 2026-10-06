@@ -88,6 +88,65 @@ Existing data: no migration or journal rewrite. Refresh the browser once to load
 frontend; normal polling then preserves in-tab state. A full browser reload still starts a new view.
 Rollback the frontend change and refresh; original polling behavior returns, persistent facts remain.
 
+## Task reading and Requirement chapters (2026-10-06)
+
+```javascript
+taskDetailScopeKey()                  // Team + page + Project + selected Task
+syncTaskReadingToolbar(panel)         // only toolbar text/pressed state, only when changed
+taskReadingFold(title, key, open = false)
+taskFeedbackSection(history, taskId)   // latest saved QA/Review artifact per kind
+requestChapter(key)                   // current / outputs / history / reference
+requestChapterNavigation(request)     // read-only scroll controls
+```
+
+### Contracts and presentation
+
+- Requirement detail has exactly four primary `h2` chapters: 当前进展、产物与交付、完整交付记录、
+  工程参考. Each `.request-chapter` owns an independent card and `.request-chapter-heading`;
+  existing modules become `h3` subsections. Stage documents are peer `.artifact-document` items.
+  Historical discussion/operations/repository records belong to history, not the document chapter.
+  Current business/engineering decisions and Product reply stay visible in current; navigation only
+  scrolls. Reparenting must retain the original action gates, exact signatures and fresh callbacks.
+  Any `knowledge_gap.is_current` belongs to current, including team/engineering responsibility;
+  only historical gaps belong to reference. Never move an actionable current knowledge decision
+  into engineering reference merely because it is not assigned to Product.
+- The chapter, fold and list ancestors must all be `viewGroup` for descendant keys to preserve DOM.
+  `appendExecutionEntry` binds `{entry, currentTaskId}`; Task model rows bind full `run` facts and
+  `run_id/source_uri`. A heartbeat or added history row cannot rebuild unchanged sealed text.
+- Task modal is read-only and may pause its displayed facts. `pausedTaskDetailKey` belongs only to
+  its exact Team/page/Project/Task. Backend snapshot polling remains live; new facts show a pending
+  progress notice. Both incremental and default `renderDetail()` respect pause: delayed unrelated
+  command completion cannot silently replace paused text. Explicit resume renders latest facts;
+  entity/scope change, navigation or missing Task clears pause. Requirement approval never pauses.
+- Task overview preserves a known typed engineering `WAITING.reason/next_action`; `UNKNOWN` still
+  requires execution verification. Latest saved QA/Review feedback names current/historical Task
+  and is not a verdict for a later candidate. No role success is inferred from document presence.
+- Task dialog and Requirement detail each have one main vertical reading surface. History/report
+  bodies have no inner max-height clipping; long text wraps. Document source URI/hash is accessible
+  after the body in a collapsed identity disclosure. Empty activity regions render no blank card.
+
+### Validation and error matrix
+
+| Trigger | Required behavior / assertion |
+| --- | --- |
+| Task heartbeat or appended history | Same history/text/report/model nodes, selection/open/scroll retained; all rows present |
+| Pause then fresh snapshot or default render callback | Snapshot current, Task text frozen; pending progress notice remains |
+| Resume, scope change or Task disappears | Latest same-scope facts or missing-record view; pause cannot survive |
+| Product checkpoint changes | Requirement remains live; old approval control removed and cannot submit |
+| Requirement title updates with document selected | Same document/text nodes and selection through keyed chapter ancestry |
+| Stage docs mixed names / history exists | Four main chapters; all documents peer style; history only inside history card |
+| 390 / 1024 / 1440 px | No horizontal overflow; chapter borders/spacing visible; navigation targets visible |
+
+Good: pause a Task report while the team snapshot progresses; resume explicitly to review new facts.
+Base: real-time heartbeat only patches changed activity, leaving selected evidence untouched.
+Bad: freeze approval callbacks, replace paused text on an async completion, or key rows under an
+unkeyed list/chapter. Correct: pause only Task read facts and group every ancestor, not just the row.
+
+Required coverage: `browser/task-detail-reading.test.cjs`, `browser/requirement-detail.test.cjs`,
+`browser/polling-state.test.cjs` and affected interaction/state contracts. Fixtures intercept all API
+traffic; no production action or migration is needed. Existing facts remain usable after loading the
+new frontend. Roll back assets and refresh without changing Task, Operation or approval history.
+
 ## Live progress inside an immutable Operation row (2026-10-05)
 
 `currentOperationProgress(operation, request)` is a pure read-side derivation shared by the

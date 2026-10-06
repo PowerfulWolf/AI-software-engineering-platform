@@ -53,7 +53,7 @@ test("polling patches changed Requirement facts without collapsing diagnostics o
   await diagnostics.locator("summary").click();
   await diagnostics.getByText(/暂无已完成的阶段调用明细/).waitFor();
   const document = detail.locator('details[data-key="artifact://design-one"]');
-  await document.locator("summary").click();
+  await document.locator(":scope > summary").click();
   await diagnostics.evaluate(node => { window.polledDiagnostics = node; });
   await document.evaluate(node => { window.polledDocument = node; });
   await h.page.locator(".request").evaluate(node => { window.polledRequestCard = node; });
@@ -81,7 +81,7 @@ test("timestamp-only ticks do not mutate page content and changed facts retain s
   await h.tick();
   await h.requests();
   const document = h.page.locator('details[data-key="artifact://long"]');
-  await document.locator("summary").click();
+  await document.locator(":scope > summary").click();
   await h.page.setViewportSize({width: 1440, height: 600});
   await document.locator("pre").evaluate(node => {
     const range = document.createRange();
@@ -122,7 +122,7 @@ test("Knowledge polling detects inventory-only changes and retains another expan
   await h.page.locator("#nav-knowledge").click();
   await h.page.getByRole("tab", {name: "开发规范", exact: true}).click();
   const document = h.page.locator('details[data-key="spec:team:project_fixture:spec_one"]');
-  await document.locator("summary").click();
+  await document.locator(":scope > summary").click();
   await document.evaluate(node => { window.polledSpec = node; });
   specs.push({active: false, document: {...specs[0].document, spec_id: "spec_two", spec_key: "two",
     title: "New background rule", body_markdown: "Second rule body"}});
@@ -141,7 +141,7 @@ test("Task updates retain expanded artifacts in the same modal", async t => {
   await h.tick();
   await h.page.evaluate(() => showDetail("task", "task_fixture"));
   const document = h.page.locator('details[data-key="artifact://report"]');
-  await document.locator("summary").click();
+  await document.locator(":scope > summary").click();
   await document.evaluate(node => { window.polledTaskDocument = node; });
   await h.page.locator(".task-detail-dialog").evaluate(node => { window.polledTaskDialog = node; });
   task.status = "QA";

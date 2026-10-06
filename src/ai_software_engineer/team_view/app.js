@@ -2,6 +2,7 @@
 let snapshot = null;
 let page = "team";
 let selected = null;
+let pausedTaskDetailKey = null;
 let refreshing = false;
 let refreshFlight = null;
 let requestedProjectId = null;
@@ -857,6 +858,9 @@ function productExecutionSummary(item, {guidance = true} = {}) {
 }
 function taskExecutionPresentation(task) {
   const status = taskPresentationStatus(task);
+  if (status === "WAITING_ENGINEERING" && task.execution?.state === "WAITING" &&
+      task.execution.responsibility === "engineering")
+    return {...engineeringExecutionCheck(), reason: task.execution.reason, nextAction: task.execution.next_action};
   if (status === "WAITING_ENGINEERING") return engineeringExecutionCheck();
   if (status === "RUNNING") return runningRolePresentation();
   if (status === "READY") return queuedRolePresentation();
@@ -1691,7 +1695,7 @@ function requestBlockerSection(request) {
     "detail-section request-blocking-section",
   ), "request-blockers");
   section.append(
-    el("h2", summary.approvedKnowledge ? "下一步" : "阻塞信息"),
+    el("h3", summary.approvedKnowledge ? "下一步" : "阻塞信息"),
     el(
       "p",
       "以下是本次交付的当前原因与建议操作；历史轮次请查看页面下方的记录。",
@@ -1805,12 +1809,10 @@ function documentList(parent, documents) {
     return;
   }
   for (const doc of documents) {
-    const d = viewBlock(el("details"), `document:${doc.source_uri}`, doc);
+    const d = viewBlock(el("details", undefined, "artifact-document"), `document:${doc.source_uri}`, doc);
     d.dataset.key = doc.source_uri;
     d.append(
       el("summary", doc.name),
-      el("p", doc.source_uri, "paths"),
-      el("p", "SHA-256 · " + doc.sha256, "paths"),
     );
     d.append(
       el(
@@ -1818,6 +1820,9 @@ function documentList(parent, documents) {
         doc.content || "当前提供已提交文档的身份引用；正文尚未接入此视图。",
       ),
     );
+    const identity = engineeringDetails("文档来源与校验摘要", doc.source_uri + ":identity");
+    identity.append(el("p", doc.source_uri, "paths"), el("p", "SHA-256 · " + doc.sha256, "paths"));
+    d.append(identity);
     parent.append(d);
   }
 }
@@ -1826,7 +1831,7 @@ function requestDialogue(parent, request) {
   if (!turns.length && !productDiscussionStages.has(request.stage)) return null;
   const section = viewGroup(el("section", undefined, "detail-section product-dialogue"), "discussion");
   const heading = el("div", undefined, "row");
-  heading.append(el("h2", "需求讨论"));
+  heading.append(el("h3", "需求讨论"));
   if (turns.length) heading.append(el("span", `${turns.length} 轮消息`, "badge"));
   section.append(heading);
   if (turns.length) {
@@ -3774,7 +3779,7 @@ function deliveryResult(panel, request) {
   const section = el("section", undefined, "detail-section");
   const result = el("div", undefined, "delivery-result");
   result.append(
-    el("h2", "交付结果"),
+    el("h3", "交付结果"),
     el(
       "p",
       "以下候选提交已经通过独立 QA、Reviewer 和联合验收；平台没有自动合并或上线。",
@@ -6801,6 +6806,7 @@ function renderStatus(content) {
   content.append(summary, grid, agentRoutes, routes);
 }
 function showDetail(kind, id) {
+  pausedTaskDetailKey = null;
   selected = { kind, id };
   if (page === "requests") {
     const request =
@@ -6998,7 +7004,7 @@ function knowledgeGapSection(item) {
   const intro = el("div");
   let approved = approvedKnowledge(item);
   const historyOnly = item.stage !== "WAITING_HUMAN";
-  const renderIntro = () => intro.replaceChildren(el("h2", historyOnly ? "知识核对记录" : approved ? "已确认的知识" : "待确认的知识"), el("p", historyOnly
+  const renderIntro = () => intro.replaceChildren(el("h3", historyOnly ? "知识核对记录" : approved ? "已确认的知识" : "待确认的知识"), el("p", historyOnly
     ? "查看原问题、已保存的解答与确认依据。已确认的历史事项无需重复回答；重新核对本身不代表批准。" : approved
     ? "解答已批准并保存，无需重复填写。点击“继续交付”恢复原需求。"
     : "补充待确认的信息，批准后再继续原需求。", "muted"));
@@ -7278,7 +7284,8 @@ function appendExecutionArtifactDetails(target, entry) {
 }
 
 function appendExecutionEntry(target, entry, currentTaskId) {
-  const item = el("li", undefined, "execution-history-entry");
+  const item = viewBlock(el("li", undefined, "execution-history-entry"),
+    "execution-entry:" + entry.id, {entry, currentTaskId});
   const current = entry.task_id && entry.task_id === currentTaskId;
   item.append(
     el("div", entry.summary),
@@ -7334,7 +7341,6 @@ function requestOperationHistory(panel, request) {
     operation.intent.project_id === request.project_id)
     .sort((a, b) => a.updated_at.localeCompare(b.updated_at) || a.operation_id.localeCompare(b.operation_id));
   if (!records.length) return;
-  const section = viewGroup(el("div", undefined, "detail-section"), "requirement-operation-history");
   const fold = viewGroup(el("details", undefined, "request-history-fold"), "operation-history-fold");
   fold.dataset.key = "operation-history:" + request.project_id + "/" + request.id;
   fold.append(el("summary", `操作记录（完整历史） · ${records.length} 条`),
@@ -7387,15 +7393,13 @@ function requestOperationHistory(panel, request) {
     list.append(item);
   }
   fold.append(list);
-  section.append(fold);
-  panel.append(section);
+  panel.append(fold);
 }
 function requestHistoricalDeliveryRecords(panel, request) {
   const history = requestTasks(request).filter(isHistoricalRequestTask)
     .sort((left, right) => left.last_activity.localeCompare(right.last_activity));
   if (!history.length) return;
-  const section = viewGroup(el("div", undefined, "detail-section"), "historical-delivery-records");
-  const fold = el("details", undefined, "historical-delivery-records");
+  const fold = viewGroup(el("details", undefined, "historical-delivery-records"), "historical-delivery-fold");
   fold.dataset.key = "historical-delivery:" + request.project_id + "/" + request.id;
   fold.append(el("summary", `历史仓库交付记录（${history.length} 条）`),
     el("p", "以下记录保留当次执行结果，不代表当前交付状态。", "muted"));
@@ -7407,11 +7411,106 @@ function requestHistoricalDeliveryRecords(panel, request) {
     entry.append(button("查看当次执行记录", () => showDetail("task", task.id), "secondary"));
     fold.append(entry);
   }
-  section.append(fold);
-  panel.append(section);
+  panel.append(fold);
 }
 
+function taskDetailScopeKey() {
+  return selected?.kind === "task"
+    ? JSON.stringify([snapshot?.team_id, page, currentProjectId(), selected.id]) : null;
+}
+const requestChapters = [
+  ["current", "当前进展", "查看当前状态、阻塞原因和下一步操作。"],
+  ["outputs", "产物与交付", "查看阶段文档，以及通过验收后的交付结果。"],
+  ["history", "完整交付记录", "按记录类型查看全过程；历史结论只描述当次执行。"],
+  ["reference", "工程参考", "查看需求身份、工程授权和知识核对信息。"],
+];
+function requestChapter(key) {
+  const index = requestChapters.findIndex(chapter => chapter[0] === key);
+  const [, title, description] = requestChapters[index];
+  const section = viewGroup(el("section", undefined, "request-chapter"), "request-chapter:" + key);
+  section.id = "request-chapter-" + key;
+  section.setAttribute("aria-labelledby", section.id + "-title");
+  const heading = viewBlock(el("div", undefined, "request-chapter-heading"), "chapter-heading:" + key, key);
+  const titleNode = el("h2", title);
+  titleNode.id = section.id + "-title";
+  heading.append(el("span", String(index + 1).padStart(2, "0"), "request-chapter-number"),
+    titleNode, el("p", description, "muted"));
+  section.append(heading);
+  return section;
+}
+function requestChapterNavigation(request) {
+  const nav = viewBlock(el("nav", undefined, "request-chapter-nav"), "request-chapter-nav", [request.project_id, request.id]);
+  nav.setAttribute("aria-label", "需求详情章节");
+  for (const [key, title] of requestChapters)
+    nav.append(button(title, () => document.getElementById("request-chapter-" + key)?.scrollIntoView({block: "start"}), "request-chapter-link"));
+  return nav;
+}
+function syncTaskReadingToolbar(panel) {
+  const toolbar = panel.querySelector(".task-reading-toolbar");
+  if (!toolbar) return;
+  const paused = pausedTaskDetailKey === taskDetailScopeKey();
+  const changed = renderedSurfaces.get(panel)?.signature !== JSON.stringify(pollingDetailFacts());
+  const status = toolbar.querySelector(".task-reading-status");
+  const statusText = paused
+    ? changed ? "阅读已暂停 · 有新进展，更新后可查看" : "阅读已暂停 · 当前内容保持不动"
+    : "实时更新 · 阅读位置和展开内容会保留";
+  if (status.textContent !== statusText) status.textContent = statusText;
+  const control = toolbar.querySelector("button");
+  const controlText = paused ? "更新并恢复实时" : "暂停详情更新";
+  if (control.textContent !== controlText) control.textContent = controlText;
+  if (control.getAttribute("aria-pressed") !== String(paused))
+    control.setAttribute("aria-pressed", String(paused));
+}
+function taskReadingToolbar() {
+  const toolbar = viewBlock(el("div", undefined, "task-reading-toolbar"), "task-reading-toolbar", taskDetailScopeKey());
+  toolbar.append(el("span", "", "task-reading-status"), button("暂停详情更新", () => {
+    const key = taskDetailScopeKey();
+    pausedTaskDetailKey = pausedTaskDetailKey === key ? null : key;
+    if (pausedTaskDetailKey) syncTaskReadingToolbar(document.getElementById("detail"));
+    else render({preserveComposer: true, incremental: true});
+  }, "secondary"));
+  return toolbar;
+}
+function taskReadingFold(title, key, open = false) {
+  const fold = viewGroup(el("details", undefined, "task-detail-section task-reading-fold"), key);
+  fold.dataset.key = key + ":" + taskDetailScopeKey();
+  // Only set the initial state; reconciliation retains the user's later choice.
+  fold.open = open;
+  fold.append(viewBlock(el("summary", title), key + ":title", title));
+  return fold;
+}
+function taskFeedbackSection(history, taskId) {
+  const reports = ["qa-report", "review-report"].map(kind =>
+    [...history].reverse().find(entry => entry.kind === "artifact" && entry.details?.kind === kind)
+  ).filter(Boolean);
+  if (!reports.length) return null;
+  const fold = taskReadingFold("最近 QA / Review 反馈", "task-feedback", true);
+  fold.append(viewBlock(el("p", "以下是最近一次已保存的独立验收记录；历史结论不代表当前候选已经通过。", "muted"), "task-feedback-note", []));
+  const list = viewGroup(el("div", undefined, "task-feedback-list"), "task-feedback-list");
+  for (const entry of reports) {
+    const details = entry.details;
+    const card = viewBlock(el("article", undefined, "task-feedback-card"), "feedback:" + entry.id, {entry, taskId});
+    card.append(el("strong", entry.summary), el("p", `${entry.task_id === taskId ? "当前轮" : "历史轮"} · ${time(entry.occurred_at)}`, "muted"));
+    if (details.summary) card.append(el("p", details.summary));
+    for (const finding of details.findings || []) {
+      if (finding.message) card.append(el("p", finding.message));
+      if (finding.recommendation) card.append(el("p", "建议 · " + finding.recommendation));
+    }
+    list.append(card);
+  }
+  fold.append(list);
+  return fold;
+}
 function renderDetail({ incremental = false } = {}) {
+  const panel = document.getElementById("detail");
+  if (!snapshot || selected?.kind !== "task" || pausedTaskDetailKey !== taskDetailScopeKey() ||
+      !taskById(selected.id)) pausedTaskDetailKey = null;
+  // The Task modal contains only read-side facts and navigation, never approvals.
+  // Requirement controls still reconcile against fresh checkpoint/authorization facts.
+  if (pausedTaskDetailKey && renderedSurfaces.has(panel)) {
+    syncTaskReadingToolbar(panel);
+    return;
+  }
   const opener = document.activeElement;
   const expanded = new Set([...document.querySelectorAll("details[open]")]
     .filter(node => node.dataset.key).map(node => node.dataset.key));
@@ -7420,6 +7519,7 @@ function renderDetail({ incremental = false } = {}) {
   rememberModalOpener(document.getElementById("detail"), opener);
   for (const node of document.querySelectorAll("details"))
     if (node.dataset.key && expanded.has(node.dataset.key)) node.open = true;
+  syncTaskReadingToolbar(panel);
   syncModalState();
 }
 function buildDetail(panel = document.getElementById("detail")) {
@@ -7552,7 +7652,7 @@ function buildDetail(panel = document.getElementById("detail")) {
   );
   top.append(
     el(
-      "h2",
+      selected.kind === "request" ? "p" : "h2",
       selected.kind === "task" ? "任务详情" : "需求详情",
       selected.kind === "request" ? "detail-panel-heading" : "",
     ),
@@ -7562,12 +7662,14 @@ function buildDetail(panel = document.getElementById("detail")) {
     const presentation = requestPresentation(item);
     const blocking = requestBlockerSection(item);
     panel.className = "request-detail-panel";
-    const overview = el("section", undefined, "request-detail-overview");
-    overview.append(
-      top,
-      el("h3", item.title, "request-detail-title"),
-      requestNodeBadge(item),
-    );
+    const masthead = viewGroup(el("header", undefined, "request-detail-masthead"), "request-detail-masthead");
+    masthead.append(viewBlock(top, "request-heading-actions", [item, pollingControlFacts(), operations]),
+      viewBlock(el("p", item.title, "request-detail-title"), "request-heading-title", item.title),
+      viewBlock(requestNodeBadge(item), "request-heading-status", requestNodeExecution(item)));
+    panel.append(masthead, requestChapterNavigation(item));
+    const current = requestChapter("current");
+    const overview = viewBlock(el("div", undefined, "request-detail-overview"), "request-detail-overview",
+      [item.execution, presentation, requestNodeExecution(item), deliveryPhase(item), Boolean(blocking)]);
     if (item.execution) overview.append(productExecutionSummary(item, {guidance: !blocking}));
     const identity = engineeringDetails("需求工程详情", item.id);
     identity.append(el("p", item.id, "paths request-detail-id"));
@@ -7584,28 +7686,28 @@ function buildDetail(panel = document.getElementById("detail")) {
           "muted request-detail-next",
         ),
       );
-    panel.append(overview);
-    if (blocking) panel.append(blocking);
-    const productKnowledgeVisible = item.knowledge_gap?.is_current && (!item.execution || item.execution.responsibility === "product");
-    if (productKnowledgeVisible)
-      panel.append(knowledgeGapSection(item));
+    current.append(overview);
+    if (blocking) current.append(blocking);
+    const currentKnowledgeVisible = Boolean(item.knowledge_gap?.is_current);
+    if (currentKnowledgeVisible)
+      current.append(knowledgeGapSection(item));
     // Build the existing discussion/action gates in their original scope, then
     // position current controls ahead of reference material. Rendering never submits.
     const discussionHolder = el("div");
     const discussionSection = requestDialogue(discussionHolder, item);
     const actions = viewGroup(el("section", undefined, "detail-section request-current-actions"), "current-actions");
-    actions.append(el("h2", "下一步操作"));
+    actions.append(el("h3", "下一步操作"));
     requestOperation(actions, item, discussionSection);
-    if (actions.children.length > 1) panel.append(actions);
-    if (discussionSection && productDiscussionStages.has(item.stage)) panel.append(discussionSection);
+    if (actions.children.length > 1) current.append(actions);
+    if (discussionSection && productDiscussionStages.has(item.stage)) current.append(discussionSection);
     const flow = viewGroup(el("section", undefined, "detail-section"), "delivery-flow");
-    flow.append(el("h2", "交付流程"));
+    flow.append(el("h3", "交付流程"));
     const manager = managerFlowStatus(item);
     if (manager) flow.append(manager);
     flow.append(deliveryFlow(item));
-    panel.append(flow);
+    current.append(flow);
     const scopes = viewGroup(el("section", undefined, "detail-section"), "repository-scopes");
-    scopes.append(el("h2", "涉及代码目录"));
+    scopes.append(el("h3", "涉及代码目录"));
     const currentTasks = currentRequestTasks(item);
     for (const scope of item.scopes) {
       const scopeCard = el("div", undefined, "request-scope-card");
@@ -7623,31 +7725,40 @@ function buildDetail(panel = document.getElementById("detail")) {
       else scopeCard.append(el("span", "尚未生成交付任务", "badge"));
       scopes.append(scopeCard);
     }
-    panel.append(scopes);
+    if (!item.scopes.length) scopes.append(el("p", "此需求没有仓库交付目录。", "muted"));
+    current.append(scopes);
+    panel.append(current);
     const lastOperation = latestOperation(item.id);
     if (lastOperation?.operation_id && discussionSection)
       discussionSection.append(modelCallDiagnostics(lastOperation));
-    deliveryResult(panel, item);
+    const outputs = requestChapter("outputs");
+    deliveryResult(outputs, item);
     const artifacts = viewGroup(el("section", undefined, "detail-section stage-artifacts"), "stage-artifacts");
-    artifacts.append(el("h2", "阶段产物"));
+    artifacts.append(el("h3", `阶段产物 · ${item.documents.length} 份`));
     documentList(artifacts, item.documents);
-    panel.append(artifacts);
+    outputs.append(artifacts);
+    panel.append(outputs);
+    const history = requestChapter("history");
     if (discussionSection && !productDiscussionStages.has(item.stage)) {
       const fold = viewGroup(el("details", undefined, "request-history-fold"), "discussion-history-fold");
       fold.dataset.key = "discussion-history:" + item.project_id + "/" + item.id;
       fold.append(el("summary", `需求讨论记录（${(item.dialogue || []).length} 轮）`), discussionSection);
-      panel.append(fold);
+      history.append(fold);
     }
-    requestOperationHistory(panel, item);
-    requestHistoricalDeliveryRecords(panel, item);
+    requestOperationHistory(history, item);
+    requestHistoricalDeliveryRecords(history, item);
+    if (history.children.length === 1) history.append(el("p", "暂无已保存的历史记录。", "muted"));
+    panel.append(history);
+    const reference = requestChapter("reference");
     const engineering = viewGroup(el("div", undefined, "detail-section request-reference-section"), "request-engineering");
     engineering.append(identity);
-    if (!productKnowledgeVisible) {
-      const knowledge = engineeringDetails(item.knowledge_gap?.is_current ? "工程知识处理" : "知识核对记录", item.id + ":knowledge");
+    if (!currentKnowledgeVisible) {
+      const knowledge = engineeringDetails("知识核对记录", item.id + ":knowledge");
       knowledge.append(knowledgeGapSection(item));
       engineering.append(knowledge);
     }
-    panel.append(engineering);
+    reference.append(engineering);
+    panel.append(reference);
     return;
   }
   panel.className = "task-detail-modal";
@@ -7660,34 +7771,48 @@ function buildDetail(panel = document.getElementById("detail")) {
   dialog.setAttribute("role", "dialog");
   dialog.setAttribute("aria-modal", "true");
   dialog.setAttribute("aria-label", "任务详情");
-  dialog.append(
-    top,
-    el("h3", item.title),
-    badge(taskPresentationStatus(item)),
-  );
-  if (item.execution) dialog.append(productExecutionSummary(item));
+  const header = viewGroup(el("header", undefined, "task-detail-header"), "task-detail-header");
+  viewBlock(top, "task-heading", item.id);
+  header.append(top, taskReadingToolbar());
+  dialog.append(header);
+  const overview = viewBlock(el("section", undefined, "task-detail-overview"), "task-overview",
+    [item.title, taskPresentationStatus(item), item.execution, item.blocker, item.next_action, item.last_activity,
+      interruptedExecution(item), waitingExecutionStep(item), item.scope]);
+  overview.append(el("h3", item.title, "task-detail-title"), badge(taskPresentationStatus(item)));
+  if (item.execution) overview.append(productExecutionSummary(item));
+  else {
+    overview.append(el("p", "当前阶段 · " + deliveryPhase(item)));
+    if (item.blocker) overview.append(el("p", "当前原因 · " + humanizeBlockingText(item.blocker), "blocker"));
+    if (item.next_action) overview.append(el("p", "下一步 · " + humanizeBlockingText(item.next_action)));
+  }
+  overview.append(el("p", paths(item.scope), "paths"), el("p", "最近活动 · " + time(item.last_activity), "muted"));
+  const activity = roleExecutionActivity(item);
+  activity.classList.add("task-activity-block");
+  viewBlock(activity, "task-activity", [item.status, item.terminal, item.role_queue]);
+  dialog.append(overview, activity);
   const engineering = engineeringDetails("任务工程详情", item.id);
-  engineering.append(el("p", item.id, "paths"));
-  if (item.execution?.policy_id) engineering.append(el("p", "工程授权 · " + item.execution.policy_id, "paths"));
-  if (item.execution?.receipt_uri) engineering.append(el("p", "执行事实 · " + item.execution.receipt_uri, "paths"));
-  dialog.append(
-    el("p", paths(item.scope), "paths"),
-    el("p", "最近活动 · " + time(item.last_activity), "muted"),
-  );
+  viewGroup(engineering, "task-engineering");
+  const engineeringBody = viewBlock(el("div"), "task-engineering-facts",
+    [item.id, item.execution, item.blocker, item.next_action, item.candidate_revision, item.candidate_branch,
+      item.role_queue, item.task_id, item.history_task_ids, taskGroup(item), item.assignments, snapshot.agents]);
+  const engineeringTarget = engineeringBody;
+  engineeringTarget.append(el("p", item.id, "paths"));
+  if (item.execution?.policy_id) engineeringTarget.append(el("p", "工程授权 · " + item.execution.policy_id, "paths"));
+  if (item.execution?.receipt_uri) engineeringTarget.append(el("p", "执行事实 · " + item.execution.receipt_uri, "paths"));
   if (item.blocker)
-    engineering.append(el("p", "原始阻塞原因 · " + humanizeBlockingText(item.blocker), "blocker"));
+    engineeringTarget.append(el("p", "原始阻塞原因 · " + humanizeBlockingText(item.blocker), "blocker"));
   if (taskGroup(item) === "blocked" && item.next_action)
-    engineering.append(el("p", "原始下一步 · " + humanizeBlockingText(item.next_action), "muted"));
+    engineeringTarget.append(el("p", "原始下一步 · " + humanizeBlockingText(item.next_action), "muted"));
   if (interruptedExecution(item) && !item.execution)
-    dialog.append(el("p", `${interruptedExecutionReason} 当前交付检查点：${item.status}。`));
+    overview.append(el("p", `${interruptedExecutionReason} 当前交付检查点：${label(item.status)}。`));
   if (waitingExecutionStep(item))
-    dialog.append(el("p", `当前角色已暂停，交付检查点保留在${label(item.status)}。`));
+    overview.append(el("p", `当前角色已暂停，交付检查点保留在${label(item.status)}。`));
   if (item.candidate_revision)
-    engineering.append(el("p", "候选版本 · " + item.candidate_revision, "paths"));
+    engineeringTarget.append(el("p", "候选版本 · " + item.candidate_revision, "paths"));
   if (item.candidate_branch)
-    engineering.append(el("p", "候选分支 · " + item.candidate_branch, "paths"));
+    engineeringTarget.append(el("p", "候选分支 · " + item.candidate_branch, "paths"));
   if (item.role_queue?.length) {
-    engineering.append(el("h2", "角色执行队列"));
+    engineeringTarget.append(el("h2", "角色执行队列"));
     for (const step of item.role_queue) {
       const lease = {
         LEASE_VALID: "租约有效",
@@ -7697,52 +7822,63 @@ function buildDetail(panel = document.getElementById("detail")) {
       const status = step.status === "CLOSED" ? "本次执行已结束"
         : interruptedStep(step)
           ? "执行中断" : label(step.status);
-      engineering.append(el("p", `${label(step.role)} · 第 ${step.attempt} 次 · ${status} · ${lease}`));
+      engineeringTarget.append(el("p", `${label(step.role)} · 第 ${step.attempt} 次 · ${status} · ${lease}`));
       if (step.heartbeat_at)
-        engineering.append(el("p", "最近心跳 · " + time(step.heartbeat_at), "muted"));
+        engineeringTarget.append(el("p", "最近心跳 · " + time(step.heartbeat_at), "muted"));
       if (step.wait_reason?.startsWith("KNOWLEDGE_GAP:"))
-        engineering.append(el("p", "等待补充知识，详情见需求的阻塞信息。", "muted"));
+        engineeringTarget.append(el("p", "等待补充知识，详情见需求的阻塞信息。", "muted"));
     }
   }
-  dialog.append(engineering);
-  dialog.append(el("h2", "成员与分配模型"));
+  engineeringTarget.append(el("h2", "成员与分配模型"));
   for (const a of item.assignments)
-    dialog.append(
+    engineeringTarget.append(
       el(
         "p",
         `${snapshot.agents.find((x) => x.id === a.agent_id)?.name || a.agent_id} · ${label(a.role)} · ${a.planned_provider} / ${a.planned_model}${a.current_stage ? " · 当前阶段" : ""}`,
       ),
     );
   const history = item.execution_history?.length ? item.execution_history : item.timeline;
-  dialog.append(el("h2", "执行记录（完整历史）"));
-  dialog.append(el("p", `共 ${history.length} 条记录。历史轮次完整保留，不代表当前状态。`, "muted"));
-  engineering.append(el("p", "当前 Task · " + (item.task_id || item.id), "paths"));
+  const feedback = taskFeedbackSection(history, item.task_id || item.id);
+  if (feedback) dialog.append(feedback);
+  const records = taskReadingFold(`执行记录（完整历史） · ${history.length} 条`, "task-history", true);
+  records.append(viewBlock(el("p", `共 ${history.length} 条记录。历史轮次完整保留，不代表当前状态。`, "muted"), "task-history-count", history.length));
+  engineeringTarget.append(el("p", "当前 Task · " + (item.task_id || item.id), "paths"));
   if (item.history_task_ids?.length > 1)
-    engineering.append(el("p", "关联 Task · " + item.history_task_ids.join(" → "), "paths"));
-  const list = el("ol", undefined, "execution-history");
-  for (const entry of history) appendExecutionEntry(list, entry, item.task_id);
+    engineeringTarget.append(el("p", "关联 Task · " + item.history_task_ids.join(" → "), "paths"));
+  const list = viewGroup(el("ol", undefined, "execution-history"), "task-history-list");
+  for (const entry of history) appendExecutionEntry(list, entry, item.task_id || item.id);
   if (!history.length) list.append(el("li", "暂无已保存的执行记录。", "muted"));
-  dialog.append(list);
-  dialog.append(el("h2", "已完成的模型调用"));
-  dialog.append(roleExecutionActivity(item));
+  records.append(list);
+  dialog.append(records);
+  const reports = taskReadingFold(`产物与报告 · ${item.documents.length} 份`, "task-documents", true);
+  documentList(reports, item.documents);
+  dialog.append(reports);
+  const calls = taskReadingFold(`已完成的模型调用 · ${item.runs.length} 次`, "task-model-calls");
+  const callList = viewGroup(el("div", undefined, "task-model-call-list"), "task-model-call-list");
   if (!item.runs.length)
-    dialog.append(
+    callList.append(
       el("p", "暂无已提交调用记录；进行中的调用完成后才会出现。", "muted"),
     );
   for (const run of item.runs) {
-    dialog.append(
+    const card = viewBlock(el("article", undefined, "task-model-call-card"),
+      `task-run:${run.run_id}:${run.source_uri}`, run);
+    card.append(
       el(
         "p",
         `${label(run.role)} · ${run.provider} / ${run.model} · ${recordedModelConnectionLabel(run)} · 第 ${run.route_index} 路 · ${label(run.outcome)} · ${(run.duration_ms / 1000).toFixed(1)} 秒`,
       ),
     );
-    if (run.error_code) dialog.append(el("div", run.error_code, "blocker"));
-    dialog.append(
+    if (run.error_code) card.append(el("div", humanizeBlockingText(run.error_code), "blocker"),
+      el("p", "原因代码 · " + run.error_code, "paths"));
+    card.append(
       el("div", time(run.completed_at) + " · " + run.source_uri, "paths"),
     );
+    callList.append(card);
   }
-  dialog.append(el("h2", "产物与报告"));
-  documentList(dialog, item.documents);
+  calls.append(callList);
+  engineering.append(engineeringBody);
+  engineering.classList.add("task-detail-section");
+  dialog.append(calls, engineering);
   panel.append(dialog);
 }
 function render({ preserveComposer = false, incremental = false } = {}) {

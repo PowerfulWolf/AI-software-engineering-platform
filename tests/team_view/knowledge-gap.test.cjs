@@ -578,7 +578,7 @@ test("opening a stale pending entry echoes the saved answer and immediately conf
   assert.match(css, /\.knowledge-gap-answer\s*\{[^}]*white-space:\s*pre-wrap/);
   assert.equal(all(h.detail()).find(n => n.className === "knowledge-gap-content").hidden, false);
   assert.equal(all(h.detail()).filter(n => n.tag === "form" || n.tag === "textarea").length, 0);
-  assert.ok(all(h.detail()).some(n => n.tag === "h2" && n.textContent === "已确认的知识"));
+  assert.ok(all(h.detail()).some(n => n.tag === "h3" && n.textContent === "已确认的知识"));
   assert.match(text(h.detail()), /已确认的知识 · 待继续/);
   assert.doesNotMatch(text(h.detail()), /补充待确认的信息|查看待确认的知识|需要你的确认/);
   await findButton(h, "收起知识详情").events.click();

@@ -41,6 +41,32 @@
 | 基线保留草稿发生冲突 | 显式提出 Coder 适配完整旧补丁的新计划，不在旧批准下改变输入方式 |
 | 旧基线 checkpoint / Task revision / plan | 旧控件拒提交；QA/Review 不展示 Coder 分支更新入口 |
 | 原生验证准备 NOT_STARTED / FINISHED / UNCERTAIN | 只展示服务许可的不同处理方式，不把准备完成当作验收通过 |
+| Task 心跳更新 / 新增历史 | 历史行、报告、模型记录保持同一 DOM；选区、展开和滚动保留 |
+| Task 暂停阅读 / 异步操作完成 | 后台快照继续读取，正文保持；默认 renderDetail 不能绕过暂停 |
+| Task 恢复 / Team、页面、Project 或实体变化 / 删除 | 恢复最新事实或解除暂停，不能冻结其他作用域 |
+| Requirement 四章 / 混合文档名称 | 仅四个主标题，独立边框与留白；文档同级，历史有明确归属 |
+| Requirement 文档选区期间轮询 | 章节父容器也 keyed，正文/选区保留；过期审批仍必须更新 |
+
+需求详情的四章固定为“当前进展”“产物与交付”“完整交付记录”“工程参考”。
+章内只使用副标题/同级折叠项；当前操作不能放进历史或工程参考。顶部章节导航仅滚动。
+Task 可点击“暂停详情更新”稳定阅读，出现新进展提示后点击“更新并恢复实时”；
+此开关不暂停后台执行或 Requirement 审批事实。文档正文优先，来源/摘要放在内层折叠。
+详情只有一个主要垂直滚动容器，完整历史和长报告不再在内部限高裁剪。
+
+本次改造增量验证可使用：
+
+```sh
+node --test tests/team_view/ui.test.cjs tests/team_view/engineering-wait.test.cjs \
+  tests/team_view/product-execution.test.cjs tests/team_view/operation-progress.test.cjs \
+  tests/team_view/delivery-status.test.cjs tests/team_view/knowledge-gap.test.cjs
+NODE_PATH=/path/to/node_modules node --test tests/team_view/browser/task-detail-reading.test.cjs \
+  tests/team_view/browser/requirement-detail.test.cjs tests/team_view/browser/polling-state.test.cjs \
+  tests/team_view/browser/execution-history.test.cjs tests/team_view/browser/engineering-wait.test.cjs \
+  tests/team_view/browser/product-execution.test.cjs tests/team_view/browser/interactions.test.cjs \
+  tests/team_view/browser/async-boundaries.test.cjs tests/team_view/browser/historical-child.test.cjs
+```
+
+存量不改库：刷新浏览器加载新资产即可；回滚资产并刷新，不改历史或审批，不需重启角色执行。
 
 ## 验证命令
 

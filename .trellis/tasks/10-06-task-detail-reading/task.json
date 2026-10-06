@@ -1,0 +1,9 @@
+{
+  "id": "task-detail-reading-20261006",
+  "title": "需求与任务详情信息层级及稳定阅读",
+  "status": "completed",
+  "phase": "complete",
+  "created_at": "2026-10-06",
+  "owner": "codex",
+  "constraints": ["增量验证", "仅前端展示", "不代用户执行交付或审批"]
+}

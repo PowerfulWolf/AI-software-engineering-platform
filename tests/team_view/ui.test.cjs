@@ -37,7 +37,9 @@ class Element {
   getAttribute(key) { return this.attributes[key] ?? null; }
   querySelector(selector) {
     const name = selector.startsWith(".") ? selector.slice(1) : null;
-    return name ? descend(this).slice(1).find(node => node.className.split(/\s+/).includes(name)) || null : null;
+    return descend(this).slice(1).find(node => name
+      ? node.className.split(/\s+/).includes(name)
+      : node.tag === selector.toLowerCase()) || null;
   }
   remove() { if (this.parentElement) this.parentElement.children = this.parentElement.children.filter(node => node !== this); }
   removeAttribute(key) {
@@ -158,25 +160,10 @@ test("long blocker diagnostics stay inside the detail boundary", () => {
   );
 });
 
-test("Requirement detail uses one heading hierarchy and section rhythm", () => {
+test("Product discussion does not add empty feedback spacing", () => {
   const styles = fs.readFileSync(
     path.join(__dirname, "../../src/ai_software_engineer/team_view/style.css"),
     "utf8",
-  );
-  assert.match(
-    styles,
-    /\.request-detail-panel\s*\{[^}]*--detail-section-space:\s*14px;[^}]*padding:\s*16px;/s,
-    "the Requirement detail panel must define one shared section spacing token",
-  );
-  assert.match(
-    styles,
-    /\.detail-section\s*\{[^}]*margin:\s*0;[^}]*padding:\s*var\(--detail-section-space\) 0;[^}]*border-top:\s*1px solid var\(--line\);/s,
-    "every Requirement module must use the shared divider rhythm",
-  );
-  assert.match(
-    styles,
-    /\.request-detail-panel > \.detail-section h2\s*\{[^}]*font-size:\s*1rem;[^}]*line-height:\s*1\.4;/s,
-    "all Requirement module headings must have the same typography",
   );
   assert.match(
     styles,
@@ -2770,13 +2757,16 @@ test("team, multi-directory requests, detail, refresh preservation and stale err
   await interval.fn();
   vm.runInContext('showDetail("request","r1")', context);
   const detailOverview = descend(get("detail")).find(
-    (node) => node.className === "request-detail-overview",
+    (node) => node.className === "request-detail-masthead",
   );
   assert.ok(detailOverview, "Requirement identity is grouped into a stable overview");
   assert.equal(
-    descend(detailOverview).find((node) => node.tag === "h2")?.textContent,
+    descend(detailOverview).find((node) => node.className === "detail-panel-heading")?.textContent,
     "需求详情",
   );
+  const chapters = get("detail").children.filter(node => node.className === "request-chapter");
+  assert.deepEqual(chapters.map(node => descend(node.children[0]).find(child => child.tag === "h2").textContent),
+    ["当前进展", "产物与交付", "完整交付记录", "工程参考"]);
   const productDialogue = descend(get("detail")).find(
     (node) => node.className === "detail-section product-dialogue",
   );
