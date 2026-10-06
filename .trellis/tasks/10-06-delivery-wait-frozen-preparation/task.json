@@ -1,0 +1,10 @@
+{
+  "id": "delivery-wait-frozen-preparation-20261006",
+  "title": "工程等待调查使用原批准准备事实",
+  "status": "completed",
+  "phase": "complete",
+  "completed_at": "2026-10-06",
+  "owner": "codex",
+  "created_at": "2026-10-06",
+  "constraints": ["只跑增量测试", "不代用户调查、审批或继续交付", "不修改存量Task、批准或失败Operation"]
+}

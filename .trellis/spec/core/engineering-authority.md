@@ -28,6 +28,9 @@ TeamHost.inspect_delivery_wait(command: InspectDeliveryWait, *,
                                project_id: str, delivery_id: str) -> DeliveryWaitInvestigation
 TeamHost.resolve_delivery_wait(command: ResolveDeliveryWait, *,
                                project_id: str, delivery_id: str) -> DeliveryResolution
+ProductionProjectDeliveryBackend.inspect_delivery_wait_prerequisites(
+    task: Task, step: QueuedRoleStep,
+    checkpoint: ProjectDeliveryCheckpoint) -> DeliveryPreflightReceipt
 MySqlRoleQueue.resolve_wait(resolution: DeliveryResolution) -> QueuedWorkItem
 ```
 
@@ -65,6 +68,13 @@ Product 职责，工程状态只读仍可使用；不能以一次后台恢复绕
 - 非终态工程等待来自 `DeliveryDisposition`。调查命令绑定 work item、disposition 摘要、
   Task intent、source revision、checkpoint sequence；Host 同时核验 Project Requirement 的
   当前 native 子 Task 和 Repository 注册事实，防止跨 Project 或 Requirement 消费。
+- 工程调查的生产 prerequisite collector 必须只读重开 checkpoint 的原 sealed preparation、
+  profile、runtime binding 与 compiled spec，校验完整身份/摘要；读取原 dispatch 的权限与
+  当前 accepted Plan，以 `step.boundary.source_revision` 检查当前真实注册 executor 前提。
+  若已有 execution-baseline binding，仍须校验最新 binding 的完整冻结 Task intent。
+  主 checkout 或原生规范升级不能让调查重新 prepare、替换旧批准输入，或在环境检查前误报
+  preparation drift。缺失、篡改或不唯一的原记录仍拒绝，禁止 fallback 当前 prepare。
+  通用执行 `_facts_for_checkpoint` 的当前准备漂移守卫不变；新代码基线和新规范仍需独立授权。
 - 调查取得 manager-owned Task process lock，再读取 exact invocation start/outcome、可信
   continuation receipt、停止进程组及完整 Git/inventory。租约到期不等于进程停止；未知
   调用不能退款、复用旧 Run 或靠产品勾选一个布尔值变成安全。
@@ -161,6 +171,8 @@ Product 职责，工程状态只读仍可使用；不能以一次后台恢复绕
 
 | 输入/事实 | 结果 |
 |---|---|
+| 首次preflight等待后主checkout/原生规范升级 | 调查原批准source与sealed上下文，检查真实当前前提；不rebase或调用模型 |
+| 调查缺失/篡改sealed preparation、stale source或baseline intent | 拒绝，保持原Task/等待，不制造新批准或恢复proof |
 | 已改执行输入、无 accepted implementation | 重建 candidate=None，输入 SHA 不冒充候选 |
 | implementation已接纳、candidate checkpoint尚未写入 | 按accepted报告保留真实candidate和Artifact引用 |
 | 原candidate_ready存在、对应implementation已由基线废弃 | 原记录保留，candidate=None；新报告存在则只保留新candidate |
@@ -205,6 +217,8 @@ tests/manager/test_engineering_authority.py
 tests/manager/test_native_product_authority.py
 tests/manager/test_terminal_candidate_reconstruction.py
 tests/manager/test_delivery_wait.py
+tests/manager/test_production_execution_baseline.py
+tests/manager/test_sealed_preparation.py
 tests/recovery/test_engineering_verification.py
 tests/work_queue/test_invocation_journal.py
 tests/work_queue/test_wait_resolution_mysql.py
@@ -213,7 +227,21 @@ tests/team_view/browser/engineering-wait.test.cjs
 tests/team_view/test_accepted_artifact_history.py
 ```
 
+工程调查 frozen-preparation 回归通过公共 `TeamHost.inspect_delivery_wait` 复现未调用 Coder 的
+preflight 等待：升级主分支并新增 AGENTS 后，调查必须封存原 source 的真实 WAIT receipt，
+保持 Task/events/revision、queue、checkpoint 和原批准记录不变；stale expected source 拒绝。
+生产 backend 的缺失/损坏 sealed preparation 测试必须拒绝且不重建准备或调查 proof；已有
+binding 时修改 Task intent 必须在 discovery 前拒绝。调查与更新原分支基线的授权不能混用。
+
+Wrong：调查先 `prepare(当前主checkout)` 并要求旧准备摘要一致。
+Correct：读取精确原 sealed 上下文、校验当前 binding，再按 queued source 检查当前 executor。
+
 ## 存量数据处置 / Rollback
+
+2026-10-06 调查 preparation 漂移修复不需要改库。当前原 K1 的 FAILED 调查 Operation 保留，
+它未产生可用 proof，不能改成成功或直接解除等待。服务装载后由用户在同一需求重新调查，
+只有新 proof 提供精确可用的处理方式才继续。前提缺项先由工程人员处理后重新调查；含新原生
+规范的最新 main 仍不是原批准输入，不由环境调查自动更新或批准。
 
 不回写旧 Task policy、人工批准或终态。旧记录 bytes/hash 保持兼容；新 schema 字段 absent
 排除序列化。已删除的 K1 维持 tombstone，不重建、不触发业务执行。旧终态只能走已有显式

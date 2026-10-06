@@ -595,6 +595,14 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
         assert DeliveryProofMissing.OUTCOME_REJECTED in proof.missing
         assert not proof.permitted_resolutions
         with MySqlTaskRepository(mysql_dsn) as current_repository:
+            investigation_task = current_repository.get(frozen_task.id)
+        with pytest.raises(ValueError, match="baseline binding differs"):
+            host._runtime("project_test").backend.inspect_delivery_wait_prerequisites(
+                investigation_task.model_copy(update={"title": "unapproved intent"}),
+                host.work_queue.step(waiting.id),
+                delivered,
+            )
+        with MySqlTaskRepository(mysql_dsn) as current_repository:
             retained = current_repository.get(frozen_task.id)
         assert retained.base_ref == approved_source and retained.status is TaskStatus.IMPLEMENTING
         assert _git_output("branch", "--show-current", cwd=original_worktree) == original_branch
@@ -683,10 +691,15 @@ def test_public_baseline_updates_original_workspace_then_completes_independent_d
 
 
 @pytest.mark.mysql
+@pytest.mark.parametrize(
+    "scenario",
+    ["baseline_updates", "changed_checkout", "missing_preparation", "corrupt_preparation"],
+)
 def test_public_repeated_preflight_waits_keep_exact_historical_sources_without_model_calls(
     tmp_path: Path,
     mysql_dsn: str,
     monkeypatch: pytest.MonkeyPatch,
+    scenario: str,
 ) -> None:
     repository = tmp_path / "target"
     repository.mkdir()
@@ -794,6 +807,101 @@ def test_public_repeated_preflight_waits_keep_exact_historical_sources_without_m
     )
     assert original_item.status is WorkItemStatus.WAITING_DEPENDENCY
     sidecar = host.projects()[0].root / "repositories" / checkpoint.repository_id
+    if scenario != "baseline_updates":
+        from ai_software_engineer.domain.delivery_resolution import (
+            DeliveryProofMissing,
+            InspectDeliveryWait,
+        )
+        from ai_software_engineer.manager.delivery_preflight import DeliveryPreflightReceipt
+        from ai_software_engineer.manager.delivery_wait import DeliveryWaitRejected
+
+        assert original_item.wait_disposition is not None
+        facts = original_item.wait_disposition.facts
+        command = InspectDeliveryWait(
+            work_item_id=original_item.id,
+            expected_disposition_sha256=original_item.wait_disposition.disposition_sha256,
+            expected_task_intent_sha256=facts.task_intent_sha256,
+            expected_source_revision=facts.source_revision,
+            expected_checkpoint_sequence=facts.checkpoint_sequence,
+        )
+        with closing(MySqlTaskRepository(mysql_dsn)) as tasks:
+            original_task = tasks.get(checkpoint.task_id)
+            original_events = tasks.list_events(original_task.id)
+            original_revision = tasks.current_revision(original_task.id)
+        frozen_records = {path: path.read_bytes() for path in (sidecar / "policy").rglob("*.json")}
+        (repository / "hello.txt").write_text("upgraded platform\n")
+        (repository / "AGENTS.md").write_text("New native rules need separate authorization.\n")
+        _git("add", "hello.txt", "AGENTS.md", cwd=repository)
+        _git("commit", "-m", "platform and native rules upgrade", cwd=repository)
+        current_head = _git_output("rev-parse", "HEAD", cwd=repository)
+        assert current_head != approved_source
+        from ai_software_engineer.manager.store import (
+            FileProjectPreparationStore,
+            ProjectPreparationCorruption,
+        )
+
+        (preparation_path,) = tuple(
+            path
+            for path in (sidecar / "policy").rglob(
+                f"project-preparation-{checkpoint.repository_id}.json"
+            )
+            if FileProjectPreparationStore(path.parent, read_only=True)
+            .get(checkpoint.repository_id)
+            .preparation_sha256
+            == checkpoint.preparation_sha256
+        )
+        if scenario == "missing_preparation":
+            preparation_path.unlink()
+        elif scenario == "corrupt_preparation":
+            preparation_path.write_text("{}")
+        if scenario == "changed_checkout":
+            investigation = host.inspect_delivery_wait(
+                command, project_id="project_test", delivery_id=checkpoint.delivery_id
+            )
+            investigation.validate_integrity()
+            assert investigation.source_revision == approved_source
+            assert DeliveryProofMissing.PREREQUISITES_UNVERIFIED in investigation.missing
+            assert not investigation.permitted_resolutions
+            assert investigation.prerequisite_facts_sha256 is not None
+            assert investigation.prerequisite_receipt_sha256 is not None
+            records = KnowledgeRecordStore(sidecar / "state" / "delivery-waits", read_only=True)
+            prerequisites = records.get(
+                "wait-prerequisites",
+                investigation.prerequisite_receipt_sha256,
+                DeliveryPreflightReceipt,
+            )
+            assert prerequisites.source_revision == approved_source
+            assert prerequisites.task_id == original_task.id
+            assert prerequisites.status == "WAIT_ENGINEERING"
+            assert all(path.read_bytes() == body for path, body in frozen_records.items())
+            with pytest.raises(DeliveryWaitRejected):
+                host.inspect_delivery_wait(
+                    command.model_copy(update={"expected_source_revision": current_head}),
+                    project_id="project_test",
+                    delivery_id=checkpoint.delivery_id,
+                )
+        else:
+            with pytest.raises((ValueError, ProjectPreparationCorruption)):
+                host._runtime("project_test").backend.inspect_delivery_wait_prerequisites(
+                    original_task, host.work_queue.step(original_item.id), checkpoint
+                )
+            assert not tuple(
+                (sidecar / "state" / "delivery-waits").glob("wait-investigations-*.json")
+            )
+            if scenario == "missing_preparation":
+                assert not preparation_path.exists()
+            else:
+                assert preparation_path.read_text() == "{}"
+        with closing(MySqlTaskRepository(mysql_dsn)) as tasks:
+            assert tasks.get(original_task.id) == original_task
+            assert tasks.list_events(original_task.id) == original_events
+            assert tasks.current_revision(original_task.id) == original_revision
+        assert host.work_queue.get(original_item.id) == original_item
+        if scenario == "changed_checkout":
+            assert entry.status(checkpoint.delivery_id).checkpoint == checkpoint
+        assert _git_output("rev-parse", "HEAD", cwd=repository) == current_head
+        assert not invoked
+        return
     proof_records = KnowledgeRecordStore(
         sidecar / "state/execution-baselines" / checkpoint.task_id,
         read_only=True,

@@ -1824,13 +1824,24 @@ class ProductionProjectDeliveryBackend:
         checkpoint: ProjectDeliveryCheckpoint,
     ) -> DeliveryPreflightReceipt:
         """Recheck current prerequisites using the same production executor registration."""
+        from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
         from ai_software_engineer.orchestration.retry import _latest
         from ai_software_engineer.work_queue.worker import (
             AcceptedArtifactStore,
             WorkerExecutionGuard,
         )
 
-        facts = self._facts_for_checkpoint(checkpoint)
+        # Investigation checks today's executor against the approved queued
+        # input. A platform/main checkout upgrade must not replace that input
+        # or prevent investigation before any prerequisite is inspected.
+        facts = self._sealed_facts_for_checkpoint(checkpoint)
+        baseline_root = facts.workspace.directory("state") / "execution-baselines" / task.id
+        if baseline_root.is_dir():
+            bindings = FileExecutionBaselineStore(baseline_root, read_only=True).bindings_for_task(
+                task.id
+            )
+            if bindings:
+                bindings[-1].require_task(task)
         authority = MySqlDispatchAuthority(
             self._dsn,
             request_revisions=facts.product,
