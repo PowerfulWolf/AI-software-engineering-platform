@@ -114,6 +114,9 @@ requestChapterNavigation(request)     // read-only scroll controls
   while the status remains visible on its right without shrinking or horizontal overflow.
   The status block signature includes both `deliveryPhase(item)` and `requestNodeExecution(item)`;
   unchanged RUNNING facts cannot retain an old phase label after the Requirement advances.
+  Requirement masthead groups its context label/management controls and title/status inside one
+  card. Context label and controls share compact typography; title/status remain adjacent rather
+  than filling opposing ends. Scoped close styling must not override primary/danger action colors.
 - The chapter, fold and list ancestors must all be `viewGroup` for descendant keys to preserve DOM.
   `appendExecutionEntry` binds `{entry, currentTaskId}`; Task model rows bind full `run` facts and
   `run_id/source_uri`. A heartbeat or added history row cannot rebuild unchanged sealed text.

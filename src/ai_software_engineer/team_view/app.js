@@ -7647,7 +7647,7 @@ function buildDetail(panel = document.getElementById("detail")) {
         selected = null;
         render();
       },
-      "",
+      selected.kind === "request" ? "detail-close-control" : "",
     ),
   );
   top.append(
