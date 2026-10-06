@@ -1787,10 +1787,12 @@ class ProductionProjectDeliveryBackend:
         from ai_software_engineer.manager.delivery_preflight import inspect_delivery_prerequisites
 
         discovery_failure = None
+        discovery_detail = None
         try:
             capabilities = registry.discover(task, plan, registry.scope, source_revision=source)
         except NativeVerificationWaiting as error:
             discovery_failure = error.reason
+            discovery_detail = error.detail_code
             capabilities = ()
         if plan.content.verification_requirements is None:
             raise ValueError(
@@ -1813,6 +1815,7 @@ class ProductionProjectDeliveryBackend:
             environment=self._environment,
             controlled_capabilities=capabilities,
             controlled_discovery_failure=discovery_failure,
+            controlled_discovery_detail=discovery_detail,
             checked_at=self._clock(),
             source_revision=source,
         )

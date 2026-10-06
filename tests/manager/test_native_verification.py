@@ -45,6 +45,7 @@ from ai_software_engineer.domain.execution_window import PlannedVerificationRequ
 from ai_software_engineer.domain.native_verification import (
     NativeRoleVerificationAdmission,
     NativeRoleVerificationPlan,
+    NativeVerificationCapabilityDetail,
     NativeVerificationWaiting,
     NativeVerificationWaitReason,
 )
@@ -67,6 +68,7 @@ from ai_software_engineer.manager.python_verification import (
     PythonMysqlHostPrerequisites,
     PythonMysqlSandboxCapability,
 )
+from ai_software_engineer.manager.python_verification_discovery import PythonMysqlDiscoveryError
 from ai_software_engineer.recovery.python_mysql_records import MysqlResourceIntent
 from ai_software_engineer.recovery.verification_records import VerificationExecutionRecord
 from ai_software_engineer.work_queue.models import QueueClaim, QueuedWorkItem
@@ -793,6 +795,31 @@ def test_prepared_receipt_rechecks_facts_without_rediscovery_or_reexecution(
         ) == provider.evidence_for(fixture.request, fixture.root, fixture.guard)
         assert fixture.facts.reads > before_reads
     assert len(resources) == len(executions) == 1
+
+
+def test_evidence_revalidation_preserves_host_discovery_detail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = _fixture(tmp_path)
+    _fake_ports(monkeypatch, fixture)
+    fixture.registry.prepare_verifier(
+        request=fixture.request, workspace_root=fixture.root, guard=fixture.guard
+    )
+    fixture.registry._prepared.clear()
+    provider = fixture.registry.provider_for(
+        workspace_root=fixture.root, guard=fixture.guard
+    )
+
+    def unavailable(*args: object, **kwargs: object) -> Never:
+        raise PythonMysqlDiscoveryError(
+            NativeVerificationCapabilityDetail.DOCKER_DAEMON_UNAVAILABLE
+        )
+
+    monkeypatch.setattr(_PREFIX + "discover_python_mysql_capability", unavailable)
+    with pytest.raises(NativeVerificationWaiting) as failure:
+        provider.evidence_for(fixture.request, fixture.root, fixture.guard)
+    assert failure.value.reason is NativeVerificationWaitReason.CAPABILITY_UNAVAILABLE
+    assert failure.value.detail_code is NativeVerificationCapabilityDetail.DOCKER_DAEMON_UNAVAILABLE
 
 
 def test_ordinary_responses_plan_uses_original_tools_without_registered_command_execution(

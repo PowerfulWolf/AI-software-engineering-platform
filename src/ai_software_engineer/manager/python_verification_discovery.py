@@ -15,6 +15,7 @@ import tempfile
 from fnmatch import fnmatchcase
 from pathlib import Path
 
+from ai_software_engineer.domain.native_verification import NativeVerificationCapabilityDetail
 from ai_software_engineer.manager.python_verification import (
     PytestSelection,
     PythonMysqlHostPrerequisites,
@@ -35,6 +36,14 @@ _ENVIRONMENT = {
     "GIT_ALLOW_PROTOCOL": "",
     "GIT_TERMINAL_PROMPT": "0",
 }
+
+
+class PythonMysqlDiscoveryError(ValueError):
+    """Safe host-discovery category; never retains command output or credentials."""
+
+    def __init__(self, code: NativeVerificationCapabilityDetail) -> None:
+        self.code = code
+        super().__init__(code.value)
 
 
 def _file_sha256(path: Path) -> str:
@@ -126,7 +135,10 @@ def _binary(name: str) -> Path:
     found = shutil.which(name)
     if found is None:
         raise ValueError("required verification executable is unavailable")
-    return Path(found).resolve(strict=True)
+    try:
+        return Path(found).resolve(strict=True)
+    except RuntimeError as error:
+        raise ValueError("required verification executable is unavailable") from error
 
 
 def require_selected_candidate_files(
@@ -158,43 +170,112 @@ def discover_python_mysql_host_prerequisites(
     The exact final source/selector gate remains mandatory before QA/Review.
     """
     if platform.system() != "Darwin":
-        raise ValueError("Python/MySQL capability requires the validated macOS sandbox")
-    sandbox, docker = _binary(codex_executable), _binary(docker_executable)
+        raise PythonMysqlDiscoveryError(NativeVerificationCapabilityDetail.PLATFORM_UNSUPPORTED)
+    try:
+        sandbox = _binary(codex_executable)
+        sandbox_sha = _file_sha256(sandbox)
+    except (OSError, RuntimeError, ValueError):
+        raise PythonMysqlDiscoveryError(
+            NativeVerificationCapabilityDetail.CODEX_EXECUTABLE_UNAVAILABLE
+        ) from None
+    try:
+        docker = _binary(docker_executable)
+        docker_sha = _file_sha256(docker)
+    except (OSError, RuntimeError, ValueError):
+        raise PythonMysqlDiscoveryError(
+            NativeVerificationCapabilityDetail.DOCKER_EXECUTABLE_UNAVAILABLE
+        ) from None
     if docker_socket is None:
-        endpoint = _read_command(
-            (str(docker), "context", "inspect", "--format", "{{.Endpoints.docker.Host}}")
-        )
+        try:
+            endpoint = _read_command(
+                (str(docker), "context", "inspect", "--format", "{{.Endpoints.docker.Host}}")
+            )
+        except ValueError:
+            raise PythonMysqlDiscoveryError(
+                NativeVerificationCapabilityDetail.DOCKER_CONTEXT_UNAVAILABLE
+            ) from None
         if not endpoint.startswith("unix://"):
-            raise ValueError("verification requires a local Unix Docker daemon")
+            raise PythonMysqlDiscoveryError(
+                NativeVerificationCapabilityDetail.DOCKER_ENDPOINT_INVALID
+            )
         docker_socket = endpoint.removeprefix("unix://")
-    socket = Path(docker_socket).resolve(strict=True)
-    if not stat.S_ISSOCK(socket.stat().st_mode):
-        raise ValueError("verification Docker endpoint is not a local socket")
+    try:
+        socket = Path(docker_socket).resolve(strict=True)
+        if not stat.S_ISSOCK(socket.stat().st_mode):
+            raise ValueError
+    except (OSError, RuntimeError, ValueError):
+        raise PythonMysqlDiscoveryError(
+            NativeVerificationCapabilityDetail.DOCKER_SOCKET_UNAVAILABLE
+        ) from None
     with tempfile.TemporaryDirectory(prefix="ase-docker-discovery-") as directory:
         prefix = (str(docker), "--config", directory, "--host", f"unix://{socket}")
-        daemon = _read_command((*prefix, "info", "--format", "{{.ID}}"))
-        image = _read_command((*prefix, "image", "inspect", "--format", "{{.Id}}", mysql_image))
-    python = Path(sys.executable).resolve(strict=True)
-    runtime = Path(sys.base_prefix).resolve(strict=True)
-    dependencies = Path(sysconfig.get_path("purelib")).resolve(strict=True)
-    runner = Path(runner_file).resolve(strict=True)
-    return PythonMysqlHostPrerequisites(
-        sandbox_executable=str(sandbox),
-        sandbox_executable_sha256=_file_sha256(sandbox),
-        python_executable=str(python),
-        python_executable_sha256=_file_sha256(python),
-        python_runtime_root=str(runtime),
-        python_runtime_sha256=dependency_fingerprint(runtime),
-        dependency_root=str(dependencies),
-        dependency_sha256=dependency_fingerprint(dependencies),
-        runner_path=str(runner),
-        runner_sha256=_file_sha256(runner),
-        docker_executable=str(docker),
-        docker_executable_sha256=_file_sha256(docker),
-        docker_socket=str(socket),
-        docker_daemon_id=daemon,
-        mysql_image_id=image,
-    )
+        try:
+            daemon = _read_command((*prefix, "info", "--format", "{{.ID}}"))
+        except (OSError, RuntimeError, ValueError):
+            raise PythonMysqlDiscoveryError(
+                NativeVerificationCapabilityDetail.DOCKER_DAEMON_UNAVAILABLE
+            ) from None
+        if not daemon or len(daemon) > 256:
+            raise PythonMysqlDiscoveryError(
+                NativeVerificationCapabilityDetail.DOCKER_DAEMON_UNAVAILABLE
+            )
+        try:
+            image = _read_command((*prefix, "image", "inspect", "--format", "{{.Id}}", mysql_image))
+        except (OSError, RuntimeError, ValueError):
+            raise PythonMysqlDiscoveryError(
+                NativeVerificationCapabilityDetail.MYSQL_IMAGE_UNAVAILABLE
+            ) from None
+        if re.fullmatch(r"sha256:[a-f0-9]{64}", image) is None:
+            raise PythonMysqlDiscoveryError(
+                NativeVerificationCapabilityDetail.MYSQL_IMAGE_UNAVAILABLE
+            )
+    try:
+        python = Path(sys.executable).resolve(strict=True)
+        runtime = Path(sys.base_prefix).resolve(strict=True)
+        dependencies = Path(sysconfig.get_path("purelib")).resolve(strict=True)
+        python_sha = _file_sha256(python)
+    except (OSError, RuntimeError, ValueError):
+        raise PythonMysqlDiscoveryError(
+            NativeVerificationCapabilityDetail.PYTHON_RUNTIME_UNAVAILABLE
+        ) from None
+    try:
+        runner = Path(runner_file).resolve(strict=True)
+        if not runner.is_file():
+            raise ValueError
+        runner_sha = _file_sha256(runner)
+    except (OSError, RuntimeError, ValueError):
+        raise PythonMysqlDiscoveryError(
+            NativeVerificationCapabilityDetail.RUNNER_UNAVAILABLE
+        ) from None
+    try:
+        runtime_sha = dependency_fingerprint(runtime)
+        dependency_sha = dependency_fingerprint(dependencies)
+    except (OSError, RuntimeError, ValueError):
+        raise PythonMysqlDiscoveryError(
+            NativeVerificationCapabilityDetail.DEPENDENCY_FINGERPRINT_FAILED
+        ) from None
+    try:
+        return PythonMysqlHostPrerequisites(
+            sandbox_executable=str(sandbox),
+            sandbox_executable_sha256=sandbox_sha,
+            python_executable=str(python),
+            python_executable_sha256=python_sha,
+            python_runtime_root=str(runtime),
+            python_runtime_sha256=runtime_sha,
+            dependency_root=str(dependencies),
+            dependency_sha256=dependency_sha,
+            runner_path=str(runner),
+            runner_sha256=runner_sha,
+            docker_executable=str(docker),
+            docker_executable_sha256=docker_sha,
+            docker_socket=str(socket),
+            docker_daemon_id=daemon,
+            mysql_image_id=image,
+        )
+    except ValueError:
+        raise PythonMysqlDiscoveryError(
+            NativeVerificationCapabilityDetail.PYTHON_RUNTIME_UNAVAILABLE
+        ) from None
 
 
 def discover_python_mysql_capability(
@@ -210,7 +291,7 @@ def discover_python_mysql_capability(
 ) -> PythonMysqlSandboxCapability:
     """Bind current host prerequisites to exact regular candidate selections."""
     if platform.system() != "Darwin":
-        raise ValueError("Python/MySQL capability requires the validated macOS sandbox")
+        raise PythonMysqlDiscoveryError(NativeVerificationCapabilityDetail.PLATFORM_UNSUPPORTED)
     require_selected_candidate_files(repository, revision, selections)
     denied = candidate_denied_paths(repository, revision, denied_patterns)
     if any(selection.node_id.split("::", 1)[0] in denied for selection in selections):

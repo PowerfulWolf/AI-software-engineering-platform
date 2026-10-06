@@ -44,6 +44,7 @@ from ai_software_engineer.domain.enums import (
     TaskStatus,
     WorkItemStatus,
 )
+from ai_software_engineer.domain.native_verification import NativeVerificationCapabilityDetail
 from ai_software_engineer.domain.retry_policy import TRANSIENT_CODES, DeliveryRetryFailure
 from ai_software_engineer.domain.task import Task
 from ai_software_engineer.git import GitWorkspaceError, GitWorktreeManager
@@ -91,6 +92,45 @@ class DeliveryWaitQueue(Protocol):
 
 class DeliveryWaitRejected(ValueError):
     """Safe engineering diagnostic; no mutation of the waiting item or workspace."""
+
+
+_CAPABILITY_DETAIL_ACTIONS: dict[NativeVerificationCapabilityDetail, str] = {
+    NativeVerificationCapabilityDetail.PLATFORM_UNSUPPORTED: "服务主机不是受控 macOS 验证环境",
+    NativeVerificationCapabilityDetail.CODEX_EXECUTABLE_UNAVAILABLE: "找不到已配置的 Codex 执行器",
+    NativeVerificationCapabilityDetail.DOCKER_EXECUTABLE_UNAVAILABLE: "找不到 Docker 执行器",
+    NativeVerificationCapabilityDetail.DOCKER_CONTEXT_UNAVAILABLE: "无法读取本地 Docker 上下文",
+    NativeVerificationCapabilityDetail.DOCKER_ENDPOINT_INVALID: "Docker 上下文不是本地 Unix 套接字",
+    NativeVerificationCapabilityDetail.DOCKER_SOCKET_UNAVAILABLE: (
+        "Docker Unix socket 不存在或类型不正确"
+    ),
+    NativeVerificationCapabilityDetail.DOCKER_DAEMON_UNAVAILABLE: "Docker 服务进程当前不可用",
+    NativeVerificationCapabilityDetail.MYSQL_IMAGE_UNAVAILABLE: "本地没有已批准的 MySQL 8.0 镜像",
+    NativeVerificationCapabilityDetail.PYTHON_RUNTIME_UNAVAILABLE: (
+        "受控 Python 运行时或验证执行器不可用"
+    ),
+    NativeVerificationCapabilityDetail.DEPENDENCY_FINGERPRINT_FAILED: (
+        "Python 运行时依赖无法完成完整指纹校验"
+    ),
+    NativeVerificationCapabilityDetail.RUNNER_UNAVAILABLE: "受控验证 runner 不可用",
+}
+
+
+def _preflight_detail_action(
+    prerequisites: DeliveryPreflightReceipt | None,
+) -> str | None:
+    if prerequisites is None:
+        return None
+    details = tuple(
+        dict.fromkeys(
+            _CAPABILITY_DETAIL_ACTIONS[item.native_wait_detail]
+            for item in prerequisites.observations
+            if item.native_wait_detail is not None
+            and item.native_wait_detail in _CAPABILITY_DETAIL_ACTIONS
+        )
+    )
+    if not details:
+        return None
+    return "执行前提尚未满足: " + "; ".join(details) + "。工程负责人处理后请重新调查工程等待。"
 
 
 class DeliveryNativeExecutionUncertain(DeliveryWaitRejected):
@@ -870,6 +910,7 @@ class DeliveryWaitService:
         verifier_preparation: VerifierPreparationEvidence | None = None,
     ) -> DeliveryWaitInvestigation:
         assert item.wait_disposition is not None
+        preflight_detail_action = _preflight_detail_action(prerequisites)
         proof = DeliveryWaitInvestigation(
             task_id=task.id,
             work_item_id=item.id,
@@ -923,6 +964,8 @@ class DeliveryWaitService:
                 "修复产物或执行器契约; 核验真实停机与完整合法现场后, 按剩余工作额度重新调查。"
                 "原产出、角色结论和历史保留。"
                 if DeliveryProofMissing.OUTCOME_REJECTED in missing
+                else preflight_detail_action
+                if preflight_detail_action is not None
                 else "工程证明尚不完整, 等待和现场保留; 查看缺项, "
                 "由受控执行器补齐原调用停机、完整 checkpoint 或当前前提记录后重新调查"
             ),

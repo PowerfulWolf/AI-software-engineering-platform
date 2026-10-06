@@ -12,7 +12,8 @@ select_coder_work_slice(task, plan, *, attempt, source_revision, progress) -> Co
 validate_coder_slice_output(work: CoderWorkSlice, artifact: Artifact) -> None
 JointDeliveryService(..., execution_window: PlanExecutionWindow | None = None)
 compile_joint_plan(checkpoint: JointCheckpoint, plan: JointExecutionPlan) -> JointExecutionPlan
-inspect_delivery_prerequisites(..., controlled_capabilities=(), source_revision=None) -> DeliveryPreflightReceipt
+inspect_delivery_prerequisites(..., controlled_capabilities=(), controlled_discovery_detail=None,
+                               source_revision=None) -> DeliveryPreflightReceipt
 RegisteredNativePythonVerifier.discover(task, plan, scope, source_revision=None) -> tuple[DiscoveredControlledCapability, ...]
 DispatchDeliveryAgentAdapter.prepare_verifier(request: AgentRequest) -> None
 ConfiguredDeliveryRouteAdapterFactory.prepare_verifier(*, request, route, binding) -> None
@@ -71,7 +72,11 @@ NativeVerificationWaitReason | None = None)` 接收注册执行器的 typed disc
 `WAIT_ENGINEERING + CONTROLLED_VERIFICATION_CAPABILITY_REQUIRED`，不能携带 provider 自由文本
 或附在 READY/其他原因上。未使用受控能力的普通 Responses 工具及已成功发现的精确能力不受
 无关注册 discovery failure 影响。字段为空时不进入 wire/hash，旧 receipt 保持原 digest。
-gate 的产品原因由枚举转换为具体中文；reason_code、原枚举值、hash 只保留在技术证据中。
+受控宿主发现还可封存 `native_wait_detail`，只能是版本化的安全分类（平台、Codex、Docker
+上下文/套接字/服务进程、MySQL 镜像、Python 运行时、依赖指纹或 runner），不得携带原始 stderr、
+绝对路径、DSN、密码、环境变量或 provider 自由文本。字段为空时不进入 wire/hash，旧 receipt
+保持原 digest。工程调查的 `next_action` 将去重后的分类映射成中文处理提示；reason_code、原枚举值、
+hash 只保留在技术证据中，不能把英文内部枚举直接展示给产品用户。
 
 ## 原角色内的受控 Python 验证
 

@@ -1,21 +1,214 @@
 """Fingerprint the actual trusted files; candidate selection discovery never imports tests."""
 
 import os
+import socket
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+from ai_software_engineer.domain.native_verification import NativeVerificationCapabilityDetail
 from ai_software_engineer.manager.python_verification import (
     PytestSelection,
     PythonMysqlHostPrerequisites,
 )
 from ai_software_engineer.manager.python_verification_discovery import (
+    PythonMysqlDiscoveryError,
     candidate_denied_paths,
     dependency_fingerprint,
+    discover_python_mysql_capability,
+    discover_python_mysql_host_prerequisites,
     require_selected_candidate_files,
 )
+
+
+def test_host_discovery_classifies_unsupported_platform_without_host_details() -> None:
+    with (
+        patch(
+            "ai_software_engineer.manager.python_verification_discovery.platform.system",
+            return_value="Linux",
+        ),
+        pytest.raises(PythonMysqlDiscoveryError) as caught,
+    ):
+        from ai_software_engineer.manager.python_verification_discovery import (
+            discover_python_mysql_host_prerequisites,
+        )
+
+        discover_python_mysql_host_prerequisites(codex_executable="codex")
+    assert caught.value.code is NativeVerificationCapabilityDetail.PLATFORM_UNSUPPORTED
+    assert str(caught.value) == NativeVerificationCapabilityDetail.PLATFORM_UNSUPPORTED.value
+
+
+def test_candidate_discovery_classifies_unsupported_platform_without_candidate_access(
+    tmp_path: Path,
+) -> None:
+    with (
+        patch(
+            "ai_software_engineer.manager.python_verification_discovery.platform.system",
+            return_value="Linux",
+        ),
+        pytest.raises(PythonMysqlDiscoveryError) as caught,
+    ):
+        discover_python_mysql_capability(
+            tmp_path,
+            "0" * 40,
+            (),
+            codex_executable="codex",
+        )
+    assert caught.value.code is NativeVerificationCapabilityDetail.PLATFORM_UNSUPPORTED
+
+
+def _host_discovery_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    codex = tmp_path / "codex"
+    docker = tmp_path / "docker"
+    codex.write_bytes(b"codex")
+    docker.write_bytes(b"docker")
+    monkeypatch.setattr(
+        "ai_software_engineer.manager.python_verification_discovery.platform.system",
+        lambda: "Darwin",
+    )
+    monkeypatch.setattr(
+        "ai_software_engineer.manager.python_verification_discovery._binary",
+        lambda name: codex if name == "codex" else docker,
+    )
+    monkeypatch.setattr(
+        "ai_software_engineer.manager.python_verification_discovery._file_sha256",
+        lambda path: "a" * 64,
+    )
+    return docker
+
+
+def _bound_unix_socket() -> tuple[socket.socket, Path]:
+    socket_path = Path("/tmp/ase-preflight-docker.sock")
+    socket_path.unlink(missing_ok=True)
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(socket_path))
+    return server, socket_path
+
+
+@pytest.mark.parametrize(
+    ("stage", "expected"),
+    [
+        ("codex", NativeVerificationCapabilityDetail.CODEX_EXECUTABLE_UNAVAILABLE),
+        ("docker", NativeVerificationCapabilityDetail.DOCKER_EXECUTABLE_UNAVAILABLE),
+        ("context", NativeVerificationCapabilityDetail.DOCKER_CONTEXT_UNAVAILABLE),
+        ("endpoint", NativeVerificationCapabilityDetail.DOCKER_ENDPOINT_INVALID),
+        ("socket", NativeVerificationCapabilityDetail.DOCKER_SOCKET_UNAVAILABLE),
+        ("daemon", NativeVerificationCapabilityDetail.DOCKER_DAEMON_UNAVAILABLE),
+        ("image", NativeVerificationCapabilityDetail.MYSQL_IMAGE_UNAVAILABLE),
+        ("python", NativeVerificationCapabilityDetail.PYTHON_RUNTIME_UNAVAILABLE),
+        ("runner", NativeVerificationCapabilityDetail.RUNNER_UNAVAILABLE),
+        ("dependencies", NativeVerificationCapabilityDetail.DEPENDENCY_FINGERPRINT_FAILED),
+    ],
+)
+def test_host_discovery_classifies_each_safe_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+    expected: NativeVerificationCapabilityDetail,
+) -> None:
+    _host_discovery_fixture(tmp_path, monkeypatch)
+    if stage == "codex":
+        monkeypatch.setattr(
+            "ai_software_engineer.manager.python_verification_discovery._binary",
+            lambda name: (_ for _ in ()).throw(ValueError("secret-sentinel")),
+        )
+    elif stage == "docker":
+        monkeypatch.setattr(
+            "ai_software_engineer.manager.python_verification_discovery._binary",
+            lambda name: (
+                tmp_path / "codex"
+                if name == "codex"
+                else (_ for _ in ()).throw(ValueError("secret-sentinel"))
+            ),
+        )
+    elif stage == "context":
+        monkeypatch.setattr(
+            "ai_software_engineer.manager.python_verification_discovery._read_command",
+            lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("secret-sentinel")),
+        )
+    elif stage == "endpoint":
+        monkeypatch.setattr(
+            "ai_software_engineer.manager.python_verification_discovery._read_command",
+            lambda *args, **kwargs: "tcp://remote",
+        )
+    elif stage == "socket":
+        docker_socket = tmp_path / "missing.sock"
+    else:
+        server, docker_socket = _bound_unix_socket()
+        calls = iter(
+            ("daemon-id", "invalid-image")
+            if stage == "image"
+            else ("daemon-id", "sha256:" + "0" * 64)
+        )
+        monkeypatch.setattr(
+            "ai_software_engineer.manager.python_verification_discovery._read_command",
+            (
+                lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("secret-sentinel"))
+                if stage == "daemon"
+                else next(calls)
+            ),
+        )
+        if stage == "python":
+            monkeypatch.setattr(
+                "ai_software_engineer.manager.python_verification_discovery.sys.executable",
+                str(tmp_path / "missing-python"),
+            )
+        elif stage == "runner":
+            monkeypatch.setattr(
+                "ai_software_engineer.manager.python_verification_discovery.runner_file",
+                str(tmp_path / "missing-runner"),
+            )
+        elif stage == "dependencies":
+            runner = tmp_path / "runner.py"
+            runner.write_text("runner\n")
+            monkeypatch.setattr(
+                "ai_software_engineer.manager.python_verification_discovery.runner_file",
+                str(runner),
+            )
+            monkeypatch.setattr(
+                "ai_software_engineer.manager.python_verification_discovery.dependency_fingerprint",
+                lambda root: (_ for _ in ()).throw(ValueError("secret-sentinel")),
+            )
+        try:
+            with pytest.raises(PythonMysqlDiscoveryError) as caught:
+                discover_python_mysql_host_prerequisites(
+                    codex_executable="codex", docker_socket=str(docker_socket)
+                )
+        finally:
+            server.close()
+            docker_socket.unlink(missing_ok=True)
+        assert caught.value.code is expected
+        assert "secret-sentinel" not in str(caught.value)
+        return
+    with pytest.raises(PythonMysqlDiscoveryError) as caught:
+        discover_python_mysql_host_prerequisites(
+            codex_executable="codex",
+            docker_socket=str(docker_socket) if stage == "socket" else None,
+        )
+    assert caught.value.code is expected
+    assert "secret-sentinel" not in str(caught.value)
+
+
+def test_host_discovery_rejects_malformed_daemon_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _host_discovery_fixture(tmp_path, monkeypatch)
+    server, docker_socket = _bound_unix_socket()
+    monkeypatch.setattr(
+        "ai_software_engineer.manager.python_verification_discovery._read_command",
+        lambda *args, **kwargs: "",
+    )
+    try:
+        with pytest.raises(PythonMysqlDiscoveryError) as caught:
+            discover_python_mysql_host_prerequisites(
+                codex_executable="codex", docker_socket=str(docker_socket)
+            )
+    finally:
+        server.close()
+        docker_socket.unlink(missing_ok=True)
+    assert caught.value.code is NativeVerificationCapabilityDetail.DOCKER_DAEMON_UNAVAILABLE
 
 
 def test_dependency_fingerprint_binds_source_and_loadable_bytecode(tmp_path: Path) -> None:

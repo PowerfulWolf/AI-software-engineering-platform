@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Literal, Never, cast
 
 import pytest
@@ -53,6 +54,7 @@ from ai_software_engineer.domain.enums import (
     WorkItemStatus,
 )
 from ai_software_engineer.domain.native_verification import (
+    NativeVerificationCapabilityDetail,
     NativeVerificationWaiting,
     NativeVerificationWaitReason,
 )
@@ -75,7 +77,11 @@ from ai_software_engineer.manager.delivery_preflight import (
     DeliveryPreflightScope,
     inspect_delivery_prerequisites,
 )
-from ai_software_engineer.manager.delivery_wait import DeliveryWaitRejected, DeliveryWaitService
+from ai_software_engineer.manager.delivery_wait import (
+    DeliveryWaitRejected,
+    DeliveryWaitService,
+    _preflight_detail_action,
+)
 from ai_software_engineer.manager.production_host import TeamHost
 from ai_software_engineer.manager.verifier_preparation import VerifierPreparationCheckpoint
 from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
@@ -111,6 +117,24 @@ from tests.manager.test_native_verification import (
 )
 from tests.manager.test_verifier_preparation import _gate, _marker, _Wait
 from tests.orchestration.test_native_continuation import NOW, Fixture, Guard
+
+
+def test_preflight_detail_action_is_deduplicated_and_chinese() -> None:
+    observation = DeliveryPreflightObservation(
+        requirement_id="requirement",
+        status="WAIT_ENGINEERING",
+        reason_code="CONTROLLED_VERIFICATION_CAPABILITY_REQUIRED",
+        native_wait_reason=NativeVerificationWaitReason.CAPABILITY_UNAVAILABLE,
+        native_wait_detail=NativeVerificationCapabilityDetail.DOCKER_DAEMON_UNAVAILABLE,
+    )
+    receipt = cast(
+        DeliveryPreflightReceipt,
+        SimpleNamespace(observations=(observation, observation)),
+    )
+    action = _preflight_detail_action(receipt)
+    assert action is not None
+    assert action.count("Docker 服务进程当前不可用") == 1
+    assert "重新调查工程等待" in action
 
 
 class WaitQueue:

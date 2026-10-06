@@ -70,6 +70,17 @@
             }
           ],
           "default": null
+        },
+        "native_wait_detail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativeVerificationCapabilityDetail"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -112,6 +123,24 @@
       ],
       "title": "DeliveryPreflightScope",
       "type": "object"
+    },
+    "NativeVerificationCapabilityDetail": {
+      "description": "Safe, bounded cause categories for controlled host discovery.",
+      "enum": [
+        "VERIFICATION_HOST_PLATFORM_UNSUPPORTED",
+        "VERIFICATION_CODEX_EXECUTABLE_UNAVAILABLE",
+        "VERIFICATION_DOCKER_EXECUTABLE_UNAVAILABLE",
+        "VERIFICATION_DOCKER_CONTEXT_UNAVAILABLE",
+        "VERIFICATION_DOCKER_ENDPOINT_INVALID",
+        "VERIFICATION_DOCKER_SOCKET_UNAVAILABLE",
+        "VERIFICATION_DOCKER_DAEMON_UNAVAILABLE",
+        "VERIFICATION_MYSQL_IMAGE_UNAVAILABLE",
+        "VERIFICATION_PYTHON_RUNTIME_UNAVAILABLE",
+        "VERIFICATION_DEPENDENCY_FINGERPRINT_FAILED",
+        "VERIFICATION_RUNNER_UNAVAILABLE"
+      ],
+      "title": "NativeVerificationCapabilityDetail",
+      "type": "string"
     },
     "NativeVerificationWaitReason": {
       "enum": [

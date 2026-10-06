@@ -54,6 +54,7 @@ from ai_software_engineer.manager.python_verification import (
     PytestSelection,
 )
 from ai_software_engineer.manager.python_verification_discovery import (
+    PythonMysqlDiscoveryError,
     discover_python_mysql_capability,
     discover_python_mysql_host_prerequisites,
 )
@@ -312,6 +313,11 @@ class RegisteredNativePythonVerifier:
                 docker_socket=self._socket,
                 mysql_image=self._image,
             )
+        except PythonMysqlDiscoveryError as error:
+            raise NativeVerificationWaiting(
+                NativeVerificationWaitReason.CAPABILITY_UNAVAILABLE,
+                detail_code=error.code,
+            ) from None
         except (OSError, ValueError):
             raise NativeVerificationWaiting(
                 NativeVerificationWaitReason.CAPABILITY_UNAVAILABLE
@@ -474,6 +480,11 @@ class RegisteredNativePythonVerifier:
                 denied_patterns=task.constraints.denied_paths if task.constraints else (),
             )
             _require_clean_native_candidate(workspace_root, request.source_revision)
+        except PythonMysqlDiscoveryError as error:
+            raise NativeVerificationWaiting(
+                NativeVerificationWaitReason.CAPABILITY_UNAVAILABLE,
+                detail_code=error.code,
+            ) from None
         except (OSError, ValueError):
             raise NativeVerificationWaiting(
                 NativeVerificationWaitReason.CAPABILITY_UNAVAILABLE
@@ -798,6 +809,11 @@ class NativePythonVerificationEvidence:
                         validate_facts=validate,
                         require_clean_candidate=_require_clean_native_candidate,
                     )
+        except PythonMysqlDiscoveryError as error:
+            raise NativeVerificationWaiting(
+                NativeVerificationWaitReason.CAPABILITY_UNAVAILABLE,
+                detail_code=error.code,
+            ) from None
         except (OSError, ValueError):
             raise NativeVerificationWaiting(
                 NativeVerificationWaitReason.CAPABILITY_UNAVAILABLE

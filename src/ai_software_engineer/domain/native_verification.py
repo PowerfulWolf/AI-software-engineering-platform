@@ -137,14 +137,36 @@ class NativeVerificationWaitReason(StrEnum):
     COMMAND_START_FAILED = "CONTROLLED_VERIFICATION_COMMAND_START_FAILED"
 
 
+class NativeVerificationCapabilityDetail(StrEnum):
+    """Safe, bounded cause categories for controlled host discovery."""
+
+    PLATFORM_UNSUPPORTED = "VERIFICATION_HOST_PLATFORM_UNSUPPORTED"
+    CODEX_EXECUTABLE_UNAVAILABLE = "VERIFICATION_CODEX_EXECUTABLE_UNAVAILABLE"
+    DOCKER_EXECUTABLE_UNAVAILABLE = "VERIFICATION_DOCKER_EXECUTABLE_UNAVAILABLE"
+    DOCKER_CONTEXT_UNAVAILABLE = "VERIFICATION_DOCKER_CONTEXT_UNAVAILABLE"
+    DOCKER_ENDPOINT_INVALID = "VERIFICATION_DOCKER_ENDPOINT_INVALID"
+    DOCKER_SOCKET_UNAVAILABLE = "VERIFICATION_DOCKER_SOCKET_UNAVAILABLE"
+    DOCKER_DAEMON_UNAVAILABLE = "VERIFICATION_DOCKER_DAEMON_UNAVAILABLE"
+    MYSQL_IMAGE_UNAVAILABLE = "VERIFICATION_MYSQL_IMAGE_UNAVAILABLE"
+    PYTHON_RUNTIME_UNAVAILABLE = "VERIFICATION_PYTHON_RUNTIME_UNAVAILABLE"
+    DEPENDENCY_FINGERPRINT_FAILED = "VERIFICATION_DEPENDENCY_FINGERPRINT_FAILED"
+    RUNNER_UNAVAILABLE = "VERIFICATION_RUNNER_UNAVAILABLE"
+
+
 class NativeVerificationWaiting(RuntimeError):
     def __init__(
         self,
         reason: NativeVerificationWaitReason,
         *,
         record_sha256: str | None = None,
+        detail_code: NativeVerificationCapabilityDetail | None = None,
     ) -> None:
-        self.reason, self.record_sha256 = reason, record_sha256
+        if (
+            detail_code is not None
+            and reason is not NativeVerificationWaitReason.CAPABILITY_UNAVAILABLE
+        ):
+            raise ValueError("capability detail requires capability unavailable")
+        self.reason, self.record_sha256, self.detail_code = reason, record_sha256, detail_code
         messages = {
             NativeVerificationWaitReason.LEGACY_AUTHORITY: (
                 "任务没有冻结的受控验证授权。需工程负责人处理。"

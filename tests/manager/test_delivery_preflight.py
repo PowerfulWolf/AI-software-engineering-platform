@@ -23,7 +23,10 @@ from ai_software_engineer.domain.execution_window import (
     PlannedVerificationInspection,
     PlannedVerificationRequirement,
 )
-from ai_software_engineer.domain.native_verification import NativeVerificationWaitReason
+from ai_software_engineer.domain.native_verification import (
+    NativeVerificationCapabilityDetail,
+    NativeVerificationWaitReason,
+)
 from ai_software_engineer.manager.delivery_preflight import (
     DeliveryPreflightObservation,
     DeliveryPreflightReceipt,
@@ -35,6 +38,7 @@ from ai_software_engineer.manager.production_backend import (
     ProductionProjectDeliveryBackend,
     _ProjectFacts,
 )
+from ai_software_engineer.manager.python_verification_discovery import PythonMysqlDiscoveryError
 from tests.domain.factories import NOW, make_agent, make_task
 from tests.manager.test_native_verification import _fixture
 
@@ -153,6 +157,7 @@ def _inspect(
     route: Literal["codex_cli", "responses"] = "responses",
     capabilities: tuple[DiscoveredControlledCapability, ...] = (),
     discovery_failure: NativeVerificationWaitReason | None = None,
+    discovery_detail: NativeVerificationCapabilityDetail | None = None,
 ) -> DeliveryPreflightReceipt:
     return inspect_delivery_prerequisites(
         scope=_SCOPE,
@@ -164,6 +169,7 @@ def _inspect(
         environment=environment,
         controlled_capabilities=capabilities,
         controlled_discovery_failure=discovery_failure,
+        controlled_discovery_detail=discovery_detail,
         checked_at=NOW,
     )
 
@@ -256,6 +262,44 @@ def test_registered_discovery_failure_retains_typed_root_cause_without_executing
                 ),
             }
         ).validate_integrity()
+
+
+def test_registered_discovery_detail_is_safe_and_part_of_receipt_integrity(
+    tmp_path: Path,
+) -> None:
+    task, definitions, environment, sentinel = _prepare(tmp_path)
+    receipt = _inspect(
+        task,
+        definitions,
+        environment,
+        route="codex_cli",
+        requirement=_requirement(capability=_CAPABILITY),
+        discovery_failure=NativeVerificationWaitReason.CAPABILITY_UNAVAILABLE,
+        discovery_detail=NativeVerificationCapabilityDetail.DOCKER_DAEMON_UNAVAILABLE,
+    )
+    observation = receipt.observations[0]
+    assert (
+        observation.native_wait_detail
+        is NativeVerificationCapabilityDetail.DOCKER_DAEMON_UNAVAILABLE
+    )
+    assert "docker" in observation.native_wait_detail.value.lower()
+    assert "stderr" not in json.dumps(receipt.to_wire()).lower()
+    assert not sentinel.exists()
+    tampered = receipt.model_copy(
+        update={
+            "observations": (
+                observation.model_copy(
+                    update={
+                        "native_wait_detail": (
+                            NativeVerificationCapabilityDetail.MYSQL_IMAGE_UNAVAILABLE
+                        )
+                    }
+                ),
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="changed"):
+        tampered.validate_integrity()
 
 
 def test_unused_registered_discovery_failure_does_not_block_ordinary_responses_tools(
@@ -380,7 +424,9 @@ def test_production_backend_preserves_actual_registered_discovery_failure(
     else:
 
         def unavailable(**kwargs: object) -> Never:
-            raise OSError(_SECRET_SENTINEL)
+            raise PythonMysqlDiscoveryError(
+                NativeVerificationCapabilityDetail.DOCKER_DAEMON_UNAVAILABLE
+            )
 
         monkeypatch.setattr(
             "ai_software_engineer.manager.native_verification.discover_python_mysql_host_prerequisites",
@@ -438,6 +484,11 @@ def test_production_backend_preserves_actual_registered_discovery_failure(
     receipt.validate_integrity()
     assert receipt.status == "WAIT_ENGINEERING"
     assert receipt.observations[0].native_wait_reason is reason
+    if reason is NativeVerificationWaitReason.CAPABILITY_UNAVAILABLE:
+        assert (
+            receipt.observations[0].native_wait_detail
+            is NativeVerificationCapabilityDetail.DOCKER_DAEMON_UNAVAILABLE
+        )
     assert _SECRET_SENTINEL not in json.dumps(receipt.to_wire())
     assert not (tmp_path / "sidecar/native-role-verification").exists()
 

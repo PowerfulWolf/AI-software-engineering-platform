@@ -23,7 +23,10 @@ from ai_software_engineer.domain.agent import AgentDefinition
 from ai_software_engineer.domain.enums import AgentRole
 from ai_software_engineer.domain.execution_window import PlannedVerificationRequirement
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
-from ai_software_engineer.domain.native_verification import NativeVerificationWaitReason
+from ai_software_engineer.domain.native_verification import (
+    NativeVerificationCapabilityDetail,
+    NativeVerificationWaitReason,
+)
 from ai_software_engineer.domain.task import Task
 from ai_software_engineer.git import WorkspacePolicy, WorkspacePolicyError
 from ai_software_engineer.manager.verification_process import bounded_verification_command
@@ -59,6 +62,10 @@ class DeliveryPreflightObservation(DomainModel):
         default=None,
         exclude_if=lambda value: value is None,
     )
+    native_wait_detail: NativeVerificationCapabilityDetail | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
 
     @model_validator(mode="after")
     def validate_native_wait(self) -> DeliveryPreflightObservation:
@@ -67,6 +74,11 @@ class DeliveryPreflightObservation(DomainModel):
             or self.reason_code != "CONTROLLED_VERIFICATION_CAPABILITY_REQUIRED"
         ):
             raise ValueError("native discovery failure requires a controlled capability wait")
+        if (
+            self.native_wait_detail is not None
+            and self.native_wait_reason is not NativeVerificationWaitReason.CAPABILITY_UNAVAILABLE
+        ):
+            raise ValueError("capability detail requires a capability unavailable wait")
         return self
 
 
@@ -144,6 +156,7 @@ def inspect_delivery_prerequisites(
     environment: Mapping[str, str],
     controlled_capabilities: tuple[DiscoveredControlledCapability, ...] = (),
     controlled_discovery_failure: NativeVerificationWaitReason | None = None,
+    controlled_discovery_detail: NativeVerificationCapabilityDetail | None = None,
     checked_at: datetime,
     source_revision: str | None = None,
 ) -> DeliveryPreflightReceipt:
@@ -281,6 +294,9 @@ def inspect_delivery_prerequisites(
                         native_wait_reason=controlled_discovery_failure
                         if capability is None
                         else None,
+                        native_wait_detail=controlled_discovery_detail
+                        if capability is None
+                        else None,
                     )
                 )
             else:
@@ -389,6 +405,7 @@ def inspect_delivery_prerequisites(
                         status="WAIT_ENGINEERING",
                         reason_code="CONTROLLED_VERIFICATION_CAPABILITY_REQUIRED",
                         native_wait_reason=controlled_discovery_failure,
+                        native_wait_detail=controlled_discovery_detail,
                     )
                 )
             else:
