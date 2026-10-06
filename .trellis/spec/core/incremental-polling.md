@@ -54,6 +54,21 @@ pollingKnowledgeFacts()
 | Current Task phase changes | Update modal facts, retain its artifact | Same dialog/document; latest phase visible |
 | Spec inventory changes without index/Team change | Show new asset, preserve existing body | New title visible; old details/body same node/open |
 | Exact approval checkpoint changes | Remove old action | Old approval disconnected; no stale POST |
+| Current Requirement title/status changes with operation history expanded | Retain outer fold and unchanged sealed row DOM | Same fold/row nodes; open state remains true |
+| Non-Product baseline action and older Product discussion both exist | Current action stays outside historical disclosure | Visible current engineering summary; old discussion remains closed |
+
+`buildDetail()` positions current Requirement facts and controls ahead of reference/history.
+`productExecutionSummary(item, {guidance = true} = {})` may suppress duplicated guidance only
+when the same current blocker/next action is visibly rendered in `requestBlockerSection`.
+`requestOperation()` still owns every existing readiness/checkpoint/role gate and event callback;
+`appendDiscussionContent` routes controls into discussion only for `productDiscussionStages`.
+An event-free `current-actions` group may relocate those controls, never synthesize authorization.
+Current product knowledge has exactly one placement, including legacy facts without execution.
+
+Requirement historical discussion/operations/repository deliveries default to closed disclosures
+keyed by Project/Requirement. Group outer history containers and their lists so unchanged rows and
+loaded inner disclosures survive reconciliation. Full record count/data remains present in DOM;
+do not truncate to improve layout. Sealed record next actions are explicitly historical.
 
 Good: a new Task heartbeat updates its activity while a user continues selecting an artifact paragraph.
 Base: repeated identical polling changes only the connection/read timestamp.
@@ -62,6 +77,10 @@ Bad: restore every old button by matching its label, or preserve old action hand
 ## Verification and operations
 
 `tests/team_view/browser/polling-state.test.cjs` exercises real Chrome with intercepted API facts.
+`tests/team_view/browser/requirement-detail.test.cjs` checks current/historical hierarchy, complete
+history and node preservation, current action visibility, Product drafts, legacy knowledge placement,
+no rendering-triggered POST and no detail/page overflow at 1440px/1024px/390px. Browser history tests must
+open the outer disclosure before reading `innerText` or clicking nested engineering summaries.
 Also run affected interactions, async-boundaries, settings-layout, notification and lightweight
 readiness/UI contracts. Use `node --check` and `git diff --check`. No full repository suite required.
 

@@ -835,7 +835,7 @@ function currentOperationProgress(operation, request) {
       : humanizeBlockingText(node.nextAction || execution?.next_action || request.next_action),
   };
 }
-function productExecutionSummary(item) {
+function productExecutionSummary(item, {guidance = true} = {}) {
   if (!item.execution) return null;
   const execution = item.execution;
   const node = item.stage ? requestNodeExecution(item) : taskExecutionPresentation(item);
@@ -843,8 +843,10 @@ function productExecutionSummary(item) {
   section.append(
     el("p", "交付阶段 · " + deliveryPhase(item), "execution-phase"),
     el("p", "当前执行 · " + (node?.label || label(executionPresentationStatus(execution))), "execution-state"),
-    el("p", node?.upstreamProcessing ? "当前节点正在执行，请等待本阶段处理完成。" : humanizeBlockingText(node?.reason || execution.reason)),
     el("p", "处理方 · " + {product: "产品负责人", team: "ASE 团队", engineering: "工程团队"}[node?.responsibility || (node?.requiresEngineeringCheck ? "engineering" : execution.responsibility)], "muted"),
+  );
+  if (guidance) section.append(
+    el("p", node?.upstreamProcessing ? "当前节点正在执行，请等待本阶段处理完成。" : humanizeBlockingText(node?.reason || execution.reason)),
     el("p", "下一步 · " + (node?.upstreamProcessing ? "请等待本轮处理完成。" : humanizeBlockingText(node?.nextAction || execution.next_action)), "muted"),
   );
   if (execution.available_at)
@@ -1692,7 +1694,7 @@ function requestBlockerSection(request) {
     el("h2", summary.approvedKnowledge ? "下一步" : "阻塞信息"),
     el(
       "p",
-      "当前原因、最近恢复结果和建议操作都集中在这里。",
+      "以下是本次交付的当前原因与建议操作；历史轮次请查看页面下方的记录。",
       "muted",
     ),
   );
@@ -3357,7 +3359,7 @@ function requestOperation(panel, request, discussionSection) {
     panel.append(section);
   };
   const appendDiscussionContent = (content) => {
-    if (discussionSection) discussionSection.append(content);
+    if (discussionSection && productDiscussionStages.has(request.stage)) discussionSection.append(content);
     else appendOperation(content);
   };
   const running = activeOperation(request.id);
@@ -7332,9 +7334,11 @@ function requestOperationHistory(panel, request) {
     operation.intent.project_id === request.project_id)
     .sort((a, b) => a.updated_at.localeCompare(b.updated_at) || a.operation_id.localeCompare(b.operation_id));
   if (!records.length) return;
-  const section = viewGroup(el("section", undefined, "detail-section"), "requirement-operation-history");
-  section.append(el("h2", "操作记录（完整历史）"),
-    el("p", `共 ${records.length} 条操作。操作成功仅表示命令返回，交付阶段和验收结果以执行记录为准。`, "muted"));
+  const section = viewGroup(el("div", undefined, "detail-section"), "requirement-operation-history");
+  const fold = viewGroup(el("details", undefined, "request-history-fold"), "operation-history-fold");
+  fold.dataset.key = "operation-history:" + request.project_id + "/" + request.id;
+  fold.append(el("summary", `操作记录（完整历史） · ${records.length} 条`),
+    el("p", `共 ${records.length} 条操作，全部保留。历史原因与当次下一步只描述那一轮；当前阻塞和建议操作以本页上方为准。命令完成不代表需求已交付。`, "muted"));
   const list = viewGroup(el("ol", undefined, "execution-history"), "requirement-operation-history-list");
   for (const record of records) {
     const progress = currentOperationProgress(record, request);
@@ -7363,7 +7367,7 @@ function requestOperationHistory(panel, request) {
     if (record.error_summary) item.append(el("p", humanizeBlockingText(record.error_summary), "error"));
     if (record.status === "SUCCEEDED" && deliveryOperationActions.has(record.intent.action) && record.result?.diagnostic)
       item.append(el("p", "当次原因 · " + humanizeBlockingText(record.result.diagnostic), "error"));
-    if (!progress && record.result?.next_action) item.append(el("p", humanizeBlockingText(record.result.next_action)));
+    if (!progress && record.result?.next_action) item.append(el("p", "当次下一步 · " + humanizeBlockingText(record.result.next_action)));
     const technical = engineeringDetails("排障信息（供工程人员使用）", record.operation_id);
     technical.append(el("p", "这些标识用于工程核验，无需产品负责人填写。", "muted"));
     technical.append(el("p", "操作 · " + record.operation_id, "paths"));
@@ -7382,16 +7386,17 @@ function requestOperationHistory(panel, request) {
     item.append(technical);
     list.append(item);
   }
-  section.append(list);
+  fold.append(list);
+  section.append(fold);
   panel.append(section);
 }
 function requestHistoricalDeliveryRecords(panel, request) {
   const history = requestTasks(request).filter(isHistoricalRequestTask)
     .sort((left, right) => left.last_activity.localeCompare(right.last_activity));
   if (!history.length) return;
-  const section = viewGroup(el("section", undefined, "detail-section"), "historical-delivery-records");
+  const section = viewGroup(el("div", undefined, "detail-section"), "historical-delivery-records");
   const fold = el("details", undefined, "historical-delivery-records");
-  fold.dataset.key = "historical-delivery:" + request.id;
+  fold.dataset.key = "historical-delivery:" + request.project_id + "/" + request.id;
   fold.append(el("summary", `历史仓库交付记录（${history.length} 条）`),
     el("p", "以下记录保留当次执行结果，不代表当前交付状态。", "muted"));
   for (const task of history) {
@@ -7555,6 +7560,7 @@ function buildDetail(panel = document.getElementById("detail")) {
   );
   if (selected.kind === "request") {
     const presentation = requestPresentation(item);
+    const blocking = requestBlockerSection(item);
     panel.className = "request-detail-panel";
     const overview = el("section", undefined, "request-detail-overview");
     overview.append(
@@ -7562,15 +7568,14 @@ function buildDetail(panel = document.getElementById("detail")) {
       el("h3", item.title, "request-detail-title"),
       requestNodeBadge(item),
     );
-    if (item.execution) overview.append(productExecutionSummary(item));
+    if (item.execution) overview.append(productExecutionSummary(item, {guidance: !blocking}));
     const identity = engineeringDetails("需求工程详情", item.id);
     identity.append(el("p", item.id, "paths request-detail-id"));
     if (item.execution) identity.append(el("p", "执行事实状态 · " + label(executionPresentationStatus(item.execution)), "muted"));
     if (item.execution?.policy_id) identity.append(el("p", "工程授权 · " + item.execution.policy_id, "paths"));
     if (item.execution?.receipt_uri) identity.append(el("p", "执行事实 · " + item.execution.receipt_uri, "paths"));
-    overview.append(identity);
     if (item.stage_budget || (item.stage === "DESIGNING" && item.design_budget))
-      overview.append(el("p", designBudgetSummary(item), "muted"));
+      identity.append(el("p", designBudgetSummary(item), "muted"));
     if (presentation.group !== "blocked" && !item.execution)
       overview.append(
         el(
@@ -7580,13 +7585,19 @@ function buildDetail(panel = document.getElementById("detail")) {
         ),
       );
     panel.append(overview);
-    const blocking = requestBlockerSection(item);
     if (blocking) panel.append(blocking);
-    if (item.knowledge_gap?.is_current && item.execution && item.execution.responsibility !== "product") {
-      const knowledge = engineeringDetails("工程知识处理", item.id + ":knowledge");
-      knowledge.append(knowledgeGapSection(item));
-      panel.append(knowledge);
-    } else panel.append(knowledgeGapSection(item));
+    const productKnowledgeVisible = item.knowledge_gap?.is_current && (!item.execution || item.execution.responsibility === "product");
+    if (productKnowledgeVisible)
+      panel.append(knowledgeGapSection(item));
+    // Build the existing discussion/action gates in their original scope, then
+    // position current controls ahead of reference material. Rendering never submits.
+    const discussionHolder = el("div");
+    const discussionSection = requestDialogue(discussionHolder, item);
+    const actions = viewGroup(el("section", undefined, "detail-section request-current-actions"), "current-actions");
+    actions.append(el("h2", "下一步操作"));
+    requestOperation(actions, item, discussionSection);
+    if (actions.children.length > 1) panel.append(actions);
+    if (discussionSection && productDiscussionStages.has(item.stage)) panel.append(discussionSection);
     const flow = viewGroup(el("section", undefined, "detail-section"), "delivery-flow");
     flow.append(el("h2", "交付流程"));
     const manager = managerFlowStatus(item);
@@ -7613,18 +7624,30 @@ function buildDetail(panel = document.getElementById("detail")) {
       scopes.append(scopeCard);
     }
     panel.append(scopes);
-    const discussionSection = requestDialogue(panel, item);
-    requestOperation(panel, item, discussionSection);
     const lastOperation = latestOperation(item.id);
     if (lastOperation?.operation_id && discussionSection)
       discussionSection.append(modelCallDiagnostics(lastOperation));
     deliveryResult(panel, item);
-    requestOperationHistory(panel, item);
-    requestHistoricalDeliveryRecords(panel, item);
     const artifacts = viewGroup(el("section", undefined, "detail-section stage-artifacts"), "stage-artifacts");
     artifacts.append(el("h2", "阶段产物"));
     documentList(artifacts, item.documents);
     panel.append(artifacts);
+    if (discussionSection && !productDiscussionStages.has(item.stage)) {
+      const fold = viewGroup(el("details", undefined, "request-history-fold"), "discussion-history-fold");
+      fold.dataset.key = "discussion-history:" + item.project_id + "/" + item.id;
+      fold.append(el("summary", `需求讨论记录（${(item.dialogue || []).length} 轮）`), discussionSection);
+      panel.append(fold);
+    }
+    requestOperationHistory(panel, item);
+    requestHistoricalDeliveryRecords(panel, item);
+    const engineering = viewGroup(el("div", undefined, "detail-section request-reference-section"), "request-engineering");
+    engineering.append(identity);
+    if (!productKnowledgeVisible) {
+      const knowledge = engineeringDetails(item.knowledge_gap?.is_current ? "工程知识处理" : "知识核对记录", item.id + ":knowledge");
+      knowledge.append(knowledgeGapSection(item));
+      engineering.append(knowledge);
+    }
+    panel.append(engineering);
     return;
   }
   panel.className = "task-detail-modal";

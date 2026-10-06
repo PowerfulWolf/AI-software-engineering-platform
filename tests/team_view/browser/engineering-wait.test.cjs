@@ -71,6 +71,7 @@ test("engineering wait investigation and decision use exact proof without hiding
   assert.match(await fold.innerText(), /工程决定已记录/);
   assert.equal(await fold.getByRole("button", {name: "确认现场并继续原交付", exact: true}).count(), 0);
   assert.match(await detail.innerText(), /操作记录（完整历史）/);
+  await detail.locator('.request-history-fold[data-key^="operation-history:"] > summary').click();
   assert.match(await detail.innerText(), /operator:fixture/);
 });
 

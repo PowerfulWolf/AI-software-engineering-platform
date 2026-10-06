@@ -165,7 +165,7 @@ test("Requirement detail uses one heading hierarchy and section rhythm", () => {
   );
   assert.match(
     styles,
-    /\.request-detail-panel\s*\{[^}]*--detail-section-space:\s*18px;[^}]*padding:\s*20px;/s,
+    /\.request-detail-panel\s*\{[^}]*--detail-section-space:\s*14px;[^}]*padding:\s*16px;/s,
     "the Requirement detail panel must define one shared section spacing token",
   );
   assert.match(
@@ -175,7 +175,7 @@ test("Requirement detail uses one heading hierarchy and section rhythm", () => {
   );
   assert.match(
     styles,
-    /\.request-detail-panel > \.detail-section h2\s*\{[^}]*font-size:\s*1\.2rem;[^}]*line-height:\s*1\.4;/s,
+    /\.request-detail-panel > \.detail-section h2\s*\{[^}]*font-size:\s*1rem;[^}]*line-height:\s*1\.4;/s,
     "all Requirement module headings must have the same typography",
   );
   assert.match(

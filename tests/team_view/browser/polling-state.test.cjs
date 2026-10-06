@@ -48,6 +48,7 @@ test("polling patches changed Requirement facts without collapsing diagnostics o
   await h.tick();
   await h.requests();
   const detail = h.page.locator("#detail");
+  await detail.locator('.request-history-fold[data-key^="discussion-history:"] > summary').click();
   const diagnostics = detail.locator(".model-call-diagnostics");
   await diagnostics.locator("summary").click();
   await diagnostics.getByText(/暂无已完成的阶段调用明细/).waitFor();

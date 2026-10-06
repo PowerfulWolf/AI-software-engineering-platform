@@ -31,6 +31,8 @@ test("local execution time budget shows available window and hides exhausted ret
   await h.requests();
   await h.page.evaluate(() => showDetail("request", "request_fixture"));
   const detail = h.page.locator("#detail");
+  if (await h.page.locator("#notification").isVisible()) await h.close();
+  await detail.getByText("需求工程详情", {exact: true}).click();
   assert.match(await detail.innerText(), /本地执行触顶 2\/3，当前可用执行窗口 2400 秒/);
   h.team.requests[0].stage_budget = {...h.team.requests[0].stage_budget,
     capacity_timeouts: 3, next_timeout_seconds: null, exhausted: "capacity"};
@@ -52,6 +54,9 @@ test("stage budget keeps available-window semantics during running and failed up
         max_capacity_timeouts: 3, next_timeout_seconds: 1200}});
       await h.tick();
       await h.page.evaluate(() => showDetail("request", "request_fixture"));
+      if (await h.page.locator("#notification").isVisible()) await h.close();
+      const engineering = detail.locator('details[data-key="engineering:request_fixture"]');
+      if (!await engineering.evaluate(node => node.open)) await engineering.locator(":scope > summary").click();
       const text = await detail.innerText();
       assert.match(text, new RegExp(`${role} 工作尝试 1/3.*当前可用执行窗口 1200 秒`), `${status} ${role}`);
       assert.doesNotMatch(text, /下次时限/, `${status} ${role}`);

@@ -377,9 +377,15 @@ production_console_app(
 - 需求列表中的整张 Requirement card 是一个选择控件，而不是只有标题文字可点：click 与键盘
   `Enter`/`Space` 必须打开同一个详情；详情、唯一 `aria-current` 与可见 selected 样式必须同步指向
   同一 Requirement，轮询不得把它们恢复到列表第一项。
-- Requirement 详情必须使用一个稳定摘要区和同级 section：交付流程、涉及代码目录、Product 对话/输入、
-  操作/批准、交付结果、阶段产物。所有同级 section 使用 `--detail-section-space` 作为分割线两侧的
-  唯一垂直间距，标题统一为 `h2`；子级需求名称使用 `h3`，ID、状态和下一步保持辅助信息层级。
+- Requirement 详情按当前事实优先排列：需求名称/阶段/执行/责任摘要 → 当前原因与建议操作/当前产品知识
+  → 当前操作及 Product 对话/输入 → 交付流程 → 涉及代码目录 → 交付结果/阶段产物
+  → 折叠的历史讨论、完整操作和历史仓库交付 → 折叠的工程标识/预算/知识参考。
+  具体阻塞原因和下一步已在当前原因区出现时，顶部摘要只保留阶段、执行与责任，避免重复长文。
+  当前产品讨论/精确审批与工程等待入口不得移入历史折叠区；非 Product 阶段的基线处理入口仍属于
+  当前操作区。所有同级 section 使用 `--detail-section-space` 作为分割线两侧的唯一垂直间距，
+  可见内容模块标题统一为 `h2`，纯历史/参考容器使用 `div` 和可读的 disclosure summary；
+  需求名称使用 `h3`，ID和预算放入工程详情。当前操作容器中的子 section
+  不得叠加分割线或 padding。正文和窄屏 scope/action 内容必须在容器内换行。
   section 不得再叠加独立 `margin-top`，流程组件也不得通过额外底部 margin 改变下一条分割线的位置。
 - “交付流程”section 只展示七个节点及其当前/已完成状态，不追加 `QUEUED`/`RUNNING`、Manager
   恢复、离开页面或串行推进文案。Operation 状态只在全局操作/结果入口展示，Product 处理状态只在
@@ -418,7 +424,10 @@ production_console_app(
   Requirement 只提示最新一项需要人工关注的结果，避免历史通知重复弹出。
 - 需求的“操作记录（完整历史）”是所选需求全部持久化 Operation 的审计入口，不是常驻
   全局通知卡。它展示调查缺项、精确工程决定、实际处理者与命令结果；完整记录不截为 8 条。
-  工程摘要/hash 放在折叠详情，日常产品摘要只展示责任、原因与下一步。
+  默认折叠并显示总条数，展开仍包含全部记录；已封存操作的建议标为“当次下一步”，不能充当
+  当前任务的处理建议。工程摘要/hash 放在内层折叠详情，日常产品摘要只展示责任、原因与下一步。
+  历史讨论/操作/仓库折叠键包含 Project/Requirement 身份，轮询保留展开和已加载正文；不复用
+  旧 checkpoint 的事件回调。历史资料后置只改变展示，不删除或改写任何 durable facts。
 - 当前非终态 WorkItem 的工程等待只能用折叠工程区的调查/处理入口，不能用 generic
   “继续交付”绕过 proof。调查成功展示缺项或被允许的处理方式；决定成功仍等待读取新的
   durable execution facts。`INSPECT_DELIVERY_WAIT/RESOLVE_DELIVERY_WAIT` 的 RUNNING 通知

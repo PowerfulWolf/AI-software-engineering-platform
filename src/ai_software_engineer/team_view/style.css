@@ -645,8 +645,8 @@ main[data-page="requests"] #detail {
   padding: 16px;
 }
 .request-detail-panel {
-  --detail-section-space: 18px;
-  padding: 20px;
+  --detail-section-space: 14px;
+  padding: 16px;
 }
 .request-filter {
   display: flex;
@@ -814,11 +814,13 @@ main[data-page="requests"] #detail {
 }
 .detail-panel-heading {
   margin: 0;
+  color: var(--muted);
+  font-size: 0.875rem;
   line-height: 1.4;
 }
 .request-detail-title {
-  margin: 10px 0 2px;
-  font-size: 1.05rem;
+  margin: 12px 0 8px;
+  font-size: 1.15rem;
   line-height: 1.45;
 }
 .request-detail-id {
@@ -834,7 +836,7 @@ main[data-page="requests"] #detail {
 .request-blocking-primary {
   min-width: 0;
   max-width: 100%;
-  padding: 16px 18px;
+  padding: 12px 14px;
   border-left: 3px solid #cf7a20;
   border-radius: 0 9px 9px 0;
   background: #fff8ed;
@@ -850,8 +852,8 @@ main[data-page="requests"] #detail {
   letter-spacing: 0.04em;
 }
 .request-blocking-reason {
-  margin: 7px 0 0;
-  font-size: 1rem;
+  margin: 6px 0 0;
+  font-size: 0.9375rem;
   font-weight: 620;
   line-height: 1.6;
   overflow-wrap: anywhere;
@@ -889,8 +891,8 @@ main[data-page="requests"] #detail {
   grid-template-columns: max-content minmax(0, 1fr);
   align-items: start;
   gap: 12px;
-  margin-top: 14px;
-  padding-top: 14px;
+  margin-top: 10px;
+  padding-top: 10px;
   border-top: 1px solid var(--line);
 }
 .request-blocking-next p {
@@ -898,8 +900,8 @@ main[data-page="requests"] #detail {
   line-height: 1.55;
 }
 .request-detail-panel > .detail-section h2 {
-  margin: 0 0 12px;
-  font-size: 1.2rem;
+  margin: 0 0 10px;
+  font-size: 1rem;
   line-height: 1.4;
 }
 .request-detail-panel .operation-running,
@@ -911,8 +913,8 @@ main[data-page="requests"] #detail {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
-  padding: 11px 12px;
+  gap: 10px;
+  padding: 8px 10px;
   margin-top: 8px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1002,6 +1004,52 @@ main[data-page="requests"] #detail {
 .product-execution-summary p { margin: 6px 0; }
 .product-execution-summary .execution-phase,
 .product-execution-summary .execution-state { font-weight: 600; }
+.request-detail-panel .product-execution-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 14px;
+  margin: 10px 0 0;
+  padding: 10px 12px;
+}
+.request-detail-panel .product-execution-summary p {
+  grid-column: 1 / -1;
+  margin: 0;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.request-detail-panel .product-execution-summary .execution-phase,
+.request-detail-panel .product-execution-summary .execution-state {
+  grid-column: auto;
+}
+.request-current-actions > .detail-section {
+  border-top: 0;
+  padding: 0;
+}
+.request-current-actions > .detail-section + .detail-section { margin-top: 10px; }
+.request-detail-panel .request-history-fold,
+.request-detail-panel .historical-delivery-records {
+  min-width: 0;
+}
+.request-detail-panel > .request-history-fold {
+  padding: var(--detail-section-space) 0;
+  border-top: 1px solid var(--line);
+}
+.request-history-fold > summary,
+.historical-delivery-records > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.request-history-fold[open] > summary,
+.historical-delivery-records[open] > summary { color: var(--ink); }
+.request-history-fold > .detail-section {
+  border-top: 0;
+  padding-bottom: 0;
+}
+.request-reference-section .engineering-details { margin: 0; }
+.request-reference-section .engineering-details + .engineering-details { margin-top: 10px; }
 .engineering-details { margin: 10px 0; }
 .engineering-details > summary {
   color: #536174;
@@ -2398,6 +2446,15 @@ code {
 #detail[hidden] {
   display: none;
 }
+@media (max-width: 1180px) {
+  main[data-page="requests"] .workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  main[data-page="requests"] #detail {
+    position: static;
+    max-height: none;
+  }
+}
 @media (max-width: 900px) {
   .sidebar {
     position: static;
@@ -2508,6 +2565,13 @@ code {
   }
 }
 @media (max-width: 600px) {
+  .request-detail-panel .product-execution-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .request-detail-panel .request-scope-card {
+    flex-direction: column;
+    align-items: stretch;
+  }
   .settings-page-title-row {
     align-items: start;
   }

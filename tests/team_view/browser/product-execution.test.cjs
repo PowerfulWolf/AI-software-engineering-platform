@@ -50,7 +50,8 @@ test("legacy product approval facts show Chinese actions and retain the original
   await h.page.evaluate(() => showDetail("request", "request_fixture"));
   const detail = h.page.locator("#detail");
   const expected = "请审阅本版产品规格并批准，或回复需要修改的内容。";
-  assert.match(await detail.locator(".product-execution-summary").innerText(), new RegExp(expected));
+  assert.match(await detail.locator(".request-blocking-section").innerText(), new RegExp(expected));
+  await detail.locator('.request-history-fold[data-key^="operation-history:"] > summary').click();
   assert.match(await detail.locator(".execution-history").innerText(), new RegExp(expected));
   assert.doesNotMatch(await detail.innerText(), /Review product_spec and approve/);
   assert.equal(await h.page.evaluate(() => snapshot.requests[0].execution.next_action), original);
@@ -140,6 +141,7 @@ test("host interruption turns the retained stage and Designer queue red and offe
   assert.match(await detail.locator(".product-execution-summary").innerText(), /操作已中断/);
   assert.doesNotMatch(await detail.locator(".product-execution-summary").innerText(), /状态待核对|尚无执行事实/);
   const stoppedBadge = detail.locator(".execution-history .badge.execution-interrupted");
+  await detail.locator('.request-history-fold[data-key^="operation-history:"] > summary').click();
   assert.equal(await stoppedBadge.evaluate(node => getComputedStyle(node).color), "rgb(198, 40, 40)");
   assert.match(await detail.locator(".execution-history").innerText(), /服务在本次操作完成前已停止/);
   assert.equal(await detail.getByRole("button", {name: "继续设计", exact: true}).isVisible(), true);

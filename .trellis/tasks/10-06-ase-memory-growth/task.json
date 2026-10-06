@@ -1,8 +1,10 @@
 {
   "id": "ase-memory-growth-20261006",
   "title": "排查并限制ASE控制台进程快速内存增长",
-  "status": "in_progress",
-  "phase": "verify_live_repair",
+  "status": "completed",
+  "phase": "complete",
+  "completed_at": "2026-10-06",
+  "implementation_commit": "09edc12",
   "owner": "codex",
   "created_at": "2026-10-06",
   "constraints": [

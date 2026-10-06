@@ -17,3 +17,20 @@ Public Console concurrent/cancelled caller red tests showed second reads enterin
 Incremental verification: 74 selected Python tests across memory, admission/correction/journal, production Agents, transport and Console core passed. Ruff and changed-file Mypy (`--follow-imports=silent`) pass; importing unrelated helper-test implementations into full Mypy traversal exposes 23 existing errors, not new runtime errors. No full test suite was run.
 
 While idle, the trusted script restarted PID80012 as84247 for pressure mitigation; repeated footprint still climbed1.5→1.9→4.6→6.0GiB. After a second public check showed0activeOperations, the trusted service was stopped pending deployment to avoid further pressure. No delivery commands or approvals were submitted. User subsequently requested layout improvement and explicitly reserved all further ASE delivery decisions/actions for them; that boundary is now in force.
+
+## Production repair validation
+
+Repair commit `09edc12` was pushed and fast-forwarded into the production checkout. The trusted
+service script loaded the repair as PID 94152. Six samples at ten-second intervals recorded physical
+footprint 0.3292 / 0.3396 / 0.3418 / 0.3428 / 0.3407 / 0.3428 GiB (RSS 1108.89–1122.89 MiB).
+The short repeated polling window passed the numeric gate and showed a plateau; this is not proof
+against every possible long-running workload. Raw numeric facts are preserved in the external
+maintenance directory. A validated current Team snapshot was captured for read-only delivery
+diagnosis and isolated layout inspection. No delivery command, engineering investigation, approval
+or resume was submitted. Existing SQL/journal/Task facts require no migration.
+
+After the layout/diagnosis work, a further three ten-second-interval samples of the same PID were
+0.6660 / 0.6484 / 0.6453 GiB physical footprint (RSS 1227.39–1238.42 MiB). These later samples remained
+below the 2 GiB diagnostic gate and plateaued instead of the previous rapid multi-GiB growth. The
+physical allocator/working set and RSS are distinct measurements; single-read transient peaks and
+other future workloads still need observation. No additional service restart was needed.

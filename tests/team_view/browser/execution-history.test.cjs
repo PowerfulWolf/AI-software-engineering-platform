@@ -38,6 +38,7 @@ test("one unchanged running operation follows design, planning and each native r
     if (stage === "DESIGNING") {
       await h.page.evaluate(() => showDetail("request", "request_fixture"));
       await h.close();
+      await h.page.locator("#detail .request-history-fold").filter({hasText: "操作记录（完整历史"}).locator(":scope > summary").click();
       await currentRow.locator("details summary").click();
       await oldRow.evaluate(node => {window.oldOperationRow = node;});
     }
@@ -87,6 +88,7 @@ test("sealed succeeded command outcomes keep their actual delivery result after 
   await h.tick();
   if (await h.page.locator("#notification").isVisible()) await h.close();
   await h.page.evaluate(() => showDetail("request", "request_fixture"));
+  await h.page.locator("#detail .request-history-fold").filter({hasText: "操作记录（完整历史"}).locator(":scope > summary").click();
   for (let index = 0; index < expected.length; index++) {
     const row = h.page.locator("#detail .execution-history-entry").filter({hasText: "outcome_" + index});
     assert.equal(await row.locator("strong").first().innerText(), expected[index]);
