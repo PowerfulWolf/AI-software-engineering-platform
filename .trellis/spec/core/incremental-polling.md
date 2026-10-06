@@ -96,6 +96,8 @@ syncTaskReadingToolbar(panel)         // only toolbar text/pressed state, only w
 taskReadingFold(title, key, open = false)
 taskFeedbackSection(history, taskId)   // latest saved QA/Review artifact per kind
 requestChapter(key)                   // current / outputs / history / reference
+taskChapter(key)                      // same grouping with Task-specific names and facts
+detailChapter(chapters, prefix, key)   // shared read-only chapter structure
 requestChapterNavigation(request)     // read-only scroll controls
 ```
 
@@ -131,6 +133,15 @@ requestChapterNavigation(request)     // read-only scroll controls
 - Task dialog and Requirement detail each have one main vertical reading surface. History/report
   bodies have no inner max-height clipping; long text wraps. Document source URI/hash is accessible
   after the body in a collapsed identity disclosure. Empty activity regions render no blank card.
+- Task uses four `.task-chapter` cards: 当前进展、产物与报告、完整执行记录、工程参考.
+  Current status/feedback precedes source reports and complete history. Model calls belong to
+  history, identity/queues/assignments to reference. Chapter titles are `h2`, internal titles `h3`,
+  peer disclosures share summary size/padding/borders; only nested source metadata is smaller.
+  Task documents live under keyed `.task-artifact-list`; style this actual parent, not only
+  chapter-direct `details`. Grid gaps prevent adjacent fold margins from collapsing together.
+  Sticky header keeps close/reading controls; nonsticky title/status may wrap fully without
+  filling the viewport. Overview signature includes raw `item.status` as well as presentation,
+  since a changed delivery phase can have an unchanged WAITING/RUNNING presentation.
 
 ### Validation and error matrix
 

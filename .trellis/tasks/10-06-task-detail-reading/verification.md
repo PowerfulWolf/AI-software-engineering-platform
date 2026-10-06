@@ -80,3 +80,39 @@ NODE_PATH=/path/to/node_modules node --test tests/team_view/browser/task-detail-
 computed fontSize 证明需求详情/关闭详情字号一致，primary/danger 颜色未被关闭样式覆盖。
 桌面和手机抬头截图已目视检查，独立 reviewer 局部复核未发现未解决问题。
 仅前端展示，无数据迁移，存量和回滚方式与前述相同。
+
+## Task 四章跟进
+
+按用户任务详情截图，将 Task 也重排为四章：当前进展、产物与报告、完整执行记录、工程参考。
+当前执行说明和最近 QA/Review 反馈放在第一章；全部报告放在第二章；完整历史及已完成模型
+调用放在第三章；任务身份、候选版本、角色队列和分配放在第四章。同级折叠项统一字号、
+边框和内边距，章节和报告列表使用 Grid gap，避免相邻卡片的 margin collapse。
+
+Task 长标题与状态放在随正文滚动的抬头，固定区域只保留任务详情、关闭和阅读工具栏。
+只有四章使用 h2，内部标题降为 h3；所有新增章节及列表父容器仍为 keyed viewGroup。
+另补入 overview 的原始 item.status 签名：展示 WAITING/RUNNING 不变时，交付阶段仍可能从
+QA 进入 REVIEW，不能保留旧阶段。文档样式覆盖实际的 task-artifact-list 父层。
+
+本轮只跑相关增量检查：
+
+```sh
+node --test tests/team_view/ui.test.cjs tests/team_view/product-execution.test.cjs \
+  tests/team_view/delivery-status.test.cjs
+NODE_PATH=/path/to/node_modules node --test tests/team_view/browser/task-detail-reading.test.cjs \
+  tests/team_view/browser/requirement-detail.test.cjs tests/team_view/browser/polling-state.test.cjs \
+  tests/team_view/browser/execution-history.test.cjs tests/team_view/browser/historical-child.test.cjs \
+  tests/team_view/browser/product-execution.test.cjs tests/team_view/browser/interactions.test.cjs
+```
+
+- 轻量 JS 契约 41 项通过；隔离 Chrome 36 项通过，全部请求由 fixture 拦截。
+- 独立 reviewer 发现工程折叠样式断言的 selector 漏项；按反馈修复后，Task reading 单独重跑
+  4 项全部通过，工程参考也纳入同级样式检查。
+- 390/1024/1440 px 无横向溢出，长标题完整且不占固定顶部，长报告末尾可读。
+- QA → REVIEW 时显示阶段更新；阅读选区、原 DOM、滚动、展开及暂停/恢复边界继续通过。
+- 独立复核确认 Task 保持只读，没有新增业务操作，也没有改变 Requirement 的审批门禁。
+- 只读 GET 127.0.0.1:8765/app.js 与 style.css 均为 200、no-store，字节摘要与本轮工作区一致。
+- 截图底部重复片段经像素比较及 CDP 交叉截图确认为本机 Chrome headless 截图尺寸问题，
+  非重复 DOM 或 UI 卡片；原生 surface 截图与 DOM 命中交叉验证正常，没有为截图管线改动 CSS。
+
+存量数据处置：无需改库或迁移，Task 和 Requirement 的原历史、报告与审批事实保持原契约。
+刷新浏览器加载前端资产即可；回滚本轮 app.js/style.css 并刷新，不需数据库回滚或重启角色。

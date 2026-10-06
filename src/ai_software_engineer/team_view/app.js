@@ -7424,19 +7424,31 @@ const requestChapters = [
   ["history", "完整交付记录", "按记录类型查看全过程；历史结论只描述当次执行。"],
   ["reference", "工程参考", "查看需求身份、工程授权和知识核对信息。"],
 ];
-function requestChapter(key) {
-  const index = requestChapters.findIndex(chapter => chapter[0] === key);
-  const [, title, description] = requestChapters[index];
-  const section = viewGroup(el("section", undefined, "request-chapter"), "request-chapter:" + key);
-  section.id = "request-chapter-" + key;
+const taskChapters = [
+  ["current", "当前进展", "查看当前执行、处理建议和最近的独立验收反馈。"],
+  ["outputs", "产物与报告", "查看已保存的任务产物和报告正文。"],
+  ["history", "完整执行记录", "查看全部执行轮次和已完成的模型调用。"],
+  ["reference", "工程参考", "查看任务身份、候选版本、角色队列和分配信息。"],
+];
+function detailChapter(chapters, prefix, key) {
+  const index = chapters.findIndex(chapter => chapter[0] === key);
+  const [, title, description] = chapters[index];
+  const section = viewGroup(el("section", undefined, prefix + "-chapter"), prefix + "-chapter:" + key);
+  section.id = prefix + "-chapter-" + key;
   section.setAttribute("aria-labelledby", section.id + "-title");
-  const heading = viewBlock(el("div", undefined, "request-chapter-heading"), "chapter-heading:" + key, key);
+  const heading = viewBlock(el("div", undefined, prefix + "-chapter-heading"), prefix + "-chapter-heading:" + key, [title, description]);
   const titleNode = el("h2", title);
   titleNode.id = section.id + "-title";
-  heading.append(el("span", String(index + 1).padStart(2, "0"), "request-chapter-number"),
+  heading.append(el("span", String(index + 1).padStart(2, "0"), prefix + "-chapter-number"),
     titleNode, el("p", description, "muted"));
   section.append(heading);
   return section;
+}
+function requestChapter(key) {
+  return detailChapter(requestChapters, "request", key);
+}
+function taskChapter(key) {
+  return detailChapter(taskChapters, "task", key);
 }
 function requestChapterNavigation(request) {
   const nav = viewBlock(el("nav", undefined, "request-chapter-nav"), "request-chapter-nav", [request.project_id, request.id]);
@@ -7647,14 +7659,14 @@ function buildDetail(panel = document.getElementById("detail")) {
         selected = null;
         render();
       },
-      selected.kind === "request" ? "detail-close-control" : "",
+      "detail-close-control",
     ),
   );
   top.append(
     el(
-      selected.kind === "request" ? "p" : "h2",
+      "p",
       selected.kind === "task" ? "任务详情" : "需求详情",
-      selected.kind === "request" ? "detail-panel-heading" : "",
+      "detail-panel-heading",
     ),
     topActions,
   );
@@ -7776,12 +7788,16 @@ function buildDetail(panel = document.getElementById("detail")) {
   viewBlock(top, "task-heading", item.id);
   header.append(top, taskReadingToolbar());
   dialog.append(header);
+  const masthead = viewGroup(el("div", undefined, "task-detail-masthead"), "task-detail-masthead");
+  const taskTitleRow = viewGroup(el("div", undefined, "task-title-row"), "task-title-row");
+  taskTitleRow.append(viewBlock(el("p", item.title, "task-detail-title"), "task-title", item.title),
+    viewBlock(badge(taskPresentationStatus(item)), "task-heading-status", taskPresentationStatus(item)));
+  masthead.append(taskTitleRow);
+  dialog.append(masthead);
+  const current = taskChapter("current");
   const overview = viewBlock(el("section", undefined, "task-detail-overview"), "task-overview",
-    [item.title, taskPresentationStatus(item), item.execution, item.blocker, item.next_action, item.last_activity,
+    [item.status, taskPresentationStatus(item), item.execution, item.blocker, item.next_action, item.last_activity,
       interruptedExecution(item), waitingExecutionStep(item), item.scope]);
-  const taskTitleRow = el("div", undefined, "task-title-row");
-  taskTitleRow.append(el("h3", item.title, "task-detail-title"), badge(taskPresentationStatus(item)));
-  overview.append(taskTitleRow);
   if (item.execution) overview.append(productExecutionSummary(item));
   else {
     overview.append(el("p", "当前阶段 · " + deliveryPhase(item)));
@@ -7792,7 +7808,7 @@ function buildDetail(panel = document.getElementById("detail")) {
   const activity = roleExecutionActivity(item);
   activity.classList.add("task-activity-block");
   viewBlock(activity, "task-activity", [item.status, item.terminal, item.role_queue]);
-  dialog.append(overview, activity);
+  current.append(overview, activity);
   const engineering = engineeringDetails("任务工程详情", item.id);
   viewGroup(engineering, "task-engineering");
   const engineeringBody = viewBlock(el("div"), "task-engineering-facts",
@@ -7815,7 +7831,7 @@ function buildDetail(panel = document.getElementById("detail")) {
   if (item.candidate_branch)
     engineeringTarget.append(el("p", "候选分支 · " + item.candidate_branch, "paths"));
   if (item.role_queue?.length) {
-    engineeringTarget.append(el("h2", "角色执行队列"));
+    engineeringTarget.append(el("h3", "角色执行队列"));
     for (const step of item.role_queue) {
       const lease = {
         LEASE_VALID: "租约有效",
@@ -7832,7 +7848,7 @@ function buildDetail(panel = document.getElementById("detail")) {
         engineeringTarget.append(el("p", "等待补充知识，详情见需求的阻塞信息。", "muted"));
     }
   }
-  engineeringTarget.append(el("h2", "成员与分配模型"));
+  engineeringTarget.append(el("h3", "成员与分配模型"));
   for (const a of item.assignments)
     engineeringTarget.append(
       el(
@@ -7842,7 +7858,15 @@ function buildDetail(panel = document.getElementById("detail")) {
     );
   const history = item.execution_history?.length ? item.execution_history : item.timeline;
   const feedback = taskFeedbackSection(history, item.task_id || item.id);
-  if (feedback) dialog.append(feedback);
+  if (feedback) current.append(feedback);
+  dialog.append(current);
+  const outputs = taskChapter("outputs");
+  outputs.append(viewBlock(el("p", `共 ${item.documents.length} 份已保存产物。`, "muted"), "task-document-count", item.documents.length));
+  const reports = viewGroup(el("div", undefined, "task-artifact-list"), "task-documents");
+  documentList(reports, item.documents);
+  outputs.append(reports);
+  dialog.append(outputs);
+  const executionRecords = taskChapter("history");
   const records = taskReadingFold(`执行记录（完整历史） · ${history.length} 条`, "task-history", true);
   records.append(viewBlock(el("p", `共 ${history.length} 条记录。历史轮次完整保留，不代表当前状态。`, "muted"), "task-history-count", history.length));
   engineeringTarget.append(el("p", "当前 Task · " + (item.task_id || item.id), "paths"));
@@ -7852,10 +7876,7 @@ function buildDetail(panel = document.getElementById("detail")) {
   for (const entry of history) appendExecutionEntry(list, entry, item.task_id || item.id);
   if (!history.length) list.append(el("li", "暂无已保存的执行记录。", "muted"));
   records.append(list);
-  dialog.append(records);
-  const reports = taskReadingFold(`产物与报告 · ${item.documents.length} 份`, "task-documents", true);
-  documentList(reports, item.documents);
-  dialog.append(reports);
+  executionRecords.append(records);
   const calls = taskReadingFold(`已完成的模型调用 · ${item.runs.length} 次`, "task-model-calls");
   const callList = viewGroup(el("div", undefined, "task-model-call-list"), "task-model-call-list");
   if (!item.runs.length)
@@ -7881,7 +7902,10 @@ function buildDetail(panel = document.getElementById("detail")) {
   calls.append(callList);
   engineering.append(engineeringBody);
   engineering.classList.add("task-detail-section");
-  dialog.append(calls, engineering);
+  executionRecords.append(calls);
+  const reference = taskChapter("reference");
+  reference.append(engineering);
+  dialog.append(executionRecords, reference);
   panel.append(dialog);
 }
 function render({ preserveComposer = false, incremental = false } = {}) {

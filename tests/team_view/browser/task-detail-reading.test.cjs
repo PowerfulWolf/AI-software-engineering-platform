@@ -129,6 +129,9 @@ test("reading pause cannot cross Team, page, Project or selected entity boundari
 
 test("Task hierarchy and long reports fit narrow screens with one scrolling reading surface", async t => {
   const h = await openTask(t);
+  assert.deepEqual(await h.detail.locator(":scope > .task-chapter > .task-chapter-heading > h2").allTextContents(),
+    ["当前进展", "产物与报告", "完整执行记录", "工程参考"]);
+  assert.equal(await h.detail.locator("h2").count(), 4, "Task subsections cannot be mistaken for additional chapters");
   h.task.title += "超长连续标题".repeat(20);
   await h.tick();
   assert.match(await h.detail.locator(".task-detail-overview").innerText(), /验证环境未就绪/);
@@ -136,7 +139,15 @@ test("Task hierarchy and long reports fit narrow screens with one scrolling read
   assert.match(await h.detail.locator(".task-feedback-card").innerText(), /补充空输入/);
   assert.equal(await h.detail.locator(".task-activity-block").evaluate(node => getComputedStyle(node).display), "none");
   assert.equal(await h.detail.locator('[data-key="engineering:task_reading"]').evaluate(node => node.open), false);
+  assert.equal(await h.detail.locator('[data-key="engineering:task_reading"]').evaluate(node => node.closest(".task-chapter").id), "task-chapter-reference");
+  assert.equal(await h.detail.locator(".task-model-call-list").evaluate(node => node.closest(".task-chapter").id), "task-chapter-history");
+  const peerStyles = await h.detail.locator(".task-reading-fold > summary, .task-artifact-list > .artifact-document > summary, #task-chapter-reference > details > summary").evaluateAll(nodes => nodes.map(node => {
+    const style = getComputedStyle(node), card = getComputedStyle(node.parentElement);
+    return [style.fontSize, style.fontWeight, card.padding, card.borderTopWidth];
+  }));
+  assert.ok(peerStyles.every(style => JSON.stringify(style) === JSON.stringify(peerStyles[0])), "peer folds and reports share typography, spacing and boundaries");
   const report = h.detail.locator('details[data-key="artifact://reading"]');
+  assert.equal(await report.evaluate(node => node.closest(".task-chapter").id), "task-chapter-outputs");
   await report.locator(":scope > summary").click();
   assert.match(await report.innerText(), /全文末尾/);
   assert.doesNotMatch(await report.innerText(), /SHA-256/);
@@ -156,4 +167,12 @@ test("Task hierarchy and long reports fit narrow screens with one scrolling read
     await h.detail.evaluate(node => {node.scrollTop = 600;});
     assert.equal(await h.detail.evaluate(node => Math.abs(node.querySelector(".task-detail-header").getBoundingClientRect().top - node.getBoundingClientRect().top) <= 2), true);
   }
+  // Typed waiting state is unchanged, but the saved delivery checkpoint can advance.
+  // Current phase must include raw Task status in its rendering signature.
+  h.task.status = "QA";
+  await h.tick();
+  assert.equal(await h.detail.locator(".execution-phase").innerText(), "交付阶段 · 测试");
+  h.task.status = "REVIEW";
+  await h.tick();
+  assert.equal(await h.detail.locator(".execution-phase").innerText(), "交付阶段 · 评审");
 });
