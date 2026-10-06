@@ -176,10 +176,19 @@ def native_acceptance_mapping(item: AcceptanceMappingDraft) -> AcceptanceDesignM
         return AcceptanceDesignMapping.model_validate(item.to_wire())
     except ValidationError as error:
         code = "INVALID_MAPPING"
-        messages = {
-            entry["msg"]
-            for entry in error.errors(include_input=False, include_url=False, include_context=False)
-        }
+        entries = error.errors(include_input=False, include_url=False)
+        messages = {entry["msg"] for entry in entries}
+        for entry in entries:
+            context = entry.get("ctx")
+            cause = context.get("error") if context is not None else None
+            if isinstance(cause, BaseException):
+                # Pydantic's native error retains validator exceptions outside
+                # Python GC traversal. Their traceback frames point back to this
+                # caller and can keep an entire completed journal read alive.
+                # Preserve the safe classification, not nested execution frames.
+                cause.__traceback__ = None
+                cause.__context__ = None
+                cause.__cause__ = None
         if "Value error, inspection cannot weaken the approved verification levels" in messages:
             code = "INSPECTION_LEVELS"
         elif "Value error, verification command and inspection are mutually exclusive" in messages:

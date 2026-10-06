@@ -3,17 +3,20 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Event, get_ident
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 from starlette.types import Message, Scope
 
 from ai_software_engineer.agents.model_diagnostics import ModelCallDiagnostic
 from ai_software_engineer.config import ProductionConfig, ProductionConfigError
+from ai_software_engineer.domain.model import WirePayload
 from ai_software_engineer.multi_directory.attachments import RequirementScreenshot
-from ai_software_engineer.team_view.models import TeamSnapshot
+from ai_software_engineer.team_view.models import TeamReadError, TeamSnapshot
 from ai_software_engineer.team_workspace import TeamWorkspace
 from ai_software_engineer.web_console import (
     ConfigurationApplyError,
@@ -80,6 +83,152 @@ class _DirectoryChooser:
 
     def choose(self) -> tuple[str, ...]:
         return self.values
+
+
+class _HeldSnapshotReader(_Reader):
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = Event()
+        self.release = Event()
+        self.finished = Event()
+
+    def snapshot(self, project_id: str | None = None) -> TeamSnapshot:
+        if not self.project_ids:
+            self.project_ids.append(project_id)
+            self.entered.set()
+            try:
+                assert self.release.wait(5), "test did not release its first snapshot"
+            finally:
+                self.finished.set()
+            return TeamSnapshot(
+                as_of=datetime(2026, 9, 12, tzinfo=UTC),
+                team_id="team_test",
+                team_name="Test team",
+                selected_project_id=project_id,
+            )
+        return super().snapshot(project_id)
+
+
+@pytest.mark.parametrize("cancel_first", [False, True])
+def test_team_snapshot_admission_tracks_actual_worker_lifetime(cancel_first: bool) -> None:
+    async def exercise() -> None:
+        reader = _HeldSnapshotReader()
+        app = create_console_app(_Console(), reader, team_id="team_test")
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app), base_url="http://127.0.0.1:8765"
+        ) as client:
+            first = asyncio.create_task(client.get("/api/v1/team?project_id=project_first"))
+            try:
+                assert await asyncio.to_thread(reader.entered.wait, 2)
+                if cancel_first:
+                    first.cancel()
+                    # Middleware may shield cancellation until the synchronous
+                    # worker returns; do not wait for that before probing overlap.
+                    await asyncio.sleep(0)
+                rejected = await asyncio.wait_for(
+                    client.get("/api/v1/team?project_id=project_second"), 2
+                )
+                assert rejected.status_code == 503
+                assert rejected.json()["error"]["code"] == "TEAM_READ_IN_PROGRESS"
+                assert rejected.headers["cache-control"] == "no-store"
+                assert reader.project_ids == ["project_first"]
+                assert (await client.get("/api/v1/console")).status_code == 200
+                assert (
+                    await client.get("/api/v1/team", headers={"Origin": "https://untrusted.test"})
+                ).status_code == 403
+                assert reader.project_ids == ["project_first"]
+            finally:
+                reader.release.set()
+                if not cancel_first:
+                    response = await asyncio.wait_for(first, 2)
+                    assert response.json()["selected_project_id"] == "project_first"
+                else:
+                    with pytest.raises(asyncio.CancelledError):
+                        await asyncio.wait_for(first, 2)
+                assert await asyncio.to_thread(reader.finished.wait, 2)
+
+            # A cancelled HTTP caller is not proof that its synchronous worker stopped.
+            # Wait for the actual worker's gate to be released, without reusing old facts.
+            for _ in range(100):
+                response = await client.get("/api/v1/team?project_id=project_second")
+                if response.status_code != 503:
+                    break
+                await asyncio.sleep(0.005)
+            assert response.status_code == 200
+            assert response.json()["selected_project_id"] == "project_second"
+            assert reader.project_ids == ["project_first", "project_second"]
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("safe_failure", [True, False])
+def test_team_snapshot_admission_releases_after_read_failure(safe_failure: bool) -> None:
+    class FailingOnceReader(_Reader):
+        def snapshot(self, project_id: str | None = None) -> TeamSnapshot:
+            if not self.project_ids:
+                self.project_ids.append(project_id)
+                error = TeamReadError if safe_failure else RuntimeError
+                raise error("private configuration must never reach the response")
+            return super().snapshot(project_id)
+
+    reader = FailingOnceReader()
+    app = create_console_app(_Console(), reader, team_id="team_test")
+    with TestClient(app, base_url="http://127.0.0.1:8765", raise_server_exceptions=False) as client:
+        failed = client.get("/api/v1/team")
+        assert failed.status_code == (503 if safe_failure else 500)
+        if safe_failure:
+            assert failed.json()["error"]["code"] == "TEAM_UNAVAILABLE"
+        assert "private configuration" not in failed.text
+        assert client.get("/api/v1/team?project_id=project_next").status_code == 200
+
+
+@pytest.mark.parametrize("phase", ["wire", "render"])
+def test_team_snapshot_admission_includes_worker_serialization(
+    monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    entered, release = Event(), Event()
+    loop_thread = get_ident()
+    original_wire = TeamSnapshot.to_wire
+    original_render = JSONResponse.render
+
+    def hold() -> None:
+        assert get_ident() != loop_thread, "serialization blocked the HTTP event loop"
+        entered.set()
+        assert release.wait(5), "test did not release serialization"
+
+    def wire(snapshot: TeamSnapshot) -> WirePayload:
+        if not release.is_set():
+            hold()
+        return original_wire(snapshot)
+
+    def render(response: JSONResponse, content: object) -> bytes:
+        if isinstance(content, dict) and "team_id" in content and not release.is_set():
+            hold()
+        return original_render(response, content)
+
+    if phase == "wire":
+        monkeypatch.setattr(TeamSnapshot, "to_wire", wire)
+    else:
+        monkeypatch.setattr(JSONResponse, "render", render)
+
+    async def exercise() -> None:
+        reader = _Reader()
+        app = create_console_app(_Console(), reader, team_id="team_test")
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app), base_url="http://127.0.0.1:8765"
+        ) as client:
+            first = asyncio.create_task(client.get("/api/v1/team"))
+            try:
+                assert await asyncio.to_thread(entered.wait, 2)
+                second = await asyncio.wait_for(client.get("/api/v1/team"), 2)
+                assert second.status_code == 503
+                assert reader.project_ids == [None]
+            finally:
+                release.set()
+                assert (await asyncio.wait_for(first, 2)).status_code == 200
+            assert (await client.get("/api/v1/team")).status_code == 200
+
+    asyncio.run(exercise())
 
 
 class _ScreenshotAdministration:

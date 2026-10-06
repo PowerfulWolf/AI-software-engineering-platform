@@ -1,5 +1,10 @@
 # T036 Live team read side
 
+Long-lived read lifetime and native validation-error retention follow
+[`read-memory-lifecycle.md`](read-memory-lifecycle.md). Team GET admission stays with the actual
+worker through serialization; cancellation does not prove that read stopped. Complete verified
+history remains available and must release after a finished read.
+
 ## 面向产品负责人的执行状态与工程处理（2026-10-04）
 
 ### Scope / Signatures

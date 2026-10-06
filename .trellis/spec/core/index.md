@@ -38,6 +38,9 @@
 
 ## Files
 
+- [Read memory lifecycle](read-memory-lifecycle.md): nested validation-error frame release,
+  worker-owned snapshot admission and bounded serial/concurrent memory verification.
+
 - [`engineering-authority.md`](engineering-authority.md): versioned engineering policy, trusted
   Product/Engineering duties, exact nonterminal wait investigations and resolutions.
 

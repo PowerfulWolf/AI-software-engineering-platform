@@ -1,5 +1,9 @@
 # Local Web Console Contract
 
+Console Team-read admission and diagnostic-object lifetime follow
+[`read-memory-lifecycle.md`](read-memory-lifecycle.md), including fixed
+`503 TEAM_READ_IN_PROGRESS`, worker-owned release and unchanged read-only facts.
+
 ## 1. Scope / Trigger
 
 修改 `web_console/`、浏览器交付操作、Team View 中的写入口、后台 Manager 执行、

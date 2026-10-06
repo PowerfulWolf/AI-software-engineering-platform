@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from _thread import LockType
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from importlib.resources import files
+from threading import Lock
 from typing import Protocol
 
 from fastapi import FastAPI, Request
@@ -95,6 +97,7 @@ def create_console_app(
     expected_host = f"127.0.0.1:{port}"
     expected_origin = f"http://{expected_host}"
     command_team_id = TypeAdapter(TeamId).validate_python(team_id)
+    snapshot_gate = Lock()
     knowledge_worker = (
         KnowledgeIndexWorker(administration.tick_knowledge_indexes)
         if isinstance(administration, LocalConsoleAdministration)
@@ -146,7 +149,7 @@ def create_console_app(
     async def team(project_id: str | None = None) -> Response:
         if project_id is not None and not _valid_project_id(project_id):
             return _error(404, "NOT_FOUND", "Project was not found.")
-        return await _team_snapshot(reader, project_id)
+        return await _team_snapshot(reader, project_id, snapshot_gate)
 
     @app.get("/api/v1/admin/projects/{project_id}/requirements/{requirement_id}/knowledge-gaps")
     async def knowledge_gaps(project_id: str, requirement_id: str) -> Response:
@@ -927,12 +930,22 @@ def _valid_project_id(project_id: str) -> bool:
     return True
 
 
-async def _team_snapshot(reader: TeamReader, project_id: str | None) -> Response:
-    try:
-        snapshot = await run_in_threadpool(reader.snapshot, project_id)
-    except TeamReadError:
-        return _error(503, "TEAM_UNAVAILABLE", "Team data is temporarily unavailable.")
-    return JSONResponse(snapshot.to_wire())
+async def _team_snapshot(reader: TeamReader, project_id: str | None, gate: LockType) -> Response:
+    def read_response() -> Response:
+        # A disconnected HTTP caller does not stop its synchronous worker. Keep
+        # admission with the actual read, including serialization, rather than
+        # releasing an async gate when that caller is cancelled.
+        if not gate.acquire(blocking=False):
+            return _error(503, "TEAM_READ_IN_PROGRESS", "A Team read is already in progress.")
+        try:
+            snapshot = reader.snapshot(project_id)
+            return JSONResponse(snapshot.to_wire())
+        except TeamReadError:
+            return _error(503, "TEAM_UNAVAILABLE", "Team data is temporarily unavailable.")
+        finally:
+            gate.release()
+
+    return await run_in_threadpool(read_response)
 
 
 def _header_values(request: Request, name: bytes) -> list[str]:
