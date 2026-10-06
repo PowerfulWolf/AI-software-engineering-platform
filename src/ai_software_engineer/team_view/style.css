@@ -662,12 +662,27 @@ main[data-page="requests"] #detail {
   align-items: flex-start;
   gap: 16px;
 }
-.request-detail-masthead .request-detail-title {
+.request-title-row,
+.task-title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
   margin: 14px 0 10px;
+}
+.request-detail-masthead .request-detail-title {
+  flex: 1 1 0;
+  min-width: 0;
+  margin: 0;
   color: var(--ink);
   font-size: 1.3rem;
   font-weight: 650;
   line-height: 1.5;
+}
+.request-title-row > .badge,
+.task-title-row > .badge {
+  flex: 0 0 auto;
+  margin-top: 3px;
+  white-space: nowrap;
 }
 .request-chapter-nav {
   position: sticky;
@@ -2664,6 +2679,14 @@ main #detail.task-detail-modal {
   font-weight: 650;
   overflow-wrap: anywhere;
 }
+.task-title-row {
+  margin: 8px 0 12px;
+}
+.task-title-row > .task-detail-title {
+  flex: 1 1 0;
+  min-width: 0;
+  margin: 0;
+}
 .task-detail-overview,
 .task-detail-section,
 .task-reading-fold {
@@ -3039,8 +3062,10 @@ code {
   .request-detail-masthead > .row {
     flex-wrap: wrap;
   }
-  .request-detail-masthead .request-detail-title {
+  .request-title-row {
     margin-top: 12px;
+  }
+  .request-detail-masthead .request-detail-title {
     font-size: 1.125rem;
   }
   .request-chapter-nav {

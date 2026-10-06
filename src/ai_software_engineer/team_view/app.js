@@ -7663,9 +7663,10 @@ function buildDetail(panel = document.getElementById("detail")) {
     const blocking = requestBlockerSection(item);
     panel.className = "request-detail-panel";
     const masthead = viewGroup(el("header", undefined, "request-detail-masthead"), "request-detail-masthead");
-    masthead.append(viewBlock(top, "request-heading-actions", [item, pollingControlFacts(), operations]),
-      viewBlock(el("p", item.title, "request-detail-title"), "request-heading-title", item.title),
-      viewBlock(requestNodeBadge(item), "request-heading-status", requestNodeExecution(item)));
+    const titleRow = viewGroup(el("div", undefined, "request-title-row"), "request-title-row");
+    titleRow.append(viewBlock(el("p", item.title, "request-detail-title"), "request-heading-title", item.title),
+      viewBlock(requestNodeBadge(item), "request-heading-status", [deliveryPhase(item), requestNodeExecution(item)]));
+    masthead.append(viewBlock(top, "request-heading-actions", [item, pollingControlFacts(), operations]), titleRow);
     panel.append(masthead, requestChapterNavigation(item));
     const current = requestChapter("current");
     const overview = viewBlock(el("div", undefined, "request-detail-overview"), "request-detail-overview",
@@ -7778,7 +7779,9 @@ function buildDetail(panel = document.getElementById("detail")) {
   const overview = viewBlock(el("section", undefined, "task-detail-overview"), "task-overview",
     [item.title, taskPresentationStatus(item), item.execution, item.blocker, item.next_action, item.last_activity,
       interruptedExecution(item), waitingExecutionStep(item), item.scope]);
-  overview.append(el("h3", item.title, "task-detail-title"), badge(taskPresentationStatus(item)));
+  const taskTitleRow = el("div", undefined, "task-title-row");
+  taskTitleRow.append(el("h3", item.title, "task-detail-title"), badge(taskPresentationStatus(item)));
+  overview.append(taskTitleRow);
   if (item.execution) overview.append(productExecutionSummary(item));
   else {
     overview.append(el("p", "当前阶段 · " + deliveryPhase(item)));

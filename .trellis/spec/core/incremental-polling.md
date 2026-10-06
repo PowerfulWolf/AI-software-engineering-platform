@@ -110,6 +110,10 @@ requestChapterNavigation(request)     // read-only scroll controls
   Any `knowledge_gap.is_current` belongs to current, including team/engineering responsibility;
   only historical gaps belong to reference. Never move an actionable current knowledge decision
   into engineering reference merely because it is not assigned to Product.
+  The masthead title and current status share a keyed `.request-title-row`: the title may wrap,
+  while the status remains visible on its right without shrinking or horizontal overflow.
+  The status block signature includes both `deliveryPhase(item)` and `requestNodeExecution(item)`;
+  unchanged RUNNING facts cannot retain an old phase label after the Requirement advances.
 - The chapter, fold and list ancestors must all be `viewGroup` for descendant keys to preserve DOM.
   `appendExecutionEntry` binds `{entry, currentTaskId}`; Task model rows bind full `run` facts and
   `run_id/source_uri`. A heartbeat or added history row cannot rebuild unchanged sealed text.

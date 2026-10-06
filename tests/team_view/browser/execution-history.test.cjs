@@ -43,6 +43,8 @@ test("one unchanged running operation follows design, planning and each native r
       await oldRow.evaluate(node => {window.oldOperationRow = node;});
     }
     assert.equal(await currentRow.locator("strong").first().innerText(), `当前阶段 · ${phase} · 执行中`);
+    assert.equal(await h.page.locator(".request-title-row > .request-node-badge").innerText(), `${phase} · 执行中`,
+      "the title badge follows phase changes even when the running execution facts are unchanged");
     assert.match(await currentRow.innerText(), /发起操作 · 继续交付/);
     assert.match(await currentRow.innerText(), /发起操作时的需求版本摘要/);
     assert.equal(await currentRow.locator("details").evaluate(node => node.open), true, "expanded engineering details survive progress changes");

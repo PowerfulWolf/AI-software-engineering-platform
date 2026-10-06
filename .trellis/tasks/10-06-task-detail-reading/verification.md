@@ -58,3 +58,12 @@ NODE_PATH=/path/to/node_modules node --test tests/team_view/browser/task-detail-
 完整浏览器刷新会开启新视图，阅读暂停不是持久化设置，也不暂停后台 Agent。
 回滚本次 app.js/style.css 并刷新页面即可恢复原展示；不修改历史、不重启正在运行的角色，
 无需数据库回滚。前端变更没有新的仓库依赖或生成模板需要同步。
+
+## 标题右侧状态跟进
+
+按用户两张截图，将 Requirement 和 Task 的状态都移至标题右侧同一行。
+原标题/状态 facts 保持不变，标题可换行、状态不压缩；Requirement 新父容器也保持 keyed。
+独立复核同时发现徽章签名遗漏交付阶段：同一个 RUNNING 状态跨 DESIGNING/PLANNING
+曾保留旧阶段。签名现包括 deliveryPhase，并在既有跨阶段浏览器用例增加徽章同步断言。
+仅跑上述相关浏览器文件；另用隔离 Chrome fixture 检查两类标题在 1440/390 px、普通/长标题
+共 8 种布局，状态均在右侧且无溢出。存量处理和回滚方式与本任务一致。
