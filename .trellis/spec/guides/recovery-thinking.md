@@ -77,3 +77,13 @@ and every derived tool ended on the same local machine/account. A real later boo
 support the old reboot proof; it never changes a local attestation into a reboot record. Survey
 failures are typed WAITING results with no plan or queue consumption, and the console distinguishes
 the survey from approval and subsequent execution.
+### 维护会话不是历史执行（2026-10-08）
+
+- 全账户 Codex 名字匹配是否把正在调查的平台控制会话或路径里的 Codex 词误当执行？
+  以 kernel executable identity 区分；真实 CLI 的未知动作必须保守处理，包含 exec 的 e alias。
+- cwd 是空闲 shell 的位置还是工具/孤儿进程的工作位置？仅明确 idle shell 可豁免 cwd；
+  真正打开原工作区文件、交互控制位于原 checkout 和不明工具仍应拒绝。
+- 不用维护 ancestry 给任意子进程文件豁免。Unix exec 不改变 PID/birth；
+  两次清单分类变化须重查已覆盖路径，不能只验 PID 复用。
+- 原电脑当前没有识别到执行依然不能替代旧调用及派生工具的 exact 工程确认。
+  见 `../core/legacy-execution-rescue.md` 的进程归属契约。

@@ -1,0 +1,10 @@
+{
+  "id": "control-process-attribution-20261008",
+  "title": "修复本机恢复调查将维护会话和空闲终端误判为开发执行",
+  "status": "completed",
+  "owner": "codex",
+  "created_at": "2026-10-08",
+  "baseline": "fd05841",
+  "verification": "verification.md",
+  "completed_at": "2026-10-08"
+}

@@ -100,6 +100,7 @@ from ai_software_engineer.work_queue.invocation import (
     DeliveryInvocationStart,
 )
 from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
+from tests.manager.test_legacy_local_execution import MacFixtureObserver
 from tests.manager.test_production_backend import (
     _git,
     _git_output,
@@ -461,6 +462,8 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
         lambda _: boot.model_copy(update={"booted_at": original_start.started_at}),
     )
 
+    native_survey = TrustedLegacyLocalExecutionObserver.observe
+
     def incomplete_survey(
         _self: TrustedLegacyLocalExecutionObserver,
         *,
@@ -485,6 +488,31 @@ def test_public_host_rescues_original_unknown_coder_without_rewriting_history(
         worktree_root: Path,
         boot: LocalBootObservation,
     ) -> LegacyLocalExecutionSurvey:
+        if local_stop:
+            # Exercise the real attribution/path scanner through the public
+            # Host collector; only the bounded OS reads use fixture facts.
+            uid = os.getuid()
+            rows = (
+                f"101 1 {uid} S Thu Oct 8 08:00:00 2026 /usr/local/bin/codex resume maintenance\n"
+                f"102 1 {uid} S Thu Oct 8 08:00:00 2026 /usr/bin/python /platform/ase-console\n"
+                f"103 1 {uid} S Thu Oct 8 08:00:00 2026 /bin/zsh"
+            )
+            files = (
+                b"p101\0\nfcwd\0tDIR\0n/maintenance-checkout\0\n"
+                b"p102\0\nfcwd\0tDIR\0n/platform\0\n"
+                + f"p103\0\nfcwd\0tDIR\0n{worktree_root}\0\n".encode()
+            )
+            with monkeypatch.context() as scoped:
+                scoped.setattr(
+                    "ai_software_engineer.manager.legacy_local_execution.sys.platform", "darwin"
+                )
+                result = native_survey(
+                    MacFixtureObserver(commands=(rows, rows), open_files=files),
+                    worktree_root=worktree_root,
+                    boot=boot,
+                )
+            result.require_idle()
+            return result
         return LegacyLocalExecutionSurvey.create(
             worktree_path=str(worktree_root.resolve()),
             machine_sha256=boot.machine_sha256,

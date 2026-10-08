@@ -79,7 +79,7 @@ OS booleans/dates/PIDs cannot bypass the observer. Original historical UNKNOWN/o
 
 When boot does not postdate the original start, collect a fresh trusted survey over the current
 effective-account local execution boundary and the manager-owned original checkout. Fixed bounded
-OS queries inspect native Codex execution/wrappers and cwd/open workspace references. App-server
+OS queries inspect native Codex execution/wrappers and attributable cwd/open workspace references. App-server
 identity alone is not native delivery execution. Unknown ownership/state, query denial/truncation,
 target-associated processes and incomplete coverage refuse preparation. Commands never signal
 discovered processes, read environment variables or publish raw arguments. The original exact
@@ -146,3 +146,70 @@ QA/Review candidate sources; foreign, missing, cyclic or stale-epoch lineages re
 Wrong: manufacture a timeout stop from a restart, accept a user `stopped=true`, or reset the Task.
 Correct: capture new engineering facts honestly, require exact human attestation where old machine
 identity is absent, preserve the old unknown Run and use a separately claimed successor attempt.
+## 本机调查的控制会话归属（2026-10-08）
+
+### 1. Scope / Trigger
+
+修复调查者也使用 Codex 时的全账户假阻塞。此调查仍是旧 UNKNOWN 的当前辅助事实，不产生
+历史停止证明或自动审批。普通维护 checkout 与被救援的 manager-owned Coder checkout 分开。
+
+### 2. Signatures
+
+`_Process(pid, ppid, state, birth, command, executable_name)` 只存在调查内存；
+固定 ps 查询为 `/bin/ps -ww -U <uid> -o pid=,ppid=,uid=,stat=,lstart=,command=`。
+`_executable_name(pid)` 使用 macOS `proc_pidinfo(PROC_PIDTBSDINFO)` 的 kernel name，
+Linux 使用 `/proc/<pid>/exe`；不是 argv 内目录名字。macOS 已更新/删除的旧 app 二进制
+仍可能正在运行，不能因 PIDPATH 的 ENOENT 将它看成已退出或令本账户调查永远不完整。
+`_idle_terminal(process)` 只接受 S/I 状态、明确 shell basename 与固定交互/login flags，无执行命令。
+
+### 3. Contracts
+
+- 根可执行身份与动作分开识别：真实 `codex exec` 和 `e` 阻塞；实际 CLI 的未知参数、
+  sandbox/apply/default prompt 和包装路线保守阻塞。不能用四个子命令白名单放行未知 CLI。
+  `_codex_action` 按实际动作位置跳过明确全局选项和值，`_argv_blocker` 按 shell command、
+  script/module/env 的启动位置识别 wrapper；参数中的 app-server/exec/e 和会话名称不是动作。
+- 独立 `codex resume`、code-mode-host 和明确控制 daemon 不属于旧平台 `codex exec`。
+  桌面 Resources 下的 resume 与未知 wrapper 不获得全账户维护豁免。
+- 仅明确空闲 shell 的 cwd 可以不算访问；Python/Node、运行 shell command、孤儿工具及其他
+  未知进程的原工作区 cwd 仍阻塞。控制会话若 cwd 就在原 Coder checkout 也阻塞。
+- 真实打开的工作区文件/目录始终检查，控制进程的任意祖先/后代不获文件豁免；仅调查进程
+  自身不参与访问判定。原生执行后代的 cwd 保持执行归属。
+- 第二清单的 command/executable/PPID 或 cwd 归属改变时，重查已 covered PID 的路径。
+  Unix exec 不改变 PID/birth，不能只靠出生时间一致沿用旧空闲分类。重查前撤销旧 coverage，
+  活进程重查无 cwd/路径 coverage 时返回 PROCESS_SCAN_INCOMPLETE。
+- 未知状态、身份权限异常、截断、扫描时限、缺失 coverage 和 PID 复用仍 WAITING。
+  不信任 caller 传入 PID/进程豁免名单；不发信号、不读环境、不发布 raw argv/kernel names。
+- wire `local-execution-v1`、封存摘要及同账户/设备/路径/boot 比较保持；这是 v1 误分类修正，
+  无新增持久化结构、能力或审批方法。旧 sealed records 不重写。
+
+### 4. Validation & Error Matrix
+
+| 情况 | 结果 |
+| --- | --- |
+| 维护 resume/控制服务在另一 checkout，原 checkout 空闲 | 可以准备；仍需 exact 工程确认 |
+| 明确空闲 shell cwd 在原 checkout | 不仅凭 cwd 阻塞 |
+| 普通工具或孤儿 Python/Node cwd 在原 checkout | WORKTREE_PROCESS_ACTIVE |
+| 真实 exec/e、未知 native CLI 或 wrapper | CODEX_EXECUTION_ACTIVE / CODEX_WRAPPER_ACTIVE |
+| 维护会话打开原 checkout 文件或交互 cwd 就在原 checkout | WORKTREE_PROCESS_ACTIVE |
+| shell 在两次清单之间 exec 成 resume/command | 重查路径，不能沿用已覆盖的空闲事实 |
+| kernel name 不可读、身份变化或调查不全 | PROCESS_SCAN_INCOMPLETE；无 plan/authority/consumption |
+
+### 5. Good / Base / Bad
+
+Good：保持维护 Codex/ASE 在线，在原隔离 checkout 准备；审批仍是独立工程声明。
+Base：关闭真正使用原 checkout 的工具后复查。Bad：kill 调查者、猜目录名即执行器，
+或将整个维护进程树从文件检查中剔除。
+
+### 6. Tests Required
+
+`tests/manager/test_legacy_local_execution.py` 覆盖内核名称、exec/e/未知 CLI、维护入口、
+idle shell、孤儿工具、真文件、same-PID exec drift、Linux/macOS 和截断/身份拒绝。
+`tests/manager/test_legacy_rescue_delivery.py` 的本机停止两场景使用真实 observer，仅替换
+固定 OS reads；公开 Host 必须保持同 Task、草稿、旧 UNKNOWN、预算和独立 QA/Review。
+Console/containment/Schema 增量回归保证 WAITING 无 plan/approval、新浏览器字段不能伪造调查。
+
+### 7. Wrong vs Correct
+
+Wrong：`if "codex" in command: block()` 或 `if control_ancestor: ignore_all_files()`。
+Correct：读取内核可执行身份，分类明确控制入口，按原 checkout 的实际 cwd/文件事实核验，
+仅豁免明确空闲终端；再由已有 exact 工程授权供给缺失的历史停止事实。

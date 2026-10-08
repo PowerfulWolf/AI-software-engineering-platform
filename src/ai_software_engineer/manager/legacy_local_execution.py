@@ -6,6 +6,7 @@ import ctypes
 import hashlib
 import os
 import re
+import shlex
 import struct
 import subprocess
 import sys
@@ -102,7 +103,7 @@ class LegacyLocalExecutionSurvey(DomainModel):
                 "也可保存其他工作后采用整机重启恢复路径。"
                 if incomplete
                 else "请等待相关开发执行结束, 或由维护者通过原执行入口正常停止; "
-                "关闭正在使用该工作区的终端或工具后重新检查。不要清空工作区。"
+                "停止仍在读写保留工作区的工具后重新检查。普通空闲终端无需关闭, 不要清空工作区。"
             ),
         )
 
@@ -143,9 +144,11 @@ class LegacyLocalExecutionObserver(Protocol):
 @dataclass(frozen=True, slots=True)
 class _Process:
     pid: int
+    ppid: int
     state: str
     birth: str
     command: str
+    executable_name: str
 
 
 class _IncompleteSurvey(RuntimeError):
@@ -206,65 +209,106 @@ class TrustedLegacyLocalExecutionObserver:
 
     def _processes(self, uid: int) -> dict[int, _Process]:
         body = self._query(
-            ("/bin/ps", "-ww", "-U", str(uid), "-o", "pid=,uid=,stat=,lstart=,command=")
+            (
+                "/bin/ps",
+                "-ww",
+                "-U",
+                str(uid),
+                "-o",
+                "pid=,ppid=,uid=,stat=,lstart=,command=",
+            )
         )
         if len(body) > self.MAX_QUERY_BYTES:
             raise _IncompleteSurvey
         result: dict[int, _Process] = {}
         for line in body.decode("utf-8", errors="strict").splitlines():
-            fields = line.split(maxsplit=8)
+            fields = line.split(maxsplit=9)
             if (
-                len(fields) != 9
-                or not fields[0].isdigit()
-                or not fields[1].isdigit()
-                or not fields[2]
+                len(fields) != 10
+                or not all(field.isdigit() for field in fields[:3])
+                or not fields[3]
             ):
                 raise _IncompleteSurvey
-            if int(fields[1]) != uid:
+            if int(fields[2]) != uid:
                 continue  # effective UID, consistent with lsof and the trusted runner
             pid = int(fields[0])
             if pid < 1 or pid in result or len(result) >= _MAX_PROCESSES:
                 raise _IncompleteSurvey
-            fixed_query = f"/bin/ps -ww -U {uid} -o pid=,uid=,stat=,lstart=,command="
-            if pid in (_QUERY_PIDS.get() or ()) and fields[8] == fixed_query:
+            fixed_query = f"/bin/ps -ww -U {uid} -o pid=,ppid=,uid=,stat=,lstart=,command="
+            if pid in (_QUERY_PIDS.get() or ()) and fields[9] == fixed_query:
                 continue
             try:
                 birth = self._birth(pid)
+                executable_name = "" if fields[3][0] == "Z" else self._executable_name(pid)
             except ProcessLookupError:
                 # Preserve the observed command for classification. Only its
                 # absence from the final inventory permits missing birth facts.
                 birth = "unobserved"
-            result[pid] = _Process(pid, fields[2][0], birth, fields[8])
+                executable_name = ""
+            result[pid] = _Process(
+                pid,
+                int(fields[1]),
+                fields[3][0],
+                birth,
+                fields[9],
+                executable_name,
+            )
         if not result:
             raise _IncompleteSurvey
         return result
+
+    def _executable_name(self, pid: int) -> str:
+        """Read the OS executable identity, not a name appearing in argv data."""
+        self._remaining()
+        platform = sys.platform
+        if platform == "darwin":
+            info = self._darwin_info(pid)
+            # The kernel basename remains readable for a running executable
+            # whose old on-disk app version was removed by an update. PIDPATH
+            # can return ENOENT for that live process; argv is not a substitute.
+            name = (info[64:96].split(b"\0", 1)[0] or info[48:64].split(b"\0", 1)[0]).decode(
+                "utf-8", errors="strict"
+            )
+            if not name or "/" in name:
+                raise _IncompleteSurvey
+            return name
+        try:
+            executable = os.readlink(_PROC_ROOT / str(pid) / "exe")
+        except FileNotFoundError as error:
+            raise ProcessLookupError from error
+        if not executable.startswith("/"):
+            raise _IncompleteSurvey
+        return Path(executable.removesuffix(" (deleted)")).name
+
+    def _darwin_info(self, pid: int) -> bytes:
+        self._remaining()
+        library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        query = library.proc_pidinfo
+        query.argtypes = [
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_uint64,
+            ctypes.c_void_p,
+            ctypes.c_int,
+        ]
+        query.restype = ctypes.c_int
+        # Fixed 136-byte proc_bsdinfo ABI: effective UID, kernel executable
+        # name and high-resolution start time; no environment or prompt data.
+        buffer = ctypes.create_string_buffer(136)
+        size = cast(int, query(pid, 3, 0, ctypes.byref(buffer), len(buffer)))
+        if size == 0 and ctypes.get_errno() == 3:
+            raise ProcessLookupError
+        if size != len(buffer) or struct.unpack_from("=I", buffer.raw, 20)[0] != os.getuid():
+            raise _IncompleteSurvey
+        return buffer.raw
 
     def _birth(self, pid: int) -> str:
         """Native high-resolution identity; ps lstart's seconds are insufficient."""
         self._remaining()
         platform = sys.platform
         if platform == "darwin":
-            library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
-            query = library.proc_pidinfo
-            query.argtypes = [
-                ctypes.c_int,
-                ctypes.c_int,
-                ctypes.c_uint64,
-                ctypes.c_void_p,
-                ctypes.c_int,
-            ]
-            query.restype = ctypes.c_int
-            # Darwin proc_bsdinfo is a stable 136-byte OS ABI. Only the final
-            # uint64 start sec/usec and effective UID are read, never argv/env.
-            buffer = ctypes.create_string_buffer(136)
-            size = cast(int, query(pid, 3, 0, ctypes.byref(buffer), len(buffer)))
-            if size == 0 and ctypes.get_errno() == 3:
-                raise ProcessLookupError
-            if size != len(buffer):
-                raise _IncompleteSurvey
-            effective_uid = struct.unpack_from("=I", buffer.raw, 20)[0]
-            sec, usec = struct.unpack_from("=QQ", buffer.raw, 120)
-            if effective_uid != os.getuid() or not sec or usec >= 1_000_000:
+            sec, usec = struct.unpack_from("=QQ", self._darwin_info(pid), 120)
+            if not sec or usec >= 1_000_000:
                 raise _IncompleteSurvey
             return f"{sec}:{usec}"
         try:
@@ -278,38 +322,217 @@ class TrustedLegacyLocalExecutionObserver:
         return fields[19]  # kernel starttime ticks, within this survey's exact boot
 
     @staticmethod
-    def _execution_blocker(command: str) -> LegacyLocalExecutionBlocker | None:
-        lowered = command.lower()
-        # Desktop app, language server and unrelated browser processes are not
-        # native exec. An actual CLI or wrapper must name its executable/action.
-        if re.match(
-            r"^.*?\.app/Contents/(?:Frameworks/.+?\.app/Contents/)?MacOS/"
-            r"Codex(?: Helper(?: \([A-Za-z ]+\))?)?(?:\s|$)",
-            command,
+    def _codex_action(arguments: tuple[str, ...]) -> str | None:
+        """Find the subcommand position; option values and prompts are data."""
+        valued = {
+            "-c",
+            "--config",
+            "-m",
+            "--model",
+            "-p",
+            "--profile",
+            "-C",
+            "--cd",
+            "--add-dir",
+            "--enable",
+            "--disable",
+            "-s",
+            "--sandbox",
+            "-a",
+            "--ask-for-approval",
+            "-i",
+            "--image",
+        }
+        flags = {
+            "--search",
+            "--oss",
+            "--full-auto",
+            "--no-alt-screen",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--analytics-default-enabled",
+        }
+        index = 0
+        while index < len(arguments):
+            token = arguments[index]
+            if token in valued:
+                if index + 1 >= len(arguments):
+                    return None
+                index += 2
+            elif token in flags or (token.split("=", 1)[0] in valued and "=" in token):
+                index += 1
+            elif token.startswith("-"):
+                return None
+            else:
+                return token
+        return None
+
+    @staticmethod
+    def _native_cli_name(name: str) -> bool:
+        return bool(
+            re.fullmatch(
+                r"codex(?:\.(?:m?js|sh)|-(?:aarch64|x86_64|arm64)[a-z0-9_-]*)?", name.lower()
+            )
+        )
+
+    @classmethod
+    def _argv_blocker(
+        cls, arguments: tuple[str, ...], *, executable_name: str | None = None, depth: int = 0
+    ) -> LegacyLocalExecutionBlocker | None:
+        if not arguments:
+            return None
+        if depth > 3:
+            return "CODEX_WRAPPER_ACTIVE"
+        executable = (executable_name or Path(arguments[0]).name).lower()
+        if cls._native_cli_name(executable):
+            action = cls._codex_action(arguments[1:])
+            if action in {"app-server", "mcp-server"}:
+                return None
+            return "CODEX_EXECUTION_ACTIVE" if action in {"exec", "e"} else "CODEX_WRAPPER_ACTIVE"
+        if executable == "ase" and arguments[1:3] == ("task", "run"):
+            return "CODEX_WRAPPER_ACTIVE"
+        if executable in {"sh", "bash", "zsh", "fish", "csh", "tcsh", "ksh"}:
+            for index, token in enumerate(arguments[1:], start=1):
+                if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", token):
+                    tail = arguments[index + 1 :]
+                    if not tail:
+                        return None
+                    command = tail[0] if len(tail) == 1 else " ".join(tail)
+                    try:
+                        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|")
+                        lexer.whitespace_split = True
+                        tokens = tuple(lexer)
+                    except ValueError:
+                        return "CODEX_WRAPPER_ACTIVE"  # an opaque active shell is not a stop fact
+                    blockers: list[LegacyLocalExecutionBlocker] = []
+                    segment: list[str] = []
+                    for part in (*tokens, ";"):
+                        if part in {";", "&&", "||", "|", "&"}:
+                            route = tuple(segment[1:] if segment[:1] == ["exec"] else segment)
+                            blocker = cls._argv_blocker(route, depth=depth + 1)
+                            if blocker is not None:
+                                blockers.append(blocker)
+                            segment = []
+                        else:
+                            segment.append(part)
+                    if "CODEX_EXECUTION_ACTIVE" in blockers:
+                        return "CODEX_EXECUTION_ACTIVE"
+                    return blockers[0] if blockers else None
+            # A script wrapper is identified by its script position, not its
+            # ordinary arguments naming a Codex directory.
+            tail = tuple(token for token in arguments[1:] if not token.startswith("-"))
+            return cls._argv_blocker(tail, depth=depth + 1)
+        if re.fullmatch(r"(?:node(?:js)?|python(?:\d+(?:\.\d+)?)?)", executable):
+            tail = arguments[1:]
+            while tail and tail[0] in {"-u", "-B", "-E", "-s", "-S"}:
+                tail = tail[1:]
+            if tail[:2] == ("-m", "ai_software_engineer.cli"):
+                return "CODEX_WRAPPER_ACTIVE" if tail[2:4] == ("task", "run") else None
+            if tail and not tail[0].startswith("-"):
+                return cls._argv_blocker(tail, depth=depth + 1)
+        if executable == "env":
+            tail = arguments[1:]
+            while tail and "=" in tail[0] and not tail[0].startswith("-"):
+                tail = tail[1:]
+            return cls._argv_blocker(tail, depth=depth + 1)
+        return None
+
+    @classmethod
+    def _execution_blocker(
+        cls, command: str, executable_name: str | None = None
+    ) -> LegacyLocalExecutionBlocker | None:
+        if (
+            executable_name is not None
+            and not cls._native_cli_name(executable_name)
+            and not re.fullmatch(
+                r"(?:node(?:js)?|python(?:\d+(?:\.\d+)?)?|sh|bash|zsh|fish|csh|tcsh|ksh|env|ase)",
+                executable_name.lower(),
+            )
         ):
             return None
-        cli = re.search(
-            r"(?:^|[/\s])codex(?:\.(?:m?js|sh)|-(?:aarch64|x86_64|arm64)[a-z0-9_-]*)?"
-            r"(?=[\s]|$)",
-            lowered,
-        )
-        if cli:
-            # The desktop app's protocol server is not a Codex exec. Its real
-            # cwd/open files still undergo the same complete worktree check.
-            if not re.search(r"\bexec\b", lowered) and re.search(
-                r"\s(?:app-server|mcp-server)(?:\s|$)", lowered[cli.end() :]
-            ):
-                return None
-            return (
-                "CODEX_EXECUTION_ACTIVE"
-                if re.search(r"\bexec\b", lowered)
-                else "CODEX_WRAPPER_ACTIVE"
-            )
-        if re.search(r"\b(?:ase|ai_software_engineer(?:\.cli)?)\b", lowered) and re.search(
-            r"\btask\s+run\b", lowered
-        ):
+        try:
+            arguments = tuple(shlex.split(command))
+        except ValueError:
             return "CODEX_WRAPPER_ACTIVE"
-        return None
+        return cls._argv_blocker(arguments, executable_name=executable_name)
+
+    @classmethod
+    def _operator_control_process(cls, command: str, executable_name: str | None = None) -> bool:
+        """Exclude direct control routes, never their open files or descendants."""
+        try:
+            arguments = tuple(shlex.split(command))
+        except ValueError:
+            return False
+        if not arguments:
+            return False
+        executable = (executable_name or Path(arguments[0]).name).lower()
+        if executable == "codex-code-mode-host":
+            return True
+        if not cls._native_cli_name(executable):
+            return False
+        if ".app/contents/resources/" in command.lower():
+            return False
+        action = cls._codex_action(arguments[1:])
+        return action == "resume" or arguments[1:4] == ("app-server", "daemon", "pid-update-loop")
+
+    def _operator_control_pids(self, processes: dict[int, _Process]) -> frozenset[int]:
+        return frozenset(
+            pid
+            for pid, process in processes.items()
+            if self._operator_control_process(process.command, process.executable_name)
+        )
+
+    def _execution_related_pids(
+        self, processes: dict[int, _Process], roots: frozenset[int]
+    ) -> frozenset[int]:
+        """Keep live native execution descendants in the workspace check.
+
+        Control ancestry is never permission to ignore an arbitrary child
+        process or its open source files.
+        """
+        related = set(roots)
+        changed = True
+        while changed:
+            self._remaining()
+            changed = False
+            for pid, process in processes.items():
+                if pid in related or process.ppid not in related:
+                    continue
+                if process.state != "Z":
+                    related.add(pid)
+                    changed = True
+        return frozenset(related)
+
+    def _execution_pids(
+        self, processes: dict[int, _Process], control_pids: frozenset[int]
+    ) -> frozenset[int]:
+        return frozenset(
+            pid
+            for pid, process in processes.items()
+            if pid not in control_pids
+            and process.state != "Z"
+            and self._execution_blocker(process.command, process.executable_name) is not None
+        )
+
+    @staticmethod
+    def _idle_terminal(process: _Process) -> bool:
+        if process.state not in {"S", "I"} or process.executable_name not in {
+            "sh",
+            "bash",
+            "zsh",
+            "fish",
+            "csh",
+            "tcsh",
+            "ksh",
+        }:
+            return False
+        try:
+            arguments = shlex.split(process.command)
+        except ValueError:
+            return False
+        return all(
+            argument in {"-l", "-i", "-il", "-li", "--login", "--interactive"}
+            for argument in arguments[1:]
+        )
 
     @staticmethod
     def _covers(path: str, root: Path) -> bool:
@@ -322,7 +545,13 @@ class TrustedLegacyLocalExecutionObserver:
         return resolved == root or root in resolved.parents
 
     def _mac_paths(
-        self, uid: int, root: Path, *, pids: tuple[int, ...] = ()
+        self,
+        uid: int,
+        root: Path,
+        *,
+        pids: tuple[int, ...] = (),
+        ignored_pids: frozenset[int] = frozenset(),
+        cwd_blocker_pids: frozenset[int] = frozenset(),
     ) -> tuple[set[int], set[LegacyLocalExecutionBlocker]]:
         arguments = ("-p", ",".join(str(pid) for pid in pids)) if pids else ()
         body = self._query(
@@ -363,7 +592,11 @@ class TrustedLegacyLocalExecutionObserver:
                     if not value.startswith("/") or file_type != "DIR":
                         raise _IncompleteSurvey
                     covered.add(pid)
-                if self._covers(value, root):
+                if (
+                    pid not in ignored_pids
+                    and self._covers(value, root)
+                    and (descriptor != "cwd" or pid in cwd_blocker_pids)
+                ):
                     blockers.add("WORKTREE_PROCESS_ACTIVE")
             else:
                 raise _IncompleteSurvey
@@ -378,7 +611,12 @@ class TrustedLegacyLocalExecutionObserver:
         return body
 
     def _linux_paths(
-        self, before: dict[int, _Process], root: Path
+        self,
+        before: dict[int, _Process],
+        root: Path,
+        *,
+        ignored_pids: frozenset[int] = frozenset(),
+        cwd_blocker_pids: frozenset[int] = frozenset(),
     ) -> tuple[set[int], set[LegacyLocalExecutionBlocker]]:
         covered: set[int] = set()
         blockers: set[LegacyLocalExecutionBlocker] = set()
@@ -393,7 +631,7 @@ class TrustedLegacyLocalExecutionObserver:
                 cwd = os.readlink(proc / "cwd")
                 if not cwd.startswith("/"):
                     raise _IncompleteSurvey
-                if self._covers(cwd, root):
+                if pid not in ignored_pids and pid in cwd_blocker_pids and self._covers(cwd, root):
                     blockers.add("WORKTREE_PROCESS_ACTIVE")
                 for entry in (proc / "fd").iterdir():
                     self._remaining()
@@ -404,7 +642,7 @@ class TrustedLegacyLocalExecutionObserver:
                         opened = os.readlink(entry)
                     except FileNotFoundError:
                         continue  # a closed descriptor cannot still access the worktree
-                    if self._covers(opened, root):
+                    if pid not in ignored_pids and self._covers(opened, root):
                         blockers.add("WORKTREE_PROCESS_ACTIVE")
                 covered.add(pid)
             except FileNotFoundError:
@@ -429,30 +667,85 @@ class TrustedLegacyLocalExecutionObserver:
             if sys.platform != "darwin" and not sys.platform.startswith("linux"):
                 raise _IncompleteSurvey
             before = self._processes(uid)
+            control_pids = self._operator_control_pids(before)
+            execution_pids = self._execution_related_pids(
+                before, self._execution_pids(before, control_pids)
+            )
+            cwd_blocker_pids = execution_pids | frozenset(
+                pid for pid, process in before.items() if not self._idle_terminal(process)
+            )
+            # Only the observer itself is excluded from open-file checks.
+            # A control session's real source descriptors still block rescue.
+            observer_pids = frozenset({os.getpid()})
             covered, path_blockers = (
-                self._mac_paths(uid, root)
+                self._mac_paths(
+                    uid,
+                    root,
+                    ignored_pids=observer_pids,
+                    cwd_blocker_pids=cwd_blocker_pids,
+                )
                 if sys.platform == "darwin"
-                else self._linux_paths(before, root)
+                else self._linux_paths(
+                    before,
+                    root,
+                    ignored_pids=observer_pids,
+                    cwd_blocker_pids=cwd_blocker_pids,
+                )
             )
             blockers.update(path_blockers)
             after = self._processes(uid)
+            after_control_pids = self._operator_control_pids(after)
+            execution_pids = execution_pids | self._execution_related_pids(
+                after, self._execution_pids(after, after_control_pids)
+            )
+            previous_cwd_blocker_pids = cwd_blocker_pids
+            cwd_blocker_pids = (
+                cwd_blocker_pids
+                | execution_pids
+                | frozenset(
+                    pid for pid, process in after.items() if not self._idle_terminal(process)
+                )
+            )
             missing = {
                 pid: process
                 for pid, process in after.items()
-                if process.state != "Z" and pid not in covered
+                if process.state != "Z"
+                and (
+                    pid not in covered
+                    or before.get(pid) != process
+                    or (pid in cwd_blocker_pids and pid not in previous_cwd_blocker_pids)
+                )
             }
             if missing:
                 extra_covered, extra_blockers = (
-                    self._mac_paths(uid, root, pids=tuple(sorted(missing)))
+                    self._mac_paths(
+                        uid,
+                        root,
+                        pids=tuple(sorted(missing)),
+                        ignored_pids=observer_pids,
+                        cwd_blocker_pids=cwd_blocker_pids,
+                    )
                     if sys.platform == "darwin"
-                    else self._linux_paths(missing, root)
+                    else self._linux_paths(
+                        missing,
+                        root,
+                        ignored_pids=observer_pids,
+                        cwd_blocker_pids=cwd_blocker_pids,
+                    )
                 )
+                covered.difference_update(missing)
                 covered.update(extra_covered)
                 blockers.update(extra_blockers)
             for process in (*before.values(), *after.values()):
                 if process.state not in {"R", "S", "I", "T", "U", "D", "W", "Z"}:
                     blockers.add("PROCESS_STATE_UNKNOWN")
-                if process.state != "Z" and (blocker := self._execution_blocker(process.command)):
+                if (
+                    not self._operator_control_process(process.command, process.executable_name)
+                    and process.state != "Z"
+                    and (
+                        blocker := self._execution_blocker(process.command, process.executable_name)
+                    )
+                ):
                     blockers.add(blocker)
             for pid in before.keys() & after.keys():
                 if after[pid].state != "Z" and (
