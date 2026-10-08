@@ -14,10 +14,16 @@ from ai_software_engineer.domain.delivery_disposition import (
 from ai_software_engineer.domain.delivery_resolution import (
     DeliveryResolution,
     DeliveryResolutionKind,
+    DeliveryWaitHandling,
+    DeliveryWaitHandlingStatus,
     DeliveryWaitInvestigation,
     EngineeringDispositionRecord,
+    delivery_wait_resolution_plan_sha256,
 )
 from ai_software_engineer.domain.engineering_authority import (
+    EngineeringAdmission,
+    EngineeringCapability,
+    EngineeringPolicy,
     EngineeringScope,
     LocalOperatorPrincipal,
     OperatorDuty,
@@ -34,6 +40,7 @@ from ai_software_engineer.manager.verifier_preparation import (
     VerifierPreparationIntent,
     VerifierPreparationObservation,
 )
+from ai_software_engineer.recovery.models import RecoveryRejected
 from ai_software_engineer.team_view.engineering_history import engineering_history
 from ai_software_engineer.team_view.models import RoleQueueView, ScopeView, TaskView
 from ai_software_engineer.team_view.reader import _with_execution_state
@@ -103,8 +110,79 @@ def _decision(proof: DeliveryWaitInvestigation) -> DeliveryResolution:
     return value.model_copy(update={"resolution_sha256": value.recompute_sha256()})
 
 
+def _policy_task() -> Task:
+    task = make_task()
+    policy = EngineeringPolicy.bounded_local(
+        scope=_scope(task), principal=LocalOperatorPrincipal.trusted_local()
+    )
+    return Task.model_validate({**task.to_wire(), "engineering_policy": policy.to_wire()})
+
+
+def _policy_decision(
+    task: Task,
+    proof: DeliveryWaitInvestigation,
+    *,
+    policy: EngineeringPolicy | None = None,
+) -> DeliveryResolution:
+    frozen = policy or task.engineering_policy
+    assert frozen is not None
+    kind = DeliveryResolutionKind.RETRY_FROM_CHECKPOINT
+    admission = EngineeringAdmission.create(
+        task_id=task.id,
+        task_intent_sha256=task_intent_sha256(task),
+        policy=frozen,
+        policy_sha256=frozen.policy_sha256,
+        plan_sha256=delivery_wait_resolution_plan_sha256(proof.proof_sha256, kind),
+        facts_sha256=proof.proof_sha256,
+        capabilities=(EngineeringCapability.DELIVERY_WAIT_RESOLUTION,),
+        admission_number=1,
+        admitted_at=proof.inspected_at + timedelta(seconds=1),
+    )
+    value = DeliveryResolution.model_validate(
+        {
+            **_decision(proof).to_wire(),
+            "authorization_source": "organization_engineering_policy",
+            "operator_principal": None,
+            "engineering_admission": admission.to_wire(),
+        }
+    )
+    return value.model_copy(update={"resolution_sha256": value.recompute_sha256()})
+
+
+def _handling(
+    proof: DeliveryWaitInvestigation,
+    resolution: DeliveryResolution | None = None,
+    *,
+    status: DeliveryWaitHandlingStatus = "PLATFORM_ATTENTION",
+    manual_resolution_allowed: bool = False,
+    collection_failed: bool = False,
+) -> DeliveryWaitHandling:
+    value = DeliveryWaitHandling(
+        task_id=proof.task_id,
+        work_item_id=proof.work_item_id,
+        disposition_sha256=proof.disposition_sha256,
+        task_intent_sha256=proof.task_intent_sha256,
+        source_revision=proof.source_revision,
+        checkpoint_sequence=proof.checkpoint_sequence,
+        investigation=proof,
+        resolution=resolution,
+        status="RESOLVED" if resolution is not None else status,
+        summary="平台处理结果已保存, 尚未开始新的角色执行。",
+        user_action="当前无需产品做业务决定。",
+        recheck_when="工程事实发生变化后可重新核验。",
+        manual_resolution_allowed=manual_resolution_allowed,
+        collection_failed=collection_failed,
+        handled_at=proof.inspected_at + timedelta(seconds=1),
+        handling_sha256="0" * 64,
+    )
+    return value.model_copy(update={"handling_sha256": value.recompute_sha256()})
+
+
 def _publish(
-    sidecar: Path, proof: DeliveryWaitInvestigation, decision: DeliveryResolution | None = None
+    sidecar: Path,
+    proof: DeliveryWaitInvestigation,
+    decision: DeliveryResolution | None = None,
+    handling: DeliveryWaitHandling | None = None,
 ) -> None:
     records = KnowledgeRecordStore(sidecar / "state" / "delivery-waits")
     records.put("wait-investigations", proof.proof_sha256, proof)
@@ -114,6 +192,8 @@ def _publish(
             decision.work_item_id + ":" + decision.expected_disposition_sha256,
             decision,
         )
+    if handling is not None:
+        records.put("wait-handlings", handling.record_key, handling)
 
 
 def _bytes(sidecar: Path) -> dict[Path, bytes]:
@@ -138,6 +218,228 @@ def test_complete_engineering_history_is_read_only_and_keeps_actor_and_source(
     assert history[-1].details["operator_id"] == "operator:local-console"
     assert history[-1].details["authorization_source"] == "engineering_operator_decision"
     assert history[-1].source_sha256 == decision.resolution_sha256
+    assert before == _bytes(sidecar)
+
+
+def test_policy_resolution_history_keeps_admission_source_without_claiming_a_human(
+    tmp_path: Path,
+) -> None:
+    task = _policy_task()
+    proof = _proof(task)
+    decision = _policy_decision(task, proof)
+    sidecar = tmp_path / "sidecar"
+    _publish(sidecar, proof, decision)
+    before = _bytes(sidecar)
+
+    history = engineering_history(sidecar, task, _scope(task), "delivery_history")
+
+    assert len(history) == 2
+    entry = next(item for item in history if item.details["kind"] == "delivery_wait_resolution")
+    assert "平台按冻结工程策略" in entry.summary
+    assert entry.details["authorization_source"] == "organization_engineering_policy"
+    assert decision.engineering_admission is not None
+    assert entry.details["admission_sha256"] == decision.engineering_admission.admission_sha256
+    assert "operator_id" not in entry.details
+    assert entry.source_sha256 == decision.resolution_sha256
+    records = KnowledgeRecordStore(sidecar / "state" / "delivery-waits", read_only=True)
+    assert entry.source_uri == (
+        records.root
+        / records._name("wait-resolutions", decision.work_item_id + ":" + proof.disposition_sha256)
+    ).as_uri()
+    assert before == _bytes(sidecar)
+
+
+def test_policy_resolution_history_refuses_valid_admission_for_another_frozen_policy(
+    tmp_path: Path,
+) -> None:
+    task = _policy_task()
+    proof = _proof(task)
+    assert task.engineering_policy is not None
+    other_policy = task.engineering_policy.model_copy(update={"max_total_admissions": 13})
+    decision = _policy_decision(task, proof, policy=other_policy)
+    decision.validate_integrity()
+    sidecar = tmp_path / "sidecar"
+    _publish(sidecar, proof, decision)
+    before = _bytes(sidecar)
+
+    with pytest.raises(RecoveryRejected, match="冻结范围与授权"):
+        engineering_history(sidecar, task, _scope(task), "delivery_history")
+
+    assert before == _bytes(sidecar)
+
+
+def test_policy_resolution_history_refuses_another_registered_project_scope(
+    tmp_path: Path,
+) -> None:
+    task = _policy_task()
+    proof = _proof(task)
+    sidecar = tmp_path / "sidecar"
+    _publish(sidecar, proof, _policy_decision(task, proof))
+    before = _bytes(sidecar)
+    other_scope = _scope(task).model_copy(update={"project_id": "project_other"})
+
+    with pytest.raises(ValueError, match="Project scope"):
+        engineering_history(sidecar, task, other_scope, "delivery_history")
+
+    assert before == _bytes(sidecar)
+
+
+def test_handling_history_keeps_all_records_and_links_the_shared_immutable_key(
+    tmp_path: Path,
+) -> None:
+    task = make_task()
+    sidecar = tmp_path / "sidecar"
+    handlings = []
+    for number in range(12):
+        proof = _proof(task, number).model_copy(update={"step_sha256": digest({"step": number})})
+        proof = proof.model_copy(update={"proof_sha256": proof.recompute_sha256()})
+        handling = _handling(
+            proof,
+            manual_resolution_allowed=number % 2 == 0,
+            collection_failed=number % 2 == 1,
+        )
+        handlings.append(handling)
+        _publish(sidecar, proof, handling=handling)
+    before = _bytes(sidecar)
+
+    history = engineering_history(sidecar, task, _scope(task), "delivery_history")
+
+    assert len(history) == 24
+    projected = {entry.source_sha256: entry for entry in history}
+    records = KnowledgeRecordStore(sidecar / "state" / "delivery-waits", read_only=True)
+    for handling in handlings:
+        entry = projected[handling.handling_sha256]
+        assert entry.summary == handling.summary
+        assert entry.details["status"] == handling.status
+        assert entry.details["user_action"] == handling.user_action
+        assert entry.details["recheck_when"] == handling.recheck_when
+        assert entry.details["proof_sha256"] == handling.investigation.proof_sha256
+        assert entry.source_uri == (
+        records.root / records._name("wait-handlings", handling.record_key)
+        ).as_uri()
+    assert before == _bytes(sidecar)
+
+
+def test_handling_history_refuses_a_valid_report_stored_under_another_key(tmp_path: Path) -> None:
+    task = make_task()
+    proof = _proof(task)
+    handling = _handling(proof)
+    sidecar = tmp_path / "sidecar"
+    _publish(sidecar, proof)
+    KnowledgeRecordStore(sidecar / "state" / "delivery-waits").put(
+        "wait-handlings", "wrong-key", handling
+    )
+    before = _bytes(sidecar)
+
+    with pytest.raises(KnowledgeError):
+        engineering_history(sidecar, task, _scope(task), "delivery_history")
+
+    assert before == _bytes(sidecar)
+
+
+def test_handling_redaction_keeps_sealed_report_and_hash_unchanged(tmp_path: Path) -> None:
+    task = make_task()
+    proof = _proof(task)
+    handling = _handling(proof).model_copy(
+        update={
+            "summary": "处理 token=private-summary 已保存",
+            "user_action": "无需提供 token=private-action",
+            "recheck_when": "记录 token=private-recheck 更新后重新核验",
+        }
+    )
+    handling = handling.model_copy(update={"handling_sha256": handling.recompute_sha256()})
+    sidecar = tmp_path / "sidecar"
+    _publish(sidecar, proof, handling=handling)
+    before = _bytes(sidecar)
+
+    history = engineering_history(sidecar, task, _scope(task), "delivery_history")
+
+    entry = next(item for item in history if item.details["kind"] == "delivery_wait_handling")
+    assert "private-summary" not in entry.summary and "REDACTED" in entry.summary
+    assert "private-action" not in str(entry.details)
+    assert "private-recheck" not in str(entry.details)
+    assert entry.source_sha256 == handling.handling_sha256
+    assert before == _bytes(sidecar)
+
+
+def test_resolved_handling_history_keeps_its_exact_policy_resolution(tmp_path: Path) -> None:
+    task = _policy_task()
+    proof = _proof(task)
+    decision = _policy_decision(task, proof)
+    handling = _handling(proof, decision)
+    sidecar = tmp_path / "sidecar"
+    _publish(sidecar, proof, decision, handling)
+    before = _bytes(sidecar)
+
+    history = engineering_history(sidecar, task, _scope(task), "delivery_history")
+
+    assert len(history) == 3
+    entry = next(item for item in history if item.details["kind"] == "delivery_wait_handling")
+    assert entry.details["status"] == "RESOLVED"
+    assert entry.details["proof_sha256"] == decision.proof_sha256
+    assert entry.source_sha256 == handling.handling_sha256
+    assert before == _bytes(sidecar)
+
+
+def test_resolved_handling_history_refuses_another_frozen_admission_policy(tmp_path: Path) -> None:
+    task = _policy_task()
+    proof = _proof(task)
+    assert task.engineering_policy is not None
+    other_policy = task.engineering_policy.model_copy(update={"max_total_admissions": 13})
+    decision = _policy_decision(task, proof, policy=other_policy)
+    handling = _handling(proof, decision)
+    handling.validate_integrity()
+    sidecar = tmp_path / "sidecar"
+    _publish(sidecar, proof, decision, handling)
+    before = _bytes(sidecar)
+
+    with pytest.raises(RecoveryRejected, match="冻结范围与授权"):
+        engineering_history(sidecar, task, _scope(task), "delivery_history")
+
+    assert before == _bytes(sidecar)
+
+
+def test_resolved_handling_history_refuses_another_project_scope(tmp_path: Path) -> None:
+    task = _policy_task()
+    proof = _proof(task)
+    decision = _policy_decision(task, proof)
+    handling = _handling(proof, decision)
+    sidecar = tmp_path / "sidecar"
+    _publish(sidecar, proof, decision, handling)
+    before = _bytes(sidecar)
+
+    with pytest.raises(ValueError, match="Project scope"):
+        engineering_history(
+            sidecar,
+            task,
+            _scope(task).model_copy(update={"project_id": "project_other"}),
+            "delivery_history",
+        )
+
+    assert before == _bytes(sidecar)
+
+
+def test_resolved_handling_history_refuses_a_retry_cause_changed_after_investigation(
+    tmp_path: Path,
+) -> None:
+    task = make_task()
+    proof = _proof(task)
+    decision = _decision(proof)
+    changed_proof = proof.model_copy(update={"retry_cause": "provider_transient"})
+    changed_proof = changed_proof.model_copy(
+        update={"proof_sha256": changed_proof.recompute_sha256()}
+    )
+    decision = decision.model_copy(update={"proof_sha256": changed_proof.proof_sha256})
+    decision = decision.model_copy(update={"resolution_sha256": decision.recompute_sha256()})
+    handling = _handling(changed_proof, decision)
+    handling.validate_integrity()
+    sidecar = tmp_path / "sidecar"
+    _publish(sidecar, changed_proof, handling=handling)
+    before = _bytes(sidecar)
+
+    with pytest.raises(ValueError, match="exact investigation"):
+        engineering_history(sidecar, task, _scope(task), "delivery_history")
+
     assert before == _bytes(sidecar)
 
 

@@ -2,9 +2,9 @@
 
 from enum import StrEnum
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
-from ai_software_engineer.agents.execution import ExecutionStop
+from ai_software_engineer.agents.execution import ExecutionStop, NativeProcessStop
 from ai_software_engineer.agents.models import AgentErrorCode, AgentRequest, AgentResult
 from ai_software_engineer.domain.continuation import ContinuationCause
 from ai_software_engineer.domain.task import Task
@@ -50,6 +50,27 @@ class CoderInterruptionControl(Protocol):
         process_stop: ExecutionStop | None,
         output_present: bool,
     ) -> InterruptionObservation: ...
+
+
+@runtime_checkable
+class NativeStopRecordingControl(Protocol):
+    """Optional trusted fact writer, unavailable to the model or request body."""
+
+    def record_native_stop(
+        self,
+        request: AgentRequest,
+        root: Path,
+        *,
+        process_stop: NativeProcessStop,
+        output_present: bool,
+        cause: ContinuationCause | None,
+        original_error_code: AgentErrorCode | None,
+    ) -> None: ...
+
+
+def native_stop_recorder(control: object) -> NativeStopRecordingControl | None:
+    """Discover an optional fact seam without expanding the base adapter policy."""
+    return control if isinstance(control, NativeStopRecordingControl) else None
 
 
 class InterruptionRetryControl(Protocol):

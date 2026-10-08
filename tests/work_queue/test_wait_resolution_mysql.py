@@ -37,8 +37,15 @@ from ai_software_engineer.domain.delivery_resolution import (
     OriginalInvocationAuthority,
     VerificationRetryEvidence,
     VerifierPreparationEvidence,
+    delivery_wait_resolution_plan_sha256,
 )
-from ai_software_engineer.domain.engineering_authority import LocalOperatorPrincipal
+from ai_software_engineer.domain.engineering_authority import (
+    EngineeringAdmission,
+    EngineeringCapability,
+    EngineeringPolicy,
+    EngineeringScope,
+    LocalOperatorPrincipal,
+)
 from ai_software_engineer.domain.enums import WorkItemStatus
 from ai_software_engineer.domain.retry_policy import DeliveryRetryFailure, DeliveryRetryPolicy
 from ai_software_engineer.knowledge.models import digest
@@ -173,6 +180,15 @@ def waiting(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[WaitingF
         {
             **original.to_wire(),
             "repository": "/fixture/repository",
+            "engineering_policy": EngineeringPolicy.bounded_local(
+                scope=EngineeringScope(
+                    team_id="team_test",
+                    project_id="project_test",
+                    repository_id=REPOSITORY_ID,
+                    repository_root="/fixture/repository",
+                ),
+                principal=LocalOperatorPrincipal.trusted_local(),
+            ).to_wire(),
             "max_attempts": policy.execution_limit,
             "retry_policy": policy.to_wire(),
             "constraints": {
@@ -295,6 +311,53 @@ def waiting(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[WaitingF
             now=now + timedelta(seconds=2),
         )
         yield WaitingFixture(dsn, repository, queue, step, claim, disposition, now)
+
+
+def _policy_resolution(waiting: WaitingFixture, *, drift: bool = False) -> DeliveryResolution:
+    original = waiting.resolution()
+    task = waiting.repository.get(waiting.step.boundary.task_id)
+    policy = task.engineering_policy
+    assert policy is not None
+    if drift:
+        policy = policy.model_copy(update={"max_total_admissions": policy.max_total_admissions + 1})
+    admission = EngineeringAdmission.create(
+        task_id=task.id,
+        task_intent_sha256=task_intent_sha256(task),
+        policy=policy,
+        policy_sha256=policy.policy_sha256,
+        plan_sha256=delivery_wait_resolution_plan_sha256(
+            original.proof_sha256, original.resolution_kind
+        ),
+        facts_sha256=original.proof_sha256,
+        capabilities=(EngineeringCapability.DELIVERY_WAIT_RESOLUTION,),
+        admission_number=1,
+        admitted_at=original.submitted_at,
+    )
+    return reseal(
+        original,
+        authorization_source="organization_engineering_policy",
+        operator_principal=None,
+        engineering_admission=admission.to_wire(),
+    )
+
+
+def test_policy_wait_resolution_checks_exact_frozen_admission_and_consumes_once(
+    waiting: WaitingFixture,
+) -> None:
+    resolution = _policy_resolution(waiting)
+    next_item = waiting.queue.resolve_wait(resolution)
+    assert next_item.attempt == 2 and next_item.id != waiting.step.work_item.id
+    assert waiting.queue.resolve_wait(resolution) == next_item
+    assert waiting.resolution_events() == 1
+
+
+def test_policy_wait_resolution_rejects_a_valid_admission_for_different_policy(
+    waiting: WaitingFixture,
+) -> None:
+    with pytest.raises(QueueConflict, match="冻结授权"):
+        waiting.queue.resolve_wait(_policy_resolution(waiting, drift=True))
+    assert waiting.resolution_events() == 0
+    assert waiting.queue.get(waiting.step.work_item.id).status is WorkItemStatus.WAITING_HUMAN
 
 
 @pytest.mark.parametrize("waiting", [AgentRole.QA], indirect=True)

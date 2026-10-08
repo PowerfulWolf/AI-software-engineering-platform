@@ -55,16 +55,17 @@ test("engineering wait investigation and decision use exact proof without hiding
   }});
   await h.tick();
   assert.equal(await panel.evaluate(node => node === window.engineeringWaitPanel), true, "the visible intervention panel survives polling");
-  assert.match(await panel.innerText(), /缺少可信停止记录/);
+  assert.match(await panel.innerText(), /原执行是否已结束还没有可靠记录/);
+  assert.match(await panel.innerText(), /重复调查不会补齐缺失记录/);
   assert.equal(await binding.evaluate(node => node.open), false);
-  assert.equal(await panel.getByRole("button", {name: "确认现场并继续原交付", exact: true}).count(), 0);
+  assert.equal(await panel.getByRole("button", {name: "继续原交付", exact: true}).count(), 0);
   Object.assign(proof, {proof_sha256: "f".repeat(64), missing: [],
     permitted_resolutions: ["RETRY_FROM_CHECKPOINT"], next_action: "现场已核验，可记录精确继续决定。"});
   await h.tick();
-  assert.match(await panel.innerText(), /现场已核验，可记录精确继续决定/);
-  assert.equal(await panel.getByRole("button", {name: "确认现场并继续原交付", exact: true}).isVisible(), true,
+  assert.match(await panel.innerText(), /检查已通过，可按以下方案继续/);
+  assert.equal(await panel.getByRole("button", {name: "继续原交付", exact: true}).isVisible(), true,
     "a decision backed by the current proof is directly visible");
-  await panel.getByRole("button", {name: "确认现场并继续原交付", exact: true}).click();
+  await panel.getByRole("button", {name: "继续原交付", exact: true}).click();
   await h.close();
   assert.equal(submitted[1].action, "RESOLVE_DELIVERY_WAIT");
   assert.equal(submitted[1].proof_sha256, "f".repeat(64));
@@ -75,11 +76,138 @@ test("engineering wait investigation and decision use exact proof without hiding
   }}});
   await h.tick();
   assert.match(await detail.locator(".product-execution-summary").innerText(), /等待工程处理/);
-  assert.match(await panel.innerText(), /工程决定已记录/);
-  assert.equal(await panel.getByRole("button", {name: "确认现场并继续原交付", exact: true}).count(), 0);
+  assert.match(await panel.innerText(), /继续决定已记录/);
+  assert.equal(await panel.getByRole("button", {name: "继续原交付", exact: true}).count(), 0);
   assert.match(await detail.innerText(), /操作记录（完整历史）/);
   await detail.locator('.request-history-fold[data-key^="operation-history:"] > summary').click();
   assert.match(await detail.innerText(), /operator:fixture/);
+});
+
+test("product users ask the platform to handle an interruption and see honest maintenance guidance", async t => {
+  const h = await ui(t);
+  const request = h.team.requests[0];
+  request.stage = "DELIVERING";
+  request.scopes = [{root: "/fixture", selected_paths: ["."], delivery_id: "delivery_handle"}];
+  request.execution = {state: "WAITING", responsibility: "engineering", reason_code: "EXECUTION_UNCERTAIN",
+    reason: "原工作没有返回完整结果，原进度需要检查。", next_action: "平台处理原执行后继续。"};
+  const facts = {task_id: "task_handle", work_item_id: "work_handle", role: "coder",
+    task_intent_sha256: "b".repeat(64), source_revision: "c".repeat(40), checkpoint_sequence: 4};
+  const step = {work_item_id: facts.work_item_id, role: "coder", status: "WAITING_HUMAN",
+    wait_disposition_sha256: "d".repeat(64), wait_disposition: {facts, responsibility: "engineering",
+      reason: request.execution.reason, next_action: request.execution.next_action}};
+  h.team.tasks.push({id: "delivery_handle", task_id: facts.task_id, request_id: request.id,
+    project_id: request.project_id, title: request.title, status: "IMPLEMENTING", terminal: false,
+    scope: request.scopes[0], last_activity: "2026-10-05T00:00:00Z", execution: request.execution,
+    assignments: [], documents: [], timeline: [], runs: [], role_queue: [step]});
+  const submitted = [];
+  let writes = 0;
+  h.page.on("request", req => {if (req.method() !== "GET") writes++;});
+  await h.page.route("http://ui.test/api/v1/operations", async route => {
+    if (route.request().method() !== "POST") return route.fallback();
+    const intent = route.request().postDataJSON().intent;
+    submitted.push(intent);
+    const record = operation("QUEUED", {operation_id: "operation_handle", intent,
+      updated_at: "2026-10-05T01:00:00Z"});
+    h.state.operations.push(record);
+    await route.fulfill({status: 202, json: record});
+  });
+  await h.tick();
+  await h.requests();
+  await h.page.evaluate(() => showDetail("request", "request_fixture"));
+  const detail = h.page.locator("#detail");
+  const panel = detail.locator('section.engineering-wait-panel[data-key="engineering:work_handle"]');
+  assert.deepEqual(await panel.locator(".engineering-wait-facts dt").allTextContents(),
+    ["发生了什么", "开发进度", "平台可以做什么", "你需要做什么"]);
+  assert.equal(await panel.getByRole("button", {name: "让平台处理中断", exact: true}).isVisible(), true);
+  assert.equal(writes, 0);
+  await panel.getByRole("button", {name: "让平台处理中断", exact: true}).click();
+  await h.close();
+  assert.equal(submitted[0].action, "HANDLE_DELIVERY_WAIT");
+  assert.equal(submitted[0].expected_disposition_sha256, step.wait_disposition_sha256);
+  assert.equal(submitted[0].expected_checkpoint_sha256, request.checkpoint_sha256);
+  assert.equal(Object.hasOwn(submitted[0], "process_stopped"), false);
+  Object.assign(h.state.operations[0], {status: "RUNNING"});
+  await h.tick();
+  assert.match(await panel.innerText(), /平台正在处理中断/);
+  const proof = {kind: "delivery_wait_investigation", ...facts, disposition_sha256: step.wait_disposition_sha256,
+    proof_sha256: "e".repeat(64), inspected_at: "2026-10-05T01:10:00Z", missing: ["STOP_UNRECORDED"],
+    permitted_resolutions: [], next_action: "缺少可信停止记录，需工程核验。"};
+  const handling = {kind: "delivery_wait_handling", schema_version: "v1", ...facts,
+    disposition_sha256: step.wait_disposition_sha256, investigation: proof, status: "PLATFORM_ATTENTION",
+    manual_resolution_allowed: false, handling_sha256: "f".repeat(64), handled_at: "2026-10-05T01:10:00Z",
+    summary: "平台尚未取得原执行的结束记录，不能安全继续。",
+    user_action: "请将处理报告交给平台维护者，无需自行确认执行记录。",
+    recheck_when: "平台维护者修复原执行记录后再检查。"};
+  Object.assign(h.state.operations[0], {status: "SUCCEEDED", result: {
+    checkpoint_sha256: request.checkpoint_sha256, engineering_wait_handling: handling,
+  }});
+  await h.tick();
+  if (await h.page.locator("#notification").isVisible()) await h.close();
+  assert.match(await panel.innerText(), /平台尚未取得原执行的结束记录/);
+  assert.match(await panel.innerText(), /处理方 · 平台执行服务或维护者/);
+  assert.match(await panel.innerText(), /无需自行确认执行记录/);
+  assert.match(await panel.innerText(), /平台维护者修复原执行记录后再检查/);
+  assert.doesNotMatch(await panel.innerText(), /可信停止|Manager.*(?:正在|已经)/);
+  assert.equal(await panel.getByRole("button", {name: "继续原交付", exact: true}).count(), 0);
+  assert.equal(await panel.getByRole("button", {name: "让平台处理中断", exact: true}).count(), 0);
+  assert.equal(await panel.getByRole("button", {name: "重新检查状态", exact: true}).getAttribute("class"), "secondary");
+  assert.equal(await panel.locator(".engineering-wait-binding").evaluate(node => node.open), false);
+  assert.match(await detail.locator(".product-execution-summary").innerText(), /等待工程处理/);
+  for (const width of [1440, 1024, 390]) {
+    await h.page.setViewportSize({width, height: 1000});
+    assert.equal(await panel.evaluate(node => node.scrollWidth <= node.clientWidth + 1), true);
+    assert.equal(await detail.evaluate(node => node.scrollWidth <= node.clientWidth + 1), true);
+    assert.equal(await h.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+    assert.equal(await panel.locator(".engineering-wait-facts").evaluate(node => parseFloat(getComputedStyle(node).fontSize)), 14);
+    if (process.env.ASE_UI_SCREENSHOT_DIR) {
+      await panel.scrollIntoViewIfNeeded();
+      await h.page.screenshot({path: process.env.ASE_UI_SCREENSHOT_DIR + `/engineering-handling-${width}.png`});
+    }
+  }
+  await h.page.evaluate(() => Object.defineProperty(navigator, "clipboard", {configurable: true,
+    value: {writeText: async value => {window.copiedHandlingReport = value;}}}));
+  await panel.getByRole("button", {name: "复制处理报告", exact: true}).click();
+  await h.close();
+  assert.match(await h.page.evaluate(() => window.copiedHandlingReport), /ASE 交付处理报告/);
+  assert.match(await h.page.evaluate(() => window.copiedHandlingReport), /待处理事项 · 原执行是否已结束还没有可靠记录/);
+  assert.match(await h.page.evaluate(() => window.copiedHandlingReport), /任务 · task_handle/);
+  proof.missing = [];
+  proof.permitted_resolutions = ["RETRY_FROM_CHECKPOINT"];
+  Object.assign(proof, {interruption_receipt_sha256: "1".repeat(64), process_stop_sha256: "2".repeat(64),
+    workspace_inventory_sha256: "3".repeat(64)});
+  handling.collection_failed = true;
+  handling.summary = "平台未通过执行事实收集校验，需要维护者处理，原工作区和记录已保留。";
+  handling.user_action = "复制处理报告交给平台维护者。";
+  await h.tick();
+  assert.match(await panel.innerText(), /部分执行事实已核验，但收集校验失败，当前不能继续/);
+  assert.doesNotMatch(await panel.innerText(), /检查已通过，可按以下方案继续/);
+  assert.equal(await panel.getByRole("button", {name: "继续原交付", exact: true}).count(), 0);
+  await panel.getByRole("button", {name: "复制处理报告", exact: true}).click();
+  await h.close();
+  assert.match(await h.page.evaluate(() => window.copiedHandlingReport), /收集校验失败，当前不能继续/);
+  assert.doesNotMatch(await h.page.evaluate(() => window.copiedHandlingReport), /检查已通过|已恢复|已交付/);
+  assert.equal(writes, 1, "copying and reading a result cannot submit another delivery command");
+  handling.collection_failed = false;
+  handling.status = "NEEDS_AUTHORIZATION";
+  handling.summary = "检查已通过，需要工程授权者确认所列继续方案。";
+  handling.user_action = "请工程授权者确认按页面所列方案继续。";
+  proof.missing = [];
+  proof.permitted_resolutions = ["RETRY_FROM_CHECKPOINT"];
+  await h.tick();
+  if (await h.page.locator("#notification").isVisible()) await h.close();
+  assert.equal(await panel.getByRole("button", {name: "继续原交付", exact: true}).count(), 0,
+    "product duty cannot approve an engineering resolution");
+  handling.manual_resolution_allowed = true;
+  await h.tick();
+  assert.equal(await panel.getByRole("button", {name: "继续原交付", exact: true}).isVisible(), true);
+  await panel.getByRole("button", {name: "继续原交付", exact: true}).evaluate(node => {window.oldHandlingApproval = node;});
+  h.state.operations.push(operation("FAILED", {operation_id: "inspection_failed_newer",
+    intent: {...submitted[0], action: "INSPECT_DELIVERY_WAIT"}, updated_at: "2026-10-05T02:00:00Z"}));
+  await h.tick();
+  if (await h.page.locator("#notification").isVisible()) await h.close();
+  assert.equal(await panel.getByRole("button", {name: "继续原交付", exact: true}).count(), 0);
+  await h.page.evaluate(() => window.oldHandlingApproval.click());
+  assert.equal(writes, 1, "a retained old approval closure cannot consume a proof invalidated by a newer failed check");
 });
 
 test("original branch baseline update has a separate exact engineering plan and decision", async (t) => {

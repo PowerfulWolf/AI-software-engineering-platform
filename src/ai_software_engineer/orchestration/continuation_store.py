@@ -19,12 +19,19 @@ from ai_software_engineer.orchestration.continuation_models import (
     ContinuationConflict,
     ContinuationRecordMissing,
     ContinuationRejected,
+    ExecutionCaptureStart,
+    ExecutionCaptureStop,
     ExecutionInterruptionReceipt,
 )
 from ai_software_engineer.recovery.models import canonical_bytes, digest
 
 MAX_CONTINUATION_RECORD_BYTES = 8_000_000
-type _Record = ExecutionInterruptionReceipt | ContinuationAdmission
+type _Record = (
+    ExecutionInterruptionReceipt
+    | ContinuationAdmission
+    | ExecutionCaptureStart
+    | ExecutionCaptureStop
+)
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -125,6 +132,42 @@ class FileContinuationStore:
             else f"receipt-{receipt.request.run_id}.json"
         )
         return self._put(name, receipt, ExecutionInterruptionReceipt)
+
+    def put_capture_start(self, record: ExecutionCaptureStart) -> ExecutionCaptureStart:
+        record.validate_integrity()
+        self._require_task(record.request.task_id)
+        return self._put(
+            f"capture-start-{self._checked_run(record.request.run_id)}.json",
+            record,
+            ExecutionCaptureStart,
+        )
+
+    def capture_start(self, run_id: str) -> ExecutionCaptureStart:
+        record = self._get(f"capture-start-{self._checked_run(run_id)}.json", ExecutionCaptureStart)
+        self._require_task(record.request.task_id)
+        if record.request.run_id != run_id:
+            raise ContinuationRejected("capture start belongs to another Run")
+        return record
+
+    def put_capture_stop(self, record: ExecutionCaptureStop) -> ExecutionCaptureStop:
+        record.validate_integrity()
+        self._require_task(record.task_id)
+        start = self.capture_start(record.run_id)
+        if record.capture_start_sha256 != start.start_sha256 or (
+            record.process_stop.stopped_at < start.started_at
+        ):
+            raise ContinuationRejected("capture stop changed its original invocation")
+        return self._put(
+            f"capture-stop-{self._checked_run(record.run_id)}.json", record, ExecutionCaptureStop
+        )
+
+    def capture_stop(self, run_id: str) -> ExecutionCaptureStop:
+        record = self._get(f"capture-stop-{self._checked_run(run_id)}.json", ExecutionCaptureStop)
+        self._require_task(record.task_id)
+        start = self.capture_start(run_id)
+        if record.run_id != run_id or record.capture_start_sha256 != start.start_sha256:
+            raise ContinuationRejected("capture stop changed its original invocation")
+        return record
 
     def get_receipt(self, run_id: str) -> ExecutionInterruptionReceipt:
         checked_run = self._checked_run(run_id)

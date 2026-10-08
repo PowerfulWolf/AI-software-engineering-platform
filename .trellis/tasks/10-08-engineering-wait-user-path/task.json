@@ -1,0 +1,11 @@
+{
+  "id": "engineering-wait-user-path-20261008",
+  "title": "工程中断由平台受控处理与明确用户操作路径",
+  "status": "completed",
+  "phase": "incremental_verified",
+  "owner": "codex",
+  "created_at": "2026-10-08",
+  "baseline": "967c1fb",
+  "verification": "verification.md",
+  "deployment": "pending_user_idle_restart"
+}

@@ -39,7 +39,12 @@ schemas["pre-execution-restart"]["allOf"] = [
 console = schemas["console-operation"]
 definitions = console["$defs"]
 engineering_wire = json.loads((root / "engineering-wait-resolution.schema.json").read_text())
-for name in ("DeliveryResolution", "DeliveryWaitInvestigation", "VerifierPreparationEvidence"):
+for name in (
+    "DeliveryResolution",
+    "DeliveryWaitInvestigation",
+    "DeliveryWaitHandling",
+    "VerifierPreparationEvidence",
+):
     definitions[name]["allOf"] = engineering_wire["$defs"][name]["allOf"]
 for name in ("CreateRequirementIntent", "UpdateRequirementIntent"):
     roots = definitions[name]["properties"]["repository_roots"]

@@ -1353,6 +1353,34 @@ main[data-page="requests"] #detail {
   font-size: 0.875rem;
   line-height: 1.65;
 }
+.engineering-wait-facts {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  font-size: 0.875rem;
+  line-height: 1.65;
+}
+.engineering-wait-facts > div {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 8px 14px;
+  min-width: 0;
+}
+.engineering-wait-facts dt {
+  margin: 0;
+  color: #745020;
+  font-weight: 600;
+}
+.engineering-wait-facts dd {
+  min-width: 0;
+  margin: 0;
+  color: #4f5d70;
+}
+.engineering-wait-panel > .engineering-wait-recheck {
+  color: #725d42;
+  font-size: 0.8125rem;
+}
 .engineering-investigation-result {
   display: grid;
   gap: 8px;
@@ -1379,6 +1407,27 @@ main[data-page="requests"] #detail {
   margin: 4px 0;
   overflow-wrap: anywhere;
 }
+.engineering-investigation-result > .engineering-wait-issues {
+  display: grid;
+  gap: 10px;
+  padding: 0;
+  list-style: none;
+}
+.engineering-wait-issues > .engineering-wait-issue {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid #e8e1d7;
+  border-radius: 6px;
+  background: #fffcf7;
+}
+.engineering-wait-issue > p {
+  margin: 0;
+}
+.engineering-wait-issue > .muted {
+  font-size: 0.8125rem;
+}
 .engineering-wait-actions,
 .engineering-baseline-actions {
   display: flex;
@@ -1388,6 +1437,7 @@ main[data-page="requests"] #detail {
   min-width: 0;
 }
 .engineering-wait-actions > button,
+.engineering-wait-panel > .engineering-wait-report,
 .engineering-baseline-actions > button {
   max-width: 100%;
   min-height: 40px;
@@ -1396,6 +1446,10 @@ main[data-page="requests"] #detail {
   line-height: 1.5;
   white-space: normal;
   overflow-wrap: anywhere;
+}
+.engineering-wait-panel > .engineering-wait-report {
+  width: auto;
+  justify-self: start;
 }
 .engineering-wait-binding {
   min-width: 0;
@@ -3403,6 +3457,10 @@ code {
   }
   .engineering-investigation-result {
     padding: 10px 12px;
+  }
+  .engineering-wait-facts > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
   }
   #detail.request-detail-panel {
     padding: 12px;

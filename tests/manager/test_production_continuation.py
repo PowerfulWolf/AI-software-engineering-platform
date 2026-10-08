@@ -156,7 +156,7 @@ def test_public_native_entry_continues_stopped_coder_and_independently_verifies(
                 },
                 duration_ms=0,
             )
-        return original_complete(
+        result = original_complete(
             self,
             instructions=instructions,
             input_payload=input_payload,
@@ -164,6 +164,28 @@ def test_public_native_entry_continues_stopped_coder_and_independently_verifies(
             timeout_seconds=timeout_seconds,
             input_images=input_images,
         )
+        if output_schema.get("title") != "TechnicalDesignDraft":
+            return result
+        # This repository has no executable test entrypoint. Declare the exact
+        # candidate inspection performed by QA rather than bypassing preflight.
+        payload = dict(result.payload)
+        mappings = payload["acceptance_mappings"]
+        assert isinstance(mappings, list)
+        payload["acceptance_mappings"] = [
+            {
+                **mapping,
+                "test_levels": ["inspection"],
+                "verification_inspection": {
+                    "kind": "source",
+                    "paths": ["hello.txt"],
+                    "checklist": [
+                        "Read the exact committed greeting and compare the approved value."
+                    ],
+                },
+            }
+            for mapping in mappings
+        ]
+        return StructuredModelResult(payload=payload, duration_ms=result.duration_ms)
 
     monkeypatch.setattr(_ScriptedStructuredClient, "complete", clarify_once)
     monkeypatch.setattr(

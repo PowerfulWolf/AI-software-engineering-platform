@@ -13,21 +13,26 @@ from typing import TYPE_CHECKING
 from ai_software_engineer.artifacts import FileArtifactStore
 from ai_software_engineer.config import ProductionConfig
 from ai_software_engineer.context import ContextSource
+from ai_software_engineer.domain.delivery_disposition import DeliveryResponsibility
 from ai_software_engineer.domain.delivery_resolution import (
     DeliveryResolution,
+    DeliveryWaitHandling,
     DeliveryWaitInvestigation,
+    HandleDeliveryWait,
     InspectDeliveryWait,
     ResolveDeliveryWait,
 )
 from ai_software_engineer.domain.engineering_authority import (
+    EngineeringCapability,
     EngineeringScope,
     LocalOperatorPrincipal,
     OperatorDuty,
 )
-from ai_software_engineer.domain.enums import AgentRole
+from ai_software_engineer.domain.enums import AgentRole, WorkItemStatus
 from ai_software_engineer.domain.execution_baseline import ExecutionBaselineBinding
 from ai_software_engineer.domain.execution_window import PlanExecutionWindow
 from ai_software_engineer.domain.identity import ProjectId
+from ai_software_engineer.domain.task import Task
 from ai_software_engineer.git import GitWorktreeManager
 from ai_software_engineer.knowledge.gaps import KnowledgeGap, KnowledgeGapRaised
 from ai_software_engineer.knowledge_selection import (
@@ -74,6 +79,7 @@ from ai_software_engineer.multi_directory.deletion import ProductionRequirementD
 from ai_software_engineer.multi_directory.models import JointDeliveryResult, JointStage
 from ai_software_engineer.multi_directory.production import ProductionJointBackend
 from ai_software_engineer.multi_directory.service import JointDeliveryService
+from ai_software_engineer.orchestration.continuation_models import ContinuationScope
 from ai_software_engineer.product import HumanProductDecisionVerifier
 from ai_software_engineer.project_workspace import ProjectWorkspace, ProjectWorkspaceRegistry
 from ai_software_engineer.runtime_workspace import (
@@ -90,8 +96,9 @@ from ai_software_engineer.store import MySqlTaskRepository
 from ai_software_engineer.team_workspace import TeamWorkspace
 from ai_software_engineer.work_queue import DispatcherLoop
 from ai_software_engineer.work_queue.dispatcher import OwnerTokenFactory, RunDemandBuilder
-from ai_software_engineer.work_queue.execution_store import MySqlRoleQueue
+from ai_software_engineer.work_queue.execution_store import MySqlRoleQueue, QueuedRoleStep
 from ai_software_engineer.work_queue.models import LeaseWorkerId
+from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
 
 # Compatibility seam retained for tests and injected local hosts.
 MySqlPersistentWorkQueue = production_role_queue
@@ -231,6 +238,75 @@ class TeamHost:
         )
 
     def resume_delivery(
+        self, command: ResumeProjectDelivery, *, project_id: str | None = None
+    ) -> DeliveryResumeResult | JointDeliveryResult:
+        """Continue once, then handle at most one policy-authorized technical wait."""
+        result = self._resume_delivery_once(command, project_id=project_id)
+        checkpoint = result.checkpoint
+        if checkpoint.stage.value != "DELIVERING":
+            return result
+        identity = self._resolve_project_id(project_id, command.delivery_id)
+        if self._handle_current_wait_once(identity, command.delivery_id):
+            # No recursive retry loop. A later wait remains visible with its own
+            # durable record, allowance and user-facing action.
+            return self._resume_delivery_once(
+                ResumeProjectDelivery(delivery_id=command.delivery_id), project_id=identity
+            )
+        return result
+
+    def _handle_current_wait_once(self, project_id: str, delivery_id: str) -> bool:
+        runtime = self._runtime(project_id)
+        if delivery_id.startswith("delivery_multi_"):
+            native = tuple(
+                child.checkpoint
+                for child in runtime.requirements.status(delivery_id).checkpoint.children
+            )
+        else:
+            native = (runtime.entry.status(delivery_id).checkpoint,)
+        with closing(
+            MySqlTaskRepository(self._config.require_mysql_dsn(self._environment))
+        ) as repository:
+            for checkpoint in native:
+                if checkpoint.task_id is None or checkpoint.stage is not DeliveryStage.DELIVERING:
+                    continue
+                task = repository.get(checkpoint.task_id)
+                if task.engineering_policy is None or not task.engineering_policy.allowance(
+                    EngineeringCapability.DELIVERY_WAIT_RESOLUTION
+                ):
+                    continue
+                waiting = tuple(
+                    item
+                    for item in self._work_queue.items_for_task(task.id)
+                    if item.status
+                    in {
+                        WorkItemStatus.WAITING_HUMAN,
+                        WorkItemStatus.WAITING_DEPENDENCY,
+                    }
+                    and item.wait_disposition is not None
+                    and item.wait_disposition.responsibility is DeliveryResponsibility.ENGINEERING
+                )
+                if len(waiting) != 1:
+                    continue
+                item = waiting[0]
+                assert item.wait_disposition is not None
+                facts = item.wait_disposition.facts
+                command = HandleDeliveryWait(
+                    work_item_id=item.id,
+                    expected_disposition_sha256=item.wait_disposition.disposition_sha256,
+                    expected_task_intent_sha256=facts.task_intent_sha256,
+                    expected_source_revision=facts.source_revision,
+                    expected_checkpoint_sequence=facts.checkpoint_sequence,
+                )
+                result = self._delivery_wait_service(
+                    command,
+                    project_id=project_id,
+                    delivery_id=delivery_id,
+                    repository=repository,
+                ).handle(command)
+                return result.status == "RESOLVED"
+        return False
+
+    def _resume_delivery_once(
         self, command: ResumeProjectDelivery, *, project_id: str | None = None
     ) -> DeliveryResumeResult | JointDeliveryResult:
         """Manager's single public continuation seam for native and joint work."""
@@ -426,6 +502,29 @@ class TeamHost:
                 repository=repository,
             ).inspect(command)
 
+    def handle_delivery_wait(
+        self,
+        command: HandleDeliveryWait,
+        *,
+        project_id: str,
+        delivery_id: str,
+    ) -> DeliveryWaitHandling:
+        """Product may request handling; frozen policy alone grants automatic work."""
+        with closing(
+            MySqlTaskRepository(self._config.require_mysql_dsn(self._environment))
+        ) as repository:
+            handling = self._delivery_wait_service(
+                command,
+                project_id=project_id,
+                delivery_id=delivery_id,
+                repository=repository,
+            ).handle(command)
+        if handling.status == "RESOLVED":
+            self._resume_delivery_once(
+                ResumeProjectDelivery(delivery_id=delivery_id), project_id=project_id
+            )
+        return handling
+
     def propose_execution_baseline(
         self,
         command: BaselineProposeCommand,
@@ -529,7 +628,9 @@ class TeamHost:
             ).resolve(command)
         # v0.1 has a synchronous Supervisor, not an unattended fleet. A READY
         # record alone would leave delivery idle after this authorized action.
-        self.resume_delivery(ResumeProjectDelivery(delivery_id=delivery_id), project_id=project_id)
+        self._resume_delivery_once(
+            ResumeProjectDelivery(delivery_id=delivery_id), project_id=project_id
+        )
         return resolution
 
     def _delivery_wait_service(
@@ -540,6 +641,9 @@ class TeamHost:
         delivery_id: str,
         repository: MySqlTaskRepository,
     ) -> DeliveryWaitService:
+        from ai_software_engineer.agents.fallback import model_route_root
+        from ai_software_engineer.manager.wait_fact_collection import DeliveryWaitFactCollector
+
         runtime = self._runtime(project_id)
         item = self._work_queue.get(command.work_item_id)
         if delivery_id.startswith("delivery_multi_"):
@@ -573,26 +677,56 @@ class TeamHost:
         def consume(resolution: DeliveryResolution) -> None:
             self._work_queue.resolve_wait(resolution)
 
-        return DeliveryWaitService(
-            repository=repository,
-            queue=self._work_queue,
-            scope=EngineeringScope(
+        scope = EngineeringScope(
+            team_id=self._config.team_id,
+            project_id=project_id,
+            repository_id=item.repository_id,
+            repository_root=str(workspace.repository_root),
+        )
+        git = GitWorktreeManager(
+            workspace.repository_root,
+            Path(self._config.platform_root).expanduser().resolve()
+            / "worktrees"
+            / item.repository_id,
+            branch_names={task.id: task.branch_name},
+        )
+        dispatch_sha256 = native.dispatch_commit_sha256
+        if dispatch_sha256 is None:
+            raise ValueError("当前交付缺少 dispatch 绑定")
+        collector = DeliveryWaitFactCollector(
+            sidecar_state=workspace.directory("state"),
+            route_root=model_route_root(workspace.root),
+            scope=scope,
+            expected_continuation_scope=ContinuationScope(
                 team_id=self._config.team_id,
                 project_id=project_id,
                 repository_id=item.repository_id,
-                repository_root=str(workspace.repository_root),
+                requirement_id=native.delivery_id,
+                dispatch_sha256=dispatch_sha256,
             ),
+            git=git,
+            queue=self._work_queue,
+        )
+
+        def collect_wait_facts(
+            current: Task,
+            step: QueuedRoleStep,
+            guard: WorkerExecutionGuard,
+        ) -> None:
+            with self._work_queue.idle_task_scope(current.id):
+                collector.collect(current, step, guard)
+
+        return DeliveryWaitService(
+            repository=repository,
+            queue=self._work_queue,
+            scope=scope,
             sidecar_state=workspace.directory("state"),
-            git=GitWorktreeManager(
-                workspace.repository_root,
-                Path(self._config.platform_root).expanduser().resolve()
-                / "worktrees"
-                / item.repository_id,
-                branch_names={task.id: task.branch_name},
-            ),
+            git=git,
             principal=self._operator_principal,
             consume=consume,
             artifacts=FileArtifactStore(workspace.directory("artifacts"), read_only=True),
+            engineering_authority=EngineeringAuthority(self._team.directory("work-items")),
+            fact_collector=collect_wait_facts,
             prerequisite_collector=lambda current, step: (
                 runtime.backend.inspect_delivery_wait_prerequisites(
                     current,

@@ -7,10 +7,14 @@ stop, mutation, budget and owner-fenced queue facts before publishing it.
 
 from typing import Annotated, Literal, Self
 
-from pydantic import AwareDatetime, Field, StrictInt, model_validator
+from pydantic import AwareDatetime, Field, StrictBool, StrictInt, model_validator
 
 from ai_software_engineer.agents.continuation import InterruptionAdmissionRejected
-from ai_software_engineer.agents.execution import ExecutionStop, SynchronousToolLoopStop
+from ai_software_engineer.agents.execution import (
+    ExecutionStop,
+    NativeProcessStop,
+    SynchronousToolLoopStop,
+)
 from ai_software_engineer.agents.models import AgentErrorCode, AgentRequest
 from ai_software_engineer.domain.continuation import ContinuationCause
 from ai_software_engineer.domain.enums import AgentRole
@@ -23,8 +27,8 @@ from ai_software_engineer.domain.workforce import LeaseId
 from ai_software_engineer.git.mutation import WorkspaceMutationInventory
 from ai_software_engineer.manager.delivery_checkpoint import DeliveryId
 from ai_software_engineer.orchestration.continuation_capture import CapturedMutations
-from ai_software_engineer.recovery.models import CapturedChanges, RelativePath, digest
-from ai_software_engineer.work_queue.models import WorkItemId
+from ai_software_engineer.recovery.models import AbsolutePath, CapturedChanges, RelativePath, digest
+from ai_software_engineer.work_queue.models import QueueClaim, WorkItemId
 
 
 class ContinuationRejected(InterruptionAdmissionRejected):
@@ -45,6 +49,94 @@ class ContinuationScope(DomainModel):
     repository_id: RepositoryId
     requirement_id: DeliveryId
     dispatch_sha256: StageSha256
+
+
+class ExecutionCaptureStart(DomainModel):
+    """Original claimed inventory, sealed before the native invocation starts."""
+
+    kind: Literal["execution_capture_start"] = "execution_capture_start"
+    schema_version: Literal["v1"] = "v1"
+    scope: ContinuationScope
+    request: AgentRequest
+    claim: QueueClaim
+    task_intent_sha256: StageSha256
+    task_revision: Annotated[StrictInt, Field(ge=1)]
+    policy_sha256: StageSha256
+    worktree_path: AbsolutePath
+    inventory_before: WorkspaceMutationInventory
+    started_at: AwareDatetime
+    start_sha256: StageSha256
+
+    @model_validator(mode="after")
+    def require_original_claim(self) -> Self:
+        item, request = self.claim.work_item, self.request
+        if (item.task_id, item.repository_id, item.role, item.attempt) != (
+            request.task_id,
+            self.scope.repository_id,
+            AgentRole.CODER,
+            request.attempt,
+        ) or request.role is not AgentRole.CODER:
+            raise ValueError("capture start requires the original claimed Coder invocation")
+        return self
+
+    def recompute_sha256(self) -> str:
+        return digest(self.model_dump(mode="json", exclude={"start_sha256"}))
+
+    def validate_integrity(self) -> None:
+        type(self).model_validate(self.to_wire())
+        if self.start_sha256 != self.recompute_sha256():
+            raise ContinuationRejected("capture start digest mismatch")
+
+    @classmethod
+    def create(cls, **values: object) -> Self:
+        value = cls.model_validate({**values, "start_sha256": "0" * 64})
+        return value.model_copy(update={"start_sha256": value.recompute_sha256()})
+
+
+class ExecutionCaptureStop(DomainModel):
+    """Owned-runner final observation; it grants no retry or artifact authority."""
+
+    kind: Literal["execution_capture_stop"] = "execution_capture_stop"
+    schema_version: Literal["v1"] = "v1"
+    task_id: TaskId
+    run_id: RunId
+    capture_start_sha256: StageSha256
+    process_stop: NativeProcessStop
+    output_present: StrictBool
+    cause: ContinuationCause | None = None
+    original_error_code: AgentErrorCode | None = None
+    observation_sha256: StageSha256
+
+    @model_validator(mode="after")
+    def require_real_cause(self) -> Self:
+        self.process_stop.validate_integrity()
+        if self.cause == "local_execution_limit" and (
+            self.process_stop.kind != "local_execution_limit"
+            or self.original_error_code is not AgentErrorCode.TIMEOUT
+        ):
+            raise ValueError("local capture stop requires a real execution limit")
+        if self.cause == "provider_transient" and (
+            self.process_stop.kind != "failed"
+            or self.original_error_code is None
+            or self.original_error_code.value not in TRANSIENT_CODES
+        ):
+            raise ValueError("provider capture stop requires a typed transient failure")
+        return self
+
+    def recompute_sha256(self) -> str:
+        return digest(
+            self.model_dump(mode="json", exclude_none=True, exclude={"observation_sha256"})
+        )
+
+    def validate_integrity(self) -> None:
+        type(self).model_validate(self.to_wire())
+        if self.observation_sha256 != self.recompute_sha256():
+            raise ContinuationRejected("capture stop digest mismatch")
+
+    @classmethod
+    def create(cls, **values: object) -> Self:
+        value = cls.model_validate({**values, "observation_sha256": "0" * 64})
+        return value.model_copy(update={"observation_sha256": value.recompute_sha256()})
 
 
 class ExecutionInterruptionReceipt(DomainModel):

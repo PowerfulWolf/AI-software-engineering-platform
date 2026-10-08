@@ -58,6 +58,8 @@ def test_reopen_retains_all_per_run_immutable_bodies_and_hashes(v2_fixture: V2Fi
         f"receipt-{first.request.run_id}.json",
         f"receipt-{second.request.run_id}.json",
         f"admission-{admission.new_request.run_id}.json",
+        f"capture-start-{first.request.run_id}.json",
+        f"capture-start-{second.request.run_id}.json",
     }
 
 

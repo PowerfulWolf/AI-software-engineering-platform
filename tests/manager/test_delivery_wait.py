@@ -1,5 +1,6 @@
 """Real stop/Git proof, exact engineering decisions and conservative unknown waits."""
 
+import json
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -10,6 +11,7 @@ from types import SimpleNamespace
 from typing import Literal, Never, cast
 
 import pytest
+from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 
 from ai_software_engineer.agents.continuation import InterruptionObservation
@@ -36,11 +38,15 @@ from ai_software_engineer.domain.delivery_resolution import (
     DeliveryProofMissing,
     DeliveryResolution,
     DeliveryResolutionKind,
+    DeliveryWaitHandling,
     DeliveryWaitInvestigation,
+    HandleDeliveryWait,
     InspectDeliveryWait,
     ResolveDeliveryWait,
 )
 from ai_software_engineer.domain.engineering_authority import (
+    EngineeringCapability,
+    EngineeringPolicy,
     EngineeringScope,
     LocalOperatorPrincipal,
     OperatorDuty,
@@ -53,6 +59,7 @@ from ai_software_engineer.domain.enums import (
     TaskStatus,
     WorkItemStatus,
 )
+from ai_software_engineer.domain.model import DomainModel
 from ai_software_engineer.domain.native_verification import (
     NativeVerificationCapabilityDetail,
     NativeVerificationWaiting,
@@ -82,14 +89,17 @@ from ai_software_engineer.manager.delivery_wait import (
     DeliveryWaitService,
     _preflight_detail_action,
 )
+from ai_software_engineer.manager.engineering_authority import EngineeringAuthority
 from ai_software_engineer.manager.production_host import TeamHost
 from ai_software_engineer.manager.verifier_preparation import VerifierPreparationCheckpoint
+from ai_software_engineer.orchestration.continuation_models import ContinuationRejected
 from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
 from ai_software_engineer.orchestration.state_machine import build_event
 from ai_software_engineer.orchestration.steps import RoleRunBoundary
 from ai_software_engineer.store import SqliteTaskRepository
 from ai_software_engineer.web_console import (
     ConsoleCommandRejected,
+    HandleDeliveryWaitIntent,
     InspectDeliveryWaitIntent,
     ManagerConsoleAdapter,
     ResolveDeliveryWaitIntent,
@@ -101,6 +111,8 @@ from ai_software_engineer.work_queue.invocation import (
     DeliveryInvocationStart,
 )
 from ai_software_engineer.work_queue.models import QueueArtifactReceipt, QueueClaim, QueuedWorkItem
+from ai_software_engineer.work_queue.ports import QueueLeaseLost
+from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
 from tests.domain.factories import (
     make_agent,
     make_coder_progress_artifact,
@@ -117,6 +129,281 @@ from tests.manager.test_native_verification import (
 )
 from tests.manager.test_verifier_preparation import _gate, _marker, _Wait
 from tests.orchestration.test_native_continuation import NOW, Fixture, Guard
+
+
+def _handling_policy(native: Fixture, root: Path, *, grant: bool = True) -> None:
+    events = native.repository.list_events(native.task.id)
+    native.repository.close()
+    policy = EngineeringPolicy.bounded_local(
+        scope=EngineeringScope(
+            team_id=native.scope.team_id,
+            project_id=native.scope.project_id,
+            repository_id=native.scope.repository_id,
+            repository_root=native.task.repository,
+        ),
+        principal=LocalOperatorPrincipal.trusted_local(),
+    )
+    if not grant:
+        policy = policy.model_copy(
+            update={
+                "grants": tuple(
+                    g
+                    for g in policy.grants
+                    if g.capability is not EngineeringCapability.DELIVERY_WAIT_RESOLUTION
+                )
+            }
+        )
+    native.task = Task.model_validate(
+        {**native.task.to_wire(), "engineering_policy": policy.to_wire()}
+    )
+    native.repository = SqliteTaskRepository(root / "policy-task.sqlite")
+    native.repository.create(native.task)
+    native.repository.record_attempt(native.task.id, 1)
+    for event in events:
+        native.repository.append_event(event)
+
+
+def test_product_handling_unknown_execution_saves_case_without_fake_stop_or_resolution(
+    native: Fixture,
+    tmp_path: Path,
+) -> None:
+    queue = WaitQueue(native)
+    seal_start(native, queue, tmp_path)
+    entry = service(native, queue, tmp_path)
+    entry.principal = LocalOperatorPrincipal(
+        operator_id="product:fixture", duties=(OperatorDuty.PRODUCT,)
+    )
+    collected: list[str] = []
+    entry.fact_collector = lambda task, step, guard: collected.append(task.id)
+    command = HandleDeliveryWait.model_validate(queue.command().to_wire())
+    before = native.repository.get(native.task.id)
+    handling = entry.handle(command)
+    assert handling.status == "PLATFORM_ATTENTION"
+    assert handling.resolution is None and not handling.manual_resolution_allowed
+    assert handling.investigation.missing == (
+        DeliveryProofMissing.OUTCOME_UNKNOWN,
+        DeliveryProofMissing.STOP_UNRECORDED,
+        DeliveryProofMissing.CHECKPOINT_UNAVAILABLE,
+    )
+    assert "重复调查不会" in handling.recheck_when
+    assert "未自动创建修复任务" in handling.user_action
+    assert native.repository.get(native.task.id) == before and queue.consumed == []
+    assert service(native, queue, tmp_path).records.list(
+        "wait-handlings", DeliveryWaitHandling
+    ) == (handling,)
+    assert entry.handle(command) == handling
+    assert collected == [native.task.id, native.task.id]
+    assert len(entry.records.list("wait-handlings", DeliveryWaitHandling)) == 1
+
+
+def test_handling_real_checkpoint_uses_frozen_policy_without_human_actor_and_replays(
+    native: Fixture,
+    tmp_path: Path,
+) -> None:
+    _handling_policy(native, tmp_path)
+    queue = WaitQueue(native)
+    seal_start(native, queue, tmp_path)
+    stopped_receipt(native, tmp_path)
+    entry = service(native, queue, tmp_path)
+    ledger = tmp_path / "authority-ledger"
+    ledger.mkdir()
+    entry.engineering_authority = EngineeringAuthority(ledger)
+    entry.principal = LocalOperatorPrincipal(
+        operator_id="product:fixture", duties=(OperatorDuty.PRODUCT,)
+    )
+    handling = entry.handle(HandleDeliveryWait.model_validate(queue.command().to_wire()))
+    assert handling.status == "RESOLVED" and handling.resolution is not None
+    decision = handling.resolution
+    assert decision.authorization_source == "organization_engineering_policy"
+    assert decision.operator_principal is None and "operator_principal" not in decision.to_wire()
+    assert decision.engineering_admission is not None
+    assert decision.engineering_admission.capabilities == (
+        EngineeringCapability.DELIVERY_WAIT_RESOLUTION,
+    )
+    assert len(queue.consumed) == 1
+    schema = json.loads(Path("schemas/engineering-wait-resolution.schema.json").read_text())
+    Draft202012Validator(schema).validate(handling.to_wire())
+    Draft202012Validator(schema).validate(decision.to_wire())
+    with pytest.raises(ValidationError):
+        DeliveryResolution.model_validate(
+            {
+                **decision.to_wire(),
+                "operator_principal": LocalOperatorPrincipal.trusted_local().to_wire(),
+            }
+        )
+    with pytest.raises(ValidationError):
+        DeliveryResolution.model_validate({**decision.to_wire(), "proof_sha256": "f" * 64})
+
+
+def test_handling_reopens_sealed_decision_after_queue_consumption_before_report_publication(
+    native: Fixture,
+    tmp_path: Path,
+) -> None:
+    _handling_policy(native, tmp_path)
+    queue = WaitQueue(native)
+    seal_start(native, queue, tmp_path)
+    stopped_receipt(native, tmp_path)
+    entry = service(native, queue, tmp_path)
+    ledger = tmp_path / "authority-ledger"
+    ledger.mkdir()
+    entry.engineering_authority = EngineeringAuthority(ledger)
+    proof = entry.inspect(queue.command())
+    decision = entry._resolve(
+        ResolveDeliveryWait.model_validate(
+            {
+                **queue.command().to_wire(),
+                "resolution_kind": DeliveryResolutionKind.RETRY_FROM_CHECKPOINT,
+                "proof_sha256": proof.proof_sha256,
+                "submitted_at": NOW + timedelta(seconds=2),
+            }
+        ),
+        automatic=True,
+    )
+    command = HandleDeliveryWait.model_validate(queue.command().to_wire())
+    queue.item = queue.item.model_copy(update={"status": WorkItemStatus.CLOSED})
+    handling = entry.handle(command)
+    assert handling.status == "RESOLVED" and handling.resolution == decision
+    assert len(queue.consumed) == 1
+    assert entry.handle(command) == handling
+
+
+def test_handling_pins_proof_across_partial_admission_publication_and_clock_change(
+    native: Fixture,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _handling_policy(native, tmp_path)
+    queue = WaitQueue(native)
+    seal_start(native, queue, tmp_path)
+    stopped_receipt(native, tmp_path)
+    entry = service(native, queue, tmp_path)
+    ledger = tmp_path / "authority-ledger"
+    ledger.mkdir()
+    entry.engineering_authority = EngineeringAuthority(ledger)
+    command = HandleDeliveryWait.model_validate(queue.command().to_wire())
+    put = entry.records.put
+
+    def fail_decision(namespace: str, key: str, record: DomainModel) -> DomainModel:
+        if namespace == "wait-resolutions":
+            raise OSError("fixture local decision publication interrupted")
+        return put(namespace, key, record)
+
+    monkeypatch.setattr(entry.records, "put", fail_decision)
+    with pytest.raises(OSError, match="interrupted"):
+        entry.handle(command)
+    assert queue.consumed == []
+    original = entry.records.list("wait-handling-proofs", DeliveryWaitInvestigation)[0]
+    monkeypatch.setattr(entry.records, "put", put)
+    entry.clock = lambda: NOW + timedelta(seconds=5)
+    handling = entry.handle(command)
+    assert handling.status == "RESOLVED" and handling.resolution is not None
+    assert handling.investigation == original
+    assert handling.resolution.engineering_admission is not None
+    assert handling.resolution.engineering_admission.admission_number == 1
+    assert handling.resolution.engineering_admission.admitted_at == NOW + timedelta(seconds=1)
+    assert len(queue.consumed) == 1
+    assert entry.handle(HandleDeliveryWait.model_validate(queue.command().to_wire())) == handling
+    assert len(queue.consumed) == 1
+
+
+@pytest.mark.parametrize("policy", [False, True])
+@pytest.mark.parametrize("engineering_actor", [False, True])
+def test_handling_does_not_add_wait_grant_to_legacy_task(
+    native: Fixture,
+    tmp_path: Path,
+    policy: bool,
+    engineering_actor: bool,
+) -> None:
+    if policy:
+        _handling_policy(native, tmp_path, grant=False)
+    queue = WaitQueue(native)
+    seal_start(native, queue, tmp_path)
+    stopped_receipt(native, tmp_path)
+    entry = service(native, queue, tmp_path)
+    ledger = tmp_path / "authority-ledger"
+    ledger.mkdir()
+    entry.engineering_authority = EngineeringAuthority(ledger)
+    if not engineering_actor:
+        entry.principal = LocalOperatorPrincipal(
+            operator_id="product:fixture", duties=(OperatorDuty.PRODUCT,)
+        )
+    before = native.repository.get(native.task.id)
+    handling = entry.handle(HandleDeliveryWait.model_validate(queue.command().to_wire()))
+    assert handling.status == "NEEDS_AUTHORIZATION"
+    assert not handling.investigation.missing
+    assert handling.manual_resolution_allowed is engineering_actor
+    assert handling.resolution is None
+    assert native.repository.get(native.task.id) == before and queue.consumed == []
+    assert list(ledger.iterdir()) == []
+    assert not (tmp_path / "delivery-wait-authority").exists()
+    if not engineering_actor:
+        with pytest.raises(ValueError, match="ENGINEERING"):
+            entry.resolve(
+                ResolveDeliveryWait.model_validate(
+                    {
+                        **queue.command().to_wire(),
+                        "proof_sha256": handling.investigation.proof_sha256,
+                        "resolution_kind": DeliveryResolutionKind.RETRY_FROM_CHECKPOINT,
+                        "submitted_at": NOW + timedelta(seconds=2),
+                    }
+                )
+            )
+
+
+def test_handling_stale_input_and_untrusted_claim_fields_are_rejected(
+    native: Fixture,
+    tmp_path: Path,
+) -> None:
+    queue = WaitQueue(native)
+    entry = service(native, queue, tmp_path)
+    command = HandleDeliveryWait.model_validate(queue.command().to_wire())
+    for field in ("process_stopped", "operator_principal", "engineering_admission", "command"):
+        with pytest.raises(ValidationError):
+            HandleDeliveryWait.model_validate({**command.to_wire(), field: True})
+    with pytest.raises(DeliveryWaitRejected, match="已变化"):
+        entry.handle(command.model_copy(update={"expected_source_revision": "f" * 40}))
+    assert queue.consumed == []
+    assert not entry.records.list("wait-handlings", DeliveryWaitHandling)
+
+
+def test_handling_collector_refusal_preserves_actual_proof_without_authorizing_recovery(
+    native: Fixture,
+    tmp_path: Path,
+) -> None:
+    queue = WaitQueue(native)
+    seal_start(native, queue, tmp_path)
+    stopped_receipt(native, tmp_path)
+    entry = service(native, queue, tmp_path)
+
+    def rejected(task: Task, step: QueuedRoleStep, guard: WorkerExecutionGuard) -> None:
+        raise ContinuationRejected("record integrity rejection")
+
+    entry.fact_collector = rejected
+    handling = entry.handle(HandleDeliveryWait.model_validate(queue.command().to_wire()))
+    assert handling.status == "PLATFORM_ATTENTION" and handling.resolution is None
+    assert not handling.investigation.missing
+    assert handling.investigation.permitted_resolutions == (
+        DeliveryResolutionKind.RETRY_FROM_CHECKPOINT,
+    )
+    assert "校验失败" in handling.summary
+    assert queue.consumed == []
+
+
+def test_handling_live_claim_fence_does_not_collect_or_authorize_retry(
+    native: Fixture,
+    tmp_path: Path,
+) -> None:
+    queue = WaitQueue(native)
+    entry = service(native, queue, tmp_path)
+
+    def active_claim(task: Task, step: QueuedRoleStep, guard: WorkerExecutionGuard) -> None:
+        raise QueueLeaseLost("active claim blocks collection")
+
+    entry.fact_collector = active_claim
+    handling = entry.handle(HandleDeliveryWait.model_validate(queue.command().to_wire()))
+    assert handling.status == "WAITING_EXECUTION" and handling.resolution is None
+    assert handling.investigation.missing == (DeliveryProofMissing.PROCESS_LIVE_OR_UNKNOWN,)
+    assert queue.consumed == []
 
 
 def test_preflight_detail_action_is_deduplicated_and_chinese() -> None:
@@ -1062,8 +1349,15 @@ def test_console_engineering_actions_bind_displayed_requirement_and_real_investi
         assert project_id == "project_console_wait" and delivery_id == checkpoint.delivery_id
         return engineering.resolve(command)
 
+    def handle(
+        command: HandleDeliveryWait, *, project_id: str, delivery_id: str
+    ) -> DeliveryWaitHandling:
+        assert project_id == "project_console_wait" and delivery_id == checkpoint.delivery_id
+        return engineering.handle(command)
+
     monkeypatch.setattr(host, "inspect_delivery_wait", inspect, raising=False)
     monkeypatch.setattr(host, "resolve_delivery_wait", resolve, raising=False)
+    monkeypatch.setattr(host, "handle_delivery_wait", handle, raising=False)
     common = {
         **queue.command().to_wire(),
         "project_id": project_id,
@@ -1073,6 +1367,16 @@ def test_console_engineering_actions_bind_displayed_requirement_and_real_investi
     result = adapter.execute(InspectDeliveryWaitIntent.model_validate(common))
     proof = result.engineering_wait_investigation
     assert proof is not None and proof.permitted_resolutions
+    handled = adapter.execute(HandleDeliveryWaitIntent.model_validate(common))
+    assert handled.engineering_wait_handling is not None
+    assert handled.engineering_wait_handling.status == "NEEDS_AUTHORIZATION"
+    assert handled.stage == "ENGINEERING_WAIT_HANDLED" and queue.consumed == []
+    with pytest.raises(ConsoleCommandRejected, match="Refresh"):
+        adapter.execute(
+            HandleDeliveryWaitIntent.model_validate(
+                {**common, "expected_checkpoint_sha256": "f" * 64}
+            )
+        )
     resolved = adapter.execute(
         ResolveDeliveryWaitIntent.model_validate(
             {

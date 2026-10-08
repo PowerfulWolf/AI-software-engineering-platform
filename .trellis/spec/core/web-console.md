@@ -264,6 +264,10 @@ production_console_app(
 - `INSPECT_DELIVERY_WAIT(project_id, delivery_id, expected_checkpoint_sha256, work_item_id,
   expected_disposition_sha256, expected_task_intent_sha256, expected_source_revision,
   expected_checkpoint_sequence)`；仅工程职责可调查当前非终态等待。
+- `HANDLE_DELIVERY_WAIT(同一精确绑定)`；产品可以请求平台处理当前工程等待。服务在受控
+  Task lock/queue fence 内执行一次有界事实收集，只有新 Task 冻结的工程能力和完整证据才会
+  自动消费；请求本身不携带 stop、actor、retry cause、预算或命令。返回的
+  `engineering_wait_handling` 必须给出状态、中文原因、处理方、用户动作和复查时机。
 - `RESOLVE_DELIVERY_WAIT(上述精确绑定, resolution_kind, proof_sha256)`；仅消费服务封存的
   当前完整调查，浏览器不得携带 actor、stop/ready bool 或 retry cause/failure。
 - `PROPOSE_EXECUTION_BASELINE(project_id, delivery_id, expected_checkpoint_sha256, task_id,
@@ -433,6 +437,11 @@ production_console_app(
   durable execution facts。`INSPECT_DELIVERY_WAIT/RESOLVE_DELIVERY_WAIT` 的 RUNNING 通知
   说明正在核验/处理，不将当前工程等待改为“开发中”。当前调查、缺项和允许决定不能藏在
   参考折叠中；只有身份/hash 参考默认折叠。旧 checkpoint/disposition/proof 按钮不得继续提交。
+- 当前工程等待卡片的主按钮是“让平台处理中断”，次按钮是“重新检查状态”。前者完成一次
+  有界平台处理并展示 `RESOLVED`、`WAITING_EXECUTION`、`NEEDS_AUTHORIZATION`、
+  `PLATFORM_ATTENTION`、`WAITING_PREREQUISITES` 或 `BUDGET_EXHAUSTED` 的中文说明；后者
+  只重新读取事实，不能补造停止记录。`PLATFORM_ATTENTION` 要明确说明由 ASE 工程维护者
+  处理，产品无需填写内部 hash。`RESOLVED` 也只表示已交回原 Supervisor，不能显示需求已交付。
 - 原分支基线更新只出现在有精确 Task intent/revision/source 的 IMPLEMENTING Coder 工程区。
   调查完整草稿与目标代码后显示封存计划；冲突必须明确提出 coder_reapply 新计划，不能在旧
   批准下切换。QA/Review 阶段不提供 Coder 分支更新按钮，操作成功也不推断独立验收通过。

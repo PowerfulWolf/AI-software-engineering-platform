@@ -653,6 +653,7 @@
     },
     "EngineeringCapability": {
       "enum": [
+        "delivery_wait_resolution",
         "verification_refresh",
         "swift_sandbox",
         "python_mysql_sandbox",

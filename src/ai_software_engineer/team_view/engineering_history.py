@@ -9,6 +9,7 @@ from ai_software_engineer.domain.continuation import task_intent_sha256
 from ai_software_engineer.domain.delivery_resolution import (
     DeliveryResolution,
     DeliveryResolutionKind,
+    DeliveryWaitHandling,
     DeliveryWaitInvestigation,
     EngineeringDispositionRecord,
 )
@@ -23,6 +24,7 @@ from ai_software_engineer.manager.baseline_models import (
 )
 from ai_software_engineer.manager.baseline_store import FileExecutionBaselineStore
 from ai_software_engineer.manager.delivery_preflight import DeliveryPreflightReceipt
+from ai_software_engineer.manager.engineering_authority import EngineeringAuthority
 from ai_software_engineer.manager.native_verification_store import NativeRoleVerificationBinding
 from ai_software_engineer.manager.verifier_preparation import (
     VerifierPreparationCheckpoint,
@@ -170,13 +172,21 @@ def engineering_history(
             )
             proof.validate_integrity()
             _decision_matches_proof(decision, proof)
+            if decision.engineering_admission is not None:
+                EngineeringAuthority.validate(task=task, record=decision.engineering_admission)
+                if decision.engineering_admission.policy.scope != scope:
+                    raise ValueError("engineering resolution policy changed the Project scope")
             entries.append(
                 TimelineEntry(
                     id="resolution_" + decision.resolution_sha256,
                     kind=ProjectionEventKind.EVIDENCE,
                     occurred_at=decision.submitted_at,
                     task_id=task.id,
-                    summary="工程负责人记录了精确处置决定。执行结果以之后的角色记录为准。",
+                    summary=(
+                        "平台按冻结工程策略记录了自动处理。执行结果以之后的角色记录为准。"
+                        if decision.engineering_admission is not None
+                        else "工程负责人记录了精确处置决定。执行结果以之后的角色记录为准。"
+                    ),
                     source_uri=(
                         waits
                         / records._name(
@@ -188,10 +198,77 @@ def engineering_history(
                     details={
                         "kind": decision.kind,
                         "authorization_source": decision.authorization_source,
-                        "operator_id": decision.operator_principal.operator_id,
+                        **(
+                            {"operator_id": decision.operator_principal.operator_id}
+                            if decision.operator_principal is not None
+                            else {}
+                        ),
+                        **(
+                            {"admission_sha256": decision.engineering_admission.admission_sha256}
+                            if decision.engineering_admission is not None
+                            else {}
+                        ),
                         "resolution_kind": decision.resolution_kind.value,
                         "work_item_id": decision.work_item_id,
                         "proof_sha256": decision.proof_sha256,
+                    },
+                )
+            )
+        for handling in records.list("wait-handlings", DeliveryWaitHandling):
+            handling.validate_integrity()
+            if records.get("wait-handlings", handling.record_key, DeliveryWaitHandling) != handling:
+                raise ValueError("platform handling changed its immutable store key")
+            if handling.task_id != task.id:
+                continue
+            if handling.task_intent_sha256 != intent:
+                raise ValueError("platform handling changed approved Task intent")
+            proof = records.get(
+                "wait-investigations",
+                handling.investigation.proof_sha256,
+                DeliveryWaitInvestigation,
+            )
+            if proof != handling.investigation:
+                raise ValueError("platform handling changed its sealed investigation")
+            proof.validate_integrity()
+            if handling.resolution is not None:
+                decision = handling.resolution
+                decision.validate_integrity()
+                _decision_matches_proof(decision, proof)
+                if (
+                    records.get(
+                        "wait-resolutions",
+                        decision.work_item_id + ":" + decision.expected_disposition_sha256,
+                        DeliveryResolution,
+                    )
+                    != decision
+                ):
+                    raise ValueError("platform handling changed its sealed resolution")
+                if decision.engineering_admission is not None:
+                    EngineeringAuthority.validate(task=task, record=decision.engineering_admission)
+                    if decision.engineering_admission.policy.scope != scope:
+                        raise ValueError("platform handling policy changed the Project scope")
+            entries.append(
+                TimelineEntry(
+                    id="handling_" + handling.handling_sha256,
+                    kind=ProjectionEventKind.EVIDENCE,
+                    occurred_at=handling.handled_at,
+                    task_id=task.id,
+                    run_id=proof.original_run_id,
+                    role=proof.disposition.facts.role,
+                    summary=handling.summary,
+                    source_uri=(
+                        waits / records._name("wait-handlings", handling.record_key)
+                    ).as_uri(),
+                    source_sha256=handling.handling_sha256,
+                    details={
+                        "kind": handling.kind,
+                        "status": handling.status,
+                        "user_action": handling.user_action,
+                        "recheck_when": handling.recheck_when,
+                        "manual_resolution_allowed": handling.manual_resolution_allowed,
+                        "collection_failed": handling.collection_failed,
+                        "proof_sha256": proof.proof_sha256,
+                        "work_item_id": handling.work_item_id,
                     },
                 )
             )

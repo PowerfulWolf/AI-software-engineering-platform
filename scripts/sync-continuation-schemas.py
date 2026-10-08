@@ -12,6 +12,8 @@ from ai_software_engineer.domain.retry_policy import TRANSIENT_CODES
 from ai_software_engineer.domain.task import Task
 from ai_software_engineer.orchestration.continuation_models import (
     ContinuationAdmission,
+    ExecutionCaptureStart,
+    ExecutionCaptureStop,
     ExecutionInterruptionReceipt,
 )
 
@@ -221,6 +223,48 @@ def main() -> None:
         }
     ]
     _write("execution-continuation.schema.json", continuation_schema)
+    capture_schema = TypeAdapter(
+        Annotated[ExecutionCaptureStart | ExecutionCaptureStop, Field(discriminator="kind")]
+    ).json_schema()
+    capture_schema["$defs"]["ExecutionCaptureStart"]["properties"]["request"] = {
+        "allOf": [
+            {"$ref": "#/$defs/AgentRequest"},
+            {"properties": {"role": {"const": "coder"}}},
+        ]
+    }
+    capture_schema["$defs"]["ExecutionCaptureStop"]["allOf"] = [
+        {
+            "if": {
+                "required": ["cause"],
+                "properties": {
+                    "cause": {"const": "local_execution_limit"},
+                },
+            },
+            "then": {
+                "required": ["original_error_code"],
+                "properties": {
+                    "original_error_code": {"const": "TIMEOUT"},
+                    "process_stop": {"properties": {"kind": {"const": "local_execution_limit"}}},
+                },
+            },
+        },
+        {
+            "if": {
+                "required": ["cause"],
+                "properties": {
+                    "cause": {"const": "provider_transient"},
+                },
+            },
+            "then": {
+                "required": ["original_error_code"],
+                "properties": {
+                    "original_error_code": {"enum": sorted(TRANSIENT_CODES)},
+                    "process_stop": {"properties": {"kind": {"const": "failed"}}},
+                },
+            },
+        },
+    ]
+    _write("execution-capture.schema.json", capture_schema)
 
 
 if __name__ == "__main__":

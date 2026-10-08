@@ -21,6 +21,7 @@ from ai_software_engineer.agents.model_diagnostics import ModelCallDiagnostic
 from ai_software_engineer.domain.delivery_resolution import (
     DeliveryResolution,
     DeliveryResolutionKind,
+    DeliveryWaitHandling,
     DeliveryWaitInvestigation,
     EngineeringDispositionRecord,
     InspectDeliveryWait,
@@ -73,6 +74,7 @@ class ConsoleAction(StrEnum):
     RECOVER_DESIGN = "RECOVER_DESIGN"
     RECHECK_DESIGN = "RECHECK_DESIGN"
     INSPECT_DELIVERY_WAIT = "INSPECT_DELIVERY_WAIT"
+    HANDLE_DELIVERY_WAIT = "HANDLE_DELIVERY_WAIT"
     RESOLVE_DELIVERY_WAIT = "RESOLVE_DELIVERY_WAIT"
     PROPOSE_EXECUTION_BASELINE = "PROPOSE_EXECUTION_BASELINE"
     EXECUTE_EXECUTION_BASELINE = "EXECUTE_EXECUTION_BASELINE"
@@ -233,6 +235,10 @@ class InspectDeliveryWaitIntent(_DeliveryWaitIntent):
     action: Literal[ConsoleAction.INSPECT_DELIVERY_WAIT] = ConsoleAction.INSPECT_DELIVERY_WAIT
 
 
+class HandleDeliveryWaitIntent(_DeliveryWaitIntent):
+    action: Literal[ConsoleAction.HANDLE_DELIVERY_WAIT] = ConsoleAction.HANDLE_DELIVERY_WAIT
+
+
 class ResolveDeliveryWaitIntent(_DeliveryWaitIntent):
     action: Literal[ConsoleAction.RESOLVE_DELIVERY_WAIT] = ConsoleAction.RESOLVE_DELIVERY_WAIT
     resolution_kind: DeliveryResolutionKind
@@ -268,6 +274,7 @@ ConsoleIntent = Annotated[
     | RecoverDesignIntent
     | RecheckDesignIntent
     | InspectDeliveryWaitIntent
+    | HandleDeliveryWaitIntent
     | ResolveDeliveryWaitIntent
     | ProposeExecutionBaselineIntent
     | ExecuteExecutionBaselineIntent,
@@ -307,6 +314,9 @@ class ConsoleCommandResult(DomainModel):
     diagnostic: Annotated[str, StringConstraints(min_length=1, max_length=500)] | None = None
     approval: ConsoleApprovalRequest | None = None
     engineering_wait_investigation: DeliveryWaitInvestigation | None = None
+    engineering_wait_handling: DeliveryWaitHandling | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     engineering_wait_resolution: DeliveryResolution | None = None
     engineering_disposition: EngineeringDispositionRecord | None = None
     execution_baseline_plan: ExecutionBaselinePlan | None = None
@@ -489,6 +499,7 @@ __all__ = [
     "CreateProjectIntent",
     "CreateRequirementIntent",
     "DeleteRequirementIntent",
+    "HandleDeliveryWaitIntent",
     "IdempotencyKey",
     "InspectDeliveryWaitIntent",
     "OperationId",

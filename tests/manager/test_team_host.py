@@ -11,8 +11,22 @@ import pytest
 
 from ai_software_engineer.agents import StructuredModelClient, StructuredModelResult
 from ai_software_engineer.config import ModelProviderKind, ProductionConfig, ProviderRouteConfig
-from ai_software_engineer.domain import TeamRole
-from ai_software_engineer.domain.engineering_authority import LocalOperatorPrincipal
+from ai_software_engineer.domain import Task, TeamRole
+from ai_software_engineer.domain.continuation import task_intent_sha256
+from ai_software_engineer.domain.delivery_disposition import (
+    DeliveryFailureFacts,
+    DeliveryResponsibility,
+    decide_delivery_disposition,
+)
+from ai_software_engineer.domain.delivery_resolution import HandleDeliveryWait
+from ai_software_engineer.domain.engineering_authority import (
+    EngineeringCapability,
+    EngineeringGrant,
+    EngineeringPolicy,
+    EngineeringScope,
+    LocalOperatorPrincipal,
+)
+from ai_software_engineer.domain.enums import AgentRole, WorkItemStatus
 from ai_software_engineer.knowledge.gaps import KnowledgeGapRaised
 from ai_software_engineer.knowledge_documents import (
     ProjectKnowledgeDocumentStore,
@@ -33,16 +47,19 @@ from ai_software_engineer.manager.delivery_checkpoint import (
 )
 from ai_software_engineer.manager.production_backend import StructuredClientFactory
 from ai_software_engineer.manager.production_host import TeamHost
+from ai_software_engineer.manager.wait_fact_collection import DeliveryWaitFactCollector
 from ai_software_engineer.multi_directory.errors import RequirementSourceRevisionDrift
-from ai_software_engineer.multi_directory.models import JointStage
+from ai_software_engineer.multi_directory.models import JointDeliveryResult, JointStage
 from ai_software_engineer.multi_directory.production import ProductionJointBackend
 from ai_software_engineer.multi_directory.service import CreateRequirement
+from ai_software_engineer.project_workspace import ProjectWorkspaceRegistry
 from ai_software_engineer.spec_documents import (
     CreateSpecDocument,
     ProjectSpecDocumentStore,
     TeamSpecDocumentStore,
 )
 from ai_software_engineer.team_workspace import TeamWorkspace
+from tests.domain.factories import make_task
 from tests.manager.test_production_backend import _git, _git_output, _ScriptedStructuredClient
 
 
@@ -97,6 +114,93 @@ class _RecordingFactory(StructuredClientFactory, StructuredModelClient):
             output_schema=output_schema,
             timeout_seconds=timeout_seconds,
         )
+
+
+class _TaskRepositoryStub(_ConnectivityStub):
+    def __init__(self, dsn: str, task: Task) -> None:
+        super().__init__(dsn)
+        self.task = task
+        self.requested: list[str] = []
+
+    def get(self, task_id: str) -> Task:
+        self.requested.append(task_id)
+        assert task_id == self.task.id
+        return self.task
+
+
+def _wait_host_fixture(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    stage: DeliveryStage = DeliveryStage.DELIVERING,
+    engineering_policy: EngineeringPolicy | None = None,
+) -> tuple[TeamHost, SimpleNamespace, HandleDeliveryWait, list[object]]:
+    """Build only the public-host facts; DB access remains connectivity-only."""
+    base = _config_task()
+    frozen_policy = engineering_policy or EngineeringPolicy.bounded_local(
+        scope=EngineeringScope(
+            team_id="team_alpha",
+            project_id="project_alpha",
+            repository_id="repository_current",
+            repository_root=base.repository,
+        ),
+        principal=LocalOperatorPrincipal.trusted_local(),
+    )
+    task = Task.model_validate({**base.to_wire(), "engineering_policy": frozen_policy.to_wire()})
+    checkpoint = SimpleNamespace(
+        delivery_id="delivery_current_wait",
+        stage=stage,
+        task_id=task.id,
+        repository_id="repository_current",
+    )
+    facts = DeliveryFailureFacts(
+        task_id=task.id,
+        work_item_id="work_current_wait",
+        role=AgentRole.CODER,
+        classification="EXECUTION_UNCERTAIN",
+        source_revision=task.base_ref,
+        task_intent_sha256=task_intent_sha256(task),
+        checkpoint_sequence=1,
+        budget_available=True,
+    )
+    disposition = decide_delivery_disposition(facts)
+    assert disposition.responsibility is DeliveryResponsibility.ENGINEERING
+    item = SimpleNamespace(
+        id=facts.work_item_id,
+        task_id=task.id,
+        repository_id=checkpoint.repository_id,
+        status=WorkItemStatus.WAITING_HUMAN,
+        wait_disposition=disposition,
+    )
+    queue = SimpleNamespace(items_for_task=lambda task_id: (item,) if task_id == task.id else ())
+    runtime = SimpleNamespace(
+        entry=SimpleNamespace(status=lambda delivery_id: SimpleNamespace(checkpoint=checkpoint))
+    )
+    host = object.__new__(TeamHost)
+    host._config = SimpleNamespace(require_mysql_dsn=lambda environment: "connectivity-only")
+    host._environment = {"ASE_MYSQL_DSN": "connectivity-only"}
+    host._work_queue = queue
+    host._operator_principal = LocalOperatorPrincipal.trusted_local()
+    host._runtime = lambda project_id: runtime
+    host._resolve_project_id = lambda project_id, delivery_id=None: project_id or "project_alpha"
+    captured: list[object] = []
+
+    monkeypatch.setattr(
+        "ai_software_engineer.manager.production_host.MySqlTaskRepository",
+        lambda dsn: _TaskRepositoryStub(dsn, task),
+    )
+    command = HandleDeliveryWait(
+        work_item_id=item.id,
+        expected_disposition_sha256=disposition.disposition_sha256,
+        expected_task_intent_sha256=facts.task_intent_sha256,
+        expected_source_revision=facts.source_revision,
+        expected_checkpoint_sequence=facts.checkpoint_sequence,
+    )
+    return host, checkpoint, command, captured
+
+
+def _config_task() -> Task:
+    """Keep the fixture's task fully typed while avoiding a production workspace."""
+    return make_task()
 
 
 def _config(root: Path, team_id: str, paths: tuple[str, ...] = ()) -> ProductionConfig:
@@ -159,7 +263,7 @@ def test_joint_resume_syncs_parent_after_non_done_child_recovery(
         integration=None,
         children=(child,),
     )
-    parent_result = object()
+    parent_result = JointDeliveryResult.model_construct(checkpoint=joint)
     child_result = SimpleNamespace(
         checkpoint=SimpleNamespace(stage=DeliveryStage.BLOCKED),
         outcome="WAITING_HUMAN",
@@ -192,6 +296,7 @@ def test_joint_resume_syncs_parent_after_non_done_child_recovery(
     )
     requirements = SimpleNamespace(
         backend=backend,
+        journal=SimpleNamespace(current=lambda delivery_id: None),
         status=lambda delivery_id: SimpleNamespace(checkpoint=joint),
         resume=resume_parent,
     )
@@ -211,6 +316,275 @@ def test_joint_resume_syncs_parent_after_non_done_child_recovery(
 
     assert result is parent_result
     assert [kind for kind, _ in calls] == ["child", "parent"]
+
+
+def test_resume_delivery_handles_one_current_wait_then_resumes_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    host, checkpoint, command, captured = _wait_host_fixture(monkeypatch)
+    resume_calls: list[ResumeProjectDelivery] = []
+    service_bindings: list[dict[str, object]] = []
+
+    def resume_once(
+        current: ResumeProjectDelivery, *, project_id: str | None = None
+    ) -> SimpleNamespace:
+        del project_id
+        resume_calls.append(current)
+        return SimpleNamespace(checkpoint=checkpoint)
+
+    class ResolvedService:
+        def handle(self, current: HandleDeliveryWait) -> SimpleNamespace:
+            captured.append(current)
+            return SimpleNamespace(status="RESOLVED")
+
+    host._resume_delivery_once = resume_once
+
+    def delivery_wait_service(current: HandleDeliveryWait, **kwargs: object) -> ResolvedService:
+        del current
+        service_bindings.append(kwargs)
+        return ResolvedService()
+
+    host._delivery_wait_service = delivery_wait_service
+
+    result = host.resume_delivery(
+        ResumeProjectDelivery(delivery_id=checkpoint.delivery_id), project_id="project_alpha"
+    )
+
+    assert result.checkpoint is checkpoint
+    assert len(resume_calls) == 2
+    assert all(call.delivery_id == checkpoint.delivery_id for call in resume_calls)
+    assert captured == [command]
+    assert service_bindings[0]["project_id"] == "project_alpha"
+    assert service_bindings[0]["delivery_id"] == checkpoint.delivery_id
+
+
+def test_resume_delivery_does_not_recurse_when_handling_stays_waiting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    host, checkpoint, command, captured = _wait_host_fixture(monkeypatch)
+    resume_calls: list[ResumeProjectDelivery] = []
+
+    def resume_once(
+        current: ResumeProjectDelivery, *, project_id: str | None = None
+    ) -> SimpleNamespace:
+        del project_id
+        resume_calls.append(current)
+        return SimpleNamespace(checkpoint=checkpoint)
+
+    class WaitingService:
+        def handle(self, current: HandleDeliveryWait) -> SimpleNamespace:
+            captured.append(current)
+            return SimpleNamespace(status="WAITING_EXECUTION")
+
+    host._resume_delivery_once = resume_once
+    host._delivery_wait_service = lambda current, **kwargs: WaitingService()
+
+    host.resume_delivery(
+        ResumeProjectDelivery(delivery_id=checkpoint.delivery_id), project_id="project_alpha"
+    )
+
+    assert len(resume_calls) == 1
+    assert captured == [command]
+
+
+def test_resume_delivery_does_not_handle_non_delivering_stage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    host, checkpoint, _, _ = _wait_host_fixture(monkeypatch, stage=DeliveryStage.PLANNING)
+    handle_calls: list[object] = []
+    resume_calls: list[ResumeProjectDelivery] = []
+
+    def resume_once(
+        current: ResumeProjectDelivery, *, project_id: str | None = None
+    ) -> SimpleNamespace:
+        del project_id
+        resume_calls.append(current)
+        return SimpleNamespace(checkpoint=checkpoint)
+
+    def unexpected_handle(project_id: str, delivery_id: str) -> bool:
+        handle_calls.append((project_id, delivery_id))
+        return True
+
+    host._resume_delivery_once = resume_once
+    host._handle_current_wait_once = unexpected_handle
+
+    host.resume_delivery(
+        ResumeProjectDelivery(delivery_id=checkpoint.delivery_id), project_id="project_alpha"
+    )
+
+    assert len(resume_calls) == 1
+    assert handle_calls == []
+
+
+def test_current_wait_without_frozen_delivery_wait_grant_does_not_call_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = _config_task()
+    policy = EngineeringPolicy(
+        scope=EngineeringScope(
+            team_id="team_alpha",
+            project_id="project_alpha",
+            repository_id="repository_current",
+            repository_root=base.repository,
+        ),
+        issued_by=LocalOperatorPrincipal.trusted_local(),
+        grants=(
+            EngineeringGrant(
+                capability=EngineeringCapability.VERIFICATION_REFRESH,
+                max_admissions=1,
+            ),
+        ),
+    )
+    host, checkpoint, _, _ = _wait_host_fixture(monkeypatch, engineering_policy=policy)
+    service_calls: list[object] = []
+    host._delivery_wait_service = lambda current, **kwargs: service_calls.append(current)
+
+    assert host._handle_current_wait_once("project_alpha", checkpoint.delivery_id) is False
+    assert service_calls == []
+
+
+def test_explicit_handle_delivery_wait_resumes_exactly_once_after_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    host, checkpoint, command, captured = _wait_host_fixture(monkeypatch)
+    resume_calls: list[ResumeProjectDelivery] = []
+    service_bindings: list[dict[str, object]] = []
+
+    class ResolvedService:
+        def handle(self, current: HandleDeliveryWait) -> SimpleNamespace:
+            captured.append(current)
+            return SimpleNamespace(status="RESOLVED")
+
+    def delivery_wait_service(current: HandleDeliveryWait, **kwargs: object) -> ResolvedService:
+        del current
+        service_bindings.append(kwargs)
+        return ResolvedService()
+
+    host._delivery_wait_service = delivery_wait_service
+
+    def resume_once(
+        current: ResumeProjectDelivery, *, project_id: str | None = None
+    ) -> SimpleNamespace:
+        del project_id
+        resume_calls.append(current)
+        return SimpleNamespace(checkpoint=checkpoint)
+
+    host._resume_delivery_once = resume_once
+
+    result = host.handle_delivery_wait(
+        command, project_id="project_alpha", delivery_id=checkpoint.delivery_id
+    )
+
+    assert result.status == "RESOLVED"
+    assert captured == [command]
+    assert len(resume_calls) == 1
+    assert resume_calls[0].delivery_id == checkpoint.delivery_id
+    assert service_bindings[0]["project_id"] == "project_alpha"
+    assert service_bindings[0]["delivery_id"] == checkpoint.delivery_id
+
+
+def test_joint_wait_service_binds_continuation_to_native_child_and_exact_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    platform = tmp_path / "platform"
+    team = TeamWorkspace.initialize(platform, team_id="team_alpha", name="Alpha")
+    project = ProjectWorkspaceRegistry(team).register(project_id="project_alpha", name="Alpha")
+    code = tmp_path / "code"
+    code.mkdir()
+    _git("init", cwd=code)
+    (code / "hello.txt").write_text("hello\n", encoding="utf-8")
+    _git("add", "hello.txt", cwd=code)
+    _git("commit", "-m", "base", cwd=code)
+    workspace = project.repository_registry().register(code)
+    task = Task.model_validate(
+        {
+            **make_task().to_wire(),
+            "repository": str(code),
+            "base_ref": _git_output("rev-parse", "HEAD", cwd=code),
+        }
+    )
+    parent_id, child_id = "delivery_multi_parent_wait", "delivery_child_wait"
+    native = SimpleNamespace(
+        delivery_id=child_id,
+        task_id=task.id,
+        repository_id=workspace.repository_id,
+        repository_root=str(code),
+        dispatch_commit_sha256="d" * 64,
+    )
+    current = SimpleNamespace(
+        id="work_child_wait", task_id=task.id, repository_id=workspace.repository_id
+    )
+    command = HandleDeliveryWait(
+        work_item_id=current.id,
+        expected_disposition_sha256="a" * 64,
+        expected_task_intent_sha256=task_intent_sha256(task),
+        expected_source_revision=task.base_ref,
+        expected_checkpoint_sequence=1,
+    )
+    requested: list[str] = []
+    collectors: list[DeliveryWaitFactCollector] = []
+    queue = SimpleNamespace(get=lambda work_item_id: current)
+
+    def requirement_status(delivery_id: str) -> SimpleNamespace:
+        requested.append(delivery_id)
+        assert delivery_id == parent_id
+        return SimpleNamespace(
+            checkpoint=SimpleNamespace(children=(SimpleNamespace(checkpoint=native),))
+        )
+
+    runtime = SimpleNamespace(
+        project=project,
+        requirements=SimpleNamespace(status=requirement_status),
+        backend=SimpleNamespace(),
+    )
+    host = object.__new__(TeamHost)
+    host._config = _config(platform, "team_alpha")
+    host._environment = {"ASE_MYSQL_DSN": "connectivity-only"}
+    host._team = team
+    host._operator_principal = LocalOperatorPrincipal.trusted_local()
+    host._work_queue = queue
+    monkeypatch.setattr(host, "_runtime", lambda project_id: runtime)
+
+    class RecordingCollector(DeliveryWaitFactCollector):
+        def __init__(self, **kwargs: object) -> None:
+            super().__init__(**kwargs)
+            collectors.append(self)
+
+    monkeypatch.setattr(
+        "ai_software_engineer.manager.wait_fact_collection.DeliveryWaitFactCollector",
+        RecordingCollector,
+    )
+    repository = _TaskRepositoryStub("connectivity-only", task)
+
+    service = host._delivery_wait_service(
+        command,
+        project_id=project.manifest.project_id,
+        delivery_id=parent_id,
+        repository=repository,
+    )
+
+    assert requested == [parent_id]
+    assert repository.requested == [task.id]
+    assert len(collectors) == 1
+    collector = collectors[0]
+    assert collector.scope == EngineeringScope(
+        team_id=team.manifest.team_id,
+        project_id=project.manifest.project_id,
+        repository_id=workspace.repository_id,
+        repository_root=str(code),
+    )
+    assert collector.expected_continuation_scope.requirement_id == child_id
+    assert collector.expected_continuation_scope.requirement_id != parent_id
+    assert collector.expected_continuation_scope.dispatch_sha256 == native.dispatch_commit_sha256
+    assert collector.expected_continuation_scope.team_id == team.manifest.team_id
+    assert collector.expected_continuation_scope.project_id == project.manifest.project_id
+    assert collector.expected_continuation_scope.repository_id == workspace.repository_id
+    assert collector.state == workspace.directory("state")
+    assert service.scope == collector.scope
+    assert service.queue is queue and service.repository is repository
+    assert service.fact_collector is not None
+    assert (code / "hello.txt").read_text(encoding="utf-8") == "hello\n"
+    assert not (code / ".ase").exists()
 
 
 def test_team_host_scopes_product_catalog_and_context(

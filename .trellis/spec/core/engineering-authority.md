@@ -21,11 +21,14 @@ EngineeringAuthority.admit(task: Task, store: FileRecoveryStore,
                            at: datetime) -> EngineeringAdmission
 CandidateVerificationEntry.authorize_policy(path: Path) -> EngineeringAdmission | None
 DeliveryWaitService.inspect(command: InspectDeliveryWait) -> DeliveryWaitInvestigation
+DeliveryWaitService.handle(command: HandleDeliveryWait) -> DeliveryWaitHandling
 DeliveryWaitService.resolve(command: ResolveDeliveryWait) -> DeliveryResolution
 ProductionProjectDeliveryBackend.authorize_product_action() -> None
 UnifiedProjectEntryService(..., product_action_authorizer: Callable[[], None] | None = None)
 TeamHost.inspect_delivery_wait(command: InspectDeliveryWait, *,
                                project_id: str, delivery_id: str) -> DeliveryWaitInvestigation
+TeamHost.handle_delivery_wait(command: HandleDeliveryWait, *,
+                              project_id: str, delivery_id: str) -> DeliveryWaitHandling
 TeamHost.resolve_delivery_wait(command: ResolveDeliveryWait, *,
                                project_id: str, delivery_id: str) -> DeliveryResolution
 ProductionProjectDeliveryBackend.inspect_delivery_wait_prerequisites(
@@ -206,6 +209,48 @@ Product 职责，工程状态只读仍可使用；不能以一次后台恢复绕
   产品用户只看到工程负责处理和当前下一步，不被要求审批内部 hash。
 - Bad：Manager 生成一条“用户已批准”字符串、lease 到期后推断没执行、修改历史 verdict 或
   每次新建 recovery Task/branch 代替正常返工。全部违反本契约。
+
+## Product user path for an engineering wait (2026-10-08)
+
+`HandleDeliveryWait` is the product-facing request to let the platform process one exact current
+engineering wait. It carries only the displayed `work_item_id`, disposition digest, frozen Task
+intent, source revision and checkpoint sequence. It cannot carry a stop flag, actor, retry cause,
+hash override or shell command. `TeamHost.handle_delivery_wait()` executes one bounded collector
+under the Task lock and queue idle fence, then records one immutable `DeliveryWaitHandling` before
+the optional existing Supervisor continuation. It must not create a new Requirement, Task, branch,
+or model Run merely because a wait was displayed.
+
+The handling record has `status`, `summary`, `user_action`, `recheck_when`,
+`manual_resolution_allowed`, `collection_failed`, the exact investigation and (only when
+resolved) the exact resolution. `RESOLVED` means a policy or real engineering decision was
+sealed and the original delivery was handed back to the existing Supervisor; it does not mean QA,
+Review or final delivery succeeded. `WAITING_EXECUTION` means the process may still be live or its
+stop is not proven. `NEEDS_AUTHORIZATION` means the old Task has no new frozen capability and
+requires an actual engineering decision. `PLATFORM_ATTENTION` means records or fact collection
+failed and the system must preserve the original wait; a product user is not asked to repair it.
+
+| Product view | Platform responsibility | User action |
+|---|---|---|
+| `WAITING_EXECUTION` | preserve worktree and wait for durable stop facts | check again after the displayed condition; never start a second Coder |
+| `RESOLVED` | continue once through the original delivery Supervisor | read subsequent role records and independent QA/Review |
+| `NEEDS_AUTHORIZATION` | keep exact proof and expose an engineering decision entry | an engineering-duty operator decides the listed exact action |
+| `PLATFORM_ATTENTION` | retain evidence and report the missing/corrupt record in Chinese | wait for ASE maintenance; repeated inspection cannot repair the record |
+| `BUDGET_EXHAUSTED` | do not refund or silently expand frozen budget | an authorized owner decides whether to provide new resource authority |
+
+The Console must make “让平台处理中断” the primary action for an active engineering wait. The
+current card keeps the reason, responsible party, concrete action and recheck condition visible;
+technical IDs and digests remain in a secondary engineering details section. “重新检查状态” is
+secondary and must say that it only re-reads durable facts. Operation success is command completion,
+not delivery completion. The full operation and engineering timeline is retained; it is never
+truncated to the last eight entries.
+
+Legacy Tasks without a frozen wait-resolution capability are not retroactively expanded. If their
+sealed proof is complete, an engineering-duty operator may record the exact decision. If the old
+run has no trustworthy start/stop/claim or complete workspace facts, the platform records
+`PLATFORM_ATTENTION` and does not invent a timeout or checkpoint. Existing production data needs no
+migration; the user refreshes after the service is idle, submits the exact platform-handling action,
+and reads the resulting report. A real missing ledger remains a maintenance defect, not a product
+approval step.
 
 ## Tests / Evidence
 

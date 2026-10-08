@@ -13,6 +13,12 @@ stopped-process evidence, complete capture, before/after inventory digests and m
 `ContinuationAdmission` binds that receipt to one new request/WorkItem/Lease. Its authorization
 source is organization policy, never a fabricated human verdict.
 
+`ExecutionCaptureStart.scope` is a full `ContinuationScope`, including the exact Requirement ID
+and dispatch commit digest. The engineering wait collector receives the current native checkpoint
+scope from the trusted Host and requires equality before it can reconcile a capture; matching only
+Team/Project/Repository is insufficient. Requirement or dispatch drift remains a platform attention
+record and cannot consume a continuation admission.
+
 ```python
 CoderInterruptionControl.prepare(request, root) -> str | None
 CoderInterruptionControl.started(request, root) -> WorkspaceMutationInventory | None
@@ -24,6 +30,16 @@ NativeCoderContinuation.next_attempt(task, result, repository) -> int | None
 FileContinuationStore.initialize(root, *, task_id) -> FileContinuationStore
 FileContinuationStore.put_receipt(receipt) -> ExecutionInterruptionReceipt
 FileContinuationStore.put_admission(admission) -> ContinuationAdmission
+FileContinuationStore.put_capture_start(start: ExecutionCaptureStart) -> ExecutionCaptureStart
+FileContinuationStore.capture_start(run_id: str) -> ExecutionCaptureStart
+FileContinuationStore.put_capture_stop(stop: ExecutionCaptureStop) -> ExecutionCaptureStop
+FileContinuationStore.capture_stop(run_id: str) -> ExecutionCaptureStop
+NativeCoderContinuation.record_native_stop(request, root, *, process_stop,
+    output_present, cause, original_error_code) -> None
+DeliveryWaitFactCollector.collect(task: Task, step: QueuedRoleStep,
+    guard: WorkerExecutionGuard) -> None
+reconcile_capture(*, start, stop, task, task_revision, historical_claim,
+    store, git, task_lock, validate_inputs, has_output, clock) -> ExecutionInterruptionReceipt
 ```
 
 `finished` verifies the exact invocation inventory and original source HEAD before platform
@@ -40,6 +56,47 @@ schema/hash-validated, exact-replay-only files. A different new Run cannot consu
 admission. Missing facts, symlinks, drift or conflicting writes fail closed.
 
 ## Runtime and scheduling contracts
+
+### Native start/stop publication and bounded reconciliation (2026-10-08)
+
+`started()` seals `capture-start-<run_id>.json` before invoking Codex, within the real claim and
+Task lock. The body retains the complete original request, historical claim, frozen Task intent,
+revision/policy, full inventory, absolute owned worktree, scope and start time. The owned native
+runner uses `run_observed(..., observer=...)` to seal `capture-stop-<run_id>.json` after the process
+group is proven stopped and before the adapter returns or produces its interruption receipt.
+Owner loss may publish the actual stop fact under the retained Task lock, but cannot publish a
+verdict, mutate Task/budget, or invent a provider failure. Unknown cause remains null.
+
+`DeliveryWaitFactCollector` is only called by the Host with an exclusive Task lock and MySQL
+`idle_task_scope`. Its `expected_continuation_scope` uses the native child delivery ID and native
+dispatch digest even when the product command addresses a joint parent. It can recover a sealed
+final route result into the original invocation journal without a model call. It cannot treat a
+fallback-only route chain as final. If no final exists, `reconcile_capture` requires the original
+start/stop, known typed cause, output absent, historical claim, unchanged authorized inputs and
+complete legal inventory before it seals a receipt. It never revives the expired old lease.
+
+| Boundary | Required behavior |
+|---|---|
+| Complete final route chain, exact request/result identity | Seal original invocation outcome once; no new call or budget |
+| Known native stop before receipt publication | Verify all before/after bodies, index/HEAD, scope, policy and inputs; seal immutable receipt |
+| v2 clean/cache-only known failure | A fully verified empty-source capture is allowed; it is not Coder progress |
+| v1 empty-source capture | Preserve historical v1 restriction and refuse fabricated checkpoint |
+| Missing original claim or result identity mismatch | Typed collector rejection; HANDLE records platform attention |
+| Still active claim or unavailable Task lock | Wait for execution; do not label record corruption or timeout |
+| Host killed before stop publication, unknown cause, output already observed | Preserve wait; no synthetic stop, refund or new invocation |
+| Start/stop tamper, symlink, scope/dispatch drift or incompatible time | Fail closed; source and audit remain unchanged |
+
+The new ledger is additive. Old Tasks without start/stop records are not backfilled with guesses.
+No migration or production SQL repair is required. Deploy only when idle and preserve immutable
+ledgers on rollback. Future orphan-process supervision requires a separate trusted observer contract.
+Tests: `test_wait_fact_collection.py`, `test_capture_reconciliation.py`,
+`test_continuation_store.py`, `test_continuation_schema.py`, `test_codex_cli.py` and the real joint
+Host composition test assert no new model call, Task/event mutation, budget debit, discarded draft,
+or parent/child scope alias during fact collection.
+
+Wrong: declare timeout after a restart because a lease expired or a process ID is absent.
+Correct: reuse only the original owned runner's sealed stop and complete original inventory,
+or find and verify the original final result; otherwise record a platform maintenance issue.
 
 - The native runner must prove the owned process group stopped. Lease expiry is insufficient.
 - Capture is execution evidence, never a CoderProgress or implementation report. Unknown output,
@@ -78,6 +135,7 @@ admission. Missing facts, symlinks, drift or conflicting writes fail closed.
 | Missing stop evidence, live process, unknown output, HEAD moved | Preserve and refuse automatic invocation |
 | Ignored Trellis/deny mutation, unsafe capture, deletion/rename/mode change | Reject capability admission |
 | Changed capture/policy/claim, duplicate admission with different Run | Refuse; no provider call |
+| Capture start has another Requirement or dispatch digest | Refuse reconciliation; preserve the wait and report platform attention |
 | Completed draft then candidate | Normal independent verification, no repeated Coder |
 
 Good: exact draft survives restart and new claim completes on the same branch.

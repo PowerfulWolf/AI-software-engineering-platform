@@ -1,6 +1,9 @@
 """Additive continuation contracts preserve old Task and diagnostic wire schemas."""
 
+import fcntl
 import json
+import os
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import cast
 
@@ -9,14 +12,19 @@ from jsonschema import Draft202012Validator, FormatChecker
 
 from ai_software_engineer.agents.models import AgentResult
 from ai_software_engineer.domain.continuation import InterruptionContinuationPolicy
+from ai_software_engineer.domain.enums import AgentRole
 from ai_software_engineer.domain.model import JsonValue, WirePayload
 from ai_software_engineer.domain.task import Task
 from ai_software_engineer.orchestration.continuation_models import (
     ContinuationAdmission,
+    ExecutionCaptureStart,
+    ExecutionCaptureStop,
     ExecutionInterruptionReceipt,
 )
 from tests.domain.factories import make_task
+from tests.orchestration.test_capture_reconciliation import observations
 from tests.orchestration.test_continuation_records import make_admission, make_receipt
+from tests.orchestration.test_native_continuation import Fixture, Guard
 
 SCHEMAS = Path(__file__).resolve().parents[2] / "schemas"
 
@@ -32,6 +40,20 @@ def _errors(name: str, payload: WirePayload) -> list[str]:
             _schema(name), format_checker=FormatChecker()
         ).iter_errors(payload)
     ]
+
+
+@pytest.fixture
+def capture_facts(
+    tmp_path: Path,
+) -> Iterator[tuple[ExecutionCaptureStart, ExecutionCaptureStop]]:
+    descriptor = os.open(tmp_path / "original.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    fixture = Fixture(tmp_path, Guard(descriptor))
+    try:
+        yield observations(fixture)
+    finally:
+        fixture.repository.close()
+        os.close(descriptor)
 
 
 def test_policy_and_new_task_satisfy_schema_without_granting_legacy_task() -> None:
@@ -163,3 +185,48 @@ def test_receipt_schema_uses_existing_capture_model_without_changing_old_contrac
     assert _errors("execution-continuation.schema.json", malformed)
     with pytest.raises(ValueError):
         ExecutionInterruptionReceipt.model_validate(malformed)
+
+
+def test_capture_schema_accepts_a_complete_owned_start_and_stop(
+    capture_facts: tuple[ExecutionCaptureStart, ExecutionCaptureStop],
+) -> None:
+    start, stop = capture_facts
+    assert not _errors("execution-capture.schema.json", start.to_wire())
+    assert not _errors("execution-capture.schema.json", stop.to_wire())
+    start.validate_integrity()
+    stop.validate_integrity()
+
+
+@pytest.mark.parametrize(
+    ("kind", "mutate"),
+    (
+        (
+            "role",
+            lambda start, stop: start.model_copy(
+                update={"request": start.request.model_copy(update={"role": AgentRole.QA})}
+            ),
+        ),
+        ("cause", lambda start, stop: stop.model_copy(update={"cause": "provider_transient"})),
+        (
+            "stop_kind",
+            lambda start, stop: stop.model_copy(
+                update={"process_stop": stop.process_stop.model_copy(update={"kind": "completed"})}
+            ),
+        ),
+    ),
+)
+def test_capture_schema_and_models_reject_bad_role_cause_and_stop_kind(
+    capture_facts: tuple[ExecutionCaptureStart, ExecutionCaptureStop],
+    kind: str,
+    mutate: Callable[
+        [ExecutionCaptureStart, ExecutionCaptureStop],
+        ExecutionCaptureStart | ExecutionCaptureStop,
+    ],
+) -> None:
+    start, stop = capture_facts
+    changed = mutate(start, stop)
+    payload = changed.to_wire()
+    assert _errors("execution-capture.schema.json", payload)
+    model = ExecutionCaptureStart if kind == "role" else ExecutionCaptureStop
+    with pytest.raises(ValueError):
+        model.model_validate(payload)

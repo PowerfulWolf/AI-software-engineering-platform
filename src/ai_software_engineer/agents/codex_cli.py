@@ -10,7 +10,7 @@ import signal
 import subprocess
 import tempfile
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -26,6 +26,7 @@ from ai_software_engineer.agents.continuation import (
     ContinuationExecutionUncertain,
     InterruptionAdmissionRejected,
     InterruptionObservation,
+    native_stop_recorder,
 )
 from ai_software_engineer.agents.execution import ExecutionGuard, NativeProcessStop, execution_scope
 from ai_software_engineer.agents.json_schema import strict_output_schema
@@ -196,6 +197,7 @@ class SubprocessCodexCommandRunner:
         environment: Mapping[str, str],
         stdin: str,
         timeout_seconds: float,
+        observer: Callable[[CodexInvocationResult], None] | None = None,
     ) -> CodexInvocationResult:
         guard = self._execution_guard
         assert guard is not None
@@ -272,6 +274,15 @@ class SubprocessCodexCommandRunner:
                     time.sleep(0.02)
             return None
 
+        observed = False
+
+        def publish(result: CodexInvocationResult) -> CodexInvocationResult:
+            nonlocal observed
+            observed = True
+            if observer is not None:
+                observer(result)
+            return result
+
         try:
             while True:
                 guard.check()
@@ -280,26 +291,66 @@ class SubprocessCodexCommandRunner:
                     proof = stopped("local_execution_limit")
                     if proof is None:
                         raise CodexExecutionUnconfirmed("原执行进程停止状态无法确认")
-                    guard.check()
-                    return CodexInvocationResult(
-                        process.returncode, _bounded(stdout), _bounded(stderr), True, proof
+                    result = publish(
+                        CodexInvocationResult(
+                            process.returncode, _bounded(stdout), _bounded(stderr), True, proof
+                        )
                     )
+                    guard.check()
+                    return result
                 try:
                     stdout, stderr = process.communicate(timeout=0.2)
                     guard.check()
                     proof = stopped("completed" if process.returncode == 0 else "failed")
                     if proof is None:
                         raise CodexExecutionUnconfirmed("原执行进程停止状态无法确认")
-                    guard.check()
-                    return CodexInvocationResult(
-                        process.returncode, _bounded(stdout), _bounded(stderr), False, proof
+                    result = publish(
+                        CodexInvocationResult(
+                            process.returncode, _bounded(stdout), _bounded(stderr), False, proof
+                        )
                     )
+                    guard.check()
+                    return result
                 except subprocess.TimeoutExpired:
                     continue
         except BaseException:
-            stop()
-            stopped("completed" if process.returncode == 0 else "failed")
+            stdout, stderr = stop()
+            proof = stopped("completed" if process.returncode == 0 else "failed")
+            if proof is not None and not observed:
+                publish(
+                    CodexInvocationResult(
+                        process.returncode, _bounded(stdout), _bounded(stderr), False, proof
+                    )
+                )
             raise
+
+    def run_observed(
+        self,
+        argv: tuple[str, ...],
+        *,
+        cwd: Path,
+        environment: Mapping[str, str],
+        stdin: str,
+        timeout_seconds: float,
+        observer: Callable[[CodexInvocationResult], None],
+    ) -> CodexInvocationResult:
+        """Publish owned stop facts before returning to the artifact adapter."""
+        if self._execution_guard is None:
+            return self.run(
+                argv,
+                cwd=cwd,
+                environment=environment,
+                stdin=stdin,
+                timeout_seconds=timeout_seconds,
+            )
+        return self._run_owned(
+            argv,
+            cwd=cwd,
+            environment=environment,
+            stdin=stdin,
+            timeout_seconds=timeout_seconds,
+            observer=observer,
+        )
 
 
 class CodexCliAgentAdapter:
@@ -529,7 +580,57 @@ class CodexCliAgentAdapter:
                     transient=False,
                     duration_ms=_elapsed_ms(started),
                 )
-            invocation = self._runner.run(
+            run = self._runner.run
+            recorder = native_stop_recorder(self._interruption_control)
+            if (
+                isinstance(self._runner, SubprocessCodexCommandRunner)
+                and recorder is not None
+                and inventory_before is not None
+            ):
+                runner = self._runner
+
+                def record_stop(result: CodexInvocationResult) -> None:
+                    if result.process_stop is None:
+                        return
+                    code, transient = _classify_cli_failure(result)
+                    recorder.record_native_stop(
+                        request,
+                        self._workspace_root,
+                        process_stop=result.process_stop,
+                        output_present=output_path.exists(),
+                        cause=(
+                            "local_execution_limit"
+                            if result.timed_out
+                            else (
+                                "provider_transient"
+                                if result.returncode != 0 and transient
+                                else None
+                            )
+                        ),
+                        original_error_code=AgentErrorCode.TIMEOUT
+                        if result.timed_out
+                        else (code if result.returncode != 0 else None),
+                    )
+
+                def run_owned(
+                    argv: tuple[str, ...],
+                    *,
+                    cwd: Path,
+                    environment: Mapping[str, str],
+                    stdin: str,
+                    timeout_seconds: float,
+                ) -> CodexInvocationResult:
+                    return runner.run_observed(
+                        argv,
+                        cwd=cwd,
+                        environment=environment,
+                        stdin=stdin,
+                        timeout_seconds=timeout_seconds,
+                        observer=record_stop,
+                    )
+
+                run = run_owned
+            invocation = run(
                 (
                     self._executable,
                     "exec",

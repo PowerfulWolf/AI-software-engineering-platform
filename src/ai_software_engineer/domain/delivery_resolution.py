@@ -7,13 +7,18 @@ import json
 from enum import StrEnum
 from typing import Annotated, Literal, Self
 
-from pydantic import AwareDatetime, Field, StrictInt, model_validator
+from pydantic import AwareDatetime, Field, StrictBool, StrictInt, model_validator
 
 from ai_software_engineer.domain.agent import AgentPermissions
 from ai_software_engineer.domain.artifact import ArtifactId
 from ai_software_engineer.domain.continuation import ContinuationCause
 from ai_software_engineer.domain.delivery_disposition import DeliveryDisposition, DispositionSha256
-from ai_software_engineer.domain.engineering_authority import LocalOperatorPrincipal, OperatorDuty
+from ai_software_engineer.domain.engineering_authority import (
+    EngineeringAdmission,
+    EngineeringCapability,
+    LocalOperatorPrincipal,
+    OperatorDuty,
+)
 from ai_software_engineer.domain.enums import TaskStatus
 from ai_software_engineer.domain.execution_baseline import FullGitRevision
 from ai_software_engineer.domain.identity import ContextId, RunId
@@ -149,6 +154,10 @@ class ResolveDeliveryWait(InspectDeliveryWait):
     submitted_at: AwareDatetime
 
 
+class HandleDeliveryWait(InspectDeliveryWait):
+    """Request one bounded platform handling, never assert execution facts."""
+
+
 class DeliveryWaitInvestigation(DomainModel):
     """Trusted collector observation. Request fields cannot assert stop or readiness."""
 
@@ -264,8 +273,15 @@ class DeliveryResolution(DomainModel):
     step_sha256: DispositionSha256
     resolution_kind: DeliveryResolutionKind
     proof_sha256: DispositionSha256
-    authorization_source: Literal["engineering_operator_decision"] = "engineering_operator_decision"
-    operator_principal: LocalOperatorPrincipal
+    authorization_source: Literal[
+        "engineering_operator_decision", "organization_engineering_policy"
+    ] = "engineering_operator_decision"
+    operator_principal: LocalOperatorPrincipal | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    engineering_admission: EngineeringAdmission | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     submitted_at: AwareDatetime
     resolution_sha256: DispositionSha256
     retry_failure: DeliveryRetryFailure | None = Field(
@@ -288,7 +304,25 @@ class DeliveryResolution(DomainModel):
 
     @model_validator(mode="after")
     def require_engineering_actor(self) -> Self:
-        self.operator_principal.require_duty(OperatorDuty.ENGINEERING)
+        if self.authorization_source == "engineering_operator_decision":
+            if self.operator_principal is None or self.engineering_admission is not None:
+                raise ValueError("operator decision requires only its real engineering actor")
+            self.operator_principal.require_duty(OperatorDuty.ENGINEERING)
+        else:
+            admission = self.engineering_admission
+            if self.operator_principal is not None or admission is None:
+                raise ValueError("policy resolution requires an admission, never an operator")
+            admission.validate_integrity()
+            if (
+                admission.task_id != self.task_id
+                or admission.task_intent_sha256 != self.expected_task_intent_sha256
+                or admission.facts_sha256 != self.proof_sha256
+                or admission.plan_sha256
+                != delivery_wait_resolution_plan_sha256(self.proof_sha256, self.resolution_kind)
+                or admission.capabilities != (EngineeringCapability.DELIVERY_WAIT_RESOLUTION,)
+                or admission.admitted_at > self.submitted_at
+            ):
+                raise ValueError("policy resolution changed its exact engineering admission")
         retry = self.resolution_kind is DeliveryResolutionKind.RETRY_FROM_CHECKPOINT
         if retry != (self.retry_cause is not None):
             raise ValueError("checkpoint retry requires its sealed exact cause")
@@ -337,6 +371,151 @@ class DeliveryResolution(DomainModel):
         type(self).model_validate(self.to_wire())
         if self.resolution_sha256 != self.recompute_sha256():
             raise ValueError("engineering resolution digest mismatch")
+
+
+def delivery_wait_resolution_plan_sha256(proof_sha256: str, kind: DeliveryResolutionKind) -> str:
+    """One deterministic, exact use of wait authority; not a new execution plan."""
+    return _digest(
+        {
+            "kind": "delivery_wait_resolution_plan",
+            "proof_sha256": proof_sha256,
+            "resolution_kind": kind.value,
+        }
+    )
+
+
+DeliveryWaitHandlingStatus = Literal[
+    "RESOLVED",
+    "WAITING_EXECUTION",
+    "NEEDS_AUTHORIZATION",
+    "PLATFORM_ATTENTION",
+    "WAITING_PREREQUISITES",
+    "BUDGET_EXHAUSTED",
+]
+
+
+class DeliveryWaitHandling(DomainModel):
+    """Immutable platform handling report, separate from execution and verdict."""
+
+    kind: Literal["delivery_wait_handling"] = "delivery_wait_handling"
+    schema_version: Literal["v1"] = "v1"
+    task_id: TaskId
+    work_item_id: NonEmptyStr
+    disposition_sha256: DispositionSha256
+    task_intent_sha256: DispositionSha256
+    source_revision: NonEmptyStr
+    checkpoint_sequence: Annotated[StrictInt, Field(ge=0)]
+    investigation: DeliveryWaitInvestigation
+    resolution: DeliveryResolution | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    status: DeliveryWaitHandlingStatus
+    summary: NonEmptyStr
+    user_action: NonEmptyStr
+    recheck_when: NonEmptyStr
+    manual_resolution_allowed: StrictBool
+    collection_failed: StrictBool = Field(default=False, exclude_if=lambda value: value is False)
+    handled_at: AwareDatetime
+    handling_sha256: DispositionSha256
+
+    @model_validator(mode="after")
+    def validate_handling(self) -> Self:
+        proof = self.investigation
+        proof.validate_integrity()
+        if (
+            self.task_id,
+            self.work_item_id,
+            self.disposition_sha256,
+            self.task_intent_sha256,
+            self.source_revision,
+            self.checkpoint_sequence,
+        ) != (
+            proof.task_id,
+            proof.work_item_id,
+            proof.disposition_sha256,
+            proof.task_intent_sha256,
+            proof.source_revision,
+            proof.checkpoint_sequence,
+        ):
+            raise ValueError("platform handling changed its exact waiting facts")
+        if (self.status == "RESOLVED") != (self.resolution is not None):
+            raise ValueError("resolved handling requires its sealed resolution")
+        if self.resolution is not None:
+            decision = self.resolution
+            decision.validate_integrity()
+            if (
+                proof.missing
+                or decision.proof_sha256 != proof.proof_sha256
+                or decision.resolution_kind not in proof.permitted_resolutions
+                or decision.task_revision != proof.task_revision
+                or decision.task_snapshot_sha256 != proof.task_snapshot_sha256
+                or decision.step_sha256 != proof.step_sha256
+                or (
+                    decision.task_id,
+                    decision.work_item_id,
+                    decision.expected_disposition_sha256,
+                    decision.expected_task_intent_sha256,
+                    decision.expected_source_revision,
+                    decision.expected_checkpoint_sequence,
+                )
+                != (
+                    self.task_id,
+                    self.work_item_id,
+                    self.disposition_sha256,
+                    self.task_intent_sha256,
+                    self.source_revision,
+                    self.checkpoint_sequence,
+                )
+            ):
+                raise ValueError("platform handling resolution does not match its proof")
+        return self
+
+    def recompute_sha256(self) -> str:
+        return _digest(self.model_dump(mode="json", exclude_none=True, exclude={"handling_sha256"}))
+
+    @property
+    def record_key(self) -> str:
+        return delivery_wait_handling_record_key(
+            InspectDeliveryWait(
+                work_item_id=self.work_item_id,
+                expected_disposition_sha256=self.disposition_sha256,
+                expected_task_intent_sha256=self.task_intent_sha256,
+                expected_source_revision=self.source_revision,
+                expected_checkpoint_sequence=self.checkpoint_sequence,
+            ),
+            self.investigation,
+            manual_resolution_allowed=self.manual_resolution_allowed,
+            collection_failed=self.collection_failed,
+        )
+
+    def validate_integrity(self) -> None:
+        type(self).model_validate(self.to_wire())
+        if self.handling_sha256 != self.recompute_sha256():
+            raise ValueError("platform handling digest mismatch")
+
+
+def delivery_wait_handling_record_key(
+    command: InspectDeliveryWait,
+    proof: DeliveryWaitInvestigation,
+    *,
+    manual_resolution_allowed: bool,
+    collection_failed: bool = False,
+) -> str:
+    return _digest(
+        {
+            "binding": command.to_wire(),
+            "facts": proof.model_dump(
+                mode="json",
+                exclude={
+                    "proof_sha256",
+                    "inspected_at",
+                    "prerequisite_receipt_sha256",
+                },
+            ),
+            "manual_resolution_allowed": manual_resolution_allowed,
+            "collection_failed": collection_failed,
+        }
+    )
 
 
 class EngineeringDispositionRecord(DomainModel):

@@ -11,7 +11,9 @@ from ai_software_engineer.agents.structured import StructuredModelError
 from ai_software_engineer.context.ports import ContextBudgetExceeded
 from ai_software_engineer.domain.delivery_resolution import (
     DeliveryResolution,
+    DeliveryWaitHandling,
     DeliveryWaitInvestigation,
+    HandleDeliveryWait,
     InspectDeliveryWait,
     ResolveDeliveryWait,
 )
@@ -72,6 +74,7 @@ from .models import (
     CreateRequirementIntent,
     DeleteRequirementIntent,
     ExecuteExecutionBaselineIntent,
+    HandleDeliveryWaitIntent,
     InspectDeliveryWaitIntent,
     ProductApprovalIntent,
     ProductReplyIntent,
@@ -102,6 +105,14 @@ class TeamConsoleHost(Protocol):
         project_id: str,
         delivery_id: str,
     ) -> DeliveryWaitInvestigation: ...
+
+    def handle_delivery_wait(
+        self,
+        command: HandleDeliveryWait,
+        *,
+        project_id: str,
+        delivery_id: str,
+    ) -> DeliveryWaitHandling: ...
 
     def resolve_delivery_wait(
         self,
@@ -288,7 +299,10 @@ class ManagerConsoleAdapter:
                     next_action="原分支执行基线已更新并记录工程决定, 继续原需求的独立交付验收。",
                     execution_baseline_binding=binding,
                 )
-            if isinstance(intent, (InspectDeliveryWaitIntent, ResolveDeliveryWaitIntent)):
+            if isinstance(
+                intent,
+                (InspectDeliveryWaitIntent, ResolveDeliveryWaitIntent, HandleDeliveryWaitIntent),
+            ):
                 current = (
                     self._entry(intent.project_id, intent.delivery_id)
                     .status(intent.delivery_id)
@@ -303,6 +317,20 @@ class ManagerConsoleAdapter:
                     "expected_source_revision": intent.expected_source_revision,
                     "expected_checkpoint_sequence": intent.expected_checkpoint_sequence,
                 }
+                if isinstance(intent, HandleDeliveryWaitIntent):
+                    handling = self._host.handle_delivery_wait(
+                        HandleDeliveryWait.model_validate(bound),
+                        project_id=intent.project_id,
+                        delivery_id=intent.delivery_id,
+                    )
+                    return ConsoleCommandResult(
+                        project_id=intent.project_id,
+                        delivery_id=intent.delivery_id,
+                        checkpoint_sha256=current.checkpoint_sha256,
+                        stage="ENGINEERING_WAIT_HANDLED",
+                        next_action=handling.user_action,
+                        engineering_wait_handling=handling,
+                    )
                 if isinstance(intent, InspectDeliveryWaitIntent):
                     proof = self._host.inspect_delivery_wait(
                         InspectDeliveryWait.model_validate(bound),

@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
+from ai_software_engineer.agents.fallback import ModelRouteAttemptStoreError
 from ai_software_engineer.agents.models import AgentRunStatus
 from ai_software_engineer.artifacts import ArtifactStore, ArtifactStoreError, artifact_digest
 from ai_software_engineer.domain.artifact import (
@@ -25,14 +26,20 @@ from ai_software_engineer.domain.delivery_resolution import (
     DeliveryProofMissing,
     DeliveryResolution,
     DeliveryResolutionKind,
+    DeliveryWaitHandling,
+    DeliveryWaitHandlingStatus,
     DeliveryWaitInvestigation,
+    HandleDeliveryWait,
     InspectDeliveryWait,
     OriginalInvocationAuthority,
     ResolveDeliveryWait,
     VerificationRetryEvidence,
     VerifierPreparationEvidence,
+    delivery_wait_handling_record_key,
+    delivery_wait_resolution_plan_sha256,
 )
 from ai_software_engineer.domain.engineering_authority import (
+    EngineeringCapability,
     EngineeringScope,
     LocalOperatorPrincipal,
     OperatorDuty,
@@ -48,12 +55,21 @@ from ai_software_engineer.domain.native_verification import NativeVerificationCa
 from ai_software_engineer.domain.retry_policy import TRANSIENT_CODES, DeliveryRetryFailure
 from ai_software_engineer.domain.task import Task
 from ai_software_engineer.git import GitWorkspaceError, GitWorktreeManager
-from ai_software_engineer.git.mutation import WorkspaceMutationInventory, capture_mutation_inventory
+from ai_software_engineer.git.mutation import (
+    MutationInventoryRejected,
+    WorkspaceMutationInventory,
+    capture_mutation_inventory,
+)
 from ai_software_engineer.knowledge.models import KnowledgeError, digest
 from ai_software_engineer.knowledge.store import KnowledgeRecordStore
 from ai_software_engineer.manager.delivery_preflight import (
     DeliveryPreflightCheckpoint,
     DeliveryPreflightReceipt,
+)
+from ai_software_engineer.manager.engineering_authority import (
+    EngineeringAuthority,
+    EngineeringAuthorityRejected,
+    EngineeringRejectionKind,
 )
 from ai_software_engineer.manager.verifier_preparation import (
     VerifierPreparationCheckpoint,
@@ -68,6 +84,8 @@ from ai_software_engineer.orchestration.continuation_models import (
     ExecutionInterruptionReceipt,
 )
 from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
+from ai_software_engineer.recovery.models import RecoveryScope
+from ai_software_engineer.recovery.store import FileRecoveryStore
 from ai_software_engineer.store import TaskRepository
 from ai_software_engineer.work_queue.execution_store import (
     AcceptedRoleArtifact,
@@ -79,7 +97,7 @@ from ai_software_engineer.work_queue.invocation import (
     DeliveryInvocationStart,
 )
 from ai_software_engineer.work_queue.models import QueueClaim, QueuedWorkItem
-from ai_software_engineer.work_queue.ports import DeliveryQueuePending, QueueError
+from ai_software_engineer.work_queue.ports import DeliveryQueuePending, QueueError, QueueLeaseLost
 from ai_software_engineer.work_queue.worker import WorkerExecutionGuard
 
 
@@ -138,6 +156,7 @@ class DeliveryNativeExecutionUncertain(DeliveryWaitRejected):
 
 
 PrerequisiteCollector = Callable[[Task, QueuedRoleStep], DeliveryPreflightReceipt | None]
+WaitFactCollector = Callable[[Task, QueuedRoleStep, WorkerExecutionGuard], None]
 
 
 class DeliveryWaitService:
@@ -153,6 +172,8 @@ class DeliveryWaitService:
         consume: Callable[[DeliveryResolution], None],
         prerequisite_collector: PrerequisiteCollector | None = None,
         artifacts: ArtifactStore | None = None,
+        engineering_authority: EngineeringAuthority | None = None,
+        fact_collector: WaitFactCollector | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.repository, self.queue, self.sidecar_state = repository, queue, sidecar_state
@@ -160,6 +181,7 @@ class DeliveryWaitService:
         self.git, self.principal, self.consume = git, principal, consume
         self.prerequisite_collector = prerequisite_collector
         self.artifacts = artifacts
+        self.engineering_authority, self.fact_collector = engineering_authority, fact_collector
         self.clock = clock or (lambda: datetime.now(UTC))
         self.records = KnowledgeRecordStore(sidecar_state / "delivery-waits")
 
@@ -179,11 +201,296 @@ class DeliveryWaitService:
 
     def resolve(self, command: ResolveDeliveryWait) -> DeliveryResolution:
         self.principal.require_duty(OperatorDuty.ENGINEERING)
+        return self._resolve(command)
+
+    def handle(self, command: HandleDeliveryWait) -> DeliveryWaitHandling:
+        """Collect once and use frozen policy; requesting handling adds no authority."""
+        binding_key = digest(command.to_wire())
+        resolved = self.records.find("wait-handling-resolutions", binding_key, DeliveryWaitHandling)
+        if resolved is not None:
+            resolved.validate_integrity()
+            self._require_handling_binding(resolved, command)
+            assert resolved.resolution is not None
+            self.consume(resolved.resolution)
+            return resolved
+        # The decision is sealed before queue consumption. Recover publication
+        # after a crash without requiring the old item to remain WAITING.
+        existing = self.records.find(
+            "wait-resolutions",
+            command.work_item_id + ":" + command.expected_disposition_sha256,
+            DeliveryResolution,
+        )
+        if existing is not None:
+            existing.validate_integrity()
+            proof = self.records.get(
+                "wait-investigations", existing.proof_sha256, DeliveryWaitInvestigation
+            )
+            self._require_proof_binding(proof, command)
+            self.consume(existing)
+            published = self.records.find(
+                "wait-handlings", self._handling_identity(command, proof), DeliveryWaitHandling
+            )
+            if published is not None:
+                published.validate_integrity()
+                self._require_handling_binding(published, command)
+                if published.resolution != existing:
+                    raise DeliveryWaitRejected("已封存平台处理记录不符合原工程决定")
+                return self.records.put("wait-handling-resolutions", binding_key, published)
+            record = self._handling_record(
+                proof,
+                existing,
+                "RESOLVED",
+                "已找回原等待的精确工程决定, 原交付和审计历史保留。",
+                "无需重复批准; 查看后续执行记录和独立 QA、Review 结果。",
+                "无需重复处理本次等待。",
+                at=existing.submitted_at,
+            )
+            record = self.records.put("wait-handlings", record.record_key, record)
+            return self.records.put("wait-handling-resolutions", binding_key, record)
+        item, step, task = self._current(command)
+        guard = WorkerExecutionGuard()
+        collector_failed = False
+        try:
+            with guard.task_scope(self.sidecar_state / "queue-worker-locks", task.id):
+                # This seam can recover sealed original facts. It cannot grant new
+                # commands, invoke a model, consume queue state or invent a stop.
+                if self.fact_collector is not None:
+                    try:
+                        self.fact_collector(task, step, guard)
+                    except (
+                        ContinuationRejected,
+                        ModelRouteAttemptStoreError,
+                        KnowledgeError,
+                        GitWorkspaceError,
+                        MutationInventoryRejected,
+                    ):
+                        collector_failed = True
+                proof = self._collect(item, step, task)
+        except QueueLeaseLost:
+            proof = self._proof(
+                item, step, task, missing=(DeliveryProofMissing.PROCESS_LIVE_OR_UNKNOWN,)
+            )
+        except DeliveryQueuePending:
+            proof = self._proof(item, step, task, missing=(DeliveryProofMissing.TASK_PROCESS_LIVE,))
+        status, summary, user_action, recheck_when = self._handling_presentation(proof)
+        if collector_failed:
+            status = "PLATFORM_ATTENTION"
+            summary = "平台收集原执行事实时校验失败, 原记录和工作现场保留。"
+            user_action = (
+                "已保存平台待处理记录。ASE 工程维护者需修复原执行记录的关联或完整性; "
+                "本次没有批准恢复, 也没有修改原调查证明或角色结论。"
+            )
+            recheck_when = "原记录校验问题修复后再检查; 重复调查不能绕过完整性校验。"
+        identity = self._handling_identity(command, proof, collector_failed=collector_failed)
+        prior = self.records.find("wait-handlings", identity, DeliveryWaitHandling)
+        if prior is not None:
+            prior.validate_integrity()
+            self._require_handling_binding(prior, command)
+            return prior
+        proof.validate_integrity()
+        # Pin the first exact proof before spending shared admission allowance.
+        # A restart with unchanged facts must recover the same admission plan,
+        # despite a new inspection timestamp or prerequisite receipt time.
+        frozen = self.records.find("wait-handling-proofs", identity, DeliveryWaitInvestigation)
+        if frozen is None:
+            try:
+                frozen = self.records.put("wait-handling-proofs", identity, proof)
+            except KnowledgeError:
+                # Another exact handler can have won exclusive publication.
+                # Re-read and compare semantic identity; other errors still fail.
+                concurrent = self.records.find(
+                    "wait-handling-proofs", identity, DeliveryWaitInvestigation
+                )
+                if concurrent is None:
+                    raise
+                frozen = concurrent
+        frozen.validate_integrity()
+        self._require_proof_binding(frozen, command)
+        if self._handling_identity(command, frozen, collector_failed=collector_failed) != identity:
+            raise DeliveryWaitRejected("平台处理记录绑定的原调查事实已变化")
+        proof = frozen
+        proof = self.records.put("wait-investigations", proof.proof_sha256, proof)
+        resolution = None
+        if not collector_failed and not proof.missing and proof.permitted_resolutions:
+            try:
+                resolution = self._resolve(
+                    ResolveDeliveryWait.model_validate(
+                        {
+                            **command.to_wire(),
+                            "resolution_kind": proof.permitted_resolutions[0],
+                            "proof_sha256": proof.proof_sha256,
+                            "submitted_at": self.clock(),
+                        },
+                    ),
+                    automatic=True,
+                )
+                status = "RESOLVED"
+                summary = "平台已核验恢复条件, 并按原任务冻结的工程授权记录了精确处理。"
+                user_action = (
+                    "无需重新定义需求或重复批准; 原需求由新的执行身份继续, 结果以执行记录为准。"
+                )
+                recheck_when = "无需重复处理本次等待; 查看后续执行记录及独立 QA、Review 结果。"
+            except EngineeringAuthorityRejected as error:
+                if error.kind is EngineeringRejectionKind.BUDGET_EXHAUSTED:
+                    status = "BUDGET_EXHAUSTED"
+                    summary = "恢复条件已核验, 但冻结的组织工程恢复额度已耗尽。"
+                    user_action = "由工程负责人核对资源和剩余交付额度, 决定是否追加授权或结束交付。"
+                    recheck_when = "获得独立、有效的新授权后再处理; 重复检查不会重置额度。"
+                elif error.kind in {
+                    EngineeringRejectionKind.LEGACY_AUTHORITY,
+                    EngineeringRejectionKind.CAPABILITY_UNAVAILABLE,
+                }:
+                    status = "NEEDS_AUTHORIZATION"
+                    summary = "恢复条件已核验, 但原任务没有授权平台自动执行此处理。"
+                    user_action = (
+                        "请核对下面的处理方式, 再记录精确工程决定; 批准不代表验收通过。"
+                        if OperatorDuty.ENGINEERING in self.principal.duties
+                        else "请有工程职责的负责人记录精确处理决定; 产品权限不能代替工程授权。"
+                    )
+                    recheck_when = "事实未改变时无需重新调查; 工程决定应使用本次已核验的证明。"
+                else:
+                    status = "PLATFORM_ATTENTION"
+                    summary = "恢复条件已核验, 但冻结授权记录与当前事实不一致。"
+                    user_action = (
+                        "ASE 工程维护者需核对原授权范围与审计记录; 不能通过批准按钮绕过漂移。"
+                    )
+                    recheck_when = "授权记录的关联或读取问题修复后再检查。"
+        record = self._handling_record(
+            proof,
+            resolution,
+            status,
+            summary,
+            user_action,
+            recheck_when,
+            at=self.clock(),
+            collection_failed=collector_failed,
+        )
+        try:
+            sealed = self.records.put("wait-handlings", identity, record)
+        except KnowledgeError:
+            concurrent_handling = self.records.find(
+                "wait-handlings", identity, DeliveryWaitHandling
+            )
+            if concurrent_handling is None:
+                raise
+            concurrent_handling.validate_integrity()
+            self._require_handling_binding(concurrent_handling, command)
+            if concurrent_handling.model_dump(
+                mode="json", exclude={"handled_at", "handling_sha256"}
+            ) != record.model_dump(mode="json", exclude={"handled_at", "handling_sha256"}):
+                raise
+            sealed = concurrent_handling
+        if resolution is not None:
+            self.records.put("wait-handling-resolutions", binding_key, sealed)
+        return sealed
+
+    def _handling_identity(
+        self,
+        command: HandleDeliveryWait,
+        proof: DeliveryWaitInvestigation,
+        *,
+        collector_failed: bool = False,
+    ) -> str:
+        return delivery_wait_handling_record_key(
+            command,
+            proof,
+            manual_resolution_allowed=OperatorDuty.ENGINEERING in self.principal.duties,
+            collection_failed=collector_failed,
+        )
+
+    def _handling_record(
+        self,
+        proof: DeliveryWaitInvestigation,
+        resolution: DeliveryResolution | None,
+        status: DeliveryWaitHandlingStatus,
+        summary: str,
+        user_action: str,
+        recheck_when: str,
+        *,
+        at: datetime,
+        collection_failed: bool = False,
+    ) -> DeliveryWaitHandling:
+        record = DeliveryWaitHandling(
+            task_id=proof.task_id,
+            work_item_id=proof.work_item_id,
+            disposition_sha256=proof.disposition_sha256,
+            task_intent_sha256=proof.task_intent_sha256,
+            source_revision=proof.source_revision,
+            checkpoint_sequence=proof.checkpoint_sequence,
+            investigation=proof,
+            resolution=resolution,
+            status=status,
+            summary=summary,
+            user_action=user_action,
+            recheck_when=recheck_when,
+            manual_resolution_allowed=OperatorDuty.ENGINEERING in self.principal.duties,
+            collection_failed=collection_failed,
+            handled_at=at,
+            handling_sha256="0" * 64,
+        )
+        record = record.model_copy(update={"handling_sha256": record.recompute_sha256()})
+        record.validate_integrity()
+        return record
+
+    @staticmethod
+    def _require_handling_binding(
+        record: DeliveryWaitHandling, command: InspectDeliveryWait
+    ) -> None:
+        proof = record.investigation
+        DeliveryWaitService._require_proof_binding(proof, command)
+
+    @staticmethod
+    def _handling_presentation(
+        proof: DeliveryWaitInvestigation,
+    ) -> tuple[DeliveryWaitHandlingStatus, str, str, str]:
+        missing = set(proof.missing)
+        if missing & {
+            DeliveryProofMissing.TASK_PROCESS_LIVE,
+            DeliveryProofMissing.PROCESS_LIVE_OR_UNKNOWN,
+        }:
+            return (
+                "WAITING_EXECUTION",
+                "原执行仍在运行, 或尚不能证明其安全停止。",
+                "保留原工作区; 不要重复启动 Coder。平台不会凭租约到期判定已经停机。",
+                "原调用实际结束并封存停止记录后, 再检查状态。",
+            )
+        if DeliveryProofMissing.BUDGET_EXHAUSTED in missing:
+            return (
+                "BUDGET_EXHAUSTED",
+                "原任务的可用执行额度已耗尽。",
+                "工程负责人需决定执行资源或结束交付; 平台不重置历史额度。",
+                "新的精确资源授权生效后再处理。",
+            )
+        if DeliveryProofMissing.PREREQUISITES_UNVERIFIED in missing:
+            return (
+                "WAITING_PREREQUISITES",
+                "当前验证工具或环境前提仍未满足。",
+                proof.next_action,
+                "所列工具或环境处理完成后, 再检查状态。",
+            )
+        if missing:
+            return (
+                "PLATFORM_ATTENTION",
+                "平台已检查原执行, 但恢复所需的可信记录仍不完整。",
+                "已保存本次平台待处理记录。ASE 工程维护者需核对原调用的最终结果、"
+                "真实停止记录和完整现场; 当前没有可安全继续的决定, 也未自动创建修复任务。",
+                "平台补齐原执行记录或修复记录读取后再检查; 现在重复调查不会补出缺失事实。",
+            )
+        return (
+            "NEEDS_AUTHORIZATION",
+            "恢复事实已核验, 正在检查原任务冻结的工程授权。",
+            "平台只在原范围、已注册能力和冻结额度内处理。",
+            "事实没有变化时无需重新调查。",
+        )
+
+    def _resolve(
+        self, command: ResolveDeliveryWait, *, automatic: bool = False
+    ) -> DeliveryResolution:
         key = command.work_item_id + ":" + command.expected_disposition_sha256
         prior = self.records.find("wait-resolutions", key, DeliveryResolution)
         if prior is not None:
             prior.validate_integrity()
-            self._require_decision_binding(prior, command)
+            self._require_decision_binding(prior, command, automatic=automatic)
             self.consume(prior)
             return prior
         proof = self.records.get(
@@ -209,6 +516,38 @@ class DeliveryWaitService:
                     )
                 if command.submitted_at < proof.inspected_at:
                     raise DeliveryWaitRejected("工程决定早于对应调查, 不能消费此证明")
+                admission = None
+                if automatic:
+                    policy = task.engineering_policy
+                    if self.engineering_authority is None or policy is None:
+                        raise EngineeringAuthorityRejected(
+                            EngineeringRejectionKind.LEGACY_AUTHORITY,
+                            "当前任务没有可用的冻结工程恢复授权。",
+                        )
+                    if not policy.allowance(EngineeringCapability.DELIVERY_WAIT_RESOLUTION):
+                        raise EngineeringAuthorityRejected(
+                            EngineeringRejectionKind.CAPABILITY_UNAVAILABLE,
+                            "当前任务的冻结工程授权不包括自动处理此等待。",
+                        )
+                    store = FileRecoveryStore.initialize(
+                        self.sidecar_state / "delivery-wait-authority",
+                        scope=RecoveryScope(
+                            team_id=self.scope.team_id,
+                            repository_id=self.scope.repository_id,
+                            repository_root=self.scope.repository_root,
+                            delivery_id="delivery_wait_" + task.id,
+                        ),
+                    )
+                    admission = self.engineering_authority.admit(
+                        task=task,
+                        store=store,
+                        plan_sha256=delivery_wait_resolution_plan_sha256(
+                            proof.proof_sha256, command.resolution_kind
+                        ),
+                        facts_sha256=proof.proof_sha256,
+                        capabilities=(EngineeringCapability.DELIVERY_WAIT_RESOLUTION,),
+                        at=command.submitted_at,
+                    )
                 retry_failure = None
                 retry_cause = None
                 if command.resolution_kind is DeliveryResolutionKind.RETRY_FROM_CHECKPOINT:
@@ -231,7 +570,13 @@ class DeliveryWaitService:
                     step_sha256=proof.step_sha256,
                     resolution_kind=command.resolution_kind,
                     proof_sha256=proof.proof_sha256,
-                    operator_principal=self.principal,
+                    authorization_source=(
+                        "organization_engineering_policy"
+                        if automatic
+                        else "engineering_operator_decision"
+                    ),
+                    operator_principal=None if automatic else self.principal,
+                    engineering_admission=admission,
                     submitted_at=command.submitted_at,
                     resolution_sha256="0" * 64,
                     retry_failure=retry_failure,
@@ -976,7 +1321,7 @@ class DeliveryWaitService:
 
     @staticmethod
     def _require_proof_binding(
-        proof: DeliveryWaitInvestigation, command: ResolveDeliveryWait
+        proof: DeliveryWaitInvestigation, command: InspectDeliveryWait
     ) -> None:
         if (
             proof.work_item_id,
@@ -994,7 +1339,7 @@ class DeliveryWaitService:
             raise DeliveryWaitRejected("工程决定不属于这份精确调查")
 
     def _require_decision_binding(
-        self, prior: DeliveryResolution, command: ResolveDeliveryWait
+        self, prior: DeliveryResolution, command: ResolveDeliveryWait, *, automatic: bool = False
     ) -> None:
         if (
             prior.work_item_id,
@@ -1013,6 +1358,6 @@ class DeliveryWaitService:
             command.expected_checkpoint_sequence,
             command.proof_sha256,
             command.resolution_kind,
-            self.principal,
+            None if automatic else self.principal,
         ):
             raise DeliveryWaitRejected("此等待已记录不同工程决定, 不能覆盖审计历史")

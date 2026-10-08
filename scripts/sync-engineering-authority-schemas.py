@@ -9,11 +9,13 @@ from pydantic import Field, TypeAdapter
 from ai_software_engineer.domain.delivery_resolution import (
     RESULT_REPLAY_REJECTED_CLASSIFICATIONS,
     DeliveryResolution,
+    DeliveryWaitHandling,
     DeliveryWaitInvestigation,
     EngineeringDispositionRecord,
 )
 from ai_software_engineer.domain.engineering_authority import (
     EngineeringAdmission,
+    EngineeringCapability,
     EngineeringPolicy,
 )
 
@@ -28,7 +30,10 @@ schema["$id"] = "https://ai-software-engineer.local/schemas/engineering-authorit
 
 resolution_schema = TypeAdapter(
     Annotated[
-        DeliveryWaitInvestigation | DeliveryResolution | EngineeringDispositionRecord,
+        DeliveryWaitInvestigation
+        | DeliveryResolution
+        | DeliveryWaitHandling
+        | EngineeringDispositionRecord,
         Field(discriminator="kind"),
     ]
 ).json_schema()
@@ -37,6 +42,26 @@ resolution_schema["$id"] = (
     "https://ai-software-engineer.local/schemas/engineering-wait-resolution.schema.json"
 )
 resolution_schema["$defs"]["DeliveryResolution"]["allOf"] = [
+    {
+        "if": {
+            "properties": {"authorization_source": {"const": "organization_engineering_policy"}},
+            "required": ["authorization_source"],
+        },
+        "then": {
+            "required": ["engineering_admission"],
+            "properties": {
+                "engineering_admission": {"type": "object"},
+                "operator_principal": {"type": "null"},
+            },
+        },
+        "else": {
+            "required": ["operator_principal"],
+            "properties": {
+                "operator_principal": {"type": "object"},
+                "engineering_admission": {"type": "null"},
+            },
+        },
+    },
     {
         "if": {"properties": {"resolution_kind": {"const": "RETRY_FROM_CHECKPOINT"}}},
         "then": {
@@ -102,6 +127,13 @@ resolution_schema["$defs"]["DeliveryResolution"]["allOf"] = [
             },
             "else": {"properties": {"verifier_preparation": {"type": "null"}}},
         },
+    },
+]
+resolution_schema["$defs"]["DeliveryWaitHandling"]["allOf"] = [
+    {
+        "if": {"properties": {"status": {"const": "RESOLVED"}}},
+        "then": {"required": ["resolution"], "properties": {"resolution": {"type": "object"}}},
+        "else": {"properties": {"resolution": {"type": "null"}}},
     },
 ]
 resolution_schema["$defs"]["DeliveryWaitInvestigation"]["allOf"] = [
@@ -170,3 +202,17 @@ resolution_schema["$defs"]["VerifierPreparationEvidence"]["allOf"] = [
 (
     Path(__file__).resolve().parents[1] / "schemas/engineering-wait-resolution.schema.json"
 ).write_text(json.dumps(resolution_schema, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+# EngineeringPolicy is embedded in Task/dispatch/recovery wire contracts. Keep
+# every copy's capability enum synchronized without erasing their hand-written
+# validation matrices or unrelated definitions.
+capability_schema = TypeAdapter(EngineeringCapability).json_schema()
+for path in (Path(__file__).resolve().parents[1] / "schemas").glob("*.schema.json"):
+    embedded = json.loads(path.read_text(encoding="utf-8"))
+    definitions = embedded.get("$defs", {})
+    if (
+        "EngineeringCapability" in definitions
+        and definitions["EngineeringCapability"] != capability_schema
+    ):
+        definitions["EngineeringCapability"] = capability_schema
+        path.write_text(json.dumps(embedded, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

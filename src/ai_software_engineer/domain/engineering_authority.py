@@ -58,6 +58,7 @@ class LocalOperatorPrincipal(DomainModel):
 
 
 class EngineeringCapability(StrEnum):
+    DELIVERY_WAIT_RESOLUTION = "delivery_wait_resolution"
     VERIFICATION_REFRESH = "verification_refresh"
     SWIFT_SANDBOX = "swift_sandbox"
     PYTHON_MYSQL_SANDBOX = "python_mysql_sandbox"

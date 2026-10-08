@@ -19,6 +19,7 @@ from ai_software_engineer.agents.continuation import (
 from ai_software_engineer.agents.execution import (
     ExecutionGuard,
     ExecutionStop,
+    NativeProcessStop,
     SynchronousToolLoopStop,
 )
 from ai_software_engineer.agents.models import (
@@ -48,6 +49,8 @@ from ai_software_engineer.orchestration.continuation_models import (
     ContinuationAdmission,
     ContinuationRejected,
     ContinuationScope,
+    ExecutionCaptureStart,
+    ExecutionCaptureStop,
     ExecutionInterruptionReceipt,
 )
 from ai_software_engineer.orchestration.continuation_store import FileContinuationStore
@@ -162,6 +165,8 @@ class NativeCoderContinuation:
             raise ContinuationRejected("replacement has ambiguous interruption predecessors")
         receipt = predecessors[0]
         task, claim = self._current(request)
+        policy = task.interruption_continuation_policy
+        assert policy is not None
         self._require_receipt_current(receipt, task)
         self._require_active_request(request, task)
         if (
@@ -241,6 +246,8 @@ class NativeCoderContinuation:
         if task.interruption_continuation_policy is None:
             return None
         task, claim = self._current(request)
+        policy = task.interruption_continuation_policy
+        assert policy is not None
         self._require_active_request(request, task)
         if request.run_id in self._starts:
             self._uncertain(task, "同一执行记录已开始。不能再次调用模型。")
@@ -250,6 +257,19 @@ class NativeCoderContinuation:
             raise ContinuationRejected("invocation workspace does not bind its source") from error
         before = capture_mutation_inventory(root)
         self._guard.check()
+        capture_start = ExecutionCaptureStart.create(
+            scope=self._scope,
+            request=request,
+            claim=claim,
+            task_intent_sha256=task_intent_sha256(task),
+            task_revision=self._revision(),
+            policy_sha256=policy.policy_sha256,
+            worktree_path=str(root),
+            inventory_before=before,
+            started_at=self._clock(),
+        )
+        with self._guard.write_scope():
+            self._store.put_capture_start(capture_start)
         self._starts[request.run_id] = _Started(
             request,
             task_intent_sha256(task),
@@ -259,6 +279,40 @@ class NativeCoderContinuation:
             before.sha256,
         )
         return before
+
+    def record_native_stop(
+        self,
+        request: AgentRequest,
+        root: Path,
+        *,
+        process_stop: NativeProcessStop,
+        output_present: bool,
+        cause: ContinuationCause | None,
+        original_error_code: AgentErrorCode | None,
+    ) -> None:
+        """Seal only the runner's observation, even if ownership ended meanwhile.
+
+        The original claimed start and still-held Task lock own this fact-only
+        publication. It cannot write Task, budget, artifacts or a verdict.
+        """
+        if request.role is not AgentRole.CODER or request.run_id not in self._starts:
+            return
+        if not self._guard.inherited_fds:
+            raise ContinuationRejected("native stop recording requires the original Task lock")
+        start = self._store.capture_start(request.run_id)
+        if start.request != request or start.worktree_path != str(root):
+            raise ContinuationRejected("native stop recording changed its claimed start")
+        self._store.put_capture_stop(
+            ExecutionCaptureStop.create(
+                task_id=request.task_id,
+                run_id=request.run_id,
+                capture_start_sha256=start.start_sha256,
+                process_stop=process_stop,
+                output_present=output_present,
+                cause=cause,
+                original_error_code=original_error_code,
+            )
+        )
 
     def interrupted(
         self,
@@ -426,13 +480,17 @@ class NativeCoderContinuation:
         """Replay sealed original-WorkItem facts without invoking its Run again."""
         self._guard.check()
         claimed = self._claim()
-        receipts = tuple(
+        attempt_receipts = tuple(
             receipt
             for receipt in self._store.receipts_for_task(task.id)
-            if receipt.original_work_item_id == claimed.work_item.id
-            and receipt.request.attempt == claimed.work_item.attempt
+            if receipt.request.attempt == claimed.work_item.attempt
             and not self._receipt_resolved_by_baseline(receipt)
         )
+        if any(
+            receipt.original_work_item_id != claimed.work_item.id for receipt in attempt_receipts
+        ):
+            raise ContinuationRejected("original interruption belongs to another WorkItem")
+        receipts = attempt_receipts
         if not receipts:
             return None
         if len(receipts) != 1:

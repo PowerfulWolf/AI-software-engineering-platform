@@ -25,6 +25,7 @@ from ai_software_engineer.domain.delivery_resolution import (
     DeliveryResolution,
     DeliveryResolutionKind,
 )
+from ai_software_engineer.domain.engineering_authority import EngineeringCapability
 from ai_software_engineer.domain.enums import AgentRole, TaskStatus, WorkItemStatus
 from ai_software_engineer.domain.identity import ContextId, RepositoryId, RunId
 from ai_software_engineer.domain.model import DomainModel, NonEmptyStr, ensure_unique
@@ -310,6 +311,18 @@ class MySqlRoleQueue(MySqlPersistentWorkQueue):
                 raise QueueCorruption("waiting Task is missing")
             task = _decode_task(current.task_id, str(row["payload_json"]))
             step = self.step(current.id)
+            if resolution.authorization_source == "organization_engineering_policy":
+                admission = resolution.engineering_admission
+                if (
+                    admission is None
+                    or task.engineering_policy is None
+                    or admission.policy != task.engineering_policy
+                    or admission.task_intent_sha256 != task_intent_sha256(task)
+                    or admission.policy.scope.repository_id != current.repository_id
+                    or admission.policy.scope.repository_root != task.repository
+                    or admission.capabilities != (EngineeringCapability.DELIVERY_WAIT_RESOLUTION,)
+                ):
+                    raise QueueConflict("自动工程处理不符合原任务的精确冻结授权")
             if (
                 task.status in {TaskStatus.BLOCKED, TaskStatus.FAILED, TaskStatus.DONE}
                 or task_intent_sha256(task) != resolution.expected_task_intent_sha256

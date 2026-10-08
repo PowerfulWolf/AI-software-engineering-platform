@@ -70,6 +70,7 @@ legacy_unknown，不推断已完成，不补造 QA/Review。独立报告原样�
 
 | 目录 | 任务 ID | 状态记录 |
 |---|---|---|
+| 10-08-engineering-wait-user-path | engineering-wait-user-path-20261008 | [completed](10-08-engineering-wait-user-path/task.json)：平台处理中断入口、冻结策略自动处理与完整中文记录已增量验证；服务待用户空闲加载，旧无可信停止资料仍需平台维护 |
 | 10-01-confirmation-execution-visibility | confirmation-execution-visibility-20261001 | [completed](10-01-confirmation-execution-visibility/task.json)：历史答复入口与角色心跳提示，44定向回归及独立检查通过，静态HTTP已加载 |
 | 10-01-interrupted-coder-changes | interrupted-coder-changes-20261001 | [completed](10-01-interrupted-coder-changes/task.json)：9f00cf7 已推送加载；20 文件精确新审批、下一代租约及实际 Coder 续跑已验证，K1 本身仍在交付 |
 | 10-01-console-session-disconnect | console-session-disconnect-20261001 | [completed](10-01-console-session-disconnect/task.json)：后台独立会话及准确断连提示已验证激活；K1新改动的中断恢复另行处理 |

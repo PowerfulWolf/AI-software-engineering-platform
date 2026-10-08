@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
+import os
 import subprocess
-from collections.abc import Mapping
+import sys
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -34,6 +39,7 @@ from tests.domain.factories import (
     make_implementation_artifact,
     make_qa_artifact,
 )
+from tests.orchestration.test_native_continuation import Fixture, Guard
 
 
 def _git(root: Path, *arguments: str) -> str:
@@ -1106,3 +1112,135 @@ def test_subprocess_timeout_retains_bounded_partial_capture(
     assert invocation.returncode == -1
     assert invocation.stdout == "partial stdout"
     assert invocation.stderr == "partial stderr\ufffd"
+
+
+class _OwnedRunnerGuard:
+    def __init__(self, *, fail_after: int | None = None) -> None:
+        self.fd = os.open(os.devnull, os.O_RDONLY)
+        self.calls = 0
+        self.fail_after = fail_after
+
+    @property
+    def inherited_fds(self) -> tuple[int, ...]:
+        return (self.fd,)
+
+    def check(self) -> None:
+        self.calls += 1
+        if self.fail_after is not None and self.calls > self.fail_after:
+            raise RuntimeError("Task ownership was lost")
+
+    @contextmanager
+    def write_scope(self) -> Iterator[None]:
+        self.check()
+        yield
+        self.check()
+
+    def close(self) -> None:
+        os.close(self.fd)
+
+
+def test_owned_runner_observes_a_real_timeout_before_returning(tmp_path: Path) -> None:
+    guard = _OwnedRunnerGuard()
+    observed: list[CodexInvocationResult] = []
+    try:
+        invocation = SubprocessCodexCommandRunner(guard).run_observed(
+            (sys.executable, "-c", "import time; time.sleep(10)"),
+            cwd=tmp_path,
+            environment={"PATH": os.environ["PATH"]},
+            stdin="",
+            timeout_seconds=0.05,
+            observer=observed.append,
+        )
+    finally:
+        guard.close()
+    assert invocation.timed_out
+    assert invocation.process_stop is not None
+    assert invocation.process_stop.kind == "local_execution_limit"
+    assert observed == [invocation]
+
+
+def test_owned_runner_publishes_stop_when_ownership_is_lost_after_observation(
+    tmp_path: Path,
+) -> None:
+    guard = _OwnedRunnerGuard(fail_after=4)
+    observed: list[CodexInvocationResult] = []
+    try:
+        with pytest.raises(RuntimeError, match="ownership"):
+            SubprocessCodexCommandRunner(guard).run_observed(
+                (sys.executable, "-c", "print('completed')"),
+                cwd=tmp_path,
+                environment={"PATH": os.environ["PATH"]},
+                stdin="",
+                timeout_seconds=2,
+                observer=observed.append,
+            )
+    finally:
+        guard.close()
+    assert len(observed) == 1
+    assert observed[0].process_stop is not None
+    assert observed[0].process_stop.kind == "completed"
+    assert observed[0].returncode == 0
+
+
+def test_adapter_seals_real_stop_before_return_when_original_ownership_is_lost(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    descriptor = os.open(tmp_path / "original.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    guard = Guard(descriptor)
+    fixture = Fixture(tmp_path, guard)
+    native_popen = cast(Callable[..., subprocess.Popen[str]], subprocess.Popen)
+
+    def lose_ownership(*args: object, **kwargs: object) -> subprocess.Popen[str]:
+        process = native_popen(*args, **kwargs)
+        argv = args[0] if args else kwargs.get("args")
+        if isinstance(argv, (tuple, list)) and argv and argv[0] == sys.executable and "-c" in argv:
+            guard.live = False
+        return process
+
+    class FixtureRunner(SubprocessCodexCommandRunner):
+        def run_observed(
+            self,
+            argv: tuple[str, ...],
+            *,
+            cwd: Path,
+            environment: Mapping[str, str],
+            stdin: str,
+            timeout_seconds: float,
+            observer: Callable[[CodexInvocationResult], None],
+        ) -> CodexInvocationResult:
+            return super().run_observed(
+                (sys.executable, "-c", "import time; time.sleep(10)"),
+                cwd=cwd,
+                environment=environment,
+                stdin=stdin,
+                timeout_seconds=timeout_seconds,
+                observer=observer,
+            )
+
+    monkeypatch.setattr(subprocess, "Popen", lose_ownership)
+    try:
+        result = CodexCliAgentAdapter(
+            workspace_root=fixture.worktree.path,
+            model="fixture-model",
+            agent_id="agent_native_coder",
+            agent_version="v1",
+            prompt_builder=StaticPromptBuilder(),
+            environment={"PATH": os.environ["PATH"]},
+            runner=FixtureRunner(guard),
+            execution_guard=guard,
+            interruption_control=fixture.service(),
+        ).run(fixture.request)
+        assert result.error is not None
+        assert result.error.code is AgentErrorCode.WORK_INTERRUPTED
+        start = fixture.store.capture_start(fixture.request.run_id)
+        stop = fixture.store.capture_stop(fixture.request.run_id)
+        assert stop.capture_start_sha256 == start.start_sha256
+        assert stop.process_stop.returncode < 0
+        assert stop.process_stop.kind == "failed"
+        assert stop.cause is None, "lost ownership cannot fabricate a provider cause"
+        assert not stop.output_present
+        assert fixture.store.receipts_for_task(fixture.task.id) == ()
+    finally:
+        fixture.repository.close()
+        os.close(descriptor)
